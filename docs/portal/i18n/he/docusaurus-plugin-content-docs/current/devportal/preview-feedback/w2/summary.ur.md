@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -15,7 +17,7 @@ description: community preview wave (W2) کے لئے live digest۔
 
 | آئٹم | تفصیل |
 | --- | --- |
-| لہر | W2 - community reviewers |
+| לרי | W2 - מבקרי קהילה |
 | دعوتی ونڈو | 2025-06-15 -> 2025-06-29 |
 | آرٹیفیکٹ ٹیگ | `preview-2025-06-15` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W2` |
@@ -30,15 +32,15 @@ description: community preview wave (W2) کے لئے live digest۔
 
 ## ایکشن آئٹمز
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| תעודה מזהה | وضاحت | مالک | اسٹیٹس |
 | --- | --- | --- | --- |
-| W2-A1 | `docs-preview/w2 #1` (tooltip wording) حل کرنا۔ | Docs-core-04 | ✅ مکمل (2025-06-21). |
-| W2-A2 | `docs-preview/w2 #2` (localization sidebar) حل کرنا۔ | Docs-core-05 | ✅ مکمل (2025-06-21). |
-| W2-A3 | exit evidence archive کرنا + roadmap/status اپ ڈیٹ کرنا۔ | Docs/DevRel lead | ✅ مکمل (2025-06-29). |
+| W2-A1 | `docs-preview/w2 #1` (tooltip wording) حل کرنا۔ | Docs-core-04 | ✅ מקל (21-06-2025). |
+| W2-A2 | `docs-preview/w2 #2` (localization sidebar) حل کرنا۔ | Docs-core-05 | ✅ מקל (21-06-2025). |
+| W2-A3 | exit evidence archive کرنا + roadmap/status اپ ڈیٹ کرنا۔ | Docs/DevRel lead | ✅ מחמל (2025-06-29). |
 
 ## اختتامی خلاصہ (2025-06-29)
 
 - تمام آٹھ community reviewers نے تکمیل کی تصدیق کی اور preview access واپس لے لیا گیا؛ acknowledgements tracker invite log میں ریکارڈ ہوئے۔
 - آخری telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) green رہے؛ logs اور Try it proxy transcripts `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہیں۔
 - evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) `artifacts/docs_preview/W2/preview-2025-06-15/` میں archive ہوا۔
-- tracker کا W2 checkpoint log exit تک اپ ڈیٹ کیا گیا تاکہ roadmap W3 planning شروع ہونے سے پہلے audit-ready ریکارڈ رکھے۔
+- מעקב אחר יציאת יומן נקודת ביקורת W2. מפת דרכים W3 תכנון תכנון W3

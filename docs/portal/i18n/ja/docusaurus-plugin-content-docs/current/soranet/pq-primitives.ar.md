@@ -4,29 +4,31 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-primitives.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-primitives
-title: بدائيات ما بعد الكم في SoraNet
-sidebar_label: بدائيات PQ
-description: نظرة عامة على crate `soranet_pq` وكيف يستهلك مصافحة SoraNet مساعدات ML-KEM/ML-DSA.
+id: pq-プリミティブ
+タイトル: بدائيات ما بعد الكم في SoraNet
+サイドバーラベル: بدائيات PQ
+説明: クレート `soranet_pq` وكيف يستهلك مصافحة SoraNet مساعدات ML-KEM/ML-DSA。
 ---
 
-:::note المصدر القياسي
-تعكس هذه الصفحة `docs/source/soranet/pq_primitives.md`. حافظ على النسختين متطابقتين حتى يتم تقاعد مجموعة الوثائق القديمة.
+:::メモ
+テストは `docs/source/soranet/pq_primitives.md` です。 حافظ على النسختين متطابقتين حتى يتم تقاعد مجموعة الوثائق القديمة。
 :::
 
-يحتوي crate `soranet_pq` على لبنات ما بعد الكم التي تعتمد عليها كل relay وclient وtooling في SoraNet. وهو يغلف مجموعات Kyber (ML-KEM) وDilithium (ML-DSA) المدعومة من PQClean ويضيف helpers لـ HKDF وRNG hedged ملائمة للبروتوكول حتى تتشارك جميع الأسطح نفس التنفيذات.
+クレート `soranet_pq` は、リレー、クライアント、ツール、SoraNet をサポートしています。 Kyber (ML-KEM) ダイリチウム (ML-DSA) PQClean ヘルパー HKDF ヘッジ RNG ヘッジ ダイリチウム (ML-DSA)最高です。
 
 ## ما الذي يتضمنه `soranet_pq`
 
-- **ML-KEM-512/768/1024:** توليد مفاتيح حتمي، ومساعدات encapsulation وdecapsulation مع نشر أخطاء بزمن ثابت.
+- **ML-KEM-512/768/1024:** カプセル化とカプセル化解除のテスト。
 - **ML-DSA-44/65/87:** توقيع/تحقق منفصلان مربوطان بنصوص مفصولة النطاق.
-- **HKDF موسوم:** `derive_labeled_hkdf` يضيف namespace لكل اشتقاق مع مرحلة المصافحة (`DH/es`, `KEM/1`, ...) حتى تبقى النصوص الهجينة بلا تصادم.
-- **عشوائية hedged:** `hedged_chacha20_rng` يمزج بذورا حتمية مع إنتروبيا النظام ويصفر الحالة الوسيطة عند التحرير.
+- **HKDF موسوم:** `derive_labeled_hkdf` يضيف 名前空間 لكل اشتقاق مع مرحلة المصافحة (`DH/es`, `KEM/1`, ...) حتى最高です。
+- **ヘッジ済み:** `hedged_chacha20_rng` يمزج بذورا حتمية مع إنتروبيا النظام ويصفر الحالة الوسيطة عندああ。
 
-تسكن جميع الأسرار داخل حاويات `Zeroizing` وتختبر CI روابط PQClean على جميع المنصات المدعومة.
+`Zeroizing` CI アカウント PQClean をサポートしています。
 
 ```rust
 use soranet_pq::{
@@ -51,17 +53,17 @@ let okm = derive_labeled_hkdf(
 
 ## كيفية الاستخدام
 
-1. **اضف الاعتماد** إلى crates الموجودة خارج جذر workspace:
+1. **作業スペース** 作業スペースのクレート:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **اختر المجموعة الصحيحة** في نقاط الاستدعاء. للعمل الأولي على المصافحة الهجينة، استخدم `MlKemSuite::MlKem768` و`MlDsaSuite::MlDsa65`.
+2. ** اختر المجموعة الصحيحة** في نقاط الاستدعاء. `MlKemSuite::MlKem768` و`MlDsaSuite::MlDsa65` を確認してください。
 
-3. **اشتق المفاتيح مع وسوم.** استخدم `HkdfDomain::soranet("KEM/1")` (ونظراءه) حتى يبقى تسلسل النصوص حتميا عبر العقد.
+3. **اشتق المفاتيح مع وسوم.** استخدم `HkdfDomain::soranet("KEM/1")` (ونظراءه) حتى يبقى تسلسل النصوص حتميا عبرああ。
 
-4. **استخدم RNG hedged** عند أخذ عينات لأسرار بديلة:
+4. **RNG ヘッジ** リスク:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -69,11 +71,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-تسحب مصافحة SoraNet الأساسية ومساعدات تعمية CID (`iroha_crypto::soranet`) هذه الأدوات مباشرة، ما يعني أن crates التابعة ترث نفس التنفيذات دون ربط PQClean بنفسها.
+SoraNet の情報 CID (`iroha_crypto::soranet`) هذه الأدوات مباشرة، ما يعني أن クレートPQClean を使用してください。
 
 ## قائمة تحقق التحقق
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- راجع أمثلة الاستخدام في README (`crates/soranet_pq/README.md`)
+- README (`crates/soranet_pq/README.md`)
 - حدث وثيقة تصميم مصافحة SoraNet عند وصول الهجائن

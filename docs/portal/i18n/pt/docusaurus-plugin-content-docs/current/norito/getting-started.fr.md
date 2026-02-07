@@ -4,31 +4,33 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Prise en main de Norito
+# Prêmio principal de Norito
 
-Ce guide rapide presente le workflow minimal pour compiler un contrat Kotodama, inspecter le bytecode Norito genere, l'executer localement et le deployer sur un nud Iroha.
+Este guia rápido apresenta o fluxo de trabalho mínimo para compilar um contrato Kotodama, inspecionar o bytecode Norito gerado, executar o local e implantar em um novo Iroha.
 
-## Prerequis
+## Pré-requisito
 
-1. Installez la toolchain Rust (1.76 ou plus) et recuperez ce depot.
-2. Construisez ou telechargez les binaires de support :
-   - `koto_compile` - compilateur Kotodama qui emet du bytecode IVM/Norito
-   - `ivm_run` et `ivm_tool` - utilitaires d'execution locale et d'inspection
-   - `iroha_cli` - utilise pour le deploiement de contrats via Torii
+1. Instale o conjunto de ferramentas Rust (1.76 ou mais) e recupere este depósito.
+2. Construa ou baixe os binários de suporte:
+   - `koto_compile` - compilador Kotodama que emite o bytecode IVM/Norito
+   - `ivm_run` e `ivm_tool` - utilitários de local de execução e inspeção
+   - `iroha_cli` - utilizado para implantação de contratos via Torii
 
-   Le Makefile du depot attend ces binaires dans `PATH`. Vous pouvez telecharger des artefacts precompiles ou les construire depuis les sources. Si vous compilez la toolchain localement, pointez les helpers du Makefile vers les binaires :
+   O Makefile do depósito atende esses binários em `PATH`. Você pode baixar artefatos pré-compilados ou construí-los a partir das fontes. Se você compilar o local do conjunto de ferramentas, indique os auxiliares do Makefile para os binários:
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Assurez-vous qu'un nud Iroha est en cours d'execution lorsque vous atteignez l'etape de deploiement. Les exemples ci-dessous supposent que Torii est accessible a l'URL configuree dans votre profil `iroha_cli` (`~/.config/iroha/cli.toml`).
+3. Certifique-se de que um novo Iroha esteja em processo de execução quando você iniciar a etapa de implantação. Os exemplos aqui supõem que Torii está acessível no URL configurado em seu perfil `iroha_cli` (`~/.config/iroha/cli.toml`).
 
-## 1. Compiler un contrat Kotodama
+## 1. Compilador de contrato Kotodama
 
-Le depot fournit un contrat minimal "hello world" dans `examples/hello/hello.ko`. Compilez-le en bytecode Norito/IVM (`.to`) :
+O depósito forneceu um contrato mínimo "olá mundo" em `examples/hello/hello.ko`. Compile o bytecode Norito/IVM (`.to`):
 
 ```sh
 mkdir -p target/examples
@@ -38,34 +40,34 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Options cles :
+Opções:
 
-- `--abi 1` verrouille le contrat sur la version ABI 1 (la seule supportee au moment de la redaction).
-- `--max-cycles 0` demande une execution sans limite ; fixez un nombre positif pour borner le padding de cycles pour les preuves de connaissance zero.
+- `--abi 1` alterou o contrato na versão ABI 1 (somente suportado no momento da redação).
+- `--max-cycles 0` exige uma execução sem limite; fixe um nome positivo para suportar o preenchimento dos ciclos para as previsões de conhecimento zero.
 
-## 2. Inspecter l'artefact Norito (optionnel)
+## 2. Inspecione o artefato Norito (opcional)
 
-Utilisez `ivm_tool` pour verifier l'en-tete et les metadonnees integrees :
+Use `ivm_tool` para verificar a integridade do corpo e das metadonas:
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-Vous devriez voir la version ABI, les flags actives et les points d'entree exportes. C'est un controle rapide avant le deploiement.
+Você deve ver a versão ABI, os sinalizadores ativos e os pontos de entrada de exportação. Este é um controle rápido antes da implantação.
 
-## 3. Executer le contrat localement
+## 3. Executar o contrato local
 
-Executez le bytecode avec `ivm_run` pour confirmer le comportement sans toucher un nud :
+Execute o bytecode com `ivm_run` para confirmar o comportamento sem tocar um nud:
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-L'exemple `hello` journalise une salutation et emet un syscall `SET_ACCOUNT_DETAIL`. L'execution locale est utile pendant que vous iterez sur la logique du contrat avant de le publier on-chain.
+O exemplo `hello` registra uma saudação e emite um syscall `SET_ACCOUNT_DETAIL`. O local de execução é útil enquanto você iterez na lógica do contrato antes do editor na rede.
 
-## 4. Deployer via `iroha_cli`
+## 4. Implantador via `iroha_cli`
 
-Lorsque vous etes satisfait du contrat, deployez-le sur un nud via le CLI. Fournissez un compte d'autorite, sa cle de signature et soit un fichier `.to` soit un payload Base64 :
+Quando você estiver satisfeito com o contrato, implante-o em um nud por meio da CLI. Forneça uma conta de autoridade, insira uma assinatura e um arquivo `.to` com uma carga útil Base64 :
 
 ```sh
 iroha_cli app contracts deploy \
@@ -74,26 +76,24 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-La commande soumet un bundle manifeste Norito + bytecode via Torii et affiche l'etat de la transaction resultante. Une fois la transaction validee, le hash de code affiche dans la reponse peut servir a recuperer des manifests ou lister des instances :
+O comando foi um pacote manifestado Norito + bytecode via Torii e exibiu o estado da transação resultante. Uma vez que a transação foi válida, o hash do código exibido na resposta pode servir para recuperar manifestos ou listar instâncias:
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
 iroha_cli app contracts instances --namespace apps --table
 ```
 
-## 5. Executer via Torii
+## 5. Executor via ToriiCom o bytecode registrado, você pode invocar uma instrução que faça referência ao código armazenado (p. ex., via `iroha_cli ledger transaction submit` ou seu aplicativo cliente). Certifique-se de que as permissões de conta autorizem as chamadas de sistema desejadas (`set_account_detail`, `transfer_asset`, etc.).
 
-Avec le bytecode enregistre, vous pouvez l'invoquer en soumettant une instruction qui reference le code stocke (p. ex., via `iroha_cli ledger transaction submit` ou votre client applicatif). Assurez-vous que les permissions du compte autorisent les syscalls souhaites (`set_account_detail`, `transfer_asset`, etc.).
+## Conselhos e Depannage
 
-## Conseils et depannage
+- Use `make examples-run` para compilar e executar os exemplos em um único comando. Sobrecarregue as variáveis ​​de ambiente `KOTO`/`IVM` se os binários não estiverem em `PATH`.
+- Se `koto_compile` recusar a versão ABI, verifique se o compilador e se ele está funcionando bem ABI v1 (execute `koto_compile --abi` sem argumentos para listar o suporte).
+- A CLI aceita arquivos de assinatura em hexadecimal ou Base64. Para os testes, você pode usar as emissões do par `iroha_cli tools crypto keypair`.
+- Ao depurar cargas úteis Norito, o subcomando `ivm_tool disassemble` ajuda a correlacionar as instruções com a fonte Kotodama.
 
-- Utilisez `make examples-run` pour compiler et executer les exemples en une seule commande. Surchargez les variables d'environnement `KOTO`/`IVM` si les binaires ne sont pas dans `PATH`.
-- Si `koto_compile` refuse la version ABI, verifiez que le compilateur et le nud ciblent bien ABI v1 (executez `koto_compile --abi` sans arguments pour lister le support).
-- Le CLI accepte des cles de signature en hex ou Base64. Pour les tests, vous pouvez utiliser les cles emises par `iroha_cli tools crypto keypair`.
-- Lors du debug de payloads Norito, le sous-commande `ivm_tool disassemble` aide a correler les instructions avec le source Kotodama.
+Este fluxo reflete as etapas utilizadas no CI e nos testes de integração. Para uma análise mais aproximada da gramática Kotodama, dos mapeamentos de syscalls e dos internos Norito, veja:
 
-Ce flux reflete les etapes utilisees en CI et dans les tests d'integration. Pour une analyse plus approfondie de la grammaire Kotodama, des mappings de syscalls et des internals Norito, voir :
-
-- `docs/source/kotodama_grammar.md`
-- `docs/source/kotodama_examples.md`
-- `norito.md`
+-`docs/source/kotodama_grammar.md`
+-`docs/source/kotodama_examples.md`
+-`norito.md`

@@ -11,114 +11,115 @@ id: preview-invite-flow
 title: Preview invite flow
 sidebar_label: Preview invite flow
 description: Sequencing, evidence, and communications plan for the docs portal public preview waves.
+translator: machine-google-reviewed
 ---
 
-## Purpose
+## Мақсат
 
-Roadmap item **DOCS-SORA** calls out reviewer onboarding and the public preview
-invite program as the final blockers before the portal can exit beta. This page
-describes how to open each invite wave, which artefacts must ship before
-invites go out, and how to prove the flow is auditable. Use it alongside:
+Жол картасы тармағы **DOCS-SORA** шолушыны жұмысқа қосуды және жалпыға қолжетімді алдын ала қарауды шақырады
+портал бета нұсқасынан шықпас бұрын бағдарламаны соңғы блокаторлар ретінде шақырыңыз. Бұл бет
+әрбір шақыру толқынын ашу жолын сипаттайды, қандай артефактілер бұрын жөнелтілуі керек
+шақырулар шығады және ағынның тексерілетінін қалай дәлелдеуге болады. Онымен бірге пайдаланыңыз:
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) for
-  per-reviewer handling.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) for checksum
-  guarantees.
-- [`devportal/observability`](./observability.md) for telemetry exports and
-  alerting hooks.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) үшін
+  әрбір рецензент өңдеу.
+- бақылау сомасы үшін [`devportal/preview-integrity-plan`](./preview-integrity-plan.md)
+  кепілдіктер.
+- [`devportal/observability`](./observability.md) телеметрия экспорты және
+  ескерту ілмектері.
 
-## Wave plan
+## Толқын жоспары
 
-| Wave | Audience | Entry criteria | Exit criteria | Notes |
+| Толқын | Аудитория | Қатысу критерийлері | Шығу критерийлері | Ескертпелер |
 | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs/SDK maintainers validating day-one content. | `docs-portal-preview` GitHub team populated, `npm run serve` checksum gate green, Alertmanager quiet for 7 days. | All P0 docs reviewed, backlog tagged, no blocking incidents. | Used to validate the flow; no invite email, just share the preview artefacts. |
-| **W1 – Partners** | SoraFS operators, Torii integrators, governance reviewers under NDA. | W0 exited, legal terms approved, Try-it proxy staged. | Collected partner sign-off (issue or signed form), telemetry shows ≤10 concurrent reviewers, no security regressions for 14 days. | Enforce invite template + request tickets. |
-| **W2 – Community** | Selected contributors from the community waitlist. | W1 exited, incident drills rehearsed, public FAQ updated. | Feedback digested, ≥2 documentation releases shipped via preview pipeline without rollback. | Cap concurrent invites (≤25) and batch weekly. |
+| **W0 – Негізгі қызмет көрсетушілер** | Docs/SDK қолдаушылары бірінші күнгі мазмұнды растайды. | `docs-portal-preview` GitHub командасы толтырылды, `npm run serve` бақылау сомасы қақпасы жасыл, Alertmanager 7 күн бойы тыныш. | Барлық P0 құжаттары қаралды, артта қалдыру белгіленді, блоктау оқиғалары жоқ. | Ағынды тексеру үшін пайдаланылады; шақыру электрондық поштасы жоқ, тек алдын ала қарау артефактілерін бөлісіңіз. |
+| **W1 – Серіктестер** | SoraFS операторлары, Torii интеграторлары, NDA бойынша басқаруды тексерушілер. | W0 аяқталды, заңды шарттар мақұлданды, прокси-проксиді пайдаланып көріңіз. | Жиналған серіктес тіркеуден шығу (шығарылым немесе қол қойылған пішін), телеметрия ≤10 бір уақытта шолушыны көрсетеді, 14 күн бойы қауіпсіздік регрессиялары жоқ. | Шақыру үлгісін қолдану + билеттерді сұрау. |
+| **W2 – Қауымдастық** | Қауымдастық күту тізімінен таңдалған үлескерлер. | W1 шықты, оқиға жаттығулары қайталанды, жалпыға ортақ жиі қойылатын сұрақтар жаңартылды. | Кері пікір қорытылды, ≥2 құжаттаманың шығарылымы кері қайтарусыз алдын ала қарау құбыры арқылы жіберіледі. | Бір мезгілде шақыруларды шектеу (≤25) және топтама апта сайын. |
 
-Document which wave is active inside `status.md` and in the preview request
-tracker so governance can see where the program sits at a glance.
+`status.md` ішінде және алдын ала қарау сұрауында қай толқын белсенді екенін құжат
+трекер, сондықтан басқару бағдарламаның қай жерде орналасқанын бір қарағанда көре алады.
 
-## Preflight checklist
+## Ұшу алдындағы бақылау тізімі
 
-Complete these actions **before** scheduling invites for a wave:
+Толқынға шақыруларды жоспарлаудан **бұрын** мына әрекеттерді орындаңыз:
 
-1. **CI artefacts available**
-   - Latest `docs-portal-preview` + descriptor uploaded by
+1. **CI артефактілері қолжетімді**
+   - Соңғы `docs-portal-preview` + жүктеп салған дескриптор
      `.github/workflows/docs-portal-preview.yml`.
-   - SoraFS pin noted in `docs/portal/docs/devportal/deploy-guide.md`
-     (cutover descriptor present).
-2. **Checksum enforcement**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invoked through
+   - SoraFS пин `docs/portal/docs/devportal/deploy-guide.md` ішінде белгіленген
+     (қиып алу дескрипторы бар).
+2. **Бөлім сомасын орындау**
+   - `docs/portal/scripts/serve-verified-preview.mjs` арқылы шақырылды
      `npm run serve`.
-   - `scripts/preview_verify.sh` instructions tested on macOS + Linux.
-3. **Telemetry baseline**
-   - `dashboards/grafana/docs_portal.json` shows healthy Try it traffic and
-     `docs.preview.integrity` alert is green.
-   - Latest `docs/portal/docs/devportal/observability.md` appendix updated with
-     Grafana links.
-4. **Governance artefacts**
-   - Invite tracker issue ready (one issue per wave).
-   - Reviewer registry template copied (see
+   - `scripts/preview_verify.sh` нұсқаулары macOS + Linux жүйесінде сыналған.
+3. **Телеметриялық базалық көрсеткіш**
+   - `dashboards/grafana/docs_portal.json` салауатты көрсетеді Трафикті көріңіз және
+     `docs.preview.integrity` ескертуі жасыл.
+   - Соңғы `docs/portal/docs/devportal/observability.md` қосымшасы келесімен жаңартылды
+     Grafana сілтемелері.
+4. **Басқару артефактілері**
+   - Трекер мәселесін шақыру дайын (әр толқынға бір мәселе).
+   - Шолушының тізілім үлгісі көшірілген (қараңыз
      [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Legal- and SRE-required approvals attached to the issue.
+   - Мәселеге заңды және SRE талап ететін бекітулер қоса беріледі.
 
-Record preflight completion in the invite tracker before sending any mail.
+Кез келген хатты жібермес бұрын шақыру трекерінде рейстің аяқталуын жазыңыз.
 
-## Flow steps
+## Ағын қадамдары
 
-1. **Select candidates**
-   - Pull from the waitlist spreadsheet or partner queue.
-   - Ensure each candidate has a completed request template.
-2. **Approve access**
-   - Assign an approver to the invite tracker issue.
-   - Verify prerequisites (CLA/contract, acceptable use, security brief).
-3. **Send invites**
-   - Fill in the
+1. **Үміткерлерді таңдау**
+   - Күту тізімінің электрондық кестесінен немесе серіктес кезегінен тартыңыз.
+   - Әрбір үміткерде толтырылған сұрау үлгісі бар екеніне көз жеткізіңіз.
+2. **Кіруге рұқсат беру**
+   - Шақыру трекер мәселесіне бекітуші тағайындаңыз.
+   - Алғышарттарды тексеру (CLA/келісімшарт, қолайлы пайдалану, қауіпсіздік туралы қысқаша).
+3. **Шақырулар жіберу**
+   - толтырыңыз
      [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-     placeholders (`<preview_tag>`, `<request_ticket>`, contacts).
-   - Attach the descriptor + archive hash, Try it staging URL, and support
-     channels.
-   - Store the final email (or Matrix/Slack transcript) in the issue.
-4. **Track onboarding**
-   - Update the invite tracker with `invite_sent_at`, `expected_exit_at`, and
-     status (`pending`, `active`, `complete`, `revoked`).
-   - Link to the reviewer’s intake request for auditability.
-5. **Monitor telemetry**
-   - Watch `docs.preview.session_active` and `TryItProxyErrors` alerts.
-   - File an incident if telemetry deviates from the baseline and record the
-     outcome next to the invite entry.
-6. **Collect feedback & exit**
-   - Close invites once feedback lands or `expected_exit_at` passes.
-   - Update the wave issue with a short summary (findings, incidents, next
-     actions) before moving to the next cohort.
+     толтырғыштар (`<preview_tag>`, `<request_ticket>`, контактілер).
+   - Дескрипторды + мұрағат хэшін тіркеңіз, URL мекенжайын орналастырып көріңіз және қолдау көрсетіңіз
+     арналар.
+   - Соңғы электрондық поштаны (немесе Matrix/Slack транскриптін) шығарылымда сақтаңыз.
+4. **Трекке кіру**
+   - `invite_sent_at`, `expected_exit_at` арқылы шақыру трекерін жаңартыңыз және
+     күй (`pending`, `active`, `complete`, `revoked`).
+   - Рецензенттің тексеру мүмкіндігін қабылдау сұрауына сілтеме.
+5. **Телеметрияны бақылау**
+   - `docs.preview.session_active` және `TryItProxyErrors` ескертулерін қараңыз.
+   - Телеметрия бастапқы деңгейден ауытқыса, оқиғаны жазып алыңыз
+     шақыру жазбасының жанындағы нәтиже.
+6. **Пікір жинау және шығу**
+   - Кері байланыс түскенде немесе `expected_exit_at` өткенде шақыруларды жабыңыз.
+   - Толқын мәселесін қысқаша қорытындымен жаңартыңыз (анықтамалар, оқиғалар, келесі
+     әрекеттер) келесі когортаға көшу алдында.
 
-## Evidence & reporting
+## Дәлелдемелер және есеп беру
 
-| Artefact | Where to store | Refresh cadence |
+| Артефакт | Қайда сақтауға болады | Каденсті жаңарту |
 | --- | --- | --- |
-| Invite tracker issue | `docs-portal-preview` GitHub project | Update after each invite. |
-| Reviewer roster export | `docs/portal/docs/devportal/reviewer-onboarding.md` linked registry | Weekly. |
-| Telemetry snapshots | `docs/source/sdk/android/readiness/dashboards/<date>/` (reuse telemetry bundle) | Per wave + after incidents. |
-| Feedback digest | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (create folder per wave) | Within 5 days of wave exit. |
-| Governance meeting note | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Populate before each DOCS-SORA governance sync. |
+| Трекерді шақыру мәселесі | `docs-portal-preview` GitHub жобасы | Әрбір шақырудан кейін жаңартыңыз. |
+| Шолушылардың тізімін экспорттау | `docs/portal/docs/devportal/reviewer-onboarding.md` байланысты тізілім | Апта сайын. |
+| Телеметриялық суреттер | `docs/source/sdk/android/readiness/dashboards/<date>/` (телеметрия бумасын қайта пайдалану) | Бір толқынға + оқиғалардан кейін. |
+| Кері байланыс дайджест | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (әр толқын үшін қалта жасау) | Толқын шыққаннан кейін 5 күн ішінде. |
+| Басқарма отырысының хаттамасы | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Әрбір DOCS-SORA басқару синхрондауына дейін толтырыңыз. |
 
-Run `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-after each batch to produce a machine-readable event digest. Attach the rendered
-JSON to the wave issue so governance reviewers can confirm invite counts without
-replaying the entire log.
+`cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json` іске қосыңыз
+әрбір партиядан кейін машина оқылатын оқиға дайджестін жасау үшін. Көрсетілгенді тіркеңіз
+Басқаруды тексерушілер шақырулар санын онсыз да растауы үшін толқын мәселесіне JSON
+бүкіл журналды қайта ойнату.
 
-Attach the evidence list to `status.md` whenever a wave ends so the roadmap
-entry can be updated quickly.
+Толқын аяқталған сайын жол картасын көрсету үшін дәлелдер тізімін `status.md` тіркеңіз.
+жазбаны тез жаңартуға болады.
 
-## Rollback & pause criteria
+## Кері қайтару және кідірту критерийлері
 
-Pause the invite flow (and notify governance) when any of the following occur:
+Төмендегілердің кез келгені орын алған кезде шақыру ағынын кідіртіңіз (және басқаруға хабарлаңыз):
 
-- A Try it proxy incident that required rollback (`npm run manage:tryit-proxy`).
-- Alert fatigue: >3 alert pages for preview-only endpoints within 7 days.
-- Compliance gap: invite sent without signed terms or without logging the
-  request template.
-- Integrity risk: checksum mismatch detected by `scripts/preview_verify.sh`.
+- Кері қайтаруды қажет ететін прокси оқиғасын көріңіз (`npm run manage:tryit-proxy`).
+- Шаршау туралы ескерту: 7 күн ішінде тек алдын ала қарауға арналған соңғы нүктелер үшін >3 ескерту беті.
+- Сәйкестік аралығы: шақыру қол қойылған шарттарсыз немесе тіркеусіз жіберілді
+  сұрау үлгісі.
+- Тұтастық тәуекелі: бақылау сомасы сәйкессіздігі `scripts/preview_verify.sh` арқылы анықталды.
 
-Resume only after documenting the remediation in the invite tracker and
-confirming the telemetry dashboard is stable for at least 48 hours.
+Шақыру трекерінде жөндеуді құжаттағаннан кейін ғана жалғастырыңыз және
+телеметрия бақылау тақтасының кемінде 48 сағат тұрақты екенін растау.

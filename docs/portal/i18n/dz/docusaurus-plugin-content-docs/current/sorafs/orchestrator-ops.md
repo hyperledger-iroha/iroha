@@ -8,21 +8,23 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Orchestrator Operations Runbook
 sidebar_label: Orchestrator Ops Runbook
 description: Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-This runbook guides SREs through preparing, rolling out, and operating the multi-source fetch orchestrator. It complements the developer guide with procedures tuned for production rollouts, including staged enablement and peer blacklisting.
+འ་ནི་རན་དེབ་འདི་གིས་ སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ ཕེཆ་ཨོར་ཀེཊ་ཊར་འདི་ གྲ་སྒྲིག་དང་ བསྐོར་ར་རྐྱབ་ནི་ དེ་ལས་ ལག་ལེན་འཐབ་ཐོག་ལས་ ཨེསི་ཨར་ཨི་ཚུ་ལུ་ ལམ་སྟོན་འབདཝ་ཨིན། འདི་གིས་ བཟོ་བསྐྲུན་གྱི་ལམ་སྟོན་འདི་ བཟོ་བསྐྲུན་འགོ་བཙུགས་ནིའི་དོན་ལུ་ བྱ་རིམ་ཚུ་ གོ་རིམ་ཅན་གྱི་ལྕོགས་གྲུབ་དང་ མཉམ་རོགས་ ནགཔོ་ཚུ་ ཐོ་བཀོད་འབད་ནི་ཚུ་ ལྷན་ཐབས་འབདཝ་ཨིན།
 
-> **See also:** The [Multi-Source Rollout Runbook](./multi-source-rollout.md) focuses on fleet-wide rollout waves and emergency provider denial. Reference it for governance / staging coordination while using this document for day-to-day orchestrator operations.
+> **ཡང་:** [Multi-Source Rollout Runbook](./multi-source-rollout.md) གིས་ གྲུ་གཟིངས་རྒྱ་ཆེ་བའི་ བསྐོར་བའི་རླབས་དང་ གློ་བུར་གྱི་བྱིན་མི་ ངོས་ལེན་མེད་པའི་ རླབས་ཚུ་ལུ་ གཙོ་བོར་བཏོནམ་ཨིན། ཉིན་བསྟར་གྱི་སྙན་ཆའི་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ ཡིག་ཆ་འདི་ལག་ལེན་འཐབ་པའི་སྐབས་ གཞུང་སྐྱོང་/ གནས་རིམ་མཉམ་འབྲེལ་གྱི་དོན་ལུ་ གཞི་བསྟུན་འབད།
 
-## 1. Pre-flight Checklist
+## 1. འཕུར་འགྲུལ་སྔོན་གྱི་ དཔྱད་གཞི།
 
-1. **Collect provider inputs**
-   - Latest provider adverts (`ProviderAdvertV1`) and telemetry snapshot for the target fleet.
-   - Payload plan (`plan.json`) derived from the manifest under test.
-2. **Render a deterministic scoreboard**
+1.*བྱིན་མཁན་གྱི་ཨིན་པུཊི་ཚུ་བསྡུ་ལེན་འབད།**
+   - དམིགས་གཏད་ཅན་གྱི་གྲུ་གཟིངས་ཀྱི་དོན་ལུ་ འཕྲལ་གྱི་བྱིན་མི་ ཁྱབ་བསྒྲགས་འབད་མི་ (I18NI0000003X) དང་ ཊེ་ལི་མི་ཊི་པར་ལེན་ཚུ།
+   - བརྟག་དཔྱད་འོག་ལུ་ཡོད་པའི་ གསལ་སྟོན་ལས་ ཐོན་མི་ གླ་ཆ་འཆར་གཞི་ (I18NI0000004X)
+2. **གཏན་འབེབས་ཀྱི་སྐུགས་** 10015-1015-15
 
    ```bash
    sorafs_fetch \
@@ -35,30 +37,30 @@ This runbook guides SREs through preparing, rolling out, and operating the multi
      --json-out artifacts/session.summary.json
    ```
 
-   - Validate that `artifacts/scoreboard.json` lists every production provider as `eligible`.
-   - Archive the summary JSON alongside the scoreboard; auditors rely on the chunk retry counters when certifying the change request.
-3. **Dry-run with fixtures** — Exercise the same command against the public fixtures in `docs/examples/sorafs_ci_sample/` to ensure the orchestrator binary matches the expected version before touching production payloads.
+   - I18NI000000005X གིས་ བཟོ་བསྐྲུན་བྱིན་མི་རེ་རེ་བཞིན་དུ་ `eligible` སྦེ་ཐོ་བཀོད་འབདཝ་ཨིནམ་བདེན་དཔྱད་འབད།
+   - སྐུགས་ཤོག་གི་སྦོ་ལོགས་ཁར་ བཅུད་བསྡུས་ JSON གཏན་མཛོད་འབད་ནི། རྩིས་ཞིབ་པ་ཚུ་གིས་ བསྒྱུར་བཅོས་ཀྱི་ཞུ་བ་འདི་ ངོས་ལེན་འབད་བའི་སྐབས་ ཆ་ཤས་ཚུ་ ལོག་འབད་རྩོལ་བསྐྱེད་མི་ལུ་ བརྟེན་དོ་ཡོདཔ་ཨིན།
+3. **Dry-ran with filectures** — རོལ་དབྱངས་འདི་ I18NI0000000007X ནང་ མི་མང་སྒྲིག་ཆས་ལུ་རྒྱབ་འགལ་འབད་མི་བརྡ་བཀོད་འདི་ ལག་ལེན་འཐབ་ཨིན།
 
-## 2. Staged Rollout Procedure
+## 2. རྩེར་གྱི་སྒྲིབ་པའི་བྱ་རིམ།
 
-1. **Canary stage (≤2 providers)**
-   - Rebuild the scoreboard and run with `--max-peers=2` to clamp the orchestrator to a small subset.
-   - Monitor:
-     - `sorafs_orchestrator_active_fetches`
+1. **ཀེ་ན་རི་གནས་རིམ་ (≤2 བྱིན་མི་)**
+   - སྐུགས་ཤོག་འདི་ ལོག་སྟེ་རྐྱབ་ཞིནམ་ལས་ `--max-peers=2` དང་ཅིག་ཁར་ གཡོག་བཀོལ་ནིའི་དོན་ལུ་ སྙན་ཆའི་སྡེ་ཚན་འདི་ ཆ་ཤས་ཆུང་བ་ཅིག་ལུ་ བསྡམ་བཞག་དགོ།
+   - ལྟ༌རྟོག༌འབད༌ནི:
+     - I18NI0000009X
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Proceed once retry rates remain below 1% for a complete manifest fetch and no provider accumulates failures.
-2. **Ramp stage (50% providers)**
-   - Increase `--max-peers` and rerun with a fresh telemetry snapshot.
-   - Persist every run with `--provider-metrics-out` and `--chunk-receipts-out`. Retain the artefacts for ≥7 days.
-3. **Full rollout**
-   - Remove `--max-peers` (or set it to the full eligible count).
-   - Enable orchestrator mode in client deployments: distribute the persisted scoreboard and configuration JSON via your configuration management system.
-   - Update dashboards to display `sorafs_orchestrator_fetch_duration_ms` p95/p99 and retry histograms per region.
+   - ཚར་གཅིག་ ལོག་འབད་རྩོལ་ཅན་གྱི་ཚད་གཞི་འདི་ གསལ་སྟོན་གྱི་ ཆ་ཚང་ཐོབ་ནིའི་དོན་ལུ་ བརྒྱ་ཆ་༡ ལས་ཉུངམ་སྦེ་ཡོདཔ་ལས་ བྱིན་མི་གཅིག་གིས་ཡང་ འཐུས་ཤོར་ཚུ་ བསྡུ་གསོག་འབད་མི་ཚུགས།
+2.*Ramp གནས་རིམ་ (50% བྱིན་མཁན་)**
+   - `--max-peers` ཡར་སེང་འབད་ཞིནམ་ལས་ ཊེ་ལི་མི་ཊི་པར་ཆས་གསརཔ་ཅིག་དང་གཅིག་ཁར་ ལོག་གཡོག་བཀོལ།
+   - `--provider-metrics-out` དང་ `--chunk-receipts-out` དང་མཉམ་དུ་རྒྱུག་པ་རེ་རེ་བཞིན་ཡོད། ཉིནམ་ ≥7 གི་དོན་ལུ་ ཅ་རྙིང་ཚུ་བཞག་དགོ།
+3. **ཆ་ཚང་བསྐོར་**།
+   - `--max-peers` རྩ་བསྐྲད་གཏང་ (ཡང་ན་ འོས་འབབ་ཅན་གྱི་གྲངས་འབོར་ཆ་ཚང་ལུ་གཞི་སྒྲིག་འབད།)
+   - མཁོ་མངགས་བཀྲམ་སྤེལ་ནང་ རོལ་དབྱངས་ཐབས་ལམ་ལྕོགས་ཅན་བཟོ་: ཁྱོད་རའི་རིམ་སྒྲིག་འཛིན་སྐྱོང་རིམ་ལུགས་བརྒྱུད་དེ་ འཕྲོ་མཐུད་དེ་ཡོད་པའི་སྐུགས་དང་ རིམ་སྒྲིག་ཇེ་ཨེསི་ཨོ་ཨེན་ བཀྲམ་སྤེལ་འབད།
+   - I18NI000000016X p95/p99 བཀྲམ་སྟོན་འབད་ནིའི་དོན་ལུ་ ཌེཤ་བོརཌི་ཚུ་དུས་མཐུན་བཟོ་ཞིནམ་ལས་ ལུང་ཕྱོགས་རེ་ལུ་ ཧིསི་ཊོ་གཱརམ་ཚུ་ ལོག་འབད་རྩོལ་བསྐྱེད།
 
-## 3. Peer Blacklisting & Boosting
+## 3. མཉམ་རོགས་ བླམ་ཐོ་འགོད་དང་ ཡར་འཕར།
 
-Use the CLI’s scoring policy overrides to triage unhealthy providers without waiting for governance updates.
+གཞུང་སྐྱོང་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ བསྒུག་མ་དགོ་པར་ འཕྲོད་བསྟེན་ལུ་ཐོ་ཕོག་མི་ བྱིན་མི་ཚུ་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ CLI གི་ སྐུགས་ཀྱི་ སྲིད་བྱུས་ཚུ་ ལག་ལེན་འཐབ་དགོ།
 
 ```bash
 sorafs_fetch \
@@ -72,33 +74,33 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` removes the listed alias from consideration for the current session.
-- `--boost-provider=<alias>=<weight>` raises the provider’s scheduler weight. Values are additive to the normalised scoreboard weight and apply only to the local run.
-- Record overrides in the incident ticket and attach the JSON outputs so the owning team can reconcile state once the underlying issue is fixed.
+- I18NI0000000017X གིས་ ད་ལྟོའི་ལཱ་ཡུན་གྱི་དོན་ལུ་ བརྩི་འཇོག་ལས་ ཐོ་བཀོད་འབད་ཡོད་པའི་ མིང་གཞན་ཚུ་ རྩ་བསྐྲད་གཏངམ་ཨིན།
+- I18NI000000018X གིས་ བྱིན་མི་གི་ལས་རིམ་བཟོ་མི་གི་ལྗིད་ཚད་འདི་ ཡར་སེང་འབདཝ་ཨིན། གནས་གོང་ཚུ་ སྤྱིར་བཏང་སྐུགས་ཀྱི་ལྗིད་ཚད་ལུ་ཁ་སྐོང་འབད་ཡོདཔ་དང་ ཉེ་གནས་གཡོག་བཀོལ་མི་ལུ་རྐྱངམ་ཅིག་འཇུག་སྤྱོད་འབདཝ་ཨིན།
+- བྱུང་རྐྱེན་གྱི་ ཤོག་འཛིན་ནང་ ཐོ་བཀོད་འབད་དེ་ JSON ཐོན་འབྲས་ཚུ་ མཐུད་དེ་ཡོདཔ་ལས་ བདག་དབང་སྡེ་ཚན་གྱིས་ གནད་དོན་འདི་ གཞི་རྟེན་གཏན་འཁེལ་བཟོ་ཚར་བའི་ཤུལ་ལས་ གནས་སྟངས་དེ་ མཐུན་སྒྲིག་འབད་ཚུགས།
 
-For permanent changes, amend the source telemetry (mark the offender penalised) or refresh the advert with updated stream budgets before clearing the CLI overrides.
+གཏན་འཇགས་བསྒྱུར་བཅོས་ཚུ་གི་དོན་ལུ་ འབྱུང་ཁུངས་ ཊེ་ལི་མི་ཊི་རི་ (ཉེས་ཅན་འདི་ ཉེས་ཆད་བཀལ་ཡོདཔ་) ཡང་ན་ སི་ཨེལ་ཨའི་ བཀག་ཆ་འབད་བའི་ཧེ་མ་ དུས་མཐུན་བཟོ་ཡོད་པའི་ རྒྱུན་རིམ་ཚུ་གི་ཐོག་ལས་ ཁྱབ་བསྒྲགས་འདི་ གསར་བསྐྲུན་འབད་དགོ།
 
-## 4. Failure Triage
+## 4. འཐུས་ཤོར་ཚད་གཞི།
 
-When a fetch fails:
+ཕིཊི་ཆི་ཅིག་འཐུས་ཤོར་བྱུང་པའི་སྐབས།
 
-1. Capture the following artefacts before rerunning:
+༡ ལོག་སྟེ་མ་འཛུལ་བའི་ཧེ་མ་ གཤམ་གསལ་གྱི་ཅ་ཆས་ཚུ་ བསྡུ་ལེན་འབད་ནི།
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspect `session.summary.json` for the human-readable error string:
-   - `no providers were supplied` → verify provider paths and adverts.
-   - `retry budget exhausted ...` → increase `--retry-budget` or remove unstable peers.
-   - `no compatible providers available ...` → audit the offending provider’s range capability metadata.
-3. Correlate the provider name with `sorafs_orchestrator_provider_failures_total` and create a follow-up ticket if the metric spikes.
-4. Replay the fetch offline with `--scoreboard-json` and the captured telemetry to reproduce the failure deterministically.
+2. མི་ལྷག་པའི་འཛོལ་བ་ཡིག་རྒྱུན་གྱི་ I18NI0000023X བརྟག་དཔྱད་འབད།
+   - I18NI000000024X → བདེན་དཔྱད་འབད་ཡོད་པའི་བྱིན་མི་འགྲུལ་ལམ་དང་ཁྱབ་བསྒྲགས་ཚུ།
+   - I18NI000000025X → `--retry-budget` ཡར་སེང་ཡང་ན་ བརྟན་ཏོག་ཏོ་མེད་པའི་མཉམ་རོགས་ བཏོན་གཏང་།
+   - I18NI000000027X → ཉེས་ཅན་བྱིན་མི་གི་ཁྱབ་ཚད་ལྕོགས་གྲུབ་ཀྱི་མེ་ཊ་ཌེ་ཊ་འདི་ ཉེས་འཛུགས་ཅན་གྱི་རྩིས་ཞིབ་འབད།
+༣༽ བྱིན་མི་མིང་འདི་ `sorafs_orchestrator_provider_failures_total` དང་ཅིག་ཁར་ འབྲེལ་མཐུན་འབད་ཞིནམ་ལས་ མེ་ཊིག་གི་མཆེ་བ་ཚུ་ཡོད་པ་ཅིན་ རྗེས་འཇུག་ཤོག་བྱང་ཅིག་གསར་བསྐྲུན་འབད།
+༤ ཕིཆ་ཨོཕ་ལའིན་འདི་ `--scoreboard-json` དང་གཅིག་ཁར་ ལོག་གཏང་ཞིནམ་ལས་ འཐུས་ཤོར་འདི་ གཏན་འབེབས་བཟོ་ནི་གི་དོན་ལུ་ བསྐྱར་བཟོ་འབད་ནིའི་དོན་ལུ་ འཛིན་བཟུང་འབད་ཡོདཔ།
 
-## 5. Rollback
+## 5. རོལ་ཆང་།
 
-To revert an orchestrator rollout:
+སྙན་ཆའི་སྡེ་ཚན་བསྐོར་ཐེངས་ཅིག་ ལོག་བཏང་ནིའི་དོན་ལུ།
 
-2. Remove any `--boost-provider` overrides so the scoreboard reverts to neutral weighting.
-3. Continue scraping the orchestrator metrics for at least one day to confirm no residual fetches are in-flight.
+2. `--boost-provider` གང་རུང་ཅིག་ ཕྱིར་འཐེན་འབད་ཞིནམ་ལས་ སྐུགས་ཐོབ་ཐངས་འདི་ བར་ལམ་གྱི་ལྗིད་ཚད་ལུ་ ལོག་འགྱོཝ་ཨིན།
+༣ འཕུར་འགྲུལ་ནང་ ལྷག་ལུས་ཀྱི་ ཕེཊི་ཆི་ཚུ་ མ་ལྷོདཔ་སྦེ་ ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ ཉུང་མཐའ་ཉིནམ་གཅིག་གི་དོན་ལུ་ སྙན་ཆའི་སྡེ་ཚན་མེ་ཊིག་ཚུ་ འཕྲོ་འཐུད་དེ་ འཕྲོ་འཐུད་དེ་ འཕྲོ་མཐུད་དགོ།
 
-Maintaining disciplined artefact capture and staged rollouts ensures the multi-source orchestrator can be operated safely across heterogeneous provider fleets while keeping observability and audit requirements intact.
+སྒྲིག་ཁྲིམས་ཀྱི་ཅ་ཆས་ཚུ་ རྒྱུན་སྐྱོང་འཐབ་ནི་དང་ གོ་རིམ་བཞིན་དུ་ བསྐོར་ར་རྐྱབ་སྟེ་ ཐོན་ཁུངས་སྣ་ཚོགས་ཀྱི་ སྙན་ཆའི་སྡེ་ཚན་འདི་ ཉེན་སྲུང་དང་ལྡནམ་སྦེ་ མ་འདྲ་བའི་བྱིན་མི་གྲུ་གཟིངས་ཚུ་ནང་ལས་ཕར་ བལྟ་བརྟོག་འབད་ཚུགས་ནི་དང་ རྩིས་ཞིབ་ཀྱི་དགོས་མཁོ་ཚུ་ མ་ཉམས་པ་སྦེ་བཞག་ཚུགས།

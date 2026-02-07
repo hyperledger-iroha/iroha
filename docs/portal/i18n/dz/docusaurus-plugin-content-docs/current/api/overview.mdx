@@ -4,55 +4,53 @@ direction: ltr
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+ནང་འདྲེན་ ཊི་རི་ཊི་ཀོན་སོལ་ '@site/src/ཆ་ཤས་/ཊི་རི་ཊི་ཀོན་སོལ་.jsx';
 
-# Torii API Overview
+# Torii ཨེ་པི་ཨའི་ སྤྱིར་བཏང་ལྟ་སྟངས།
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+Torii འཛུལ་སྒོ་འདི་གིས་ Iroha དང་གཅིག་ཁར་ འབྲེལ་བ་འཐབ་ནིའི་དོན་ལུ་ REST + WebSocket ཁ་ཐོག་ཅིག་ གསལ་སྟོན་འབདཝ་ཨིན།
+མཐུད་མཚམས་ཚུ། ཡིག་ཆ་འདི་ ཡིག་ཆ་འདི་བརྒྱུད་དེ་བཟོ་བཏོན་འབད་ཡོདཔ་ཨིན།
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+གོང་གི་བརྡ་བཀོད་གཡོག་བཀོལ་ནི་ `docs/portal/static/openapi/torii.json` དང་།
+I18NI000000019X མཉམ་བསྡོམས་ལུ་ ལྟོ་འབོར་འབདཝ་ཨིན་ དེ་འབདཝ་ལས་ དབྱེ་ཚན་འདི་གིས་དུས་མཐུན་བཟོཝ་ཨིན།
+རང་བཞིན་གྱིས་ གློག་ཤུགས་འཕྲུལ་ཆས་འདི་གིས་ དྲན་ཚད་ I18NT0000009X རའུ་ཊར་ཅིག་ འཕྱར་ཏེ་ འདི་ལུ་དཔའ་བཅམ་དོ་ཡོདཔ་ཨིན།
+འདི་གི་ OpenAPI མཐའ་མཇུག་འདྲི་དཔྱད་འབད། དེ་འཐུས་ཤོར་བྱུང་པ་ཅིན་ (དཔེར་ན་ རའུ་ཊར་འགོ་བཙུགས་ .
+འཛོལ་བ།) དེ་གི་ཚབ་ལུ་ གཏན་འབེབས་ས་གནས་ཀྱི་ ཁྱད་ཚད་ཅིག་ བཏོན་བཏངམ་ཨིན།
 
-## Current status
+## ད་ལྟའི་གནས་སྟངས།- **Spec འབྱུང་ཁུངས་:** `cargo xtask openapi` གིས་ Torii རའུ་ཊར་འདི་ཐད་ཀར་དུ་འདྲི་དཔྱད་འབདཝ་ཨིན། ཚིག༌ཕྲད
+  ཕོལ་བེག་ stub འདི་ རའུ་ཊར་གྱིས་ I18NT0000003X ཅིག་ ཕྱིར་བཏོན་འབད་མ་ཚུགས་པའི་སྐབས་རྐྱངམ་ཅིག་ བཏོན་ཡོདཔ་ཨིན།
+  ཡིག་ཆ།
+- ** Determinism:** JSON ཐོན་འབྲས་འདི་ CI ནང་ལུ་ བརྟན་ཏོག་ཏོ་སྦེ་ ཁྱབ་སྤེལ་འབད་ནི་ལུ་ ཚད་གཞི་བཟོཝ་ཨིན།
+- **བདེན་བཤད་:** “Try it” sandebox ད་ལྟ་ ༡ བརྒྱུད་དེ་ ཞུ་བ་ཚུ་ མདུན་དུ་གཏང།
+  ཐོགས་ལུས་ཀྱི་ གནས་རིམ་གྱི་ ངོ་ཚབ་། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ Torii མཐའ་མཇུག་དང་ འབག་མི་ཅིག་ བཀྲམ་སྤེལ་འབད་དགོ།
+  འབོད་བརྡ་མ་སྤྲོད་པའི་ཧེ་མ།
+- **ཐོན་རིམ་འདེམས་སྒྲུག་:** སཝ་གར་ཡུ་ཨའི་ རཔ་ཌོག་ དེ་ལས་ Torii OpenAPI ཤོག་ངོས་ཆ་ཚང་།
+  ཕྱིར་འདོན་བྱས་པའི་ཕྱིར་འབུད་བྱས་པ་ `openapi/versions.json` ལྷག་ནས་ཁྱོད་ཀྱིས་ག་བསྡུར་འབད་ཚུགས།
+  ལོ་རྒྱུས་ཀྱི་པར་རིས། `Latest (tracked)` གདམ་ཁའི་ས་ཚིགས་འདི་ .
+  `/openapi/torii.json`, གཞན་ཐོ་འགོད་ཆ་མཉམ་གྱིས་མཐུན་སྒྲིག་མངོན་གསལ་འབདཝ་ཨིན།
+  `openapi/versions/<version>/torii.json` ཅ་ཆས།
+- **པར་རིས་ལཱ་གི་རྒྱུན་རིམ་:** I18NI0000025X གཡོག་བཀོལ་བའི་ཤུལ་ལས་ གསར་བསྐྲུན་འབད།
+  མཐུན་སྒྲིག་ OpenAPI ཡིག་སྣོད་ `npm run sync-openapi -- --version=<label> --latest` དང་བཅས་པ།
+  དེ་འབདཝ་ལས་ བཀོག་བཞག་མི་འདི་གིས་ གྱང་ཤུགས་ཅན་གྱི་པར་ཆས་དང་ བསྐོར་བའི་ “Latest” བཟོ་བསྐྲུན་གཉིས་ཆ་ར་ མངོན་གསལ་འབད་ཚུགས།
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+ད་ལྟོ་ རའུ་ཊར་རྒྱབ་སྐྱོར་ཐོག་ལས་ Torii གི་ཁ་ཐོག་འདི་ ཆ་ཚང་སྦེ་བཏོནམ་ཨིན། མཐོང་ན།
+ས་གནས་འཛིན་མཁན་གྱི་སྦ་སྒོར་འདི་ བཟོ་བསྐྲུན་གྱི་དུས་ཚོད་འཐུས་ཤོར་སྦེ་བརྩི་སྟེ་ I18NT0000014X བརྟག་དཔྱད་འབདཝ་ཨིན།
+འགྲུལ་ལམ་འགོ་བཙུགས་དྲན་ཐོ།
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+## བྱེམ་སྒྲོམ་ (DOCS-3) འབད་རྩོལ་བསྐྱེད།གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་འདི་གིས་ རེསི་ཞུ་བ་ཚུ་ བརྒྱུད་དེ་ བརྡ་སྤྲོད་འབད་མི་ ཀོན་སོལ་ཆུང་ཀུ་ཅིག་ བཙུགསཔ་ཨིན།
+ནོ་ཌི་གཞི་བཞག་པའི་ པོརོག་སི། ངོ་ཚབ་འདི་གིས་ CORS དང་ གོང་ཚད་ཚད་ དེ་ལས་ གདམ་ཁའི་འབག་མི་ཚུ་ བརྟན་བཞུགས་འབདཝ་ཨིན།
+བརྡ་རྟགས་འདི་གིས་ ཝིཌི་གེཊི་གིས་ ངོས་ལེན་ཡིག་ཆ་ཚུ་ མ་སྟོན་པར་ འཁྲབ་སྟོན་གྱི་ འཛུལ་སྒོ་ཚུ་དང་གཅིག་ཁར་ ཁ་སླབ་ཚུགས།
+བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་ཆ་ཚང་གི་དོན་ལུ་ `docs/devportal/try-it.md` ལུ་བལྟ།
 
-## Try it sandbox (DOCS-3)
-
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
-
-Start the proxy alongside the Docusaurus dev server:
+Docusaurus dev server དང་མཉམ་པའི་ངོ་ཚབ་འགོ་བཙུགས།
 
 ```bash
 cd docs/portal
@@ -68,15 +66,14 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
+- ངོ་ཚབ་འདི་གིས་ `TRYIT_PROXY_LISTEN` (སྔོན་སྒྲིག་ I18NI0000029X) དང་ ཉན་འོང་།
+  `/proxy/...` གིས་ I18NI000000031X གི་ཞུ་བ་ཚུ་ མདུན་སྐྱོད་འབདཝ་ཨིན།
+- གནས་སྟངས་འགྱུར་ཅན་གྱི་བེ་ཡར་ཊོ་ཀེན་ཚུ་གི་དོན་ལུ་ ཡང་ན་ འབོད་བརྡ་གཏང་མི་ཚུ་གིས་ བཀྲམ་སྤེལ་འབདཝ་ཨིན།
+  ཞུ་བ་རེ་ལུ་ “Bearer token” ས་སྒོ་བརྒྱུད་དེ་ གཅིག་ཨིན།
+- སྐར་མ་རེ་ནང་ ཞུ་བ་༦༠ ལུ་ སྔོན་སྒྲིག་འབད་དེ་ ཚད་གཞི་ཚུ་ བརྒྱུད་དེ་ བསྒྱུར་བཅོས་འབད་ཚུགས།
   `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ ངོ་ཚབ་འདི་ ཁྲབ་སྟེགས་/བརྡ་སྟོན་འཛུལ་སྤྱོད་ཀྱི་དོན་ལུ་ཨིན། ཐོན་སྐྱེད་བཀོལ་སྤྱོད་ཚུ།
+> འདི་ བརྟན་པོ་བཟོ་ཡོད་པའི་ ingress གི་རྒྱབ་ཁར་ གཡོག་བཀོལ་དགོཔ་དང་ ༢༠༠༨ ལུ་ གནས་གོང་ཚད་འཛིན་གྱི་ སྲིད་བྱུས་གཅིགཔོ་འདི་ ལོག་ལག་ལེན་འཐབ་དགོ།
+> གདོང་ཁར་ Torii.
 
-<TryItConsole />

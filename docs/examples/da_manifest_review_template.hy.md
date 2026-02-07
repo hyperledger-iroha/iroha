@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5c959bd6654d095d2b3785a02e9c2ec162e699ad985b342760b952e38766a66
 source_last_modified: "2025-12-29T18:16:35.069812+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Manifest Governance Packet (Template)
+# Տվյալների հասանելիության մանիֆեստի կառավարման փաթեթ (կաղապար)
 
-Use this template when Parliament panels review DA manifests for subsidies,
-takedowns, or retention changes (roadmap DA-10). Copy the Markdown into the
-governance ticket, fill in the placeholders, and attach the completed file
-alongside the signed Norito payloads and CI artefacts referenced below.
+Օգտագործեք այս ձևանմուշը, երբ խորհրդարանի վահանակները վերանայում են DA մանիֆեստները սուբսիդիաների համար,
+հեռացումներ կամ պահպանման փոփոխություններ (ճանապարհային քարտեզ DA-10): Պատճենեք Markdown-ը
+կառավարման տոմս, լրացրեք տեղապահները և կցեք ավարտված ֆայլը
+Ստորև նշված Norito բեռնատար բեռների և CI արտեֆակտների կողքին:
 
 ```markdown
 ## Manifest Metadata
@@ -73,6 +74,6 @@ alongside the signed Norito payloads and CI artefacts referenced below.
 - [ ] Buffer telemetry snapshot (`iroha_settlement_buffer_xor`)
 ```
 
-Archive every completed packet under the Governance DAG entry for the vote so
-subsequent reviews can reference the manifest digest without repeating the full
-ceremony.【docs/source/governance_playbook.md:24】
+Արխիվացրեք յուրաքանչյուր ավարտված փաթեթը Governance DAG մուտքի տակ՝ քվեարկության համար
+հետագա ակնարկները կարող են հղում կատարել մանիֆեստի ամփոփմանը առանց ամբողջական կրկնելու
+արարողություն.【docs/source/governance_playbook.md:24】

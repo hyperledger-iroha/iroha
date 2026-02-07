@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-summary
-title: W2 فيڈبیک اور اسٹیٹس خلاصہ
-sidebar_label: W2 خلاصہ
-description: community preview wave (W2) کے لئے live digest۔
+id: プレビュー-フィードバック-w2-まとめ
+タイトル: W2 فيڈبیک اور اسٹیٹس خلاصہ
+サイドバーラベル: W2 マーク
+説明: コミュニティ プレビュー ウェーブ (W2) ライブ ダイジェスト
 ---
 
-| آئٹم | تفصیل |
+| और देखें評価 |
 | --- | --- |
-| لہر | W2 - community reviewers |
-| دعوتی ونڈو | 2025-06-15 -> 2025-06-29 |
+|ああ | W2 - コミュニティレビュアー |
+| और देखें 2025-06-15 -> 2025-06-29 |
 | آرٹیفیکٹ ٹیگ | `preview-2025-06-15` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W2` |
-| شرکا | comm-vol-01...comm-vol-08 |
+| और देखें comm-vol-01...comm-vol-08 |
 
-## نمایاں نکات
+## ナオト
 
-1. **Governance اور tooling** - community intake پالیسی 2025-05-20 کو متفقہ طور پر منظور ہوئی؛ motivation/timezone فیلڈز کے ساتھ اپ ڈیٹ request template `docs/examples/docs_preview_request_template.md` میں موجود ہے۔
-2. **Preflight evidence** - Try it proxy change `OPS-TRYIT-188` 2025-06-09 کو چلایا گیا، Grafana dashboards کیپچر کیے گئے، اور `preview-2025-06-15` کے descriptor/checksum/probe outputs `artifacts/docs_preview/W2/` میں archive کیے گئے۔
-3. **Invite wave** - آٹھ community reviewers کو 2025-06-15 کو مدعو کیا گیا، acknowledgements tracker invite table میں لاگ ہوئے؛ سب نے browsing سے پہلے checksum verification مکمل کیا۔
-4. **Feedback** - `docs-preview/w2 #1` (tooltip wording) اور `#2` (localization sidebar order) 2025-06-18 کو فائل ہوئے اور 2025-06-21 تک حل ہو گئے (Docs-core-04/05)؛ لہر کے دوران کوئی incidents نہیں ہوئے۔
+1. **ガバナンスツール** - コミュニティへの参加 2025-05-20 日 2025 年 5 月 20 日モチベーション/タイムゾーン فیلڈز کے ساتھ اپ ڈیٹ リクエスト テンプレート `docs/examples/docs_preview_request_template.md` میں موجود ہے۔
+2. **プリフライトの証拠** - プロキシの変更を試してください `OPS-TRYIT-188` 2025-06-09 Grafana ダッシュボードの確認`preview-2025-06-15` 記述子/チェックサム/プローブ出力 `artifacts/docs_preview/W2/` アーカイブ アーカイブ
+3. **招待ウェーブ** - コミュニティ レビュアー آٹھ 2025-06-15 مدعو کیا گیا، 謝辞トラッカー招待テーブル میں لاگ ہوئے؛ブラウジング チェックサム検証 チェックサム検証
+4. **フィードバック** - `docs-preview/w2 #1` (ツールチップの文言) `#2` (ローカリゼーション サイドバーの順序) 2025-06-18 فائل ہوئے 2025-06-21 تک حل ہو (ドキュメントコア-04/05)事件、事件、事故、事件
 
-## ایکشن آئٹمز
+## ありがとうございます
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| ID | |意味 | और देखें
 | --- | --- | --- | --- |
-| W2-A1 | `docs-preview/w2 #1` (tooltip wording) حل کرنا۔ | Docs-core-04 | ✅ مکمل (2025-06-21). |
-| W2-A2 | `docs-preview/w2 #2` (localization sidebar) حل کرنا۔ | Docs-core-05 | ✅ مکمل (2025-06-21). |
-| W2-A3 | exit evidence archive کرنا + roadmap/status اپ ڈیٹ کرنا۔ | Docs/DevRel lead | ✅ مکمل (2025-06-29). |
+| W2-A1 | `docs-preview/w2 #1` (ツールチップの文言) |ドキュメント-コア-04 | ✅ مکمل (2025-06-21)。 |
+| W2-A2 | `docs-preview/w2 #2` (ローカリゼーションサイドバー) |ドキュメント-コア-05 | ✅ مکمل (2025-06-21)。 |
+| W2-A3 |出口証拠アーカイブ + ロードマップ/ステータス پ ڈیٹ کرنا۔ |ドキュメント/DevRel リード | ✅ مکمل (2025-06-29)。 |
 
-## اختتامی خلاصہ (2025-06-29)
+## ختتامی خلاصہ (2025-06-29)
 
-- تمام آٹھ community reviewers نے تکمیل کی تصدیق کی اور preview access واپس لے لیا گیا؛ acknowledgements tracker invite log میں ریکارڈ ہوئے۔
-- آخری telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) green رہے؛ logs اور Try it proxy transcripts `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہیں۔
-- evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) `artifacts/docs_preview/W2/preview-2025-06-15/` میں archive ہوا۔
-- tracker کا W2 checkpoint log exit تک اپ ڈیٹ کیا گیا تاکہ roadmap W3 planning شروع ہونے سے پہلے audit-ready ریکارڈ رکھے۔
+- コミュニティレビュー担当者へのアクセス レビュー プレビュー アクセス謝辞トラッカー招待ログ میں ریکارڈ ہوئے۔
+- テレメトリ スナップショット (`docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals`) 緑色ログ Try it プロキシ トランスクリプト `DOCS-SORA-Preview-W2` ساتھ منسلک ہیں۔
+- 証拠バンドル (記述子、チェックサム ログ、プローブ出力、リンク レポート、Grafana スクリーンショット、招待状) `artifacts/docs_preview/W2/preview-2025-06-15/` アーカイブ ہوا۔
+- トラッカー W2 チェックポイント ログの終了 評価 評価 評価 評価 ロードマップ W3 計画 監査準備完了 評価準備完了

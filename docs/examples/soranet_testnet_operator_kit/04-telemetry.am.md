@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# የቴሌሜትሪ መስፈርቶች
 
-## Prometheus Targets
+## Prometheus ኢላማዎች
 
-Scrape the relay and orchestrator with the following labels:
+ቅብብሎሹን እና ኦርኬስትራውን በሚከተለው መለያዎች ይከርክሙ።
 
 ```yaml
 - job_name: "soranet-relay"
@@ -30,36 +31,36 @@ Scrape the relay and orchestrator with the following labels:
         role: "orchestrator"
 ```
 
-## Required Dashboards
+## የሚፈለጉ ዳሽቦርዶች
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+1. `dashboards/grafana/soranet_testnet_overview.json` *(የሚታተም)* - JSON ን ይጫኑ፣ ተለዋዋጮችን `region` እና I18NI0000006X አስመጣ።
+2. `dashboards/grafana/soranet_privacy_metrics.json` *(ነባር SNNet-8 ንብረት)* - የግላዊነት ባልዲ ፓነሎች ያለ ክፍተት መስራታቸውን ያረጋግጡ።
 
-## Alert Rules
+## የማንቂያ ህጎች
 
-Thresholds must match the playbook expectation:
+ገደቦች ከመጫወቻ መጽሐፍ ከሚጠበቀው ጋር መዛመድ አለባቸው፡-
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- `soranet_privacy_circuit_events_total{kind="downgrade"}` ጭማሪ> 0 በ 10 ደቂቃ ውስጥ `critical` ቀስቅሴዎች.
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`> 5 በ 30 ደቂቃ `warning` ቀስቅሴዎች.
+- `up{job="soranet-relay"}` == 0 ለ 2 ደቂቃዎች ቀስቅሴዎች `critical`.
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+ደንቦችዎን በ `testnet-t0` መቀበያ ወደ Alertmanager ይጫኑ; በ `amtool check-config` ያረጋግጡ።
 
-## Metrics Evaluation
+## የመለኪያዎች ግምገማ
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+የ14-ቀን ቅጽበታዊ ገጽ እይታን ያዋህዱ እና ለ SNNet-10 አረጋጋጭ ይስጡት፡-
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- ከቀጥታ ውሂብ ጋር ሲወዳደር የናሙና ፋይሉን ወደ ውጭ በተላከው ቅጽበታዊ ገጽ እይታ ይተኩ።
+- የ `status = fail` ውጤት ማስተዋወቅን ያግዳል; በድጋሚ ከመሞከርዎ በፊት የደመቁትን ቼኮች ይፍቱ።
 
-## Reporting
+## ሪፖርት ማድረግ
 
-Every week upload:
+በየሳምንቱ ጭነት፡-
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- የመጠይቅ ቅጽበተ-ፎቶዎች (`.png` ወይም `.pdf`) PQ ሬሾን፣ የወረዳ ስኬት መጠንን እና የPoW መፍታት ሂስቶግራምን ያሳያሉ።
+- Prometheus የመቅጃ ደንብ ውፅዓት ለ I18NI0000019X።
+- የተኩስ እና የመቀነስ እርምጃዎችን (የጊዜ ማህተሞችን ጨምሮ) ማንቂያዎችን የሚገልጽ አጭር ትረካ።

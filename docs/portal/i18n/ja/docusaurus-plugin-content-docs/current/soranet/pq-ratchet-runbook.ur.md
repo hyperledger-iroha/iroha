@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-ratchet-runbook.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
-title: SoraNet PQ Ratchet Fire Drill
-sidebar_label: PQ Ratchet Runbook
-description: مرحلہ وار PQ anonymity policy کو promote یا demote کرنے کے لئے on-call rehearsal steps اور deterministic telemetry validation.
+ID: pq-ratchet-runbook
+title: SoraNet PQ ラチェットファイアドリル
+サイドバー_ラベル: PQ ラチェット ランブック
+説明: PQ の匿名性ポリシー、昇進、降格、オンコール リハーサル ステップ、決定論的テレメトリ検証。
 ---
 
-:::note Canonical Source
-یہ صفحہ `docs/source/soranet/pq_ratchet_runbook.md` کی عکاسی کرتا ہے۔ جب تک پرانا documentation set retire نہ ہو، دونوں کاپیاں sync رکھیں۔
+:::note 正規ソース
+یہ صفحہ `docs/source/soranet/pq_ratchet_runbook.md` کی عکاسی کرتا ہے۔ドキュメント セットの引退 دونوں کاپیاں 同期 رکھیں۔
 :::
 
-## مقصد
+## 大事
 
-یہ runbook SoraNet کی staged post-quantum (PQ) anonymity policy کے لئے fire-drill sequence گائیڈ کرتا ہے۔ Operators promotion (Stage A -> Stage B -> Stage C) اور PQ supply کم ہونے پر controlled demotion واپس Stage B/A دونوں rehearse کرتے ہیں۔ Drill telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) validate کرتا ہے اور incident rehearsal log کے لئے artefacts جمع کرتا ہے۔
+ランブック SoraNet ステージングされたポスト量子 (PQ) 匿名性ポリシー ファイアドリル シーケンス ファイアドリル シーケンスオペレーターの昇進 (ステージ A -> ステージ B -> ステージ C) PQ の供給 コントロールされた降格 ステージ B/A のリハーサルドリル テレメトリ フック (`sorafs_orchestrator_policy_events_total`、`sorafs_orchestrator_brownouts_total`、`sorafs_orchestrator_pq_ratio_*`) は、インシデント リハーサル ログを検証し、アーティファクトを検証します。
 
-## Prerequisites
+## 前提条件
 
-- Capability-weighting کے ساتھ تازہ ترین `sorafs_orchestrator` binary (commit drill reference کے برابر یا بعد میں جو `docs/source/soranet/reports/pq_ratchet_validation.md` میں دکھایا گیا ہے)۔
-- Prometheus/Grafana stack تک رسائی جو `dashboards/grafana/soranet_pq_ratchet.json` serve کرتا ہے۔
-- Nominal guard directory snapshot۔ drill سے پہلے copy fetch اور verify کریں:
+- 能力の重み付け `sorafs_orchestrator` バイナリ (コミット ドリル リファレンス) ٯیا ہے)۔
+- Prometheus/Grafana スタックのスタック `dashboards/grafana/soranet_pq_ratchet.json` のサービス
+- 名目上のガード ディレクトリのスナップショットドリル、コピー、フェッチ、検証、次のとおりです。
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -34,9 +36,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-اگر source directory صرف JSON publish کرتا ہے تو rotation helpers چلانے سے پہلے `soranet-directory build` سے اسے Norito binary میں re-encode کریں۔
+ソース ディレクトリ JSON パブリッシュ 回転ヘルパー `soranet-directory build` バイナリ Norito バイナリ 再エンコード ローテーション ヘルパー
 
-- CLI سے metadata capture کریں اور issuer rotation artefacts pre-stage کریں:
+- CLI によるメタデータのキャプチャと発行者のローテーション アーティファクトの前段階の処理:
 
 ```bash
 soranet-directory inspect \
@@ -47,67 +49,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- Networking اور observability on-call teams کی منظور شدہ change window۔
+- ネットワークの監視、オンコール チームの変更ウィンドウの管理
 
-## Promotion steps
+## プロモーションの手順
 
-1. **Stage audit**
+1. **段階監査**
 
-   ابتدا کا stage ریکارڈ کریں:
+   ステージステージ:
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Promotion سے پہلے `anon-guard-pq` expect کریں۔
+   プロモーション سے پہلے `anon-guard-pq` 期待してください
 
-2. **Stage B (Majority PQ) پر promote کریں**
+2. **ステージ B (多数決 PQ) 昇格**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - Manifests refresh ہونے کے لئے >=5 منٹ انتظار کریں۔
-   - Grafana میں (dashboard `SoraNet PQ Ratchet Drill`) "Policy Events" panel پر `stage=anon-majority-pq` کے لئے `outcome=met` کی تصدیق کریں۔
-   - Screenshot یا panel JSON capture کریں اور incident log میں attach کریں۔
+   - マニフェストの更新 ہونے کے لئے >=5 منٹ انتظار کریں۔
+   - Grafana میں (ダッシュボード `SoraNet PQ Ratchet Drill`) [ポリシー イベント] パネル `stage=anon-majority-pq` کے لئے `outcome=met` کی تصدیق کریں۔
+   - スクリーンショット パネル JSON キャプチャー インシデント ログ 添付ファイル
 
-3. **Stage C (Strict PQ) پر promote کریں**
+3. **ステージ C (厳密な PQ) でプロモート**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - `sorafs_orchestrator_pq_ratio_*` histograms کو 1.0 کی طرف جاتا ہوا verify کریں۔
-   - Brownout counter کا flat رہنا confirm کریں؛ ورنہ demotion steps فالو کریں۔
+   - `sorafs_orchestrator_pq_ratio_*` ヒストグラム 1.0 確認 確認 確認
+   - 停電カウンター フラット チェック 確認降格手順 فالو کریں۔
 
-## Demotion / brownout drill
+## 降格/停電訓練
 
-1. **Synthetic PQ shortage پیدا کریں**
+1. **合成 PQ 不足です**
 
-   Playground environment میں guard directory کو صرف classical entries تک trim کر کے PQ relays disable کریں، پھر orchestrator cache reload کریں:
+   プレイグラウンド環境 ガード ディレクトリ クラシック エントリ トリミング トリム PQ リレーの無効化 オーケストレーター キャッシュのリロード:
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Brownout telemetry observe کریں**
+2. **停電テレメトリで観測**
 
-   - Dashboard: "Brownout Rate" panel 0 سے اوپر spike کرے۔
+   - ダッシュボード: 「停電率」パネル 0 が急上昇
    - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` کو `anonymity_outcome="brownout"` اور `anonymity_reason="missing_majority_pq"` رپورٹ کرنا چاہئے۔
+   - `sorafs_fetch` ٩و `anonymity_outcome="brownout"` اور `anonymity_reason="missing_majority_pq"` رپورٹ کرنا چاہئے۔
 
-3. **Stage B / Stage A پر demote کریں**
+3. **ステージ B / ステージ A の降格**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   اگر PQ supply اب بھی ناکافی ہو تو `anon-guard-pq` پر demote کریں۔ Drill اس وقت مکمل ہوتا ہے جب brownout counters settle ہوں اور promotions دوبارہ لاگو ہو سکیں۔
+   PQ 供給 اب بھی ناکافی ہو تو `anon-guard-pq` پر 降格 کریں۔ドリルを実行する 電圧低下カウンターを解決する プロモーションを実行する プロモーションを実行する
 
-4. **Guard directory بحال کریں**
+4. **ディレクトリを監視します**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -115,14 +117,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry & artefacts
+## テレメトリとアーティファクト
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Prometheus alerts:** یقینی بنائیں کہ `sorafs_orchestrator_policy_events_total` brownout alert configured SLO کے نیچے رہے (&lt;5% کسی بھی 10 minute window میں)۔
-- **Incident log:** telemetry snippets اور operator notes کو `docs/examples/soranet_pq_ratchet_fire_drill.log` میں append کریں۔
-- **Signed capture:** `cargo xtask soranet-rollout-capture` استعمال کریں تاکہ drill log اور scoreboard کو `artifacts/soranet_pq_rollout/<timestamp>/` میں copy کیا جا سکے، BLAKE3 digests compute ہوں، اور signed `rollout_capture.json` بنے۔
+- **ダッシュボード:** `dashboards/grafana/soranet_pq_ratchet.json`
+- **Prometheus アラート:** یقینی بنائیں کہ `sorafs_orchestrator_policy_events_total` 電圧低下アラートが設定された SLO کے نیچے رہے (<5% کسی بھی 10 分ウィンドウ) और देखें
+- **インシデント ログ:** テレメトリ スニペット、オペレーターのメモ、`docs/examples/soranet_pq_ratchet_fire_drill.log` 追加、追加
+- **署名付きキャプチャ:** `cargo xtask soranet-rollout-capture` スコアボード ドリル ログ `artifacts/soranet_pq_rollout/<timestamp>/` コピー スコアボード BLAKE3 ダイジェストの計算署名済み `rollout_capture.json` 認証
 
-Example:
+例:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -134,12 +136,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Generated metadata اور signature کو governance packet کے ساتھ attach کریں۔
+生成されたメタデータ、署名、ガバナンス パケット、添付ファイル
 
-## Rollback
+## ロールバック
 
-اگر drill حقیقی PQ shortage ظاہر کرے تو Stage A پر رہیں، Networking TL کو مطلع کریں، اور collected metrics کے ساتھ guard directory diffs کو incident tracker میں attach کریں۔ پہلے capture کیا گیا guard directory export استعمال کر کے normal service restore کریں۔
+訓練、PQ 不足、ステージ A のネットワーク、TL の収集、メトリクスの収集、ガード ディレクトリの差分、インシデント トラッカーの添付ありがとうキャプチャ キャプチャ ガード ディレクトリのエクスポート 正常なサービスの復元
 
-:::tip Regression Coverage
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` اس drill کو support کرنے والی synthetic validation فراہم کرتا ہے۔
+:::tip 回帰カバレッジ
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` ドリルとサポートの統合検証
 :::

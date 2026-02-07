@@ -8,53 +8,55 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet Privacy Metrics Pipeline (SNNet-8)
 sidebar_label: Privacy Metrics Pipeline
 description: Privacy-preserving telemetry collection for SoraNet relays and orchestrators.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
 # SoraNet Privacy Metrics Pipeline
 
-SNNet-8 introduces a privacy-aware telemetry surface for the relay runtime. The
-relay now aggregates handshake and circuit events into minute-sized buckets and
-exports only coarse Prometheus counters, keeping individual circuits
-unlinkable while giving operators actionable visibility.
+SNNet-8 წარმოგიდგენთ კონფიდენციალურობის მცოდნე ტელემეტრიულ ზედაპირს სარელეო მუშაობისთვის. The
+რელე ახლა აგროვებს ხელის ჩამორთმევას და წრიულ მოვლენებს წუთების ზომის თაიგულებში და
+ექსპორტს ახორციელებს მხოლოდ უხეში Prometheus მრიცხველებით, ინდივიდუალური სქემების შენარჩუნებით
+unlinkable, ხოლო ოპერატორებს აძლევს ქმედით ხილვადობას.
 
-## Aggregator Overview
+## აგრეგატორის მიმოხილვა
 
-- The runtime implementation lives in `tools/soranet-relay/src/privacy.rs` as
+- Runtime განხორციელება მოქმედებს `tools/soranet-relay/src/privacy.rs`-ში როგორც
   `PrivacyAggregator`.
-- Buckets are keyed by wall-clock minute (`bucket_secs`, default 60 seconds) and
-  stored in a bounded ring (`max_completed_buckets`, default 120). Collector
-  shares keep their own bounded backlog (`max_share_lag_buckets`, default 12)
-  so stale Prio windows are flushed as suppressed buckets rather than leaking
-  memory or masking stuck collectors.
-- `RelayConfig::privacy` maps straight into `PrivacyConfig`, exposing tuning
-  knobs (`bucket_secs`, `min_handshakes`, `flush_delay_buckets`,
+- თაიგულები იკვრება კედლის საათის წუთით (`bucket_secs`, ნაგულისხმევი 60 წამი) და
+  ინახება შემოსაზღვრულ რგოლში (`max_completed_buckets`, ნაგულისხმევი 120). კოლექციონერი
+  აქციები ინარჩუნებენ საკუთარ შეზღუდულ ნარჩენებს (`max_share_lag_buckets`, ნაგულისხმევი 12)
+  ასე რომ, შემორჩენილი Prio-ს ფანჯრები გარეცხილია როგორც ჩახშობილი თაიგულები, ვიდრე გაჟონვა
+  მეხსიერების ან ნიღბის ჩარჩენილი კოლექციონერები.
+- `RelayConfig::privacy` პირდაპირ რუკებს ასახავს `PrivacyConfig`-ში, ავლენს ტუნინგს
+  სახელურები (`bucket_secs`, `min_handshakes`, `flush_delay_buckets`,
   `force_flush_buckets`, `max_completed_buckets`, `max_share_lag_buckets`,
-  `expected_shares`). The production runtime keeps the defaults while SNNet-8a
-  introduces secure aggregation thresholds.
-- Runtime modules record events through typed helpers:
+  `expected_shares`). წარმოების გაშვების დრო ინარჩუნებს ნაგულისხმევს, ხოლო SNNet-8a
+  შემოაქვს უსაფრთხო აგრეგაციის ზღვრები.
+- Runtime მოდულები ჩაწერენ მოვლენებს აკრეფილი დამხმარეების საშუალებით:
   `record_circuit_accepted`, `record_circuit_rejected`, `record_throttle`,
   `record_throttle_cooldown`, `record_capacity_reject`, `record_active_sample`,
-  `record_verified_bytes`, and `record_gar_category`.
+  `record_verified_bytes` და `record_gar_category`.
 
-## Relay Admin Endpoint
+## სარელეო ადმინისტრატორის საბოლოო წერტილი
 
-Operators can poll the relay's admin listener for raw observations via
-`GET /privacy/events`. The endpoint returns newline-delimited JSON
-(`application/x-ndjson`) containing `SoranetPrivacyEventV1` payloads mirrored
-from the internal `PrivacyEventBuffer`. The buffer retains the newest events up
-to `privacy.event_buffer_capacity` entries (default 4 096) and is drained on
-read, so scrapers should poll frequently enough to avoid gaps. Events cover the
-same handshake, throttle, verified bandwidth, active circuit, and GAR signals
-that power the Prometheus counters, allowing downstream collectors to archive
-privacy-safe breadcrumbs or feed secure aggregation workflows.
+ოპერატორებს შეუძლიათ გამოიკითხონ რელეს ადმინისტრატორის მსმენელი ნედლეული დაკვირვებისთვის
+`GET /privacy/events`. ბოლო წერტილი აბრუნებს ახალი ხაზებით გამოყოფილ JSON-ს
+(`application/x-ndjson`), რომელიც შეიცავს `SoranetPrivacyEventV1` სარკისებურ დატვირთვას
+შიდა `PrivacyEventBuffer`-დან. ბუფერი ინახავს უახლეს მოვლენებს
+`privacy.event_buffer_capacity` ჩანაწერებში (ნაგულისხმევი 4096) და იშლება
+წაიკითხეთ, ამიტომ საფხეკები საკმარისად ხშირად უნდა გამოკითხონ, რათა თავიდან აიცილონ ხარვეზები. მოვლენები მოიცავს
+იგივე ხელის ჩამორთმევა, დროსელი, დამოწმებული გამტარობა, აქტიური წრე და GAR სიგნალები
+რომელიც კვებავს Prometheus მრიცხველებს, რაც საშუალებას აძლევს ქვედა დინების კოლექციონერებს დაარქივონ
+კონფიდენციალურობისთვის უსაფრთხო პურის ნამსხვრევები ან შესანახი უსაფრთხო აგრეგაციის სამუშაო ნაკადები.
 
-## Relay Configuration
+## სარელეო კონფიგურაცია
 
-Operators adjust privacy telemetry cadences in the relay configuration file via
-the `privacy` section:
+ოპერატორები არეგულირებენ კონფიდენციალურობის ტელემეტრიის კადენციებს სარელეო კონფიგურაციის ფაილში
+`privacy` განყოფილება:
 
 ```json
 {
@@ -72,133 +74,131 @@ the `privacy` section:
 }
 ```
 
-Field defaults match the SNNet-8 spec and are validated at load time:
+ველის ნაგულისხმევი პარამეტრები ემთხვევა SNNet-8 სპეციფიკაციას და დამოწმებულია დატვირთვის დროს:
 
-| Field | Description | Default |
+| ველი | აღწერა | ნაგულისხმევი |
 |-------|-------------|---------|
-| `bucket_secs` | Width of each aggregation window (seconds). | `60` |
-| `min_handshakes` | Minimum contributor count before a bucket can emit counters. | `12` |
-| `flush_delay_buckets` | Completed buckets to wait before attempting a flush. | `1` |
-| `force_flush_buckets` | Maximum age before we emit a suppressed bucket. | `6` |
-| `max_completed_buckets` | Retained bucket backlog (prevents unbounded memory). | `120` |
-| `max_share_lag_buckets` | Retention window for collector shares before suppression. | `12` |
-| `expected_shares` | Prio collector shares required before combining. | `2` |
-| `event_buffer_capacity` | NDJSON event backlog for the admin stream. | `4096` |
+| `bucket_secs` | თითოეული აგრეგაციის ფანჯრის სიგანე (წამი). | `60` |
+| `min_handshakes` | კონტრიბუტორების მინიმალური რაოდენობა, სანამ bucket შეძლებს მრიცხველების გამოშვებას. | `12` |
+| `flush_delay_buckets` | დასრულებული თაიგულები უნდა დაველოდოთ გარეცხვის მცდელობას. | `1` |
+| `force_flush_buckets` | მაქსიმალური ასაკი, სანამ ჩვენ გამოვყოფთ ჩახშობილ ვედროს. | `6` |
+| `max_completed_buckets` | შენახული თაიგულის ნარჩენი (აფერხებს შეუზღუდავ მეხსიერებას). | `120` |
+| `max_share_lag_buckets` | კოლექტორის აქციების შენახვის ფანჯარა ჩახშობამდე. | `12` |
+| `expected_shares` | Prio კოლექციონერის აქციები საჭიროა გაერთიანებამდე. | `2` |
+| `event_buffer_capacity` | NDJSON ღონისძიების ჩანაწერი ადმინისტრატორის ნაკადისთვის. | `4096` |
 
-Setting `force_flush_buckets` lower than `flush_delay_buckets`, zeroing the
-thresholds, or disabling the retention guard now fails validation to avoid
-deployments that would leak per-relay telemetry.
+დააყენეთ `force_flush_buckets` უფრო დაბალი ვიდრე `flush_delay_buckets`, ნულოვანი
+ზღურბლები, ან შეკავების მცველის გამორთვა ახლა ვერ ხერხდება ვალიდაციის თავიდან აცილება
+განლაგება, რომელიც გაჟონავს თითო სარელეო ტელემეტრია.
 
-The `event_buffer_capacity` limit also bounds `/admin/privacy/events`, ensuring
-scrapers cannot fall behind indefinitely.
+`event_buffer_capacity` ლიმიტი ასევე ზღუდავს `/admin/privacy/events`-ს, რაც უზრუნველყოფს
+საფხეკები განუსაზღვრელი ვადით ვერ ჩამორჩებიან.
 
-## Prio collector shares
+## Prio კოლექციონერი აქციები
 
-SNNet-8a deploys dual collectors that emit secret-shared Prio buckets. The
-orchestrator now parses the `/privacy/events` NDJSON stream for both
-`SoranetPrivacyEventV1` entries and `SoranetPrivacyPrioShareV1` shares,
-forwarding them into `SoranetSecureAggregator::ingest_prio_share`. Buckets emit
-once `PrivacyBucketConfig::expected_shares` contributions arrive, mirroring the
-relay behaviour. Shares are validated for bucket alignment and histogram shape
-before being combined into `SoranetPrivacyBucketMetricsV1`. If the combined
-handshake count falls below `min_contributors`, the bucket is exported as
-`suppressed`, mirroring the behaviour of the in-relay aggregator. Suppressed
-windows now emit a `suppression_reason` label so operators can distinguish
-between `insufficient_contributors`, `collector_suppressed`,
-`collector_window_elapsed`, and `forced_flush_window_elapsed` scenarios when
-diagnosing telemetry gaps. The `collector_window_elapsed` reason also fires
-when Prio shares linger past `max_share_lag_buckets`, making stuck collectors
-visible without leaving stale accumulators in memory.
+SNNet-8a ავრცელებს ორმაგ კოლექციონერებს, რომლებიც ასხივებენ საიდუმლოებით გაზიარებულ Prio თაიგულებს. The
+ორკესტრი ახლა აანალიზებს `/privacy/events` NDJSON ნაკადს ორივესთვის
+`SoranetPrivacyEventV1` ჩანაწერები და `SoranetPrivacyPrioShareV1` გაზიარებები,
+მათი გადაგზავნა `SoranetSecureAggregator::ingest_prio_share`-ში. თაიგულები ასხივებენ
+ერთხელ `PrivacyBucketConfig::expected_shares` შენატანები ჩამოვა, ასახული
+სარელეო ქცევა. აქციები დამოწმებულია თაიგულების გასწორებისა და ჰისტოგრამის ფორმისთვის
+`SoranetPrivacyBucketMetricsV1`-ში გაერთიანებამდე. თუ კომბინირებული
+ხელის ჩამორთმევის რაოდენობა მცირდება `min_contributors`-ზე ქვემოთ, ვედრო ექსპორტირებულია როგორც
+`suppressed`, სარელეო აგრეგატორის ქცევის ასახვა. დათრგუნული
+Windows ახლა ასხივებს `suppression_reason` ეტიკეტს, რათა ოპერატორებმა განასხვავონ
+`insufficient_contributors`, `collector_suppressed` შორის,
+`collector_window_elapsed` და `forced_flush_window_elapsed` სცენარი, როდესაც
+ტელემეტრიული ხარვეზების დიაგნოსტიკა. `collector_window_elapsed` მიზეზიც ირთვება
+როდესაც Prio-ს აქციები აგრძელებს `max_share_lag_buckets`-ს და ქმნის ჩარჩენილ კოლექციონერებს
+ხილული აკუმულატორების მეხსიერებაში დატოვების გარეშე.
 
-## Torii Ingestion Endpoints
+## Torii გადაყლაპვის საბოლოო წერტილები
 
-Torii now exposes two telemetry-gated HTTP endpoints so relays and collectors
-can forward observations without embedding a bespoke transport:
+Torii ახლა ასახავს ორ ტელემეტრიით დახურულ HTTP ბოლო წერტილს, ასე რომ, რელეები და კოლექტორები
+შეუძლია დაკვირვების გაგზავნა შეკვეთილი ტრანსპორტის ჩაშენების გარეშე:
 
-- `POST /v1/soranet/privacy/event` accepts a
-  `RecordSoranetPrivacyEventDto` payload. The body wraps a
-  `SoranetPrivacyEventV1` plus an optional `source` label. Torii validates the
-  request against the active telemetry profile, records the event, and responds
-  with HTTP `202 Accepted` alongside a Norito JSON envelope containing the
-  computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) and the
-  relay mode.
-- `POST /v1/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
-  payload. The body carries a `SoranetPrivacyPrioShareV1` and an optional
-  `forwarded_by` hint so operators can audit collector flows. Successful
-  submissions return HTTP `202 Accepted` with a Norito JSON envelope summarising
-  the collector, bucket window, and suppression hint; validation failures map to
-  a telemetry `Conversion` response to preserve deterministic error handling
-  across collectors. The orchestrator’s event loop now emits these shares as it
-  polls relays, keeping Torii’s Prio accumulator in sync with on-relay buckets.
+- `POST /v1/soranet/privacy/event` იღებს ა
+  `RecordSoranetPrivacyEventDto` დატვირთვა. სხეული ახვევს ა
+  `SoranetPrivacyEventV1` პლუს სურვილისამებრ `source` ლეიბლი. Torii ადასტურებს
+  მოთხოვნა აქტიური ტელემეტრიის პროფილის წინააღმდეგ, ჩაიწერს მოვლენას და პასუხობს
+  HTTP `202 Accepted`-თან ერთად Norito JSON კონვერტით, რომელიც შეიცავს
+  გამოთვლილი თაიგულის ფანჯარა (`bucket_start_unix`, `bucket_duration_secs`) და
+  სარელეო რეჟიმი.
+- `POST /v1/soranet/privacy/share` იღებს `RecordSoranetPrivacyShareDto`-ს
+  ტვირთამწეობა. კორპუსს აქვს `SoranetPrivacyPrioShareV1` და სურვილისამებრ
+  `forwarded_by` მინიშნება, რომ ოპერატორებმა შეძლონ კოლექტორების ნაკადების შემოწმება. წარმატებული
+  წარდგენები აბრუნებს HTTP `202 Accepted` Norito JSON კონვერტით, რომელიც აჯამებს
+  კოლექციონერი, თაიგულის ფანჯარა და ჩახშობის მინიშნება; ვალიდაციის წარუმატებლობები რუკაზე
+  ტელემეტრიული `Conversion` პასუხი დეტერმინისტული შეცდომის დამუშავების შესანარჩუნებლად
+  კოლექციონერებს შორის. ორკესტრატორის ღონისძიების ციკლი ახლა ასხივებს ამ აქციებს
+  გამოკითხვის რელეები, ინარჩუნებს Torii-ის Prio აკუმულატორის სინქრონიზაციას სარელეო თაიგულებთან.
 
-Both endpoints honour the telemetry profile: they emit `503 Service
-Unavailable` when metrics are disabled. Clients may send either Norito binary
-(`application/x.norito`) or Norito JSON (`application/x.norito+json`) bodies;
-the server automatically negotiates the format via the standard Torii
-extractors.
+ორივე ბოლო წერტილი პატივს სცემს ტელემეტრიის პროფილს: ისინი ასხივებენ `503 სერვისს
+მიუწვდომელია` როდესაც მეტრიკა გამორთულია. კლიენტებს შეუძლიათ გაგზავნონ ან Norito ორობითი
+(`application/x.norito`) ან Norito JSON (`application/x.norito+json`) სხეულები;
+სერვერი ავტომატურად აწარმოებს მოლაპარაკებას ფორმატზე სტანდარტული Torii-ის საშუალებით
+ექსტრაქტორები.
 
-## Prometheus Metrics
+## Prometheus მეტრიკა
 
-Each exported bucket carries `mode` (`entry`, `middle`, `exit`) and
-`bucket_start` labels. The following metric families are emitted:
+თითოეული ექსპორტირებული ვედრო ატარებს `mode` (`entry`, `middle`, `exit`) და
+`bucket_start` ეტიკეტები. გამოიყოფა შემდეგი მეტრიკული ოჯახები:
 
-| Metric | Description |
-|--------|-------------|
-| `soranet_privacy_circuit_events_total{kind}` | Handshake taxonomy with `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`. |
-| `soranet_privacy_throttles_total{scope}` | Throttle counters with `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`. |
-| `soranet_privacy_throttle_cooldown_millis_{sum,count}` | Aggregated cooldown durations contributed by throttled handshakes. |
-| `soranet_privacy_verified_bytes_total` | Verified bandwidth from blinded measurement proofs. |
-| `soranet_privacy_active_circuits_{avg,max}` | Mean and peak active circuits per bucket. |
-| `soranet_privacy_rtt_millis{percentile}` | RTT percentile estimates (`p50`, `p90`, `p99`). |
-| `soranet_privacy_gar_reports_total{category_hash}` | Hashed Governance Action Report counters keyed by category digest. |
-| `soranet_privacy_bucket_suppressed` | Buckets withheld because the contributor threshold was not met. |
-| `soranet_privacy_pending_collectors{mode}` | Collector share accumulators pending combination, grouped by relay mode. |
-| `soranet_privacy_suppression_total{reason}` | Suppressed bucket counters with `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}` so dashboards can attribute privacy gaps. |
-| `soranet_privacy_snapshot_suppression_ratio` | Last drain’s suppressed/drained ratio (0–1), useful for alert budgets. |
-| `soranet_privacy_last_poll_unixtime` | UNIX timestamp of the most recent successful poll (drives the collector-idle alert). |
-| `soranet_privacy_collector_enabled` | Gauge that flips to `0` when the privacy collector is disabled or fails to start (drives the collector-disabled alert). |
-| `soranet_privacy_poll_errors_total{provider}` | Polling failures grouped by relay alias (increments on decode errors, HTTP failures, or unexpected status codes). |
+| მეტრული | აღწერა |
+|--------|------------|
+| `soranet_privacy_circuit_events_total{kind}` | ხელის ჩამორთმევის ტაქსონომია `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`-ით. |
+| `soranet_privacy_throttles_total{scope}` | დროსელის მრიცხველები `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`-ით. |
+| `soranet_privacy_throttle_cooldown_millis_{sum,count}` | გაერთიანებული გაგრილების ხანგძლივობა, რომელიც ხელს უწყობს შენელებული ხელის ჩამორთმევას. |
+| `soranet_privacy_verified_bytes_total` | დამოწმებული გამტარუნარიანობა დაბრმავებული გაზომვის მტკიცებულებებიდან. |
+| `soranet_privacy_active_circuits_{avg,max}` | საშუალო და პიკური აქტიური სქემები თითო თაიგულზე. |
+| `soranet_privacy_rtt_millis{percentile}` | RTT პროცენტული შეფასებები (`p50`, `p90`, `p99`). |
+| `soranet_privacy_gar_reports_total{category_hash}` | ჰეშირებული მმართველობის სამოქმედო ანგარიშის მრიცხველები ჩართულია კატეგორიის შეჯამების მიხედვით. |
+| `soranet_privacy_bucket_suppressed` | თაიგულები შეჩერებულია, რადგან კონტრიბუტორის ბარიერი არ დაკმაყოფილდა. |
+| `soranet_privacy_pending_collectors{mode}` | კოლექტორის წილი აკუმულატორების მოლოდინში კომბინაცია, დაჯგუფებული სარელეო რეჟიმის მიხედვით. |
+| `soranet_privacy_suppression_total{reason}` | ჩახშობილია თაიგულების მრიცხველები `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}`-ით, რათა დაფებმა შეძლონ კონფიდენციალურობის ხარვეზების მინიჭება. |
+| `soranet_privacy_snapshot_suppression_ratio` | ბოლო გადინების ჩახშობა/დაწურული თანაფარდობა (0–1), სასარგებლოა გაფრთხილებული ბიუჯეტისთვის. |
+| `soranet_privacy_last_poll_unixtime` | უახლესი წარმატებული გამოკითხვის UNIX დროის ანაბეჭდი (ამოძრავებს კოლექციონერის უმოქმედობის გაფრთხილებას). |
+| `soranet_privacy_collector_enabled` | ლიანდაგი, რომელიც გადატრიალდება `0`-ზე, როდესაც კონფიდენციალურობის შემგროვებელი გამორთულია ან ვერ ჩაირთვება (ამოძრავებს კოლექციონერის გამორთული გაფრთხილებას). |
+| `soranet_privacy_poll_errors_total{provider}` | კენჭისყრის წარუმატებლობები დაჯგუფებული სარელეო ფსევდონიმების მიხედვით (გადაშიფვრის შეცდომებზე ზრდა, HTTP წარუმატებლობა ან სტატუსის მოულოდნელი კოდები). |
 
-Buckets without observations stay silent, keeping dashboards tidy without
-fabricating zero-filled windows.
+თაიგულები დაკვირვების გარეშე რჩება ჩუმად, დაფის დაფების გარეშე
+ნულოვანი ფანჯრების დამზადება.
 
-## Operational Guidance
+## ოპერატიული სახელმძღვანელო
 
-1. **Dashboards** – chart the metrics above grouped by `mode` and `window_start`.
-   Highlight missing windows to surface collector or relay issues. Use
-   `soranet_privacy_suppression_total{reason}` to distinguish contributor
-   shortfalls from collector-driven suppression when triaging gaps. The Grafana
-   asset now ships a dedicated **“Suppression Reasons (5m)”** panel fed by those
-   counters plus a **“Suppressed Bucket %”** stat that computes
-   `sum(soranet_privacy_bucket_suppressed) / count(...)` per selection so
-   operators can spot budget breaches at a glance. The **Collector Share
-   Backlog** series (`soranet_privacy_pending_collectors`) and the **Snapshot
-   Suppression Ratio** stat highlight stuck collectors and budget drift during
-   automated runs.
-2. **Alerting** – drive alarms from privacy-safe counters: PoW reject spikes,
-   cooldown frequency, RTT drift, and capacity rejects. Because counters are
-   monotonic within each bucket, straightforward rate-based rules work well.
-3. **Incident response** – rely on aggregated data first. When deeper debugging
-   is necessary, request relays to replay bucket snapshots or inspect blinded
-   measurement proofs instead of harvesting raw traffic logs.
-4. **Retention** – scrape often enough to avoid exceeding
-   `max_completed_buckets`. Exporters should treat the Prometheus output as the
-   canonical source and drop local buckets once forwarded.
+1. **Dashboards** – ზემოთ მოცემული მეტრიკის დიაგრამა დაჯგუფებული `mode` და `window_start` მიხედვით.
+   მონიშნეთ დაკარგული ფანჯრები ზედაპირული კოლექტორის ან სარელეო პრობლემებისთვის. გამოყენება
+   `soranet_privacy_suppression_total{reason}` კონტრიბუტორის გასარჩევად
+   ხარვეზები კოლექციონერზე ორიენტირებული ჩახშობის შედეგად ხარვეზების ტრიაჟის დროს. Grafana
+   აქტივი ახლა აგზავნის სპეციალურ **"ჩახშობის მიზეზები (5 მ)"** პანელი, რომელიც იკვებება ამ
+   მრიცხველები პლუს **"Suppressed Bucket %"** სტატისტიკა, რომელიც გამოითვლება
+   `sum(soranet_privacy_bucket_suppressed) / count(...)` თითო შერჩევით ასე
+   ოპერატორებს შეუძლიათ შეამჩნიონ ბიუჯეტის დარღვევები ერთი შეხედვით. ** კოლექციონერის წილი
+   Backlog** სერია (`soranet_privacy_pending_collectors`) და **Snapshot
+   ჩახშობის კოეფიციენტი** სტატისტიკა ხაზს უსვამს ჩარჩენილ კოლექტორებს და ბიუჯეტის დრიფტს დროს
+   ავტომატური გაშვებები.
+2. **გაფრთხილება** – მართეთ სიგნალიზაცია კონფიდენციალურობისთვის დაცული მრიცხველებიდან: PoW უარყოფის მწვერვალები,
+   გაგრილების სიხშირე, RTT დრიფტი და ტევადობის უარყოფა. რადგან მრიცხველები არიან
+   მონოტონური თითოეულ თაიგულში, განაკვეთზე დაფუძნებული პირდაპირი წესები კარგად მუშაობს.
+3. **ინციდენტის რეაგირება** – პირველ რიგში დაეყრდნოთ გაერთიანებულ მონაცემებს. უფრო ღრმა გამართვისას
+   აუცილებელია, მოითხოვეთ რელეები თაიგულის კადრების გასამეორებლად ან დაბრმავებული შესამოწმებლად
+   საზომი მტკიცებულებები, ნაცვლად ნედლი სატრანსპორტო ჟურნალის მოსავლის.
+4. **შეკავება** – გადაფხეკით ხშირად, რათა თავიდან აიცილოთ გადაჭარბება
+   `max_completed_buckets`. ექსპორტიორებმა უნდა განიხილონ Prometheus გამომავალი, როგორც
+   კანონიკური წყარო და ჩამოაგდეთ ადგილობრივი თაიგულები გადაგზავნის შემდეგ.
 
-## Suppression Analytics & Automated Runs
+## ჩახშობის ანალიტიკა და ავტომატური გაშვებებიSNNet-8-ის მიღება ემყარება იმის დემონსტრირებას, რომ ავტომატური კოლექტორები დარჩებიან
+ჯანსაღი და ეს ჩახშობა რჩება პოლიტიკის ფარგლებში (≤10% თაიგულების თითო
+რელე ნებისმიერი 30 წუთიანი ფანჯარაში). ინსტრუმენტები საჭირო იყო ამ კარიბჭის დასაკმაყოფილებლად ახლა
+გემები ხესთან ერთად; ოპერატორებმა ის უნდა ჩაერთონ თავიანთ ყოველკვირეულ რიტუალებში. ახალი
+Grafana ჩახშობის პანელები ასახავს ქვემოთ მოცემულ PromQL სნიპეტებს, რაც იძლევა გამოძახების საშუალებას
+გუნდების პირდაპირი ხილვადობა მანამ, სანამ მათ არ დასჭირდებათ ხელით შეკითხვებზე დაბრუნება.
 
-SNNet-8 acceptance hinges on demonstrating that automated collectors stay
-healthy and that suppression stays within policy bounds (≤10% of buckets per
-relay over any 30 minute window). The tooling needed to satisfy that gate now
-ships with the tree; operators must wire it into their weekly rituals. The new
-Grafana suppression panels mirror the PromQL snippets below, giving on-call
-teams live visibility before they need to fall back to manual queries.
+### PromQL რეცეპტები ჩახშობის მიმოხილვისთვის
 
-### PromQL recipes for suppression review
-
-Operators should keep the following PromQL helpers handy; both are referenced
-in the shared Grafana dashboard (`dashboards/grafana/soranet_privacy_metrics.json`)
-and Alertmanager rules:
+ოპერატორებს ხელთ უნდა ჰქონდეთ შემდეგი PromQL დამხმარეები; ორივე მითითებულია
+გაზიარებულ Grafana დაფაში (`dashboards/grafana/soranet_privacy_metrics.json`)
+და Alertmanager წესები:
 
 ```promql
 /* Suppression ratio per relay mode (30 minute window) */
@@ -222,14 +222,14 @@ clamp_min(
 )
 ```
 
-Use the ratio output to confirm the **“Suppressed Bucket %”** stat remains below
-the policy budget; wire the spike detector into Alertmanager for fast feedback
-when contributor counts dip unexpectedly.
+გამოიყენეთ გამომავალი თანაფარდობა, რათა დაადასტუროთ, რომ **“Suppressed Bucket %”** სტატისტიკა რჩება ქვემოთ
+პოლიტიკის ბიუჯეტი; შეაერთეთ მავთულის დეტექტორი Alertmanager-ში სწრაფი გამოხმაურებისთვის
+როდესაც კონტრიბუტორის რაოდენობა მოულოდნელად ეცემა.
 
-### Offline bucket report CLI
+### ოფლაინ თაიგულის ანგარიში CLI
 
-The workspace exposes `cargo xtask soranet-privacy-report` for one-off NDJSON
-captures. Point it at one or more relay admin exports:
+სამუშაო სივრცე აჩვენებს `cargo xtask soranet-privacy-report` ერთჯერადი NDJSON-ისთვის
+იჭერს. მიუთითეთ ის ერთ ან რამდენიმე სარელეო ადმინისტრატორის ექსპორტზე:
 
 ```bash
 cargo xtask soranet-privacy-report \
@@ -238,25 +238,25 @@ cargo xtask soranet-privacy-report \
   --json-out artifacts/sorafs_privacy/relay_summary.json
 ```
 
-The helper streams the capture through `SoranetSecureAggregator`, prints a
-suppression summary to stdout, and optionally writes a structured JSON report
-via `--json-out <path|->`. It honours the same knobs as the live collector
-(`--bucket-secs`, `--min-contributors`, `--expected-shares`, etc.), letting
-operators replay historical captures under different thresholds when triaging
-an issue. Attach the JSON alongside Grafana screenshots so the SNNet-8
-suppression analytics gate remains auditable.
+დამხმარე გადასცემს გადაღებას `SoranetSecureAggregator`-ის მეშვეობით, ბეჭდავს ა
+ჩახშობის შეჯამება stdout-ზე და სურვილისამებრ წერს სტრუქტურირებულ JSON ანგარიშს
+`--json-out <path|->`-ის საშუალებით. იგი პატივს სცემს იმავე სახელურებს, როგორც ცოცხალი კოლექციონერი
+(`--bucket-secs`, `--min-contributors`, `--expected-shares` და ა.შ.), გაქირავება
+ოპერატორები იმეორებენ ისტორიულ გადაღებებს სხვადასხვა ზღურბლზე ტრიაჟის დროს
+საკითხი. მიამაგრეთ JSON Grafana ეკრანის სურათებთან ერთად, რათა SNNet-8
+ჩახშობის ანალიტიკური კარიბჭე რჩება აუდიტორული.
 
-### First automated run checklist
+### პირველი ავტომატური გაშვების საკონტროლო სია
 
-Governance still requires proving that the first automation run met the
-suppression budget. The helper now accepts `--max-suppression-ratio <0-1>` so
-CI or operators can fail fast whenever suppressed buckets exceed the allowed
-window (default 10%) or when no buckets are present yet. Recommended flow:
+მმართველობა კვლავ მოითხოვს იმის მტკიცებას, რომ პირველი ავტომატიზაციის გაშვება დააკმაყოფილა
+ჩახშობის ბიუჯეტი. დამხმარე ახლა იღებს `--max-suppression-ratio <0-1>` ასე
+CI ან ოპერატორებს შეუძლიათ სწრაფად მარცხი, როდესაც ჩახშობილი თაიგულები აღემატება დაშვებულს
+ფანჯარა (ნაგულისხმევი 10%) ან როდესაც ჯერ არ არის თაიგულები. რეკომენდებული ნაკადი:
 
-1. Export NDJSON from the relay admin endpoint(s) plus the orchestrator’s
-   `/v1/soranet/privacy/event|share` stream into
+1. NDJSON-ის ექსპორტი რელეს ადმინისტრატორის ბოლო წერტილიდან
+   `/v1/soranet/privacy/event|share` ნაკადი შევიდა
    `artifacts/sorafs_privacy/<relay>.ndjson`.
-2. Run the helper with the policy budget:
+2. გაუშვით დამხმარე პოლიტიკის ბიუჯეტით:
 
    ```bash
    cargo xtask soranet-privacy-report \
@@ -266,37 +266,37 @@ window (default 10%) or when no buckets are present yet. Recommended flow:
      --max-suppression-ratio 0.10
    ```
 
-   The command prints the observed ratio and exits non-zero when the budget is
-   exceeded **or** when no buckets are ready, signalling that telemetry has not
-   yet been produced for the run. Live metrics should show
-   `soranet_privacy_pending_collectors` draining toward zero and
-   `soranet_privacy_snapshot_suppression_ratio` staying under the same budget
-   while the run executes.
-3. Archive the JSON output and CLI log with the SNNet-8 evidence bundle before
-   flipping the transport default so reviewers can replay the exact artefacts.
+   ბრძანება ბეჭდავს დაკვირვებულ თანაფარდობას და გამოდის ნულიდან, როდესაც ბიუჯეტი არის
+   გადააჭარბა **ან**, როდესაც თაიგულები მზად არ არის, რაც მიუთითებს იმაზე, რომ ტელემეტრია არ არის
+   ჯერ კიდევ წარმოებული გასაშვებად. ცოცხალი მეტრიკა უნდა იყოს ნაჩვენები
+   `soranet_privacy_pending_collectors` დრენაჟი ნულისკენ და
+   `soranet_privacy_snapshot_suppression_ratio` რჩება იმავე ბიუჯეტის ფარგლებში
+   ხოლო გაშვება სრულდება.
+3. დაარქივეთ JSON გამომავალი და CLI ჟურნალი SNNet-8 მტკიცებულების ნაკრებით მანამდე
+   სატრანსპორტო ნაგულისხმევის გადახვევა, რათა მიმომხილველებმა შეძლონ ზუსტი არტეფაქტების გამეორება.
 
-## Next Steps (SNNet-8a)
+## შემდეგი ნაბიჯები (SNNet-8a)
 
-- Integrate the dual Prio collectors, wiring their share ingestion into the
-  runtime so relays and collectors emit consistent `SoranetPrivacyBucketMetricsV1`
-  payloads. *(Done — see `ingest_privacy_payload` in
-  `crates/sorafs_orchestrator/src/lib.rs` and accompanying tests.)*
-- Publish the shared Prometheus dashboard JSON and alert rules covering
-  suppression gaps, collector health, and anonymity brownouts. *(Done — see
+- ორმაგი Prio კოლექციონერების ინტეგრირება, მათი წილი გადაყლაპვისას
+  მუშაობის დრო ისე, რომ რელეები და კოლექტორები ასხივებენ თანმიმდევრულ `SoranetPrivacyBucketMetricsV1`
+  ტვირთამწეობა. *(შესრულებულია - იხილეთ `ingest_privacy_payload` in
+  `crates/sorafs_orchestrator/src/lib.rs` და თანმხლები ტესტები.)*
+- გამოაქვეყნეთ საერთო Prometheus დაფა JSON და გაფრთხილების წესები, რომელიც მოიცავს
+  ჩახშობის ხარვეზები, კოლექციონერის ჯანმრთელობა და ანონიმურობის გაუარესება. *(შესრულებულია - იხ
   `dashboards/grafana/soranet_privacy_metrics.json`,
   `dashboards/alerts/soranet_privacy_rules.yml`,
-  `dashboards/alerts/soranet_policy_rules.yml`, and validation fixtures.)*
-- Produce the differential-privacy calibration artefacts described in
-  `privacy_metrics_dp.md`, including reproducible notebooks and governance
-  digests. *(Done — notebook + artefacts generated by
-  `scripts/telemetry/run_privacy_dp.py`; CI wrapper
-  `scripts/telemetry/run_privacy_dp_notebook.sh` executes the notebook via the
-  `.github/workflows/release-pipeline.yml` workflow; governance digest filed in
+  `dashboards/alerts/soranet_policy_rules.yml` და ვალიდაციის მოწყობილობები.)*
+- შექმენით დიფერენციალური კონფიდენციალურობის კალიბრაციის არტეფაქტები, რომლებიც აღწერილია აქ
+  `privacy_metrics_dp.md`, რეპროდუცირებადი ნოუთბუქების და მართვის ჩათვლით
+  ამუშავებს. *(შესრულებულია - რვეული + არტეფაქტები, გენერირებული
+  `scripts/telemetry/run_privacy_dp.py`; CI შეფუთვა
+  `scripts/telemetry/run_privacy_dp_notebook.sh` ახორციელებს ნოუთბუქის მეშვეობით
+  `.github/workflows/release-pipeline.yml` სამუშაო პროცესი; მმართველობის დაიჯესტი შეტანილია
   `docs/source/status/soranet_privacy_dp_digest.md`.)*
 
-The current release delivers the SNNet-8 foundation: deterministic,
-privacy-safe telemetry that slots directly into existing Prometheus scrapers
-and dashboards. Differential privacy calibration artefacts are in place, the
-release pipeline workflow keeps the notebook outputs fresh, and the remaining
-work focuses on monitoring the first automated run plus extending suppression
-alert analytics.
+მიმდინარე გამოცემა აწვდის SNNet-8 საფუძველს: განმსაზღვრელი,
+კონფიდენციალურობისთვის უსაფრთხო ტელემეტრია, რომელიც პირდაპირ ხვდება არსებულ Prometheus საფხეხებში
+და დაფები. არსებობს დიფერენციალური კონფიდენციალურობის კალიბრაციის არტეფაქტები
+გამოშვების მილსადენის სამუშაო მიმდინარეობა ინარჩუნებს ნოუთბუქის გამომავალს და დარჩენილს
+სამუშაო ფოკუსირებულია პირველი ავტომატური გაშვების მონიტორინგზე, პლუს ჩახშობის გაფართოებაზე
+გაფრთხილების ანალიტიკა.

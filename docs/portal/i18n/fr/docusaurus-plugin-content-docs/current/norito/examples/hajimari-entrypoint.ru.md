@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/hajimari-entrypoint
-title: Каркас входной точки Hajimari
-description: Минимальный каркас контракта Kotodama с одной публичной точкой входа и хендлом состояния.
-source: crates/ivm/docs/examples/01_hajimari.ko
+limace : /norito/examples/hajimari-entrypoint
+titre : Каркас входной точки Hajimari
+description : Le contrat de carte minimale Kotodama est destiné à une entreprise publique et à un service de ménage.
+source : crates/ivm/docs/examples/01_hajimari.ko
 ---
 
-Минимальный каркас контракта Kotodama с одной публичной точкой входа и хендлом состояния.
+Le contrat de carte minima Kotodama est destiné à une entreprise publique et à un service de ménage.
 
 ## Пошаговый обход реестра
 
-- Скомпилируйте контракт с `koto_compile --abi 1` как показано в [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) или через `cargo test -p ivm developer_portal_norito_snippets_compile`.
-- Прогоните smoke-test байткода локально с `ivm_run` / `developer_portal_norito_snippets_run`, чтобы проверить лог `info!` и начальный syscall перед тем, как трогать узел.
-- Разверните артефакт через `iroha_cli app contracts deploy` и подтвердите манифест, используя шаги из [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
+- Compilez le contrat avec `koto_compile --abi 1` en vous rendant dans [Norito Démarrage] (/norito/getting-started#1-compile-a-kotodama-contract) ou ici `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- Programmez le serveur de test de fumée localement avec `ivm_run` / `developer_portal_norito_snippets_run` pour vérifier le journal `info!` et l'appel système avant ce thème, afin de le lancer. узел.
+- Téléchargez l'artéfact à partir de `iroha_cli app contracts deploy` et téléchargez le manifeste en utilisant les instructions de [Norito Getting Started] (/norito/getting-started#4-deploy-via-iroha_cli).
 
-## Связанные руководства SDK
+## SDK de démarrage rapide
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [SDK de démarrage rapide Rust](/sdks/rust)
+- [SDK Python de démarrage rapide](/sdks/python)
+- [SDK JavaScript de démarrage rapide](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/hajimari-entrypoint.ko)
 

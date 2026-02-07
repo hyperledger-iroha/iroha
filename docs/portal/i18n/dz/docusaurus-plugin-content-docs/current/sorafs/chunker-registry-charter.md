@@ -8,113 +8,109 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Registry Charter
 sidebar_label: Chunker Registry Charter
 description: Governance charter for chunker profile submissions and approvals.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# SoraFS Chunker Registry Governance Charter
+# I18NT00000000 ཆུང་ངུར་ཐོ་བཀོད་གཞུང་གི་ཁྲིམས།
 
-> **Ratified:** 2025-10-29 by the Sora Parliament Infrastructure Panel (see
-> `docs/source/sorafs/council_minutes_2025-10-29.md`). Any amendments require a
-> formal governance vote; implementation teams must treat this document as
-> normative until a superseding charter is approved.
+> **ཆ་སྙོམས་:** 2025-10-29
+> I18NI0000006X). བཅོས་སྒྱུར་གང་རུང་ལུ་ ༡ ཀ།
+> ལུགས་མཐུན་གཞུང་གི་ཚོགས་རྒྱན་། བཀོལ་སྤྱོད་སྡེ་ཚན་ཚུ་གིས་ ཡིག་ཆ་འདི་ བཟུམ་སྦེ་ བརྩི་དགོ།
+> སུ་ཡལ་སིང་ཆོག་ཐམ་ཆ་འཇོག་འབད་ཚུན་ཚོད་ ཚད་གཞི།
 
-This charter defines the process and roles for evolving the SoraFS chunker
-registry. It complements the [Chunker Profile Authoring Guide](./chunker-profile-authoring.md) by describing how new
+ཆིངས་ཡིག་འདི་གིས་ I18NT0000001X གི་ཆ་རྐྱེན་འཕེལ་རྒྱས་གཏང་ནིའི་དོན་ལུ་ བྱ་རིམ་དང་འགན་ཁུར་ཚུ་ ངེས་ཚིག་བརྗོདཔ་ཨིན།
+ཐོ་འགོད་འབད་ཐངས། འདི་གིས་ [ཆུན་ཀར་གསལ་སྡུད་རྩོམ་སྒྲིག་ལམ་སྟོན་](I18NU0000003X) འདི་ ག་དེ་སྦེ་གསརཔ་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ ལྷན་ཐབས་འབདཝ་ཨིན།
 
-## Scope
+## གོ་སྐབས
 
-The charter applies to every entry in `sorafs_manifest::chunker_registry` and
-to any tooling that consumes the registry (manifest CLI, provider-advert CLI,
-SDKs). It enforces the alias and handle invariants checked by
+བཀའ་ཁྲིམས་འདི་ `sorafs_manifest::chunker_registry` དང་ ནང་ན་འཛུལ་ཞུགས་ག་ར་ལུ་འཇུགཔ་ཨིན།
+ཐོ་བཀོད་འདི་ བཀོལ་སྤྱོད་འབད་མི་ ལག་ཆས་གང་རུང་ཅིག་ལུ་ (མན་ངག་ CLI, བྱིན་མི་-ཁྱབ་བསྒྲགས་འབད་མི་ CLI,
+ཨེསི་ཌི་ཀེ་ཚུ། འདི་གིས་ མིང་གཞན་ཚུ་ བསྟར་སྤྱོད་འབདཝ་མ་ཚད་ འགྱུར་ལྡོག་མེད་པའི་ བརྟག་དཔྱད་འབད་མི་འདི་ འཛིན་སྐྱོང་འཐབ་ཨིན།
 `chunker_registry::ensure_charter_compliance()`:
 
-- Profile IDs are positive integers that increase monotonically.
-- The canonical handle `namespace.name@semver` **must** appear as the first
-- Alias strings are trimmed, unique, and do not collide with canonical handles
-  of other entries.
+- གསལ་སྡུད་ཀྱི་ཨའི་ཌི་ཚུ་ མོ་ནོ་ཊོ་ནི་ཐོག་ལས་ ཡར་སེང་འབད་མི་ ཧྲིལ་གྲངས་ཚུ་ཨིན་པས།
+- ཀེ་ནོ་ནིག་ལག་ལེབ་ `namespace.name@semver` **དང་** འདི་ འགོ་དང་པ་སྦེ་འབྱུངམ་ཨིན།
+- མིང་གཞན་ཡིག་རྒྱུན་ཚུ་ བཏོག་བཏོགཔ་ཨིནམ་དང་ གཞན་དང་མ་འདྲཝ་དང་ ཀེ་ནོ་ནིག་ལག་ལེན་འཐབ་ཐངས་ཚུ་ ཁ་བསྡམས་མི་བཏུབ།
+  ཐོ་བཀོད་གཞན་ཚུ།
 
-## Roles
+## འགན་ཁུར།
 
-- **Author(s)** – prepare the proposal, regenerate fixtures, and collect the
-  determinism evidence.
-- **Tooling Working Group (TWG)** – validates the proposal using the published
-  checklists and ensures the registry invariants hold.
-- **Governance Council (GC)** – reviews the TWG report, signs the proposal
-  envelope, and approves publication/deprecation timelines.
-- **Storage Team** – maintains the registry implementation and publishes
-  documentation updates.
+- **རྩོམ་པ་པོས་(s)** – གྲོས་འཆར་གྲ་སྒྲིག་འབད་དེ་ བསྐྱར་བཟོ་འབད་དེ་ བསྡུ་ལེན་འབད།
+  གཏན་འབེབས་རིང་ལུགས་ཀྱི་སྒྲུབ་བྱེད།
+- **Tooling Working Group (TWG)** – དཔར་བསྐྲུན་འབད་དེ་ལག་ལེན་འཐབ་ཐོག་ལས་ གྲོས་འཆར་འདི་བདེན་དཔྱད་འབདཝ་ཨིན།
+  བརྟག་ཞིབ་ཐོ་ཡིག་ཚུ་དང་ ཐོ་བཀོད་འགྱུར་མེད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+- **གཞུང་སྐྱོང་ཚོགས་སྡེ་ (GC)** – TWG སྙན་ཞུ་བསྐྱར་ཞིབ་འབད་དེ་ གྲོས་འཆར་ལུ་མཚན་རྟགས་བཀོད།
+  ཡིག་ཤུབས་དང་ དཔེ་སྐྲུན་/པེརེཀ་དུས་ཚོད་ཚུ་ ཆ་འཇོག་འབདཝ་ཨིན།
+- **གསོག་འཇོག་སྡེ་ཚན་** – ཐོ་བཀོད་ལག་ལེན་རྒྱུན་སྐྱོང་འབད་དེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  ཡིག་ཆའི་དུས་མཐུན་ཚུ།
 
-## Lifecycle Workflow
+## སྲོག་འཁོར་གྱི་ལས་རིམ།
 
-1. **Proposal Submission**
-   - Author runs the validation checklist from the authoring guide and creates
-     a `ChunkerProfileProposalV1` JSON under
+༡ **འཆར་གཞིའི་ཕུལ་བ།**
+   - རྩོམ་པ་པོས་རྩོམ་འབྲི་པ་ལམ་སྟོན་པ་ལས་བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་གཡོག་བཀོལ་ཞིནམ་ལས་གསར་བསྐྲུན་འབདཝ་ཨིན།
+     A `ChunkerProfileProposalV1` འོག་གི་ JSON 1 1 1 1015
      `docs/source/sorafs/proposals/`.
-   - Include CLI output from:
-     ```bash
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
-     cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
-       --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
-       --chunker-profile=<handle> --json-out=-
-     ```
-   - Submit a PR containing fixtures, proposal, determinism report, and registry
-     updates.
+   - སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་ལས་::
+     I18NF0000002X
+   - བདེ་སྒྲིག་དང་གྲོས་འཆར་ གཏན་འབེབས་སྙན་ཞུ་ དེ་ལས་ ཐོ་བཀོད་ཡོད་པའི་ PR ཅིག་བཙུགས།
+     དུས་མཐུན་ཚུ།
 
-2. **Tooling Review (TWG)**
-   - Replay the validation checklist (fixtures, fuzz, manifest/PoR pipeline).
-   - Run `cargo test -p sorafs_car --chunker-registry` and ensure
-     `ensure_charter_compliance()` passes with the new entry.
-   - Verify CLI behaviour (`--list-profiles`, `--promote-profile`, streaming
-     `--json-out=-`) reflects the updated aliases and handles.
-   - Produce a short report summarising findings and pass/fail status.
+2. **Tooling བསྐྱར་ཞིབ་ (TWG)**
+   - བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་ (གཏན་བཟོས་དང་ ཕཱ་ཟི་ གསལ་སྟོན་/PoR མདོང་ལམ་) སླར་གཏང་།
+   - I18NI000000012X གཡོག་བཀོལ།
+     `ensure_charter_compliance()` གིས་ ཐོ་བཀོད་གསརཔ་དང་གཅིག་ཁར་ འགྱོཝ་ཨིན།
+   - སི་ཨེལ་ཨའི་སྤྱོད་ལམ་བདེན་དཔྱད་འབད་ (`--list-profiles`, `--promote-profile`, རྒྱུན་སྤེལ་འབད་ནི།
+     I18NI000000016X) གིས་ དུས་མཐུན་བཟོ་ཡོད་པའི་ མིང་ཚིག་དང་ ལག་ལེན་འཐབ་མི་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+   - ཞིབ་འཚོལ་གྱི་སྙན་ཞུ་ཐུང་ཀུ་ཅིག་བཟོ་ཞིནམ་ལས་ གྲུབ་འབྲས་ཚུ་ བཅུད་བསྡུ་སྟེ་ ཆ་འཇོག་/འཐུས་ཤོར་གྱི་གནས་རིམ་བཟོ།
 
-3. **Council Approval (GC)**
-   - Review TWG report and proposal metadata.
-   - Sign the proposal digest (`blake3("sorafs-chunker-profile-v1" || bytes)`)
-     and append signatures to the council envelope maintained alongside the
-     fixtures.
-   - Record the vote outcome in the governance minutes.
+3. **Council ཆ་འཇོག་ (GC)**
+   - ཊི་ཌབ་ལུ་ཇི་སྙན་ཞུ་དང་ གྲོས་འཆར་ མེ་ཊ་ཌེ་ཊ་ བསྐྱར་ཞིབ་འབད།
+   - གྲོས་འཆར་འཇུ་བྱེད་ (`blake3("sorafs-chunker-profile-v1" || bytes)`) ལུ་མིང་རྟགས་བཀོད།
+     དེ་ལས་ ཚོགས་སྡེ་གི་ཡིག་ཤུབས་ལུ་ མཚན་རྟགས་ཚུ་ དེ་དང་གཅིག་ཁར་ བདག་འཛིན་འཐབ་ཡོདཔ་ཨིན།
+     སྒྲིག་ཆས།
+   - གཞུང་སྐྱོང་གི་དུས་ཚོད་ནང་ ཚོགས་རྒྱན་གྱི་གྲུབ་འབྲས་ཐོ་བཀོད་འབད།
 
-4. **Publication**
-   - Merge the PR, updating:
+༤ **དཔེ་བསྐྲུན་**
+   - PR མཉམ་བསྡོམས་, དུས་མཐུན་བཟོ་ནི།
      - `sorafs_manifest::chunker_registry_data`.
-     - Documentation (`chunker_registry.md`, authoring/conformance guides).
-     - Fixtures and determinism reports.
-   - Notify operators and SDK teams of the new profile and planned rollout.
+     - ཡིག་ཆ་ (I18NI0000019X, རྩོམ་བྲིས/དགོས་མཁོའི་ལམ་སྟོན།)
+     - གཏན་འཇགས་དང་ གཏན་འབེབས་སྙན་ཐོ།
+   - གསལ་སྡུད་གསརཔ་གི་ བཀོལ་སྤྱོད་པ་དང་ ཨེསི་ཌི་ཀེ་སྡེ་ཚན་ཚུ་ བརྡ་བསྐུལ་འབད་ཞིནམ་ལས་ འཆར་གཞི་བརྩམས་ཡོད་པའི་ མཇུག་བསྐྱོད་འབད་ནི།
 
-5. **Deprecation / Sunset**
-   - Proposals that supersede an existing profile must include a dual-publish
-     window (grace periods) and upgrade plan.
-     in the registry and update the migration ledger.
+5. **ཚོད་དཔག་ / སཱན་སེཊི་**།
+   - ད་ལྟོ་ཡོད་པའི་གསལ་སྡུད་ཅིག་ ཚབ་འཛིན་འབད་མི་ གྲོས་འཆར་ཚུ་ནང་ དཔར་བསྐྲུན་གཉིས་ལྡན་ཅིག་དགོཔ་ཨིན།
+     སྒོ་སྒྲིག་ (བྱིན་རླབས་དུས་ཡུན་) དང་ ཡར་འཕེལ་འཆར་གཞི།
+     ཐོ་བཀོད་ནང་ལུ་ གནས་སྤོ་འགྱོ་མི་གི་རྩིས་དེབ་འདི་དུས་མཐུན་བཟོ།
 
-6. **Emergency Changes**
-   - Removal or hotfixes require a council vote with majority approval.
-   - TWG must document the risk mitigation steps and update the incident log.
+6. **ཛ་དྲག་འགྱུར་བ་**།
+   - བཏོན་གཏང་ནི་ཡང་ན་ ཧོཊ་ཕིགསི་ཚུ་གིས་ མང་ཤོས་ཆ་འཇོག་ཐོག་ལས་ ཚོགས་སྡེའི་ཚོགས་རྒྱན་དགོཔ་ཨིན།
+   - TWG གིས་ ཉེན་ཁ་མར་ཕབ་ཀྱི་གོ་རིམ་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་དགོཔ་དང་ བྱུང་རྐྱེན་དྲན་ཐོ་འདི་ དུས་མཐུན་བཟོ་དགོ།
 
-## Tooling Expectations
+## ལག་ཆས་ཀྱི་རེ་བ།
 
-- `sorafs_manifest_chunk_store` and `sorafs_manifest_stub` expose:
-  - `--list-profiles` for registry inspection.
-  - `--promote-profile=<handle>` to generate the canonical metadata block used
-    when promoting a profile.
-  - `--json-out=-` to stream reports to stdout, enabling reproducible review
+- `sorafs_manifest_chunk_store` དང་ `sorafs_manifest_stub` གསལ་སྟོན་:
+  - ཐོ་བཀོད་ཞིབ་དཔྱད་ཀྱི་དོན་ལུ་ `--list-profiles`.
+  - ཀེ་ནོ་ནིག་མེ་ཊ་ཌེ་ཊ་སྡེབ་ཚན་ལག་ལེན་འཐབ་ཐོག་ལས་ `--promote-profile=<handle>` ལག་ལེན་འཐབ་ཡོདཔ།
+    གསལ་སྡུད་ཅིག་ཁྱབ་སྤེལ་འབད་བའི་སྐབས།
+  - I18NI000000024X བསྐྱར་བཟོ་བསྐྱར་ཞིབ་འབད་ཚུགསཔ་བཟོ་ནི།
     logs.
-- `ensure_charter_compliance()` is invoked at startup in relevant binaries
-  (`manifest_chunk_store`, `provider_advert_stub`). CI tests must fail if new
-  entries violate the charter.
+- I18NI000000025X འདི་ འབྲེལ་ཡོད་གཉིས་ལྡན་ནང་ འགོ་བཙུགས་པའི་སྐབས་ འབོད་བརྡ་འབདཝ་ཨིན།
+  (I 18NI0000026X, I18NI0000027X). CI བརྟག་དཔྱད་ཚུ་གསརཔ་ཨིན་པ་ཅིན་ འཐུས་ཤོར་དགོ།
+  ཐོ་བཀོད་ཚུ་གིས་ ཆོག་ཐམ་ལས་འགལ་ཡོདཔ།
 
-## Record Keeping
+## དྲན་ཐོ་བཞག་ནི།
 
-- Store all determinism reports in `docs/source/sorafs/reports/`.
-- Council minutes referencing chunker decisions live under
+- I18NI0000028X ནང་ གཏན་འབེབས་སྙན་ཞུ་ཚུ་ཆ་མཉམ་གསོག་འཇོག་འབད།
+- ཚོགས་སྡེ་གི་སྐར་མ་ཚུ་ གཞི་བསྟུན་འབད་མི་ གྲོས་ཆོད་གྲོས་ཐག་ཚུ་ འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
   `docs/source/sorafs/migration_ledger.md`.
-- Update `roadmap.md` and `status.md` after each major registry change.
+- ཐོ་བཀོད་གཙོ་བོ་རེ་རེ་བསྒྱུར་བཅོས་འབད་བའི་ཤུལ་ལས་ `roadmap.md` དང་ I18NI000000031X དུས་མཐུན་བཟོ།
 
-## References
+## དཔྱད་གཞི།
 
-- Authoring guide: [Chunker Profile Authoring Guide](./chunker-profile-authoring.md)
-- Conformance checklist: `docs/source/sorafs/chunker_conformance.md`
-- Registry reference: [Chunker Profile Registry](./chunker-registry.md)
+- རྩོམ་པ་པོ: [ཆུན་ཀར་གསལ་སྡུད་རྩོམ་སྒྲིག་ལམ་སྟོན་](I18NU000004X)
+- མཐུན་སྒྲིག་དཔྱད་ཞིབ་ཐོ་ཡིག་: `docs/source/sorafs/chunker_conformance.md`
+- ཐོ་འགོད་གཞི་རྟེན། [ཆུན་ཀར་གསལ་སྡུད་ཐོ་གཞུང་](I18NU0000005X)

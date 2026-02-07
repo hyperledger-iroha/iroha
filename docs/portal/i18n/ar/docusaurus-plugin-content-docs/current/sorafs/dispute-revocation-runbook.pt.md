@@ -4,41 +4,41 @@ direction: rtl
 source: docs/portal/docs/sorafs/dispute-revocation-runbook.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: dispute-revocation-runbook
-title: Runbook de disputas e revogacoes da SoraFS
-sidebar_label: Runbook de disputas e revogacoes
-description: Fluxo de governanca para registrar disputas de capacidade da SoraFS, coordenar revogacoes e evacuar dados de forma deterministica.
+المعرف: دليل إلغاء النزاع
+العنوان: Runbook de disputas e revogacoes da SoraFS
+Sidebar_label: Runbook de disputas and Revogacoes
+الوصف: تدفق الإدارة لتسجيل نزاعات السعة في SoraFS، وتنسيق عمليات الإصلاح وإخلاء البيانات بالشكل الحتمي.
 ---
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/sorafs/dispute_revocation_runbook.md`. Mantenha ambas as copias sincronizadas ate que a documentacao Sphinx herdada seja retirada.
+:::ملاحظة فونتي كانونيكا
+هذه الصفحة تعكس `docs/source/sorafs/dispute_revocation_runbook.md`. قم بحفظ النسخ المتزامنة حتى يتم سحب وثيقة أبو الهول.
 :::
 
-## Proposito
+## اقتراح
 
-Este runbook guia operadores de governanca na abertura de disputas de capacidade da SoraFS, na coordenacao de revogacoes e em garantir que a evacuacao de dados seja concluida de forma deterministica.
+هذا الدليل يوجه مشغلي الإدارة لفتح نزاعات القدرة على SoraFS، من خلال تنسيق عمليات التجديد ويضمن أن إخلاء البيانات سينتهي من شكل حتمي.
 
-## 1. Avaliar o incidente
+## 1. معرفة الحادث
 
-- **Condicoes de gatilho:** deteccao de violacao de SLA (uptime/falha de PoR), deficit de replicacao ou divergencia de cobranca.
-- **Confirmar telemetria:** capture snapshots de `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` do provedor.
-- **Notificar partes interessadas:** Storage Team (operacoes do provedor), Governance Council (orgao decisor), Observability (atualizacoes de dashboards).
+- **شروط الاسترداد:** اكتشاف تداخل SLA (وقت التشغيل/خطأ PoR)، أو عجز النسخ، أو تباين النحاس.
+- **تأكيد القياس عن بعد:** التقط لقطات `/v1/sorafs/capacity/state` و`/v1/sorafs/capacity/telemetry`.
+- **Notificar parts interessadas:** فريق التخزين (عمليات إثبات)، مجلس الإدارة (orgao decisor)، إمكانية المراقبة (تحقيق لوحات المعلومات).
 
-## 2. Preparar o pacote de evidencias
+## 2. إعداد حزمة الأدلة1. Colete artefatos brutos (القياس عن بعد JSON، سجلات CLI، ملاحظات الاستماع).
+2. تطبيع الملف الحتمي (على سبيل المثال، القطران)؛ سجل:
+   - ملخص BLAKE3-256 (`evidence_digest`)
+   - نوع الوسائط (`application/zip`، `application/jsonl`، إلخ.)
+   - URI للمستشفى (تخزين الكائنات، دبوس da SoraFS أو نقطة النهاية يمكن الوصول إليها عبر Torii)
+3. قم بتخزين أو تخزين مجموعة من أدلة الإدارة مع إمكانية الوصول إليها مرة واحدة.
 
-1. Colete artefatos brutos (telemetry JSON, logs de CLI, notas de auditoria).
-2. Normalize em um arquivo deterministico (por exemplo, um tarball); registre:
-   - digest BLAKE3-256 (`evidence_digest`)
-   - tipo de midia (`application/zip`, `application/jsonl`, etc.)
-   - URI de hospedagem (object storage, pin da SoraFS ou endpoint acessivel via Torii)
-3. Armazene o pacote no bucket de evidencias da governanca com acesso write-once.
+## 3. سجل النزاع
 
-## 3. Registrar a disputa
-
-1. Crie um JSON spec para `sorafs_manifest_stub capacity dispute`:
+1. صرخ بمواصفات JSON للفقرة `sorafs_manifest_stub capacity dispute`:
 
    ```json
    {
@@ -58,7 +58,7 @@ Este runbook guia operadores de governanca na abertura de disputas de capacidade
    }
    ```
 
-2. Execute a CLI:
+2. تنفيذ CLI:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -71,38 +71,36 @@ Este runbook guia operadores de governanca na abertura de disputas de capacidade
      --private-key=ed25519:<key>
    ```
 
-3. Revise `dispute_summary.json` (confirme tipo, digest das evidencias e timestamps).
-4. Envie o JSON da requisicao para Torii `/v1/sorafs/capacity/dispute` via fila de transacoes de governanca. Capture o valor de resposta `dispute_id_hex`; ele ancora as acoes de revogacao posteriores e os relatorios de auditoria.
+3. قم بمراجعة `dispute_summary.json` (تأكيد النوع، ملخص الأدلة والطوابع الزمنية).
+4. قم بإرسال طلب JSON لـ Torii `/v1/sorafs/capacity/dispute` عبر ملف التحويلات الحاكمة. التقاط قيمة الرد `dispute_id_hex`; إنها أخرى مثل نصائح التجديد اللاحقة وعلاقات الاستماع.
 
-## 4. Evacuacao e revogacao
+## 4. الإخلاء والإعادة1. **Janela de graca:** إشعار أو إثبات حول إعادة وشيكة؛ يسمح بالإخلاء بعد إصلاحه عندما تسمح به السياسة.
+2. ** جير `ProviderAdmissionRevocationV1`: **
+   - استخدم `sorafs_manifest_stub provider-admission revoke` كدافع مصدق.
+   - التحقق من الاغتيالات وخلاصة المراجعة.
+3. **نشر تجديد:**
+   - أرسل طلب الإصلاح لـ Torii.
+   - تأكد من أن الإعلانات تثبت أنها محظورة (نأمل أن يكون `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` أكثر).
+4. **تحقيق لوحات المعلومات:** علامة أو إثبات كمراجع أو مرجع أو معرف النزاع وتسجيل أو حزمة الأدلة.
 
-1. **Janela de graca:** notifique o provedor sobre a revogacao iminente; permita a evacuacao dos dados fixados quando a politica permitir.
-2. **Gere `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` com o motivo aprovado.
-   - Verifique assinaturas e o digest de revogacao.
-3. **Publique a revogacao:**
-   - Envie a requisicao de revogacao para Torii.
-   - Garanta que os adverts do provedor estejam bloqueados (espera-se que `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` aumente).
-4. **Atualize dashboards:** marque o provedor como revogado, referencie o ID da disputa e vincule o pacote de evidencias.
+## 5. مرافقة بعد الوفاة
 
-## 5. Post-mortem e acompanhamento
+- قم بالتسجيل في خط الزمن والسبب والأدوات العلاجية دون تعقب أحداث الإدارة.
+- تحديد الاسترداد (خفض الحصة، استرداد الضرائب، المكافآت للعملاء).
+- توثيق نظام التشغيل؛ تحقيق حدود SLA أو تنبيهات المراقبة إذا كانت ضرورية.
 
-- Registre a linha do tempo, a causa raiz e as acoes de remediacao no tracker de incidentes de governanca.
-- Determine a restitucao (slashing de stake, clawbacks de taxas, reembolsos aos clientes).
-- Documente os aprendizados; atualize limites de SLA ou alertas de monitoramento se necessario.
+## 6. المواد المرجعية
 
-## 6. Materiais de referencia
+-`sorafs_manifest_stub capacity dispute --help`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (سيكاو دي ديسبوتاس)
+- `docs/source/sorafs/provider_admission_policy.md` (تدفق التجديد)
+- لوحة القيادة للمراقبة: `SoraFS / Capacity Providers`
 
-- `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (secao de disputas)
-- `docs/source/sorafs/provider_admission_policy.md` (fluxo de revogacao)
-- Dashboard de observabilidade: `SoraFS / Capacity Providers`
+## قائمة المراجعة
 
-## Checklist
-
-- [ ] Pacote de evidencias capturado e hasheado.
-- [ ] Payload da disputa validado localmente.
-- [ ] Transacao de disputa no Torii aceita.
-- [ ] Revogacao executada (se aprovada).
-- [ ] Dashboards/runbooks atualizados.
-- [ ] Post-mortem arquivado junto ao conselho de governanca.
+- [ ] حزمة الأدلة التي تم التقاطها وتقطيعها.
+- [ ] الحمولة هي محل النزاع الصحيح.
+- [ ] نزاع حول رقم Torii.
+- [ ] إعادة التنفيذ (إذا تمت الموافقة عليه).
+- [ ] تم تحديث لوحات المعلومات/دفاتر التشغيل.
+- [ ] أرشيف ما بعد الوفاة جنبًا إلى جنب مع نصيحة الإدارة.

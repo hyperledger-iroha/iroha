@@ -5,12 +5,14 @@ source: docs/portal/docs/norito-streaming-roadmap.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito Streaming Roadmap
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The following backlog captures the near-term work items the Streaming Working
-Group tracks for Norito audio/video delivery. Values are updated alongside
-`status.md` and shared here for portal consumers who prefer a machine-friendly
-view.
+Aşağıdakı gecikmə axın işinin yaxın müddətli iş elementlərini əhatə edir
+Norito audio/video çatdırılması üçün qrup trekləri. Dəyərlər yanaşı yenilənir
+`status.md` və burada maşın dostu olan portal istehlakçıları üçün paylaşıldı
+görünüşü.
 
 ```json
 [

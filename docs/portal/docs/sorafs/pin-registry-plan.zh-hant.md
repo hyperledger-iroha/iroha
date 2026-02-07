@@ -11,136 +11,137 @@ id: pin-registry-plan
 title: SoraFS Pin Registry Implementation Plan
 sidebar_label: Pin Registry Plan
 description: SF-4 implementation plan covering registry state machine, Torii facade, tooling, and observability.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-# SoraFS Pin Registry Implementation Plan (SF-4)
+# SoraFS 密碼註冊實施計劃 (SF-4)
 
-SF-4 delivers the Pin Registry contract and supporting services that store
-manifest commitments, enforce pin policies, and expose APIs to Torii, gateways,
-and orchestrators. This document expands the validation plan with concrete
-implementation tasks, covering on-chain logic, host-side services, fixtures,
-and operational requirements.
+SF-4 提供 Pin 註冊合同和支持服務，存儲
+明確承諾，實施 pin 策略，並將 API 公開給 Torii、網關、
+和協調者。本文件用具體內容擴展了驗證計劃
+實現任務，涵蓋鏈上邏輯、主機端服務、固定裝置、
+和操作要求。
 
-## Scope
+## 範圍
 
-1. **Registry state machine**: Norito-defined records for manifests, aliases,
-   successor chains, retention epochs, and governance metadata.
-2. **Contract implementation**: deterministic CRUD operations for pin lifecycle
-   (`ReplicationOrder`, `Precommit`, `Completion`, eviction).
-3. **Service facade**: gRPC/REST endpoints backed by the registry that Torii
-   and SDKs consume, including pagination and attestation.
-4. **Tooling & fixtures**: CLI helpers, test vectors, and documentation to keep
-   manifests, aliases, and governance envelopes in sync.
-5. **Telemetry & ops**: metrics, alerts, and runbooks for registry health.
+1. **註冊表狀態機**：Norito 定義的清單、別名、
+   後繼鏈、保留紀元和治理元數據。
+2. **合約實現**：pin生命週期的確定性CRUD操作
+   （`ReplicationOrder`、`Precommit`、`Completion`、驅逐）。
+3. **服務門面**：由 Torii 的註冊表支持的 gRPC/REST 端點
+   SDK 消耗，包括分頁和證明。
+4. **工具和固定裝置**：CLI 幫助程序、測試向量和要保留的文檔
+   清單、別名和治理信封同步。
+5. **遙測和操作**：註冊表健康狀況的指標、警報和運行手冊。
 
-## Data Model
+## 數據模型
 
-### Core Records (Norito)
+### 核心記錄 (Norito)
 
-| Struct | Description | Fields |
+|結構|描述 |領域 |
 |--------|-------------|--------|
-| `PinRecordV1` | Canonical manifest entry. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
-| `AliasBindingV1` | Maps alias -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Instruction for providers to pin manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Provider acknowledgement. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | Governance policy snapshot. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+| `PinRecordV1` |規范清單條目。 | `manifest_cid`、`chunk_plan_digest`、`por_root`、`profile_handle`、`approved_at`、`retention_epoch`、`pin_policy`、`successor_of`、 `governance_envelope_hash`。 |
+| `AliasBindingV1` |映射別名 -> 清單 CID。 | `alias`、`manifest_cid`、`bound_at`、`expiry_epoch`。 |
+| `ReplicationOrderV1` |提供者固定清單的說明。 | `order_id`、`manifest_cid`、`providers`、`redundancy`、`deadline`、`policy_hash`。 |
+| `ReplicationReceiptV1` |提供商確認。 | `order_id`、`provider_id`、`status`、`timestamp`、`por_sample_digest`。 |
+| `ManifestPolicyV1` |治理政策快照。 | `min_replicas`、`max_retention_epochs`、`allowed_profiles`、`pin_fee_basis_points`。 |
 
-Implementation reference: see `crates/sorafs_manifest/src/pin_registry.rs` for the
-Rust Norito schemas and validation helpers backing these records. Validation
-mirrors the manifest tooling (chunker registry lookup, pin policy gating) so the
-contract, Torii facades, and CLI share identical invariants.
+實現參考：參見 `crates/sorafs_manifest/src/pin_registry.rs`
+Rust Norito 模式和支持這些記錄的驗證助手。驗證
+鏡像清單工具（分塊註冊表查找、引腳策略門控），因此
+契約、Torii 外觀和 CLI 共享相同的不變量。
 
-Tasks:
-- Finalise Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs`.
-- Generate code (Rust + other SDKs) using Norito macros.
-- Update docs (`sorafs_architecture_rfc.md`) once schemas land.
+任務：
+- 最終確定 `crates/sorafs_manifest/src/pin_registry.rs` 中的 Norito 架構。
+- 使用 Norito 宏生成代碼（Rust + 其他 SDK）。
+- 一旦架構落地，更新文檔（`sorafs_architecture_rfc.md`）。
 
-## Contract Implementation
+## 合同執行
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Implement registry storage (sled/sqlite/off-chain) or smart contract module. | Core Infra / Smart Contract Team | Provide deterministic hashing, avoid floating point. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Leverage `ManifestValidator` from validation plan. Alias binding now flows through `RegisterPinManifest` (Torii DTO surfacing) while dedicated `bind_alias` remains planned for successive updates. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness. | Governance Council / Core Infra | Alias uniqueness, retention limits, and predecessor approval/retirement checks now live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection and replication bookkeeping remain open. |
-| Governed parameters: load `ManifestPolicyV1` from config/governance state; allow updates via governance events. | Governance Council | Provide CLI for policy updates. |
-| Event emission: emit Norito events for telemetry (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Define event schema + logging. |
+|任務|所有者 |筆記|
+|------|----------|--------|
+|實施註冊表存儲（sled/sqlite/鏈下）或智能合約模塊。 |核心基礎設施/智能合約團隊|提供確定性哈希，避免浮點。 |
+|入口點：`submit_manifest`、`approve_manifest`、`bind_alias`、`issue_replication_order`、`complete_replication`、`evict_manifest`。 |核心基礎設施|利用驗證計劃中的 `ManifestValidator`。別名綁定現在通過 `RegisterPinManifest`（Torii DTO 表面處理）流動，而專用 `bind_alias` 仍計劃進行連續更新。 |
+|狀態轉換：強制繼承（清單 A -> B）、保留紀元、別名唯一性。 |治理委員會/核心基礎設施|別名唯一性、保留限制和前任批准/停用檢查現在位於 `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` 中；多跳連續檢測和復制簿記保持開放。 |
+|治理參數：從配置/治理狀態加載 `ManifestPolicyV1`；允許通過治理事件進行更新。 |治理委員會|提供用於策略更新的 CLI。 |
+|事件發射：發射 Norito 事件以進行遙測（`ManifestApproved`、`ReplicationOrderIssued`、`AliasBound`）。 |可觀察性|定義事件模式+日誌記錄。 |
 
-Testing:
-- Unit tests for each entry point (positive + rejection).
-- Property tests for succession chain (no cycles, monotonic epochs).
-- Fuzz validation by generating random manifests (bounded).
+測試：
+- 每個入口點的單元測試（正面+拒絕）。
+- 繼承鏈的屬性測試（無循環，單調時期）。
+- 通過生成隨機清單（有界）進行模糊驗證。
 
-## Service Facade (Torii/SDK Integration)
+## 服務外觀（Torii/SDK 集成）
 
-| Component | Task | Owner(s) |
-|-----------|------|----------|
-| Torii Service | Expose `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Provide pagination + filtering. | Networking TL / Core Infra |
-| Attestation | Include registry height/hash in responses; add Norito attestation struct consumed by SDKs. | Core Infra |
-| CLI | Extend `sorafs_manifest_stub` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Generate client bindings (Rust/Go/TS) from Norito schema; add integration tests. | SDK Teams |
+|組件|任務|所有者 |
+|------------|------|----------|
+| Torii 服務 |公開 `/v1/sorafs/pin`（提交）、`/v1/sorafs/pin/{cid}`（查找）、`/v1/sorafs/aliases`（列表/綁定）、`/v1/sorafs/replication`（訂單/收據）。提供分頁+過濾。 |網絡 TL/核心基礎設施 |
+|認證|在響應中包含註冊表高度/哈希值；添加 SDK 使用的 Norito 證明結構。 |核心基礎設施|
+|命令行|使用 `pin submit`、`alias bind`、`order issue`、`registry export` 擴展 `sorafs_manifest_stub` 或新的 `sorafs_pin` CLI。 |工具工作組 |
+| SDK |從 Norito 模式生成客戶端綁定 (Rust/Go/TS)；添加集成測試。 | SDK 團隊 |
 
-Operations:
-- Add caching layer/ETag for GET endpoints.
-- Provide rate limiting / auth consistent with Torii policies.
+操作：
+- 為 GET 端點添加緩存層/ETag。
+- 提供與 Torii 策略一致的速率限制/身份驗證。
 
-## Fixtures & CI
+## 賽程和 CI
 
-- Fixtures directory: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` stores signed manifest/alias/order snapshots regenerated by `cargo run -p iroha_core --example gen_pin_snapshot`.
-- CI step: `ci/check_sorafs_fixtures.sh` regenerates the snapshot and fails if diffs appear, keeping CI fixtures aligned.
-- Integration tests (`crates/iroha_core/tests/pin_registry.rs`) exercise the happy path plus duplicate-alias rejection, alias approval/retention guards, mismatched chunker handles, replica-count validation, and successor-guard failures (unknown/pre-approved/retired/self pointers); see `register_manifest_rejects_*` cases for coverage details.
-- Unit tests now cover alias validation, retention guards, and successor checks in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection once state machine lands.
-- Golden JSON for events used by observability pipelines.
+- 夾具目錄：`crates/iroha_core/tests/fixtures/sorafs_pin_registry/` 存儲由 `cargo run -p iroha_core --example gen_pin_snapshot` 重新生成的簽名清單/別名/訂單快照。
+- CI 步驟：`ci/check_sorafs_fixtures.sh` 重新生成快照，如果出現差異則失敗，保持 CI 裝置對齊。
+- 集成測試 (`crates/iroha_core/tests/pin_registry.rs`) 執行快樂路徑加上重複別名拒絕、別名批准/保留保護、不匹配的分塊器句柄、副本計數驗證和後繼保護失敗（未知/預先批准/退休/自指針）；有關承保範圍的詳細信息，請參閱 `register_manifest_rejects_*` 案例。
+- 單元測試現在涵蓋 `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` 中的別名驗證、保留保護和後繼檢查；狀態機著陸後進行多跳連續檢測。
+- 可觀測性管道使用的事件的黃金 JSON。
 
-## Telemetry & Observability
+## 遙測和可觀測性
 
-Metrics (Prometheus):
+指標（Prometheus）：
 - `torii_sorafs_registry_manifests_total{status="pending|approved|retired"}`
 - `torii_sorafs_registry_aliases_total`
 - `torii_sorafs_registry_orders_total{status="pending|completed|expired"}`
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- Existing provider telemetry (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) remains in scope for end-to-end dashboards.
+- 現有的提供商遙測（`torii_sorafs_capacity_*`、`torii_sorafs_fee_projection_nanos`）仍然在端到端儀表板的範圍內。
 
-Logs:
-- Structured Norito event stream for governance audits (signed?).
+日誌：
+- 用於治理審計的結構化 Norito 事件流（已簽名？）。
 
-Alerts:
-- Pending replication orders exceeding SLA.
-- Alias expiry < threshold.
-- Retention violations (manifest not renewed before expiry).
+警報：
+- 待處理的複制訂單超出 SLA。
+- 別名到期 < 閾值。
+- 違反保留規定（清單在到期前未續訂）。
 
-Dashboards:
-- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` tracks manifest lifecycle totals, alias coverage, backlog saturation, SLA ratio, latency vs slack overlays, and missed-order rates for on-call review.
+儀表板：
+- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` 跟踪清單生命週期總數、別名覆蓋率、積壓飽和度、SLA 比率、延遲與鬆弛覆蓋以及待命審核的錯過訂單率。
 
-## Runbooks & Documentation
+## 操作手冊和文檔
 
-- Update `docs/source/sorafs/migration_ledger.md` to include registry status updates.
-- Operator guide: `docs/source/sorafs/runbooks/pin_registry_ops.md` (now published) covering metrics, alerting, deployment, backup, and recovery flows.
-- Governance guide: describe policy parameters, approval workflow, dispute handling.
-- API reference pages for each endpoint (Docusaurus docs).
+- 更新 `docs/source/sorafs/migration_ledger.md` 以包括註冊表狀態更新。
+- 操作員指南：`docs/source/sorafs/runbooks/pin_registry_ops.md`（現已發布），涵蓋指標、警報、部署、備份和恢復流程。
+- 治理指南：描述政策參數、審批流程、爭議處理。
+- 每個端點的 API 參考頁（Docusaurus 文檔）。
 
-## Dependencies & Sequencing
+## 依賴關係和排序
 
-1. Complete validation plan tasks (ManifestValidator integration).
-2. Finalise Norito schema + policy defaults.
-3. Implement contract + service, wire telemetry.
-4. Regenerate fixtures, run integration suites.
-5. Update docs/runbooks and mark roadmap items complete.
+1. 完成驗證計劃任務（ManifestValidator 集成）。
+2. 最終確定 Norito 架構 + 策略默認值。
+3.實行合同+服務，有線遙測。
+4. 重新生成裝置，運行集成套件。
+5. 更新文檔/操作手冊並將路線圖項目標記為完成。
 
-Each roadmap checklist item under SF-4 should reference this plan when progress is made.
-The REST façade now ships with attested listing endpoints:
+SF-4 下的每個路線圖清單項目在取得進展時都應參考該計劃。
+REST 外觀現在附帶經過驗證的列表端點：
 
-- `GET /v1/sorafs/pin` and `GET /v1/sorafs/pin/{digest}` return manifests with
-  alias bindings, replication orders, and an attestation object derived from the
-  latest block hash.
-- `GET /v1/sorafs/aliases` and `GET /v1/sorafs/replication` expose the active
-  alias catalogue and replication order backlog with consistent pagination and
-  status filters.
+- `GET /v1/sorafs/pin` 和 `GET /v1/sorafs/pin/{digest}` 返回清單
+  別名綁定、複製順序和從派生的證明對象
+  最新的塊哈希。
+- `GET /v1/sorafs/aliases` 和 `GET /v1/sorafs/replication` 暴露活動
+  別名目錄和復制訂單積壓具有一致的分頁和
+  狀態過濾器。
 
-The CLI wraps these calls (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`) so operators can script registry audits without touching
-lower-level APIs.
+CLI 包裝這些調用（`iroha app sorafs pin list`、`pin show`、`alias list`、
+`replication list`），因此操作員可以編寫註冊表審核腳本而無需接觸
+較低級別的 API。

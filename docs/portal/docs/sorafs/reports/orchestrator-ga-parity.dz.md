@@ -7,83 +7,82 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a206b033b430fc9895f64d402cd53bfea35c3f269b2c18bb12a1f929114423aa
 source_last_modified: "2025-12-29T18:16:35.200252+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Orchestrator GA Parity Report
+# SoraFS ཨོར་ཀེཊ་ཊར་ ཇི་ཨེ་ ཆ་སྙོམས་སྙན་ཞུ།
 
-Deterministic multi-fetch parity is now tracked per SDK so release engineers can confirm that
-payload bytes, chunk receipts, provider reports, and scoreboard outcomes remain aligned across
-implementations. Every harness consumes the canonical multi-provider bundle under
-`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`, which packages the SF1 plan, provider
-metadata, telemetry snapshot, and orchestrator options.
+ད་ལྟོ་ གསར་བཏོན་འབད་མི་ཚུ་གིས་ ངེས་དཔྱད་འབད་ཚུགས་པའི་ ཨེསི་ཌི་ཀེ་རེ་ལུ་ གཏན་འབེབས་མང་བའི་ ཕེཆ་ ཆ་སྙོམས་འདི་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+པེ་ལོཌ་བཱའིཊི་དང་ ཆ་ཤས་འོང་འབབ་བྱིན་མི་གི་སྙན་ཞུ་ དེ་ལས་ སྐུགས་བཀོད་སྒྲིག་གྲུབ་འབྲས་ཚུ་ ནང་འཁོད་ལུ་ ཕྲང་སྒྲིག་འབད་དེ་རང་ལུས།
+བཀོལ་སྤྱོད་ཚུ། གཤམ་གསལ་གྱི་ཁྲིམས་ལུགས་རེ་རེ་གིས་ འོག་ལུ་ཡོད་པའི་ སྣ་མང་མཁོ་སྤྲོད་འབད་མི་གི་བང་སྒྲིག་འདི་ འོག་ལུ་ཟཝ་ཨིན།
+I18NI000000006X, དེ་གིས་ SF1 འཆར་གཞི་ ཐུམ་སྒྲིལ་ བྱིན་མི་།
+མེ་ཊ་ཌེ་ཊ་ ཊེ་ལི་མི་ཊི་པར་ལེན་དང་ སྙན་ཆའི་སྡེ་ཚན་གདམ་ཁ་ཚུ།
 
-## Rust Baseline
+## རསཊ་གཞི་རྟེན།
 
-- **Command:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
-- **Scope:** Runs the `MultiPeerFixture` plan twice via the in-process orchestrator, verifying
-  assembled payload bytes, chunk receipts, provider reports, and scoreboard outcomes. Instrumentation
-  also tracks peak concurrency and effective working-set size (`max_parallel × max_chunk_length`).
-- **Performance guard:** Each run must complete within 2 s on CI hardware.
-- **Working set ceiling:** With the SF1 profile the harness enforces `max_parallel = 3`, yielding a
-  ≤ 196 608 byte window.
+- **བརྡ་བཀོད་:** I18NI0000007X
+- **Scope:** I18NI000000008X འཆར་གཞི་འདི་ ནང་སྦྱོར་ནང་ རོལ་དབྱངས་འཕྲུལ་ཆས་བརྒྱུད་དེ་ ཚར་གཉིས་གཡོག་བཀོལཝ་ཨིན།
+  བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ འབབ་ཁུངས་བཱའིཊི་དང་ ཆ་ཤས་འོང་འབབ་ བྱིན་མི་སྙན་ཞུ་ དེ་ལས་ སྐུགས་ཐོབ་པའི་གྲུབ་འབྲས་ཚུ་ཨིན། ལག་ཆས།
+  དེ་མ་ཚད་ དུས་མཉམ་གྱི་མཐོ་ཤོས་དང་ ནུས་སྟོབས་ཅན་གྱི་ལཱ་འབད་སའི་ཚད་ (I18NI0000009X) ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+- **ལཱ་འགན་སྲུང་མི་:** རྒྱུག་འགྲན་རེ་རེ་གིས་ སི་ཨའི་ མཐུན་རྐྱེན་ནང་ ༢ ནང་འཁོད་ལུ་ མཇུག་བསྡུ་དགོ།
+- **ལཱ་འབད་ཐངས་ཆ་ཚན་གྱི་ཐོག་ཁར་:** ཨེསི་ཨེཕ་༡ གསལ་སྡུད་དང་གཅིག་ཁར་ ཧར་ནིས་ཀྱིས་ `max_parallel = 3`, a ཐོན་དོ་ཡོདཔ་ཨིན།
+  ≤196608byte.
 
-Sample log output:
+དཔེ་ཚད་དྲན་ཐོ་ཨའུཊི་པུཊི་::
 
 ```
 Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 peak_reserved_bytes=196608
 ```
 
-## JavaScript SDK Harness
+## ཇ་བ་ཨིསི་ཀིརིཔཊི་ཨེསི་ཌི་ཀེ་ཧར་ནེས།
 
-- **Command:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
-- **Scope:** Replays the same fixture via `iroha_js_host::sorafsMultiFetchLocal`, comparing payloads,
-  receipts, provider reports, and scoreboard snapshots across consecutive runs.
-- **Performance guard:** Each execution must finish within 2 s; the harness prints the measured
-  duration and reserved-byte ceiling (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
+- **བརྡ་བཀོད་:** I18NI0000011X
+- **Scope:** I18NI000000012X, བརྒྱུད་དེ་ ཆ་རྐྱེན་གཅིག་པ་བསྐྱར་རྩེད་འབདཝ་ཨིན།
+  ཐོབ་མི་དང་ བྱིན་མི་སྙན་ཞུ་ དེ་ལས་ རིམ་མཐུན་རྒྱུག་འགྲན་ཚུ་ནང་ སྐུགས་ཐོབ་ཐངས་ཚུ་ བཏབ་ནི།
+- **ལཱ་འགན་སྲུང་སྐྱོབ་པ་:** བཀོལ་སྤྱོད་རེ་རེ་བཞིན་དུ་ ༢s ནང་འཁོད་ལུ་མཇུག་བསྡུ་དགོ། ཧར་ནིསི་གིས་ ཚད་འཇལ་མི་འདི་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  དུས་ཡུན་དང་ བཀག་བཞག་ཡོད་པའི་ བཱའིཊ་ (I18NI000000013X, `peak_reserved_bytes ≤ 196 608`).
 
-Example summary line:
+དཔེར་བརྗོད་བཅུད་དོན་གྲལ་ཐིག་།
 
-```
-JS orchestrator parity: duration_ms=187.42 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
-```
+I18NF0000004X
 
-## Swift SDK Harness
+## སུའིཕཊ་ཨེསི་ཌི་ཀེ་ཧར་ནེས།
 
-- **Command:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
-- **Scope:** Runs the parity suite defined in `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`,
-  replaying the SF1 fixture twice through the Norito bridge (`sorafsLocalFetch`). The harness verifies
-  payload bytes, chunk receipts, provider reports, and scoreboard entries using the same deterministic
-  provider metadata and telemetry snapshots as the Rust/JS suites.
-- **Bridge bootstrap:** The harness unpacks `dist/NoritoBridge.xcframework.zip` on demand and loads
-  the macOS slice via `dlopen`. When the xcframework is missing or lacks the SoraFS bindings, it
-  falls back to `cargo build -p connect_norito_bridge --release` and links against
-  `target/release/libconnect_norito_bridge.dylib`, so no manual setup is required in CI.
-- **Performance guard:** Each execution must finish within 2 s on CI hardware; the harness prints the
-  measured duration and reserved-byte ceiling (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
+- **བརྡ་བཀོད་:** I18NI0000015X
+- **Scope:** `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift` ནང་ངེས་འཛིན་འབད་ཡོད་པའི་ ཆ་སྙོམ་སྒྲིག་ཆས་འདི་གཡོག་བཀོལ།,
+  I18NT000000000X ཟམ་ (`sorafsLocalFetch`) བརྒྱུད་དེ་ SF1 གི་སྒྲིག་ཆས་འདི་ ཚར་གཉིས་བསྐྱར་རྩེད་འབད་ནི། ཆུ་སྲིན་གྱིས་བདེན་དཔང་འབདཝ་ཨིན།
+  པེ་ལོཌ་བཱའིཊི་དང་ ཆ་ཤས་བྱུང་འཛིན་ བྱིན་མི་སྙན་ཞུ་ དེ་ལས་ སྐུགས་བོཌི་ཐོ་བཀོད་ཚུ་ གཏན་འབེབས་ཅོག་འཐདཔ་ལག་ལེན་འཐབ་ཐོག་ལས་ སྐུགས་ཤོག་ཐོ་བཀོད་ཚུ།
+  བྱིན་མི་ མེ་ཊ་ཌེ་ཊ་དང་ ཊེ་ལི་མི་ཊི་པར་ཚུ་ རཱསི་/ཇེ་ཨེསི་ཁང་མིག་ཚུ་བཟུམ་སྦེ་ པར་ཚུ་བཏབ་ཨིན།
+- **ཟམ་གྱི་བུཊི་སི་ཊར:* མཁོ་འདོད་དང་ ལྗིད་ཚད་ཚུ་གུར་ `dist/NoritoBridge.xcframework.zip` བཏོན་གཏང་།
+  མེཀ་ཨོ་ཨེསི་འདི་ `dlopen` བརྒྱུད་དེ་ཨིན། xcframe འདི་ མེད་པའི་སྐབས་ ཡང་ན་ SoraFS བཱའིན་ཌིང་མེད་པའི་སྐབས་ལུ།
+  ཕྱིར་ལོག་ I18NI000000020X དང་ འགལ་བའི་འབྲེལ་མཐུད།
+  `target/release/libconnect_norito_bridge.dylib`, དེ་འབདཝ་ལས་ CI ནང་ ལག་ཐོག་གཞི་སྒྲིག་འབད་དགོཔ་མེདཔ་ཨིན།
+- **ལཱ་འགན་སྲུང་སྐྱོབ་:** བཀོལ་སྤྱོད་རེ་རེ་གིས་ ༢ སི་ནང་འཁོད་ལུ་ སི་ཨའི་ མཐུན་རྐྱེན་ནང་ མཇུག་བསྡུ་དགོ། ཧར་ནིས་ཀྱིས་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  ཚད་འཇལ་བའི་དུས་ཡུན་དང་ བཀག་སྡོམ་-བཱའི་ཊི་ (`max_parallel = 3`, I18NI0000023X).
 
-Example summary line:
+དཔེར་བརྗོད་བཅུད་དོན་གྲལ་ཐིག་།
 
 ```
 Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Python Bindings Harness
+## པའི་ཐོན་བསྡམས་སྲིད།
 
-- **Command:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
-- **Scope:** Exercises the high-level `iroha_python.sorafs.multi_fetch_local` wrapper and its typed
-  dataclasses so the canonical fixture flows through the same API that wheel consumers call. The test
-  rebuilds the provider metadata from `providers.json`, injects the telemetry snapshot, and verifies
-  payload bytes, chunk receipts, provider reports, and scoreboard content just like the Rust/JS/Swift
-  suites.
-- **Pre-req:** Run `maturin develop --release` (or install the wheel) so `_crypto` exposes the
-  `sorafs_multi_fetch_local` binding before invoking pytest; the harness auto-skips when the binding
-  is unavailable.
-- **Performance guard:** Same ≤ 2 s budget as the Rust suite; pytest logs the assembled byte count
-  and provider participation summary for the release artefact.
+- **བརྡ་བཀོད་:** I18NI0000024X
+- **Scope:** མཐོ་རིམ་ I18NI0000025X wrapper དང་དེ་གི་ཡིག་དཔར་རྐྱབས།
+  གནད་སྡུད་དབྱེ་རིམ་ཚུ་ དེ་འབདཝ་ལས་ འཁོར་ལོའི་ཉོ་སྤྱོད་འབད་མི་ཚུ་གིས་ འབོད་མི་ API གཅིག་པའི་ཐོག་ལས་ ཁྲིམས་ལུགས་ཀྱི་སྒྲིག་བཀོད་འདི་ འགྱོཝ་ཨིན། བརྟག་དཔྱད།
+  I18NI000000026X ལས་ བྱིན་མི་མེ་ཊ་ཌེ་ཊ་འདི་ ལོག་བཟོ་བསྐྲུན་འབད་དེ་ ཊེ་ལི་མི་ཊི་པར་པར་ཚུ་བཙུགས་ཞིནམ་ལས་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  པེ་ལོཌ་བཱའིཊིསི་ ཆ་ཤས་ཚུ་ འབབ་ཁུངས་ བྱིན་མི་སྙན་ཞུ་ དེ་ལས་ རསཊི་/ཇེ་ཨེསི་/སུའིཕཊི་བཟུམ་གྱི་ རསཊ་/ཇེ་ཨེསི་/སུའིཕཊི་བཟུམ་གྱི་ བརྡ་བཀོད་ནང་དོན་ཚུ།
+  ཁང་མིག་ཚུ།
+- **Pre-req:** `maturin develop --release` (ཡང་ན་འཁོར་ལོ་བཙུགས་) དེ་འབདཝ་ལས་ `_crypto` གིས་ གསལ་སྟོན་འབདཝ་ཨིན།
+  `sorafs_multi_fetch_local` pytest མ་བཙུགས་པའི་ཧེ་མ་ བསྡམ་བཞག་ཡོདཔ། བསྡམ་བཞག་པའི་སྐབས་ ཧར་ནེསི་རང་བཞིན་སྒྱིད་ལུགས།
+  འདི་མ་ཐོབ་པས།
+- **ལཱ་འགན་སྲུང་སྐྱོབ།:** རཱསི་ཊི་ཆ་ཚང་སྦེ་ འཆར་དངུལ་འདྲ་བ། pytest གིས་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་བཱའིཊི་གྱངས་ཁ་འདི་དྲན་ཐོ་བཀོདཔ་ཨིན།
+  དང་ གསར་བཏོན་གྱི་ ཅ་ཆས་ཚུ་གི་དོན་ལུ་ བྱིན་མི་ བཅའ་མར་གཏོགས་མི་ བཅུད་བསྡུས་ཚུ།
 
-Release gating should capture the summary output from every harness (Rust, Python, JS, Swift) so the
-archived report can diff payload receipts and metrics uniformly before promoting a build. Run
-`ci/sdk_sorafs_orchestrator.sh` to execute every parity suite (Rust, Python bindings, JS, Swift) in
-one pass; CI artifacts should attach the log excerpt from that helper plus the generated
-`matrix.md` (SDK/status/duration table) to the release ticket so reviewers can audit the parity
-matrix without rerunning the suite locally.
+བཏོན་གཏང་ནི་ བཏོན་གཏང་ནི་ ཧར་ནེསི་ག་ར་ལས་ བཅུད་བསྡུས་ཨའུཊི་པུཊི་ (Rust, Python, JS, Swift) ལས་ བཟུང་དགོཔ་ཨིན།
+གཏན་མཛོད་ཀྱི་སྙན་ཞུ་གིས་ བཟོ་བསྐྲུན་གྱི་ལས་རིམ་འདི་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ འབབ་ཁུངས་དང་ ཚད་གཞི་ཚུ་ གཅིག་མཚུངས་སྦེ་ ཁྱབ་སྤེལ་འབད་ཚུགས། རྒྱུག༌ནི
+I18NI000000030X ནང་ ཆ་སྙོམས་ཆ་ཚང་ (Rust, Python binds, JS, Swift) ནང་ ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ཨིན།
+གཅིག་ལམ་གཅིག་; སི་ཨའི་ ཅ་རྙིང་ཚུ་གིས་ རོགས་རམ་དེ་ལས་ བཟོ་བཏོན་འབད་མི་དེ་ལས་ ལོག་ཐོན་འབྲས་འདི་ མཉམ་སྦྲགས་འབད་དགོ།
+`matrix.md` (SDK/status/duration table) འདི་ གསར་བཏོན་འབད་མི་ ཤོག་འཛིན་ལུ་ཨིནམ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ འདྲ་མཉམ་རྩིས་ཞིབ་འབད་ཚུགས།
+metrix ས་གནས་ནང་ སྡེ་ཕྲན་འདི་ ལོག་མ་བརྒྱབ་པར་ .

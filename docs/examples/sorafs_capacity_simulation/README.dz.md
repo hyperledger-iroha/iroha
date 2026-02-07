@@ -7,62 +7,57 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 727a648141405b0c8f12a131ff903d3e7ce5b74a7f899dd99fe9aa6490b55ef2
 source_last_modified: "2025-12-29T18:16:35.080764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Simulation Toolkit
+# I18NT0000006X ཤོང་ཚད་ཀྱི་དཔེ་མཚོན་ལག་ཆས་ཐོབ།
 
-This directory ships the reproducible artefacts for the SF-2c capacity marketplace
-simulation. The toolkit exercises quota negotiation, failover handling, and slashing
-remediation using the production CLI helpers and a lightweight analysis script.
+སྣོད་ཐོ་འདི་གིས་ ཨེསི་ཨེཕ་-༢སི་ ལྕོགས་གྲུབ་ཚོང་ཁང་གི་དོན་ལུ་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ཅ་ཆས་ཚུ་ བཏངམ་ཨིན།
+བརྫུས་མ་བཟོས། ལག་ཆས་མཁོ་ཆས་འདི་གིས་ ཁྲལ་གྱི་གྲོས་བསྟུན་དང་ འཐུས་ཤོར་འཛིན་སྐྱོང་ དེ་ལས་ བསད་ནི།
+བཟོ་བསྐྲུན་གྱི་ CLI གྲོགས་རམ་པ་དང་ ལྗིད་ཚད་མར་ཕབ་ཀྱི་དབྱེ་དཔྱད་ཡིག་ཆ་ལག་ལེན་འཐབ་སྟེ་ བཅོ་ཁ་རྐྱབ་ནི།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Rust toolchain capable of running `cargo run` for workspace members.
-- Python 3.10+ (standard library only).
+- ལཱ་གི་ས་སྒོ་འཐུས་མི་ཚུ་གི་དོན་ལུ་ I18NI0000009X འདི་ གཡོག་བཀོལ་ཚུགས་པའི་ རསཊ་ལག་ཆས་རྒྱུན་ཤུན།
+- པའི་ཐོན་ ༣.༡༠+ (ཚད་གཞིའི་དཔེ་མཛོད་རྐྱངམ་གཅིག)།
 
-## Quickstart
+## མགྱོགས་འགོ་བཙུགས་པ།
 
-```bash
-# 1. Generate canonical CLI artefacts
-./run_cli.sh ./artifacts
+I18NF0000008X
 
-# 2. Aggregate the results and emit Prometheus metrics
-./analyze.py --artifacts ./artifacts
-```
+I18NI0000000010X གིས་ བཟོ་བསྐྲུན་འབད་ནི་ལུ་ `sorafs_manifest_stub capacity` འབོད་བརྡ་འབདཝ་ཨིན།
 
-The `run_cli.sh` script invokes `sorafs_manifest_stub capacity` to build:
+- གྲོས་བསྟུན་སྒྲིག་སྟངས་ཆ་ཚན་གྱི་དོན་ལུ་ གཏན་འབེབས་བྱིན་མི་གསལ་བསྒྲགས་ཚུ།
+- གྲོས་བསྟུན་གནས་སྟངས་དང་མཐུན་པའི་ འདྲ་བཤུས་བཀའ་རྒྱ་ཅིག།
+- འཐུས་ཤོར་སྒོ་སྒྲིག་གི་དོན་ལུ་ ཊེ་ལི་མི་ཊི་པར་ལེན་ཚུ།
+- བརྡབ་གསིག་ཞུ་བ་འདི་ བཟུང་མི་ རྩོད་གཞི་ཅིག།
 
-- Deterministic provider declarations for the quota negotiation fixture set.
-- A replication order matching the negotiation scenario.
-- Telemetry snapshots for the failover window.
-- A dispute payload capturing the slashing request.
+ཡིག་ཆ་འདི་གིས་ I18NT0000005X བཱའིཊི་ (`*.to`), base64 པེ་ལོཌི་ (I18NI000000013X), I18NT000000007X བྲིས།
+གཟུགས་པོ་དང་མི་གིས་ལྷག་ཐུབ་པའི་བཅུད་བསྡུས་ (`*_summary.json`) གདམ་ཁ་རྐྱབ་ཡོད་པའི་ཅ་ལག་འོག་ལུ།
+སྣོད་ཐོ།
 
-The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), Torii request
-bodies, and human-readable summaries (`*_summary.json`) under the chosen artifact
-directory.
+`analyze.py` བཟོ་བཏོན་འབད་ཡོད་པའི་བཅུད་བསྡུས་ཚུ་ བཟའ་སྤྱོད་འབདཝ་ཨིནམ་དང་ བསྡོམས་རྩིས་སྙན་ཞུ་ཅིག་བཏོནམ་ཨིན།
+(`capacity_simulation_report.json`), དང་ Prometheus ཚིག་ཡིག་ཅིག་བཏོན་གཏངམ་ཨིན།
+(`capacity_simulation.prom`) འབག་པ།
 
-`analyze.py` consumes the generated summaries, produces an aggregated report
-(`capacity_simulation_report.json`), and emits a Prometheus textfile
-(`capacity_simulation.prom`) carrying:
+- `sorafs_simulation_quota_*` མཐུན་གྲོས་ཡོད་པའི་ནུས་པ་དང་བགོ་བཀྲམ་ཚུ་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+  བྱིན་མི་རེ་ལུ་བགོ་བཤའ་།
+- `sorafs_simulation_failover_*` མར་འབབ་དུས་ཚོད་ཌེལ་ཊ་དང་ སེལ་འཐུ་འབད་ཡོད་པའི་ ཚད་འཇལ་འབདཝ་ཨིན།
+  ཚབ་བཙུགས་ནི།
+- I18NI000000020X བཅོས་མའི་བརྒྱ་ཆའི་འདོན་སྤེལ་འབད་ཡོདཔ།
+  རྩོད་གཞི་སྤྲོད་ལེན་ལས་།
 
-- `sorafs_simulation_quota_*` gauges describing negotiated capacity and allocation
-  share per provider.
-- `sorafs_simulation_failover_*` gauges highlighting downtime deltas and the selected
-  replacement provider.
-- `sorafs_simulation_slash_requested` recording the remediation percentage extracted
-  from the dispute payload.
+`dashboards/grafana/sorafs_capacity_simulation.json` ནང་ Grafana ནང་འདྲེན་འབད།
+དེ་ལས་ བཟོ་བཏོན་འབད་ཡོད་པའི་ཚིག་ཡིག་ཡིག་སྣོད་འདི་ བརྡ་བཀོད་འབད་མི་ Prometheus གནད་སྡུད་འབྱུང་ཁུངས་ལུ་ དཔག་བྱེད།
+དཔེར་ན་ མཐུད་མཚམས་ཕྱིར་འདྲེན་འབད་མི་ཚིག་ཡིག་ཡིག་སྣོད་བསྡུ་སྒྲིག་འབད་མི་བརྒྱུད་དེ་)། བང་རྒྱུགས་ཀྱི་དེབ་འདི།
+I18NI0000002X ཆ་ཚང་བརྒྱུད་དེ་འགྲོ་བཞིན་ཡོད།
+ལས་ཀ, Prometheus རིམ་སྒྲིག་བསླབ་བྱ་ཚུ་ཚུདཔ་ཨིན།
 
-Import the Grafana bundle in `dashboards/grafana/sorafs_capacity_simulation.json`
-and point it at a Prometheus datasource that scrapes the generated textfile (for
-example via the node-exporter textfile collector). The runbook at
-`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` walks through the full
-workflow, including Prometheus configuration tips.
+## བརྐོ་ནི།
 
-## Fixtures
+- `scenarios/quota_negotiation/` — མཁོ་སྤྲོད་པ་གསལ་བསྒྲགས་ཀྱི་ཁྱད་ཚད་དང་ འདྲ་བཤུས་ཀྱི་གོ་རིམ་ཚུ།
+- `scenarios/failover/` — གཞི་རྟེན་གྱི་ བརླག་སྟོར་ཤོར་མི་དང་ འཐུས་ཤོར་གྱི་ཡར་འཐེན་གྱི་དོན་ལུ་ ཊེ་ལི་མི་ཊི་སྒོ་སྒྲིག་ཚུ།
+- `scenarios/slashing/` — འདྲ་བཤུས་བཀོད་རྒྱ་གཅིག་པ་ལུ་གཞི་བསྟུན་འབད་བའི་ རྩོད་གཞི་ཁྱད་ཚད་ཚུ།
 
-- `scenarios/quota_negotiation/` — Provider declaration specs and replication order.
-- `scenarios/failover/` — Telemetry windows for the primary outage and failover lift.
-- `scenarios/slashing/` — Dispute spec referencing the same replication order.
-
-These fixtures are validated in `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`
-to guarantee they remain in sync with the CLI schema.
+འ་ནི་སྒྲིག་བཀོད་ཚུ་ `crates/sorafs_car/tests/capacity_simulation_toolkit.rs` གིས་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ དེ་ཚུ་ སི་ཨེལ་ཨའི་འཆར་གཞི་དང་གཅིག་ཁར་ མཉམ་འབྱུང་སྦེ་སྡོད་དགོ།

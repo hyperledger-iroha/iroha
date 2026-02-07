@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b453559c05401edc11894e585c8d5ca4b678d4667c1cef0415582e1f7de8246
 source_last_modified: "2025-12-29T18:16:35.087502+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Economic Analysis - 2025-10 -> 2025-11 Shadow Run
+# စီးပွားရေးသုံးသပ်ချက် - 2025-10 -> 2025-11 Shadow Run
 
-Source artefact: `docs/examples/soranet_incentive_shadow_run.json` (signature +
-public key in the same directory). The simulation replayed 60 epochs per relay
-with the reward engine pinned to `RewardConfig` recorded in
-`reward_config.json`.
+အရင်းအမြစ်အနုပညာ- `docs/examples/soranet_incentive_shadow_run.json` (လက်မှတ် +
+တူညီသောလမ်းညွှန်တွင် အများသူငှာသော့။) ပုံသဏ္ဍာန်သည် relay တစ်ခုလျှင် 60 အပိုင်းကို ပြန်လည်ပြသသည်။
+မှတ်တမ်းတင်ထားသော `RewardConfig` တွင် ဆုကြေးအင်ဂျင်ဖြင့် ချိတ်ထားသည်။
+`reward_config.json`။
 
-## Distribution Summary
+## ဖြန့်ဝေမှုအကျဉ်းချုပ်
 
-- **Total payouts:** 5,160 XOR over 360 rewarded epochs.
-- **Fairness envelope:** Gini coefficient 0.121; top relay share 23.26%
-  (well below the 30% governance guardrail).
-- **Availability:** fleet average 96.97%, all relays remained above 94%.
-- **Bandwidth:** fleet average 91.20%, with the lowest performer at 87.23%
-  during planned maintenance; penalties were applied automatically.
-- **Compliance noise:** 9 warning epochs and 3 suspensions were observed and
-  translated into payout reductions; no relay exceeded the 12-warning cap.
-- **Operational hygiene:** no metrics snapshots were skipped due to missing
-  config, bonds, or duplicates; no calculator errors were emitted.
+- ** စုစုပေါင်း ပေးချေမှု-** ဆုပေးချိန် 360 ကျော် 5,160 XOR ။
+- **မျှတမှုစာအိတ်-** Gini ကိန်းဂဏန်း 0.121; ထိပ်တန်း relay မျှဝေမှု 23.26%
+  (အုပ်ချုပ်မှုအစောင့်အကြပ် ၃၀ ရာခိုင်နှုန်းအောက်)။
+- **ရရှိနိုင်မှု-** ရေယာဉ်စုပျမ်းမျှ 96.97%, relays များအားလုံး 94% အထက်တွင် ရှိနေပါသည်။
+- **Bandwidth:** ရေယာဉ်စုပျမ်းမျှ 91.20%, အနိမ့်ဆုံးလုပ်ဆောင်သူ 87.23%
+  စီစဉ်ထိန်းသိမ်းမှုကာလအတွင်း; ပြစ်ဒဏ်များကို အလိုအလျောက် ကျင့်သုံးခဲ့သည်။
+- **လိုက်နာမှု ဆူညံသံ-** သတိပေးချက် ၉ ခုနှင့် ဆိုင်းထိန်းမှု ၃ ခုတို့ကို စောင့်ကြည့်လေ့လာခဲ့ပြီး၊
+  ပေးချေမှုလျှော့ချခြင်းသို့ ဘာသာပြန်ဆိုခြင်း၊ relay သည် 12-warning cap ကိုကျော်လွန်ခြင်းမရှိပါ။
+- **လုပ်ငန်းဆောင်တာတစ်ကိုယ်ရေသန့်ရှင်းရေး-** ပျောက်ဆုံးနေသောကြောင့် တိုင်းတာမှုလျှပ်တစ်ပြက်ရိုက်ချက်များကို ကျော်သွားခြင်းမရှိပါ။
+  config၊ နှောင်ကြိုးများ သို့မဟုတ် ထပ်နေခြင်း၊ ဂဏန်းပေါင်းစက် အမှားအယွင်းများကို ထုတ်လွှတ်ခြင်းမရှိပါ။
 
-## Observations
+##လေ့လာတွေ့ရှိချက်များ
 
-- Suspensions correspond to epochs where relays entered maintenance mode. The
-  payout engine emitted zero payouts for those epochs while preserving the
-  audit trail in the shadow-run JSON.
-- Warning penalties shaved 2% off the affected payouts; the resulting
-  distribution still converges thanks to the uptime/bandwidth weights (650/350
-  per mille).
-- Bandwidth variance tracks the anonymised guard heatmap. The lowest performer
-  (`6666...6666`) retained 620 XOR across the window, above the 0.6x floor.
-- Latency-sensitive alerts (`SoranetRelayLatencySpike`) remained below warning
-  thresholds throughout the window; correlated dashboards are captured under
-  `dashboards/grafana/soranet_incentives.json`.
+- Suspensions များသည် ပြုပြင်ထိန်းသိမ်းမှုမုဒ်သို့ relay များဝင်ရောက်သည့်ခေတ်နှင့် ကိုက်ညီပါသည်။ ဟိ
+  ငွေပေးချေမှုအင်ဂျင်သည် ထိုခေတ်ကာလများအတွက် ပေးချေမှု သုညကို ထုတ်ပေးသည်။
+  အရိပ်ပြေး JSON တွင် စာရင်းစစ်လမ်းကြောင်း။
+- သတိပေးပြစ်ဒဏ်များသည် ဒဏ်ငွေပေးချေမှုမှ 2% ကို ရိတ်ခြင်း၊ ရလဒ်
+  uptime/bandwidth weights (650/350) ကြောင့် ဖြန့်ချီဆဲဖြစ်သည်။
+  တစ်ထောင်)။
+- Bandwidth ကွဲလွဲမှုသည် အမည်မသိတပ်ထားသည့် အပူမြေပုံကို ခြေရာခံသည်။ အနိမ့်ဆုံးဖျော်ဖြေသူ
+  (`6666...6666`) 0.6x ကြမ်းပြင်အထက် ပြတင်းပေါက်တစ်လျှောက်တွင် 620 XOR ကို ထိန်းသိမ်းထားသည်။
+- Latency-sensitive သတိပေးချက်များ (`SoranetRelayLatencySpike`) သည် သတိပေးချက်အောက်တွင် ရှိနေသည်
+  ပြတင်းပေါက်တစ်လျှောက် တံခါးခုံများ၊ ဆက်စပ်ဒိုင်ခွက်များကို အောက်တွင် ဖမ်းယူထားသည်။
+  `dashboards/grafana/soranet_incentives.json`။
 
-## Recommended Actions Before GA
+## GA မတိုင်မီ အကြံပြုထားသော လုပ်ဆောင်ချက်များ
 
-1. Keep running monthly shadow replays and update the artefact set and this
-   analysis if the fleet composition changes.
-2. Gate automatic payouts on the Grafana alert suite referenced in the roadmap
-   (`dashboards/alerts/soranet_incentives_rules.yml`); copy screenshots into the
-   governance minutes when seeking renewal.
-3. Re-run the economic stress test if base reward, uptime/bandwidth weights, or
-   the compliance penalty changes by >=10%.
+1. လစဉ် shadow replay များကို ဆက်လက်လုပ်ဆောင်ပြီး artefact set နှင့် ၎င်းကို အပ်ဒိတ်လုပ်ပါ။
+   ရေယာဉ်စုဖွဲ့စည်းမှု ပြောင်းလဲပါက ခွဲခြမ်းစိတ်ဖြာပါ။
+2. လမ်းပြမြေပုံတွင်ဖော်ပြထားသော Grafana သတိပေးချက်အစုံရှိ အလိုအလျောက်ပေးချေမှုများကို ဂိတ်ပေါက်
+   (`dashboards/alerts/soranet_incentives_rules.yml`); စခရင်ရှော့ပုံများကို ကူးယူပါ။
+   သက်တမ်းတိုးရန်ရှာဖွေသည့်အခါ အုပ်ချုပ်မှုမိနစ်။
+3. အခြေခံဆုလာဘ်၊ အလုပ်ချိန်/ဘန်းဝဒ်အလေးများ သို့မဟုတ် အခြေနေရှိပါက စီးပွားရေးဖိစီးမှုစမ်းသပ်မှုကို ပြန်လည်လုပ်ဆောင်ပါ။
+   လိုက်နာမှုပြစ်ဒဏ်သည် >=10% ဖြင့် ပြောင်းလဲပါသည်။

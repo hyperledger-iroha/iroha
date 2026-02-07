@@ -4,12 +4,14 @@ direction: rtl
 source: docs/portal/docs/norito/quickstart.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 title: بدء سريع ل Norito
 description: ابن وتحقق وانشر عقد Kotodama باستخدام ادوات الاصدار والشبكة الافتراضية ذات العقدة الواحدة.
-slug: /norito/quickstart
+Slug: /norito/Quickstart
 ---
 
 يعكس هذا الدليل العملي سير العمل الذي نتوقع ان يتبعه المطورون عند تعلم Norito و Kotodama لاول مرة: تشغيل شبكة حتمية بعقدة واحدة، تجميع عقد، اجراء dry-run محلي، ثم ارساله عبر Torii باستخدام CLI المرجعي.
@@ -69,7 +71,7 @@ KO
 
 > يفضل حفظ مصادر Kotodama تحت التحكم بالنسخ. توجد ايضا امثلة مستضافة على البوابة ضمن [معرض امثلة Norito](./examples/) اذا كنت تريد نقطة بداية اغنى.
 
-## 3. التجميع و dry-run مع IVM
+## 3. מידע והפעלה יבשה של IVM
 
 قم بتجميع العقد الى bytecode IVM/Norito (`.to`) ثم نفذه محليا للتأكد من نجاح syscalls للمضيف قبل لمس الشبكة:
 
@@ -101,7 +103,7 @@ iroha --config defaults/client.toml \
 
 يقوم CLI بترميز المعاملة عبر Norito، وتوقيعها بالمفتاح التطويري، وارسالها الى الـ peer العامل. راقب سجلات Docker ل syscall `set_account_detail` او تابع خرج CLI ل hash المعاملة الملتزمة.
 
-## 5. التحقق من تغيير الحالة
+##.
 
 استخدم نفس ملف تعريف CLI لجلب account detail الذي كتبه العقد:
 
@@ -122,9 +124,7 @@ iroha --config defaults/client.toml \
 
 اذا كانت القيمة مفقودة، تاكد من ان خدمة Docker compose ما زالت تعمل وان hash المعاملة الذي ابلغ عنه `iroha` وصل الى حالة `Committed`.
 
-## الخطوات التالية
-
-- استكشف [معرض الامثلة](./examples/) المولد تلقائيا لرؤية
+## אומנות- استكشف [معرض الامثلة](./examples/) المولد تلقائيا لرؤية
   كيف تتطابق مقتطفات Kotodama الاكثر تقدما مع syscalls Norito.
 - اقرأ [دليل البدء Norito](./getting-started) للحصول على شرح اعمق
   لادوات المترجم/runner ونشر manifests وبيانات IVM الوصفية.

@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8f2fe1d4fc449fc895f770195f3d209d5a576dfe78c8fea37c523cc111694c44
 source_last_modified: "2026-02-07T00:30:39.016220+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Hyperledger Iroha
+# I18NT0000000X Iroha
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![[ཆོག་ཐམ་](I18NU0000032X)](https://opensource.org/licenses/Apache-2.0)
 
-Hyperledger Iroha is a deterministic blockchain platform for permissioned and consortium deployments. It provides account/asset management, on-chain permissions, and smart contracts through the Iroha Virtual Machine (IVM).
+I18NT0000001X Iroha འདི་ གནང་བ་དང་ ཀོན་ཊི་ཡམ་བཀྲམ་སྤེལ་ཚུ་གི་དོན་ལུ་ གཏན་འབེབས་བཀག་ཆ་ཡོད་པའི་ གཞི་རྟེན་ཅིག་ཨིན། འདི་གིས་ རྩིས་ཁྲ་/རྒྱུ་དངོས་འཛིན་སྐྱོང་དང་ རིམ་སྒྲིག་གནང་བ་ དེ་ལས་ Iroha བར་ཅུ་ཡལ་འཕྲུལ་ཆས་ (I18NT000000023X) བརྒྱུད་དེ་ གན་རྒྱ་ཚུ་བྱིནམ་ཨིན།
 
-> Workspace status and recent changes are tracked in [`status.md`](./status.md).
+> ལཱ་གི་ས་སྒོ་དང་ འཕྲལ་གྱི་བསྒྱུར་བཅོས་ཚུ་ [`status.md`](./status.md) ནང་ལུ་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།
 
-## Release Tracks
+## རྗེས་འཇུག་རྗེས་འཇུག་།
 
-This repository ships two deployment tracks from the same codebase:
+མཛོད་ཁང་འདི་གིས་ གསང་ཡིག་གཞི་རྟེན་གཅིག་ལས་ བཀྲམ་སྤེལ་ལམ་གཉིས་ བཏངམ་ཨིན།
 
-- **Iroha 2**: self-hosted permissioned/consortium networks.
-- **Iroha 3 (SORA Nexus)**: the Nexus-oriented deployment track using the same core crates.
+- **I18NT0000015X 2**:: རང་གིས་གནང་བའི་གནང་བ་/མཉམ་བསྡོམས་དྲ་ཚིགས།
+- **Iroha 3 (SORA Nexus)***: Nexus-oriented repenting repeeding dounteding repeed ed dee of ཀེརེཊི་འདི་ལག་ལེན་འཐབ་ཨིན།
 
-Both tracks share the same core components, including Norito serialization, Sumeragi consensus, and the Kotodama -> IVM toolchain.
+ལམ་གཉིས་ཆ་ར་གིས་ Norito རིམ་སྒྲིག་ Sumeragi མོས་མཐུན་དང་ I18NT0000004X -> I18NT000000024X ལག་ཆས་ཚུ་ཚུ་རྩིས་ཏེ་ གཙོ་བོ་ཆ་ཤས་ཅོག་འཐདཔ་ཚུ་ བརྗེ་སོར་འབདཝ་ཨིན།
 
-## Repository Layout
+## མཛོད་ཁང་གི་སྒྲིག་བསྒྲགས།
 
-- [`crates/`](./crates): core Rust crates (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, `ivm`, `norito`, etc.).
-- [`integration_tests/`](./integration_tests): cross-component network/integration tests.
-- [`IrohaSwift/`](./IrohaSwift): Swift SDK package.
-- [`java/iroha_android/`](./java/iroha_android): Android SDK package.
-- [`docs/`](./docs): user/operator/developer documentation.
+- [I18NI0000000078X](./crates): རསཊ་ཀེརེསི་གཙོ་བོ་ (`iroha`, I18NI00000000081X, I18NI0000000081X, I18NI00000000082X, I18NI000000000083X, I18NI0000000083X, I18NI000000083X, `norito` ལ་སོགས་པ།).
+- [I18NI0000085X](I18NU000000035X): ཆ་ཤས་-ཆ་ཤས་ཡོངས་འབྲེལ་/མཉམ་བསྡོམས་བརྟག་དཔྱད།
+- [I18NI0000086X](./IrohaSwift): སོར་ཆུད་ཨེསི་ཌི་ཀེ་ཐུམ་སྒྲིལ་།
+- [I18NI0000087X](I18NU000000037X): Android SDK ཐུམ་སྒྲིལ་།
+- [I18NI0000088X](I18NU000000038X): ལག་ལེན་པ་/བཀོལ་སྤྱོད་པ་/གོང་འཕེལ་གཏང་མི་ཡིག་ཆ།
 
-## Quickstart
+## མགྱོགས་འགོ་བཙུགས་པ།
 
-### Prerequisites
+### སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- [Rust stable](https://www.rust-lang.org/tools/install)
-- Optional: Docker + Docker Compose for local multi-peer runs
+- [རྒྱུས་གྲངས།](I18NU0000039X)
+- གདམ་ཁ་ཅན་: I18NT000000009X + I18NT000000010X ཉེ་གནས་མལ་ཊི་པི་ཡར་གཡོག་བཀོལ་ཚུ་གི་དོན་ལུ་ བརྩམས་སྒྲིག།
 
-### Build and Test (Workspace)
+### བཟོ་སྐྲུན་དང་བརྟག་དཔྱད།(ལས་ཀ)།
 
 ```bash
 cargo build --workspace
@@ -50,105 +51,96 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-Notes:
+དྲན་ཐོ།
 
-- Full workspace build can take about 20 minutes.
-- Full workspace tests can take multiple hours.
-- The workspace targets `std` (WASM/no-std builds are not supported).
+- ལཱ་གི་ས་སྒོ་ཆ་ཚང་བཟོ་ནི་ལུ་ སྐར་མ་༢༠ དེ་ཅིག་འགོརཝ་ཨིན།
+- ལཱ་གི་ས་སྒོ་བརྟག་དཔྱད་ཆ་ཚང་གིས་ ཆུ་ཚོད་ལེ་ཤ་ཅིག་འགོར་འོང་།
+- ལཱ་གི་ས་སྒོ་དམིགས་གཏད་ཚུ་ I18NI000000089X (WASM/no-std བཟོ་བསྐྲུན་ཚུ་རྒྱབ་སྐྱོར་མ་འབད་བས།)
 
-### Targeted Test Commands
+### དམིགས་ཚད་ཅན་གྱི་ཚོད་ལྟའི་བརྡ་ཆ།
 
 ```bash
 cargo test -p <crate>
 cargo test -p <crate> <test_name> -- --nocapture
 ```
 
-### SDK Test Commands
+### ཨེསི་ཌི་ཀེ་བརྟག་དཔྱད་བརྡ་བཀོད།
 
-```bash
-cd IrohaSwift
-swift test
-```
+I18NF0000028X
 
-```bash
-cd java/iroha_android
-JAVA_HOME=$(/usr/libexec/java_home -v 21) \
-ANDROID_HOME=~/Library/Android/sdk \
-ANDROID_SDK_ROOT=~/Library/Android/sdk \
-./gradlew test
-```
+I18NF0000029X
 
-## Run a Local Network
+## ས་གནས་དྲ་རྒྱ་གཡོག་བཀོལ།
 
-Start the provided Docker Compose network:
+བྱིན་འགོ་བཙུགས། Docker རྩོམ་སྒྲིག་དྲ་བ།
 
 ```bash
 docker compose -f defaults/docker-compose.yml up
 ```
 
-Use the CLI against the default client config:
+སྔོན་སྒྲིག་མཁོ་སྤྲོད་རིམ་སྒྲིག་འབད་མི་ལུ་ སི་ཨེལ་ཨའི་ལག་ལེན་འཐབ།
 
 ```bash
 cargo run --bin iroha -- --config ./defaults/client.toml --help
 ```
 
-For daemon-specific native deployment steps, see [`crates/irohad/README.md`](./crates/irohad/README.md).
+ཌེ་མཱོན་དམིགས་བསལ་གྱི་ བཀྲམ་སྤེལ་གྱི་གོ་རིམ་ཚུ་གི་དོན་ལུ་ [`crates/irohad/README.md`](./crates/irohad/README.md) ལུ་བལྟ།
 
-## API and Observability
+## API དང་བལྟ་རྟོག་འབད་ཚུལ།
 
-Torii exposes both Norito and JSON APIs. Common operator endpoints:
+Torii གིས་ Norito དང་ JSON APIs གཉིས་ཆ་ར་ ཕྱིར་བཏོན་འབདཝ་ཨིན། སྤྱིར་བཏང་བཀོལ་སྤྱོད་པའི་མཇུག་སྣོད་ཚུ།
 
 - `GET /status`
 - `GET /metrics`
 - `GET /v1/parameters`
 - `GET /v1/events/sse`
 
-See the full endpoint reference in:
+མཐའ་མཇུག་གི་གཞི་བསྟུན་ཆ་ཚང་ནང་བལྟ།
 
-- [`docs/source/telemetry.md`](./docs/source/telemetry.md)
-- [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
+- [I18NI0000095X](I18NU0000041X)
+- [I18NI0000096X](I18NU0000042X)
 
-## Core Crates
+## ཚད་གཞི།
 
-- [`crates/iroha`](./crates/iroha): client library.
-- [`crates/irohad`](./crates/irohad): peer daemon binaries.
-- [`crates/iroha_cli`](./crates/iroha_cli): reference CLI.
-- [`crates/iroha_core`](./crates/iroha_core): ledger/core execution engine.
-- [`crates/iroha_config`](./crates/iroha_config): typed configuration model.
-- [`crates/iroha_data_model`](./crates/iroha_data_model): canonical data model.
-- [`crates/iroha_crypto`](./crates/iroha_crypto): cryptographic primitives.
-- [`crates/norito`](./crates/norito): deterministic serialization codec.
-- [`crates/ivm`](./crates/ivm): Iroha Virtual Machine.
-- [`crates/iroha_kagami`](./crates/iroha_kagami): key/genesis/config tooling.
+- [`crates/iroha`](./crates/iroha): མཁོ་སྤྲོད་པ་དཔེ་མཛོད་.
+- [I18NI0000098X](./crates/irohad): མཉམ་རོགས་ཌེ་མཱོན་གཉིས་ལྡན་ཚུ།
+- [I18NI0000099X](./crates/iroha_cli): གཞི་བསྟུན་ CLI.
+- [`crates/iroha_core`](./crates/iroha_core): ལེཌ་ཇར་/ཀོར་བཀོལ་སྤྱོད་འཕྲུལ་ཆས།
+- [I18NI0000010101X](./crates/iroha_config): ཡིག་དཔར་རྐྱབས་པའི་རིམ་སྒྲིག་དཔེ་ཚད།
+- [`crates/iroha_data_model`](./crates/iroha_data_model): ཀེ་ནོ་ནིག་གནས་སྡུད་དཔེ་ཚད།
+- [`crates/iroha_crypto`](./crates/iroha_crypto): ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་གི་གནའ་དུས་ཚུ།
+- [`crates/norito`](I18NU000000050X): གཏན་འབེབས་རིམ་སྒྲིག་ཀོ་ཌེཀ།
+- [`crates/ivm`](I18NU000000051X): Iroha བརྡ་དོན་འཕྲུལ་ཆས།
+- [`crates/iroha_kagami`](I18NU000000052X): ལྡེ་མིག་/རིགས་མཚན་/རིམ་སྒྲིག་ལག་ཆས།
 
-## Documentation Map
+## ཡིག་ཆའི་ས་ཁྲ།
 
-- Main docs index: [`docs/README.md`](./docs/README.md)
-- Genesis: [`docs/genesis.md`](./docs/genesis.md)
-- Consensus (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
-- Transaction pipeline: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
-- P2P internals: [`docs/source/p2p.md`](./docs/source/p2p.md)
-- IVM syscalls: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
-- Kotodama grammar: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
-- Norito wire format: [`norito.md`](./norito.md)
-- Current work tracking: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
+- ཡིག་ཆ་གཙོ་བོ་: [`docs/README.md`](./docs/README.md)
+- Genesi: [`docs/genesis.md`](./docs/genesis.md)
+- མོས་མཐུན་ (I18NT0000003X): [I18NI000000109X](Kotodama)
+- བརྒྱུད་འཕྲིན་གྱི་མདོང་ལམ་: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
+- P2P ནང་འཁོད་: [`docs/source/p2p.md`](./docs/source/p2p.md)
+- I18NT0000025X སི་ཀཱལ་: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
+- Kotodama ཡིག་གཟུགས་: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
+- Norito གློག་ཐག་རྩ་སྒྲིག་: [`norito.md`](I18NU0000000060X)
+- ད་ལྟའི་ལས་ཀའི་རྗེས་འདེད་: [I18NI0000115X](./status.md), [`roadmap.md`](I18NU000000062X)
 
-## Translations
+## བསྒྱུར།
 
-Japanese overview: [`README.ja.md`](./README.ja.md)
+ཇ་པཱན་གྱི་བལྟ་དཔྱད།: [`README.ja.md`](I18NU000000063X)
 
-Other overviews:
-[`README.he.md`](./README.he.md), [`README.es.md`](./README.es.md), [`README.pt.md`](./README.pt.md), [`README.fr.md`](./README.fr.md), [`README.ru.md`](./README.ru.md), [`README.ar.md`](./README.ar.md), [`README.ur.md`](./README.ur.md)
+གཞན་ཡང་ བལྟ་སྟངས།
+[I18NI000000118X](./README.he.md) [`README.es.md`](I18NI000000000065X](I18NI0000000065X) [I18NI000000120X](`README.pt.md`](I18NU000000066X). [`README.fr.md`](./README.fr.md) [`README.ru.md`](I18NI00000000068X)(I18NI0000000068X), [`README.ar.md`](I18NI0000000069X)(./README.ar.md). [`README.ur.md`](./README.ur.md)
 
-Translation workflow: [`docs/i18n/README.md`](./docs/i18n/README.md)
+སྐད་སྒྱུར་ལཱ་གི་རྒྱུན་རིམ་: [`docs/i18n/README.md`](I18NU000000071X)
 
-## Contributing and Help
+## ཕན་འདེབས།
 
-- Contribution guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- Community/support channels: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
+- ཕན་འདེབས་ལམ་སྟོན་: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- མི་སྡེ་/རྒྱབ་སྐྱོར་རྒྱུ་ལམ་: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
 
-## License
+## ཆོག་ཐམ།
 
-Iroha is licensed under Apache-2.0. See [`LICENSE`](./LICENSE).
+Iroha འདི་ Apache-2.0 འོག་ལུ་ཆོག་ཐམ་ཡོདཔ་ཨིན། བལྟ། [`LICENSE`](./LICENSE).
 
-Documentation is licensed under CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/
+ཡིག་ཆ་འདི་ CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/ འོག་ལུ་ཆོག་ཐམ་ཡོདཔ་ཨིན།

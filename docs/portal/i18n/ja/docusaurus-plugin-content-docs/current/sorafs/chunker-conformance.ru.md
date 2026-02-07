@@ -4,56 +4,58 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-conformance.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: Руководство по соответствию chunker SoraFS
-sidebar_label: Соответствие chunker
-description: Требования и workflow для сохранения детерминированного профиля chunker SF1 в fixtures и SDKs.
+id: チャンカー準拠
+タイトル: Руководство по соответствию チャンカー SoraFS
+サイドバーラベル: チャンカー
+説明: チャンカー SF1、フィクスチャ、SDK のワークフローとワークフロー。
 ---
 
 :::note Канонический источник
 :::
 
 Этот документ фиксирует требования, которым должна следовать каждая реализация, чтобы
-оставаться совместимой с детерминированным профилем chunker SoraFS (SF1). Он также
-документирует workflow регенерации, политику подписей и шаги верификации, чтобы
-потребители fixtures в SDKs оставались синхронизированными.
+チャンカー SoraFS (SF1) が見つかりました。 Он также
+документирует ワークフロー регенерации、политику、подписей и ги верификации、чтобы
+フィクスチャと SDK を組み合わせて使用できます。
 
 ## Канонический профиль
 
-- Входной seed (hex): `0000000000dec0ded`
-- Целевой размер: 262144 bytes (256 KiB)
-- Минимальный размер: 65536 bytes (64 KiB)
-- Максимальный размер: 524288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Seed таблицы gear: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- Входной シード (16 進数): `0000000000dec0ded`
+- バイト数: 262144 バイト (256 KiB)
+- Минимальный размер: 65536 バイト (64 KiB)
+- メッセージ: 524288 バイト (512 KiB)
+- ローリング多項式: `0x3DA3358B4DC173`
+- シードギア: `sorafs-v1-gear`
+- ブレークマスク：`0x0000FFFF`
 
-Эталонная реализация: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Любое SIMD-ускорение должно выдавать идентичные границы и digests.
+バージョン: `sorafs_chunker::chunk_bytes_with_digests_profile`。
+SIMD は、ダイジェストを表示します。
 
-## Набор fixtures
+## Набор 器具
 
 `cargo run --locked -p sorafs_chunker --bin export_vectors` регенерирует
-fixtures и выпускает следующие файлы в `fixtures/sorafs_chunker/`:
+備品と`fixtures/sorafs_chunker/`の情報:
 
 - `sf1_profile_v1.{json,rs,ts,go}` — канонические границы чанков для
-  потребителей Rust, TypeScript и Go. Каждый файл объявляет канонический handle как
-  `sorafs.sf1@1.0.0`, затем `sorafs.sf1@1.0.0`). Порядок фиксируется
-  `ensure_charter_compliance` и НЕ ДОЛЖЕН изменяться.
-- `manifest_blake3.json` — BLAKE3-верифицированный manifest, покрывающий каждый файл fixtures.
-- `manifest_signatures.json` — подписи совета (Ed25519) поверх digest манифеста.
-- `sf1_profile_v1_backpressure.json` и сырые corpora в `fuzz/` —
-  детерминированные streaming сценарии, используемые в тестах back-pressure chunker.
+  Rust、TypeScript、Go に対応します。 Каждый файл объявляет канонический ハンドル как
+  `sorafs.sf1@1.0.0`、`sorafs.sf1@1.0.0`)。 Порядок фиксируется
+  `ensure_charter_compliance` と НЕ ДОЛЖЕН изменяться。
+- `manifest_blake3.json` — BLAKE3-верифициров​​анный マニフェスト、покрывающий каждый файл フィクスチャ。
+- `manifest_signatures.json` — ダイジェスト版 (Ed25519) です。
+- `sf1_profile_v1_backpressure.json` と `fuzz/` のコーパス —
+  バック プレッシャー チャンカーを使用してストリーミングを行うことができます。
 
 ### Политика подписей
 
-Регенерация fixtures **должна** включать валидную подпись совета. Генератор
-отклоняет неподписанный вывод, если явно не передан `--allow-unsigned` (предназначен
-только для локальных экспериментов). Конверты подписей append-only и
-дедуплицируются по подписанту.
+試合の試合 **должна** が表示されます。 Генератор
+отклоняет неподписанный вывод, если явно не передан `--allow-unsigned` (предназначен)
+только для локальных экспериментов)。追加専用です。
+дедуплицируются по подписанту。
 
 Чтобы добавить подпись совета:
 
@@ -65,31 +67,31 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
 
 ## Верификация
 
-CI helper `ci/check_sorafs_fixtures.sh` повторно запускает генератор с
-`--locked`. Если fixtures расходятся или отсутствуют подписи, job падает. Используйте
-этот скрипт в nightly workflows и перед отправкой изменений fixtures.
+CI ヘルパー `ci/check_sorafs_fixtures.sh` の機能
+`--locked`。試合の試合、仕事の記録。 Используйте
+夜間のワークフローとフィクスチャを備えています。
 
-Шаги ручной проверки:
+概要:
 
-1. Запустите `cargo test -p sorafs_chunker`.
-2. Выполните `ci/check_sorafs_fixtures.sh` локально.
-3. Убедитесь, что `git status -- fixtures/sorafs_chunker` чист.
+1. `cargo test -p sorafs_chunker` です。
+2. Выполните `ci/check_sorafs_fixtures.sh` локально。
+3. Убедитесь、что `git status -- fixtures/sorafs_chunker` чист。
 
 ## Плейбук обновления
 
-При предложении нового профиля chunker или обновлении SF1:
+SF1 のチャンカー:
 
-См. также: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) для
-требований к метаданным, шаблонов предложений и чеклистов валидации.
+См. также: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) 日付
+требований к метаданным, заблонов предложений и чеклистов валидации.
 
-1. Подготовьте `ChunkProfileUpgradeProposalV1` (см. RFC SF-1) с новыми параметрами.
-2. Регенерируйте fixtures через `export_vectors` и зафиксируйте новый digest манифеста.
-3. Подпишите манифест требуемым кворумом совета. Все подписи должны быть
-   добавлены в `manifest_signatures.json`.
-4. Обновите затронутые SDK fixtures (Rust/Go/TS) и обеспечьте паритет между runtime.
-5. Регенерируйте fuzz corpora при изменении параметров.
-6. Обновите это руководство новым handle профиля, seeds и digest.
-7. Отправьте изменения вместе с обновленными тестами и roadmap-обновлениями.
+1. `ChunkProfileUpgradeProposalV1` (RFC SF-1) を参照してください。
+2. フィクスチャ через `export_vectors` および новый ダイジェスト メソッド。
+3. Подпизите манифест требуемым кворумом совета. Все подписи должны быть
+   `manifest_signatures.json` です。
+4. SDK フィクスチャ (Rust/Go/TS) とランタイムをサポートします。
+5. ファズコーパスを参照してください。
+6. 処理、シード、ダイジェストを実行します。
+7. ロードマップを確認してください。
 
-Изменения, которые затрагивают границы чанков или digests без соблюдения этого процесса,
-недействительны и не должны быть смержены.
+Изменения、которые затрагивают границы чанков или ダイジェスト без соблюдения этого процесса,
+あなたのことを考えてください。

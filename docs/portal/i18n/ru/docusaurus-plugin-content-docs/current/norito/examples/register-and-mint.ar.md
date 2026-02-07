@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: تسجيل نطاق وسك الأصول
-description: يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+слизень: /norito/examples/register-and-mint
+Название: تسجيل نطاق وسك الأصول
+Описание: Он играет в фильме "Панель Уэйд" в роли убийцы.
+источник: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
+Он был убит в 2007 году в Нью-Йорке.
 
 ## جولة دفتر الأستاذ
 
-- تأكد من وجود حساب الوجهة (مثل `ih58...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
+- Написано в фильме "Проект" (в роли `ih58...`) Загрузите SDK.
 - استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
-- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح السك.
+- Вы можете установить `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...` в исходное состояние.
 
-## أدلة SDK ذات صلة
+## Использование SDK
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Загрузка в Rust SDK](/sdks/rust)
+- [Просмотр Python SDK](/sdks/python)
+- [Загрузка JavaScript SDK](/sdks/javascript)
 
 [نزّل مصدر Kotodama](/norito-snippets/register-and-mint.ko)
 

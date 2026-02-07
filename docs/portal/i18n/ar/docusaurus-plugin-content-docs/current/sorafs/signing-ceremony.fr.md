@@ -4,70 +4,66 @@ direction: rtl
 source: docs/portal/docs/sorafs/signing-ceremony.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: signing-ceremony
-title: Remplacement de la ceremony de signature
-description: Comment le Parlement Sora approuve et distribue les fixtures du chunker SoraFS (SF-1b).
-sidebar_label: Ceremonie de signature
+المعرف: حفل التوقيع
+العنوان: استبدال حفل التوقيع
+الوصف: تعليق على Parlement Sora يوافق على تركيبات القطعة SoraFS (SF-1b) ويوزعها.
+Sidebar_label: حفل التوقيع
 ---
 
-> Roadmap : **SF-1b — approbations des fixtures du Parlement Sora.**
-> Le workflow du Parlement remplace l'ancienne « ceremonie de signature du conseil » hors ligne.
+> خريطة الطريق: **SF-1b — موافقة على تركيبات Parlement Sora.**
+> يحل سير عمل البرلمان محل القديم «حفل التوقيع على المجلس» خارج الخط.
 
-Le rituel manuel de signature des fixtures du chunker SoraFS est retire. Toutes les
-approbations passent desormais par le **Parlement Sora**, la DAO basee sur le tirage
-au sort qui gouverne Nexus. Les membres du Parlement bloquent du XOR pour obtenir la
-citoyennete, tournent entre panels et votent on-chain pour approuver, rejeter ou
-revenir sur des releases de fixtures. Ce guide explique le processus et le tooling
-pour les developers.
+تم إيقاف طقوس التركيب اليدوية الخاصة بـ Chunker SoraFS. توت ليه
+تم إلغاء الموافقات من قبل **Parlement Sora**، قاعدة DAO على النقل
+au النوع الذي يحكم Nexus. يحظر أعضاء البرلمان XOR للحصول على ذلك
+مواطن، قم بالمشاركة بين اللوحات والتصويت على السلسلة للموافقة أو الرفض أو
+Revenir sur des Releases de Installations. يشرح هذا الدليل العملية والأدوات
+من أجل المطورين.
 
-## Vue d'ensemble du Parlement
+## Vue d'ensemble du Parlement- **Citoyennete** — مشغلو XOR الذين يطلبون منك الاشتراك
+  المواطنون والمواطنون مؤهلون للتنقل بالفرز.
+- **اللوحات** — المسؤوليات هي جزء من اللوحات الدوارة
+  (البنية التحتية، الاعتدال، الخزانة، ...). حاجز البنية التحتية لـ Le Panel
+  اعتمادات التركيبات SoraFS.
+- **النقل بالفرز والتدوير** — يتم إعادة ترتيب حصار اللوحة بمفردها
+  الإيقاع المحدد في دستور البرلمان هو مجموعة qu'aucun ne
+  احتكار الموافقات.
 
-- **Citoyennete** — Les operateurs immobilisent le XOR requis pour s'inscrire comme
-  citoyens et devenir eligibles au tirage au sort.
-- **Panels** — Les responsabilites sont reparties entre des panels rotatifs
-  (Infrastructure, Moderation, Tresorerie, ...). Le Panel Infrastructure detient
-  les approbations de fixtures SoraFS.
-- **Tirage au sort et rotation** — Les sieges de panel sont reattribues selon la
-  cadence specifiee dans la constitution du Parlement afin qu'aucun groupe ne
-  monopolise les approbations.
+## تدفق الموافقة على التركيبات1. ** إذن الاقتراح **
+   - يعرض Tooling WG الحزمة المرشحة `manifest_blake3.json` والفرق
+     يتم التثبيت في التسجيل على السلسلة عبر `sorafs.fixtureProposal`.
+   - يقوم الاقتراح بتسجيل ملخص BLAKE3 والإصدار الدلالي والملاحظات
+     التغيير.
+2. ** المراجعة والتصويت **
+   - تستعرض لوحة البنية التحتية التأثير عبر ملف لوحة المفاتيح في البرلمان.
+   - يقوم الأعضاء بفحص القطع الأثرية CI وتنفيذ اختبارات التكافؤ وما إلى ذلك
+     تصدر الأصوات التي تفكر فيها على السلسلة.
+3. **الإنهاء**
+   - بمجرد اكتمال النصاب القانوني، سيتضمن وقت التشغيل ليلة موافقة متضمنة
+     ملخص البيانات الأساسية والتفاعل مع حمولة التثبيت.
+   - الحدث مكرر في السجل SoraFS حتى يتمكن العملاء من النفاذ
+     يستعيد البيان الأخير الموافق عليه من قبل البرلمان.
+4. ** التوزيع **
+   - يستعيد مساعدو CLI (`cargo xtask sorafs-fetch-fixture`) البيان
+     الموافقة عبر Nexus RPC. الثوابت JSON/TS/Go في المستودع متزامنة
+     مع `export_vectors` وصحيح الملخص حسب العلاقة مع التسجيل
+     على السلسلة.
 
-## Flux d'approbation des fixtures
+## تطوير سير العمل
 
-1. **Soumission de proposition**
-   - Le Tooling WG televerse le bundle candidat `manifest_blake3.json` et le diff
-     de fixture dans le registre on-chain via `sorafs.fixtureProposal`.
-   - La proposition enregistre le digest BLAKE3, la version semantique et les notes
-     de changement.
-2. **Revue et vote**
-   - Le Panel Infrastructure recoit l'affectation via la file de taches du Parlement.
-   - Les membres inspectent les artefacts CI, executent des tests de parite et
-     emettent des votes ponderes on-chain.
-3. **Finalisation**
-   - Une fois le quorum atteint, le runtime emet un evenement d'approbation incluant
-     le digest canonique du manifest et l'engagement Merkle du payload de fixture.
-   - L'evenement est duplique dans le registry SoraFS afin que les clients puissent
-     recuperer le dernier manifest approuve par le Parlement.
-4. **Distribution**
-   - Les helpers CLI (`cargo xtask sorafs-fetch-fixture`) recuperent le manifest
-     approuve via Nexus RPC. Les constantes JSON/TS/Go du depot restent synchronisees
-     en relancant `export_vectors` et en validant le digest par rapport a l'enregistrement
-     on-chain.
-
-## Workflow developpeur
-
-- Regenerer les fixtures avec :
+- تجديد التركيبات مع :
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
-```
-
-- Utiliser le helper de fetch du Parlement pour telecharger l'enveloppe approuvee,
-  verifier les signatures et rafraichir les fixtures locales. Pointer `--signatures`
-  vers l'enveloppe publiee par le Parlement ; le helper resout le manifest associe,
-  recalcule le digest BLAKE3 et impose le profil canonique `sorafs.sf1@1.0.0`.
+```- استخدم مساعد جلب Parlement لتنزيل المغلف المعتمد،
+  التحقق من التوقيعات وإزالة التركيبات المحلية. المؤشر `--signatures`
+  Vers l'enveloppe publiee par le Parlement؛ المصدر المساعد لو البيان المرتبط،
+  أعد حساب ملخص BLAKE3 وفرض الملف التعريفي الكنسي `sorafs.sf1@1.0.0`.
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -75,11 +71,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Passer `--manifest` si le manifest se trouve a une autre URL. Les enveloppes non
-signees sont refusees sauf si `--allow-unsigned` est active pour des smoke runs locaux.
+Passer `--manifest` إذا وجد البيان عنوان URL آخر. المغلفات غير
+الموقعون يرفضون sauf si `--allow-unsigned` est active pour des smoke run locaux.
 
-- Pour valider un manifest via un gateway de staging, cibler Torii plutot que des
-  payloads locaux :
+- من أجل التحقق من بيان عبر بوابة التدريج، cibler Torii plutot que des
+  موقع الحمولات:
 
 ```bash
 sorafs-fetch \
@@ -90,31 +86,29 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Le CI local n'exige plus un roster `signer.json`.
-  `ci/check_sorafs_fixtures.sh` compare l'etat du repo avec le dernier engagement
-  on-chain et echoue lorsqu'ils divergent.
+- Le CI local n'exige plus un list `signer.json`.
+  `ci/check_sorafs_fixtures.sh` مقارنة حالة الريبو مع المشاركة الأخيرة
+  على السلسلة وصدى عندما تكون متباعدة.
 
-## Notes de gouvernance
+## ملاحظات الحوكمة
 
-- La constitution du Parlement gouverne le quorum, la rotation et l'escalade ;
-  aucune configuration au niveau du crate n'est necessaire.
-- Les rollbacks d'urgence sont geres via le panel de moderation du Parlement. Le
-  Panel Infrastructure depose une proposition de revert qui reference le digest
-  precedent du manifest, et la release est remplacee une fois approuvee.
-- Les approbations historiques restent disponibles dans le registry SoraFS pour
-  un replay forensique.
+- دستور البرلمان يحكم النصاب القانوني والتناوب والتصعيد؛
+  لا يلزم تكوين مستوى الصندوق.
+- يتم تغيير عمليات التراجع عن الطلب عبر لوحة التحكم في Parlement. لو
+  تطرح البنية التحتية للوحة عرضًا للعودة يشير إلى الملخص
+  سابقة البيان، والإصدار يستبدل بفترة الموافقة عليها.
+- الموافقات التاريخية متاحة في السجل SoraFS من أجل
+  الأمم المتحدة إعادة الطب الشرعي.
 
-## FAQ
+## التعليمات- ** هل تجاوزت `signer.json` ؟**  
+  إنه رائع. كل إسناد التوقيع على السلسلة ؛ `manifest_signatures.json`
+  في المستودع، لا يوجد شيء أساسي يمكن تطويره وهو ما يجب أن يتوافق مع الأحدث
+  حدث الموافقة.
 
-- **Ou est passe `signer.json` ?**  
-  Il a ete supprime. Toute attribution de signature vit on-chain ; `manifest_signatures.json`
-  dans le depot n'est qu'un fixture developpeur qui doit correspondre au dernier
-  evenement d'approbation.
+- **فشل في ظهور التوقيعات Ed25519 locales ؟**  
+  غير. استحسانات Parlement هي عبارة عن قطع أثرية متصلة بالسلسلة. التركيبات
+  اللغات الموجودة لإعادة الإنتاج هي صالحة ضد هضم البرلمان.
 
-- **Faut-il encore des signatures Ed25519 locales ?**  
-  Non. Les approbations du Parlement sont stockees comme artefacts on-chain. Les fixtures
-  locales existent pour la reproductibilite mais sont validees contre le digest du Parlement.
-
-- **Comment les equipes surveillent-elles les approbations ?**  
-  Abonnez-vous a l'evenement `ParliamentFixtureApproved` ou interrogez le registry via
-  Nexus RPC pour obtenir le digest actuel du manifest et la liste des membres du panel.
+- **Comment les Equipments surveillent-elles les approbations ?**  
+  قم بإبلاغ الحدث `ParliamentFixtureApproved` أو التحقق من التسجيل عبر
+  Nexus RPC للحصول على ملخص البيان الحالي وقائمة أعضاء اللوحة.

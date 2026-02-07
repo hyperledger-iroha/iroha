@@ -11,35 +11,32 @@ id: transport
 title: SoraNet transport overview
 sidebar_label: Transport Overview
 description: Handshake, salt rotation, and capability guidance for the SoraNet anonymity overlay.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC streaming, and future Nexus data lanes. The transport program (roadmap items **SNNet-1**, **SNNet-1a**, and **SNNet-1b**) defined a deterministic handshake, post-quantum (PQ) capability negotiation, and salt rotation plan so every relay, client, and gateway observes the same security posture.
+SoraNet འདི་ I18NT000000001X ཁྱབ་ཚད་ཀྱི་ ཕེཊི་ཆི་དང་ Norito RPC རྒྱུན་སྤེལ་ དེ་ལས་ མ་འོངས་པའི་ Nexus གནད་སྡུད་ཀྱི་ལམ་ཚུ་ཨིན་མི་ མིང་མེད་པའི་ བཀབ་བཙུགས་ཨིན། སྐྱེལ་འདྲེན་ལས་རིམ་ (ལམ་སབ་ཁྲ་གི་རྣམ་གྲངས་ **SNet-1*, **SNet-1a**, དང་ **SNNet-1b**) གིས་ ལགཔ་འཐུད་དེ་ ཚད་གཞིའི་ཤུལ་ལས་ (PQ) ལྕོགས་གྲུབ་ཀྱི་གྲོས་བསྟུན་དང་ ཚྭ་བསྒྱིར་བའི་འཆར་གཞི་ཚུ་ ངེས་ཚིག་བཀོད་ཡོདཔ་ལས་ བར་འཛུལ་དང་ དགོངས་ཞུ་ དེ་ལས་ སྒོ་ར་ཚུ་གིས་ ཉེན་སྲུང་གི་གནས་སྟངས་གཅིག་མཚུངས་སྦེ་ བལྟ་རྟོག་འབདཝ་ཨིན།
 
-## Goals & network model
+## དམིགས་ཡུལ་དང་དྲ་རྒྱའི་དཔེ་སྟོན།
 
-- Build three-hop circuits (entry → middle → exit) over QUIC v1 so abusive peers never reach Torii directly.
-- Layer a Noise XX *hybrid* handshake (Curve25519 + Kyber768) on top of QUIC/TLS to bind session keys to the TLS transcript.
-- Require capability TLVs that advertise PQ KEM/signature support, relay role, and protocol version; GREASE unknown types to keep future extensions deployable.
-- Rotate blinded-content salts daily and pin guard relays for 30 days so directory churn cannot deanonymize clients.
-- Keep cells fixed at 1024 B, inject padding/dummy cells, and export deterministic telemetry so downgrade attempts are caught quickly.
+- QUIC v1 ལུ་ ཧོབ་གསུམ་གློག་ལམ་ (འཛུལ་ཞུགས་ → ཕྱིར་འཐོན་) བཟོ་བསྐྲུན་འབདཝ་ལས་ ལོག་སྤྱོད་འབད་མི་ མཉམ་རོགས་ཚུ་གིས་ ཐད་ཀར་དུ་ Torii མ་ལྷོདཔ་ཨིན།
+- ཊི་ཨེལ་ཨེསི་ཡིག་བསྒྱུར་གྱི་དོན་ལུ་ ལཱ་ཡུན་ལྡེ་མིག་ཚུ་ མཐུད་ནིའི་དོན་ལུ་ QUIC/TLS གི་གུ་ལུ་ QUIC/TLS གི་གུ་ལུ་ ཊི་ཨེལ་ཨེསི་ ཡིག་བསྒྱུར་གྱི་ ཡིག་བསྒྱུར་ ( Curve25519 + Kyber768) བང་རིམ་ཅིག་ བང་རིམ་ཅིག་ བང་རིམ་ཅིག་ བརྩེགས་བརྩེགས་འབད།
+- PQ KEM/signature རྒྱབ་སྐྱོར་དང་ བརྡ་སྤྲོད་ཀྱི་འགན་ཁུར་ དེ་ལས་ མཐུན་སྒྲིག་ཐོན་རིམ་ཚུ་ ཁྱབ་བསྒྲགས་འབད་མི་ ལྕོགས་གྲུབ་ཀྱི་ TLVs ཚུ་དགོ། མ་འོངས་རྒྱ་བསྐྱེད་ཚུ་ བཀོལ་སྤྱོད་འབད་བཏུབ་སྦེ་བཞག་ནི་ལུ་ མ་ཤེས་པའི་དབྱེ་བ་ཚུ་ གསལ་སྟོན་འབད།
+- ཉིན་བསྟར་བཞིན་དུ་ ནང་དོན་མེད་པའི་ཚྭ་དང་ ཉིན་གྲངས་༣༠ གི་རིང་ལུ་ པིན་སྲུང་སྐྱོབ་ཀྱི་ རི་ལེ་ཚུ་ རོ་ཊེཊ་གིས་ མཁོ་མངགས་འབད་མི་ཚུ་ལུ་ མིང་བཏགས་མི་ཚུགས།
+- ནང་ཐིག་ཚུ་ ༡༠༢༤B ལུ་གཏན་འཁེལ་སྦེ་བཞག་ཞིནམ་ལས་ པད་ཌིང་/ཌམ་མི་ནང་ཐིག་ཚུ་བཙུགས་ཞིནམ་ལས་ ཕྱིར་འདྲེན་གྱི་ ཌི་ཊར་མི་ཊིསི་ ཊེ་ལི་མི་ཊི་ཊི་འདི་ མགྱོགས་དྲགས་སྦེ་ མར་ཕབ་འབདཝ་ཨིན།
 
-## Handshake pipeline (SNNet-1a)
+## ལག་པའི་མདོང་ལམ་ (SNNet-1a)
 
-1. **QUIC/TLS envelope** – clients dial relays over QUIC v1 and complete a TLS 1.3 handshake using Ed25519 certificates signed by the governance CA. The TLS exporter (`tls-exporter("soranet handshake", 64)`) seeds the Noise layer so the transcripts are inseparable.
-2. **Noise XX hybrid** – protocol string `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` with prologue = TLS exporter. Message flow:
+1. **QUIC/TLS velope** – མཁོ་མངགས་འབད་མི་ཚུ་གིས་ QUIC v1 གུར་ བརྡ་སྤྲོད་འབད་དེ་ གཞུང་སྐྱོང་ CA གིས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ Ed25519 ལག་ཁྱེར་ཚུ་ལག་ལེན་འཐབ་སྟེ་ TLS1.3 ལག་ཤེད་ཅིག་ མཇུག་བསྡུ་ཡོདཔ་ཨིན། ཊི་ཨེལ་ཨེསི་ཕྱིར་འདྲེན་པ་ (`tls-exporter("soranet handshake", 64)`) སོན་འདི་སྐད་སྒྲ་བང་རིམ་འདི་ཨིནམ་ལས་ ཡིག་བསྒྱུར་ཚུ་དབྱེ་བ་ཕྱེ་མ་ཚུགས།
+2. **Noise XX hybrid** – མཐུན་སྒྲིག་ཡིག་རྒྱུན་ I18NI0000009X prologue = ཊི་ཨེལ་ཨེསི་ཕྱིར་འདྲེན་པ་། འཕྲིན་དོན་རྒྱུན་འབབ་།
 
-   ```
-   -> e, s
-   <- e, ee, se, s, pq_ciphertext
-   -> ee, se, pq_ciphertext
-   ```
+   I18NF0000004X
 
-   Curve25519 DH output and both Kyber encapsulations are mixed into the final symmetric keys. Failure to negotiate PQ material aborts the handshake outright—no classical-only fallback is permitted.
+   Curve25519 DH ཐོན་འབྲས་དང་ Kyber encapsulations གཉིས་ཆ་ར་ མཐའ་མའི་འདྲ་མཚུངས་ཀྱི་ལྡེ་མིག་ནང་ལུ་ སླ་བསྲེ་རྐྱབ་ཨིན། PQ རྒྱུ་ཆ་ཚུ་ ལགཔ་གིས་ ཕྲང་ཏང་ཏ་སྦེ་ གྲོས་བསྟུན་འབད་མ་ཚུགས་པ་ཅིན་ སྔར་སྲོལ་རྐྱངམ་གཅིག་གི་ མགུ་སྐོར་ག་ནི་ཡང་ འབད་མ་ཆོགཔ་ཨིན།
 
-3. **Puzzle tickets & tokens** – relays can demand an Argon2id proof-of-work ticket before `ClientHello`. Tickets are length-prefixed frames that carry the hashed Argon2 solution and expire within the policy bounds:
+3. **དཔར་བཤད་ཀྱི་ཤོག་འཛིན་དང་ཊོ་ཀེན་ཚུ་** – བརྡ་སྤྲོད་ཚུ་གིས་ I18NI000000010X གི་ཧེ་མ་ Argon2id གི་བདེན་དཔང་ལཱ་གི་ཤོག་བྱང་འདི་ དགོས་མཁོ་བཀོད་ཚུགས། ཤོག་འཛིན་ཚུ་ རིང་ཚད་-སྔོན་སྒྲིག་འབད་ཡོད་པའི་གཞི་ཁྲམ་ཚུ་ཨིནམ་ད་ དེ་གིས་ ཧེར་གཱོན་༢ ཐབས་ཤེས་འབག་སྟེ་ སྲིད་བྱུས་མཐའ་མཚམས་ནང་འཁོད་ལུ་ དུས་ཡུན་ཚང་ཡོདཔ་ཨིན།
 
    ```norito
    struct PowTicketV1 {
@@ -51,15 +48,15 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    }
    ```
 
-   Admission tokens prefixed with `SNTK` bypass puzzles when an ML-DSA-44 signature from the issuer validates against the active policy and revocation list.
+   `SNTK` གིས་ སྔོན་སྒྲིག་འབད་ཡོད་པའི་ འཛུལ་ཞུགས་ཊོ་ཀེན་ཚུ་ ཨེམ་ཨེལ་-ཌི་ཨེསི་ཨེ་-༤༤ གིས་ བརྡ་རྟགས་ལས་ ཨེམ་ཨེལ་ཌི་ཨེསི་ཨེ་-༤༤ གིས་ ཤུགས་ལྡན་སྲིད་བྱུས་དང་ ཆ་མེད་ཀྱི་ཐོ་ཡིག་ལུ་ ཤུགས་ལྡན་གྱི་སྲིད་བྱུས་དང་ ཆ་མེད་ཐོ་ཡིག་ལུ་ བདེན་དཔྱད་འབད་བའི་སྐབས་ མགུ་ཐོམ་སི་སི་ཚུ་ བྱུར་བརྩེགས་འབདཝ་ཨིན།
 
-4. **Capability TLV exchange** – the final Noise payload transports the capability TLVs described below. Clients abort the connection if any mandatory capability (PQ KEM/signature, role, or version) is missing or mismatched with the directory entry.
+4. **ལྕོགས་གྲུབ་ཅན་གྱི་ TLV བརྗེ་སོར་** – མཐའ་མའི་སྐད་སྒྲ་འདི་གིས་ གཤམ་གསལ་གྱི་ TLVs གི་ནུས་པ་སྐྱེལ་འདྲེན་འབདཝ་ཨིན། མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ མཐུད་ལམ་གྱི་ལྕོགས་གྲུབ་གང་རུང་ཅིག་ (PQ KEM/signature, འགན་ཁུར་ ཡང་ན་ ཐོན་རིམ་) མེདཔ་ཨིན་ ཡང་ན་ སྣོད་ཐོ་ཐོ་བཀོད་དང་གཅིག་ཁར་ མ་མཐུན་པར་ཡོདཔ་ཨིན།
 
-5. **Transcript logging** – relays log the transcript hash, TLS fingerprint, and TLV contents to feed downgrade detectors and compliance pipelines.
+༥. **Transcript loggging** – ཡིག་བསྒྱུར་གྱི་ཧེ་ཤི་དང་ ཊི་ཨེལ་ཨེསི་མཛུབ་མོ་གི་པར་ དེ་ལས་ ཊི་ཨེལ་ཝི་ནང་དོན་ཚུ་ མར་ཕབ་འབད་མི་ བརྟག་དཔྱད་འབད་མི་དང་ བསྟར་སྤྱོད་འབད་མི་ མདོང་ལམ་ཚུ་ལུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན།
 
-## Capability TLVs (SNNet-1c)
+## ལྕོགས་གྲུབ་ TLVs (SNNet-1c)
 
-Capabilities reuse a fixed `typ/length/value` TLV envelope:
+ལྕོགས་གྲུབ་ཚུ་ གཏན་བཟོས་ `typ/length/value` ཊི་ཨེལ་ཝི་ ཡིག་ཤུབས་:
 
 ```norito
 struct CapabilityTLV {
@@ -69,48 +66,48 @@ struct CapabilityTLV {
 }
 ```
 
-Defined types today:
+ད་རིས་ ངེས་ཚིག་བཀོད་ཡོད་པའི་དབྱེ་བ་ཚུ།
 
-- `snnet.pqkem` – Kyber level (`kyber768` for the current rollout).
-- `snnet.pqsig` – PQ signature suite (`ml-dsa-44`).
-- `snnet.role` – relay role (`entry`, `middle`, `exit`, `gateway`).
-- `snnet.version` – protocol version identifier.
-- `snnet.grease` – random filler entries in the reserved range to ensure future TLVs are tolerated.
+- I18NI0000000013X – ཀའི་བཱར་གནས་རིམ་ (I18NI00000000014X ད་ལྟོའི་བརྡ་ཆད་ཀྱི་དོན་ལུ་)།
+- `snnet.pqsig` – PQ མཚན་རྟགས་ཆ་ཚང་ (I18NI0000016X).
+- I18NI000000000017X – རི་ལེ་འགན་འཁུར་ (`entry`, I18NI000000019X, I18NI0000000020X, I18NI000000021X).
+- `snnet.version` – མཐུན་སྒྲིག་ཐོན་རིམ་ངོས་འཛིན་འབད་མི།
+- `snnet.grease` – མ་འོངས་པའི་ཊི་ཨེལ་ཝི་ཚུ་ བཟོད་སྒོམ་འབད་ནི་གི་དོན་ལུ་ གསོག་འཇོག་འབད་ཡོད་པའི་ཁྱབ་ཚད་ནང་ གང་བྱུང་བཀང་མི་ཐོ་བཀོད་ཚུ་ བཀག་འཛིན་འབད་དགོ།
 
-Clients maintain an allow-list of required TLVs and fail handshakes that omit or downgrade them. Relays publish the same set in their directory microdescriptor so validation is deterministic.
+མཁོ་མངགས་འབད་མི་ཚུ་གིས་ དགོས་མཁོའི་ ཊི་ཨེལ་ཝི་ཚུ་གི་ ཆོག་ཐམ་ཐོ་ཡིག་ཅིག་ བདག་འཛིན་འཐབ་སྟེ་ ལགཔ་འཐུད་མི་འདི་ བཏོན་གཏང་ནི་དང་ ཡང་ན་ མར་ཕབ་འབད་ནི་ཚུ་ འཐུས་ཤོར་འགྱོཝ་ཨིན། རི་ལེ་གིས་ ཁོང་རའི་སྣོད་ཐོ་མའི་ཀོརོ་ཌིསི་ཀྲར་ནང་ལུ་ ཆ་ཚན་ཅོག་འཐདཔ་འདི་དཔར་བསྐྲུན་འབདཝ་ཨིན་ དེ་འབདཝ་ལས་ བདེན་དཔྱད་འདི་ གཏན་འབེབས་བཟོཝ་ཨིན།
 
-## Salt rotation & CID blinding (SNNet-1b)
+## ཚྭ་བསྒྱིར་ནི་དང་ CID མིག་བཙུམ་ (SNNet-1b)
 
-- Governance publishes a `SaltRotationScheduleV1` record with `(epoch_id, salt, valid_after, valid_until)` values. Relays and gateways fetch the signed schedule from the directory publisher.
-- Clients apply the new salt at `valid_after`, keep the previous salt for a 12 h grace period, and retain a 7-epoch history to tolerate delayed updates.
-- Canonical blinded identifiers use:
+- གཞུང་སྐྱོང་གིས་ `SaltRotationScheduleV1` དྲན་ཐོ་ཅིག་ `(epoch_id, salt, valid_after, valid_until)` གནས་གོང་ཚུ་དང་གཅིག་ཁར་ དཔར་བསྐྲུན་འབདཝ་ཨིན། རི་ལེ་དང་ འཛུལ་སྒོ་ཚུ་གིས་ སྣོད་ཐོ་དཔར་བསྐྲུན་པ་ལས་ མཚན་རྟགས་བཀོད་པའི་ལས་རིམ་འདི་ ཐོབ་ཡོདཔ་ཨིན།
+- མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ཚྭ་གསརཔ་འདི་ I18NI000000026X ལུ་འཇུག་སྤྱོད་འབད་ཞིནམ་ལས་ ཧེ་མའི་ཚྭ་འདི་ ༡༢h བྱིན་རླབས་ཀྱི་དུས་ཡུན་ནང་ བཞག་ཞིནམ་ལས་ ཕྱིར་འགྱངས་དུས་མཐུན་བཟོ་ནི་ལུ་ བཟོད་བསྲན་འབད་ནི་ལུ་ ༧-poch བྱུང་རབས་འདི་ བདག་འཛིན་འཐབ་ཨིན།
+- ཀེ་ནོ་ཀལ་ མིག་མེད་ངོས་འཛིན་འབད་མི་ཚུ་ ལག་ལེན་འཐབ་ནི།
 
   ```
   cache_key = BLAKE3("soranet.blinding.canonical.v1" ∥ salt ∥ cid)
   ```
 
-  Gateways accept the blinded key via `Sora-Req-Blinded-CID` and echo it in `Sora-Content-CID`. Circuit/request blinding (`CircuitBlindingKey::derive`) ships in `iroha_crypto::soranet::blinding`.
-- If a relay misses an epoch, it halts new circuits until it downloads the schedule and emits a `SaltRecoveryEventV1`, which on-call dashboards treat as a paging signal.
+  སྒོ་སྒྲིག་ཚུ་གིས་ `Sora-Req-Blinded-CID` བརྒྱུད་དེ་ མིག་མེད་པའི་ལྡེ་མིག་འདི་ངོས་ལེན་འབད་དེ་ `Sora-Content-CID` ནང་ལུ་ བསྐྱར་སྒྲོག་འབདཝ་ཨིན། གློག་རྒྱུན་/ཞུ་བ་ (`CircuitBlindingKey::derive`) གིས་ `iroha_crypto::soranet::blinding` ནང་ གྲུ་བཏང་ཡོདཔ།
+- གལ་སྲིད་ རི་ལེ་གིས་ དུས་སྐབས་ཅིག་ བརླག་སྟོར་ཞུགས་པ་ཅིན་ ལས་རིམ་ཕབ་ལེན་མ་འབད་ཚུན་ཚོད་ གློག་ལམ་གསརཔ་ཚུ་ མཚམས་འཇོག་འབད་དེ་ I18NI000000031X ཅིག་བཏོན་ཞིནམ་ལས་ ཁ་པར་ནང་ བརྡ་རྟགས་སྦེ་ བརྩི་དོ་ཡོདཔ་ཨིན།
 
-## Directory data & guard policy
+## སྣོད་ཐོ་གནས་སྡུད་དང་སྲུང་སྐྱོབ་སྲིད་བྱུས།
 
-- Microdescriptors carry relay identity (Ed25519 + ML-DSA-65), PQ keys, capability TLVs, region tags, guard eligibility, and the currently advertised salt epoch.
-- Clients pin guard sets for 30 days and persist `guard_set` caches alongside the signed directory snapshot. CLI and SDK wrappers surface the cache fingerprint so rollout evidence can be attached to change reviews.
+- མའི་ཀོརོ་ཌི་སི་ཊིར་ཚུ་གིས་ རེ་ལེ་ངོ་རྟགས་ (Ed25519 + ML-DSA-65), PQ ལྡེ་མིག་དང་ ལྕོགས་གྲུབ་ TLVs, ལུང་ཕྱོགས་ཀྱི་ངོ་རྟགས་ ཉེན་སྲུང་གི་འོས་འབབ་དང་ ད་ལྟོ་ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་ཚྭ་གི་དུས་སྐབས་ནང་ འབག་འོང་དོ་ཡོདཔ་ཨིན།
+- མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ཉིནམ་༣༠ གི་རིང་ལུ་ པིན་སྲུང་སྒྲིག་ཆ་ཚན་ཚུ་དང་ མཚན་རྟགས་བཀོད་ཡོད་པའི་སྣོད་ཐོ་གི་པར་བཏབ་དང་གཅིག་ཁར་ `guard_set` མཛོད་ཚུ་ གནས་ཏེ་ཡོདཔ་ཨིན། CLI དང་ SDK wrappers གིས་ འདྲ་མཛོད་ཀྱི་མཛུབ་མོ་གི་པར་འདི་ ཁ་ཐོག་ལུ་ཡོདཔ་ལས་ བསྐྱར་ཞིབ་བསྒྱུར་བཅོས་འབད་ནི་གི་དོན་ལུ་ བསྐོར་བའི་སྒྲུབ་བྱེད་ཚུ་ མཐུད་ཚུགས།
 
-## Telemetry & rollout checklist
+## ཊེ་ལི་མི་ཊི་དང་ བསྐོར་བའི་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-- Metrics to export before production:
+- ཐོན་སྐྱེད་མ་འབད་བའི་ཧེ་མ་ ཕྱིར་ཚོང་འཐབ་ནི་ལུ་ མེ་ཊིགསི་ཚུ།
   - `soranet_handshake_success_total{role}`
   - `soranet_handshake_failure_total{reason}`
   - `soranet_handshake_latency_seconds`
   - `soranet_capability_mismatch_total`
   - `soranet_salt_rotation_lag_seconds`
-- Alert thresholds live alongside the salt rotation SOP SLO matrix (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) and must be mirrored in Alertmanager before the network is promoted.
-- Alerts: >5 % failure rate over 5 minutes, salt lag >15 minutes, or capability mismatches observed in production.
-- Rollout steps:
-  1. Exercise relay/client interoperability tests on staging with the hybrid handshake and PQ stack enabled.
-  2. Rehearse the salt rotation SOP (`docs/source/soranet_salt_plan.md`) and attach drill artefacts to the change record.
-  3. Enable capability negotiation in the directory, then roll out to entry relays, middle relays, exits, and finally clients.
-  4. Record guard cache fingerprints, salt schedules, and telemetry dashboards for each phase; attach the evidence bundle to `status.md`.
+- ཚྭ་བསྒྱིར་བའི་ SLO matrix (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) འདི་ ཚྭ་གི་འཁོར་སྐྱོད་ཀྱི་ ཉེ་འདབས་ལུ་ཡོད་པའི་ དྲན་སྐུལ་ཚད་གཞི་ (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) འདི་ ཡོངས་འབྲེལ་འདི་ ཡར་འཕེལ་མ་འགྱོ་བའི་ཧེ་མ་ དྲན་ཚད་ཀྱི་ མདའ་རྩེདཔ་ནང་ མེ་ལོང་ནང་བཙུགས་དགོ།
+- ཉེན་བརྡ་: >༥% འཐུས་ཤོར་གྱི་ཚད་གཞི་སྐར་མ་༥ ལས་ལྷག་པའི་ ཚྭ་ལམ་ >༡༥ སྐར་མ་༡༥ ཡང་ན་ ཐོན་སྐྱེད་ནང་ བལྟ་རྟོགས་འབད་ཚུགས་པའི་ ལྕོགས་གྲུབ་མ་མཐུན།
+- ཐོ་ཡིག་གོམ་པ།
+  ༡ ལུས་སྦྱོང་རི་ལེ་/མཁོ་མངགས་འབད་མི་ བར་འཛུལ་གྱི་བརྟག་དཔྱད་ཚུ་ ཧའིབ་རིཌ་ལགཔ་བརྡུང་མི་དང་ པི་ཀིའུ་བརྩེགས་བརྩེགས་ཚུ་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན།
+  ༢ ཚྭ་བསྒྱིར་བའི་ SOP (`docs/source/soranet_salt_plan.md`) དང་ བསྒྱུར་བཅོས་ཀྱི་ཐོ་བཀོད་ལུ་ སྦྱོང་བརྡར་གྱི་ཅ་ཆས་ཚུ་ མཉམ་སྦྲགས་འབད་དགོ།
+  ༣ སྣོད་ཐོ་ནང་ ལྕོགས་གྲུབ་ཀྱི་གྲོས་བསྟུན་ལྕོགས་ཅན་བཟོ་ཞིནམ་ལས་ ཐོ་བཀོད་ཀྱི་ རི་ལེ་ བར་མའི་ རི་ལེ་ ཕྱིར་ཐོན་དང་ མཐའ་མཇུག་ལུ་ མཁོ་མངགས་འབད་མི་ཚུ་ལུ་ བཤུད་སྒྲིལ་འབད།
+  ༤ གོ་རིམ་རེ་རེ་གི་དོན་ལུ་ སྒྲ་བཟུང་འབད་མི་ འདྲ་མཛོད་ཀྱི་མཛུབ་མོ་གི་པར་དང་ ཚྭ་གི་ལས་རིམ་ དེ་ལས་ བརྡ་བརྒྱུདཔ་ཚུ་ བཀོད་སྒྲིག་འབད་ནི། སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་འདི་ `status.md` ལུ་མཉམ་སྦྲགས་འབད།
 
-Following this checklist lets operator, client, and SDK teams adopt SoraNet transports in lockstep while meeting the determinism and audit requirements captured in the SNNet roadmap.
+འདི་གི་འོག་ལུ་ བརྟག་ཞིབ་ཐོ་ཡིག་འདི་གིས་ བཀོལ་སྤྱོད་པ་དང་ མཁོ་མངགས་འབད་མི་ དེ་ལས་ ཨེསི་ཌི་ཀེ་སྡེ་ཚན་ཚུ་གིས་ སོ་ར་ནེཊ་སྐྱེལ་འདྲེན་ཚུ་ ལྡེ་མིག་ནང་ སྐྱེལ་འདྲེན་འབད་བཅུགཔ་ཨིན།

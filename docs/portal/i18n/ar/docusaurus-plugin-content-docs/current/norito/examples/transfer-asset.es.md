@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/transfer-asset.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: Transferir activo entre cuentas
-description: Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.
-source: examples/transfer/transfer.ko
+سبيكة: /norito/examples/transfer-asset
+العنوان: نقل النشاط بين الحسابات
+الوصف: تدفق مباشر لنقل الأنشطة التي تعكس البدايات السريعة لـ SDK والمسجلات الأكبر للكتاب.
+المصدر: أمثلة/نقل/transfer.ko
 ---
 
-Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.
+يتدفق مباشرة نقل الأنشطة التي تعكس البدايات السريعة لـ SDK والمسجلات الأكبر للكتاب.
 
 ## Recorrido del libro mayor
 
-- Pre-fondea a Alice con el activo objetivo (por ejemplo mediante el fragmento `register and mint` o los flujos de quickstart del SDK).
-- Ejecuta el entrypoint `do_transfer` para mover 10 unidades de Alice a Bob, cumpliendo el permiso `AssetTransferRole`.
-- Consulta balances (`FindAccountAssets`, `iroha_cli ledger assets list`) o suscríbete a eventos del pipeline para observar el resultado de la transferencia.
+- قم بالبدء مسبقًا في Alice باستخدام الهدف النشط (على سبيل المثال عبر الجزء `register and mint` أو تدفقات التشغيل السريع من SDK).
+- قم بتشغيل نقطة الدخول `do_transfer` لتحريك 10 وحدات من Alice إلى Bob، بعد الحصول على الإذن `AssetTransferRole`.
+- راجع الأرصدة (`FindAccountAssets`، `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لمراقبة نتيجة النقل.
 
-## Guías de SDK relacionadas
+## أدلة SDK ذات الصلة
 
 - [Quickstart del SDK de Rust](/sdks/rust)
 - [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [بدء التشغيل السريع لـ SDK لـ JavaScript](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/transfer-asset.ko)
+[تنزيل مصدر Kotodama](/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

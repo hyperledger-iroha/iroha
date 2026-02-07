@@ -4,49 +4,49 @@ direction: rtl
 source: docs/portal/docs/sorafs/capacity-simulation.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
-title: Runbook de simulation de capacité SoraFS
-sidebar_label: Runbook de simulation de capacité
-description: Exercer le kit de simulation du marketplace de capacité SF-2c avec des fixtures reproductibles, des exports Prometheus et des tableaux de bord Grafana.
+المعرف: محاكاة القدرات
+العنوان: Runbook de Simulation de capacité SoraFS
+Sidebar_label: Runbook لمحاكاة القدرات
+الوصف: قم بتمرين مجموعة محاكاة سوق السعة SF-2c مع التركيبات القابلة لإعادة الإنتاج والصادرات Prometheus واللوحات الخشبية Grafana.
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Gardez les deux copies synchronisées jusqu'à ce que l'ensemble de documentation Sphinx hérité soit entièrement migré.
+:::ملاحظة المصدر الكنسي
+هذه الصفحة تعكس `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. قم بمزامنة النسختين حتى يتم هجرة مجموعة الوثائق التي ورثها أبو الهول بالكامل.
 :::
 
-Ce runbook explique comment exécuter le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. Il valide la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures déterministes dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
+يشرح كتاب التشغيل هذا التعليق على تنفيذ مجموعة محاكاة سوق السعة SF-2c ورؤية المقاييس الناتجة. يصادق على التفاوض بشأن الحصص وإدارة الفشل ومعالجة قطع النوبة بمساعدة التركيبات المحددة في `docs/examples/sorafs_capacity_simulation/`. تستخدم الحمولات ذات السعة دائمًا `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفق التفريغ الواضح/CAR.
 
-## 1. Générer les artefacts CLI
+## 1. إنشاء القطع الأثرية CLI
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` encapsule `sorafs_manifest_stub capacity` pour émettre des payloads Norito, des blobs base64, des corps de requête Torii et des résumés JSON pour :
+`run_cli.sh` يحتوي على `sorafs_manifest_stub capacity` لزيادة الحمولات Norito وblobs base64 ومجموعة الطلبات Torii والسيرة الذاتية JSON من أجل:- ثلاثة إعلانات من الموردين المشاركين في سيناريو التفاوض على الحصص.
+- أمر نسخ يسمح بالبيان المرحلي بين هؤلاء الموردين.
+- لقطات عن بعد للخط الأساسي المسبق والفاصل الزمني للشاشة واستعادة الفشل.
+- حمولة من الدعاوى القضائية تتطلب تقطيعًا بعد اللوحة المحاكية.
 
-- Trois déclarations de fournisseurs participant au scénario de négociation de quotas.
-- Un ordre de réplication allouant le manifeste en staging entre ces fournisseurs.
-- Des snapshots de télémétrie pour la ligne de base pré‑panne, l'intervalle de panne et la récupération de failover.
-- Un payload de litige demandant un slashing après la panne simulée.
+جميع المنتجات محفوظة في `./artifacts` (استبدلها بمرجع آخر في الوسيطة الأولى). افحص الملفات `_summary.json` للحصول على سياق مقبول.
 
-Tous les artefacts sont déposés sous `./artifacts` (remplacez en passant un autre répertoire en premier argument). Inspectez les fichiers `_summary.json` pour un contexte lisible.
-
-## 2. Agréger les résultats et émettre les métriques
+## 2. إضافة النتائج وتحسين المقاييس
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-L'analyseur produit :
+منتج المحلل :
 
-- `capacity_simulation_report.json` - allocations agrégées, deltas de failover et métadonnées de litige.
-- `capacity_simulation.prom` - métriques textfile Prometheus (`sorafs_simulation_*`) adaptées au textfile collector de node-exporter ou à un scrape job indépendant.
+- `capacity_simulation_report.json` - التخصيصات المعتمدة وأجزاء تجاوز الفشل وتعديلات الدعاوى.
+- `capacity_simulation.prom` - يتم تكييف ملفات textfile Prometheus (`sorafs_simulation_*`) مع مجمع ملفات نصية لعقدة المصدر أو لاستخراج مهمة مستقلة.
 
-Exemple de configuration de scrape Prometheus :
+مثال لتكوين الكشط Prometheus :
 
 ```yaml
 scrape_configs:
@@ -63,20 +63,18 @@ scrape_configs:
 
 Dirigez le textfile collector vers `capacity_simulation.prom` (si vous utilisez node-exporter, copiez-le dans le répertoire passé via `--collector.textfile.directory`).
 
-## 3. Importer le dashboard Grafana
+## 3. المستورد لوحة القيادة Grafana1. في Grafana، قم باستيراد `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. قم بإقران متغير مصدر البيانات `Prometheus` بسلك الاستخراج الذي تم تكوينه.
+3. التحقق من الألواح :
+   - **تخصيص الحصة (GiB)** لعرض المبيعات المشاركة/المخصصة لكل مورد.
+   - **Failover Trigger** أساسي على *Failover Active* عند وصول مقاييس اللوحة.
+   - **انخفاض وقت التشغيل أثناء انقطاع التيار الكهربائي** تتبع النسبة المئوية لمزود `alpha`.
+   - **النسبة المئوية للقطع المطلوبة** تصور نسبة العلاج الإضافية من تركيبات الدعوى.
 
-1. Dans Grafana, importez `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Associez la variable de datasource `Prometheus` à la cible de scrape configurée ci-dessus.
-3. Vérifiez les panneaux :
-   - **Quota Allocation (GiB)** affiche les soldes engagés/assignés pour chaque fournisseur.
-   - **Failover Trigger** bascule sur *Failover Active* lorsque les métriques de panne arrivent.
-   - **Uptime Drop During Outage** trace la perte en pourcentage pour le fournisseur `alpha`.
-   - **Requested Slash Percentage** visualise le ratio de remédiation extrait du fixture de litige.
+## 4. حضور عمليات التحقق
 
-## 4. Vérifications attendues
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` متساوٍ مع `600` بحيث يكون إجمالي المشاركة >=600.
+- `sorafs_simulation_failover_triggered` يشير إلى `1` ومقياس مزود الاستبدال المقدم `beta`.
+- `sorafs_simulation_slash_requested` يشير إلى `0.15` (15% من الشرطة المائلة) لمعرف المورد `alpha`.
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` est égal à `600` tant que le total engagé reste >=600.
-- `sorafs_simulation_failover_triggered` indique `1` et la métrique du fournisseur de remplacement met en avant `beta`.
-- `sorafs_simulation_slash_requested` indique `0.15` (15 % de slash) pour l'identifiant de fournisseur `alpha`.
-
-Exécutez `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` pour confirmer que les fixtures sont toujours acceptées par le schéma CLI.
+قم بتنفيذ `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` للتأكد من أن التركيبات مقبولة دائمًا وفقًا لمخطط CLI.

@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/reference/torii-app-api-parity.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: torii-app-api-parity
-title: تدقيق تكافؤ واجهة تطبيق Torii
-description: نسخة مرآة لمراجعة TORII-APP-1 حتى تتمكن فرق SDK والمنصة من تأكيد التغطية العامة.
+タイトル: تدقيق تكافؤ واجهة تطبيق Torii
+説明: TORII-APP-1 と SDK のバージョン。
 ---
 
-الحالة: مكتمل 2026-03-21  
-المالكون: Torii Platform، SDK Program Lead  
-مرجع خارطة الطريق: TORII-APP-1 — تدقيق تكافؤ `app_api`
+回答: 2026-03-21  
+所属: Torii プラットフォーム SDK プログラム リード  
+重要: TORII-APP-1 — تدقيق تكافؤ `app_api`
 
-تعكس هذه الصفحة تدقيق `TORII-APP-1` الداخلي (`docs/source/torii/app_api_parity_audit.md`) حتى يتمكن القراء خارج المستودع الاحادي من معرفة اي اسطح `/v1/*` موصولة ومختبرة وموثقة. يتتبع التدقيق المسارات المعاد تصديرها عبر `Torii::add_app_api_routes` و`add_contracts_and_vk_routes` و`add_connect_routes`.
+تعكس هذه الصفحة تدقيق `TORII-APP-1` الداخلي (`docs/source/torii/app_api_parity_audit.md`) حتى يتمكن القراء خارج المستودع `/v1/*` موصولة ومختبرة وموثقة 。 `Torii::add_app_api_routes` و`add_contracts_and_vk_routes` و`add_connect_routes`。
 
-## النطاق والمنهج
+## うーん
 
-يفحص التدقيق عمليات اعادة التصدير العامة في `crates/iroha_torii/src/lib.rs:256-522` وبناة المسارات المحمية بالميزات. ولكل سطح `/v1/*` في خارطة الطريق تحققنا من:
+يفحص التدقيق عمليات اعادة التصدير العامة في `crates/iroha_torii/src/lib.rs:256-522` وبناة المسارات المحمية بالميزات。テスト `/v1/*` テスト:
 
-- تنفيذ المعالج وتعريفات DTO في `crates/iroha_torii/src/routing.rs`.
-- تسجيل الموجه ضمن مجموعات الميزات `app_api` او `connect`.
-- اختبارات التكامل/الوحدة الموجودة والفريق المسؤول عن التغطية طويلة الاجل.
+- アメリカ合衆国 DTO 国家 `crates/iroha_torii/src/routing.rs`。
+- テスト `app_api` テスト `connect`。
+- ニュース/ニュース/ニュース/ニュース/ニュース/ニュース/ニュース/ニュース/ニュース。
 
-قوائم أصول/معاملات الحساب وقوائم حاملي الأصول تقبل معاملات استعلام `asset_id` اختيارية للتصفية المسبقة، بالإضافة إلى حدود الترقيم/الضغط العكسي الحالية.
+قوائم أصول/معاملات الحساب وقوائم حاملي الأصول تقبل معاملات استعلام `asset_id` اختياريةログインしてください。
 
-## المصادقة والتوقيع القياسي
+## صادقة والتوقيع القياسي
 
-- نقاط النهاية GET/POST الموجهة للتطبيقات تقبل رؤوس طلب قياسية اختيارية (`X-Iroha-Account`, `X-Iroha-Signature`) مبنية من `METHOD\n/path\nsorted_query\nsha256(body)`؛ يقوم Torii بتغليفها في `QueryRequestWithAuthority` قبل تحقق executor لتطابق `/query`.
-- تتوفر مساعدات SDK في جميع العملاء الرئيسيين:
-  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })` من `canonicalRequest.js`.
-  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
-  - Android (Kotlin/Java): `CanonicalRequestSigner.signingHeaders(accountId, method, path, query, body, signer)`.
-- امثلة:
+- 取得/投稿 (`X-Iroha-Account`、`X-Iroha-Signature`)重要 `METHOD\n/path\nsorted_query\nsha256(body)` يقوم Torii بتغليفها في `QueryRequestWithAuthority` قبل تحقق executor لتطابق `/query`.
+- SDK のバージョン:
+  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })` 、 `canonicalRequest.js`。
+  - スイフト: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`。
+  - Android (Kotlin/Java): `CanonicalRequestSigner.signingHeaders(accountId, method, path, query, body, signer)`。
+- 説明:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
 const headers = buildCanonicalRequestHeaders({ accountId: "ih58...", method: "get", path: "/v1/accounts/ih58.../assets", query: "limit=5", body: "", privateKey });
@@ -54,92 +56,90 @@ val signer = Ed25519Signer(privateKey, publicKey)
 val headers = CanonicalRequestSigner.signingHeaders("ih58...", "get", "/v1/accounts/ih58.../assets", "limit=5", ByteArray(0), signer)
 ```
 
-## جرد نقاط النهاية
+## और देखें
 
 ### اذونات الحساب (`/v1/accounts/{id}/permissions`) — مغطى
-- المعالج: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
-- DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
-- ربط الموجه: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
-- الاختبارات: `crates/iroha_torii/tests/accounts_endpoints.rs:126` و`crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`.
-- المالك: Torii Platform.
-- ملاحظات: الاستجابة هي جسم JSON Norito مع `items`/`total`، بما يتطابق مع مساعدات ترقيم الصفحات في SDK.
+- 名前: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`)。
+- DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`)。
+- 番号: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
+- 回答: `crates/iroha_torii/tests/accounts_endpoints.rs:126` と `crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`。
+- 名前: Torii プラットフォーム。
+- メッセージ: JSON Norito メッセージ `items`/`total` メッセージ メッセージSDK を使用します。
 
 ### تقييم OPRF للاسماء المستعارة (`POST /v1/aliases/voprf/evaluate`) — مغطى
-- المعالج: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
-- DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
-  (`crates/iroha_torii/src/routing.rs:809-865`).
-- ربط الموجه: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
-- الاختبارات: اختبارات inline للمعالج (`crates/iroha_torii/src/lib.rs:9945-9986`) بالاضافة الى تغطية SDK
-  (`javascript/iroha_js/test/toriiClient.test.js:72`).
-- المالك: Torii Platform.
-- ملاحظات: واجهة الاستجابة تفرض hex محدد وهوية backend؛ وتستهلك SDK الDTO.
+- 名前: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`)。
+- DTO: `AliasVoprfEvaluateRequestDto`、`AliasVoprfEvaluateResponseDto`、`AliasVoprfBackendDto`
+  (`crates/iroha_torii/src/routing.rs:809-865`)。
+- 番号: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`)。
+- バージョン: インライン バージョン (`crates/iroha_torii/src/lib.rs:9945-9986`) バージョン SDK
+  (`javascript/iroha_js/test/toriiClient.test.js:72`)。
+- 名前: Torii プラットフォーム。
+- 意味: واجهة الاستجابة تفرض hex محدد وهوية backend؛ SDK と DTO。
 
-### احداث proof عبر SSE (`GET /v1/events/sse`) — مغطى
-- المعالج: `handle_v1_events_sse` مع دعم الفلاتر (`crates/iroha_torii/src/routing.rs:14008-14133`).
-- DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) مع توصيل فلتر proof.
-- ربط الموجه: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
-- الاختبارات: حزم SSE خاصة بالproof (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`,
-  `sse_proof_callhash.rs`, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) واختبار smoke لSSE في خط الانابيب
-  (`integration_tests/tests/events/sse_smoke.rs`).
-- المالك: Torii Platform (runtime)، Integration Tests WG (fixtures).
-- ملاحظات: تم التحقق من مسارات فلتر proof طرفا لطرف؛ والتوثيق موجود في `docs/source/zk_app_api.md`.
+### 証明 SSE (`GET /v1/events/sse`) — مغطى
+- メッセージ: `handle_v1_events_sse` メッセージ (`crates/iroha_torii/src/routing.rs:14008-14133`)。
+- DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) の証明。
+- 番号: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
+- 認証: SSE 認証 (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`、
+  `sse_proof_callhash.rs`、`sse_proof_verified_fields.rs`、`sse_proof_rejected_fields.rs`) 煙 لSSE في خط الانابيب
+  (`integration_tests/tests/events/sse_smoke.rs`)。
+- 名前: Torii プラットフォーム (ランタイム)、統合テスト WG (フィクスチャ)。
+- 証明: 証明 証明 証明 証明`docs/source/zk_app_api.md`。
 
 ### دورة حياة العقود (`/v1/contracts/*`) — مغطى
-- المعالجات: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
-  `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
-  `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
-  `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
-  (`crates/iroha_torii/src/routing.rs:3124-3463`).
-- ربط الموجه: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- الاختبارات: حزم router/integration `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
-  `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
-  `contracts_instances_list_router.rs`.
-- المالك: Smart Contract WG مع Torii Platform.
-- ملاحظات: نقاط النهاية تضع المعاملات الموقعة في قائمة انتظار وتعيد استخدام مقاييس التليمترية المشتركة (`handle_transaction_with_metrics`).
+- 名前: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`)、
+  `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`)、
+  `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`)、
+  `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`)、
+  `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`)。
+- DTO: `DeployContractDto`、`DeployAndActivateInstanceDto`、`ActivateInstanceDto`、`ContractCallDto`
+  (`crates/iroha_torii/src/routing.rs:3124-3463`)。
+- 番号: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`)。
+- バージョン: ルーター/統合 `contracts_deploy_integration.rs`、`contracts_activate_integration.rs`、
+  `contracts_instance_activate_integration.rs`、`contracts_call_integration.rs`、
+  `contracts_instances_list_router.rs`。
+- 名前: スマート コントラクト WG Torii プラットフォーム。
+- 意味: نقاط النهاية تضع المعاملات الموقعة في قائمة انتظار وتعيد استخدام مقاييس (`handle_transaction_with_metrics`)。
 
 ### دورة حياة مفاتيح التحقق (`/v1/zk/vk/*`) — مغطى
-- المعالجات: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
-  (`crates/iroha_torii/src/routing.rs:4282-4382`) و`handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
-- DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
-  (`crates/iroha_torii/src/routing.rs:3619-4279`).
-- ربط الموجه: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- الاختبارات: `crates/iroha_torii/tests/zk_vk_get_integration.rs`,
-  `crates/iroha_torii/tests/zk_verify_handler_integration.rs`,
-  `crates/iroha_torii/tests/zk_vote_tally_handler.rs`.
-- المالك: ZK Working Group مع دعم Torii Platform.
-- ملاحظات: تتطابق DTOs مع مخططات Norito التي تعتمد عليها SDKs؛ ويتم فرض rate limiting عبر `limits.rs`.
+- 名前: `handle_post_vk_register`、`handle_post_vk_update`、`handle_post_vk_deprecate`
+  (`crates/iroha_torii/src/routing.rs:4282-4382`) و`handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`)。
+- DTO: `ZkVkRegisterDto`、`ZkVkUpdateDto`、`ZkVkDeprecateDto`、`VkListQuery`、`ProofFindByIdQueryDto`
+  (`crates/iroha_torii/src/routing.rs:3619-4279`)。
+- 番号: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`)。
+- 番号: `crates/iroha_torii/tests/zk_vk_get_integration.rs`、
+  `crates/iroha_torii/tests/zk_verify_handler_integration.rs`、
+  `crates/iroha_torii/tests/zk_vote_tally_handler.rs`。
+- 名前: ZK ワーキング グループ Torii プラットフォーム。
+- 説明: DTO の説明 Norito の説明 SDK の説明レート制限 `limits.rs`。### Nexus 接続 (`/v1/connect/*`) — مغطى (機能 `connect`)
+- 名前: `handle_connect_session`、`handler_connect_session_delete`、`handle_connect_ws`、
+  `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`)。
+- DTO: `ConnectSessionRequest`、`ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`)、
+  `ConnectSessionStatusDto` (`crates/iroha_torii/src/routing.rs:2004-2035`)。
+- 番号: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`)。
+- バージョン: `crates/iroha_torii/tests/connect_gating.rs` (機能ゲーティング、ハンドシェイク WS)
+  (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`) を参照してください。
+- メッセージ: Nexus WG に接続します。
+- 重要: レート制限 `limits::rate_limit_key`؛ وتغذي عدادات التليمترية مقاييس `connect.*`。
 
-### Nexus Connect (`/v1/connect/*`) — مغطى (feature `connect`)
-- المعالجات: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
-  `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
-- DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),
-  `ConnectSessionStatusDto` (`crates/iroha_torii/src/routing.rs:2004-2035`).
-- ربط الموجه: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`).
-- الاختبارات: `crates/iroha_torii/tests/connect_gating.rs` (feature gating، دورة حياة الجلسة، handshake WS) و
-  تغطية مصفوفة ميزات الموجه (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`).
-- المالك: Nexus Connect WG.
-- ملاحظات: يتم تتبع مفاتيح rate limit عبر `limits::rate_limit_key`؛ وتغذي عدادات التليمترية مقاييس `connect.*`.
-
-### تليمترية مرحلات Kaigi — مغطى
-- المعالجات: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
-  `handle_v1_kaigi_relays_health`, `handle_v1_kaigi_relays_sse`
-  (`crates/iroha_torii/src/routing.rs:14510-14787`).
-- DTOs: `KaigiRelaySummaryDto`, `KaigiRelaySummaryListDto`,
-  `KaigiRelayDetailDto`, `KaigiRelayDomainMetricsDto`,
-  `KaigiRelayHealthSnapshotDto` (`crates/iroha_torii/src/routing.rs:932-1046`).
-- ربط الموجه: `Torii::add_app_api_routes`
-  (`crates/iroha_torii/src/lib.rs:6805-6840`).
-- الاختبارات: `crates/iroha_torii/tests/kaigi_endpoints.rs`.
-- ملاحظات: يعيد بث SSE استخدام القناة العامة للبث مع فرض بوابة ملف تليمترية؛ وتوثق مخططات الاستجابة في `docs/source/torii/kaigi_telemetry_api.md`.
+### カイギ — مغطى
+- 名前: `handle_v1_kaigi_relays`、`handle_v1_kaigi_relay_detail`、
+  `handle_v1_kaigi_relays_health`、`handle_v1_kaigi_relays_sse`
+  (`crates/iroha_torii/src/routing.rs:14510-14787`)。
+- DTO: `KaigiRelaySummaryDto`、`KaigiRelaySummaryListDto`、
+  `KaigiRelayDetailDto`、`KaigiRelayDomainMetricsDto`、
+  `KaigiRelayHealthSnapshotDto` (`crates/iroha_torii/src/routing.rs:932-1046`)。
+- 名前: `Torii::add_app_api_routes`
+  (`crates/iroha_torii/src/lib.rs:6805-6840`)。
+- 番号: `crates/iroha_torii/tests/kaigi_endpoints.rs`。
+- ملاحظات: يعيد بث SSE القناة العامة للبث مع فرض بوابة ملف تليمترية؛ وتوثق مخططات الاسجابة في `docs/source/torii/kaigi_telemetry_api.md`。
 
 ## ملخص تغطية الاختبارات
 
-- اختبارات smoke للراوتر (`crates/iroha_torii/tests/router_feature_matrix.rs`) تضمن ان تركيبات الميزات تسجل كل مسار وان توليد OpenAPI يبقى متزامنا.
-- تغطي الحزم الخاصة بنقاط النهاية استعلامات الحسابات ودورة حياة العقود ومفاتيح التحقق ZK وفلاتر proof SSE وسلوك Nexus Connect.
-- ادوات تكافؤ SDK (JavaScript, Swift, Python) تستهلك بالفعل Alias VOPRF ونقاط SSE؛ ولا يلزم عمل اضافي.
+- 煙 للراوتر (`crates/iroha_torii/tests/router_feature_matrix.rs`) 煙のようなもの (`crates/iroha_torii/tests/router_feature_matrix.rs`) 煙のようなもの (OpenAPI يبقى)そうです。
+- ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュース - ニュースSSE 証明 Nexus 接続します。
+- SDK (JavaScript、Swift、Python) のバージョン、別名 VOPRF および SSE バージョンولا يلزم عمل اضافي。
 
 ## الحفاظ على تحديث هذه المرآة
 
-حدّث هذه الصفحة وتدقيق المصدر (`docs/source/torii/app_api_parity_audit.md`) عند تغير سلوك واجهة تطبيق Torii حتى يبقى مالكو SDK والقراء الخارجيون على نفس الخط.
+حدّث هذه الصفحة وتدقيق المصدر (`docs/source/torii/app_api_parity_audit.md`) عند تغير سلوك واجهة تطبيق Torii حتى SDK をダウンロードしてください。

@@ -4,51 +4,49 @@ direction: ltr
 source: docs/portal/docs/sorafs/migration-roadmap.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "Feuille de route de migration SoraFS"
+titre : "Feuille de route de migration SoraFS"
 ---
 
-> Adapte de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> Adapter de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
 # Feuille de route de migration SoraFS (SF-1)
 
-Ce document operationalise les directives de migration capturees dans
-`docs/source/sorafs_architecture_rfc.md`. Il developpe les livrables SF-1 en
-jalons prets a executer, criteres de passage et checklists des responsables afin
-que les equipes storage, governance, DevRel et SDK coordonnent la transition du
+Ce document opérationnalise les directives de migration capturées dans
+`docs/source/sorafs_architecture_rfc.md`. Il développe les livrables SF-1 fr
+jalons prêts à être exécutés, critères de passage et checklists des responsables afin
+que les équipes de stockage, de gouvernance, DevRel et SDK coordonnent la transition du
 
-La feuille de route est volontairement deterministe: chaque jalon nomme les
-artefacts requis, les invocations de commandes et les etapes d'attestation pour
-que les pipelines downstream produisent des sorties identiques et que la
-governance conserve une trace auditable.
+La feuille de route est volontairement déterministe : chaque jalon nomme les
+artefacts requis, les invocations de commandes et les étapes d'attestation pour
+que les pipelines en aval produisent des sorties identiques et que la
+la gouvernance conserve une trace auditable.
 
 ## Vue d'ensemble des jalons
 
-| Jalon | Fenetre | Objectifs principaux | Doit livrer | Owners |
-|-------|---------|----------------------|-------------|--------|
-| **M1 - Enforcement deterministe** | Semaines 7-12 | Exiger des fixtures signees et preparer les preuves d'alias pendant que les pipelines adoptent les expectation flags. | Verification nightly des fixtures, manifests signes par le conseil, entrees staging du registre d'alias. | Storage, Governance, SDKs |
+| Jalón | Fenêtre | Objectifs principaux | Doit livrer | Propriétaires |
+|-------|---------|------------|-------------|--------|
+| **M1 - Enforcement déterministe** | Semaines 7-12 | Exiger des luminaires signés et préparer les preuves d'alias pendant que les pipelines adoptent les drapeaux d'attente. | Vérification nocturne des luminaires, manifestes signes par le conseil, entrées mise en scène du registre d'alias. | Stockage, gouvernance, SDK |
 
 Le statut des jalons est suivi dans `docs/source/sorafs/migration_ledger.md`. Toutes
-les modifications de cette feuille de route DOIVENT mettre a jour le registre afin
-que governance et release engineering restent synchronises.
+les modifications de cette feuille de route DOIVENT mettre à jour le registre afin
+que la gouvernance et l’ingénierie des versions restent synchronisées.## Pistes de travail
 
-## Pistes de travail
+### 2. Adoption du pinning déterministe
 
-### 2. Adoption du pinning deterministe
+| Étape | Jalón | Descriptif | Propriétaire(s) | Sortie |
+|-------|-------|-------------|---------|--------|
+| Répétitions de rencontres | M0 | Dry-runs hebdomadaires comparent les digests locaux de chunks avec `fixtures/sorafs_chunker`. Publier un rapport sous `docs/source/sorafs/reports/`. | Fournisseurs de stockage | `determinism-<date>.md` avec matrice réussite/échec. |
+| Exiger les signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` font écho aux signatures ou manifestes dérivés. Les overrides de dev exigent une renonciation à la gouvernance attachée au PR. | GT Outillage | Log CI, lien vers ticket de renonciation (si applicable). |
+| Indicateurs d'attente | M1 | Les pipelines appelant `sorafs_manifest_stub` avec des attentes explicites pour figer les sorties : | Documents CI | Les scripts doivent être à jour référençant les attentes flags (voir bloc de commande ci-dessous). |
+| Épingler le registre en premier | M2 | `sorafs pin propose` et `sorafs pin approve` enveloppent les soumissions de manifeste; la CLI par défaut utilise `--require-registry`. | Opérations de gouvernance | Log d'audit du registre CLI, télémétrie des propositions notées. |
+| Observabilité parite | M3 | Des tableaux de bord Prometheus/Grafana alertent lorsque les inventaires de morceaux divergent des registres des manifestes ; alertes branchées sur l'astreinte ops. | Observabilité | Lien vers le tableau de bord, les identifiants des règles d'alerte, les résultats GameDay. |
 
-| Etape | Jalon | Description | Owner(s) | Sortie |
-|-------|-------|-------------|----------|--------|
-| Repetitions de fixtures | M0 | Dry-runs hebdomadaires comparant les digests locaux de chunks avec `fixtures/sorafs_chunker`. Publier un rapport sous `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` avec matrice pass/fail. |
-| Exiger les signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` echouent si signatures ou manifests derivent. Les overrides de dev exigent un waiver governance attache au PR. | Tooling WG | Log CI, lien vers ticket de waiver (si applicable). |
-| Expectation flags | M1 | Les pipelines appellent `sorafs_manifest_stub` avec des expectations explicites pour figer les sorties: | Docs CI | Scripts mis a jour referencant les expectation flags (voir bloc de commande ci-dessous). |
-| Pinning registry-first | M2 | `sorafs pin propose` et `sorafs pin approve` enveloppent les soumissions de manifest; le CLI par defaut utilise `--require-registry`. | Governance Ops | Log d'audit du CLI registry, telemetrie des propositions ratees. |
-| Parite observabilite | M3 | Des dashboards Prometheus/Grafana alertent quand les inventaires de chunks divergent des manifests registry; alertes branchees sur l'astreinte ops. | Observability | Lien dashboard, IDs des regles d'alerte, resultats GameDay. |
-
-#### Commande canonique de publication
-
-```bash
+#### Commande canonique de publication```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
@@ -60,50 +58,46 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Remplacez les valeurs de digest, taille et CID par les references attendues
+Remplacez les valeurs de digest, taille et CID par les références attendues
 recensees dans l'entree du registre de migration pour l'artefact.
 
-### 3. Transition des alias et communications
+### 3. Transition des alias et des communications
 
-| Etape | Jalon | Description | Owner(s) | Sortie |
-|-------|-------|-------------|----------|--------|
-| Preuves d'alias en staging | M1 | Enregistrer les claims d'alias dans le Pin Registry staging et attacher des preuves Merkle aux manifests (`--alias`). | Governance, Docs | Bundle de preuves stocke a cote du manifest + commentaire du registre avec le nom d'alias. |
-| Enforcement des preuves | M2 | Les gateways rejettent les manifests sans headers `Sora-Proof` recents; CI ajoute l'etape `sorafs alias verify` pour recuperer les preuves. | Networking | Patch de config gateway + sortie CI capturant la verification reussie. |
+| Étape | Jalón | Descriptif | Propriétaire(s) | Sortie |
+|-------|-------|-------------|---------|--------|
+| Preuves d'alias en mise en scène | M1 | Enregistrer les revendications d'alias dans le Pin Registry staging et attacher des preuves Merkle aux manifestes (`--alias`). | Gouvernance, Docs | Bundle de preuves stocke a cote du manifeste + commentaire du registre avec le nom d'alias. |
+| Application des preuves | M2 | Les gateways rejettent les manifests sans headers `Sora-Proof` recents; CI ajoute l'étape `sorafs alias verify` pour récupérer les preuves. | Réseautage | Patch de config gateway + sortie CI capturant la vérification russe. |
 
 ### 4. Communication et audit
 
-- **Discipline du registre:** chaque changement d'etat (drift de fixtures, soumission registry,
-  activation d'alias) doit ajouter une note datee dans
+- **Discipline du registre:** chaque changement d'état (dérive de luminaires, registre de soumission,
+  activation d'alias) doit ajouter une note datée dans
   `docs/source/sorafs/migration_ledger.md`.
-- **Minutes de gouvernance:** les sessions du conseil approuvant les changements du pin registry ou
-  les politiques d'alias doivent referencer cette feuille de route et le registre.
-- **Comms externes:** DevRel publie des mises a jour a chaque jalon (blog + extrait de changelog)
-  mettant en avant les garanties deterministes et les calendriers d'alias.
+- **Minutes de gouvernance:** les séances du conseil approuvant les changements du pin registre ou
+  les politiques d'alias doivent référencer cette feuille de route et le registre.
+- **Comms externes:** DevRel publie des mises à jour à chaque jalon (blog + extrait de changelog)
+  mettant en avant les garanties déterministes et les calendriers d'alias.## Dépendances et risques
 
-## Dependances et risques
-
-| Dependance | Impact | Mitigation |
+| Dépendance | Impact | Atténuation |
 |------------|--------|------------|
-| Disponibilite du contrat Pin Registry | Bloque le rollout M2 pin-first. | Preparer le contrat avant M2 avec des tests de replay; maintenir un fallback envelope jusqu'a stabilite. |
-| Cles de signature du conseil | Requises pour les envelopes de manifest et les approbations registry. | Ceremony de signature documentee dans `docs/source/sorafs/signing_ceremony.md`; rotation avec chevauchement et note dans le registre. |
-| Cadence de release SDK | Les clients doivent honorer les preuves d'alias avant M3. | Aligner les fenetres de release SDK sur les gates des jalons; ajouter des checklists de migration aux templates de release. |
+| Disponibilité du contrat Pin Registry | Bloquer le déploiement M2 pin-first. | Préparer le contrat avant M2 avec des tests de replay; maintenir une enveloppe de repli jusqu'à la stabilité. |
+| Clés de signature du conseil | Requises pour les enveloppes de manifeste et les approbations registre. | Cérémonie de signature documentée dans `docs/source/sorafs/signing_ceremony.md` ; rotation avec chevauchement et note dans le registre. |
+| Cadence de sortie du SDK | Les clients doivent honorer les preuves d'alias avant M3. | Aligner les fenêtres de release SDK sur les portes des jalons ; ajouter des checklists de migration aux modèles de release. |
 
-Les risques residuels et mitigations sont reprennent dans `docs/source/sorafs_architecture_rfc.md`
-et doivent etre recoupes lors des ajustements.
+Les risques résiduels et atténuations sont reprennent dans `docs/source/sorafs_architecture_rfc.md`
+et doivent être récupérés lors des ajustements.
 
-## Checklist des criteres de sortie
+## Checklist des critères de sortie
 
-| Jalon | Criteres |
-|-------|----------|
-| M1 | - Job nightly des fixtures vert pendant sept jours consecutifs. <br /> - Preuves d'alias staging verifiees en CI. <br /> - Governance ratifie la politique d'expectation flags. |
+| Jalón | Critères |
+|-------|--------------|
+| M1 | - Job nightly des luminaires vert pendant sept jours consécutifs.  - Preuves d'alias staging vérifiées en CI.  - La gouvernance ratifie la politique d'attente flags. |
 
-## Gestion du changement
-
-1. Proposer des ajustements via PR mettant a jour ce fichier **et**
+##Gestion du changement1. Proposer des ajustements via PR mettant à jour ce fichier **et**
    `docs/source/sorafs/migration_ledger.md`.
 2. Lier les minutes de gouvernance et les preuves CI dans la description du PR.
-3. Apres merge, notifier la liste storage + DevRel avec un resume et les actions
-   attendues des operateurs.
+3. Après la fusion, notifier la liste storage + DevRel avec un CV et les actions
+   attendues des opérateurs.
 
-Suivre cette procedure garantit que le rollout SoraFS reste deterministe,
-auditable et transparent entre les equipes participant au lancement Nexus.
+Suivre cette procédure garantit que le déploiement SoraFS reste déterministe,
+auditable et transparent entre les équipes participant au lancement Nexus.

@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SF-2c Capacity Accrual Soak Report
+# SF-2c հզորության հաշվեգրման ներծծման հաշվետվություն
 
-Date: 2026-03-21
+Ամսաթիվ՝ 2026-03-21
 
-## Scope
+## Շրջանակ
 
-This report records the deterministic SoraFS capacity accrual and payout soak
-tests requested under the SF-2c roadmap track.
+Այս զեկույցը գրանցում է SoraFS հզորության որոշիչ կուտակումը և վճարման ներծծումը
+թեստեր, որոնք պահանջվել են SF-2c ճանապարհային քարտեզի ուղու ներքո:
 
-- **30-day multi-provider soak:** Exercised by
-  `capacity_fee_ledger_30_day_soak_deterministic` in
+- **30-օրյա բազմապրովայդերային ներծծում:** Իրականացվում է
+  `capacity_fee_ledger_30_day_soak_deterministic` ին
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  The harness instantiates five providers, spans 30 settlement windows, and
-  validates that ledger totals match an independently computed reference
-  projection. The test emits a Blake3 digest (`capacity_soak_digest=...`) so
-  CI can capture and diff the canonical snapshot.
-- **Under-delivery penalties:** Enforced by
+  Զուգահեռը ներառում է հինգ մատակարարների, ընդգրկում է 30 հաշվարկային պատուհաններ և
+  հաստատում է, որ մատյանների ընդհանուր գումարները համընկնում են անկախ հաշվարկված տեղեկանքի հետ
+  պրոյեկցիա. Թեստը թողարկում է Blake3 digest (`capacity_soak_digest=...`), այնպես որ
+  CI-ն կարող է ֆիքսել և տարբերել կանոնական պատկերը:
+- ** Առաքման տակ գտնվող տույժեր.** Կիրառվում է
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (same file). The test confirms strike thresholds, cooldowns, collateral slashes,
-  and ledger counters remain deterministic.
+  (նույն ֆայլը): Թեստը հաստատում է հարվածի շեմերը, սառեցումները, գրավի շեղերը,
+  իսկ մատյանների հաշվիչները մնում են դետերմինիստական:
 
-## Execution
+## Կատարում
 
-Run the soak validations locally with:
+Գործարկեք ներծծման վավերացումները տեղում՝
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-The tests complete in under one second on a standard laptop and require no
-external fixtures.
+Ստանդարտ նոութբուքի վրա թեստերն ավարտվում են մեկ վայրկյանում և պահանջում են ոչ
+արտաքին հարմարանքներ.
 
-## Observability
+## Դիտարկելիություն
 
-Torii now exposes provider credit snapshots alongside fee ledgers so dashboards
-can gate on low balances and penalty strikes:
+Torii-ն այժմ բացահայտում է մատակարարի վարկային նկարները վճարների մատյանների և վահանակների հետ միասին
+կարող է դարպասը գրավել ցածր հավասարակշռության և 11 մետրանոց հարվածների դեպքում.
 
-- REST: `GET /v1/sorafs/capacity/state` returns `credit_ledger[*]` entries that
-  mirror the ledger fields verified in the soak test. See
+- ՀԱՆԳՍՏՈՒՄ. `GET /v1/sorafs/capacity/state`-ը վերադարձնում է `credit_ledger[*]` գրառումները, որոնք
+  արտացոլել մատյանների դաշտերը, որոնք հաստատվել են ներծծման թեստում: Տես
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` plots the
-  exported strike counters, penalty totals, and bonded collateral so on-call
-  staff can compare soak baselines with live environments.
+- Grafana ներմուծում. `dashboards/grafana/sorafs_capacity_penalties.json` պատկերում է
+  արտահանված գործադուլի հաշվիչներ, տուգանքների ընդհանուր գումարներ և պարտատոմսերի գրավադրում, այսպես
+  անձնակազմը կարող է համեմատել ներծծման բազային գծերը կենդանի միջավայրերի հետ:
 
-## Follow-up
+## Հետևում
 
-- Schedule weekly gate runs in CI to replay the soak test (smoke-tier).
-- Extend the Grafana board with Torii scrape targets once production telemetry
-  exports go live.
+- Շաբաթական դարպասի անցկացման ժամանակացույցը CI-ով վերարտադրելու համար թրջող թեստը (ծխի մակարդակ):
+- Ընդլայնել Grafana տախտակը Torii քերծող թիրախներով, երբ արտադրական հեռաչափություն կատարվի
+  արտահանումն ակտիվանում է.

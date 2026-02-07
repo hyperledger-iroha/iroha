@@ -4,11 +4,13 @@ direction: rtl
 source: docs/portal/docs/sdks/nexus-quickstarts.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Le guide complet se trouve dans `docs/source/nexus_sdk_quickstarts.md`. Ce resume du portail met en avant les prerequis communs et les commandes par SDK pour que les developpeurs verifient rapidement leur configuration.
+Le guide complet se trouve dans `docs/source/nexus_sdk_quickstarts.md`. זה קורות חיים של פורטיל עם התקדמות מוקדמות ותקשורות ל-SDK כדי לאמת את תצורת המהירות.
 
-## Configuration commune
+## קומונת תצורה
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Telechargez le paquet de configuration Nexus, installez les dependances de chaque SDK et assurez-vous que les certificats TLS correspondent au profil de release (voir `docs/source/sora_nexus_operator_onboarding.md`).
+הורד את חבילת התצורה Nexus, התקן את התלויות של ה-SDK ואת האישורים לכתבי TLS בפרופיל השחרור (לפי `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## חלודה
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,7 +30,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+רפים: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -36,17 +38,17 @@ Refs: `docs/source/sdk/rust.md`
 npm run demo:nexus
 ```
 
-Le script instancie `ToriiClient` avec les variables d'environnement ci-dessus et affiche le dernier bloc.
+מופע התסריט `ToriiClient` כולל משתנים סביבתיים וציורי גוש.
 
-## Swift
+## סוויפט
 
 ```bash
 make swift-nexus-demo
 ```
 
-Utilise `Torii.Client` de `IrohaSwift` pour recuperer `FindNetworkStatus`.
+השתמש ב-`Torii.Client` de `IrohaSwift` pour recuperer `FindNetworkStatus`.
 
-## Android
+## אנדרואיד
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -54,7 +56,7 @@ Utilise `Torii.Client` de `IrohaSwift` pour recuperer `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Execute le test d'appareil gere qui vise le point de terminaison de staging Nexus.
+בצע את מבחן הלבוש ב-Nexus.
 
 ## CLI
 
@@ -67,8 +69,8 @@ iroha_cli app nexus quickstart \
 
 ## Depannage
 
-- Echecs TLS -> verifier le bundle CA du tarball de release Nexus.
-- `ERR_UNKNOWN_LANE` -> passer `--lane-id`/`--dataspace-id` une fois le routage multi-lane applique.
-- `ERR_SETTLEMENT_PAUSED` -> consulter [Nexus operations](../nexus/nexus-operations) pour le processus d'incident; la gouvernance a peut etre mis la lane en pause.
+- Echecs TLS -> Verifier le bundle CA du tarball de release Nexus.
+- `ERR_UNKNOWN_LANE` -> עובר `--lane-id`/`--dataspace-id` une fois le routage אפליקציה מרובה נתיבים.
+- `ERR_SETTLEMENT_PAUSED` -> יועץ [Nexus פעולות](../nexus/nexus-operations) pour le processus d'incident; la governance a peut etre mis lane en pause.
 
 Pour plus de contexte et d'explications par SDK, voir `docs/source/nexus_sdk_quickstarts.md`.

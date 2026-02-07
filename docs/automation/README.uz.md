@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c56bacde8ee42c2427d06038a3a6ca65035d4055c42f6e5ded7e54b33c1fe921
 source_last_modified: "2025-12-29T18:16:35.060432+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Documentation Automation Baselines
+# Hujjatlarni avtomatlashtirish asoslari
 
-This directory captures the automation surfaces that roadmap items such as
-AND5/AND6 (Android Developer Experience + Release Readiness) and DA-1
-(Data-Availability threat-model automation) refer to when they call for
-auditable documentation evidence. Staging the command references and expected
-artefacts in-tree keeps the prerequisites for compliance reviews available even
-when CI pipelines or dashboards are offline.
+Ushbu katalog yo'l xaritasi kabi elementlarni avtomatlashtirish yuzalarini qamrab oladi
+AND5/AND6 (Android Developer tajribasi + Relizga tayyorlik) va DA-1
+(Ma'lumotlar-mavjudlik tahdidi-modelni avtomatlashtirish) ular qo'ng'iroq qilganda ishora qiladi
+tekshirilishi mumkin bo'lgan hujjatlar dalillari. Buyruq havolalarini bosqichma-bosqich va kutilgan
+Daraxt ichidagi artefaktlar muvofiqlikni tekshirish uchun zarur shart-sharoitlarni saqlab qoladi
+CI quvurlari yoki asboblar paneli oflayn bo'lganda.
 
-## Directory Layout
+## Katalog tartibi
 
-| Path | Purpose |
+| Yo'l | Maqsad |
 |------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
-| `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
+| `docs/automation/android/` | Android hujjatlari va mahalliylashtirishni avtomatlashtirish asoslari (AND5), shu jumladan i18n stub sinxronlash jurnallari, paritet xulosalari va AND6 tizimidan chiqishdan oldin talab qilinadigan SDK nashri dalillari. |
+| `docs/automation/da/` | `cargo xtask da-threat-model-report` tomonidan havola qilingan Maʼlumotlar mavjudligi tahdidi modeli avtomatlashtirish natijalari va tungi hujjatlar yangilanadi. |
 
-Each subdirectory documents the commands that produce the evidence along with
-the file layout we expect to check in (usually JSON summaries, run logs, or
-manifests). Teams drop new artefacts under the respective folder whenever an
-automation run materially changes the published docs, then link to the commit
-from the relevant status/roadmap entry.
+Har bir kichik katalog dalil bilan birga keltiruvchi buyruqlarni hujjatlashtiradi
+biz tekshirishni kutayotgan fayl tartibi (odatda JSON xulosalari, ishga tushirish jurnallari yoki
+namoyon bo'ladi). Jamoalar har safar yangi artefaktlarni tegishli papka ostiga tashlaydilar
+avtomatlashtirish chop etilgan hujjatlarni sezilarli darajada o'zgartiradi, so'ngra majburiyatga bog'lanadi
+tegishli holat/yo‘l xaritasi yozuvidan.
 
-## Usage
+## Foydalanish
 
-1. **Run the automation** using the commands described in the subdirectory
-   README (for example, `ci/check_android_fixtures.sh` or
+1. **Avtomatlashtirishni** quyi katalogda tasvirlangan buyruqlar yordamida ishga tushiring
+   README (masalan, `ci/check_android_fixtures.sh` yoki
    `cargo xtask da-threat-model-report`).
-2. **Copy the resulting JSON/log artefacts** from `artifacts/…` into the
-   matching `docs/automation/<program>/…` folder with an ISO-8601 timestamp in
-   the filename so auditors can correlate the evidence with governance minutes.
-3. **Reference the commit** in `status.md`/`roadmap.md` when closing a roadmap
-   gate so reviewers can confirm the automation baseline used for that decision.
-4. **Keep the files lightweight**. The expectation is structured metadata,
-   manifests, or summaries—not bulk binary blobs. Larger dumps should stay in
-   object storage with the signed reference recorded here.
+2. **Olingan JSON/log artefaktlarini** `artifacts/…` dan nusxa oling.
+   ISO-8601 vaqt tamg'asi bilan mos keladigan `docs/automation/<program>/…` papkasi
+   auditorlar dalillarni boshqaruv bayonnomalari bilan bog'lashlari uchun fayl nomi.
+3. Yo‘l xaritasini yopishda **`status.md`/`roadmap.md`-dagi majburiyatga** havola qiling
+   gate, shuning uchun ko'rib chiquvchilar ushbu qaror uchun foydalanilgan avtomatlashtirish asosini tasdiqlashlari mumkin.
+4. **Fayllarni engil tuting**. Kutish tuzilgan metadata,
+   manifestlar yoki xulosalar - ommaviy ikkilik bloblar emas. Kattaroq axlatxonalar ichida qolishi kerak
+   imzolangan ma'lumotnoma bilan ob'ektni saqlash.
 
-By centralising these automation notes we unblock the “docs/automation baselines
-available for audit” prerequisite that AND6 calls out and give the DA threat
-model flow a deterministic home for the nightly reports and manual spot checks.
+Ushbu avtomatlashtirish qaydlarini markazlashtirib, biz “hujjatlar/avtomatlashtirish asoslarini” blokdan chiqaramiz
+audit uchun mavjud” sharti AND6 chaqiradi va DA tahdidini beradi
+model oqimi tungi hisobotlar va qo'lda spot tekshiruvlar uchun deterministik uy.

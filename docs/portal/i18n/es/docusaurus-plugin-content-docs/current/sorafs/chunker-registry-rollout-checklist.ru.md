@@ -4,32 +4,34 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: Чеклист rollout реестра chunker SoraFS
-sidebar_label: Чеклист rollout chunker
-description: Пошаговый план rollout для обновлений реестра chunker.
+id: lista de verificación de implementación de registro fragmentado
+título: Чеклист rollout реестра fragmentador SoraFS
+sidebar_label: fragmento de implementación de resumen
+descripción: Implementación del plan de actualización para el fragmentador de registro exclusivo.
 ---
 
-:::note Канонический источник
-Отражает `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Держите обе копии синхронизированными, пока набор документации Sphinx не будет выведен из эксплуатации.
+:::nota Канонический источник
+Introduzca `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Deje copias sincronizadas de los documentos de Sphinx que no contienen especificaciones.
 :::
 
 # Чеклист rollout реестра SoraFS
 
-Этот чеклист фиксирует шаги, необходимые для продвижения нового профиля chunker
-или bundle provider admission от ревью до продакшена после ратификации
-governance charter.
+Esta lista de archivos ficticios no está disponible para el nuevo perfil de fragmentación del producto.
+или admisión del proveedor del paquete от ревью до продакшена после ратификации
+carta de gobernanza.
 
 > **Область:** применяется ко всем релизам, которые меняют
-> `sorafs_manifest::chunker_registry`, provider admission envelopes или
-> канонические fixture bundles (`fixtures/sorafs_chunker/*`).
+> `sorafs_manifest::chunker_registry`, sobres de admisión de proveedores или
+> paquetes de accesorios канонические (`fixtures/sorafs_chunker/*`).
 
-## 1. Предварительная валидация
+## 1. Validación previa
 
-1. Перегенерируйте fixtures и проверьте детерминизм:
+1. Pregenere los accesorios y proteja la determinación:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
@@ -37,69 +39,65 @@ governance charter.
    ```
 2. Убедитесь, что hashes детерминизма в
    `docs/source/sorafs/reports/sf1_determinism.md` (или релевантном отчете
-   профиля) совпадают с регенерированными артефактами.
+   профиля) совпадают с regеnerированными артефактами.
 3. Убедитесь, что `sorafs_manifest::chunker_registry` компилируется с
-   `ensure_charter_compliance()` при запуске:
+   `ensure_charter_compliance()` por mensaje:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Обновите dossier предложения:
+4. Обновите expediente предложения:
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Запись minutes совета в `docs/source/sorafs/council_minutes_*.md`
+   - Запись minutos совета в `docs/source/sorafs/council_minutes_*.md`
    - Отчет о детерминизме
 
-## 2. Governance sign-off
-
-1. Представьте отчет Tooling Working Group и digest предложения в
-   Sora Parliament Infrastructure Panel.
+## 2. Aprobación de la gobernanza1. Consulte el grupo de trabajo sobre herramientas y resuma la publicación en
+   Panel de Infraestructura del Parlamento de Sora.
 2. Зафиксируйте детали одобрения в
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Опубликуйте envelope, подписанный парламентом, вместе с fixtures:
+3. Опубликуйте sobre, подписанный парламентом, вместе с accesorios:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Проверьте, что envelope доступен через helper получения governance:
+4. Проверьте, что sobre доступен через ayudante получения gobernanza:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging rollout
+## 3. Lanzamiento de la puesta en escena
 
-Подробный walkthrough см. в [staging manifest playbook](./staging-manifest-playbook).
+Подробный tutorial см. в [libro de estrategias del manifiesto de puesta en escena] (./staging-manifest-playbook).
 
-1. Разверните Torii с включенным discovery `torii.sorafs` и включенным enforcement
-   admission (`enforce_admission = true`).
-2. Загрузите approved provider admission envelopes в staging registry directory,
+1. Разверните Torii с включенным descubrimiento `torii.sorafs` y включенным aplicación
+   admisión (`enforce_admission = true`).
+2. Introducir los sobres de admisión de proveedores aprobados en el directorio de registro de preparación,
    указанный в `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Проверьте, что provider adverts распространяются через discovery API:
+3. Asegúrese de que los anuncios del proveedor se adapten a su API de descubrimiento:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Прогоните endpoints manifest/plan с governance headers:
+4. Progrese el manifiesto/plan de puntos finales con los encabezados de gobernanza:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Убедитесь, что telemetry dashboards (`torii_sorafs_*`) и alert rules
+5. Убедитесь, что paneles de telemetría (`torii_sorafs_*`) y reglas de alerta
    отображают новый профиль без ошибок.
 
-## 4. Production rollout
+## 4. Lanzamiento de la producción
 
-1. Повторите шаги staging на продакшен Torii-узлах.
-2. Объявите окно активации (дата/время, grace period, rollback plan) в каналы
-   операторов и SDK.
+1. Coloque la puesta en escena en el producto Torii-узлах.
+2. Activar activaciones (datos/inicios, período de gracia, plan de reversión) en los canales
+   operadores y SDK.
 3. Смёрджите релизный PR с:
-   - Обновленными fixtures и envelope
-   - Документационными изменениями (ссылки на charter, отчет о детерминизме)
-   - Обновлением roadmap/status
-4. Поставьте тег релиза и архивируйте подписанные артефакты для provenance.
+   - Обновленными accesorios y sobre
+   - Documentos de identidad (sobre el alquiler, la documentación sobre la determinación)
+   - Hoja de ruta/estado actualizados
+4. Asegúrese de seleccionar y almacenar artefactos de procedencia.## 5. Auditoría posterior al lanzamiento
 
-## 5. Post-rollout аудит
-
-1. Снимите финальные метрики (discovery counts, fetch success rate, error
-   histograms) через 24 часа после rollout.
-2. Обновите `status.md` кратким резюме и ссылкой на отчет детерминизма.
-3. Заведите follow-up задачи (например, дополнительная guidance по authoring
-   профилей) в `roadmap.md`.
+1. Снимите финальные метрики (recuentos de descubrimiento, tasa de éxito de recuperación, error
+   histogramas) hace 24 horas después del lanzamiento.
+2. Retire `status.md` para seleccionar la resolución y la configuración necesarias.
+3. Заведите seguimiento задачи (por primera vez, дополнительная orientación по autoría
+   perfil) en `roadmap.md`.

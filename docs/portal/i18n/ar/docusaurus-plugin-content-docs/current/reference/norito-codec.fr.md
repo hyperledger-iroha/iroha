@@ -4,45 +4,43 @@ direction: rtl
 source: docs/portal/docs/reference/norito-codec.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Reference du codec Norito
+# مرجع برنامج الترميز Norito
 
-Norito est la couche de serialisation canonique d'Iroha. Chaque message on-wire, payload sur disque et API inter-composants utilise Norito afin que les nuds s'accordent sur des octets identiques meme lorsqu'ils tournent sur du materiel different. Cette page resume les elements cles et renvoie vers la specification complete dans `norito.md`.
+Norito هو سطح التسلسل canonique d'Iroha. تستخدم كل رسالة سلكية وحمولة على القرص ومكونات واجهة برمجة التطبيقات المتداخلة Norito حتى تتوافق النبضات مع الثمانيات المتطابقة عندما تدور على مواد مختلفة. هذه الصفحة تستأنف العناصر الأساسية وتجددها مقابل المواصفات الكاملة في `norito.md`.
 
-## Disposition de base
+## التخلص من القاعدة
 
-| Composant | Objectif | Source |
+| مركب | موضوعي | المصدر |
 | --- | --- | --- |
-| **Header** | Encapsule les payloads avec magic/version/schema hash, CRC64, longueur et tag de compression; v1 exige `VERSION_MINOR = 0x00` et valide les flags d'en-tete contre le masque supporte (par defaut `0x00`). | `norito::header` - voir `norito.md` ("Header & Flags", racine du depot) |
-| **Payload nu** | Encodage deterministe des valeurs utilise pour le hashing/comparaison. Le transport on-wire utilise toujours un header; les octets nus sont internes uniquement. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Zstd optionnel (et acceleration GPU experimentale) selectionne via l'octet de compression du header. | `norito.md`, "Compression negotiation" |
+| **الرأس** | قم بتغليف الحمولات باستخدام تجزئة المخطط السحري/الإصدار/المخطط، CRC64، الطول وعلامة الضغط؛ v1 exige `VERSION_MINOR = 0x00` and valide les flags d'en-tete contre le masque supporte (par default `0x00`). | `norito::header` - عرض `norito.md` ("Header & Flags"، سباق المستودع) |
+| ** الحمولة نو ** | تشفير تحديد القيم المستخدمة للتجزئة/المقارنة. يستخدم النقل عبر الأسلاك رأسًا دائمًا; الثمانيات الآن هي داخلية فريدة من نوعها. | `norito::codec::{Encode, Decode}` |
+| **ضغط** | يتم تحديد خيار ZSTD (وتسريع وحدة معالجة الرسومات التجريبية) عبر ثماني مجموعات من ضغط الرأس. | `norito.md`، "تفاوض الضغط" |سجل علامات التخطيط (البنية المعبأة، والتسلسل المعبأ، ومجموعة البت الميدانية، والأطوال المدمجة) موجود في `norito::header::flags`. يستخدم الإصدار 1 افتراضيًا العلامات `0x00` ويقبل العلامات الصريحة في القناع المدعوم؛ البتات غير المرغوب فيها مرفوضة. `norito::header::Flags` محفوظ للفحص الداخلي والإصدارات المستقبلية.
 
-Le registre des flags de layout (packed-struct, packed-seq, field bitset, compact lengths) vit dans `norito::header::flags`. La v1 utilise par defaut les flags `0x00` mais accepte des flags explicites dans le masque supporte; les bits inconnus sont rejetes. `norito::header::Flags` est conserve pour l'inspection interne et les versions futures.
+## دعم المشتقات
 
-## Support des derives
+يوفر `norito_derive` المشتقات `Encode` و`Decode` و`IntoSchema` والمساعدين JSON. اتفاقيات الاتفاقيات:
 
-`norito_derive` fournit les derives `Encode`, `Decode`, `IntoSchema` et les helpers JSON. Conventions cles:
+- المشتقات المولدة لطرق AoS ومعبأة؛ يستخدم الإصدار 1 تخطيط AoS افتراضيًا (العلامات `0x00`) إذا كانت العلامات المتاحة اختيارية للمتغيرات المعبأة. تم العثور على التنفيذ في `crates/norito_derive/src/derive_struct.rs`.
+- يتم تمكين الوظائف التي تؤثر على التخطيط (`packed-struct`، `packed-seq`، `compact-len`) من خلال علامات التشفير والتشفير/فك التشفير بطرق متماسكة بين الأزواج.
+- توفر مساعدات JSON (`norito::json`) تحديد JSON لـ Norito لإصدارات API العامة. استخدم `norito::json::{to_json_pretty, from_json}` - جامايس `serde_json`.
 
-- Les derives generent des chemins AoS et packed; v1 utilise le layout AoS par defaut (flags `0x00`) sauf si les flags d'en-tete optent pour des variantes packed. L'implementation se trouve dans `crates/norito_derive/src/derive_struct.rs`.
-- Les fonctionnalites qui affectent le layout (`packed-struct`, `packed-seq`, `compact-len`) sont opt-in via les flags d'en-tete et doivent etre encodees/decodees de maniere coherente entre pairs.
-- Les helpers JSON (`norito::json`) fournissent un JSON deterministe adosse a Norito pour les API publiques. Utilisez `norito::json::{to_json_pretty, from_json}` - jamais `serde_json`.
+## Multicodec وجداول المعرفات
 
-## Multicodec et tables d'identifiants
+Norito يحافظ على تأثيرات الترميز المتعدد في `norito::multicodec`. يتم الاحتفاظ بالجدول المرجعي (التجزئة وأنواع العناصر وواصفات الحمولة) في `multicodec.md` في سباق المستودع. تم إضافة المعرف الجديد:1. ميتز كل يوم `norito::multicodec::registry`.
+2. أعد الجدول في `multicodec.md`.
+3. قم بإعادة إنشاء الروابط في اتجاه مجرى النهر (Python/Java) باستخدام الخريطة.
 
-Norito conserve ses affectations multicodec dans `norito::multicodec`. La table de reference (hashes, types de cles, descripteurs de payload) est maintenue dans `multicodec.md` a la racine du depot. Lorsqu'un nouvel identifiant est ajoute:
+## تجديد المستندات والتجهيزات
 
-1. Mettez a jour `norito::multicodec::registry`.
-2. Etendez la table dans `multicodec.md`.
-3. Regenerez les bindings downstream (Python/Java) s'ils consomment la map.
+مع البوابة التي توفر حاليًا سيرة ذاتية نثرية، استخدم مصادر Markdown كمصدر حقيقي:
 
-## Regenerer les docs et fixtures
+- **المواصفات**: `norito.md`
+- **الترميز المتعدد للجدول**: `multicodec.md`
+- **المقاييس**: `crates/norito/benches/`
+- **الاختبارات الذهبية**: `crates/norito/tests/`
 
-Avec le portail qui heberge actuellement un resume en prose, utilisez les sources Markdown amont comme source de verite:
-
-- **Spec**: `norito.md`
-- **Table multicodec**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-Quand l'automatisation Docusaurus sera en ligne, le portail sera mis a jour via un script de sync (suivi dans `docs/portal/scripts/`) qui extrait les donnees depuis ces fichiers. D'ici la, gardez cette page alignee manuellement a chaque changement de spec.
+عندما يتم تشغيل Docusaurus تلقائيًا عبر الإنترنت، سيتم تشغيل البوابة يوميًا عبر برنامج نصي للمزامنة (يتبع في `docs/portal/scripts/`) يقوم بإضافة البيانات بعد هذه الملفات. لذلك، قم بمحاذاة هذه الصفحة يدويًا مع كل تغيير في المواصفات.

@@ -10,40 +10,41 @@ translation_last_reviewed: 2026-02-07
 title: Governance & ISO bridge examples
 description: Drive advanced Torii workflows with `@iroha/iroha-js`.
 slug: /sdks/javascript/governance-iso-examples
+translator: machine-google-reviewed
 ---
 
-This field guide expands on the quickstart by demonstrating governance and
-ISO&nbsp;20022 bridge flows with `@iroha/iroha-js`. The snippets reuse the same
-runtime helpers that ship with `ToriiClient`, so you can copy them directly into
-CLI tooling, CI harnesses, or long-running services.
+Бұл өріс нұсқаулығы басқаруды көрсету арқылы жылдам бастауға кеңейтіледі және
+ISO 20022 көпірі `@iroha/iroha-js` арқылы өтеді. Үзінділер бірдей қайта пайдаланылады
+`ToriiClient` арқылы жеткізілетін орындау уақыты көмекшілері, сондықтан оларды тікелей көшіруге болады
+CLI құралдары, CI қондырғылары немесе ұзақ жұмыс істейтін қызметтер.
 
-Additional resources:
+Қосымша ресурстар:
 
-- `javascript/iroha_js/recipes/governance.mjs` — runnable end-to-end script for
-  proposals, ballots, and council rotations.
-- `javascript/iroha_js/recipes/iso_bridge.mjs` — CLI helper for submitting
-  pacs.008/pacs.009 payloads and polling deterministic status.
-- `docs/source/finance/settlement_iso_mapping.md` — canonical ISO field mapping.
+- `javascript/iroha_js/recipes/governance.mjs` — орындалатын соңына дейін сценарий
+  ұсыныстар, бюллетеньдер және кеңес ротациялары.
+- `javascript/iroha_js/recipes/iso_bridge.mjs` — жіберуге арналған CLI көмекшісі
+  pacs.008/pacs.009 пайдалы жүктемелер және сұраудың детерминирленген күйі.
+- `docs/source/finance/settlement_iso_mapping.md` — ISO өрісінің канондық картасы.
 
-## Running the bundled recipes
+## Жинақталған рецепттерді іске қосу
 
-These examples depend on the scripts in `javascript/iroha_js/recipes/`. Run
-`npm install && npm run build:native` beforehand so the generated bindings are
-available.
+Бұл мысалдар `javascript/iroha_js/recipes/` ішіндегі сценарийлерге байланысты. Жүгіру
+`npm install && npm run build:native` алдын ала, сондықтан жасалған байланыстырулар болады
+қолжетімді.
 
-### Governance helper walkthrough
+### Басқару бойынша көмекші шолу
 
-Configure the following environment variables before invoking
+Шақыру алдында келесі орта айнымалы мәндерін конфигурациялаңыз
 `recipes/governance.mjs`:
 
-- `TORII_URL` — Torii endpoint.
-- `AUTHORITY` / `PRIVATE_KEY_HEX` — signer account and key (hex). Keep keys in a
-  secure secret store.
-- `CHAIN_ID` — optional network identifier.
-- `GOV_SUBMIT=1` — push the generated transactions to Torii.
-- `GOV_FETCH=1` — fetch proposals/locks after submission.
-- `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` — optional lookups used
-  when `GOV_FETCH=1`.
+- `TORII_URL` — Torii соңғы нүкте.
+- `AUTHORITY` / `PRIVATE_KEY_HEX` — қол қоюшы тіркелгісі және кілт (он алтылық). Кілттерді а ішінде сақтаңыз
+  қауіпсіз құпия дүкен.
+- `CHAIN_ID` — қосымша желі идентификаторы.
+- `GOV_SUBMIT=1` — жасалған транзакцияларды Torii дейін итеріңіз.
+- `GOV_FETCH=1` — жіберілгеннен кейін ұсыныстарды/құлыптарды алу.
+- `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` — пайдаланылған қосымша іздеулер
+  `GOV_FETCH=1` кезінде.
 
 ```bash
 npm run build:native
@@ -62,30 +63,30 @@ GOV_PROPOSAL_ID=calc.v1 \
 node javascript/iroha_js/recipes/governance.mjs
 ```
 
-Hashes are logged for every step, and Torii responses are surfaced when
-`GOV_SUBMIT=1` so CI jobs can fail fast on submission errors.
+Әр қадам үшін хэштер журналға жазылады және Torii жауаптары пайда болады:
+`GOV_SUBMIT=1`, сондықтан CI тапсырмалары жіберу қателерінде тез істен шығуы мүмкін.
 
-### ISO bridge helper
+### ISO көпір көмекшісі
 
-`recipes/iso_bridge.mjs` submits either a pacs.008 or pacs.009 message and polls
-the ISO bridge until the status settles. Configure it with:
+`recipes/iso_bridge.mjs` pacs.008 немесе pacs.009 хабарын және сауалнаманы жібереді.
+күй реттелгенше ISO көпірін басыңыз. Оны конфигурациялаңыз:
 
-- `TORII_URL` — Torii endpoint exposing the ISO bridge APIs.
-- `ISO_MESSAGE_KIND` — `pacs.008` (default) or `pacs.009`. The helper uses the
-  matching sample builder (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
-  when you do not supply your own XML.
-- `ISO_MESSAGE_SUFFIX` — optional suffix appended to the sample payload IDs to
-  keep repeated rehearsals unique (defaults to the current epoch seconds in hex).
-- `ISO_CONTENT_TYPE` — override the `Content-Type` header for submissions
-  (for example `application/pacs009+xml`); ignored when you only poll an
-  existing message id.
-- `ISO_MESSAGE_ID` — skip submission altogether and only poll the supplied
-  identifier via `waitForIsoMessageStatus`.
-- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — tune the wait strategy for
-  noisy or slow bridge deployments.
-- `ISO_RESOLVE_ON_ACCEPTED=1` — exit as soon as Torii returns `Accepted`,
-  even if the transaction hash is still pending (handy during bridge maintenance
-  when the ledger commit is delayed).
+- `TORII_URL` — Torii соңғы нүктесі ISO көпірінің API интерфейстерін ашады.
+- `ISO_MESSAGE_KIND` — `pacs.008` (әдепкі) немесе `pacs.009`. Көмекші пайдаланады
+  сәйкес үлгі құрастырушы (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
+  сіз өзіңіздің XML-ді бермеген кезде.
+- `ISO_MESSAGE_SUFFIX` — үлгі пайдалы жүктеме идентификаторларына қосылған қосымша жұрнақ
+  қайталанатын жаттығуларды бірегей етіп сақтаңыз (әдепкі бойынша ағымдағы дәуір секундына он алтылықпен).
+- `ISO_CONTENT_TYPE` — жіберулер үшін `Content-Type` тақырыбын қайта анықтау
+  (мысалы, `application/pacs009+xml`); тек сауалнама жүргізгенде еленбейді
+  бар хабар идентификаторы.
+- `ISO_MESSAGE_ID` — жіберуді мүлдем өткізіп жіберіңіз және тек жеткізілгенді сұраңыз
+  `waitForIsoMessageStatus` арқылы идентификатор.
+- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — күту стратегиясын реттеңіз
+  шулы немесе баяу көпірді орналастыру.
+- `ISO_RESOLVE_ON_ACCEPTED=1` — Torii қайтарған кезде бірден шығу `Accepted`,
+  транзакция хэші әлі күтілуде болса да (көпірге техникалық қызмет көрсету кезінде ыңғайлы
+  бухгалтерлік міндеттеме кешіктірілгенде).
 
 ```bash
 # Submit a pacs.009 message and wait for completion.
@@ -101,25 +102,25 @@ ISO_MESSAGE_ID=iso-demo-1 \
 node javascript/iroha_js/recipes/iso_bridge.mjs
 ```
 
-Both scripts exit with status code `1` if Torii never reports a terminal
-transition, making them suitable for CI gate jobs.
+Екі сценарий де `1` күй кодымен шығады, егер Torii ешқашан терминал туралы есеп бермесе
+өту, оларды CI қақпасы жұмыстарына қолайлы етеді.
 
-### ISO alias helper
+### ISO бүркеншік ат көмекшісі
 
-`recipes/iso_alias.mjs` targets the ISO alias endpoints so rehearsals can cover
-blinded-element hashing and alias lookups without writing bespoke tooling. It
-calls `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-and prints the backend, digest, account binding, source, and deterministic index
-returned by Torii.
+`recipes/iso_alias.mjs` ISO бүркеншік атының соңғы нүктелеріне бағытталған, осылайша жаттығулар қамтылуы мүмкін.
+соқыр элементтерді хэштеу және арнайы құралдарды жазбай бүркеншік аттарды іздеу. Ол
+қоңыраулар `ToriiClient.evaluateAliasVoprf` плюс `resolveAlias` / `resolveAliasByIndex`
+және серверді, дайджестті, тіркелгіні байланыстыруды, бастапқы және детерминирленген индексті басып шығарады
+Torii арқылы қайтарылды.
 
-Environment variables:
+Қоршаған ортаның айнымалылары:
 
-- `TORII_URL` — Torii endpoint exposing the alias helpers.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — skip the VOPRF call when only testing lookups.
-- `ISO_ALIAS_LABEL` — literal alias to resolve (e.g., IBAN-style strings).
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index passed to `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
+- `TORII_URL` — Torii соңғы нүкте бүркеншік ат көмекшілерін көрсетеді.
+- `ISO_VOPRF_INPUT` — алтылық кодталған соқыр элемент (әдепкі бойынша `deadbeef`).
+- `ISO_SKIP_VOPRF=1` — тек іздеулерді тексеру кезінде VOPRF қоңырауын өткізіп жіберіңіз.
+- `ISO_ALIAS_LABEL` — шешуге арналған әріптік бүркеншік ат (мысалы, IBAN стиліндегі жолдар).
+- `ISO_ALIAS_INDEX` — ондық немесе `0x`-префиксті индекс `resolveAliasByIndex`-қа өтті.
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — қорғалған Torii орналастыруларына арналған қосымша тақырыптар.
 
 ```bash
 # Evaluate a blinded element and resolve an alias literal + deterministic index.
@@ -136,13 +137,13 @@ ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The helper mirrors Torii’s behaviour: it surfaces 404s when aliases are missing
-and treats runtime-disabled errors as soft skips so CI flows can tolerate bridge
-maintenance windows.
+Көмекші Torii әрекетін көрсетеді: бүркеншік аттар болмаған кезде ол 404-ті көрсетеді
+және CI ағындары көпірге төзе алатындықтан, орындау уақытында өшірілген қателерді жұмсақ өткізіп жіберу ретінде қарастырады.
+техникалық қызмет көрсету терезелері.
 
-## Governance workflows
+## Басқару жұмыс процестері
 
-### Inspect contract instances and proposals
+### Келісім-шарттар мен ұсыныстарды тексеріңіз
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -166,10 +167,10 @@ const proposal = await torii.getGovernanceProposal("proposal-001", {
 console.log(proposal?.kind, proposal?.status);
 ```
 
-### Submit proposals and ballots
+### Ұсыныстар мен бюллетеньдерді жіберу
 
-Use an `AbortController` when you need to cancel or time-bound governance submissions—the SDK
-accepts an optional `{ signal }` object for every POST helper shown below.
+`AbortController` нұсқасын бас тарту немесе уақытпен байланысты басқару жіберілімдерін — SDK пайдаланыңыз.
+төменде көрсетілген әрбір POST көмекшісі үшін қосымша `{ signal }` нысанын қабылдайды.
 
 ```ts
 const authority = "ih58...";
@@ -216,7 +217,7 @@ await torii.governanceSubmitZkBallot({
 }, { signal: writeController.signal });
 ```
 
-### Council VRF and enactment
+### Кеңес VRF және күшіне енуі
 
 ```ts
 const validatorPk = Buffer.alloc(48, 0xdd);
@@ -261,9 +262,9 @@ const enactDraft = await torii.governanceEnactProposalTyped({
 console.log("enact tx count", enactDraft.tx_instructions.length);
 ```
 
-## ISO&nbsp;20022 bridge recipes
+## ISO 20022 көпір рецептері
 
-### Build pacs.008 / pacs.009 payloads
+### Пак.008 / пакет.009 пайдалы жүктемені құрастырыңыз
 
 ```ts
 import { buildPacs008Message } from "@iroha/iroha-js";
@@ -282,11 +283,11 @@ const settlement = buildPacs008Message({
 });
 ```
 
-All identifiers (BIC, LEI, IBAN, ISO amount) are validated before XML is
-generated. Swap `buildPacs008Message` for `buildPacs009Message` to emit PvP
-funding payloads.
+Барлық идентификаторлар (BIC, LEI, IBAN, ISO сомасы) XML жасалғанға дейін тексеріледі.
+құрылған. PvP шығару үшін `buildPacs008Message`-ті `buildPacs009Message`-ке ауыстырыңыз
+пайдалы жүктемелерді қаржыландыру.
 
-### Submit and poll ISO messages
+### ISO хабарламаларын жіберіңіз және сұраңыз
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -325,17 +326,17 @@ await torii.submitIsoMessage(
 );
 ```
 
-Both `resolveOnAccepted` and `resolveOnAcceptedWithoutTransaction` are valid; use either flag
-to treat `Accepted` statuses (without a transaction hash) as terminal when orchestrating polls.
+`resolveOnAccepted` және `resolveOnAcceptedWithoutTransaction` екеуі де жарамды; кез келген жалаушаны пайдаланыңыз
+сауалнамаларды ұйымдастыру кезінде `Accepted` күйлерін (транзакция хэшсіз) терминал ретінде қарастыру.
 
-The helpers throw `IsoMessageTimeoutError` if the bridge never reports a
-terminal state. Use the lower-level `submitIsoPacs008` / `submitIsoPacs009`
-calls when you need to orchestrate custom polling logic; `getIsoMessageStatus`
-exposes a single-shot lookup.
+Көмекшілер көпір ешқашан а хабар бермесе, `IsoMessageTimeoutError` лақтырады
+терминалдық күй. Төменгі деңгейлі `submitIsoPacs008` / `submitIsoPacs009` пайдаланыңыз
+теңшелетін сұрау логикасын реттеу қажет болғанда шақырады; `getIsoMessageStatus`
+бір реттік іздеуді көрсетеді.
 
-### Related surfaces
+### Байланысты беттер
 
-- `torii.getSorafsPorWeeklyReport("2026-W05")` fetches the ISO-week PoR bundle
-  referenced in the roadmap and can reuse the wait helpers for alerts.
-- `resolveAlias` / `resolveAliasByIndex` expose ISO bridge alias bindings so
-  reconciliation tools can prove account ownership before issuing a payment.
+- `torii.getSorafsPorWeeklyReport("2026-W05")` ISO апталық PoR жинағын алады
+  жол картасында сілтеме жасалған және ескертулер үшін күту көмекшілерін қайта пайдалана алады.
+- `resolveAlias` / `resolveAliasByIndex` ISO көпірінің бүркеншік атын байланыстырады, осылайша
+  салыстыру құралдары төлемді бермес бұрын шоттың иелігін дәлелдей алады.

@@ -11,97 +11,98 @@ id: orchestrator-tuning
 title: Orchestrator Rollout & Tuning
 sidebar_label: Orchestrator Tuning
 description: Practical defaults, tuning guidance, and audit checkpoints for taking the multi-source orchestrator to GA.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# Orchestrator Rollout & Tuning Guide
+# Orchestrator Rollout & Tuning လမ်းညွှန်
 
-This guide builds on the [configuration reference](orchestrator-config.md) and the
-[multi-source rollout runbook](multi-source-rollout.md). It explains
-how to tune the orchestrator for each rollout phase, how to interpret the
-scoreboard artefacts, and which telemetry signals must be in place before
-expanding traffic. Apply the recommendations consistently across CLI, SDKs, and
-automation so every node follows the same deterministic fetch policy.
+ဤလမ်းညွှန်ချက်သည် [ဖွဲ့စည်းပုံအကိုးအကား](orchestrator-config.md) နှင့်
+[ရင်းမြစ်ပေါင်းစုံ ဖြန့်ချိရေးအကျဉ်းချုပ်](multi-source-rollout.md)။ အဲဒါ ရှင်းပြတယ်။
+ထုတ်လွှင့်မှုအဆင့်တစ်ခုစီအတွက် သံစုံတီးဝိုင်းကို ချိန်ညှိနည်း၊ အဓိပ္ပာယ်ဖွင့်ဆိုပုံ
+ရမှတ်ဘုတ် လက်ရာများ နှင့် မည်သည့် တယ်လီမီတာ အချက်ပြမှုများ ရှေ့တွင် ရှိရမည်
+အသွားအလာချဲ့ထွင်ခြင်း။ အကြံပြုချက်များကို CLI၊ SDK နှင့် တို့တွင် တသမတ်တည်း ကျင့်သုံးပါ။
+အလိုအလျောက်စနစ်ကြောင့် node တစ်ခုစီတိုင်းသည် တူညီသော အဆုံးအဖြတ်ရယူမှုမူဝါဒကို လိုက်နာသည်။
 
 ## 1. Baseline Parameter Sets
 
-Start from a shared configuration template and adjust a small set of knobs as
-the rollout progresses. The table below captures the recommended values for the
-most common phases; values not listed fall back to the defaults in
-`OrchestratorConfig::default()` and `FetchOptions::default()`.
+မျှဝေထားသော ဖွဲ့စည်းမှုပုံစံပုံစံမှ စတင်ပြီး သေးငယ်သော ခလုတ်များအဖြစ် ချိန်ညှိပါ။
+ဖြန့်ချိမှုသည် တိုးတက်နေသည်။ အောက်ပါဇယားသည် ၎င်းအတွက် အကြံပြုထားသော တန်ဖိုးများကို ဖမ်းယူပါသည်။
+အဖြစ်အများဆုံးအဆင့်များ; ဖော်ပြထားခြင်းမရှိသော တန်ဖိုးများသည် မူလပုံစံများသို့ ပြန်ရောက်သွားပါသည်။
+`OrchestratorConfig::default()` နှင့် `FetchOptions::default()`။
 
-| Phase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notes |
-|-------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Tight latency cap and grace window surface noisy telemetry quickly. Keep retries low to expose invalid manifests sooner. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Mirrors production defaults while leaving headroom for exploratory peers. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Matches defaults; set `telemetry_region` so dashboards can pivot on canary traffic. |
-| **General Availability** | `None` (use all eligible) | `4` | `4` | `5000` | `900` | Increase retry and failure thresholds to absorb transient faults while audits continue to enforce determinism. |
+| အဆင့် | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | မှတ်စုများ |
+|--------|-----------------|--------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|--------|
+| **Lab/CI** | `3` | `2` | `2` | `2500` | `300` | တင်းတင်းကြပ်ကြပ် latency ဦးထုပ်နှင့် ကျေးဇူးတော် ပြတင်းပေါက် မျက်နှာပြင် ဆူညံသော တယ်လီမီတာကို လျင်မြန်စွာ ပြုလုပ်ပါ။ မမှန်ကန်သော အင်္ဂါရပ်များကို အမြန်ဆုံး ဖော်ထုတ်ရန် ပြန်လည်ကြိုးစားမှု နည်းပါးနေပါစေ။ |
+| **Staging** | `4` | `3` | `3` | `4000` | `600` | စူးစမ်းလေ့လာရေးလုပ်ဖော်ကိုင်ဖက်များအတွက် headroom မှထွက်ခွာချိန်တွင် မှန်ချပ်များထုတ်လုပ်ခြင်းသည် ပုံသေဖြစ်သည်။ |
+| **ကိန္နရီ** | `6` | `3` | `3` | `5000` | `900` | ပုံသေများ ကိုက်ညီသည်; `telemetry_region` ကိုသတ်မှတ်ထားသောကြောင့် ဒက်ရှ်ဘုတ်များသည် ကိန္နရီအသွားအလာတွင် လှည့်ပတ်နိုင်သည်။ |
+| **အထွေထွေရရှိနိုင်မှု** | `None` (အားလုံး အကျုံးဝင်သည်) | `4` | `4` | `5000` | `900` | စာရင်းစစ်များသည် အဆုံးအဖြတ်ကို ဆက်လက်ကျင့်သုံးနေချိန်တွင် ယာယီအမှားများကို စုပ်ယူရန် ပြန်လည်ကြိုးစားမှုနှင့် ပျက်ကွက်မှုအဆင့်များကို တိုးမြှင့်ပါ။ |
 
-- `scoreboard.weight_scale` remains at the default `10_000` unless a downstream
-  system requires a different integer resolution. Increasing the scale does not
-  change provider ordering; it only emits a denser credit distribution.
-- When migrating between phases, persist the JSON bundle and use
-  `--scoreboard-out` so the audit trail records the exact parameter set.
+- `scoreboard.weight_scale` သည် မူလ `10_000` တွင် ရှိနေသည်
+  စနစ်သည် မတူညီသော integer resolution လိုအပ်သည်။ အတိုင်းအတာကို တိုးမပေးဘူး။
+  ဝန်ဆောင်မှုပေးသူ အော်ဒါကို ပြောင်းလဲခြင်း၊ ၎င်းသည် ပိုမိုသိပ်သည်းသော အကြွေးဖြန့်ဖြူးမှုကိုသာ ထုတ်လွှတ်သည်။
+- အဆင့်များအကြား ရွှေ့ပြောင်းသည့်အခါ JSON အစုအဝေးကို ဆက်၍အသုံးပြုပါ။
+  `--scoreboard-out` ထို့ကြောင့် စာရင်းစစ်လမ်းကြောင်းသည် သတ်မှတ်ထားသော ကန့်သတ်ဘောင်အတိအကျကို မှတ်တမ်းတင်သည်။
 
-## 2. Scoreboard Hygiene
+## 2. ရမှတ်များ တစ်ကိုယ်ရေသန့်ရှင်းမှု
 
-The scoreboard combines manifest requirements, provider adverts, and telemetry.
-Before rolling forward:
+ရမှတ်ဘုတ်သည် ထင်ရှားသောလိုအပ်ချက်များ၊ ပံ့ပိုးပေးသူကြော်ငြာများနှင့် တယ်လီမီတာကို ပေါင်းစပ်ထားသည်။
+ရှေ့သို့မရွေ့မီ-
 
-1. **Validate telemetry freshness.** Ensure the snapshots referenced by
-   `--telemetry-json` were captured within the configured grace window. Entries
-   older than the configured `telemetry_grace_secs` fail with
-   `TelemetryStale { last_updated }`. Treat this as a hard stop and refresh the
-   telemetry export before continuing.
-2. **Inspect eligibility reasons.** Persist artefacts via
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Each entry
-   carries an `eligibility` block with the exact failure cause. Do not override
-   capability mismatches or expired adverts; fix the upstream payload.
-3. **Review weight deltas.** Compare the `normalised_weight` field against the
-   previous release. Weight shifts >10 % should correlate with deliberate advert
-   or telemetry changes and must be acknowledged in the rollout log.
-4. **Archive artefacts.** Configure `scoreboard.persist_path` so every run emits
-   the final scoreboard snapshot. Attach the artefact to the release record
-   alongside the manifest and telemetry bundle.
-5. **Record provider mix evidence.** `scoreboard.json` metadata _and_ the
-   matching `summary.json` must expose `provider_count`,
-   `gateway_provider_count`, and the derived `provider_mix` label so reviewers
-   can prove whether the run was `direct-only`, `gateway-only`, or `mixed`.
-   Gateway captures therefore report `provider_count=0` plus
-   `provider_mix="gateway-only"`, while mixed runs require non-zero counts for
-   both sources. `cargo xtask sorafs-adoption-check` enforces these fields (and
-   fails when the counts/labels disagree), so always run it alongside
-   `ci/check_sorafs_orchestrator_adoption.sh` or your bespoke capture script to
-   produce the `adoption_report.json` evidence bundle. When Torii gateways are
-   involved, keep `gateway_manifest_id`/`gateway_manifest_cid` in the scoreboard
-   metadata so the adoption gate can correlate the manifest envelope with the
-   captured provider mix.
+1. **တယ်လီမီတာ လတ်ဆတ်မှုကို မှန်ကန်ကြောင်း သက်သေပြပါ။** ကိုးကားထားသော လျှပ်တစ်ပြက်ပုံများကို သေချာပါစေ။
+   `--telemetry-json` ကို ပြင်ဆင်သတ်မှတ်ထားသော ကျေးဇူးတော်ဝင်းဒိုးအတွင်း ဖမ်းယူထားသည်။ ထည့်သွင်းမှုများ
+   configured `telemetry_grace_secs` ထက် ဟောင်းသည်နှင့် မအောင်မြင်ပါ။
+   `TelemetryStale { last_updated }`။ ဒါကို ခက်ခက်ခဲခဲ ရပ်တန့်ပြီး ပြန်လည်ဆန်းသစ်မှုအဖြစ် ခံယူပါ။
+   ဆက်မလုပ်မီ telemetry တင်ပို့ခြင်း။
+2. **အရည်အချင်းပြည့်မီသော အကြောင်းရင်းများကို စစ်ဆေးပါ။** မှတစ်ဆင့် ပစ္စည်းများ ဆက်ရှိနေပါ။
+   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`။ ဝင်ခွင့်တိုင်း
+   ပျက်ကွက်ခြင်းအကြောင်းအတိအကျနှင့်အတူ `eligibility` ဘလောက်တစ်ခုကို သယ်ဆောင်သည်။ ထပ်မရေးပါနဲ့။
+   စွမ်းဆောင်ရည်မတူညီခြင်း သို့မဟုတ် သက်တမ်းကုန်သွားသော ကြော်ငြာများ၊ upstream payload ကိုပြင်ပါ။
+3. **အလေးချိန်မြစ်ဝကျွန်းပေါ်ဒေသကို ပြန်လည်သုံးသပ်ပါ။** `normalised_weight` အကွက်နှင့် နှိုင်းယှဉ်ပါ။
+   ယခင်ထုတ်ဝေမှု။ ကိုယ်အလေးချိန် အပြောင်းအလဲ> 10% သည် တမင်တကာ ကြော်ငြာခြင်းနှင့် ဆက်စပ်နေသင့်သည်။
+   သို့မဟုတ် တယ်လီမီတာ ပြောင်းလဲမှုများကို ထုတ်လွှင့်မှုမှတ်တမ်းတွင် အသိအမှတ်ပြုရပါမည်။
+4. **Archive artefacts.** `scoreboard.persist_path` ကို စီစဉ်သတ်မှတ်ပေးခြင်းဖြင့် လည်ပတ်မှုတိုင်း ထွက်လာသည်
+   နောက်ဆုံး အမှတ်စာရင်း လျှပ်တစ်ပြက်။ ထုတ်ဝေမှုမှတ်တမ်းတွင် ပစ္စည်းကို ပူးတွဲပါ။
+   manifest နှင့် telemetry အတွဲနှင့်အတူ။
+5. ** မှတ်တမ်းပံ့ပိုးပေးသူ အထောက်အထားများ ရောနှောခြင်း။** `scoreboard.json` မက်တာဒေတာ _and_ အဆိုပါ
+   ကိုက်ညီသော `summary.json` သည် `provider_count` ကို ဖော်ထုတ်ရမည်၊
+   `gateway_provider_count` နှင့် `provider_mix` တံဆိပ်မှ ဆင်းသက်လာသောကြောင့် ဝေဖန်သုံးသပ်သူများ
+   ပြေးခြင်းသည် `direct-only`၊ `gateway-only` သို့မဟုတ် `mixed` ဟုတ်မဟုတ် သက်သေပြနိုင်သည်။
+   ထို့ကြောင့် Gateway ဖမ်းယူမှု `provider_count=0` plus ကို တိုင်ကြားပါ။
+   `provider_mix="gateway-only"`၊ ရောနှောလုပ်ဆောင်မှုများသည် သုညမဟုတ်သော ရေတွက်မှုများ လိုအပ်သော်လည်း၊
+   အရင်းအမြစ်နှစ်ခုစလုံး။ `cargo xtask sorafs-adoption-check` သည် ဤအကွက်များကို ပြဌာန်းသည် (နှင့်
+   အရေအတွက်များ/တံဆိပ်များ သဘောမတူပါက မအောင်မြင်ပါ) ထို့ကြောင့် ၎င်းကို အမြဲတွဲလျက် လုပ်ဆောင်ပါ။
+   `ci/check_sorafs_orchestrator_adoption.sh` သို့မဟုတ် သင့်စိတ်ကြိုက်ရိုက်ယူထားသော script မှ
+   `adoption_report.json` အထောက်အထားအစုအဝေးကို ထုတ်လုပ်ပါ။ Torii gateway တွေဖြစ်တဲ့အခါ
+   ပါဝင်ပါ၊ `gateway_manifest_id`/`gateway_manifest_cid` ကို အမှတ်စာရင်းတွင် ထားရှိပါ။
+   မက်တာဒေတာသည် မွေးစားခြင်းတံခါးသည် ထင်ရှားသောစာအိတ်နှင့် ဆက်စပ်နိုင်သည်။
+   ဖမ်းယူပေးသူ ရောနှော။
 
-For detailed field definitions see
-`crates/sorafs_car/src/scoreboard.rs` and the CLI summary structure exposed by
-`sorafs_cli fetch --json-out`.
+အသေးစိတ်အကွက် အဓိပ္ပါယ်ဖွင့်ဆိုချက်များကို ကြည့်ပါ။
+`crates/sorafs_car/src/scoreboard.rs` နှင့် CLI အကျဉ်းချုပ်ဖွဲ့စည်းပုံတို့ကို ဖော်ထုတ်ထားသည်။
+`sorafs_cli fetch --json-out`။
 
-## CLI & SDK Flag Reference
+## CLI & SDK အလံ အကိုးအကား
 
-`sorafs_cli fetch` (see `crates/sorafs_car/src/bin/sorafs_cli.rs`) and the
-`iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
-share the same orchestrator configuration surface. Use the following flags when
-capturing rollout evidence or replaying the canonical fixtures:
+`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` ကိုကြည့်ပါ) နှင့်
+`iroha_cli app sorafs fetch` ထုပ်ပိုးခြင်း (`crates/iroha_cli/src/commands/sorafs.rs`)
+တူညီသော orchestrator configuration မျက်နှာပြင်ကိုမျှဝေပါ။ အောက်ပါအလံများကို အသုံးပြုပါ။
+စတင်ရောင်းချခြင်းဆိုင်ရာ အထောက်အထားများကို ဖမ်းယူခြင်း သို့မဟုတ် Canonical fixtures များကို ပြန်လည်ပြသခြင်း-
 
-Shared multi-source flag reference (keep CLI help and docs in sync by editing this file only):
+မျှဝေထားသော ရင်းမြစ်ပေါင်းများစွာ အလံကိုးကားချက် (ဤဖိုင်ကိုတည်းဖြတ်ခြင်းဖြင့်သာ CLI အကူအညီနှင့် စာရွက်စာတမ်းများကို တစ်ပြိုင်တည်း ထားရှိပါ-
 
-- `--max-peers=<count>` limits how many eligible providers survive the scoreboard filter. Leave unset to stream from every eligible provider, set to `1` only when intentionally exercising the single-source fallback. Mirrors the `maxPeers` knob in SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` forwards to the per-chunk retry limit enforced by `FetchOptions`. Use the rollout table in the tuning guide for recommended values; CLI runs that collect evidence must match SDK defaults to keep parity.
-- `--telemetry-region=<label>` tags `sorafs_orchestrator_*` Prometheus series (and OTLP relays) with a region/env label so dashboards can separate lab, staging, canary, and GA traffic.
-- `--telemetry-json=<path>` injects the snapshot referenced by the scoreboard. Persist the JSON next to the scoreboard so auditors can replay the run (and so `cargo xtask sorafs-adoption-check --require-telemetry` can prove which OTLP stream fed the capture).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) enable the bridge observer hooks. When set, the orchestrator streams chunks through the local Norito/Kaigi proxy so browser clients, guard caches, and Kaigi rooms receive the same receipts emitted by Rust.
-- `--scoreboard-out=<path>` (optionally paired with `--scoreboard-now=<unix_secs>`) persists the eligibility snapshot for auditors. Always pair the persisted JSON with the telemetry and manifest artefacts referenced in the release ticket.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` apply deterministic adjustments on top of the advert metadata. Use these flags only for rehearsals; production downgrades must flow through governance artefacts so every node applies the same policy bundle.
-- `--provider-metrics-out` / `--chunk-receipts-out` retain the per-provider health metrics and chunk receipts referenced by the rollout checklist; attach both artefacts when filing adoption evidence.
+- `--max-peers=<count>` သည် ရမှတ်ဘုတ်စစ်ထုတ်မှုတွင် အရည်အချင်းပြည့်မီသော ဝန်ဆောင်မှုပေးသူမည်မျှကို ကန့်သတ်ထားသည်။ အရင်းအမြစ်တစ်ခုတည်းမှ လှည့်စားမှုကို ရည်ရွယ်ချက်ရှိရှိ ကျင့်သုံးမှသာ အရည်အချင်းပြည့်မီသော ဝန်ဆောင်မှုပေးသူတိုင်းထံမှ တိုက်ရိုက်ထုတ်လွှင့်ရန် မသတ်မှတ်ထားဘဲ၊ `1` သို့ သတ်မှတ်ထားပါ။ SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`) တွင် `maxPeers` ကို မှန်ပြောင်းကြည့်ပါ။
+- `--retry-budget=<count>` သည် `FetchOptions` မှ ပြဌာန်းထားသည့် တစ်ပိုင်းတစ်စ ပြန်လည်ကြိုးစားမှု ကန့်သတ်ချက်သို့ ပေးပို့သည်။ အကြံပြုထားသောတန်ဖိုးများအတွက် ချိန်ညှိခြင်းလမ်းညွှန်ရှိ ဖြန့်ချိရေးဇယားကို အသုံးပြုပါ။ သာတူညီမျှမှုကို ထိန်းသိမ်းထားရန် အထောက်အထားများစုဆောင်းသည့် CLI သည် SDK ပုံသေများနှင့် ကိုက်ညီရပါမည်။
+- `--telemetry-region=<label>` တဂ်များ `sorafs_orchestrator_*` Prometheus စီးရီးများ (နှင့် OTLP relays) များကို ဒေသ/ env အညွှန်းများဖြင့် ပြုလုပ်ထားသောကြောင့် ဒက်ရှ်ဘုတ်များသည် ဓာတ်ခွဲခန်း၊ ဇာတ်ခုံ၊ ကိန္နရီနှင့် GA အသွားအလာများကို ခွဲခြားနိုင်သည်။
+- `--telemetry-json=<path>` သည် အမှတ်စာရင်းဘုတ်မှ ရည်ညွှန်းထားသော လျှပ်တစ်ပြက်ရိုက်ချက်အား ထိုးသွင်းသည်။ ရမှတ်ဘုတ်ဘေးတွင် JSON ကို ဆက်ထားခြင်းဖြင့် စာရင်းစစ်များသည် အပြေးကို ပြန်ဖွင့်နိုင်သည် (ထို့ကြောင့် `cargo xtask sorafs-adoption-check --require-telemetry` သည် မည်သည့် OTLP ထုတ်လွှင့်မှုကို သက်သေပြနိုင်သည်)။
+- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) တံတားလေ့လာသူချိတ်များကို ဖွင့်ပါ။ သတ်မှတ်သည့်အခါ၊ သံစုံတီးဝိုင်းသည် ဒေသဆိုင်ရာ Norito/Kaigi ပရောက်စီမှတစ်ဆင့် အပိုင်းပိုင်းများကို ထုတ်လွှင့်ပေးသောကြောင့် ဘရောက်ဆာကလိုင်းယင့်များ၊ guard caches နှင့် Kaigi အခန်းများသည် Rust မှ ထုတ်လွှတ်သော တူညီသောပြေစာများကို လက်ခံရရှိမည်ဖြစ်သည်။
+- `--scoreboard-out=<path>` (ရွေးချယ်နိုင်သော `--scoreboard-now=<unix_secs>`) သည် စာရင်းစစ်များအတွက် အရည်အချင်းပြည့်မီမှုလျှပ်တစ်ပြက်ဓာတ်ပုံကို ဆက်လက်တည်ရှိနေပါသည်။ ဆက်ရှိနေသော JSON ကို တယ်လီမီတာနှင့် ထုတ်ဝေခွင့်လက်မှတ်တွင် ကိုးကားထားသော သရုပ်ဖော်ပစ္စည်းများနှင့် အမြဲတွဲချိတ်ပါ။
+- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` သည် ကြော်ငြာမက်တာဒေတာ၏ထိပ်တွင် အဆုံးအဖြတ်ပေးသော ချိန်ညှိမှုများကို သက်ရောက်သည်။ အစမ်းလေ့ကျင့်မှုများအတွက်သာ ဤအလံများကို အသုံးပြုပါ။ ထုတ်လုပ်မှု အဆင့်နှိမ့်ချမှုများသည် အုပ်ချုပ်မှုဆိုင်ရာ ပစ္စည်းများမှတဆင့် စီးဆင်းရမည်ဖြစ်ပြီး၊ ထို့ကြောင့် node တိုင်းသည် တူညီသောမူဝါဒအစုအဝေးကို ကျင့်သုံးပါသည်။
+- `--provider-metrics-out` / `--chunk-receipts-out` သည် ထုတ်ပေးသည့်စာရင်းမှ ကိုးကားထားသော ဝန်ဆောင်မှုပေးသူ တစ်ဦးချင်းစီ၏ ကျန်းမာရေးဆိုင်ရာ မက်ထရစ်များနှင့် အတုံးလိုက်ပြေစာများကို ဆက်လက်ထိန်းသိမ်းထားသည်။ ကလေးမွေးစားခြင်းဆိုင်ရာ သက်သေအထောက်အထား တင်သွင်းသည့်အခါ ပစ္စည်းနှစ်ခုလုံးကို ပူးတွဲပါရှိသည်။
 
-Example (using the published fixture):
+ဥပမာ (ထုတ်ဝေထားသော အတွဲကို အသုံးပြု၍)
 
 ```bash
 sorafs_cli fetch \
@@ -118,110 +119,108 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-SDKs consume the same configuration via `SorafsGatewayFetchOptions` in the Rust
-client (`crates/iroha/src/client.rs`), the JS bindings
-(`javascript/iroha_js/src/sorafs.js`), and the Swift SDK
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Keep those helpers in
-lock-step with the CLI defaults so operators can copy policies across automation
-without bespoke translation layers.
+SDKs များသည် Rust ရှိ `SorafsGatewayFetchOptions` မှတစ်ဆင့် တူညီသောဖွဲ့စည်းပုံကို စားသုံးသည်
+client (`crates/iroha/src/client.rs`)၊ JS ချိတ်ဆက်မှုများ
+(`javascript/iroha_js/src/sorafs.js`) နှင့် Swift SDK တို့ ဖြစ်သည်။
+(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`)။ ထိုအကူအညီများကို သိမ်းဆည်းထားပါ။
+အော်ပရေတာများသည် အလိုအလျောက်စနစ်ဖြင့် မူဝါဒများကို ကူးယူနိုင်စေရန် CLI ပုံသေများဖြင့် သော့ခတ်ပါ။
+စိတ်ကြိုက်ဘာသာပြန်အလွှာများမပါဘဲ
 
 ## 3. Fetch Policy Tuning
 
-`FetchOptions` controls retry behaviour, concurrency, and verification. When
-tuning:
+`FetchOptions` သည် ထပ်စမ်းကြည့်ပါက အပြုအမူ၊ တူညီသောငွေကြေးနှင့် အတည်ပြုခြင်းကို ထိန်းချုပ်သည်။ ဘယ်တော့လဲ။
+ချိန်ညှိခြင်း-
 
-- **Retries:** Raising `per_chunk_retry_limit` beyond `4` increases recovery
-  time but risks masking provider faults. Prefer keeping `4` as the ceiling and
-  relying on the provider rotation to surface poor performers.
-- **Failure threshold:** The `provider_failure_threshold` governs when a
-  provider is disabled for the remainder of the session. Align this value with
-  retry policy: a threshold lower than the retry budget forces the orchestrator
-  to eject a peer before all retries are exhausted.
-- **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
-  specific environment cannot saturate the advertised ranges. When set, ensure
-  the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+- **ပြန်လည်ကြိုးစားခြင်း-** `per_chunk_retry_limit` ကို `4` ထက်ကျော်လွန်၍ ပြုစုပျိုးထောင်ခြင်းသည် ပြန်လည်နာလန်ထူလာမှုကို တိုးစေသည်
+  အချိန်ကုန်သော်လည်း ဝန်ဆောင်မှုပေးသူ၏ အမှားများကို ဖုံးကွယ်ရန် အန္တရာယ်ရှိသည်။ မျက်နှာကျက်နှင့် `4` ကို ထားရှိခြင်းကို ဦးစားပေးပါ။
+  ညံ့ဖျင်းသော ဖျော်ဖြေတင်ဆက်သူများကို ပေါ်လွင်စေရန် ပံ့ပိုးပေးသူ၏ လည်ပတ်မှုကို အားကိုးပါ။
+- **ပျက်ကွက်မှုအဆင့်-** `provider_failure_threshold` သည် တစ်ဦးကိုအုပ်ချုပ်သည့်အခါ၊
+  ဝန်ဆောင်မှုပေးသူသည် စက်ရှင်၏ကျန်ရှိမှုအတွက် ပိတ်ထားသည်။ ဤတန်ဖိုးကို ညှိပါ။
+  ထပ်စမ်းကြည့်ပါ မူဝါဒ- ပြန်စမ်းသုံးရန် ဘတ်ဂျက်ထက် နိမ့်သော သတ်မှတ်ချက်သည် တီးမှုတ်သူကို တွန်းအားပေးသည်။
+  ကြိုးစားမှုအားလုံး မကုန်ဆုံးမီ သက်တူရွယ်တူတစ်ဦးကို ထုတ်ပစ်ရန်။
+- **Concurrency:** `global_parallel_limit` ကို သတ်မှတ်မထားပါက (`None`) ကို ထားခဲ့ပါ။
+  သတ်မှတ်ထားသော ပတ်ဝန်းကျင်သည် ကြော်ငြာထားသော အပိုင်းအခြားများကို ပြည့်ဝအောင် မလုပ်နိုင်ပါ။ သတ်မှတ်တဲ့အခါ သေချာအောင်ပါ။
+  တန်ဖိုးသည် ≤ ငတ်မွတ်မှုကို ရှောင်ရှားရန် ပံ့ပိုးပေးသူ စီးဆင်းမှုဘတ်ဂျက်၏ ပေါင်းလဒ်ဖြစ်သည်။
+- **အတည်ပြုခြင်းခလုတ်များ-** `verify_lengths` နှင့် `verify_digests` ရှိနေရမည်
+  ထုတ်လုပ်မှုတွင် ဖွင့်ထားသည်။ ၎င်းတို့သည် ပံ့ပိုးပေးသူ တပ်ဖွဲ့များ ရောနှောသည့်အခါ အဆုံးအဖြတ်ပေးမှုကို အာမခံပါသည်။
+  ကစားနေကြသည်၊ ၎င်းတို့ကို သီးခြားမွမ်းမံထားသော ပတ်ဝန်းကျင်များတွင်သာ ပိတ်ပါ။
 
 ## 4. Transport & Anonymity Staging
 
-Use the `rollout_phase`, `anonymity_policy`, and `transport_policy` fields to
-represent the privacy posture:
+`rollout_phase`၊ `anonymity_policy` နှင့် `transport_policy` အကွက်များကို အသုံးပြုပါ။
+ကိုယ်ရေးကိုယ်တာကိုယ်ဟန်အနေအထားကို ကိုယ်စားပြုသည်-- `rollout_phase="snnet-5"` ကို ဦးစားပေးပြီး မူရင်းအမည်ဝှက်ခြင်းမူဝါဒကို ခွင့်ပြုပါ။
+  SNNet-5 မှတ်တိုင်များကို ခြေရာခံပါ။ `anonymity_policy_override` ဖြင့်သာ ထပ်ရေးပါ။
+  အုပ်ချုပ်ရေးက လက်မှတ်ရေးထိုးထားတဲ့ ညွှန်ကြားချက်ကို ထုတ်ပြန်တဲ့အခါ။
+- `transport_policy="soranet-first"` ကို အခြေခံလိုင်းအဖြစ် SNNet-4/5/5a/5b/6a/7/8/12/13 တို့မှာ 🈺 ထားရှိပါ။
+  (`roadmap.md` ကိုကြည့်ပါ)။ မှတ်တမ်းတင်ရန်အတွက်သာ `transport_policy="direct-only"` ကိုသုံးပါ။
+  အဆင့်နှိမ့်ချ/လိုက်နာမှုဆိုင်ရာ လေ့ကျင့်မှုများ၊ မတိုင်မီ PQ လွှမ်းခြုံမှု ပြန်လည်သုံးသပ်မှုကို စောင့်ပါ။
+  `transport_policy="soranet-strict"` သို့ မြှင့်တင်ခြင်း- ထိုအဆင့်သည် လျှင်မြန်စွာ ကျရှုံးလိမ့်မည်။
+  classical relay များသာ ကျန်ရှိတော့သည် ။
+- `write_mode="pq-only"` ကို စာရေးလမ်းကြောင်းတိုင်းတွင်သာ ကျင့်သုံးသင့်သည် (SDK၊
+  သံစုံတီးဝိုင်း၊ အုပ်ချုပ်မှုကိရိယာတန်ဆာပလာ) သည် PQ လိုအပ်ချက်များကို ဖြည့်ဆည်းပေးနိုင်သည်။ ကာလအတွင်း
+  ဖြန့်ချိမှုများသည် `write_mode="allow-downgrade"` ကို ထိန်းသိမ်းထားသောကြောင့် အရေးပေါ်တုံ့ပြန်မှုများကို အားကိုးနိုင်သည်။
+  တယ်လီမီတာမှ အဆင့်နှိမ့်ချခြင်းကို အလံပြနေချိန်တွင် တိုက်ရိုက်လမ်းကြောင်းများပေါ်တွင်။
+- အစောင့်ရွေးချယ်မှုနှင့် ဆားကစ်အဆင့်သည် SoraNet လမ်းညွှန်အပေါ် အားကိုးသည်။ ထောက်ပံ့သည်။
+  `relay_directory` လျှပ်တစ်ပြက်ဓာတ်ပုံကို လက်မှတ်ရေးထိုးပြီး `guard_set` ကက်ရှ်ကို ဆက်ထားရန် သတိပြုပါ။
+  သဘောတူညီထားသည့် ထိန်းသိမ်းမှုပြတင်းပေါက်အတွင်း လှည့်ပတ်နေပါသည်။ ကက်ရှ်လက်ဗွေကို မှတ်သားထားသည်။
+  `sorafs_cli fetch` သည် ထုတ်ပေးခြင်းဆိုင်ရာ အထောက်အထား၏ တစ်စိတ်တစ်ပိုင်းဖြစ်သည်။
 
-- Prefer `rollout_phase="snnet-5"` and allow the default anonymity policy to
-  track the SNNet-5 milestones. Override via `anonymity_policy_override` only
-  when governance issues a signed directive.
-- Keep `transport_policy="soranet-first"` as the baseline while SNNet-4/5/5a/5b/6a/7/8/12/13 are 🈺
-  (see `roadmap.md`). Use `transport_policy="direct-only"` only for documented
-  downgrades/compliance drills, and wait for the PQ coverage review before
-  promoting to `transport_policy="soranet-strict"`—that tier will fail fast if
-  only classical relays remain.
-- `write_mode="pq-only"` should only be enforced when every write path (SDK,
-  orchestrator, governance tooling) can satisfy PQ requirements. During
-  rollouts keep `write_mode="allow-downgrade"` so emergency responses can rely
-  on direct routes while telemetry flags the downgrade.
-- Guard selection and circuit staging rely on the SoraNet directory. Supply the
-  signed `relay_directory` snapshot and persist the `guard_set` cache so guard
-  churn stays within the agreed retention window. The cache fingerprint logged
-  by `sorafs_cli fetch` forms part of the rollout evidence.
+## 5. အဆင့်နှိမ့်ချခြင်းနှင့် လိုက်နာမှု ချိတ်များ
 
-## 5. Downgrade & Compliance Hooks
+လူကိုယ်တိုင်ဝင်ရောက်စွက်ဖက်ခြင်းမရှိဘဲ မူဝါဒကို တီးမှုတ်သူစနစ်ခွဲနှစ်ခုက ကူညီပေးသည်-
 
-Two orchestrator subsystems help enforce policy without manual intervention:
+- **ပြန်လည်ပြင်ဆင်ခြင်း** (`downgrade_remediation`)- မော်နီတာများ
+  `handshake_downgrade_total` ဖြစ်ရပ်များ နှင့် `threshold` ကို ပြင်ဆင်ပြီးနောက်၊
+  `window_secs` အတွင်း ကျော်လွန်သွားပြီး၊ ဒေသခံ proxy ကို `target_mode` သို့ တွန်းပို့သည်
+  (ပုံသေအားဖြင့် မက်တာဒေတာသာ)။ ပုံသေများကို ထားရှိပါ (`threshold=3`၊ `window=300`၊
+  `cooldown=900`) အဖြစ်အပျက် သုံးသပ်ချက်များသည် မတူညီသော ပုံစံကို မပြပါက။ စာရွက်စာတမ်းတစ်ခုခု
+  ထုတ်ဝေမှုမှတ်တမ်းတွင် အစားထိုးပြီး ဒက်ရှ်ဘုတ်များ ခြေရာခံကြောင်း သေချာပါစေ။
+  `sorafs_proxy_downgrade_state`။
+- **လိုက်နာမှုမူဝါဒ** (`compliance`)- တရားစီရင်ပိုင်ခွင့်နှင့် ထင်ရှားသော အစီအစဥ်များ
+  အုပ်ချုပ်မှု-စီမံခန့်ခွဲသည့် ဖယ်ထုတ်စာရင်းများမှတစ်ဆင့် စီးဆင်းသည်။ ad-hoc တွင် ထပ်မရေးပါနှင့်
+  ဖွဲ့စည်းမှုအစုအဝေးတွင်; ယင်းအစား၊ လက်မှတ်ရေးထိုးထားသော အပ်ဒိတ်ကို တောင်းဆိုပါ။
+  `governance/compliance/soranet_opt_outs.json` နှင့် ထုတ်လုပ်ထားသော JSON ကို ပြန်လည်အသုံးချပါ။
 
-- **Downgrade remediation** (`downgrade_remediation`): monitors
-  `handshake_downgrade_total` events and, after the configured `threshold` is
-  exceeded within `window_secs`, forces the local proxy into the `target_mode`
-  (metadata-only by default). Keep the defaults (`threshold=3`, `window=300`,
-  `cooldown=900`) unless incident reviews show a different pattern. Document any
-  override in the rollout log and ensure dashboards track
-  `sorafs_proxy_downgrade_state`.
-- **Compliance policy** (`compliance`): jurisdiction and manifest carve-outs
-  flow through governance-managed opt-out lists. Never inline ad-hoc overrides
-  in the configuration bundle; instead, request a signed update to
-  `governance/compliance/soranet_opt_outs.json` and redeploy the generated JSON.
-
-For both systems, persist the resulting configuration bundle and include it in
-release evidences so auditors can trace how downshifts were triggered.
+စနစ်နှစ်ခုစလုံးအတွက် ရလဒ်ဖွဲ့စည်းမှုအစုအဝေးကို ဆက်ပြီးထည့်သွင်းပါ။
+စာရင်းစစ်များသည် အလှည့်အပြောင်းများ ဖြစ်ပေါ်လာပုံကို ခြေရာခံနိုင်စေရန် သက်သေအထောက်အထားများကို ထုတ်ပြန်ပါ။
 
 ## 6. Telemetry & Dashboards
 
-Before widening the rollout, confirm that the following signals are live in the
-target environment:
+ထုတ်လွှင့်မှုကို ချဲ့ထွင်ခြင်းမပြုမီ၊ အောက်ပါအချက်ပြမှုများသည် ဤနေရာတွင် အသက်ရှင်နေကြောင်း အတည်ပြုပါ။
+ပစ်မှတ်ပတ်ဝန်းကျင်-
 
 - `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  should be zero after the canary completes.
-- `sorafs_orchestrator_retries_total` and
-  `sorafs_orchestrator_retry_ratio` — should stabilise below 10 % during the
-  canary and stay below 5 % after GA.
-- `sorafs_orchestrator_policy_events_total` — validates that the expected
-  rollout stage is active (`stage` label) and records brownouts via `outcome`.
-- `sorafs_orchestrator_pq_candidate_ratio` /
-  `sorafs_orchestrator_pq_deficit_ratio` — track PQ relay supply against
-  policy expectations.
-- `telemetry::sorafs.fetch.*` log targets — must be streamed to the shared log
-  aggregator with saved searches for `status=failed`.
+  ကိန္နရီပြီးစီးပြီးနောက် သုညဖြစ်သင့်သည်။
+- `sorafs_orchestrator_retries_total` နှင့်
+  `sorafs_orchestrator_retry_ratio` — ကာလအတွင်း 10% အောက် တည်ငြိမ်သင့်သည်။
+  canary နှင့် GA ပြီးနောက် 5% အောက်တွင်နေပါ။
+- `sorafs_orchestrator_policy_events_total` — မျှော်လင့်ထားသည်ကို အတည်ပြုသည်။
+  ဖြန့်ချိသည့်အဆင့်သည် အသက်ဝင်သည် (`stage` အညွှန်း) နှင့် `outcome` မှတစ်ဆင့် အညိုရောင်ထွက်မှုများကို မှတ်တမ်းတင်သည်။
+- `sorafs_orchestrator_pq_candidate_ratio`/
+  `sorafs_orchestrator_pq_deficit_ratio` — PQ relay ထောက်ပံ့မှုကို ခြေရာခံပါ။
+  မူဝါဒမျှော်လင့်ချက်။
+- `telemetry::sorafs.fetch.*` မှတ်တမ်းပစ်မှတ်များ — မျှဝေထားသောမှတ်တမ်းသို့ တိုက်ရိုက်ထုတ်လွှင့်ရပါမည်။
+  `status=failed` အတွက် သိမ်းဆည်းထားသော ရှာဖွေမှုများနှင့်အတူ စုစည်းမှု။
 
-Load the canonical Grafana dashboard from
-`dashboards/grafana/sorafs_fetch_observability.json` (exported in the portal
-under **SoraFS → Fetch Observability**) so the region/manifest selectors,
-provider retry heatmap, chunk latency histograms, and stall counters match
-what SRE reviews during burn-ins. Wire the Alertmanager rules in
-`dashboards/alerts/sorafs_fetch_rules.yml` and validate the Prometheus syntax
-with `scripts/telemetry/test_sorafs_fetch_alerts.sh` (the helper automatically
-runs `promtool test rules` locally or in Docker). Alert hand-offs require the
-same routing block that the script prints so operators can pin the evidence to
-the rollout ticket.
+Canonical Grafana ဒက်ရှ်ဘုတ်ကို တင်ပါ။
+`dashboards/grafana/sorafs_fetch_observability.json` (ပေါ်တယ်တွင် တင်ပို့ထားသည်။
+**SoraFS → Fetch Observability** အောက်တွင်) ထို့ကြောင့် တိုင်းဒေသကြီး/မန်နီးဖက်စ် ရွေးချယ်မှုများ၊
+ဝန်ဆောင်မှုပေးသူသည် အပူမြေပုံ၊ အတုံးလိုက်နေချိန် ဟစ်စတိုဂရမ်များနှင့် အရောင်းကောင်တာများ တူညီသည်။
+burn-ins ကာလအတွင်း SRE က ဘာသုံးသပ်ချက်လဲ။ Alertmanager ၏ စည်းမျဉ်းများကို ကြိုးပေးလိုက်ပါ။
+`dashboards/alerts/sorafs_fetch_rules.yml` နှင့် Prometheus syntax ကို အတည်ပြုပါ
+`scripts/telemetry/test_sorafs_fetch_alerts.sh` ဖြင့် (အကူအညီပေးသူ အလိုအလျောက်
+`promtool test rules` ကို စက်တွင်း သို့မဟုတ် Docker တွင် လုပ်ဆောင်သည်)။ သတိပေးချက် လက်ကမ်းပေးမှုများ လိုအပ်သည်။
+အော်ပရေတာများက အထောက်အထားကို ပင်ထိုးနိုင်စေရန် script မှ print ထုတ်သည့် တူညီသောလမ်းကြောင်းပိတ်ဆို့ခြင်း
+ဖြန့်ချိရေးလက်မှတ်။
 
-### Telemetry burn-in workflow
+### Telemetry burn-in လုပ်ဆောင်မှု
 
-Roadmap item **SF-6e** requires a 30-day telemetry burn-in before flipping the
-multi-source orchestrator to its GA defaults. Use the repository scripts to
-capture a reproducible artefact bundle for every day in the window:
+လမ်းပြမြေပုံပါ ပစ္စည်း **SF-6e** ကိုလှန်မလှန်မီ ရက် 30 ကြာ တယ်လီမီတာ လောင်ကျွမ်းမှု လိုအပ်သည်
+Multi-source orchestrator သည် ၎င်း၏ GA မူရင်းအတိုင်းဖြစ်သည်။ repository scripts ကိုသုံးပါ။
+ပြတင်းပေါက်တွင် နေ့စဥ်နေ့တိုင်းအတွက် မျိုးပွားနိုင်သော ပစ္စည်းထုပ်ကို ဖမ်းယူပါ-
 
-1. Run `ci/check_sorafs_orchestrator_adoption.sh` with the burn-in environment
-   knobs set. Example:
+1. `ci/check_sorafs_orchestrator_adoption.sh` ကို burn-in ပတ်၀န်းကျင်ဖြင့် run ပါ။
+   knobs အစုံ။ ဥပမာ-
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -232,40 +231,40 @@ capture a reproducible artefact bundle for every day in the window:
    ci/check_sorafs_orchestrator_adoption.sh
    ```
 
-   The helper replays `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   writes `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json`, and `adoption_report.json` under
-   `artifacts/sorafs_orchestrator/<timestamp>/`, and enforces a minimum number
-   of eligible providers via `cargo xtask sorafs-adoption-check`.
-2. When the burn-in variables are present the script also emits
-   `burn_in_note.json`, capturing the label, day index, manifest id, telemetry
-   source, and artefact digests. Attach this JSON to the rollout log so it is
-   obvious which capture satisfied each day in the 30-day window.
-3. Import the updated Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`)
-   into the staging/production workspace, tag it with the burn-in label, and
-   confirm that every panel shows samples for the manifest/region under test.
-4. Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` (or `promtool test rules …`)
-   whenever `dashboards/alerts/sorafs_fetch_rules.yml` changes to document that
-   alert routing matches the metrics exported during the burn-in.
-5. Archive the resulting dashboard snapshot, alert test output, and log tail
-   from the `telemetry::sorafs.fetch.*` searches alongside the orchestrator
-   artefacts so governance can replay the evidence without pulling metrics from
-   live systems.
+   အကူအညီပေးသူက `fixtures/sorafs_orchestrator/multi_peer_parity_v1` ကို ပြန်ဖွင့်သည်၊
+   `scoreboard.json`, `summary.json`, `provider_metrics.json`၊
+   `chunk_receipts.json` နှင့် `adoption_report.json` အောက်တွင်
+   `artifacts/sorafs_orchestrator/<timestamp>/` နှင့် အနိမ့်ဆုံးနံပါတ်ကို ပြဌာန်းသည်။
+   `cargo xtask sorafs-adoption-check` မှတစ်ဆင့် အရည်အချင်းပြည့်မီသော ဝန်ဆောင်မှုပေးသူများ။
+2. burn-in variable များရှိနေသောအခါ script သည်လည်း ထုတ်လွှတ်ပါသည်။
+   `burn_in_note.json`၊ တံဆိပ်ရိုက်ခြင်း၊ နေ့အညွှန်းကိန်း၊ ထင်ရှားသော ID၊ တယ်လီမီတာ
+   အရင်းအမြစ်၊ နှင့် artefact digests။ ဤ JSON ကို ထုတ်ပေးသည့် မှတ်တမ်းတွင် ၎င်းနှင့် တွဲပါ။
+   ရက် 30 ဝင်းဒိုးတွင် နေ့တိုင်း စိတ်ကျေနပ်မှု ဖမ်းယူနိုင်သည့် ထင်ရှားသည်။
+3. မွမ်းမံထားသော Grafana ဘုတ် (`dashboards/grafana/sorafs_fetch_observability.json`) ကို တင်သွင်းပါ
+   ဇာတ်ညွှန်း/ထုတ်လုပ်ရေး လုပ်ငန်းခွင်ထဲသို့၊ ၎င်းကို မီးလောင်မှုအညွှန်းဖြင့် အမှတ်အသားပြုပါ။
+   အကန့်တိုင်းသည် စမ်းသပ်မှုအောက်တွင်ရှိသော မန်နီးဖက်စ်/ဒေသအတွက် နမူနာများကို ပြသထားကြောင်း အတည်ပြုပါ။
+4. `scripts/telemetry/test_sorafs_fetch_alerts.sh` (သို့မဟုတ် `promtool test rules …`) ကိုဖွင့်ပါ
+   `dashboards/alerts/sorafs_fetch_rules.yml` သည် အချိန်တိုင်း ၎င်းကို မှတ်တမ်းအဖြစ် ပြောင်းလဲပါသည်။
+   သတိပေးချက်လမ်းကြောင်းပေးခြင်းသည် မီးလောင်မှုအတွင်း တင်ပို့သည့် မက်ထရစ်များနှင့် ကိုက်ညီသည်။
+5. ရရှိလာသော ဒက်ရှ်ဘုတ်လျှပ်တစ်ပြက်ရိုက်ချက်၊ သတိပေးချက် စမ်းသပ်ထွက်ရှိမှုနှင့် မှတ်တမ်းအမြီးကို သိမ်းဆည်းပါ။
+   `telemetry::sorafs.fetch.*` မှ သံစုံတီးဝိုင်းနှင့်အတူ ရှာဖွေမှုများ
+   ထို့ကြောင့် အုပ်ချုပ်ရေးသည် မက်ထရစ်များကို မဆွဲဘဲ သက်သေအထောက်အထားများကို ပြန်လည်ပြသနိုင်သည်။
+   တိုက်ရိုက်စနစ်များ။
 
-## 7. Rollout Checklist
+## 7. စတင်စစ်ဆေးရန်စာရင်း
 
-1. Regenerate scoreboards in CI using the candidate configuration and capture
-   artefacts under version control.
-2. Run the deterministic fixture fetch in each environment (lab, staging,
-   canary, production) and attach the `--scoreboard-out` and `--json-out`
-   artefacts to the rollout record.
-3. Review telemetry dashboards with the on-call engineer, ensuring all metrics
-   above have live samples.
-4. Record the final configuration path (usually via `iroha_config`) and the
-   git commit of the governance registry used for adverts and compliance.
-5. Update the rollout tracker and notify SDK teams of new defaults so client
-   integrations stay aligned.
+1. ကိုယ်စားလှယ်လောင်း၏ဖွဲ့စည်းပုံနှင့် ဖမ်းယူမှုကို အသုံးပြု၍ CI တွင် ရမှတ်ဘုတ်များကို ပြန်ထုတ်ပါ။
+   ဗားရှင်းထိန်းချုပ်မှုအောက်တွင် လက်ရာများ။
+2. ပတ်ဝန်းကျင်တစ်ခုစီတွင် အဆုံးအဖြတ်ပေးသော fixture အကျုံးဝင်မှုကို လုပ်ဆောင်ပါ (ဓာတ်ခွဲခန်း၊ အဆင့်သတ်မှတ်ခြင်း၊
+   ကိန္နရီ၊ ထုတ်လုပ်မှု) နှင့် `--scoreboard-out` နှင့် `--json-out` ကို ပူးတွဲပါ
+   ဖြန့်ချိရေး မှတ်တမ်းအတွက် လက်ရာများ။
+3. တိုင်းတာမှုအားလုံးကို သေချာစေရန် ဖုန်းခေါ်ဆိုမှုအင်ဂျင်နီယာနှင့်အတူ တယ်လီမီတာ ဒက်ရှ်ဘုတ်များကို ပြန်လည်စစ်ဆေးပါ။
+   အထက်တွင်နေထိုင်နမူနာများရှိသည်။
+4. နောက်ဆုံးဖွဲ့စည်းပုံလမ်းကြောင်း (များသောအားဖြင့် `iroha_config` မှတဆင့်) မှတ်တမ်းတင်ပြီး
+   ကြော်ငြာများနှင့် လိုက်နာမှု အတွက် အသုံးပြုသည့် အုပ်ချုပ်မှု မှတ်ပုံတင်ခြင်း၏ git ကတိပြုချက်။
+5. ဖြန့်ချိသည့်ခြေရာခံကိရိယာကို အပ်ဒိတ်လုပ်ကာ ကလိုင်းယင့်သည် ပုံစံအသစ်များကို SDK အဖွဲ့များကို အကြောင်းကြားပါ။
+   ပေါင်းစည်းမှုများသည် ချိန်ညှိနေပါသည်။
 
-Following this guide keeps orchestrator deployments deterministic and auditable
-while providing clear feedback loops for tuning retry budgets, provider
-capacity, and privacy posture.
+ဤလမ်းညွှန်ချက်ကို လိုက်နာခြင်းဖြင့် သံစုံတီးဝိုင်းအဖွဲ့၏ ဖြန့်ကျက်မှုများကို အဆုံးအဖြတ်ပေးပြီး စာရင်းစစ်နိုင်စေပါသည်။
+ဘတ်ဂျက်များကို ထပ်စမ်းကြည့်ပါ၊ ပံ့ပိုးပေးသူအတွက် ရှင်းလင်းပြတ်သားသော တုံ့ပြန်မှု loops များကို ပံ့ပိုးပေးနေစဉ်
+စွမ်းရည်နှင့် ကိုယ်ရေးကိုယ်တာ ကိုယ်ဟန်အနေအထား။

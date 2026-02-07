@@ -480,7 +480,8 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
     if len <= 3 {
         return len;
     }
-    len.saturating_mul(2).saturating_add(2) / 3
+    let max_faults = len.saturating_sub(1) / 3;
+    max_faults.saturating_mul(2).saturating_add(1)
 }
 
 /// Compute the redundant send fan-out (r) for a topology of the given length.
@@ -1155,6 +1156,7 @@ mod tests {
             (2, 2, vec![1]),
             (3, 3, vec![2]),
             (4, 3, vec![2, 3]),
+            (5, 3, vec![2, 3]),
         ];
 
         for (len, expected_min, expected_collectors) in cases {
@@ -1178,7 +1180,7 @@ mod tests {
 
     #[test]
     fn commit_quorum_helper_matches_topology_rule() {
-        let cases = [1_usize, 2, 3, 4, 6, 7, 9, 10, 16];
+        let cases = [1_usize, 2, 3, 4, 5, 6, 7, 9, 10, 16];
         for len in cases {
             let topology = test_topology(len);
             assert_eq!(
@@ -1367,11 +1369,11 @@ mod tests {
 
     #[test]
     fn collectors_fallback_bumps_small_k_to_quorum() {
-        // N = 5; min_votes = 4 => tail idx = 3.
+        // N = 5; min_votes = 3 => tail idx = 2.
         let peers = test_peers(5);
         let topology = Topology::new(peers);
-        // K=1 should still fill quorum=4 via wraparound: 3,4,1,2 (skip leader 0).
-        assert_eq!(topology.collector_indices_k_fallback(1), vec![3, 4, 1, 2]);
+        // K=1 should still fill quorum=3: 2,3,4.
+        assert_eq!(topology.collector_indices_k_fallback(1), vec![2, 3, 4]);
     }
 
     #[test]
@@ -1400,10 +1402,10 @@ mod tests {
 
     #[test]
     fn redundant_send_r_floor_bumps_to_quorum() {
-        // N = 5 => min_votes_for_commit = 4.
+        // N = 5 => min_votes_for_commit = 3.
         let peers = test_peers(5);
         let topology = Topology::new(peers);
-        assert_eq!(topology.redundant_send_r_floor(2), 4);
+        assert_eq!(topology.redundant_send_r_floor(2), 3);
         assert_eq!(topology.redundant_send_r_floor(6), 6);
     }
 

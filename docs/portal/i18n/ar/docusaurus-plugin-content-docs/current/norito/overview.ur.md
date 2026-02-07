@@ -4,42 +4,40 @@ direction: rtl
 source: docs/portal/docs/norito/overview.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito کا جائزہ
+#Norito کا جائزہ
 
-Norito Iroha میں استعمال ہونے والی بائنری سیریلائزیشن کی تہہ ہے: یہ طے کرتی ہے کہ ڈیٹا ڈھانچے نیٹ ورک پر کیسے انکوڈ ہوتے ہیں، ڈسک پر کیسے محفوظ ہوتے ہیں، اور کنٹریکٹس اور ہوسٹس کے درمیان کیسے تبادلہ ہوتے ہیں۔ ورک اسپیس کے ہر crate میں `serde` کے بجائے Norito استعمال ہوتا ہے تاکہ مختلف ہارڈ ویئر پر peers یکساں bytes پیدا کریں۔
+Norito Iroha تم استخدام هذا المنتج منذ فترة طويلة: هناك حاجة إلى المزيد من العمل بعد ذلك لقد تم نشر هذه المقالة، وتم نشرها من خلال هذا المحفوظات، والمركز والأطباء الذين يتبادلون هذه المنتجات. يتم استخدام مربع العمل الخاص بالصندوق `serde` باستخدام Norito على نطاق واسع من أقرانه بأكثر من بايت واحد.
 
-یہ جائزہ بنیادی حصوں کا خلاصہ کرتا ہے اور معیاری حوالہ جات کی طرف لنک دیتا ہے۔
+لقد حصل على جائزة مكافأة حسية من الخلاصة والتحويل من طرف لنك ديتا.
 
-## ایک نظر میں معماری
+## نظرة رائعة
 
-- **ہیڈر + پے لوڈ** – ہر Norito پیغام feature-negotiation ہیڈر (flags, checksum) سے شروع ہوتا ہے جس کے بعد سادہ payload آتا ہے۔ packed layouts اور compression ہیڈر کے bits کے ذریعے negotiate ہوتے ہیں۔
-- **ڈیٹرمنسٹک انکوڈنگ** – `norito::codec::{Encode, Decode}` بنیادی انکوڈنگ نافذ کرتے ہیں۔ payloads کو headers میں لپیٹتے وقت بھی وہی layout دوبارہ استعمال ہوتا ہے تاکہ hashing اور signing ڈیٹرمنسٹک رہیں۔
-- **اسکیما + derives** – `norito_derive` `Encode`، `Decode` اور `IntoSchema` کی implementations بناتا ہے۔ packed structs/sequences ڈیفالٹ طور پر فعال ہیں اور `norito.md` میں دستاویزی ہیں۔
-- **ملٹی کوڈیک رجسٹری** – hashes، key types اور payload descriptors کے identifiers `norito::multicodec` میں موجود ہیں۔ مستند جدول `multicodec.md` میں برقرار رکھی جاتی ہے۔
+- **تحميل + تحميل** – Norito تفاوض الميزات (الأعلام, المجموع الاختباري) بدء التشغيل والمتابعة بعد الحمولة البسيطة. يتم التفاوض على التخطيطات المعبأة وضغط البتات.
+- **التكنولوجيا الأخرى** – `norito::codec::{Encode, Decode}` بطاقة الائتمان الناجحة. يتم نسخ الحمولات والرؤوس مرة أخرى وإعادة استخدام التخطيط مرة أخرى بالإضافة إلى التجزئة والتوقيع.
+- **اسكيما + مشتقات** – `norito_derive` `Encode`، `Decode` و `IntoSchema` هي تطبيقات بناتنا. أصبحت الهياكل/التسلسلات المعبأة نشطة وتم إنشاء `norito.md`.
+- **متعددة المسجلات** – التجزئة وأنواع المفاتيح وواصفات الحمولة النافعة هي المعرفات `norito::multicodec` المتوفرة. يحتوي الجدول الوثائقي `multicodec.md` على المزيد من التفاصيل.
 
-## ٹولنگ
-
-| کام | کمانڈ / API | نوٹس |
+## ٹولنگ| كام | کمانڈ / API | أخبار |
 | --- | --- | --- |
-| ہیڈر/سیکشنز کی جانچ | `ivm_tool inspect <file>.to` | ABI ورژن، flags اور entrypoints دکھاتا ہے۔ |
-| Rust میں انکوڈ/ڈیکوڈ | `norito::codec::{Encode, Decode}` | data model کے تمام بنیادی اقسام کے لئے نافذ ہے۔ |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Norito ویلیوز پر مبنی ڈیٹرمنسٹک JSON۔ |
-| docs/specs بنانا | `norito.md`, `multicodec.md` | رپو کے روٹ میں سورس آف ٹروتھ ڈاکیومنٹیشن۔ |
+| المزيد/سیکشنز کي جانج | `ivm_tool inspect <file>.to` | ABI ورژن، الأعلام ونقاط الدخول دکھاتا. |
+| الصدأ انكوڈ/ڈيکوڈ | `norito::codec::{Encode, Decode}` | نموذج البيانات هو كل أقسام الأقسام الأكثر شهرة. |
+| التشغيل المتداخل لـ JSON | `norito::json::{to_json_pretty, from_json}` | Norito لويليامز JSON. |
+| المستندات/المواصفات بنا | `norito.md`، `multicodec.md` | يمكن أن يكون هناك روت ثوري. |
 
-## ترقیاتی ورک فلو
+## ترياتي عمل فلو
 
-1. **derives شامل کریں** – نئی ڈیٹا ساختوں کے لئے `#[derive(Encode, Decode, IntoSchema)]` کو ترجیح دیں۔ ہاتھ سے لکھی گئی سریلائزرز سے گریز کریں جب تک کہ بالکل ضروری نہ ہو۔
-2. **packed layouts کی توثیق** – `cargo test -p norito` استعمال کریں (اور `scripts/run_norito_feature_matrix.sh` میں packed feature matrix) تاکہ نئی layouts مستحکم رہیں۔
-3. **docs دوبارہ بنائیں** – جب انکوڈنگ بدلتی ہے تو `norito.md` اور multicodec جدول اپ ڈیٹ کریں، پھر پورٹل صفحات (`/reference/norito-codec` اور یہ جائزہ) ریفریش کریں۔
-4. **Norito-first ٹیسٹس برقرار رکھیں** – انٹیگریشن ٹیسٹس کو `serde_json` کے بجائے Norito کے JSON helpers استعمال کرنے چاہئیں تاکہ وہی راستے چلیں جو پروڈکشن میں ہوتے ہیں۔
+1. **مشتق شامل للقراءة** – نوع جديد من المعلومات يقصده `#[derive(Encode, Decode, IntoSchema)]`. لا يزال هناك عدد كبير من الجوائز المرموقة التي لم تعد ضرورية.
+2. **التخطيطات المعبأة** – استخدام `cargo test -p norito` (و`scripts/run_norito_feature_matrix.sh` مصفوفة الميزات المعبأة) هي تخطيطات جديدة متاحة.
+3. **نسخة ثانية من المستندات** – قم بالتنزيل المجاني عبر `norito.md` وجدول الترميز المتعدد لصفحات الصفحة الرئيسية (`/reference/norito-codec` والإصدارات الأحدث) کریں۔
+4. **Norito-السجل الأول للسجل الأول** – السجل الإلكتروني `serde_json` هو Norito الذي يستخدمه مساعدو JSON. تم إصدار كل شيء من هذا المشروع.
 
 ## فوری لنکس
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix اسکرپٹ: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout مثالیں: `crates/norito/tests/`
-
-اس جائزے کو quickstart گائیڈ (`/norito/getting-started`) کے ساتھ ملائیں تاکہ Norito payloads استعمال کرنے والے bytecode کو کمپائل اور چلانے کا عملی walkthrough مل سکے۔
+- المواصفات: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- تعيينات الترميز المتعدد: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- مصفوفة الميزات اسکرپٹ: `scripts/run_norito_feature_matrix.sh`
+- مثال التخطيط المعبأ: `crates/norito/tests/`تم تكريمه بواسطة Quickstart (`/norito/getting-started`) الذي يدعم حمولات Norito التي تستخدم الرمز الثانوي المدمج وإرشادات العمل.

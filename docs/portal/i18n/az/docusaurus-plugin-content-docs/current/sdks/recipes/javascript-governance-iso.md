@@ -7,25 +7,27 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ı '@site/src/components/SampleDownload'dan idxal edin;
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+Bu resept JS5 yol xəritəsində göstərilən iki qabaqcıl iş axınını birləşdirir
+maddələr: başdan-başa idarəetmə köməkçiləri (təkliflər, bülletenlər, şuranın şəkilləri)
+və ISO 20022 körpüsü (pacs.008/pacs.009). Hər bir nümunə işləyir
+nəşr edilmiş `@iroha/iroha-js` paketinə qarşı və parçaları əks etdirir
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## İdarəetmə köməkçisi nümunəsi
 
-<SampleDownload
+<Nümunə Yüklə
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  fayl adı = "governance.mjs"
+  description="Bu reseptdə istinad edilən icra edilə bilən idarəetmə köməkçisini yükləyin."
 />
 
-### Prerequisites
+### İlkin şərtlər
 
 ```bash
 npm install @iroha/iroha-js
@@ -39,10 +41,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+İmzalanmış əməliyyatları Torii-ə təqdim etmək üçün `GOV_SUBMIT=1` seçin və
+`GOV_FETCH=1` təqdim edildikdən sonra yaranan idarəetmə vəziyyətini yoxlamaq üçün.
 
-### Example script
+### Nümunə skript
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -222,26 +224,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Çalışın və nəzarət edin
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
+- Yalnız hash yaratmaq üçün `node governance.mjs`-i yerinə yetirin. `GOV_SUBMIT=1` əlavə edin
+  canlı idarəetmə vəziyyətini qeyd etmək üçün əməliyyatları Torii və `GOV_FETCH=1`-ə göndərin
+  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks` və
   `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- CI qeydlərində deterministik hashləri çəkin; hər addım imzalanmış baytı çap edir
+  uzunluq və əlavə yerli köməkçi mövcud olduqda yenidən hesablanmış hash.
+- Auditorların izləyə bilməsi üçün konsol çıxışını idarəetmənin nəzərdən keçirilməsi paketlərinə əlavə edin
+  Təklif/referendum identifikatorları təkrarlana bilən CLI sübutlarına qaytarılır.
 
-## ISO bridge sample
+## ISO körpü nümunəsi
 
-<SampleDownload
+<Nümunə Yüklə
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  fayl adı = "iso-bridge.mjs"
+  description="Bu reseptdə istinad edilən işlək ISO 20022 köməkçisini endirin."
 />
 
-### Prerequisites
+### İlkin şərtlər
 
 ```bash
 npm install @iroha/iroha-js
@@ -253,11 +255,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+Təqdimatı atlamaq və yalnız məlum olanı sorğulamaq istədiyiniz zaman `ISO_MESSAGE_ID` təyin edin
+identifikator. Körpü işarələyən kimi çıxmaq üçün `ISO_RESOLVE_ON_ACCEPTED=1` istifadə edin
+tranzaksiya hash hələ yekunlaşdırılmamış olsa belə, `Accepted` girişi.
 
-### Example script
+### Nümunə skript
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -357,22 +359,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Çalışın və nəzarət edin
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- Nümunə yükü təqdim etmək üçün `node iso-bridge.mjs`-i yerinə yetirin. Set
+  PvP axınını həyata keçirmək üçün `ISO_MESSAGE_KIND=pacs.009` və ya `ISO_MESSAGE_ID`
+  mövcud təqdimatı yenidən yerləşdirmədən sorğu keçirin.
+- Köməkçi `wait.onPoll` vasitəsilə hər sorğu cəhdini qeyd edir və bunu asanlaşdırır
+  CI qeydlərində qəbul müddətlərini qeyd edin.
+- Auditorlar üçün son statusu + əməliyyat hashını ISO körpü runbook-larına əlavə edin
+  pacs.008/pacs.009 çatdırılmalarını təkrar istehsal olunan faydalı yüklərə qədər izləyə bilər.
+  JS5 yol xəritəsinin çatdırılması tələb olunur.
 
-## Offline allowances & transfers
+## Oflayn müavinətlər və köçürmələr
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js` sənəddə istinad edilən eyni müavinət/köçürmə köməkçilərini göndərir.
+oflayn yol xəritəsi sətirləri. Dürüstlük siyasətlərini yoxlamaq üçün onlardan istifadə edin (marker açarı, Play
+Bütövlük, HMS Safety Detect, Provisioned) xam metadatanı təhlil etmədən:
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -400,19 +402,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+Torii Təmin edilmiş müavinət haqqında məlumat verdikdə, müfəttiş açıq açarı açıqlayır
+şema, isteğe bağlı versiya, TTL və həzm altında yaşayır
+`integrity_metadata.provisioned`, lazım olanı əlavə etməyi mənasız edir
+OA10.3 sübut paketlərinə metadata.
 
-## Next steps
+## Növbəti addımlar
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- `javascript/iroha_js/recipes/governance.mjs` və kəşf edin
+  Genişləndirilmiş nümunələr üçün `javascript/iroha_js/recipes/iso_bridge.mjs` (çox işarəli
+  seçki bülletenləri, şuranın VRF-dən əldə edilməsi, təkrar cəhd siyasətləri).
+- Norito tərəfindəki sənədləri nəzərdən keçirin
+  `docs/source/sdk/js/governance_iso_examples.md` və
+  Kanonik sahə üçün `docs/source/finance/settlement_iso_mapping.md`
+  bu köməkçilərin istinad etdiyi xəritələr.
+- İş qeydlərini götürün və onları təmin etmək üçün idarəetmə / ISO təsdiqlərinə əlavə edin
+  `roadmap.md`-də istinad edilən JS5 “sənədləşdirmə + nəşriyyat” tələbi.

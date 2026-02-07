@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dd9da5045f5f40dbc31837145ad13bf79b4d751b0803c0b6d69bab49885ed1b4
 source_last_modified: "2025-12-29T18:16:35.079313+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Slide Template
+# SNS Training Slide Կաղապար
 
-This Markdown outline mirrors the slides that facilitators should adapt for
-their language cohorts. Copy these sections into Keynote/PowerPoint/Google
-Slides and localise the bullet points, screenshots, and diagrams as needed.
+Markdown-ի այս ուրվագիծը արտացոլում է այն սլայդները, որոնց պետք է հարմարվեն վարողները
+նրանց լեզվական խմբերը: Պատճենեք այս բաժինները Keynote/PowerPoint/Google-ում
+Անհրաժեշտության դեպքում սահում և տեղայնացնում է կետերը, սքրինշոթները և դիագրամները:
 
-## Title slide
-- Program: “Sora Name Service onboarding”
-- Subtitle: specify suffix + cycle (e.g., `.sora — 2026‑03`)
-- Presenters + affiliations
+## Վերնագրի սլայդ
+- Ծրագիր՝ «Sora Name Service inboarding»
+- Ենթագրեր. նշեք վերջածանց + ցիկլը (օրինակ՝ `.sora — 2026‑03`)
+- Ներկայացնողներ + պատկանելություններ
 
-## KPI orientation
-- Screenshot or embed of `docs/portal/docs/sns/kpi-dashboard.md`
-- Bullet list explaining suffix filters, ARPU table, freeze tracker
-- Callouts for exporting PDF/CSV
+## KPI կողմնորոշում
+- Սքրինշոթ կամ ներկառուցված `docs/portal/docs/sns/kpi-dashboard.md`
+- Բլետների ցանկ, որը բացատրում է վերջածանցների ֆիլտրերը, ARPU աղյուսակը, սառեցման հետքերը
+- Զանգեր PDF/CSV արտահանման համար
 
-## Manifest lifecycle
-- Diagram: registrar → Torii → governance → DNS/gateway
-- Steps referencing `docs/source/sns/registry_schema.md`
-- Example manifest excerpt with annotations
+## Դրսեւորված կյանքի ցիկլը
+- Դիագրամ՝ գրանցող → Torii → կառավարում → DNS/gateway
+- `docs/source/sns/registry_schema.md` հղումով քայլեր
+- Օրինակ մանիֆեստի հատված ծանոթագրություններով
 
-## Dispute and freeze drills
-- Flow diagram for guardian intervention
-- Checklist referencing `docs/source/sns/governance_playbook.md`
-- Example freeze ticket timeline
+## Վեճերի և սառեցման վարժանքներ
+- Խնամակալի միջամտության հոսքի դիագրամ
+- Ստուգաթերթի հղում՝ `docs/source/sns/governance_playbook.md`
+- Սառեցման տոմսերի ժամանակացույցի օրինակ
 
-## Annex capture
-- Command snippet showing `cargo xtask sns-annex ... --portal-entry ...`
-- Reminder to archive Grafana JSON under `artifacts/sns/regulatory/<suffix>/<cycle>/`
-- Link to `docs/source/sns/reports/.<suffix>/<cycle>.md`
+## Հավելվածի գրավում
+- Հրամանի հատված, որը ցույց է տալիս `cargo xtask sns-annex ... --portal-entry ...`
+- Հիշեցում Grafana JSON արխիվին `artifacts/sns/regulatory/<suffix>/<cycle>/` տակ
+- Հղում դեպի `docs/source/sns/reports/.<suffix>/<cycle>.md`
 
-## Next steps
-- Training feedback link (see `docs/examples/sns_training_eval_template.md`)
-- Slack/Matrix channel handles
-- Upcoming milestone dates
+## Հաջորդ քայլերը
+- Մարզման հետադարձ կապի հղում (տես `docs/examples/sns_training_eval_template.md`)
+- Slack/Matrix ալիքի բռնակներ
+- Առաջիկա կարևոր ամսաթվերը

@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/sns/registrar-api.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note Канонический источник
 Эта страница отражает `docs/source/sns/registrar_api.md` и теперь служит
-канонической копией портала. Исходный файл остается для PR переводов.
+канонической копией портала。 Исходный файл остается для PR переводов.
 :::
 
 # API регистратора SNS и хуки управления (SN-2b)
 
 **Статус:** Подготовлен 2026-03-24 — на рассмотрении Nexus Core  
-**Ссылка roadmap:** SN-2b "Registrar API & governance hooks"  
+**ロードマップ:** SN-2b「レジストラー API とガバナンス フック」  
 **Предпосылки:** Определения схемы в [`registry-schema.md`](./registry-schema.md)
 
-Эта заметка описывает эндпоинты Torii, сервисы gRPC, DTO запросов/ответов и
-артефакты управления, необходимые для работы регистратора Sora Name Service
-(SNS). Это авторитетный контракт для SDK, кошельков и автоматизации, которым
-нужно регистрировать, продлевать или управлять SNS-именами.
+Эта заметка описывает эндпоинты Torii、сервисы gRPC、DTO запросов/ответов и
+Sora Name Service の名前サービス
+（SNS）。 Это авторитетный контракт для SDK、кольков и автоматизации、которым
+SNS にアクセスできます。
 
 ## 1. Транспорт и аутентификация
 
-| Требование | Детали |
-|------------|--------|
-| Протоколы | REST под `/v1/sns/*` и gRPC сервис `sns.v1.Registrar`. Оба принимают Norito-JSON (`application/json`) и двоичный Norito-RPC (`application/x-norito`). |
-| Auth | `Authorization: Bearer` токены или mTLS сертификаты, выданные по suffix steward. Чувствительные к управлению эндпоинты (freeze/unfreeze, reserved assignments) требуют `scope=sns.admin`. |
-| Ограничения | registrar делят buckets `torii.preauth_scheme_limits` с JSON вызывающими плюс лимиты всплеска по suffix: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
-| Телеметрия | Torii публикует `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` для обработчиков registrar (фильтр по `scheme="norito_rpc"`); API также увеличивает `sns_registrar_status_total{result, suffix_id}`. |
+| Требование |ださい |
+|-----------|----------|
+| Протоколы | REST は `/v1/sns/*` および gRPC は `sns.v1.Registrar` です。 Norito-JSON (`application/json`) と Norito-RPC (`application/x-norito`) を参照してください。 |
+|認証 | `Authorization: Bearer` токены или mTLS のサフィックス スチュワード。 Чувствительные к управлению эндпоинты (凍結/凍結解除、予約された割り当て) требуют `scope=sns.admin`。 |
+| Ограничения |レジストラのバケット `torii.preauth_scheme_limits` с JSON вызывающими плюс лимиты всплеска по suffix: `sns.register`、`sns.renew`、`sns.controller`、 `sns.freeze`。 |
+| Телеметрия | Torii публикует `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` レジストラ (фильтр по `scheme="norito_rpc"`); API は `sns_registrar_status_total{result, suffix_id}` です。 |
 
 ## 2. Обзор DTO
 
-Поля ссылаются на канонические структуры, определенные в [`registry-schema.md`](./registry-schema.md). Все payloads встраивают `NameSelectorV1` + `SuffixId`, чтобы избежать неоднозначной маршрутизации.
+[`registry-schema.md`](./registry-schema.md) を参照してください。ペイロードは `NameSelectorV1` + `SuffixId` に相当します。
 
 ```text
 Struct RegisterNameRequestV1 {
@@ -101,27 +103,27 @@ Struct ReservedAssignmentRequestV1 {
 }
 ```
 
-## 3. REST эндпоинты
+## 3. 休息
 
-| Эндпоинт | Метод | Payload | Описание |
-|----------|-------|---------|----------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрешает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Продлевает срок. Применяет окна grace/redemption из политики. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Заменяет набор controllers; проверяет подписанные адреса аккаунтов. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Freeze guardian/council. Требует guardian ticket и ссылку на governance docket. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze после устранения; убеждается, что council override зафиксирован. |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Назначение reserved имен steward/council. |
-| `/v1/sns/policies/{suffix_id}` | GET | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
-| `/v1/sns/registrations/{selector}` | GET | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |
+| Эндпоинт | Метод |ペイロード | Описание |
+|----------|----------|----------|----------|
+| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрезает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
+| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` | Продлевает срок.恵みと救いを意味します。 |
+| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления。 |
+| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーを使用します。必要に応じて、必要な情報を入力してください。 |
+| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |ガーディアン/評議会を凍結します。ガーディアンチケットとガバナンスドケットを参照してください。 |
+| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` |凍結を解除してください。 убеждается、議会オーバーライド зафиксирован。 |
+| `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` | Назначение 予約されたスチュワード/評議会。 |
+| `/v1/sns/policies/{suffix_id}` |入手 | -- | Получает текущую `SuffixPolicyV1` (кэвируемо)。 |
+| `/v1/sns/registrations/{selector}` |入手 | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (アクティブ、グレース、и т. д.)。 |
 
-**Кодирование selector:** сегмент `{selector}` принимает IH58, compressed (`sora`) или канонический hex по ADDR-5; Torii нормализует через `NameSelectorV1`.
+**セレクター:** `{selector}` は IH58、圧縮 (`sora`) または 16 進数、ADDR-5; Torii нормализует через `NameSelectorV1`。
 
-**Модель ошибок:** все эндпоинты возвращают Norito JSON с `code`, `message`, `details`. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**例:** Norito JSON と `code`、`message`、`details`。 `sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing`。
 
-### 3.1 CLI помощники (требование ручного регистратора N0)
+### 3.1 CLI バージョン (требование ручного регистратора N0)
 
-Steward закрытой беты теперь могут использовать registrar через CLI без ручной сборки JSON:
+スチュワード セッション レジストラ セッション CLI セッション JSON:
 
 ```bash
 iroha sns register \
@@ -134,19 +136,19 @@ iroha sns register \
   --payment-signature '"steward-signature"'
 ```
 
-- `--owner` по умолчанию использует аккаунт конфигурации CLI; повторяйте `--controller`, чтобы добавить дополнительные controller аккаунты (по умолчанию `[owner]`).
-- Inline флаги платежа напрямую сопоставляются с `PaymentProofV1`; передайте `--payment-json PATH`, если уже есть структурированная квитанция. Metadata (`--metadata-json`) и governance hooks (`--governance-json`) следуют тому же шаблону.
+- `--owner` は CLI を使用します。 `--controller`、コントローラー аккаунты (`[owner]`) を使用してください。
+- インライン флаги платежа напрямую сопоставляются с `PaymentProofV1`; `--payment-json PATH` を確認してください。メタデータ (`--metadata-json`) とガバナンス フック (`--governance-json`) が必要です。
 
-Read-only помощники дополняют репетиции:
+読み取り専用のファイル:
 
 ```bash
 iroha sns registration --selector makoto.sora
 iroha sns policy --suffix-id 1
 ```
 
-См. `crates/iroha_cli/src/commands/sns.rs` для реализации; команды повторно используют Norito DTO из этого документа, поэтому вывод CLI совпадает с ответами Torii байт-в-байт.
+См. `crates/iroha_cli/src/commands/sns.rs` 日。 команды повторно используют Norito DTO из этого документа, поэтому вывод CLI совпадает с ответами Torii байт-в-байт。
 
-Дополнительные помощники покрывают продления, передачи и действия guardian:
+保護者、保護者、保護者:
 
 ```bash
 # Renew an expiring name
@@ -176,9 +178,9 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` должен содержать корректную запись `GovernanceHookV1` (proposal id, vote hashes, подписи steward/guardian). Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/registrations/{selector}/...` чтобы операторы беты могли репетировать точные поверхности Torii, которые будут вызывать SDK.
+`--governance-json` должен содержать корректную запись `GovernanceHookV1` (提案 ID、投票ハッシュ、スチュワード/ガーディアン)。 Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/registrations/{selector}/...` чтобы операторы беты могли репетировать Torii は、SDK に含まれています。
 
-## 4. gRPC сервис
+## 4. gRPC の使い方
 
 ```text
 service Registrar {
@@ -192,85 +194,83 @@ service Registrar {
     rpc GetRegistration(NameSelectorV1) returns (NameRecordV1);
     rpc GetPolicy(SuffixId) returns (SuffixPolicyV1);
 }
-```
-
-Wire-format: хеш схемы Norito на этапе компиляции записан в
-`fixtures/norito_rpc/schema_hashes.json` (строки `RegisterNameRequestV1`,
-`RegisterNameResponseV1`, `NameRecordV1`, и т. д.).
+```ワイヤー形式: Norito は、次のようになります。
+`fixtures/norito_rpc/schema_hashes.json` (`RegisterNameRequestV1`、
+`RegisterNameResponseV1`、`NameRecordV1`、および。 д.)。
 
 ## 5. Хуки управления и доказательства
 
 Каждый изменяющий вызов должен приложить доказательства, пригодные для воспроизведения:
 
 | Действие | Требуемые данные управления |
-|----------|-----------------------------|
-| Стандартная регистрация/продление | Доказательство платежа со ссылкой на settlement инструкцию; голосование council не нужно, если tier не требует одобрения steward. |
-| Регистрация premium tier / reserved assignment | `GovernanceHookV1` со ссылкой на proposal id + steward acknowledgement. |
-| Передача | Хеш голосования council + хеш сигнала DAO; guardian clearance, когда передача инициирована разрешением спора. |
-| Freeze/Unfreeze | Подпись guardian ticket плюс council override (unfreeze). |
+|----------|----------------------------|
+| Стандартная регистрация/продление |解決済み、解決済み。 голосование 評議会 не нужно、если tier не требует одобрения 管理人。 |
+| Регистрация プレミアム層 / 予約済み割り当て | `GovernanceHookV1` プロポーザル ID + スチュワード承認。 |
+| Передача | Хез голосования Council + хел сигнала DAO;ガーディアン・クリアランス、когда передача инициирована разрезением спора。 |
+|凍結/凍結解除 |ガーディアンチケットは評議会オーバーライド（凍結解除）を行います。 |
 
-Torii проверяет доказательства, проверяя:
+Torii の日付:
 
-1. proposal id существует в ledger управления (`/v1/governance/proposals/{id}`) и статус `Approved`.
-2. Хеши совпадают с записанными артефактами голосования.
-3. Подписи steward/guardian ссылаются на ожидаемые публичные ключи из `SuffixPolicyV1`.
+1. 提案 ID существует в レジャー управления (`/v1/governance/proposals/{id}`) および статус `Approved`。
+2. 問題を解決します。
+3. スチュワード/ガーディアンは `SuffixPolicyV1` に属します。
 
-Неуспешные проверки возвращают `sns_err_governance_missing`.
+`sns_err_governance_missing` を参照してください。
 
 ## 6. Примеры рабочих процессов
 
 ### 6.1 Стандартная регистрация
 
-1. Клиент запрашивает `/v1/sns/policies/{suffix_id}` чтобы получить цены, grace и доступные tiers.
+1. `/v1/sns/policies/{suffix_id}` чтобы получить цены、grace и доступные tier。
 2. Клиент строит `RegisterNameRequestV1`:
-   - `selector` получен из предпочитаемого IH58 или второго по предпочтению compressed (`sora`) label.
-   - `term_years` в пределах политики.
-   - `payment` ссылается на перевод splitter treasury/steward.
-3. Torii проверяет:
-   - Нормализацию метки + reserved список.
-   - Term/gross price vs `PriceTierV1`.
+   - `selector` 圧縮 (`sora`) ラベル。
+   - `term_years` が表示されます。
+   - `payment` スプリッター トレジャリー/スチュワード。
+3. Torii の値:
+   - Нормализацию метки + 予約済み。
+   - 期間/総額対 `PriceTierV1`。
    - Сумма доказательства платежа >= рассчитанной цены + комиссии.
-4. В случае успеха Torii:
-   - Сохраняет `NameRecordV1`.
-   - Испускает `RegistryEventV1::NameRegistered`.
-   - Испускает `RevenueAccrualEventV1`.
-   - Возвращает новую запись + события.
+4. Torii:
+   - Сохраняет `NameRecordV1`。
+   - `RegistryEventV1::NameRegistered`。
+   - `RevenueAccrualEventV1`。
+   - Возвращает новую запись + события。
 
-### 6.2 Продление в период grace
+### 6.2 猶予を与える
 
-Продления в grace включают стандартный запрос плюс детект штрафа:
+グレースとの出会い:
 
-- Torii сравнивает `now` с `grace_expires_at` и добавляет таблицы surcharge из `SuffixPolicyV1`.
-- Доказательство платежа должно покрывать surcharge. Ошибка => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` записывает новый `expires_at`.
+- Torii と `now` と `grace_expires_at` および追加料金と `SuffixPolicyV1`。
+- 追加料金がかかります。 Осибка => `sns_err_payment_mismatch`。
+- `RegistryEventV1::NameRenewed` は `expires_at` です。
 
-### 6.3 Guardian freeze и council override
+### 6.3 ガーディアンの凍結と評議会のオーバーライド
 
-1. Guardian отправляет `FreezeNameRequestV1` с ticket, ссылающимся на id инцидента.
-2. Torii переводит запись в `NameStatus::Frozen`, испускает `NameFrozen`.
-3. После устранения council выпускает override; оператор отправляет DELETE `/v1/sns/registrations/{selector}/freeze` с `GovernanceHookV1`.
-4. Torii проверяет override, испускает `NameUnfrozen`.
+1. ガーディアン отправляет `FreezeNameRequestV1` с ticket, ссылающимся на id инцидента.
+2. Torii は `NameStatus::Frozen`、`NameFrozen` と一致します。
+3. 評議会のオーバーライド。 `/v1/sns/registrations/{selector}/freeze` から `GovernanceHookV1` を削除してください。
+4. Torii はオーバーライド、`NameUnfrozen` です。
 
-## 7. Валидация и коды ошибок
+## 7. Валидация и коды осибок
 
 | Код | Описание | HTTP |
 |-----|----------|------|
 | `sns_err_reserved` | Метка зарезервирована или заблокирована. | 409 |
-| `sns_err_policy_violation` | Срок, tier или набор controllers нарушает политику. | 422 |
+| `sns_err_policy_violation` | Срок、tier はコントローラーのレベルを表します。 | 422 |
 | `sns_err_payment_mismatch` | Несоответствие значения или актива в доказательстве платежа. | 402 |
-| `sns_err_governance_missing` | Отсутствуют/некорректны требуемые артефакты управления. | 403 |
+| `sns_err_governance_missing` | Отсутствуют/некорректны требуемые артефакты управления。 | 403 |
 | `sns_err_state_conflict` | Операция недопустима в текущем состоянии жизненного цикла. | 409 |
 
-Все коды пробрасываются через `X-Iroha-Error-Code` и структурированные Norito JSON/NRPC конверты.
+`X-Iroha-Error-Code` と Norito JSON/NRPC のファイルが表示されます。
 
 ## 8. Примечания по реализации
 
-- Torii хранит pending аукционы в `NameRecordV1.auction` и отклоняет прямые попытки регистрации, пока `PendingAuction`.
-- Доказательства платежа переиспользуют Norito ledger receipts; treasury сервисы предоставляют helper API (`/v1/finance/sns/payments`).
-- SDK должны обернуть эти эндпоинты строго типизированными помощниками, чтобы кошельки могли показывать понятные причины ошибок (`ERR_SNS_RESERVED`, и т. д.).
+- Torii 保留中 аукционы в `NameRecordV1.auction` と отклоняет прямые попытки регистрации, пока `PendingAuction`。
+- Доказательства платежа переиспользуют Norito 元帳領収書。財務省ヘルパー API (`/v1/finance/sns/payments`)。
+- SDK のアップデート、アップデート、アップデート、アップデート、アップデートпричины озибок (`ERR_SNS_RESERVED`, и т. д.)。
 
-## 9. Следующие шаги
+## 9. Следующие заги
 
-- Подключить обработчики Torii к реальному контракту реестра после появления аукционов SN-3.
-- Опубликовать SDK-руководства (Rust/JS/Swift), ссылающиеся на это API.
-- Расширить [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) перекрестными ссылками на поля доказательств governance hook.
+- SN-3 を使用して Torii を確認します。
+- SDK-руководства (Rust/JS/Swift)、API を使用します。
+- [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) ガバナンス フックの詳細。

@@ -4,37 +4,39 @@ direction: ltr
 source: docs/portal/docs/sns/registrar-api.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/sns/registrar_api.md` y ahora sirve como la
-copia canonica del portal. El archivo fuente se mantiene para flujos de
-traduccion.
+:::nota Fonte canônica
+Esta página reflete `docs/source/sns/registrar_api.md` e agora sirve como la
+cópia canônica do portal. O arquivo fonte é mantido para fluxos de
+tradução.
 :::
 
-# API del registrador SNS y hooks de gobernanza (SN-2b)
+# API do registrador SNS e ganchos de governo (SN-2b)
 
-**Estado:** Borrador 2026-03-24 -- bajo revision de Nexus Core  
-**Enlace del roadmap:** SN-2b "Registrar API & governance hooks"  
-**Prerequisitos:** Definiciones de esquema en [`registry-schema.md`](./registry-schema.md)
+**Estado:** Borrador 2026-03-24 -- revisão inferior do Nexus Core  
+**Incluir roteiro:** SN-2b "API do registrador e ganchos de governança"  
+**Pré-requisitos:** Definições de esquema em [`registry-schema.md`](./registry-schema.md)
 
-Esta nota especifica los endpoints Torii, servicios gRPC, DTOs de solicitud
-respuesta y artefactos de gobernanza necesarios para operar el registrador del
-Sora Name Service (SNS). Es el contrato autoritativo para SDKs, wallets y
-automatizacion que necesitan registrar, renovar o gestionar nombres SNS.
+Esta nota especifica os endpoints Torii, serviços gRPC, DTOs de solicitação
+respostas e artefatos de governo necessários para operar o registrador do
+Serviço de nomes Sora (SNS). É o contrato autoritativo para SDKs, carteiras e
+automatização que precisa registrar, renovar ou gerenciar nomes SNS.
 
-## 1. Transporte y autenticacion
+## 1. Transporte e autenticação
 
-| Requisito | Detalle |
+| Requisito | Detalhes |
 |-----------|---------|
-| Protocolos | REST bajo `/v1/sns/*` y servicio gRPC `sns.v1.Registrar`. Ambos aceptan Norito-JSON (`application/json`) y Norito-RPC binario (`application/x-norito`). |
-| Auth | Tokens `Authorization: Bearer` o certificados mTLS emitidos por suffix steward. Endpoints sensibles a gobernanza (freeze/unfreeze, asignaciones reservadas) requieren `scope=sns.admin`. |
-| Limites de tasa | Registrars comparten los buckets `torii.preauth_scheme_limits` con callers JSON mas limites de rafaga por suffix: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
-| Telemetria | Torii expone `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` para handlers del registrador (filtrar `scheme="norito_rpc"`); la API tambien incrementa `sns_registrar_status_total{result, suffix_id}`. |
+| Protocolos | REST abaixo `/v1/sns/*` e serviço gRPC `sns.v1.Registrar`. Ambos aceitam Norito-JSON (`application/json`) e Norito-RPC binário (`application/x-norito`). |
+| Autenticação | Tokens `Authorization: Bearer` ou certificados mTLS emitidos por sufixo steward. Endpoints sensíveis a governança (congelar/descongelar, atribuições reservadas) requerem `scope=sns.admin`. |
+| Limites de tasa | Os registradores comparam os buckets `torii.preauth_scheme_limits` com chamadores JSON mas limites de rafaga por sufixo: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
+| Telemetria | Torii expõe `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` para manipuladores do registrador (filtrar `scheme="norito_rpc"`); a API também incrementa `sns_registrar_status_total{result, suffix_id}`. |
 
-## 2. Resumen de DTO
+## 2. Resumo do DTO
 
-Los campos referencian los structs canonicos definidos en [`registry-schema.md`](./registry-schema.md). Todas las cargas incluyen `NameSelectorV1` + `SuffixId` para evitar ruteo ambiguo.
+Os campos referenciam as estruturas canônicas definidas em [`registry-schema.md`](./registry-schema.md). Todas as cargas incluem `NameSelectorV1` + `SuffixId` para evitar ambiguidade de rota.
 
 ```text
 Struct RegisterNameRequestV1 {
@@ -102,27 +104,25 @@ Struct ReservedAssignmentRequestV1 {
 }
 ```
 
-## 3. Endpoints REST
+## 3. Terminais REST
 
-| Endpoint | Metodo | Payload | Descripcion |
+| Ponto final | Método | Carga útil | Descrição |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Registrar o reabrir un nombre. Resuelve la tier de precios, valida pruebas de pago/gobernanza, emite eventos de registro. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Extiende termino. Aplica ventanas de gracia/redencion segun la politica. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Transfiere propiedad una vez adjuntas las aprobaciones de gobernanza. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Reemplaza el set de controllers; valida direcciones de cuenta firmadas. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Freeze de guardian/council. Requiere ticket de guardian y referencia al docket de gobernanza. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze tras remediacion; asegura override del council registrado. |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Asignacion de nombres reservados por steward/council. |
-| `/v1/sns/policies/{suffix_id}` | GET | -- | Obtiene `SuffixPolicyV1` actual (cacheable). |
-| `/v1/sns/registrations/{selector}` | GET | -- | Devuelve `NameRecordV1` actual + estado efectivo (Active, Grace, etc.). |
+| `/v1/sns/registrations` | POSTAR | `RegisterNameRequestV1` | Registrador ou reabrir um nome. Resuelve la tier de precios, valida pruebas de pago/gobernanza, emite eventos de registro. |
+| `/v1/sns/registrations/{selector}/renew` | POSTAR | `RenewNameRequestV1` | Estenda o término. Aplica janelas de graça/redenção segundo a política. |
+| `/v1/sns/registrations/{selector}/transfer` | POSTAR | `TransferNameRequestV1` | Transfiere propiedad uma vez junto com as aprovações de governo. |
+| `/v1/sns/registrations/{selector}/controllers` | COLOCAR | `UpdateControllersRequestV1` | Substitua o conjunto de controladores; valida direções de conta firmadas. |
+| `/v1/sns/registrations/{selector}/freeze` | POSTAR | `FreezeNameRequestV1` | Congelar o guardião/conselho. Requer ticket de guardião e referência ao docket de gobernanza. |
+| `/v1/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | Descongelar remediação de tras; asegura a substituição do conselho registrado. |
+| `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | Atribuição de nomes reservados pelo administrador/conselho. |
+| `/v1/sns/policies/{suffix_id}` | OBTER | -- | Obtenha `SuffixPolicyV1` real (armazenável em cache). |
+| `/v1/sns/registrations/{selector}` | OBTER | -- | Devuelve `NameRecordV1` atual + estado efectivo (Ativo, Graça, etc.). |**Codificação do seletor:** o segmento `{selector}` aceita IH58, comprimido ou hexadecimal canônico após ADDR-5; Torii normaliza via `NameSelectorV1`.
 
-**Codificacion de selector:** el segmento `{selector}` acepta IH58, comprimido o hex canonico segun ADDR-5; Torii lo normaliza via `NameSelectorV1`.
+**Modelo de erros:** todos os endpoints retornam Norito JSON com `code`, `message`, `details`. Os códigos incluem `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
-**Modelo de errores:** todos los endpoints devuelven Norito JSON con `code`, `message`, `details`. Los codigos incluyen `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+### 3.1 Helpers CLI (requisito do manual do registrador N0)
 
-### 3.1 Helpers CLI (requisito de registrador manual N0)
-
-Los stewards de beta cerrada pueden operar el registrador via la CLI sin armar JSON a mano:
+Os administradores da versão beta fechada podem operar o registrador via CLI sem armar JSON manualmente:
 
 ```bash
 iroha sns register \
@@ -135,19 +135,19 @@ iroha sns register \
   --payment-signature '"steward-signature"'
 ```
 
-- `--owner` toma por defecto la cuenta de configuracion de la CLI; repite `--controller` para adjuntar cuentas controller adicionales (default `[owner]`).
-- Los flags inline de pago mapean directo a `PaymentProofV1`; usa `--payment-json PATH` cuando ya tengas un recibo estructurado. Metadata (`--metadata-json`) y governance hooks (`--governance-json`) siguen el mismo patron.
+- `--owner` toma por defeito a conta de configuração da CLI; repita `--controller` para adicionar informações adicionais ao controlador (padrão `[owner]`).
+- As bandeiras inline de pagamento mapeadas direto para `PaymentProofV1`; usa `--payment-json PATH` quando você tiver um recibo estruturado. Metadados (`--metadata-json`) e ganchos de governança (`--governance-json`) seguem o mesmo patrono.
 
-Helpers de solo lectura completan los ensayos:
+Ajudantes de solo lectura completando os ensaios:
 
 ```bash
 iroha sns registration --selector makoto.sora
 iroha sns policy --suffix-id 1
 ```
 
-Ver `crates/iroha_cli/src/commands/sns.rs` para la implementacion; los comandos reutilizan los DTOs Norito descritos en este documento para que la salida de la CLI coincida byte por byte con las respuestas de Torii.
+Ver `crates/iroha_cli/src/commands/sns.rs` para implementação; Os comandos reutilizam os DTOs Norito descritos neste documento para que a saída da CLI coincida byte por byte com as respostas de Torii.
 
-Helpers adicionales cubren renovaciones, transfers y acciones de guardian:
+Ajudantes adicionais para renovações, transferências e ações de guardião:
 
 ```bash
 # Renew an expiring name
@@ -177,9 +177,9 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` debe contener un registro `GovernanceHookV1` valido (proposal id, vote hashes, firmas de steward/guardian). Cada comando simplemente refleja el endpoint `/v1/sns/registrations/{selector}/...` correspondiente para que los operadores de beta ensayen exactamente las superficies Torii que llamaran los SDKs.
+`--governance-json` deve conter um registro `GovernanceHookV1` válido (ID da proposta, hashes de voto, firmas de administrador/guardião). Cada comando simplesmente reflete o endpoint `/v1/sns/registrations/{selector}/...` correspondente para que os operadores de beta ensayem exatamente as superfícies Torii que ligam os SDKs.
 
-## 4. Servicio gRPC
+## 4. Serviço gRPC
 
 ```text
 service Registrar {
@@ -195,83 +195,81 @@ service Registrar {
 }
 ```
 
-Wire-format: hash del esquema Norito en tiempo de compilacion registrado en
+Wire-format: hash do esquema Norito no tempo de compilação registrada em
 `fixtures/norito_rpc/schema_hashes.json` (filas `RegisterNameRequestV1`,
 `RegisterNameResponseV1`, `NameRecordV1`, etc.).
 
-## 5. Hooks de gobernanza y evidencia
+## 5. Ganchos de governança e evidência
 
-Cada llamada que muta estado debe adjuntar evidencia apta para replay:
+Cada chamada que muda de estado deve ser adjunta de evidência adequada para reprodução:
 
-| Accion | Datos de gobernanza requeridos |
-|--------|-------------------------------|
-| Registro/renovacion estandar | Prueba de pago que referencia una instruccion de settlement; no se requiere voto de council salvo que la tier requiera aprobacion de steward. |
-| Registro premium / asignacion reservada | `GovernanceHookV1` que referencia proposal id + steward acknowledgement. |
-| Transfer | Hash de voto del council + hash de senal DAO; guardian clearance cuando la transferencia se activa por resolucion de disputa. |
-| Freeze/Unfreeze | Firma de ticket guardian mas override del council (unfreeze). |
+| Ação | Dados de governança exigidos |
+|--------|------------------------------------------|
+| Registro/renovação padrão | Teste de pagamento que se refere a uma instrução de liquidação; não se exige voto do conselho salvo que la tier exige aprovação do administrador. |
+| Registro premium / atribuição reservada | `GovernanceHookV1` que referencia o id da proposta + reconhecimento do administrador. |
+| Transferência | Hash de voto do conselho + hash de senal DAO; autorização do guardião quando a transferência é ativada para resolução de disputa. |
+| Congelar/descongelar | Firma de ticket Guardian mas override del Council (descongelar). |
 
-Torii verifica las pruebas comprobando:
+Torii verifica os testes verificados:
 
-1. Proposal id existe en el ledger de gobernanza (`/v1/governance/proposals/{id}`) y el status es `Approved`.
-2. Hashes coinciden con los artefactos de voto registrados.
-3. Firmas de steward/guardian referencian las claves publicas esperadas de `SuffixPolicyV1`.
+1. O ID da proposta existe no razão de governo (`/v1/governance/proposals/{id}`) e o status é `Approved`.
+2. Os hashes coincidem com os artefatos de voto registrados.
+3. Firmas de steward/guardian referenciam as claves públicas esperadas de `SuffixPolicyV1`.
 
 Fallos devuelven `sns_err_governance_missing`.
 
-## 6. Ejemplos de flujo
+## 6. Exemplos de fluxo
 
-### 6.1 Registro estandar
+### 6.1 Registro padrão1. O cliente consulte `/v1/sns/policies/{suffix_id}` para obter preços, graça e níveis disponíveis.
+2. Arma cliente `RegisterNameRequestV1`:
+   - `selector` derivado do rótulo IH58 (preferido) ou comprimido (segunda melhor opção).
+   - `term_years` dentro dos limites da política.
+   - `payment` que referencia a transferência do splitter tesoreria/steward.
+3. Validação Torii:
+   - Normalização de etiqueta + lista reservada.
+   - Prazo/preço bruto vs `PriceTierV1`.
+   - Valor do comprovante de pagamento >= preço calculado + taxas.
+4. Na saída Torii:
+   - Persistir `NameRecordV1`.
+   - Emita `RegistryEventV1::NameRegistered`.
+   - Emita `RevenueAccrualEventV1`.
+   - Retorne o novo registro + eventos.
 
-1. El cliente consulta `/v1/sns/policies/{suffix_id}` para obtener precios, gracia y tiers disponibles.
-2. El cliente arma `RegisterNameRequestV1`:
-   - `selector` derivado de label IH58 (preferido) o comprimido (segunda mejor opcion).
-   - `term_years` dentro de los limites de la politica.
-   - `payment` que referencia la transferencia del splitter tesoreria/steward.
-3. Torii valida:
-   - Normalizacion de label + lista reservada.
-   - Term/gross price vs `PriceTierV1`.
-   - Proof de pago amount >= precio calculado + fees.
-4. En exito Torii:
-   - Persiste `NameRecordV1`.
-   - Emite `RegistryEventV1::NameRegistered`.
-   - Emite `RevenueAccrualEventV1`.
-   - Devuelve el nuevo registro + eventos.
+### 6.2 Renovação durante graça
 
-### 6.2 Renovacion durante gracia
+Las renovaciones en gracia incluem a solicitação padrão, mas a detecção de penalidade:
 
-Las renovaciones en gracia incluyen la solicitud estandar mas deteccion de penalidad:
+- Torii compara `now` vs `grace_expires_at` e adiciona tabelas de recarga de `SuffixPolicyV1`.
+- A verificação de pagamento deve ser realizada. Fallo => `sns_err_payment_mismatch`.
+- `RegistryEventV1::NameRenewed` registra o novo `expires_at`.
 
-- Torii compara `now` vs `grace_expires_at` y agrega tablas de recargo desde `SuffixPolicyV1`.
-- La prueba de pago debe cubrir el recargo. Fallo => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` registra el nuevo `expires_at`.
+### 6.3 Congelamento do guardião e substituição do conselho
 
-### 6.3 Congelamiento de guardian y override del council
+1. Guardian envia `FreezeNameRequestV1` com ticket que refere id de incidente.
+2. Torii mova o registro para `NameStatus::Frozen`, emita `NameFrozen`.
+3. Tras remediação, el conselho emite override; o operador envia DELETE `/v1/sns/registrations/{selector}/freeze` com `GovernanceHookV1`.
+4. Torii valida a substituição, emite `NameUnfrozen`.
 
-1. Guardian envia `FreezeNameRequestV1` con ticket que referencia id de incidente.
-2. Torii mueve el registro a `NameStatus::Frozen`, emite `NameFrozen`.
-3. Tras remediacion, el council emite override; el operador envia DELETE `/v1/sns/registrations/{selector}/freeze` con `GovernanceHookV1`.
-4. Torii valida el override, emite `NameUnfrozen`.
+## 7. Validação e códigos de erro
 
-## 7. Validacion y codigos de error
-
-| Codigo | Descripcion | HTTP |
+| Código | Descrição | http |
 |--------|-------------|------|
-| `sns_err_reserved` | Label reservado o bloqueado. | 409 |
-| `sns_err_policy_violation` | Term, tier o set de controllers viola la politica. | 422 |
-| `sns_err_payment_mismatch` | Mismatch de valor o asset en la prueba de pago. | 402 |
-| `sns_err_governance_missing` | Artefactos de gobernanza requeridos ausentes/invalidos. | 403 |
-| `sns_err_state_conflict` | Operacion no permitida en el estado actual del ciclo de vida. | 409 |
+| `sns_err_reserved` | Etiqueta reservada ou bloqueada. | 409 |
+| `sns_err_policy_violation` | Prazo, nível ou conjunto de controladores viola a política. | 422 |
+| `sns_err_payment_mismatch` | Incompatibilidade de valor ou ativo na tentativa de pagamento. | 402 |
+| `sns_err_governance_missing` | Artefatos de governo exigidos ausentes/inválidos. | 403 |
+| `sns_err_state_conflict` | Operação não permitida no estado atual do ciclo de vida. | 409 |
 
-Todos los codigos salen via `X-Iroha-Error-Code` y envelopes Norito JSON/NRPC estructurados.
+Todos os códigos são vendidos via `X-Iroha-Error-Code` e envelopes Norito JSON/NRPC estruturados.
 
-## 8. Notas de implementacion
+## 8. Notas de implementação
 
-- Torii guarda subastas pendientes en `NameRecordV1.auction` y rechaza intentos de registro directo mientras este en `PendingAuction`.
-- Las pruebas de pago reutilizan recibos del ledger Norito; servicios de tesoreria proveen APIs helper (`/v1/finance/sns/payments`).
-- Los SDKs deben envolver estos endpoints con helpers tipados para que las wallets muestren razones claras de error (`ERR_SNS_RESERVED`, etc.).
+- Torii guarda subastas pendentes em `NameRecordV1.auction` e rechaza intenções de registro diretamente enquanto estiver em `PendingAuction`.
+- As verificações de pagamento reutilizam recibos do livro-razão Norito; serviços de tesouraria comprovados APIs helper (`/v1/finance/sns/payments`).
+- Os SDKs devem envolver esses endpoints com ajudantes tipados para que as carteiras mostrem motivos claros de erro (`ERR_SNS_RESERVED`, etc.).
 
-## 9. Proximos pasos
+## 9. Próximos passos
 
-- Conectar los handlers de Torii al contrato de registro real una vez que lleguen las subastas SN-3.
-- Publicar guias especificas de SDK (Rust/JS/Swift) que referencien esta API.
-- Extender [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) con enlaces cruzados a los campos de evidencia de governance hook.
+- Conecte os manipuladores de Torii ao contrato de registro real uma vez que conecte as subastas SN-3.
+- Publicar guias específicos de SDK (Rust/JS/Swift) que fazem referência a esta API.
+- Extender [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) com links cruzados nos campos de evidência de governança gancho.

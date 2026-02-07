@@ -4,12 +4,14 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-refactor-plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-refactor-plan
+ID: nexus-リファクタリングプラン
 title: План рефакторинга Sora Nexus Ledger
-description: Зеркало `docs/source/nexus_refactor_plan.md`, описывающее поэтапную зачистку кодовой базы Iroha 3.
+説明: Зеркало `docs/source/nexus_refactor_plan.md`、описывающее поэтапную зачистку кодовой базы Iroha 3.
 ---
 
 :::note Канонический источник
@@ -18,100 +20,96 @@ description: Зеркало `docs/source/nexus_refactor_plan.md`, описыва
 
 # План рефакторинга Sora Nexus Ledger
 
-Этот документ фиксирует ближайший roadmap по рефакторингу Sora Nexus Ledger ("Iroha 3"). Он отражает текущую структуру репозитория и регрессии, замеченные в учете genesis/WSV, консенсусе Sumeragi, триггерах смарт-контрактов, snapshot queries, host bindings pointer-ABI и Norito codecs. Цель - прийти к согласованной, тестируемой архитектуре, не пытаясь посадить все исправления одним монолитным патчем.
+ソラ Nexus レジャー ("Iroha 3") のロードマップを確認してください。 Он отражает текущую структуру репозитория и регрессии, замеченные в учете Genesis/WSV, консенсусе Sumeragi, триггерах смарт-контрактов、スナップショット クエリ、ホスト バインディング ポインター ABI および Norito コーデック。 Цель - прийти к согласованной, тестируемой архитектуре, не пытаясь посадить все исправления одним монолитнымです。
 
 ## 0. Направляющие принципы
-- Сохранять детерминированное поведение на гетерогенном железе; использовать ускорение только через opt-in feature flags с идентичными fallbacks.
-- Norito - слой сериализации. Любые изменения state/schema должны включать Norito encode/decode round-trip тесты и обновления fixtures.
-- Конфигурация проходит через `iroha_config` (user -> actual -> defaults). Уберите ad-hoc environment toggles из продакшн путей.
-- Политика ABI остается V1 и не подлежит обсуждению. Hosts должны детерминированно отклонять неизвестные pointer types/syscalls.
-- `cargo test --workspace` и golden tests (`ivm`, `norito`, `integration_tests`) остаются базовым гейтом для каждого этапа.
+- Сохранять детерминированное поведение на гетерогенном железе;オプトイン機能フラグとフォールバックを確認できます。
+- Norito - 最高です。 Norito は、フィクスチャの状態/スキーマをラウンドトリップでエンコード/デコードします。
+- Конфигурация проходит через `iroha_config` (ユーザー -> 実際の -> デフォルト)。アドホック環境を切り替えることができます。
+- ABI остается V1 を使用してください。ポインター タイプ/システムコールをホストします。
+- `cargo test --workspace` およびゴールデン テスト (`ivm`、`norito`、`integration_tests`) のテストが必要です。
 
 ## 1. Снимок топологии репозитория
-- `crates/iroha_core`: Sumeragi actors, WSV, genesis loader, pipelines (query, overlay, zk lanes), glue для smart-contract host.
-- `crates/iroha_data_model`: авторитетная схема on-chain данных и queries.
-- `crates/iroha`: client API, используемый CLI, tests, SDK.
-- `crates/iroha_cli`: операторский CLI, сейчас зеркалит множество APIs из `iroha`.
-- `crates/ivm`: Kotodama bytecode VM, entry points для pointer-ABI host integration.
-- `crates/norito`: serialization codec с JSON adapters и AoS/NCB backends.
-- `integration_tests`: кросс-компонентные assertions, покрывающие genesis/bootstrap, Sumeragi, triggers, pagination и т.д.
-- Docs уже описывают цели Sora Nexus Ledger (`nexus.md`, `new_pipeline.md`, `ivm.md`), но реализация фрагментирована и частично устарела относительно кода.
+- `crates/iroha_core`: Sumeragi アクター、WSV、ジェネシス ローダー、パイプライン (クエリ、オーバーレイ、ZK レーン)、スマート コントラクト ホストの接着剤。
+- `crates/iroha_data_model`: オンチェーンのクエリを実行します。
+- `crates/iroha`: クライアント API、CLI、テスト、SDK。
+- `crates/iroha_cli`: CLI、API および `iroha`。
+- `crates/ivm`: Kotodama バイトコード VM、エントリ ポイントとポインターと ABI ホストの統合。
+- `crates/norito`: シリアル化コーデック、JSON アダプター、AoS/NCB バックエンド。
+- `integration_tests`: кросс-компонентные アサーション、ジェネシス/ブートストラップ、Sumeragi、トリガー、ページネーション、т.д。
+- Sora Nexus Ledger (`nexus.md`、`new_pipeline.md`、`ivm.md`) のドキュメントを参照してください。 Єрагментирована и частично устарела относительно кода.
 
 ## 2. Опорные элементы рефакторинга и вехи
 
-### Phase A - Foundations and Observability
-1. **WSV Telemetry + Snapshots**
-   - Зафиксировать canonical snapshot API в `state` (trait `WorldStateSnapshot`), используемый queries, Sumeragi и CLI.
-   - Использовать `scripts/iroha_state_dump.sh` для детерминированных snapshots через `iroha state dump --format norito`.
-2. **Genesis/Bootstrap Determinism**
-   - Переписать ingest genesis так, чтобы он проходил через единый Norito pipeline (`iroha_core::genesis`).
-   - Добавить integration/regression покрытие, которое воспроизводит genesis плюс первый блок и подтверждает идентичные WSV roots между arm64/x86_64 (трекится в `integration_tests/tests/genesis_replay_determinism.rs`).
-3. **Cross-crate Fixity Tests**
-   - Расширить `integration_tests/tests/genesis_json.rs`, чтобы валидировать WSV, pipeline и ABI invariants в одном harness.
-   - Ввести scaffold `cargo xtask check-shape`, который паникует при schema drift (трекится в DevEx tooling backlog; см. action item в `scripts/xtask/README.md`).
+### フェーズ A - 基礎と可観測性
+1. **WSV テレメトリ + スナップショット**
+   - 正規スナップショット API、`state` (特性 `WorldStateSnapshot`)、クエリ、Sumeragi、CLI をサポートします。
+   - `scripts/iroha_state_dump.sh` 日のスナップショット `iroha state dump --format norito`。
+2. **ジェネシス/ブートストラップ決定論**
+   - Genesis так、чтобы он проходил через единый Norito パイプライン (`iroha_core::genesis`) を取り込みます。
+   - 統合/回帰、ジェネシスの統合/回帰、WSV ルートの arm64/x86_64 の統合(трекится в `integration_tests/tests/genesis_replay_determinism.rs`)。
+3. **クレート間の固定性テスト**
+   - `integration_tests/tests/genesis_json.rs`、WSV、パイプライン、ABI 不変条件、ハーネスをサポートします。
+   - スキャフォールド `cargo xtask check-shape`、スキーマ ドリフト (DevEx ツール バックログ、アクション アイテム `scripts/xtask/README.md`) を参照してください。
 
-### Phase B - WSV & Query Surface
-1. **State Storage Transactions**
+### フェーズ B - WSV とクエリ サーフェス
+1. **状態ストレージ トランザクション**
    - Свести `state/storage_transactions.rs` к транзакционному адаптеру, который обеспечивает порядок commit и детектирует конфликты.
-   - Unit tests теперь проверяют, что модификации assets/world/triggers откатываются при ошибках.
-2. **Query Model Refactor**
-   - Перенести pagination/cursor логику в переиспользуемые компоненты под `crates/iroha_core/src/query/`. Согласовать Norito representations в `iroha_data_model`.
-   - Добавить snapshot queries для triggers, assets и roles с детерминированным порядком (отслеживается через `crates/iroha_core/tests/snapshot_iterable.rs` для текущего покрытия).
-3. **Snapshot Consistency**
-   - Убедиться, что `iroha ledger query` CLI использует тот же snapshot path, что и Sumeragi/fetchers.
-   - CLI snapshot regression tests находятся в `tests/cli/state_snapshot.rs` (feature-gated для медленных прогонов).
+   - 単体テスト、アセット/ワールド/トリガーのテスト。
+2. **クエリモデルのリファクタリング**
+   - ページネーション/カーソルを表示するには、`crates/iroha_core/src/query/` を使用します。 Norito 表現と `iroha_data_model` を組み合わせます。
+   - トリガー、アセット、ロールのスナップショット クエリを実行します (отслеживается через `crates/iroha_core/tests/snapshot_iterable.rs` для текущего покрытия)。
+3. **スナップショットの一貫性**
+   - Убедиться、что `iroha ledger query` CLI использует тот же スナップショット パス、что и Sumeragi/fetchers。
+   - CLI スナップショット回帰テスト находятся в `tests/cli/state_snapshot.rs` (機能ゲート型 для медленных прогонов)。### フェーズ C - Sumeragi パイプライン
+1. **トポロジーとエポック管理**
+   - WSV ステーク スナップショットの特性 `EpochRosterProvider` です。
+   - `WsvEpochRosterAdapter::from_peer_iter` は、コンストラクター、モック、ベンチ/テストを備えています。
+2. **コンセンサスフローの簡素化**
+   - `crates/iroha_core/src/sumeragi/*` のメッセージ: `pacemaker`、`aggregation`、`availability`、`witness` が必要です。 `consensus`。
+   - アドホック メッセージ受け渡し、Norito エンベロープ、ビュー変更プロパティ テスト (трекится в Sumeragi メッセージング バックログ)。
+3. **レーン/プルーフの統合**
+   - レーンプルーフ、DA コミットメント、および RBC ゲーティングをサポートします。
+   - エンドツーエンドで `integration_tests/tests/extra_functional/seven_peer_consistency.rs` を確認し、RBC を確認します。
 
-### Phase C - Sumeragi Pipeline
-1. **Topology & Epoch Management**
-   - Вынести `EpochRosterProvider` в trait с реализациями, основанными на WSV stake snapshots.
-   - `WsvEpochRosterAdapter::from_peer_iter` предлагает простой constructor, удобный для mock в benches/tests.
-2. **Consensus Flow Simplification**
-   - Реорганизовать `crates/iroha_core/src/sumeragi/*` в модули: `pacemaker`, `aggregation`, `availability`, `witness` с общими типами под `consensus`.
-   - Заменить ad-hoc message passing на типизированные Norito envelopes и добавить view-change property tests (трекится в Sumeragi messaging backlog).
-3. **Lane/Proof Integration**
-   - Согласовать lane proofs с DA commitments и обеспечить единообразный RBC gating.
-   - End-to-end интеграционный тест `integration_tests/tests/extra_functional/seven_peer_consistency.rs` теперь проверяет путь с включенным RBC.
+### フェーズ D - スマート コントラクトと Pointer-ABI ホスト
+1. **ホスト境界監査**
+   - ポインター タイプのオプション (`ivm::pointer_abi`) およびホスト アダプター (`iroha_core::smartcontracts::ivm::host`)。
+   - ポインター テーブルとホスト マニフェスト バインディング、`crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` および `ivm_host_mapping.rs`、ゴールデン TLV マッピングを参照します。
+2. **実行サンドボックスのトリガー**
+   - トリガー、トリガー、`TriggerExecutor`、ガス、ポインター検証、イベント ジャーナリング。
+   - 回帰テストでは、コール/タイム トリガーと障害パスをテストします (`crates/iroha_core/tests/trigger_failure.rs`)。
+3. **CLI とクライアントの調整**
+   - CLI の機能 (`audit`、`gov`、`sumeragi`、`ivm`) のクライアントфункции `iroha`、ドリフトです。
+   - CLI JSON スナップショット テスト находятся в `tests/cli/json_snapshot.rs`;これは、標準的な JSON リファレンスのコア クラスです。
 
-### Phase D - Smart Contracts & Pointer-ABI Hosts
-1. **Host Boundary Audit**
-   - Консолидировать pointer-type проверки (`ivm::pointer_abi`) и host adapters (`iroha_core::smartcontracts::ivm::host`).
-   - Ожидания pointer table и host manifest bindings покрыты тестами `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` и `ivm_host_mapping.rs`, которые проверяют golden TLV mappings.
-2. **Trigger Execution Sandbox**
-   - Перефакторить triggers, чтобы они выполнялись через общий `TriggerExecutor`, который применяет gas, pointer validation и event journaling.
-   - Добавить regression tests для call/time triggers с покрытием failure paths (трекится через `crates/iroha_core/tests/trigger_failure.rs`).
-3. **CLI & Client Alignment**
-   - Обеспечить, чтобы CLI операции (`audit`, `gov`, `sumeragi`, `ivm`) использовали общие client функции `iroha`, чтобы избежать drift.
-   - CLI JSON snapshot tests находятся в `tests/cli/json_snapshot.rs`; держите их актуальными, чтобы вывод core команд совпадал с canonical JSON reference.
-
-### Phase E - Norito Codec Hardening
-1. **Schema Registry**
-   - Создать Norito schema registry под `crates/norito/src/schema/`, чтобы задавать canonical encodings для core data types.
-   - Добавлены doc tests, проверяющие encoding sample payloads (`norito::schema::SamplePayload`).
-2. **Golden Fixtures Refresh**
-   - Обновить golden fixtures в `crates/norito/tests/*`, чтобы они соответствовали новой WSV schema после посадки рефакторинга.
-   - `scripts/norito_regen.sh` детерминированно регенерирует Norito JSON goldens через helper `norito_regen_goldens`.
-3. **IVM/Norito Integration**
-   - Провалидировать сериализацию Kotodama manifest end-to-end через Norito, гарантируя консистентность pointer ABI metadata.
-   - `crates/ivm/tests/manifest_roundtrip.rs` удерживает Norito encode/decode паритет для manifests.
+### フェーズ E - Norito コーデック強化
+1. **スキーマ レジストリ**
+   - Norito スキーマ レジストリと `crates/norito/src/schema/`、コア データ型の正規エンコーディングを確認します。
+   - ドキュメント テスト、エンコード サンプル ペイロード (`norito::schema::SamplePayload`)。
+2. **ゴールデン フィクスチャの更新**
+   - `crates/norito/tests/*` のゴールデン フィクスチャを確認し、WSV スキーマを確認してください。
+   - `scripts/norito_regen.sh` デート Norito JSON ゴールデンズ ヘルパー `norito_regen_goldens`。
+3. **IVM/Norito の統合**
+   - Kotodama マニフェストのエンドツーエンドの Norito、ポインター ABI メタデータの説明。
+   - `crates/ivm/tests/manifest_roundtrip.rs` удерживает Norito マニフェストをエンコード/デコードします。
 
 ## 3. Сквозные вопросы
-- **Testing Strategy**: Каждый этап продвигает unit tests -> crate tests -> integration tests. Падающие тесты фиксируют текущие регрессии; новые тесты не дают им повториться.
-- **Documentation**: После посадки каждой фазы обновлять `status.md` и переносить незакрытые пункты в `roadmap.md`, удаляя завершенные задачи.
-- **Performance Benchmarks**: Сохранять существующие benches в `iroha_core`, `ivm` и `norito`; добавлять базовые измерения после рефакторинга, чтобы подтвердить отсутствие регрессий.
-- **Feature Flags**: Оставлять crate-level toggles только для backends, требующих внешних toolchains (`cuda`, `zk-verify-batch`). CPU SIMD пути всегда собираются и выбираются во время выполнения; обеспечить детерминированные scalar fallbacks для неподдерживаемого железа.
+- **テスト戦略**: 単体テスト -> クレート テスト -> 統合テスト。 Падающие тесты фиксируют текущие регрессии;ログインしてください。
+- **ドキュメント**: После посадки каждой фазы обновлять `status.md` и переносить незакрытые пункты в `roadmap.md`, удаляя заверленные задачи。
+- **パフォーマンス ベンチマーク**: `iroha_core`、`ivm`、`norito` のベンチマークを取得します。問題が解決されれば、それが可能になります。
+- **機能フラグ**: バックエンド、ツールチェーン (`cuda`、`zk-verify-batch`) をクレートレベルで切り替えます。 CPU SIMD が必要な場合は、CPU SIMD を使用してください。スカラー フォールバックが必要になります。
 
-## 4. Ближайшие действия
-- Phase A scaffolding (snapshot trait + telemetry wiring) - см. actionable tasks в обновлениях roadmap.
-- Недавний аудит дефектов по `sumeragi`, `state` и `ivm` выделил следующие моменты:
-  - `sumeragi`: dead-code allowances защищают broadcast view-change proof, VRF replay state и EMA telemetry export. Они остаются gated, пока не будут выполнены deliverables Phase C по упрощению consensus flow и интеграции lane/proof.
-  - `state`: `Cell` cleanup и telemetry routing переходят в Phase A WSV telemetry track, а заметки SoA/parallel-apply входят в Phase C pipeline optimization backlog.
-  - `ivm`: экспонирование CUDA toggle, envelope validation и Halo2/Metal coverage маппятся на Phase D host-boundary работу плюс сквозную тему GPU acceleration; kernels остаются в отдельном GPU backlog до готовности.
-- Подготовить cross-team RFC с резюме этого плана для sign-off перед посадкой инвазивных изменений кода.
-
-## 5. Открытые вопросы
-- Должен ли RBC оставаться опциональным после P1, или он обязателен для Nexus ledger lanes? Требуется решение стейкхолдеров.
-- Нужны ли DS composability groups в P1 или держать их выключенными до зрелости lane proofs?
-- Какое каноническое место для параметров ML-DSA-87? Кандидат: новый crate `crates/fastpq_isi` (создание ожидается).
+## 4. Ближайствие действия
+- フェーズ A の足場 (スナップショット特性 + テレメトリ配線) - см.実行可能なタスクとロードマップ。
+- `sumeragi`、`state` および `ivm` のメッセージ:
+  - `sumeragi`: ブロードキャスト ビュー変更プルーフ、VRF リプレイ状態、および EMA テレメトリ エクスポートに対するデッドコード許容量。ゲートされたゲート、成果物フェーズ C 、コンセンサス フロー、レーン/プルーフを確認します。
+  - `state`: `Cell` クリーンアップ、テレメトリ ルーティング、フェーズ A WSV テレメトリ トラック、SoA/並列適用、フェーズ C パイプライン最適化バックログ。
+  - `ivm`: CUDA トグル、エンベロープ検証、Halo2/Metal カバレッジ、フェーズ D のホスト境界、GPU アクセラレーション。カーネルと GPU バックログが表示されます。
+- クロスチーム RFC は、承認を得るために承認されます。## 5. Открытые вопросы
+- RBC оставаться опциональным после P1、или он обязателен для Nexus レジャーレーン? Требуется резение стейкхолдеров
+- DS コンポーザビリティ グループと P1 を組み合わせてレーン証明を作成しますか?
+- ML-DSA-87 を使用しますか? Кандидат: новый crate `crates/fastpq_isi` (создание ожидается)。
 
 ---
 

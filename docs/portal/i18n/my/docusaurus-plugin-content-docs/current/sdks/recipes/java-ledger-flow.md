@@ -7,28 +7,30 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Java ledger flow recipe
 description: Drive the register → mint → transfer demo using the IrohaAndroid JVM library.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+'@site/src/components/SampleDownload' မှ SampleDownload ကို တင်သွင်းပါ။
 
-This recipe targets the desktop/JVM variant of the `java/iroha_android` module.
-It mirrors the CLI walkthrough by registering an asset definition, minting into
-the admin account, transferring to a second account, and printing the resulting
-balance.
+ဤစာရွက်သည် `java/iroha_android` module ၏ desktop/JVM မူကွဲကို ပစ်မှတ်ထားသည်။
+၎င်းသည် ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက်တစ်ခုကို မှတ်ပုံတင်ခြင်းဖြင့် CLI ၏ လမ်းညွှန်ချက်အား ထင်ဟပ်စေသည်။
+စီမံခန့်ခွဲသူအကောင့်၊ ဒုတိယအကောင့်တစ်ခုသို့ လွှဲပြောင်းကာ ရလဒ်ကို ပုံနှိပ်ခြင်း။
+လက်ကျန်။
 
-<SampleDownload
+<နမူနာဒေါင်းလုဒ်လုပ်ပါ။
   href="/sdk-recipes/java/src/main/java/ledger/LedgerFlow.java"
   filename="src/main/java/ledger/LedgerFlow.java"
-  description="Download the complete Java example to import into your IDE or project template."
+  description="သင်၏ IDE သို့မဟုတ် ပရောဂျက် နမူနာထဲသို့ ထည့်သွင်းရန် Java နမူနာအပြည့်အစုံကို ဒေါင်းလုဒ်လုပ်ပါ။"
 />
 
-## 1. Register the asset definition (CLI)
+## 1. ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက် (CLI) ကို မှတ်ပုံတင်ပါ။
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Export credentials
+## 2. အထောက်အထားများကို ထုတ်ယူပါ။
 
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
@@ -37,10 +39,10 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-> Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
-> need to strip the multihash prefix from the default config.
+> သင်ဆိုလျှင် `iroha_cli tools crypto private-key export --raw --private-key <multihash>` ကိုသုံးပါ။
+> default config မှ multihash prefix ကိုဖယ်ရှားရန်လိုအပ်သည်။
 
-## 3. Add dependencies
+## 3. မှီခိုမှုထည့်ပါ။
 
 ```kts title="build.gradle.kts"
 dependencies {
@@ -49,7 +51,7 @@ dependencies {
 }
 ```
 
-## 4. Example program
+## 4. ဥပမာ ပရိုဂရမ်
 
 ```java title="src/main/java/ledger/LedgerFlow.java"
 package ledger;
@@ -175,10 +177,10 @@ public final class LedgerFlow {
 }
 ```
 
-Compile with your preferred build tool (`./gradlew :java:iroha_android:assemble && ./gradlew run`).
+သင်နှစ်သက်သော တည်ဆောက်ရေးကိရိယာ (`./gradlew :java:iroha_android:assemble && ./gradlew run`) ဖြင့် စုစည်းပါ။
 
-## 5. Verify parity
+## 5. တန်းတူညီမျှမှုကို အတည်ပြုပါ။
 
-- Inspect the transaction hashes via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Fetch balances with the CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
-- Compare results with the Rust/Python/JavaScript/Swift recipes to ensure every SDK produces identical Norito payloads for the demo flow.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` မှတစ်ဆင့် ငွေပေးငွေယူ hashe များကို စစ်ဆေးပါ။
+- CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) ဖြင့် လက်ကျန်ငွေများကို ရယူပါ။
+- SDKတိုင်းသည် ဒီမိုစီးဆင်းမှုအတွက် ထပ်တူကျသော Norito payloads ထုတ်ပေးကြောင်းသေချာစေရန် Rust/Python/JavaScript/Swift ချက်ပြုတ်နည်းများနှင့် ရလဒ်များကို နှိုင်းယှဉ်ပါ။

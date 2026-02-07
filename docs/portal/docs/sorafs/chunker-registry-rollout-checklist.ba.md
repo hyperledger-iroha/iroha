@@ -11,95 +11,96 @@ id: chunker-registry-rollout-checklist
 title: SoraFS Chunker Registry Rollout Checklist
 sidebar_label: Chunker Rollout Checklist
 description: Step-by-step rollout plan for chunker registry updates.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# SoraFS Registry Rollout Checklist
+# I18NT000000000X теркәү исемлеге
 
-This checklist captures the steps required to promote a new chunker profile or
-provider admission bundle from review to production after the governance
-charter has been ratified.
+Был тикшерелгән исемлек яңы chunker профилен пропагандалау өсөн кәрәкле аҙымдарҙы тота йәки
+провайдер ҡабул итеү өйөмө тикшерелгәндән һуң идара итеүҙән һуң
+устав ратификацияланған.
 
-> **Scope:** Applies to all releases that modify
-> `sorafs_manifest::chunker_registry`, provider admission envelopes, or the
-> canonical fixture bundles (`fixtures/sorafs_chunker/*`).
+> **Сик:** Үҙгәргән бөтә релиздарға ла ҡағыла.
+> `sorafs_manifest::chunker_registry`, провайдер ҡабул итеү конверттары, йәки был
+> канонлы ҡоролма өйөмдәре (`fixtures/sorafs_chunker/*`).
 
-## 1. Pre-flight Validation
+## 1. Осоу алдынан раҫлау
 
-1. Regenerate fixtures and verify determinism:
+1. Предприятиеларҙы тергеҙергә һәм детерминизмды раҫлау:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirm determinism hashes in
-   `docs/source/sorafs/reports/sf1_determinism.md` (or the relevant profile
-   report) match the regenerated artifacts.
-3. Ensure `sorafs_manifest::chunker_registry` compiles with
-   `ensure_charter_compliance()` by running:
+2. Детерминизм хештарын раҫлау.
+   `docs/source/sorafs/reports/sf1_determinism.md` (йәки тейешле профиль
+   отчет) регенерацияланған артефакттарға тап килә.
+.
+   `ensure_charter_compliance()` йүгерә:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Update the proposal dossier:
+4. Тәҡдимде яңыртыу досье:
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Council minutes entry under `docs/source/sorafs/council_minutes_*.md`
-   - Determinism report
+   - Совет протоколдары I18NI000000015X буйынса инеү
+   - Детерминизм отчеты
 
-## 2. Governance Sign-off
+## 2. Идара итеү
 
-1. Present the Tooling Working Group report and proposal digest to the Sora
-   Parliament Infrastructure Panel.
-2. Record approval details in
+1. Ҡоролма эшсе төркөмө отчеты һәм тәҡдим үҙләштереү тәҡдим Сора
+   Парламент инфраструктура панелендә.
+2. 2012 йылда раҫлау реквизиттарын яҙып алыу.
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publish the Parliament-signed envelope alongside the fixtures:
+3. Парламент-ҡул ҡуйылған конвертты ҡоролмалар менән бер рәттән баҫтырып сығарыу:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verify the envelope is accessible via the governance fetch helper:
+4. Конвертты тикшерергә идара итеү аша ярҙам итеүсе ярҙам итеүсе:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging Rollout
+## 3.
 
-Refer to the [staging manifest playbook](./staging-manifest-playbook) for a
-detailed walkthrough of these steps.
+Һылтанма [стажировка манифест плейбук] (./staging-manifest-playbook) өсөн
+ентекле проходка был аҙымдар.
 
-1. Deploy Torii with `torii.sorafs` discovery enabled and admission
-   enforcement turned on (`enforce_admission = true`).
-2. Push the approved provider admission envelopes to the staging registry
-   directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verify provider adverts propagate via the discovery API:
+2
+   үтәлеше башланды (I18NI000000019X).
+2. Ҡабул ителгән провайдер ҡабул итеү конверттарын сәхнәләштереү реестрына этәрергә
+   каталогы I18NI000000020X тарафынан һылтанма яһаны.
+3. Тикшерергә провайдер реклама аша таралыу асыш API:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Exercise manifest/plan endpoints with governance headers:
+4. Күнекмәләр манифест/план остары менән идара итеү башлыҡтары:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirm telemetry dashboards (`torii_sorafs_*`) and alert rules report the
-   new profile without errors.
+5. Телеметрия таҡталарын раҫлау (`torii_sorafs_*`) һәм иҫкәртмә ҡағиҙәләре тураһында хәбәр итә
+   яңы профиль хатаһыҙ.
 
-## 4. Production Rollout
+## 4. Етештереү рулеты
 
-1. Repeat the staging steps against production Torii nodes.
-2. Announce the activation window (date/time, grace period, rollback plan) to
-   operator and SDK channels.
-3. Merge the release PR containing:
-   - Updated fixtures and envelope
-   - Documentation changes (charter references, determinism report)
-   - Roadmap/status refresh
-4. Tag the release and archive the signed artifacts for provenance.
+1. I18NT000000002X төйөндәренә ҡаршы сәхнәләштереү аҙымдарын ҡабатлау.
+2. Иғлан активация тәҙрәһе (дата/ваҡыт, льгота осоро, кире ҡайтарыу планы)
+   операторы һәм SDK каналдары.
+3. ПР-ҙы үҙ эсенә алған сығарыуҙы берләштерегеҙ:
+   - Яңыртылған ҡорамалдар һәм конверт
+   - Документация үҙгәрештәре ( устав һылтанмалары, детерминизм отчеты)
+   - Юл картаһы/статус яңыртыу
+4. Реклавканы билдәләгеҙ һәм провенанс өсөн ҡул ҡуйылған артефакттарҙы архивлау.
 
-## 5. Post-Rollout Audit
+## 5.
 
-1. Capture final metrics (discovery counts, fetch success rate, error
-   histograms) 24h after rollout.
-2. Update `status.md` with a short summary and link to the determinism report.
-3. File any follow-up tasks (e.g., additional profile authoring guidance) in
+1. Һуңғы метрикаларҙы тотоу (асыу иҫәптәре, уңыш ставкаһы, хата
+   гистограммалар) 24 сәғәт йәйелгәндән һуң.
+2. Яңыртыу I18NI000000022 X ҡыҫҡаса резюме һәм һылтанма менән детерминизм отчеты.
+3. Файл теләһә ниндәй эҙмә-эҙлекле бурыстар (мәҫәлән, өҫтәмә профиль авторлыҡ етәкселеге)
    `roadmap.md`.

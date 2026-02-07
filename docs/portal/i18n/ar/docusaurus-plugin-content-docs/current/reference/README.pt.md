@@ -4,18 +4,20 @@ direction: rtl
 source: docs/portal/docs/reference/README.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Indice de referencia
-slug: /reference
+العنوان: الفهرس المرجعي
+سبيكة: / مرجع
 ---
 
-Esta secao agrega o material "leia como especificacao" para Iroha. Essas paginas permanecem estaveis mesmo quando guias e tutoriais evoluem.
+هذا هو المكان الذي ستنضم إليه المادة "كما هي محددة" لـ Iroha. تبقى هذه الصفحات ثابتة حتى مع تطور الأدلة والبرامج التعليمية.
 
-## Disponivel hoje
+## متاح اليوم
 
-- **Visao geral do codec Norito** - `reference/norito-codec.md` aponta diretamente para a especificacao autoritativa `norito.md` enquanto a tabela do portal esta sendo preenchida.
-- **Torii OpenAPI** - `/reference/torii-openapi` renderiza a especificacao REST mais recente de Torii usando Redoc. Regenere a spec com `npm run sync-openapi -- --version=current --latest` (adicione `--mirror=<label>` para copiar o snapshot para versoes historicas adicionais).
-- **Tabelas de configuracao** - O catalogo completo de parametros fica em `docs/source/references/configuration.md`. Ate o portal oferecer auto-import, consulte esse arquivo Markdown para defaults exatos e overrides de ambiente.
-- **Versionamento de docs** - O dropdown de versao na navbar expoe snapshots congelados criados com `npm run docs:version -- <label>`, facilitando comparar orientacoes entre releases.
+- **العرض العام لبرنامج الترميز Norito** - `reference/norito-codec.md` يوجه مباشرة إلى محدد تلقائي `norito.md` أثناء إرسال لوحة البوابة.
+- **Torii OpenAPI** - `/reference/torii-openapi` يعرض REST محددًا أحدث Torii باستخدام Redoc. قم بإعادة إنشاء المواصفات مع `npm run sync-openapi -- --version=current --latest` (أضف `--mirror=<label>` لنسخ أو لقطة للأجزاء التاريخية المضافة).
+- **ألواح التكوين** - كتالوج كامل للمعلمات في `docs/source/references/configuration.md`. إذا كانت البوابة توفر الاستيراد التلقائي، فاطلع على ملف Markdown للإعدادات الافتراضية وتجاوزات البيئة المحيطة.
+- **إصدار المستندات** - تعرض القائمة المنسدلة للعكس في شريط التنقل لقطات مجمعة مكتوبة على `npm run docs:version -- <label>`، مما يسهل مقارنة الاتجاهات بين الإصدارات.

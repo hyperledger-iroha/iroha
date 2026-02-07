@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+Մշակողների պորտալը առաքում է «Փորձեք» վահանակը Torii REST API-ի համար: Այս ուղեցույցը
+բացատրում է, թե ինչպես գործարկել օժանդակ պրոքսին և միացնել վահանակը բեմադրությանը
+դարպաս՝ առանց հավատարմագրերը բացահայտելու:
 
-## Prerequisites
+## Նախադրյալներ
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- Iroha պահեստի վճարում (աշխատանքային տարածքի արմատ):
+- Node.js 18.18+ (համապատասխանում է պորտալի բազային):
+- Torii վերջնակետը հասանելի է ձեր աշխատակայանից (բեմական կամ տեղական):
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. Ստեղծեք OpenAPI լուսանկարը (ըստ ցանկության)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+Վահանակը նորից օգտագործում է նույն OpenAPI բեռնվածությունը, ինչպես պորտալի տեղեկատու էջերը: Եթե
+դուք փոխել եք Torii երթուղիները, վերականգնեք նկարը.
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+Առաջադրանքը գրում է `docs/portal/static/openapi/torii.json`:
 
-## 2. Start the Try It proxy
+## 2. Սկսեք «Փորձեք այն» վստահված անձը
 
-From the repository root:
+Պահեստի արմատից.
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### Շրջակա միջավայրի փոփոխականներ
 
-| Variable | Description |
+| Փոփոխական | Նկարագրություն |
 |----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| `TRYIT_PROXY_TARGET` | Torii բազային URL (պարտադիր է): |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | Ստորակետերով բաժանված ծագման ցուցակը, որը թույլատրվում է օգտագործել պրոքսի (կանխադրված է `http://localhost:3000`): |
+| `TRYIT_PROXY_BEARER` | Լրացուցիչ լռելյայն կրիչի նշանը կիրառվում է բոլոր վստահված հարցումների համար: |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Սահմանեք `1`՝ զանգահարողի `Authorization` վերնագիրը բառացիորեն փոխանցելու համար: |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | Հիշողության արագության սահմանափակիչի կարգավորումներ (կանխադրված՝ 60 հարցում 60 վայրկյանում): |
+| `TRYIT_PROXY_MAX_BODY` | Ընդունված առավելագույն հայտի օգտակար բեռը (բայթ, լռելյայն 1 ՄԲ): |
+| `TRYIT_PROXY_TIMEOUT_MS` | Torii հարցումների վերին հոսքի ժամանակի ավարտ (կանխադրված 10000 մվ): |
 
-The proxy exposes:
+Վստահված անձը բացահայտում է.
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` — պատրաստության ստուգում:
+- `/proxy/*` — վստահված հարցումներ՝ պահպանելով ուղին և հարցումների տողը:
 
-## 3. Launch the portal
+## 3. Գործարկել պորտալը
 
-In a separate terminal:
+Առանձին տերմինալում.
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+Այցելեք `http://localhost:3000/api/overview` և օգտագործեք Try It վահանակը: Նույնը
+շրջակա միջավայրի փոփոխականները կարգավորում են Swagger UI և RapiDoc ներկառուցումները:
 
-## 4. Running unit tests
+## 4. Գործող միավորի թեստեր
 
-The proxy exposes a fast Node-based test suite:
+Վստահված անձը բացահայտում է արագ հանգույցի վրա հիմնված թեստային փաթեթը.
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+Թեստերը ներառում են հասցեների վերլուծություն, ծագման մշակում, տոկոսադրույքի սահմանափակում և կրող
+ներարկում.
 
-## 5. Probe automation & metrics
+## 5. Զոնդերի ավտոմատացում և չափումներ
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+Օգտագործեք փաթեթավորված զոնդը՝ `/healthz`-ը և նմուշի վերջնական կետը ստուգելու համար.
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+Շրջակա միջավայրի բռնակներ.
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — կամընտիր Torii երթուղի (առանց `/proxy`) մարզվելու համար:
+- `TRYIT_PROXY_SAMPLE_METHOD` — կանխադրված է `GET`; սահմանել `POST`՝ գրելու երթուղիների համար:
+- `TRYIT_PROXY_PROBE_TOKEN` — ներարկում է ժամանակավոր կրող նշան նմուշի զանգի համար:
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — անտեսում է լռելյայն 5 վրկ ժամանակի ավարտը:
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus տեքստային ֆայլի նպատակակետ `probe_success`/`probe_duration_seconds`-ի համար:
+- `TRYIT_PROXY_PROBE_LABELS` — ստորակետերով բաժանված `key=value` զույգերը կցված են չափիչներին (կանխադրված են `job=tryit-proxy` և `instance=<proxy URL>`):
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+Երբ `TRYIT_PROXY_PROBE_METRICS_FILE`-ը դրված է, սցենարը վերագրում է ֆայլը
+ատոմային կերպով, այնպես որ ձեր node_exporter/textfile հավաքողը միշտ տեսնում է ամբողջական
+օգտակար բեռ. Օրինակ՝
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+Ստացված չափումները փոխանցեք Prometheus-ին և նորից օգտագործեք նմուշի ահազանգը
+ծրագրավորող-պորտալի փաստաթղթերը դեպի էջ, երբ `probe_success`-ն իջնում է մինչև `0`:
 
-## 6. Production hardening checklist
+## 6. Արտադրության կարծրացման ստուգաթերթ
 
-Before publishing the proxy beyond local development:
+Մինչև տեղական զարգացումից դուրս վստահված անձի հրապարակումը.
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- Դադարեցրեք TLS-ը վստահված անձից առաջ (հակադարձ վստահված անձ կամ կառավարվող դարպաս):
+- Կազմաձևեք կառուցվածքային անտառահատումները և փոխանցեք դիտարկելիության խողովակաշարերին:
+- Պտտեք կրիչի նշանները և պահեք դրանք ձեր գաղտնիքների կառավարիչում:
+- Վերահսկեք վստահված անձի `/healthz` վերջնակետը և ընդհանուր հետաձգման չափումները:
+- Հավասարեցրեք տոկոսադրույքի սահմանները ձեր Torii բեմականացման քվոտաների հետ; հարմարեցնել `Retry-After`-ը
+  վարքագիծը հաճախորդներին շոշափելու համար:

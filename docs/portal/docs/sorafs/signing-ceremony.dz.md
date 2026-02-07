@@ -11,73 +11,68 @@ id: signing-ceremony
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> ལམ་ཐིག་: **SF-1b — སོ་ར་སྤྱི་ཚོགས་སྒྲིག་བཀོད་ཀྱི་ཆ་འཇོག་ཚུ།**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+SoraFS ཆ་ཤས་སྒྲིག་ཆས་ཚུ་གི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ ལག་ཐོག་མིང་རྟགས་བཀོད་ནི་གི་རིམ་འགྲོ་འདི་ དགོངས་ཞུ་འབདཝ་ཨིན། གེ་ར
+ཆ་འཇོག་ཚུ་ ད་ལྟོ་ **སོ་ར་ སྤྱི་ཚོགས་** བརྒྱུད་དེ་ འགྱོཝ་ཨིན།
+Nexus གཞི་བསྟུན། སྤྱི་ཚོགས་ཀྱི་འཐུས་མི་ཚུ་གིས་ མི་ཁུངས་ཐོབ་ནིའི་དོན་ལུ་ XOR ལུ་ བུན་གཏང་།
+པེ་ནཱལ་ཚུ་ དང་ ཆ་འཇོག་འབད་ནི་དང་ ངོས་ལེན་མ་འབད་བར་ ཡང་ན་ ལོག་སྟེ་བཙུགས་ནིའི་ ཚོགས་རྒྱན་ཚུ་ བཀོདཔ་ཨིན།
+གསར་བཏོན་ཚུ། ལམ་སྟོན་འདི་གིས་ བྱ་རིམ་དང་ གོང་འཕེལ་གཏང་མི་ ལག་ཆས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
 
-## Parliament overview
+## སྤྱི་ཚོགས་ཀྱི་བལྟ་དཔྱད།
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **མི་སེར་གྱི་གོ་གནས་** — བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མི་སེར་སྦེ་ཐོ་བཀོད་འབད་དགོ་པའི་ XOR འདི་ དང་།
+  དབྱེ་སེལ་གྱི་འོས་འབབ་ཡོདཔ་ཨིན།
+- **Panels** — འགན་ཁུར་ཚུ་ བསྒྱིར་བའི་ པེ་ནཱལ་ཚུ་ནང་ ཁ་ཕྱེ་སྟེ་ཡོདཔ་ཨིན།
+  བར་མཚམས་, དངུལ་ཁང་, ...). གཞི་རྟེན་པེ་ནཱལ་གྱིས་ SoraFS བདག་དབང་།
+  ཆ་འཇོག་ཚུ།
+- **དབྱེ་འབྱེད་དང་བསྒྱིར་ཚད་** — པེ་ནཱལ་གྱི་སྡོད་ཁྲི་ཚུ་ ༢༠༠༨ ལུ་གསལ་བཀོད་འབད་ཡོད་པའི་ གདམ་ཁའི་ཐོག་ལུ་ ཕྱིར་འཐེན་འབདཝ་ཨིན།
+  སྤྱི་ཚོགས་རྩ་ཁྲིམས་ཆེན་མོ་འདི་གིས་ སྡེ་ཚན་གཅིག་གིས་ཡང་ ཆ་འཇོག་འབད་མི་ཚུགས།
 
-## Fixture approval flow
+## བཅོས་མའི་ཆ་འཇོག་རྒྱུན་འབྲེལ།
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **རྒྱ་བསྐྱེད་ཕུལ་ནི།**།
+   - ཊོལ་ ཌབ་ལུ་ཇི་གིས་ འདེམས་ངོ་ `manifest_blake3.json` བཱན་ཌལ་ པཱུལསི།
+     གློག་སྒྲིག་གིས་ `sorafs.fixtureProposal` བརྒྱུད་དེ་ རྒྱུན་རིམ་ཐོ་བཀོད་ལུ་ ཁྱད་པར་ཕྱེ་ཚུགས།
+   - གྲོས་འཆར་འདི་གིས་ BLAKE3 ཟས་བཅུད་དང་ ཡིག་བརྡའི་ཐོན་རིམ་ དེ་ལས་ བསྒྱུར་བཅོས་དྲན་འཛིན་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+2. **བསྐྱར་ཞིབ་དང་ཚོགས་རྒྱན་**
+   - གཞི་རྟེན་ཚོགས་ཆུང་གིས་ སྤྱི་ཚོགས་ཀྱི་ལཱ་བརྒྱུད་དེ་ ལས་འགན་ཚུ་ཐོབ་ཨིན།
+     གྱལ།
+   - པེ་ནཱལ་གྱིས་ CI གི་ཅ་རྙིང་ཚུ་བརྟག་དཔྱད་འབད་ནི་དང་ འདྲ་མཉམ་གྱི་བརྟག་དཔྱད་ དེ་ལས་ ལྗིད་ཚད་བཀལ་ནི།
+     ཚོགས་རྒྱན་།
+3. **མཐའ་མཇུག་**།
+   - ཚད་གཞི་འདི་གྲུབ་ཚརཝ་ཅིག་ རན་ཊའིམ་འདི་གིས་ ཆ་འཇོག་བྱུང་རིམ་ཅིག་ འདི་ཚུད་ཡོད་པའི་ བཏོནམ་ཨིན།
+     ཁྲིམས་ལུགས་ཀྱི་གསལ་སྟོན་དང་ མེར་ཀལ་གྱིས་ བརྟན་བཞུགས་སྤྲོད་ལེན་ལུ་ ཁས་བླངས་འབདཝ་ཨིན།
+   - བྱུང་ལས་འདི་ SoraFS ཐོ་བཀོད་ནང་ལུ་ མེ་ལོང་ནང་བཀོད་དེ་ཡོདཔ་ལས་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ལེན་ཚུགས།
+     སྤྱི་ཚོགས་ཀྱིས་ ཆ་འཇོག་འབད་ཡོད་པའི་ གསལ་སྟོན་འབདཝ་ཨིན།
+༤ **བཀྲམ་སྤེལ་**
+   - སི་ཨེལ་ཨའི་གྲོགས་རམ་པ་ (`cargo xtask sorafs-fetch-fixture`) ཆ་འཇོག་གྲུབ་པའི་གསལ་སྟོན་འདི་འཐེན།
+     ལས་ I18NT0000000X RPC. མཛོད་ཁང་གི་ JSON/TS/Go ponstains འདི་ མཉམ་འབྱུང་སྦེ་སྡོད་དོ་ཡོདཔ་ཨིན།
+     བསྐྱར་དུ་ I18NI000000014X དང་ ཟས་བཅུད་ཀྱི་བདེན་དཔང་འབད་ནི།
+     ཐོ་བཀོད།
 
-## Developer workflow
+## གོང་འཕེལ་གཏང་མི་ལཱ་གི་རྒྱུན་ལམ།
 
-- Regenerate fixtures with:
+- དང་ཅིག་ཁར་ རིམ་སྒྲིག་ཚུ་ ལོག་བཟོ་ནི།
 
-```bash
-cargo run -p sorafs_chunker --bin export_vectors
-```
+I18NF0000008X
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- ཆ་འཇོག་གྲུབ་པའི་ ཡིག་ཆའི་ཡིག་ཆ་ཕབ་ལེན་འབད་ནིའི་དོན་ལུ་ སྤྱི་ཚོགས་ཀྱི་ འཐུས་མིའི་གྲོགས་རམ་པ་ལག་ལེན་འཐབ།
+  མཚན་རྟགས་དང་ ས་གནས་ཀྱི་སྒྲིག་ཆས་གསར་བསྐྲུན་འབད། ས་ཚིགས་ `--signatures` ནང་།
+  སྤྱི་ཚོགས་ཀྱིས་དཔེ་སྐྲུན་འབད་ཡོད་པའི་ཡིག་ཆ་། གྲོགས་རམ་པ་འདི་གིས་ མཉམ་འབྲེལ་གྱི་གསལ་སྟོན་འདི་སེལ་ཚུགས།
+  BLAKE3 བཞུ་བཅོས་འབད་དེ་ ཁྲིམས་ལུགས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  I18NI000000016X གསལ་སྡུད།
 
-```bash
-cargo xtask sorafs-fetch-fixture \
-  --signatures https://nexus.example/api/sorafs/manifest_signatures.json \
-  --out fixtures/sorafs_chunker
-```
+I18NF0000009X
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+`--manifest` གསལ་སྟོན་འདི་ ཡུ་ཨར་ཨེལ་སོ་སོ་ཅིག་ནང་སྡོད་པ་ཅིན་ བརྒྱུད་དེ་འགྱོཝ་ཨིན། མཚན་རྟགས་མེད་པའི་ཡིག་ཤུབས་ཚུ།
+`--allow-unsigned` འདི་ས་གནས་ཀྱི་དུ་ཁ་གི་དོན་ལུ་གཞི་སྒྲིག་མ་འབད་ཚུན་ཚོད་ ངོས་ལེན་མ་འབད་བས།
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- གནས་རིམ་གྱི་སྒོ་ར་བརྒྱུད་དེ་ གསལ་སྟོན་ཅིག་ བདེན་དཔྱད་འབད་བའི་སྐབས་ དམིགས་གཏད་ I18NT0000007X གི་ཚབ་ལུ་ དེ་གི་ཚབ་ལུ་ཨིན།
+  ས་གནས་ཀྱི་ གླ་ཆ་ཚུ།
 
 ```bash
 sorafs-fetch \
@@ -88,31 +83,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- ས་གནས་ཀྱི་སི་ཨའི་ལུ་ ད་ལས་ཕར་ I18NI0000019X ཐོ་ཡིག་དགོཔ་མེད།
+  I18NI000000020X གིས་ རི་པོ་མངའ་སྡེ་འདི་ གསརཔ་དང་ག་བསྡུར་འབདཝ་ཨིན།
+  On-chain ཁས་བླངས་དང་ ཁ་བྱལ་འགྱོ་བའི་སྐབས་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
 
-## Governance notes
+## གཞུང་སྐྱོང་དྲན་ཐོ།
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- སྤྱི་ཚོགས་ཀྱི་རྩ་ཁྲིམས་ཆེན་མོ་གིས་ ཁྲལ་དང་བསྒྱིར་ནི་ དེ་ལས་ ཡར་འཕར་འགྱོ་ནི་ཚུ་ དབང་འཛིན་འབདཝ་ཨིན།
+  ཀེརེཊ་-གནས་རིམ་རིམ་སྒྲིག་དགོཔ་ཨིན།
+- ཛ་དྲག་གི་བསྐོར་འགྲུལ་ཚུ་ སྤྱི་ཚོགས་ཀྱི་ བར་འཛུལ་པེ་ནཱལ་བརྒྱུད་དེ་ འཛིན་སྐྱོང་འཐབ་ཨིན། ཚིག༌ཕྲད
+  གཞི་རྟེན་པེ་ནཱལ་ཡིག་སྣོད་ཚུ་གིས་ ཧེ་མའི་གསལ་སྟོན་ལུ་གཞི་བསྟུན་འབད་མི་ ཕྱིར་ལོག་གྲོས་འཆར་ཅིག་ ཡིག་སྣོད་འབདཝ་ཨིན།
+  ཌའི་སའིཊ་གིས་ ཆ་འཇོག་འབད་ཚརཝ་ཅིག་ གསར་བཏོན་འདི་ ཚབ་བཙུགསཔ་ཨིན།
+- ལོ་རྒྱུས་ཀྱི་ཆ་འཇོག་ཚུ་ SoraFS ཁྲིམས་ལུགས་ཀྱི་ཐོ་བཀོད་ནང་ཡོདཔ་ཨིན།
+  བསྐྱར་རྩེད་འབད།
 
 ## FAQ
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **གང་གིས་ I18NI0000021X འགྱོ་ཡི་ག་?**  
+  འདི་བཏོན་བཏང་ཡོདཔ་ཨིན། མཚན་རྟགས་བཀོད་མི་ཆ་མཉམ་གྱི་ རིམ་བཞིན་; I18NI000002X
+  མཛོད་ཁང་ནང་ གསར་ཤོས་དང་མཐུན་པའི་ གོང་འཕེལ་གཏོང་མཁན་གྱི་སྒྲིག་ཆས་རྐྱངམ་གཅིག་ཨིན།
+  ཆ་འཇོག་ལས་རིམ།
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- **ང་བཅས་ལུ་ ད་ལྟོ་ཡང་ ས་གནས་ཀྱི་ Ed25519 མིང་རྟགས་དགོཔ་ཨིན་ན?**  
+  No. སྤྱི་ཚོགས་ཀྱི་གནང་བ་ཚུ་ རིམ་ཐེངས་ཀྱི་ ཅ་ཆས་ཚུ་སྦེ་ གསོག་འཇོག་འབདཝ་ཨིན། ཉེ་གནས་ཀྱི་སྒྲིག་བཀོད་ཚུ་ཡོད།
+  བསྐྱར་བཟོ་འབད་ནི་གི་དོན་ལུ་ སྤྱི་ཚོགས་ཀྱི་ ཟས་བཅུད་ལུ་ ངོས་ལེན་འབད་ནི་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **སྡེ་ཚན་ཚུ་གིས་ གནང་བ་ཚུ་ག་དེ་སྦེ་བལྟ་རྟོག་འབད་ནི་ཨིན་ན?**  
+  `ParliamentFixtureApproved` བྱུང་རིམ་ལུ་མིང་རྟགས་བཀོད་ནི་ཡང་ན་ ཐོ་བཀོད་འདི་ བརྒྱུད་དེ་འདྲི་དཔྱད་འབད།
+  Nexus RPC གིས་ ད་ལྟོའི་མངོན་རྟགས་ བཞུ་བཅོས་དང་ པེ་ནཱལ་བཤུད་འབོད་འདི་ ལོག་ཐོབ་ནིའི་དོན་ལུ་ཨིན།

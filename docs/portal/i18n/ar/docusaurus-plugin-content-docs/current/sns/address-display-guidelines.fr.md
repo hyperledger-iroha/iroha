@@ -4,147 +4,138 @@ direction: rtl
 source: docs/portal/docs/sns/address-display-guidelines.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+استيراد ExplorerAddressCard من '@site/src/components/ExplorerAddressCard'؛
 
-:::note Source canonique
-Cette page reflete `docs/source/sns/address_display_guidelines.md` et sert
-maintenant de copie canonique du portail. Le fichier source reste pour les PRs
-de traduction.
+:::ملاحظة المصدر الكنسي
+هذه الصفحة تعكس `docs/source/sns/address_display_guidelines.md` و sert
+صيانة نسخة Canonique du Portail. يبقى الملف المصدري للعلاقات العامة
+دي ترادوكشن.
 :::
 
-Les portefeuilles, explorateurs et exemples de SDK doivent traiter les adresses
-de compte comme des payloads immuables. L'exemple de portefeuille retail Android
-dans `examples/android/retail-wallet` montre maintenant le pattern UX requis:
-
-- **Deux cibles de copie.** Fournissez deux boutons de copie explicites: IH58
-  (prefere) et la forme compressee Sora-only (`sora...`, second choix). IH58 est toujours
-  sure a partager en externe et alimente le payload du QR. La variante compressee
-  doit inclure un avertissement inline parce qu'elle ne fonctionne que dans des
-  apps prises en charge par Sora. L'exemple Android branche les deux boutons Material et
-  leurs tooltips dans
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, et la
-  demo iOS SwiftUI reflete le meme UX via `AddressPreviewCard` dans
+تحتوي الحافظات والمستكشفون وأمثلة SDK على العناوين
+من حساب الحمولات غير القابلة للتغيير. مثال على محفظة Android بالتجزئة
+في `examples/android/retail-wallet` يتم صيانة نمط UX:- **اثنين من أسراب النسخ.** قم بتزويد اثنين من أزرار النسخ الصريحة: IH58
+  (يفضل) وشكل الضغط Sora فقط (`sora...`، الخيار الثاني). IH58 موجود دائمًا
+  تأكد من مشاركة حمولة QR خارجيًا وشحنها. الضغط المتغير
+  يجب أن تتضمن إعلانًا مضمنًا لأنه لا يعمل في
+  تطبيقات الأسعار تهمة على قدم المساواة سورا. مثال على Android المتفرع من الأزرار المزدوجة Material et
+  تلميحات الأدوات لدينا
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`، وآخرون
+  العرض التوضيحي لنظام التشغيل iOS SwiftUI يعيد إحياء تجربة المستخدم عبر `AddressPreviewCard` في
   `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, texte selectionnable.** Affichez les deux chaines avec une police
-  monospace et `textIsSelectable="true"` afin que les utilisateurs puissent
-  inspecter les valeurs sans invoquer un IME. Evitez les champs editables: les
-  IME peuvent reecrire le kana ou injecter des points de code a largeur zero.
-- **Indications de domaine par defaut implicite.** Quand le selecteur pointe sur
-  le domaine implicite `default`, affichez une legende rappelant aux operateurs
-  qu'aucun suffixe n'est requis. Les explorateurs doivent aussi mettre en avant
-  le label de domaine canonique quand le selecteur encode un digest.
-- **QR IH58.** Les QR codes doivent encoder la chaine IH58. Si la generation du
-  QR echoue, affichez une erreur explicite au lieu d'une image vide.
-- **Message presse-papiers.** Apres avoir copie la forme compressee, emettez un
-  toast ou snackbar rappelant aux utilisateurs qu'elle est Sora-only et sujette
-  a la distorsion IME.
+- **مساحة أحادية، يمكن اختيار النص.** قم بعرض السلاسل الثنائية مع الشرطة
+  monospace و`textIsSelectable="true"` يساعدان المستخدمين
+  المفتش les valeurs sans invoquer un IME. تجنب الأبطال القابلة للتحرير: les
+  يمكن أن يقوم IME بإعادة كتابة القناة أو إدخال نقاط التعليمات البرمجية إلى صفر أكبر.
+- **مؤشرات المجال الافتراضي الضمني.** عند تحديد النقطة سور
+  المجال الضمني `default`، يعرض أسطورة للمشغلين
+  qu'aucun لاحقة لا تتطلب. يجب على المستكشفين أيضًا أن يتقدموا للأمام
+  تسمية المجال الكنسي عندما يقوم المحدد بتشفير ملخص.
+- **QR IH58.** تعمل رموز QR على تشفير السلسلة IH58. سي لا جيل دو
+  صدى QR، لعرض خطأ واضح بدلاً من مقطع فيديو للصورة.
+- **أوراق الرسائل المطبوعة.** بعد أن تتجنب نسخ الشكل المضغوط، قم بتحريرهاالخبز المحمص أو الوجبات الخفيفة Rappelant aux utilisateurs qu'elle est Sora-only et sujette
+  على غرار تشويه IME.
 
-Suivre ces garde-fous evite la corruption Unicode/IME et satisfait les criteres
-d'acceptation du roadmap ADDR-6 pour l'UX portefeuille/explorateur.
+ستؤدي هذه الحماية الجيدة إلى تجنب الفساد في Unicode/IME وتلبية المعايير
+قبول خريطة الطريق ADDR-6 لـ UX portefeuille/explorateur.
 
-## Captures de reference
+## يلتقط المرجعية
 
-Utilisez les references suivantes lors des revues de localisation pour garantir
-que les libelles de boutons, tooltips et avertissements restent alignes entre
-plateformes:
+استخدم المراجع التالية عند إيرادات الترجمة لضمان ذلك
+أن علامات الأزرار وتلميحات الأدوات والإعلانات تظل متوازية فيما بينها
+الصفائح:
 
-- Reference Android: `/img/sns/address_copy_android.svg`
+- مرجع أندرويد: `/img/sns/address_copy_android.svg`
 
-  ![Reference Android double copie](/img/sns/address_copy_android.svg)
+  ![نسخة Android المزدوجة المرجعية](/img/sns/address_copy_android.svg)
 
-- Reference iOS: `/img/sns/address_copy_ios.svg`
+- مرجع iOS: `/img/sns/address_copy_ios.svg`
 
-  ![Reference iOS double copie](/img/sns/address_copy_ios.svg)
+  ![مرجع نسخة iOS مزدوجة](/img/sns/address_copy_ios.svg)
 
-## Helpers SDK
+## مساعدين SDK
 
-Chaque SDK expose un helper de convenance qui retourne les formes IH58 et
-compressee ainsi que la chaine d'avertissement pour que les couches UI restent
-coherentes:
+يعرض Chaque SDK مساعدًا للعقد يقوم بإرجاع نماذج IH58 et
+اضغط أيضًا على سلسلة الإعلانات حتى تبقى الأرائك في واجهة المستخدم
+متماسكة:
 
-- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
+- جافا سكريبت: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` retourne la chaine
-  d'avertissement compressee et l'ajoute a `warnings` quand les appelants
-  fournissent un literal `sora...`, pour que les explorateurs/tableaux de bord de
-  portefeuille puissent afficher l'avertissement Sora-only pendant les flux de
-  collage/validation plutot que seulement lorsqu'ils generent eux-memes la forme
-  compressee.
-- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
-  (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
+- مفتش جافا سكريبت: `inspectAccountId(...)` يعيد السلسلة
+  ضغط الإعلان والإضافة إلى `warnings` عند المستأنفين
+  قدم حرفيًا `sora...`، حتى يتمكن المستكشفون/لوحات اللوح من اللوح
+  يمكن عرض النافذة بإعلان Sora فقط أثناء تدفقها
+  الكولاج/التحقق من الصحة مما يؤدي فقط إلى إنشاء ميمات مماثلة للشكل
+  ضاغط.
+- بايثون: `AccountAddress.display_formats(network_prefix: int = 753)`
+- سويفت: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- جافا/كوتلين: `AccountAddress.displayFormats(int networkPrefix = 753)`
+  (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)استخدم هذه الأدوات المساعدة بدلاً من إعادة تنفيذ منطق التشفير في هذه
+واجهة مستخدم الأرائك. يقوم مساعد JavaScript بكشف الحمولة `selector` أيضًا
+`domainSummary` (`tag`، `digest_hex`، `registry_id`، `label`) لواجهات المستخدم
+مؤشر قوي إذا كان المحدد هو Local-12 أو قم بالتسجيل بدون تسجيل
+إعادة تحليل الحمولة الخام.
 
-Utilisez ces helpers au lieu de reimplementer la logique d'encoding dans les
-couches UI. Le helper JavaScript expose aussi un payload `selector` dans
-`domainSummary` (`tag`, `digest_hex`, `registry_id`, `label`) pour que les UIs
-puissent indiquer si un selecteur est Local-12 ou adosse a un registre sans
-reparser le payload brut.
+## عرض توضيحي لأداة المستكشف
 
-## Demo d'instrumentation d'explorateur
 
-<ExplorerAddressCard />
 
-Les explorateurs doivent reproduire le travail de telemetrie et d'accessibilite
-fait pour le portefeuille:
+يجب على المستكشفين إعادة إنتاج عمل القياس عن بعد وإمكانية الوصول إليه
+fait pour le portefeuille:- Appliquez `data-copy-mode="ih58|compressed|qr"` aux boutons de copie afin que
+  يمكن للواجهات الأمامية أن تطلق حاسبات الاستخدام بالتوازي
+  متري Torii `torii_address_format_total`. العرض التوضيحي للمؤلف
+  أرسل حدثًا `iroha:address-copy` مع `{mode,timestamp}` - تخلص من هذا
+  خط أنابيب التحليل/القياس عن بعد الخاص بك (على سبيل المثال مبعوث مقطع أو وحدة
+  قاعدة التجميع في NORITO) حتى تتمكن لوحات المعلومات من ربط الاستخدام
+  تنسيق عنوان الخادم مع أوضاع نسخ العميل. ريفليتيز
+  بالإضافة إلى حاسبات المجال Torii (`torii_address_domain_total{domain_kind}`)
+  في تدفق الميمات من أجل إعادة إنتاج أفلام Local-12 القوية، يمكنك تصديرها
+  Preuve de 30 jours `domain_kind="local12"` مباشرة بعد اللوحة
+  `address_ingest` من Grafana.
+- Associez chaque controle a des المؤشرات `aria-label`/`aria-describedby`
+  المميزات التي توضح ما إذا كان الحرفي موجودًا في مشاركة (IH58) أو Sora فقط
+  (ضغط). أدخل أسطورة المجال الضمني في الوصف من أجل
+  تعكس تقنيات المساعدة سياق الصورة التي يتم عرضها.
+- عرض منطقة مباشرة (على سبيل المثال `<output aria-live="polite">...</output>`).
+  قم بإعلان نتائج النسخ والتحذيرات بمحاذاة
+  يتم توصيل VoiceOver/TalkBack عبر الكابل من خلال أمثلة Swift/Android.هذه الأجهزة ترضي ADDR-6b وتؤكد أن المشغلين قد يتمكنون من ذلك
+مراقبة عملية الإدخال Torii وأوضاع نسخ العميل قبل ذلك
+المحددات المحلية soient desactives.
 
-- Appliquez `data-copy-mode="ih58|compressed|qr"` aux boutons de copie afin que
-  les front-ends puissent emettre des compteurs d'usage en parallele de la
-  metrique Torii `torii_address_format_total`. Le composant demo ci-dessus
-  envoie un evenement `iroha:address-copy` avec `{mode,timestamp}` - reliez cela
-  a votre pipeline d'analytique/telemetrie (par exemple envoyer a Segment ou a un
-  collecteur base sur NORITO) pour que les dashboards puissent correler l'usage
-  de format d'adresse cote serveur avec les modes de copie cote client. Refletez
-  aussi les compteurs de domaine Torii (`torii_address_domain_total{domain_kind}`)
-  dans le meme flux pour que les revues de retrait Local-12 puissent exporter une
-  preuve de 30 jours `domain_kind="local12"` directement depuis le tableau
-  `address_ingest` de Grafana.
-- Associez chaque controle a des indications `aria-label`/`aria-describedby`
-  distinctes qui expliquent si un literal est sur a partager (IH58) ou Sora-only
-  (compresse). Incluez la legende de domaine implicite dans la description pour
-  que les technologies d'assistance refletent le meme contexte que l'affichage.
-- Exposez une region live (ex. `<output aria-live="polite">...</output>`) qui
-  annonce les resultats de copie et les avertissements, en alignant le
-  comportement VoiceOver/TalkBack deja cable dans les exemples Swift/Android.
+## مجموعة أدوات الهجرة المحلية -> العالمية
 
-Cette instrumentation satisfait ADDR-6b en prouvant que les operateurs peuvent
-observer a la fois l'ingestion Torii et les modes de copie client avant que les
-selecteurs Local soient desactives.
+استخدم [toolkit Local -> Global](local-to-global-toolkit.md) للصب
+أتمتة عملية التدقيق وتحويل المحددات المحلية. لو المساعد
+قم بإنشاء تقرير مراجعة JSON والقائمة المحولة إلى IH58/compressee مرة أخرى
+ينضم المشغلون إلى تذاكر الاستعداد بينما يرتبط دفتر التشغيل
+تكمن في لوحات المعلومات Grafana والقواعد Alertmanager التي تم قفلها
+قطع في وضع صارم.
 
-## Toolkit de migration Local -> Global
+## المرجع السريع للتخطيط الثنائي (ADDR-1a)
 
-Utilisez le [toolkit Local -> Global](local-to-global-toolkit.md) pour
-automatiser l'audit et la conversion des selecteurs Local heredites. Le helper
-emet a la fois le rapport d'audit JSON et la liste convertie IH58/compressee que
-les operateurs joignent aux tickets de readiness, tandis que le runbook associe
-lie les dashboards Grafana et les regles Alertmanager qui verrouillent le
-cutover en mode strict.
-
-## Reference rapide du layout binaire (ADDR-1a)
-
-Quand les SDK exposent un outillage avance d'adresse (inspecteurs, indications de
-validation, constructeurs de manifest), pointez les developpeurs vers le format
-wire canonique capture dans `docs/account_structure.md`. Le layout est toujours
-`header · selector · controller`, ou les bits du header sont:
+عندما تعرض SDK انقطاعًا مسبقًا في العنوان (المفتشون، مؤشرات
+التحقق من الصحة، منشئو البيان)، يشيرون إلى التطوير مقابل التنسيق
+التقاط سلك canonique في `docs/account_structure.md`. التخطيط دائمًا
+`header · selector · controller`، أو أجزاء الرأس هي:
 
 ```
 bit index:   7        5 4      3 2      1 0
              ┌─────────┬────────┬────────┬────┐
 payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
-```
+```- `addr_version = 0` (البتات 7-5) اليوم؛ القيم غير الصفرية هي احتياطيات
+  ورافعة doivent `AccountAddressError::InvalidHeaderVersion`.
+- `addr_class` يميز بين وحدات التحكم البسيطة (`0`) من multisig (`1`).
+- `norm_version = 1` يقوم بتشفير قواعد التحديد Norm v1. العقود الآجلة ليه نورم
+  إعادة استخدام ميمي البطل 2 بت.
+- `ext_flag` vaut toujours `0`; les bits actifs indiquent des Extensions de
+  الحمولة غير مدفوعة.
 
-- `addr_version = 0` (bits 7-5) aujourd'hui; les valeurs non zero sont reservees
-  et doivent lever `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` distingue les controlleurs simples (`0`) des multisig (`1`).
-- `norm_version = 1` encode les regles de selecteur Norm v1. Les Norm futures
-  reutiliseront le meme champ 2 bits.
-- `ext_flag` vaut toujours `0`; les bits actifs indiquent des extensions de
-  payload non prises en charge.
-
-Le selecteur suit immediatement le header:
+يناسب المحدد الرأس فورًا:
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -152,39 +143,37 @@ Le selecteur suit immediatement le header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-Les UIs et SDK doivent etre prets a afficher le type de selecteur:
+تعمل واجهات المستخدم وSDK على عرض نوع المحدد:
 
-- `0x00` = domaine par defaut implicite (sans payload).
-- `0x01` = digest local (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = entree de registre global (`registry_id:u32` big-endian).
+- `0x00` = النطاق الافتراضي الضمني (بدون حمولة).
+- `0x01` = ملخص محلي (12 بايت `blake2s_mac("SORA-LOCAL-K:v1", label)`).
+- `0x02` = مدخل التسجيل العالمي (`registry_id:u32` كبير النهاية).
 
-Exemples hex canoniques que les outils de portefeuille peuvent lier ou integrer
-aux docs/tests:
+أمثلة على القواعد السداسية التي يمكن أن تكون أدوات المحفظة إما مدمجة أو متكاملة
+مستندات/اختبارات aux:
 
-| Type de selecteur | Hex canonique |
+| نوع المحدد | السداسية الكنسي |
 |---------------|---------------|
-| Implicite par defaut | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Digest local (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Registre global (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+| ضمني افتراضيا | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| الملخص المحلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
+| التسجيل العالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
-Voir `docs/source/references/address_norm_v1.md` pour la table complete
-selecteur/etat et `docs/account_structure.md` pour le diagramme complet des
-bytes.
+Voir `docs/source/references/address_norm_v1.md` pour la table complet
+حدد/الحالة و`docs/account_structure.md` للرسم التخطيطي الكامل
+بايت.
 
-## Imposer les formes canoniques
+## فرض الأشكال canoniques
 
-Les operateurs qui convertissent les encodages Local herites en IH58 canonique
-ou en chaines compressees doivent suivre le workflow CLI documente sous ADDR-5:
-
-1. `iroha tools address inspect` emet maintenant un resume JSON structure avec IH58,
-   compresse et des payloads hex canoniques. Le resume inclut aussi un objet
-   `domain` avec les champs `kind`/`warning` et reflete tout domaine fourni via
-   le champ `input_domain`. Quand `kind` vaut `local12`, la CLI imprime un
-   avertissement sur stderr et le resume JSON reflete la meme consigne pour que
-   les pipelines CI et les SDK puissent l'afficher. Passez `--append-domain`
-   lorsque vous voulez rejouer l'encodage converti sous la forme `<ih58>@<domain>`.
-2. Les SDK peuvent afficher le meme avertissement/resume via le helper
-   JavaScript:
+المشغلون الذين يقومون بتحويل الترميزات المحلية إلى IH58 canonique
+يجب عليك اتباع سلاسل الضغطات لسير العمل CLI المستند الخاص بـ ADDR-5:1. `iroha tools address inspect` يقوم بصيانة استئناف بنية JSON مع IH58،
+   ضغط وحمولة الحمولات السداسية. تتضمن السيرة الذاتية أيضًا كائنًا
+   `domain` مع الأبطال `kind`/`warning` ويفتح المجال بأكمله عبر
+   لو تشامب `input_domain`. عندما `kind` vaut `local12`، لا CLI يطبع un
+   Avertissement sur stderr واستئناف JSON يعكس الرسالة المرسلة لذلك
+   يمكن عرض خطوط الأنابيب CI وSDK. باسيز `--append-domain`
+   عندما ترغب في تجديد التشفير المحول إلى الشكل `<ih58>@<domain>`.
+2. يمكن لـ SDK عرض رسالة التنبيه/الاستئناف عبر المساعد
+   جافا سكريبت:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -195,81 +184,72 @@ ou en chaines compressees doivent suivre le workflow CLI documente sous ADDR-5:
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
-  Le helper preserve le prefixe IH58 detecte depuis le literal sauf si vous
-  fournissez explicitement `networkPrefix`, donc les resumes pour des reseaux
-  non defaut ne sont pas re-rendus silencieusement avec le prefixe par defaut.
-
-3. Convertissez le payload canonique en reutilisant les champs `ih58.value` ou
-   `compressed` du resume (ou demandez un autre encodage via `--format`). Ces
-   chaines sont deja sures a partager en externe.
-4. Mettez a jour les manifests, registres et documents orientes client avec la
-   forme canonique et notifiez les contreparties que les selecteurs Local seront
-   refuses une fois le cutover termine.
-5. Pour les jeux de donnees en masse, executez
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. La commande
+  يقوم المساعد في الحفاظ على البادئة IH58 بالكشف عن الحرفي إذا كنت ترغب في ذلك
+  قم بتقديم `networkPrefix` بشكل واضح، قم بإرسال السيرة الذاتية للأبحاث
+  Non defaut ne sont pas rerendus silencieusement avec le prefixe par defaut.3. قم بتحويل الحمولة الكنسي إلى إعادة استخدام الأبطال `ih58.value` ou
+   `compressed` من السيرة الذاتية (أو تطلب تشفيرًا آخر عبر `--format`). سيس
+   السلاسل هي بالتأكيد مشاركة خارجية.
+4. قم بإعداد البيانات والسجلات والمستندات الموجهة يوميًا من قبل العميل
+   النموذج القانوني وإخطار المشاركين بأن المحددات المحلية ستظهر
+   يرفض une fois le Cutover termine.
+5. قم بتنفيذ الألعاب بشكل جماعي
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. لا أمر
    lit des literaux separes par nouvelle ligne (les commentaires commencant par
-   `#` sont ignores, et `--input -` ou aucun flag utilise STDIN), emet un rapport
-   JSON avec des resumes canoniques/IH58/compresse pour chaque entree, et compte
-   les erreurs de parse ainsi que les avertissements de domaine Local. Utilisez
-   `--allow-errors` lors de l'audit de dumps herites contenant des lignes
-   parasites, et bloquez l'automatisation via `--fail-on-warning` lorsque les
-   operateurs sont prets a bloquer les selecteurs Local dans CI.
-6. Quand vous avez besoin d'une reecriture ligne a ligne, utilisez
-  Pour les feuilles de calcul de remediation des selecteurs Local, utilisez
-  pour exporter un CSV `input,status,format,...` qui met en avant les encodages
-  canoniques, avertissements et echecs de parse en une seule passe.
-   Le helper ignore les lignes non Local par defaut, convertit chaque entree
-   restante dans l'encodage demande (IH58/compresse/hex/JSON), et preserve le
-   domaine original quand `--append-domain` est active. Associez-le a
-   `--allow-errors` pour continuer l'analyse meme quand un dump contient des
-   literaux mal formes.
-7. L'automatisation CI/lint peut executer `ci/check_address_normalize.sh`, qui
-   extrait les selecteurs Local de `fixtures/account/address_vectors.json`, les
-   convertit via `iroha tools address normalize`, et rejoue
-   `iroha tools address audit --fail-on-warning` pour prouver que les releases
-   n'emetent plus de digests Local.
-
-`torii_address_local8_total{endpoint}` plus
+   `#` يتم تجاهله، و`--input -` أو علامة تستخدم STDIN)، وإصدار تقرير
+   JSON مع السيرة الذاتية canoniques/IH58/compresse لكل إدخال وحساب
+   أخطاء التحليل بالإضافة إلى إعلانات النطاق المحلي. استخدم
+   `--allow-errors` أثناء تدقيق مخلفات المخلفات المحتوي على الخطوط
+   الطفيليات، وحظر الأتمتة عبر `--fail-on-warning` عندما تكون
+   تعمل المشغلات على حظر المحددات المحلية في CI.
+6. عندما تحتاج إلى إعادة كتابة الخط على الخط، استخدمه
+  Pour les feuilles de calcule de recession des sélecteurs Local, utilisez
+  من أجل مُصدِّر ملف CSV `input,status,format,...` الذي تم إعداده مسبقًا بالتشفيرات
+  المعايير والإعلانات والتحليلات في خطوة واحدة.
+   يقوم المساعد بتجاهل الخطوط غير المحلية بشكل افتراضي، وتحويلها كل مرةيتم حفظه في التشفير المطلوب (IH58/compresse/hex/JSON)، مع الاحتفاظ بالملف
+   المجال الأصلي عندما `--append-domain` نشط. أسوشييز لو أ
+   `--allow-errors` لمواصلة تحليل المحتوى أثناء تفريغ المحتوى
+   أشكال literaux mal.
+7. قد يؤدي أتمتة CI/lint إلى تنفيذ المنفذ `ci/check_address_normalize.sh`، وهو ما
+   قم بإخراج المحددات المحلية من `fixtures/account/address_vectors.json`، les
+   قم بالتحويل عبر `iroha tools address normalize`، واستمتع
+   `iroha tools address audit --fail-on-warning` للتحقق من الإصدارات
+   n'emetent plus de هضم محلي.`torii_address_local8_total{endpoint}` زائد
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, et le tableau Grafana
-`dashboards/grafana/address_ingest.json` fournissent le signal d'application:
-une fois que les dashboards de production montrent zero soumissions Local
-legitimes et zero collisions Local-12 pendant 30 jours consecutifs, Torii
-basculera la porte Local-8 en echec strict sur mainnet, suivi par Local-12 une
-fois que les domaines globaux ont des entrees de registre correspondantes.
-Considerez la sortie CLI comme l'avis operateur pour ce gel - la meme chaine
- d'avertissement est utilisee dans les tooltips SDK et l'automatisation pour
-maintenir la parite avec les criteres de sortie du roadmap. Torii utilise
-que sur des clusters dev/test lors du diagnostic de regressions. Continuez a
-miroiter `torii_address_domain_total{domain_kind}` dans Grafana
-(`dashboards/grafana/address_ingest.json`) pour que le pack de preuve ADDR-7
-puisse montrer que `domain_kind="local12"` est reste a zero pendant la fenetre
-Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) ajoute trois
-barrieres:
+`torii_address_collision_domain_total{endpoint,domain}` واللوحة Grafana
+`dashboards/grafana/address_ingest.json` يوفر إشارة التطبيق:
+مرة واحدة تكون لوحات معلومات الإنتاج خالية من أي طلبات محلية
+شرعية وصفر تصادمات محلية 12 قلادة 30 يوم متتالية، Torii
+قم بإلقاء نظرة على البوابة المحلية 8 وتتبعها بشكل صارم على الشبكة الرئيسية، وتتبعها عبر Local-12 une
+حتى تحتوي النطاقات العالمية على إدخالات التسجيل المقابلة.
+ضع في اعتبارك عملية CLI كعامل تشغيل لهذا الجل - سلسلة الميمات
+ يتم استخدام الإعلان في تلميحات الأدوات SDK والأتمتة من أجل
+الحفاظ على التكافؤ مع معايير خارطة الطريق. الاستفادة من Torii
+ما هو تطوير/اختبار المجموعات عند تشخيص الانحدارات. تابع أ
+ميرويتر `torii_address_domain_total{domain_kind}` في Grafana
+(`dashboards/grafana/address_ingest.json`) للحصول على حزمة الأمان ADDR-7
+يمكنك رؤية ما إذا كان `domain_kind="local12"` يستقر على النافذة صفرًا
+يقوم Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) بإضافة ثلاث مرات
+الحواجز:- `AddressLocal8Resurgence` كل صفحة تشير إلى سياق جديد
+  الزيادة المحلية-8. قم بإيقاف عمليات الطرح في الوضع الصارم، وقم بتخصيصها
+  Surface SDK الخاطئ في لوحة القيادة، وإذا كنت بحاجة إلى تحديد مؤقت
+  الافتراضي (`true`).
+- `AddressLocal12Collision` يتم حذفه من خلال التسميات المزدوجة Local-12 hashent
+  مقابل ميمي هضم. Mettez enتوقف مؤقتًا عن الترقيات في البيان، قم بتنفيذها
+  مجموعة الأدوات المحلية -> العالمية لتدقيق خرائط الهضم والتنسيق
+  مع الإدارة Nexus قبل إعادة إدخال التسجيل أو
+  قم بإعادة تشغيل عمليات الطرح بشكل فعال.
+- `AddressInvalidRatioSlo` للحماية عندما تكون النسبة غير صالحة لمستوى الصف
+  التعويم (باستثناء الإرجاعات المحلية 8/الوضع الصارم) يتجاوز SLO بنسبة 0.1%
+  دقائق قلادة ديكس. استخدم `torii_address_invalid_total` للمعرف
+  السياق/السبب المسؤول والتنسيق مع معدات SDK المملوكة مسبقًا
+  de reenclencher le mode الصارم.
 
-- `AddressLocal8Resurgence` page chaque fois qu'un contexte signale une nouvelle
-  incrementation Local-8. Stoppez les rollouts en mode strict, localisez la
-  surface SDK fautive dans le dashboard et, si besoin, definissez temporairement
-  defaut (`true`).
-- `AddressLocal12Collision` se declenche lorsque deux labels Local-12 hashent
-  vers le meme digest. Mettez en pause les promotions de manifest, executez le
-  toolkit Local -> Global pour auditer le mapping des digests, et coordonnez
-  avec la gouvernance Nexus avant de reemettre l'entree de registre ou de
-  reenclencher les rollouts en aval.
-- `AddressInvalidRatioSlo` avertit lorsque le ratio invalide a l'echelle de la
-  flotte (en excluant les rejets Local-8/strict-mode) depasse le SLO de 0.1%
-  pendant dix minutes. Utilisez `torii_address_invalid_total` pour identifier le
-  contexte/raison responsable et coordonnez avec l'equipe SDK proprietaire avant
-  de reenclencher le mode strict.
+### ملحق مذكرة الإصدار (الحقيبة والمستكشف)
 
-### Extrait de note de release (portefeuille et explorateur)
-
-Incluez le bullet suivant dans les notes de release portefeuille/explorateur
-lors du cutover:
-
-> **Adresses:** Ajoute le helper `iroha tools address normalize --only-local --append-domain`
-> et l'a branche dans CI (`ci/check_address_normalize.sh`) pour que les pipelines
-> portefeuille/explorateur puissent convertir les selecteurs Local herites vers
-> des formes canoniques IH58/compressees avant que Local-8/Local-12 soient
-> bloques sur mainnet. Mettez a jour les exports personnalises pour executer la
-> commande et joindre la liste normalisee au bundle de preuve de release.
+قم بتضمين الرصاصة التالية في ملاحظات الإصدار/المستكشف
+lors du Cutover:> **العناوين:** Ajoute le helper `iroha tools address normalize --only-local --append-domain`
+> والفرع في CI (`ci/check_address_normalize.sh`) لخطوط الأنابيب
+> Portefeuille/explorateur puissent converter les Selecteurs Local Herites vers
+> الأشكال canoniques IH58/compressees avant que Local-8/Local-12 soient
+> كتل على الشبكة الرئيسية. قم بتخصيص الصادرات يوميًا لتنفيذها
+> الأمر وضم القائمة الطبيعية إلى حزمة الإصدار المسبق.

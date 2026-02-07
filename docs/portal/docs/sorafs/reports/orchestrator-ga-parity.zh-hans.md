@@ -7,83 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a206b033b430fc9895f64d402cd53bfea35c3f269b2c18bb12a1f929114423aa
 source_last_modified: "2025-12-29T18:16:35.200252+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Orchestrator GA Parity Report
+# SoraFS Orchestrator GA 奇偶校验报告
 
-Deterministic multi-fetch parity is now tracked per SDK so release engineers can confirm that
-payload bytes, chunk receipts, provider reports, and scoreboard outcomes remain aligned across
-implementations. Every harness consumes the canonical multi-provider bundle under
-`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`, which packages the SF1 plan, provider
-metadata, telemetry snapshot, and orchestrator options.
+现在每个 SDK 都会跟踪确定性多重获取奇偶校验，因此发布工程师可以确认
+有效负载字节、块收据、提供商报告和记分板结果保持一致
+实施。每个线束都会消耗规范的多提供商捆绑包
+`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`，包含 SF1 计划、提供商
+元数据、遥测快照和协调器选项。
 
-## Rust Baseline
+## Rust 基线
 
-- **Command:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
-- **Scope:** Runs the `MultiPeerFixture` plan twice via the in-process orchestrator, verifying
-  assembled payload bytes, chunk receipts, provider reports, and scoreboard outcomes. Instrumentation
-  also tracks peak concurrency and effective working-set size (`max_parallel × max_chunk_length`).
-- **Performance guard:** Each run must complete within 2 s on CI hardware.
-- **Working set ceiling:** With the SF1 profile the harness enforces `max_parallel = 3`, yielding a
-  ≤ 196 608 byte window.
+- **命令：** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
+- **范围：** 通过进程内编排器运行 `MultiPeerFixture` 计划两次，验证
+  组装有效负载字节、块收据、提供商报告和记分板结果。仪器仪表
+  还跟踪峰值并发和有效工作集大小 (`max_parallel × max_chunk_length`)。
+- **性能防护：** 每次运行必须在 CI 硬件上在 2 秒内完成。
+- **工作设置上限：** 通过 SF1 型材，线束强制执行 `max_parallel = 3`，产生
+  ≤196608字节窗口。
 
-Sample log output:
+日志输出示例：
 
 ```
 Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 peak_reserved_bytes=196608
 ```
 
-## JavaScript SDK Harness
+## JavaScript SDK 工具
 
-- **Command:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
-- **Scope:** Replays the same fixture via `iroha_js_host::sorafsMultiFetchLocal`, comparing payloads,
-  receipts, provider reports, and scoreboard snapshots across consecutive runs.
-- **Performance guard:** Each execution must finish within 2 s; the harness prints the measured
-  duration and reserved-byte ceiling (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
+- **命令：** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
+- **范围：** 通过 `iroha_js_host::sorafsMultiFetchLocal` 重播相同的装置，比较有效负载，
+  连续运行的收据、提供商报告和记分板快照。
+- **性能守卫：**每次执行必须在2秒内完成；线束打印测量值
+  持续时间和保留字节上限（`max_parallel = 3`、`peak_reserved_bytes ≤ 196 608`）。
 
-Example summary line:
+摘要行示例：
 
 ```
 JS orchestrator parity: duration_ms=187.42 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Swift SDK Harness
+## Swift SDK 线束
 
-- **Command:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
-- **Scope:** Runs the parity suite defined in `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`,
-  replaying the SF1 fixture twice through the Norito bridge (`sorafsLocalFetch`). The harness verifies
-  payload bytes, chunk receipts, provider reports, and scoreboard entries using the same deterministic
-  provider metadata and telemetry snapshots as the Rust/JS suites.
-- **Bridge bootstrap:** The harness unpacks `dist/NoritoBridge.xcframework.zip` on demand and loads
-  the macOS slice via `dlopen`. When the xcframework is missing or lacks the SoraFS bindings, it
-  falls back to `cargo build -p connect_norito_bridge --release` and links against
-  `target/release/libconnect_norito_bridge.dylib`, so no manual setup is required in CI.
-- **Performance guard:** Each execution must finish within 2 s on CI hardware; the harness prints the
-  measured duration and reserved-byte ceiling (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
+- **命令：** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
+- **范围：** 运行 `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift` 中定义的奇偶校验套件，
+  通过 Norito 桥 (`sorafsLocalFetch`) 重播 SF1 赛程两次。线束验证
+  有效负载字节、块收据、提供商报告和记分板条目使用相同的确定性
+  作为 Rust/JS 套件的提供者元数据和遥测快照。
+- **Bridge bootstrap：** 线束按需解包 `dist/NoritoBridge.xcframework.zip` 并加载
+  通过 `dlopen` 的 macOS 切片。当 xcframework 缺失或缺少 SoraFS 绑定时，它
+  回退到 `cargo build -p connect_norito_bridge --release` 并链接到
+  `target/release/libconnect_norito_bridge.dylib`，所以CI中不需要手动设置。
+- **性能守卫：** CI 硬件上每次执行必须在 2 秒内完成；线束打印
+  测量的持续时间和保留字节上限（`max_parallel = 3`、`peak_reserved_bytes ≤ 196 608`）。
 
-Example summary line:
+摘要行示例：
 
 ```
 Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Python Bindings Harness
+## Python 绑定线束
 
-- **Command:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
-- **Scope:** Exercises the high-level `iroha_python.sorafs.multi_fetch_local` wrapper and its typed
-  dataclasses so the canonical fixture flows through the same API that wheel consumers call. The test
-  rebuilds the provider metadata from `providers.json`, injects the telemetry snapshot, and verifies
-  payload bytes, chunk receipts, provider reports, and scoreboard content just like the Rust/JS/Swift
-  suites.
-- **Pre-req:** Run `maturin develop --release` (or install the wheel) so `_crypto` exposes the
-  `sorafs_multi_fetch_local` binding before invoking pytest; the harness auto-skips when the binding
-  is unavailable.
-- **Performance guard:** Same ≤ 2 s budget as the Rust suite; pytest logs the assembled byte count
-  and provider participation summary for the release artefact.
+- **命令：** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
+- **范围：** 练习高级 `iroha_python.sorafs.multi_fetch_local` 包装器及其类型
+  数据类，因此规范装置流经轮消费者调用的相同 API。测试
+  从 `providers.json` 重建提供者元数据，注入遥测快照并验证
+  有效负载字节、块收据、提供商报告和记分板内容，就像 Rust/JS/Swift 一样
+  套房。
+- **先决条件：** 运行 `maturin develop --release` （或安装轮子），以便 `_crypto` 公开
+  `sorafs_multi_fetch_local` 调用 pytest 之前绑定；绑定时线束会自动跳过
+  不可用。
+- **性能保障：** 与 Rust 套件相同 ≤2s 预算； pytest 记录组装的字节数
+  以及发布工件的提供商参与摘要。
 
-Release gating should capture the summary output from every harness (Rust, Python, JS, Swift) so the
-archived report can diff payload receipts and metrics uniformly before promoting a build. Run
-`ci/sdk_sorafs_orchestrator.sh` to execute every parity suite (Rust, Python bindings, JS, Swift) in
-one pass; CI artifacts should attach the log excerpt from that helper plus the generated
-`matrix.md` (SDK/status/duration table) to the release ticket so reviewers can audit the parity
-matrix without rerunning the suite locally.
+发布门控应该捕获每个工具（Rust、Python、JS、Swift）的摘要输出，以便
+归档报告可以在推广构建之前统一区分有效负载收据和指标。运行
+`ci/sdk_sorafs_orchestrator.sh` 执行每个奇偶校验套件（Rust、Python 绑定、JS、Swift）
+一趟； CI 工件应附加该助手的日志摘录以及生成的
+`matrix.md`（SDK/状态/持续时间表）到发布票证，以便审核者可以审核奇偶校验
+矩阵而无需在本地重新运行套件。

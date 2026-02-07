@@ -4,43 +4,37 @@ direction: ltr
 source: docs/portal/docs/reference/address-safety.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Securite et accessibilite des adresses
-description: Exigences UX pour presenter et partager les adresses Iroha en securite (ADDR-6c).
+título: Seguridad y accesibilidad de direcciones
+descripción: Exigencias UX para presentar y compartir las direcciones Iroha de forma segura (ADDR-6c).
 ---
 
-Cette page capture le livrable de documentation ADDR-6c. Appliquez ces contraintes aux wallets, explorers, outils SDK et a toute surface du portail qui rend ou accepte des adresses destinees aux humains. Le modele de donnees canonique se trouve dans `docs/account_structure.md`; la checklist ci-dessous explique comment exposer ces formats sans compromettre la securite ou l'accessibilite.
+Esta página captura el archivo disponible de documentación ADDR-6c. Aplique estas restricciones a las billeteras, exploradores, herramientas SDK y toda la superficie del portal que le permite acceder o aceptar direcciones destinadas a los humanos. El modelo de mujeres canónicas se encuentra en `docs/account_structure.md`; La lista de verificación contiene comentarios explícitos que exponen estos formatos sin comprometer la seguridad o la accesibilidad.
 
-## Flux de partage surs
+## Flujo de partición en el sur- Por defecto, toda acción de copia/partición debe utilizar la dirección IH58. Afichez le domaine resolu comme contexte d'appui afin que la chaine avec checksum reste au centre.
+- Proponga una acción "Partager" que reagrupe la dirección en texto bruto y un QR para derivar la carga útil del meme. Permettez aux utilisateurs d'inspecter les dos avant de confirmer.
+- Cuando el espacio imponga la troncatura (cartas minúsculas, notificaciones), conserve el prefijo lisible, afiche de elipses y guarde los 4-6 últimos caracteres para que el ancho de verificación sobreviva. Ofrez un geste/raccourci clavier pour copier la chaine complete sans troncature.
+- Empechez la desynchronisation du presse-papiers y emita un brindis de confirmación que previsualise la cadena IH58 exacta copia. La o la telemetría existen, comptez las tentativas de copia versus las acciones de partición para detectar rápidamente las regresiones UX.
 
-- Par defaut, toute action de copie/partage doit utiliser l'adresse IH58. Affichez le domaine resolu comme contexte d'appui afin que la chaine avec checksum reste au centre.
-- Proposez une action "Partager" qui regroupe l'adresse en texte brut et un QR derive du meme payload. Permettez aux utilisateurs d'inspecter les deux avant de confirmer.
-- Lorsque l'espace impose la troncature (cartes minuscules, notifications), conservez le prefixe lisible, affichez des ellipses et gardez les 4-6 derniers caracteres pour que l'ancre de checksum survive. Offrez un geste/raccourci clavier pour copier la chaine complete sans troncature.
-- Empechez la desynchronisation du presse-papiers en emettant un toast de confirmation qui previsualise la chaine IH58 exacte copiee. La ou la telemetrie existe, comptez les tentatives de copie vs les actions de partage afin de detecter rapidement les regressions UX.
+## IME y protecciones de entrada- Rechace todas las entradas que no sean ASCII en los campos de direcciones. Cuando aparecen los artefactos de composición IME (ancho completo, Kana, marques de tonalite), se muestra un aviso en línea con un comentario explícito que pasa el teclado en saisie latine antes del reessayer.
+- Fournissez una zona de collage en texto brut que suprime las marcas combinadas y reemplaza los espacios por los espacios ASCII antes de la validación. Esto evite perder la progresión si el usuario desactiva el IME en curso de flujo.
+- Durcissez la validación contre les joiners de ancho cero, selectores de variación y otros puntos de código Unicode furtifs. Registre la categoría del punto de código rechazado para que las suites de fuzzing puedan importar la telemetría.
 
-## IME et protections d'entree
+## Attentes pour les technologies d'assistance- Anote cada bloque de direcciones con `aria-label` o `aria-describedby` que epelle le prefixe lisible et segmente le payload en grupos de 4-8 caracteres ("ih guión b tres dos ..."). Evite que los lectores de pantalla produzcan un flujo de caracteres ininteligible.
+- Annoncez les action de copie/partage reussies via une mise a jour de live region en mode polite. Incluez el destino (papeles de prensa, partición, QR) para que el usuario pueda realizar la acción sin cambiar el enfoque.
+- Introduzca un texto descriptivo `alt` para la apertura QR (por ejemplo, "Adresse IH58 pour `<account>` sur la chaine `0x1234`"). Ofrezca un respaldo "Copiar la dirección en texto" en la base de datos QR para los usuarios malintencionados.
 
-- Rejetez toute entree non ASCII dans les champs d'adresse. Lorsque des artefacts de composition IME (full width, Kana, marques de tonalite) apparaissent, affichez un avertissement inline expliquant comment passer le clavier en saisie latine avant de reessayer.
-- Fournissez une zone de collage en texte brut qui supprime les marques combinees et remplace les espaces par des espaces ASCII avant validation. Cela evite de perdre la progression si l'utilisateur desactive l'IME en cours de flux.
-- Durcissez la validation contre les zero-width joiners, variation selectors et autres points de code Unicode furtifs. Journalisez la categorie du point de code rejete pour que les suites de fuzzing puissent importer la telemetrie.
+## Direcciones comprimidas solo para Sora- Gating: cachez la chaine compressee `sora...` después de una confirmación explícita. La confirmación debe reiterar que el formato no funciona en las cadenas Sora Nexus.
+- Etiqueta: cada aparición debe incluir una insignia visible "Solo Sora" y una información sobre herramientas explicativa para otras investigaciones exigentes en la forma IH58.
+- Guardrails: si el discriminador de cadena activo no pasa la asignación Nexus, rechace generar la dirección comprimida y redirigir hacia IH58.
+- Telemetría: registre la frecuencia de demanda y la copia de la forma comprimida para que el libro de jugadas de incidente detecte las imágenes de participación accidental.
 
-## Attentes pour les technologies d'assistance
+## Puertas de calidad
 
-- Annotez chaque bloc d'adresse avec `aria-label` ou `aria-describedby` qui epelle le prefixe lisible et segmente le payload en groupes de 4-8 caracteres ("ih dash b three two ..."). Cela evite que les lecteurs d'ecran produisent un flux inintelligible de caracteres.
-- Annoncez les actions de copie/partage reussies via une mise a jour de live region en mode polite. Incluez la destination (presse-papiers, partage, QR) pour que l'utilisateur sache que l'action s'est terminee sans deplacer le focus.
-- Fournissez un texte `alt` descriptif pour les apercus QR (par ex., "Adresse IH58 pour `<account>` sur la chaine `0x1234`"). Offrez un fallback "Copier l'adresse en texte" a cote du canvas QR pour les utilisateurs malvoyants.
-
-## Adresses compressees Sora-only
-
-- Gating: cachez la chaine compressee `sora...` derriere une confirmation explicite. La confirmation doit reiterer que le format ne fonctionne que sur les chaines Sora Nexus.
-- Etiquetage: chaque occurrence doit inclure un badge visible "Sora-only" et un tooltip expliquant pourquoi les autres reseaux exigent la forme IH58.
-- Guardrails: si le discriminant de chaine active n'est pas l'allocation Nexus, refusez de generer l'adresse compressee et redirigez vers IH58.
-- Telemetrie: enregistrez la frequence de demande et de copie de la forme compressee afin que le playbook d'incident detecte les pics de partage accidentel.
-
-## Quality gates
-
-- Etendez les tests UI automatises (ou les suites a11y de storybook) pour verifier que les composants d'adresse exposent les metadonnees ARIA requises et que les messages de rejet IME apparaissent.
-- Incluez des scenarios de QA manuels pour l'entree IME (kana, pinyin), un passage lecteur d'ecran (VoiceOver/NVDA) et la copie de QR en themes a fort contraste avant release.
-- Faites remonter ces verifications dans les checklists de release aux cotes des tests de parite IH58 afin que les regressions restent bloquees jusqu'a correction.
+- Actualice las pruebas de interfaz de usuario automatizadas (o las suites de storybook) para verificar qué componentes de direcciones exponen los metadones solicitados por ARIA y que aparecen los mensajes de rechazo de IME.
+- Incluye escenarios de control de calidad manuales para la entrada IME (kana, pinyin), un lector de texto en pantalla (VoiceOver/NVDA) y una copia de QR en temas con un fuerte contraste antes del lanzamiento.
+- Haga remontar estas verificaciones en las listas de verificación de liberación aux cotes des tests de parite IH58 a fin de que las regresiones retengan bloques justos de corrección.

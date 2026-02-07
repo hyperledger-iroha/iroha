@@ -4,45 +4,43 @@ direction: rtl
 source: docs/portal/docs/reference/norito-codec.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Referencia del codec Norito
+# مرجع برنامج الترميز Norito
 
-Norito es la capa de serializacion canonica de Iroha. Cada mensaje on-wire, payload en disco y API entre componentes usa Norito para que los nodos concuerden en bytes identicos incluso cuando ejecutan hardware distinto. Esta pagina resume las piezas moviles y apunta a la especificacion completa en `norito.md`.
+Norito هو القدرة على التسلسل الكنسي لـ Iroha. يتم استخدام كل رسالة عبر الإنترنت والحمولة والديسكو وواجهة برمجة التطبيقات (API) بين المكونات Norito حتى تلتقي العقد بالبايتات المتطابقة بما في ذلك عند تشغيل الأجهزة بشكل منفصل. تستأنف هذه الصفحة الأجزاء المتحركة وتصل إلى المواصفات الكاملة في `norito.md`.
 
-## Diseno base
+## قاعدة ديسينو
 
-| Componente | Proposito | Fuente |
+| مكون | اقتراح | فوينتي |
 | --- | --- | --- |
-| **Encabezado** | Encapsula los payloads con magic/version/schema hash, CRC64, longitud y etiqueta de compresion; v1 requiere `VERSION_MINOR = 0x00` y valida los flags del encabezado contra la mascara soportada (por defecto `0x00`). | `norito::header` - ver `norito.md` ("Header & Flags", raiz del repositorio) |
-| **Payload sin encabezado** | Codificacion determinista de valores usada para hashing/comparacion. El transporte on-wire siempre usa encabezado; los bytes sin encabezado son solo internos. | `norito::codec::{Encode, Decode}` |
-| **Compresion** | Zstd opcional (y aceleracion GPU experimental) seleccionada via el byte de compresion del encabezado. | `norito.md`, "Compression negotiation" |
+| **إنكابيزادو** | قم بتغليف الحمولات بتجزئة سحرية/إصدار/مخطط وCRC64 وطول وعلامة ضغط؛ يتطلب الإصدار 1 `VERSION_MINOR = 0x00` والتحقق من العلامات المغطاة ضد الماسكارا المدعومة (بسبب الخلل `0x00`). | `norito::header` - الإصدار `norito.md` ("الرأس والأعلام"، رأس المستودع) |
+| **الحمولة بدون حمولة** | تدوين تحديد القيم المستخدمة للتجزئة/المقارنة. النقل عبر الأسلاك دائمًا في الولايات المتحدة الأمريكية; البايتات لا تحتوي إلا على internos منفردة. | `norito::codec::{Encode, Decode}` |
+| **الضغط** | يتم تحديد اختياري (وتسريع GPU التجريبي) عبر بايت الضغط المغطى. | `norito.md`، "تفاوض الضغط" |سجل علامات التخطيط (البنية المعبأة، والتسلسل المعبأ، ومجموعة البت الميدانية، والأطوال المدمجة) موجود في `norito::header::flags`. أعلام V1 usa `0x00` por deffecto pero acepta أعلام صريحة داخل الماسكارا المدعومة؛ يتم إعادة تخزين القطع المحذوفة. `norito::header::Flags` هو محفوظ للفحص الداخلي والإصدارات المستقبلية.
 
-El registro de flags de layout (packed-struct, packed-seq, field bitset, compact lengths) vive en `norito::header::flags`. V1 usa flags `0x00` por defecto pero acepta flags explicitos dentro de la mascara soportada; los bits desconocidos se rechazan. `norito::header::Flags` se conserva para inspeccion interna y versiones futuras.
+## دعم الاشتقاق
 
-## Soporte de derive
+`norito_derive` ofrece يشتق `Encode`، `Decode`، `IntoSchema` والمساعدين JSON. عقد الاتفاقيات:
 
-`norito_derive` ofrece derives `Encode`, `Decode`, `IntoSchema` y helpers JSON. Convenciones clave:
+- يشتق Los generan rutas AoS ypacked؛ v1 يستخدم تخطيط AoS من أجل الخلل (الأعلام `0x00`) الذي يتم تعبئة الأعلام المضمنة من خلال المتغيرات. يتم التنفيذ بشكل مباشر في `crates/norito_derive/src/derive_struct.rs`.
+- يتم تمكين الوظائف التي تؤثر على التخطيط (`packed-struct`، `packed-seq`، `compact-len`) من خلال علامات التحجيم والترميز/فك التشفير بشكل متسق بين النظراء.
+- تم تثبيت مساعدي JSON (`norito::json`) على تحديد JSON بواسطة Norito لواجهات برمجة التطبيقات المفتوحة. الولايات المتحدة الأمريكية `norito::json::{to_json_pretty, from_json}` - نونكا `serde_json`.
 
-- Los derives generan rutas AoS y packed; v1 usa el layout AoS por defecto (flags `0x00`) salvo que los flags del encabezado opten por variantes packed. La implementacion vive en `crates/norito_derive/src/derive_struct.rs`.
-- Las funciones que afectan el layout (`packed-struct`, `packed-seq`, `compact-len`) son opt-in via flags del encabezado y deben codificarse/decodificarse de forma consistente entre peers.
-- Los helpers JSON (`norito::json`) proveen JSON determinista respaldado por Norito para APIs abiertas. Usa `norito::json::{to_json_pretty, from_json}` - nunca `serde_json`.
+## ترميز متعدد وجداول معرفات
 
-## Multicodec y tablas de identificadores
+Norito يحافظ على تعيينات الترميز المتعدد الخاصة به في `norito::multicodec`. يتم الاحتفاظ بالجدول المرجعي (التجزئة وأنواع المفاتيح وواصفات الحمولة) في `multicodec.md` في رأس المستودع. عندما يتم إنشاء معرف جديد:1. تحديث `norito::multicodec::registry`.
+2. قم بتمديد اللوحة إلى `multicodec.md`.
+3. قم بإعادة إنشاء الروابط النهائية (Python/Java) عند استخدام الخريطة.
 
-Norito mantiene sus asignaciones multicodec en `norito::multicodec`. La tabla de referencia (hashes, tipos de clave, descriptores de payload) se mantiene en `multicodec.md` en la raiz del repositorio. Cuando se anade un nuevo identificador:
+## إعادة إنشاء المستندات والتركيبات
 
-1. Actualiza `norito::multicodec::registry`.
-2. Extiende la tabla en `multicodec.md`.
-3. Regenera los bindings downstream (Python/Java) si consumen el mapa.
+مع إتاحة البوابة الآن للحصول على سيرة ذاتية احترافية، استخدم عناصر تخفيض السعر في المنبع كقوة حقيقية:
 
-## Regenerar docs y fixtures
+- **المواصفات**: `norito.md`
+- ** ترميز الطبلة المتعدد **: `multicodec.md`
+- **المقاييس**: `crates/norito/benches/`
+- **الاختبارات الذهبية**: `crates/norito/tests/`
 
-Con el portal alojando por ahora un resumen en prosa, usa las fuentes Markdown upstream como fuente de verdad:
-
-- **Spec**: `norito.md`
-- **Tabla multicodec**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-Cuando la automatizacion de Docusaurus entre en produccion, el portal se actualizara mediante un script de sync (seguido en `docs/portal/scripts/`) que extrae los datos de estos archivos. Hasta entonces, manten esta pagina alineada manualmente cada vez que cambie la spec.
+عند أتمتة Docusaurus أثناء الإنتاج، سيتم تحديث البوابة عبر برنامج نصي للمزامنة (يتبع في `docs/portal/scripts/`) يضيف بيانات هذه الأرشيفات. بعد ذلك، قم بحفظ هذه الصفحة يدويًا كل مرة تقوم فيها بتغيير المواصفات.

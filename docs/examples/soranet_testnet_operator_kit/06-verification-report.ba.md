@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf489427d0eba2beebfdefc44092730c3963cbd77e83669853f4e9681ac9fd2d
 source_last_modified: "2025-12-29T18:16:35.092552+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Operator Verification Report (Phase T0)
+## Оператор тикшерелгән отчет (Паза Т0)
 
-- Operator name: ______________________
-- Relay descriptor ID: ______________________
-- Submission date (UTC): ___________________
-- Contact email / matrix: ___________________
+- Оператор исеме: _____________________
+- Реле дескрипторы ID: _____________________
+- тапшырыу көнө (UTC): __________________
+- Электрон почта / матрица: __________________
 
-### Checklist Summary
+### Контроль исемлеге Йыйынтыҡ
 
-| Item | Completed (Y/N) | Notes |
-|------|-----------------|-------|
-| Hardware & network validated | | |
-| Compliance block applied | | |
-| Admission envelope verified | | |
-| Guard rotation smoke test | | |
-| Telemetry scraped & dashboards live | | |
-| Brownout drill executed | | |
-| PoW ticket success within target | | |
+| Элемент | тамамланған (Y/N) | Иҫкәрмәләр |
+|-----|-----------------|-------|
+| Аппарат & селтәр раҫланған | | |
+| Ҡулланылған үтәү блогы | | |
+| Ҡабул итеү конверты раҫланды | | |
+| Гвардия ротация төтөн һынау | | |
+| Телеметрия ҡырҡылған & приборҙар таҡталары йәшәй | | |
+| Браунут бурау башҡарылған | | |
+| PoW билет уңыш сиктәрендә маҡсат | | |
 
-### Metrics Snapshot
+### Метрика снимок
 
-- PQ ratio (`sorafs_orchestrator_pq_ratio`): ________
-- Downgrade count last 24h: ________
-- Average circuit RTT (p95): ________ ms
-- PoW median solve time: ________ ms
+- PQ нисбәте (`sorafs_orchestrator_pq_ratio`): _______
+- 24h: _______
+- Уртаса схема РТТ (p95): ________ мс
+- PoW медиана ваҡытты хәл итеү: _______ мс
 
-### Attachments
+### Ҡушымталар
 
-Please attach:
+Зинһар, беркетегеҙ:
 
-1. Relay support bundle hash (`sha256`): __________________________
-2. Dashboard screenshots (PQ ratio, circuit success, PoW histogram).
-3. Signed drill bundle (`drills-signed.json` + signer public key hex and attachments).
-4. SNNet-10 metrics report (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
+1. Реле ярҙам өйөм хеш (I18NI0000001X): ________________________
+2. Приборҙар таҡтаһы скриншоттары (PQ нисбәте, схема уңышы, PoW гистограмма).
+3. Ҡултамғалы быраулау пакеты (`drills-signed.json` + ҡул ҡуйыусы асыҡ асҡыс гекс һәм ҡушымталар).
+4. SNNet-10 метрика отчеты (I18NI000000003X).
 
-### Operator Signature
+### Оператор ҡултамғаһы
 
-I certify the above information is accurate and all required steps have been
-completed.
+Мин өҫтәге мәғлүмәтте раҫлайым дөрөҫ һәм бөтә кәрәкле аҙымдар булды
+тамамланған.
 
-Signature: _________________________  Date: ___________________
+Ҡултамға: _____________________________________.

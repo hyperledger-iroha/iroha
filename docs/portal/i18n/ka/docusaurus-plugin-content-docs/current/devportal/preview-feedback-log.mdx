@@ -8,85 +8,87 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview feedback logging
 sidebar_label: Feedback logging
 description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
+იმპორტი previewFeedbackSummary-დან '@site/src/data/previewFeedbackSummary.json';
 
-function FeedbackSummaryTable() {
+ფუნქცია FeedbackSummaryTable() {
   const waves = previewFeedbackSummary?.waves ?? [];
-  if (waves.length === 0) {
-    return (
+  თუ (ტალღები.სიგრძე === 0) {
+    დაბრუნება (
       <p>
-        No preview feedback entries have been recorded in
-        {' '}
-        <code>{previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+        გადახედვისას გამოხმაურების ჩანაწერები არ დაფიქსირებულა
+        {''}
+        <code>{previewFeedbackSummary?.წყარო ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
         .
       </p>
     );
   }
-  return (
-    <table>
-      <thead>
+  დაბრუნება (
+    <მაგიდა>
+      <თავი>
         <tr>
-          <th>Wave</th>
-          <th>Status</th>
-          <th>Total events</th>
-          <th>Invites</th>
-          <th>Open invites</th>
-          <th>Acknowledged</th>
-          <th>Revoked</th>
-          <th>Feedback</th>
-          <th>Issues</th>
-          <th>Completion %</th>
-          <th>Ack %</th>
-          <th>Response rate</th>
-          <th>Ack latency (avg h)</th>
-          <th>Feedback latency (avg h)</th>
-          <th>Last event</th>
-          <th>Days since last event</th>
+          <th>ტალღა</th>
+          <th>სტატუსები</th>
+          <th>მოვლენების საერთო რაოდენობა</th>
+          <th>მიწვევები</th>
+          <th>გახსენით მოსაწვევები</th>
+          <th>დადასტურებულია</th>
+          <th>გაუქმებულია</th>
+          <th>გამოხმაურება</th>
+          <th>პრობლემები</th>
+          <th>დასრულების %</th>
+          <th>% დადასტურება</th>
+          <th>პასუხის მაჩვენებელი</th>
+          <th>დაყოვნება (საშ. სთ)</th>
+          <th>გამოხმაურების შეყოვნება (საშ. სთ)</th>
+          <th>ბოლო ღონისძიება</th>
+          <th>დღეები ბოლო მოვლენიდან</th>
         </tr>
       </thead>
       <tbody>
-        {waves.map((wave) => {
-          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
-          const issues = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
-          const acknowledgements =
-            wave.acknowledgements ?? wave.eventCounts?.acknowledged ?? 0;
+        {waves.map((ტალღა) => {
+          const კავშირი = wave.feedbackCount ?? wave.event Counts?.['feedback-submitted'] ?? 0;
+          const საკითხები = wave.issuesCount ?? wave.event Counts?.['issue-opened'] ?? 0;
+          const აღიარება =
+            ტალღა.მადლობა ?? ტალღა.მოვლენა ითვლის?.აღიარებულია ?? 0;
           const revocations =
-            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
-          const responseRate =
-            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
+            ტალღა.გაუქმება ?? wave.event Counts?.['access-revoked'] ?? 0;
+          const პასუხის მაჩვენებელი =
+            wave.responseRatePercent == null? '—' : `${wave.responseRatePercent}%`;
           const completionPercent =
             wave.inviteCompletionPercent == null
-              ? '—'
+              ? '-'
               : `${wave.inviteCompletionPercent}%`;
           const ackPercent =
-            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
-          const ackLatency =
-            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
+            wave.ackRatePercent == null? '—' : `${wave.ackRatePercent}%`;
+          const ckLatency =
+            wave.ackLatencyHoursAvg == null? '—' : wave.ackLatencyHoursAvg;
           const feedbackLatency =
-            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
-          return (
+            wave.feedbackLatencyHoursAvg == null? '—' : wave.feedbackLatencyHoursAvg;
+          დაბრუნება (
             <tr key={wave.wave}>
               <td>{wave.wave}</td>
-              <td>{wave.status ?? 'pending'}</td>
+              <td>{wave.status ?? 'მოლოდინში'}</td>
               <td>{wave.totalEvents}</td>
               <td>{wave.invites?.total ?? 0}</td>
               <td>{wave.invites?.open ?? 0}</td>
-              <td>{acknowledgements}</td>
-              <td>{revocations}</td>
-              <td>{feedback}</td>
-              <td>{issues}</td>
+              <td>{მადლობა</td>
+              <td>{გაუქმება</td>
+              <td>{გამოხმაურება}</td>
+              <td>{საკითხები}</td>
               <td>{completionPercent}</td>
               <td>{ackPercent}</td>
               <td>{responseRate}</td>
-              <td title={wave.ackLatencyHoursP95 == null ? undefined : `p95 ${wave.ackLatencyHoursP95}h`}>
+              <td title={wave.ackLatencyHoursP95 == null ? განუსაზღვრელი: `p95 ${wave.ackLatencyHoursP95}h`}>
                 {ackLatency}
               </td>
               <td
-                title={
+                სათაური={
                   wave.feedbackLatencyHoursP95 == null
-                    ? undefined
+                    ? განუსაზღვრელი
                     : `p95 ${wave.feedbackLatencyHoursP95}h`
                 }
               >
@@ -102,75 +104,73 @@ function FeedbackSummaryTable() {
   );
 }
 
-The roadmap calls for verifiable evidence whenever we invite reviewers into the
-docs portal preview. This note explains how to capture that evidence with the
-`preview-feedback-log` helper, how to share the resulting artefacts with
-governance, and where to file digests once a wave closes.
+საგზაო რუკა მოითხოვს გადამოწმებად მტკიცებულებებს, როდესაც ჩვენ ვიწვევთ რეცენზენტებს
+Docs პორტალის გადახედვა. ეს ჩანაწერი განმარტავს, თუ როგორ უნდა დაიჭიროთ ეს მტკიცებულება
+`preview-feedback-log` დამხმარე, როგორ გავაზიაროთ მიღებული არტეფაქტები
+მმართველობა და სად შეიტანოს დაიჯესტები ტალღის დახურვის შემდეგ.
 
-## Why we log feedback
+## რატომ ვწერთ გამოხმაურებას
 
-- **Compliance:** every invite must record who accessed the preview, when they
-  acknowledged the acceptable-use policy, and when their access was revoked.
-- **Telemetry correlation:** the log lets us correlate portal telemetry spikes
-  or Try it traffic with specific invite cohorts.
-- **Governance evidence:** each DOCS-SORA checkpoint needs a machine-readable
-  summary showing invite counts, open reviewers, and the state of outstanding
-  issues.
+- ** შესაბამისობა:** ყველა მოწვევამ უნდა ჩაიწეროს, თუ ვინ იყო წვდომა წინასწარ გადახედვაზე, როდის
+  აღიარა მისაღები გამოყენების პოლიტიკა და როდის გაუქმდა მათი წვდომა.
+- **ტელემეტრიის კორელაცია:** ჟურნალი საშუალებას გვაძლევს დავაკავშიროთ პორტალის ტელემეტრიის მწვერვალები
+  ან სცადეთ ტრაფიკი კონკრეტული მოწვევის კოჰორტებით.
+- **მმართველობის მტკიცებულება:** თითოეულ DOCS-SORA გამშვებ პუნქტს სჭირდება მანქანით წაკითხვადი
+  შეჯამება, რომელიც აჩვენებს მოწვევის რაოდენობას, ღია რეცენზენტებს და გამორჩეულთა მდგომარეობას
+  საკითხები.
 
-All evidence lives under `artifacts/docs_portal_preview/` so it can be attached
-to the invite wave ticket or governance review without scraping CI logs.
+ყველა მტკიცებულება მოქმედებს `artifacts/docs_portal_preview/`-ის ქვეშ, ასე რომ შეიძლება დაერთოს
+მოწვევის ტალღის ბილეთზე ან მმართველობის მიმოხილვაზე CI ჟურნალების გაფუჭების გარეშე.
 
-## Live invite summary
+## პირდაპირი მოწვევის შეჯამება
 
-`docs/portal/scripts/preview-feedback-summary.mjs` ingests the shared log and
-writes `src/data/previewFeedbackSummary.json` during `npm run build`. The table
-below renders that JSON so reviewers can see the current invite footprint
-without running the CLI helper.
+`docs/portal/scripts/preview-feedback-summary.mjs` შთანთქავს გაზიარებულ ჟურნალს და
+წერს `src/data/previewFeedbackSummary.json` `npm run build`-ის დროს. მაგიდა
+ქვემოთ მოცემულია, რომ JSON, რათა მიმომხილველებმა ნახონ მოწვევის მიმდინარე კვალი
+CLI დამხმარე გაშვების გარეშე.
 
-<FeedbackSummaryTable />
+<FeedbackSummaryTable />მოწვევის ჯამების გარდა, რეზიუმე ახლა გამოჩნდება აღიარება და
+გაუქმების რაოდენობა, მიღებული პასუხის კოეფიციენტი (გამოხმაურება დაყოფილი
+ჯამური მოწვევები) და საშუალო შეყოვნება (ჰვერადი p95) შორის
+მოწვევა და მიმომხილველის აღიარება ან გამოხმაურება. ახალი
+**შესრულების %** სვეტი აჩვენებს რამდენი მოწვევა დაიხურა (დადასტურებული ან
+გაუქმებულია), ხოლო **Ack %** ხაზს უსვამს, რამდენმა მიმღებმა დაადასტურა პირდაპირ
+მისაღები გამოყენების ნაბიჯები. ეს მიღებული პროცენტები - პლუს მხოლოდ JSON
+გაუქმების/გამოცემის ტარიფები — მიაწოდეთ მართვის საინფორმაციო დაფები, რათა მიმომხილველებმა დაადასტურონ
+როგორც მონაწილეობის დონე, ასევე დაბრუნების დრო CLI დამხმარე პროგრამის გარეშე.
+**სტატუსის** სვეტი ხაზს უსვამს, არის თუ არა ტალღა უძრავი
+აქტიური (`active`), დახურულია, მაგრამ 14-დღიანი მონიტორინგის ფანჯარაში (`closed`), ან
+მზად არის არქივირებისთვის (`archived`). ** დღეების ბოლო მოვლენიდან ** მეტრიკა გვიჩვენებს, თუ როგორ
+დიდი ხანია გავიდა საბოლოო მოწვევის/გამოხმაურების მოქმედებიდან, ასე რომ საკრებულოებმა შენიშნეს
+ტალღები, რომლებიც საჭიროებს შეფუთვას ან ხელახლა ჩაერთოს გრძელვადიან მიმღებებს.
 
-In addition to the invite totals, the summary now surfaces acknowledgement and
-revocation counts, the derived response rate (feedback submissions divided by
-total invites), and the average latency (with a hoverable p95) between an
-invite and the reviewer’s acknowledgement or feedback submission. The new
-**Completion %** column shows how many invites have been closed (acknowledged or
-revoked), while **Ack %** highlights how many recipients explicitly confirmed
-the acceptable-use steps. These derived percentages—plus the JSON-only
-revocation/issue rates—feed the governance dashboards so reviewers can confirm
-both participation levels and turnaround time without running the CLI helper.
-The **Status** column highlights whether a wave is still
-active (`active`), closed but within the 14-day monitoring window (`closed`), or
-ready for archival (`archived`). The **Days since last event** metric shows how
-long it has been since the final invite/feedback action so councils can spot
-waves that need to be wrapped up or re-engage lingering recipients.
+### ტალღა `preview-20260218` შეჯამება
 
-### Wave `preview-20260218` recap
+- **ფარგლები:** ფინანსური ბეტა, დაკვირვებადობის ოპერაციები, SDK პარტნიორი და ეკოსისტემის დამცველი მიმომხილველები მოწვეული **2026-02-18** მომდევნო DOCS-SORA გამშვები პუნქტის წინ.
+- **მეტრიკა:** 4 მოწვევა, 4 აღიარება, 4 გაუქმება და 4 გამოხმაურება (`responseRatePercent = 100`) ერთი შემდგომი საკითხით (`DOCS-SORA-Preview-20260218`) შეტანილი დაკვირვებადობის კოჰორტის მიერ.
+- **მტკიცებულება:** `artifacts/docs_portal_preview/feedback_log.json` ახლა მოიცავს ამ ტალღის მოვლენის დეტალურ ვადებს და `artifacts/docs_portal_preview/preview-20260218-summary.json` აღწერს ნორმალიზებულ მეტრიკას, რომელსაც ჩვენ ვამაგრებთ მართვის პაკეტებს. პორტალის მონაცემების რეგენერაცია `npm run --prefix docs/portal preview:log -- --summary --summary-json`-ის საშუალებით იზიდავს იგივე ნომრებს `src/data/previewFeedbackSummary.json`-ში.
+- **ტალღის დამხმარე:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` ასხივებს თითო ტალღის შეჯამებას, დაიჯესტს და განახლებულ პორტალის მონაცემებს ერთი ნაბიჯით.
+- ** შემდგომი დაკვირვებები: ** დაკვირვებადობის გამოხმაურება მოიცავდა დამატებით CSP მაგალითებს Try it მოთხოვნებისთვის; Docs/DevRel თვალს ადევნებს ჩაწერას `docs/portal/docs/sorafs/observability-plan.md` (§4.2) ქვეშ, ასე რომ, მოწვევის შემდეგ ტალღას შეუძლია დაადასტუროს შესწორება. სრული მიმოხილვა ცხოვრობს [`preview-feedback/w3/summary.md`]-ში (./preview-feedback/w3/summary.md) ქრონოლოგიით აღბეჭდილი [`preview-feedback/w3/log.md`] (./preview-feedback/w3/log.md).
 
-- **Scope:** Finance beta, observability ops, SDK partner, and ecosystem advocate reviewers invited on **2026‑02‑18** ahead of the next DOCS-SORA checkpoint.
-- **Metrics:** 4 invites, 4 acknowledgements, 4 revocations, and 4 feedback submissions (`responseRatePercent = 100`) with a single follow-up issue (`DOCS-SORA-Preview-20260218`) filed by the observability cohort.
-- **Evidence:** `artifacts/docs_portal_preview/feedback_log.json` now includes the detailed event timeline for this wave and `artifacts/docs_portal_preview/preview-20260218-summary.json` captures the normalized metrics we attach to governance packets. Regenerating the portal data via `npm run --prefix docs/portal preview:log -- --summary --summary-json` pulls the same numbers into `src/data/previewFeedbackSummary.json`.
-- **Wave helper:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` emits the per-wave summary, digest, and refreshed portal data in one step.
-- **Follow-ups:** Observability feedback scoped additional CSP examples for Try it requests; Docs/DevRel are tracking the write-up under `docs/portal/docs/sorafs/observability-plan.md` (§4.2) so the next invite wave can validate the fix. The full recap lives in [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) with the timeline captured in [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
+## მოვლენის ტაქსონომია
 
-## Event taxonomy
-
-| Event | When to record it | Notes |
+| ღონისძიება | როდის ჩაიწეროს | შენიშვნები |
 | --- | --- | --- |
-| `invite-sent` | Immediately after sending an invite email. | Append one entry per recipient so invite counts stay accurate. |
-| `acknowledged` | When the reviewer confirms they read the security/observability docs and ran the checksum gate. | Optional but recommended for partner cohorts. |
-| `feedback-submitted` | When a reviewer files a finding via the agreed tracker. | Include the issue/link in the `--notes` field. |
-| `issue-opened` | When DOCS-SORA files a follow-up issue derived from feedback. | Helps governance correlate roadmap items to preview feedback. |
-| `access-revoked` | Once the reviewer’s preview window ends or access is revoked early. | Required so the “open recipients” count stays accurate. |
+| `invite-sent` | მოწვევის ელ.ფოსტის გაგზავნისთანავე. | მიამაგრეთ ერთი ჩანაწერი თითო მიმღებზე, რათა მოწვევის რაოდენობა ზუსტი დარჩეს. |
+| `acknowledged` | როდესაც მიმომხილველი ადასტურებს, მან წაიკითხა უსაფრთხოების/დაკვირვებადობის დოკუმენტები და გაუშვა საკონტროლო ჯამის კარიბჭე. | სურვილისამებრ, მაგრამ რეკომენდებულია პარტნიორების კოჰორტებისთვის. |
+| `feedback-submitted` | როდესაც მიმომხილველი წარადგენს დასკვნას შეთანხმებული ტრეკერის მეშვეობით. | ჩადეთ საკითხი/ბმული `--notes` ველში. |
+| `issue-opened` | როდესაც DOCS-SORA წარადგენს შემდგომ საკითხს, რომელიც გამომდინარეობს გამოხმაურებიდან. | ეხმარება მმართველობას საგზაო რუქის ელემენტების კორელაციაში გამოხმაურების წინასწარი გადახედვის მიზნით. |
+| `access-revoked` | მას შემდეგ, რაც მიმომხილველის გადახედვის ფანჯარა დასრულდება ან წვდომა ადრე გაუქმდება. | საჭიროა, რათა „ღია მიმღებთა“ რაოდენობა ზუსტი დარჩეს. |
 
-If you need an additional event, add it to
-`VALID_EVENTS` inside `docs/portal/scripts/preview-feedback-log.mjs` and update
-this table in the same change.
+თუ გჭირდებათ დამატებითი ღონისძიება, დაამატეთ იგი
+`VALID_EVENTS` შიგნით `docs/portal/scripts/preview-feedback-log.mjs` და განახლება
+ეს ცხრილი იმავე ცვლილებაშია.
 
-## Logging workflow
+## სამუშაო ნაკადის აღრიცხვა
 
-The helper behind `npm run preview:log` writes a single JSON log that captures
-all events. Each entry contains the wave label, recipient, event, timestamp, and
-optional notes. Example:
+დამხმარე `npm run preview:log`-ის უკან წერს ერთ JSON ჟურნალს, რომელიც იჭერს
+ყველა მოვლენა. თითოეული ჩანაწერი შეიცავს ტალღის ეტიკეტს, მიმღებს, მოვლენას, დროის ნიშანს და
+სურვილისამებრ შენიშვნები. მაგალითი:
 
 ```json
 {
@@ -195,7 +195,7 @@ optional notes. Example:
 }
 ```
 
-Commands:
+ბრძანებები:
 
 ```bash
 # Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
@@ -225,51 +225,49 @@ npm run --prefix docs/portal preview:digest -- \
   --out artifacts/docs_portal_preview/preview-20260204-digest.md
 ```
 
-Tips:
+რჩევები:
 
-- Place the log under version control when working in a feature branch so other
-  maintainers can review changes. For long-running waves store the log in the
-  governance ticket and attach the final version to the release artefacts.
-- `preview:log` accepts `--log <path>` when you need to log directly inside a
-  SoraFS bundle or CI workspace.
-- Always include a `--notes` hint (issue link, GitHub handle, cohort ID) so the
-  summary is useful during the retrospective.
-- When you need deterministic summary timestamps (for CI or docs snapshots),
-  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` before running the summary
-  helper. This keeps the `generatedAt`, status, and day counters consistent
-  across rebuilds.
+- მოათავსეთ ჟურნალი ვერსიის კონტროლის ქვეშ ფუნქციების ფილიალში მუშაობისას სხვა
+  შემსრულებლებს შეუძლიათ ცვლილებების გადახედვა. ხანგრძლივი ტალღებისთვის შეინახეთ ჟურნალი
+  მმართველობის ბილეთი და დაურთოს საბოლოო ვერსია გამოშვების არტეფაქტებს.
+- `preview:log` იღებს `--log <path>`-ს, როდესაც თქვენ გჭირდებათ პირდაპირ სისტემაში შესვლა
+  SoraFS პაკეტი ან CI სამუშაო სივრცე.
+- ყოველთვის ჩართეთ `--notes` მინიშნება (გამოცემის ბმული, GitHub სახელური, კოჰორტის ID) ასე რომ
+  შეჯამება სასარგებლოა რეტროსპექტივის დროს.
+- როდესაც გჭირდებათ განმსაზღვრელი შემაჯამებელი დროის ანაბეჭდები (CI ან დოკუმენტების სნეპშოტებისთვის),
+  დააყენეთ `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` შეჯამების გაშვებამდე
+  დამხმარე. ეს ინარჩუნებს `generatedAt`-ს, სტატუსს და დღის მრიცხველებს თანმიმდევრულად
+  აღდგენის მასშტაბით.
 
-## Summaries, digests, and archives
-
-1. **Per-wave summary:** generate the JSON summary and attach it to the invite
-   ticket together with the raw log. The summary enumerates total invites, open
-   recipients, and feedback counts so governance can confirm we captured every
-   reviewer. The portal build also publishes an aggregate summary at
-   `src/data/previewFeedbackSummary.json` so stakeholders can see the current
-   snapshot without running the CLI.
-2. **Weekly digest:** run `npm run --prefix docs/portal preview:digest -- --wave <label>`
-   to pre-populate the Markdown metrics, then tailor the placeholder sections
-   using the template in
+## შეჯამებები, დაიჯესტები და არქივები1. **თითო ტალღის შეჯამება:** შექმენით JSON შეჯამება და მიამაგრეთ იგი მოწვევას
+   ბილეთი ნედლეულ ჟურნალთან ერთად. რეზიუმე ითვლის სულ მოწვევებს, ღია
+   მიმღებები და გამოხმაურება ითვლის, რათა მმართველობამ დაადასტუროს, რომ ჩვენ ყველა ავიღეთ
+   რეცენზენტი. პორტალის build ასევე აქვეყნებს საერთო რეზიუმეს მისამართზე
+   `src/data/previewFeedbackSummary.json`, რათა დაინტერესებულ მხარეებს ნახონ მიმდინარეობა
+   სნეპშოტი CLI-ის გაშვების გარეშე.
+2. **კვირეული დაიჯესტი:** გაშვება `npm run --prefix docs/portal preview:digest -- --wave <label>`
+   წინასწარ შეავსოთ Markdown მეტრიკა, შემდეგ მოარგოთ ჩანაცვლების სექციები
+   შაბლონის გამოყენებით
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   before sharing it with stakeholders. Include at least: wave label, open
-   reviewers, notable findings, and next actions.
-3. **Archival:** move closed-wave logs into
-   `artifacts/docs_portal_preview/archive/<wave>/` and keep only the most recent
-   active wave at the root. This keeps CI artefacts small while preserving the
-   audit trail.
+   დაინტერესებულ მხარეებთან გაზიარებამდე. ჩართეთ მინიმუმ: ტალღის ეტიკეტი, ღია
+   მიმომხილველები, მნიშვნელოვანი აღმოჩენები და შემდეგი ქმედებები.
+3. **არქივი:** გადაიტანეთ დახურული ტალღის ჟურნალები
+   `artifacts/docs_portal_preview/archive/<wave>/` და შეინახეთ მხოლოდ უახლესი
+   აქტიური ტალღა ფესვზე. ეს ინარჩუნებს CI არტეფაქტებს მცირე ზომის შენარჩუნებისას
+   აუდიტის ბილიკი.
 
-## Linking to the roadmap
+## საგზაო რუკასთან დაკავშირება
 
-- Reference this document from invite and onboarding playbooks whenever you ask
-  reviewers to file feedback (see
+- მიმართეთ ამ დოკუმენტს მოწვევისა და ჩართვის სათამაშო წიგნებიდან, როცა ითხოვთ
+  რეცენზენტებმა გამოაქვეყნონ გამოხმაურება (იხ
   [`preview-invite-flow`](./preview-invite-flow.md),
-  [`reviewer-onboarding`](./reviewer-onboarding.md), and
+  [`reviewer-onboarding`](./reviewer-onboarding.md) და
   [`public-preview-invite`](./public-preview-invite.md)).
-- Mention the generated summary in `status.md` when closing a wave so DOCS-SORA
-  roadmap items (e.g., DOCS-1b/2b/3c) can cite the artefact.
-- Store hash digests alongside the summary when uploading to SoraFS so external
-  reviewers can verify the evidence bundle.
+- აღნიშნეთ გენერირებული შეჯამება `status.md`-ში ტალღის დახურვისას ასე DOCS-SORA
+  საგზაო რუქის ელემენტებს (მაგ. DOCS-1b/2b/3c) შეუძლიათ არტეფაქტის ციტირება.
+- ი18NT00000001X-ზე ატვირთვისას ი18NT00000001X-ზე შენახვა
+  რეცენზენტებს შეუძლიათ გადაამოწმონ მტკიცებულებათა ნაკრები.
 
-Keeping the logging workflow codified here unblocks the roadmap requirement to
-“capture feedback/telemetry for governance” and reduces the time spent
-reconstructing invite history at every milestone.
+ხე-ტყის სამუშაო ნაკადის კოდირებული აქ შენახვა ბლოკავს საგზაო რუქის მოთხოვნას
+„გადაიღეთ უკუკავშირი/ტელემეტრია მმართველობისთვის“ და ამცირებს დახარჯულ დროს
+მოწვევის ისტორიის რეკონსტრუქცია ყოველ ეტაპზე.

@@ -8,169 +8,160 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview feedback logging
 sidebar_label: Feedback logging
 description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
-
-function FeedbackSummaryTable() {
-  const waves = previewFeedbackSummary?.waves ?? [];
-  if (waves.length === 0) {
-    return (
-      <p>
-        No preview feedback entries have been recorded in
-        {' '}
-        <code>{previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+импорт алдан ҡарау FeedbackSummary '@site/src/мәғлүмәттәр/превизор FeedbackSummary.json';функцияһы FeedbackSummaryTable() {
+  const тулҡындар = previewFeedbackSummary?.тулҡындар ?? [];
+  әгәр (тулҡындар.оҙонлоҡ == 0) {
+    кире бирергә (
+      
+        Бер ниндәй ҙә алдан ҡарау кире бәйләнеш яҙмалары 2019 йылда теркәлгән.
+        {'}.
+        {предвидение Федбек Сығыш?.сығанаҡ ?? 'арфакттар/доктар_порталь_превизор/кире бәйләнеш_log.json'}
         .
-      </p>
+      
     );
-  }
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Wave</th>
-          <th>Status</th>
-          <th>Total events</th>
-          <th>Invites</th>
-          <th>Open invites</th>
-          <th>Acknowledged</th>
-          <th>Revoked</th>
-          <th>Feedback</th>
-          <th>Issues</th>
-          <th>Completion %</th>
-          <th>Ack %</th>
-          <th>Response rate</th>
-          <th>Ack latency (avg h)</th>
-          <th>Feedback latency (avg h)</th>
-          <th>Last event</th>
-          <th>Days since last event</th>
-        </tr>
-      </thead>
-      <tbody>
-        {waves.map((wave) => {
-          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
-          const issues = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
-          const acknowledgements =
-            wave.acknowledgements ?? wave.eventCounts?.acknowledged ?? 0;
-          const revocations =
-            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
-          const responseRate =
-            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
-          const completionPercent =
-            wave.inviteCompletionPercent == null
-              ? '—'
+  }.
+  кире бирергә (
+    
+      
+        .
+          Туҡта
+          Статус
+          Дөйөм ваҡиғалар
+          Сәки
+          Асыҡ саҡыра
+          
+          Аҫылынып
+          Федбек
+          Мәсьәләләр
+          
+          Ак %
+          Яуап ставкаһы
+          Ак латентлығы (ваг ч)
+          Киске-килешеп латентлыҡ (ваг ч)
+          Һуңғы ваҡиға
+          Һуңғы ваҡиғанан бирлеКөндәр
+        .
+      
+      
+        {тулҡындар.карта((тулҡын) => { .
+          sconst кире бәйләнеш = тулҡын.килегкүк ?? тулҡын. 0;
+          const мәсьәләләр = тулҡын.ssuesCount ?? тулҡын. 0;
+          конст таныуҙары =
+            тулҡын.таныуҙар ?? тулҡын. 0;
+          консст тартып алыу =
+            тулҡын.ревокациялар ?? тулҡын. 0;
+          constureRateRate =тулҡын.яуапРатПерсент == нуль ? '—' : `${wave.responseRatePercent}%`;
+          тамамлау Перцент =
+            тулҡын.инвит СвитениеПерсент == нуль
+              ? — — —
               : `${wave.inviteCompletionPercent}%`;
           const ackPercent =
-            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
-          const ackLatency =
-            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
-          const feedbackLatency =
-            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
-          return (
-            <tr key={wave.wave}>
-              <td>{wave.wave}</td>
-              <td>{wave.status ?? 'pending'}</td>
-              <td>{wave.totalEvents}</td>
-              <td>{wave.invites?.total ?? 0}</td>
-              <td>{wave.invites?.open ?? 0}</td>
-              <td>{acknowledgements}</td>
-              <td>{revocations}</td>
-              <td>{feedback}</td>
-              <td>{issues}</td>
-              <td>{completionPercent}</td>
-              <td>{ackPercent}</td>
-              <td>{responseRate}</td>
-              <td title={wave.ackLatencyHoursP95 == null ? undefined : `p95 ${wave.ackLatencyHoursP95}h`}>
-                {ackLatency}
-              </td>
+            тулҡын. '—' : `${wave.ackRatePercent}%`;
+          const ackLatancy =
+            тулҡын.ackLatancyHoursAvg == нуль ? '—' : тулҡын.
+          const кире бәйләнеш Латентлыҡ =
+            тулҡын.килегкүкләүҡиәфәтеХурсАвг == нуль ? '—' : тулҡын.төшөрөүLatancyHoursAvg;
+          кире бирергә (
+            {wave.wave.
+              {тулҡын.статус ?? 'көтөү'}
+              {wave.totalEvents}
+              {тулҡындар.инвиттар?.тоталь ?? 0}
+              {тулҡындар.инвиттар?.асыҡ ?? 0}
+              {таныуҙар}
+              {ҡаралауҙар}
+              {йөкмәтке}
+              {әлемдәр}
+              {тулыландырыусы}
+              {cackpercent}
+              {яуапРат}
+              
+                {aceLatancy}
+              
               <td
-                title={
-                  wave.feedbackLatencyHoursP95 == null
-                    ? undefined
-                    : `p95 ${wave.feedbackLatencyHoursP95}h`
-                }
-              >
-                {feedbackLatency}
-              </td>
-              <td>{wave.lastEventTimestamp ?? '—'}</td>
-              <td>{wave.daysSinceLastEvent ?? '—'}</td>
-            </tr>
+                титул={ .
+                  тулҡын.килегкейклатентлыҡХурсП95 == нуль
+                    ? билдәләнмәгән
+                    : I18NI000000019X
+                }.>
+                {киребек латентность}
+              
+              {wave.sstEventTimestamp ?? '—'}
+              {wave.daysSinceLastEvent ?? '—'}
+            .
           );
-        })}
-      </tbody>
-    </table>
+        }}.
+      
+    
   );
-}
+}.
 
-The roadmap calls for verifiable evidence whenever we invite reviewers into the
-docs portal preview. This note explains how to capture that evidence with the
-`preview-feedback-log` helper, how to share the resulting artefacts with
-governance, and where to file digests once a wave closes.
+Юл картаһы тикшерелгән дәлилдәргә саҡыра, ҡасан беҙ рецензенттарҙы саҡырабыҙ
+docs порталы алдан ҡарау. Был иҫкәрмә аңлата, нисек тотоп, был дәлилдәр менән
+I18NI000000020X ярҙамсыһы, нисек һөҙөмтәлә алынған артефакттар менән бүлешергә
+идара итеү, һәм ҡайҙа файл файлы бер тулҡын ябыла.
 
-## Why we log feedback
+## Ни өсөн беҙ кире бәйләнеш журнал
 
-- **Compliance:** every invite must record who accessed the preview, when they
-  acknowledged the acceptable-use policy, and when their access was revoked.
-- **Telemetry correlation:** the log lets us correlate portal telemetry spikes
-  or Try it traffic with specific invite cohorts.
-- **Governance evidence:** each DOCS-SORA checkpoint needs a machine-readable
-  summary showing invite counts, open reviewers, and the state of outstanding
-  issues.
+- **Тотороҡһоҙ:** һәр саҡырыу тейеш яҙып алырға, кем алды алдан ҡарау, улар ҡасан
+  ҡабул итеүгә яраҡлы ҡулланыу сәйәсәтен таныны, ә уларҙы рөхсәт ителгәндә тартып алғанда.
+- **Телеметрия корреляцияһы:** лог беҙгә порталь телеметрия шпиктарын корреляциялай.
+  йәки аныҡ саҡырыу когорталары менән трафик һынап ҡарағыҙ.
+- **Идара итеү дәлилдәре:** һәр DOCS-I18NT000000002X тикшерелгән пункт машина-уҡыу кәрәк
+  йыйнаҡ күрһәтеү саҡырыу иҫәптәре, асыҡ рецензенттар, һәм дәүләт күренекле
+  мәсьәләләр.
 
-All evidence lives under `artifacts/docs_portal_preview/` so it can be attached
-to the invite wave ticket or governance review without scraping CI logs.
+Бөтә дәлилдәр йәшәй аҫтында I18NI0000000021X шулай итеп, ул беркетелгән була ала
+саҡырыу тулҡын билет йәки идара итеү тикшерелгән ҡырҡып ташламай CI журналдар.
 
-## Live invite summary
+## Тере саҡырыу резюме
 
-`docs/portal/scripts/preview-feedback-summary.mjs` ingests the shared log and
-writes `src/data/previewFeedbackSummary.json` during `npm run build`. The table
-below renders that JSON so reviewers can see the current invite footprint
-without running the CLI helper.
+I18NI000000022Х дөйөм журнал һәм
+I18NI0000023X I18NI000000024X ваҡытында яҙа. Таблица
+Түбәндә рендерҙар, тип JSON шулай рецензенттар күрә ала, ағымдағы саҡырыу эҙҙәре эҙе
+CLI ярҙамсыһын эшләтмәйенсә.
 
-<FeedbackSummaryTable />
+Сәфәр дөйөм алғандан тыш, йыйылма хәҙер таныуҙы таныу һәм
+ҡайтарыу һаны, алынған яуап ставкаһы (кире бәйләнеш тапшырыуҙары бүленә
+дөйөм саҡыра), һәм уртаса латентность (күбәйә p95 менән) араһында
+саҡырыу һәм рецензент’таныу йәки кире бәйләнеш тапшырыу. Яңы
+**Тулыландырыу %** бағана күрһәтә, күпме саҡырыу ябылған (таныу йәки
+ҡабул ителгән), шул уҡ ваҡытта **Ак %** асыҡтан-асыҡ раҫланған күпме алыусыларҙы асыҡлай
+ҡабул итеү өсөн ҡулланыу аҙымдары. Был алынған проценттар — плюс JSON-бер генә
+ҡайтарыу/эмиссия ставкалары — идара итеү приборҙар таҡталарын туҡландырыу, шуға күрә рецензенттар раҫлай ала
+ҡатнашыу кимәле лә, әйләнеш ваҡыты ла CLI ярҙамсыһын эшләтмәйенсә.
+**Статус** бағанаһы тулҡындың һаман да булыуын асыҡлай .
+әүҙем (I18NI000000025X), ябыҡ, әммә 14 көнлөк мониторинг тәҙрәһе сиктәрендә (`closed`), йәки
+архивҡа әҙер (I18NI000000027X). **Көндәрҙән бирле һуңғы ваҡиға** метрика күрһәтә, нисек
+оҙаҡ ул һуңғы саҡырыу/кире бәйләнеш ғәмәлдәренән һуң, шулай советтар күрә ала
+тулҡындар, уларҙы уратып йәки яңынан шөғөлләнергә кәрәк, оҙайлы алыусылар.
 
-In addition to the invite totals, the summary now surfaces acknowledgement and
-revocation counts, the derived response rate (feedback submissions divided by
-total invites), and the average latency (with a hoverable p95) between an
-invite and the reviewer’s acknowledgement or feedback submission. The new
-**Completion %** column shows how many invites have been closed (acknowledged or
-revoked), while **Ack %** highlights how many recipients explicitly confirmed
-the acceptable-use steps. These derived percentages—plus the JSON-only
-revocation/issue rates—feed the governance dashboards so reviewers can confirm
-both participation levels and turnaround time without running the CLI helper.
-The **Status** column highlights whether a wave is still
-active (`active`), closed but within the 14-day monitoring window (`closed`), or
-ready for archival (`archived`). The **Days since last event** metric shows how
-long it has been since the final invite/feedback action so councils can spot
-waves that need to be wrapped up or re-engage lingering recipients.
+### тулҡын I18NI00000000028X рекап- **Сода:** Финанс бета, күҙәтеүсәнлек опстары, SDK партнеры, һәм экосистема яҡлаусыһы рецензенттар саҡырылған **2026‐02‐18** алда киләһе DOCS-I18NT000000003 X пункт пункты.
+- **Метрика:** 4 саҡыра, 4 таныу, 4 ҡайтарыу, һәм 4 кире бәйләнеш тапшырыу (`responseRatePercent = 100`) менән бер эҙмә-эҙлекле мәсьәлә (`DOCS-SORA-Preview-20260218`) күҙәтеү когортаһы тарафынан бирелгән.
+- **Дәлилдәр:** `artifacts/docs_portal_preview/feedback_log.json` хәҙер был тулҡын өсөн ентекле ваҡиға һыҙығын үҙ эсенә ала һәм I18NI000000002X беҙ идара итеү пакеттарына беркеткән нормалаштырылған метрикаларҙы тота. I18NI000000033X аша порталь мәғлүмәттәрҙе тергеҙеү шул уҡ һандарҙы I18NI000000034X-ға тарта.
+- **Тулҡын ярҙамсыһы:** I18NI000000035X бер аҙымда бер тулҡынлы, үҙләштереү һәм яңыртылған порталь мәғлүмәттәр сығара.
+- **Һуғыш-өҫтәү:** Күҙәтеүсәнлек кире бәйләнеш өҫтәмә CSP миҫалдары өсөн һынап ҡарағыҙ, ул һорай; Docs/DevRel I18NI000000036X (§4.2) буйынса яҙыуҙы күҙәтә, шуға күрә киләһе саҡырыу тулҡыны төҙәтеүҙе раҫлай ала. Тулы резюме йәшәй [I18NI000000037X] (./preview-feedback/w3/summary.md) менән ваҡыт һыҙығы менән төшөрөлгән [I18NI000000038X] (./preview-feedback/w3/log.md).
 
-### Wave `preview-20260218` recap
-
-- **Scope:** Finance beta, observability ops, SDK partner, and ecosystem advocate reviewers invited on **2026‑02‑18** ahead of the next DOCS-SORA checkpoint.
-- **Metrics:** 4 invites, 4 acknowledgements, 4 revocations, and 4 feedback submissions (`responseRatePercent = 100`) with a single follow-up issue (`DOCS-SORA-Preview-20260218`) filed by the observability cohort.
-- **Evidence:** `artifacts/docs_portal_preview/feedback_log.json` now includes the detailed event timeline for this wave and `artifacts/docs_portal_preview/preview-20260218-summary.json` captures the normalized metrics we attach to governance packets. Regenerating the portal data via `npm run --prefix docs/portal preview:log -- --summary --summary-json` pulls the same numbers into `src/data/previewFeedbackSummary.json`.
-- **Wave helper:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` emits the per-wave summary, digest, and refreshed portal data in one step.
-- **Follow-ups:** Observability feedback scoped additional CSP examples for Try it requests; Docs/DevRel are tracking the write-up under `docs/portal/docs/sorafs/observability-plan.md` (§4.2) so the next invite wave can validate the fix. The full recap lives in [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) with the timeline captured in [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
-
-## Event taxonomy
-
-| Event | When to record it | Notes |
+## Ваҡиға таксономияһы| Ваҡиға | Ҡасан уны яҙып алырға | Иҫкәрмәләр |
 | --- | --- | --- |
-| `invite-sent` | Immediately after sending an invite email. | Append one entry per recipient so invite counts stay accurate. |
-| `acknowledged` | When the reviewer confirms they read the security/observability docs and ran the checksum gate. | Optional but recommended for partner cohorts. |
-| `feedback-submitted` | When a reviewer files a finding via the agreed tracker. | Include the issue/link in the `--notes` field. |
-| `issue-opened` | When DOCS-SORA files a follow-up issue derived from feedback. | Helps governance correlate roadmap items to preview feedback. |
-| `access-revoked` | Once the reviewer’s preview window ends or access is revoked early. | Required so the “open recipients” count stays accurate. |
+| `invite-sent` | Шунда уҡ саҡырыу электрон почта ебәргәндән һуң. | Ҡушымта бер яҙма алыусы шулай саҡырырға иҫәптәр дөрөҫ ҡала. |
+| `acknowledged` | Ҡасан рецензент раҫлай, улар уҡыу хәүефһеҙлек/күҙәтеүсәнлек docs һәм йүгерҙе тикшерелгән суммаһы ҡапҡаһы. | Опциональ, әммә партнер когортаһы өсөн тәҡдим ителә. |
+| `feedback-submitted` | Ҡасан рецензент файлдар аша табыш килешеп трекер. | Мәсьәләне/һылтанма I18NI000000042X яланына индерегеҙ. |
+| `issue-opened` | Ҡасан DOCS-I18NT000000005X файлдар эҙмә-эҙлекле мәсьәлә алынған кире бәйләнеш. | Идара итеү ярҙам итә, юл картаһы әйберҙәрен корреляциялау өсөн кире бәйләнештәрҙе алдан ҡарау. |
+| `access-revoked` | Бер тапҡыр рецензент’s алдан ҡарау тәҙрәһе йәки инеү рөхсәт итеү иртә. | Кәрәкле, шулай итеп, “асыҡ алыусылар” иҫәп-хисап дөрөҫ ҡала. |
 
-If you need an additional event, add it to
-`VALID_EVENTS` inside `docs/portal/scripts/preview-feedback-log.mjs` and update
-this table in the same change.
+Әгәр һеҙгә өҫтәмә ваҡиға кәрәк, уны өҫтәргә .
+I18NI000000045X эсендә I18NI00000000046X һәм яңыртыу
+был таблица шул уҡ үҙгәрештә.
 
-## Logging workflow
+## Яҡтылыҡ эш ағымы
 
-The helper behind `npm run preview:log` writes a single JSON log that captures
-all events. Each entry contains the wave label, recipient, event, timestamp, and
-optional notes. Example:
+I18NI000000047X артында ярҙамсы бер JSON журналын яҙа, ул тота.
+бөтә ваҡиғалар. Һәр яҙма тулҡын ярлығы, алыусы, ваҡиға, ваҡыт маркаһы, һәм
+өҫтәмә иҫкәрмәләр. Миҫал:
 
 ```json
 {
@@ -195,7 +186,7 @@ optional notes. Example:
 }
 ```
 
-Commands:
+Командалар:
 
 ```bash
 # Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
@@ -225,51 +216,45 @@ npm run --prefix docs/portal preview:digest -- \
   --out artifacts/docs_portal_preview/preview-20260204-digest.md
 ```
 
-Tips:
+Кәңәштәр:- версия аҫтында версия контроле аҫтында урынлаштырыу, ҡасан эшләү функцияһы филиалы шулай башҡа .
+  хеҙмәтләндергәндәр үҙгәрештәрҙе тикшерә ала. Оҙаҡ ваҡыт үткән тулҡындар өсөн журналды һаҡлай.
+  идара итеү билеты һәм һуңғы версияны сығарыу артефакттарына беркетергә.
+- I18NI0000000048X ҡабул итә I18NI00000000049X, ҡасан һеҙгә кәрәк туранан-тура эсендә инеү
+  I18NT000000000X өйөм йәки CI эш урыны.
+- Һәр ваҡыт I18NI000000050X һиҙеүен индерегеҙ (сығынма, GitHub ручкаһы, когорталы ID) шулай итеп
+  резюме ретроспектив ваҡытында файҙалы.
+- Ҡасан һеҙгә кәрәк детерминистик йыйнаҡ ваҡыт маркалары (CI өсөн йәки docs снимоктар өсөн),
+  18NI000000051X йыйылмаһын эшләткәнсе, 2012 йыл
+  ярҙамсыһы. Был I18NI000000052X, статус һәм көндөҙгө иҫәпләүселәрҙе эҙмә-эҙлекле тота.
+  ҡайтанан төҙөүҙәр аша.
 
-- Place the log under version control when working in a feature branch so other
-  maintainers can review changes. For long-running waves store the log in the
-  governance ticket and attach the final version to the release artefacts.
-- `preview:log` accepts `--log <path>` when you need to log directly inside a
-  SoraFS bundle or CI workspace.
-- Always include a `--notes` hint (issue link, GitHub handle, cohort ID) so the
-  summary is useful during the retrospective.
-- When you need deterministic summary timestamps (for CI or docs snapshots),
-  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` before running the summary
-  helper. This keeps the `generatedAt`, status, and day counters consistent
-  across rebuilds.
+## Йәмғеһе, һеңдереүселәр һәм архивтар1. **Сер-тулҡын резюме:** генерациялау JSON резюме һәм уны беркетергә саҡырыу .
+   билет менән бергә сеймал журналы. Йәмғеһе дөйөм саҡыра, асыҡ .
+   алыусылар, һәм кире бәйләнештәр иҫәпләнә, шулай итеп, идара итеү раҫлай ала, беҙ һәр тотоп
+   рецензент. Портал төҙөү шулай уҡ дөйөм резюме 2012 й.
+   I18NI000000053X шулай ҡатнашыусылар ток күрә ала
+   снимок CLI йүгермәйенсә.
+2. **Аҙна һайын үҙләштереү:** йүгерергә I18NI000000054X
+   Markdown метрикаһын алдан халыҡҡа сығарыу өсөн, һуңынан урын хужалары бүлектәрен тегеү
+   шаблонды ҡулланып, 1990 й.
+   [I18NI000000055X] (../../../examples/docs_preview_feedback_digest.md)
+   уны ҡатнашыусылар менән бүлешер алдынан. Һис юғында: тулҡын ярлығы, асыҡ
+   рецензенттар, иғтибарға лайыҡ табыштар һәм киләһе ғәмәлдәр.
+3. **Архивал:** ябыҡ тулҡынлы журналдарҙы күсерергә
+   I18NI000000056X һәм иң һуңғыһын ғына һаҡлағыҙ
+   тамырында әүҙем тулҡын. Был CI һаҡлай, шул уҡ ваҡытта һаҡлау, шул уҡ ваҡытта .
+   аудит эҙҙәре.
 
-## Summaries, digests, and archives
+## Юл картаһына бәйләү- Һылтанма был документтан саҡырыу һәм onboarding playbooks ҡасан һеҙ һораған
+  рецензенттар файл кире бәйләнеш (ҡара
+  [I18NI000000057X] (I18NU000000012X),
+  [I18NI000000058X] (I18NU000000013X), һәм
+  [`public-preview-invite`] (./public-preview-invite.md)).
+- I18NI000000060X-та генерацияланған резюме телгә алығыҙ, был тулҡынды шулай DOCS-I18NT000000006Х ябыу ваҡытында 2012 йылда 2000 й.
+  юл картаһы әйберҙәре (мәҫәлән, DOCS-1b/2b/3c) артефакт килтерә ала.
+- Һаҡлау хеш derights менән бер рәттән резюме тейәгәндә I18NT0000000001X шулай тышҡы .
+  рецензенттар дәлилдәр өйөмөн раҫлай ала.
 
-1. **Per-wave summary:** generate the JSON summary and attach it to the invite
-   ticket together with the raw log. The summary enumerates total invites, open
-   recipients, and feedback counts so governance can confirm we captured every
-   reviewer. The portal build also publishes an aggregate summary at
-   `src/data/previewFeedbackSummary.json` so stakeholders can see the current
-   snapshot without running the CLI.
-2. **Weekly digest:** run `npm run --prefix docs/portal preview:digest -- --wave <label>`
-   to pre-populate the Markdown metrics, then tailor the placeholder sections
-   using the template in
-   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   before sharing it with stakeholders. Include at least: wave label, open
-   reviewers, notable findings, and next actions.
-3. **Archival:** move closed-wave logs into
-   `artifacts/docs_portal_preview/archive/<wave>/` and keep only the most recent
-   active wave at the root. This keeps CI artefacts small while preserving the
-   audit trail.
-
-## Linking to the roadmap
-
-- Reference this document from invite and onboarding playbooks whenever you ask
-  reviewers to file feedback (see
-  [`preview-invite-flow`](./preview-invite-flow.md),
-  [`reviewer-onboarding`](./reviewer-onboarding.md), and
-  [`public-preview-invite`](./public-preview-invite.md)).
-- Mention the generated summary in `status.md` when closing a wave so DOCS-SORA
-  roadmap items (e.g., DOCS-1b/2b/3c) can cite the artefact.
-- Store hash digests alongside the summary when uploading to SoraFS so external
-  reviewers can verify the evidence bundle.
-
-Keeping the logging workflow codified here unblocks the roadmap requirement to
-“capture feedback/telemetry for governance” and reduces the time spent
-reconstructing invite history at every milestone.
+Бында ағас ҡырҡыу эш ағымы кодификацияланғанын һаҡлау бында юл картаһы талабын асыу өсөн
+“ҡатнашыу кире бәйләнеш/телеметрия идара итеү өсөн” һәм ваҡытты кәметә .
+реконструкциялау саҡырыу тарихы һәр этапта.

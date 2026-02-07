@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -30,7 +32,7 @@ description: ملخص حي لموجة المعاينة المجتمعية (W2).
 
 ## بنود العمل
 
-| المعرف | الوصف | المالك | الحالة |
+| المعرف | אוטו | المالك | الحالة |
 | --- | --- | --- | --- |
 | W2-A1 | معالجة `docs-preview/w2 #1` (صياغة tooltip). | Docs-core-04 | ✅ مكتمل (2025-06-21). |
 | W2-A2 | معالجة `docs-preview/w2 #2` (ترتيب الشريط الجانبي للترجمة). | Docs-core-05 | ✅ مكتمل (2025-06-21). |
@@ -39,6 +41,6 @@ description: ملخص حي لموجة المعاينة المجتمعية (W2).
 ## ملخص الخروج (2025-06-29)
 
 - اكد جميع المراجعين المجتمعيين الثمانية الاكتمال وتم سحب صلاحيات المعاينة; تم تسجيل الاقرارات في سجل الدعوات بالمتتبع.
-- بقيت لقطات القياس النهائية (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) خضراء; اللوجات ونصوص وكيل Try it مرفقة بـ `DOCS-SORA-Preview-W2`.
+- بقيت لقطات القياس النهائية (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) خضراء; טלפונים ותמונות נסה את זה.
 - حزمة الادلة (descriptor, checksum log, probe output, link report, لقطات Grafana, اقرارات الدعوة) ارشفت تحت `artifacts/docs_preview/W2/preview-2025-06-15/`.
 - تم تحديث سجل نقاط التحقق W2 في المتتبع حتى الخروج، لضمان سجل قابل للتدقيق قبل بدء تخطيط W3.

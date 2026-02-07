@@ -11,27 +11,28 @@ id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
 description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# Pin Registry Manifest Validation Plan (SF-4 Prep)
+# Пин реестры валидация планы (SF-4 әҙерлек)
 
-This plan outlines the steps required to thread `sorafs_manifest::ManifestV1`
-validation into the forthcoming Pin Registry contract so that SF-4 work can
-build on the existing tooling without duplicating encode/decode logic.
+Был планда `sorafs_manifest::ManifestV1` еп өсөн кәрәкле аҙымдар билдәләнә.
+раҫлау өсөн алдағы булавка реестр килешүе, шулай итеп, SF-4 эше ала
+төҙөү өҫтөндә булған инструменттар дубляжһыҙ кодировка/decode логикаһы.
 
-## Goals
+## Маҡсаттар
 
-1. Host-side submission paths verify manifest structure, chunking profile, and
-   governance envelopes before accepting proposals.
-2. Torii and gateway services reuse the same validation routines to ensure
-   deterministic behaviour across hosts.
-3. Integration tests cover positive/negative cases for manifest acceptance,
-   policy enforcement, and error telemetry.
+.
+   идара итеү тәҡдимдәр ҡабул итеү алдынан конверттар.
+2. I18NT0000000003X һәм шлюз хеҙмәттәре ҡабаттан ҡулланыу шул уҡ валидация рутинаһы тәьмин итеү өсөн
+   хужалар араһында детерминистик тәртип.
+3. Интеграция һынауҙары асыҡ ҡабул итеү өсөн ыңғай/тиҫкәре осраҡтарҙы ҡаплай,
+   сәйәсәтте үтәү, һәм хата телеметрияһы.
 
-## Architecture
+## Архитектура
 
 ```mermaid
 flowchart LR
@@ -43,46 +44,46 @@ flowchart LR
     registry --> torii
 ```
 
-### Components
+### Компоненттар
 
-- `ManifestValidator` (new module in `sorafs_manifest` or `sorafs_pin` crate)
-  encapsulates structural checks and policy gates.
-- Torii exposes a gRPC endpoint `SubmitManifest` that calls into
-  `ManifestValidator` before forwarding to the contract.
-- Gateway fetch path optionally consumes the same validator when caching new
-  manifests from the registry.
+- I18NI000000014X (яңы модуль `sorafs_manifest` йәки `sorafs_pin` йәшниктә)
+  структур тикшерелеүҙәрҙе һәм сәйәсәт ҡапҡаларын капсулировать итә.
+- I18NT0000000005X gRPC ос нөктәһе I18NI000000017X асыҡлана, тип шылтырата
+  I18NI000000018X контрактҡа ебәрер алдынан.
+- Ҡапҡалар юл fetch юл теләк буйынса ҡулланыу шул уҡ валитатор ҡасан кэшлау яңы .
+  реестрҙан күренә.
 
-## Task Breakdown
+## Бурыс өҙөлгән
 
-| Task | Description | Owner | Status |
-|------|-------------|-------|--------|
-| V1 API skeleton | Add `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` to `sorafs_manifest`. Include BLAKE3 digest verification and chunker registry lookup. | Core Infra | ✅ Done | Shared helpers (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) now live in `sorafs_manifest::validation`. |
-| Policy wiring | Map registry policy config (`min_replicas`, expiry windows, allowed chunker handles) into validation inputs. | Governance / Core Infra | Pending — tracked in SORAFS-215 |
-| Torii integration | Call validator inside Torii manifest submission path; return structured Norito errors on failure. | Torii Team | Planned — tracked in SORAFS-216 |
-| Host contract stub | Ensure contract entrypoint rejects manifests that fail validation hash; expose metrics counters. | Smart Contract Team | ✅ Done | `RegisterPinManifest` now invokes the shared validator (`ensure_chunker_handle`/`ensure_pin_policy`) before mutating state and unit tests cover the failure cases. |
-| Tests | Add unit tests for validator + trybuild cases for invalid manifests; integration tests in `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 In progress | Validator unit tests landed alongside on-chain rejection tests; full integration suite still pending. |
-| Docs | Update `docs/source/sorafs_architecture_rfc.md` and `migration_roadmap.md` once validator lands; document CLI usage in `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | Pending — tracked in DOCS-489 |
+| Эш | Тасуирлама | Хужа | Статус |
+|-----|-------------|--------|--------|
+| V1 API скелеты | Өҫтәү I18NI000000019X I18NI000000020X тиклем. BLAKE3 үҙләштереү тикшерелгән һәм chunker реестр эҙләү индереү. | Ядро Инфра | ✅ Эш | Дөйөм ярҙамсылары (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) хәҙер `sorafs_manifest::validation`-та йәшәй. |
+| Сәйәсәт проводкаһы | Карта реестры сәйәсәте конфигы (`min_replicas`, срогы windows, рөхсәт итеүсе өлөшсәләр тотҡаһы) раҫлау индереүҙәр. | Идара итеү / Ядро Инфра | Сабыр — СОРАФС-215-тә күҙәтелгән |
+| I18NT000000006X интеграцияһы | Torii эсендә шылтыратыу валитаторы манифест тапшырыу юлы; ҡайтарыу структуралы I18NT000000000000Х хаталары тураһында етешһеҙлектәр. | Torii командаһы | Планлаштырылған — СОРАФС-216-ла күҙәтелә |
+| Хост контракт стаб | Килешеп инеү нөктәһен тәьмин итеү кире ҡаға, улар валидация хеш етешмәй; метрикаларҙы фашлай. | Аҡыллы килешәү командаһы | ✅ Эш | `RegisterPinManifest` хәҙер дөйөм валидаторҙы саҡыра (I18NI0000000027X/`ensure_pin_policy`) мутацияланған дәүләт һәм берәмек һынауҙары етешһеҙлектәре осраҡтарын ҡаплағансы. |
+| Һынауҙар | Өҫтәү өсөн берәмек һынауҙары өсөн валидатор + трибуна осраҡтар өсөн дөрөҫ булмаған манифесттар; интеграция һынауҙары I18NI000000029X. | QA Гильдия | 🟠 Алданы | Валидатор блогы һынауҙары сылбырлы кире ҡағыу һынауҙары менән бергә төшкән; тулы интеграция люкс һаман да көтөп. |
+| Доктар | Яңыртыу I18NI0000000300Х һәм I18NI000000031X бер тапҡыр валидатор ерҙәре; документ CLI ҡулланыу I18NI000000032X. | Доктар командаһы | Оҙата — DOCS-489-ҙа күҙәтелгән |
 
-## Dependencies
+##
 
-- Pin Registry Norito schema finalisation (ref: SF-4 item in roadmap).
-- Council-signed chunker registry envelopes (ensures validator mapping is
-  deterministic).
-- Torii authentication decisions for manifest submission.
+- Пин-концерт I18NT000000001X схемаһы финализацияһы (реф: SF-4 пункт юл картаһында).
+- Совет ҡултамғалы чанкер реестры конверттары (валитатор картаһы төҙөүҙе тәьмин итә
+  детерминистик).
+- Torii аутентификация ҡарарҙары өсөн асыҡ тапшырыу.
 
-## Risks & Mitigations
+## Хәүефтәр һәм йомшартыуҙар
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Divergent policy interpretation between Torii and contract | Non-deterministic acceptance. | Share validation crate + add integration tests that compare host vs on-chain decisions. |
-| Performance regression for large manifests | Slower submission | Benchmark via cargo criterion; consider caching manifest digest results. |
-| Error messaging drift | Operator confusion | Define Norito error codes; document them in `manifest_pipeline.md`. |
+| Хәүеф | Һөҙөмтә | Йомшартыу |
+|-----|--------|-------------|
+| Torii араһында дивергент сәйәсәт интерпретация һәм контракт | Детерминистик булмаған ҡабул итеү. | Акция раҫлау йәшник + өҫтәү интеграция һынауҙары, тип сағыштырырға хост vs сылбырлы ҡарарҙар. |
+| Ҙур манифестар өсөн башҡарыу регрессияһы | Яйыраҡ тапшырыу | Йөк критерийы аша эталон; Ҡарап кэшлау асыҡ һеңдерелгән һөҙөмтәләр. |
+| Хата хәбәрҙәр дрейф | Оператор буталсыҡлығы | Norito хата кодтарын билдәләү; уларҙы I18NI000000033X-та документлаштыра. |
 
-## Timeline Targets
+## Ваҡыт һыҙығы Маҡсаттар
 
-- Week 1: Land `ManifestValidator` skeleton + unit tests.
-- Week 2: Wire Torii submission path and update CLI to surfacing validation errors.
-- Week 3: Implement contract hooks, add integration tests, update docs.
-- Week 4: Run end-to-end rehearsal with migration ledger entry, capture council sign-off.
+- 1-се аҙна: ер I18NI000000034X скелет + блок һынауҙары.
+- 2-се аҙна: Wire I18NT000000011X тапшырыу юлы һәм CLI-ны валидациялау хаталарын өҫтөн ҡуйыу өсөн CLI-ны яңыртыу.
+- 3-сө аҙна: Ғәмәлгә ашырыу килешүе ҡармаҡтар, интеграция һынауҙары өҫтәү, docs яңыртыу.
+- 4-се аҙна: миграция баш китабына инеү, ҡулға алыу советы ҡул ҡуйыуы менән репетицияның аҙағынан аҙағына тиклем репетиция үткәреү.
 
-This plan will be referenced in the roadmap once the validator work begins.
+Был планға юл картаһында валидатор эше башланғас, һылтанма яһаласаҡ.

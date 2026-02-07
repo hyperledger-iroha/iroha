@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6c819c8d2a9517f1235a66a4661efd061a166ea89c953fd599e102b3cfd9157b
 source_last_modified: "2025-12-29T18:16:35.072254+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Invite (Template)
+# Docs порталын алдын ала қарау шақыруы (үлгі)
 
-Use this template when sending preview access instructions to reviewers. Replace
-the placeholders (`<...>`) with the relevant values, attach the descriptor +
-archive artefacts referenced in the message, and store the final text inside
-the corresponding intake ticket.
+Қарап шығушыларға алдын ала қарауға кіру нұсқауларын жіберген кезде осы үлгіні пайдаланыңыз. Ауыстыру
+тиісті мәндері бар толтырғыштарды (`<...>`), дескрипторды тіркеңіз +
+хабарламада сілтеме жасалған артефактілерді мұрағаттаңыз және соңғы мәтінді ішінде сақтаңыз
+сәйкес қабылдау билеті.
 
 ```text
 Subject: [DOCS-SORA] docs portal preview <preview_tag> invite for <reviewer/org>

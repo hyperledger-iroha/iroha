@@ -7,64 +7,65 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 06dcd662ffb2b22a13d9cd5418f5d2e8e64a4cdadb71a054488ce75b1eb96188
 source_last_modified: "2025-12-29T18:16:35.094764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNNet-10 Stage-Gate Report (T?_→T?_)
+# ཨེསི་ཨེན་ནེཊི་-༡༠ རིམ་པ་-གཱེཊི་སྙན་ཞུ་ (ཊི་?_→T?_)
 
-> Replace every placeholder (items in angle brackets) before submission. Keep
-> the section headers so governance automation can parse the file.
+> མ་བཙུགས་པའི་ཧེ་མར་ ས་གནས་འཛིན་མི་ཆ་མཉམ་ (ཟུར་ཁུག་གུག་ཤད་ནང་) ཚབ་བཙུགས། བཞག
+> དབྱེ་ཚན་མགོ་ཡིག་ཚུ་ དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་རང་བཞིན་གྱིས་ ཡིག་སྣོད་འདི་དབྱེ་དཔྱད་འབད་ཚུགས།
 
-## 1. Metadata
+## 1. མེ་ཏ་ཌེ་ཊ་
 
-| Field | Value |
-|-------|-------|
-| Promotion | `<T0→T1 or T1→T2>` |
-| Reporting window | `<YYYY-MM-DD → YYYY-MM-DD>` |
-| Relays in scope | `<count + IDs or “see appendix A”>` |
-| Primary contact | `<name/email/Matrix handle>` |
-| Submission archive | `<snnet10-stage-gate-YYYYMMDD.tar.zst>` |
-| Archive SHA-256 | `<sha256:...>` |
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| ཡར་འཕེལ་ | I18NI0000002X |
+| སྙན་ཞུའི་སྒོ་སྒྲིག་ | I18NI0000003X |
+| ཁྱབ་ཁོངས་ནང་ བསྐྱར་ལོག་འབད་ | I18NI0000004X |
+| གཞི་རིམ་འབྲེལ་བ་ | I18NI0000000X |
+| ཡིག་མཛོད་ཡིག་མཛོད་ | I18NI0000006X |
+| གཏན་མཛོད་ SHA-256 | `<sha256:...>` |
 
-## 2. Metrics summary
+## 2. མེ་ཊིག་བསྡུ་སྒྲིག།
 
-| Metric | Observed | Threshold | Pass? | Source |
-|--------|----------|-----------|-------|--------|
-| Circuit success ratio | `<0.000>` | ≥0.95 | ☐ / ☑ | `reports/metrics-report.json` |
-| Fetch brownout ratio | `<0.000>` | ≤0.01 | ☐ / ☑ | `reports/metrics-report.json` |
-| GAR mix variance | `<+0.0%>` | ≤±10% | ☐ / ☑ | `reports/metrics-report.json` |
-| PoW p95 seconds | `<0.0 s>` | ≤3 s | ☐ / ☑ | `telemetry/pow_window.json` |
-| Latency p95 | `<0 ms>` | <200 ms | ☐ / ☑ | `telemetry/latency_window.json` |
-| PQ ratio (avg) | `<0.00>` | ≥ target | ☐ / ☑ | `telemetry/pq_summary.json` |
+| མེ་ཊིག་ | བལྟ་རྟོག་འབད་ཡོདཔ། | ཐེརེ་ཤོལཌ | མཐར༌འཁྱོལ? | ཡོང་ཁུངས། |
+|----------------------------------------------------------------------------------------- |
+| གློག་རྒྱུན་མཐར་འཁྱོལ་ཆ་ཚད། | I18NI0000008X | ≥0.95 | ☐ / ☑ | I18NI0000009X |
+| ཕེཆ་བཱརའོན་ཨའུཊ་ཆ་ཚད་ | `<0.000>` | ≤0.01 | ☐ / ☑ | `reports/metrics-report.json` |
+| GAR བསྲེས་པའི་ཁྱད་པར་ | `<+0.0%>` | ≤±10% | ☐ / ☑ | `reports/metrics-report.json` |
+| POW p95 སྐར་ཆ་ | `<0.0 s>` | ≤3 s | ☐ / ☑ | `telemetry/pow_window.json` |
+| ལེ་ཊེན་ p95 | `<0 ms>` | <200 ms | ☐ / ☑ | `telemetry/latency_window.json` |
+| PQ ཆ་ཚད་ (avg) | `<0.00>` | ≥ དམིགས་ཚད། | ☐ / ☑ | `telemetry/pq_summary.json` |
 
-**Narrative:** `<summaries of anomalies, mitigations, overrides>`
+**རང་བརྗོད་:** I18NI0000020X
 
-## 3. Drill & incident log
+## 3. དྲིལ་དང་བྱུང་རྐྱེན་དྲན་ཐོ་།
 
-| Timestamp (UTC) | Region | Type | Alert ID | Mitigation summary |
+| དུས་ཚོད་མཚོན་རྟགས་ (ཡུ་ཊི་སི) | ས་ཁུངས། | དབྱེ་བ་ | དྲན་སྐུལ་ཨའི་ཌི་ | ཕབ་ལེན་བཅུད་བསྡུས། |
 |-----------------|--------|------|----------|--------------------|
-| `<YYYY-MM-DD HH:MM>` | `<region>` | `Brownout drill` | `<alert://...>` | `<restored anon-guard-pq in 3m12s>` |
+| I18NI0000021X | I18NI0000022X | I18NI0000023X | `<alert://...>` | I18NI0000025X |
 
-## 4. Attachments and hashes
+## 4. མཚན་མ་དང་ཧ་ཤེད།
 
-| Artefact | Path | SHA-256 |
-|----------|------|---------|
-| Metrics snapshot | `reports/metrics-window.json` | `<sha256>` |
-| Metrics report | `reports/metrics-report.json` | `<sha256>` |
-| Guard rotation transcripts | `evidence/guard_rotation/*.log` | `<sha256>` |
-| Exit bonding manifests | `evidence/exit_bonds/*.to` | `<sha256>` |
-| Drill logs | `evidence/drills/*.md` | `<sha256>` |
-| MASQUE readiness (T1→T2) | `reports/masque-readiness.md` | `<sha256 or n/a>` |
-| Rollback plan (T1→T2) | `reports/downgrade_plan.md` | `<sha256 or n/a>` |
+| ཅ་ཆས། | ལམ། SHA-256 |
+|------------------------------------- |
+| མེ་ཊིགསི་གི་པར་རིས། | `reports/metrics-window.json` | I18NI0000027X |
+| མེ་ཊིགསི་སྙན་ཞུ། | I18NI0000028X | I18NI0000029X |
+| བསྒྱིར་བའི་ཡིག་ཆ་ཚུ་ | `evidence/guard_rotation/*.log` | I18NI0000031X |
+| ཐོན་འབྲས་མཐུད་སྦྱོར་གྱི་མངོན་གསལ་ | I18NI0000032X | I18NI0000033X |
+| ཌིརིལ་དྲན་ཐོ་ཚུ་ | I18NI0000034X | `<sha256>` |
+| MASQUE གྲ་སྒྲིག་ (T1→T2) | `reports/masque-readiness.md` | `<sha256 or n/a>` |
+| བསྐོར་རྒྱབ་འཆར་གཞི་ (ཊི་༡→ཊི་༢) | `reports/downgrade_plan.md` | I18NI0000039X |
 
-## 5. Approvals
+## 5. ཆ་འཇོག།
 
-| Role | Name | Signed (Y/N) | Notes |
-|------|------|--------------|-------|
-| Networking TL | `<name>` | ☐ / ☑ | `<comments>` |
-| Governance rep | `<name>` | ☐ / ☑ | `<comments>` |
-| SRE delegate | `<name>` | ☐ / ☑ | `<comments>` |
+| འགན་ཁུར་ | མིང | མཚན་རྟགས་ (Y/N) | དྲན་ཐོ། |
+|--|-|--------------------------------------------- |
+| ཡོངས་འབྲེལ་ TL | I18NI0000040X | ☐ / ☑ | I18NI0000041X |
+| གཞུང་སྐྱོང་ ངོ་ | I18NI0000042X | ☐ / ☑ | I18NI0000043X |
+| SRE འཐུས་མི་ | I18NI0000044X | ☐ / ☑ | `<comments>` |
 
-## Appendix A — Relay roster
+## ཟུར་དེབ་ཀ་ — རི་ལེ་ཐོ་སི་
 
 ```
 - relay-id-001 (AS64496, region=SJC)
@@ -72,7 +73,7 @@ translation_last_reviewed: 2026-02-07
 ...
 ```
 
-## Appendix B — Incident summaries
+## ཟུར་དེབ་ ཁ་ — འབོད་ཚིག་བཅུད་བསྡུས།
 
 ```
 <Detailed context for any incidents or overrides referenced above.>

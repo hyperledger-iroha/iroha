@@ -4,50 +4,48 @@ direction: rtl
 source: docs/portal/docs/sorafs/runbooks-index.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: runbooks-index
-title: Índice de runbooks de operadores
-sidebar_label: Índice de runbooks
-description: Ponto de entrada canônico para os runbooks de operadores do SoraFS migrados.
+المعرف: فهرس كتب التشغيل
+العنوان: دليل التشغيل للمشغلين
+Sidebar_label: دليل التشغيل
+الوصف: نقطة الإدخال الكنسي لمشغلي التشغيل SoraFS migrados.
 ---
 
-> Reflete o registro de responsáveis que fica em `docs/source/sorafs/runbooks/`.
-> Cada novo guia de operações do SoraFS deve ser vinculado aqui assim que for publicado no
-> build do portal.
+> قم بإعادة كتابة سجل الاستجابة الموجود في `docs/source/sorafs/runbooks/`.
+> يجب أن يتم هزيمة كل دليل عمليات SoraFS الجديد هنا كما لم يتم نشره
+> بناء البوابة.
 
-Use esta página para verificar quais runbooks concluíram a migração da árvore de docs
-alternativa para o portal. Cada entrada lista a responsabilidade, o caminho de origem canônico
-e a cópia no portal para que revisores possam ir direto ao guia desejado durante a prévia beta.
+استخدم هذه الصفحة للتحقق من انتهاء دفاتر التشغيل من عملية ترحيل المستندات
+بدائل للبوابة. كل قائمة بالمسؤولية، أو الطريق الكنسي الأصلي
+ونسخة على البوابة حتى تتمكن المراجعات من توجيهها إلى الدليل المطلوب أثناء الإصدار التجريبي السابق.
 
-## Host de prévia beta
+## مضيف النسخة التجريبية
 
-A onda DocOps já promoveu o host de prévia beta aprovado pelos revisores em
-`https://docs.iroha.tech/`. Ao direcionar operadores ou revisores para um runbook migrado,
-referencie esse hostname para que usem o snapshot do portal protegido por checksum.
-Os procedimentos de publicação/rollback estão em
-[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
-
-| Runbook | Responsável(is) | Cópia no portal | Fonte |
+عند قيامك بترقية DocOps إلى المضيف التجريبي السابق، وافق على بعض المراجعات فيه
+`https://docs.iroha.tech/`. لتوجيه المشغلين أو المراجعين لترحيل دليل التشغيل،
+قم بالإشارة إلى اسم المضيف لاستخدام لقطة البوابة المحمية من خلال المجموع الاختباري.
+إجراءات النشر/التراجع موجودة
+[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).| كتاب التشغيل | الرد(هو) | نسخة بدون بوابة | فونتي |
 |---------|-----------------|-----------------|-------|
-| Kickoff de gateway e DNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| Playbook de operações do SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Reconciliação de capacidade | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Operações do registro de pins | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Checklist de operações de nó | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Runbook de disputas e revogações | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Playbook de manifesto de staging | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Observabilidade da âncora Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| بداية البوابة الإلكترونية DNS | الشبكات TL، أتمتة العمليات، Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| دليل العمليات الخاص بـ SoraFS | مستندات/ديفريل | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| تسوية القدرات | الخزانة / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| عمليات تسجيل الدبابيس | الأدوات مجموعة العمل | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| قائمة التحقق من عمليات عدم | فريق التخزين، SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| Runbook de Disputas e Revogações | مجلس الحكم | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| كتاب اللعب من بيان التدريج | مستندات/ديفريل | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| إمكانية ملاحظة رقبة Taikai | منصة الوسائط WG / برنامج DA / الشبكات TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Checklist de verificação
+## قائمة التحقق
 
-- [x] A build do portal aponta para este índice (entrada na barra lateral).
-- [x] Cada runbook migrado lista o caminho de origem canônico para manter os revisores
-  alinhados durante as revisões de documentação.
-- [x] O pipeline de prévia do DocOps bloqueia merges quando um runbook listado estiver
-  ausente da saída do portal.
-
-Migrações futuras (por exemplo, novas simulações de caos ou apêndices de governança) devem
-adicionar uma linha à tabela acima e atualizar a checklist do DocOps embutida em
+- [x] بناء البوابة aponta para este índice (مدخل إلى الشريط الجانبي).
+- [x] كل دليل تشغيل يقوم بتغيير القائمة أو المسار الأصلي الكنسي لإدارة المراجعات
+  يتم الاحتفاظ بها طوال فترة مراجعة المستندات.
+- [x] يتم دمج خط الأنابيب السابق لحظر DocOps عند وجود دليل تشغيل مدرج
+  ausente da saída do port.الهجرة المستقبلية (على سبيل المثال، محاكاة جديدة للجزر أو ملحقات الحكم) هي
+إضافة خط إلى اللوحة الأخيرة وتحديث قائمة مرجعية لـ DocOps المُدمجة فيها
 `docs/examples/docs_preview_request_template.md`.

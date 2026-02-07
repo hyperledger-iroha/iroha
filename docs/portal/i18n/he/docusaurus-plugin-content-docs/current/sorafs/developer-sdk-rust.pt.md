@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-sdk-rust.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: developer-sdk-rust
-title: Snippets de SDK Rust
+כותרת: Snippets de SDK Rust
 sidebar_label: Snippets de Rust
-description: Exemplos Rust minimos para consumir proof streams e manifests.
+תיאור: דוגמאות Rust minimos para consumir הוכחה זרמים e manifests.
 ---
 
-:::note Fonte canonica
+:::שים לב Fonte canonica
 Esta pagina espelha `docs/source/sorafs/developer/sdk/rust.md`. Mantenha ambas as copias sincronizadas.
 :::
 
-Os crates Rust neste repositorio alimentam o CLI e podem ser embutidos em
+Os ארגזים Rust neste repositorio alimentam o CLI e podem ser embutidos em
 orquestradores ou servicos customizados. Os snippets abaixo destacam os helpers que
 mais aparecem nas solicitacoes dos desenvolvedores.
 
-## Helper de proof stream
+## זרם עוזר הוכחה
 
-Reutilize o parser de proof stream existente para agregar metricas de uma resposta HTTP:
+השתמש מחדש ב-Perser de proof stream existente ל-Agregar Metricas de Uma Resposta HTTP:
 
 ```rust
 use std::error::Error;
@@ -65,46 +67,46 @@ A versao completa (com testes) vive em `docs/examples/sorafs_rust_proof_stream.r
 `ProofStreamSummary::to_json()` renderiza o mesmo JSON de metricas do CLI, facilitando
 alimentar backends de observabilidade ou assertions de CI.
 
-## Scoring de fetch multi-source
+## ניקוד אחזר ריבוי מקורות
 
-O modulo `sorafs_car::multi_fetch` expoe o scheduler de fetch assincrono usado pelo
-CLI. Implemente `sorafs_car::multi_fetch::ScorePolicy` e passe via
+O modulo `sorafs_car::multi_fetch` אקספו או מתזמן להביא assincrono ארה"ב
+CLI. יישם את `sorafs_car::multi_fetch::ScorePolicy` ועבור
 `FetchOptions::score_policy` para ajustar a ordenacao de provedores. O teste unitario
-`multi_fetch::tests::score_policy_can_filter_providers` mostra como impor preferencias
-customizadas.
+`multi_fetch::tests::score_policy_can_filter_providers` כמו גם העדפות חשובות
+התאמה אישית.
 
-Outros knobs espelham flags do CLI:
+Outros מכוון את דגלי espelham ל-CLI:
 
 - `FetchOptions::per_chunk_retry_limit` corresponde ao flag `--retry-budget` para runs
   de CI que restringem tentativas propositalmente.
-- Combine `FetchOptions::global_parallel_limit` com `--max-peers` para limitar o numero
+- Combine `FetchOptions::global_parallel_limit` com `--max-peers` למספר מוגבל או מספריים
   de provedores concorrentes.
-- `OrchestratorConfig::with_telemetry_region("region")` marca as metricas
+- `OrchestratorConfig::with_telemetry_region("region")` סמן כמדדים
   `sorafs_orchestrator_*`, enquanto `OrchestratorConfig::with_transport_policy` espelha
-  o flag CLI `--transport-policy`. `TransportPolicy::SoranetPreferred` e o default nas
-  superficies CLI/SDK; use `TransportPolicy::DirectOnly` apenas ao preparar um downgrade
-  ou seguir uma diretiva de compliance, e reserve `SoranetStrict` para pilotos PQ-only
+  o דגל CLI `--transport-policy`. `TransportPolicy::SoranetPreferred` או ברירת מחדל
+  superficies CLI/SDK; השתמש ב-`TransportPolicy::DirectOnly` אפנים או הכנה לשדרוג לאחור
+  או להגדיר אומה הנחיות לציות, e Reserve `SoranetStrict` עבור פיילוט PQ בלבד
   com aprovacao explicita.
 - Defina `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` para forcar uploads PQ-only; o helper promove
+  Some(WriteModeHint::UploadPqOnly)` para forcar העלאות PQ-only; o עוזר לקדם
   automaticamente as politicas de transporte/anonymity a menos que sejam explicitamente
   sobrescritas.
-- Use `SorafsGatewayFetchOptions::policy_override` para fixar um tier temporario de
+- השתמש ב-`SorafsGatewayFetchOptions::policy_override` para fixar um tier temporario de
   transporte ou anonimato para um unico request; fornecer qualquer um dos campos pula
-  o brownout demotion e falha quando o tier solicitado nao pode ser atendido.
-- Os bindings Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) e
-  JavaScript (`sorafsMultiFetchLocal`) reutilizam o mesmo scheduler, entao defina
+  o הורדה בראייה e falha quando o tier solicitado nao pode ser atendido.
+- כריכות מערכת הפעלה Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) e
+  JavaScript (`sorafsMultiFetchLocal`) מחדש או מתזמן mesmo, entao defina
   `return_scoreboard=true` nesses helpers para recuperar os pesos calculados junto com
-  chunk receipts.
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` registra o stream OTLP que
-  produziu um adoption bundle. Quando omitido, o cliente deriva automaticamente
-  `region:<telemetry_region>` (ou `chain:<chain_id>`) para que o metadata sempre
+  חתיכות קבלות.
+- `SorafsGatewayScoreboardOptions::telemetry_source_label` רישום או זרם OTLP que
+  חבילת אימוץ. Quando omitido, o cliente deriva automaticamente
+  `region:<telemetry_region>` (ou `chain:<chain_id>`) עבור מטא נתונים סמפר
   carregue um rotulo descritivo.
 
-## Fetch via `iroha::Client`
+## אחזור דרך `iroha::Client`
 
-O SDK Rust inclui o helper de gateway fetch; forneca um manifest mais descritores de
-provedores (incluindo stream tokens) e deixe o cliente conduzir o fetch multi-source:
+O SDK Rust כולל עוזר לשער אחזור; forneca um manifest mais decritores de
+הוכחות (כולל אסימוני זרם) או שירות לקוחות או אחזור מקורות מרובים:
 
 ```rust
 use eyre::Result;
@@ -151,25 +153,23 @@ pub async fn fetch_payload(
         .await?;
     Ok(outcome.assemble_payload())
 }
-```
-
-Defina `transport_policy` como `Some(TransportPolicy::SoranetStrict)` quando uploads
+```Defina `transport_policy` como `Some(TransportPolicy::SoranetStrict)` quando העלאות
 precisarem recusar relays classicos, ou `Some(TransportPolicy::DirectOnly)` quando
-SoraNet precisar ser totalmente bypassada. Aponte `scoreboard.persist_path` para o
-diretorio de artefatos de release, opcionalmente fixe `scoreboard.now_unix_secs` e preencha
-`scoreboard.metadata` com contexto de captura (labels de fixtures, alvo Torii, etc.)
-para que `cargo xtask sorafs-adoption-check` consuma JSON deterministico entre SDKs
+SoraNet סרגל מעקף מוחלט. Aponte `scoreboard.persist_path` para o
+מדריך לשחרור אמנות, תיקון אופציונלי `scoreboard.now_unix_secs` e preencha
+`scoreboard.metadata` com contexto de captura (תוויות מתקנים, alvo Torii וכו')
+para que `cargo xtask sorafs-adoption-check` צרכני SDK של JSON מוגדרים
 com o blob de provenance que SF-6c espera.
 `Client::sorafs_fetch_via_gateway` agora aumenta esse metadata com o identificador de
-manifest, a expectativa opcional de manifest CID e o flag `gateway_manifest_provided`
+מניפסט, ציפייה אופציונלית למניפסט CID e o flag `gateway_manifest_provided`
 inspecionando o `GatewayFetchConfig` fornecido, para que capturas que incluem um
-manifest envelope assinado atendam ao requisito de evidencia SF-6c sem duplicar esses
+מעטפת מניפסט assinado atendam ao requisito de evidencia SF-6c sem duplicar esses
 campos manualmente.
 
-## Helpers de manifest
+## עוזרי המניפסט
 
-`ManifestBuilder` continua sendo a forma canonica de montar payloads Norito de forma
-programatica:
+`ManifestBuilder` ממשיך לשלוח פורמה קנוניקה דה מונטאר מטענים Norito דה פורמה
+פרומטיקה:
 
 ```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
@@ -186,5 +186,5 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
 }
 ```
 
-Incorpore o builder sempre que servicos precisarem gerar manifests em tempo real; o
+Incorpore o Builder semper que servicos precisarem gerar manifests em tempo real; o
 CLI segue sendo o caminho recomendado para pipelines deterministicos.

@@ -6,71 +6,73 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page captures the ADDR-6c documentation deliverable. Apply these
-constraints to wallets, explorers, SDK tooling, and any portal surface that
-renders or accepts human-facing addresses. The canonical data model lives in
-`docs/account_structure.md`; the checklist below explains how to expose those
-formats without compromising safety or accessibility.
+Был биттә ADDR-6c документация тапшырыла ала. Был ҡулланыу .
+сроктары янсыҡтар, тикшеренүселәр, SDK инструменттары, һәм теләһә ниндәй порталь өҫтө, тип
+кеше менән осрашҡан адрестарҙы күрһәтә йәки ҡабул итә. Каноник мәғлүмәттәр моделе 2019 йылда йәшәй.
+`docs/account_structure.md`; түбәндәге тикшерелгән исемлек аңлата, нисек уларҙы фашлау
+форматтары хәүефһеҙлек йәки мөмкинлектәрҙе боҙмайынса.
 
-## Safe sharing flows
+## Хәүефһеҙ бүлешергә ағымдар
 
-- Default every copy/share action to the IH58 address. Display the resolved
-  domain as supporting context so the checksummed string stays front and centre.
-- Offer a “Share” affordance that bundles the full plain-text address and a QR
-  code derived from the same payload. Let users inspect both before committing.
-- When space requires truncation (tiny cards, notifications), keep the leading
-  human-readable prefix, show ellipses, and retain the final 4–6 characters so
-  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
-  string without truncation.
-- Prevent clipboard desync by emitting a confirmation toast that previews the
-  exact IH58 string that was copied. Where telemetry is available, count copy
-  attempts versus share actions so UX regressions surface quickly.
+- IH58 адресы буйынса һәр күсермә/акция ғәмәлдәре тураһында ғәҙәттән тыш хәл. Хәл ителгән хәлде күрһәтеү
+  домен ярҙамсы контекст булараҡ, шулай итеп, тикшерелгән йыйыла струнный ҡала алғы һәм үҙәк.
+- Тәҡдим “Предприятие” affordance, тип өйөлә тулы ябай текст адресы һәм QR .
+  код шул уҡ файҙалы йөктән алынған. Ҡулланыусыларҙы тикшерергә рөхсәт итегеҙ, ә һуңынан ҡылғансы.
+- Ҡасан урын ҡыҫҡартыу талап итә (бәләкәй генә карталар, хәбәрҙәр), етәксе һаҡлау
+  кеше менән уҡыла торған префикс, эллипс күрһәтеү, һәм һуңғы 4–6 символдарҙы һаҡлап ҡала
+  тикшерелгән сумма якорь иҫән ҡала. Кран/клавиатура ярлыҡ тәьмин итеү өсөн тулы күсермә
+  ҡыҫҡартыуһыҙ еп.
+- Һеҙҙең был һүҙҙәрҙе алдан ҡарау, тип раҫлау тост сығарыу, тип иҫкәртергә буфер десинх.
+  теүәл IH58 еп, тип күсерелгән. Ҡайҙа телеметрия, иҫәп күсермәһе .
+  тырышлыҡ ҡаршы ғәмәлдәр менән бүлешергә шулай UX регрессиялар тиҙ өҫтө.
 
-## IME & input safeguards
+## IME & инеү һаҡлау саралары
 
-- Reject non-ASCII input in address fields. When IME composition artefacts (full
-  width, Kana, tone marks) appear, surface an inline warning that explains how
-  to switch the keyboard to Latin input before retrying.
-- Provide a plain-text paste zone that strips combining marks and replaces
-  whitespace with ASCII spaces before validation. This keeps users from losing
-  progress when they disable their IME mid-flow.
-- Harden validation against zero-width joiners, variation selectors, and other
-  stealth Unicode code points. Log the rejected code point category so fuzzing
-  suites can import the telemetry.
+- ASCII булмаған индереү адрес ҡырҙарында кире ҡағыу. Ҡасан IME композиция артефакттары (тулы
+  киңлеге, Кана, тон билдәләре) барлыҡҡа килә, өҫкө рәт иҫкәрткән, тип аңлата, нисек
+  клавиатураны латин индереүгә күсерергә кәрәк, ҡабаттан эшләү алдынан.
+- Ябай текст пастаһы зонаһын бирегеҙ, ул билдәләрҙе берләштерә һәм алмаштыра
+  ASCII киңлектәр менән аҡ майҙанды раҫлау алдынан. Был ҡулланыусыларҙы юғалтыуҙан һаҡлай
+  прогресс, улар үҙҙәренең ММЭ урта ағымын өҙөү.
+- нуль киңлектәге данлаусылар, вариация селекторҙары һәм башҡаларға ҡаршы ҡаты раҫлау
+  стелт Юникод код мәрәйҙәре. Инжир кире ҡағылған код нөктәһе категорияһы шулай fuzzing
+  люкс телеметрияны импортлай ала.
 
-## Assistive technology expectations
+## Технологиялар ярҙамы өмөттәре
 
-- Annotate every address block with `aria-label` or `aria-describedby` that
-  spells out the human-readable prefix and chunks the payload in 4–8 character
-  groups (“ih dash b three two …”). This stops screen readers from producing an
-  unintelligible stream of characters.
-- Announce successful copy/share events via a polite live region update. Include
-  the destination (clipboard, share sheet, QR) so the user knows the action
-  completed without moving focus.
-- Supply descriptive `alt` text for QR previews (e.g., “IH58 address for
-  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
-  fallback adjacent to the QR canvas for low-vision users.
+- Аннотация һәр адрес блогы менән I18NI0000000003X йәки I18NI000000004X тип
+  1990 йылдарҙа был йүнәлештәге эштәрҙең 4–8 символында файҙалы йөктө өлөштәр индерә.
+  төркөмдәре (“ih һыҙыҡ б өс ике ...”). Был экран уҡыусыларҙы етештереүҙән туҡтата
+  аңлашылмаған персонаждар ағымы.
+- Уңышлы күсермәһе/акцияларҙы әҙәпле йәшәй төбәк яңыртыу аша иғлан итегеҙ. Индерергә
+  тәғәйенләнеше (будка, бүлешергә, лит, QR) шулай ҡулланыусы ғәмәлде белә
+  күсерелгән фокусһыҙ тамамланды.
+- QR алдан ҡарауҙары өсөн тәҡдим ителгән `alt` тексты (мәҫәлән, “IH58 адресы өсөн
+  I18NI000000006X селтәрендә I18NI000000007X”) “Текст булараҡ күсермә адресы” бирегеҙ.
+  QR полотноһына эргәләге fallback түбән күренеш ҡулланыусылар өсөн.
 
-## Sora-only compressed addresses
+## Сора-тик ҡыҫылған адрестар
 
-- Gating: hide the `sora…` compressed string behind an explicit confirmation.
-  The confirmation must reiterate that the form only works on Sora Nexus chains.
-- Labelling: every occurrence must include a visible “Sora-only” badge and a
-  tooltip describing why other networks require the IH58 form.
-- Guardrails: if the active chain discriminant is not the Nexus allocation,
-  refuse to generate the compressed address entirely and direct the user back to
+- Ҡапҡа: йәшерергә I18NI000000008X ҡыҫылған еп артында асыҡ раҫлау.
+  Раҫлау ҡабатларға тейеш, тип форма ғына эшләй Sora I18NT00000000000X сылбырҙары.
+- Ярлыҡ: һәр осраҡ күренеп торған “Сора-тик” значогы һәм а үҙ эсенә алырға тейеш.
+  ни өсөн башҡа селтәрҙәр IH58 формаһын талап итә, тип һүрәтләй.
+- Гвардия: әгәр әүҙем сылбыр дискриминант түгел I18NT000000001X бүленә,
+  ҡыҫылған адресты тулыһынса генерациялауҙан баш тарта һәм ҡулланыусыға кире йүнәлтергә
   IH58.
-- Telemetry: record how often the compressed form is requested and copied so the
-  incident playbook can detect accidental sharing spikes.
+- Телеметрия: яҙып алығыҙ, ни тиклем йыш ҡына ҡыҫылған форма һорала һәм күсерелгән, шулай итеп,
+  инцидент playbook асыҡлай ала осраҡлы бүлешеп шпилька.
 
-## Quality gates
+## Сифат ҡапҡалары
 
-- Extend automated UI tests (or storybook a11y suites) to assert that address
-  components expose the required ARIA metadata and that IME rejection messages
-  appear.
-- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
-  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
-- Surface these checks in release checklists alongside the IH58 parity tests
-  so regressions remain blocked until corrected.
+- Автоматлаштырылған UI һынауҙары (йәки хикәйәләр китабы a11y люкс) был адресты раҫлау өсөн
+  компоненттар кәрәкле АРИА метамағлүмәттәрен фашлай һәм был IME кире ҡағыу хәбәрҙәре
+  күренергә.
+- Ҡул менән QA сценарийҙарын индереү өсөн IME индереү (кана, пиньин), экран уҡыусы үткән .
+  (VoiceOver/NVDA), һәм QR күсермәһе юғары контраст темалары өҫтөндә сығарыу алдынан.
+- Был тикшерелеүҙәрҙе IH58 паритет һынауҙары менән бер рәттән сығарыу тикшерелгән исемлектәрҙә ер өҫтө .
+  шуға күрә регрессиялар төҙәтелгәнсе блоклана.

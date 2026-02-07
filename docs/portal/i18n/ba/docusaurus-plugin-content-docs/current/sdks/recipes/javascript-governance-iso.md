@@ -7,25 +7,27 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+импорт SapleDownload '@site/src/компоненттар/SampleDownload';
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+Был рецепт өйөмдәре ике алдынғы эш ағымы JS5 юл картаһында саҡырылған
+әйберҙәр: идара итеү ярҙамсылары (тәҡдимдәр, бюллетендәр, совет снимоктары)
+һәм ISO 20022 күпер аша үткән (pacs.008/pacs.009). Һәр өлгө эшләй
+ҡаршы баҫылған I18NI000000010X пакетына ҡаршы һәм 2012 йылда өҙөктәрҙе көҙгөләй.
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## Идара итеү ярҙамсыһы өлгөһө
 
-<SampleDownload
-  href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+<СэмплДау-лог
+  href="/sdk-рецепттары/жаваскрипт/идара итеү.мжс".
+  файл исеме="идара итеү.мжс".
+  был рецептта һылтанма яһалған идара итеү ярҙамсыһын скачать.
 />
 
-### Prerequisites
+### Алдан шарттар
 
 ```bash
 npm install @iroha/iroha-js
@@ -39,10 +41,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+Ҡул ҡуйылған операцияларҙы I18NT000000001X һәм
+`GOV_FETCH=1` тикшерелгәндән һуң һөҙөмтәлә идара итеү дәүләтен тикшерергә.
 
-### Example script
+### Миҫал сценарийы
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -222,26 +224,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Йүгерергә & монитор
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
+- `node governance.mjs` башҡарырға хештар ғына генерациялау өсөн. Өҫтәү I18NI000000015X .
+  операцияларҙы I18NT000000003X һәм I18NI0000000016X тиклем тере идара итеү дәүләтенә теркәргә
+  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, һәм
   `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- CI журналдарында детерминистик хештарҙы тотоу; һәр аҙым ҡултамғалы байт баҫтыра
+  оҙонлоғо плюс ҡабаттан иҫәпләнгән хеш ҡасан опциональ туған ярҙамсы бар.
+- Беркетергә консоль етештереү идара итеү тикшерелгән пакеттар, шулай итеп, аудиторҙар эҙләй ала
+  тәҡдим / референдум идентификаторҙары кире ҡабатлана CLI дәлилдәре.
 
-## ISO bridge sample
+## ISO күпер өлгөһө
 
-<SampleDownload
-  href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+<СэмплДау-лог
+  href="/sdk-рецепттар/javascript/изо-күпер.мж".
+  файл исеме="изо-күпер".
+  20022 был рецептта һылтанма яһалған ISO 20022 ярҙамсыһын скачать.
 />
 
-### Prerequisites
+### Алдан шарттар
 
 ```bash
 npm install @iroha/iroha-js
@@ -253,11 +255,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+`ISO_MESSAGE_ID` комплекты ҡасан һеҙ теләйһегеҙ, тип үткәрергә һәм тик һорау алыу билдәле
+идентификаторы. Ҡулланыу I18NI0000000022X, күпер билдәләре менән сығыу өсөн сығыу өсөн
+инеү I18NI000000023X хатта әгәр ҙә транзакция хеш әлегә тиклем финаллаштырылған.
 
-### Example script
+### Миҫал сценарийы
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -357,22 +359,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Йүгерергә & монитор
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- Өлгө файҙалы йөк тапшырыу өсөн `node iso-bridge.mjs` башҡарырға. Йыйылма
+  I18NI000000025X PvP ағымын йәки `ISO_MESSAGE_ID` XX .
+  һорау алыу, ғәмәлдәге тапшырыу, уны ҡабаттан ҡуймайынса.
+- Ярҙам һәр һорау алыу маташыуын I18NI000000027X аша теркәй, был еңел генә .
+  ҡабул итеү ваҡыт һыҙыҡтарын тотоу CI журналдарында.
+- Һуңғы статусын беркетергә + транзакция хеш ISO күпер runbooks шулай аудиторҙар
+  эҙләү мөмкин pacs.008/pacs.009 тапшырыуҙар кире ҡабатланған файҙалы йөкләмәләр, тип
+  JS5 юл картаһы тапшырыу талап итә.
 
-## Offline allowances & transfers
+## офлайн пособиелар & күсермәләр
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+I18NI0000000028X суднолары шул уҡ пособие/трансфер ярҙамсылары һылтанма һылтанма 2019.
+офлайн юл картаһы рәттәре. Уларҙы ҡулланыу өсөн тикшерергә интеграция сәйәсәте (маркер асҡысы, Уйын .
+Бөтөнлөк, HMS хәүефһеҙлек асыҡлау, тәьмин ителгән) сей метамағлүмәттәрҙе анализламайынса:
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -398,21 +400,21 @@ node -e '
     console.log(entry.bundle_id_hex, entry.integrity_metadata?.policy ?? "<unknown>", manifest);
   }
 '
-```
+``` X
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+Ҡасан I18NT0000000004X хәбәр итеүенсә, пособие пособие инспектор асыҡ асҡыс, нәфис
+схема, факультатив версия, TTL, һәм үҙләштереү менән тура эфирҙа
+I18NI000000029X, был кәрәкле беркетергә тривиаль.
+метамағлүмәттәр OA10.3 дәлилдәр пакеттары.
 
-## Next steps
+## Киләһе аҙымдар
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+— I18NI0000000300X һәм 1990 й.
+  I18NI0000000031X киңәйтелгән миҫалдар өсөн (күпсе-сиг
+  бюллетендәре, совет ВРФ сығарылыш, ҡабаттан эшләп торған сәйәсәт).
+- I18NT00000000000000-1200 йылда документацияны ҡабатлау.
+  I18NI00000032Х һәм
+  I18NI0000000033X канон яланы өсөн
+  карталар был ярҙамсылар тарафынан һылтанма яһай.
+- Ҡабул итеү бүрәнәләр йүгерә һәм уларҙы идара итеүгә беркетергә / ISO раҫлауҙары ҡәнәғәтләндерергә
+  JS5 “документация + нәшриәт” талап һылтанма I18NI000000034X.

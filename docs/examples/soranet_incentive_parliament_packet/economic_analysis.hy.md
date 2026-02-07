@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b453559c05401edc11894e585c8d5ca4b678d4667c1cef0415582e1f7de8246
 source_last_modified: "2025-12-29T18:16:35.087502+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Economic Analysis - 2025-10 -> 2025-11 Shadow Run
+# Տնտեսական վերլուծություն - 2025-10 -> 2025-11 Shadow Run
 
-Source artefact: `docs/examples/soranet_incentive_shadow_run.json` (signature +
-public key in the same directory). The simulation replayed 60 epochs per relay
-with the reward engine pinned to `RewardConfig` recorded in
+Աղբյուրի արտեֆակտ՝ `docs/examples/soranet_incentive_shadow_run.json` (ստորագրություն +
+հանրային բանալին նույն գրացուցակում): Սիմուլյացիան կրկնել է 60 դարաշրջան մեկ ռելեի համար
+պարգևատրման շարժիչով, որը ամրացված է `RewardConfig`-ին, գրանցված է
 `reward_config.json`.
 
-## Distribution Summary
+## Բաշխման ամփոփագիր
 
-- **Total payouts:** 5,160 XOR over 360 rewarded epochs.
-- **Fairness envelope:** Gini coefficient 0.121; top relay share 23.26%
-  (well below the 30% governance guardrail).
-- **Availability:** fleet average 96.97%, all relays remained above 94%.
-- **Bandwidth:** fleet average 91.20%, with the lowest performer at 87.23%
-  during planned maintenance; penalties were applied automatically.
-- **Compliance noise:** 9 warning epochs and 3 suspensions were observed and
-  translated into payout reductions; no relay exceeded the 12-warning cap.
-- **Operational hygiene:** no metrics snapshots were skipped due to missing
-  config, bonds, or duplicates; no calculator errors were emitted.
+- **Ընդհանուր վճարումներ.** 5,160 XOR 360 պարգևատրված դարաշրջանների ընթացքում:
+- **Արդարության ծրար:** Ջինիի գործակիցը 0,121; վերին ռելեի մասնաբաժինը 23,26%
+  (կառավարման 30%-անոց բազկաթոռից շատ ցածր):
+- **Հասանելիություն.** նավատորմի միջինը 96,97%, բոլոր ռելեները մնացել են 94% -ից բարձր:
+- **Թողունակություն.** նավատորմի միջինը 91,20%, ամենացածր կատարողականով` 87,23%
+  պլանավորված պահպանման ժամանակ; տույժերը կիրառվել են ինքնաբերաբար.
+- **Համապատասխանության աղմուկ.** Դիտարկվել են 9 նախազգուշական դարաշրջաններ և 3 կասեցումներ և
+  թարգմանվել է վճարումների կրճատման; ոչ մի ռելե չի գերազանցել 12 նախազգուշացնող գլխարկը:
+- **Օպերատիվ հիգիենա.** չափման նկարներ բաց չեն թողնվել բացակայելու պատճառով
+  կոնֆիգուրացիա, պարտատոմսեր կամ կրկնօրինակներ; հաշվիչի սխալներ չեն արձակվել:
 
-## Observations
+## Դիտարկումներ
 
-- Suspensions correspond to epochs where relays entered maintenance mode. The
-  payout engine emitted zero payouts for those epochs while preserving the
-  audit trail in the shadow-run JSON.
-- Warning penalties shaved 2% off the affected payouts; the resulting
-  distribution still converges thanks to the uptime/bandwidth weights (650/350
-  per mille).
-- Bandwidth variance tracks the anonymised guard heatmap. The lowest performer
-  (`6666...6666`) retained 620 XOR across the window, above the 0.6x floor.
-- Latency-sensitive alerts (`SoranetRelayLatencySpike`) remained below warning
-  thresholds throughout the window; correlated dashboards are captured under
+- Կախոցները համապատասխանում են այն դարաշրջաններին, որտեղ ռելեները մտել են սպասարկման ռեժիմ: Այն
+  վճարման շարժիչը թողարկել է զրոյական վճարումներ այդ դարաշրջանների համար՝ պահպանելով այն
+  աուդիտի հետք ստվերային JSON-ում:
+- Նախազգուշացման տույժերը սափրվել են ազդակիր վճարումների 2%-ով; ստացվածը
+  բաշխումը դեռևս համախմբվում է ժամանակի/թողունակության կշիռների շնորհիվ (650/350
+  մեկ մղոն):
+- Թողունակության շեղումը հետևում է անանուն պահակային ջերմային քարտեզին: Ամենացածր կատարողը
+  (`6666...6666`) 620 XOR պահեց պատուհանի երկայնքով, 0,6x հատակից վեր:
+- Հապաղման նկատմամբ զգայուն ահազանգերը (`SoranetRelayLatencySpike`) մնացել են նախազգուշացման տակ
+  շեմեր ամբողջ պատուհանում; փոխկապակցված վահանակները գրավված են տակ
   `dashboards/grafana/soranet_incentives.json`.
 
-## Recommended Actions Before GA
+## Առաջարկվող գործողություններ GA-ից առաջ
 
-1. Keep running monthly shadow replays and update the artefact set and this
-   analysis if the fleet composition changes.
-2. Gate automatic payouts on the Grafana alert suite referenced in the roadmap
-   (`dashboards/alerts/soranet_incentives_rules.yml`); copy screenshots into the
-   governance minutes when seeking renewal.
-3. Re-run the economic stress test if base reward, uptime/bandwidth weights, or
-   the compliance penalty changes by >=10%.
+1. Շարունակեք ամենամսյա ստվերային կրկնությունները և թարմացրեք արտեֆակտների հավաքածուն և սա
+   վերլուծություն, եթե փոխվում է նավատորմի կազմը:
+2. Դարպասի ավտոմատ վճարումներ Grafana ազդանշանային փաթեթի վրա, որը նշված է ճանապարհային քարտեզում
+   (`dashboards/alerts/soranet_incentives_rules.yml`); պատճենեք սքրինշոթները մեջ
+   կառավարման րոպեներ, երբ փնտրում են նորացում:
+3. Կրկին գործարկեք տնտեսական սթրես-թեստը, եթե բազային պարգևատրումը, ժամանակի/թողունակության կշիռները կամ
+   համապատասխանության տույժը փոխվում է >=10%-ով:

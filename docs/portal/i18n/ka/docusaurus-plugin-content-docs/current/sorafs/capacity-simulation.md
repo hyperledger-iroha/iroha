@@ -8,41 +8,43 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+ეს სახელმძღვანელო განმარტავს, თუ როგორ უნდა გაუშვათ SF-2c სიმძლავრის ბაზრის სიმულაციური ნაკრები და წარმოიდგინოთ მიღებული მეტრიკა. ის ადასტურებს კვოტების მოლაპარაკებას, უკმარისობის დამუშავებას და შემცირების გამოსწორებას ბოლოდან ბოლომდე `docs/examples/sorafs_capacity_simulation/`-ის დეტერმინისტული მოწყობილობების გამოყენებით. სიმძლავრის ტვირთამწეობა კვლავ იყენებს `sorafs_manifest_stub capacity`; გამოიყენეთ `iroha app sorafs toolkit pack` manifest/CAR შეფუთვის ნაკადებისთვის.
 
-## 1. Generate CLI artefacts
+## 1. შექმენით CLI არტეფაქტები
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+`run_cli.sh` ახვევს `sorafs_manifest_stub capacity`-ს Norito ტვირთამწეობის, base64 blobs, Torii მოთხოვნის ორგანოებისა და JSON შეჯამებების გამოსაცემად:
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- კვოტის მოლაპარაკების სცენარში მონაწილე სამი პროვაიდერის დეკლარაცია.
+- რეპლიკაციის შეკვეთა, რომელიც ანაწილებს ეტაპობრივ მანიფესტს ამ პროვაიდერებში.
+- ტელემეტრიული კადრები გათიშვამდე საბაზისო ხაზისთვის, გათიშვის ინტერვალისა და უკმარისობის აღდგენისთვის.
+- დავის დატვირთვა, რომელიც ითხოვს შემცირებას სიმულირებული გათიშვის შემდეგ.
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+ყველა არტეფაქტი მოდის `./artifacts`-ის ქვეშ (გადალახვა სხვა დირექტორიაში, როგორც პირველ არგუმენტად). შეამოწმეთ `_summary.json` ფაილები ადამიანის მიერ წასაკითხად კონტექსტში.
 
-## 2. Aggregate results & emit metrics
+## 2. შეაგროვეთ შედეგები და გამოაქვეყნეთ მეტრიკა
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analyzer produces:
+ანალიზატორი აწარმოებს:
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- `capacity_simulation_report.json` - აგრეგირებული გამოყოფები, დელტა და დავის მეტამონაცემები.
+- `capacity_simulation.prom` - Prometheus ტექსტური ფაილის მეტრიკა (`sorafs_simulation_*`) შესაფერისია კვანძის ექსპორტიორის ტექსტური ფაილების კოლექციონერისთვის ან დამოუკიდებლად გაფხეკისთვის.
 
-Example Prometheus scrape configuration:
+მაგალითი Prometheus ნაკაწრის კონფიგურაცია:
 
 ```yaml
 scrape_configs:
@@ -57,22 +59,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+მიუთითეთ ტექსტური ფაილის შემგროვებელი `capacity_simulation.prom`-ზე (კვანძის ექსპორტიორის გამოყენებისას დააკოპირეთ იგი `--collector.textfile.directory`-ის მეშვეობით გადაცემულ დირექტორიაში).
 
-## 3. Import the Grafana dashboard
+## 3. Grafana დაფის იმპორტი
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. Grafana-ში შემოიტანეთ `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. დააკავშირეთ `Prometheus` მონაცემთა წყაროს ცვლადი ზემოთ კონფიგურირებულ scrape სამიზნესთან.
+3. შეამოწმეთ პანელები:
+   - **კვოტის განაწილება (GiB)** გვიჩვენებს ვალდებულებებს/მიკუთვნებულ ნაშთებს თითოეული პროვაიდერისთვის.
+   - **Failover Trigger** გადატრიალდება *Failover Active*-ზე, როდესაც გათიშვის მეტრიკა შემოდის.
+   - **Uptime Drop დროს outage** ასახავს პროცენტულ დანაკარგს პროვაიდერის `alpha`.
+   - **მოთხოვნილი დახრილობის პროცენტი** ვიზუალურად ასახავს გამოსწორების კოეფიციენტს, რომელიც ამოღებულია დავის წყობიდან.
 
-## 4. Expected checks
+## 4. მოსალოდნელი შემოწმებები
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` უდრის `600` ხოლო ჩადენილი ჯამი რჩება >=600.
+- `sorafs_simulation_failover_triggered` იუწყება `1` და შემცვლელი პროვაიდერის მეტრიკა ხაზს უსვამს `beta`-ს.
+- `sorafs_simulation_slash_requested` იტყობინება `0.15` (15% დახრილი) `alpha` პროვაიდერის იდენტიფიკატორისთვის.
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+გაუშვით `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit`, რათა დაადასტუროთ, რომ მოწყობილობები კვლავ მიღებულია CLI სქემით.

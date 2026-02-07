@@ -4,62 +4,64 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: Resumen de feedback de mitad de W0
-sidebar_label: Feedback W0 (mitad)
-description: Puntos de control, hallazgos y acciones de mitad de ola para la ola de preview de mantenedores core.
+المعرف: ملخص المعاينة-w0
+العنوان: استئناف ردود الفعل من W0
+Sidebar_label: التعليقات W0 (ميتاد)
+الوصف: نقاط التحكم والميزات والإجراءات من الدرجة الأولى لمعاينة الصيانة الأساسية.
 ---
 
-| Item | Detalles |
+| العنصر | تفاصيل |
 | --- | --- |
-| Ola | W0 - Mantenedores core |
-| Fecha del resumen | 2025-03-27 |
-| Ventana de revision | 2025-03-25 -> 2025-04-08 |
-| Participantes | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Tag de artefacto | `preview-2025-03-24` |
+| علا | W0 - جوهر مانتينيدوريس |
+| ملخص السيرة الذاتية | 2025-03-27 |
+| نافذة المراجعة | 2025-03-25 -> 2025-04-08 |
+| المشاركون | docs-core-01، sdk-rust-01، sdk-js-01، sorafs-ops-01، إمكانية الملاحظة-01 |
+| علامة دي قطعة أثرية | `preview-2025-03-24` |
 
-## Destacados
+## ديستاكادوس
 
-1. **Flujo de checksum** - Todos los revisores confirmaron que `scripts/preview_verify.sh`
-   tuvo exito contra el par descriptor/archivo compartido. No se requirieron
-   overrides manuales.
-2. **Feedback de navegacion** - Se registraron dos problemas menores de orden del sidebar
-   (`docs-preview/w0 #1-#2`). Ambos se asignaron a Docs/DevRel y no bloquean la
-   ola.
-3. **Paridad de runbooks de SoraFS** - sorafs-ops-01 pidio enlaces cruzados mas claros
-   entre `sorafs/orchestrator-ops` y `sorafs/multi-source-rollout`. Se abrio un
-   issue de seguimiento; se atendera antes de W1.
-4. **Revision de telemetria** - observability-01 confirmo que `docs.preview.integrity`,
-   `TryItProxyErrors` y los logs del proxy Try-it se mantuvieron en verde; no se
-   dispararon alertas.
+1. **تدفق المجموع الاختباري** - جميع المراجعات تؤكد `scripts/preview_verify.sh`
+   Tuvo Exito Contrast El Par Descriptor/archivo Compartido. لا يتطلب الأمر ذلك
+   يتجاوز الأدلة.
+2. **ملاحظات التنقل** - قم بتسجيل العديد من المشكلات في ترتيب الشريط الجانبي
+   (`docs-preview/w0 #1-#2`). يتم تعيين هذه الميزات إلى Docs/DevRel ولا يتم حظرها
+   علا.
+3. **سلسلة كتب التشغيل SoraFS** - sorafs-ops-01 pidio enlaces Cruzados mas claros
+   أدخل `sorafs/orchestrator-ops` و`sorafs/multi-source-rollout`. سيبدأ من جديد
+   إصدار التسلسل؛ إذا كان موجودًا قبل W1.
+4. **مراجعة القياس عن بعد** - إمكانية المراقبة-01 تؤكد `docs.preview.integrity`,
+   `TryItProxyErrors` وسجلات الوكيل Try-it se mantuvieron en verde; لا حد ذاته
+   تنبيهات التجاهل.
 
-## Acciones
+##الانجازات
 
-| ID | Descripcion | Responsable | Estado |
+| معرف | الوصف | مسؤول | حالة |
 | --- | --- | --- | --- |
-| W0-A1 | Reordenar entradas del sidebar del devportal para destacar docs enfocados en reviewers (`preview-invite-*` agrupados). | Docs-core-01 | Completado - el sidebar ahora lista los docs de reviewers de forma contigua (`docs/portal/sidebars.js`). |
-| W0-A2 | Agregar enlace cruzado explicito entre `sorafs/orchestrator-ops` y `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Completado - cada runbook ahora enlaza al otro para que los operadores vean ambas guias durante rollouts. |
-| W0-A3 | Compartir snapshots de telemetria + paquete de queries con el tracker de gobernanza. | Observability-01 | Completado - paquete adjunto a `DOCS-SORA-Preview-W0`. |
+| W0-A1 | قم بإعادة ترتيب إدخالات الشريط الجانبي للتطبيق لحذف المستندات المضمنة والمراجعين (`preview-invite-*` agrupados). | مستندات-core-01 | اكتمل - الشريط الجانبي الآن يسرد مستندات المراجعة ذات الشكل المتصل (`docs/portal/sidebars.js`). |
+| W0-A2 | قم بإضافة الرابط الواضح بين `sorafs/orchestrator-ops` و`sorafs/multi-source-rollout`. | Sorafs-ops-01 | تم إكمال كل دليل تشغيل بعد ذلك ليتم إضافته إلى الآخرين حتى يتواصل المشغلون مع بعضهم البعض خلال عمليات الطرح. |
+| W0-A3 | قم بمشاركة لقطات القياس عن بعد + مجموعة من الاستعلامات مع جهاز تعقب الحكومة. | إمكانية الملاحظة-01 | مكتمل - حزمة ملحقة بـ `DOCS-SORA-Preview-W0`. |
 
-## Resumen de cierre (2025-04-08)
+## السيرة الذاتية (2025-04-08)
 
-- Los cinco revisores confirmaron la finalizacion, limpiaron builds locales y salieron de la
-  ventana de preview; las revocaciones de acceso quedaron registradas en `DOCS-SORA-Preview-W0`.
-- No hubo incidentes ni alertas durante la ola; los dashboards de telemetria se mantuvieron
-  en verde todo el periodo.
-- Las acciones de navegacion + enlaces cruzados (W0-A1/A2) estan implementadas y reflejadas en
-  los docs de arriba; la evidencia de telemetria (W0-A3) esta adjunta al tracker.
-- Paquete de evidencia archivado: screenshots de telemetria, acuses de invitacion y este
-  resumen estan enlazados desde el issue del tracker.
+- تؤكد خمس مراجعات على الانتهاء، وتبني المواقع وتخرج منها
+  نافذة المعاينة؛ تم تسجيل عمليات إلغاء الوصول في `DOCS-SORA-Preview-W0`.
+- لا توجد حوادث أو تنبيهات خلال الرحلة؛ يتم تحديث لوحات معلومات القياس عن بعد
+  أون فيردي كل الفترة.
+- إجراءات التنقل + عمليات النقل (W0-A1/A2) تم تنفيذها وتحديثها
+  مستندات الوصول؛ دليل القياس عن بعد (W0-A3) هو ملحق للمتعقب.
+- حزمة الأدلة الأرشيفية: لقطات شاشة للقياس عن بعد، ودعوات الدعوة وهذا
+  قم باستئناف هذا الإجراء من إصدار المتتبع.
 
-## Siguientes pasos
+## الخطوة التالية
 
-- Implementar los action items de W0 antes de abrir W1.
-- Obtener aprobacion legal y un slot de staging para el proxy, luego seguir los pasos de
-  preflight de la ola de partners detallados en el [preview invite flow](../../preview-invite-flow.md).
+- تنفيذ عناصر الإجراء الخاصة بـ W0 قبل فتح W1.
+- الحصول على الموافقة القانونية وفتحة التدريج للوكيل، ثم متابعة الخطوات
+  الاختبار المبدئي لحلقة الشركاء التفصيلية في [تدفق دعوة المعاينة](../../preview-invite-flow.md).
 
-_Este resumen esta enlazado desde el [preview invite tracker](../../preview-invite-tracker.md) para
-mantener el roadmap DOCS-SORA trazable._
+_تم استئناف هذا الأمر من [متتبع دعوة المعاينة](../../preview-invite-tracker.md) الفقرة
+صيانة خريطة الطريق DOCS-SORA trazable._

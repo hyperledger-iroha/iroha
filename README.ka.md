@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8f2fe1d4fc449fc895f770195f3d209d5a576dfe78c8fea37c523cc111694c44
 source_last_modified: "2026-02-07T00:30:39.016220+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Hyperledger Iroha
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![ლიცენზია](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Hyperledger Iroha is a deterministic blockchain platform for permissioned and consortium deployments. It provides account/asset management, on-chain permissions, and smart contracts through the Iroha Virtual Machine (IVM).
+Hyperledger Iroha არის დეტერმინისტული ბლოკჩეინის პლატფორმა ნებადართული და კონსორციუმის განლაგებისთვის. ის უზრუნველყოფს ანგარიშის/აქტივების მენეჯმენტს, ნებართვებს და ჭკვიან კონტრაქტებს Iroha ვირტუალური აპარატის საშუალებით (IVM).
 
-> Workspace status and recent changes are tracked in [`status.md`](./status.md).
+> სამუშაო სივრცის სტატუსს და ბოლო ცვლილებებს თვალყურს ადევნებთ [`status.md`](./status.md).
 
-## Release Tracks
+## გამოუშვით ტრეკები
 
-This repository ships two deployment tracks from the same codebase:
+ეს საცავი აგზავნის ორ განლაგების ბილიკს ერთი და იგივე კოდების ბაზიდან:
 
-- **Iroha 2**: self-hosted permissioned/consortium networks.
-- **Iroha 3 (SORA Nexus)**: the Nexus-oriented deployment track using the same core crates.
+- **Iroha 2**: ნებადართული/კონსორციუმის ქსელები, რომლებიც განთავსებულია საკუთარ თავზე.
+- **Iroha 3 (SORA Nexus)**: Nexus-ზე ორიენტირებული განლაგების ბილიკი იმავე ბირთვიანი უჯრების გამოყენებით.
 
-Both tracks share the same core components, including Norito serialization, Sumeragi consensus, and the Kotodama -> IVM toolchain.
+ორივე ბილიკი იზიარებს ერთსა და იმავე ძირითად კომპონენტებს, მათ შორის Norito სერიალიზაციას, Sumeragi კონსენსუსს და Kotodama -> IVM ხელსაწყოების ჯაჭვს.
 
-## Repository Layout
+## საცავის განლაგება
 
-- [`crates/`](./crates): core Rust crates (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, `ivm`, `norito`, etc.).
-- [`integration_tests/`](./integration_tests): cross-component network/integration tests.
-- [`IrohaSwift/`](./IrohaSwift): Swift SDK package.
-- [`java/iroha_android/`](./java/iroha_android): Android SDK package.
-- [`docs/`](./docs): user/operator/developer documentation.
+- [`crates/`](./crates): ბირთვის ჟანგის ყუთები (`iroha`, `irohad`, `iroha_cli`, I18NI00000008NI00000 `norito` და ა.შ.).
+- [`integration_tests/`](./integration_tests): ჯვარედინი კომპონენტის ქსელის/ინტეგრაციის ტესტები.
+- [`IrohaSwift/`](./IrohaSwift): Swift SDK პაკეტი.
+- [`java/iroha_android/`](./java/iroha_android): Android SDK პაკეტი.
+- [`docs/`](./docs): მომხმარებლის/ოპერატორის/დეველოპერის დოკუმენტაცია.
 
-## Quickstart
+## სწრაფი დაწყება
 
-### Prerequisites
+### წინაპირობები
 
-- [Rust stable](https://www.rust-lang.org/tools/install)
-- Optional: Docker + Docker Compose for local multi-peer runs
+- [ჟანგის სტაბილური] (https://www.rust-lang.org/tools/install)
+- სურვილისამებრ: Docker + Docker შედგენა ლოკალური მრავალთანაბარიანი გაშვებისთვის
 
-### Build and Test (Workspace)
+### აშენება და ტესტირება (სამუშაო სივრცე)
 
 ```bash
 cargo build --workspace
@@ -50,20 +51,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-Notes:
+შენიშვნები:
 
-- Full workspace build can take about 20 minutes.
-- Full workspace tests can take multiple hours.
-- The workspace targets `std` (WASM/no-std builds are not supported).
+- სრული სამუშაო სივრცის შექმნა შეიძლება დაახლოებით 20 წუთი დასჭირდეს.
+- სამუშაო სივრცის სრულ ტესტებს შეიძლება რამდენიმე საათი დასჭირდეს.
+- სამუშაო სივრცე მიზნად ისახავს `std` (WASM/no-std builds არ არის მხარდაჭერილი).
 
-### Targeted Test Commands
+### მიზნობრივი ტესტის ბრძანებები
 
 ```bash
 cargo test -p <crate>
 cargo test -p <crate> <test_name> -- --nocapture
 ```
 
-### SDK Test Commands
+### SDK ტესტის ბრძანებები
 
 ```bash
 cd IrohaSwift
@@ -78,77 +79,77 @@ ANDROID_SDK_ROOT=~/Library/Android/sdk \
 ./gradlew test
 ```
 
-## Run a Local Network
+## გაუშვით ლოკალური ქსელი
 
-Start the provided Docker Compose network:
+გაუშვით მოწოდებული Docker Compose ქსელი:
 
 ```bash
 docker compose -f defaults/docker-compose.yml up
 ```
 
-Use the CLI against the default client config:
+გამოიყენეთ CLI ნაგულისხმევი კლიენტის კონფიგურაციის წინააღმდეგ:
 
 ```bash
 cargo run --bin iroha -- --config ./defaults/client.toml --help
 ```
 
-For daemon-specific native deployment steps, see [`crates/irohad/README.md`](./crates/irohad/README.md).
+დემონის სპეციფიკური დანერგვის საფეხურებისთვის იხილეთ [`crates/irohad/README.md`](./crates/irohad/README.md).
 
-## API and Observability
+## API და დაკვირვებადობა
 
-Torii exposes both Norito and JSON APIs. Common operator endpoints:
+Torii ავლენს როგორც Norito, ასევე JSON API-ებს. საერთო ოპერატორის საბოლოო წერტილები:
 
 - `GET /status`
 - `GET /metrics`
 - `GET /v1/parameters`
 - `GET /v1/events/sse`
 
-See the full endpoint reference in:
+იხილეთ სრული საბოლოო წერტილის მითითება:
 
 - [`docs/source/telemetry.md`](./docs/source/telemetry.md)
 - [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
 
-## Core Crates
+## ძირითადი ყუთები
 
-- [`crates/iroha`](./crates/iroha): client library.
-- [`crates/irohad`](./crates/irohad): peer daemon binaries.
-- [`crates/iroha_cli`](./crates/iroha_cli): reference CLI.
-- [`crates/iroha_core`](./crates/iroha_core): ledger/core execution engine.
-- [`crates/iroha_config`](./crates/iroha_config): typed configuration model.
-- [`crates/iroha_data_model`](./crates/iroha_data_model): canonical data model.
-- [`crates/iroha_crypto`](./crates/iroha_crypto): cryptographic primitives.
-- [`crates/norito`](./crates/norito): deterministic serialization codec.
-- [`crates/ivm`](./crates/ivm): Iroha Virtual Machine.
-- [`crates/iroha_kagami`](./crates/iroha_kagami): key/genesis/config tooling.
+- [`crates/iroha`](./crates/iroha): კლიენტის ბიბლიოთეკა.
+- [`crates/irohad`](./crates/irohad): თანატოლი დემონის ბინარები.
+- [`crates/iroha_cli`](./crates/iroha_cli): მითითება CLI.
+- [`crates/iroha_core`](./crates/iroha_core): წიგნის/ბირთვული შესრულების ძრავა.
+- [`crates/iroha_config`](./crates/iroha_config): აკრეფილი კონფიგურაციის მოდელი.
+- [`crates/iroha_data_model`](./crates/iroha_data_model): მონაცემთა კანონიკური მოდელი.
+- [`crates/iroha_crypto`](./crates/iroha_crypto): კრიპტოგრაფიული პრიმიტივები.
+- [`crates/norito`](./crates/norito): განმსაზღვრელი სერიალიზაციის კოდეკი.
+- [`crates/ivm`](./crates/ivm): Iroha ვირტუალური მანქანა.
+- [`crates/iroha_kagami`](./crates/iroha_kagami): გასაღები/გენეზისი/კონფიგურაციის ხელსაწყოები.
 
-## Documentation Map
+## დოკუმენტაციის რუკა
 
-- Main docs index: [`docs/README.md`](./docs/README.md)
-- Genesis: [`docs/genesis.md`](./docs/genesis.md)
-- Consensus (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
-- Transaction pipeline: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
-- P2P internals: [`docs/source/p2p.md`](./docs/source/p2p.md)
-- IVM syscalls: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
-- Kotodama grammar: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
-- Norito wire format: [`norito.md`](./norito.md)
-- Current work tracking: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
+- ძირითადი დოკუმენტების ინდექსი: [`docs/README.md`](./docs/README.md)
+- დაბადება: [`docs/genesis.md`](./docs/genesis.md)
+- კონსენსუსი (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
+- ტრანზაქციის მილსადენი: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
+- P2P შიდა: [`docs/source/p2p.md`](./docs/source/p2p.md)
+- IVM სისტემის ზარები: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
+- Kotodama გრამატიკა: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
+- Norito მავთულის ფორმატი: [`norito.md`](./norito.md)
+- მიმდინარე სამუშაოს თვალყურის დევნება: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
 
-## Translations
+## თარგმანები
 
-Japanese overview: [`README.ja.md`](./README.ja.md)
+იაპონური მიმოხილვა: [`README.ja.md`](./README.ja.md)
 
-Other overviews:
+სხვა მიმოხილვები:
 [`README.he.md`](./README.he.md), [`README.es.md`](./README.es.md), [`README.pt.md`](./README.pt.md), [`README.fr.md`](./README.fr.md), [`README.ru.md`](./README.ru.md), [`README.ar.md`](./README.ar.md), [`README.ur.md`](./README.ur.md)
 
-Translation workflow: [`docs/i18n/README.md`](./docs/i18n/README.md)
+თარგმანის სამუშაო პროცესი: [`docs/i18n/README.md`](./docs/i18n/README.md)
 
-## Contributing and Help
+## წვლილი და დახმარება
 
-- Contribution guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- Community/support channels: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
+- წვლილის სახელმძღვანელო: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- საზოგადოება/მხარდაჭერის არხები: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
 
-## License
+## ლიცენზია
 
-Iroha is licensed under Apache-2.0. See [`LICENSE`](./LICENSE).
+Iroha ლიცენზირებულია Apache-2.0-ით. იხილეთ [`LICENSE`](./LICENSE).
 
-Documentation is licensed under CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/
+დოკუმენტაცია ლიცენზირებულია CC-BY-4.0-ით: http://creativecommons.org/licenses/by/4.0/

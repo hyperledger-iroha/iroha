@@ -10,43 +10,44 @@ translation_last_reviewed: 2026-02-07
 id: nexus-telemetry-remediation
 title: Nexus telemetry remediation plan (B2)
 description: Mirror of `docs/source/nexus_telemetry_remediation_plan.md`, documenting the telemetry gap matrix and operational workflow.
+translator: machine-google-reviewed
 ---
 
-# Overview
+# ལྟ་ཚུལ།
 
-Roadmap item **B2 — telemetry gap ownership** requires a published plan tying
-every outstanding Nexus telemetry gap to a signal, alert guardrail, owner,
-deadline, and verification artifact before the Q1 2026 audit windows begin.
-This page mirrors `docs/source/nexus_telemetry_remediation_plan.md` so release
-engineering, telemetry ops, and SDK owners can confirm coverage ahead of the
-routed-trace and `TRACE-TELEMETRY-BRIDGE` rehearsals.
+ལམ་སྟོན་རྣམ་གྲངས་ **B2 — ཊེ་ལི་མི་ཊི་བར་སྟོང་བདག་དབང་** ལུ་ མཉམ་བསྡོམས་འབད་དེ་ དཔར་བསྐྲུན་འབད་ནི་གི་འཆར་གཞི་ཅིག་དགོཔ་ཨིན།
+བརྡ་རྟགས་ཅིག་ལུ་ ཁྱད་འཕགས་ཅན་གྱི་ I18NT0000003X བརྡ་འཕྲིན་གྱི་བར་སྟོང་རེ་རེ་བཞིན་ ཉེན་བརྡའི་སྲུང་སྐྱོབ་པ་ ཇོ་བདག་།
+ཚེས་གྲངས་དང་ ༢༠༢༦ ལོའི་ རྩིས་ཞིབ་སྒོ་སྒྲིག་ཚུ་ འགོ་མ་བཙུགས་པའི་ཧེ་མ་ བདེན་དཔྱད་ཀྱི་ ཅ་ཆས་ཚུ་ཨིན།
+ཤོག་ལེབ་འདི་གིས་ I18NI000000010X འདི་ གསར་བཏོན་འབདཝ་ཨིན།
+བཟོ་རིག་དང་ ཊེ་ལི་མི་ཊི་ཨོ་པི་ དེ་ལས་ ཨེསི་ཌི་ཀེ་གི་ཇོ་བདག་ཚུ་གིས་ ཧེ་མ་ལས་ ཁྱབ་ཚད་བདེན་དཔྱད་འབད་ཚུགས།
+འགྲུལ་ལམ་-ཊེསི་དང་ `TRACE-TELEMETRY-BRIDGE` བསྐྱར་སྦྱོང་།
 
-# Gap matrix
+# བར་མཐའི་མེ་རི།
 
-| Gap ID | Signal & alert guardrail | Owner / escalation | Due (UTC) | Evidence & verification |
-|--------|-------------------------|--------------------|-----------|-------------------------|
-| `GAP-TELEM-001` | Histogram `torii_lane_admission_latency_seconds{lane_id,endpoint}` with alert **`SoranetLaneAdmissionLatencyDegraded`** firing when `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` for 5 minutes (`dashboards/alerts/soranet_lane_rules.yml`). | `@torii-sdk` (signal) + `@telemetry-ops` (alert); escalate via Nexus routed-trace on-call. | 2026‑02‑23 | Alert tests under `dashboards/alerts/tests/soranet_lane_rules.test.yml` plus the `TRACE-LANE-ROUTING` rehearsal capture showing fired/recovered alert and Torii `/metrics` scrape archived in [Nexus transition notes](./nexus-transition-notes). |
-| `GAP-TELEM-002` | Counter `nexus_config_diff_total{knob,profile}` with guardrail `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` gating deploys (`docs/source/telemetry.md`). | `@nexus-core` (instrumentation) → `@telemetry-ops` (alert); governance duty officer paged when counter increments unexpectedly. | 2026‑02‑26 | Governance dry-run outputs stored next to `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`; release checklist includes the Prometheus query screenshot plus log excerpt proving `StateTelemetry::record_nexus_config_diff` emitted the diff. |
-| `GAP-TELEM-003` | Event `TelemetryEvent::AuditOutcome` (metric `nexus.audit.outcome`) with alert **`NexusAuditOutcomeFailure`** when failures or missing outcomes persist for >30 minutes (`dashboards/alerts/nexus_audit_rules.yml`). | `@telemetry-ops` (pipeline) escalating to `@sec-observability`. | 2026‑02‑27 | CI gate `scripts/telemetry/check_nexus_audit_outcome.py` archives NDJSON payloads and fails when a TRACE window lacks a success event; alert screenshots attached to the routed-trace report. |
-| `GAP-TELEM-004` | Gauge `nexus_lane_configured_total` with guardrail `nexus_lane_configured_total != EXPECTED_LANE_COUNT` feeding the SRE on-call checklist. | `@telemetry-ops` (gauge/export) escalating to `@nexus-core` when nodes report inconsistent catalog sizes. | 2026‑02‑28 | Scheduler telemetry test `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` proves emission; operators attach Prometheus diff + `StateTelemetry::set_nexus_catalogs` log excerpt to the TRACE rehearsal package. |
+| གཱཔ་ཨའི་ཌི་ | བརྡ་རྟགས་དང་ཉེན་བརྡའི་སྲུང་སྐྱོབ། | ཇོ་བདག་ / ཡར་འཕར་ | ཌུ (ཡུ་ཊི་སི) | སྒྲུབ་བྱེད་དང་བདེན་དཔྱད། |
+| |
+| `GAP-TELEM-001` | ཧིསི་ཊོ་གཱརམ་ I18NI00000000013X དྲན་སྐུལ་དང་གཅིག་ཁར་ **I18NI0000014X** གིས་ སྐར་མ་ཚུ་ (`histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` གི་དོན་ལུ་ 5minutes (I18NI000000000016X). | I18NI000000017X (བརྡ་མཚོན་) + `@telemetry-ops` (ཉེན་བརྡ་); e18NT000000004X འགྲུལ་ལམ་-རྗེས་འཇུག་ཨོན་-འབོད་བརྡ་བརྒྱུད་དེ་ ཡར་སེང་། | ༢༠༢༦‐༠༢‐༢༣ | I18NI000000019X གི་འོག་ལུ་ དྲན་སྐུལ་བརྟག་དཔྱད་ཚུ་ དང་ `TRACE-LANE-ROUTING` བསྐྱར་སྦྱོང་གི་འཛིན་བཟུང་འདི་ མཚོན་ཆ་/སླར་འབྱུང་བའི་ཉེན་བརྡ་དང་ I18NI000000021X གིས་ [I18NI000000021X འདི་ [I18NI0000005X འགྱུར་བཅོས་ནང་ལུ་ གཏན་མཛོད་འབད་ཡོདཔ་ཨིན། དྲན་ཐོ་](I18NU0000009X). |
+| I18NI0000022X | I18NI0000000023X དང་སྲུང་སྐྱོབ་ཀྱི་ `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` གིས་ སྒོ་སྒྲིག་བཀྲམ་སྤེལ་ (I18NI0000000025X). | I18NI000000026X (བཙུགས་བཀོད) → I18NI0000027X (དྲན་ཐོ); གཞུང་སྐྱོང་འགན་འཁྲི་འགོ་དཔོན་གྱིས་ རེ་བ་མེད་པར་ ཡར་སེང་འབད་བའི་སྐབས་ ཤོག་ལེབ་བཟོ་ཡོདཔ་ཨིན། | ༢༠༢༦‐༠༢‐༢༦ | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` གི་སྦོ་ལོགས་ཁར་ བསག་བཞག་ཡོད་པའི་ གཞུང་སྐྱོང་སྐམ་པའི་ཐོན་འབྲས་ཚུ། གསར་བཏོན་ཐོ་ཡིག་ནང་ Prometheus འདྲི་དཔྱད་གསལ་གཞི་པར་བརྙན་དང་ དྲན་ཐོ་ ཕྱིར་ཐོན་པ་ གིས་ I18NI000000029X གིས་ ཌིཕ་འདི་ བཏོན་ཡོདཔ་ཨིན། |
+| `GAP-TELEM-003` | བྱུང་ལས་ I18NI000000031X (མེ་ཊིག་ I18NI0000032X) དྲན་སྐུལ་དང་གཅིག་ཁར་ **`NexusAuditOutcomeFailure`** འཐུས་ཤོར་ཡང་ན་ བརླག་སྟོར་ཤོར་བའི་གྲུབ་འབྲས་ཚུ་ >30 minutes (I18NI00000000344) གི་དོན་ལུ་གནས་ཏེ་ཡོདཔ་ཨིན། | I18NI000000035X (pipeline) I18NI000000036X ལུ་ཡར་སེང་འགྱོ་ཡོདཔ། | ༢༠༢༦‐༠༢‐༢༧ | CI གི་སྒོ་ར་ `scripts/telemetry/check_nexus_audit_outcome.py` གཏན་མཛོད་ NDJSON ཚུ་ TRACE སྒོ་སྒྲིག་ཅིག་མཐར་འཁྱོལ་མེད་པའི་སྐབས་ འཐུས་ཤོར་འགྱོཝ་ཨིན། འགྲུལ་ལམ་-བརྟག་ཞིབ་སྙན་ཞུ་ལུ་ མཉམ་སྦྲགས་འབད་ཡོད་པའི་ ཉེན་བརྡ་གསལ་གཞི་ཚུ། |
+| `GAP-TELEM-004` | འཇལ་ཚད་ I18NI000000039X གིས་ སྲུང་དམག་ `nexus_lane_configured_total != EXPECTED_LANE_COUNT` གིས་ ཨེསི་ཨར་ཨི་ལུ་ ཁ་པར་ཞིབ་དཔྱད་ཐོ་ཡིག་ལུ་ ལྟོ་བྱིན་དོ་ཡོདཔ་ཨིན། | I18NI000000041X (gauge/export) གིས་ I18NI000000042X ལུ་ཡར་སེང་འགྱོ་སྟེ་ མཐུད་མཚམས་ཚུ་གིས་ མ་འདྲ་བའི་ཐོ་གཞུང་ཚད་ཚུ་སྙན་ཞུ་འབདཝ་ཨིན། | ༢༠༢༦‐༠༢‐༢༨ | ཐོ་གཞུང་བརྡ་འཕྲིན་བརྟག་དཔྱད་ `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` གིས་ བཙོག་པ་ཐོན་པའི་བདེན་དཔང་འབད་ཡོདཔ། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ Prometheus གིས་ TRECE བསྐྱར་སྦྱོང་ཐུམ་སྒྲིལ་ལུ་ I18NI000000044X དྲན་ཐོ་འདི་ མཉམ་སྦྲགས་འབདཝ་ཨིན། |
 
-# Operational workflow
+# ལས་ཀའི་ལས་རིམ།
 
-1. **Weekly triage.** Owners report progress in the Nexus readiness call;
-   blockers and alert-test artefacts are logged in `status.md`.
-2. **Alert dry-runs.** Each alert rule ships alongside a
-   `dashboards/alerts/tests/*.test.yml` entry so CI executes `promtool test
-   rules` whenever the guardrail changes.
-3. **Audit evidence.** During `TRACE-LANE-ROUTING` and
-   `TRACE-TELEMETRY-BRIDGE` rehearsals the on-call captures the Prometheus query
-   results, alert history, and relevant script outputs
+1. **བདུན་ཕྲག་རེ་རེའི་ཚོད་ལྟ།** ཇོ་བདག་ཚུ་གིས་ I18NT0000006X གྲ་སྒྲིག་འབོད་བརྡ་ནང་ ཡར་རྒྱས་སྙན་ཞུ་འབད་ཡོདཔ།
+   བཀག་ཆ་དང་ཉེན་བརྡའི་བརྟག་དཔྱད་ཅ་ཆས་ཚུ་ `status.md` ནང་ལུ་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
+2. **སྐམ་པའི་གཡོག་བཀོལ་བ།** ཉེན་བརྡའི་སྒྲིག་གཞི་གྲུ་གཟིངས་རེ་རེ་བཞིན་ 1 མཉམ་དུ་ཡོད།
+   `dashboards/alerts/tests/*.test.yml` འཛུལ་ཞུགས་འབདཝ་ལས་ སི་ཨའི་ `promtool བརྟག་དཔྱད།
+   ལམ་ལུགས་ཀྱི་སྲུང་སྐྱོབ་འདི་ག་དུས་ལུ་འགྱུར་བཅོས་འགྱོཝ་ཨིན།
+3. **རྩིས་ཞིབ་ཀྱི་སྒྲུབ་བྱེད་.** I18NI0000004XX དང་སྐབས།
+   `TRACE-TELEMETRY-BRIDGE` བསྐྱར་སྦྱོང་འབདཝ་ཨིན།
+   གྲུབ་འབྲས་དང་ཉེན་བརྡའི་ལོ་རྒྱུས་དང་འབྲེལ་ཡོད་ཡིག་ཚུགས་ཐོན་འབྲས་ཚུ།
    (`scripts/telemetry/check_nexus_audit_outcome.py`,
-   `scripts/telemetry/check_redaction_status.py` for correlated signals) and
-   stores them with the routed-trace artefacts.
-4. **Escalation.** If any guardrail fires outside a rehearsed window, the owning
-   team files a Nexus incident ticket referencing this plan, including the
-   metric snapshot and mitigation steps before resuming audits.
+   འབྲེལ་མཐུད་ཡོད་པའི་བརྡ་རྟགས་ཚུ་གི་དོན་ལུ་ I18NI000000050X) དང་།
+   དེ་ཚུ་ འགྲུལ་ལམ་ཡོད་པའི་ ཅ་རྙིང་ཚུ་དང་གཅིག་ཁར་ གསོག་འཇོག་འབདཝ་ཨིན།
+4. **Escalation.** གལ་སྲིད་ བསྐྱར་སྦྱོང་འབད་ཡོད་པའི་སྒོ་སྒྲིག་གི་ཕྱི་ཁར་ ཉེན་སྲུང་འབད་མི་ མེ་རྐྱེན་འབྱུང་པ་ཅིན་ བདག་དབང་ཡོདཔ་ཨིན།
+   སྡེ་ཚན་གྱིས་ འཆར་གཞི་འདི་ གཞི་བསྟུན་འབད་དེ་ Nexus བྱུང་རྐྱེན་གྱི་ ཤོག་འཛིན་ a ཨིན།
+   རྩིས་ཞིབ་ཚུ་ ལོག་འགོ་བཙུགས་པའི་ཧེ་མ་ metric snapshot དང་ མར་ཕབ་ཀྱི་གོ་རིམ་ཚུ།
 
-With this matrix published — and referenced from both `roadmap.md` and
-`status.md` — roadmap item **B2** now meets the “responsibility, deadline,
-alert, verification” acceptance criteria.
+འ་ནི་མེ་ཊིགསི་འདི་དཔར་བསྐྲུན་འབད་དེ་ — དང་ I18NI000000051X གཉིས་ཆ་ར་ལས་ གཞི་བསྟུན་འབད་ཡོདཔ་ཨིན།
+`status.md` — ལམ་གྱི་ས་ཁྲ་ **B2** ད་ལྟ་ “འགན་འཁྲི་དང་ འགན་འཁྲི།
+ཉེན་བརྡ་, བདེན་དཔྱད་” དང་ལེན་གྱི་ཁྱད་ཆོས།

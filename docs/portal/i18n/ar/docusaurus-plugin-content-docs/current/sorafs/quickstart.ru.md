@@ -4,46 +4,48 @@ direction: rtl
 source: docs/portal/docs/sorafs/quickstart.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Быстрый старт SoraFS
+# البداية السريعة SoraFS
 
-Этот практический гайд проходит через детерминированный профиль чанкователя SF-1,
-подпись манифестов и поток выборки от нескольких провайдеров, которые лежат в основе
-конвейера хранения SoraFS. Дополните его
-[подробным разбором конвейера манифестов](manifest-pipeline.md)
-для заметок по дизайну и справки по флагам CLI.
+يتم تحقيق هذا الدليل العملي من خلال الملف التعريفي المحدد للشاحنة SF-1,
+قم بإدراج البيانات واختيارات سريعة من عدد قليل من الموردين الذين يتم تسليمهم في الأساس
+ناقل الحركة SoraFS. هذه هي الذات الكاملة
+[بيان ناقل المعلومات الجيد](manifest-pipeline.md)
+لسلامة التصميم والأخلاق تحت علم CLI.
 
-## Требования
+## تريبوفانيا
 
-- Тулчейн Rust (`rustup update`), workspace клонирован локально.
-- Опционально: [пара ключей Ed25519, совместимая с OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  для подписи манифестов.
-- Опционально: Node.js ≥ 18, если планируете предварительно просматривать портал Docusaurus.
+- تولشين روست (`rustup update`)، نسخة من مساحة العمل محلية.
+- اختياريًا: [للمفتاح Ed25519، المتوافق مع OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  لنشر البيانات.
+- اختياريًا: Node.js أكبر من 18، إذا كنت تخطط مسبقًا لنشر البوابة Docusaurus.
 
-Установите `export RUST_LOG=info` во время экспериментов, чтобы получать полезные
-сообщения CLI.
+قم بتثبيت `export RUST_LOG=info` أثناء التجربة للحصول على فائدة مفيدة
+المشاركة CLI.
 
-## 1. Обновить детерминированные фикстуры
+## 1. التعرف على تحديد التركيبات
 
-Сгенерируйте канонические векторы чанкинга SF-1. Команда также выпускает подписанные
-конверты манифеста при указании `--signing-key`; используйте `--allow-unsigned`
-только в локальной разработке.
+تم تصميم المتجهات الكنسي من خلال تغيير SF-1. قم بتعبئة الأمر أيضًا
+تحويلات البيان عند الإعلان عن `--signing-key`; استخدم `--allow-unsigned`
+فقط في الصناعة المحلية.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Результаты:
+النتائج:
 
-- `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
-- `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (если подписано)
-- `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
+-`fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
+-`fixtures/sorafs_chunker/manifest_blake3.json`
+-`fixtures/sorafs_chunker/manifest_signatures.json` (إذا تم النشر)
+-`fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Разбейте payload и изучите план
+## 2. حدد الحمولة واستكمل الخطة
 
-Используйте `sorafs_chunker`, чтобы разбить произвольный файл или архив:
+استخدم `sorafs_chunker` لمسح ملف الإنتاج أو الأرشيف:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -51,23 +53,21 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Ключевые поля:
+كلمات مفتاحية:
 
-- `profile` / `break_mask` – подтверждает параметры `sorafs.sf1@1.0.0`.
-- `chunks[]` – упорядоченные смещения, длины и дайджесты BLAKE3 чанков.
-
-Для более крупных фикстур запустите регрессию на базе proptest, чтобы убедиться,
-что потоковый и пакетный чанкинг остаются синхронными:
+- `profile` / `break_mask` – التحقق من المعلمات `sorafs.sf1@1.0.0`.
+- `chunks[]` - إعدادات وميزات وتفاصيل أفضل لـ BLAKE3.من أجل إنشاء مجموعة كبيرة من الصور، قم بإعادة التراجع إلى قاعدة Proptest لتتمكن من مشاهدتها،
+ما هي المزامنة السريعة والحزم:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Соберите и подпишите манифест
+## 3. بيان اليقظة والتضامن
 
-Объедините план чанков, алиасы и подписи управления в манифест с помощью
-`sorafs-manifest-stub`. Команда ниже показывает payload одного файла; передайте путь
-к директории, чтобы упаковать дерево (CLI обходит его в лексикографическом порядке).
+تظهر خطة الالتزام والأسماء المستعارة وإدارة المشاركات مع العرض
+`sorafs-manifest-stub`. قم بإظهار الأمر التالي لملف واحد للحمولة؛ اسبق الطريق
+إلى الدلائل، لتغطيه العنوان (CLI تتعهد به في ليكسيكوغرافيتسكوم).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -79,21 +79,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Проверьте `/tmp/docs.report.json` на:
+تحقق من `/tmp/docs.report.json` على:
 
-- `chunking.chunk_digest_sha3_256` – SHA3-дайджест смещений/длин, совпадает с фикстурами
-  чанкователя.
-- `manifest.manifest_blake3` – BLAKE3-дайджест, подписанный в конверте манифеста.
-- `chunk_fetch_specs[]` – упорядоченные инструкции выборки для оркестраторов.
+- `chunking.chunk_digest_sha3_256` – SHA3-ضبط الضبط/الخط، متصل بالتركيبات
+  شكرا.
+- `manifest.manifest_blake3` – BLAKE3-дайддест, подписанный в повите manifesta.
+- `chunk_fetch_specs[]` – تعليمات مختارة للموسيقيين.
 
-Когда будете готовы предоставить реальные подписи, добавьте аргументы `--signing-key`
-и `--signer`. Команда проверяет каждую подпись Ed25519 перед записью конверта.
+عندما تريد تقديم عرض حقيقي، قم بإضافة الحجج `--signing-key`
+و `--signer`. قم بالتحقق من الأمر عندما تقوم بإدراج Ed25519 قبل كتابة التحويل.
 
-## 4. Смоделируйте получение от нескольких провайдеров
+## 4. قم بتزويدك بعدد قليل من مقدمي الخدمة
 
-Используйте dev-CLI для выборки, чтобы проиграть план чанков через одного или
-нескольких провайдеров. Это идеально для smoke-тестов CI и прототипирования
-оркестратора.
+استخدم dev-CLI للاختيارات لتنزيل الخطة من خلال جزء واحد أو
+عدد قليل من المقدمين. هذا مثالي لاختبار الدخان CI والنماذج الأولية
+أوركيستراتورا.
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -103,27 +103,25 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Проверки:
+بروفيرك:- `payload_digest_hex` يتم الالتزام ببيان آخر.
+- `provider_reports[]` يعرض كل النجاح/الجهاز في مقدم الخدمة.
+- Ненулевой `chunk_retry_total` يدعم الضغط الخلفي.
+- قم بالتقدم إلى `--max-peers=<n>` لتتمكن من تخطي موفر الشيسلو في النهاية و
+  التركيز على محاكاة CI للمرشحين الأساسيين.
+- `--retry-budget=<n>` تم إعادة تصميمه بشكل قياسي من خلال رأس السهم (3) ، لذلك
+  يتم تشغيل أوركسترا الانحدار بشكل أفضل عند الحقن بشكل متكرر.
 
-- `payload_digest_hex` должен совпадать с отчетом манифеста.
-- `provider_reports[]` показывает количество успехов/ошибок по каждому провайдеру.
-- Ненулевой `chunk_retry_total` подсвечивает настройки back-pressure.
-- Передайте `--max-peers=<n>`, чтобы ограничить число провайдеров в запуске и
-  сфокусировать CI-симуляции на основных кандидатах.
-- `--retry-budget=<n>` переопределяет стандартное число повторов на чанк (3), чтобы
-  быстрее выявлять регрессии оркестратора при инъекции сбоев.
+قم بإضافة `--expect-payload-digest=<hex>` و`--expect-payload-len=<bytes>` لتكون جاهزًا
+تم الانتهاء من ذلك باستخدام oshibkoy عندما يتم إلغاء حجب الحمولة النافعة من البيان.
 
-Добавьте `--expect-payload-digest=<hex>` и `--expect-payload-len=<bytes>`, чтобы быстро
-завершаться с ошибкой, когда восстановленный payload отклоняется от манифеста.
+## 5. أحدث الصيحات
 
-## 5. Дальнейшие шаги
-
-- **Интеграция с управлением** – передайте дайджест манифеста и
-  `manifest_signatures.json` в процесс совета, чтобы Pin Registry мог объявить
-  доступность.
-- **Переговоры с реестром** – ознакомьтесь с [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  перед регистрацией новых профилей. Автоматизация должна предпочитать канонические
-  хэндлы (`namespace.name@semver`) числовым ID.
-- **Автоматизация CI** – добавьте команды выше в release-пайплайны, чтобы документация,
-  фикстуры и артефакты публиковали детерминированные манифесты вместе с подписанными
-  метаданными.
+- **التكامل مع الإدارة** – قم بمتابعة بيان الصفحة و
+  `manifest_signatures.json` في العملية التي يمكنك من خلالها الالتزام بـ Pin Registry
+  مضمون.
+- **المراسلات مع السجل** – تواصل مع [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  قبل التسجيل في الملف الشخصي الجديد. الأتمتة تتطلب جهدًا كبيرًا للكتابة الكنسية
+  المعرف (`namespace.name@semver`) معرف جيد.
+- **أتمتة CI** – قم بإضافة الأوامر التالية إلى الإصدار العادي للتوثيق،
+  يتم نشر الصور والمصنوعات اليدوية من خلال بيانات تحديد المعالم
+  ترجمة.

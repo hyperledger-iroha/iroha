@@ -11,62 +11,63 @@ id: preview-feedback-w1-plan
 title: W1 partner preflight plan
 sidebar_label: W1 plan
 description: Tasks, owners, and evidence checklist for the partner preview cohort.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| ንጥል | ዝርዝሮች |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Target window | Q2 2025 week 3 |
-| Artefact tag (planned) | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
+| ማዕበል | W1 - አጋሮች እና I18NT0000002X integrators |
+| የዒላማ መስኮት | Q2 2025 ሳምንት 3 |
+| Artefact መለያ (የታቀደ) | `preview-2025-04-12` |
+| የመከታተያ ጉዳይ | `DOCS-SORA-Preview-W1` |
 
-## Objectives
+# አላማዎች
 
-1. Secure legal + governance approvals for partner preview terms.
-2. Stage the Try it proxy and telemetry snapshots used in the invite bundle.
-3. Refresh the checksum-verified preview artefact and probe results.
-4. Finalise the partner roster + request templates before invites are sent.
+1. ለአጋር ቅድመ እይታ ውሎች ደህንነቱ የተጠበቀ የህግ + የአስተዳደር ማፅደቆች።
+2. በግብዣ ጥቅል ውስጥ ጥቅም ላይ የዋለውን ፕሮክሲ እና ቴሌሜትሪ ቅጽበተ-ፎቶዎችን ይሞክሩ።
+3. በቼክሱም የተረጋገጠ ቅድመ ዕይታ ቅርስ እና የምርመራ ውጤቶችን ያድሱ።
+4. ግብዣዎች ከመላካቸው በፊት የአጋር ስም ዝርዝር + የጥያቄ አብነቶችን ያጠናቅቁ።
 
-## Task breakdown
+##የተግባር ትንተና
 
-| ID | Task | Owner | Due | Status | Notes |
+| መታወቂያ | ተግባር | ባለቤት | የሚከፈልበት | ሁኔታ | ማስታወሻ |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtain legal approval for the preview terms addendum | Docs/DevRel lead → Legal | 2025‑04‑05 | ✅ Completed | Legal ticket `DOCS-SORA-Preview-W1-Legal` signed off 2025‑04‑05; PDF attached to the tracker. |
-| W1-P2 | Capture Try it proxy staging window (2025‑04‑10) and validate proxy health | Docs/DevRel + Ops | 2025‑04‑06 | ✅ Completed | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` executed 2025‑04‑06; CLI transcript + `.env.tryit-proxy.bak` archived. |
-| W1-P3 | Build preview artefact (`preview-2025-04-12`), run `scripts/preview_verify.sh` + `npm run probe:portal`, archive descriptor/checksums | Portal TL | 2025‑04‑08 | ✅ Completed | Artefact + verification logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`; probe output attached to tracker. |
-| W1-P4 | Review partner intake forms (`DOCS-SORA-Preview-REQ-P01…P08`), confirm contacts + NDAs | Governance liaison | 2025‑04‑07 | ✅ Completed | All eight requests approved (last two cleared 2025‑04‑11); approvals linked in tracker. |
-| W1-P5 | Draft invite copy (based on `docs/examples/docs_preview_invite_template.md`), set `<preview_tag>` and `<request_ticket>` for each partner | Docs/DevRel lead | 2025‑04‑08 | ✅ Completed | Invite draft sent 2025‑04‑12 15:00 UTC alongside artefact links. |
+| W1-P1 | ለቅድመ እይታ ውሎች ተጨማሪ ህጋዊ ፈቃድ ያግኙ ሰነዶች/DevRel አመራር → ህጋዊ | 2025-04-05 | ✅ ተጠናቀቀ | ሕጋዊ ቲኬት I18NI0000017X ተፈርሟል 2025-04-05; ፒዲኤፍ ከመከታተያው ጋር ተያይዟል። |
+| W1-P2 | ያንሱት ፕሮክሲ ማዘጋጃ መስኮትን ይሞክሩት (2025-04-10) እና የተኪ ጤናን ያረጋግጡ | ሰነዶች/DevRel + Ops | 2025-04-06 | ✅ ተጠናቀቀ | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` ተፈጽሟል 2025-04-06; የCLI ግልባጭ + I18NI0000019X በማህደር ተቀምጧል። |
+| W1-P3 | የቅድመ እይታ አርቴፋክትን (`preview-2025-04-12`)፣ `scripts/preview_verify.sh` + `npm run probe:portal`፣ የማህደር ገላጭ/Checksumsን ያሂዱ | ፖርታል TL | 2025-04-08 | ✅ ተጠናቀቀ | Artefact + የማረጋገጫ ምዝግብ ማስታወሻዎች በ `artifacts/docs_preview/W1/preview-2025-04-12/`; የመመርመሪያ ውፅዓት ከመከታተያ ጋር ተያይዟል። |
+| W1-P4 | የአጋር ቅበላ ቅጾችን ይገምግሙ (I18NI0000024X)፣ እውቂያዎችን + NDAs ያረጋግጡ | የአስተዳደር ግንኙነት | 2025-04-07 | ✅ ተጠናቀቀ | ሁሉም ስምንቱ ጥያቄዎች ጸድቀዋል (የመጨረሻዎቹ ሁለት ጸድተዋል 2025-04-11); በክትትል ውስጥ የተገናኙ ማጽደቆች። |
+| W1-P5 | ረቂቅ የግብዣ ቅጂ (በ`docs/examples/docs_preview_invite_template.md` ላይ የተመሰረተ)፣ ለእያንዳንዱ አጋር `<preview_tag>` እና `<request_ticket>` አዘጋጅ | ሰነዶች/DevRel አመራር | 2025-04-08 | ✅ ተጠናቀቀ | የግብዣ ረቂቅ ከ2025-04-12 15:00UTC ከሥነ ጥበብ ማገናኛዎች ጋር ተልኳል። |
 
-## Preflight checklist
+## የቅድመ በረራ ማረጋገጫ ዝርዝር
 
-> Tip: run `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` to execute steps 1‑5 automatically (build, checksum verification, portal probe, link checker, and Try it proxy update). The script records a JSON log you can attach to the tracker issue.
+> ጠቃሚ ምክር፡ ደረጃ 1-5ን በራስ ሰር ለመፈፀም `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` ን ያሂዱ (ግንባታ፣ ቼክሰም ማረጋገጥ፣ የፖርታል ፍተሻ፣ አገናኝ አራሚ እና ተኪ ማዘመኛ ይሞክሩት)። ስክሪፕቱ ከመከታተያ ችግር ጋር ማያያዝ የምትችለውን የJSON ሎግ ይመዘግባል።
 
-1. `npm run build` (with `DOCS_RELEASE_TAG=preview-2025-04-12`) to regenerate `build/checksums.sha256` and `build/release.json`.
+1. `npm run build` (ከ I18NI0000030X ጋር) `build/checksums.sha256` እና `build/release.json` እንደገና ለማዳበር።
 2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` and archive `build/link-report.json` beside the descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (or provide the appropriate target via `--tryit-target`); commit the updated `.env.tryit-proxy` and keep the `.bak` for rollback.
-6. Update the W1 tracker issue with log paths (descriptor checksum, probe output, Try it proxy change, Grafana snapshots).
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` እና I18NI0000036X በማህደር ገላጭ አጠገብ።
+5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ወይም ተገቢውን ዒላማ በ `--tryit-target` ያቅርቡ); የዘመነውን `.env.tryit-proxy` አስገባ እና `.bak` ለመልሶ ማቆየት።
+6. የW1 መከታተያ ችግርን በሎግ ዱካዎች ያዘምኑ (ገላጭ ቼክተም፣ የፍተሻ ውፅዓት፣ ተኪ ለውጥ ይሞክሩት፣ I18NT0000000X ቅጽበተ-ፎቶዎች)።
 
-## Evidence checklist
+## የማስረጃ ዝርዝር
 
-- [x] Signed legal approval (PDF or ticket link) attached to `DOCS-SORA-Preview-W1`.
-- [x] Grafana screenshots for `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] `preview-2025-04-12` descriptor + checksum log stored under `artifacts/docs_preview/W1/`.
-- [x] Invite roster table with `invite_sent_at` timestamps populated (see tracker W1 log).
-- [x] Feedback artifacts mirrored in [`preview-feedback/w1/log.md`](./log.md) with one row per partner (updated 2025-04-26 with roster/telemetry/issue data).
+- [x] ከI18NI0000041X ጋር ተያይዟል (ፒዲኤፍ ወይም ቲኬት ማገናኛ) የተፈረመ ሕጋዊ ፈቃድ።
+- [x] I18NT0000001X ቅጽበታዊ ገጽ እይታዎች ለI18NI0000042X፣ `TryItProxyErrors`፣ `DocsPortal/GatewayRefusals`።
+- [x] `preview-2025-04-12` ገላጭ + የቼክ መዝገብ በ `artifacts/docs_preview/W1/` ስር ተቀምጧል።
+- [x] በ`invite_sent_at` የጊዜ ማህተሞች የተሞሉ (የመከታተያ W1 ሎግ ይመልከቱ) የስም ዝርዝር ሠንጠረዥን ይጋብዙ።
+- [x] የግብረመልስ ቅርሶች በ[`preview-feedback/w1/log.md`](./log.md) በአንድ ረድፍ በአንድ ባልደረባ (የዘመነ 2025-04-26 ከሮስተር/ቴሌሜትሪ/ጉዳይ መረጃ ጋር)።
 
-Update this plan as tasks progress; the tracker references it to keep the roadmap
-auditable.
+ተግባራት እየገፉ ሲሄዱ ይህንን እቅድ ያዘምኑ; መከታተያው የመንገድ ካርታውን ለመጠበቅ ይጠቅሳል
+ኦዲት ሊደረግ የሚችል።
 
-## Feedback workflow
+## የግብረመልስ የስራ ሂደት
 
-1. For each reviewer, duplicate the template in
-   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   fill the metadata, and store the completed copy under
+1. ለእያንዳንዱ ገምጋሚ አብነቱን በ ውስጥ ያባዙት።
+   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)፣
+   ሜታዳታውን ይሙሉ እና የተጠናቀቀውን ቅጂ ከስር ያከማቹ
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Summarise invites, telemetry checkpoints, and open issues inside the live log at
-   [`preview-feedback/w1/log.md`](./log.md) so governance reviewers can replay the entire wave
-   without leaving the repository.
-3. When knowledge-check or survey exports arrive, attach them in the artefact path noted in the log
-   and cross-link the tracker issue.
+2. ግብዣዎችን ማጠቃለል፣ የቴሌሜትሪ ፍተሻ ነጥቦችን እና ጉዳዮችን በቀጥታ መዝገብ ውስጥ ይክፈቱ
+   [`preview-feedback/w1/log.md`](./log.md) ስለዚህ የአስተዳደር ገምጋሚዎች ሙሉውን ሞገድ እንደገና ማጫወት ይችላሉ
+   ከማጠራቀሚያው ሳይወጡ.
+3. የእውቀት ቼክ ወይም የዳሰሳ ጥናት ወደ ውጭ በሚላኩበት ጊዜ፣ በምዝግብ ማስታወሻው ላይ በተጠቀሰው የጥበብ መንገድ አያይዟቸው
+   እና የመከታተያ ጉዳይን ያቋርጡ።

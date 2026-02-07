@@ -11,27 +11,28 @@ id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
 description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-# Pin Registry Manifest Validation Plan (SF-4 Prep)
+# Pin 注册表清单验证计划 (SF-4 Prep)
 
-This plan outlines the steps required to thread `sorafs_manifest::ManifestV1`
-validation into the forthcoming Pin Registry contract so that SF-4 work can
-build on the existing tooling without duplicating encode/decode logic.
+该计划概述了线程 `sorafs_manifest::ManifestV1` 所需的步骤
+验证即将到来的密码注册合同，以便 SF-4 工作可以
+基于现有工具构建，无需重复编码/解码逻辑。
 
-## Goals
+## 目标
 
-1. Host-side submission paths verify manifest structure, chunking profile, and
-   governance envelopes before accepting proposals.
-2. Torii and gateway services reuse the same validation routines to ensure
-   deterministic behaviour across hosts.
-3. Integration tests cover positive/negative cases for manifest acceptance,
-   policy enforcement, and error telemetry.
+1. 主机端提交路径验证清单结构、分块配置文件和
+   在接受提案之前先确定治理信封。
+2. Torii 和网关服务重用相同的验证例程以确保
+   跨主机的确定性行为。
+3. 集成测试涵盖明显接受的正面/负面案例，
+   策略执行和错误遥测。
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart LR
@@ -43,46 +44,46 @@ flowchart LR
     registry --> torii
 ```
 
-### Components
+### 组件
 
-- `ManifestValidator` (new module in `sorafs_manifest` or `sorafs_pin` crate)
-  encapsulates structural checks and policy gates.
-- Torii exposes a gRPC endpoint `SubmitManifest` that calls into
-  `ManifestValidator` before forwarding to the contract.
-- Gateway fetch path optionally consumes the same validator when caching new
-  manifests from the registry.
+- `ManifestValidator`（`sorafs_manifest` 或 `sorafs_pin` 板条箱中的新模块）
+  封装结构检查和策略门。
+- Torii 暴露了调用的 gRPC 端点 `SubmitManifest`
+  `ManifestValidator` 在转发到合约之前。
+- 网关获取路径在缓存新内容时可以选择使用相同的验证器
+  从注册表中体现出来。
 
-## Task Breakdown
+## 任务分解
 
-| Task | Description | Owner | Status |
-|------|-------------|-------|--------|
-| V1 API skeleton | Add `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` to `sorafs_manifest`. Include BLAKE3 digest verification and chunker registry lookup. | Core Infra | ✅ Done | Shared helpers (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) now live in `sorafs_manifest::validation`. |
-| Policy wiring | Map registry policy config (`min_replicas`, expiry windows, allowed chunker handles) into validation inputs. | Governance / Core Infra | Pending — tracked in SORAFS-215 |
-| Torii integration | Call validator inside Torii manifest submission path; return structured Norito errors on failure. | Torii Team | Planned — tracked in SORAFS-216 |
-| Host contract stub | Ensure contract entrypoint rejects manifests that fail validation hash; expose metrics counters. | Smart Contract Team | ✅ Done | `RegisterPinManifest` now invokes the shared validator (`ensure_chunker_handle`/`ensure_pin_policy`) before mutating state and unit tests cover the failure cases. |
-| Tests | Add unit tests for validator + trybuild cases for invalid manifests; integration tests in `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 In progress | Validator unit tests landed alongside on-chain rejection tests; full integration suite still pending. |
-| Docs | Update `docs/source/sorafs_architecture_rfc.md` and `migration_roadmap.md` once validator lands; document CLI usage in `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | Pending — tracked in DOCS-489 |
+|任务|描述 |业主|状态 |
+|------|-------------|--------|--------|
+| V1 API 骨架 |将 `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` 添加到 `sorafs_manifest`。包括 BLAKE3 摘要验证和分块器注册表查找。 |核心基础设施| ✅ 完成 |共享助手（`validate_chunker_handle`、`validate_pin_policy`、`validate_manifest`）现在位于 `sorafs_manifest::validation` 中。 |
+|政策布线|将注册表策略配置（`min_replicas`、到期窗口、允许的分块句柄）映射到验证输入。 |治理/核心基础设施|待定 — 在 SORAFS-215 中跟踪 |
+| Torii 集成 |在 Torii 清单提交路径内调用验证器；失败时返回结构化 Norito 错误。 | Torii 团队 |已计划 — 在 SORAFS-216 中跟踪 |
+|主机合同存根 |确保合约入口点拒绝验证哈希失败的清单；公开指标计数器。 |智能合约团队 | ✅ 完成 | `RegisterPinManifest` 现在在改变状态之前调用共享验证器 (`ensure_chunker_handle`/`ensure_pin_policy`)，并且单元测试覆盖失败案例。 |
+|测试 |为无效清单添加验证器 + trybuild 案例的单元测试； `crates/iroha_core/tests/pin_registry.rs` 中的集成测试。 |质量保证协会 | 🟠 进行中 |验证器单元测试与链上拒绝测试同时进行；完整的集成套件仍在等待中。 |
+|文档 |验证器登陆后更新 `docs/source/sorafs_architecture_rfc.md` 和 `migration_roadmap.md`；在 `docs/source/sorafs/manifest_pipeline.md` 中记录 CLI 用法。 |文档团队 |待处理 — 在 DOCS-489 中跟踪 |
 
-## Dependencies
+## 依赖关系
 
-- Pin Registry Norito schema finalisation (ref: SF-4 item in roadmap).
-- Council-signed chunker registry envelopes (ensures validator mapping is
-  deterministic).
-- Torii authentication decisions for manifest submission.
+- Pin 注册表 Norito 架构最终确定（参考：路线图中的 SF-4 项目）。
+- 理事会签署的分块注册信封（确保验证器映射是
+  确定性）。
+- Torii 清单提交的身份验证决定。
 
-## Risks & Mitigations
+## 风险与缓解措施
 
-| Risk | Impact | Mitigation |
+|风险|影响 |缓解措施 |
 |------|--------|------------|
-| Divergent policy interpretation between Torii and contract | Non-deterministic acceptance. | Share validation crate + add integration tests that compare host vs on-chain decisions. |
-| Performance regression for large manifests | Slower submission | Benchmark via cargo criterion; consider caching manifest digest results. |
-| Error messaging drift | Operator confusion | Define Norito error codes; document them in `manifest_pipeline.md`. |
+| Torii与合同政策解读分歧|非确定性接受。 |共享验证箱+添加集成测试来比较主机与链上决策。 |
+|大型清单的性能回归 |提交速度较慢 |通过货物标准进行基准；考虑缓存清单摘要结果。 |
+|错误消息漂移|操作员困惑|定义Norito错误代码；将它们记录在 `manifest_pipeline.md` 中。 |
 
-## Timeline Targets
+## 时间表目标
 
-- Week 1: Land `ManifestValidator` skeleton + unit tests.
-- Week 2: Wire Torii submission path and update CLI to surfacing validation errors.
-- Week 3: Implement contract hooks, add integration tests, update docs.
-- Week 4: Run end-to-end rehearsal with migration ledger entry, capture council sign-off.
+- 第 1 周：登陆 `ManifestValidator` 骨架 + 单元测试。
+- 第 2 周：连接 Torii 提交路径并更新 CLI 以显示验证错误。
+- 第 3 周：实施合约挂钩、添加集成测试、更新文档。
+- 第 4 周：进行端到端排练，包括迁移分类账录入、捕获委员会签字。
 
-This plan will be referenced in the roadmap once the validator work begins.
+验证器工作开始后，该计划将在路线图中引用。

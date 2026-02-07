@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: اکاؤنٹس کے درمیان اثاثہ منتقل کریں
-description: سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
-source: examples/transfer/transfer.ko
+slug : /norito/examples/transfer-asset
+titre : اکاؤنٹس کے درمیان اثاثہ منتقل کریں
+description : Voici les étapes à suivre et les démarrages rapides du SDK ainsi que les procédures pas à pas et les procédures pas à pas.
+source : exemples/transfert/transfer.ko
 ---
 
-سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
+Découvrez les étapes à suivre et les démarrages rapides du SDK ainsi que les procédures pas à pas et les étapes à suivre pour résoudre ce problème.
 
 ## لیجر واک تھرو
 
-- Alice کو ہدف اثاثہ پہلے سے فنڈ کریں (مثلا `register and mint` اسنیپٹ یا SDK quickstart فلو کے ذریعے)۔
-- `do_transfer` انٹری پوائنٹ چلائیں تاکہ Alice سے Bob کو 10 یونٹس منتقل ہوں، اور `AssetTransferRole` اجازت پوری ہو۔
+- Alice est en train de démarrer le démarrage rapide du SDK (avec `register and mint` pour le démarrage rapide du SDK)
+- `do_transfer` Il y a 10 ans d'amour avec Alice et Bob et `AssetTransferRole` اجازت پوری ہو۔
 - بیلنس (`FindAccountAssets`, `iroha_cli ledger assets list`) چیک کریں یا پائپ لائن ایونٹس سبسکرائب کریں تاکہ ٹرانسفر کے نتیجے کا مشاہدہ ہو۔
 
-## متعلقہ SDK گائیڈز
+## Utiliser le SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [Démarrage rapide du SDK Rust](/sdks/rust)
+- [Démarrage rapide du SDK Python](/sdks/python)
+- [Démarrage rapide du SDK JavaScript](/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/transfer-asset.ko)
 

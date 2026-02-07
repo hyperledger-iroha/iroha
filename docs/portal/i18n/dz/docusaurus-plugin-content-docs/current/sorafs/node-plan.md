@@ -8,108 +8,110 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Implementation Plan
 sidebar_label: Node Implementation Plan
 description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii process into a SoraFS storage provider. Use this plan alongside the [node storage guide](node-storage.md), [provider admission policy](provider-admission-policy.md), and [storage capacity marketplace roadmap](storage-capacity-marketplace.md) when sequencing deliverables.
+SF-3 གིས་ I18NI000000028X cret འདི་ I18NT000000009X/I18NT000000010X ལས་སྦྱོར་ཅིག་ SoraFS གསོག་འཇོག་འབད་མི་ལུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན། འཆར་གཞི་འདི་ [མཛུབ་གནོན་གྱི་ལམ་སྟོན་](I18NU0000022X), [provider-admission-policy.md) དེ་ལས་ [I18NU0000023X) དེ་ལས་ [I18NU0000023X) དེ་ལས་ [ལྕོགས་གྲུབ་ཚོང་འབྲེལ་ས་གནས་ཀྱི་ལམ་སྟོན་](I18NU0000000024X) ཚུ་དང་མཉམ་སྒྲིག་འབད་དགོ།
 
-## Target Scope (Milestone M1)
+## དམིགས་ཚད་ཀྱི་ཁྱབ་ཁོངས།(མའིལ་སི་ཊོན་ཨེམ་༡)
 
-1. **Chunk store integration.** Wrap `sorafs_car::ChunkStore` with a persistent backend that stores chunk bytes, manifests, and PoR trees in the configured data directory.
-2. **Gateway endpoints.** Expose Norito HTTP endpoints for pin submission, chunk fetch, PoR sampling, and storage telemetry within the Torii process.
-3. **Configuration plumbing.** Add a `SoraFsStorage` config struct (enabled flag, capacity, directories, concurrency limits) wired through `iroha_config`, `iroha_core`, and `iroha_torii`.
-4. **Quota/scheduling.** Enforce operator-defined disk/parallelism limits and queue requests with back-pressure.
-5. **Telemetry.** Emit metrics/logs for pin success, chunk fetch latency, capacity utilisation, and PoR sampling results.
+1. **ཆུན་ཀ་ཚོང་ཁང་མཉམ་བསྡོམས་འབད།** ཅངཀ་བཱའིཊི་དང་ གསལ་སྟོན་ཚུ་ གསོག་འཇོག་འབད་མི་ རྒྱབ་ཐག་གཏན་ཏོག་ཏོ་ཅིག་དང་ རིམ་སྒྲིག་འབད་ཡོད་པའི་གནད་སྡུད་སྣོད་ཐོ་ནང་ པོ་ཨར་ཤིང་ཚུ་ བརྟན་པོར་གནས་པའི་རྒྱབ་རྟེན་ཅིག་དང་གཅིག་ཁར་ བཤུད།
+2. **Gateway མཐའ་མཚམས་ཚུ་ པིན་ཕུལ་ནིའི་དོན་ལུ་ I18NT0000002X ཨེཆ་ཊི་ཊི་པི་ ཨེཆ་ཊི་ཊི་པི་ ཨེཆ་ཊི་ཊི་པི་ཚུ་ I18NT000000011X བྱ་རིམ་ནང་ གསོག་འཇོག་འབད་བའི་ བརྒྱུད་འཕྲིན་ཚུ་ཨིན།
+3. **རིམ་སྒྲིག་ཆུ་གཡུར་.** `SoraFsStorage` རིམ་སྒྲིག་སྒྲིག་བཀོད་ (ལྕོགས་ཅན་བཟོ་ཡོད་པའི་རྒྱལ་དར་དང་ ལྕོགས་གྲུབ་ སྣོད་ཐོ་ དུས་མཉམ་གྱི་ཚད་གཞི་) འདི་ I18NI0000000031X, I18NI0000000032X, དང་ `iroha_torii`, བརྒྱུད་དེ་ གློག་ཐག་བཏང་ཡོདཔ།
+4. **Quota/schenuling.** བཀོལ་སྤྱོད་ངེས་འཛིན་འབད་ཡོད་པའི་ ཌིཀསི་/པར་ལེ་ལི་ཟམ་ཚད་དང་ བང་རིམ་གྱི་ཞུ་བ་ཚུ་ རྒྱབ་བསྐྱོད་གནོན་ཤུགས་དང་གཅིག་ཁར་ཨིན།
+༥. **ཊེ་ལི་མི་ཊི་རི།** པིན་མཐར་འཁྱོལ་དང་ ཆ་ཤས་མཐར་འཁྱོལ་ ཆ་ཤས་ འཕྲོ་མཐུད་ ལྕོགས་གྲུབ་ལག་ལེན་འཐབ་ཐངས་ དེ་ལས་ པོ་ཨར་དཔེ་ཚད་གྲུབ་འབྲས་ཚུ་གི་དོན་ལུ་ མེ་ཊིག་/དྲན་ཐོ་ཚུ་ བཏོནམ་ཨིན།
 
-## Work Breakdown
+## ལས་བསྡོམས།
 
-### A. Crate & Module Structure
+### A. ཀྲེཊ་དང་ཚད་གཞིའི་བཟོ་བཀོད།
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (user → actual → defaults). | Storage Team / Config WG | Ensure the Norito/`iroha_config` layers remain deterministic. |
-| Provide a `NodeHandle` facade Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals and async plumbing. |
+| ལས་ཀ་ | ཇོ་བདག་(ཚུ་) | དྲན་ཐོ། |
+|-------|---------------|-|-------------------------------------------
+| I18NI0000000344X, I18NI000000035X, I18NI0000000036X, I18NI000000037X, I18NI0000000038X, I18NI0000000039X. | བསག་མཛོད་སྡེ་ཚན། | Torii མཉམ་བསྡོམ་གྱི་དོན་ལུ་ ལོག་ཕྱིར་འདྲེན་འབད་བཏུབ་པའི་དབྱེ་བ་ཚུ། |
+| I18NI000000040X I18NI000000041X (user → ངོ་མ་→སྔོན་སྒྲིག་ཚུ་) ལས་ སབ་ཁྲ་བཟོ་ཡོདཔ། | གསོག་འཇོག་སྡེ་ཚན་ / རིམ་སྒྲིག་ WG | I18NT000000003X/`iroha_config` བང་རིམ་ཚུ་ གཏན་འཁེལ་སྦེ་བཞག་དགོ། |
+| `NodeHandle` གདོང་ཕྱོགས་ Torii ཚུ་ པིན་/ཕེཊི་ཚུ་བཙུགས་ནིའི་དོན་ལུ་ ལག་ལེན་འཐབ་དགོ། | བསག་མཛོད་སྡེ་ཚན། | གསོག་འཇོག་ནང་ཁུལ་དང་ async plumbing ཚུ་ བཀག་ཆ་འབད་ནི། |
 
-### B. Persistent Chunk Store
+### B. གཏན་བཟོས་ཆུང་བའི་ཚོང་ཁང་།
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Build a disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (`sled`/`sqlite`). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Maintain PoR metadata (64 KiB/4 KiB trees) using `ChunkStore::sample_leaves`. | Storage Team | Support replay after restart; fail fast on corruption. |
-| Implement integrity replay on startup (rehash manifests, prune incomplete pins). | Storage Team | Block Torii start until replay completes. |
+| ལས་ཀ་ | ཇོ་བདག་(ཚུ་) | དྲན་ཐོ། |
+|-------|---------------|-|-------------------------------------------
+| ཌིཀསི་ཨོན་-ཌིཀསི་གསལ་སྡུད་ཟུར་ཐོ་ (`sled`/`sqlite`) དང་གཅིག་ཁར་ ཌིཀསི་རྒྱབ་ལོག་བཀབ་ནི་ `sorafs_car::ChunkStore` བཟོ་བསྐྲུན་འབད། | བསག་མཛོད་སྡེ་ཚན། | གཏན་འབེབས་བཀོད་སྒྲིག་: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
+| པོ་ཨར་ མེ་ཊ་ཌེ་ཊ་ (64KiB/4KiB ཤིང་) བདག་འཛིན་འཐབ་སྟེ་ `ChunkStore::sample_leaves` ལག་ལེན་འཐབ་སྟེ་། | བསག་མཛོད་སྡེ་ཚན། | ལོག་འགོ་བཙུགས་པའི་ཤུལ་ལས་ རྒྱབ་སྐྱོར་བསྐྱར་རྩེད་འབད་ནི། ངན་ལྷད་ཀྱི་ཐོག་ལུ་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་བྱུང་ཡོདཔ། |
+| འགོ་བཙུགས་གུ་ ཆིག་སྒྲིལ་བསྐྱར་རྩེད་ལག་ལེན་འཐབ། (གསལ་སྟོན་ཚུ་ བསྐྱར་བཟོ་འབད་ པྲུན་པྲུན་མེད་པའི་ པིན་ཚུ་)། | བསག་མཛོད་སྡེ་ཚན། | བསྐྱར་རྩེད་མཇུག་མ་བསྡུ་ཚུན་ཚོད་ བཀག་ཆ་འབད་དེ་ Torii འགོ་བཙུགས། |
 
-### C. Gateway Endpoints
+### C. འཛུལ་སྒོ་མཇུག་བསྡུ།
 
-| Endpoint | Behaviour | Tasks |
-|----------|-----------|-------|
-| `POST /sorafs/pin` | Accept `PinProposalV1`, validate manifests, queue ingestion, respond with manifest CID. | Validate chunk profile, enforce quotas, stream data via chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Serve chunk bytes with `Content-Chunker` headers; respect range capability spec. | Use scheduler + stream budgets (tie into SF-2d range capability). |
-| `POST /sorafs/por/sample` | Run PoR sampling for a manifest and return proof bundle. | Reuse chunk store sampling, respond with Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Summaries: capacity, PoR success, fetch error counts. | Provide data for dashboards/operators. |
+| མཐའ་མཇུག་ | སྤྱོད་ལམ་ | ལས་ཀ་ |
+|--------------------------|-----------|
+| I18NI0000049X | `PinProposalV1` ལུ་ངོས་ལེན་འབད་ གསལ་སྟོན་འབད་ནི། བང་རིམ་བཙུགས་ནི། | ཆ་ཤས་གསལ་སྡུད་དང་ ཟུར་ཐོ་ཚུ་ རྒྱུན་ལམ་གནས་སྡུད་ ཅངཀ་ཚོང་ཁང་བརྒྱུད་དེ་ བདེན་དཔྱད་འབད། |
+| `GET /sorafs/chunks/{cid}` + ཁྱབ་ཚད་འདྲི་དཔྱད་ | `Content-Chunker` མགོ་ཡིག་ཚུ་དང་གཅིག་ཁར་ ཅངཀ་བཱའིཊི་ཚུ་ ཞབས་ཏོག་སྤྲོད་དགོ། བརྩི་མཐོང་ཁྱབ་ཚད་ཀྱི་ཚད་གཞི། | དུས་ཚོད་བཀོད་མི་ + རྒྱུན་ལམ་འཆར་དངུལ་ཚུ་ལག་ལེན་འཐབ། |
+| I18NI0000003X | གསལ་སྟོན་དང་ ལོག་འོང་བའི་བདེན་དཔང་བཱན་ཌལ་གྱི་དོན་ལུ་ པོ་ཨར་དཔེ་ཚད་འདི་ གཡོག་བཀོལ། | བསྐྱར་དུ་སྤྱོད་པའི་ཆང་ཚོའི་ཚོང་ཁང་དཔེ་ཚད་ Norito JSON payloads དང་མཉམ་དུ་ལན་འདེབས་འབད། |
+| `GET /sorafs/telemetry` | བཅུད་བསྡུས་: ལྕོགས་གྲུབ་, པོ་ཨར་ མཐར་འཁྱོལ་ འཛོལ་བའི་གྱངས་ཁ་ཚུ། | ཌེཤ་བོརཌི་/བཀོལ་སྤྱོད་འབད་མི་ཚུ་གི་དོན་ལུ་ གནད་སྡུད་བྱིན། |
 
-Runtime plumbing threads PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` metrics reflect governance verdicts without bespoke Torii logic.【crates/sorafs_node/src/scheduler.rs#L147】
+རན་ཊའིམ་ཆུ་གཡུར་གྱི་ཐགསཔ་ཚུ་ Norito བརྒྱུད་དེ་ བརྡ་རྟགས་འདི་གིས་ I18NI000000066X, I18NI000000057X, དང་ `AuditVerdictV1` རེ་ལུ་ཐོ་བཀོད་འབདཝ་ཨིན། I18NT0000015X ཚད་མ།【crates/sorafs_node/src/schenuler.rs#L147】
 
-Implementation notes:
+ལག་ལེན་དྲན་འཛིན་ཚུ།
 
-- Use Torii’s Axum stack with `norito::json` payloads.
-- Add Norito schemas for responses (`PinResultV1`, `FetchErrorV1`, telemetry structs).
+- Torii གི་ Axum stack `norito::json` པེ་ལོཌི་ཚུ་དང་གཅིག་ཁར་ལག་ལེན་འཐབ།
+- ལན་ཚུ་གི་དོན་ལུ་ I18NT0000005X ལས་འཆར་ཁ་སྐོང་རྐྱབས།
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now exposes backlog depth plus the oldest epoch/deadline and
-  the most recent success/failure timestamps for each provider, powered by
-  `sorafs_node::NodeHandle::por_ingestion_status`, and Torii records the
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges for dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ ད་ལྟ་ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` གིས་ རྒྱབ་ལོག་གཏིང་ཚད་དང་ རྙིང་ཤོས་རྙིང་ཤོས་/དུས་ཚོད་དང་ དང་།
+  འཕྲལ་ཁམས་ཀྱི་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་དུས་ཚོད་ཚུ་ བྱིན་མི་རེ་རེ་ལུ་ ནུས་ཤུགས་སྤྲོད་ཡོདཔ་ཨིན།
+  `sorafs_node::NodeHandle::por_ingestion_status`, དང་ Torii གིས་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  `torii_sorafs_por_ingest_backlog`/I18NI0000006X གི་ཚད་འཇལ་འབདཝ་ཨིན། dashboods.【ཀརཕ་སི་_ནོཌ་/སྲིབ་/ལིབ་.s:510】                                                                  /སརཕས་/པི་ཨའི.ས:༡༨ 83】 ཨི་རོ་ཧ་_ཊོ་རི/རའུཊ་ཊིང་།:7244】 ཨི་རོ་ཧ་_ཊེ་ལེ་མི་ཊི་མེ་ཊི་རི་/སི་ཨར་སི་/མེ་ཊིགསི།:5390】
 
-### D. Scheduler & Quota Enforcement
+### D. ལས་རིམ།
 
-| Task | Details |
-|------|---------|
-| Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) plus per-provider budgets sourced from SF-2d range caps. |
-| Pin queue | Limit outstanding ingestion jobs; expose Norito status endpoints for queue depth. |
-| PoR cadence | Background worker driven by `por_sample_interval_secs`. |
+| ལས་ཀ་ | ཁ་གསལ་ |
+|------|--------------------------------------------------------------------
+| ཌིཀསི་ཀོ་ཊ་ | ཌིཀསི་གུ་བཱའིཊི་ཚུ་འཚོལ་ཞིབ་འབད། `max_capacity_bytes` ལས་བརྒལ་བའི་སྐབས་ པིན་གསརཔ་ཚུ་ ངོས་ལེན་འབད། མ་འོངས་པའི་སྲིད་བྱུས་ཚུ་གི་དོན་ལུ་ བཏོན་གཏང་ནིའི་ ཧུཀ་ཚུ་བྱིན། |
+| མཉམ་བསྡོམས་ | འཛམ་གླིང་སེ་མ་ཕོར་ (`max_parallel_fetches`) དང་ SF-2d ཁྱབ་ཚད་ཀྱི་ ཀེབ་ཚུ་ལས་ འབྱུང་ཁུངས་རེ་ལུ་ འཆར་དངུལ་རེ་ལུ་ འཆར་དངུལ་ཚུ། |
+| པིན་གྱལ་ | ཟ་སྤྱོད་ཀྱི་ལཱ་ཚུ་ ཚད་ལས་བརྒལ་ཏེ་ ཚད་གཞི། གྲལ་ཐིག་གཏིང་ཚད་ཀྱི་དོན་ལུ་ Norito གནས་ཚད་ཀྱི་མཇུག་བསྡུ། |
+| PoR གདམ་ཁ། | `por_sample_interval_secs` གིས་བཏང་ཡོད་པའི་རྒྱབ་ཁུངས་ལས་བྱེད་པ། |
 
-### E. Telemetry & Logging
+### E. ཊེ་ལི་མི་ཊི་དང་ ནང་བསྐྱོད་འབད་ནི།
 
-Metrics (Prometheus):
+མེ་ཊིག་ (I18NT000000000X):
 
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histogram with `result` labels)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
+- `sorafs_pin_success_total`, `sorafs_pin_failure_total`,
+- I18NI0000000072X (`result` ཁ་ཡིག་ཚུ་དང་གཅིག་ཁར་ histogram)
+- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`,
+- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`,
 - `torii_sorafs_storage_fetch_bytes_per_sec`
 - `torii_sorafs_storage_por_inflight`
 - `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / events:
+དྲན་ཐོ་ / བྱུང་ལས་:
 
-- Structured Norito telemetry for governance ingestion (`StorageTelemetryV1`).
-- Alerts when utilisation > 90% or PoR failure streak exceeds threshold.
+- གཞུང་སྐྱོང་ནང་ བཟའ་ནིའི་དོན་ལུ་ བཀོད་སྒྲིག་ Norito བརྡ་འཕྲིན་ (I18NI0000082X).
+- ལག་ལེན་འཐབ་པའི་སྐབས་ >༩༠% ཡང་ན་ པོ་ཨར་ འཐུས་ཤོར་གྱི་ཐིག་ཚད་འདི་ ཚད་གཞི་ལས་བརྒལ་བའི་སྐབས་ ཉེན་བརྡ་འབདཝ་ཨིན།
 
-### F. Testing Strategy
+### F. བརྟག་དཔྱད།
 
-1. **Unit tests.** Chunk store persistence, quota calculations, scheduler invariants (see `crates/sorafs_node/src/scheduler.rs`).  
-2. **Integration tests** (`crates/sorafs_node/tests`). Pin → fetch round trip, restart recovery, quota rejection, PoR sampling proof verification.  
-3. **Torii integration tests.** Run Torii with storage enabled, exercise HTTP endpoints via `assert_cmd`.  
-4. **Chaos roadmap.** Future drills simulate disk exhaustion, slow IO, provider removal.
+1. **སྡེ་ཚན་བརྟག་དཔྱད།** ཆུང་ཆུང་ཚོང་ཁང་བརྟན་ཏོག་ཏོ་དང་ ཁྲལ་གྱི་རྩིས་སྟོན་ འགྱུར་མེད་ (`crates/sorafs_node/src/scheduler.rs` བལྟ།)  
+2. **མཉམ་བསྡོམས་བརྟག་དཔྱད་** (I18NI0000084X). Pin → སྐོར་ཐེངས་འགྲུལ་བསྐྱོད་དང་ ལོག་འགོ་བཙུགས་ ལོག་ཐོབ་ནི་ བཞི་ཆ་བཀག་ཆ་ པོ་ཨར་དཔེ་ཚད་བདེན་ཁུངས་བདེན་དཔྱད་འབད་ནི།  
+3. **I18NT0000018X མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ།:* Torii གསོག་འཇོག་ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན་ I18NI000000085X བརྒྱུད་དེ་ HTTP མཇུག་བསྡུ།  
+4. **ཟང་ཟིང་གི་ལམ་ཁྲམ།** མ་འོངས་པའི་སྦྱོང་བརྡར་ཚུ་གིས་ ཌིཀསི་གི་ཐོན་འབྲས་འདི་ དཔེ་སྟོན་འབདཝ་ཨིན།
 
-## Dependencies
+## བརྟེན་པ།
 
-- SF-2b admission policy — ensure nodes verify admission envelopes before advertising.  
-- SF-2c capacity marketplace — tie telemetry back into capacity declarations.  
-- SF-2d advert extensions — consume range capability + stream budgets once available.
+- SF-2b འཛུལ་ཞུགས་སྲིད་བྱུས་ — ཁྱབ་བསྒྲགས་མ་འབད་བའི་ཧེ་མ་ མཐུད་མཚམས་བདེན་དཔྱད་འབད།  
+- SF-2c ལྕོགས་གྲུབ་ཚོང་ཁང་ — ལྕོགས་གྲུབ་གསལ་བསྒྲགས་ནང་ བརྒྱུད་འཕྲིན་ལོག་ཐབས།  
+- SF-2d ཁྱབ་བསྒྲགས་རྒྱ་བསྐྱེད་ཚུ་ — ཁྱབ་ཚད་ཀྱི་ནུས་སྟོབས་ + རྒྱུན་འབབ་འཆར་དངུལ་ཚུ་ འཐོབ་ཚུགསཔ་ཅིག་ བཀོལ་སྤྱོད་འབད།
 
-## Milestone Exit Criteria
+## མའིལ་སི་ཊོན་ཕྱིར་ཐོན་ཚད་གཞི།
 
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.  
-- Torii builds with `--features sorafs-storage` and passes integration tests.  
-- Documentation ([node storage guide](node-storage.md)) updated with configuration defaults + CLI examples; operator runbook available.  
-- Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
+- `cargo run -p sorafs_node --example pin_fetch` ས་གནས་ཀྱི་སྒྲིག་ཆས་ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན།  
+- I18NT0000000020X གིས་ `--features sorafs-storage` དང་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ བརྒྱུད་དེ་བཟོཝ་ཨིན།  
+- ཡིག་ཆ་ ([ནོཌི་གསོག་འཇོག་ལམ་སྟོན་](I18NU0000025X) རིམ་སྒྲིག་སྔོན་སྒྲིག་ཚུ་དང་གཅིག་ཁར་དུས་མཐུན་བཟོ་ཡོདཔ་ + CLI དཔེ་ཚུ་; བཀོལ་སྤྱོད་པའི་རན་དེབ་ཡོད།  
+- སྟེགས་རིས་བཀོད་སྒྲོམ་ཚུ་ནང་ ཊེ་ལི་མི་ཊི་རི།; ཤུགས་ཚད་ཚད་གཞི་དང་ པོ་ཨར་ འཐུས་ཤོར་ཚུ་གི་དོན་ལུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཉེན་བརྡ་ཚུ།
 
-## Documentation & Ops Deliverables
+## ཡིག་ཆ་ & Ops བ ད་འདེབས།
 
-- Update the [node storage reference](node-storage.md) with configuration defaults, CLI usage, and troubleshooting steps.  
-- Keep the [node operations runbook](node-operations.md) aligned with the implementation as SF-3 evolves.  
-- Publish API references for `/sorafs/*` endpoints inside the developer portal and wire them into the OpenAPI manifest once Torii handlers land.
+- རིམ་སྒྲིག་སྔོན་སྒྲིག་དང་ སི་ཨེལ་ཨའི་ལག་ལེན་ དེ་ལས་ དཀའ་ངལ་སེལ་ཐབས་རིམ་པ་ཚུ་དང་གཅིག་ཁར་ [མཐུད་མཚམས་གསོག་འཇོག་གཞི་བསྟུན་](I18NU0000026X) དུས་མཐུན་བཟོ་དགོ།  
+- [མཛུབ་གནོན་བཀོལ་བཀོད](node-operations.md) ཨེསི་ཨེཕ་-༣ གོང་འཕེལ་འགྱོ་བའི་བསྒང་ལས་ ལག་ལེན་འཐབ་ཐངས་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་བཞག་དགོ།  
+- གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་ནང་ `/sorafs/*` མཐའ་མཇུག་གི་དོན་ལུ་ API གཞི་བསྟུན་ཚུ་ དཔར་བསྐྲུན་འབད་ཞིནམ་ལས་ I18NT000000001X ནང་ལུ་ གློག་ཐག་འདི་ གསལ་སྟོན་འབད།

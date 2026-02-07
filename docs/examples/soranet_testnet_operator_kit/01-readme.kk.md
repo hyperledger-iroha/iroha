@@ -7,24 +7,25 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 74c5337171b90ea6fbac64da89c6208bf452895f69f75184db6aa3905d3bc99a
 source_last_modified: "2025-12-29T18:16:35.089470+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraNet Testnet Onboarding Kit (Phase T0)
+# SoraNet Testnet қосымша жинағы (T0 фазасы)
 
-Welcome! You are receiving this kit as part of the closed SoraNet testnet
-(SNNet-10 phase T0). Complete every checklist item before connecting your
-relay. The Governance Council will validate your submission before whitelisting
-your descriptors.
+Қош келдіңіз! Сіз бұл жинақты жабық SoraNet сынақ желісінің бөлігі ретінде алып отырсыз
+(SNNet-10 фаза T0). Қосар алдында бақылау тізімінің әрбір элементін аяқтаңыз
+реле. Басқару кеңесі ақ тізімге енгізілмес бұрын жібергеніңізді тексереді
+дескрипторларыңыз.
 
-Artifacts in this directory:
+Осы каталогтағы артефактілер:
 
-1. `01-readme.md` — this overview.
-2. `02-checklist.md` — operator pre-flight tasks.
-3. `03-config-example.toml` — baseline relay + orchestrator configuration.
-4. `04-telemetry.md` — required dashboards and alert wiring.
-5. `05-incident-playbook.md` — brownout/downgrade response workflow.
-6. `06-verification-report.md` — template to submit after smoke tests.
-7. `07-metrics-sample.json` — example input for the SNNet-10 metrics validator.
+1. `01-readme.md` — бұл шолу.
+2. `02-checklist.md` — оператордың ұшу алдындағы тапсырмалары.
+3. `03-config-example.toml` — негізгі реле + оркестр конфигурациясы.
+4. `04-telemetry.md` — қажетті бақылау тақталары және ескерту сымдары.
+5. `05-incident-playbook.md` — өшіру/төмендетуге жауап беру жұмыс процесі.
+6. `06-verification-report.md` — түтін сынақтарынан кейін ұсынылатын үлгі.
+7. `07-metrics-sample.json` — SNNet-10 метрикасының валидаторына мысал енгізу.
 
-Keep the kit private; a signed copy will be archived by governance once your
-relay is approved.
+Жинақты жеке сақтаңыз; қол қойылған көшірме сіздің қолыңыздан кейін басшылықпен мұрағатталады
+реле бекітілген.

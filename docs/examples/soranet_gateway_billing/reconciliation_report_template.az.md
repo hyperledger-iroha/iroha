@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5c10cd7eda24260bfd1319c7b8ac23dba2a1c8a1cb39ea49f0f1a64427ca15db
 source_last_modified: "2025-12-29T18:16:35.086260+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraGlobal Gateway Billing Reconciliation
+# SoraGlobal Gateway Billinq uzlaşması
 
-- **Window:** `<from>/<to>`
-- **Tenant:** `<tenant-id>`
-- **Catalog Version:** `<catalog-version>`
-- **Usage Snapshot:** `<path or hash>`
-- **Guardrails:** soft cap `<soft-cap-xor> XOR`, hard cap `<hard-cap-xor> XOR`, alert threshold `<alert-threshold>%`
-- **Payer -> Treasury:** `<payer>` -> `<treasury>` in `<asset-definition>`
-- **Total Due:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
+- **Pəncərə:** `<from>/<to>`
+- **Kirayəçi:** `<tenant-id>`
+- **Kataloq Versiyası:** `<catalog-version>`
+- **İstifadə Snapshot:** `<path or hash>`
+- **Qorxuluklar:** yumşaq qapaq `<soft-cap-xor> XOR`, sərt qapaq `<hard-cap-xor> XOR`, xəbərdarlıq həddi `<alert-threshold>%`
+- **Ödəyici -> Xəzinədarlıq:** `<payer>` -> `<treasury>`, `<asset-definition>`
+- **Ümumi ödəniş:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
 
-## Line Item Checks
-- [ ] Usage entries cover only catalog meter ids and valid billing regions
-- [ ] Quantity units match catalog definitions (requests, GiB, ms, etc.)
-- [ ] Region multipliers and discount tiers applied as per catalog
-- [ ] CSV/Parquet exports match the JSON invoice line items
+## Sətir elementinin yoxlanılması
+- [ ] İstifadə qeydləri yalnız kataloq sayğac identifikatorlarını və etibarlı hesablaşma bölgələrini əhatə edir
+- [ ] Kəmiyyət vahidləri kataloq təriflərinə uyğun gəlir (sorğular, GiB, ms və s.)
+- [ ] Kataloq üzrə tətbiq olunan region çarpanları və endirim dərəcələri
+- [ ] CSV/Parket ixracları JSON faktura sətir elementlərinə uyğun gəlir
 
-## Guardrail Evaluation
-- [ ] Soft cap alert threshold reached? `<yes/no>` (attach alert evidence if yes)
-- [ ] Hard cap exceeded? `<yes/no>` (if yes, attach override approval)
-- [ ] Minimum invoice floor satisfied
+## Korpusun Qiymətləndirilməsi
+- [ ] Yumşaq qapaq siqnalı həddi çatdı? `<yes/no>` (əgər varsa, xəbərdarlıq sübutunu əlavə edin)
+- [ ] Sərt qapaq keçildi? `<yes/no>` (əgər varsa, ləğvetmə təsdiqini əlavə edin)
+- [ ] Minimum faktura mərtəbəsi razıdır
 
-## Ledger Projection
-- [ ] Transfer batch total equals `total_micros` in invoice
-- [ ] Asset definition matches billing currency
-- [ ] Payer and treasury accounts match tenant and operator of record
-- [ ] Norito/JSON artefacts attached for audit replay
+## Ledger Proyeksiyası
+- [ ] Köçürmə partiyasının cəmi fakturada `total_micros`-ə bərabərdir
+- [ ] Aktiv tərifi faktura valyutasına uyğun gəlir
+- [ ] Ödəyici və xəzinə hesabları kirayəçi və operatorla uyğun gəlir
+- [ ] Norito/JSON artefaktları auditin təkrarı üçün əlavə edilib
 
-## Dispute/Adjustment Notes
-- Observed variance: `<variance detail>`
-- Proposed adjustment: `<delta and rationale>`
-- Supporting evidence: `<logs/dashboards/alerts>`
+## Mübahisə/Tənzimləmə Qeydləri
+- Müşahidə olunan fərq: `<variance detail>`
+- Təklif olunan düzəliş: `<delta and rationale>`
+- Dəstəkləyici sübut: `<logs/dashboards/alerts>`
 
-## Approvals
-- Billing analyst: `<name + signature>`
-- Treasury reviewer: `<name + signature>`
-- Governance packet hash: `<hash/reference>`
+## Təsdiqlər
+- Ödəniş analitiki: `<name + signature>`
+- Xəzinədarlığın rəyçisi: `<name + signature>`
+- İdarəetmə paketi hash: `<hash/reference>`

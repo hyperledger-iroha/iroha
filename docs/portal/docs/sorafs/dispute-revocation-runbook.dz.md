@@ -11,33 +11,34 @@ id: dispute-revocation-runbook
 title: SoraFS Dispute & Revocation Runbook
 sidebar_label: Dispute & Revocation Runbook
 description: Governance workflow for filing SoraFS capacity disputes, coordinating revocations, and evacuating data deterministically.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-## Purpose
+## དགོས༌དོན
 
-This runbook guides governance operators through filing SoraFS capacity disputes, coordinating revocations, and ensuring data evacuation completes deterministically.
+འདི་ཡང་ བརྡ་དོན་འཕྲུལ་རིག་གིས་ གཞུང་སྐྱོང་ལས་སྡེ་ཚུ་ལུ་ SoraFS ལྕོགས་གྲུབ་ཀྱི་རྩོད་རྙོག་ཚུ་ བཙུགས་ཏེ་ ཆ་མེད་བཏང་ནི་ཚུ་ མཉམ་འབྲེལ་འབད་དེ་ གནས་སྡུད་ཚུ་ བཏོན་གཏང་ནི་ཚུ་ ངེས་གཏན་སྦེ་ མཇུག་བསྡུཝ་ཨིན་མས།
 
-## 1. Assess the Incident
+## 1. བྱུང་རྐྱེན་དཔྱད་ཞིབ།
 
-- **Trigger conditions:** detection of SLA breach (uptime/PoR failure), replication shortfall, or billing disagreement.
-- **Confirm telemetry:** capture `/v1/sorafs/capacity/state` and `/v1/sorafs/capacity/telemetry` snapshots for the provider.
-- **Notify stakeholders:** Storage Team (provider operations), Governance Council (decision body), Observability (dashboard updates).
+- **ཊི་རི་གཱར་གནས་སྟངས།:** ཨེསི་ཨེལ་ཨེ་ བརྡལ་བཤིག་ (ཡར་འཕར་/པི་ཨོ་ འཐུས་ཤོར་) དང་ འདྲ་བཤུས་མ་འགྲིགས་པ་ ཡང་ན་ མོས་མཐུན་མེད་པའི་ བིལ་ལིང་ཚུ་ བརྟག་དཔྱད་འབད་ནི།
+- ** ཊེ་ལི་མི་ཊི་རི་:** འཛིན་བཟུང་ `/v1/sorafs/capacity/state` དང་ `/v1/sorafs/capacity/telemetry` པར་ལེན་ཚུ་ བྱིན་མི་གི་དོན་ལུ་ པར་ལེན་ཚུ།
+- **བརྡ་དོན་སྤྲོད་མི་ བཅའ་མར་གཏོགས་མི་ཚུ་:** གསོག་འཇོག་སྡེ་ཚན་ (བཀོལ་སྤྱོད་མཁོ་སྤྲོད་འབད་ནི།) གཞུང་སྐྱོང་ཚོགས་སྡེ་ (གྲོས་ཐག་བཅད་མི་ གཟུགས་བརྙན་) བལྟ་རྟོག་འབད་ཚུགསཔ་ (ཌེཤ་བོརཌ་དུས་མཐུན་)།
 
-## 2. Prepare Evidence Bundle
+## 2. སྔོན་སྒྲིག སྒྲུབ་བྱེད་ཀྱི་བསྡམས།
 
-1. Collect raw artefacts (telemetry JSON, CLI logs, auditor notes).
-2. Normalize into a deterministic archive (for example, a tarball); record:
-   - BLAKE3-256 digest (`evidence_digest`)
-   - Media type (`application/zip`, `application/jsonl`, and so on)
-   - Hosting URI (object storage, SoraFS pin, or Torii-accessible endpoint)
-3. Store the bundle in the governance evidence collection bucket with write-once access.
+༡ ཅ་རྙིང་ཚུ་བསྡུ་སྒྲིག་འབད་ (ཊེ་ལི་མི་ཊི་རི་ཇེ་ཨེསི་ཨོ་ཨེན་, སི་ཨེལ་ཨའི་དྲན་ཐོ་, རྩིས་ཞིབ་པའི་དྲན་ཐོ།))
+༢ གཏན་མཛོད་ནང་ སྤྱིར་བཏང་བཟོ་ནི། (དཔེར་ན་ ཊར་བཱོལ་ཅིག་); ཐོ་བཀོད:
+   - བེ་ལེ་ཀེ་༣-༢༥༦ བཞུ་བཅོས་ (`evidence_digest`)
+   - བརྡ་བརྒྱུད་དབྱེ་བ་ (`application/zip`, I18NI0000000013X, དང་དེ་ལས་དེ་བཟུམ་ཚུ།
+   - ཧོསི་ཊིང་ཡུ་ཨར་ཨའི་ (དངོས་པོ་གསོག་འཇོག་ I18NT0000001X པིན་ ཡང་ན་ I18NT00000003-accessessissibily མཐའ་མཚམས་))
+༣ གཞུང་སྐྱོང་སྒྲུབ་བྱེད་བསྡུ་སྒྲིག་བཱ་ཀེཊ་ནང་ བཱན་ཌལ་འདི་ འབྲི་ནིའི་ནང་ འཛུལ་སྤྱོད་འབད་དགོ།
 
-## 3. File the Dispute
+## 3. ཡིག་ཆ།
 
-1. Create a spec JSON for `sorafs_manifest_stub capacity dispute`:
+༡ `sorafs_manifest_stub capacity dispute` གི་དོན་ལུ་ JSON ཅིག་གསར་བསྐྲུན་འབད།
 
    ```json
    {
@@ -57,51 +58,42 @@ This runbook guides governance operators through filing SoraFS capacity disputes
    }
    ```
 
-2. Run the CLI:
+2. CLI རྒྱུག:
 
-   ```bash
-   sorafs_manifest_stub capacity dispute \
-     --spec=dispute.json \
-     --norito-out=dispute.to \
-     --base64-out=dispute.b64 \
-     --json-out=dispute_summary.json \
-     --request-out=dispute_request.json \
-     --authority=ih58... \
-     --private-key=ed25519:<key>
-   ```
+   I18NF0000008X
 
-3. Review `dispute_summary.json` (confirm kind, evidence digest, timestamps).
-4. Submit the request JSON to Torii `/v1/sorafs/capacity/dispute` via the governance transaction queue. Capture the `dispute_id_hex` response value; it anchors follow-up revocation actions and audit reports.
+3. བསྐྱར་ཞིབ་ `dispute_summary.json` (དབྱེ་བ་ངེས་ཏིག་དང་ སྒྲུབ་བྱེད་བཞུ་ནི་ དུས་ཚོད་མཚོན་རྟགས་)།
+༤ ཞུ་བ་འདི་ Torii I18NI000000016X ལུ་ གཞུང་སྐྱོང་ཚོང་འབྲེལ་གྱལ་རིམ་བརྒྱུད་དེ་ ཕུལ་དགོ། `dispute_id_hex` ལན་འདེབས་གནས་གོང་འདི་ བརྐོ་དགོ། འདི་གིས་ བརྟག་ཞིབ་ཆ་མེད་ཀྱི་བྱ་སྤྱོད་དང་ རྩིས་ཞིབ་སྙན་ཞུ་ཚུ་ཨིན།
 
-## 4. Evacuation & Revocation
+## 4. ཕྱིར་འཐེན།
 
-1. **Grace window:** notify the provider of impending revocation; allow evacuation of pinned data when policy permits.
-2. **Generate `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` with the approved reason.
-   - Verify signatures and the revocation digest.
-3. **Publish revocation:**
-   - Submit the revocation request to Torii.
-   - Ensure provider adverts are blocked (expect `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to climb).
-4. **Update dashboards:** flag the provider as revoked, reference the dispute ID, and link the evidence bundle.
+1. **Grace Window:** འབྱུང་འགྱུར་གྱི་ཆ་མེད་གཏང་མི་ལུ་བརྡ་བསྐུལ་འབད། སྲིད་བྱུས་གནང་བ་འབད་བའི་སྐབས་ གནས་སྡུད་ཚུ་ བཏོན་བཏང་བཅུགཔ་ཨིན།
+༢.
+   - ཆ་འཇོག་གྲུབ་པའི་རྒྱུ་མཚན་དང་བཅས་ `sorafs_manifest_stub provider-admission revoke` ལག་ལེན་འཐབ།
+   - མཚན་རྟགས་དང་ ཆ་མེད་གཏང་ནིའི་ ཟས་བཅུད་ཚུ་ བདེན་དཔྱད་འབད།
+3. **དཔེ་སྐྲུན་གྱི་ཆ་མེད་:**
+   - ཆ་མེད་བཏང་བའི་ཞུ་བ་ I18NT0000005X ལུ་ཕུལ་དགོ།
+   - བྱིན་མི་བརྡ་ཁྱབ་ཚུ་བཀག་ཆ་འབད་ཡོདཔ་ཨིན་ (ཡར་འཛེགས་ནི་ལུ་ I18NI0000020X རེ་བ་)
+༤. ** བརྡ་དོན་བཀོད་སྒྲིག་ཚུ་ དུས་མཐུན་བཟོ་ནི།** བྱིན་མི་འདི་ ཆ་མེད་བཏང་ཡོདཔ་སྦེ་ རྟགས་བཀོད།
 
-## 5. Post-Mortem & Follow-Up
+## 5. མོར་ཊེམ་དང་ རྗེས་འཇུག་-ཨཔ་
 
-- Record the timeline, root cause, and remediation actions in the governance incident tracker.
-- Determine restitution (stake slashing, fee clawbacks, customer refunds).
-- Document learnings; update SLA thresholds or monitoring alerts if required.
+- གཞུང་སྐྱོང་བྱུང་རིམ་འཚོལ་ཞིབ་པ་ནང་ དུས་ཚོད་ཀྱི་ཐིག་དང་ རྩ་བ་ དེ་ལས་ བཅོ་ཁ་རྐྱབ་ནིའི་བྱ་བ་ཚུ་ ཐོ་བཀོད་འབད།
+- བསྐྱར་གསོ་འབད་ནི། (བགོ་བཤའ་རྐྱབ་ནི་དང་ འཐུས་བཀལ་ནི་ ཚོང་མགྲོན་པའི་དངུལ་སྤྲོད་ནི།)
+- ཡིག་ཆ་ལྷབ་སྦྱང་། ཨེསི་ཨེལ་ཨེ་ཚད་གཞི་ཚུ་དུས་མཐུན་བཟོ་ནི་ཡང་ན་དགོ་པ་ཅིན་ ལྟ་རྟོག་ཉེན་བརྡ་ཚུ།
 
-## 6. Reference Materials
+## 6. དཔྱད་གཞིའི་དངོས་པོ།
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (dispute section)
-- `docs/source/sorafs/provider_admission_policy.md` (revocation workflow)
-- Observability dashboard: `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (རྩོད་རྙོགས་དབྱེ་ཚན་)།
+- `docs/source/sorafs/provider_admission_policy.md` (བསྐྱར་བཟོ་ལཱ་གི་རྒྱུན་རིམ།)
+- བལྟ་རྟོག་འབད་བཏུབ་པའི་ ཌེཤ་བོརཌ་: `SoraFS / Capacity Providers`
 
-## Checklist
+## ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-- [ ] Evidence bundle captured and hashed.
-- [ ] Dispute payload validated locally.
-- [ ] Torii dispute transaction accepted.
-- [ ] Revocation executed (if approved).
-- [ ] Dashboards/runbooks updated.
-- [ ] Post-mortem filed with governance council.
+- [ ] སྒྲུབ་བྱེད་ཀྱི་བང་མཛོད་འཛིན་བཟུང་བྱས་ནས་མགོ་སྐོར་གཏོང་བ།
+- [ ] ས་གནས་ནང་བདེན་དཔང་འབད་ཡོད་པའི་ རྩོད་འགྲན་པ་ གླ་ཆ་སྤྲོད་དགོ།
+- [ ] I18NT00000006 རྩོད་རྙོགས་ཚོང་འབྲེལ།
+- [ ] ཆ་འཇོག་འབད་ཡོདཔ་ (གལ་སྲིད་ཆ་འཇོག་འབད་བ་ཅིན་)།
+- [ ] དྲ་རྒྱ་/རན་དེབ་ཚུ་དུས་མཐུན་བཟོ་ཡོདཔ།
+- [ ] གཞུང་སྐྱོང་ཚོགས་སྡེ་ནང་ ཞུ་ཡིག་བཙུགས་ཡོདཔ།

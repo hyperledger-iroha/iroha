@@ -4,51 +4,49 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-roadmap.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "Feuille de route de migration SoraFS"
+العنوان: "خطة طريق الهجرة SoraFS"
 ---
 
-> Adapte de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> التكيف مع [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-# Feuille de route de migration SoraFS (SF-1)
+# تفاصيل مسار الهجرة SoraFS (SF-1)
 
-Ce document operationalise les directives de migration capturees dans
-`docs/source/sorafs_architecture_rfc.md`. Il developpe les livrables SF-1 en
-jalons prets a executer, criteres de passage et checklists des responsables afin
-que les equipes storage, governance, DevRel et SDK coordonnent la transition du
+تعمل هذه الوثيقة على تفعيل توجيهات الترحيل التي يتم التقاطها فيها
+`docs/source/sorafs_architecture_rfc.md`. Il développe les livrables SF-1 en
+متطلبات التنفيذ ومعايير المرور والقوائم المرجعية للمسؤولين
+تقوم معدات التخزين والحوكمة وDevRel وSDK بتنسيق عملية الانتقال
 
-La feuille de route est volontairement deterministe: chaque jalon nomme les
-artefacts requis, les invocations de commandes et les etapes d'attestation pour
-que les pipelines downstream produisent des sorties identiques et que la
-governance conserve une trace auditable.
+يتم تحديد خطة الطريق بشكل إرادي: كل منها يسمى nomme les
+المصنوعات اليدوية المطلوبة، واستدعاءات الأوامر، وأوراق التصديق من أجل
+إن خطوط الأنابيب في اتجاه مجرى النهر تنتج طلعات متطابقة وما إلى ذلك
+الحوكمة تحافظ على أثر قابل للتدقيق.
 
 ## Vue d'ensemble des jalons
 
-| Jalon | Fenetre | Objectifs principaux | Doit livrer | Owners |
+| جالون | فينتر | الأهداف الأساسية | دويت الكبد | أصحاب |
 |-------|---------|----------------------|-------------|--------|
-| **M1 - Enforcement deterministe** | Semaines 7-12 | Exiger des fixtures signees et preparer les preuves d'alias pendant que les pipelines adoptent les expectation flags. | Verification nightly des fixtures, manifests signes par le conseil, entrees staging du registre d'alias. | Storage, Governance, SDKs |
+| **M1 - حتمية التنفيذ** | سيمينس 7-12 | قم بتركيب التركيبات الموقعة وإعداد الإجراءات البديلة عندما تعتمد خطوط الأنابيب علامات التوقع. | التحقق ليلاً من التركيبات وعلامات البيان من قبل المجلس ومدخلات التسجيل المستعار. | التخزين والحوكمة ومجموعات SDK |
 
-Le statut des jalons est suivi dans `docs/source/sorafs/migration_ledger.md`. Toutes
-les modifications de cette feuille de route DOIVENT mettre a jour le registre afin
-que governance et release engineering restent synchronises.
+قانون الجالونات متبع في `docs/source/sorafs/migration_ledger.md`. تروج
+تعديلات هذا المسار DOIVENT mettre a jour le registre afin
+كيو الحكم وإطلاق مزامنة بقية الهندسة.## ممرات العمل
 
-## Pistes de travail
+### 2. اعتماد تحديد التثبيت
 
-### 2. Adoption du pinning deterministe
+| إيتاب | جالون | الوصف | المالك (المالكون) | طلعة جوية |
+|-------|-------|------------|----------|--------|
+| التكرارات دي تركيبات | م0 | تعمل عمليات التشغيل الجافة على مقارنة الأجزاء المحلية من القطع بـ `fixtures/sorafs_chunker`. نشر تقرير حول `docs/source/sorafs/reports/`. | موفرو التخزين | `determinism-<date>.md` avec مصفوفة تمرير/فشل. |
+| Exiger les التوقيعات | م1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` يعكس التوقيعات أو البيانات المشتقة. تتطلب تجاوزات التطوير إرفاق تنازل عن الحوكمة بالعلاقات العامة. | الأدوات مجموعة العمل | سجل CI، الامتياز مقابل تذكرة التنازل (إذا كان قابلاً للتطبيق). |
+| أعلام التوقع | م1 | خطوط الأنابيب تستأنف `sorafs_manifest_stub` مع التوقعات الواضحة لتوضيح الطلعات: | مستندات CI | تشير البرامج النصية يوميًا إلى أعلام التوقع (voir bloc de commande ci-dessous). |
+| تثبيت التسجيل أولاً | م2 | `sorafs pin propose` و`sorafs pin approve` يغلفان مستندات البيان؛ يستخدم CLI الافتراضي `--require-registry`. | عمليات الحوكمة | سجل تدقيق سجل CLI، قياس أسعار المقترحات عن بعد. |
+| باريت ملاحظتها | م3 | يتم تنبيه لوحات المعلومات Prometheus/Grafana عند اكتشاف قطع بيانات السجل المتباينة؛ تنبيهات الفروع على l'astreinte ops. | إمكانية الملاحظة | لوحة معلومات الامتياز ومعرفات قواعد التنبيه ونتائج GameDay. |
 
-| Etape | Jalon | Description | Owner(s) | Sortie |
-|-------|-------|-------------|----------|--------|
-| Repetitions de fixtures | M0 | Dry-runs hebdomadaires comparant les digests locaux de chunks avec `fixtures/sorafs_chunker`. Publier un rapport sous `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` avec matrice pass/fail. |
-| Exiger les signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` echouent si signatures ou manifests derivent. Les overrides de dev exigent un waiver governance attache au PR. | Tooling WG | Log CI, lien vers ticket de waiver (si applicable). |
-| Expectation flags | M1 | Les pipelines appellent `sorafs_manifest_stub` avec des expectations explicites pour figer les sorties: | Docs CI | Scripts mis a jour referencant les expectation flags (voir bloc de commande ci-dessous). |
-| Pinning registry-first | M2 | `sorafs pin propose` et `sorafs pin approve` enveloppent les soumissions de manifest; le CLI par defaut utilise `--require-registry`. | Governance Ops | Log d'audit du CLI registry, telemetrie des propositions ratees. |
-| Parite observabilite | M3 | Des dashboards Prometheus/Grafana alertent quand les inventaires de chunks divergent des manifests registry; alertes branchees sur l'astreinte ops. | Observability | Lien dashboard, IDs des regles d'alerte, resultats GameDay. |
-
-#### Commande canonique de publication
-
-```bash
+#### الأمر بالنشر القانوني```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
@@ -60,50 +58,46 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Remplacez les valeurs de digest, taille et CID par les references attendues
-recensees dans l'entree du registre de migration pour l'artefact.
+استبدل قيم الملخص والتفاصيل وCID حسب المراجع الموجودة
+يتم إجراء عمليات الاسترداد في مدخل سجل الترحيل من أجل المنتج.
 
-### 3. Transition des alias et communications
+### 3. نقل الأسماء المستعارة والاتصالات
 
-| Etape | Jalon | Description | Owner(s) | Sortie |
-|-------|-------|-------------|----------|--------|
-| Preuves d'alias en staging | M1 | Enregistrer les claims d'alias dans le Pin Registry staging et attacher des preuves Merkle aux manifests (`--alias`). | Governance, Docs | Bundle de preuves stocke a cote du manifest + commentaire du registre avec le nom d'alias. |
-| Enforcement des preuves | M2 | Les gateways rejettent les manifests sans headers `Sora-Proof` recents; CI ajoute l'etape `sorafs alias verify` pour recuperer les preuves. | Networking | Patch de config gateway + sortie CI capturant la verification reussie. |
+| إيتاب | جالون | الوصف | المالك (المالكون) | طلعة جوية |
+|-------|-------|------------|----------|--------|
+| Preuves d'alias en Stage | م1 | قم بتسجيل المطالبات الاسمية في مرحلة Pin Registry وإرفاق Preuves Merkle aux البيانات (`--alias`). | الحوكمة، وثائق | حزمة من Preuves مخزون في قائمة البيان + تعليق التسجيل بالاسم المستعار. |
+| إنفاذ الإجراءات المسبقة | م2 | تعيد البوابات إظهار البيانات بدون رؤوس `Sora-Proof` الأخيرة؛ قم بإضافة الشريط `sorafs alias verify` لاستعادة الإعدادات المسبقة. | الشبكات | تصحيح بوابة التكوين + التقاط CI للتحقق مرة أخرى. |
 
-### 4. Communication et audit
+### 4. الاتصالات والتدقيق
 
-- **Discipline du registre:** chaque changement d'etat (drift de fixtures, soumission registry,
-  activation d'alias) doit ajouter une note datee dans
+- **انضباط السجل:** كل تغيير في الحالة (انجراف التركيبات، تسجيل التسليم،
+  الاسم المستعار للتنشيط) قم بإضافة ملاحظة datee dans
   `docs/source/sorafs/migration_ledger.md`.
-- **Minutes de gouvernance:** les sessions du conseil approuvant les changements du pin registry ou
-  les politiques d'alias doivent referencer cette feuille de route et le registre.
-- **Comms externes:** DevRel publie des mises a jour a chaque jalon (blog + extrait de changelog)
-  mettant en avant les garanties deterministes et les calendriers d'alias.
+- **محضر الإدارة:** توافق جلسات المجلس على تغييرات سجل الدبوس الخاص بك
+  تشير السياسة المستعارة إلى هذا المسار والتسجيل.
+- **Comms externes:** DevRel publie des Misses a jour a chaque jalon (مدونة + ملحق سجل التغيير)
+  تعمل قبل الضمانات المحددة والتقويمات المستعارة.## التبعيات والمخاطر
 
-## Dependances et risques
+| التبعية | التأثير | التخفيف |
+|------------|-------|------------|
+| متاح من خلال عقد Pin Registry | قم بحظر طرح M2 دبوسًا أولاً. | قم بإعداد العقد الأمامي M2 مع اختبارات الإعادة؛ الحفاظ على مظروف احتياطي حتى يستقر. |
+| كل التوقيعات من المجلس | يتطلب مغلفات البيان وتسجيل الموافقات. | حفل التوقيع على الوثيقة في `docs/source/sorafs/signing_ceremony.md`؛ دوران مع chevauchement وملاحظة في السجل. |
+| وتيرة إصدار SDK | يجب على العملاء تكريم Preuves d'alias avant M3. | قم بمحاذاة نوافذ إصدار SDK على بوابات الزجاجات؛ إضافة قوائم التحقق من الترحيل إلى قوالب الإصدار. |
 
-| Dependance | Impact | Mitigation |
-|------------|--------|------------|
-| Disponibilite du contrat Pin Registry | Bloque le rollout M2 pin-first. | Preparer le contrat avant M2 avec des tests de replay; maintenir un fallback envelope jusqu'a stabilite. |
-| Cles de signature du conseil | Requises pour les envelopes de manifest et les approbations registry. | Ceremony de signature documentee dans `docs/source/sorafs/signing_ceremony.md`; rotation avec chevauchement et note dans le registre. |
-| Cadence de release SDK | Les clients doivent honorer les preuves d'alias avant M3. | Aligner les fenetres de release SDK sur les gates des jalons; ajouter des checklists de migration aux templates de release. |
+يتم استبعاد المخاطر المتبقية وعمليات التخفيف في `docs/source/sorafs_architecture_rfc.md`
+et doivent etre recoupes lors des Adjustments.
 
-Les risques residuels et mitigations sont reprennent dans `docs/source/sorafs_architecture_rfc.md`
-et doivent etre recoupes lors des ajustements.
+## قائمة مرجعية لمعايير الطلعة
 
-## Checklist des criteres de sortie
-
-| Jalon | Criteres |
+| جالون | المعايير |
 |-------|----------|
-| M1 | - Job nightly des fixtures vert pendant sept jours consecutifs. <br /> - Preuves d'alias staging verifiees en CI. <br /> - Governance ratifie la politique d'expectation flags. |
+| م1 | - وظيفة ليلية دي تركيبات فير قلادة سبتمبر أيام متتالية.  - يتم إجراء عمليات التحقق المسبقة من الأسماء المستعارة في CI.  - الحكم يصادق على سياسة التوقعات. |
 
-## Gestion du changement
-
-1. Proposer des ajustements via PR mettant a jour ce fichier **et**
+##Gestion du Change1. اقتراح التعديلات عبر العلاقات العامة في كل يوم من هذه الملفات **و**
    `docs/source/sorafs/migration_ledger.md`.
-2. Lier les minutes de gouvernance et les preuves CI dans la description du PR.
-3. Apres merge, notifier la liste storage + DevRel avec un resume et les actions
-   attendues des operateurs.
+2. قم بكتابة محاضر الحوكمة وإجراءات CI في وصف العلاقات العامة.
+3. بعد الدمج، قم بإعلام قائمة التخزين + DevRel مع استئناف وإجراءات
+   حضور المشغلين.
 
-Suivre cette procedure garantit que le rollout SoraFS reste deterministe,
-auditable et transparent entre les equipes participant au lancement Nexus.
+هذا الإجراء التالي يضمن أن يتم تحديد الطرح SoraFS مرة أخرى،
+قابلة للتدقيق وشفافة بين المعدات المشاركة في Nexus.

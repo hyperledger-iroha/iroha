@@ -4,13 +4,15 @@ direction: rtl
 source: docs/portal/docs/sorafs/capacity-simulation.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
+id: סימולציית קיבולת
 title: SoraFS کپیسٹی سمیولیشن رَن بُک
 sidebar_label: کپیسٹی سمیولیشن رَن بُک
-description: reproducible fixtures، Prometheus exports، اور Grafana dashboards کے ساتھ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن ٹول کٹ چلانا۔
+תיאור: מתקנים ניתנים לשחזור, יצוא Prometheus, לוחות מחוונים של Grafana עם SF-2c מכשירי טלפון ניידים کٹ چلانا۔
 ---
 
 :::note ماخذِ مستند
@@ -35,7 +37,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 
 تمام آرٹی فیکٹس `./artifacts` کے تحت جمع ہوتے ہیں (پہلے آرگومنٹ میں مختلف ڈائریکٹری دے کر اووررائیڈ کر سکتے ہیں)۔ انسانی سمجھ کے لیے `_summary.json` فائلیں دیکھیں۔
 
-## 2. نتائج جمع کریں اور metrics جاری کریں
+## 2. מדדים של ערכים גיאוגרפיים
 
 ```bash
 ./analyze.py --artifacts ./artifacts
@@ -43,10 +45,10 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 
 اینالائزر تیار کرتا ہے:
 
-- `capacity_simulation_report.json` - مجموعی allocations، failover deltas، اور dispute metadata۔
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) جو node-exporter textfile collector یا standalone scrape job کے لیے موزوں ہیں۔
+- `capacity_simulation_report.json` - הקצאות מידע, דלתות תקלות, או מטא נתונים של מחלוקות.
+- `capacity_simulation.prom` - Prometheus מדדי קבצי טקסט (`sorafs_simulation_*`) או אספן קבצי טקסט של ייצואן צומתים - עבודת גרידה עצמאית.
 
-Prometheus scrape configuration کی مثال:
+Prometheus תצורת גרידה דף:
 
 ```yaml
 scrape_configs:
@@ -63,11 +65,11 @@ scrape_configs:
 
 textfile collector کو `capacity_simulation.prom` کی طرف پوائنٹ کریں (node-exporter استعمال کریں تو اسے `--collector.textfile.directory` والی ڈائریکٹری میں کاپی کریں)۔
 
-## 3. Grafana ڈیش بورڈ امپورٹ کریں
+## 3. Grafana
 
 1. Grafana میں `dashboards/grafana/sorafs_capacity_simulation.json` امپورٹ کریں۔
 2. `Prometheus` datasource ویری ایبل کو اوپر دیے گئے scrape target سے جوڑیں۔
-3. پینلز چیک کریں:
+3. תכניות:
    - **Quota Allocation (GiB)** ہر provider کے committed/assigned balances دکھاتا ہے۔
    - **Failover Trigger** outage metrics آنے پر *Failover Active* ہو جاتا ہے۔
    - **Uptime Drop During Outage** provider `alpha` کے لیے فیصدی نقصان دکھاتا ہے۔

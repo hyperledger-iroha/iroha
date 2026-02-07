@@ -4,75 +4,75 @@ direction: ltr
 source: docs/portal/docs/sorafs/deal-engine.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: deal-engine
-title: Motor de acuerdos de SoraFS
-sidebar_label: Motor de acuerdos
-description: Resumen del motor de acuerdos SF-8, integración con Torii y superficies de telemetría.
+идентификатор: механизм сделок
+Название: Motor de acuerdos de SoraFS
+Sidebar_label: Двигатель аккуэрдоса
+описание: Резюме электродвигателя SF-8, интеграция с Torii и поверхностями телеметрии.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/deal_engine.md`. Mantén ambas ubicaciones alineadas mientras la documentación heredada siga activa.
+:::примечание Фуэнте каноника
+Эта страница отражает `docs/source/sorafs/deal_engine.md`. Mantén ambas ubicaciones alineadas mientras la documentación hereedada siga active.
 :::
 
-# Motor de acuerdos de SoraFS
+# Двигатель электродвигателя SoraFS
 
-La línea de ruta SF-8 introduce el motor de acuerdos de SoraFS, que aporta
-contabilidad determinista para acuerdos de almacenamiento y recuperación entre
-clientes y proveedores. Los acuerdos se describen con los payloads Norito
-definidos en `crates/sorafs_manifest/src/deal.rs`, que cubren términos del acuerdo,
-bloqueo de bonos, micropagos probabilísticos y registros de liquidación.
+На линии движения SF-8 представлен двигатель SoraFS, который работает
+Определенные меры по обеспечению безопасности и восстановлению сил между
+клиенты и поставщики. Эти сведения описаны с полезными нагрузками Norito
+Определено в `crates/sorafs_manifest/src/deal.rs`, что означает завершение этого дела,
+Блокировка пособий, вероятностные микропагосы и реестры ликвидаций.
 
-El worker embebido de SoraFS (`sorafs_node::NodeHandle`) ahora instancia un
-`DealEngine` para cada proceso de nodo. El motor:
+Рабочий элемент SoraFS (`sorafs_node::NodeHandle`) сейчас
+`DealEngine` для каждого процесса. Эл мотор:
 
-- valida y registra acuerdos usando `DealTermsV1`;
-- acumula cargos denominados en XOR cuando se reporta el uso de replicación;
-- evalúa ventanas de micropago probabilístico usando muestreo determinista
-  basado en BLAKE3; y
-- produce snapshots de ledger y payloads de liquidación aptos para publicación
-  de gobernanza.
+- проверка и регистрация acuerdos usando `DealTermsV1`;
+- накопление грузов с номиналом в XOR, когда вы сообщаете об использовании репликации;
+- вероятностная оценка вероятностных микропазов с использованием детерминированного устройства
+  базируется на BLAKE3; й
+- создавать снимки бухгалтерской книги и ликвидационные данные для публикации
+  де Гобернанса.
 
-Las pruebas unitarias cubren validación, selección de micropagos y flujos de
-liquidación para que los operadores puedan ejercitar las APIs con confianza.
-Las liquidaciones ahora emiten payloads de gobernanza `DealSettlementV1`,
-conectándose directamente al pipeline de publicación SF-12, y actualizan la serie
-OpenTelemetry `sorafs.node.deal_*`
-(`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) para dashboards de Torii y
-aplicación de SLOs. Los siguientes pasos se enfocan en la automatización de slashing
-iniciada por auditores y en coordinar la semántica de cancelación con la política de gobernanza.
+Проверка унитарных унитарий Las pruebas cubren, выбор микропагосов и потоков
+ликвидация для того, чтобы операторы могли получить доступ к API с конфиденциальностью.
+Las Liquidaciones Ahora Emiten Payloads de Gobernanza `DealSettlementV1`,
+Подключитесь непосредственно к конвейеру публикации SF-12 и реализуйте серию
+ОпенТелеметрия `sorafs.node.deal_*`
+(И18НИ00000018Х, И18НИ00000019Х, И18НИ00000020Х,
+`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) для панелей мониторинга Torii y
+применение SLO. Los siguientes pasos se enfocan en la autotización de slashing
+инициация для аудиторов и координатор семантики отмены политики правительства.
 
-La telemetría de uso también alimenta el conjunto de métricas `sorafs.node.micropayment_*`:
-`micropayment_charge_nano`, `micropayment_credit_generated_nano`,
-`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, y los contadores de tickets
-(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). Estos totales exponen el flujo de lotería
-probabilística para que los operadores puedan correlacionar las victorias de micropagos y
-el carry-over de crédito con los resultados de liquidación.
+Телеметрия для использования также пищевых продуктов с измерительным устройством `sorafs.node.micropayment_*`:
+И18НИ00000025Х, И18НИ00000026Х,
+И18НИ00000027Х, И18НИ00000028Х,
+`micropayment_outstanding_nano`, и контадоры по билетам
+(И18НИ00000030Х, И18НИ00000031Х,
+`micropayment_tickets_duplicate_total`). Estos Totales Exponen el Flujo de Lotería
+Вероятностная вероятность того, что операторы могут коррелировать с победами микропагосов и
+перенос кредита с результатами ликвидации.
 
-## Integración con Torii
+## Интеграция с Torii
 
-Torii expone endpoints dedicados para que los proveedores reporten uso y conduzcan el ciclo
-de vida del acuerdo sin wiring personalizado:
+Torii экспонирует конечные точки, выделенные для того, чтобы проверяющие отчеты использовались и проводились в цикле
+персонализированная проводка для жизни без греха:- `POST /v1/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращается
+  определённые результаты контроля (`UsageOutcome`).
+- `POST /v1/sorafs/deal/settle` завершает актуальную вентиляцию, передает эл.
+  `DealSettlementRecord` — результат объединения с `DealSettlementV1` в base64
+  список для публикации в DAG de gobernanza.
+- El подача `/v1/events/sse` от Torii сейчас передает регистры `SorafsGatewayEvent::DealUsage`
+  que возобновлено каждый раз, когда мы отправляемся (эпоха, GiB-hora medidos, contadores de Tickets,
+  грузы детерминированные), регистры `SorafsGatewayEvent::DealSettlement`
+  который включает в себя снимок канонической книги учета ликвидации в виде дайджеста/tamaño/base64
+  BLAKE3 артефакт правительства на дискотеке, и оповещения `SorafsGatewayEvent::ProofHealth`
+  Cada vez que se exceden umbrales PDP/PoTR (проводник, вентиляция, состояние удара/перезарядки,
+  «монто де пенализасьон»). Потребители могут использовать фильтр для реакции
+  новая телеметрия, ликвидация или оповещение о спасении по результатам опроса.
 
-- `POST /v1/sorafs/deal/usage` acepta telemetría `DealUsageReport` y retorna
-  resultados deterministas de contabilidad (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finaliza la ventana actual, transmitiendo el
-  `DealSettlementRecord` resultante junto con un `DealSettlementV1` en base64
-  listo para publicación en el DAG de gobernanza.
-- El feed `/v1/events/sse` de Torii ahora transmite registros `SorafsGatewayEvent::DealUsage`
-  que resumen cada envío de uso (epoch, GiB-hora medidos, contadores de tickets,
-  cargos deterministas), registros `SorafsGatewayEvent::DealSettlement`
-  que incluyen el snapshot canónico del ledger de liquidación más el digest/tamaño/base64
-  BLAKE3 del artefacto de gobernanza en disco, y alertas `SorafsGatewayEvent::ProofHealth`
-  cada vez que se exceden umbrales PDP/PoTR (proveedor, ventana, estado de strike/cooldown,
-  monto de penalización). Los consumidores pueden filtrar por proveedor para reaccionar a
-  nueva telemetría, liquidaciones o alertas de salud de pruebas sin hacer polling.
-
-Ambos endpoints participan en el framework de cuotas de SoraFS a través de la nueva ventana
-`torii.sorafs.quota.deal_telemetry`, permitiendo a los operadores ajustar la tasa de envío
-permitida por despliegue.
+Конечные точки участвуют в фреймворке SoraFS и проходят по новому каналу.
+`torii.sorafs.quota.deal_telemetry`, разрешите работу операторов настроить тарелку отправки
+разрешено для деспльега.

@@ -7,25 +7,27 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ის იმპორტი '@site/src/components/SampleDownload'-დან;
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+ეს რეცეპტი აერთიანებს ორ მოწინავე სამუშაო პროცესს, რომლებიც მოწოდებულია JS5 საგზაო რუკაში
+პუნქტები: მმართველობის ბოლომდე დამხმარეები (წინადადებები, ბიულეტენები, საბჭოს კადრები)
+და ISO 20022 ხიდის გავლა (pacs.008/pacs.009). თითოეული ნიმუში გადის
+გამოქვეყნებული `@iroha/iroha-js` პაკეტის წინააღმდეგ და ასახავს ფრაგმენტებს
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## მმართველობის დამხმარე ნიმუში
 
 <SampleDownload
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  filename = "governance.mjs"
+  description="ჩამოტვირთეთ ამ რეცეპტში მითითებული runnable მმართველობის დამხმარე."
 />
 
-### Prerequisites
+### წინაპირობები
 
 ```bash
 npm install @iroha/iroha-js
@@ -39,10 +41,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+დააყენეთ `GOV_SUBMIT=1` ხელმოწერილი ტრანზაქციების გამოსაგზავნად Torii-ზე და
+`GOV_FETCH=1`, რათა შეამოწმოს მიღებული მმართველობის მდგომარეობა წარდგენის შემდეგ.
 
-### Example script
+### მაგალითი სკრიპტი
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -222,26 +224,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### გაშვება და მონიტორინგი
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
+- შეასრულეთ `node governance.mjs` მხოლოდ ჰეშების გენერირებისთვის. დაამატეთ `GOV_SUBMIT=1`
+  განათავსეთ ტრანზაქციები Torii-ზე და `GOV_FETCH=1`-ზე, რათა დარეგისტრირდეთ ცოცხალი მმართველობის მდგომარეობაზე
+  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks` და
   `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- დააფიქსირეთ დეტერმინისტული ჰეშები CI ჟურნალებში; ყოველი ნაბიჯი ბეჭდავს ხელმოწერილ ბაიტს
+  სიგრძე პლუს ხელახლა გამოთვლილი ჰეში, როდესაც ხელმისაწვდომია არჩევითი მშობლიური დამხმარე.
+- მიამაგრეთ კონსოლის გამომავალი მმართველობის მიმოხილვის პაკეტებს, რათა აუდიტორებმა შეძლონ კვალი
+  წინადადების/რეფერენდუმის პირადობის მოწმობები დაბრუნდა რეპროდუცირებადი CLI მტკიცებულებებზე.
 
-## ISO bridge sample
+## ISO ხიდის ნიმუში
 
 <SampleDownload
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  filename = "iso-bridge.mjs"
+  description="ჩამოტვირთეთ გასაშვები ISO 20022 დამხმარე, რომელიც მითითებულია ამ რეცეპტში."
 />
 
-### Prerequisites
+### წინაპირობები
 
 ```bash
 npm install @iroha/iroha-js
@@ -253,11 +255,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+დააყენეთ `ISO_MESSAGE_ID`, როდესაც გსურთ გამოტოვოთ გაგზავნა და გამოკითხოთ მხოლოდ ცნობილი
+იდენტიფიკატორი. გამოიყენეთ `ISO_RESOLVE_ON_ACCEPTED=1` გასასვლელად ხიდის მონიშვნისთანავე
+ჩანაწერი `Accepted` მაშინაც კი, თუ ტრანზაქციის ჰეში ჯერ კიდევ არ არის დასრულებული.
 
-### Example script
+### მაგალითი სკრიპტი
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -357,22 +359,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### გაშვება და მონიტორინგი
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- შეასრულეთ `node iso-bridge.mjs`, რათა წარადგინოთ ნიმუშის დატვირთვა. კომპლექტი
+  `ISO_MESSAGE_KIND=pacs.009` PvP ნაკადის განსახორციელებლად ან `ISO_MESSAGE_ID`
+  გამოკითხეთ არსებული წარდგენა ხელახლა გამოქვეყნების გარეშე.
+- დამხმარე იწერს ყველა გამოკითხვის მცდელობას `wait.onPoll`-ის მეშვეობით, რაც აადვილებს
+  აღბეჭდეთ მიღების ვადები CI ჟურნალებში.
+- მიამაგრეთ საბოლოო სტატუსი + ტრანზაქციის ჰეში ISO ხიდის წიგნებში, რათა აუდიტორებმა
+  შეუძლია აკონტროლოს pacs.008/pacs.009 მიწოდება რეპროდუცირებადი ტვირთამწეობამდე, როგორც
+  JS5-ის საგზაო რუქის მიწოდებით მოთხოვნილი.
 
-## Offline allowances & transfers
+## ოფლაინ შემწეობები და გადარიცხვები
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js` აგზავნის იგივე შემწეობას/გადაცემის დამხმარეებს, რომლებიც მითითებულია
+ხაზგარეშე საგზაო რუქის რიგები. გამოიყენეთ ისინი მთლიანობის პოლიტიკის შესამოწმებლად (მარკერის გასაღები, თამაში
+მთლიანობა, HMS Safety Detect, უზრუნველყოფილი) ნედლი მეტამონაცემების გაანალიზების გარეშე:
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -400,19 +402,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+როდესაც Torii იტყობინება მოწოდებული შემწეობის შესახებ, ინსპექტორის საჯარო გასაღები გამოჩნდება
+სქემა, არჩევითი ვერსია, TTL და დაიჯესტი პირდაპირ ეთერში
+`integrity_metadata.provisioned`, რაც ტრივიალურს ხდის საჭიროების მიმაგრებას
+მეტამონაცემები OA10.3 მტკიცებულებათა პაკეტებზე.
 
-## Next steps
+## შემდეგი ნაბიჯები
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- გამოიკვლიეთ `javascript/iroha_js/recipes/governance.mjs` და
+  `javascript/iroha_js/recipes/iso_bridge.mjs` გაფართოებული მაგალითებისთვის (მულტი-სიგ
+  ბიულეტენები, საბჭოს VRF-ის წარმოშობა, ხელახალი ცდის პოლიტიკა).
+- გადახედეთ Norito მხარის დოკუმენტაციას
+  `docs/source/sdk/js/governance_iso_examples.md` და
+  `docs/source/finance/settlement_iso_mapping.md` კანონიკური სფეროსთვის
+  ამ დამხმარეების მიერ მითითებულ რუკებს.
+- აიღეთ გაშვებული ჟურნალები და მიამაგრეთ ისინი მმართველობის / ISO დამტკიცებებზე, რომ დააკმაყოფილოთ ისინი
+  JS5 „დოკუმენტაცია + გამოქვეყნების“ მოთხოვნა მითითებულია `roadmap.md`-ში.

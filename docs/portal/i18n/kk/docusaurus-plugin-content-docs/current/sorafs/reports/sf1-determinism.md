@@ -6,42 +6,44 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS SF1 Determinism Dry-Run
 summary: Checklist and expected digests for validating the canonical `sorafs.sf1@1.0.0` chunker profile.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS SF1 Determinism Dry-Run
+# SoraFS SF1 Детерминизм Құрғақ жұмыс
 
-This report captures the baseline dry-run for the canonical
-`sorafs.sf1@1.0.0` chunker profile. Tooling WG should re-run the checklist
-below when validating fixture refreshes or new consumer pipelines. Record the
-outcome of each command in the table to maintain an auditable trail.
+Бұл есеп канондық үшін бастапқы құрғақ жұмысты жазады
+`sorafs.sf1@1.0.0` chunker профилі. Tooling WG бақылау парағын қайта іске қосу керек
+арматура жаңартуларын немесе жаңа тұтынушы құбырларын тексеру кезінде төменде. жазыңыз
+тексерілетін ізді сақтау үшін кестедегі әрбір пәрменнің нәтижесі.
 
-## Checklist
+## Бақылау тізімі
 
-| Step | Command | Expected Outcome | Notes |
+| Қадам | Команда | Күтілетін нәтиже | Ескертпелер |
 |------|---------|------------------|-------|
-| 1 | `cargo test -p sorafs_chunker` | All tests pass; `vectors` parity test succeeds. | Confirms canonical fixtures compile and match Rust implementation. |
-| 2 | `ci/check_sorafs_fixtures.sh` | Script exits 0; reports manifest digests below. | Verifies fixtures regenerate cleanly and signatures remain attached. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | Entry for `sorafs.sf1@1.0.0` matches registry descriptor (`profile_id=1`). | Ensures registry metadata stays in sync. |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneration succeeds without `--allow-unsigned`; manifest and signature files unchanged. | Provides determinism proof for chunk boundaries and manifests. |
-| 5 | `node scripts/check_sf1_vectors.mjs` | Reports no diff between TypeScript fixtures and Rust JSON. | Optional helper; ensure parity across runtimes (script maintained by Tooling WG). |
+| 1 | `cargo test -p sorafs_chunker` | Барлық сынақтардан өтеді; `vectors` паритет сынағы сәтті өтті. | Канондық құрылғыларды құрастыруды және Rust іске асыруды сәйкестендіруді растайды. |
+| 2 | `ci/check_sorafs_fixtures.sh` | Сценарий 0 шығады; төменде манифест дайджесттерін хабарлайды. | Арматуралардың таза қалпына келтірілетінін және қолтаңбалардың тіркелгенін тексереді. |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` жазбасы тізілім дескрипторына (`profile_id=1`) сәйкес келеді. | Тіркеу метадеректерінің синхрондалуын қамтамасыз етеді. |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Регенерация `--allow-unsigned`сыз сәтті өтеді; манифест және қолтаңба файлдары өзгеріссіз. | Бөлшек шекаралары мен манифесттер үшін детерминизмді дәлелдейді. |
+| 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript құрылғылары мен Rust JSON арасында ешқандай айырмашылық жоқ деп есептейді. | Қосымша көмекші; орындалу уақыттары бойынша тепе-теңдікті қамтамасыз ету (скрипт Tooling WG қолдайды). |
 
-## Expected Digests
+## Күтілетін қорытулар
 
-- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+- Дайджест (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
 - `manifest_blake3.json`: `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`
 - `sf1_profile_v1.json`: `d89a4fdc030b0c7c4911719ea133c780d9f4610b08eef1d6d0e0ca443391718e`
 - `sf1_profile_v1.ts`: `9a3bb8e4d96518b3a0a1301046b2d86a793991959ebdd8adda1fb2988e4292dc`
 - `sf1_profile_v1.go`: `0f0348b8751b0f85fe874afda3371af75b78fac5dad65182204dcb3cf3e4c0a1`
 - `sf1_profile_v1.rs`: `66b5956826c86589a24b71ca6b400cc1335323c6371f1cec9475f09af8743f61`
 
-## Sign-Off Log
+## Шығу журналы
 
-| Date | Engineer | Checklist Result | Notes |
+| Күні | Инженер | Бақылау тізімінің нәтижесі | Ескертпелер |
 |------|----------|------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ❌ Failed | Step 1: `cargo test -p sorafs_chunker` fails `vectors` suite because fixtures are out of date. Step 2: `ci/check_sorafs_fixtures.sh` aborts—`manifest_signatures.json` missing in repo state (deleted in working tree). Step 4: `export_vectors` cannot verify signatures while the manifest file is absent. Recommend restoring the signed fixtures (or providing council key) and regenerating bindings so canonical handles are embedded as required by the tests. |
-| 2026-02-12 | Tooling (LLM) | ✅ Passed | Regenerated fixtures via `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`, producing canonical handle-only alias lists and a fresh manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`. Verified with `cargo test -p sorafs_chunker` and a clean `ci/check_sorafs_fixtures.sh` run (staged fixtures for the check). Step 5 pending until the Node parity helper lands. |
-| 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) fetched via `ci/check_sorafs_fixtures.sh`; script re-generated fixtures, confirmed manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`, and re-ran the Rust harness (Go/Node steps execute when available) with no diffs. |
+| 12.02.2026 | Құралдар (LLM) | ❌ Сәтсіз | 1-қадам: `cargo test -p sorafs_chunker` `vectors` жиынтығы сәтсіз аяқталды, себебі арматура ескірген. 2-қадам: `ci/check_sorafs_fixtures.sh` тоқтатылады — `manifest_signatures.json` репо күйінде жоқ (жұмыс тармағында жойылған). 4-қадам: `export_vectors` манифест файлы болмаған кезде қолтаңбаларды тексере алмайды. Қол қойылған құрылғыларды қалпына келтіруді (немесе кеңес кілтін беруді) және канондық тұтқаларды сынақтар талап ететіндей кірістірілген етіп қалпына келтіруді ұсыныңыз. |
+| 12.02.2026 | Құралдар (LLM) | ✅ Өтті | `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f` арқылы қалпына келтірілген құрылғылар, тек қана тұтқаға арналған канондық бүркеншік ат тізімдерін және `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4` жаңа манифест дайджестін шығарады. `cargo test -p sorafs_chunker` және таза `ci/check_sorafs_fixtures.sh` жүгірісімен расталған (тексеруге арналған кезеңді құрылғылар). 5-қадам Түйін паритетінің көмекшісі қонғанша күтілуде. |
+| 2026-02-20 | Сақтау құралы CI | ✅ Өтті | Парламент конверті (`fixtures/sorafs_chunker/manifest_signatures.json`) `ci/check_sorafs_fixtures.sh` арқылы алынды; сценарийді қайта жасаған арматуралар, расталған манифест дайджесті `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4` және Rust құралын (қол жетімді болғанда өту/түйін қадамдары орындалады) ешқандай айырмашылықсыз қайта іске қосты. |
 
-Tooling WG should append a dated row after running the checklist. If any step
-fails, file an issue linked here and include remediation details before
-approving new fixtures or profiles.
+Құралдар ЖТ бақылау парағын іске қосқаннан кейін күні белгіленген жолды қосуы керек. Кез келген қадам болса
+орындалмаса, осында байланыстырылған мәселені жіберіңіз және алдын ала түзету мәліметтерін қосыңыз
+жаңа қондырғыларды немесе профильдерді бекіту.

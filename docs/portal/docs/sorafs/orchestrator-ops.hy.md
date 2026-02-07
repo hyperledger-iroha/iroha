@@ -11,21 +11,22 @@ id: orchestrator-ops
 title: SoraFS Orchestrator Operations Runbook
 sidebar_label: Orchestrator Ops Runbook
 description: Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-This runbook guides SREs through preparing, rolling out, and operating the multi-source fetch orchestrator. It complements the developer guide with procedures tuned for production rollouts, including staged enablement and peer blacklisting.
+Այս գրքույկը ուղղորդում է SRE-ներին բազմաֆունկցիոնալ ֆետչ նվագախմբի պատրաստման, տարածման և գործարկման միջոցով: Այն լրացնում է ծրագրավորողների ուղեցույցը արտադրական տեղակայման համար հարմարեցված ընթացակարգերով, ներառյալ փուլային ակտիվացումը և գործընկերների սև ցուցակում ներառելը:
 
-> **See also:** The [Multi-Source Rollout Runbook](./multi-source-rollout.md) focuses on fleet-wide rollout waves and emergency provider denial. Reference it for governance / staging coordination while using this document for day-to-day orchestrator operations.
+> **Տես նաև.** [Multi-Source Rollout Runbook] (./multi-source-rollout.md)-ը կենտրոնանում է ամբողջ նավատորմի տարածման ալիքների և արտակարգ իրավիճակների մատակարարի մերժման վրա: Հղեք այն կառավարման/բեմադրության համակարգման համար՝ այս փաստաթուղթն օգտագործելով ամենօրյա նվագախմբի գործողությունների համար:
 
-## 1. Pre-flight Checklist
+## 1. Թռիչքից առաջ ստուգաթերթ
 
-1. **Collect provider inputs**
-   - Latest provider adverts (`ProviderAdvertV1`) and telemetry snapshot for the target fleet.
-   - Payload plan (`plan.json`) derived from the manifest under test.
-2. **Render a deterministic scoreboard**
+1. **Հավաքեք մատակարարի տվյալները**
+   - Վերջին մատակարարի գովազդները (`ProviderAdvertV1`) և թիրախային նավատորմի հեռաչափության պատկերը:
+   - Օգտակար բեռի պլան (`plan.json`), որը ստացվել է փորձարկվող մանիֆեստից:
+2. **Ներկայացրեք որոշիչ ցուցատախտակ**
 
    ```bash
    sorafs_fetch \
@@ -38,30 +39,30 @@ This runbook guides SREs through preparing, rolling out, and operating the multi
      --json-out artifacts/session.summary.json
    ```
 
-   - Validate that `artifacts/scoreboard.json` lists every production provider as `eligible`.
-   - Archive the summary JSON alongside the scoreboard; auditors rely on the chunk retry counters when certifying the change request.
-3. **Dry-run with fixtures** — Exercise the same command against the public fixtures in `docs/examples/sorafs_ci_sample/` to ensure the orchestrator binary matches the expected version before touching production payloads.
+   - Հաստատեք, որ `artifacts/scoreboard.json`-ը ցուցակում է արտադրության յուրաքանչյուր մատակարարին որպես `eligible`:
+   - Արխիվացրեք ամփոփագիրը JSON-ը ցուցատախտակի կողքին. Փոփոխության հարցումը հաստատելիս աուդիտորները հիմնվում են կրկնակի փորձի հաշվիչների վրա:
+3. **Չոր վազում հարմարանքներով** — Կիրառեք նույն հրամանը հանրային հարմարանքների դեմ `docs/examples/sorafs_ci_sample/`-ում, որպեսզի համոզվեք, որ նվագախմբի երկուական տարբերակը համապատասխանում է ակնկալվող տարբերակին, նախքան արտադրական օգտակար բեռներին դիպչելը:
 
-## 2. Staged Rollout Procedure
+## 2. Փուլային տեղադրման ընթացակարգ
 
-1. **Canary stage (≤2 providers)**
-   - Rebuild the scoreboard and run with `--max-peers=2` to clamp the orchestrator to a small subset.
-   - Monitor:
+1. **Կանարյան փուլ (≤2 մատակարար)**
+   - Վերակառուցեք ցուցատախտակը և գործարկեք `--max-peers=2`-ով՝ նվագախմբին մի փոքր ենթաբազմություն ամրացնելու համար:
+   - Մոնիտոր:
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Proceed once retry rates remain below 1% for a complete manifest fetch and no provider accumulates failures.
-2. **Ramp stage (50% providers)**
-   - Increase `--max-peers` and rerun with a fresh telemetry snapshot.
-   - Persist every run with `--provider-metrics-out` and `--chunk-receipts-out`. Retain the artefacts for ≥7 days.
-3. **Full rollout**
-   - Remove `--max-peers` (or set it to the full eligible count).
-   - Enable orchestrator mode in client deployments: distribute the persisted scoreboard and configuration JSON via your configuration management system.
-   - Update dashboards to display `sorafs_orchestrator_fetch_duration_ms` p95/p99 and retry histograms per region.
+   - Շարունակեք, երբ կրկնակի փորձի տոկոսադրույքները մնան 1%-ից ցածր՝ ամբողջական մանիֆեստի առբերման համար, և ոչ մի մատակարար չի կուտակի ձախողումներ:
+2. **Թեքահարթակ փուլ (50% մատակարարներ)**
+   - Բարձրացրեք `--max-peers`-ը և վերագործարկեք հեռաչափության թարմ նկարով:
+   - Շարունակեք յուրաքանչյուր վազք `--provider-metrics-out` և `--chunk-receipts-out`-ով: Պահպանեք արտեֆակտները ≥7 օր:
+3. ** Ամբողջական թողարկում **
+   - Հեռացրեք `--max-peers`-ը (կամ դրեք այն լիարժեք իրավասու համարի վրա):
+   - Միացրեք նվագախմբի ռեժիմը հաճախորդի տեղակայման ժամանակ. տարածեք շարունակվող արդյունքների տախտակը և JSON կազմաձևումը ձեր կազմաձևման կառավարման համակարգի միջոցով:
+   - Թարմացրեք վահանակները՝ ցուցադրելու `sorafs_orchestrator_fetch_duration_ms` p95/p99 և նորից փորձեք հիստոգրամները յուրաքանչյուր տարածաշրջանում:
 
-## 3. Peer Blacklisting & Boosting
+## 3. Գործընկերների սև ցուցակում և խթանում
 
-Use the CLI’s scoring policy overrides to triage unhealthy providers without waiting for governance updates.
+Օգտագործեք CLI-ի գնահատման քաղաքականության անտեսումները՝ անառողջ մատակարարներին տրորելու համար՝ չսպասելով կառավարման թարմացումներին:
 
 ```bash
 sorafs_fetch \
@@ -75,33 +76,33 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` removes the listed alias from consideration for the current session.
-- `--boost-provider=<alias>=<weight>` raises the provider’s scheduler weight. Values are additive to the normalised scoreboard weight and apply only to the local run.
-- Record overrides in the incident ticket and attach the JSON outputs so the owning team can reconcile state once the underlying issue is fixed.
+- `--deny-provider`-ը հեռացնում է նշված կեղծանունը ընթացիկ նստաշրջանի քննարկումից:
+- `--boost-provider=<alias>=<weight>`-ը բարձրացնում է մատակարարի ժամանակացույցի քաշը: Արժեքները հավելում են ցուցատախտակի նորմալացված քաշին և կիրառվում են միայն տեղական վազքի համար:
+- Գրանցեք անտեսումները միջադեպի տոմսում և կցեք JSON ելքերը, որպեսզի սեփականատեր թիմը կարողանա հաշտեցնել վիճակը, երբ հիմնական խնդիրը շտկվի:
 
-For permanent changes, amend the source telemetry (mark the offender penalised) or refresh the advert with updated stream budgets before clearing the CLI overrides.
+Մշտական ​​փոփոխությունների համար փոփոխեք սկզբնաղբյուրի հեռաչափությունը (նշեք իրավախախտին պատժված) կամ թարմացրեք գովազդը թարմացված հոսքային բյուջեներով՝ նախքան CLI-ի անտեսումները մաքրելը:
 
-## 4. Failure Triage
+## 4. Անհաջողության տրիաժ
 
-When a fetch fails:
+Երբ բեռնումը ձախողվում է.
 
-1. Capture the following artefacts before rerunning:
+1. Վերագործարկելուց առաջ վերցրեք հետևյալ արտեֆակտները.
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspect `session.summary.json` for the human-readable error string:
-   - `no providers were supplied` → verify provider paths and adverts.
-   - `retry budget exhausted ...` → increase `--retry-budget` or remove unstable peers.
-   - `no compatible providers available ...` → audit the offending provider’s range capability metadata.
-3. Correlate the provider name with `sorafs_orchestrator_provider_failures_total` and create a follow-up ticket if the metric spikes.
-4. Replay the fetch offline with `--scoreboard-json` and the captured telemetry to reproduce the failure deterministically.
+2. Ստուգեք `session.summary.json`-ը մարդու կողմից ընթեռնելի սխալի տողի համար.
+   - `no providers were supplied` → ստուգեք մատակարարի ուղիները և գովազդները:
+   - `retry budget exhausted ...` → մեծացնել `--retry-budget` կամ հեռացնել անկայուն հասակակիցներին:
+   - `no compatible providers available ...` → ստուգեք վիրավորող մատակարարի տիրույթի հնարավորությունների մետատվյալները:
+3. Կապակցեք մատակարարի անունը `sorafs_orchestrator_provider_failures_total`-ի հետ և ստեղծեք հաջորդական տոմս, եթե մետրային ցուցանիշը բարձրանում է:
+4. Վերարտադրեք բեռնումը անցանց `--scoreboard-json`-ով և ֆիքսված հեռաչափությամբ՝ ձախողումը վճռականորեն վերարտադրելու համար:
 
-## 5. Rollback
+## 5. Վերադարձ
 
-To revert an orchestrator rollout:
+Նվագախմբի թողարկումը վերադարձնելու համար՝
 
-2. Remove any `--boost-provider` overrides so the scoreboard reverts to neutral weighting.
-3. Continue scraping the orchestrator metrics for at least one day to confirm no residual fetches are in-flight.
+2. Հեռացրեք `--boost-provider` ցանկացած անտեսում, որպեսզի ցուցատախտակը վերադառնա չեզոք կշռման:
+3. Շարունակեք քերել նվագախմբի չափորոշիչները առնվազն մեկ օր՝ հաստատելու համար, որ թռիչքի ընթացքում մնացորդներ չկան:
 
-Maintaining disciplined artefact capture and staged rollouts ensures the multi-source orchestrator can be operated safely across heterogeneous provider fleets while keeping observability and audit requirements intact.
+Արտեֆակտի կարգապահ հավաքումը և բեմականացված տեղադրումը երաշխավորում են, որ բազմաղբյուր նվագախումբը կարող է անվտանգ շահագործվել տարբեր մատակարարների նավատորմում` միաժամանակ պահպանելով դիտարկելիության և աուդիտի պահանջները:

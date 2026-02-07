@@ -4,49 +4,51 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: W1 فيڈبیک اور اختتامی خلاصہ
-sidebar_label: W1 خلاصہ
-description: پارٹنر/Torii integrators preview wave کے لئے نتائج، اقدامات اور اختتامی ثبوت۔
+المعرف: ملخص المعاينة W1
+العنوان: W1 فبراير واختتام الخلاص
+Sidebar_label: W1 خلاصةہ
+description: پارٹنر/Torii integrators معاينة الموجة کے لئے نتائج، إجراءات واختتام ثبوت.
 ---
 
-| آئٹم | تفصیل |
+| ئٹم | تفاصيل |
 | --- | --- |
-| لہر | W1 - پارٹنرز اور Torii integrators |
-| دعوتی ونڈو | 2025-04-12 -> 2025-04-26 |
-| آرٹیفیکٹ ٹیگ | `preview-2025-04-12` |
+| لہر | W1 - الشركاء ومتكاملو Torii |
+| دعوةی ونڈو | 12-04-2025 -> 26-04-2025 |
+| المقالة القادمة `preview-2025-04-12` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W1` |
-| شرکا | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+| شرکا | sorafs-op-01...03، torii-int-01...02، sdk-partner-01...02، gate-ops-01 |
 
-## نمایاں نکات
+## نماياں نکات
 
-1. **Checksum ورک فلو** - تمام reviewers نے `scripts/preview_verify.sh` کے ذریعے descriptor/archive کی تصدیق کی؛ logs کو دعوتی acknowledgements کے ساتھ محفوظ کیا گیا۔
-2. **ٹیلیمیٹری** - `docs.preview.integrity`, `TryItProxyErrors`, اور `DocsPortal/GatewayRefusals` dashboards پوری لہر کے دوران green رہے؛ کوئی incidents یا alert pages نہیں ہوئیں۔
-3. **Docs فيڈبیک (`docs-preview/w1`)** - دو معمولی نٹس ریکارڈ ہوئیں:
-   - `docs-preview/w1 #1`: Try it سیکشن میں navigation wording واضح کرنا (حل ہو گیا)۔
-   - `docs-preview/w1 #2`: Try it اسکرین شاٹ اپ ڈیٹ کرنا (حل ہو گیا)۔
-4. **Runbook parity** - SoraFS operators نے تصدیق کی کہ `orchestrator-ops` اور `multi-source-rollout` کے درمیان نئے cross-links نے W0 کے خدشات حل کیے۔
+1. **عمل المجموع الاختباري** - لا يوجد لدى جميع المراجعين `scripts/preview_verify.sh` واصف/أرشيف للتتبع؛ السجلات هي بمثابة دعوة للاعترافات وهي مهمة جدًا.
+2. **ٹيليميتن** - `docs.preview.integrity` و`TryItProxyErrors` و`DocsPortal/GatewayRefusals` لوحات العدادات قادرة على الدوران باللون الأخضر؛ لا توجد أحداث متطابقة أو صفحات التنبيه.
+3. **Docs فيبي (`docs-preview/w1`)** - تسجيل الدخول المعتاد:
+   - `docs-preview/w1 #1`: جربه سیکشن میں صياغة الملاحة کرنا (حل ہو واضح گیا)۔
+   - `docs-preview/w1 #2`: جربه اسكرين شات كرنا (حل هاو گيا).
+4. **تكافؤ دفتر التشغيل** - لا يتم التحقق من عوامل تشغيل SoraFS على `orchestrator-ops` و`multi-source-rollout` من خلال الارتباطات المتقاطعة الجديدة W0.
 
-## ایکشن آئٹمز
+## ایکشن آئمز
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| معرف | وضاحت | مالك | ٹیٹس |
 | --- | --- | --- | --- |
-| W1-A1 | `docs-preview/w1 #1` کے مطابق Try it navigation wording اپ ڈیٹ کرنا۔ | Docs-core-02 | ✅ مکمل (2025-04-18). |
-| W1-A2 | `docs-preview/w1 #2` کے مطابق Try it اسکرین شاٹ اپ ڈیٹ کرنا۔ | Docs-core-03 | ✅ مکمل (2025-04-19). |
-| W1-A3 | پارٹنر findings اور telemetry evidence کو roadmap/status میں سمری کرنا۔ | Docs/DevRel lead | ✅ مکمل (tracker + status.md دیکھیں). |
+| W1-A1 | `docs-preview/w1 #1` مطابق لصيغة التنقل جربها. | مستندات-core-02 | ✅ مكمل (2025-04-18). |
+| W1-A2 | `docs-preview/w1 #2` مطابق جربه انشر هذه الصفحة. | مستندات-core-03 | ✅ مكمل (2025-04-19). |
+| W1-A3 | تعتبر نتائج الشركاء وأدلة القياس عن بعد بمثابة خارطة الطريق/الحالة. | مستندات/DevRel الرصاص | ✅ مکمل (tracker +status.md دیکھیں). |
 
-## اختتامی خلاصہ (2025-04-26)
+## اختتامی خلاصہ (26-04-2025)
 
-- تمام آٹھ reviewers نے آخری office hours میں تکمیل کی تصدیق کی، لوکل artefacts صاف کیے، اور ان کی رسائی واپس لی گئی۔
-- ٹیلیمیٹری اختتام تک green رہی؛ آخری snapshots `DOCS-SORA-Preview-W1` کے ساتھ منسلک ہیں۔
-- دعوتی log میں exit acknowledgements شامل کیے گئے؛ tracker نے W1 کو 🈴 پر سیٹ کیا اور checkpoints شامل کیے۔
-- evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) `artifacts/docs_preview/W1/` میں archive ہوا۔
+- لم يقم جميع المراجعين في آخر ساعات العمل بمراسلتهم، والمصنوعات اليدوية البسيطة نظيفة، وإرسال رسائل عبر الهاتف المحمول.
+- ٹيليميٹری اختتام اللون الأخضر؛ اللقطات الأخيرة `DOCS-SORA-Preview-W1` تم التقاطها من قبل.
+- سجل الدعوة يتضمن إقرارات الخروج بما في ذلك؛ جهاز التعقب W1 يشمل كل شيء.
+- حزمة الأدلة (الواصف، سجل المجموع الاختباري، مخرجات التحقيق، جرب نسخة الوكيل، لقطات شاشة القياس عن بعد، ملخص التعليقات) `artifacts/docs_preview/W1/` أرشيف ہوا۔
 
-## اگلے اقدامات
+##اگلے اجراءات
 
-- W2 community intake plan تیار کریں (governance approval + request template tweaks).
-- W2 wave کے لئے preview artefact tag ریفریش کریں اور تاریخیں فائنل ہونے پر preflight اسکرپٹ دوبارہ چلائیں۔
-- W1 کے قابل اطلاق findings کو roadmap/status میں منتقل کریں تاکہ community wave کے پاس تازہ guidance ہو۔
+- خطة الاستيعاب المجتمعية W2 (موافقة الإدارة + تعديل قالب الطلب).
+- موجة W2 لمعاينة علامة القطع الأثرية لتجديد تاريخها وتاريخها الفني قبل إعادة الاختبار المبدئي للسكربت.
+- W1 هي نتائج توافقية مقبولة لخارطة الطريق/الحالة ستنتقل إلى موجة مجتمعية تتجه نحو التوجيه الحالي.

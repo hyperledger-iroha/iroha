@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e3f492c3253124b1066f1ca4389c5ccf4b96a723a2cd9c30ca28ec92775eeaf4
 source_last_modified: "2026-01-05T18:22:23.396018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Recommended SDK Flow (ConnectClient + Norito bridge)
+## 推荐的 SDK 流程（ConnectClient + Norito 桥）
 
-Need a full Xcode integration walkthrough (SPM/CocoaPods, XCFramework wiring, ChaChaPoly helpers)?
-See `docs/connect_swift_integration.md` for the end-to-end packaging guide.
+需要完整的 Xcode 集成演练（SPM/CocoaPods、XCFramework 连接、ChaChaPoly 助手）？
+有关端到端打包指南，请参阅 `docs/connect_swift_integration.md`。
 
-The Swift SDK ships a Norito-backed Connect stack:
+Swift SDK 附带了 Norito 支持的 Connect 堆栈：
 
-- `ConnectClient` maintains the WebSocket (`/v1/connect/ws?...`) transport on top of
-  `URLSessionWebSocketTask`.
-- `ConnectSession` orchestrates the lifecycle (open → approve/reject → sign → close) and
-  decrypts ciphertext frames once direction keys are installed.
-- `ConnectCrypto` exposes X25519 key generation plus Norito-compliant direction-key
-  derivation so apps never have to implement HKDF/HMAC plumbing manually.
-- `ConnectEnvelope`/`ConnectControl` represent the typed Norito frames emitted by the
-  Rust bridge (`connect_norito_bridge`); ciphertext envelopes are decrypted via the
-  same FFI helpers used on Android/Rust, guaranteeing parity.
+- `ConnectClient` 在之上维护 WebSocket (`/v1/connect/ws?...`) 传输
+  `URLSessionWebSocketTask`。
+- `ConnectSession` 协调生命周期（打开→批准/拒绝→签名→关闭）并
+  安装方向密钥后解密密文帧。
+- `ConnectCrypto` 公开 X25519 密钥生成以及符合 Norito 的方向键
+  推导，因此应用程序永远不必手动实现 HKDF/HMAC 管道。
+- `ConnectEnvelope`/`ConnectControl` 表示由
+  锈桥（`connect_norito_bridge`）；密文信封通过以下方式解密
+  与 Android/Rust 上使用的 FFI 助手相同，保证同等性。
 
-Before starting a session:
-1. Derive the 32-byte session identifier (`sid`) using the same BLAKE2b recipe as other
-   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
-2. Generate a Connect key pair via `ConnectCrypto.generateKeyPair()` or reuse a stored
-   private key (public keys can be recomputed with `ConnectCrypto.publicKey(fromPrivateKey:)`).
-3. Create the WebSocket client and start it inside an async context.
+开始会话之前：
+1. 使用与其他方法相同的 BLAKE2b 配方导出 32 字节会话标识符 (`sid`)
+   SDK (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`)。
+2. 通过 `ConnectCrypto.generateKeyPair()` 生成连接密钥对或重复使用已存储的密钥对
+   私钥（可以使用 `ConnectCrypto.publicKey(fromPrivateKey:)` 重新计算公钥）。
+3. 创建 WebSocket 客户端并在异步上下文中启动它。
 
 ```swift
 import IrohaSwift
@@ -79,15 +80,15 @@ Task {
 }
 ```
 
-`ConnectSession` throws `ConnectSessionError.missingDecryptionKeys` if ciphertext frames
-arrive before direction keys are installed; derive them immediately after processing an
-`Approve` control (wallet public key is included in the payload). To inspect ciphertext
-frames manually, call `ConnectEnvelope.decrypt(frame:symmetricKey:)` with the directional
-key that matches the frame’s direction.
+如果是密文帧，则 `ConnectSession` 抛出 `ConnectSessionError.missingDecryptionKeys`
+在方向键安装之前到达；处理后立即导出它们
+`Approve` 控制（钱包公钥包含在有效负载中）。检查密文
+手动帧，使用定向调用 `ConnectEnvelope.decrypt(frame:symmetricKey:)`
+与框架方向匹配的关键点。
 
-> **Tip:** When the Norito bridge is missing (e.g., Swift Package Manager builds without
-> the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
-> (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
+> **提示：** 当 Norito 桥丢失时（例如，Swift Package Manager 构建时没有
+> XCFramework），SDK 会自动回退到 JSON 填充程序。加密助手
+> (`ConnectCrypto.*`) 需要桥接器，因此在生产应用程序中链接 XCFramework。
 
 ```swift
 import Foundation
@@ -287,19 +288,19 @@ let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: r
 let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
 ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
 ```
-## CI validation
+## CI 验证
 
-- Before making Connect or bridge integration changes, run:
+- 在进行 Connect 或桥接集成更改之前，运行：
 
   ```bash
   make swift-ci
   ```
 
-  The command validates Swift fixtures, checks the dashboard feeds, and renders the CLI
-  summaries. The CI workflow relies on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
-  StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
-  appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
-  `mobile_ci` output to determine which lane needs regeneration or further incident
-  handling.
+  该命令验证 Swift 装置、检查仪表板提要并呈现 CLI
+  总结。 CI 工作流程依赖于 Buildkite 元数据
+  (`ci/xcframework-smoke:<lane>:device_tag`) 将结果映射回模拟器或
+  StrongBox 通道 - 更改管道或代理标签后，仍确认元数据
+  出现在日志中。
+- 如果运行失败，按照`docs/source/swift_parity_triage.md`检查
+  `mobile_ci` 输出以确定哪个车道需要再生或进一步发生事件
+  处理。

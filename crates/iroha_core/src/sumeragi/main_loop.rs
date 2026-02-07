@@ -9077,10 +9077,6 @@ impl Actor {
         view: u64,
     ) -> Result<usize> {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        if mode_tag == PERMISSIONED_TAG {
-            topology.nth_rotation(view);
-            return Ok(topology.leader_index());
-        }
         if matches!(consensus_mode, ConsensusMode::Npos) && prf_seed.is_none() {
             return Err(eyre!(
                 "missing NPoS PRF seed for height {height} in leader selection"

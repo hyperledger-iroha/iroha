@@ -7,126 +7,127 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4ac4c98cc4aa6ab0c34e58e6428d0ee33eb9a0c3fdad9e6958bdc75f2a48dc66
 source_last_modified: "2026-01-22T16:26:46.488648+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Governance Playbook
+# Fırıldaqların İdarə Edilməsi üzrə Kitab
 
-This document summarizes the scaffolding required for the PSP fraud stack while
-full microservices and SDKs are under active development. It captures
-expectations for analytics, auditor workflows, and fallback procedures so that
-upcoming implementations can plug into the ledger safely.
+Bu sənəd PSP fırıldaqçıları yığını üçün tələb olunan iskeleləri ümumiləşdirir
+tam mikroservislər və SDK-lar aktiv inkişaf mərhələsindədir. Bu tutur
+analitika, auditor iş axını və ehtiyat prosedurları üçün gözləntilər
+qarşıdan gələn tətbiqlər kitab kitabçasına təhlükəsiz şəkildə daxil ola bilər.
 
-## Services Overview
+## Xidmətlərə Baxış
 
-1. **API Gateway** – receives synchronous `RiskQuery` payloads, forwards them to
-   feature aggregation, and relays `FraudAssessment` responses back to ledger
-   flows. High availability (active-active) is required; use regional pairs with
-   deterministic hashing to avoid request skew.
-2. **Feature Aggregation** – composes feature vectors for scoring. Emit
-   `FeatureInput` hashes only; sensitive payloads stay off-chain. Observability
-   must publish latency histograms, queue depth gauges, and replay counters per
-   tenant.
-3. **Risk Engine** – evaluates rules/models and produces deterministic
-   `FraudAssessment` outputs. Ensure rule execution order is stable and capture
-   audit logs per assessment ID.
+1. **API Gateway** – sinxron `RiskQuery` faydalı yükləri qəbul edir, onları yönləndirir
+   xüsusiyyətlərin aqreqasiyası və `FraudAssessment` cavablarını kitab dəftərinə qaytarır
+   axır. Yüksək əlçatanlıq (aktiv-aktiv) tələb olunur; ilə regional cütlərdən istifadə edin
+   sorğu əyriliyinin qarşısını almaq üçün deterministik heshing.
+2. **Feature Aggregation** – xal toplamaq üçün xüsusiyyət vektorlarını tərtib edir. Emit
+   Yalnız `FeatureInput` hashları; həssas yüklər zəncirdən kənarda qalır. Müşahidə qabiliyyəti
+   gecikmə histoqramlarını, növbə dərinliyi ölçmələrini və təkrar sayğacları dərc etməlidir.
+   kirayəçi.
+3. **Risk Mühərriki** – qaydaları/modelləri qiymətləndirir və deterministik istehsal edir
+   `FraudAssessment` çıxışları. Qaydaların icrası qaydasının sabit və ələ keçirildiyinə əmin olun
+   qiymətləndirmə ID-si üzrə audit jurnalları.
 
-## Analytics & Model Promotion
+## Analitika və Model Təşviqi
 
-- **Anomaly Detection**: maintain a streaming job that flags deviations in
-  decision rates per tenant. Feed alerts into the governance dashboard and store
-  summaries for quarterly reviews.
-- **Graph Analysis**: run nightly graph traversals on relational exports to
-  identify collusion clusters. Export findings into the governance portal via
-  `GovernanceExport` with references to supporting evidence.
-- **Feedback Ingestion**: curate manual review outcomes and chargeback reports.
-  Convert them into feature deltas and incorporate them into training datasets.
-  Publish ingestion status metrics so the risk team can spot stalled feeds.
-- **Model Promotion Pipeline**: automate candidate evaluation (offline metrics,
-  canary scoring, rollback readiness). Promotions should emit a signed
-  `FraudAssessment` sample set and update the `model_version` field in
+- **Anomaliya aşkarlanması**: kənarlaşmaları qeyd edən axın işini qoruyun
+  icarəçiyə görə qərar dərəcələri. Xəbərdarlıqları idarəetmə panelinə və mağazaya göndərin
+  rüblük rəylər üçün xülasələr.
+- **Qrafik Təhlil**: əlaqə ixracı üzrə gecə qrafik keçidlərini həyata keçirin
+  sövdələşmə qruplarını müəyyənləşdirin. Tapıntıları vasitəsilə idarəetmə portalına ixrac edin
+  `GovernanceExport` dəstəkləyici dəlillərə istinadlarla.
+- **Əlaqə qəbulu**: əl ilə nəzərdən keçirmə nəticələrini və geri qaytarma hesabatlarını idarə edin.
+  Onları xüsusiyyət deltalarına çevirin və təlim verilənlər bazasına daxil edin.
+  Risk qrupunun dayanmış lentləri görə bilməsi üçün qəbul statusu göstəricilərini dərc edin.
+- **Model Təşviq Kəməri**: namizədlərin qiymətləndirilməsini avtomatlaşdırın (oflayn ölçülər,
+  kanareyka hesabı, geri çəkilmə hazırlığı). Promosyonlar bir imzalı yaymalıdır
+  `FraudAssessment` nümunə təyin edin və `model_version` sahəsini yeniləyin
   `GovernanceExport`.
 
-## Auditor Workflow
+## Auditor İş Akışı
 
-1. Snapshot the latest `GovernanceExport` and verify the `policy_digest` matches
-   the manifest provided by the risk team.
-2. Validate that rule aggregates reconcile with ledger-side decision totals for
-   the sampled window.
-3. Review the anomaly detection and graph analysis reports for outstanding
-   issues. Document escalations and expected remediation owners.
-4. Sign and archive the review checklist. Store the Norito-encoded artifacts in
-   the governance portal for reproducibility.
+1. Ən son `GovernanceExport` şəklini çəkin və `policy_digest` uyğunluqlarını yoxlayın
+   risk qrupu tərəfindən təqdim edilən manifest.
+2. Qayda aqreqatlarının mühasibat kitabçası tərəfindəki qərar yekunları ilə uyğunlaşdığını təsdiq edin
+   nümunə götürülmüş pəncərə.
+3. Görkəmli üçün anomaliya aşkarlanması və qrafik təhlili hesabatlarını nəzərdən keçirin
+   məsələlər. Sənəd eskalasiyaları və gözlənilən remediasiya sahibləri.
+4. Yoxlama siyahısını imzalayın və arxivləşdirin. Norito kodlu artefaktları burada saxlayın
+   təkrar istehsal üçün idarəetmə portalı.
 
 ## Fallback Playbooks
 
-- **Engine Outage**: if the risk engine is unavailable for more than 60 seconds,
-  the gateway should flip into review-only mode, issuing `AssessmentDecision::Review`
-  for all requests and alerting operators.
-- **Telemetry Gap**: when metrics or traces fall behind (missing for 5 minutes),
-  halt automatic model promotions and notify the on-call engineer.
-- **Model Regression**: if post-deployment feedback indicates elevated fraud
-  losses, roll back to the previous signed model bundle and update the roadmap
-  with corrective actions.
+- **Mühərrikin dayanması**: risk mühərriki 60 saniyədən çox müddət ərzində əlçatmaz olarsa,
+  şlüz `AssessmentDecision::Review` verərək yalnız nəzərdən keçirmə rejiminə keçməlidir
+  bütün sorğular və xəbərdarlıq edən operatorlar üçün.
+- **Telemetriya boşluğu**: ölçülər və ya izlər geridə qaldıqda (5 dəqiqə itkin),
+  avtomatik model promosyonlarını dayandırın və çağırış üzrə mühəndisə məlumat verin.
+- **Reqressiya Modeli**: yerləşdirmədən sonrakı rəy yüksək saxtakarlığı göstərirsə
+  itkilər, əvvəlki imzalanmış model paketinə qayıdın və yol xəritəsini yeniləyin
+  düzəldici tədbirlərlə.
 
-## Data-Sharing Agreements
+## Məlumat Paylaşımı Müqavilələri
 
-- Maintain jurisdiction-specific appendices covering retention, encryption, and
-  breach notification SLAs. Partners must sign the appendix before receiving
-  `FraudAssessment` exports.
-- Document data minimization practices for each integration (e.g., hashing
-  account identifiers, truncating card numbers).
-- Refresh agreements annually or whenever regulatory requirements change.
+- Saxlama, şifrələmə və əhatə edən yurisdiksiyaya aid əlavələri qoruyun
+  pozuntu bildirişi SLAs. Tərəfdaşlar qəbul etməzdən əvvəl əlavəni imzalamalıdırlar
+  `FraudAssessment` ixrac edir.
+- Hər bir inteqrasiya üçün məlumatların minimuma endirilməsi təcrübələrini sənədləşdirin (məsələn, hashing
+  hesab identifikatorları, kəsilmiş kart nömrələri).
+- Hər il və ya tənzimləyici tələblər dəyişdikdə müqavilələri yeniləyin.
 
-## API Schemas
+## API Sxemləri
 
-The gateway now exposes concrete JSON envelopes that map one-to-one to the
-Norito types implemented in `crates/iroha_data_model::fraud`:
+Şlüz indi konkret JSON zərflərini nümayiş etdirir ki, bu da bir-birini ilə əlaqələndirir
+`crates/iroha_data_model::fraud`-də tətbiq olunan Norito növləri:
 
-- **Risk intake** – `POST /v1/fraud/query` accepts the `RiskQuery` schema:
-  - `query_id` (`[u8; 32]`, hex encoded)
-  - `subject` (`AccountId`, canonical IH58 literal; optional `@<domain>` hint or alias)
-  - `operation` (tagged enum matching `RiskOperation`; the JSON `type`
-    discriminator mirrors the enum variant)
-  - `related_asset` (`AssetId`, optional)
-  - `features` (array of `{ key: String, value_hash: hex32 }` mapped from
+- **Risk qəbulu** – `POST /v1/fraud/query` `RiskQuery` sxemini qəbul edir:
+  - `query_id` (`[u8; 32]`, hex kodlu)
+  - `subject` (`AccountId`, kanonik IH58 hərfi; isteğe bağlı `@<domain>` işarə və ya ləqəb)
+  - `operation` (`RiskOperation`-ə uyğun etiketlənmiş nömrə; JSON `type`
+    diskriminator enum variantını əks etdirir)
+  - `related_asset` (`AssetId`, isteğe bağlı)
+  - `features` (`{ key: String, value_hash: hex32 }` massivi xəritələndi
     `FeatureInput`)
   - `issued_at_ms` (`u64`)
-  - `context` (`RiskContext`; carries `tenant_id`, optional `session_id`,
-    optional `reason`)
-- **Risk decision** – `POST /v1/fraud/assessment` consumes the
-  `FraudAssessment` payload (also mirrored in the governance exports):
+  - `context` (`RiskContext`; daşıyan `tenant_id`, isteğe bağlı `session_id`,
+    isteğe bağlı `reason`)
+- **Risk qərarı** – `POST /v1/fraud/assessment` istehlak edir
+  `FraudAssessment` faydalı yük (həmçinin idarəetmə ixracında əks olunur):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
-    `decision` (`AssessmentDecision` enum), `rule_outcomes`
-    (array of `{ rule_id, score_delta_bps, rationale? }`)
+    `decision` (`AssessmentDecision` nömrə), `rule_outcomes`
+    (`{ rule_id, score_delta_bps, rationale? }` massivi)
   - `generated_at_ms`
-  - `signature` (optional base64 wrapping the Norito-encoded assessment)
-- **Governance export** – `GET /v1/fraud/governance/export` returns the
-  `GovernanceExport` structure when the `governance` feature is enabled, bundling
-  active parameters, the latest enactment, model version, policy digest, and the
-  `DecisionAggregate` histogram.
+  - `signature` (optional base64 Norito kodlu qiymətləndirməni əhatə edir)
+- **İdarəetmə ixracı** – `GET /v1/fraud/governance/export` qaytarır
+  `GovernanceExport` strukturu `governance` funksiyası aktiv olduqda, paketləşmə
+  aktiv parametrlər, ən son qanunvericilik aktı, model versiyası, siyasət həzmi və
+  `DecisionAggregate` histoqramı.
 
-Round-trip tests in `crates/iroha_data_model/src/fraud/types.rs` ensure these
-schemas remain binary-conformant with the Norito codec, and
-`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` exercises
-the full intake/decision pipeline end-to-end.
+`crates/iroha_data_model/src/fraud/types.rs`-də gediş-gəliş testləri bunları təmin edir
+sxemlər Norito kodek ilə binar uyğun olaraq qalır və
+`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` məşqləri
+tam suqəbuledici/qərar boru kəməri başdan-ayağa.
 
-## PSP SDK References
+## PSP SDK İstinadları
 
-The following language stubs track the PSP-facing integration examples:
+Aşağıdakı dil stubları PSP ilə üzbəüz inteqrasiya nümunələrini izləyir:
 
 - **Rust** – `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
-  uses the workspace `iroha` client to craft `RiskQuery` metadata and validate
-  admission failures/successes.
-- **TypeScript** – `docs/source/governance_api.md` documents the REST surface
-  consumed by the lightweight Torii gateway used in the PSP demo dashboard; the
-  scripted client lives in `scripts/ci/schedule_fraud_scoring.sh` for smoke
-  drills.
-- **Swift & Kotlin** – the existing SDKs (`IrohaSwift` and
-  `crates/iroha_cli/docs/multisig.md` references) expose the Torii metadata
-  hooks needed to attach `fraud_assessment_*` fields. PSP-specific helpers are
-  tracked under the “Fraud & Telemetry Governance Loop” milestone in
-  `status.md` and reuse those SDKs’ transaction builders.
+  `RiskQuery` metadatasını hazırlamaq və doğrulamaq üçün iş sahəsi `iroha` müştərisindən istifadə edir
+  qəbul uğursuzluqları/uğurları.
+- **TypeScript** – `docs/source/governance_api.md` REST səthini sənədləşdirir
+  PSP demo panelində istifadə edilən yüngül çəkili Torii şlüz tərəfindən istehlak edilir; the
+  scripted müştəri tüstü üçün `scripts/ci/schedule_fraud_scoring.sh` yaşayır
+  matkaplar.
+- **Swift & Kotlin** – mövcud SDK-lar (`IrohaSwift` və
+  `crates/iroha_cli/docs/multisig.md` istinadları) Torii metadatasını ifşa edir
+  `fraud_assessment_*` sahələrini əlavə etmək üçün lazım olan qarmaqlar. PSP-ə xüsusi köməkçilərdir
+  ildə “Fraud & Telemetry Governance Loop” çərçivəsində izlənilib
+  `status.md` və həmin SDK-ların əməliyyat qurucularından yenidən istifadə edin.
 
-These references will be kept in sync with the microservice gateway so PSP
-implementers always have an up-to-date schema and sample code path for each
-supported language.
+Bu istinadlar PSP üçün mikroservis şlüzü ilə sinxronlaşdırılacaq
+icraçıların hər zaman hər biri üçün müasir sxem və nümunə kod yolu var
+dəstəklənən dil.

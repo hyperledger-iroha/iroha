@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-12-29T18:16:35.078130+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Evaluation Template
+# SNS уҡытыу баһалау ҡалыптары
 
-Please distribute this survey immediately after each session. Responses can be
-captured via form tool or Markdown and archived under
+Һәр сессиянан һуң шунда уҡ был һорау алыуҙы таратып бирегеҙ. Яуаптар булыуы мөмкин
+форма ҡоралы йәки Маркдаун аша әсирлеккә эләккән һәм архивланған.
 `artifacts/sns/training/<suffix>/<cycle>/feedback/`.
 
-## Session metadata
-- Suffix:
-- Cycle:
-- Language:
-- Date:
-- Facilitator(s):
+## Сессия метамағлүмәттәре
+- Ялғай:
+- Цикл:
+- Тел:
+- Дата:
+- Фасилитатор(ы):
 
-## Rating scale
-1 — Poor · 2 — Fair · 3 — Good · 4 — Very good · 5 — Excellent
+## Рейтинг шкалаһы
+1 — Ярлы · 2 — Ғәҙел · 3 — Яҡшы · 4 — Бик яҡшы · 5 — Отличный
 
-| Question | 1 | 2 | 3 | 4 | 5 |
-|----------|---|---|---|---|---|
-| Clarity of KPI walkthrough | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Usefulness of labs | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Pace + time allocation | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Localization quality (slides + facilitation) | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Overall confidence entering suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Һорау | 1 | 2 | 3 | 4 | 5 |
+|--------|---|---|----|---|---|
+| КПИ проходкаһының асыҡлығы | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Лабораториялар файҙалылығы | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Темп + ваҡыт бүлергә | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Локализация сифаты (слайдтар + еңеләйтеү) | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Дөйөм ышаныс индереү суффикс старт | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-## Open questions
-1. Which topic needs more depth?
-2. Were any tools/docs missing from the workbook?
-3. Did the localization meet your expectations? If not, why?
-4. Additional comments / blockers the program should track.
+## Асыш
+1. Ҡайһы темаға тәрәнлек кәрәк?
+2. Эш дәфтәренән ниндәйҙер ҡоралдар/өҫтәмәләр юҡмы?
+3. локализация һеҙҙең өмөттәрегеҙгә яуап биргәнме? Әгәр юҡ икән, ни өсөн?
+4. Өҫтәмә комментарийҙар / блокировщиктар программа күҙәтергә тейеш.
 
-## Follow-up
-- `[]` Feedback logged in governance tracker (ticket: __________)
-- `[]` Annex export captured (path: ____________________)
-- `[]` Action items assigned (owner + due date)
+## Артынан эйәрерга
+- I18NI000000001X кире бәйләнеш логин идара итеү трекеры (билет: _________)
+- I18NI000000002X Ҡушымта экспорты төшөрөлгән (юл: __________________)
+- `[]` Экшен әйберҙәре тәғәйенләнгән (хужа + тейешле ваҡыт)

@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Зарегистрировать домен и выпустить активы
-description: Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سلگ:/نوریٹو/مثالوں/رجسٹر اور ٹکسال
+عنوان: ڈومین رجسٹر کریں اور اثاثوں کو جاری کریں
+تفصیل: ڈومین کی تشکیل ، اثاثہ جات کی رجسٹریشن ، اور عین مطابق رہائی کو ظاہر کرتا ہے۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/13_register_and_mint.ko
 ---
 
-Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
+اجازت نامہ ڈومین تخلیق ، اثاثوں کی رجسٹریشن ، اور عین مطابق رہائی کو ظاہر کرتا ہے۔
 
-## Пошаговый обход реестра
+## قدم بہ قدم رجسٹری ٹریورسل
 
-- Убедитесь, что аккаунт назначения (например `ih58...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
-- Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить успешный выпуск.
+- اس بات کو یقینی بنائیں کہ ہر کوئیک اسٹارٹ ایس ڈی کے میں فراہمی کے مرحلے کو دہراتے ہوئے منزل مقصود اکاؤنٹ (جیسے `ih58...`) موجود ہے۔
+- ایک ہی لین دین میں ایلس کو گلاب اثاثہ تعریف اور ایلس کو 250 یونٹ جاری کرنے کے لئے انٹری پوائنٹ `register_and_mint` پر کال کریں۔
+- کامیاب رہائی کی تصدیق کے ل I `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس چیک کریں۔
 
-## Связанные руководства SDK
+## متعلقہ SDK سبق
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [کوئیک اسٹارٹ مورچا SDK] (/sdks/rust)
+- [کوئک اسٹارٹ ازگر ایس ڈی کے] (/sdks/python)
+- [کوئیک اسٹارٹ جاوا اسکرپٹ SDK] (/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/register-and-mint.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

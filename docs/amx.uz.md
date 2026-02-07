@@ -7,32 +7,33 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f11f0a83efc46035aeeaf4c1ad626a2a773303e9dfab188704016cf483a78ce6
 source_last_modified: "2026-01-23T08:31:38.611123+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AMX Execution & Operations Guide
+# AMX ijro va operatsiyalar bo'yicha qo'llanma
 
-**Status:** Draft (NX-17)  
-**Audience:** Core protocol, AMX/consensus engineers, SRE/Telemetry, SDK & Torii teams  
-**Context:** Completes the roadmap item “Documentation (owner: Docs) — update `docs/amx.md` with timing diagrams, error catalog, operator expectations, and developer guidance for generating/using PVOs.”【roadmap.md:2497】
+**Holat:** qoralama (NX-17)  
+**Tomoshabinlar:** Asosiy protokol, AMX/konsensus muhandislari, SRE/Telemetry, SDK va Torii jamoalari  
+**Kontekst:** “Hujjatlar (egasi: Hujjatlar) – `docs/amx.md` ni vaqt diagrammalari, xatolar katalogi, operator kutishlari va PVO yaratish/foydalanish bo‘yicha ishlab chiquvchi ko‘rsatmalari bilan yangilang.”【roadmap.md:2497” yo‘l xaritasi bandini to‘ldiradi.【roadmap.md:2497
 
-## Summary
+## Xulosa
 
-Atomic cross-data-space transactions (AMX) let a single submission touch multiple data spaces (DS) while preserving 1 s slot finality, deterministic failure codes, and confidentiality for private DS fragments. This guide captures the timing model, canonical error handling, operator evidence requirements, and developer expectations for Proof Verification Objects (PVOs) so the roadmap deliverable remains self-contained outside the Nexus design paper (`docs/source/nexus.md`).
+Atom oʻzaro maʼlumotlar fazosi tranzaksiyalari (AMX) bitta joʻnatmaga bir nechta maʼlumotlar boʻshliqlariga (DS) tegishiga imkon beradi, shu bilan birga 1s slotning yakuniyligini, deterministik xato kodlarini va shaxsiy DS fragmentlari uchun maxfiylikni saqlaydi. Ushbu qo'llanma vaqt modeli, xatolarni kanonik qayta ishlash, operator dalillari talablari va Proof Tekshirish Ob'ektlari (PVOs) uchun ishlab chiquvchi kutishlarini qamrab oladi, shuning uchun etkazib beriladigan yo'l xaritasi Nexus dizayn qog'ozidan (`docs/source/nexus.md`) tashqarida qoladi.
 
-Key guarantees:
+Asosiy kafolatlar:
 
-- Every AMX submission receives deterministic prepare/commit budgets; overruns abort with documented codes rather than hanging lanes.
-- DA samples that miss the budget are logged as missing availability evidence and the transaction remains queued for the next slot instead of silently stalling throughput.
-- Proof Verification Objects (PVOs) decouple heavy proofs from the 1 s slot by letting clients/batchers pre-register artefacts that the nexus host validates quickly in-slot.
-- IVM hosts derive per-dataspace AXT policy from the Space Directory: handles must target the lane advertised in the catalog, present the latest manifest root, satisfy expiry_slot, handle_era, and sub_nonce minima, and reject unknown dataspaces with `PermissionDenied` before execution.
-- Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
-- Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
-- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later) so peer switches do not reopen replay gaps.
-- Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`next_min_handle_era`/`next_min_sub_nonce`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
+- Har bir AMX taqdimoti deterministik byudjetlarni tayyorlaydi/tasdiqlaydi; osilgan yo'laklardan ko'ra hujjatlashtirilgan kodlar bilan bekor qilishni overruns.
+- Byudjetni o'tkazib yuboradigan DA namunalari mavjudlik dalillari etishmayotganligi sifatida qayd qilinadi va tranzaksiya o'tkazuvchanlikni jimgina to'xtatib turish o'rniga keyingi slot uchun navbatda qoladi.
+- Isbotni tekshirish ob'ektlari (PVO) mijozlarga/to'plamchilarga nexus xosti uy ichida tezda tasdiqlaydigan artefaktlarni oldindan ro'yxatdan o'tkazishga ruxsat berish orqali og'ir dalillarni 1-slotdan ajratadi.
+- IVM xostlari Space Directory'dan har bir ma'lumot maydoni uchun AXT siyosatini oladi: tutqichlar katalogda e'lon qilingan qatorga yo'naltirilishi, eng so'nggi manifest ildizini taqdim etishi, expiry_slot, handle_era va sub_nonce minimalarini qondirishi va ex00000ec bilan noma'lum ma'lumotlar maydonlarini rad etishi kerak.
+- Slotning amal qilish muddati `nexus.axt.slot_length_ms` (standart `1`ms, `1`ms va `600_000`ms oraligʻida tasdiqlangan) hamda chegaralangan `nexus.axt.max_clock_skew_ms` (standart uzunlik I040ms ga, I04ms ga qisqartirilgan) foydalanadi va `60_000`ms). Xostlar `current_slot = block.creation_time_ms / slot_length_ms` ni hisoblaydi, amal qilish muddatini tekshirishni isbotlash va boshqarish uchun egrilik imtiyozini qo'llaydi va sozlangan chegaradan kattaroq egrilikni reklama qiluvchi tutqichlarni rad etadi.
+- Isbot keshi TTL chegaralarini qayta ishlatish: `nexus.axt.proof_cache_ttl_slots` (standart `1`, tasdiqlangan `1`–`64`) qabul qilingan yoki rad etilgan dalillarning xost keshida qancha vaqt qolishini cheklaydi; TTL oynasi yoki isbotning `expiry_slot` tugashi bilan yozuvlar tushadi, shuning uchun takroriy himoya chegaralangan bo'lib qoladi.
+- Qayta o'ynatish kitobini saqlash: `nexus.axt.replay_retention_slots` (standart `128`, tasdiqlangan `1`–`4_096`) tengdoshlar/restartlar orasida takroriy ijroni rad etish uchun saqlanadigan tutqichdan foydalanish tarixining minimal slot oynasini o'rnatadi; uni operatorlar chiqarishi kutilayotgan eng uzun ishlov berish oynasi bilan tekislang. Buxgalteriya kitobi WSV da saqlanadi, ishga tushirilganda namlanadi va saqlash oynasi va tutqichning amal qilish muddati tugagach (qaysi biri keyinroq bo'lishidan qat'iy nazar) aniq tarzda kesiladi, shuning uchun tengdosh kalitlari takroriy bo'shliqlarni qayta ochmaydi.
+- Kesh holatini disk raskadrovka qilish: Torii joriy AXT siyosatining oniy tasvir versiyasini, eng so'nggi rad etishni (yo'l/sabab/versiya), keshlangan dalillarni (dataspace/reject/rootsmanifest) qaytarish uchun Torii (temetriya/ishlab chiquvchi darvozasi) ni ochib beradi. (`next_min_handle_era`/`next_min_sub_nonce`). Slot/manifest aylanishlari kesh holatida aks etishini tasdiqlash va muammolarni bartaraf etish vaqtida tutqichlarni aniq yangilash uchun ushbu so‘nggi nuqtadan foydalaning.
 
-## Slot Timing Model
+## Slot vaqtini belgilash modeli
 
-### Timeline
+### Xronologiya
 
 ```text
 t=0ms           70ms             300ms              600ms       840ms    1000ms
@@ -42,12 +43,12 @@ t=0ms           70ms             300ms              600ms       840ms    1000ms
 │  ingest │sample (≤300ms) │(≤300ms)           │(≤250ms)      │(≤40ms)   │(≤40ms) │
 ```
 
-- Budgets align with the global ledger plan: mempool 70 ms, DA commit ≤300 ms, consensus 300 ms, IVM/AMX 250 ms, settlement 40 ms, guard 40 ms.【roadmap.md:2529】
-- Transactions breaching the DA window are logged as missing availability evidence and retried in the next slot; all other breaches surface codes such as `AMX_TIMEOUT` or `SETTLEMENT_ROUTER_UNAVAILABLE`.
-- The guard slice absorbs telemetry export and final auditing so the slot still closes at 1 s even if exporters lag briefly.
-- Configuration tips: defaults keep expiry strict (`slot_length_ms = 1`, `max_clock_skew_ms = 0`). For a 1 s cadence set `slot_length_ms = 1_000` and `max_clock_skew_ms = 250`; for a 2 s cadence use `slot_length_ms = 2_000` and `max_clock_skew_ms = 500`. Values outside the validated window (`1`–`600_000` ms or `max_clock_skew_ms` greater than the slot length/`60_000` ms) are rejected at config-parse time, and advertised handle skew must stay within the configured bound.
+- Byudjetlar global buxgalteriya rejasiga mos keladi: mempool 70ms, DA commit ≤300ms, consensus 300ms, IVM/AMX 250ms, hisob 40ms, qorovul 40ms.【roadmap.md:2529
+- DA oynasini buzgan tranzaktsiyalar mavjudlik to'g'risidagi dalil etishmayotganligi sifatida qayd qilinadi va keyingi slotda qayta urinib ko'riladi; `AMX_TIMEOUT` yoki `SETTLEMENT_ROUTER_UNAVAILABLE` kabi boshqa barcha buzilishlar sirt kodlari.
+- Qo'riqchi bo'lagi telemetriya eksporti va yakuniy auditni o'zlashtiradi, shuning uchun eksportchilar qisqa vaqt ortda qolsa ham slot 1 soniyada yopiladi.
+- Konfiguratsiya bo'yicha maslahatlar: sukut bo'yicha amal qilish muddati qat'iy saqlanadi (`slot_length_ms = 1`, `max_clock_skew_ms = 0`). 1 soniyali kadans uchun `slot_length_ms = 1_000` va `max_clock_skew_ms = 250`; 2 soniyali kadans uchun `slot_length_ms = 2_000` va `max_clock_skew_ms = 500` dan foydalaning. Tasdiqlangan oynadan tashqaridagi qiymatlar (`1`–`600_000`ms yoki `max_clock_skew_ms` slot uzunligidan kattaroq/`60_000`ms) konfiguratsiyani tahlil qilish vaqtida rad etiladi va eʼlon qilingan tutqich egri chiziq ichida qolishi kerak.
 
-### Cross-DS swim lane
+### Cross-DS suzish yo'lagi
 
 ```text
 Client        DS A (public)        DS B (private)        Nexus Lane        Settlement
@@ -61,189 +62,185 @@ Client        DS A (public)        DS B (private)        Nexus Lane        Settl
   │◀──────────│ result + code │◀────│ result + code │◀────│ outcome│          receipt
 ```
 
-Each DS fragment must finish its 30 ms prepare window before the lane assembles the slot. Missing proofs stay in the mempool for the next slot rather than blocking peers.
+Har bir DS fragmenti 30 ms tayyorlash oynasini bo'lak uyani yig'ishdan oldin tugatishi kerak. Yo'qolgan dalillar tengdoshlarni blokirovka qilishdan ko'ra keyingi slot uchun mempulda qoladi.
 
-### Instrumentation checklist
+### Asboblar nazorat ro'yxati
 
-| Metric / Trace | Source | SLO / Alert | Notes |
+| Metrik / Trace | Manba | SLO / Ogohlantirish | Eslatmalar |
 |----------------|--------|-------------|-------|
-| `iroha_slot_duration_ms` (histogram) / `iroha_slot_duration_ms_latest` (gauge) | `iroha_telemetry` | p95 ≤ 1000 ms | Ci gate described in `ans3.md`. |
-| `iroha_da_quorum_ratio` | `iroha_telemetry` (commit hook) | ≥0.95 per 30 min window | Derived from missing-availability telemetry so every block updates the gauge (`crates/iroha_core/src/telemetry.rs:3524`,`crates/iroha_core/src/telemetry.rs:4558`). |
-| `iroha_amx_prepare_ms` | IVM host | p95 ≤ 30 ms per DS scope | Drives `AMX_TIMEOUT` aborts. |
-| `iroha_amx_commit_ms` | IVM host | p95 ≤ 40 ms per DS scope | Covers delta merge + trigger execution. |
-| `iroha_ivm_exec_ms` | IVM host | Alert if >250 ms per lane | Mirrors the IVM overlay chunk execution window. |
-| `iroha_amx_abort_total{stage}` | Executor | Alert if >0.05 aborts/slot or sustained single-stage spikes | Stage labels: `prepare`, `exec`, `commit`. |
-| `iroha_amx_lock_conflicts_total` | AMX scheduler | Alert if >0.1 conflicts/slot | Indicates inaccurate R/W sets. |
-| `iroha_axt_policy_reject_total{lane,reason}` | IVM host | Watch for spikes | Distinguishes manifest/lane/era/sub_nonce/expiry rejects. |
-| `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM host | Expect cache_miss only on startup/manifest change | Sustained misses indicate stale policy hydration. |
-| `iroha_axt_proof_cache_events_total{event}` | IVM host | Expect mostly `hit`/`miss` | `reject`/`expired` spikes usually indicate manifest drift or stale proofs. |
-| `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM host | Inspect cached proofs | Gauge value is expiry_slot (with skew applied) for the cached proof. |
-| Missing availability evidence (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Lane telemetry | Alert if >5% of tx per DS | Means attesters or proofs are lagging. |
+| `iroha_slot_duration_ms` (gistogramma) / `iroha_slot_duration_ms_latest` (o'lchov) | `iroha_telemetry` | p95 ≤ 1000ms | Ci darvozasi `ans3.md` da tasvirlangan. |
+| `iroha_da_quorum_ratio` | `iroha_telemetry` (majburiy kanca) | ≥0,95 30 daqiqa oynaga | Mavjudlik yo'qligi telemetriyasidan olingan, shuning uchun har bir blok o'lchagichni yangilaydi (`crates/iroha_core/src/telemetry.rs:3524`, `crates/iroha_core/src/telemetry.rs:4558`). |
+| `iroha_amx_prepare_ms` | IVM xost | p95 ≤ 30ms DS doirasida | `AMX_TIMEOUT` drayvlari bekor qilinadi. |
+| `iroha_amx_commit_ms` | IVM xost | p95 ≤ 40ms DS doirasida | Delta birlashma + trigger bajarilishini qamrab oladi. |
+| `iroha_ivm_exec_ms` | IVM xost | Har bir chiziqda >250ms bo'lsa, ogohlantirish | IVM qatlamli qismlarni bajarish oynasini aks ettiradi. |
+| `iroha_amx_abort_total{stage}` | Ijrochi | Agar >0,05 abort/slot yoki doimiy bir bosqichli tikanlar | Bosqich belgilari: `prepare`, `exec`, `commit`. |
+| `iroha_amx_lock_conflicts_total` | AMX rejalashtiruvchisi | >0,1 ziddiyatlar/uya | Noto'g'ri R/W to'plamlarini ko'rsatadi. |
+| `iroha_axt_policy_reject_total{lane,reason}` | IVM xost | Tiklarni kuzating | Manifest/lane/era/sub_nonce/expiry rad etishlarini ajratib turadi. |
+| `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM xost | cache_miss ni faqat ishga tushirish/manifest o'zgarishi | Doimiy o'tkazib yuborishlar eskirgan siyosatning hidratsiyasini ko'rsatadi. |
+| `iroha_axt_proof_cache_events_total{event}` | IVM xost | Ko'pincha kuting `hit`/`miss` | `reject`/`expired` tikanlar odatda manifest drift yoki eskirgan dalillarni bildiradi. |
+| `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM xost | Keshlangan dalillarni tekshirish | O'lchov qiymati keshlangan isbot uchun expiry_slot (qiyshaygan holda). |
+| Mavjudlik dalillari etishmayapti (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Yo'lak telemetriyasi | Agar DS uchun >5% tx bo'lsa, ogohlantirish | Tasdiqlovchilar yoki dalillar orqada qolgan degan ma'noni anglatadi. |
 
-`/v1/debug/axt/cache` mirrors the `iroha_axt_proof_cache_state` gauge with a per-dataspace snapshot (status, manifest root, verified/expiry slots) for operators.
+`/v1/debug/axt/cache` operatorlar uchun `iroha_axt_proof_cache_state` o'lchagichni har bir ma'lumot maydoni oniy tasviri (holat, manifest ildizi, tasdiqlangan/muddati tugashi) bilan aks ettiradi.
 
-`iroha_amx_commit_ms` and `iroha_ivm_exec_ms` share the same latency buckets as
-`iroha_amx_prepare_ms`. The abort counter tags every rejection with the lane id
-and stage (`prepare` = overlay build/validation, `exec` = IVM chunk execution,
-`commit` = delta merge + trigger replay) so telemetry can highlight whether
-contention comes from read/write mismatches or post-state merges.
+`iroha_amx_commit_ms` va `iroha_ivm_exec_ms` bir xil kechikish chelaklariga ega
+`iroha_amx_prepare_ms`. Bekor qilish hisoblagichi har bir rad etishni chiziq identifikatori bilan belgilaydi
+va bosqich (`prepare` = qatlamli qurish/validatsiya, `exec` = IVM parcha bajarilishi,
+`commit` = delta birlashma + trigger takrori) shuning uchun telemetriya yoki yo'qligini ta'kidlashi mumkin.
+qarama-qarshilik o'qish/yozish nomuvofiqligi yoki post-davlat birlashmasidan kelib chiqadi.
 
-Operators must archive these metrics for audit alongside slot acceptance evidence and note regressions in `status.md`.
+Operatorlar ushbu ko'rsatkichlarni `status.md` da slotni qabul qilish dalillari va regressiyalarni qayd etish bilan birga audit uchun arxivlashlari kerak.
 
-### AXT golden fixtures
+### AXT oltin armaturalari
 
-Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_data_model/tests/fixtures/axt_golden.rs`, with a regeneration helper in `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`). CoreHost consumes the same fixtures in `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) to exercise lane binding, manifest root matching, expiry_slot freshness, handle_era/sub_nonce minima, and missing-dataspace rejections.
-- A multi-dataspace JSON fixture (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) pins the descriptor/touch schema, canonical Norito bytes, and Poseidon binding (`compute_descriptor_binding`). The `axt_descriptor_fixture` test guards the encoded bytes, and SDKs can use `AxtDescriptorBuilder::builder` plus `TouchManifest::from_read_write` to assemble deterministic samples for docs/SDKs.
+`crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`) da regeneratsiya yordamchisi bilan `crates/iroha_data_model/tests/fixtures/axt_golden.rs` da deskriptor/tutqich/siyosat snapshoti uchun Norito moslamalari jonli. CoreHost `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) da bir xil moslamalarni qatorni bogʻlash, manifest ildiz moslashuvi, amal qilish muddatining yangiligi, handle_era/sub_nonce minima va etishmayotgan maʼlumotlar maydonini rad etish uchun ishlatadi.
+- Ko'p ma'lumotlar maydonili JSON moslamasi (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) deskriptor/sensorli sxemani, kanonik Norito baytlarni va Poseidon ulanishini (`compute_descriptor_binding`) o'rnatadi. `axt_descriptor_fixture` testi kodlangan baytlarni himoya qiladi va SDKlar hujjatlar/SDKlar uchun deterministik namunalarni yig'ish uchun `AxtDescriptorBuilder::builder` va `TouchManifest::from_read_write` dan foydalanishi mumkin.
 
-### Lane catalog mapping and manifests
+### Lane katalogini xaritalash va manifestlar
 
-- AXT policy snapshots are built from the Space Directory manifest set and lane catalog. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash, activation epoch (`min_handle_era`), and sub-nonce floor. UAID bindings without an active manifest still emit a policy entry with a zeroed manifest root so lane gating remains active until a real manifest lands.
-- `current_slot` in the snapshot is derived from the latest committed block timestamp (`creation_time_ms / slot_length_ms`), falling back to the block height only before a committed header is available.
-- Telemetry surfaces the hydrated snapshot as `iroha_axt_policy_snapshot_version` (lower 64 bits of the Norito-encoded snapshot hash) and cache events via `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}`. Reject counters use the labels `lane`, `manifest`, `era`, `sub_nonce`, and `expiry` so operators can immediately see which field blocked a handle.
+- AXT siyosatining suratlari Space Directory manifest to'plami va qatorlar katalogidan tuzilgan. Har bir ma'lumot maydoni o'zining sozlangan qatoriga ko'rsatilgan; faol manifestlar manifest xeshini, faollashuv davrini (`min_handle_era`) va sub-nonce qavatni qo'shadi. Faol manifestsiz UAID bog'lashlari manifest ildizi nolga teng bo'lgan siyosat yozuvini chiqaradi, shuning uchun chiziqli yo'lak haqiqiy manifest tushguncha faol bo'lib qoladi.
+- Suratdagi `current_slot` oxirgi bloklangan vaqt tamg'asidan (`creation_time_ms / slot_length_ms`) olingan bo'lib, faqat bloklangan sarlavha mavjud bo'lgunga qadar blok balandligiga tushadi.
+- Telemetriya gidratlangan suratni `iroha_axt_policy_snapshot_version` (Norito bilan kodlangan snapshot xeshining pastki 64 biti) va `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}` orqali kesh hodisalarini ko'rsatadi. Rad etish hisoblagichlari `lane`, `manifest`, `era`, `sub_nonce` va `expiry` yorliqlaridan foydalanadi, shunda operatorlar qaysi maydon tutqichni bloklaganligini darhol ko'rishlari mumkin.
 
-### Cross-dataspace composability checklist
+### O'zaro ma'lumotlar fazosining birlashtirilishini tekshirish ro'yxati- Kosmik katalogda ko'rsatilgan har bir ma'lumot maydonida chiziqli yozuv va faol manifest mavjudligini tasdiqlang; aylanish yangi tutqichlarni chiqarishdan oldin ulanishlarni yangilashi va ildizlarni ko'rsatishi kerak. Nollangan ildizlar manifestlar mavjud bo'lgunga qadar tutqichlar rad etilishini anglatadi va xostlar/blok tekshiruvi endi manifest ildizlari nolga teng bo'lgan tutqichlarni rad etadi.
+- Ishga tushganda va Space Directory oʻzgartirilgandan soʻng, siyosat snapshot metrikasi boʻyicha bir `cache_miss` va undan soʻng barqaror `cache_hit` hodisalarini kuting; barqaror o'tkazib yuborish darajasi eskirgan yoki etishmayotgan manifest tasmasini ko'rsatadi.
+- Tutqich rad etilganda, yangilangan tutqichni so'rash (`expiry`/`era`/`sub_nonce`) yoki chiziq/manifest bog'lanishini tuzatish uchun `iroha_axt_policy_reject_total{lane,reason}` va surat versiyasiga qarang. (`lane`/`manifest`). Torii disk raskadrovka so'nggi nuqtasi `/v1/debug/axt/cache` shuningdek, `reject_hints`ni `dataspace`, `target_lane`, `next_min_handle_era` va I18NI010 operatori so'nggi aniqlik bilan qaytaradi. siyosat zarbasidan keyin.
 
-- Confirm every dataspace listed in the Space Directory has a lane entry and an active manifest; rotation should refresh bindings and manifest roots before issuing new handles. Zeroed roots mean handles will stay denied until manifests are present, and hosts/block validation now reject handles that present zeroed manifest roots.
-- On startup and after Space Directory changes, expect one `cache_miss` followed by steady `cache_hit` events on the policy snapshot metric; a sustained miss rate points to a stale or missing manifest feed.
-- When a handle is rejected, look at `iroha_axt_policy_reject_total{lane,reason}` and the snapshot version to decide whether to request a refreshed handle (`expiry`/`era`/`sub_nonce`) or to repair the lane/manifest binding (`lane`/`manifest`). The Torii debug endpoint `/v1/debug/axt/cache` also returns `reject_hints` with `dataspace`, `target_lane`, `next_min_handle_era`, and `next_min_sub_nonce` so operators can refresh handles deterministically after a policy bump.
+### SDK namunasi: token chiqmasdan masofaviy sarflash
 
-### SDK sample: remote spend without token egress
+1. Aktivga egalik qiluvchi maʼlumotlar maydoni roʻyxatini hamda mahalliy talab qilinadigan har qanday oʻqish/yozish teginishlarini koʻrsatuvchi AXT deskriptorini yarating; bog'lovchi xesh barqaror bo'lib qolishi uchun deskriptorni deterministik saqlang.
+2. Siz kutgan manifest ko'rinishga ega masofaviy ma'lumotlar maydoni uchun `AXT_TOUCH` raqamiga qo'ng'iroq qiling; ixtiyoriy ravishda, agar xost talab qilsa, `AXT_VERIFY_DS_PROOF` orqali dalil ilova qiling.
+3. Obyekt dastagini so'rang yoki yangilang va masofaviy ma'lumotlar maydoni ichida sarflaydigan `RemoteSpendIntent` bilan `AXT_USE_ASSET_HANDLE` ni chaqiring (ko'prik oyog'i yo'q). Byudjet ijrosi yuqorida tavsiflangan suratga nisbatan `remaining`, `per_use`, `sub_nonce`, `handle_era` va `expiry_slot` dan foydalanadi.
+4. `AXT_COMMIT` orqali bajaring; agar xost `PermissionDenied` ni qaytarsa, yangi tutqichni olish (muddati/sub_nonce/era) yoki manifest/yo'l bog'lanishini tuzatishni qaror qilish uchun rad etish yorlig'idan foydalaning.
 
-1. Build an AXT descriptor listing the dataspace that owns the asset plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
-2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
-3. Request or refresh the asset handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends inside the remote dataspace (no bridge leg). Budget enforcement uses the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
-4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
+## Operator kutishlari
 
-## Operator Expectations
+1. **Slot oldidan tayyorlik**
+   - Har bir profil uchun DA attestator hovuzlarining (A=12, B=9, C=7) sog'lom ekanligiga ishonch hosil qiling; attester churn uyasi uchun Space Directory snapshot yozilgan.
+   - Yangi ish yuki aralashmalarini yoqishdan oldin `iroha_amx_prepare_ms` vakolatli yuguruvchilar uchun byudjetdan past ekanligini tekshiring.
 
-1. **Pre-slot readiness**
-   - Ensure DA attester pools per profile (A=12, B=9, C=7) are healthy; attester churn is recorded in the Space Directory snapshot for the slot.
-   - Validate `iroha_amx_prepare_ms` is below budget on representative runners before enabling new workload mixes.
+2. **Slot ichidagi monitoring**
+   - Mavjudlik yetishmasligi haqida ogohlantirish (ikkita ketma-ket uyalar uchun >5%) va `AMX_TIMEOUT` da, chunki ikkalasi ham o'tkazib yuborilgan byudjetlarni bildiradi.
+   - PVO keshidan foydalanishni kuzatib boring (`iroha_pvo_cache_hit_ratio`, tekshirish xizmati tomonidan eksport qilingan) yo'ldan tashqari tekshirish yuborilganlar bilan davom etishini isbotlash.
 
-2. **In-slot monitoring**
-   - Alert on missing-availability spikes (>5% for two consecutive slots) and on `AMX_TIMEOUT` because both indicate missed budgets.
-   - Track PVO cache utilisation (`iroha_pvo_cache_hit_ratio`, exported by the proof service) to prove that off-path verification keeps up with submissions.
+3. **Dalillarni qo‘lga olish**
+   - `status.md` dan havola qilingan tungi artefaktlar to'plamiga DA kvitansiyalari to'plamini, AMX gistogrammalarini va PVO kesh hisobotlarini tayyorlang.
+   - `ops/drill-log.md`-da DA jitter, oracle stalllari yoki bufer tugashi testlari ishlaganda tartibsizlik matkap natijalarini yozib oling.
 
-3. **Evidence capture**
-   - Attach DA receipt sets, AMX prepare histograms, and PVO cache reports to the nightly artefact bundle referenced from `status.md`.
-   - Record chaos drill outputs in `ops/drill-log.md` whenever DA jitter, oracle stalls, or buffer depletion tests run.
+4. **Runbook texnik xizmati**
+   - AMX xato kodlari yoki bekor qilishlar o'zgarganda Android/Swift SDK ish kitoblarini yangilang, shunda mijoz guruhlari deterministik nosozlik semantikasini meros qilib oladi.
+   - Konfiguratsiya parchalarini (masalan, `iroha_config.amx.*`) `docs/source/nexus.md` da kanonik parametrlar bilan sinxronlashtiring.
 
-4. **Runbook maintenance**
-   - Update the Android/Swift SDK runbooks whenever AMX error codes or overrides change so client teams inherit the deterministic failure semantics.
-   - Keep configuration snippets (e.g., `iroha_config.amx.*`) in sync with the canonical parameters in `docs/source/nexus.md`.
+## Telemetriya va muammolarni bartaraf etish
 
-## Telemetry & Troubleshooting
+### Telemetriyaga tezkor ma'lumotnoma
 
-### Telemetry quick reference
-
-| Source | What to capture | Command / Path | Evidence expectations |
+| Manba | Nimani suratga olish kerak | Buyruq / yo'l | Dalillarni kutish |
 |--------|-----------------|----------------|-----------------------|
-| Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/telemetry/metrics` or export from the dashboards described in `docs/source/telemetry.md`. | Attach histogram snapshots (and alert history if triggered) to the nightly `status.md` note so auditors can see p95/p99 values and alert states. |
-| Torii RBC snapshots | DA/RBC backlog: per-session chunk backlog, view/height metadata, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy). | `GET /v1/sumeragi/rbc` and `GET /v1/sumeragi/rbc/sessions` (see `docs/source/samples/sumeragi_rbc_status.md` for examples). | Store the JSON responses (with timestamps) whenever AMX DA alerts fire; include them in the incident bundle so reviewers can confirm that backpressure matched telemetry. |
-| Proof service metrics | PVO cache health: `iroha_pvo_cache_hit_ratio`, cache fill/evict counters, proof queue depth | `GET /metrics` on the proof service (`IROHA_PVO_METRICS_URL`) or via the shared OTLP collector. | Export the cache hit ratio and queue depth alongside the AMX slot metrics so the roadmap OA/PVO gate has deterministic artefacts. |
-| Acceptance harness | End-to-end mixed load (slot/DA/RBC/PVO) under controlled jitter | Re-run `ci/acceptance/slot_1s.yml` (or the same job in CI) and archive the log bundle + generated artefacts in `artifacts/acceptance/slot_1s/<timestamp>/`. | Required before GA and whenever pacemaker/DA settings change; include the YAML run summary plus the Prometheus snapshots in the operator hand-off packet. |
+| Prometheus (`iroha_telemetry`) | Slot va AMX SLO'lar: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | `https://$TORII/telemetry/metrics` qirib tashlang yoki `docs/source/telemetry.md` da tasvirlangan asboblar panelidan eksport qiling. | Auditorlar p95/p99 qiymatlari va ogohlantirish holatlarini ko'rishlari uchun tungi `status.md` qaydiga gistogramma suratlarini (va agar ishga tushirilsa, ogohlantirishlar tarixini) biriktiring. |
+| Torii RBC suratlari | DA/RBC qoldig‘i: har bir seans bo‘limi, ko‘rish/balandligi metama’lumotlari va DA mavjudligi hisoblagichlari (`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` eski). | `GET /v1/sumeragi/rbc` va `GET /v1/sumeragi/rbc/sessions` (misollar uchun `docs/source/samples/sumeragi_rbc_status.md` ga qarang). | AMX DA yong'in haqida ogohlantirganda JSON javoblarini (vaqt belgilari bilan) saqlang; Ularni voqea to'plamiga qo'shing, shunda sharhlovchilar orqa bosimning telemetriyaga mos kelishini tasdiqlashlari mumkin. |
+| Isbot xizmati ko'rsatkichlari | PVO kesh holati: `iroha_pvo_cache_hit_ratio`, keshni to'ldirish/evakuatsiya hisoblagichlari, navbat chuqurligini isbotlash | `GET /metrics` isbotlash xizmatida (`IROHA_PVO_METRICS_URL`) yoki umumiy OTLP kollektori orqali. | OA/PVO yo‘l xaritasi deterministik artefaktlarga ega bo‘lishi uchun kesh urish nisbati va navbat chuqurligini AMX slot ko‘rsatkichlari bilan birga eksport qiling. |
+| Qabul qilish jabduqlari | Boshqariladigan jitter ostida end-to-end aralash yuk (slot/DA/RBC/PVO) | `ci/acceptance/slot_1s.yml` (yoki CI da bir xil ishni) qayta ishga tushiring va jurnallar toʻplamini + yaratilgan artefaktlarni `artifacts/acceptance/slot_1s/<timestamp>/` da arxivlang. | GA dan oldin va yurak stimulyatori/DA sozlamalari o'zgarganda talab qilinadi; YAML ishga tushirish sarhisobini va Prometheus oniy tasvirlarini operatorga topshirish paketiga kiriting. |
 
-### Troubleshooting playbook
+### Nosozliklarni bartaraf etish o'yin kitobi
 
-| Symptom | Inspect first | Recommended remediation |
+| Alomat | Avval tekshiring | Tavsiya etilgan tuzatish |
 |---------|---------------|--------------------------|
-| `iroha_slot_duration_ms` p95 creeps above 1 000 ms | Prometheus export from `/telemetry/metrics` plus the latest `/v1/sumeragi/rbc` snapshot to confirm DA deferrals; compare against the last `ci/acceptance/slot_1s.yml` artefact. | Lower AMX batch sizes or enable additional RBC collectors (`sumeragi.collectors.k`), then rerun the acceptance harness and capture the new telemetry evidence. |
-| Missing availability spike | `/v1/sumeragi/rbc/sessions` backlog fields (`lane_backlog`, `dataspace_backlog`) alongside attester health dashboards. | Remove unhealthy attesters, temporarily increase `redundant_send_r` to speed up delivery, and publish the remediation notes in `status.md`. Attach updated RBC snapshots once the backlog clears. |
-| Frequent `PVO_MISSING_OR_EXPIRED` in receipts | Proof service cache metrics + the issuer’s PVO scheduler logs. | Regenerate stale PVO artefacts, shorten the rotation cadence, and ensure every SDK refreshes the handle before `expiry_slot`. Include the proof-service metrics in the evidence bundle to prove the cache recovered. |
-| Repeated `AMX_LOCK_CONFLICT` or `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, and the affected transaction manifests. | Re-run the Norito static analyzer, correct the read/write selectors (or split the batch), and publish the updated manifest fixtures so the conflict counter returns to baseline. |
-| `SETTLEMENT_ROUTER_UNAVAILABLE` alerts | Settlement router logs (`docs/settlement-router.md`), treasury buffer dashboards, and the affected receipts. | Top up XOR buffers or flip the lane to XOR-only mode, document the treasury action, and rerun the slot acceptance test to prove settlement resumed. |
+| `iroha_slot_duration_ms` p95 1000ms dan yuqori tezlikda harakat qiladi | `/telemetry/metrics` dan Prometheus eksporti va DA kechiktirishlarini tasdiqlash uchun oxirgi `/v1/sumeragi/rbc` surati; oxirgi `ci/acceptance/slot_1s.yml` artefakt bilan solishtiring. | AMX partiyasi oʻlchamlarini pasaytiring yoki qoʻshimcha RBC kollektorlarini (`sumeragi.collectors.k`) yoqing, soʻng qabul qilish simlarini qayta ishga tushiring va yangi telemetriya dalillarini oling. |
+| Mavjudlik spike | `/v1/sumeragi/rbc/sessions` qoldiq maydonlari (`lane_backlog`, `dataspace_backlog`) attestatorning sogʻliqni saqlash paneli bilan birga. | Nosog'lom attestatorlarni olib tashlang, yetkazib berishni tezlashtirish uchun vaqtincha `redundant_send_r` ni oshiring va tuzatish eslatmalarini `status.md` da chop eting. Ortiqcha roʻyxat tozalangandan soʻng yangilangan RBC snapshotlarini ilova qiling. |
+| Kvitansiyalarda tez-tez `PVO_MISSING_OR_EXPIRED` | Tasdiqlash xizmati kesh ko'rsatkichlari + emitentning PVO rejalashtiruvchi jurnallari. | Eskirgan PVO artefaktlarini qayta tiklang, aylanish kadensini qisqartiring va `expiry_slot` dan oldin har bir SDK tutqichni yangilashiga ishonch hosil qiling. Qayta tiklangan keshni isbotlash uchun dalillar to'plamiga isbot-xizmat ko'rsatkichlarini qo'shing. |
+| Takrorlangan `AMX_LOCK_CONFLICT` yoki `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms` va ta'sirlangan tranzaksiya namoyon bo'ladi. | Norito statik analizatorini qayta ishga tushiring, o'qish/yozish selektorlarini to'g'rilang (yoki to'plamni ajrating) va yangilangan manifest moslamalarini nashr qiling, shunda ziddiyat hisoblagichi dastlabki holatga qaytadi. |
+| `SETTLEMENT_ROUTER_UNAVAILABLE` ogohlantirishlar | Hisob-kitob marshrutizatori jurnallari (`docs/settlement-router.md`), xazina buferi boshqaruv paneli va ta'sirlangan tushumlar. | XOR buferlarini to'ldiring yoki chiziqni faqat XOR rejimiga o'tkazing, xazina harakatini hujjatlashtiring va hisob-kitoblar davom etganligini isbotlash uchun slotni qabul qilish testini qayta o'tkazing. |
 
-### AXT rejection signals
+### AXT rad etish signallari
 
-- Reason codes are captured as `AxtRejectReason` (`lane`, `manifest`, `era`, `sub_nonce`, `expiry`, `missing_policy`, `policy_denied`, `proof`, `budget`, `replay_cache`, `descriptor`, `duplicate`). Block validation now surfaces `AxtEnvelopeValidationFailed { message, reason, snapshot_version }`, so incidents can pin the rejection to a specific policy snapshot.
-- `/v1/debug/axt/cache` returns `{ policy_snapshot_version, last_reject, cache, hints }`, where `last_reject` carries the lane/reason/version of the most recent host rejection and `hints` provide `next_min_handle_era`/`next_min_sub_nonce` refresh guidance alongside the cached proof state.
-- Alert template: page when `iroha_axt_policy_reject_total{reason="manifest"}` or `{reason="expiry"}` spikes over a 5‑minute window, attach the `last_reject` snapshot + `policy_snapshot_version` from the Torii debug endpoint to the incident, and use the hint payload to request refreshed handles before retrying.
+- Sabab kodlari `AxtRejectReason` sifatida olingan `policy_denied`, `proof`, `budget`, `replay_cache`, `descriptor`, `duplicate`). Blok tekshiruvi endi `AxtEnvelopeValidationFailed { message, reason, snapshot_version }` bo‘ladi, shuning uchun hodisalar rad etishni ma’lum bir siyosat suratiga bog‘lashi mumkin.
+- `/v1/debug/axt/cache` `{ policy_snapshot_version, last_reject, cache, hints }`ni qaytaradi, bu erda `last_reject` so'nggi xostni rad etish qatorini/sababini/versiyasini o'z ichiga oladi va `hints` `next_min_handle_era`/I08215X/I08NI02 yonma-yonini ta'minlaydi. keshlangan isbot holati.
+- Ogohlantirish shabloni: `iroha_axt_policy_reject_total{reason="manifest"}` yoki `{reason="expiry"}` 5 daqiqali oynadan oshib ketganda sahifa, `last_reject` suratini + `policy_snapshot_version` dan `policy_snapshot_version` ilova qiling va hodisani toʻlash uchun toʻlovni toʻlang va toʻlovdan foydalaning. qayta urinishdan oldin yangilangan tutqichlar.
 
-## Proof Verification Objects (PVOs)
+## Isbotni tekshirish ob'ektlari (PVO)
 
-### Structure
+### Tuzilishi
 
-PVOs are Norito-encoded envelopes that let clients prove heavy work ahead of time. The canonical fields are:
+PVO'lar Norito kodli konvertlar bo'lib, mijozlarga og'ir ishlarni muddatidan oldin isbotlash imkonini beradi. Kanonik maydonlar quyidagilardir:
 
-| Field | Description |
+| Maydon | Tavsif |
 |-------|-------------|
-| `circuit_id` | Static identifier for the proof system/statement (e.g., `amx.transfer.v1`). |
-| `vk_hash` | Blake2b-256 hash of the verifying key referenced by the DS manifest. |
-| `proof_digest` | Poseidon digest of the serialized proof payload stored in the off-slot PVO registry. |
-| `max_k` | Upper bound on the AIR domain; hosts reject proofs exceeding the advertised size. |
-| `expiry_slot` | Slot height after which the artefact is invalid; keeps stale proofs out of lanes. |
-| `profile` | Optional hint (e.g., DS profile A/B/C) to help schedulers batch proofs that share a profile. |
+| `circuit_id` | Tasdiqlash tizimi/bayonoti uchun statik identifikator (masalan, `amx.transfer.v1`). |
+| `vk_hash` | DS manifestida havola qilingan tekshirish kalitining Blake2b-256 xeshi. |
+| `proof_digest` | Slotdan tashqari PVO registrida saqlangan ketma-ket isbotlangan foydali yukning Poseidon digesti. |
+| `max_k` | AIR domenidagi yuqori chegara; xostlar e'lon qilingan hajmdan oshgan dalillarni rad etadi. |
+| `expiry_slot` | Slot balandligi shundan keyin artefakt yaroqsiz; eskirgan dalillarni bo'laklardan saqlaydi. |
+| `profile` | Rejalashtiruvchilarga profilni baham ko'radigan dalillarni to'plashda yordam berish uchun ixtiyoriy maslahatlar (masalan, DS profili A/B/C). |
 
-The Norito schema lives beside the data model definitions in `crates/iroha_data_model/src/nexus` so SDKs can derive it without serde.
+Norito sxemasi `crates/iroha_data_model/src/nexus` da ma'lumotlar modeli ta'riflari bilan birga yashaydi, shuning uchun SDKlar uni serdesiz olishlari mumkin.
 
-### Generation pipeline
+### Ishlab chiqarish quvuri1. **Sxema metamaʼlumotlarini kompilyatsiya qilish** — `circuit_id`, tekshirish kaliti va prover tuzilmasidan maksimal iz hajmini eksport qiling (odatda `fastpq_prover` hisobotlari orqali).
+2. **Tasdiqlangan artefaktlar yarating** — Slotdan tashqari proverni ishga tushiring va to'liq transkriptlarni va majburiyatlarni saqlang.
+3. **Tasdiqlash xizmati orqali roʻyxatdan oʻting** — Norito PVO foydali yukini off-slot tekshirgichga yuboring (NX-17 proof quvur liniyasi yoʻl xaritasiga qarang). Xizmat bir marta tekshiradi, dayjestni mahkamlaydi va Torii orqali tutqichni ochib beradi.
+4. **Tranzaksiyalarda havola** — PVO tutqichini AMX quruvchilarga (`amx_touch` yoki undan yuqori darajadagi SDK yordamchilariga) biriktiring. Xostlar dayjestni qidiradi, keshlangan natijani tekshiradi va faqat kesh sovuq bo'lsa, slot ichida qayta hisoblaydi.
+5. **Muddati tugashi bilan aylantirish** — SDKlar keshlangan tutqichni `expiry_slot` dan oldin yangilashi kerak. Muddati o'tgan ob'ektlar `PVO_MISSING_OR_EXPIRED` ni ishga tushiradi.
 
-1. **Compile circuit metadata** — Export `circuit_id`, verifying key, and max trace size from your prover build (usually via `fastpq_prover` reports).
-2. **Produce proof artefacts** — Run the out-of-slot prover and store full transcripts plus commitments.
-3. **Register via the proof service** — Submit the Norito PVO payload to the off-slot verifier (see roadmap NX-17 proof pipeline). The service verifies once, pins the digest, and exposes the handle via Torii.
-4. **Reference in transactions** — Attach the PVO handle to AMX builders (`amx_touch` or higher-level SDK helpers). Hosts look up the digest, verify the cached result, and only recompute inside the slot if the cache is cold.
-5. **Rotate on expiry** — SDKs must refresh any cached handle before `expiry_slot`. Expired objects trigger `PVO_MISSING_OR_EXPIRED`.
+### Ishlab chiquvchi nazorat ro'yxati
 
-### Developer checklist
+- AMX qulflarni oldindan yuklashi va `AMX_LOCK_CONFLICT`dan qochishi uchun o'qish/yozish to'plamlarini aniq e'lon qiling.
+- Bir xil UAID manifest yangilanishidagi deterministik to'lov dalillarini to'plang.
+- Qayta urinish strategiyasi: mavjudlik dalillari etishmayapti → hech qanday harakat yo'q (tx mempulda qoladi); `AMX_TIMEOUT` yoki `PVO_MISSING_OR_EXPIRED` → artefaktlarni qayta tiklang va eksponent ravishda orqaga qayting.
+- Determinizm regressiyasidan himoyalanish uchun testlar kesh va sovuq ishga tushirishlarni (xostni bir xil `max_k` bilan dalilni tekshirishga majburlash) o'z ichiga olishi kerak.
+- Proof bloblar (`ProofBlob`) `AxtProofEnvelope { dsid, manifest_root, da_commitment?, proof }` kodlashi KERAK; xostlar Space Directory manifest root va `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}` bilan har bir ma'lumot maydoni/uyasiga o'tish/muvaffaqiyatsiz natijalarni keshga bog'lash dalillarini. Muddati o'tgan yoki manifestga mos kelmaydigan artefaktlar keshlangan `reject` da bir xil slot qisqa tutashuvida bajarilishdan va keyingi qayta urinishlardan oldin rad etiladi.
+- Isbot keshini qayta ishlatish slotga bog'liq: tekshirilgan dalillar bir xil slot ichidagi konvertlar bo'ylab issiq bo'lib qoladi va slot ilgarilaganda avtomatik ravishda chiqarib yuboriladi, shuning uchun qayta urinishlar deterministik bo'lib qoladi.
 
-- Declare read/write sets accurately so AMX can prefetch locks and avoid `AMX_LOCK_CONFLICT`.
-- Bundle deterministic allowance proofs in the same UAID manifest update when cross-DS transfers touch regulated DSes.
-- Retrying strategy: missing availability evidence → no action (the tx stays in mempool); `AMX_TIMEOUT` or `PVO_MISSING_OR_EXPIRED` → rebuild artefacts and back off exponentially.
-- Tests should include both cache hits and cold starts (forcing the host to verify the proof with the same `max_k`) to guard against determinism regressions.
-- Proof blobs (`ProofBlob`) MUST encode an `AxtProofEnvelope { dsid, manifest_root, da_commitment?, proof }`; hosts bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Expired or manifest-mismatched artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
-- Proof cache reuse is slot-scoped: verified proofs stay hot across envelopes within the same slot and are evicted automatically when the slot advances so retries remain deterministic.
+### Statik o'qish/yozish analizatori
 
-### Static read/write analyzer
+Kompilyatsiya vaqti selektorlari AMXdan oldin shartnomaning haqiqiy xatti-harakatlariga mos kelishi kerak
+qulflarni oldindan yuklash yoki UAID manifestlarini qo'llash. Yangi `ivm::analysis` moduli
+(`crates/ivm/src/analysis.rs`) kodni dekodlaydigan `analyze_program(&[u8])` ni ochib beradi.
+`.to` artefakt, o'qish/yozish, xotira operatsiyalari va tizim qo'ng'iroqlarini ro'yxatga olish,
+va SDK manifestlari joylashtirishi mumkin bo'lgan JSON-do'st hisobotni ishlab chiqaradi. Uni ishga tushiring
+UAIDlarni nashr qilishda `koto_lint` bilan birga ishlab chiqarilgan R/W xulosasi
+NX-17 tayyorligini tekshirish paytida havola qilingan dalillar to'plamida olingan.
 
-Compile-time selectors must match the contract’s actual behaviour before AMX can
-prefetch locks or apply UAID manifests. The new `ivm::analysis` module
-(`crates/ivm/src/analysis.rs`) exposes `analyze_program(&[u8])` which decodes a
-`.to` artefact, tallies register reads/writes, memory ops, and syscall usage,
-and produces a JSON-friendly report that the SDK manifests can embed. Run it
-alongside `koto_lint` when publishing UAIDs so the generated R/W summary is
-captured in the evidence bundle referenced during NX-17 readiness reviews.
+## Space Directory siyosatini amalga oshirish
 
-## Space Directory policy enforcement
+AXT tutqichini tekshirish endi xost unga kirish imkoniga ega bo'lganda Space Directory snapshotiga o'rnatiladi (testlarda CoreHost, integratsiya oqimlarida WsvHost). Har bir maʼlumot maydoni siyosati yozuvlarida `manifest_root`, `target_lane`, `min_handle_era`, `min_sub_nonce` va `current_slot` mavjud. Xostlar amal qiladi:
 
-AXT handle verification now defaults to the Space Directory snapshot when the host has access to it (CoreHost in tests, WsvHost in integration flows). Per-dataspace policy entries carry `manifest_root`, `target_lane`, `min_handle_era`, `min_sub_nonce`, and `current_slot`. Hosts enforce:
+- chiziqli bog'lash: `target_lane` tutqichi Space Directory yozuviga mos kelishi kerak;
+- manifest bog'lanishi: nolga teng bo'lmagan `manifest_root` qiymatlari tutqichning `manifest_view_root` qiymatiga mos kelishi kerak;
+- amal qilish muddati: `current_slot` dastagi `expiry_slot`dan kattaroq rad etildi;
+- hisoblagichlar: `handle_era` va `sub_nonce` kamida e'lon qilingan minimal bo'lishi kerak;
+- a'zolik: oniy tasvirda mavjud bo'lmagan ma'lumotlar bo'shliqlari uchun ishlov berish rad etiladi.
 
-- lane binding: handle `target_lane` must match the Space Directory entry;
-- manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
-- expiry: `current_slot` greater than the handle’s `expiry_slot` is rejected;
-- counters: `handle_era` and `sub_nonce` must be at least the advertised minima;
-- membership: handles for dataspaces absent from the snapshot are denied.
+Xatolar `PermissionDenied` ga mos keladi va `crates/ivm/tests/core_host_policy.rs` da CoreHost siyosatining oniy surati testlari har bir maydon uchun holatlarga ruxsat berish/rad etishni qamrab oladi.
+Blokni tekshirish, shuningdek, `expiry_slot` bilan siyosat uyasi (konfiguratsiya qilingan egrilik ruxsati bilan) va tutqichdan oldin muddati tugamaydigan maʼlumotlar maydoni uchun boʻsh boʻlmagan dalillarni talab qiladi, eʼlon qilingan spetsifikatsiyalar uchun deskriptorni bogʻlash va teginish manifestlarini amalga oshiradi (va kiruvchi tekshiruvlarni rad etadi), miqdorlar, doira/mavzuni moslashtirish va nolga teng boʻlmagan davr/sub_nonce/expiry), agregatlar har bir maʼlumot maydoni uchun byudjetlarni boshqaradi va konvertlar bajarilgani uchun `min_handle_era`/`min_sub_nonce` avanslar, shuning uchun takrorlangan sub-noces boʻsh joydan keyin ham rad etiladi.
 
-Failures map to `PermissionDenied`, and the CoreHost policy snapshot tests in `crates/ivm/tests/core_host_policy.rs` cover allow/deny cases for each field.
-Block validation also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants (non-zero amounts, scope/subject alignment, and non-zero era/sub_nonce/expiry), aggregates handle budgets per dataspace, and advances `min_handle_era`/`min_sub_nonce` as envelopes commit so replayed sub-nonces are rejected even after Space Directory rebuilds.
+## Xato katalogi
 
-## Error Catalog
+Kanonik kodlar `crates/iroha_data_model/src/errors.rs` da yashaydi. Operatorlar ularni o'lchovlar/jurnallarda so'zma-so'z ko'rsatishi kerak va SDK ularni amaldagi qayta urinishlar bilan taqqoslashi kerak.
 
-Canonical codes live in `crates/iroha_data_model/src/errors.rs`. Operators must surface them verbatim in metrics/logs, and SDKs should map them to actionable retries.
-
-| Code | Trigger | Operator response | SDK guidance |
+| Kod | Trigger | Operator javobi | SDK ko'rsatmalari |
 |------|---------|-------------------|--------------|
-| Missing availability evidence (telemetry) | Fewer than `q` attester receipts verified before 300 ms. | Inspect attester health, widen sampling parameters for next slot, keep the transaction queued, and capture the missing-availability counters for runbook evidence. | No action; retry happens automatically because the tx stays enqueued. |
-| `DA_DEADLINE_EXCEEDED` | Δ window elapsed without meeting DA quorum. | Resign offending attesters, publish incident note, force clients to resubmit. | Rebuild transaction once attesters are back; consider splitting the batch. |
-| `AMX_TIMEOUT` | Combined prepare/commit exceeded 250 ms per DS slice. | Capture flamegraphs, verify R/W sets, and compare against `iroha_amx_prepare_ms`. | Retry with smaller batch or after reducing contention. |
-| `AMX_LOCK_CONFLICT` | Host detected overlapping write sets or unsignaled touches. | Inspect UAID manifests and static analysis reports; update manifests if missing selectors. | Recompile transaction with corrected read/write declarations. |
-| `PVO_MISSING_OR_EXPIRED` | Referenced PVO handle not in cache or past `expiry_slot`. | Check proof service backlog, regenerate artefact, and verify Torii indexes. | Refresh proof artefact and resubmit with the new handle. |
-| `RWSET_UNBOUNDED` | Static analysis could not bound a read/write selector. | Reject deployment, log selector stack trace, require developer fix before retry. | Update contract to emit explicit selectors. |
-| `HEAVY_INSTRUCTION_DISALLOWED` | Contract invoked an instruction banned from AMX lanes (e.g., large FFT without PVO). | Make sure Norito builder uses the approved opcode set before re-enabling. | Split workload or add a pre-computed proof. |
-| `SETTLEMENT_ROUTER_UNAVAILABLE` | Router could not compute deterministic conversion (missing path, buffer drained). | Engage Treasury to refill buffers or flip XOR-only mode; record in settlement runbook. | Retry after buffer alert clears; show user-facing warning. |
+| Mavjudlik dalillari etishmayotgan (telemetriya) | 300 ms dan oldin tasdiqlangan `q` dan kamroq attestator cheklari. | Attestatorning sog'lig'ini tekshiring, keyingi slot uchun namuna olish parametrlarini kengaytiring, tranzaksiyani navbatda saqlang va runbook dalillari uchun etishmayotgan hisoblagichlarni oling. | Hech qanday harakat yo'q; qayta urinish avtomatik ravishda sodir bo'ladi, chunki tx navbatda qoladi. |
+| `DA_DEADLINE_EXCEEDED` | D oynasi DA kvorumiga javob bermasdan o'tdi. | Huquqbuzar attestatorlarni iste'foga chiqaring, voqea qaydini e'lon qiling, mijozlarni qayta topshirishga majburlang. | Attestatorlar qaytib kelgach, tranzaksiyani qayta tiklang; partiyani bo'lish haqida o'ylab ko'ring. |
+| `AMX_TIMEOUT` | Birlashtirilgan tayyorlanish/tasdiqlash DS boʻlagi uchun 250ms dan oshdi. | Olovli grafiklarni oling, R/W to'plamlarini tekshiring va `iroha_amx_prepare_ms` bilan solishtiring. | Kichikroq to'plam bilan yoki tortishuvni kamaytirgandan keyin qayta urinib ko'ring. |
+| `AMX_LOCK_CONFLICT` | Xost bir-biriga o'xshash yozish to'plamlari yoki signalsiz teginishlarni aniqladi. | UAID manifestlarini va statik tahlil hisobotlarini tekshiring; Agar selektorlar yo'q bo'lsa, yangilash namoyon bo'ladi. | Tuzatilgan o'qish/yozish deklaratsiyasi bilan tranzaktsiyani qayta kompilyatsiya qilish. |
+| `PVO_MISSING_OR_EXPIRED` | Yo'naltirilgan PVO tutqichi keshda yoki o'tgan `expiry_slot`da emas. | Isbot xizmatining qoldirilganligini tekshiring, artefaktni qayta tiklang va Torii indekslarini tekshiring. | Tasdiqlangan artefaktni yangilang va yangi tutqich bilan qayta yuboring. |
+| `RWSET_UNBOUNDED` | Statik tahlil o‘qish/yozish selektorini bog‘lay olmadi. | Joylashtirishni rad etish, jurnal tanlash stekini kuzatish, qayta urinishdan oldin ishlab chiquvchi tuzatishni talab qilish. | Aniq selektorlarni chiqarish uchun shartnomani yangilang. |
+| `HEAVY_INSTRUCTION_DISALLOWED` | Shartnoma AMX yo'laklarida (masalan, PVOsiz katta FFT) taqiqlangan ko'rsatmani chaqirdi. | Qayta yoqishdan oldin Norito quruvchisi tasdiqlangan opcode to'plamidan foydalanishiga ishonch hosil qiling. | Ish yukini ajrating yoki oldindan hisoblangan dalilni qo'shing. |
+| `SETTLEMENT_ROUTER_UNAVAILABLE` | Router deterministik konvertatsiyani hisoblay olmadi (yo'l yo'q, bufer drenajlangan). | Buferlarni to'ldirish yoki faqat XOR rejimini o'zgartirish uchun G'aznachilikni jalb qiling; hisob-kitoblar kitobida qayd etish. | Bufer ogohlantirishi oʻchirilgandan keyin qayta urinib koʻring; foydalanuvchiga qarshi ogohlantirishni ko'rsatish. |
 
-SDK teams should mirror these codes in integration tests so `iroha_cli`, Android, Swift, JS, and Python surfaces agree on error text and recommended actions.
+SDK guruhlari ushbu kodlarni integratsiya testlarida aks ettirishi kerak, shuning uchun `iroha_cli`, Android, Swift, JS va Python sirtlari xato matni va tavsiya etilgan harakatlarga rozi bo'ladi.
 
-### AXT rejection observability
+### AXT rad etish kuzatilishi
 
-- Torii surfaces policy failures as `ValidationFail::AxtReject` (and block validation as `AxtEnvelopeValidationFailed`) with a stable reason label, the active `snapshot_version`, optional `lane`/`dataspace` identifiers, and hint fields for `next_min_handle_era`/`next_min_sub_nonce`. SDKs should bubble these fields to users so stale handles can be refreshed deterministically.
-- Torii now also stamps HTTP responses with `X-Iroha-Axt-*` headers for quick triage: `Code`/`Reason`, `Snapshot-Version`, `Dataspace`, `Lane`, and optional `Next-Handle-Era`/`Next-Sub-Nonce`. ISO bridge rejections carry matching `PRTRY:AXT_*` reason codes and the same detail strings so dashboards and operators can key alerts off the AXT failure class without decoding the full payload.
-- Hosts log `AXT policy rejection recorded` with the same fields and export them via telemetry: `iroha_axt_policy_reject_total{lane,reason}` counts rejects, and `iroha_axt_policy_snapshot_version` tracks the hash of the active snapshot. Proof cache state remains available via `/v1/debug/axt/cache` (dataspace/status/manifest root/slots).
-- Alerting: watch for spikes in `iroha_axt_policy_reject_total` grouped by `reason` and page with the `snapshot_version` from logs/ValidationFail to confirm whether operators need to rotate manifests (lane/manifest rejects) or refresh handles (era/sub_nonce/expiry). Pair alerts with the proof-cache endpoint to confirm whether rejects are cache-related or policy-related.
+- Torii siyosat xatoliklarini barqaror sabab yorlig'i, faol `snapshot_version`, ixtiyoriy `lane`/I10intifiers0000000279X/I10intifiers00 bilan `ValidationFail::AxtReject` (va blok tekshiruvi `AxtEnvelopeValidationFailed`) sifatida ko'rsatadi. `next_min_handle_era`/`next_min_sub_nonce` uchun. SDK'lar bu maydonlarni foydalanuvchilarga puflashi kerak, shunda eskirgan tutqichlar aniq yangilanishi mumkin.
+- Endi Torii HTTP javoblarini tezkor triaj uchun `X-Iroha-Axt-*` sarlavhalari bilan muhrlaydi: `Code`/`Reason`, `Snapshot-Version`, `Snapshot-Version`, `dataspace`, I000002802 `Next-Handle-Era`/`Next-Sub-Nonce`. ISO ko'prigini rad etish mos keladigan `PRTRY:AXT_*` sabab kodlari va bir xil tafsilotlar qatorlarini o'z ichiga oladi, shuning uchun asboblar paneli va operatorlar to'liq yukni dekodlashsiz AXT nosozlik sinfidan asosiy ogohlantirishlarni olishlari mumkin.
+- Xostlar `AXT policy rejection recorded` ni bir xil maydonlar bilan qayd qiladi va ularni telemetriya orqali eksport qiladi: `iroha_axt_policy_reject_total{lane,reason}` rad etishlarni hisoblaydi va `iroha_axt_policy_snapshot_version` faol suratning xeshini kuzatadi. Kesh holatini tasdiqlash `/v1/debug/axt/cache` (ma'lumotlar maydoni/status/manifest ildizi/slotlari) orqali mavjud bo'lib qoladi.
+- Ogohlantirish: operatorlar manifestlarni aylantirishi (yoʻlak/manifestni rad etish) yoki/refresh tutqichini_rezalash kerakmi yoki yoʻqligini tasdiqlash uchun `reason` va `snapshot_version` sahifasi boʻyicha `reason` boʻyicha guruhlangan va `snapshot_version` sahifasini kuzating. Rad qilish keshga yoki siyosatga bog‘liqligini tasdiqlash uchun ogohlantirishlarni proof-kesh so‘nggi nuqtasi bilan bog‘lang.
 
-## Testing & Evidence
+## Sinov va dalillar
 
-- CI must run the `ci/acceptance/slot_1s.yml` suite (30 min mixed workloads) and fail merges when the slot/DA/telemetry thresholds are not met, as spelled out in `ans3.md`.
-- Chaos drills (attester jitter, oracle stalls, buffer depletion) must be executed at least quarterly with artefacts archived under `ops/drill-log.md`.
-- Status updates should include: most recent slot SLO report, outstanding error spikes, and a link to the latest PVO cache snapshot so roadmap stakeholders can audit readiness.
+- CI `ci/acceptance/slot_1s.yml` to'plamini ishga tushirishi kerak (30 daqiqa aralash ish yuki) va `ans3.md` da ta'kidlanganidek, slot/DA/temetriya chegaralari bajarilmasa, birlasha olmaydi.
+- Xaos mashqlari (attester jitteri, oracle stalls, buferning tugashi) `ops/drill-log.md` ostida arxivlangan artefaktlar bilan kamida har chorakda bajarilishi kerak.
+- Status yangilanishlari quyidagilarni o'z ichiga olishi kerak: eng so'nggi SLO uyasi hisoboti, ko'zga ko'rinmas xatoliklar va so'nggi PVO kesh suratiga havola, shuning uchun manfaatdor tomonlar yo'l xaritasi tayyorligini tekshirishlari mumkin.
 
-By following this guide, contributors satisfy the roadmap requirement for AMX documentation and give operators and developers a single reference for timing, telemetry, and PVO workflows.
+Ushbu qo'llanmaga rioya qilish orqali hissa qo'shuvchilar AMX hujjatlari uchun yo'l xaritasi talabini qondiradi va operatorlar va ishlab chiquvchilarga vaqt, telemetriya va PVO ish oqimlari uchun yagona ma'lumotnoma beradi.

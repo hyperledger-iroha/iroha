@@ -4,60 +4,60 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-registry-charter.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-charter
-title: Charte du registre chunker SoraFS
-sidebar_label: Charte registre chunker
-description: Charte de gouvernance pour les soumissions et approbations de profils chunker.
+المعرف: ميثاق التسجيل مقسم
+العنوان: مخطط التسجيل Chunker SoraFS
+Sidebar_label: مقطع تسجيل المخطط
+الوصف: ميثاق حوكمة لموافقات وموافقات الملفات الشخصية.
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/chunker_registry_charter.md`. Gardez les deux copies synchronisées jusqu'à la retraite complète du set Sphinx hérité.
+:::ملاحظة المصدر الكنسي
+هذه الصفحة تعكس `docs/source/sorafs/chunker_registry_charter.md`. قم بمزامنة النسختين حتى تكتمل مجموعة أبو الهول الموروثة.
 :::
 
-# Charte de gouvernance du registre chunker SoraFS
+# ميثاق إدارة السجل chunker SoraFS
 
-> **Ratifiée :** 2025-10-29 par le Sora Parliament Infrastructure Panel (voir
-> `docs/source/sorafs/council_minutes_2025-10-29.md`). Tout amendement exige un
-> vote de gouvernance formel ; les équipes d'implémentation doivent traiter ce document comme
-> normatif jusqu'à l'approbation d'une charte de remplacement.
+> **المصدقة:** 2025-10-29 من قبل لجنة البنية التحتية البرلمانية في سورا (تصويت)
+> `docs/source/sorafs/council_minutes_2025-10-29.md`). تعديل كامل exige un
+> التصويت النموذجي للحوكمة؛ تعتمد معدات التنفيذ على هذه الوثيقة
+> المعيار هو الموافقة على ميثاق الاستبدال.
 
-Cette charte définit le processus et les rôles pour faire évoluer le registre chunker SoraFS.
-Elle complète le [Guide de création des profils chunker](./chunker-profile-authoring.md) en décrivant comment de nouveaux
-profils sont proposés, revus, ratifiés et finalement dépréciés.
+يحدد هذا المخطط العملية والأدوار التي ستؤدي إلى تطوير سجل القطع SoraFS.
+أكمل [دليل إنشاء ملفات التعريف مقسم](./chunker-profile-authoring.md) في تعليق جديد
+الملفات الشخصية هي مقترحات، ومراجعة، وتم التصديق عليها، ونهائية منخفضة القيمة.
 
-## Portée
+## بورتيه
 
-La charte s'applique à chaque entrée de `sorafs_manifest::chunker_registry` et
-à tout tooling qui consomme le registre (manifest CLI, provider-advert CLI,
-SDKs). Elle impose les invariants d'alias et de handle vérifiés par
-`chunker_registry::ensure_charter_compliance()` :
-
-- Les ID de profil sont des entiers positifs qui augmentent de façon monotone.
-- Le handle canonique `namespace.name@semver` **doit** apparaître en première
-- Les chaînes d'alias sont trimées, uniques et ne collisionnent pas avec les handles
+يتم تطبيق المخطط على كل إدخال من `sorafs_manifest::chunker_registry` et
+إلى جميع الأدوات التي تستهلك التسجيل (CLI الواضح، CLI لإعلان الموفر،
+أدوات تطوير البرمجيات). Elle فرض الثوابت الاسمية والتعامل مع التحقق من قدم المساواة
+`chunker_registry::ensure_charter_compliance()` :- معرف الملف الشخصي عبارة عن مجموعة من الإيجابيات التي تزيد من رتابة الصورة.
+- يظهر المقبض canonique `namespace.name@semver` **doit** لأول مرة
+- السلاسل الاسمية مشذبة وفريدة ولا تتصادم مع المقابض
   canoniques d'autres entrées.
 
-## Rôles
+## الأدوار
 
-- **Auteur(s)** – préparent la proposition, régénèrent les fixtures et collectent les
+- **المؤلف (المؤلفون)** – يتولى إعداد الاقتراح، وينظم التركيبات ويجمعها
   preuves de déterminisme.
-- **Tooling Working Group (TWG)** – valide la proposition à l'aide des checklists
-  publiées et s'assure que les invariants du registre sont respectés.
-- **Governance Council (GC)** – examine le rapport du TWG, signe l'enveloppe de la proposition
-  et approuve les calendriers de publication/dépréciation.
-- **Storage Team** – maintient l'implémentation du registre et publie
-  les mises à jour de documentation.
+- **مجموعة عمل الأدوات (TWG)** – التحقق من صحة الاقتراح بمساعدة قوائم المراجعة
+  تم النشر والتأكد من احترام ثوابت السجل.
+- **مجلس الإدارة (GC)** – دراسة تقرير TWG، توقيع مغلف الاقتراح
+  والموافقة على رزنامة النشر/الإهلاك.
+- **فريق التخزين** – يحافظ على تنفيذ التسجيل والنشر
+  les Misses à jour de documentaires.
 
-## Flux du cycle de vie
+## تدفق دورة الحياة
 
-1. **Soumission de la proposition**
-   - L'auteur exécute la checklist de validation du guide d'auteur et crée
+1. **موافقة الاقتراح**
+   - يقوم الكاتب بتنفيذ قائمة التحقق من صحة دليل المؤلف والإنشاء
      un JSON `ChunkerProfileProposalV1` sous
      `docs/source/sorafs/proposals/`.
-   - Inclure la sortie CLI de :
+   - قم بتضمين عملية CLI الخاصة بـ:
      ```bash
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -65,61 +65,57 @@ SDKs). Elle impose les invariants d'alias et de handle vérifiés par
      cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
-   - Soumettre une PR contenant fixtures, proposition, rapport de déterminisme et
-     mises à jour du registre.
+   - عرض تركيبات محتوى العلاقات العامة، والاقتراح، وتقرير التحديد، وما إلى ذلك
+     ما زلت في يوم التسجيل.2. ** أدوات المراجعة (TWG) **
+   - قم بتجديد قائمة التحقق من الصحة (التركيبات، الزغب، بيان خط الأنابيب/PoR).
+   - قم بتنفيذ `cargo test -p sorafs_car --chunker-registry` والتحقق من ذلك
+     `ensure_charter_compliance()` يمر بالمدخل الجديد.
+   - التحقق من سلوك CLI (`--list-profiles`، `--promote-profile`، البث
+     `--json-out=-`) يعكس الأسماء المستعارة والمقابض في الوقت الحالي.
+   - قم بإعداد تقرير محكمة يلخص الإحصائيات وحالة النجاح/الفشل.
 
-2. **Revue tooling (TWG)**
-   - Rejouer la checklist de validation (fixtures, fuzz, pipeline manifest/PoR).
-   - Exécuter `cargo test -p sorafs_car --chunker-registry` et vérifier que
-     `ensure_charter_compliance()` passe avec la nouvelle entrée.
-   - Vérifier que le comportement du CLI (`--list-profiles`, `--promote-profile`, streaming
-     `--json-out=-`) reflète les alias et handles mis à jour.
-   - Produire un court rapport résumant les constats et le statut pass/fail.
+3. **موافقة المجلس (GC)**
+   - Examiner le Rapport TWG et les métadonnées de la proposition.
+   - التوقيع على خلاصة الاقتراح (`blake3("sorafs-chunker-profile-v1" || bytes)`)
+     وإضافة التوقيعات إلى مغلف المجلس مع الاستمرار في التركيبات.
+   - إرسال نتيجة التصويت في محضر الحوكمة.
 
-3. **Approbation du conseil (GC)**
-   - Examiner le rapport TWG et les métadonnées de la proposition.
-   - Signer le digest de la proposition (`blake3("sorafs-chunker-profile-v1" || bytes)`)
-     et ajouter les signatures à l'enveloppe du conseil maintenue avec les fixtures.
-   - Consigner le résultat du vote dans les minutes de gouvernance.
+4. **النشر**
+   - دمج العلاقات العامة في يومنا هذا :
+     -`sorafs_manifest::chunker_registry_data`.
+     - التوثيق (`chunker_registry.md`، أدلة التأليف/المطابقة).
+     - تركيبات وتقارير التحديد.
+   - قم بإخطار المشغلين ومعدات SDK بالملف التعريفي الجديد والطرح المسبق.
 
-4. **Publication**
-   - Fusionner la PR en mettant à jour :
-     - `sorafs_manifest::chunker_registry_data`.
-     - Documentation (`chunker_registry.md`, guides d'auteur/conformité).
-     - Fixtures et rapports de déterminisme.
-   - Notifier les opérateurs et équipes SDK du nouveau profil et du rollout prévu.
+5. **الاستهلاك / التراجع**
+   - المقترحات التي تحل محل الملف الشخصي الموجود يجب أن تتضمن نافذة للنشر
+     مزدوج (فترات نعمة) وخطة ترقية.
+   - بعد انتهاء صلاحية نافذة النعمة، قم بتغيير الملف الشخصي باعتباره مستهلكًا
+     في السجل وقياس دفتر الأستاذ للترحيل.6. ** تغييرات عاجلة **
+   - تتطلب عمليات القمع أو الإصلاحات العاجلة تصويتًا للأغلبية.
+   - تقوم TWG بتوثيق خطوات تخفيف المخاطر ومتابعة يومية الحادث.
 
-5. **Dépréciation / Retrait**
-   - Les propositions qui remplacent un profil existant doivent inclure une fenêtre de publication
-     double (périodes de grâce) et un plan d'upgrade.
-   - Après expiration de la fenêtre de grâce, marquer le profil remplacé comme déprécié
-     dans le registre et mettre à jour le ledger de migration.
+## أدوات الحضور
 
-6. **Changements d'urgence**
-   - Les suppressions ou hotfixes exigent un vote du conseil à la majorité.
-   - Le TWG doit documenter les étapes de mitigation des risques et mettre à jour le journal d'incident.
+- `sorafs_manifest_chunk_store` و`sorafs_manifest_stub` المكشوف :
+  - `--list-profiles` لفحص السجل.
+  - `--promote-profile=<handle>` لإنشاء كتلة métadonnées canonique utilisé
+    أثناء الترويج للملف الشخصي.
+  - `--json-out=-` لدفق التقارير عبر الوضع القياسي، مما يسمح بسجلات العرض
+    الاستنساخ.
+- `ensure_charter_compliance()` تم استدعاؤه للبدء في الثنائيات المعنية
+  (`manifest_chunk_store`، `provider_advert_stub`). اختبارات CI تفعل ذلك
+  دي نوفيلس تدخل عنيفة على الرسم البياني.
 
-## Attentes tooling
+## التسجيل
 
-- `sorafs_manifest_chunk_store` et `sorafs_manifest_stub` exposent :
-  - `--list-profiles` pour l'inspection du registre.
-  - `--promote-profile=<handle>` pour générer le bloc de métadonnées canonique utilisé
-    lors de la promotion d'un profil.
-  - `--json-out=-` pour streamer les rapports vers stdout, permettant des logs de revue
-    reproductibles.
-- `ensure_charter_compliance()` est invoqué au démarrage dans les binaires concernés
-  (`manifest_chunk_store`, `provider_advert_stub`). Les tests CI doivent échouer si
-  de nouvelles entrées violent la charte.
-
-## Registre
-
-- Stocker tous les rapports de déterminisme dans `docs/source/sorafs/reports/`.
-- Les minutes du conseil référant aux décisions chunker vivent sous
+- Stocker tous les Rapports de déterminisme dans `docs/source/sorafs/reports/`.
+- دقائق الاستشارة المرجعية للقرارات تنبض بالحياة
   `docs/source/sorafs/migration_ledger.md`.
-- Mettre à jour `roadmap.md` et `status.md` après chaque changement majeur du registre.
+- Mettre à jour `roadmap.md` et `status.md` بعد كل تغيير قاهرة في السجل.
 
-## Références
+## المراجع
 
-- Guide de création : [Guide de création des profils chunker](./chunker-profile-authoring.md)
-- Checklist de conformité : `docs/source/sorafs/chunker_conformance.md`
-- Référence du registre : [Registre des profils chunker](./chunker-registry.md)
+- دليل الإنشاء : [دليل إنشاء ملفات التعريف مقسم](./chunker-profile-authoring.md)
+- قائمة التحقق من المطابقة: `docs/source/sorafs/chunker_conformance.md`
+- مرجع السجل: [تسجيل ملفات التعريف مقسم](./chunker-registry.md)

@@ -4,17 +4,19 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-index.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
-title: أدلة مطوري SoraFS
-description: صفحة البداية لتوثيق مطوري SoraFS والعينات ومراجع الأتمتة.
-sidebar_label: نظرة عامة للمطورين
+ID: 開発者インデックス
+タイトル: أدلة مطوري SoraFS
+説明: صفحة البداية لتوثيق مطوري SoraFS والعينات ومراجع الأتمتة。
+サイドバー ラベル: ナチス
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/index.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+:::note ノート
+テストは `docs/source/sorafs/developer/index.md` です。 حرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة。
 :::
 
 # أدلة مطوري SoraFS

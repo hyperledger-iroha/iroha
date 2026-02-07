@@ -4,136 +4,130 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-client-protocol.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# بروتوكول عقدة ↔ عميل SoraFS
+#بروتوكول عقدة ↔ عميل SoraFS
 
-يلخص هذا الدليل التعريف المعتمد للبروتوكول في
+يلخص هذا الدليل الدليل المعتمد للبروتوكول في
 [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-استخدم المواصفة upstream لتخطيطات Norito على مستوى البايت وسجل التغييرات؛
-تحافظ نسخة البوابة على أبرز النقاط التشغيلية قرب بقية runbooks الخاصة بـ SoraFS.
+استخدم المواصفة المنبع لتخطيط Norito على مستوى البايت لتغيير التغييرات؛
+حافظ على نسخة البوابة على النقاط التشغيلية المميزة قرب بقية runbooks الخاصة بـ SoraFS.
 
-## إعلانات المزوّد والتحقق
+##إعلانات المتحكم والتحقق
 
-يقوم مزوّدو SoraFS ببث حمولات `ProviderAdvertV1` (راجع
-`crates/sorafs_manifest::provider_advert`) الموقعة من المُشغّل الخاضع للحوكمة.
-تثبت الإعلانات بيانات الاكتشاف والضوابط التي يفرضها المُنسِّق متعدد المصادر
-أثناء التشغيل.
-
-- **مدة الصلاحية** — `issued_at < expires_at ≤ issued_at + 86,400 s`. ينبغي على
-  المزوّدين التجديد كل 12 ساعة.
-- **TLV القدرات** — تسرد قائمة TLV ميزات النقل (Torii، QUIC+Noise، ترحيلات
-  SoraNet، امتدادات مزوّد). يمكن تجاهل الأكواد المجهولة عندما
+يقوم بتنظيمو SoraFS ببث حمولات `ProviderAdvertV1` (راجع
+`crates/sorafs_manifest::provider_advert`) الموقع من المُشغّل التنظيمي للرقابة التنظيمية.
+تثبت الإعلانات بياناتها والضوابط التي تفترضها المُنسِّق ذات المصدر المتعددة
+أثناء التشغيل.- **مدة الصلاحية** — `issued_at < expires_at ≤ issued_at + 86,400 s`. ينبغي على
+  المدقق الدقيق كل 12 ساعة.
+- **TLVhan** — تسرد قائمة TLV صلاحيات الإصدار (Torii، QUIC+Noise، ترحيلات)
+  سورانت، امتدادات متحكم). يمكن تجاهل الأكواد المجهولة عندما
   `allow_unknown_capabilities = true` مع اتباع إرشادات GREASE.
-- **تلميحات QoS** — طبقة `availability` (Hot/Warm/Cold)، أقصى كمون للاسترجاع،
-  حد التزامن، وميزانية stream اختيارية. يجب أن تتوافق QoS مع التليمترية
-  الملحوظة ويتم تدقيقها في القبول.
-- **Endpoints ومواضيع rendezvous** — عناوين خدمة محددة مع بيانات TLS/ALPN إضافة
-  إلى مواضيع الاكتشاف التي يجب أن يشترك بها العملاء عند بناء مجموعات الحراسة.
+- **تلميحات QoS** — `availability` (ساخن/دافئ/بارد)، أقصى كمون للاسترجاع،
+  إلى حد التزامن، والتيار الميزاني اختياري. يجب أن تحدد جودة الخدمة مع التليميترية
+  الملحوظة أصغر تدقيقها في التقبل.
+- **موعد نقاط النهاية ومواضيع** — عناوين خدمة محددة مع إضافة بيانات TLS/ALPN
+  إلى أمور لا يجب أن يشترك فيها العملاء عند بناء مجموعات الاستشعار.
 - **سياسة تنوع المسارات** — `min_guard_weight` وحدود fan-out لمجموعات AS/pool و
-  `provider_failure_threshold` تجعل جلب multi-peer الحتمي ممكنًا.
-- **معرّفات الملف الشخصي** — يجب على المزوّدين نشر المقبض المعتمد (مثل
-  `sorafs.sf1@1.0.0`)؛ تساعد `profile_aliases` الاختيارية العملاء القدامى على
-  الترحيل.
+  `provider_failure_threshold` تجعل تعدد الأقران حتمي ممكنًا.
+- **معرّفات الملف الشخصي** — يجب على المحكمين نشر المدقق المعتمد (مثل
+  `sorafs.sf1@1.0.0`). مساعدة `profile_aliases` اختيارية العملاء القدامى على
+  الرحيل.
 
-ترفض قواعد التحقق stake الصفري، أو قوائم القدرات/العناوين/المواضيع الفارغة،
-أو تواريخ غير مرتبة، أو أهداف QoS مفقودة. تقارن أظرف القبول بين محتوى الإعلان
-والاقتراح (`compare_core_fields`) قبل بث التحديثات.
+رفض متطلبات التحقق من الحصة النمساوية، أو قوائم الترشيحات/العناوين/المواضيع الفارغة،
+أو تواريخ غير مرتبة، أو أهداف جودة الخدمة مفقودة. تقارن أظرف مقبولة بين محتوى الإعلان
+والاقتراح (`compare_core_fields`) قبل تحديث التحديثات.
 
 ### امتدادات الجلب بالنطاقات
 
-تتضمن المزوّدات الداعمة للنطاق البيانات التالية:
-
-| الحقل | الغرض |
+تتضمن المتحكمات الباتش لنطاق البيانات التالي:| الحقل | اللحوم |
 |-------|-------|
-| `CapabilityType::ChunkRangeFetch` | يعلن `max_chunk_span` و`min_granularity` وأعلام المحاذاة/الأدلة. |
-| `StreamBudgetV1` | غلاف اختياري للتزامن/المعدل (`max_in_flight`, `max_bytes_per_sec`, و`burst` اختياري). يتطلب قدرة نطاق. |
-| `TransportHintV1` | تفضيلات نقل مرتبة (مثل `torii_http_range`, `quic_stream`, `soranet_relay`). الأولويات ضمن `0–15` ويُرفض التكرار. |
+| `CapabilityType::ChunkRangeFetch` | أعلن `max_chunk_span` و`min_granularity` وأعلام العازف/الأدلة. |
+| `StreamBudgetV1` | غلافي اختياري للتزامن/المعدل (`max_in_flight`, `max_bytes_per_sec`, و`burst` اختياري). تتطلب قدرة النطاق. |
+| `TransportHintV1` | تفضيلات نقل مرتبة (مثل `torii_http_range`, `quic_stream`, `soranet_relay`). الأولويات ضمن `0–15` ولا يتم رفض التكرار. |
 
 دعم الأدوات:
 
-- يجب على خطوط إعلانات المزوّدين التحقق من قدرة النطاق وميزانية stream وتلميحات
-  النقل قبل إصدار حمولات حتمية للتدقيق.
-- `cargo xtask sorafs-admission-fixtures` يجمع إعلانات متعددة المصادر مع
-  fixtures للخفض تحت `fixtures/sorafs_manifest/provider_admission/`.
-- تُرفض الإعلانات الداعمة للنطاق التي تُسقط `stream_budget` أو `transport_hints`
-  بواسطة محمّلات CLI/SDK قبل الجدولة، ما يحافظ على توافق مسار multi-source مع
-  توقعات قبول Torii.
+- يجب على خطوط الإعلانات المتحكمة التحقق من قدرة النطاق وميزانية الدفق وتلميحات
+  الإصدار السابق حمولات حتمية للتدقيق.
+- `cargo xtask sorafs-admission-fixtures` يجمع إعلانات متعددة المصدر مع
+  تركيبات للخفض تحت `fixtures/sorafs_manifest/provider_admission/`.
+- تُرفض الإعلانات الباهتة للنطاق الذي تُسقط `stream_budget` أو `transport_hints`
+  بواسطة مجاهدات CLI/SDK قبل الجدولة، ما نلتزم بتوافق متعدد المصادر مع
+  توقعات مقبولة Torii.
 
 ## نقاط نهاية نطاقات البوابة
 
-تقبل البوابات طلبات HTTP حتمية تعكس بيانات الإعلانات.
+تقبل البوابات طلبات HTTP حتمية احترام بيانات الإعلانات.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+###`GET /v1/sorafs/storage/car/{manifest_id}`
 
 | المتطلب | التفاصيل |
-|---------|----------|
-| **Headers** | `Range` (نافذة واحدة مصطفة مع إزاحات الشرائح)، `dag-scope: block`، `X-SoraFS-Chunker`، `X-SoraFS-Nonce` اختياري، و`X-SoraFS-Stream-Token` base64 إلزامي. |
-| **Responses** | `206` مع `Content-Type: application/vnd.ipld.car`، و`Content-Range` يصف النافذة المقدمة، وبيانات `X-Sora-Chunk-Range`، وإعادة إرسال رؤوس chunker/token. |
-| **Failure modes** | `416` للنطاقات غير المصطفة، `401` للرموز المفقودة/غير الصالحة، `429` عند تجاوز ميزانيات stream/byte. |
+|---------|---------|
+| **العناوين** | `Range` (نافذة واحدة مصطفة مع إزاحات القادة)، `dag-scope: block`، `X-SoraFS-Chunker`، `X-SoraFS-Nonce` اختياري، و`X-SoraFS-Stream-Token` base64. |
+| **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، و`Content-Range` يصف النافذة المقدمة، وبيانات `X-Sora-Chunk-Range`، جاهز لإعادة إرسال الرموز/الرمز المميز. |
+| **أوضاع الفشل** | `416` للنطاقات غير المصطفة، `401` للرموز الناطق/غير الصالحة، `429` عند تجاوز ميزانيات الدفق/البايت. |###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+جلبة شريحة واحدة بنفس الرؤوس بالإضافة إلى هضم حتمي للشريحة. مفيد مرة أخرى
+المحاولة أو تنزيل الطب الشرعي عندما لا تكون شرائح CAR ضرورية.
 
-جلب شريحة واحدة بنفس الرؤوس بالإضافة إلى digest الحتمي للشريحة. مفيد لإعادة
-المحاولة أو تنزيلات الطب الشرعي عندما لا تكون شرائح CAR ضرورية.
-
-## سير عمل المُنسِّق متعدد المصادر
+## سير عمل المُنسِّق ذو المصادر المتعددة
 
 عند تفعيل جلب SF-6 متعدد المصادر (CLI Rust عبر `sorafs_fetch`، وSDKs عبر
 `sorafs_orchestrator`):
 
-1. **جمع المدخلات** — فك خطة شرائح المانيفست، وجلب أحدث الإعلانات، وتمرير
+1. **جمع المدخلات** — خطة تخطيط شرائح المانيفيست، وجلب أحدث الإعلانات، وتمرير
    لقطة تليمترية اختيارية (`--telemetry-json` أو `TelemetrySnapshot`).
-2. **بناء scoreboard** — يقوم `Orchestrator::build_scoreboard` بتقييم الأهلية
-   وتسجيل أسباب الرفض؛ يحفظ `sorafs_fetch --scoreboard-out` ملف JSON.
-3. **جدولة الشرائح** — يفرض `fetch_with_scoreboard` (أو `--plan`) قيود النطاق،
-   ميزانيات stream، وحدود إعادة المحاولة/الأقران (`--retry-budget`, `--max-peers`)
-   ويصدر stream token بنطاق المانيفست لكل طلب.
-4. **التحقق من الإيصالات** — تشمل المخرجات `chunk_receipts` و`provider_reports`؛
+2. **بناء لوحة النتائج** — يقوم `Orchestrator::build_scoreboard` بتقييم الأهلية
+   وتسجيل سبب الرفض؛ يحفظ `sorafs_fetch --scoreboard-out` ملف JSON.
+3. **جدول المقاعد** — يفرض `fetch_with_scoreboard` (أو `--plan`) النطاق الإلكتروني،
+   تيار ميزانيات، وحدود إعادة المحاولة/الأقران (`--retry-budget`, `--max-peers`)
+   ويصدر تيار رمزي بنطاق المانيفيست لكل طلب.
+4. **التحقق من الإيصالات** — تشمل المنفذات `chunk_receipts` و`provider_reports`؛
    تحفظ ملخصات CLI كلًا من `provider_reports` و`chunk_receipts` و`ineligible_providers`
    لحزم الأدلة.
 
-أخطاء شائعة تصل إلى المشغلين/SDKs:
+الأخطاء الشائعة تصل إلى المشغلين/SDKs:
 
 | الخطأ | الوصف |
 |-------|-------|
-| `no providers were supplied` | لا توجد إدخالات مؤهلة بعد التصفية. |
-| `no compatible providers available for chunk {index}` | عدم توافق نطاق أو ميزانية لشريحة محددة. |
+| `no providers were supplied` | لا توجد كمية كافية بعد التصفية. |
+| `no compatible providers available for chunk {index}` | لا تتوافق مع النطاق أو لشريحة محددة. |
 | `retry budget exhausted after {attempts}` | زد `--retry-budget` أو استبعد الأقران المتعثرين. |
-| `no healthy providers remaining` | تم تعطيل جميع المزوّدين بعد إخفاقات متكررة. |
-| `streaming observer failed` | انهار كاتب CAR في المسار السفلي. |
-| `orchestrator invariant violated` | التقط المانيفست وscoreboard ولقطة التليمترية وJSON الخاص بالـ CLI للتحليل. |
+| `no healthy providers remaining` | تم جميع المتحكمين بعد إخفاقات متكررة. |
+| `streaming observer failed` | كاتب نهاري CAR في المسار السفلي. |
+| `orchestrator invariant violated` | التقط المانيفيست ولوحة النتائج واللقطة التليميترية وJSON الخاص بالـ CLI للتحليل. |##التليمترية والأدلة
 
-## التليمترية والأدلة
-
-- المقاييس الصادرة عن المُنسِّق:  
-  `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
-  `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (موسومة حسب manifest/region/provider). اضبط `telemetry_region` في الإعداد أو عبر
-  أعلام CLI ليتم تقسيم لوحات المتابعة بحسب الأسطول.
-- تتضمن ملخصات الجلب في CLI/SDK ملف scoreboard JSON المحفوظ وإيصالات الشرائح
-  وتقارير المزوّدين التي يجب شحنها ضمن حزم الإطلاق لبوابات SF-6/SF-7.
-- تكشف معالجات البوابة `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  كي تتمكن لوحات SRE من ربط قرارات المُنسِّق بسلوك الخادم.
+- المحاسبون عن المُنسِّق:  
+  `sorafs_orchestrator_active_fetches`، `sorafs_orchestrator_fetch_duration_ms`،
+  `sorafs_orchestrator_retries_total`، `sorafs_orchestrator_provider_failures_total`
+  (موسومة حسب المانيفست/المنطقة/المزود). ضبط `telemetry_region` في الطول أو الطول
+  أعلام CLI للنسخ الاحتياطي حسب النسخة الطولية.
+- تتضمن ملخصات الجلب في CLI/SDK ملف لوحة النتائج JSON المحفوظ وإيصالات المقاعد
+  والتقارير المحاسبية التي يجب شحنها ضمن حزم نهائية لبوابات SF-6/SF-7.
+- كاميرا معالجات البوابة `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
+  كي تبدأ لوحات SRE بتكوين المُنسِّق بسلوك الموظفين.
 
 ## مساعدات CLI وREST
 
-- `iroha app sorafs pin list|show` و`alias list` و`replication list` تغلف نقاط REST
-  الخاصة بسجل pins وتطبع Norito JSON الخام مع كتل attestation لأدلة التدقيق.
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان manifests
-  بنمط Norito أو JSON مع proofs اختيارية للـ alias والـ successor؛ تؤدي proofs
-  المشوهة إلى `400`، وتُظهر proofs القديمة `503` مع `Warning: 110`، بينما تعيد
-  proofs المنتهية تمامًا `412`.
-- نقاط REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
-  تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
+- `iroha app sorafs pin list|show` و`alias list` و`replication list` تطبع نقاط REST
+  الخاصة بسجل الدبابيس وتطبع Norito JSON Raw مع شهادة الكتل لأدلة التدقيق.
+- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان البيانات
+  بنمط Norito أو JSON مع إثباتات اختيارية للـ alias والـ Successor؛ لها البراهين
+  المشوهة إلى `400`، وتظهر البراهين القديمة `503` مع `Warning: 110`، بينما
+  البراهين كاملة تمامًا `412`.
+- نقاط REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
+  تتضمن الهياكل التصديق حتى يبدأ العملاء في التحقق من البيانات مقابل الأحدث
   رؤوس الكتل قبل التنفيذ.
 
 ## المراجع
 
-- المواصفة المعتمدة:
+- المواصفة المعتمدة :
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- أنواع Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+-أنواع Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
 - مساعدات CLI: `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- مكتبة المُنسِّق: `crates/sorafs_orchestrator`
-- حزمة لوحات المتابعة: `dashboards/grafana/sorafs_fetch_observability.json`
+- مكتبة المُنسِّق: `crates/sorafs_orchestrator`
+- حزمة النسخ: `dashboards/grafana/sorafs_fetch_observability.json`

@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus SDK quickstarts
 description: Minimal steps for Rust/JS/Swift/Android/CLI SDKs to connect to Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The full quickstart lives at `docs/source/nexus_sdk_quickstarts.md`. This portal
-summary highlights the shared prerequisites and per-SDK commands so developers
-can verify their setup quickly.
+Ամբողջական արագ մեկնարկը գործում է `docs/source/nexus_sdk_quickstarts.md`-ում: Այս պորտալը
+ամփոփումը ընդգծում է ընդհանուր նախադրյալները և յուրաքանչյուր SDK հրամանները, որպեսզի մշակողները
+կարող է արագ ստուգել դրանց կարգավորումը:
 
-## Shared setup
+## Համօգտագործվող կարգավորում
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -22,11 +24,11 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Download the Nexus config bundle, install each SDK’s dependencies, and ensure
-TLS certificates match the release profile (see
-`docs/source/sora_nexus_operator_onboarding.md`).
+Ներբեռնեք Nexus կազմաձևման փաթեթը, տեղադրեք յուրաքանչյուր SDK-ի կախվածությունը և ապահովեք
+TLS վկայագրերը համապատասխանում են թողարկման պրոֆիլին (տես
+`docs/source/sora_nexus_operator_onboarding.md`):
 
-## Rust
+## Ժանգ
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -35,7 +37,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+Հղումներ՝ `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -43,16 +45,16 @@ Refs: `docs/source/sdk/rust.md`
 npm run demo:nexus
 ```
 
-The script instantiates `ToriiClient` with the env vars above and prints the
-latest block.
+Սցենարը ներկայացնում է `ToriiClient`-ը վերևում գտնվող env vars-ով և տպում է
+վերջին բլոկը.
 
-## Swift
+## Սվիֆթ
 
 ```bash
 make swift-nexus-demo
 ```
 
-Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
+Օգտագործում է `Torii.Client` `IrohaSwift`-ից՝ `FindNetworkStatus` բերելու համար:
 
 ## Android
 
@@ -62,7 +64,7 @@ Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Runs the managed-device test hitting the Nexus staging endpoint.
+Գործարկում է կառավարվող սարքի թեստը՝ հարվածելով Nexus փուլային վերջնակետին:
 
 ## CLI
 
@@ -73,13 +75,13 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Troubleshooting
+## Անսարքությունների վերացում
 
-- TLS failures → confirm the CA bundle from the Nexus release tarball.
-- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` once multi-lane routing
-  is enforced.
-- `ERR_SETTLEMENT_PAUSED` → check [Nexus operations](../nexus/nexus-operations) for the
-  incident process; governance may have paused the lane.
+- TLS ձախողումներ → հաստատեք CA փաթեթը Nexus թողարկման tarball-ից:
+- `ERR_UNKNOWN_LANE` → անցեք `--lane-id`/`--dataspace-id` մեկ անգամ բազմագոտի երթուղի
+  հարկադրված է։
+- `ERR_SETTLEMENT_PAUSED` → ստուգեք [Nexus գործողություններ] (../nexus/nexus-operations)
+  միջադեպի գործընթաց; կառավարումը կարող է դադարեցրել երթուղին:
 
-For deeper context and SDK-specific explanations see
+Ավելի խորը համատեքստի և SDK-ին հատուկ բացատրությունների համար տե՛ս
 `docs/source/nexus_sdk_quickstarts.md`.

@@ -10,26 +10,27 @@ translation_last_reviewed: 2026-02-07
 title: Rust ledger flow recipe
 description: Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.
 slug: /sdks/recipes/rust-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+импорт SapleDownload '@site/src/компоненттар/SampleDownload';
 
-This recipe mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-but runs everything from a Rust binary. It reuses the default dev network
-(`docker compose -f defaults/docker-compose.single.yml up --build`) and the demo
-credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes one
-for one.
+Был рецепт көҙгө [CLI леджер проходка] (../../norito/ledger-walkthrough.md X)
+әммә барыһын да йүгерә, тип, руст бинар. Ул ҡабаттан ҡулланыла default de de de dev .
+(`docker compose -f defaults/docker-compose.single.yml up --build`) һәм демо
+ышаныс ҡағыҙҙары `defaults/client.toml`, шуға күрә һеҙ SDK һәм CLI хеш сағыштырырға мөмкин бер
+берәүһе өсөн.
 
-<SampleDownload
-  href="/sdk-recipes/rust/src/main.rs"
-  filename="src/main.rs"
-  description="Use this Rust source file as a baseline to follow along or to diff against your changes."
+<СэмплДау-лог
+  href="/sdk-рецепттар/көсһөҙ/src/main.rs".
+  файл исеме="src/main.rs".
+  Һеҙҙең үҙгәрештәргә ҡаршы йәки айырмалы рәүештә, был Rust сығанаҡ файлын ҡулланыу.
 />
 
-## Prerequisites
+## Алдан шарттар
 
-1. Run the dev peer with Docker Compose (see the [Norito quickstart](../../norito/quickstart.md)).
-2. Export the default admin/receiver accounts and the admin private key from
+1. Йүгерергә dev менән I18NT000000002X Композа (ҡара: [I18NT000000000X faverstart](../../norito/quickstart.md)).
+2. Экспорт ғәҙәттәге админ/ҡабул итеүсе иҫәп-хисап һәм админ шәхси асҡыс .
    `defaults/client.toml`:
 
    ```bash
@@ -38,16 +39,16 @@ for one.
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
-   The private key string is the multihash-encoded value stored under `[account].private_key`.
-3. Create a new workspace binary (or reuse an existing one):
+   Шәхси асҡыс ептәре булып тора, күп хеш-кодланған ҡиммәт һаҡланған I18NI000000014X.
+3. Яңы эш урыны бинар төҙөү (йәки ғәмәлдәгеһен ҡабаттан ҡулланырға):
 
    ```bash
    cargo new --bin rust-ledger-recipe
    cd rust-ledger-recipe
    ```
 
-4. Add the dependencies (use a crates.io version if you are outside the
-   workspace):
+4. Өҫтәү менән бәйлелек (ҡулланыу crate.io версияһы, әгәр һеҙ ситтә .
+   эш урыны):
 
    ```toml title="Cargo.toml"
    [dependencies]
@@ -57,7 +58,7 @@ for one.
    iroha_data_model = { path = "../../crates/iroha_data_model", features = ["transparent_api", "json"] }
    ```
 
-## Example program
+## Миҫал программаһы
 
 ```rust title="src/main.rs"
 use std::str::FromStr;
@@ -112,28 +113,28 @@ fn main() -> Result<()> {
 }
 ```
 
-## Run the recipe
+## Рецепты йүгерегеҙ
 
 ```bash
 cargo run
 ```
 
-You should see log output similar to:
+Һеҙ күрергә тейеш лог сығыш оҡшаш:
 
 ```
 ih58... now holds:
   50 units of coffee#wonderland
 ```
 
-If the asset definition already exists, the register call returns a
-`ValidationError::Duplicate`. Either ignore it (the mint still succeeds) or pick
-a new name.
+Әгәр актив билдәләмәһе инде бар, регистр шылтыратыу ҡайтарыу а .
+`ValidationError::Duplicate`. Әллә уны иғтибарға алмай (метка һаман да уңышҡа өлгәшә) йәки һайлап алыу
+яңы исем.
 
-## Verify hashes and parity
+## Хеш һәм паритет раҫлау
 
-- Use `iroha --config defaults/client.toml transaction get --hash <hash>` to
-  inspect the transactions that the SDK submitted.
-- Cross-check balances with `iroha --config defaults/client.toml asset list all --table`
-  or `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Repeat the same flow from the CLI walkthrough to confirm both surfaces produce
-  the same Norito payloads and transaction statuses.
+- I18NI000000016X тиклем ҡулланыу.
+  тикшерергә операциялар, тип SDK тапшырҙы.
+- I18NI000000017X менән крест-тикшерергә
+  йәки `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- CLI проходкаһынан бер үк ағымды ҡабатлағыҙ, ике ер өҫтөн дә етештереүҙе раҫлау өсөн
+  шул уҡ I18NT000000001X файҙалы йөктәр һәм транзакция статусы.

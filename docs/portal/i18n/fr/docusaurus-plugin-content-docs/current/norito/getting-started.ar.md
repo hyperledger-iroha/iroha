@@ -4,31 +4,33 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # بدء استخدام Norito
 
-يعرض هذا الدليل السريع سير العمل الادنى لتجميع عقد Kotodama، وفحص bytecode Norito الناتج، وتشغيله محليا، ثم نشره على عقدة Iroha.
+Vous pouvez trouver le code d'accès Kotodama avec le bytecode Norito et le bytecode Norito. محليا، ثم نشره على عقدة Iroha.
 
 ## المتطلبات المسبقة
 
-1. ثبّت سلسلة ادوات Rust (1.76 او احدث) واستنسخ هذا المستودع.
+1. Rust (1,76 par jour) est utilisé par Rust.
 2. ابن او نزّل الثنائيات الداعمة:
-   - `koto_compile` - مترجم Kotodama الذي يصدر bytecode IVM/Norito
-   - `ivm_run` و `ivm_tool` - ادوات التشغيل المحلي والفحص
+   - `koto_compile` - Utiliser Kotodama pour le bytecode IVM/Norito
+   - `ivm_run` et `ivm_tool`
    - `iroha_cli` - يستخدم لنشر العقود عبر Torii
 
-   يتوقع Makefile في المستودع هذه الثنائيات ضمن `PATH`. يمكنك تنزيل artefacts جاهزة او بناؤها من المصدر. اذا قمت ببناء toolchain محليا فاشر الى الثنائيات في مساعدات Makefile:
+   Makefile est un fichier Makefile `PATH`. يمكنك تنزيل artefacts جاهزة او بناؤها من المصدر. La chaîne d'outils est associée à un Makefile :
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. تاكد من ان عقدة Iroha تعمل عند الوصول الى خطوة النشر. تفترض الامثلة ادناه ان Torii متاح على عنوان URL المهيأ في ملف تعريف `iroha_cli` (`~/.config/iroha/cli.toml`).
+3. Utilisez le Iroha pour installer le système d'exploitation. Utilisez l'URL Torii pour accéder à l'URL `iroha_cli` (`~/.config/iroha/cli.toml`).
 
-## 1. تجميع عقد Kotodama
+## 1. Rechercher Kotodama
 
-يشمل المستودع عقدا بسيطا "hello world" في `examples/hello/hello.ko`. قم بتجميعه الى bytecode Norito/IVM (`.to`):
+Il s'agit d'un "hello world" `examples/hello/hello.ko`. Il s'agit du bytecode Norito/IVM (`.to`) :
 
 ```sh
 mkdir -p target/examples
@@ -40,14 +42,12 @@ koto_compile examples/hello/hello.ko \
 
 اهم الاعلام:
 
-- `--abi 1` يثبت العقد على نسخة ABI 1 (النسخة الوحيدة المدعومة وقت الكتابة).
+- `--abi 1` est compatible avec ABI 1 (النسخة الوحيدة المدعومة وقت الكتابة).
 - `--max-cycles 0` يطلب تنفيذا غير محدود؛ ضع رقما موجبا لحد padding الدورات لاجل اثباتات المعرفة الصفرية.
 
 ## 2. فحص اثر Norito (اختياري)
 
-استخدم `ivm_tool` للتحقق من الرأس والبيانات الوصفية المضمنة:
-
-```sh
+استخدم `ivm_tool` pour les personnes âgées et les personnes handicapées :```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
@@ -55,17 +55,17 @@ ivm_tool inspect target/examples/hello.to
 
 ## 3. تشغيل العقد محليا
 
-نفذ bytecode عبر `ivm_run` لتاكيد السلوك دون لمس العقدة:
+Le bytecode `ivm_run` est utilisé pour la connexion :
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-مثال `hello` يسجل تحية ويصدر syscall `SET_ACCOUNT_DETAIL`. التشغيل المحلي مفيد اثناء تكرار منطق العقد قبل نشره على السلسلة.
+Utilisez `hello` pour utiliser l'appel système `SET_ACCOUNT_DETAIL`. التشغيل المحلي مفيد اثناء تكرار منطق العقد قبل نشره على السلسلة.
 
 ## 4. النشر عبر `iroha_cli`
 
-عندما تكون راضيا عن العقد، انشره على عقدة باستخدام CLI. وفر حساب صلاحية ومفتاح توقيعه واما ملف `.to` او payload بصيغة Base64:
+Il s'agit d'une option pour la CLI. Vous pouvez utiliser la charge utile `.to` pour Base64 :
 
 ```sh
 iroha_cli app contracts deploy \
@@ -74,7 +74,7 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-يرسل الامر bundle من manifest Norito + bytecode عبر Torii ويطبع حالة المعاملة الناتجة. بعد التزام المعاملة يمكن استخدام hash الكود المعروض في الاستجابة لاسترجاع manifests او سرد instances:
+Il s'agit d'un bundle contenant le manifeste Norito + le bytecode et Torii et le code d'octet. Dans le cas d'un hachage, le hachage se manifeste et les instances sont :
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
@@ -83,17 +83,15 @@ iroha_cli app contracts instances --namespace apps --table
 
 ## 5. التشغيل عبر Torii
 
-مع تسجيل bytecode يمكنك استدعاؤه عبر ارسال تعليمات تشير الى الكود المخزن (مثلا عبر `iroha_cli ledger transaction submit` او عميل التطبيق). تاكد من ان صلاحيات الحساب تسمح بالـ syscalls المطلوبة (`set_account_detail`, `transfer_asset`, الخ).
+مع تسجيل bytecode يمكنك استدعاؤه عبر ارسال تعليمات تشير الى الكود المخزن (مثلا عبر `iroha_cli ledger transaction submit` او عميل التطبيق). Vous pouvez utiliser les appels système pour les appels système (`set_account_detail`, `transfer_asset`, ici).
 
-## نصائح واستكشاف الاعطال
+## نصائح واستكشاف الاعطال- استخدم `make examples-run` لتجميع وتنفيذ الامثلة دفعة واحدة. قم بتجاوز متغيرات البيئة `KOTO`/`IVM` اذا لم تكن الثنائيات على `PATH`.
+- اذا رفض `koto_compile` نسخة ABI, تحقق من ان المترجم والعقدة يستهدفان ABI v1 (شغّل `koto_compile --abi` بدون معاملات لعرض الدعم).
+- La CLI est une version hexadécimale et Base64. للاختبار يمكنك استخدام المفاتيح الصادرة من `iroha_cli tools crypto keypair`.
+- Utilisez les charges utiles Norito, puis `ivm_tool disassemble` pour les charges utiles Kotodama.
 
-- استخدم `make examples-run` لتجميع وتنفيذ الامثلة دفعة واحدة. قم بتجاوز متغيرات البيئة `KOTO`/`IVM` اذا لم تكن الثنائيات على `PATH`.
-- اذا رفض `koto_compile` نسخة ABI، تحقق من ان المترجم والعقدة يستهدفان ABI v1 (شغّل `koto_compile --abi` بدون معاملات لعرض الدعم).
-- يقبل CLI مفاتيح توقيع بصيغة hex او Base64. للاختبار يمكنك استخدام المفاتيح الصادرة من `iroha_cli tools crypto keypair`.
-- عند تصحيح payloads Norito، يساعد امر `ivm_tool disassemble` على ربط التعليمات بمصدر Kotodama.
+يعكس هذا التدفق الخطوات المستخدمة في CI واختبارات التكامل. Pour utiliser Kotodama et les appels système, utilisez Norito:
 
-يعكس هذا التدفق الخطوات المستخدمة في CI واختبارات التكامل. للمزيد حول قواعد Kotodama وربط syscalls وداخل Norito، راجع:
-
-- `docs/source/kotodama_grammar.md`
-- `docs/source/kotodama_examples.md`
-- `norito.md`
+-`docs/source/kotodama_grammar.md`
+-`docs/source/kotodama_examples.md`
+-`norito.md`

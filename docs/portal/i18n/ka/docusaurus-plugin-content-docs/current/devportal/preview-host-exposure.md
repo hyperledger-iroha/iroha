@@ -8,25 +8,27 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview host exposure guide
 sidebar_label: Preview host exposure
 description: Publish and verify the beta preview host before sending invites.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The DOCS‑SORA roadmap requires every public preview to ride on the same
-checksum‑verified bundle that reviewers exercise locally. Use this runbook
-after reviewer onboarding (and the invite approval ticket) are complete to put
-the beta preview host online.
+DOCS‑SORA საგზაო რუკა მოითხოვს ყველა საჯარო გადახედვას იმავეზე ტარებისთვის
+საკონტროლო ჯამით დამოწმებული ნაკრები, რომელსაც მიმომხილველები ახორციელებენ ადგილობრივად. გამოიყენეთ ეს სახელმძღვანელო
+რეცენზენტის ჩასვლის შემდეგ (და მოწვევის დამტკიცების ბილეთი) დასრულებულია განთავსება
+ბეტა წინასწარი გადახედვის მასპინძელი ონლაინ.
 
-## Prerequisites
+## წინაპირობები
 
-- Reviewer onboarding wave approved and logged in the preview tracker.
-- Latest portal build present under `docs/portal/build/` and checksum
-  verified (`build/checksums.sha256`).
-- SoraFS preview credentials (Torii URL, authority, private key, submitted
-  epoch) stored either in environment variables or a JSON config such as
+- მიმომხილველის ჩასვლის ტალღა დაამტკიცა და შესულია გადახედვის ტრეკერში.
+- უახლესი პორტალის აშენება წარმოდგენილია `docs/portal/build/`-ით და საკონტროლო ჯამით
+  დამოწმებული (`build/checksums.sha256`).
+- SoraFS წინასწარი გადახედვის სერთიფიკატები (Torii URL, ავტორიტეტი, პირადი გასაღები, გაგზავნილი
+  ეპოქა) ინახება ან გარემოს ცვლადებში ან JSON კონფიგურაციაში, როგორიცაა
   [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- DNS change ticket opened with the desired hostname (`docs-preview.sora.link`,
-  `docs.iroha.tech`, etc.) plus on-call contacts.
+- DNS შეცვლის ბილეთი გახსნილია სასურველი ჰოსტის სახელით (`docs-preview.sora.link`,
+  `docs.iroha.tech` და ა.შ.) პლუს გამოძახების კონტაქტები.
 
-## Step 1 – Build and verify the bundle
+## ნაბიჯი 1 – შექმენით და გადაამოწმეთ პაკეტი
 
 ```bash
 cd docs/portal
@@ -36,13 +38,13 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-The verify script refuses to continue when the checksum manifest is missing or
-tampered with, keeping every preview artefact audited.
+გადამოწმების სკრიპტი უარს ამბობს გაგრძელებაზე, როდესაც არ არის საკონტროლო ჯამის მანიფესტი ან
+შეცვლილია, ყოველი გადახედვის არტეფაქტის აუდიტის შენახვა.
 
-## Step 2 – Package the SoraFS artefacts
+## ნაბიჯი 2 – შეფუთეთ SoraFS არტეფაქტები
 
-Convert the static site into a deterministic CAR/manifest pair. `ARTIFACT_DIR`
-defaults to `docs/portal/artifacts/`.
+გადაიყვანეთ სტატიკური ადგილი დეტერმინისტულ CAR/მანიფესტის წყვილად. `ARTIFACT_DIR`
+ნაგულისხმევად არის `docs/portal/artifacts/`.
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -58,13 +60,13 @@ node scripts/generate-preview-descriptor.mjs \
   --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Attach the generated `portal.car`, `portal.manifest.*`, descriptor, and checksum
-manifest to the preview wave ticket.
+მიამაგრეთ გენერირებული `portal.car`, `portal.manifest.*`, აღმწერი და გამშვები ჯამი
+მანიფესტი გადახედვის ტალღის ბილეთზე.
 
-## Step 3 – Publish the preview alias
+## ნაბიჯი 3 – გამოაქვეყნეთ წინასწარი გადახედვის მეტსახელი
 
-Re-run the pin helper **without** `--skip-submit` once you are ready to expose
-the host. Supply either the JSON config or explicit CLI flags:
+ხელახლა გაუშვით პინის დამხმარე ** `--skip-submit`-ის გარეშე, როგორც კი მზად იქნებით გამოსაქვეყნებლად
+მასპინძელი. მიაწოდეთ JSON კონფიგურაცია ან აშკარა CLI დროშები:
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -75,11 +77,11 @@ the host. Supply either the JSON config or explicit CLI flags:
   --config ~/secrets/sorafs_preview_publish.json
 ```
 
-The command writes `portal.pin.report.json`,
-`portal.manifest.submit.summary.json`, and `portal.submit.response.json`, which
-must ship with the invite evidence bundle.
+ბრძანება წერს `portal.pin.report.json`,
+`portal.manifest.submit.summary.json` და `portal.submit.response.json`, რომელიც
+უნდა გაიგზავნოს მოწვევის მტკიცებულებათა ნაკრები.
 
-## Step 4 – Generate the DNS cutover plan
+## ნაბიჯი 4 – შექმენით DNS ამოღების გეგმა
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -94,11 +96,11 @@ node scripts/generate-dns-cutover-plan.mjs \
   --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Share the resulting JSON with Ops so the DNS switch references the exact
-manifest digest. When reusing an earlier descriptor as the rollback source,
-append `--previous-dns-plan path/to/previous.json`.
+გაუზიარეთ მიღებული JSON Ops-ს, რათა DNS გადამრთველი ზუსტად მიუთითებდეს
+მანიფესტი მონელება. ადრინდელი აღწერის ხელახლა გამოყენებისას, როგორც დაბრუნების წყაროს,
+დაურთოს `--previous-dns-plan path/to/previous.json`.
 
-## Step 5 – Probe the deployed host
+## ნაბიჯი 5 – გამოიკვლიეთ განლაგებული ჰოსტი
 
 ```bash
 npm run probe:portal -- \
@@ -106,23 +108,23 @@ npm run probe:portal -- \
   --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-The probe confirms the served release tag, CSP headers, and signature metadata.
-Repeat the command from two regions (or attach curl output) so auditors can see
-that the edge cache is warm.
+გამოძიება ადასტურებს მოწოდებული გამოშვების ტეგს, CSP სათაურებს და ხელმოწერის მეტამონაცემებს.
+გაიმეორეთ ბრძანება ორი რეგიონიდან (ან მიამაგრეთ გადახვევის გამომავალი), რათა აუდიტორებმა დაინახონ
+რომ ზღვარზე ქეში თბილია.
 
-## Evidence bundle
+## მტკიცებულებათა ნაკრები
 
-Include the following artefacts in the preview wave ticket and refer to them in
-the invite email:
+ჩართეთ შემდეგი არტეფაქტები გადახედვის ტალღის ბილეთში და მიმართეთ მათში
+მოწვევის ელფოსტა:
 
-| Artefact | Purpose |
+| არტეფაქტი | დანიშნულება |
 |----------|---------|
-| `build/checksums.sha256` | Proves the bundle matches the CI build. |
+| `build/checksums.sha256` | ადასტურებს, რომ პაკეტი ემთხვევა CI-ს. |
 | `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS payload + manifest. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Shows the manifest submission + alias binding succeeded. |
-| `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (ticket, window, contacts), route promotion (`Sora-Route-Binding`) summary, the `route_plan` pointer (plan JSON + header templates), cache purge info, and rollback instructions for Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Signed descriptor tying the archive + checksum together. |
-| `probe` output | Confirms the live host advertises the expected release tag. |
+| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | აჩვენებს მანიფესტის წარდგენას + მეტსახელის შეკვრა წარმატებით დასრულდა. |
+| `artifacts/sorafs/portal.dns-cutover.json` | DNS მეტამონაცემები (ბილეთი, ფანჯარა, კონტაქტები), მარშრუტის პოპულარიზაცია (`Sora-Route-Binding`) შეჯამება, `route_plan` მაჩვენებელი (გეგმის JSON + სათაურის შაბლონები), ქეშის გასუფთავების ინფორმაცია და დაბრუნების ინსტრუქციები Ops-ისთვის. |
+| `artifacts/sorafs/preview-descriptor.json` | ხელმოწერილი აღმწერი, რომელიც აკავშირებს არქივს + საკონტროლო ჯამს. |
+| `probe` გამომავალი | ადასტურებს, რომ ცოცხალი მასპინძელი აქვეყნებს მოსალოდნელ გამოშვების ტეგს. |
 
-Once the host is live, follow the [preview invite playbook](./public-preview-invite.md)
-to distribute the link, log invites, and monitor telemetry.
+მას შემდეგ, რაც მასპინძელი ცოცხალია, მიჰყევით [მოწვევის წიგნს წინასწარ გადახედვა] (./public-preview-invite.md)
+ბმულის გასავრცელებლად, მოწვევის შესვლა და ტელემეტრიის მონიტორინგი.

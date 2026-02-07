@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Acuñar, transferir y quemar un NFT
-description: Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+пуля: /norito/examples/nft-flow
+Название: Acuñar, Transferir y quemar un NFT
+описание: Восстановить цикл жизни NFT в крайнем и крайнем случае: понимание собственности, передача, этикет метаданных и quema.
+источник: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
+Восстановите цикл жизни NFT в крайнем и крайнем случае: ознакомление с собственностью, перенос, этикет метаданных и quema.
 
-## Recorrido del libro mayor
+## Запись мэра библиотеки
 
-- Asegúrate de que exista la definición del NFT (por ejemplo `n0#wonderland`) junto con las cuentas de propietario/receptor usadas en el fragmento (`ih58...`, `ih58...`).
-- Invoca el entrypoint `nft_issue_and_transfer` para acuñar el NFT, transferirlo de Alice a Bob y adjuntar una bandera de metadatos que describa la emisión.
-- Inspecciona el estado del libro mayor de NFT con `iroha_cli ledger nfts list --account <id>` o los equivalentes del SDK para verificar la transferencia, luego confirma que el activo se elimina una vez que se ejecuta la instrucción de quema.
+- Убедитесь, что определение NFT (например, `n0#wonderland`) существует вместе с используемыми объектами владельца/рецептора на фрагменте (`ih58...`, `ih58...`).
+- Вызовите точку входа `nft_issue_and_transfer`, чтобы включить NFT, передать Алису Бобу и добавить группу метаданных для описания выбросов.
+- Проверьте состояние библиотеки NFT с номером `iroha_cli ledger nfts list --account <id>` или эквивалентами SDK для проверки передачи, а затем подтвердите, что активация устраняет то, что выдает инструкция по этому вопросу.
 
-## Guías de SDK relacionadas
+## Руководство по настройке SDK
 
-- [Quickstart del SDK de Rust](/sdks/rust)
-- [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [Краткий запуск SDK Rust](/sdks/rust)
+- [Краткий запуск SDK Python] (/sdks/python)
+- [Краткий запуск SDK JavaScript](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/nft-flow.ko)
+[Удалить ссылку Kotodama](/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

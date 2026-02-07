@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
 source_last_modified: "2026-01-28T17:11:30.632934+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IH58 Rollout Note for SDK & Codec Owners
+SDK және кодек иелеріне арналған # IH58 шығару жазбасы
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+Командалар: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec құралдары
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+Мәтінмән: `docs/account_structure.md` енді жеткізу IH58 тіркелгі идентификаторын көрсетеді
+жүзеге асыру. SDK әрекетін және сынақтарын канондық спецификацияға сәйкестендіріңіз.
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+Негізгі сілтемелер:
+- Мекенжай кодегі + тақырыптың орналасуы — `docs/account_structure.md` §2
+- Қисық тізілім — `docs/source/references/address_curve_registry.md`
+- Norm v1 домен өңдеу — `docs/source/references/address_norm_v1.md`
+- Бекіту векторлары — `fixtures/account/address_vectors.json`
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
+Әрекет элементтері:
+1. **Канондық шығыс:** `AccountId::to_string()`/Дисплей тек IH58 шығаруы КЕРЕК
+   (`@domain` жұрнағы жоқ). Канондық он алтылық қатені түзетуге арналған (`0x...`).
+2. **Қабылданған кірістер:** талдаушылар IH58 (қалаулы), `sora` қысылған,
+   және канондық он алтылық (тек `0x...`; жалаң он алтылық қабылданбайды). Кірістері болуы мүмкін
+   `@<domain>` бағдарлау бойынша кеңестерге арналған жұрнақ; `<label>@<domain>` бүркеншік аттары а талап етеді
+   шешуші. Шикі `public_key@domain` (мультихашты он алтылық) қолдау көрсетіледі.
+3. **Resolvers:** доменсіз IH58/sora талдау үшін домен таңдаушысы қажет
+   шешуші, егер селектор жасырын әдепкі болмаса (конфигурацияланған әдепкі параметрді пайдаланыңыз
+   домен белгісі). UAID (`uaid:...`) және мөлдір емес (`opaque:...`) литералдар қажет
+   шешушілер.
+4. **IH58 бақылау сомасы:** `IH58PRE || prefix || payload` орнына Blake2b-512 пайдаланыңыз, алыңыз
+   алғашқы 2 байт. Сығылған алфавит базасы **105**.
+5. **Қисық сызық:** SDK әдепкі бойынша тек Ed25519 үшін. Нақты қосылуды қамтамасыз етіңіз
+   ML‑DSA/GOST/SM (Swift құрастыру жалаулары; JS/Android `configureCurveSupport`). Жасаңыз
+   secp256k1 әдепкі бойынша Rust сыртында қосылған деп санамаңыз.
+6. **CAIP-10 жоқ:** жөнелтілген CAIP-10 картасы әлі жоқ; ашпаңыз немесе
+   CAIP‑10 түрлендірулеріне байланысты.
 
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+Кодектер/тесттер жаңартылғаннан кейін растаңыз; ашық сұрақтарды қадағалауға болады
+тіркелгі мекенжайындағы RFC ағынында.

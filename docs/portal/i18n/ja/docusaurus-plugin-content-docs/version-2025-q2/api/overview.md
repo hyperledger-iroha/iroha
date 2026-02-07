@@ -6,56 +6,57 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 293cedf8e24e3e711da383ae5152786614d1ea294b9232988dcf57784cf1a30d
 source_last_modified: "2025-12-27T17:59:34+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+TryItConsole を '@site/src/components/TryItConsole.jsx' からインポートします。
 
-# Torii API Overview
+# Torii API の概要
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+Torii ゲートウェイは、Iroha と対話するための REST + WebSocket サーフェスを公開します。
+ノード。正規の OpenAPI ドキュメントは次のように生成されます。
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+上記のコマンドを実行すると、`docs/portal/static/openapi/torii.json` と書き込まれます。
+`docusaurus-plugin-openapi-docs` 統合をフィードするため、このセクションが更新されます
+自動的に。ジェネレーターはメモリ内の Torii ルーターを起動し、次のことを試みます。
+OpenAPI エンドポイントをクエリします。それが失敗した場合 (ルーターの初期化など)
+エラー)、代わりに決定的なプレースホルダー仕様が発行されます。
 
-## Current status
+## 現在のステータス
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+- **仕様ソース:** `cargo xtask openapi` は Torii ルーターに直接クエリを実行します。の
+  フォールバック スタブは、ルーターが OpenAPI の公開に失敗した場合にのみ発行されます。
+  文書。
+- **決定性:** JSON 出力は、CI での安定した差分を確保するために正規化されています。
+- **認証:** 「Try it」サンドボックスは、リクエストを
+  制約付きステージング プロキシ。オペレータは Torii エンドポイントとベアラーを提供する必要があります
+  呼び出しを発行する前にトークンを取得します。
+- **バージョン セレクター:** Swagger UI、RapiDoc、および完全な Torii OpenAPI ページ
+  `openapi/versions.json` というドロップダウンを公開して比較できるようにします
+  歴史的なスナップショット。 `Latest (tracked)` オプションは次を指します。
+  `/openapi/torii.json`、他のすべてのエントリは対応する
+  `openapi/versions/<version>/torii.json` アーティファクト。
+- **スナップショット ワークフロー:** `npm run docs:version -- <label>` を実行した後、更新します。
+  `npm run sync-openapi -- --version=<label> --latest` と一致する OpenAPI ファイル
+  そのため、ドロップダウンでは、凍結されたスナップショットとローリングの「最新」ビルドの両方を読み込むことができます。
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+ルーターを使用したエクストラクターは、Torii サーフェス全体を出力するようになりました。を見た場合は、
+プレースホルダー スタブをビルド時の失敗として扱い、Torii を検査します。
+ルーターの起動ログ。
 
-## Try it sandbox (DOCS-3)
+## サンドボックスを試してみる (DOCS-3)
 
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
+開発者ポータルには、REST リクエストを中継する小さなコンソールが組み込まれています。
+ノードベースのプロキシ。プロキシは CORS、レート制限、およびオプションのベアラーを強制します
+トークンを使用して、ウィジェットが資格情報を公開せずにステージング ゲートウェイと通信できるようにします。
+完全なオペレータ チェックリストについては、`docs/devportal/try-it.md` を参照してください。
 
-Start the proxy alongside the Docusaurus dev server:
+Docusaurus 開発サーバーと並行してプロキシを起動します。
 
 ```bash
 cd docs/portal
@@ -71,15 +72,15 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
-  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+- プロキシは `TRYIT_PROXY_LISTEN` (デフォルトは `127.0.0.1:8787`) をリッスンし、
+  `/proxy/...` リクエストを `TRYIT_PROXY_TARGET` に転送します。
+- 静的ベアラー トークンに `TRYIT_PROXY_BEARER` を指定するか、呼び出し元に提供させます
+  「ベアラー トークン」フィールド経由でリクエストごとに 1 つ。
+- レート制限のデフォルトは 1 分あたり 60 リクエストで、調整可能
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`。
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ プロキシはステージング/デモアクセスを目的としています。本番展開
+> 強化された入力の背後で実行し、同じレート制限ポリシーを再利用する必要があります。
+> Torii の前。
 
 <TryItConsole />

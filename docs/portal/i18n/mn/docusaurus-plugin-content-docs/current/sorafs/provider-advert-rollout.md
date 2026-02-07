@@ -5,138 +5,140 @@ source: docs/portal/docs/sorafs/provider-advert-rollout.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: "SoraFS Provider Advert Rollout Plan"
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
+> [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md)-аас тохируулсан.
 
-# SoraFS Provider Advert Rollout Plan
+# SoraFS Үйлчилгээ үзүүлэгчийн зар сурталчилгааны төлөвлөгөө
 
-This plan coordinates the cut-over from permissive provider advertisements to
-the fully-governed `ProviderAdvertV1` surface required for multi-source chunk
-retrieval. It focuses on three deliverables:
+Энэ төлөвлөгөө нь зөвшөөрөгдсөн үйлчилгээ үзүүлэгчийн зар сурталчилгааг таслах ажлыг зохицуулдаг
+Олон эх сурвалжийн хэсгүүдэд шаардлагатай бүрэн удирдлагатай `ProviderAdvertV1` гадаргуу
+олж авах. Энэ нь гурван үр дүнд анхаарлаа хандуулдаг:
 
-- **Operator guide.** Step-by-step actions storage providers must complete
-  before each gate flips.
-- **Telemetry coverage.** Dashboards and alerts that Observability and Ops use
-  to confirm the network only accepts compliant adverts.
-The rollout aligns with SF-2b/2c milestones in the [SoraFS migration
-roadmap](./migration-roadmap) and assumes the admission policy in the
-[provider admission policy](./provider-admission-policy) is already in
-effect.
+- **Операторын гарын авлага.** Хадгалах үйлчилгээ үзүүлэгч нар алхам алхмаар хийх ёстой
+  хаалга бүр эргэхээс өмнө.
+- **Телеметрийн хамрах хүрээ.** Ажиглах чадвар болон үйлдлийн системд ашигладаг хяналтын самбар болон анхааруулга
+  сүлжээг баталгаажуулахын тулд зөвхөн шаардлагад нийцсэн зар сурталчилгааг хүлээн авдаг.
+Энэхүү танилцуулга нь [SoraFS шилжих үеийн SF-2b/2c чухал үе шаттай нийцдэг.
+замын зураг](./migration-roadmap) бөгөөд элсэлтийн бодлогыг
+[үзүүлэгчийн элсэлтийн журам](./provider-admission-policy) аль хэдийн орсон байна
+нөлөө.
 
-## Current Requirements
+## Одоогийн шаардлага
 
-SoraFS accepts only governance-enveloped `ProviderAdvertV1` payloads. The
-following requirements are enforced at admission:
+SoraFS нь зөвхөн засаглалын дугтуйтай `ProviderAdvertV1` ачааллыг хүлээн авдаг. The
+элсэлтийн үед дараах шаардлагыг мөрдөнө.
 
-- `profile_id=sorafs.sf1@1.0.0` with canonical `profile_aliases` present.
-- `chunk_range_fetch` capability payloads must be included for multi-source
-  retrieval.
-- `signature_strict=true` with council signatures attached to the advert
-  envelope.
-- `allow_unknown_capabilities` is only permitted during explicit GREASE drills
-  and must be logged.
+- `profile_id=sorafs.sf1@1.0.0`, каноник `profile_aliases` байгаа.
+- Олон эх сурвалжийн хувьд `chunk_range_fetch` чадварын даацыг оруулах ёстой
+  олж авах.
+- Зар сурталчилгаанд хавсаргасан зөвлөлийн гарын үсэг бүхий `signature_strict=true`
+  дугтуй.
+- `allow_unknown_capabilities`-ийг зөвхөн тодорхой ӨСЛӨХ өрөмдлөгийн үед зөвшөөрнө.
+  мөн бүртгэлд оруулах ёстой.
 
-## Operator Checklist
+## Операторын хяналтын хуудас
 
-1. **Inventory adverts.** List every published advert and record:
-   - Governing envelope path (`defaults/nexus/sorafs_admission/...` or production equivalent).
-   - Advert `profile_id` and `profile_aliases`.
-   - Capability list (expect at least `torii_gateway` and `chunk_range_fetch`).
-   - `allow_unknown_capabilities` flag (required when vendor-reserved TLVs are present).
-2. **Regenerate with provider tooling.**
-   - Rebuild the payload with your provider advert publisher, ensuring:
+1. **Бараа материалын сурталчилгаа.** Нийтлэгдсэн зар бүрийг жагсааж, тэмдэглэнэ үү:
+   - Удирдах дугтуйны зам (`defaults/nexus/sorafs_admission/...` эсвэл үйлдвэрлэлийн эквивалент).
+   - `profile_id` болон `profile_aliases` зар сурталчилгаа.
+   - Чадварын жагсаалт (хамгийн багадаа `torii_gateway` болон `chunk_range_fetch` байх ёстой).
+   - `allow_unknown_capabilities` туг (борлуулагчийн нөөцтэй TLV байгаа үед шаардлагатай).
+2. **Үйлчилгээ үзүүлэгчийн хэрэгслээр сэргээнэ үү.**
+   - Зар сурталчилгааны үйлчилгээ үзүүлэгчтэйгээ хамт ачааллыг дахин бүтээж, дараахь зүйлийг баталгаажуулна уу.
      - `profile_id=sorafs.sf1@1.0.0`
-     - `capability=chunk_range_fetch` with a defined `max_span`
-     - `allow_unknown_capabilities=<true|false>` when GREASE TLVs are present
-   - Validate via `/v1/sorafs/providers` and `sorafs_fetch`; warnings about unknown
-     capabilities must be triaged.
-3. **Validate multi-source readiness.**
-   - Execute `sorafs_fetch` with `--provider-advert=<path>`; the CLI now fails
-     when `chunk_range_fetch` is missing and prints warnings for ignored unknown
-     capabilities. Capture the JSON report and archive it with operations logs.
-4. **Stage renewals.**
-   - Submit `ProviderAdmissionRenewalV1` envelopes at least 30 days before
-     expiration. Renewals must retain the canonical handle and capability set;
-     only stake, endpoints, or metadata should change.
-5. **Communicate with dependent teams.**
-   - SDK owners must release versions that surface warnings to operators when
-     adverts are rejected.
-   - DevRel announces each phase transition; include dashboard links and the
-     threshold logic below.
-6. **Install dashboards & alerts.**
-   - Import the Grafana export and place it under **SoraFS / Provider
-     Rollout** with dashboard UID `sorafs-provider-admission`.
-   - Ensure the alert rules point to the shared `sorafs-advert-rollout`
-     notification channel in staging and production.
+     - Тодорхойлогдсон `max_span`-тай `capability=chunk_range_fetch`
+     - GREASE TLV байгаа үед `allow_unknown_capabilities=<true|false>`
+   - `/v1/sorafs/providers` болон `sorafs_fetch`-ээр дамжуулан баталгаажуулах; үл мэдэгдэх тухай анхааруулга
+     чадавхийг шалгах ёстой.
+3. **Олон эх сурвалжийн бэлэн байдлыг баталгаажуулах.**
+   - `sorafs_fetch`-ийг `--provider-advert=<path>` ашиглан гүйцэтгэх; CLI одоо амжилтгүй боллоо
+     `chunk_range_fetch` байхгүй үед үл тоомсорлож буй үл мэдэгдэх анхааруулгыг хэвлэдэг
+     чадварууд. JSON тайланг авч, үйлдлийн бүртгэлээр архивлана.
+4. **Үе шатыг шинэчлэх.**
+   - `ProviderAdmissionRenewalV1` дугтуйг 30-аас доошгүй хоногийн өмнө илгээнэ үү
+     хугацаа дуусах. Шинэчлэлт нь каноник бариул болон чадварын багцыг хадгалах ёстой;
+     зөвхөн гадас, төгсгөлийн цэг эсвэл мета өгөгдөл өөрчлөгдөх ёстой.
+5. **Харилцааны багуудтай харилцах.**
+   - SDK эзэмшигчид операторуудад анхааруулга өгөх хувилбаруудыг гаргах ёстой
+     сурталчилгаа татгалзсан.
+   - DevRel нь үе шат болгоны шилжилтийг зарладаг; хяналтын самбарын холбоосууд болон
+     босго логик доор байна.
+6. **Хяналтын самбар болон анхааруулга суулгах.**
+   - Grafana экспортыг оруулж ирээд **SoraFS / Үйлчилгээ үзүүлэгчийн доор байрлуулна уу.
+     UID `sorafs-provider-admission` хяналтын самбартай Rollout**.
+   - Анхааруулгын дүрмүүд нь хуваалцсан `sorafs-advert-rollout` руу чиглэж байгаа эсэхийг шалгаарай
+     үе шат, үйлдвэрлэл дэх мэдэгдлийн суваг.
 
-## Telemetry & Dashboards
+## Телеметр ба хяналтын самбар
 
-The following metrics are already exposed via `iroha_telemetry`:
+Дараах хэмжүүрүүд `iroha_telemetry`-ээр аль хэдийн илэрсэн байна:
 
-- `torii_sorafs_admission_total{result,reason}` — counts accepted, rejected,
-  and warning outcomes. Reasons include `missing_envelope`, `unknown_capability`,
-  `stale`, and `policy_violation`.
+- `torii_sorafs_admission_total{result,reason}` - хүлээн зөвшөөрсөн, татгалзсан тоо,
+  болон анхааруулах үр дүн. Шалтгаан нь `missing_envelope`, `unknown_capability`,
+  `stale`, `policy_violation`.
 
-Grafana export: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
-Import the file into the shared dashboards repository (`observability/dashboards`)
-and update only the datasource UID before publishing.
+Grafana экспорт: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
+Файлыг хуваалцсан хяналтын самбарын репозитор руу импортлох (`observability/dashboards`)
+мөн нийтлэхээс өмнө зөвхөн өгөгдлийн эх сурвалжийн UID-г шинэчилнэ үү.
 
-The board publishes under the Grafana folder **SoraFS / Provider Rollout** with
-the stable UID `sorafs-provider-admission`. Alert rules
-`sorafs-admission-warn` (warning) and `sorafs-admission-reject` (critical) are
-pre-configured to use the `sorafs-advert-rollout` notification policy; adjust
-that contact point if the destination list changes rather than editing the
-dashboard JSON.
+Удирдах зөвлөл нь Grafana хавтас **SoraFS / Provider Rollout** дор нийтэлдэг.
+тогтвортой UID `sorafs-provider-admission`. Анхааруулах дүрэм
+`sorafs-admission-warn` (анхааруулга) ба `sorafs-admission-reject` (чухал)
+`sorafs-advert-rollout` мэдэгдлийн бодлогыг ашиглахаар урьдчилан тохируулсан; тохируулах
+-ийг засварлахын оронд очих жагсаалт өөрчлөгдвөл тэр холбоо барих цэг
+JSON хяналтын самбар.
 
-Recommended Grafana panels:
+Санал болгож буй Grafana хавтангууд:
 
-| Panel | Query | Notes |
+| Самбар | Асуулга | Тэмдэглэл |
 |-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Stack chart to visualise accept vs warn vs reject. Alert when warn > 0.05 * total (warning) or reject > 0 (critical). |
-| **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Single-line timeseries that feeds the pager threshold (5% warning rate rolling 15 minutes). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Drives runbook triage; attach links to mitigation steps. |
-| **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Indicates providers missing the refresh deadline; cross-reference with discovery cache logs. |
+| **Элсэлтийн үр дүнгийн хувь хэмжээ** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Зөвшөөрөх, анхааруулах, татгалзах зэргийг дүрслэн харуулах диаграммыг стек. Анхааруулах > 0.05 * нийт (анхааруулах) эсвэл татгалзах > 0 (чухал) үед дохио өгнө. |
+| **Анхааруулах харьцаа** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Пэйжерийн босгыг хангадаг нэг мөрт цагийн цуврал (5% анхааруулах хурд 15 минут). |
+| **Татгалзах шалтгаан** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Runbook triage-ийг хөтчүүд; бууруулах алхмуудын холбоосыг хавсаргана уу. |
+| **Өрийг сэргээх** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Үйлчилгээ үзүүлэгчдийг шинэчлэх хугацааг дутуу байгааг харуулж байна; илрүүлэх кэш логуудтай хөндлөн лавлагаа. |
 
-CLI artefacts for manual dashboards:
+Гарын авлагын хяналтын самбарт зориулсан CLI олдворууд:
 
-- `sorafs_fetch --provider-metrics-out` writes `failures`, `successes`, and
-  `disabled` counters per provider. Import into ad-hoc dashboards to monitor
-  orchestrator dry-runs before switching production providers.
-- The JSON report’s `chunk_retry_rate` and `provider_failure_rate` fields
-  highlight throttling or stale payload symptoms that often precede admission
-  rejections.
+- `sorafs_fetch --provider-metrics-out` `failures`, `successes` бичих ба
+  Үйлчилгээ үзүүлэгч бүрт `disabled` тоолуур. Хянахын тулд түр хяналтын самбар руу импорт хийнэ үү
+  Үйлдвэрлэгчийг солихын өмнө найруулагч хуурай гүйлт.
+- JSON тайлангийн `chunk_retry_rate` болон `provider_failure_rate` талбарууд
+  ихэвчлэн элсэлтийн өмнөх ачааллыг бууруулах эсвэл хуучирсан шинж тэмдгийг онцлон тэмдэглэ
+  татгалзал.
 
-### Grafana dashboard layout
+### Grafana хяналтын самбарын зохион байгуулалт
 
-Observability publishes a dedicated board — **SoraFS Provider Admission
-Rollout** (`sorafs-provider-admission`) — under **SoraFS / Provider Rollout**
-with the following canonical panel IDs:
+Observability нь тусгай самбарыг нийтэлдэг — **SoraFS Үйлчилгээ үзүүлэгчийн элсэлт
+Rollout** (`sorafs-provider-admission`) — **SoraFS / Provider Rollout**-ийн дагуу
+дараах каноник самбар ID-тай:
 
-- Panel 1 — *Admission outcome rate* (stacked area, unit “ops/min”).
-- Panel 2 — *Warning ratio* (single series), emitting the expression
-  `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) /
-   sum(rate(torii_sorafs_admission_total[5m]))`.
-- Panel 3 — *Rejection reasons* (time series grouped by `reason`), sorted by
+- 1-р самбар — *Элсэлтийн үр дүнгийн хувь хэмжээ* (овоолсон талбай, нэгж “ops/min”).
+- Самбар 2 — *Анхааруулах харьцаа* (нэг цуврал), илэрхийлэл ялгаруулна
+  `нийлбэр(хүн(torii_sorafs_admission_total{үр дүн="анхааруулах"}[5м])) /
+   нийлбэр(хувь(torii_sorafs_элсэлтийн_нийт[5м]))`.
+- Самбар 3 — *Татгалзсан шалтгаан* (цаг хугацааны цуваа `reason`-р бүлэглэсэн), эрэмбэлсэн
   `rate(...[5m])`.
-- Panel 4 — *Refresh debt* (stat), mirroring the query in the table above and
-  annotated with the advert refresh deadlines pulled from the migration ledger.
+- Самбар 4 — *Өрийг сэргээх* (стат), дээрх хүснэгтэд байгаа асуулга болон
+  Шилжилт хөдөлгөөний дэвтэрээс авсан сурталчилгааны шинэчлэлтийн эцсийн хугацааг тэмдэглэсэн.
 
-Copy (or create) the JSON skeleton in the infrastructure dashboards repo at
-`observability/dashboards/sorafs_provider_admission.json`, then update only the
-data source UID; the panel IDs and alert rules are referenced by the runbooks
-below, so avoid renumbering them without revising this documentation.
+Дэд бүтцийн хяналтын самбарын репо дахь JSON араг ясыг хуулах (эсвэл үүсгэх).
+`observability/dashboards/sorafs_provider_admission.json`, дараа нь зөвхөн шинэчилнэ үү
+өгөгдлийн эх сурвалж UID; самбар ID болон дохиоллын дүрмийг runbook-ээс иш татсан болно
+доор байгаа тул энэ баримт бичгийг засварлахгүйгээр дугаарлахаас зайлсхий.
 
-For convenience the repository now ships a reference dashboard definition at
-`docs/source/grafana_sorafs_admission.json`; copy it into your Grafana folder if
-you need a starting point for local testing.
+Тохиромжтой болгох үүднээс репозитор одоо лавлах самбарын тодорхойлолтыг хаягаар илгээж байна
+`docs/source/grafana_sorafs_admission.json`; Хэрэв та үүнийг Grafana хавтсандаа хуулж ав
+танд орон нутгийн туршилтын эхлэх цэг хэрэгтэй.
 
-### Prometheus alert rules
+### Prometheus дохиоллын дүрэм
 
-Add the following rule group to `observability/prometheus/sorafs_admission.rules.yml`
-(create the file if this is the first SoraFS rule group) and include it from
-your Prometheus configuration. Replace `<pagerduty>` with the actual routing
-label for your on-call rotation.
+Дараах дүрмийн бүлгийг `observability/prometheus/sorafs_admission.rules.yml` дээр нэмнэ үү
+(хэрэв энэ нь SoraFS дүрмийн эхний бүлэг бол файлыг үүсгээд)
+таны Prometheus тохиргоо. `<pagerduty>`-г бодит чиглүүлэлтээр солино уу
+таны дуудлага дээр сэлгэх шошго.
 
 ```yaml
 groups:
@@ -169,34 +171,34 @@ groups:
             the refresh deadline elapses.
 ```
 
-Run `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
-before pushing changes to ensure the syntax passes `promtool check rules`.
+`scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml` ажиллуулна уу
+синтакс `promtool check rules` дамждагийг баталгаажуулахын тулд өөрчлөлтийг түлхэхээс өмнө.
 
-## Admission Outcomes
+## Элсэлтийн үр дүн
 
-- Missing `chunk_range_fetch` capability → reject with `reason="missing_capability"`.
-- Unknown capability TLVs without `allow_unknown_capabilities=true` → reject with
+- `chunk_range_fetch` чадвар дутуу → `reason="missing_capability"`-ээр татгалз.
+- `allow_unknown_capabilities=true`-гүй үл мэдэгдэх чадвартай TLVs → татгалз
   `reason="unknown_capability"`.
-- `signature_strict=false` → reject (reserved for isolated diagnostics).
-- Expired `refresh_deadline` → reject.
+- `signature_strict=false` → татгалзах (тусгаарлагдсан оношлогоонд зориулагдсан).
+- Хугацаа дууссан `refresh_deadline` → татгалзах.
 
-## Communication & Incident Handling
+## Харилцаа холбоо ба ослыг зохицуулах
 
-- **Weekly status mailer.** DevRel circulates a brief summary of admission
-  metrics, outstanding warnings, and upcoming deadlines.
-- **Incident response.** If `reject` alerts fire, on-call engineers:
-  1. Fetch the offending advert via Torii discovery (`/v1/sorafs/providers`).
-  2. Re-run advert validation in the provider pipeline and compare with
-     `/v1/sorafs/providers` to reproduce the error.
-  3. Coordinate with the provider to rotate the advert before the next refresh
-     deadline.
-- **Change freezes.** No capability schema changes land during R1/R2 unless
-  the rollout committee signs off; GREASE trials must be scheduled during the
-  weekly maintenance window and logged in the migration ledger.
+- **Долоо хоног тутмын статусын шуудан.** DevRel элсэлтийн товч тоймыг тараадаг
+  хэмжигдэхүүн, үл мэдэгдэх анхааруулга, удахгүй болох хугацаа.
+- **Осол гарсан хариу арга хэмжээ.** Хэрэв `reject` галын дохио өгвөл дуудлагын инженерүүд:
+  1. Torii илрүүлэлт (`/v1/sorafs/providers`)-ээр зөрчигдсөн зарыг татаж аваарай.
+  2. Үйлчилгээ үзүүлэгчийн шугамд зар сурталчилгааны баталгаажуулалтыг дахин ажиллуулж, харьцуулна уу
+     Алдааг дахин гаргахын тулд `/v1/sorafs/providers`.
+  3. Зар сурталчилгааг дараагийн шинэчлэлтээс өмнө эргүүлэхийн тулд үйлчилгээ үзүүлэгчтэй хамтран ажиллана уу
+     эцсийн хугацаа.
+- **Өөрчлөлт хөлддөг.** R1/R2-ын үед ямар ч чадамжийн схем газар өөрчлөхгүй
+  сонгон шалгаруулах хороо гарын үсэг зурсан; GREASE-ийн туршилтыг энэ үеэр хийх ёстой
+  долоо хоног тутмын засвар үйлчилгээний цонх болон шилжилт хөдөлгөөний дэвтэрт нэвтэрсэн.
 
-## References
+## Лавлагаа
 
-- [SoraFS Node/Client Protocol](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
-- [Provider Admission Policy](./provider-admission-policy)
-- [Migration Roadmap](./migration-roadmap)
-- [Provider Advert Multi-Source Extensions](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)
+- [SoraFS зангилаа/Клиент протокол](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
+- [Үйлчилгээ үзүүлэгчийн элсэлтийн бодлого](./provider-admission-policy)
+- [Шилжилт хөдөлгөөний замын зураг](./migration-roadmap)
+- [Үйлчилгээ үзүүлэгчийн зарын олон эх сурвалжийн өргөтгөлүүд](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)

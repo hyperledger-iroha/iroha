@@ -4,45 +4,47 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Demarrage Norito
-description: Construisez, validez et deployez un contrat Kotodama avec l'outillage de release et le reseau mono-pair par defaut.
-slug: /norito/quickstart
+заголовок: Демарраж Norito
+описание: Создать, проверить и развернуть контракт Kotodama с использованием одной пары релизов и ресурсов по умолчанию.
+слизень: /norito/quickstart
 ---
 
-Ce walkthrough reprend le workflow que nous attendons des developpeurs lorsqu'ils decouvrent Norito et Kotodama pour la premiere fois : demarrer un reseau deterministe mono-pair, compiler un contrat, le dry-run localement, puis l'envoyer via Torii avec le CLI de reference.
+Это пошаговое руководство воспроизводит рабочий процесс, который мы сопровождаем разработчиков, которые разработали Norito и Kotodama для премьеры: определение детерминированной монопары, компилятор, локальный тест, затем отправитель через Torii со ссылкой на CLI.
 
-Le contrat d'exemple ecrit une paire cle/valeur dans le compte de l'appelant afin que vous puissiez verifier l'effet de bord immediatement avec `iroha_cli`.
+Образец договора содержит пару ключей/ценностей в счете апеллянта, чтобы вы могли немедленно проверить эффект борда с `iroha_cli`.
 
-## Prerequis
+## Предварительное условие
 
-- [Docker](https://docs.docker.com/engine/install/) avec Compose V2 active (utilise pour demarrer le pair d'exemple defini dans `defaults/docker-compose.single.yml`).
-- Toolchain Rust (1.76+) pour construire les binaires auxiliaires si vous ne telechargez pas ceux publies.
-- Binaires `koto_compile`, `ivm_run` et `iroha_cli`. Vous pouvez les construire depuis le checkout du workspace comme ci-dessous ou telecharger les artefacts de release correspondants :
+- [Docker](https://docs.docker.com/engine/install/) с активным Compose V2 (используйте для разделения пары примеров, определенных в `defaults/docker-compose.single.yml`).
+- Инструментарий Rust (1.76+) для создания вспомогательных бинарников, если вы не хотите телезаряжать их в публикации.
+- Бинары `koto_compile`, `ivm_run` и `iroha_cli`. Вы можете построить кассу рабочего пространства как ci-dessous или телезарядить артефакты корреспондентов выпуска:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
-> Les binaires ci-dessus sont sans risque a installer avec le reste du workspace.
-> Ils ne lient jamais `serde`/`serde_json` ; les codecs Norito sont appliques de bout en bout.
+> Les binaires ci-dessus sont sans sans risque — установщик с остальным рабочим пространством.
+> Ils ne lient jamais `serde`/`serde_json` ; Кодеки Norito содержат приложения bout en bout.
 
-## 1. Demarrer un reseau dev mono-pair
+## 1. Удаление монопары из резервной копии
 
-Le depot inclut un bundle Docker Compose genere par `kagami swarm` (`defaults/docker-compose.single.yml`). Il connecte la genesis par defaut, la configuration client et les health probes afin que Torii soit joignable a `http://127.0.0.1:8080`.
+В состав склада входит комплект Docker. Создайте родовой код `kagami swarm` (`defaults/docker-compose.single.yml`). Он подключит исходный код по умолчанию, клиент конфигурации и датчики работоспособности, которые Torii можно соединить с `http://127.0.0.1:8080`.
 
 ```sh
 docker compose -f defaults/docker-compose.single.yml up --build
 ```
 
-Laissez le conteneur tourner (au premier plan ou en detache). Toutes les commandes CLI suivantes ciblent ce pair via `defaults/client.toml`.
+Laissez le conteneur Tourner (на первом плане или отдельно). Все команды CLI могут быть подключены через `defaults/client.toml`.
 
-## 2. Ecrire le contrat
+## 2. Подтвердить договор
 
-Creez un repertoire de travail et enregistrez l'exemple Kotodama minimal :
+Создайте репертуар труда и зарегистрируйте пример Kotodama минимальный:
 
 ```sh
 mkdir -p target/quickstart
@@ -67,11 +69,11 @@ seiyaku Hello {
 KO
 ```
 
-> Preferer conserver les sources Kotodama en controle de version. Des exemples heberges sur le portail sont aussi disponibles dans la [galerie d'exemples Norito](./examples/) si vous voulez un point de depart plus riche.
+> Предпочитаю сохранять исходные файлы Kotodama под контролем версии. Des exmples heberges sur le portail sont aussi disponibles dans la [galerie d'examples Norito](./examples/), если вы хотите отправиться в пункт отправления плюс богатство.
 
-## 3. Compiler et dry-run avec IVM
+## 3. Компилятор и пробный запуск с IVM
 
-Compilez le contrat en bytecode IVM/Norito (`.to`) et executez-le localement pour confirmer que les syscalls du host reussissent avant de toucher le reseau :
+Скомпилируйте контракт в байт-коде IVM/Norito (`.to`) и выполните локаль для подтверждения того, что системные вызовы хоста будут повторно использоваться перед нажатием кнопки:
 
 ```sh
 koto_compile target/quickstart/hello.ko \
@@ -82,28 +84,26 @@ koto_compile target/quickstart/hello.ko \
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Le runner imprime le log `info("Hello from Kotodama")` et effectue le syscall `SET_ACCOUNT_DETAIL` contre le host simule. Si le binaire optionnel `ivm_tool` est disponible, `ivm_tool inspect target/quickstart/hello.to` affiche l'en-tete ABI, les bits de features et les entrypoints exportes.
+Бегун заполняет журнал `info("Hello from Kotodama")` и выполняет системный вызов `SET_ACCOUNT_DETAIL` против симуляции хоста. Если опция двоичного кода `ivm_tool` доступна, `ivm_tool inspect target/quickstart/hello.to` добавляет к ABI общий доступ, некоторые функции и экспортируемые точки входа.
 
-## 4. Soumettre le bytecode via Torii
+## 4. Собрать байт-код через Torii
 
-Le noeud etant toujours en cours d'execution, envoyez le bytecode compile a Torii avec le CLI. L'identite de developpement par defaut est derivee de la cle publique dans `defaults/client.toml`, donc l'ID de compte est
+Во время выполнения команды, отправив байт-код, скомпилируйте Torii с CLI. Идентификатор разработки по умолчанию является производным от публичного общества в `defaults/client.toml`, не используйте идентификатор счета.
 ```
 ih58...
 ```
 
-Utilisez le fichier de configuration pour fournir l'URL Torii, le chain ID et la cle de signature :
-
-```sh
+Используйте файл конфигурации для URL-адреса Torii, идентификатора цепочки и файла подписи:```sh
 iroha --config defaults/client.toml \
   transaction ivm \
   --path target/quickstart/hello.to
 ```
 
-Le CLI encode la transaction avec Norito, la signe avec la cle de dev et l'envoie au pair en cours d'execution. Surveillez les logs Docker pour le syscall `set_account_detail` ou lisez la sortie du CLI pour le hash de transaction committed.
+CLI кодирует транзакцию с Norito, подпись с кодом разработчика и отправителем в процессе выполнения. Просматривайте журналы Docker для системного вызова `set_account_detail` или просматривайте выборку CLI для хэширования зафиксированной транзакции.
 
-## 5. Verifier le changement d'etat
+## 5. Проверка изменения состояния
 
-Utilisez le meme profil CLI pour recuperer l'account detail que le contrat a ecrit :
+Используйте мем-профиль CLI для восстановления подробностей учетной записи, которые содержат контракт:
 
 ```sh
 iroha --config defaults/client.toml \
@@ -112,7 +112,7 @@ iroha --config defaults/client.toml \
   --key example | jq .
 ```
 
-Vous devriez voir le payload JSON adosse a Norito :
+Вы разработаете для полезной нагрузки JSON доступ к Norito:
 
 ```json
 {
@@ -120,14 +120,14 @@ Vous devriez voir le payload JSON adosse a Norito :
 }
 ```
 
-Si la valeur est absente, verifiez que le service Docker compose tourne toujours et que le hash de transaction signale par `iroha` a atteint l'etat `Committed`.
+Если значение отсутствует, проверьте, что служба Docker составляет турне toujours и что хеш-сигнал транзакции соответствует `iroha`, и обратите внимание на состояние `Committed`.
 
-## Etapes suivantes
+## Следующие этапы
 
-- Explorez la [galerie d'exemples](./examples/) auto-generee pour voir
-  comment des snippets Kotodama plus avances se mappent a des syscalls Norito.
-- Lisez le [guide Norito getting started](./getting-started) pour une explication
-  plus approfondie des outils compilateur/runner, du deploiement de manifests et des metadonnees IVM.
+- Откройте для себя [галерею примеров] (./examples/) автоматически.
+  комментарий к фрагментам Kotodama плюс переход к системным вызовам Norito.
+- Lisez le [руководство Norito начало работы] (./getting-started) для объяснения
+  плюс приложение для компилятора/исполнителя утилит, развертывания манифестов и метадонов IVM.
 - Lorsque vous iterez sur vos propres contrats, utilisez `npm run sync-norito-snippets` dans le
-  workspace pour regenerer les snippets telechargeables afin que les docs du portail et les artefacts restent
-  synchronises avec les sources sous `crates/ivm/docs/examples/`.
+  рабочее пространство для регенерации фрагментов телезарядных устройств, где документы и артефакты остаются в памяти
+  синхронизируется с исходными файлами sous `crates/ivm/docs/examples/`.

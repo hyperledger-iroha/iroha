@@ -9,36 +9,36 @@ source_last_modified: "2026-01-05T09:28:11.880522+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Migration Ledger"
 description: "Canonical change log tracking every migration milestone, owners, and required follow-ups."
+translator: machine-google-reviewed
 ---
 
-> Adapted from [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) ལས་བསྒྱུར་བཅོས་འབད་ཡོདཔ།
 
-# SoraFS Migration Ledger
+# I18NT0000000X གནས་སྤོ་མི་
 
-This ledger mirrors the migration change log captured in the SoraFS
-Architecture RFC. Entries are grouped by milestone and list the effective
-window, impacted teams, and required actions. Updates to the migration plan
-MUST modify both this page and the RFC (`docs/source/sorafs_architecture_rfc.md`)
-to keep downstream consumers aligned.
+འ་ནི་ལེཌ་ཇར་འདི་གིས་ I18NT0000001X ནང་ལུ་བཟུང་ཡོད་པའི་ གནས་སྤོ་བའི་བསྒྱུར་བཅོས་དྲན་དེབ་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+བཟོ་རིགས་ RFC. ཐོ་བཀོད་ཚུ་ ལམ་རིམ་གྱི་ཐོག་ལས་ སྡེ་ཚན་བཟོ་སྟེ་ ཕན་ནུས་ཅན་གྱི་ཐོ་བཀོད་འབདཝ་ཨིན།
+window, ཕན་གནོད་ཡོད་པའི་སྡེ་ཚན་ཚུ་དང་ དགོས་མཁོའི་བྱ་བ་ཚུ། གནས་སྤོའི་འཆར་གཞི་ལུ་དུས་མཐུན་བཟོཝ་ཨིན།
+ཤོག་ལེབ་འདི་དང་ ཨར་ཨེཕ་སི་ (I18NI0000005X) གཉིས་ཆ་རང་ལེགས་བཅོས་འབད་དགོ།
+མར་འབབ་པའི་ཉོ་སྤྱོད་པ་ ཕྲང་སྒྲིག་འབད་ནི།
 
-| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
+| མའིལ་སི་ཊོན་ | ཕན་ནུས་ཅན་གྱི་སྒོ་སྒྲིག་ | བཅུད་དོན་བསྒྱུར་བཅོས་ | གནོད་སྐྱོན་བྱུང་བའི་སྡེ་ཚན་ | བྱ་བ་རྣམ་གྲངས། | གནས་ཚད་ |
 |-----------|------------------|----------------|----------------|--------------|--------|
-| M1 | Weeks&nbsp;7–12 | CI enforces deterministic fixtures; alias proofs available in staging; tooling exposes explicit expectation flags. | Docs, Storage, Governance | Ensure fixtures stay signed, register aliases in staging registry, update release checklists with `--car-digest/--root-cid` enforcement. | ⏳ Pending |
+| M1 | བདུན་ཕྲག་ ༧–༡༢ | CI གིས་ གཏན་འབེབས་བཟོ་ནིའི་སྒྲིག་བཀོད་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན། འཁྲབ་སྟོན་ནང་ཡོད་པའི་ བདེན་དཔང་ཚུ། ལག་ཆས་འདི་གིས་ གསལ་ཏོག་ཏོ་སྦེ་རེ་བ་བསྐྱེད་པའི་རྒྱལ་དར་ཚུ་སྟོནམ་ཨིན། | Docs, གསོག་འཇོག་, གཞུང་སྐྱོང་། | སྒྲིག་ཆས་ཚུ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ངེས་གཏན་བཟོ་ཞིནམ་ལས་ ཐོ་བཀོད་ཐོ་བཀོད་ནང་ ཐོ་བཀོད་ཚུ་ ཐོ་བཀོད་འབད། | ⏳ བརྡབ་བཅོས། |
 
-Governance control plane minutes referencing these milestones live under
-`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
-when notable events occur (e.g., new alias registrations, registry incident
-retrospectives) to provide an auditable paper trail.
+གཞུང་སྐྱོང་ཚད་འཛིན་གྱི་གནམ་གྲུའི་སྐར་མ་ཚུ་ མཐོ་རིམ་གྱི་ གཞི་རིམ་ཚུ་ལུ་ གཞི་བསྟུན་འབདཝ་ཨིན།
+`docs/source/sorafs/`. སྡེ་ཚན་ཚུ་གིས་ གྲལ་ཐིག་རེ་རེ་གི་འོག་ལུ་ ཚེས་གྲངས་བཀོད་ཡོད་པའི་མདའ་རྟགས་ཚུ་ཁ་སྐོང་འབད་དགོ།
+གལ་གནད་ཅན་གྱི་བྱུང་རིམ་ཚུ་འབྱུང་པའི་སྐབས་ (དཔེར་ན་ མིང་གཞན་ཐོ་བཀོད་གསརཔ་ ཐོ་བཀོད་ཀྱི་བྱུང་རྐྱེན་ཚུ་
+retropective) རྩིས་ཞིབ་འབད་བཏུབ་པའི་ཤོག་གུ་ལམ་ཅིག་བྱིན་ནི།
 
-## Recent Updates
+## ཉེ་བའི་དུས་མཐུན།
 
-- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and
-  operator lists for review; awaiting sign-off at the next council session
-  (ref: `docs/source/sorafs/council_minutes_2025-10-29.md` follow-up).
-- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy
-  validation via `sorafs_manifest` helpers, keeping on-chain paths aligned
-  with Torii checks.
-- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and
-  published the associated dashboards and operator guidance
-  (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
-
+- 2025-11-01 — གཞུང་སྐྱོང་ཚོགས་སྡེ་དང་ I18NI0000008X ལུ་ གློག་རྒྱུན་བཏང་ཡོདཔ།
+  བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ བཀོལ་སྤྱོད་ཐོ་ཡིག་ཚུ་; ཤུལ་མའི་ཚོགས་སྡེའི་ཚོགས་ཐེངས་ནང་ མཚན་རྟགས་བཀོད་ནི་ལུ་ བསྒུག་སྡོད་ནི།
+  (ref: `docs/source/sorafs/council_minutes_2025-10-29.md` རྗེས་འཇུག་)།
+- 2025-11-02 — པིན་ཐོ་བཀོད་ཐོ་འགོད་ ISI ད་ལྟ་ བརྗེ་སོར་འབད་ཡོད་པའི་ ཆ་རྐྱེན་/སྲིད་བྱུས།
+  བདེན་དཔྱད་ `sorafs_manifest` གྲོགས་རམ་འབད་མི་ཚུ་ རིམ་ཐེངས་ཅིག་ཕྲང་སྟེ་བཞག་ནི།
+  དང་མཉམ་དུ། Torii བརྟག་དཔྱད།
+- 2026-02-13 — ཁ་སྐོང་འབད་ཡོད་པའི་ ཁྱབ་བསྒྲགས་འབད་ནིའི་ བསྐོར་རིམ་ (R0–R3) འདི་ ལེཌི་ཇར་དང་ དང་ ལུ།
+  འབྲེལ་མཐུད་འབད་ཡོད་པའི་ ཌེཤ་བོརཌི་དང་ བཀོལ་སྤྱོད་ལམ་སྟོན་འདི་དཔར་བསྐྲུན་འབད་ཡོདཔ།
+  (I 18NI00000011X, I18NI0000012X).

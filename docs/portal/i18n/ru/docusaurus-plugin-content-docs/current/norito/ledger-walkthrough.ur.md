@@ -4,39 +4,41 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: لیجر واک تھرو
-description: `iroha` CLI کے ساتھ deterministic register -> mint -> transfer فلو دوبارہ بنائیں اور نتیجے میں لیجر اسٹیٹ کی تصدیق کریں۔
-slug: /norito/ledger-walkthrough
+Название: لیجر واک تھرو
+описание: `iroha` CLI Детерминированный регистр -> mint -> передача تصدیق کریں۔
+слизень: /norito/ledger-walkthrough
 ---
 
-یہ walkthrough [Norito quickstart](./quickstart.md) کی تکمیل کرتا ہے اور دکھاتا ہے کہ `iroha` CLI کے ساتھ لیجر اسٹیٹ کو کیسے بدلیں اور چیک کریں۔ آپ ایک نئی asset definition رجسٹر کریں گے، ڈیفالٹ آپریٹر اکاؤنٹ میں units mint کریں گے، بیلنس کا کچھ حصہ دوسرے اکاؤنٹ کو ٹرانسفر کریں گے، اور نتیجے میں آنے والی transactions اور holdings کی تصدیق کریں گے۔ ہر قدم Rust/Python/JavaScript SDK quickstarts میں کورڈ فلو کی عکاسی کرتا ہے تاکہ آپ CLI اور SDK کے درمیان parity کی تصدیق کر سکیں۔
+Краткое руководство [Norito краткое руководство](./quickstart.md) Для использования `iroha` CLI. ساتھ لیجر اسٹیٹ کو کیسے بدلیں چیک کریں۔ آپ ایک نئی определение актива رجسٹر کریں گے، ڈیفالٹ آپریٹر اکاؤنٹ کریں کریں گے، بیلنس کا کچھ حصہ دوسرے کاؤنٹ کو ٹرانسفر کریں گے, اور نتیجے میڌ آنے Транзакции и холдинги, которые можно использовать Краткое руководство по Rust/Python/JavaScript SDK Использование и использование SDK для CLI درمیان parity کی تصدیق کر سکیں۔
 
 ## پیشگی تقاضے
 
-- [quickstart](./quickstart.md) فالو کریں تاکہ سنگل-پیئر نیٹ ورک کو
+- [быстрый старт](./quickstart.md)
   `docker compose -f defaults/docker-compose.single.yml up --build` کے ذریعے بوٹ کیا جا سکے۔
-- یقینی بنائیں کہ `iroha` (CLI) build یا download ہے اور آپ `defaults/client.toml` سے peer تک پہنچ سکتے ہیں۔
-- اختیاری مددگار: `jq` (JSON responses کی formatting) اور POSIX shell تاکہ نیچے دیے گئے environment-variable snippets استعمال ہو سکیں۔
+- Загрузите сборку `iroha` (CLI) и загрузите `defaults/client.toml` для однорангового узла. ہیں۔
+- Доступно: `jq` (ответы JSON и форматирование) В оболочке POSIX можно использовать фрагменты фрагментов переменных среды. ہو سکیں۔
 
-اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان account IDs سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ defaults bundle پہلے ہی demo keys سے اخذ کیے گئے دو accounts شامل کرتا ہے:
+Если вы хотите использовать `$ADMIN_ACCOUNT` или `$RECEIVER_ACCOUNT`, вы можете указать идентификаторы учетных записей. چاہتے ہیں۔ Пакет настроек по умолчанию и демо-ключи, а также учетные записи и учетные записи:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-پہلے چند accounts لسٹ کر کے ویلیوز کی تصدیق کریں:
+Ниже приведены учетные записи, которые могут быть использованы для:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. genesis اسٹیٹ کا معائنہ
+## 1. Бытие اسٹیٹ کا معائنہ
 
-CLI جس لیجر کو ٹارگٹ کر رہا ہے اسے ایکسپلور کریں:
+CLI позволяет получить доступ к следующим функциям:
 
 ```sh
 # genesis میں رجسٹرڈ domains
@@ -51,22 +53,22 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-یہ کمانڈز Norito-backed responses پر انحصار کرتی ہیں، لہذا filtering اور pagination deterministic ہیں اور وہی ہیں جو SDKs حاصل کرتے ہیں۔
+یہ کمانڈز Norito-поддерживаемые ответы для проверки фильтрации и детерминированной нумерации страниц. Использование SDK
 
-## 2. asset definition رجسٹر کریں
+## 2. Определение актива رجسٹر کریں
 
-`wonderland` ڈومین کے اندر `coffee` نام کا ایک نیا، لامحدود mintable asset بنائیں:
+`wonderland` ڈومین کے `coffee` Для создания монетного актива:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-CLI submitted transaction hash (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ اسے محفوظ کریں تاکہ بعد میں status کو query کیا جا سکے۔
+CLI отправил хэш транзакции (مثلاً `0x5f…`). اسے محفوظ کریں تاکہ بعد میں status کو query کیا جا سکے۔
 
-## 3. آپریٹر اکاؤنٹ میں units mint کریں
+## 3. آپریٹر اکاؤنٹ میں unit mint کریں
 
-asset quantities `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` میں `coffee#wonderland` کی 250 units mint کریں:
+количества активов `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` в упаковке `coffee#wonderland` — 250 штук в мятом виде:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -74,13 +76,13 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-CLI output سے transaction hash (`$MINT_HASH`) محفوظ کریں۔ بیلنس دوبارہ چیک کرنے کے لئے چلائیں:
+Вывод CLI — хеш транзакции (`$MINT_HASH`). Вот как можно использовать:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-یا صرف نئے asset کو ٹارگٹ کرنے کے لئے:
+Какие активы могут быть использованы для:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -90,7 +92,7 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 4. بیلنس کا کچھ حصہ دوسرے اکاؤنٹ کو ٹرانسفر کریں
 
-آپریٹر اکاؤنٹ سے `$RECEIVER_ACCOUNT` کو 50 units منتقل کریں:
+Для заказа `$RECEIVER_ACCOUNT` требуется 50 единиц:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -99,7 +101,7 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-transaction hash کو `$TRANSFER_HASH` کے طور پر محفوظ کریں۔ دونوں اکاؤنٹس پر holdings query کریں تاکہ نئی balances کی تصدیق ہو:
+хеш транзакции کو `$TRANSFER_HASH` کے طور پر محفوظ کریں۔ Вы можете запросить холдинги и узнать балансы, например:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -109,28 +111,26 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. لیجر ایویڈنس کی تصدیق
+## 5. Сделайте выбор в пользу
 
-محفوظ hashes استعمال کریں تاکہ دونوں transactions کے commit ہونے کی تصدیق ہو:
+Для хэшей и операций с фиксацией, например:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-آپ حالیہ blocks بھی stream کر سکتے ہیں تاکہ دیکھا جا سکے کہ transfer کس block میں شامل ہوا:
+В блоках потока или потоковом режиме, а также в блоках передачи и блокировке данных:
 
 ```sh
 # جدید ترین block سے stream کریں اور ~5 seconds بعد رک جائیں
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-اوپر کی ہر کمانڈ وہی Norito payloads استعمال کرتی ہے جو SDKs استعمال کرتے ہیں۔ اگر آپ اس فلو کو کوڈ کے ذریعے دہرائیں (نیچے SDK quickstarts دیکھیں)، تو hashes اور balances اس وقت تک align رہیں گے جب تک آپ اسی نیٹ ورک اور defaults کو ٹارگٹ کرتے ہیں۔
+Использование полезных нагрузок Norito для использования с SDK Здесь вы можете найти необходимые инструменты (быстрые руководства по SDK), а также хэши и балансы. Вы можете выровнять настройки по умолчанию и использовать настройки по умолчанию.
 
-## SDK parity لنکس
+## Проверка четности SDK- [Краткий старт Rust SDK](../sdks/rust) — Инструкции по Rust رجسٹر کرنا، submit کرنا، اور status poll کرنا دکھاتا ہے۔
+- [Краткое руководство по Python SDK](../sdks/python) — Norito-помощники JSON для выполнения операций регистрации и монетирования.
+- [Краткое руководство по JavaScript SDK](../sdks/javascript) — запросы Torii, помощники управления, а также оболочки типизированных запросов.
 
-- [Rust SDK quickstart](../sdks/rust) — Rust سے instructions رجسٹر کرنا، transactions submit کرنا، اور status poll کرنا دکھاتا ہے۔
-- [Python SDK quickstart](../sdks/python) — Norito-backed JSON helpers کے ساتھ وہی register/mint operations دکھاتا ہے۔
-- [JavaScript SDK quickstart](../sdks/javascript) — Torii requests، governance helpers، اور typed query wrappers کو کور کرتا ہے۔
-
-پہلے CLI walkthrough چلائیں، پھر اپنے پسندیدہ SDK کے ساتھ وہی منظرنامہ دہرائیں تاکہ دونوں سطحیں transaction hashes، balances، اور query outputs پر متفق ہوں۔
+Подробное руководство по использованию CLI в разделе SDK и дополнительные сведения о возможностях использования CLI. Здесь можно просмотреть хэши транзакций, балансы, результаты запросов и многое другое.

@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Cunhar, transferir e queimar um NFT
-description: Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+سلگ:/نوریٹو/مثالوں/این ایف ٹی فلو
+عنوان: ٹکسال ، منتقلی اور جلانے والا این ایف ٹی
+تفصیل: شروع سے ختم ہونے تک کسی این ایف ٹی کے لائف سائیکل سے گزرتا ہے: مالک کے لئے ٹکسال کرنا ، منتقلی ، میٹا ڈیٹا ٹیگنگ اور جلانا۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/12_NFT_FLOW.KO
 ---
 
-Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
+شروع سے ختم ہونے تک کسی این ایف ٹی کے لائف سائیکل سے گزرتا ہے: مالک کو ٹکسال کرنا ، منتقلی ، میٹا ڈیٹا ٹیگنگ ، اور جلا دینا۔
 
-## Roteiro do livro razao
+## لیجر اسکرپٹ
 
-- Garanta que a definicao do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatario usadas no trecho (`ih58...`, `ih58...`).
-- Invoque o entrypoint `nft_issue_and_transfer` para cunhar o NFT, transferi-lo de Alice para Bob e anexar um sinal de metadados que descreva a emissao.
-- Inspecione o estado do livro razao de NFT com `iroha_cli ledger nfts list --account <id>` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
+- اس بات کو یقینی بنائیں کہ این ایف ٹی تعریف (جیسے `n0#wonderland`) اسنیپٹ (`ih58...` ، `ih58...`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ موجود ہے۔
+- `nft_issue_and_transfer` انٹری پوائنٹ کو این ایف ٹی کو ٹکسال کرنے کے لئے طلب کریں ، اسے ایلس سے باب میں منتقل کریں ، اور میٹا ڈیٹا سگنل منسلک کریں جو جاری کرنے کی وضاحت کرتا ہے۔
+- منتقلی کی تصدیق کے ل I `iroha_cli ledger nfts list --account <id>` یا SDK کے مساویوں کے ساتھ NFT لیجر کی حالت کا معائنہ کریں ، پھر اس بات کی تصدیق کریں کہ جب برن کی ہدایت چلتی ہے تو اثاثہ ہٹا دیا جاتا ہے۔
 
-## Guias de SDK relacionados
+## متعلقہ SDK گائیڈز
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
 
-[Baixe a fonte Kotodama](/norito-snippets/nft-flow.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

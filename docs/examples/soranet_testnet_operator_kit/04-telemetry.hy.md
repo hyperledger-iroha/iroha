@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# Հեռուստաչափության պահանջներ
 
-## Prometheus Targets
+## Prometheus Թիրախներ
 
-Scrape the relay and orchestrator with the following labels:
+Քերեք ռելեին և նվագախմբին հետևյալ պիտակներով.
 
 ```yaml
 - job_name: "soranet-relay"
@@ -30,36 +31,36 @@ Scrape the relay and orchestrator with the following labels:
         role: "orchestrator"
 ```
 
-## Required Dashboards
+## Պահանջվող վահանակներ
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+1. `dashboards/grafana/soranet_testnet_overview.json` *(հրապարակվելու է)* — բեռնել JSON-ը, ներմուծել `region` և `relay_id` փոփոխականները:
+2. `dashboards/grafana/soranet_privacy_metrics.json` *(առկա SNNet-8 ակտիվ)* — ապահովել, որ գաղտնիության շերեփի վահանակները մատուցվեն առանց բացերի:
 
-## Alert Rules
+## Զգուշացման կանոններ
 
-Thresholds must match the playbook expectation:
+Շեմերը պետք է համապատասխանեն խաղագրքի ակնկալիքներին.
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- `soranet_privacy_circuit_events_total{kind="downgrade"}` աճը > 0 10 րոպեի ընթացքում գործարկում է `critical`:
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 30 րոպեի ընթացքում գործարկում է `warning`:
+- `up{job="soranet-relay"}` == 0 2 րոպեի ընթացքում գործարկում է `critical`:
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+Բեռնեք ձեր կանոնները Alertmanager-ում `testnet-t0` ընդունիչով; վավերացնել `amtool check-config`-ով:
 
-## Metrics Evaluation
+## Չափումների գնահատում
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+Հավաքեք 14-օրյա պատկերը և այն փոխանցեք SNNet-10 վավերացնողին.
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- Փոխարինեք նմուշ ֆայլը ձեր արտահանված նկարով, երբ աշխատում է կենդանի տվյալների դեմ:
+- `status = fail` արդյունքը արգելափակում է առաջխաղացումը; լուծեք ընդգծված չեկ(ները) նախքան նորից փորձելը:
 
-## Reporting
+## Հաշվետվություն
 
-Every week upload:
+Ամեն շաբաթ վերբեռնում.
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- Հարցման պատկերներ (`.png` կամ `.pdf`), որոնք ցույց են տալիս PQ հարաբերակցությունը, շղթայի հաջողության մակարդակը և PoW լուծման հիստոգրամը:
+- Prometheus ձայնագրման կանոնի ելք `soranet_privacy_throttles_per_minute`-ի համար:
+- Համառոտ պատմություն, որը նկարագրում է արձակված ցանկացած ահազանգ և մեղմացման քայլեր (ներառում է ժամանակի դրոշմանիշները):

@@ -11,95 +11,96 @@ id: chunker-registry-rollout-checklist
 title: SoraFS Chunker Registry Rollout Checklist
 sidebar_label: Chunker Rollout Checklist
 description: Step-by-step rollout plan for chunker registry updates.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-# SoraFS Registry Rollout Checklist
+# SoraFS რეესტრის გამოქვეყნების საკონტროლო სია
 
-This checklist captures the steps required to promote a new chunker profile or
-provider admission bundle from review to production after the governance
-charter has been ratified.
+ეს ჩამონათვალი ასახავს ნაბიჯებს, რომლებიც საჭიროა ახალი chunker პროფილის გასაუმჯობესებლად ან
+პროვაიდერის დაშვების ნაკრები განხილვიდან წარმოებამდე მმართველობის შემდეგ
+ქარტია რატიფიცირებულია.
 
-> **Scope:** Applies to all releases that modify
-> `sorafs_manifest::chunker_registry`, provider admission envelopes, or the
-> canonical fixture bundles (`fixtures/sorafs_chunker/*`).
+> **ფარგლები:** ვრცელდება ყველა გამოშვებაზე, რომელიც იცვლება
+> `sorafs_manifest::chunker_registry`, პროვაიდერის დაშვების კონვერტები, ან
+> კანონიკური მოწყობილობების შეკვრა (`fixtures/sorafs_chunker/*`).
 
-## 1. Pre-flight Validation
+## 1. წინასწარი ფრენის დადასტურება
 
-1. Regenerate fixtures and verify determinism:
+1. განაახლეთ მოწყობილობები და გადაამოწმეთ დეტერმინიზმი:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirm determinism hashes in
-   `docs/source/sorafs/reports/sf1_determinism.md` (or the relevant profile
-   report) match the regenerated artifacts.
-3. Ensure `sorafs_manifest::chunker_registry` compiles with
-   `ensure_charter_compliance()` by running:
+2. დაადასტურეთ დეტერმინიზმის ჰეშები
+   `docs/source/sorafs/reports/sf1_determinism.md` (ან შესაბამისი პროფილი
+   ანგარიში) ემთხვევა რეგენერირებული არტეფაქტებს.
+3. დარწმუნდით, რომ `sorafs_manifest::chunker_registry` შედგენილია
+   `ensure_charter_compliance()` გაშვებით:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Update the proposal dossier:
+4. განაახლეთ წინადადების დოსიე:
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Council minutes entry under `docs/source/sorafs/council_minutes_*.md`
-   - Determinism report
+   - საბჭოს ოქმის ჩანაწერი `docs/source/sorafs/council_minutes_*.md` ქვეშ
+   - დეტერმინიზმის ანგარიში
 
-## 2. Governance Sign-off
+## 2. მმართველობის ხელმოწერა
 
-1. Present the Tooling Working Group report and proposal digest to the Sora
-   Parliament Infrastructure Panel.
-2. Record approval details in
+1. წარუდგინეთ Tooling სამუშაო ჯგუფის ანგარიში და წინადადების დაიჯესტი Sora-ს
+   პარლამენტის ინფრასტრუქტურის პანელი.
+2. ჩაწერეთ დამტკიცების დეტალები
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publish the Parliament-signed envelope alongside the fixtures:
+3. გამოაქვეყნეთ პარლამენტის მიერ ხელმოწერილი კონვერტი ნიშანთან ერთად:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verify the envelope is accessible via the governance fetch helper:
+4. გადაამოწმეთ, რომ კონვერტი ხელმისაწვდომია მმართველობის მოპოვების დამხმარის მეშვეობით:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging Rollout
+## 3. დადგმის გაშვება
 
-Refer to the [staging manifest playbook](./staging-manifest-playbook) for a
-detailed walkthrough of these steps.
+იხილეთ [მანიფესტის დადგმის სათამაშო წიგნი] (./staging-manifest-playbook)
+ამ ნაბიჯების დეტალური აღწერა.
 
-1. Deploy Torii with `torii.sorafs` discovery enabled and admission
-   enforcement turned on (`enforce_admission = true`).
-2. Push the approved provider admission envelopes to the staging registry
-   directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verify provider adverts propagate via the discovery API:
+1. განათავსეთ Torii `torii.sorafs` აღმოჩენით და დაშვებით
+   აღსრულება ჩართულია (`enforce_admission = true`).
+2. გადაიტანეთ დამტკიცებული პროვაიდერის დაშვების კონვერტები დადგმის რეესტრში
+   დირექტორია მითითებულ `torii.sorafs.discovery.admission.envelopes_dir`-ის მიერ.
+3. შეამოწმეთ, რომ პროვაიდერის რეკლამები ვრცელდება აღმოჩენის API-ით:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Exercise manifest/plan endpoints with governance headers:
+4. განახორციელეთ მანიფესტის/გეგმის საბოლოო წერტილები მმართველობის სათაურებით:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirm telemetry dashboards (`torii_sorafs_*`) and alert rules report the
-   new profile without errors.
+5. დაადასტურეთ ტელემეტრიის დაფები (`torii_sorafs_*`) და გაფრთხილების წესები აცნობეთ
+   ახალი პროფილი შეცდომების გარეშე.
 
-## 4. Production Rollout
+## 4. წარმოების გავრცელება
 
-1. Repeat the staging steps against production Torii nodes.
-2. Announce the activation window (date/time, grace period, rollback plan) to
-   operator and SDK channels.
-3. Merge the release PR containing:
-   - Updated fixtures and envelope
-   - Documentation changes (charter references, determinism report)
-   - Roadmap/status refresh
-4. Tag the release and archive the signed artifacts for provenance.
+1. გაიმეორეთ დადგმის ნაბიჯები წარმოების Torii კვანძების წინააღმდეგ.
+2. გამოაცხადეთ აქტივაციის ფანჯარა (თარიღი/დრო, საშეღავათო პერიოდი, დაბრუნების გეგმა).
+   ოპერატორი და SDK არხები.
+3. გააერთიანეთ გამოშვების PR, რომელიც შეიცავს:
+   - განახლებული მოწყობილობები და კონვერტი
+   - დოკუმენტაციის ცვლილებები (წესდების მითითებები, დეტერმინიზმის ანგარიში)
+   - საგზაო რუკა/სტატუსის განახლება
+4. მონიშნეთ გამოშვება და დაარქივეთ ხელმოწერილი არტეფაქტები წარმოშობისთვის.
 
-## 5. Post-Rollout Audit
+## 5. გამოშვების შემდგომი აუდიტი
 
-1. Capture final metrics (discovery counts, fetch success rate, error
-   histograms) 24h after rollout.
-2. Update `status.md` with a short summary and link to the determinism report.
-3. File any follow-up tasks (e.g., additional profile authoring guidance) in
+1. დააფიქსირეთ საბოლოო მეტრიკა (აღმოჩენების რაოდენობა, წარმატების მაჩვენებელი, შეცდომა
+   ჰისტოგრამები) გაშვებიდან 24 საათის შემდეგ.
+2. განაახლეთ `status.md` მოკლე მიმოხილვით და ბმული დეტერმინიზმის ანგარიშთან.
+3. შეიტანეთ ნებისმიერი შემდგომი დავალება (მაგ. პროფილის საავტორო დამატებითი ინსტრუქცია) აქ
    `roadmap.md`.

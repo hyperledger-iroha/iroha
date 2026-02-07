@@ -4,58 +4,60 @@ direction: ltr
 source: docs/portal/docs/da/ingest-plan.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-title: Data Availability Ingest Plan
-sidebar_label: Ingest Plan
-description: Schema, API surface, and validation plan for Torii blob ingestion.
+title: གནད་སྡུད་ཐོབ་ཚུགསཔ་འཆར་གཞི་མེད་པའི་འཆར་གཞི།
+sarebar_label: ཟ་སྤྱོད་འཆར་གཞི།
+འགྲེལ་བཤད་: ལས་འཆར་དང་ API ཁ་ཐོག་ དེ་ལས་ བདེན་དཔྱད་འཆར་གཞི་ Torii བློ་སྤོབས་བསྐྱེད་ནིའི་དོན་ལུ་ཨིན།
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Sora Nexus Data Availability Ingest Plan
+# Sora Nexus གནད་སྡུད་ཐོབ་ཚུགས་ཚད་མེད་འཆར་གཞི།
 
-_Drafted: 2026-02-20 - Owner: Core Protocol WG / Storage Team / DA WG_
+_ཟིན་བྲིས་: 2026-02-20 - ཇོ་བདག་: ཀོར་ མཐུན་གྲོས་ ཌབ་ལུ་ཇི་ / གསོག་འཇོག་སྡེ་ཚན་ / ཌི་ཨེ་ཌབ་ལུ་ཇི་_
 
-The DA-2 workstream extends Torii with a blob ingest API that emits Norito
-metadata and seeds SoraFS replication. This document captures the proposed
-schema, API surface, and validation flow so implementation can proceed without
-blocking on outstanding simulations (DA-1 follow-ups). All payload formats MUST
-use Norito codecs; no serde/JSON fallbacks are permitted.
+DA-2 ལཱ་གི་རྒྱུན་ལམ་འདི་གིས་ Torii འདི་ Norito བཏོན་མི་ blob insess API དང་ཅིག་ཁར་ རྒྱ་སྐྱེད་འབདཝ་ཨིན།
+མེ་ཊ་ཌེ་ཊ་དང་ སོན་ I18NT0000002X འདྲ་བཤུས་རྐྱབ་ཡོདཔ། ཡིག་ཆ་འདི་གིས་ གྲོས་འཆར་བཀོད་མི་འདི་ འཛིན་བཟུང་འབདཝ་ཨིན།
+ལས་འཆར་དང་ API ཁ་ཐོག་ དེ་ལས་ བདེན་དཔྱད་རྒྱུན་འགྲུལ་འདི་ ལག་ལེན་འཐབ་མི་འདི་གིས་ མེད་པར་ འཕྲོ་མཐུད་ཚུགས།
+ཁྱད་དུ་འཕགས་པའི་ བརྡ་སྟོན་ཚུ་གུ་བཀག་ཆ་ (DA-1 རྗེས་འཇུག་ཚུ།) པེ་ལོཌི་རྩ་སྒྲིག་ཚུ་ཆ་མཉམ་དགོ།
+Norito ཀོ་ཌེཀསི་ཚུ་ལག་ལེན་འཐབ། serde/JSON ཕོརེཀ་བེག་ཚུ་ ཆོག་ཐམ་མེདཔ་ཨིན།
 
-## Goals
+## རིལ་ཚང
 
-- Accept large blobs (Taikai segments, lane sidecars, governance artefacts)
-  deterministically over Torii.
-- Produce canonical Norito manifests describing the blob, codec parameters,
-  erasure profile, and retention policy.
-- Persist chunk metadata in SoraFS hot storage and enqueue replication jobs.
-- Publish pin intents + policy tags to the SoraFS registry and governance
-  observers.
-- Expose admission receipts so clients regain deterministic proof of publication.
+- མེ་ཏོག་སྦོམ་ཚུ་ ངོས་ལེན་འབད། (ཊའི་ཀའི་ཆ་ཤས་དང་ ལམ་ཟུར་གྱི་སྣུམ་འཁོར་ དེ་ལས་ གཞུང་སྐྱོང་ཅ་ཆས་ཚུ་)།
+  Torii ལས་ལྷག་པའི་ གཏན་འཁེལ།
+- ཀེ་ནོ་ནིཀ་ Norito གིས་ བློ་ཚད་ཚུ་ བརྡ་རྟགས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ ཀོ་ཌེག་ཚད་བཟུང་ཚུ་ གསལ་སྟོན་འབད།
+  གསལ་སྡུད་དང་ བདག་འཛིན་སྲིད་བྱུས།
+- SoraFS ཧོཊ་གསོག་འཇོག་དང་ enqueue འདྲ་དཔེ་ལཱ་ཚུ་ནང་ ཆངཀ་མེ་ཊ་ཌེ་ཊ་ ནང་།
+- པིན་གྱི་དམིགས་ཡུལ་ + སྲིད་བྱུས་ཀྱི་ངོ་རྟགས་ཚུ་ SoraFS ཐོ་བཀོད་དང་གཞུང་སྐྱོང་ལུ་ཨིན།
+  བལྟ་རྟོག་པ་ཚུ།
+- ཕྱིར་འབུད་ཀྱི་འཛུལ་ཞུགས་ཐོབ་ཐངས་ཚུ་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ དཔར་བསྐྲུན་གྱི་བདེན་ཁུངས་གཏན་འབེབས་བཟོ་ཚུགས།
 
-## API Surface (Torii)
+## API ཁ་ཐོག་ (Torii)
 
 ```
 POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
-Payload is a Norito-encoded `DaIngestRequest`. Responses use
-`application/norito+v1` and return `DaIngestReceipt`.
+Payload འདི་ Norito-encoded `DaIngestRequest` ཨིན། ལན་འདེབས་ཚུ་ལག་ལེན་འཐབ་ནི།
+`application/norito+v1` དང་ `DaIngestReceipt` ལོག་སྤྲོད་ཡོད།
 
-| Response | Meaning |
+| ལན་ | དོན་དག་ |
 | --- | --- |
-| 202 Accepted | Blob queued for chunking/replication; receipt returned. |
-| 400 Bad Request | Schema/size violation (see validation checks). |
-| 401 Unauthorized | Missing/invalid API token. |
-| 409 Conflict | Duplicate `client_blob_id` with mismatched metadata. |
-| 413 Payload Too Large | Exceeds configured blob length limit. |
-| 429 Too Many Requests | Rate limit hit. |
-| 500 Internal Error | Unexpected failure (logged + alert). |
+| 202 ངོས་ལེན་འབད་ཡོདཔ། | ཆ་ཤས་ཚུ་གི་དོན་ལུ་/འདྲ་བཤུས་རྐྱབ་ནིའི་དོན་ལུ་ བློ་སྤོབས་ཀྱི་གྱལ་རིམ་; བྱུང་འཛིན་ལོག་ཡོདཔ། |
+| 400 ཞུ་བ་ངན་པ། | ལས་རིམ་/ཚད་འགལ་ (བདེན་དཔྱད་ཞིབ་དཔྱད་ཚུ་བལྟ།)། |
+| 401 གནང་བ་མེད་ | མེདཔ་/ནུས་མེད་ཨེ་པི་ཨའི་ ཊོ་ཀེན་ཚུ། |
+| 409 འཁྲུག་རྩོད་ | མ་མཐུན་པའི་མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ `client_blob_id` འདྲ་བཤུས་རྐྱབས། |
+| 413 དངུལ་སྤྲོད་ཚད། ལས་ལྷག་སྟེ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ བློ་བིགི་རིང་ཚད་ཚད་གཞི། |
+| 429 ཧ་ཅང་མང་པོ་ ཞུ་བ་ | རིན་ཚད་ཀྱི་ཤུགས་རྐྱེན། |
+| 500 ནང་འཛོལ་བ། | རེ་བ་མེད་པའི་འཐུས་ཤོར་ (ནང་བསྐྱོད་འབད་ཡོདཔ་ + དྲན་སྐུལ་)། |
 
-## Proposed Norito Schema
+## གྲོས་འཆར་ Norito ལས་རིམ།
 
 ```rust
 /// Top-level ingest request.
@@ -133,211 +135,207 @@ pub struct DaIngestReceipt {
 }
 ```
 
-> Implementation note: the canonical Rust representations for these payloads now live under
-> `iroha_data_model::da::types`, with request/receipt wrappers in `iroha_data_model::da::ingest`
-> and the manifest structure in `iroha_data_model::da::manifest`.
+> ལག་ལེན་དྲན་ཐོ།: ད་ལྟ་ འདི་གི་དོན་ལུ་ འ་ནི་ པེ་ལོཌ་ཚུ་ འདི་གི་དོན་ལུ་ ཁྲིམས་མཐུན་གྱི་ རཱསི་ཊི་གི་ངོ་ཚབ་ཚུ་ འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+> `iroha_data_model::da::types`, ཞུ་བ་/ཐོབ་ཐངས་ཀྱི་ བཀབ་ཆ་ཚུ་ I18NI0000006X ནང་ཡོདཔ་ཨིན།
+> དང་ `iroha_data_model::da::manifest` ནང་གསལ་པོ་བཟོ་བ།
 
-The `compression` field advertises how callers prepared the payload. Torii accepts
-`identity`, `gzip`, `deflate`, and `zstd`, transparently decompressing the bytes before
-hashing, chunking, and verifying optional manifests.
+I18NI000000068X ས་སྒོ་འདི་གིས་ ཁ་སླབ་མི་ཚུ་གིས་ པེ་ལོཌ་འདི་ ག་དེ་སྦེ་བཟོ་ཡོདཔ་ཨིན་ན་ ཁྱབ་བསྒྲགས་འབདཝ་ཨིན། Torii དང་ལེན་འབད་ནི།
+I18NI0000000069X, I18NI000000070X, I18NI000000000071X, དང་ I18NI00000000072X, འདི་གི་ཧེ་མ་ བྱམོ་ཚུ་ དྭངས་གསལ་སྦེ་ བརྡལ་བཤིག་གཏངམ་ཨིན།
+ཧ་ཤིང་དང་ ཆ་ཤས་ དེ་ལས་ བདེན་བཤད་གདམ་ཁ་ཅན་གྱི་གསལ་སྟོན་ཚུ་ བདེན་བཤད་འབད་ནི།
 
-### Validation Checklist
+### བདེན་དཔྱད་དཔྱད་ཐོ་།
 
-1. Verify request Norito header matches `DaIngestRequest`.
-2. Fail if `total_size` differs from the canonical (decompressed) payload length or exceeds the configured max.
-3. Enforce `chunk_size` alignment (power-of-two, <= 2 MiB).
-4. Ensure `data_shards + parity_shards` <= global maximum and parity >= 2.
-5. `retention_policy.required_replica_count` must respect governance baseline.
-6. Signature verification against canonical hash (excluding signature field).
-7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
-8. When `norito_manifest` provided, verify schema + hash matches recalculated
-   manifest after chunking; otherwise node generates manifest and stores it.
-9. Enforce the configured replication policy: Torii rewrites the submitted
-   `RetentionPolicy` with `torii.da_ingest.replication_policy` (see
-   `replication-policy.md`) and rejects pre-built manifests whose retention
-   metadata does not match the enforced profile.
+1. ཞུ་བ་བདེན་དཔྱད་འབད་ I18NT000000007X མགོ་ཡིག་མཐུན་སྒྲིག་ `DaIngestRequest`.
+2. I18NI000000074X འདི་ ཀེ་ནོ་ནིག་(decomprepsed) པེ་ལོཌི་རིང་ཚད་ལས་ ཁྱད་པར་ཡོདཔ་ཨིན་པ་ཅིན་ ཡང་ན་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ མཐོ་ཤོས་ལས་ལྷག་འོང་།
+3. བསྟར་སྤྱོད་ `chunk_size` ཕྲང་སྒྲིག་ (གློག་ཤུགས་གཉིས་, <= 2 MiB).
+4. I18NI000000076X <= འཛམ་གླིང་མཐོ་ཤོས་དང་ ཆ་སྙོམས་ >= ༢ ངེས་གཏན་བཟོ།
+༥༽ གཞུང་སྐྱོང་གཞི་རྟེན་ལུ་གུས་ཞབས་འབད་དགོ།
+༦ ཀེ་ནོ་ནིག་ཧེ་ཤི་ལུ་ མཚན་རྟགས་བདེན་དཔྱད་འབད་ནི།(མཚན་རྟགས་ས་སྒོ་མ་བརྩིས་བར་)།
+7. པེ་ལིཀཊི་ `client_blob_id` བཀག་ཆ་འབད།
+8. I18NI0000000079X བྱིན་པའི་སྐབས་ ལས་རིམ་བདེན་དཔྱད་འབད་ + ཧེཤ་མཐུན་སྒྲིག་ཚུ་ ལོག་རྩིས་སྟོན་ཡོདཔ་ཨིན།
+   ཆ་ཤས་ཅིག་གི་ཤུལ་ལས་ གསལ་སྟོན་འབདཝ་ཨིན། དེ་མེན་པ་ཅིན་ མཐུད་མཚམས་འདི་གིས་ གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ གསོག་འཇོག་འབདཝ་ཨིན།
+༩ རིམ་སྒྲིག་འབད་ཡོད་པའི་འདྲ་བཤུས་སྲིད་བྱུས་འདི་བསྟར་སྤྱོད་འབད། Torii གིས་ ཕུལ་མི་འདི་ ལོག་བྲིས་ཡོདཔ་ཨིན།
+   `RetentionPolicy` དང་ `torii.da_ingest.replication_policy` (see)
+   `replication-policy.md`) དང་ དེ་ལས་ སྔོན་སྒྲིག་འབད་ཡོད་པའི་ གསལ་སྟོན་ཚུ་ ངོས་ལེན་མ་འབད་བར་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན།
+   མེ་ཊ་ཌེ་ཊ་འདི་ དམ་འཛིན་འབད་ཡོད་པའི་གསལ་སྡུད་དང་ མཐུན་སྒྲིག་མི་འབད།
 
-### Chunking & Replication Flow
+### ཆོས་ཚན་དང་ འདྲ་བཤུས་རྒྱུན་འབྲེལ།
 
-1. Chunk payload into `chunk_size`, compute BLAKE3 per chunk + Merkle root.
-2. Build Norito `DaManifestV1` (new struct) capturing chunk commitments (role/group_id),
-   erasure layout (row and column parity counts plus `ipa_commitment`), retention policy,
-   and metadata.
-3. Queue the canonical manifest bytes under `config.da_ingest.manifest_store_dir`
-   (Torii writes `manifest.encoded` files keyed by lane/epoch/sequence/ticket/fingerprint) so SoraFS
-   orchestration can ingest them and link the storage ticket to persisted data.
-4. Publish pin intents via `sorafs_car::PinIntent` with governance tag + policy.
-5. Emit Norito event `DaIngestPublished` to notify observers (light clients,
-   governance, analytics).
-6. Return `DaIngestReceipt` to caller (signed by the Torii DA service key) and emit the
-   `Sora-PDP-Commitment` header so SDKs can capture the encoded commitment immediately. The receipt
-   now includes `rent_quote` (a Norito `DaRentQuote`) and `stripe_layout`, letting submitters display
-   the base rent, reserve share, PDP/PoTR bonus expectations, and the 2D erasure layout alongside
-   the storage ticket before committing funds.
+1. ཆུང་ཆུང་ `chunk_size`, comput BLAKE3 རེས་རེ་ལུ་ + མར་ཀལ་རྩ་བ།
+2. Norito `DaManifestV1` (struct) ཆུང་ཆུང་གི་ཁས་བླངས་ (འགན་ཁུར་/སྡེ་ཚན་_id) བཀོད་སྒྲིག་འབད་ནི་ལུ་ བཟོ་བསྐྲུན་འབད།
+   རྩ་བསྐྲད་སྒྲིག་བཀོད་ (གྲལ་ཐིག་དང་ཀེར་ཐིག་ཆ་སྙོམས་གྱངས་ཁ་ཚུ་ དེ་ལས་ I18NI0000085X) བཀག་འཛིན་སྲིད་བྱུས།
+   དང་ མེ་ཊ་ཌེ་ཊ་.
+3. I18NI0000086X འོག་ལུ་ཡོད་པའི་ ཀེ་ནོ་ནིག་གསལ་རྟགས་ཅན་གྱི་བཱའིཊིསི་ཚུ་ ཀིའུ་ཝེ་
+   (I18NT000000039X གིས་ `manifest.encoded` ལྡེ་མིག་འདི་ ལེན་/ཨི་པོཆ་/རིམ་པ་/ཊིག་ཀེཊི་/མཛུབ་མོའི་པར་རིས་གིས་ ལྡེ་མིག་བརྩམས་ཡོདཔ་ཨིན།) དེ་འབདཝ་ལས་ SoraFS ཨིན།
+   orchester གིས་ དེ་ཚུ་ བཙུགས་ཏེ་ གནས་ཡུན་གནས་ནི་ལུ་ གསོག་འཇོག་འབད་སའི་ ཤོག་འཛིན་འདི་ འབྲེལ་མཐུད་འབད་ཚུགས།
+༤ གཞུང་སྐྱོང་ངོ་རྟགས་+སྲིད་བྱུས་དང་གཅིག་ཁར་ `sorafs_car::PinIntent` བརྒྱུད་དེ་ པིན་གྱི་དམིགས་ཡུལ་ཚུ་ དཔར་བསྐྲུན་འབད་ནི།
+༥༽ བལྟ་རྟོག་པ་ཚུ་ལུ་ བརྡ་དོན་སྤྲོད་ནིའི་དོན་ལུ་ Norito བྱུང་ལས་ `DaIngestPublished` ལུ་ ཨེཊ།
+   གཞུང་སྐྱོང་། དབྱེ་དཔྱད།)
+6. ཁ་པར་གཏོང་མཁན་ལུ་ `DaIngestReceipt` ལོག་སྤྲོད་དགོ། (Torii DA ཞབས་ཏོག་ལྡེ་མིག་གིས་མིང་རྟགས་བཀོད་ཡོདཔ།) དེ་ལས་ བཏོན་གཏང་།
+   `Sora-PDP-Commitment` མགོ་ཡིག་འདི་ དེ་འབདཝ་ལས་ SDKs ཚུ་གིས་ བརྡ་བཀོད་འབད་ཡོད་པའི་ཁས་བླངས་འདི་ དེ་འཕྲོ་ལས་ བཟུང་ཚུགས། བྱུང་འཛིན་འདི།
+   ད་ལྟ་ I18NI000000092X (a Norito I18NI00000000093X) དང་ I18NI000000094X ལ་ཚུད་ཡོད།
+   གཞི་རྟེན་ཁང་གླ་དང་ གསོག་འཇོག་བགོ་བཤའ་ PDP/PoTR རེ་བ་དང་ ༢D བཏོན་གཏང་བའི་སྒྲིག་བཀོད་ མཉམ་དུ།
+   མ་དངུལ་མ་སྤྲོད་པའི་ཧེ་མ་ བསག་མཛོད་ཀྱི་ཤོག་འཛིན་ཅིག།
 
-## Storage / Registry Updates
+## གསོག་འཇོག་ / ཐོ་བཀོད་དུས་མཐུན།
 
-- Extend `sorafs_manifest` with `DaManifestV1`, enabling deterministic parsing.
-- Add new registry stream `da.pin_intent` with versioned payload referencing
-  manifest hash + ticket id.
-- Update observability pipelines to track ingest latency, chunking throughput,
-  replication backlog, and failure counts.
+- `sorafs_manifest` དང་གཅིག་ཁར་ `DaManifestV1`, གཏན་འབེབས་བཟོ་ནིའི་ གཏན་འབེབས་བཟོ་ནི།
+- ཐོ་བཀོད་རྒྱུན་ལམ་གསརཔ་ I18NI0000097X འདི་ ཐོན་རིམ་འབད་ཡོད་པའི་ པེ་ལོཌི་གཞི་བསྟུན་དང་གཅིག་ཁར་ ཁ་སྐོང་འབད།
+  གསལ་སྟོན་ཧ་ཤི་ + ཤོག་འཛིན་ཨའི་ཌི།
+- བལྟ་རྟོག་འབད་བཏུབ་པའི་ པའིལ་ལའིན་ཚུ་ མངལ་ཆགས་ཀྱི་ བར་ཆད་དང་ ཆ་ཤས་ཆ་ཤས་སྦེ་ བརྟག་ཞིབ་འབད་ནི་ལུ་ དུས་མཐུན་བཟོ་ནི།
+  འདྲ་བཤུས་རྒྱབ་ལོག་དང་ འཐུས་ཤོར་གྱི་གྱངས་ཁ་ཚུ།
 
-## Testing Strategy
+## བརྟག་དཔྱད།
 
-- Unit tests for schema validation, signature checks, duplicate detection.
-- Golden tests verifying Norito encoding of `DaIngestRequest`, manifest, and receipt.
-- Integration harness spinning up mock SoraFS + registry, asserting chunk + pin flows.
-- Property tests covering random erasure profiles and retention combinations.
-- Fuzzing of Norito payloads to guard against malformed metadata.
+- ལས་རིམ་བདེན་དཔྱད་དང་ མཚན་རྟགས་ཞིབ་དཔྱད་ འདྲ་བཤུས་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ ཡུ་ནིཊི་བརྟག་དཔྱད།
+- གསེར་གྱི་བརྟག་དཔྱད་ Norito བདེན་དཔྱད་འབད་ནི། `DaIngestRequest` གི་ཨེན་ཀོ་ཌིང་།
+- གཅིག་སྒྲིལ་གྱི་ ཧར་ནེསི་ འཕུར་ལྡིང་མོ་ཀ་ I18NT0000026X + ཐོ་བཀོད་ བདེན་དཔྱད་ཀྱི་ ཆ་ཤས་ + པིན་རྒྱུན་འབབ་ཚུ།
+- གང་བྱུང་བཏོན་གཏང་ནི་གི་གསལ་སྡུད་དང་ བཀག་འཛིན་མཉམ་སྡེབ་ཚུ་ཁྱབ་པའི་ རྒྱུ་དངོས་བརྟག་དཔྱད།
+- Norito དངུལ་སྤྲོད་ལེན་གྱི་ ནོར་འཁྲུལ་ཅན་གྱི་ མེ་ཊ་ཌེ་ཊ་ལུ་ ཉེན་སྲུང་འབད་མི་ལུ་ ཕུའུ་ཟི་འབད་ནི།
 
-## CLI & SDK Tooling (DA-8)
+## CLI & SDK ལག་ཆས་ (DA-8)- Norito (CLI འཛུལ་སྒོ་གསརཔ་) ད་ལྟ་རུན་ཆད་ཀྱི་བགོ་བཤའི་བཟོ་བསྐྲུན་པ་/དཔར་བསྐྲུན་པ་དེ་འདྲ་བཀོལ་སྤྱོད་པ་ཚུ་ བཀབ་བཞགཔ་ཨིན།
+  ཐའི་ཀཱའི་བཱན་ཌལ་རྒྱུན་འགྲུལ་གྱི་ཕྱི་ཁར་ གང་བྱུང་གི་ བུལ་བ་ཚུ་ བཙུགས་ཚུགས། བཀའ་རྒྱ་འདི་ སྤྱི་ལོ་༢༠༠༨ ལུ་སྡོདཔ་ཨིན།
+  `crates/iroha_cli/src/commands/da.rs:1` དང་ འབབ་ཁུངས་དང་ བཏོན་གཏང་ནི་/བཀག་བཞག་གི་གསལ་སྡུད་ དེ་ལས་ དང་
+  གདམ་ཁའི་མེ་ཊ་ཌེ་ཊ་/ཡིག་སྣོད་ཚུ་ སི་ཨེལ་ཨའི་དང་གཅིག་ཁར་ ཀེ་ནོ་ནིག་ I18NI000001010 མཚན་རྟགས་མ་བཀོད་པའི་ཧེ་མ།
+  རིམ་སྒྲིག་ལྡེ་མིག། མཐར་འཁྱོལ་ཅན་གྱི་རྒྱུག་འགྲན་ཚུ་ `da_request.{norito,json}` དང་ I18NI000000103X འོག་ལུ་ 1 1014-15
+  `artifacts/da/submission_<timestamp>/` (I18NI000000105X བརྒྱུད་དེ་བཀག་ཆ་འབད་ཡོདཔ་) དེ་འབདཝ་ལས་ གསར་བཏོན་འབད་མི་ ཅ་རྙིང་ཚུ་ འབད་ཚུགས།
+  བཟའ་སྤྱོད་འབད་བའི་སྐབས་ལག་ལེན་འཐབ་མི་ I1NT00000013X བཱའིཊི་ཚུ་ ཏན་ཏན་སྦེ་ཐོ་བཀོད་འབད།
+- བརྡ་བཀོད་འདི་གིས་ `client_blob_id = blake3(payload)` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན་རུང་ བརྒྱུད་དེ་ འབྲེལ་འཛིན་ཚུ་ངོས་ལེན་འབདཝ་ཨིན།
+  `--client-blob-id`, གཟེངས་བསྟོད་ཀྱི་མེ་ཊ་ཌེ་ཊ་ JSON སབ་ཁྲ་ (`--metadata-json`) དང་ སྔོན་ལས་བཏོན་ཡོད་པའི་མངོན་གསལ་ཚུ།
+  (I18NI000000109X) དང་ Offline གི་དོན་ལུ་ `--no-submit` ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
+  Torii ཧོསི། སྙན་ཞུ་ JSON འདི་ ཌིཀསི་ལུ་བྲིས་ཡོད་པའི་ཁ་སྐོང་ལུ་ stdout ལུ་དཔར་བསྐྲུན་འབདཝ་ཨིན་ དེ་ལས་ འདི་ཁ་བསྡམས།
+  DA-8 “submit_blob” ལག་ཆས་དགོས་མཁོ་དང་ ཨེསི་ཌི་ཀེ་ ཆ་སྙོམས་ལཱ་བཀག་ཆ་འབད་ནི།
+- I18NI000000112X གིས་ ཧེ་མ་ལས་ ནུས་ཤུགས་ཡོད་མི་ སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ རོལ་དབྱངས་འཐེན་འཕྲུལ་གྱི་དོན་ལུ་ ཌི་ཨེ་-གཙོ་བོར་བསྟེན་མི་ མིང་གཞན་ཁ་སྐོང་འབདཝ་ཨིན།
+  `iroha app sorafs fetch`. བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་སྟོན་ + ཅངཀ་-པེ་ལེན་ཅ་ཆས་ཚུ་ལུ་ བརྡ་སྟོན་འབད་ཚུགས། (`--manifest`, )
+  I18NI000000115X, `--manifest-id`) **or** Torii གསོག་འཇོག་ཤོག་བྱང་ `--storage-ticket` བརྒྱུད་དེ་སྤྲོད་ཡོད། ཤོག་འཛིན་གྱི་སྐབས།
+  ལམ་འདི་ CLI གིས་ `/v1/da/manifests/<ticket>` ལས་ གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ འོག་ལུ་ བང་རིམ་འདི་ གནས་ཏེ་ཡོདཔ་ཨིན།
+  `artifacts/da/fetch_<timestamp>/` (I18NI0000000120X) དང་འགལ་འཛོལ་འབདཝ་ཨིན།
+  `--manifest-id`, དེ་ལས་ རོལ་དབྱངས་འཕྲུལ་ཆས་འདི་ `--gateway-provider` ཐོ་ཡིག་དང་གཅིག་ཁར་ གཡོག་བཀོལཝ་ཨིན། གེ་ར
+  SoraFS ཕེཊ་ཅར་གྱི་ཁ་ཐོག་ལས་ ཡར་འཕེལ་ཅན་གྱི་མཛུབ་མོ་ཚུ་ ༼ཡིག་ཤུབས་གཙོ་བོ་དང་ མཁོ་མངགས་འབད་མི་ ཁ་ཡིག་ཚུ་ དེ་ལས་ སྲུང་རྒྱབ་ཀྱི་ འདྲ་མཛོད་ཚུ་ ཉམས་ཆུང་སྦེ་ཡོདཔ་ཨིན།
+  མིང་མ་བཀོད་པའི་སྐྱེལ་འདྲེན་དང་སྐུགས་ཕྱིར་གཏོང་ དེ་ལས་ I18NI000000123X ལམ་ཚུ་ བརྡ་སྟོན།
+  སྲོལ་སྒྲིག་ Torii གི་ ཧོསིཊི་ཚུ་གི་དོན་ལུ་ `--manifest-endpoint` བརྒྱུད་དེ་ བཀག་ཆ་འབད་དགོཔ་ལས་ མཐའ་མཇུག་ལས་མཇུག་ཚུན་ཚོད་ འཐོབ་ཚུགས་པའི་ ཞིབ་དཔྱད་ཚུ་ ཐད་རི་བ་རི་སྦེ་ ཐད་རི་བ་རི་སྦེ་ བཞགཔ་ཨིན།
+  ཡོངས་རྫོགས་སྦེ་ `da` མིང་གི་ས་སྒོ་འདི་ སྙན་ཆའི་གཏན་ཚིག་འདྲ་བཤུས་མ་འབད་བར་ཡོདཔ་ཨིན།
+- I18NI00000000126X I18NI000000127X བརྒྱུད་དེ་ I18NT000000044X ལས་ ཕྲང་ཏང་ཏ་སྦེ་ ཀེ་ནོ་ནིག་གསལ་སྟོན་ཚུ་ འཐེན་དོ་ཡོདཔ་ཨིན།
+  བརྡ་བཀོད་འདི་གིས་ `manifest_{ticket}.norito` དང་ I18NI000000129X དེ་ལས་ `chunk_plan_{ticket}.json` བྲིས་ཡོདཔ་ཨིན།
+  I18NI000000131X གི་འོག་ལུ་ (ཡང་ན་ ལག་ལེན་པ་གིས་ བཀྲམ་སྤེལ་འབད་མི་ I18NI000000132X)
+  I18NI000000133X འབོད་བརྡ་ (I18NI000000134X རྩིས་ཏེ་) འདི་ རྗེས་འཇུག་ཨོར་ཀེཊ་ཊར་གྱི་ ཕེཆ་གི་དོན་ལུ་ དགོཔ་ཨིན།
+  འདི་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ གསལ་སྟོན་གྱི་ འཕྲུལ་འཁོར་སྣོད་ཐོ་ཚུ་ལས་ ཕྱིར་བཏོན་འབད་དེ་ ལེན་མི་འདི་གིས་ ཨ་རྟག་རང་ ལག་ལེན་འཐབ་ཨིན།
+  མཚན་རྟགས་བཀོད་པའི་ཅ་རྙིང་ཚུ་ Torii གིས་བཏོན་ཡོདཔ། ཇ་བ་ཨིསི་ཀིརིཔཊི་ Torii མགྲོན་པོ་འདི་གིས་ བརྒྱུད་དེ་ འཕྲོ་མཐུད་འདི་ མེ་ལོང་བཟོཝ་ཨིན།
+  `ToriiClient.getDaManifest(storageTicketHex)`, ཌི་ཀོཌི་འབད་ཡོད་པའི་ I18NT0000014X བཱའིཊི་ཚུ་སླར་ལོག་འབད་དེ་ ཇེ་ཨེསི་ཨོ་ཨེན་ གསལ་སྟོན་འབདཝ་ཨིན།
+  དང་ ཆ་ཤས། དེ་འབདཝ་ལས་ ཨེསི་ཌི་ཀེ་ ཁ་པར་བཏང་མི་ཚུ་གིས་ སི་ཨེལ་ཨའི་ལུ་ མ་བཙུགས་པར་ ཨོར་ཀེཊ་ཊར་གྱི་ དུས་ཚོད་ཚུ་ ཆུ་བླུག་ཚུགས།
+  ད་ལྟ་ Swift SDK གིས་ ཁ་ཐོག་གཅིག་པའི་ (`ToriiClient.getDaManifestBundle(...)` པཱལ་སི་པལ་སི།
+  `fetchDaPayloadViaGateway(...)`), དེ་ལྟར་ SoraFSstractor werepper ནང་དུ་བཤུབ་པ།
+  iOS མཁོ་སྤྲོད་པ་ཚུ་གིས་ གསལ་སྟོན་ཚུ་ཕབ་ལེན་འབད་དེ་ འབྱུང་ཁུངས་སྣ་ཚོགས་ཀྱི་ ཕེཊི་ཆི་ཚུ་ ལག་ལེན་འཐབ་ཚུགས།
+  【ཨི་རོ་ཧ་སུའིཕཊ་/འབྱུང་ཁུངས།/ཨི་རོ་ཧ་སུའིཕ/ཊོ་རི་ཀི་ལིནཊ། ༢༤༠】】】】【ཨ་རོ་ཧ་སུའིཕ།/འབྱུང་ཁུངས།/ཨའི་རོ་ཧ་སུའིཕ/སོ་ར་ཧྥ་སི་ཨོར་ཅེསི་ཊི་ཊོར་མཚོན་ཆ།:12】།
+- I18NI000000138X བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ བསག་བཞག་ཚད་ཅིག་གི་དོན་ལུ་ ཁང་གླ་དང་ སྐུལ་སློང་ཚུ་ བརྡལ་བཤིག་གཏང་ནི་ཚུ་ རྩིས་རྐྱབ།
+  དང་ བཀག་བཞག་སྒོ་སྒྲིག་། གྲོགས་རམ་པ་འདི་གིས་ ཤུགས་ལྡན་ `DaRentPolicyV1` (JSON ཡང་ན་ Norito bytes) ཡང་ན་ ཡང་ཅིན་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
+  བཀོད་སྒྲིག་འབད་ཡོད་པའི་སྔོན་སྒྲིག་དང་ སྲིད་བྱུས་འདི་བདེན་དཔྱད་འབད་ཞིནམ་ལས་ JSON བཅུད་བསྡུས་ (`gib`, `months`, སྲིད་བྱུས་མེ་ཊ་ཌེ་ཊ་, དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  དང་ `DaRentQuote` ས་ཁོངས་ཚུ་) དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ གཞུང་སྐྱོང་སྐར་མ་ཚུ་ནང་ XOR གི་གླ་ཆ་ཚུ་ ངེས་བདེན་སྦེ་ བཀོད་ཚུགས།
+  འབྲི་ནི་ ad ཧོག་ཡིག་ཚུ། བརྡ་བཀོད་འདི་གིས་ གྲལ་ཐིག་གཅིག་ `rent_quote ...` བཅུད་བསྡུས་ཡང་ བཏོནམ་ཨིན།
+  བྱུང་རྐྱེན་གྱི་ དམག་སྦྱོང་འབད་བའི་སྐབས་ ཀོན་སོལ་དྲན་ཐོ་ཚུ་ ལྷག་ཚུགསཔ་སྦེ་ བཞག་ནི་ལུ་ payload. དང་བཅས་ `--quote-out artifacts/da/rent_quotes/<stamp>.json`
+  `--policy-label "governance ticket #..."` སྲིད་བྱུས་ཚོགས་རྒྱན་ངེས་བདེན་ བཤད་པའི་ དངོས་གནས་ བཀོད་སྒྲིག་འབད་དེ་ གནས་ཏེ་ཡོདཔ་ཨིན།
+  ཡང་ན་ བང་སྒྲིག་བཟོ་ནི།; CLI གིས་ སྲོལ་སྒྲིག་ཁ་ཡིག་འདི་ བསྒྱུར་བཅོས་འབད་དེ་ ཡིག་རྒྱུན་སྟོངམ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ `policy_source` གནས་གོང་ཚུ།
+  དངུལ་ཁང་གི་ བཀོད་སྒྲིག་ཚུ་ནང་ལས་ ལཱ་འབད་ཚུགསཔ་སྦེ་ལུས་ཡོདཔ་ཨིན། ཡན་ལག་བཀོད་ཁྱབ་ཀྱི་དོན་ལུ་ `crates/iroha_cli/src/commands/da.rs` ལུ་བལྟ།
+  དང་ I18NI00000000148X སྲིད་བྱུས་ཀྱི་ཆེད་དུ་ `docs/source/da/rent_policy.md` 【crates/iroha_cli/src/src/commands/da.r.1:】】འབྱུང་ཁུངས་/འབྱུང་ཁུངས་/ཌན་ཊི་/རནཊ་_སྲིད་བྱུས་.md:1】།
+- `iroha app da prove-availability` གོང་འཁོད་ཀྱི་ཆ་མཉམ་: གསོག་འཇོག་གི་ཤོག་འཛིན་འགོརཝ་ད་ ཕབ་ལེན་འབདཝ་ཨིན།
+  ཀེ་ནོ་ནིག་གསལ་རྟགས་ཀྱི་བུནཌལ་, སྣ་མང་-འབྱུང་ཁུངས་སྙན་ཆའི་སྡེ་ཚན་ (I18NI000000150X) འདི་ གཡོག་བཀོལཝ་ཨིན།
+  ཕབ་ལེན་འབད་ཡོད་པའི་ པེ་ལོཌ་ + སྐུགས་བཀོད་སྒྲིག་འདི་ གཤམ་གསལ་གྱི་འོག་ལུ་ བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན།
+  `artifacts/da/prove_availability_<timestamp>/`, དང་དེ་འཕྲལ་ལས་ ད་ལྟོ་ཡོད་པའི་ POR གྲོགས་རམ་པ་ འབོད་བརྡ་འབདཝ་ཨིན།
+  (`iroha app da prove`) འཐོབ་པའི་བཱའིཊི་ཚུ་ལག་ལེན་འཐབ་སྟེ། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ སྙན་ཆའི་སྡེ་ཚན་འདི་ བསྒྱུར་བཅོས་འབད་ཚུགས།
+  (`--max-peers`, `--scoreboard-out`, གསལ་སྟོན་མཐའ་མཇུག་བཀག་ཆ་) དང་ བདེན་ཁུངས་ཀྱི་དཔེ་ཚད་ཚུ།
+  (I18NI000000156X, `--leaf-index`, I18NI0000000158X) དེ་ལས་ བརྡ་བཀོད་གཅིག་གིས་ ཅ་རྙིང་ཚུ་བཏོནམ་ཨིན།
+  DA-5/DA-9 རྩིས་ཞིབ་ཚུ་གིས་ རེ་བ་བསྐྱེད་མི་: འབབ་ཁུངས་འདྲ་བཤུས་དང་ སྐུགས་ཐོབ་ཀྱི་སྒྲུབ་བྱེད་ དེ་ལས་ JSON བདེན་ཁུངས་བཅུད་བསྡུས་ཚུ།
 
-- `iroha app da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
-  can ingest arbitrary blobs outside of the Taikai bundle flow. The command lives in
-  `crates/iroha_cli/src/commands/da.rs:1` and consumes a payload, erasure/retention profile, and
-  optional metadata/manifest files before signing the canonical `DaIngestRequest` with the CLI
-  config key. Successful runs persist `da_request.{norito,json}` and `da_receipt.{norito,json}` under
-  `artifacts/da/submission_<timestamp>/` (override via `--artifact-dir`) so release artefacts can
-  record the exact Norito bytes used during ingestion.
-- The command defaults to `client_blob_id = blake3(payload)` but accepts overrides via
-  `--client-blob-id`, honours metadata JSON maps (`--metadata-json`) and pre-generated manifests
-  (`--manifest`), and supports `--no-submit` for offline preparation plus `--endpoint` for custom
-  Torii hosts. Receipt JSON is printed to stdout in addition to being written to disk, closing the
-  DA-8 “submit_blob” tooling requirement and unblocking SDK parity work.
-- `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
-  `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
-  `--plan`, `--manifest-id`) **or** pass a Torii storage ticket via `--storage-ticket`. When the ticket
-  path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle under
-  `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the blob hash for
-  `--manifest-id`, and then runs the orchestrator with the supplied `--gateway-provider` list. All
-  advanced knobs from the SoraFS fetcher surface intact (manifest envelopes, client labels, guard caches,
-  anonymity transport overrides, scoreboard export, and `--output` paths), and the manifest endpoint can
-  be overridden via `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live
-  entirely under the `da` namespace without duplicating orchestrator logic.
-- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
-  The command writes `manifest_{ticket}.norito`, `manifest_{ticket}.json`, and `chunk_plan_{ticket}.json`
-  under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
-  `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
-  This keeps operators out of the manifest spool directories and guarantees the fetcher always uses the
-  signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
-  `ToriiClient.getDaManifest(storageTicketHex)`, returning the decoded Norito bytes, manifest JSON,
-  and chunk plan so SDK callers can hydrate orchestrator sessions without shelling out to the CLI.
-  The Swift SDK now exposes the same surfaces (`ToriiClient.getDaManifestBundle(...)` plus
-  `fetchDaPayloadViaGateway(...)`), piping bundles into the native SoraFS orchestrator wrapper so
-  iOS clients can download manifests, execute multi-source fetches, and capture proofs without
-  invoking the CLI.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】【IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12】
-- `iroha app da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
-  and retention window. The helper consumes either the active `DaRentPolicyV1` (JSON or Norito bytes) or
-  the built-in default, validates the policy, and prints a JSON summary (`gib`, `months`, policy metadata,
-  and the `DaRentQuote` fields) so auditors can cite exact XOR charges inside governance minutes without
-  writing ad hoc scripts. The command also emits a one-line `rent_quote ...` summary ahead of the JSON
-  payload to keep console logs readable during incident drills. Pair `--quote-out artifacts/da/rent_quotes/<stamp>.json` with
-  `--policy-label "governance ticket #..."` to persist prettified artefacts that cite the exact policy vote
-  or config bundle; the CLI trims the custom label and refuses blank strings so `policy_source` values
-  remain actionable across treasury dashboards. See `crates/iroha_cli/src/commands/da.rs` for the subcommand
-  and `docs/source/da/rent_policy.md` for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
-  canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
-  supplied `--gateway-provider` list, persists the downloaded payload + scoreboard under
-  `artifacts/da/prove_availability_<timestamp>/`, and immediately invokes the existing PoR helper
-  (`iroha app da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
-  (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) and the proof sampler
-  (`--sample-count`, `--leaf-index`, `--sample-seed`) while a single command produces the artefacts
-  expected by DA-5/DA-9 audits: payload copy, scoreboard evidence, and JSON proof summaries.
+## TODO གྲོས་ཆོད་བཅུད་བསྡུས།
 
-## TODO Resolution Summary
+ཧེ་མ་ལས་བཀག་ཆ་འབད་ཡོད་པའི་ ཊི་ཨོ་ཌི་ཨོ་ཚུ་ཆ་མཉམ་ ལག་ལེན་འཐབ་སྟེ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
 
-All previously blocked ingest TODOs have been implemented and verified:
+- **གཉན་ཚད་བརྡ་སྟོན་ཚུ་** — Torii གིས་ འབོད་བརྡ་གཏང་མི་གིས་ འབོད་བརྡ་གཏང་མི་ ཁ་ཡིག་ཚུ་ (`identity`, I18NI00000000160X, I18NI0000000016160, ཨིན།
+  `zstd`) དང་ བདེན་དཔྱད་མ་འབད་བའི་ཧེ་མ་ འབབ་ཁུངས་ཚུ་ སྤྱིར་བཏང་བཟོཝ་ལས་ ཀེ་ནོ་ནིག་གསལ་སྟོན་གྱི་ ཧ་ཤི་འདི་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+  decompressed bytes.【ཧ་ཊི་/ཨི་རོ་ཧ་ཊོ་རི/ཌ/དངསཊ།༢༢༠】 ཨི་རོ་ཧ་_གནས་སྡུད་_མོ་ཌེལ/སརc/types.rs:161】།
+- **གཞུང་སྐྱོང་རྐྱངམ་ཅིག་ མེ་ཊ་ཌེ་ཊ་གསང་བཟོ་** — Torii གིས་ ད་ལྟོ་ གཞུང་སྐྱོང་མེ་ཊ་ཌེ་ཊ་ དང་གཅིག་ཁར་ གསང་བཟོ་འབདཝ་ཨིན།
+  ChaCha20-Poly1305 ལྡེ་མིག་རིམ་སྒྲིག་འབད་ཞིནམ་ལས་ མ་མཐུན་པའི་ཁ་ཡིག་ཚུ་ ངོས་ལེན་མ་འབད་བར་ གཉིས་ལྡན་སྦེ་ ཁ་ཐོག་ལུ་བཏོནམ་ཨིན།
+  སྒྲིག་བཀོད་ཀྱི་མཛུབ་གནོན་ (`torii.da_ingest.governance_metadata_key_hex`,
+  I18NI0000000164X) 【ཚོད་བརྟག་/ཨི་རོ་ཧ་ཊོ་རི/ཌ་/ཨིནསཊ།:༧༠༧】 】            ཨི་རོ་ཧ་_ཀམ་པ་/ཤར་སི་/པེ་ར་མི་ཀྲར་ཨང་།:༡༦༦༢】
+- ** པེ་ལོཌ་སྦོམ་གྱི་རྒྱུན་ལམ་** — ཆ་ཤས་སྣ་ཚོགས་ཀྱི་ བཅུད་བསྡུས་འདི་ ཐད་རི་བ་རི་ཨིན། མཁོ་མངགས་འབད་མི་ཚུ་གི་རྒྱུན་ལམ་གཏན་འབེབས་བཟོ་ནི།
+  `DaIngestChunk` I18NI000000166X, I18NT000000049X གིས་ བཤུད་ཕྲད་རེ་རེ་ལུ་བདེན་དཔྱད་འབདཝ་ཨིན་ དེ་ལས་ དེ་ཚུ་སྟེགས་རིས།
+  I18NI000000167X གི་འོག་ལུ་ `is_last` དར་ཆ་འདི་ ལྷོད་པའི་སྐབས་ རྡུལ་ཕྲན་གྱི་ཐོག་ལས་ གསལ་སྟོན་འབདཝ་ཨིན།
+  【crates/iroha_tori/src/da/da/da/ingest.392】།
+- **ཐོན་རིམ་བཟོ་ནི་** — I18NI000000169X གིས་ གསལ་ཏོག་ཏོ་ I18NI000000170X དང་ I18NT000000050X གིས་ ངོས་ལེན་འབདཝ་ཨིན།
+  མ་ཤེས་པའི་ཐོན་རིམ་ཚུ་ གསལ་སྟོན་གྲུ་གཟིངས་གསརཔ་ཡོད་པའི་སྐབས་ གཏན་འབེབས་བཟོ་ནིའི་ངེས་གཏན་བཟོ་ནི།
+- **PDP/PoTR hooks** — PDP ཁས་བླངས་ཚུ་ ཐད་ཀར་དུ་ ཆ་ཀན་ཚོང་ཁང་ལས་ ཐོན་ཡོདཔ་ལས་ གནས་ཏེ་ཡོདཔ་ཨིན།
+  འདི་མ་ཚད་ DA-5 ལས་རིམ་བཟོ་མི་ཚུ་གིས་ ཁྲིམས་མཐུན་གྱི་གནས་སྡུད་ལས་ དཔེ་ཚད་ཀྱི་གདོང་ལེན་ཚུ་ འགོ་བཙུགས་ཚུགས།
+  `/v1/da/ingest` དང་ `/v1/da/manifests/{ticket}` གིས་ ད་ལྟོ་ `Sora-PDP-Commitment` མགོ་ཡིག་ཅིག་བཙུགས་ཡོདཔ་ཨིན།
+  base64 Norito paibad འདི་ འབག་ཡོདཔ་ལས་ SDKs ཚུ་གིས་ DA-5 འཚོལ་ཞིབ་ཚུ་ གཏན་གཏན་སྦེ་ མཛོད་ཁང་ནང་ བཞག་སྟེ་ཡོདཔ་ཨིན། དམིགས་ཚད།【ཀར/སི་ཨར་སི།/ལིབ་.360】【ཀྲེཊ་/སོ་རཱཕ་/སོ་རཱཕ་/སོ་རཕ་/སརཀ/པི་ཌི་པི་.1】ཀྲེ་ཀྲེ་/ཨི་རོ་ཧ་_སོ་ར་སི/ད་/དངུསཊ། 476】།
 
-- **Compression hints** — Torii accepts caller-provided labels (`identity`, `gzip`, `deflate`,
-  `zstd`) and normalises payloads before validation so the canonical manifest hash matches the
-  decompressed bytes.【crates/iroha_torii/src/da/ingest.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
-- **Governance-only metadata encryption** — Torii now encrypts governance metadata with the
-  configured ChaCha20-Poly1305 key, rejects mismatched labels, and surfaces two explicit
-  configuration knobs (`torii.da_ingest.governance_metadata_key_hex`,
-  `torii.da_ingest.governance_metadata_key_label`) to keep rotation deterministic.【crates/iroha_torii/src/da/ingest.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
-- **Large payload streaming** — multi-part ingestion is live. Clients stream deterministic
-  `DaIngestChunk` envelopes keyed by `client_blob_id`, Torii validates each slice, stages them
-  under `manifest_store_dir`, and atomically rebuilds the manifest once the `is_last` flag lands,
-  eliminating the RAM spikes seen with single-call uploads.【crates/iroha_torii/src/da/ingest.rs:392】
-- **Manifest versioning** — `DaManifestV1` carries an explicit `version` field and Torii refuses
-  unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
-- **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
-  beside manifests so DA-5 schedulers can launch sampling challenges from canonical data, and
-  `/v1/da/ingest` plus `/v1/da/manifests/{ticket}` now include a `Sora-PDP-Commitment` header
-  carrying the base64 Norito payload so SDKs cache the exact commitment DA-5 probes target.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
+## བཀོལ་སྤྱོད་དྲན་ཐོ།
 
-## Implementation Notes
+- Torii’s `/v1/da/ingest` མཇུག་བསྡུའི་གནས་ཚིགས་ཀྱིས་ ད་ལྟོ་ པེ་ལོཌི་བསྡམ་བཞག་འདི་ སྤྱིར་བཏང་བཟོཝ་ཨིན་ བསྐྱར་རྩེད་ཀྱི་འདྲ་མཛོད་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  གཏན་འཁེལ་སྦེ་ ཆ་ཤས་ཀྱིས་ ཀེ་ནོ་ནིག་བཱའིཊི་ཚུ་ཨིནམ་དང་ I18NI000000175X ལོག་སྟེ་བཟོ་བསྐྲུན་འབད་དེ་ ཨིན་ཀོཌི་འབད་ཡོད་པའི་ པེ་ལོཌི་འདི་བཀོག་བཞགཔ་ཨིན།
+  I18NI000000176X SoraFS གི་དོན་ལུ་ `Sora-PDP-Commitment` ཁ་སྐོང་འབདཝ་ཨིན།
+  མགོ་ཡིག་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ པི་ཌི་པི་ལས་རིམ་ཚུ་གིས་ གཞི་བསྟུན་འབད་ནི་གི་ཁས་བླངས་འདི་ བཟུང་ཡོདཔ་ཨིན།
+- ངོས་ལེན་འབད་མི་ བོལ་བ་རེ་རེ་གིས་ ད་ལྟོ་ `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+  འོག་ལུ་ I18NI000000179X དང་མཉམ་པའི་ ཀེ་ནོ་ནིག་ `DaCommitmentRecord` འདི་ རུལ་པོ་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
+  `PdpCommitmentV1` བཱའིཊིསི་ དེ་འབདཝ་ལས་ ཌི་ཨེ་-༣ བཱན་ཌལ་བཟོ་བསྐྲུན་པ་དང་ ཌི་ཨེ་-༥ ལས་རིམ་ཚུ་ མཉམ་སྦྲགས་འབད་མི་ ཅོག་འཐདཔ་ཚུ་ཨིན།
+  བསྐྱར་ལྷག་པའི་མངོན་རྟགས་ཡང་ན་ཆུང་ཚོ།【crates/iroha_torii/src/ད/ད/དིང་སེསཊ།:1814】
+- ཨེསི་ཌི་ཀེ་གྲོགས་རམ་ཨེ་པི་ཨའི་ཨེསི་གིས་ ཁ་པར་བཏང་མི་ཚུ་ Norito decoding བསྐྱར་བཟོ་འབད་མ་དགོ་པར་ PDP མགོ་ཡིག་སྤྲོད་ལེན་འདི་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  རསཊ་ཀྲེཊ་གིས་ `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, པའི་ཐོན་ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+  `ToriiClient` ད་ལྟ་`decode_pdp_commitment_header` དང་I18NI000000185X གྲུ་གཟིངས།
+  `decodePdpCommitmentHeader` མགོ་ཡིག་ས་ཁྲ་ངོ་མ་ཚུ་གི་དོན་ལུ་ ཡང་ན་ `HTTPURLResponse` instances.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
+- Torii གིས་ `GET /v1/da/manifests/{storage_ticket}` ཡང་གསལ་སྟོན་འབདཝ་ལས་ SDKs དང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་སྟོན་ཚུ་འཐོབ་ཚུགས།
+  དང་ མཛུབ་གནོན་གྱི་ སྣོད་ཐོ་ལུ་ མ་ཐུག་པར་ འཆར་གཞི་བཟོ་ནི། ལན་འདི་ Norito བཱའིཊིསི་སླར་ལོག་འབདཝ་ཨིན།
+  (base64), redendered venuse, JSON, a `chunk_plan` JSON blob འདི་ I18NI000000190X གི་དོན་ལུ་གྲ་སྒྲིག་ཡོདཔ་ཨིན།
+  hex (I18NI000000191X, `client_blob_id`, `blob_hash`, `chunk_root`), དེ་ལས་
+  `Sora-PDP-Commitment` ཆ་སྙོམས་དོན་ལུ་ བཙུགས་མི་ལན་ཚུ་ལས་ མགོ་ཡིག་། ནང་ `block_hash=<hex>` བཀྲམ་སྤེལ་འབད་དོ།
+  འདྲི་དཔྱད་ཡིག་རྒྱུན་འདི་གིས་ གཏན་འབེབས་ `sampling_plan` (འགན་སྤྲོད་ཧེཤ་, I18NI000000198X, དང་ དཔེ་ཚད་བཟོ་ཡོདཔ་ཨིན།
+  `(index, role, group)` tuples གིས་ 2D བཀོད་སྒྲིག་ཆ་ཚང་ནང་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན་) དེ་འབདཝ་ལས་ བདེན་དཔྱད་དང་ པོ་ཨར་ ལག་ཆས་ཚུ་ གཅིག་མཚུངས་སྦེ་འབྲི།
+  ཟུར་ཐོ་ཚུ།
 
-- Torii’s `/v1/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
-  deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, drops the encoded payload
-  into `config.da_ingest.manifest_store_dir` for SoraFS orchestration, and adds the `Sora-PDP-Commitment`
-  header so operators capture the commitment that PDP schedulers will reference.【crates/iroha_torii/src/da/ingest.rs:220】
-- Every accepted blob now produces a `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito`
-  entry under `manifest_store_dir` bundling the canonical `DaCommitmentRecord` together with the raw
-  `PdpCommitmentV1` bytes so DA-3 bundle builders and DA-5 schedulers hydrate identical inputs without
-  re-reading manifests or chunk stores.【crates/iroha_torii/src/da/ingest.rs:1814】
-- SDK helper APIs expose the PDP header payload without forcing callers to reimplement Norito decoding:
-  the Rust crate exports `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, the Python
-  `ToriiClient` now includes `decode_pdp_commitment_header`, and `IrohaSwift` ships
-  `decodePdpCommitmentHeader` overloads for raw header maps or `HTTPURLResponse` instances.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
-  and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
-  (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, the relevant
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), and mirrors the
-  `Sora-PDP-Commitment` header from ingest responses for parity. Supplying `block_hash=<hex>` in the
-  query string returns a deterministic `sampling_plan` (assignment hash, `sample_window`, and sampled
-  `(index, role, group)` tuples spanning the full 2D layout) so validators and PoR tools draw the same
-  indices.
+### གླ་ཆ་སྦོམ་གྱི་རྒྱུན་འབབ་འཕྲོ་མཐུད།
 
-### Large Payload Streaming Flow
+རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཞུ་བ་རྐྱང་པའི་ཚད་གཞི་འགོ་བཙུགས་མི་ལས་སྦོམ་པའི་རྒྱུ་དངོས་ཚུ་ བླུགས་དགོཔ་ཡོད་མི་ མཁོ་སྤྲོད་འབད་མི་ཚུ།
+I18NI0000200X ལུ་ཁ་པར་གཏོང་སྟེ་ རྒྱུན་སྤེལ་གྱི་ལཱ་ཡུན་། I18NT0000003X གིས་ ལན་འདེབས་འབདཝ་ཨིན།
+`ChunkSessionId` (BLAKE3-ཞུ་བ་འབད་ཡོད་པའི་ blob metadata ལས་བྱུང་ཡོདཔ་) དང་ གྲོས་བསྟུན་འབད་ཡོད་པའི་ཆ་ཅུན་གྱི་ཚད་འདི་ཨིན།
+ཤུལ་མམ་གྱི་ `DaIngestChunk` ཞུ་བ་རེ་རེ་བཞིན་:- `client_blob_id` — མཐའ་མའི་`DaIngestRequest` དང་འདྲ་བ།
+- I18NI000000205X — གཡོག་བཀོལ་བའི་ལཱ་ཡུན་ལུ་ མཐུན་འབྲེལ་གྱི་ཆ་ཤས་ཚུ་ཨིན།
+- `chunk_index` དང་ `offset` — གཏན་འབེབས་བཀའ་རྒྱ་བཏོན་དགོ།
+- `payload` — མཐུན་སྒྲིག་འབད་ཡོད་པའི་ ཅནཀ་ཚད་ཚུན་ཚོད་ཨིན།
+- `payload_hash` — BLAKE3 hash གིས་ slice of silce se se se se se se 18NT00000054X གིས་ boffer ཆ་མཉམ་བཱ་ཕར་མ་བཏང་པར་ བདེན་དཔྱད་འབད་ཚུགས།
+- `is_last` — གིས་ ཊར་མི་ནཱལ་བཤུད་བརྙན་བརྡ་སྟོནམ་ཨིན།
 
-Clients that need to ingest assets larger than the configured single-request limit initiate a
-streaming session by calling `POST /v1/da/ingest/chunk/start`. Torii responds with a
-`ChunkSessionId` (BLAKE3-derived from the requested blob metadata) and the negotiated chunk size.
-Each subsequent `DaIngestChunk` request carries:
+I18NT0000005X གིས་ `config.da_ingest.manifest_store_dir/chunks/<session>/` དང་ `config.da_ingest.manifest_store_dir/chunks/<session>/` གི་འོག་ལུ་ བདེན་དཔྱད་འབད་ཡོད་པའི་བཤུད་ཚུ་ འཕྲོ་མཐུད་དེ་ཡོདཔ་ཨིན།
+ཐོ་བཀོད་ཚུ་ བསྐྱར་རྩེད་ཀྱི་འདྲ་མཛོད་ནང་ལུ་ གལ་གནད་གུས་བཏུད་འབད་ནིའི་དོན་ལུ་ ཡར་འཕེལ་འགྱོཝ་ཨིན། མཐའ་མའི་ས་ཆ་ཚུ་ འབད་བའི་སྐབས་ I18NT0000056X
+ཌིཀསི་གུ་ཡོད་པའི་ པེ་ལོཌི་འདི་སླར་སྒྲིག་འབདཝ་ཨིན་ (དྲན་ཚད་འཕར་མ་ཚུ་ བཀག་ཐབས་ལུ་ ཆ་ཤས་སྣོད་ཐོ་བརྒྱུད་དེ་ རྒྱུན་ལམ་བཏོནམ་ཨིན།)
+ཚད་ལྡན་གསལ་སྟོན་/འོང་འབབ་འདི་ རྐྱང་པའི་པར་སྐྱེལ་ཚུ་དང་ཅིག་ཁར་བཟུམ་སྦེ་རྩིས་སྟོནམ་ཨིནམ་དང་ མཐའ་མར་ལན་གསལ་འབདཝ་ཨིན།
+`POST /v1/da/ingest` གིས་ གནས་རིམ་ཅན་གྱི་ཅ་རྙིང་ཚུ་ ཟ་སྤྱོད་འབད་དེ་ འབད་དགོ། འཐུས་ཤོར་བྱུང་ཡོད་པའི་ལཱ་ཡུན་ཚུ་ གསལ་རི་རི་ ཡང་ཅིན་ ཆ་མེད་གཏང་ཚུགས།
+`config.da_ingest.replay_cache_ttl` གི་ཤུལ་ལས་ ཕྱགས་སྙིགས་བསྡུ་བསྒྱོམ་འབད་ཡོདཔ་ཨིན། བཟོ་བཀོད་འདི་གིས་ ཡོངས་འབྲེལ་རྩ་སྒྲིག་བཞགཔ་ཨིན།
+I18NT0000019X མཐུན་སྒྲིག་ཅན་འདི་གིས་ མཁོ་སྤྲོད་འབད་མི་དམིགས་བསལ་གྱི་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ མཐུན་སྒྲིག་ཚུ་ སྤང་ཞིནམ་ལས་ ད་ལྟོ་ཡོད་པའི་ གསལ་སྟོན་གྱི་ པའིཔ་འདི་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན།
+འགྱུར་བ་མེད་པ།
 
-- `client_blob_id` — identical to the final `DaIngestRequest`.
-- `chunk_session_id` — ties slices to the running session.
-- `chunk_index` and `offset` — enforce deterministic ordering.
-- `payload` — up to the negotiated chunk size.
-- `payload_hash` — BLAKE3 hash of the slice so Torii can validate without buffering the entire blob.
-- `is_last` — indicates the terminal slice.
-
-Torii persists validated slices under `config.da_ingest.manifest_store_dir/chunks/<session>/` and
-records progress inside the replay cache to honour idempotency. When the final slice lands, Torii
-reassembles the payload on disk (streaming through the chunk directory to avoid memory spikes),
-computes the canonical manifest/receipt exactly as with single-shot uploads, and finally responds to
-`POST /v1/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
-are garbage-collected after `config.da_ingest.replay_cache_ttl`. This design keeps the network format
-Norito-friendly, avoids client-specific resumable protocols, and reuses the existing manifest pipeline
-unchanged.
-
-**Implementation status.** The canonical Norito types now live in
+**ལག་ལེན་གྱི་གནས་ཚད།** ད་ ཀེ་ནེ་ནིག་ I18NT00000020 དབྱེ་བ་འདི་ ད་ ནང་སྡོད་ཡོདཔ་ཨིན།
 `crates/iroha_data_model/src/da/`:
 
-- `ingest.rs` defines `DaIngestRequest`/`DaIngestReceipt`, together with the
-  `ExtraMetadata` container used by Torii.【crates/iroha_data_model/src/da/ingest.rs:1】
-- `manifest.rs` hosts `DaManifestV1` and `ChunkCommitment`, which Torii emits after
-  chunking completes.【crates/iroha_data_model/src/da/manifest.rs:1】
-- `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
-  `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
-- Manifest spool files land in `config.da_ingest.manifest_store_dir`, ready for the SoraFS orchestration
-  watcher to pull into storage admission.【crates/iroha_torii/src/da/ingest.rs:220】
+- I18NI000000215X གིས་ `DaIngestRequest`/I18NI000000217X, མཉམ་དུ་ངེས་འཛིན་འབདཝ་ཨིན།
+  `ExtraMetadata` Torii ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།【ཚད་ཀ/ཨི་རོ་ཧ་_གནས་སྡུད་_མོ་ཌེལ་/src/da/ingest.s:1】།
+- I18NI000000219X ཧོསིཊི་ I18NI000000220X དང་ I18NI000000221X, དེ་གིས་ དེ་གི་ཤུལ་ལས་ Torii གིས་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  ཆ་ཀིང་ཆ་ཚང་།【ཀྲེ་རེཊསི།/ཨི་རོ་ཧ་_གནས་སྡུད་_མོ་ཌེལ/སརཆ/ད/ད/མ་ཕེསཏ།:】།】
+- `types.rs` གིས་ བརྗེ་སོར་འབད་ཡོད་པའི་ བརྗེ་སོར་གྱི་ (`BlobDigest`, `RetentionPolicy`,
+  `ErasureProfile`, ལ་སོགས་པ་ཚུ་) དང་ དེ་ལས་ གཤམ་གསལ་གྱི་ སྔོན་སྒྲིག་སྲིད་བྱུས་གནས་གོང་ཚུ་ གཤམ་ལུ་ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ་ཨིན།
+- མ་ཕེསཊ་ སྤུ་ལུ་ཡིག་སྣོད་ཚུ་ `config.da_ingest.manifest_store_dir` ནང་ ཆགས་ཡོདཔ་ཨིན།
+  བལྟ་རྟོག་པ་ གསོག་འཇོག་འཛུལ་ཞུགས་ནང་འཐེན་ནི།【ཀརེ་ཊི་/ཨི་རོ་ཧ་_ཊོ་རི་/སི་ཨར་སི/ཌ་/ཨིང་སི་ཊི་.220】
 
-Roundtrip coverage for the request, manifest, and receipt payloads is tracked in
-`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, ensuring the Norito codec
-remains stable across updates.【crates/iroha_data_model/tests/da_ingest_roundtrip.rs:1】
+ཞུ་བ་དང་ གསལ་སྟོན་ དེ་ལས་ འབབ་ཁུངས་ཀྱི་ འབབ་ཁུངས་ཚུ་གི་དོན་ལུ་ སྐོར་ཐིག་ཁྱབ་ཁོངས་འདི་ ༢༠༠༨ ལུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, I18NT0000021X གསང་གྲངས་ངེས་གཏན་བཟོ་ནི།
+དུས་མཐུན་བཟོ་ནི་ཚུའི་ནང་ལུ་ བརྟན་ཏོག་ཏོ་སྦེ་ལུས་ཡོདཔ་ཨིན།
 
-**Retention defaults.** Governance ratified the initial retention policy during
-SF-6; the defaults enforced by `RetentionPolicy::default()` are:
+**བཀག་འཛིན་སྔོན་སྒྲིག་ཚུ་.** གཞུང་སྐྱོང་གིས་ འགོ་ཐོག་བཀག་ཆ་སྲིད་བྱུས་འདི་ ཆ་འཇོག་འབད་ཡོདཔ།
+SF-6; སྔོན་སྒྲིག་ཚུ་ `RetentionPolicy::default()` གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན།
 
-- hot tier: 7 days (`604_800` seconds)
-- cold tier: 90 days (`7_776_000` seconds)
-- required replicas: `3`
-- storage class: `StorageClass::Hot`
-- governance tag: `"da.default"`
+- ཚ་དྲོད་རིམ་པ་: ཉིནམ་༧ (`604_800` སྐར་ཆ་)
+- བསིལ་དྲོད་རིམ་པ་: ཉིནམ་༩༠ (`7_776_000` སྐར་ཆ་)
+- དགོས་མཁོའི་འདྲ་བཤུས།: `3`
+- གསོག་འཇོག་སྡེ་ཚན།: `StorageClass::Hot`
+- གཞུང་སྐྱོང་ངོ་རྟགས།: `"da.default"`
 
-Downstream operators must override these values explicitly when a lane adopts
-stricter requirements.
+ལམ་ཐིག་ཅིག་ཆ་འཇོག་འབད་བའི་སྐབས་ མར་ཕབ་ཀྱི་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གནས་གོང་འདི་ཚུ་གསལ་ཏོག་ཏོ་སྦེ་ བཀག་ཆ་འབད་དགོ།
+དགོས་མཁོའི་དགོས་མཁོ།

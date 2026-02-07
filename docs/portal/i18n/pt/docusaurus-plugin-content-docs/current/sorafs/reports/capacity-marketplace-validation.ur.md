@@ -4,54 +4,54 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: SoraFS Capacity Marketplace Validation
-summary: Acceptance checklist جو provider onboarding، dispute workflows اور treasury reconciliation کو کور کرتی ہے اور SoraFS capacity marketplace کی GA کو gate کرتی ہے۔
-tags: [SF-2c, acceptance, checklist]
+título: Validação de mercado de capacidade SoraFS
+resumo: Lista de verificação de aceitação جو integração do provedor ، fluxos de trabalho de disputa اور reconciliação de tesouraria کو کور کرتی ہے اور Mercado de capacidade SoraFS کی GA کو portão کرتی ہے۔
+tags: [SF-2c, aceitação, lista de verificação]
 ---
 
-# SoraFS Capacity Marketplace Validation Checklist
+# Lista de verificação de validação do mercado de capacidade SoraFS
 
-**Review window:** 2026-03-18 -> 2026-03-24  
-**Programme owners:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Scope:** Provider onboarding pipelines، dispute adjudication flows، اور treasury reconciliation processes جو SF-2c GA کے لئے درکار ہیں۔
+**Janela de revisão:** 18/03/2026 -> 24/03/2026  
+**Proprietários do programa:** Equipe de armazenamento (`@storage-wg`), Conselho de governança (`@council`), Treasury Guild (`@treasury`)  
+**Escopo:** Pipelines de integração de provedores, fluxos de adjudicação de disputas, e processos de reconciliação de tesouraria e SF-2c GA کے لئے درکار ہیں۔
 
-نیچے دی گئی checklist کو بیرونی operators کے لئے marketplace enable کرنے سے پہلے review کرنا لازم ہے۔ ہر row deterministic evidence (tests, fixtures, یا documentation) سے لنک کرتی ہے جسے auditors replay کر سکتے ہیں۔
+نیچے دی گئی checklist کو بیرونی operadores کے لئے marketplace enable کرنے سے پہلے revisão کرنا لازم ہے۔ ہر evidência determinística de linha (testes, acessórios, documentação) سے لنک کرتی ہے جسے repetição dos auditores کر سکتے ہیں۔
 
-## Acceptance Checklist
+## Lista de verificação de aceitação
 
-### Provider Onboarding
+### Integração do Provedor
 
-| Check | Validation | Evidence |
+| Verifique | Validação | Evidência |
 |-------|------------|----------|
-| Registry canonical capacity declarations قبول کرتا ہے | Integration test app API کے ذریعے `/v1/sorafs/capacity/declare` چلایا جاتا ہے، signatures handling، metadata capture، اور node registry تک hand-off کو verify کرتا ہے۔ | `crates/iroha_torii/src/routing.rs:7654` |
-| Smart contract mismatched payloads کو reject کرتا ہے | Unit test یقینی بناتا ہے کہ provider IDs اور committed GiB fields signed declaration کے مطابق ہوں قبل از persistence۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| CLI canonical onboarding artefacts emit کرتا ہے | CLI harness deterministic Norito/JSON/Base64 outputs لکھتا ہے اور round-trips validate کرتا ہے تاکہ operators offline declarations تیار کر سکیں۔ | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| Operator guide admission workflow اور governance guardrails کو cover کرتا ہے | Documentation declaration schema، policy defaults، اور council review steps کو enumerate کرتی ہے۔ | `../storage-capacity-marketplace.md` |
+| Declarações de capacidade canônica do registro قبول کرتا ہے | API do aplicativo de teste de integração کے ذریعے `/v1/sorafs/capacity/declare` چلایا جاتا ہے, manipulação de assinaturas, captura de metadados, registro de nó, transferência e verificação کرتا ہے۔ | `crates/iroha_torii/src/routing.rs:7654` |
+| Cargas úteis incompatíveis de contrato inteligente کو rejeitar کرتا ہے | Teste de unidade یقینی بناتا ہے کہ IDs de provedor اور campos GiB comprometidos declaração assinada کے مطابق ہوں قبل از persistência۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| Artefatos de integração canônicos CLI emitem کرتا ہے | Chicote CLI determinístico Saídas Norito/JSON/Base64 لکھتا ہے اور viagens de ida e volta validam کرتا ہے تاکہ declarações offline de operadores تیار کر سکیں۔ | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+| Guia do operador fluxo de trabalho de admissão اور guarda-corpos de governança کو cobertura کرتا ہے | Esquema de declaração de documentação, padrões de política, etapas de revisão do conselho e enumerar کرتی ہے۔ | `../storage-capacity-marketplace.md` |
 
-### Dispute Resolution
+### Resolução de disputas
 
-| Check | Validation | Evidence |
+| Verifique | Validação | Evidência |
 |-------|------------|----------|
-| Dispute records canonical payload digest کے ساتھ persist ہوتے ہیں | Unit test dispute register کرتا ہے، stored payload decode کرتا ہے، اور pending status assert کرتا ہے تاکہ ledger determinism یقینی ہو۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| CLI dispute generator canonical schema سے match کرتا ہے | CLI test `CapacityDisputeV1` کے لئے Base64/Norito outputs اور JSON summaries cover کرتا ہے، جس سے evidence bundles deterministic hash ہوتے ہیں۔ | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Replay test dispute/penalty determinism کو ثابت کرتا ہے | Proof-failure telemetry کو دو بار replay کرنے سے ledger، credit اور dispute snapshots یکساں بنتے ہیں تاکہ slashes peers کے درمیان deterministic رہیں۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| Runbook escalation اور revocation flow کو document کرتا ہے | Operations guide council workflow، evidence requirements اور rollback procedures کو capture کرتا ہے۔ | `../dispute-revocation-runbook.md` |
+| Disputa registra resumo de carga útil canônico کے ساتھ persist ہوتے ہیں | Registro de disputa de teste de unidade کرتا ہے، decodificação de carga útil armazenada کرتا ہے، اور afirmação de status pendente کرتا ہے تاکہ determinismo de razão یقینی ہو۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| Esquema canônico do gerador de disputa CLI سے match کرتا ہے | Teste CLI `CapacityDisputeV1` کے لئے Base64/Norito saídas e resumos JSON cobrem کرتا ہے, جس سے pacotes de evidências hash determinístico ہوتے ہیں۔ | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| Teste de repetição determinismo de disputa/penalidade کو ثابت کرتا ہے | Telemetria de prova de falha کو دو بار replay کرنے سے razão, crédito اور instantâneos de disputa یکساں بنتے ہیں تاکہ corta pares کے درمیان determinístico رہیں۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| Escalação de runbook e fluxo de revogação کو documento کرتا ہے | Guia de operações do fluxo de trabalho do conselho, requisitos de evidência e procedimentos de reversão e captura de dados | `../dispute-revocation-runbook.md` |
 
-### Treasury Reconciliation
-
-| Check | Validation | Evidence |
+### Reconciliação de Tesouraria| Verifique | Validação | Evidência |
 |-------|------------|----------|
-| Ledger accrual 30-day soak projection سے match کرتا ہے | Soak test پانچ providers کو 30 settlement windows میں چلاتا ہے، ledger entries کو expected payout reference کے ساتھ diff کرتا ہے۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| Ledger export reconciliation ہر رات record ہوتا ہے | `capacity_reconcile.py` fee ledger expectations کو executed XOR transfer exports کے ساتھ compare کرتا ہے، Prometheus metrics emit کرتا ہے، اور Alertmanager کے ذریعے treasury approval gate کرتا ہے۔ | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Billing dashboards penalties اور accrual telemetry surface کرتے ہیں | Grafana import GiB-hour accrual، strike counters، اور bonded collateral plot کرتا ہے تاکہ on-call visibility ملے۔ | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| Published report soak methodology اور replay commands archive کرتا ہے | Report soak scope، execution commands اور observability hooks کو auditors کے لئے detail کرتا ہے۔ | `./sf2c-capacity-soak.md` |
+| Projeção de absorção de 30 dias de acumulação do razão سے correspondência کرتا ہے | Teste de absorção پانچ provedores کو 30 janelas de liquidação میں چلاتا ہے، entradas do razão کو referência de pagamento esperado کے ساتھ diff کرتا ہے۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| Reconciliação de exportação do razão ہر رات registro ہوتا ہے | Expectativas do razão de taxas `capacity_reconcile.py` کو exportações de transferência XOR executadas کے ساتھ comparar کرتا ہے, métricas Prometheus emitem کرتا ہے, اور Alertmanager کے ذریعے portão de aprovação do tesouro کرتا ہے۔ | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| Penalidades nos painéis de faturamento e superfície de telemetria de acumulação کرتے ہیں | Grafana importar acúmulo de GiB-hora, contadores de greve, e gráfico de garantia vinculada کرتا ہے تاکہ visibilidade de plantão ملے۔ | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+| Relatório publicado metodologia de imersão e arquivo de comandos de repetição کرتا ہے | Relatório absorve escopo, comandos de execução e ganchos de observabilidade کو auditores کے لئے detalhes کرتا ہے۔ | `./sf2c-capacity-soak.md` |
 
-## Execution Notes
+## Notas de Execução
 
-Sign-off سے پہلے validation suite دوبارہ چلائیں:
+Assinatura do conjunto de validação دوبارہ چلائیں:
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -63,20 +63,20 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operators کو `sorafs_manifest_stub capacity {declaration,dispute}` کے ساتھ onboarding/dispute request payloads دوبارہ generate کرنے چاہئیں اور بنے ہوئے JSON/Norito bytes کو governance ticket کے ساتھ archive کرنا چاہیے۔
+Operadores کو `sorafs_manifest_stub capacity {declaration,dispute}` کے ساتھ cargas úteis de solicitação de integração/disputa دوبارہ gerar کرنے چاہئیں اور بنے ہوئے JSON/Norito bytes کو ticket de governança کے ساتھ arquivo کرنا چاہیے۔
 
-## Sign-off Artefacts
+## Artefatos de aprovação
 
-| Artefact | Path | blake2b-256 |
-|----------|------|-------------|
-| Provider onboarding approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Dispute resolution approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Treasury reconciliation approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| Artefato | Caminho | blake2b-256 |
+|----------|------|------------|
+| Pacote de aprovação de integração do provedor | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+| Pacote de aprovação para resolução de disputas | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+| Pacote de aprovação de reconciliação do Tesouro | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-ان artefacts کی signed copies کو release bundle کے ساتھ محفوظ کریں اور governance change record میں لنک کریں۔
+ان artefatos کی cópias assinadas کو pacote de lançamento کے ساتھ محفوظ کریں اور registro de mudança de governança میں لنک کریں۔
 
-## Approvals
+## Aprovações
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- Líder da equipe de armazenamento - @storage-tl (24/03/2026)  
+- Secretário do Conselho de Governança — @council-sec (2026/03/24)  
+- Líder de Operações de Tesouraria — @treasury-ops (24/03/2026)

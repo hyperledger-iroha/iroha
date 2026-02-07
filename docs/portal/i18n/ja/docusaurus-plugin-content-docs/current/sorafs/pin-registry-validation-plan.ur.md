@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/sorafs/pin-registry-validation-plan.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: pin-registry-validation-plan
-title: Pin Registry کے manifests کی توثیقی منصوبہ بندی
-sidebar_label: Pin Registry توثیق
-description: SF-4 Pin Registry rollout سے پہلے ManifestV1 gating کے لیے توثیقی منصوبہ۔
+タイトル: Pin レジストリのマニフェスト توثیقی منصوبہ بندی
+Sidebar_label: レジストリをピン留めする
+説明: SF-4 Pin Registry のロールアウト、ManifestV1 のゲート制御、および منصوبہ۔
 ---
 
-:::note مستند ماخذ
+:::note メモ
 یہ صفحہ `docs/source/sorafs/pin_registry_validation_plan.md` کی عکاسی کرتا ہے۔ جب تک پرانی دستاویزات فعال ہیں دونوں مقامات کو ہم آہنگ رکھیں۔
 :::
 
-# Pin Registry Manifest Validation Plan (SF-4 Prep)
+# Pin レジストリ マニフェスト検証計画 (SF-4 準備)
 
 یہ منصوبہ وہ اقدامات بیان کرتا ہے جو `sorafs_manifest::ManifestV1` کی توثیق کو
-آنے والے Pin Registry کنٹریکٹ میں جوڑنے کے لیے درکار ہیں تاکہ SF-4 کا کام
-موجودہ tooling پر استوار ہو اور encode/decode منطق کی نقل نہ بنے۔
+ピン レジストリ کنٹریکٹ میں جوڑنے کے لیے درکار ہیں تاکہ SF-4 کا کام
+ツールのエンコード/デコードの実行
 
-## مقاصد
+## 大事
 
-1. Host-side submission راستے manifest کی ساخت، chunking profile، اور governance
-   envelopes کو proposals قبول کرنے سے پہلے verify کرتے ہیں۔
-2. Torii اور gateway سروسز وہی validation routines دوبارہ استعمال کرتی ہیں تاکہ
-   hosts کے درمیان deterministic behavior برقرار رہے۔
-3. Integration tests مثبت/منفی کیسز کو کور کرتے ہیں، جن میں manifest acceptance،
-   policy enforcement، اور error telemetry شامل ہیں۔
+1. ホスト側の提出マニフェスト、チャンキング プロファイル、ガバナンス
+   封筒 プロポーズ قبول کرنے سے پہلے 確認 کرتے ہیں۔
+2. Torii ゲートウェイの検証ルーチンの検証ルーチン
+   ホストの決定論的な動作
+3. 統合テストのテスト/テスト、マニフェストの受け入れ、テスト
+   ポリシーの施行、エラー テレメトリ、および
 
-## Architecture
+## アーキテクチャ
 
 ```mermaid
 flowchart LR
@@ -44,45 +46,45 @@ flowchart LR
     registry --> torii
 ```
 
-### Components
+### コンポーネント
 
-- `ManifestValidator` (`sorafs_manifest` یا `sorafs_pin` crate میں نیا ماڈیول)
-  ساختی چیکس اور policy gates کو encapsulate کرتا ہے۔
-- Torii ایک gRPC endpoint `SubmitManifest` expose کرتا ہے جو کنٹریکٹ کو forward
-  کرنے سے پہلے `ManifestValidator` کو کال کرتا ہے۔
-- Gateway fetch path optionally وہی validator استعمال کرتا ہے جب registry سے
-  نئے manifests cache کیے جائیں۔
+- `ManifestValidator` (`sorafs_manifest` یا `sorafs_pin` クレート میں نیا ماڈیول)
+  ポリシー ゲートをカプセル化する
+- Torii gRPC エンドポイント `SubmitManifest` 転送を公開します
+  سے پہلے `ManifestValidator` کو کال کرتا ہے۔
+- ゲートウェイフェッチパス (オプション) バリデーター、レジストリー、レジストリ
+  マニフェスト キャッシュ
 
-## Task Breakdown
+## タスクの内訳
 
-| Task | Description | Owner | Status |
-|------|-------------|-------|--------|
-| V1 API skeleton | `sorafs_manifest` میں `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` شامل کریں۔ BLAKE3 digest verification اور chunker registry lookup شامل کریں۔ | Core Infra | ✅ Done | مشترکہ helpers (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) اب `sorafs_manifest::validation` میں ہیں۔ |
-| Policy wiring | registry policy config (`min_replicas`, expiry windows, allowed chunker handles) کو validation inputs سے map کریں۔ | Governance / Core Infra | Pending — SORAFS-215 میں ٹریکڈ |
-| Torii integration | Torii submission path کے اندر validator کال کریں؛ failure پر structured Norito errors واپس کریں۔ | Torii Team | Planned — SORAFS-216 میں ٹریکڈ |
-| Host contract stub | یقینی بنائیں کہ contract entrypoint وہ manifests reject کرے جو validation hash میں fail ہوں؛ metrics counters ظاہر کریں۔ | Smart Contract Team | ✅ Done | `RegisterPinManifest` اب state mutate کرنے سے پہلے shared validator (`ensure_chunker_handle`/`ensure_pin_policy`) چلاتا ہے اور unit tests failure cases کور کرتے ہیں۔ |
-| Tests | validator کے لیے unit tests + invalid manifests کے لیے trybuild cases شامل کریں؛ `crates/iroha_core/tests/pin_registry.rs` میں integration tests شامل کریں۔ | QA Guild | 🟠 In progress | validator unit tests on-chain rejection tests کے ساتھ آ گئے ہیں؛ مکمل integration suite ابھی باقی ہے۔ |
-| Docs | validator آنے کے بعد `docs/source/sorafs_architecture_rfc.md` اور `migration_roadmap.md` اپڈیٹ کریں؛ CLI استعمال `docs/source/sorafs/manifest_pipeline.md` میں لکھیں۔ | Docs Team | Pending — DOCS-489 میں ٹریکڈ |
+|タスク |説明 |オーナー |ステータス |
+|------|-------------|------|----------|
+| V1 API スケルトン | `sorafs_manifest` すごい `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` すごいBLAKE3 ダイジェスト検証、チャンカー レジストリ検索の実行|コアインフラ | ✅ 完了 |ヘルパー (`validate_chunker_handle`、`validate_pin_policy`、`validate_manifest`) および `sorafs_manifest::validation` میں ہیں۔ |
+|ポリシーの配線 |レジストリ ポリシー設定 (`min_replicas`、有効期限ウィンドウ、許可されたチャンカー ハンドル) 検証入力とマップ|ガバナンス / コアインフラ |保留中 — SORAFS-215 میں ٹریکڈ |
+| Torii 統合 | Torii 送信パス テスト バリデーター テスト障害 構造化 Norito エラー واپس کریں۔ | Torii チーム |計画中 — SORAFS-216 میں ٹریکڈ |
+|ホスト契約スタブ |契約のエントリーポイント マニフェスト拒否 検証ハッシュ 失敗 契約のエントリポイントメトリクス カウンター|スマートコントラクトチーム | ✅ 完了 | `RegisterPinManifest` 状態の変更 共有バリデータ (`ensure_chunker_handle`/`ensure_pin_policy`) 単体テストの失敗例 単体テストの失敗例|
+|テスト |バリデータ 単体テスト + 無効なマニフェスト Trybuild ケース`crates/iroha_core/tests/pin_registry.rs` 統合テストのテスト| QAギルド | 🟠 進行中 |バリデータ単体テスト オンチェーン拒否テスト統合スイート 統合スイート|
+|ドキュメント |バリデーター آنے کے بعد `docs/source/sorafs_architecture_rfc.md` اور `migration_roadmap.md` اپڈیٹ کریں؛ CLI は `docs/source/sorafs/manifest_pipeline.md` を実行します。 |ドキュメントチーム |保留中 — DOCS-489 ٹریکڈ |
 
-## Dependencies
+## 依存関係
 
-- Pin Registry Norito schema کی تکمیل (ref: roadmap میں SF-4 آئٹم)۔
-- Council-signed chunker registry envelopes (validator mapping کو deterministic بناتے ہیں)۔
-- Manifest submission کے لیے Torii authentication فیصلے۔
+- ピン レジストリ Norito スキーマ (参照: ロードマップ SF-4 の図)۔
+- 評議会が署名したチャンカー レジストリ エンベロープ (バリデータ マッピング、決定論的手法)۔
+- マニフェストの提出 فیصلے۔ Torii 認証 فیصلے۔
 
-## Risks & Mitigations
+## リスクと軽減策
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Torii اور کنٹریکٹ کے درمیان policy interpretation میں فرق | Non-deterministic acceptance۔ | validation crate شیئر کریں + host vs on-chain فیصلوں کا موازنہ کرنے والی integration tests شامل کریں۔ |
-| بڑے manifests کے لیے performance regression | Submission سست | cargo criterion سے benchmark کریں؛ manifest digest results cache کرنے پر غور کریں۔ |
-| Error messaging drift | Operators میں کنفیوژن | Norito error codes define کریں؛ `manifest_pipeline.md` میں document کریں۔ |
+|リスク |影響 |緩和 |
+|------|--------|-----------|
+| Torii セキュリティ ポリシーの解釈 セキュリティ | Torii非決定的な受け入れ|検証クレート + ホスト vs オンチェーン 統合テスト 統合テスト|
+|パフォーマンスの回帰を明らかにします。提出する貨物基準 ベンチマークマニフェスト ダイジェスト結果キャッシュ|
+|エラー メッセージのドリフト |演算子Norito エラー コードは次のとおりです`manifest_pipeline.md` ドキュメント ٩ریں۔ |
 
-## Timeline Targets
+## タイムラインのターゲット
 
-- Week 1: `ManifestValidator` skeleton + unit tests لینڈ کریں۔
-- Week 2: Torii submission path wire کریں اور CLI کو validation errors دکھانے کے لیے اپڈیٹ کریں۔
-- Week 3: contract hooks implement کریں، integration tests شامل کریں، docs اپڈیٹ کریں۔
-- Week 4: migration ledger entry کے ساتھ end-to-end rehearsal چلائیں اور council sign-off حاصل کریں۔
+- 1 週目: `ManifestValidator` スケルトン + 単体テスト
+- 2 週目: Torii サブミット パス ワイヤ کریں اور CLI کو 検証エラー دکھانے کے لیے اپڈیٹ کریں۔
+- 3 週目: コントラクトフックは統合テストを実装します。
+- 第 4 週: 移行台帳の入力、エンドツーエンドのリハーサル、評議会の承認、および承認
 
-یہ منصوبہ validator کام شروع ہونے کے بعد roadmap میں حوالہ دیا جائے گا۔
+یہ منصوبہ validator کام شروع ہونے کے بعد ロードマップ میں حوالہ دیا جائے گا۔

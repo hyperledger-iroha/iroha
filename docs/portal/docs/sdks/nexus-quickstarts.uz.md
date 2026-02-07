@@ -10,13 +10,14 @@ translation_last_reviewed: 2026-02-07
 id: nexus-quickstarts
 title: Nexus SDK quickstarts
 description: Minimal steps for Rust/JS/Swift/Android/CLI SDKs to connect to Sora Nexus.
+translator: machine-google-reviewed
 ---
 
-The full quickstart lives at `docs/source/nexus_sdk_quickstarts.md`. This portal
-summary highlights the shared prerequisites and per-SDK commands so developers
-can verify their setup quickly.
+To'liq tezkor ishga tushirish `docs/source/nexus_sdk_quickstarts.md` da ishlaydi. Ushbu portal
+Xulosa ishlab chiquvchilar uchun umumiy shartlar va har bir SDK buyruqlarini ta'kidlaydi
+ularning sozlamalarini tezda tekshirishi mumkin.
 
-## Shared setup
+## Umumiy sozlash
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -25,11 +26,11 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Download the Nexus config bundle, install each SDK’s dependencies, and ensure
-TLS certificates match the release profile (see
+Nexus konfiguratsiya to'plamini yuklab oling, har bir SDK bog'liqligini o'rnating va ishonch hosil qiling
+TLS sertifikatlari nashr profiliga mos keladi (qarang
 `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## Zang
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -46,16 +47,16 @@ Refs: `docs/source/sdk/rust.md`
 npm run demo:nexus
 ```
 
-The script instantiates `ToriiClient` with the env vars above and prints the
-latest block.
+Skript yuqoridagi env varslari bilan `ToriiClient` ni yaratadi va chop etadi
+oxirgi blok.
 
-## Swift
+## Tezkor
 
 ```bash
 make swift-nexus-demo
 ```
 
-Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
+`FindNetworkStatus` ni olish uchun `IrohaSwift` dan `Torii.Client` dan foydalanadi.
 
 ## Android
 
@@ -65,7 +66,7 @@ Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Runs the managed-device test hitting the Nexus staging endpoint.
+Nexus bosqichma-bosqich yakuniy nuqtasiga tegib, boshqariladigan qurilma testini ishga tushiradi.
 
 ## CLI
 
@@ -76,13 +77,13 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Troubleshooting
+## Nosozliklarni bartaraf etish
 
-- TLS failures → confirm the CA bundle from the Nexus release tarball.
-- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` once multi-lane routing
-  is enforced.
-- `ERR_SETTLEMENT_PAUSED` → check [Nexus operations](../nexus/nexus-operations) for the
-  incident process; governance may have paused the lane.
+- TLS nosozliklari → Nexus reliz tarballidan CA to'plamini tasdiqlang.
+- `ERR_UNKNOWN_LANE` → `--lane-id`/`--dataspace-id` bir marta ko'p qatorli marshrutga o'ting
+  amalga oshiriladi.
+- `ERR_SETTLEMENT_PAUSED` → [Nexus operatsiyalarini](../nexus/nexus-operations) tekshiring
+  hodisa jarayoni; boshqaruv yo'lni to'xtatib qo'ygan bo'lishi mumkin.
 
-For deeper context and SDK-specific explanations see
+Chuqurroq kontekst va SDK-ga xos tushuntirishlar uchun qarang
 `docs/source/nexus_sdk_quickstarts.md`.

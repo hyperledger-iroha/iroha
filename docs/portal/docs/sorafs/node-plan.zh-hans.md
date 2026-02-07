@@ -11,108 +11,109 @@ id: node-plan
 title: SoraFS Node Implementation Plan
 sidebar_label: Node Implementation Plan
 description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii process into a SoraFS storage provider. Use this plan alongside the [node storage guide](node-storage.md), [provider admission policy](provider-admission-policy.md), and [storage capacity marketplace roadmap](storage-capacity-marketplace.md) when sequencing deliverables.
+SF-3 提供了第一个可运行的 `sorafs-node` 包，可将 Iroha/Torii 进程转变为 SoraFS 存储提供程序。在对可交付成果进行排序时，请将此计划与[节点存储指南](node-storage.md)、[提供商准入政策](provider-admission-policy.md) 和[存储容量市场路线图](storage-capacity-marketplace.md) 一起使用。
 
-## Target Scope (Milestone M1)
+## 目标范围（里程碑 M1）
 
-1. **Chunk store integration.** Wrap `sorafs_car::ChunkStore` with a persistent backend that stores chunk bytes, manifests, and PoR trees in the configured data directory.
-2. **Gateway endpoints.** Expose Norito HTTP endpoints for pin submission, chunk fetch, PoR sampling, and storage telemetry within the Torii process.
-3. **Configuration plumbing.** Add a `SoraFsStorage` config struct (enabled flag, capacity, directories, concurrency limits) wired through `iroha_config`, `iroha_core`, and `iroha_torii`.
-4. **Quota/scheduling.** Enforce operator-defined disk/parallelism limits and queue requests with back-pressure.
-5. **Telemetry.** Emit metrics/logs for pin success, chunk fetch latency, capacity utilisation, and PoR sampling results.
+1. **块存储集成。** 使用持久后端包装 `sorafs_car::ChunkStore`，该后端在配置的数据目录中存储块字节、清单和 PoR 树。
+2. **网关端点。** 公开 Norito HTTP 端点，用于 Torii 进程中的 pin 提交、块获取、PoR 采样和存储遥测。
+3. **配置管道。** 添加通过 `iroha_config`、`iroha_core` 和 `iroha_torii` 连接的 `SoraFsStorage` 配置结构（启用标志、容量、目录、并发限制）。
+4. **配额/调度。** 通过背压强制执行操作员定义的磁盘/并行度限制和队列请求。
+5. **遥测。** 发出 pin 成功、块获取延迟、容量利用率和 PoR 采样结果的指标/日志。
 
-## Work Breakdown
+## 工作分解
 
-### A. Crate & Module Structure
+### A. 板条箱和模块结构
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (user → actual → defaults). | Storage Team / Config WG | Ensure the Norito/`iroha_config` layers remain deterministic. |
-| Provide a `NodeHandle` facade Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals and async plumbing. |
+|任务|所有者 |笔记|
+|------|----------|--------|
+|使用以下模块创建 `crates/sorafs_node`：`config`、`store`、`gateway`、`scheduler`、`telemetry`。 |存储团队|重新导出可重用类型以进行 Torii 集成。 |
+|实现从 `SoraFsStorage` 映射的 `StorageConfig`（用户 → 实际 → 默认值）。 |存储团队/配置工作组 |确保 Norito/`iroha_config` 层保持确定性。 |
+|提供 `NodeHandle` 外观 Torii 用于提交 pin/fetch。 |存储团队|封装存储内部结构和异步管道。 |
 
-### B. Persistent Chunk Store
+### B. 持久块存储
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Build a disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (`sled`/`sqlite`). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Maintain PoR metadata (64 KiB/4 KiB trees) using `ChunkStore::sample_leaves`. | Storage Team | Support replay after restart; fail fast on corruption. |
-| Implement integrity replay on startup (rehash manifests, prune incomplete pins). | Storage Team | Block Torii start until replay completes. |
+|任务|所有者 |笔记|
+|------|----------|--------|
+|使用磁盘清单索引 (`sled`/`sqlite`) 构建磁盘后端包装 `sorafs_car::ChunkStore`。 |存储团队|确定性布局：`<data_dir>/<manifest_cid>/chunk_{idx}.bin`。 |
+|使用 `ChunkStore::sample_leaves` 维护 PoR 元数据（64KiB/4KiB 树）。 |存储团队|支持重启后回放；腐败问题快速失败。 |
+|在启动时实施完整性重放（重新散列清单、修剪不完整的引脚）。 |存储团队|阻止 Torii 启动，直到重播完成。 |
 
-### C. Gateway Endpoints
+### C. 网关端点
 
-| Endpoint | Behaviour | Tasks |
-|----------|-----------|-------|
-| `POST /sorafs/pin` | Accept `PinProposalV1`, validate manifests, queue ingestion, respond with manifest CID. | Validate chunk profile, enforce quotas, stream data via chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Serve chunk bytes with `Content-Chunker` headers; respect range capability spec. | Use scheduler + stream budgets (tie into SF-2d range capability). |
-| `POST /sorafs/por/sample` | Run PoR sampling for a manifest and return proof bundle. | Reuse chunk store sampling, respond with Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Summaries: capacity, PoR success, fetch error counts. | Provide data for dashboards/operators. |
+|端点 |行为 |任务 |
+|----------|------------|--------|
+| `POST /sorafs/pin` |接受 `PinProposalV1`，验证清单，队列摄取，使用清单 CID 进行响应。 |验证块配置文件、强制配额、通过块存储传输数据。 |
+| `GET /sorafs/chunks/{cid}` + 范围查询 |使用 `Content-Chunker` 标头提供块字节；遵守范围能力规范。 |使用调度程序 + 流预算（与 SF-2d 范围功能相关）。 |
+| `POST /sorafs/por/sample` |对清单和退货证明包运行 PoR 采样。 |重用块存储采样，使用 Norito JSON 有效负载进行响应。 |
+| `GET /sorafs/telemetry` |摘要：容量、PoR 成功、获取错误计数。 |为仪表板/操作员提供数据。 |
 
-Runtime plumbing threads PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` metrics reflect governance verdicts without bespoke Torii logic.【crates/sorafs_node/src/scheduler.rs#L147】
+运行时管道通过 `sorafs_node::por` 线程 PoR 交互：跟踪器记录每个 `PorChallengeV1`、`PorProofV1` 和 `AuditVerdictV1`，因此 `CapacityMeter` 指标反映治理结论，无需定制 Torii逻辑.【crates/sorafs_node/src/scheduler.rs#L147】
 
-Implementation notes:
+实施注意事项：
 
-- Use Torii’s Axum stack with `norito::json` payloads.
-- Add Norito schemas for responses (`PinResultV1`, `FetchErrorV1`, telemetry structs).
+- 将 Torii 的 Axum 堆栈与 `norito::json` 有效负载结合使用。
+- 添加 Norito 响应模式（`PinResultV1`、`FetchErrorV1`、遥测结构）。
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now exposes backlog depth plus the oldest epoch/deadline and
-  the most recent success/failure timestamps for each provider, powered by
-  `sorafs_node::NodeHandle::por_ingestion_status`, and Torii records the
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges for dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` 现在公开积压深度以及最旧的纪元/截止日期和
+  每个提供商最近的成功/失败时间戳，由
+  `sorafs_node::NodeHandle::por_ingestion_status` 和 Torii 记录
+  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` 仪表仪表板.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
-### D. Scheduler & Quota Enforcement
+### D. 调度程序和配额执行
 
-| Task | Details |
+|任务|详情 |
 |------|---------|
-| Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) plus per-provider budgets sourced from SF-2d range caps. |
-| Pin queue | Limit outstanding ingestion jobs; expose Norito status endpoints for queue depth. |
-| PoR cadence | Background worker driven by `por_sample_interval_secs`. |
+|磁盘配额 |跟踪磁盘上的字节；当超过 `max_capacity_bytes` 时拒绝新的引脚。为未来的政策提供驱逐钩子。 |
+|获取并发|全局信号量 (`max_parallel_fetches`) 加上来自 SF-2d 范围上限的每个提供商的预算。 |
+|引脚队列 |限制未完成的摄取作业；公开队列深度的 Norito 状态端点。 |
+| PoR 节奏 |由 `por_sample_interval_secs` 驱动的后台工作者。 |
 
-### E. Telemetry & Logging
+### E. 遥测和记录
 
-Metrics (Prometheus):
+指标（Prometheus）：
 
 - `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histogram with `result` labels)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
+- `sorafs_chunk_fetch_duration_seconds`（带有 `result` 标签的直方图）
+- `torii_sorafs_storage_bytes_used`、`torii_sorafs_storage_bytes_capacity`
+- `torii_sorafs_storage_pin_queue_depth`、`torii_sorafs_storage_fetch_inflight`
 - `torii_sorafs_storage_fetch_bytes_per_sec`
 - `torii_sorafs_storage_por_inflight`
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
+- `torii_sorafs_storage_por_samples_success_total`、`torii_sorafs_storage_por_samples_failed_total`
 
-Logs / events:
+日志/事件：
 
-- Structured Norito telemetry for governance ingestion (`StorageTelemetryV1`).
-- Alerts when utilisation > 90% or PoR failure streak exceeds threshold.
+- 用于治理摄取的结构化 Norito 遥测 (`StorageTelemetryV1`)。
+- 当利用率 >90% 或 PoR 故障连续超过阈值时发出警报。
 
-### F. Testing Strategy
+### F. 测试策略
 
-1. **Unit tests.** Chunk store persistence, quota calculations, scheduler invariants (see `crates/sorafs_node/src/scheduler.rs`).  
-2. **Integration tests** (`crates/sorafs_node/tests`). Pin → fetch round trip, restart recovery, quota rejection, PoR sampling proof verification.  
-3. **Torii integration tests.** Run Torii with storage enabled, exercise HTTP endpoints via `assert_cmd`.  
-4. **Chaos roadmap.** Future drills simulate disk exhaustion, slow IO, provider removal.
+1. **单元测试。** 块存储持久性、配额计算、调度程序不变量（请参阅 `crates/sorafs_node/src/scheduler.rs`）。  
+2. **集成测试** (`crates/sorafs_node/tests`)。 Pin → 取回往返、重启恢复、配额拒绝、PoR 采样证明验证。  
+3. **Torii 集成测试。** 在启用存储的情况下运行 Torii，通过 `assert_cmd` 执行 HTTP 端点。  
+4. **混乱路线图。** 未来的演练将模拟磁盘耗尽、IO 缓慢、提供程序删除。
 
-## Dependencies
+## 依赖关系
 
-- SF-2b admission policy — ensure nodes verify admission envelopes before advertising.  
-- SF-2c capacity marketplace — tie telemetry back into capacity declarations.  
-- SF-2d advert extensions — consume range capability + stream budgets once available.
+- SF-2b 准入策略 — 确保节点在发布广告之前验证准入信封。  
+- SF-2c 容量市场 — 将遥测技术与容量声明联系起来。  
+- SF-2d 广告扩展 — 消耗范围能力 + 可用的流预算。
 
-## Milestone Exit Criteria
+## 里程碑退出标准
 
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.  
-- Torii builds with `--features sorafs-storage` and passes integration tests.  
-- Documentation ([node storage guide](node-storage.md)) updated with configuration defaults + CLI examples; operator runbook available.  
-- Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
+- `cargo run -p sorafs_node --example pin_fetch` 适用于本地装置。  
+- Torii 使用 `--features sorafs-storage` 构建并通过集成测试。  
+- 使用默认配置+ CLI 示例更新了文档（[节点存储指南](node-storage.md)）；提供操作手册。  
+- 遥测在暂存仪表板中可见；针对容量饱和和 PoR 故障配置的警报。
 
-## Documentation & Ops Deliverables
+## 文档和运营交付成果
 
-- Update the [node storage reference](node-storage.md) with configuration defaults, CLI usage, and troubleshooting steps.  
-- Keep the [node operations runbook](node-operations.md) aligned with the implementation as SF-3 evolves.  
-- Publish API references for `/sorafs/*` endpoints inside the developer portal and wire them into the OpenAPI manifest once Torii handlers land.
+- 使用默认配置、CLI 用法和故障排除步骤更新[节点存储参考](node-storage.md)。  
+- 随着 SF-3 的发展，保持[节点操作运行手册](node-operations.md) 与实施保持一致。  
+- 在开发人员门户内发布 `/sorafs/*` 端点的 API 参考，并在 Torii 处理程序登陆后将它们连接到 OpenAPI 清单中。

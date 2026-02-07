@@ -8,25 +8,27 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet transport overview
 sidebar_label: Transport Overview
 description: Handshake, salt rotation, and capability guidance for the SoraNet anonymity overlay.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC streaming, and future Nexus data lanes. The transport program (roadmap items **SNNet-1**, **SNNet-1a**, and **SNNet-1b**) defined a deterministic handshake, post-quantum (PQ) capability negotiation, and salt rotation plan so every relay, client, and gateway observes the same security posture.
+SoraNet የSoraFS ክልል ፈልጎዎችን፣ Norito RPC ዥረትን እና የወደፊት የNexus የመረጃ መስመሮችን የሚደግፍ ማንነትን መደበቅ ተደራቢ ነው። የትራንስፖርት መርሃ ግብሩ (የመንገድ ካርታ እቃዎች **SNNet-1**፣ **SNNet-1a** እና **SNNet-1b**) የሚወስን መጨባበጥ፣ድህረ-ኳንተም (PQ) የችሎታ ድርድር እና የጨው ሽክርክር እቅድ እያንዳንዱ ቅብብሎሽ፣ ደንበኛ እና መግቢያ በር ተመሳሳይ የደህንነት አቋም እንዲታይ ወስኗል።
 
-## Goals & network model
+## ግቦች እና የአውታረ መረብ ሞዴል
 
-- Build three-hop circuits (entry → middle → exit) over QUIC v1 so abusive peers never reach Torii directly.
-- Layer a Noise XX *hybrid* handshake (Curve25519 + Kyber768) on top of QUIC/TLS to bind session keys to the TLS transcript.
-- Require capability TLVs that advertise PQ KEM/signature support, relay role, and protocol version; GREASE unknown types to keep future extensions deployable.
-- Rotate blinded-content salts daily and pin guard relays for 30 days so directory churn cannot deanonymize clients.
-- Keep cells fixed at 1024 B, inject padding/dummy cells, and export deterministic telemetry so downgrade attempts are caught quickly.
+- በQUIC v1 ላይ ባለ ሶስት-ሆፕ ወረዳዎችን (መግቢያ → መካከለኛ → መውጫ) ይገንቡ ስለዚህ ተሳዳቢ እኩዮች በቀጥታ ወደ Torii አይደርሱም።
+- የክፍለ ጊዜ ቁልፎችን ከTLS ግልባጭ ጋር ለማያያዝ በQUIC/TLS ላይ የ Noise XX *ድብልቅ* መጨባበጥ (Curve25519 + Kyber768) ንብር።
+- PQ KEM/የፊርማ ድጋፍን፣ የማስተላለፊያ ሚናን እና የፕሮቶኮል ሥሪትን የሚያስተዋውቁ የችሎታ TLVዎችን ይፈልጋሉ። የወደፊት ማራዘሚያዎች ተዘርግተው እንዲቆዩ የማይታወቁ ዓይነቶችን ይቀቡ።
+- የማውጫ ጩኸት የደንበኞቹን ማንነታቸው እንዳይገለጽ በየቀኑ የታወሩ የይዘት ጨዎችን እና የፒን ጠባቂ ማሰራጫዎችን ለ30 ቀናት ያሽከርክሩ።
+- ሕዋሶችን በ1024B እንዲጠግኑ ያድርጉ፣ ፕላዲንግ/ዱሚ ህዋሶችን በመርፌ እና ወደ ውጭ የሚላኩ ዲሲሜትሪቲስቲክ ቴሌሜትሪ ስለዚህ የማውረድ ሙከራዎች በፍጥነት እንዲያዙ ያድርጉ።
 
-## Handshake pipeline (SNNet-1a)
+## የመጨባበጥ ቧንቧ መስመር (SNNet-1a)
 
-1. **QUIC/TLS envelope** – clients dial relays over QUIC v1 and complete a TLS 1.3 handshake using Ed25519 certificates signed by the governance CA. The TLS exporter (`tls-exporter("soranet handshake", 64)`) seeds the Noise layer so the transcripts are inseparable.
-2. **Noise XX hybrid** – protocol string `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` with prologue = TLS exporter. Message flow:
+1. **QUIC/TLS ኤንቨሎፕ** - ደንበኞች በQUIC v1 ላይ ሪሌይ ይደውላሉ እና በአስተዳደር CA የተፈረመ በ Ed25519 የምስክር ወረቀቶች በመጠቀም TLS1.3 መጨባበጥ ያጠናቅቃሉ። የቲኤልኤስ ላኪ (`tls-exporter("soranet handshake", 64)`) የ Noise ንብርብርን ይዘራል ስለዚህ ግልባጮቹ የማይነጣጠሉ ናቸው።
+2. ** ጫጫታ ኤክስኤክስ ዲቃላ** - የፕሮቶኮል ሕብረቁምፊ `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` ከመቅድም ጋር = TLS ላኪ። የመልእክት ፍሰት፡-
 
    ```
    -> e, s
@@ -34,9 +36,9 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    -> ee, se, pq_ciphertext
    ```
 
-   Curve25519 DH output and both Kyber encapsulations are mixed into the final symmetric keys. Failure to negotiate PQ material aborts the handshake outright—no classical-only fallback is permitted.
+   Curve25519 DH ውፅዓት እና ሁለቱም የ Kyber ኢንካፕሱሎች ወደ መጨረሻው ሲሜትሪክ ቁልፎች ይደባለቃሉ። የPQ ቁሳቁስ አለመደራደር መጨባበጥን ያስወገደው - ምንም ክላሲካል-ብቻ ውድቀት አይፈቀድም።
 
-3. **Puzzle tickets & tokens** – relays can demand an Argon2id proof-of-work ticket before `ClientHello`. Tickets are length-prefixed frames that carry the hashed Argon2 solution and expire within the policy bounds:
+3. ** የእንቆቅልሽ ቲኬቶች እና ቶከኖች** - ሪሌሎች ከ`ClientHello` በፊት Argon2id የማረጋገጫ ትኬት ሊጠይቁ ይችላሉ። ትኬቶች የሃሽ Argon2 መፍትሄን የሚሸከሙ እና በመመሪያው ወሰን ውስጥ ጊዜያቸው የሚያልፍባቸው ረጅም ቅድመ ቅጥያ ክፈፎች ናቸው።
 
    ```norito
    struct PowTicketV1 {
@@ -48,15 +50,15 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    }
    ```
 
-   Admission tokens prefixed with `SNTK` bypass puzzles when an ML-DSA-44 signature from the issuer validates against the active policy and revocation list.
+   የML-DSA-44 ፊርማ ከአውጪው ከገባሪ ፖሊሲ እና የስረዛ ዝርዝር ጋር ሲወዳደር የመግቢያ ቶከኖች በ`SNTK` ማለፊያ እንቆቅልሾች ቅድመ ቅጥያ።
 
-4. **Capability TLV exchange** – the final Noise payload transports the capability TLVs described below. Clients abort the connection if any mandatory capability (PQ KEM/signature, role, or version) is missing or mismatched with the directory entry.
+4. ** የችሎታ TLV ልውውጥ *** - የመጨረሻው የድምፅ ጭነት ከዚህ በታች የተገለጹትን የችሎታ TLVs ያጓጉዛል። ማንኛውም የግዴታ አቅም (PQ KEM/ፊርማ፣ ሚና ወይም ስሪት) ከጎደለ ወይም ከማውጫው ግቤት ጋር ካልተዛመደ ደንበኞች ግንኙነቱን ያቋርጣሉ።
 
-5. **Transcript logging** – relays log the transcript hash, TLS fingerprint, and TLV contents to feed downgrade detectors and compliance pipelines.
+5. **የጽሑፍ ግልባጭ ምዝግብ ማስታወሻ** - የማስተላለፊያ ደብተሮች መዝገብ የጽሑፍ ግልባጭ ሃሽ፣ TLS የጣት አሻራ እና የ TLV ይዘቶችን ዝቅ ለማድረግ መመርመሪያዎችን እና ተገዢ ቧንቧዎችን ለመመገብ።
 
-## Capability TLVs (SNNet-1c)
+## አቅም TLVs (SNNet-1c)
 
-Capabilities reuse a fixed `typ/length/value` TLV envelope:
+ችሎታዎች ቋሚ `typ/length/value` TLV ፖስታ እንደገና መጠቀም
 
 ```norito
 struct CapabilityTLV {
@@ -66,48 +68,48 @@ struct CapabilityTLV {
 }
 ```
 
-Defined types today:
+ዛሬ የተገለጹ ዓይነቶች፡-
 
-- `snnet.pqkem` – Kyber level (`kyber768` for the current rollout).
-- `snnet.pqsig` – PQ signature suite (`ml-dsa-44`).
-- `snnet.role` – relay role (`entry`, `middle`, `exit`, `gateway`).
-- `snnet.version` – protocol version identifier.
-- `snnet.grease` – random filler entries in the reserved range to ensure future TLVs are tolerated.
+- `snnet.pqkem` - Kyber ደረጃ (ለአሁኑ ልቀት `kyber768`)።
+- `snnet.pqsig` – PQ ፊርማ ስብስብ (`ml-dsa-44`)።
+- `snnet.role` - የማስተላለፊያ ሚና (`entry`, `middle`, `exit`, I18NI0000021X).
+- `snnet.version` - የፕሮቶኮል ሥሪት መለያ።
+- `snnet.grease` - የወደፊት ቲኤልቪዎች መታገስን ለማረጋገጥ በተያዘው ክልል ውስጥ የዘፈቀደ መሙያ ግቤቶች።
 
-Clients maintain an allow-list of required TLVs and fail handshakes that omit or downgrade them. Relays publish the same set in their directory microdescriptor so validation is deterministic.
+ደንበኞች የሚፈለጉትን TLVዎች የተፈቀደላቸው ዝርዝር ይይዛሉ እና እነሱን የሚተው ወይም ዝቅ የሚያደርጉትን መጨባበጥ አይሳኩም። ማስተላለፎች ተመሳሳይ ስብስብ በማውጫቸው ማይክሮ ገለጻ ውስጥ ያትማሉ ስለዚህ ማረጋገጥ የሚወስነው።
 
-## Salt rotation & CID blinding (SNNet-1b)
+## የጨው ሽክርክሪት እና የ CID ዓይነ ስውር (SNNet-1b)
 
-- Governance publishes a `SaltRotationScheduleV1` record with `(epoch_id, salt, valid_after, valid_until)` values. Relays and gateways fetch the signed schedule from the directory publisher.
-- Clients apply the new salt at `valid_after`, keep the previous salt for a 12 h grace period, and retain a 7-epoch history to tolerate delayed updates.
-- Canonical blinded identifiers use:
+- አስተዳደር የI18NI0000024X ሪኮርድን ከ`(epoch_id, salt, valid_after, valid_until)` እሴቶች ጋር ያትማል። ማስተላለፎች እና መግቢያዎች የተፈረመውን መርሐግብር ከማውጫ አታሚው ያገኙታል።
+- ደንበኞች አዲሱን ጨው በI18NI0000026X ይተገብራሉ፣ የቀደመውን ጨው ለ12 ሰአታት የእፎይታ ጊዜ ያቆዩት እና የተዘገዩ ዝመናዎችን ለመቋቋም የ7-ኢፖክ ታሪክ ያቆያሉ።
+- ቀኖናዊ ዓይነ ስውር መለያዎች ይጠቀማሉ፡-
 
   ```
   cache_key = BLAKE3("soranet.blinding.canonical.v1" ∥ salt ∥ cid)
   ```
 
-  Gateways accept the blinded key via `Sora-Req-Blinded-CID` and echo it in `Sora-Content-CID`. Circuit/request blinding (`CircuitBlindingKey::derive`) ships in `iroha_crypto::soranet::blinding`.
-- If a relay misses an epoch, it halts new circuits until it downloads the schedule and emits a `SaltRecoveryEventV1`, which on-call dashboards treat as a paging signal.
+  ጌትዌይስ የታወረውን ቁልፍ በ`Sora-Req-Blinded-CID` ተቀብለው በ`Sora-Content-CID` አስተጋባ። የወረዳ/ጥያቄ ዓይነ ስውር (`CircuitBlindingKey::derive`) በ`iroha_crypto::soranet::blinding` ውስጥ ይጓዛሉ።
+- ሪሌይ አንድ ዘመን ካጣ፣ መርሃ ግብሩን እስኪያወርድ ድረስ አዳዲስ ወረዳዎችን ያቆማል እና `SaltRecoveryEventV1` ያወጣል፣ ይህም የጥሪ ዳሽቦርዶች እንደ ፔጂንግ ሲግናል ይቆጥሩታል።
 
-## Directory data & guard policy
+## የማውጫ መረጃ እና የጥበቃ ፖሊሲ
 
-- Microdescriptors carry relay identity (Ed25519 + ML-DSA-65), PQ keys, capability TLVs, region tags, guard eligibility, and the currently advertised salt epoch.
-- Clients pin guard sets for 30 days and persist `guard_set` caches alongside the signed directory snapshot. CLI and SDK wrappers surface the cache fingerprint so rollout evidence can be attached to change reviews.
+- ማይክሮ ዲስክሪፕተሮች የሪሌይ መታወቂያ (Ed25519 + ML-DSA-65)፣ PQ ቁልፎች፣ የችሎታ TLVs፣ የክልል መለያዎች፣ የጥበቃ ብቁነት እና በአሁኑ ጊዜ ማስታወቂያ የተደረገውን የጨው ዘመን ይይዛሉ።
+- የደንበኞች ፒን ጠባቂ ለ 30 ቀናት ያዘጋጃል እና `guard_set` መሸጎጫዎች ከተፈረመበት የማውጫ ቅጽበታዊ ገጽ እይታ ጎን ይቆያሉ። የCLI እና የኤስዲኬ መጠቅለያዎች የመሸጎጫ አሻራውን ስላሳለፉ ግምገማዎችን ለመቀየር የታቀዱ ማስረጃዎች ማያያዝ ይችላሉ።
 
-## Telemetry & rollout checklist
+## ቴሌሜትሪ እና የታቀዱ የፍተሻ ዝርዝር
 
-- Metrics to export before production:
+- ከምርት በፊት ወደ ውጭ ለመላክ መለኪያዎች;
   - `soranet_handshake_success_total{role}`
   - `soranet_handshake_failure_total{reason}`
   - `soranet_handshake_latency_seconds`
   - `soranet_capability_mismatch_total`
   - `soranet_salt_rotation_lag_seconds`
-- Alert thresholds live alongside the salt rotation SOP SLO matrix (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) and must be mirrored in Alertmanager before the network is promoted.
-- Alerts: >5 % failure rate over 5 minutes, salt lag >15 minutes, or capability mismatches observed in production.
-- Rollout steps:
-  1. Exercise relay/client interoperability tests on staging with the hybrid handshake and PQ stack enabled.
-  2. Rehearse the salt rotation SOP (`docs/source/soranet_salt_plan.md`) and attach drill artefacts to the change record.
-  3. Enable capability negotiation in the directory, then roll out to entry relays, middle relays, exits, and finally clients.
-  4. Record guard cache fingerprints, salt schedules, and telemetry dashboards for each phase; attach the evidence bundle to `status.md`.
+- የማንቂያ ገደቦች ከጨው ሽክርክሪት SOP SLO ማትሪክስ (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) ጋር አብረው ይኖራሉ እና አውታረ መረቡ ከመስፋፋቱ በፊት በአለርትማኔጀር ውስጥ መንጸባረቅ አለባቸው።
+- ማንቂያዎች፡ > 5% የውድቀት መጠን ከ5ደቂቃ በላይ፣ የጨው መዘግየት > 15ደቂቃዎች፣ ወይም የችሎታ አለመመጣጠን በምርት ላይ ይስተዋላል።
+- የታቀዱ ደረጃዎች;
+  1. በድብልቅ የእጅ መጨባበጥ እና PQ ቁልል የነቃ የእንቅስቃሴ ቅብብል/የደንበኛ መስተጋብር ሙከራዎች።
+  2. የጨው ሽክርክሪት SOP (`docs/source/soranet_salt_plan.md`) ይለማመዱ እና የመሰርሰሪያ ቅርሶችን ከለውጥ መዝገብ ጋር ያያይዙ።
+  3. በማውጫው ውስጥ የችሎታ ድርድርን ያንቁ፣ ከዚያ ወደ የመግቢያ ቅብብሎሽ፣ መካከለኛ ቅብብሎሽ፣ መውጫዎች እና በመጨረሻም ደንበኞች ይልቀቁ።
+  4. ለእያንዳንዱ ደረጃ የጥበቃ መሸጎጫ አሻራዎችን፣ የጨው መርሃ ግብሮችን እና የቴሌሜትሪ ዳሽቦርዶችን ይመዝግቡ። የማስረጃውን ጥቅል ከ I18NI0000040X ጋር ያያይዙ።
 
-Following this checklist lets operator, client, and SDK teams adopt SoraNet transports in lockstep while meeting the determinism and audit requirements captured in the SNNet roadmap.
+ይህንን የፍተሻ ዝርዝር በመከተል ኦፕሬተር፣ ደንበኛ እና ኤስዲኬ ቡድኖች በSNNet ፍኖተ ካርታ ውስጥ የተካተቱትን የቁርጥነት እና የኦዲት መስፈርቶች በሚያሟሉበት ጊዜ የ SoraNet ትራንስፖርትን በመቆለፊያ ደረጃ እንዲወስዱ ያስችላቸዋል።

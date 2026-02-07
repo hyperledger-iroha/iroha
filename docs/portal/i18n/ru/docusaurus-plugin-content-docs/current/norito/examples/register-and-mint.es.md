@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Registrar dominio y acuñar activos
-description: Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+слизень: /norito/examples/register-and-mint
+титул: Регистратор доменов и активных действий
+описание: Demuestra la creación de dominios con Permisos, el registero de activos y la acuñación determinista.
+источник: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
+Продемонстрируйте создание прав собственности с разрешениями, реестр действий и детерминированный учет.
 
-## Recorrido del libro mayor
+## Запись мэра библиотеки
 
-- Asegúrate de que exista la cuenta de destino (por ejemplo `ih58...`), reflejando la fase de configuración en cada quickstart del SDK.
-- Invoca el entrypoint `register_and_mint` para crear la definición de activo ROSE y acuñar 250 unidades para Alice en una sola transacción.
-- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account ih58...` para confirmar que la acuñación tuvo éxito.
+- Убедитесь, что существующий адрес назначения (например, `ih58...`), отобразите этап настройки в каждом быстром запуске SDK.
+- Вызовите точку входа `register_and_mint`, чтобы создать определение активности ROSE и добавить 250 единиц для Алисы в одной транзакции.
+- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить, что ваша запись вышла.
 
-## Guías de SDK relacionadas
+## Руководство по настройке SDK
 
-- [Quickstart del SDK de Rust](/sdks/rust)
-- [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [Краткий запуск SDK Rust](/sdks/rust)
+- [Краткий запуск SDK Python] (/sdks/python)
+- [Краткий запуск SDK JavaScript](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/register-and-mint.ko)
+[Удалить ссылку Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

@@ -4,57 +4,59 @@ direction: rtl
 source: docs/portal/docs/nexus/overview.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-overview
-title: Sora Nexus کا جائزہ
-description: Iroha 3 (Sora Nexus) کی معماری کا اعلی سطحی خلاصہ اور مونو ریپو کی کینونیکل دستاویزات کے حوالے۔
+المعرف: نظرة عامة على العلاقة
+العنوان: سورا Nexus کا جائزہ
+الوصف: Iroha 3 (Sora Nexus) هو عبارة عن خلاصة سطحية كاملة ومونو ريبو من كينونيكالز حوالة.
 ---
 
-Nexus (Iroha 3) Iroha 2 کو multi-lane اجرا، گورننس کے دائرہ کار میں ڈیٹا اسپیسز، اور ہر SDK میں مشترکہ ٹولنگ کے ساتھ توسیع دیتا ہے۔ یہ صفحہ مونو ریپو میں نئے خلاصے `docs/source/nexus_overview.md` کی عکاسی کرتا ہے تاکہ پورٹل کے قارئین جلد سمجھ سکیں کہ معماری کے اجزا کیسے جڑتے ہیں۔
+Nexus (Iroha 3) Iroha 2 عبارة عن واجهة متعددة الممرات، ومواقع متعددة تعمل بالسرعة، ومتعددة SDK ساتھ توسیع دیتا ہے۔ تحتوي صفحة مونو ريبو على ملخص جديد `docs/source/nexus_overview.md` وهو عبارة عن منفذ لقارئ الكمبيوتر المحمول الذي تم إجراؤه مؤخرًا.
 
-## ریلیز لائنز
+## ريليز لاينز
 
-- **Iroha 2** - کنسورشیم یا نجی نیٹ ورکس کے لئے خود میزبان ڈپلائمنٹس۔
-- **Iroha 3 / Sora Nexus** - پبلک multi-lane نیٹ ورک جہاں آپریٹرز ڈیٹا اسپیسز (DS) رجسٹر کرتے ہیں اور مشترکہ گورننس، سیٹلمنٹ، اور آبزرویبیلٹی ٹولنگ وراثت میں لیتے ہیں۔
-- دونوں لائنیں ایک ہی workspace (IVM + Kotodama toolchain) سے کمپائل ہوتی ہیں، اس لئے SDK فکسز، ABI اپڈیٹس اور Norito فکسچرز قابلِ نقل رہتے ہیں۔ آپریٹرز Nexus میں شامل ہونے کے لئے `iroha3-<version>-<os>.tar.zst` بَنڈل ڈاؤن لوڈ کرتے ہیں؛ فل اسکرین چیک لسٹ کے لئے `docs/source/sora_nexus_operator_onboarding.md` دیکھیں۔
+- **Iroha 2** - وحدة التحكم أو العمل الجديد الذي يناسبك.
+- **Iroha 3 / Sora Nexus** - شبكة عمل متعددة المسارات لكاميرات المراقبة (DS) مسجلة ومسجلة، سيلمان، و راثت آبزرويبيل ٹولنگ لایتے ہیں.
+- قم بتنزيل مساحة عمل عبر الإنترنت (IVM + Kotodama Toolchain) وكمبيوتر محمول، وهي مخصصة لـ SDK فكسز، ABI App، وNorito فكسشيرز قابل للنقل رہتے ہيں. تتضمن الطابعة Nexus المزيد من تنزيل بطاقة `iroha3-<version>-<os>.tar.zst`؛ اضغط على زر واحد لـ `docs/source/sora_nexus_operator_onboarding.md`.
 
-## بنیادی اجزا
+## بنيادی اجزا
 
-| جزو | خلاصہ | پورٹل لنکس |
-|-----------|---------|--------------|
-| ڈیٹا اسپیس (DS) | گورننس سے متعین اجرا/اسٹوریج ڈومین جو ایک یا زیادہ lanes رکھتا ہے، ویلیڈیٹر سیٹس، پرائیویسی کلاس، اور فیس + DA پالیسی کا اعلان کرتا ہے۔ | مینفسٹ اسکیمہ کے لئے [Nexus spec](./nexus-spec) دیکھیں۔ |
-| Lane | اجرا کا ڈیٹرمنسٹک شَارڈ؛ ایسے commitments جاری کرتا ہے جنہیں عالمی NPoS رنگ ترتیب دیتا ہے۔ Lane کلاسز میں `default_public`, `public_custom`, `private_permissioned`, اور `hybrid_confidential` شامل ہیں۔ | [Lane model](./nexus-lane-model) جیومیٹری، اسٹوریج پری فکسز، اور ریٹینشن کو بیان کرتا ہے۔ |
-| ٹرانزیشن پلان | Placeholder identifiers، routing phases، اور dual-profile packaging اس بات کو ٹریک کرتے ہیں کہ single-lane ڈپلائمنٹس کیسے Nexus میں ارتقا کرتے ہیں۔ | [Transition notes](./nexus-transition-notes) ہر مائیگریشن مرحلہ دستاویز کرتی ہیں۔ |
-| Space Directory | رجسٹری کنٹریکٹ جو DS مینفسٹس + ورژنز اسٹور کرتا ہے۔ آپریٹرز شامل ہونے سے پہلے کیٹلاگ انٹریز کو اس ڈائریکٹری کے ساتھ ملاتے ہیں۔ | مینفسٹ ڈف ٹریکر `docs/source/project_tracker/nexus_config_deltas/` کے تحت موجود ہے۔ |
-| Lane catalog | `[nexus]` کنفیگ سیکشن lane IDs کو aliases، routing پالیسیز اور DA thresholds سے میپ کرتا ہے۔ `irohad --sora --config … --trace-config` آڈٹ کے لئے resolved catalog پرنٹ کرتا ہے۔ | CLI walkthrough کے لئے `docs/source/sora_nexus_operator_onboarding.md` استعمال کریں۔ |
-| Settlement router | XOR ٹرانسفر آرکسٹریٹر جو نجی CBDC lanes کو پبلک لیکویڈیٹی lanes سے جوڑتا ہے۔ | `docs/source/cbdc_lane_playbook.md` پالیسی knobs اور ٹیلیمیٹری gates کی وضاحت کرتا ہے۔ |
-| Telemetry/SLOs | `dashboards/grafana/nexus_*.json` کے تحت ڈیش بورڈز + الرٹس lane height، DA backlog، settlement latency اور governance queue depth کو کیپچر کرتے ہیں۔ | [Telemetry remediation plan](./nexus-telemetry-remediation) ڈیش بورڈز، الرٹس اور آڈٹ ثبوت کی وضاحت کرتا ہے۔ |
+| جزو | خلاصةہ | بورتال لنكس |
+|-----------|--------|--------------|
+| كل سبيس (DS) | هناك ترفيه ممتع/استرالي يضم جوًا جويًا أو العديد من الممرات الممتعة، شبكة ويلليتر، الدرجة الأولى، وفيديو + DA باليس للإعلان عن الكرتا. | تم تصميمه خصيصًا [Nexus spec](./nexus-spec). |
+| لين | عملية برمائية؛ تم تحديد هذه الالتزامات في نطاق NPoS العالمي. تشمل فئة حارة `default_public` و`public_custom` و`private_permissioned` و`hybrid_confidential`. | [نموذج المسار](./nexus-lane-model) جويومي، ستوريج پري فكسز، وإعادة تصميم كرتا. |
+| ٹرانزیشن پلان | معرفات العناصر النائبة، ومراحل التوجيه، والتعبئة ذات الملف المزدوج هي بطاقة ملائمة أحادية المسار Nexus. | [ملاحظات الانتقال](./nexus-transition-notes) ہر مايگریشن رحلةہ دستاویز کرتی ہیں۔ |
+| دليل الفضاء | المسجل في DS ماينفس + ويرنز ستيركرتا. يتضمن المؤلفون عددًا لا يحصى من المواقع الإلكترونية التي تضم جميع أنحاء العالم. | أنا موجود بالفعل `docs/source/project_tracker/nexus_config_deltas/`. |
+| كتالوج الحارة | `[nexus]` معرفات مسار الشبكة والأسماء المستعارة والتوجيه وعتبات DA أكثر دقة. لقد تم حل الكتالوج `irohad --sora --config … --trace-config`. | استخدام إرشادات CLI لـ `docs/source/sora_nexus_operator_onboarding.md`. |
+| موجه التسوية | XOR هو أحد ممرات CBDC وممرات الليكويد العامة. | `docs/source/cbdc_lane_playbook.md` مقابض باليس وبوابات ضاحية كيرتا. |
+| القياس عن بعد/SLOs | `dashboards/grafana/nexus_*.json` تحت ارتفاع الممر + ارتفاع المسار، وتراكم DA، وزمن وصول التسوية، وعمق قائمة انتظار الإدارة. | [خطة علاج القياس عن بعد](./nexus-telemetry-remediation) كل بورز، الرٹس ومتجر وضحت كرتا. |
 
-## رول آؤٹ اسنیپ شاٹ
+## رول آسنيپ شات
 
-| مرحلہ | فوکس | اخراجی معیار |
+| رحلةہ | فوكس | اخراجي معاير |
 |-------|-------|---------------|
-| N0 - بند بیٹا | کونسل-مینجڈ registrar (`.sora`)، مینول آپریٹر آن بورڈنگ، جامد lane catalog۔ | دستخط شدہ DS مینفسٹس + گورننس ہینڈ آفز کی مشق۔ |
-| N1 - عوامی لانچ | `.nexus` سفکسز، نیلامیاں، self-service registrar، XOR settlement wiring شامل کرتا ہے۔ | resolver/gateway sync ٹیسٹس، بلنگ reconciliation ڈیش بورڈز، dispute tabletop drills۔ |
-| N2 - توسیع | `.dao`، reseller APIs، analytics، dispute portal، steward scorecards متعارف کراتا ہے۔ | compliance artefacts ورژن شدہ، policy-jury toolkit آن لائن، treasury transparency reports۔ |
-| NX-12/13/14 gate | compliance engine، telemetry dashboards اور documentation کو پارٹنر پائلٹس سے پہلے اکٹھا ریلیز ہونا ضروری ہے۔ | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) شائع، dashboards wired، policy engine merged۔ |
+| N0 - بند بیٹا | مسجل مستشار مينج (`.sora`)، منبر بورنج، كتالوج جامد لين. | تم تحديث جهاز DS ماينفس + الحملات إلى شقين. |
+| N1 - عوامی لانچ | `.nexus` سفكس، نيلايامي، مسجل الخدمة الذاتية، أسلاك تسوية XOR تتضمن المزيد. | مزامنة المحلل/البوابة النظام، مصالحة البيانات، تدريبات الطاولة الخلافية. |
+| N2 - توسيّع | `.dao`، واجهات برمجة تطبيقات الموزع، التحليلات، بوابة النزاعات، بطاقات أداء المضيفين متعارف کراتا ہے۔ | تم تحديث عناصر الامتثال، ومجموعة أدوات لجنة التحكيم الخاصة بالسياسة عبر الإنترنت، وتقارير شفافية الخزانة. |
+| بوابة NX-12/13/14 | يعد محرك الامتثال ولوحات المعلومات والوثائق الخاصة بالقياس عن بعد أمرًا ضروريًا. | [نظرة عامة على Nexus](./nexus-overview) + [عمليات Nexus](./nexus-operations) شاع، لوحات المعلومات سلكية، محرك السياسة مدمج۔ |
 
-## آپریٹر کی ذمہ داریاں
+## قارورة دخانية
 
-1. **کنفیگ حفظانِ صحت** - `config/config.toml` کو شائع شدہ lane اور dataspace کیٹلاگ کے ساتھ ہم آہنگ رکھیں؛ ہر ریلیز ٹکٹ کے ساتھ `--trace-config` آؤٹ پٹ محفوظ کریں۔
-2. **مینفسٹ ٹریکنگ** - شامل ہونے یا نوڈ اپ گریڈ سے پہلے کیٹلاگ انٹریز کو تازہ ترین Space Directory بَنڈل سے ہم آہنگ کریں۔
-3. **ٹیلیمیٹری کوریج** - `nexus_lanes.json`، `nexus_settlement.json` اور متعلقہ SDK ڈیش بورڈز کو expose کریں؛ الرٹس کو PagerDuty سے جوڑیں اور ٹیلیمیٹری remediation پلان کے مطابق سہ ماہی جائزے چلائیں۔
-4. **حادثہ رپورٹنگ** - [Nexus operations](./nexus-operations) میں سیوریٹی میٹرکس کی پیروی کریں اور پانچ کاروباری دنوں میں RCA فائل کریں۔
-5. **گورننس تیاری** - اپنی lanes پر اثر انداز ہونے والی Nexus کونسل ووٹس میں حصہ لیں اور سہ ماہی rollback ہدایات کی مشق کریں (ٹریکنگ `docs/source/project_tracker/nexus_config_deltas/` کے ذریعے ہوتی ہے)۔
+1. **الحفاظ على الصحة** - `config/config.toml` تم تحديثه مسبقًا للمسارات ومساحة البيانات؛ لقد أصبح ريليز رقم `--trace-config` أكثر من مرة.
+2. **التكنولوجيا** - تشتمل على أحدث إصدار من دليل الفضاء أو أحدث دليل على الإنترنت وهو أحدث إصدار من دليل الفضاء حاليًا.
+3. **الإصدار الأولي** - `nexus_lanes.json`، `nexus_settlement.json` وما يتعلق بـ SDK باللون الوردي الذي يكشف عن البطاقة؛ تتوافق قائمة PagerDuty مع خطة العلاج والمعالجة مع ما تم الفوز به.
+4. **حادثة تقرير** - [عمليات Nexus](./nexus-operations) لعبة البيروقراطية والطائرات الورقية من RCA المفضلة.
+5. **التصوير الفوتوغرافي** - إنشاء ممرات إبداعية Nexus يقوم مستشار ووٹس بحصصه واستعادة ما تم إنجازه من أعمال الكريں (ٹریكنگ `docs/source/project_tracker/nexus_config_deltas/` کے ذریے ہوتی ہے).
 
-## مزید دیکھیں
+## مزيد من التفاصيل
 
 - کینونیکل جائزہ: `docs/source/nexus_overview.md`
-- تفصیلی اسپیسفیکیشن: [./nexus-spec](./nexus-spec)
-- Lane جیومیٹری: [./nexus-lane-model](./nexus-lane-model)
+- تفاصيلیلی اسپیسفیکیشن: [./nexus-spec](./nexus-spec)
+- لين جیومیٹری: [./nexus-lane-model](./nexus-lane-model)
 - ٹرانزیشن پلان: [./nexus-transition-notes](./nexus-transition-notes)
-- ٹیلیمیٹری remediation پلان: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- آپریشنز runbook: [./nexus-operations](./nexus-operations)
-- آپریٹر onboarding گائیڈ: `docs/source/sora_nexus_operator_onboarding.md`
+- ٹیلیمیٹری خطة العلاج: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
+- دليل التشغيل: [./nexus-operations](./nexus-operations)
+- سجل الالتحاق: `docs/source/sora_nexus_operator_onboarding.md`

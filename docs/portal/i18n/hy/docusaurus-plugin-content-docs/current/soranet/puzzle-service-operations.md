@@ -8,43 +8,45 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Puzzle Service Operations Guide
 sidebar_label: Puzzle Service Ops
 description: Operating the `soranet-puzzle-service` daemon for Argon2/ML-DSA admission tickets.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-# Puzzle Service Operations Guide
+# Puzzle ծառայության գործառնությունների ուղեցույց
 
-The `soranet-puzzle-service` daemon (`tools/soranet-puzzle-service/`) issues
-Argon2-backed admission tickets that mirror the relay’s `pow.puzzle.*` policy
-and, when configured, brokers ML-DSA admission tokens on behalf of edge relays.
-It exposes five HTTP endpoints:
+`soranet-puzzle-service` դեյմոն (`tools/soranet-puzzle-service/`) խնդիրներ
+Արգոն 2-ով ապահովված մուտքի տոմսեր, որոնք արտացոլում են ռելեի `pow.puzzle.*` քաղաքականությունը
+և, երբ կազմաձևված է, բրոքերները ML-DSA ընդունելության նշանները եզրային ռելեների անունից:
+Այն բացահայտում է հինգ HTTP վերջնակետեր.
 
-- `GET /healthz` – liveness probe.
-- `GET /v1/puzzle/config` – returns the effective PoW/puzzle parameters pulled
-  from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
+- `GET /healthz` – կենդանի զոնդ:
+- `GET /v1/puzzle/config` – վերադարձնում է արդյունավետ PoW/փազլ պարամետրերը
+  JSON ռելեից (`handshake.descriptor_commit_hex`, `pow.*`):
+- `POST /v1/puzzle/mint` – կտրում է Argon2 տոմս; կամընտիր JSON մարմին
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  requests a shorter TTL (clamped to the policy window), binds the ticket to a
-  transcript hash, and returns a relay-signed ticket + signature fingerprint
-  when signing keys are configured.
-- `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
-  admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
-  and the merged revocation set).
-- `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
-  resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
+  խնդրում է ավելի կարճ TTL (միացված քաղաքականության պատուհանին), տոմսը կապում է a-ին
+  տառադարձումը հեշ է և վերադարձնում է ռելեով ստորագրված տոմս + ստորագրության մատնահետք
+  երբ ստորագրման բանալիները կազմաձևված են:
+- `GET /v1/token/config` – երբ `pow.token.enabled = true`, վերադարձնում է ակտիվը
+  ընդունելության նշանի քաղաքականություն (թողարկողի մատնահետք, TTL/ժամացույցի թեքության սահմաններ, ռելեի ID,
+  և միաձուլված չեղյալ համարելը):
+- `POST /v1/token/mint` – թողարկում է ML-DSA ընդունելության նշանը, որը կապված է մատակարարվածին
+  ռեզյումե հեշ; հարցումն ընդունում է `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`:
 
-Tickets produced by the service are verified in the
+Ծառայության կողմից արտադրված տոմսերը ստուգվում են
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo`
-integration test, which also exercises relay throttles during volumetric DoS
-scenarios.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
+ինտեգրման թեստ, որը նաև իրականացնում է ռելեային շնչափողներ ծավալային DoS-ի ժամանակ
+սցենարներ.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
 
-## Configuring token issuance
+## Նշանների թողարկման կարգավորում
 
-Set the relay JSON fields under `pow.token.*` (see
-`tools/soranet-relay/deploy/config/relay.entry.json` for an example) to enable
-ML-DSA tokens. At minimum provide the issuer public key and optional
-revocation list:
+Սահմանեք ռելեի JSON դաշտերը `pow.token.*`-ի տակ (տես
+`tools/soranet-relay/deploy/config/relay.entry.json` օրինակ) միացնելու համար
+ML-DSA նշաններ. Առնվազն տրամադրեք թողարկողի հանրային բանալին և կամընտիր
+չեղյալ հայտարարման ցուցակ.
 
 ```json
 "pow": {
@@ -57,13 +59,13 @@ revocation list:
 }
 ```
 
-The puzzle service reuses these values and automatically reloads the Norito
-JSON revocation file at runtime. Use the `soranet-admission-token` CLI
-(`cargo run -p soranet-relay --bin soranet_admission_token`) to mint and inspect
-tokens offline, append `token_id_hex` entries to the revocation file, and audit
-existing credentials before pushing updates to production.
+Փազլ ծառայությունը նորից օգտագործում է այս արժեքները և ավտոմատ կերպով վերաբեռնում է Norito
+JSON չեղյալ համարվող ֆայլը գործարկման ժամանակ: Օգտագործեք `soranet-admission-token` CLI
+(`cargo run -p soranet-relay --bin soranet_admission_token`) հատել և ստուգել
+նշանները անցանց, կցեք `token_id_hex` գրառումները չեղյալ համարվող ֆայլին և աուդիտ
+առկա հավատարմագրերը, նախքան արտադրության թարմացումները:
 
-Pass the issuer secret key to the puzzle service via the CLI flags:
+Թողարկողի գաղտնի բանալին փոխանցեք հանելուկ ծառայությանը CLI դրոշների միջոցով.
 
 ```bash
 cargo run -p soranet-puzzle-service -- \
@@ -73,82 +75,82 @@ cargo run -p soranet-puzzle-service -- \
   --token-revocation-refresh-secs 60
 ```
 
-`--token-secret-hex` is also available when the secret is managed by an out-of-band
-tooling pipeline. The revocation file watcher keeps `/v1/token/config` current;
-coordinate updates with the `soranet-admission-token revoke` command to avoid lagging
-revocation state.
+`--token-secret-hex`-ը հասանելի է նաև, երբ գաղտնիքը կառավարվում է խմբից դուրս
+գործիքային խողովակաշար: Չեղյալ համարվող ֆայլի դիտիչը պահում է `/v1/token/config` ընթացիկ;
+համակարգել թարմացումները `soranet-admission-token revoke` հրամանով, որպեսզի խուսափեք ուշացումից
+չեղյալ հայտարարելու վիճակը:
 
-Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
-key used to verify signed PoW tickets; `/v1/puzzle/config` echoes the key and its BLAKE3
-fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients can pin the verifier.
-Signed tickets are validated against the relay ID and transcript bindings and share the same
-revocation store; raw 74-byte PoW tickets remain valid when the signed-ticket verifier is
-configured. Pass the signer secret via `--signed-ticket-secret-hex` or
-`--signed-ticket-secret-path` when launching the puzzle service; startup rejects mismatched
-keypairs if the secret does not validate against `pow.signed_ticket_public_key_hex`.
-`POST /v1/puzzle/mint` accepts `"signed": true` (and optional `"transcript_hash_hex"`) to
-return a Norito-encoded signed ticket alongside the raw ticket bytes; responses include
-`signed_ticket_b64` and `signed_ticket_fingerprint_hex` to help track replay fingerprints.
-Requests with `signed = true` are rejected if the signer secret is not configured.
+Տեղադրեք `pow.signed_ticket_public_key_hex` ռելեի JSON-ում՝ ML-DSA-44 հանրությունը գովազդելու համար
+բանալին, որն օգտագործվում է ստորագրված PoW տոմսերը ստուգելու համար. `/v1/puzzle/config`-ն արձագանքում է բանալին և դրա BLAKE3-ը
+մատնահետք (`signed_ticket_public_key_fingerprint_hex`), որպեսզի հաճախորդները կարողանան ամրացնել ստուգիչը:
+Ստորագրված տոմսերը վավերացվում են ռելեի ID-ի և արտագրման կապերի հետ և կիսվում են նույնը
+չեղյալ համարելու խանութ; չմշակված 74 բայթանոց PoW տոմսերը մնում են վավեր, երբ ստորագրված տոմսերի ստուգիչը գործում է
+կազմաձևված. Ստորագրողի գաղտնիքը փոխանցեք `--signed-ticket-secret-hex` կամ
+`--signed-ticket-secret-path` փազլ ծառայությունը գործարկելիս; ստարտափը մերժում է անհամապատասխանությունը
+բանալիների զույգեր, եթե գաղտնիքը չի վավերացվում `pow.signed_ticket_public_key_hex`-ի հետ:
+`POST /v1/puzzle/mint` ընդունում է `"signed": true` (և կամընտիր `"transcript_hash_hex"`)
+վերադարձնել Norito կոդավորված ստորագրված տոմսը չմշակված տոմսերի բայթերի հետ միասին. պատասխանները ներառում են
+`signed_ticket_b64` և `signed_ticket_fingerprint_hex`՝ օգնելու հետևել մատնահետքերի վերարտադրմանը:
+`signed = true`-ով հարցումները մերժվում են, եթե ստորագրողի գաղտնիքը կազմաձևված չէ:
 
-## Key rotation playbook
+## Ստեղների ռոտացիայի խաղագիրք
 
-1. **Collect the new descriptor commit.** Governance publishes the relay
-   descriptor commit in the directory bundle. Copy the hex string into
-   `handshake.descriptor_commit_hex` inside the relay JSON configuration shared
-   with the puzzle service.
-2. **Review puzzle policy bounds.** Confirm the updated
-   `pow.puzzle.{memory_kib,time_cost,lanes}` values align with the release
-   plan. Operators should keep the Argon2 configuration deterministic across
-   relays (minimum 4 MiB memory, 1 ≤ lanes ≤ 16).
-3. **Stage the restart.** Reload the systemd unit or container once governance
-   announces the rotation cutover. The service has no hot-reload support; a
-   restart is required to pick up the new descriptor commit.
-4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` and confirm the
-   returned `difficulty` and `expires_at` match the new policy. The soak report
-   (`docs/source/soranet/reports/pow_resilience.md`) captures expected latency
-   bounds for reference. When tokens are enabled, fetch `/v1/token/config` to
-   ensure the advertised issuer fingerprint and revocation count match the
-   expected values.
+1. **Հավաքեք նոր նկարագրիչի պարտավորությունը։** Կառավարումը հրապարակում է ռելեը
+   descriptor commit գրացուցակի փաթեթում: Պատճենեք վեցանկյուն տողը
+   `handshake.descriptor_commit_hex` ռելեի JSON կոնֆիգուրացիան համօգտագործված է
+   Փազլ ծառայության հետ։
+2. **Վերանայեք գլուխկոտրուկների քաղաքականության սահմանները:** Հաստատեք թարմացվածը
+   `pow.puzzle.{memory_kib,time_cost,lanes}` արժեքները համընկնում են թողարկման հետ
+   պլան. Օպերատորները պետք է Argon2-ի կոնֆիգուրացիան դետերմինիստական պահեն ամբողջ տարածքում
+   ռելեներ (նվազագույնը 4ՄԲ հիշողություն, 1≤գծեր≤16):
+3. **Կարգավորեք վերագործարկումը:** Վերաբեռնեք համակարգված միավորը կամ կոնտեյները կառավարման ժամանակ
+   հայտարարում է ռոտացիայի կտրվածքը։ Ծառայությունը չունի տաք վերբեռնման աջակցություն. ա
+   վերսկսել պահանջվում է վերցնել նոր նկարագրիչ commit-ը:
+4. **Վավերացնել։** Տոմս թողարկեք `POST /v1/puzzle/mint`-ի միջոցով և հաստատեք
+   վերադարձված `difficulty` և `expires_at` համապատասխանում են նոր քաղաքականությանը: Ներծծման հաշվետվությունը
+   (`docs/source/soranet/reports/pow_resilience.md`) գրավում է սպասվող հետաձգումը
+   հղումների սահմանները: Երբ թոքենները միացված են, բերեք `/v1/token/config`
+   ապահովել, որ գովազդված թողարկողի մատնահետքը և չեղյալ համարելը համընկնում են
+   ակնկալվող արժեքներ.
 
-## Emergency disable procedure
+## Արտակարգ իրավիճակների անջատման կարգը
 
-1. Set `pow.puzzle.enabled = false` in the shared relay configuration. Keep
-   `pow.required = true` if hashcash fallback tickets must remain mandatory.
-2. Optionally enforce `pow.emergency` entries to reject stale descriptors while
-   the Argon2 gate is offline.
-3. Restart both the relay and the puzzle service to apply the change.
-4. Monitor `soranet_handshake_pow_difficulty` to ensure the difficulty drops to
-   the expected hashcash value, and verify `/v1/puzzle/config` reports
+1. Սահմանեք `pow.puzzle.enabled = false`-ը ընդհանուր ռելեի կազմաձևում: Պահել
+   `pow.required = true`, եթե հեշքեշի հետընտրական տոմսերը պետք է մնան պարտադիր:
+2. Ընտրովիորեն կիրառեք `pow.emergency` գրառումները՝ հնացած նկարագրիչները մերժելու համար, մինչդեռ
+   the Argon2 gate-ը անցանց է:
+3. Վերագործարկեք և՛ ռելեը, և՛ փազլ ծառայությունը՝ փոփոխությունը կիրառելու համար:
+4. Մոնիտոր `soranet_handshake_pow_difficulty`՝ ապահովելու դժվարությունը
+   ակնկալվող հեշքեշի արժեքը և ստուգեք `/v1/puzzle/config` հաշվետվությունները
    `puzzle = null`.
 
-## Monitoring and alerting
+## Դիտարկում և ահազանգում
 
-- **Latency SLO:** Track `soranet_handshake_latency_seconds` and keep the P95
-  below 300 ms. The soak test offsets provide calibration data for guard
+- **Latency SLO:** Հետևեք `soranet_handshake_latency_seconds`-ին և պահեք P95-ը
+  300 մվ-ից ցածր: Ներծծման փորձարկման օֆսեթները ապահովում են ստուգաչափման տվյալներ պահակի համար
   throttles.【docs/source/soranet/reports/pow_resilience.md:1】
-- **Quota pressure:** Use `soranet_guard_capacity_report.py` with relay metrics
-  to tune `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`,
+- **Քվոտայի ճնշում.** Օգտագործեք `soranet_guard_capacity_report.py` ռելեի չափման միջոցով
+  կարգավորելու `pow.quotas` սառեցումները (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
-- **Puzzle alignment:** `soranet_handshake_pow_difficulty` should match the
-  difficulty returned by `/v1/puzzle/config`. Divergence indicates stale relay
-  config or a failed restart.
-- **Token readiness:** Alert if `/v1/token/config` drops to `enabled = false`
-  unexpectedly or if `revocation_source` reports stale timestamps. Operators
-  should rotate the Norito revocation file via the CLI whenever a token is
-  retired to keep this endpoint accurate.
-- **Service health:** Probe `/healthz` in the usual liveness cadence and alert
-  if `/v1/puzzle/mint` returns HTTP 500 responses (indicates Argon2 parameter
-  mismatch or RNG failures). Token minting errors surface through HTTP 4xx/5xx
-  responses on `/v1/token/mint`; treat repeated failures as a paging condition.
+- **Փազլների հավասարեցում.** `soranet_handshake_pow_difficulty` պետք է համապատասխանի
+  դժվարությունը վերադարձրել է `/v1/puzzle/config`: Դիվերգենցիան ցույց է տալիս հնացած ռելե
+  կոնֆիգուրացիա կամ ձախողված վերագործարկում:
+- **Token-ի պատրաստություն.** Զգուշացում, եթե `/v1/token/config`-ը իջնի մինչև `enabled = false`
+  անսպասելիորեն կամ եթե `revocation_source`-ը հաղորդում է հնացած ժամանակի դրոշմանիշներ: Օպերատորներ
+  պետք է պտտել Norito չեղյալ համարվող ֆայլը CLI-ի միջոցով, երբ նշան է
+  հեռացել է այս վերջնակետը ճշգրիտ պահելու համար:
+- **Ծառայության առողջություն.** զոնդ `/healthz` սովորական աշխուժության արագությամբ և զգոնությամբ
+  եթե `/v1/puzzle/mint`-ը վերադարձնի HTTP 500 պատասխաններ (նշում է Argon2 պարամետրը
+  անհամապատասխանություն կամ RNG ձախողումներ): Նշանների հատման սխալները հայտնվում են HTTP 4xx/5xx-ի միջոցով
+  պատասխաններ `/v1/token/mint`-ով; վերաբերվել կրկնվող ձախողումներին որպես էջավորման վիճակ:
 
-## Compliance and audit logging
+## Համապատասխանության և աուդիտի գրանցում
 
-Relays emit structured `handshake` events that include throttle reasons and
-cooldown durations. Ensure the compliance pipeline described in
-`docs/source/soranet/relay_audit_pipeline.md` ingests these logs so puzzle
-policy changes remain auditable. When the puzzle gate is enabled, archive the
-minted ticket samples and the Norito configuration snapshot with the rollout
-ticket for future audits. Admission tokens minted ahead of maintenance windows
-should be tracked with their `token_id_hex` values and inserted into the
-revocation file once they expire or are revoked.
+Ռելեները թողարկում են կառուցվածքային I18NI00000066 իրադարձություններ, որոնք ներառում են շնչափողի պատճառները և
+սառեցման տևողությունը. Համոզվեք, որ համապատասխանության խողովակաշարը նկարագրված է
+`docs/source/soranet/relay_audit_pipeline.md`-ը կուլ է տալիս այս տեղեկամատյանները այնքան հանելուկ
+քաղաքականության փոփոխությունները մնում են ստուգման ենթակա: Երբ հանելուկի դարպասը միացված է, արխիվացրեք այն
+կտրված տոմսերի նմուշներ և Norito կոնֆիգուրացիայի լուսանկար՝ թողարկման հետ միասին
+տոմս ապագա աուդիտի համար: Ընդունման նշանները հատվել են սպասարկման պատուհաններից առաջ
+պետք է հետևվեն իրենց `token_id_hex` արժեքներով և տեղադրվեն մեջ
+չեղյալ համարվող ֆայլը, երբ դրանք ավարտվեն կամ չեղարկվեն:

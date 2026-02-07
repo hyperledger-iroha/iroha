@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note المصدر القياسي
+:::メモ
 يعكس `docs/source/sns/bulk_onboarding_toolkit.md` حتى يرى المشغلون الخارجيون
-نفس ارشادات SN-3b دون استنساخ المستودع.
+SN-3b を使用してください。
 :::
 
 # عدة ادوات التهيئة بالجملة لـ SNS (SN-3b)
 
-**مرجع خارطة الطريق:** SN-3b "Bulk onboarding tooling"  
-**الاثار:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**重要な情報:** SN-3b「バルク オンボーディング ツール」  
+** 回答:** `scripts/sns_bulk_onboard.py`、`scripts/tests/test_sns_bulk_onboard.py`、
 `docs/portal/scripts/sns_bulk_release.sh`
 
-غالبا ما يجهز المسجلون الكبار مئات تسجيلات `.sora` او `.nexus` مع نفس
-موافقات الحوكمة وقنوات التسوية. صياغة payloads JSON يدويا او اعادة تشغيل
-CLI لا يتوسع، لذا يقدم SN-3b builder حتمي من CSV الى Norito يحضر هياكل
-`RegisterNameRequestV1` لـ Torii او الـ CLI. يتحقق المساعد من كل صف مسبقا،
-ويصدر كلا من manifest مجمع و JSON اختياري مفصول باسطر، ويمكنه ارسال
-payloads تلقائيا مع تسجيل ايصالات منظمة لاغراض التدقيق.
+`.sora` او `.nexus` مع نفس
+すごいです。ペイロード JSON يدويا او اعادة تشغيل
+CLI は SN-3b ビルダー、CSV は Norito 、 هياكل
+`RegisterNameRequestV1` Torii CLI。 يتحقق المساعد من كل صف مسبقا،
+マニフェスト マニフェスト JSON マニフェスト マニフェスト JSON マニフェスト マニフェスト JSON マニフェスト マニフェスト JSON マニフェスト マニフェスト
+ペイロードは、最大のペイロードです。
 
-## 1. مخطط CSV
+## 1.CSV
 
 يتطلب المحلل صف العناوين التالي (الترتيب مرن):
 
-| العمود | مطلوب | الوصف |
-|--------|-------|-------|
-| `label` | نعم | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norm v1 و UTS-46). |
-| `suffix_id` | نعم | معرف لاحقة رقمي (عشري او `0x` hex). |
-| `owner` | نعم | سلسلة AccountId (IH58 literal; optional @domain hint) لمالك التسجيل. |
-| `term_years` | نعم | عدد صحيح `1..=255`. |
-| `payment_asset_id` | نعم | اصل التسوية (مثل `xor#sora`). |
-| `payment_gross` / `payment_net` | نعم | اعداد صحيحة غير موقعة تمثل وحدات الاصل. |
-| `settlement_tx` | نعم | قيمة JSON او سلسلة حرفية تصف معاملة الدفع او hash. |
-| `payment_payer` | نعم | AccountId الذي فوض الدفع. |
-| `payment_signature` | نعم | JSON او سلسلة حرفية تحتوي دليل توقيع steward او الخزينة. |
-| `controllers` | اختياري | قائمة مفصولة بفاصلة او فاصلة منقوطة لعناوين حسابات controller. الافتراضي `[owner]` عند الحذف. |
-| `metadata` | اختياري | JSON inline او `@path/to/file.json` يقدم تلميحات resolver وسجلات TXT وغيرها. الافتراضي `{}`. |
-| `governance` | اختياري | JSON inline او `@path` يشير الى `GovernanceHookV1`. `--require-governance` يفرض هذا العمود. |
+|ああ | और देखेंああ |
+|----------|----------|----------|
+| `label` |とん | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norm v1 و UTS-46)。 |
+| `suffix_id` |とん | معرف لاحقة رقمي (عشري او `0x` hex)。 |
+| `owner` |とん | AccountId (IH58 リテラル、オプションの @domain ヒント)。 |
+| `term_years` |とん | عدد صحيح `1..=255`。 |
+| `payment_asset_id` |とん | صل التسوية (مثل `xor#sora`)。 |
+| `payment_gross` / `payment_net` |とん | عداد صحيحة غير موقعة تمثل وحدات الاصل. |
+| `settlement_tx` |とん | JSON ハッシュ。 |
+| `payment_payer` |とん | AccountId は です。 |
+| `payment_signature` |とん | JSON は、スチュワードとスチュワードの両方をサポートします。 |
+| `controllers` |認証済み |コントローラー。 `[owner]` です。 |
+| `metadata` |認証済み | JSON インライン `@path/to/file.json` セキュリティ リゾルバー TXT です。 `{}`。 |
+| `governance` |認証済み | JSON インライン `@path` または `GovernanceHookV1`。 `--require-governance` يفرض هذا العمود. |
 
-يمكن لاي عمود الاشارة الى ملف خارجي عبر بادئة قيمة الخلية بـ `@`.
-يتم حل المسارات نسبة الى ملف CSV.
+يمكن لاي عمود الاشارة الى ملف خارجي عبر بادئة قيمة الخلية بـ `@`。
+CSV を使用します。
 
-## 2. تشغيل المساعد
+## 2. いいえ
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -54,16 +56,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-خيارات رئيسية:
+意味:
 
-- `--require-governance` يرفض الصفوف بدون hook حوكمة (مفيد لمزادات premium او
-  التعيينات المحجوزة).
-- `--default-controllers {owner,none}` يقرر ما اذا كانت خلايا controllers
-  الفارغة تعود الى حساب owner.
-- `--controllers-column`, `--metadata-column`, و `--governance-column` تسمح
-  باعادة تسمية الاعمدة الاختيارية عند العمل مع exports خارجية.
+- `--require-governance` يرفض الصفوف بدون フック حوكمة (مفيد لمزادات プレミアム او
+  ）。
+- `--default-controllers {owner,none}` コントローラー
+  オーナー。
+- `--controllers-column`、`--metadata-column`、`--governance-column`
+  輸出も可能です。
 
-عند النجاح يكتب السكربت manifest مجمع:
+マニフェストの内容:
 
 ```json
 {
@@ -100,8 +102,8 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
 }
 ```
 
-اذا تم تمرير `--ndjson`، يكتب كل `RegisterNameRequestV1` ايضا كسطر JSON واحد
-حتى تتمكن الاتمتة من بث الطلبات مباشرة الى Torii:
+`--ndjson` 評価 `RegisterNameRequestV1` 評価 JSON واحد
+Torii:
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -113,12 +115,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. الارسال الالي
+## 3. いいえ
 
 ### 3.1 وضع Torii REST
 
-حدد `--submit-torii-url` مع `--submit-token` او `--submit-token-file` لارسال كل
-ادخال في manifest مباشرة الى Torii:
+`--submit-torii-url` `--submit-token` `--submit-token-file` ログイン
+マニフェスト Torii:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -129,17 +131,17 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- يصدر المساعد `POST /v1/sns/registrations` لكل طلب ويتوقف عند اول خطا HTTP.
-  تضاف الردود الى مسار السجل كسجلات NDJSON.
+- `POST /v1/sns/registrations` HTTP を使用します。
+  NDJSON をご覧ください。
 - `--poll-status` يعيد الاستعلام عن `/v1/sns/registrations/{selector}` بعد كل
-  ارسال (حتى `--poll-attempts`, الافتراضي 5) لتاكيد ظهور السجل. وفر
+  (`--poll-attempts`, 5) を参照してください。うーん
   `--suffix-map` (JSON يحول `suffix_id` الى قيم "suffix") كي تتمكن الاداة من
-  اشتقاق لواحق `{label}.{suffix}` عند polling.
-- اعدادات قابلة للضبط: `--submit-timeout`, `--poll-attempts`, و `--poll-interval`.
+  `{label}.{suffix}` ポーリングです。
+- バージョン: `--submit-timeout`、`--poll-attempts`、`--poll-interval`。
 
-### 3.2 وضع iroha CLI
+### 3.2 iroha CLI
 
-لتمرير كل ادخال في manifest عبر CLI، وفر مسار الملف التنفيذي:
+マニフェストと CLI のリスト:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -149,18 +151,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- يجب ان تكون controllers من نوع `Account` (`controller_type.kind = "Account"`)
-  لان CLI حاليا لا يدعم سوى controllers المعتمدة على الحساب.
-- تكتب blobs الخاصة بـ metadata و governance في ملفات مؤقتة لكل طلب ويتم
-  تمريرها الى `iroha sns register --metadata-json ... --governance-json ...`.
-- يتم تسجيل stdout و stderr مع اكواد الخروج؛ الاكواد غير الصفرية توقف التشغيل.
+- コントローラ `Account` (`controller_type.kind = "Account"`)
+  CLI を使用して、コントローラを管理します。
+- BLOB とメタデータとガバナンスを管理する
+  `iroha sns register --metadata-json ... --governance-json ...`。
+- 標準出力と標準エラー出力の標準出力最高のパフォーマンスを見せてください。
 
 يمكن تشغيل وضعي الارسال معا (Torii و CLI) للتحقق المتقاطع من نشر المسجل او
-لتمرين مسارات fallback.
+フォールバック。
 
-### 3.3 ايصالات الارسال
+### 3.3 説明
 
-عند تمرير `--submission-log <path>` يضيف السكربت سجلات NDJSON تلتقط:
+`--submission-log <path>` يضيف السكربت سجلات NDJSON تلتقط:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -168,17 +170,17 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-تتضمن ردود Torii الناجحة حقولا منظمة مستخرجة من `NameRecordV1` او
-`RegisterNameResponseV1` (مثل `record_status`, `record_pricing_class`,
-`record_owner`, `record_expires_at_ms`, `registry_event_version`, `suffix_id`,
+Torii 認証 `NameRecordV1` 認証
+`RegisterNameResponseV1` (`record_status`、`record_pricing_class`、
+`record_owner`、`record_expires_at_ms`、`registry_event_version`、`suffix_id`、
 `label`) حتى تتمكن لوحات المتابعة وتقارير الحوكمة من تحليل السجل دون تفتيش
-نص حر. ارفق هذا السجل مع تذكرة المسجل بجانب manifest لاثبات قابل لاعادة
-الانتاج.
+ああ。マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト マニフェスト
+ああ。
 
-## 4. اتـمتة اصدار بوابة الوثائق
+## 4. いいえ、いいえ、いいえ。
 
 تستدعي مهام CI والبوابة `docs/portal/scripts/sns_bulk_release.sh` الذي يلف
-المساعد ويخزن الاثار تحت `artifacts/sns/releases/<timestamp>/`:
+`artifacts/sns/releases/<timestamp>/`:
 
 ```bash
 docs/portal/scripts/sns_bulk_release.sh \
@@ -191,24 +193,22 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-السكربت:
+説明:1. يبني `registrations.manifest.json` و `registrations.ndjson` وينسخ CSV الاصلي
+   そうです。
+2. マニフェスト Torii و/او CLI (国際規格) `submissions.log` مع
+   ありがとうございます。
+3. يصدر `summary.json` الذي يصف الاصدار (المسارات، عنوان Torii، مسار CLI،)
+   タイムスタンプ) 時間、時間、時間。
+4. ينتج `metrics.prom` (`--metrics` をオーバーライド) متضمنا عدادات متوافقة مع
+   Prometheus 問題を解決してください。
+   JSON を使用してください。
 
-1. يبني `registrations.manifest.json` و `registrations.ndjson` وينسخ CSV الاصلي
-   الى مجلد الاصدار.
-2. يرسل manifest عبر Torii و/او CLI (عند التهيئة)، ويكتب `submissions.log` مع
-   الايصالات المنظمة اعلاه.
-3. يصدر `summary.json` الذي يصف الاصدار (المسارات، عنوان Torii، مسار CLI،
-   timestamp) لكي تتمكن اتـمتة البوابة من رفع الحزمة الى مخزن الاثار.
-4. ينتج `metrics.prom` (override عبر `--metrics`) متضمنا عدادات متوافقة مع
-   Prometheus لعدد الطلبات الاجمالي وتوزيع اللاحقات ومجاميع الاصل ونتائج الارسال.
-   يربط JSON الملخص بهذا الملف.
+ワークフローの説明 ワークフロー ワークフロー ワークフロー ワークフロー ワークフロー ワークフロー ワークフロー ワークフロー ワークフロー
+ありがとうございます。
 
-تقوم workflows بارشفة مجلد الاصدار كاثر واحد، والذي يحتوي الان كل ما تحتاجه
-الاعتمادات للتدقيق.
+## 5. いいえ
 
-## 5. القياس ولوحات المتابعة
-
-يعرض ملف المقاييس الناتج عن `sns_bulk_release.sh` السلاسل التالية:
+セキュリティ `sns_bulk_release.sh` 番号:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -219,34 +219,34 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-قم بتغذية `metrics.prom` الى sidecar Prometheus لديك (مثلا عبر Promtail او
+قم بتغذية `metrics.prom` الى サイドカー Prometheus لديك (مثلا عبر Promtail او
 مستورد دفعات) للحفاظ على توافق المسجلين وstewards وشركاء الحوكمة حول تقدم
-الجملة. لوحة Grafana `dashboards/grafana/sns_bulk_release.json` تعرض نفس
-البيانات مع لوحات لعدد الطلبات لكل لاحقة، حجم الدفع، ونسب نجاح/فشل الارسال.
-تقوم اللوحة بالتصفية عبر `release` حتى يتمكن المدققون من التعمق في تشغيل CSV
-واحد.
+ああ。 Grafana `dashboards/grafana/sns_bulk_release.json` の評価
+ログインしてください。 ログインしてください。
+`release` حتى يتمكن المدققون من التعمق في تشغيل CSV
+うーん。
 
-## 6. التحقق وحالات الفشل
+## 6. いいえ。
 
-- **توحيد label:** يتم تطبيع الادخالات باستخدام Python IDNA مع lowercase وفلاتر
-  Norm v1. تفشل التسميات غير الصالحة بسرعة قبل اي اتصال شبكي.
-- **حواجز رقمية:** يجب ان تقع suffix ids و term years و pricing hints ضمن حدود
-  `u16` و `u8`. تقبل حقول الدفع اعدادا عشرية او hex حتى `i64::MAX`.
-- **تحليل metadata او governance:** يتم تحليل JSON inline مباشرة؛ ويتم حل
-  مراجع الملفات نسبة الى موقع CSV. metadata غير الكائن ينتج خطا تحقق.
-- **Controllers:** الخلايا الفارغة تلتزم بـ `--default-controllers`. قدم قوائم
-  controller صريحة (مثل `ih58...;ih58...`) عند التفويض لجهات غير المالك.
+- **توحيد ラベル:** يتم تطبيع الادخالات باستخدام Python IDNA مع 小文字 وفلاتر
+  ノルム v1.最高のパフォーマンスを見せてください。
+- ** حواجز رقمية:** يجب ان تقع サフィックス ID 、 期間年数 、 価格のヒント 、
+  `u16` と `u8`。 16 進数は `i64::MAX` です。
+- **メタデータとガバナンス:** JSON インライン セキュリティありがとう
+  CSV を使用します。メタデータは、次のとおりです。
+- **コントローラー:** `--default-controllers`。 قدم قوائم
+  コントローラ (مثل `ih58...;ih58...`) は、コントローラを制御します。
 
-يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
-`error: row 12 term_years must be between 1 and 255`). يخرج السكربت بالكود `1`
-عند اخطاء التحقق و `2` عندما يكون مسار CSV مفقودا.
+يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا)
+`error: row 12 term_years must be between 1 and 255`)。セキュリティ `1`
+`2` と CSV を表示します。
 
-## 7. الاختبار والاعتمادية
+## 7. ああ、
 
-- يغطي `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` تحليل CSV،
-  اصدار NDJSON، فرض الحوكمة، ومسارات ارسال CLI او Torii.
-- المساعد مكتوب ببايثون فقط (بدون تبعيات اضافية) ويعمل حيث يتوفر `python3`.
-  يتم تتبع سجل الالتزامات بجانب CLI في المستودع الرئيسي للموثوقية.
+- يغطي `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` 評価 CSV
+  NDJSON を使用して、CLI を使用して Torii を実行します。
+- المساعد مكتوب ببايثون فقط (بدون تبعيات اضافية) ويعمل حيث يتوفر `python3`。
+  CLI を使用して、セキュリティを強化します。
 
-للانتاج، ارفق manifest الناتج وحزمة NDJSON مع تذكرة المسجل حتى يتمكن stewards
-من اعادة تشغيل الـ payloads الدقيقة التي تم ارسالها الى Torii.
+マニフェストを作成する NDJSON を作成する スチュワードを作成する
+ペイロードは Torii です。

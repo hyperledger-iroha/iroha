@@ -4,43 +4,43 @@ direction: rtl
 source: docs/portal/docs/reference/address-safety.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Securite et accessibilite des adresses
-description: Exigences UX pour presenter et partager les adresses Iroha en securite (ADDR-6c).
+عنوان: سیکیورٹی اور پتے کی رسائ
+تفصیل: Iroha ایکس ایڈریس کو محفوظ طریقے سے (EDDR-6C) پیش کرنے اور ان کا اشتراک کرنے کے لئے UX کی ضروریات۔
 ---
 
-Cette page capture le livrable de documentation ADDR-6c. Appliquez ces contraintes aux wallets, explorers, outils SDK et a toute surface du portail qui rend ou accepte des adresses destinees aux humains. Le modele de donnees canonique se trouve dans `docs/account_structure.md`; la checklist ci-dessous explique comment exposer ces formats sans compromettre la securite ou l'accessibilite.
+اس صفحے نے EDDR-6C دستاویزات کی فراہمی کے قابل قبضہ کیا ہے۔ ان رکاوٹوں کو بٹوے ، ایکسپلورر ، ایس ڈی کے ٹولز اور پورٹل کی کسی بھی سطح پر لگائیں جو انسانوں کے لئے ارادے کو پیش کرتا ہے یا قبول کرتا ہے۔ کیننیکل ڈیٹا ماڈل `docs/account_structure.md` میں پایا جاتا ہے۔ نیچے دیئے گئے چیک لسٹ میں بتایا گیا ہے کہ سیکیورٹی یا رسائ پر سمجھوتہ کیے بغیر ان فارمیٹس کو کس طرح بے نقاب کیا جائے۔
 
-## Flux de partage surs
+## محفوظ شیئرنگ فیڈز
 
-- Par defaut, toute action de copie/partage doit utiliser l'adresse IH58. Affichez le domaine resolu comme contexte d'appui afin que la chaine avec checksum reste au centre.
-- Proposez une action "Partager" qui regroupe l'adresse en texte brut et un QR derive du meme payload. Permettez aux utilisateurs d'inspecter les deux avant de confirmer.
-- Lorsque l'espace impose la troncature (cartes minuscules, notifications), conservez le prefixe lisible, affichez des ellipses et gardez les 4-6 derniers caracteres pour que l'ancre de checksum survive. Offrez un geste/raccourci clavier pour copier la chaine complete sans troncature.
-- Empechez la desynchronisation du presse-papiers en emettant un toast de confirmation qui previsualise la chaine IH58 exacte copiee. La ou la telemetrie existe, comptez les tentatives de copie vs les actions de partage afin de detecter rapidement les regressions UX.
+- پہلے سے طے شدہ طور پر ، کسی بھی کاپی/شیئر ایکشن کو IH58 ایڈریس کا استعمال کرنا چاہئے۔ حل شدہ ڈومین کو معاون سیاق و سباق کے طور پر ڈسپلے کریں تاکہ چیکس کے ساتھ سلسلہ مرکز میں رہے۔
+- ایک "شیئر" ایکشن کی تجویز کریں جس میں سادہ متن میں پتے کو ایک ساتھ مل کر اور ایک ہی پے لوڈ سے اخذ کردہ کیو آر۔ تصدیق کرنے سے پہلے صارفین کو دونوں کا معائنہ کرنے کی اجازت دیں۔
+- جب جگہ تراش (نچلے کیس کارڈز ، اطلاعات) کا حکم دیتی ہے تو ، سابقہ ​​پڑھنے کے قابل رکھیں ، بیضوی ڈسپلے کریں اور آخری 4-6 حروف رکھیں تاکہ چیکسم اینکر زندہ رہے۔ بغیر کسی تراشے کے مکمل تار کو کاپی کرنے کے لئے اشارے/کی بورڈ شارٹ کٹ پیش کریں۔
+- تصدیق شدہ ٹوسٹ جاری کرکے کلپ بورڈ ڈیسینک کو روکیں جو عین مطابق کاپی شدہ IH58 سٹرنگ کا پیش نظارہ کرتا ہے۔ جہاں ٹیلی میٹری موجود ہے ، کاؤنٹ کاپی کی کوششوں بمقابلہ شیئرنگ ایکشنز کو فوری طور پر UX رجعتوں کا پتہ لگانے کے لئے۔
 
-## IME et protections d'entree
+## IME اور ان پٹ تحفظات
 
-- Rejetez toute entree non ASCII dans les champs d'adresse. Lorsque des artefacts de composition IME (full width, Kana, marques de tonalite) apparaissent, affichez un avertissement inline expliquant comment passer le clavier en saisie latine avant de reessayer.
-- Fournissez une zone de collage en texte brut qui supprime les marques combinees et remplace les espaces par des espaces ASCII avant validation. Cela evite de perdre la progression si l'utilisateur desactive l'IME en cours de flux.
-- Durcissez la validation contre les zero-width joiners, variation selectors et autres points de code Unicode furtifs. Journalisez la categorie du point de code rejete pour que les suites de fuzzing puissent importer la telemetrie.
+- ایڈریس فیلڈز میں کسی بھی غیر ASCII ان پٹ کو مسترد کریں۔ جب آئی ایم ای کمپوزیشن نمونے (مکمل چوڑائی ، کنا ، ٹونالائٹ مارکس) ظاہر ہوتے ہیں تو ، ایک ان لائن انتباہ ظاہر کریں جس میں یہ بتایا گیا ہے کہ دوبارہ کوشش کرنے سے پہلے کی بورڈ کو لاطینی ٹائپنگ میں کیسے تبدیل کیا جائے۔
+- ایک سادہ ٹیکسٹ پیسٹ باکس مہیا کریں جو مشترکہ نشانات کو ہٹاتا ہے اور توثیق سے پہلے خالی جگہوں کی جگہ ASCII خالی جگہوں سے لے جاتا ہے۔ اگر صارف بہاؤ کے دوران IME کو غیر فعال کردے تو یہ ترقی کو کھونے سے روکتا ہے۔
+- صفر چوڑائی کے جوائنرز ، تغیرات کے سلیکٹرز اور دیگر چپکے والے یونیکوڈ کوڈ پوائنٹس کے خلاف ہارڈن توثیق۔ مسترد شدہ کوڈ پوائنٹ کے زمرے کو لاگ ان کریں تاکہ فوزنگ سوئٹ ٹیلی میٹری کو درآمد کرسکیں۔
 
-## Attentes pour les technologies d'assistance
+## معاون ٹیکنالوجیز کے لئے توقعات- ہر ایڈریس بلاک کو `aria-label` یا `aria-describedby` کے ساتھ تشریح کریں جو پڑھنے کے قابل پریفکس اور حصوں کو 4-8 حروف ("IH ڈیش بی تین دو ...") کے گروپوں میں منتقل کرتا ہے۔ اس سے اسکرین کے قارئین کو کرداروں کے ناقابل فہم سلسلے کی تیاری سے روکتا ہے۔
+- شائستہ موڈ میں براہ راست خطے کی تازہ کاری کے ذریعہ کامیاب کاپی/شیئر ایکشنز کا اعلان کریں۔ منزل (کلپ بورڈ ، شیئر ، کیو آر) کو شامل کریں تاکہ صارف جانتا ہو کہ عمل بغیر کسی توجہ کے مکمل ہوچکا ہے۔
+- QR پیش نظارہ کے لئے وضاحتی `alt` متن فراہم کریں (جیسے ، چینل `0x1234` پر `<account>` کے لئے IH58 ایڈریس ")۔ ضعف خراب صارفین کے لئے QR کینوس کے ساتھ ہی "متن میں کاپی ایڈریس" فال بیک پیش کریں۔
 
-- Annotez chaque bloc d'adresse avec `aria-label` ou `aria-describedby` qui epelle le prefixe lisible et segmente le payload en groupes de 4-8 caracteres ("ih dash b three two ..."). Cela evite que les lecteurs d'ecran produisent un flux inintelligible de caracteres.
-- Annoncez les actions de copie/partage reussies via une mise a jour de live region en mode polite. Incluez la destination (presse-papiers, partage, QR) pour que l'utilisateur sache que l'action s'est terminee sans deplacer le focus.
-- Fournissez un texte `alt` descriptif pour les apercus QR (par ex., "Adresse IH58 pour `<account>` sur la chaine `0x1234`"). Offrez un fallback "Copier l'adresse en texte" a cote du canvas QR pour les utilisateurs malvoyants.
+## سورہ- صرف کمپریسڈ پتے
 
-## Adresses compressees Sora-only
+- گیٹنگ: ایک واضح تصدیق کے پیچھے کمپریسڈ سٹرنگ `sora...` کو چھپائیں۔ تصدیق کو اس بات کا اعادہ کرنا چاہئے کہ فارمیٹ صرف SORA Nexus چینلز پر کام کرتا ہے۔
+- لیبلنگ: ہر واقعے میں ایک مرئی "سورہ صرف" بیج اور ایک ٹول ٹپ شامل ہونا ضروری ہے جس میں بتایا گیا ہے کہ دوسرے نیٹ ورکس کو IH58 فارم کی ضرورت کیوں ہے۔
+- محافظ: اگر فعال سٹرنگ امتیازی سلوک Nexus مختص نہیں ہے تو ، کمپریسڈ ایڈریس پیدا کرنے اور IH58 پر ری ڈائریکٹ کرنے سے انکار کردیں۔
+- ٹیلی میٹری: کمپریسڈ فارم کی درخواستوں اور کاپیاں کی فریکوئنسی ریکارڈ کریں تاکہ واقعہ پلے بوک حادثاتی اشتراک میں اسپائکس کا پتہ لگائے۔
 
-- Gating: cachez la chaine compressee `sora...` derriere une confirmation explicite. La confirmation doit reiterer que le format ne fonctionne que sur les chaines Sora Nexus.
-- Etiquetage: chaque occurrence doit inclure un badge visible "Sora-only" et un tooltip expliquant pourquoi les autres reseaux exigent la forme IH58.
-- Guardrails: si le discriminant de chaine active n'est pas l'allocation Nexus, refusez de generer l'adresse compressee et redirigez vers IH58.
-- Telemetrie: enregistrez la frequence de demande et de copie de la forme compressee afin que le playbook d'incident detecte les pics de partage accidentel.
+## کوالٹی گیٹس
 
-## Quality gates
-
-- Etendez les tests UI automatises (ou les suites a11y de storybook) pour verifier que les composants d'adresse exposent les metadonnees ARIA requises et que les messages de rejet IME apparaissent.
-- Incluez des scenarios de QA manuels pour l'entree IME (kana, pinyin), un passage lecteur d'ecran (VoiceOver/NVDA) et la copie de QR en themes a fort contraste avant release.
-- Faites remonter ces verifications dans les checklists de release aux cotes des tests de parite IH58 afin que les regressions restent bloquees jusqu'a correction.
+- خودکار UI ٹیسٹ (یا A11y اسٹوری بوک سوٹ) میں توسیع کریں تاکہ اس بات کی تصدیق کی جاسکے کہ ایڈریس اجزاء مطلوبہ اریہ میٹا ڈیٹا کو بے نقاب کرتے ہیں اور یہ کہ آئی ایم ای مسترد ہونے والے پیغامات ظاہر ہوتے ہیں۔
+- آئی ایم ای ان پٹ (کانا ، پائنین) ، اسکرین ریڈر پاس تھرو (وائس اوور/این وی ڈی اے) اور کیو آر کے لئے دستی QA منظرنامے شامل کریں۔
+- IH58 پیریٹی ٹیسٹوں کے ساتھ ساتھ ریلیز چیک لسٹ میں ان چیکوں کو شامل کریں تاکہ رجعتیں درست ہونے تک مسدود رہیں۔

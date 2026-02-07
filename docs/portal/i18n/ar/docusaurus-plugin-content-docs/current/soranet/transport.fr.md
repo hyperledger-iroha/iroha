@@ -4,43 +4,41 @@ direction: rtl
 source: docs/portal/docs/soranet/transport.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: transport
-title: Vue d'ensemble du transport SoraNet
-sidebar_label: Vue d'ensemble du transport
-description: Handshake, rotation des salts et guide des capacites pour l'overlay d'anonymat SoraNet.
+الهوية: النقل
+العنوان: Vue d'ensemble du Transport SoraNet
+Sidebar_label: Vue d'ensemble du Transport
+الوصف: المصافحة وتدوير الأملاح وتوجيه القدرات لتراكب المجهول SoraNet.
 ---
 
-:::note Source canonique
-Cette page reflete la specification de transport SNNet-1 dans `docs/source/soranet/spec.md`. Gardez les deux copies alignees jusqu'a la retraite de l'ancien ensemble de documentation.
+:::ملاحظة المصدر الكنسي
+تعكس هذه الصفحة مواصفات النقل SNNet-1 في `docs/source/soranet/spec.md`. قم بحفظ نسختين من محاذاة مجموعة الوثائق القديمة.
 :::
 
-SoraNet est l'overlay d'anonymat qui soutient les range fetches de SoraFS, le streaming Norito RPC et les futurs data lanes de Nexus. Le programme transport (items de roadmap **SNNet-1**, **SNNet-1a** et **SNNet-1b**) a defini un handshake deterministe, une negotiation de capacites post-quantum (PQ) et un plan de rotation des salts afin que chaque relay, client et gateway observe la meme posture de securite.
+SoraNet عبارة عن تراكب مجهول يدعم نطاق جلب SoraFS، وتدفق Norito RPC وممرات البيانات المستقبلية لـ Nexus. يقوم برنامج النقل (عناصر خارطة الطريق **SNNet-1** و **SNNet-1a** و **SNNet-1b**) بتحديد تحديد المصافحة وتفاوض السعة بعد الكم (PQ) وخطة تدوير الأملاح لكل تتابع، ويراقب العميل والبوابة الوضع الآمن.
 
-## Objectifs et modele reseau
+## البحث عن الكائنات والنماذج- إنشاء دوائر ثلاث مرات (إدخال -> وسط -> خروج) على QUIC v1 حتى يتمكن أقرانك الذين يسيئون استخدام Torii من الانتباه مباشرة.
+- تراكب مصافحة Noise XX *hybride* (Curve25519 + Kyber768) باستخدام QUIC/TLS من أجل إضافة مفاتيح الجلسة إلى نسخة TLS.
+- Exiger des TLVs de capacite التي تعلن عن دعم PQ KEM/signature ودور التتابع وإصدار البروتوكول؛ دهن الأنواع غير المعروفة حتى تبقى الامتدادات المستقبلية قابلة للنشر.
+- التدوير اليومي لأملاح المحتوى بشكل متوسط ​​وإلغاء تتابعات الحماية لمدة 30 يومًا حتى لا يتمكن تشغيل الدليل من إخفاء هوية العملاء.
+- يقوم Garder des cell بإصلاح 1024 B، وحقن الحشو/الخلايا الوهمية، وتصدير قياس عن بعد محدد للكشف السريع عن محاولات خفض المستوى.
 
-- Construire des circuits a trois sauts (entry -> middle -> exit) sur QUIC v1 afin que les peers abusifs n'atteignent jamais Torii directement.
-- Superposer un handshake Noise XX *hybride* (Curve25519 + Kyber768) par-dessus QUIC/TLS pour lier les cles de session au transcript TLS.
-- Exiger des TLVs de capacite qui annoncent le support PQ KEM/signature, le role du relay et la version de protocole; GREASE les types inconnus pour que les extensions futures restent deployables.
-- Rotation quotidienne des salts de contenu aveugle et epinglage des guard relays pour 30 jours afin que le churn du directory ne puisse pas desanonymiser les clients.
-- Garder des cells fixes a 1024 B, injecter du padding/des cells dummy, et exporter une telemetrie deterministe pour detecter rapidement les tentatives de downgrade.
+## خط أنابيب المصافحة (SNNet-1a)
 
-## Pipeline de handshake (SNNet-1a)
-
-1. **QUIC/TLS envelope** - les clients se connectent aux relays via QUIC v1 et terminent un handshake TLS 1.3 en utilisant des certificats Ed25519 signes par la governance CA. Le TLS exporter (`tls-exporter("soranet handshake", 64)`) alimente la couche Noise pour que les transcripts soient inseparables.
-2. **Noise XX hybrid** - chaine de protocole `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` avec prologue = TLS exporter. Flux de messages:
+1. **مغلف QUIC/TLS** - يتصل العملاء بالمرحلات عبر QUIC v1 وينهيون مصافحة TLS 1.3 باستخدام شهادات Ed25519 وفقًا لحوكمة CA. يقوم مُصدر TLS (`tls-exporter("soranet handshake", 64)`) برفع مستوى الضوضاء بحيث تكون النصوص غير قابلة للفصل.
+2. **Noise XX hybrid** - سلسلة البروتوكول `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` مع prologue = مُصدِّر TLS. تدفق الرسائل:
 
    ```
    -> e, s
    <- e, ee, se, s, pq_ciphertext
    -> ee, se, pq_ciphertext
-   ```
+   ```إن عملية DH Curve25519 وتغليفات Kyber تمتزج في العناصر المتماثلة النهائية. يؤدي إجراء تفاوض PQ إلى إلغاء إكمال المصافحة: لن يتم المصادقة على خيار احتياطي كلاسيكي.
 
-   La sortie DH Curve25519 et les deux encapsulations Kyber sont melangees dans les cles symetriques finales. Un echec de negotiation PQ annule le handshake completement: aucun fallback classique seul n'est autorise.
-
-3. **Puzzle tickets et tokens** - les relays peuvent exiger un ticket de proof-of-work Argon2id avant `ClientHello`. Les tickets sont des frames prefixees par la longueur qui transportent la solution Argon2 hachee et expirent dans les bornes de la politique:
+3. **ألغاز التذاكر والرموز** - قد تتطلب المرحلات تذكرة إثبات العمل Argon2id avant `ClientHello`. التذاكر هي إطارات بادئة طولية تنقل الحل Argon2 hachee وتنتهي في les Bornes de la politique:
 
    ```norito
    struct PowTicketV1 {
@@ -52,15 +50,15 @@ SoraNet est l'overlay d'anonymat qui soutient les range fetches de SoraFS, le st
    }
    ```
 
-   Les tokens d'admission prefixes par `SNTK` contournent les puzzles lorsqu'une signature ML-DSA-44 de l'emetteur valide contre la politique active et la liste de revocation.
+   بادئات القبول المميزة `SNTK` تحيط بالألغاز عند التوقيع ML-DSA-44 على الباعث الصالح ضد السياسة النشطة وقائمة الإلغاء.
 
-4. **Echange de capability TLV** - le payload final de Noise transporte les TLVs de capacite decrits ci-dessous. Les clients abandonnent la connexion si une capacite obligatoire (PQ KEM/signature, role ou version) est manquante ou en conflit avec l'entree du directory.
+4. **تغيير القدرة TLV** - الحمولة النهائية للضوضاء تنقل السعة TLVs التي تقل عن ci-dessous. يتخلى العملاء عن الاتصال إذا كانت السعة الإلزامية (PQ KEM/التوقيع أو الدور أو الإصدار) عالقة أو تتعارض مع مدخل الدليل.
 
-5. **Journalisation du transcript** - les relays journalisent le hash du transcript, l'empreinte TLS et le contenu TLV pour alimenter les detecteurs de downgrade et les pipelines de conformite.
+5. **Journalisation du Transcript** - les Relays Journalisent Le hash du Transcript، و TLS ومحتوى TLV لإيقاف كاشفات الانحدار وخطوط المطابقة.
 
-## Capability TLVs (SNNet-1c)
+## قدرة TLVs (SNNet-1c)
 
-Les capacites reutilisent une enveloppe TLV fixe `typ/length/value`:
+يتم إعادة استخدام السعات في مظروف TLV الذي تم إصلاحه `typ/length/value`:
 
 ```norito
 struct CapabilityTLV {
@@ -70,48 +68,42 @@ struct CapabilityTLV {
 }
 ```
 
-Types definis aujourd'hui:
+أنواع محددة في aujourd'hui:- `snnet.pqkem` - مستوى Kyber (`kyber768` للطرح الفعلي).
+- `snnet.pqsig` - مجموعة التوقيع PQ (`ml-dsa-44`).
+- `snnet.role` - دور التتابع (`entry`، `middle`، `exit`، `gateway`).
+- `snnet.version` - معرف إصدار البروتوكول.
+- `snnet.grease` - مدخلات المكافأة الإضافية في الشاطئ الاحتياطي لضمان التسامح مع TLVs المستقبلية.
 
-- `snnet.pqkem` - niveau Kyber (`kyber768` pour le rollout actuel).
-- `snnet.pqsig` - suite de signature PQ (`ml-dsa-44`).
-- `snnet.role` - role du relay (`entry`, `middle`, `exit`, `gateway`).
-- `snnet.version` - identifiant de version du protocole.
-- `snnet.grease` - entrees de remplissage aleatoires dans la plage reservee pour garantir la tolerance des futurs TLVs.
+يحتفظ العملاء بقائمة السماح بـ TLVs المطلوبة ويكررون المصافحة عندما يتم حذفها أو تدهورها. تنشر المرحلات مجموعة الميمات في الواصف الدقيق للدليل حتى يتم تحديد التحقق من الصحة.
 
-Les clients maintiennent une allow-list de TLVs requis et echouent le handshake lorsqu'ils sont omis ou degrades. Les relays publient le meme set dans leur microdescriptor de directory pour que la validation soit deterministe.
+## دوران الأملاح وتعمية CID (SNNet-1b)
 
-## Rotation des salts et CID blinding (SNNet-1b)
-
-- La governance publie un enregistrement `SaltRotationScheduleV1` avec les valeurs `(epoch_id, salt, valid_after, valid_until)`. Les relays et gateways recuperent le calendrier signe depuis le directory publisher.
-- Les clients appliquent le nouveau salt a `valid_after`, conservent le salt precedent pour une periode de grace de 12 h et gardent un historique de 7 epoques pour tolerer les mises a jour retardees.
-- Les identifiants aveugles canoniques utilisent:
+- تقوم الإدارة بنشر تسجيل `SaltRotationScheduleV1` مع القيم `(epoch_id, salt, valid_after, valid_until)`. تستعيد المرحلات والبوابات علامة التقويم من ناشر الدليل.
+- يطبق العملاء الملح الجديد على `valid_after`، ويحافظون على الملح السابق لفترة سماح مدتها 12 ساعة ويزرعون تاريخًا من 7 حقب لتحمل التأخر في اليوم.
+- المعرفات aveugles canoniques المستخدمة:
 
   ```
   cache_key = BLAKE3("soranet.blinding.canonical.v1" ∥ salt ∥ cid)
-  ```
+  ```تقبل البوابات المفتاح عبر `Sora-Req-Blinded-CID` ويتم إرجاعه في `Sora-Content-CID`. الدائرة/الطلب المسببة للعمى (`CircuitBlindingKey::derive`) موجودة في `iroha_crypto::soranet::blinding`.
+- إذا كان هناك مرحل منذ فترة ما، فسيتم إيقاف الدوائر الجديدة حتى يتم تحميل التقويم وإصدار `SaltRecoveryEventV1`، بحيث تكون لوحات المعلومات الرئيسية بمثابة إشارة ترحيل.
 
-  Les gateways acceptent la cle aveugle via `Sora-Req-Blinded-CID` et la renvoient dans `Sora-Content-CID`. Le blinding circuit/request (`CircuitBlindingKey::derive`) est fourni dans `iroha_crypto::soranet::blinding`.
-- Si un relay manque une epoque, il arrete de nouveaux circuits jusqu'a ce qu'il telecharge le calendrier et emet un `SaltRecoveryEventV1`, que les dashboards d'astreinte traitent comme un signal de paging.
+## بيانات الدليل والسياسة الأمنية
 
-## Donnees de directory et politique de guard
+- تشير الواصفات الدقيقة إلى هوية التتابع (Ed25519 + ML-DSA-65)، والعناصر PQ، وTLVs للسعة، وعلامات المنطقة، وحرس الأهلية، وإعلان فترة الملح.
+- يرسل العملاء مجموعات الحماية لمدة 30 يومًا ويستمرون في تخزين ذاكرات التخزين المؤقت `guard_set` في لقطة الشاشة لتوقيع الدليل. تعرض أغلفة CLI وSDK تمكين ذاكرة التخزين المؤقت بحيث يتم إرفاق إجراءات الطرح المسبقة بمراجعات التغيير.
 
-- Les microdescriptors portent l'identite du relay (Ed25519 + ML-DSA-65), les cles PQ, les TLVs de capacite, les tags de region, l'eligibilite guard et l'epoque de salt annoncee.
-- Les clients epinglent les guard sets pendant 30 jours et persistent les caches `guard_set` aux cotes du snapshot signe du directory. Les wrappers CLI et SDK exposent l'empreinte du cache afin que les preuves de rollout soient attachees aux revues de changement.
+## القياس عن بعد وقائمة التحقق من التشغيل- مقاييس الإنتاج الطليعي المصدر:
+  -`soranet_handshake_success_total{role}`
+  -`soranet_handshake_failure_total{reason}`
+  -`soranet_handshake_latency_seconds`
+  -`soranet_capability_mismatch_total`
+  -`soranet_salt_rotation_lag_seconds`
+- تستمر التنبيهات في الظهور في مصفوفة SLO في SOP لتدوير الأملاح (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) ويتم عكسها في Alertmanager قبل ترقية الشبكة.
+- التنبيهات: > 5% من كمية الشوائب خلال 5 دقائق، تأخر الملح > 15 دقيقة، أو عدم تطابق القدرات الملاحظ في الإنتاج.
+- مراحل الطرح:
+  1. قم بممارسة اختبارات قابلية التشغيل البيني للترحيل/العميل والتشغيل المرحلي مع المصافحة الهجينة وكومة PQ النشطة.
+  2. كرر SOP لتدوير الأملاح (`docs/source/soranet_salt_plan.md`) وقم بضم قطع الحفر إلى ملف التغيير.
+  3. قم بتنشيط التفاوض بشأن القدرات في الدليل، ثم قم بنشر مرحلات الدخول، ومرحلات الوسطاء، ومرحلات الفرز، وإلحاق العملاء.
+  4. قم بتسجيل إعدادات حماية ذاكرة التخزين المؤقت وموازنات الملح ولوحات القياس عن بعد لكل مرحلة؛ انضم إلى الحزمة المسبقة إلى `status.md`.
 
-## Telemetrie et checklist de rollout
-
-- Metriques a exporter avant production:
-  - `soranet_handshake_success_total{role}`
-  - `soranet_handshake_failure_total{reason}`
-  - `soranet_handshake_latency_seconds`
-  - `soranet_capability_mismatch_total`
-  - `soranet_salt_rotation_lag_seconds`
-- Les seuils d'alerte vivent aux cotes de la matrice SLO du SOP de rotation des salts (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) et doivent etre refletes dans Alertmanager avant la promotion du reseau.
-- Alertes: >5 % de taux d'echec sur 5 minutes, salt lag >15 minutes, ou des mismatches de capacites observes en production.
-- Etapes de rollout:
-  1. Exercicer les tests d'interoperabilite relay/client en staging avec le handshake hybride et la pile PQ activee.
-  2. Repeter le SOP de rotation des salts (`docs/source/soranet_salt_plan.md`) et joindre les artefacts de drill au dossier de changement.
-  3. Activer la negotiation de capacites dans le directory, puis deployer aux relays d'entree, relays intermediaires, relays de sortie, et enfin aux clients.
-  4. Enregistrer les empreintes de cache de guard, les calendriers de salt et les dashboards de telemetrie pour chaque phase; joindre le bundle de preuves a `status.md`.
-
-Suivre cette checklist permet aux equipes d'operateurs, de clients et de SDK d'adopter les transports SoraNet de concert tout en respectant la determinisme et les exigences d'audit capturees dans la roadmap SNNet.
+تسمح قائمة المراجعة التالية لمعدات المشغلين والعملاء وSDK باعتماد وسائل النقل SoraNet للتنسيق بالكامل مع احترام الحتمية ومتطلبات التدقيق التي تم التقاطها في خريطة الطريق SNNet.

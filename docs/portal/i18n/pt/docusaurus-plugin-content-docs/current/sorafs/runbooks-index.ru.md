@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/sorafs/runbooks-index.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: runbooks-index
-title: Индекс операторских ранбуков
+id: índice de runbooks
+título: Индекс операторских ранбуков
 sidebar_label: Индекс ранбуков
-description: Каноническая точка входа для мигрированных операторских ранбуков SoraFS.
+descrição: Каноническая точка входа для мигрированных операторских ранбуков SoraFS.
 ---
 
-> Отражает реестр владельцев, который находится в `docs/source/sorafs/runbooks/`.
-> Каждое новое руководство по операциям SoraFS должно быть связано здесь после публикации в
+> Abra o arquivo владельцев, que está localizado em `docs/source/sorafs/runbooks/`.
+> A nova versão da operação SoraFS está disponível para uso público em
 > сборке портала.
 
-Используйте эту страницу, чтобы проверить, какие ранбуки завершили миграцию из устаревшего
-дерева документации в портал. Каждая запись содержит владельцев, канонический путь источника
-и копию в портале, чтобы ревьюеры могли сразу перейти к нужному руководству во время бета‑превью.
+Use este site, isso é garantido, como o serviço irá migrar do local
+você precisa de documentação no portal. Каждая запись содержит владельцев, канонический путь источника
+e copiando no portal, esses programas podem ser configurados para uma nova operação no período beta.
 
-## Хост бета‑превью
+##Host бета‑превью
 
-Волна DocOps уже повысила одобренный ревьюерами хост бета‑превью на `https://docs.iroha.tech/`.
-Когда направляете операторов или ревьюеров к мигрированному ранбуку, используйте это имя
-хоста, чтобы они работали со снимком портала, защищённым контрольной суммой. Процедуры
-публикации/отката находятся в
+O DocOps está disponível para versão beta `https://docs.iroha.tech/`.
+Quando você precisa de um operador ou de uma transferência para uma migração, use-o
+Então, você está trabalhando no portal de segurança, para obter uma reunião de controle. Produtores
+publique/отката находятся em
 [`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
 
-| Ранбук | Владельцы | Копия в портале | Источник |
+| Ранбук | Владельцы | Copiar no portal | Estocado |
 |--------|-----------|-----------------|----------|
-| Запуск gateway и DNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| Плейбук операций SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Сверка ёмкости | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Операции реестра пинов | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Чеклист операций узла | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Ранбук споров и отзывов | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Плейбук staging‑манифестов | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Наблюдаемость якоря Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| Gateway de segurança e DNS | TL de rede, automação de operações, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| Operação do cabo SoraFS | Documentos/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| Caixa de câmbio | Tesouraria / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| Operações de restauração de pinos | GT Ferramentaria | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| Verifique o funcionamento da operação | Equipe de armazenamento, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| Esporos e отзывов | Conselho de Governança | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| Encenação de plástico‑manifestos | Documentos/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| Наблюдаемость якоря Taikai | GT Plataforma de Mídia / Programa DA / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Чеклист проверки
+## Verifique as receitas
 
 - [x] Сборка портала ссылается на этот индекс (элемент боковой панели).
 - [x] Каждый мигрированный ранбук указывает канонический путь источника, чтобы держать
   ревьюеров согласованными во время ревизии документации.
 - [x] Пайплайн предварительного просмотра DocOps блокирует слияния, когда перечисленный
-  ранбук отсутствует в выводе портала.
+  ранбук отсутствует em seu portal.
 
-Будущие миграции (например, новые хаос‑дрили или приложения по управлению) должны добавить
-строку в таблицу выше и обновить чеклист DocOps, встроенный в
+Minha migração (por exemplo, nova mudança ou privilégio de atualização) é necessária para a transferência
+abra sua tabela e verifique o DocOps, acessando
 `docs/examples/docs_preview_request_template.md`.

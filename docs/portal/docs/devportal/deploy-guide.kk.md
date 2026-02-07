@@ -11,43 +11,44 @@ id: deploy-guide
 title: SoraFS Deployment Guide
 sidebar_label: Deployment Guide
 description: Promote the developer portal through the SoraFS pipeline with deterministic builds, Sigstore signing, and rollback drills.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## Шолу
 
-This playbook converts roadmap items **DOCS-7** (SoraFS publishing) and **DOCS-8**
-(CI/CD pin automation) into an actionable procedure for the developer portal.
-It covers the build/lint phase, SoraFS packaging, Sigstore-backed manifest
-signing, alias promotion, verification, and rollback drills so every preview and
-release artefact is reproducible and auditable.
+Бұл кітап жол картасының элементтерін **DOCS-7** (SoraFS жариялау) және **DOCS-8** түрлендіреді.
+(CI/CD пин автоматизациясы) әзірлеуші порталының әрекет етуші процедурасына айналдырыңыз.
+Ол құрастыру/линт фазасын, SoraFS қаптамасын, Sigstore қолдау көрсететін манифестті қамтиды.
+қол қою, бүркеншік атпен жылжыту, тексеру және кері қайтару жаттығулары осылайша әрбір алдын ала қарау және
+шығару артефакті қайталанатын және тексерілетін.
 
-The flow assumes you have the `sorafs_cli` binary (built with
-`--features cli`), access to a Torii endpoint with pin-registry permissions, and
-OIDC credentials for Sigstore. Store long-lived secrets (`IROHA_PRIVATE_KEY`,
-`SIGSTORE_ID_TOKEN`, Torii tokens) in your CI vault; local runs can source them
-from shell exports.
+Ағын сізде `sorafs_cli` екілік нұсқасы бар (құрылған
+`--features cli`), PIN-тізілім рұқсаттары бар Torii соңғы нүктесіне қатынасу және
+OIDC Sigstore үшін тіркелгі деректері. Ұзақ өмір сүретін құпияларды сақтаңыз (`IROHA_PRIVATE_KEY`,
+`SIGSTORE_ID_TOKEN`, Torii белгілері) сіздің CI қоймаңызда; жергілікті жүгірулер олардың көзі бола алады
+қабық экспортынан.
 
-## Prerequisites
+## Алғышарттар
 
-- Node 18.18+ with `npm` or `pnpm`.
-- `sorafs_cli` from `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- Torii URL that exposes `/v1/sorafs/*` plus an authority account/private key
-  that can submit manifests and aliases.
-- OIDC issuer (GitHub Actions, GitLab, workload identity, etc.) to mint a
+- `npm` немесе `pnpm` бар 18.18+ түйіні.
+- `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli` бастап.
+- Torii URL мекенжайы `/v1/sorafs/*` плюс өкілетті тіркелгіні/жеке кілтті көрсетеді
+  манифесттер мен бүркеншік аттарды жібере алады.
+- OIDC эмитенті (GitHub әрекеттері, GitLab, жұмыс жүктемесінің идентификациясы және т.б.)
   `SIGSTORE_ID_TOKEN`.
-- Optional: `examples/sorafs_cli_quickstart.sh` for dry runs and
-  `docs/source/sorafs_ci_templates.md` for GitHub/GitLab workflow scaffolding.
-- Configure the Try it OAuth variables (`DOCS_OAUTH_*`) and run the
-  [security-hardening checklist](./security-hardening.md) before promoting a build
-  outside the lab. The portal build now fails when these variables are missing
-  or when the TTL/polling knobs fall outside the enforced windows; export
-  `DOCS_OAUTH_ALLOW_INSECURE=1` only for disposable local previews. Attach the
-  pen-test evidence to the release ticket.
+- Қосымша: құрғақ жүгіруге арналған `examples/sorafs_cli_quickstart.sh` және
+  `docs/source/sorafs_ci_templates.md` GitHub/GitLab жұмыс процесінің тірегі үшін.
+- Try it OAuth айнымалы мәндерін конфигурациялаңыз (`DOCS_OAUTH_*`) және іске қосыңыз
+  [қауіпсіздікті күшейтетін бақылау тізімі](./security-hardening.md) құрастыруды жылжытудан бұрын
+  зертханадан тыс. Бұл айнымалылар жоқ кезде портал құрастыру енді сәтсіз болады
+  немесе TTL/сауалдау тұтқалары бекітілген терезелердің сыртына түскенде; экспорт
+  `DOCS_OAUTH_ALLOW_INSECURE=1` тек бір рет қолданылатын жергілікті алдын ала қарау үшін. тіркеңіз
+  босату билетіне қалам-тест дәлелі.
 
-## Step 0 — Capture a Try it proxy bundle
+## 0-қадам — Байқап көріңіз прокси бумасын түсіріңіз
 
-Before promoting a preview to Netlify or the gateway, stamp the Try it proxy
-sources and signed OpenAPI manifest digest into a deterministic bundle:
+Алдын ала қарауды Netlify немесе шлюзге жылжытпас бұрын, көріңіз проксиге мөр қойыңыз
+көздер мен қол қойылған OpenAPI манифест дайджесті детерминирленген бумаға:
 
 ```bash
 cd docs/portal
@@ -57,14 +58,14 @@ npm run release:tryit-proxy -- \
   --label preview-2026-02-14
 ```
 
-`scripts/tryit-proxy-release.mjs` copies the proxy/probe/rollback helpers,
-verifies the OpenAPI signature, and writes `release.json` plus
-`checksums.sha256`. Attach this bundle to the Netlify/SoraFS gateway promotion
-ticket so reviewers can replay the exact proxy sources and Torii target hints
-without rebuilding. The bundle also records whether client-supplied bearers were
-enabled (`allow_client_auth`) to keep the rollout plan and CSP rules in sync.
+`scripts/tryit-proxy-release.mjs` прокси/зонд/қайтару көмекшілерін көшіреді,
+OpenAPI қолтаңбасын тексереді және `release.json` плюс жазады
+`checksums.sha256`. Бұл топтаманы Netlify/SoraFS шлюз жарнамасына тіркеңіз
+тексерушілер дәл прокси көздерін және Torii мақсатты кеңестерін қайталай алатындай билет
+қайта құрусыз. Бума сонымен қатар клиент жеткізген жеткізушілер болған-болмайтынын жазады
+қосу жоспары мен CSP ережелерін синхрондауда сақтау үшін (`allow_client_auth`).
 
-## Step 1 — Build and lint the portal
+## 1-қадам — Порталды құрастырыңыз және сызыңыз
 
 ```bash
 cd docs/portal
@@ -77,19 +78,19 @@ npm run check:links
 npm run build
 ```
 
-`npm run build` automatically executes `scripts/write-checksums.mjs`, producing:
+`npm run build` `scripts/write-checksums.mjs` функциясын автоматты түрде орындайды, мыналарды жасайды:
 
-- `build/checksums.sha256` — SHA256 manifest suitable for `sha256sum -c`.
-- `build/release.json` — metadata (`tag`, `generated_at`, `source`) pinned into
-  every CAR/manifest.
+- `build/checksums.sha256` — `sha256sum -c` үшін жарамды SHA256 манифесті.
+- `build/release.json` — метадеректер (`tag`, `generated_at`, `source`)
+  әрбір CAR/манифест.
 
-Archive both files alongside the CAR summary so reviewers can diff preview
-artefacts without rebuilding.
+Тексерушілер алдын ала қарауды басқаша алуы үшін екі файлды да CAR қорытындысымен бірге мұрағаттаңыз
+қайта құрусыз артефактілер.
 
-## Step 2 — Package the static assets
+## 2-қадам — Статикалық активтерді жинаңыз
 
-Run the CAR packer against the Docusaurus output directory. The example below
-writes all artefacts under `artifacts/devportal/`.
+CAR пакетін Docusaurus шығыс каталогына қарсы іске қосыңыз. Төмендегі мысал
+`artifacts/devportal/` астында барлық артефактілерді жазады.
 
 ```bash
 OUT=artifacts/devportal
@@ -103,25 +104,25 @@ sorafs_cli car pack \
   --chunker-handle sorafs.sf1@1.0.0
 ```
 
-The summary JSON captures chunk counts, digests, and proof-planning hints that
-`manifest build` and CI dashboards reuse later.
+Жиынтық JSON кесінділерді, дайджесттерді және дәлелдеуді жоспарлау бойынша кеңестерді қамтиды
+`manifest build` және CI бақылау тақталары кейінірек қайта пайдаланылады.
 
-## Step 2b — Package OpenAPI and SBOM companions
+## 2b-қадам — OpenAPI пакеті және SBOM серіктестері
 
-DOCS-7 requires publishing the portal site, OpenAPI snapshot, and SBOM payloads
-as distinct manifests so gateways can staple `Sora-Proof`/`Sora-Content-CID`
-headers for each artefact. The release helper
-(`scripts/sorafs-pin-release.sh`) already packages the OpenAPI directory
-(`static/openapi/`) and SBOMs emitted via `syft` into separate
-`openapi.*`/`*-sbom.*` CARs and records the metadata in
-`artifacts/sorafs/portal.additional_assets.json`. When running the manual flow,
-repeat Steps 2–4 for each payload with its own prefixes and metadata labels
-(for example `--car-out "$OUT"/openapi.car` plus
-`--metadata alias_label=docs.sora.link/openapi`). Register every manifest/alias
-pair in Torii (site, OpenAPI, portal SBOM, OpenAPI SBOM) before switching DNS so
-the gateway can serve stapled proofs for all published artefacts.
+DOCS-7 портал сайтын, OpenAPI суретін және SBOM пайдалы жүктемелерін жариялауды талап етеді
+Шлюздер `Sora-Proof`/`Sora-Content-CID` степлей алады.
+әрбір артефакт үшін тақырыптар. Шығарылатын көмекші
+(`scripts/sorafs-pin-release.sh`) OpenAPI каталогын буып қойған.
+(`static/openapi/`) және `syft` арқылы шығарылатын SBOMs бөлек
+`openapi.*`/`*-sbom.*` CAR және метадеректерді мына қалтада жазады
+`artifacts/sorafs/portal.additional_assets.json`. Қолмен ағынды іске қосқанда,
+өз префикстері мен метадеректер белгілері бар әрбір пайдалы жүктеме үшін 2-4 қадамдарды қайталаңыз
+(мысалы, `--car-out "$OUT"/openapi.car` плюс
+`--metadata alias_label=docs.sora.link/openapi`). Әрбір манифестті/бүркеншік атты тіркеңіз
+DNS ауыстырмас бұрын Torii (сайт, OpenAPI, SBOM порталы, OpenAPI SBOM) ішінде жұптаңыз.
+шлюз барлық жарияланған артефактілер үшін қапсырмаланған дәлелдерге қызмет ете алады.
 
-## Step 3 — Build the manifest
+## 3-қадам — Манифест құрастыру
 
 ```bash
 sorafs_cli manifest build \
@@ -134,10 +135,10 @@ sorafs_cli manifest build \
   --metadata alias_label=docs.sora.link
 ```
 
-Tune pin-policy flags to your release window (for example, `--pin-storage-class
-hot` for canaries). The JSON variant is optional but convenient for code review.
+Шығарылым терезесіне pin-политика жалаушаларын реттеңіз (мысалы, `--pin-storage-class
+канарейлерге арналған ыстық`). JSON нұсқасы қосымша, бірақ кодты қарап шығуға ыңғайлы.
 
-## Step 4 — Sign with Sigstore
+## 4-қадам — Sigstore арқылы қол қойыңыз
 
 ```bash
 sorafs_cli manifest sign \
@@ -149,17 +150,17 @@ sorafs_cli manifest sign \
   --identity-token-audience sorafs-devportal
 ```
 
-The bundle records the manifest digest, chunk digests, and a BLAKE3 hash of the
-OIDC token without persisting the JWT. Keep both the bundle and detached
-signature; production promotions can reuse the same artefacts instead of resigning.
-Local runs can replace the provider flags with `--identity-token-env` (or set
-`SIGSTORE_ID_TOKEN` in the environment) when an external OIDC helper issues the
-token.
+Бума манифест дайджестін, кесек дайджесттерді және BLAKE3 хэшін жазады.
+JWT сақталмай OIDC таңбалауышы. Буманы да, бөлек те сақтаңыз
+қол қою; өндірісті жылжыту жұмыстан шығудың орнына сол артефактілерді қайта пайдалана алады.
+Жергілікті іске қосулар провайдер жалаушаларын `--identity-token-env` (немесе орнату) ауыстыра алады
+`SIGSTORE_ID_TOKEN` ортада) сыртқы OIDC көмекшісі
+жетон.
 
-## Step 5 — Submit to the pin registry
+## 5-қадам — PIN тізіліміне жіберіңіз
 
-Submit the signed manifest (and chunk plan) to Torii. Always request a summary
-so the resulting registry entry/alias proof is auditable.
+Қол қойылған манифестті (және бөліктік жоспарды) Torii мекенжайына жіберіңіз. Әрқашан қорытынды сұраңыз
+сондықтан алынған тізілім жазбасы/бүркеншік аттың дәлелі тексеріледі.
 
 ```bash
 sorafs_cli manifest submit \
@@ -176,21 +177,21 @@ sorafs_cli manifest submit \
   --response-out "$OUT"/portal.submit.response.json
 ```
 
-When rolling out a preview or canary alias (`docs-preview.sora`), repeat the
-submission with a unique alias so QA can verify content before production
-promotion.
+Алдын ала қарауды немесе канарей бүркеншік атын (`docs-preview.sora`) шығарған кезде
+бірегей бүркеншік атпен жіберу, осылайша QA өнім шығару алдында мазмұнды тексере алады
+жылжыту.
 
-Alias binding requires three fields: `--alias-namespace`, `--alias-name`, and
-`--alias-proof`. Governance produces the proof bundle (base64 or Norito bytes)
-when the alias request is approved; store it in CI secrets and surface it as a
-file before invoking `manifest submit`. Leave the alias flags unset when you
-only intend to pin the manifest without touching DNS.
+Бүркеншік атпен байланыстыру үш өрісті қажет етеді: `--alias-namespace`, `--alias-name` және
+`--alias-proof`. Басқару дәлелдеу бумасын шығарады (base64 немесе Norito байт)
+бүркеншік ат сұрау мақұлданған кезде; оны CI құпияларында сақтаңыз және оны а ретінде көрсетіңіз
+`manifest submit` шақыру алдында файл. Кез келген кезде бүркеншік ат жалаушаларын орнатусыз қалдырыңыз
+тек DNS-ге қол тигізбестен манифестті бекітуді көздейді.
 
-## Step 5b — Generate a governance proposal
+## Қадам 5b — Басқару ұсынысын жасаңыз
 
-Every manifest should travel with a Parliament-ready proposal so that any Sora
-citizen can introduce the change without borrowing privileged credentials.
-After the submit/sign steps, run:
+Әрбір манифест кез келген Сора болатындай Парламент дайын ұсыныспен саяхаттау керек
+азамат артықшылықты куәлікті қарызға алмай-ақ өзгеріс енгізе алады.
+Жіберу/қол қою қадамдарынан кейін іске қосыңыз:
 
 ```bash
 sorafs_cli manifest proposal \
@@ -201,15 +202,15 @@ sorafs_cli manifest proposal \
   --proposal-out "$OUT"/portal.pin.proposal.json
 ```
 
-`portal.pin.proposal.json` captures the canonical `RegisterPinManifest`
-instruction, chunk digest, policy, and alias hint. Attach it to the governance
-ticket or Parliament portal so delegates can diff the payload without rebuilding
-the artefacts. Because the command never touches the Torii authority key, any
-citizen can draft the proposal locally.
+`portal.pin.proposal.json` канондық `RegisterPinManifest` түсіреді
+нұсқаулық, кесінді дайджест, саясат және бүркеншік ат туралы кеңес. Оны басқармаға бекітіңіз
+билет немесе Парламент порталы, осылайша делегаттар пайдалы жүктемені қайта құрусыз ажырата алады
+артефактілер. Өйткені пәрмен Torii өкілетті кілтіне ешқашан тимейді, кез келген
+азамат жергілікті жерде ұсыныс жасай алады.
 
-## Step 6 — Verify proofs and telemetry
+## 6-қадам — Дәлелдемелер мен телеметрияны тексеріңіз
 
-After pinning, run the deterministic verification steps:
+Бекіткеннен кейін детерминирленген тексеру қадамдарын орындаңыз:
 
 ```bash
 sorafs_cli proof verify \
@@ -223,18 +224,18 @@ sorafs_cli manifest verify-signature \
   --chunk-plan "$OUT"/portal.plan.json
 ```
 
-- Check `torii_sorafs_gateway_refusals_total` and
-  `torii_sorafs_replication_sla_total{outcome="missed"}` for anomalies.
-- Run `npm run probe:portal` to exercise the Try-It proxy and recorded links
-  against the newly pinned content.
-- Capture the monitoring evidence described in
-  [Publishing & Monitoring](./publishing-monitoring.md) so DOCS-3c’s
-  observability gate is satisfied alongside the publishing steps. The helper
-  now accepts multiple `bindings` entries (site, OpenAPI, portal SBOM, OpenAPI
-  SBOM) and enforces `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` on the target
-  host via the optional `hostname` guard. The invocation below writes both a
-  single JSON summary and the evidence bundle (`portal.json`, `tryit.json`,
-  `binding.json`, and `checksums.sha256`) under the release directory:
+- `torii_sorafs_gateway_refusals_total` және тексеріңіз
+  Аномалиялар үшін `torii_sorafs_replication_sla_total{outcome="missed"}`.
+- Try-It проксиін және жазылған сілтемелерді пайдалану үшін `npm run probe:portal` іске қосыңыз
+  жаңадан бекітілген мазмұнға қарсы.
+- бөлімінде сипатталған бақылау дәлелдерін түсіріңіз
+  [Жариялау және бақылау](./publishing-monitoring.md) сондықтан DOCS-3c
+  Бақылау қақпасы жариялау қадамдарымен қатар қанағаттандырылады. Көмекші
+  енді бірнеше `bindings` жазбаларын қабылдайды (сайт, OpenAPI, SBOM порталы, OpenAPI
+  SBOM) және мақсатқа `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` күшіне енгізеді
+  қосымша `hostname` қорғаушысы арқылы хост. Төмендегі шақыру а деп те жазады
+  жалғыз JSON қорытындысы және дәлелдер жинағы (`portal.json`, `tryit.json`,
+  `binding.json` және `checksums.sha256`) шығарылым каталогында:
 
   ```bash
   npm run monitor:publishing -- \
@@ -243,12 +244,12 @@ sorafs_cli manifest verify-signature \
     --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
   ```
 
-## Step 6a — Plan gateway certificates
+## Қадам 6a — Шлюз сертификаттарын жоспарлаңыз
 
-Derive the TLS SAN/challenge plan before creating GAR packets so the gateway
-team and DNS approvers review the same evidence. The new helper mirrors the
-DG-3 automation inputs by enumerating canonical wildcard hosts,
-pretty-host SANs, DNS-01 labels, and recommended ACME challenges:
+TLS SAN/challenge жоспарын шлюз ретінде GAR пакеттерін жасамас бұрын шығарыңыз
+команда және DNS мақұлдаушылары бірдей дәлелдерді қарайды. Жаңа көмекші бейнені көрсетеді
+Канондық қойылмалы таңбалы хосттарды санау арқылы DG-3 автоматтандыру кірістері,
+әдемі хост SAN, DNS-01 белгілері және ұсынылған ACME тапсырмалары:
 
 ```bash
 cargo xtask soradns-acme-plan \
@@ -256,20 +257,20 @@ cargo xtask soradns-acme-plan \
   --json-out artifacts/sorafs/portal.acme-plan.json
 ```
 
-Commit the JSON alongside the release bundle (or upload it with the change
-ticket) so operators can paste the SAN values into Torii’s
-`torii.sorafs_gateway.acme` configuration and GAR reviewers can confirm the
-canonical/pretty mappings without re-running host derivations. Add additional
-`--name` arguments for each suffix promoted in the same release.
+JSON файлын шығарылым жинағымен бірге орындаңыз (немесе оны өзгертумен бірге жүктеп салыңыз
+билет) операторлар SAN мәндерін Torii мәндеріне қоя алады
+`torii.sorafs_gateway.acme` конфигурациясы және GAR шолушылары растай алады
+хост туындыларын қайта іске қоспай, канондық/әдемі салыстырулар. Қосымша қосыңыз
+Бір шығарылымда көтерілген әрбір жұрнақ үшін `--name` дәлелдері.
 
-## Step 6b — Derive canonical host mappings
+## Қадам 6b — Канондық хост салыстыруларын шығару
 
-Before templating GAR payloads, record the deterministic host mapping for every
-alias. `cargo xtask soradns-hosts` hashes each `--name` into its canonical
-label (`<base32>.gw.sora.id`), emits the required wildcard
-(`*.gw.sora.id`), and derives the pretty host (`<alias>.gw.sora.name`). Persist
-the output in the release artefacts so DG-3 reviewers can diff the mapping
-alongside the GAR submission:
+GAR пайдалы жүктемелерін үлгілеуден бұрын, әрқайсысы үшін детерминирленген хост салыстыруын жазыңыз
+бүркеншік ат. `cargo xtask soradns-hosts` әр `--name` хэштерін өзінің канондық форматына
+жапсырма (`<base32>.gw.sora.id`), қажетті қойылмалы таңбаны шығарады
+(`*.gw.sora.id`) және әдемі хостты шығарады (`<alias>.gw.sora.name`). Табандылық
+шығарылым артефактілеріндегі шығыс DG-3 рецензенттері салыстыруды ажырата алады
+GAR ұсынуымен қатар:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -277,10 +278,10 @@ cargo xtask soradns-hosts \
   --json-out artifacts/sorafs/portal.canonical-hosts.json
 ```
 
-Use `--verify-host-patterns <file>` to fail fast whenever a GAR or gateway
-binding JSON omits one of the required hosts. The helper accepts multiple
-verification files, making it easy to lint both the GAR template and the
-stapled `portal.gateway.binding.json` in the same invocation:
+GAR немесе шлюз кезінде жылдам істен шығу үшін `--verify-host-patterns <file>` пайдаланыңыз
+байланыстыру JSON қажетті хосттардың бірін өткізбейді. Көмекші бірнеше қабылдайды
+тексеру файлдары, бұл GAR үлгісін де, үлгіні де сызуды жеңілдетеді
+сол шақырудағы `portal.gateway.binding.json` қапсырмасы:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -290,38 +291,36 @@ cargo xtask soradns-hosts \
   --verify-host-patterns artifacts/sorafs/portal.gateway.binding.json
 ```
 
-Attach the summary JSON and verification log to the DNS/gateway change ticket so
-auditors can confirm the canonical, wildcard, and pretty hosts without re-running
-the derivation scripts. Re-run the command whenever new aliases are added to the
-bundle so subsequent GAR updates inherit the same evidence trail.
+Жиынтық JSON және тексеру журналын DNS/шлюз өзгерту билетіне тіркеңіз
+аудиторлар канондық, қойылмалы және әдемі хосттарды қайта іске қоспай-ақ растай алады
+туынды сценарийлер. Жаңа бүркеншік аттар қосылған сайын пәрменді қайта іске қосыңыз
+келесі GAR жаңартулары бірдей дәлелдер ізін иеленеді.
 
-## Step 7 — Generate the DNS cutover descriptor
+## 7-қадам — DNS кесу дескрипторын жасаңыз
 
-Production cutovers require an auditable change packet. After a successful
-submission (alias binding), the helper emits
-`artifacts/sorafs/portal.dns-cutover.json`, capturing:
+Өндірістік үзілістер тексерілетін өзгерту пакетін қажет етеді. Сәтті болғаннан кейін
+тапсыру (бүркеншік ат байланыстыру), көмекші шығарады
+`artifacts/sorafs/portal.dns-cutover.json`, түсіру:- бүркеншік атпен байланыстыратын метадеректер (аттар кеңістігі/аты/дәлелдеу, манифест дайджест, Torii URL,
+  берілген дәуір, билік);
+- шығарылым мәтінмәні (тег, бүркеншік ат белгісі, манифест/CAR жолдары, блок жоспары, Sigstore
+  бума);
+- тексеру көрсеткіштері (зерттеу командасы, бүркеншік ат + Torii соңғы нүкте); және
+- қосымша өзгертуді басқару өрістері (билет идентификаторы, кесу терезесі, операциялық байланыс,
+  өндірістік хост атауы/аймақ);
+- `Sora-Route-Binding` қапсырмасынан алынған маршрутты жылжыту метадеректері
+  тақырып (канондық хост/CID, тақырып + байланыстыру жолдары, тексеру пәрмендері),
+  GAR ілгерілету және қалпына келтіру жаттығуларының бірдей дәлелдерге сілтеме жасауын қамтамасыз ету;
+- құрылған маршрут жоспарының артефактілері (`gateway.route_plan.json`,
+  тақырып үлгілері және қосымша кері тақырыптар) сондықтан билеттерді және CI мәнін өзгертіңіз
+  линт ілмектері әрбір DG-3 пакетінің канондық пакетке сілтеме жасайтынын тексере алады
+  бекітуге дейін жылжыту/қайтару жоспарлары;
+- қосымша кэшті жарамсыз ету метадеректері (тазалаудың соңғы нүктесі, аутентификация айнымалысы, JSON
+  пайдалы жүктеме және мысал `curl` пәрмені); және
+- алдыңғы дескрипторды көрсететін кері қайтару кеңестері (шығару тегін және манифест
+  дайджест) сондықтан өзгерту билеттері детерминирленген қалпына келтіру жолын алады.
 
-- alias binding metadata (namespace/name/proof, manifest digest, Torii URL,
-  submitted epoch, authority);
-- release context (tag, alias label, manifest/CAR paths, chunk plan, Sigstore
-  bundle);
-- verification pointers (probe command, alias + Torii endpoint); and
-- optional change-control fields (ticket id, cutover window, ops contact,
-  production hostname/zone);
-- route promotion metadata derived from the stapled `Sora-Route-Binding`
-  header (canonical host/CID, header + binding paths, verification commands),
-  ensuring GAR promotion and fallback drills refer to the same evidence;
-- the generated route-plan artefacts (`gateway.route_plan.json`,
-  header templates, and optional rollback headers) so change tickets and CI
-  lint hooks can verify that every DG-3 packet references the canonical
-  promotion/rollback plans before approval;
-- optional cache invalidation metadata (purge endpoint, auth variable, JSON
-  payload, and example `curl` command); and
-- rollback hints pointing at the previous descriptor (release tag and manifest
-  digest) so change tickets capture a deterministic fallback path.
-
-When the release requires cache purges, generate a canonical plan alongside the
-cutover descriptor:
+Шығарылым кэшті тазалауды қажет еткенде, келесімен бірге канондық жоспар жасаңыз
+кесінді дескрипторы:
 
 ```bash
 cargo xtask soradns-cache-plan \
@@ -333,15 +332,15 @@ cargo xtask soradns-cache-plan \
   --json-out artifacts/sorafs/portal.cache_plan.json
 ```
 
-Attach the resulting `portal.cache_plan.json` to the DG-3 packet so operators
-have deterministic hosts/paths (and the matching auth hints) when issuing
-`PURGE` requests. The descriptor’s optional cache metadata section can reference
-this file directly, keeping change-control reviewers aligned on exactly which
-endpoints are flushed during a cutover.
+Алынған `portal.cache_plan.json` DG-3 пакетіне операторлар үшін тіркеңіз
+шығару кезінде детерминирленген хосттар/жолдар (және сәйкес аутентификациялық кеңестер) бар
+`PURGE` сұраулары. Дескриптордың қосымша кэш метадеректер бөлімі сілтеме жасай алады
+бұл файлды тікелей өзгерте отырып, өзгертулерді бақылауды тексерушілерді дәл қайсысына сәйкестендіреді
+кесу кезінде соңғы нүктелер тазаланады.
 
-Every DG-3 packet also needs a promotion + rollback checklist. Generate it via
-`cargo xtask soradns-route-plan` so change-control reviewers can trace the exact
-preflight, cutover, and rollback steps per alias:
+Әрбір DG-3 пакетіне жылжыту + кері қайтару тексеру парағы қажет. арқылы жасаңыз
+`cargo xtask soradns-route-plan`, сондықтан өзгертуді бақылау шолушылары дәл бақылай алады
+бүркеншік ат бойынша алдын ала ұшу, кесу және кері қайтару қадамдары:
 
 ```bash
 cargo xtask soradns-route-plan \
@@ -349,14 +348,14 @@ cargo xtask soradns-route-plan \
   --json-out artifacts/sorafs/gateway.route_plan.json
 ```
 
-The emitted `gateway.route_plan.json` captures canonical/pretty hosts, staged
-health-check reminders, GAR binding updates, cache purges, and rollback actions.
-Bundle it with the GAR/binding/cutover artefacts before submitting the change
-ticket so Ops can rehearse and sign off on the same scripted steps.
+Шығарылған `gateway.route_plan.json` сахналанған канондық/әдемі хосттарды түсіреді
+денсаулықты тексеру еске салғыштары, GAR байланыстыру жаңартулары, кэшті тазарту және кері қайтару әрекеттері.
+Өзгерістерді жібермес бұрын оны GAR/байлау/қиып алу артефактілерімен біріктіріңіз
+билет, осылайша Ops сценариймен жазылған қадамдарды орындап, шығуға мүмкіндік береді.
 
-`scripts/generate-dns-cutover-plan.mjs` powers this descriptor and runs
-automatically from `sorafs-pin-release.sh`. To regenerate or customize it
-manually:
+`scripts/generate-dns-cutover-plan.mjs` осы дескрипторды қуаттайды және жұмыс істейді
+`sorafs-pin-release.sh` бастап автоматты түрде. Оны қалпына келтіру немесе теңшеу үшін
+қолмен:
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -371,74 +370,74 @@ node scripts/generate-dns-cutover-plan.mjs \
   --previous-dns-plan artifacts/sorafs/previous.dns-cutover.json
 ```
 
-Populate the optional metadata via environment variables before running the pin
-helper:
+PIN кодын іске қоспас бұрын орта айнымалылары арқылы қосымша метадеректерді толтырыңыз
+көмекші:
 
-| Variable | Purpose |
+| Айнымалы | Мақсаты |
 |----------|---------|
-| `DNS_CHANGE_TICKET` | Ticket ID stored in the descriptor. |
-| `DNS_CUTOVER_WINDOW` | ISO8601 cutover window (e.g., `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
-| `DNS_HOSTNAME`, `DNS_ZONE` | Production hostname + authoritative zone. |
-| `DNS_OPS_CONTACT` | On-call alias or escalation contact. |
-| `DNS_CACHE_PURGE_ENDPOINT` | Cache purge endpoint recorded in the descriptor. |
-| `DNS_CACHE_PURGE_AUTH_ENV` | Env var containing the purge token (defaults to `CACHE_PURGE_TOKEN`). |
-| `DNS_PREVIOUS_PLAN` | Path to the prior cutover descriptor for rollback metadata. |
+| `DNS_CHANGE_TICKET` | Дескрипторда сақталған билет идентификаторы. |
+| `DNS_CUTOVER_WINDOW` | ISO8601 кесу терезесі (мысалы, `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
+| `DNS_HOSTNAME`, `DNS_ZONE` | Өндірістік хост атауы + беделді аймақ. |
+| `DNS_OPS_CONTACT` | Қоңыраудағы бүркеншік ат немесе эскалация контактісі. |
+| `DNS_CACHE_PURGE_ENDPOINT` | Дескрипторда жазылған кэшті тазартудың соңғы нүктесі. |
+| `DNS_CACHE_PURGE_AUTH_ENV` | Тазарту таңбалауышын қамтитын Env var (әдепкі `CACHE_PURGE_TOKEN`). |
+| `DNS_PREVIOUS_PLAN` | Қайтару метадеректеріне арналған алдыңғы кесу дескрипторына жол. |
 
-Attach the JSON to the DNS change review so approvers can verify manifest
-digests, alias bindings, and probe commands without scraping CI logs.
-CLI flags `--dns-change-ticket`, `--dns-cutover-window`, `--dns-hostname`,
+Бекітушілер манифестті тексере алуы үшін JSON файлын DNS өзгерту шолуына тіркеңіз
+дайджесттер, бүркеншік атпен байланыстырулар және CI журналдарын сызусыз тексеру пәрмендері.
+CLI жалаулары `--dns-change-ticket`, `--dns-cutover-window`, `--dns-hostname`,
 `--dns-zone`, `--ops-contact`, `--cache-purge-endpoint`,
-`--cache-purge-auth-env`, and `--previous-dns-plan` provide the same overrides
-when running the helper outside CI.
+`--cache-purge-auth-env` және `--previous-dns-plan` бірдей қайта анықтауды қамтамасыз етеді
+көмекшіні CI сыртында іске қосқанда.
 
-## Step 8 — Emit the resolver zonefile skeleton (optional)
+## 8-қадам — шешуші аймақтық файл қаңқасын шығару (міндетті емес)
 
-When the production cutover window is known, the release script can emit the
-SNS zonefile skeleton and resolver snippet automatically. Pass the desired DNS
-records and metadata via either environment variables or CLI options; the helper
-will call `scripts/sns_zonefile_skeleton.py` immediately after the cutover
-descriptor is generated. Provide at least one A/AAAA/CNAME value and the GAR
-digest (BLAKE3-256 of the signed GAR payload). If the zone/hostname are known
-and `--dns-zonefile-out` is omitted, the helper writes to
-`artifacts/sns/zonefiles/<zone>/<hostname>.json` and populates
-`ops/soradns/static_zones.<hostname>.json` as the resolver snippet.
+Өндірістің қысқару терезесі белгілі болған кезде, шығарылым сценарийі шығара алады
+SNS аймақтық файлының қаңқасы және шешуші үзіндісі автоматты түрде. Қажетті DNS жіберіңіз
+орта айнымалылары немесе CLI опциялары арқылы жазбалар мен метадеректер; көмекші
+кесілгеннен кейін бірден `scripts/sns_zonefile_skeleton.py` нөміріне қоңырау шалады
+дескриптор жасалады. Кем дегенде бір A/AAAA/CNAME мәнін және GAR мәнін беріңіз
+дайджест (қол қойылған GAR пайдалы жүктемесінің BLAKE3-256). Егер аймақ/хост аты белгілі болса
+және `--dns-zonefile-out` алынып тасталды, көмекші оған жазады
+`artifacts/sns/zonefiles/<zone>/<hostname>.json` және толтырады
+`ops/soradns/static_zones.<hostname>.json` шешуші үзінді ретінде.
 
-| Variable / flag | Purpose |
-|-----------------|---------|
-| `DNS_ZONEFILE_OUT`, `--dns-zonefile-out` | Path for the generated zonefile skeleton. |
-| `DNS_ZONEFILE_RESOLVER_SNIPPET`, `--dns-zonefile-resolver-snippet` | Resolver snippet path (defaults to `ops/soradns/static_zones.<hostname>.json` when omitted). |
-| `DNS_ZONEFILE_TTL`, `--dns-zonefile-ttl` | TTL applied to generated records (default: 600 seconds). |
-| `DNS_ZONEFILE_IPV4`, `--dns-zonefile-ipv4` | IPv4 addresses (comma-separated env or repeatable CLI flag). |
-| `DNS_ZONEFILE_IPV6`, `--dns-zonefile-ipv6` | IPv6 addresses. |
-| `DNS_ZONEFILE_CNAME`, `--dns-zonefile-cname` | Optional CNAME target. |
-| `DNS_ZONEFILE_SPKI`, `--dns-zonefile-spki-pin` | SHA-256 SPKI pins (base64). |
-| `DNS_ZONEFILE_TXT`, `--dns-zonefile-txt` | Additional TXT entries (`key=value`). |
-| `DNS_ZONEFILE_VERSION`, `--dns-zonefile-version` | Override the computed zonefile version label. |
-| `DNS_ZONEFILE_EFFECTIVE_AT`, `--dns-zonefile-effective-at` | Force the `effective_at` timestamp (RFC3339) instead of the cutover window start. |
-| `DNS_ZONEFILE_PROOF`, `--dns-zonefile-proof` | Override the proof literal recorded in the metadata. |
-| `DNS_ZONEFILE_CID`, `--dns-zonefile-cid` | Override the CID recorded in the metadata. |
-| `DNS_ZONEFILE_FREEZE_STATE`, `--dns-zonefile-freeze-state` | Guardian freeze state (soft, hard, thawing, monitoring, emergency). |
-| `DNS_ZONEFILE_FREEZE_TICKET`, `--dns-zonefile-freeze-ticket` | Guardian/council ticket reference for freezes. |
-| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`, `--dns-zonefile-freeze-expires-at` | RFC3339 timestamp for thawing. |
-| `DNS_ZONEFILE_FREEZE_NOTES`, `--dns-zonefile-freeze-note` | Additional freeze notes (comma-separated env or repeatable flag). |
-| `DNS_GAR_DIGEST`, `--dns-gar-digest` | BLAKE3-256 digest (hex) of the signed GAR payload. Required whenever gateway bindings are present. |
+| Айнымалы / жалауша | Мақсаты |
+|----------------|---------|
+| `DNS_ZONEFILE_OUT`, `--dns-zonefile-out` | Жасалған аймақтық файл қаңқасының жолы. |
+| `DNS_ZONEFILE_RESOLVER_SNIPPET`, `--dns-zonefile-resolver-snippet` | Шешуші үзінді жолы (өткізілген кезде әдепкі `ops/soradns/static_zones.<hostname>.json`). |
+| `DNS_ZONEFILE_TTL`, `--dns-zonefile-ttl` | TTL жасалған жазбаларға қолданылады (әдепкі: 600 секунд). |
+| `DNS_ZONEFILE_IPV4`, `--dns-zonefile-ipv4` | IPv4 мекенжайлары (үтірмен бөлінген env немесе қайталанатын CLI жалауы). |
+| `DNS_ZONEFILE_IPV6`, `--dns-zonefile-ipv6` | IPv6 мекенжайлары. |
+| `DNS_ZONEFILE_CNAME`, `--dns-zonefile-cname` | Қосымша CNAME мақсаты. |
+| `DNS_ZONEFILE_SPKI`, `--dns-zonefile-spki-pin` | SHA-256 SPKI түйреуіштері (негізгі 64). |
+| `DNS_ZONEFILE_TXT`, `--dns-zonefile-txt` | Қосымша TXT жазбалары (`key=value`). |
+| `DNS_ZONEFILE_VERSION`, `--dns-zonefile-version` | Есептелген аймақтық файл нұсқасының белгісін қайта анықтау. |
+| `DNS_ZONEFILE_EFFECTIVE_AT`, `--dns-zonefile-effective-at` | Кесетін терезені бастаудың орнына `effective_at` уақыт белгісін (RFC3339) мәжбүрлеңіз. |
+| `DNS_ZONEFILE_PROOF`, `--dns-zonefile-proof` | Метадеректерде жазылған дәлелдеу литералын қайта анықтау. |
+| `DNS_ZONEFILE_CID`, `--dns-zonefile-cid` | Метадеректерде жазылған CID қайта анықтау. |
+| `DNS_ZONEFILE_FREEZE_STATE`, `--dns-zonefile-freeze-state` | Күзетші мұздату күйі (жұмсақ, қатты, еріту, бақылау, төтенше жағдай). |
+| `DNS_ZONEFILE_FREEZE_TICKET`, `--dns-zonefile-freeze-ticket` | Қауіпсіздікке арналған қамқоршы/кеңес билетінің анықтамасы. |
+| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`, `--dns-zonefile-freeze-expires-at` | Ерітуге арналған RFC3339 уақыт белгісі. |
+| `DNS_ZONEFILE_FREEZE_NOTES`, `--dns-zonefile-freeze-note` | Қосымша мұздату жазбалары (үтірмен бөлінген env немесе қайталанатын жалауша). |
+| `DNS_GAR_DIGEST`, `--dns-gar-digest` | Қол қойылған GAR пайдалы жүктемесінің BLAKE3-256 дайджесті (он алтылық). Шлюз байлаулары болған кезде қажет. |
 
-The GitHub Actions workflow reads these values from repository secrets so every production pin emits the zonefile artefacts automatically. Configure the following secrets (strings may contain comma-separated lists for multi-value fields):
+GitHub Actions жұмыс процесі бұл мәндерді репозитарий құпияларынан оқиды, осылайша әрбір өндірістік түйреуіш аймақтық файл артефактілерін автоматты түрде шығарады. Келесі құпияларды конфигурациялаңыз (жолдарда көп мәнді өрістер үшін үтірмен бөлінген тізімдер болуы мүмкін):
 
-| Secret | Purpose |
+| Құпия | Мақсаты |
 |--------|---------|
-| `DOCS_SORAFS_DNS_HOSTNAME`, `DOCS_SORAFS_DNS_ZONE` | Production hostname/zone passed to the helper. |
-| `DOCS_SORAFS_DNS_OPS_CONTACT` | On-call alias stored in the descriptor. |
-| `DOCS_SORAFS_ZONEFILE_IPV4`, `DOCS_SORAFS_ZONEFILE_IPV6` | IPv4/IPv6 records to publish. |
-| `DOCS_SORAFS_ZONEFILE_CNAME` | Optional CNAME target. |
-| `DOCS_SORAFS_ZONEFILE_SPKI` | Base64 SPKI pins. |
-| `DOCS_SORAFS_ZONEFILE_TXT` | Additional TXT entries. |
-| `DOCS_SORAFS_ZONEFILE_FREEZE_STATE/TICKET/EXPIRES_AT/NOTES` | Freeze metadata recorded in the skeleton. |
-| `DOCS_SORAFS_GAR_DIGEST` | Hex-encoded BLAKE3 digest of the signed GAR payload. |
+| `DOCS_SORAFS_DNS_HOSTNAME`, `DOCS_SORAFS_DNS_ZONE` | Өндіріс хост атауы/аймағы көмекшіге берілді. |
+| `DOCS_SORAFS_DNS_OPS_CONTACT` | Дескрипторда сақталған қоңырау бойынша бүркеншік ат. |
+| `DOCS_SORAFS_ZONEFILE_IPV4`, `DOCS_SORAFS_ZONEFILE_IPV6` | Жариялауға арналған IPv4/IPv6 жазбалары. |
+| `DOCS_SORAFS_ZONEFILE_CNAME` | Қосымша CNAME мақсаты. |
+| `DOCS_SORAFS_ZONEFILE_SPKI` | Base64 SPKI түйреуіштері. |
+| `DOCS_SORAFS_ZONEFILE_TXT` | Қосымша TXT жазбалары. |
+| `DOCS_SORAFS_ZONEFILE_FREEZE_STATE/TICKET/EXPIRES_AT/NOTES` | Қаңқада жазылған метадеректерді мұздату. |
+| `DOCS_SORAFS_GAR_DIGEST` | Қол қойылған GAR пайдалы жүктемесінің он алтылық кодталған BLAKE3 дайджесті. |
 
-When triggering `.github/workflows/docs-portal-sorafs-pin.yml`, provide the `dns_change_ticket` and `dns_cutover_window` inputs so the descriptor/zonefile inherit the correct change window metadata. Leave them blank only when running dry runs.
+`.github/workflows/docs-portal-sorafs-pin.yml` іске қосқан кезде дескриптор/аймақтық файл дұрыс өзгерту терезесінің метадеректерін иеленуі үшін `dns_change_ticket` және `dns_cutover_window` кірістерін қамтамасыз етіңіз. Оларды тек құрғақ жүгірістерді орындаған кезде бос қалдырыңыз.
 
-Typical invocation (matching the SN-7 owner runbook):
+Әдеттегі шақыру (SN-7 иесінің жұмыс кітабына сәйкес):
 
 ```bash
 ./docs/portal/scripts/sorafs-pin-release.sh \
@@ -453,42 +452,42 @@ Typical invocation (matching the SN-7 owner runbook):
   …other flags…
 ```
 
-The helper automatically carries over the change ticket as a TXT entry and
-inherits the cutover window start as the `effective_at` timestamp unless
-overridden. For the full operational workflow, see
+Көмекші өзгерту билетін TXT жазбасы ретінде автоматты түрде өткізеді және
+кесу терезесінің басталуын `effective_at` уақыт белгісі ретінде иеленеді.
+ауыстырылды. Толық операциялық жұмыс процесі үшін қараңыз
 `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
-### Public DNS delegation note
+### Жалпы DNS делегациясының жазбасы
 
-The zonefile skeleton only defines authoritative records for the zone. You
-still need to configure parent-zone NS/DS delegation at your registrar or DNS
-provider so the regular internet can discover the nameservers.
+Аймақтық файлдың қаңқасы тек аймақ үшін беделді жазбаларды анықтайды. Сіз
+әлі де тіркеушіде немесе DNS-те ата-аналық аймақ NS/DS өкілдігін конфигурациялау қажет
+провайдер, сондықтан кәдімгі интернет аттар серверлерін таба алады.
 
-- For apex/TLD cutovers, use ALIAS/ANAME (provider-specific) or publish A/AAAA
-  records pointing at the gateway anycast IPs.
-- For subdomains, publish a CNAME to the derived pretty host
+- Апекс/TLD кесінділері үшін ALIAS/ANAME (провайдерге арнайы) пайдаланыңыз немесе A/AAAA жариялаңыз
+  кез келген IP шлюзін көрсететін жазбалар.
+- Ішкі домендер үшін алынған әдемі хостқа CNAME жариялаңыз
   (`<fqdn>.gw.sora.name`).
-- The canonical host (`<hash>.gw.sora.id`) stays under the gateway domain and
-  is not published inside your public zone.
+- Канондық хост (`<hash>.gw.sora.id`) шлюз доменінің астында қалады және
+  жалпыға ортақ аймақта жарияланбаған.
 
-### Gateway header template
+### Шлюз тақырыбы үлгісі
 
-The deploy helper also emits `portal.gateway.headers.txt` and
-`portal.gateway.binding.json`, two artefacts that satisfy DG-3’s
-gateway-content-binding requirement:
+Қолдану көмекшісі де `portal.gateway.headers.txt` және шығарады
+`portal.gateway.binding.json`, DG-3 талаптарын қанағаттандыратын екі артефакт
+шлюз мазмұнын байланыстыру талабы:
 
-- `portal.gateway.headers.txt` contains the full HTTP header block (including
-  `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS, and the
-  `Sora-Route-Binding` descriptor) that edge gateways must staple onto every
-  response.
-- `portal.gateway.binding.json` records the same information in machine-readable
-  form so change tickets and automation can diff host/cid bindings without
-  scraping shell output.
+- `portal.gateway.headers.txt` толық HTTP тақырып блогын қамтиды (соның ішінде
+  `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS және
+  `Sora-Route-Binding` дескрипторы) шеткі шлюздер әрбір шлюзге қапсырмалануы керек.
+  жауап.
+- `portal.gateway.binding.json` бірдей ақпаратты машина оқи алатындай етіп жазады
+  пішінді өзгертіңіз, сондықтан билеттерді өзгерту және автоматтандыру хост/сид байланыстарын онсыз да ажырата алады
+  қабықшаның шығуы.
 
-They are generated automatically via
+Олар арқылы автоматты түрде жасалады
 `cargo xtask soradns-binding-template`
-and capture the alias, manifest digest, and gateway hostname that were supplied
-to `sorafs-pin-release.sh`. To regenerate or customise the header block, run:
+және берілген бүркеншік атты, манифест дайджестін және шлюз хост атын түсіріңіз
+`sorafs-pin-release.sh` дейін. Тақырып блогын қалпына келтіру немесе теңшеу үшін келесі әрекеттерді орындаңыз:
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -500,18 +499,18 @@ cargo xtask soradns-binding-template \
   --headers-out artifacts/sorafs/portal.gateway.headers.txt
 ```
 
-Pass `--csp-template`, `--permissions-template`, or `--hsts-template` to override
-the default header templates when a specific deployment needs additional
-directives; combine them with the existing `--no-*` switches to drop a header
-entirely.
+Қайта анықтау үшін `--csp-template`, `--permissions-template` немесе `--hsts-template` өтіңіз
+арнайы орналастыру қосымша қажет болғанда әдепкі тақырып үлгілері
+директивалар; тақырыпты тастау үшін оларды бар `--no-*` қосқыштарымен біріктіріңіз
+толығымен.
 
-Attach the header snippet to the CDN change request and feed the JSON document
-into the gateway automation pipeline so the actual host promotion matches the
-release evidence.
+Тақырып үзіндісін CDN өзгерту сұрауына тіркеңіз және JSON құжатын беріңіз
+шлюзді автоматтандыру құбырына енгізіңіз, осылайша нақты хост жылжыту сәйкес келеді
+дәлелдемелерді босату.
 
-The release script runs the verification helper automatically so DG-3 tickets
-always include recent evidence. Re-run it manually whenever you tweak the
-binding JSON by hand:
+Шығарылым сценарийі DG-3 билеттері үшін растау көмекшісін автоматты түрде іске қосады
+әрқашан соңғы дәлелдерді қамтиды. параметрін өзгерткен сайын оны қолмен қайта іске қосыңыз
+JSON қолмен байланыстыру:
 
 ```bash
 cargo xtask soradns-verify-binding \
@@ -522,26 +521,24 @@ cargo xtask soradns-verify-binding \
   --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
-The command validates the `Sora-Proof` payload captured in the binding bundle,
-ensures the `Sora-Route-Binding` metadata matches the manifest CID + hostname,
-and fails fast if any header drifts. Archive the console output next to the
-other deployment artefacts whenever you run the command outside CI so DG-3
-reviewers have proof that the binding was validated prior to cutover.
+Пәрмен байланыстыру бумасында түсірілген `Sora-Proof` пайдалы жүктемесін тексереді,
+`Sora-Route-Binding` метадеректерінің манифест CID + хост атауына сәйкес келуін қамтамасыз етеді,
+және кез келген тақырып дрейф болса, тез істен шығады. жанындағы консоль шығысын мұрағаттаңыз
+басқа орналастыру артефактілері CI сыртындағы пәрменді іске қосқан сайын DG-3
+шолушылардың түптеу кесілгенге дейін расталғанының дәлелі бар.> **DNS дескрипторын біріктіру:** `portal.dns-cutover.json` енді
+> Осы артефактілерді көрсететін `gateway_binding` бөлімі (жолдар, мазмұн CID,
+> дәлелдеу күйі және әріптік тақырып үлгісі) **және** `route_plan` шумақ
+> `gateway.route_plan.json` плюс негізгі + кері қайтару тақырыбына сілтеме жасау
+> шаблондар. Бұл блоктарды әрбір DG-3 өзгерту билетіне енгізіңіз, сонда шолушылар мүмкін
+> дәл `Sora-Name/Sora-Proof/CSP` мәндерін ажыратыңыз және маршрутты растаңыз
+> жылжыту/қайтару жоспарлары құрастыруды ашпай-ақ дәлелдер жинағына сәйкес келеді
+> мұрағат.
 
-> **DNS descriptor integration:** `portal.dns-cutover.json` now embeds a
-> `gateway_binding` section pointing at these artefacts (paths, content CID,
-> proof status, and the literal header template) **and** a `route_plan` stanza
-> referencing `gateway.route_plan.json` plus the main + rollback header
-> templates. Include those blocks in every DG-3 change ticket so reviewers can
-> diff the exact `Sora-Name/Sora-Proof/CSP` values and confirm that the route
-> promotion/rollback plans match the evidence bundle without opening the build
-> archive.
+## 9-қадам — Жариялау мониторларын іске қосыңыз
 
-## Step 9 — Run publishing monitors
-
-Roadmap task **DOCS-3c** requires continuous evidence that the portal, Try it
-proxy, and gateway bindings stay healthy after a release. Run the consolidated
-monitor immediately after Steps 7–8 and wire it into your scheduled probes:
+Жол картасы тапсырмасы **DOCS-3c** порталдың үздіксіз дәлелдеуді талап етеді, Байқап көріңіз
+прокси және шлюз байланыстары шығарылғаннан кейін сау болып қалады. Біріктірілгенді іске қосыңыз
+7–8-қадамдардан кейін дереу бақылаңыз және оны жоспарланған зондтарға қосыңыз:
 
 ```bash
 cd docs/portal
@@ -551,89 +548,89 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/${RELEASE_TAG}/monitoring
 ```
 
-- `scripts/monitor-publishing.mjs` loads the config file (see
-  `docs/portal/docs/devportal/publishing-monitoring.md` for the schema) and
-  executes three checks: portal path probes + CSP/Permissions-Policy validation,
-  Try it proxy probes (optionally hitting its `/metrics` endpoint), and the
-  gateway binding verifier (`cargo xtask soradns-verify-binding`) which checks
-  the captured binding bundle against the expected alias, host, proof status,
-  and manifest JSON.
-- The command exits non-zero whenever any probe fails so CI, cron jobs, or
-  runbook operators can halt a release before promoting aliases.
-- Passing `--json-out` writes a single summary JSON payload with per-target
-  status; `--evidence-dir` emits `summary.json`, `portal.json`, `tryit.json`,
-  `binding.json`, and `checksums.sha256` so governance reviewers can diff the
-  results without re-running the monitors. Archive this directory under
-  `artifacts/sorafs/<tag>/monitoring/` alongside the Sigstore bundle and DNS
-  cutover descriptor.
-- Include the monitor output, Grafana export (`dashboards/grafana/docs_portal.json`),
-  and Alertmanager drill ID in the release ticket so the DOCS-3c SLO can be
-  audited later. The dedicated publishing monitor playbook lives at
+- `scripts/monitor-publishing.mjs` конфигурация файлын жүктейді (қараңыз
+  Схема үшін `docs/portal/docs/devportal/publishing-monitoring.md`) және
+  үш тексеруді орындайды: портал жолының тексерулері + CSP/Рұқсаттар-Саясатты тексеру,
+  Прокси зондтарын қолданып көріңіз (міндетті түрде `/metrics` соңғы нүктесін басыңыз) және
+  тексеретін шлюзді байланыстыратын тексеруші (`cargo xtask soradns-verify-binding`).
+  күтілетін бүркеншік атқа, хостқа, дәлелдеу күйіне қарсы түсірілген байланыстыру бумасы,
+  және манифест JSON.
+- Кез келген зонд сәтсіз болған кезде пәрмен нөлден тыс шығады, сондықтан CI, cron тапсырмалары немесе
+  runbook операторлары бүркеншік аттарды көтермес бұрын шығарылымды тоқтата алады.
+- `--json-out` өту арқылы бір мақсатқа арналған JSON пайдалы жүктемесін жазады
+  статус; `--evidence-dir` шығарады `summary.json`, `portal.json`, `tryit.json`,
+  `binding.json` және `checksums.sha256`, сондықтан басқаруды сарапшылар ажырата алады.
+  мониторларды қайта іске қоспай-ақ нәтиже береді. Бұл каталогты астына мұрағаттаңыз
+  `artifacts/sorafs/<tag>/monitoring/` Sigstore пакетімен және DNS
+  кесінді дескриптор.
+- Монитор шығысын қосыңыз, Grafana экспорты (`dashboards/grafana/docs_portal.json`),
+  және DOCS-3c SLO болуы мүмкін шығарылым билетіндегі Alertmanager бұрғылау идентификаторы
+  кейінірек тексерілді. Арнайы баспа мониторының ойын кітабы мына жерде тұрады
   `docs/portal/docs/devportal/publishing-monitoring.md`.
 
-Portal probes require HTTPS and reject `http://` base URLs unless
-`allowInsecureHttp` is set in the monitor config; keep production/staging
-targets on TLS and only enable the override for local previews.
+Портал зондтары HTTPS талап етеді және `http://` негізгі URL мекенжайларын қабылдамайды
+`allowInsecureHttp` монитор конфигурациясында орнатылған; өндірісті/қоюды сақтау
+TLS-дегі мақсаттарды белгілейді және тек жергілікті алдын ала қарау үшін қайта анықтауды қосыңыз.
 
-Automate the monitor via `npm run monitor:publishing` in Buildkite/cron once the
-portal is live. The same command, pointed at production URLs, feeds the ongoing
-health checks that SRE/Docs rely on between releases.
+Мониторды Buildkite/cron ішіндегі `npm run monitor:publishing` арқылы автоматтандырыңыз.
+портал тікелей эфирде. Өндіріс URL мекенжайларына бағытталған бірдей пәрмен ағымдағы ақпаратты береді
+SRE/Docs шығарылымдар арасында сүйенетін денсаулық тексерулері.
 
-## Automating with `sorafs-pin-release.sh`
+## `sorafs-pin-release.sh` көмегімен автоматтандыру
 
-`docs/portal/scripts/sorafs-pin-release.sh` encapsulates Steps 2–6. It:
+`docs/portal/scripts/sorafs-pin-release.sh` 2–6-қадамдарды инкапсуляциялайды. Ол:
 
-1. archives `build/` into a deterministic tarball,
-2. runs `car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`,
-   and `proof verify`,
-3. optionally executes `manifest submit` (including alias binding) when Torii
-   credentials are present, and
-4. writes `artifacts/sorafs/portal.pin.report.json`, the optional
-  `portal.pin.proposal.json`, the DNS cutover descriptor (after submissions),
-  and the gateway binding bundle (`portal.gateway.binding.json` plus the
-  text header block) so governance, networking, and ops teams can diff the
-  evidence bundle without scraping CI logs.
+1. `build/` мұрағаты детерминирленген тарболға,
+2. `car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`,
+   және `proof verify`,
+3. Torii кезінде міндетті түрде `manifest submit` (бүркеншік атпен байланыстыруды қоса) орындайды
+   тіркелгі деректері бар және
+4. міндетті емес `artifacts/sorafs/portal.pin.report.json` жазады
+  `portal.pin.proposal.json`, DNS кесу дескрипторы (жіберілгеннен кейін),
+  және шлюз байланыстыру жинағы (`portal.gateway.binding.json` плюс
+  мәтін тақырыбы блогы) сондықтан басқару, желі және операциялық топтар бір-бірінен ерекшеленуі мүмкін
+  CI журналдарын сызып алмаған дәлелдер жинағы.
 
-Set `PIN_ALIAS`, `PIN_ALIAS_NAMESPACE`, `PIN_ALIAS_NAME`, and (optionally)
-`PIN_ALIAS_PROOF_PATH` before invoking the script. Use `--skip-submit` for dry
-runs; the GitHub workflow described below toggles this via the `perform_submit`
-input.
+`PIN_ALIAS`, `PIN_ALIAS_NAMESPACE`, `PIN_ALIAS_NAME` және (міндетті емес) орнату
+`PIN_ALIAS_PROOF_PATH` сценарийді шақырмас бұрын. Кептіру үшін `--skip-submit` пайдаланыңыз
+жүгіру; Төменде сипатталған GitHub жұмыс процесі оны `perform_submit` арқылы ауыстырады
+енгізу.
 
-## Step 8 — Publish OpenAPI specs & SBOM bundles
+## 8-қадам — OpenAPI сипаттамалары мен SBOM жинақтарын жариялау
 
-DOCS-7 requires the portal build, OpenAPI spec, and SBOM artefacts to travel
-through the same deterministic pipeline. The existing helpers cover all three:
+DOCS-7 саяхаттау үшін портал құрастыруын, OpenAPI спецификациясын және SBOM артефактілерін қажет етеді
+бірдей детерминирленген құбыр арқылы. Қолданыстағы көмекшілер үшеуін де қамтиды:
 
-1. **Regenerate & sign the spec.**
+1. **Спецификацияны қайта жасаңыз және қол қойыңыз.**
 
    ```bash
    npm run sync-openapi -- --version=2025-q3 --mirror=current --latest
    cargo xtask openapi --sign docs/portal/static/openapi/manifest.json
    ```
 
-   Pass a release label via `--version=<label>` whenever you want to preserve a
-   historical snapshot (for example `2025-q3`). The helper writes the snapshot
-   to `static/openapi/versions/<label>/torii.json`, mirrors it into
-   `versions/current`, and records the metadata (SHA-256, manifest status, and
-   updated timestamp) in `static/openapi/versions.json`. The developer portal
-   reads that index so the Swagger/RapiDoc panels can present a version picker
-   and display the associated digest/signature info inline. Omitting
-   `--version` keeps the previous release labels intact and only refreshes the
-   `current` + `latest` pointers.
+   Сақтағыңыз келген кезде `--version=<label>` арқылы шығару жапсырмасын жіберіңіз a
+   тарихи сурет (мысалы, `2025-q3`). Көмекші суретті жазады
+   `static/openapi/versions/<label>/torii.json`, оны айналады
+   `versions/current` және метадеректерді жазады (SHA-256, манифест күйі және
+   жаңартылған уақыт белгісі) `static/openapi/versions.json`. Әзірлеуші порталы
+   бұл индексті оқиды, сондықтан Swagger/RapiDoc панельдері нұсқа таңдау құралын ұсына алады
+   және қатысты дайджест/қолтаңба ақпаратын кірістірілген түрде көрсетіңіз. Өткізілу
+   `--version` алдыңғы шығарылым белгілерін сақтайды және тек жаңартады
+   `current` + `latest` көрсеткіштері.
 
-   The manifest captures SHA-256/BLAKE3 digests so the gateway can staple
-   `Sora-Proof` headers for `/reference/torii-swagger`.
+   Манифест SHA-256/BLAKE3 дайджесттерін түсіреді, осылайша шлюз степлей алады
+   `Sora-Proof` тақырыптары `/reference/torii-swagger` үшін.
 
-2. **Emit CycloneDX SBOMs.** The release pipeline already expects syft-based
-   SBOMs per `docs/source/sorafs_release_pipeline_plan.md`. Keep the output
-   next to the build artefacts:
+2. **CycloneDX SBOMs шығарыңыз.** Шығару құбыры қазірдің өзінде syft негізіндегі күтуде.
+   `docs/source/sorafs_release_pipeline_plan.md` үшін SBOMs. Шығаруды сақтаңыз
+   құрылыс артефактілерінің жанында:
 
    ```bash
    syft dir:build -o json > "$OUT"/portal.sbom.json
    syft file:docs/portal/static/openapi/torii.json -o json > "$OUT"/openapi.sbom.json
    ```
 
-3. **Pack each payload into a CAR.**
+3. **Әр пайдалы жүкті көлікке салыңыз.**
 
    ```bash
    sorafs_cli car pack \
@@ -649,32 +646,32 @@ through the same deterministic pipeline. The existing helpers cover all three:
      --summary-out "$OUT"/portal.sbom.car.json
    ```
 
-   Follow the same `manifest build` / `manifest sign` steps as the main site,
-   tuning aliases per asset (for example, `docs-openapi.sora` for the spec and
-   `docs-sbom.sora` for the signed SBOM bundle). Maintaining distinct aliases
-   keeps SoraDNS proofs, GARs, and rollback tickets scoped to the exact payload.
+   Негізгі сайт сияқты `manifest build` / `manifest sign` қадамдарын орындаңыз,
+   актив үшін бүркеншік аттарды баптау (мысалы, спецификация үшін `docs-openapi.sora` және
+   Қол қойылған SBOM бумасы үшін `docs-sbom.sora`). Ерекше бүркеншік аттарды сақтау
+   SoraDNS дәлелдерін, GAR және қайтару билеттерін нақты пайдалы жүктемеге дейін сақтайды.
 
-4. **Submit and bind.** Reuse the existing authority + Sigstore bundle, but
-   record the alias tuple in the release checklist so auditors can track which
-   Sora name maps to which manifest digest.
+4. **Жіберу және байланыстыру.** Қолданыстағы рұқсатты + Sigstore бумасын қайта пайдаланыңыз, бірақ
+   аудиторлар қайсысын бақылай алатындай етіп шығарылымды тексеру тізіміне бүркеншік ат кортежін жазыңыз
+   Манифест дайджесті Сора атауы карталары.
 
-Archiving the spec/SBOM manifests alongside the portal build ensures every
-release ticket contains the full artefact set without rerunning the packer.
+Портал құрастыруымен бірге спецификация/SBOM манифесін мұрағаттау барлығын қамтамасыз етеді
+шығару билетінде бумалауышты қайта іске қоспай-ақ толық артефакт жинағы бар.
 
-### Automation helper (CI/package script)
+### Автоматтандыру көмекшісі (CI/пакет сценарийі)
 
-`./ci/package_docs_portal_sorafs.sh` codifies Steps 1–8 so roadmap item
-**DOCS‑7** can be exercised with a single command. The helper:
+`./ci/package_docs_portal_sorafs.sh` 1-8 қадамдарды кодтайды, сондықтан жол картасы элементі
+**DOCS‑7** бір пәрменмен орындалуы мүмкін. Көмекші:
 
-- runs the required portal prep (`npm ci`, OpenAPI/norito sync, widget tests);
-- emits the portal, OpenAPI, and SBOM CARs + manifest pairs via `sorafs_cli`;
-- optionally runs `sorafs_cli proof verify` (`--proof`) and Sigstore signing
+- қажетті порталды дайындауды іске қосады (`npm ci`, OpenAPI/norito синхрондау, виджет сынақтары);
+- `sorafs_cli` арқылы порталды, OpenAPI және SBOM CARs + манифест жұптарын шығарады;
+- міндетті түрде `sorafs_cli proof verify` (`--proof`) және Sigstore қол қоюды іске қосады
   (`--sign`, `--sigstore-provider`, `--sigstore-audience`);
-- drops every artefact under `artifacts/devportal/sorafs/<timestamp>/` and
-  writes `package_summary.json` so CI/release tooling can ingest the bundle; and
-- refreshes `artifacts/devportal/sorafs/latest` to point at the most recent run.
+- `artifacts/devportal/sorafs/<timestamp>/` және астында әрбір артефакт түсіреді
+  `package_summary.json` деп жазады, сондықтан CI/шығару құралдары жинақты қабылдай алады; және
+- ең соңғы іске қосуды көрсету үшін `artifacts/devportal/sorafs/latest` жаңартады.
 
-Example (full pipeline with Sigstore + PoR):
+Мысал (Sigstore + PoR бар толық құбыр):
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -684,45 +681,45 @@ Example (full pipeline with Sigstore + PoR):
   --sigstore-audience=sorafs-devportal
 ```
 
-Flags worth knowing:
+Білуге тұрарлық жалаулар:
 
-- `--out <dir>` – override the artefact root (default keeps timestamped folders).
-- `--skip-build` – reuse an existing `docs/portal/build` (handy when CI cannot
-  rebuild due to offline mirrors).
-- `--skip-sync-openapi` – skip `npm run sync-openapi` when `cargo xtask openapi`
-  cannot reach crates.io.
-- `--skip-sbom` – avoid calling `syft` when the binary is not installed (the
-  script prints a warning instead).
-- `--proof` – run `sorafs_cli proof verify` for each CAR/manifest pair. Multi-
-  file payloads still require chunk-plan support in the CLI, so leave this flag
-  unset if you hit `plan chunk count` errors and verify manually once the
-  upstream gate lands.
-- `--sign` – invoke `sorafs_cli manifest sign`. Provide a token with
-  `SIGSTORE_ID_TOKEN` (or `--sigstore-token-env`) or let the CLI fetch it using
+- `--out <dir>` – артефакт түбірін қайта анықтау (әдепкі уақыт белгісі бар қалталарды сақтайды).
+- `--skip-build` – бар `docs/portal/build` қайта пайдалану (CI мүмкін болмаған кезде ыңғайлы
+  желіден тыс айналар арқасында қайта құру).
+- `--skip-sync-openapi` – `cargo xtask openapi` кезінде `npm run sync-openapi` өткізіп жіберіңіз
+  crates.io-ға қол жеткізу мүмкін емес.
+- `--skip-sbom` – екілік орнатылмаған кезде `syft` қоңырауын болдырмау (
+  скрипт оның орнына ескертуді басып шығарады).
+- `--proof` – әрбір CAR/манифест жұбы үшін `sorafs_cli proof verify` іске қосыңыз. көп-
+  файлдың пайдалы жүктемелері әлі де CLI жүйесінде бөліктік жоспарды қолдауды қажет етеді, сондықтан бұл жалаушаны қалдырыңыз
+  `plan chunk count` қателерін басып, бір рет қолмен растасаңыз, орнатудан босатылады.
+  жоғары ағындағы қақпа жерлері.
+- `--sign` – `sorafs_cli manifest sign` шақыру. Белгішені көрсетіңіз
+  `SIGSTORE_ID_TOKEN` (немесе `--sigstore-token-env`) немесе CLI-ге оны пайдаланып алуға рұқсат етіңіз
   `--sigstore-provider/--sigstore-audience`.
 
-When shipping production artefacts use `docs/portal/scripts/sorafs-pin-release.sh`.
-It now packages the portal, OpenAPI, and SBOM payloads, signs each manifest, and
-records extra asset metadata in `portal.additional_assets.json`. The helper
-understands the same optional knobs used by the CI packager plus the new
-`--openapi-*`, `--portal-sbom-*`, and `--openapi-sbom-*` switches so you can
-assign alias tuples per artefact, override the SBOM source via
-`--openapi-sbom-source`, skip certain payloads (`--skip-openapi`/`--skip-sbom`),
-and point at a non-default `syft` binary with `--syft-bin`.
+Өндірістік артефактілерді жөнелту кезінде `docs/portal/scripts/sorafs-pin-release.sh` пайдаланыңыз.
+Ол енді порталды, OpenAPI және SBOM пайдалы жүктемелерін буып, әрбір манифестке қол қояды және
+`portal.additional_assets.json` ішінде қосымша актив метадеректерін жазады. Көмекші
+CI бумалаушысы пайдаланатын бірдей қосымша тұтқаларды және жаңасын түсінеді
+`--openapi-*`, `--portal-sbom-*` және `--openapi-sbom-*` қосқыштары
+артефакт үшін бүркеншік ат кортеждерін тағайындаңыз, арқылы SBOM көзін қайта анықтаңыз
+`--openapi-sbom-source`, белгілі бір пайдалы жүктемелерді өткізіп жіберу (`--skip-openapi`/`--skip-sbom`),
+және `--syft-bin` бар әдепкі емес `syft` екілік нұсқасын көрсетіңіз.
 
-The script surfaces every command it runs; copy the log into the release ticket
-alongside `package_summary.json` so reviewers can diff CAR digests, plan
-metadata, and Sigstore bundle hashes without spelunking ad‑hoc shell output.
+Сценарий іске қосылған әрбір пәрменді көрсетеді; журналды шығару билетіне көшіріңіз
+`package_summary.json`-пен қатар, шолушылар CAR дайджесттерін, жоспарларын ажырата алады.
+метадеректер және Sigstore бума хэштері арнайы қабықша шығысын нақтылаусыз.
 
-## Step 9 — Gateway + SoraDNS verification
+## 9-қадам — Шлюз + SoraDNS тексеруі
 
-Before announcing a cutover, prove the new alias resolves via SoraDNS and that
-gateways staple fresh proofs:
+Кесуді жарияламас бұрын, жаңа бүркеншік аттың SoraDNS арқылы шешілетінін дәлелдеңіз
+шлюздер жаңа дәлелдер:
 
-1. **Run the probe gate.** `ci/check_sorafs_gateway_probe.sh` exercises
-   `cargo xtask sorafs-gateway-probe` against the demo fixtures in
-   `fixtures/sorafs_gateway/probe_demo/`. For real deployments, point the probe
-   at the target hostname:
+1. **Зонд қақпасын іске қосыңыз.** `ci/check_sorafs_gateway_probe.sh` жаттығулары
+   `cargo xtask sorafs-gateway-probe` демонстрацияларға қарсы
+   `fixtures/sorafs_gateway/probe_demo/`. Нақты орналастырулар үшін зондты бағыттаңыз
+   мақсатты хост атауында:
 
    ```bash
    ./ci/check_sorafs_gateway_probe.sh -- \
@@ -734,75 +731,73 @@ gateways staple fresh proofs:
      --report-json artifacts/sorafs_gateway_probe/ci/docs.json
    ```
 
-   The probe decodes `Sora-Name`, `Sora-Proof`, and `Sora-Proof-Status` per
-   `docs/source/sorafs_alias_policy.md` and fails when the manifest digest,
-   TTLs, or GAR bindings drift.
+   Зонд `Sora-Name`, `Sora-Proof` және `Sora-Proof-Status` кодтарын шешеді.
+   `docs/source/sorafs_alias_policy.md` және манифест дайджесті кезінде сәтсіздікке ұшырайды,
+   TTL немесе GAR байламдарының дрейфі.
 
-   For lightweight spot checks (for example, when only the binding bundle
-   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
-   The helper validates the captured binding bundle and is handy for release
-   tickets that only need binding confirmation instead of a full probe drill.
+   Жеңіл нүктелік тексерулер үшін (мысалы, тек байлау бумасы болғанда
+   өзгертілді), `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>` іске қосыңыз.
+   Көмекші түсірілген байланыстыру бумасын тексереді және босатуға ыңғайлы
+   толық тексеру бұрғысының орнына міндетті растауды қажет ететін билеттер.
 
-2. **Capture drill evidence.** For operator drills or PagerDuty dry runs, wrap
-   the probe with `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario
-   devportal-rollout -- …`. The wrapper stores headers/logs under
-   `artifacts/sorafs_gateway_probe/<stamp>/`, updates `ops/drill-log.md`, and
-   (optionally) triggers rollback hooks or PagerDuty payloads. Set
-   `--host docs.sora` to validate the SoraDNS path instead of hard-coding an IP.
-
-3. **Verify DNS bindings.** When governance publishes the alias proof, record
-   the GAR file referenced in the probe (`--gar`) and attach it to the release
-   evidence. Resolver owners can mirror the same input through
-   `tools/soradns-resolver` to ensure cached entries honour the new manifest.
-   Before attaching the JSON, run
+2. **Бұрғылау дәлелдерін түсіріңіз.** Операторлық бұрғылар немесе PagerDuty құрғақ жүрістері үшін орау
+   `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario бар зонд
+   devportal-rollout -- …`. Орауыш тақырыптарды/журналдарды астында сақтайды
+   `artifacts/sorafs_gateway_probe/<stamp>/`, `ops/drill-log.md` жаңартулары және
+   (міндетті емес) кері ілмектерді немесе PagerDuty пайдалы жүктемелерін іске қосады. Орнату
+   `--host docs.sora` IP мекенжайын қатты кодтаудың орнына SoraDNS жолын тексеру үшін.3. **DNS байланыстыруларын тексеріңіз.** Басқару бүркеншік аттың дәлелін жариялағанда, жазыңыз
+   зондта (`--gar`) сілтеме жасалған GAR файлын тауып, оны шығарылымға тіркеңіз
+   дәлел. Резолютор иелері бірдей енгізуді көрсете алады
+   `tools/soradns-resolver` кэштелген жазбалардың жаңа манифестті құрметтеуін қамтамасыз ету үшін.
+   JSON тіркемес бұрын, іске қосыңыз
    `cargo xtask soradns-verify-gar --gar <path> --name <alias> [--manifest-cid <cid>] [--telemetry-label <label>]`
-   so the deterministic host mapping, manifest metadata, and telemetry labels are
-   validated offline. The helper can emit a `--json-out` summary alongside the
-   signed GAR so reviewers have verifiable evidence without opening the binary.
-  When drafting a new GAR, prefer
+   сондықтан детерминирленген хостты салыстыру, манифест метадеректері және телеметриялық белгілер
+   желіден тыс расталған. Көмекші келесімен бірге `--json-out` қорытындысын шығара алады
+   GAR қол қойды, сондықтан шолушылар екілік файлды ашпай-ақ тексерілетін дәлелдерге ие болады.
+  Жаңа GAR жобасын жасаған кезде артықшылық беріңіз
   `cargo xtask soradns-gar-template --name <alias> --manifest <portal.manifest.json> --telemetry-label <label> ...`
-  (fall back to `--manifest-cid <cid>` only when a manifest file is not
-  available). The helper now derives the CID **and** BLAKE3 digest directly from
-  the manifest JSON, trims whitespace, deduplicates repeated `--telemetry-label`
-  flags, sorts the labels, and emits the default CSP/HSTS/Permissions-Policy
-  templates before writing the JSON so the payload stays deterministic even when
-  operators capture labels from different shells.
+  (манифест файлы болмаған кезде ғана `--manifest-cid <cid>` нұсқасына оралыңыз
+  қол жетімді). Көмекші енді CID **және** BLAKE3 дайджестін тікелей мына жерден алады
+  манифест JSON, бос орынды қысқартады, қайталанатын `--telemetry-label` қайталайды
+  жалаушалар, белгілерді сұрыптайды және әдепкі CSP/HSTS/Permissions-Policy шығарады
+  JSON жазбас бұрын үлгілерді орнатыңыз, осылайша пайдалы жүктеме болған кезде де детерминирленген болып қалады
+  операторлар әртүрлі қабықшалардан белгілерді алады.
 
-4. **Watch alias metrics.** Keep `torii_sorafs_alias_cache_refresh_duration_ms`
-   and `torii_sorafs_gateway_refusals_total{profile="docs"}` on screen while the
-   probe is running; both series are charted in
+4. **Лақап ат көрсеткіштерін қараңыз.** `torii_sorafs_alias_cache_refresh_duration_ms` сақтаңыз
+   және экранда `torii_sorafs_gateway_refusals_total{profile="docs"}`
+   зонд жұмыс істейді; екі серия да диаграммада
    `dashboards/grafana/docs_portal.json`.
 
-## Step 10 — Monitoring & evidence bundling
+## 10-қадам — Мониторинг және дәлелдемелерді жинақтау
 
-- **Dashboards.** Export `dashboards/grafana/docs_portal.json` (portal SLOs),
-  `dashboards/grafana/sorafs_gateway_observability.json` (gateway latency +
-  proof health), and `dashboards/grafana/sorafs_fetch_observability.json`
-  (orchestrator health) for every release. Attach the JSON exports to the
-  release ticket so reviewers can replay the Prometheus queries.
-- **Probe archives.** Keep `artifacts/sorafs_gateway_probe/<stamp>/` in git-annex
-  or your evidence bucket. Include the probe summary, headers, and PagerDuty
-  payload captured by the telemetry script.
-- **Release bundle.** Store the portal/SBOM/OpenAPI CAR summaries, manifest
-  bundles, Sigstore signatures, `portal.pin.report.json`, Try-It probe logs, and
-  link-check reports under a single timestamped folder (for example,
+- **Бақылау тақталары.** `dashboards/grafana/docs_portal.json` экспорттау (порталдың SLOs),
+  `dashboards/grafana/sorafs_gateway_observability.json` (шлюз кідірісі +
+  денсаулықты растау) және `dashboards/grafana/sorafs_fetch_observability.json`
+  (оркестрдің денсаулығы) әрбір шығарылым үшін. JSON экспорттарын тіркеңіз
+  шолушылардың Prometheus сұрауларын қайталауы үшін босату билеті.
+- **Мұрағаттарды тексеру.** `artifacts/sorafs_gateway_probe/<stamp>/` git-қосымшасында сақтаңыз
+  немесе сіздің дәлелдер шелегі. Тексеру қорытындысын, тақырыптарды және PagerDuty қосыңыз
+  телеметрия сценарийі арқылы түсірілген пайдалы жүктеме.
+- **Шығарылым жинағы.** Порталды/SBOM/OpenAPI CAR қорытындыларын, манифестті сақтаңыз
+  бумалар, Sigstore қолтаңбалары, `portal.pin.report.json`, Байқап көру журналдары және
+  бір уақыт белгісі бар қалта астындағы есептерді сілтеме арқылы тексеру (мысалы,
   `artifacts/sorafs/devportal/20260212T1103Z/`).
-- **Drill log.** When probes are part of a drill, let
-  `scripts/telemetry/run_sorafs_gateway_probe.sh` append to `ops/drill-log.md`
-  so the same evidence satisfies the SNNet-5 chaos requirement.
-- **Ticket links.** Reference the Grafana panel IDs or attached PNG exports in
-  the change ticket, together with the probe report path, so change-reviewers
-  can cross-check the SLOs without shell access.
+- **Бұрғылау журналы.** Зондтар бұрғылаудың бөлігі болған кезде рұқсат етіңіз
+  `scripts/telemetry/run_sorafs_gateway_probe.sh` `ops/drill-log.md` қосу
+  сондықтан бірдей дәлелдер SNNet-5 хаос талабын қанағаттандырады.
+- **Билет сілтемелері.** Grafana панелінің идентификаторларына немесе тіркелген PNG экспорттарына сілтеме жасаңыз.
+  өзгерту билеті, зерттеу есеп жолымен бірге, сондықтан өзгерту-рецензенттер
+  қабықшаға қол жеткізусіз SLO-ларды салыстыра алады.
 
-## Step 11 — Multi-source fetch drill & scoreboard evidence
+## 11-қадам — Көп дереккөзді алу жаттығулары және табло дәлелдері
 
-Publishing to SoraFS now requires multi-source fetch evidence (DOCS-7/SF-6)
-alongside the DNS/gateway proofs above. After pinning the manifest:
+SoraFS сайтында жариялау енді көп дереккөзді алу дәлелдерін қажет етеді (DOCS-7/SF-6)
+жоғарыдағы DNS/шлюз дәлелдерімен қатар. Манифестті бекіткеннен кейін:
 
-1. **Run `sorafs_fetch` against the live manifest.** Use the same plan/manifest
-   artefacts produced in Steps 2–3 plus the gateway credentials issued for each
-   provider. Persist every output so auditors can replay the orchestrator
-   decision trail:
+1. **`sorafs_fetch` нұсқасын тікелей манифестке қарсы іске қосыңыз.** Бірдей жоспарды/манифестті пайдаланыңыз
+   2–3-қадамдарда жасалған артефактілер және әрқайсысы үшін берілген шлюз тіркелгі деректері
+   провайдер. Аудиторлар оркестрді қайта ойнатуы үшін әрбір нәтижені сақтау
+   шешім жолы:
 
    ```bash
    OUT=artifacts/sorafs/devportal
@@ -823,112 +818,112 @@ alongside the DNS/gateway proofs above. After pinning the manifest:
      --retry-budget=4
    ```
 
-   - Fetch the provider adverts referenced by the manifest first (for example
+   - Алдымен манифестпен сілтеме жасалған провайдердің жарнамаларын алыңыз (мысалы
      `sorafs_cli manifest describe --provider-adverts-out artifacts/sorafs/provider_adverts/`)
-     and pass them via `--provider-advert name=path` so the scoreboard can
-     evaluate capability windows deterministically. Use
-     `--allow-implicit-provider-metadata` **only** when replaying fixtures in
-     CI; production drills must cite the signed adverts that landed with the
-     pin.
-   - When the manifest references additional regions, repeat the command with
-     the corresponding provider tuples so every cache/alias has a matching
-     fetch artefact.
+     және оларды `--provider-advert name=path` арқылы өткізіңіз, осылайша табло мүмкін болады
+     мүмкіндіктер терезелерін анықтаушы түрде бағалау. Қолдану
+     `--allow-implicit-provider-metadata` **тек** қондырмаларды қайта ойнатқанда
+     CI; өндірістік жаттығулар қол қойылған хабарландыруларға сілтеме жасауы керек
+     түйреуіш.
+   - Манифест қосымша аймақтарға сілтеме жасағанда, пәрменді қайталаңыз
+     сәйкес провайдер әрбір кэш/бүркеншік аттың сәйкестігіне ие болатындай кортеждер жасайды
+     артефакті алу.
 
-2. **Archive the outputs.** Store `scoreboard.json`,
-   `providers.ndjson`, `fetch.json`, and `chunk_receipts.ndjson` under the
-   release evidence folder. These files capture the peer weighting, retry
-   budget, latency EWMA, and per-chunk receipts that the governance packet must
-   retain for SF-7.
+2. **Шығыстарды мұрағаттау.** `scoreboard.json` дүкені,
+   `providers.ndjson`, `fetch.json` және `chunk_receipts.ndjson`
+   дәлелдеме қалтасын шығарыңыз. Бұл файлдар тең салмақты түсіреді, қайталап көріңіз
+   бюджет, кідіріс EWMA және басқару пакеті міндетті түрде әр бөлікке түсетін түсімдер
+   SF-7 үшін сақтаңыз.
 
-3. **Update telemetry.** Import the fetch outputs into the **SoraFS Fetch
-   Observability** dashboard (`dashboards/grafana/sorafs_fetch_observability.json`),
-   watching `torii_sorafs_fetch_duration_ms`/`_failures_total` and the
-   provider-range panels for anomalies. Link the Grafana panel snapshots to the
-   release ticket alongside the scoreboard path.
+3. **Телеметрияны жаңарту.** Алу шығыстарын **SoraFS Fetch ішіне импорттау
+   Бақылау мүмкіндігі** бақылау тақтасы (`dashboards/grafana/sorafs_fetch_observability.json`),
+   `torii_sorafs_fetch_duration_ms`/`_failures_total` және
+   аномалияларға арналған провайдер ауқымы панельдері. Grafana панелінің суретін келесіге байланыстырыңыз
+   билетті табло жолымен бірге босатыңыз.
 
-4. **Smoke the alert rules.** Run `scripts/telemetry/test_sorafs_fetch_alerts.sh`
-   to validate the Prometheus alert bundle before closing the release. Attach
-   the promtool output to the ticket so DOCS-7 reviewers can confirm the stall
-   and slow-provider alerts remain armed.
+4. **Ескерту ережелерін қолданыңыз.** `scripts/telemetry/test_sorafs_fetch_alerts.sh` іске қосыңыз
+   шығарылымды жабу алдында Prometheus ескерту жинағын тексеру үшін. Тіркеу
+   DOCS-7 шолушылары дүңгіршекті растауы үшін билетке промқұралдың шығуы
+   және баяу провайдер ескертулері қарулы күйінде қалады.
 
-5. **Wire into CI.** The portal pin workflow keeps a `sorafs_fetch` step behind
-   the `perform_fetch_probe` input; enable it for staging/production runs so the
-   fetch evidence is produced alongside the manifest bundle without manual
-   intervention. Local drills can reuse the same script by exporting the
-   gateway tokens and setting `PIN_FETCH_PROVIDERS` to the comma-separated
-   provider list.
+5. **CI жүйесіне сым.** Портал түйреуішінің жұмыс процесі `sorafs_fetch` қадамын артта қалдырады.
+   `perform_fetch_probe` кірісі; оны сахналау/өндірістік іске қосу үшін қосыңыз
+   алу дәлелдері манифест бумасымен бірге нұсқаулықсыз жасалады
+   араласу. Жергілікті жаттығулар экспорттау арқылы бірдей сценарийді қайта пайдалана алады
+   шлюз таңбалауыштары және `PIN_FETCH_PROVIDERS` үтірмен бөлінгенге орнату
+   провайдерлер тізімі.
 
-## Promotion, observability, and rollback
+## Көтермелеу, бақылау және кері қайтару
 
-1. **Promotion:** keep separate staging and production aliases. Promote by
-   re-running `manifest submit` with the same manifest/bundle, swapping
-   `--alias-namespace/--alias-name` to point at the production alias. This
-   avoids rebuilding or resigning once QA approves the staging pin.
-2. **Monitoring:** import the pin-registry dashboard
-   (`docs/source/grafana_sorafs_pin_registry.json`) plus the portal-specific
-   probes (see `docs/portal/docs/devportal/observability.md`). Alert on checksum
-   drift, failed probes, or proof retry spikes.
-3. **Rollback:** to revert, resubmit the previous manifest (or retire the
-   current alias) using `sorafs_cli manifest submit --alias ... --retire`.
-   Always keep the last known-good bundle and CAR summary so rollback proofs can
-   be recreated if the CI logs rotate.
+1. **Жарнама:** бөлек қойылым және өндіріс бүркеншік аттарын сақтаңыз. арқылы насихаттау
+   `manifest submit` бірдей манифестпен/бумамен қайта іске қосу, ауыстыру
+   Өндіріс бүркеншік атын көрсету үшін `--alias-namespace/--alias-name`. Бұл
+   QA орнату пинін бекіткеннен кейін қайта құруды немесе жұмыстан шығуды болдырмайды.
+2. **Мониторинг:** PIN-тізілімінің бақылау тақтасын импорттаңыз
+   (`docs/source/grafana_sorafs_pin_registry.json`) плюс порталға тән
+   зондтар (`docs/portal/docs/devportal/observability.md` қараңыз). Бақылау сомасы туралы ескерту
+   дрейф, сәтсіз зондтар немесе қайталап көру ұштарын дәлелдеу.
+3. **Кері қайтару:** қайтару, алдыңғы манифестті қайта жіберу (немесе өшіру
+   ағымдағы бүркеншік ат) `sorafs_cli manifest submit --alias ... --retire` арқылы.
+   Қайтару дәлелдері болуы үшін әрқашан соңғы белгілі жинақты және CAR қорытындысын сақтаңыз
+   CI журналдары айналса, қайта жасалады.
 
-## CI workflow template
+## CI жұмыс процесі үлгісі
 
-At minimum, your pipeline should:
+Сіздің құбырыңыз кем дегенде:
 
-1. Build + lint (`npm ci`, `npm run build`, checksum generation).
-2. Package (`car pack`) and compute manifests.
-3. Sign using the job-scoped OIDC token (`manifest sign`).
-4. Upload artefacts (CAR, manifest, bundle, plan, summaries) for auditing.
-5. Submit to the pin registry:
-   - Pull requests → `docs-preview.sora`.
-   - Tags / protected branches → production alias promotion.
-6. Run probes + proof verification gates before exiting.
+1. Build + lint (`npm ci`, `npm run build`, бақылау сомасын құру).
+2. Бума (`car pack`) және манифесттерді есептеу.
+3. Тапсырма ауқымындағы OIDC (`manifest sign`) таңбалауышын пайдаланып қол қойыңыз.
+4. Тексеру үшін артефактілерді жүктеп салыңыз (CAR, манифест, бума, жоспар, қорытындылар).
+5. PIN тізіліміне жіберіңіз:
+   - Тарту сұраулары → `docs-preview.sora`.
+   - Тегтер / қорғалған филиалдар → өндіріс бүркеншік атын жылжыту.
+6. Шығу алдында зондтарды + дәлелдеу тексеру қақпаларын іске қосыңыз.
 
-`.github/workflows/docs-portal-sorafs-pin.yml` wires all of these steps together
-for manual releases. The workflow:
+`.github/workflows/docs-portal-sorafs-pin.yml` осы қадамдардың барлығын біріктіреді
+қолмен шығарылымдар үшін. Жұмыс барысы:
 
-- builds/tests the portal,
-- packages the build via `scripts/sorafs-pin-release.sh`,
-- signs/verifies the manifest bundle using GitHub OIDC,
-- uploads the CAR/manifest/bundle/plan/proof summaries as artifacts, and
-- (optionally) submits the manifest + alias binding when secrets are present.
+- порталды құрастырады/сынайды,
+- құрастыруды `scripts/sorafs-pin-release.sh` арқылы буады,
+- GitHub OIDC көмегімен манифест жинағына қол қояды/тексереді,
+- артефактілер ретінде CAR/манифест/бума/жоспар/дәлелдеу қорытындыларын жүктеп салады және
+- (міндетті емес) құпиялар болған кезде манифестті + міндетті бүркеншік атын жібереді.
 
-Configure the following repository secrets/variables before triggering the job:
+Тапсырманы іске қоспас бұрын келесі репозитарий құпияларын/айнымалы мәндерін конфигурациялаңыз:
 
-| Name | Purpose |
+| Аты | Мақсаты |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | Torii host that exposes `/v1/sorafs/pin/register`. |
-| `DOCS_SORAFS_SUBMITTED_EPOCH` | Epoch identifier recorded with submissions. |
-| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Signing authority for the manifest submission. |
-| `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Alias tuple bound to the manifest when `perform_submit` is `true`. |
-| `DOCS_SORAFS_ALIAS_PROOF_B64` | Base64-encoded alias proof bundle (optional; omit to skip alias binding). |
-| `DOCS_ANALYTICS_*` | Existing analytics/probe endpoints reused by other workflows. |
+| `DOCS_SORAFS_TORII_URL` | `/v1/sorafs/pin/register` ашатын Torii хосты. |
+| `DOCS_SORAFS_SUBMITTED_EPOCH` | Жіберулермен жазылған дәуір идентификаторы. |
+| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Манифестті жіберуге қол қоюшы орган. |
+| `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` `true` болғанда манифестке байланыстырылған бүркеншік ат кортежі. |
+| `DOCS_SORAFS_ALIAS_PROOF_B64` | Base64-кодталған бүркеншік атын дәлелдеу жинағы (міндетті емес; бүркеншік атпен байланыстыруды өткізіп жіберуді өткізіп жіберіңіз). |
+| `DOCS_ANALYTICS_*` | Басқа жұмыс үрдістері арқылы қайта пайдаланылатын бар аналитика/зерттеу соңғы нүктелері. |
 
-Trigger the workflow via the Actions UI:
+Actions UI арқылы жұмыс процесін іске қосыңыз:
 
-1. Provide `alias_label` (e.g., `docs.sora.link`), optional `proposal_alias`,
-   and an optional `release_tag` override.
-2. Leave `perform_submit` unchecked to generate artefacts without touching Torii
-   (useful for dry runs) or enable it to publish directly to the configured
-   alias.
+1. `alias_label` (мысалы, `docs.sora.link`), қосымша `proposal_alias`,
+   және қосымша `release_tag` қайта анықтау.
+2. Torii-ке тимей-ақ артефактілерді жасау үшін `perform_submit` құсбелгісін қойыңыз.
+   (құрғақ жұмыс үшін пайдалы) немесе оны конфигурацияланғандарға тікелей жариялау үшін қосыңыз
+   бүркеншік ат.
 
-`docs/source/sorafs_ci_templates.md` still documents the generic CI helpers for
-projects outside this repository, but the portal workflow should be preferred
-for day-to-day releases.
+`docs/source/sorafs_ci_templates.md` әлі де жалпы CI көмекшілерін құжаттайды
+осы репозиторийден тыс жобалар, бірақ порталдың жұмыс үрдісін таңдау керек
+күнделікті шығарылымдар үшін.
 
-## Checklist
+## Бақылау тізімі
 
-- [ ] `npm run build`, `npm run test:*`, and `npm run check:links` are green.
-- [ ] `build/checksums.sha256` and `build/release.json` captured in artefacts.
-- [ ] CAR, plan, manifest, and summary generated under `artifacts/`.
-- [ ] Sigstore bundle + detached signature stored with logs.
-- [ ] `portal.manifest.submit.summary.json` and `portal.manifest.submit.response.json`
-      captured when submissions occur.
-- [ ] `portal.pin.report.json` (and optional `portal.pin.proposal.json`)
-      archived alongside CAR/manifest artefacts.
-- [ ] `proof verify` and `manifest verify-signature` logs archived.
-- [ ] Grafana dashboards updated + Try-It probes successful.
-- [ ] Rollback notes (previous manifest ID + alias digest) attached to the
-      release ticket.
+- [ ] `npm run build`, `npm run test:*` және `npm run check:links` жасыл.
+- [ ] Артефактілерде түсірілген `build/checksums.sha256` және `build/release.json`.
+- [ ] CAR, жоспар, манифест және `artifacts/` астында жасалған қорытынды.
+- [ ] Sigstore бумасы + журналдармен сақталған бөлек қолтаңба.
+- [ ] `portal.manifest.submit.summary.json` және `portal.manifest.submit.response.json`
+      жіберулер орын алған кезде түсіріледі.
+- [ ] `portal.pin.report.json` (және қосымша `portal.pin.proposal.json`)
+      CAR/манифест артефактілерімен бірге мұрағатталған.
+- [ ] `proof verify` және `manifest verify-signature` журналдары мұрағатталды.
+- [ ] Grafana бақылау тақталары жаңартылды + Байқау сынақтары сәтті аяқталды.
+- [ ] Қайтару жазбалары (алдыңғы манифест идентификаторы + бүркеншік ат дайджест).
+      босату билеті.

@@ -7,41 +7,43 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Settlement FAQ
 description: Operator-facing answers covering settlement routing, XOR conversion, telemetry, and audit evidence.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page mirrors the internal settlement FAQ (`docs/source/nexus_settlement_faq.md`)
-so portal readers can review the same guidance without digging through the
-mono-repo. It explains how the Settlement Router processes payouts, what metrics
-to monitor, and how SDKs should integrate the Norito payloads.
+ይህ ገጽ ውስጣዊ የሰፈራ FAQ (`docs/source/nexus_settlement_faq.md`) ያንጸባርቃል
+ስለዚህ ፖርታል አንባቢዎች ሳይቆፍሩ ተመሳሳይ መመሪያን መከለስ ይችላሉ።
+ሞኖ-ሪፖ. የማቋቋሚያ ራውተር ክፍያዎችን እንዴት እንደሚያስኬድ፣ ምን አይነት መለኪያዎችን ያብራራል።
+ለመከታተል፣ እና ኤስዲኬዎች የNorito ክፍያ ጭነቶችን እንዴት እንደሚያዋህዱ።
 
-## Highlights
+## ድምቀቶች
 
-1. **Lane mapping** — each data space declares a `settlement_handle`
-   (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody`, or
-   `xor_dual_fund`). Consult the latest lane catalog under
+1. ** ሌይን ካርታ *** - እያንዳንዱ የውሂብ ቦታ `settlement_handle` ያውጃል
+   (`xor_global`፣ `xor_lane_weighted`፣ `xor_hosted_custody`፣ ወይም
+   I18NI0000009X). የቅርብ ጊዜውን የሌይን ካታሎግ በስር ይመልከቱ
    `docs/source/project_tracker/nexus_config_deltas/`.
-2. **Deterministic conversion** — the router converts all settlements to XOR via
-   the governance-approved liquidity sources. Private lanes pre-fund XOR buffers;
-   haircuts apply only when buffers drift outside policy.
-3. **Telemetry** — watch `nexus_settlement_latency_seconds`, conversion counters,
-   and haircut gauges. Dashboards live in `dashboards/grafana/nexus_settlement.json`
-   and alerts in `dashboards/alerts/nexus_audit_rules.yml`.
-4. **Evidence** — archive configs, router logs, telemetry exports, and
-   reconciliation reports for audits.
-5. **SDK responsibilities** — every SDK must expose settlement helpers, lane IDs,
-   and Norito payload encoders to keep parity with the router.
+2. ** ቆራጥ ልወጣ *** — ራውተር ሁሉንም ሰፈሮች በ XOR ይለውጣል
+   በአስተዳደር የተፈቀዱ የፈሳሽ ምንጮች. የግል መስመሮች ቅድመ ፈንድ XOR ማቋቋሚያዎች;
+   የፀጉር መቆረጥ የሚሠራው መከላከያዎች ከፖሊሲ ውጭ ሲንሸራተቱ ብቻ ነው።
+3. ** ቴሌሜትሪ *** - `nexus_settlement_latency_seconds` ይመልከቱ ፣ የመቀየሪያ ቆጣሪዎች ፣
+   እና የፀጉር መቁረጫዎች መለኪያዎች. ዳሽቦርዶች በI18NI0000012X ይኖራሉ
+   እና ማንቂያዎች በ I18NI0000013X.
+4. ** ማስረጃ *** - የማህደር ውቅሮች፣ ራውተር ምዝግብ ማስታወሻዎች፣ ቴሌሜትሪ ወደ ውጭ መላክ እና
+   የማስታረቅ ሪፖርቶች ለኦዲት.
+5. **የኤስዲኬ ኃላፊነቶች** — እያንዳንዱ ኤስዲኬ የሰፈራ ረዳቶችን፣ የሌይን መታወቂያዎችን፣
+   እና Norito ከራውተሩ ጋር ያለውን እኩልነት ለመጠበቅ የመክፈያ ማመሳከሪያዎች።
 
-## Example flows
+## ምሳሌ ይፈስሳል
 
-| Lane type | Evidence to capture | What it proves |
-|-----------|--------------------|----------------|
-| Private `xor_hosted_custody` | Router log + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | CBDC buffers debit deterministic XOR and haircuts stay within policy. |
-| Public `xor_global` | Router log + DEX/TWAP reference + latency/conversion metrics | Shared liquidity path priced the transfer at the published TWAP with zero haircut. |
-| Hybrid `xor_dual_fund` | Router log showing public vs shielded split + telemetry counters | Shielded/public mix respected governance ratios and recorded the haircut applied to each leg. |
+| የሌይን አይነት | ማስረጃ ለመያዝ | ምን ያረጋግጣል |
+|---------------
+| የግል `xor_hosted_custody` | የራውተር መዝገብ + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | የሲቢሲሲ ማቋቋሚያ ዴቢት መወሰኛ XOR እና የፀጉር ማቆሚያዎች በፖሊሲ ውስጥ ይቆያሉ። |
+| የህዝብ `xor_global` | የራውተር መዝገብ + DEX/TWAP ማጣቀሻ + መዘግየት/የልወጣ መለኪያዎች | የተጋራ ፈሳሽ መንገድ ዝውውሩን በታተመው TWAP በዜሮ ፀጉር ዋጋ አስከፍሏል። |
+| ዲቃላ `xor_dual_fund` | የራውተር ሎግ ይፋዊ vs የተከለለ ስንጥቅ + የቴሌሜትሪ ቆጣሪዎች | የተከለለ/የህዝብ ቅይጥ የተከበረ የአስተዳደር ምጥጥን እና በእያንዳንዱ እግር ላይ የተተገበረውን የፀጉር አሠራር መዝግቧል። |
 
-## Need more detail?
+## ተጨማሪ ዝርዝር ይፈልጋሉ?
 
-- Full FAQ: `docs/source/nexus_settlement_faq.md`
-- Settlement router spec: `docs/source/settlement_router.md`
-- CBDC policy playbook: `docs/source/cbdc_lane_playbook.md`
-- Operations runbook: [Nexus operations](./nexus-operations)
+- ሙሉ ተደጋጋሚ ጥያቄዎች፡ I18NI0000019X
+- የሰፈራ ራውተር ዝርዝር: `docs/source/settlement_router.md`
+- CBDC ፖሊሲ ጨዋታ መጽሐፍ: I18NI0000021X
+- የክወናዎች runbook: [Nexus ክወናዎች](./nexus-operations)

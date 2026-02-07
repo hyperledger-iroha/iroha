@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-fee-model.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-fee-model
-title: Atualizacoes do modelo de taxas do Nexus
-description: Espelho de `docs/source/nexus_fee_model.md`, documentando recibos de liquidacao de lanes e superficies de conciliacao.
+ID: گٹھ جوڑ-فی ماڈل
+عنوان: Nexus فیس ماڈل کی تازہ کاری
+تفصیل: `docs/source/nexus_fee_model.md` کا آئینہ ، لین آبادکاری کی رسیدوں اور مفاہمت کی سطحوں کی دستاویزات۔
 ---
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/nexus_fee_model.md`. Mantenha as duas copias alinhadas enquanto as traducoes japonesas, hebraicas, espanholas, portuguesas, francesas, russas, arabes e urdu migram.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/nexus_fee_model.md` کی عکاسی کرتا ہے۔ دونوں کاپیاں منسلک رکھیں جیسے جاپانی ، عبرانی ، ہسپانوی ، پرتگالی ، فرانسیسی ، روسی ، عربی ، اور اردو ترجمے ہجرت کرتے ہیں۔
 :::
 
-# Atualizacoes do modelo de taxas do Nexus
+# Nexus فیس ماڈل میں تازہ ترین معلومات
 
-O roteador de liquidacao unificado agora captura recibos deterministas por lane para que operadores possam conciliar debitos de gas com o modelo de taxas do Nexus.
+متحد تصفیہ روٹر اب فی لین میں تعصب کی رسیدوں پر قبضہ کرلیتا ہے تاکہ آپریٹرز Nexus فیس ماڈل کے ساتھ گیس کے معاوضوں میں صلح کر سکے۔
 
-- Para a arquitetura completa do roteador, politica de buffer, matriz de telemetria e sequenciamento de rollout, veja `docs/settlement-router.md`. Esse guia explica como os parametros documentados aqui se conectam ao entregavel do roadmap NX-3 e como os SREs devem monitorar o roteador em producao.
-- A configuracao do ativo de gas (`pipeline.gas.units_per_gas`) inclui um decimal `twap_local_per_xor`, um `liquidity_profile` (`tier1`, `tier2`, ou `tier3`), e uma `volatility_class` (`stable`, `elevated`, `dislocated`). Esses sinalizadores alimentam o roteador de liquidacao para que a cotacao XOR resultante corresponda ao TWAP canonico e ao tier de haircut da lane.
-- Cada transacao que paga gas registra um `LaneSettlementReceipt`. Cada recibo armazena o identificador de origem fornecido pelo chamador, o micro-valor local, o XOR devido imediatamente, o XOR esperado apos o haircut, a variancia realizada (`xor_variance_micro`) e o timestamp do bloco em milissegundos.
-- A execucao de blocos agrega recibos por lane/dataspace e os publica via `lane_settlement_commitments` em `/v1/sumeragi/status`. Os totais mostram `total_local_micro`, `total_xor_due_micro` e `total_xor_after_haircut_micro` somados no bloco para exportacoes noturnas de conciliacao.
-- Um novo contador `total_xor_variance_micro` rastreia quanto de margem de seguranca foi consumida (diferenca entre o XOR devido e o esperado pos-haircut), e `swap_metadata` documenta os parametros de conversao deterministica (TWAP, epsilon, liquidity profile e volatility_class) para que auditores possam verificar as entradas da cotacao independentemente da configuracao em runtime.
+- مکمل روٹر فن تعمیر ، بفر پالیسی ، ٹیلی میٹری میٹرکس اور رول آؤٹ تسلسل کے لئے ، `docs/settlement-router.md` دیکھیں۔ یہ گائیڈ وضاحت کرتا ہے کہ یہاں دستاویزی پیرامیٹرز NX-3 روڈ میپ کی فراہمی کے قابل کیسے جڑتے ہیں اور SREs کو کس طرح پیداوار میں روٹر کی نگرانی کرنی چاہئے۔
+- گیس اثاثہ کی تشکیل (`pipeline.gas.units_per_gas`) میں ایک اعشاریہ `twap_local_per_xor` ، ایک `liquidity_profile` (`tier1` ، `tier2` ، یا `tier3`) ، اور `volatility_class` `elevated` ، `dislocated`)۔ ان جھنڈوں کو تصفیہ روٹر کو کھلایا جاتا ہے تاکہ نتیجے میں XOR اقتباس کیننیکل ٹیوپ اور لین کے بال کٹوانے کے درجے سے مماثل ہو۔
+- ہر لین دین جو گیس ریکارڈ کے لئے ادائیگی کرتا ہے `LaneSettlementReceipt`۔ ہر رسید کالر ، مقامی مائیکرو ویلیو ، فوری طور پر XOR کی وجہ سے فراہم کردہ ماخذ شناخت کنندہ کو محفوظ کرتی ہے ، بال کٹوانے کے بعد متوقع XOR ، احساس شدہ تغیر (`xor_variance_micro`) ، اور ملی سیکنڈ میں بلاک ٹائم اسٹیمپ۔
+- بلاک پھانسی سے لین/ڈیٹا اسپیس کے ذریعہ رسیدوں کو جمع کرتا ہے اور `lane_settlement_commitments` کے ذریعے `/v1/sumeragi/status` میں شائع کرتا ہے۔ مجموعی طور پر `total_local_micro` ، `total_xor_due_micro` اور `total_xor_after_haircut_micro` رات کے مفاہمت کی برآمدات کے لئے بلاک میں ایک ساتھ شامل کیا گیا ہے۔
+- ایک نیا کاؤنٹر `total_xor_variance_micro` ٹریک کرتا ہے کہ حفاظت کا کتنا فرق کھایا گیا (XOR اور متوقع بعد کے بعد کے بعد کے درمیان فرق) ، اور `swap_metadata` دستاویزات ڈٹرمینسٹک تبادلوں کے پیرامیٹرز (ٹوپپ ، ایپسیلون ، لیکویڈیٹی پروفائل اور اتار چڑھاؤ سے متعلق) تاکہ آڈیٹرز کوئٹ ان پٹ کی تصدیق کرسکیں۔
 
-Os consumidores podem acompanhar `lane_settlement_commitments` junto com os snapshots existentes de commitments de lane e dataspace para verificar que os buffers de taxas, os tiers de haircut e a execucao do swap correspondem ao modelo de taxas do Nexus configurado.
+صارفین `lane_settlement_commitments` کو ٹریک کرسکتے ہیں اور اس کے ساتھ ساتھ لین اور ڈیٹا اسپیس کے وعدوں کے موجودہ سنیپ شاٹس کے ساتھ ساتھ اس بات کی تصدیق کی جاسکتی ہے کہ اس کی شرح بفر ، بال کٹوانے والے درجے ، اور تبادلہ کرنے والے Nexus ریٹ ماڈل سے ملتے ہیں۔

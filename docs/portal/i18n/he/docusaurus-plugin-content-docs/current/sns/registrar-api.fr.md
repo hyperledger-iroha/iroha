@@ -4,33 +4,35 @@ direction: rtl
 source: docs/portal/docs/sns/registrar-api.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
+:::הערה מקור קנוניק
 Cette page reflete `docs/source/sns/registrar_api.md` et sert desormais de
-copie canonique du portail. Le fichier source est conserve pour les flux de
-traduction.
+עותק canonique du portail. Le fichier source est conserve pour les flux de
+מסירה.
 :::
 
-# API du registrar SNS et hooks de gouvernance (SN-2b)
+# API של הרשם SNS et hooks de governance (SN-2b)
 
-**Statut:** Redige 2026-03-24 -- en revue par Nexus Core  
-**Lien roadmap:** SN-2b "Registrar API & governance hooks"  
-**Prerequis:** Definitions de schema dans [`registry-schema.md`](./registry-schema.md)
+**סטטוס:** Redige 2026-03-24 -- en revue par Nexus Core  
+**מפת הדרכים של Lien:** SN-2b "Registrar API & Governance Hooks"  
+**דרישה מוקדמת:** Definitions de schema dans [`registry-schema.md`](./registry-schema.md)
 
-Cette note specifie les endpoints Torii, services gRPC, DTOs de requete/reponse
-et artefacts de gouvernance necessaires pour operer le registrar du Sora Name
-Service (SNS). C'est le contrat de reference pour les SDKs, wallets et
-automatisation qui doivent enregistrer, renouveler ou gerer des noms SNS.
+הערה Cette מציינת את נקודות הקצה Torii, שירותי gRPC, DTOs de Request/Reponse
+et artefacts de governance necessaires pour operer le registrar du Sora שם
+שירות (SNS). C'est le contrat de reference pour les SDKs, ארנקים et
+אוטומציה qui doivent enregistrer, renouveler ou gerer des noms SNS.
 
-## 1. Transport et authentification
+## 1. תחבורה ואימות
 
-| Exigence | Detail |
-|----------|--------|
-| Protocoles | REST sous `/v1/sns/*` et service gRPC `sns.v1.Registrar`. Les deux acceptent Norito-JSON (`application/json`) et Norito-RPC binaire (`application/x-norito`). |
-| Auth | Jetons `Authorization: Bearer` ou certificats mTLS emis par suffix steward. Les endpoints sensibles a la gouvernance (freeze/unfreeze, affectations reservees) exigent `scope=sns.admin`. |
-| Limites de debit | Les registrars partagent les buckets `torii.preauth_scheme_limits` avec les appelants JSON plus des limites de rafale par suffixe: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
-| Telemetrie | Torii expose `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` pour les handlers du registrar (filtrer `scheme="norito_rpc"`); l'API incremente aussi `sns_registrar_status_total{result, suffix_id}`. |
+| נחישות | פירוט |
+|--------|--------|
+| פרוטוקולים | REST sous `/v1/sns/*` et service gRPC `sns.v1.Registrar`. Les deux acceptent Norito-JSON (`application/json`) ו-Norito-RPC binaire (`application/x-norito`). |
+| Auth | Jetons `Authorization: Bearer` או אישורי mTLS emis par suffix steward. Les endpoints sensibles a la governance (הקפאה/ביטול ההקפאה, שמירה על השפעות) דרושים `scope=sns.admin`. |
+| מגבלות חיוב | Les registrars partagent les buckets `torii.preauth_scheme_limits` avec les appelants JSON plus des limites de rafale par סיומת: `sns.register`, `sns.renew`, `sns.controller`, Norito. |
+| טלמטריה | Torii לחשוף `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` למטפלים של הרשם (מסנן `scheme="norito_rpc"`); l'API incremente aussi `sns_registrar_status_total{result, suffix_id}`. |
 
 ## 2. Apercu des DTO
 
@@ -102,25 +104,23 @@ Struct ReservedAssignmentRequestV1 {
 }
 ```
 
-## 3. Endpoints REST
+## 3. נקודות קצה REST
 
-| Endpoint | Methode | Payload | Description |
-|----------|---------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Enregistrer ou rouvrir un nom. Resout le tier de prix, valide les preuves de paiement/gouvernance, emet des evenements de registre. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Prolonge le terme. Applique les fenetres de grace/redemption depuis la politique. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Transfere la propriete une fois les approbations de gouvernance jointes. |
+| נקודת קצה | מתודה | מטען | תיאור |
+|--------|--------|--------|----------------|
+| `/v1/sns/registrations` | פוסט | `RegisterNameRequestV1` | הרשום או rouvrir un nom. Resout le tier de prix, valide les preuves de paiement/gouvernance, emet des evenements de registre. |
+| `/v1/sns/registrations/{selector}/renew` | פוסט | `RenewNameRequestV1` | הארך את הטרמה. Applique les fenetres de grace/גאולה depuis la politique. |
+| `/v1/sns/registrations/{selector}/transfer` | פוסט | `TransferNameRequestV1` | Transfere la propriete une fois les approbations de gouvernance jointes. |
 | `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Remplace l'ensemble des controllers; valide les adresses de compte signees. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Freeze guardian/council. Exige un ticket guardian et une reference au dossier de gouvernance. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze apres remediation; s'assure que l'override du council est enregistre. |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Affectation de noms reserves par steward/council. |
-| `/v1/sns/policies/{suffix_id}` | GET | -- | Recupere le `SuffixPolicyV1` courant (cacheable). |
-| `/v1/sns/registrations/{selector}` | GET | -- | Retourne le `NameRecordV1` courant + etat effectif (Active, Grace, etc.). |
+| `/v1/sns/registrations/{selector}/freeze` | פוסט | `FreezeNameRequestV1` | הקפאת אפוטרופוס/מועצה. קבל כרטיס אפוטרופוס ויחידה הפניה au dossier de gouvernance. |
+| `/v1/sns/registrations/{selector}/freeze` | מחק | `GovernanceHookV1` | ביטול הקפאה של תיקון אפרה; s'assure que l'override du Council est להירשם. |
+| `/v1/sns/reserved/{selector}` | פוסט | `ReservedAssignmentRequestV1` | חיבה דה נומס מילואים פר דייל/מועצה. |
+| `/v1/sns/policies/{suffix_id}` | קבל | -- | Recupere le `SuffixPolicyV1` courant (ניתן לאחסון במטמון). |
+| `/v1/sns/registrations/{selector}` | קבל | -- | Retourne le `NameRecordV1` courant + etat effectif (אקטיב, גרייס וכו'). |**Encodage du selector:** קטע `{selector}` מקבל IH58, דחיסה, או hex canonique selon ADDR-5; Torii לנרמל דרך `NameSelectorV1`.
 
-**Encodage du selector:** le segment `{selector}` accepte IH58, compresse, ou hex canonique selon ADDR-5; Torii le normalise via `NameSelectorV1`.
+**דגם שגיאות:** tous les endpoints retournent Norito JSON avec `code`, `message`, `details`. הקודים כוללים `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
-**Modele d'erreurs:** tous les endpoints retournent Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
-
-### 3.1 Aides CLI (exigence du registrar manuel N0)
+### 3.1 Aides CLI (דרישת מדריך הרשם N0)
 
 Les stewards de beta fermee peuvent desormais utiliser le registrar via la CLI sans fabriquer du JSON a la main:
 
@@ -136,9 +136,9 @@ iroha sns register \
 ```
 
 - `--owner` prend par defaut le compte de configuration de la CLI; repetez `--controller` pour ajouter des comptes controller supplementaires (par defaut `[owner]`).
-- Les flags inline de paiement mappent directement vers `PaymentProofV1`; passez `--payment-json PATH` quand vous avez deja un recu structure. Les metadonnees (`--metadata-json`) et les hooks de gouvernance (`--governance-json`) suivent le meme schema.
+- Les flags inline de paiement mappt direction vers `PaymentProofV1`; passez `--payment-json PATH` quand vous avez deja un recu מבנה. Les metadonnees (`--metadata-json`) et les hooks de governance (`--governance-json`) תואם לסכימת הממים.
 
-Les aides en lecture seule completent les repetitions:
+Les aides and lecture הם חזרות שלמות:
 
 ```bash
 iroha sns registration --selector makoto.sora
@@ -147,7 +147,7 @@ iroha sns policy --suffix-id 1
 
 Voir `crates/iroha_cli/src/commands/sns.rs` pour l'implementation; les commandes reutilisent les DTOs Norito decrits dans ce document afin que la sortie CLI corresponde byte for byte aux reponses Torii.
 
-Des aides supplementaires couvrent les renouvellements, transferts et actions guardian:
+עוזרים משלימים לחידושים, העברות ופעולות אפוטרופוס:
 
 ```bash
 # Renew an expiring name
@@ -177,9 +177,9 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` doit contenir un enregistrement `GovernanceHookV1` valide (proposal id, vote hashes, signatures steward/guardian). Chaque commande reflete simplement l'endpoint `/v1/sns/registrations/{selector}/...` correspondant pour que les operateurs de beta puissent repeter exactement les surfaces Torii que les SDKs appelleront.
+`--governance-json` תגדיר את הרישום `GovernanceHookV1` תקף (מזהה הצעה, גיבוב הצבעה, דייל/אפוטרופוס חתימות). Chaque commande reflee simplement l'endpoint `/v1/sns/registrations/{selector}/...` correspondant pour que les operators de beta puissent repeter exactement les משטחים Torii que les SDKs appelleront.
 
-## 4. Service gRPC
+## 4. שירות gRPC
 
 ```text
 service Registrar {
@@ -195,83 +195,81 @@ service Registrar {
 }
 ```
 
-Wire-format: hash du schema Norito en temps de compilation enregistre dans
+פורמט חוט: hash du schema Norito בזמני קומפילציה הרשום
 `fixtures/norito_rpc/schema_hashes.json` (lignes `RegisterNameRequestV1`,
-`RegisterNameResponseV1`, `NameRecordV1`, etc.).
+`RegisterNameResponseV1`, `NameRecordV1` וכו').
 
-## 5. Hooks de gouvernance et preuves
+## 5. Hooks de governance et preuves
 
 Chaque appel qui modifie l'etat doit joindre des preuves reutilisables pour la relecture:
 
-| Action | Donnees de gouvernance requises |
-|--------|-------------------------------|
-| Enregistrement/renouvellement standard | Preuve de paiement referencant une instruction de settlement; aucun vote council requis sauf si le tier exige l'approbation steward. |
-| Enregistrement de tier premium / affectation reservee | `GovernanceHookV1` referencant proposal id + steward acknowledgement. |
-| Transfert | Hash du vote council + hash du signal DAO; clearance guardian quand le transfert est declenche par resolution de litige. |
-| Freeze/Unfreeze | Signature du ticket guardian plus override du council (unfreeze). |
+| פעולה | Donnees de governance requises |
+|--------|-------------------------------------|
+| תקן רישום/חידוש | Preuve de paiement referencant une instruction de settlement; מועצת ההצבעה של aucun דרישה לסדרת ההסכמה. |
+| רישום פרמיית שכבת/השפעה | `GovernanceHookV1` מזהה הצעה רפרנטית + אישור דייל. |
+| העברה | חש דו קול מועצת + חש דו אות DAO; אפוטרופוס אישור quand le transfert est declenche par resolution de litige. |
+| הקפאה/בטל הקפאה | Signature du ticket guardian plus override du Council (ביטול הקפאה). |
 
-Torii verifie les preuves en verifiant:
+Torii בדוק את הקודמים והאימות:
 
-1. L'identifiant de proposal existe dans le ledger de gouvernance (`/v1/governance/proposals/{id}`) et le statut est `Approved`.
-2. Les hashes correspondent aux artefacts de vote enregistres.
-3. Les signatures steward/guardian referencent les cles publiques attendues de `SuffixPolicyV1`.
+1. L'identifiant de offer existe dans le Ledger de governance (`/v1/governance/proposals/{id}`) et le statut est `Approved`.
+2. כתב Les hashes aux artefacts de vote enregistres.
+3. Les חתימות דייל/אפוטרופוס התייחסות Les cles publiques attendues de `SuffixPolicyV1`.
 
-Les controles en echec renvoient `sns_err_governance_missing`.
+Les controls en echec renvoient `sns_err_governance_missing`.
 
-## 6. Exemples de workflow
+## 6. דוגמאות לזרימת עבודה### 6.1 תקן רישום
 
-### 6.1 Enregistrement standard
-
-1. Le client interroge `/v1/sns/policies/{suffix_id}` pour recuperer les prix, la grace et les tiers disponibles.
+1. חקירת הלקוח `/v1/sns/policies/{suffix_id}` pour recuperer les prix, la grace et les tiers disponibles.
 2. Le client construit `RegisterNameRequestV1`:
-   - `selector` derive du label IH58 (prefere) ou compresse (second choix).
+   - `selector` נגזר מהתווית IH58 (עדיף) או דחיסה (בחירה שנייה).
    - `term_years` dans les limites de la politique.
-   - `payment` referencant le transfert du splitter tresorerie/steward.
-3. Torii valide:
-   - Normalisation du label + liste reservee.
-   - Term/gross price vs `PriceTierV1`.
+   - `payment` referencant le transfert du splitter tresorerie/דייל.
+3. תקף Torii:
+   - נורמליזציה תווית + רשימת שמירה.
+   - טווח/מחיר ברוטו לעומת `PriceTierV1`.
    - Montant de preuve de paiement >= prix calcule + frais.
-4. En succes Torii:
+4. En success Torii:
    - Persiste `NameRecordV1`.
-   - Emet `RegistryEventV1::NameRegistered`.
-   - Emet `RevenueAccrualEventV1`.
+   - אמת `RegistryEventV1::NameRegistered`.
+   - אמת `RevenueAccrualEventV1`.
    - Retourne le nouveau record + evenements.
 
-### 6.2 Renouvellement pendant la grace
+### 6.2 תליון Renouvellement la grace
 
-Les renouvellements pendant la grace incluent la requete standard plus la detection de penalite:
+תליון Les renouvellements la grace incluent la requete standard plus la detection de penalite:
 
-- Torii compare `now` vs `grace_expires_at` et ajoute les tables de surcharge de `SuffixPolicyV1`.
-- La preuve de paiement doit couvrir la surcharge. Echec => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` enregistre le nouveau `expires_at`.
+- Torii השווה בין `now` ל-`grace_expires_at` ו-ajoute les tables de surcharge de `SuffixPolicyV1`.
+- La preuve de paiement doit couvrir la תשלום נוסף. Echec => `sns_err_payment_mismatch`.
+- `RegistryEventV1::NameRenewed` הרשמה ל-Nouveau `expires_at`.
 
-### 6.3 Freeze guardian et override du council
+### 6.3 הקפאת האפוטרופוס וביטול המועצה
 
 1. Guardian soumet `FreezeNameRequestV1` avec un ticket referencant l'id d'incident.
 2. Torii deplace le record en `NameStatus::Frozen`, emet `NameFrozen`.
-3. Apres remediation, le council emet un override; l'operateur envoie DELETE `/v1/sns/registrations/{selector}/freeze` avec `GovernanceHookV1`.
+3. תיקון אפרה, le Council emet un override; l'operateur envoie DELETE `/v1/sns/registrations/{selector}/freeze` avec `GovernanceHookV1`.
 4. Torii valide l'override, emet `NameUnfrozen`.
 
 ## 7. Validation et codes d'erreur
 
-| Code | Description | HTTP |
+| קוד | תיאור | HTTP |
 |------|-------------|------|
-| `sns_err_reserved` | Label reserve ou bloque. | 409 |
-| `sns_err_policy_violation` | Term, tier ou ensemble de controllers viole la politique. | 422 |
-| `sns_err_payment_mismatch` | Mismatch de valeur ou d'asset dans la preuve de paiement. | 402 |
-| `sns_err_governance_missing` | Artefacts de gouvernance requis absents/invalides. | 403 |
+| `sns_err_reserved` | תווית reserve ou bloque. | 409 |
+| `sns_err_policy_violation` | מונח, tier ou אנסמבל דה בקרי ויולה לפוליטיקה. | 422 |
+| `sns_err_payment_mismatch` | חוסר התאמה דה valeur ou d'asset dans la preuve de paiement. | 402 |
+| `sns_err_governance_missing` | חפצי שלטון דורשים נעדרים/פסולים. | 403 |
 | `sns_err_state_conflict` | Operation non permise dans l'etat de cycle de vie actuel. | 409 |
 
-Tous les codes apparaissent via `X-Iroha-Error-Code` et des enveloppes Norito JSON/NRPC structurees.
+ניתן לראות את הקודים באמצעות `X-Iroha-Error-Code` ו-des enveloppes Norito מבני JSON/NRPC.
 
-## 8. Notes d'implementation
+## 8. הערות ליישום
 
-- Torii stocke les auctions en attente sous `NameRecordV1.auction` et rejette les tentatives d'enregistrement direct tant que `PendingAuction`.
+- Torii stocke les auctions en attente sous `NameRecordV1.auction` et rejette les tentatives d'enregistrement Direct tant que `PendingAuction`.
 - Les preuves de paiement reutilisent les recus du ledger Norito; les services de tresorerie fournissent des APIs helper (`/v1/finance/sns/payments`).
-- Les SDKs devraient envelopper ces endpoints avec des helpers fortement types pour que les wallets puissent presenter des raisons d'erreur claires (`ERR_SNS_RESERVED`, etc.).
+- Les SDKs devraient envelopper ces endpoints avec des helpers fortement types pour que les wallets puissent presenter des raisons d'erreur claires (`ERR_SNS_RESERVED`, וכו').
 
 ## 9. Prochaines etapes
 
 - Relier les handlers Torii au contrat de registre reel une fois les auctions SN-3 disponibles.
-- Publier des guides SDK specifiques (Rust/JS/Swift) referencant cette API.
-- Etendre [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) avec des liens croises vers les champs de preuve des hooks de gouvernance.
+- Publier des guides מפרט SDK (Rust/JS/Swift) מתייחס ל-API.
+- Etendre [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) avec des liens croises vers les champs de preuve des hooks de governance.

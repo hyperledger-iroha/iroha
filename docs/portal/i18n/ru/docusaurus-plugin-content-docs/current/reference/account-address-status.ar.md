@@ -4,15 +4,17 @@ direction: ltr
 source: docs/portal/docs/reference/account-address-status.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: account-address-status
-title: امتثال عنوان الحساب
-description: ملخص سير عمل fixture ADDR-2 وكيف تبقى فرق SDK متزامنة.
+id: статус-адрес-аккаунта
+Название: امتثال عنوان الحساب
+описание: Создан прибор ADDR-2, созданный в SDK.
 ---
 
-الحزمة القياسية ADDR-2 (`fixtures/account/address_vectors.json`) تلتقط fixtures IH58 و compressed (`sora`, second-best; half/full width) و multisignature و negative. تعتمد كل واجهة SDK + Torii على نفس JSON حتى نرصد اي انحراف في codec قبل وصوله الى الانتاج. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.
+Доступ к ADDR-2 (`fixtures/account/address_vectors.json`) с фикстурами IH58 и сжатым (`sora`, второй лучший; половинная/полная ширина), мультисигнатурой и отрицательным. Используйте SDK + Torii с поддержкой JSON и кодеком для кодека. الانتاج. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى Он был создан в 2017 году в рамках монорепозитория.
 
 ## اعادة توليد او التحقق من الحزمة
 
@@ -24,31 +26,31 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Flags:
+Флаги:
 
-- `--stdout` — يطبع JSON على stdout للفحص السريع.
+- `--stdout` — используется стандартный формат JSON для обработки.
 - `--out <path>` — يكتب الى مسار مختلف (مثلا عند مقارنة تغييرات محلية).
-- `--verify` — يقارن نسخة العمل بالمحتوى المولد حديثا (لا يمكن دمجه مع `--stdout`).
+- `--verify` — создан в 2008 году в Нижнем Новгороде (в честь `--stdout`).
 
-يشغل مسار CI **Address Vector Drift** الامر `cargo xtask address-vectors --verify`
-عند تغير fixture او المولد او الوثائق لتنبيه المراجعين فورا.
+Код CI **Дрейф вектора адреса** Код `cargo xtask address-vectors --verify`
+Он сыграл в матче против "Лордона" и "Лейк-Сити" в Уэльсе.
 
-## من يستهلك fixture؟
+## من يستهلك, приспособление؟
 
-| السطح | التحقق |
+| سطح | تحقق |
 |---------|------------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
-| Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
+| Модель данных Rust | `crates/iroha_data_model/tests/account_address_vectors.rs` |
+| Torii (сервер) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-كل harness يجري round-trip للبايتات القياسية + IH58 + الترميزات المضغوطة ويتحقق من ان اكواد الخطأ بنمط Norito تطابق fixture للحالات السلبية.
+При использовании ремня безопасности туда и обратно можно использовать + IH58 + автокресло, которое можно использовать в поездке. Установите приспособление Norito на место.
 
 ## هل تحتاج الى اتمتة؟
 
-يمكن لادوات الاصدار برمجة تحديثات fixture عبر المساعد
-`scripts/account_fixture_helper.py`، الذي يجلب او يتحقق من الحزمة القياسية دون خطوات نسخ/لصق:
+В 1990-х годах в Лос-Анджелесе состоялась премьера матча
+`scripts/account_fixture_helper.py`, который находится в режиме онлайн-просмотра:
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -64,9 +66,9 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-يقبل المساعد overrides عبر `--source` او متغير البيئة `IROHA_ACCOUNT_FIXTURE_URL` حتى تتمكن مهام CI الخاصة بـ SDK من الاشارة الى المرآة المفضلة. عند تمرير `--metrics-out` يكتب المساعد `account_address_fixture_check_status{target="…"}` مع digest القياسي SHA-256 (`account_address_fixture_remote_info`) حتى يتمكن textfile collectors في Prometheus ولوحة Grafana `account_address_fixture_status` من اثبات بقاء كل سطح متزامنا. فعّل التنبيه عندما يبلغ اي target قيمة `0`. للاتمتة متعددة الاسطح استخدم الغلاف `ci/account_fixture_metrics.sh` (يقبل تكرار `--target label=path[::source]`) حتى تتمكن فرق المناوبة من نشر ملف `.prom` موحد لجامع textfile الخاص بـ node-exporter.
+Функция блокировки переопределяет команду `--source` и модуль `IROHA_ACCOUNT_FIXTURE_URL`, установленный в CI. Используйте SDK для создания приложений. Создан `--metrics-out` в режиме `account_address_fixture_check_status{target="…"}` в дайджесте SHA-256 (`account_address_fixture_remote_info`) Сборщики текстовых файлов относятся к Prometheus и Grafana `account_address_fixture_status`, созданному в 2012 году. Для этого используется целевой объект `0`. Установите флажок `ci/account_fixture_metrics.sh` (только версия `--target label=path[::source]`). Создан для создания файла `.prom` для создания текстового файла с помощью node-exporter.
 
 ## هل تحتاج الملخص الكامل؟
 
-حالة الامتثال الكاملة لـ ADDR-2 (owners وخطة المراقبة وبنود العمل المفتوحة)
-موجودة في `docs/source/account_address_status.md` داخل المستودع مع Address Structure RFC (`docs/account_structure.md`). استخدم هذه الصفحة كتذكير تشغيلي سريع؛ وارجع الى وثائق المستودع للارشاد المفصل.
+Создано приложение для ADDR-2 (владельцы получили сертификаты от компании ADDR-2)
+Создан для `docs/source/account_address_status.md` в соответствии со структурой адреса RFC (`docs/account_structure.md`). استخدم هذه الصفحة كتذكير تشغيلي سريع؛ Вы можете сделать это в ближайшее время.

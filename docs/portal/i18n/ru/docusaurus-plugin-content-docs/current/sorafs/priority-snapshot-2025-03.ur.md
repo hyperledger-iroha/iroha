@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: ترجیحات اسنیپ شاٹ — مارچ 2025 (بیٹا)
-description: Nexus 2025-03 steering snapshot کا عکس؛ عوامی rollout سے پہلے ACKs کا انتظار۔
+идентификатор: приоритет-снимок-2025-03
+Название: ترجیحات اسنیپ شاٹ — مارچ 2025 (بیٹا)
+описание: Nexus 2025-03 снимок рулевого управления کا عکس؛ Развертывание и использование ACK
 ---
 
-> مستند ماخذ: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Имя файла: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> اسٹیٹس: **بیٹا / steering ACKs کا انتظار** (Networking, Storage, Docs leads).
+> Ответы: ** بیٹا / управление ACKs کا انتظار** (лиды по работе в сети, хранилище, документации).
 
 ## جائزہ
 
-مارچ اسنیپ شاٹ docs/content-network کی initiatives کو SoraFS delivery tracks
-(SF-3, SF-6b, SF-9) کے ساتھ aligned رکھتا ہے۔ جیسے ہی تمام leads Nexus steering
-چینل میں snapshot کی تصدیق کر دیں، اوپر والی “Beta” نوٹ ہٹا دیں۔
+Документы/контент-сети, инициативы и треки доставки SoraFS
+(SF-3, SF-6b, SF-9). جیسے ہی تمام ведет Nexus рулевое управление
+Снимок экрана или снимок экрана «Бета» или «Бета»
 
 ### فوکس تھریڈز
 
-1. **ترجیحات اسنیپ شاٹ circulate کریں** — acknowledgements جمع کریں اور انہیں
-   2025-03-05 council minutes میں لاگ کریں۔
-2. **Gateway/DNS kickoff close-out** — 2025-03-03 workshop سے پہلے نیا facilitation
-   kit (runbook کا Section 6) rehearse کریں۔
-3. **Operator runbook migration** — portal `Runbook Index` live ہے؛ reviewer
-   onboarding sign-off کے بعد beta preview URL ظاہر کریں۔
-4. **SoraFS delivery threads** — SF-3/6b/9 کا باقی کام plan/roadmap کے ساتھ align کریں:
-   - `sorafs-node` میں PoR ingestion worker + status endpoint۔
-   - Rust/JS/Swift orchestrator integrations میں CLI/SDK bindings کا polish۔
-   - PoR coordinator runtime wiring اور GovernanceLog events۔
+1. **ترجیحات اسنیپ شاٹ распространять کریں** — благодарности جمع کریں اور انہیں
+   Протокол совета от 05 марта 2025 г.
+2. **Завершение открытия шлюза/DNS** — семинар 3 марта 2025 г., фасилитация
+   комплект (сборник упражнений, раздел 6)
+3. **Миграция Runbook оператора** — портал `Runbook Index` в реальном времени ہے؛ рецензент
+   URL-адрес предварительного просмотра бета-версии ظاہر کریں۔
+4. **SoraFS потоки доставки** — SF-3/6b/9, где есть план/дорожная карта, где нужно выровнять:
+   - `sorafs-node` — рабочий процесс приема PoR + конечная точка состояния.
+   - Интеграция оркестратора Rust/JS/Swift, привязки CLI/SDK и полировка.
+   - Проводка времени выполнения координатора PoR اور GovernanceLogevents۔
 
-مکمل جدول، distribution checklist اور log entries کے لیے source فائل دیکھیں۔
+Контрольный список распространения, записи в журнале, источник, источник.

@@ -7,53 +7,54 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7fd1985901145d0dbcc587d953b0b1a3b5210132c3f915ffd36ec81fbe0692b7
 source_last_modified: "2026-01-22T14:45:01.276618+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-title: Data Availability Commitments Plan
-sidebar_label: Commitments Plan
-description: Block, RPC, and proof plumbing for embedding DA commitments in Nexus.
+ርዕስ: የውሂብ ተገኝነት ግዴታዎች ዕቅድ
+sidebar_label: ግዴታዎች ዕቅድ
+መግለጫ፡ አግድ፣ RPC እና የ DA ቁርጠኝነትን በNexus ውስጥ ለመክተት ማረጋገጫ የቧንቧ መስመር።
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-# Sora Nexus Data Availability Commitments Plan (DA-3)
+# Sora Nexus የውሂብ ተገኝነት ግዴታዎች እቅድ (DA-3)
 
-_Drafted: 2026-03-25 — Owners: Core Protocol WG / Smart Contract Team / Storage Team_
+የተረቀቀው፡ 2026-03-25 — ባለቤቶች፡ ኮር ፕሮቶኮል WG / ስማርት ኮንትራት ቡድን / የማከማቻ ቡድን_
 
-DA-3 extends the Nexus block format so every lane embeds deterministic records
-describing the blobs accepted by DA-2. This note captures the canonical data
-structures, block pipeline hooks, light-client proofs, and Torii/RPC surfaces
-that must land before validators can rely on DA commitments during admission or
-governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
+DA-3 የNexus የማገጃ ቅርጸትን ያራዝማል ስለዚህ እያንዳንዱ መስመር ወሳኝ መዝገቦችን ይከተታል
+በDA-2 የተቀበሉትን ብሎቦች በመግለጽ። ይህ ማስታወሻ ቀኖናዊውን መረጃ ይይዛል
+አወቃቀሮች፣ የቧንቧ መስመር መንጠቆዎች፣ የብርሃን ደንበኛ ማረጋገጫዎች፣ እና I18NT0000014X/RPC ንጣፎች
+አረጋጋጮች በዲኤ ቃል ኪዳኖች ላይ ከመመካታቸው በፊት ማረፍ ያለበት በመግቢያ ጊዜ ወይም
+የአስተዳደር ቼኮች. ሁሉም የክፍያ ጭነቶች I18NT0000002X-የተመሰጠሩ ናቸው; ምንም SCALE ወይም ad-hoc JSON.
 
-## Objectives
+# አላማዎች
 
-- Carry per-blob commitments (chunk root + manifest hash + optional KZG
-  commitment) inside every Nexus block so peers can reconstruct availability
-  state without consulting off-ledger storage.
-- Provide deterministic membership proofs so light clients can verify that a
-  manifest hash was finalised in a given block.
-- Expose Torii queries (`/v1/da/commitments/*`) and proofs that let relays,
-  SDKs, and governance automation audit availability without replaying every
-  block.
-- Keep the existing `SignedBlockWire` envelope canonical by threading the new
-  structures through the Norito metadata header and block hash derivation.
+- ቃል ኪዳኖችን ያካሂዱ ( ቸንክ ስር + ግልጽ ሃሽ + አማራጭ KZG
+  ቁርጠኝነት) በእያንዳንዱ Nexus ብሎኮች ውስጥ እኩዮች ተገኝነትን እንደገና እንዲገነቡ
+  ከደብዳቤ ውጭ ማከማቻን ሳያማክሩ ግዛት።
+- ቀላል ደንበኞች ማረጋገጥ እንዲችሉ ቆራጥ የአባልነት ማረጋገጫዎችን ያቅርቡ ሀ
+  መግለጫ ሃሽ በተሰጠው ብሎክ ተጠናቀቀ።
+- የTorii መጠይቆችን (`/v1/da/commitments/*`) እና ሪሌሎችን የሚፈቅዱ ማረጋገጫዎችን ያጋልጡ፣
+  ኤስዲኬዎች፣ እና የአስተዳደር አውቶሜሽን ኦዲት መገኘት እያንዳንዱን ሳይደግሙ
+  አግድ
+- አዲሱን ክር በማድረግ ያለውን I18NI0000028X ኤንቨሎፕ ቀኖናዊ ያድርጉት
+  በNorito ሜታዳታ ራስጌ በኩል ያሉ መዋቅሮች እና የሃሽ አመጣጥን አግድ።
 
-## Scope Overview
+## ወሰን አጠቃላይ እይታ
 
-1. **Data model additions** in `iroha_data_model::da::commitment` plus block
-   header changes in `iroha_data_model::block`.
-2. **Executor hooks** so `iroha_core` ingests DA receipts emitted by Torii
-   (`crates/iroha_core/src/queue.rs` and `crates/iroha_core/src/block.rs`).
-3. **Persistence/indexes** so the WSV can answer commitment queries quickly
-   (`iroha_core/src/wsv/mod.rs`).
-4. **Torii RPC additions** for list/query/prove endpoints under
+1. ** የውሂብ ሞዴል ተጨማሪዎች ** በ I18NI0000029X ሲደመር ብሎክ
+   የርዕስ ለውጦች በ I18NI0000030X.
+2. **አስፈፃሚ መንጠቆዎች** ስለዚህ `iroha_core` በ Torii የወጡትን የ DA ደረሰኞች አስገብቷል።
+   (`crates/iroha_core/src/queue.rs` እና `crates/iroha_core/src/block.rs`)።
+3. ** ጽናት/ኢንዴክሶች** ስለዚህ WSV የቁርጠኝነት ጥያቄዎችን በፍጥነት መመለስ ይችላል።
+   (`iroha_core/src/wsv/mod.rs`)።
+4. **Torii RPC ተጨማሪዎች** ለዝርዝር/ጥያቄ/በስር ያሉ የመጨረሻ ነጥቦችን ያረጋግጡ
    `/v1/da/commitments`.
-5. **Integration tests + fixtures** validating the wire layout and proof flow in
+5. ** የውህደት ሙከራዎች + ቋሚዎች ** የሽቦውን አቀማመጥ የሚያረጋግጡ እና የማረጋገጫ ፍሰት ወደ ውስጥ
    `integration_tests/tests/da/commitments.rs`.
 
-## 1. Data Model Additions
+## 1. የውሂብ ሞዴል ተጨማሪዎች
 
 ### 1.1 `DaCommitmentRecord`
 
@@ -75,18 +76,18 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent we fall back to Merkle proofs only.
-- `proof_scheme` is derived from the lane catalog; Merkle lanes reject KZG
-  payloads while `kzg_bls12_381` lanes require non-zero KZG commitments. Torii
-  currently only produces Merkle commitments and rejects KZG-configured lanes.
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent on Merkle lanes we fall back to Merkle proofs
-  only.
-- `proof_digest` anticipates DA-5 PDP/PoTR integration so the same record
-  enumerates the sampling schedule used to keep blobs live.
+- `KzgCommitment` አሁን ያለውን ባለ 48-ባይት ነጥብ ከዚህ በታች ጥቅም ላይ ይውላል
+  `iroha_crypto::kzg`. በሌለበት ጊዜ ወደ መርክል ማስረጃዎች ብቻ እንመለሳለን።
+- `proof_scheme` ከሌይን ካታሎግ የተገኘ ነው; የመርክል መስመሮች KZGን አይቀበሉም።
+  የሚጫኑ ጭነቶች I18NI0000041X መስመሮች ዜሮ ያልሆኑ KZG ግዴታዎች ይጠይቃሉ። Torii
+  በአሁኑ ጊዜ የመርክል ቁርጠኝነትን ብቻ የሚያመርት እና በKZG የተዋቀሩ መስመሮችን ውድቅ ያደርጋል።
+- `KzgCommitment` አሁን ያለውን ባለ 48-ባይት ነጥብ ከዚህ በታች ጥቅም ላይ ይውላል
+  `iroha_crypto::kzg`. በመርክሌ መንገዶች ላይ በማይገኝበት ጊዜ ወደ መርክል ማረጋገጫዎች እንመለሳለን።
+  ብቻ።
+- `proof_digest` የ DA-5 PDP/PoTR ውህደትን ይጠብቃል ስለዚህም ተመሳሳይ መዝገብ
+  ነጠብጣቦችን በቀጥታ ለማቆየት ጥቅም ላይ የዋለውን የናሙና መርሃ ግብር ይዘረዝራል።
 
-### 1.2 Block header extension
+### 1.2 የራስጌ ቅጥያ አግድ
 
 ```
 pub struct BlockHeader {
@@ -100,115 +101,115 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-overhead.
+የጥቅል ሃሽ በሁለቱም የብሎክ hash እና `SignedBlockWire` ሜታዳታ ይመገባል።
+በላይ።
 
-Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose
-`da_commitments` setters/getters (see `BlockBuilder::set_da_commitments` and
-`SignedBlock::set_da_commitments`), so hosts can attach a pre-built bundle
-before sealing a block. All helper constructors default the field to `None`
-until Torii threads real bundles through.
+የማስፈጸሚያ ማስታወሻ፡ I18NI0000046X እና ግልፅ የሆነው `BlockBuilder` አሁን ተጋልጧል
+`da_commitments` setters/getters (`BlockBuilder::set_da_commitments` ይመልከቱ እና
+`SignedBlock::set_da_commitments`)፣ ስለዚህ አስተናጋጆች አስቀድሞ የተሰራ ጥቅል ማያያዝ ይችላሉ።
+እገዳ ከመዘጋቱ በፊት. ሁሉም አጋዥ ገንቢዎች መስኩን ወደ `None` ነባሪ አድርገውታል።
+እስከ Torii ክሮች እውነተኛ ቅርቅቦች ውስጥ።
 
-### 1.3 Wire encoding
+### 1.3 ሽቦ ኢንኮዲንግ
 
-- `SignedBlockWire::canonical_wire()` appends the Norito header for
-  `DaCommitmentBundle` immediately after the existing transaction list. The
-  version byte is `0x01`.
-- `SignedBlockWire::decode_wire()` rejects bundles whose `version` is unknown,
-  matching the Norito policy described in `norito.md`.
-- Hash derivation updates exist only in `block::Hasher`; light clients decoding
-  the existing wire format automatically gain the new field because the Norito
-  header advertises its presence.
+- `SignedBlockWire::canonical_wire()` የ I18NT0000004X ራስጌን ለ
+  `DaCommitmentBundle` አሁን ካለው የግብይት ዝርዝር በኋላ። የ
+  ባይት ስሪት I18NI0000054X ነው።
+- `SignedBlockWire::decode_wire()` `version` የማይታወቅ ጥቅሎችን ውድቅ ያደርጋል፣
+  በI18NI0000057X ውስጥ ከተገለጸው የNorito ፖሊሲ ጋር የሚዛመድ።
+- የሃሽ መነጫነጭ ዝማኔዎች በ`block::Hasher` ውስጥ ብቻ ይኖራሉ። ብርሃን ደንበኞች መፍታት
+  አሁን ያለው የሽቦ ቅርፀት አዲሱን መስክ በራስ-ሰር ያገኛል ምክንያቱም Norito
+  ራስጌ መገኘቱን ያስታውቃል።
 
-## 2. Block Production Flow
+## 2. የምርት ፍሰትን አግድ
 
-1. Torii DA ingest finalises a `DaIngestReceipt` and publishes it on the
-   internal queue (`iroha_core::gossiper::QueueMessage::DaReceipt`).
-2. `PendingBlocks` collects all receipts whose `lane_id` matches the block under
-   construction, deduplicating by `(lane_id, client_blob_id, manifest_hash)`.
-3. Right before sealing, the block builder sorts commitments by `(lane_id,
-   epoch, sequence)` to keep the hash deterministic, encodes the bundle with the
-   Norito codec, and updates `da_commitments_hash`.
-4. The full bundle is stored in the WSV and emitted alongside the block inside
+1. Torii DA inges `DaIngestReceipt` አጠናቅቆ በ
+   የውስጥ ወረፋ (I18NI0000060X)።
+2. `PendingBlocks` ሁሉንም ደረሰኞች ይሰበስባል `lane_id` ከታች ካለው ብሎክ ጋር የሚዛመድ
+   ግንባታ, በ `(lane_id, client_blob_id, manifest_hash)` ማባዛት.
+3. ልክ ከመታተሙ በፊት ብሎክ ገንቢው ቃል ኪዳኖችን በ `(ሌይን_መታወቂያ፣
+   epoch፣ sequence)` ሃሽ ወሳኙን ለማድረግ፣ ጥቅሉን በ
+   Norito ኮዴክ፣ እና I18NI0000064X ያዘምናል።
+4. ሙሉው ጥቅል በ WSV ውስጥ ተከማችቶ ከውስጥ ካለው እገዳ ጋር አብሮ ይወጣል
    `SignedBlockWire`.
 
-If block creation fails the receipts remain in the queue so the next block
-attempt can pick them up; the builder records the last included `sequence` per
-lane to avoid replay attacks.
+እገዳ መፍጠር ካልተሳካ ደረሰኞች በወረፋው ውስጥ ይቀራሉ ስለዚህ ቀጣዩ እገዳ
+ሙከራ እነሱን ማንሳት ይችላል; ግንበኛ `sequence` በ የተካተተ የመጨረሻውን ይመዘግባል
+ተደጋጋሚ ጥቃቶችን ለማስወገድ መስመር።
 
 ## 3. RPC & Query Surface
 
-Torii exposes three endpoints:
+Torii ሶስት የመጨረሻ ነጥቦችን ያጋልጣል፡
 
-| Route | Method | Payload | Notes |
-|-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
+| መስመር | ዘዴ | ጭነት | ማስታወሻ |
+|-------|--------|-----|------|
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (የክልል ማጣሪያ በሌይን/ኢፖክ/ተከታታይ፣ pagination) | `DaCommitmentPage` በጠቅላላ ቆጠራ፣ ቃል ኪዳኖች እና ሃሽ አግድ ይመልሳል። |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (ሌይን + ግልጽ ሃሽ ወይም `(epoch, sequence)` tuple)። | በ`DaCommitmentProof` (መዝገብ + Merkle መንገድ + አግድ ሃሽ) ምላሽ ይሰጣል። |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | የብሎክ ሃሽ ስሌትን የሚደግም እና ማካተትን የሚያረጋግጥ ሀገር አልባ ረዳት ፤ በቀጥታ ወደ `iroha_crypto` ማገናኘት በማይችሉ ኤስዲኬዎች ጥቅም ላይ ይውላል። |
 
-All payloads live under `iroha_data_model::da::commitment`. Torii routers mount
-the handlers next to the existing DA ingest endpoints to reuse token/mTLS
-policies.
+ሁሉም የክፍያ ጭነቶች በ I18NI0000080X ስር ይኖራሉ። Torii ራውተሮች ተራራ
+ቶከን/ኤምቲኤልኤስን እንደገና ለመጠቀም ከነባሩ DA ቀጥሎ ያሉት ተቆጣጣሪዎች የመጨረሻ ነጥቦችን ያስገባሉ።
+ፖሊሲዎች.
 
-## 4. Inclusion Proofs & Light Clients
+## 4. የማካተት ማረጋገጫዎች እና ቀላል ደንበኞች
 
-- The block producer builds a binary Merkle tree over the serialized
-  `DaCommitmentRecord` list. The root feeds `da_commitments_hash`.
-- `DaCommitmentProof` packages the target record plus a vector of `(sibling_hash,
-  position)` entries so verifiers can reconstruct the root. Proofs also include
-  the block hash and signed header so light clients can verify finality.
-- CLI helpers (`iroha_cli app da prove-commitment`) wrap the proof request/verify
-  cycle and surface Norito/hex outputs for operators.
+- የማገጃ አምራቹ በተከታታዩ ላይ ሁለትዮሽ የመርክል ዛፍ ይገነባል።
+  `DaCommitmentRecord` ዝርዝር. ሥሩ `da_commitments_hash` ይመገባል።
+- `DaCommitmentProof` የዒላማውን ሪከርድ እና የ`(ወንድም_እህት_ሃሽ፣
+  አቀማመጥ)` ግቤቶች ስለዚህ አረጋጋጮች ሥሩን እንደገና መገንባት ይችላሉ። ማስረጃዎችም ያካትታሉ
+  ቀላል ደንበኞች የመጨረሻነቱን ማረጋገጥ እንዲችሉ ሃሽ እና የተፈረመ ራስጌ።
+- የ CLI ረዳቶች (`iroha_cli app da prove-commitment`) የማስረጃ ጥያቄውን ያጠቃልላሉ/ ያረጋግጡ
+  ዑደት እና ወለል Norito/ሄክስ ውፅዓቶች ለኦፕሬተሮች።
 
-## 5. Storage & Indexing
+## 5. ማከማቻ እና መረጃ ጠቋሚ
 
-WSV stores commitments in a dedicated column family keyed by `manifest_hash`.
-Secondary indexes cover `(lane_id, epoch)` and `(lane_id, sequence)` so queries
-avoid scanning full bundles. Each record tracks the block height that sealed it,
-allowing catch-up nodes to rebuild the index quickly from the block log.
+WSV በ`manifest_hash` ቁልፍ በተሰየመ አምድ ቤተሰብ ውስጥ ቃል ኪዳኖችን ያከማቻል።
+የሁለተኛ ደረጃ ኢንዴክሶች `(lane_id, epoch)` እና `(lane_id, sequence)` ይሸፍናሉ ስለዚህ መጠይቆች
+ሙሉ ጥቅሎችን መቃኘትን ያስወግዱ። እያንዳንዱ መዝገብ የታሸገውን የማገጃ ቁመት ይከታተላል ፣
+የተያዙ አንጓዎች መረጃ ጠቋሚውን ከብሎክ ሎግ በፍጥነት እንዲገነቡ ማድረግ።
 
-## 6. Telemetry & Observability
+## 6. ቴሌሜትሪ እና ታዛቢነት
 
-- `torii_da_commitments_total` increments whenever a block seals at least one
-  record.
-- `torii_da_commitment_queue_depth` tracks receipts waiting to be bundled (per
-  lane).
-- Grafana dashboard `dashboards/grafana/da_commitments.json` visualises block
-  inclusion, queue depth, and proof throughput so DA-3 release gates can audit
-  behaviour.
+- `torii_da_commitments_total` ጭማሪዎች ቢያንስ አንድ ብሎክ ባዘጋ ቁጥር
+  መዝገብ.
+- `torii_da_commitment_queue_depth` ለመጠቅለል የሚጠብቁ ደረሰኞችን ይከታተላል (በየ
+  መስመር)።
+- Grafana ዳሽቦርድ `dashboards/grafana/da_commitments.json` ምስላዊ አግድ
+  DA-3 የመልቀቂያ በሮች ኦዲት ማድረግ እንዲችሉ ማካተት፣ የወረፋ ጥልቀት እና የማስረጃ ፍሰት
+  ባህሪ.
 
-## 7. Testing Strategy
+## 7. የሙከራ ስልት
 
-1. **Unit tests** for `DaCommitmentBundle` encoding/decoding and block hash
-   derivation updates.
-2. **Golden fixtures** under `fixtures/da/commitments/` capturing canonical
-   bundle bytes and Merkle proofs.
-3. **Integration tests** booting two validators, ingesting sample blobs, and
-   asserting that both nodes agree on the bundle contents and query/proof
-   responses.
-4. **Light-client tests** in `integration_tests/tests/da/commitments.rs`
-   (Rust) that call `/prove` and verify the proof without talking to Torii.
-5. **CLI smoke** script `scripts/da/check_commitments.sh` to keep operator
-   tooling reproducible.
+1. **የዩኒት ሙከራዎች** ለ`DaCommitmentBundle` ኢንኮዲንግ/መግለጽ እና ሃሽ ማገድ
+   የመነሻ ዝማኔዎች.
+2. **ወርቃማ እቃዎች** በ`fixtures/da/commitments/` ስር ቀኖናዊ እየያዙ
+   ጥቅል ባይት እና የመርክሌ ማረጋገጫዎች።
+3. ** የውህደት ሙከራዎች *** ሁለት አረጋጋጮችን ማስነሳት ፣ የናሙና ነጠብጣቦችን ወደ ውስጥ ማስገባት እና
+   ሁለቱም አንጓዎች በጥቅሉ ይዘቶች እና መጠይቅ/ማስረጃ ላይ እንደሚስማሙ በማረጋገጥ
+   ምላሾች.
+4. **የብርሃን-ደንበኛ ሙከራዎች** በI18NI0000093X
+   (ዝገት) ወደ I18NI0000094X የሚደውል እና ከTorii ጋር ሳያወራ ማስረጃውን የሚያረጋግጥ።
+5. ** CLI ጭስ ** ስክሪፕት I18NI0000095X ኦፕሬተርን ለማቆየት
+   መሣርያ ሊባዛ የሚችል.
 
-## 8. Rollout Plan
+## 8. የልቀት እቅድ
 
-| Phase | Description | Exit Criteria |
-|-------|-------------|---------------|
-| P0 — Data model merge | Land `DaCommitmentRecord`, block header updates, and Norito codecs. | `cargo test -p iroha_data_model` green with new fixtures. |
-| P1 — Core/WSV wiring | Thread queue + block builder logic, persist indexes, and expose RPC handlers. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` pass with bundle proof assertions. |
-| P2 — Operator tooling | Ship CLI helpers, Grafana dashboard, and proof verification doc updates. | `iroha_cli app da prove-commitment` works against devnet; dashboard displays live data. |
-| P3 — Governance gate | Enable block validator requiring DA commitments on the lanes flagged in `iroha_config::nexus`. | Status entry + roadmap update mark DA-3 as 🈴. |
+| ደረጃ | መግለጫ | መውጫ መስፈርት |
+|-------|-------------|-----------|
+| P0 - የውሂብ ሞዴል ውህደት | መሬት `DaCommitmentRecord`፣ የአርእስት ማሻሻያዎችን እና Norito ኮዴኮችን አግድ። | `cargo test -p iroha_data_model` አረንጓዴ ከአዳዲስ መገልገያዎች ጋር። |
+| P1 - ኮር / WSV ሽቦ | የክር ወረፋ + ገንቢ አመክንዮ አግድ፣ ኢንዴክሶችን ቀጥል እና RPC ተቆጣጣሪዎችን ያጋልጣል። | `cargo test -p iroha_core`፣ `integration_tests/tests/da/commitments.rs` ማለፊያ ከጥቅል ማረጋገጫ ማረጋገጫዎች ጋር። |
+| P2 - ኦፕሬተር መሳሪያ | CLI አጋዥዎችን፣ Grafana ዳሽቦርድ እና የማረጋገጫ ማረጋገጫ ሰነድ ማሻሻያዎችን ይላኩ። | `iroha_cli app da prove-commitment` devnet ላይ ይሰራል; ዳሽቦርድ የቀጥታ ውሂብ ያሳያል. |
+| P3 - የአስተዳደር በር | በI18NI0000101X በተጠቆሙት መስመሮች ላይ የDA ቁርጠኝነትን የሚፈልግ ብሎክ አረጋጋጭን ያንቁ። | የሁኔታ ግቤት + የመንገድ ካርታ ማሻሻያ DA-3 እንደ 🈴 ምልክት ያድርጉ። |
 
-## Open Questions
+## ክፍት ጥያቄዎች
 
-1. **KZG vs Merkle defaults** — Should small blobs always skip KZG commitments to
-   reduce block size? Proposal: keep `kzg_commitment` optional and gate via
+1. **KZG vs Merkle ነባሪዎች** - ትናንሽ ነጠብጣቦች ሁል ጊዜ የKZG ቃል ኪዳኖችን መዝለል አለባቸው
+   የማገጃውን መጠን ይቀንሱ? ፕሮፖዛል፡ `kzg_commitment` እንደ አማራጭ እና በበር በኩል ያቆዩት።
    `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** — Do we allow out-of-order lanes? Current plan rejects gaps
-   unless governance toggles `allow_sequence_skips` for emergency replay.
-3. **Light-client cache** — SDK team requested a lightweight SQLite cache for
-   proofs; pending follow-up under DA-8.
+2. **የቅደም ተከተል ክፍተቶች** - ከትዕዛዝ ውጪ መስመሮችን እንፈቅዳለን? አሁን ያለው እቅድ ክፍተቶችን ውድቅ ያደርጋል
+   የአደጋ ጊዜ ድጋሚ ለማጫወት `allow_sequence_skips` አስተዳደር ካልተቀየረ።
+3. **የብርሃን ደንበኛ መሸጎጫ** — የኤስዲኬ ቡድን ቀላል ክብደት ያለው SQLite መሸጎጫ ጠየቀ።
+   ማስረጃዎች; በDA-8 ስር በመጠባበቅ ላይ ያለ ክትትል.
 
-Answering these in implementation PRs moves DA-3 from 🈸 (this document) to 🈺
-once code work begins.
+እነዚህን በአፈፃፀም PRs ውስጥ መመለስ DA-3ን ከ 🈸 (ይህ ሰነድ) ወደ 🈺 ያንቀሳቅሳል
+አንዴ የኮድ ሥራ ከጀመረ.

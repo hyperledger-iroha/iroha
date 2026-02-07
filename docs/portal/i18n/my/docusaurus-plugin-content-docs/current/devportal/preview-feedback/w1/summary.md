@@ -8,42 +8,44 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
-| --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
+| အမျိုးအမည် | အသေးစိတ် |
+| ---| ---|
+| လှိုင်း | W1 — ပါတနာများနှင့် Torii ပေါင်းစည်းသူများ |
+| ဒိုးပတ် | 2025-04-12 → 2025-04-26 |
 | Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| Tracker ပြဿနာ | `DOCS-SORA-Preview-W1` |
+| ပါဝင်သူများ | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
 
-## Highlights
+## ပေါ်လွင်ချက်များ
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. **Checksum အလုပ်အသွားအလာ** — ပြန်လည်သုံးသပ်သူအားလုံးသည် `scripts/preview_verify.sh` မှတစ်ဆင့် ဖော်ပြချက်/မှတ်တမ်းကို စစ်ဆေးအတည်ပြုခဲ့သည်။ ဖိတ်ကြားချက် အသိအမှတ်ပြုချက်များနှင့်အတူ သိမ်းဆည်းထားသော မှတ်တမ်းများ။
+2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, နှင့် `DocsPortal/GatewayRefusals` ဒိုင်ခွက်များသည် လှိုင်းတစ်ခုလုံးအတွက် စိမ်းနေခဲ့သည်။ အဖြစ်အပျက်များ သို့မဟုတ် သတိပေးချက် စာမျက်နှာများကို အလုပ်ဖြုတ်ခြင်း မရှိပါ။
+3. **Doc တုံ့ပြန်ချက် (`docs-preview/w1`)** — အသေးစား nits နှစ်ခုကို တင်ပြခဲ့သည်-
+   - `docs-preview/w1 #1`- စမ်းသုံးကြည့်ခြင်းကဏ္ဍရှိ nav စကားလုံးကို ရှင်းလင်းပါ (ဖြေရှင်းထားသည်)။
+   - `docs-preview/w1 #2`: အပ်ဒိတ်လုပ်ကြည့်ပါ စခရင်ရှော့ပုံ (ဖြေရှင်းပြီး)။
+4. **Runbook parity** — SoraFS အော်ပရေတာများသည် `orchestrator-ops` နှင့် `multi-source-rollout` အကြား ၎င်းတို့၏ W0 စိုးရိမ်ပူပန်မှုများကို ဖြေရှင်းပေးသည့် အပြန်အလှန်လင့်ခ်များကို အတည်ပြုခဲ့သည်။
 
-## Action items
+## လုပ်ဆောင်ချက်ပစ္စည်းများ
 
-| ID | Description | Owner | Status |
-| --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| ID | ဖော်ပြချက် | ပိုင်ရှင် | အဆင့်အတန်း |
+| ---| ---| ---| ---|
+| W1-A1 | အပ်ဒိတ် `docs-preview/w1 #1` အတွက် nav wording ကိုစမ်းကြည့်ပါ။ | Docs-core-02 | ✅ (2025-04-18) ပြီးစီးခဲ့သည်။ |
+| W1-A2 | Refresh `docs-preview/w1 #2` နှုန်းဖြင့် စမ်းသုံးကြည့်ပါ။ | Docs-core-03 | ✅ ပြီးစီးသည် (2025-04-19)။ |
+| W1-A3 | လမ်းပြမြေပုံ/အခြေအနေရှိ ပါတနာတွေ့ရှိချက် + တယ်လီမီတာ အထောက်အထားများကို အကျဉ်းချုံ့ပါ။ | Docs/DevRel ဦးဆောင် | ✅ ပြီးပါပြီ (ခြေရာခံ + status.md ကိုကြည့်ပါ)။ |
 
-## Exit summary (2025-04-26)
+## ထွက်ပေါက်အကျဉ်းချုပ် (2025-04-26)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- ပြန်လည်သုံးသပ်သူ ရှစ်ဦးစလုံးသည် နောက်ဆုံးရုံးချိန်အတွင်း ပြီးစီးကြောင်း အတည်ပြုခဲ့ပြီး၊ ဒေသန္တရပစ္စည်းများကို ဖယ်ရှားခဲ့ပြီး ၎င်းတို့၏ ဝင်ရောက်ခွင့်ကို ရုတ်သိမ်းခဲ့သည်။
+- Telemetry ထွက်ပေါက်မှတဆင့်စိမ်းလန်းနေခဲ့သည်။ `DOCS-SORA-Preview-W1` နှင့်တွဲထားသော နောက်ဆုံးဓာတ်ပုံများ။
+- ထွက်ပေါက်အသိအမှတ်ပြုမှုများဖြင့် အပ်ဒိတ်လုပ်ထားသော ဖိတ်ကြားချက်မှတ်တမ်း။ ခြေရာခံသူသည် W1 သို့ 🈴 သို့ပြောင်းကာ စစ်ဆေးရေးဂိတ်ထည့်သွင်းမှုများကို ထည့်သွင်းခဲ့သည်။
+- `artifacts/docs_preview/W1/` အောက်တွင် သိမ်းဆည်းထားသော အထောက်အထားအစုအဝေး (ဖော်ပြချက်၊ စစ်ဆေးချက်မှတ်တမ်း၊ စုံစမ်းစစ်ဆေးမှုအထွက်၊ ၎င်းကို စမ်းသုံးကြည့်ပါ ပရောက်စီမှတ်တမ်းများ၊ တယ်လီမီတာဖန်သားပြင်ဓာတ်ပုံများ၊ အကြံပြုချက်အကျဉ်းချုပ်)
 
-## Next steps
+## နောက်တစ်ဆင့်
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- W2 ကွန်မြူနတီ စားသုံးမှု အစီအစဉ်ကို ပြင်ဆင်ပါ (အုပ်ချုပ်မှု အတည်ပြုချက် + တောင်းဆိုမှု ပုံစံပုံစံ ပြောင်းလဲမှုများ) ကို ပြင်ဆင်ပါ။
+- W2 လှိုင်းအတွက် အစမ်းကြည့်ရှုသည့် artefact tag ကို ပြန်လည်စတင်ပြီး ရက်စွဲများ အပြီးသတ်ပြီးသည်နှင့် preflight script ကို ပြန်လည်စတင်ပါ။
+- သက်ဆိုင်ရာ W1 ရှာဖွေတွေ့ရှိချက်များကို လမ်းပြမြေပုံ/အခြေအနေသို့ ပို့လိုက်ပါ၊ ထို့ကြောင့် အသိုင်းအဝိုင်းလှိုင်းတွင် နောက်ဆုံးလမ်းညွှန်ချက်ရှိသည်။

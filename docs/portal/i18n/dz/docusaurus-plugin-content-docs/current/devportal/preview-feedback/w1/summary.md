@@ -8,42 +8,44 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| རྣམ་གྲངས་ | ཁ་གསལ་ |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
-| Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| རླབས་ | W1 — མཉམ་འབྲེལ་པ་ & Torii མཉམ་བསྡོམས་པ་ |
+| མགྲོན་འབོད་སྒོ་སྒྲིག་ | ༢༠༢༥‐༠༤‐༡༢ → ༢༠༢༥‐༠༤‐༢༦ |
+| ཅ་རྙིང་ངོ་རྟགས། | I18NI0000004X |
+| བརྟག་ཞིབ་ཀྱི་གནད་དོན་ | I18NI0000000X |
+| བཅའ་མར་གཏོགས་མི་ཚུ་ | སོ་རཕ་སི་-ཨོཔ་-༠༡...༠༣, ཊོ་རི་-ཨེན་ཊི་-༠༡...༠༢, ཨེསི་ཌི་ཀེ་-མཉམ་འབྲེལ་པ་-༠༡...༠༢, གཱེཊ་ཝེ་-ཨོཔ་-༠༡ |
 
-## Highlights
+## གཙོ་བསྟེན།
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. **Checksum ལཱ་གི་རྒྱུན་རིམ་** བསྐྱར་ཞིབ་པ་ཆ་མཉམ་གྱིས་ I18NI0000006X བརྒྱུད་དེ་ འགྲེལ་བཤད་/གཏན་མཛོད་འདི་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན། མགྲོན་འབོད་ཀྱི་ངོས་ལེན་ཚུ་དང་གཅིག་ཁར་ གསོག་འཇོག་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ།
+2. **Telemetry*** — I18NI000000007X, I18NI000000008X, དང་ I18NI000000009X གི་ བརྡ་བཀོད་བཀོད་སྒྲིག་ཚུ་ རླབས་ཆ་མཉམ་གྱི་དོན་ལུ་ ལྗང་ཁུ་སྦེ་སྡོད་ནུག། བྱུང་རྐྱེན་ཡང་ན་ ཉེན་བརྡའི་ཤོག་ལེབ་ཚུ་ མ་བཏོན་པས།
+3. **Doc བསམ་འཆར། (`docs-preview/w1`)** — ནིཊ་ཆུང་ཆུང་གཉིས་ ཕུལ་ཡོད།
+   - `docs-preview/w1 #1`: དབྱེ་ཚན་ནང་ ནེབ་མིང་ཚིག་ཚུ་ གསལ་རི་རི་སྦེ་ དབྱེ་ཚན་ (སེལ་ཡོདཔ་) འབད་རྩོལ་བསྐྱེད།
+   - `docs-preview/w1 #2`: དུས་མཐུན་བཟོ་ནི་ གསལ་གཞི་པར་རིས་ (སེལ་འཐུ་འབད་ཡོདཔ་) ལུ་ཚོད་བལྟ་འབད།
+4. **Runbook parity** — I18NI00000000013X དང་ I18NI000000014X གི་བར་ན་ འབྲེལ་མཐུད་གསརཔ་འདི་ ངེས་གཏན་བཟོ་ཡོདཔ་ཨིན།
 
-## Action items
+## བྱ་བ་རྣམ་གྲངས།
 
-| ID | Description | Owner | Status |
+| ID | འགྲེལ་བཤད་ | ཇོ་བདག་ | གནས་ཚད་ |
 | --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| W1-A1 | དུས་མཐུན་བཟོ། `docs-preview/w1 #1` ལུ་ nav གི་མིང་ཚིག་བརྐྱབ། | ཡིག་ཆ་-ཀོར་-༠༢ | ✅ མཇུག་བསྡུ་ (༢༠༢༥‐༠༤‐༡༨) མཇུག་བསྡུ་ཡོདཔ་ཨིན། |
+| W1-A2 | གསར་བསྐྲུན་འབད། `docs-preview/w1 #2` ལུ་གསལ་གཞི་པར་བཏབ་བལྟ། | ཡིག་ཆ་-ཀོར་-༠༣ | ✅ མཇུག་བསྡུ་ (༢༠༢༥‐༠༤‐༡༩)། |
+| W1-A3 | ལམ་སྟོན་པ་/གནས་ཚད་ནང་ མཉམ་འབྲེལ་གྱི་ ཤེས་རྟོགས་ + བརྒྱུད་འཕྲིན་སྒྲུབ་བྱེད་ བཅུད་བསྡུས། | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ✅ མཇུག་བསྡུ་ཡོདཔ་ (འཚོལ་ཞིབ་པ་ + གནས་རིམ་.md བལྟ།) |
 
-## Exit summary (2025-04-26)
+## ཐོན་པའི་བཅུད་དོན་ (༢༠༢༥-༠༤-༢༦)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- བསྐྱར་ཞིབ་པ་༨ ཆ་ར་གིས་ ཡིག་ཚང་གི་དུས་ཚོད་མཇུག་བསྡུའི་ནང་ མཇུག་བསྡུ་ཡོདཔ་སྦེ་ ངེས་གཏན་བཟོ་ཡོདཔ་མ་ཚད་ ས་གནས་ཀྱི་ ཅ་ཆས་ཚུ་ཡང་ གཙང་སྦྲ་བཟོ་སྟེ་ འཛུལ་སྤྱོད་ཚུ་ ཆ་མེད་བཏང་ཡོདཔ་ཨིན་པས།
+- ཊེ་ལི་མི་ཊི་རི་འདི་ ཐོན་བརྒྱུད་དེ་ ལྗང་ཁུ་སྦེ་སྡོད་ཡོདཔ་ཨིན། མཐའ་མའི་པར་རིས་ཚུ་ `DOCS-SORA-Preview-W1` ལུ་མཉམ་སྦྲགས་འབད་ཡོདཔ་ཨིན།
+- ཕྱིར་ཐོན་གྱི་གྲོས་འཆམ་ཚུ་དང་གཅིག་ཁར་དུས་མཐུན་བཟོ་ཡོད་པའི་ མགྲོན་འབོད་འབད་ནི། བརྟག་ཞིབ་པ་གིས་ W1 ལུ་ 🈴 ལུ་ ཕིལཔ་འབད་དེ་ བརྟག་ཞིབ་ས་ཚིགས་ཐོ་བཀོད་ཚུ་ ཁ་སྐོང་འབད་ཡོདཔ་ཨིན།
+- སྒྲུབ་བྱེད་ཀྱི་བཱན་ཌལ་ (འགྲེལ་བཤད་པ་ ཅེག་སམ་དྲན་ཐོ་ འཚོལ་ཞིབ་ཨའུཊི་པུཊི་ ངོ་ཚབ་ཡིག་ཆ་ ཊེ་ལི་མི་ཊི་གསལ་གཞི་ཚུ་ བརྡ་བཀོད་ཀྱི་གསལ་གཞི་ཚུ་ འབད་རྩོལ་བསྐྱེད།) འོག་ལུ་ I18NI000000018X གི་འོག་ལུ་ གཏན་མཛོད་འབད་ཡོདཔ་ཨིན།
 
-## Next steps
+## ཤུལ་མམ་གྱི་གོམ་པ།
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- W2 མི་སྡེ་ནང་བླངས་པའི་འཆར་གཞི་གྲ་སྒྲིག་འབད་ (གཞུང་གི་ཆ་འཇོག་ + ཞུ་བ་ཊེམ་པེལེཊི་བསྒྱུར་བཅོས་)།
+- ཌབ་ལུ་༢ རླབས་ཀྱི་དོན་ལུ་ སྔོན་ལྟའི་ཅ་མཛོད་ངོ་རྟགས་འདི་ གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ ཚེས་གྲངས་ཚུ་མཐའ་དཔྱད་འབད་ཚརཝ་ཅིག་ སྔོན་ལྟ་ཡིག་ཚུགས་འདི་ བསྐྱར་གསོ་འབད།
+- འདྲེན་ལམ་ལག་ལེན་འཐབ་བཏུབ་པའི་ W1 གི་ཤེས་རྟོགས་འདི་ ལམ་ཐིག་/གནས་ཚད་ནང་ལུ་ཡོདཔ་ལས་ མི་སྡེ་རླབས་འདི་ལུ་ ལམ་སྟོན་གསརཔ་ཡོདཔ་ཨིན།

@@ -11,38 +11,39 @@ id: multi-source-rollout
 title: Multi-Source Client Rollout & Blacklisting Runbook
 sidebar_label: Multi-Source Rollout Runbook
 description: Operational checklist for staged multi-source rollouts and emergency provider blacklisting.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-## Purpose
+## Зорилго
 
-This runbook guides SRE and on-call engineers through two critical workflows:
+Энэхүү runbook нь SRE болон дуудлагын инженерүүдийг хоёр чухал ажлын урсгалаар удирддаг:
 
-1. Rolling out the multi-source orchestrator in controlled waves.
-2. Blacklisting or de-prioritising misbehaving providers without destabilising existing sessions.
+1. Олон эх сурвалжийн найрал хөгжимчийг хяналттай долгионоор эргүүлэх.
+2. Одоо байгаа сессүүдийг тогтворгүй болгохгүйгээр буруу үйлдэл хийсэн үйлчилгээ үзүүлэгчдийг хар жагсаалтад оруулах эсвэл тэргүүлэх ач холбогдолгүй болгох.
 
-It assumes the orchestration stack delivered under SF-6 is already deployed (`sorafs_orchestrator`, gateway chunk-range API, telemetry exporters).
+Энэ нь SF-6-ийн дагуу хүргэгдсэн зохион байгуулалтын стекийг аль хэдийн суулгасан гэж үздэг (`sorafs_orchestrator`, gateway chunk-range API, телеметрийн экспортлогчид).
 
-> **See also:** The [Orchestrator Operations Runbook](./orchestrator-ops.md) dives into per-run procedures (scoreboard capture, staged rollout toggles, rollback). Use both references together during live changes.
+> **Мөн үзнэ үү:** [Orchestrator Operations Runbook](./orchestrator-ops.md) нь нэг гүйлтийн процедурыг (онооны самбар авах, үе шаттайгаар шилжүүлэх, буцаах) руу оруулдаг. Шууд өөрчлөлтүүдийн үед хоёр лавлагааг хамтад нь ашиглаарай.
 
-## 1. Pre-flight Validation
+## 1. Нислэгийн өмнөх баталгаажуулалт
 
-1. **Confirm governance inputs.**
-   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
-   - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
-2. **Stage configuration.**
-   - Persist the orchestrator JSON config in the layered `iroha_config` tree:
+1. **Засаглалын орцыг баталгаажуулах.**
+   - Бүх нэр дэвшигчид `ProviderAdvertV1` дугтуйг хамрах хүрээний багтаамж, урсгалын төсөв бүхий нийтлэх ёстой. `/v1/sorafs/providers`-ээр баталгаажуулж, хүлээгдэж буй чадварын талбаруудтай харьцуулна уу.
+   - Хоцролт/бүтэлгүйтлийн хурдыг өгдөг телеметрийн агшин зуурын зураг нь канарын гүйлт бүрийн өмнө < 15 минутын настай байх ёстой.
+2. **Үе шатын тохиргоо.**
+   - Давхаргатай `iroha_config` модонд оркестрын JSON тохиргоог үргэлжлүүлнэ үү:
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Update the JSON with rollout-specific limits (`max_providers`, retry budgets). Feed the same file to staging/production so diffs stay small.
-3. **Exercise canonical fixtures.**
-   - Populate the manifest/token environment variables and run the deterministic fetch:
+     JSON-г танилцуулах тусгай хязгаарлалттайгаар шинэчилнэ үү (`max_providers`, дахин оролдох төсөв). Ялгаа нь бага байхын тулд ижил файлыг найруулга/үйлдвэрлэлд оруулаарай.
+3. **каноник бэхэлгээг дасгал хий.**
+   - Манифест/токен орчны хувьсагчдыг бөглөж, тодорхойлогч дуудлагыг ажиллуулна уу:
 
      ```bash
      sorafs_cli fetch \
@@ -57,55 +58,55 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
        --json-out artifacts/canary.fetch.json
      ```
 
-     Environment variables should contain the manifest payload digest (hex) and base64-encoded stream tokens for each provider participating in the canary.
-   - Diff `artifacts/canary.scoreboard.json` against the previous release. Any new ineligible provider or weight shift >10 % requires review.
-4. **Verify telemetry is wired.**
-   - Open the Grafana export in `docs/examples/sorafs_fetch_dashboard.json`. Ensure the `sorafs_orchestrator_*` metrics populate in staging before progressing.
+     Орчны хувьсагч нь канарид оролцож буй үйлчилгээ үзүүлэгч бүрийн хувьд илэрхий ачааллын дижест (hex) болон base64-ээр кодлогдсон урсгалын жетонуудыг агуулсан байх ёстой.
+   - `artifacts/canary.scoreboard.json` өмнөх хувилбараас ялгаатай. Шаардлага хангаагүй аливаа шинэ үйлчилгээ үзүүлэгч эсвэл жингийн өөрчлөлт > 10% бол хянан үзэх шаардлагатай.
+4. **Телеметрийн утас холбогдсон эсэхийг шалгана уу.**
+   - `docs/examples/sorafs_fetch_dashboard.json` дээр Grafana экспортыг нээнэ үү. Дахин ахихаасаа өмнө `sorafs_orchestrator_*` хэмжигдэхүүнүүдийг үе шаттайгаар дүүргэж байгаа эсэхийг шалгаарай.
 
-## 2. Emergency Provider Blacklisting
+## 2. Яаралтай тусламжийн үйлчилгээ үзүүлэгчийн хар жагсаалт
 
-Follow this procedure when a provider serves corrupt chunks, times out persistently, or fails compliance checks.
+Үйлчилгээ үзүүлэгч нь эвдэрсэн хэсгүүдэд үйлчилдэг, хугацаа нь үргэлжилдэг эсвэл дагаж мөрдөх шалгалтыг бүтэлгүйтсэн тохиолдолд энэ журмыг дагаж мөрдөөрэй.
 
-1. **Capture evidence.**
-   - Export the latest fetch summary (`--json-out` output). Record failing chunk indices, provider aliases, and digest mismatches.
-   - Save relevant log excerpts from `telemetry::sorafs.fetch.*` targets.
-2. **Apply an immediate override.**
-   - Mark the provider penalised in the telemetry snapshot distributed to the orchestrator (set `penalty=true` or clamp `token_health` to `0`). The next scoreboard build will exclude the provider automatically.
-   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
-   - Redeploy the updated telemetry/config bundle to the affected environment (staging → canary → production). Document the change in the incident log.
-3. **Validate the override.**
-   - Re-run the canonical fixture fetch. Confirm the scoreboard marks the provider as ineligible with reason `policy_denied`.
-   - Inspect `sorafs_orchestrator_provider_failures_total` to ensure the counter stops incrementing for the denied provider.
-4. **Escalate long-lived bans.**
-   - If the provider will remain blocked for >24 h, raise a governance ticket to rotate or suspend its advert. Until the vote passes, keep the deny list in place and refresh telemetry snapshots so the provider does not re-enter the scoreboard.
-5. **Rollback protocol.**
-   - To reinstate the provider, remove it from the deny list, redeploy, and capture a fresh scoreboard snapshot. Attach the change to the incident postmortem.
+1. **Нотлох баримтыг хураах.**
+   - Хамгийн сүүлийн үеийн хураангуйг экспортлох (`--json-out` гаралт). Амжилтгүй болсон хэсгүүдийн индексүүд, үйлчилгээ үзүүлэгчийн нэрсийг бүртгэж, тохирохгүй байна.
+   - `telemetry::sorafs.fetch.*` зорилтуудаас холбогдох бүртгэлийн хэсгүүдийг хадгал.
+2. **Шууд хүчингүй болгох.**
+   - Оркестраторт тараасан телеметрийн агшин зуурт үйлчилгээ үзүүлэгчийг шийтгэсэн гэж тэмдэглээрэй (`penalty=true` эсвэл `token_health` хавчаарыг `0` болгон тохируулна уу). Дараагийн онооны самбар нь үйлчилгээ үзүүлэгчийг автоматаар хасна.
+   - Утааны түр зуурын туршилтын хувьд `--deny-provider gw-alpha`-ыг `sorafs_cli fetch` руу дамжуулж, телеметрийн тархалтыг хүлээхгүйгээр алдааны замыг гүйцэтгэнэ.
+   - Нөлөөлөлд өртсөн орчинд шинэчлэгдсэн телеметрийн/тохируулгын багцыг дахин байршуулах (үе шат → канар → үйлдвэрлэл). Өөрчлөлтийг тохиолдлын бүртгэлд баримтжуулна уу.
+3. **Дараахыг баталгаажуулах.**
+   - Каноник бэхэлгээг дахин ажиллуулна уу. Онооны самбарт үйлчилгээ үзүүлэгчийг `policy_denied` шалтгаанаар шаардлага хангаагүй гэж тэмдэглэснийг баталгаажуулна уу.
+   - Татгалзсан үйлчилгээ үзүүлэгчийн тоолуур нэмэгдэхээ больж байгаа эсэхийг шалгахын тулд `sorafs_orchestrator_provider_failures_total`-г шалгана уу.
+4. **Урт хугацааны хоригийг чангатгах.**
+   - Хэрэв үйлчилгээ үзүүлэгчийг 24 цагийн турш блоклосон хэвээр байвал түүний сурталчилгааг эргүүлэх эсвэл түр зогсоохын тулд засаглалын тасалбараа өргө. Санал хураалт дуусах хүртэл татгалзсан жагсаалтыг хэвээр үлдээж, телеметрийн агшин зуурын агшинг сэргээж, үйлчилгээ үзүүлэгч онооны самбарт дахин орохгүй.
+5. **Буцах протокол.**
+   - Үйлчилгээ үзүүлэгчийг сэргээхийн тулд түүнийг үгүйсгэх жагсаалтаас хасч, дахин байршуулж, онооны самбарын шинэхэн агшин зургийг аваарай. Өөрчлөлтийг үхлийн дараах ослын хэсэгт хавсаргана уу.
 
-## 3. Staged Rollout Plan
+## 3. Үе шаттай танилцуулах төлөвлөгөө
 
-| Phase | Scope | Required Signals | Go/No-Go Criteria |
+| Үе шат | Хамрах хүрээ | Шаардлагатай дохио | Go/No-Go шалгуур |
 |-------|-------|------------------|-------------------|
-| **Lab** | Dedicated integration cluster | Manual CLI fetch against fixture payloads | All chunks succeed, provider failure counters stay at 0, retry rate < 5 %. |
-| **Staging** | Full control-plane staging | Grafana dashboard connected; alert rules in warning-only mode | `sorafs_orchestrator_active_fetches` returns to zero after each test run; no `warn/critical` alert firings. |
-| **Canary** | ≤10 % of production traffic | Pager muted but telemetry monitored in real time | Retry ratio < 10 %, provider failures isolated to known noisy peers, latency histogram matches staging baseline ±20 %. |
-| **General Availability** | 100 % roll-out | Pager rules active | Zero `NoHealthyProviders` errors for 24 h, retry ratio stable, dashboard SLA panels green. |
+| **Лаборатори** | Зориулалтын интеграцийн кластер | Бэхэлгээний ачааллын эсрэг гараар CLI татах | Бүх хэсгүүд амжилттай болж, үйлчилгээ үзүүлэгчийн алдааны тоолуур 0-д үлдэнэ, дахин оролдох хувь <5% байна. |
+| **Тайзлах** | Бүрэн удирдлагын хавтгай үе шат | Grafana хяналтын самбар холбогдсон; Зөвхөн анхааруулах горимд анхааруулах дүрэм | `sorafs_orchestrator_active_fetches` туршилтын ажил бүрийн дараа тэг рүү буцдаг; `warn/critical` дохиолол байхгүй. |
+| **Канар** | Үйлдвэрлэлийн хөдөлгөөний ≤10% | Пейжерийн дууг хаасан боловч телеметрийг бодит цаг хугацаанд хянадаг | Дахин оролдох харьцаа < 10%, үйлчилгээ үзүүлэгчийн алдаа нь мэдэгдэж буй чимээ шуугиантай үе тэнгийнхнээсээ тусгаарлагдсан, хоцрогдлын гистограм нь үе шатны суурь үзүүлэлттэй таарч байна ±20%. |
+| **Ерөнхий боломж** | 100% нэвтрүүлэх | Пэйжерийн дүрэм идэвхтэй | 24 цагийн турш `NoHealthyProviders` алдаа тэг, дахин оролдох харьцаа тогтвортой, хяналтын самбарын SLA самбар ногоон байна. |
 
-For each phase:
+Үе шат бүрийн хувьд:
 
-1. Update the orchestrator JSON with the intended `max_providers` and retry budgets.
-2. Run `sorafs_cli fetch` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
-3. Capture scoreboard + summary artefacts and attach them to the release record.
-4. Review telemetry dashboards with the on-call engineer before promoting to the next phase.
+1. Оркестрийн JSON-г төлөвлөсөн `max_providers` төсвөөр шинэчилж, дахин оролдоно уу.
+2. `sorafs_cli fetch` эсвэл SDK интеграцийн туршилтын багцыг каноник бэхэлгээ болон орчноос авсан манифестийн эсрэг ажиллуулна уу.
+3. Онооны самбар + хураангуй олдворуудыг авч, хувилбарын бичлэгт хавсаргана уу.
+4. Дараагийн үе шат руу шилжихийн өмнө дуудлагын инженертэй телеметрийн хяналтын самбарыг шалгана уу.
 
-## 4. Observability & Incident Hooks
+## 4. Ажиглах боломжтой & Осол гэмтлийн дэгээ
 
-- **Metrics:** Ensure Alertmanager monitors `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` and `sorafs_orchestrator_retries_total`. A sudden spike typically means a provider is degrading under load.
-- **Logs:** Route the `telemetry::sorafs.fetch.*` targets to the shared log aggregator. Build saved searches for `event=complete status=failed` to speed up triage.
-- **Scoreboards:** Persist every scoreboard artefact to long-term storage. The JSON doubles as the evidence trail for compliance reviews and staged rollbacks.
-- **Dashboards:** Clone the canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) into the production folder with alert rules from `docs/examples/sorafs_fetch_alerts.yaml`.
+- **Хэмжээ:** Alertmanager-ийн `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` болон `sorafs_orchestrator_retries_total` мониторуудыг баталгаажуулна уу. Гэнэтийн өсөлт нь ихэвчлэн үйлчилгээ үзүүлэгч ачаалал дор доройтож байна гэсэн үг юм.
+- **Бүртгэл:** `telemetry::sorafs.fetch.*` зорилтуудыг хуваалцсан лог агрегатор руу чиглүүлэх. Гурвалжийг хурдасгахын тулд `event=complete status=failed`-ийн хадгалсан хайлтуудыг үүсгэ.
+- ** Онооны самбар:** Онооны самбар бүрийг удаан хугацаанд хадгалахын тулд хадгална. JSON нь дагаж мөрдөх шалгалт болон үе шаттайгаар буцаах нотлох баримт болдог.
+- **Хяналтын самбар:** Каноник Grafana самбарыг (`docs/examples/sorafs_fetch_dashboard.json`) `docs/examples/sorafs_fetch_alerts.yaml`-ийн анхааруулах дүрмийн дагуу үйлдвэрлэлийн хавтсанд хуваана уу.
 
-## 5. Communication & Documentation
+## 5. Харилцаа холбоо ба баримтжуулалт
 
-- Log every deny/boost change in the operations changelog with timestamp, operator, reason, and associated incident.
-- Notify SDK teams when provider weights or retry budgets change to align client-side expectations.
-- After GA completes, update `status.md` with the rollout summary and archive this runbook reference in the release notes.
+- Үйл ажиллагааны өөрчлөлтийн бүртгэлд татгалзах/өсгөх өөрчлөлт бүрийг цагийн тэмдэг, оператор, шалтгаан болон холбогдох тохиолдлын хамт бүртгээрэй.
+- Үйлчлүүлэгчийн хүлээлттэй нийцүүлэхийн тулд үйлчилгээ үзүүлэгчийн жин эсвэл дахин оролдлого хийх төсөв өөрчлөгдөх үед SDK багуудад мэдэгдэнэ үү.
+- GA дууссаны дараа `status.md`-ийг танилцуулгын хураангуйгаар шинэчилж, энэ runbook лавлагааг хувилбарын тэмдэглэлд архивлана.

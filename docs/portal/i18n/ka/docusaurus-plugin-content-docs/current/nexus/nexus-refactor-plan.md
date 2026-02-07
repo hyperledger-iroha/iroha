@@ -7,109 +7,111 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus ledger refactor plan
 description: Mirror of `docs/source/nexus_refactor_plan.md`, detailing the phased clean-up work for the Iroha 3 codebase.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_refactor_plan.md`. Keep both copies aligned until the multilingual edition lands in the portal.
+:::შენიშვნა კანონიკური წყარო
+ეს გვერდი ასახავს `docs/source/nexus_refactor_plan.md`. შეინახეთ ორივე ასლი გასწორებული მანამ, სანამ მრავალენოვანი გამოცემა პორტალზე არ მოხვდება.
 :::
 
 # Sora Nexus Ledger Refactor Plan
 
-This document captures the immediate roadmap for the Sora Nexus Ledger ("Iroha 3") refactor. It reflects the current repository layout and the regressions observed in genesis/WSV bookkeeping, Sumeragi consensus, smart-contract triggers, snapshot queries, pointer-ABI host bindings, and Norito codecs. The objective is to converge on a coherent, testable architecture without attempting to land all fixes in one monolithic patch.
+ეს დოკუმენტი ასახავს Sora Nexus Ledger-ის ("Iroha 3") რეფაქტორის უშუალო საგზაო რუკას. ის ასახავს საცავის ამჟამინდელ განლაგებას და რეგრესიას, რომელიც შეინიშნება genesis/WSV ბუღალტრულ აღრიცხვაში, Sumeragi კონსენსუსი, ჭკვიანი კონტრაქტის ტრიგერები, სნეპშოტის შეკითხვებს, პოინტერ-ABI ჰოსტის დაკავშირებას და Norito კოდეკებს. მიზანი არის თანმიმდევრული, ტესტირებადი არქიტექტურის დაახლოება, ყველა გამოსწორების ერთ მონოლითურ პატჩში შეტანის მცდელობის გარეშე.
 
-## 0. Guiding Principles
-- Preserve deterministic behavior across heterogeneous hardware; leverage acceleration only through opt-in feature flags with identical fallbacks.
-- Norito is the serialization layer. Any state/schema changes must include Norito encode/decode round-trip tests and fixture updates.
-- Configuration flows through `iroha_config` (user → actual → defaults). Remove ad-hoc environment toggles from production paths.
-- ABI policy remains V1 and non-negotiable. Hosts must reject unknown pointer types/syscalls deterministically.
-- `cargo test --workspace` and golden tests (`ivm`, `norito`, `integration_tests`) remain the baseline gate for every milestone.
+## 0. სახელმძღვანელო პრინციპები
+- შევინარჩუნოთ დეტერმინისტული ქცევა ჰეტეროგენულ აპარატურაზე; გამოიყენეთ აჩქარების ბერკეტი მხოლოდ არჩევის ფუნქციების დროშებით იდენტური ჩანაცვლებით.
+- Norito არის სერიალიზაციის ფენა. მდგომარეობის/სქემის ნებისმიერი ცვლილება უნდა შეიცავდეს Norito კოდირების/გაშიფვრის ორმხრივ ტესტებს და მოწყობილობების განახლებებს.
+- კონფიგურაცია მიედინება `iroha_config`-ში (მომხმარებელი → რეალური → ნაგულისხმევი). ამოიღეთ ad-hoc გარემოს გადამრთველები წარმოების გზებიდან.
+- ABI პოლიტიკა რჩება V1 და შეთანხმების გარეშე. მასპინძლებმა უნდა უარყოს უცნობი პოინტერის ტიპები/სისკალები დეტერმინისტულად.
+- `cargo test --workspace` და ოქროს ტესტები (`ivm`, `norito`, `integration_tests`) რჩება საბაზისო კარიბჭე ყოველი ეტაპისთვის.
 
-## 1. Repository Topology Snapshot
-- `crates/iroha_core`: Sumeragi actors, WSV, genesis loader, pipelines (query, overlay, zk lanes), smart-contract host glue.
-- `crates/iroha_data_model`: authoritative schema for on-chain data and queries.
-- `crates/iroha`: client API used by CLI, tests, SDK.
-- `crates/iroha_cli`: operator CLI, currently mirrors numerous APIs in `iroha`.
-- `crates/ivm`: Kotodama bytecode VM, pointer-ABI host integration entry points.
-- `crates/norito`: serialization codec with JSON adapters and AoS/NCB backends.
-- `integration_tests`: cross-component assertions covering genesis/bootstrap, Sumeragi, triggers, pagination, etc.
-- Docs already outline Sora Nexus Ledger goals (`nexus.md`, `new_pipeline.md`, `ivm.md`), but the implementation is fragmented and partially stale relative to the code.
+## 1. საცავის ტოპოლოგიის სურათი
+- `crates/iroha_core`: Sumeragi მსახიობები, WSV, genesis loader, მილსადენები (მოკითხვა, გადაფარვა, zk ბილიკები), ჭკვიანი კონტრაქტის მასპინძელი წებო.
+- `crates/iroha_data_model`: ავტორიტეტული სქემა ჯაჭვური მონაცემებისა და მოთხოვნებისთვის.
+- `crates/iroha`: კლიენტის API, რომელსაც იყენებს CLI, ტესტები, SDK.
+- `crates/iroha_cli`: ოპერატორი CLI, ამჟამად ასახავს მრავალ API-ს `iroha`-ში.
+- `crates/ivm`: Kotodama ბაიტიკოდი VM, მაჩვენებელი-ABI ჰოსტის ინტეგრაციის შესვლის წერტილები.
+- `crates/norito`: სერიალიზაციის კოდეკი JSON ადაპტერებით და AoS/NCB სარეზერვო საშუალებებით.
+- `integration_tests`: ჯვარედინი კომპონენტის მტკიცებულებები, რომლებიც მოიცავს genesis/bootstrap, Sumeragi, ტრიგერები, პაგინაცია და ა.შ.
+- Docs უკვე ასახავს Sora Nexus Ledger-ის მიზნებს (`nexus.md`, `new_pipeline.md`, `ivm.md`), მაგრამ იმპლემენტაცია ფრაგმენტირებული და ნაწილობრივ შემორჩენილია კოდთან შედარებით.
 
 ## 2. Refactor Pillars & Milestones
 
-### Phase A – Foundations and Observability
+### ფაზა A – საფუძვლები და დაკვირვება
 1. **WSV Telemetry + Snapshots**
-   - Establish canonical snapshot API in `state` (`WorldStateSnapshot` trait) used by queries, Sumeragi, and CLI.
-   - Use `scripts/iroha_state_dump.sh` to produce deterministic snapshots via `iroha state dump --format norito`.
-2. **Genesis/Bootstrap Determinism**
-   - Refactor genesis ingestion to flow through a single Norito-powered pipeline (`iroha_core::genesis`).
-  - Add integration/regression coverage that replays genesis plus the first block and asserts identical WSV roots across arm64/x86_64 (tracked under `integration_tests/tests/genesis_replay_determinism.rs`).
-3. **Cross-crate Fixity Tests**
-   - Expand `integration_tests/tests/genesis_json.rs` to validate WSV, pipeline, and ABI invariants in one harness.
-  - Introduce a `cargo xtask check-shape` scaffold that panics on schema drift (tracked under DevEx tooling backlog; see `scripts/xtask/README.md` action item).
+   - ჩამოაყალიბეთ კანონიკური სნეპშოტის API `state`-ში (`WorldStateSnapshot` თვისება), რომელიც გამოიყენება მოთხოვნების, Sumeragi და CLI-ში.
+   - გამოიყენეთ `scripts/iroha_state_dump.sh` დეტერმინისტული კადრების შესაქმნელად `iroha state dump --format norito`-ის საშუალებით.
+2. ** Genesis/Bootstrap Determinism**
+   - Refactor genesis ingestion გადინება ერთი Norito მილსადენში (`iroha_core::genesis`).
+  - დაამატეთ ინტეგრაციის/რეგრესიის გაშუქება, რომელიც ასახავს გენეზისს პლუს პირველ ბლოკს და ამტკიცებს იდენტურ WSV ფესვებს arm64/x86_64-ში (მიმდინარეობს `integration_tests/tests/genesis_replay_determinism.rs`).
+3. **ჯვარედინი კრატის ფიქსაციის ტესტები **
+   - გააფართოვეთ `integration_tests/tests/genesis_json.rs` WSV, მილსადენის და ABI ინვარიანტების დასადასტურებლად ერთ აღკაზმულობაში.
+  - წარმოადგინეთ `cargo xtask check-shape` ხარაჩო, რომელიც პანიკაშია სქემის დრიფტის დროს (თვალს ადევნებთ DevEx tooling backlog-ში; იხილეთ `scripts/xtask/README.md` ქმედების პუნქტი).
 
-### Phase B – WSV & Query Surface
-1. **State Storage Transactions**
-   - Collapse `state/storage_transactions.rs` into a transactional adapter that enforces commit ordering and conflict detection.
-   - Unit tests now verify asset/world/triggers modifications roll back on failure.
-2. **Query Model Refactor**
-   - Move pagination/cursor logic into reusable components under `crates/iroha_core/src/query/`. Align Norito representations in `iroha_data_model`.
-  - Add snapshot queries for triggers, assets, and roles with deterministic ordering (tracked via `crates/iroha_core/tests/snapshot_iterable.rs` for current coverage).
+### ფაზა B – WSV & შეკითხვის ზედაპირი
+1. ** სახელმწიფო შენახვის ოპერაციები **
+   - ჩაკეცეთ `state/storage_transactions.rs` ტრანზაქციის ადაპტერში, რომელიც აიძულებს შეკვეთის შეკვეთას და კონფლიქტის გამოვლენას.
+   - ერთეულის ტესტები ახლა ადასტურებს აქტივის/მსოფლიოს/ტრიგერების მოდიფიკაციებს წარუმატებლობის შემთხვევაში.
+2. **შეკითხვის მოდელის რეფაქტორი**
+   - გადაიტანეთ პაგინაცია/კურსორის ლოგიკა მრავალჯერად გამოყენებად კომპონენტებში `crates/iroha_core/src/query/`-ში. გაასწორეთ Norito წარმოდგენები `iroha_data_model`-ში.
+  - დაამატეთ სნეპშოტის მოთხოვნები ტრიგერების, აქტივებისა და როლებისთვის დეტერმინისტული შეკვეთით (მიმდინარე დაფარვისთვის თვალის დევნება `crates/iroha_core/tests/snapshot_iterable.rs`-ის საშუალებით).
 3. **Snapshot Consistency**
-   - Ensure `iroha ledger query` CLI uses the same snapshot path as Sumeragi/fetchers.
-   - CLI snapshot regression tests live under `tests/cli/state_snapshot.rs` (feature-gated for slow runs).
+   - დარწმუნდით, რომ `iroha ledger query` CLI იყენებს იგივე სნეპშოტის გზას, როგორც Sumeragi/fetchers.
+   - CLI სნეპშოტის რეგრესიის ტესტები მოქმედებს `tests/cli/state_snapshot.rs`-ის ქვეშ (ფუნქციით დახურულია ნელი გაშვებისთვის).
 
-### Phase C – Sumeragi Pipeline
-1. **Topology & Epoch Management**
-   - Extract `EpochRosterProvider` into a trait with implementations backed by WSV stake snapshots.
-  - `WsvEpochRosterAdapter::from_peer_iter` offers a simple mock-friendly constructor for benches/tests.
-2. **Consensus Flow Simplification**
-   - Reorganize `crates/iroha_core/src/sumeragi/*` into modules: `pacemaker`, `aggregation`, `availability`, `witness` with shared types under `consensus`.
-  - Replace ad-hoc message passing with typed Norito envelopes and introduce view-change property tests (tracked in the Sumeragi messaging backlog).
-3. **Lane/Proof Integration**
-   - Align lane proofs with DA commitments and ensure RBC gating is uniform.
-   - End-to-end integration test `integration_tests/tests/extra_functional/seven_peer_consistency.rs` now verifies the RBC-enabled path.
+### ფაზა C – Sumeragi მილსადენი
+1. **ტოპოლოგია და ეპოქის მენეჯმენტი**
+   - ამოიღეთ `EpochRosterProvider` მახასიათებელში WSV ფსონების კადრებით მხარდაჭერილი განხორციელებით.
+  - `WsvEpochRosterAdapter::from_peer_iter` გთავაზობთ მარტივ იმიტირებულ კონსტრუქტორს სკამებისთვის/ტესტებისთვის.
+2. **კონსენსუსის ნაკადის გამარტივება**
+   - გადააკეთეთ `crates/iroha_core/src/sumeragi/*` მოდულებად: `pacemaker`, `aggregation`, `availability`, `witness` საერთო ტიპებით `consensus`-ში.
+  - ჩაანაცვლეთ ad-hoc შეტყობინების გაგზავნა აკრეფილი Norito კონვერტებით და შემოიტანეთ ხედვის შეცვლის თვისებების ტესტები (მიმდინარეობს Sumeragi შეტყობინებების ჩანაწერებში).
+3. **შესახვევი/პროფ-ინტეგრაცია**
+   - გაასწორეთ ზოლის მტკიცებულებები DA ვალდებულებებთან და დარწმუნდით, რომ RBC კარიბჭე ერთგვაროვანია.
+   - ბოლოდან ბოლომდე ინტეგრაციის ტესტი `integration_tests/tests/extra_functional/seven_peer_consistency.rs` ახლა ამოწმებს RBC ჩართული გზას.
 
-### Phase D – Smart Contracts & Pointer-ABI Hosts
-1. **Host Boundary Audit**
-   - Consolidate pointer-type checks (`ivm::pointer_abi`) and host adapters (`iroha_core::smartcontracts::ivm::host`).
-   - Pointer table expectations and host manifest bindings are covered by `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` and `ivm_host_mapping.rs`, which exercise the golden TLV mappings.
-2. **Trigger Execution Sandbox**
-   - Refactor triggers to run through a common `TriggerExecutor` that enforces gas, pointer validation, and event journaling.
-  - Add regression tests for call/time triggers covering failure paths (tracked via `crates/iroha_core/tests/trigger_failure.rs`).
-3. **CLI & Client Alignment**
-   - Ensure CLI operations (`audit`, `gov`, `sumeragi`, `ivm`) rely on the shared `iroha` client functions to avoid drift.
-   - CLI JSON snapshot tests live in `tests/cli/json_snapshot.rs`; keep them up to date so core command output continues to match the canonical JSON reference.
+### ფაზა D – ჭკვიანი კონტრაქტები და Pointer-ABI ჰოსტები
+1. **მასპინძლის საზღვრის აუდიტი**
+   - მაჩვენებლის ტიპის შემოწმებების (`ivm::pointer_abi`) და ჰოსტის გადამყვანების (`iroha_core::smartcontracts::ivm::host`) კონსოლიდაცია.
+   - მაჩვენებლის ცხრილის მოლოდინი და მასპინძელი მანიფესტის შეკვრა დაფარულია `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` და `ivm_host_mapping.rs`-ით, რომლებიც ახორციელებენ ოქროს TLV რუკებს.
+2. **ტრიგერი შესრულების Sandbox**
+   - Refactor იწვევს საერთო `TriggerExecutor`-ის გაშვებას, რომელიც ახორციელებს გაზის, მაჩვენებლის ვალიდაციას და მოვლენის დღიურს.
+  - დაამატეთ რეგრესიის ტესტები ზარის/დროის გამომწვევებისთვის, რომლებიც ფარავს წარუმატებლობის ბილიკებს (მიკვლევა `crates/iroha_core/tests/trigger_failure.rs`-ის საშუალებით).
+3. **CLI და კლიენტის გასწორება **
+   - დარწმუნდით, რომ CLI ოპერაციები (`audit`, `gov`, `sumeragi`, `ivm`) ეყრდნობა საერთო `iroha` კლიენტის ფუნქციებს დრიფტის თავიდან ასაცილებლად.
+   - CLI JSON სნეპშოტის ტესტები პირდაპირ ეთერშია `tests/cli/json_snapshot.rs`; განაახლეთ ისინი ისე, რომ ძირითადი ბრძანების გამომავალი აგრძელებს კანონიკურ JSON მითითებას.
 
-### Phase E – Norito Codec Hardening
-1. **Schema Registry**
-   - Create a Norito schema registry under `crates/norito/src/schema/` to source canonical encodings for core data types.
-   - Added doc tests verifying sample payload encoding (`norito::schema::SamplePayload`).
+### ფაზა E – Norito კოდეკის გამკვრივება
+1. **სქემის რეესტრი **
+   - შექმენით Norito სქემის რეესტრი `crates/norito/src/schema/` ქვეშ, რათა გამოიყენოს კანონიკური კოდირება ძირითადი მონაცემთა ტიპებისთვის.
+   - დამატებულია დოკუმენტური ტესტები, რომლებიც ადასტურებენ ნიმუშების დატვირთვის კოდირებას (`norito::schema::SamplePayload`).
 2. **Golden Fixtures Refresh**
-   - Update `crates/norito/tests/*` golden fixtures to match new WSV schema once the refactor lands.
-   - `scripts/norito_regen.sh` regenerates the Norito JSON goldens deterministically via the `norito_regen_goldens` helper.
-3. **IVM/Norito Integration**
-   - Validate Kotodama manifest serialization end-to-end through Norito, ensuring pointer ABI metadata is consistent.
-   - `crates/ivm/tests/manifest_roundtrip.rs` keeps Norito encode/decode parity for manifests.
+   - განაახლეთ `crates/norito/tests/*` ოქროს მოწყობილობები, რათა შეესაბამებოდეს ახალ WSV სქემას, როგორც კი რეფაქტორი დაეშვება.
+   - `scripts/norito_regen.sh` აღადგენს Norito JSON ოქროს დეტერმინისტულად `norito_regen_goldens` დამხმარე საშუალებით.
+3. **IVM/Norito ინტეგრაცია**
+   - გადაამოწმეთ Kotodama მანიფესტის სერიულიზაციის ბოლოდან ბოლომდე Norito-ის მეშვეობით, დარწმუნდით, რომ მაჩვენებელი ABI მეტამონაცემები თანმიმდევრულია.
+   - `crates/ivm/tests/manifest_roundtrip.rs` ინარჩუნებს Norito კოდირების/გაშიფვრის პარიტეტს მანიფესტებისთვის.
 
-## 3. Cross-Cutting Concerns
-- **Testing Strategy**: Every phase promotes unit tests → crate tests → integration tests. Failing tests capture current regressions; new tests prevent them from resurfacing.
-- **Documentation**: After each phase lands, update `status.md` and roll open items into `roadmap.md` while pruning completed tasks.
-- **Performance Benchmarks**: Maintain existing benches in `iroha_core`, `ivm`, and `norito`; add baseline measurements post-refactor to validate no regressions.
-- **Feature Flags**: Keep crate-level toggles only for backends that require external toolchains (`cuda`, `zk-verify-batch`). CPU SIMD paths are always built and selected at runtime; provide deterministic scalar fallbacks for unsupported hardware.
+## 3. ჯვარედინი შეშფოთება
+- **ტესტირების სტრატეგია**: ყოველი ეტაპი ხელს უწყობს ერთეულის ტესტებს → კრატის ტესტებს → ინტეგრაციის ტესტებს. წარუმატებელი ტესტები ასახავს მიმდინარე რეგრესიებს; ახალი ტესტები ხელს უშლის მათ ხელახლა გაჩენას.
+- **დოკუმენტაცია**: ყოველი ფაზის ჩამოსვლის შემდეგ, განაახლეთ `status.md` და გადაახვიეთ ღია ელემენტები `roadmap.md`-ში დასრულებული ამოცანების ამოსვლისას.
+- ** შესრულების კრიტერიუმები **: შეინარჩუნეთ არსებული სკამები `iroha_core`, `ivm` და `norito`; დაამატეთ საბაზისო გაზომვები პოსტრეფაქტორული რეგრესიების არარსებობის დასადასტურებლად.
+- **ფუნქციური დროშები**: შეინახეთ კოლოფების დონის გადამრთველები მხოლოდ იმ საყრდენებისთვის, რომლებიც საჭიროებენ გარე ხელსაწყოების ჯაჭვებს (`cuda`, `zk-verify-batch`). CPU SIMD ბილიკები ყოველთვის აგებულია და არჩეულია გაშვების დროს; უზრუნველყოს დეტერმინისტული სკალარული ჩანაცვლება მხარდაჭერილი ტექნიკისთვის.
 
-## 4. Immediate Next Actions
-- Phase A scaffolding (snapshot trait + telemetry wiring) – see actionable tasks in roadmap updates.
-- The recent defect audit for `sumeragi`, `state`, and `ivm` surfaced the following highlights:
-  - `sumeragi`: dead-code allowances guard view-change proof broadcast, VRF replay state, and EMA telemetry export. These stay gated until Phase C’s consensus flow simplification and lane/proof integration deliverables land.
-  - `state`: `Cell` cleanup and telemetry routing move onto the Phase A WSV telemetry track, while the SoA/parallel-apply notes fold into the Phase C pipeline optimisation backlog.
-  - `ivm`: CUDA toggle exposure, envelope validation, and Halo2/Metal coverage map to Phase D host-boundary work plus the cross-cutting GPU acceleration theme; kernels remain on the dedicated GPU backlog until ready.
-- Prepare cross-team RFC summarizing this plan for sign-off before landing invasive code changes.
+## 4. დაუყოვნებლივი შემდეგი ქმედებები
+- ფაზა A ხარაჩო (სნეპშოტის თვისება + ტელემეტრიული გაყვანილობა) – იხილეთ სამოქმედო ამოცანები საგზაო რუქის განახლებებში.
+- ბოლოდროინდელი დეფექტების აუდიტი `sumeragi`, `state` და `ivm` გამოავლინა შემდეგი ხაზგასმით:
+  - `sumeragi`: მკვდარი კოდის შეღავათები იცავს ხედვის შეცვლას მტკიცებულების მაუწყებლობას, VRF განმეორების მდგომარეობას და EMA ტელემეტრიის ექსპორტს. ისინი დახურულია C ფაზის კონსენსუსის ნაკადის გამარტივებამდე და ზოლის/დამტკიცების ინტეგრაციის მიწოდებამდე.
+  - `state`: `Cell` გასუფთავება და ტელემეტრიული მარშრუტი გადადის A ფაზის WSV ტელემეტრიის ტრასაზე, ხოლო SoA/პარალელური გამოყენების შენიშვნები იკეცება C ფაზის მილსადენის ოპტიმიზაციის ნარჩენებში.
+  - `ivm`: CUDA-ს გადართვის ექსპოზიცია, კონვერტის ვალიდაცია და Halo2/Metal დაფარვის რუკა D ფაზის ჰოსტის საზღვრის მუშაობაზე, პლუს GPU აჩქარების ჯვარედინი თემა; ბირთვები რჩება გამოყოფილ GPU-ზე, სანამ მზად არ იქნება.
+- მოამზადეთ გუნდური RFC, რომელიც აჯამებს ამ გეგმას ხელმოწერისთვის, ინვაზიური კოდის შეცვლამდე.
 
-## 5. Open Questions
-- Should RBC remain optional past P1, or is it mandatory for Nexus ledger lanes? Requires stakeholder decision.
-- Do we enforce DS composability groups in P1 or keep them disabled until lane proofs mature?
-- What is the canonical location for ML-DSA-87 parameters? Candidate: new `crates/fastpq_isi` crate (pending creation).
+## 5. ღია კითხვები
+- უნდა დარჩეს თუ არა RBC სურვილისამებრ P1-ს შემდეგ, თუ სავალდებულოა Nexus ledger ზოლებისთვის? მოითხოვს დაინტერესებული მხარის გადაწყვეტილებას.
+- ვაყენებთ DS კომპოზიტორობის ჯგუფებს P1-ში თუ ვტოვებთ მათ გათიშულ, სანამ ზოლის მტკიცებულება არ მომწიფდება?
+- როგორია ML-DSA-87 პარამეტრების კანონიკური მდებარეობა? კანდიდატი: ახალი `crates/fastpq_isi` ყუთი (მოლოდინშია შექმნა).
 
 ---
 
-_Last updated: 2025-09-12_
+_ბოლო განახლება: 2025-09-12_

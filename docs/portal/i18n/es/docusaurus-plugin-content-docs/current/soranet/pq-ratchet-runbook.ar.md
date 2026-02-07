@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-ratchet-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
-title: تمرين PQ Ratchet في SoraNet
-sidebar_label: دليل PQ Ratchet
-description: خطوات تمرين المناوبة لترقية او خفض سياسة اخفاء الهوية PQ المرحلية مع تحقق telemetry حتمي.
+identificación: pq-ratchet-runbook
+título: تمرين PQ Ratchet في SoraNet
+sidebar_label: trinquete PQ interno
+descripción: خطوات تمرين المناوبة لترقية او خفض سياسة اخفاء الهوية PQ المرحلية مع تحقق telemetría حتمي.
 ---
 
-:::note المصدر القياسي
-تعكس هذه الصفحة `docs/source/soranet/pq_ratchet_runbook.md`. حافظ على النسختين متطابقتين حتى يتم تقاعد الوثائق القديمة.
+:::nota المصدر القياسي
+Utilice el enlace `docs/source/soranet/pq_ratchet_runbook.md`. حافظ على النسختين متطابقتين حتى يتم تقاعد الوثائق القديمة.
 :::
 
 ## الغرض
 
-هذا الدليل يوجه تسلسل تمرين الطوارئ لسياسة اخفاء الهوية post-quantum (PQ) المرحلية في SoraNet. يتدرب المشغلون على الترقية (Stage A -> Stage B -> Stage C) وعلى خفض منضبط الى Stage B/A عندما تنخفض امدادات PQ. يتحقق التمرين من telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) ويجمع artefacts لسجل تدريب الحوادث.
+هذا الدليل يوجه تسلسل تمرين الطوارئ لسياسة اخفاء الهوية post-quantum (PQ) المرحلية في SoraNet. يتدرب المشغلون على الترقية (Etapa A -> Etapa B -> Etapa C) y خفض منضبط الى Etapa B/A عندما تنخفض امدادات PQ. يتحقق التمرين من telemetría ganchos (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) y artefactos لسجل تدريب الحوادث.
 
 ## المتطلبات
 
-- احدث binary لـ `sorafs_orchestrator` مع capability-weighting (commit عند او بعد مرجع التمرين المعروض في `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- الوصول الى حزمة Prometheus/Grafana التي تخدم `dashboards/grafana/soranet_pq_ratchet.json`.
-- snapshot اسمي للـ guard directory. اجلب وتحقق من نسخة قبل التمرين:
+- Utiliza el binario `sorafs_orchestrator` con ponderación de capacidad (commit عند او بعد مرجع التمرين المعروض في `docs/source/soranet/reports/pq_ratchet_validation.md`).
+- الى حزمة Prometheus/Grafana التي تخدم `dashboards/grafana/soranet_pq_ratchet.json`.
+- instantánea del directorio de guardia. اجلب وتحقق من نسخة قبل التمرين:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -34,9 +36,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-اذا كان source directory ينشر JSON فقط، فاعد ترميزه الى Norito binary عبر `soranet-directory build` قبل تشغيل helpers التدوير.
+Aquí hay un directorio fuente, un archivo JSON y un archivo binario Norito y un archivo binario `soranet-directory build` para crear ayudantes.
 
-- التقط metadata وجهز مسبقا artefacts تدوير issuer عبر CLI:
+- Metadatos y artefactos del emisor de la CLI:
 
 ```bash
 soranet-directory inspect \
@@ -47,7 +49,7 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- نافذة تغيير معتمدة من فرق on-call الخاصة بالشبكات والمراقبة.
+- نافذة تغيير معتمدة من فرق de guardia الخاصة بالشبكات والمراقبة.
 
 ## خطوات الترقية
 
@@ -59,55 +61,53 @@ soranet-directory rotate \
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   توقع `anon-guard-pq` قبل الترقية.
+   Haga clic en `anon-guard-pq`.
 
-2. **الترقية الى Stage B (Majority PQ)**
+2. **الترقية الى Etapa B (PQ mayoritaria)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
-   ```
+   ```- انتظر >=5 دقائق حتى تتجدد manifiestos.
+   - En Grafana (en `SoraNet PQ Ratchet Drill`) está en "Eventos de política" en `outcome=met` en `stage=anon-majority-pq`.
+   - Archivos de archivos JSON y archivos JSON.
 
-   - انتظر >=5 دقائق حتى تتجدد manifests.
-   - في Grafana (لوحة `SoraNet PQ Ratchet Drill`) اكد ان لوحة "Policy Events" تعرض `outcome=met` للـ `stage=anon-majority-pq`.
-   - التقط لقطة شاشة او JSON للوحة وارفقها بسجل الحوادث.
-
-3. **الترقية الى Stage C (Strict PQ)**
+3. **الترقية الى Etapa C (PQ estricto)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - تحقق ان مخططات `sorafs_orchestrator_pq_ratio_*` تتجه الى 1.0.
-   - تاكد ان عداد brownout يبقى ثابتا؛ خلاف ذلك اتبع خطوات الخفض.
+   - Aplicación `sorafs_orchestrator_pq_ratio_*` versión 1.0.
+   - تاكد ان عداد apagón يبقى ثابتا؛ خلاف ذلك اتبع خطوات الخفض.
 
-## تمرين الخفض / brownout
+## تمرين الخفض / apagón
 
 1. **احداث نقص PQ اصطناعي**
 
-   عطل relays PQ في بيئة playground بتقليم guard directory الى entries كلاسيكية فقط، ثم اعد تحميل cache الخاص بالـ orchestrator:
+   عطل retransmisiones PQ في بيئة patio de juegos بتقليم directorio de guardia الى entradas كلاسيكية فقط، ثم اعد تحميل caché الخاص بالـ orquestador:
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **مراقبة telemetry الخاصة بـ brownout**
+2. **مراقبة telemetría الخاصة بـ apagón**
 
-   - Dashboard: لوحة "Brownout Rate" ترتفع فوق 0.
-   - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - يجب ان يبلغ `sorafs_fetch` عن `anonymity_outcome="brownout"` مع `anonymity_reason="missing_majority_pq"`.
+   - Panel de control: لوحة "Tasa de apagones" ترتفع فوق 0.
+   -PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
+   - Está entre `sorafs_fetch` y `anonymity_outcome="brownout"` y `anonymity_reason="missing_majority_pq"`.
 
-3. **الخفض الى Stage B / Stage A**
+3. **الخفض الى Etapa B / Etapa A**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   اذا بقيت امدادات PQ غير كافية، اخفض الى `anon-guard-pq`. ينتهي التمرين عند استقرار عدادات brownout ويمكن اعادة الترقية.
+   La configuración PQ es la siguiente: `anon-guard-pq`. ينتهي التمرين عند استقرار عدادات apagones y اعادة الترقية.
 
-4. **استعادة guard directory**
+4. **directorio de guardia**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -115,14 +115,12 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry و artefacts
-
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
+## Telemetría y artefactos- **Panel de control:** `dashboards/grafana/soranet_pq_ratchet.json`
 - **تنبيهات Prometheus:** تاكد من ان تنبيه brownout لـ `sorafs_orchestrator_policy_events_total` يبقى دون SLO المعتمد (&lt;5% ضمن اي نافذة 10 دقائق).
-- **Incident log:** ارفق مقتطفات telemetry وملاحظات المشغل الى `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **التقاط موقع:** استخدم `cargo xtask soranet-rollout-capture` لنسخ drill log ولوحة النتائج الى `artifacts/soranet_pq_rollout/<timestamp>/`، وحساب BLAKE3 digests، وانتاج `rollout_capture.json` موقع.
+- **Registro de incidentes:** ارفق مقتطفات telemetry وملاحظات المشغل الى `docs/examples/soranet_pq_ratchet_fire_drill.log`.
+- **التقاط موقع:** استخدم `cargo xtask soranet-rollout-capture` لنسخ registro de perforación ولوحة النتائج الى `artifacts/soranet_pq_rollout/<timestamp>/`, y BLAKE3 digests, y انتاج `rollout_capture.json` Aquí está.
 
-مثال:
+Nombre:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -134,12 +132,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-ارفق البيانات المولدة والتوقيع بحزمة governance.
+ارفق البيانات المولدة والتوقيع بحزمة gobernanza.
 
-## Rollback
+## Revertir
 
-اذا كشف التمرين عن نقص PQ حقيقي، ابق على Stage A، اخطر Networking TL، وارفق المقاييس المجمعة مع فروقات guard directory الى متتبع الحوادث. استخدم تصدير guard directory الذي تم التقاطه سابقا لاستعادة الخدمة الطبيعية.
+اذا كشف التمرين عن نقص PQ حقيقي، ابق على Etapa A, اخطر Networking TL, وارفق المقاييس المجمعة مع فروقات directorio de guardia الى متتبع الحوادث. استخدم تصدير directorio de guardia الذي تم التقاطه سابقا لاستعادة الخدمة الطبيعية.
 
-:::tip تغطية الانحدار
+:::consejo تغطية الانحدار
 `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` يوفر التحقق الاصطناعي الذي يدعم هذا التمرين.
 :::

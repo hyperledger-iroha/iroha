@@ -4,39 +4,41 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: جولة في السجل
-description: اعادة انتاج تدفق حتمي register -> mint -> transfer باستخدام CLI `iroha` والتحقق من حالة السجل الناتجة.
-slug: /norito/ledger-walkthrough
+タイトル: ヤスデ
+説明: 登録 -> 造幣 -> 転送 CLI `iroha` والتحقق من حالة السجل الناتجة。
+スラッグ: /norito/ledger-walkthrough
 ---
 
-تكمل هذه الجولة [Norito quickstart](./quickstart.md) عبر توضيح كيفية تعديل حالة السجل وفحصها باستخدام CLI `iroha`. ستسجل تعريف اصل جديدا، وتسك وحدات في حساب المشغل الافتراضي، وتنقل جزءا من الرصيد الى حساب اخر، وتتحقق من المعاملات والممتلكات الناتجة. كل خطوة تعكس التدفقات المغطاة في quickstarts الخاصة ب Rust/Python/JavaScript لتتمكن من التحقق من التطابق بين CLI وسلوك SDK.
+[Norito クイックスタート](./quickstart.md) を使用してください。 CLI `iroha`。 ستسجل تعريف اصل جديدا، وتسك وحدات في حساب المشغل الافتراضي، وتنقل جزءا من الرصيد الىあなたのことを忘れないでください。開発者ガイド クイックスタート ガイド Rust/Python/JavaScript 開発者 管理者 管理者 CLI SDK。
 
-## المتطلبات المسبقة
+## ああ、ああ
 
-- اتبع [quickstart](./quickstart.md) لتشغيل شبكة بعقدة واحدة عبر
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- تاكد من ان `iroha` (الـ CLI) مبني او محمل وانك تستطيع الوصول الى الـ peer باستخدام `defaults/client.toml`.
-- ادوات اختيارية: `jq` (تنسيق ردود JSON) وصدفة POSIX لمقاطع متغيرات البيئة في الاسفل.
+- [クイックスタート](./quickstart.md) 概要
+  `docker compose -f defaults/docker-compose.single.yml up --build`。
+- ピア `iroha` (CLI) ピア `defaults/client.toml` を実行します。
+- バージョン: `jq` (JSON) POSIX バージョン。
 
-طوال الدليل، استبدل `$ADMIN_ACCOUNT` و `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
+`$ADMIN_ACCOUNT` と `$RECEIVER_ACCOUNT` を確認してください。バンドルのバンドルのバンドル:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-اكد القيم عبر سرد اولى الحسابات:
+回答:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. فحص حالة genesis
+## 1. 起源
 
-ابدأ باستكشاف السجل الذي يستهدفه CLI:
+CLI :
 
 ```sh
 # Domains المسجلة في genesis
@@ -51,22 +53,22 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-تعتمد هذه الاوامر على ردود مدعومة ب Norito، لذا يكون الترشيح والتقسيم حتميين ومتطابقين مع ما تتلقاه SDKs.
+تعتمد هذه الاوامر على ردود مدعومة ب Norito، لذا يكون الترشيح والتقسيم حتميين ومتطابقين SDK をダウンロードします。
 
-## 2. تسجيل تعريف اصل
+## 2. いいえ
 
-انشئ اصلا جديدا قابلا للسك بلا حدود باسم `coffee` داخل نطاق `wonderland`:
+アクセスポイント `coffee` アクセスポイント `wonderland`:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-يطبع CLI hash المعاملة المقدمة (مثلا `0x5f…`). احفظه كي تستعلم عن الحالة لاحقا.
+CLI ハッシュ المقدمة (مثلا `0x5f…`)。ありがとうございます。
 
-## 3. سك وحدات في حساب المشغل
+## 3. いいえ、いいえ。
 
-توجد كميات الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+`(asset definition, account)` を確認してください。 250 日 `coffee#wonderland` 日 `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -74,13 +76,13 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-مرة اخرى احفظ hash المعاملة (`$MINT_HASH`) من خرج CLI. للتحقق من الرصيد نفذ:
+ハッシュ ハッシュ (`$MINT_HASH`) CLI を使用します。重要なポイント:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-او لاستهداف الاصل الجديد فقط:
+回答:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -88,9 +90,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. نقل جزء من الرصيد الى حساب اخر
+## 4. 問題を解決する
 
-انقل 50 وحدة من حساب المشغل الى `$RECEIVER_ACCOUNT`:
+50 時間以内に `$RECEIVER_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -99,7 +101,7 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-احفظ hash المعاملة باسم `$TRANSFER_HASH`. استعلم عن الممتلكات في الحسابين للتحقق من الارصدة الجديدة:
+ハッシュ値は `$TRANSFER_HASH` です。回答:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -109,28 +111,28 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. التحقق من ادلة السجل
+## 5. 問題を解決する
 
-استخدم الهاشات المحفوظة لتاكيد ان المعاملتين تم التزامهما:
+回答:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-يمكنك ايضا بث الكتل الحديثة لمعرفة اي كتلة تضمنت التحويل:
+عرض المزيد المزيد
 
 ```sh
 # Stream من اخر كتلة والتوقف بعد ~5 ثوان
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-تستخدم كل الاوامر اعلاه نفس payloads الخاصة ب Norito التي تستخدمها SDKs. اذا كررت هذا التدفق عبر الكود (انظر quickstarts للـ SDK ادناه)، فستتطابق الهاشات والارصدة ما دمت تستهدف الشبكة نفسها والافتراضات نفسها.
+ペイロードと Norito SDK が含まれています。 هذا التدفق عبر الكود (انظر クイックスタート للـ SDK ادناه)، فستتطابق الهاشات والارصدة ما دمت最高のパフォーマンスを見せてください。
 
-## روابط تكافؤ SDK
+## 開発 SDK
 
-- [Rust SDK quickstart](../sdks/rust) — يوضح تسجيل التعليمات، ارسال المعاملات، واستطلاع الحالة من Rust.
-- [Python SDK quickstart](../sdks/python) — يعرض نفس عمليات register/mint مع مساعدات JSON مدعومة ب Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) — يغطي طلبات Torii، ومساعدات الحوكمة، واغلفة الاستعلامات المtyped.
+- [Rust SDK クイックスタート](../sdks/rust) — Rust をインストールします。
+- [Python SDK クイックスタート](../sdks/python) — 登録/造幣局 JSON مدعومة ب Norito。
+- [JavaScript SDK クイックスタート](../sdks/javascript) — يغطي طلبات Torii، ومساعدات الحوكمة، واغلفة الاستعلامات المtyped。
 
-نفذ جولة CLI اولا ثم كرر السيناريو باستخدام SDK المفضل لديك للتأكد من تطابق السطحين في هاشات المعاملات والارصدة ومخرجات الاستعلام.
+CLI のセキュリティとセキュリティ SDK のセキュリティの強化ありがとうございます。

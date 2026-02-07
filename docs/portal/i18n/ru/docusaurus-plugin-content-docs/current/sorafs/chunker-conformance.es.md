@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-conformance.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: Guía de conformidad del chunker de SoraFS
-sidebar_label: Conformidad de chunker
-description: Requisitos y flujos para preservar el perfil determinista de chunker SF1 en fixtures y SDKs.
+идентификатор: соответствие чанкеру
+title: Руководство по согласованию блоков SoraFS
+Sidebar_label: Согласование фрагмента
+описание: Реквизиты и средства для сохранения определенной емкости фрагмента SF1 в приспособлениях и SDK.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/chunker_conformance.md`. Mantén ambas versiones sincronizadas hasta que se retiren los docs heredados.
+:::примечание Фуэнте каноника
+Эта страница отражает `docs/source/sorafs/chunker_conformance.md`. Многие из синхронизированных версий должны удалить устаревшие документы.
 :::
 
-Esta guía codifica los requisitos que toda implementación debe seguir para mantenerse
-alineada con el perfil determinista de chunker de SoraFS (SF1). También
-documenta el flujo de regeneración, la política de firmas y los pasos de verificación para que
-los consumidores de fixtures en los SDKs permanezcan sincronizados.
+Это кодифицированные требования, которые должны быть реализованы для дальнейшего обслуживания.
+Выполняется с определенным идентификатором фрагмента SoraFS (SF1). Тамбьен
+документ о потоке регенерации, политике фирм и способах проверки для того, чтобы
+потребители приборов и SDK могут быть постоянно синхронизированы.
 
-## Perfil canónico
+## Канонический Perfil
 
-- Handle del perfil: `sorafs.sf1@1.0.0` (alias heredado `sorafs.sf1@1.0.0`)
-- Seed de entrada (hex): `0000000000dec0ded`
-- Tamaño objetivo: 262144 bytes (256 KiB)
-- Tamaño mínimo: 65536 bytes (64 KiB)
-- Tamaño máximo: 524288 bytes (512 KiB)
-- Polinomio de rolling: `0x3DA3358B4DC173`
-- Seed de la tabla gear: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- Дескриптор профиля: `sorafs.sf1@1.0.0` (псевдоним наследника `sorafs.sf1@1.0.0`)
+- Seed de entrada (шестнадцатеричное): `0000000000dec0ded`
+- Размер объекта: 262144 байт (256 КиБ)
+- Минимальный размер: 65536 байт (64 КиБ)
+- Максимальный размер: 524288 байт (512 КиБ)
+- Полиномиум прокатки: `0x3DA3358B4DC173`
+- Семя таблицы: `sorafs-v1-gear`.
+- Маска разрыва: `0x0000FFFF`
 
-Implementación de referencia: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Cualquier aceleración SIMD debe producir límites y digests idénticos.
+Реализация ссылки: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+Ускорение SIMD может производить ограничения и обрабатывать идентичные данные.
 
-## Bundle de fixtures
+## Комплект светильников
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenera los
-fixtures y emite los siguientes archivos bajo `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` регенерирует лос
+светильники и излучающие архивы bajo `fixtures/sorafs_chunker/`:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — límites de chunk canónicos para consumidores
-  Rust, TypeScript y Go. Cada archivo anuncia el handle canónico como la primera
-  entrada en `profile_aliases`, seguido por cualquier alias heredado (p. ej.,
+- `sf1_profile_v1.{json,rs,ts,go}` — ограничения канонических фрагментов для потребителей
+  Rust, TypeScript и Go. Cada archiveo anuncia el handle canónico como la primera
+  введите `profile_aliases`, затем введите псевдоним здесь (стр. ej.,
   `sorafs.sf1@1.0.0`, luego `sorafs.sf1@1.0.0`). El orden se impone por
-  `ensure_charter_compliance` y NO DEBE alterarse.
-- `manifest_blake3.json` — manifest verificado con BLAKE3 que cubre cada archivo de fixtures.
-- `manifest_signatures.json` — firmas del consejo (Ed25519) sobre el digest del manifest.
-- `sf1_profile_v1_backpressure.json` y corpora en bruto dentro de `fuzz/` —
-  escenarios deterministas de streaming usados por pruebas de back-pressure del chunker.
+  `ensure_charter_compliance` и НЕТ ДЕБЕ.
+- `manifest_blake3.json` — манифест, проверенный с помощью BLAKE3, который содержит каждый архив приборов.
+- `manifest_signatures.json` — фирма совета (Ed25519) с обзором манифеста.
+- `sf1_profile_v1_backpressure.json` и тела в грубом виде `fuzz/` —
+  сценарии, определяющие потоковую передачу, используются для регулирования обратного давления на блокировщик.
 
-### Política de firmas
+### Политика фирм
 
-La regeneración de fixtures **debe** incluir una firma válida del consejo. El generador
-rechaza la salida sin firmar a menos que se pase explícitamente `--allow-unsigned` (pensado
-solo para experimentación local). Los sobres de firma son append-only y se
-deduplican por firmante.
+Регенерация светильников **debe** включает в себя действующую фирму совета. Эль-генерадор
+повторение заявления без указания того, что это было ясно `--allow-unsigned` (мысленно
+соло для местных экспериментов). Los sobres defirma son, только для приложений, и так
+дедупликация для фирмы.
 
-Para agregar una firma del consejo:
+Для объединения фирмы совета:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -66,33 +68,31 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verificación
+## Проверка
 
-El helper de CI `ci/check_sorafs_fixtures.sh` reejecuta el generador con
-`--locked`. Si los fixtures divergen o faltan firmas, el job falla. Usa
-este script en workflows nocturnos y antes de enviar cambios de fixtures.
+Помощник CI `ci/check_sorafs_fixtures.sh` повторно активирует генератор с
+`--locked`. Если оборудование расходится или у фирм нет, работа не удалась. США
+этот сценарий в рабочих процессах ночью и перед отправкой светильников.
 
-Pasos de verificación manual:
+Руководство по проверке:
 
-1. Ejecuta `cargo test -p sorafs_chunker`.
-2. Invoca `ci/check_sorafs_fixtures.sh` localmente.
-3. Confirma que `git status -- fixtures/sorafs_chunker` esté limpio.
+1. Эекута `cargo test -p sorafs_chunker`.
+2. Вызовите локальный `ci/check_sorafs_fixtures.sh`.
+3. Подтвердите, что `git status -- fixtures/sorafs_chunker` является прозрачным.
 
-## Playbook de actualización
+## Учебник по актуализации
 
-Cuando propongas un nuevo perfil de chunker o actualices SF1:
+Когда появится новая возможность фрагментировать актуальные SF1:
 
-Ver también: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) para
-requisitos de metadatos, plantillas de propuesta y checklists de validación.
-
-1. Redacta un `ChunkProfileUpgradeProposalV1` (ver RFC SF-1) con nuevos parámetros.
-2. Regenera fixtures vía `export_vectors` y registra el nuevo digest del manifest.
-3. Firma el manifest con el quórum del consejo requerido. Todas las firmas deben
+Также: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) пункт
+реквизиты метаданных, планировки реквизитов и контрольные списки валидации.1. Отредактируйте `ChunkProfileUpgradeProposalV1` (версия RFC SF-1) с новыми параметрами.
+2. Обновите настройки через `export_vectors` и зарегистрируйте новый дайджест манифеста.
+3. Фирменный манифест с требуемым кворумом совета. Todas las Firmas deben
    anexarse a `manifest_signatures.json`.
-4. Actualiza las fixtures de SDK afectadas (Rust/Go/TS) y asegura paridad cross-runtime.
-5. Regenera corpora fuzz si cambian los parámetros.
-6. Actualiza esta guía con el nuevo handle de perfil, seeds y digest.
-7. Envía el cambio junto con pruebas actualizadas y actualizaciones del roadmap.
+4. Актуализировать исправления SDK, влияющие на (Rust/Go/TS), и обеспечить равное взаимодействие между средами выполнения.
+5. Регенерируйте тело и замените параметры.
+6. Actualiza esta guía с новой ручкой для перфиля, семенами и дайджестом.
+7. Отправьте объединенное объединение с актуализированными и актуализированными дорожными картами.
 
-Los cambios que afecten los límites de chunk o los digests sin seguir este proceso
-son inválidos y no deben fusionarse.
+Лос-камбиосы, которые влияют на ограничения фрагментов или дайджесты, не являются следствием этого процесса.
+сын инвалидов и не нуждающийся в слиянии.

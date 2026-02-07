@@ -4,45 +4,45 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito codec reference
+# Ссылка на кодек Norito
 
-Norito Iroha کی canonical serialization layer ہے۔ ہر on-wire message، on-disk payload، اور cross-component API Norito استعمال کرتا ہے تاکہ nodes مختلف hardware پر بھی ایک جیسے bytes پر متفق رہیں۔ یہ صفحہ اہم حصے خلاصہ کرتا ہے اور مکمل specification کے لئے `norito.md` کی طرف اشارہ کرتا ہے۔
+Norito Iroha Уровень канонической сериализации ہے۔ передача сообщений по сети, полезная нагрузка на диске, межкомпонентный API Norito, резервное копирование узлов, аппаратное обеспечение и т. д. байты پر متفق رہیں۔ Для получения дополнительной информации обратитесь к спецификации `norito.md`, которая соответствует требованиям. ہے۔
 
-## Core layout
+## Основной макет
 
-| Component | Purpose | Source |
+| Компонент | Цель | Источник |
 | --- | --- | --- |
-| **Header** | magic/version/schema hash، CRC64، length، اور compression tag کے ساتھ payloads کو فریم کرتا ہے؛ v1 میں `VERSION_MINOR = 0x00` ضروری ہے اور header flags کو supported mask کے مقابل validate کیا جاتا ہے (default `0x00`). | `norito::header` — `norito.md` ("Header & Flags", repository root) دیکھیں |
-| **Bare payload** | hashing/موازنہ کیلئے deterministic value encoding۔ On-wire transport ہمیشہ header استعمال کرتا ہے؛ bare bytes صرف اندرونی استعمال کیلئے ہیں۔ | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (اور experimental GPU acceleration) جو header کے compression byte کے ذریعے منتخب ہوتی ہے۔ | `norito.md`, “Compression negotiation” |
+| **Заголовок** | хеш магии/версии/схемы, CRC64, длина, тег сжатия и полезные данные, а также другие полезные данные. v1 `VERSION_MINOR = 0x00` содержит флаги заголовка и поддерживаемую маску, а также проверку подлинности (по умолчанию `0x00`). | `norito::header` — `norito.md` («Заголовок и флаги», корень репозитория) دیکھیں |
+| **Пустая полезная нагрузка** | хеширование/детерминированное кодирование значений. Заголовок проводного транспорта استعمال کرتا ہے؛ голые байты | `norito::codec::{Encode, Decode}` |
+| **Сжатие** | Необязательный Zstd (экспериментальное ускорение графического процессора) и заголовок или байт сжатия или дополнительная информация. | `norito.md`, «Согласование сжатия» |
 
-layout flag registry (packed-struct, packed-seq, field bitset, compact lengths) `norito::header::flags` میں ہے۔ V1 defaults کے طور پر flags `0x00` استعمال کرتا ہے مگر supported mask کے اندر explicit header flags قبول کرتا ہے؛ unknown bits رد کئے جاتے ہیں۔ `norito::header::Flags` اندرونی inspection اور مستقبل کی versions کیلئے رکھا جاتا ہے۔
+Реестр флагов макета (packed-struct, packaged-seq, битовый набор полей, компактная длина) `norito::header::flags` میں ہے۔ Настройки по умолчанию V1 Есть флаги `0x00` Поддерживаемые маски Есть явные флаги заголовка. неизвестные биты رد کئے جاتے ہیں۔ `norito::header::Flags` Проверьте наличие доступных версий.
 
-## Derive support
+## Получение поддержки
 
-`norito_derive` `Encode`, `Decode`, `IntoSchema` اور JSON helper derives فراہم کرتا ہے۔ اہم conventions:
+`norito_derive` `Encode`, `Decode`, `IntoSchema` Помощник JSON извлекает فراہم کرتا ہے۔ اہم конвенции:
 
-- Derives AoS اور packed code paths دونوں بناتے ہیں؛ v1 AoS layout (flags `0x00`) کو default رکھتا ہے جب تک header flags packed variants کو opt-in نہ کریں۔ Implementation `crates/norito_derive/src/derive_struct.rs` میں ہے۔
-- Layout پر اثر انداز ہونے والی features (`packed-struct`, `packed-seq`, `compact-len`) header flags کے ذریعے opt-in ہیں اور peers کے درمیان consistent encode/decode ہونی چاہئیں۔
-- JSON helpers (`norito::json`) open APIs کیلئے deterministic Norito-backed JSON فراہم کرتے ہیں۔ `norito::json::{to_json_pretty, from_json}` استعمال کریں — کبھی `serde_json` نہیں۔
+- Получает упакованные пути кода AoS. Макет AoS версии 1 (флаги `0x00`) Доступен по умолчанию или флаги заголовка упакованные варианты Возможность подписки или выбора Реализация `crates/norito_derive/src/derive_struct.rs` میں ہے۔
+- Макет в различных функциях (`packed-struct`, `packed-seq`, `compact-len`), флаги заголовков и возможность выбора. Одноранговые узлы обеспечивают согласованное кодирование/декодирование.
+- Помощники JSON (`norito::json`) открывают API-интерфейсы. Детерминированный JSON на основе Norito. `norito::json::{to_json_pretty, from_json}` استعمال کریں — کبھی `serde_json` نہیں۔
 
-## Multicodec اور identifier tables
+## Таблицы идентификаторов мультикодеков
 
-Norito اپنی multicodec assignments `norito::multicodec` میں رکھتا ہے۔ Reference table (hashes، key types، payload descriptors) repository root کے `multicodec.md` میں برقرار رکھی جاتی ہے۔ جب نیا identifier شامل ہو:
+Norito Назначение мультикодеков `norito::multicodec` Справочная таблица (хэши, типы ключей, дескрипторы полезной нагрузки) корень репозитория `multicodec.md` Ваш идентификатор شامل ہو:
 
-1. `norito::multicodec::registry` اپڈیٹ کریں۔
-2. `multicodec.md` میں table بڑھائیں۔
-3. اگر downstream bindings (Python/Java) map استعمال کرتے ہیں تو انہیں regenerate کریں۔
+1. `norito::multicodec::registry` Дополнительная информация
+2. Таблица `multicodec.md` بڑھائیں۔
+3. Карта нисходящих привязок (Python/Java) и возможность регенерации
 
-## Docs اور fixtures کو regenerate کرنا
+## Документы и приспособления для регенерации
 
-جب پورٹل اس وقت prose summary host کر رہا ہے، upstream Markdown sources کو source of truth رکھیں:
+جب پورٹل اس وقت прозаическое резюме хоста کر رہا ہے، восходящие источники Markdown کو источник истины رکھیں:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-جب Docusaurus automation live ہو جائے، پورٹل ایک sync script کے ذریعے اپڈیٹ ہوگا (جسے `docs/portal/scripts/` میں track کیا گیا ہے) جو ان files سے data کھینچتا ہے۔ تب تک، spec میں تبدیلی کے ساتھ اس صفحہ کو دستی طور پر align رکھیں۔
+- **Спецификация**: `norito.md`
+- **Таблица мультикодеков**: `multicodec.md`
+- **Бенчмарки**: `crates/norito/benches/`
+- **Золотые тесты**: `crates/norito/tests/`جب Docusaurus автоматизация в реальном времени ہو جائے، پورٹل ایک sync script کے ذریعے اپڈیٹ ہوگا (جسے `docs/portal/scripts/` میں track Если вам нужны файлы и данные, вы можете использовать их. Если вам нужна спецификация, вы можете настроить выравнивание

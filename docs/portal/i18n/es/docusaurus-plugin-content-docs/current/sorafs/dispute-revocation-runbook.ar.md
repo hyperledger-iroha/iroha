@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/sorafs/dispute-revocation-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: dispute-revocation-runbook
-title: دليل تشغيل نزاعات وإلغاءات SoraFS
+id: disputa-revocación-runbook
+título: دليل تشغيل نزاعات وإلغاءات SoraFS
 sidebar_label: دليل تشغيل النزاعات والإلغاءات
-description: سير عمل الحوكمة لتقديم نزاعات سعة SoraFS وتنسيق الإلغاءات وإخلاء البيانات بشكل حتمي.
+descripción: سير عمل الحوكمة لتقديم نزاعات سعة SoraFS وتنسيق الإلغاءات وإخلاء البيانات بشكل حتمي.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/dispute_revocation_runbook.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم سحب توثيق Sphinx القديم.
+:::nota المصدر المعتمد
+Utilice el código `docs/source/sorafs/dispute_revocation_runbook.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم سحب توثيق Sphinx القديم.
 :::
 
 ## الهدف
 
-يرشد هذا الدليل مشغلي الحوكمة خلال تقديم نزاعات سعة SoraFS، وتنسيق الإلغاءات، وضمان اكتمال إخلاء البيانات بشكل حتمي.
+يرشد هذا الدليل مشغلي الحوكمة خلال تقديم نزاعات سعة SoraFS, وتنسيق الإلغاءات, وضمان اكتمال إخلاء البيانات بشكل حتمي.
 
 ## 1. تقييم الحادث
 
-- **شروط الإطلاق:** رصد خرق SLA (التوفر/فشل PoR)، نقص التكرار، أو خلاف في الفوترة.
-- **تأكيد التليمترية:** التقط لقطات `/v1/sorafs/capacity/state` و`/v1/sorafs/capacity/telemetry` للمزوّد.
-- **إخطار أصحاب المصلحة:** Storage Team (عمليات المزوّد)، Governance Council (جهة القرار)، Observability (تحديثات لوحات المتابعة).
+- **شروط الإطلاق:** رصد خرق SLA (التوفر/فشل PoR), نقص التكرار، أو خلاف في الفوترة.
+- **تأكيد التليمترية:** التقط لقطات `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` للمزوّد.
+- **إخطار أصحاب المصلحة:** Equipo de almacenamiento (عمليات المزوّد), Consejo de gobierno (جهة القرار), Observabilidad (تحديثات لوحات المتابعة).
 
 ## 2. إعداد حزمة الأدلة
 
-1. اجمع الآرتيفاكتات الخام (telemetry JSON، سجلات CLI، ملاحظات المدققين).
-2. وحّدها في أرشيف حتمي (مثل tarball)؛ وسجّل:
-   - digest BLAKE3-256 (`evidence_digest`)
-   - نوع الوسائط (`application/zip`، `application/jsonl`، وما إلى ذلك)
-   - URI الاستضافة (object storage، أو SoraFS pin، أو نقطة نهاية متاحة عبر Torii)
+1. اجمع الآرتيفاكتات الخام (telemetría JSON, سجلات CLI, ملاحظات المدققين).
+2. وحّدها في أرشيف حتمي (مثل tarball)؛ Descripción:
+   - digerir BLAKE3-256 (`evidence_digest`)
+   - نوع الوسائط (`application/zip`, `application/jsonl`, y ما إلى ذلك)
+   - URI (almacenamiento de objetos, pin SoraFS, o pin Torii)
 3. خزّن الحزمة في حاوية جمع الأدلة الخاصة بالحوكمة مع وصول كتابة لمرة واحدة.
 
 ## 3. تقديم النزاع
 
-1. أنشئ مواصفة JSON لـ `sorafs_manifest_stub capacity dispute`:
+1. Texto JSON en `sorafs_manifest_stub capacity dispute`:
 
    ```json
    {
@@ -58,7 +60,7 @@ description: سير عمل الحوكمة لتقديم نزاعات سعة SoraF
    }
    ```
 
-2. شغّل CLI:
+2. Haga clic en CLI:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -69,10 +71,8 @@ description: سير عمل الحوكمة لتقديم نزاعات سعة SoraF
      --request-out=dispute_request.json \
      --authority=ih58... \
      --private-key=ed25519:<key>
-   ```
-
-3. راجع `dispute_summary.json` (تأكد من النوع، digest الأدلة، والطوابع الزمنية).
-4. أرسل JSON الطلب إلى Torii `/v1/sorafs/capacity/dispute` عبر طابور معاملات الحوكمة. التقط قيمة الاستجابة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.
+   ```3. راجع `dispute_summary.json` (تأكد من النوع، resumen الأدلة، والطوابع الزمنية).
+4. Inserte el archivo JSON en Torii `/v1/sorafs/capacity/dispute` para crear archivos. Adaptador de corriente `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.
 
 ## 4. الإخلاء والإلغاء
 
@@ -82,13 +82,13 @@ description: سير عمل الحوكمة لتقديم نزاعات سعة SoraF
    - تحقّق من التواقيع وdigest الإلغاء.
 3. **نشر الإلغاء:**
    - أرسل طلب الإلغاء إلى Torii.
-   - تأكد من حظر adverts الخاصة بالمزوّد (توقع ارتفاع `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`).
+   - تأكد من حظر anuncios الخاصة بالمزوّد (توقع ارتفاع `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`).
 4. **حدّث لوحات المتابعة:** علّم المزوّد على أنه مُلغى، وأشر إلى معرّف النزاع، واربط حزمة الأدلة.
 
 ## 5. ما بعد الحادث والمتابعة
 
 - سجّل الجدول الزمني والسبب الجذري وإجراءات المعالجة في متتبع حوادث الحوكمة.
-- حدّد التعويض (slashing للرهان، clawbacks للرسوم، وتعويضات العملاء).
+- حدّد التعويض (recortando للرهان، clawbacks للرسوم، وتعويضات العملاء).
 - وثّق الدروس المستفادة؛ حدّث عتبات SLA أو تنبيهات المراقبة إذا لزم الأمر.
 
 ## 6. مواد مرجعية
@@ -96,13 +96,13 @@ description: سير عمل الحوكمة لتقديم نزاعات سعة SoraF
 - `sorafs_manifest_stub capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم النزاعات)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
-- لوحة المراقبة: `SoraFS / Capacity Providers`
+- Nombre del usuario: `SoraFS / Capacity Providers`
 
 ## قائمة التحقق
 
 - [ ] تم التقاط حزمة الأدلة واحتساب التجزئة.
 - [ ] تم التحقق من حمولة النزاع محليًا.
-- [ ] تم قبول معاملة النزاع في Torii.
+- [ ] Haga clic en el botón Torii.
 - [ ] تم تنفيذ الإلغاء (إن تمت الموافقة).
 - [ ] تم تحديث لوحات المتابعة/الأدلة التشغيلية.
 - [ ] تم إيداع ما بعد الحادث لدى مجلس الحوكمة.

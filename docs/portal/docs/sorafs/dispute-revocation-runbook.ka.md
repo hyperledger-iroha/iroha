@@ -11,33 +11,34 @@ id: dispute-revocation-runbook
 title: SoraFS Dispute & Revocation Runbook
 sidebar_label: Dispute & Revocation Runbook
 description: Governance workflow for filing SoraFS capacity disputes, coordinating revocations, and evacuating data deterministically.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-## Purpose
+## მიზანი
 
-This runbook guides governance operators through filing SoraFS capacity disputes, coordinating revocations, and ensuring data evacuation completes deterministically.
+ეს სახელმძღვანელო ხელმძღვანელობს მმართველობით ოპერატორებს SoraFS სიმძლავრის დავების შეტანის, გაუქმების კოორდინაციისა და მონაცემთა ევაკუაციის განმსაზღვრელ დასრულებაში.
 
-## 1. Assess the Incident
+## 1. შეაფასეთ ინციდენტი
 
-- **Trigger conditions:** detection of SLA breach (uptime/PoR failure), replication shortfall, or billing disagreement.
-- **Confirm telemetry:** capture `/v1/sorafs/capacity/state` and `/v1/sorafs/capacity/telemetry` snapshots for the provider.
-- **Notify stakeholders:** Storage Team (provider operations), Governance Council (decision body), Observability (dashboard updates).
+- **ტრიგერის პირობები:** SLA დარღვევის გამოვლენა (uptime/PoR უკმარისობა), რეპლიკაციის ნაკლებობა ან ბილინგის შეუთანხმებლობა.
+- **დაადასტურეთ ტელემეტრია:** გადაიღეთ `/v1/sorafs/capacity/state` და `/v1/sorafs/capacity/telemetry` კადრები პროვაიდერისთვის.
+- **აცნობეთ დაინტერესებულ მხარეებს:** შენახვის გუნდს (პროვაიდერის ოპერაციები), მმართველობის საბჭო (გადაწყვეტილების ორგანო), დაკვირვებადობა (დაფის განახლებები).
 
-## 2. Prepare Evidence Bundle
+## 2. მოამზადეთ მტკიცებულებათა ნაკრები
 
-1. Collect raw artefacts (telemetry JSON, CLI logs, auditor notes).
-2. Normalize into a deterministic archive (for example, a tarball); record:
-   - BLAKE3-256 digest (`evidence_digest`)
-   - Media type (`application/zip`, `application/jsonl`, and so on)
-   - Hosting URI (object storage, SoraFS pin, or Torii-accessible endpoint)
-3. Store the bundle in the governance evidence collection bucket with write-once access.
+1. შეაგროვეთ ნედლეული არტეფაქტები (ტელემეტრია JSON, CLI ჟურნალები, აუდიტორის ჩანაწერები).
+2. ნორმალიზება დეტერმინისტულ არქივში (მაგალითად, ტარბოლი); ჩანაწერი:
+   - BLAKE3-256 დაიჯესტი (`evidence_digest`)
+   - მედიის ტიპი (`application/zip`, `application/jsonl` და ა.შ.)
+   - ჰოსტინგის URI (ობიექტის საცავი, SoraFS პინი, ან Torii-წვდომა ბოლო წერტილი)
+3. შეინახეთ ნაკრები მმართველობის მტკიცებულებების შეგროვების თაიგულში ჩაწერის ერთხელ წვდომით.
 
-## 3. File the Dispute
+## 3. დავის შეტანა
 
-1. Create a spec JSON for `sorafs_manifest_stub capacity dispute`:
+1. შექმენით სპეციფიკაცია JSON `sorafs_manifest_stub capacity dispute`-ისთვის:
 
    ```json
    {
@@ -57,7 +58,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
    }
    ```
 
-2. Run the CLI:
+2. გაუშვით CLI:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -70,38 +71,38 @@ This runbook guides governance operators through filing SoraFS capacity disputes
      --private-key=ed25519:<key>
    ```
 
-3. Review `dispute_summary.json` (confirm kind, evidence digest, timestamps).
-4. Submit the request JSON to Torii `/v1/sorafs/capacity/dispute` via the governance transaction queue. Capture the `dispute_id_hex` response value; it anchors follow-up revocation actions and audit reports.
+3. გადახედეთ `dispute_summary.json` (დაადასტურეთ სახეობა, მტკიცებულება დაიჯესტი, დროის ანაბეჭდები).
+4. გაგზავნეთ მოთხოვნა JSON-ზე Torii `/v1/sorafs/capacity/dispute` მმართველობითი ტრანზაქციის რიგის მეშვეობით. დააფიქსირეთ `dispute_id_hex` პასუხის მნიშვნელობა; ის ამაგრებს შემდგომი გაუქმების ქმედებებს და აუდიტის ანგარიშებს.
 
-## 4. Evacuation & Revocation
+## 4. ევაკუაცია და გაუქმება
 
-1. **Grace window:** notify the provider of impending revocation; allow evacuation of pinned data when policy permits.
-2. **Generate `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` with the approved reason.
-   - Verify signatures and the revocation digest.
-3. **Publish revocation:**
-   - Submit the revocation request to Torii.
-   - Ensure provider adverts are blocked (expect `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to climb).
-4. **Update dashboards:** flag the provider as revoked, reference the dispute ID, and link the evidence bundle.
+1. **Grace window:** აცნობეთ პროვაიდერს მოსალოდნელი გაუქმების შესახებ; ნებადართულია ჩამაგრებული მონაცემების ევაკუაცია, როდესაც პოლიტიკა ნებადართულია.
+2. **შექმენით `ProviderAdmissionRevocationV1`:**
+   - გამოიყენეთ `sorafs_manifest_stub provider-admission revoke` დამტკიცებული მიზეზით.
+   - გადაამოწმეთ ხელმოწერები და გაუქმების დაიჯესტი.
+3. **გამოაქვეყნეთ გაუქმება:**
+   - გაგზავნეთ გაუქმების მოთხოვნა Torii-ზე.
+   - დარწმუნდით, რომ პროვაიდერის რეკლამები დაბლოკილია (მოველით `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` ასვლას).
+4. **განაახლეთ საინფორმაციო დაფები:** მონიშნეთ პროვაიდერი, როგორც გაუქმებული, მიუთითეთ დავის ID და დააკავშირეთ მტკიცებულებათა ნაკრები.
 
-## 5. Post-Mortem & Follow-Up
+## 5. სიკვდილის შემდგომი და შემდგომი დაკვირვება
 
-- Record the timeline, root cause, and remediation actions in the governance incident tracker.
-- Determine restitution (stake slashing, fee clawbacks, customer refunds).
-- Document learnings; update SLA thresholds or monitoring alerts if required.
+- ჩაწერეთ ვადები, ძირეული მიზეზი და გამოსწორების ქმედებები მმართველობის ინციდენტების ტრეკერში.
+- განსაზღვრეთ რესტიტუცია (ფსონის შემცირება, საკომისიოს უკან დაბრუნება, კლიენტის თანხის დაბრუნება).
+- დოკუმენტური სწავლება; განაახლეთ SLA ზღვრები ან საჭიროების შემთხვევაში მონიტორინგის სიგნალიზაცია.
 
-## 6. Reference Materials
+## 6. საცნობარო მასალები
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (dispute section)
-- `docs/source/sorafs/provider_admission_policy.md` (revocation workflow)
-- Observability dashboard: `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (დავების განყოფილება)
+- `docs/source/sorafs/provider_admission_policy.md` (გაუქმების სამუშაო პროცესი)
+- დაკვირვებადობის დაფა: `SoraFS / Capacity Providers`
 
-## Checklist
+## საკონტროლო სია
 
-- [ ] Evidence bundle captured and hashed.
-- [ ] Dispute payload validated locally.
-- [ ] Torii dispute transaction accepted.
-- [ ] Revocation executed (if approved).
-- [ ] Dashboards/runbooks updated.
-- [ ] Post-mortem filed with governance council.
+- [ ] მტკიცებულებათა ნაკრები დაჭერილია და ჰეშირებულია.
+- [ ] დავის დატვირთვა დამოწმებულია ადგილობრივად.
+- [ ] Torii დავის ტრანზაქცია მიღებულია.
+- [ ] გაუქმება შესრულებულია (თუ დამტკიცდება).
+- [ ] Dashboards/Runbooks განახლებულია.
+- [ ] მოკვდავი შეტანილია მმართველ საბჭოში.

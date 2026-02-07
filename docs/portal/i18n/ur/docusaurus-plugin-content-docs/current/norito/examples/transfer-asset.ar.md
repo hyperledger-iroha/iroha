@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: نقل أصل بين الحسابات
-description: سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
-source: examples/transfer/transfer.ko
+سلگ:/نوریٹو/مثالوں/ٹرانسفر اثاثہ
+عنوان: اکاؤنٹس کے مابین اثاثہ کی منتقلی
+تفصیل: ایک سادہ اثاثہ منتقلی کا ورک فلو جو SDK اسپرنٹ اور لیجر راؤنڈ کی عکاسی کرتا ہے۔
+ماخذ: مثالوں/منتقلی/منتقلی.KO
 ---
 
-سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+سادہ اثاثہ منتقلی کا ورک فلو جو SDK جمپ اسٹارٹس اور لیجر راؤنڈ کی عکاسی کرتا ہے۔
 
-## جولة دفتر الأستاذ
+## لیجر ٹور
 
-- موّل Alice بالأصل المستهدف مسبقا (على سبيل المثال عبر المقتطف `register and mint` أو تدفقات البدء السريع للـ SDK).
-- نفّذ نقطة الدخول `do_transfer` لنقل 10 وحدات من Alice إلى Bob مع استيفاء إذن `AssetTransferRole`.
-- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
+- پہلے ہی ہدف اثاثہ کے ساتھ ایلس کو فنڈ (جیسے اسنیپیٹ `register and mint` یا SDK کوئیک اسٹارٹ فلو کے ذریعے)۔
+- انٹری پوائنٹ `do_transfer` پر عمل کریں `AssetTransferRole` مطمئن کے ساتھ ایلس سے باب میں 10 یونٹ منتقل کریں۔
+- بیلنس (`FindAccountAssets` ، `iroha_cli ledger assets list`) کے بارے میں پوچھ گچھ کریں یا منتقلی کے نتائج کو دیکھنے کے لئے پائپ لائن واقعات کو سبسکرائب کریں۔
 
-## أدلة SDK ذات صلة
+## متعلقہ SDK گائیڈز
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر SDK کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/transfer-asset.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

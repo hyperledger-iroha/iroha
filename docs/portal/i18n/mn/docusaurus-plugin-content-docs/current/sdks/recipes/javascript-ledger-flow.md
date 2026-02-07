@@ -7,20 +7,22 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript ledger flow recipe
 description: Register an asset, mint, transfer, and query balances with `@iroha2/torii-client`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-г '@site/src/components/SampleDownload'-аас импортлох;
 
-This recipe uses the Node.js `@iroha2/torii-client` and
-`@iroha2/crypto-target-node` packages to reproduce the CLI ledger walkthrough.
+Энэхүү жор нь Node.js `@iroha2/torii-client` болон
+`@iroha2/crypto-target-node` багцууд нь CLI дэвтэрийн зааварчилгааг хуулбарлах боломжтой.
 
-<SampleDownload
+<Жишээ татаж авах
   href="/sdk-recipes/javascript/ledger-flow.mjs"
-  filename="ledger-flow.mjs"
-  description="Download the exact JavaScript script used in this ledger walkthrough."
+  файлын нэр = "ledger-flow.mjs"
+  description="Энэ дэвтэрт ашигласан яг JavaScript скриптийг татаж аваарай."
 />
 
-## Prerequisites
+## Урьдчилсан нөхцөл
 
 ```bash
 npm install @iroha2/torii-client @iroha2/crypto-target-node
@@ -29,7 +31,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## Жишээ скрипт
 
 ```ts title="ledger-flow.mjs"
 import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
@@ -72,12 +74,12 @@ for (const asset of balances.items) {
 }
 ```
 
-Run with `node --env-file=.env ledger-flow.mjs` (or export the environment
-variables manually). The log should show the transaction hash (from the receipt
-payload) and the updated receiver balance.
+`node --env-file=.env ledger-flow.mjs` ашиглан ажиллуул (эсвэл орчныг экспортлох
+хувьсагчдыг гараар). Бүртгэлд гүйлгээний хэшийг харуулах ёстой (баримтаас
+ачаалал) болон шинэчлэгдсэн хүлээн авагчийн үлдэгдэл.
 
-## Verify parity
+## Паритетийг баталгаажуулна уу
 
-- Fetch the transaction details via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Cross-check balances with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Compare the emitted hash with the Rust and Python recipes to ensure SDK parity.
+- `iroha --config defaults/client.toml transaction get --hash <hash>`-ээр дамжуулан гүйлгээний дэлгэрэнгүй мэдээллийг авна уу.
+- Үлдэгдлийг `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` ашиглан шалгана уу.
+- SDK паритыг баталгаажуулахын тулд ялгарсан хэшийг Rust болон Python жортой харьцуул.

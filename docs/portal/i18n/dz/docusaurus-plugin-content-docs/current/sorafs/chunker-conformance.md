@@ -8,53 +8,55 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Conformance Guide
 sidebar_label: Chunker Conformance
 description: Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-This guide codifies the requirements every implementation must follow to stay
-aligned with the SoraFS deterministic chunker profile (SF1). It also
-documents the regeneration workflow, signing policy, and verification steps so
-fixture consumers across SDKs remain in sync.
+ལམ་སྟོན་འདི་གིས་ ལག་ལེན་རེ་རེ་གིས་ རྗེས་སུ་འཇུག་དགོ་པའི་ དགོས་མཁོ་ཚུ་ ཆ་འཇོག་འབདཝ་ཨིན།
+SoraFS གཏན་འབེབས་ཅན་གྱི་ཆར་ཀར་གསལ་སྡུད་ (SF1) དང་མཉམ་དུ་ཕྱོགས་སྒྲིག་འབད་ཡོདཔ། འདི་ཡང་
+བསྐྱར་འབྱུང་ལཱ་གི་རྒྱུན་རིམ་དང་ མཚན་རྟགས་སྲིད་བྱུས་ དེ་ལས་ བདེན་དཔྱད་ཀྱི་གོ་རིམ་ཚུ་ ཡིག་ཆ་བཟོཝ་ཨིན།
+ཨེསི་ཌི་ཀེ་ཚུ་ནང་ལུ་ ཉོ་སྤྱོད་འབད་མི་ཚུ་ མཉམ་འབྱུང་སྦེ་ལུསཔ་ཨིན།
 
-## Canonical Profile
+## དཀར་ཆག་གསལ་སྡུད།
 
-- Profile handle: `sorafs.sf1@1.0.0`
-- Input seed (hex): `0000000000dec0ded`
-- Target size: 262 144 bytes (256 KiB)
-- Minimum size: 65 536 bytes (64 KiB)
-- Maximum size: 524 288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Gear table seed: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- གསལ་སྡུད་ཀྱི་ལག་ལེན: `sorafs.sf1@1.0.0`
+- ཨིན་པུཊི་སོན་ (ཧེགསི་): I18NI0000004X
+- དམིགས་གཏད་ཀྱི་ཚད་: བཱའིཊི་༢༦༢༡༤༤ (༢༥༦ཀི་བི་)
+- ཉུང་མཐའ་ཚད་: བཱའིཊི་༦༥༥༣༦ (༦༤ཀིབི་)
+- མཐོ་ཤོས་ཚད་: བཱའིཊི་༥༢༤༢༨༨ (༥༡༢KiB)
+- བཤུད་བརྙན་པོ་ལི་ནོ་མིའལ་: I18NI0000005X
+- གི་ཡར་ཐིག་ཁྲམ་སོན་: I18NI0000006X
+- ཁ་རས་: I18NI000000007X
 
-Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Any SIMD acceleration must produce identical boundaries and digests.
+གཞི་བསྟུན་ལག་ལེན།: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+SIMD མགྱོགས་ཚད་གང་རུང་གིས་ གཅིག་མཚུངས་ཀྱི་མཚམས་བཏོན་དགོཔ་དང་ བཞུ་དགོཔ་ཨིན།
 
-## Fixture Bundle
+## བཅོ་རམ།
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenerates the
-fixtures and emits the following files under `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` བསྐྱར་བཟོ་འབདཝ་ཨིན།
+བདེ་སྒྲིག་དང་ འོག་གི་ཡིག་སྣོད་ཚུ་ I18NI000000010X གི་འོག་ལུ་ཡོདཔ་ཨིན།
 
-- `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
-  TypeScript, and Go consumers. Each file advertises the canonical handle as the
-  first (and only) entry in `profile_aliases`. The ordering is enforced by
-  `ensure_charter_compliance` and MUST NOT be altered.
-- `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
-- `manifest_signatures.json` — Council signatures (Ed25519) over the manifest
-  digest.
-- `sf1_profile_v1_backpressure.json` and raw corpora inside `fuzz/` —
-  deterministic streaming scenarios used by chunker back-pressure tests.
+- I18NI000000011X — རཱསི་གི་དོན་ལུ་ ཀེ་ནོ་ནིག་ཆ་ཤས་མཚམས་ཐིག་ཚུ།
+  TypeScript, དང་ Go ཉེར་སྤྱོད་ཚུ། ཡིག་སྣོད་རེ་རེ་གིས་ ཀེ་ནོ་ནིག་གི་བཤེད་བཟུང་འདི་ བཟུམ་སྦེ་ ཁྱབ་བསྒྲགས་འབདཝ་ཨིན།
+  དང་པོ་(དང་རྐྱངམ་ཅིག་) I18NI0000012X ནང་ལུ་འཛུལ་ཞུགས་འབད་ཡོདཔ། གོ་རིམ་འདི་ གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན།
+  I18NI000000013X དང་བསྒྱུར་བཅོས་མི་བྱེད།
+- I18NI000000014X — BLAKE3-བདེན་དཔྱད་འབད་ཡོད་པའི་ གསལ་སྟོན་ཡིག་སྣོད་ག་ར་ཁྱབ་པའི་ བདེ་སྒྲིག་ཡིག་སྣོད་ག་ར་ལུ།
+- `manifest_signatures.json` — ཚོགས་སྡེའི་མིང་རྟགས་ (Ed25519) གསལ་སྟོན་ཐོག་ལུ།
+  འཇའ་ཚོན།
+- I18NI000000016X དང་ `fuzz/` ནང་དུ་ ཀོར་པོ་ར་ —
+  ཆར་རྒྱབ་ཀྱི་གནོན་ཤུགས་བརྟག་དཔྱད་ཀྱིས་ལག་ལེན་འཐབ་མི་ གཏན་འབེབས་བརྡ་འཕྲིན་གནས་སྟངས་ཚུ་ཨིན།
 
-### Signing Policy
+### མཚན་རྟགས་སྲིད་བྱུས།
 
-Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+བདེ་སྒྲིག་བསྐྱར་གསོ་ **must** ནང་ ཚོགས་སྡེའི་མིང་རྟགས་ནུས་ཅན་ཚུ་ཚུདཔ་ཨིན། གློག་ཤུགས་འཕྲུལ་ཆས་འདི།
+I18NI0000018X འདི་ གསལ་ཏོག་ཏོ་སྦེ་ ཆ་འཇོག་འབད་མ་ཚུགས་ཚུན་ཚོད་ མཚན་རྟགས་མ་བཀོད་པའི་ཐོན་འབྲས་འདི་ ངོས་ལེན་འབདཝ་ཨིན།
+ས་གནས་ཀྱི་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་རྐྱངམ་ཅིག་)། མཚན་རྟགས་ཀྱི་ཡིག་ཤུབས་ཚུ་ ཟུར་དེབ་རྐྱངམ་གཅིག་དང་།
+མཚན་རྟགས་བཀོད་མི་རེ་ལུ་ གླེན་པ།
 
-To add a council signature:
+ཚོགས་སྡེའི་མིང་རྟགས་བསྣན་ནི།
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -62,33 +64,33 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verification
+## བདེན་དཔྱད་འབད་ནི།
 
-The CI helper `ci/check_sorafs_fixtures.sh` replays the generator with
-`--locked`. If fixtures drift or signatures are missing, the job fails. Use
-this script in nightly workflows and before submitting fixture changes.
+སི་ཨའི་གྲོགས་རམ་པ་ I18NI000000019X གིས་ གློག་ཤུགས་འཕྲུལ་ཆས་དང་གཅིག་ཁར་ བསྐྱར་རྩེད་འབདཝ་ཨིན།
+`--locked`. གལ་སྲིད་ སྒྲིག་ཆས་ཚུ་ གཡོ་འགུལ་ཡང་ན་ མཚན་རྟགས་ཚུ་མེད་པ་ཅིན་ ལཱ་འདི་འཐུས་ཤོར་འབྱུང་འོང་། ལག་ལེན་འཐབ་ནི
+མཚན་མོའི་ལཱ་གི་རྒྱུན་རིམ་ནང་ ཡིག་གཟུགས་འདི་དང་ གཏན་འཇགས་བསྒྱུར་བཅོས་ཚུ་ མ་བཙུགས་པའི་ཧེ་མ།
 
-Manual verification steps:
+ལག་དེབ་བདེན་དཔྱད་ཀྱི་གོ་རིམ་:
 
-1. Run `cargo test -p sorafs_chunker`.
-2. Invoke `ci/check_sorafs_fixtures.sh` locally.
-3. Confirm `git status -- fixtures/sorafs_chunker` is clean.
+1. `cargo test -p sorafs_chunker` རྒྱུགས།
+2. ས་གནས་ནང་ I18NI0000022X ལུ་འཛིན་བཟུང་འབད།
+3. `git status -- fixtures/sorafs_chunker` གཙང་མ་ཡིན།
 
-## Upgrade Playbook
+## ཡར་འཕེལ་གྱི་རྩེད་དེབ་།
 
-When proposing a new chunker profile or updating SF1:
+ཅར་ཀར་གསལ་སྡུད་གསརཔ་ཅིག་ གྲོས་འཆར་བཀོད་པའི་སྐབས་ ཡང་ན་ ཨེསི་ཨེཕ་༡ དུས་མཐུན་བཟོ་བའི་སྐབས།
 
-See also: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) for
-metadata requirements, proposal templates, and validation checklists.
+ད་དུང་: [I18NI0000024X](./chunker-profile-authoring.md) གི་དོན་ལུ་ཨིན།
+མེ་ཊ་ཌེ་ཊ་ དགོས་མཁོ་དང་ གྲོས་འཆར་ཊེམ་པེལེཊི་ དེ་ལས་ བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་ཚུ།
 
-1. Draft a `ChunkProfileUpgradeProposalV1` (see RFC SF‑1) with new parameters.
-2. Regenerate fixtures via `export_vectors` and record the new manifest digest.
-3. Sign the manifest with the required council quorum. All signatures must be
-   appended to `manifest_signatures.json`.
-4. Update affected SDK fixtures (Rust/Go/TS) and ensure cross-runtime parity.
-5. Regenerate fuzz corpora if parameters change.
-6. Update this guide with the new profile handle, seeds, and digest.
-7. Submit the change alongside updated tests and roadmap updates.
+1. ཚད་བཟུང་གསརཔ་ཚུ་དང་གཅིག་ཁར་ `ChunkProfileUpgradeProposalV1` (RFC SF‐1 ལུ་བལྟ།) ཅིག་བྲིས།
+༢ I18NI000000026X བརྒྱུད་དེ་ སྒྲིག་ཆས་ཚུ་ ལོག་བཟོ་ཞིནམ་ལས་ གསལ་སྟོན་གསརཔ་ བཞུ་བཅོས་འདི་ ཐོ་བཀོད་འབད།
+༣ དགོས་མཁོའི་ཚོགས་སྡེའི་ བསྡོམས་རྩིས་ཐོག་ལས་ གསལ་སྟོན་ལུ་ མཚན་རྟགས་བཀོད་དགོ། མཚན་རྟགས་ཆ་མཉམ་དགོ
+   `manifest_signatures.json` ལུ་ མཐུད་ཡོདཔ་ཨིན།
+༤ གནོད་སྐྱོན་བྱུང་མི་ SDK གི་སྒྲིག་ཆས་ (Rust/Go/TS) དུས་མཐུན་བཟོ་ཞིནམ་ལས་ ཕར་ཚུར་གྱི་ ཆ་སྙོམས་ངེས་གཏན་བཟོ།
+༥ ཚད་གཞི་ཚུ་འགྱུར་བཅོས་འགྱོ་བ་ཅིན་ fuzz corpora བསྐྱར་བཟོ་འབད།
+༦ ལམ་སྟོན་འདི་ གསལ་སྡུད་ལག་ལེན་གསརཔ་དང་ སོན་དང་ ཟས་བཅུད་ཚུ་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་དགོ།
+༧ དུས་མཐུན་བཟོ་ཡོད་པའི་བརྟག་དཔྱད་དང་ ལམ་སྟོན་དུས་མཐུན་ཚུ་དང་གཅིག་ཁར་ བསྒྱུར་བཅོས་འདི་ ཕུལ་དགོ།
 
-Changes that affect chunk boundaries or digests without following this process
-are invalid and must not be merged.
+ཅནཀ་མཚམས་ལུ་གནོད་པ་ཡོད་པའི་བསྒྱུར་བཅོས་ཚུ་ཡང་ན་བྱ་རིམ་འདི་ལུ་མ་གནས་པར་ བཞུ་ནི་ཚུ་ཨིན།
+ནུས་མེད་ཨིནམ་ལས་ མཉམ་བསྡོམས་འབད་མི་བཏུབ།

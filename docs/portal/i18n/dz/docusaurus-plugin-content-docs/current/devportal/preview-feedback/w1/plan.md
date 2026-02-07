@@ -8,62 +8,64 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner preflight plan
 sidebar_label: W1 plan
 description: Tasks, owners, and evidence checklist for the partner preview cohort.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| རྣམ་གྲངས་ | ཁ་གསལ་ |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Target window | Q2 2025 week 3 |
-| Artefact tag (planned) | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
+| རླབས་ | W1 — མཉམ་འབྲེལ་པ་ & Torii མཉམ་བསྡོམས་པ་ |
+| དམིགས་གཏད་སྒོ་སྒྲིག་ | Q2 ༢༠༢༥ བདུན་ཕྲག་ ༣ |
+| ཅ་རྙིང་ངོ་རྟགས། (འཆར་གཞི་བཟོ་ཡོདཔ་) | `preview-2025-04-12` |
+| བརྟག་ཞིབ་ཀྱི་གནད་དོན་ | `DOCS-SORA-Preview-W1` |
 
-## Objectives
+## དམིགས་ཡུལ།
 
-1. Secure legal + governance approvals for partner preview terms.
-2. Stage the Try it proxy and telemetry snapshots used in the invite bundle.
-3. Refresh the checksum-verified preview artefact and probe results.
-4. Finalise the partner roster + request templates before invites are sent.
+༡ མཉམ་འབྲེལ་པ་སྔོན་ལྟའི་གནས་ཚིག་ཚུ་གི་དོན་ལུ་ ཁྲིམས་དོན་+ གཞུང་སྐྱོང་གནང་བ་ཚུ་ བརྟན་ཏོག་ཏོ་བཟོ་ནི།
+༢ འབོད་བརྡ་ནང་ལུ་ལག་ལེན་འཐབ་མི་ ངོ་ཚབ་དང་ བརྡ་འཕྲིན་ཚུ་ འབད་རྩོལ་བསྐྱེད།
+༣ ཅེག་སམ་བདེན་དཔྱད་འབད་ཡོད་པའི་ སྔོན་ལྟ་གི་ཅ་ཆས་ཚུ་དང་ འཚོལ་ཞིབ་གྲུབ་འབྲས་ཚུ་ གསར་བསྐྲུན་འབད།
+༤ མགྲོན་བརྡ་ཚུ་མ་གཏང་པའི་ཧེ་མ་ མཉམ་འབྲེལ་ཐོར་ + ཞུ་བ་ཊེམ་པེལེཊི་ཚུ་ མཇུག་བསྡུ།
 
-## Task breakdown
+## ལས་ཀའི་ཆད་པ།
 
-| ID | Task | Owner | Due | Status | Notes |
+| ID | ལས་ཀ་ | ཇོ་བདག་ | འདི་ | གནས་ཚད་ | དྲན་ཐོ། |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtain legal approval for the preview terms addendum | Docs/DevRel lead → Legal | 2025‑04‑05 | ✅ Completed | Legal ticket `DOCS-SORA-Preview-W1-Legal` signed off 2025‑04‑05; PDF attached to the tracker. |
-| W1-P2 | Capture Try it proxy staging window (2025‑04‑10) and validate proxy health | Docs/DevRel + Ops | 2025‑04‑06 | ✅ Completed | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` executed 2025‑04‑06; CLI transcript + `.env.tryit-proxy.bak` archived. |
-| W1-P3 | Build preview artefact (`preview-2025-04-12`), run `scripts/preview_verify.sh` + `npm run probe:portal`, archive descriptor/checksums | Portal TL | 2025‑04‑08 | ✅ Completed | Artefact + verification logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`; probe output attached to tracker. |
-| W1-P4 | Review partner intake forms (`DOCS-SORA-Preview-REQ-P01…P08`), confirm contacts + NDAs | Governance liaison | 2025‑04‑07 | ✅ Completed | All eight requests approved (last two cleared 2025‑04‑11); approvals linked in tracker. |
-| W1-P5 | Draft invite copy (based on `docs/examples/docs_preview_invite_template.md`), set `<preview_tag>` and `<request_ticket>` for each partner | Docs/DevRel lead | 2025‑04‑08 | ✅ Completed | Invite draft sent 2025‑04‑12 15:00 UTC alongside artefact links. |
+| W1-P1 | སྔོན་ལྟའི་ཐ་སྙད་ཁ་སྐོང་དོན་ལུ་ ཁྲིམས་མཐུན་གྱི་ཆ་འཇོག་ཐོབ་ནི། Docs/DevRel led → ཁྲིམས་མཐུན་ | ༢༠༢༥‐༠༤‐༠༥ | ✅ མཇུག་བསྡུ་ | ཁྲིམས་དོན་གྱི་ཤོག་འཛིན་ `DOCS-SORA-Preview-W1-Legal` གིས་ ༢༠༢༥‐༠༤‐༠༥ མཚན་རྟགས་བཀོད་ཡོད། PDF འཚོལ་ཞིབ་པ་ལུ་མཉམ་སྦྲགས་འབད་ཡོདཔ་ཨིན། |
+| W1-P2 | བཀག་འཛིན་འབད་ནི། ངོ་ཚབ་གནས་རིམ་གྱི་སྒོ་སྒྲིག་ (༢༠༢༥‐༠༤‐༡༠) དང་ ངོ་ཚབ་གསོ་བའི་བདེན་དཔྱད་འབད་བལྟ། | ཡིག་ཆ་/ཌི་ཝི་རེལ་ + Ops | ༢༠༢༥‐༠༤‐༠༦ | ✅ མཇུག་བསྡུ་ | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` བཀོལ་སྤྱོད་བྱས་པའི་ ༢༠༢༥‐༠༤‐༠༦; CLI ཡིག་ཆ་ + `.env.tryit-proxy.bak` གཏན་མཛོད་བྱས། |
+| W1-P3 | སྔོན་ལྟའི་ཅ་མཛོད་ (I18NI0000020X), `scripts/preview_verify.sh` + `npm run probe:portal`, ཡིག་མཛོད་འགྲེལ་བཤད་/ཞིབ་དཔྱད་སམ་ | Portal TL | ༢༠༢༥‐༠༤‐༠༨ | ✅ མཇུག་བསྡུ་ | ཅ་རྙིང་ + `artifacts/docs_preview/W1/preview-2025-04-12/` འོག་ལུ་གསོག་འཇོག་འབད་ཡོད་པའི་བདེན་དཔྱད་དྲན་ཐོ་ཚུ། འཚོལ་ཞིབ་པ་ལུ་མཉམ་སྦྲགས་འབད་ཡོད་པའི་འཚོལ་ཞིབ་ཨའུཊི་པུ། |
+| W1-P4 | བསྐྱར་ཞིབ་མཉམ་འབྲེལ་པ་ འབྲི་ཤོག་ (`DOCS-SORA-Preview-REQ-P01…P08`), འབྲེལ་འཐུད་ངེས་གཏན་ + NDAs | གཞུང་སྐྱོང་འབྲེལ་གནས། | ༢༠༢༥‐༠༤‐༠༧ | ✅ མཇུག་བསྡུ་ | ཞུ་བ་བརྒྱད་ཆ་ར་ཆ་འཇོག་འབད་ཡོདཔ་ཨིན་ (མཇུག་གཉིས་ ༢༠༢༥-༠༤‐༡༡) བསལ་ཡོདཔ།); ཆ་འཇོག་ཚུ་ བརྟག་ཞིབ་པ་ནང་ འབྲེལ་མཐུད་འབད་ཡོདཔ་ཨིན། |
+| W1-P5 | འདྲེན་བཀོལ་འདྲ་བཤུས་ (I18NI0000025X ལུ་གཞི་བཞག་སྟེ་) `<preview_tag>` དང་ I18NI000000027X འདི་ མཉམ་འབྲེལ་པ་རེ་རེ་ལུ་ གཞི་སྒྲིག་འབད། | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ༢༠༢༥‐༠༤‐༠༨ | ✅ མཇུག་བསྡུ་ | མགྲོན་བརྡ་ཟིན་བྲིས་ 2025‐04‐12 15:00UTC དང་མཉམ་པའི་ ཅ་རྙིང་གི་འབྲེལ་མཐུད་ཚུ་ མཉམ་སྦྲགས་འབད་ཡོདཔ། |
 
-## Preflight checklist
+## སྔོན་མའི་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-> Tip: run `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` to execute steps 1‑5 automatically (build, checksum verification, portal probe, link checker, and Try it proxy update). The script records a JSON log you can attach to the tracker issue.
+> བསླབ་བྱ་: `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` གིས་ རིམ་པ་ ༡‐༥ རང་བཞིན་གྱིས་ རང་བཞིན་གྱིས་ ལག་ལེན་འཐབ་ནི་ལུ་ གཡོག་བཀོལ། ཡིག་ཚུགས་འདི་གིས་ JSON དྲན་ཐོ་ཅིག་ ཐོ་བཀོད་འབདཝ་ཨིན་ ཁྱོད་ཀྱིས་ བརྟག་ཞིབ་པ་གི་གནད་དོན་ལུ་ མཉམ་སྦྲགས་འབད་ཚུགས།
 
-1. `npm run build` (with `DOCS_RELEASE_TAG=preview-2025-04-12`) to regenerate `build/checksums.sha256` and `build/release.json`.
+1. I18NI000000029X (I18NI000000030X དང་བཅས་) I18NI000000031X དང་ I18NI000000032X བསྐྱར་བཟོ་འབད་ནིའི་དོན་ལུ་ཨིན།
 2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` and archive `build/link-report.json` beside the descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (or provide the appropriate target via `--tryit-target`); commit the updated `.env.tryit-proxy` and keep the `.bak` for rollback.
-6. Update the W1 tracker issue with log paths (descriptor checksum, probe output, Try it proxy change, Grafana snapshots).
+4. འགྲེལ་བཤད་ཀྱི་བོ་ལོག་ཁར་ `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` དང་ཡིག་མཛོད་ `build/link-report.json` དང་།
+༥ `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ཡང་ན་ `--tryit-target` བརྒྱུད་དེ་ འོས་འབབ་ཅན་གྱི་དམིགས་ཚད་བྱིན།); དུས་མཐུན་བཟོ་ཡོད་པའི་ `.env.tryit-proxy` འདི་བཀག་ཆ་འབད་ཞིནམ་ལས་ ལོག་བསྐོར་ནིའི་དོན་ལུ་ `.bak` འདི་བཞག།
+༦ དྲན་ཐོ་འགྲུལ་ལམ་ཚུ་དང་གཅིག་ཁར་ W1 འཚོལ་ཞིབ་ཀྱི་གནད་དོན་དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན་ (འགྲེལ་བཤད་པ་ཞིབ་དཔྱད་སམ་ འཚོལ་ཞིབ་ཨའུཊི་པུཊི་ པོརོག་སི་བསྒྱུར་བཅོས་འབད་རྩོལ་བསྐྱེད།, I18NT000000000X པར་ལེན་ཚུ།)
 
-## Evidence checklist
+## བདེན་དཔང་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-- [x] Signed legal approval (PDF or ticket link) attached to `DOCS-SORA-Preview-W1`.
-- [x] Grafana screenshots for `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] `preview-2025-04-12` descriptor + checksum log stored under `artifacts/docs_preview/W1/`.
-- [x] Invite roster table with `invite_sent_at` timestamps populated (see tracker W1 log).
-- [x] Feedback artifacts mirrored in [`preview-feedback/w1/log.md`](./log.md) with one row per partner (updated 2025-04-26 with roster/telemetry/issue data).
+- [x] མཚན་རྟགས་ཁྲིམས་མཐུན་ཆ་འཇོག་ (PDF ཡང་ན་ ཤོག་འཛིན་འབྲེལ་མཐུད་) དང་ `DOCS-SORA-Preview-W1` མཉམ་སྦྲགས་འབད་ཡོདཔ།
+- [x] Grafana གིས་ `docs.preview.integrity`, I18NI000000043X, `DocsPortal/GatewayRefusals`.
+- [x] `preview-2025-04-12` འགྲེལ་བཤད་ + ཅེག་སམ་དྲན་ཐོ་ `artifacts/docs_preview/W1/` འོག་ལུ་གསོག་འཇོག་འབད་ཡོད་པའི་དྲན་ཐོ་།
+- [x] I18NI0000004X དུས་ཚོད་མཚོན་རྟགས་ཚུ་དང་གཅིག་ཁར་ མགྲོན་བརྡ་འབད་ (འཚོལ་ཞིབ་པ་ W1 དྲན་ཐོ་བལྟ།)།
+- [x] བསམ་འཆར། བསམ་ཚུལ་ཚུ་ [I18NI0000004X](I18NU0000000007X) ནང་ མཉམ་འབྲེལ་པ་རེ་ལུ་ གྲལ་ཐིག་གཅིག་ (Roster/teleme/issu data) དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
 
-Update this plan as tasks progress; the tracker references it to keep the roadmap
-auditable.
+ལས་འགན་ཚུ་ཡར་རྒྱས་འགྱོ་བའི་བསྒང་ལས་ འཆར་གཞི་འདི་དུས་མཐུན་བཟོ། ལམ་སྟོན་པ་འདི་གིས་ ལམ་སྟོན་བཞག་ནིའི་དོན་ལུ་ གཞི་བསྟུན་འབདཝ་ཨིན།
+རྩིས་ཞིབ་འབད་ནི།
 
-## Feedback workflow
+## བསམ་འཆར།
 
-1. For each reviewer, duplicate the template in
-   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   fill the metadata, and store the completed copy under
+1. བསྐྱར་ཞིབ་པ་རེ་རེའི་དོན་ལུ་ ༢༠༠༨ ལུ་ ཊེམ་པེལེཊི་འདྲ་བཤུས་རྐྱབས།
+   [I18NI0000049X](I18NU0000008X), .
+   མེ་ཊ་ཌེ་ཊ་བཀང་ཞིནམ་ལས་ མཇུག་བསྡུ་ཡོད་པའི་འདྲ་བཤུས་འདི་ འོག་ལུ་གསོག་འཇོག་འབད།
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Summarise invites, telemetry checkpoints, and open issues inside the live log at
-   [`preview-feedback/w1/log.md`](./log.md) so governance reviewers can replay the entire wave
-   without leaving the repository.
-3. When knowledge-check or survey exports arrive, attach them in the artefact path noted in the log
-   and cross-link the tracker issue.
+༢ མགྲོན་བརྡ་དང་ ཊེ་ལི་མི་ཊི་ཞིབ་དཔྱད་ས་ཚིགས་ དེ་ལས་ ཐད་འཕྲོད་དྲན་ཐོ་ནང་ དངོས་མཐོང་དྲན་ཐོ་ནང་ གནད་དོན་ཚུ་ ཁ་ཕྱེ་དགོ།
+   [I18NI000000051X](./log.md) དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ རླབས་ཆ་མཉམ་ལོག་སྟེ་རྩེད་ཚུགས།
+   མཛོད་ཁང་ལས་མ་ཐོན་པར་།
+༣ ཤེས་ཡོན་ཞིབ་དཔྱད་ཡང་ན་ བརྟག་ཞིབ་ཕྱིར་ཚོང་འཐབ་པའི་སྐབས་ དྲན་དེབ་ནང་བཀོད་ཡོད་པའི་ དངོས་ཅན་གྱི་ལམ་ལུགས་ནང་ མཉམ་སྦྲགས་འབད།
+   དང་ ཊེག་ཊར་གྱི་གནད་དོན་ ཕར་ཚུར་འབྲེལ་མཐུད་འབད་ནི།

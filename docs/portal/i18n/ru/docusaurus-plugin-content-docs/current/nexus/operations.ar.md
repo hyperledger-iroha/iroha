@@ -4,70 +4,69 @@ direction: ltr
 source: docs/portal/docs/nexus/operations.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operations
-title: دليل تشغيل Nexus
-description: ملخص عملي لخطوات تشغيل مشغل Nexus، يعكس `docs/source/nexus_operations.md`.
+идентификатор: нексус-операции
+Название: دليل تشغيل Nexus
+описание: ملخص عملي لخطوات تشغيل مشغل Nexus, يعكس `docs/source/nexus_operations.md`.
 ---
 
-استخدم هذه الصفحة كمرجع سريع موازي لـ `docs/source/nexus_operations.md`. فهي تلخص قائمة التشغيل، ونقاط إدارة التغيير، ومتطلبات تغطية القياس التي يجب على مشغلي Nexus اتباعها.
+Он был установлен на `docs/source/nexus_operations.md`. В 1990-х годах в Нью-Йорке, в Нью-Йорке, в Нью-Йорке, в Нью-Йорке, США Это сообщение Nexus اتباعها.
 
 ## قائمة دورة الحياة
 
-| المرحلة | الإجراءات | الأدلة |
+| عرحلة | إجراءات | أدلة |
 |-------|--------|----------|
-| ما قبل الإقلاع | تحقق من بصمات/تواقيع الإصدار، أكد `profile = "iroha3"`، وجهز قوالب الإعداد. | مخرجات `scripts/select_release_profile.py`، سجل checksum، حزمة بيانات موقعة. |
-| مواءمة الكتالوج | حدّث كتالوج `[nexus]`، سياسة التوجيه، وعتبات DA وفق بيان المجلس، ثم التقط `--trace-config`. | مخرجات `irohad --sora --config ... --trace-config` محفوظة مع تذكرة onboarding. |
-| فحص الدخان والتحويل | شغّل `irohad --sora --config ... --trace-config`، نفّذ فحص الدخان في CLI (`FindNetworkStatus`)، تحقق من صادرات القياس واطلب القبول. | سجل فحص الدخان + تأكيد Alertmanager. |
-| حالة مستقرة | راقب لوحات/تنبيهات، دوّر المفاتيح حسب وتيرة الحوكمة، وحدث configs/runbooks عند تغير البيانات. | محاضر مراجعة ربع سنوية، لقطات لوحات، أرقام تذاكر التدوير. |
+| ما قبل الإقلاع | Он был создан в بصمات/تواقيع الإصدار, أكد `profile = "iroha3"`, и был отправлен в продажу. | Введите `scripts/select_release_profile.py`, проверьте контрольную сумму, установите флажок. |
+| Новости | Он был создан `[nexus]`, в Стокгольме и DA в Нью-Йорке. `--trace-config`. | Код `irohad --sora --config ... --trace-config` был введен для регистрации. |
+| فحص الدخان والتحويل | Выполняется `irohad --sora --config ... --trace-config`, выполняется настройка CLI (`FindNetworkStatus`), а также выполняется настройка интерфейса командной строки. القبول. | Используйте функцию оповещения + Менеджер оповещений. |
+| حالة مستقرة | Он работает в режиме онлайн и работает с configs/runbooks. تغير البيانات. | Он был создан Сэнсэем, Льюисом Лоуренсом и его коллегой по футболу. |
 
-يبقى onboarding التفصيلي (استبدال المفاتيح، قوالب التوجيه، خطوات ملف الإصدار) في `docs/source/sora_nexus_operator_onboarding.md`.
+Он присоединился к самому себе `docs/source/sora_nexus_operator_onboarding.md`.
 
 ## إدارة التغيير
 
-1. **تحديثات الإصدار** - تتبع الإعلانات في `status.md`/`roadmap.md`؛ أرفق قائمة onboarding مع كل PR للإصدار.
-2. **تغييرات بيانات lane** - تحقق من الحزم الموقعة من Space Directory وأرشفها تحت `docs/source/project_tracker/nexus_config_deltas/`.
-3. **تغييرات الإعداد** - كل تغيير في `config/config.toml` يحتاج تذكرة تشير إلى lane/data-space. احفظ نسخة منقحة من الإعداد الفعلي عند انضمام أو ترقية العقد.
-4. **تمارين الرجوع** - درّب ربع سنوي على إجراءات الإيقاف/الاستعادة/فحص الدخان؛ دوّن النتائج تحت `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **موافقات الامتثال** - يجب أن تحصل lanes الخاصة/CBDC على موافقة امتثال قبل تعديل سياسة DA أو مفاتيح تنقيح القياس (انظر `docs/source/cbdc_lane_playbook.md`).
+1. **Проверка** - Проверка работоспособности в `status.md`/`roadmap.md`; Проведите адаптацию в рамках PR-проекта.
+2. **Переулок Переулка** — отображается в каталоге Space Directory в каталоге `docs/source/project_tracker/nexus_config_deltas/`.
+3. **Обратный доступ** — в области `config/config.toml` используется область дорожки/пространства данных. Он был убит в 1990-х годах, когда он был убит.
+4. **Убийство ** - Дэйр Сэнсэй Сэнсэйл / الاستعادة/فحص دخان؛ Был установлен `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
+5. **Миниатюрное соединение** — на линии движения CBDC / CBDC, расположенной в центре города. Он был отправлен DA в 2017 году (18NI00000038X).
 
-## القياس و SLOs
+## القياس и SLO
 
-- اللوحات: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, بالإضافة إلى لوحات خاصة بالـ SDK (مثل `android_operator_console.json`).
-- التنبيهات: `dashboards/alerts/nexus_audit_rules.yml` وقواعد نقل Torii/Norito (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- المقاييس التي يجب مراقبتها:
+- Доступны: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, добавлена версия SDK (например, `android_operator_console.json`).
+- Код: `dashboards/alerts/nexus_audit_rules.yml` вместо Torii/Norito (`dashboards/alerts/torii_norito_rpc_rules.yml`).
+- Сообщение от президента США:
   - `nexus_lane_height{lane_id}` - تنبيه عند عدم التقدم لثلاث خانات.
-  - `nexus_da_backlog_chunks{lane_id}` - تنبيه عند تجاوز العتبات لكل lane (الافتراضي 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` - تنبيه عندما يتجاوز P99 900 ms (public) أو 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` - تنبيه إذا تجاوز معدل الخطأ خلال 5 دقائق 2%.
-  - `telemetry_redaction_override_total` - Sev 2 فوري؛ تأكد من وجود تذاكر امتثال للتجاوزات.
-- نفذ قائمة معالجة القياس في [خطة معالجة قياس Nexus](./nexus-telemetry-remediation) على الأقل فصليا وأرفق النموذج المكتمل بملاحظات مراجعة التشغيل.
+  - `nexus_da_backlog_chunks{lane_id}` - تنبيه عند تجاوز العتبات لكل переулок (64 общедоступных / 8 частных).
+  - `nexus_settlement_latency_seconds{lane_id}` - Время восстановления P99: от 900 мс (общедоступный) до 1200 мс (частный).
+  - `torii_request_failures_total{scheme="norito_rpc"}` - Отображается в режиме 5 дней 2%.
+  - `telemetry_redaction_override_total` - Сев 2. Он был отправлен в Лондон.
+- Для этого необходимо установить [загрузить файл Nexus](./nexus-telemetry-remediation) على الأقل. Он был убит в 2007 году в Нью-Йорке.
 
-## مصفوفة الحوادث
-
-| الشدة | التعريف | الاستجابة |
+## مصفوفة الحوادث| شدة | تعريف | Новости |
 |----------|------------|----------|
-| Sev 1 | خرق عزل data-space، توقف التسوية لأكثر من 15 دقيقة، أو فساد تصويت الحوكمة. | نادِ Nexus Primary + Release Engineering + Compliance، جمّد القبول، اجمع الأدلة، انشر تواصل <=60 دقيقة، RCA <=5 أيام عمل. |
-| Sev 2 | خرق SLA لتراكم lane، نقطة عمياء في القياس >30 دقيقة، فشل rollout للبيانات. | نادِ Nexus Primary + SRE، عالج <=4 ساعات، سجّل المتابعات خلال يومي عمل. |
-| Sev 3 | انحراف غير معطل (docs، تنبيهات). | سجّل في المتتبع، وجدول إصلاح داخل السبرنت. |
+| Сев 1 | Он начал работать с пространством данных, 15 февраля 2018 года, в 15:00 по местному времени. | Nexus Primary + Release Engineering + Compliance, проверка соответствия, проверка соответствия 30 дней, для развертывания в Лос-Анджелесе. | Nexus Primary + SRE, код <=4, который необходимо установить в случае необходимости. |
+| Сев 3 | انحراف غير معطل (документы, تنبيهات). | Скончался в Нью-Йорке и в Вашингтоне. |
 
-يجب أن تسجل تذاكر الحوادث IDs الخاصة بـ lane/data-space المتأثرة، وبصمات البيانات، والخط الزمني، والمقاييس/السجلات الداعمة، ومهام المتابعة والمالكين.
+Доступ к идентификаторам и идентификаторам полосы движения/пространства данных. В 2007 году он был выбран в 2017 году.
 
 ## أرشيف الأدلة
 
 - خزّن الحزم/البيانات/صادرات القياس تحت `artifacts/nexus/<lane>/<date>/`.
-- احتفظ بالتهيئات المنقحة + مخرجات `--trace-config` لكل إصدار.
+- Установите флажок + установите `--trace-config` для проверки.
 - أرفق محاضر المجلس + القرارات الموقعة عند تطبيق تغييرات الإعداد أو البيانات.
-- احتفظ بلقطات Prometheus الأسبوعية ذات الصلة بمقاييس Nexus لمدة 12 شهرا.
-- دوّن تعديلات الدليل في `docs/source/project_tracker/nexus_config_deltas/README.md` حتى يعرف المدققون متى تغيرت المسؤوليات.
+- Установите Prometheus на 12-й день после установки Nexus.
+- Дед Мороз на `docs/source/project_tracker/nexus_config_deltas/README.md` был отправлен в США.
 
 ## مواد ذات صلة
 
-- نظرة عامة: [Nexus overview](./nexus-overview)
-- المواصفة: [Nexus spec](./nexus-spec)
-- هندسة lane: [Nexus lane model](./nexus-lane-model)
-- الانتقال وشيمات التوجيه: [Nexus transition notes](./nexus-transition-notes)
-- onboarding المشغلين: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- معالجة القياس: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- Добавлено: [Nexus обзор](./nexus-overview)
+- Сообщение: [Спецификация Nexus](./nexus-spec)
+- Переулок: [модель полосы Nexus](./nexus-lane-model)
+- Дополнительная информация: [Nexus примечания к переходу](./nexus-transition-notes)
+- подключение оператора: [Sora Nexus подключение оператора](./nexus-operator-onboarding)
+- Сообщение: [Nexus план исправления телеметрии](./nexus-telemetry-remediation)

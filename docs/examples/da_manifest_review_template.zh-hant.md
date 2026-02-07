@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5c959bd6654d095d2b3785a02e9c2ec162e699ad985b342760b952e38766a66
 source_last_modified: "2025-12-29T18:16:35.069812+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Manifest Governance Packet (Template)
+# 數據可用性清單治理數據包（模板）
 
-Use this template when Parliament panels review DA manifests for subsidies,
-takedowns, or retention changes (roadmap DA-10). Copy the Markdown into the
-governance ticket, fill in the placeholders, and attach the completed file
-alongside the signed Norito payloads and CI artefacts referenced below.
+當議會小組審查 DA 補貼清單時使用此模板，
+刪除或保留更改（路線圖 DA-10）。將 Markdown 複製到
+治理票證，填寫佔位符，並附加完整的文件
+以及下面引用的簽名的 Norito 有效負載和 CI 工件。
 
 ```markdown
 ## Manifest Metadata
@@ -73,6 +74,6 @@ alongside the signed Norito payloads and CI artefacts referenced below.
 - [ ] Buffer telemetry snapshot (`iroha_settlement_buffer_xor`)
 ```
 
-Archive every completed packet under the Governance DAG entry for the vote so
-subsequent reviews can reference the manifest digest without repeating the full
-ceremony.【docs/source/governance_playbook.md:24】
+將每個已完成的數據包存檔在治理 DAG 條目下進行投票，以便
+後續評論可以參考清單摘要，而無需重複完整內容
+儀式。 【docs/source/governance_playbook.md:24】

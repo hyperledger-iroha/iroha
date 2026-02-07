@@ -11,64 +11,65 @@ id: reviewer-onboarding
 title: Preview reviewer onboarding
 sidebar_label: Reviewer onboarding
 description: Process and checklists for enrolling reviewers in the docs portal public preview.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## Umumiy ko'rinish
 
-DOCS-SORA tracks a staged launch of the developer portal. Checksum-gated builds
-(`npm run serve`) and hardened Try it flows unblock the next milestone:
-onboarding vetted reviewers before the public preview opens broadly. This guide
-describes how to collect requests, verify eligibility, provision access, and
-offboard participants safely. Refer to the
-[preview invite flow](./preview-invite-flow.md) for cohort planning, invite
-cadence, and telemetry exports; the steps below focus on the actions to take
-once a reviewer has been selected.
+DOCS-SORA dasturchi portalining bosqichma-bosqich ishga tushirilishini kuzatib boradi. Tekshirish summasi bilan himoyalangan tuzilmalar
+(`npm run serve`) va qattiqlashtirilgan. Oqimlarini sinab ko'ring, keyingi bosqichni blokdan chiqaring:
+ommaviy oldindan koʻrish keng ochilishidan oldin tekshirilgan sharhlovchilarni ishga tushirish. Ushbu qo'llanma
+so'rovlarni qanday to'plash, muvofiqligini tekshirish, kirishni ta'minlash va
+ishtirokchilarni xavfsiz tarzda bortdan chiqarib yuborish. ga murojaat qiling
+[takliflar oqimini koʻrib chiqish](./preview-invite-flow.md) kohortni rejalashtirish, taklif qilish uchun
+kadans va telemetriya eksporti; quyidagi qadamlar amalga oshiriladigan harakatlarga qaratilgan
+sharhlovchi tanlanganidan keyin.
 
-- **Scope:** reviewers who need access to the docs preview (`docs-preview.sora`,
-  GitHub Pages builds, or SoraFS bundles) before GA.
-- **Out-of-scope:** Torii or SoraFS operators (covered by their own onboarding
-  kits) and production portal deployments (see
+- **Qoʻl:** hujjatlarni oldindan koʻrishga ruxsati kerak boʻlgan sharhlovchilar (`docs-preview.sora`,
+  GitHub Pages tuzilmalari yoki SoraFS to'plamlari) GA dan oldin.
+- **Qo'llash doirasi tashqarisida:** Torii yoki SoraFS operatorlari (o'z bortiga qo'shiladi)
+  to'plamlar) va ishlab chiqarish portalini joylashtirish (qarang
   [`devportal/deploy-guide`](./deploy-guide.md)).
 
-## Roles & prerequisites
+## Rollar va shartlar
 
-| Role | Typical goals | Required artefacts | Notes |
+| Rol | Odatdagi maqsadlar | Kerakli artefaktlar | Eslatmalar |
 | --- | --- | --- | --- |
-| Core maintainer | Verify new guides, run smoke tests. | GitHub handle, Matrix contact, signed CLA on file. | Usually already in the `docs-preview` GitHub team; still file a request so access is auditable. |
-| Partner reviewer | Validate SDK snippets or governance content before public release. | Corporate email, legal POC, signed preview terms. | Must acknowledge telemetry + data handling requirements. |
-| Community volunteer | Provide usability feedback on guides. | GitHub handle, preferred contact, timezone, acceptance of CoC. | Keep cohorts small; prioritize reviewers who have signed the contributor agreement. |
+| Asosiy saqlovchi | Yangi qo'llanmalarni tekshiring, tutun sinovlarini o'tkazing. | GitHub tutqichi, Matritsa kontakti, faylda imzolangan CLA. | Odatda allaqachon `docs-preview` GitHub jamoasida; hali ham so'rov yuboring, shuning uchun kirish tekshirilishi mumkin. |
+| Hamkor sharhlovchi | Ommaga chiqarishdan oldin SDK snippetlari yoki boshqaruv tarkibini tasdiqlang. | Korporativ elektron pochta, qonuniy POC, imzolangan oldindan ko'rish shartlari. | Telemetriya + ma'lumotlarni qayta ishlash talablarini tan olishi kerak. |
+| Jamoa ko'ngillisi | Qo'llanmalar haqida fikr-mulohaza bildiring. | GitHub tutqichi, afzal qilingan kontakt, vaqt mintaqasi, CoC qabul qilinishi. | Kogortalarni kichik tuting; hissa qo'shish shartnomasini imzolagan sharhlovchilarga ustunlik bering. |
 
-All reviewer types must:
+Barcha sharhlovchi turlari quyidagilarga ega bo'lishi kerak:
 
-1. Acknowledge the acceptable-use policy for preview artefacts.
-2. Read the security/observability appendices
+1. Artefaktlarni oldindan koʻrish uchun maqbul foydalanish siyosatini tan oling.
+2. Xavfsizlik/kuzatish mumkin bo'lgan ilovalarni o'qing
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md)).
-3. Agree to run `docs/portal/scripts/preview_verify.sh` before serving any
-   snapshot locally.
+3. Har qanday xizmat ko'rsatishdan oldin `docs/portal/scripts/preview_verify.sh` ni ishga tushirishga rozilik bildiring
+   mahalliy surat.
 
-## Intake workflow
+## Ish jarayonini qabul qilish
 
-1. Ask the requester to fill out the
+1. So'rovchidan to'ldirishni so'rang
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   form (or copy/paste it into an issue). Capture at least: identity, contact
-   method, GitHub handle, intended review dates, and confirmation that the
-   security docs were read.
-2. Record the request in the `docs-preview` tracker (GitHub issue or governance
-   ticket) and assign an approver.
-3. Validate prerequisites:
-   - CLA / contributor agreement on file (or partner contract reference).
-   - Acceptable-use acknowledgement stored in the request.
-   - Risk assessment complete (for example, partner reviewers approved by Legal).
-4. Approver signs off in the request and links the tracking issue to any
-   change-management entry (example: `DOCS-SORA-Preview-####`).
+   shakl (yoki uni biror masalaga nusxalash/joylashtirish). Hech bo'lmaganda suratga oling: shaxs, aloqa
+   usuli, GitHub tutqichi, ko'rib chiqish uchun mo'ljallangan sanalar va tasdiqlash
+   xavfsizlik hujjatlari o'qildi.
+2. So‘rovni `docs-preview` trekeriga yozib oling (GitHub muammosi yoki boshqaruvi
+   chipta) va tasdiqlovchini tayinlang.
+3. Old shartlarni tasdiqlang:
+   - Fayl bo'yicha CLA / hissa qo'shuvchi shartnomasi (yoki hamkor shartnomasi ma'lumotnomasi).
+   - Qabul qilinadigan foydalanishni tasdiqlovchi so'rovda saqlangan.
+   - Xavflarni baholash tugallandi (masalan, yuridik tomonidan tasdiqlangan hamkor sharhlovchilar).
+4. Tasdiqlovchi so'rovda imzo chekadi va kuzatuv muammosini istalganiga bog'laydi
+   o'zgartirishni boshqarish yozuvi (misol: `DOCS-SORA-Preview-####`).
 
-## Provisioning & tooling
+## Ta'minlash va asboblar
 
-1. **Share artefacts** — Provide the latest preview descriptor + archive from
-   the CI workflow or SoraFS pin (`docs-portal-preview` artefact). Remind
-   reviewers to run:
+1. **Artefaktlarni ulashish** — Eng soʻnggi oldindan koʻrish deskriptorini + arxivini taqdim eting
+   CI ish oqimi yoki SoraFS pin (`docs-portal-preview` artefakt). Eslatma
+   Ishlaydigan sharhlovchilar:
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -77,65 +78,65 @@ All reviewer types must:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Serve with checksum enforcement** — Point reviewers at the checksum-gated
-   command:
+2. **Cheklash summasi ijrosi bilan xizmat ko'rsatish** — Tekshiruv so'rovi bo'yicha tekshiruvchilar
+   buyruq:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   This reuses `scripts/serve-verified-preview.mjs` so no unverified build can be
-   launched accidentally.
+   Bu `scripts/serve-verified-preview.mjs` dan qayta foydalanadi, shuning uchun hech qanday tasdiqlanmagan tuzilish bo'lishi mumkin emas
+   tasodifan ishga tushirilgan.
 
-3. **Grant GitHub access (optional)** — If reviewers need unpublished branches,
-   add them to the `docs-preview` GitHub team for the duration of the review and
-   record the membership change in the request.
+3. **GitHub-ga ruxsat bering (ixtiyoriy)** — Agar sharhlovchilarga nashr etilmagan filiallar kerak bo'lsa,
+   ko'rib chiqish muddati davomida ularni `docs-preview` GitHub jamoasiga qo'shing va
+   a'zolik o'zgarishini so'rovga yozib qo'ying.
 
-4. **Communicate support channels** — Share the on-call contact (Matrix/Slack)
-   and incident procedure from [`incident-runbooks`](./incident-runbooks.md).
+4. **Ko‘mak kanallari bilan muloqot qilish** — Qo‘ng‘iroq bo‘yicha kontaktni baham ko‘ring (Matrix/Slack)
+   va [`incident-runbooks`](./incident-runbooks.md) dan hodisa tartibi.
 
-5. **Telemetry + feedback** — Remind reviewers that anonymised analytics are
-  collected (see [`observability`](./observability.md)). Provide the feedback
-  form or issue template referenced in the invite and log the event with the
-  [`preview-feedback-log`](./preview-feedback-log) helper so the wave summary
-  stays current.
+5. **Telemetriya + fikr-mulohaza** — Sharhlovchilarga anonim tahlillar
+  to'plangan (qarang: [`observability`](./observability.md)). Fikr bildiring
+  taklifnomada ko'rsatilgan shakl yoki nashr shablonini kiriting va tadbirni ro'yxatdan o'tkazing
+  [`preview-feedback-log`](./preview-feedback-log) yordamchi, shuning uchun to'lqin xulosasi
+  dolzarbligicha qoladi.
 
-## Reviewer checklist
+## Tekshiruvchi nazorat ro'yxati
 
-Before accessing the preview, reviewers must complete the following:
+Ko'rib chiqishga kirishdan oldin sharhlovchilar quyidagilarni bajarishlari kerak:
 
-1. Verify the downloaded artefacts (`preview_verify.sh`).
-2. Launch the portal via `npm run serve` (or `serve:verified`) to ensure the
-   checksum guard is active.
-3. Read the security and observability notes linked above.
-4. Test the OAuth/Try it console using device-code login (if applicable) and
-   avoid reusing production tokens.
-5. File findings in the agreed tracker (issue, shared doc, or form) and tag
-   them with the preview release tag.
+1. Yuklab olingan artefaktlarni tekshiring (`preview_verify.sh`).
+2. Portalni `npm run serve` (yoki `serve:verified`) orqali ishga tushiring.
+   nazorat summasi himoyasi faol.
+3. Yuqorida havola qilingan xavfsizlik va kuzatuvchanlik eslatmalarini o'qing.
+4. OAuth-ni sinab ko'ring/konsolni qurilma kodiga kirish (agar mavjud bo'lsa) yordamida sinab ko'ring va
+   ishlab chiqarish tokenlarini qayta ishlatishdan saqlaning.
+5. Kelishilgan kuzatuvchi (muammo, umumiy hujjat yoki shakl) va tegdagi topilmalarni fayl
+   ularni oldindan ko'rish reliz yorlig'i bilan.
 
-## Maintainer responsibilities & offboarding
+## Xizmat ko'rsatuvchi mas'uliyat va offboarding
 
-| Phase | Actions |
+| Bosqich | Amallar |
 | --- | --- |
-| Kickoff | Confirm intake checklist is attached to the request, share artefacts + instructions, append an `invite-sent` entry via [`preview-feedback-log`](./preview-feedback-log), and schedule a midpoint sync if the review lasts longer than one week. |
-| Monitoring | Track preview telemetry (look for unusual Try it traffic, probe failures) and follow the incident runbook if anything suspicious occurs. Log `feedback-submitted`/`issue-opened` events as findings arrive so the wave metrics stay accurate. |
-| Offboarding | Revoke temporary GitHub or SoraFS access, record `access-revoked`, archive the request (include feedback summary + outstanding actions), and update the reviewer registry. Ask the reviewer to purge local builds and attach the digest generated from [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| Boshlanish | Qabul qilish nazorat roʻyxati soʻrovga ilova qilinganligini tasdiqlang, artefaktlar + koʻrsatmalar bilan baham koʻring, [`preview-feedback-log`](./preview-feedback-log) orqali `invite-sent` yozuvini qoʻshing va agar koʻrib chiqish bir haftadan koʻproq davom etsa, oʻrta nuqta sinxronlashni rejalashtiring. |
+| Monitoring | Oldindan koʻrish telemetriyasini kuzatib boring (noodatiy boʻlgan trafikni qidiring, nosozliklarni koʻring) va agar biror shubhali narsa yuz bersa, voqeani tekshirish kitobini kuzatib boring. `feedback-submitted`/`issue-opened` hodisalari topilmalar yetib borishi bilan jurnalga kiring, shunda toʻlqin koʻrsatkichlari toʻgʻri qoladi. |
+| Bortdan ketish | Vaqtinchalik GitHub yoki SoraFS ruxsatini bekor qiling, `access-revoked`ni yozib oling, soʻrovni arxivlang (fikrlar xulosasi + bajarilmagan amallarni oʻz ichiga oladi) va koʻrib chiquvchilar registrini yangilang. Sharhlovchidan mahalliy tuzilmalarni tozalashni va [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md) dan yaratilgan dayjestni biriktirishini so'rang. |
 
-Use the same process when rotating reviewers between waves. Keeping the
-paper trail in the repo (issue + templates) helps DOCS-SORA remain auditable and
-lets governance confirm that preview access followed the documented controls.
+Tekshiruvchilarni to'lqinlar orasida aylantirganda ham xuddi shunday jarayondan foydalaning. ni saqlash
+Repodagi qog'oz izi (muammo + andozalar) DOCS-SORA tekshirilishi mumkin bo'lib qolishiga yordam beradi va
+boshqaruvga oldindan koʻrish ruxsati hujjatlashtirilgan boshqaruv elementlariga amal qilganligini tasdiqlash imkonini beradi.
 
-## Invite templates & tracking
+## Taklif shablonlari va kuzatish
 
-- Start every outreach with the
+- Har bir targ'ibotni quyidagidan boshlang
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  file. It captures the minimum legal language, preview checksum instructions,
-  and the expectation that reviewers acknowledge the acceptable-use policy.
-- When editing the template, replace the placeholders for `<preview_tag>`,
-  `<request_ticket>`, and contact channels. Store a copy of the final message in
-  the intake ticket so reviewers, approvers, and auditors can reference the
-  exact wording that was sent.
-- After dispatching the invite, update the tracking spreadsheet or issue with
-  the `invite_sent_at` timestamp and expected end date so the
-  [preview invite flow](./preview-invite-flow.md) report can pick up the cohort
-  automatically.
+  fayl. U minimal yuridik tilni oladi, nazorat summasi ko'rsatmalarini ko'rib chiqadi,
+  va sharhlovchilar maqbul foydalanish siyosatini tan olishlarini kutish.
+- Shablonni tahrirlashda `<preview_tag>` uchun to'ldirgichlarni almashtiring,
+  `<request_ticket>` va aloqa kanallari. Yakuniy xabarning nusxasini saqlang
+  qabul qilish chiptasi, shuning uchun sharhlovchilar, tasdiqlovchilar va auditorlar murojaat qilishlari mumkin
+  yuborilgan aniq so'z.
+- Taklif yuborilgandan so'ng, kuzatuv jadvalini yoki muammoni yangilang
+  `invite_sent_at` vaqt tamg'asi va kutilgan tugash sanasi
+  [taklif oqimini oldindan ko'rish](./preview-invite-flow.md) hisoboti kogortni olishi mumkin
+  avtomatik ravishda.

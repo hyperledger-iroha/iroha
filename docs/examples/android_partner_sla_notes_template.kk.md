@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android Partner SLA Discovery Notes — Үлгі
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+Әрбір AND8 SLA табу сеансы үшін осы үлгіні пайдаланыңыз. Толтырылған көшірмені сақтаңыз
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` астында
+және көмекші артефактілерді (сауалнама жауаптары, алғыс,
+қосымшалар) сол каталогта.
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. Күн тәртібі және контекст
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- Сеанстың мақсаты (пилоттық ауқым, шығару терезесі, телеметриялық күтулер).
+- Қоңырау алдында ортақ анықтамалық құжаттар (қолдау ойыны, шығарылым күнтізбесі,
+  телеметриялық бақылау тақталары).
 
-## 2. Workload Overview
+## 2. Жұмыс жүктемесіне шолу
 
-| Topic | Notes |
+| Тақырып | Ескертпелер |
 |-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| Мақсатты жұмыс жүктемелері/тізбектері | |
+| Күтілетін транзакция көлемі | |
+| Бизнестің маңызды терезелері / өшіру кезеңдері | |
+| Реттеу режимдері (GDPR, MAS, FISC және т.б.) | |
+| Қажетті тілдер / локализация | |
 
-## 3. SLA Discussion
+## 3. SLA талқылауы
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA класы | Серіктес күту | Дельта бастапқы деңгейден? | Әрекет қажет |
+|----------|-------------------|----------------------|-----------------|
+| Критикалық түзету (48 сағ) | | Иә/Жоқ | |
+| Ауырлығы жоғары (5 жұмыс күні) | | Иә/Жоқ | |
+| Техникалық қызмет көрсету (30 күн) | | Иә/Жоқ | |
+| Кесу туралы хабарлама (60 күн) | | Иә/Жоқ | |
+| Оқиға байланысының каденсі | | Иә/Жоқ | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+Серіктес сұраған кез келген қосымша SLA ережелерін құжаттаңыз (мысалы, арнайы
+телефон көпірі, қосымша телеметрия экспорты).
 
-## 4. Telemetry & Access Requirements
+## 4. Телеметрия және қол жеткізу талаптары
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus қатынасу қажет:
+- Экспортқа қойылатын талаптарды тіркеу/бақылау:
+- Офлайн дәлелдер немесе деректер күтулері:
 
-## 5. Compliance & Legal Notes
+## 5. Сәйкестік және заңды ескертпелер
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- юрисдикциялық хабарлама талаптары (жарғы + мерзім).
+- Оқиғаларды жаңарту үшін қажетті заңды контактілер.
+- Деректердің резиденттік шектеулері/сақтау талаптары.
 
-## 6. Decisions & Action Items
+## 6. Шешімдер және әрекеттер
 
-| Item | Owner | Due | Notes |
+| Элемент | Иесі | Мерзімі | Ескертпелер |
 |------|-------|-----|-------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. Алғыс айту
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- Серіктес бастапқы SLA-ны мойындады ма? (Ж/Ж)
+- Кейінгі растау әдісі (электрондық пошта / билет / қолтаңба):
+- Жабу алдында растайтын электрондық поштаны немесе жиналыс хаттамаларын осы каталогқа тіркеңіз.

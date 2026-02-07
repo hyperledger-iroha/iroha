@@ -4,39 +4,41 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-elastic-lane.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-elastic-lane
-title: Provisionamento de lane elastico (NX-7)
-sidebar_label: Provisionamento de lane elastico
-description: Fluxo de bootstrap para criar manifests de lane Nexus, entradas de catalogo e evidencia de rollout.
+ID: گٹھ جوڑ-لچکدار لین
+عنوان: لچکدار لین کی فراہمی (NX-7)
+سائڈبار_لیبل: لچکدار لین کی فراہمی
+تفصیل: Nexus لین منشور ، کیٹلاگ اندراجات اور رول آؤٹ ثبوت بنانے کے لئے بوٹسٹریپ فلو۔
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/nexus_elastic_lane.md`. Mantenha ambas as copias alinhadas ate que o sweep de localizacao chegue ao portal.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/nexus_elastic_lane.md` کا آئینہ دار ہے۔ دونوں کاپیاں سیدھے رکھیں جب تک کہ مقام کا سویپ پورٹل تک نہ پہنچے۔
 :::
 
-# Kit de provisionamento de lane elastico (NX-7)
+# لچکدار لین کی فراہمی کٹ (NX-7)
 
-> **Item do roadmap:** NX-7 - tooling de provisionamento de lane elastico  
-> **Status:** tooling completo - gera manifests, snippets de catalogo, payloads Norito, smoke tests,
-> e o helper de bundle de load-test agora costura gating de latencia por slot + manifests de evidencia para que as rodadas de carga de validadores
-> possam ser publicadas sem scripting sob medida.
+> ** روڈ میپ آئٹم: ** NX -7 - لچکدار لین کی فراہمی کا ٹولنگ  
+> ** حیثیت: ** مکمل ٹولنگ - ظاہر ہوتا ہے ، کیٹلاگ کے ٹکڑوں ، Norito پے لوڈ ، دھواں ٹیسٹ ،
+> اور بوجھ ٹیسٹ کے بنڈل مددگار اب لیٹینسی گیٹنگ میں سلاٹ + شواہد کو سلائی کرتا ہے تاکہ توثیق کنندہ لوڈ راؤنڈز
+> کسٹم اسکرپٹنگ کے بغیر شائع کیا جاسکتا ہے۔
 
-Este guia leva operadores pelo novo helper `scripts/nexus_lane_bootstrap.sh` que automatiza a geracao de manifests de lane, snippets de catalogo de lane/dataspace e evidencia de rollout. O objetivo e facilitar a criacao de novas lanes Nexus (publicas ou privadas) sem editar manualmente varios arquivos nem re-derivar a geometria do catalogo manualmente.
+یہ گائیڈ آپریٹرز کو نئے `scripts/nexus_lane_bootstrap.sh` مددگار کے ذریعے چلتا ہے جو لین کے منشور ، لین/ڈیٹا اسپیس کاتلاگ کے ٹکڑوں اور رول آؤٹ شواہد کی نسل کو خود کار کرتا ہے۔ مقصد یہ ہے کہ دستی طور پر متعدد فائلوں میں ترمیم کیے بغیر یا دوبارہ ماخوذ کیٹلاگ دستی طور پر تیار کیے بغیر نئی Nexus لین (عوامی یا نجی) کی تشکیل میں آسانی ہو۔
 
-## 1. Prerequisitos
+## 1. شرائط
 
-1. Aprovacao de governanca para o alias de lane, dataspace, conjunto de validadores, tolerancia a falhas (`f`) e politica de settlement.
-2. Uma lista final de validadores (IDs de conta) e uma lista de namespaces protegidos.
-3. Acesso ao repositorio de configuracao do node para poder anexar os snippets gerados.
-4. Caminhos para o registro de manifests de lane (veja `nexus.registry.manifest_directory` e `cache_directory`).
-5. Contatos de telemetria/handles do PagerDuty para o lane, para que os alertas sejam conectados assim que o lane estiver online.
+1. لین عرف ، ڈیٹاسپیس ، ویلڈیٹر سیٹ ، فالٹ رواداری (`f`) اور تصفیہ پالیسی کے لئے گورننس کی منظوری۔
+2. جائزوں کی ایک حتمی فہرست (اکاؤنٹ IDs) اور محفوظ نام کی جگہوں کی ایک فہرست۔
+3. نوڈ کنفیگریشن ریپوزٹری تک رسائی پیدا شدہ ٹکڑوں کو جوڑنے کے قابل ہو۔
+4. لین منشور کو رجسٹر کرنے کے راستے (`nexus.registry.manifest_directory` اور `cache_directory` دیکھیں)۔
+5. لین کے ل Pa پیجریڈی ٹیلی میٹری رابطے/ہینڈلز تاکہ لین آن لائن ہونے کے ساتھ ہی انتباہات منسلک ہوجائیں۔
 
-## 2. Gere artefatos de lane
+## 2. لین نمونے تیار کریں
 
-Execute o helper a partir da raiz do repositorio:
+ذخیرہ جڑ سے مددگار چلائیں:
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -58,36 +60,34 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-Flags chave:
+کلیدی جھنڈے:
 
-- `--lane-id` deve corresponder ao index da nova entrada em `nexus.lane_catalog`.
-- `--dataspace-alias` e `--dataspace-id/hash` controlam a entrada de catalogo do dataspace (por padrao usa o id do lane quando omitido).
-- `--validator` pode ser repetido ou lido de `--validators-file`.
-- `--route-instruction` / `--route-account` emitem regras de roteamento prontas para colar.
-- `--metadata key=value` (ou `--telemetry-contact/channel/runbook`) captura contatos de runbook para que os dashboards mostrem os owners corretos.
-- `--allow-runtime-upgrades` + `--runtime-upgrade-*` adicionam o hook de runtime-upgrade ao manifest quando o lane requer controles estendidos de operador.
-- `--encode-space-directory` chama `cargo xtask space-directory encode` automaticamente. Combine com `--space-directory-out` quando quiser que o arquivo `.to` codificado va para outro lugar alem do default.
+- `--lane-id` کو `nexus.lane_catalog` میں نئی ​​اندراج کے انڈیکس سے ملنا چاہئے۔
+- `--dataspace-alias` اور `--dataspace-id/hash` ڈیٹا اسپیس کیٹلاگ انٹری کو کنٹرول کریں (بطور ڈیفالٹ لین ID استعمال کرتا ہے)۔
+- `--validator` کو `--validators-file` سے دہرایا جاسکتا ہے یا پڑھا جاسکتا ہے۔
+-`--route-instruction` / `--route-account` آؤٹ پٹ تیار کرنے کے لئے تیار روٹنگ کے قواعد۔
+- `--metadata key=value` (یا `--telemetry-contact/channel/runbook`) رن بک رابطوں کو اپنی گرفت میں لے لیتا ہے تاکہ ڈیش بورڈز صحیح مالکان کو دکھائیں۔
+- `--allow-runtime-upgrades` + `--runtime-upgrade-*` جب لین میں توسیعی آپریٹر کنٹرول کی ضرورت ہوتی ہے تو ظاہر ہونے میں رن ٹائم اپ گریڈ ہک شامل کریں۔
+- `--encode-space-directory` `cargo xtask space-directory encode` خود بخود کال کرتا ہے۔ جب آپ Nexus انکوڈڈ فائل کو پہلے سے طے شدہ کے علاوہ کہیں اور جانے کے لئے چاہتے ہیں تو `--space-directory-out` کے ساتھ یکجا کریں۔
 
-O script produz tres artefatos dentro do `--output-dir` (por padrao o diretorio atual), mais um quarto opcional quando o encoding esta habilitado:
+اسکرپٹ `--output-dir` (موجودہ ڈائرکٹری کے مطابق) کے اندر تین نمونے تیار کرتا ہے ، اور جب انکوڈنگ کو فعال کیا جاتا ہے تو اختیاری چوتھا:1. `<slug>.manifest.json` - لین مینی فیسٹ جس میں رن ٹائم اپ گریڈ ہک سے تصدیق کنندگان ، محفوظ نام کی جگہوں اور اختیاری میٹا ڈیٹا پر مشتمل ہے۔
+2. `<slug>.catalog.toml` - `[[nexus.lane_catalog]]` ، `[[nexus.dataspace_catalog]]` ، اور کسی بھی درخواست کردہ روٹنگ کے قواعد کے ساتھ ایک ٹومل اسنیپٹ۔ اس بات کو یقینی بنائیں کہ `fault_tolerance` لین ریلے کمیٹی (`3f+1`) کے سائز کے لئے ڈیٹا اسپیس انٹری میں بیان کیا گیا ہے۔
+3. `<slug>.summary.json` - جیومیٹری (سلگ ، طبقات ، میٹا ڈیٹا) کے علاوہ مطلوبہ رول آؤٹ اقدامات اور `cargo xtask space-directory encode` (`space_directory_encode.command` میں) کی عین مطابق کمانڈ کی وضاحت کرنے والی آڈٹ سمری۔ اس JSON کو بطور ثبوت آن بورڈنگ ٹکٹ سے منسلک کریں۔
+4. `<slug>.manifest.to` - جاری کیا گیا جب `--encode-space-directory` فعال ہو ؛ Torii سے `iroha app space-directory manifest publish` کو اسٹریم کرنے کے لئے تیار ہے۔
 
-1. `<slug>.manifest.json` - manifest de lane contendo o quorum de validadores, namespaces protegidos e metadados opcionais do hook de runtime-upgrade.
-2. `<slug>.catalog.toml` - um snippet TOML com `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]` e quaisquer regras de roteamento solicitadas. Garanta que `fault_tolerance` esteja definido na entrada de dataspace para dimensionar o comite de lane-relay (`3f+1`).
-3. `<slug>.summary.json` - resumo de auditoria descrevendo a geometria (slug, segmentos, metadados) mais os passos de rollout requeridos e o comando exato de `cargo xtask space-directory encode` (em `space_directory_encode.command`). Anexe esse JSON ao ticket de onboarding como evidencia.
-4. `<slug>.manifest.to` - emitido quando `--encode-space-directory` esta habilitado; pronto para o fluxo `iroha app space-directory manifest publish` do Torii.
+موجودہ نمونے کو اوور رائٹ کرنے کے لئے فائلیں لکھے بغیر JSON/ٹکڑوں کو دیکھنے کے لئے `--dry-run` کا استعمال کریں۔
 
-Use `--dry-run` para visualizar os JSON/snippets sem gravar arquivos e `--force` para sobrescrever artefatos existentes.
+## 3. تبدیلیوں کا اطلاق کریں
 
-## 3. Aplique as mudancas
+1. JSON منشور کو تشکیل شدہ `nexus.registry.manifest_directory` (اور اگر رجسٹری ریموٹ بنڈلوں کا آئینہ دار ہے تو کیش ڈائرکٹری میں) پر کاپی کریں۔ اگر آپ کے کنفیگریشن ریپوزٹری میں ظاہر ہوتا ہے تو فائل کا ارتکاب کریں۔
+2. `config/config.toml` (یا مناسب `config.d/*.toml`) سے کیٹلاگ کے ٹکڑوں کو منسلک کریں۔ اس بات کو یقینی بنائیں کہ `nexus.lane_count` کم از کم `lane_id + 1` ہے اور کسی بھی `nexus.routing_policy.rules` کو اپ ڈیٹ کریں جو نئی لین کی طرف اشارہ کرے۔
+3. انکوڈ (اگر آپ نے `--encode-space-directory` کو چھوڑ دیا ہے) اور خلاصہ (`space_directory_encode.command`) میں حاصل کردہ کمانڈ کا استعمال کرتے ہوئے خلائی ڈائرکٹری میں ظاہر کریں۔ اس سے `.manifest.to` پے لوڈ تیار ہوتا ہے جس کی Torii آڈیٹرز کے لئے توقع کرتا ہے اور ثبوت ریکارڈ کرتا ہے۔ `iroha app space-directory manifest publish` کے ذریعے بھیجیں۔
+4. `irohad --sora --config path/to/config.toml --trace-config` چلائیں اور رول آؤٹ ٹکٹ میں ٹریس آؤٹ پٹ فائل کریں۔ اس سے یہ ثابت ہوتا ہے کہ نیا جیومیٹری تیار کردہ کورا سلگ/طبقات سے میل کھاتا ہے۔
+5. جب منشور/کیٹلاگ میں تبدیلیوں کو تعینات کیا جاتا ہے تو لین کو تفویض کردہ توثیق کاروں کو دوبارہ شروع کریں۔ مستقبل کے آڈٹ کے لئے JSON کا خلاصہ ٹکٹ میں رکھیں۔
 
-1. Copie o manifest JSON para o `nexus.registry.manifest_directory` configurado (e para o cache directory se o registry espelha bundles remotos). Comite o arquivo se manifests sao versionados no seu repositorio de configuracao.
-2. Anexe o snippet de catalogo em `config/config.toml` (ou no `config.d/*.toml` apropriado). Garanta que `nexus.lane_count` seja pelo menos `lane_id + 1` e atualize quaisquer `nexus.routing_policy.rules` que devam apontar para o novo lane.
-3. Encode (se voce pulou `--encode-space-directory`) e publique o manifest no Space Directory usando o comando capturado no summary (`space_directory_encode.command`). Isso produz o payload `.manifest.to` que o Torii espera e registra evidencia para auditores; envie via `iroha app space-directory manifest publish`.
-4. Execute `irohad --sora --config path/to/config.toml --trace-config` e arquive a saida do trace no ticket de rollout. Isso prova que a nova geometria corresponde ao slug/segmentos de Kura gerados.
-5. Reinicie os validadores atribuidos ao lane quando as mudancas de manifest/catalogo estiverem implantadas. Mantenha o summary JSON no ticket para auditorias futuras.
+## 4. رجسٹری کی تقسیم کا بنڈل بنائیں
 
-## 4. Monte um bundle de distribuicao do registry
-
-Empacote o manifest gerado e o overlay para que operadores possam distribuir dados de governanca de lanes sem editar configs em cada host. O helper de bundling copia manifests para o layout canonico, produz um overlay opcional do catalogo de governanca para `nexus.registry.cache_directory` e pode emitir um tarball para transferencias offline:
+پیدا شدہ مینی فیسٹ اور اوورلے کو پیکج کریں تاکہ آپریٹرز ہر میزبان پر تشکیلات میں ترمیم کیے بغیر لین گورننس ڈیٹا تقسیم کرسکیں۔ بنڈلنگ مددگار کاپیاں کیننیکل لے آؤٹ پر ظاہر ہوتی ہیں ، `nexus.registry.cache_directory` کے لئے ایک اختیاری گورننس کیٹلاگ اوورلی تیار کرتی ہیں ، اور آف لائن ٹرانسفر کے لئے ٹربال کو آؤٹ پٹ کرسکتی ہیں:
 
 ```bash
 scripts/nexus_lane_registry_bundle.sh \
@@ -98,18 +98,16 @@ scripts/nexus_lane_registry_bundle.sh \
   --bundle-out artifacts/nexus/payments_lane/registry_bundle.tar.gz
 ```
 
-Saidas:
+نتائج:
 
-1. `manifests/<slug>.manifest.json` - copie estes arquivos para o `nexus.registry.manifest_directory` configurado.
-2. `cache/governance_catalog.json` - coloque em `nexus.registry.cache_directory`. Cada entrada `--module` vira uma definicao de modulo plugavel, permitindo swap-outs do modulo de governanca (NX-2) ao atualizar o overlay de cache em vez de editar `config.toml`.
-3. `summary.json` - inclui hashes, metadados do overlay e instrucoes para operadores.
-4. Opcional `registry_bundle.tar.*` - pronto para SCP, S3 ou trackers de artefatos.
+1. `manifests/<slug>.manifest.json` - ان فائلوں کو تشکیل شدہ `nexus.registry.manifest_directory` میں کاپی کریں۔
+2. `cache/governance_catalog.json` - `nexus.registry.cache_directory` میں ڈالیں۔ `config.toml` میں ترمیم کرنے کے بجائے کیشے کے اوورلے کو اپ ڈیٹ کرتے وقت ہر `--module` اندراج ایک پلگ ایبل ماڈیول تعریف بن جاتا ہے ، جس سے گورننس ماڈیول (NX-2) تبادلہ ہوتا ہے۔
+3. `summary.json` - ہیشس ، اوورلے میٹا ڈیٹا اور آپریٹرز کے لئے ہدایات شامل ہیں۔
+4. اختیاری `registry_bundle.tar.*` - ایس سی پی ، ایس 3 یا نمونے والے ٹریکروں کے لئے تیار ہے۔
 
-Sincronize o diretorio inteiro (ou o arquivo) para cada validador, extraia em hosts air-gapped e copie os manifests + overlay de cache para seus caminhos de registry antes de reiniciar o Torii.
+ہر ایک توثیق کنندہ کے لئے پوری ڈائریکٹری (یا فائل) کو مطابقت پذیر کریں ، ہوا سے چلنے والے میزبانوں کو نکالیں اور Torii کو دوبارہ شروع کرنے سے پہلے ان کی رجسٹری کے راستوں پر منشور + کیشے کے اوورلے کو کاپی کریں۔## 5. توثیق کرنے والوں کے تمباکو نوشی کے ٹیسٹ
 
-## 5. Smoke tests de validadores
-
-Depois que o Torii reiniciar, execute o novo helper de smoke para verificar se o lane reporta `manifest_ready=true`, se as metricas expoem a contagem esperada de lanes e se o gauge de sealed esta limpo. Lanes que exigem manifests devem expor um `manifest_path` nao vazio; o helper agora falha imediatamente quando o caminho falta para que cada deploy NX-7 inclua a evidencia do manifest assinado:
+Torii دوبارہ شروع ہونے کے بعد ، اس بات کی تصدیق کے لئے نیا تمباکو نوشی مددگار چلائیں کہ لین `manifest_ready=true` کی اطلاع دیتا ہے ، کہ میٹرکس متوقع لین کی گنتی کو بے نقاب کرتی ہے ، اور یہ کہ مہر بند گیج واضح ہے۔ لینوں کو جن کو ظاہر کرنے کی ضرورت ہوتی ہے ان کو غیر خالی `manifest_path` کو بے نقاب کرنا چاہئے۔ جب راستہ غائب ہوتا ہے تو مددگار فوری طور پر ناکام ہوجاتا ہے تاکہ ہر NX-7 تعیناتی میں دستخط شدہ مینی فیسٹ کے ثبوت شامل ہوں:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -132,9 +130,9 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Adicione `--insecure` ao testar ambientes self-signed. O script sai com codigo nao zero se o lane estiver ausente, sealed ou se metricas/telemetria divergirem dos valores esperados. Use os knobs `--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog` e `--max-headroom-events` para manter telemetria por lane (altura de bloco/finalidade/backlog/headroom) dentro dos seus limites operacionais e combine com `--max-slot-p95` / `--max-slot-p99` (mais `--min-slot-samples`) para impor as metas de duracao de slot NX-18 sem sair do helper.
+جب خود دستخط شدہ ماحول کی جانچ کرتے ہو تو `--insecure` شامل کریں۔ اسکرپٹ غیر صفر کوڈ کے ساتھ باہر نکلتا ہے اگر لین غیر حاضر ہے ، مہر بند ہے یا اگر میٹرکس/ٹیلی میٹری متوقع اقدار سے ہٹ جاتی ہے۔ `--min-block-height` ، `--max-finality-lag` ، `--max-settlement-backlog` اور `--max-headroom-events` KNOBS اپنے آپریشنل حدود میں فی لین ٹیلی میٹری (بلاک اونچائی/مقصد/بیکلاگ/ہیڈ روم) کو `--max-slot-p95`/I188NI کے ساتھ جوڑیں `--min-slot-samples`) NX-18 سلاٹ لائف ٹائم اہداف کو نافذ کرنے کے لئے مددگار کو چھوڑے بغیر۔
 
-Para validacoes air-gapped (ou CI) voce pode reproduzir uma resposta Torii capturada em vez de acessar um endpoint live:
+ہوا سے چلنے والے (یا CI) کی توثیق کے ل you آپ براہ راست اختتامی نقطہ تک رسائی کے بجائے پکڑے گئے Torii ردعمل کو دوبارہ چلا سکتے ہیں:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -158,4 +156,4 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Os fixtures gravados em `fixtures/nexus/lanes/` refletem os artefatos produzidos pelo helper de bootstrap para que novos manifests possam ser lintados sem scripting sob medida. A CI executa o mesmo fluxo via `ci/check_nexus_lane_smoke.sh` e `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`) para provar que o helper de smoke NX-7 continua compativel com o formato de payload publicado e garantir que os digests/overlays do bundle fiquem reproduziveis.
+`fixtures/nexus/lanes/` پر لکھے گئے فکسچر بوٹسٹریپ ہیلپر کے ذریعہ تیار کردہ نمونے کی عکاسی کرتے ہیں تاکہ نئے منشور کو کسٹم اسکرپٹ کے بغیر تشکیل دیا جاسکے۔ CI اسی بہاؤ کو `ci/check_nexus_lane_smoke.sh` اور `ci/check_nexus_lane_registry_bundle.sh` (عرف: `make check-nexus-lanes`) کے ذریعے چلاتا ہے تاکہ یہ ثابت کیا جاسکے کہ NX-7 دھواں مددگار شائع شدہ تنخواہوں کی شکل کے ساتھ مطابقت رکھتا ہے اور اس بات کو یقینی بناتا ہے کہ بنڈل ڈائجسٹ/اوورلیز دوبارہ پیدا ہونے والے ہیں۔

@@ -10,95 +10,96 @@ translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
 title: Sora Nexus bootstrap & observability
 description: Operational plan for bringing the core Nexus validator cluster online before layering SoraFS and SoraNet services.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/soranexus_bootstrap_plan.md`. Keep both copies aligned until localized versions land in the portal.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདིའི་ནང་ `docs/source/soranexus_bootstrap_plan.md` ལུ་མཐོང་སྣང་། འདྲ་བཤུས་གཉིས་ཆ་ར་ ས་གནས་ཀྱི་ཐོན་རིམ་ཚུ་ དྲྭ་ཐོག་ནང་མ་ལྷོད་ཚུན་ཚོད་ ཕྲང་སྒྲིག་འབད་བཞག།
 :::
 
-# Sora Nexus Bootstrap & Observability Plan
+# སོ་ར་ Nexus བུཊ་སི་ཊེཔ་ & བལྟ་རྟོག་འཆར་གཞི།
 
-## Objectives
-- Stand up the base Sora Nexus validator/observer network with governance keys, Torii APIs, and consensus monitoring.
-- Validate core services (Torii, consensus, persistence) before enabling SoraFS/SoraNet piggyback deployments.
-- Establish CI/CD workflows and observability dashboards/alerts to ensure network health.
+## དམིགས་ཡུལ།
+- གཞི་རྟེན་ Sora I18NT0000007X གཞུང་སྐྱོང་ལྡེ་མིག་ཚུ་དང་གཅིག་ཁར་ བདེན་དཔྱད་འབད་མི་/ལྟ་རྟོག་པ་ ཡོངས་འབྲེལ་དང་ I18NT00000013 APIs དེ་ལས་ མོས་མཐུན་ལྟ་རྟོག་འབད་ནི།
+- SoraFS/SoraNet pigggyback བཀྲམ་སྤེལ་ཚུ་ ལྕོགས་མིན་བཟོ་བའི་ཧེ་མ་ ཀོར་ཀོར་ཞབས་ཏོག་ཚུ་ བདེན་དཔྱད་འབད།
+- ཡོངས་འབྲེལ་གསོ་བའི་གནས་སྟངས་ངེས་གཏན་བཟོ་ནི་ལུ་ སི་ཨའི་/སི་ཌི་ལཱ་གི་རྒྱུན་རིམ་དང་ བལྟ་བརྟོག་འབད་ཚུགས་པའི་ ཌེཤ་བོརཌ་/དྲན་སྐུལ་ཚུ་གཞི་བཙུགས་འབད།
 
-## Prerequisites
-- Governance key material (council multisig, committee keys) available in HSM or Vault.
-- Baseline infrastructure (Kubernetes clusters or bare-metal nodes) in primary/secondary regions.
-- Updated bootstrap configuration (`configs/nexus/bootstrap/*.toml`) reflecting latest consensus parameters.
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
+- གཞུང་སྐྱོང་ལྡེ་མིག་རྒྱུ་ཆ་ (ཚོགས་སྡེ་མང་པོའི་, ཚོགས་ཆུང་གི་ལྡེ་མིག་) ཨེཆ་ཨེསི་ཨེམ་ཡང་ན་ བཱའུཊ་ནང་ཡོདཔ་ཨིན།
+- གཞི་རིམ་/གཞི་རིམ་ལུང་ཕྱོགས་ནང་ གཞི་རྟེན་གཞི་རྟེན་ (Kubernetes clusters ཡང་ན་ ལྕགས་རིགས་ nodes) ཚུ་ཨིན།
+- དུས་མཐུན་བཟོ་ཡོད་པའི་ བུཊི་སི་ཊརཔ་རིམ་སྒྲིག་ (`configs/nexus/bootstrap/*.toml`) གིས་ མོས་མཐུན་ཚད་གཞི་གསརཔ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-## Network Environments
-- Operate two Nexus environments with distinct network prefixes:
-- **Sora Nexus (mainnet)** – production network prefix `nexus`, hosting canonical governance and SoraFS/SoraNet piggyback services (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** – staging network prefix `testus`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Testus acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
-- CI/CD pipelines should deploy to Testus first, execute automated smoke tests, and require manual promotion to Nexus once checks pass.
-- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/testus/` (testnet), each containing sample `config.toml`, `genesis.json`, and Torii admission directories.
+## ཡོངས་འབྲེལ་ཁོར་ཡུག །
+- ཡོངས་འབྲེལ་སྔོན་སྒྲིག་ཁྱད་པར་ཅན་གྱི་ Nexus མཐའ་འཁོར་གཉིས་བཀོལ་སྤྱོད་འབད།
+- **སོ་ར་ I18NT0000009X (mainnet)** – ཐོན་སྐྱེད་ཡོངས་འབྲེལ་གྱི་སྔོན་སྒྲིག་ `nexus`, ཧོསིཊི་གཞུང་སྐྱོང་དང་ I18NT000000003X/སོ་ར་ནེཊ་པིག་གྷི་བེག་ཞབས་ཏོག་ཚུ་ (རིམ་སྒྲིག་ I18NI000000000028X / UID I18NI000000000000000000000029X).
+- **སོ་ར་ཊེས་ཊས་ (ཊེས་ཊེནཊི་)** – འཁྲབ་སྟོན་ཡོངས་འབྲེལ་གྱི་སྔོན་སྒྲིག་ `testus`, མཉམ་བསྡོམས་བརྟག་དཔྱད་དང་ སྔོན་སྒྲིག་བདེན་དཔྱད་ཀྱི་དོན་ལུ་ གཙོ་བོའི་རིམ་སྒྲིག་ མའི་ནེཊི་རིམ་སྒྲིག་ (རྒྱུན་རིམ་ཡུ་ཨུ་ཨའི་ཌི་ I18NI0000000031X) ཨིན།
+- མཐའ་འཁོར་རེ་རེ་གི་དོན་ལུ་ རིགས་མཚན་གྱི་ཡིག་སྣོད་དང་ གཞུང་སྐྱོང་ལྡེ་མིག་ དེ་ལས་ གཞི་རྟེན་གྱི་ རྐང་རྗེས་ཚུ་ སོ་སོ་སྦེ་ བདག་འཛིན་འཐབ་དགོ། ཊེས་ཊས་ཀྱིས་ SoraFS/SoraNet བསྐོར་ར་ཚུ་ག་ར་ Nexus ལུ་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ བདེན་ཁུངས་བཀལ་ཡོད་པའི་ས་ཁོངས་ཅིག་སྦེ་ལཱ་འབདཝ་ཨིན།
+- སི་ཨའི་/སི་ཌི་པའིཔ་ལའིན་ཚུ་གིས་ དང་པ་ར་ ཊེསི་ཊསི་ལུ་ བཀྲམ་སྤེལ་འབད་དགོཔ་དང་ རང་བཞིན་གྱིས་ དུ་ཁའི་བརྟག་དཔྱད་ཚུ་ ལག་ལེན་འཐབ་དགོཔ་ དེ་ལས་ ཞིབ་དཔྱད་ཚུ་ བརྒལ་ཚར་བའི་ཤུལ་ལས་ ལག་ཐོག་ལས་ ཁྱབ་སྤེལ་འབད་དགོཔ་ཨིན།
+- གཞི་བསྟུན་རིམ་སྒྲིག་བཱན་ཌལ་ཚུ་ `configs/soranexus/nexus/` (mainnet) དང་ I18NI000000033X (ཊེས་ནེསི་) གི་འོག་ལུ་ཡོདཔ་ཨིན།
 
-## Step 1 – Configuration Review
-1. Audit existing documentation:
-   - `docs/source/nexus/architecture.md` (consensus, Torii layout).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
-   - `docs/source/nexus/governance_keys.md` (key custody procedures).
-2. Validate genesis files (`configs/nexus/genesis/*.json`) align with current validator roster and staking weights.
-3. Confirm network parameters:
-   - Consensus committee size & quorum.
-   - Block interval / finality thresholds.
-   - Torii service ports and TLS certificates.
+## གོ་རིམ་༡ – རིམ་སྒྲིག་བསྐྱར་ཞིབ།
+1. ད་ལྟོ་ཡོད་པའི་ཡིག་ཆ་རྩིས་ཞིབ་འབད་ནི།
+   - `docs/source/nexus/architecture.md` (མོས་མཐུན་, Torii བཀོད་སྒྲིག་).
+   - `docs/source/nexus/deployment_checklist.md` (ཨིན་ཕ་ར་དགོས་མཁོ།)
+   - `docs/source/nexus/governance_keys.md` (གཙོ་བོ་བདག་འཛིན་བྱ་རིམ།)
+༢ རིགས་མཚན་ཡིག་སྣོད་ (I18NI000000039X) གིས་ ད་ལྟོའི་བདེན་དཔྱད་འབད་མི་ རོ་སི་ཊར་དང་ ལྗིད་ཚད་ཚུ་དང་གཅིག་ཁར་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+༣ ཡོངས་འབྲེལ་ཚད་བཟུང་ཚུ་ངེས་དཔྱད་འབད།
+   - མོས་མཐུན་ཚོགས་ཆུང་གི་ཚད་དང་ ཚད་གཞི།
+   - བཀག་ཆ་བར་མཚམས་ / མཐའ་མའི་ཚད་གཞི་ཚུ།
+   - I18NT000000017X ཞབས་ཏོག་འདྲེན་ལམ་དང་ ཊི་ཨེལ་ཨེསི་ལག་ཁྱེར་ཚུ།
 
-## Step 2 – Bootstrap Cluster Deployment
-1. Provision validator nodes:
-   - Deploy `irohad` instances (validators) with persistent volumes.
-   - Ensure network firewall rules allow consensus & Torii traffic between nodes.
-2. Start Torii services (REST/WebSocket) on each validator with TLS.
-3. Deploy observer nodes (read-only) for extra resilience.
-4. Run bootstrap scripts (`scripts/nexus_bootstrap.sh`) to distribute genesis, start consensus, and register nodes.
-5. Execute smoke tests:
-   - Submit test transactions via Torii (`iroha_cli tx submit`).
-   - Verify block production/finality through telemetry.
-   - Check ledger replication across validators/observers.
+## གོ་རིམ་༢ པ་ – བུཊ་སི་ཊརཔ་ ཀླད་ཀོར་བཀྲམ་སྤེལ་འབད་ནི།
+1. བཀོད་སྒྲིག་བདེན་དཔྱད་མཛུབ་གནོན་ཚུ།
+   - བརྟན་པོའི་སྐད་ཤུགས་དང་བཅས་ (བདེན་དཔྱད་འབད་མི་) གནས་སྟངས་ཚུ་ (བདེན་བཤད་འབད་མི་) བཀྲམ་སྤེལ་འབད།
+   - ཡོངས་འབྲེལ་ཕ་ཡར་ཝོལ་ལམ་ལུགས་ཚུ་གིས་ མོས་མཐུན་དང་ I18NT0000018X མཐུད་མཚམས་ཚུ་གི་བར་ན་ འགྲུལ་སྐྱོད་འབད་བཅུགཔ་ཨིན།
+2. Torii ཞབས་ཏོག་ (REST/WebSocket) འདི་ ཊི་ཨེལ་ཨེསི་དང་གཅིག་ཁར་ བདེན་དཔྱད་རེ་རེ་གུ་འགོ་བཙུགས།
+༣ བརྟན་བཞུགས་ཁ་སྐོང་དོན་ལུ་ ལྟ་རྟོག་པ་ མཐུད་མཚམས་ (ལྷག་ནི་རྐྱངམ་ཅིག་)།
+༤ རིགས་མཚན་བཀྲམ་སྤེལ་འབད་ནི་དང་ མོས་མཐུན་འགོ་བཙུགས་ནི་ དེ་ལས་ མཐུད་མཚམས་ཚུ་ཐོ་བཀོད་འབད་ནི་ལུ་ བུཊི་སི་ཊརཔ་ཡིག་གཟུགས་ (I18NI0000041X) གཡོག་བཀོལ།
+༥ དུ་ཁའི་བརྟག་དཔྱད་ཚུ་ལག་ལེན་འཐབ་ནི།
+   - བརྟག་དཔྱད་ཚོང་འབྲེལ་ཚུ་ Torii (`iroha_cli tx submit`) བརྒྱུད་དེ་ བཙུགས།
+   - ཊེ་ལི་མི་ཊི་བརྒྱུད་དེ་ སྡེབ་ཚན་ཐོན་སྐྱེད་/མཐའ་དཔྱད་བདེན་དཔྱད་འབད།
+   - བདེན་དཔྱད་/བལྟ་བརྟོག་པ་ཚུ་གི་ནང་ལུ་ འདྲ་བཤུས་བརྐྱབ་མི་ འདྲ་བཟོ་བརྟག་དཔྱད་འབད།
 
-## Step 3 – Governance & Key Management
-1. Load council multisig configuration; confirm governance proposals can be submitted and ratified.
-2. Securely store consensus/committee keys; configure automatic backups with access logging.
-3. Set up emergency key rotation procedures (`docs/source/nexus/key_rotation.md`) and verify runbook.
+## གོམ་པ་ ༣ – གཞུང་སྐྱོང་དང་ གཙོ་བོའི་འཛིན་སྐྱོང་།
+༡ མངོན་གསལ་ཚོགས་སྡེ་ སྣ་མང་རིམ་སྒྲིག་རིམ་སྒྲིག་; གཞུང་འབྲེལ་གྱི་གྲོས་འཆར་ཚུ་ ཕུལ་ནི་དང་ ཆ་འཇོག་འབད་ཚུགས།
+༢ མོས་མཐུན་/ཚོགས་ཆུང་གི་ལྡེ་མིག་ཚུ་ བདེ་ཏོག་ཏོ་སྦེ་ གསོག་འཇོག་འབད་ནི། འཛུལ་སྤྱོད་དྲན་ཐོ་དང་གཅིག་ཁར་ རང་བཞིན་རྒྱབ་ཐག་ཚུ་རིམ་སྒྲིག་འབད།
+༣ གློ་བུར་ལྡེ་མིག་བསྒྱིར་བའི་བྱ་རིམ་ཚུ་ (`docs/source/nexus/key_rotation.md`) གཞི་བཙུགས་འབད་ཞིནམ་ལས་ རན་བུག་བདེན་དཔྱད་འབད།
 
-## Step 4 – CI/CD Integration
-1. Configure pipelines:
-   - Build & publish validator/Torii images (GitHub Actions or GitLab CI).
-   - Automated configuration validation (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) for staging & production clusters.
-2. Implement smoke tests in CI (spin up ephemeral cluster, run canonical transaction suite).
-3. Add rollback scripts for failed deployments and document runbooks.
+## གོ་རིམ་ ༤ – སི་ཨའི་/སི་ཌི་མཉམ་འབྲེལ།
+༡ མདོང་ལམ་རིམ་སྒྲིག་འབད་ནི།
+   - བདེན་དཔྱད་པ་/I18NT0000021X པར་རིས་ (GitHub བྱ་བ་ཚུ་ཡང་ན་ གིཊི་ལེབ་སི་ཨའི་) བཟོ་བསྐྲུན་དང་དཔར་བསྐྲུན་འབད།
+   - རང་བཞིན་རིམ་སྒྲིག་བདེན་དཔྱད་ (lint རིགས་མཚན་ བདེན་དཔྱད་འབད་ མཚན་རྟགས་ཚུ་བདེན་སྦྱོར་འབད།)
+   - གོ་རིམ་དང་ཐོན་སྐྱེད་ཚོགས་པ་ཚུ་གི་དོན་ལུ་ བཀྲམ་སྤེལ་མདོང་ལམ་ (Helm/Kustomize) ཚུ་ཨིན།
+༢ CI (spin uperemeral cluster, canonic curves colve suite) ནང་དུ་དུ་བའི་བརྟག་དཔྱད་ཚུ་ལག་ལེན་འཐབ།
+༣ འཐུས་ཤོར་བྱུང་ཡོད་པའི་བཀྲམ་སྤེལ་དང་ཡིག་ཆའི་རྔོན་དེབ་ཚུ་གི་དོན་ལུ་ བསྐོར་རྒྱབ་ཡིག་ཚུགས་ཚུ་ཁ་སྐོང་རྐྱབས།
 
-## Step 5 – Observability & Alerts
-1. Deploy monitoring stack (Prometheus + Grafana + Alertmanager) per region.
-2. Collect core metrics:
-  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK for Torii & consensus services.
-3. Dashboards:
-   - Consensus health (block height, finality, peer status).
-   - Torii API latency/error rates.
-   - Governance transactions & proposal statuses.
-4. Alerts:
-   - Block production stall (>2 block intervals).
-   - Peer count drop below quorum.
-   - Torii error rate spikes.
-   - Governance proposal queue backlog.
+## གོ་རིམ་༥ – བལྟ་རྟོག་དང་ ཉེན་བརྡ་
+1. ལུང་ཕྱོགས་རེ་རེའི་ནང་ ལྟ་རྟོག་ལྟ་རྟོག་བང་རིམ་ (I18NT00000000000X + I18NT000000001X + ཉེན་བརྡ་མ་ནར་)།
+2. ཀོར་མེ་ཊིག་ཚུ་བསྡུ་སྒྲིག་འབད་ནི།
+  - `nexus_consensus_height`, `nexus_finality_lag`, I18NI000000046X, I18NI000000004X,
+   - I18NT0000022X དང་ མོས་མཐུན་ཞབས་ཏོག་ཚུ་གི་དོན་ལུ་ Loki/ELK བརྒྱུད་དེ་ ནང་བསྐྱོད་འབད་ཡོདཔ།
+3. ཌེཤ་བོརཌ་ཚུ།
+   - མོས་མཐུན་གསོ་བའི་ (བཀག་ཆ་མཐོ་ཚད་ མཐའ་མའི་ མཉམ་རོགས་ཀྱི་གནས་རིམ།)
+   - Torii ཨེ་པི་ཨའི་ འཕྲོ་མཐུད་/འཛོལ་བ་ཚད་གཞི།
+   - གཞུང་སྐྱོང་ཚོང་འབྲེལ་དང་ གྲོས་འཆར་གྱི་གནས་རིམ།
+4. ཉེན་བརྡ་:
+   - སྡེབ་ཚན་བཟོ་བསྐྲུན་ཁང་ (>༢ སྡེབ་ཚན་བར་མཚམས་)།
+   - པི་ཡར་གྱངས་ཁ་འདི་ ཀོན་རམ་ལས་མར་འབབ་ནི།
+   - Torii འཛོལ་བའི་ཚད་གཞི།
+   - གཞུང་སྐྱོང་གྲོས་འཆར་གྱལ་རིམ་རྒྱབ་བསྐྱོར་།
 
-## Step 6 – Validation & Handoff
-1. Run end-to-end validation:
-   - Submit governance proposal (e.g., parameter change).
-   - Process it through council approval to ensure governance pipeline works.
-   - Run ledger state diff to ensure consistency.
-2. Document runbook for on-call (incident response, failover, scaling).
-3. Communicate readiness to SoraFS/SoraNet teams; confirm piggyback deployments can point to Nexus nodes.
+## གོམ་པ་ ༦ – བདེན་དཔྱད་དང་ལག་ཁྱེར།
+1. མཇུག་ལས་མཐའ་དཔྱད་ཀྱི་བདེན་དཔང་རྒྱུ།
+   - གཞུང་སྐྱོང་གྲོས་འཆར་ (དཔེར་ན་ ཚད་གཞི་བསྒྱུར་བཅོས་) བཙུགས།
+   - གཞུང་སྐྱོང་མདོང་ལམ་ལཱ་འབད་ནིའི་དོན་ལུ་ ཚོགས་སྡེའི་གནང་བ་བརྒྱུད་དེ་ ལས་སྦྱོར་འབད་ནི།
+   - མཐུན་སྒྲིག་ངེས་གཏན་བཟོ་ནི་ལུ་ ལེད་ཇར་མངའ་སྡེ་ཁྱབ་སྤེལ་འདི་ གཡོག་བཀོལ།
+༢ ཁ་པར་གྱི་དོན་ལུ་ ཡིག་ཆའི་རཱན་ཀི་དེབ་ (བྱུང་རྐྱེན་ལན་གསལ་ འཐུས་ཤོར་ ཚད་འཇལ་ནི)།
+༣ I18NT0000005X/SoraNet སྡེ་ཚན་ཚུ་ལུ་ བརྡ་སྤྲོད་འབད་ནི། ཕགཔ་གི་བེག་བཀྲམ་སྤེལ་ཚུ་གིས་ Nexus མཐུད་མཚམས་ལུ་སྟོན་ཚུགས།
 
-## Implementation Checklist
-- [ ] Genesis/configuration audit completed.
-- [ ] Validator & observer nodes deployed with healthy consensus.
-- [ ] Governance keys loaded, proposal tested.
-- [ ] CI/CD pipelines running (build + deploy + smoke tests).
-- [ ] Observability dashboards live with alerting.
-- [ ] Handoff documentation delivered to downstream teams.
+## ལག་ལེན་འཐབ་ནི་ ཞིབ་དཔྱད་ཐོ་ཡིག་།
+- [ ] བྱུང་རིམ་/རིམ་སྒྲིག་རྩིས་ཞིབ་མཇུག་བསྡུ་ཡོདཔ།
+- [ བདེན་དཔྱད་དང་ བལྟ་རྟོག་པ་ མཐུད་མཚམས་ཚུ་ གསོ་བའི་མོས་མཐུན་ཐོག་ལས་ བཀྲམ་སྤེལ་འབད་ཡོདཔ།
+- [ ] གཞུང་སྐྱོང་ལྡེ་མིག་བཙུགས་ཡོད་པའི་གྲོས་འཆར་བརྟག་དཔྱད་བྱས།
+- [ ] CI/CD ཆུ་རྒྱུན་གཡོག་བཀོལ་ (བཟོ་བསྐྲུན་ + བཀོལ་སྤྱོད་ + དུ་ཁའི་བརྟག་དཔྱད།)
+- [ ] བལྟ་རྟོགས་འབད་ཚུགས་པའི་ བརྡ་རྟགས་ཚུ་ ཉེན་བརྡ་དང་གཅིག་ཁར་ སྡོདཔ་ཨིན།
+- [ ] མར་ཁུའི་སྡེ་ཚན་ཚུ་ལུ་ ལག་དེབ་ཀྱི་ཡིག་ཆ་ཚུ་ བཀྲམ་སྤེལ་འབད་ཡོདཔ།

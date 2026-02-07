@@ -8,69 +8,69 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Program goals
+## ལས་རིམ་གྱི་དམིགས་ཡུལ།
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+འདི་རྩེད་དེབ་འདི་གིས་ ཚར་གཅིག་ མི་མང་གི་སྔོན་ལྟ་འདི་ ག་དེ་སྦེ་ གསལ་བསྒྲགས་འབད་ནི་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+བསྐྱར་ཞིབ་པ་ གཡོག་བཀོལ་བའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ ཐད་རི་བ་རི་ཨིན། འདི་གིས་ DOCS-I1NT00000002X གི་ལམ་སྟོན་འདི་ དྲང་བདེན་སྦེ་བཞགཔ་ཨིན།
+བདེན་དཔང་འབད་ཚུགས་པའི་ ཅ་ཆས་ཚུ་དང་ ཉེན་སྲུང་ལམ་སྟོན་ དེ་ལས་ གྲུ་གཟིངས་ཚུ་ ངེས་གཏན་བཟོ་ནི།
+བསམ་འཆར་གྱི་ལམ་གསལ་བ།
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **ཤེས་ཡོན་:** མི་སྡེ་འཐུས་མི་དང་ མཉམ་འབྲེལ་པ་ དེ་ལས་ རྒྱུན་སྐྱོང་འབད་མི་ཚུ་གི་ཐོ་གཞུང་ཚུ་ བདག་འཛིན་འཐབ་ཡོདཔ།
+  སྔོན་ལྟ་གིས་ ངོས་ལེན་འབད་བཏུབ་པའི་ ལག་ལེན་གྱི་སྲིད་བྱུས་ལུ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན།
+- **Ceilings:** སྔོན་སྒྲིག་རླབས་ཚད་ ≤ 25 བསྐྱར་ཞིབ་པ་ , 14 འཛུལ་སྤྱོད་ཀྱི་སྒོ་སྒྲིག་, བྱུང་རྐྱེན་བྱུང་བ།
+  ལན་ ༢༤ ཆུ་ཚོད་ ནང་འཁོད་ལུ་ཨིན།
 
-## Launch gating checklist
+## སྒོ་སྒྲིབ་ཞིབ་དཔྱད་ཐོ་ཡིག་འགོ་བཙུགས།
 
-Complete these tasks before sending any invitation:
+མགྲོན་བརྡ་གང་རུང་མ་གཏང་པའི་ཧེ་མ་ ལས་འགན་འདི་ཚུ་ མཇུག་བསྡུ།
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+༡ CI (I18NI0000018X ནང་ སྐྱེལ་བཙུགས་འབད་ཡོད་པའི་ སྔོན་ལྟའི་ཅ་ཆས་ཚུ་ གསརཔ་བཙུགས་ཡོདཔ།
+   བརྟག་དཔྱད་གསུམ་མངའ་ཁོངས་, འགྲེལ་བཤད་ I18NT0000000X བཱན་ཌལ་)།
+2. `npm run --prefix docs/portal serve` (checksum-gated) འདི་ ངོ་རྟགས་གཅིག་གུ་བརྟག་དཔྱད་འབད་ཡོདཔ་ཨིན།
+༣ བསྐྱར་ཞིབ་པ་ ངོ་སྤྲོད་འབད་མི་ ཤོག་འཛིན་ཚུ་ ཆ་འཇོག་འབད་དེ་ རླབས་འབོད་འབད་མི་དང་འབྲེལ་བ་ཡོདཔ་ཨིན།
+༤ བདེ་འཇགས་དང་ བལྟ་རྟོག་འབད་ཚུགསཔ་ དེ་ལས་ བྱུང་རྐྱེན་ཡིག་ཆ་ཚུ་ བདེན་དཔྱད་འབད་ཡོདཔ།
+   ([I18NI0000020X](I18NU0000009X);
+   [I18NI0000021X](./observability.md);
+   [I18NI0000022X](./incident-runbooks.md)).
+༥ གྲ་སྒྲིག་འབད་ཡོད་པའི་གྲ་སྒྲིག་འབད་ཡོད་པའི་བསམ་འཆར་འབྲི་ཤོག་ཡང་ན་ གནད་དོན་ཊེམ་པེལེཊི་ (ཚབས་ཆེ་བའི་དོན་ལུ་ ས་སྒོ་ཚུ་ཚུདཔ་ཨིན།
+   བསྐྱར་བཟོ་གི་རིམ་པ་དང་ གསལ་གཞི་པར་རིས་ དེ་ལས་ མཐའ་འཁོར་གྱི་བརྡ་དོན་ཚུ་)།
+༦ ཡིག་ཆ་/DevRel + གཞུང་སྐྱོང་གིས་བསྐྱར་ཞིབ་འབད་མི་ གསལ་བསྒྲགས་འདྲ་བཤུས།
 
-## Invite package
+## འབོད་ཡིག་ཐུམ་སྐད།
 
-Every invite must include:
+གདན་འདྲེན་ཞུ་མི་རེ་རེར་ཡང་།
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **བདེན་པའི་ཅ་ལག་** — SoraFS གསལ་སྟོན་/འཆར་གཞི་ ཡང་ན་ GitHub ཅ་ཆས།
+   འབྲེལ་ལམ་ཚུ་དང་ ཅེག་སམ་ གསལ་སྟོན་དང་ འགྲེལ་བཤད་ཚུ། བདེན་དཔྱད་ཀྱི་གཞི་བསྟུན།
+   བརྡ་བཀོད་གསལ་ཏོག་ཏོ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ས་ཁོངས་འདི་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ གཡོག་བཀོལ་ཚུགས།
+2. **ཞབས་ཏོག་བཀོད་རྒྱ་ཚུ་** — ཅེག་སམ་-གཱེཊི་སྔོན་ལྟ་བརྡ་བཀོད་འདི་ བཙུགསཔ་ཨིན།
 
-   ```bash
-   DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
-   ```
+   I18NF0000004X
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **ཉེན་སྲུང་དྲན་སྐུལ་** — ཊོ་ཀེན་ཚུ་ རང་བཞིན་གྱིས་དུས་ཚོད་རྫོགས་ཡོདཔ་སྦེ་ ཁ་པར་གཏང་།
+   བརྗེ་སོར་འབད་མི་ཆོག དེ་ལས་ བྱུང་རྐྱེན་ཚུ་ དེ་འཕྲོ་ལས་ སྙན་ཞུ་འབད་དགོ།
+4. **བསམ་བློའི་རྒྱུན་ལམ་** — གནད་དོན་ཊེམ་པེལེཊི་/འབྲི་ཤོག་ལུ་འབྲེལ་ལམ་དང་ལན་གསལ་གསལ་ཏོག་ཏོ་བཟོ།
+   དུས་ཚོད་རེ་བ།
+༥. **ལས་རིམ་ཚེས་གྲངས་** — འགོ་བཙུགས་/མཇུག་གི་ཚེས་གྲངས་དང་ ཡིག་ཚང་གི་དུས་ཚོད་ ཡང་ན་ མཉམ་འབྱུང་ཞལ་འཛོམས་ཚུ་བྱིན།
+   དང་ ཤུལ་མའི་གསར་བསྐྲུན་སྒོ་སྒྲིག་འདི་ཨིན།
 
-The sample email in
-[`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+དཔེ་ཚད་གློག་འཕྲིན་ནང་།
+[I18NI0000023X](I18NU0000012X)
+དགོས་མཁོ་འདི་དག་ཁྱབ་ཡོད། ས་གནས་འཛིན་མི་ (ཚེས་གྲངས་, ཡུ་ཨར་ཨེལ་ཚུ་, འབྲེལ་མཐུད་ཚུ།) དུས་མཐུན་བཟོ་ནི།
+མ་གཏང་པའི་ཧེ་མ།
 
-## Expose the preview host
+## སྔོན་ལྟའི་ཧོསཊི་གསལ་སྟོན་འབད།
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+བཀོད་སྒྲིག་འབད་ཚར་བའི་ཤུལ་ལུ་ སྔོན་ལྟའི་ཧོསཊི་འདི་རྐྱངམ་ཅིག་ ཁྱབ་སྤེལ་འབད་ཞིནམ་ལས་ བསྒྱུར་བཅོས་ཀྱི་ཤོག་བྱང་འདི་ ཁྱབ་སྤེལ་འབད།
+ཆ་འཇོག་འབད་ཡོདཔ་ཨིན། བལྟ། [སྔོན་ལྟའི་ཧོསིཊི་ གསལ་སྟོན་ལམ་སྟོན་](I18NU0000013X)
+དབྱེ་ཚན་འདི་ནང་ལག་ལེན་འཐབ་མི་ གོ་རིམ་ཚུ་ བཟོ་བསྐྲུན་/དཔར་བསྐྲུན་/བདེན་དཔྱད་འབད་ནིའི་དོན་ལུ་ཨིན།
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. **བཟོ་བསྐྲུན་དང་ཐུམ་སྒྲིལ་:** གསར་བཏོན་ངོ་རྟགས་འདི་རྟགས་བཀལ་ཞིནམ་ལས་ གཏན་འབེབས་བཟོ་ནི།
+   ཅ་རྙིང་།
 
    ```bash
    cd docs/portal
@@ -89,18 +89,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   པིན་ཡིག་གཟུགས་འདི་གིས་ `portal.car`, `portal.manifest.*`, I18NI000000026X, བྲིས་ཡོདཔ་ཨིན།
+   དང་ `portal.dns-cutover.json` འོག་ལུ་ `artifacts/sorafs/`. ཡིག་སྣོད་དེ་ཚུ་ ལུ་མཉམ་སྦྲགས་འབད།
+   རླབས་འབོཝ་ལས་ བསྐྱར་ཞིབ་པ་ག་ར་གིས་ བིཊི་གཅིགཔོ་ཚུ་ བདེན་དཔྱད་འབད་ཚུགས།
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. **སྔོན་ལྟའི་མིང་གཞན་ཚུ་དཔར་བསྐྲུན་འབད།:* I18NI0000029X མེད་པའི་བརྡ་བཀོད་འདི་བསྐྱར་གཡོག་འབད།
+   (བཀྲམ་སྤེལ་ `TORII_URL`, I18NI000000031X, I18NI000000032X, དང་
+   གཞུང་སྐྱོང་གིས་ མིང་གཞན་བདེན་དཔང་འབད་ཡོདཔ།) ཡིག་ཚུགས་འདི་གིས་ གསལ་སྟོན་འདི་ ལུ་བཅིང་འོང་།
+   `docs-preview.sora` དང་ I18NI000000034X དང་།
+   སྒྲུབ་བྱེད་བསྡོམ་གྱི་དོན་ལུ་ `portal.pin.report.json` ཨིན།
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. **བཀྲམ་སྤེལ་འདི་བདེན་དཔྱད་:** མིང་གཞན་ཐག་གཅོད་དང་ ཅེག་སམ་མཐུན་སྒྲིག་ཚུ་ངེས་དཔྱད་འབད།
+   འདྲེན་བྱེད་ཚུ་མ་གཏང་པའི་ཧེ་མ་ ངོ་རྟགས་འདི།
 
    ```bash
    npm run probe:portal -- \
@@ -108,26 +108,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   `npm run serve` (SORA) འདི་ ཅིག་བཟུམ་སྦེ་ ལག་ལེན་འཐབ་ཨིན།
+   དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ སྔོན་ལྟའི་མཐའམ་འདི་བཤུབ་པ་ཅིན་ ཉེ་གནས་ཀྱི་འདྲ་བཤུས་ཅིག་ བསྒྱིར་ཚུགས།
 
-## Communications timeline
+## བརྒྱུད་ལམ་དུས་ཚོད།
 
-| Day | Action | Owner |
+| ཉིན་མོ། | བྱ་བ་ | ཇོ་བདག་ |
 | --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| ཌི་-༣ | Finalize མགྲོན་པའི་འདྲ་བཤུས་དང་ ཅ་རྙིང་ཚུ་གསར་བསྐྲུན་འབད་ སྐམ་བཏང་ཡོད་པའི་བདེན་དཔྱད་ | ཡིག་ཆ་/ཌི་ཝི་རེལ |
+| ཌི་-༢ | གཞུང་སྐྱོང་མིང་རྟགས་བཀོད་ + འགྱུར་བའི་ཤོག་བྱང་ | ཡིག་ཆ་/DevRel + གཞུང་སྐྱོང་། |
+| ཌི་-༡ | ཊེམ་པེལེཊི་ལག་ལེན་འཐབ་སྟེ་ མགྲོན་བརྡ་གཏང་མི་ཚུ་ ལེན་མི་ཐོ་ཡིག་དང་གཅིག་ཁར་ འཚོལ་ཞིབ་འཕྲུལ་ཆས་དུས་མཐུན་བཟོ་ནི། | ཡིག་ཆ་/ཌི་ཝི་རེལ |
+| D | Kickoff cant / ཡིག་ཚང་གི་དུས་ཚོད་, ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌི་ | Docs/DevRel + On-call |
+| ཌི་+༧ | བར་མའི་བསམ་འཆར། བཞུར་, ཚོད་བརྟག་བཀག་པའི་གནད་དོན། | ཡིག་ཆ་/ཌི་ཝི་རེལ |
+| ཌི་+༡༤ | ཀླད་ཀོར་གྱི་རླབས་དང་ གནས་སྐབས་ཀྱི་འཛུལ་སྤྱོད་འདི་ ཆ་མེད་བཏང་ཞིནམ་ལས་ `status.md` ནང་ལུ་ བཅུད་བསྡུས་དཔར་བསྐྲུན་འབད། | ཡིག་ཆ་/ཌི་ཝི་རེལ |
 
-## Access tracking & telemetry
+## འཛུལ་སྤྱོད་རྗེས་འདེད་དང་བརྒྱུད་འཕྲིན་གཏོང་བ།
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+༡ ཐོབ་མི་རེ་རེ་བཞིན་ བླམ་དང་ དུས་ཚོད་མཚོན་རྟགས་ དེ་ལས་ ཆ་མེད་ཀྱི་ཚེས་གྲངས་ཚུ་ ཐོ་བཀོད་འབད་ནི།
+   སྔོན་ལྟའི་བསམ་ལན་ནང་བར།(se)
+   [`preview-feedback-log`](./preview-feedback-log)དེ་ལྟར་རླབས་རེ་རེ་བཞིན་ བརྗེ་རེས་བྱས་པ་རེད།
+   སྒྲུབ་བྱེད་ཀྱི་ལམ་རིམ་གཅིག་པ།
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -138,41 +138,38 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   རྒྱབ་སྐྱོར་ཡོད་པའི་བྱུང་རིམ་ཚུ་ `invite-sent`, I18NI000000041X, ཨིན།
+   `feedback-submitted`, `issue-opened`, དང་ `access-revoked`. ཤིང་དུམ་འདི་སྡོདཔ་ཨིན།
+   I18NI000000045X སྔོན་སྒྲིག་གིས་; འདི་ལུ།
+   གནང་བ་འབྲི་ཤོག་ཚུ་དང་གཅིག་ཁར་ མགྲོན་བརྡ་རླབས་ཀྱི་ ཤོག་འཛིན་ཚུ། བཅུད་དོན་གྲོགས་རམ་པ་ལག་ལེན་འཐབ།
+   ཉེ་འདབས་དྲན་འཛིན་མ་འབད་བའི་ཧེ་མ་ རྩིས་ཞིབ་འབད་བཏུབ་པའི་ བཤུད་སྒྲིལ་ཅིག་ བཟོ་བསྐྲུན་འབད་ནི་ལུ་:
 
-   ```bash
-   npm run --prefix docs/portal preview:summary -- --summary-json \
-     > artifacts/docs_portal_preview/preview-20250303-summary.json
-   ```
+   I18NF0000008X
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
-   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   JSON གིས་ རླབས་རེ་ལུ་ མགྲོན་བརྡ་དང་ ཁ་ཕྱེ་ཐོབ་མི་ བསམ་འཆར།
+   རྩིས་རྐྱབ་ནི་དང་ འཕྲལ་གྱི་བྱུང་རིམ་གྱི་དུས་ཚོད་རྟགས་བཀོད་ནི། གྲོགས་རམ་པ་དེ་གིས་ རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
+   [I18NI0000046X](I18NU0000015X);
+   དེ་འབདཝ་ལས་ ལཱ་གི་རྒྱུན་རིམ་འདི་ ནང་འཁོད་ཡང་ན་ སི་ཨའི་ནང་ལུ་ གཡོག་བཀོལ་ཚུགས། ནང་ལུ་ ཌའི་ཇེསཊི་ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ།
+   [`docs/examples/docs_preview_feedback_digest.md`](I18NU0000016X)
+   རླབས་ཀྱི་ བསྐྱར་ཞིབ་འདི་དཔར་བསྐྲུན་འབད་བའི་སྐབས།
+2. རླབས་འདི་གི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ `DOCS_RELEASE_TAG` དང་གཅིག་ཁར་ བརྡ་བརྒྱུདཔ་ཚུ་ བརྡ་བརྒྱུད།
+   spikes འདི་ མགྲོན་བརྡ་སྡེ་ཚན་ཚུ་དང་ འབྲེལ་བ་འཐབ་ཚུགས།
+3. བཀྲམ་སྤེལ་འབད་བའི་ཤུལ་ལས་ I18NI000000049X གཡོག་བཀོལ།
+   སྔོན་ལྟ་མཐའ་འཁོར་འདི་ ངེས་བདེན་ གསར་བཏོན་མེ་ཊ་ཌེ་ཊ་ ཁྱབ་བསྒྲགས་འབདཝ་ཨིན།
+༤ རན་བུག་ཊེམ་པེལེཊི་ནང་ བྱུང་རྐྱེན་གང་རུང་ཚུ་ བསྡུ་ཞིནམ་ལས་ སྡེ་ཚན་ནང་ འབྲེལ་མཐུད་འབད།
 
-## Feedback & close-out
+## བསམ་འཆར་དང་ཉེ་འགྲམ།
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+༡ བརྗེ་སོར་གྱི་ཡིག་ཆ་ ཡང་ན་ གནད་དོན་ཚོགས་ཆུང་ནང་ བསམ་འཆར་ཚུ་ བསྡུ་སྒྲིག་འབད་དགོ། ཁ་ཡིག་རྣམ་གྲངས་དང་།
+   I18NI000000050X དེ་འབདཝ་ལས་ ལམ་གྱི་ཇོ་བདག་ཚུ་གིས་ འཇམ་ཏོང་ཏོ་སྦེ་ འདྲི་དཔྱད་འབད་ཚུགས།
+2. རླབས་སྙན་ཞུ་འདི་ ངོ་སྤྲོད་འབད་ནིའི་དོན་ལུ་ སྔོན་ལྟའི་ནང་བསྐྱོད་ཀྱི་བཅུད་བསྡུས་ཨའུཊི་པུཊི་འདི་ལག་ལེན་འཐབ།
+   བཅུད་བསྡུས་ཡོད། I18NI000000051X ནང་ (བཅའ་མར་གཏོགས་མི་ཚུ་ འཆར་གཞི་གཙོ་བོ་ འཆར་གཞི་བརྩམས་ཡོད།
+   fitives) དང་ དུས་མཐུན་བཟོས་ཏེ་ I18NI000000052X འདི་ DOCS-SORA འདི་ འགྱུར་བཅོས་འགྱོ་བ་ཅིན་ དུས་མཐུན་བཟོ་དགོ།
+3. ལས་ ཕར་ཚུར་གྱི་རིམ་པ་ཚུ་ བལྟ།
+   [`reviewer-onboarding`](./reviewer-onboarding.md): འཛུལ་སྤྱོད་ཆ་མེད་གཏོང་བ། ཡིག་མཛོད་།
+   ཞུ་བ་དང་ བཅའ་མར་གཏོགས་མི་ཚུ་ལུ་བཀའ་དྲིན་ཆེ།
+༤ ཤུལ་མའི་རླབས་འདི་ བསྐྱར་གསོ་འབད་བའི་ ཅ་ཆས་ཚུ་གིས་ བརྟག་ཞིབ་སུམ་སྒོ་ཚུ་ ལོག་སྟེ་གཡོག་བཀོལ་དགོ།
+   དང་ ཚེས་གྲངས་གསརཔ་ཚུ་དང་གཅིག་ཁར་ མགྲོན་བརྡ་ཊེམ་པེལེཊི་འདི་དུས་མཐུན་བཟོ་ནི།
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+རྩེདམོ་འདི་འཇུག་སྤྱོད་འབད་མི་འདི་གིས་ སྔོན་ལྟའི་ལས་རིམ་རྩིས་ཞིབ་འབད་བཏུབ་སྦེ་བཞགཔ་ཨིན།
+ཌོཀསི་/ཌི་ཝི་རེལ་ལུ་ དྲྭ་རྒྱ་འདི་ ཇི་ཨེ་ལུ་ འབྱོན་ཚུགས་པའི་ བསྐྱར་ལོག་འབད་བཏུབ་པའི་ཐབས་ལམ་ཅིག་ བྱིནམ་ཨིན།

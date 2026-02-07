@@ -8,42 +8,44 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| Նյութ | Մանրամասն |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
-| Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| Ալիք | W1 — Գործընկերներ և Torii ինտեգրատորներ |
+| Հրավիրելու պատուհան | 2025‑04‑12 → 2025‑04‑26 |
+| Արտեֆակտ պիտակ | `preview-2025-04-12` |
+| Հետագծողի խնդիր | `DOCS-SORA-Preview-W1` |
+| Մասնակիցներ | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
 
-## Highlights
+## Կարևորություններ
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. **Checksum workflow** — Բոլոր վերանայողները ստուգել են նկարագրիչը/արխիվը `scripts/preview_verify.sh`-ի միջոցով; տեղեկամատյանները, որոնք պահվում են հրավերի ճանաչման կողքին:
+2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors` և `DocsPortal/GatewayRefusals` վահանակները կանաչ մնացին ամբողջ ալիքի համար; միջադեպեր կամ ահազանգերի էջեր չեն բացվել:
+3. **Փաստաթղթի հետադարձ կապ (`docs-preview/w1`)** — Ներկայացվել է երկու փոքր նիտ.
+   - `docs-preview/w1 #1`. պարզաբանեք նավի ձևակերպումը «Փորձեք» բաժնում (լուծված է):
+   - `docs-preview/w1 #2`. թարմացրեք Փորձեք այն սքրինշոթը (լուծված է):
+4. **Runbook-ի հավասարություն** — SoraFS օպերատորները հաստատել են `orchestrator-ops`-ի և `multi-source-rollout`-ի միջև նոր խաչաձև կապերը՝ ուղղված իրենց W0 մտահոգություններին:
 
-## Action items
+## Գործողությունների տարրեր
 
-| ID | Description | Owner | Status |
+| ID | Նկարագրություն | Սեփականատեր | Կարգավիճակը |
 | --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| W1-A1 | Թարմացնել Փորձեք այն նավարկության ձևակերպումը ըստ `docs-preview/w1 #1`-ի: | Docs-core-02 | ✅ Ավարտված է (2025-04-18): |
+| W1-A2 | Թարմացրեք Փորձեք այն սքրինշոթը ըստ `docs-preview/w1 #2`-ի: | Docs-core-03 | ✅ Ավարտված է (2025-04-19): |
+| W1-A3 | Ամփոփեք գործընկերների բացահայտումները + հեռաչափության ապացույցները ճանապարհային քարտեզում/կարգավիճակում: | Docs/DevRel առաջատար | ✅ Ավարտված է (տես tracker + status.md): |
 
-## Exit summary (2025-04-26)
+## Ելքի ամփոփում (2025-04-26)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- Բոլոր ութ վերանայողները հաստատել են ավարտը գրասենյակի վերջին ժամերին, մաքրել են տեղական արտեֆակտները և չեղյալ են համարել նրանց մուտքը:
+- Հեռուստաչափությունը մնաց կանաչ ելքի միջոցով; վերջնական նկարներ՝ կցված `DOCS-SORA-Preview-W1`-ին:
+- Հրավերների գրանցամատյանը թարմացվել է ելքի հաստատումներով; հետագծողը շրջեց W1-ը 🈴 և ավելացրեց անցակետի մուտքերը:
+- Ապացույցների փաթեթ (նկարագրիչ, ստուգիչ գումարի մատյան, զոնդի ելք, փորձիր վստահված անձի տառադարձում, հեռաչափության սքրինշոթներ, հետադարձ կապի ամփոփում) արխիվացված `artifacts/docs_preview/W1/` տակ:
 
-## Next steps
+## Հաջորդ քայլերը
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- Պատրաստեք W2 համայնքի ընդունման պլանը (կառավարման հաստատում + ձևանմուշի հարցումների ճշգրտումներ):
+- Թարմացրեք նախադիտման արտեֆակտ պիտակը W2 ալիքի համար և նորից գործարկեք նախաթռիչքի սցենարը, երբ ավարտվեն ամսաթվերը:
+- W1-ի կիրառման արդյունքները միացրե՛ք ճանապարհային քարտեզին/կարգավիճակին, որպեսզի համայնքի ալիքն ունենա վերջին ուղեցույցը:

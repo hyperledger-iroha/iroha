@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dd9da5045f5f40dbc31837145ad13bf79b4d751b0803c0b6d69bab49885ed1b4
 source_last_modified: "2025-12-29T18:16:35.079313+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Slide Template
+# SNS сургалтын слайдын загвар
 
-This Markdown outline mirrors the slides that facilitators should adapt for
-their language cohorts. Copy these sections into Keynote/PowerPoint/Google
-Slides and localise the bullet points, screenshots, and diagrams as needed.
+Энэхүү Markdown тойм нь сургагч багш нарын дасан зохицох ёстой слайдуудыг тусгасан болно
+тэдний хэлний бүлэг. Эдгээр хэсгийг Keynote/PowerPoint/Google руу хуулна уу
+Шаардлагатай бол сумны цэг, дэлгэцийн агшин, диаграммуудыг слайд хийж, нутагшуулна.
 
-## Title slide
-- Program: “Sora Name Service onboarding”
-- Subtitle: specify suffix + cycle (e.g., `.sora — 2026‑03`)
-- Presenters + affiliations
+## Гарчгийн слайд
+- Хөтөлбөр: "Sora Name Service-д элсэх"
+- Хадмал: дагавар + мөчлөгийг зааж өгөх (жишээ нь, `.sora — 2026‑03`)
+- Илтгэгчид + харьяалал
 
-## KPI orientation
-- Screenshot or embed of `docs/portal/docs/sns/kpi-dashboard.md`
-- Bullet list explaining suffix filters, ARPU table, freeze tracker
-- Callouts for exporting PDF/CSV
+## KPI чиг баримжаа
+- `docs/portal/docs/sns/kpi-dashboard.md` дэлгэцийн агшин эсвэл оруулах
+- Суффикс шүүлтүүрийг тайлбарласан сумны жагсаалт, ARPU хүснэгт, хөлдөлт хянагч
+- PDF/CSV экспортлох мэдээлэл
 
-## Manifest lifecycle
-- Diagram: registrar → Torii → governance → DNS/gateway
-- Steps referencing `docs/source/sns/registry_schema.md`
-- Example manifest excerpt with annotations
+## Илэрхий амьдралын мөчлөг
+- Диаграм: бүртгэгч → Torii → засаглал → DNS/гарц
+- `docs/source/sns/registry_schema.md`-д хамаарах алхамууд
+- Тэмдэглэл бүхий манифестын жишээ
 
-## Dispute and freeze drills
-- Flow diagram for guardian intervention
-- Checklist referencing `docs/source/sns/governance_playbook.md`
-- Example freeze ticket timeline
+## Маргаан болон хөлдөөх дасгалууд
+- Асран хамгаалагчийн оролцооны урсгалын диаграмм
+- `docs/source/sns/governance_playbook.md` лавлагааны хяналтын хуудас
+- Тасалбарын цагийн хуваарийг царцаах жишээ
 
-## Annex capture
-- Command snippet showing `cargo xtask sns-annex ... --portal-entry ...`
-- Reminder to archive Grafana JSON under `artifacts/sns/regulatory/<suffix>/<cycle>/`
-- Link to `docs/source/sns/reports/.<suffix>/<cycle>.md`
+## Хавсралтын зураг
+- `cargo xtask sns-annex ... --portal-entry ...`-г харуулсан командын хэсэг
+- `artifacts/sns/regulatory/<suffix>/<cycle>/` доор Grafana JSON-г архивлах сануулга
+- `docs/source/sns/reports/.<suffix>/<cycle>.md` холбоос
 
-## Next steps
-- Training feedback link (see `docs/examples/sns_training_eval_template.md`)
-- Slack/Matrix channel handles
-- Upcoming milestone dates
+## Дараагийн алхамууд
+- Сургалтын санал хүсэлтийн холбоос (`docs/examples/sns_training_eval_template.md`-г үзнэ үү)
+- Slack/Matrix сувгийн бариул
+- Удахгүй болох чухал өдрүүд

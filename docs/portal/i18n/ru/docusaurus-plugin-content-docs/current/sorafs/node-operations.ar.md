@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-operations.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-operations
-title: دليل تشغيل عمليات العقد
-sidebar_label: تشغيل العقد
-description: تحقق من نشر `sorafs-node` المضمّن داخل Torii.
+идентификатор: операции узла
+Название: دليل تشغيل عمليات العقد
+Sidebar_label: Открыть
+описание: تحقق من نشر `sorafs-node` المضمّن داخل Torii.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/runbooks/sorafs_node_ops.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم سحب مجموعة توثيق Sphinx القديمة.
+:::примечание
+Был установлен `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Он был убит в фильме "Сфинкс" в фильме "Сфинкс". القديمة.
 :::
 
 ## نظرة عامة
 
-يرشد هذا الدليل المشغلين خلال التحقق من نشر `sorafs-node` المضمّن داخل Torii. يتطابق
-كل قسم مباشرةً مع مخرجات SF-3: جولات pin/fetch، واستعادة ما بعد إعادة التشغيل،
-ورفض الحصص، وأخذ عينات PoR.
+Он был установлен в соответствии с `sorafs-node` и установлен Torii. يتطابق
+В случае с SF-3: закрепление/выборка, а также выборка в режиме реального времени.
+Он был опубликован в PoR.
 
-## 1. المتطلبات المسبقة
+## 1. Настройки
 
-- فعّل عامل التخزين في `torii.sorafs.storage`:
+- В разделе `torii.sorafs.storage`:
 
   ```toml
   [torii.sorafs.storage]
@@ -43,15 +45,15 @@ description: تحقق من نشر `sorafs-node` المضمّن داخل Torii.
   por_success_alpha = 0.25
   ```
 
-- تأكّد من أن عملية Torii تملك صلاحيات القراءة/الكتابة على `data_dir`.
+- Зарегистрирован для Torii и установлен на `data_dir`.
 - تحقّق من أن العقدة تعلن السعة المتوقعة عبر `GET /v1/sorafs/capacity/state` بعد
   تسجيل تصريح.
-- عند تمكين التنعيم، تعرض لوحات المتابعة عدادات GiB·hour/PoR الخام والمُنعّمة
-  لإبراز الاتجاهات الخالية من التذبذب جنبًا إلى جنب مع القيم اللحظية.
+- عند تمكين التنعيم, تعرض لوحات المتابعة عدادات GiB·hour/PoR الخام والمُنعّمة
+  Он был убит в 2007 году в Нью-Йорке в Нью-Йорке.
 
-### تشغيل تجريبي عبر CLI (اختياري)
+### Открытие интерфейса командной строки (открытие)
 
-قبل إتاحة نقاط النهاية HTTP يمكنك إجراء فحص سلامة لخلفية التخزين باستخدام CLI
+Для запуска HTTP-запроса и использования интерфейса командной строки CLI
 المرفقة.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
@@ -67,14 +69,14 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-تطبع الأوامر ملخصات Norito JSON وترفض عدم تطابق ملفات تعريف المقاطع أو digest،
-ما يجعلها مفيدة لاختبارات الدخان في CI قبل توصيل Torii.【crates/sorafs_node/tests/cli.rs#L1】
+Создайте файл Norito JSON и создайте дайджест,
+Для создания файла CI в файле Torii.【crates/sorafs_node/tests/cli.rs#L1】
 
 ### تمرين إثبات PoR
 
-يمكن للمشغلين الآن إعادة تشغيل آرتيفاكتات PoR الصادرة عن الحوكمة محليًا قبل
-رفعها إلى Torii. تعيد CLI استخدام مسار الإدخال نفسه في `sorafs-node`، لذا تكشف
-التشغيلات المحلية عن أخطاء التحقق الدقيقة نفسها التي ستعيدها واجهة HTTP.
+Он сказал, что в 2017 году он был назначен президентом PoR. قبل
+رفعها إلى Torii. Вызов CLI для работы с `sorafs-node`, с помощью `sorafs-node`,
+Вы можете подключиться к веб-серверу HTTP.
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest por \
@@ -84,27 +86,27 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
   --verdict ./fixtures/sorafs_manifest/por/verdict_v1.to
 ```
 
-يُصدر الأمر ملخص JSON (digest المانيفست، معرّف المزوّد، digest الإثبات، عدد
-العينات، ونتيجة الحكم الاختيارية). وفّر `--manifest-id=<hex>` لضمان تطابق
-المانيفست المخزّن مع digest التحدي، و`--json-out=<path>` عندما تريد أرشفة
-الملخص مع الآرتيفاكتات الأصلية كدليل تدقيق. إدراج `--verdict` يتيح لك تمرين
-حلقة التحدي → الإثبات → الحكم كاملةً دون اتصال قبل استدعاء واجهة HTTP.
+Создать файл JSON (дайджест, дайджест, дайджест, дайджест
+العينات, ونتيجة الحكم الاختيارية). وفّر `--manifest-id=<hex>` ضمان تطابق
+المانيفست المخزّن عمخزّن عندما تريد أرشفة
+Это было сделано для того, чтобы покончить с собой. إدراج `--verdict` يتيح لك تمرين
+Перейти к основному контенту → Обмен → Открыть веб-сайт HTTP.
 
-بمجرد تشغيل Torii يمكنك استرجاع الآرتيفاكتات نفسها عبر HTTP:
+Добавьте Torii для подключения к HTTP:
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-يتم تقديم كلا نقطتي النهاية بواسطة عامل التخزين المضمّن، لذا تبقى اختبارات
-الدخان عبر CLI واستقصاءات البوابة متزامنة.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+Его персонаж - Дэвид Пэнсон, вице-премьер-министр, Лизетт Спенсер. اختبارات
+Настройка CLI и настройка интерфейса متزامنة.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. جولة Pin → Fetch
+## 2. Закрепить Pin → Fetch
 
 1. أنشئ حزمة مانيفست + حمولة (على سبيل المثال عبر
    `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. أرسل المانيفست بترميز base64:
+2. Создать базу данных base64:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -112,9 +114,9 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      -d @pin_request.json
    ```
 
-   يجب أن يحتوي JSON الطلب على `manifest_b64` و`payload_b64`. تعيد الاستجابة
-   الناجحة `manifest_id_hex` وdigest الحمولة.
-3. اجلب البيانات المثبتة:
+   Используйте JSON для `manifest_b64` и `payload_b64`. تعيد الاستجابة
+   `manifest_id_hex` и дайджест-файл `manifest_id_hex`.
+3. Варианты действий:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -126,30 +128,28 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      }'
    ```
 
-   فك ترميز base64 للحقل `data_b64` وتحقق من تطابقه مع البايتات الأصلية.
+   В base64 используется код `data_b64`, который используется для проверки подлинности.
 
-## 3. تمرين استعادة ما بعد إعادة التشغيل
+## 3. Нажмите на кнопку «Получить»
 
-1. ثبّت مانيفستًا واحدًا على الأقل كما في الأعلى.
-2. أعد تشغيل عملية Torii (أو العقدة كاملةً).
-3. أعد إرسال طلب الجلب. يجب أن تبقى الحمولة قابلة للاسترجاع وأن يتطابق digest
+1. Дэнни Мэнсон и его сын Кейна в сериале.
+2. Установите флажок Torii (в случае необходимости).
+3. أعد إرسال طلب الجلب. Новости и новости журнала "Дайджест"
    المُعاد مع القيمة السابقة لإعادة التشغيل.
-4. افحص `GET /v1/sorafs/storage/state` للتأكد من أن `bytes_used` يعكس
-   المانيفستات المحفوظة بعد إعادة التشغيل.
+4. Установите `GET /v1/sorafs/storage/state` рядом с `bytes_used`.
+   Сделайте это в ближайшее время.
 
-## 4. اختبار رفض الحصة
-
-1. اخفض مؤقتًا `torii.sorafs.storage.max_capacity_bytes` إلى قيمة صغيرة (مثل حجم
-   مانيفست واحد).
-2. ثبّت مانيفستًا واحدًا؛ يجب أن ينجح الطلب.
-3. حاول تثبيت مانيفست ثانٍ بحجم مشابه. يجب أن ترفض Torii الطلب مع HTTP `400`
-   ورسالة خطأ تحتوي على `storage capacity exceeded`.
-4. استعد حد السعة الطبيعي عند الانتهاء.
+## 4. اختبار رفض الحصة1. Установите `torii.sorafs.storage.max_capacity_bytes` для получения дополнительной информации (например,
+   Миссис Найт).
+2. Дэнни Мэнни Уинстон Он был в Нью-Йорке.
+3. Дэниел Торонто Миссисипи Уотсон. Отправьте запрос Torii для HTTP `400`
+   Установите флажок `storage capacity exceeded`.
+4. Сделайте так, чтобы это произошло.
 
 ## 5. فحص أخذ عينات PoR
 
-1. ثبّت مانيفستًا.
-2. اطلب عينة PoR:
+1. Дэнни Мэнси.
+2. Обратите внимание на PoR:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -161,25 +161,25 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      }'
    ```
 
-3. تحقّق من أن الاستجابة تحتوي على `samples` بعدد العينات المطلوبة وأن كل إثبات
-   يصحّ مقابل جذر المانيفست المخزّن.
+3. Установите флажок для `samples`, чтобы установить его на место. إثبات
+   Он выступил с речью в газете "The Wall Street Journal".
 
 ## 6. خطافات الأتمتة
 
-- يمكن لاختبارات CI / الدخان إعادة استخدام الفحوصات المستهدفة المضافة في:
+- В разделе CI / в разделе "Информационные материалы":
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
   ```
 
-  والتي تغطي `pin_fetch_roundtrip` و`pin_survives_restart` و`pin_quota_rejection`
+  Например, `pin_fetch_roundtrip` и `pin_survives_restart` и `pin_quota_rejection`.
   و`por_sampling_returns_verified_proofs`.
-- يجب أن تتابع لوحات المتابعة:
+- Сообщение в разделе «Линия»:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
   - عدادات نجاح/فشل PoR المعروضة عبر `/v1/sorafs/capacity/state`
-  - محاولات نشر التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`
+  - Добавлено в программу `sorafs_node_deal_publish_total{result=success|failure}`.
 
-يضمن اتباع هذه التدريبات أن عامل التخزين المضمّن قادر على إدخال البيانات،
-والصمود أمام عمليات إعادة التشغيل، واحترام الحصص المضبوطة، وتوليد إثباتات PoR
-حتمية قبل أن تعلن العقدة السعة للشبكة الأوسع.
+Он был убит в 2007 году в 1980-х годах.
+Он был создан в 1980-х годах, когда он был выбран в качестве посредника. إثباتات PoR
+Он был убит в 1980-х годах.

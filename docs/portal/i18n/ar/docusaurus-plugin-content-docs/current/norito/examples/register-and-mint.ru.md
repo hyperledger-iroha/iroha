@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Зарегистрировать домен и выпустить активы
-description: Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سبيكة: /norito/examples/register-and-mint
+العنوان: تسجيل النطاق وشراء الأنشطة
+description: عرض إنشاء النطاقات بالتحديد والتسجيل النشط وتحديد الخيارات.
+المصدر: صناديق/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
+يعرض إنشاء النطاقات بالتحديدات والتسجيل النشط وتحديد الخيارات.
 
-## Пошаговый обход реестра
+## Почаговый обдод еестра
 
-- Убедитесь, что аккаунт назначения (например `ih58...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
-- Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить успешный выпуск.
+- تأكد من أن اسم الحساب (على سبيل المثال `ih58...`) موجود، وهو ما يعكس التحسينات في Quickstart SDK.
+- اختر هنا `register_and_mint` لإنشاء النشاط المقترح ROSE وشراء 250 وحدة لـ Alice في معاملة واحدة.
+- تحقق من التوازن عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` للتحقق من صحة البيانات بنجاح.
 
-## Связанные руководства SDK
+## تطوير شامل SDK
 
 - [Quickstart Rust SDK](/sdks/rust)
 - [Quickstart Python SDK](/sdks/python)
 - [Quickstart JavaScript SDK](/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/register-and-mint.ko)
+[تحميل النسخة Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

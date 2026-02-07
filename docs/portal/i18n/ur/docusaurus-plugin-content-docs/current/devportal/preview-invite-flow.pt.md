@@ -4,92 +4,91 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-invite-flow.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Fluxo de convites do preview
+# پیش نظارہ دعوت کا بہاؤ
 
-## Objetivo
+## مقصد
 
-O item do roadmap **DOCS-SORA** destaca o onboarding de revisores e o programa de convites do preview publico como os ultimos bloqueadores antes de o portal sair de beta. Esta pagina descreve como abrir cada onda de convites, quais artefatos devem ser enviados antes de mandar convites e como provar que o fluxo e auditavel. Use junto com:
+روڈ میپ آئٹم ** DOCS-SORA ** پورٹل کے بیٹے سے پہلے آخری بلاکرز کے طور پر جائزہ لینے والے اور عوامی پیش نظارہ دعوت نامے کے پروگرام کو نمایاں کرتا ہے۔ اس صفحے میں یہ بیان کیا گیا ہے کہ دعوت نامے کی ہر لہر کو کیسے کھولیں ، دعوت نامے بھیجنے سے پہلے کون سے نمونے بھیجیئے جائیں ، اور یہ کیسے ثابت کیا جائے کہ بہاؤ قابل آیت ہے۔ ساتھ مل کر استعمال کریں:
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) para o manejo por revisor.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) para garantias de checksum.
-- [`devportal/observability`](./observability.md) para exports de telemetria e hooks de alertas.
+- [`devportal/reviewer-onboarding`] (./reviewer-onboarding.md) جائزہ لینے والے انتظام کے لئے۔
+- [`devportal/preview-integrity-plan`] (./preview-integrity-plan.md) چیکسم کی ضمانتوں کے لئے۔
+- [`devportal/observability`] (./observability.md) ٹیلی میٹری برآمدات اور الرٹ ہکس کے لئے۔
 
-## Plano de ondas
+## لہر طیارہ
 
-| Onda | Audiencia | Criterios de entrada | Criterios de saida | Notas |
+| لہر | سامعین | اندراج کا معیار | باہر نکلنے کے معیارات | نوٹ |
 | --- | --- | --- | --- | --- |
-| **W0 - Maintainers core** | Maintainers de Docs/SDK validando conteudo do dia um. | Time GitHub `docs-portal-preview` populado, gate de checksum `npm run serve` verde, Alertmanager silencioso por 7 dias. | Todos os docs P0 revisados, backlog tagueado, sem incidentes bloqueadores. | Usado para validar o fluxo; sem email de convite, apenas compartilhar os artefatos de preview. |
-| **W1 - Partners** | Operadores SoraFS, integradores Torii, revisores de governanca sob NDA. | W0 encerrado, termos legais aprovados, proxy Try-it em staging. | Sign-off dos partners coletado (issue ou formulario assinado), telemetria mostra <=10 revisores concorrentes, sem regressoes de seguranca por 14 dias. | Aplicar template de convite + tickets de solicitacao. |
-| **W2 - Comunidade** | Contribuidores selecionados da lista de espera da comunidade. | W1 encerrado, drills de incidentes ensaiados, FAQ publico atualizado. | Feedback digerido, >=2 releases de documentacao enviados via pipeline de preview sem rollback. | Limitar convites concorrentes (<=25) e agrupar semanalmente. |
+| ** W0 - برقرار رکھنے والے کور ** | پہلے دن سے دستاویزات/ایس ڈی کے کی دیکھ بھال کرنے والے مواد کی توثیق کرتے ہیں۔ | گٹ ہب ٹیم `docs-portal-preview` آبادی ، چیکسم گیٹ `npm run serve` گرین ، الرٹ مینجر 7 دن کے لئے خاموش۔ | تمام P0 دستاویزات کا جائزہ لیا گیا ، بیک بلاگ ٹیگ کیا گیا ، کوئی مسدود واقعات نہیں۔ | بہاؤ کو درست کرنے کے لئے استعمال کیا جاتا تھا۔ کوئی دعوت نامہ ای میل نہیں ، صرف پیش نظارہ نمونے کا اشتراک کریں۔ |
+| ** W1 - شراکت دار ** | SoraFS آپریٹرز ، Torii انٹیگریٹرز ، این ڈی اے کے تحت گورننس جائزہ لینے والے۔ | W0 بند ، قانونی شرائط منظور شدہ ، اسٹیجنگ میں پراکسی کی کوشش کریں۔ | پارٹنر سائن آف جمع (مسئلہ یا دستخط شدہ فارم) ، ٹیلی میٹری شوز  = 2 دستاویزات رول بیک کے بغیر پیش نظارہ پائپ لائن کے ذریعے بھیجی گئی۔ | مسابقتی دعوت ناموں (<= 25) اور گروپ ہفتہ وار کو محدود کریں۔ |
 
-Documente qual onda esta ativa em `status.md` e no tracker de solicitacoes de preview para que a governanca veja o estado rapidamente.
+دستاویز جس کی لہر `status.md` میں اور پیش نظارہ کی درخواست ٹریکر میں فعال ہے تاکہ گورننس کی حیثیت کو تیزی سے دیکھ سکے۔
 
-## Checklist de preflight
+## پریفل لائٹ چیک لسٹ
 
-Conclua estas acoes **antes** de agendar convites para uma onda:
+** اس سے پہلے ** اس سے پہلے کہ ** ایک لہر کے لئے دعوت نامے کو مکمل کریں:
 
-1. **Artefatos de CI disponiveis**
-   - Ultimo `docs-portal-preview` + descriptor enviado por `.github/workflows/docs-portal-preview.yml`.
-   - Pin de SoraFS anotado em `docs/portal/docs/devportal/deploy-guide.md` (descriptor de cutover presente).
-2. **Enforcement de checksum**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invocado via `npm run serve`.
-   - Instrucoes de `scripts/preview_verify.sh` testadas em macOS + Linux.
-3. **Baseline de telemetria**
-   - `dashboards/grafana/docs_portal.json` mostra trafego Try it saudavel e o alerta `docs.preview.integrity` esta verde.
-   - Ultimo apendice de `docs/portal/docs/devportal/observability.md` atualizado com links do Grafana.
-4. **Artefatos de governanca**
-   - Issue do invite tracker pronta (uma issue por onda).
-   - Template de registro de revisores copiado (ver [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Aprovacoes legais e de SRE requeridas anexadas a issue.
+1. ** CI نمونے دستیاب **
+   - آخری `docs-portal-preview` + ڈسکرپٹر `.github/workflows/docs-portal-preview.yml` کے ذریعہ بھیجا گیا۔
+   - SoraFS کا پن `docs/portal/docs/devportal/deploy-guide.md` میں نوٹ کیا گیا (کٹ اوور ڈسریکٹر موجود)۔
+2. ** چیکسم نفاذ **
+   - `docs/portal/scripts/serve-verified-preview.mjs` `npm run serve` کے ذریعے تیار کیا گیا۔
+   - `scripts/preview_verify.sh` ہدایات MacOS + Linux پر جانچ کی گئیں۔
+3. ** ٹیلی میٹری بیس لائن **
+   - `dashboards/grafana/docs_portal.json` صحت مند دکھاتا ہے آئی ٹی ٹریفک کی کوشش کریں اور `docs.preview.integrity` الرٹ سبز ہے۔
+   - `docs/portal/docs/devportal/observability.md` کا آخری ضمیمہ Grafana کے لنکس کے ساتھ اپ ڈیٹ ہوا۔
+4. ** گورننس نمونے **
+   - دعوت نامہ ٹریکر تیار (فی لہر ایک مسئلہ) کا مسئلہ۔
+   - جائزہ لینے والے رجسٹریشن ٹیمپلیٹ کاپی کیا گیا (دیکھیں [`docs/examples/docs_preview_request_template.md`] (../../../examples/docs_preview_request_template.md))۔
+   - مسئلے سے منسلک قانونی اور SRE منظوری کی ضرورت ہے۔
 
-Registre a conclusao do preflight no invite tracker antes de enviar qualquer email.
+کسی بھی ای میل بھیجنے سے پہلے انوائٹ ٹریکر میں پہلے سے مکمل تکمیل کو رجسٹر کریں۔
 
-## Etapas do fluxo
+## بہاؤ کے اقدامات1. ** امیدوار منتخب کریں **
+   - ویٹنگ شیٹ یا پارٹنر قطار سے کھینچیں۔
+   - اس بات کو یقینی بنائیں کہ ہر امیدوار کے پاس مکمل درخواست ٹیمپلیٹ موجود ہے۔
+2. ** رسائی کو منظور کریں **
+   - دعوت نامے کے ٹریکر کے مسئلے کو ایک منظوری تفویض کریں۔
+   - شرطیں چیک کریں (سی ایل اے/معاہدہ ، قابل قبول استعمال ، سیکیورٹی بریف)۔
+3. ** دعوت نامے بھیجیں **
+   - [`docs/examples/docs_preview_invite_template.md`] (../../../examples/docs_preview_invite_template.md) (`<preview_tag>` ، `<request_ticket>` ، رابطے) کے پلیس ہولڈرز کو پُر کریں۔
+   - آرکائیو ڈسکرپٹر + ہیش منسلک کریں ، اس کو یو آر ایل کے اسٹیج کرنے کی کوشش کریں ، اور چینلز کی حمایت کریں۔
+   - اس مسئلے میں حتمی ای میل (یا میٹرکس/سلیک ٹرانسکرپٹ) کو محفوظ کریں۔
+4. ** آن بورڈنگ کی پیروی کریں **
+   - `invite_sent_at` ، `expected_exit_at` ، اور حیثیت (`pending` ، `active` ، `complete` ، `revoked`) کے ساتھ انوائٹ ٹریکر کو اپ ڈیٹ کریں۔
+   - آڈیٹیبلٹی کے لئے جائزہ لینے والے کی ان پٹ درخواست کو لنک کریں۔
+5. ** مانیٹر ٹیلی میٹری **
+   - `docs.preview.session_active` اور `TryItProxyErrors` الرٹس کا مشاہدہ کریں۔
+   - کسی واقعے کو کھولیں اگر ٹیلی میٹری بیس لائن سے ہٹ جاتی ہے اور دعوت نامے کے اندراج کے ساتھ ہی نتیجہ ریکارڈ کرتی ہے۔
+6. ** رائے جمع کریں اور بند کریں **
+   جب تاثرات آتے ہیں یا `expected_exit_at` کی میعاد ختم ہوجاتی ہے تو اختتام دعوت دیتا ہے۔
+   - اگلے کوہورٹ کی طرف جانے سے پہلے ایک مختصر خلاصہ (نتائج ، واقعات ، اگلی کارروائیوں) کے ساتھ لہر کے مسئلے کو اپ ڈیٹ کریں۔
 
-1. **Selecionar candidatos**
-   - Puxar da planilha de espera ou fila de partners.
-   - Garantir que cada candidato tenha o template de solicitacao completo.
-2. **Aprovar acesso**
-   - Atribuir um aprovador a issue do invite tracker.
-   - Verificar prerequisitos (CLA/contrato, uso aceitavel, brief de seguranca).
-3. **Enviar convites**
-   - Preencher os placeholders de [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, contatos).
-   - Anexar o descriptor + hash do archive, URL de staging do Try it, e canais de suporte.
-   - Guardar o email final (ou transcript do Matrix/Slack) na issue.
-4. **Acompanhar onboarding**
-   - Atualizar o invite tracker com `invite_sent_at`, `expected_exit_at`, e status (`pending`, `active`, `complete`, `revoked`).
-   - Linkar a solicitacao de entrada do revisor para auditabilidade.
-5. **Monitorar telemetria**
-   - Observar `docs.preview.session_active` e alertas `TryItProxyErrors`.
-   - Abrir um incidente se a telemetria desviar do baseline e registrar o resultado ao lado da entrada de convite.
-6. **Coletar feedback e encerrar**
-   - Encerrar convites quando o feedback chegar ou `expected_exit_at` expirar.
-   - Atualizar a issue da onda com um resumo curto (achados, incidentes, proximas acoes) antes de passar para a proxima coorte.
+## ثبوت اور رپورٹنگ
 
-## Evidencia e reporting
-
-| Artefato | Onde armazenar | Cadencia de atualizacao |
+| نمونہ | کہاں اسٹور کریں | اپ ڈیٹ کیڈینس |
 | --- | --- | --- |
-| Issue do invite tracker | Projeto GitHub `docs-portal-preview` | Atualizar apos cada convite. |
-| Export do roster de revisores | Registro vinculado em `docs/portal/docs/devportal/reviewer-onboarding.md` | Semanal. |
-| Snapshots de telemetria | `docs/source/sdk/android/readiness/dashboards/<date>/` (reutilizar bundle de telemetria) | Por onda + apos incidentes. |
-| Digest de feedback | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (criar pasta por onda) | Dentro de 5 dias apos a saida da onda. |
-| Nota de reuniao de governanca | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Preencher antes de cada sync DOCS-SORA. |
+| ٹریکر کے مسئلے کو مدعو کریں | گٹ ہب پروجیکٹ `docs-portal-preview` | ہر دعوت کے بعد اپ ڈیٹ کریں۔ |
+| جائزہ لینے والوں کی فہرست کی برآمد | ریکارڈ `docs/portal/docs/devportal/reviewer-onboarding.md` | سے منسلک ہے ہفتہ وار۔ |
+| ٹیلی میٹری اسنیپ شاٹس | `docs/source/sdk/android/readiness/dashboards/<date>/` (دوبارہ استعمال ٹیلی میٹری بنڈل) | واقعات کے بعد لہر + کے ذریعہ۔ |
+| تاثرات ڈائجسٹ | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (لہر کے ذریعہ فولڈر بنائیں) | لہر کے جانے کے 5 دن کے اندر۔ |
+| گورننس میٹنگ نوٹ | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | ہر مطابقت پذیری دستاویزات سے پہلے پُر کریں۔ SORA۔ |
 
-Execute `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-apos cada lote para produzir um digest legivel por maquina. Anexe o JSON renderizado a issue da onda para que revisores de governanca confirmem as contagens de convite sem reproduzir todo o log.
+`cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json` چلائیں
+ہر بیچ کے بعد ایک مشین تیار کرنے کے لئے پڑھنے کے قابل ڈائجسٹ۔ گورننس جائزہ لینے والوں کے لئے رینڈرڈ JSON کو لہر کے مسئلے سے منسلک کریں تاکہ پورے لاگ کو دوبارہ چلائے بغیر دعوت نامے کی تصدیق کی جاسکے۔
 
-Anexe a lista de evidencias a `status.md` sempre que uma onda terminar para que a entrada do roadmap possa ser atualizada rapidamente.
+شواہد کی فہرست کو `status.md` پر منسلک کریں جب بھی لہر ختم ہوجائے تاکہ روڈ میپ انٹری کو جلدی سے اپ ڈیٹ کیا جاسکے۔
 
-## Criterios de rollback e pausa
+## رول بیک اور توقف معیار
 
-Pause o fluxo de convites (e notifique a governanca) quando qualquer um dos itens abaixo ocorrer:
+دعوت کے بہاؤ کو روکیں (اور گورننس کو مطلع کریں) جب مندرجہ ذیل میں سے کوئی بھی واقع ہوتا ہے:
 
-- Incidente de proxy Try it que exigiu rollback (`npm run manage:tryit-proxy`).
-- Fadiga de alertas: >3 alert pages para endpoints apenas de preview em 7 dias.
-- Gap de compliance: convite enviado sem termos assinados ou sem registrar o template de solicitacao.
-- Risco de integridade: mismatch de checksum detectado por `scripts/preview_verify.sh`.
+- اس کو پراکسی واقعہ آزمائیں جس میں رول بیک (`npm run manage:tryit-proxy`) کی ضرورت ہے۔
+- انتباہ تھکاوٹ:> 7 دن میں صرف پیش نظارہ کے اختتامی مقامات کے لئے 3 الرٹ صفحات۔
+- تعمیل گیپ: بغیر کسی دستخط شدہ شرائط کے یا درخواست ٹیمپلیٹ کے اندراج کے بغیر دعوت نامہ۔
+- سالمیت کا خطرہ: `scripts/preview_verify.sh` کے ذریعہ چیکسم مماثل پتہ چلا۔
 
-Retome somente apos documentar a remediacao no invite tracker e confirmar que o dashboard de telemetria esta estavel por pelo menos 48 horas.
+انوائٹ ٹریکر میں تدارک کی دستاویز کرنے اور اس بات کی تصدیق کرنے کے بعد ہی دوبارہ شروع کریں کہ ٹیلی میٹری ڈیش بورڈ کم از کم 48 گھنٹوں سے مستحکم رہا ہے۔

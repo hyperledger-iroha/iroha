@@ -8,114 +8,116 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview invite flow
 sidebar_label: Preview invite flow
 description: Sequencing, evidence, and communications plan for the docs portal public preview waves.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Purpose
+## Նպատակը
 
-Roadmap item **DOCS-SORA** calls out reviewer onboarding and the public preview
-invite program as the final blockers before the portal can exit beta. This page
-describes how to open each invite wave, which artefacts must ship before
-invites go out, and how to prove the flow is auditable. Use it alongside:
+Ճանապարհային քարտեզի կետը **DOCS-SORA** կոչ է անում վերանայողին մուտք գործել և հանրային նախադիտում
+հրավիրել ծրագրին որպես վերջնական արգելափակող, նախքան պորտալը կարող է դուրս գալ բետա-ից: Այս էջը
+նկարագրում է, թե ինչպես բացել յուրաքանչյուր հրավերի ալիքը, որը նախքան արտեֆակտները պետք է առաքվեն
+հրավերները դուրս են գալիս, և ինչպես ապացուցել, որ հոսքը ստուգելի է: Օգտագործեք այն կողքին.
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) for
-  per-reviewer handling.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) for checksum
-  guarantees.
-- [`devportal/observability`](./observability.md) for telemetry exports and
-  alerting hooks.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) համար
+  մեկ գրախոսի բեռնաթափում:
+- [`devportal/preview-integrity-plan`] (./preview-integrity-plan.md) ստուգիչ գումարի համար
+  երաշխիքներ։
+- [`devportal/observability`](./observability.md) հեռաչափության արտահանման և
+  ահազանգող կեռիկներ.
 
-## Wave plan
+## Ալիքային պլան
 
-| Wave | Audience | Entry criteria | Exit criteria | Notes |
+| Ալիք | Հանդիսատես | Մուտքի չափանիշներ | Ելքի չափանիշներ | Ծանոթագրություններ |
 | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs/SDK maintainers validating day-one content. | `docs-portal-preview` GitHub team populated, `npm run serve` checksum gate green, Alertmanager quiet for 7 days. | All P0 docs reviewed, backlog tagged, no blocking incidents. | Used to validate the flow; no invite email, just share the preview artefacts. |
-| **W1 – Partners** | SoraFS operators, Torii integrators, governance reviewers under NDA. | W0 exited, legal terms approved, Try-it proxy staged. | Collected partner sign-off (issue or signed form), telemetry shows ≤10 concurrent reviewers, no security regressions for 14 days. | Enforce invite template + request tickets. |
-| **W2 – Community** | Selected contributors from the community waitlist. | W1 exited, incident drills rehearsed, public FAQ updated. | Feedback digested, ≥2 documentation releases shipped via preview pipeline without rollback. | Cap concurrent invites (≤25) and batch weekly. |
+| **W0 – Հիմնական պահպանողներ ** | Փաստաթղթեր/SDK սպասարկողներ, որոնք վավերացնում են առաջին օրվա բովանդակությունը: | `docs-portal-preview` GitHub թիմը բնակեցված է, `npm run serve` checksum դարպասը կանաչ է, Alertmanager-ը 7 օր լուռ է: | Բոլոր P0 փաստաթղթերը վերանայված են, պիտակավորված են, արգելափակման միջադեպեր չկան: | Օգտագործվում է հոսքը վավերացնելու համար; ոչ հրավերի էլ.փոստ, պարզապես կիսվեք նախադիտման արտեֆակտներով: |
+| **W1 – Գործընկերներ** | SoraFS օպերատորներ, Torii ինտեգրատորներ, կառավարման վերանայողներ NDA-ի ներքո: | W0-ը դուրս եկավ, իրավական պայմանները հաստատվեցին, փորձիր վստահված անձը բեմադրվեց: | Հավաքագրված գործընկերոջ գրանցում (թողարկում կամ ստորագրված ձև), հեռաչափությունը ցույց է տալիս ≤10 միաժամանակյա վերանայողներ, 14 օրվա ընթացքում անվտանգության հետընթաց չկա: | Պարտադրել հրավերի ձևանմուշը + պահանջել տոմսեր: |
+| **W2 – Համայնք** | Ընտրված մասնակիցները համայնքի սպասման ցուցակից: | W1-ը դուրս եկավ, միջադեպերի պարապմունքները փորձարկվեցին, հանրային ՀՏՀ-ն թարմացվեց: | Հետադարձ կապը ամփոփված է, ≥2 փաստաթղթերի թողարկումներ առաքվել են նախադիտման խողովակաշարով առանց հետադարձի: | Գլխարկ միաժամանակյա հրավերներ (≤25) և խմբաքանակ շաբաթական: |
 
-Document which wave is active inside `status.md` and in the preview request
-tracker so governance can see where the program sits at a glance.
+Փաստաթուղթ, որը ալիքն ակտիվ է `status.md`-ի ներսում և նախադիտման հարցումում
+որոնիչ, որպեսզի կառավարումը կարողանա տեսնել, թե որտեղ է գտնվում ծրագիրը մի հայացքով:
 
-## Preflight checklist
+## Նախնական թռիչքի ստուգաթերթ
 
-Complete these actions **before** scheduling invites for a wave:
+Կատարեք այս գործողությունները **մինչ** ալիքի հրավերը պլանավորելը.
 
-1. **CI artefacts available**
-   - Latest `docs-portal-preview` + descriptor uploaded by
+1. **CI արտեֆակտներ մատչելի **
+   - Վերջին `docs-portal-preview` + նկարագրիչը վերբեռնվել է
      `.github/workflows/docs-portal-preview.yml`.
-   - SoraFS pin noted in `docs/portal/docs/devportal/deploy-guide.md`
-     (cutover descriptor present).
-2. **Checksum enforcement**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invoked through
+   - SoraFS փին նշված է `docs/portal/docs/devportal/deploy-guide.md`-ում
+     (կտրող նկարագրիչը ներկա է):
+2. **Չեկային գումարի կատարում**
+   - `docs/portal/scripts/serve-verified-preview.mjs`-ը կանչվել է
      `npm run serve`.
-   - `scripts/preview_verify.sh` instructions tested on macOS + Linux.
-3. **Telemetry baseline**
-   - `dashboards/grafana/docs_portal.json` shows healthy Try it traffic and
-     `docs.preview.integrity` alert is green.
-   - Latest `docs/portal/docs/devportal/observability.md` appendix updated with
-     Grafana links.
-4. **Governance artefacts**
-   - Invite tracker issue ready (one issue per wave).
-   - Reviewer registry template copied (see
-     [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Legal- and SRE-required approvals attached to the issue.
+   - `scripts/preview_verify.sh` հրահանգներ փորձարկված macOS + Linux-ում:
+3. **Հեռաչափության բազային**
+   - `dashboards/grafana/docs_portal.json` ցույց է տալիս առողջ Փորձեք այն երթեւեկությունը և
+     `docs.preview.integrity` ահազանգը կանաչ է:
+   - Վերջին `docs/portal/docs/devportal/observability.md` հավելվածը թարմացվել է
+     Grafana հղումներ:
+4. **Կառավարման արտեֆակտներ**
+   - Հրավիրեք հետախույզի հարցը պատրաստ է (մեկ թողարկում յուրաքանչյուր ալիքի համար):
+   - Գրախոսի ռեեստրի ձևանմուշը պատճենված է (տես
+     [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)):
+   - Խնդրին կցված իրավական և SRE-ի համար պահանջվող հաստատումները:
 
-Record preflight completion in the invite tracker before sending any mail.
+Գրանցեք նախաթռիչքի ավարտը հրավերի հետագծում՝ նախքան որևէ նամակ ուղարկելը:
 
-## Flow steps
+## Հոսքի քայլեր
 
-1. **Select candidates**
-   - Pull from the waitlist spreadsheet or partner queue.
-   - Ensure each candidate has a completed request template.
-2. **Approve access**
-   - Assign an approver to the invite tracker issue.
-   - Verify prerequisites (CLA/contract, acceptable use, security brief).
-3. **Send invites**
-   - Fill in the
+1. **Ընտրեք թեկնածուներին**
+   - Քաշեք սպասացանկի աղյուսակից կամ գործընկերների հերթից:
+   - Համոզվեք, որ յուրաքանչյուր թեկնածու ունի լրացված հարցման ձևանմուշ:
+2. **Հաստատել մուտքը**
+   - Հաստատող նշանակեք հրավերի հետագծման խնդրին:
+   - Ստուգեք նախադրյալները (CLA/պայմանագիր, ընդունելի օգտագործում, անվտանգության համառոտ):
+3. **Ուղարկել հրավերներ**
+   - Լրացրո՛ւ
      [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-     placeholders (`<preview_tag>`, `<request_ticket>`, contacts).
-   - Attach the descriptor + archive hash, Try it staging URL, and support
-     channels.
-   - Store the final email (or Matrix/Slack transcript) in the issue.
-4. **Track onboarding**
-   - Update the invite tracker with `invite_sent_at`, `expected_exit_at`, and
-     status (`pending`, `active`, `complete`, `revoked`).
-   - Link to the reviewer’s intake request for auditability.
-5. **Monitor telemetry**
-   - Watch `docs.preview.session_active` and `TryItProxyErrors` alerts.
-   - File an incident if telemetry deviates from the baseline and record the
-     outcome next to the invite entry.
-6. **Collect feedback & exit**
-   - Close invites once feedback lands or `expected_exit_at` passes.
-   - Update the wave issue with a short summary (findings, incidents, next
-     actions) before moving to the next cohort.
+     տեղապահներ (`<preview_tag>`, `<request_ticket>`, կոնտակտներ):
+   - Կցեք նկարագրիչը + արխիվի հեշը, փորձեք բեմադրել URL-ը և աջակցեք
+     ալիքներ.
+   - Պահպանեք վերջնական էլփոստը (կամ Matrix/Slack տեքստը) համարում:
+4. **Հետևել մուտքին**
+   - Թարմացրեք հրավերի հետագծիչը `invite_sent_at`, `expected_exit_at` և
+     կարգավիճակը (`pending`, `active`, `complete`, `revoked`):
+   - Հղում վերանայողի կողմից աուդիտի ընդունման խնդրանքին:
+5. **Հեռաչափության մոնիտորինգ**
+   - Դիտեք `docs.preview.session_active` և `TryItProxyErrors` ահազանգերը:
+   - Պատկերացրեք միջադեպ, եթե հեռաչափությունը շեղվում է ելակետից և գրանցեք այն
+     արդյունքը հրավերի մուտքի կողքին:
+6. **Հավաքեք կարծիք և դուրս եկեք **
+   - Փակեք հրավերները, երբ արձագանքը ստացվի կամ `expected_exit_at` անցնի:
+   - Թարմացրեք ալիքի հարցը կարճ ամփոփմամբ (բացահայտումներ, միջադեպեր, հաջորդ
+     գործողություններ) նախքան հաջորդ խումբ անցնելը:
 
-## Evidence & reporting
+## Ապացույցներ և հաշվետվություններ
 
-| Artefact | Where to store | Refresh cadence |
+| Արտեֆակտ | Որտեղ պահել | Թարմացնել կադանս |
 | --- | --- | --- |
-| Invite tracker issue | `docs-portal-preview` GitHub project | Update after each invite. |
-| Reviewer roster export | `docs/portal/docs/devportal/reviewer-onboarding.md` linked registry | Weekly. |
-| Telemetry snapshots | `docs/source/sdk/android/readiness/dashboards/<date>/` (reuse telemetry bundle) | Per wave + after incidents. |
-| Feedback digest | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (create folder per wave) | Within 5 days of wave exit. |
-| Governance meeting note | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Populate before each DOCS-SORA governance sync. |
+| Հրավիրել հետագծողի խնդիր | `docs-portal-preview` GitHub նախագիծ | Թարմացրեք յուրաքանչյուր հրավերից հետո: |
+| Գրախոսական ցուցակի արտահանում | `docs/portal/docs/devportal/reviewer-onboarding.md` կապված ռեեստր | Շաբաթական. |
+| Հեռուստաչափական պատկերներ | `docs/source/sdk/android/readiness/dashboards/<date>/` (վերաօգտագործման հեռաչափության փաթեթ) | Մեկ ալիք + միջադեպերից հետո: |
+| Հետադարձ կապ | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (ստեղծել թղթապանակ յուրաքանչյուր ալիքի համար) | Ալիքի ելքից 5 օրվա ընթացքում։ |
+| Կառավարության նիստի նշում | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Լրացրեք յուրաքանչյուր DOCS-SORA կառավարման համաժամացումից առաջ: |
 
-Run `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-after each batch to produce a machine-readable event digest. Attach the rendered
-JSON to the wave issue so governance reviewers can confirm invite counts without
-replaying the entire log.
+Գործարկեք `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
+յուրաքանչյուր խմբաքանակից հետո մեքենայական ընթեռնելի իրադարձություն ստեղծելու համար: Կցեք մատուցվածը
+JSON-ը ալիքի խնդրին, որպեսզի կառավարման վերանայողները կարողանան հաստատել առանց հրավերների քանակը
+կրկնում է ամբողջ մատյանը:
 
-Attach the evidence list to `status.md` whenever a wave ends so the roadmap
-entry can be updated quickly.
+Կցեք ապացույցների ցանկը `status.md`-ին, երբ ալիքն ավարտվում է, այնպես որ ճանապարհային քարտեզը
+մուտքը կարող է արագ թարմացվել:
 
-## Rollback & pause criteria
+## Հետադարձ և դադարի չափանիշներ
 
-Pause the invite flow (and notify governance) when any of the following occur:
+Դադարեցրեք հրավերների հոսքը (և տեղեկացրեք կառավարմանը), երբ տեղի է ունենում հետևյալներից որևէ մեկը.
 
-- A Try it proxy incident that required rollback (`npm run manage:tryit-proxy`).
-- Alert fatigue: >3 alert pages for preview-only endpoints within 7 days.
-- Compliance gap: invite sent without signed terms or without logging the
-  request template.
-- Integrity risk: checksum mismatch detected by `scripts/preview_verify.sh`.
+- Փորձեք այն վստահված անձի միջադեպը, որը պահանջում էր վերադարձ (`npm run manage:tryit-proxy`):
+- Զգուշացման հոգնածություն. >3 զգուշացման էջ միայն նախադիտման վերջնակետերի համար 7 օրվա ընթացքում:
+- Համապատասխանության բացը. հրավեր ուղարկվել է առանց ստորագրված պայմանների կամ առանց գրանցման
+  հարցման ձևանմուշ:
+- Ամբողջականության ռիսկ. ստուգիչ գումարի անհամապատասխանությունը հայտնաբերվել է `scripts/preview_verify.sh`-ի կողմից:
 
-Resume only after documenting the remediation in the invite tracker and
-confirming the telemetry dashboard is stable for at least 48 hours.
+Վերսկսեք միայն այն բանից հետո, երբ վերականգնումը փաստաթղթավորեք հրավերի հետագծում և
+հաստատելով, որ հեռաչափության վահանակը կայուն է առնվազն 48 ժամ:

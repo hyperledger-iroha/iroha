@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SF-2c Capacity Accrual Soak Report
+# SF-2c сыйымдылығының есептелуі туралы есеп
 
-Date: 2026-03-21
+Күні: 21.03.2026 ж
 
-## Scope
+## Ауқым
 
-This report records the deterministic SoraFS capacity accrual and payout soak
-tests requested under the SF-2c roadmap track.
+Бұл есепте детерминирленген SoraFS сыйымдылық есептелуі мен төлемді сіңіру жазылады.
+SF-2c жол картасы жолында сұралған сынақтар.
 
-- **30-day multi-provider soak:** Exercised by
-  `capacity_fee_ledger_30_day_soak_deterministic` in
+- **30-күндік мультипровайдер сору:** Жаттығуды орындаған
+  `capacity_fee_ledger_30_day_soak_deterministic` дюйм
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  The harness instantiates five providers, spans 30 settlement windows, and
-  validates that ledger totals match an independently computed reference
-  projection. The test emits a Blake3 digest (`capacity_soak_digest=...`) so
-  CI can capture and diff the canonical snapshot.
-- **Under-delivery penalties:** Enforced by
+  Жабдық бес провайдерді жасайды, 30 есеп айырысу терезесін қамтиды және
+  Бухгалтерлік кітап қорытындылары тәуелсіз есептелген анықтамаға сәйкес келетінін растайды
+  проекция. Сынақ Blake3 дайджестін (`capacity_soak_digest=...`) шығарады, сондықтан
+  CI канондық суретті түсіріп, ажырата алады.
+- **Жеткізу үшін айыппұлдар:** Орындаған
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (same file). The test confirms strike thresholds, cooldowns, collateral slashes,
-  and ledger counters remain deterministic.
+  (бірдей файл). Сынақ ереуіл шегін, салқындатуды, кепілдік қиғаш сызықтарды,
+  және бухгалтерлік есептегіштер детерминистік болып қалады.
 
-## Execution
+## Орындау
 
-Run the soak validations locally with:
+Жібітуді тексеруді жергілікті түрде іске қосыңыз:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-The tests complete in under one second on a standard laptop and require no
-external fixtures.
+Сынақтар стандартты ноутбукта бір секундтан аз уақыт ішінде аяқталады және жоқ
+сыртқы қондырғылар.
 
-## Observability
+## Бақылау мүмкіндігі
 
-Torii now exposes provider credit snapshots alongside fee ledgers so dashboards
-can gate on low balances and penalty strikes:
+Torii енді бақылау тақталары үшін төлем журналдарымен бірге провайдердің несиелік суреттерін көрсетеді
+төмен теңгерім мен айыппұл соққыларына қарсы тұра алады:
 
-- REST: `GET /v1/sorafs/capacity/state` returns `credit_ledger[*]` entries that
-  mirror the ledger fields verified in the soak test. See
+- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` жазбаларын қайтарады
+  жібіту сынағында тексерілген кітап өрістерін айналаңыз. Қараңыз
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` plots the
-  exported strike counters, penalty totals, and bonded collateral so on-call
-  staff can compare soak baselines with live environments.
+- Grafana импорт: `dashboards/grafana/sorafs_capacity_penalties.json`
+  экспортталған strike counters, өсімпұл сомасы және кепілге қойылған кепілді талап бойынша
+  қызметкерлер негізгі көрсеткіштерді тірі ортамен салыстыра алады.
 
-## Follow-up
+## Бақылау
 
-- Schedule weekly gate runs in CI to replay the soak test (smoke-tier).
-- Extend the Grafana board with Torii scrape targets once production telemetry
-  exports go live.
+- Ылғалдау сынамасын (түтін деңгейін) қайталау үшін CI-де апта сайынғы жұмыстарды жоспарлаңыз.
+- Өндірістік телеметриядан кейін Grafana тақтасын Torii қырып алу мақсаттарымен кеңейтіңіз
+  экспорт өмірге келеді.

@@ -6,71 +6,73 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page captures the ADDR-6c documentation deliverable. Apply these
-constraints to wallets, explorers, SDK tooling, and any portal surface that
-renders or accepts human-facing addresses. The canonical data model lives in
-`docs/account_structure.md`; the checklist below explains how to expose those
-formats without compromising safety or accessibility.
+Энэ хуудсанд хүргэх боломжтой ADDR-6c баримт бичгийг агуулна. Эдгээрийг хэрэглээрэй
+түрийвч, судлаачид, SDK хэрэгсэл болон аливаа портал гадаргуу дээрх хязгаарлалт
+хүн рүү чиглэсэн хаягийг гаргах эсвэл хүлээн авах. Каноник өгөгдлийн загвар нь амьдардаг
+`docs/account_structure.md`; Доорх хяналтын хуудас нь тэдгээрийг хэрхэн илчлэхийг тайлбарладаг
+аюулгүй байдал, хүртээмжийг алдагдуулахгүйгээр формат.
 
-## Safe sharing flows
+## Аюулгүй хуваалцах урсгал
 
-- Default every copy/share action to the IH58 address. Display the resolved
-  domain as supporting context so the checksummed string stays front and centre.
-- Offer a “Share” affordance that bundles the full plain-text address and a QR
-  code derived from the same payload. Let users inspect both before committing.
-- When space requires truncation (tiny cards, notifications), keep the leading
-  human-readable prefix, show ellipses, and retain the final 4–6 characters so
-  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
-  string without truncation.
-- Prevent clipboard desync by emitting a confirmation toast that previews the
-  exact IH58 string that was copied. Where telemetry is available, count copy
-  attempts versus share actions so UX regressions surface quickly.
+- Хуулбарлах/хуваалцах үйлдэл бүрийг IH58 хаяг руу өгөгдмөл байдлаар хийнэ. Шийдвэрлэсэн зүйлийг харуулах
+  домэйныг дэмжих контекст болгон ашиглах тул шалгах нийлбэр мөр урд болон голд үлдэнэ.
+- Бүтэн бичвэр хаяг болон QR-г багтаасан "Хуваалцах" боломжийг санал болго.
+  ижил ачааллаас гаргаж авсан код. Үйлдэл хийхээсээ өмнө хэрэглэгчдэд хоёуланг нь шалгахыг зөвшөөрнө үү.
+- Зай таслах шаардлагатай үед (жижиг картууд, мэдэгдэл) тэргүүлэх байр суурийг хадгал
+  хүн унших боломжтой угтвар, эллипс харуулж, эцсийн 4-6 тэмдэгтийг хадгална
+  шалгах нийлбэрийн зангуу амьд үлдэнэ. Бүрэн хуулахын тулд товших/гарын товчлолыг өгнө үү
+  тайралтгүй мөр.
+- Урьдчилан харж байгаа баталгаажуулах шарсан талхыг гаргаж санах ойн синк хийгдэхээс сэргийлнэ
+  яг хуулбарлагдсан IH58 мөр. Телеметрийн боломж байгаа тохиолдолд хуулбарыг тоол
+  оролдлого ба хуваалцах үйлдэлтэй тул UX регресс хурдан гарч ирдэг.
 
-## IME & input safeguards
+## IME & оролтын хамгаалалт
 
-- Reject non-ASCII input in address fields. When IME composition artefacts (full
-  width, Kana, tone marks) appear, surface an inline warning that explains how
-  to switch the keyboard to Latin input before retrying.
-- Provide a plain-text paste zone that strips combining marks and replaces
-  whitespace with ASCII spaces before validation. This keeps users from losing
-  progress when they disable their IME mid-flow.
-- Harden validation against zero-width joiners, variation selectors, and other
-  stealth Unicode code points. Log the rejected code point category so fuzzing
-  suites can import the telemetry.
+- Хаягийн талбарт ASCII бус оролтоос татгалзах. Хэзээ IME найрлага олдворууд (бүрэн
+  өргөн, Кана, аяны тэмдэг) гарч ирэхэд хэрхэн яаж тайлбарлаж буй шугаман анхааруулга гарч ирнэ
+  дахин оролдохын өмнө гарыг латин оролт руу шилжүүлэх.
+- Хосолсон тэмдэглэгээг хуулж, орлуулах энгийн бичвэрт буулгах бүсээр хангана
+  Баталгаажуулахын өмнө ASCII зайтай хоосон зай. Энэ нь хэрэглэгчдийг алдахаас сэргийлдэг
+  IME-ийн дунд урсгалыг идэвхгүй болгох үед ахиц дэвшил.
+- Тэг өргөнтэй холбогч, вариаци сонгогч болон бусад эсрэг баталгаажуулалтыг хатууруулах
+  нууц Юникод кодын цэгүүд. Татгалзсан кодын цэгийн категорийг бүртгээрэй
+  Suites нь телеметрийг импортлох боломжтой.
 
-## Assistive technology expectations
+## Туслах технологийн хүлээлт
 
-- Annotate every address block with `aria-label` or `aria-describedby` that
-  spells out the human-readable prefix and chunks the payload in 4–8 character
-  groups (“ih dash b three two …”). This stops screen readers from producing an
-  unintelligible stream of characters.
-- Announce successful copy/share events via a polite live region update. Include
-  the destination (clipboard, share sheet, QR) so the user knows the action
-  completed without moving focus.
-- Supply descriptive `alt` text for QR previews (e.g., “IH58 address for
-  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
-  fallback adjacent to the QR canvas for low-vision users.
+- Хаягийн блок бүрийг `aria-label` эсвэл `aria-describedby` гэж тэмдэглэнэ.
+  хүний унших боломжтой угтварыг зөв бичиж, ачааллыг 4-8 тэмдэгтээр хуваана
+  бүлгүүд ("ih зураас b гурав хоёр ..."). Энэ нь дэлгэц уншигчид үүсгэхийг зогсооно
+  үл ойлгогдох дүрүүдийн урсгал.
+- Бүс нутгийн шинэчлэлийг эелдэгээр дамжуулан амжилттай хуулбарлах/хуваалцах үйл явдлуудыг зарлах. оруулах
+  очих газар (түр санах ой, хуваалцах хуудас, QR) тул хэрэглэгч үйлдлийг мэддэг
+  анхаарлыг хөдөлгөхгүйгээр дуусгах.
+- QR урьдчилан харахын тулд тайлбарласан `alt` текстийг нийлүүлэх (жишээ нь, "IH58 хаяг
+  `<account>` `0x1234` гинж дээр"). "Хаяг бичвэр болгон хуулах"-г оруулна уу
+  хараа муутай хэрэглэгчдэд зориулсан QR зотонтой зэргэлдээх нөөц.
 
-## Sora-only compressed addresses
+## Зөвхөн Sora шахагдсан хаягууд
 
-- Gating: hide the `sora…` compressed string behind an explicit confirmation.
-  The confirmation must reiterate that the form only works on Sora Nexus chains.
-- Labelling: every occurrence must include a visible “Sora-only” badge and a
-  tooltip describing why other networks require the IH58 form.
-- Guardrails: if the active chain discriminant is not the Nexus allocation,
-  refuse to generate the compressed address entirely and direct the user back to
+- Gating: `sora…` шахсан мөрийг тодорхой баталгаажуулалтын ард нуу.
+  Баталгаажуулалт нь маягт нь зөвхөн Sora Nexus сүлжээн дээр ажилладаг гэдгийг давтан хэлэх ёстой.
+- Шошго: тохиолдол бүрт харагдахуйц "Зөвхөн Сора" тэмдэг болон a
+  Бусад сүлжээ яагаад IH58 маягтыг шаарддагийг тайлбарласан зөвлөмж.
+- Хамгаалалтын хашлага: хэрэв идэвхтэй гинжин хэлхээний ялгаварлагч нь Nexus хуваарилалт биш бол,
+  шахсан хаягийг бүхэлд нь үүсгэхээс татгалзаж, хэрэглэгчийг буцааж чиглүүлэх
   IH58.
-- Telemetry: record how often the compressed form is requested and copied so the
-  incident playbook can detect accidental sharing spikes.
+- Телеметр: шахсан маягтыг хэр олон удаа хүсч, хуулж байгааг тэмдэглэ
+  ослын тоглоомын дэвтэр нь санамсаргүй хуваалцах огцом өсөлтийг илрүүлж чадна.
 
-## Quality gates
+## Чанартай хаалга
 
-- Extend automated UI tests (or storybook a11y suites) to assert that address
-  components expose the required ARIA metadata and that IME rejection messages
-  appear.
-- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
-  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
-- Surface these checks in release checklists alongside the IH58 parity tests
-  so regressions remain blocked until corrected.
+- Энэ хаягийг баталгаажуулахын тулд автоматжуулсан UI тестүүдийг (эсвэл storybook a11y suites) өргөтгөнө
+  Бүрэлдэхүүн хэсгүүд нь шаардлагатай ARIA мета өгөгдөл болон IME-ээс татгалзсан мессежүүдийг ил гаргадаг
+  гарч ирнэ.
+- IME оролт (кана, пиньинь), дэлгэц уншигч нэвтрэх гарын авлагын QA хувилбаруудыг оруулах
+  (VoiceOver/NVDA), гаргахаас өмнө өндөр тодосгогч сэдэв дээр QR хуулах.
+- Эдгээр шалгалтуудыг IH58 паритет тестийн хамт хувилбарын хяналтын хуудсанд оруулна уу
+  тиймээс регрессийг засах хүртэл блоклосон хэвээр байна.

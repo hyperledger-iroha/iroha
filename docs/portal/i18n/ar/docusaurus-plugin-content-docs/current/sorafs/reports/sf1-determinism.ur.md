@@ -4,46 +4,44 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf1-determinism.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: SoraFS SF1 Determinism Dry-Run
-summary: canonical `sorafs.sf1@1.0.0` chunker profile کو validate کرنے کے لئے checklist اور expected digests.
+العنوان: SoraFS SF1 الحتمية التشغيل الجاف
+ملخص: ملف تعريف مقسم `sorafs.sf1@1.0.0` الكنسي والتحقق من صحة قائمة المراجعة والملخصات المتوقعة.
 ---
 
-# SoraFS SF1 Determinism Dry-Run
+# SoraFS SF1 الحتمية التشغيل الجاف
 
-یہ رپورٹ canonical `sorafs.sf1@1.0.0` chunker profile کے baseline dry-run کو
-capture کرتی ہے۔ Tooling WG کو fixtures refreshes یا نئے consumer pipelines کی
-validation کے وقت نیچے والا checklist دوبارہ چلانا چاہیے۔ ہر کمانڈ کا نتیجہ
-ٹیبل میں ریکارڈ کریں تاکہ auditable trail برقرار رہے۔
+هذا التقرير الكنسي `sorafs.sf1@1.0.0` ملف تعريف القطع الأساسي للتشغيل الجاف
+القبض على كرتی ہے۔ تعمل تركيبات Tooling WG على تحديث خطوط أنابيب المستهلك الجديدة أو الجديدة
+لم يتم التحقق من الصحة وقائمة المراجعة مرة أخرى. إنها عملية ناجحة
+ٹيحقق أسلوب لعب جديد قابل للتدقيق مسارًا قابلاً للتدقيق.
 
-## Checklist
-
-| Step | Command | Expected Outcome | Notes |
+## قائمة المراجعة| خطوة | الأمر | النتيجة المتوقعة | ملاحظات |
 |------|---------|------------------|-------|
-| 1 | `cargo test -p sorafs_chunker` | تمام tests پاس ہوں؛ `vectors` parity test کامیاب ہو۔ | تصدیق کرتا ہے کہ canonical fixtures compile ہوتے ہیں اور Rust implementation سے match کرتے ہیں۔ |
-| 2 | `ci/check_sorafs_fixtures.sh` | اسکرپٹ 0 کے ساتھ exit کرے؛ نیچے والے manifest digests رپورٹ کرے۔ | verify کرتا ہے کہ fixtures صاف طور پر regenerate ہوں اور signatures attached رہیں۔ |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` کا entry registry descriptor (`profile_id=1`) سے match کرے۔ | یقینی بناتا ہے کہ registry metadata sync رہے۔ |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | regeneration `--allow-unsigned` کے بغیر succeed کرے؛ manifest اور signature فائلیں unchanged رہیں۔ | chunk boundaries اور manifests کے لئے determinism proof فراہم کرتا ہے۔ |
-| 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript fixtures اور Rust JSON کے درمیان کوئی diff report نہ کرے۔ | optional helper؛ runtimes کے درمیان parity یقینی بنائیں (script Tooling WG maintain کرتا ہے)۔ |
+| 1 | `cargo test -p sorafs_chunker` | تمام الاختبارات پاس ہوں؛ اختبار التكافؤ `vectors` اختبار التكافؤ. | تتطابق مطابقة الكرتا والتركيبات الأساسية مع تنفيذ الصدأ والتركيبات الأساسية. |
+| 2 | `ci/check_sorafs_fixtures.sh` | سكرپٹ 0 سات الخروج من الكرے؛ لا يوجد ملخص واضح للتقرير. | تحقق من صحة الكرتا والتركيبات من خلال تجديد التوقيعات والتوقيعات المرفقة. |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` هو واصف تسجيل الإدخال (`profile_id=1`) يتطابق مع کرے۔ | هذه بناتنا هي مزامنة بيانات تعريف التسجيل. |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | تجديد `--allow-unsigned` کے بغداد ينجح کے؛ البيان والتوقيع فيلیں دون تغيير رہیں. | حدود القطعة والبيانات هي دليل الحتمية. |
+| 5 | `node scripts/check_sf1_vectors.mjs` | لا يوجد تقرير فرق لتركيبات TypeScript وRust JSON. | مساعد اختياري؛ أوقات التشغيل هي تكافؤ جلدي (تحافظ مجموعة أدوات البرنامج النصي على التكافؤ). |
 
-## Expected Digests
+## الملخصات المتوقعة
 
-- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
-- `manifest_blake3.json`: `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`
-- `sf1_profile_v1.json`: `23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be`
+- ملخص القطعة (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+-`manifest_blake3.json`: `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`
+-`sf1_profile_v1.json`: `23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be`
 - `sf1_profile_v1.ts`: `2bc35d45a9a1e539c4b0e3571817dc57d5a938e954882537379d7abba7b751a1`
-- `sf1_profile_v1.go`: `dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666`
+-`sf1_profile_v1.go`: `dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666`
 - `sf1_profile_v1.rs`: `181f0595284dcbb862db997d1c18564832c157f9e1eaf804f0bf88c846f73d65`
 
-## Sign-Off Log
-
-| Date | Engineer | Checklist Result | Notes |
+## سجل الخروج| التاريخ | مهندس | نتيجة القائمة المرجعية | ملاحظات |
 |------|----------|------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ✅ Passed | `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f` کے ذریعے fixtures regenerate ہوئیں، canonical handle + alias lists اور نیا manifest digest `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55` بنا۔ `cargo test -p sorafs_chunker` اور صاف `ci/check_sorafs_fixtures.sh` run سے verify کیا (fixtures check کے لئے staged تھیں). Step 5 تب تک pending ہے جب تک Node parity helper نہ آ جائے۔ |
-| 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) `ci/check_sorafs_fixtures.sh` کے ذریعے حاصل ہوا؛ اسکرپٹ نے fixtures regenerate کیے، manifest digest `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21` confirm کیا، اور Rust harness دوبارہ چلایا (Go/Node steps دستیاب ہوں تو چلتے ہیں) بغیر diffs کے۔ |
+| 2026-02-12 | الأدوات (ماجستير في القانون) | ✅ نجح | `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f` يتم تجديد التركيبات، والمقبض الأساسي + قوائم الأسماء المستعارة وملخص البيان الجديد `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55`. يتم التحقق من تشغيل `cargo test -p sorafs_chunker` وصافي `ci/check_sorafs_fixtures.sh` (فحص التركيبات على مراحل). الخطوة 5: الخطوة 5 معلقة، لا يوجد مساعد لتكافؤ العقدة. |
+| 2026-02-20 | أدوات التخزين CI | ✅ نجح | مظروف البرلمان (`fixtures/sorafs_chunker/manifest_signatures.json`) `ci/check_sorafs_fixtures.sh` حصل على موافقة؛ يتم تجديد تركيبات السكربت، وتأكيد الملخص الواضح `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`، وحزام الصدأ مرة أخرى (خطوات الانتقال/العقدة تظهر لك) هناك اختلافات. |
 
-Tooling WG کو checklist چلانے کے بعد تاریخ کے ساتھ قطار شامل کرنی چاہیے۔ اگر
-کوئی قدم fail ہو تو یہاں linked issue فائل کریں اور remediation تفصیلات شامل
-کریں، پھر نئے fixtures یا profiles approve کریں۔
+Tooling WG هي القائمة المرجعية التي تتضمن التاريخ التالي للأدوات الأساسية. إذاً
+قد يفشل التوافق في حل المشكلة المرتبطة
+الموافقة على كريات، بعض التركيبات أو الملفات الشخصية الجديدة.

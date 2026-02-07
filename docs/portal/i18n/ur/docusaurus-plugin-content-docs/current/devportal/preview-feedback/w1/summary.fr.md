@@ -4,49 +4,51 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: Resume feedback et sortie W1
-sidebar_label: Resume W1
-description: Constats, actions et preuves de sortie pour la vague de preview partenaires/integrateurs Torii.
+ID: پیش نظارہ-فیڈ بیک-ڈبلیو 1 سمر
+عنوان: دوبارہ شروع کرنے کی رائے اور W1 آؤٹ پٹ
+سائڈبار_لیبل: دوبارہ شروع کریں W1
+تفصیل: شراکت داروں/انٹیگریٹرز کے لئے نتائج ، اعمال اور آؤٹ پٹ ثبوت پیش نظارہ لہر Torii۔
 ---
 
-| Element | Details |
+| عنصر | تفصیلات |
 | --- | --- |
-| Vague | W1 - Partenaires et integrateurs Torii |
-| Fenetre d'invitation | 2025-04-12 -> 2025-04-26 |
-| Tag d'artefact | `preview-2025-04-12` |
-| Issue tracker | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+| لہر | W1 - شراکت دار اور انٹیگریٹرز Torii |
+| دعوت ونڈو | 2025-04-12-> 2025-04-26 |
+| نمونہ ٹیگ | `preview-2025-04-12` |
+| ٹریکر جاری کریں | `DOCS-SORA-Preview-W1` |
+| شرکا | sorafs-op-01 ... 03 ، torii-int-01 ... 02 ، SDK-partner-01 ... 02 ، گیٹ وے-او پی ایس -01 |
 
-## Points saillants
+## جھلکیاں
 
-1. **Workflow checksum** - Tous les reviewers ont verifie le descriptor/archive via `scripts/preview_verify.sh`; les logs ont ete stockes avec les accuses d'invitation.
-2. **Telemetrie** - Les dashboards `docs.preview.integrity`, `TryItProxyErrors` et `DocsPortal/GatewayRefusals` sont restes verts pendant toute la vague; aucun incident ni page d'alerte.
-3. **Feedback docs (`docs-preview/w1`)** - Deux nits mineurs ont ete signales:
-   - `docs-preview/w1 #1`: clarifier la formulation de navigation dans la section Try it (resolu).
-   - `docs-preview/w1 #2`: mettre a jour la capture Try it (resolu).
-4. **Parite runbook** - Les operateurs SoraFS ont confirme que les nouveaux cross-links entre `orchestrator-ops` et `multi-source-rollout` ont traite leurs points W0.
+1. ** ورک فلو چیکسم ** - تمام جائزہ نگاروں نے `scripts/preview_verify.sh` کے ذریعے وضاحتی/محفوظ شدہ دستاویزات کی جانچ کی ہے۔ نوشتہ جات کو دعوت نامہ کے ساتھ محفوظ کیا گیا تھا۔
+2. کوئی واقعہ یا الرٹ صفحات نہیں۔
+3. ** رائے دستاویزات (`docs-preview/w1`) ** - دو معمولی نٹس کی اطلاع ملی ہے:
+   - `docs-preview/w1 #1`: کوشش کریں سیکشن (حل شدہ) میں نیویگیشن ورڈنگ کو واضح کریں۔
+   - `docs-preview/w1 #2`: اپ ڈیٹ کرنے کی کوشش کریں اس کی گرفتاری (حل شدہ)۔
+4. ** رن بک پیریٹی ** - آپریٹرز SoraFS نے تصدیق کی ہے کہ `orchestrator-ops` اور `multi-source-rollout` کے مابین نئے کراس لنکس نے اپنے W0 پوائنٹس پر کارروائی کی ہے۔
 
-## Actions
+## اعمال
 
-| ID | Description | Responsable | Statut |
+| ID | تفصیل | ذمہ دار | حیثیت |
 | --- | --- | --- | --- |
-| W1-A1 | Mettre a jour la formulation de navigation Try it selon `docs-preview/w1 #1`. | Docs-core-02 | Termine (2025-04-18). |
-| W1-A2 | Rafraichir la capture Try it selon `docs-preview/w1 #2`. | Docs-core-03 | Termine (2025-04-19). |
-| W1-A3 | Resumer les constats partenaires et la preuve telemetrie dans roadmap/status. | Docs/DevRel lead | Termine (voir tracker + status.md). |
+| W1-A1 | `docs-preview/w1 #1` کے مطابق کوشش کریں نیویگیشن ورڈنگ کو اپ ڈیٹ کریں۔ | DOCS-CORE-02 | ختم (2025-04-18)۔ |
+| W1-A2 | `docs-preview/w1 #2` کے مطابق اس کی گرفتاری کی کوشش کریں۔ | دستاویزات-کور -03 | ختم (2025-04-19)۔ |
+| W1-A3 | روڈ میپ/حیثیت میں پارٹنر کے نتائج اور ٹیلی میٹری کے ثبوت کا خلاصہ کریں۔ | دستاویزات/ڈیوریل لیڈ | اختتام (دیکھیں ٹریکر + statuse.md) |
 
-## Resume de sortie (2025-04-26)
+## ریلیز کا خلاصہ (2025-04-26)
 
-- Les huit reviewers ont confirme la fin pendant les office hours finales, purge les artefacts locaux et leurs acces ont ete revoques.
-- La telemetrie est restee verte jusqu'a la sortie; snapshots finaux attaches a `DOCS-SORA-Preview-W1`.
-- Le log d'invitations a ete mis a jour avec les accuses de sortie; le tracker a marque W1 comme termine et ajoute les checkpoints.
-- Bundle de preuve (descriptor, checksum log, probe output, transcript du proxy Try it, screenshots de telemetrie, feedback digest) archive sous `artifacts/docs_preview/W1/`.
+- تمام آٹھ جائزہ نگاروں نے آخری دفتر کے اوقات کے دوران معطلی کی تصدیق کی ، مقامی نمونے صاف کیے ، اور ان کی رسائی کو منسوخ کردیا۔
+- ٹیلی میٹری باہر نکلنے تک سبز رہا۔ `DOCS-SORA-Preview-W1` سے منسلک آخری سنیپ شاٹس۔
+- دعوت نامہ لاگ ان ایگزٹ کے اعترافات کے ساتھ اپ ڈیٹ کیا گیا ہے۔ ٹریکر W1 کو مکمل طور پر نشان زد کرتا ہے اور چوکیوں کو شامل کرتا ہے۔
+- `artifacts/docs_preview/W1/` کے تحت محفوظ شدہ دستاویزات (وضاحتی ، چیکس لاگ ، تحقیقات آؤٹ پٹ ، پراکسی ٹرانسکرپٹ ، ٹیلی میٹری اسکرین شاٹس ، آراء ڈائجسٹ) کو آزمائیں۔
 
-## Prochaines etapes
+## اگلے اقدامات
 
-- Preparer le plan d'intake communautaire W2 (approbation governance + ajustements du template de demande).
-- Rafraichir le tag d'artefact preview pour la vague W2 et relancer le script de preflight une fois les dates finalisees.
-- Porter les constats applicables de W1 dans roadmap/status pour que la vague communautaire ait les dernieres indications.
+- W2 کمیونٹی انٹیک پلان تیار کریں (گورننس کی منظوری + درخواست کے سانچے میں ایڈجسٹمنٹ)۔
+- W2 لہر کے لئے پیش نظارہ نمونے والے ٹیگ کو تازہ کریں اور تاریخوں کو حتمی شکل دینے کے بعد پریف لائٹ اسکرپٹ کو دوبارہ لانچ کریں۔
+- W1 سے قابل اطلاق نتائج کو روڈ میپ/اسٹیٹس میں شامل کریں تاکہ کمیونٹی کی لہر کو تازہ ترین اشارے ملیں۔

@@ -7,109 +7,111 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus ledger refactor plan
 description: Mirror of `docs/source/nexus_refactor_plan.md`, detailing the phased clean-up work for the Iroha 3 codebase.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_refactor_plan.md`. Keep both copies aligned until the multilingual edition lands in the portal.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདིའི་ནང་ `docs/source/nexus_refactor_plan.md` ལ་སྤྲོ་སྣང་། འདྲ་བཤུས་གཉིས་ཆ་ར་ སྐད་ཡིག་སྣ་ཚོགས་ཀྱི་ པར་སྐྲུན་ཚུ་ ཡོངས་འབྲེལ་ནང་ མ་ལྷོད་ཚུན་ཚོད་ ཕྲང་སྒྲིག་འབད་དགོ།
 :::
 
-# Sora Nexus Ledger Refactor Plan
+# སོ་ར་ Nexus ལེབ་ཇར་བསྐྱར་བཟོ་འཆར་གཞི།
 
-This document captures the immediate roadmap for the Sora Nexus Ledger ("Iroha 3") refactor. It reflects the current repository layout and the regressions observed in genesis/WSV bookkeeping, Sumeragi consensus, smart-contract triggers, snapshot queries, pointer-ABI host bindings, and Norito codecs. The objective is to converge on a coherent, testable architecture without attempting to land all fixes in one monolithic patch.
+ཡིག་ཆ་འདི་གིས་ སོ་ར་ I18NT0000023X Ledger ("I18NT0000021X 3") བསྐྱར་ཞིབ་ཀྱི་ འཕྲལ་མགྱོགས་རང་ ལམ་གྱི་ས་ཁྲ་འདི་ བརྩམ་དོ་ཡོདཔ་ཨིན། འདི་གིས་ ད་རེས་ནངས་པའི་ མཛོད་ཁང་གི་བཀོད་རིས་དང་ རིགས་མཚན་/WSV གི་དེབ་བདག་དང་ Sumeragi གི་ མོས་མཐུན་དང་ མགུ་ཐོམ་སི་སི་གི་འཕྲུལ་ཆས་ དེ་ལས་ བརྡ་རྟགས་འདྲི་དཔྱད་ མཚོན་རྟགས་-ABI གཞི་བཙུགས་འབད་མི་ མཐུད་འབྲེལ་དང་ Norito གི་ གསང་ཡིག་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། དམིགས་ཡུལ་འདི་ གཅིག་མཐུན་དང་ བརྟག་དཔྱད་འབད་ཚུགས་པའི་ བཟོ་རིགས་ཚུ་ གཅིག་ཁར་བསྡོམས་ཏེ་ བཅོ་ཁ་རྐྱབ་ནི་གི་དཔའ་བཅམ་མ་དགོ་པར་ གཅིག་རྐྱངམ་ཅིག་གི་ཐིག་ཅིག་གི་ནང་ལུ་ བཅོ་ཁ་རྐྱབ་ནི་གི་དཔའ་བཅམ་ནི་འདི་ཨིན་མས།
 
-## 0. Guiding Principles
-- Preserve deterministic behavior across heterogeneous hardware; leverage acceleration only through opt-in feature flags with identical fallbacks.
-- Norito is the serialization layer. Any state/schema changes must include Norito encode/decode round-trip tests and fixture updates.
-- Configuration flows through `iroha_config` (user → actual → defaults). Remove ad-hoc environment toggles from production paths.
-- ABI policy remains V1 and non-negotiable. Hosts must reject unknown pointer types/syscalls deterministically.
-- `cargo test --workspace` and golden tests (`ivm`, `norito`, `integration_tests`) remain the baseline gate for every milestone.
+## 0. ལམ་སྟོན་གྱི་གཞི་རྩ།
+- མ་འདྲ་བའི་སྲ་ཆས་ནང་ གཏན་འབེབས་ཀྱི་སྤྱོད་ལམ་ཉམས་སྲུང་འབད་ནི། མགྱོགས་ཚད་འདི་ འདྲ་མཚུངས་ཀྱི་ དར་ཆ་ཚུ་ འདྲ་མཚུངས་སྦེ་ཡོད་པའི་ ཕོལཀ་ཚུ་བརྒྱུད་དེ་རྐྱངམ་ཅིག་ ལག་ལེན་འཐབ་ཨིན།
+- I18NT000000010X འདི་ རིམ་སྒྲིག་བང་རིམ་ཨིན། གནས་སྟངས་/ལས་རིམ་བསྒྱུར་བཅོས་གང་རུང་ཅིག་ནང་ Norito ཨིན་ཀོ་ཌི་/སྒོར་རིམ་འགྲུལ་བསྐྱོད་བརྟག་དཔྱད་དང་ སྒྲིག་བཀོད་དུས་མཐུན་བཟོ་ནི་ཚུ་ཚུདཔ་ཨིན།
+- རིམ་སྒྲིག་འདི་ `iroha_config` (user →ངོ་མ་ → སྔོན་སྒྲིག་ཚུ་) བརྒྱུད་དེ་འགྱོཝ་ཨིན། ཐོན་སྐྱེད་འགྲུལ་ལམ་ལས་ ad-hoc མཐའ་འཁོར་སོར་བསྒྱུར་ཚུ་ བཏོན་གཏང་།
+- ABI སྲིད་བྱུས་འདི་ V1 དང་ གྲོས་བསྟུན་མ་འབད་བར་ལུས་ཡོདཔ་ཨིན། ཧོསིཊི་ཚུ་གིས་ མ་ཤེས་པའི་ དཔག་བྱེད་དབྱེ་བ་/རིམ་ལུགས་ཚུ་ གཏན་འབེབས་བཟོ་ཐོག་ལས་ ངོས་ལེན་མ་འབད་བར་བཞག་དགོ།
+- I18NI00000000029X དང་གསེར་གྱི་བརྟག་དཔྱད་ (I18NI000000030X, I18NI000000003X, I18NI000000032X) གཞི་རྟེན་གྱི་སྒོ་ར་རེ་རེ་བཞིན་ མཚམས་ཐིག་རེ་རེའི་དོན་ལུ་ ལུས་ཡོདཔ་ཨིན།
 
-## 1. Repository Topology Snapshot
-- `crates/iroha_core`: Sumeragi actors, WSV, genesis loader, pipelines (query, overlay, zk lanes), smart-contract host glue.
-- `crates/iroha_data_model`: authoritative schema for on-chain data and queries.
-- `crates/iroha`: client API used by CLI, tests, SDK.
-- `crates/iroha_cli`: operator CLI, currently mirrors numerous APIs in `iroha`.
-- `crates/ivm`: Kotodama bytecode VM, pointer-ABI host integration entry points.
-- `crates/norito`: serialization codec with JSON adapters and AoS/NCB backends.
-- `integration_tests`: cross-component assertions covering genesis/bootstrap, Sumeragi, triggers, pagination, etc.
-- Docs already outline Sora Nexus Ledger goals (`nexus.md`, `new_pipeline.md`, `ivm.md`), but the implementation is fragmented and partially stale relative to the code.
+## 1. མཛོད་ཁང་གི་ ཊོཔ་ལོ་ཇི་ པར་རིས།
+- I18NI000000033X: Sumeragi འཁྲབ་རྩེདཔ་ ཌབ་ལུ་ཨེསི་ཝི་ རིགས་མཚན་མངོན་གསལ་འབད་མི་ མདོང་ལམ་ (འདྲི་དཔྱད་དང་ བཀབ་སྟེ་ ཟཀ་ལེན) སི་མཱརཊ་གན་ཡིག་གི་ འབྱར་རྩི་ཚུ་ཨིན།
+- `crates/iroha_data_model`: རིམ་སྒྲིག་གནས་སྡུད་དང་འདྲི་དཔྱད་ཚུ་གི་དོན་ལུ་ དབང་ཚད་ཅན་གྱི་འཆར་གཞི་།
+- `crates/iroha`: CLI, བརྟག་དཔྱད་, SDK.
+- I18NI000000036X: བཀོལ་སྤྱོད་པ་ CLI གིས་ ད་ལྟོ་ `iroha` ནང་ APIs མང་པོ་ གཟུགས་བརྙན་བཟོཝ་ཨིན།
+- I18NI000000038X: Kotodama བཱའིཊི་ཀོཌི་ཝི་ཨེམ་, དཔག་བྱེད་-ཨེ་བི་ཨའི་ ཧོསིཊི་མཉམ་བསྡོམས་འཛུལ་ཞུགས་ས་ཚིགས་ཚུ།
+- I18NI000000039X: ཇེ་ཨེསི་ཨོ་ཨེན་མཐུན་སྒྲིག་འབད་མི་དང་ AoS/NCB backens ཚུ་དང་གཅིག་ཁར་ རིམ་སྒྲིག་ཀོ་ཌེཀ་།
+- I18NI0000000040X: རིགས་མཚན་/བུཊི་སི་ཊརཔ་ Sumeragi, tinders, pagination, ལ་སོགས་པ་ཚུ་ ཁྱབ་པའི་ ཆ་ཤས་བརྒལ་བའི་བདེན་བཤད་ཚུ།
+- ཡིག་ཆ་ཚུ་གིས་ ཧེ་མ་ལས་རང་ སོ་ར་ I18NT0000024X Ledger དམིགས་ཡུལ་ཚུ་ (`nexus.md`, I18NI0000042X, I18NI000000043X) དེ་འབདཝ་ད་ ལག་ལེན་འཐབ་ཐངས་འདི་ གསང་ཡིག་ལུ་འབྲེལ་བ་ཡོད་པའི་ ཕྲ་རིང་དང་ ཆ་ཤས་ཅིག་ཨིན།
 
-## 2. Refactor Pillars & Milestones
+## 2. བསྐྱར་བཅོས་ཀཝ་དང་མའིལ་རྡོ་ཚད།
 
-### Phase A – Foundations and Observability
-1. **WSV Telemetry + Snapshots**
-   - Establish canonical snapshot API in `state` (`WorldStateSnapshot` trait) used by queries, Sumeragi, and CLI.
-   - Use `scripts/iroha_state_dump.sh` to produce deterministic snapshots via `iroha state dump --format norito`.
-2. **Genesis/Bootstrap Determinism**
-   - Refactor genesis ingestion to flow through a single Norito-powered pipeline (`iroha_core::genesis`).
-  - Add integration/regression coverage that replays genesis plus the first block and asserts identical WSV roots across arm64/x86_64 (tracked under `integration_tests/tests/genesis_replay_determinism.rs`).
-3. **Cross-crate Fixity Tests**
-   - Expand `integration_tests/tests/genesis_json.rs` to validate WSV, pipeline, and ABI invariants in one harness.
-  - Introduce a `cargo xtask check-shape` scaffold that panics on schema drift (tracked under DevEx tooling backlog; see `scripts/xtask/README.md` action item).
+### རིམ་པ་ཀ – གཞི་ཚོགས་དང་བལྟ་རྟོག་འབད་ཚུལ།
+1. **WSV བརྒྱུད་འཕྲིན་ + པར་ལེན་ཚུ་**
+   - འདྲི་དཔྱད་ཀྱིས་ལག་ལེན་འཐབ་མི་ `state` (I18NI000000045X རང་གཤིས་) ནང་ལུ་ ཀེ་ནོ་ནིཀ་པར་ལེན་ཨེ་པི་ཨའི་ གཞི་བཙུགས་འབད།
+   - `iroha state dump --format norito` བརྒྱུད་དེ་ གཏན་འབེབས་ཀྱི་པར་ཚུ་བཟོ་ནི་གི་དོན་ལུ་ `scripts/iroha_state_dump.sh` ལག་ལེན་འཐབ།
+2. **Genesis/བུཊ་སི་ཊརཔ་ ཌི་ཊར་མི་ནི་ཟམ་**
+   - Norito གི་ནུས་ཤུགས་ཅན་གྱི་ཆུ་ལམ་ (I18NI000000048X) གཅིག་བརྒྱུད་དེ་ བསྐྱར་བཟོ་འབད་བའི་རིགས་མཚན་བཙུགས་ནི།
+  - རིགས་མཚན་དང་ བཀག་ཆ་འགོ་དང་པ་དང་ sarch64/x86_64 ནང་ལུ་ WSV གི་རྩ་ཚུ་ གཅིག་མཚུངས་སྦེ་ མཉམ་བསྡོམས་/འགྱུར་ལྡོག་ཁྱབ་ཚད་ཁ་སྐོང་བརྐྱབ་དགོ།
+3.*Cross-crate Fixity Tests**
+   - ཌབ་ལུ་ཨེསི་ཝི་དང་ མདོང་ལམ་ དེ་ལས་ ཨེ་བི་ཨའི་ འགྱུར་ལྡོག་མེད་པའི་ ཧར་ནིསི་གཅིག་ནང་ བདེན་དཔྱད་འབད་ནིའི་དོན་ལུ་ I18NI000000050X རྒྱ་སྐྱེད་འབད།
+  - ལས་རིམ་ ཌིརཊི་གུ་ ཚ་གྱང་ལང་མི་ `cargo xtask check-shape` གི་ གྱང་ཤོག་ཅིག་ ངོ་སྤྲོད་འབད་ (DevEx ལག་ཆས་རྒྱབ་ལོག་འོག་ལུ་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན་; I18NI0000052X བྱ་བའི་རྣམ་གྲངས་བལྟ།)
 
-### Phase B – WSV & Query Surface
-1. **State Storage Transactions**
-   - Collapse `state/storage_transactions.rs` into a transactional adapter that enforces commit ordering and conflict detection.
-   - Unit tests now verify asset/world/triggers modifications roll back on failure.
-2. **Query Model Refactor**
-   - Move pagination/cursor logic into reusable components under `crates/iroha_core/src/query/`. Align Norito representations in `iroha_data_model`.
-  - Add snapshot queries for triggers, assets, and roles with deterministic ordering (tracked via `crates/iroha_core/tests/snapshot_iterable.rs` for current coverage).
-3. **Snapshot Consistency**
-   - Ensure `iroha ledger query` CLI uses the same snapshot path as Sumeragi/fetchers.
-   - CLI snapshot regression tests live under `tests/cli/state_snapshot.rs` (feature-gated for slow runs).
+### གོ་རིམ་ཁ་ – WSV & འདྲི་དཔྱད་ཕྱི་ངོས་།
+1. **མངའ་སྡེ་གསོག་འཇོག་ཚོང་འབྲེལ་**
+   - `state/storage_transactions.rs` འདི་ བཀོད་སྒྲིག་དང་ འཁྲུག་རྩོད་བརྟག་དཔྱད་འབད་ནི་ལུ་ བསྟར་སྤྱོད་འབད་མི་ ཚོང་འབྲེལ་གྱི་ མཐུན་རྐྱེན་ཅིག་ལུ་ བསྡུ་སྒྲིག་འབད།
+   - ཡུ་ནིཊི་བརྟག་དཔྱད་ཚུ་གིས་ ད་ལྟོ་ འཐུས་ཤོར་གུ་ལོག་བསྐོར་ཏེ་ རྒྱུ་དངོས་/འཛམ་གླིང་/འགྲུལ་བསྐྱོད་ཚུ་ བདེན་བཤད་འབད།
+2. **འདྲི་དཔྱད་དཔེ་གཟུགས་བསྐྱར་བཟོ་**
+   - ཤོག་ལེབ་/འོད་རྟགས་ཚད་མ་འདི་ `crates/iroha_core/src/query/` གི་འོག་ལུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་བཏུབ་པའི་ཆ་ཤས་ཚུ་ནང་ལུ་སྤོ་བཤུད་འབད། Sumeragi ནང་ Norito ངོ་ཚབ་ཚུ་ ཕྲང་སྒྲིག་འབད།
+  - གློག་ཐག་དང་ རྒྱུ་དངོས་ དེ་ལས་ གཏན་འབེབས་བཀའ་རྒྱ་གི་དོན་ལུ་ པར་ཚུ་ ཁ་སྐོང་བརྐྱབས་ (ད་ལྟོའི་ཁྱབ་ཚད་ཀྱི་དོན་ལུ་ I18NI0000006X བརྒྱུད་དེ་ བརྟག་ཞིབ་འབད་ཡོདཔ།)
+3. **Snapsyt རྟག་བརྟན་**།
+   - I18NI000000057X CLI གིས་ Sumeragi/fatchers བཟུམ་སྦེ་ པར་རིས་འཕྲུལ་ཆས་འགྲུལ་ལམ་ལག་ལེན་འཐབ་ཨིན།
+   - CLI snapshot བརྟག་དཔྱད་ཚུ་ I18NI000000058X གི་འོག་ལུ་ཡོདཔ་ཨིན།
 
-### Phase C – Sumeragi Pipeline
-1. **Topology & Epoch Management**
-   - Extract `EpochRosterProvider` into a trait with implementations backed by WSV stake snapshots.
-  - `WsvEpochRosterAdapter::from_peer_iter` offers a simple mock-friendly constructor for benches/tests.
-2. **Consensus Flow Simplification**
-   - Reorganize `crates/iroha_core/src/sumeragi/*` into modules: `pacemaker`, `aggregation`, `availability`, `witness` with shared types under `consensus`.
-  - Replace ad-hoc message passing with typed Norito envelopes and introduce view-change property tests (tracked in the Sumeragi messaging backlog).
-3. **Lane/Proof Integration**
-   - Align lane proofs with DA commitments and ensure RBC gating is uniform.
-   - End-to-end integration test `integration_tests/tests/extra_functional/seven_peer_consistency.rs` now verifies the RBC-enabled path.
+### རིམ་པ་C – Sumeragi པགས་པ།
+༡ **ཊོཔ་ལོ་ཇི་དང་ཨི་པོཆ་འཛིན་སྐྱོང་**
+   - `EpochRosterProvider` འདི་ WSV stake shots གིས་རྒྱབ་སྐྱོར་འབད་དེ་ ལག་ལེན་འཐབ་ཡོད་པའི་ རང་གཤིས་ཅིག་ལུ་ བཏོན་གཏང་།
+  - I18NI000000060X གིས་ བང་ཁྲི་/བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ འཇམ་ཏོང་ཏོ་སྦེ་ མཐུན་སྒྲིག་ཅན་གྱི་ བཟོ་བསྐྲུན་པ་ཅིག་ བྱིནམ་ཨིན།
+2. **མོས་མཐུན་གྱི་རྒྱུན་འབབ་འཇམ་ཏོང་ཏོ་**
+   - I18NI000000061X འདི་ མཐུད་ལམ་ཚུ་ནང་ ལོག་སྟེ་སྒྲིག་འཛུགས། `pacemaker`, I18NI0000000063X, I18NI000000064X, I18NI0000000065X གིས་ I18NI0000000065X བརྗེ་སོར་གྱི་དབྱེ་བ་ I18NI0000000066X, འོག་ལུ་ `consensus`.
+  - ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ Norito ཡིག་ཤུབས་ཚུ་དང་གཅིག་ཁར་ བརྒྱུད་སྤྲོད་འབད་མི་ ad-hoc འཕྲིན་དོན་འདི་ ཚབ་བཙུགས།
+༣.*ལེན/བདེན་དཔང་མཉམ་བསྡོམས་**
+   - DA ཁས་བླངས་ཚུ་དང་གཅིག་ཁར་ ལམ་ཐིག་བདེན་ཁུངས་ཚུ་ ཕྲང་སྒྲིག་འབད་དེ་ RBC gating གཅིག་མཚུངས་སྦེ་ཡོདཔ་ངེས་གཏན་བཟོ།
+   - མཇུག་བསྡུའི་མཉམ་བསྡོམས་བརྟག་དཔྱད་ I18NI000000067X གིས་ ད་ལྟོ་ ཨར་བི་སི་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་འགྲུལ་ལམ་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
 
-### Phase D – Smart Contracts & Pointer-ABI Hosts
-1. **Host Boundary Audit**
-   - Consolidate pointer-type checks (`ivm::pointer_abi`) and host adapters (`iroha_core::smartcontracts::ivm::host`).
-   - Pointer table expectations and host manifest bindings are covered by `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` and `ivm_host_mapping.rs`, which exercise the golden TLV mappings.
-2. **Trigger Execution Sandbox**
-   - Refactor triggers to run through a common `TriggerExecutor` that enforces gas, pointer validation, and event journaling.
-  - Add regression tests for call/time triggers covering failure paths (tracked via `crates/iroha_core/tests/trigger_failure.rs`).
-3. **CLI & Client Alignment**
-   - Ensure CLI operations (`audit`, `gov`, `sumeragi`, `ivm`) rely on the shared `iroha` client functions to avoid drift.
-   - CLI JSON snapshot tests live in `tests/cli/json_snapshot.rs`; keep them up to date so core command output continues to match the canonical JSON reference.
+### གོ་རིམ་ D – གན་ཡིག་དང་ མཚོན་རྟགས་-ABI Hosts
+1. **ཧོསཊི་མཚམས་རྩིས་**།
+   - དཔག་བྱེད་དབྱེ་བ་ཞིབ་དཔྱད་ (`ivm::pointer_abi`) དང་ ཧོསིཊི་ཨེ་ཌབ་ཊར་ (I18NI000000069X) མཉམ་བསྡོམས་འབད།
+   - ཐིག་ཁྲམ་གྱི་རེ་བ་དང་ ཧོསིཊ་གསལ་སྟོན་ཚུ་ I18NI000000070X དང་ I18NI0000000071X གིས་ ཁྱབ་ཚུགསཔ་ཨིན།
+2. **Trigger བཀོལ་སྤྱོད་བྱེ་བྲག་**
+   - རླངས་རྫས་དང་ དཔག་བྱེད་བདེན་དཔྱད་ དེ་ལས་ བྱུང་ལས་དུས་དེབ་ཚུ་ བསྟར་སྤྱོད་འབད་མི་ སྤྱིར་བཏང་ I18NI000000072X བརྒྱུད་དེ་ བསྐྱར་བཟོ་འབད་བཅུགཔ་ཨིན།
+  - འཐུས་ཤོར་འགྲུལ་ལམ་ཚུ་ བཀབ་མི་ འབོད་བརྡ་/དུས་ཚོད་ཚུ་གི་དོན་ལུ་ ལོག་ལྟའི་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་རྐྱབས། (I18NI0000000073X)
+3. **CLI & མཁོ་སྤྲོད་པ་ཕྲང་སྒྲིག་**།
+   - སི་ཨེལ་ཨའི་བཀོལ་སྤྱོད་ (`audit`, I18NI000000075X, I18NI000000076X, I18NI00000000000077X) ཌིརཊི་སྤང་ནིའི་དོན་ལུ་ I18NI000000000077X)
+   - CLI JSON པར་ལེན་བརྟག་དཔྱད་ཚུ་ `tests/cli/json_snapshot.rs` ནང་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། དེ་ཚུ་ དུས་མཐུན་བཟོ་སྟེ་བཞག་དགོཔ་ལས་ ཀོར་བརྡ་བཀོད་ཨའུཊི་པུཊི་གིས་ ཀེ་ནོ་ནིག་ཇེ་ཨེསི་ཨོ་ཨེན་ གཞི་བསྟུན་འདི་ འཕྲོ་མཐུད་དེ་རང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-### Phase E – Norito Codec Hardening
-1. **Schema Registry**
-   - Create a Norito schema registry under `crates/norito/src/schema/` to source canonical encodings for core data types.
-   - Added doc tests verifying sample payload encoding (`norito::schema::SamplePayload`).
-2. **Golden Fixtures Refresh**
-   - Update `crates/norito/tests/*` golden fixtures to match new WSV schema once the refactor lands.
-   - `scripts/norito_regen.sh` regenerates the Norito JSON goldens deterministically via the `norito_regen_goldens` helper.
-3. **IVM/Norito Integration**
-   - Validate Kotodama manifest serialization end-to-end through Norito, ensuring pointer ABI metadata is consistent.
-   - `crates/ivm/tests/manifest_roundtrip.rs` keeps Norito encode/decode parity for manifests.
+### གོ་རིམ་ E – I18NT0000015X ཀོ་ཌེག་ཧར་ཌེ་ནིང་།
+1. **Schema ཐོ་བཀོད་**།
+   - གནད་སྡུད་དབྱེ་བ་གཙོ་བོ་ཚུ་གི་དོན་ལུ་ འབྱུང་ཁུངས་དོན་ལུ་ `crates/norito/src/schema/` གི་འོག་ལུ་ Norito ལས་འཆར་ཐོ་བཀོད་ཅིག་གསར་བསྐྲུན་འབད།
+   - དཔེ་ཚད་ པེ་ལོཌི་ཨེན་ཀོ་ཌིང་ (I18NI000081X) བདེན་དཔྱད་འབད་ཡོདཔ།
+2. **གསེར་གྱི་བརྟན་བཞུགས་ཚུ་ གསར་བསྐྲུན་**
+   - `crates/norito/tests/*` གསེར་གྱི་བརྟན་བཞུགས་ཚུ་ ཌབ་ལུ་ཨེསི་ཝི་གི་ལས་རིམ་གསརཔ་ བསྐྱར་བཟོ་འབད་མི་ས་གཞི་ཚུ་ ཚར་གཅིག་ དུས་མཐུན་བཟོ་ནི།
+   - I18NI000000083X གིས་ Norito `norito_regen_goldens` གྲོགས་རམ་བརྒྱུད་དེ་ I18NT000000017X བསྐྱར་བཟོ་འབདཝ་ཨིན།
+3. **I18NT0000026X/Norito མཉམ་བསྡོམས་**
+   - I18NT000000008X གིས་ རིམ་སྒྲིག་མཇུག་ལས་མཇུག་ཚུན་ཚོད་ I18NT000000019X བརྒྱུད་དེ་ རིམ་སྒྲིག་འདི་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ དཔག་བྱེད་ཨེ་བི་ཨའི་ མེ་ཊ་ཌེ་ཊ་འདི་ རིམ་མཐུན་སྦེ་ངེས་གཏན་བཟོཝ་ཨིན།
+   - `crates/ivm/tests/manifest_roundtrip.rs` གིས་ I18NT0000020X ཨིན་ཀོ་ཌི་/ཌི་ཀོཌི་ ཆ་སྙོམས་འདི་ གསལ་སྟོན་ཚུ་གི་དོན་ལུ་ བཞགཔ་ཨིན།
 
-## 3. Cross-Cutting Concerns
-- **Testing Strategy**: Every phase promotes unit tests → crate tests → integration tests. Failing tests capture current regressions; new tests prevent them from resurfacing.
-- **Documentation**: After each phase lands, update `status.md` and roll open items into `roadmap.md` while pruning completed tasks.
-- **Performance Benchmarks**: Maintain existing benches in `iroha_core`, `ivm`, and `norito`; add baseline measurements post-refactor to validate no regressions.
-- **Feature Flags**: Keep crate-level toggles only for backends that require external toolchains (`cuda`, `zk-verify-batch`). CPU SIMD paths are always built and selected at runtime; provide deterministic scalar fallbacks for unsupported hardware.
+## 3. བརྒལ་བའི་འགྲིག་པའི་ཚ་གྱང་།
+- **བརྟག་དཔྱད་ཐབས་བྱུས་**:: གནས་རིམ་ག་རའི་ནང་ ཡུ་ནིཊ་བརྟག་དཔྱད་ཚུ་ → ཀེརེཊ་བརྟག་དཔྱད་ཚུ་ ཡར་དྲག་གཏང་དོ་ཡོདཔ་ཨིན། འཐུས་ཤོར་བའི་བརྟག་དཔྱད་ཚུ་གིས་ ད་ལྟོའི་འགྱུར་ལྡོག་ཚུ་ འཛིན་བཟུང་འབདཝ་ཨིན། བརྟག་དཔྱད་གསརཔ་ཚུ་གིས་ ལོག་ཐོན་ནི་ལས་ བཀག་ཆ་འབདཝ་ཨིན།
+- **ཡིག་ཆ་***: གོ་རིམ་རེ་རེ་གི་ཤུལ་ལས་ མཇུག་བསྡུ་ཡོད་པའི་ལས་འགན་ཚུ་ བཏོག་པའི་སྐབས་ I18NI0000086X དུས་མཐུན་བཟོ་ཞིནམ་ལས་ རྣམ་གྲངས་ཁ་ཕྱེ་མི་ཚུ་ `roadmap.md` ནང་ལུ་ བསྐོར་ར་རྐྱབ།
+- **ལཱ་འགན་ཚད་གཞི་***: ད་ལྟོ་ཡོད་པའི་བང་ཁྲི་ཚུ་ `iroha_core`, `ivm`, དང་ I18NI000000090X ནང་ བདག་འཛིན་འཐབ་དགོ། ལོག་ལྟ་ཚུ་ བདེན་དཔྱད་འབད་ནི་ལུ་ གཞི་རྟེན་འཇལ་ཚད་ཚུ་ ཁ་སྐོང་བརྐྱབ།
+- **ཕགཔ་གི་རྒྱུ་ནོར་***: ཕྱིའི་ལག་ཆས་ཚུ་དགོ་པའི་ རྒྱབ་རྟེན་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ ཀེརེཊི་གནས་རིམ་གྱི་སོར་བསྒྱུར་ཚུ་བཞག། (`cuda`, I18NI000000092X) སི་པི་ཡུ་ སིམ་ཌི་འགྲུལ་ལམ་ཚུ་ ཨ་རྟག་ར་ རན་ཊའིམ་ལུ་ བཟོ་བསྐྲུན་འབད་དེ་ སེལ་འཐུ་འབད་ཡོདཔ་ཨིན། རྒྱབ་སྐྱོར་མ་འབད་བའི་ མཐུན་རྐྱེན་ཚུ་གི་དོན་ལུ་ གཏན་འབེབས་ཚད་འཇལ་འཕྲུལ་ཆས་ཀྱི་ ཕོལཀ་ཚུ་བྱིན།
 
-## 4. Immediate Next Actions
-- Phase A scaffolding (snapshot trait + telemetry wiring) – see actionable tasks in roadmap updates.
-- The recent defect audit for `sumeragi`, `state`, and `ivm` surfaced the following highlights:
-  - `sumeragi`: dead-code allowances guard view-change proof broadcast, VRF replay state, and EMA telemetry export. These stay gated until Phase C’s consensus flow simplification and lane/proof integration deliverables land.
-  - `state`: `Cell` cleanup and telemetry routing move onto the Phase A WSV telemetry track, while the SoA/parallel-apply notes fold into the Phase C pipeline optimisation backlog.
-  - `ivm`: CUDA toggle exposure, envelope validation, and Halo2/Metal coverage map to Phase D host-boundary work plus the cross-cutting GPU acceleration theme; kernels remain on the dedicated GPU backlog until ready.
-- Prepare cross-team RFC summarizing this plan for sign-off before landing invasive code changes.
+## 4. འཕྲལ་གྱི་བྱ་བ།
+- དུས་རིམ་ A scaffolding (snapshot རང་གཤིས་ + བརྒྱུད་འཕྲིན་གློག་ཐག་) – ལམ་གྱི་ས་ཁྲ་དུས་མཐུན་ནང་ ལག་ལེན་འཐབ་བཏུབ་པའི་ལས་འགན་ཚུ་བལྟ།
+- འཕྲལ་གྱི་སྐྱོན་རྩིས་ `sumeragi`, `state`, དང་ I18NI000000095X གིས་ གཤམ་གསལ་གྱི་གཙོ་བོ་ཚུ་ བཏོན་ཡོདཔ་ཨིན།
+  - I18NI000000096X: ཤི་བའི་ཨང་རྟགས་འཐུས་ཚུ་ སྲུང་སྐྱོབ་མཐོང་སྣང་བསྒྱུར་བཅོས་བདེན་དཔྱད་ དང་ ཝི་ཨར་ཨེཕ་ བསྐྱར་རྩེད་གནས་སྟངས་ དེ་ལས་ ཨི་ཨེམ་ཨེ་ བརྒྱུད་འཕྲིན་ཕྱིར་ཚོང་། འ་ནི་ཚུ་ གནས་རིམ་སི་གི་མོས་མཐུན་གྱི་ འཇམ་ཏོང་ཏོ་བཟོ་ནི་དང་ ལམ་ཐིག་/བདེན་དཔྱད་མཉམ་བསྡོམས་འབད་ཚུགས་པའི་ ས་ཆ་ཚུ་ མ་ཐོན་ཚུན་ཚོད་ འགྱོ་དོ་ཡོདཔ་ཨིན།
+  - I18NI000000097X: I18NI0000098X གཙང་སྦྲ་དང་ བརྡ་འཕྲིན་འགྲུལ་ལམ་འདི་ Phase A WSV བརྡ་འཕྲིན་རྒྱུན་ལམ་ནང་ སྤོ་བཤུད་འབདཝ་ཨིན་རུང་ SoA/parell-apply དྲན་ཐོ་ཚུ་ Phase C pipeline ཡར་འཕེལ་གྱི་ རྒྱབ་ལོག་ནང་ལུ་ བསྡམ་བཞགཔ་ཨིན།
+  - `ivm`: CUDA སོར་ལྡེའི་འོད་འཕྲོ་དང་ ཡིག་ཤུབས་བདེན་དཔྱད་ དེ་ལས་ Halo2/Metal ཁྱབ་ཚད་སབ་ཁྲ་ Phase D ཧོསིཊི་ས་མཚམས་ལས་ཀ་དང་ ཕར་ཚུར་གཅོད་པའི་ ཇི་པི་ཡུ་མགྱོགས་ཚད་བརྗོད་དོན་ ; ཀར་ནེལ་ཚུ་ གྲ་སྒྲིག་མ་འབད་ཚུན་ཚོད་ བློ་གཏད་ཅན་གྱི་ ཇི་པི་ཡུ་ རྒྱབ་ལོག་གུ་ལུསཔ་ཨིན།
+- བཙན་འཛུལ་གྱི་གསང་ཡིག་བསྒྱུར་བཅོས་མ་འབད་བའི་ཧེ་མ་ མཚན་རྟགས་བཀོད་ནིའི་དོན་ལུ་ འཆར་གཞི་འདི་ བཅུད་བསྡུས་འབད་དེ་ སྡེ་ཚན་ཕར་ཚུར་སྡེ་ཚན་ RFC གྲ་སྒྲིག་འབད་དགོ།
 
-## 5. Open Questions
-- Should RBC remain optional past P1, or is it mandatory for Nexus ledger lanes? Requires stakeholder decision.
-- Do we enforce DS composability groups in P1 or keep them disabled until lane proofs mature?
-- What is the canonical location for ML-DSA-87 parameters? Candidate: new `crates/fastpq_isi` crate (pending creation).
+## 5. དྲི་བ་ཁ་ཕྱེ།
+- RBC འདི་ P1 ལས་འདས་པའི་ P1 ལས་ལྷག་དགོཔ་ཨིན་ན། འབྲེལ་གཏོགས་ཅན་གྱི་གྲོས་ཐག་བཅད་དགོཔ།
+- ང་བཅས་ཀྱིས་ P1 ནང་ DS བརྩམ་སྒྲིག་སྡེ་ཚན་ཚུ་ བསྟར་སྤྱོད་འབད་ནི་ཨིན་ན་ ཡང་ན་ ལམ་བདེན་བདེན་ཚུ་ མ་ཚང་ཚུན་ཚོད་ ལྕོགས་མིན་བཟོ་དགོཔ་ཨིན་ན།
+- ཨེམ་ཨེལ་-ཌི་ཨེསི་ཨེ་-༨༧ ཚད་བཟུང་ཚུ་གི་དོན་ལུ་ ཀེ་ནོ་ནིག་གནས་ཁོངས་ག་ཅི་སྨོ? འདེམས་ངོ་: གསརཔ་ `crates/fastpq_isi` ཀེརེཊ་ (གསར་བསྐྲུན་འབད་ནི།)
 
 ---
 
-_Last updated: 2025-09-12_
+_མཇུག་དུས་མཐུན་བཟོ་ཡོདཔ་: ༢༠༢༥-༠༩-༡༢_

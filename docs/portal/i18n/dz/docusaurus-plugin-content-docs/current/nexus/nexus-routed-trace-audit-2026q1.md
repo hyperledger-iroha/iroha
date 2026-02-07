@@ -7,84 +7,86 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: 2026 Q1 routed-trace audit report (B1)
 description: Mirror of `docs/source/nexus_routed_trace_audit_report_2026q1.md`, covering the quarterly telemetry rehearsal outcomes.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_routed_trace_audit_report_2026q1.md`. Keep both copies aligned until remaining translations land.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདིའི་ནང་ `docs/source/nexus_routed_trace_audit_report_2026q1.md` ལུ་མཐོང་སྣང་། འདྲ་བཤུས་གཉིས་ཆ་ར་ ལྷག་ལུས་སྐད་སྒྱུར་གྱི་ས་གཞི་ཚུན་ཚོད་ ཕྲང་སྒྲིག་འབད་བཞག།
 :::
 
-# 2026 Q1 Routed-Trace Audit Report (B1)
+# 2026 Q1 རའུཊ་-ཊེསི་རྩིས་ཞིབ་སྙན་ཞུ།(B1)
 
-Roadmap item **B1 — Routed-Trace Audits & Telemetry Baseline** requires a
-quarterly review of the Nexus routed-trace program. This report documents the
-Q1 2026 audit window (January–March) so the governance council can sign off the
-telemetry posture before the Q2 launch rehearsals.
+ལམ་སྟོན་རྣམ་གྲངས་ **B1 — རའུཊི་-ཊེསི་ དང་ བརྒྱུད་འཕྲིན་གཞི་རྟེན་** ལུ་ དགོཔ་ཨིན།
+ཟླཝ་གསུམ་པའི་ནང་ Nexus འགྲུལ་ལམ་-འཚོལ་ཞིབ་ལས་རིམ། སྙན་ཞུ་འདི་གིས་ ཡིག་ཆའི་ཡིག་ཆ་བཟོཝ་ཨིན།
+Q12026 རྩིས་ཞིབ་སྒོ་སྒྲིག་ (སྤྱི་ཟླ་དང་པ་–ཟླ་གསུམ་པ་) དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་ཚོགས་སྡེ་གིས་ མཚན་རྟགས་བཀོད་ཚུགས།
+Q2 འགོ་འབྱེད་ཀྱི་སྦྱོང་བརྡར་མ་འབད་བའི་ཧེ་མ་ telemetry གི་གནས་ཚུལ།
 
-## Scope & Timeline
+## ཁྱབ་ཁོངས་དང་དུས་ཚོད།
 
-| Trace ID | Window (UTC) | Objective |
-|----------|--------------|-----------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | Verify lane-admission histograms, queue gossip, and alert flow before multi-lane enablement. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | Validate OTLP replay, diff bot parity, and SDK telemetry ingestion ahead of AND4/AND7 milestones. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | Confirm governance-approved `iroha_config` deltas and rollback readiness prior to the RC1 cut. |
+| རྗེས་འཇུག་ཨའི་ཌི་ | སྒོ་སྒྲིག་ (ཡུ་ཊི་སི) | དམིགས་ཡུལ། |
+|-------------------------------------------------------------------------------------- |
+| `TRACE-LANE-ROUTING` | ༢༠༢༦-༠༢-༡༧ ༠༩:༠༠–༠༩:༤༥ | སྣ་མང་ལམ་ལྕོགས་ཅན་མ་བཟོ་བའི་ཧེ་མ་ ལམ་གྱི་འཛུལ་ཞུགས་ཀྱི་ ཧིསི་ཊོ་གཱརམ་དང་ གྱལ་རིམ་གྱི་སྐད་ཆ་ དེ་ལས་ ཉེན་བརྡའི་རྒྱུན་འབབ་ཚུ་ བདེན་དཔྱད་འབད། |
+| `TRACE-TELEMETRY-BRIDGE` | ༢༠༢༦-༠༢-༢༤ ༡༠:༠༠–༡༠:༤༥ | OTLP བསྐྱར་རྩེད་དང་ dif bot parity དེ་ལས་ SDK ཊེ་ལི་མི་ཊི་ཚུ་ AND4/AND7 གི་ མཐོ་རིམ་གྱི་ཧེ་མ་ལས་ བདེན་དཔྱད་འབད། |
+| `TRACE-CONFIG-DELTA` | ༢༠༢༦-༠༣-༠༡ ༡༢:༠༠–༡༢:༣༠ | RC1 བཏོག་མ་བཏང་པའི་ཧེ་མ་ `iroha_config` ཌེལ་ཊ་དང་ བསྐོར་རྒྱབ་གྲ་སྒྲིག་འབད་ཡོདཔ། |
 
-Each rehearsal ran on production-like topology with the routed-trace
-instrumentation enabled (`nexus.audit.outcome` telemetry + Prometheus counters),
-Alertmanager rules loaded, and evidence exported into `docs/examples/`.
+བསྐྱར་སྦྱོང་རེ་རེ་གིས་ ཐོན་སྐྱེད་བཟུམ་གྱི་ ཊོ་པོ་ལོ་ཇི་ལུ་ འགྲུལ་ལམ་བདའ་སྟེ་ འགྱོ་ཡོདཔ་ཨིན།
+ལག་ཆས་ལྕོགས་ཅན་བཟོ་ཡོདཔ་ (I18NI0000015X བརྡ་འཕྲིན་ + Prometheus གྱངས་ཁ་)
+དྲན་ཤེས་བཏོན་མི་གི་ལམ་ལུགས་ཚུ་ མངོན་གསལ་འབད་དེ་ སྒྲུབ་བྱེད་ཚུ་ `docs/examples/` ནང་ལུ་ ཕྱིར་ཚོང་འཐབ་ཡོདཔ་ཨིན།
 
-## Methodology
+## ཐབས་ལམ།
 
-1. **Telemetry collection.** All nodes emitted the structured
-   `nexus.audit.outcome` event and accompanying metrics
-   (`nexus_audit_outcome_total*`). The helper
-   `scripts/telemetry/check_nexus_audit_outcome.py` tailed the JSON log,
-   validated the event status, and archived the payload under
-   `docs/examples/nexus_audit_outcomes/`.【scripts/telemetry/check_nexus_audit_outcome.py:1】
-2. **Alert validation.** `dashboards/alerts/nexus_audit_rules.yml` and its test
-   harness ensured alert noise thresholds and payload templating stayed
-   consistent. CI runs `dashboards/alerts/tests/nexus_audit_rules.test.yml` on
-   every change; the same rules were exercised manually during each window.
-3. **Dashboard capture.** Operators exported the routed-trace panels from
-   `dashboards/grafana/soranet_sn16_handshake.json` (handshake health) and the
-   telemetry overview dashboards to correlate queue health with audit outcomes.
-4. **Reviewer notes.** The governance secretary logged reviewer initials,
-   decision, and any mitigation tickets in [Nexus transition notes](./nexus-transition-notes)
-   and the config delta tracker (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
+1. **Telemetry བསྡུ་སྒྲིག
+   I18NI000000017X བྱུང་ལས་དང་ མཉམ་དུ་ཡོད་པའི་མེ་ཊིགས།
+   (I18NI0000018X). རོགས་རམ་པ།
+   I18NI000000019X tail, JSON དྲན་ཐོ་།
+   བྱུང་རིམ་གནས་རིམ་འདི་ བདེན་དཔྱད་འབད་དེ་ འོག་ལུ་ འབབ་ཁུངས་འདི་ གཏན་མཛོད་འབད་ཡོདཔ་ཨིན།
+   `docs/examples/nexus_audit_outcomes/`.【【【【/telemetry/telemetry/བརྟག་དཔྱད/ནེག་སི_རྩིས་ཁྲེ་_ཐོན་འབྲས་.༡】།
+2. **Ilert བདེན་དཔྱད།** `dashboards/alerts/nexus_audit_rules.yml` དང་དེའི་བརྟག་དཔྱད།
+   ཧར་ནེས་ཀྱིས་ ཉེན་བརྡའི་སྐད་ཚད་དང་ གླ་ཆ་སྤྲོད་ལེན་གྱི་ ཊེམ་པེལེཊི་ཚུ་ བཞག་ཡོདཔ་ངེས་གཏན་བཟོ་ཡི།
+   རིམ་མཐུན། CI གིས་ I18NI0000002X ལུ།
+   འགྱུར་བ་རེ་རེ་བཞིན་; ལམ་ལུགས་གཅིག་མཚུངས་ཚུ་ སྒོ་སྒྲིག་རེ་རེ་གི་སྐབས་ལུ་ ལག་ཐོག་ལས་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+༣. **ཌེཤ་བོརཌི་འཛིན་བཟུང་།* བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འགྲུལ་ལམ་ཊེམ་པེན་ཚུ་ ལས་ཕྱིར་འདྲེན་འབད་ཡོདཔ།
+   `dashboards/grafana/soranet_sn16_handshake.json` (ལག་བརྡ་འཕྲོད་བསྟེན་) དང་།
+   རྩིས་ཞིབ་གྲུབ་འབྲས་དང་གཅིག་ཁར་ བང་རིམ་གསོ་བའི་འབྲེལ་བ་འཐབ་ནིའི་དོན་ལུ་ telemetry perview dashboards.
+༤. **བསྐྱར་ཞིབ་པ་དྲན་ཐོ།** གཞུང་སྐྱོང་དྲུང་ཆེན་གྱིས་བསྐྱར་ཞིབ་པ་ ནང་བསྐྱོད་འབད་ཡོདཔ།
+   གྲོས་ཐག་དང་ [I1NT00000002X འགྱུར་བའི་དྲན་ཐོ་](I18NU000000007X)
+   དང་ རིམ་སྒྲིག་ཌེལ་ཊ་འཚོལ་ཞིབ་ (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) འདི་ རིམ་སྒྲིག་འབད་ཡོདཔ།
 
-## Findings
+## འཚོལ་ཐོབ།
 
-| Trace ID | Outcome | Evidence | Notes |
-|----------|---------|----------|-------|
-| `TRACE-LANE-ROUTING` | Pass | Alert fire/recover screenshots (internal link) + `dashboards/alerts/tests/soranet_lane_rules.test.yml` replay; telemetry diffs recorded in [Nexus transition notes](./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | Queue-admission P95 remained 612 ms (target ≤750 ms). No follow-up required. |
-| `TRACE-TELEMETRY-BRIDGE` | Pass | Archived outcome payload `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` plus OTLP replay hash recorded in `status.md`. | SDK redaction salts matched the Rust baseline; diff bot reported zero deltas. |
-| `TRACE-CONFIG-DELTA` | Pass (mitigation closed) | Governance tracker entry (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS profile manifest (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + telemetry pack manifest (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Q2 rerun hashed the approved TLS profile and confirmed zero stragglers; telemetry manifest records slot range 912–936 and workload seed `NEXUS-REH-2026Q2`. |
+| རྗེས་འཇུག་ཨའི་ཌི་ | གྲུབ་འབྲས་ | སྒྲུབ་བྱེད་ | དྲན་ཐོ། |
+|--------------------------------------------- -|
+| I18NI0000025X | བརྒྱུད་པ་ | ཉེན་བརྡ་མེ་/སླར་གསོ་གསལ་གཞི་ཚུ་ (ནང་འཁོད་འབྲེལ་མཐུད།) + `dashboards/alerts/tests/soranet_lane_rules.test.yml` བསྐྱར་རྩེད་; [I1NT00000003X འགྱུར་བའི་དྲན་ཐོ་](I18NU0000008X)ནང་སྒྲ་བཟུང་འབད་ཡོད་པའི་བརྡ་འཕྲིན་ཁྱབ་སྤེལ་ཚུ་ | གྱལ་རིམ་འཛུལ་ཞུགས་ P95 ནི་ ༦༡༢ms (target ≤750ms) ཡོད། རྗེས་སྙེག་མེད། |
+| I18NI0000027X | བརྒྱུད་པ་ | གཏན་མཛོད་གྲུབ་འབྲས་ཀྱི་ གླ་ཆ་ I18NI0000028X དང་ OTLP བསྐྱར་རྩེད་ཀྱི་ཧེ་ཤི་ I18NI000000029X ནང་ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན། | SDK བསྐྱར་བཟོ་ཚྭ་ཚུ་ Rust གཞི་རྟེན་དང་མཐུན་སྒྲིག་འབད་ཡོདཔ། diff bot གིས་ ཀླད་ཀོར་གྱི་ ཌེལ་ཊ་ཚུ་ སྙན་ཞུ་འབད་ཡོདཔ་ཨིན། |
+| `TRACE-CONFIG-DELTA` | Pass (མར་ཕབ་འདི་ཁ་བསྡམས།) | གཞུང་འཛིན་འཚོལ་ཞིབ་པ་ཐོ་བཀོད་ (I18NI0000031X) + ཊི་ཨེལ་ཨེསི་གསལ་སྡུད་གསལ་སྟོན་གསལ་སྟོན་ (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + བརྒྱུད་འཕྲིན་ཐུམ་སྒྲིལ་གསལ་སྟོན་ (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`) | Q2 གིས་ ཆ་འཇོག་གྲུབ་པའི་ TLS གསལ་སྡུད་འདི་ ལོག་གཡོག་བཀོལ་ཞིནམ་ལས་ ཀླད་ཀོར་གྱི་ straggers ཚུ་ ངེས་གཏན་བཟོ་ཡོདཔ་ཨིན། བརྡ་རྟགས་གསལ་སྟོན་གྱི་ཐོ་བཀོད་ཀྱི་ཁྱབ་ཁོངས་ ༩༡༢–༩༣༦ དང་ ལཱ་གི་འབོར་ཚད་ཀྱི་སོན་ `NEXUS-REH-2026Q2`. |
 
-All traces produced at least one `nexus.audit.outcome` event within their
-windows, satisfying the Alertmanager guardrails (`NexusAuditOutcomeFailure`
-remained green for the quarter).
+རྗེས་འཇུག་ཆ་མཉམ་གྱིས་ཁོང་ཚོའི་ནང་དུ་ཉུང་མཐར་I18NI0000035X བྱུང་རིམ་གཅིག་ཐོན་ཡོད།
+windows, ཉེན་བརྡ་མ་ནར་ བདག་འཛིན་པ་ (`NexusAuditOutcomeFailure`
+བཞི་ཆ་གཅིག་གི་དོན་ལུ་ ལྗང་ཁུ་ལུས་ཡོདཔ།)
 
-## Follow-ups
+## རྗེས་སུ་འབྲང་།
 
-- Routed-trace appendix updated with TLS hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`;
-  mitigation `NEXUS-421` closed in the transition notes.
-- Continue attaching raw OTLP replays and Torii diff artifacts to the archive to
-  bolster parity evidence for Android AND4/AND7 reviews.
-- Confirm that upcoming `TRACE-MULTILANE-CANARY` rehearsals reuse the same
-  telemetry helper so Q2 sign-off benefits from the validated workflow.
+- ཊི་ཨེལ་ཨེསི་ ཧེཤ་ I18NI000000037X དང་ཅིག་ཁར་དུས་མཐུན་བཟོ་ཡོད་པའི་ འགྲུལ་ལམ་ཡོད་པའི་ ཟུར་ཐོ་།
+  མར་ཕབ་ `NEXUS-421` འདི་ འགྱུར་བའི་དྲན་འཛིན་ཚུ་ནང་ སྒོ་བསྡམ་ཡོདཔ་ཨིན།
+- OTLP བསྐྱར་རྩེད་དང་ I18NT0000005X ལུ་ ཡིག་མཛོད་ལུ་ ཅ་རྙིང་ཚུ་ མཉམ་སྦྲགས་འབད་ནི།
+  Android AND4/AND7 བསྐྱར་ཞིབ་ཀྱི་ bolter ཆ་སྙོམས་སྒྲུབ་བྱེད་ཚུ།
+- འོང་ནི་ཨིན་པའི་ `TRACE-MULTILANE-CANARY` བསྐྱར་སྦྱོང་ཚུ་ དེ་བཟུམ་ལོག་ལག་ལེན་འཐབ།
+  ཊེ་ལི་མི་ཊི་གྲོགས་རམ་པ་དེ་སྦེ་ བདེན་དཔྱད་འབད་ཡོད་པའི་ལཱ་གི་རྒྱུན་རིམ་ལས་ ཀིའུ་༢ མཚན་རྟགས་བཀོད་པའི་ཁེ་ཕན་ཚུ།
 
-## Artefact Index
+## ཅ་རྙིང་གི་ཟུར་ཐོ།
 
-| Asset | Location |
-|-------|----------|
-| Telemetry validator | `scripts/telemetry/check_nexus_audit_outcome.py` |
-| Alert rules & tests | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
-| Sample outcome payload | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
-| Config delta tracker | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
-| Routed-trace schedule & notes | [Nexus transition notes](./nexus-transition-notes) |
+| རྒྱུ་དངོས་ | ས་གནས་ |
+|--------|------------------------------------------------------------------
+| བརྒྱུད་འཕྲིན་བདེན་དཔྱད་པ་ | I18NI0000040X |
+| ཉེན་བརྡ་ལམ་ལུགས་དང་བརྟག་དཔྱད་ཚུ་ | I18NI0000041X, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
+| དཔེ་ཚད་གྲུབ་འབྲས་ཀྱི་སྤྲོད་འབབ་ | I18NI0000043X |
+| ཌེལ་ཊ་འཚོལ་ཞིབ་པ་རིམ་སྒྲིག་འབད། | I18NI0000044X |
+| འགྲུལ་ལམ་-རྗེས་འཇུག་ལས་རིམ་དང་དྲན་ཐོ་ཚུ་ | [I18NT0000004X འགྱུར་བའི་དྲན་ཐོ།](./nexus-transition-notes) |
 
-This report, the artefacts above, and the alert/telemetry exports should be
-attached to the governance decision log to close B1 for the quarter.
+སྙན་ཞུ་འདི་ གོང་འཁོད་ཀྱི་ཅ་ཆས་ཚུ་དང་ ཉེན་བརྡ་/ལྕགས་རིགས་ཕྱིར་ཚོང་ཚུ་ འོང་དགོ།
+ཟླཝ་བཞི་པའི་དོན་ལུ་ བི་༡ སྒོ་བསྡམ་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་གྲོས་ཐག་བཅད་ནིའི་དོན་ལུ་ མཐུད་ཡོདཔ་ཨིན།

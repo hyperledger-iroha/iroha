@@ -1212,20 +1212,37 @@ impl Actor {
                     let _ = self.handle_block_created(created, sender.clone());
                     return Ok(());
                 }
-                super::status::inc_block_sync_drop_invalid_signatures();
-                warn!(
-                    ?err,
-                    hash = ?block_hash,
-                    height = block_height,
-                    view = block_view,
-                    "dropping block sync update with invalid or insufficient signatures"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::BlockSyncUpdate,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::InvalidSignature,
-                );
-                return Ok(());
+                let has_roster_evidence = incoming_qc.is_some()
+                    || selection.commit_qc.is_some()
+                    || selection.checkpoint.is_some();
+                if has_roster_evidence {
+                    warn!(
+                        ?err,
+                        hash = ?block_hash,
+                        height = block_height,
+                        view = block_view,
+                        has_incoming_qc = incoming_qc.is_some(),
+                        has_commit_qc = selection.commit_qc.is_some(),
+                        has_checkpoint = selection.checkpoint.is_some(),
+                        "continuing block sync update despite signature mismatch because roster/QC evidence is available"
+                    );
+                    BTreeSet::new()
+                } else {
+                    super::status::inc_block_sync_drop_invalid_signatures();
+                    warn!(
+                        ?err,
+                        hash = ?block_hash,
+                        height = block_height,
+                        view = block_view,
+                        "dropping block sync update with invalid or insufficient signatures"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockSyncUpdate,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidSignature,
+                    );
+                    return Ok(());
+                }
             }
         };
         let qc_candidate_start = Instant::now();

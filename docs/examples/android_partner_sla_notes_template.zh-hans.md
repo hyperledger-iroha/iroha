@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android 合作伙伴 SLA 发现说明 — 模板
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+将此模板用于每个 AND8 SLA 发现会话。保存填写好的副本
+在 `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` 下
+并附上支持性资料（调查问卷答复、致谢、
+附件）在同一目录中。
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. 议程和背景
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- 会议的目的（试点范围、发布窗口、遥测期望）。
+- 在电话会议前共享的参考文档（支持手册、发布日历、
+  遥测仪表板）。
 
-## 2. Workload Overview
+## 2. 工作负载概述
 
-| Topic | Notes |
-|-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+|主题 |笔记|
+|--------|--------|
+|目标工作负载/链 | |
+|预计交易量 | |
+|关键业务窗口/停电期 | |
+|监管制度（GDPR、MAS、FISC 等）| |
+|所需语言/本地化 | |
 
-## 3. SLA Discussion
+## 3.SLA 讨论
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA 等级 |合作伙伴期望 |相对于基线的增量？ |需要采取行动|
+|----------|--------------------|----------------------|-----------------|
+|关键修复（48 小时）| |是/否 | |
+|高严重性（5 个工作日）| |是/否 | |
+|维护（30 天）| |是/否 | |
+|割接通知（60 天）| |是/否 | |
+|事件通讯节奏 | |是/否 | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+记录合作伙伴要求的任何附加 SLA 条款（例如专用
+电话桥，额外的遥测出口）。
 
-## 4. Telemetry & Access Requirements
+## 4. 遥测和访问要求
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus 访问需求：
+- 日志/跟踪导出要求：
+- 离线证据或档案期望：
 
-## 5. Compliance & Legal Notes
+## 5. 合规性和法律说明
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- 管辖区通知要求（法规+时间）。
+- 事件更新所需的法律联系人。
+- 数据驻留限制/存储要求。
 
-## 6. Decisions & Action Items
+## 6. 决策和行动项目
 
-| Item | Owner | Due | Notes |
-|------|-------|-----|-------|
+|项目 |业主|到期|笔记|
+|------|--------|-----|--------|
 | | | | |
 
-## 7. Acknowledgement
+## 7.致谢
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- 合作伙伴承认基线 SLA？ （是/否）
+- 后续确认方式（电子邮件/票据/签名）：
+- 关闭前将确认电子邮件或会议纪要附加到此目录。

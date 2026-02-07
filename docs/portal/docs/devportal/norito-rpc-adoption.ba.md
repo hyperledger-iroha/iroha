@@ -11,48 +11,49 @@ id: norito-rpc-adoption
 title: Norito-RPC Adoption Schedule
 sidebar_label: Norito-RPC adoption
 description: Cross-SDK rollout plan, evidence checklist, and automation hooks for roadmap item NRPC-4.
+translator: machine-google-reviewed
 ---
 
-> Canonical planning notes live in `docs/source/torii/norito_rpc_adoption_schedule.md`.  
-> This portal copy distils the rollout expectations for SDK authors, operators, and reviewers.
+> Канонлы планлаштырыу ноталары йәшәй I18NI0000000019X.  
+> Был портал күсермәһе SDK авторҙары, операторҙар һәм рецензенттар өсөн өмөттәрҙе таратыу өмөттәрен дистилляциялай.
 
-## Objectives
+## Маҡсаттар
 
-- Align every SDK (Rust CLI, Python, JavaScript, Swift, Android) on the binary Norito-RPC transport ahead of the AND4 production toggle.
-- Keep phase gates, evidence bundles, and telemetry hooks deterministic so governance can audit the rollout.
-- Make it trivial to capture fixture and canary evidence with the shared helpers that roadmap NRPC-4 calls out.
+- Һәр SDK тура килтерергә (Раст CLI, Python, JavaScript, Свифт, Андроид) бинар I18NT0000000000000000000000000000000000000000000000-гә тиклем AND4 етештереү toggle алдынан.
+- фазалы ҡапҡаларҙы, дәлилдәр өйөмдәрен һәм телеметрияны детерминистик ҡармаҡтар тота, шуға күрә идара итеү ролл-аутты аудитлай ала.
+- Был юл картаһы NRPC-4 саҡырыуҙары менән дөйөм ярҙамсылар менән ҡоролма һәм канар дәлилдәрҙе тотоу өсөн тривиаль эшләй.
 
-## Phase timeline
+## Фаза ваҡыт һыҙығы
 
-| Phase | Window | Scope | Exit Criteria |
-|-------|--------|-------|---------------|
-| **P0 – Lab parity** | Q2 2025 | Rust CLI + Python smoke suites run `/v1/norito-rpc` in CI, JS helper passes unit tests, Android mock harness exercises dual transports. | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` and `javascript/iroha_js/test/noritoRpcClient.test.js` green in CI; Android harness wired into `./gradlew test`. |
-| **P1 – SDK preview** | Q3 2025 | Shared fixture bundle checked in, `scripts/run_norito_rpc_fixtures.sh --sdk <label>` records logs + JSON in `artifacts/norito_rpc/`, optional Norito transport flags exposed in SDK samples. | Fixture manifest signed, README updates show opt-in usage, Swift preview API available behind the IOS2 flag. |
-| **P2 – Staging / AND4 preview** | Q1 2026 | Staging Torii pools prefer Norito, Android AND4 preview clients and Swift IOS2 parity suites default to the binary transport, telemetry dashboard `dashboards/grafana/torii_norito_rpc_observability.json` populated. | `docs/source/torii/norito_rpc_stage_reports.md` captures the canary, `scripts/telemetry/test_torii_norito_rpc_alerts.sh` passes, Android mock harness replay captures success/error cases. |
-| **P3 – Production GA** | Q4 2026 | Norito becomes the default transport for all SDKs; JSON remains a brownout fallback. Release jobs archive parity artefacts with every tag. | Release checklist bundles Norito smoke output for Rust/JS/Python/Swift/Android; Alert thresholds for Norito vs JSON error-rate SLOs enforced; `status.md` and release notes cite GA evidence. |
+| Фаза | Тәҙрә | Скоп | Критерийҙар сығыу |
+|------|--------|--------|-------------- |
+| **Р0 – Лаборатория паритеты** | Q22025 | Rust CLI + Python төтөн люкстары эшләй I18NI000000020X CI, JS ярҙамсыһы үткән блок һынауҙары, Android макет жгут күнекмәләр ике транспорт. | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` һәм I18NI000000022X йәшел CI; Android жгут проводной `./gradlew test`. |
+| **Р1 – SDK алдан ҡарау** | Q32025 | 18NI000000024X рекордтары + JSON I18NI00000000025X, опциональ I18NT00000000001X транспорт флагтары SDK өлгөләрендә фашланған. | Fixture манифест ҡул ҡуйылған, README яңыртыуҙар күрһәтә опт-ин ҡулланыу, Swift алдан ҡарау API IOS2 флагы артында бар. |
+| **Р2 – Сәхнә / AND4 алдан ҡарау** | Q12026 | I18NT000000016X бассейндары Norito, Android AND4 алдан ҡарау клиенттары һәм Swift IOS2 паритеты люкстары бинар транспорт, телеметрия приборҙар таҡтаһы I18NI000000026X халыҡ өҫтөнлөк бирә. | `docs/source/torii/norito_rpc_stage_reports.md` канарҙы тота, `scripts/telemetry/test_torii_norito_rpc_alerts.sh` үтә, Android макет жгут реплейын тота уңыш/хата осраҡтары. |
+| **Р3 – ГА** етештереү | Q42026 | Norito бөтә SDKs өсөн ғәҙәттәге транспортҡа әйләнә; JSON ҡала браунут fallback. Эш урындары архив паритет артефакттары менән һәр тег. | Релиз тикшерелгән исемлек өйөмдәре I18NT000000000004X төтөн сығарыу өсөн Rust/JS/Питон/Свифт/Андроид; Иҫкәртмә сиктәре өсөн I18NT00000000005X vs JSON хаталар ставкаһы SLOs үтәлгән; `status.md` һәм сығарыу тураһында иҫкәрмәләр GA дәлилдәренә һылтанма яһай. |
 
-## SDK deliverables & CI hooks
+## SDK тапшырыуҙар & CI ҡармаҡтар
 
-- **Rust CLI & integration harness** – extend `iroha_cli pipeline` smoke tests to force the Norito transport once `cargo xtask norito-rpc-verify` lands. Guard with `cargo test -p integration_tests -- norito_streaming` (lab) and `cargo xtask norito-rpc-verify` (staging/GA), storing artefacts under `artifacts/norito_rpc/`.
-- **Python SDK** – default the release smoke (`python/iroha_python/scripts/release_smoke.sh`) to Norito RPC, keep `run_norito_rpc_smoke.sh` as the CI entrypoint, and document parity handling in `python/iroha_python/README.md`. CI target: `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
-- **JavaScript SDK** – stabilise `NoritoRpcClient`, let governance/query helpers default to Norito when `toriiClientConfig.transport.preferred === "norito_rpc"`, and capture end-to-end samples in `javascript/iroha_js/recipes/`. CI must run `npm test` plus the dockerised `npm run test:norito-rpc` job before publish; provenance uploads Norito smoke logs under `javascript/iroha_js/artifacts/`.
-- **Swift SDK** – wire the Norito bridge transport behind the IOS2 flag, mirror the fixture cadence, and ensure the Connect/Norito parity suite runs inside the Buildkite lanes referenced in `docs/source/sdk/swift/index.md`.
-- **Android SDK** – AND4 preview clients and the mock Torii harness adopt Norito, with retry/backoff telemetry documented in `docs/source/sdk/android/networking.md`. The harness shares fixtures with other SDKs via `scripts/run_norito_rpc_fixtures.sh --sdk android`.
+- **Раст CLI & интеграция йүгән** – оҙайтыу I18NI000000000300X төтөн һынауҙары көсләү өсөн I18NT0000000000006X транспорт бер тапҡыр I18NI0000000031X ерҙәре. I18NI000000032X (лаборатория) һәм I18NI000000033X (стажировка/GA), I18NI000000034X буйынса артефакттар менән гвардия.
+- **Python SDK** – ғәҙәттәгесә төтөн сығарыу (I18NI0000000035X) I18NT00000000007X RPC, I18NI000000036X CI инеү нөктәһе булараҡ һаҡлау, һәм документтар паритет менән эш итеү I18NI000000000037X. CI маҡсатлы: I18NI000000038X.
+- **JavaScript SDK** – I18NI000000039X, идара итеү/эҙләү ярҙамсылары I18NNT00000008X тиклем ғәҙәттәгесә, ҡасан I18NI0000000040X, һәм I18NI00000000041X-та ос-ос өлгөләрен тотоу. CI эшләргә тейеш I18NI000000042X плюс докерланған `npm run test:norito-rpc` эш баҫтырып сығарыр алдынан; провенанс тейәп I18NT000000009X төтөн журналдары буйынса I18NI000000044X.
+- **Swift SDK** – IOS2 флагы артында I18NT00000000010X күпер транспорты сым, ҡоролма каденцияһын көҙгөләй, һәм I18NI00000000000045X һылтанма буйынса Buildkite һыҙаттары эсендә Connect/I18NT0000000011X паритет люксы йүгерә.
+- **Android SDK** – AND4 алдан ҡарау клиенттары һәм I18NT000000017X жгут ҡабул итеү I18NT00000000012X, ҡабаттан тырышып/кире телеметрия менән документлаштырылған I18NI000000000000046. Йүгән башҡа SDKs менән ҡорамалдар менән бүлешә `scripts/run_norito_rpc_fixtures.sh --sdk android` аша.
 
-## Evidence & automation
+## Дәлилдәр & автоматлаштырыу
 
-- `scripts/run_norito_rpc_fixtures.sh` wraps `cargo xtask norito-rpc-verify`, captures stdout/stderr, and emits `fixtures.<sdk>.summary.json` so SDK owners have a deterministic artefact to attach to `status.md`. Use `--sdk <label>` and `--out artifacts/norito_rpc/<stamp>/` to keep CI bundles tidy.
-- `cargo xtask norito-rpc-verify` enforces schema hash parity (`fixtures/norito_rpc/schema_hashes.json`) and fails if Torii returns `X-Iroha-Error-Code: schema_mismatch`. Pair every failure with a JSON fallback capture for debugging.
-- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` and `dashboards/grafana/torii_norito_rpc_observability.json` define the alert contracts for NRPC-2. Run the script after every dashboard edit and store the `promtool` output in the canary bundle.
-- `docs/source/runbooks/torii_norito_rpc_canary.md` describes the staging and production drills; update it whenever fixture hashes or alert gates change.
+- I18NI0000000048X уратып I18NI0000000049X, тотоу stdout/stderr, һәм I18NI000000050X сыға, шуға күрә SDK хужалары детерминистик артефакт беркетергә I18NI000000051X. Ҡулланыу I18NI000000052X һәм `--out artifacts/norito_rpc/<stamp>/` CI өйөмдәре йыйыштырылған тотоу өсөн.
+- `cargo xtask norito-rpc-verify` схемаһы хеш-паритетын (I18NI000000055X) үтәй һәм әгәр I18NT0000000018X `X-Iroha-Error-Code: schema_mismatch` ҡайтарыуҙары булһа, уңышһыҙлыҡҡа осрай. Пар һәр уңышһыҙлыҡ менән JSON fallback тотоу өсөн отладка.
+- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` һәм `dashboards/grafana/torii_norito_rpc_observability.json` NRPC-2 өсөн иҫкәртмә контракттарын билдәләй. Сценарийҙы һәр приборҙар таҡтаһы мөхәррирләгәндән һуң йүгерергә һәм канар өйөмөндә I18NI000000059X сығышын һаҡларға.
+- `docs/source/runbooks/torii_norito_rpc_canary.md` стадия һәм етештереү күнекмәләрен һүрәтләй; яңыртыу, ҡасан да булһа ҡоролма хеш йәки иҫкәртмә ҡапҡалары үҙгәрә.
 
-## Reviewer checklist
+## Рецензент тикшерелгән исемлек
 
-Before ticking an NRPC-4 milestone, confirm:
+NRPC-4-се этапты тикшерер алдынан, раҫлау:
 
-1. Latest fixture bundle hashes match `fixtures/norito_rpc/schema_hashes.json` and the corresponding CI artefact recorded under `artifacts/norito_rpc/<stamp>/`.
-2. SDK README / portal docs describe how to force JSON fallback and cite the Norito transport default.
-3. Telemetry dashboards show dual-stack error-rate panels with alert links, and the Alertmanager dry run (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) is attached to the tracker.
-4. The adoption schedule here matches the tracker entry (`docs/source/torii/norito_rpc_tracker.md`) and the roadmap (NRPC-4) references the same evidence bundle.
+1. Һуңғы ҡоролма өйөмлө хештар матч I18NI0000000061X һәм тейешле CI артефакт теркәлгән I18NI0000000062X.
+2. SDK УҠЫУ / порталь docs һүрәтләй, нисек көсләп JSON fallback һәм цитироваться I18NT00000000013X транспорт стандарт.
+3. Телеметрия приборҙар таҡталары күрһәтә ике-стек хата-темптары панелдәре менән иҫкәртмә һылтанмалар, һәм иҫкәртмәнсе ҡоро йүгерә (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) трекер беркетелгән.
+4. Ҡабул итеү графигы бында тура килә трекер инеү (`docs/source/torii/norito_rpc_tracker.md`) һәм юл картаһы (NRPC-4) һылтанмалар шул уҡ дәлилдәр йыйылмаһы.
 
-Staying disciplined on the schedule keeps cross-SDK behaviour predictable and lets governance audit Norito-RPC adoption without bespoke requests.
+Ҡаса дисциплина графикта тота кросс-SDK тәртибе күҙаллана һәм идара итеү аудиты I18NT00000000014X-RPC ҡабул итеү тураһында запростарһыҙ.

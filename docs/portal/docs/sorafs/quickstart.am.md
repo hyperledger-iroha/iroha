@@ -7,44 +7,45 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 79a048e6061f7054e14a471004cf7da0dddd3f9bf627d9f1d20ff63803cb0979
 source_last_modified: "2026-01-05T09:28:11.908615+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Quickstart
+# SoraFS ፈጣን ማስጀመር
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+ይህ በእጅ የሚሰራ መመሪያ በሚወስነው SF-1 chunker መገለጫ ውስጥ ያልፋል፣
+የI18NT0000002Xን የሚደግፉ አንጸባራቂ ፊርማ እና ባለብዙ አቅራቢ ማምጣት ፍሰት
+የማከማቻ ቧንቧ መስመር. ከ[አንጸባራቂ የቧንቧ መስመር ጥልቅ ዳይቭ](manifest-pipeline.md) ጋር ያጣምሩት።
+ለዲዛይን ማስታወሻዎች እና የ CLI ባንዲራ ማመሳከሪያ ቁሳቁስ.
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- Rust toolchain (`rustup update`)፣ የስራ ቦታ በአካባቢው ተዘግቷል።
+- አማራጭ፡ [በኤስኤስኤል የመነጨ Ed25519 የቁልፍ ጥምር](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  መግለጫዎችን ለመፈረም.
+- አማራጭ፡ Node.js ≥ 18 Docusaurus ፖርታል ለማየት ካቀዱ።
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+አጋዥ የCLI መልዕክቶችን ለማሳየት እየሞከርክ ሳለ `export RUST_LOG=info` አዘጋጅ።
 
-## 1. Refresh the deterministic fixtures
+## 1. የመወሰኛ ዕቃዎችን ያድሱ
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+ቀኖናዊውን SF-1 ቺንኪንግ ቬክተሮችን ያድሱ። ትዕዛዙም ተፈርሟል
+`--signing-key` ሲቀርብ የማሳያ ፖስታዎች; `--allow-unsigned` ይጠቀሙ
+በአካባቢ ልማት ጊዜ ብቻ.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Outputs:
+ውጤቶች፡
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json` (ከተፈረመ)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. የተከፈለ ጭነት ቆርጠህ እቅዱን ተመልከት
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+የዘፈቀደ ፋይል ወይም ማህደር ለመቁረጥ `sorafs_chunker` ይጠቀሙ፡
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -52,23 +53,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+ቁልፍ መስኮች:
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- `profile` / `break_mask` - የ I18NI0000023X መለኪያዎችን ያረጋግጣል።
+- `chunks[]` - የታዘዙ ማካካሻዎች፣ ርዝመቶች እና ጥቅጥቅ ያሉ BLAKE3 መፍጨት።
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+ለትላልቅ መጫዎቻዎች፣ ዥረት መልቀቅን ለማረጋገጥ እና በፕሮቴስት የተደገፈ ድግግሞሹን ያሂዱ
+ባች መቆራረጥ በማመሳሰል ቆይታ፡
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. አንጸባራቂ ይገንቡ እና ይፈርሙ
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+የጭራሹን እቅድ፣ ተለዋጭ ስሞች እና የአስተዳደር ፊርማዎችን ተጠቅመው ወደ አንጸባራቂነት ያቅርቡ
+`sorafs-manifest-stub`. ከታች ያለው ትዕዛዝ ነጠላ-ፋይል ጭነት ያሳያል; ማለፍ
+ዛፍ ለመጠቅለል የማውጫ መንገድ (CLI በቃላት አነጋገር ይራመዳል)።
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -80,21 +81,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+ግምገማ `/tmp/docs.report.json` ለ፡-
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunking.chunk_digest_sha3_256` – SHA3 የማካካሻዎችን/ርዝመቶችን መፍጨት፣ ከሚከተሉት ጋር ይዛመዳል።
+  chunker ቋሚዎች.
+- `manifest.manifest_blake3` – BLAKE3 ዳይጀስት በማንፌክት ፖስታ ውስጥ ተፈርሟል።
+- `chunk_fetch_specs[]` - ለኦርኬስትራዎች የታዘዙ መመሪያዎችን ያግኙ።
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+እውነተኛ ፊርማዎችን ለማቅረብ ሲዘጋጁ `--signing-key` እና `--signer` ይጨምሩ
+ክርክሮች. ትዕዛዙ ከመጻፉ በፊት እያንዳንዱን የ Ed25519 ፊርማ ያረጋግጣል
+ኤንቨሎፕ.
 
-## 4. Simulate multi-provider retrieval
+## 4. የባለብዙ አቅራቢ መልሶ ማግኛን አስመስለው
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+የ chunk እቅዱን ከአንድ ወይም ከዛ በላይ ለማጫወት ገንቢውን CLI ን ይጠቀሙ
+አቅራቢዎች. ይህ ለ CI ጭስ ሙከራዎች እና ኦርኬስትራ ፕሮቶታይፕ ተስማሚ ነው።
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -104,27 +105,27 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Assertions:
+ማረጋገጫዎች፡-
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex` ከአንጸባራቂ ዘገባው ጋር መዛመድ አለበት።
+- `provider_reports[]` የወለል ንጣፎች ስኬት/የሽንፈት ቆጠራ በአንድ አቅራቢ።
+- ዜሮ ያልሆነ I18NI0000034X የጀርባ-ግፊት ማስተካከያዎችን ያደምቃል.
+- ለአንድ ሩጫ የታቀዱ አቅራቢዎችን ቁጥር ለመገደብ `--max-peers=<n>` ማለፍ
+  እና የ CI ማስመሰያዎች በዋና እጩዎች ላይ ያተኩሩ።
+- `--retry-budget=<n>` ነባሪውን በየቁልቁል የድጋሚ ሙከራ ብዛት (3) ይሽራል ስለዚህ እርስዎ
+  ውድቀቶችን በሚያስገቡበት ጊዜ የኦርኬስትራ ሪገሬሽን በፍጥነት እንዲታይ ሊያደርግ ይችላል።
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+እንዳይሳካ `--expect-payload-digest=<hex>` እና `--expect-payload-len=<bytes>` ይጨምሩ
+እንደገና የተገነባው ጭነት ከማንፀባረቂያው ሲወጣ በፍጥነት።
 
-## 5. Next steps
+## 5. ቀጣይ ደረጃዎች
 
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
-  metadata.
+- ** የአስተዳደር ውህደት *** - አንጸባራቂ መፍጨት እና
+  የፒን መዝገብ ቤት እንዲችል `manifest_signatures.json` ወደ ምክር ቤት የስራ ሂደት
+  ተገኝነትን ያስተዋውቁ.
+- ** የመመዝገቢያ ድርድር *** - ያማክሩ [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  አዲስ መገለጫዎችን ከመመዝገብዎ በፊት. አውቶማቲክ ቀኖናዊ እጀታዎችን መምረጥ አለበት
+  (`namespace.name@semver`) ከቁጥር መታወቂያዎች በላይ።
+- ** CI አውቶሜሽን *** - የቧንቧ መስመሮችን ለመልቀቅ ከላይ ያሉትን ትዕዛዞች ያክሉ ፣
+  ዕቃዎች እና ቅርሶች ከተፈረመበት ጎን ለጎን የሚወስኑ መግለጫዎችን ያትማሉ
+  ሜታዳታ

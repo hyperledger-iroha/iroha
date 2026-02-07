@@ -11,32 +11,33 @@ id: preview-feedback-w3-summary
 title: W3 beta feedback & status
 sidebar_label: W3 summary
 description: Live digest for the 2026 beta preview wave (finance, observability, SDK, and ecosystem cohorts).
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| ንጥል | ዝርዝሮች |
 | --- | --- |
-| Wave | W3 — Beta cohorts (finance + ops + SDK partner + ecosystem advocate) |
-| Invite window | 2026‑02‑18 → 2026‑02‑28 |
-| Artefact tag | `preview-20260218` |
-| Tracker issue | `DOCS-SORA-Preview-W3` |
-| Participants | finance-beta-01, observability-ops-02, partner-sdk-03, ecosystem-advocate-04 |
+| ማዕበል | W3 — የቅድመ-ይሁንታ ስብስብ (ፋይናንስ + ኦፕስ + ኤስዲኬ አጋር + የስነ-ምህዳር ጠበቃ) |
+| የግብዣ መስኮት | 2026-02-18 → 2026-02-28 |
+| Artefact መለያ | `preview-20260218` |
+| የመከታተያ ጉዳይ | `DOCS-SORA-Preview-W3` |
+| ተሳታፊዎች | ፋይናንስ-ቤታ-01፣ ታዛቢነት-ops-02፣ አጋር-sdk-03፣ ምህዳር-ተሟጋች-04 |
 
-## Highlights
+## ድምቀቶች
 
-1. **End-to-end evidence pipeline.** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` generates the per-wave summary (`artifacts/docs_portal_preview/preview-20260218-summary.json`), digest (`preview-20260218-digest.md`), and refreshes `docs/portal/src/data/previewFeedbackSummary.json` so governance reviewers can rely on a single command.
-2. **Telemetry + governance coverage.** All four reviewers acknowledged checksum-gated access, submitted feedback, and were revoked on time; the digest references the feedback issues (`docs-preview/20260218` set + `DOCS-SORA-Preview-20260218`) alongside the Grafana runs collected during the wave.
-3. **Portal surfacing.** The refreshed portal table now shows the closed W3 wave with latency and response-rate metrics, and the new log page below mirrors the event timeline for auditors who do not pull the raw JSON log.
+1. **ከጫፍ እስከ ጫፍ የማስረጃ መስመር።** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` የያንዳንዱ ሞገድ ማጠቃለያ (`artifacts/docs_portal_preview/preview-20260218-summary.json`) ዳይጀስት (I18NI0000009X) እና `docs/portal/src/data/previewFeedbackSummary.json`ን ያድሳል ስለዚህ የአስተዳደር ገምጋሚዎች በአንድ ነጠላ ላይ ሊተማመኑ ይችላሉ።
+2. **ቴሌሜትሪ + የአስተዳደር ሽፋን።** አራቱም ገምጋሚዎች የቼክሰም-ጋድ መዳረሻን አምነዋል፣ ግብረ መልስ ሰጥተዋል እና በሰዓቱ ተሽረዋል። በማዕበል ወቅት ከተሰበሰቡት የGrafana ሩጫዎች ጎን ለጎን የግብረመልስ ጉዳዮችን (`docs-preview/20260218` set + `DOCS-SORA-Preview-20260218`) ይጠቅሳል።
+3. **የፖርታል ንጣፍ።** የታደሰው ፖርታል ሠንጠረዥ አሁን የተዘጋውን W3 ሞገድ ዘግይቶ እና የምላሽ-ተመን መለኪያዎችን ያሳያል፣ እና ከታች ያለው አዲሱ የምዝግብ ማስታወሻ ገጽ ጥሬውን የJSON ሎግ ለማይጎትቱ ኦዲተሮች የዝግጅት ጊዜን ያሳያል።
 
-## Action items
+## የእርምጃ ዕቃዎች
 
-| ID | Description | Owner | Status |
+| መታወቂያ | መግለጫ | ባለቤት | ሁኔታ |
 | --- | --- | --- | --- |
-| W3-A1 | Capture preview digest and attach to tracker. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
-| W3-A2 | Mirror invite/digest evidence into portal + roadmap/status. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
+| W3-A1 | የቅድመ እይታ መፍጨትን ያንሱ እና ከመከታተያ ጋር ያያይዙ። | ሰነዶች/DevRel አመራር | ✅ ተጠናቀቀ 2026-02-28 |
+| W3-A2 | ማስረጃዎችን ወደ ፖርታል + የመንገድ ካርታ/ሁኔታ ጋብዝ/መፍጨት። | ሰነዶች/DevRel አመራር | ✅ ተጠናቀቀ 2026-02-28 |
 
-## Exit summary (2026-02-28)
+## የመውጫ ማጠቃለያ (2026-02-28)
 
-- Invites dispatched 2026‑02‑18 with acknowledgements logged minutes later; preview access revoked 2026‑02‑28 after the final telemetry check passed.
-- Digest + summary captured under `artifacts/docs_portal_preview/`, with the raw log anchored by `artifacts/docs_portal_preview/feedback_log.json` for replayability.
-- Issue follow-ups filed under `docs-preview/20260218` with the governance tracker `DOCS-SORA-Preview-20260218`; CSP/Try it notes routed to the observability/finance owners and linked from the digest.
-- Tracker row updated to 🈴 Completed and the portal feedback table reflects the closed wave, completing the remaining DOCS-SORA beta-readiness task.
+- ግብዣዎች 2026-02-18 ከደቂቃዎች በኋላ ከተመዘገቡ ምስጋናዎች ጋር; የመጨረሻው የቴሌሜትሪ ፍተሻ ካለፈ በኋላ የቅድመ እይታ መዳረሻ በ2026-02-28 ተሽሯል።
+- Digest + ማጠቃለያ በ`artifacts/docs_portal_preview/` ስር ተይዟል፣ ከጥሬ ምዝግብ ማስታወሻው በ `artifacts/docs_portal_preview/feedback_log.json` ለእንደገና መጫወት።
+- በአስተዳደር መከታተያ `DOCS-SORA-Preview-20260218` በ `docs-preview/20260218` ስር የቀረቡ ክትትሎችን መስጠት; CSP/ ወደ ታዛቢነት/የፋይናንስ ባለቤቶች የተላለፈ ማስታወሻዎችን ይሞክሩ እና ከማዋሃድ ጋር የተገናኙት።
+- የመከታተያ ረድፍ ወደ 🈴 ተጠናቋል እና የፖርታል ግብረመልስ ሠንጠረዥ የተዘጋውን ሞገድ ያንፀባርቃል፣ ቀሪውን DOCS-SORA የቅድመ-ይሁንታ ዝግጁነት ተግባርን ያጠናቅቃል።

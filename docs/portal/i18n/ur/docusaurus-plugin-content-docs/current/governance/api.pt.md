@@ -4,122 +4,118 @@ direction: rtl
 source: docs/portal/docs/governance/api.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Status: rascunho/esboco para acompanhar as tarefas de implementacao de governanca. As formas podem mudar durante a implementacao. Determinismo e politica RBAC sao restricoes normativas; Torii pode assinar/submeter transacoes quando `authority` e `private_key` sao fornecidos, caso contrario os clientes constroem e submetem para `/transaction`.
+حیثیت: گورننس کے نفاذ کے کاموں کو ٹریک کرنے کے لئے مسودہ/خاکہ۔ نفاذ کے دوران فارم تبدیل ہوسکتے ہیں۔ تعی .ن اور آر بی اے سی پالیسی بنیادی پابندیاں ہیں۔ Torii لین دین پر دستخط/جمع کراسکتے ہیں جب `authority` اور `private_key` فراہم کیا جاتا ہے ، بصورت دیگر کلائنٹ `/transaction` پر تعمیر اور جمع کرواتے ہیں۔
 
-Visao geral
-- Todos os endpoints retornam JSON. Para fluxos que produzem transacoes, as respostas incluem `tx_instructions` - um array de uma ou mais instrucoes esqueleto:
-  - `wire_id`: identificador de registro para o tipo de instrucao
-  - `payload_hex`: bytes de payload Norito (hex)
-- Se `authority` e `private_key` forem fornecidos (ou `private_key` em DTOs de ballots), Torii assina e submete a transacao e ainda retorna `tx_instructions`.
-- Caso contrario, clientes montam uma SignedTransaction usando sua authority e chain_id, depois assinam e fazem POST para `/transaction`.
-- Cobertura de SDK:
-- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` retorna `GovernanceProposalResult` (normaliza campos status/kind), `ToriiClient.get_governance_referendum_typed` retorna `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` retorna `GovernanceTally`, `ToriiClient.get_governance_locks_typed` retorna `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` retorna `GovernanceUnlockStats`, e `ToriiClient.list_governance_instances_typed` retorna `GovernanceInstancesPage`, impondo acesso tipado em toda a superficie de governanca com exemplos de uso no README.
-- Cliente Python leve (`iroha_torii_client`): `ToriiClient.finalize_referendum` e `ToriiClient.enact_proposal` retornam bundles tipados `GovernanceInstructionDraft` (encapsulando o esqueleto `tx_instructions` do Torii), evitando parse manual de JSON quando scripts compoem fluxos Finalize/Enact.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` expone helpers tipados para proposals, referenda, tallies, locks, unlock stats, e agora `listGovernanceInstances(namespace, options)` mais os endpoints do council (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) para que clientes Node.js possam paginar `/v1/gov/instances/{ns}` e conduzir workflows com VRF junto do listing existente de instancias de contrato.
+جائزہ
+- تمام اختتامی نکات JSON واپس کردیتے ہیں۔ لین دین پیدا کرنے والے بہاؤ کے ل respons ، ردعمل میں `tx_instructions` شامل ہیں - ایک یا زیادہ کنکال ہدایات کی ایک صف:
+  - `wire_id`: ہدایت کی قسم کے لئے شناخت کنندہ
+  - `payload_hex`: Norito پے لوڈ بائٹس (ہیکس)
+- اگر `authority` اور `private_key` فراہم کی گئی ہے (یا `private_key` میں بیلٹ DTOS میں) ، Torii اشارے اور ٹرانزیکشن جمع کرواتے ہیں اور پھر بھی `tx_instructions` کو لوٹاتے ہیں۔
+- بصورت دیگر ، مؤکلوں نے اپنے اتھارٹی اور چین_ایڈ کا استعمال کرتے ہوئے ایک دستخطی ٹرانسیکشن مرتب کیا ، پھر `/transaction` پر دستخط کریں اور پوسٹ کریں۔
+- ایس ڈی کے کوریج:
+- ازگر (`iroha_python`): `ToriiClient.get_governance_proposal_typed` واپس کرتا ہے `GovernanceProposalResult` (معمول کی حیثیت/قسم کے فیلڈز) ، `ToriiClient.get_governance_referendum_typed` ریٹرن Sumeragi ، `ToriiClient.get_governance_tally_typed` ریٹرن `GovernanceLocksResult` ، `ToriiClient.get_governance_unlock_stats_typed` `GovernanceUnlockStats` ، اور `ToriiClient.list_governance_instances_typed` RARTS `GovernanceInstancesPage` ، REDME میں USAGE مثالوں کے ساتھ پوری حکمرانی کی سطح پر ٹائپ شدہ تک رسائی کو نافذ کرتے ہیں۔
+- لائٹ ویٹ ازگر کلائنٹ (`iroha_torii_client`): `ToriiClient.finalize_referendum` اور `ToriiClient.enact_proposal` ریٹرن بنڈل ٹائپ شدہ Norito (Sumeragi کے Sumeragi کے compiting compsing) سے بچنا۔
+- جاوا اسکرپٹ (`@iroha/iroha-js`): `ToriiClient` نے تجاویز ، ریفرنڈمز ، ٹیلس ، تالے ، انلاک اعدادوشمار ، اور اب `listGovernanceInstances(namespace, options)` پلس کونسل کے اختتامی مقامات (`getGovernanceCouncilCurrent` ، `governanceDeriveCouncilVrf` کے لئے ٹائپ شدہ مددگاروں کو بے نقاب کیا۔ `getGovernanceCouncilAudit`) تاکہ نوڈ ڈاٹ جے ایس کلائنٹ `/v1/gov/instances/{ns}` کو صفحہ بناسکتے ہیں اور معاہدے کی مثالوں کی موجودہ فہرست کے خلاف VRF کے ساتھ ورک فلوز چلاسکتے ہیں۔
 
-Endpoints
+اختتامی نکات
 
-- POST `/v1/gov/proposals/deploy-contract`
-  - Requisicao (JSON):
+- پوسٹ `/v1/gov/proposals/deploy-contract`
+  - درخواست (JSON):
     {
-      "namespace": "apps",
-      "contract_id": "my.contract.v1",
-      "code_hash": "blake2b32:..." | "...64hex",
-      "abi_hash": "blake2b32:..." | "...64hex",
-      "abi_version": "1",
-      "window": { "lower": 12345, "upper": 12400 },
-      "authority": "ih58…?",
-      "private_key": "...?"
-    }
-  - Resposta (JSON):
-    { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
-  - Validacao: os nos canonizam `abi_hash` para o `abi_version` fornecido e rejeitam divergencias. Para `abi_version = "v1"`, o valor esperado e `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
+      "نام کی جگہ": "ایپس" ،
+      "کنٹریکٹ_یڈ": "my.contract.v1" ،
+      "کوڈ_ھاش": "بلیک 2 بی 32: ..." | "... 64 ہیکس" ،
+      "ابی_ھاش": "بلیک 2 بی 32: ..." | "... 64 ہیکس" ،
+      "ابی_ورژن": "1" ،
+      "ونڈو": {"لوئر": 12345 ، "اوپری": 12400} ،
+      "اتھارٹی": "IH58…؟" ،
+      "پرائیویٹ_کی": "...؟"
+    دہ
+  - جواب (JSON):
+    {"اوکے": سچ ، "تجویز_ایڈ": "... 64HEX" ، "TX_INSTRUCTIONS": [{"وائر_ایڈ": "..." ، "پے لوڈ_ہیکس": "..."}]}
+  - توثیق: فراہم کردہ `abi_version` پر `abi_hash` کو کیننیکلائزز اور ڈائیورجنس کو مسترد کرتا ہے۔ `abi_version = "v1"` کے لئے ، متوقع قیمت `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ہے۔معاہدہ API (تعینات)
+- پوسٹ `/v1/contracts/deploy`
+  - درخواست: {"اتھارٹی": "IH58 ..." ، "پرائیویٹ_کی": "..." ، "کوڈ_ب 64": "..."}
+  - سلوک: پروگرام باڈی IVM اور `abi_hash` سے ہیڈر `abi_version` سے `abi_hash` سے حساب کتاب کرتا ہے ، پھر Grafana (Manifest) اور `RegisterSmartContractBytes` (BYTES I18NII) میں جمع کراتا ہے۔ `authority`۔
+  - جواب: {"اوکے": سچ ، "کوڈ_ہش_ہیکس": "..." ، "ابی_ہش_ہیکس": "..."}
+  - متعلقہ:
+    - `/v1/contracts/code/{code_hash}` حاصل کریں -> ذخیرہ شدہ مینی فیسٹ کو لوٹاتا ہے
+    - `/v1/contracts/code-bytes/{code_hash}` حاصل کریں -> `{ code_b64 }` واپس کرتا ہے
+- پوسٹ `/v1/contracts/instance`
+  - درخواست: {"اتھارٹی": "IH58 ..." ، "پرائیویٹ_کی": "..." ، "نام کی جگہ": "ایپس" ، "کنٹریکٹ_ آئی ڈی": "کیلک.وی1" ، "کوڈ_ب 64": "..."}
+  - سلوک: فراہم کردہ بائیکوڈ کو تعینات کرتا ہے اور فوری طور پر `(namespace, contract_id)` کو `ActivateContractInstance` کے ذریعے چالو کرتا ہے۔
+  - جواب: {"اوکے": سچ ، "نام کی جگہ": "ایپس" ، "کنٹریکٹ_ آئی ڈی": "کیلک. وی 1" ، "کوڈ_ہش_ہیکس": "..." ، "ابی_ہش_ہیکس": "..." "}
 
-API de contratos (deploy)
-- POST `/v1/contracts/deploy`
-  - Requisicao: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
-  - Comportamento: calcula `code_hash` a partir do corpo do programa IVM e `abi_hash` a partir do header `abi_version`, depois submete `RegisterSmartContractCode` (manifesto) e `RegisterSmartContractBytes` (bytes `.to` completos) em nome de `authority`.
-  - Resposta: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
-  - Relacionado:
-    - GET `/v1/contracts/code/{code_hash}` -> retorna o manifesto armazenado
-    - GET `/v1/contracts/code-bytes/{code_hash}` -> retorna `{ code_b64 }`
-- POST `/v1/contracts/instance`
-  - Requisicao: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
-  - Comportamento: deploya o bytecode fornecido e ativa imediatamente o mapeamento `(namespace, contract_id)` via `ActivateContractInstance`.
-  - Resposta: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
+عرف خدمت
+- پوسٹ `/v1/aliases/voprf/evaluate`
+  - درخواست: {"بلائنڈ_لیمنٹ_ہیکس": "..."}
+  - جواب: {"تشخیص_لیمنٹ_ہیکس": "... 128HEX" ، "بیکینڈ": "بلیک 2 بی 512-موک"}
+    - `backend` تشخیص کار کے نفاذ کی عکاسی کرتا ہے۔ موجودہ قیمت: `blake2b512-mock`۔
+  ۔ ٹیسٹ ٹولنگ کا ارادہ کیا گیا ہے جب تک کہ پروڈکشن VOPRF پائپ لائن Iroha میں ضم ہوجائے۔
+  - غلطیاں: خراب شدہ ہیکس ان پٹ میں HTTP `400`۔ Torii ایک لفافہ Norito `ValidationFail::QueryFailed::Conversion` کو ڈیکوڈر غلطی کے پیغام کے ساتھ لوٹاتا ہے۔
+- پوسٹ `/v1/aliases/resolve`
+  - درخواست: {"عرف": "GB82 مغرب 1234 5698 7654 32"}
+  - جواب: {"عرف": "GB82WEST12345698765432" ، "اکاؤنٹ_یڈ": "IH58 ..." ، "انڈیکس": 0 ، "ماخذ": "iso_bridge"}
+  - نوٹ: آئی ایس او برج اسٹیجنگ رن ٹائم (`[iso_bridge.account_aliases]` in `iroha_config`) کی ضرورت ہے۔ Torii خالی جگہوں کو ہٹانے اور تلاش سے پہلے بڑے میں تبدیل کرکے عرفی کو معمول بناتا ہے۔ جب آئی ایس او برج رن ٹائم غیر فعال ہوجاتا ہے تو عرفی لاپتہ ہوتا ہے اور 503 جب 404 لوٹتا ہے۔
+- پوسٹ `/v1/aliases/resolve_index`
+  - درخواست: {"انڈیکس": 0}
+  - جواب: {"انڈیکس": 0 ، "عرف": "GB82WEST12345698765432" ، "اکاؤنٹ_ آئی ڈی": "IH58 ..." ، "ماخذ": "iso_bridge"}
+  - نوٹ: عرفی انڈیکس کو ترتیب کے آرڈر (0 پر مبنی) کے ذریعہ عزم کے ساتھ تفویض کیا جاتا ہے۔ عرفیت کی تصدیق کے واقعات کے آڈٹ ٹریلس بنانے کے لئے صارفین آف لائن ردعمل کو کیش کرسکتے ہیں۔
 
-Servico de alias
-- POST `/v1/aliases/voprf/evaluate`
-  - Requisicao: { "blinded_element_hex": "..." }
-  - Resposta: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
-    - `backend` reflete a implementacao do avaliador. Valor atual: `blake2b512-mock`.
-  - Notas: avaliador mock deterministico que aplica Blake2b512 com separacao de dominio `iroha.alias.voprf.mock.v1`. Destinado a tooling de teste ate o pipeline VOPRF de producao ser integrado ao Iroha.
-  - Erros: HTTP `400` em input hex malformado. Torii retorna um envelope Norito `ValidationFail::QueryFailed::Conversion` com a mensagem de erro do decoder.
-- POST `/v1/aliases/resolve`
-  - Requisicao: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Resposta: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
-  - Notas: requer o runtime ISO bridge staging (`[iso_bridge.account_aliases]` em `iroha_config`). Torii normaliza aliases removendo espacos e convertendo para maiusculas antes do lookup. Retorna 404 quando o alias esta ausente e 503 quando o runtime ISO bridge esta desabilitado.
-- POST `/v1/aliases/resolve_index`
-  - Requisicao: { "index": 0 }
-  - Resposta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
-  - Notas: indices de alias sao atribuidos de forma deterministica pela ordem de configuracao (0-based). Clientes podem cachear respostas offline para construir trilhas de auditoria de eventos de atestacao de alias.
+کوڈ سائز کی حد
+- کسٹم پیرامیٹر: `max_contract_code_bytes` (JSON U64)
+  - آن چین معاہدہ کوڈ کو ذخیرہ کرنے کے لئے زیادہ سے زیادہ اجازت شدہ سائز (بائٹس میں) کو کنٹرول کرتا ہے۔
+  - پہلے سے طے شدہ: 16 میب۔ نوڈس `RegisterSmartContractBytes` کو مسترد کرتے ہیں جب تصویر کا سائز `.to` ایک ناگوار خلاف ورزی کی غلطی کے ساتھ دہلیز سے تجاوز کرتا ہے۔
+  - آپریٹر `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور ایک عددی پے لوڈ کے ساتھ ایڈجسٹ کرسکتے ہیں۔- پوسٹ `/v1/gov/ballots/zk`
+  - درخواست: {"اتھارٹی": "IH58 ..." ، "نجی_کی": "...؟" ، "چین_ڈ": "..." ، "الیکشن_ڈ": "E1" ، "پروف_بی 64": "..." ، "عوامی": {...}}}
+  - جواب: {"اوکے": سچ ، "قبول": سچ ، "tx_instructions": [{...}]}
+  - نوٹ:
+    - جب سرکٹ کے عوامی آدانوں میں `owner` ، `amount` اور `duration_blocks` ، اور تشکیل شدہ VK کے خلاف ثبوت کی جانچ پڑتال شامل ہے تو ، Grafana کے ساتھ Sumeragi کے لئے گورننس لاک تخلیق یا توسیع نہیں کرتا ہے۔ سمت پوشیدہ ہے (`unknown`) ؛ صرف رقم/میعاد ختم ہونے کو اپ ڈیٹ کیا جاتا ہے۔ دوبارہ ووٹ ایک نیرس ہیں: رقم اور میعاد ختم ہونے میں صرف اضافہ ہوتا ہے (اس میں زیادہ سے زیادہ (رقم ، prev.amount) اور زیادہ سے زیادہ (میعاد ختم ہونے ، prev.expiry) کا اطلاق نہیں ہوتا ہے۔
+    - زیڈ کے دوبارہ ووٹ جو رقم کو کم کرنے یا ختم ہونے کی کوشش کرتے ہیں وہ تشخیص `BallotRejected` کے ساتھ سرور پر مسترد کردیئے جاتے ہیں۔
+    - معاہدے پر عمل درآمد Norito قطار لگانے سے پہلے `ZK_VOTE_VERIFY_BALLOT` پر کال کرنا ضروری ہے۔ میزبان ایک وقتی لچ لگاتے ہیں۔
 
-Limite de tamanho de codigo
-- Parametro custom: `max_contract_code_bytes` (JSON u64)
-  - Controla o tamanho maximo permitido (em bytes) para armazenamento de codigo de contrato on-chain.
-  - Default: 16 MiB. Os nos rejeitam `RegisterSmartContractBytes` quando o tamanho da imagem `.to` excede o limite com um erro de violacao de invariante.
-  - Operadores podem ajustar via `SetParameter(Custom)` com `id = "max_contract_code_bytes"` e um payload numerico.
+- پوسٹ `/v1/gov/ballots/plain`
+  - درخواست: {"اتھارٹی": "IH58 ..." ، "پرائیویٹ_کی": "...؟" ، "چین_ آئیڈ": "..." ، "Regendum_id": "R1" ، "مالک": "IH58 ..." ، "رقم": "1000" ، "1000" ، "ڈورشن_ بلاکس": 6000 ، "سمت": "AYE |
+  - جواب: {"اوکے": سچ ، "قبول": سچ ، "tx_instructions": [{...}]}
+  - نوٹ: دوبارہ ووٹ صرف ایکسٹینشن ہیں - ایک نیا بیلٹ موجودہ لاک کی رقم یا ختم ہونے کو کم نہیں کرسکتا ہے۔ `owner` لازمی طور پر ٹرانزیکشن اتھارٹی سے ملنا چاہئے۔ کم سے کم مدت `conviction_step_blocks` ہے۔
 
-- POST `/v1/gov/ballots/zk`
-  - Requisicao: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
-  - Resposta: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
-  - Notas:
-    - Quando os inputs publicos do circuito incluem `owner`, `amount` e `duration_blocks`, e a prova verifica contra a VK configurada, o no cria ou estende um lock de governanca para `election_id` com esse `owner`. A direcao permanece oculta (`unknown`); apenas amount/expiry sao atualizados. Re-votes sao monotonic: amount e expiry apenas aumentam (o no aplica max(amount, prev.amount) e max(expiry, prev.expiry)).
-    - Re-votes ZK que tentem reduzir amount ou expiry sao rejeitados no servidor com diagnosticos `BallotRejected`.
-    - A execucao do contrato deve chamar `ZK_VOTE_VERIFY_BALLOT` antes de enfileirar `SubmitBallot`; hosts impoem um latch de uma unica vez.
+- پوسٹ `/v1/gov/finalize`
+  - درخواست: {"ریفرنڈم_ آئی ڈی": "آر 1" ، "تجویز_ آئی ڈی": "... 64 ہیکس" ، "اتھارٹی": "IH58…؟" ، "نجی_کی": "...؟" دہ
+  - جواب: {"اوکے": سچ ، "tx_instructions": [{"تار_یڈ": "... فائنلائزر فیرینڈم" ، "پے لوڈ_ہیکس": "..."}]}
+  - آن چین اثر (موجودہ سہاروں): ایک منظور شدہ تعیناتی کی تجویز کو نافذ کرنا متوقع `code_hash` کے ساتھ کم از کم `ContractManifest` داخل کرتا ہے جس میں متوقع `abi_hash` کے ساتھ کلیدی `code_hash` شامل ہوتا ہے اور اس کی تجویز کو بطور نافذ کیا جاتا ہے۔ اگر ایک مختلف `abi_hash` کے ساتھ `code_hash` کے لئے پہلے سے موجود ہے تو ، نفاذ کو مسترد کردیا گیا ہے۔
+  - نوٹ:
+    - زیڈ کے انتخابات کے ل contract ، معاہدے کے راستوں کو `FinalizeElection` کو انجام دینے سے پہلے `ZK_VOTE_VERIFY_TALLY` پر کال کرنا چاہئے۔ میزبان ایک وقت کے استعمال کی لچ کو نافذ کرتے ہیں۔ `FinalizeReferendum` زیڈ کے ریفرنڈا کو مسترد کرتا ہے جب تک کہ انتخابات کی تعداد کو حتمی شکل نہیں دی جاتی ہے۔
+    - `h_end` میں صرف سادہ ریفرنڈا کے لئے منظور شدہ/مسترد کردہ `h_end` میں آٹو بند کرنا ؛ زیڈ کے ریفرنڈمز بند رہتے ہیں جب تک کہ فائنلائزڈ ٹلی نہ بھیجے اور `FinalizeReferendum` عمل میں آجائے۔
+    - ٹرن آؤٹ چیک صرف منظوری+مسترد کریں ؛ پرہیزی ٹرن آؤٹ کی طرف نہیں گنتی۔- پوسٹ `/v1/gov/enact`
+  - درخواست: {"پروپوزل_ آئی ڈی": "... 64 ہیکس" ، "پریمیج_ہش": "... 64 ہیکس؟" ، "ونڈو": {"لوئر": 0 ، "اوپری": 0}؟ ، "اتھارٹی": "IH58…؟" ، "نجی_کی": "...؟" دہ
+  - جواب: {"اوکے": سچ ، "tx_instructions": [{"تار_یڈ": "... enactreferendum" ، "پے لوڈ_ہیکس": "..."}]}
+  - نوٹ: جب `authority`/`private_key` فراہم کی جاتی ہے تو Torii دستخط شدہ ٹرانزیکشن پیش کرتا ہے۔ بصورت دیگر ، یہ گاہکوں کو دستخط اور جمع کرانے کے لئے ایک کنکال واپس کرتا ہے۔ پیشگی آج اختیاری اور معلوماتی ہے۔
 
-- POST `/v1/gov/ballots/plain`
-  - Requisicao: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
-  - Resposta: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
-  - Notas: re-votes sao de extensao apenas - um novo ballot nao pode reduzir amount ou expiry do lock existente. O `owner` deve igualar a authority da transacao. Duracao minima e `conviction_step_blocks`.
+- `/v1/gov/proposals/{id}` حاصل کریں
+  - راستہ `{id}`: ہیکس پروپوزل ID (64 چارس)
+  - جواب: {"ملا": بول ، "تجویز": {...}؟ دہ
 
-- POST `/v1/gov/finalize`
-  - Requisicao: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
-  - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
-  - Efeito on-chain (scaffold atual): promulgar uma proposta de deploy aprovada insere um `ContractManifest` minimo com chave `code_hash` com o `abi_hash` esperado e marca a proposta como Enacted. Se um manifesto ja existir para o `code_hash` com `abi_hash` diferente, o enactment e rejeitado.
-  - Notas:
-    - Para eleicoes ZK, os caminhos do contrato devem chamar `ZK_VOTE_VERIFY_TALLY` antes de executar `FinalizeElection`; os hosts impoem um latch de uso unico. `FinalizeReferendum` rejeita referendos ZK ate que o tally da eleicao esteja finalizado.
-    - O auto-fechamento em `h_end` emite Approved/Rejected apenas para referendos Plain; referendos ZK permanecem Closed ate que um tally finalizado seja enviado e `FinalizeReferendum` seja executado.
-    - As checagens de turnout usam apenas approve+reject; abstain nao conta para o turnout.
+- `/v1/gov/locks/{rid}` حاصل کریں
+  - راستہ `{rid}`: ریفرنڈم ID سٹرنگ
+  - جواب: {"فاؤنڈ": بول ، "ریفرنڈم_ آئی ڈی": "ریڈ" ، "تالے": {...}؟ دہ
 
-- POST `/v1/gov/enact`
-  - Requisicao: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
-  - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
-  - Notas: Torii submete a transacao assinada quando `authority`/`private_key` sao fornecidos; caso contrario retorna um esqueleto para clientes assinarem e submeterem. A preimage e opcional e hoje informativa.
+- `/v1/gov/council/current` حاصل کریں
+  - جواب: {"ایپوچ": این ، "ممبران": [{"اکاؤنٹ_ آئی ڈی": "..."} ، ...]}
+  - نوٹ: موجود ہونے پر مستقل کونسل کو لوٹاتا ہے۔ بصورت دیگر یہ تشکیل شدہ اسٹیک اثاثہ اور دہلیز کا استعمال کرتے ہوئے ایک عین مطابق فال بیک حاصل کرتا ہے (جب تک کہ پیداوار میں وی آر ایف کے ثبوتوں پر وی آر ایف کے ثبوت برقرار نہیں رہتے ہیں)۔
 
-- GET `/v1/gov/proposals/{id}`
-  - Path `{id}`: id de proposta hex (64 chars)
-  - Resposta: { "found": bool, "proposal": { ... }? }
+- پوسٹ `/v1/gov/council/derive-vrf` (خصوصیت: GOV_VRF)
+  - درخواست: {"کمیٹی_سائز": 21 ، "عہد": 123؟ .
+  - سلوک: `chain_id` ، `epoch` اور آخری بلاک ہیش سے اخذ کردہ کیننیکل ان پٹ کے خلاف ہر امیدوار کے VRF پروف چیک کرتا ہے۔ ٹائی بریکر کے ساتھ ڈیسک آؤٹ پٹ بائٹس کے ذریعہ ترتیب دیں۔ ٹاپ `committee_size` ممبروں کو لوٹاتا ہے۔ یہ برقرار نہیں رہتا ہے۔
+  - جواب: {"ایپوچ": این ، "ممبران": [{"اکاؤنٹ_ آئی ڈی": "..."} ...] ، "ٹوٹل_کینڈیڈیٹس": ایم ، "تصدیق شدہ": K}
+  - نوٹ: G1 میں عام = PK ، G2 (96 بائٹس) میں ثبوت۔ G1 میں چھوٹا = PK ، G1 (48 بائٹس) میں ثبوت۔ آدانوں کو ڈومین کے ذریعہ الگ کیا جاتا ہے اور اس میں `chain_id` شامل ہوتا ہے۔
 
-- GET `/v1/gov/locks/{rid}`
-  - Path `{rid}`: string de id de referendum
-  - Resposta: { "found": bool, "referendum_id": "rid", "locks": { ... }? }
+### گورننس ڈیفالٹس (IROHA_CONFIG `gov.*`)
 
-- GET `/v1/gov/council/current`
-  - Resposta: { "epoch": N, "members": [{ "account_id": "..." }, ...] }
-  - Notas: retorna o council persistido quando presente; caso contrario deriva um fallback deterministico usando o asset de stake configurado e thresholds (espelha a especificacao VRF ate que provas VRF em producao sejam persistidas on-chain).
-
-- POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
-  - Requisicao: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
-  - Comportamento: verifica a prova VRF de cada candidato contra o input canonico derivado de `chain_id`, `epoch` e do ultimo hash de bloco; ordena por bytes de saida desc com tiebreakers; retorna os top `committee_size` membros. Nao persiste.
-  - Resposta: { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "verified": K }
-  - Notas: Normal = pk em G1, proof em G2 (96 bytes). Small = pk em G2, proof em G1 (48 bytes). Inputs sao separados por dominio e incluem `chain_id`.
-
-### Defaults de governanca (iroha_config `gov.*`)
-
-O council fallback usado pelo Torii quando nao existe roster persistido e parametrizado via `iroha_config`:
+جب Torii کے ذریعہ استعمال کیا جاتا ہے جب `iroha_config` کے ذریعہ کوئی مستقل روسٹر اور پیرامیٹرائزڈ نہیں ہوتا ہے تو استعمال کیا جاتا ہے:
 
 ```toml
 [gov]
@@ -136,10 +132,10 @@ O council fallback usado pelo Torii quando nao existe roster persistido e parame
   parliament_committee_size = 21
   parliament_term_blocks = 43200
   parliament_min_stake = 1
-  parliament_eligibility_asset_id = "SORA#stake"
+  parliament_eligibility_asset_id = "Prometheus#stake"
 ```
 
-Overrides de ambiente equivalentes:
+مساوی ماحول کو ختم کرنا:
 
 ```
 GOV_VK_BACKEND=halo2/ipa
@@ -147,145 +143,137 @@ GOV_VK_NAME=ballot_v1
 GOV_PARLIAMENT_COMMITTEE_SIZE=21
 GOV_PARLIAMENT_TERM_BLOCKS=43200
 GOV_PARLIAMENT_MIN_STAKE=1
-GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=SORA#stake
+GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=Sumeragi#stake
 GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
 
-`parliament_committee_size` limita o numero de membros fallback retornados quando nao ha council persistido, `parliament_term_blocks` define o comprimento da epoca usado para derivacao de seed (`epoch = floor(height / term_blocks)`), `parliament_min_stake` aplica o minimo de stake (em unidades minimas) no asset de elegibilidade, e `parliament_eligibility_asset_id` seleciona qual saldo de asset e escaneado ao construir o conjunto de candidatos.
+`parliament_committee_size` جب کوئی مستقل کونسل نہیں ہوتا ہے تو فال بیک ممبروں کی تعداد کو محدود کرتا ہے ، `parliament_term_blocks` بیج اخذ (`epoch = floor(height / term_blocks)`) کے لئے استعمال ہونے والے عہد کی لمبائی کی وضاحت کرتا ہے ، `parliament_min_stake` IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS IS ISERIBICTENSE (`epoch = floor(height / term_blocks)`) کے لئے استعمال کیا جاتا ہے۔ امیدوار سیٹ کی تعمیر کرتے وقت اسکین کیا گیا۔
 
-A verificacao VK de governanca nao tem bypass: a verificacao de ballot sempre requer uma chave `Active` com bytes inline, e os ambientes nao devem depender de toggles de teste para pular a verificacao.
+وی کے گورننس چیک کا کوئی بائی پاس نہیں ہے: بیلٹ چیک میں ہمیشہ ان لائن بائٹس کے ساتھ `Active` کلید کی ضرورت ہوتی ہے ، اور ماحول کو چیک کو چھوڑنے کے لئے ٹیسٹ ٹوگل پر انحصار نہیں کرنا چاہئے۔
 
-RBAC
-- Execucao on-chain exige permissoes:
-  - Proposals: `CanProposeContractDeployment{ contract_id }`
-  - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
-  - Enactment: `CanEnactGovernance`
-  - Council management (futuro): `CanManageParliament`
+آر بی اے سی
+- آن چین پر عمل درآمد کے لئے اجازت کی ضرورت ہے:
+  - تجاویز: `CanProposeContractDeployment{ contract_id }`
+  - بیلٹ: `CanSubmitGovernanceBallot{ referendum_id }`
+  - نفاذ: `CanEnactGovernance`
+  - کونسل مینجمنٹ (مستقبل): `CanManageParliament`محفوظ نام کی جگہیں
+- کسٹم پیرامیٹر `gov_protected_namespaces` (JSON ARE آف اسٹرنگز) درج ناموں کی جگہوں میں تعیناتی کے لئے داخلہ گیٹنگ کو قابل بناتا ہے۔
+- صارفین کو لازمی طور پر محفوظ نام کی جگہوں کو نشانہ بنانے والی تعیناتیوں کے لئے ٹرانزیکشن میٹا ڈیٹا کی چابیاں شامل کرنا ہوں گی۔
+  - `gov_namespace`: ہدف نام کی جگہ (جیسے ، "ایپس"))
+  - `gov_contract_id`: نام کی جگہ کے اندر منطقی معاہدہ ID
+- `gov_manifest_approvers`: اختیاری JSON سرنی کی توثیق کرنے والے اکاؤنٹ کی IDs۔ جب کوئی لین ایک سے زیادہ کورم کا اعلان کرتی ہے تو ، داخلے میں ٹرانزیکشن اتھارٹی کے علاوہ مینی فیسٹ کورم کو پورا کرنے کے لئے درج اکاؤنٹس کی ضرورت ہوتی ہے۔
+- ٹیلی میٹری `governance_manifest_admission_total{result}` کے ذریعہ داخلہ کاؤنٹرز کو بے نقاب کرتا ہے تاکہ آپریٹرز کامیاب اعترافات کو راستوں `missing_manifest` ، `non_validator_authority` ، `quorum_rejected` سے ممتاز کرسکیں ، `protected_namespace_rejected` اور `runtime_hook_rejected`۔
+- ٹیلی میٹری آپریٹرز کو گمشدہ منظوریوں کا آڈٹ کرنے کے لئے `governance_manifest_quorum_total{outcome}` (قدر `satisfied` / `rejected`) کے ذریعے نفاذ کے راستے کو بے نقاب کرتی ہے۔
+- لین ان کے منشور میں شائع ہونے والے نام کی جگہوں کی اجازت کی فہرست کا اطلاق کرتی ہے۔ کوئی بھی لین دین جو `gov_namespace` کی وضاحت کرتا ہے `gov_contract_id` فراہم کرنا ضروری ہے ، اور نام کی جگہ کو ظاہر کرنے کے `protected_namespaces` سیٹ میں ظاہر ہونا چاہئے۔ اس میٹا ڈیٹا کے بغیر `RegisterSmartContractCode` گذارشات مسترد کردیئے جاتے ہیں جب تحفظ کو فعال کیا جاتا ہے۔
+- داخلے میں یہ مسلط کیا گیا ہے کہ `(namespace, contract_id, code_hash, abi_hash)` Tuple کے لئے گورننس کی ایک نافذ تجویز ہے۔ بصورت دیگر توثیق کسی غیر معمولی غلطی سے ناکام ہوجاتی ہے۔
 
-Namespaces protegidos
-- Parametro custom `gov_protected_namespaces` (JSON array de strings) habilita admission gating para deploys em namespaces listados.
-- Clientes devem incluir chaves de metadata de transacao para deploys que visam namespaces protegidos:
-  - `gov_namespace`: namespace alvo (ex., "apps")
-  - `gov_contract_id`: contract id logico dentro do namespace
-- `gov_manifest_approvers`: JSON array opcional de account IDs de validadores. Quando um lane manifest declara quorum maior que um, admission requer a authority da transacao mais as contas listadas para satisfazer o quorum do manifesto.
-- Telemetria expoe contadores de admission via `governance_manifest_admission_total{result}` para que operadores distingam admits bem-sucedidos de caminhos `missing_manifest`, `non_validator_authority`, `quorum_rejected`, `protected_namespace_rejected` e `runtime_hook_rejected`.
-- Telemetria expoe o caminho de enforcement via `governance_manifest_quorum_total{outcome}` (valores `satisfied` / `rejected`) para que operadores auditem aprovacoes faltantes.
-- Lanes aplicam a allowlist de namespaces publicada em seus manifests. Qualquer transacao que define `gov_namespace` deve fornecer `gov_contract_id`, e o namespace deve aparecer no conjunto `protected_namespaces` do manifesto. Submissoes `RegisterSmartContractCode` sem essa metadata sao rejeitadas quando a protecao esta habilitada.
-- Admission impoe que exista uma proposta de governanca Enacted para o tuple `(namespace, contract_id, code_hash, abi_hash)`; caso contrario a validacao falha com um erro NotPermitted.
+رن ٹائم اپ گریڈ ہکس
+- لین منشور `hooks.runtime_upgrade` کو گیٹ رن ٹائم اپ گریڈ ہدایات (`ProposeRuntimeUpgrade` ، `ActivateRuntimeUpgrade` ، `CancelRuntimeUpgrade`) کا اعلان کرسکتا ہے۔
+- ہک فیلڈز:
+  - `allow` (BOOL ، Default `true`): جب `false` ، تمام رن ٹائم اپ گریڈ ہدایات کو مسترد کردیا جاتا ہے۔
+  - `require_metadata` (BOOL ، ڈیفالٹ `false`): `metadata_key` کے ذریعہ متعین میٹا ڈیٹا اندراج کی ضرورت ہے۔
+  - `metadata_key` (سٹرنگ): ہک کے ذریعہ لاگو میٹا ڈیٹا کا نام۔ ڈیفالٹ `gov_upgrade_id` جب میٹا ڈیٹا کی ضرورت ہوتی ہے یا وہاں اجازت دیتا ہے۔
+  - `allowed_ids` (تار کی صف): میٹا ڈیٹا کی اقدار کی اختیاری اجازت نامہ (ٹرم کے بعد)۔ مسترد کرتا ہے جب فراہم کردہ قیمت کو درج نہیں کیا جاتا ہے۔
+- جب ہک موجود ہوتا ہے تو ، قطار میں داخل ہونے سے پہلے قطار میں داخلہ میٹا ڈیٹا پالیسی کا اطلاق کرتا ہے۔ لاپتہ میٹا ڈیٹا ، خالی اقدار یا اقدار سے باہر کی لسٹ لسٹ میں ایک عکاسی کرنے والی غلطی پیدا کرتی ہے۔
+- ٹیلی میٹری `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` کے ذریعے نتائج کو ٹریک کرتا ہے۔
+- ہک کو مطمئن کرنے والے لین دین میں `gov_upgrade_id=<value>` میٹا ڈیٹا (یا مینی فیسٹ سے طے شدہ کلید) شامل ہونا ضروری ہے جس میں مینی فیسٹ کورم کے ذریعہ مطلوبہ کسی بھی تصدیق کنندہ کی منظوری بھی شامل ہے۔
 
-Hooks de runtime upgrade
-- Manifests de lane podem declarar `hooks.runtime_upgrade` para gatear instrucoes de runtime upgrade (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
-- Campos do hook:
-  - `allow` (bool, default `true`): quando `false`, todas as instrucoes de runtime upgrade sao rejeitadas.
-  - `require_metadata` (bool, default `false`): requer a entrada de metadata especificada por `metadata_key`.
-  - `metadata_key` (string): nome da metadata aplicada pelo hook. Default `gov_upgrade_id` quando metadata e requerida ou ha allowlist.
-  - `allowed_ids` (array de strings): allowlist opcional de valores de metadata (apos trim). Rejeita quando o valor fornecido nao esta listado.
-- Quando o hook esta presente, admission de fila aplica a politica de metadata antes de a transacao entrar na fila. Metadata ausente, valores em branco ou fora da allowlist geram um erro NotPermitted deterministico.
-- Telemetria rastreia outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
-- Transacoes que satisfazem o hook devem incluir metadata `gov_upgrade_id=<value>` (ou a chave definida pelo manifesto) junto com quaisquer aprovacoes de validadores exigidas pelo quorum do manifesto.
-
-Endpoint de conveniencia
-- POST `/v1/gov/protected-namespaces` - aplica `gov_protected_namespaces` diretamente no no.
-  - Requisicao: { "namespaces": ["apps", "system"] }
-  - Resposta: { "ok": true, "applied": 1 }
-  - Notas: destinado a admin/testing; requer token de API se configurado. Para producao, prefira enviar uma transacao assinada com `SetParameter(Custom)`.
-
-Helpers CLI
+سہولت اختتامی نقطہ
+- پوسٹ `/v1/gov/protected-namespaces` - `gov_protected_namespaces` کا اطلاق براہ راست نمبر پر کرتا ہے۔
+  - درخواست: {"نام کی جگہیں": ["ایپس" ، "سسٹم"]}
+  - جواب: {"اوکے": سچ ، "اپلائیڈ": 1}
+  - نوٹ: ایڈمن/ٹیسٹنگ کا ارادہ ؛ اگر تشکیل شدہ ہے تو API ٹوکن کی ضرورت ہے۔ پیداوار کے ل ، ، `SetParameter(Custom)` کے ساتھ دستخط شدہ ٹرانزیکشن بھیجنے کو ترجیح دیں۔سی ایل آئی مددگار
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
-  - Busca instancias de contrato para o namespace e confere que:
-    - Torii armazena bytecode para cada `code_hash`, e seu digest Blake2b-32 corresponde ao `code_hash`.
-    - O manifesto armazenado em `/v1/contracts/code/{code_hash}` reporta `code_hash` e `abi_hash` correspondentes.
-    - Existe uma proposta de governanca enacted para `(namespace, contract_id, code_hash, abi_hash)` derivada pelo mesmo hashing de proposal-id que o no usa.
-  - Emite um relatorio JSON com `results[]` por contrato (issues, resumos de manifest/code/proposal) mais um resumo de uma linha a menos que suprimido (`--no-summary`).
-  - Util para auditar namespaces protegidos ou verificar fluxos de deploy controlados por governanca.
+  - نام کی جگہ کے لئے معاہدے کے واقعات کی تلاش کریں اور اس کی جانچ کریں:
+    - Torii ہر `code_hash` کے لئے بائیک کوڈ اسٹور کرتا ہے ، اور اس کا بلیک 2 بی -32 ڈائجسٹ `code_hash` کے مساوی ہے۔
+    - `/v1/contracts/code/{code_hash}` کی رپورٹوں میں `code_hash` اور `abi_hash` میں موجود مینی فیسٹ۔
+    - `(namespace, contract_id, code_hash, abi_hash)` کے لئے گورننس کی ایک نافذ تجویز ہے جو اسی تجویز-آئی ڈی ہیشنگ سے اخذ کی گئی ہے جو کوئی استعمال نہیں کرتی ہے۔
+  - `results[]` فی معاہدہ (مسائل ، مینی فیسٹ/کوڈ/تجویز کے خلاصے) کے ساتھ ساتھ JSON رپورٹ جاری کریں جب تک کہ دبے نہ جائیں (`--no-summary`)۔
+  - محفوظ نام کی جگہوں کا آڈٹ کرنے یا گورننس کے ذریعہ کنٹرول شدہ تعیناتی کے بہاؤ کی جانچ پڑتال کے لئے مفید ہے۔
 - `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
-  - Emite o esqueleto JSON de metadata usado ao submeter deployments em namespaces protegidos, incluindo `gov_manifest_approvers` opcionais para satisfazer regras de quorum do manifesto.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints são obrigatórios quando `min_bond_amount > 0`, e qualquer conjunto de hints fornecido deve incluir `owner`, `amount` e `duration_blocks`.
-  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
-  - O resumo de uma linha agora exibe `fingerprint=<hex>` deterministico derivado do `CastZkBallot` codificado junto com hints decodificados (`owner`, `amount`, `duration_blocks`, `direction` quando fornecidos).
-  - As respostas da CLI anotam `tx_instructions[]` com `payload_fingerprint_hex` mais campos decodificados para que ferramentas downstream verifiquem o esqueleto sem reimplementar decodificacao Norito.
-  - Fornecer hints de lock permite que o no emita eventos `LockCreated`/`LockExtended` para ballots ZK assim que o circuito expuser os mesmos valores.
+  - مینی فیسٹ کورم کے قواعد کو پورا کرنے کے لئے اختیاری `gov_manifest_approvers` سمیت محفوظ نام کی جگہوں پر تعیناتی جمع کرواتے وقت استعمال ہونے والے میٹا ڈیٹا JSON کنکال کو خارج کرتا ہے۔
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` - جب `min_bond_amount > 0` ، اور فراہم کردہ کسی بھی اشارے کے سیٹ میں `owner` ، `amount` ، اور `duration_blocks` شامل ہونا ضروری ہے تو لاک اشارے لازمی ہیں۔
+  - کیننیکل اکاؤنٹ کی شناختوں کی توثیق کرتا ہے ، کیننیکلز 32 بائٹ نیلیفائر اشارے ، اور اشاروں کو `public_inputs_json` میں ضم کرتا ہے (اضافی اوور رائڈس کے لئے `--public <path>` کے ساتھ)۔
+  - نیلیفائر پروف عزم (عوامی ان پٹ) کے علاوہ `domain_tag` ، `chain_id` ، اور `election_id` سے اخذ کیا گیا ہے۔ `--nullifier` فراہم کردہ ثبوت کے خلاف توثیق کی جاتی ہے۔
+  - ون لائن کا خلاصہ اب ڈیکوڈڈ `CastZkBallot` سے اخذ کردہ ڈیکوڈڈ اشارے (`owner` ، `amount` ، `duration_blocks` ، `direction` کے ساتھ حاصل کردہ `CastZkBallot` سے اخذ کیا گیا ہے۔
+  - CLI کے جوابات `payload_fingerprint_hex` پلس ڈیکوڈڈ فیلڈز کے ساتھ `tx_instructions[]` کی تشریح کریں تاکہ بہاو کے اوزار Norito ضابطہ کشائی کے بغیر کنکال کو چیک کریں۔
+  - لاک اشارے فراہم کرنے سے واقعات کو خارج کرنے کی اجازت ملتی ہے `LockCreated`/`LockExtended` ZK بیلٹ کے لئے جیسے ہی سرکٹ ایک ہی اقدار کو بے نقاب کرتا ہے۔
 - `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - Os aliases `--lock-amount`/`--lock-duration-blocks` espelham os nomes de flags ZK para paridade de script.
-  - A saida de resumo espelha `vote --mode zk` ao incluir o fingerprint da instrucao codificada e campos de ballot legiveis (`owner`, `amount`, `duration_blocks`, `direction`), oferecendo confirmacao rapida antes de assinar o esqueleto.
+  - الیسیس `--lock-amount`/`--lock-duration-blocks` اسکرپٹ برابری کے لئے زیڈ کے پرچم کے ناموں کی آئینہ دار ہے۔
+  - خلاصہ آؤٹ پٹ آئینہ `vote --mode zk` کو انکوڈڈ انسٹرکشن فنگر پرنٹ اور پڑھنے کے قابل بیلٹ فیلڈز (`owner` ، `amount` ، `duration_blocks` ، IVM) شامل کرکے ، اسکال پر دستخط کرنے سے پہلے فوری تصدیق کی پیش کش کرتے ہیں۔مثال کی فہرست
+- `/v1/gov/instances/{ns}` حاصل کریں - نام کی جگہ کے لئے فعال معاہدے کی مثالوں کی فہرست بنائیں۔
+  - استفسار پیرامس:
+    - `contains`: `contract_id` (کیس حساس) کے سبسٹرنگ کے ذریعہ فلٹرز
+    - `hash_prefix`: `code_hash_hex` (لوئر کیس) کے ہیکس پریفکس کے ذریعہ فلٹرز
+    - `offset` (پہلے سے طے شدہ 0) ، `limit` (پہلے سے طے شدہ 100 ، زیادہ سے زیادہ 10_000)
+    - `order`: `cid_asc` (پہلے سے طے شدہ) ، `cid_desc` ، `hash_asc` ، `hash_desc` میں سے ایک
+  - جواب: {"نام کی جگہ": "این ایس" ، "مثال": [{"کنٹریکٹ_ڈ": "..." ، "کوڈ_ہش_ہیکس": "..."} ، ...] ، "کل": این ، "آفسیٹ": این ، "حد": ایم}
+  - ہیلپر ایس ڈی کے: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (جاوا اسکرپٹ) یا `ToriiClient.list_governance_instances_typed("apps", ...)` (ازگر)۔
 
-Listagem de instancias
-- GET `/v1/gov/instances/{ns}` - lista instancias de contrato ativas para um namespace.
-  - Query params:
-    - `contains`: filtra por substring de `contract_id` (case-sensitive)
-    - `hash_prefix`: filtra por prefixo hex de `code_hash_hex` (lowercase)
-    - `offset` (default 0), `limit` (default 100, max 10_000)
-    - `order`: um de `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-  - Resposta: { "namespace": "ns", "instances": [{ "contract_id": "...", "code_hash_hex": "..." }, ...], "total": N, "offset": n, "limit": m }
-  - Helper SDK: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) ou `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
+انلاک اسکیننگ (آپریٹر/آڈٹ)
+- `/v1/gov/unlocks/stats` حاصل کریں
+  - جواب: {"اونچائی_کورنٹ": ایچ ، "میعاد ختم_لوکس_نو": این ، "ریفرنڈہ_ ویتھ_سپیئرڈ": ایم ، "لسٹ_سیوپ_ہائٹ": ایس}
+  - نوٹ: `last_sweep_height` حالیہ بلاک اونچائی کی عکاسی کرتا ہے جہاں میعاد ختم ہونے والے تالے بہہ گئے اور برقرار رہے۔ `expired_locks_now` کا حساب `expiry_height <= height_current` کے ساتھ لاک رجسٹر اسکین کرکے کیا جاتا ہے۔
+- پوسٹ `/v1/gov/ballots/zk-v1`
+  - درخواست (ڈی ٹی او اسٹائل V1):
+    {
+      "اتھارٹی": "IH58 ..." ،
+      "چین_ڈ": "00000000-0000-0000-0000-00000000000000" ،
+      "نجی_کی": "...؟" ،
+      "الیکشن_ڈ": "ریف 1" ،
+      "بیکینڈ": "ہیلو 2/آئی پی اے" ،
+      "لفافہ_بی 64": "aaecawq =" ،
+      "روٹ_ہنٹ": "0x ... 64 ہیکس؟" ،
+      "مالک": "IH58…؟" ،
+      "نیلیفائر": "بلیک 2 بی 32: ... 64 ہیکس؟"
+    دہ
+  - جواب: {"اوکے": سچ ، "قبول": سچ ، "tx_instructions": [{...}]}
 
-Varredura de unlocks (Operador/Auditoria)
-- GET `/v1/gov/unlocks/stats`
-  - Resposta: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
-  - Notas: `last_sweep_height` reflete a altura de bloco mais recente onde locks expirados foram varridos e persistidos. `expired_locks_now` e calculado ao varrer registros de lock com `expiry_height <= height_current`.
-- POST `/v1/gov/ballots/zk-v1`
-  - Requisicao (DTO estilo v1):
+- پوسٹ `/v1/gov/ballots/zk-v1/ballot-proof` (خصوصیت: `zk-ballot`)
+  - سیدھے JSON `BallotProof` کو قبول کرتا ہے اور ایک کنکال `CastZkBallot` واپس کرتا ہے۔
+  - درخواست:
     {
-      "authority": "ih58...",
-      "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "...?",
-      "election_id": "ref-1",
-      "backend": "halo2/ipa",
-      "envelope_b64": "AAECAwQ=",
-      "root_hint": "0x...64hex?",
-      "owner": "ih58…?",
-      "nullifier": "blake2b32:...64hex?"
-    }
-  - Resposta: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
-
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
-  - Aceita um JSON `BallotProof` direto e retorna um esqueleto `CastZkBallot`.
-  - Requisicao:
+      "اتھارٹی": "IH58 ..." ،
+      "چین_ڈ": "00000000-0000-0000-0000-00000000000000" ،
+      "نجی_کی": "...؟" ،
+      "الیکشن_ڈ": "ریف 1" ،
+      "بیلٹ": {
+        "بیکینڈ": "ہیلو 2/آئی پی اے" ،
+        "لفافہ_بائٹس": "aaecawq =" ، // ZK1 یا H2* کنٹینر کا بیس 64
+        "روٹ_ہنٹ": NULL ، // اختیاری 32-بائٹ ہیکس سٹرنگ (اہلیت کی جڑ)
+        "مالک": NULL ، // اکاؤنٹ ID اختیاری جب سرکٹ مالک کا ارتکاب کرتا ہے
+        "nullifier": NULL // اختیاری 32-بائٹ ہیکس سٹرنگ (nullifier اشارہ)
+      دہ
+    دہ
+  - جواب:
     {
-      "authority": "ih58...",
-      "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "...?",
-      "election_id": "ref-1",
-      "ballot": {
-        "backend": "halo2/ipa",
-        "envelope_bytes": "AAECAwQ=",   // base64 do container ZK1 ou H2*
-        "root_hint": null,                // optional 32-byte hex string (eligibility root)
-        "owner": null,                    // AccountId opcional quando o circuito compromete owner
-        "nullifier": null                 // optional 32-byte hex string (nullifier hint)
-      }
-    }
-  - Resposta:
-    {
-      "ok": true,
-      "accepted": true,
-      "reason": "build transaction skeleton",
+      "ٹھیک ہے": سچ ،
+      "قبول": سچ ،
+      "وجہ": "ٹرانزیکشن کنکال بنائیں" ،
       "tx_instructions": [
-        { "wire_id": "CastZkBallot", "payload_hex": "..." }
-      ]
-    }
-  - Notas:
-    - O servidor mapeia `root_hint`/`owner`/`nullifier` opcionais do ballot para `public_inputs_json` em `CastZkBallot`.
-    - Os bytes do envelope sao re-encodados como base64 para o payload da instrucao.
-    - A resposta `reason` muda para `submitted transaction` quando Torii submete o ballot.
-    - Este endpoint so esta disponivel quando o feature `zk-ballot` esta habilitado.
+        {"تار_یڈ": "کاسٹزک بالٹ" ، "پے لوڈ_ہیکس": "..."}
+      ن
+    دہ
+  - نوٹ:
+    - سرور کا نقشہ اختیاری `root_hint`/`owner`/`nullifier` `public_inputs_json` میں `CastZkBallot` میں بیلٹ سے ہے۔
+    - لفافے بائٹس کو ہدایت پے لوڈ کے لئے بیس 64 کے طور پر دوبارہ انکوڈ کیا جاتا ہے۔
+    - جواب `reason` `submitted transaction` میں تبدیل ہوتا ہے جب Torii بیلٹ جمع کراتا ہے۔
+    - یہ اختتامی نقطہ تب ہی دستیاب ہے جب فیچر `zk-ballot` فعال ہو۔کاسک بالٹ کی توثیق کا راستہ
+- `CastZkBallot` فراہم کردہ بیس 64 پروف کو ضابطہ کرتا ہے اور خالی یا خراب شدہ پے لوڈ (`BallotRejected` کے ساتھ `invalid or empty proof`) کو مسترد کرتا ہے۔
+- میزبان رائے شماری (`vk_ballot`) یا گورننس ڈیفالٹس کی بنیاد پر بیلٹ تصدیق کی کلید کو حل کرتا ہے اور اس کی ضرورت ہوتی ہے کہ ریکارڈ موجود ہے ، `Active` ہے اور اس میں ان لائن بائٹس پر مشتمل ہے۔
+- ذخیرہ شدہ توثیق کلیدی بائٹس کو `hash_vk` کے ساتھ دوبارہ ہیش کیا جاتا ہے۔ کسی بھی عزم سے مطابقت نہیں ہوتا ہے اس سے پہلے کہ وہ چھیڑ چھاڑ والے رجسٹری اندراجات (`BallotRejected` کے ساتھ `BallotRejected`) سے بچاؤ کے لئے جانچ پڑتال سے پہلے پھانسی کو ختم کردے۔
+- پروف بائٹس کو `zk::verify_backend` کے ذریعے رجسٹرڈ بیکینڈ پر روانہ کیا جاتا ہے۔ `invalid proof` کے ساتھ `BallotRejected` کے طور پر غلط نقلیں ظاہر ہوتی ہیں اور ہدایات طے شدہ طور پر ناکام ہوجاتی ہیں۔
+- ثبوت کو بیلٹ کے عزم اور اہلیت کی جڑ کو عوامی آدانوں کے طور پر بے نقاب کرنا ہوگا۔ جڑ کو انتخابات کے `eligible_root` سے ملنا چاہئے ، اور اخذ کردہ Nullifier کو کسی بھی فراہم کردہ اشارے سے ملنا چاہئے۔
+- کامیاب ٹیسٹوں کا مسئلہ `BallotAccepted` ؛ اس دستاویز میں پہلے بیان کردہ موجودہ مسترد ہونے کی وجوہات پیدا کرتے رہتے ہیں۔
 
-Caminho de verificacao CastZkBallot
-- `CastZkBallot` decodifica a prova base64 fornecida e rejeita payloads vazios ou malformados (`BallotRejected` com `invalid or empty proof`).
-- O host resolve a chave verificadora do ballot a partir do referendum (`vk_ballot`) ou defaults de governanca e exige que o registro exista, esteja `Active` e contenha bytes inline.
-- Bytes de chave verificadora armazenados sao re-hasheados com `hash_vk`; qualquer mismatch de commitment aborta a execucao antes da verificacao para proteger contra entradas de registro adulteradas (`BallotRejected` com `verifying key commitment mismatch`).
-- Bytes de prova sao despachados ao backend registrado via `zk::verify_backend`; transcricoes invalidas aparecem como `BallotRejected` com `invalid proof` e a instrucao falha de forma deterministica.
-- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
-- Provas bem-sucedidas emitem `BallotAccepted`; nullifiers duplicados, roots de elegibilidade obsoletos ou regressao de lock continuam a produzir as razoes de rejeicao existentes descritas anteriormente neste documento.
+## توثیق کرنے والوں اور مشترکہ اتفاق رائے کا برا سلوک
 
-## Mau comportamento de validadores e consenso conjunto
+### سلیشنگ اور جیل کا بہاؤ
 
-### Fluxo de slashing e jailing
+اتفاق رائے سے `Evidence` Norito میں انکوڈڈ ہوتا ہے جب کوئی توثیق کنندہ پروٹوکول کی خلاف ورزی کرتا ہے۔ ہر پے لوڈ میموری میں `EvidenceStore` پر پہنچتا ہے اور ، اگر غیر منقطع ہے تو ، WSV کی حمایت یافتہ `consensus_evidence` نقشہ میں تیار کیا گیا ہے۔ `sumeragi.npos.reconfig.evidence_horizon_blocks` (پہلے سے طے شدہ `7200` بلاکس) سے زیادہ کے ریکارڈ فائل کو محدود رکھنے کے لئے مسترد کردیئے گئے ہیں ، لیکن مسترد آپریٹرز پر لاگ ان کیا گیا ہے۔ افق کے اندر شواہد `sumeragi.npos.reconfig.activation_lag_blocks` (پہلے سے طے شدہ `1`) اور سلیشنگ تاخیر `sumeragi.npos.reconfig.slashing_delay_blocks` (پہلے سے طے شدہ `259200`) کا بھی احترام کرتے ہیں۔ گورننس `CancelConsensusEvidencePenalty` کے ساتھ جرمانے منسوخ کرسکتی ہے اس سے پہلے کہ اس کا اطلاق ہوتا ہے۔
 
-O consenso emite `Evidence` codificada em Norito quando um validador viola o protocolo. Cada payload chega ao `EvidenceStore` em memoria e, se inedito, e materializado no mapa `consensus_evidence` respaldado por WSV. Registros mais antigos que `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocos) sao rejeitados para manter o arquivo limitado, mas a rejeicao e registrada para operadores. Evidence within the horizon also respects `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) and the slashing delay `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`); governance can cancel penalties with `CancelConsensusEvidencePenalty` before slashing applies.
-
-Ofensas reconhecidas mapeiam um-para-um para `EvidenceKind`; os discriminantes sao estaveis e impostos pelo data model:
+قابل شناخت جرائم `EvidenceKind` کے لئے ایک سے ایک کا نقشہ۔ امتیازی سلوک مستحکم اور ڈیٹا ماڈل کے ذریعہ عائد کیا جاتا ہے:
 
 ```rust
 use iroha_data_model::block::consensus::EvidenceKind;
@@ -303,49 +291,45 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** - o validador assinou hashes conflitantes para o mesmo tuple `(phase,height,view,epoch)`.
-- **InvalidQc** - um agregador gossiped um commit certificate cuja forma falha em checagens deterministicas (ex., bitmap de signers vazio).
-- **InvalidProposal** - um leader prop os um bloco que falha validacao estrutural (ex., viola a regra de locked-chain).
-- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
+۔
+۔
+۔
+۔
 
-Operadores e tooling podem inspecionar e re-broadcast payloads via:
+آپریٹرز اور ٹولنگ کے ذریعے پے لوڈ کا معائنہ اور دوبارہ نشر کیا جاسکتا ہے:
 
-- Torii: `GET /v1/sumeragi/evidence` e `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha ops sumeragi evidence list`, `... count`, e `... submit --evidence-hex <payload>`.
+- Torii: `GET /v1/sumeragi/evidence` اور `GET /v1/sumeragi/evidence/count`۔
+- CLI: `iroha ops sumeragi evidence list` ، `... count` ، اور `... submit --evidence-hex <payload>`۔
 
-A governanca deve tratar os bytes de evidence como prova canonica:
+گورننس کو شواہد کو بائٹس کو کیننیکل ثبوت کے طور پر سمجھنا چاہئے:1. ** میعاد ختم ہونے سے پہلے پے لوڈ ** جمع کریں۔ اونچائی/ویو میٹا ڈیٹا کے ساتھ خام Norito بائٹس کو محفوظ کریں۔
+2. پھانسی سے پے لوڈ کی دوبارہ توثیق ہوتی ہے۔ خراب یا باسی ثبوت اور عزم کے ساتھ مسترد کردیا گیا۔
+3. ** فالو اپ ٹوپولوجی کا شیڈول ** عام بہاؤ قطار `SetParameter(Sumeragi::NextMode)` اور `SetParameter(Sumeragi::ModeActivationHeight)` تازہ ترین روسٹر کے ساتھ۔
+4. ** آڈٹ کے نتائج ** `/v1/sumeragi/evidence` اور `/v1/sumeragi/status` کے ذریعے اس بات کا یقین کرنے کے لئے کہ ثبوت کاؤنٹر نے ترقی کی ہے اور اس حکمرانی نے ہٹانے کا اطلاق کیا ہے۔
 
-1. **Coletar o payload** antes de expirar. Arquive os bytes Norito brutos junto com metadata de height/view.
-2. **Preparar a penalidade** embedando o payload em um referendum ou instrucao sudo (ex., `Unregister::peer`). A execucao re-valida o payload; evidence malformada ou stale e rejeitada deterministamente.
-3. **Agendar a topologia de acompanhamento** para que o validador infrator nao possa retornar imediatamente. Fluxos tipicos enfileiram `SetParameter(Sumeragi::NextMode)` e `SetParameter(Sumeragi::ModeActivationHeight)` com o roster atualizado.
-4. **Auditar resultados** via `/v1/sumeragi/evidence` e `/v1/sumeragi/status` para garantir que o contador de evidence avancou e que a governanca aplicou a remocao.
+### مشترکہ اتفاق رائے کی ترتیب
 
-### Sequenciamento de consenso conjunto
+مشترکہ اتفاق رائے اس بات کو یقینی بناتا ہے کہ نیا سیٹ تجویز کرنا شروع ہونے سے پہلے سبکدوش ہونے والے جائزوں کا سیٹ فرنٹیئر بلاک کو حتمی شکل دے دیتا ہے۔ رن ٹائم جوڑے کے پیرامیٹرز کے ذریعہ قاعدہ کا اطلاق کرتا ہے:
 
-O consenso conjunto garante que o conjunto de validadores de saida finalize o bloco de fronteira antes que o novo conjunto comeca a propor. O runtime aplica a regra via parametros pareados:
-
-- `SumeragiParameter::NextMode` e `SumeragiParameter::ModeActivationHeight` devem ser confirmados no **mesmo bloco**. `mode_activation_height` deve ser estritamente maior que a altura do bloco que carregou a atualizacao, fornecendo ao menos um bloco de lag.
-- `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) e o guard de configuracao que impede hand-offs com lag zero:
-- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
+- `SumeragiParameter::NextMode` اور `SumeragiParameter::ModeActivationHeight` ** اسی بلاک ** میں تصدیق کرنی ہوگی۔ `mode_activation_height` بلاک کی اونچائی سے سختی سے زیادہ ہونا چاہئے جس نے اپ ڈیٹ کو لوڈ کیا ، جس سے کم از کم ایک بلاک کا وقفہ فراہم کیا جائے۔
+- `sumeragi.npos.reconfig.activation_lag_blocks` (پہلے سے طے شدہ `1`) کنفیگریشن گارڈ ہے جو صفر وقفے کے ساتھ ہاتھ سے دوروں کو روکتا ہے:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (پہلے سے طے شدہ `259200`) اتفاق رائے میں تاخیر کرتا ہے تاکہ گورننس درخواست دینے سے پہلے جرمانے منسوخ کرسکے۔
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- O runtime e a CLI expoem parametros staged via `/v1/sumeragi/params` e `iroha --output-format text ops sumeragi params`, para que operadores confirmem alturas de ativacao e rosters de validadores.
-- A automacao de governanca deve sempre:
-  1. Finalizar a decisao de remocao (ou reintegro) respaldada por evidence.
-  2. Enfileirar uma reconfiguracao de acompanhamento com `mode_activation_height = h_current + activation_lag_blocks`.
-  3. Monitorar `/v1/sumeragi/status` ate `effective_consensus_mode` trocar na altura esperada.
+- آپریٹرز کو چالو کرنے کی اونچائیوں اور جائز روسٹرز کی تصدیق کے ل The - رن ٹائم اور سی ایل آئی نے `/v1/sumeragi/params` اور `iroha --output-format text ops sumeragi params` کے ذریعے اسٹیجڈ پیرامیٹرز کو بے نقاب کیا۔
+- گورننس آٹومیشن ہمیشہ لازمی ہے:
+  1. ثبوت کے ذریعہ تعاون یافتہ ہٹانے (یا بحالی) کے فیصلے کو حتمی شکل دیں۔
+  2. `mode_activation_height = h_current + activation_lag_blocks` کے ساتھ فالو اپ کی تشکیل نو کی قطار لگائیں۔
+  3. متوقع وقت پر `effective_consensus_mode` تک تبدیل ہونے تک `/v1/sumeragi/status` کی نگرانی کریں۔
 
-Qualquer script que rotacione validadores ou aplique slashing **nao deve** tentar ativacao de lag zero ou omitir os parametros de hand-off; tais transacoes sao rejeitadas e deixam a rede no modo anterior.
+کوئی بھی اسکرپٹ جو توثیق کرنے والوں کو گھوماتا ہے یا سلیشنگ کا اطلاق کرتا ہے ** ** نہیں ہونا چاہئے ** صفر وقفے ایکٹیویشن کی کوشش کرنی چاہئے یا ہینڈ آف آف پیرامیٹرز کو چھوڑ دیں۔ اس طرح کے لین دین کو مسترد کردیا جاتا ہے اور نیٹ ورک کو پچھلے موڈ میں چھوڑ دیا جاتا ہے۔
 
-## Superficies de telemetria
-
-- Metricas Prometheus exportam atividade de governanca:
-  - `governance_proposals_status{status}` (gauge) rastreia contagens de proposals por status.
-  - `governance_protected_namespace_total{outcome}` (counter) incrementa quando admission de namespaces protegidos permite ou rejeita um deploy.
-  - `governance_manifest_activations_total{event}` (counter) registra insercoes de manifest (`event="manifest_inserted"`) e bindings de namespace (`event="instance_bound"`).
-- `/status` inclui um objeto `governance` que espelha as contagens de proposals, relata totais de namespaces protegidos e lista ativacoes recentes de manifest (namespace, contract id, code/ABI hash, block height, activation timestamp). Operadores podem consultar esse campo para confirmar que enactments atualizaram manifests e que gates de namespaces protegidos estao sendo aplicados.
-- Um template Grafana (`docs/source/grafana_governance_constraints.json`) e o runbook de telemetria em `telemetry.md` mostram como ligar alertas para proposals presas, ativacoes de manifest ausentes, ou rejeicoes inesperadas de namespaces protegidos durante upgrades de runtime.
+## ٹیلی میٹری سطحیں- میٹرکس Prometheus برآمدی گورننس سرگرمی:
+  - `governance_proposals_status{status}` (گیج) اسٹیٹس کے ذریعہ تجویز کی گنتی کا پتہ لگاتا ہے۔
+  - `governance_protected_namespace_total{outcome}` (کاؤنٹر) انکریمنٹ جب محفوظ نام کی جگہوں کا داخلہ کسی تعیناتی کی اجازت دیتا ہے یا اسے مسترد کرتا ہے۔
+  - `governance_manifest_activations_total{event}` (کاؤنٹر) ریکارڈز مینی فیسٹ اضافے (`event="manifest_inserted"`) اور نام کی جگہ بائنڈنگ (`event="instance_bound"`)۔
+- `/status` میں ایک `governance` آبجیکٹ شامل ہے جو تجویز کی گنتی کا آئینہ دار ہے ، محفوظ نام کی جگہ کی مجموعی اطلاعات ، اور حالیہ مینی فیسٹ ایکٹیویشنز (نام کی جگہ ، معاہدہ ID ، کوڈ/ABI ہیش ، بلاک اونچائی ، ایکٹیویشن ٹائم اسٹیمپ) کی فہرست دیتا ہے۔ آپریٹرز اس فیلڈ سے استفسار کرسکتے ہیں تاکہ اس بات کی تصدیق کی جاسکے کہ نفاذ میں تازہ کاری کی گئی ہے اور یہ محفوظ نام کی جگہ کے دروازے لگائے جارہے ہیں۔
+- ایک ٹیمپلیٹ Grafana (`docs/source/grafana_governance_constraints.json`) اور `telemetry.md` پر ٹیلی میٹری رن بک میں یہ ظاہر ہوتا ہے کہ رن ٹائم اپ گریڈ کے دوران پھنسے ہوئے تجاویز ، گمشدہ مظہر سرگرمیوں ، یا محفوظ نام کی جگہوں کی غیر متوقع طور پر مسترد ہونے کے لئے کس طرح الرٹس کو چالو کیا جائے۔

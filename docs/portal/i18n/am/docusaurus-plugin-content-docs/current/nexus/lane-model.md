@@ -7,60 +7,62 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus lane model
 description: Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Nexus Lane Model & WSV Partitioning
+# Nexus ሌይን ሞዴል እና WSV ክፍፍል
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** NX-1 in `roadmap.md`
+> ** ሁኔታ፡** NX-1 ሊደርስ የሚችል — ሌይን ታክሶኖሚ፣ የውቅረት ጂኦሜትሪ እና የማከማቻ አቀማመጥ ለትግበራ ዝግጁ ናቸው።  
+> ** ባለቤቶች፡** I18NT0000005X Core WG፣ Governance WG  
+> ** የመንገድ ካርታ ማጣቀሻ፡** NX-1 በ`roadmap.md`
 
-This portal page mirrors the canonical `docs/source/nexus_lanes.md` brief so Sora
-Nexus operators, SDK owners, and reviewers can read the lane guidance without
-diving into the mono-repo tree. The target architecture keeps the world state
-deterministic while allowing individual data spaces (lanes) to run public or
-private validator sets with isolated workloads.
+ይህ ፖርታል ገጽ ቀኖናዊውን `docs/source/nexus_lanes.md` አጭር ሶራ ያንጸባርቃል
+Nexus ኦፕሬተሮች፣ የኤስዲኬ ባለቤቶች እና ገምጋሚዎች የሌይን መመሪያውን ያለሱ ማንበብ ይችላሉ።
+ወደ ሞኖ-ሬፖ ዛፍ ዘልቆ መግባት. የታለመው አርክቴክቸር የአለምን ሁኔታ ይጠብቃል።
+የግለሰብ የውሂብ ክፍተቶችን (መስመሮችን) በይፋ እንዲሰሩ በሚፈቅዱበት ጊዜ የሚወስን ወይም
+ከገለልተኛ የሥራ ጫናዎች ጋር የግል አረጋጋጭ ስብስቦች።
 
-## Concepts
+# ጽንሰ-ሀሳቦች
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and
-  execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share
-  compliance, routing, and settlement policies.
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA
-  policy, gas token, settlement rules, and routing permissions.
-- **Global Commitment:** Proof emitted by a lane summarising new state roots,
-  settlement data, and optional cross-lane transfers. The global NPoS ring
-  orders commitments.
+- ** ሌይን፡** የNexus ደብተር ከራሱ አረጋጋጭ ስብስብ ጋር እና
+  የአፈፃፀም የኋላ ታሪክ. በተረጋጋ I18NI0000018X ተለይቷል።
+- ** የውሂብ ቦታ፡** የሚጋሩትን አንድ ወይም ከዚያ በላይ መስመሮችን በመመደብ የአስተዳደር ባልዲ
+  ተገዢነት፣ መንገድ እና የሰፈራ ፖሊሲዎች።
+- **ሌይን አንጸባራቂ፡** አረጋጋጮችን የሚገልጽ በመንግስት ቁጥጥር የሚደረግበት ሜታዳታ፣ ዲኤ
+  ፖሊሲ፣ ጋዝ ቶከን፣ የሰፈራ ደንቦች እና የማዘዋወር ፈቃዶች።
+- ** ዓለም አቀፋዊ ቁርጠኝነት: *** አዲስ የግዛት ሥሮችን በሚያጠቃልል ሌይን የወጣ ማረጋገጫ፣
+  የመቋቋሚያ መረጃ እና አማራጭ የሌይን ተሻጋሪ ዝውውሮች። ዓለም አቀፍ NPoS ቀለበት
+  ቃል ኪዳኖችን ያዛል.
 
-## Lane taxonomy
+## ሌይን ታክሶኖሚ
 
-Lane types canonically describe their visibility, governance surface, and
-settlement hooks. The configuration geometry (`LaneConfig`) captures these
-attributes so nodes, SDKs, and tooling can reason about the layout without
-bespoke logic.
+የሌይን ዓይነቶች ታይነታቸውን፣ የአስተዳደር ገጽታቸውን፣ እና በቀኖና ይገልጻሉ።
+የሰፈራ መንጠቆዎች. የውቅረት ጂኦሜትሪ (I18NI0000019X) እነዚህን ይይዛል
+ባህሪያት ስለዚህ አንጓዎች፣ ኤስዲኬዎች እና መሳሪያዎች ስለ አቀማመጥ ያለሱ ምክንያት ሊሆኑ ይችላሉ።
+አሳማኝ አመክንዮ
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| የሌይን አይነት | ታይነት | አረጋጋጭ አባልነት | WSV መጋለጥ | ነባሪ አስተዳደር | የሰፈራ ፖሊሲ | የተለመደ አጠቃቀም |
+|--------|--------|------------|--------|
+| `default_public` | የህዝብ | ያልተፈቀደ (ዓለም አቀፍ ድርሻ) | ሙሉ ግዛት ቅጂ | SORA ፓርላማ | `xor_global` | መሰረታዊ የህዝብ መዝገብ |
+| `public_custom` | የህዝብ | ያልተፈቀደ ወይም በካስማ የተከለለ | ሙሉ ሁኔታ ቅጂ | የካስማ ክብደት ያለው ሞጁል | `xor_lane_weighted` | ከፍተኛ-የተሰራ የህዝብ መተግበሪያዎች |
+| `private_permissioned` | የተከለከለ | ቋሚ አረጋጋጭ ስብስብ (መንግስት ጸድቋል) | ቃል ኪዳኖች እና ማስረጃዎች | የፌዴራል ምክር ቤት | `xor_hosted_custody` | CBDC, የጥምረት ሥራ ጫና |
+| `hybrid_confidential` | የተከለከለ | የተቀላቀለ አባልነት; የ ZK ማስረጃዎችን ይጠቀልላል | ግዴታዎች + የተመረጠ ይፋ ማድረግ | ፕሮግራም ገንዘብ ሞጁል | `xor_dual_fund` | ግላዊነትን መጠበቅ ፕሮግራም ገንዘብ |
 
-All lane types must declare:
+ሁሉም የሌይን ዓይነቶች የሚከተሉትን ማወጅ አለባቸው፡-
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
-- Governance handle — identifier resolved through `Nexus.governance.modules`.
-- Settlement handle — identifier consumed by the settlement router to debit XOR
-  buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced
-  through `/status` and dashboards.
+- የውሂብ ቦታ ተለዋጭ ስም - ተገዢ ፖሊሲዎችን የሚያገናኝ በሰው-ሊነበብ የሚችል ስብስብ።
+- የአስተዳደር እጀታ - መለያ በ`Nexus.governance.modules` ተፈትቷል።
+- የመቋቋሚያ እጀታ - መለያ XORን ለመክፈል በሰፈራ ራውተር የሚበላ
+  ማቋቋሚያዎች.
+- አማራጭ ቴሌሜትሪ ሜታዳታ (መግለጫ፣ አድራሻ፣ የንግድ ጎራ) ብቅ ብሏል።
+  በ `/status` እና ዳሽቦርዶች.
 
-## Lane configuration geometry (`LaneConfig`)
+## የሌይን ውቅር ጂኦሜትሪ (`LaneConfig`)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It
-does **not** replace governance manifests; instead it provides deterministic
-storage identifiers and telemetry hints for every configured lane.
+`LaneConfig` ከተረጋገጠው የሌይን ካታሎግ የተገኘ የሩጫ ጊዜ ጂኦሜትሪ ነው። እሱ
+** የአስተዳደር መግለጫዎችን አይተካም; ይልቁንም ቆራጥነት ያቀርባል
+የማከማቻ መለያዎች እና የቴሌሜትሪ ፍንጮች ለእያንዳንዱ የተዋቀረ መስመር።
 
 ```text
 LaneConfigEntry {
@@ -77,112 +79,112 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recomputes the geometry whenever configuration is
-  loaded (`State::set_nexus`).
-- Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric
-  characters collapse into `_`. If the alias yields an empty slug we fall back
-  to `lane{id}`.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting
-  to `lane_id`) and drives the persisted shard cursor journal to keep DA replay
-  deterministic across restarts/resharding.
-- Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the
-  same backend is shared.
-- Kura segment names are deterministic across hosts; auditors can cross-check
-  segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and
-  global state commitments for that lane.
+- `LaneConfig::from_catalog` ውቅር በሚሆንበት ጊዜ ጂኦሜትሪውን እንደገና ያሰላል
+  ተጭኗል (`State::set_nexus`).
+- ተለዋጭ ስሞች ወደ ንዑስ ሆሄያት ይጸዳሉ; ተከታታይ ፊደል ያልሆኑ
+  ቁምፊዎች ወደ `_` ይወድቃሉ። ተለዋጭ ስም ባዶ ዝቃጭ ቢያፈራ ወደ ኋላ እንመለሳለን።
+  ወደ `lane{id}`.
+- `shard_id` ከካታሎግ ሜታዳታ ቁልፍ `da_shard_id` (ነባሪ) የተገኘ ነው
+  ወደ `lane_id`) እና ቀጣይነቱን የሻርድ ጠቋሚ ጆርናል በመንዳት DA እንደገና ማጫወትን ለማቆየት
+  በዳግም ማስጀመር/በዳግም ማጋራት ላይ የሚወሰን።
+- ቁልፍ ቅድመ ቅጥያዎች WSV በሌይን የተከፋፈሉ ሆነው እንዲቆዩ ያረጋግጣሉ
+  ተመሳሳይ ጀርባ ይጋራል።
+- የኩራ ክፍል ስሞች በአስተናጋጆች ላይ የሚወሰኑ ናቸው; ኦዲተሮች መሻገር ይችላሉ።
+  ክፍልፋዮች ማውጫዎች እና ገላጭ መሣሪያዎች ያለ ግልጽ መሣሪያ።
+- ክፍሎችን ማዋሃድ (`lane_{id:03}_merge`) የቅርብ ጊዜ ውህደት-ፍንጭ ሥሮችን ይይዛሉ እና
+  ለዚያ መስመር የአለም አቀፍ መንግስት ቁርጠኝነት።
 
-## World-state partitioning
+## የአለም-ግዛት ክፍፍል
 
-- The logical Nexus world state is the union of per-lane state spaces. Public
-  lanes persist full state; private/confidential lanes export Merkle/commitment
-  roots to the merge ledger.
-- MV storage prefixes every key with the 4-byte lane prefix from
-  `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++
-  PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store
-  entries grouped by lane prefix, keeping range scans deterministic.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint
-  roots and reduced global state roots to `lane_{id:03}_merge`, allowing
-  targeted retention or eviction when a lane retires.
-- Cross-lane indexes (account aliases, asset registries, governance manifests)
-  store explicit lane prefixes so operators can reconcile entries quickly.
-- **Retention policy** — public lanes retain full block bodies; commitment-only
-  lanes may compact older bodies after checkpoints because commitments are
-  authoritative. Confidential lanes keep ciphertext journals in dedicated
-  segments to avoid blocking other workloads.
-- **Tooling** — maintenance utilities (`kagami`, CLI admin commands) should
-  reference the slugged namespace when exposing metrics, Prometheus labels, or
-  archiving Kura segments.
+- አመክንዮአዊው I18NT0000009X የአለም ሁኔታ የየሌይን ግዛት ቦታዎች ህብረት ነው። የህዝብ
+  መስመሮች ሙሉ ሁኔታን ይቀጥላሉ; የግል / ሚስጥራዊ መስመሮች Merkle / ቁርጠኝነት ወደ ውጭ መላክ
+  ሥሮች ወደ ውህደት መዝገብ.
+- MV ማከማቻ ቅድመ ቅጥያ እያንዳንዱን ቁልፍ ከ ባለ 4-ባይት ሌይን ቅድመ ቅጥያ
+  `LaneConfigEntry::key_prefix`፣ እንደ `[00 00 00 01] ++ ያሉ ቁልፎችን የሚሰጥ
+  የታሸገ ቁልፍ»
+- የተጋሩ ሠንጠረዦች (መለያዎች, ንብረቶች, ቀስቅሴዎች, የአስተዳደር መዝገቦች) ስለዚህ ያከማቹ
+  በሌይን ቅድመ ቅጥያ የተከፋፈሉ ግቤቶች፣ የክልል ፍተሻዎችን የሚወስኑ ናቸው።
+- የውህደት-ሊጀር ሜታዳታ አንድ አይነት አቀማመጥን ያንጸባርቃል፡ እያንዳንዱ መስመር የውህደት-ፍንጭ ይጽፋል
+  ስሮች እና ቀንሷል አቀፍ ሁኔታ ሥሮች ወደ `lane_{id:03}_merge`, በመፍቀድ
+  መስመር ጡረታ ሲወጣ የታለመ ማቆየት ወይም ማስወጣት።
+- ተሻጋሪ መስመር ኢንዴክሶች (የመለያ ቅጽል ስሞች፣ የንብረት መዝገብ ቤቶች፣ የአስተዳደር መግለጫዎች)
+  ኦፕሬተሮች በፍጥነት ግቤቶችን እንዲያስታርቁ ግልጽ የሌይን ቅድመ ቅጥያዎችን ያከማቹ።
+- ** የማቆያ ፖሊሲ *** - የሕዝብ መስመሮች ሙሉ የማገጃ አካላትን ይይዛሉ; ቁርጠኝነት-ብቻ
+  መንገዶች ከቼክ ኬላዎች በኋላ የቆዩ አካላትን ሊጨምቁ ይችላሉ ምክንያቱም ቃል ኪዳኖች ናቸው።
+  ባለስልጣን. ሚስጥራዊ መስመሮች የምስጢር ጽሑፍ መጽሔቶችን ያቆያሉ።
+  ሌሎች የሥራ ጫናዎችን እንዳይገድቡ ክፍሎች.
+- ** መሳሪያ ማድረግ *** - የጥገና መገልገያዎች (`kagami` ፣ CLI አስተዳዳሪ ትዕዛዞች) አለባቸው
+  መለኪያዎችን፣ የPrometheus መሰየሚያዎችን በሚያጋልጡበት ጊዜ የተንጣለለውን የስም ቦታ ያጣቅሱ።
+  የኩራ ክፍሎችን በማህደር ማስቀመጥ.
 
-## Routing & APIs
+## መስመር እና ኤፒአይዎች
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
+- Torii REST/gRPC የመጨረሻ ነጥቦች አማራጭ `lane_id` መቀበል; መቅረት ማለት ነው።
   `lane_default`.
-- SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
-  the lane catalog.
-- Routing rules operate on the validated catalog and may pick both lane and
-  dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
-  logs.
+- የኤስዲኬዎች የገጽታ መስመር መራጮች እና ለተጠቃሚ ምቹ የሆኑ ስሞችን ለ`LaneId` በመጠቀም
+  የሌይን ካታሎግ.
+- የማዞሪያ ህጎች በተረጋገጠው ካታሎግ ላይ ይሰራሉ እና ሁለቱንም መስመር እና ሁለቱንም ሊመርጡ ይችላሉ።
+  የውሂብ ቦታ. `LaneConfig` ለዳሽቦርድ እና ለቴሌሜትሪ ተስማሚ ተለዋጭ ስሞችን ይሰጣል
+  መዝገቦች.
 
-## Settlement & fees
+## ማቋቋሚያ እና ክፍያዎች
 
-- Every lane pays XOR fees to the global validator set. Lanes may collect native
-  gas tokens but must escrow XOR equivalents alongside commitments.
-- Settlement proofs include amount, conversion metadata, and proof of escrow
-  (for example, transfer to the global fee vault).
-- The unified settlement router (NX-3) debits buffers using the same lane
-  prefixes, so settlement telemetry lines up with storage geometry.
+- እያንዳንዱ መስመር ለአለምአቀፍ አረጋጋጭ ስብስብ የXOR ክፍያዎችን ይከፍላል። መስመሮች ቤተኛ ሊሰበሰቡ ይችላሉ።
+  የጋዝ ቶከኖች ነገር ግን የXOR አቻዎችን ከቃል ኪዳኖች ጋር መሸሽ አለባቸው።
+- የመቋቋሚያ ማረጋገጫዎች መጠን፣ ልወጣ ሜታዳታ እና የተሸሸገ ማስረጃ ያካትታሉ
+  (ለምሳሌ ወደ ዓለም አቀፋዊ ክፍያ ቫልት ያስተላልፉ)።
+- የተዋሃደ የሰፈራ ራውተር (NX-3) ተመሳሳይ መስመር በመጠቀም ዴቢት ቋቶችን ያዘጋጃል።
+  ቅድመ ቅጥያ፣ ስለዚህ የሰፈራ ቴሌሜትሪ ከማከማቻ ጂኦሜትሪ ጋር ይዘረጋል።
 
-## Governance
+#አስተዳደር
 
-- Lanes declare their governance module via the catalog. `LaneConfigEntry`
-  carries the original alias and slug to keep telemetry and audit trails
-  readable.
-- The Nexus registry distributes signed lane manifests that include the
-  `LaneId`, dataspace binding, governance handle, settlement handle, and
-  metadata.
-- Runtime-upgrade hooks continue to enforce governance policies
-  (`gov_upgrade_id` by default) and log diffs via the telemetry bridge
-  (`nexus.config.diff` events).
+- መስመሮች የአስተዳደር ሞጁላቸውን በካታሎግ በኩል ያውጃሉ። `LaneConfigEntry`
+  የቴሌሜትሪ እና የኦዲት መንገዶችን ለመጠበቅ ዋናውን ተለዋጭ ስም እና ስሉግ ይይዛል
+  ሊነበብ የሚችል.
+- የNexus መዝገብ የተፈረመ የሌይን መግለጫዎችን ያሰራጫል
+  `LaneId`፣ ዳታስፔስ ማሰሪያ፣ የአስተዳደር እጀታ፣ የሰፈራ እጀታ እና
+  ሜታዳታ
+- የሩጫ ጊዜ ማሻሻያ መንጠቆዎች የአስተዳደር ፖሊሲዎችን ማስፈጸማቸውን ቀጥለዋል።
+  (በነባሪ `gov_upgrade_id`) እና በቴሌሜትሪ ድልድይ በኩል ይመዝገቡ
+  (`nexus.config.diff` ክስተቶች).
 
-## Telemetry & status
+## ቴሌሜትሪ እና ሁኔታ
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and
-  settlement profiles, derived from the catalog and `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so
-  operators can map backlog and TEU pressure quickly.
-- `nexus_lane_configured_total` counts the number of derived lane entries and is
-  recomputed when configuration changes. Telemetry emits signed diffs whenever
-  lane geometry changes.
-- Dataspace backlog gauges include the alias/description metadata to help
-  operators associate queue pressure with business domains.
+- `/status` የሌይን ተለዋጭ ስሞችን፣ የውሂብ ቦታ ማያያዣዎችን፣ የአስተዳደር መያዣዎችን እና
+  የሰፈራ መገለጫዎች፣ ከካታሎግ እና `LaneConfig` የተገኙ።
+- የጊዜ መርሐግብር መለኪያ (`nexus_scheduler_lane_teu_*`) የሌይን ተለዋጭ ስሞችን ይሰጣል
+  ኦፕሬተሮች የኋላ ታሪክን እና የ TEU ግፊትን በፍጥነት ማተም ይችላሉ።
+- `nexus_lane_configured_total` የተገኙትን የሌይን ግቤቶች ብዛት ይቆጥራል እና ነው
+  ውቅረት ሲቀየር እንደገና ይሰላል። ቴሌሜትሪ በማንኛውም ጊዜ የተፈረመ ልዩነት ይፈጥራል
+  የሌይን ጂኦሜትሪ ለውጦች.
+- የውሂብ ቦታ የኋላ ሎግ መለኪያዎች ለማገዝ ተለዋጭ ስም/መግለጫ ሜታዳታን ያካትታሉ
+  ኦፕሬተሮች የወረፋ ግፊትን ከንግድ ጎራዎች ጋር ያዛምዳሉ።
 
-## Configuration & Norito types
+## ውቅረት እና Norito ዓይነቶች
 
-- `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-format structures for
-  manifests and SDKs.
-- `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
-  automatically from the catalog; it does not require Norito encoding because it
-  is an internal runtime helper.
-- The user-facing configuration (`iroha_config::parameters::user::Nexus`)
-  continues to accept declarative lane and dataspace descriptors; parsing now
-  derives the geometry and rejects invalid aliases or duplicate lane IDs.
+- `LaneCatalog`፣ `LaneConfig`፣ እና `DataSpaceCatalog` ይኖራሉ
+  `iroha_data_model::nexus` እና የ I18NT0000002X-ቅርጸት አወቃቀሮችን ያቅርቡ ለ
+  አንጸባራቂ እና ኤስዲኬዎች።
+- `LaneConfig` በI18NI0000060X ውስጥ ይኖራል እና የተገኘ ነው
+  ከካታሎግ በራስ-ሰር; እሱ Norito ኢንኮዲንግ አያስፈልገውም ምክንያቱም እሱ ነው።
+  የውስጥ ሩጫ ረዳት ነው።
+- በተጠቃሚው ፊት ያለው ውቅር (`iroha_config::parameters::user::Nexus`)
+  ገላጭ ሌይን እና የውሂብ ቦታ ገላጭዎችን መቀበል ይቀጥላል; አሁን መተንተን
+  ጂኦሜትሪውን ያመነጫል እና ልክ ያልሆኑ ተለዋጭ ስሞችን ወይም የተባዙ ሌይን መታወቂያዎችን ውድቅ ያደርጋል።
 
-## Outstanding work
+#አስደናቂ ስራ
 
-- Integrate settlement router updates (NX-3) with the new geometry so XOR buffer
-  debits and receipts are tagged by lane slug.
-- Extend admin tooling to list column families, compact retired lanes, and
-  inspect per-lane block logs using the slugged namespace.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and
-  attach regression fixtures for cross-lane replay.
-- Add compliance hooks for whitelists/blacklists and programmable-money
-  policies (tracked under NX-12).
+- የሰፈራ ራውተር ማሻሻያዎችን (NX-3) ከአዲሱ ጂኦሜትሪ ጋር በ XOR ቋት ያዋህዱ
+  ዴቢት እና ደረሰኞች በሌይን ስሉግ መለያ ተሰጥቷቸዋል።
+- የአምድ ቤተሰቦችን ፣ የታመቁ ጡረታ መስመሮችን እና ለመዘርዘር የአስተዳዳሪ መሳሪያዎችን ያራዝሙ
+  የተንጣለለውን የስም ቦታ በመጠቀም የየሌይን ማገጃ ምዝግቦችን ይፈትሹ።
+- የማዋሃድ ስልተ ቀመር (ማዘዝ, መቁረጥ, ግጭትን መለየት) እና
+  የመስቀለኛ መንገድን እንደገና ለማጫወት የድግግሞሽ መሳሪያዎችን ያያይዙ።
+- ለተፈቀደላቸው / ለጥቁሮች እና ለፕሮግራም የሚውል ገንዘብ የማክበር ማያያዣዎችን ይጨምሩ
+  ፖሊሲዎች (በNX-12 ስር ተከታትለዋል)።
 
 ---
 
-*This page will continue to track NX-1 follow-ups as NX-2 through NX-18 land.
-Please surface open questions in `roadmap.md` or the governance tracker so the
-portal stays aligned with the canonical docs.*
+*ይህ ገጽ NX-1 ክትትሎችን እንደ NX-2 እስከ NX-18 መሬት መከታተል ይቀጥላል።
+እባክዎን ክፍት ጥያቄዎችን በ I18NI0000062X ወይም በአስተዳደር መከታተያ ውስጥ ያቅርቡ
+ፖርታል ከቀኖናዊ ሰነዶች* ጋር ተስተካክሏል።

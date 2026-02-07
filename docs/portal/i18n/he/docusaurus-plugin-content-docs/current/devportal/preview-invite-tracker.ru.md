@@ -4,121 +4,115 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-invite-tracker.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Трекер приглашений preview
+# תצוגה מקדימה של Трекер приглашений
 
-Этот трекер фиксирует каждую волну preview портала документации, чтобы владельцы DOCS-SORA и ревьюеры governance могли видеть активную когорту, кто утвердил приглашения и какие артефакты еще требуют внимания. Обновляйте его при отправке, отзыве или переносе приглашений, чтобы аудитный след оставался в репозитории.
+Этот трекер фиксирует каждую волну תצוגה מקדימה портала документации, чтобы владельцы DOCS-SORA и governance видеть активную когорту, кто утвердил приглашения ו- какие артефакты еще требуют внимания. Обновляйте его при отправке, отзыве или переносе приглашений, чтобы аудитный след оставался в репиозий.
 
-## Статус волн
+## סטאטוס волн
 
-| Волна | Когорта | Issue трекера | Approver(s) | Статус | Целевое окно | Примечания |
+| Волна | Когорта | גיליון трекера | מאשר/ים | Статус | Целевое окно | Примечания |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 - Core maintainers** | Maintainers Docs + SDK, валидирующие checksum flow | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Lead Docs/DevRel + Portal TL | Завершено | Q2 2025 недели 1-2 | Приглашения отправлены 2025-03-25, телеметрия была зеленой, итоговый summary опубликован 2025-04-08. |
-| **W1 - Partners** | Операторы SoraFS, интеграторы Torii под NDA | `DOCS-SORA-Preview-W1` | Lead Docs/DevRel + Governance liaison | Завершено | Q2 2025 неделя 3 | Приглашения 2025-04-12 -> 2025-04-26, все восемь партнеров подтвердили; evidence в [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) и digest выхода в [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 - Community** | Кураторский community waitlist (<=25 за раз) | `DOCS-SORA-Preview-W2` | Lead Docs/DevRel + Community manager | Завершено | Q3 2025 неделя 1 (tentative) | Приглашения 2025-06-15 -> 2025-06-29, телеметрия зеленая весь период; evidence + findings в [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 - Beta cohorts** | Finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Lead Docs/DevRel + Governance liaison | Завершено | Q1 2026 неделя 8 | Приглашения 2026-02-18 -> 2026-02-28; digest + portal data через волну `preview-20260218` (см. [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| **W0 - מתחזקי ליבה** | Maintainers Docs + SDK, валидирующие זרימת checksum | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Lead Docs/DevRel + Portal TL | Завершено | Q2 2025 недели 1-2 | Приглашения отправлены 2025-03-25, телеметрия была зеленой, итоговый סיכום опубликован 2025-04-08. |
+| **W1 - שותפים** | Операторы SoraFS, интеграторы Torii под NDA | `DOCS-SORA-Preview-W1` | Lead Docs/DevRel + קשר ממשל | Завершено | Q2 2025 неделя 3 | Приглашения 2025-04-12 -> 2025-04-26, все восемь партнеров подтвердили; ראיות в [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) и digest выхода в [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
+| **W2 - קהילה** | רשימת ההמתנה של הקהילה Кураторский (<=25 ימים) | `DOCS-SORA-Preview-W2` | Lead Docs/DevRel + מנהל קהילה | Завершено | Q3 2025 неделя 1 (טנטטיבי) | Приглашения 2025-06-15 -> 2025-06-29, телеметрия зеленая весь период; ראיות + ממצאים в [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
+| **W3 - קבוצות ביטא** | בטא פיננסים/צפיות + שותף SDK + עו"ד | `DOCS-SORA-Preview-W3` | Lead Docs/DevRel + קשר ממשל | Завершено | Q1 2026 неделя 8 | Приглашения 2026-02-18 -> 2026-02-28; תקציר + נתוני פורטל через волну `preview-20260218` (см. [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
 
-> Примечание: связывайте каждую issue трекера с соответствующими preview request tickets и архивируйте их в проекте `docs-portal-preview`, чтобы approvals оставались доступными.
+> פריטים: связывайте каждую issue трекера с соответствующими בקש כרטיסים לתצוגה מקדימה и архивируйте их в проекера с соответствующими בקש כרטיסים לתצוגה מקדימה и архивируйте их в проекера с соответствующими בקש כרטיסים לתצוגה מקדימה и архивируйте их в проекера с соответствующими בקש כרטיסים לתצוגה מקדימה ו- архивируйте их в проекера с соответствующими оставались доступными.
 
 ## Активные задачи (W0)
 
-- Обновлены preflight артефакты (запуск GitHub Actions `docs-portal-preview` 2025-03-24, descriptor проверен через `scripts/preview_verify.sh` с тегом `preview-2025-03-24`).
-- Зафиксированы baseline телеметрии (`docs.preview.integrity`, snapshot `TryItProxyErrors` сохранен в issue W0).
-- Outreach текст зафиксирован через [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) с preview tag `preview-2025-03-24`.
-- Записаны intake запросы для первых пяти maintainers (tickets `DOCS-SORA-Preview-REQ-01` ... `-05`).
-- Первые пять приглашений отправлены 2025-03-25 10:00-10:20 UTC после семи дней зеленой телеметрии; acknowledgements сохранены в `DOCS-SORA-Preview-W0`.
-- Мониторинг телеметрии + office hours для хоста (ежедневные check-ins до 2025-03-31; checkpoint log ниже).
-- Собраны midpoint feedback / issues и отмечены `docs-preview/w0` (см. [W0 digest](./preview-feedback/w0/summary.md)).
-- Опубликован summary волны + подтверждения выхода (exit bundle 2025-04-08; см. [W0 digest](./preview-feedback/w0/summary.md)).
-- W3 beta wave отслежена; будущие волны планируются после governance review.
+- Обновлены preflight артефакты (запуск GitHub Actions `docs-portal-preview` 2025-03-24, descriptor проверен через `scripts/preview_verify.sh` с тег600м I00060м I00060м I00060м I00060м03-24).
+- Зафиксированы baseline телеметрии (`docs.preview.integrity`, תמונת מצב `TryItProxyErrors` сохранен в issue W0).
+- Outreach текст зафиксирован через [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) עם תג תצוגה מקדימה `preview-2025-03-24`.
+- Записаны intake запросы для первых пяти מתחזקים (כרטיסים `DOCS-SORA-Preview-REQ-01` ... `-05`).
+- Первые пять приглашений отправлены 2025-03-25 10:00-10:20 UTC после семи дней зеленой телеметрии; תודות сохранены в `DOCS-SORA-Preview-W0`.
+- Мониторинг телеметрии + שעות פעילות משרדיות לשירות (צ'ק-אין עד 2025-03-31; יומן המחסום לא).
+- משוב / בעיות נקודת אמצע ומכשירים `docs-preview/w0` (см. [W0 digest](./preview-feedback/w0/summary.md)).
+- סיכום Опубликован волны + подтверждения выхода (צרור יציאה 2025-04-08; см. [W0 digest](./preview-feedback/w0/summary.md)).
+- גל בטא W3 отслежена; будущие волны планируются после סקירת ממשל.
 
-## Резюме волны W1 partners
+## Резюме волны שותפים W1- אישורים משפטיים וממשל. שותפים לתוספת подписан 2025-04-05; אישורים загружены в `DOCS-SORA-Preview-W1`.
+- טלמטריה + נסה את הבמה. שנה כרטיס `OPS-TRYIT-147` выполнен 2025-04-06 с Grafana תמונות מצב `docs.preview.integrity`, `TryItProxyErrors`, ו-SoraFS.
+- הכנת חפץ + סכום בדיקה. חבילה `preview-2025-04-12` проверен; מתאר יומנים/בדיקת סכום/בדיקה сохранены в `artifacts/docs_preview/W1/preview-2025-04-12/`.
+- סגל הזמנה + שליחה. Все восемь בקשות שותפים (`DOCS-SORA-Preview-REQ-P01...P08`) одобрены; приглашения отправлены 2025-04-12 15:00-15:21 UTC, אישורים зафиксированы по ревьюеру.
+- מכשור משוב. Ежедневные שעות המשרד + מחסומים телеметрии; см. [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md).
+- סגל סופי/יומן יציאה. [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) теперь фиксирует חותמות זמן הזמנה/אישור, ראיות טלמטריה, ייצוא חידון ומצביעים артефактов ב-2025-04-26, משטר ניהול воспроизвести волну.
 
-- Legal & governance approvals. Addendum partners подписан 2025-04-05; approvals загружены в `DOCS-SORA-Preview-W1`.
-- Telemetry + Try it staging. Change ticket `OPS-TRYIT-147` выполнен 2025-04-06 с Grafana snapshots `docs.preview.integrity`, `TryItProxyErrors`, и `DocsPortal/GatewayRefusals`.
-- Artefact + checksum prep. Bundle `preview-2025-04-12` проверен; logs descriptor/checksum/probe сохранены в `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- Invite roster + dispatch. Все восемь partner requests (`DOCS-SORA-Preview-REQ-P01...P08`) одобрены; приглашения отправлены 2025-04-12 15:00-15:21 UTC, acknowledgements зафиксированы по ревьюеру.
-- Feedback instrumentation. Ежедневные office hours + checkpoints телеметрии; см. [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md).
-- Final roster/exit log. [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) теперь фиксирует timestamps invite/ack, telemetry evidence, quiz exports и pointers артефактов на 2025-04-26, чтобы governance могла воспроизвести волну.
+## יומן הזמנות - מנהלי ליבה של W0
 
-## Invite log - W0 core maintainers
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| מזהה מבקר | תפקיד | בקש כרטיס | ההזמנה נשלחה (UTC) | יציאה צפויה (UTC) | סטטוס | הערות |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Active | Подтвердил verification checksum; фокус на nav/sidebar review. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Active | Тестирует SDK recipes + Norito quickstarts. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | Active | Валидирует Try it console + ISO flows. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Active | Аудитит SoraFS runbooks + orchestration docs. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Active | Ревьюит telemetry/incident appendices; отвечает за Alertmanager coverage. |
+| docs-core-01 | מתחזק פורטל | `DOCS-SORA-Preview-REQ-01` | 25-03-2025 10:05 | 2025-04-08 10:00 | פעיל | בדיקת סכום אימות Подтвердил; фокус на סקירת ניווט/סרגל צד. |
+| sdk-rust-01 | עופרת SDK חלודה | `DOCS-SORA-Preview-REQ-02` | 25-03-2025 10:08 | 2025-04-08 10:00 | פעיל | מתכוני Тестирует SDK + Norito התחלות מהירות. |
+| sdk-js-01 | מתחזק JS SDK | `DOCS-SORA-Preview-REQ-03` | 25-03-2025 10:12 | 2025-04-08 10:00 | פעיל | Валидирует נסה את זה קונסולת + זרימות ISO. |
+| sorafs-ops-01 | SoraFS קשר מפעיל | `DOCS-SORA-Preview-REQ-04` | 25-03-2025 10:15 | 2025-04-08 10:00 | פעיל | Аудитит SoraFS ספרי הפעלה + מסמכי תזמור. |
+| observability-01 | צפיות TL | `DOCS-SORA-Preview-REQ-05` | 25-03-2025 10:18 | 2025-04-08 10:00 | פעיל | Ревьюит נספחי טלמטריה/אירועים; отвечает за כיסוי Alertmanager. |
 
-Все приглашения ссылаются на один и тот же `docs-portal-preview` artefact (run 2025-03-24, tag `preview-2025-03-24`) и transcript проверки в `DOCS-SORA-Preview-W0`. Любые добавления/паузы нужно фиксировать и в таблице выше, и в issue трекера перед переходом к следующей волне.
+Все приглашения ссылаются на один и тот же `docs-portal-preview` artefact (הפעלה 2025-03-24, תג `preview-2025-03-24`) ותמליל пврови `DOCS-SORA-Preview-W0`. Любые добавления/паузы нужно фиксировать и в таблице выше, и в issue трекера перед переходом кледуй.
 
-## Checkpoint log - W0
+## יומן מחסום - W0
 
-| Date (UTC) | Activity | Notes |
+| תאריך (UTC) | פעילות | הערות |
 | --- | --- | --- |
-| 2025-03-26 | Baseline telemetry review + office hours | `docs.preview.integrity` + `TryItProxyErrors` оставались зелеными; office hours подтвердили завершение checksum verification. |
-| 2025-03-27 | Midpoint feedback digest posted | Summary сохранен в [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); две minor nav issues отмечены `docs-preview/w0`, инцидентов нет. |
-| 2025-03-31 | Final week telemetry spot check | Последние office hours перед выходом; ревьюеры подтвердили оставшиеся задачи, алертов не было. |
-| 2025-04-08 | Exit summary + invite closures | Подтверждены завершенные обзоры, временный доступ отозван, findings архивированы в [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker обновлен перед W1. |
+| 26-03-2025 | סקירת טלמטריה בסיסית + שעות עבודה | `docs.preview.integrity` + `TryItProxyErrors` оставались зелеными; שעות המשרד подтвердили завершение אימות סכום בדיקה. |
+| 27-03-2025 | תקציר משוב נקודת אמצע פורסם | סיכום сохранен в [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); בעיות ניווט קלות отмечены `docs-preview/w0`, инцидентов нет. |
+| 31-03-2025 | בדיקת נקודתית של טלמטריה בשבוע האחרון | Последние שעות המשרד перед выходом; ревьюеры подтвердили оставшиеся задачи, алертов не было. |
+| 2025-04-08 | סיכום יציאה + סגירות הזמנות | Подтверждены завершенные обзоры, временный доступ отозван, ממצאים архивированы в [`preview-feedback/w0/summary.md`](Grafana); tracker обновлен перед W1. |
 
-## Invite log - W1 partners
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## יומן הזמנות - שותפים W1| מזהה מבקר | תפקיד | בקש כרטיס | ההזמנה נשלחה (UTC) | יציאה צפויה (UTC) | סטטוס | הערות |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Completed | Orchestrator ops feedback delivered 2025-04-20; exit ack 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Completed | Rollout comments logged in `docs-preview/w1`; exit ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Completed | Dispute/blacklist edits filed; exit ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Completed | Try it auth walkthrough accepted; exit ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Completed | RPC/OAuth doc comments logged; exit ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Completed | Preview integrity feedback merged; exit ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Completed | Telemetry/redaction review done; exit ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Completed | Gateway DNS runbook comments filed; exit ack 15:24 UTC. |
+| soraps-op-01 | מפעיל SoraFS (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 26/04/2025 15:00 | הושלם | משוב על תזמורת נמסר 2025-04-20; יציאה ack 15:05 UTC. |
+| soraps-op-02 | מפעיל SoraFS (JP) | `DOCS-SORA-Preview-REQ-P02` | 12-04-2025 15:03 | 26/04/2025 15:00 | הושלם | הערות השקה מחוברות ב-`docs-preview/w1`; יציאה ack 15:10 UTC. |
+| soraps-op-03 | מפעיל SoraFS (ארה"ב) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 26/04/2025 15:00 | הושלם | מחלוקת/עריכות ברשימה השחורה שהוגשו; יציאה ack 15:12 UTC. |
+| torii-int-01 | אינטגרטור Torii | `DOCS-SORA-Preview-REQ-P04` | 12-04-2025 15:09 | 26/04/2025 15:00 | הושלם | נסה את זה אישור הדרכה מקובל; יציאה ack 15:14 UTC. |
+| torii-int-02 | אינטגרטור Torii | `DOCS-SORA-Preview-REQ-P05` | 12-04-2025 15:12 | 26/04/2025 15:00 | הושלם | הערות מסמך RPC/OAuth נרשמו; יציאה ack 15:16 UTC. |
+| sdk-partner-01 | שותף SDK (Swift) | `DOCS-SORA-Preview-REQ-P06` | 12-04-2025 15:15 | 26/04/2025 15:00 | הושלם | תצוגה מקדימה משוב יושרה מוזג; יציאה ack 15:18 UTC. |
+| sdk-partner-02 | שותף SDK (אנדרואיד) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 26/04/2025 15:00 | הושלם | סקירת טלמטריה / עריכה נעשתה; יציאה ack 15:22 UTC. |
+| gateway-ops-01 | מפעיל שער | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 26/04/2025 15:00 | הושלם | הוגשו הערות ספר ריצה של שער DNS; יציאה ack 15:24 UTC. |
 
-## Checkpoint log - W1
+## יומן מחסום - W1
 
-| Date (UTC) | Activity | Notes |
+| תאריך (UTC) | פעילות | הערות |
 | --- | --- | --- |
-| 2025-04-12 | Invite dispatch + artefact verification | All eight partners emailed with `preview-2025-04-12` descriptor/archive; acknowledgements stored in tracker. |
-| 2025-04-13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards green; office hours confirmed checksum verification completed. |
-| 2025-04-18 | Mid-wave office hours | `docs.preview.integrity` remained green; two doc nits logged under `docs-preview/w1` (nav wording + Try it screenshot). |
-| 2025-04-22 | Final telemetry spot check | Proxy + dashboards healthy; no new issues raised, noted in tracker ahead of exit. |
-| 2025-04-26 | Exit summary + invite closures | All partners confirmed review completion, invites revoked, evidence archived in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025-04-12 | שליחת הזמנה + אימות חפץ | כל שמונת השותפים שלחו אימייל עם מתאר/ארכיון `preview-2025-04-12`; אישורים המאוחסנים ב-tracker. |
+| 2025-04-13 | סקירת בסיס טלמטריה | לוחות מחוונים `docs.preview.integrity`, `TryItProxyErrors` ו-`DocsPortal/GatewayRefusals` ירוקים; שעות המשרד מאושרות שאימות סכום הבדיקה הושלם. |
+| 2025-04-18 | שעות עבודה באמצע גל | `docs.preview.integrity` נשאר ירוק; שני מסמכים מחוברים תחת `docs-preview/w1` (ניסוח ניווט + צילום מסך נסה זאת). |
+| 22-04-2025 | בדיקת נקודתית סופית בטלמטריה | פרוקסי + לוחות מחוונים בריאים; לא הועלו בעיות חדשות, צוין ב-tracker לפני היציאה. |
+| 26-04-2025 | סיכום יציאה + סגירות הזמנות | כל השותפים אישרו את השלמת הבדיקה, ההזמנות בוטלו, הראיות הועברו לארכיון ב-[`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
 
-## W3 beta cohort recap
+## סיכום קבוצת הביטא של W3
 
-- Invites sent 2026-02-18 with checksum verification + acknowledgements logged the same day.
-- Feedback collected under `docs-preview/20260218` with governance issue `DOCS-SORA-Preview-20260218`; digest + summary generated via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- Access revoked 2026-02-28 after the final telemetry check; tracker + portal tables updated to show W3 as completed.
+- הזמנות נשלחו 2026-02-18 עם אימות סכום בדיקה + אישורים שנרשמו באותו היום.
+- משוב שנאסף במסגרת `docs-preview/20260218` עם בעיית ממשל `DOCS-SORA-Preview-20260218`; תקציר + סיכום שנוצר באמצעות `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
+- הגישה בוטלה 2026-02-28 לאחר בדיקת הטלמטריה האחרונה; טבלאות מעקב + פורטל עודכנו כדי להציג את W3 כמושלם.
 
-## Invite log - W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## יומן הזמנות - קהילת W2| מזהה מבקר | תפקיד | בקש כרטיס | ההזמנה נשלחה (UTC) | יציאה צפויה (UTC) | סטטוס | הערות |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Completed | Ack 16:06 UTC; focusing on SDK quickstarts; exit confirmed 2025-06-29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Completed | Governance/SNS review done; exit confirmed 2025-06-29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Completed | Norito walkthrough feedback logged; exit ack 2025-06-29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Completed | SoraFS runbook review done; exit ack 2025-06-29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Completed | Accessibility/UX notes shared; exit ack 2025-06-29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Completed | Localization feedback logged; exit ack 2025-06-29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Completed | Mobile SDK doc checks delivered; exit ack 2025-06-29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Completed | Observability appendix review done; exit ack 2025-06-29. |
+| comm-vol-01 | מבקר קהילה (SDK) | `DOCS-SORA-Preview-REQ-C01` | 15-06-2025 16:00 | 29/06/2025 16:00 | הושלם | אק 16:06 UTC; התמקדות בהתחלות מהירות של SDK; אישור יציאה 2025-06-29. |
+| comm-vol-02 | מבקר קהילה (ממשל) | `REQ-C02` | 15/06/2025 16:03 | 29/06/2025 16:00 | הושלם | סקירת ממשל/SNS נעשתה; אישור יציאה 2025-06-29. |
+| comm-vol-03 | מבקר קהילה (Norito) | `REQ-C03` | 15/06/2025 16:06 | 29/06/2025 16:00 | הושלם | משוב דרך Norito נרשם; יציאה ack 2025-06-29. |
+| comm-vol-04 | מבקר קהילה (SoraFS) | `REQ-C04` | 15/06/2025 16:09 | 29/06/2025 16:00 | הושלם | סקירת ספר ההפעלה SoraFS בוצעה; יציאה ack 2025-06-29. |
+| comm-vol-05 | מבקר קהילה (נגישות) | `REQ-C05` | 15/06/2025 16:12 | 29/06/2025 16:00 | הושלם | הערות נגישות/UX משותפות; יציאה ack 2025-06-29. |
+| comm-vol-06 | מבקר קהילה (לוקליזציה) | `REQ-C06` | 15/06/2025 16:15 | 29/06/2025 16:00 | הושלם | משוב לוקליזציה נרשם; יציאה ack 2025-06-29. |
+| comm-vol-07 | מבקר קהילה (נייד) | `REQ-C07` | 15/06/2025 16:18 | 29/06/2025 16:00 | הושלם | נמסרו בדיקות מסמך SDK לנייד; יציאה ack 2025-06-29. |
+| comm-vol-08 | מבקר קהילה (צפיות) | `REQ-C08` | 15/06/2025 16:21 | 29/06/2025 16:00 | הושלם | סקירת נספח נצפיות נעשתה; יציאה ack 2025-06-29. |
 
-## Checkpoint log - W2
+## יומן מחסום - W2
 
-| Date (UTC) | Activity | Notes |
+| תאריך (UTC) | פעילות | הערות |
 | --- | --- | --- |
-| 2025-06-15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive shared with 8 community reviewers; acknowledgements stored in tracker. |
-| 2025-06-16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards green; Try it proxy logs show community tokens active. |
-| 2025-06-18 | Office hours & issue triage | Collected two suggestions (`docs-preview/w2 #1` tooltip wording, `#2` localization sidebar) - both routed to Docs. |
-| 2025-06-21 | Telemetry check + doc fixes | Docs addressed `docs-preview/w2 #1/#2`; dashboards still green, no incidents. |
-| 2025-06-24 | Final week office hours | Reviewers confirmed remaining feedback submissions; no alert fire. |
-| 2025-06-29 | Exit summary + invite closures | Acks recorded, preview access revoked, telemetry snapshots + artefacts archived (see [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025-04-15 | Office hours & issue triage | Two documentation suggestions logged under `docs-preview/w1`; no incidents or alerts triggered. |
+| 2025-06-15 | שליחת הזמנה + אימות חפץ | `preview-2025-06-15` מתאר/ארכיון משותף עם 8 סוקרי קהילה; אישורים המאוחסנים ב-tracker. |
+| 2025-06-16 | סקירת בסיס טלמטריה | לוחות מחוונים `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` ירוקים; נסה זאת יומני proxy מציגים אסימוני קהילה פעילים. |
+| 2025-06-18 | שעות משרד ובחינת גיליון | נאספו שתי הצעות (ניסוח תיאור כלי `docs-preview/w2 #1`, סרגל הצד של לוקליזציה `#2`) - שתיהן נותבו ל-Docs. |
+| 21-06-2025 | בדיקת טלמטריה + תיקוני מסמכים | מסמכים פנו ל-`docs-preview/w2 #1/#2`; לוחות המחוונים עדיין ירוקים, ללא תקלות. |
+| 24-06-2025 | שעות עבודה בשבוע האחרון | הסוקרים אישרו את שאר הגשות המשוב; אין אש כוננית. |
+| 29-06-2025 | סיכום יציאה + סגירות הזמנות | אקסים הוקלטו, בוטלה הגישה לתצוגה מקדימה, צילומי מצב של טלמטריה + חפצי אמנות הועברו לארכיון (ראה [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
+| 2025-04-15 | שעות משרד ובחינת גיליון | שתי הצעות תיעוד שנרשמו תחת `docs-preview/w1`; לא הופעלו תקריות או התראות. |
 
-## Reporting hooks
-
-- Each Wednesday, update the tracker table above plus the active invite issue with a short status note (invites sent, active reviewers, incidents).
-- When a wave closes, append the feedback summary path (for example, `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) and link it from `status.md`.
-- If any pause criteria from the [preview invite flow](./preview-invite-flow.md) trigger, add the remediation steps here before resuming invites.
+## ווי דיווח- בכל יום רביעי, עדכן את טבלת המעקב שלמעלה בתוספת נושא ההזמנה הפעילה עם הערת סטטוס קצרה (הזמנות שנשלחו, סוקרים פעילים, תקריות).
+- כאשר גל נסגר, הוסף את נתיב סיכום המשוב (לדוגמה, `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) וקשר אותו מ-`status.md`.
+- אם קריטריונים להשהיה כלשהם מהטריגר [זרימת הזמנה מקדימה](./preview-invite-flow.md), הוסף כאן את שלבי התיקון לפני חידוש ההזמנות.

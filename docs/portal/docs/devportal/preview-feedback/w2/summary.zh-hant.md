@@ -11,34 +11,35 @@ id: preview-feedback-w2-summary
 title: W2 community feedback & status
 sidebar_label: W2 summary
 description: Live digest for the community preview wave (W2).
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
-| --- | --- |
-| Wave | W2 — Community reviewers |
-| Invite window | 2025‑06‑15 → 2025‑06‑29 |
-| Artefact tag | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
-| Participants | comm-vol-01 … comm-vol-08 |
+|項目 |詳情 |
+| ---| ---|
+|波| W2 — 社區審閱者 |
+|邀請窗口 | 2025-06-15 → 2025-06-29 |
+|文物標籤| `preview-2025-06-15` |
+|追踪器問題 | `DOCS-SORA-Preview-W2` |
+|參與者 |通訊卷 01 … 通訊卷 08 |
 
-## Highlights
+## 亮點
 
-1. **Governance & tooling** — Community intake policy unanimously approved on 2025‑05‑20; updated request template with motivation/timezone fields lives under `docs/examples/docs_preview_request_template.md`.
-2. **Preflight evidence** — Try it proxy change `OPS-TRYIT-188` ran 2025‑06‑09, Grafana dashboards captured, and `preview-2025-06-15` descriptor/checksum/probe outputs archived under `artifacts/docs_preview/W2/`.
-3. **Invite wave** — Eight community reviewers invited 2025‑06‑15, with acknowledgements logged in the tracker invite table; all completed checksum verification before browsing.
-4. **Feedback** — `docs-preview/w2 #1` (tooltip wording) and `#2` (localization sidebar order) were filed on 2025‑06‑18 and resolved by 2025‑06‑21 (Docs-core-04/05); no incidents occurred during the wave.
+1. **治理和工具** — 社區接納政策於 2025 年 5 月 20 日一致批准；帶有動機/時區字段的更新請求模板位於 `docs/examples/docs_preview_request_template.md` 下。
+2. **預檢證據** — 嘗試代理更改 `OPS-TRYIT-188` 在 2025-06-09 運行，捕獲 Grafana 儀表板，並在 `artifacts/docs_preview/W2/` 下存檔 `preview-2025-06-15` 描述符/校驗和/探針輸出。
+3. **邀請波** — 2025 年 6 月 15 日邀請了八位社區審閱者，並在跟踪者邀請表中記錄了致謝信息；瀏覽前全部完成校驗和驗證。
+4. **反饋** — `docs-preview/w2 #1`（工具提示措辭）和 `#2`（本地化側邊欄順序）於 2025-06-18 提交，並於 2025-06-21 解決（Docs-core-04/05）；浪潮期間沒有發生任何事件。
 
-## Action items
+## 行動項目
 
-| ID | Description | Owner | Status |
-| --- | --- | --- | --- |
-| W2-A1 | Address `docs-preview/w2 #1` (tooltip wording). | Docs-core-04 | ✅ Completed 2025‑06‑21 |
-| W2-A2 | Address `docs-preview/w2 #2` (localization sidebar). | Docs-core-05 | ✅ Completed 2025‑06‑21 |
-| W2-A3 | Archive exit evidence + update roadmap/status. | Docs/DevRel lead | ✅ Completed 2025‑06‑29 |
+|身份證 |描述 |業主|狀態 |
+| ---| ---| ---| ---|
+| W2-A1 |地址 `docs-preview/w2 #1`（工具提示措辭）。 |文檔核心-04 | ✅ 2025-06-21 完成 |
+| W2-A2 |地址 `docs-preview/w2 #2`（本地化側邊欄）。 |文檔核心-05 | ✅ 2025-06-21 完成 |
+| W2-A3 |存檔退出證據+更新路線圖/狀態。 |文檔/DevRel 領導 | ✅ 2025-06-29 完成 |
 
-## Exit summary (2025-06-29)
+## 退出總結 (2025-06-29)
 
-- All eight community reviewers confirmed completion and had preview access revoked; acknowledgements recorded in the tracker invite log.
-- Final telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) remained green; logs plus Try it proxy transcripts attached to `DOCS-SORA-Preview-W2`.
-- Evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) archived under `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- Tracker W2 checkpoint log updated through exit, ensuring the roadmap keeps an auditable record before W3 planning begins.
+- 所有八位社區審閱者均確認完成並取消了預覽訪問權限；跟踪器邀請日誌中記錄的確認。
+- 最終遙測快照（`docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals`）保持綠色；日誌以及附加到 `DOCS-SORA-Preview-W2` 的 Try it 代理記錄。
+- 證據包（描述符、校驗和日誌、探測輸出、鏈接報告、Grafana 屏幕截圖、邀請確認）存檔在 `artifacts/docs_preview/W2/preview-2025-06-15/` 下。
+- 跟踪器 W2 檢查點日誌通過退出進行更新，確保路線圖在 W3 規劃開始之前保留可審核的記錄。

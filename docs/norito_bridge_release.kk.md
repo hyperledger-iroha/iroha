@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b9dc9862d4806d355fd83c885de92775712a7b32c68c010d29f4fc74229d054b
 source_last_modified: "2026-01-06T05:24:53.995808+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# NoritoBridge Release Packaging
+# NoritoBridge шығарылатын қаптама
 
-This guide outlines the steps required to publish the `NoritoBridge` Swift bindings as
-an XCFramework that can be consumed from Swift Package Manager and CocoaPods. The
-workflow keeps the Swift artifacts in lock-step with the Rust crate releases that ship
-Iroha's Norito codec. For end-to-end instructions on consuming the published
-artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
+Бұл нұсқаулық `NoritoBridge` Swift байланыстарын жариялау үшін қажетті қадамдарды сипаттайды.
+Swift Package Manager және CocoaPods жүйесінен тұтынуға болатын XCFramework. The
+жұмыс процесі Swift артефактілерін жіберілетін Rust жәшігі шығарылымдарымен құлыптаулы қадамда ұстайды.
+Iroha Norito кодегі. Жарияланғандарды тұтыну бойынша түпкілікті нұсқаулар үшін
+қолданба ішіндегі артефактілер (Xcode жобасының сымдары, ChaChaPoly пайдалануы және т.б.), қараңыз
 `docs/connect_swift_integration.md`.
 
-> **Note:** CI automation for this flow will land once macOS builders with the required
-> Apple tooling come online (tracked in the Release Engineering macOS builder backlog).
-> Until then the steps below must be executed manually on a development Mac.
+> **Ескертпе:** Осы ағынға арналған CI автоматтандыруы macOS құрастырушылары қажет болған кезде жерге түседі
+> Apple құралдары желіге қосылады (Release Engineering macOS құрастырушысының артта қалу тізімінде қадағаланады).
+> Осы уақытқа дейін төмендегі қадамдар әзірлеуші ​​Mac жүйесінде қолмен орындалуы керек.
 
-## Prerequisites
+## Алғышарттар
 
-- A macOS host with the latest stable Xcode command line tools installed.
-- Rust toolchain that matches the workspace `rust-toolchain.toml`.
-- Swift toolchain 5.7 or newer.
-- CocoaPods (via Ruby gems) if publishing to the central specs repository.
-- Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
+- Соңғы тұрақты Xcode пәрмен жолы құралдары орнатылған macOS хосты.
+- `rust-toolchain.toml` жұмыс кеңістігіне сәйкес келетін Rust құралдар тізбегі.
+- Swift құралдар тізбегі 5.7 немесе одан жаңа.
+- CocoaPods (Ruby асыл тастары арқылы), егер орталық сипаттамалар репозиторийінде жарияланса.
+- Swift артефактілерін тегтеу үшін Hyperledger Iroha шығарылымға қол қою кілттеріне қатынасу.
 
-## Versioning model
+## Нұсқалау үлгісі
 
-1. Determine the Rust crate version for the Norito codec (`crates/norito/Cargo.toml`).
-2. Tag the workspace with the release identifier (e.g. `v2.1.0`).
-3. Use the same semantic version for the Swift package and the CocoaPods podspec.
-4. When the Rust crate increments its version, repeat the process and publish a matching
-   Swift artifact. Versions may include metadata suffixes (e.g. `-alpha.1`) while testing.
+1. Norito кодек (`crates/norito/Cargo.toml`) үшін Rust жәшігі нұсқасын анықтаңыз.
+2. Жұмыс кеңістігін шығарылым идентификаторымен белгілеңіз (мысалы, `v2.1.0`).
+3. Swift бумасы мен CocoaPods подспекциясы үшін бірдей семантикалық нұсқаны пайдаланыңыз.
+4. Rust жәшігі өз нұсқасын ұлғайтқанда, процесті қайталаңыз және сәйкестікті жариялаңыз
+   Жылдам артефакт. Тестілеу кезінде нұсқалар метадеректер жұрнақтарын (мысалы, `-alpha.1`) қамтуы мүмкін.
 
-## Build steps
+## Қадамдарды құрастыру
 
-1. From the repository root, invoke the helper script to assemble the XCFramework:
+1. Репозиторий түбірінен XCFramework құрастыру үшін көмекші сценарийді шақырыңыз:
 
    ```bash
    ./scripts/build_norito_xcframework.sh --workspace-root "$(pwd)" \
@@ -48,13 +49,13 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
        --profile release
    ```
 
-   The script compiles the Rust bridge library for iOS and macOS targets and bundles the
-   resulting static libraries under a single XCFramework directory.
-   It also emits `dist/NoritoBridge.artifacts.json`, capturing the bridge version and
-   per-platform SHA-256 hashes (override the version with `NORITO_BRIDGE_VERSION` if
-   needed).
+   Сценарий iOS және macOS мақсаттары үшін Rust көпір кітапханасын құрастырады және жинақтайды
+   нәтижесінде бір XCFramework каталогы астындағы статикалық кітапханалар.
+   Ол сондай-ақ көпір нұсқасын басып `dist/NoritoBridge.artifacts.json` шығарады және
+   әр платформаға арналған SHA-256 хэштері (егер `NORITO_BRIDGE_VERSION` нұсқасын ауыстырыңыз
+   қажет).
 
-2. Zip the XCFramework for distribution:
+2. Тарату үшін XCFramework файлын Zip жасаңыз:
 
    ```bash
    ditto -c -k --sequesterRsrc --keepParent \
@@ -62,71 +63,71 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
      artifacts/NoritoBridge.xcframework.zip
    ```
 
-3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
-   version and checksum:
+3. Жаңа нұсқаны көрсету үшін Swift бума манифестін (`IrohaSwift/Package.swift`) жаңартыңыз.
+   нұсқасы және бақылау сомасы:
 
    ```bash
    swift package compute-checksum artifacts/NoritoBridge.xcframework.zip
    ```
 
-   Record the checksum in `Package.swift` when defining the binary target.
+   Екілік мақсатты анықтау кезінде `Package.swift` ішіндегі бақылау сомасын жазыңыз.
 
-4. Update `IrohaSwift/IrohaSwift.podspec` with the new version, checksum, and archive
+4. `IrohaSwift/IrohaSwift.podspec` жаңа нұсқасымен, бақылау сомасымен және мұрағатпен жаңартыңыз
    URL.
 
-5. **Regenerate headers if the bridge gained new exports.** The Swift bridge now exposes
-   `connect_norito_set_acceleration_config` so `AccelerationSettings` can toggle Metal /
-   GPU backends. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
-   matches `crates/connect_norito_bridge/include/connect_norito_bridge.h` before zipping.
+5. **Көпір жаңа экспортқа ие болса, тақырыптарды қалпына келтіріңіз.** Swift көпірі енді ашады.
+   `connect_norito_set_acceleration_config` сондықтан `AccelerationSettings` металды ауыстыра алады /
+   GPU серверлері. `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h` екеніне көз жеткізіңіз
+   сығымдау алдында `crates/connect_norito_bridge/include/connect_norito_bridge.h` сәйкес келеді.
 
-6. Run the Swift validation suite before tagging:
+6. Белгілеу алдында Swift тексеру жинағын іске қосыңыз:
 
    ```bash
    swift test --package-path IrohaSwift
    make swift-ci
    ```
 
-   The first command ensures the Swift package (including `AccelerationSettings`) stays
-   green; the second validates fixture parity, renders the parity/CI dashboards, and
-   exercises the same telemetry checks enforced in Buildkite (including the
-   `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
+   Бірінші пәрмен Swift бумасының (соның ішінде `AccelerationSettings`) сақталуын қамтамасыз етеді
+   жасыл; екіншісі арматура тепе-теңдігін тексереді, паритет/CI бақылау тақталарын көрсетеді және
+   Buildkite бағдарламасында орындалған бірдей телеметриялық тексерулерді орындайды (соның ішінде
+   `ci/xcframework-smoke:<lane>:device_tag` метадеректер талабы).
 
-7. Commit the generated artifacts in a release branch and tag the commit.
+7. Жасалған артефактілерді шығарылым тармағында орындаңыз және тапсырманы белгілеңіз.
 
-## Publishing
+## Баспа
 
-### Swift Package Manager
+### Swift пакет менеджері
 
-- Push the tag to the public Git repository.
-- Ensure the tag is reachable by the package index (Apple or the community mirror).
-- Consumers can now depend on `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")`.
+- Тегті жалпы Git репозиторийіне итеріңіз.
+- Тегке бума индексі (Apple немесе қауымдастық айнасы) арқылы қол жеткізуге болатынын тексеріңіз.
+- Тұтынушылар енді `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")` тәуелді болады.
 
 ### CocoaPods
 
-1. Validate the pod locally:
+1. Постты жергілікті түрде растаңыз:
 
    ```bash
    pod lib lint IrohaSwift.podspec --allow-warnings
    ```
 
-2. Push the updated podspec:
+2. Жаңартылған подспекцияны басыңыз:
 
    ```bash
    pod trunk push IrohaSwift.podspec
    ```
 
-3. Confirm the new version appears in the CocoaPods index.
+3. Жаңа нұсқаның CocoaPods индексінде пайда болуын растаңыз.
 
-## CI considerations
+## CI ойлары
 
-- Create a macOS job that runs the packaging script, archives artifacts, and uploads the
-  generated checksum as a workflow output.
-- Gate releases on the Swift demo app building against the freshly produced framework.
-- Store build logs to assist in diagnosing failures.
+- Бума сценарийін іске қосатын, артефактілерді мұрағаттайтын және жүктеп салатын macOS тапсырмасын жасаңыз.
+  жұмыс процесінің шығысы ретінде жасалған бақылау сомасы.
+- Gate жаңадан шығарылған фреймворкке қарсы Swift демо қолданбасының ғимаратында шығарылады.
+- Ақауларды диагностикалауға көмектесу үшін құрастыру журналдарын сақтаңыз.
 
-## Additional automation ideas
+## Қосымша автоматтандыру идеялары
 
-- Use `xcodebuild -create-xcframework` directly once all required targets are exposed.
-- Integrate signing/notarisation for distribution outside developer machines.
-- Keep integration tests in lock-step with the packaged version by pinning the SPM
-  dependency to the release tag.
+- Барлық қажетті нысандар ашылғаннан кейін `xcodebuild -create-xcframework` құралын тікелей пайдаланыңыз.
+- Әзірлеуші ​​машиналарынан тыс тарату үшін қол қоюды/нотариалды растауды біріктіру.
+- SPM бекіту арқылы пакеттік нұсқамен біріктіру сынақтарын құлыптау қадамында сақтаңыз
+  шығару тегіне тәуелділік.

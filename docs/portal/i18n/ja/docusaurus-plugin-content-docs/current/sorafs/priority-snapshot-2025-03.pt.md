@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Snapshot de prioridades - marco de 2025 (Beta)
-description: Espelho do snapshot de steering Nexus 2025-03; pendente de ACKs antes do rollout publico.
+id: 優先度-スナップショット-2025-03
+タイトル: 優先スナップショット - 2025 年のマルコ (ベータ版)
+説明: Espelho はステアリング Nexus 2025-03 のスナップショットを行います。公開公開を行う前に ACK を保留します。
 ---
 
-> Fonte canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> フォンテ カノニカ: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / aguardando ACKs de steering** (Networking, Storage, Docs leads).
+> ステータス: **ベータ版 / ステアリングのアガード ACK** (ネットワーキング、ストレージ、ドキュメント リード)。
 
-## Visao geral
+## ヴィサオ・ゲラル
 
-O snapshot de marco mantem as iniciativas de docs/content-network alinhadas aos
-tracks de entrega de SoraFS (SF-3, SF-6b, SF-9). Quando todos os leads fizerem
-acknowledge no canal steering do Nexus, remova a nota "Beta" acima.
+ドキュメント/コンテンツ ネットワーク アリンハダ AOS の開始者としてのマルコマンテムのスナップショット
+SoraFS のトラック (SF-3、SF-6b、SF-9)。 Quando todos os がフィゼレムをリード
+カナルステアリングが Nexus を実行していないことを確認し、nota "Beta" acima を削除します。
 
-### Threads de foco
+### スレッド デ フォコ
 
-1. **Circular snapshot de prioridades** - coletar acknowledgements e registra-los
-   nas atas do council de 2025-03-05.
-2. **Fechamento do kickoff Gateway/DNS** - ensaiar o novo facilitation kit (Secao 6
-   no runbook) antes do workshop 2025-03-03.
-3. **Migracao de runbooks de operador** - o portal `Runbook Index` esta live; exponha
-   a URL de beta preview apos o sign-off do onboarding de reviewers.
-4. **Threads de entrega SoraFS** - alinhar o trabalho restante de SF-3/6b/9 com o
-   plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - Polimento de bindings CLI/SDK nas integracoes orchestrator Rust/JS/Swift.
-   - PoR coordinator runtime wiring e eventos GovernanceLog.
+1. **事前の循環スナップショット** - レジストラとの共同承認
+   2025 年 3 月 5 日の議会。
+2. **ゲートウェイ/DNS キックオフのフェチャメント** - 新たな促進キット (Secao 6)
+   ランブックなし) アンテはワークショップ 2025-03-03 を実施します。
+3. **オペレータの Runbook の移行** - ポータル `Runbook Index` ライブ。エクスポンハ
+   レビュー担当者のオンボーディングを承認するためのベータ プレビューの URL。
+4. **スレッド SoraFS** - SF-3/6b/9 com のアリンハール トラバルホ レストスタンテ
+   計画/ロードマップ:
+   - `sorafs-node` PoR インジェスト ワーカー + ステータス エンドポイント。
+   - CLI/SDK と統合オーケストレーター Rust/JS/Swift のバインディングのポリメント。
+   - PoR コーディネーター ランタイム配線、イベント ガバナンス ログ。
 
-Veja o arquivo fonte para a tabela completa, o distribution checklist e log entries.
+完全なテーブルの情報、配布チェックリスト、ログ エントリを確認できます。

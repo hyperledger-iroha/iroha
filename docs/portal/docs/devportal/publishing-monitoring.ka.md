@@ -11,33 +11,34 @@ id: publishing-monitoring
 title: SoraFS Publishing & Monitoring
 sidebar_label: Publishing & Monitoring
 description: Capture the end-to-end monitoring flow for SoraFS portal releases so DOCS-3c has deterministic probes, telemetry, and evidence bundles.
+translator: machine-google-reviewed
 ---
 
-Roadmap item **DOCS-3c** requires more than a packaging checklist: after every
-SoraFS publish we must continuously prove that the developer portal, Try it
-proxy, and gateway bindings remain healthy. This page documents the monitoring
-surface that accompanies the [deployment guide](./deploy-guide.md) so CI and on
-call engineers can exercise the same checks that Ops uses to enforce the SLO.
+საგზაო რუკის პუნქტი **DOCS-3c** მოითხოვს უფრო მეტს, ვიდრე შეფუთვის საკონტროლო სია: ყოველი
+SoraFS გამოვაქვეყნოთ ჩვენ მუდმივად უნდა დავამტკიცოთ, რომ დეველოპერის პორტალი, სცადეთ
+პროქსი, და კარიბჭის საკინძები ჯანმრთელი რჩება. ეს გვერდი ადასტურებს მონიტორინგს
+ზედაპირი, რომელიც ახლავს [განლაგების სახელმძღვანელოს] (./deploy-guide.md) ისე CI და შემდეგ
+ზარის ინჟინრებს შეუძლიათ განახორციელონ იგივე შემოწმებები, რომლებსაც Ops იყენებს SLO-ს აღსასრულებლად.
 
-## Pipeline recap
+## მილსადენის მიმოხილვა
 
-1. **Build and sign** – follow the [deployment guide](./deploy-guide.md) to run
-   `npm run build`, `scripts/preview_wave_preflight.sh`, and the Sigstore +
-   manifest submission steps. The preflight script emits `preflight-summary.json`
-   so every preview carries build/link/probe metadata.
-2. **Pin and verify** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
-   and the DNS cutover plan provide deterministic artefacts for governance.
-3. **Archive evidence** – store the CAR summary, Sigstore bundle, alias proof,
-   probe output, and `docs_portal.json` dashboard snapshots under
+1. **აშენეთ და მოაწერეთ ხელი** – მიჰყევით [განლაგების სახელმძღვანელოს] (./deploy-guide.md) გასაშვებად
+   `npm run build`, `scripts/preview_wave_preflight.sh` და Sigstore +
+   მანიფესტი წარდგენის ნაბიჯები. წინასწარი ფრენის სკრიპტი ასხივებს `preflight-summary.json`
+   ასე რომ, ყოველი გადახედვა შეიცავს build/link/probe მეტამონაცემებს.
+2. **დაამაგრეთ და დაადასტურეთ** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
+   და DNS cutover გეგმა უზრუნველყოფს დეტერმინისტულ არტეფაქტებს მმართველობისთვის.
+3. **არქივის მტკიცებულება** – შეინახეთ CAR რეზიუმე, Sigstore პაკეტი, მეტსახელის მტკიცებულება,
+   ზონდის გამომავალი და `docs_portal.json` დაფის სნეპშოტები ქვეშ
    `artifacts/sorafs/<tag>/`.
 
-## Monitoring channels
+## არხების მონიტორინგი
 
-### 1. Publishing monitors (`scripts/monitor-publishing.mjs`)
+### 1. გამომცემელი მონიტორები (`scripts/monitor-publishing.mjs`)
 
-The new `npm run monitor:publishing` command wraps the portal probe, Try it
-proxy probe, and binding verifier into a single CI-friendly check. Provide a
-JSON config (checked into CI secrets or `configs/docs_monitor.json`) and run:
+ახალი `npm run monitor:publishing` ბრძანება ახვევს პორტალის ზონდს, სცადეთ
+proxy probe და სავალდებულო ვერიფიკატორი ერთ CI მეგობრულ შემოწმებაში. მიაწოდეთ ა
+JSON კონფიგურაცია (შემოწმდა CI საიდუმლოებში ან `configs/docs_monitor.json`) და გაუშვით:
 
 ```bash
 cd docs/portal
@@ -47,13 +48,13 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
 ```
 
-Add `--prom-out ../../artifacts/docs_monitor/monitor.prom` (and optionally
-`--prom-job docs-preview`) to emit Prometheus text-format metrics suitable for
-Pushgateway uploads or direct Prometheus scrapes in staging/production. The
-metrics mirror the JSON summary so SLO dashboards and alert rules can track
-portal, Try it, binding, and DNS health without parsing the evidence bundle.
+დაამატეთ `--prom-out ../../artifacts/docs_monitor/monitor.prom` (და სურვილისამებრ
+`--prom-job docs-preview`) გამოსცეს Prometheus ტექსტური ფორმატის მეტრიკა, რომელიც შესაფერისია
+Pushgateway-ის ატვირთვები ან პირდაპირი Prometheus სკრეპები დადგმაში/წარმოებაში. The
+მეტრიკა ასახავს JSON-ის შეჯამებას, რათა SLO-ის საინფორმაციო დაფებმა და გაფრთხილების წესებმა თვალი ადევნოს
+პორტალი, სცადეთ, სავალდებულო და DNS ჯანმრთელობა მტკიცებულების ნაკრების გაანალიზების გარეშე.
 
-Example config with required knobs and multiple bindings:
+კონფიგურაციის მაგალითი საჭირო ღილაკებით და მრავალჯერადი შეკვრით:
 
 ```json
 {
@@ -120,101 +121,101 @@ Example config with required knobs and multiple bindings:
 }
 ```
 
-The monitor writes a JSON summary (S3/SoraFS friendly) and exits non‑zero when
-any probe fails, making it suitable for Cron jobs, Buildkite steps, or
-Alertmanager webhooks. Passing `--evidence-dir` persists `summary.json`,
-`portal.json`, `tryit.json`, and `binding.json` alongside a `checksums.sha256`
-manifest so governance reviewers can diff the monitor results without having to
-re-run the probes.
+მონიტორი წერს JSON-ის შეჯამებას (S3/SoraFS მეგობრული) და გამოდის ნულის გარეშე, როდესაც
+ნებისმიერი ზონდი ვერ ხერხდება, რაც მას შესაფერისს ხდის Cron სამუშაოებისთვის, Buildkite ნაბიჯებისთვის ან
+Alertmanager webhooks. `--evidence-dir` გავლა გრძელდება `summary.json`,
+`portal.json`, `tryit.json` და `binding.json` `checksums.sha256`-თან ერთად
+მანიფესტი ისე, რომ მმართველობის მიმომხილველებს შეუძლიათ განასხვავონ მონიტორის შედეგები ამის გარეშე
+ხელახლა გაუშვით ზონდები.
 
-> **TLS guardrail:** `monitorPortal` rejects `http://` base URLs unless you set
-> `allowInsecureHttp: true` in the config. Keep production/staging probes on
-> HTTPS; the opt-in exists solely for local previews.
+> **TLS დამცავი მოაჯირი:** `monitorPortal` უარყოფს `http://` საბაზისო URL-ებს, თუ არ დააყენეთ
+> `allowInsecureHttp: true` კონფიგურაციაში. განაგრძეთ წარმოების/დადგმის ზონდები
+> HTTPS; არჩევა არსებობს მხოლოდ ადგილობრივი გადახედვისთვის.
 
-Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
-`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
-proof status, and content CID stay aligned with the published evidence. The
-optional `hostname` guard confirms the alias-derived canonical host matches the
-gateway host you intend to promote, preventing DNS cutovers that drift from the
-recorded binding.
+თითოეული სავალდებულო ჩანაწერი გადის `cargo xtask soradns-verify-binding` დაჭერილის წინააღმდეგ
+`portal.gateway.binding.json` პაკეტი (და სურვილისამებრ `manifestJson`) ასე რომ, მეტსახელი,
+მტკიცებულების სტატუსი და შინაარსი CID შეესაბამება გამოქვეყნებულ მტკიცებულებებს. The
+არასავალდებულო `hostname` მცველი ადასტურებს, რომ მეტსახელიდან მიღებული კანონიკური მასპინძელი ემთხვევა
+კარიბჭის მასპინძელი, რომლის პოპულარიზაციასაც აპირებთ, თავიდან აიცილებთ DNS-ის ამოკვეთებს, რომლებიც გადაადგილდებიან
+ჩაწერილი სავალდებულო.
 
-The optional `dns` block wires DOCS-7’s SoraDNS rollout into the same monitor.
-Each entry resolves a hostname/record-type pair (for example the
-`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) and
-confirms the answers match `expectedRecords` or `expectedIncludes`. The second
-entry in the snippet above hard-codes the canonical hashed hostname produced by
-`cargo xtask soradns-hosts --name docs-preview.sora.link`; the monitor now proves
-both the human-friendly alias and the canonical hash (`igjssx53…gw.sora.id`)
-resolve to the pinned pretty host. This makes DNS promotion evidence automatic:
-the monitor will fail if either host drifts, even when the HTTP bindings still
-staple the right manifest.
+არჩევითი `dns` ბლოკის მავთულები DOCS-7-ის SoraDNS ავრცელებს იმავე მონიტორს.
+თითოეული ჩანაწერი წყვეტს ჰოსტის სახელს/ჩანაწერის ტიპის წყვილს (მაგალითად
+`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) და
+ადასტურებს პასუხების შესაბამისობას `expectedRecords` ან `expectedIncludes`. მეორე
+ჩანაწერი სნიპეტში ზემოთ მყარ კოდებს აწარმოებს კანონიკური ჰეშირებული ჰოსტის სახელს
+`cargo xtask soradns-hosts --name docs-preview.sora.link`; მონიტორი ახლა ამტკიცებს
+როგორც ადამიანისთვის შესაფერისი მეტსახელი, ასევე კანონიკური ჰეში (`igjssx53…gw.sora.id`)
+გადაწყვეტს მიმაგრებულ ლამაზ მასპინძელს. ეს ხდის DNS-ის ხელშეწყობის მტკიცებულებებს ავტომატურს:
+მონიტორი მარცხდება, თუ რომელიმე ჰოსტი გადაინაცვლებს, მაშინაც კი, როცა HTTP აკავშირებს
+დაამაგრეთ სწორი მანიფესტი.
 
-### 2. OpenAPI version manifest guard
+### 2. OpenAPI ვერსიის მანიფესტი მცველი
 
-DOCS-2b’s “signed OpenAPI manifest” requirement now ships an automated guard:
-`ci/check_openapi_spec.sh` calls `npm run check:openapi-versions`, which invokes
-`scripts/verify-openapi-versions.mjs` to cross-check
-`docs/portal/static/openapi/versions.json` with the actual Torii specs and
-manifests. The guard verifies that:
+DOCS-2b-ის „ხელმოწერილი OpenAPI მანიფესტის“ მოთხოვნა ახლა აგზავნის ავტომატურ მცველს:
+`ci/check_openapi_spec.sh` ურეკავს `npm run check:openapi-versions`-ს, რომელიც იწვევს
+`scripts/verify-openapi-versions.mjs` გადასამოწმებლად
+`docs/portal/static/openapi/versions.json` რეალური Torii სპეციფიკაციებით და
+ვლინდება. მცველი ამოწმებს, რომ:
 
-- Every version listed in `versions.json` has a matching directory under
+- `versions.json`-ში ჩამოთვლილ ყველა ვერსიას აქვს შესაბამისი დირექტორია ქვემოთ
   `static/openapi/versions/`.
-- Each entry’s `bytes` and `sha256` fields match the on-disk spec file.
-- The `latest` alias mirrors the `current` entry (digest/size/signature metadata)
-  so the default download cannot drift.
-- Signed entries reference a manifest whose `artifact.path` points back to the
-  same spec and whose signature/public key hex values match the manifest.
+- თითოეული ჩანაწერის `bytes` და `sha256` ველები ემთხვევა დისკის სპეციფიკურ ფაილს.
+- `latest` მეტსახელი ასახავს `current` ჩანაწერს (დაჯესტი/ზომა/ხელმოწერის მეტამონაცემები)
+  ასე რომ, ნაგულისხმევი ჩამოტვირთვა შეუძლებელია.
+- ხელმოწერილი ჩანაწერები მიუთითებს მანიფესტზე, რომლის `artifact.path` მიუთითებს უკან
+  იგივე სპეციფიკაცია და რომლის ხელმოწერის/საჯარო გასაღების თექვსმეტობითი მნიშვნელობები ემთხვევა მანიფესტს.
 
-Run the guard locally whenever you mirror a new spec:
+გაუშვით მცველი ადგილობრივად, როდესაც ასახავთ ახალ სპეციფიკას:
 
 ```bash
 cd docs/portal
 npm run check:openapi-versions
 ```
 
-Failure messages include the stale-file hint (`npm run sync-openapi -- --latest`)
-so portal contributors know how to refresh the snapshots. Keeping the guard in
-CI prevents portal releases where the signed manifest and the published digest
-fall out of sync.
+წარუმატებლობის შეტყობინებები შეიცავს მინიშნებას ძველი ფაილის შესახებ (`npm run sync-openapi -- --latest`)
+ასე რომ, პორტალის ავტორებმა იციან როგორ განაახლონ სნეპშოტები. მცველის შენახვა
+CI ხელს უშლის პორტალის გამოშვებას, სადაც ხელმოწერილი მანიფესტი და გამოქვეყნებული დაიჯესტი
+სინქრონიდან ამოვარდნა.
 
-### 2. Dashboards & alerts
+### 2. დაფები და გაფრთხილებები
 
-- **`dashboards/grafana/docs_portal.json`** – primary board for DOCS-3c. Panels
-  track `torii_sorafs_gateway_refusals_total`, replication SLA misses, Try it
-  proxy errors, and probe latency (`docs.preview.integrity` overlay). Export the
-  board after every release and attach it to the operations ticket.
-- **Try it proxy alerts** – Alertmanager rule `TryItProxyErrors` fires on
-  sustained `probe_success{job="tryit-proxy"}` drops or
-  `tryit_proxy_requests_total{status="error"}` spikes.
-- **Gateway SLO** – `DocsPortal/GatewayRefusals` ensures alias bindings continue
-  to advertise the pinned manifest digest; escalations link to the
-  `cargo xtask soradns-verify-binding` CLI transcript captured during publish.
+- **`dashboards/grafana/docs_portal.json`** – ძირითადი დაფა DOCS-3c-სთვის. პანელები
+  სიმღერა `torii_sorafs_gateway_refusals_total`, რეპლიკაცია SLA გამოტოვებს, სცადეთ
+  პროქსის შეცდომები და გამოძიების შეყოვნება (`docs.preview.integrity` გადაფარვა). ექსპორტი
+  ბორტზე ყოველი გამოშვების შემდეგ და მიამაგრეთ იგი საოპერაციო ბილეთზე.
+- **სცადეთ პროქსის გაფრთხილებები** – Alertmanager წესი `TryItProxyErrors` ჩართულია
+  მდგრადი `probe_success{job="tryit-proxy"}` წვეთები ან
+  `tryit_proxy_requests_total{status="error"}` მწვერვალები.
+- **Gateway SLO** – `DocsPortal/GatewayRefusals` უზრუნველყოფს ალიასის დაკავშირების გაგრძელებას
+  დამაგრებული მანიფესტს დაიჯესტის რეკლამირება; ესკალაციები ბმული
+  `cargo xtask soradns-verify-binding` CLI ტრანსკრიპტი გადაღებული გამოქვეყნებისას.
 
-### 3. Evidence trail
+### 3. მტკიცებულების ბილიკი
 
-Each monitoring run should append:
+ყოველი მონიტორინგის გაშვება უნდა დაერთოს:
 
-- `monitor-publishing` evidence bundle (`summary.json`, per-section files, and
+- `monitor-publishing` მტკიცებულების ნაკრები (`summary.json`, თითო განყოფილების ფაილები და
   `checksums.sha256`).
-- Grafana screenshots for the `docs_portal` board over the release window.
-- Try it proxy change/rollback transcripts (`npm run manage:tryit-proxy` logs).
-- Alias verification output from `cargo xtask soradns-verify-binding`.
+- Grafana ეკრანის ანაბეჭდები `docs_portal` დაფისთვის გამოშვების ფანჯარაში.
+- სცადეთ პროქსის შეცვლა/დაბრუნების ტრანსკრიპტები (`npm run manage:tryit-proxy` ჟურნალები).
+- მეტსახელის გადამოწმების გამომავალი `cargo xtask soradns-verify-binding`-დან.
 
-Store these under `artifacts/sorafs/<tag>/monitoring/` and link them in the
-release issue so the audit trail survives after CI logs expire.
+შეინახეთ ისინი `artifacts/sorafs/<tag>/monitoring/`-ში და დააკავშირეთ ისინი
+გამოშვების საკითხი, რათა აუდიტის ბილიკი გადარჩეს CI ჟურნალების ვადის გასვლის შემდეგ.
 
-## Operational checklist
+## ოპერატიული ჩამონათვალი
 
-1. Run the deployment guide through Step 7.
-2. Execute `npm run monitor:publishing` with production configuration; archive
-   the JSON output.
-3. Capture Grafana panels (`docs_portal`, `TryItProxyErrors`,
-   `DocsPortal/GatewayRefusals`) and attach them to the release ticket.
-4. Schedule recurring monitors (recommended: every 15 minutes) pointing at the
-   production URLs with the same config to satisfy the DOCS-3c SLO gate.
-5. During incidents, re-run the monitor command with `--json-out` to record
-   before/after evidence and attach it to the postmortem.
+1. გაუშვით განლაგების სახელმძღვანელო ნაბიჯი 7-მდე.
+2. შეასრულეთ `npm run monitor:publishing` საწარმოო კონფიგურაციით; არქივი
+   JSON გამომავალი.
+3. გადაიღეთ Grafana პანელები (`docs_portal`, `TryItProxyErrors`,
+   `DocsPortal/GatewayRefusals`) და მიამაგრეთ გაშვების ბილეთს.
+4. დაგეგმეთ განმეორებადი მონიტორები (რეკომენდირებულია: ყოველ 15 წუთში)
+   წარმოების URL-ები იგივე კონფიგურაციით DOCS-3c SLO კარიბჭის დასაკმაყოფილებლად.
+5. ინციდენტების დროს ხელახლა გაუშვით მონიტორის ბრძანება `--json-out`-ით ჩასაწერად
+   მტკიცებულებამდე/შემდეგ და დაურთოს სიკვდილის შემდგომ.
 
-Following this loop closes DOCS-3c: the portal build flow, publishing pipeline,
-and monitoring stack now live in a single playbook with reproducible commands,
-sample configs, and telemetry hooks.
+ამ მარყუჟის შემდეგ იხურება DOCS-3c: პორტალის აშენების ნაკადი, გამოქვეყნების მილსადენი,
+და მონიტორინგის დასტა ახლა ცხოვრობს ერთ სათამაშო წიგნში რეპროდუცირებადი ბრძანებებით,
+ნიმუშების კონფიგურაციები და ტელემეტრიის კაკვები.

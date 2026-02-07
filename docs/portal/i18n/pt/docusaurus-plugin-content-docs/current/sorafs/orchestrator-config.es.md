@@ -4,42 +4,44 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-config.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-config
-title: Configuracion del orquestador de SoraFS
-sidebar_label: Configuracion del orquestador
-description: Configura el orquestador de fetch multi-origen, interpreta fallos y depura la salida de telemetria.
+id: orquestrador-config
+título: Configuração do orquestrador de SoraFS
+sidebar_label: Configuração do orquestrador
+description: Configura o orquestrador de busca de múltiplas origens, interpreta falhas e depura a saída de telemetria.
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/sorafs/developer/orchestrator.md`. Manten ambas copias sincronizadas hasta que se retiren los docs heredados.
+:::nota Fonte canônica
+Esta página reflete `docs/source/sorafs/developer/orchestrator.md`. Mantenha ambas as cópias sincronizadas até que os documentos herdados sejam retirados.
 :::
 
-# Guia del orquestador de fetch multi-origen
+# Guia do orquestrador de busca de origem múltipla
 
-El orquestador de fetch multi-origen de SoraFS impulsa descargas deterministas y
-paralelas desde el conjunto de proveedores publicado en adverts respaldados por
-la gobernanza. Esta guia explica como configurar el orquestador, que senales de
-fallo esperar durante los rollouts y que flujos de telemetria exponen indicadores
-de salud.
+O orquestrador de busca multi-origem de SoraFS impulsa descargas deterministas e
+paralelamente ao conjunto de provedores publicados em anúncios respaldados por
+a governança. Este guia explica como configurar o orquestrador, que senales de
+falo esperar durante os lançamentos e os fluxos de telemetria expõem indicadores
+de saúde.
 
-## 1. Resumen de configuracion
+## 1. Resumo de configuração
 
-El orquestador combina tres fuentes de configuracion:
+O orquestrador combina três fontes de configuração:
 
-| Fuente | Proposito | Notas |
+| Fonte | Proposta | Notas |
 |--------|-----------|-------|
-| `OrchestratorConfig.scoreboard` | Normaliza los pesos de proveedores, valida la frescura de la telemetria y persiste el scoreboard JSON usado para auditorias. | Respaldado por `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
-| `OrchestratorConfig.fetch` | Aplica limites en tiempo de ejecucion (presupuestos de reintentos, limites de concurrencia, toggles de verificacion). | Se mapea a `FetchOptions` en `crates/sorafs_car::multi_fetch`. |
-| Parametros de CLI / SDK | Limitan el numero de peers, adjuntan regiones de telemetria y exponen politicas de deny/boost. | `sorafs_cli fetch` expone estos flags directamente; los SDK los pasan via `OrchestratorConfig`. |
+| `OrchestratorConfig.scoreboard` | Normaliza os pesos dos provedores, valida o frescor da telemetria e persiste o scoreboard JSON usado para auditórios. | Respaldado por `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
+| `OrchestratorConfig.fetch` | Aplicar limites de tempo de execução (pressupostos de reintenção, limites de concorrência, alternâncias de verificação). | É mapeado para `FetchOptions` e `crates/sorafs_car::multi_fetch`. |
+| Parâmetros de CLI/SDK | Limita o número de pares, ajuda regiões de telemetria e expõe políticas de negação/aumento. | `sorafs_cli fetch` expor esses flags diretamente; o SDK é transferido via `OrchestratorConfig`. |
 
-Los helpers JSON en `crates/sorafs_orchestrator::bindings` serializan la
-configuracion completa en Norito JSON, lo que la hace portable entre bindings de
-SDK y automatizacion.
+Os helpers JSON em `crates/sorafs_orchestrator::bindings` serializaram
+configuração completa em Norito JSON, para que haja um portátil entre ligações de
+SDK e automação.
 
-### 1.1 Configuracion JSON de ejemplo
+### 1.1 Configuração JSON de exemplo
 
 ```json
 {
@@ -62,17 +64,17 @@ SDK y automatizacion.
 }
 ```
 
-Persiste el archivo mediante el apilado habitual de `iroha_config` (`defaults/`,
-user, actual) para que los despliegues deterministas hereden los mismos limites
-entre nodos. Para un perfil de fallback direct-only alineado con el rollout
-SNNet-5a, consulta `docs/examples/sorafs_direct_mode_policy.json` y la guia
-complementaria en `docs/source/sorafs/direct_mode_pack.md`.
+Persista o arquivo por meio da compilação habitual de `iroha_config` (`defaults/`,
+usuário, atual) para que os despliegues deterministas herdem os limites mismos
+entre nós. Para um perfil de fallback diretamente alinhado com o rollout
+SNNet-5a, consulte `docs/examples/sorafs_direct_mode_policy.json` e o guia
+complementaria em `docs/source/sorafs/direct_mode_pack.md`.
 
-### 1.2 Anulaciones de cumplimiento
+### 1.2 Anulações de cumprimento
 
-SNNet-9 integra el cumplimiento dirigido por gobernanza en el orquestador. Un
-nuevo objeto `compliance` en la configuracion Norito JSON captura los carve-outs
-que fuerzan el pipeline de fetch a modo direct-only:
+SNNet-9 integra o cumprimento dirigido pelo governo no orquestrador. Un
+novo objeto `compliance` na configuração Norito JSON captura os carve-outs
+que acionou o pipeline de busca no modo somente direto:
 
 ```json
 "compliance": {
@@ -83,135 +85,127 @@ que fuerzan el pipeline de fetch a modo direct-only:
   ],
   "audit_contacts": ["mailto:compliance@example.org"]
 }
-```
-
-- `operator_jurisdictions` declara los codigos ISO-3166 alpha-2 donde opera esta
-  instancia del orquestador. Los codigos se normalizan a mayusculas durante el
-  parseo.
-- `jurisdiction_opt_outs` refleja el registro de gobernanza. Cuando alguna
-  jurisdiccion de operador aparece en la lista, el orquestador aplica
-  `transport_policy=direct-only` y emite la razon de fallback
+```- `operator_jurisdictions` declara os códigos ISO-3166 alfa-2 onde opera esta
+  instância do orquestrador. Os códigos são normalizados e maiúsculos durante o
+  análise.
+- `jurisdiction_opt_outs` reflete o registro de governo. Quando alguma coisa
+  jurisdição do operador aparece na lista, o solicitante aplica-se
+  `transport_policy=direct-only` e emite a razão de fallback
   `compliance_jurisdiction_opt_out`.
-- `blinded_cid_opt_outs` lista digests de manifest (CIDs cegados, codificados en
-  hex mayusculas). Las cargas coincidentes tambien fuerzan la planificacion
-  direct-only y exponen el fallback `compliance_blinded_cid_opt_out` en la
+- `blinded_cid_opt_outs` lista resumos de manifesto (CIDs cegados, codificados em
+  hexadecimal mayusculas). As cargas coincidentes também forçam o planejamento
+  direct-only e expõe o substituto `compliance_blinded_cid_opt_out` no
   telemetria.
-- `audit_contacts` registra las URI que la gobernanza espera que los operadores
-  publiquen en sus playbooks GAR.
-- `attestations` captura los paquetes de cumplimiento firmados que respaldan la
-  politica. Cada entrada define una `jurisdiction` opcional (codigo ISO-3166
-  alpha-2), un `document_uri`, el `digest_hex` canonico de 64 caracteres, el
-  timestamp de emision `issued_at_ms` y un `expires_at_ms` opcional. Estos
-  artefactos alimentan la checklist de auditoria del orquestador para que el
-  tooling de gobernanza pueda vincular las anulaciones con la documentacion
+- `audit_contacts` registra o URI que o governo espera que os operadores
+  publique em seus playbooks GAR.
+- `attestations` captura os pacotes de cumprimento firmados que respaldam la
+  política. Cada entrada define um `jurisdiction` opcional (código ISO-3166
+  alpha-2), um `document_uri`, o `digest_hex` canônico de 64 caracteres, o
+  timestamp de emissão `issued_at_ms` e um `expires_at_ms` opcional. Estos
+  artefatos alimentam a lista de verificação dos auditórios do orquestrador para que o
+  as ferramentas de governança podem vincular as anulações à documentação
   firmada.
 
-Proporciona el bloque de compliance mediante el apilado habitual de
-configuracion para que los operadores reciban anulaciones deterministas. El
-orquestador aplica compliance _despues_ de los hints de write-mode: incluso si
-un SDK solicita `upload-pq-only`, las exclusiones por jurisdiccion o manifiesto
-siguen forzando transporte direct-only y fallan rapido cuando no existen
-proveedores aptos.
+Proporciona o bloqueio de conformidade mediante a apilação habitual de
+configuração para que os operadores recebam anulações deterministas. El
+aplicativo orquestrador compliance _despues_ das dicas de modo de gravação: mesmo si
+um SDK solicitado `upload-pq-only`, exclusões por jurisdição ou manifestação
+siguen forzando transporte direct-only e fallan rapido quando não existir
+provadores aptos.
 
-Los catalogos canonicos de opt-out viven en
-`governance/compliance/soranet_opt_outs.json`; el Consejo de Gobernanza publica
-actualizaciones mediante releases etiquetados. Un ejemplo completo de
-configuracion (incluyendo attestations) esta disponible en
-`docs/examples/sorafs_compliance_policy.json`, y el proceso operativo se
-captura en el
-[playbook de cumplimiento GAR](../../../source/soranet/gar_compliance_playbook.md).
+Os catálogos canônicos de opt-out vivem em
+`governance/compliance/soranet_opt_outs.json`; el Conselho de Governo Publico
+atualizações mediante lançamentos etiquetados. Um exemplo completo de
+configuração (incluindo atestados) está disponível em
+`docs/examples/sorafs_compliance_policy.json`, e o processo operacional é
+captura no el
+[manual de cumprimento GAR](../../../source/soranet/gar_compliance_playbook.md).
 
-### 1.3 Ajustes de CLI y SDK
-
-| Flag / Campo | Efecto |
+### 1.3 Ajustes de CLI e SDK| Bandeira / Campo | Efeito |
 |--------------|--------|
-| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limita cuantos proveedores sobreviven al filtro del scoreboard. Ponlo en `None` para usar todos los proveedores elegibles. |
-| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Limita los reintentos por chunk. Superar el limite genera `MultiSourceError::ExhaustedRetries`. |
-| `--telemetry-json` | Inyecta snapshots de latencia/fallo en el constructor del scoreboard. La telemetria obsoleta mas alla de `telemetry_grace_secs` marca proveedores como ineligibles. |
-| `--scoreboard-out` | Persiste el scoreboard calculado (proveedores elegibles + ineligibles) para inspeccion posterior. |
-| `--scoreboard-now` | Sustituye el timestamp del scoreboard (segundos Unix) para que las capturas de fixtures sigan siendo deterministas. |
-| `--deny-provider` / hook de politica de score | Excluye deterministamente proveedores de la planificacion sin borrar adverts. Util para listas negras de respuesta rapida. |
-| `--boost-provider=name:delta` | Ajusta los creditos de round-robin ponderado para un proveedor manteniendo intactos los pesos de gobernanza. |
-| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Etiqueta metricas emitidas y logs estructurados para que los dashboards puedan filtrar por geografia u ola de rollout. |
-| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | Por defecto es `soranet-first` ahora que el orquestador multi-origen es la base. Usa `direct-only` al preparar un downgrade o seguir una directiva de cumplimiento, y reserva `soranet-strict` para pilotos PQ-only; las anulaciones de compliance siguen siendo el techo duro. |
+| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limite de quantos provedores sobreviveram no filtro do placar. Ponlo en `None` para usar todos os fornecedores elegíveis. |
+| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Limite as reintenções por pedaço. Superar o limite do gênero `MultiSourceError::ExhaustedRetries`. |
+| `--telemetry-json` | Injete instantâneos de latência/queda no construtor do placar. A telemetria obsoleta, mas em `telemetry_grace_secs` é marcada como fornecedora como inelegível. |
+| `--scoreboard-out` | Persistir o cálculo do placar (provedores elegíveis + inelegíveis) para inspeção posterior. |
+| `--scoreboard-now` | Substitua o carimbo de data/hora do placar (segundos Unix) para que as capturas de jogos sigam os deterministas. |
+| `--deny-provider` / gancho de política de pontuação | Excluir deterministicamente provedores de planejamento sem borrar anúncios. Util para listas negras de resposta rápida. |
+| `--boost-provider=name:delta` | Ajusta os créditos de round-robin ponderados para um provedor mantendo intactos os pesos de governo. |
+| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Etiquetas métricas emitidas e logs estruturados para que os painéis possam ser filtrados por geografia e fase de implementação. |
+| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | Por defeito é `soranet-first` agora que o orquestrador multi-origem está na base. Usa `direct-only` para preparar um downgrade ou seguir uma diretriz de cumprimento, e reserva `soranet-strict` para pilotos somente PQ; as anulações de conformidade continuarão sendo a tecnologia difícil. |
 
-SoraNet-first es ahora el valor por defecto, y los rollbacks deben citar el
-bloqueador SNNet correspondiente. Tras graduarse SNNet-4/5/5a/5b/6a/7/8/12/13,
-la gobernanza endurecera la postura requerida (hacia `soranet-strict`); hasta
-entonces, solo las anulaciones motivadas por incidentes deben priorizar
-`direct-only`, y deben registrarse en el log de rollout.
+SoraNet-first é agora o valor por defeito, e as reversões devem citar o
+bloquearr SNNet correspondente. Tras graduado SNNet-4/5/5a/5b/6a/7/8/12/13,
+a governança suporta a postura exigida (para `soranet-strict`); até agora
+Então, apenas as anulações motivadas por incidentes devem ser priorizadas
+`direct-only`, e deve ser registrado no log de implementação.
 
-Todos los flags anteriores aceptan sintaxis estilo `--` tanto en
-`sorafs_cli fetch` como en el binario `sorafs_fetch` orientado a
-desarrolladores. Los SDK exponen las mismas opciones mediante builders tipados.
+Todas as bandeiras anteriores aceitam sintaxe estilo `--` tanto em
+`sorafs_cli fetch` como no binário `sorafs_fetch` orientado a
+desarrolladores. O SDK expõe as diversas opções por meio de construtores informados.
 
-### 1.4 Gestion de cache de guards
+### 1.4 Gerenciamento de cache de guardas
 
-La CLI ahora integra el selector de guards de SoraNet para que los operadores
-puedan fijar relays de entrada de forma determinista antes del rollout completo
-SNNet-5 de transporte. Tres nuevos flags controlan el flujo:
-
-| Flag | Proposito |
+A CLI agora integra o seletor de proteção do SoraNet para os operadores
+pode-se estabelecer relés de entrada de forma determinista antes da implementação completa
+SNNet-5 de transporte. Três novas bandeiras controlam o fluxo:| Bandeira | Proposta |
 |------|-----------|
-| `--guard-directory <PATH>` | Apunta a un archivo JSON que describe el consenso de relays mas reciente (se muestra un subconjunto abajo). Pasar el directorio refresca la cache de guards antes de ejecutar el fetch. |
-| `--guard-cache <PATH>` | Persiste el `GuardSet` codificado en Norito. Las ejecuciones posteriores reutilizan la cache incluso cuando no se suministra un directorio nuevo. |
-| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Overrides opcionales para el numero de guards de entrada a fijar (por defecto 3) y la ventana de retencion (por defecto 30 dias). |
-| `--guard-cache-key <HEX>` | Clave opcional de 32 bytes usada para etiquetar caches de guard con un MAC Blake3 para que el archivo pueda verificarse antes de reutilizarse. |
+| `--guard-directory <PATH>` | Basta acessar um arquivo JSON que descreve o consenso de relés mais recente (mostra um subconjunto abaixo). Passe o diretório para atualizar o cache de guardas antes de executar a busca. |
+| `--guard-cache <PATH>` | Persiste o `GuardSet` codificado em Norito. As execuções posteriores reutilizam o cache, mesmo quando um novo diretório não é fornecido. |
+| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Substitui opcionais para o número de guardas de entrada a fijar (por defeito 3) e a janela de retenção (por defeito 30 dias). |
+| `--guard-cache-key <HEX>` | Clave opcional de 32 bytes usada para etiquetar caches de proteção com um MAC Blake3 para que o arquivo possa ser verificado antes de ser reutilizado. |
 
-Las cargas del directorio de guards usan un esquema compacto:
+As cargas do diretório de guardas usam um esquema compacto:
 
-El flag `--guard-directory` ahora espera un payload `GuardDirectorySnapshotV2`
-codificado en Norito. El snapshot binario contiene:
+A bandeira `--guard-directory` agora espera uma carga útil `GuardDirectorySnapshotV2`
+codificado em Norito. O binário do snapshot contém:
 
-- `version` — version del esquema (actualmente `2`).
+- `version` — versão do esquema (na verdade `2`).
 - `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` —
-  metadatos de consenso que deben coincidir con cada certificado embebido.
-- `validation_phase` — compuerta de politica de certificados (`1` = permitir
-  una sola firma Ed25519, `2` = preferir firmas dobles, `3` = requerir firmas
-  dobles).
-- `issuers` — emisores de gobernanza con `fingerprint`, `ed25519_public` y
-  `mldsa65_public`. Los fingerprints se calculan como
+  metadados de consenso que devem coincidir com cada certificado embebido.
+- `validation_phase` — computador de política de certificados (`1` = permitir
+  uma única firma Ed25519, `2` = preferir firmas dobles, `3` = requerir firmas
+  duplos).
+- `issuers` — emissores de governo com `fingerprint`, `ed25519_public` e
+  `mldsa65_public`. As impressões digitais são calculadas como
   `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
-- `relays` — una lista de bundles SRCv2 (salida de
-  `RelayCertificateBundleV2::to_cbor()`). Cada bundle incluye el descriptor del
-  relay, flags de capacidad, politica ML-KEM y firmas dobles Ed25519/ML-DSA-65.
+- `relays` — uma lista de pacotes SRCv2 (saída de
+  `RelayCertificateBundleV2::to_cbor()`). Cada pacote inclui o descritor do
+  relé, bandeiras de capacidade, política ML-KEM e firmas duplas Ed25519/ML-DSA-65.
 
-La CLI verifica cada bundle contra las claves de emisor declaradas antes de
-fusionar el directorio con la cache de guards. Los esquemas JSON heredados ya
-no se aceptan; se requieren snapshots SRCv2.
+A CLI verifica cada pacote contra as chaves do emissor declaradas antes de
+fundir o diretório com o cache de guardas. Os esquemas JSON herdados você
+não se aceite; são necessários snapshots SRCv2.
 
-Invoca la CLI con `--guard-directory` para fusionar el consenso mas reciente con
-la cache existente. El selector conserva los guards fijados que aun estan dentro
-la ventana de retencion y son elegibles en el directorio; los relays nuevos
-reemplazan entradas expiradas. Tras un fetch exitoso, la cache actualizada se
-escribe de nuevo en la ruta indicada por `--guard-cache`, manteniendo sesiones
-subsecuentes deterministas. Los SDK pueden reproducir el mismo comportamiento al
-llamar `GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)`
-y pasar el `GuardSet` resultante a `SorafsGatewayFetchOptions`.
-
-`ml_kem_public_hex` permite que el selector priorice guards con capacidad PQ
-cuando se despliega SNNet-5. Los toggles de etapa (`anon-guard-pq`,
-`anon-majority-pq`, `anon-strict-pq`) ahora degradan automaticamente relays
-clasicos: cuando hay un guard PQ disponible el selector elimina los pines
-clasicos sobrantes para que las sesiones posteriores favorezcan handshakes
-hibridos. Los resumenes de CLI/SDK exponen la mezcla resultante via
+Invoque a CLI com `--guard-directory` para fundir o consenso mais recente com
+o cache existente. O seletor mantém as proteções fixadas que você está dentro
+la ventana de retenção y son elegibles en el directorio; os relés novos
+reemplazan entradas expiradas. Após uma busca exitosa, o cache atualizado é
+escreva de novo na rota indicada por `--guard-cache`, mantendo sessões
+subseqüentes deterministas. O SDK pode reproduzir o mesmo comportamento
+chamada `GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)`
+e passar o `GuardSet` resultando em `SorafsGatewayFetchOptions`.`ml_kem_public_hex` permite que o seletor priorize proteja com capacidade PQ
+quando o SNNet-5 é usado. Os alternadores de etapa (`anon-guard-pq`,
+`anon-majority-pq`, `anon-strict-pq`) agora degradan relés automaticamente
+clássicos: quando há um guarda PQ disponível el seletor elimina los pines
+clássicos sobrantes para que as sessões posteriores favoreçam apertos de mão
+híbridos. Os resumos do CLI/SDK expõem a mistura resultante via
 `anonymity_status`/`anonymity_reason`, `anonymity_effective_policy`,
 `anonymity_pq_selected`, `anonymity_classical_selected`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio` y los campos complementarios de candidatos/deficit/
-variacion de supply, haciendo explicitos los brownouts y fallbacks clasicos.
+`anonymity_classical_ratio` e os campos complementares de candidatos/déficit/
+variação de fornecimento, deixando explícitos os quedas de energia e os clássicos substitutos.
 
-Los directorios de guards ahora pueden incorporar un bundle SRCv2 completo via
-`certificate_base64`. El orquestador decodifica cada bundle, revalida las firmas
-Ed25519/ML-DSA y conserva el certificado analizado junto a la cache de guards.
-Cuando hay un certificado presente se convierte en la fuente canonica para
-claves PQ, preferencias de handshake y ponderacion; los certificados expirados
-se descartan y el selector vuelve a campos heredados del descriptor. Los
-certificados se propagan a la gestion del ciclo de vida de circuitos y se
-exponen via `telemetry::sorafs.guard` y `telemetry::sorafs.circuit`, que registran
-la ventana de validez, las suites de handshake y si se observaron firmas dobles
-para cada guard.
+Os diretórios de guardas agora podem incorporar um pacote SRCv2 completo via
+`certificate_base64`. El orquestrador decodifica cada pacote, revalida as firmas
+Ed25519/ML-DSA e conserva o certificado analisado junto ao cache de guardas.
+Quando um certificado presente for convertido na fonte canônica para
+chaves PQ, preferências de aperto de mão e ponderação; os certificados expirados
+é descartado e o seletor retorna aos campos herdados do descritor. Los
+certificados são propagados na gestão do ciclo de vida de circuitos e se
+expor via `telemetry::sorafs.guard` e `telemetry::sorafs.circuit`, que registra
+la ventana de validez, las suites de handshake e si se observaron firmas dobles
+para cada guarda.
 
-Usa los helpers de la CLI para mantener los snapshots sincronizados con los
+Use os ajudantes da CLI para manter os snapshots sincronizados com os
 publicadores:
 
 ```bash
@@ -225,25 +219,25 @@ sorafs_cli guard-directory verify \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-`fetch` descarga y verifica el snapshot SRCv2 antes de escribirlo en disco,
-mientras que `verify` repite el pipeline de validacion para artefactos obtenidos
-por otros equipos, emitiendo un resumen JSON que refleja la salida del selector
-de guards en CLI/SDK.
+`fetch` baixe e verifique o snapshot SRCv2 antes de escrevê-lo no disco,
+enquanto `verify` repete o pipeline de validação para artefatos obtidos
+para outros equipamentos, emitindo um currículo JSON que reflete a saída do seletor
+de guardas em CLI/SDK.
 
 ### 1.5 Gestor de ciclo de vida de circuitos
 
-Cuando se proporcionan tanto el directorio de relays como la cache de guards, el
-orquestador activa el gestor de ciclo de vida de circuitos para preconstruir y
-renovar circuitos de SoraNet antes de cada fetch. La configuracion vive en
+Quando for fornecido tanto o diretório de relés quanto o cache de guardas, o
+orquestrador ativa o gestor de ciclo de vida de circuitos para pré-construir e
+atualize os circuitos do SoraNet antes de cada busca. A configuração viva em
 `OrchestratorConfig` (`crates/sorafs_orchestrator/src/lib.rs:305`) via dos campos
-nuevos:
+novos:
 
-- `relay_directory`: lleva el snapshot del directorio SNNet-3 para que los hops
-  middle/exit puedan seleccionarse de forma determinista.
-- `circuit_manager`: configuracion opcional (habilitada por defecto) que
-  controla el TTL del circuito.
+- `relay_directory`: leva o instantâneo do diretório SNNet-3 para os saltos
+  middle/exit pode selecionar a forma determinista.
+- `circuit_manager`: configuração opcional (habilitada por defeito) que
+  controla o TTL do circuito.
 
-Norito JSON ahora acepta un bloque `circuit_manager`:
+Norito JSON agora aceita um bloco `circuit_manager`:
 
 ```json
 "circuit_manager": {
@@ -252,33 +246,31 @@ Norito JSON ahora acepta un bloque `circuit_manager`:
 }
 ```
 
-Los SDK reenfian los datos del directorio via
+O SDK reenfian os dados do diretório via
 `SorafsGatewayFetchOptions::relay_directory`
-(`crates/iroha/src/client.rs:320`), y la CLI lo conecta automaticamente siempre
-que se suministre `--guard-directory` (`crates/iroha_cli/src/commands/sorafs.rs:365`).
-
-El gestor renueva circuitos cuando cambian los metadatos del guard (endpoint,
-clave PQ o timestamp fijado) o cuando vence el TTL. El helper `refresh_circuits`
-invocado antes de cada fetch (`crates/sorafs_orchestrator/src/lib.rs:1346`)
-emite logs de `CircuitEvent` para que los operadores rastreen decisiones del
-ciclo de vida. El soak test
+(`crates/iroha/src/client.rs:320`), e o CLI se conecta automaticamente sempre
+que se suministra `--guard-directory` (`crates/iroha_cli/src/commands/sorafs.rs:365`).O gestor renova circuitos quando muda os metadados da guarda (endpoint,
+chave PQ ou timestamp fixado) ou quando vencer o TTL. El ajudante `refresh_circuits`
+invocado antes de cada busca (`crates/sorafs_orchestrator/src/lib.rs:1346`)
+emite logs de `CircuitEvent` para que os operadores rastreiem decisões do
+ciclo de vida. El teste de imersão
 `circuit_manager_latency_soak_remains_stable_across_rotations`
-(`crates/sorafs_orchestrator/src/soranet.rs:1479`) demuestra latencia estable a
-traves de tres rotaciones de guards; consulta el reporte en
+(`crates/sorafs_orchestrator/src/soranet.rs:1479`) demonstra latência estável a
+traves de três rotações de guardas; consulte o relatório em
 `docs/source/soranet/reports/circuit_stability.md:1`.
 
 ### 1.6 Proxy QUIC local
 
-El orquestador puede iniciar opcionalmente un proxy QUIC local para que las
-extensiones del navegador y los adaptadores SDK no tengan que gestionar
-certificados o claves de cache de guards. El proxy se enlaza a una direccion
-loopback, termina conexiones QUIC y devuelve un manifest Norito que describe el
-certificado y la clave de cache de guard opcional al cliente. Los eventos de
-transporte emitidos por el proxy se contabilizan via
+O sequestrador pode iniciar opcionalmente um proxy QUIC local para que
+extensões do navegador e adaptadores SDK não precisam ser gerenciados
+certificados ou chaves de cache de guardas. O proxy é colocado em uma direção
+loopback, termina conexões QUIC e desenvolve um manifesto Norito que descreve o
+certificado e a chave de cache de proteção opcional ao cliente. Os eventos de
+transportes emitidos por el proxy se contabilizan via
 `sorafs_orchestrator_transport_events_total`.
 
-Habilita el proxy a traves del nuevo bloque `local_proxy` en el JSON del
-orquestador:
+Habilite o proxy através do novo bloco `local_proxy` no JSON do
+orquestrador:
 
 ```json
 "local_proxy": {
@@ -300,218 +292,208 @@ orquestador:
     "room_policy": "public"
   }
 }
-```
+```- `bind_addr` controla onde ouve o proxy (usa porto `0` para solicitar
+  un porto efímero).
+- `telemetry_label` se propaga às métricas para que os painéis possam
+  distinguir proxies de sessões de busca.
+- `guard_cache_key_hex` (opcional) permite que o proxy exponha o mesmo cache
+  de guardas com chave que usam CLI/SDK, mantendo as extensões alinhadas
+  do navegador.
+- `emit_browser_manifest` alterna se o handshake apresentar um manifesto que
+  extensões podem armazenar e validar.
+- `proxy_mode` seleciona se a porta proxy de tráfego local (`bridge`) ou
+  apenas emite metadados para que o SDK abra circuitos SoraNet por sua conta
+  (`metadata-only`). O proxy por defeito é `bridge`; estabelecimento `metadata-only`
+  quando uma estação de trabalho deba expõe o manifesto sem reenviar streams.
+- `prewarm_circuits`, `max_streams_per_circuit` e `circuit_ttl_hint_secs`
+  expor dicas adicionais ao navegador para que você possa presupuestar streams
+  paralelos e entendo que tão agressivamente o proxy reutiliza circuitos.
+- `car_bridge` (opcional) para colocar um cache local de arquivos CAR. O campo
+  `extension` controla o sufixo agregado quando o objetivo do stream é omitido
+  `*.car`; estabelecer `allow_zst = true` para servir cargas úteis `*.car.zst`
+  pré-comprimidos diretamente.
+- `kaigi_bridge` (opcional) expor rotas Kaigi em spool para proxy. O campo
+  `room_policy` anuncia se a ponte opera no modo `public` ou `authenticated`
+  para que os clientes do navegador pré-selecionem as etiquetas GAR
+  correta.
+- A exposição `sorafs_cli fetch` substitui `--local-proxy-mode=bridge|metadata-only`
+  e `--local-proxy-norito-spool=PATH`, permitindo alternar o modo de
+  executar ou colocar spools alternativos sem modificar a política JSON.
+- `downgrade_remediation` (opcional) configura o gancho de downgrade automático.
+  Quando o orquestrador está habilitado a observar a telemetria dos relés para
+  detectar rafagas de downgrade e, após `threshold` configurado dentro de
+  `window_secs`, ativa o proxy local em `target_mode` (por padrão
+  `metadata-only`). Uma vez que os downgrades cessam, o proxy volta a
+  `resume_mode` após `cooldown_secs`. Use o arreglo `modes` para limitar
+  el aciona uma função de relé específica (por defeito relés de entrada).
 
-- `bind_addr` controla donde escucha el proxy (usa puerto `0` para solicitar
-  un puerto efimero).
-- `telemetry_label` se propaga a las metricas para que los dashboards puedan
-  distinguir proxies de sesiones de fetch.
-- `guard_cache_key_hex` (opcional) permite que el proxy exponga la misma cache
-  de guards con clave que usan CLI/SDK, manteniendo alineadas las extensiones
-  del navegador.
-- `emit_browser_manifest` alterna si el handshake devuelve un manifest que las
-  extensiones pueden almacenar y validar.
-- `proxy_mode` selecciona si el proxy puentea trafico localmente (`bridge`) o
-  solo emite metadatos para que los SDK abran circuitos SoraNet por su cuenta
-  (`metadata-only`). El proxy por defecto es `bridge`; establece `metadata-only`
-  cuando una workstation deba exponer el manifest sin reenviar streams.
-- `prewarm_circuits`, `max_streams_per_circuit` y `circuit_ttl_hint_secs`
-  exponen hints adicionales al navegador para que pueda presupuestar streams
-  paralelos y entender que tan agresivamente el proxy reutiliza circuitos.
-- `car_bridge` (opcional) apunta a una cache local de archivos CAR. El campo
-  `extension` controla el sufijo agregado cuando el objetivo de stream omite
-  `*.car`; establece `allow_zst = true` para servir payloads `*.car.zst`
-  precomprimidos directamente.
-- `kaigi_bridge` (opcional) expone rutas Kaigi en spool al proxy. El campo
-  `room_policy` anuncia si el bridge opera en modo `public` o `authenticated`
-  para que los clientes del navegador preseleccionen las etiquetas GAR
-  correctas.
-- `sorafs_cli fetch` expone overrides `--local-proxy-mode=bridge|metadata-only`
-  y `--local-proxy-norito-spool=PATH`, permitiendo alternar el modo de
-  ejecucion o apuntar a spools alternativos sin modificar la politica JSON.
-- `downgrade_remediation` (opcional) configura el hook de downgrade automatico.
-  Cuando esta habilitado el orquestador observa la telemetria de relays para
-  detectar rafagas de downgrade y, despues del `threshold` configurado dentro de
-  `window_secs`, fuerza el proxy local al `target_mode` (por defecto
-  `metadata-only`). Una vez que cesan los downgrades, el proxy vuelve a
-  `resume_mode` despues de `cooldown_secs`. Usa el arreglo `modes` para limitar
-  el trigger a roles de relay especificos (por defecto relays de entrada).
+Quando o proxy é executado no modo bridge sirve dos serviços de aplicação:
 
-Cuando el proxy se ejecuta en modo bridge sirve dos servicios de aplicacion:
+- **`norito`** – o objetivo de fluxo do cliente é resolvido em relação a
+  `norito_bridge.spool_dir`. Os objetivos são higienizados (sin traversal ni rutas
+  absolutas) e, quando o arquivo não tem extensão, aplica-se o sufijo
+  configurado antes de transmitir a carga útil literalmente para o navegador.
+- **`car`** – os objetivos de stream são resolvidos dentro de
+  `car_bridge.cache_dir`, herdou a extensão por defeito configurado e
+  rechazan payloads comprimidos menos que `allow_zst` está ativado. Los
+  pontes exitosos respondem com `STREAM_ACK_OK` antes de transferir los bytes
+  do arquivo para que os clientes possam canalizar a verificação.Em ambos os casos, o proxy entrega o HMAC de cache-tag (quando existia uma chave
+cache de guarda durante o handshake) e registrar códigos de razão de telemetria
+`norito_*` / `car_*` para que os painéis sejam diferentes saídas, arquivos
+faltantes e falhas de higienização de um vistazo.
 
-- **`norito`** – el objetivo de stream del cliente se resuelve relativo a
-  `norito_bridge.spool_dir`. Los objetivos se sanitizan (sin traversal ni rutas
-  absolutas) y, cuando el archivo no tiene extension, se aplica el sufijo
-  configurado antes de transmitir el payload literalmente al navegador.
-- **`car`** – los objetivos de stream se resuelven dentro de
-  `car_bridge.cache_dir`, heredan la extension por defecto configurada y
-  rechazan payloads comprimidos a menos que `allow_zst` este activado. Los
-  bridges exitosos responden con `STREAM_ACK_OK` antes de transferir los bytes
-  del archivo para que los clientes puedan canalizar la verificacion.
+`Orchestrator::local_proxy().await` expõe o identificador na execução para que
+Chamadores podem ler o PEM do certificado, obter o manifesto do
+navegador ou solicitar um computador desligado quando o aplicativo for finalizado.
 
-En ambos casos el proxy entrega la HMAC de cache-tag (cuando existia una clave
-cache de guard durante el handshake) y registra codigos de razon de telemetria
-`norito_*` / `car_*` para que los dashboards diferencien exitos, archivos
-faltantes y fallos de sanitizacion de un vistazo.
+Quando estiver habilitado, o proxy agora será enviado aos registros **manifest v2**. Ademas do
+certificado existente e a chave de cache de guarda, v2 agrega:
 
-`Orchestrator::local_proxy().await` expone el handle en ejecucion para que los
-llamadores puedan leer el PEM del certificado, obtener el manifest del
-navegador o solicitar un apagado ordenado cuando la aplicacion finaliza.
-
-Cuando se habilita, el proxy ahora sirve registros **manifest v2**. Ademas del
-certificado existente y la clave de cache de guard, v2 agrega:
-
-- `alpn` (`"sorafs-proxy/1"`) y un arreglo `capabilities` para que los clientes
-  confirmen el protocolo de stream que deben usar.
-- Un `session_id` por handshake y un bloque de sal `cache_tagging` para derivar
-  afinidades de guard por sesion y tags HMAC.
-- Hints de circuito y seleccion de guard (`circuit`, `guard_selection`,
-  `route_hints`) para que las integraciones del navegador expongan una UI mas
+- `alpn` (`"sorafs-proxy/1"`) e um arquivo `capabilities` para os clientes
+  confirme o protocolo de stream que você deve usar.
+- Um `session_id` por handshake e um bloco de sal `cache_tagging` para derivar
+  camadas de proteção por sessão e tags HMAC.
+- Dicas de circuito e seleção de guarda (`circuit`, `guard_selection`,
+  `route_hints`) para que as integrações do navegador exponham uma UI mas
   rica antes de abrir streams.
-- `telemetry_v2` con knobs de muestreo y privacidad para instrumentacion local.
-- Cada `STREAM_ACK_OK` incluye `cache_tag_hex`. Los clientes reflejan el valor en
-  el header `x-sorafs-cache-tag` al emitir solicitudes HTTP o TCP para que las
-  selecciones de guard en cache permanezcan cifradas en reposo.
+- `telemetry_v2` com botões de exibição e privacidade para instrumentação local.
+- Cada `STREAM_ACK_OK` inclui `cache_tag_hex`. Os clientes refletem o valor em
+  o cabeçalho `x-sorafs-cache-tag` para emitir solicitações HTTP ou TCP para que
+  seleciona de guarda e cache permanente cifradas em repouso.
 
-Estos campos preservan el formato previo; los clientes antiguos pueden ignorar
-las nuevas claves y continuar usando el subconjunto v1.
+Esses campos preservam o formato anterior; clientes antigos podem ignorar
+as novas chaves e continue usando o subconjunto v1.
 
-## 2. Semantica de fallos
+## 2. Semântica de falhas
 
-El orquestador aplica comprobaciones estrictas de capacidad y presupuestos antes
-que se transfiera un solo byte. Los fallos caen en tres categorias:
+O orquestrador aplica testes rigorosos de capacidade e pressupostos antes
+que foi transferido um único byte. Los fallos caen em três categorias:
 
-1. **Fallos de elegibilidad (pre-flight).** Proveedores sin capacidad de rango,
-   adverts expirados o telemetria obsoleta quedan registrados en el artefacto
-   del scoreboard y se omiten en la planificacion. Los resumenes de CLI llenan
-   el arreglo `ineligible_providers` con razones para que los operadores puedan
-   inspeccionar el drift de gobernanza sin raspar logs.
-2. **Agotamiento en tiempo de ejecucion.** Cada proveedor registra fallos
-   consecutivos. Una vez que se alcanza el `provider_failure_threshold`
-   configurado, el proveedor se marca como `disabled` por el resto de la sesion.
-   Si todos los proveedores pasan a `disabled`, el orquestador devuelve
+1. **Fallos de elegibilidad (pré-voo).** Proveedores sin capacidad de rango,
+   anúncios expirados ou telemetria obsoleta quedan registrados no artefato
+   do placar e é omitido na planificação. Os currículos da CLI completam
+   o arreglo `ineligible_providers` com razões para que os operadores possam
+   inspecionar a deriva da governança sem raspar logs.
+2. **Agotamiento en tiempo de ejecucion.** Cada provedor registra falhas
+   consecutivos. Uma vez que você alcance o `provider_failure_threshold`
+   configurado, o provedor é marcado como `disabled` no restante da sessão.
+   Se todos os provedores passarem para `disabled`, o orquestrador deve voltar
    `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`.
-3. **Abortos deterministas.** Los limites estrictos se presentan como errores
-   estructurados:
-   - `MultiSourceError::NoCompatibleProviders` — el manifiesto requiere un tramo
-     de chunks o alineacion que los proveedores restantes no pueden cumplir.
-   - `MultiSourceError::ExhaustedRetries` — se consumio el presupuesto de
+3. **Abortos deterministas.** Limites restritos são apresentados como erros
+   estruturados:
+   - `MultiSourceError::NoCompatibleProviders` — a manifestação requer um tramo
+     de pedaços ou alinhamento que os fornecedores restantes não podem cumprir.
+   - `MultiSourceError::ExhaustedRetries` — consome o pressuposto de
      reintentos por chunk.
-   - `MultiSourceError::ObserverFailed` — los observadores downstream (hooks de
-     streaming) rechazaron un chunk verificado.
+   - `MultiSourceError::ObserverFailed` — os observadores downstream (ganchos de
+     streaming) rechazaron um pedaço selecionado.Cada erro inclui o índice do pedaço problemático e, quando está disponível,
+la razon final de fallo del proveedor. Trata esses erros como bloqueadores de
+release: los reintentos con la misma entrada reproduzindo a falha até que
+mude o anúncio, a telemetria ou a saúde do provedor subyacente.
 
-Cada error incluye el indice del chunk problematico y, cuando esta disponible,
-la razon final de fallo del proveedor. Trata estos fallos como bloqueadores de
-release: los reintentos con la misma entrada reproduciran el fallo hasta que
-cambien el advert, la telemetria o la salud del proveedor subyacente.
+### 2.1 Persistência do placar
 
-### 2.1 Persistencia del scoreboard
+Quando se configura `persist_path`, o orquestrador escreve o placar final
+tras cada execução. O documento JSON contém:
 
-Cuando se configura `persist_path`, el orquestador escribe el scoreboard final
-tras cada ejecucion. El documento JSON contiene:
+- `eligibility` (`eligible` ou `ineligible::<reason>`).
+- `weight` (peso normalizado atribuído para esta execução).
+- metadados do `provider` (identificador, endpoints, pressuposto de
+  concorrência).
 
-- `eligibility` (`eligible` o `ineligible::<reason>`).
-- `weight` (peso normalizado asignado para esta ejecucion).
-- metadatos del `provider` (identificador, endpoints, presupuesto de
-  concurrencia).
+Arquive os instantâneos do placar junto com os artefatos de lançamento para que
+as decisões de lista negra e implementação seguem sendo auditáveis.
 
-Archiva los snapshots de scoreboard junto a los artefactos de release para que
-las decisiones de blacklist y rollout sigan siendo auditables.
+## 3. Telemetria e depuração
 
-## 3. Telemetria y depuracion
+### 3.1 Métricas Prometheus
 
-### 3.1 Metricas Prometheus
+O orquestrador emite as seguintes métricas via `iroha_telemetry`:
 
-El orquestador emite las siguientes metricas via `iroha_telemetry`:
+| Métrica | Etiquetas | Descrição |
+|--------|--------|-------------|
+| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Medidor de buscas orquestradas em vôo. |
+| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histograma que registra a latência de busca de extremo a extremo. |
+| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Contador de falhas terminais (reintentos agotados, sin proveedores, falha do observador). |
+| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Contador de intenções de reintenção por provedor. |
+| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Contador de falhas no nível de sessão que leva a desativar provedores. |
+| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Conteúdo de decisões políticas anônimas (cumplida vs brownout) agrupadas por etapa de implementação e motivo de fallback. |
+| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Histograma da cota de relés PQ dentro do conjunto SoraNet selecionado. |
+| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Histograma de taxas de oferta de relés PQ no instantâneo do placar. |
+| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Histograma do déficit político (brecha entre o objetivo e a cota PQ real). |
+| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | Histograma da cota de relés clássicos usados ​​em cada sessão. |
+| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Histograma de conteúdo de relés clássicos selecionados por sessão. |
 
-| Metrica | Labels | Descripcion |
-|---------|--------|-------------|
-| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Gauge de fetches orquestados en vuelo. |
-| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histograma que registra la latencia de fetch de extremo a extremo. |
-| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Contador de fallos terminales (reintentos agotados, sin proveedores, fallo del observador). |
-| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Contador de intentos de reintento por proveedor. |
-| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Contador de fallos a nivel de sesion que llevan a deshabilitar proveedores. |
-| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Conteo de decisiones de politica de anonimato (cumplida vs brownout) agrupadas por etapa de rollout y razon de fallback. |
-| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Histograma de la cuota de relays PQ dentro del set SoraNet seleccionado. |
-| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Histograma de ratios de oferta de relays PQ en el snapshot del scoreboard. |
-| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Histograma del deficit de politica (brecha entre el objetivo y la cuota PQ real). |
-| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | Histograma de la cuota de relays clasicos usada en cada sesion. |
-| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Histograma de conteos de relays clasicos seleccionados por sesion. |
+Integre as métricas nos painéis de teste antes de ativar os botões de
+produção. O layout recomendado reflete o plano de observação SF-6:
 
-Integra las metricas en dashboards de staging antes de activar los knobs de
-produccion. El layout recomendado refleja el plan de observabilidad SF-6:
+1. **Busca ativos** — alerta se o medidor sube sem conclusões equivalentes.
+2. **Ratio de reintentos** — avisa quando os contadores `retry` superan
+   linhas de base históricas.
+3. **Fallos de provedor** — dispara alertas ao pager quando qualquer provedor
+   supera `session_failure > 0` em 15 minutos.### 3.2 Alvos de logs estruturados
 
-1. **Fetches activos** — alerta si el gauge sube sin completions equivalentes.
-2. **Ratio de reintentos** — avisa cuando los contadores `retry` superan
-   baselines historicos.
-3. **Fallos de proveedor** — dispara alertas al pager cuando cualquier proveedor
-   supera `session_failure > 0` dentro de 15 minutos.
+O orquestrador publica eventos estruturados em alvos deterministas:
 
-### 3.2 Targets de logs estructurados
+- `telemetry::sorafs.fetch.lifecycle` — marcas de ciclo de vida `start` e
+  `complete` com conteúdo de pedaços, reintenções e duração total.
+- `telemetry::sorafs.fetch.retry` — eventos de reintenção (`provider`, `reason`,
+  `attempts`) para alimentação e triagem manual.
+- `telemetry::sorafs.fetch.provider_failure` — provedores deshabilitados por
+  erros repetidos.
+- `telemetry::sorafs.fetch.error` — falha nos terminais resumidos com `reason` e
+  metadados opcionais do provedor.
 
-El orquestador publica eventos estructurados en targets deterministas:
+Envie esses fluxos para o pipeline de logs Norito existente para que a resposta a
+incidentes têm uma única fonte de verdade. Os eventos do ciclo de vida
+expor a mistura PQ/clássica via `anonymity_effective_policy`,
+`anonymity_pq_ratio`, `anonymity_classical_ratio` e seus contadores associados,
+o que facilita a instalação de painéis sem raspar métricas. Durante os lançamentos do GA,
+fixe o nível de logs em `info` para eventos de ciclo de vida/reintenção e uso
+`warn` para falhas nos terminais.
 
-- `telemetry::sorafs.fetch.lifecycle` — marcas de ciclo de vida `start` y
-  `complete` con conteo de chunks, reintentos y duracion total.
-- `telemetry::sorafs.fetch.retry` — eventos de reintento (`provider`, `reason`,
-  `attempts`) para alimentar el triage manual.
-- `telemetry::sorafs.fetch.provider_failure` — proveedores deshabilitados por
-  errores repetidos.
-- `telemetry::sorafs.fetch.error` — fallos terminales resumidos con `reason` y
-  metadatos opcionales del proveedor.
+### 3.3 Currículos JSON
 
-Envia estos flujos al pipeline de logs Norito existente para que la respuesta a
-incidentes tenga una unica fuente de verdad. Los eventos de ciclo de vida
-exponen la mezcla PQ/clasica via `anonymity_effective_policy`,
-`anonymity_pq_ratio`, `anonymity_classical_ratio` y sus contadores asociados,
-lo que facilita cablear dashboards sin raspar metricas. Durante rollouts de GA,
-fija el nivel de logs en `info` para eventos de ciclo de vida/reintento y usa
-`warn` para fallos terminales.
+Tanto `sorafs_cli fetch` quanto o SDK de Rust desenvolveram um currículo estruturado
+que contém:
 
-### 3.3 Resumenes JSON
+- `provider_reports` com conteúdo de saída/fracaso e se um provedor foi
+  desativado.
+- `chunk_receipts` detalhando o que prova ou resolve cada pedaço.
+- arranjos `retry_stats` e `ineligible_providers`.
 
-Tanto `sorafs_cli fetch` como el SDK de Rust devuelven un resumen estructurado
-que contiene:
+Arquivar o arquivo de currículo para limpar fornecedores problemáticos: os recibos
+mapeie diretamente aos metadados dos logs anteriores.
 
-- `provider_reports` con conteos de exito/fracaso y si un proveedor fue
-  deshabilitado.
-- `chunk_receipts` detallando que proveedor resolvio cada chunk.
-- arreglos `retry_stats` e `ineligible_providers`.
+## 4. Checklist operativo
 
-Archiva el archivo de resumen al depurar proveedores problematicos: los receipts
-mapean directamente a los metadatos de logs anteriores.
-
-## 4. Checklist operativa
-
-1. **Preparar la configuracion en CI.** Ejecuta `sorafs_fetch` con la
-   configuracion objetivo, pasa `--scoreboard-out` para capturar la vista de
-   elegibilidad y compara con el release anterior. Cualquier proveedor ineligible
+1. **Prepare a configuração em CI.** Execute `sorafs_fetch` com
+   configuração objetivo, pasa `--scoreboard-out` para capturar a vista de
+   elegibilidade e comparação com a liberação anterior. Cualquier provado ou inelegível
    inesperado detiene la promocion.
-2. **Validar telemetria.** Asegura que el despliegue exporta metricas
-   `sorafs.fetch.*` y logs estructurados antes de habilitar fetches multi-origen
-   para usuarios. La ausencia de metricas suele indicar que el facade del
-   orquestador no fue invocado.
-3. **Documentar overrides.** Al aplicar ajustes de emergencia `--deny-provider`
-   o `--boost-provider`, confirma el JSON (o la invocacion CLI) en tu changelog.
-   Los rollbacks deben revertir el override y capturar un nuevo snapshot del
-   scoreboard.
-4. **Repetir smoke tests.** Tras modificar presupuestos de reintentos o limites
-   de proveedores, vuelve a hacer fetch del fixture canonico
-   (`fixtures/sorafs_manifest/ci_sample/`) y verifica que los receipts de
-   chunks sigan siendo deterministas.
+2. **Validar telemetria.** Certifique-se de que o despliegue exporta métricas
+   `sorafs.fetch.*` e logs estruturados antes de habilitar buscas de origem múltipla
+   para usuários. A ausência de métricas geralmente indica que a fachada do
+   orquestrador não foi invocado.
+3. **Substituições documentais.** Ao aplicar ajustes de emergência `--deny-provider`
+   ou `--boost-provider`, confirme o JSON (ou a chamada CLI) em seu changelog.
+   As reversões devem reverter a substituição e capturar um novo instantâneo do
+   placar.
+4. **Repita os testes de fumaça.** Altere os requisitos de reintenção ou limites
+   de provedores, volte a fazer buscar del fixture canonico
+   (`fixtures/sorafs_manifest/ci_sample/`) e verifica se os recibos de
+   pedaços sigan siendo deterministas.
 
-Seguir los pasos anteriores mantiene el comportamiento del orquestador
-reproducible en rollouts por fases y proporciona la telemetria necesaria para
-la respuesta a incidentes.
+Seguindo os passos anteriores, mantenha o comportamento do orquestrador
+reproduzível em implementações por fases e fornece a telemetria necessária para
+a resposta a incidentes.
 
-### 4.1 Anulaciones de politica
-
-Los operadores pueden fijar la etapa activa de transporte/anonimato sin editar
-la configuracion base estableciendo `policy_override.transport_policy` y
-`policy_override.anonymity_policy` en su JSON de `orchestrator` (o suministrando
+### 4.1 Anulações políticasOs operadores podem estabelecer a etapa ativa de transporte/anonimato sem editar
+a configuração base estabelecendo `policy_override.transport_policy` e
+`policy_override.anonymity_policy` em seu JSON de `orchestrator` (ou ministrando
 `--transport-policy-override=` / `--anonymity-policy-override=` a
-`sorafs_cli fetch`). Cuando cualquiera de los overrides esta presente el
-orquestador omite el fallback brownout habitual: si el nivel PQ solicitado no se
-puede satisfacer, el fetch falla con `no providers` en lugar de degradar en
-silencio. Volver al comportamiento por defecto es tan simple como limpiar los
-campos de override.
+`sorafs_cli fetch`). Quando qualquer substituição das substituições está presente
+orquestrador omite o brownout alternativo habitual: se o nível PQ solicitado não se
+pode ser satisfatório, a busca falha com `no providers` em vez de degradar em
+silêncio. Voltar ao comportamento por defeito é tão simples como limpá-los
+campos de substituição.

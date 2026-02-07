@@ -7,53 +7,54 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7fd1985901145d0dbcc587d953b0b1a3b5210132c3f915ffd36ec81fbe0692b7
 source_last_modified: "2026-01-22T14:45:01.276618+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-title: Data Availability Commitments Plan
-sidebar_label: Commitments Plan
-description: Block, RPC, and proof plumbing for embedding DA commitments in Nexus.
+sarlavha: Ma'lumotlar mavjudligi bo'yicha majburiyatlar rejasi
+sidebar_label: Majburiyatlar rejasi
+tavsif: Nexus da DA majburiyatlarini joylashtirish uchun blok, RPC va isbotli sanitariya-tesisat.
 ---
 
-:::note Canonical Source
+::: Eslatma Kanonik manba
 :::
 
-# Sora Nexus Data Availability Commitments Plan (DA-3)
+# Sora Nexus Ma'lumotlar mavjudligi bo'yicha majburiyatlar rejasi (DA-3)
 
-_Drafted: 2026-03-25 — Owners: Core Protocol WG / Smart Contract Team / Storage Team_
+_Tuzilgan: 25-03-2026 — Egalari: Asosiy Protokol WG / Smart kontrakt jamoasi / Saqlash jamoasi_
 
-DA-3 extends the Nexus block format so every lane embeds deterministic records
-describing the blobs accepted by DA-2. This note captures the canonical data
-structures, block pipeline hooks, light-client proofs, and Torii/RPC surfaces
-that must land before validators can rely on DA commitments during admission or
-governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
+DA-3 Nexus blok formatini kengaytiradi, shuning uchun har bir qator deterministik yozuvlarni joylashtiradi.
+DA-2 tomonidan qabul qilingan bloblarni tavsiflash. Ushbu eslatma kanonik ma'lumotlarni qamrab oladi
+tuzilmalar, blok quvur liniyasi ilgaklari, yorug'lik-klient isbotlari va Torii/RPC sirtlari
+validatorlar qabul paytida DA majburiyatlariga tayanishidan oldin qo'nishi kerak yoki
+boshqaruv tekshiruvlari. Barcha foydali yuklar Norito kodlangan; SCALE yoki ad-hoc JSON yo'q.
 
-## Objectives
+## Maqsadlar
 
-- Carry per-blob commitments (chunk root + manifest hash + optional KZG
-  commitment) inside every Nexus block so peers can reconstruct availability
-  state without consulting off-ledger storage.
-- Provide deterministic membership proofs so light clients can verify that a
-  manifest hash was finalised in a given block.
-- Expose Torii queries (`/v1/da/commitments/*`) and proofs that let relays,
-  SDKs, and governance automation audit availability without replaying every
-  block.
-- Keep the existing `SignedBlockWire` envelope canonical by threading the new
-  structures through the Norito metadata header and block hash derivation.
+- Har bir blob uchun majburiyatlarni bajarish (chunk root + manifest xesh + ixtiyoriy KZG
+  majburiyat) har bir Nexus blokida tengdoshlar mavjudligini qayta tiklashi mumkin
+  hisobdan tashqari saqlash bilan maslahatlashmasdan davlat.
+- Engil mijozlar buni tasdiqlashlari uchun deterministik a'zolik dalillarini taqdim eting
+  manifest xeshi berilgan blokda yakunlandi.
+- Torii so'rovlarini (`/v1/da/commitments/*`) va o'tishga imkon beruvchi dalillarni ko'rsating,
+  SDK'lar va boshqaruvni avtomatlashtirish auditining mavjudligi har birini takrorlamasdan
+  blok.
+- Mavjud `SignedBlockWire` konvertini yangisini o'tkazish orqali kanonik saqlang
+  tuzilmalarni Norito metama'lumotlar sarlavhasi va blok xesh hosilasi orqali.
 
-## Scope Overview
+## Qo'llash sohasiga umumiy nuqtai
 
-1. **Data model additions** in `iroha_data_model::da::commitment` plus block
-   header changes in `iroha_data_model::block`.
-2. **Executor hooks** so `iroha_core` ingests DA receipts emitted by Torii
-   (`crates/iroha_core/src/queue.rs` and `crates/iroha_core/src/block.rs`).
-3. **Persistence/indexes** so the WSV can answer commitment queries quickly
+1. `iroha_data_model::da::commitment` plus blokidagi **Maʼlumotlar modeli qoʻshimchalari**
+   `iroha_data_model::block` da sarlavha o'zgarishi.
+2. **Ijrochi ilgaklari** shuning uchun `iroha_core` Torii tomonidan chiqarilgan DA kvitantsiyalarini oladi
+   (`crates/iroha_core/src/queue.rs` va `crates/iroha_core/src/block.rs`).
+3. **Doimiylik/indekslar**, shuning uchun WSV majburiyat so'rovlariga tezda javob berishi mumkin
    (`iroha_core/src/wsv/mod.rs`).
-4. **Torii RPC additions** for list/query/prove endpoints under
+4. **Torii RPC qoʻshimchalari** ostidagi roʻyxat/soʻrov/tasdiqlash yakuniy nuqtalari uchun
    `/v1/da/commitments`.
-5. **Integration tests + fixtures** validating the wire layout and proof flow in
+5. **Integratsiya testlari + moslamalar** simning joylashuvi va o'tkazuvchanligini tasdiqlovchi
    `integration_tests/tests/da/commitments.rs`.
 
-## 1. Data Model Additions
+## 1. Ma'lumotlar modeli qo'shimchalari
 
 ### 1.1 `DaCommitmentRecord`
 
@@ -75,18 +76,18 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent we fall back to Merkle proofs only.
-- `proof_scheme` is derived from the lane catalog; Merkle lanes reject KZG
-  payloads while `kzg_bls12_381` lanes require non-zero KZG commitments. Torii
-  currently only produces Merkle commitments and rejects KZG-configured lanes.
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent on Merkle lanes we fall back to Merkle proofs
-  only.
-- `proof_digest` anticipates DA-5 PDP/PoTR integration so the same record
-  enumerates the sampling schedule used to keep blobs live.
+- `KzgCommitment` ostida ishlatiladigan mavjud 48 baytlik nuqtadan qayta foydalanadi
+  `iroha_crypto::kzg`. Yo'q bo'lganda, biz faqat Merkle dalillariga qaytamiz.
+- `proof_scheme` chiziqli katalogdan olingan; Merkle yo'laklari KZGni rad etadi
+  foydali yuklar, `kzg_bls12_381` qatorlari esa nolga teng bo'lmagan KZG majburiyatlarini talab qiladi. Torii
+  hozirda faqat Merkle majburiyatlarini ishlab chiqaradi va KZG tomonidan sozlangan yo'llarni rad etadi.
+- `KzgCommitment` ostida ishlatiladigan mavjud 48 bayt nuqtadan qayta foydalanadi
+  `iroha_crypto::kzg`. Merkle yo'laklarida yo'q bo'lganda, biz Merkle dalillariga qaytamiz
+  faqat.
+- `proof_digest` DA-5 PDP/PoTR integratsiyasini kutadi, shuning uchun bir xil rekord
+  bloblarni jonli saqlash uchun foydalaniladigan namuna olish jadvalini sanab o'tadi.
 
-### 1.2 Block header extension
+### 1.2 Blok sarlavhasi kengaytmasi
 
 ```
 pub struct BlockHeader {
@@ -100,115 +101,115 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-overhead.
+Toʻplam xeshi ham blok xeshga, ham `SignedBlockWire` metamaʼlumotlariga taʼminlanadi.
+tepalik.
 
-Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose
-`da_commitments` setters/getters (see `BlockBuilder::set_da_commitments` and
-`SignedBlock::set_da_commitments`), so hosts can attach a pre-built bundle
-before sealing a block. All helper constructors default the field to `None`
-until Torii threads real bundles through.
+Amalga oshirish haqida eslatma: `BlockPayload` va shaffof `BlockBuilder` endi ochiladi
+`da_commitments` sozlagichlar/qabul qiluvchilar (qarang: `BlockBuilder::set_da_commitments` va
+`SignedBlock::set_da_commitments`), shuning uchun xostlar oldindan tuzilgan paketni biriktirishi mumkin
+blokni muhrlashdan oldin. Barcha yordamchi konstruktorlar maydonni sukut bo'yicha `None` deb belgilaydilar
+Torii haqiqiy to'plamlarni o'tkazmaguncha.
 
-### 1.3 Wire encoding
+### 1.3 Simli kodlash
 
-- `SignedBlockWire::canonical_wire()` appends the Norito header for
-  `DaCommitmentBundle` immediately after the existing transaction list. The
-  version byte is `0x01`.
-- `SignedBlockWire::decode_wire()` rejects bundles whose `version` is unknown,
-  matching the Norito policy described in `norito.md`.
-- Hash derivation updates exist only in `block::Hasher`; light clients decoding
-  the existing wire format automatically gain the new field because the Norito
-  header advertises its presence.
+- `SignedBlockWire::canonical_wire()` uchun Norito sarlavhasini qo'shadi
+  Mavjud operatsiyalar ro'yxatidan so'ng darhol `DaCommitmentBundle`. The
+  versiya bayti `0x01`.
+- `SignedBlockWire::decode_wire()` `version` noma'lum bo'lgan paketlarni rad etadi,
+  `norito.md` da tavsiflangan Norito siyosatiga mos keladi.
+- Xesh chiqarish yangilanishlari faqat `block::Hasher` da mavjud; engil mijozlar dekodlash
+  mavjud sim formati avtomatik ravishda yangi maydonni oladi, chunki Norito
+  sarlavha uning mavjudligini e'lon qiladi.
 
-## 2. Block Production Flow
+## 2. Blok ishlab chiqarish oqimi
 
-1. Torii DA ingest finalises a `DaIngestReceipt` and publishes it on the
-   internal queue (`iroha_core::gossiper::QueueMessage::DaReceipt`).
-2. `PendingBlocks` collects all receipts whose `lane_id` matches the block under
-   construction, deduplicating by `(lane_id, client_blob_id, manifest_hash)`.
-3. Right before sealing, the block builder sorts commitments by `(lane_id,
-   epoch, sequence)` to keep the hash deterministic, encodes the bundle with the
-   Norito codec, and updates `da_commitments_hash`.
-4. The full bundle is stored in the WSV and emitted alongside the block inside
+1. Torii DA ingest `DaIngestReceipt` ni yakunlaydi va uni nashr etadi
+   ichki navbat (`iroha_core::gossiper::QueueMessage::DaReceipt`).
+2. `PendingBlocks` `lane_id` ostidagi blokga mos keladigan barcha tushumlarni yig‘adi.
+   qurilish, `(lane_id, client_blob_id, manifest_hash)` tomonidan deuplikatsiya.
+3. Plombalashdan oldin blok quruvchi majburiyatlarni `(lane_id,
+   epoch, sequence)` xeshni deterministik saqlash uchun to'plamni bilan kodlaydi
+   Norito kodek va yangilanishlar `da_commitments_hash`.
+4. To'liq to'plam WSVda saqlanadi va ichidagi blok bilan birga chiqariladi
    `SignedBlockWire`.
 
-If block creation fails the receipts remain in the queue so the next block
-attempt can pick them up; the builder records the last included `sequence` per
-lane to avoid replay attacks.
+Agar blokni yaratish muvaffaqiyatsiz tugasa, kvitansiyalar navbatdagi blokda qoladi
+urinish ularni olishi mumkin; quruvchi oxirgi kiritilgan `sequence` boshiga qayd
+takroriy hujumlardan qochish uchun chiziq.
 
-## 3. RPC & Query Surface
+## 3. RPC va so'rovlar yuzasi
 
-Torii exposes three endpoints:
+Torii uchta so'nggi nuqtani ochib beradi:
 
-| Route | Method | Payload | Notes |
+| Marshrut | Usul | Yuk yuk | Eslatmalar |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (bo'lak/davr/ketma-ketlik bo'yicha diapazon filtri, sahifalash) | `DaCommitmentPage` ni umumiy hisob, majburiyatlar va blok xesh bilan qaytaradi. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (bo'lak + manifest xesh yoki `(epoch, sequence)` korteji). | `DaCommitmentProof` bilan javob beradi (yozuv + Merkle yo'li + blok xeshi). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Blok xesh hisobini takrorlaydigan va kiritishni tasdiqlovchi fuqaroligi bo'lmagan yordamchi; to'g'ridan-to'g'ri `iroha_crypto` ga ulana olmaydigan SDKlar tomonidan foydalaniladi. |
 
-All payloads live under `iroha_data_model::da::commitment`. Torii routers mount
-the handlers next to the existing DA ingest endpoints to reuse token/mTLS
-policies.
+Barcha foydali yuklar `iroha_data_model::da::commitment` ostida yashaydi. Torii marshrutizatorlari o'rnatiladi
+mavjud DA yonidagi ishlov beruvchilar token/mTLSni qayta ishlatish uchun oxirgi nuqtalarni qabul qiladi
+siyosatlar.
 
 ## 4. Inclusion Proofs & Light Clients
 
-- The block producer builds a binary Merkle tree over the serialized
-  `DaCommitmentRecord` list. The root feeds `da_commitments_hash`.
-- `DaCommitmentProof` packages the target record plus a vector of `(sibling_hash,
-  position)` entries so verifiers can reconstruct the root. Proofs also include
-  the block hash and signed header so light clients can verify finality.
-- CLI helpers (`iroha_cli app da prove-commitment`) wrap the proof request/verify
-  cycle and surface Norito/hex outputs for operators.
+- Blok ishlab chiqaruvchisi seriallashtirilgan ustiga ikkilik Merkle daraxtini quradi
+  `DaCommitmentRecord` ro'yxati. Ildiz `da_commitments_hash` ni oziqlantiradi.
+- `DaCommitmentProof` maqsadli yozuvni va `(sibling_hash,) vektorini paketlaydi.
+  position)` yozuvlari, shuning uchun tekshiruvchilar ildizni qayta qurishlari mumkin. Isbotlar ham o'z ichiga oladi
+  blok xesh va imzolangan sarlavha, shuning uchun engil mijozlar yakuniyligini tekshirishlari mumkin.
+- CLI yordamchilari (`iroha_cli app da prove-commitment`) isbot so'rovini o'rab oladi/tekshiradi
+  operatorlar uchun tsikl va sirt Norito/hex chiqishi.
 
-## 5. Storage & Indexing
+## 5. Saqlash va indekslash
 
-WSV stores commitments in a dedicated column family keyed by `manifest_hash`.
-Secondary indexes cover `(lane_id, epoch)` and `(lane_id, sequence)` so queries
-avoid scanning full bundles. Each record tracks the block height that sealed it,
-allowing catch-up nodes to rebuild the index quickly from the block log.
+WSV majburiyatlarni `manifest_hash` tomonidan kalitlangan maxsus ustunlar oilasida saqlaydi.
+Ikkilamchi indekslar `(lane_id, epoch)` va `(lane_id, sequence)` so'rovlarini qamrab oladi
+to'liq to'plamlarni skanerlashdan saqlaning. Har bir yozuv uni muhrlagan blok balandligini kuzatadi,
+ushlash tugunlariga blok jurnalidan indeksni tezda qayta tiklashga imkon beradi.
 
-## 6. Telemetry & Observability
+## 6. Telemetriya va kuzatuvchanlik
 
-- `torii_da_commitments_total` increments whenever a block seals at least one
-  record.
-- `torii_da_commitment_queue_depth` tracks receipts waiting to be bundled (per
-  lane).
-- Grafana dashboard `dashboards/grafana/da_commitments.json` visualises block
-  inclusion, queue depth, and proof throughput so DA-3 release gates can audit
-  behaviour.
+- `torii_da_commitments_total` blok kamida bittasini muhrlaganda oshadi
+  rekord.
+- `torii_da_commitment_queue_depth` paketlanishi kutilayotgan kvitansiyalarni kuzatib boradi
+  bo'lak).
+- Grafana asboblar paneli `dashboards/grafana/da_commitments.json` blokini ko'rsatadi
+  inklyuziya, navbat chuqurligi va isbot o'tkazuvchanligi, shuning uchun DA-3 chiqarish eshiklari tekshirilishi mumkin
+  xatti-harakati.
 
-## 7. Testing Strategy
+## 7. Sinov strategiyasi
 
-1. **Unit tests** for `DaCommitmentBundle` encoding/decoding and block hash
-   derivation updates.
-2. **Golden fixtures** under `fixtures/da/commitments/` capturing canonical
-   bundle bytes and Merkle proofs.
-3. **Integration tests** booting two validators, ingesting sample blobs, and
-   asserting that both nodes agree on the bundle contents and query/proof
-   responses.
-4. **Light-client tests** in `integration_tests/tests/da/commitments.rs`
-   (Rust) that call `/prove` and verify the proof without talking to Torii.
-5. **CLI smoke** script `scripts/da/check_commitments.sh` to keep operator
-   tooling reproducible.
+1. `DaCommitmentBundle` kodlash/dekodlash va blok xesh uchun **birlik sinovlari**
+   hosila yangilanishlari.
+2. `fixtures/da/commitments/` ostida **Oltin armatura** kanonik suratga olish
+   to'plam baytlari va Merkle dalillari.
+3. **Integratsiya testlari** ikkita validatorni yuklash, namunaviy bloblarni qabul qilish va
+   ikkala tugun ham to'plam mazmuni va so'rov/dalil bo'yicha kelishib olishini ta'kidlaydi
+   javoblar.
+4. `integration_tests/tests/da/commitments.rs` da **Light-mijoz testlari**
+   (Rust) `/prove` ga qo'ng'iroq qiladi va Torii bilan gaplashmasdan dalilni tasdiqlaydi.
+5. Operatorni ushlab turish uchun **CLI smoke** skripti `scripts/da/check_commitments.sh`
+   asboblarni takrorlash mumkin.
 
-## 8. Rollout Plan
+## 8. Ishlab chiqarish rejasi
 
-| Phase | Description | Exit Criteria |
+| Bosqich | Tavsif | Chiqish mezonlari |
 |-------|-------------|---------------|
-| P0 — Data model merge | Land `DaCommitmentRecord`, block header updates, and Norito codecs. | `cargo test -p iroha_data_model` green with new fixtures. |
-| P1 — Core/WSV wiring | Thread queue + block builder logic, persist indexes, and expose RPC handlers. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` pass with bundle proof assertions. |
-| P2 — Operator tooling | Ship CLI helpers, Grafana dashboard, and proof verification doc updates. | `iroha_cli app da prove-commitment` works against devnet; dashboard displays live data. |
-| P3 — Governance gate | Enable block validator requiring DA commitments on the lanes flagged in `iroha_config::nexus`. | Status entry + roadmap update mark DA-3 as 🈴. |
+| P0 - Ma'lumotlar modelini birlashtirish | Land `DaCommitmentRecord`, blok sarlavhalari yangilanishlari va Norito kodeklari. | `cargo test -p iroha_data_model` yashil, yangi jihozlar bilan. |
+| P1 - Yadro/WSV simlari | Mavzu navbati + blok quruvchi mantiq, doimiy indekslar va RPC ishlov beruvchilarini ochish. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` to'plamni isbotlovchi tasdiqlar bilan o'tadi. |
+| P2 — Operator asboblari | CLI yordamchilarini, Grafana asboblar panelini va tasdiqlovchi hujjat yangilanishlarini yuboring. | `iroha_cli app da prove-commitment` devnetga qarshi ishlaydi; asboblar paneli jonli ma'lumotlarni ko'rsatadi. |
+| P3 - Boshqaruv darvozasi | `iroha_config::nexus` da belgilangan qatorlarda DA majburiyatlarini talab qiluvchi blok validatorni yoqing. | Status kiritish + yo‘l xaritasini yangilash DA-3 ni 🈴 sifatida belgilang. |
 
-## Open Questions
+## Ochiq savollar
 
-1. **KZG vs Merkle defaults** — Should small blobs always skip KZG commitments to
-   reduce block size? Proposal: keep `kzg_commitment` optional and gate via
+1. **KZG va Merkle defoltlari** — Kichik bloklar har doim KZG majburiyatlarini o'tkazib yuborishi kerakmi?
+   blok hajmini kamaytirasizmi? Taklif: `kzg_commitment` ni ixtiyoriy va darvoza orqali saqlang
    `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** — Do we allow out-of-order lanes? Current plan rejects gaps
-   unless governance toggles `allow_sequence_skips` for emergency replay.
-3. **Light-client cache** — SDK team requested a lightweight SQLite cache for
-   proofs; pending follow-up under DA-8.
+2. **Tartib bo'lmagan bo'shliqlar** - Biz tartibsiz bo'laklarga ruxsat beramizmi? Joriy reja bo'shliqlarni rad etadi
+   boshqaruv favqulodda takrorlash uchun `allow_sequence_skips` ni almashtirmasa.
+3. **Light-mijoz keshi** — SDK jamoasi yengil SQLite keshini talab qildi.
+   dalillar; DA-8 bo'yicha kuzatuv kutilmoqda.
 
-Answering these in implementation PRs moves DA-3 from 🈸 (this document) to 🈺
-once code work begins.
+PRlarni amalga oshirishda ularga javob berish DA-3 ni 🈸 (ushbu hujjat) dan 🈺 ga o'tkazadi.
+kod ishi boshlangandan keyin.

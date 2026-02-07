@@ -7,58 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d6965998c392217380a1722e49098f831438e2f4499b9e3258398a66f905a35
 source_last_modified: "2025-12-29T18:16:35.080069+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Workbook Template
+# SNS སྦྱོང་བརྡར་ལས་ཀའི་ ཊེམ་པེལེཊ།
 
-Use this workbook as the canonical handout for each training cohort. Replace
-placeholders (`<...>`) before distributing to attendees.
+སྦྱོང་བརྡར་སྡེ་ཚན་རེ་རེའི་དོན་ལུ་ ལཱ་གི་དེབ་འདི་ ཀེ་ནོ་ནིག་ལག་དེབ་སྦེ་ལག་ལེན་འཐབ། བརྗེས༌སོར༌འབད༌ནི
+ས་གནས་འཛིན་མི་ (`<...>`) བཅའ་མར་གཏོགས་མི་ཚུ་ལུ་ བཀྲམ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ཨིན།
 
-## Session details
-- Suffix: `<.sora | .nexus | .dao>`
-- Cycle: `<YYYY-MM>`
-- Language: `<ar/es/fr/ja/pt/ru/ur>`
-- Facilitator: `<name>`
+## ལཱ་ཡུན་རྒྱས་བཤད།
+- རྗེས་འཇུག: `<.sora | .nexus | .dao>`
+- འཁོར་རིམ།: `<YYYY-MM>`
+- སྐད་ཡིག: `<ar/es/fr/ja/pt/ru/ur>`
+- མཐུན་རྐྱེན་པ།: `<name>`
 
-## Lab 1 — KPI export
-1. Open the portal KPI dashboard (`docs/portal/docs/sns/kpi-dashboard.md`).
-2. Filter by suffix `<suffix>` and time range `<window>`.
-3. Export PDF + CSV snapshots.
-4. Record SHA-256 of the exported JSON/PDF here: `______________________`.
+## བརྟག་དཔྱད་ ༡ — ཀེ་པི་ཨའི་ཕྱིར་འདྲེན་།
+༡ དྲྭ་ཐོག་ཀེ་པི་ཨའི་ ཌེཤ་བོརཌ་ (`docs/portal/docs/sns/kpi-dashboard.md`) ཁ་ཕྱེ།
+2. རྗེས་འཇུག་ `<suffix>` དང་དུས་ཚོད་ཀྱི་ཁྱབ་ཚད་ `<window>` གིས་ ཚགས་མ།
+3. PDF + CSV པར་ལེན་ཕྱིར་གཏོང་།
+༤ ཕྱིར་ཚོང་འབད་མི་ JSON/PDF གི་ SHA-256 འདི་ ནཱ་ལུ་: I18NI000000011X.
 
-## Lab 2 — Manifest drill
-1. Fetch the sample manifest from `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`.
-2. Validate with `cargo run --bin sns_manifest_check -- --input <file>`.
-3. Generate resolver skeleton with `scripts/sns_zonefile_skeleton.py`.
-4. Paste the diff summary:
+## ལ་བ ༢ — མ་ཕེསཊ་སྦྱོང་བརྡར་པ།
+༡ དཔེ་ཚད་ཀྱི་གསལ་སྟོན་འདི་ `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json` ལས་བཏོན་དགོ།
+2. `cargo run --bin sns_manifest_check -- --input <file>` དང་བཅས་བདེན་དཔང་འབད།
+3. ཐག་གཅོད་ཀྱི་ཀེང་རུས་འདི་ `scripts/sns_zonefile_skeleton.py` དང་བཅས་བཟོ་དགོས།
+4. ཁྱད་པར་བསྡུ་བ་ནི།
    ```
    <git diff output>
    ```
 
-## Lab 3 — Dispute simulation
-1. Use guardian CLI to start a freeze (case id `<case-id>`).
-2. Record the dispute hash: `______________________`.
-3. Upload the evidence log to `artifacts/sns/training/<suffix>/<cycle>/logs/`.
+## བརྟག་དཔྱད་ ༣ — ཉོགས་འཛིང་གི་ཚད་གཞི།
+༡ གྱང་ཤུགས་འགོ་བཙུགས་ནིའི་དོན་ལུ་ ལྟ་རྟོག་པ་ CLI ལག་ལེན་འཐབ་དགོ། (case id `<case-id>`)
+༢ རྩོད་གཞི་འདི་ཐོ་བཀོད་འབད།
+༣ སྒྲུབ་བྱེད་དྲན་ཐོ་ `artifacts/sns/training/<suffix>/<cycle>/logs/` ལུ་སྐྱེལ་བཙུགས་འབད།
 
-## Lab 4 — Annex automation
-1. Export the Grafana dashboard JSON and copy it into `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`.
-2. Run:
-   ```bash
-   cargo xtask sns-annex \
-     --suffix <suffix> \
-     --cycle <cycle> \
-     --dashboard artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json \
-     --dashboard-artifact artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json \
-     --output docs/source/sns/reports/<suffix>/<cycle>.md \
-     --regulatory-entry docs/source/sns/regulatory/<memo>.md \
-     --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
-   ```
-3. Paste the annex path + SHA-256 output: `________________________________`.
+## བརྟག་དཔྱད་ ༤ — ལེགས་བཅོས་འབད་ནི།
+1. I18NT0000000000X ཌེཤ་བོརཌ་ཇེ་ཨེསི་ཨོ་ཨེན་ ཕྱིར་འཐེན་འབད་ཞིནམ་ལས་ `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json` ནང་ལུ་འདྲ་བཤུས་རྐྱབས།
+2. རྒྱུག::
+   I18NF0000002X
+3. ཟུར་ལམ་འདི་སྦྱར་ཞིནམ་ལས་ SHA-256 ཐོན་འབྲས་: `________________________________`.
 
-## Feedback notes
-- What was unclear?
-- Which labs ran over time?
-- Tooling bugs observed?
+## བསམ་འཆར་དྲན་ཐོ།
+- ག་ཅི་གསལ་ཏོག་ཏོ་ཅིག་མེདཔ་སྨོ?
+- དུས་ཚོད་དང་འཁྲིལ་ཏེ་ བརྟག་དཔྱད་ཁང་གང་གིས་ བརྒྱུགས་ཡི་ག་?
+- ལག་ཆས་ཀྱི་འབུཔ་ཚུ་ བལྟ་རྟོགས་འབད་ཡི་ག?
 
-Return completed workbooks to the facilitator; they belong under
+ལཱ་གི་དེབ་ཚུ་ མགྱོགས་དྲགས་སྦེ་ མཐུན་རྐྱེན་བྱིན་མི་ལུ་ ལོག་སྤྲོད་ནི། དེ་ཚུ་ འོག་ལུ་ཚུདཔ་ཨིན།
 `artifacts/sns/training/<suffix>/<cycle>/workbooks/`.

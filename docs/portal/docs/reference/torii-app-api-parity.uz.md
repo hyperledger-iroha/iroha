@@ -10,37 +10,38 @@ translation_last_reviewed: 2026-02-07
 id: torii-app-api-parity
 title: Torii app API parity audit
 description: Mirror of the TORII-APP-1 review so SDK and platform teams can confirm public coverage.
+translator: machine-google-reviewed
 ---
 
-Status: Completed 2026-03-21  
-Owners: Torii Platform, SDK Program Lead  
-Roadmap reference: TORII-APP-1 — `app_api` parity audit
+Holati: Tugallangan 2026-03-21  
+Egalari: Torii platformasi, SDK dasturi rahbari  
+Yoʻl xaritasi maʼlumotnomasi: TORII-APP-1 — `app_api` paritet auditi
 
-This page mirrors the internal `TORII-APP-1` audit (`docs/source/torii/app_api_parity_audit.md`)
-so readers outside the mono-repo can see which `/v1/*` surfaces are wired, tested,
-and documented. The audit tracks the routes re-exported through `Torii::add_app_api_routes`,
-`add_contracts_and_vk_routes`, and `add_connect_routes`.
+Bu sahifa ichki `TORII-APP-1` auditini aks ettiradi (`docs/source/torii/app_api_parity_audit.md`)
+Shunday qilib, mono-repodan tashqaridagi o'quvchilar qaysi `/v1/*` sirtlari simli, sinovdan o'tganligini ko'rishlari mumkin,
+va hujjatlashtirilgan. Audit `Torii::add_app_api_routes` orqali qayta eksport qilingan marshrutlarni kuzatib boradi,
+`add_contracts_and_vk_routes` va `add_connect_routes`.
 
-## Scope & method
+## Qamrov va usul
 
-The audit inspects the public re-exports in `crates/iroha_torii/src/lib.rs:256-522` and the
-feature-gated route builders. For every `/v1/*` surface in the roadmap we verified:
+Audit `crates/iroha_torii/src/lib.rs:256-522` da davlat reeksportlarini tekshiradi va
+xususiyatga ega marshrut quruvchilar. Yo'l xaritasidagi har bir `/v1/*` yuzasi uchun biz quyidagilarni tekshirdik:
 
-- Handler implementation and DTO definitions in `crates/iroha_torii/src/routing.rs`.
-- Router registration under the `app_api` or `connect` feature groups.
-- Existing integration/unit tests and the owning team responsible for long-term coverage.
+- `crates/iroha_torii/src/routing.rs` da ishlov beruvchini amalga oshirish va DTO ta'riflari.
+- `app_api` yoki `connect` xususiyatlar guruhlari ostida marshrutizatorni ro'yxatdan o'tkazish.
+- Mavjud integratsiya/birlik testlari va uzoq muddatli qamrov uchun mas'ul bo'lgan egalik guruhi.
 
-Account assets/transactions and asset-holder listings accept optional `asset_id` query parameters
-for pre-filtering, in addition to the existing pagination/backpressure limits.
+Hisob aktivlari/tranzaksiyalari va aktiv egalari roʻyxati ixtiyoriy `asset_id` soʻrov parametrlarini qabul qiladi
+mavjud sahifalash/orqa bosim chegaralariga qo'shimcha ravishda oldindan filtrlash uchun.
 
-## Auth & canonical signing
+## Tasdiqlash va kanonik imzolash
 
-- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`) built from `METHOD\n/path\nsorted_query\nsha256(body)`; Torii wraps them into `QueryRequestWithAuthority` before executor validation so they mirror `/query`.
-- SDK helpers ship in all primary clients:
-  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })` from `canonicalRequest.js`.
-  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
+- Ilovaga qaragan GET/POST so'nggi nuqtalari `METHOD\n/path\nsorted_query\nsha256(body)` dan tuzilgan ixtiyoriy kanonik so'rov sarlavhalarini (`X-Iroha-Account`, `X-Iroha-Signature`) qabul qiladi; Torii ijrochi tekshiruvidan oldin ularni `QueryRequestWithAuthority` ichiga o'rab oladi, shuning uchun ular `/query`ni aks ettiradi.
+- SDK yordamchilari barcha asosiy mijozlarga yuboriladi:
+  - JS/TS: `canonicalRequest.js` dan `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })`.
+  - Tezkor: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
   - Android (Kotlin/Java): `CanonicalRequestSigner.signingHeaders(accountId, method, path, query, body, signer)`.
-- Example snippets:
+- Misol parchalari:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
 const headers = buildCanonicalRequestHeaders({ accountId: "ih58...", method: "get", path: "/v1/accounts/ih58.../assets", query: "limit=5", body: "", privateKey });
@@ -59,98 +60,98 @@ val signer = Ed25519Signer(privateKey, publicKey)
 val headers = CanonicalRequestSigner.signingHeaders("ih58...", "get", "/v1/accounts/ih58.../assets", "limit=5", ByteArray(0), signer)
 ```
 
-## Endpoint inventory
+## Oxirgi nuqta inventarizatsiyasi
 
-### Account permissions (`/v1/accounts/{id}/permissions`) — Covered
-- Handler: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
-- DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
-- Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
-- Tests: `crates/iroha_torii/tests/accounts_endpoints.rs:126` and `crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`.
-- Owner: Torii Platform.
-- Notes: Response is a Norito JSON body with `items`/`total`, matching SDK pagination helpers.
+### Hisob ruxsatnomalari (`/v1/accounts/{id}/permissions`) — Qoplangan
+- Ishlovchi: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
+- DTO'lar: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
+- Router ulanishi: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
+- Testlar: `crates/iroha_torii/tests/accounts_endpoints.rs:126` va `crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`.
+- Egasi: Torii platformasi.
+- Eslatmalar: Javob Norito JSON korpusi boʻlib, `items`/`total` boʻlib, SDK sahifalash yordamchilariga mos keladi.
 
-### Alias OPRF evaluate (`POST /v1/aliases/voprf/evaluate`) — Covered
-- Handler: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
-- DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
+### taxallus OPRF baholash (`POST /v1/aliases/voprf/evaluate`) - Qoplangan
+- Ishlovchi: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
+- DTOlar: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
-- Router binding: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
-- Tests: inline handler tests (`crates/iroha_torii/src/lib.rs:9945-9986`) plus SDK coverage
+- Router ulanishi: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
+- Sinovlar: inline ishlov beruvchi testlari (`crates/iroha_torii/src/lib.rs:9945-9986`) va SDK qamrovi
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
-- Owner: Torii Platform.
-- Notes: Response surface enforces deterministic hex and backend identifiers; SDKs consume the DTO.
+- Egasi: Torii platformasi.
+- Eslatmalar: Javob yuzasi deterministik hex va backend identifikatorlarini amalga oshiradi; SDKlar DTO ni iste'mol qiladi.
 
-### Proof events SSE (`GET /v1/events/sse`) — Covered
-- Handler: `handle_v1_events_sse` with filter support (`crates/iroha_torii/src/routing.rs:14008-14133`).
-- DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) plus proof filter wiring.
-- Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
-- Tests: proof-specific SSE suites (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`,
-  `sse_proof_callhash.rs`, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) and pipeline SSE smoke test
+### Proof voqealari SSE (`GET /v1/events/sse`) - Qoplangan
+- Ishlovchi: `handle_v1_events_sse` filtr qo'llab-quvvatlashi bilan (`crates/iroha_torii/src/routing.rs:14008-14133`).
+- DTO'lar: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) va filtrli simlar.
+- Router ulanishi: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
+- Sinovlar: isbot uchun maxsus SSE to'plamlari (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`,
+  `sse_proof_callhash.rs`, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) va quvur liniyasi SSE tutun sinovi
   (`integration_tests/tests/events/sse_smoke.rs`).
-- Owner: Torii Platform (runtime), Integration Tests WG (fixtures).
-- Notes: Proof filter paths validated end-to-end; documentation lives under `docs/source/zk_app_api.md`.
+- Egasi: Torii platformasi (ish vaqti), Integratsiya testlari WG (fiksatorlar).
+- Izohlar: filtri yo'llarining uchdan uchiga tasdiqlangan isboti; hujjatlar `docs/source/zk_app_api.md` ostida ishlaydi.
 
-### Contract lifecycle (`/v1/contracts/*`) — Covered
-- Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
+### Shartnomaning ishlash davri (`/v1/contracts/*`) — Qoplangan
+- Ishlovchilar: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
   `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
   `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
+- DTOlar: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
   (`crates/iroha_torii/src/routing.rs:3124-3463`).
-- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
+- Router ulanishi: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
+- Sinovlar: marshrutizator/integratsiya to'plamlari `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
   `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
   `contracts_instances_list_router.rs`.
-- Owner: Smart Contract WG with Torii Platform.
-- Notes: Endpoints queue signed transactions and reuse shared telemetry metrics (`handle_transaction_with_metrics`).
+- Egasi: Torii platformasi bilan aqlli kontrakt WG.
+- Eslatmalar: Endpoints imzolangan tranzaktsiyalarni navbatga qo'yadi va umumiy telemetriya ko'rsatkichlarini qayta ishlatadi (`handle_transaction_with_metrics`).
 
-### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
-- Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
-  (`crates/iroha_torii/src/routing.rs:4282-4382`) and `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
-- DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
+### Kalitning ishlash davrini tekshirish (`/v1/zk/vk/*`) — Qoplangan
+- Ishlovchilar: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
+  (`crates/iroha_torii/src/routing.rs:4282-4382`) va `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
+- DTOlar: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
   (`crates/iroha_torii/src/routing.rs:3619-4279`).
-- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: `crates/iroha_torii/tests/zk_vk_get_integration.rs`,
+- Router ulanishi: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
+- Testlar: `crates/iroha_torii/tests/zk_vk_get_integration.rs`,
   `crates/iroha_torii/tests/zk_verify_handler_integration.rs`,
   `crates/iroha_torii/tests/zk_vote_tally_handler.rs`.
-- Owner: ZK Working Group with Torii Platform support.
-- Notes: DTOs align with Norito schemas referenced by SDKs; rate limiting enforced via `limits.rs`.
+- Egasi: Torii platformasini qo'llab-quvvatlaydigan ZK ishchi guruhi.
+- Eslatmalar: DTOlar SDK tomonidan havola qilingan Norito sxemalariga mos keladi; tarif cheklovi `limits.rs` orqali amalga oshiriladi.
 
-### Nexus Connect (`/v1/connect/*`) — Covered (feature `connect`)
-- Handlers: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
+### Nexus Connect (`/v1/connect/*`) — Qoplangan (`connect` xususiyati)
+- Ishlovchilar: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
-- DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),
+- DTOlar: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),
   `ConnectSessionStatusDto` (`crates/iroha_torii/src/routing.rs:2004-2035`).
-- Router binding: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`).
-- Tests: `crates/iroha_torii/tests/connect_gating.rs` (feature gating, session lifecycle, WS handshake) and
-  router feature matrix coverage (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`).
-- Owner: Nexus Connect WG.
-- Notes: Rate limit keys tracked via `limits::rate_limit_key`; telemetry counters feed `connect.*` metrics.
+- Router ulanishi: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`).
+- Sinovlar: `crates/iroha_torii/tests/connect_gating.rs` (xususiyatlar chegarasi, seansning hayotiy tsikli, WS qoʻl siqish) va
+  router xususiyati matritsasi qamrovi (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`).
+- Egasi: Nexus Connect WG.
+- Eslatmalar: `limits::rate_limit_key` orqali kuzatilgan tarif chegarasi kalitlari; telemetriya hisoblagichlari `connect.*` ko'rsatkichlarini ta'minlaydi.
 
-### Kaigi relay telemetry — Covered
-- Handlers: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
+### Kaigi relay telemetriyasi — Yopiq
+- Ishlovchilar: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
   `handle_v1_kaigi_relays_health`, `handle_v1_kaigi_relays_sse`
   (`crates/iroha_torii/src/routing.rs:14510-14787`).
-- DTOs: `KaigiRelaySummaryDto`, `KaigiRelaySummaryListDto`,
+- DTOlar: `KaigiRelaySummaryDto`, `KaigiRelaySummaryListDto`,
   `KaigiRelayDetailDto`, `KaigiRelayDomainMetricsDto`,
   `KaigiRelayHealthSnapshotDto` (`crates/iroha_torii/src/routing.rs:932-1046`).
-- Router binding: `Torii::add_app_api_routes`
+- Router ulanishi: `Torii::add_app_api_routes`
   (`crates/iroha_torii/src/lib.rs:6805-6840`).
-- Tests: `crates/iroha_torii/tests/kaigi_endpoints.rs`.
-- Notes: SSE stream reuses the global broadcast channel while enforcing
-  telemetry profile gating; response schemas documented in
+- Testlar: `crates/iroha_torii/tests/kaigi_endpoints.rs`.
+- Eslatmalar: SSE oqimi amal qilish vaqtida global eshittirish kanalidan qayta foydalanadi
+  telemetriya profilini o'rnatish; javob sxemalari hujjatlashtirilgan
   `docs/source/torii/kaigi_telemetry_api.md`.
 
-## Test coverage summary
+## Test qamrovi xulosasi
 
-- Router smoke tests (`crates/iroha_torii/tests/router_feature_matrix.rs`) ensure feature combinations register every
-  route and that OpenAPI generation stays in sync.
-- Endpoint-specific suites cover account queries, contract lifecycle, ZK verifying keys, SSE proof filters, and Nexus
-  Connect behaviours.
-- SDK parity harnesses (JavaScript, Swift, Python) already consume Alias VOPRF and SSE endpoints; no additional work
-  required.
+- Routerning tutun sinovlari (`crates/iroha_torii/tests/router_feature_matrix.rs`) har bir xususiyat birikmalarining ro'yxatga olinishini ta'minlaydi
+  marshrut va OpenAPI avlodi sinxronlashtiriladi.
+- Endpoint-maxsus to'plamlar hisob so'rovlari, shartnomaning amal qilish davri, ZK tasdiqlash kalitlari, SSE proof filtrlari va Nexusni qamrab oladi.
+  Xulq-atvorni bog'lash.
+- SDK paritet jabduqlari (JavaScript, Swift, Python) allaqachon Alias ​​VOPRF va SSE so'nggi nuqtalarini iste'mol qiladi; qo'shimcha ish yo'q
+  talab qilinadi.
 
-## Keeping this mirror up to date
+## Ushbu oynani yangilab turish
 
-Update both this page and the source audit (`docs/source/torii/app_api_parity_audit.md`)
-whenever Torii app API behaviour changes so SDK owners and external readers stay aligned.
+Bu sahifani ham, manba auditini ham yangilang (`docs/source/torii/app_api_parity_audit.md`)
+Torii ilovasi API xatti-harakati o'zgarganda, SDK egalari va tashqi o'quvchilar bir xilda qoladilar.

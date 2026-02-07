@@ -5,88 +5,83 @@ source: docs/portal/docs/devportal/torii-rpc-overview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito-RPC Overview
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito-RPC Overview
+# I18NT00000000000Х-РПК Обзор
 
-Norito-RPC is the binary transport for Torii APIs. It reuses the same HTTP paths
-as `/v1/pipeline` but exchanges Norito-framed payloads that include schema
-hashes and checksums. Use it when you need deterministic, validated responses or
-when pipeline JSON responses become a bottleneck.
+Norito-RPC — I18NT000000012X API-лар өсөн бинар транспорт. Ул шул уҡ HTTP юлдарын ҡабаттан ҡуллана
+I18NI000000024X тип, әммә алмашыу I18NT0000000002X-рамкалы файҙалы йөктәр, улар үҙ эсенә ала схемаһы
+хеш һәм тикшерелгән суммалар. Уны ҡулланыу, ҡасан һеҙгә кәрәк детерминистик, раҫланған яуап йәки
+торба үткәргес JSON яуаптар тар муйынға әйләнгәндә.
 
-## Why switch?
-- Deterministic framing with CRC64 and schema hashes reduces decoding errors.
-- Shared Norito helpers across SDKs let you reuse existing data-model types.
-- Torii already tags Norito sessions in telemetry, so operators can monitor
-adoption with the provided dashboards.
+## Ни өсөн күсергә?
+- CRC64 менән детерминистик рамка һәм схема хештары декодлау хаталарын кәметә.
+- SDK-лар буйынса ярҙамсыларҙы SDK-лар буйынса бүлешергә мөмкинлек бирә.
+- I18NT0000000013X инде телеметрия буйынса I18NT0000000004X сеанстары тегтары, шуға күрә операторҙар күҙәтеү ала
+ҡабул итеү менән бирелгән приборҙар таҡталары.
 
-## Making a request
+## Һорау эшләү
 
-```bash
-curl \
-  -H 'Content-Type: application/x-norito' \
-  -H 'Accept: application/x-norito' \
-  -H "Authorization: Bearer ${TOKEN}" \
-  --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v1/transactions/submit
-```
+I18NF000000020X
 
-1. Serialize your payload with the Norito codec (`iroha_client`, SDK helpers, or
+.
    `norito::to_bytes`).
-2. Send the request with `Content-Type: application/x-norito`.
-3. Request a Norito response using `Accept: application/x-norito`.
-4. Decode the response using the matching SDK helper.
+2. Запросты `Content-Type: application/x-norito` менән ебәрегеҙ.
+3. I18NI00000000028X ҡулланып Norito яуап.
+4. Яуапты тап килгән SDK ярҙамсыһы ярҙамында асыҡлау.
 
-SDK-specific guidance:
-- **Rust**: `iroha_client::Client` negotiates Norito automatically when you set
-  the `Accept` header.
-- **Python**: use `NoritoRpcClient` from `iroha_python.norito_rpc`.
-- **Android**: use `NoritoRpcClient` and `NoritoRpcRequestOptions` in the
-  Android SDK.
-- **JavaScript/Swift**: helpers are tracked in `docs/source/torii/norito_rpc_tracker.md`
-  and will land as part of NRPC-3.
+SDK-специфик йүнәлештәр:
+- **Раст**: I18NI000000029X X һөйләшеүҙәр I18NT0000000007X автоматик рәүештә, һеҙ ҡуйғанда
+  I18NI000000030X башлығы.
+- **Питон**: `NoritoRpcClient` ҡулланыу I18NI000000032X.
+- **Android**: I18NI000000033X һәм I18NI000000034X ҡулланыу.
+  Андроид СДК.
+- **JavaScript/Swift**: ярҙамсылары I18NI000000035X-та күҙәтелә.
+  һәм НРПК-3 өлөшө булараҡ ерләнәсәк.
 
-## Try It console sample
+## Һынап ҡарағыҙ, ул консоль өлгөһө
 
-The developer portal ships a Try It proxy so reviewers can replay Norito
-payloads without writing bespoke scripts.
+Төҙөүсе портал караптары Try It прокси шулай рецензенттар реплей I18NT000000008X .
+наградалар яҙыуһыҙ скрипттарҙы яҙмайынса файҙалы йөктәр.
 
-1. [Start the proxy](./try-it.md#start-the-proxy-locally) and set
-   `TRYIT_PROXY_PUBLIC_URL` so the widgets know where to send traffic.
-2. Open the **Try it** card on this page or the `/reference/torii-swagger`
-   panel and select an endpoint such as `POST /v1/pipeline/submit`.
-3. Switch the **Content-Type** to `application/x-norito`, choose the **Binary**
-   editor, and upload `fixtures/norito_rpc/transfer_asset.norito`
-   (or any payload listed in
+1. [Прокси башлай](./try-it.md#start-the-proxy-locally) һәм комплект
+   I18NI000000036X шулай виджеттар ҡайҙа ебәрергә икәнен белә.
+.
+   панель һәм һайлау ос нөктәһе, мәҫәлән, I18NI000000038X.
+3. **Йөкмәтке-тип** I18NI0000000039X тиклем **Бинар**
+   мөхәррир, һәм тейәп I18NI000000040X
+   (йәки ниндәй ҙә булһа файҙалы йөкләмәләр исемлегенә индерелгән.
    `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
-4. Provide a bearer token via the OAuth device-code widget or the manual token
-   field (the proxy accepts `X-TryIt-Auth` overrides when configured with
+4. Ойошник ҡоролмаһы аша OAuth ҡоролма-код виджет йәки ҡул жетон тәьмин итеү .
+   ялан (прокси ҡабул итә I18NI0000000042X өҫтөнлөк ҡасан конфигурацияланған менән
    `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
-5. Submit the request and verify that Torii echoes the `schema_hash` listed in
-   `fixtures/norito_rpc/schema_hashes.json`. Matching hashes confirm that the
-   Norito header survived the browser/proxy hop.
+.
+   `fixtures/norito_rpc/schema_hashes.json`. Хештарҙы тап килтереп раҫлауынса,
+   Norito башы браузер/прокси-хоптан иҫән ҡалған.
 
-For roadmap evidence, pair the Try It screenshot with a run of
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`. The script wraps
-`cargo xtask norito-rpc-verify`, writes the JSON summary to
-`artifacts/norito_rpc/<timestamp>/`, and captures the same fixtures that the
-portal consumed.
+Юл картаһы дәлилдәре өсөн, пар скриншот менән Try 2000 йылғы йүгереүҙең .
+I18NI000000046X. Сценарий уратып ала
+I18NI000000047X, тип яҙа JSON йомғаҡлау.
+I18NI0000000048X, һәм шул уҡ ҡорамалдарҙы тота, тип,
+порталы ҡулланыла.
 
-## Troubleshooting
+## Төҙөкләндереүҙең
 
-| Symptom | Where it appears | Likely cause | Fix |
+| Симптом | Ҡайҙа күренә | Моғайын, сәбәп | Төҙәтеү |
 | --- | --- | --- | --- |
-| `415 Unsupported Media Type` | Torii response | Missing or incorrect `Content-Type` header | Set `Content-Type: application/x-norito` before sending the payload. |
-| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Torii response body/headers | Fixture schema hash differs from the Torii build | Regenerate fixtures with `cargo xtask norito-rpc-fixtures` and confirm the hash in `fixtures/norito_rpc/schema_hashes.json`; fall back to JSON if the endpoint has not enabled Norito yet. |
-| `{"error":"origin_forbidden"}` (HTTP 403) | Try It proxy response | Request came from an origin that is not listed in `TRYIT_PROXY_ALLOWED_ORIGINS` | Add the portal origin (e.g., `https://docs.devnet.sora.example`) to the env var and restart the proxy. |
-| `{"error":"rate_limited"}` (HTTP 429) | Try It proxy response | Per-IP quota exceeded the `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` budget | Increase the limit for internal load testing or wait until the window resets (see `retryAfterMs` in the JSON response). |
-| `{"error":"upstream_timeout"}` (HTTP 504) or `{"error":"upstream_error"}` (HTTP 502) | Try It proxy response | Torii timed out or the proxy could not reach the configured backend | Verify that `TRYIT_PROXY_TARGET` is reachable, check Torii health, or retry with a larger `TRYIT_PROXY_TIMEOUT_MS`. |
+| `415 Unsupported Media Type` | I18NT000000015X яуап | Юғалған йәки дөрөҫ булмаған `Content-Type` башлығы | Комплект I18NI000000051X ебәрер алдынан файҙалы йөк. |
+| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | I18NT000000016X яуап тән/башлыҡтар | Фикстура схемаһы хеш I18NT0000000017X төҙөүҙән айырыла | `cargo xtask norito-rpc-fixtures` менән регенерация ҡоролмалары һәм I18NI000000054X-та хеш раҫлай; ҡайтып төшөү JSON, әгәр ос нөктәһе I18NT000000010X әлегә мөмкинлек бирмәгән. |
+| `{"error":"origin_forbidden"}` (HTTP 403) | Тырышып ҡарағыҙ Ул прокси яуап | Запрос сығышынан килде, тип исемлеккә инмәй I18NI0000000056X | Өҫтәү порталь сығышы (мәҫәлән, `https://docs.devnet.sora.example`) env va һәм прокси яңынан эшләй башлай. |
+| `{"error":"rate_limited"}` (HTTP 429) | Тырышып ҡарағыҙ Ул прокси яуап | Пер-IP квотаһы `TRYIT_PROXY_RATE_LIMIT`/I18NI000000060X бюджетын | Эске йөк һынау өсөн сикте арттырыу йәки тәҙрә сбросҡа тиклем көтөп (ҡара: I18NI000000061X JSON яуап). |
+| `{"error":"upstream_timeout"}` (HTTP 504) йәки `{"error":"upstream_error"}` (HTTP 502) | Тырышып ҡарағыҙ Ул прокси яуап | I18NT0000000018X ваҡытында йәки прокси етә алмаған конфигурацияланған бэкэнд | Тикшерергә, I18NI0000000064X етергә мөмкин, тикшерергә I18NT000000000019X һаулыҡ, йәки ҙурыраҡ I18NI000000065X менән яңынан һынап ҡарағыҙ. |
 
-More Try It diagnostics and OAuth tips live in
-[`devportal/try-it.md`](./try-it.md#norito-rpc-samples).
+Күберәк тырышып ҡарағыҙ Ул диагностика һәм OAuth кәңәштәре йәшәй .
+[`devportal/try-it.md`X] (./try-it.md#norito-rpc-samples).
 
-## Additional resources
-- Transport RFC: `docs/source/torii/norito_rpc.md`
-- Executive summary: `docs/source/torii/norito_rpc_brief.md`
-- Action tracker: `docs/source/torii/norito_rpc_tracker.md`
-- Try-It proxy instructions: `docs/portal/docs/devportal/try-it.md`
+## Өҫтәмә ресурстар
+- Транспорт РФК: I18NI000000067X
+- Башҡарма резюме: I18NI000000068X
+- Ғәмәл трекеры: I18NI000000069XX
+- Һынап ҡарағыҙ-It прокси күрһәтмәләр: I18NI000000070X

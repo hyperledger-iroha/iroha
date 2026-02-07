@@ -4,102 +4,104 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-advert-multisource.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Multi-Source Provider Adverts & Scheduling
+# Çox Mənbəli Provayder Reklamları və Planlaşdırma
 
-This page distils the canonical spec in
+Bu səhifədə kanonik xüsusiyyətləri distillə edir
 [`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Use that document for verbatim Norito schemas and changelogs; the portal copy
-keeps operator guidance, SDK notes, and telemetry references close to the rest
-of the SoraFS runbooks.
+Həmin sənəddən sözbəsöz Norito sxemləri və dəyişiklik qeydləri üçün istifadə edin; portal nüsxəsi
+operator rəhbərliyini, SDK qeydlərini və telemetriya arayışlarını qalanlara yaxın saxlayır
+SoraFS runbooks.
 
-## Norito schema additions
+## Norito sxem əlavələri
 
-### Range capability (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` – largest contiguous span (bytes) per request, `≥ 1`.
-- `min_granularity` – seek resolution, `1 ≤ value ≤ max_chunk_span`.
-- `supports_sparse_offsets` – permits non-contiguous offsets in one request.
-- `requires_alignment` – when true, offsets must align with `min_granularity`.
-- `supports_merkle_proof` – indicates PoR witness support.
+### Aralıq qabiliyyəti (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` – sorğuya görə ən böyük bitişik aralıq (bayt), `≥ 1`.
+- `min_granularity` – həlli axtarın, `1 ≤ value ≤ max_chunk_span`.
+- `supports_sparse_offsets` – bir sorğuda bitişik olmayan ofsetlərə icazə verir.
+- `requires_alignment` – doğru olduqda, ofsetlər `min_granularity` ilə uyğunlaşdırılmalıdır.
+- `supports_merkle_proof` – PoR şahid dəstəyini göstərir.
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` enforce canonical encoding
-so gossip payloads remain deterministic.
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` kanonik kodlaşdırmanı tətbiq edir
+belə ki, dedi-qodu yükləri deterministik olaraq qalır.
 
 ### `StreamBudgetV1`
-- Fields: `max_in_flight`, `max_bytes_per_sec`, optional `burst_bytes`.
-- Validation rules (`StreamBudgetV1::validate`):
+- Sahələr: `max_in_flight`, `max_bytes_per_sec`, isteğe bağlı `burst_bytes`.
+- Doğrulama qaydaları (`StreamBudgetV1::validate`):
   - `max_in_flight ≥ 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes`, when present, must be `> 0` and `≤ max_bytes_per_sec`.
+  - `burst_bytes`, mövcud olduqda, `> 0` və `≤ max_bytes_per_sec` olmalıdır.
 
 ### `TransportHintV1`
-- Fields: `protocol: TransportProtocol`, `priority: u8` (0–15 window enforced by
+- Sahələr: `protocol: TransportProtocol`, `priority: u8` (0-15 pəncərə tərəfindən tətbiq edilir
   `TransportHintV1::validate`).
-- Known protocols: `torii_http_range`, `quic_stream`, `soranet_relay`,
+- Məlum protokollar: `torii_http_range`, `quic_stream`, `soranet_relay`,
   `vendor_reserved`.
-- Duplicate protocol entries per provider are rejected.
+- Provayder üçün dublikat protokol girişləri rədd edilir.
 
-### `ProviderAdvertBodyV1` additions
-- Optional `stream_budget: Option<StreamBudgetV1>`.
-- Optional `transport_hints: Option<Vec<TransportHintV1>>`.
-- Both fields now flow through `ProviderAdmissionProposalV1`, governance
-  envelopes, CLI fixtures, and telemetric JSON.
+### `ProviderAdvertBodyV1` əlavələr
+- Könüllü `stream_budget: Option<StreamBudgetV1>`.
+- Könüllü `transport_hints: Option<Vec<TransportHintV1>>`.
+- Hər iki sahə indi `ProviderAdmissionProposalV1`, idarəetmə vasitəsilə axır
+  zərflər, CLI qurğuları və telemetrik JSON.
 
-## Validation & governance binding
+## Qiymətləndirmə və idarəetmə məcburiyyəti
 
-`ProviderAdvertBodyV1::validate` and `ProviderAdmissionProposalV1::validate`
-reject malformed metadata:
+`ProviderAdvertBodyV1::validate` və `ProviderAdmissionProposalV1::validate`
+səhv formalaşdırılmış metadatanı rədd edin:
 
-- Range capabilities must decode and satisfy span/granularity limits.
-- Stream budgets / transport hints require a matching
-  `CapabilityType::ChunkRangeFetch` TLV and non-empty hint list.
-- Duplicate transport protocols and invalid priorities raise validation
-  errors before adverts are gossiped.
-- Admission envelopes compare proposal/adverts for range metadata via
-  `compare_core_fields` so mismatched gossip payloads are rejected early.
+- Diapazon imkanları deşifrə etməli və span/dənəvərlik məhdudiyyətlərini təmin etməlidir.
+- Axın büdcələri / nəqliyyat göstərişləri uyğunluq tələb edir
+  `CapabilityType::ChunkRangeFetch` TLV və boş olmayan işarə siyahısı.
+- Dublikat daşıma protokolları və etibarsız prioritetlər validasiyanı artırır
+  reklamlar qeybət edilməzdən əvvəl səhvlər.
+- Qəbul zərfləri diapazon metadata üçün təklif/reklamları müqayisə edir
+  `compare_core_fields` belə uyğunsuz qeybət yükləri erkən rədd edilir.
 
-Regression coverage lives in
+Reqressiya əhatə dairəsi yaşayır
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Tooling & fixtures
+## Alətlər və qurğular
 
-- Provider advert payloads must include `range_capability`, `stream_budget`, and
-  `transport_hints` metadata. Validate via `/v1/sorafs/providers` responses and
-  admission fixtures; JSON summaries should include the parsed capability,
-  stream budget, and hint arrays for telemetry ingestion.
-- `cargo xtask sorafs-admission-fixtures` surfaces stream budgets and transport
-  hints inside its JSON artefacts so dashboards track feature adoption.
-- Fixtures under `fixtures/sorafs_manifest/provider_admission/` now include:
-  - canonical multi-source adverts,
-  - `multi_fetch_plan.json` so SDK suites can replay a deterministic multi-peer
-    fetch plan.
+- Provayderin reklam yüklərinə `range_capability`, `stream_budget` və
+  `transport_hints` metadata. `/v1/sorafs/providers` cavabları vasitəsilə təsdiqləyin və
+  qəbul qurğuları; JSON xülasələri təhlil edilmiş qabiliyyəti ehtiva etməlidir,
+  axın büdcəsi və telemetriya qəbulu üçün göstəriş massivləri.
+- `cargo xtask sorafs-admission-fixtures` axın büdcələrini və nəqliyyatı göstərir
+  onun JSON artefaktları daxilində göstərişlər verir ki, idarə panelləri funksiyaların qəbulunu izləyir.
+- `fixtures/sorafs_manifest/provider_admission/` altında olan qurğulara indi daxildir:
+  - kanonik çoxmənbəli reklamlar,
+  - `multi_fetch_plan.json` beləliklə SDK dəstləri deterministik multi-peer-i təkrarlaya bilər
+    gətirmək planı.
 
-## Orchestrator & Torii integration
+## Orchestrator & Torii inteqrasiyası
 
-- Torii `/v1/sorafs/providers` returns parsed range capability metadata along
-  with `stream_budget` and `transport_hints`. Downgrade warnings fire when
-  providers omit the new metadata, and gateway range endpoints enforce the same
-  constraints for direct clients.
-- The multi-source orchestrator (`sorafs_car::multi_fetch`) now enforces range
-  limits, capability alignment, and stream budgets when assigning work. Unit
-  tests cover chunk-too-large, sparse‑seek, and throttling scenarios.
-- `sorafs_car::multi_fetch` streams downgrade signals (alignment failures,
-  throttled requests) so operators can trace why specific providers were
-  skipped during planning.
+- Torii `/v1/sorafs/providers` təhlil edilmiş diapazon qabiliyyəti metadatasını qaytarır
+  `stream_budget` və `transport_hints` ilə. Endirmə xəbərdarlığı zamanı atəş
+  provayderlər yeni metadatanı buraxır və şlüz aralığının son nöqtələri eyni şeyi tətbiq edir
+  birbaşa müştərilər üçün məhdudiyyətlər.
+- Çoxmənbəli orkestrator (`sorafs_car::multi_fetch`) indi diapazonu tətbiq edir
+  iş təyin edərkən məhdudiyyətlər, imkanların uyğunlaşdırılması və axın büdcələri. Vahid
+  testlər çox böyük, seyrək axtarış və tənzimləmə ssenarilərini əhatə edir.
+- `sorafs_car::multi_fetch` endirmə siqnallarını verir (hizalanma uğursuzluqları,
+  azaldılmış sorğular) operatorlar xüsusi provayderlərin niyə olduğunu izləyə bilsinlər
+  planlaşdırma zamanı atlandı.
 
-## Telemetry reference
+## Telemetriya arayışı
 
-The Torii range fetch instrumentation feeds the **SoraFS Fetch Observability**
-Grafana dashboard (`dashboards/grafana/sorafs_fetch_observability.json`) and the
-paired alert rules (`dashboards/alerts/sorafs_fetch_rules.yml`).
+Torii diapazonu gətirmə cihazları **SoraFS Fetch Müşahidə Olunmasını** təmin edir.
+Grafana idarə paneli (`dashboards/grafana/sorafs_fetch_observability.json`) və
+qoşalaşmış xəbərdarlıq qaydaları (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
-| Metric | Type | Labels | Description |
+| Metrik | Növ | Etiketlər | Təsvir |
 |--------|------|--------|-------------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Providers advertising range capability features. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Throttled range fetch attempts grouped by policy. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Active guarded streams consuming the shared concurrency budget. |
+| `torii_sorafs_provider_range_capability_total` | Ölçü | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) Provayderlərin reklam diapazonu qabiliyyəti xüsusiyyətləri. |
+| `torii_sorafs_range_fetch_throttle_events_total` | Sayğac | `reason` (`quota`, `concurrency`, `byte_rate`) | Siyasətə görə qruplaşdırılan sıxılmış diapazon gətirmə cəhdləri. |
+| `torii_sorafs_range_fetch_concurrency_current` | Ölçü | — | Paylaşılan paralel büdcəni istehlak edən aktiv qorunan axınlar. |
 
-Example PromQL snippets:
+Misal PromQL fraqmentləri:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -107,6 +109,6 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Use the throttle counter to confirm quota enforcement before enabling
-multi-source orchestrator defaults, and alert when concurrency approaches the
-stream budget maxima for your fleet.
+Aktivləşdirmədən əvvəl kvota tətbiqini təsdiqləmək üçün tənzimləyici sayğacdan istifadə edin
+çoxmənbəli orkestrator defoltları və paralellik yaxınlaşdıqda xəbərdar edin
+donanmanız üçün maksimum büdcə axını.

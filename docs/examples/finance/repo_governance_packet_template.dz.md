@@ -7,47 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cd018a94197722adfbb9d54bf02f1c486147078174ba4c81f32e9d93b8c3f6d5
 source_last_modified: "2026-01-22T16:26:46.473419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+I18NH0000009X
 
-# Repo Governance Packet Template (Roadmap F1)
+# རེ་པོ་གཞུང་སྐྱོང་པ་ཀེཊ་ཊེམ་པེལེཊ་ (ལམ་འགྲུལ་ཨེཕ་༡)
 
-Use this template when preparing the artefact bundle required by roadmap item
-F1 (repo lifecycle documentation & tooling). The goal is to hand reviewers a
-single Markdown file that lists every input, hash, and evidence bundle so the
-governance council can replay the bytes referenced in the proposal.
+ལམ་གྱི་ས་ཁྲ་རྣམ་གྲངས་ལུ་དགོ་པའི་ ཅ་རྙིང་ཚུ་གྲ་སྒྲིག་འབད་བའི་སྐབས་ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ།
+F1 (repo ཚེ་སྲོག་འཁོར་རིམ་ཡིག་ཆ་དང་ལག་ཆས་)། དམིགས་ཡུལ་འདི་ ལགཔ་བསྐྱར་ཞིབ་པ་ ༡ ཨིན།
+རྐྱང་པའི་རྟགས་བཀོད་ཡིག་སྣོད་འདི་ ཨིན་པུཊི་དང་ ཧ་ཤི་ དེ་ལས་ སྒྲུབ་བྱེད་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+གཞུང་སྐྱོང་ཚོགས་སྡེ་གིས་ གྲོས་འཆར་ནང་ བཀོད་མི་ བཱའིཊ་ཚུ་ ལོག་རྩེད་ཚུགས།
 
-> Copy the template into your own evidence directory (for example
-> `artifacts/finance/repo/2026-03-15/packet.md`), replace the placeholders, and
-> commit/upload it next to the hashed artefacts referenced below.
+> ཊེམ་པེལེཊི་འདི་ཁྱོད་རའི་སྒྲུབ་བྱེད་སྣོད་ཐོ་ནང་ལུ་འདྲ་བཤུས་རྐྱབས་ (དཔེར་ན་ (དཔེར་ན་)
+> I18NI000000010X) དང་ ས་གནས་འཛིན་མི་ཚུ་ ཚབ་བཙུགས་ཏེ་ དང་།
+> འདི་གཤམ་ལུ་གཞི་བསྟུན་འབད་ཡོད་པའི་ ཧམ་སི་ཨར་ཕེག་ཊི་ཚུ་གི་སྦོ་ལོགས་ཁར་ སྐྱེལ་བཙུགས་འབད།
 
-## 1. Metadata
+## 1. མེ་ཏ་ཌེ་ཊ་
 
-| Field | Value |
-|-------|-------|
-| Agreement/change identifier | `<repo-yyMMdd-XX>` |
-| Prepared by / date | `<desk lead> – 2026-03-15T10:00Z` |
-| Reviewed by | `<dual-control reviewer(s)>` |
-| Change type | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
-| Custodian(s) | `<custodian id(s)>` |
-| Linked proposal / referendum | `<governance ticket id or GAR link>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| གན་ཡིག་/བསྒྱུར་བཅོས་ངོས་འཛིན་པ། | `<repo-yyMMdd-XX>` |
+| གྲ་སྒྲིག་འབད་མི་ / ཚེས་གྲངས་ | `<desk lead> – 2026-03-15T10:00Z` |
+| བསྐྱར་ཞིབ། | `<dual-control reviewer(s)>` |
+| བསྒྱུར་བཅོས་དབྱེ་བ་ | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
+| བདག་དབང་ཅན་(ཚུ་) | `<custodian id(s)>` |
+| འབྲེལ་མཐུད་འབད་ཡོདཔ། / འོས་བསྡུ། | `<governance ticket id or GAR link>` |
+| སྒྲུབ་བྱེད་ཀྱི་སྣོད་ཐོ། | `I18NI0000017X` |
 
-## 2. Instruction Payloads
+## 2. བསླབ་བྱའི་དངུལ་ཕོགས།
 
-Record the staged Norito instructions that desks signed off on via
-`iroha app repo ... --output`. Each entry should include the hash of the emitted
-file and a short description of the action that will be submitted once the vote
-passes.
+བཀོད་སྒྲིག་འབད་ཡོད་པའི་ Norito འདི་ ཌེཀསི་གིས་ བརྒྱུད་དེ་ མིང་རྟགས་བཀོད་ཡོད་པའི་བཀོད་རྒྱ་ཚུ་ ཐོ་བཀོད་འབད།
+`iroha app repo ... --output`. ཐོ་བཀོད་རེ་རེའི་ནང་ བཏོན་པའི་ ཧ་ཤི་ཚུ་ ཚུད་དགོ།
+ཡིག་སྣོད་དང་ ཚོགས་རྒྱན་འདི་ ཚར་ཅིག་ཕུལ་ནི་ཨིན་པའི་ བྱ་བ་འདི་གི་སྐོར་ལས་ འགྲེལ་བཤད་ཐུང་ཀུ་ཅིག།
+ཉེས་ཆད་
 
-| Action | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Initiate | `instructions/initiate.json` | `<sha256>` | Contains the cash/collateral legs approved by desk + counterparty. |
-| Margin call | `instructions/margin_call.json` | `<sha256>` | Captures cadence + participant id that triggered the call. |
-| Unwind | `instructions/unwind.json` | `<sha256>` | Proof of the reverse-leg once conditions are met. |
+| བྱ་བ་ | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|--------------------------------------------- |
+| འགོ་བཙུགས་ | `instructions/initiate.json` | `<sha256>` | ཌེཀསི་ + ཕྱོགས་ཕྱོགས་ཀྱིས་ ཆ་འཇོག་འབད་མི་ དངུལ་/ བརྟན་བཞུགས་རྐངམ་ཚུ་ཡོདཔ་ཨིན། |
+| མར་གིན་ཁ་པར་གཏོང་། | I18NI0000021X | I18NI0000022X | འཛིན་བཟུང་ + བཅའ་མར་གཏོགས་མི་ id གིས་ འབོད་བརྡ་འདི་ འབྱུང་བཅུག་ནུག། |
+| རླུང་འཚུབ་ | I18NI0000023X | `<sha256>` | གནས་སྟངས་ཚུ་གྲུབ་ཚར་བའི་ཤུལ་ལས་ ཕྱི་འགྱུར་རྐངམ་གི་བདེན་ཁུངས། |
 
 ```bash
 # Example hash helper (repeat per instruction file)
@@ -55,46 +54,39 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json \
   | tee artifacts/finance/repo/<slug>/hashes/initiate.sha256
 ```
 
-## 2.1 Custodian Acknowledgements (tri-party only)
+## ༢.༡ བདག་པོ་ངོས་ལེན་ (tri-party རྐྱངམ་གཅིག)
 
-Complete this section whenever a repo uses `--custodian`. The governance packet
-must include a signed acknowledgement from each custodian plus the hash of the
-file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
+རི་པོ་གིས་ `--custodian` ལག་ལེན་འཐབ་པའི་སྐབས་ དབྱེ་ཚན་འདི་མཇུག་བསྡུ། གཞུང་སྐྱོང་ཐུམ་སྡེ།
+བདག་དབང་རེ་རེ་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ངོས་ལེན་ཅིག་ དང་ གྱི་ཧེཤ་ཚུ་ བཙུགས་དགོ།
+ཡིག་སྣོད་ `docs/source/finance/repo_ops.md` གི་ §2.8 ནང་ གཞི་བསྟུན་འབད་ཡོདཔ།
 
-| Custodian | File | SHA-256 | Notes |
-|-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+| བདག་འཛིན་པ་ | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|---------------------------------------------- |
+| I18NI0000027X | I18NI0000028X | I18NI0000029X | མཚན་རྟགས་བཀོད་ཡོད་པའི་ ཨེསི་ཨེལ་ཨེ་གིས་ བདག་འཛིན་འཐབ་ནིའི་སྒོ་སྒྲིག་བཀབ་ནི་དང་ འགྲུལ་ལམ་རྩིས་ཐོ་ དེ་ལས་ འབྲེལ་བ་འཐབ་ནིའི་དོན་ལུ་ དམག་སྦྱོང་འབད་ནི། |
 
-> Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
-> so `scripts/repo_evidence_manifest.py` records the file in the same tree as
-> the staged instructions and config snippets. See
-> `docs/examples/finance/repo_custodian_ack_template.md` for a ready-to-fill
-> template that matches the governance evidence contract.
+> ངོས་ལེན་འདི་ གཞན་མི་སྒྲུབ་བྱེད་ (I18NI0000030X) གི་སྦོ་ལོགས་ཁར་ གསོག་འཇོག་འབད།
+> སོ་ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༣༡ ཨེགསི་གིས་ ཡིག་སྣོད་འདི་ ཤིང་གཅིག་ནང་ ཐོ་བཀོད་འབདཝ་ཨིན།
+> སྟེགས་རིས་བཀོད་ཡོད་པའི་བཀོད་རྒྱ་དང་ རིམ་སྒྲིག་རིམ་སྒྲིག་ཚུ། མཐོང
+> བཀང་ནིའི་དོན་ལུ་ I18NI0000032X གི་དོན་ལུ་ཨིན།
+> གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་གན་རྒྱ་དང་མཐུན་པའི་ཊེམ་པེལེཊི་།
 
-## 3. Configuration Snippet
+## 3. རིམ་སྒྲིག་ཡིག་ཤུགས།
 
-Paste the `[settlement.repo]` TOML block that will land on the cluster (including
-`collateral_substitution_matrix`). Store the hash next to the snippet so
-auditors can confirm the runtime policy that was active when the repo booking
-was approved.
+I18NI000000033X ཀླད་ཀོར་གུ་ལྷོད་མི་ TOML སྡེབ་ཚན་འདི་སྦྱར་དགོ།
+`collateral_substitution_matrix`). དེ་འབདཝ་ལས་ སྦུང་ཚན་གྱི་སྦོ་ལོགས་ཁར་ ཧེཤ་གསོག་འཇོག་འབད།
+རྩིས་ཞིབ་པ་ཚུ་གིས་ རི་པོ་བཀོད་སྒྲིག་འབད་བའི་སྐབས་ ཤུགས་ལྡན་ཡོད་པའི་ རན་ཊའིམ་སྲིད་བྱུས་འདི་ ངེས་གཏན་བཟོ་ཚུགས།
+ཆ་འཇོག་གྲུབ་ཡོད།
 
-```toml
-[settlement.repo]
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
-default_margin_percent = "0.025"
-
-[settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["bill#wonderland"]
-```
+I18NF0000004X
 
 `SHA-256 (config snippet): <sha256>`
 
-### 3.1 Post-Approval Configuration Snapshots
+### ༣.༡ ཆ་འཇོག་རྗེས་རིམ་རིམ་སྒྲིག་པར་ལེན་པ།
 
-After the referendum or governance vote completes and the `[settlement.repo]`
-change is rolled out, capture `/v1/configuration` snapshots from every peer so
-auditors can prove the approved policy is live across the cluster (see
-`docs/source/finance/repo_ops.md` §2.9 for the evidence workflow).
+འོས་འདེམས་ཡང་ན་ གཞུང་སྐྱོང་ཚོགས་རྒྱན་མཇུག་བསྡུ་བའི་ཤུལ་ལས་ `[settlement.repo]` དང་།
+བསྒྱུར་བཅོས་འདི་ བསྐོར་ཏེ་ `/v1/configuration` པར་ལེན་ཚུ་ མཉམ་རོགས་ག་ར་ལས་ འཛིན་བཟུང་འབདཝ་ཨིན།
+རྩིས་ཞིབ་པ་ཚུ་གིས་ ཆ་འཇོག་གྲུབ་པའི་སྲིད་བྱུས་འདི་ ཀླད་ཀོར་གྱི་ནང་འཁོད་ལུ་ གནས་ཏེ་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བསྐྱལ་ཚུགས།
+སྒྲུབ་བྱེད་ལཱ་གི་རྒྱུན་རིམ་གྱི་དོན་ལུ་ `docs/source/finance/repo_ops.md` §2.9).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
@@ -103,37 +95,42 @@ curl -fsSL https://peer01.example/v1/configuration \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
-| Peer / source | File | SHA-256 | Block height | Notes |
+| མཉམ་རོགས་ / འབྱུང་ཁུངས་ | ཡིག་སྣོད་ | SHA-256 | བཀག་ཆ་མཐོ་ཚད། | དྲན་ཐོ། |
 |---------------|------|---------|--------------|-------|
-| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot captured immediately after the config rollout. |
-| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | Confirms `[settlement.repo]` matches the staged TOML. |
+| I18NI0000039X | I18NI0000040X | I18NI0000041X | I18NI0000042X | རིམ་སྒྲིག་འབད་ཐངས་ཀྱི་ཤུལ་ལས་ པར་ལེན་འབད་ཡོདཔ། |
+| I18NI0000043X | I18NI0000044X | `<sha256>` | I18NI0000046X | I18NI000000047X གིས་ གནས་རིམ་ཅན་གྱི་ ཊི་ཨོ་ཨེམ་ཨེལ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། |
 
-Record the digests alongside the peer ids in `hashes.txt` (or the equivalent
-summary) so reviewers can trace which nodes ingested the change. The snapshots
-live under `config/peers/` next to the TOML snippet and will be picked up
-automatically by `scripts/repo_evidence_manifest.py`.
+`hashes.txt` ནང་ལུ་ པི་ཡར་ཨའི་ཌི་ཚུ་གི་སྦོ་ལོགས་ཁར་ བཞུ་མི་ཚུ་ཐོ་བཀོད་འབད།
+བཅུད་བསྡུས་) དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བསྒྱུར་བཅོས་འདི་ མཐུད་མཚམས་ག་གིས་ བཙུགས་ཡོདཔ་ཨིན་ན་ འཚོལ་ཞིབ་འབད་ཚུགས། པར་ལེན་ཚུ།
+TOML གི་སྦུག་ལུ་ `config/peers/` གི་འོག་ལུ་སྡོད་ཡོདཔ་ལས་ འཐུ་འོང་།
+རང་བཞིན་གྱིས་ `scripts/repo_evidence_manifest.py` དང་།
 
-## 4. Deterministic Test Artefacts
+## 4. གཏན་འབེབས་བརྟག་དཔྱད་རིག་པ།
 
-Attach the latest outputs from:
+གསརཔ་ཐོན་འབྲས་ཚུ་ མཉམ་སྦྲགས་འབད།
 
 - `cargo test -p iroha_core -- repo_deterministic_lifecycle_proof_matches_fixture`
 - `cargo test --package integration_tests --test repo`
 
-Record file paths + hashes for the log bundles or JUnit XML produced by your CI
-system.
+ཡིག་སྣོད་འགྲུལ་ལམ་ཚུ་དྲན་འཛིན་འབད་ + ཁྱོད་རའི་སི་ཨའི་གིས་བཟོ་མི་ དྲན་ཐོ་བཱན་ཌལ་ཡང་ན་ ཇུ་ནིཊི་ཨེགསི་ཨེམ་ཨེལ་གྱི་དོན་ལུ་ ཧ་ཤི་ཚུ།
+ལམ༌ལུགས།
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Lifecycle proof log | `tests/repo_lifecycle.log` | `<sha256>` | Captured with `--nocapture` output. |
-| Integration test log | `tests/repo_integration.log` | `<sha256>` | Includes substitution + margin cadence coverage. |
+| ཅ་ཆས། | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|------------------------------------------------ |
+| མི་ཚེ་འཁོར་བའི་བདེན་དཔང་དྲན་ཐོ་ | I18NI0000003X | `<sha256>` | ```bash
+mkdir -p artifacts/finance/repo/<slug>/config/peers
+curl -fsSL https://peer01.example/v1/configuration \
+  | jq '.' \
+  > artifacts/finance/repo/<slug>/config/peers/peer01.json
+``` ཐོན་འབྲས་དང་གཅིག་ཁར་ བསྡུ་ལེན་འབད་ཡོདཔ། |
+| མཉམ་བསྡོམས་བརྟག་དཔྱད་དྲན་ཐོ། | I18NI0000005X | I18NI0000007X | ཚབ་བཙུགས་ + མཐའ་མཚམས་ གདམ་ཁའི་ཁྱབ་ཁོངས། |
 
-## 5. Lifecycle Proof Snapshot
+## 5. སྲོག་འཁོར་བདེན་པའི་པར་ལེན་པ།
 
-Every packet must include the deterministic lifecycle snapshot exported from
-`repo_deterministic_lifecycle_proof_matches_fixture`. Run the harness with the
-export knobs enabled so reviewers can diff the JSON frame and digest against
-the fixture tracked in `crates/iroha_core/tests/fixtures/` (see
+སྦུང་ཚན་རེ་རེ་གིས་ ༢༠༠༨ ལུ་ ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ གཏན་འབེབས་མི་ཚེ་འཁོར་རིམ་གྱི་ པར་ལེན་འཕྲུལ་ཆས་ཚུ་ བཙུགས་དགོ།
+`repo_deterministic_lifecycle_proof_matches_fixture`. འདི་དང་གཅིག་ཁར་གཡོག་བཀོལ།
+ཕྱིར་འདྲེན་གྱི་ མཛུབ་གནོན་ལྕོགས་ཅན་བཟོ་ཡོདཔ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཇེ་ཨེསི་ཨོ་ཨེན་ གཞི་ཁྲམ་དང་ བཞུ་ཚུགས།
+I18NI000000059X ནང་ བརྟག་ཞིབ་འབད་ཡོད་པའི་སྒྲིག་བཀོད་ (see
 `docs/source/finance/repo_ops.md` §2.7).
 
 ```bash
@@ -143,66 +140,61 @@ cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
 ```
 
-Or use the pinned helper to regenerate the fixtures and copy them into your
-evidence bundle in one step:
+ཡང་ན་ བཀག་ཆ་འབད་དེ་ ཁྱོད་རའི་ནང་ འདྲ་བཤུས་རྐྱབ་ནིའི་དོན་ལུ་ པིན་ནིཌ་ གྲོགས་རམ་པ་ལག་ལེན་འཐབ།
+གོ་རིམ་གཅིག་ནང་ སྒྲུབ་བྱེད་བསྡམས་པ།
 
 ```bash
 scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
   --bundle-dir artifacts/finance/repo/<slug>
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Snapshot JSON | `repo_proof_snapshot.json` | `<sha256>` | Canonical lifecycle frame emitted by the proof harness. |
-| Digest file | `repo_proof_digest.txt` | `<sha256>` | Uppercase hex digest mirrored from `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`; attach even when unchanged. |
+| ཅ་ཆས། | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|------------------------------------------------ |
+| པར་རིས་ JSON | `repo_proof_snapshot.json` | `<sha256>` | བདེན་ཁུངས་བཀལ་མི་གིས་ བཏོན་མི་ ཀེནནོ་ཀཱལ་གྱི་ མི་ཚེའི་འཁོར་རིམ་གྱི་ གཞི་ཁྲམ། |
+| ཡིག་སྣོད་ | `repo_proof_digest.txt` | `<sha256>` | ལྟག་ལུ་ ཧེགསི་ ཟས་བཅུད་ཀྱི་ མེ་ལོང་ `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest` ལས་ མེ་ལོང་; འགྱུར་བ་མེད་པའི་སྐབས་ལུ་ཡང་ མཐུད་དགོ། |
 
-## 6. Evidence Manifest
+## 6. སྒྲུབ་བྱེད།
 
-Generate the manifest for the entire evidence directory so auditors can verify
-hashes without unpacking the archive. The helper mirrors the workflow described
-in `docs/source/finance/repo_ops.md` §3.2.
+རྩིས་ཞིབ་པ་ཚུ་གིས་ བདེན་དཔྱད་འབད་ཚུགས།
+གཏན་མཛོད་མ་བསྡུ་བར་ཡོད་པའི་ ཧེ། གྲོགས་རམ་པ་དེ་གིས་ འགྲེལ་བཤད་འབད་ཡོད་པའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ མེ་ལོང་བཟོཝ་ཨིན།
+in I18NI0000006X §3.2.
 
-```bash
-python3 scripts/repo_evidence_manifest.py \
-  --root artifacts/finance/repo/<slug> \
-  --agreement-id <repo-identifier> \
-  --output artifacts/finance/repo/<slug>/manifest.json
-```
+I18NF0000008X
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Include the checksum in the governance ticket / referendum notes. |
+| ཅ་ཆས། | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|------------------------------------------------ |
+| སྒྲུབ་བྱེད་ཀྱི་མངོན་རྟགས་ | `manifest.json` | `<sha256>` | གཞུང་སྐྱོང་ཤོག་བྱང་/ འོས་འདེམས་དྲན་ཐོ་ནང་ ཅེག་སམ་འདི་བཙུགས། |
 
-## 7. Telemetry & Event Snapshot
+## 7. བརྒྱུད་འཕྲིན་དང་བྱུང་རིམ་གྱི་བརྡ་རྟགས།
 
-Export the relevant `AccountEvent::Repo(*)` entries and any dashboards or CSV
-exports referenced in `docs/source/finance/repo_ops.md`. Record the files +
-hashes here so reviewers can jump straight to the evidence.
+འབྲེལ་ཡོད་ I18NI000000069X ཐོ་བཀོད་ཚུ་དང་ ཌེཤ་བོརཌི་ཡང་ན་ སི་ཨེསི་ཝི་གང་རུང་ཕྱིར་འདྲེན་འབད།
+`docs/source/finance/repo_ops.md` ནང་ལུ་གཞི་བསྟུན་འབད་ཡོད་པའི་ཕྱིར་འདྲེན་ཚུ། ཡིག་སྣོད་ + འདི་ཐོ་བཀོད་འབད།
+བསྐྱར་ཞིབ་པ་ཚུ་གིས་ སྒྲུབ་བྱེད་ལུ་ ཕྲང་སྟེ་མཆོངས་ཚུགས།
 
-| Export | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Repo events JSON | `evidence/repo_events.ndjson` | `<sha256>` | Raw Torii event stream filtered to the desk accounts. |
-| Telemetry CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | Exported from Grafana using the Repo Margin panel. |
+| ཕྱིར་འདྲེན་ | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|--------------------------------------------- |
+| Repo ལས་རིམ་ཚུ་ JSON | `evidence/repo_events.ndjson` | `<sha256>` | Torii བྱུང་ལས་རྒྱུན་ལམ་འདི་ ཌེཀསི་རྩིས་ཐོ་ཚུ་ལུ་ཚགས་མ་བཏང་ཡོདཔ་ཨིན། |
+| བརྒྱུད་འཕྲིན་ CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | རེ་པོ་མར་ཇིན་པེ་ནཱལ་ལག་ལེན་འཐབ་ཐོག་ལས་ I18NT000000000X ལས་ཕྱིར་འདྲེན་འབད་ཡོདཔ། |
 
-## 8. Approvals & Signatures
+## 8. ཆ་འཇོག་དང་མཚན་རྟགས།
 
-- **Dual-control signers:** `<names + timestamps>`
-- **GAR / minutes digest:** `<sha256>` of the signed GAR PDF or minutes upload.
-- **Storage location:** `governance://finance/repo/<slug>/packet/`
+- **གཉིས་ལྡན་མཚན་རྟགས་བཀོད་མི་:** I18NI0000075X
+- **GAR / སྐར་མ་འཇུ་བྱེད་:** I18NI000000076X མཚན་རྟགས་བཀོད་ཡོད་པའི་ GAR PDF ཡང་ན་སྐར་མ་སྐྱེལ་བཙུགས་འབད།
+- **གསོག་འཇོག་ས་གནས་:** I18NI0000077X
 
-## 9. Checklist
+## 9. བརྟག་ཐོ་།
 
-Mark each item once complete.
+རྣམ་གྲངས་རེ་རེ་ཚར་གཅིག་མཇུག་བསྡུ།
 
-- [ ] Instruction payloads staged, hashed, and attached.
-- [ ] Configuration snippet hash recorded.
-- [ ] Deterministic test logs captured + hashed.
-- [ ] Lifecycle snapshot + digest exported.
-- [ ] Evidence manifest generated and hash recorded.
-- [ ] Event/telemetry exports captured + hashed.
-- [ ] Dual-control acknowledgements archived.
-- [ ] GAR/minutes uploaded; digest recorded above.
+- [ ] བཀོད་རྒྱ་སྤྲོད་ལེན་གྱི་གོ་རིམ་དང་གནོད་སྐྱོན་དང་མཉམ་སྦྲགས།
+- [ ] རིམ་སྒྲིག་ཕྲ་རིང་ཧེ་ཤི་སྒྲ་བཟུང་འབད་ཡོདཔ།
+- [ ] གཏན་འབེབས་བརྟག་དཔྱད་དྲན་ཐོ་ཚུ་བཟུང་ཡོདཔ་ཨིན།
+- [ ] མི་ཚེ་གི་པར་ལེན་ + ཕྱིར་གཏོང་ བཞུ་བཏང་ཡོདཔ།
+- [ ] སྒྲུབ་བྱེད་མངོན་གསལ་བྱུང་བ་དང་ཧེ་ཤི་སྒྲ་བཟུང་།
+- [ ] བྱུང་རིམ་/བརྒྱུད་འཕྲིན་ཕྱིར་གཏོང་ + ཧ་ཤེད་
+- [ ] གཉིས་ལྡན་གྱི་ངོས་ལེན་ཚུ་ཡིག་མཛོད་འབད་ཡོདཔ།
+- [ ] GAR/minute ཚུ་སྐྱེལ་བཙུགས་འབད་ཡོདཔ། གོང་ལུ་ཐོ་བཀོད་འབད་མི་ ཌའི་སའིཊ་།
 
-Maintaining this template alongside every packet keeps the governance DAG
-deterministic and provides auditors with a portable manifest for repo lifecycle
-decisions.
+སྦུང་ཚན་ག་ར་དང་གཅིག་ཁར་ ཊེམ་པེལེཊི་འདི་རྒྱུན་སྐྱོང་འཐབ་མི་འདི་གིས་ གཞུང་སྐྱོང་ཌི་ཨེ་ཇི་འདི་བཞགཔ་ཨིན།
+གཏན་འབེབས་བཟོ་ནི་དང་ རྩིས་ཞིབ་པ་ཚུ་ལུ་ repo ཚེ་སྲོག་འཁོར་རིམ་གྱི་དོན་ལུ་ འབག་བཏུབ་པའི་མངོན་རྟགས་ཅིག་བྱིནམ་ཨིན།
+ཐག་གཅོད།

@@ -11,27 +11,28 @@ id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
 description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Pin Registry Manifest Validation Plan (SF-4 Prep)
+# པིན་ཐོ་བཀོད་མཚོན་རྟགས་བདེན་དཔྱད་འཆར་གཞི།(SF-4 Prep)
 
-This plan outlines the steps required to thread `sorafs_manifest::ManifestV1`
-validation into the forthcoming Pin Registry contract so that SF-4 work can
-build on the existing tooling without duplicating encode/decode logic.
+འཆར་གཞི་འདི་གིས་ `sorafs_manifest::ManifestV1` ལུ་དགོ་པའི་ གོ་རིམ་ཚུ་ གསལ་བཀོད་འབདཝ་ཨིན།
+འོས་འཚམ་གྱི་ པིན་ཐོ་བཀོད་གན་རྒྱ་ནང་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ ཨེསི་ཨེཕ་-༤ ལཱ་འབད་ཚུགས།
+ཨིན་ཀོ་ཌི་/ཌི་ཀོཌི་ཚད་མ་འདྲ་བཤུས་མ་འབད་བར་ ད་ལྟོ་ཡོད་པའི་ལག་ཆས་ཚུ་གུ་བཟོ་བསྐྲུན་འབད།
 
-## Goals
+## རིལ་ཚང
 
-1. Host-side submission paths verify manifest structure, chunking profile, and
-   governance envelopes before accepting proposals.
-2. Torii and gateway services reuse the same validation routines to ensure
-   deterministic behaviour across hosts.
-3. Integration tests cover positive/negative cases for manifest acceptance,
-   policy enforcement, and error telemetry.
+1. ཧོསཊ་ཕྱོགས་ཕུལ་བའི་འགྲུལ་ལམ་ཚུ་གིས་ གསལ་སྟོན་གཞི་བཀོད་ ཆ་ཤས་གསལ་སྡུད་བདེན་དཔྱད་འབདཝ་ཨིན།
+   གྲོས་འཆར་ཚུ་ངོས་ལེན་མ་འབད་བའི་ཧེ་མ་ གཞུང་སྐྱོང་ཡིག་ཆ་ཚུ།
+2. Torii དང་ སྒོ་སྒྲིག་ཞབས་ཏོག་ཚུ་གིས་ བདེན་དཔྱད་རྒྱུན་ལམ་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ ལོག་སྟེ་ལག་ལེན་འཐབ།
+   གཙོ་བོ་ཚུ་ནང་ལུ་ གཏན་འབེབས་གི་སྤྱོད་ལམ།
+༣ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་གིས་ གསལ་སྟོན་ངོས་ལེན་འབད་ནིའི་དོན་ལུ་ ངེས་གཏན་/ལོག་པའི་གནད་དོན་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+   སྲིད་བྱུས་བསྟར་སྤྱོད་དང་འཛོལ་བ་བརྡ་འཕྲིན་རྒྱང་བསྒྲགས།
 
-## Architecture
+## བཟོ༌བཀོད༌རིག༌པ
 
 ```mermaid
 flowchart LR
@@ -43,46 +44,46 @@ flowchart LR
     registry --> torii
 ```
 
-### Components
+### ཆ་ཤས།
 
-- `ManifestValidator` (new module in `sorafs_manifest` or `sorafs_pin` crate)
-  encapsulates structural checks and policy gates.
-- Torii exposes a gRPC endpoint `SubmitManifest` that calls into
-  `ManifestValidator` before forwarding to the contract.
-- Gateway fetch path optionally consumes the same validator when caching new
-  manifests from the registry.
+- I18NI000000014X (`sorafs_manifest` ནང་ མཐུད་ལམ་གསརཔ་ ཡང་ན་ `sorafs_pin` crete)
+  བཟོ་བཀོད་ཀྱི་ཞིབ་དཔྱད་དང་ སྲིད་བྱུས་ཀྱི་སྒོ་ཚུ་ བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+- Torii གིས་ ཇི་ཨར་པི་སི་ མཇུག་སྣོད་ `SubmitManifest` ཅིག་ ནང་འབོད་བརྡ་འབདཝ་ཨིན།
+  I18NI000000018X གན་ཡིག་ནང་ མདུན་སྐྱོད་མ་འབད་བའི་ཧེ་མ།
+- གསརཔ་ འདྲ་མཛོད་འབད་བའི་སྐབས་ གདམ་ཁ་ཅན་སྦེ་ བདེན་དཔྱད་འབད་མི་ འགྲུལ་ལམ་འདི་གིས་ གེ་ཊི་ཝེ་གིས་ བདེན་དཔྱད་འབད་མི་གཅིག་སྤྱོད་འབདཝ་ཨིན།
+  །མངོན་པར་སྒོ་ནས་མངོན་པར་བརྗོད་པ་ནི།
 
-## Task Breakdown
+## ལས་ཀའི་བརྡ་ཐོ།
 
-| Task | Description | Owner | Status |
-|------|-------------|-------|--------|
-| V1 API skeleton | Add `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` to `sorafs_manifest`. Include BLAKE3 digest verification and chunker registry lookup. | Core Infra | ✅ Done | Shared helpers (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) now live in `sorafs_manifest::validation`. |
-| Policy wiring | Map registry policy config (`min_replicas`, expiry windows, allowed chunker handles) into validation inputs. | Governance / Core Infra | Pending — tracked in SORAFS-215 |
-| Torii integration | Call validator inside Torii manifest submission path; return structured Norito errors on failure. | Torii Team | Planned — tracked in SORAFS-216 |
-| Host contract stub | Ensure contract entrypoint rejects manifests that fail validation hash; expose metrics counters. | Smart Contract Team | ✅ Done | `RegisterPinManifest` now invokes the shared validator (`ensure_chunker_handle`/`ensure_pin_policy`) before mutating state and unit tests cover the failure cases. |
-| Tests | Add unit tests for validator + trybuild cases for invalid manifests; integration tests in `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 In progress | Validator unit tests landed alongside on-chain rejection tests; full integration suite still pending. |
-| Docs | Update `docs/source/sorafs_architecture_rfc.md` and `migration_roadmap.md` once validator lands; document CLI usage in `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | Pending — tracked in DOCS-489 |
+| ལས་ཀ་ | འགྲེལ་བཤད་ | ཇོ་བདག་ | གནས་ཚད་ |
+|--|--|------------------------------------------------- |
+| V1 API རུས་སྒྲོམ་ | `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` `sorafs_manifest` ལུ་ཁ་སྐོང་འབད། BLAKE3 ཟས་བཅུད་བདེན་དཔྱད་དང་ ཆར་ཀར་ཐོ་བཀོད་བལྟ་ཞིབ་ཚུ་ བཙུགས། | ཀོར་ཨིན་ཕ་ར་ | ✅ འབད་ | བརྗེ་སོར་འབད་ཡོད་པའི་གྲོགས་རམ་པ་ (I18NI0000021X, `validate_pin_policy`, I18NI0000000023X) ད་ལྟོ་ I18NI000000024X ནང་སྡོད་དོ་ཡོདཔ་ཨིན། |
+| སྲིད་བྱུས་གློག་ཐག་འདི་ | སབ་ཁྲ་ཐོ་བཀོད་སྲིད་བྱུས་རིམ་སྒྲིག་ (`min_replicas` གིས་ དུས་ཡུན་ཚང་མི་ སྒོ་སྒྲིག་ཚུ་ ཆ་རྐྱེན་གྱི་ ལག་ཆས་ཚུ་ འབད་བཅུག་མི་) བདེན་བཤད་ཀྱི་ཨིན་པུཊི་ཚུ་ནང་། | གཞུང་སྐྱོང་ / Core Infra | Pending — SORAFS-215 ནང་ བརྟག་ཞིབ་འབད་ཡོདཔ། |
+| Torii མཉམ་བསྡོམས་ | I18NT000000007X གསལ་སྟོན་ཕུལ་ལམ་ནང་ལུ་ བདེན་དཔྱད་འབད་མི་ལུ་ ཁ་པར་གཏོང་། return གཞི་བཀོད་བཟོ་ཡོད་པའི་ I18NT000000000X འཐུས་ཤོར་གྱི་འཛོལ་བ་ཚུ། | I18NT0000008X སྡེ་ཚན་ | འཆར་གཞི་བརྩམ་ཡོད་པའི་ — SORAFS-216 ནང་ བརྟག་ཞིབ་འབད་ཡོདཔ། |
+| ཧོསཊ་གན་རྒྱ་ | བདེན་དཔྱད་འབད་མ་ཚུགས་པའི་ ཧེཤ་ལུ་ གན་འཛིན་འཛུལ་སྒོ་ཚུ་ ངོས་ལེན་མ་འབད་བའི་ གསལ་སྟོན་ཚུ་ ངེས་གཏན་བཟོ། exty མེཊིག་ ཀའུན་ཊར་ཚུ། | གན་ཡིག་གན་ཡིག་སྡེ་ཚན། | ✅ འབད་ | I18NI00000000026X གིས་ ད་ལྟོ་ བརྗེ་སོར་འབད་ཡོད་པའི་ བདེན་དཔྱད་པ་ (`ensure_chunker_handle`/`ensure_pin_policy`) གིས་ གནས་སྟངས་དང་ ཡུ་ནིཊ་བརྟག་དཔྱད་ཚུ་གིས་ འཐུས་ཤོར་གྱི་གནད་དོན་ཚུ་ ཁྱབ་མ་བཅུག་པའི་ཧེ་མ་ འབོད་བརྡ་འབདཝ་ཨིན། |
+| བརྟག་དཔྱད་ཚུ་ | ནུས་མེད་མངོན་གསལ་ཚུ་གི་དོན་ལུ་ བདེན་དཔྱད་+ trybuild case གི་དོན་ལུ་ ཡུ་ནིཊི་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་འབད། `crates/iroha_core/tests/pin_registry.rs` ནང་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ། | QA guild | 🟠 ཡར་རྒྱས་ནང་ | བདེན་དཔྱད་སྡེ་ཚན་གྱི་བརྟག་དཔྱད་ཚུ་ རིམ་ཐེངས་བཀག་ཆ་བརྟག་དཔྱད་ཚུ་གི་མཉམ་ལས་ ལྷོད་ཡོདཔ་ཨིན། མཉམ་བསྡོམས་སྡེ་ཚན་ཆ་ཚང་ ད་ལྟོ་ཡང་ མཇུག་བསྡུ་ཡོདཔ་ཨིན། |
+| ཡིག་ཆ་ | བདེན་དཔྱད་ས་གཞི་ཚུ་ཚར་གཅིག་ I18NI000000030X དང་ I18NI0000000031X དུས་མཐུན་བཟོ། ཡིག་ཆ་ `docs/source/sorafs/manifest_pipeline.md` ནང་ CLI ལག་ལེན་འཐབ། | ཡིག་ཆ་སྡེ་ཚན། | Pending — DOCS-489 ནང་ བརྟག་ཞིབ་འབད་ཡོདཔ། |
 
-## Dependencies
+## བརྟེན་པ།
 
-- Pin Registry Norito schema finalisation (ref: SF-4 item in roadmap).
-- Council-signed chunker registry envelopes (ensures validator mapping is
-  deterministic).
-- Torii authentication decisions for manifest submission.
+- པིན་ཐོ་བཀོད་ Norito ལས་རིམ་མཇུག་བསྡུ་ (ref: SF-4 རྣམ་གྲངས་ནང་ ལམ་སྟོན་ནང་)།
+- ཚོགས་སྡེ་གིས་ མཚན་རྟགས་བཀོད་མི་ ཅར་ཀར་ཐོ་བཀོད་ཡིག་ཆ་ (བདེན་དཔྱད་ཀྱི་ས་ཁྲ་བཟོ་ནིའི་ ཡིག་ཆ་ཚུ་ ༡༠ ཨིན།
+  ཆོསཔ་
+- Torii གསལ་སྟོན་ཕུལ་ནིའི་དོན་ལུ་ བདེན་བཤད་གྲོས་ཐག་ཚུ།
 
-## Risks & Mitigations
+## ཉེན་དང་ ཉུང་འཕྲིན།
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Divergent policy interpretation between Torii and contract | Non-deterministic acceptance. | Share validation crate + add integration tests that compare host vs on-chain decisions. |
-| Performance regression for large manifests | Slower submission | Benchmark via cargo criterion; consider caching manifest digest results. |
-| Error messaging drift | Operator confusion | Define Norito error codes; document them in `manifest_pipeline.md`. |
+| ཉེན་ཁ། ཕན་གནོད་ | མར་ཕབ་ |
+|-------------------------------------- |
+| Torii དང་ གན་རྒྱ་གི་བར་ན་ སྲིད་བྱུས་ཁ་སྟོར་གྱི་དོན་འགྲེལ། | གཏན་ཚིགས་མེད་པའི་ངོས་ལེན་ནི། | བདེན་དཔྱད་ཀྲེག་ + ཧོསཊི་དང་ རིམ་ཐེངས་གྲོས་ཐག་ཚུ་ ག་བསྡུར་རྐྱབ་མི་ མཉམ་བསྡོམ་བརྟག་དཔྱད་ཚུ་ ཁ་སྐོང་རྐྱབས། |
+| གསལ་སྟོན་སྦོམ་གྱི་དོན་ལུ་ ལཱ་འགན་འགྱུར་ལྡོག་ཚུ་ | མགྱོགས་འཕྲིན་ཕུལ་ནི། | དངོས་རྫས་ཚད་གཞི་བརྒྱུད་དེ་ བེན་ཀ་མཱན། འདྲ་མཛོད་ཀྱི་གསལ་སྟོན་གྲུབ་འབྲས་འདི་བརྩི་འཇོག་འབད། |
+| འཛོལ་བའི་འཕྲིན་དོན་གྱི་ འདྲེན་བཀོལ། | བཀོལ་སྤྱོད་པ་མགོ་རྙོག་དྲགས། | Norito འཛོལ་བ་ཨང་རྟགས་ཚུ་ངེས་འཛིན་འབད། དེ་ཚུ་ I18NI000000033X ནང་ལུ་ ཡིག་ཆ་བཟོ། |
 
-## Timeline Targets
+## དུས་ཚོད་ཀྱི་དབྱེ་ཞིབ།
 
-- Week 1: Land `ManifestValidator` skeleton + unit tests.
-- Week 2: Wire Torii submission path and update CLI to surfacing validation errors.
-- Week 3: Implement contract hooks, add integration tests, update docs.
-- Week 4: Run end-to-end rehearsal with migration ledger entry, capture council sign-off.
+- བདུན་ཕྲག་༡: ས་ཆ་ `ManifestValidator` ཀེང་རུས་ + ཡུ་ནིཊ་བརྟག་དཔྱད།
+- བདུན་ཕྲག་༢ པ་: བདེན་དཔྱད་འཛོལ་བ་ཚུ་ བརྒལ་ནིའི་དོན་ལུ་ ཝའིར་ I18NT0000011X ཕུལ་སྤྲོད་ལམ་དང་ དུས་མཐུན་བཟོས།
+- བདུན་ཕྲག་༣ པ་ གན་རྒྱ་ཧུཀ་ཚུ་ལག་ལེན་འཐབ་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཁ་སྐོང་རྐྱབས་ དུས་མཐུན་བཟོ་ནི།
+- བདུན་ཕྲག་༤ པ་ གནས་སྤོ་བའི་ ལག་དེབ་ཐོ་བཀོད་དང་གཅིག་ཁར་ མཇུག་ལས་མཇུག་བསྡུའི་སྦྱོང་བརྡར་ནང་ ཚོགས་སྡེའི་མིང་རྟགས་བཀོད་ནི།
 
-This plan will be referenced in the roadmap once the validator work begins.
+འཆར་གཞི་འདི་ བདེན་དཔྱད་ཀྱི་ལཱ་འགོ་བཙུགས་ཞིནམ་ལས་ ལམ་སྟོན་ནང་ གཞི་བསྟུན་འབད་འོང་།

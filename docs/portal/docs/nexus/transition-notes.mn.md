@@ -10,166 +10,165 @@ translation_last_reviewed: 2026-02-07
 id: nexus-transition-notes
 title: Nexus transition notes
 description: Mirror of `docs/source/nexus_transition_notes.md`, covering Phase B transition evidence, audit schedule, and mitigations.
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Nexus Transition Notes
+# Nexus Шилжилтийн тэмдэглэл
 
-This log tracks the lingering **Phase B — Nexus Transition Foundations** work
-until the multi-lane launch checklist finishes. It supplements the milestone
-entries in `roadmap.md` and keeps the evidence referenced by B1–B4 in one place
-so governance, SRE, and SDK leads can share the same source of truth.
+Энэ бүртгэл нь **PhaseB — Nexus Transition Foundations**-ийн ажлыг дагаж мөрддөг.
+олон эгнээ хөөргөх шалгах хуудас дуусах хүртэл. Энэ нь чухал үеийг нөхөж өгдөг
+`roadmap.md` дахь оруулгууд ба B1-B4-д дурдсан нотлох баримтыг нэг газар хадгалдаг.
+тиймээс засаглал, SRE болон SDK удирдагчид үнэний ижил эх сурвалжийг хуваалцаж чадна.
 
-## Scope & Cadence
+## Хамрах хүрээ ба хэмнэл
 
-- Covers the routed-trace audits and telemetry guardrails (B1/B2), the
-  governance-approved configuration delta set (B3), and the multi-lane launch
-  rehearsal follow-ups (B4).
-- Replaces the temporary cadence note that previously lived here; as of the 2026
-  Q1 audit the detailed report resides in
-  `docs/source/nexus_routed_trace_audit_report_2026q1.md`, while this page owns
-  the running schedule and mitigation register.
-- Update the tables after each routed-trace window, governance vote, or launch
-  rehearsal. Whenever artefacts move, mirror the new location inside this page
-  so downstream docs (status, dashboards, SDK portals) can link to a stable
-  anchor.
+- Маршрутлагдсан мөрийн аудит болон телеметрийн хамгаалалтын хашлага (B1/B2), the
+  засаглалаар батлагдсан тохиргооны дельта багц (B3), олон эгнээтэй хөөргөх
+  давталтын дараалал (B4).
+- Өмнө нь энд амьдарч байсан түр зуурын тэмдэглэлийг орлуулна; 2026 оны байдлаар
+  1-р улирлын аудитын нарийвчилсан тайланд оршдог
+  Энэ хуудсыг эзэмшдэг бол `docs/source/nexus_routed_trace_audit_report_2026q1.md`
+  ажиллах хуваарь болон бууруулах бүртгэл.
+- Чиглүүлсэн мөшгөх цонх, засаглалын санал хураалт, эхлүүлэх бүрийн дараа хүснэгтүүдийг шинэчилнэ үү
+  бэлтгэл. Олдворууд хөдлөх бүрд энэ хуудасны доторх шинэ байршлыг тусга
+  Тиймээс доод баримт бичиг (статус, хяналтын самбар, SDK портал) нь тогтвортой файлтай холбогдож болно.
+  зангуу.
 
-## Evidence Snapshot (2026 Q1–Q2)
+## Нотлох баримтын агшин зураг (2026 оны 1-р улирал)
 
-| Workstream | Evidence | Owner(s) | Status | Notes |
+| Ажлын урсгал | Нотлох баримт | Эзэмшигч(үүд) | Статус | Тэмдэглэл |
 |------------|----------|----------|--------|-------|
-| **B1 — Routed-trace audits** | `docs/source/nexus_routed_trace_audit_report_2026q1.md`, `docs/examples/nexus_audit_outcomes/` | @telemetry-ops, @governance | ✅ Complete (Q1 2026) | Three audit windows recorded; TLS lag from `TRACE-CONFIG-DELTA` closed during the Q2 rerun. |
-| **B2 — Telemetry remediation & guardrails** | `docs/source/nexus_telemetry_remediation_plan.md`, `docs/source/telemetry.md`, `dashboards/alerts/nexus_audit_rules.yml` | @sre-core, @telemetry-ops | ✅ Complete | Alert pack, diff bot policy, and OTLP batch sizing (`nexus.scheduler.headroom` log + Grafana headroom panel) shipped; no open waivers. |
-| **B3 — Config delta approvals** | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`, `defaults/nexus/config.toml`, `defaults/nexus/genesis.json` | @release-eng, @governance | ✅ Complete | GOV-2026-03-19 vote captured; signed bundle feeds the telemetry pack noted below. |
-| **B4 — Multi-lane launch rehearsal** | `docs/source/runbooks/nexus_multilane_rehearsal.md`, `docs/source/project_tracker/nexus_rehearsal_2026q1.md`, `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`, `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`, `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | @nexus-core, @sre-core | ✅ Complete (Q2 2026) | Q2 canary rerun closed the TLS lag mitigation; validator manifest + `.sha256` capture slot range 912–936, workload seed `NEXUS-REH-2026Q2`, and the recorded TLS profile hash from the rerun. |
+| **B1 — Routed-trace audits** | `docs/source/nexus_routed_trace_audit_report_2026q1.md`, `docs/examples/nexus_audit_outcomes/` | @telemetry-ops, @governance | ✅ Бүрэн (2026 оны 1-р улирал) | Аудитын гурван цонх бүртгэгдсэн; `TRACE-CONFIG-DELTA`-ээс TLS хоцролт 2-р улирлын давталтын үеэр хаагдсан. |
+| **B2 — Телеметрийн засвар ба хашлага** | `docs/source/nexus_telemetry_remediation_plan.md`, `docs/source/telemetry.md`, `dashboards/alerts/nexus_audit_rules.yml` | @sre-core, @telemetry-ops | ✅ Бүрэн | Анхааруулгын багц, ялгаа ботын бодлого, OTLP багцын хэмжээ (`nexus.scheduler.headroom` бүртгэл + Grafana толгойн хэсгийн самбар) тээвэрлэгдсэн; нээлттэй чөлөөлөлт байхгүй. |
+| **B3 — Гурвалсан тохиргооны зөвшөөрлүүд** | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`, `defaults/nexus/config.toml`, `defaults/nexus/genesis.json` | @release-eng, @governance | ✅ Бүрэн | GOV-2026-03-19 санал хураалтыг авсан; гарын үсэг зурсан багц нь доор дурдсан телеметрийн багцыг өгдөг. |
+| **B4 — Олон эгнээ хөөргөх сургуулилт** | `docs/source/runbooks/nexus_multilane_rehearsal.md`, `docs/source/project_tracker/nexus_rehearsal_2026q1.md`, `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`, `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`, `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | @nexus-core, @sre-core | ✅ Бүрэн (2026 оны 2-р улирал) | 2-р улирлын канарын давталт нь TLS-ийн хоцрогдол бууруулахыг хаасан; баталгаажуулагчийн манифест + `.sha256` 912–936 хүртэлх зай, ажлын ачааллын үрийн `NEXUS-REH-2026Q2`, дахин ажиллуулахаас бичигдсэн TLS профайлын хэш. |
 
-## Quarterly Routed-Trace Audit Schedule
+## Улирлын чиглүүлэлт-мөшгих аудитын хуваарь
 
-| Trace ID | Window (UTC) | Outcome | Notes |
+| Trace ID | Цонх (UTC) | Үр дүн | Тэмдэглэл |
 |----------|--------------|---------|-------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | ✅ Pass | Queue-admission P95 stayed well below the ≤750 ms target. No action required. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | ✅ Pass | OTLP replay hashes attached to `status.md`; SDK diff bot parity confirmed zero drift. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | ✅ Resolved | TLS profile lag closed during Q2 rerun; telemetry pack for `NEXUS-REH-2026Q2` records TLS profile hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` (see `artifacts/nexus/tls_profile_rollout_2026q2/`) and zero stragglers. |
-| `TRACE-MULTILANE-CANARY` | 2026-05-05 09:12–10:14 | ✅ Pass | Workload seed `NEXUS-REH-2026Q2`; telemetry pack + manifest/digest under `artifacts/nexus/rehearsals/2026q1/` (slot range 912–936) with agenda in `artifacts/nexus/rehearsals/2026q2/`. |
+| `TRACE-LANE-ROUTING` | 2026-02-17 09:00-09:45 | ✅ Тасалбар | Дараалалд орох P95 нь зорилтот ≤750ms-ээс нэлээд доогуур байв. Ямар ч арга хэмжээ авах шаардлагагүй. |
+| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00-10:45 | ✅ Тасалбар | `status.md`-д хавсаргасан OTLP дахин тоглуулах хэшүүд; SDK diff bot parity 0 drift-ийг баталгаажуулсан. |
+| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00-12:30 | ✅ Шийдвэрлэсэн | 2-р улиралд дахин ажиллуулах явцад TLS профайлын хоцрогдол хаагдсан; `NEXUS-REH-2026Q2`-д зориулсан телеметрийн багц нь TLS профайлын хэш `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` (`artifacts/nexus/tls_profile_rollout_2026q2/`-г үзнэ үү) болон тэг stragglers-ийг бүртгэдэг. |
+| `TRACE-MULTILANE-CANARY` | 2026-05-05 09:12–10:14 | ✅ Тасалбар | Ажлын ачаалал үр `NEXUS-REH-2026Q2`; телеметрийн багц + `artifacts/nexus/rehearsals/2026q2/` дээр хэлэлцэх асуудалтай `artifacts/nexus/rehearsals/2026q1/` (слотын хүрээ 912–936) дагуу манифест/дижест. |
 
-Future quarters should add new rows and move the
-completed entries to an appendix when the table grows beyond the current
-quarter. Reference this section from routed-trace reports or governance minutes
-using the `#quarterly-routed-trace-audit-schedule` anchor.
+Ирээдүйн улирал нь шинэ мөрүүдийг нэмж, зөөх ёстой
+Хүснэгт одоогийн хэмжээнээс хэтрэх үед хавсралтын бөглөсөн оруулгууд
+улирал. Энэ хэсгийг чиглүүлэлтийн тайлан эсвэл засаглалын протоколоос лавлана уу
+`#quarterly-routed-trace-audit-schedule` зангуу ашиглан.
 
-## Mitigation & Backlog Items
+## Нөлөөллийг бууруулах & Хоцрогдол арилгах зүйлс
 
-| Item | Description | Owner | Target | Status / Notes |
+| Зүйл | Тодорхойлолт | Эзэмшигч | Зорилтот | Төлөв / Тэмдэглэл |
 |------|-------------|-------|--------|----------------|
-| `NEXUS-421` | Finish propagating the TLS profile that lagged during `TRACE-CONFIG-DELTA`, capture rerun evidence, and close the mitigation log. | @release-eng, @sre-core | Q2 2026 routed-trace window | ✅ Closed — TLS profile hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` captured in `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` + `.sha256`; rerun confirmed no stragglers. |
-| `TRACE-MULTILANE-CANARY` prep | Schedule the Q2 rehearsal, attach fixtures to the telemetry pack, and ensure SDK harnesses reuse the validated helper. | @telemetry-ops, SDK Program | Planning call 2026-04-30 | ✅ Completed — agenda stored at `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` with slot/workload metadata; harness reuse noted in the tracker. |
-| Telemetry pack digest rotation | Run `scripts/telemetry/validate_nexus_telemetry_pack.py` before each rehearsal/release and log digests next to the config delta tracker. | @telemetry-ops | Per release candidate | ✅ Completed — `telemetry_manifest.json` + `.sha256` emitted in `artifacts/nexus/rehearsals/2026q1/` (slot range `912-936`, seed `NEXUS-REH-2026Q2`); digests copied into the tracker and evidence index. |
+| `NEXUS-421` | `TRACE-CONFIG-DELTA`-ийн үеэр хоцрогдсон TLS профайлыг тарааж дуусгаж, дахин ажиллуулах нотлох баримтыг авч, бууруулах бүртгэлийг хаа. | @release-eng, @sre-core | 2026 оны 2-р улирал чиглүүлэгдсэн мөрийн цонх | ✅ Хаалттай — `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` + `.sha256`-д авсан TLS профайлын хэш; Дахин гүйлтэнд довтолгоо байхгүй гэдгийг баталсан. |
+| `TRACE-MULTILANE-CANARY` бэлтгэл | 2-р улирлын бэлтгэлийн хуваарийг гаргаж, телеметрийн багцад бэхэлгээг хавсаргаж, SDK бэхэлгээг баталгаажуулсан туслагчийг дахин ашиглахыг баталгаажуулна уу. | @telemetry-ops, SDK програм | Төлөвлөлтийн дуудлага 2026-04-30 | ✅ Дууссан — мөрийн хөтөлбөрийг `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` хаягт үүр/ажлын мета өгөгдөлтэй хамт хадгалсан; мөрдөгч дээр тэмдэглэсэн морины дахин ашиглах. |
+| Телеметрийн багцын дижест эргэлт | Сургуулилт/хувилбар бүрийн өмнө `scripts/telemetry/validate_nexus_telemetry_pack.py`-г ажиллуулж, тохируулгын дельта трекерийн хажууд хураангуйг бүртгэнэ. | @telemetry-ops | Нэр дэвшигчээс чөлөөлөгдсөн | ✅ Дууссан — `telemetry_manifest.json` + `artifacts/nexus/rehearsals/2026q1/`-д ялгарсан `.sha256` (слотын хүрээ `912-936`, үр `NEXUS-REH-2026Q2`); трекер болон нотлох баримтын индекс рүү хуулсан дайджест. |
 
-## Config Delta Bundle Integration
+## Дельта багцын интеграцийн тохиргоо
 
-- `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` remains the
-  canonical diff summary. When new `defaults/nexus/*.toml` or genesis changes
-  land, update that tracker first, then mirror the highlights here.
-- Signed config bundles feed the rehearsal telemetry pack. The pack, validated
-  by `scripts/telemetry/validate_nexus_telemetry_pack.py`, must be published
-  alongside the config delta evidence so operators can replay the exact
-  artefacts used during B4.
-- Iroha 2 bundles remain lane-free: configs with `nexus.enabled = false` now
-  reject lane/dataspace/routing overrides unless the Nexus profile is enabled
-  (`--sora`), so strip `nexus.*` sections from single-lane templates.
-- Keep the governance vote log (GOV-2026-03-19) linked from both the tracker and
-  this note so future votes can copy the format without re-discovering the
-  approval ritual.
+- `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` хэвээр байна
+  каноник ялгааны хураангуй. Шинэ `defaults/nexus/*.toml` эсвэл генезис өөрчлөгдөх үед
+  газар, эхлээд тэр трекерийг шинэчил, дараа нь онцлох зүйлсийг энд тусга.
+- Гарын үсэг зурсан тохиргооны багцууд нь давталтын телеметрийн багцыг тэжээдэг. Багц, баталгаажсан
+  `scripts/telemetry/validate_nexus_telemetry_pack.py` гэхэд нийтлэгдсэн байх ёстой
+  тохиргооны дельта нотлох баримтын зэрэгцээ операторууд яг дахин тоглуулах боломжтой
+  В4-ийн үед ашигласан олдворууд.
+- Iroha 2 багц нь эгнээгүй хэвээр байна: одоо `nexus.enabled = false` тохиргоотой
+  Nexus профайлыг идэвхжүүлээгүй тохиолдолд эгнээ/өгөгдлийн орон зай/маршрутыг хүчингүй болгохоос татгалзах
+  (`--sora`), тиймээс `nexus.*` хэсгүүдийг нэг эгнээний загвараас салгана.
+- Засаглалын саналын бүртгэлийг (GOV-2026-03-19) хянагч болон аль алинаас нь холбосон байлгах.
+  Энэ тэмдэглэл нь ирээдүйн санал хураалтыг дахин нээхгүйгээр форматыг хуулж авах боломжтой
+  батлах зан үйл.
 
-## Launch Rehearsal Follow-Ups
+## Дасгалын дагалтуудыг эхлүүл
 
-- `docs/source/runbooks/nexus_multilane_rehearsal.md` captures the canary plan,
-  participant roster, and rollback steps; refresh the runbook whenever the lane
-  topology or telemetry exporters change.
-- `docs/source/project_tracker/nexus_rehearsal_2026q1.md` lists every artefact
-  checked during the April 9 rehearsal and now carries the Q2 prep notes/agenda.
-  Append future rehearsals to the same tracker instead of opening one-off
-  trackers to keep evidence monotonic.
-- Publish OTLP collector snippets and Grafana exports (see `docs/source/telemetry.md`)
-  whenever the exporter batching guidance changes; the Q1 update bumped the
-  batch size to 256 samples to prevent headroom alerts.
-- Multi-lane CI/test evidence now lives in
-  `integration_tests/tests/nexus/multilane_pipeline.rs` and runs under the
-  `Nexus Multilane Pipeline` workflow
-  (`.github/workflows/integration_tests_multilane.yml`), replacing the retired
-  `pytests/nexus/test_multilane_pipeline.py` reference; keep the hash for
+- `docs/source/runbooks/nexus_multilane_rehearsal.md` канарын төлөвлөгөөг авч,
+  оролцогчдын жагсаалт, буцаах алхмууд; эгнээнд орох бүрт runbook-г шинэчил
+  топологи эсвэл телеметрийн экспортлогч өөрчлөгддөг.
+- `docs/source/project_tracker/nexus_rehearsal_2026q1.md` олдвор бүрийг жагсаасан
+  4-р сарын 9-ний бэлтгэлийн үеэр шалгасан бөгөөд одоо 2-р улирлын бэлтгэлийн тэмдэглэл/хэлэлцэх асуудлыг авч байна.
+  Ирээдүйн бэлтгэл сургуулилтыг нэг удаа нээхийн оронд ижил трекер дээр хавсарга
+  нотлох баримтыг монотон байлгахын тулд мөрдөгч.
+- OTLP цуглуулагчийн хэсгүүд болон Grafana экспортыг нийтлэх (`docs/source/telemetry.md`-г үзнэ үү)
+  экспортлогчийн багцын заавар өөрчлөгдөх бүрт; 1-р улирлын шинэчлэлт нь давсан
+  Багцын хэмжээг 256 дээж хүртэл зайны дохиололоос сэргийлнэ.
+- Олон эгнээний CI/туршилтын нотлох баримтууд одоо амьдарч байна
+  `integration_tests/tests/nexus/multilane_pipeline.rs` ба доор ажилладаг
+  `Nexus Multilane Pipeline` ажлын урсгал
+  (`.github/workflows/integration_tests_multilane.yml`), тэтгэвэрт гарсан хүмүүсийг солих
+  `pytests/nexus/test_multilane_pipeline.py` лавлагаа; хэшийг хадгалах
   `defaults/nexus/config.toml` (`nexus.enabled = true`, blake2b
-  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) in sync
-  with the tracker when refreshing rehearsal bundles.
+  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) синк хийнэ
+  бэлтгэлийн багцыг сэргээх үед трекертэй.
 
 ## Runtime Lane Lifecycle
 
-- Runtime lane lifecycle plans now validate dataspace bindings and abort when
-  Kura/tiered storage reconciliation fails, leaving the catalog unchanged. The
-  helpers prune cached lane relays for retired lanes so merge-ledger synthesis
-  does not reuse stale proofs.
-- Apply plans through the Nexus config/lifecycle helpers (`State::apply_lane_lifecycle`,
-  `Queue::apply_lane_lifecycle`) to add/retire lanes without restart; routing,
-  TEU snapshots, and manifest registries reload automatically after a successful plan.
-- Operator guidance: when a plan fails, check for missing dataspaces or storage
-  roots that cannot be created (tiered cold root/Kura lane directories). Fix the
-  backing paths and retry; successful plans re-emit the lane/dataspace telemetry
-  diff so dashboards reflect the new topology.
+- Ажиллах цагийн эгнээний амьдралын мөчлөгийн төлөвлөгөө нь одоо өгөгдлийн орон зайн холболтыг баталгаажуулж, хэзээ цуцлах болно
+  Кура/давхарласан хадгалалтын тохируулга амжилтгүй болж, каталог өөрчлөгдөөгүй. The
+  Туслагчид тэтгэвэрт гарсан эгнээнд зориулсан кэштэй эгнээний релейг тайрч, нэгдэх дэвтэр нэгтгэх болно.
+  хуучирсан нотолгоог дахин ашиглахгүй.
+- Nexus тохиргоо/насан туршийн туслахуудаар (`State::apply_lane_lifecycle`,
+  `Queue::apply_lane_lifecycle`) дахин эхлүүлэхгүйгээр эгнээ нэмэх/тэтгэвэрлэх; чиглүүлэлт,
+  TEU агшин зуурын зураг, манифест бүртгэл амжилттай төлөвлөгөөний дараа автоматаар дахин ачаалагдана.
+- Операторын заавар: төлөвлөгөө бүтэлгүйтсэн тохиолдолд өгөгдлийн орон зай эсвэл хадгалах сан байхгүй эсэхийг шалгаарай
+  үүсгэх боломжгүй үндэсүүд (давхарласан хүйтэн root/Kura lane лавлахууд). -ийг засах
+  арын зам болон дахин оролдох; амжилттай төлөвлөгөө нь эгнээ/өгөгдлийн орон зайн телеметрийг дахин ялгаруулдаг
+  ялгаатай тул хяналтын самбарууд шинэ топологийг тусгадаг.
 
-## NPoS Telemetry & Backpressure Evidence
+## NPoS телеметр ба эсрэг даралтын нотолгоо
 
-Phase B’s launch-rehearsal retro asked for deterministic telemetry captures that
-prove the NPoS pacemaker and gossip layers stay within their backpressure
-limits. The integration harness at
-`integration_tests/tests/sumeragi_npos_performance.rs` exercises those
-scenarios and emits JSON summaries (`sumeragi_baseline_summary::<scenario>::…`)
-whenever new metrics land. Run it locally with:
+PhaseB-ийн хөөргөх-сургуулалтын чимэг нь үүнийг тодорхойлох телеметрийг тодорхойлохыг хүссэн
+NPoS зүрхний аппарат болон хов живийн давхаргууд нь арын даралтандаа үлддэгийг батлах
+хязгаар. интеграцийн бэхэлгээ at
+`integration_tests/tests/sumeragi_npos_performance.rs` эдгээр дасгалуудыг хийдэг
+хувилбарууд болон JSON хураангуйг гаргадаг (`sumeragi_baseline_summary::<scenario>::…`)
+шинэ хэмжүүрүүд буух бүрт. Үүнийг локалаар ажиллуулна уу:
 
 ```bash
 cargo test -p integration_tests sumeragi_npos_performance -- --nocapture
 ```
 
-Set `SUMERAGI_NPOS_STRESS_PEERS`, `SUMERAGI_NPOS_STRESS_COLLECTORS_K`, or
-`SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R` to explore higher-stress topologies; the
-defaults mirror the 1 s/`k=3` collector profile used in B4.
+`SUMERAGI_NPOS_STRESS_PEERS`, `SUMERAGI_NPOS_STRESS_COLLECTORS_K` эсвэл тохируулах
+`SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R` өндөр ачаалалтай топологийг судлах; нь
+анхдагч нь B4-д ашигласан 1s/`k=3` коллекторын профайлыг тусгадаг.
 
-| Scenario / test | Coverage | Key telemetry |
+| Хувилбар / тест | Хамрах хүрээ | Түлхүүр телеметр |
 | --- | --- | --- |
-| `npos_baseline_1s_k3_captures_metrics` | Blocks 12 rounds with the rehearsal block time to record EMA latency envelopes, queue depths, and redundant-send gauges before serialising the evidence bundle. | `sumeragi_phase_latency_ema_ms`, `sumeragi_collectors_k`, `sumeragi_redundant_send_r`, `sumeragi_bg_post_queue_depth*`. |
-| `npos_queue_backpressure_triggers_metrics` | Floods the transaction queue to ensure admission deferrals kick in deterministically and that the queue exports capacity/saturation counters. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_pacemaker_jitter_within_band` | Samples pacemaker jitter and view timeouts until it proves the configured ±125 ‰ band is enforced. | `sumeragi_pacemaker_jitter_ms`, `sumeragi_pacemaker_view_timeout_target_ms`, `sumeragi_pacemaker_jitter_frac_permille`. |
-| `npos_rbc_store_backpressure_records_metrics` | Pushes large RBC payloads to the soft/hard store limits to show sessions and byte counters climb, back off, and settle without overrunning the store. | `sumeragi_rbc_store_pressure`, `sumeragi_rbc_store_sessions`, `sumeragi_rbc_store_bytes`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_redundant_send_retries_update_metrics` | Forces retransmits so the redundant-send ratio gauges and collectors-on-target counters advance, proving the telemetry the retro requested is wired end-to-end. | `sumeragi_collectors_targeted_current`, `sumeragi_redundant_sends_total`. |
-| `npos_rbc_chunk_loss_fault_reports_backlog` | Drops deterministically spaced chunks to verify backlog monitors raise faults instead of silently draining payloads. | `sumeragi_rbc_backlog_sessions_pending`, `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`. |
+| `npos_baseline_1s_k3_captures_metrics` | Нотлох баримтыг цуваа болгохын өмнө EMA хоцрогдолын дугтуй, дарааллын гүн, нэмэлт илгээх хэмжигчийг бүртгэхийн тулд давталтын блоклох хугацаатай 12 тойрог блокло. | `sumeragi_phase_latency_ema_ms`, `sumeragi_collectors_k`, `sumeragi_redundant_send_r`, `sumeragi_bg_post_queue_depth*`. |
+| `npos_queue_backpressure_triggers_metrics` | Элсэлтийн хойшлуулалт тодорхой эхэлж, дараалал нь хүчин чадал/ханалтын тоолуур экспортлохын тулд гүйлгээний дарааллыг үерлэдэг. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`, `sumeragi_rbc_backpressure_deferrals_total`. |
+| `npos_pacemaker_jitter_within_band` | Зүрхний аппаратын чичирхийллийн жишээг авч, тохируулсан ±125‰ зурвасыг баталгаажуулах хүртэл завсарлагыг харна. | `sumeragi_pacemaker_jitter_ms`, `sumeragi_pacemaker_view_timeout_target_ms`, `sumeragi_pacemaker_jitter_frac_permille`. |
+| `npos_rbc_store_backpressure_records_metrics` | Их хэмжээний RBC-ийн ачааллыг зөөлөн/хатуу дэлгүүрийн хязгаарт хүргэж, сесс болон байт тоолуурыг дэлгүүрээс хэтрүүлэхгүйгээр авирч, ухарч, суурьшдаг. | `sumeragi_rbc_store_pressure`, `sumeragi_rbc_store_sessions`, `sumeragi_rbc_store_bytes`, `sumeragi_rbc_backpressure_deferrals_total`. |
+| `npos_redundant_send_retries_update_metrics` | Хүчээр дахин дамжуулдаг тул илүүдэл-илгээлтийн харьцаа хэмжигч болон цуглуулагч-зорилтот тоолуур урагшилж, чимэг хүссэн телеметрийг төгсгөлөөс нь утастай болохыг нотолж байна. | `sumeragi_collectors_targeted_current`, `sumeragi_redundant_sends_total`. |
+| `npos_rbc_chunk_loss_fault_reports_backlog` | Хоцрогдсон мониторууд ачааллыг чимээгүйхэн шавхахын оронд алдааг нэмэгдүүлэхийн тулд тодорхой зайтай хэсгүүдийг буулгадаг. | `sumeragi_rbc_backlog_sessions_pending`, `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`. |JSON шугамыг Prometheus хусуурын хамт бэхэлгээний хэвлэмэлийг хавсаргана.
+Засаглалын зүгээс дарамт шахалт үзүүлж байгааг нотлох баримт гуйх үед гүйлтийн явцад баригдсан
+дохиолол нь давталтын топологитой таарч байна.
 
-Attach the JSON lines the harness prints together with the Prometheus scrape
-captured during the run whenever governance asks for evidence that backpressure
-alarms match the rehearsal topology.
+## Шалгах хуудсыг шинэчлэх
 
-## Update Checklist
+1. Шинэ чиглүүлэгдсэн цонхнуудыг хавсаргаж, хуучин цонхнуудыг хорооллуудыг эргүүлэх үед ашигла.
+2. Alertmanager-ийн хяналт бүрийн дараа бууруулах хүснэгтийг шинэчлээрэй
+   үйлдэл нь тасалбарыг хаах явдал юм.
+3. Тохиргооны дельта өөрчлөгдөх үед трекер, энэ тэмдэглэл болон телеметрийг шинэчилнэ үү
+   ижил татах хүсэлтэд дижест жагсаалтыг багцлах.
+4. Аливаа шинэ давтлага/телеметрийн олдворуудыг энд холбоно уу, ингэснээр ирээдүйн замын зураглал болно
+   шинэчлэлтүүд нь тараагдсан түр тэмдэглэлийн оронд нэг баримт бичигт лавлаж болно.
 
-1. Append new routed-trace windows and retire old ones as quarters roll over.
-2. Update the mitigation table after every Alertmanager follow-up, even if the
-   action is to close the ticket.
-3. When config deltas change, update the tracker, this note, and the telemetry
-   pack digest list in the same pull request.
-4. Link any new rehearsal/telemetry artefacts here so future roadmap status
-   updates can reference a single document instead of scattered ad-hoc notes.
+## Нотлох баримтын индекс
 
-## Evidence Index
-
-| Asset | Location | Notes |
+| Хөрөнгө | Байршил | Тэмдэглэл |
 |-------|----------|-------|
-| Routed-trace audit report (Q1 2026) | `docs/source/nexus_routed_trace_audit_report_2026q1.md` | Canonical source for Phase B1 evidence; mirrored for the portal under `docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md`. |
-| Config delta tracker | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` | Contains the TRACE-CONFIG-DELTA diff summaries, reviewer initials, and GOV-2026-03-19 vote log. |
-| Telemetry remediation plan | `docs/source/nexus_telemetry_remediation_plan.md` | Documents the alert pack, OTLP batch sizing, and export budget guardrails tied to B2. |
-| Multi-lane rehearsal tracker | `docs/source/project_tracker/nexus_rehearsal_2026q1.md` | Lists Apr 9 rehearsal artefacts, validator manifest/digest, Q2 prep notes/agenda, and rollback evidence. |
-| Telemetry pack manifest/digest (latest) | `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json` (+ `.sha256`) | Records slot range 912–936, seed `NEXUS-REH-2026Q2`, and artefact hashes for governance bundles. |
-| TLS profile manifest | `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` (+ `.sha256`) | Hash of the approved TLS profile captured during the Q2 rerun; cite in routed-trace appendices. |
-| TRACE-MULTILANE-CANARY agenda | `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | Planning notes for the Q2 rehearsal (window, slot range, workload seed, action owners). |
-| Launch rehearsal runbook | `docs/source/runbooks/nexus_multilane_rehearsal.md` | Operational checklist for staging → execution → rollback; update when lane topology or exporter guidance changes. |
-| Telemetry pack validator | `scripts/telemetry/validate_nexus_telemetry_pack.py` | CLI referenced by B4 retro; archive digests alongside the tracker whenever the pack changes. |
-| Multilane regression | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | Proves `nexus.enabled = true` for multi-lane configs, preserves the Sora catalog hashes, and provisions lane-local Kura/merge-log paths (`blocks/lane_{id:03}_{slug}`) via `ConfigLaneRouter` before publishing artefact digests. |
+| Routed-trace аудитын тайлан (2026 оны 1-р улирал) | `docs/source/nexus_routed_trace_audit_report_2026q1.md` | PhaseB1 нотлох баримтын каноник эх сурвалж; `docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md` дор порталын толин тусгал. |
+| Дельта мөрдөгчийг тохируулах | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` | TRACE-CONFIG-DELTA ялгааны хураангуй, шүүмжлэгчийн нэрийн эхний үсгүүд болон GOV-2026-03-19 саналын бүртгэлийг агуулна. |
+| Телеметрийн засварын төлөвлөгөө | `docs/source/nexus_telemetry_remediation_plan.md` | B2-д холбогдсон дохиоллын багц, OTLP багцын хэмжээ, экспортын төсвийн хашлага зэргийг баримтжуулна. |
+| Олон эгнээний бэлтгэлийн мөрдөгч | `docs/source/project_tracker/nexus_rehearsal_2026q1.md` | Дөрөвдүгээр сарын 9-ний бэлтгэлийн олдворууд, баталгаажуулагчийн манифест/тодорхойлолт, 2-р улирлын бэлтгэлийн тэмдэглэл/хэлэлцэх асуудал, буцаах нотлох баримтуудыг жагсаав. |
+| Телеметрийн багц манифест/дижест (хамгийн сүүлийн үеийн) | `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json` (+ `.sha256`) | 912–936 слотын муж, үр `NEXUS-REH-2026Q2` болон засаглалын багцад зориулсан олдворын хэшийг бүртгэдэг. |
+| TLS профайлын манифест | `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` (+ `.sha256`) | 2-р улирлын давталтын үеэр авсан батлагдсан TLS профайлын хэш; routed-trace хавсралтуудад иш татна. |
+| МӨР-МУЛЬТИЛАН-КАНАР хөтөлбөр | `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | 2-р улирлын бэлтгэл сургуулилтын төлөвлөлтийн тэмдэглэл (цонх, үүрний хүрээ, ажлын ачаалал үр, үйл ажиллагааны эзэд). |
+| Сургуулийн runbook | `docs/source/runbooks/nexus_multilane_rehearsal.md` | Үе шатлах үйл ажиллагааны хяналтын хуудас → гүйцэтгэл → буцаах; эгнээний топологи эсвэл экспортлогчийн удирдамж өөрчлөгдөх үед шинэчлэх. |
+| Телеметрийн багц баталгаажуулагч | `scripts/telemetry/validate_nexus_telemetry_pack.py` | B4 чимэгээр иш татсан CLI; Багц солигдох бүрд архивын хайгчийг дагаж мөрддөг. |
+| Олон эгнээний регресс | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | Олон эгнээний тохиргоонд зориулж `nexus.enabled = true`-г баталж, Сора каталогийн хэшүүдийг хадгалж, олдворуудыг нийтлэхээс өмнө `ConfigLaneRouter`-ээр дамжуулан эгнээний орон нутгийн Kura/merge-логийн замыг (`blocks/lane_{id:03}_{slug}`) хангадаг. |

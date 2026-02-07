@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # تقرير تكافؤ GA لمنسق SoraFS
@@ -12,13 +14,13 @@ generator: docs/portal/scripts/sync-i18n.mjs
 بايتات payload وإيصالات chunk وتقارير provider ونتائج scoreboard تبقى متطابقة عبر
 التطبيقات. كل harness يستهلك الحزمة القياسية متعددة المزوّدين تحت
 `fixtures/sorafs_orchestrator/multi_peer_parity_v1/`، والتي تجمع خطة SF1 وبيانات
-provider الوصفية ولقطة telemetry وخيارات orchestrator.
+ספק טלמטריה ותזמר טלמטריה.
 
 ## خط الأساس في Rust
 
 - **الأمر:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
 - **النطاق:** يشغّل خطة `MultiPeerFixture` مرتين عبر orchestrator داخل العملية، مع التحقق
-  من بايتات payload المجمعة وإيصالات chunk وتقارير provider ونتائج scoreboard. كما
+  לוח התוצאות של הספק ונתח נתח ונתוני מטען. קמא
   تتعقب أدوات القياس ذروة التوازي وحجم working-set الفعال (`max_parallel x max_chunk_length`).
 - **حاجز الأداء:** يجب أن يكتمل كل تشغيل خلال 2 s على عتاد CI.
 - **سقف مجموعة العمل:** مع ملف تعريف SF1 يفرض harness `max_parallel = 3`، مما ينتج
@@ -34,7 +36,7 @@ Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 
 
 - **الأمر:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
 - **النطاق:** يعيد تشغيل نفس fixture عبر `iroha_js_host::sorafsMultiFetchLocal`، ويقارن
-  payloads وreceipts وتقارير provider ولقطات scoreboard عبر تشغيلين متتاليين.
+  מטענים וקבלות ולוח תוצאות של ספק ולוח תוצאות.
 - **حاجز الأداء:** يجب أن ينتهي كل تنفيذ خلال 2 s؛ يطبع harness المدة المقاسة وسقف
   البايتات المحجوزة (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
 
@@ -69,18 +71,16 @@ Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3
 - **الأمر:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
 - **النطاق:** يمارس wrapper عالي المستوى `iroha_python.sorafs.multi_fetch_local` وdataclasses
   المقيّدة بالأنواع كي تمر fixture القياسية عبر نفس الواجهة التي يستخدمها مستهلكو
-  wheel. يعيد الاختبار بناء بيانات provider الوصفية من `providers.json`، ويحقن
-  لقطة telemetry، ويتحقق من بايتات payload وإيصالات chunk وتقارير provider ومحتوى
-  scoreboard مثل حزم Rust/JS/Swift.
+  גלגל. يعيد الاختبار بناء بيانات provider الوصفية من `providers.json`، ويحقن
+  טלמטריה, טלמטריה, מטען מטען ונתח ונתחים וספקים.
+  לוח תוצאות משחק חלודה/JS/Swift.
 - **متطلب مسبق:** شغّل `maturin develop --release` (أو ثبّت wheel) كي يعرض `_crypto` ربط
   `sorafs_multi_fetch_local` قبل تشغيل pytest؛ يتخطى harness تلقائيا عندما لا يكون
   الربط متاحا.
 - **حاجز الأداء:** نفس حد <= 2 s مثل حزمة Rust؛ يسجل pytest عدد البايتات المجمعة
-  وملخص مشاركة providers لقطعة الإصدار.
-
-يجب أن يلتقط مسار اعتماد الإصدار مخرجات الملخص من كل harness (Rust وPython وJS وSwift)
+  وملخص مشاركة providers لقطعة الإصدار.يجب أن يلتقط مسار اعتماد الإصدار مخرجات الملخص من كل harness (Rust وPython وJS وSwift)
 حتى يتمكن التقرير المؤرشف من مقارنة إيصالات payload والقياسات بشكل موحد قبل ترقية
-build. شغّل `ci/sdk_sorafs_orchestrator.sh` لتنفيذ كل مجموعات التكافؤ (Rust وPython
+לבנות. شغّل `ci/sdk_sorafs_orchestrator.sh` لتنفيذ كل مجموعات التكافؤ (Rust وPython
 bindings وJS وSwift) في تمريرة واحدة؛ ينبغي أن تُرفق مخرجات CI مقتطف السجل من هذا
 المساعد بالإضافة إلى ملف `matrix.md` المُنشأ (جدول SDK/الحالة/المدة) بتذكرة الإصدار
 حتى يتمكن المراجعون من تدقيق مصفوفة التكافؤ دون إعادة تشغيل المجموعة محليا.

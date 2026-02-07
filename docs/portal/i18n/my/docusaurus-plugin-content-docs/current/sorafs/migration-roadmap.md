@@ -5,44 +5,46 @@ source: docs/portal/docs/sorafs/migration-roadmap.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: "SoraFS Migration Roadmap"
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-# SoraFS Migration Roadmap (SF-1)
+#SoraFS ရွှေ့ပြောင်းနေထိုင်ခြင်း လမ်းပြမြေပုံ (SF-1)
 
-This document operationalises the migration guidance captured in
-`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
-execution-ready milestones, gating criteria, and owner checklists so storage,
-artifact hosting to SoraFS-backed publication.
+ဤစာရွက်စာတမ်းသည် ဖမ်းယူထားသော ရွှေ့ပြောင်းသွားလာမှုဆိုင်ရာ လမ်းညွှန်ချက်ကို လုပ်ဆောင်ပေးပါသည်။
+`docs/source/sorafs_architecture_rfc.md`။ ၎င်းသည် SF-1 ပေးပို့နိုင်သောပစ္စည်းများသို့ချဲ့ထွင်သည်။
+အကောင်အထည်ဖော်ရန် အဆင်သင့်ဖြစ်သည့် မှတ်တိုင်များ၊ ဂိတ်ပေါက်သတ်မှတ်ချက်များနှင့် ပိုင်ရှင်စစ်ဆေးရေးစာရင်းများ သိမ်းဆည်းခြင်း၊
+SoraFS ကျောထောက်နောက်ခံပြုထားသော ထုတ်ဝေမှုသို့ လက်ခံလုပ်ဆောင်နေသော artifact
 
-The roadmap is intentionally deterministic: every milestone names the required
-artifacts, command invocations, and attestation steps so downstream pipelines
-produce identical outputs and governance retains an auditable trail.
+လမ်းပြမြေပုံသည် ရည်ရွယ်ချက်ရှိရှိ အဆုံးအဖြတ်ပေးသည်- မှတ်တိုင်တိုင်းသည် လိုအပ်သည်များကို အမည်ပေးသည်။
+ရှေးဟောင်းပစ္စည်းများ၊ အမိန့်တောင်းခံမှုများနှင့် သက်သေအဆင့်များ ဖြစ်သောကြောင့် မြစ်အောက်ပိုင်း ပိုက်လိုင်းများ
+တူညီသော ရလဒ်များကို ထုတ်ပေးပြီး အုပ်ချုပ်မှုစနစ်သည် စာရင်းစစ်လမ်းကြောင်းကို ထိန်းသိမ်းထားသည်။
 
-## Milestone Overview
+## မှတ်တိုင်အကျဉ်းချုပ်
 
-| Milestone | Window | Primary Goals | Must Ship | Owners |
-|-----------|--------|---------------|-----------|--------|
-| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and stage alias proofs while pipelines adopt expectation flags. | Nightly fixture verification, council-signed manifests, alias registry staging entries. | Storage, Governance, SDKs |
+| မှတ်တိုင် | ပြတင်းပေါက် | မူလရည်မှန်းချက်များ | သင်္ဘောတင်ရမည် | ပိုင်ရှင်များ |
+|----------|--------------------|----------------|-----------------|--------|
+| **M1 – အဆုံးအဖြတ်ပြုခြင်း** | ရက်သတ္တပတ် 7–12 | ပိုက်လိုင်းများသည် မျှော်လင့်ခြင်းအလံများကို ခံယူနေစဉ်တွင် လက်မှတ်ထိုးထားသော တန်ဆာပလာများနှင့် ဇာတ်ခုံအမည်ခံအထောက်အထားများကို တွန်းအားပေးပါ။ | ညစဉ် တပ်ဆင်မှု အတည်ပြုခြင်း၊ ကောင်စီမှ လက်မှတ်ရေးထိုးထားသော သရုပ်ပြမှုများ၊ အမည်တူ မှတ်ပုံတင်ခြင်း စသည်ဖြင့် ထည့်သွင်းမှုများ။ | သိုလှောင်မှု၊ အုပ်ချုပ်မှု၊ SDKs |
 
-Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
-changes to this roadmap MUST update the ledger to keep governance and release
-engineering in sync.
+Milestone အခြေအနေကို `docs/source/sorafs/migration_ledger.md` တွင် ခြေရာခံထားသည်။ အားလုံး
+ဤလမ်းပြမြေပုံအား အပြောင်းအလဲများသည် အုပ်ချုပ်မှုနှင့် ထုတ်ပြန်မှုကို ထိန်းသိမ်းရန် လယ်ဂျာကို အပ်ဒိတ်လုပ်ရမည်။
+အင်ဂျင်နီယာနှင့် ထပ်တူကျသည်။
 
-## Workstreams
+## အလုပ်လမ်းကြောင်းများ
 
-### 2. Deterministic Pinning Adoption
+### 2. Deterministic Pinning မွေးစားခြင်း။
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
-| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
-| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
-| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
-| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
+| အဆင့် | မှတ်တိုင် | ဖော်ပြချက် | ပိုင်ရှင်(များ) | အထွက် |
+|--------|-----------|----------------|----------------|--------|
+| ခံစစ်မှူး အစမ်းလေ့ကျင့်မှု | M0 | `fixtures/sorafs_chunker` နှင့် ဒေသတွင်း အတုံးအခဲများကို နှိုင်းယှဉ်ကာ အပတ်စဉ် ခြောက်သွေ့မှု။ `docs/source/sorafs/reports/` အောက်တွင် အစီရင်ခံစာကို ထုတ်ဝေပါ။ | သိုလှောင်ပံ့ပိုးသူများ | pass/fail matrix ပါသော `determinism-<date>.md`။ |
+| လက်မှတ်များ | ပဌာန်း M1 | လက်မှတ်များ သို့မဟုတ် ထင်ရှားပေါ်လွင်ပါက `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` မအောင်မြင်ပါ။ ဖွံ့ဖြိုးရေးဆိုင်ရာ လွှမ်းမိုးမှုများသည် PR နှင့် ပူးတွဲပါရှိသော အုပ်ချုပ်မှုကို စွန့်လွှတ်ရန် လိုအပ်သည်။ | Tooling WG | CI မှတ်တမ်း၊ စွန့်လွှတ်လက်မှတ်လင့်ခ် (လိုအပ်ပါက)။ |
+| မျှော်လင့်ချက်အလံများ | M1 | ပိုက်လိုင်းများသည် `sorafs_manifest_stub` ကို ခေါ်ဆို၍ အထွက်များကို ချိတ်ရန် ပြတ်သားစွာ မျှော်လင့်ထားပါသည်- | Docs CI | မျှော်လင့်ခြင်းအလံများကို ရည်ညွှန်းသည့် script များကို အပ်ဒိတ်လုပ်ထားသည် (အောက်ပါ command block ကိုကြည့်ပါ)။ |
+| Registry-ပထမ pinning | M2 | `sorafs pin propose` နှင့် `sorafs pin approve` ထင်ရှားသော တင်ပြချက်များကို ခြုံငုံသုံးသပ်ပါ။ CLI သည် `--require-registry` သို့ ပုံသေဖြစ်သည်။ | အုပ်ချုပ်ရေး Ops | Registry CLI စာရင်းစစ်မှတ်တမ်း၊ မအောင်မြင်သောအဆိုပြုချက်များအတွက် telemetry။ |
+| မြင်နိုင်မှု တန်းတူညီမျှ | M3 | Prometheus/Grafana အစုအပြုံလိုက်စာရင်းများ မှတ်ပုံတင်ခြင်းဖော်ပြချက်မှ ကွဲပြားသွားသောအခါ ဒိုင်ခွက်များသတိပေးချက်။ ဖုန်းခေါ်ဆိုမှုတွင် ops များအတွက် ကြိုးတပ်ထားသော သတိပေးချက်များ။ | မြင်နိုင်စွမ်း | ဒက်ရှ်ဘုတ်လင့်ခ်၊ သတိပေးချက် စည်းမျဉ်း IDs၊ GameDay ရလဒ်များ။ |
 
-#### Canonical publishing command
+#### Canonical ထုတ်ဝေခြင်း အမိန့်
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -56,50 +58,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Replace the digest, size, and CID values with the expected references recorded in
-the migration ledger entry for the artifact.
+မှတ်တမ်းတင်ထားသော မျှော်လင့်ထားသော အကိုးအကားများဖြင့် အချေအတင်၊ အရွယ်အစားနှင့် CID တန်ဖိုးများကို အစားထိုးပါ။
+ပစ္စည်းများအတွက် ရွှေ့ပြောင်းခြင်းဆိုင်ရာ လယ်ဂျာ ဝင်ခွင့်။
 
 ### 3. Alias Transition & Communications
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`). | Governance, Docs | Proof bundle stored next to manifest + ledger comment with alias name. |
-| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
+| အဆင့် | မှတ်တိုင် | ဖော်ပြချက် | ပိုင်ရှင်(များ) | အထွက် |
+|--------|-----------|----------------|----------------|--------|
+| ဇာတ်ခုံ | M1 | Pin Registry အဆင့်သတ်မှတ်သည့်ပတ်ဝန်းကျင်တွင် alias အရေးဆိုမှုများကို မှတ်ပုံတင်ပြီး Merkle အထောက်အထားများကို manifests (`--alias`) သို့ ပူးတွဲပါ။ | အုပ်ချုပ်ရေး၊ Docs | manifest + လယ်ဂျာမှတ်ချက်ဘေးတွင် သိမ်းဆည်းထားသည့် အထောက်အထားအတွဲ။ |
+| သက်သေပြဠာန်း | M2 | Gateways သည် `Sora-Proof` ခေါင်းစီးများမပါသော manifest များကို ငြင်းပယ်သည်၊ အထောက်အထားများရယူရန် CI သည် `sorafs alias verify` အဆင့်ကို ရရှိသည်။ | ကွန်ရက်ချိတ်ဆက်ခြင်း | Gateway config patch + CI output ကို အတည်ပြုခြင်း အောင်မြင်ပါသည်။ |
 
 ### 4. Communication & Audit
 
-- **Ledger discipline:** every state change (fixture drift, registry submission,
-  alias activation) must append a dated note to
-  `docs/source/sorafs/migration_ledger.md`.
-- **Governance minutes:** council sessions approving pin registry changes or
-  alias policies must reference both this roadmap and the ledger.
-- **External comms:** DevRel publishes status updates at each milestone (blog +
-  changelog excerpt) highlighting deterministic guarantees and alias timelines.
+- **စာရင်းရှင်းတမ်းစည်းကမ်း-** တိုင်းနှင့်ပြည်နယ် ပြောင်းလဲမှု (ပြင်ဆင်မှု ပျံ့လွင့်မှု၊ မှတ်ပုံတင်တင်ပြမှု၊
+  alias activation) တွင် ရက်စွဲပါ မှတ်စုကို ထည့်သွင်းရပါမည်။
+  `docs/source/sorafs/migration_ledger.md`။
+- **အုပ်ချုပ်မှုမိနစ်-** pin registry အပြောင်းအလဲများကို အတည်ပြုခြင်း သို့မဟုတ် ကောင်စီအစည်းအဝေးများ
+  နာမည်တူမူဝါဒများသည် ဤလမ်းပြမြေပုံနှင့် လယ်ဂျာနှစ်ခုလုံးကို ကိုးကားရပါမည်။
+- **ပြင်ပကွန်မန့်များ-** DevRel သည် မှတ်တိုင်တစ်ခုစီတွင် အခြေအနေမွမ်းမံမှုများကို ထုတ်ပြန်သည် (ဘလော့ဂ် +
+  changelog မှ ကောက်နုတ်ချက်) အဆုံးအဖြတ်ပေးသော အာမခံချက်များနှင့် အချိန်ဇယားများကို မီးမောင်းထိုးပြခြင်း။
 
-## Dependencies & Risks
+## မှီခိုမှုနှင့် အန္တရာယ်များ
 
-| Dependency | Impact | Mitigation |
-|------------|--------|------------|
-| Pin Registry contract availability | Blocks M2 pin-first rollout. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
-| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
-| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
+| မှီခို | ထိခိုက်မှု | လျော့ပါးရေး |
+|--------------------|--------|------------|
+| Pin Registry စာချုပ်ရရှိနိုင်မှု | M2 ပင်နံပါတ်-ပထမဦးစွာ ထုတ်လွှတ်မှုကို ပိတ်ဆို့ထားသည်။ | ပြန်လည်ကစားခြင်းစမ်းသပ်မှုများနှင့်အတူ M2 မတိုင်မီအဆင့်စာချုပ်။ ဆုတ်ယုတ်မှုမရှိဘဲ စာအိတ်ကို ဆုတ်ကိုင်ထားလိုက်ပါ။ |
+| ကောင်စီဝင်သော့များ | ထင်ရှားသောစာအိတ်များနှင့် မှတ်ပုံတင်ခွင့်ပြုချက်များအတွက် လိုအပ်သည်။ | `docs/source/sorafs/signing_ceremony.md` တွင် မှတ်တမ်းတင်လက်မှတ်ထိုးခြင်းအခမ်းအနား။ ထပ်နေသော လယ်ဂျာမှတ်စုဖြင့် သော့များကို လှည့်ပါ။ |
+| SDK လွှတ်တင်ခြင်း cadence | ဖောက်သည်များသည် M3 မတိုင်မီ နံပတ်တစ်အထောက်အထားများကို လေးစားရပါမည်။ | SDK ထွက်ရှိသည့်ဝင်းဒိုးများကို မိုင်တိုင်ဂိတ်များဖြင့် ချိန်ညှိပါ။ နမူနာပုံစံများကိုထုတ်ရန် ရွှေ့ပြောင်းခြင်းစစ်ဆေးရန်စာရင်းများကို ထည့်ပါ။ |
 
-Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
-and should be cross-referenced when adjustments are made.
+ကျန်ရှိသောအန္တရာယ်များနှင့် လျော့ပါးသက်သာစေမှုများကို `docs/source/sorafs_architecture_rfc.md` တွင် ထင်ဟပ်ပြသည်
+ပြုပြင်ပြောင်းလဲမှုများပြုလုပ်သည့်အခါ အပြန်အလှန်ကိုးကားသင့်သည်။
 
-## Exit Criteria Checklist
+## သတ်မှတ်ချက်များ စစ်ဆေးရန်စာရင်းမှ ထွက်ပါ။
 
-| Milestone | Criteria |
-|-----------|----------|
-| M1 | - Nightly fixture job green for seven consecutive days. <br /> - Staging alias proofs verified in CI. <br /> - Governance ratifies expectation flag policy. |
+| မှတ်တိုင် | လိုအပ်ချက် |
+|----------|----------|
+| M1 | - ခုနစ်ရက်ဆက်တိုက် တစ်ညတာ အလုပ်စိမ်း။ <br /> - CI တွင် အတည်ပြုထားသော နာမည်အရင်း အထောက်အထားများ။ <br /> - အုပ်ချုပ်ရေးသည် မျှော်လင့်ချက်အလံမူဝါဒကို အတည်ပြုသည်။ |
 
-## Change Management
+## ပြောင်းလဲခြင်းစီမံခန့်ခွဲမှု
 
-1. Propose adjustments via PR updating this file **and**
-   `docs/source/sorafs/migration_ledger.md`.
-2. Link supporting governance minutes and CI evidence in the PR description.
-3. On merge, notify storage + DevRel mailing list with summary and expected
-   operator actions.
+1. ဤဖိုင်ကို **နှင့်** အဆင့်မြှင့်တင်ခြင်း PR မှတစ်ဆင့် ပြုပြင်ပြောင်းလဲမှုများကို အဆိုတင်သွင်းပါ။
+   `docs/source/sorafs/migration_ledger.md`။
+2. PR ဖော်ပြချက်ရှိ အုပ်ချုပ်မှုမိနစ်များနှင့် CI အထောက်အထားများကို ပံ့ပိုးပေးသည့် လင့်ခ်။
+3. ပေါင်းစည်းခြင်းတွင်၊ သိုလှောင်မှု + DevRel စာပို့ခြင်းစာရင်းကို အကျဉ်းချုပ်နှင့် မျှော်မှန်းထားသည်ကို အကြောင်းကြားပါ။
+   အော်ပရေတာလုပ်ဆောင်ချက်များ။
 
-Following this procedure ensures the SoraFS rollout remains deterministic,
-auditable, and transparent across teams participating in the Nexus launch.
+ဤလုပ်ထုံးလုပ်နည်းကို လိုက်နာခြင်းဖြင့် SoraFS ထုတ်လွှင့်မှုသည် အဆုံးအဖြတ်အတိုင်း ဆက်လက်တည်ရှိနေမည်ကို သေချာစေသည်၊
+Nexus လွှင့်တင်မှုတွင် ပါဝင်သည့် အဖွဲ့များတစ်လျှောက် စာရင်းစစ်နိုင်ပြီး ပွင့်လင်းမြင်သာမှုရှိသည်။

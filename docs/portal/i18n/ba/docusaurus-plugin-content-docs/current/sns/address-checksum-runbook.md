@@ -8,103 +8,105 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Account Address Checksum Incident Runbook
 sidebar_label: Checksum incidents
 description: Operational response for IH58 (preferred) / compressed (`sora`, second-best) checksum failures (ADDR-7).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/address_checksum_failure_runbook.md`. Update
-the source file first, then sync this copy.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Был биттә `docs/source/sns/address_checksum_failure_runbook.md` көҙгөһө. Яңыртыу
+сығанаҡ файл тәүҙә, һуңынан синхронизация был күсермә.
+::: 1990 й.
 
-Checksum failures surface as `ERR_CHECKSUM_MISMATCH` (`ChecksumMismatch`) across
-Torii, SDKs, and wallet/explorer clients. The ADDR-6/ADDR-7 roadmap items now
-require operators to follow this runbook whenever checksum alerts or support
-tickets fire.
+I18NI000000012X (I18NI000000013X) тип чек-сум-сумка етешһеҙлектәре буйынса.
+Torii, SDKs, һәм янсыҡ/тикшерелгән клиенттар. ADDR-6/ADDR-7 юл картаһы әйберҙәре хәҙер
+операторҙар был runbook-ты үтәүҙе талап итә, ҡасан да булһа тикшерелгән сумма иҫкәртмәләр йәки ярҙам
+билеттар ут.
 
-## When to run the play
+## Ҡасан спектакль йүгерергә
 
-- **Alerts:** `AddressInvalidRatioSlo` (defined in
-  `dashboards/alerts/address_ingest_rules.yml`) trips and the annotations list
+- **Иҫкәртмәләр:** I18NI000000014X 1990 йылда билдәләнгән.
+  `dashboards/alerts/address_ingest_rules.yml`) сәйәхәттәр һәм аннотациялар исемлеге
   `reason="ERR_CHECKSUM_MISMATCH"`.
-- **Fixture drift:** The `account_address_fixture_status` Prometheus textfile or
-  Grafana dashboard reports a checksum mismatch for any SDK copy.
-- **Support escalations:** Wallet/explorer/SDK teams cite checksum errors, IME
-  corruption, or clipboard scans that no longer decode.
-- **Manual observation:** Torii logs show repeated `address_parse_error=checksum_mismatch`
-  for production endpoints.
+- **Фиктура дрейфы:** I18NI000000017X I18NT0000000000000000000
+  I18NT000000002X приборҙар таҡтаһы хәбәр итеүҙәренсә, теләһә ниндәй SDK күсермәһе өсөн чек-сам тап килмәүе.
+- **Ярҙам эскалациялар:** Ҡанатлы/тикшерерсе/SDK командалары тикшерелгән сумма хаталарын килтерә, IME .
+  коррупция, йәки буфер сканерҙары, улар инде расшифровка.
+- **Ҡулланма күҙәтеү:** I18NT0000000008X журналдары ҡабатланған I18NI000000018X .
+  етештереү ос нөктәләре өсөн.
 
-If the incident is specifically about Local-8/Local-12 collisions, follow the
-`AddressLocal8Resurgence` or `AddressLocal12Collision` playbooks instead.
+Әгәр ҙә был ваҡиға махсус рәүештә урындағы-8/Local-12 бәрелештәр тураһында, эҙләп
+I18NI000000019X йәки `AddressLocal12Collision` урынына плейбуктар.
 
-## Evidence checklist
+## Дәлилдәр тикшерелгән исемлек
 
-| Evidence | Command / Location | Notes |
-|----------|-------------------|-------|
-| Grafana snapshot | `dashboards/grafana/address_ingest.json` | Capture invalid reason breakdowns and affected endpoints. |
-| Alert payload | PagerDuty/Slack + `dashboards/alerts/address_ingest_rules.yml` | Include context labels and timestamps. |
-| Fixture health | `artifacts/account_fixture/address_fixture.prom` + Grafana | Proves whether SDK copies drifted from `fixtures/account/address_vectors.json`. |
-| PromQL query | `sum by (context) (increase(torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH"}[5m]))` | Export CSV for the incident doc. |
-| Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (or log aggregation) | Scrub PII before sharing. |
-| Fixture verification | `cargo xtask address-vectors --verify` | Confirms canonical generator and committed JSON agree. |
-| SDK parity check | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Run for every SDK reported in alerts/tickets. |
-| Clipboard/IME sanity | `iroha tools address inspect <literal>` | Detects hidden characters or IME rewrites; cite `address_display_guidelines.md`. |
+| Дәлилдәр | Команда / Урыны | Иҫкәрмәләр |
+|---------|-------------------|-------|
+| I18NT000000003Х снимок | `dashboards/grafana/address_ingest.json` | Ҡулға алыу дөрөҫ булмаған сәбәп өҙөлгән һәм йоғонто яһай ос нөктәләре. |
+| Иҫкәртмә файҙалы йөк | PagerDuty/Slack + I18NI000000022Х | Контекст ярлыҡтарын һәм ваҡыт маркаларын үҙ эсенә ала. |
+| Һаулыҡты нығытыу | I18NI0000023X + I18NT000000004X | SDK күсермәләре I18NI000000024X-тан дрейфланғанмы икәнлеген иҫбатлай. |
+| PromQL эҙләү | `sum by (context) (increase(torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH"}[5m]))` | Экспорт CSV өсөн ваҡиға doc. |
+| Журналдар | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (йәки журнал агрегацияһы) | Скраб PII бүлешкәнсе. |
+| Фикстура тикшерелеүе | `cargo xtask address-vectors --verify` | Канон генераторы һәм ҡылған JSON ризалыҡ бирә. |
+| SDK паритет чек | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Һәр SDK өсөн йүгерергә хәбәр итте иҫкәртмәләр/билеттар. |
+| Буферы/IME аҡыл | `iroha tools address inspect <literal>` | Йәшерен персонаждарҙы йәки ММЭ-ны яңынан яҙа; цитата I18NI0000000300. |
 
-## Immediate response
+## Тиҙ арала яуап
 
-1. Acknowledge the alert, link Grafana snapshots + PromQL output in the incident
-   thread, and note affected Torii contexts.
-2. Freeze manifest promotions / SDK releases touching address parsing.
-3. Save dashboard snapshots and the generated Prometheus textfile artefacts in
-   the incident folder (`docs/source/sns/incidents/YYYY-MM/<ticket>/`).
-4. Pull log samples showing `checksum_mismatch` payloads.
-5. Notify SDK owners (`#sdk-parity`) with sample payloads so they can triage.
+.
+   еп, һәм иҫкәрмә йоғонто яһаны I18NT0000000009X контекстары.
+2. Туңдырыу манифест акциялары / SDK релиздар ҡағыла адрес анализлау.
+.
+   инцидент папкаһы (I18NI000000031X).
+4. I18NI000000032X файҙалы йөкләмәләрен күрһәткән журнал өлгөләрен тартығыҙ.
+5. SDK хужаларына хәбәр итегеҙ (I18NI000000033X) өлгө файҙалы йөктәр менән, улар триаж.
 
-## Root-cause isolation
+## Тамыр-сәбәп изоляцияһы
 
-### Fixture or generator drift
+### Экрасть йәки генератор дрейф
 
-- Re-run `cargo xtask address-vectors --verify`; regenerate if it fails.
-- Execute `ci/account_fixture_metrics.sh` (or individual
-  `scripts/account_fixture_helper.py check`) for each SDK to confirm bundled
-  fixtures match the canonical JSON.
+- Ҡабаттан эшләй I18NI000000034X; тергеҙелә, әгәр ул уңышһыҙлыҡҡа осрай.
+- I18NI0000000035X башҡарырға (йәки айырым
+  I18NI0000000036X) һәр SDK өсөн раҫлау өсөн йыйылған
+  ҡоролмалары канонлы JSON тура килә.
 
-### Client encoders / IME regressions
+### Клиент кодерҙары / IME регрессиялары
 
-- Inspect user-provided literals via `iroha tools address inspect` to find zero-width
-  joins, kana conversions, or truncated payloads.
-- Cross-check wallet/explorer flows with
-  `docs/source/sns/address_display_guidelines.md` (dual copy targets, warnings,
-  QR helpers) to ensure they follow the approved UX.
+- нуль киңлеген табыу өсөн I18NI00000000037X аша ҡулланыусылар тарафынан бирелгән литералдар тикшерергә
+  ҡушыла, кана конверсия, йәки ҡыҫҡартылған файҙалы йөктәр.
+- Кросс-тикшерергә янсыҡ/тикшереүсе ағымдар менән
+  I18NI000000038X (ике күсермә маҡсатлы, иҫкәртмәләр,
+  QR ярҙамсылары) улар раҫланған UX үтәргә тәьмин итеү өсөн.
 
-### Manifest or registry issues
+### Манифест йәки реестр мәсьәләләре
 
-- Follow `address_manifest_ops.md` to re-validate the latest manifest bundle and
-  ensure no Local-8 selectors resurfaced.
-  appear in payloads.
+- I18NI000000039X X һуңғы манифест өйөмөн яңынан раҫлау өсөн һәм
+  тәьмин итеү өсөн бер ниндәй ҙә локаль-8 селекторҙары ҡабаттан тыуҙы.
+  файҙалы йөктәрҙә күренә.
 
-### Malicious or malformed traffic
+### Яуыз йәки дөрөҫ булмаған трафик
 
-- Break down offending IPs/app IDs via Torii logs and `torii_http_requests_total`.
-- Preserve at least 24 hours of logs for Security/Governance follow-up.
+- IPs/ҡушымта идентификаторҙары өҙөлгән I18NT000000010X журналдары һәм I18NI000000040X аша өҙөлә.
+- Һаҡлау кәмендә 24 сәғәт журнал өсөн хәүефһеҙлек/идара итеү күҙәтеү.
 
-## Mitigation & recovery
+## Митигация һәм һауығыу
 
-| Scenario | Actions |
-|----------|---------|
-| Fixture drift | Regenerate `fixtures/account/address_vectors.json`, rerun `cargo xtask address-vectors --verify`, update SDK bundles, and attach `address_fixture.prom` snapshots to the ticket. |
-| SDK/client regression | File issues referencing the canonical fixture + `iroha tools address inspect` output, and gate releases behind the SDK parity CI (e.g., `ci/check_address_normalize.sh`). |
-| Malicious submissions | Rate-limit or block offending principals, escalate to Governance if tombstoning selectors is required. |
+| Сценарий | Эштәр |
+|---------|----------|
+| Фикстура дрейфы | Regenerate `fixtures/account/address_vectors.json`, ҡабаттан эшләү I18NI0000000042X, яңыртыу SDK өйөмдәре, һәм беркетергә I18NI000000043X снимок билет. |
+| SDK/клиент регрессия | Файл мәсьәләләре һылтанма канон ҡоролмаһы + I18NI000000044X сығыш, һәм ҡапҡа релиздар артында SDK паритет CI (мәҫәлән, `ci/check_address_normalize.sh`). |
+| Зарарлы тапшырыуҙар | Рейт-сикләү йәки блокировка рәнйеткән принциптар, көсәйтергә идара итеү, әгәр ҡәбер селекторҙары кәрәк. |
 
-Once mitigations land, rerun the PromQL query above to confirm
-`ERR_CHECKSUM_MISMATCH` stays at zero (excluding `/tests/*`) for at least
-30 minutes before downgrading the incident.
+Бер тапҡыр йомшартыуҙар ер, ҡабаттан эшләү PromQL эҙләү өҫтә раҫлау өсөн
+I18NI0000000046X нулдә ҡала (I18NI000000047X) кәмендә өсөн
+30 минут ҡалғас, был ваҡиғаны түбәнәйтергә.
 
-## Closure
+## Ябыҡ
 
-1. Archive Grafana snapshots, PromQL CSV, log excerpts, and `address_fixture.prom`.
-2. Update `status.md` (ADDR section) plus the roadmap row if tooling/docs
-   changed.
-3. File post-incident notes under `docs/source/sns/incidents/` when new lessons
-   emerge.
-4. Ensure SDK release notes mention checksum fixes when applicable.
-5. Confirm the alert stays green for 24h and fixture checks remain green before
-   resolving.
+1. Архив I18NT0000000006X снимоктары, PromQL CSV, журнал өҙөктәре, һәм `address_fixture.prom`.
+2. Яңыртыу I18NI0000000049X (ADDR бүлеге) плюс юл картаһы рәтендә, әгәр инструменталь/докторҙар
+   үҙгәрҙе.
+.
+   килеп сығырға.
+4. SDK сығарыу иҫкәрмәләрен телгә алыуҙы тәьмин итеү тикшерелгән сумманы төҙәтеүҙәр ҡасан ҡулланыла.
+5. Раҫлау өсөн иҫкәртмә йәшел ҡала 24h һәм ҡоролма тикшерергә йәшел булып ҡала
+   хәл итеү.

@@ -11,53 +11,54 @@ id: privacy-metrics-pipeline
 title: SoraNet Privacy Metrics Pipeline (SNNet-8)
 sidebar_label: Privacy Metrics Pipeline
 description: Privacy-preserving telemetry collection for SoraNet relays and orchestrators.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-# SoraNet Privacy Metrics Pipeline
+# SoraNet 隐私指标管道
 
-SNNet-8 introduces a privacy-aware telemetry surface for the relay runtime. The
-relay now aggregates handshake and circuit events into minute-sized buckets and
-exports only coarse Prometheus counters, keeping individual circuits
-unlinkable while giving operators actionable visibility.
+SNNet-8 为中继运行时引入了隐私感知遥测表面。的
+中继现在将握手和电路事件聚合到分钟大小的桶中，
+仅导出粗 Prometheus 计数器，保留单独的电路
+不可链接，同时为操作员提供可操作的可见性。
 
-## Aggregator Overview
+## 聚合器概述
 
-- The runtime implementation lives in `tools/soranet-relay/src/privacy.rs` as
-  `PrivacyAggregator`.
-- Buckets are keyed by wall-clock minute (`bucket_secs`, default 60 seconds) and
-  stored in a bounded ring (`max_completed_buckets`, default 120). Collector
-  shares keep their own bounded backlog (`max_share_lag_buckets`, default 12)
-  so stale Prio windows are flushed as suppressed buckets rather than leaking
-  memory or masking stuck collectors.
-- `RelayConfig::privacy` maps straight into `PrivacyConfig`, exposing tuning
-  knobs (`bucket_secs`, `min_handshakes`, `flush_delay_buckets`,
-  `force_flush_buckets`, `max_completed_buckets`, `max_share_lag_buckets`,
-  `expected_shares`). The production runtime keeps the defaults while SNNet-8a
-  introduces secure aggregation thresholds.
-- Runtime modules record events through typed helpers:
-  `record_circuit_accepted`, `record_circuit_rejected`, `record_throttle`,
-  `record_throttle_cooldown`, `record_capacity_reject`, `record_active_sample`,
-  `record_verified_bytes`, and `record_gar_category`.
+- 运行时实现位于 `tools/soranet-relay/src/privacy.rs` 中，如下所示
+  `PrivacyAggregator`。
+- 存储桶由挂钟分钟（`bucket_secs`，默认 60 秒）和
+  存储在有界环中（`max_completed_buckets`，默认 120）。收藏家
+  股票保留自己的有限积压（`max_share_lag_buckets`，默认 12）
+  陈旧的 Prio 窗户会像抑制水桶一样被冲走，而不是漏水
+  内存或屏蔽卡住的收集器。
+- `RelayConfig::privacy` 直接映射到 `PrivacyConfig`，暴露调优
+  旋钮（`bucket_secs`、`min_handshakes`、`flush_delay_buckets`、
+  `force_flush_buckets`、`max_completed_buckets`、`max_share_lag_buckets`、
+  `expected_shares`）。生产运行时保留默认值，而 SNNet-8a
+  引入安全聚合阈值。
+- 运行时模块通过类型化助手记录事件：
+  `record_circuit_accepted`、`record_circuit_rejected`、`record_throttle`、
+  `record_throttle_cooldown`、`record_capacity_reject`、`record_active_sample`、
+  `record_verified_bytes` 和 `record_gar_category`。
 
-## Relay Admin Endpoint
+## 中继管理端点
 
-Operators can poll the relay's admin listener for raw observations via
-`GET /privacy/events`. The endpoint returns newline-delimited JSON
-(`application/x-ndjson`) containing `SoranetPrivacyEventV1` payloads mirrored
-from the internal `PrivacyEventBuffer`. The buffer retains the newest events up
-to `privacy.event_buffer_capacity` entries (default 4 096) and is drained on
-read, so scrapers should poll frequently enough to avoid gaps. Events cover the
-same handshake, throttle, verified bandwidth, active circuit, and GAR signals
-that power the Prometheus counters, allowing downstream collectors to archive
-privacy-safe breadcrumbs or feed secure aggregation workflows.
+操作员可以通过以下方式轮询中继的管理监听器以获取原始观察结果
+`GET /privacy/events`。端点返回以换行符分隔的 JSON
+(`application/x-ndjson`) 包含镜像的 `SoranetPrivacyEventV1` 有效负载
+来自内部 `PrivacyEventBuffer`。缓冲区保留最新的事件
+到 `privacy.event_buffer_capacity` 条目（默认 4096）并耗尽
+阅读，因此抓取工具应该足够频繁地轮询以避免出现间隙。活动涵盖
+相同的握手、油门、验证带宽、有源电路和 GAR 信号
+为 Prometheus 计数器供电，允许下游收集器归档
+隐私安全的面包屑或提供安全的聚合工作流程。
 
-## Relay Configuration
+## 继电器配置
 
-Operators adjust privacy telemetry cadences in the relay configuration file via
-the `privacy` section:
+操作员通过以下方式调整中继配置文件中的隐私遥测节奏
+`privacy` 部分：
 
 ```json
 {
@@ -75,133 +76,131 @@ the `privacy` section:
 }
 ```
 
-Field defaults match the SNNet-8 spec and are validated at load time:
+字段默认值符合 SNNet-8 规范，并在加载时进行验证：
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| `bucket_secs` | Width of each aggregation window (seconds). | `60` |
-| `min_handshakes` | Minimum contributor count before a bucket can emit counters. | `12` |
-| `flush_delay_buckets` | Completed buckets to wait before attempting a flush. | `1` |
-| `force_flush_buckets` | Maximum age before we emit a suppressed bucket. | `6` |
-| `max_completed_buckets` | Retained bucket backlog (prevents unbounded memory). | `120` |
-| `max_share_lag_buckets` | Retention window for collector shares before suppression. | `12` |
-| `expected_shares` | Prio collector shares required before combining. | `2` |
-| `event_buffer_capacity` | NDJSON event backlog for the admin stream. | `4096` |
+|领域|描述 |默认|
+|--------|-------------|---------|
+| `bucket_secs` |每个聚合窗口的宽度（秒）。 | `60` |
+| `min_handshakes` |存储桶可以发出计数器之前的最小贡献者计数。 | `12` |
+| `flush_delay_buckets` |在尝试刷新之前要等待已完成的存储桶。 | `1` |
+| `force_flush_buckets` |我们发射抑制桶之前的最大年龄。 | `6` |
+| `max_completed_buckets` |保留存储桶积压（防止内存无界）。 | `120` |
+| `max_share_lag_buckets` |抑制前收集股的保留窗口。 | `12` |
+| `expected_shares` |合并前需要 Prio 收集者股份。 | `2` |
+| `event_buffer_capacity` |管理流的 NDJSON 事件积压。 | `4096` |
 
-Setting `force_flush_buckets` lower than `flush_delay_buckets`, zeroing the
-thresholds, or disabling the retention guard now fails validation to avoid
-deployments that would leak per-relay telemetry.
+将 `force_flush_buckets` 设置为低于 `flush_delay_buckets`，将
+阈值，或禁用保留防护现在无法通过验证来避免
+会泄漏每个中继遥测数据的部署。
 
-The `event_buffer_capacity` limit also bounds `/admin/privacy/events`, ensuring
-scrapers cannot fall behind indefinitely.
+`event_buffer_capacity` 限制还限制了 `/admin/privacy/events`，确保
+爬虫不可能无限期地落后。
 
-## Prio collector shares
+## Prio 收藏家分享
 
-SNNet-8a deploys dual collectors that emit secret-shared Prio buckets. The
-orchestrator now parses the `/privacy/events` NDJSON stream for both
-`SoranetPrivacyEventV1` entries and `SoranetPrivacyPrioShareV1` shares,
-forwarding them into `SoranetSecureAggregator::ingest_prio_share`. Buckets emit
-once `PrivacyBucketConfig::expected_shares` contributions arrive, mirroring the
-relay behaviour. Shares are validated for bucket alignment and histogram shape
-before being combined into `SoranetPrivacyBucketMetricsV1`. If the combined
-handshake count falls below `min_contributors`, the bucket is exported as
-`suppressed`, mirroring the behaviour of the in-relay aggregator. Suppressed
-windows now emit a `suppression_reason` label so operators can distinguish
-between `insufficient_contributors`, `collector_suppressed`,
-`collector_window_elapsed`, and `forced_flush_window_elapsed` scenarios when
-diagnosing telemetry gaps. The `collector_window_elapsed` reason also fires
-when Prio shares linger past `max_share_lag_buckets`, making stuck collectors
-visible without leaving stale accumulators in memory.
+SNNet-8a 部署双收集器，发出秘密共享的 Prio 存储桶。的
+Orchestrator 现在解析 `/privacy/events` NDJSON 流
+`SoranetPrivacyEventV1` 条目和 `SoranetPrivacyPrioShareV1` 共享，
+将它们转发到 `SoranetSecureAggregator::ingest_prio_share`。桶排放
+一旦 `PrivacyBucketConfig::expected_shares` 贡献到达，镜像
+中继行为。份额经过桶对齐和直方图形状验证
+在合并为 `SoranetPrivacyBucketMetricsV1` 之前。如果结合起来
+握手计数低于 `min_contributors`，存储桶导出为
+`suppressed`，镜像中继内聚合器的行为。压抑
+Windows 现在发出 `suppression_reason` 标签，以便操作员可以区分
+`insufficient_contributors`、`collector_suppressed` 之间，
+`collector_window_elapsed` 和 `forced_flush_window_elapsed` 场景
+诊断遥测差距。 `collector_window_elapsed` 原因也引发
+当 Prio 股价徘徊在 `max_share_lag_buckets` 以上时，让收藏家陷入困境
+可见，而不会在内存中留下陈旧的累加器。
 
-## Torii Ingestion Endpoints
+## Torii 摄取端点
 
-Torii now exposes two telemetry-gated HTTP endpoints so relays and collectors
-can forward observations without embedding a bespoke transport:
+Torii 现在公开两个遥测门控 HTTP 端点，以便中继和收集器
+可以在不嵌入定制传输的情况下转发观察结果：
 
-- `POST /v1/soranet/privacy/event` accepts a
-  `RecordSoranetPrivacyEventDto` payload. The body wraps a
-  `SoranetPrivacyEventV1` plus an optional `source` label. Torii validates the
-  request against the active telemetry profile, records the event, and responds
-  with HTTP `202 Accepted` alongside a Norito JSON envelope containing the
-  computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) and the
-  relay mode.
-- `POST /v1/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
-  payload. The body carries a `SoranetPrivacyPrioShareV1` and an optional
-  `forwarded_by` hint so operators can audit collector flows. Successful
-  submissions return HTTP `202 Accepted` with a Norito JSON envelope summarising
-  the collector, bucket window, and suppression hint; validation failures map to
-  a telemetry `Conversion` response to preserve deterministic error handling
-  across collectors. The orchestrator’s event loop now emits these shares as it
-  polls relays, keeping Torii’s Prio accumulator in sync with on-relay buckets.
+- `POST /v1/soranet/privacy/event` 接受
+  `RecordSoranetPrivacyEventDto` 有效负载。身体包裹着一个
+  `SoranetPrivacyEventV1` 加上可选的 `source` 标签。 Torii 验证
+  针对活动遥测配置文件的请求、记录事件并响应
+  带有 HTTP `202 Accepted` 以及包含以下内容的 Norito JSON 信封
+  计算的桶窗口（`bucket_start_unix`、`bucket_duration_secs`）和
+  中继模式。
+- `POST /v1/soranet/privacy/share` 接受 `RecordSoranetPrivacyShareDto`
+  有效负载。机身带有 `SoranetPrivacyPrioShareV1` 和可选的
+  `forwarded_by` 提示操作员可以审核收集器流量。成功
+  提交返回 HTTP `202 Accepted` 和 Norito JSON 信封总结
+  收集器、存储桶窗口和抑制提示；验证失败映射到
+  遥测 `Conversion` 响应以保留确定性错误处理
+  跨收藏家。编排器的事件循环现在会发出这些共享
+  轮询中继，使 Torii 的 Prio 累加器与中继桶保持同步。
 
-Both endpoints honour the telemetry profile: they emit `503 Service
-Unavailable` when metrics are disabled. Clients may send either Norito binary
-(`application/x.norito`) or Norito JSON (`application/x.norito+json`) bodies;
-the server automatically negotiates the format via the standard Torii
-extractors.
+两个端点均遵循遥测配置文件：它们发出“503 服务”
+当指标被禁用时不可用。客户端可以发送 Norito 二进制文件
+(`application/x.norito`) 或 Norito JSON (`application/x.norito+json`) 机构；
+服务器通过标准 Torii 自动协商格式
+提取器。
 
-## Prometheus Metrics
+## Prometheus 指标
 
-Each exported bucket carries `mode` (`entry`, `middle`, `exit`) and
-`bucket_start` labels. The following metric families are emitted:
+每个导出的桶携带 `mode` (`entry`, `middle`, `exit`) 和
+`bucket_start` 标签。发出以下度量标准系列：
 
-| Metric | Description |
+|公制|描述 |
 |--------|-------------|
-| `soranet_privacy_circuit_events_total{kind}` | Handshake taxonomy with `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`. |
-| `soranet_privacy_throttles_total{scope}` | Throttle counters with `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`. |
-| `soranet_privacy_throttle_cooldown_millis_{sum,count}` | Aggregated cooldown durations contributed by throttled handshakes. |
-| `soranet_privacy_verified_bytes_total` | Verified bandwidth from blinded measurement proofs. |
-| `soranet_privacy_active_circuits_{avg,max}` | Mean and peak active circuits per bucket. |
-| `soranet_privacy_rtt_millis{percentile}` | RTT percentile estimates (`p50`, `p90`, `p99`). |
-| `soranet_privacy_gar_reports_total{category_hash}` | Hashed Governance Action Report counters keyed by category digest. |
-| `soranet_privacy_bucket_suppressed` | Buckets withheld because the contributor threshold was not met. |
-| `soranet_privacy_pending_collectors{mode}` | Collector share accumulators pending combination, grouped by relay mode. |
-| `soranet_privacy_suppression_total{reason}` | Suppressed bucket counters with `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}` so dashboards can attribute privacy gaps. |
-| `soranet_privacy_snapshot_suppression_ratio` | Last drain’s suppressed/drained ratio (0–1), useful for alert budgets. |
-| `soranet_privacy_last_poll_unixtime` | UNIX timestamp of the most recent successful poll (drives the collector-idle alert). |
-| `soranet_privacy_collector_enabled` | Gauge that flips to `0` when the privacy collector is disabled or fails to start (drives the collector-disabled alert). |
-| `soranet_privacy_poll_errors_total{provider}` | Polling failures grouped by relay alias (increments on decode errors, HTTP failures, or unexpected status codes). |
+| `soranet_privacy_circuit_events_total{kind}` |握手分类为 `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`。 |
+| `soranet_privacy_throttles_total{scope}` |油门计数器为 `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`。 |
+| `soranet_privacy_throttle_cooldown_millis_{sum,count}` |由限制握手造成的聚合冷却持续时间。 |
+| `soranet_privacy_verified_bytes_total` |通过盲法测量证明验证带宽。 |
+| `soranet_privacy_active_circuits_{avg,max}` |每个桶的平均和峰值有源电路。 |
+| `soranet_privacy_rtt_millis{percentile}` | RTT 百分位估计（`p50`、`p90`、`p99`）。 |
+| `soranet_privacy_gar_reports_total{category_hash}` |按类别摘要键入的哈希治理行动报告计数器。 |
+| `soranet_privacy_bucket_suppressed` |由于未达到贡献者阈值，存储桶被扣留。 |
+| `soranet_privacy_pending_collectors{mode}` |收集器共享累加器待组合，按中继模式分组。 |
+| `soranet_privacy_suppression_total{reason}` |使用 `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}` 抑制存储桶计数器，以便仪表板可以归因隐私差距。 |
+| `soranet_privacy_snapshot_suppression_ratio` |最后一次消耗的抑制/消耗比率 (0-1)，对于警报预算很有用。 |
+| `soranet_privacy_last_poll_unixtime` |最近成功轮询的 UNIX 时间戳（驱动收集器空闲警报）。 |
+| `soranet_privacy_collector_enabled` |当隐私收集器被禁用或无法启动时，仪表会翻转为 `0`（驱动收集器禁用警报）。 |
+| `soranet_privacy_poll_errors_total{provider}` |按中继别名分组的轮询失败（解码错误、HTTP 失败或意外状态代码的增量）。 |
 
-Buckets without observations stay silent, keeping dashboards tidy without
-fabricating zero-filled windows.
+没有观察的桶保持沉默，保持仪表板整洁，无需观察
+制作零填充窗口。
 
-## Operational Guidance
+## 操作指导
 
-1. **Dashboards** – chart the metrics above grouped by `mode` and `window_start`.
-   Highlight missing windows to surface collector or relay issues. Use
-   `soranet_privacy_suppression_total{reason}` to distinguish contributor
-   shortfalls from collector-driven suppression when triaging gaps. The Grafana
-   asset now ships a dedicated **“Suppression Reasons (5m)”** panel fed by those
-   counters plus a **“Suppressed Bucket %”** stat that computes
-   `sum(soranet_privacy_bucket_suppressed) / count(...)` per selection so
-   operators can spot budget breaches at a glance. The **Collector Share
-   Backlog** series (`soranet_privacy_pending_collectors`) and the **Snapshot
-   Suppression Ratio** stat highlight stuck collectors and budget drift during
-   automated runs.
-2. **Alerting** – drive alarms from privacy-safe counters: PoW reject spikes,
-   cooldown frequency, RTT drift, and capacity rejects. Because counters are
-   monotonic within each bucket, straightforward rate-based rules work well.
-3. **Incident response** – rely on aggregated data first. When deeper debugging
-   is necessary, request relays to replay bucket snapshots or inspect blinded
-   measurement proofs instead of harvesting raw traffic logs.
-4. **Retention** – scrape often enough to avoid exceeding
-   `max_completed_buckets`. Exporters should treat the Prometheus output as the
-   canonical source and drop local buckets once forwarded.
+1. **仪表板** – 将上述指标按 `mode` 和 `window_start` 分组绘制图表。
+   突出显示缺失的窗口以暴露收集器或继电器问题。使用
+   `soranet_privacy_suppression_total{reason}` 区分贡献者
+   对间隙进行分类时收集器驱动的抑制造成的不足。 Grafana
+   资产现在运送一个专用的 **“抑制原因 (5m)”** 面板，由这些人员提供
+   计数器加上 **“Suppressed Bucket %”** 计算统计数据
+   `sum(soranet_privacy_bucket_suppressed) / count(...)` 每个选择所以
+   运营商可以一目了然地发现预算违规情况。 **收藏家分享
+   积压**系列 (`soranet_privacy_pending_collectors`) 和**快照
+   抑制率**统计数据突出了收藏家和预算漂移
+   自动运行。
+2. **警报** – 从隐私安全计数器发出警报：PoW 拒绝峰值，
+   冷却频率、RTT 漂移和容量拒绝。因为计数器是
+   每个存储桶内都是单调的，基于率的简单规则效果很好。
+3. **事件响应** – 首先依赖聚合数据。当进行更深层次的调试时
+   必要时，请求中继重放存储桶快照或进行盲检查
+   测量证明而不是收集原始流量日志。
+4. **保留** – 经常刮擦以避免超过
+   `max_completed_buckets`。出口商应将 Prometheus 输出视为
+   规范源并在转发后删除本地存储桶。
 
-## Suppression Analytics & Automated Runs
+## 抑制分析和自动运行SNNet-8 的接受取决于证明自动收集器的存在
+健康且抑制保持在政策范围内（每个桶的 ≤10%）
+任何 30 分钟窗口内的中继）。现在满足该要求所需的工具
+随树而船；操作员必须将其纳入每周的例行公事中。新的
+Grafana 抑制面板镜像下面的 PromQL 片段，提供 on-call
+团队在需要回退到手动查询之前实时了解情况。
 
-SNNet-8 acceptance hinges on demonstrating that automated collectors stay
-healthy and that suppression stays within policy bounds (≤10% of buckets per
-relay over any 30 minute window). The tooling needed to satisfy that gate now
-ships with the tree; operators must wire it into their weekly rituals. The new
-Grafana suppression panels mirror the PromQL snippets below, giving on-call
-teams live visibility before they need to fall back to manual queries.
+### 用于抑制审查的 PromQL 配方
 
-### PromQL recipes for suppression review
-
-Operators should keep the following PromQL helpers handy; both are referenced
-in the shared Grafana dashboard (`dashboards/grafana/soranet_privacy_metrics.json`)
-and Alertmanager rules:
+操作员应随身携带以下 PromQL 助手；两者都被引用
+在共享 Grafana 仪表板 (`dashboards/grafana/soranet_privacy_metrics.json`) 中
+和警报管理器规则：
 
 ```promql
 /* Suppression ratio per relay mode (30 minute window) */
@@ -225,14 +224,14 @@ clamp_min(
 )
 ```
 
-Use the ratio output to confirm the **“Suppressed Bucket %”** stat remains below
-the policy budget; wire the spike detector into Alertmanager for fast feedback
-when contributor counts dip unexpectedly.
+使用比率输出确认 **“Suppressed Bucket %”** 统计数据仍低于
+政策预算；将尖峰检测器连接到 Alertmanager 以获得快速反馈
+当贡献者数量意外下降时。
 
-### Offline bucket report CLI
+### 离线存储桶报告 CLI
 
-The workspace exposes `cargo xtask soranet-privacy-report` for one-off NDJSON
-captures. Point it at one or more relay admin exports:
+工作区公开 `cargo xtask soranet-privacy-report` 用于一次性 NDJSON
+捕获。将其指向一个或多个中继管理导出：
 
 ```bash
 cargo xtask soranet-privacy-report \
@@ -241,25 +240,25 @@ cargo xtask soranet-privacy-report \
   --json-out artifacts/sorafs_privacy/relay_summary.json
 ```
 
-The helper streams the capture through `SoranetSecureAggregator`, prints a
-suppression summary to stdout, and optionally writes a structured JSON report
-via `--json-out <path|->`. It honours the same knobs as the live collector
-(`--bucket-secs`, `--min-contributors`, `--expected-shares`, etc.), letting
-operators replay historical captures under different thresholds when triaging
-an issue. Attach the JSON alongside Grafana screenshots so the SNNet-8
-suppression analytics gate remains auditable.
+帮助程序通过 `SoranetSecureAggregator` 流式传输捕获，打印
+抑制摘要到标准输出，并可选择写入结构化 JSON 报告
+通过 `--json-out <path|->`。它具有与现场收集器相同的旋钮
+（`--bucket-secs`、`--min-contributors`、`--expected-shares` 等），让
+操作员在分类时重播不同阈值下的历史捕获
+一个问题。将 JSON 与 Grafana 屏幕截图一起附加，以便 SNNet-8
+抑制分析门仍然可审计。
 
-### First automated run checklist
+### 第一个自动运行清单
 
-Governance still requires proving that the first automation run met the
-suppression budget. The helper now accepts `--max-suppression-ratio <0-1>` so
-CI or operators can fail fast whenever suppressed buckets exceed the allowed
-window (default 10%) or when no buckets are present yet. Recommended flow:
+治理仍然需要证明第一次自动化运行满足
+抑制预算。助手现在接受 `--max-suppression-ratio <0-1>` 所以
+当抑制的存储桶超过允许的范围时，CI 或操作员可能会快速失败
+窗口（默认 10%）或尚不存在存储桶时。推荐流程：
 
-1. Export NDJSON from the relay admin endpoint(s) plus the orchestrator’s
-   `/v1/soranet/privacy/event|share` stream into
-   `artifacts/sorafs_privacy/<relay>.ndjson`.
-2. Run the helper with the policy budget:
+1. 从中继管理端点以及协调器的端点导出 NDJSON
+   `/v1/soranet/privacy/event|share` 流进
+   `artifacts/sorafs_privacy/<relay>.ndjson`。
+2. 使用策略预算运行助手：
 
    ```bash
    cargo xtask soranet-privacy-report \
@@ -269,37 +268,37 @@ window (default 10%) or when no buckets are present yet. Recommended flow:
      --max-suppression-ratio 0.10
    ```
 
-   The command prints the observed ratio and exits non-zero when the budget is
-   exceeded **or** when no buckets are ready, signalling that telemetry has not
-   yet been produced for the run. Live metrics should show
-   `soranet_privacy_pending_collectors` draining toward zero and
-   `soranet_privacy_snapshot_suppression_ratio` staying under the same budget
-   while the run executes.
-3. Archive the JSON output and CLI log with the SNNet-8 evidence bundle before
-   flipping the transport default so reviewers can replay the exact artefacts.
+   该命令打印观察到的比率，并在预算达到时以非零值退出
+   超过**或**，当没有桶准备好时，表明遥测尚未准备好
+   尚未生产用于运行。实时指标应该显示
+   `soranet_privacy_pending_collectors` 向零耗尽并且
+   `soranet_privacy_snapshot_suppression_ratio` 保持在相同的预算范围内
+   当运行执行时。
+3. 之前使用 SNNet-8 证据包归档 JSON 输出和 CLI 日志
+   翻转传输默认值，以便审阅者可以重放确切的工件。
 
-## Next Steps (SNNet-8a)
+## 后续步骤 (SNNet-8a)
 
-- Integrate the dual Prio collectors, wiring their share ingestion into the
-  runtime so relays and collectors emit consistent `SoranetPrivacyBucketMetricsV1`
-  payloads. *(Done — see `ingest_privacy_payload` in
-  `crates/sorafs_orchestrator/src/lib.rs` and accompanying tests.)*
-- Publish the shared Prometheus dashboard JSON and alert rules covering
-  suppression gaps, collector health, and anonymity brownouts. *(Done — see
-  `dashboards/grafana/soranet_privacy_metrics.json`,
-  `dashboards/alerts/soranet_privacy_rules.yml`,
-  `dashboards/alerts/soranet_policy_rules.yml`, and validation fixtures.)*
-- Produce the differential-privacy calibration artefacts described in
-  `privacy_metrics_dp.md`, including reproducible notebooks and governance
-  digests. *(Done — notebook + artefacts generated by
-  `scripts/telemetry/run_privacy_dp.py`; CI wrapper
-  `scripts/telemetry/run_privacy_dp_notebook.sh` executes the notebook via the
-  `.github/workflows/release-pipeline.yml` workflow; governance digest filed in
-  `docs/source/status/soranet_privacy_dp_digest.md`.)*
+- 集成双 Prio 收集器，将其共享摄取连接到
+  运行时，以便继电器和收集器发出一致的 `SoranetPrivacyBucketMetricsV1`
+  有效负载。 *（完成 — 请参阅 `ingest_privacy_payload`
+  `crates/sorafs_orchestrator/src/lib.rs` 和随附的测试。）*
+- 发布共享的 Prometheus 仪表板 JSON 和警报规则，涵盖
+  抑制差距、收集器健康状况和匿名限制。 *（完成 - 参见
+  `dashboards/grafana/soranet_privacy_metrics.json`，
+  `dashboards/alerts/soranet_privacy_rules.yml`，
+  `dashboards/alerts/soranet_policy_rules.yml`，和验证夹具。）*
+- 产生差分隐私校准工件中描述的
+  `privacy_metrics_dp.md`，包括可复制的笔记本和治理
+  消化。 *（完成——笔记本+由以下人员生成的文物
+  `scripts/telemetry/run_privacy_dp.py`； CI 包装器
+  `scripts/telemetry/run_privacy_dp_notebook.sh` 通过以下命令执行笔记本
+  `.github/workflows/release-pipeline.yml` 工作流程；治理摘要提交于
+  `docs/source/status/soranet_privacy_dp_digest.md`。）*
 
-The current release delivers the SNNet-8 foundation: deterministic,
-privacy-safe telemetry that slots directly into existing Prometheus scrapers
-and dashboards. Differential privacy calibration artefacts are in place, the
-release pipeline workflow keeps the notebook outputs fresh, and the remaining
-work focuses on monitoring the first automated run plus extending suppression
-alert analytics.
+当前版本提供了 SNNet-8 基础：确定性、
+隐私安全的遥测技术，可直接插入现有的 Prometheus 抓取器
+和仪表板。差分隐私校准工件已就位，
+发布管道工作流程使笔记本输出保持新鲜，剩余的
+工作重点是监控第一次自动运行以及扩展抑制
+警报分析。

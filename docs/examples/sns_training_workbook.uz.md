@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d6965998c392217380a1722e49098f831438e2f4499b9e3258398a66f905a35
 source_last_modified: "2025-12-29T18:16:35.080069+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Workbook Template
+# SNS trening ish kitobi shabloni
 
-Use this workbook as the canonical handout for each training cohort. Replace
-placeholders (`<...>`) before distributing to attendees.
+Ushbu ish kitobidan har bir o'quv guruhi uchun kanonik tarqatma material sifatida foydalaning. O'zgartiring
+ishtirokchilarga tarqatishdan oldin joy egalari (`<...>`).
 
-## Session details
-- Suffix: `<.sora | .nexus | .dao>`
-- Cycle: `<YYYY-MM>`
-- Language: `<ar/es/fr/ja/pt/ru/ur>`
-- Facilitator: `<name>`
+## Seans tafsilotlari
+- Suffiks: `<.sora | .nexus | .dao>`
+- Tsikl: `<YYYY-MM>`
+- Til: `<ar/es/fr/ja/pt/ru/ur>`
+- Fasilitator: `<name>`
 
-## Lab 1 — KPI export
-1. Open the portal KPI dashboard (`docs/portal/docs/sns/kpi-dashboard.md`).
-2. Filter by suffix `<suffix>` and time range `<window>`.
-3. Export PDF + CSV snapshots.
-4. Record SHA-256 of the exported JSON/PDF here: `______________________`.
+## Laboratoriya 1 - KPI eksporti
+1. Portal KPI asboblar panelini oching (`docs/portal/docs/sns/kpi-dashboard.md`).
+2. `<suffix>` qo'shimchasi va `<window>` vaqt oralig'i bo'yicha filtrlang.
+3. PDF + CSV snapshotlarini eksport qiling.
+4. Eksport qilingan JSON/PDF ning SHA-256-ni bu yerda yozing: `______________________`.
 
-## Lab 2 — Manifest drill
-1. Fetch the sample manifest from `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`.
-2. Validate with `cargo run --bin sns_manifest_check -- --input <file>`.
-3. Generate resolver skeleton with `scripts/sns_zonefile_skeleton.py`.
-4. Paste the diff summary:
+## Laboratoriya 2 - Manifest matkapi
+1. `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json` dan manifest namunasini oling.
+2. `cargo run --bin sns_manifest_check -- --input <file>` bilan tasdiqlang.
+3. `scripts/sns_zonefile_skeleton.py` bilan rezolyutsiya skeletini yarating.
+4. Farq xulosasini joylashtiring:
    ```
    <git diff output>
    ```
 
-## Lab 3 — Dispute simulation
-1. Use guardian CLI to start a freeze (case id `<case-id>`).
-2. Record the dispute hash: `______________________`.
-3. Upload the evidence log to `artifacts/sns/training/<suffix>/<cycle>/logs/`.
+## 3-laboratoriya — bahslarni simulyatsiya qilish
+1. Muzlatishni boshlash uchun qo'riqchi CLI dan foydalaning (xolat identifikatori `<case-id>`).
+2. Bahs xeshini yozib oling: `______________________`.
+3. Dalillar jurnalini `artifacts/sns/training/<suffix>/<cycle>/logs/` ga yuklang.
 
-## Lab 4 — Annex automation
-1. Export the Grafana dashboard JSON and copy it into `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`.
-2. Run:
+## Laboratoriya 4 - Ilovani avtomatlashtirish
+1. Grafana asboblar panelini JSON eksport qiling va uni `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json` ga nusxalang.
+2. Yugurish:
    ```bash
    cargo xtask sns-annex \
      --suffix <suffix> \
@@ -53,12 +54,12 @@ placeholders (`<...>`) before distributing to attendees.
      --regulatory-entry docs/source/sns/regulatory/<memo>.md \
      --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
    ```
-3. Paste the annex path + SHA-256 output: `________________________________`.
+3. Ilova yo'lini + SHA-256 chiqishini joylashtiring: `________________________________`.
 
-## Feedback notes
-- What was unclear?
-- Which labs ran over time?
-- Tooling bugs observed?
+## Fikr-mulohazalar
+- Nima tushunarsiz edi?
+- Vaqt o'tishi bilan qaysi laboratoriyalar ishlagan?
+- Asboblarni ishlatishda xatolar kuzatildimi?
 
-Return completed workbooks to the facilitator; they belong under
+Tugallangan ish daftarlarini fasilitatorga qaytaring; ostiga tegishlidirlar
 `artifacts/sns/training/<suffix>/<cycle>/workbooks/`.

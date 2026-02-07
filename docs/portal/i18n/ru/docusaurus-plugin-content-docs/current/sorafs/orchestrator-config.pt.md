@@ -4,42 +4,44 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-config.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-config
-title: Configuracao do orquestrador SoraFS
-sidebar_label: Configuracao do orquestrador
-description: Configure o orquestrador de fetch multi-origem, interprete falhas e depure a saida de telemetria.
+идентификатор: конфигурация оркестратора
+заголовок: Настройка ордера SoraFS
+Sidebar_label: Настройка ордера
+описание: Настройте организатора выборки из нескольких источников, интерпретируйте данные и очистите данные телеметрии.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/orchestrator.md`. Mantenha ambas as copias sincronizadas ate que a documentacao alternativa seja retirada.
+:::примечание Fonte canonica
+Эта страница написана `docs/source/sorafs/developer/orchestrator.md`. Мантенья представил, как синхронизированные копии ели альтернативную документацию, оставшуюся в прошлом.
 :::
 
-# Guia do orquestrador de fetch multi-origem
+# Инструкция по получению мультиоригема
 
-O orquestrador de fetch multi-origem do SoraFS conduz downloads deterministas e
-paralelos a partir do conjunto de provedores publicado em adverts respaldados
-pela governanca. Este guia explica como configurar o orquestrador, quais sinais
-de falha esperar durante rollouts e quais fluxos de telemetria expõem
-indicadores de saúde.
+Оркестратор загрузки нескольких исходных файлов для SoraFS обеспечивает определенные загрузки и
+Paralelos a partir do conjunto deprovores publicado em respaldados respaldados
+Пела Гунанка. Объясните, как настроить оратора на Синае
+они будут продолжать работать во время развертываний и в ходе экспериментов по телеметрии
+Индикадоры де Сауд.
 
-## 1. Visao geral da configuracao
+## 1. Общие настройки конфигурации
 
-O orquestrador combina tres fontes de configuracao:
+Оператор, комбинирующий три шрифта конфигурации:
 
-| Fonte | Proposito | Notas |
+| Фонте | Предложение | Заметки |
 |-------|-----------|-------|
-| `OrchestratorConfig.scoreboard` | Normaliza pesos de provedores, valida a frescura da telemetria e persiste o scoreboard JSON usado para auditorias. | Apoiado por `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
-| `OrchestratorConfig.fetch` | Aplica limites de runtime (budgets de retry, limites de concorrencia, toggles de verificacao). | Mapeia para `FetchOptions` em `crates/sorafs_car::multi_fetch`. |
-| Parametros de CLI / SDK | Limita o numero de peers, anexa regioes de telemetria e expõe politicas de deny/boost. | `sorafs_cli fetch` expõe esses flags diretamente; os SDKs os propagam via `OrchestratorConfig`. |
+| `OrchestratorConfig.scoreboard` | Нормализация песо де-проверок, проверка свежести телеметрии и сохранение табло в формате JSON, используемое для аудиторий. | Апоядо `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
+| `OrchestratorConfig.fetch` | Применение ограничений времени выполнения (бюджеты повторных попыток, ограничения согласования, переключатели проверки). | Mapeia для `FetchOptions` и `crates/sorafs_car::multi_fetch`. |
+| Параметры CLI/SDK | Ограничение количества пиров, региональные ограничения телеметрии и политические методы запрета/повышения. | `sorafs_cli fetch` прямо имеет флаги; OS SDK распространяется через `OrchestratorConfig`. |
 
-Os helpers JSON em `crates/sorafs_orchestrator::bindings` serializam a
-configuracao completa em Norito JSON, tornando-a portavel entre bindings de SDKs
-e automacao.
+Помощники ОС JSON в сериализации `crates/sorafs_orchestrator::bindings`
+Полная настройка в Norito JSON, Tornando — перенос между привязками SDK
+е автомата.
 
-### 1.1 Exemplo de configuracao JSON
+### 1.1 Пример настройки JSON
 
 ```json
 {
@@ -62,17 +64,17 @@ e automacao.
 }
 ```
 
-Persista o arquivo atraves do empilhamento usual do `iroha_config` (`defaults/`,
-user, actual) para que deployments deterministas herdem os mesmos limites entre
-nodos. Para um perfil de fallback direct-only alinhado ao rollout SNNet-5a,
-consulte `docs/examples/sorafs_direct_mode_policy.json` e a orientacao
-correspondente em `docs/source/sorafs/direct_mode_pack.md`.
+Сохранение или архивирование обычно происходит с `iroha_config` (`defaults/`,
+пользователь, фактический) для того, чтобы развертывание определяло границы между
+нодос. Чтобы использовать резервный вариант только для прямого подключения к развертыванию SNNet-5a,
+Проконсультируйтесь с `docs/examples/sorafs_direct_mode_policy.json` и ориентируйтесь
+корреспондент `docs/source/sorafs/direct_mode_pack.md`.
 
-### 1.2 Overrides de conformidade
+### 1.2 Отмена согласования
 
-A SNNet-9 integra conformidade orientada pela governanca no orquestrador. Um
-novo objeto `compliance` na configuracao Norito JSON captura os carve-outs que
-forcam o pipeline de fetch ao modo direct-only:
+Интегрированная ориентация на управление SNNet-9 без организатора. Хм
+Новый объект `compliance` в конфигурации Norito JSON захватывает вырезки, которые
+Forcam или конвейер выборки только в режиме Direct:
 
 ```json
 "compliance": {
@@ -83,132 +85,124 @@ forcam o pipeline de fetch ao modo direct-only:
   ],
   "audit_contacts": ["mailto:compliance@example.org"]
 }
-```
-
-- `operator_jurisdictions` declara os codigos ISO-3166 alpha-2 onde esta
-  instancia do orquestrador opera. Os codigos sao normalizados para maiusculas
-  durante o parsing.
-- `jurisdiction_opt_outs` espelha o registro de governanca. Quando qualquer
-  jurisdicao do operador aparece na lista, o orquestrador aplica
-  `transport_policy=direct-only` e emite o motivo de fallback
+```- `operator_jurisdictions` объявляет коды ISO-3166 альфа-2, когда они есть.
+  instancia do orquestrador Opera. Нормальные коды для большинства людей
+  во время разбора.
+- `jurisdiction_opt_outs` отправлен в государственный реестр. Когда ты хочешь
+  Юрисдикционное право оператора отображается в списке, или приложение оркестратора
+  `transport_policy=direct-only` и выдача резервного варианта
   `compliance_jurisdiction_opt_out`.
-- `blinded_cid_opt_outs` lista digests de manifest (CIDs cegados, codificados em
-  hex maiusculo). Payloads correspondentes tambem forcam agendamento direct-only
-  e expõem o fallback `compliance_blinded_cid_opt_out` na telemetria.
-- `audit_contacts` registra as URIs que a governanca espera que os operadores
+- `blinded_cid_opt_outs` список дайджестов манифеста (CID, кодированные и
+  hex maiusculo). Полезные нагрузки корреспонденты также для повестки дня камеры только для прямого доступа
+  Мы используем резервный вариант `compliance_blinded_cid_opt_out` для телеметрии.
+- `audit_contacts` регистрируется как URI, которые позволяют управлять операторами
   publiquem nos playbooks GAR.
-- `attestations` captura os pacotes de conformidade assinados que sustentam a
-  politica. Cada entrada define uma `jurisdiction` opcional (codigo ISO-3166
-  alpha-2), um `document_uri`, o `digest_hex` canonico de 64 caracteres, o
-  timestamp de emissao `issued_at_ms` e um `expires_at_ms` opcional. Esses
-  artefatos alimentam o checklist de auditoria do orquestrador para que as
-  ferramentas de governanca possam vincular overrides a documentacao assinada.
+- `attestations` захватывает пакеты соответствия, которые поддерживаются
+  политика. Cada entrada определяет uma `jurisdiction` опционально (код ISO-3166
+  альфа-2), um `document_uri`, o `digest_hex` канонический код из 64 символов, o
+  временная метка выброса `issued_at_ms` и `expires_at_ms` необязательно. Эссес
+  артефатос алиментам или контрольный список зрительного зала для оркестратора, чтобы
+  Ферраментас де Гунанка Поссам Винкуляр отменяет документацию Ассинада.
 
-Forneca o bloco de conformidade via o empilhamento usual de configuracao para
-que os operadores recebam overrides deterministas. O orquestrador aplica a
-conformidade _depois_ dos hints de write-mode: mesmo que um SDK solicite
-`upload-pq-only`, opt-outs de jurisdicao ou manifest ainda forcam o transporte
-para direct-only e falham rapidamente quando nao existem provedores conformes.
+Для блокировки или согласования с помощью обычной настройки для
+que os operadores recebam отменяет детерминированные значения. О orquestrador aplica a
+согласовать _depois_ подсказки режима записи: сообщение о том, что запрашивается SDK
+`upload-pq-only`, отказ от юрисдикции или манифестации при оформлении или транспортировке
+только для прямого доступа и быстрому достижению того, что существует в соответствии с существующими условиями.
 
-Catalogos canonicos de opt-out vivem em
-`governance/compliance/soranet_opt_outs.json`; o Conselho de Governanca publica
-atualizacoes via releases tagueadas. Um exemplo completo de configuracao
-(incluindo attestations) esta disponivel em
-`docs/examples/sorafs_compliance_policy.json`, e o processo operacional esta
-capturado no
-[playbook de conformidade GAR](../../../source/soranet/gar_compliance_playbook.md).
+Канонические каталоги отказа от участия при жизни
+`governance/compliance/soranet_opt_outs.json`; o Общественный совет управления
+обновляется посредством релизов tagueadas. Пример полной настройки
+(включая подтверждения) esta disponivel em
+`docs/examples/sorafs_compliance_policy.json`, и этот процесс работает
+захват нет
+[книга соответствия GAR] (../../../source/soranet/gar_compliance_playbook.md).
 
-### 1.3 Ajustes de CLI e SDK
-
-| Flag / Campo | Efeito |
+### 1.3 Настройки CLI и SDK| Флаг / Кампо | Эфейто |
 |--------------|--------|
-| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limita quantos provedores sobrevivem ao filtro do scoreboard. Defina `None` para usar todos os provedores elegiveis. |
-| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Limita retries por chunk. Exceder o limite gera `MultiSourceError::ExhaustedRetries`. |
-| `--telemetry-json` | Injeta snapshots de latencia/falha no construtor do scoreboard. Telemetria obsoleta alem de `telemetry_grace_secs` marca provedores como inelegiveis. |
-| `--scoreboard-out` | Persiste o scoreboard calculado (provedores elegiveis + inelegiveis) para inspecao pos-run. |
-| `--scoreboard-now` | Sobrescreve o timestamp do scoreboard (segundos Unix) para manter capturas de fixtures deterministas. |
-| `--deny-provider` / hook de politica de score | Exclui provedores de forma deterministica sem deletar adverts. Util para blacklisting rapido. |
-| `--boost-provider=name:delta` | Ajusta os creditos do round-robin ponderado de um provedor mantendo os pesos de governanca intactos. |
-| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Rotula metricas emitidas e logs estruturados para que dashboards possam filtrar por geografia ou onda de rollout. |
-| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | O padrao agora e `soranet-first` ja que o orquestrador multi-origem e a base. Use `direct-only` ao preparar downgrade ou seguir uma diretriz de conformidade, e reserve `soranet-strict` para pilotos PQ-only; overrides de conformidade continuam sendo o teto rigido. |
+| `--max-peers` / `OrchestratorConfig::with_max_providers` | Ограничить количество введенных средств, чтобы отключить фильтр на табло. Defina `None` для использования всех элегантных элементов. |
+| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Limita повторяет попытку. Превышение или ограничение числа `MultiSourceError::ExhaustedRetries`. |
+| `--telemetry-json` | Снимки задержки/загрузки не отображаются в конструкторе табло. Телеметрия устарела по причине `telemetry_grace_secs`, марка проверена как неэлегивная. |
+| `--scoreboard-out` | Продолжайте рассчитывать табло (элегивные + неэлегивные) для проверки позиции. |
+| `--scoreboard-now` | Сохраняйте временные метки на табло (вторые Unix) для захвата определенных приборов. |
+| `--deny-provider` / политический крючок | Исключаются средства детерминированной формы, которые можно удалить. Используется для быстрого внесения в черный список. |
+| `--boost-provider=name:delta` | Корректировка кредитов в циклическом порядке обдумывает, как обеспечить сохранение неповрежденных песо в управлении. |
+| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Поворотные метрики и журналы созданы для того, чтобы панели мониторинга могли фильтровать географию или время развертывания. |
+| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | На падрао агоре и `soranet-first` я могу найти многопрофильного игрока и базу. Используйте `direct-only` для подготовки к переходу на более раннюю версию или для дальнейшего изменения соответствия, а также резервный `soranet-strict` для пилотных программ только для PQ; отменяет конформность, непрерывную отправку или жесткое тело. |
 
-SoraNet-first e agora o padrao de envio, e rollbacks devem citar o bloqueador
-SNNet relevante. Depois que SNNet-4/5/5a/5b/6a/7/8/12/13 forem graduadas, a
-governanca endurecera a postura requerida (rumo a `soranet-strict`); ate la,
-apenas overrides motivados por incidentes devem priorizar `direct-only`, e eles
-devem ser registrados no log de rollout.
+SoraNet - первая агора или падрао де envio, и откаты, которые позволяют цитировать или блокировать
+Соответствует SNNet. Депуа, который SNNet-4/5/5a/5b/6a/7/8/12/13 для выпускников,
+govanca endurecera a postura requerida (по слухам, `soranet-strict`); съел ла,
+apenas отменяет мотивы для инцидентов, которые должны быть приоритетными `direct-only`, и другие
+должны быть зарегистрированы без журнала развертывания.
 
-Todos os flags acima aceitam a sintaxe `--` tanto em `sorafs_cli fetch` quanto no
-binario `sorafs_fetch` voltado a desenvolvedores. Os SDKs expõem as mesmas opcoes
-por meio de builders tipados.
+Все флаги ОС acima aceitam a sintaxe `--` tanto em `sorafs_cli fetch` quanto no
+Бинарный файл `sorafs_fetch` был отключен. Os SDK используются как простые операции
+для типичных строителей.
 
-### 1.4 Gestao de cache de guards
+### 1.4 Охранник тайников
 
-A CLI agora integra o seletor de guards da SoraNet para que operadores possam
-fixar relays de entrada de forma deterministica antes do rollout completo de
-transporte SNNet-5. Tres novos flags controlam o fluxo:
+Интеграция CLI или выбор средств защиты из SoraNet для имеющихся операторов
+фиксация реле детерминированной формы до полного развертывания
+транспортировать SNNet-5. Трес новос отмечает контроль или флюксо:
 
-| Flag | Proposito |
+| Флаг | Предложение |
 |------|-----------|
-| `--guard-directory <PATH>` | Aponta para um arquivo JSON que descreve o consenso de relays mais recente (subset abaixo). Passar o directory atualiza o cache de guards antes de executar o fetch. |
-| `--guard-cache <PATH>` | Persiste o `GuardSet` codificado em Norito. Execucoes subsequentes reutilizam o cache mesmo sem novo directory. |
-| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Overrides opcionais para o numero de guards de entrada a fixar (padrao 3) e a janela de retencao (padrao 30 dias). |
-| `--guard-cache-key <HEX>` | Chave opcional de 32 bytes usada para marcar caches de guard com um MAC Blake3 para que o arquivo seja verificado antes da reutilizacao. |
+| `--guard-directory <PATH>` | Ответ на запрос JSON, который требует недавнего согласия на использование реле (подмножество abaixo). Перейдите к настройке каталога или кэшу защиты перед выполнением или выборкой. |
+| `--guard-cache <PATH>` | Сохраняется или `GuardSet`, кодированный под Norito. В дальнейшем выполняется повторное использование или кэширование нового каталога. |
+| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Отменяет параметры номера защиты от входа в фиксатор (30 секунд) и удерживаемого канала (30 дней). |
+| `--guard-cache-key <HEX>` | Дополнительно используйте 32 байта для маркировки кэшей защиты на MAC Blake3, чтобы архив был проверен перед повторным использованием. |
 
-As cargas de directory de guards usam um esquema compacto:
+В качестве сотрудников справочника охранников usam um esquema Compacto:O flag `--guard-directory` назад, вперед и полезная нагрузка `GuardDirectorySnapshotV2`
+кодифицирован под Norito. О снимке бинарного файла:
 
-O flag `--guard-directory` agora espera um payload `GuardDirectorySnapshotV2`
-codificado em Norito. O snapshot binario contem:
-
-- `version` — versao do esquema (atualmente `2`).
-- `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` —
-  metadados de consenso que devem corresponder a cada certificado embutido.
-- `validation_phase` — gate de politica de certificados (`1` = permitir uma
-  assinatura Ed25519, `2` = preferir assinaturas duplas, `3` = exigir assinaturas
-  duplas).
-- `issuers` — emissores de governanca com `fingerprint`, `ed25519_public` e
-  `mldsa65_public`. Os fingerprints sao calculados como
+- `version` — версия этой таблицы (настоящая версия `2`).
+- И18НИ00000080Х, И18НИ00000081Х, И18НИ00000082Х, И18НИ00000083Х —
+  метаданные согласия, которые будут соответствовать каждому сертифицированному внедрению.
+- `validation_phase` — ворота политики сертификатов (`1` = разрешениe ума
+  assinatura Ed25519, `2` = предпочтительные assinaturas duplas, `3` = exigir assinaturas
+  дупла).
+- `issuers` — эмиссоры управления с `fingerprint`, `ed25519_public` e
+  `mldsa65_public`. Отпечатки пальцев Os sao Calculados como
   `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
-- `relays` — uma lista de bundles SRCv2 (saida de
-  `RelayCertificateBundleV2::to_cbor()`). Cada bundle carrega o descriptor do
-  relay, flags de capacidade, politica ML-KEM e assinaturas duplas Ed25519/ML-DSA-65.
+- `relays` — список пакетов SRCv2 (указан
+  `RelayCertificateBundleV2::to_cbor()`). Cada Bundle Carrega или дескриптор сделать
+  реле, флаги возможностей, политика ML-KEM и дублированные значки Ed25519/ML-DSA-65.
 
-A CLI verifica cada bundle contra as chaves de emissor declaradas antes de
-mesclar o directory com o cache de guards. Esbocos JSON alternativos nao sao mais
-aceitos; snapshots SRCv2 sao obrigatorios.
+Пакет CLI verifica cada противоречит тому, что элементы эмиссора объявляются раньше
+mesclar или каталог com или Cache de Guards. Альтернативные варианты JSON в большинстве случаев
+ацеитос; моментальные снимки SRCv2 как обязательные.
 
-Invoque a CLI com `--guard-directory` para mesclar o consenso mais recente com o
-cache existente. O seletor preserva guards fixados que ainda estao dentro da
-janela de retencao e sao elegiveis no directory; novos relays substituem entradas
-expiradas. Depois de um fetch bem-sucedido, o cache atualizado e escrito de volta
-no caminho fornecido via `--guard-cache`, mantendo sessoes subsequentes
-criteriosas. Os SDKs podem reproduzir o mesmo comportamento chamando
-`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` e
-passando o `GuardSet` resultante para `SorafsGatewayFetchOptions`.
+Вызовите CLI через `--guard-directory`, чтобы получить последнее согласие или согласие с ним.
+кэш существует. O селектор сохраняет фиксацию, которая всегда остается на месте.
+Джанела де retencao e sao elegiveis нет каталога; Новос реле заменить entradas
+истекает. После этого вы можете получить доступ к кэшу и сохранить его в памяти.
+no caminho fornecido через `--guard-cache`, mantendo sessoes Lateres
+критерии. SDK можно воспроизвести или выполнить вручную
+`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` е
+пройти или `GuardSet` в результате `SorafsGatewayFetchOptions`.
 
-`ml_kem_public_hex` permite que o seletor priorize guards com capacidade PQ
-quando o rollout SNNet-5 esta em curso. Os toggles de etapa (`anon-guard-pq`,
-`anon-majority-pq`, `anon-strict-pq`) agora rebaixam relays classicos
-automaticamente: quando um guard PQ esta disponivel o seletor remove pins
-classicos excedentes para que sessoes subsequentes favorecam handshakes hibridos.
-Os resumos CLI/SDK expõem a mistura resultante via `anonymity_status`/
-`anonymity_reason`, `anonymity_effective_policy`, `anonymity_pq_selected`,
-`anonymity_classical_selected`, `anonymity_pq_ratio`, `anonymity_classical_ratio`
-e campos complementares de candidatos/deficit/delta de supply, tornando claros
-brownouts e fallbacks classicos.
+`ml_kem_public_hex` разрешает выбор приоритета защиты с возможностью PQ
+Когда развертывание SNNet-5 уже началось. Переключение этапа (`anon-guard-pq`,
+`anon-majority-pq`, `anon-strict-pq`) агора rebaixam реле классические
+автоматически: когда защита PQ отключена или селектор удаляет штифты
+classicos excedentes para que sessoesпоследующие фавориты рукопожатий гибридов.
+Наши резюме CLI/SDK отображают результат ошибки через `anonymity_status`/
+И18НИ00000105Х, И18НИ00000106Х, И18НИ00000107Х,
+И18НИ00000108Х, И18НИ00000109Х, И18НИ00000110Х
+Кампос, дополняющий кандидатов/дефицит/дельта предложения, Торнандо Кларос
+классические отключения и резервные варианты.
 
-Directories de guards agora podem embutir um bundle SRCv2 completo via
-`certificate_base64`. O orquestrador decodifica cada bundle, revalida as
-assinaturas Ed25519/ML-DSA e retém o certificado analisado junto ao cache de
-guards. Quando um certificado esta presente ele se torna a fonte canonica para
-chaves PQ, preferencias de handshake e ponderacao; certificados expirados sao
-descartados e o seletor retorna aos campos alternativos do descriptor. Certificados
-propagam-se pela gestao do ciclo de vida de circuitos e sao expostos via
-`telemetry::sorafs.guard` e `telemetry::sorafs.circuit`, que registram a janela
-de validade, suites de handshake e se assinaturas duplas foram observadas para
-cada guard.
-
-Use os helpers da CLI para manter snapshots em sincronia com publicadores:
+Каталоги стражей назад можно загрузить с полным пакетом SRCv2 через
+`certificate_base64`. O orquestrador decodifica cada Bundle, повторно действующий как
+Assinaturas Ed25519/ML-DSA и удаленный сертификат анализа, полученный из кэша
+охранники. Когда сертификат вручен, он оторвался от канонического шрифта для
+отвечает на вопрос PQ, предпочитает рукопожатие и размышления; сертификаты с истекшим сроком действия в Сан-Франциско
+Descartados и o селектор, возвращающий альтернативные варианты дескриптора. Сертификаты
+propagam-se pela gestao do ciclo de vida de Circuitos e sao expostos через
+`telemetry::sorafs.guard` и `telemetry::sorafs.circuit`, которые зарегистрируют Джанелу
+подтверждение, наборы рукопожатий и двойные ассинатуры для наблюдения за
+Када охранник.Используйте помощники ОС для CLI для создания снимков на сайте Sincronia com publicadores:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -221,23 +215,23 @@ sorafs_cli guard-directory verify \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-`fetch` baixa e verifica o snapshot SRCv2 antes de grava-lo em disco, enquanto
-`verify` reproduz o pipeline de validacao para artefatos vindos de outras equipes,
-emitindo um resumo JSON que espelha a saida do seletor de guards CLI/SDK.
+`fetch` добавьте и проверьте снимок SRCv2 перед самой дискотекой, на дискотеке
+`verify` воспроизводит конвейер проверки для виндовых устройств внешнего оборудования,
+Выдаю резюме JSON, которое отвечает за выбор средств защиты CLI/SDK.
 
-### 1.5 Gestor de ciclo de vida de circuitos
+### 1.5 Цикл жизни кругов
 
-Quando um relay directory e um cache de guards sao fornecidos, o orquestrador
-ativa o gestor de ciclo de vida de circuitos para preconstruir e renovar
-circuitos SoraNet antes de cada fetch. A configuracao vive em `OrchestratorConfig`
-(`crates/sorafs_orchestrator/src/lib.rs:305`) via dois novos campos:
+Когда каталог ретрансляции и кэш де охранников, или оркестратор
+активный цикл жизненного цикла для предварительного строительства и ремонта
+Circuitos SoraNet до каждой загрузки. Конфигурация для жизни в `OrchestratorConfig`
+(`crates/sorafs_orchestrator/src/lib.rs:305`) через dois novos Campos:
 
-- `relay_directory`: carrega o snapshot do directory SNNet-3 para que hops
-  middle/exit sejam selecionados de forma deterministica.
-- `circuit_manager`: configuracao opcional (habilitada por padrao) que controla o
-  TTL do circuito.
+- `relay_directory`: сохранение или снимок каталога SNNet-3 для переходов.
+  средний/выходной режим выбран в детерминированной форме.
+- `circuit_manager`: дополнительная конфигурация (пригодная для управления), которая управляет
+  TTL делает схему.
 
-Norito JSON agora aceita um bloco `circuit_manager`:
+Norito JSON назад к блоку `circuit_manager`:
 
 ```json
 "circuit_manager": {
@@ -246,30 +240,30 @@ Norito JSON agora aceita um bloco `circuit_manager`:
 }
 ```
 
-Os SDKs encaminham dados do directory via
+OS SDK encaminham dados делает каталог через
 `SorafsGatewayFetchOptions::relay_directory`
-(`crates/iroha/src/client.rs:320`), e a CLI o conecta automaticamente sempre que
-`--guard-directory` e fornecido (`crates/iroha_cli/src/commands/sorafs.rs:365`).
+(`crates/iroha/src/client.rs:320`), а также CLI или автоматическое подключение всегда, когда
+`--guard-directory` и fornecido (`crates/iroha_cli/src/commands/sorafs.rs:365`).
 
-O gestor renova circuitos sempre que metadados do guard mudam (endpoint, chave
-PQ ou timestamp fixado) ou quando o TTL expira. O helper `refresh_circuits`
-invocado antes de cada fetch (`crates/sorafs_orchestrator/src/lib.rs:1346`)
-emite logs `CircuitEvent` para que operadores possam rastrear decisoes de ciclo
-de vida. O soak test `circuit_manager_latency_soak_remains_stable_across_rotations`
-(`crates/sorafs_orchestrator/src/soranet.rs:1479`) demonstra latencia estavel
-atraves de tres rotacoes de guards; veja o relatorio em
+O gestor renova Circuitos всегда, когда метаданные охраняют мудам (конечная точка, Chave
+PQ или временная метка (фиксированная), или когда истекает срок TTL. О помощник `refresh_circuits`
+выборка invocado antes de cada (`crates/sorafs_orchestrator/src/lib.rs:1346`)
+создавать журналы `CircuitEvent` для того, чтобы операторы могли принимать циклические решения
+де вида. O тест на выдержку `circuit_manager_latency_soak_remains_stable_across_rotations`
+(`crates/sorafs_orchestrator/src/soranet.rs:1479`) демонстрация задержки estavel
+atraves de tres rotacoes de Guards; вежа или отношение к ним
 `docs/source/soranet/reports/circuit_stability.md:1`.
 
-### 1.6 Proxy QUIC local
+### 1.6 Прокси QUIC локальный
 
-O orquestrador pode opcionalmente iniciar um proxy QUIC local para que extensoes
-de navegador e adaptadores SDK nao precisem gerenciar certificados ou chaves de
-cache de guards. O proxy liga a um endereco loopback, encerra conexoes QUIC e
-retorna um manifest Norito descrevendo o certificado e a chave de cache de guard
-opcional ao cliente. Eventos de transporte emitidos pelo proxy sao contados via
+Организатор может дополнительно запустить локальный прокси-сервер QUIC для расширения
+Навигатор и адаптеры SDK должны иметь точные сертификаты или сертификаты
+тайник охраны. Чтобы прокси-лига и петлевая обратная связь endereco, подключились к QUIC и
+возврат манифеста Norito, получение сертификата и защита кэша
+по желанию клиента. События транспортировки излучаемых прокси-серверов через
 `sorafs_orchestrator_transport_events_total`.
 
-Habilite o proxy por meio do novo bloco `local_proxy` no JSON do orquestrador:
+Используйте прокси-сервер для нового блока `local_proxy` без JSON для запроса:
 
 ```json
 "local_proxy": {
@@ -291,209 +285,201 @@ Habilite o proxy por meio do novo bloco `local_proxy` no JSON do orquestrador:
     "room_policy": "public"
   }
 }
-```
+```- `bind_addr` управление доступом к прокси-серверу (используйте порт `0` для запроса порта
+  эфемера).
+- `telemetry_label` распространяется в качестве показателей для различающихся информационных панелей.
+  прокси сеансов выборки.
+- `guard_cache_key_hex` (необязательно) разрешает использование прокси-сервера или кэша сообщений
+  Охранники, использующие CLI/SDK, расширяют возможности навигации.
+- `emit_browser_manifest` альтернативно или рукопожатие переходит в манифест
+  extensoes podem Armazenar e validar.
+- `proxy_mode` выбор локального прокси-сервера (`bridge`) или приложений
+  метаданные для SDK, которые используют SoraNet для собственной собственности
+  (И18НИ00000140Х). О прокси-сервере `bridge`; используйте `metadata-only`, когда
+  Рабочая станция должна экспортировать или манифестировать ретранслируемые потоки.
+- `prewarm_circuits`, `max_streams_per_circuit` и `circuit_ttl_hint_secs`
+  Дополнительные подсказки для навигации, чтобы можно было использовать параллельные потоки или потоки
+  предложите или сколько-нибудь или прокси-сервер повторно использовать схемы.
+- `car_bridge` (необязательно) для кэша локальных архивов CAR. О Кампо
+  `extension` управление или суфикс анексадо, когда или какой-либо поток опускается `*.car`;
+  определение `allow_zst = true` для полезных нагрузок сервера `*.car.zst` precomprimidos.
+- `kaigi_bridge` (необязательно) поочередно запускайте буфер в прокси-сервере. О Кампо
+  `room_policy` объявляет о мосте Opera в режиме `public` или `authenticated`
+  для того, чтобы клиенты предварительно выбрали метки GAR.
+- `sorafs_cli fetch` expõe переопределяет `--local-proxy-mode=bridge|metadata-only` e
+  `--local-proxy-norito-spool=PATH`, разрешите альтернативный режим выполнения или
+  можно использовать альтернативные варианты, модифицирующие политику JSON.
+- `downgrade_remediation` (дополнительно) позволяет настроить автоматический переход на более раннюю версию.
+  Когда вы умеете, оркестратор наблюдает за телеметрией реле для раджадас
+  Понижение предыдущей версии, после настройки `threshold` вместо `window_secs`, принудительно
+  локальный прокси для `target_mode` (padrao `metadata-only`). Когда понижается версия ОС
+  Cessam, или прокси-сервер возвращается к `resume_mode` после `cooldown_secs`. Использовать массив
+  `modes` для ограничения или ограничения функций специальных реле (реле Padrao
+  де энтрада).
 
-- `bind_addr` controla onde o proxy escuta (use porta `0` para solicitar porta
-  efemera).
-- `telemetry_label` propaga-se para as metricas para que dashboards distingam
-  proxies de sessoes de fetch.
-- `guard_cache_key_hex` (opcional) permite que o proxy exponha o mesmo cache de
-  guards com chave que CLI/SDKs usam, mantendo extensoes do navegador alinhadas.
-- `emit_browser_manifest` alterna se o handshake devolve um manifest que
-  extensoes podem armazenar e validar.
-- `proxy_mode` seleciona se o proxy faz bridge local (`bridge`) ou apenas emite
-  metadados para que SDKs abram circuitos SoraNet por conta propria
-  (`metadata-only`). O proxy padrao e `bridge`; use `metadata-only` quando um
-  workstation deve expor o manifest sem retransmitir streams.
-- `prewarm_circuits`, `max_streams_per_circuit` e `circuit_ttl_hint_secs`
-  expõem hints adicionais ao navegador para que possa orcar streams paralelos e
-  entender o quanto o proxy reutiliza circuitos.
-- `car_bridge` (opcional) aponta para um cache local de arquivos CAR. O campo
-  `extension` controla o sufixo anexado quando o alvo de stream omite `*.car`;
-  defina `allow_zst = true` para servir payloads `*.car.zst` precomprimidos.
-- `kaigi_bridge` (opcional) expõe rotas Kaigi em spool ao proxy. O campo
-  `room_policy` anuncia se o bridge opera em modo `public` ou `authenticated`
-  para que clientes do navegador preselecionem os labels GAR corretos.
-- `sorafs_cli fetch` expõe overrides `--local-proxy-mode=bridge|metadata-only` e
-  `--local-proxy-norito-spool=PATH`, permitindo alternar o modo de runtime ou
-  apontar para spools alternativos sem modificar a politica JSON.
-- `downgrade_remediation` (opcional) configura o hook de downgrade automatico.
-  Quando habilitado, o orquestrador observa a telemetria de relays para rajadas
-  de downgrade e, apos o `threshold` configurado dentro de `window_secs`, força o
-  proxy local para o `target_mode` (padrao `metadata-only`). Quando os downgrades
-  cessam, o proxy retorna ao `resume_mode` apos `cooldown_secs`. Use o array
-  `modes` para limitar o gatilho a funcoes de relay especificas (padrao relays
-  de entrada).
+Когда или прокси-род в режиме моста служит для обслуживания приложений:
 
-Quando o proxy roda em modo bridge ele serve dois servicos de aplicacao:
-
-- **`norito`** – o alvo de stream do cliente e resolvido relativo a
-  `norito_bridge.spool_dir`. Os alvos sao sanitizados (sem traversal, sem caminhos
+- **`norito`** – любой поток клиента и относительное разрешение
+  `norito_bridge.spool_dir`. Os alvos sao sanitizados (sem traversal, sem caminhos)
   absolutos), e quando o arquivo nao tem extensao, o sufixo configurado e aplicado
-  antes do payload ser transmitido para o navegador.
-- **`car`** – alvos de stream se resolvem dentro de `car_bridge.cache_dir`, herdam
-  a extensao padrao configurada e rejeitam payloads comprimidos a menos que
-  `allow_zst` esteja habilitado. Bridges bem-sucedidos respondem com `STREAM_ACK_OK`
-  antes de transferir os bytes do arquivo para que clientes possam fazer pipeline
-  da verificacao.
+  перед тем, как полезная нагрузка будет передана навигатору.
+- **`car`** – любой поток может быть решен вслед за `car_bridge.cache_dir`, Herdam
+  Расширенная конфигурация и доступ к полезной нагрузке включены в меню, которое
+  `allow_zst` — это навык. Мосты bem-sucedidos Answerem com `STREAM_ACK_OK`
+  перед передачей байтов в архив, чтобы клиенты могли использовать конвейер Fazer
+  да проверено.В каждом случае или в случае использования прокси-сервера или HMAC сделайте кэш-тег (когда у вас есть
+кэш де-охраны во время рукопожатия или рукопожатия) и регистрация кодов телеметрии
+`norito_*` / `car_*` для успешных различий между панелями мониторинга, старых архивов
+и быстрая дезинфекция.
 
-Em ambos os casos o proxy fornece o HMAC do cache-tag (quando havia uma chave de
-cache de guard durante o handshake) e registra codigos de razao de telemetria
-`norito_*` / `car_*` para que dashboards diferenciem sucessos, arquivos ausentes
-e falhas de sanitizacao rapidamente.
+`Orchestrator::local_proxy().await` используйте или обрабатывайте выполнение для ваших задач
+получить сертификат от PEM, подать заявление или подать навигатор или адвоката
+encerramento gracioso, когда приложение завершено.
 
-`Orchestrator::local_proxy().await` expõe o handle em execucao para que chamadas
-possam ler o PEM do certificado, buscar o manifest do navegador ou solicitar
-encerramento gracioso quando a aplicacao finaliza.
+При необходимости прокси-серверы обслуживают регистры **manifest v2**. Алем делать
+Существующий сертификат и запись в кэш-память, а также дополнение к версии 2:
 
-Quando habilitado, o proxy agora serve registros **manifest v2**. Alem do
-certificado existente e da chave de cache de guard, a v2 adiciona:
+- `alpn` (`"sorafs-proxy/1"`) и массив `capabilities` для клиентов
+  Подтвердите протокол потока, который был принят.
+- UM `session_id` для рукопожатия и блока продажи `cache_tagging` для получения
+  добавлены меры защиты для сеансов и тегов HMAC.
+- Подсказки по замыканию и выбору защиты (`circuit`, `guard_selection`,
+  `route_hints`) для интеграции навигации по интерфейсу пользователя раньше
+  ручьи де Абрир.
+- `telemetry_v2` с ручками блокировки и конфиденциальности для местных инструментов.
+- Cada `STREAM_ACK_OK`, включая `cache_tag_hex`. Clientes espelham o valor без заголовка
+  `x-sorafs-cache-tag` или необходимые отправители HTTP или TCP для выбора защиты
+  их кэш навсегда зашифрован в хранилище.
 
-- `alpn` (`"sorafs-proxy/1"`) e um array `capabilities` para que clientes
-  confirmem o protocolo de stream que devem falar.
-- Um `session_id` por handshake e um bloco de sal `cache_tagging` para derivar
-  afinidades de guard por sessao e tags HMAC.
-- Hints de circuito e selecao de guard (`circuit`, `guard_selection`,
-  `route_hints`) para que integracoes do navegador exponham uma UI mais rica antes
-  de abrir streams.
-- `telemetry_v2` com knobs de amostragem e privacidade para instrumentacao local.
-- Cada `STREAM_ACK_OK` inclui `cache_tag_hex`. Clientes espelham o valor no header
-  `x-sorafs-cache-tag` ao emitir requisicoes HTTP ou TCP para que selecoes de guard
-  em cache permaneçam criptografadas em repouso.
+Esses Campos Fazem Parte do Schema atual; Клиенты могут использовать или использовать соединение
+полные или некоммерческие потоки.
 
-Esses campos fazem parte do schema atual; clientes devem utilizar o conjunto
-completo ao negociar streams.
+## 2. Семантика фальхаса
 
-## 2. Semantica de falhas
+Приложение orquestrador проверено на соответствие требованиям и бюджетам до того, как вы это сделаете.
+Unico байт Seja Transferido. В трех категориях есть следующие категории:
 
-O orquestrador aplica verificacoes estritas de capacidade e budgets antes que um
-unico byte seja transferido. As falhas se enquadram em tres categorias:
-
-1. **Falhas de elegibilidade (pre-flight).** Provedores sem capacidade de range,
-   adverts expirados ou telemetria obsoleta sao registrados no artefato do
-   scoreboard e omitidos do agendamento. Resumos da CLI preenchem o array
-   `ineligible_providers` com razoes para que operadores inspecionem drift de
-   governanca sem raspar logs.
-2. **Esgotamento em runtime.** Cada provedor rastreia falhas consecutivas. Quando
-   `provider_failure_threshold` e atingido, o provedor e marcado como `disabled`
-   pelo restante da sessao. Se todos os provedores transicionarem para `disabled`,
-   o orquestrador retorna
+1. **Falhas de elegibilidade (предполетная подготовка).** Provedores sem capacidade de range,
+   Рекламные объявления истекли или телеметрия устарела, зарегистрированы без артефактов
+   табло и опущенные в повестке дня. Резюме загрузки CLI или массива
+   `ineligible_providers` com razoes для того, чтобы операторы проверили дрейф
+   бревна губернатора сем распара.
+2. **Esgotamento em runtime.** Cadaprovor rastreiafalhasconsecutivas. Куандо
+   `provider_failure_threshold` и тингидо, о провидоре и рынке как `disabled`
+   остаток остатка. Если все условия перехода указаны для `disabled`,
+   о оркестратор реторна
    `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`.
-3. **Abortos deterministas.** Limites rigidos surgem como erros estruturados:
-   - `MultiSourceError::NoCompatibleProviders` — o manifest exige um span de
-     chunks ou alinhamento que os provedores restantes nao conseguem honrar.
-   - `MultiSourceError::ExhaustedRetries` — o budget de retries por chunk foi
-     consumido.
-   - `MultiSourceError::ObserverFailed` — observadores downstream (hooks de
-     streaming) rejeitaram um chunk verificado.
+3. **Определённые прерывания.** Ограничивает жёсткую хирургию как ошибку образования:
+   - `MultiSourceError::NoCompatibleProviders` — o манифест exige um span de
+     куски или остатки того, что осталось до конца, не принесет нам чести.
+   - `MultiSourceError::ExhaustedRetries` — бюджет повторных попыток для фрагмента
+     потреблять.
+   - `MultiSourceError::ObserverFailed` — наблюдатели ниже по течению (крючки де
+     потоковое вещание) rejeitaram um chunk verificado.
 
-Cada erro incorpora o indice do chunk problemático e, quando disponivel, a razao
-final de falha do provedor. Trate esses erros como bloqueadores de release —
-retries com a mesma entrada reproduzirao a falha ate que o advert, a telemetria
-ou a saude do provedor subjacente mudem.
+Если вы ошибочно включили или указали проблемный фрагмент, когда вы его удалили, разао
+финал де фала до проверор. Trate esses erros como bloqueadores de Release —
+повторные попытки с повторным входом в воспроизведение и показ рекламы, телеметрия
+или саудэ делать проверор ниже мудем.
 
-### 2.1 Persistencia do scoreboard
+### 2.1 Постоянное таблоКогда `persist_path` и конфигурация, организатор записывает финал на табло
+апос када беги. В документе JSON рассматривается:
 
-Quando `persist_path` e configurado, o orquestrador escreve o scoreboard final
-apos cada run. O documento JSON contem:
+- `eligibility` (`eligible` или `ineligible::<reason>`).
+- `weight` (нормализованное песо для этого запуска).
+- метаданные `provider` (идентификатор, конечные точки, бюджет согласования).
 
-- `eligibility` (`eligible` ou `ineligible::<reason>`).
-- `weight` (peso normalizado atribuido para este run).
-- metadados do `provider` (identificador, endpoints, budget de concorrencia).
+Архивные снимки делаются на табло вместе с артефактами для публикации для принятия решений.
+де банименто и постоянное внедрение аудита.
 
-Arquive snapshots do scoreboard junto aos artefatos de release para que decisoes
-de banimento e rollout permaneçam auditaveis.
+## 3. Телеметрия и очистка
 
-## 3. Telemetria e depuracao
+###3.1 Метрика Prometheus
 
-### 3.1 Metricas Prometheus
+Оркестратор выдает следующие метрики через `iroha_telemetry`:
 
-O orquestrador emite as seguintes metricas via `iroha_telemetry`:
-
-| Metrica | Labels | Descricao |
+| Метрика | Этикетки | Описание |
 |---------|--------|-----------|
-| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Gauge de fetches orquestrados em voo. |
-| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histograma registrando latencia de fetch de ponta a ponta. |
-| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Contador de falhas terminais (retries esgotados, sem provedores, falha de observador). |
-| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Contador de tentativas de retry por provedor. |
-| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Contador de falhas de provedor na sessao que levam a desabilitacao. |
-| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Contagem de decisoes de politica de anonimato (cumprida vs brownout) agrupadas por estagio de rollout e motivo de fallback. |
-| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Histograma da participacao de relays PQ no conjunto SoraNet selecionado. |
-| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Histograma de ratios de oferta de relays PQ no snapshot do scoreboard. |
-| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Histograma do deficit de politica (gap entre alvo e a participacao PQ real). |
-| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | Histograma da participacao de relays classicos usada em cada sessao. |
-| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Histograma de contagens de relays classicos selecionados por sessao. |
+| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Датчик извлекает оркестры в вас. |
+| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Гистограмма регистрации задержки извлечения из моста в мост. |
+| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Contador de falhas terminais (повторить попытку, выполнить проверку, выполнить обсерватор). |
+| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Попробуйте повторить попытку. |
+| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Контадор-де-фалхас-де-проверитель на сеансе, который оставил вас дестабилизирующим. |
+| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Заражение анонимными политическими решениями (примирение против отключения электроэнергии) усиливается для стадии развертывания и мотива для отступления. |
+| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Гистограмма участия реле PQ не связана с выбранным SoraNet. |
+| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Гистограмма соотношений предложений реле PQ без снимка на табло. |
+| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Гистограмма дефицита политики (разрыв между альво и реальным участием PQ). |
+| `sorafs_orchestrator_classical_ratio` | И18НИ00000235Х, И18НИ00000236Х | Гистограмма участия в классических американских эстафетах каждый раз. |
+| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Гистограмма контактов классических реле, выбранных для сеанса. |
 
-Integre as metricas em dashboards de staging antes de habilitar knobs de
-producao. O layout recomendado espelha o plano de observabilidade SF-6:
+Интегрируйте метрики в информационные панели для настройки перед привычными ручками.
+производство. Рекомендуемая схема расположения или план наблюдения SF-6:
 
-1. **Fetches ativos** — alerta se o gauge sobe sem completions correspondentes.
-2. **Razao de retries** — avisa quando contadores `retry` excedem baselines
-   historicas.
-3. **Falhas de provedor** — dispara alertas no pager quando qualquer provedor
-   cruza `session_failure > 0` dentro de 15 minutos.
+1. **Извлекает данные** – оповещение о завершении работы корреспондентов.
+2. **Razao de retries** — сообщение о том, что сообщение `retry` превышает базовые показатели
+   исторический.
+3. **Falhas deprovor** — dispara alertas no пейджер quando qualquerprovor
+   cruza `session_failure > 0` за 15 минут.
 
-### 3.2 Targets de log estruturados
+### 3.2 Целевые показатели журнала исследований
 
-O orquestrador publica eventos estruturados para targets deterministas:
+Организатор публичных мероприятий разрабатывает определенные цели:- `telemetry::sorafs.fetch.lifecycle` — маркидоры `start` и `complete` com
+  Заражение фрагментов, повторные попытки и общая длительность.
+- `telemetry::sorafs.fetch.retry` — события повторной попытки (`provider`, `reason`,
+  `attempts`) для руководства по сортировке пищевых продуктов.
+- `telemetry::sorafs.fetch.provider_failure` — desabilitados desabilitados devido a.
+  повторяющиеся ошибки.
+- `telemetry::sorafs.fetch.error` — окончание возобновления работы с `reason` e
+  метададос опционаис сделать проверор.
 
-- `telemetry::sorafs.fetch.lifecycle` — marcadores `start` e `complete` com
-  contagem de chunks, retries e duracao total.
-- `telemetry::sorafs.fetch.retry` — eventos de retry (`provider`, `reason`,
-  `attempts`) para alimentar triage manual.
-- `telemetry::sorafs.fetch.provider_failure` — provedores desabilitados devido a
-  erros repetidos.
-- `telemetry::sorafs.fetch.error` — falhas terminais resumidas com `reason` e
-  metadados opcionais do provedor.
+Включение — это потоки для конвейера журналов Norito, которые существуют для того, чтобы
+Ответ на происшествие - это уникальный шрифт де Вердаде. События циклической жизни
+экспонировать мистуру PQ/classica через `anonymity_effective_policy`,
+`anonymity_pq_ratio`, `anonymity_classical_ratio` и наши партнеры,
+Tornando Simples интегрирует информационные панели с метриками raspar. Durante выпускает
+GA, исправление уровня журнала `info` для событий циклической жизни/повторной попытки и использования
+`warn` для завершения работы.
 
-Encaminhe esses fluxos para o pipeline de logs Norito existente para que a
-resposta a incidentes tenha uma unica fonte de verdade. Eventos de ciclo de vida
-exponem a mistura PQ/classica via `anonymity_effective_policy`,
-`anonymity_pq_ratio`, `anonymity_classical_ratio` e seus contadores associados,
-tornando simples integrar dashboards sem raspar metricas. Durante rollouts de
-GA, fixe o nivel de log em `info` para eventos de ciclo de vida/retry e use
-`warn` para falhas terminais.
+### 3.3 Резюме в формате JSON
 
-### 3.3 Resumos JSON
+Когда `sorafs_cli fetch` в SDK Rust возвращается к существующему резюме:
 
-Tanto `sorafs_cli fetch` quanto o SDK Rust retornam um resumo estruturado contendo:
+- `provider_reports` com contagens de sucesso/falha e se oprovor foi
+  дезабилитадо.
+- `chunk_receipts` подробно описано, как проверить или найти каждый фрагмент.
+- массивы `retry_stats` и `ineligible_providers`.
 
-- `provider_reports` com contagens de sucesso/falha e se o provedor foi
-  desabilitado.
-- `chunk_receipts` detalhando qual provedor atendeu cada chunk.
-- arrays `retry_stats` e `ineligible_providers`.
+Arquive o arquivo de resumo ao depurarprovoresprodáticos — квитанции
+Mapeiam непосредственно для метаданных журнала.
 
-Arquive o arquivo de resumo ao depurar provedores problemáticos — os receipts
-mapeiam diretamente para os metadados de log acima.
+## 4. Контрольный список в рабочем состоянии
 
-## 4. Checklist operacional
+1. **Подготовка конфигурации без CI.** Выполните команду `sorafs_fetch` при настройке.
+   также введите пароль `--scoreboard-out`, чтобы получить визуальную элегантность и
+   сравните с com или высвободите переднюю часть. Qualquerprovor inelegivel inesperado
+   вмешиваться в рекламу.
+2. **Действительная телеметрия.** Гарантия, что можно развернуть экспортные метрики `sorafs.fetch.*`
+   Электронные журналы, созданные до хабилитарного режима, извлекают разные источники для пользователей. А
+   Ausencia de metricas Normalmente Indica que a fachada do orquestrador nao foi
+   призыв.
+3. **Документарные переопределения.** Можно использовать `--deny-provider` или `--boost-provider`.
+   В экстренных случаях используйте JSON (или вызов CLI) без журнала изменений. Откаты разработки
+   возврат или переопределение и захват новых снимков на табло.
+4. **Повторно выполните дымовые тесты.** Депо изменения бюджетов повторных попыток или ограничений
+   Проверки, обновление или выборка приспособлений Canonico
+   (`fixtures/sorafs_manifest/ci_sample/`) и проверка квитанций о фрагментах
+   постоянный детерминист.
 
-1. **Preparar configuracao no CI.** Execute `sorafs_fetch` com a configuracao
-   alvo, passe `--scoreboard-out` para capturar a visao de elegibilidade e
-   compare com o release anterior. Qualquer provedor inelegivel inesperado
-   interrompe a promocao.
-2. **Validar telemetria.** Garanta que o deploy exporta metricas `sorafs.fetch.*`
-   e logs estruturados antes de habilitar fetches multi-origem para usuarios. A
-   ausencia de metricas normalmente indica que a fachada do orquestrador nao foi
-   invocada.
-3. **Documentar overrides.** Ao aplicar `--deny-provider` ou `--boost-provider`
-   emergenciais, comite o JSON (ou a invocacao CLI) no changelog. Rollbacks devem
-   reverter o override e capturar um novo snapshot do scoreboard.
-4. **Reexecutar smoke tests.** Depois de modificar budgets de retry ou limites de
-   provedores, refaça o fetch do fixture canonico
-   (`fixtures/sorafs_manifest/ci_sample/`) e verifique que os receipts de chunks
-   permanecem deterministas.
+Следите за тем, чтобы пассы были надежными или удобными для воспроизводства оркестратора.
+развертывание на этапе и для обеспечения телеметрии, необходимой для ответа на инциденты.
 
-Seguir os passos acima mantém o comportamento do orquestrador reproduzivel em
-rollouts por fase e fornece a telemetria necessaria para resposta a incidentes.
+### 4.1 Отмена политики
 
-### 4.1 Overrides de politica
-
-Operadores podem fixar o estagio ativo de transporte/anonimato sem editar a
-configuracao base definindo `policy_override.transport_policy` e
-`policy_override.anonymity_policy` em seu JSON de `orchestrator` (ou fornecendo
-`--transport-policy-override=` / `--anonymity-policy-override=` ao
-`sorafs_cli fetch`). Quando qualquer override esta presente, o orquestrador pula
-o fallback brownout usual: se o nivel PQ solicitado nao puder ser satisfeito, o
-fetch falha com `no providers` em vez de degradar silenciosamente. O rollback
-para o comportamento padrao e tao simples quanto limpar os campos de override.
+Operadores Podem Fixar o Estagio ativo de Transporte/Anonimato Sem Editar a
+База конфигурации, определенная `policy_override.transport_policy` e
+`policy_override.anonymity_policy` в своем JSON от `orchestrator` (или случайно
+`--transport-policy-override=` / `--anonymity-policy-override=` ао
+`sorafs_cli fetch`). Когда вы отменяете это, или оркестратор может
+o Обычное аварийное снижение напряжения: se o nivel PQ solicitado nao puder ser satisfeito, o
+выберите Falha com `no providers`, чтобы снизить уровень шума. о откат
+для удобства и простоты, когда вы очищаете кампус де переопределения.

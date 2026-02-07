@@ -7,58 +7,59 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 50261b1f3173cd3916b29c81e85cc92ed8c14c38a0e0296be38397fe9b5c0596
 source_last_modified: "2025-12-29T18:16:35.204852+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Taikai Anchor Observability Runbook
+# ཏའི་ཀའི་ཨེན་ཀོར་བལྟ་རྟོག་འབད་ནིའི་གཡོག་བཀོལ།
 
-This portal copy mirrors the canonical runbook in
-[`docs/source/taikai_anchor_monitoring.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/taikai_anchor_monitoring.md).
-Use it when rehearsing SN13-C routing-manifest (TRM) anchors so SoraFS/SoraNet
-operators can correlate spool artefacts, Prometheus telemetry, and governance
-evidence without leaving the portal preview build.
+དྲྭ་ཚིགས་འདི་གི་འདྲ་བཤུས་འདི་གིས་ ༢༠ ནང་ ཀེ་ནོ་ནིག་རཱན་བུཀ་འདི་ མེ་ལོང་ནང་ གསལ་སྟོན་འབདཝ་ཨིན།
+[`docs/source/taikai_anchor_monitoring.md`](I18NU0000016X).
+འདི་ SN13-C རའུ་ཊིང་-མན་ཧྥོནཊ་ (ཊི་ཨར་ཨེམ་) ཨེན་ཀོར་ཚུ་ སོ་སོ་ SoraFS/SoraNet ལག་ལེན་འཐབ།
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཕགཔ་གི་ཅ་ཆས་ཚུ་དང་ Prometheus བརྡ་འཕྲིན་དང་ གཞུང་སྐྱོང་ཚུ་ འབྲེལ་མཐུད་འབད་ཚུགས།
+དྲྭ་ཚིགས་སྔོན་ལྟ་བཟོ་སྐྲུན་མ་འབད་བའི་ སྒྲུབ་བྱེད་ཚུ།
 
-## Scope & Owners
+## ཁྱབ་ཁོངས་དང་བདག་པ།
 
-- **Program:** SN13-C — Taikai manifests & SoraNS anchors.
-- **Owners:** Media Platform WG, DA Program, Networking TL, Docs/DevRel.
-- **Goal:** Provide a deterministic playbook for Sev 1/Sev 2 alerts, telemetry
-  validation, and evidence capture while Taikai routing manifests roll forward
-  across aliases.
+- **ལས་རིམ་:** SN13-C — ཏའི་ཀཱའི་གསལ་སྟོན་དང་ སོ་ར་ཨེན་ཨེསི་ཨེན་ཀོར་ཚུ།
+- **ཇོ་བདག་ཚུ་:** བརྡ་བརྒྱུད་ཀྱི་སྟེགས་བུ་ WG, DA ལས་རིམ་, ཡོངས་འབྲེལ་ TL, Docs/DevRel.
+- **གཱོལ་:** སེབ་༡/Sev2 ཉེན་བརྡ་ཚུ་གི་དོན་ལུ་ གཏན་འབེབས་རྩེད་དེབ་ཅིག་བྱིན་དགོ།
+  བདེན་དཔྱད་དང་ སྒྲུབ་བྱེད་བཟུང་ནི་ ཐའེ་ཀའི་ རའུ་ཊི་གིས་ མདུན་སྐྱོད་འབད་བའི་ མངོན་གསལ་འབདཝ་ཨིན།
+  མིང་གཞན་ཚུ་གི་བར་ན་།
 
-## Quickstart (Sev 1/Sev 2)
+## མགྱོགས་མྱུར་ (Sev1/Sev2)
 
-1. **Capture spool artefacts** — copy the latest
-   `taikai-anchor-request-*.json`, `taikai-trm-state-*.json`, and
-   `taikai-lineage-*.json` files from
-   `config.da_ingest.manifest_store_dir/taikai/` before restarting workers.
-2. **Dump `/status` telemetry** — record the
-   `telemetry.taikai_alias_rotations` array to prove which manifest window is
-   active:
+1. ** ཕུའུ་ལོ་ཊི་ཅ་རྙིང་ཚུ་** — གསར་ཤོས་འདི་འདྲ་བཤུས་རྐྱབས།
+   `taikai-anchor-request-*.json`, I18NI0000019X, དང་།
+   ལས་ `taikai-lineage-*.json` ཡིག་སྣོད་ཚུ།
+   `config.da_ingest.manifest_store_dir/taikai/` ལས་མི་ཚུ་ ལོག་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ཨིན།
+2. **ཌམ་པ་ I18NI0000022X བརྡ་འཕྲིན་** — ཐོ་བཀོད་འབད།
+   I18NI000000023X གསལ་སྟོན་སྒོ་སྒྲིག་ག་འདི་ཨིན་ན་ བདེན་དཔང་འབད་ནི་ལུ་ ཨེ་རེ་ ཨིན།
+   ངར་ཡེང་ཡེ:
    ```bash
    curl -sSf "$TORII/status" | jq '.telemetry.taikai_alias_rotations'
    ```
-3. **Check dashboards and alerts** — load
-   `dashboards/grafana/taikai_viewer.json` (cluster + stream filters) and note
-   whether any rules in
-   `dashboards/alerts/taikai_viewer_rules.yml` fired (`TaikaiLiveEdgeDrift`,
-   `TaikaiIngestFailure`, `TaikaiCekRotationLag`, SoraFS proof-health events).
-4. **Inspect Prometheus** — run the queries in §“Metric reference” to confirm
-   ingest latency/drift and alias-rotation counters behave as expected. Escalate
-   if `taikai_trm_alias_rotations_total` stalls for multiple windows or if
-   error counters increase.
+3. **བརྡ་བཀོད་བཀོད་སྒྲིག་དང་ཉེན་བརྡ་** — མངོན་གསལ་འབད།
+   I18NI000000024X (ཀླད་ཀོར་ + རྒྱུན་ཚགས་ཚུ་) དང་ དྲན་འཛིན་ཚུ།
+   ༢༠༠༨ ཀྱི་ལམ་ལུགས་གང་ཡང་ཡོད་མི།
+   `dashboards/alerts/taikai_viewer_rules.yml` བཏོན་བཏང་ (`TaikaiLiveEdgeDrift`,
+   I18NI000000027X, `TaikaiCekRotationLag`, `TaikaiCekRotationLag`, བདེན་དཔང་བདེན་དཔང་-གསོ་བའི་བྱུང་རིམ།)
+4. **བརྟག་ཞིབ་ Prometheus*** — §“Metric གཞི་བསྟུན་” ནང་འདྲི་དཔྱད་ཚུ་ངེས་དཔྱད་འབད་ནིའི་དོན་ལུ་ གཡོག་བཀོལ།
+   insegess latence/drift དང་ alias-འཁོར་སྐྱོད་ཀྱི་ ཀའུན་ཊར་ཚུ་གིས་ རེ་བ་བསྐྱེད་དོ་བཟུམ་སྦེ་ སྤྱོད་ལམ་སྟོནམ་ཨིན། སྦོམ་འགྱོ་ནི་
+   if I18NI000000029X འདི་ སྒོ་སྒྲིག་སྣ་ཚོགས་ཀྱི་དོན་ལུ་ བཀག་བཞག་སྟེ་ཡོད་པ་ཅིན་ ཡང་ན་ ཅིན།
+   འཛོལ་བའི་གྱངས་ཁ་ཡར་སེང་།
 
-## Metric reference
+## མེ་ཊིག་གཞི་བསྟུན།
 
-| Metric | Purpose |
+| མེ་ཊིག་ | དམིགས་ཡུལ། |
 | --- | --- |
-| `taikai_ingest_segment_latency_ms` | CMAF ingest latency histogram per cluster/stream (target: p95 < 750 ms, p99 < 900 ms). |
-| `taikai_ingest_live_edge_drift_ms` | Live-edge drift between encoder and anchor workers (pages at p99 > 1.5 s for 10 min). |
-| `taikai_ingest_segment_errors_total{reason}` | Error counters by reason (`decode`, `manifest_mismatch`, `lineage_replay`, …). Any increase triggers `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Increments whenever `/v1/da/ingest` accepts a new TRM for an alias; use `rate()` to validate rotation cadence. |
-| `/status → telemetry.taikai_alias_rotations[]` | JSON snapshot with `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total`, and timestamps for evidence bundles. |
-| `taikai_viewer_*` (rebuffer, CEK rotation age, PQ health, alerts) | Viewer-side KPIs to ensure CEK rotation + PQ circuits remain healthy during anchors. |
+| `taikai_ingest_segment_latency_ms` | CMAF ingess latency histogram ཀླད་ཀོར་རེ་ལུ་ (དམིགས་གཏད་: p95<750ms, p99<900ms). |
+| I18NI0000031X | ཨིན་ཀོ་ཌར་དང་ ཨེན་ཀོར་ལཱ་འབད་མི་ཚུ་གི་བར་ན་ དངོས་གནས་ཀྱི་ གཡོ་འགུལ་ (ཤོག་ལེབ་ ༩༩>༡.༥s ལུ་ སྐར་མ་༡༠ གི་དོན་ལུ་)། |
+| I18NI0000032X | འཛོལ་བ་འདི་ རྒྱུ་མཚན་དང་འཁྲིལ་ཏེ་ ལན་བཏབ་ཡོདཔ་ཨིན། (I18NI0000033X, `manifest_mismatch`, I18NI000000035X, ...) ཡར་སེང་གང་རུང་ `TaikaiIngestFailure`. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | I18NI000000038X གིས་ མིང་གཞན་གྱི་དོན་ལུ་ TRM གསརཔ་ཅིག་ངོས་ལེན་འབད་བའི་སྐབས་ ཡར་སེང་། བསྒྱིར་ཚད་བདེན་དཔྱད་འབད་ནི་ལུ་ `rate()` ལག་ལེན་འཐབ། |
+| I18NI0000040X | JSON གིས་ `window_start_sequence`, `window_end_sequence`, I18NI000000043X, `rotations_total`, དང་ སྒྲུབ་བྱེད་བརྩེགས་བརྩེགས་ཚུ་གི་དོན་ལུ་ དུས་ཚོད་མཚོན་རྟགས་ཚུ། |
+| `taikai_viewer_*` (rebuffer, CEK བསྒྱིར་བའི་ལོ་ཚད། PQ གསོ་བ།) | བལྟ་མི་ཚུ་གི་ཕྱོགས་ལུ་ KPIs གིས་ CEK བསྒྱིར་ཚད་ + PQ གློག་ལམ་ཚུ་ གཞི་རྟེན་གྱི་སྐབས་ལུ་ གསོ་བའི་གནས་སྟངས་ལུ་བཞག་ཚུགས། |
 
-### PromQL snippets
+### པྲོམ་ཀིའུ་ཨེལ་ པར་ལེན་ཚུ།
 
 ```promql
 histogram_quantile(
@@ -81,54 +82,54 @@ rate(
 )
 ```
 
-## Dashboards & alerts
+## ཌེཤ་བོརཌི་དང་ དྲན་སྐུལ་ཚུ།
 
-- **Grafana viewer board:** `dashboards/grafana/taikai_viewer.json` — p95/p99
-  latency, live-edge drift, segment errors, CEK rotation age, viewer alerts.
-- **Grafana cache board:** `dashboards/grafana/taikai_cache.json` — hot/warm/cold
-  promotions and QoS denials when alias windows rotate.
-- **Alertmanager rules:** `dashboards/alerts/taikai_viewer_rules.yml` — drift
-  paging, ingest failure warnings, CEK rotation lag, and SoraFS proof-health
-  penalties/cooldowns. Ensure receivers exist for every production cluster.
+- **I18NT0000003X མཐོང་སྣང་བལྟ་མི་བང་བཀོད།:** `dashboards/grafana/taikai_viewer.json` — p95/p99
+  འཕྲོ་མཐུད་དང་ ཐད་སྙོམས་ཀྱི་ གཡོ་འགུལ་ ཆ་ཤས་འཛོལ་བ་ CEK བསྒྱིར་ཚད་ བལྟ་བའི་ཉེན་བརྡ་ཚུ་ཨིན།
+- **I18NT0000004X འདྲ་མཛོད་བཀོད་སྒྲིག་:** I18NI0000004X — ཚ་དྲོད་/དྲོད་ཁོལ།
+  ཝིན་ཌོ་ཚུ་བསྒྱིར་བའི་སྐབས་ ཡར་འཕེལ་དང་ QoS ཁས་མ་ལེན།
+- **Alertmanager ལམ་ལུགས་:** `dashboards/alerts/taikai_viewer_rules.yml` — ཌིཕཊ།
+  paging, ཟ་སྤྱོད་འཐུས་ཤོར་གྱི་ཉེན་བརྡ་ CEK བསྒྱིར་ཚད་དང་ I18NT0000010X བདེན་ཁུངས་ཀྱི་གསོ་བ།
+  ཉེས་ཆད་/བསིལ་དྲགས། ཐོན་སྐྱེད་ཀླད་ཀོར་ཆ་མཉམ་གྱི་དོན་ལུ་ ལེན་མི་ཚུ་ཡོདཔ་ངེས་གཏན་བཟོ།
 
-## Evidence bundle checklist
+## བདེན་དཔང་བང་སྒྲིག དཔྱད་གཞི།
 
-- Spool artefacts (`taikai-anchor-request-*`, `taikai-trm-state-*`,
+- སི་པོལ་ཅ་རྙིང་ (I18NI0000004X, I18NI000000050X,
   `taikai-lineage-*`).
-- Run `cargo xtask taikai-anchor-bundle --spool <manifest_dir>/taikai --copy-dir <bundle_dir> --signing-key <ed25519_hex>` to emit a signed JSON inventory of pending/delivered envelopes and copy request/SSM/TRM/lineage files into the drill bundle. The default spool path is `storage/da_manifests/taikai` from `torii.toml`.
-- `/status` snapshot covering `telemetry.taikai_alias_rotations`.
-- Prometheus exports (JSON/CSV) for the metrics above over the incident window.
-- Grafana screenshots with filters visible.
-- Alertmanager IDs referencing the relevant rule fires.
-- Link to `docs/examples/taikai_anchor_lineage_packet.md` describing the
-  canonical evidence packet.
+- I18NI000000052X འདི་ བརྡ་བཀོད་བཱན་ཌལ་ནང་ལུ་ མཐུད་དེ་ཡོད་པའི་ ཇེ་ཨེསི་ཨོ་ཨེན་ ཡིག་ཆའི་ཡིག་ཆ་ཚུ་གི་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ ཇེ་ཨེསི་ཨོ་གི་ཐོ་གཞུང་ཅིག་ བཏོན་གཏང་ནི། སྔོན་སྒྲིག་སྤུ་ལུ་འགྲུལ་ལམ་འདི་ I18NI000000054X ལས་ `storage/da_manifests/taikai` ཨིན།
+- `/status` པར་ཆས་ Grafana.
+- I18NT000000002X ཕྱིར་འདྲེན་ (JSON/CSV) གིས་ བྱུང་ལས་སྒོ་སྒྲིག་གུ་ གོང་གི་མེ་ཊིག་ཚུ་གི་དོན་ལུ་ཨིན།
+- Grafana ཚགས་མ་ཚུ་མཐོང་ཚུགསཔ་ཨིན།
+- དྲན་ཤེས་བཏོན་མི་ ངོ་རྟགས་ཚུ་ འབྲེལ་ཡོད་ལམ་ལུགས་ཀྱི་མེ་ཚུ་ལུ་ གཞི་བསྟུན་འབད་ནི།
+- I18NI000000057X ལུ་འགྲེལ་བཤད་རྐྱབ་ནི།
+  ཁྲིམས་ལུགས་ཀྱི་སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་།
 
-## Dashboard mirroring & drill cadence
+## ཌེཤ་བོརཌ་མེ་ལོང་དང་ དྲིལ་ལེན་གྱི་ ཚད་གཞི།
 
-Satisfying the SN13-C roadmap requirement means proving that the Taikai
-viewer/cache dashboards are reflected inside the portal **and** that the anchor
-evidence drill runs on a predictable cadence.
+SN13-C ལམ་གྱི་ས་ཁྲ་དགོས་མཁོ་འདི་ བསམ་པ་རྫོགས་ཏེ་ ཐའེ་ཀའི་ ཟེར་ བདེན་ཁུངས་བཀལ་ནི་འདི་ཨིན།
+བལྟ་མི་/འདྲ་མཛོད་ཀྱི་ བརྡ་བཀོད་ཚུ་ དྲྭ་ལམ་ནང་ **དང་** དེ་ ཨེན་ཀོར་ནང་ བཀྲམ་སྟོན་འབདཝ་ཨིན།
+སྒྲུབ་བྱེད་ཀྱི་སྦྱོང་བརྡར་ཚུ་ སྔོན་དཔག་འབད་བཏུབ་པའི་ ལྡུམ་རའི་ཐོག་ལུ་ གཡོག་བཀོལཝ་ཨིན།
 
-1. **Portal mirroring.** Whenever `dashboards/grafana/taikai_viewer.json` or
-   `dashboards/grafana/taikai_cache.json` changes, summarise the deltas in
-   `sorafs/taikai-monitoring-dashboards` (this portal) and note the JSON
-   checksums in the portal PR description. Highlight new panels/thresholds so
-   reviewers can correlate with the managed Grafana folder.
-2. **Monthly drill.**
-   - Run the drill on the first Tuesday of each month at 15:00 UTC so evidence
-     lands before the SN13 governance sync.
-   - Capture spool artefacts, `/status` telemetry, and Grafana screenshots inside
+1. ** མཚོན་ཆའི་མེ་ལོང་།** ག་དུས་ཡང་ `dashboards/grafana/taikai_viewer.json` ཡང་ན་
+   I18NI000000059X གིས་བསྒྱུར་བཅོས་འབདཝ་ཨིན་ དེ་ལས་ ཌེལ་ཊ་ཚུ་ནང་ལུ་ བཅུད་བསྡུས་འབདཝ་ཨིན།
+   `sorafs/taikai-monitoring-dashboards` (འདི་དྲྭ་ཚིགས་འདི་) དང་ JSON འདི་དྲན་འཛིན་འབད།
+   དྲྭ་ཚིགས་ PR འགྲེལ་བཤད་ནང་ བརྟག་དཔྱད་གྲངས་ཚད། དེ་འབདཝ་ལས་ པེ་ནཱལ་གསརཔ་/ཐེབས་ཚུ་ གཙོ་བོར་བཏོན།
+   བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ འཛིན་སྐྱོང་འཐབ་མི་ Grafana སྣོད་འཛིན་དང་གཅིག་ཁར་ འབྲེལ་བ་འཐབ་ཚུགས།
+2. **ཟླ་རེའི་སྦྱོང་བརྡར་.**
+   - ཟླཝ་རེ་ནང་ གཟའ་ལྷགཔ་དང་པ་ གཟའ་ལྷགཔ་གི་ཚེས་ ༡༥:༠༠UTC ལུ་ དམག་སྦྱོང་འབད་དགོ།
+     SN13 གཞུང་སྐྱོང་མཉམ་སྦྱོར་གྱི་ཧེ་མ་ ས་ཆ་ཚུ།
+   - ནང་ན་ཡོད་པའི་ གློག་ཐག་དང་ `/status` བརྒྱུད་འཕྲིན་ དེ་ལས་ GrafanaXhots
      `artifacts/sorafs_taikai/drills/<YYYYMMDD>/`.
-   - Log the execution with
-     `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor`.
-3. **Review & publish.** Within 48 hours, review alerts/false positives with the
-   DA Program + NetOps, record follow-up items in the drill log, and link the
-   governance bucket upload from `docs/source/sorafs/runbooks-index.md`.
+   - བཀོལ་སྤྱོད་འདི་དང་གཅིག་ཁར་ ནང་བསྐྱོད་འབད།
+     I18NI000000063X.
+3. **བསྐྱར་ཞིབ་དང་པར་སྐྲུན་འབདཝ་ཨིན། ཆུ་ཚོད་༤༨ གི་ནང་འཁོད་ལུ་ དྲན་སྐུལ་/རྫུན་མ་ཚུ་ བསྐྱར་ཞིབ་འབད།
+   DA ལས་རིམ་ + NetOps དང་ དམག་སྦྱོང་དྲན་ཐོ་ནང་ རྗེས་འཇུག་རྣམ་གྲངས་ཚུ་ཐོ་བཀོད་འབད་ཞིནམ་ལས་ འབྲེལ་མཐུད་འབད།
+   `docs/source/sorafs/runbooks-index.md` ལས་ གཞུང་སྐྱོང་བཱ་ཀེཊ་ ཡར་འཕེལ།
 
-If either dashboards or drills fall behind, SN13-C cannot exit 🈺; keep this
-section up to date whenever cadence or evidence expectations change.
+གལ་སྲིད་ དྲ་ཤུན་ཡང་ན་ དམག་སྦྱོང་ཚུ་ རྒྱབ་ཁར་འགྱོ་བ་ཅིན་ SN13-C འདི་ 🈺; འདི་བཞག་ནི་
+བརྗོད་གཞི་དང་ཡང་ན་སྒྲུབ་བྱེད་ཀྱི་རེ་བ་འགྱུར་བ་འགྱོ་བའི་སྐབས་ལུ་ དུས་མཐུན་གྱི་དབྱེ་ཚད།
 
-## Helpful commands
+## ཕན་ཐོགས་པའི་བཀའ་བཀོད།
 
 ```bash
 # Snapshot alias rotation telemetry to an artefact directory
@@ -144,5 +145,5 @@ jq '.error_context | select(.reason == "lineage_replay")' \
   "$MANIFEST_DIR/taikai/taikai-ssm-20260405T153000Z.norito"
 ```
 
-Keep this portal copy in sync with the canonical runbook whenever Taikai
-anchoring telemetry, dashboards, or governance evidence requirements change.
+དྲྭ་ཚིགས་འདི་ ཐའི་ཀཱའི་ནམ་ནམ་ཡང་ ཐའི་ཀཱའི་སྐབས་ལུ་ ཀེ་ནོ་ནིག་རའིན་བུཀ་དང་གཅིག་ཁར་ མཉམ་འབྱུང་སྦེ་བཞག།
+བརྡ་འཕྲིན་བརྒྱུད་ལམ་དང་ བརྡ་དོན་བཀོད་ཁྲམ་ ཡང་ན་ གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་ དགོས་མཁོ་ཚུ་ འགྱུར་བཅོས་འབདཝ་ཨིན།

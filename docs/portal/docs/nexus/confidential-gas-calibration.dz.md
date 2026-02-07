@@ -10,47 +10,48 @@ translation_last_reviewed: 2026-02-07
 title: Confidential Gas Calibration Ledger
 description: Release-quality measurements backing the confidential gas schedule.
 slug: /nexus/confidential-gas-calibration
+translator: machine-google-reviewed
 ---
 
-# Confidential Gas Calibration Baselines
+# གསང་བའི་རླངས་རྫས་ཚད་འཇལ་གཞི་རིམ།
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
+འ་ནི་ལེག་ཇར་འདི་གིས་ གསང་བའི་རླངས་རྫས་ཚད་འཇལ་གྱི་ བདེན་དཔྱད་འབད་ཡོད་པའི་ཐོན་འབྲས་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+ཚད་གཞི་ཚུ། གྲལ་ཐིག་རེ་རེ་གིས་ གསར་བཏོན་འབད་ཡོད་པའི་ གསར་བཏོན་སྤུས་ཚད་ཚད་འཇལ་ཆ་ཚན་ཅིག་ དང་གཅིག་ཁར་ དང་གཅིག་ཁར་བཟུང་ཡོད་པའི་ཡིག་ཆ་ཚུ་ ཡིག་ཆ་བཟོཝ་ཨིན།
+འགྲེལ་བཤད་བཀོད་ཡོད་པའི་བྱ་རིམ་ [གསང་བའི་རྒྱུ་དངོས་དང་ ZK སྤོ་བཤུད་](I18NU000000000X) ནང་ (./confidential-assets#calibration-baselines--acceptance-gates) ནང་།
 
-| Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
+| ཚེས་གྲངས་ (ཡུ་ཊི་སི) | ཁས་བླངས་ | གསལ་སྡུད་ | I18NI0000001X | I18NI0000002X | I18NI0000003X | དྲན་ཐོ། |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-12 | pending | baseline-simd-neutral | — | — | — | Scheduled x86_64 neutral run on CI host `bench-x86-neon0`; see ticket GAS-214. Results will be added once the bench window completes (pre-merge checklist targets release 2.1). |
-| 2026-04-13 | pending | baseline-avx2 | — | — | — | Follow-up AVX2 calibration using the same commit/build as the neutral run; requires host `bench-x86-avx2a`. GAS-214 covers both runs with delta comparison against `baseline-neon`. |
+| ༢༠༢༥-༡༠-༡༨ | 3c70a7d3 | གཞི་རྟེན་-ནེའོན་ | ༢.༩༣ཨི་༥ | 1.57e2 | ༡.༨༧ཨི་༣ | ཌར་ཝིན་ ༢༥.༠.༠ གི་ arm64e (hostinfo); I18NI0000004X; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| ༢༠༢༦-༠༤-༡༢ | བསྒུགས་བཞག་ | གཞི་རྟེན་-སིམ་-ནའུ་ཊལ་ | — | — | — | དུས་ཚོད་བཀོད་ཡོད་པའི་ x86_64 CI host on `bench-x86-neon0`; ཤོག་འཛིན་ GAS-214 བལྟ། གྲུབ་འབྲས་ཚུ་ བེན་ཇི་སྒོ་སྒྲིག་འདི་མཇུག་བསྡུ་ཞིནམ་ལས་ (མཉམ་བསྡོམས་ཞིབ་དཔྱད་ཐོ་ཡིག་དམིགས་གཏད་ཚུ་ བཏོན་གཏང་ ༢.༡) ཁ་སྐོང་འབད་འོང་། |
+| ༢༠༢༦-༠༤-༡༣ | བསྒུགས་བཞག་ | གཞི་རྟེན་-vx2 | — | — | — | བར་ལམ་རྒྱུག་སྟེ་ ཁས་བླངས་གཅིག་པ་/བཟོ་བསྐྲུན་ལག་ལེན་འཐབ་སྟེ་ རྗེས་འཇུག་ཨེ་ཝི་ཨེགསི་༢ ཚད་འཇལ་འབད། ཧོསིཊི་དགོས་ I18NI0000009X. GAS-214 གིས་ `baseline-neon` ལུ་ ཌེལ་ཊ་གི་ག་བསྡུར་དང་གཅིག་ཁར་ གཡོག་བཀོལཝ་ཨིན། |
 
-`ns/op` aggregates the median wall-clock per instruction measured by Criterion;
-`gas/op` is the arithmetic mean of the corresponding schedule costs from
-`iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
-the summed gas across the nine-instruction sample set.
+`ns/op` ཚད་གཞི་གིས་འཇལ་མི་ བཀོད་རྒྱ་རེ་ལུ་ གྱང་ཚད་བར་མཚམས་ཚུ་ བསྡོམས་ཡོདཔ་ཨིན།
+I18NI000000012X འདི་ དེ་དང་མཐུན་པའི་ལས་རིམ་གྱི་འགྲོ་སོང་ལས་ ཨང་རྩིས་རིག་པའི་ སྤྱིར་སྙོམས་ཨིན།
+`iroha_core::gas::meter_instruction`; I18NI0000000014X གིས་ བསྡོམས་རྩིས་ནེ་ནོ་སེ་ཀོན་ཌི་འདི་ ༡༠༠ གིས་བགོ་བཤའ་རྐྱབ་ཨིན།
+བཀོད་རྒྱ་དགུ་ཡོད་པའི་དཔེ་ཚད་ཆ་ཚན་ནང་ལུ་ བསྡོམས་རྩིས་རླངས་རྫས་འདི་ཨིན།
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*དྲན་འཛིན་.* ད་ལྟོའི་ mars64 ཧོསིཊི་འདི་གིས་ ཚད་རྩིས་ `raw.csv` བཅུད་བསྡུས་ཚུ་ ༢༠༠༨ ལུ་ བཏོནམ་ཨིན།
+སྒྲོམ་འདི་; I18NI000000016X དང་མཉམ་དུ་བསྐྱར་གཡོག་བཀོལ།
+གསར་བཏོན་འབདཝ་ལས་ ངོས་ལེན་ཞིབ་དཔྱད་ཐོ་ཡིག་གིས་ དགོ་པའི་ ཅ་ཆས་ཚུ་ མཉམ་སྦྲགས་འབད་ཡོདཔ་ཨིན།
+I18NI000000017X འདི་ `--save-baseline` གི་ཤུལ་ལས་ ད་ལྟོ་ཡང་ མ་ཐོབ་པ་ཅིན་ རྒྱུག་འགྲན།
+ལི་ནགསི་ཧོསིཊི་གུ་ཡང་ན་ ཀོན་སོལ་ཨའུཊི་པུཊི་འདི་ གསར་བཏོན་བཱན་ཌལ་ལུ་ རིམ་སྒྲིག་འབད།
+གནས་སྐབས་ཀྱི་བཀག་འགོག། གཞི་བསྟུན་གྱི་དོན་ལུ་ ram64 ཀོན་སོལ་དྲན་ཐོ་འདི་ འཕྲལ་གྱི་གཡོག་བཀོལ།
+`docs/source/confidential_assets_calibration_neon_20251018.log` ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
 
-Per-instruction medians from the same run (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+བཀོད་རྒྱ་རེ་རེ་བཞིན་ གཡོག་བཀོལ་མི་གཅིག་ལས་ (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+| བསླབ་སྟོན་ | བར་མཚམས་I18NI0000021X | ལས་རིམ། `gas` | I18NI0000023X |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
-| RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
-| SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
-| GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
-| RevokeAccountRole | 3.12e5 | 96 | 3.25e3 |
-| ExecuteTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
-| MintAsset | 1.56e5 | 150 | 1.04e3 |
-| TransferAsset | 3.68e5 | 180 | 2.04e3 |
+| ཐོ་བཀོད་མངའ་ཁོངས། | ༣་༤༦e༥ | ༢༠༠ | ༡.༧༣ཨི་༣ |
+| ཐོ་བཀོད་ལས་དོན་རྩིས་དཔྱད། | ༣་༡༥e༥ | ༢༠༠ | 1.58e3 |
+| ཐོ་བཀོད་ཨེ་སེཊ་ཌི་ཕི་ | ༣་༤༡ཨི་༥ | ༢༠༠ | ༡.༧༡e༣ |
+| setAccountKV_small | ༣.༢༨e༥ | ༦༧ | ༤.༩༠e3 |
+| གྷྲན་ཊི་ཨེཀ་ཀའུན་ ལས་རིམ། | ༣་༣༣ཨི་༥ | ༩༦ | ༣་༤༧e༣ |
+| RevokeAccount འགན་འཁུར་ | ༣་༡༢e༥ | ༩༦ | ༣་༢༥e༣ |
+| བཀོལ་སྤྱོད་ཊི་རི་གཱར་_བར་སྟོང་_ཨར་ཇི་ | 1.42e5 | 224 | ༦.༣༣ཨི་༢ |
+| མིན་ཊ་ཨེ་སེཊ་ | 1.56e5 | ༡༥༠ | 1.04e3 |
+| TransferAsset | ༣.༦༨e༥ | ༡༨༠ | 2.04e3 |
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+དུས་ཚོད་ཀྱི་ཀེར་ཐིག་འདི་ `gas::tests::calibration_bench_gas_snapshot` གིས་བསྟར་སྤྱོད་འབདཝ་ཨིན།
+༼ བསྡོམས་རྩིས་ ༡༤༡༣ གྱི་ རླངས་རྫས་ ༩ ནང་༽ དང་ མ་འོངས་པའི་ ཐིག་ལེ་ཚུ་ཨིན་པ་ཅིན་ འགྲུལ་བསྐྱོད་འབད་འོང་།
+ཚད་འཇལ་སྒྲིག་བཀོད་ཚུ་དུས་མཐུན་བཟོ་མ་དགོ་པར་བསྒྱུར་བཅོས་འབད་ནི།

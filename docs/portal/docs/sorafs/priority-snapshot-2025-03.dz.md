@@ -10,29 +10,30 @@ translation_last_reviewed: 2026-02-07
 id: priority-snapshot-2025-03
 title: Priority Snapshot — March 2025 (Beta)
 description: Mirror of the 2025-03 Nexus steering snapshot; pending ACKs before public rollout.
+translator: machine-google-reviewed
 ---
 
-> Canonical source: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> ཀེ་ནོ་ཀལ་འབྱུང་ཁུངས་: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / awaiting steering ACKs** (Networking, Storage, Docs leads).
+> གནས་སྟངས་: **Beta / སྒུག་སྡོད་མི་ ཨེ་སི་ཀེ་ཨེསི་** (དྲྭ་རྒྱ་ གསོག་འཇོག་, ཡིག་ཆ་ཚུ་)།
 
-## Overview
+## སྤྱི་མཐོང་།
 
-The March snapshot keeps the docs/content-network initiatives aligned with the
-SoraFS delivery tracks (SF‑3, SF‑6b, SF‑9). Once all leads acknowledge the
-snapshot in the Nexus steering channel, remove the “Beta” note above.
+སྤྱི་ཟླ་གསུམ་པའི་པར་བཏབ་མི་འདི་གིས་ ཡིག་ཆ་/ནང་དོན་དྲྭ་རྒྱ་ཚུ་དང་མཐུན་སྒྲིག་འབད་དེ་བཞགཔ་ཨིན།
+SoraFS བཀྲམ་སྤེལ་གྱི་ལམ་ཐིག་ (SF‐3, SF‐6b, SF‐9). ཚར་གཅིག་ འགོ་ཁྲིད་ཚུ་གིས་ངོས་ལེན་འབདཝ་ཨིན།
+I18NT000000002X གི་རྒྱུན་ལམ་ནང་པར་ལེན་འབད་ཞིནམ་ལས་ གོང་འཁོད་ཀྱི་ “Beta” དྲན་ཐོ་འདི་བཏོན་གཏང་།
 
-### Focus threads
+### གཙོ་བོའི་སྐུད།
 
-1. **Circulate priority snapshot** — collect acknowledgements and log them in the
-   2025-03-05 council minutes.
-2. **Gateway/DNS kickoff close-out** — rehearse the new facilitation kit (Section 6
-   in the runbook) before the 2025-03-03 workshop.
-3. **Operator runbook migration** — portal `Runbook Index` is live; expose the beta
-   preview URL after reviewer onboarding sign-off.
-4. **SoraFS delivery threads** — align SF‑3/6b/9 remaining work with the plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - CLI/SDK binding polish across Rust/JS/Swift orchestrator integrations.
-   - PoR coordinator runtime wiring and GovernanceLog events.
+1. **གཙོ་རིམ་པར་ལེན་** — ངོས་ལེན་བསྡུ་ལེན་འབད་དེ་ ནང་བསྐྱོད་འབད།
+   2025-03-05 ཚོགས་ཚན།
+2. **Gateway/DNS ཀིག་ཨོཕ་ ཉེ་འགྲམ་** — ཕན་བདེ་ཅ་ཆས་གསརཔ་ (Section6) བསྐྱར་སྦྱོང་འབད།
+   ༢༠༢༥-༠༣-༠༣ ལས་རིམ།
+3. **Operator runbook གནས་སྤོ་** — དྲྭ་ཚིགས་`Runbook Index` འདི་ ཐད་རི་བ་རི་; བེ་ཊ་ཕྱིར་སྟོན་
+   བསྐྱར་ཞིབ་འབད་མི་གི་ཤུལ་ལས་ སྔོན་ལྟའི་ཡུ་ཨར་ཨེལ།
+4. **SoraFS བཀྲམ་སྤེལ་ཐིག་ཚུ་** — ཨེསི་ཨེཕ་ཨེསི་‐༣/༦བི་/༩ འཆར་གཞི་/ལམ་སབ་ཁྲ་དང་གཅིག་ཁར་ལཱ་ལྷག་ལུས་འབད།
+   - `sorafs-node` པོ་ཨར་ བཙུགས་ནི་ལས་མི་ + གནས་ཚད་མཇུག་བསྡུ།
+   - CLI/SDK བཱའིན་ཌིང་ རས་ཆ་ རསཊ་/ཇེ་ཨེསི་/སུའིཕཊ་ སྙན་ཆའི་སྡེ་ཚན་མཉམ་བསྡོམས་འབདཝ་ཨིན།
+   - པོ་ཨར་ མཉམ་འབྲེལ་པ་ རན་ཊའིམ་ གློག་ཐག་དང་ གོ་ཝར་ནེནསི་ལོག་བྱུང་ལས་ཚུ།
 
-See the source file for the full table, distribution checklist, and log entries.
+ཐིག་ཁྲམ་ཆ་ཚང་དང་ བཀྲམ་སྤེལ་ཞིབ་དཔྱད་ཐོ་ཡིག་ དེ་ལས་ དྲན་ཐོ་ཐོ་བཀོད་ཚུ་གི་དོན་ལུ་ འབྱུང་ཁུངས་ཡིག་སྣོད་འདི་བལྟ།

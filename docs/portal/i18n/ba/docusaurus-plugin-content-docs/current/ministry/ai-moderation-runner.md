@@ -6,64 +6,66 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: AI Moderation Runner Specification
 summary: Deterministic moderation committee design for the Ministry of Information (MINFO-1) deliverable.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# AI Moderation Runner Specification
+# AI Модерация йүгерсе спецификацияһы
 
-This specification fulfils the documentation portion of **MINFO-1 — Establish AI
-moderation baseline**. It defines the deterministic execution contract for the
-Ministry of Information moderation service so every gateway can run identical
-pipelines before appeals and transparency flows (SFM-4/SFM-4b). All behaviour
-described here is normative unless explicitly marked as informational.
+Был спецификация документация өлөшөн үтәй **MINFO-1 — ЯИ булдырыу .
+модерациялау башланғыс һыҙығы**. Ул билдәләй детерминистик башҡарыу килешүе өсөн
+Мәғлүмәт министрлығының модерация хеҙмәте, шулай итеп, һәр шлюз бер үк эшләй ала
+апелляция һәм асыҡлыҡ ағымдары алдында торбалар (SFM-4/SFM-4b). Бөтә тәртип
+бында һүрәтләнгән норматив, әгәр асыҡтан-асыҡ мәғлүмәт тип билдәләнмәһә.
 
-## 1. Goals & Scope
-- Provide a reproducible moderation committee that evaluates gateway content
-  (objects, manifests, metadata, audio) using heterogeneous models.
-- Guarantee deterministic execution across operators: fixed opset, seeded
-  tokenisation, bounded precision, and versioned artefacts.
-- Produce audit-ready artefacts: manifests, scorecards, calibration evidence,
-  and transparency digests suitable for publication in the governance DAG.
-- Surface telemetry so SREs can detect drift, false positives, and downtime
-  without collecting raw user data.
+## 1. Маҡсаттар & Скоп
+- Шлюз йөкмәткеһен баһалаған ҡабатланған уртаса комитет тәьмин итегеҙ .
+  (объекттар, манифест, метамағлүмәттәр, аудио) гетероген модель ҡулланып.
+- Гарантия детерминистик башҡарыу операторҙары буйынса: нығытылған опсет, орлоҡ
+  токенизация, сикләнгән теүәллек һәм версияланған артефакттар.
+- Аудит әҙер артефакттар етештереү: манифест, scoremarts, калибровка дәлилдәре,
+  һәм асыҡлыҡ үҙләштереү өсөн яраҡлы баҫма идара итеү ДАГ.
+- Ер өҫтө телеметрияһы шулай SREs асыҡлай ала дрейф, ялған ыңғай, һәм өҙөклөктәр
+  сеймал ҡулланыусы мәғлүмәттәрен йыймайынса.
 
-## 2. Deterministic Execution Contract
-- **Runtime:** ONNX Runtime 1.19.x (CPU backend) compiled with AVX2 disabled and
-  `--enable-extended-minimal-build` to keep the opcode set fixed. CUDA/Metal
-  runtimes are explicitly disallowed in production.
-- **Opset:** `opset=17`. Models targeting newer opsets must be down-converted
-  and validated before admission.
-- **Seed derivation:** Every evaluation derives an RNG seed from
-  `BLAKE3(content_digest || manifest_id || run_nonce)` where `run_nonce` comes
-  from the governance-approved manifest. Seeds feed all stochastic components
-  (beam search, dropout toggles) so results are bit-for-bit reproducible.
-- **Threading:** One worker per model. Concurrency is coordinated by the runner
-  orchestrator to avoid shared-state race conditions. BLAS libraries operate in
-  single-threaded mode.
-- **Numerics:** FP16 accumulation is forbidden. Use FP32 intermediates and clamp
-  outputs to four decimal places before aggregation.
+## 2. Детерминистик башҡарыу килешүе
+- **Ран ваҡыты:** ONNX Runtime 1.19.x (CPU бекэнд) AVX2 өҙөлгән һәм өҙөлгән һәм
+  `--enable-extended-minimal-build` опкод комплектын ныҡлы тотоу өсөн. CUDA/Металл
+  йөрөү ваҡыты етештереүҙә асыҡтан-асыҡ рөхсәт ителмәй.
+- **Опсет:** `opset=17`. Моделдәр маҡсатлы яңы опсеттар тейеш түбән-конвертировать .
+  һәм ҡабул итеү алдынан раҫланған.
+- **Орлоҡтар сығарыу:** Һәр баһалау РНГ орлоғон ала.
+  I18NI000000017X ҡайҙа I18NI0000000018X килә
+  идара итеү раҫланған манифесттан. Орлоҡтар бөтә стохастик компоненттарҙы туҡландыра
+  (балҡыш эҙләү, ташлап китеү переключатель) шуға күрә һөҙөмтәләр бит-бит өсөн ҡабатлана.
+- **Тединг:** Бер модель бер эшсе. Конкурентлыҡ йүгерсе тарафынан көйләнә
+  оркестрист ҡотолоу өсөн уртаҡ-дәүләт ярыш шарттары. BLAS китапханалары 2012 йылда эшләй.
+  бер епле режим.
+- **Һандар:** FP16 тупланыуы тыйыла. FP32 аралыҡ һәм ҡыҫҡыс ҡулланыу
+  агрегация алдынан дүрт унлыҡ урынға тиклем сыға.
 
-## 3. Committee Composition
-The baseline committee contains three model families. Governance may add
-models, but the minimum quorum must remain satisfied.
+## 3. Комитет составы
+База комитетында өс модель ғаиләһе бар. Идара итеү өҫтәй ала
+моделдәр, әммә минималь кворум ҡәнәғәт булып ҡалырға тейеш.
 
-| Family | Baseline Model | Purpose |
-|--------|----------------|---------|
-| Vision | OpenCLIP ViT-H/14 (safety fine-tuned) | Detects visual contraband, violence, CSAM indicators. |
-| Multimodal | LLaVA-1.6 34B Safety | Captures text + image interactions, contextual cues, harassment. |
-| Perceptual | pHash + aHash + NeuralHash-lite ensemble | Fast near-duplicate detection and recall of known bad material. |
+| Ғаилә | База моделе | Маҡсат |
+|-------|----------------|----------|
+| Күренеш | OpenCLIP ViT-H/14 (хәүефһеҙлек нәфис көйләнгән) | Күҙгә күренеп торған контрабанда, көс ҡулланыу, CSAM күрһәткестәрен асыҡлай. |
+| Күп модаль | LLaVA-1.6 34B Хәүефһеҙлек | Текст + һүрәт үҙ-ара тәьҫир итешеүен, контекстуаль сигналдарҙы, ҡыҫырыҡлауҙы тота. |
+| Перцептив | pHash + аХаш + НейронХаш-лите ансамбле | Тиҙ яҡын дубляж асыҡлау һәм иҫкә төшөрөү билдәле насар материал. |
 
-Each model entry specifies:
+Һәр модель яҙмаһы күрһәтелгән:
 - `model_id` (UUID)
-- `artifact_digest` (BLAKE3-256 of OCI image)
-- `weights_digest` (BLAKE3-256 of ONNX or merged safetensors blob)
-- `opset` (must equal `17`)
-- `weight` (committee weight, default `1.0`)
-- `critical_labels` (set of labels that immediately trigger `Escalate`)
-- `max_eval_ms` (guardrail for deterministic watchdogs)
+- I18NI000000020X (BLAKE3-256 OCI һүрәтенең)
+- I18NI000000021X (BLAKE3-256 ONNX йәки берләштерелгән хәүефһеҙлекселәр блоты)
+- I18NI000000022X (тигеҙ I18NI000000023X тейеш)
+- I18NI000000024X (комитет ауырлығы, I18NI000000255X ғәҙәттәгесә)
+- I18NI000000026X (унда уҡ I18NI000000027X X)
+- I18NI000000028X (детерминистик күҙәтеүсе эттәр өсөн гардерзал)
 
-## 4. Norito Manifests & Results
+## 4. I18NT0000000001X Манифест һәм һөҙөмтәләр
 
-### 4.1 Committee Manifest
+### 4.1 Комитет манифесы
 ```norito
 struct AiModerationManifestV1 {
     manifest_id: Uuid,
@@ -88,9 +90,9 @@ struct AiModerationModelV1 {
     critical_labels: Vec<String>,
     max_eval_ms: u32,
 }
-```
+``` X
 
-### 4.2 Evaluation Result
+### 4.2 Баһалау һөҙөмтәһе
 ```norito
 struct AiModerationResultV1 {
     manifest_id: Uuid,
@@ -116,14 +118,14 @@ struct AiModerationModelScoreV1 {
 }
 ```
 
-The runner MUST emit a deterministic `AiModerationDigestV1` (BLAKE3 over the
-serialized result) for transparency logs and append results to the moderation
-ledger when the verdict is not `pass`.
+Йүгергән тейеш детерминистик I18NI000000029X (BLAKE3 өҫтөндә.
+сериялы һөҙөмтә) асыҡлыҡ журналдары һәм һөҙөмтәләрҙе модерацияға ҡушыу өсөн
+баш китабы, ҡасан хөкөм түгел I18NI0000000300X.
 
-### 4.3 Adversarial Corpus Manifest
+### 4.3 Адверсариаль корпус манифесы
 
-Gateway operators now ingest a companion manifest that enumerates perceptual
-hash/embedding “families” derived from the calibration runs:
+Ҡапҡа операторҙары хәҙер перцептив иҫәпләгән иптәш манифестын һеңдерә
+хеш/встраивание “ғаилә” калибровка йүгерә алынған:
 
 ```norito
 struct AdversarialCorpusManifestV1 {
@@ -150,138 +152,136 @@ struct AdversarialPerceptualVariantV1 {
 }
 ```
 
-The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
-validated via `AdversarialCorpusManifestV1::validate()`. The manifest allows the
-gateway denylist loader to populate `perceptual_family` entries that block
-entire near-duplicate clusters instead of individual bytes. A runnable fixture
-(`docs/examples/ai_moderation_perceptual_registry_202602.json`) demonstrates
-the expected layout and feeds directly into the sample gateway denylist.
+Схема I18NI000000031X-та йәшәй һәм
+I18NI000000032X аша раҫланған. Манифест мөмкинлек бирә
+шлюз денилисты тейәгес I18NI0000000033X халыҡты тултырыу өсөн, тип блок
+айырым байт урынына бөтә яҡын дубликаттар кластерҙары. Йүгереп торған ҡоролма
+(`docs/examples/ai_moderation_perceptual_registry_202602.json`) күрһәтә
+көтөлгән планировка һәм туранан-тура өлгө шлюз дениистына ашата.
 
-## 5. Execution Pipeline
-1. Load `AiModerationManifestV1` from the governance DAG. Reject if
-   `runner_hash` or `runtime_version` mismatch the deployed binary.
-2. Fetch model artefacts via OCI digest, verifying digests before loading.
-3. Construct evaluation batches by content type; ordering must sort by
-   `(content_digest, manifest_id)` to ensure deterministic aggregation.
-4. Execute each model with the derived seed. For perceptual hashes, combine
-   the ensemble via majority vote -> score in `[0,1]`.
-5. Aggregate scores into `combined_score` using weighted clipped ratio:
+## 5.
+1. Һуғыш I18NI0000000035X идара итеү DAG. Кире ҡағығыҙ, әгәр
+   I18NI000000036X йәки I18NI000000037X тарҡау бинар тап килмәй.
+.
+3. Йөкмәтке тибы буйынса баһалау партияларын төҙөү; заказ бирергә тейеш сорттарға .
+   I18NI000000038X детерминистик агрегацияны тәьмин итеү өсөн.
+4. Һәр модель алынған орлоҡ менән башҡарығыҙ. Һис һиҙеү хештары өсөн, берләштереү
+   ансамбль аша күпселек тауыш -> балл I18NI000000039X.
+.
    ```
    combined = Σ_i weight_i * clamp(score_i / threshold_i, 0, 1) / Σ_i weight_i
    ```
-6. Produce `ModerationVerdictV1`:
-   - `escalate` if any `critical_labels` fire or `combined ≥ thresholds.escalate`.
-   - `quarantine` if above `thresholds.quarantine` but below `escalate`.
-   - `pass` otherwise.
-7. Persist `AiModerationResultV1` and enqueue downstream processes:
-   - Quarantine service (if verdict escalates/quarantines)
-   - Transparency log writer (`ModerationLedgerV1`)
-   - Telemetry exporter
+6. `ModerationVerdictV1` етештереү:
+   - I18NI000000042X әгәр ҙә I18NI000000043X янғын йәки I18NI000000044X.
+   - I18NI000000045X, әгәр I18NI000000046X-тан юғарыраҡ булһа, әммә `escalate`-тан түбәнерәк.
+   - `pass` башҡаса.
+.
+   - Карантин хеҙмәте (әгәр хөкөм ҡарары эскалация/карантин)
+   - асыҡ журнал яҙыусыһы (I18NI000000050X)
+   - Телеметрия экспортеры
 
-## 6. Calibration & Evaluation
-- **Datasets:** Baseline calibration uses the mixed corpus curated with policy
-  team approval. Reference recorded in `calibration_dataset`.
-- **Metrics:** Compute Brier score, Expected Calibration Error (ECE), and AUROC
-  per model and combined verdict. Monthly recalibration MUST keep
-  `Brier ≤ 0.18` and `ECE ≤ 0.05`. Results stored in the SoraFS reports tree
-  (e.g., [February 2026 calibration](../sorafs/reports/ai-moderation-calibration-202602.md)).
-- **Schedule:** Monthly recalibration (first Monday). Emergency recalibration
-  allowed if drift alerts fire.
-- **Process:** Run deterministic evaluation pipeline on calibration set,
-  regenerate `thresholds`, update manifest, stage changes for governance vote.
+## 6. Калибровка & Баһалау
+- **Мәғлүмәттәр:** Башлинт калибровкаһы сәйәсәт менән курировать ҡатнаш корпус ҡуллана.
+  командаһы раҫлау. Һылтанма I18NI000000051X-та теркәлгән.
+- **Метрика:** Иҫәпләү Бриер балл, Көтөлгән калибровка хатаһы (ECE), һәм АУРОК
+  моделе һәм берләштерелгән хөкөм. Айлыҡ рекалибровка тейеш.
+  `Brier ≤ 0.18` һәм I18NI000000053X. Һөҙөмтәләр I18NT000000004X ағасында һаҡланған
+  (мәҫәлән, [2026 йылдың февраль калибровкаһы] (../sorafs/reports/ai-moderation-calibration-202602.md)).
+- **Граг:** Айлыҡ рекалибровка (беренсе дүшәмбе). Ғәҙәттән тыш хәлдәрҙе релибрлау
+  рөхсәт итеү, әгәр дрейф иҫкәртмәләр ут.
+- **Процесс:** Калибровка комплекты буйынса детерминистик баһалау торбаһын эшләтеү,
+  regenrate `thresholds`, яңыртыу өсөн асыҡ, этап үҙгәрештәре өсөн идара итеү тауыш биреүҙең.
 
-## 7. Packaging & Deployment
-- Build OCI images via `docker buildx bake -f docker/ai_moderation.hcl`.
-- Images include:
-  - Locked Python env (`poetry.lock`) or Rust binary `Cargo.lock`.
-  - `models/` directory with hashed ONNX weights.
-  - Entry point `run_moderation.py` (or Rust equivalent) exposing HTTP/gRPC API.
-- Publish artefacts to `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- Runner binary ships as part of `sorafs_ai_runner` crate. The build pipeline
-  embeds manifest hash in the binary (exposed via `/v1/info`).
+## 7. Упаковка һәм таратыу
+- I18NI000000055X аша OCI һүрәттәрен төҙөү.
+- Һүрәттәргә:
+  - Бикле Python env (I18NI000000056X) йәки рәт бинар I18NI000000057X.
+  - `models/` каталогы менән хешировать ONNX ауырлыҡтары.
+  - HTTP/gRPC API-һын фашлау `run_moderation.py` (йәки рус эквиваленты) инеү.
+- I18NI000000060X-ҡа нәшер итеү артефакттары.
+- I18NI000000061X йәшник өлөшө булараҡ, ике бинар караптар. Төҙөү торбаһы
+  встраиваемый асыҡ хеш-бинарҙа (I18NI0000000062X аша эләгә).
 
-## 8. Telemetry & Observability
-- Prometheus metrics:
-  - `moderation_requests_total{verdict}`
-  - `moderation_model_score_bucket{model_id,label}`
-  - `moderation_combined_score_bucket`
-  - `moderation_inference_latency_seconds_bucket`
-  - `moderation_runner_manifest_info{manifest_id, runtime_version}`
-- Logs: JSON lines with `request_id`, `manifest_id`, `verdict`, and the digest
-  of the stored result. Raw scores are redacted to two decimal places in logs.
-- Dashboards stored in `dashboards/grafana/ministry_moderation_overview.json`
-  (published alongside the first calibration report).
-- Alert thresholds:
-  - Missing ingestion (`moderation_requests_total` stalled for 10 minutes).
-  - Drift detection (average model score delta >20% versus rolling 7-day mean).
-  - False-positive backlog (quarantine queue > 50 items for >30 minutes).
+## 8. Телеметрия & Күҙәтеүсәнлек
+— I18NT000000000X метрикаһы:
+  - I18NI000000063X
+  - I18NI000000064X
+  - I18NI000000065X
+  - I18NI000000066X
+  - I18NI000000067X
+- Журнал: JSON линиялары менән I18NI00000000068X, I18NI000000069X X, I18NI000000070Х, һәм distest
+  һаҡланған һөҙөмтәнең. Сеймал баллдары бүрәнәләге ике унлыҡ урынға үҙгәртелә.
+- I18NI000000071X-та һаҡланған приборҙар таҡталары
+  (беренсе калибровка отчеты менән бер рәттән баҫылған).
+- Иҫкәртмә сиктәре:
+  - 10 минутҡа юғалған (`moderation_requests_total` X) туҡтап ҡалды).
+  - Дрифт асыҡлау (уртаса модель балл дельта >20% ҡаршы родинг 7-көн уртаса).
+  - Ялған ыңғай артта ҡалған (карантин сираты > 50 пункт >30 минут).
 
-## 9. Governance & Change Control
-- Manifests require dual signatures: Ministry council member + moderation SRE
-  lead. Signatures recorded in `AiModerationManifestV1.governance_signature`.
-- Changes follow `ModerationManifestChangeProposalV1` through Torii. Hashes
-  entered into the governance DAG; deployment blocked until the proposal is
-  enacted.
-- Runner binaries embed `runner_hash`; CI refuses deployment if hashes diverge.
-- Transparency: weekly `ModerationScorecardV1` summarising volume, verdict mix,
-  and appeal outcomes. Published to Sora Parliament portal.
+## 9. Идара итеү & Үҙгәрештәр менән идара итеү
+- Манифесттар ике ҡултамға талап итә: министр совет ағзаһы + SRE самаһы .
+  алып барырға. Ҡултамғалар I18NI000000073X-та теркәлгән.
+- Үҙгәрештәр `ModerationManifestChangeProposalV1` аша Torii аша үтә. Хэштар
+  идара итеүгә ингән ДАГ; тәҡдим ителгәнгә тиклем блокировкаланған таратыу
+  ҡабул ителгән.
+- Йүгергән бинарҙары `runner_hash` һеңдерелгән; CI, әгәр хеш айырылғыс, әгәр ҙә таратыуҙан баш тарта.
+- Асыҡлыҡ: аҙна һайын I18NI000000076X күләмен йомғаҡлау, хөкөм микс,
+  һәм апелляция һөҙөмтәләре. Сора парламенты порталына баҫылған.
 
-## 10. Security & Privacy
-- Content digests use BLAKE3. Raw payloads never persist outside quarantine.
-- Access to quarantine requires Just-In-Time approvals; all accesses logged.
-- Runner sandboxes untrusted content, enforcing 512 MiB memory limits and 120s
-  wall-clock guards.
-- Differential privacy is NOT applied here; gateways rely on quarantine + audit
-  workflows instead. Redaction policies follow the gateway compliance plan
-  (`docs/source/sorafs_gateway_compliance_plan.md`; portal copy pending).
+## 10. Хәүефһеҙлек & хосусилыҡ
+- Йөкмәткеһе һеңдерелгән BLAKE3 ҡулланыла. Сеймал файҙалы йөктәр бер ҡасан да карантиндан ситтә һаҡлана.
+- Карантинға инеү өсөн Just-In-Time раҫлау талап ителә; бөтә инеүҙәр ҙә теркәлде.
+- 512 MiB хәтер сиктәре һәм 120-се йылдарҙы үтәүсе ҡом йәшниктәре ышанысһыҙ йөкмәткене эшләтә
+  стена сәғәте һаҡсылары.
+- Дифференциаль хосусилыҡ бында ҡулланылмай; шлюздар карантинға таяна + аудит
+  эш ағымы урынына. Ҡабатлау сәйәсәте шлюз үтәү планы үтәй
+  (`docs/source/sorafs_gateway_compliance_plan.md`; порталы күсермәһе көтөлә).
 
-## 11. Calibration Publication (2026-02)
-- **Manifest:** `docs/examples/ai_moderation_calibration_manifest_202602.json`
-  records the governance-signed `AiModerationManifestV1` (ID
-  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`), dataset reference
-  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`, runner hash
-  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20`, and the
-  2026-02 calibration thresholds (`quarantine = 0.42`, `escalate = 0.78`).
-- **Scoreboard:** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
-  plus the human-readable report in
+## 11. Калибровка баҫмаһы (2026-02)
+- **Манифест:** `docs/examples/ai_moderation_calibration_manifest_202602.json`
+  идара итеүгә ҡул ҡуйылған I18NI000000079X (ID
+  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`), мәғлүмәттәр йыйылмаһы һылтанма
+  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`, йүгерсе хеш
+  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20`, һәм
+  2026-02 калибровка сиктәре (`quarantine = 0.42`, `escalate = 0.78`).
+- **Таштау:** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
+  плюс кеше уҡый торған отчет 2019 йылда.
   `[SoraFS Reports › AI Moderation Calibration 2026-02](../sorafs/reports/ai-moderation-calibration-202602.md)`
-  capture Brier, ECE, AUROC, and verdict mix for every model. Combined metrics
-  met the targets (`Brier = 0.126`, `ECE = 0.034`).
-- **Dashboards & alerts:** `dashboards/grafana/ministry_moderation_overview.json`
-  and `dashboards/alerts/ministry_moderation_rules.yml` (with regression tests in
-  `dashboards/alerts/tests/ministry_moderation_rules.test.yml`) provide the
-  moderation ingest/latency/drift monitoring story required for rollout.
-
-## 12. Reproducibility schema & validator (MINFO-1b)
-- Canonical Norito types now live alongside the rest of the SoraFS schema in
-  `crates/iroha_data_model/src/sorafs/moderation.rs`. The
-  `ModerationReproManifestV1`/`ModerationReproBodyV1` structs capture the
-  manifest UUID, runner hash, model digests, threshold set, and seed material.
-  `ModerationReproManifestV1::validate` enforces schema version
-  (`MODERATION_REPRO_MANIFEST_VERSION_V1`), ensures every manifest carries at
-  least one model and signer, and verifies each `SignatureOf<ModerationReproBodyV1>`
-  before returning a machine-readable summary.
-- Operators can invoke the shared validator via
-  `sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]`
-  (implemented in `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`). The CLI
-  accepts either the JSON artefacts published under
-  `docs/examples/ai_moderation_calibration_manifest_202602.json` or the raw
-  Norito encoding and prints the model/signature counts alongside the manifest
-  timestamp once validation succeeds.
-- Gateways and automation hook into the same helper so reproducibility manifests
-  can be rejected deterministically when schemas drift, digests are missing, or
-  signatures fail verification.
-- Adversarial corpus bundles follow the same pattern:
+  тотоу Бриер, ECE, AUROC, һәм һәр модель өсөн хөкөм ҡатнашмаһы. Комбинацияланған метрика
+  маҡсаттарын үтәй (`Brier = 0.126`, I18NI000000088X).
+- **Приборҙар таҡтаһы һәм иҫкәртмәләр:** `dashboards/grafana/ministry_moderation_overview.json`X
+  һәм I18NI000000090X (регрессия һынауҙары менән 2012 йылда.
+  I18NI000000091X) тәьмин итә.
+  модерация ингест/латентлыҡ/дрейф мониторинг тарихы өсөн кәрәкле таратыу.## 12. Репродуктивность схемаһы & валитатор (МИНФО-1б)
+- Canonical I18NT0000000002Х типтары хәҙер йәшәй ҡалған I18NT00000000006X схемаһы менән бергә .
+  `crates/iroha_data_model/src/sorafs/moderation.rs`. 1990 й.
+  I18NI0000000933X/`ModerationReproBodyV1` структурҙары структурҙары.
+  асыҡтан-асыҡ UUID, йүгерсе хеш, моделләштереү диспетчерҙары, порог комплекты, һәм орлоҡ материалы.
+  I18NI0000000955Х схема версияһын үтәй
+  (I18NI000000096XX), һәр манифест 2010 йылда алып барыуын тәьмин итә.
+  иң аҙ бер модель һәм ҡул ҡуйыусы, һәм һәр I18NI000000097X .
+  машина менән уҡыла торған резюме ҡайтарыр алдынан.
+- Операторҙар дөйөм валидаторға мөрәжәғәт итә ала.
+  I18NI000000098X XX
+  (I18NI000000099X-та тормошҡа ашырыла). CLI
+  ҡабул итә йәки JSON артефакттары баҫылған аҫтында
+  `docs/examples/ai_moderation_calibration_manifest_202602.json` йәки сеймал
+  I18NT0000000003Х кодлау һәм модель/ҡултамға һандары менән бер рәттән манифест .
+  ваҡыт маркаһы бер тапҡыр раҫлау уңышлы.
+- Ҡапҡалар һәм автоматлаштырыу ҡармаҡ шул уҡ ярҙамсыға шул тиклем ҡабатлаусанлыҡ күрһәтә
+  схемалар дрейфы, һеңдерелгәндәр юҡ йәки юғалғанда детерминистик рәүештә кире ҡағыла ала
+  ҡултамғалар тикшерелмәй.
+- Адверсариаль корпус өйөмдәре бер үк ҡалыпты үтәй:
   `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
-  parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
-  manifests that omit families, variants, or fingerprint metadata. Successful
-  runs emit the issued-at timestamp, cohort label, and the family/variant counts
-  so operators can pin the evidence before updating the gateway denylist entries
-  described in Section 4.3.
+  анализ `AdversarialCorpusManifestV1`, схема версияһын үтәй, һәм баш тарта
+  ғаиләләрҙе, варианттарҙы йәки бармаҡ эҙҙәре метамағлүмәттәрен төшөрөп ҡалдырғанын күрһәтә. Уңышлы
+  йүгерә сығарған-ваҡыт маркаһы, когорта ярлығы, һәм ғаилә/вариант иҫәпләнә
+  шулай итеп, операторҙар шлюз дениист яҙмаларын яңыртыу алдынан дәлилдәрҙе ҡаҙаҡлай ала
+  4.3-сө бүлектә һүрәтләнгән.
 
-## 13. Open Follow-Ups
-- Monthly recalibration windows after 2026-03-02 continue to follow the
-  procedure in Section 6; publish `ai-moderation-calibration-<YYYYMM>.md`
-  alongside updated manifest/scorecard bundles under the SoraFS reports tree.
-- MINFO-1b and MINFO-1c (reproducibility manifest validators plus adversarial
-  corpus registry) remain tracked separately in the roadmap.
+## 13. Асыҡ эҙләү-өҫтөндә
+- 2026-03-02 йылдарҙан һуң айлыҡ рекалибровка тәҙрәләре дауам итә.
+  6-сы бүлектә процедура; I18NI000000103X баҫтырып сығарыу
+  менән бер рәттән яңыртылған манифест/скарейка өйөмдәре буйынса I18NT000000007X ағасы тураһында хәбәр итә ағас.
+- MINFO-1b һәм MINFO-1c (терпракумность манифест валидаторҙар плюс адверсариаль
+  корпус реестры) юл картаһында айырым күҙәтеп ҡала.

@@ -8,66 +8,68 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Deal Engine
 sidebar_label: Deal Engine
 description: Overview of the SF-8 deal engine, Torii integration, and telemetry surfaces.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# SoraFS Deal Engine
+# SoraFS အရောင်းအင်ဂျင်
 
-The SF-8 roadmap track introduces the SoraFS deal engine, providing
-deterministic accounting for storage and retrieval agreements between
-clients and providers. Agreements are described with the Norito payloads
-defined in `crates/sorafs_manifest/src/deal.rs`, covering deal terms, bond
-locking, probabilistic micropayments, and settlement records.
+SF-8 လမ်းပြမြေပုံလမ်းကြောင်းသည် SoraFS သဘောတူညီချက်အင်ဂျင်ကို ပံ့ပိုးပေးသည်၊
+သိမ်းဆည်းခြင်းနှင့် ပြန်လည်ရယူခြင်းဆိုင်ရာ သဘောတူညီချက်များကြားတွင် အဆုံးအဖြတ်ပေးသော စာရင်းအင်း
+ဖောက်သည်များနှင့် ဝန်ဆောင်မှုပေးသူများ။ သဘောတူညီချက်များကို Norito payloads များဖြင့် ဖော်ပြထားပါသည်။
+`crates/sorafs_manifest/src/deal.rs` တွင် သတ်မှတ်ထားသော၊ သဘောတူညီချက်စည်းမျဉ်းများ၊ ငွေချေးစာချုပ်များ ပါဝင်သည်။
+လော့ခ်ချခြင်း၊ ဖြစ်နိုင်ခြေရှိသော အသေးစားငွေပေးချေမှုများနှင့် အခြေချမှုမှတ်တမ်းများ။
 
-The embedded SoraFS worker (`sorafs_node::NodeHandle`) now instantiates a
-`DealEngine` instance for every node process. The engine:
+မြှုပ်ထားသော SoraFS အလုပ်သမား (`sorafs_node::NodeHandle`) သည် ယခု ချက်ချင်းလုပ်ဆောင်ပေးသည်
+node လုပ်ငန်းစဉ်တိုင်းအတွက် `DealEngine` အင်ဂျင်-
 
-- validates and registers deals using `DealTermsV1`;
-- accrues XOR-denominated charges when replication usage is reported;
-- evaluates probabilistic micropayment windows using deterministic
-  Blake3-based sampling; and
-- produces ledger snapshots and settlement payloads suitable for governance
-  publishing.
+- `DealTermsV1` ကို အသုံးပြု၍ အပေးအယူများကို အတည်ပြုပြီး စာရင်းသွင်းပါ။
+- ကူးယူအသုံးပြုမှုကို အစီရင်ခံသောအခါတွင် XOR မှ ကောက်ခံသည့် အခကြေးငွေများ တိုးလာပါသည်။
+- အဆုံးအဖြတ်ကို အသုံးပြု၍ ဖြစ်နိုင်ခြေရှိသော micropayment windows ကို အကဲဖြတ်သည်။
+  Blake3 အခြေခံနမူနာ၊ နှင့်
+- အုပ်ချုပ်ရေးအတွက် သင့်လျော်သော လယ်ဂျာပုံများ နှင့် ငွေပေးချေမှု ဝန်ဆောင်ခများကို ထုတ်ပေးသည်။
+  ထုတ်ဝေခြင်း။
 
-Unit tests cover validation, micropayment selection, and settlement flows so
-operators can exercise the APIs with confidence. Settlements now emit
-`DealSettlementV1` governance payloads, wiring directly into the SF-12
-publishing pipeline, and update the `sorafs.node.deal_*` OpenTelemetry series
-(`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) for Torii dashboards and SLO
-enforcement. Follow-up items focus on auditor-initiated slashing automation and
-coordinating cancellation semantics with governance policy.
+ယူနစ်စစ်ဆေးမှုများသည် တရားဝင်မှု၊ အသေးစားငွေပေးချေမှုရွေးချယ်မှုနှင့် ငွေပေးချေမှုစီးဆင်းမှုများကို အကျုံးဝင်သည်။
+အော်ပရေတာများသည် APIs များကိုယုံကြည်စိတ်ချစွာအသုံးပြုနိုင်သည်။ ယခုအခါ အခြေချနေထိုင်မှုများ ထွက်ပေါ်လာသည်။
+`DealSettlementV1` အုပ်ချုပ်မှု ဝန်ဆောင်ခများ၊ SF-12 သို့ တိုက်ရိုက် ကြိုးသွယ်ခြင်း
+ပိုက်လိုင်းထုတ်ဝေခြင်းနှင့် `sorafs.node.deal_*` OpenTelemetry စီးရီးကို မွမ်းမံပါ။
+(`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`၊
+`deal_outstanding_nano`၊ `deal_bond_slash_nano`၊ `deal_publish_total`) Torii ဒိုင်ခွက်များနှင့် SLO
+ပြဋ္ဌာန်းသည်။ နောက်ဆက်တွဲ အကြောင်းအရာများသည် စာရင်းစစ်မှ အစပြုသော အလိုအလျောက် ဖြတ်တောက်ခြင်း နှင့် အာရုံခံ အရာများ ဖြစ်သည်။
+ပယ်ဖျက်ခြင်းဆိုင်ရာ အယူအဆများကို အုပ်ချုပ်ရေးမူဝါဒနှင့် ညှိနှိုင်းဆောင်ရွက်ခြင်း။
 
-Usage telemetry now also feeds the `sorafs.node.micropayment_*` metrics set:
-`micropayment_charge_nano`, `micropayment_credit_generated_nano`,
-`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, and the ticket counters
-(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). These totals expose the probabilistic
-lottery flow so operators can correlate micropayment wins and credit carry-over
-with settlement outcomes.
+ယခုအသုံးပြုမှု တယ်လီမီတာတိုင်းတာခြင်း `sorafs.node.micropayment_*` တိုင်းထွာသတ်မှတ်မှုကိုလည်း ကျွေးမွေးသည်-
+`micropayment_charge_nano`, `micropayment_credit_generated_nano`၊
+`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`၊
+`micropayment_outstanding_nano` နှင့် လက်မှတ်ကောင်တာများ
+(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`၊
+`micropayment_tickets_duplicate_total`)။ ဤစုစုပေါင်းသည် ဖြစ်နိုင်ချေကို ဖော်ထုတ်သည်။
+ထီစီးဆင်းမှုသည် အော်ပရေတာများသည် အသေးစားငွေပေးချေမှုအနိုင်ရခြင်းနှင့် အကြွေးသယ်ယူခြင်းတို့ကို ဆက်စပ်နိုင်စေပါသည်။
+ဖြေရှင်းမှုရလဒ်များနှင့်အတူ။
 
-## Torii Integration
+## Torii ပေါင်းစပ်မှု
 
-Torii exposes dedicated endpoints so providers can report usage and drive the
-deal lifecycle without bespoke wiring:
+Torii သည် သီးခြား အဆုံးမှတ်များကို ဖော်ထုတ်ပေးသောကြောင့် ဝန်ဆောင်မှုပေးသူများသည် အသုံးပြုမှုကို သတင်းပို့ပြီး မောင်းနှင်နိုင်သည်
+စိတ်ကြိုက်ဝိုင်ယာကြိုးမပါဘဲ lifecycle ကိုင်တွယ်ပါ-
 
-- `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
-  deterministic accounting outcomes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
-  resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
-  ready for governance DAG publication.
-- Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
-  records summarising each usage submission (epoch, metered GiB-hours, ticket
-  counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`
-  records that include the canonical settlement ledger snapshot plus the
-  BLAKE3 digest/size/base64 of the on-disk governance artefact, and
-  `SorafsGatewayEvent::ProofHealth` alerts whenever PDP/PoTR thresholds are
-  exceeded (provider, window, strike/cooldown state, penalty amount). Consumers can
-  filter by provider to react to new telemetry, settlements, or proof-health alerts without polling.
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` တယ်လီမီတာကို လက်ခံပြီး ပြန်ပို့သည်
+  အဆုံးအဖြတ်ပေးသော စာရင်းကိုင်ရလဒ်များ (`UsageOutcome`)။
+- `POST /v1/sorafs/deal/settle` သည် လက်ရှိဝင်းဒိုးကို အပြီးသတ်ပြီး တိုက်ရိုက်ထုတ်လွှင့်သည်။
+  ရလဒ် `DealSettlementRecord` နှင့်အတူ base64-encoded `DealSettlementV1`
+  အုပ်ချုပ်မှု DAG ထုတ်ဝေမှုအတွက် အဆင်သင့်။
+- Torii ၏ `/v1/events/sse` ဖိဒ်သည် ယခု `SorafsGatewayEvent::DealUsage` ကို ထုတ်လွှင့်နေသည်
+  အသုံးပြုမှုတင်ပြချက်တစ်ခုစီကို အကျဉ်းချုံးထားသော မှတ်တမ်းများ (ခေတ်၊ တိုင်းတာထားသော GiB-နာရီ၊ လက်မှတ်
+  ကောင်တာများ၊ အဆုံးအဖြတ်ကောက်ခံမှုများ) `SorafsGatewayEvent::DealSettlement`
+  canonical settlement လယ်ဂျာလျှပ်တစ်ပြက် နှင့် မှတ်တမ်းများ ပါဝင်သည်။
+  BLAKE3 သည် on-disk အုပ်ချုပ်မှုဆိုင်ရာ artefact ၏ digest/size/base64၊
+  PDP/PoTR သတ်မှတ်ချက်များ ရှိနေသည့်အခါတိုင်း `SorafsGatewayEvent::ProofHealth` သတိပေးချက်များ
+  ကျော်လွန်နေသည် (ဝန်ဆောင်မှုပေးသူ၊ ပြတင်းပေါက်၊ သပိတ်မှောက်ခြင်း/အအေးပေးအခြေအနေ၊ ပြစ်ဒဏ်ပမာဏ)။ စားသုံးသူတွေ လုပ်နိုင်မယ်။
+  မဲရုံအသစ်၊ အခြေချနေထိုင်မှုများ သို့မဟုတ် သက်သေပြ- ကျန်းမာရေးသတိပေးချက်များကို ကောက်ယူခြင်းမပြုဘဲ တုံ့ပြန်ရန် ဝန်ဆောင်မှုပေးသူမှ စစ်ထုတ်ပါ။
 
-Both endpoints participate in the SoraFS quota framework via the new
-`torii.sorafs.quota.deal_telemetry` window, allowing operators to tune the
-allowed submission rate per deployment.
+အဆုံးမှတ်နှစ်ခုစလုံးသည် အသစ်မှတစ်ဆင့် SoraFS ခွဲတမ်းဘောင်တွင် ပါဝင်သည်
+`torii.sorafs.quota.deal_telemetry` ဝင်းဒိုးသည် အော်ပရေတာများကို ချိန်ညှိရန် ခွင့်ပြုသည်။
+ဖြန့်ကျက်မှုတစ်ခုလျှင် တင်သွင်းမှုနှုန်းကို ခွင့်ပြုသည်။

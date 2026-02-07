@@ -7,17 +7,18 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4b1191d3475126df594d0f9f81d91f8ebbcd002c74a1f4d4176f2f42a59ca885
 source_last_modified: "2025-12-29T18:16:35.070397+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Feedback Digest (Template)
+# Sənəd Portalına Ön Baxış Rəy Həzmi (Şablon)
 
-Use this template when summarising a preview wave for governance, release
-reviews, or `status.md`. Copy the Markdown into the tracking ticket, replace
-placeholders with real data, and attach the JSON summary exported via
+İdarəetmə, buraxılış üçün ilkin baxış dalğasını ümumiləşdirərkən bu şablondan istifadə edin
+rəylər və ya `status.md`. Markdown-u izləmə biletinə köçürün, dəyişdirin
+real data ilə yer tutucular və vasitəsilə ixrac edilən JSON xülasəsini əlavə edin
 `npm run --prefix docs/portal preview:log -- --summary --summary-json`. The
-`preview:digest` helper (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
-generates the metrics section shown below so you only need to fill in the
-highlights/actions/artefacts rows.
+`preview:digest` köməkçi (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
+aşağıda göstərilən ölçülər bölməsini yaradır, ona görə də yalnız doldurmağınız lazımdır
+vurğulamalar/fəaliyyətlər/artefaktlar sıraları.
 
 ```markdown
 ## Wave preview-<tag> feedback digest (YYYY-MM-DD)
@@ -45,5 +46,5 @@ highlights/actions/artefacts rows.
 
 ```
 
-Keep each digest with the invite-tracking ticket so reviewers and governance can
-replay the evidence trail without digging through CI logs.
+Rəyçilər və idarəçilik edə bilsin ki, hər bir həzmi dəvət izləmə bileti ilə saxlayın
+CI qeydlərini qazmadan sübut izini təkrarlayın.

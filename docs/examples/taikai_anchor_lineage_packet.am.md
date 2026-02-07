@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a2037fed472e37a06559e7cd871c1b916b514b9804f309413fc369d5ded662b6
 source_last_modified: "2025-12-29T18:16:35.095373+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Taikai Anchor Lineage Packet Template (SN13-C)
+# የታይካይ መልህቅ የዘር መስመር ፓኬት አብነት (SN13-ሲ)
 
-Roadmap item **SN13-C — Manifests & SoraNS anchors** requires every alias
-rotation to ship a deterministic evidence bundle. Copy this template into your
-rollout artefact directory (for example
-`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md`) and replace
-the placeholders before submitting the packet to governance.
+የመንገድ ካርታ ንጥል ** SN13-ሲ - መግለጫዎች እና የሶራኤንኤስ መልህቆች ** እያንዳንዱን ስም ይጠይቃል
+የመወሰኛ ማስረጃ ጥቅል ለመላክ ማሽከርከር። ይህንን አብነት ወደ እርስዎ ይቅዱ
+የቅርጻ ቅርጽ ማውጫን መልቀቅ (ለምሳሌ
+`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md`) እና ተካ
+ፓኬጁን ወደ አስተዳደር ከማቅረቡ በፊት ቦታ ያዢዎቹ.
 
-## 1. Metadata
+## 1. ሜታዳታ
 
-| Field | Value |
-|-------|-------|
-| Event ID | `<taikai.event.launch-2026-07-10>` |
-| Stream / rendition | `<main-stage>` |
-| Alias namespace / name | `<sora / docs>` |
-| Evidence directory | `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
-| Operator contact | `<name + email>` |
-| GAR / RPT ticket | `<governance ticket or GAR digest>` |
+| መስክ | ዋጋ |
+|-------|------|
+| የክስተት መታወቂያ | `<taikai.event.launch-2026-07-10>` |
+| ዥረት / አተረጓጎም | `<main-stage>` |
+| ተለዋጭ ስም ቦታ / ስም | `<sora / docs>` |
+| የማስረጃ ማውጫ | `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
+| ኦፕሬተር ግንኙነት | `<name + email>` |
+| GAR / RPT ትኬት | `<governance ticket or GAR digest>` |
 
-## Bundle helper (optional)
+## ጥቅል ረዳት (አማራጭ)
 
-Copy the spool artefacts and emit a JSON (optionally signed) summary before
-filling in the remaining sections:
+የ spool artefacts ይቅዱ እና ከዚህ በፊት JSON (በአማራጭ የተፈረመ) ማጠቃለያ ይላኩ።
+የተቀሩትን ክፍሎች መሙላት;
 
 ```bash
 cargo xtask taikai-anchor-bundle \
@@ -45,67 +46,67 @@ cargo xtask taikai-anchor-bundle \
   --signing-key <hex-ed25519-optional>
 ```
 
-The helper pulls `taikai-anchor-request-*`, `taikai-trm-state-*`,
-`taikai-lineage-*`, envelopes, and sentinels out of the Taikai spool directory
-(`config.da_ingest.manifest_store_dir/taikai`) so the evidence folder already
-contains the exact files referenced below.
+ረዳቱ `taikai-anchor-request-*`፣ `taikai-trm-state-*`፣
+`taikai-lineage-*`፣ ፖስታዎች እና ሴንቴሎች ከታይካይ ስፑል ማውጫ ወጥተዋል
+(`config.da_ingest.manifest_store_dir/taikai`) ስለዚህ የማስረጃ ማህደሩ አስቀድሞ
+ከዚህ በታች የተጠቀሱትን ትክክለኛ ፋይሎች ይዟል.
 
-## 2. Lineage ledger & hint
+## 2. የዘር ሐረግ እና ፍንጭ
 
-Attach both the on-disk lineage ledger and the hint JSON Torii wrote for this
-window. These come directly from
-`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` and
+ሁለቱንም በዲስክ ላይ ያለውን የዘር መዝገብ እና JSON I18NT0000003X የፃፈውን ፍንጭ ያያይዙ
+መስኮት. እነዚህ በቀጥታ የሚመጡት
+`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` እና
 `taikai-lineage-<lane>-<epoch>-<sequence>-<storage_ticket>-<fingerprint>.json`.
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Lineage ledger | `taikai-trm-state-docs.json` | `<sha256>` | Proves the previous manifest digest/window. |
-| Lineage hint | `taikai-lineage-l1-140-6a-b2b.json` | `<sha256>` | Captured before uploading to SoraNS anchor. |
+| Artefact | ፋይል | SHA-256 | ማስታወሻ |
+|---------|-----|-------|
+| የዘር መዝገብ | `taikai-trm-state-docs.json` | `<sha256>` | የቀደመውን አንጸባራቂ መፍጨት/መስኮት ያረጋግጣል። |
+| የዘር ፍንጭ | `taikai-lineage-l1-140-6a-b2b.json` | `<sha256>` | ወደ SoraNS መልህቅ ከመጫኑ በፊት ተይዟል። |
 
 ```bash
 sha256sum artifacts/taikai/anchor/<event>/<alias>/<ts>/taikai-trm-state-*.json \
   | tee artifacts/taikai/anchor/<event>/<alias>/<ts>/hashes/lineage.sha256
 ```
 
-## 3. Anchor payload capture
+## 3. የመልህቅ ጭነት ቀረጻ
 
-Record the POST payload that Torii delivered to the anchor service. The payload
-includes `envelope_base64`, `ssm_base64`, `trm_base64`, and the inline
-`lineage_hint` object; audits rely on this capture to prove the hint that was
-sent to SoraNS. Torii now writes this JSON automatically as
+Torii ወደ መልህቅ አገልግሎት ያደረሰውን የPOST ጭነት ይመዝግቡ። ክፍያው
+`envelope_base64`፣ `ssm_base64`፣ `trm_base64`፣ እና የውስጥ መስመርን ያካትታል።
+`lineage_hint` ነገር; ኦዲቶች የነበረውን ፍንጭ ለማረጋገጥ በዚህ ቀረጻ ላይ ይመረኮዛሉ
+ወደ SoraNS ተልኳል። Torii አሁን ይህንን JSON በራስ ሰር ይጽፋል
 `taikai-anchor-request-<lane>-<epoch>-<sequence>-<ticket>-<fingerprint>.json`
-inside the Taikai spool directory (`config.da_ingest.manifest_store_dir/taikai/`), so
-operators can copy it directly instead of scraping HTTP logs.
+በታይካይ ስፑል ማውጫ (`config.da_ingest.manifest_store_dir/taikai/`) ውስጥ፣ እ.ኤ.አ
+ኦፕሬተሮች የኤችቲቲፒ ምዝግብ ማስታወሻዎችን ከመቧጨር ይልቅ በቀጥታ መቅዳት ይችላሉ።
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Anchor POST | `requests/2026-07-10T18-00Z.json` | `<sha256>` | Raw request copied from `taikai-anchor-request-*.json` (Taikai spool). |
+| Artefact | ፋይል | SHA-256 | ማስታወሻ |
+|---------|-----|-------|
+| መልህቅ POST | `requests/2026-07-10T18-00Z.json` | `<sha256>` | ጥሬ ጥያቄ ከI18NI0000035X (ታይካይ ስፑል) ተቀድቷል። |
 
-## 4. Manifest digest acknowledgement
+## 4. የምግብ መፈጨት እውቅናን ማሳየት
 
-| Field | Value |
-|-------|-------|
-| New manifest digest | `<hex digest>` |
-| Previous manifest digest (from hint) | `<hex digest>` |
-| Window start / end | `<start seq> / <end seq>` |
-| Acceptance timestamp | `<ISO8601>` |
+| መስክ | ዋጋ |
+|-------|------|
+| አዲስ አንጸባራቂ መፍጨት | `<hex digest>` |
+| የቀድሞ አንጸባራቂ መፍጨት (ከፍንጭ) | `<hex digest>` |
+| የመስኮት መጀመሪያ / መጨረሻ | `<start seq> / <end seq>` |
+| የመቀበል ጊዜ ማህተም | `<ISO8601>` |
 
-Reference the ledger/hint hashes recorded above so reviewers can verify the
-window that was superseded.
+ገምጋሚዎች ማረጋገጥ እንዲችሉ ከላይ የተመዘገቡትን የሂሳብ ደብተር/ፍንጭ ሃሽ ይመልከቱ
+የተተካው መስኮት.
 
-## 5. Metrics / `taikai_alias_rotations`
+## 5. መለኪያዎች / `taikai_alias_rotations`
 
-- `taikai_trm_alias_rotations_total` snapshot: `<Prometheus query + export path>`
-- `/status taikai_alias_rotations` dump (per alias): `<file path + hash>`
+- `taikai_trm_alias_rotations_total` ቅጽበታዊ እይታ: I18NI0000042X
+- `/status taikai_alias_rotations` መጣያ (በተለዋጭ ስም)፡ `<file path + hash>`
 
-Provide the Prometheus/Grafana export or `curl` output that shows the counter
-increment and the `/status` array for this alias.
+ቆጣሪውን የሚያሳየውን የPrometheus/Grafana ኤክስፖርት ወይም I18NI0000045X ውፅዓት ያቅርቡ
+ጭማሪ እና የ I18NI0000046X አደራደር ለዚህ ተለዋጭ ስም።
 
-## 6. Manifest for the evidence directory
+## 6. ለማስረጃዎች ማውጫ ይገለጣል
 
-Generate a deterministic manifest of the evidence directory (spool files,
-payload capture, metrics snapshots) so governance can verify every hash without
-unpacking the archive.
+የማስረጃ ዝርዝሩን የሚወስን መግለጫ ማፍለቅ (ስፑል ፋይሎች፣
+ክፍያ ቀረጻ፣ ሜትሪክስ ቅጽበታዊ ገጽ እይታዎች) ስለዚህ አስተዳደር ያለእያንዳንዱን ሃሽ ማረጋገጥ ይችላል።
+ማህደሩን በማንሳት ላይ.
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -114,19 +115,19 @@ python3 scripts/repo_evidence_manifest.py \
   --output artifacts/taikai/anchor/<event>/<alias>/<ts>/manifest.json
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Attach this to the governance packet / GAR. |
+| Artefact | ፋይል | SHA-256 | ማስታወሻ |
+|---------|-----|-------|
+| ማስረጃ አንጸባራቂ | `manifest.json` | `<sha256>` | ይህንን ከአስተዳደር ፓኬት /ጋር ጋር አያይዘው. |
 
-## 7. Checklist
+## 7. የማረጋገጫ ዝርዝር
 
-- [ ] Lineage ledger copied + hashed.
-- [ ] Lineage hint copied + hashed.
-- [ ] Anchor POST payload captured and hashed.
-- [ ] Manifest digest table filled in.
-- [ ] Metrics snapshots exported (`taikai_trm_alias_rotations_total`, `/status`).
-- [ ] Manifest generated with `scripts/repo_evidence_manifest.py`.
-- [ ] Packet uploaded to governance with hashes + contact info.
+- [ ] የዘር መዝገብ ተቀድቷል + hashed።
+- [ ] የዘር ፍንጭ ተቀድቷል + ሃሽ።
+- [ ] መልህቅ POST ክፍያ ተይዟል እና ሃሽድ።
+- [ ] ተሞልቷል የምግብ መፍጫ ሠንጠረዥ።
+- [ ] ሜትሪክስ ቅጽበተ-ፎቶዎች ወደ ውጭ ተልከዋል (`taikai_trm_alias_rotations_total`፣ `/status`)።
+- [ ] አንጸባራቂ የመነጨው በ`scripts/repo_evidence_manifest.py` ነው።
+- [ ] ወደ አስተዳደር የተሰቀለ ፓኬት ከ hashes + የእውቂያ መረጃ ጋር።
 
-Maintaining this template for every alias rotation keeps the SoraNS governance
-bundle reproducible and ties lineage hints directly to the GAR/RPT evidence.
+ይህን አብነት ለእያንዳንዱ ተለዋጭ መጠሪያ ማቆየት የሶራንኤስ አስተዳደርን ይጠብቃል።
+ሊባዛ የሚችል ጥቅል እና የዘር ፍንጮችን በቀጥታ ከGAR/RPT ማስረጃ ጋር ያገናኛል።

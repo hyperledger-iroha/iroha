@@ -9,17 +9,18 @@ source_last_modified: "2026-01-22T16:26:46.508367+00:00"
 translation_last_reviewed: 2026-02-07
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
+translator: machine-google-reviewed
 ---
 
-The portal bundles three interactive surfaces that relay traffic to Torii:
+Портал Torii трафикті жіберетін үш интерактивті бетті жинақтайды:
 
-- **Swagger UI** at `/reference/torii-swagger` renders the signed OpenAPI spec and automatically rewrites requests through the proxy when `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** at `/reference/torii-rapidoc` exposes the same schema with file uploads and content-type selectors that work well for `application/x-norito`.
-- **Try it sandbox** on the Norito overview page provides a lightweight form for ad-hoc REST requests and OAuth-device logins.
+- `/reference/torii-swagger` мекенжайындағы **Swagger UI** қол қойылған OpenAPI спецификациясын көрсетеді және `TRYIT_PROXY_PUBLIC_URL` орнатылған кезде прокси арқылы сұрауларды автоматты түрде қайта жазады.
+- `/reference/torii-rapidoc` мекенжайындағы **RapiDoc** файлды жүктеп салулармен және `application/x-norito` үшін жақсы жұмыс істейтін мазмұн түрі селекторларымен бірдей схеманы көрсетеді.
+- **Оны қолданып көріңіз құмсалғыш** Norito шолу бетіндегі арнайы REST сұраулары мен OAuth құрылғысына кіру үшін жеңіл пішінді қамтамасыз етеді.
 
-All three widgets send requests to the local **Try-It proxy** (`docs/portal/scripts/tryit-proxy.mjs`). The proxy verifies that `static/openapi/torii.json` matches the signed digest in `static/openapi/manifest.json`, enforces a rate limiter, redacts `X-TryIt-Auth` headers in logs, and tags every upstream call with `X-TryIt-Client` so Torii operators can audit traffic sources.
+Барлық үш виджет сұрауларды жергілікті **Try-It проксиге** (`docs/portal/scripts/tryit-proxy.mjs`) жібереді. Прокси `static/openapi/torii.json` `static/openapi/manifest.json` жүйесіндегі қол қойылған дайджестке сәйкес келетінін тексереді, жылдамдықты шектегішті мәжбүрлейді, журналдардағы `X-TryIt-Auth` тақырыптарын өңдейді және `X-TryIt-Client` арқылы әрбір жоғары ағындық қоңырауды белгілейді, осылайша I010 трафик көзін тексере алады.
 
-## Launch the proxy
+## Проксиді іске қосыңыз
 
 ```bash
 cd docs/portal
@@ -34,65 +35,65 @@ export DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1
 npm run tryit-proxy
 ```
 
-- `TRYIT_PROXY_TARGET` is the Torii base URL you want to exercise.
-- `TRYIT_PROXY_ALLOWED_ORIGINS` must include every portal origin (local dev server, production hostname, preview URL) that should embed the console.
-- `TRYIT_PROXY_PUBLIC_URL` is consumed by `docusaurus.config.js` and injected into the widgets via `customFields.tryIt`.
-- `TRYIT_PROXY_BEARER` only loads when `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`; otherwise users must supply their own token via the console or OAuth device flow.
-- `TRYIT_PROXY_CLIENT_ID` sets the `X-TryIt-Client` tag carried on every request.
-  Supplying `X-TryIt-Client` from the browser is allowed but values are trimmed
-  and rejected if they contain control characters.
+- `TRYIT_PROXY_TARGET` - сіз орындағыңыз келетін Torii негізгі URL мекенжайы.
+- `TRYIT_PROXY_ALLOWED_ORIGINS` консоль ендіруі керек әрбір порталдың шығу тегі (жергілікті әзірлеу сервері, өндірістік хост атауы, алдын ала қарау URL мекенжайы) қамтуы керек.
+- `TRYIT_PROXY_PUBLIC_URL` `docusaurus.config.js` арқылы тұтынылады және `customFields.tryIt` арқылы виджеттерге енгізіледі.
+- `TRYIT_PROXY_BEARER` тек `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` кезде жүктейді; әйтпесе пайдаланушылар консоль немесе OAuth құрылғы ағыны арқылы өз таңбалауышын қамтамасыз етуі керек.
+- `TRYIT_PROXY_CLIENT_ID` әрбір сұрауда тасымалданатын `X-TryIt-Client` тегін орнатады.
+  Браузерден `X-TryIt-Client` жеткізуге рұқсат етілген, бірақ мәндер кесілген
+  және оларда басқару таңбалары болса, қабылданбайды.
 
-On startup the proxy runs `verifySpecDigest` and exits with a remediation hint if the manifest is stale. Run `npm run sync-openapi -- --latest` to download the newest Torii specification or pass `TRYIT_PROXY_ALLOW_STALE_SPEC=1` for emergency overrides.
+Іске қосу кезінде прокси `verifySpecDigest` іске қосады және манифест ескірген болса, түзету нұсқауымен шығады. Ең жаңа Torii спецификациясын жүктеп алу үшін `npm run sync-openapi -- --latest` іске қосыңыз немесе төтенше жағдайды қайта анықтау үшін `TRYIT_PROXY_ALLOW_STALE_SPEC=1` өтіңіз.
 
-To update or roll back the proxy target without editing environment files by hand, use the helper:
+Орташа файлдарды қолмен өңдеусіз прокси мақсатты жаңарту немесе кері айналдыру үшін көмекшіні пайдаланыңыз:
 
 ```bash
 npm run manage:tryit-proxy -- update --target https://new.torii.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-## Wire the widgets
+## Виджеттерді жалғаңыз
 
-Serve the portal after the proxy is listening:
+Прокси тыңдап болғаннан кейін порталға қызмет көрсету:
 
 ```bash
 cd docs/portal
 TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 ```
 
-`docusaurus.config.js` exposes the following knobs:
+`docusaurus.config.js` келесі түймелерді көрсетеді:
 
-| Variable | Purpose |
+| Айнымалы | Мақсаты |
 | --- | --- |
-| `TRYIT_PROXY_PUBLIC_URL` | URL injected into Swagger, RapiDoc, and the Try it sandbox. Leave unset to hide the widgets during unauthorised previews. |
-| `TRYIT_PROXY_DEFAULT_BEARER` | Optional default token stored in memory. Requires `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` and the HTTPS-only CSP guard (DOCS-1b) unless you pass `DOCS_SECURITY_ALLOW_INSECURE=1` locally. |
-| `DOCS_OAUTH_*` | Enable the OAuth device flow (`OAuthDeviceLogin` component) so reviewers can mint short-lived tokens without leaving the portal. |
+| `TRYIT_PROXY_PUBLIC_URL` | URL URL Swagger, RapiDoc және Try it құм жәшігіне енгізілген. Рұқсат етілмеген алдын ала қарау кезінде виджеттерді жасыру үшін орнатусыз қалдырыңыз. |
+| `TRYIT_PROXY_DEFAULT_BEARER` | Қосымша әдепкі таңбалауыш жадта сақталады. `DOCS_SECURITY_ALLOW_INSECURE=1` жергілікті түрде өтпесеңіз, `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` және HTTPS тек CSP қорғаушысы (DOCS-1b) қажет. |
+| `DOCS_OAUTH_*` | OAuth құрылғы ағынын (`OAuthDeviceLogin` құрамдас) қосыңыз, осылайша шолушылар порталдан шықпай-ақ қысқа мерзімді таңбалауыштарды жасай алады. |
 
-When the OAuth variables are present the sandbox renders a **Sign in with device code** button that walks through the configured Auth server (see `config/security-helpers.js` for the exact shape). Tokens issued through the device flow are only cached in the browser session.
+OAuth айнымалы мәндері болған кезде құмсалғыш конфигурацияланған аутентификация сервері арқылы өтетін **Құрылғы кодымен кіру** түймешігін көрсетеді (нақты пішінді `config/security-helpers.js` қараңыз). Құрылғы ағыны арқылы шығарылған таңбалауыштар тек шолғыш сеансында кэштеледі.
 
-## Sending Norito-RPC payloads
+## Norito-RPC пайдалы жүктемелерін жіберу
 
-1. Build a `.norito` payload with the CLI or snippets described in the [Norito quickstart](./quickstart.md). The proxy forwards `application/x-norito` bodies unchanged, so you can reuse the same artefact you would post with `curl`.
-2. Open `/reference/torii-rapidoc` (preferred for binary payloads) or `/reference/torii-swagger`.
-3. Select the desired Torii snapshot from the drop-down. Snapshots are signed; the panel shows the manifest digest recorded in `static/openapi/manifest.json`.
-4. Choose the `application/x-norito` content type in the “Try it” drawer, click **Choose File**, and select your payload. The proxy rewrites the request to `/proxy/v1/pipeline/submit` and tags it with `X-TryIt-Client=docs-portal-rapidoc`.
-5. To download Norito responses, set `Accept: application/x-norito`. Swagger/RapiDoc expose the header selector in the same drawer and stream the binary back through the proxy.
+1. [Norito жылдам бастау](./quickstart.md) бөлімінде сипатталған CLI немесе үзінділер арқылы `.norito` пайдалы жүктемесін жасаңыз. Прокси `application/x-norito` денелерін өзгеріссіз қайта жібереді, осылайша `curl` арқылы жариялаған бірдей артефактты қайта пайдалануға болады.
+2. `/reference/torii-rapidoc` (екілік пайдалы жүктемелер үшін қолайлы) немесе `/reference/torii-swagger` ашыңыз.
+3. Ашылмалы тізімнен қажетті Torii суретін таңдаңыз. Суреттерге қол қойылады; панель `static/openapi/manifest.json` ішінде жазылған манифест дайджестін көрсетеді.
+4. “Байқап көру” тартпасында `application/x-norito` мазмұн түрін таңдап, **Файлды таңдау** түймесін басып, пайдалы жүктемені таңдаңыз. Прокси сұрауды `/proxy/v1/pipeline/submit` түріне қайта жазады және оны `X-TryIt-Client=docs-portal-rapidoc` белгісімен белгілейді.
+5. Norito жауаптарын жүктеп алу үшін `Accept: application/x-norito` орнатыңыз. Swagger/RapiDoc бір жәшіктегі тақырып селекторын ашады және екілік файлды прокси арқылы кері ағынмен жібереді.
 
-For JSON-only routes the embedded Try it sandbox is often faster: enter the path (for example, `/v1/accounts/ih58.../assets`), select the HTTP method, paste a JSON body when needed, and hit **Send request** to inspect headers, duration, and payloads inline.
+Тек JSON маршруттары үшін ендірілген "Тапсырма" құмсалғышы жиі жылдамырақ болады: жолды енгізіңіз (мысалы, `/v1/accounts/ih58.../assets`), HTTP әдісін таңдаңыз, қажет болғанда JSON негізгі мәтінін қойыңыз және тақырыптарды, ұзақтығын және кірістірілген пайдалы жүктемелерді тексеру үшін **Сұраныс жіберу** түймесін басыңыз.
 
-## Troubleshooting
+## Ақаулықтарды жою
 
-| Symptom | Likely cause | Remediation |
+| Симптом | Ықтимал себебі | Түзету |
 | --- | --- | --- |
-| Browser console shows CORS errors or the sandbox warns that the proxy URL is missing. | Proxy is not running or the origin is not whitelisted. | Start the proxy, make sure `TRYIT_PROXY_ALLOWED_ORIGINS` covers your portal host, and relaunch `npm run start`. |
-| `npm run tryit-proxy` exits with “digest mismatch”. | The Torii OpenAPI bundle changed upstream. | Run `npm run sync-openapi -- --latest` (or `--version=<tag>`) and retry. |
-| Widgets return `401` or `403`. | Token missing, expired, or insufficient scopes. | Use the OAuth device flow or paste a valid bearer token into the sandbox. For static tokens you must export `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
-| `429 Too Many Requests` from the proxy. | Per-IP rate limit exceeded. | Raise `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` for trusted environments or throttle test scripts. All rate-limit rejections increment `tryit_proxy_rate_limited_total`. |
+| Браузер консолі CORS қателерін көрсетеді немесе құм жәшік прокси URL мекенжайының жоқ екенін ескертеді. | Прокси жұмыс істемейді немесе түпнұсқа ақ тізімде жоқ. | Проксиді іске қосыңыз, `TRYIT_PROXY_ALLOWED_ORIGINS` портал хостыңызды қамтитынына көз жеткізіңіз және `npm run start` қайта іске қосыңыз. |
+| `npm run tryit-proxy` "дайджест сәйкессіздігімен" шығады. | Torii OpenAPI бумасы ағынға қарай өзгерді. | `npm run sync-openapi -- --latest` (немесе `--version=<tag>`) іске қосыңыз және әрекетті қайталаңыз. |
+| Виджеттер `401` немесе `403` қайтарады. | Токен жоқ, мерзімі өтіп кеткен немесе аумақтар жеткіліксіз. | OAuth құрылғы ағынын пайдаланыңыз немесе жарамды тасымалдаушы таңбалауышын құм жәшігіне қойыңыз. Статикалық таңбалауыштар үшін `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` экспорттауыңыз керек. |
+| `429 Too Many Requests` проксиден. | Бір IP жылдамдығы шегінен асып кетті. | Сенімді орталар немесе дроссельді тексеру сценарийлері үшін `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` көтеріңіз. Барлық мөлшерлеме-лимитін қабылдамау өсімі `tryit_proxy_rate_limited_total`. |
 
-## Observability
+## Бақылау мүмкіндігі
 
-- `npm run probe:tryit-proxy` (wrapper around `scripts/tryit-proxy-probe.mjs`) calls `/healthz`, optionally exercises a sample route, and emits Prometheus textfiles for `probe_success` / `probe_duration_seconds`. Configure `TRYIT_PROXY_PROBE_METRICS_FILE` to integrate with node_exporter.
-- Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` to expose counters (`tryit_proxy_requests_total`, `tryit_proxy_rate_limited_total`, `tryit_proxy_upstream_failures_total`) and latency histograms. The `dashboards/grafana/docs_portal.json` board reads these metrics to enforce DOCS-SORA SLOs.
-- Runtime logs live on stdout. Every entry includes the request id, upstream status, authentication source (`default`, `override`, or `client`), and duration; secrets are redacted before emission.
+- `npm run probe:tryit-proxy` (`scripts/tryit-proxy-probe.mjs` айналасындағы орауыш) `/healthz` шақырады, қалауы бойынша үлгі маршрутты орындайды және `probe_success` / I100700. I18NI00000000 үшін Prometheus мәтіндік файлдарын шығарады. Node_exporter бағдарламасымен біріктіру үшін `TRYIT_PROXY_PROBE_METRICS_FILE` конфигурациялаңыз.
+- `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` параметрін санауыштарды (`tryit_proxy_requests_total`, `tryit_proxy_rate_limited_total`, `tryit_proxy_upstream_failures_total`) және кідіріс гистограммаларын көрсету үшін орнатыңыз. `dashboards/grafana/docs_portal.json` тақтасы DOCS-SORA SLO талаптарын орындау үшін осы көрсеткіштерді оқиды.
+- Орындалу уақыты журналдары stdout сайтында тікелей эфирде. Әрбір жазба сұрау идентификаторын, жоғарғы ағын күйін, аутентификация көзін (`default`, `override` немесе `client`) және ұзақтығын қамтиды; құпиялар шығарылғанға дейін өңделеді.
 
-If you need to validate that `application/x-norito` payloads reach Torii unchanged, run the Jest suite (`npm test -- tryit-proxy`) or inspect the fixtures under `docs/portal/scripts/__tests__/tryit-proxy.test.mjs`. The regression tests cover compressed Norito binaries, signed OpenAPI manifests, and proxy downgrade paths so NRPC rollouts keep a permanent evidence trail.
+`application/x-norito` пайдалы жүктемелері өзгеріссіз Torii жететінін растау қажет болса, Jest Suite (`npm test -- tryit-proxy`) іске қосыңыз немесе `docs/portal/scripts/__tests__/tryit-proxy.test.mjs` астындағы арматураларды тексеріңіз. Регрессия сынақтары қысылған Norito екілік файлдарын, қол қойылған OpenAPI манифесттерін және проксиді төмендету жолдарын қамтиды, осылайша NRPC шығарылымдары тұрақты дәлел ізін сақтайды.

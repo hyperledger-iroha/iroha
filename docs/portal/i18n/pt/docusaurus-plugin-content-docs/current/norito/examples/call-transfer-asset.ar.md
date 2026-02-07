@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
-title: استدعاء نقل المضيف من Kotodama
-description: يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+título: استدعاء نقل المضيف من Kotodama
+description: يوضح كيف يمكن لنقطة دخول Kotodama مع التحقق المضمن من بيانات التعريف.
+fonte: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
+Você pode usar o Kotodama para obter mais informações sobre `transfer_asset` بيانات التعريف.
 
 ## جولة دفتر الأستاذ
 
-- موّل سلطة العقد (مثلا `ih58...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
-- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- O código de barras (`ih58...`) está disponível para uso em `CanTransfer` ou `CanTransfer`. Então.
+- Use o `call_transfer_asset` para 5 e coloque-o no `ih58...`. Verifique se o produto está funcionando corretamente.
+- Você pode usar `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` para obter mais informações. التعريف سجل سياق النقل.
 
-## أدلة SDK ذات صلة
+## O SDK está disponível
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Desenvolver o Rust SDK](/sdks/rust)
+- [Implementar para Python SDK](/sdks/python)
+- [Escolha o JavaScript SDK](/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/call-transfer-asset.ko)
+[Kotodama](/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

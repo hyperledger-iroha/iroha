@@ -8,44 +8,45 @@ source_hash: 84fdf4ef66efbbf7adef9cfaf41be0817ac656bec010c0a816d1f5a5310f1875
 source_last_modified: "2026-01-05T09:28:11.885227+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Migration Roadmap"
+translator: machine-google-reviewed
 ---
 
-> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md)-dən uyğunlaşdırılıb.
 
-# SoraFS Migration Roadmap (SF-1)
+# SoraFS Miqrasiya Yol Xəritəsi (SF-1)
 
-This document operationalises the migration guidance captured in
-`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
-execution-ready milestones, gating criteria, and owner checklists so storage,
-artifact hosting to SoraFS-backed publication.
+Bu sənəddə əldə edilən miqrasiya təlimatı fəaliyyət göstərir
+`docs/source/sorafs_architecture_rfc.md`. SF-1 çatdırılmalarını genişləndirir
+icraya hazır mərhələlər, keçid meyarları və sahiblərin yoxlama siyahıları, beləliklə, saxlama,
+SoraFS tərəfindən dəstəklənən nəşrə ev sahibliyi edən artefakt.
 
-The roadmap is intentionally deterministic: every milestone names the required
-artifacts, command invocations, and attestation steps so downstream pipelines
-produce identical outputs and governance retains an auditable trail.
+Yol xəritəsi qəsdən deterministikdir: hər bir mərhələ tələb olunanı adlandırır
+artefaktlar, əmr çağırışları və attestasiya addımları belə aşağı axın boru kəmərləri
+eyni nəticələr verir və idarəetmə audit edilə bilən izi saxlayır.
 
-## Milestone Overview
+## Mərhələ İcmal
 
-| Milestone | Window | Primary Goals | Must Ship | Owners |
-|-----------|--------|---------------|-----------|--------|
-| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and stage alias proofs while pipelines adopt expectation flags. | Nightly fixture verification, council-signed manifests, alias registry staging entries. | Storage, Governance, SDKs |
+| Mərhələ | Pəncərə | Əsas Məqsədlər | Göndərilməli | Sahiblər |
+|----------|--------|---------------|-----------|--------|
+| **M1 – Deterministik İcra** | 7-12 həftə | Boru kəmərləri gözlənilən bayraqları qəbul edərkən, imzalanmış qurğuları və səhnə ləqəbi sübutlarını tətbiq edin. | Gecə fikstür yoxlanışı, şura tərəfindən imzalanmış manifestlər, ləqəb reyestrinin səhnələşdirmə girişləri. | Saxlama, İdarəetmə, SDK |
 
-Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
-changes to this roadmap MUST update the ledger to keep governance and release
-engineering in sync.
+Mərhələ statusu `docs/source/sorafs/migration_ledger.md`-də izlənilir. Hamısı
+bu yol xəritəsinə edilən dəyişikliklər idarəetməni saxlamaq və buraxmaq üçün kitabı yeniləməli olmalıdır
+sinxron mühəndislik.
 
-## Workstreams
+## İş axını
 
-### 2. Deterministic Pinning Adoption
+### 2. Deterministik Pinninqə Qəbul Edilməsi
 
-| Step | Milestone | Description | Owner(s) | Output |
+| Addım | Mərhələ | Təsvir | Sahib(lər) | Çıxış |
 |------|-----------|-------------|----------|--------|
-| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
-| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
-| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
-| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
-| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
+| Quraşdırma məşqləri | M0 | Yerli parça həzmlərini `fixtures/sorafs_chunker` ilə müqayisə edən həftəlik quru qaçışlar. `docs/source/sorafs/reports/` altında hesabat dərc edin. | Saxlama Provayderləri | `determinism-<date>.md` keçid/uğursuz matrisi ilə. |
+| İmzaların tətbiqi | M1 | İmzalar və ya sürüşmə aşkar edilərsə, `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` uğursuz olur. İnkişafı ləğv etmək üçün PR-ə əlavə edilmiş idarəetmədən imtina tələb olunur. | Tooling WG | CI jurnalı, imtina biletinin linki (əgər varsa). |
+| Gözləmə bayraqları | M1 | Boru kəmərləri çıxışları bağlamaq üçün açıq gözləntilərlə `sorafs_manifest_stub` çağırır: | Sənədlər CI | Gözləmə bayraqlarına istinad edən yenilənmiş skriptlər (aşağıdakı əmr blokuna baxın). |
+| Reyestrdə ilk sancma | M2 | `sorafs pin propose` və `sorafs pin approve` manifest təqdimatlarını əhatə edir; CLI defolt olaraq `--require-registry`-dir. | İdarəetmə Əməliyyatları | Reyestr CLI audit jurnalı, uğursuz təkliflər üçün telemetriya. |
+| Müşahidə oluna bilən paritet | M3 | Prometheus/Grafana idarə panelləri yığın inventarları reyestr manifestlərindən ayrıldıqda xəbərdar edir; çağırış üzrə əməliyyatlara ötürülən xəbərdarlıqlar. | Müşahidə qabiliyyəti | İdarə paneli linki, xəbərdarlıq qayda identifikatorları, GameDay nəticələri. |
 
-#### Canonical publishing command
+#### Kanonik nəşriyyat əmri
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -59,50 +60,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Replace the digest, size, and CID values with the expected references recorded in
-the migration ledger entry for the artifact.
+Həzm, ölçü və CID dəyərlərini qeyd edilmiş gözlənilən istinadlarla əvəz edin
+artefakt üçün miqrasiya kitabçası girişi.
 
-### 3. Alias Transition & Communications
+### 3. Ləqəb Keçid və Əlaqələr
 
-| Step | Milestone | Description | Owner(s) | Output |
+| Addım | Mərhələ | Təsvir | Sahib(lər) | Çıxış |
 |------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`). | Governance, Docs | Proof bundle stored next to manifest + ledger comment with alias name. |
-| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
+| Səhnələşdirmədə ləqəb sübutları | M1 | Pin Registry quruluş mühitində ləqəb iddialarını qeyd edin və manifestlərə Merkle sübutlarını əlavə edin (`--alias`). | İdarəetmə, Sənədlər | Sübut paketi manifest + ləqəb adı ilə kitab şərhinin yanında saxlanılır. |
+| Sübutun icrası | M2 | Şlüzlər təzə `Sora-Proof` başlıqları olmayan manifestləri rədd edir; CI sübutları əldə etmək üçün `sorafs alias verify` addımını qazanır. | Şəbəkə | Şlüz konfiqurasiya yaması + doğrulama uğurunu əldə edən CI çıxışı. |
 
-### 4. Communication & Audit
+### 4. Rabitə və Audit
 
-- **Ledger discipline:** every state change (fixture drift, registry submission,
-  alias activation) must append a dated note to
+- **Mühasibat uçotu nizam-intizamı:** hər bir vəziyyət dəyişikliyi (fiksator sürüşməsi, reyestrin təqdim edilməsi,
+  ləqəb aktivləşdirilməsi) tarixli qeyd əlavə etməlidir
   `docs/source/sorafs/migration_ledger.md`.
-- **Governance minutes:** council sessions approving pin registry changes or
-  alias policies must reference both this roadmap and the ledger.
-- **External comms:** DevRel publishes status updates at each milestone (blog +
-  changelog excerpt) highlighting deterministic guarantees and alias timelines.
+- **İdarəetmə protokolu:** pin reyestrində dəyişiklikləri təsdiq edən şura iclasları və ya
+  ləqəb siyasətləri həm bu yol xəritəsinə, həm də kitab kitabçasına istinad etməlidir.
+- **Xarici rabitə:** DevRel hər bir mərhələdə status yeniləmələrini dərc edir (blog +
+  dəyişiklik qeydindən çıxarış) deterministik zəmanətləri və ləqəb vaxt qrafiklərini vurğulayır.
 
-## Dependencies & Risks
+## Asılılıqlar və Risklər
 
-| Dependency | Impact | Mitigation |
+| Asılılıq | Təsir | Azaldılması |
 |------------|--------|------------|
-| Pin Registry contract availability | Blocks M2 pin-first rollout. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
-| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
-| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
+| Pin Registry müqaviləsinin mövcudluğu | M2 pin-ilk buraxılışını bloklayır. | Təkrar testləri ilə M2-dən əvvəl mərhələli müqavilə; reqressiya olmayana qədər zərf geri qaytarılmasını təmin edin. |
+| Şura imza açarları | Manifest zərfləri və reyestr təsdiqləri üçün tələb olunur. | `docs/source/sorafs/signing_ceremony.md` sənədində imzalanma mərasimi; üst-üstə düşmə və kitab qeydi ilə düymələri döndürün. |
+| SDK buraxılış kadansı | Müştərilər M3-dən əvvəl ləqəb sübutlarına riayət etməlidirlər. | SDK buraxılış pəncərələrini mərhələ qapıları ilə uyğunlaşdırın; şablonları buraxmaq üçün miqrasiya yoxlama siyahıları əlavə edin. |
 
-Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
-and should be cross-referenced when adjustments are made.
+Qalıq risklər və azalma tədbirləri `docs/source/sorafs_architecture_rfc.md`-də əks olunur
+və düzəlişlər edildikdə çarpaz istinad edilməlidir.
 
-## Exit Criteria Checklist
+## Meyarlar Yoxlama Siyahısından çıxın
 
-| Milestone | Criteria |
-|-----------|----------|
-| M1 | - Nightly fixture job green for seven consecutive days. <br /> - Staging alias proofs verified in CI. <br /> - Governance ratifies expectation flag policy. |
+| Mərhələ | Meyarlar |
+|----------|----------|
+| M1 | - Ardıcıl yeddi gün ərzində gecə fikstür işi yaşıl. <br /> - CI-də təsdiqlənmiş ləqəb sübutları. <br /> - İdarəetmə gözləmə bayrağı siyasətini təsdiq edir. |
 
-## Change Management
+## Dəyişiklik İdarəetmə
 
-1. Propose adjustments via PR updating this file **and**
+1. Bu faylı yeniləyərək PR vasitəsilə düzəlişlər təklif edin **və**
    `docs/source/sorafs/migration_ledger.md`.
-2. Link supporting governance minutes and CI evidence in the PR description.
-3. On merge, notify storage + DevRel mailing list with summary and expected
-   operator actions.
+2. PR təsvirində idarəetmə protokollarını və CI sübutlarını dəstəkləyən əlaqə.
+3. Birləşmə zamanı xülasə və gözlənilən yaddaşa + DevRel poçt siyahısına bildirin
+   operator hərəkətləri.
 
-Following this procedure ensures the SoraFS rollout remains deterministic,
-auditable, and transparent across teams participating in the Nexus launch.
+Bu prosedurdan sonra SoraFS buraxılışının deterministik qalmasını təmin edir,
+Nexus buraxılışında iştirak edən komandalar arasında audit edilə bilən və şəffafdır.

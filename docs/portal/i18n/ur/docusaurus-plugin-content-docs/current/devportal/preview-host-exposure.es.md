@@ -4,20 +4,22 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-host-exposure.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Guia de exposicion del host de preview
+# پیش نظارہ میزبان نمائش گائیڈ
 
-El roadmap DOCS-SORA exige que cada preview publico use el mismo bundle verificado por checksum que los revisores prueban localmente. Usa este runbook despues de completar el onboarding de revisores (y el ticket de aprobacion de invitaciones) para poner en linea el host de preview beta.
+DOCS-SORA روڈ میپ کا تقاضا ہے کہ ہر عوامی پیش نظارہ وہی چیکسم کی تصدیق شدہ بنڈل استعمال کریں جس کا جائزہ لینے والے مقامی طور پر ٹیسٹ کرتے ہیں۔ بیٹا پیش نظارہ میزبان آن لائن لانے کے لئے جائزہ لینے والے آن بورڈنگ (اور دعوت نامہ کی منظوری کا ٹکٹ) مکمل کرنے کے بعد اس رن بک کا استعمال کریں۔
 
-## Requisitos previos
+## شرائط
 
-- Ola de onboarding de revisores aprobada y registrada en el tracker de preview.
-- Ultimo build del portal presente en `docs/portal/build/` y checksum verificado (`build/checksums.sha256`).
-- Credenciales de preview SoraFS (URL de Torii, autoridad, llave privada, epoch enviado) almacenadas en variables de entorno o en un config JSON como [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- Ticket de cambio DNS abierto con el hostname deseado (`docs-preview.sora.link`, `docs.iroha.tech`, etc.) mas contactos on-call.
+- جائزہ لینے والے آن بورڈنگ ویو کی منظوری اور پیش نظارہ ٹریکر میں رجسٹرڈ۔
+- `docs/portal/build/` اور تصدیق شدہ چیکسم (`build/checksums.sha256`) میں موجود پورٹل کی تازہ ترین تعمیر۔
+- SoraFS پیش نظارہ اسناد (Torii URL ، اتھارٹی ، نجی کلید ، بھیجے گئے عہد) کو ماحولیاتی متغیرات میں یا JSON کنفیگ جیسے [`docs/examples/sorafs_preview_publish.json`] (../../../examples/sorafs_preview_publish.json) میں محفوظ کیا گیا ہے۔
+- اوپن ڈی این ایس مطلوبہ میزبان نام (`docs-preview.sora.link` ، `docs.iroha.tech` ، وغیرہ) کے ساتھ ٹکٹ تبدیل کریں۔
 
-## Paso 1 - Construir y verificar el bundle
+## مرحلہ 1 - بنڈل کی تعمیر اور تصدیق کریں
 
 ```bash
 cd docs/portal
@@ -27,11 +29,11 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-El script de verificacion se niega a continuar cuando el manifiesto de checksum falta o fue manipulado, manteniendo auditado cada artefacto de preview.
+توثیق کا اسکرپٹ جاری رکھنے سے انکار کرتا ہے جب ہر پیش نظارہ نمونے کے آڈٹ کو برقرار رکھتے ہوئے ، جب چیکم مینی فیسٹ غائب ہو یا اس میں چھیڑ چھاڑ ہو۔
 
-## Paso 2 - Empaquetar los artefactos SoraFS
+## مرحلہ 2 - نمونے SoraFS کو پیکج کریں
 
-Convierte el sitio estatico en un par CAR/manifest determinista. `ARTIFACT_DIR` por defecto es `docs/portal/artifacts/`.
+جامد سائٹ کو ایک عین مطابق کار/مینی فیسٹ جوڑی میں تبدیل کرتا ہے۔ `ARTIFACT_DIR` `docs/portal/artifacts/` سے پہلے سے طے شدہ ہے۔
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --skip-submit
@@ -39,43 +41,41 @@ Convierte el sitio estatico en un par CAR/manifest determinista. `ARTIFACT_DIR` 
 node scripts/generate-preview-descriptor.mjs       --manifest artifacts/checksums.sha256       --archive artifacts/sorafs/portal.tar.gz       --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Adjunta `portal.car`, `portal.manifest.*`, el descriptor y el manifiesto de checksum al ticket de la ola de preview.
+`portal.car` ، `portal.manifest.*` ، وضاحتی اور چیکسم پیش نظارہ لہر کے ٹکٹ سے ظاہر ہوتا ہے۔
 
-## Paso 3 - Publicar el alias de preview
+## مرحلہ 3 - پیش نظارہ عرف شائع کریں
 
-Repite el helper de pin **sin** `--skip-submit` cuando estes listo para exponer el host. Proporciona el config JSON o flags CLI explicitos:
+جب آپ میزبان کو بے نقاب کرنے کے لئے تیار ہوں تو ** `--skip-submit` کے بغیر پن مددگار ** دہرائیں۔ JSON تشکیل یا واضح CLI جھنڈے فراہم کریں:
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --config ~/secrets/sorafs_preview_publish.json
 ```
 
-El comando escribe `portal.pin.report.json`, `portal.manifest.submit.summary.json` y `portal.submit.response.json`, que deben viajar con el bundle de evidencia de invitaciones.
+کمانڈ `portal.pin.report.json` ، `portal.manifest.submit.summary.json` اور `portal.submit.response.json` لکھتا ہے ، جس میں دعوت نامہ کے بنڈل کے ساتھ سفر کرنا چاہئے۔
 
-## Paso 4 - Generar el plan de corte DNS
+## مرحلہ 4 - DNS سلائسنگ پلان تیار کریں
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs       --dns-hostname docs.iroha.tech       --dns-zone sora.link       --dns-change-ticket DOCS-SORA-Preview       --dns-cutover-window "2026-03-05 18:00Z"       --dns-ops-contact "pagerduty:sre-docs"       --manifest artifacts/sorafs/portal.manifest.to       --cache-purge-endpoint https://cache.api/purge       --cache-purge-auth-env CACHE_PURGE_TOKEN       --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Comparte el JSON resultante con Ops para que el cambio DNS referencie el digest del manifiesto exacto. Cuando reutilices un descriptor anterior como fuente de rollback, agrega `--previous-dns-plan path/to/previous.json`.
+نتیجے میں JSON کو اوپس کے ساتھ بانٹیں تاکہ DNS تبدیلی عین مطابق ظاہر ہضم کا حوالہ دے۔ جب کسی رول بیک ماخذ کے طور پر کسی سابقہ ​​ڈسکرپٹر کو دوبارہ استعمال کرتے ہو تو ، `--previous-dns-plan path/to/previous.json` شامل کریں۔
 
-## Paso 5 - Probar el host desplegado
+## مرحلہ 5 - تعینات میزبان کی جانچ کریں
 
 ```bash
 npm run probe:portal --       --base-url=https://docs-preview.sora.link       --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-El probe confirma el tag de release servido, headers CSP y metadatos de firma. Repite el comando desde dos regiones (o adjunta la salida de curl) para que los auditores vean que el edge cache esta caliente.
+تحقیقات پیش کردہ ریلیز ٹیگ ، سی ایس پی ہیڈر اور دستخطی میٹا ڈیٹا کی تصدیق کرتی ہے۔ دو خطوں سے کمانڈ دہرائیں (یا کرل آؤٹ پٹ منسلک کریں) تاکہ آڈیٹرز دیکھیں کہ ایج کیشے گرم ہے۔
 
-## Bundle de evidencia
+## ثبوت بنڈل
 
-Incluye los siguientes artefactos en el ticket de la ola de preview y referencialos en el email de invitacion:
-
-| Artefacto | Proposito |
-|----------|-----------|
-| `build/checksums.sha256` | Demuestra que el bundle coincide con el build de CI. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Payload canonico SoraFS + manifiesto. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Muestra que el envio del manifiesto + el alias binding se completaron. |
-| `artifacts/sorafs/portal.dns-cutover.json` | Metadatos DNS (ticket, ventana, contactos), resumen de promocion de ruta (`Sora-Route-Binding`), el puntero `route_plan` (plan JSON + plantillas de header), info de purge de cache e instrucciones de rollback para Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Descriptor firmado que enlaza el archive + checksum. |
-| Salida de `probe` | Confirma que el host en vivo anuncia el tag de release esperado. |
+پیش نظارہ لہر کے ٹکٹ میں درج ذیل نمونے شامل کریں اور دعوت نامے کے ای میل میں ان کا حوالہ دیں:| نمونہ | مقصد |
+| ---------- | ----------- |
+| `build/checksums.sha256` | یہ ظاہر کرتا ہے کہ بنڈل سی آئی بلڈ سے مماثل ہے۔ |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | کیننیکل پے لوڈ SoraFS + مینی فیسٹ۔ |
+| `portal.pin.report.json` ، `portal.manifest.submit.summary.json` ، `portal.submit.response.json` | اس سے ظاہر ہوتا ہے کہ ظاہر جمع کرانے + عرف بائنڈنگ مکمل ہوچکی ہے۔ |
+| `artifacts/sorafs/portal.dns-cutover.json` | ڈی این ایس میٹا ڈیٹا (ٹکٹ ، ونڈو ، رابطے) ، روٹ پروموشن سمری (`Sora-Route-Binding`) ، `route_plan` پوائنٹر (JSON پلان + ہیڈر ٹیمپلیٹس) ، کیشے پرج انفارمیشن اور او پی ایس کے لئے رول بیک ہدایات۔ |
+| `artifacts/sorafs/preview-descriptor.json` | دستخط شدہ ڈسریکٹر جو فائل + چیکسم کو جوڑتا ہے۔ |
+| `probe` کی آؤٹ پٹ | تصدیق کرتا ہے کہ براہ راست میزبان متوقع ریلیز ٹیگ کا اعلان کرتا ہے۔ |

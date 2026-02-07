@@ -7,17 +7,18 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4b1191d3475126df594d0f9f81d91f8ebbcd002c74a1f4d4176f2f42a59ca885
 source_last_modified: "2025-12-29T18:16:35.070397+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Feedback Digest (Template)
+# ཡིག་ཆ་ཚུ་ དྲྭ་ཚིགས་སྔོན་ལྟ་འཆར་སྣང་འཇུ་བྱེད་ (ཊེམ་པེལེཊི་)
 
-Use this template when summarising a preview wave for governance, release
-reviews, or `status.md`. Copy the Markdown into the tracking ticket, replace
-placeholders with real data, and attach the JSON summary exported via
-`npm run --prefix docs/portal preview:log -- --summary --summary-json`. The
-`preview:digest` helper (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
-generates the metrics section shown below so you only need to fill in the
-highlights/actions/artefacts rows.
+གཞུང་སྐྱོང་གི་དོན་ལུ་ སྔོན་ལྟ་རླབས་ཅིག་བཅུད་བསྡུས་འབད་བའི་སྐབས་ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ།
+བསྐྱར་ཞིབ་ཚུ་, ཡང་ན་ `status.md`. མརཀ་ཌའོན་འདི་ བརྟག་ཞིབ་ཀྱི་ཤོག་འཛིན་ནང་ལུ་འདྲ་བཤུས་རྐྱབས།
+གནད་སྡུད་ངོ་མ་ཡོད་མི་ས་གནས་ཚུ་དང་ ཇེ་ཨེསི་ཨོ་ཨེན་བཅུད་བསྡུས་འདི་བརྒྱུད་དེ་ ཕྱིར་འདྲེན་འབད་ཡོདཔ་ཨིན།
+`npm run --prefix docs/portal preview:log -- --summary --summary-json`. ཚིག༌ཕྲད
+I18NI0000003X གྲོགས་རམ་འབད་མི་ (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
+འོག་གི་མེ་ཊིགསི་དབྱེ་ཚན་འདི་བཟོ་བཏོན་འབདཝ་ལས་ ཁྱོད་ཀྱིས་ ནང་ལུ་རྐྱངམ་ཅིག་བཀང་དགོཔ་ཨིན།
+འོད་རྟགས་ཚུ་/བྱ་བ་/སྒྱུ་རྩལ་ཚུ་གིས་ གྱལ་འབདཝ་ཨིན།
 
 ```markdown
 ## Wave preview-<tag> feedback digest (YYYY-MM-DD)
@@ -45,5 +46,5 @@ highlights/actions/artefacts rows.
 
 ```
 
-Keep each digest with the invite-tracking ticket so reviewers and governance can
-replay the evidence trail without digging through CI logs.
+འཇུ་བྱེད་རེ་རེ་བཞིན་ མགྲོན་བརྡ་རྗེས་མའི་ ཤོག་འཛིན་དེ་ བསྐྱར་ཞིབ་དང་ གཞུང་སྐྱོང་ འབད་ཚུགས།
+CI དྲན་ཐོ་ཚུ་བརྒྱུད་དེ་ ས་བརྐོ་མ་དགོ་པར་ སྒྲུབ་བྱེད་ལམ་འདི་ ལོག་གཏང་དགོ།

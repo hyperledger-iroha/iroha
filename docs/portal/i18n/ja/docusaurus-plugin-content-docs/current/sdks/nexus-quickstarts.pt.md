@@ -4,11 +4,13 @@ direction: ltr
 source: docs/portal/docs/sdks/nexus-quickstarts.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-A guia completa esta em `docs/source/nexus_sdk_quickstarts.md`. Este resumo do portal destaca os prerequisitos compartilhados e os comandos por SDK para que os desenvolvedores verifiquem sua configuracao rapidamente.
+`docs/source/nexus_sdk_quickstarts.md` の情報は完了しました。ポータル デスタカ OS の前提条件を確認し、SDK パラメタの OS コマンドを迅速に設定検証します。
 
-## Configuracao compartilhada
+## コンパルティリハーダを構成する
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Baixe o pacote de configuracao do Nexus, instale as dependencias de cada SDK e garanta que os certificados TLS correspondam ao perfil de release (veja `docs/source/sora_nexus_operator_onboarding.md`).
+Nexus の設定を行い、SDK の依存関係としてインストールし、OS 証明書の TLS 対応リリース (veja `docs/source/sora_nexus_operator_onboarding.md`) を確認します。
 
-## Rust
+## 錆びる
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,7 +30,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+参照: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -36,17 +38,17 @@ Refs: `docs/source/sdk/rust.md`
 npm run demo:nexus
 ```
 
-O script instancia `ToriiClient` com as variaveis de ambiente acima e imprime o bloco mais recente.
+O スクリプト インスタンス `ToriiClient` は、最近の環境や世界のさまざまな環境に対応しています。
 
-## Swift
+## スウィフト
 
 ```bash
 make swift-nexus-demo
 ```
 
-Usa `Torii.Client` do `IrohaSwift` para buscar `FindNetworkStatus`.
+米国 `Torii.Client` は `IrohaSwift` パラバスカー `FindNetworkStatus` を実行します。
 
-## Android
+## アンドロイド
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -54,7 +56,7 @@ Usa `Torii.Client` do `IrohaSwift` para buscar `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Executa o teste de dispositivo gerenciado apontando para o endpoint de staging do Nexus.
+エンドポイントのステージング Nexus を実行します。
 
 ## CLI
 
@@ -65,10 +67,10 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Solucao de problemas
+## 問題の解決策
 
-- Falhas TLS -> confirme o bundle CA do tarball de release do Nexus.
-- `ERR_UNKNOWN_LANE` -> passe `--lane-id`/`--dataspace-id` quando o roteamento multi-lane for imposto.
-- `ERR_SETTLEMENT_PAUSED` -> verifique [Nexus operations](../nexus/nexus-operations) para o processo de incidente; a governanca pode ter pausado a lane.
+- Falhas TLS -> バンドル CA が tarball をリリースし、Nexus を確認します。
+- `ERR_UNKNOWN_LANE` -> passe `--lane-id`/`--dataspace-id` Quando o Roteamento インポスト用マルチレーン。
+- `ERR_SETTLEMENT_PAUSED` -> 検証 [Nexus 操作](../nexus/nexus-operations) インシデント処理パラメタ。ガバナンカ ポデ テル パウサド ア レーン。
 
-Para mais contexto e explicacoes por SDK veja `docs/source/nexus_sdk_quickstarts.md`.
+SDK veja `docs/source/nexus_sdk_quickstarts.md` のコンテキストと説明が表示されます。

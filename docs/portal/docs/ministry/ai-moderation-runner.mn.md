@@ -9,64 +9,65 @@ source_last_modified: "2025-12-29T18:16:35.119787+00:00"
 translation_last_reviewed: 2026-02-07
 title: AI Moderation Runner Specification
 summary: Deterministic moderation committee design for the Ministry of Information (MINFO-1) deliverable.
+translator: machine-google-reviewed
 ---
 
-# AI Moderation Runner Specification
+# AI Moderation Runner техникийн үзүүлэлт
 
-This specification fulfils the documentation portion of **MINFO-1 — Establish AI
-moderation baseline**. It defines the deterministic execution contract for the
-Ministry of Information moderation service so every gateway can run identical
-pipelines before appeals and transparency flows (SFM-4/SFM-4b). All behaviour
-described here is normative unless explicitly marked as informational.
+Энэхүү тодорхойлолт нь **MINFO-1 — AI үүсгэн байгуулах баримт бичгийн хэсгийг хангаж байна
+зохицуулалтын суурь үзүүлэлт**. Энэ нь тодорхойлогч гүйцэтгэлийн гэрээг тодорхойлдог
+Мэдээллийн яамны зохицуулалтын үйлчилгээ тул гарц бүр адилхан ажиллах боломжтой
+давж заалдах болон ил тод байдлын урсгалын өмнө дамжуулах хоолой (SFM-4/SFM-4b). Бүх зан байдал
+Мэдээллийн чанартай гэж тодорхой заагаагүй бол энд тайлбарласан нь норматив болно.
 
-## 1. Goals & Scope
-- Provide a reproducible moderation committee that evaluates gateway content
-  (objects, manifests, metadata, audio) using heterogeneous models.
-- Guarantee deterministic execution across operators: fixed opset, seeded
-  tokenisation, bounded precision, and versioned artefacts.
-- Produce audit-ready artefacts: manifests, scorecards, calibration evidence,
-  and transparency digests suitable for publication in the governance DAG.
-- Surface telemetry so SREs can detect drift, false positives, and downtime
-  without collecting raw user data.
+## 1. Зорилго ба хамрах хүрээ
+- Гарцын агуулгыг үнэлдэг, давтагдах боломжтой зохицуулах хороогоор хангана
+  (объект, манифест, мета өгөгдөл, аудио) янз бүрийн загваруудыг ашиглан.
+- Операторуудын хооронд детерминистик гүйцэтгэлийг баталгаажуулах: тогтмол опсет, үржүүлсэн
+  токенизаци, хязгаарлагдмал нарийвчлал, хувилбарт олдворууд.
+- Аудит хийхэд бэлэн олдворуудыг гаргах: манифест, онооны хуудас, шалгалт тохируулгын нотлох баримт,
+  засаглалын DAG-д нийтлэхэд тохиромжтой ил тод байдлын тойм.
+- Гадаргуугийн телеметрийн тусламжтайгаар SRE нь шилжилт хөдөлгөөн, худал эерэг болон зогсолтыг илрүүлэх боломжтой
+  хэрэглэгчийн түүхий мэдээллийг цуглуулахгүйгээр.
 
-## 2. Deterministic Execution Contract
-- **Runtime:** ONNX Runtime 1.19.x (CPU backend) compiled with AVX2 disabled and
-  `--enable-extended-minimal-build` to keep the opcode set fixed. CUDA/Metal
-  runtimes are explicitly disallowed in production.
-- **Opset:** `opset=17`. Models targeting newer opsets must be down-converted
-  and validated before admission.
-- **Seed derivation:** Every evaluation derives an RNG seed from
-  `BLAKE3(content_digest || manifest_id || run_nonce)` where `run_nonce` comes
-  from the governance-approved manifest. Seeds feed all stochastic components
-  (beam search, dropout toggles) so results are bit-for-bit reproducible.
-- **Threading:** One worker per model. Concurrency is coordinated by the runner
-  orchestrator to avoid shared-state race conditions. BLAS libraries operate in
-  single-threaded mode.
-- **Numerics:** FP16 accumulation is forbidden. Use FP32 intermediates and clamp
-  outputs to four decimal places before aggregation.
+## 2. Детерминист гүйцэтгэлийн гэрээ
+- **Ажиллах хугацаа:** AVX2-г идэвхгүй болгосон, эмхэтгэсэн ONNX Runtime 1.19.x (CPU backend)
+  Опкодын багцыг тогтмол байлгахын тулд `--enable-extended-minimal-build`. CUDA/металл
+  үйлдвэрлэлд ажиллах цагийг шууд хориглодог.
+- **Опсет:** `opset=17`. Шинэ опсетуудад чиглэсэн загваруудыг доош хөрвүүлсэн байх ёстой
+  элсэлтийн өмнө баталгаажуулсан.
+- **Үрийн гарал үүсэл:** Үнэлгээ бүр нь RNG үрийг авдаг
+  `BLAKE3(content_digest || manifest_id || run_nonce)` хаана `run_nonce` ирдэг
+  засаглалын баталсан манифестаас. Үр нь бүх стохастик бүрэлдэхүүн хэсгүүдийг тэжээдэг
+  (цацрагт хайлт, завсарлага сэлгэх) тул үр дүн нь битээр дахин давтагдах боломжтой.
+- ** Threading:** Нэг загварт нэг ажилчин. Зэрэгцээ байдлыг гүйгч зохицуулдаг
+  хамтын муж улсын уралдааны нөхцлөөс зайлсхийхийн тулд найруулагч. BLAS номын сангууд ажилладаг
+  нэг урсгалтай горим.
+- **Тоонууд:** FP16 хуримтлуулахыг хориглоно. FP32 завсрын бүтээгдэхүүн ба хавчаарыг ашиглана
+  нэгтгэхээс өмнө аравтын дөрвөн орон руу гарна.
 
-## 3. Committee Composition
-The baseline committee contains three model families. Governance may add
-models, but the minimum quorum must remain satisfied.
+## 3. Хорооны бүрэлдэхүүн
+Суурь хороонд гурван загвар гэр бүл багтдаг. Засаглал нэмж болно
+загварууд, гэхдээ хамгийн бага чуулга хангагдсан хэвээр байх ёстой.
 
-| Family | Baseline Model | Purpose |
+| Гэр бүл | Үндсэн загвар | Зорилго |
 |--------|----------------|---------|
-| Vision | OpenCLIP ViT-H/14 (safety fine-tuned) | Detects visual contraband, violence, CSAM indicators. |
-| Multimodal | LLaVA-1.6 34B Safety | Captures text + image interactions, contextual cues, harassment. |
-| Perceptual | pHash + aHash + NeuralHash-lite ensemble | Fast near-duplicate detection and recall of known bad material. |
+| Алсын хараа | OpenCLIP ViT-H/14 (аюулгүй байдлыг нарийн тохируулсан) | Харааны хууль бус бараа, хүчирхийлэл, CSAM үзүүлэлтүүдийг илрүүлдэг. |
+| Multimodal | LLaVA-1.6 34B Аюулгүй байдал | Текст + зургийн харилцан үйлчлэл, контекстийн дохиолол, дарамтыг авдаг. |
+| Мэдрэхүйн | pHash + aHash + NeuralHash-lite чуулга | Мэдэгдэж буй муу материалыг хурдан шуурхай илрүүлэх, эргүүлэн татах. |
 
-Each model entry specifies:
+Загварын оруулга бүр дараахь зүйлийг заана.
 - `model_id` (UUID)
-- `artifact_digest` (BLAKE3-256 of OCI image)
-- `weights_digest` (BLAKE3-256 of ONNX or merged safetensors blob)
-- `opset` (must equal `17`)
-- `weight` (committee weight, default `1.0`)
-- `critical_labels` (set of labels that immediately trigger `Escalate`)
-- `max_eval_ms` (guardrail for deterministic watchdogs)
+- `artifact_digest` (OCI зургийн BLAKE3-256)
+- `weights_digest` (ONNX-ийн BLAKE3-256 эсвэл нэгдсэн хамгаалалттай блок)
+- `opset` (`17`-тэй тэнцүү байх ёстой)
+- `weight` (хорооны жин, анхдагч `1.0`)
+- `critical_labels` (`Escalate`-г шууд идэвхжүүлдэг шошгоны багц)
+- `max_eval_ms` (детерминист харуулын хашлага)
 
-## 4. Norito Manifests & Results
+## 4. Norito Манифест ба Үр дүн
 
-### 4.1 Committee Manifest
+### 4.1 Хорооны манифест
 ```norito
 struct AiModerationManifestV1 {
     manifest_id: Uuid,
@@ -93,7 +94,7 @@ struct AiModerationModelV1 {
 }
 ```
 
-### 4.2 Evaluation Result
+### 4.2 Үнэлгээний үр дүн
 ```norito
 struct AiModerationResultV1 {
     manifest_id: Uuid,
@@ -119,14 +120,14 @@ struct AiModerationModelScoreV1 {
 }
 ```
 
-The runner MUST emit a deterministic `AiModerationDigestV1` (BLAKE3 over the
-serialized result) for transparency logs and append results to the moderation
-ledger when the verdict is not `pass`.
+Гүйгч нь тодорхойлогч `AiModerationDigestV1` (BLAKE3) ялгаруулах ЗААВАЛ
+цувралын үр дүн) ил тод байдлын бүртгэлд зориулж үр дүнг тохируулгад хавсаргана
+Шүүхийн шийдвэр `pass` биш бол дэвтэр.
 
-### 4.3 Adversarial Corpus Manifest
+### 4.3 Эсэргүүцлийн корпусын манифест
 
-Gateway operators now ingest a companion manifest that enumerates perceptual
-hash/embedding “families” derived from the calibration runs:
+Гарцын операторууд одоо перцепцийг тоочдог хамтрагч манифестийг залгиж байна
+Шалгалт тохируулгын үр дүнд бий болсон "гэр бүл"-ийг хэш/суулгах:
 
 ```norito
 struct AdversarialCorpusManifestV1 {
@@ -153,138 +154,136 @@ struct AdversarialPerceptualVariantV1 {
 }
 ```
 
-The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
-validated via `AdversarialCorpusManifestV1::validate()`. The manifest allows the
-gateway denylist loader to populate `perceptual_family` entries that block
-entire near-duplicate clusters instead of individual bytes. A runnable fixture
-(`docs/examples/ai_moderation_perceptual_registry_202602.json`) demonstrates
-the expected layout and feeds directly into the sample gateway denylist.
+Уг схем нь `crates/iroha_data_model/src/sorafs/moderation.rs`-д амьдардаг бөгөөд ийм байна
+`AdversarialCorpusManifestV1::validate()`-ээр баталгаажуулсан. Манифест нь үүнийг зөвшөөрдөг
+блоклосон `perceptual_family` оруулгуудыг бөглөх гарц үгүйсгэх жагсаалт дуудагч
+бие даасан байтуудын оронд бараг давхардсан кластерууд. Ажиллах боломжтой бэхэлгээ
+(`docs/examples/ai_moderation_perceptual_registry_202602.json`) харуулж байна
+хүлээгдэж буй байршил болон шууд дээж гарц үгүйсгэх жагсаалт руу тэжээгддэг.
 
-## 5. Execution Pipeline
-1. Load `AiModerationManifestV1` from the governance DAG. Reject if
-   `runner_hash` or `runtime_version` mismatch the deployed binary.
-2. Fetch model artefacts via OCI digest, verifying digests before loading.
-3. Construct evaluation batches by content type; ordering must sort by
-   `(content_digest, manifest_id)` to ensure deterministic aggregation.
-4. Execute each model with the derived seed. For perceptual hashes, combine
-   the ensemble via majority vote -> score in `[0,1]`.
-5. Aggregate scores into `combined_score` using weighted clipped ratio:
+## 5. Гүйцэтгэлийн шугам хоолой
+1. Засаглалын DAG-аас `AiModerationManifestV1` ачаална. Хэрэв татгалзах
+   `runner_hash` эсвэл `runtime_version` суулгасан хоёртын файлтай таарахгүй байна.
+2. Загварын олдворуудыг ачаалахаас өмнө баталгаажуулж, OCI дижестээр дамжуулан татаж аваарай.
+3. Үнэлгээний багцыг агуулгын төрлөөр бүрдүүлэх; захиалгаар эрэмбэлэх ёстой
+   `(content_digest, manifest_id)` нь тодорхойлогдсон нэгтгэлийг баталгаажуулна.
+4. Загвар бүрийг гарган авсан үрээр гүйцэтгэнэ. Ойлгомжтой хэшүүдийн хувьд нэгтгэнэ үү
+   олонхийн саналаар чуулга -> оноо `[0,1]`.
+5. Жинлэсэн хасагдсан харьцааг ашиглан оноог `combined_score` болгон нэгтгэнэ үү:
    ```
    combined = Σ_i weight_i * clamp(score_i / threshold_i, 0, 1) / Σ_i weight_i
    ```
-6. Produce `ModerationVerdictV1`:
-   - `escalate` if any `critical_labels` fire or `combined ≥ thresholds.escalate`.
-   - `quarantine` if above `thresholds.quarantine` but below `escalate`.
-   - `pass` otherwise.
-7. Persist `AiModerationResultV1` and enqueue downstream processes:
-   - Quarantine service (if verdict escalates/quarantines)
-   - Transparency log writer (`ModerationLedgerV1`)
-   - Telemetry exporter
+6. `ModerationVerdictV1` үйлдвэрлэх:
+   - `escalate` хэрэв байгаа бол `critical_labels` эсвэл `combined ≥ thresholds.escalate`.
+   - `quarantine` `thresholds.quarantine`-ээс дээш, гэхдээ `escalate`-ээс доош байвал.
+   - `pass` өөрөөр.
+7. `AiModerationResultV1`-г үргэлжлүүлж, урсгалын доод процессуудыг дараалалд оруулаарай:
+   - Хорио цээрийн үйлчилгээ (хэрэв шүүхийн шийдвэр даамжирвал/хорио цээрийн дэглэм тогтоовол)
+   - Ил тод байдлын бүртгэл бичигч (`ModerationLedgerV1`)
+   - Телеметрийн экспортлогч
 
-## 6. Calibration & Evaluation
-- **Datasets:** Baseline calibration uses the mixed corpus curated with policy
-  team approval. Reference recorded in `calibration_dataset`.
-- **Metrics:** Compute Brier score, Expected Calibration Error (ECE), and AUROC
-  per model and combined verdict. Monthly recalibration MUST keep
-  `Brier ≤ 0.18` and `ECE ≤ 0.05`. Results stored in the SoraFS reports tree
-  (e.g., [February 2026 calibration](../sorafs/reports/ai-moderation-calibration-202602.md)).
-- **Schedule:** Monthly recalibration (first Monday). Emergency recalibration
-  allowed if drift alerts fire.
-- **Process:** Run deterministic evaluation pipeline on calibration set,
-  regenerate `thresholds`, update manifest, stage changes for governance vote.
+## 6. Тохируулга & Үнэлгээ
+- **Өгөгдлийн багц:** Суурь шалгалт тохируулга нь бодлогод тохируулсан холимог корпусыг ашигладаг
+  багийн зөвшөөрөл. Лавлагаа `calibration_dataset`-д бүртгэгдсэн.
+- **Хэмжээ:** Тооцоолох Бриерийн оноо, Хүлээгдэж буй шалгалт тохируулгын алдаа (ECE) болон AUROC
+  загвар тус бүр болон хосолсон дүгнэлт. Сар бүр дахин тохируулга хийх ёстой
+  `Brier ≤ 0.18` болон `ECE ≤ 0.05`. SoraFS тайлангийн модонд хадгалагдсан үр дүн
+  (жишээ нь, [2026 оны 2-р сарын шалгалт тохируулга](../sorafs/reports/ai-moderation-calibration-202602.md)).
+- **Хуваарь:** Сар бүрийн дахин тохируулга (эхний даваа). Яаралтай дахин тохируулга хийх
+  Хэрэв дрейф гал түймрийн дохио өгвөл зөвшөөрнө.
+- **Процесс:** Шалгалт тохируулгын багц дээр тодорхойлогч үнэлгээний дамжуулах хоолойг ажиллуулах,
+  `thresholds` дахин үүсгэх, манифестыг шинэчлэх, засаглалын санал хураалтад өөрчлөлт оруулах үе шат.
 
-## 7. Packaging & Deployment
-- Build OCI images via `docker buildx bake -f docker/ai_moderation.hcl`.
-- Images include:
-  - Locked Python env (`poetry.lock`) or Rust binary `Cargo.lock`.
-  - `models/` directory with hashed ONNX weights.
-  - Entry point `run_moderation.py` (or Rust equivalent) exposing HTTP/gRPC API.
-- Publish artefacts to `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- Runner binary ships as part of `sorafs_ai_runner` crate. The build pipeline
-  embeds manifest hash in the binary (exposed via `/v1/info`).
+## 7. Савлах, байршуулах
+- `docker buildx bake -f docker/ai_moderation.hcl`-ээр дамжуулан OCI зургийг бүтээх.
+- Зурганд:
+  - Түгжигдсэн Python env (`poetry.lock`) эсвэл Rust хоёртын `Cargo.lock`.
+  - Хашлагдсан ONNX жин бүхий `models/` лавлах.
+  - `run_moderation.py` (эсвэл зэвтэй тэнцэх) нэвтрэх цэг нь HTTP/gRPC API-г харуулж байна.
+- `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`-д олдворуудыг нийтлэх.
+- `sorafs_ai_runner` хайрцагны нэг хэсэг болох гүйгч хоёртын хөлөг онгоц. Барилгын шугам хоолой
+  манифест хэшийг хоёртын системд оруулдаг (`/v1/info`-ээр дамжуулан ил гарсан).
 
-## 8. Telemetry & Observability
-- Prometheus metrics:
+## 8. Телеметр ба ажиглалт
+- Prometheus хэмжүүр:
   - `moderation_requests_total{verdict}`
   - `moderation_model_score_bucket{model_id,label}`
   - `moderation_combined_score_bucket`
   - `moderation_inference_latency_seconds_bucket`
   - `moderation_runner_manifest_info{manifest_id, runtime_version}`
-- Logs: JSON lines with `request_id`, `manifest_id`, `verdict`, and the digest
-  of the stored result. Raw scores are redacted to two decimal places in logs.
-- Dashboards stored in `dashboards/grafana/ministry_moderation_overview.json`
-  (published alongside the first calibration report).
-- Alert thresholds:
-  - Missing ingestion (`moderation_requests_total` stalled for 10 minutes).
-  - Drift detection (average model score delta >20% versus rolling 7-day mean).
-  - False-positive backlog (quarantine queue > 50 items for >30 minutes).
+- Бүртгэлүүд: `request_id`, `manifest_id`, `verdict` бүхий JSON мөрүүд болон дижест
+  хадгалагдсан үр дүнгийн. Түүхий оноог логонд аравтын хоёр орон хүртэл бууруулна.
+- `dashboards/grafana/ministry_moderation_overview.json`-д хадгалагдсан хяналтын самбар
+  (эхний шалгалт тохируулгын тайлангийн хамт нийтлэгдсэн).
+- Анхааруулгын босго:
+  - Залгих дутуу (`moderation_requests_total` 10 минутын турш зогссон).
+  - Дрифт илрүүлэх (загварын дундаж оноо нь 7 өдрийн дундажтай харьцуулахад дельта >20%).
+  - Хуурамч эерэг хоцрогдол (хорио цээрийн дараалал > 50 зүйл > 30 минут).
 
-## 9. Governance & Change Control
-- Manifests require dual signatures: Ministry council member + moderation SRE
-  lead. Signatures recorded in `AiModerationManifestV1.governance_signature`.
-- Changes follow `ModerationManifestChangeProposalV1` through Torii. Hashes
-  entered into the governance DAG; deployment blocked until the proposal is
-  enacted.
-- Runner binaries embed `runner_hash`; CI refuses deployment if hashes diverge.
-- Transparency: weekly `ModerationScorecardV1` summarising volume, verdict mix,
-  and appeal outcomes. Published to Sora Parliament portal.
+## 9. Засаглал ба өөрчлөлтийн хяналт
+- Манифестэд давхар гарын үсэг шаардлагатай: Яамны зөвлөлийн гишүүн + зохицуулагч SRE
+  хар тугалга. `AiModerationManifestV1.governance_signature`-д бүртгэгдсэн гарын үсэг.
+- `ModerationManifestChangeProposalV1`-ээс Torii хүртэлх өөрчлөлтүүд. Хэш
+  засаглалын DAG-д орсон; санал гартал байршуулалтыг блоклосон
+  хуульчилсан.
+- Runner хоёртын файлыг `runner_hash` оруулах; Хэшүүд зөрүүтэй байвал CI нь байршуулахаас татгалздаг.
+- Ил тод байдал: долоо хоног бүр `ModerationScorecardV1` хураангуй хэмжээ, шийдвэрийн холимог,
+  болон давж заалдах үр дүн. Сора Парламентын порталд нийтэлсэн.
 
-## 10. Security & Privacy
-- Content digests use BLAKE3. Raw payloads never persist outside quarantine.
-- Access to quarantine requires Just-In-Time approvals; all accesses logged.
-- Runner sandboxes untrusted content, enforcing 512 MiB memory limits and 120s
-  wall-clock guards.
-- Differential privacy is NOT applied here; gateways rely on quarantine + audit
-  workflows instead. Redaction policies follow the gateway compliance plan
-  (`docs/source/sorafs_gateway_compliance_plan.md`; portal copy pending).
+## 10. Аюулгүй байдал ба нууцлал
+- Агуулга нь BLAKE3-ийг ашигладаг. Түүхий ачаа нь хорио цээрийн гадуур хэзээ ч үлддэг.
+- Хорио цээрийн дэглэмд нэвтрэхийн тулд цаг тухайд нь зөвшөөрөл авах шаардлагатай; бүх хандалтыг бүртгэсэн.
+- Runner нь найдвартай бус контентыг хамгаалж, 512 МБ санах ойн хязгаар болон 120 секундын багтаамжтай.
+  ханын цагны хамгаалагч.
+- Энд ялгавартай нууцлалыг ашиглахгүй; гарц нь хорио цээрийн + аудит дээр тулгуурладаг
+  оронд нь ажлын урсгал. Засварлах бодлого нь гарцыг дагаж мөрдөх төлөвлөгөөг дагаж мөрддөг
+  (`docs/source/sorafs_gateway_compliance_plan.md`; портал хуулбар хүлээгдэж байна).
 
-## 11. Calibration Publication (2026-02)
-- **Manifest:** `docs/examples/ai_moderation_calibration_manifest_202602.json`
-  records the governance-signed `AiModerationManifestV1` (ID
-  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`), dataset reference
-  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`, runner hash
-  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20`, and the
-  2026-02 calibration thresholds (`quarantine = 0.42`, `escalate = 0.78`).
-- **Scoreboard:** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
-  plus the human-readable report in
+## 11. Шалгалт тохируулгын хэвлэл (2026-02)
+- **Манифест:** `docs/examples/ai_moderation_calibration_manifest_202602.json`
+  засаглалын гарын үсэгтэй `AiModerationManifestV1` (ID
+  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`), өгөгдлийн багцын лавлагаа
+  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`, гүйгч хэш
+  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20`, мөн
+  2026-02 оны шалгалт тохируулгын босго (`quarantine = 0.42`, `escalate = 0.78`).
+- **Онооны самбар:** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
+  дээр нь хүний унших боломжтой тайлан
   `[SoraFS Reports › AI Moderation Calibration 2026-02](../sorafs/reports/ai-moderation-calibration-202602.md)`
-  capture Brier, ECE, AUROC, and verdict mix for every model. Combined metrics
-  met the targets (`Brier = 0.126`, `ECE = 0.034`).
-- **Dashboards & alerts:** `dashboards/grafana/ministry_moderation_overview.json`
-  and `dashboards/alerts/ministry_moderation_rules.yml` (with regression tests in
-  `dashboards/alerts/tests/ministry_moderation_rules.test.yml`) provide the
-  moderation ingest/latency/drift monitoring story required for rollout.
-
-## 12. Reproducibility schema & validator (MINFO-1b)
-- Canonical Norito types now live alongside the rest of the SoraFS schema in
+  загвар бүрийн Brier, ECE, AUROC болон шийдвэрийн холимогийг авах. Хосолсон хэмжүүрүүд
+  зорилтот түвшинд хүрсэн (`Brier = 0.126`, `ECE = 0.034`).
+- **Хяналтын самбар ба анхааруулга:** `dashboards/grafana/ministry_moderation_overview.json`
+  болон `dashboards/alerts/ministry_moderation_rules.yml` (регрессийн тесттэй
+  `dashboards/alerts/tests/ministry_moderation_rules.test.yml`) хангана
+  Дамжуулахад шаардлагатай залгих/хоцролт/дрифт хянах түүх.## 12. Дахин үржихүйн схем ба баталгаажуулагч (MINFO-1b)
+- Каноник Norito төрлүүд одоо SoraFS схемийн бусадтай зэрэгцэн ажиллаж байна.
   `crates/iroha_data_model/src/sorafs/moderation.rs`. The
-  `ModerationReproManifestV1`/`ModerationReproBodyV1` structs capture the
-  manifest UUID, runner hash, model digests, threshold set, and seed material.
-  `ModerationReproManifestV1::validate` enforces schema version
-  (`MODERATION_REPRO_MANIFEST_VERSION_V1`), ensures every manifest carries at
-  least one model and signer, and verifies each `SignatureOf<ModerationReproBodyV1>`
-  before returning a machine-readable summary.
-- Operators can invoke the shared validator via
+  `ModerationReproManifestV1`/`ModerationReproBodyV1` бүтэц нь
+  манифест UUID, гүйгч хэш, загвар дижест, босго багц, үрийн материал.
+  `ModerationReproManifestV1::validate` нь схемийн хувилбарыг хэрэгжүүлдэг
+  (`MODERATION_REPRO_MANIFEST_VERSION_V1`) нь манифест бүрийг цаг хугацаатай байлгахыг баталгаажуулдаг
+  хамгийн багадаа нэг загвар болон гарын үсэг зурсан бөгөөд `SignatureOf<ModerationReproBodyV1>` бүрийг баталгаажуулна
+  машинаар уншигдахуйц хураангуйг буцаахаас өмнө.
+- Операторууд хуваалцсан баталгаажуулагчийг дамжуулан дуудаж болно
   `sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]`
-  (implemented in `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`). The CLI
-  accepts either the JSON artefacts published under
-  `docs/examples/ai_moderation_calibration_manifest_202602.json` or the raw
-  Norito encoding and prints the model/signature counts alongside the manifest
-  timestamp once validation succeeds.
-- Gateways and automation hook into the same helper so reproducibility manifests
-  can be rejected deterministically when schemas drift, digests are missing, or
-  signatures fail verification.
-- Adversarial corpus bundles follow the same pattern:
+  (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`-д хэрэгжүүлсэн). CLI
+  доор нийтлэгдсэн JSON олдворуудыг хүлээн зөвшөөрдөг
+  `docs/examples/ai_moderation_calibration_manifest_202602.json` эсвэл түүхий
+  Norito кодчилол нь манифестын хажууд загвар/гарын үсгийн тоог хэвлэдэг.
+  Баталгаажуулалт амжилттай болсны дараа цагийн тэмдэг.
+- Гарцууд болон автоматжуулалт нь ижил туслагчтай холбогддог тул дахин давтагдах чадвар илэрдэг
+  Схемүүд шилжих, дижест байхгүй, эсвэл байхгүй үед тодорхой хэмжээгээр татгалзаж болно
+  гарын үсгийг баталгаажуулж чадаагүй.
+- Өрсөлдөгч корпусын багцууд нь ижил хэв маягийг дагадаг:
   `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
-  parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
-  manifests that omit families, variants, or fingerprint metadata. Successful
-  runs emit the issued-at timestamp, cohort label, and the family/variant counts
-  so operators can pin the evidence before updating the gateway denylist entries
-  described in Section 4.3.
+  `AdversarialCorpusManifestV1`-г задлан, схемийн хувилбарыг хэрэгжүүлж, татгалздаг
+  гэр бүл, хувилбарууд эсвэл хурууны хээний мета өгөгдлийг орхисон илрэл. Амжилттай
+  гүйлтүүд нь гаргасан цагийн тэмдэг, когортын шошго, гэр бүл/хувилбарын тоог ялгаруулдаг
+  Тиймээс операторууд гарцыг үгүйсгэх жагсаалтын оруулгуудыг шинэчлэхээс өмнө нотлох баримтыг тогтоох боломжтой
+  4.3-т тодорхойлсон.
 
-## 13. Open Follow-Ups
-- Monthly recalibration windows after 2026-03-02 continue to follow the
-  procedure in Section 6; publish `ai-moderation-calibration-<YYYYMM>.md`
-  alongside updated manifest/scorecard bundles under the SoraFS reports tree.
-- MINFO-1b and MINFO-1c (reproducibility manifest validators plus adversarial
-  corpus registry) remain tracked separately in the roadmap.
+## 13. Нээлттэй дагаж мөрдөх
+- 2026-03-02-ны өдрөөс хойш сар бүр дахин шалгалт тохируулга хийх цонхнууд үргэлжилсээр байна
+  6-р хэсэгт заасан журам; `ai-moderation-calibration-<YYYYMM>.md` нийтлэх
+  SoraFS тайлангийн модны доор шинэчлэгдсэн манифест/онолын картын багцын хамт.
+- MINFO-1b ба MINFO-1c (дахин давтагдах чадварын манифест баталгаажуулагч ба өрсөлдөгчид)
+  корпусын бүртгэл) замын зураглалд тусад нь дагаж мөрддөг.

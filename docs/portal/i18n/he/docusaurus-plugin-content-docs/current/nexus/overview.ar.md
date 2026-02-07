@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/nexus/overview.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -14,7 +16,7 @@ description: ملخص عالي المستوى لمعمارية Iroha 3 (Sora Nex
 
 توسع Nexus (Iroha 3) Iroha 2 بتنفيذ متعدد المسارات، ومساحات بيانات محددة بالحوكمة، وأدوات مشتركة عبر كل SDK. تعكس هذه الصفحة الملخص الجديد `docs/source/nexus_overview.md` في المستودع الأحادي حتى يتمكن قراء البوابة من فهم كيفية ترابط أجزاء المعمارية بسرعة.
 
-## خطوط الإصدارات
+## תקשורת
 
 - **Iroha 2** - عمليات نشر مستضافة ذاتيا للكونسورتيوم أو الشبكات الخاصة.
 - **Iroha 3 / Sora Nexus** - الشبكة العامة متعددة المسارات حيث يسجل المشغلون مساحات البيانات (DS) ويرثون أدوات مشتركة للحوكمة والتسوية والملاحظة.
@@ -23,19 +25,17 @@ description: ملخص عالي المستوى لمعمارية Iroha 3 (Sora Nex
 ## اللبنات الأساسية
 
 | المكون | الملخص | روابط البوابة |
-|-----------|---------|--------------|
+|--------|--------|----------------|
 | مساحة البيانات (DS) | نطاق تنفيذ/تخزين محدد بالحوكمة يمتلك مسارا واحدا أو أكثر، ويعلن مجموعات المدققين وفئة الخصوصية وسياسة الرسوم + DA. | راجع [Nexus spec](./nexus-spec) لمخطط البيان. |
-| Lane | شريحة تنفيذ حتمية تصدر تعهدات يرتبها حلقة NPoS العالمية. تشمل فئات Lane `default_public` و`public_custom` و`private_permissioned` و`hybrid_confidential`. | يلتقط [نموذج Lane](./nexus-lane-model) الهندسة وبوادئ التخزين والاحتفاظ. |
+| ליין | شريحة تنفيذ حتمية تصدر تعهدات يرتبها حلقة NPoS العالمية. تشمل فئات Lane `default_public` و`public_custom` و`private_permissioned` و`hybrid_confidential`. | يلتقط [نموذج Lane](./nexus-lane-model) الهندسة وبوادئ التخزين والاحتفاظ. |
 | خطة الانتقال | معرفات placeholder ومراحل توجيه وتعبئة بملفين تتبع كيف تتطور عمليات النشر أحادية المسار إلى Nexus. | توثق [ملاحظات الانتقال](./nexus-transition-notes) كل مرحلة ترحيل. |
-| Space Directory | عقد سجل يخزن بيانات DS ونسخها. يقوم المشغلون بمطابقة إدخالات الكتالوج مع هذا الدليل قبل الانضمام. | متعقب فروقات البيان موجود تحت `docs/source/project_tracker/nexus_config_deltas/`. |
+| ספריית החלל | عقد سجل يخزن بيانات DS ونسخها. يقوم المشغلون بمطابقة إدخالات الكتالوج مع هذا الدليل قبل الانضمام. | متعقب فروقات البيان موجود تحت `docs/source/project_tracker/nexus_config_deltas/`. |
 | كتالوج المسارات | قسم الإعداد `[nexus]` يربط معرّفات Lane بالأسماء المستعارة وسياسات التوجيه وعتبات DA. يقوم `irohad --sora --config … --trace-config` بطباعة الكتالوج المحسوم لأغراض التدقيق. | استخدم `docs/source/sora_nexus_operator_onboarding.md` لشرح سطر الأوامر. |
 | موجه التسوية | منسق تحويلات XOR الذي يربط مسارات CBDC الخاصة بمسارات السيولة العامة. | يوضح `docs/source/cbdc_lane_playbook.md` مقابض السياسة وبوابات القياس. |
-| القياس/SLOs | لوحات وأجهزة إنذار تحت `dashboards/grafana/nexus_*.json` تلتقط ارتفاع المسارات وتراكم DA وزمن تسوية الصفقات وعمق طابور الحوكمة. | يوضح [خطة معالجة القياس](./nexus-telemetry-remediation) اللوحات والتنبيهات وأدلة التدقيق. |
+| القياس/SLOs | תקליטורים ותקשורת תקשורת `dashboards/grafana/nexus_*.json` תקשורת תקשורת ותקשורת DA ותקשורת وعمق طابور الحوكمة. | يوضح [خطة معالجة القياس](./nexus-telemetry-remediation) اللوحات والتنبيهات وأدلة التدقيق. |
 
-## لقطة الإطلاق
-
-| المرحلة | التركيز | معايير الخروج |
-|-------|-------|---------------|
+## لقطة الإطلاق| المرحلة | التركيز | معايير الخروج |
+|-------|-------|-------------|
 | N0 - بيتا مغلقة | Registrar يديره المجلس (`.sora`)، انضمام يدوي للمشغلين، كتالوج مسارات ثابت. | بيانات DS موقعة + عمليات تسليم حوكمة مجربة. |
 | N1 - إطلاق عام | يضيف لاحقات `.nexus`، مزادات، registrar بالخدمة الذاتية، توصيل تسوية XOR. | اختبارات تزامن resolver/gateway، لوحات تسوية الفواتير، تمارين محاكاة للنزاعات. |
 | N2 - توسع | يقدم `.dao`، واجهات API للموزعين، تحليلات، بوابة نزاعات، بطاقات أداء المشرفين. | مصنوعات امتثال بإصدارات، مجموعة أدوات هيئة السياسات متاحة، تقارير شفافية الخزانة. |
@@ -54,7 +54,7 @@ description: ملخص عالي المستوى لمعمارية Iroha 3 (Sora Nex
 - النظرة العامة الرسمية: `docs/source/nexus_overview.md`
 - المواصفة التفصيلية: [./nexus-spec](./nexus-spec)
 - هندسة المسارات: [./nexus-lane-model](./nexus-lane-model)
-- خطة الانتقال: [./nexus-transition-notes](./nexus-transition-notes)
+- תכונה: [./nexus-transition-notes](./nexus-transition-notes)
 - خطة معالجة القياس: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- دليل العمليات: [./nexus-operations](./nexus-operations)
+- מידע כללי: [./nexus-operations](./nexus-operations)
 - دليل انضمام المشغلين: `docs/source/sora_nexus_operator_onboarding.md`

@@ -10,166 +10,163 @@ translation_last_reviewed: 2026-02-07
 id: nexus-transition-notes
 title: Nexus transition notes
 description: Mirror of `docs/source/nexus_transition_notes.md`, covering Phase B transition evidence, audit schedule, and mitigations.
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Nexus Transition Notes
+# Nexus བསྒྱུར་བའི་དྲན་ཐོ།
 
-This log tracks the lingering **Phase B — Nexus Transition Foundations** work
-until the multi-lane launch checklist finishes. It supplements the milestone
-entries in `roadmap.md` and keeps the evidence referenced by B1–B4 in one place
-so governance, SRE, and SDK leads can share the same source of truth.
+དྲན་ཐོ་འདི་གིས་ ལིང་ལིང་ **PhaseB — I18NT0000005X བསྒྱུར་བཅོས་གཞི་རྟེན** ལཱ་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+སྣ་མང་ལམ་ཐིག་འགོ་བཙུགས་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་མཇུག་མ་བསྡུ་ཚུན་ཚོད་། འདི་གིས་ ལམ་རིམ་འདི་ ལྷན་ཐབས་འབདཝ་ཨིན།
+I18NI000000011X ནང་ ཐོ་བཀོད་ཚུ་དང་ B1–B4 གིས་ ཁུངས་གཏུག་འབད་བའི་ སྒྲུབ་བྱེད་ཚུ་ ས་གནས་གཅིག་ནང་ བཞགཔ་ཨིན།
+དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་དང་ SRE དེ་ལས་ SDK གི་འགོ་ཁྲིད་ཚུ་གིས་ བདེན་པ་གི་འབྱུང་ཁུངས་གཅིག་མཚུངས་སྦེ་ བརྗེ་སོར་འབད་ཚུགས།
 
-## Scope & Cadence
+## ཁྱབ་ཁོངས།
 
-- Covers the routed-trace audits and telemetry guardrails (B1/B2), the
-  governance-approved configuration delta set (B3), and the multi-lane launch
-  rehearsal follow-ups (B4).
-- Replaces the temporary cadence note that previously lived here; as of the 2026
-  Q1 audit the detailed report resides in
-  `docs/source/nexus_routed_trace_audit_report_2026q1.md`, while this page owns
-  the running schedule and mitigation register.
-- Update the tables after each routed-trace window, governance vote, or launch
-  rehearsal. Whenever artefacts move, mirror the new location inside this page
-  so downstream docs (status, dashboards, SDK portals) can link to a stable
-  anchor.
+- འགྲུལ་ལམ་རྗེས་མའི་རྩིས་ཞིབ་དང་ བརྒྱུད་འཕྲིན་སྲུང་སྐྱོབ་ (B1/B2),
+  གཞུང་སྐྱོང་གིས་ ཆ་འཇོག་འབད་ཡོད་པའི་རིམ་སྒྲིག་ཌེལ་ཊ་ཆ་ཚན་ (B3) དང་ སྣ་མང་ལམ་ཐིག་འགོ་བཙུགས་ནི།
+  བསྐྱར་སྦྱོང་རྗེས་འཇུག་ (B4).
+- ཧེ་མ་ནཱ་ལུ་སྡོད་མི་ གནས་སྐབས་ཀྱི་ གདམ་ཁའི་དྲན་ཐོ་འདི་ ཚབ་བཙུགས། ༢༠༢༦ ལོའི་ནང་།
+  ཀིའུ་༡ རྩིས་ཞིབ་སྙན་ཞུ་འདི་ སྤྱི་ལོ་༢༠༠༨ ལུ་ ཡོདཔ་ཨིན།
+  `docs/source/nexus_routed_trace_audit_report_2026q1.md`, with འདི་ཤོག་ལེབ་ཀྱི་ཡོད།
+  རྒྱུག་པའི་ལས་རིམ་དང་ མར་ཕབ་ཀྱི་ཐོ་འགོད།
+- འགྲུལ་ལམ་འཚོལ་ཞིབ་སྒོ་སྒྲིག་རེ་རེ་གི་ཤུལ་ལས་ ཐིག་ཁྲམ་ཚུ་ དུས་མཐུན་བཟོ། གཞུང་སྐྱོང་ཚོགས་རྒྱན་ ཡང་ན་ འགོ་འབྱེད་འབད།
+  བསྐྱར་སྦྱོང་། ཅ་རྙིང་ཚུ་སྤོ་བཤུད་འབད་བའི་སྐབས་ ཤོག་ལེབ་འདི་གི་ནང་ན་ ས་གནས་གསརཔ་འདི་ མེ་ལོང་ནང་ བཀལ་དགོ།
+  དེ་འབདཝ་ལས་ མར་འབབ་ཀྱི་ ཌོཀ་ (གནས་ཚད་དང་ ཌེཤ་བོརཌི་ ཨེསི་ཌི་ཀེ་ དྲྭ་ཚིགས་) ཚུ་ བརྟན་ཏོག་ཏོ་ཅིག་ལུ་ འབྲེལ་མཐུད་འབད་ཚུགས།
+  གསལ༌བཤད༌པ།
 
-## Evidence Snapshot (2026 Q1–Q2)
+## བདེན་དཔང་པར་ལེན་ (༢༠༢༦ Q1–Q2)
 
-| Workstream | Evidence | Owner(s) | Status | Notes |
-|------------|----------|----------|--------|-------|
-| **B1 — Routed-trace audits** | `docs/source/nexus_routed_trace_audit_report_2026q1.md`, `docs/examples/nexus_audit_outcomes/` | @telemetry-ops, @governance | ✅ Complete (Q1 2026) | Three audit windows recorded; TLS lag from `TRACE-CONFIG-DELTA` closed during the Q2 rerun. |
-| **B2 — Telemetry remediation & guardrails** | `docs/source/nexus_telemetry_remediation_plan.md`, `docs/source/telemetry.md`, `dashboards/alerts/nexus_audit_rules.yml` | @sre-core, @telemetry-ops | ✅ Complete | Alert pack, diff bot policy, and OTLP batch sizing (`nexus.scheduler.headroom` log + Grafana headroom panel) shipped; no open waivers. |
-| **B3 — Config delta approvals** | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`, `defaults/nexus/config.toml`, `defaults/nexus/genesis.json` | @release-eng, @governance | ✅ Complete | GOV-2026-03-19 vote captured; signed bundle feeds the telemetry pack noted below. |
-| **B4 — Multi-lane launch rehearsal** | `docs/source/runbooks/nexus_multilane_rehearsal.md`, `docs/source/project_tracker/nexus_rehearsal_2026q1.md`, `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`, `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`, `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | @nexus-core, @sre-core | ✅ Complete (Q2 2026) | Q2 canary rerun closed the TLS lag mitigation; validator manifest + `.sha256` capture slot range 912–936, workload seed `NEXUS-REH-2026Q2`, and the recorded TLS profile hash from the rerun. |
+| ལས་རིམ། | སྒྲུབ་བྱེད་ | ཇོ་བདག་(ཚུ་) | གནས་ཚད་ | དྲན་ཐོ། |
+|----------------------------------------------------------- |
+| **B1 — རའུཊ་ཊེསི་རྩིས་ཞིབ་** | `docs/source/nexus_routed_trace_audit_report_2026q1.md`, `docs/examples/nexus_audit_outcomes/` | @telemetry-ops, @governance | ✅ ཆ་ཚང་ (Q1 2026) | རྩིས་ཞིབ་ཀྱི་སྒོ་སྒྲིག་གསུམ་ཐོ་བཀོད་འབད་ཡོདཔ། Q2 ལོག་གཡོག་བཀོལ་བའི་སྐབས་ I18NI000000015X ཁ་བསྡམས་ཡོད། |
+| **B2 — ཊེ་ལི་མི་ཊི་ བཅོས་སྒྲིག་དང་ སྲུང་སྐྱོབ།** | `docs/source/nexus_telemetry_remediation_plan.md`, `docs/source/telemetry.md`, `dashboards/alerts/nexus_audit_rules.yml`, | @sre-core, @telemetry-ops | ✅ ཆ་ཚང་ | ཉེན་བརྡ་ཐུམ་སྒྲིལ་དང་ ཌིཕ་བོཊ་སྲིད་བྱུས་ དེ་ལས་ ཨོ་ཊི་ཨེལ་པི་ བེཆ་ཚད་ (`nexus.scheduler.headroom` དྲན་ཐོ་ + Grafana མགུ་རྙོག་ཅན་གྱི་ ཤོག་ལེབ་) གཏང་ཡོདཔ་ཨིན། ཁ་ཕྱེ་བའི་དགོངས་ཡང་མེད། |
+| **B3 — ཌེལ་ཊ་གི་ཆ་འཇོག་ཚུ་ རིམ་སྒྲིག་འབད།** | I18NI000000020X, `defaults/nexus/config.toml`, `defaults/nexus/genesis.json`, @release-eng, @governance | ✅ ཆ་ཚང་ | GOV-2026-03-19 ཚོགས་རྒྱན་བཙུགས་ཡོདཔ། མཚན་རྟགས་བཀོད་པའི་བཱན་ཌལ་གྱིས་ གཤམ་གསལ་གྱི་ བརྡ་འཕྲིན་ཐུམ་སྒྲིལ་ལུ་ ལྟོ་བྱིནམ་ཨིན། |
+| **B4 — སྣ་མང་བརྡ་འཕྲིན་འགོ་བཙུགས་ཀྱི་ བསྐྱར་སྦྱོང་** | I18NI00000000023X, `docs/source/project_tracker/nexus_rehearsal_2026q1.md`, I18NI000000025X, I18NI000000026X, I18NI0000000026X, I18NI000000027X | @nexus-core, @sre-core | ✅ ཆ་ཚང་ (Q2 2026) | Q2 canary གིས་ TLS གི་ལག་ལེན་མར་ཕབ་འདི་ཁ་བསྡམས་ཡོདཔ། བདེན་དཔྱད་ཀྱི་གསལ་སྟོན་ + `.sha256` བཟུང་བའི་ ༩༡༢–༩༣༦ དང་ ལཱ་གི་འབོར་ཚད་སོན་ `NEXUS-REH-2026Q2` དེ་ལས་ ཐོ་བཀོད་འབད་ཡོད་པའི་ ཊི་ཨེལ་ཨེསི་གསལ་སྡུད་ ཧེཤ་ཚུ་ ལོག་གཡོག་བཀོལ་ནི་ལས་ཨིན། |
 
-## Quarterly Routed-Trace Audit Schedule
+## བཞི་ཆའི་འགྲུལ་བསྐྱོད་-འགྲུལ་བསྐྱོད་རྩིས་ཞིབ་ལས་རིམ།
 
-| Trace ID | Window (UTC) | Outcome | Notes |
-|----------|--------------|---------|-------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | ✅ Pass | Queue-admission P95 stayed well below the ≤750 ms target. No action required. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | ✅ Pass | OTLP replay hashes attached to `status.md`; SDK diff bot parity confirmed zero drift. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | ✅ Resolved | TLS profile lag closed during Q2 rerun; telemetry pack for `NEXUS-REH-2026Q2` records TLS profile hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` (see `artifacts/nexus/tls_profile_rollout_2026q2/`) and zero stragglers. |
-| `TRACE-MULTILANE-CANARY` | 2026-05-05 09:12–10:14 | ✅ Pass | Workload seed `NEXUS-REH-2026Q2`; telemetry pack + manifest/digest under `artifacts/nexus/rehearsals/2026q1/` (slot range 912–936) with agenda in `artifacts/nexus/rehearsals/2026q2/`. |
+| རྗེས་འཇུག་ཨའི་ཌི་ | སྒོ་སྒྲིག་ (ཡུ་ཊི་སི) | གྲུབ་འབྲས་ | དྲན་ཐོ། |
+|-------------------------------------------------------- |
+| `TRACE-LANE-ROUTING` | ༢༠༢༦-༠༢-༡༧ ༠༩:༠༠–༠༩:༤༥ | ✅ པ་སི་ | ཀིའུ་-འཛུལ་ཞུགས་ P95 འདི་ ≤750ms དམིགས་གཏད་ལས་ འོག་ལུ་ལེགས་ཤོམ་སྦེ་སྡོད་ཡོདཔ་ཨིན། བྱ་བ་དགོཔ་མེད། |
+| I18NI0000031X | ༢༠༢༦-༠༢-༢༤ ༡༠:༠༠–༡༠:༤༥ | ✅ པ་སི་ | `status.md` ལུ་མཐུད་ཡོད་པའི་ OTLP བསྐྱར་རྩེད་ཀྱི་ཧ་ཤི་ཚུ་; SDK diff bot parity གིས་ ཀླད་ཀོར་གྱི་ ཌིརཕཊི་ ངེས་གཏན་བཟོ་ཡོདཔ། |
+| I18NI0000033X | ༢༠༢༦-༠༣-༠༡ ༡༢:༠༠–༡༢:༣༠ | ✅ ཐག་གཅོད་འབད་ཡོདཔ། | Q2 ལོག་གཡོག་བཀོལ་བའི་སྐབས་ TLS གསལ་སྡུད་ལག་ཁ་ཁ་བསྡམས།; I18NI000000034X གི་དོན་ལུ་ ཊེ་ལི་མི་ཊི་ཊི་ཐུམ་སྒྲིལ་ ཊི་ཨེལ་ཨེསི་ གསལ་སྡུད་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན། |
+| `TRACE-MULTILANE-CANARY` | ༢༠༢༦-༠༥-༠༥ ༠༩:༡༢–༡༠:༡༤ | ✅ པ་སི་ | ལས་ཀའི་སོན་ `NEXUS-REH-2026Q2`; བརྡ་འཕྲིན་ཐུམ་སྒྲིལ་ + གསལ་སྟོན་/ བཞུ་བཅོས་འདི་ I18NI000000039X (slot range 912–936) གི་འོག་ལུ་ `artifacts/nexus/rehearsals/2026q2/` ནང་ལུ་ གྲོས་གཞི་ཡོདཔ་ཨིན། |
 
-Future quarters should add new rows and move the
-completed entries to an appendix when the table grows beyond the current
-quarter. Reference this section from routed-trace reports or governance minutes
-using the `#quarterly-routed-trace-audit-schedule` anchor.
+མ་འོངས་པ་ལུ་ གྲལ་ཐིག་གསརཔ་ཚུ་ཁ་སྐོང་འབད་དེ་ སྤོ་དགོ།
+ཐིག་ཁྲམ་འདི་ད་ལྟོའི་གནས་སྟངས་ལས་ལྷག་པའི་སྐབས་ ཟུར་ཐོ་ཅིག་ལུ་ཐོ་བཀོད་ཚུ་མཇུག་བསྡུ་ཡོདཔ་ཨིན།
+བཞི༌ཆ༌གཅིག། དོན་ཚན་འདི་ལུ་ ལམ་སྟོན་གྱི་ སྙན་ཞུ་ ཡང་ན་ གཞུང་སྐྱོང་སྐར་མ་ཚུ་ལས་ གཞི་བསྟུན་འབད་ནི།
+`#quarterly-routed-trace-audit-schedule` anchor ལག་ལེན་འཐབ་ཡོདཔ།
 
-## Mitigation & Backlog Items
+## ཉམས་སྲུང་དང་རྒྱབ་ལོག་རྣམ་གྲངས།
 
-| Item | Description | Owner | Target | Status / Notes |
-|------|-------------|-------|--------|----------------|
-| `NEXUS-421` | Finish propagating the TLS profile that lagged during `TRACE-CONFIG-DELTA`, capture rerun evidence, and close the mitigation log. | @release-eng, @sre-core | Q2 2026 routed-trace window | ✅ Closed — TLS profile hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` captured in `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` + `.sha256`; rerun confirmed no stragglers. |
-| `TRACE-MULTILANE-CANARY` prep | Schedule the Q2 rehearsal, attach fixtures to the telemetry pack, and ensure SDK harnesses reuse the validated helper. | @telemetry-ops, SDK Program | Planning call 2026-04-30 | ✅ Completed — agenda stored at `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` with slot/workload metadata; harness reuse noted in the tracker. |
-| Telemetry pack digest rotation | Run `scripts/telemetry/validate_nexus_telemetry_pack.py` before each rehearsal/release and log digests next to the config delta tracker. | @telemetry-ops | Per release candidate | ✅ Completed — `telemetry_manifest.json` + `.sha256` emitted in `artifacts/nexus/rehearsals/2026q1/` (slot range `912-936`, seed `NEXUS-REH-2026Q2`); digests copied into the tracker and evidence index. |
+| རྣམ་གྲངས་ | འགྲེལ་བཤད་ | ཇོ་བདག་ | དམིགས་ཚད་ | གནས་ཚད་ / དྲན་ཐོ། |
+|---|-|-|-|--------------------------------------------------------------------------------------------- |
+| I18NI0000042X | ཊི་ཨེལ་ཨེསི་གསལ་སྡུད་འདི་ I18NI000000043X གི་སྐབས་ལུ་ ཁྱབ་སྤེལ་འབད་དེ་ ལོག་སྟེ་སྒྲུབ་བྱེད་བཏོན་ཞིནམ་ལས་ མར་ཕབ་ཀྱི་དྲན་ཐོ་འདི་ཁ་བསྡམ་ནི། | @release-eng, @sre-core | Q2 2026 འགྲུལ་ལམ་-རྗེས་འདེད་སྒོ་སྒྲིག་ | ✅ ཁ་བསྡམས་ཡོདཔ་ — ཊི་ཨེལ་ཨེསི་གསལ་སྡུད་ཧེཤ་ `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` I18NI000000045X + `.sha256` ནང་བཟུང་ཡོདཔ་ཨིན། བསྐྱར་ལོག་གཏན་འཁེལ་འབད་མི། |
+| `TRACE-MULTILANE-CANARY` སྔོན་འགོག་ | Q2 rehersal, tenchetry filecture ཚུ་ ཊེ་ལི་མི་ཊི་ཐུམ་སྒྲིལ་ནང་ མཉམ་སྦྲགས་འབད་ཞིནམ་ལས་ ཨེསི་ཌི་ཀེ་ ཧརནསི་ཚུ་ བདེན་དཔྱད་འབད་ཡོད་པའི་གྲོགས་རམ་པ་ཚུ་ ལོག་ལག་ལེན་འཐབ་ཡོདཔ་ངེས་གཏན་བཟོ། | @telemetry-ops, ཨེསི་ཌི་ཀེ་ལས་རིམ་ | འཆར་གཞིའི་ཁ་པར་ ༢༠༢༦-༠༤-༣༠ | ✅ མཇུག་བསྡུ་ — ལས་འཆར་འདི་ `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` ལུ་ གསོག་འཇོག་འབད་ཡོདཔ་ slot/workload matada; འཚོལ་ཞིབ་ནང་ དྲན་འཛིན་འབད་ཡོད་པའི་ ཧར་ནེསི་ལོག་ལག་ལེན་འཐབ། |
+| ཊེ་ལི་མི་ཊི་ཐུམ་སྒྲིལ་ ཟས་བཅུད་བསྒྱིར། | བསྐྱར་སྦྱོང་/བཏོན་གཏང་ནི་དང་ རིམ་སྒྲིག་ཌེལ་ཊ་རྗེས་འདེད་ཀྱི་ཉེ་འདབས་ལུ་ I18NI0000000049X གཡོག་བཀོལ། | @telemetry-ops | Re གློད་སྤྱོད་ཀྱི་འདེམས་ངོ་ | ✅ མཇུག་བསྡུ་ — I18NI0000050X + `.sha256` I18NI000000052X (slot ཁྱབ་ཚད་ I18NI000000053X, སོན་ I18NI000000004X); འཚོལ་ཞིབ་འབད་མི་ཚུ་ འཚོལ་ཞིབ་འཕྲུལ་ཆས་དང་ སྒྲུབ་བྱེད་ཀྱི་ཟུར་ཐོ་ནང་ ཞུཝ་ཨིན། |
 
-## Config Delta Bundle Integration
+## ཌེལ་ཊ་བུནཌལ་མཉམ་བསྡོམས།
 
-- `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` remains the
-  canonical diff summary. When new `defaults/nexus/*.toml` or genesis changes
-  land, update that tracker first, then mirror the highlights here.
-- Signed config bundles feed the rehearsal telemetry pack. The pack, validated
-  by `scripts/telemetry/validate_nexus_telemetry_pack.py`, must be published
-  alongside the config delta evidence so operators can replay the exact
-  artefacts used during B4.
-- Iroha 2 bundles remain lane-free: configs with `nexus.enabled = false` now
-  reject lane/dataspace/routing overrides unless the Nexus profile is enabled
-  (`--sora`), so strip `nexus.*` sections from single-lane templates.
-- Keep the governance vote log (GOV-2026-03-19) linked from both the tracker and
-  this note so future votes can copy the format without re-discovering the
-  approval ritual.
+- I18NI0000005X ལུས་ཡོད།
+  ༥ ཀེར་ནི་ཀལ་དིཕ་བཅུད་དོན། Nexus ཡང་ན་ རིགས་མཚན་འགྱུར་བའི་སྐབས།
+  ས་ཆ་ དང་པ་ འཚོལ་ཞིབ་པ་དེ་ དུས་མཐུན་བཟོ་ཞིནམ་ལས་ དེ་ལས་ ནཱ་ལུ་ འོད་རྟགས་ཚུ་ མེ་ལོང་བཟོ།
+- མཚན་རྟགས་བཀོད་ཡོད་པའི་ རིམ་སྒྲིག་བཀག་ཆ་ཚུ་གིས་ བསྐྱར་སྦྱོང་འབད་བའི་ ཊེ་ལི་མི་ཊི་ཐུམ་སྒྲིལ་ལུ་ ལྟོ་བྱིནམ་ཨིན། ཐུམ་སྒྲིལ་ བདེན་དཔྱད་འབད་ཡོད་པའི་
+  by `scripts/telemetry/validate_nexus_telemetry_pack.py`, པར་སྐྲུན་དགོས།
+  རིམ་སྒྲིག་ཌེལ་ཊ་སྒྲུབ་བྱེད་དང་གཅིག་ཁར་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཏན་ཏན་སྦེ་ ལོག་རྩེད་ཚུགས།
+  B4 གི་སྐབས་ལུ་ལག་ལེན་འཐབ་མི་ ཅ་རྙིང་ཚུ།
+- Iroha 2 བཱན་ཌལ་ཚུ་ ལེན་མེད་པར་ལུས་ཡོདཔ་ཨིན་: ད་ལྟོ་ Nexus དང་གཅིག་ཁར་ རིམ་སྒྲིག་འབད།
+  I18NT0000006X གསལ་སྡུད་འདི་ལྕོགས་ཅན་བཟོ་མ་ཚུགས་ཚུན་ཚོད་ ལམ་ཐིག་/གནད་སྡུད་ས་སྟོང་/རའུཊི་ཚུ་བཀག་ཆ་འབད་ནི།
+  (`--sora`), དེ་འབདཝ་ལས་ strip `nexus.*` དབྱེ་ཚན་ཚུ་ ལམ་རིམ་རྐྱང་པའི་ཊེམ་པེལེཊི་ཚུ་ལས་ཨིན།
+- གཞུང་སྐྱོང་ཚོགས་རྒྱན་དྲན་ཐོ་ (GOV-2026-03-19) འདི་ འཚོལ་ཞིབ་གཉིས་ཆ་ར་ལས་ འབྲེལ་མཐུད་འབད་དགོ།
+  དྲན་འཛིན་འདི་ མ་འོངས་པའི་ཚོགས་རྒྱན་ཚུ་གིས་ ལོག་སྟེ་མ་ཤེས་པར་ རྩ་སྒྲིག་འདི་འདྲ་བཤུས་རྐྱབ་ཚུགས།
+  ཆ་འཇོག་གི་ཆོ་ག།
 
-## Launch Rehearsal Follow-Ups
+## འགོ་འཁྲིད་འབད་ནི།
 
-- `docs/source/runbooks/nexus_multilane_rehearsal.md` captures the canary plan,
-  participant roster, and rollback steps; refresh the runbook whenever the lane
-  topology or telemetry exporters change.
-- `docs/source/project_tracker/nexus_rehearsal_2026q1.md` lists every artefact
-  checked during the April 9 rehearsal and now carries the Q2 prep notes/agenda.
-  Append future rehearsals to the same tracker instead of opening one-off
-  trackers to keep evidence monotonic.
-- Publish OTLP collector snippets and Grafana exports (see `docs/source/telemetry.md`)
-  whenever the exporter batching guidance changes; the Q1 update bumped the
-  batch size to 256 samples to prevent headroom alerts.
-- Multi-lane CI/test evidence now lives in
-  `integration_tests/tests/nexus/multilane_pipeline.rs` and runs under the
-  `Nexus Multilane Pipeline` workflow
-  (`.github/workflows/integration_tests_multilane.yml`), replacing the retired
-  `pytests/nexus/test_multilane_pipeline.py` reference; keep the hash for
-  `defaults/nexus/config.toml` (`nexus.enabled = true`, blake2b
-  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) in sync
-  with the tracker when refreshing rehearsal bundles.
+- I18NI000000061X གིས་ ཀེ་ན་རི་འཆར་གཞི་འདི་ བཏོན་ཡོདཔ་ཨིན།
+  བཅའ་མར་གཏོགས་མི་ཐོ་ཡིག་དང་ ལོག་བསྐོར་བའི་གོམ་པ་ཚུ། ལམ་འདི་ག་དུས་འབད་རུང་ རན་དེབ་གསརཔ་བཟོ།
+  ཊོ་པོ་ལོ་ཇི་ཡང་ན་ ཊེ་ལི་མི་ཊི་ཕྱིར་ཚོང་པ་ཚུ་ འགྱུར་བཅོས་འབདཝ་ཨིན།
+- I18NI000000062X ཅ་མཛོད་རེ་རེ་བཞིན་ཐོ་བཀོད་འབདཝ་ཨིན།
+  སྤྱི་ཟླ་༤ པའི་ཚེས་༩ ལུ་ བརྟག་དཔྱད་འབད་དེ་ ད་ལྟོ་ Q2 སྔོན་སྒྲིག་དྲན་ཐོ་/གྲོས་གཞི་ཚུ་ འབག་འོང་།
+  གཅིག་ཁ་ཕྱེ་ནིའི་ཚབ་ལུ་ མ་འོངས་པའི་སྦྱོང་བརྡར་ཚུ་ འཚོལ་ཞིབ་པ་གཅིག་ལུ་ མཉམ་སྦྲགས་འབད།
+  བརྟག་ཞིབ་པ་ཚུ་ སྒྲུབ་བྱེད་གཅིག་རྐྱངམ་ཅིག་བཞག་ནིའི་དོན་ལུ་ཨིན།
+- OTLP བསྡུ་སྒྲིག་འཕྲུལ་ཆས་དང་ I18NT0000002X ཕྱིར་གཏོང་ (I18NI000000063X) དཔར་བསྐྲུན་འབད།
+  ཕྱིར་ཚོང་འཐབ་མི་གིས་ ལམ་སྟོན་བསྒྱུར་བཅོས་འགྱོཝ་ད་; the Q1 དུས་མཐུན་བཟོ་ཡོད།
+  མགོ་རྙོག་པའི་ཉེན་བརྡ་ཚུ་བཀག་ཐབས་ལུ་ དཔེ་ཚད་༢༥༦ ལས་ ༢༥༦ ལུ།
+- མལ་ཊི་ལེན་སི་ཨའི་/བརྟག་དཔྱད་སྒྲུབ་བྱེད་ད་ལྟ་ ༢༠༡༦ ལོར་གནས་ཡོད།
+  I18NI000000064X དང་ འོག་ལུ་ གཡོག་བཀོལཝ་ཨིན།
+  I18NI000000065X ལས་ཀ།
+  (I18NI0000006X), དགོངས་ཞུའི་ཚབ་ལུ་ དགོངས་ཞུ་འབད་ཡོདཔ།
+  I18NI000000067X གཞི་བསྟུན་; ཧེཤ་འདི་གི་དོན་ལུ་བཞག།
+  `defaults/nexus/config.toml` (`nexus.enabled = true`, blak2b
+  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) ནང་།
+  བསྐྱར་སྦྱོང་གི་སྡེ་ཚན་ཚུ་ གསར་བསྐྲུན་འབད་བའི་སྐབས་ ཊེག་ཊར་དང་གཅིག་ཁར་ཨིན།
 
-## Runtime Lane Lifecycle
+## གཡོག་བཀོལ།
 
-- Runtime lane lifecycle plans now validate dataspace bindings and abort when
-  Kura/tiered storage reconciliation fails, leaving the catalog unchanged. The
-  helpers prune cached lane relays for retired lanes so merge-ledger synthesis
-  does not reuse stale proofs.
-- Apply plans through the Nexus config/lifecycle helpers (`State::apply_lane_lifecycle`,
-  `Queue::apply_lane_lifecycle`) to add/retire lanes without restart; routing,
-  TEU snapshots, and manifest registries reload automatically after a successful plan.
-- Operator guidance: when a plan fails, check for missing dataspaces or storage
-  roots that cannot be created (tiered cold root/Kura lane directories). Fix the
-  backing paths and retry; successful plans re-emit the lane/dataspace telemetry
-  diff so dashboards reflect the new topology.
+- རཱན་ཊའིམ་ལེན་གྱི་ མི་ཚེ་འཁོར་རིམ་འཆར་གཞི་གིས་ ད་ལྟོ་ གནད་སྡུད་བར་སྟོང་གི་བཱའིན་ཌིང་ཚུ་ བདེན་དཔྱད་འབད་ཡོདཔ་དང་ ཆ་མེད་བཏང་པའི་སྐབས་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  ཀུ་ར་/རིམ་པ་ཅན་གྱི་གསོག་འཇོག་མཐུན་སྒྲིག་འདི་ འཐུས་ཤོར་བྱུང་སྟེ་ ཐོ་གཞུང་འདི་བསྒྱུར་བཅོས་མེད་པར་བཞགཔ་ཨིན། ཚིག༌ཕྲད
+  རོགས་རམ་འབད་མི་ཚུ་གིས་ དགོངས་ཞུ་འབད་མི་ ལམ་ཚུ་གི་དོན་ལུ་ འདྲ་མཛོད་ཀྱི་ རི་ལེ་ཚུ་ མཉམ་བསྡོམས་འབད་དེ་ མཉམ་སྡེབ་འབད་དེ་ མཉམ་སྡེབ་འབདཝ་ཨིན།
+  བརྟན་བརྟན་གྱི་བདེན་ཁུངས་ཚུ་ ལོག་ལག་ལེན་མི་འཐབ།
+- འཆར་གཞི་ཚུ་ Nexus རིམ་སྒྲིག་/མི་ཚེ་འཁོར་ལོའི་གྲོགས་རམ་པ་ (I18NI000000071X, བརྒྱུད་དེ་འཇུག་སྤྱོད་འབད།
+  I18NI000000072X) ཁ་སྐོང་/དགོངས་ཞུའི་ལམ་ཚུ་ ལོག་འགོ་མ་བཙུགས་པར་; རའུ་ཊིང་,,
+  མཐར་འཁྱོལ་ཅན་གྱི་འཆར་གཞི་ཅིག་གི་ཤུལ་ལས་ ཊི་ཨི་ཡུ་གི་པར་ཚུ་དང་ གསལ་སྟོན་ཐོ་བཀོད་ཚུ་ རང་བཞིན་གྱིས་ རང་བཞིན་གྱིས་ མངོན་གསལ་འབདཝ་ཨིན།
+- བཀོལ་སྤྱོད་པ་ལམ་སྟོན་: འཆར་གཞི་ཅིག་འཐུས་ཤོར་བྱུང་པའི་སྐབས་ གནད་སྡུད་ས་སྟོང་ ཡང་ན་ གསོག་འཇོག་མེད་མི་ཚུ་ཞིབ་དཔྱད་འབད།
+  རྩ་བསྐྲད་འབད་མ་ཚུགས་པའི་ རྩ་ཚུ་ (རིམ་པ་ཅན་གྱི་བསིལ་དྲོད་རྩ་བ་/ཀུ་ར་ལེན་སྣོད་ཐོ་ཚུ)། འདི་ བདེ་སྒྲིག་འབད།
+  རྒྱབ་ཐག་ལམ་དང་ བསྐྱར་ལོག་འབད་རྩོལ་བསྐྱེད་དོ། མཐར་འཁྱོལ་ཅན་གྱི་འཆར་གཞི་ཚུ་ ལམ་ཐིག་/གནས་སྡུད་ཀྱི་བརྒྱུད་འཕྲིན་འདི་ ལོག་བཟོཝ་ཨིན།
+  diff དེ་འབདཝ་ལས་ བཀོད་སྒྲིག་བཀོད་ཁྲམ་ཚུ་གིས་ ཊོ་པོ་ལོ་ཇི་གསརཔ་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-## NPoS Telemetry & Backpressure Evidence
+## NPoS བརྒྱུད་འཕྲིན་ & རྒྱབ་གཉེར་གྱི་སྒྲུབ་བྱེད།
 
-Phase B’s launch-rehearsal retro asked for deterministic telemetry captures that
-prove the NPoS pacemaker and gossip layers stay within their backpressure
-limits. The integration harness at
-`integration_tests/tests/sumeragi_npos_performance.rs` exercises those
-scenarios and emits JSON summaries (`sumeragi_baseline_summary::<scenario>::…`)
-whenever new metrics land. Run it locally with:
+PhaseB གིས་ འགོ་འབྱེད་ཀྱི་ སྦྱོང་བརྡར་འབད་མི་ retro གིས་ གཏན་འབེབས་བརྡ་འཕྲིན་འཛིན་བཟུང་ཚུ་ ཞུ་ཡི།
+NPoS pacemaker དང་ ཁ་གཏམ་གྱི་བང་རིམ་ཚུ་ ཁོང་རའི་རྒྱབ་ཀྱི་གནོན་ཤུགས་ནང་ལུ་སྡོད་དགོ།
+ཚད་ཚད། གཅིག་སྒྲིལ་གྱི་སྒྲིག་སྟངས་འདི་ལུ།
+I18NI000000073དེ་དག་གིས་དེ་དག་ལ་ལུས་སྦྱོང་བྱེད་ཀྱི་ཡོད།
+གནས་སྟངས་ཚུ་དང་ ཕྱིར་བཏོན་འབདཝ་ཨིན་ (`sumeragi_baseline_summary::<scenario>::…`)
+ག་དུས་ཀྱི་མེ་ཊིགསི་ས་ཆ། ས་གནས་ནང་ གཡོག་བཀོལ།:
 
-```bash
-cargo test -p integration_tests sumeragi_npos_performance -- --nocapture
-```
+I18NF0000009X
 
-Set `SUMERAGI_NPOS_STRESS_PEERS`, `SUMERAGI_NPOS_STRESS_COLLECTORS_K`, or
-`SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R` to explore higher-stress topologies; the
-defaults mirror the 1 s/`k=3` collector profile used in B4.
+`SUMERAGI_NPOS_STRESS_PEERS`, I18NI000000076X, ཡང་ན་
+Nexus མཐོ་རིམ་གྱི་ ཊོ་པོ་ལོ་ཇི་ཚུ་ འཚོལ་ཞིབ་འབད་ནི། ཚིག༌ཕྲད
+སྔོན་སྒྲིག་ 1s/`k=3` བི་༤ ནང་ལག་ལེན་འཐབ་མི་ བསྡུ་སྒྲིག་གསལ་སྡུད།
 
-| Scenario / test | Coverage | Key telemetry |
+| གནས་སྟངས་ / བརྟག་དཔྱད། | ཁྱབ་ཁོངས། | ལྡེ་མིག་བརྡ་འཕྲིན་ |
 | --- | --- | --- |
-| `npos_baseline_1s_k3_captures_metrics` | Blocks 12 rounds with the rehearsal block time to record EMA latency envelopes, queue depths, and redundant-send gauges before serialising the evidence bundle. | `sumeragi_phase_latency_ema_ms`, `sumeragi_collectors_k`, `sumeragi_redundant_send_r`, `sumeragi_bg_post_queue_depth*`. |
-| `npos_queue_backpressure_triggers_metrics` | Floods the transaction queue to ensure admission deferrals kick in deterministically and that the queue exports capacity/saturation counters. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_pacemaker_jitter_within_band` | Samples pacemaker jitter and view timeouts until it proves the configured ±125 ‰ band is enforced. | `sumeragi_pacemaker_jitter_ms`, `sumeragi_pacemaker_view_timeout_target_ms`, `sumeragi_pacemaker_jitter_frac_permille`. |
-| `npos_rbc_store_backpressure_records_metrics` | Pushes large RBC payloads to the soft/hard store limits to show sessions and byte counters climb, back off, and settle without overrunning the store. | `sumeragi_rbc_store_pressure`, `sumeragi_rbc_store_sessions`, `sumeragi_rbc_store_bytes`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_redundant_send_retries_update_metrics` | Forces retransmits so the redundant-send ratio gauges and collectors-on-target counters advance, proving the telemetry the retro requested is wired end-to-end. | `sumeragi_collectors_targeted_current`, `sumeragi_redundant_sends_total`. |
-| `npos_rbc_chunk_loss_fault_reports_backlog` | Drops deterministically spaced chunks to verify backlog monitors raise faults instead of silently draining payloads. | `sumeragi_rbc_backlog_sessions_pending`, `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`. |
+| `npos_baseline_1s_k3_captures_metrics` | སྐོར་ཐེངས་༡༢ འདི་ བསྐྱར་སྦྱོང་དུས་ཚོད་དང་གཅིག་ཁར་ EMA གི་ནང་འཁོད་ལུ་ ཡིག་ཤུབས་དང་ གྱལ་གཏིང་ཚད་ དེ་ལས་ སྒྲུབ་བྱེད་ཚུ་ མ་སྒྲིག་པའི་ཧེ་མ་ མང་ཚོགས་ཀྱི་ གཏང་ཆས་འཇལ་ཚད་ཚུ་ ཐོ་བཀོད་འབད་ནི། | I18NI0000000800X, `sumeragi_collectors_k`, I18NI000000082X, `sumeragi_bg_post_queue_depth*`. |
+| I18NI0000084X | འཛུལ་ཞུགས་ཕར་འགྱངས་ཚུ་གིས་ གཏན་འབེབས་བཟོ་ནི་གི་དོན་ལུ་ བརྗེ་སོར་གྱི་གྱལ་རིམ་འདི་ ཆུ་གིས་འཕྱག་ཞིནམ་ལས་ བང་རིམ་འདི་གིས་ ལྕོགས་གྲུབ་/ཚད་གཞི་གི་གྱངས་ཁ་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན། | I18NI0000000085X, `sumeragi_tx_queue_capacity`, I18NI000000087X, I18NI000000008X, Nexus, I18NI000000089X. |
+| `npos_pacemaker_jitter_within_band` | དཔེ་ཚད་ཀྱི་ པེ་སི་མེཀ་ ཇི་ཊར་དང་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ ±125 ‰ བང་རིམ་འདི་ བསྟར་སྤྱོད་མ་འབད་ཚུན་ཚོད་ དུས་ཚོད་རྫོགས་མི་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན། | `sumeragi_pacemaker_jitter_ms`, `sumeragi_pacemaker_view_timeout_target_ms`, `sumeragi_pacemaker_jitter_frac_permille`. |
+| I18NI0000094X | མཉེན་ཆས་/ཧརཌི་ཚོང་ཁང་གི་ཚད་གཞི་ཚུ་ལུ་ RBC གིས་ ལཱ་ཡུན་དང་ བཱའི་ཊི་ ཀའུན་ཊར་ཡར་འཛེགས་ཏེ་ ལོག་སྟེ་ བཀག་བཞག་སྟེ་ ཚོང་ཁང་འདི་ འཕྱགས་མ་བཏང་པར་ གཞི་བཅག་ནིའི་དོན་ལུ་ སྐུལ་མ་འབདཝ་ཨིན། | `sumeragi_rbc_store_pressure`, `sumeragi_rbc_store_sessions`, I18NI000000097X, I18NI000000098X. |
+| I18NI000009X | དམག་སྡེ་ཚུ་གིས་ ལོག་སྟེ་ར་ བརྒྱུད་སྤྲོད་འབདཝ་ཨིནམ་ལས་ མ་དགོ་པའི་ ཆ་ཚད་འཇལ་མི་དང་ དམིགས་གཏད་གུ་ བསྡུ་སྒྲིག་འབད་མི་ཚུ་ གོང་འཕེལ་འགྱོ་སྟེ་ རེཊོ་གི་ཞུ་བ་འབད་མི་ བརྒྱུད་འཕྲིན་འདི་ མཇུག་ལས་མཇུག་ཚུན་ཚོད་ གློག་ཐག་གིས་ བཏོནམ་ཨིན། | `sumeragi_collectors_targeted_current`, I18NI0000010101. |
+| `npos_rbc_chunk_loss_fault_reports_backlog` | བཀོ་བཞག་མི་འདི་གིས་ རྒྱབ་ལོག་ལྟ་རྟོག་པ་ཚུ་གིས་ ཁུ་སིམ་སིམ་སྦེ་ བཏོན་བཏང་ནི་མེན་པར་ འཛོལ་བ་ཚུ་ ཡར་སེང་འབདཝ་ཨིན། | `sumeragi_rbc_backlog_sessions_pending`, `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`. |JSON གྲལ་ཐིག་ཚུ་མཉམ་སྦྲགས་འབད་དེ་ ཧར་ནིསི་འདི་ I18NT0000000X བརྡ་རྟགས་དང་གཅིག་ཁར་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+གཞུང་སྐྱོང་ཁང་གི་སྐབས་ལུ་ བཟུང་ཡོདཔ་ད་ དེ་བསྒང་ གཞུང་ཚབ་ཀྱིས་ རྒྱབ་བཤུད་ཀྱི་ སྒྲུབ་བྱེད་ཚུ་ ཞུཝ་ཨིན་པས།
+ཉེན་བརྡ་ཚུ་ བསྐྱར་སྦྱོང་འབད་མི་ ཊོ་པོ་ལོ་ཇི་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-Attach the JSON lines the harness prints together with the Prometheus scrape
-captured during the run whenever governance asks for evidence that backpressure
-alarms match the rehearsal topology.
+## ཞིབ་དཔྱད་ཐོ་ཡིག་དུས་མཐུན།
 
-## Update Checklist
+༡ འགྲུལ་ལམ་གསརཔ་ མཐུད་དེ་ དགོངས་ཞུ་འབད་དེ་ དགོངས་ཞུ་འབད་ནི།
+2. དྲན་ཚད་ཀྱི་རྗེས་འཇུག་རེ་རེ་གི་ཤུལ་ལས་ མར་ཕབ་ཀྱི་ཐིག་ཁྲམ་དུས་མཐུན་བཟོ་དགོ།
+   བྱ་བ་འདི་ ཤོག་འཛིན་ཁ་བསྡམ་ནི་འདི་ཨིན།
+3. ཌེལ་ཊསི་བསྒྱུར་བཅོས་རིམ་སྒྲིག་འབད་བའི་སྐབས་ འཚོལ་ཞིབ་འདི་དུས་མཐུན་དང་ དྲན་ཐོ་འདི་དང་ ཊེ་ལི་མི་ཊི་རིཊི་ཚུ།
+   འདྲུད་པའི་ཞུ་བ་གཅིག་ནང་ ཌིསི་ཇེསཊ་ཐོ་ཡིག་སྦེ།
+༤ འདི་ཁར་ བསྐྱར་སྦྱོང་/ལྕགས་རིགས་ཀྱི་ ཅ་ཆས་ཚུ་ འབྲེལ་མཐུད་འབད་ནི་ཨིནམ་ལས་ མ་འོངས་པའི་ ལམ་སྟོན་གནས་རིམ་གྱི་ གནས་སྟངས།
+   དུས་མཐུན་ཚུ་གིས་ ཁ་སྟོར་འབད་ཡོད་པའི་ཨེཌི་ཧོཀ་དྲན་ཐོ་ཚུ་གི་ཚབ་ལུ་ ཡིག་ཆ་གཅིག་གཞི་བསྟུན་འབད་ཚུགས།
 
-1. Append new routed-trace windows and retire old ones as quarters roll over.
-2. Update the mitigation table after every Alertmanager follow-up, even if the
-   action is to close the ticket.
-3. When config deltas change, update the tracker, this note, and the telemetry
-   pack digest list in the same pull request.
-4. Link any new rehearsal/telemetry artefacts here so future roadmap status
-   updates can reference a single document instead of scattered ad-hoc notes.
+## བདེན་དཔང་ཟུར་ཐོ།
 
-## Evidence Index
-
-| Asset | Location | Notes |
-|-------|----------|-------|
-| Routed-trace audit report (Q1 2026) | `docs/source/nexus_routed_trace_audit_report_2026q1.md` | Canonical source for Phase B1 evidence; mirrored for the portal under `docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md`. |
-| Config delta tracker | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` | Contains the TRACE-CONFIG-DELTA diff summaries, reviewer initials, and GOV-2026-03-19 vote log. |
-| Telemetry remediation plan | `docs/source/nexus_telemetry_remediation_plan.md` | Documents the alert pack, OTLP batch sizing, and export budget guardrails tied to B2. |
-| Multi-lane rehearsal tracker | `docs/source/project_tracker/nexus_rehearsal_2026q1.md` | Lists Apr 9 rehearsal artefacts, validator manifest/digest, Q2 prep notes/agenda, and rollback evidence. |
-| Telemetry pack manifest/digest (latest) | `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json` (+ `.sha256`) | Records slot range 912–936, seed `NEXUS-REH-2026Q2`, and artefact hashes for governance bundles. |
-| TLS profile manifest | `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` (+ `.sha256`) | Hash of the approved TLS profile captured during the Q2 rerun; cite in routed-trace appendices. |
-| TRACE-MULTILANE-CANARY agenda | `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | Planning notes for the Q2 rehearsal (window, slot range, workload seed, action owners). |
-| Launch rehearsal runbook | `docs/source/runbooks/nexus_multilane_rehearsal.md` | Operational checklist for staging → execution → rollback; update when lane topology or exporter guidance changes. |
-| Telemetry pack validator | `scripts/telemetry/validate_nexus_telemetry_pack.py` | CLI referenced by B4 retro; archive digests alongside the tracker whenever the pack changes. |
-| Multilane regression | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | Proves `nexus.enabled = true` for multi-lane configs, preserves the Sora catalog hashes, and provisions lane-local Kura/merge-log paths (`blocks/lane_{id:03}_{slug}`) via `ConfigLaneRouter` before publishing artefact digests. |
+| རྒྱུ་དངོས་ | ས་གནས་ | དྲན་ཐོ། |
+|---------|----------------|--------------------------------
+| རའུཊ་-ཊེག་རྩིས་ཞིབ་སྙན་ཞུ། (Q1 2026) | `docs/source/nexus_routed_trace_audit_report_2026q1.md` | PhaseB1 སྒྲུབ་བྱེད་ཀྱི་ ཀེ་ནོ་ནིག་འབྱུང་ཁུངས་; `docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md` གི་འོག་ལུ་ཡོད་པའི་ དྲྭ་ཚིགས་འདི་གི་དོན་ལུ་ མེ་ལོང་བཟོ་ཡོདཔ་ཨིན། |
+| ཌེལ་ཊ་འཚོལ་ཞིབ་པ་རིམ་སྒྲིག་འབད། | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` | TRACE-CONFIG-DELTA diff བཅུད་བསྡུས་དང་ བསྐྱར་ཞིབ་པ་གི་འགོ་ཚག་ཚུ་ དེ་ལས་ GOV-2026-03-19 འོས་ཤོག་ཐོ་བཀོད་ཚུ་ཡོདཔ་ཨིན། |
+| བརྒྱུད་འཕྲིན་བཅོ་ཐབས་འཆར་གཞི། | `docs/source/nexus_telemetry_remediation_plan.md` | ཡིག་ཆ་ཚུ་ ཉེན་བརྡ་ཐུམ་སྒྲིལ་དང་ OTLP གི་ཚད་གཞི་ དེ་ལས་ ཕྱིར་ཚོང་འཆར་དངུལ་གྱི་ ལྟ་རྟོག་པ་ཚུ་ བི་༢ ལུ་བསྡམ་བཞག་མི་ ཡིག་ཆ་ཚུ་ཨིན། |
+| སྣ་མང་ལམ་ཐིག་སྦྱོང་བརྡར་རྗེས་འདེད་པ། | `docs/source/project_tracker/nexus_rehearsal_2026q1.md` | Apr9 བསྐྱར་སྦྱོང་གི་ཅ་ཆས་ཚུ་དང་ བདེན་དཔྱད་ཀྱི་གསལ་སྟོན་/བདུད། |
+| བརྒྱུད་འཕྲིན་ཐུམ་སྒྲིལ་གསལ་སྟོན་/བཞུ་ (མཇུག་མཐའ) | `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json` (+ `.sha256`) | ཐོ་བཀོད་ཀྱི་ཁྱབ་ཚད་ ༩༡༢ལས་༩༣༦ དང་ སོན་ I18NI000000113X དང་ གཞུང་སྐྱོང་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ ཅ་རྙིང་གི་ཧེ་ཤེ་ཚུ་ཨིན། |
+| ཊི་ཨེལ་ཨེསི་གསལ་སྡུད་གསལ་སྟོན་ | `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` (+ `.sha256`) | Q2 ལོག་གཡོག་བཀོལ་བའི་སྐབས་ ཆ་འཇོག་གྲུབ་པའི་ TLS གསལ་སྡུད་ཀྱི་ Hash; འབྲེལ་འཐུད་ཡོད་པའི་ ཟུར་དེབ་ནང་ བརྗོད་ཡོད། |
+| འགྲུལ་བཞུད་-མུ་མཐུད་ཟ་མི་ལས་རིམ། | `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | Q2 rehersal གི་དོན་ལུ་ འཆར་གཞི་དྲན་ཐོ། (སྒོ་སྒྲིག་དང་ slot range ལཱ་གི་འབོར་ཚད་ བྱ་རིམ་གྱི་ཇོ་བདག་ཚུ་)། |
+| བསྐྱར་སྦྱོང་གི་བང་རྒྱུག་དེབ་འགོ་བཙུགས། | `docs/source/runbooks/nexus_multilane_rehearsal.md` | གནས་རིམ་གྱི་དོན་ལུ་ བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་ → ལག་ལེན་འཐབ་ཐངས་ → བཤུད་སྒྲིལ་; ལམ་གྱི་ཊོ་པོ་ལོ་ཇི་ཡང་ན་ཕྱིར་འདྲེན་འབད་མི་ལམ་སྟོན་བསྒྱུར་བཅོས་འགྱོ་བའི་སྐབས་ དུས་མཐུན། |
+| བརྒྱུད་འཕྲིན་ཐུམ་སྒྲིལ་བདེན་དཔྱད་འབད་མི་ | `scripts/telemetry/validate_nexus_telemetry_pack.py` | CLI B4 retro གིས་ གཞི་བསྟུན་འབད་ཡོདཔ། གཏན་མཛོད་འདི་གིས་ ཐུམ་སྒྲིལ་འདི་བསྒྱུར་བཅོས་འགྱོ་བའི་སྐབས་ འཚོལ་ཞིབ་འཕྲུལ་ཆས་དང་གཅིག་ཁར་ བཞུ་བཅུགཔ་ཨིན། |
+| མལ་ཊི་ལེན་གྱི་ འགྱུར་ལྡོག་ | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | སྣ་མང་ལམ་རིམ་རིམ་སྒྲིག་ཚུ་གི་དོན་ལུ་ I18NI000000121X གིས་ སོ་ར་ཐོ་གཞུང་ཧ་ཤེ་དང་ མཁོ་ཆས་ལེན་གྱི་ ཀུ་ར་/མཉམ་བསྡོམས་-ལོག་འགྲུལ་ལམ་ (I18NI000000122X) ཚུ་ ཉམས་སྲུང་འབདཝ་ཨིན། |

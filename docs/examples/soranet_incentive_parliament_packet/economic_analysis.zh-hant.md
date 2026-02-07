@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b453559c05401edc11894e585c8d5ca4b678d4667c1cef0415582e1f7de8246
 source_last_modified: "2025-12-29T18:16:35.087502+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Economic Analysis - 2025-10 -> 2025-11 Shadow Run
+# 經濟分析 - 2025-10 -> 2025-11 Shadow Run
 
-Source artefact: `docs/examples/soranet_incentive_shadow_run.json` (signature +
-public key in the same directory). The simulation replayed 60 epochs per relay
-with the reward engine pinned to `RewardConfig` recorded in
-`reward_config.json`.
+來源文物：`docs/examples/soranet_incentive_shadow_run.json`（簽名+
+公鑰在同一目錄中）。每個中繼重放 60 個 epoch 的模擬
+獎勵引擎固定到 `RewardConfig` 記錄在
+`reward_config.json`。
 
-## Distribution Summary
+## 分佈總結
 
-- **Total payouts:** 5,160 XOR over 360 rewarded epochs.
-- **Fairness envelope:** Gini coefficient 0.121; top relay share 23.26%
-  (well below the 30% governance guardrail).
-- **Availability:** fleet average 96.97%, all relays remained above 94%.
-- **Bandwidth:** fleet average 91.20%, with the lowest performer at 87.23%
-  during planned maintenance; penalties were applied automatically.
-- **Compliance noise:** 9 warning epochs and 3 suspensions were observed and
-  translated into payout reductions; no relay exceeded the 12-warning cap.
-- **Operational hygiene:** no metrics snapshots were skipped due to missing
-  config, bonds, or duplicates; no calculator errors were emitted.
+- **總支出：** 5,160 XOR 超過 360 個獎勵時期。
+- **公平包絡線：**基尼係數0.121；頂級繼電器份額 23.26%
+  （遠低於 30% 的治理護欄）。
+- **可用性：**機隊平均96.97%，所有中繼保持在94%以上。
+- **帶寬：** 機群平均 91.20%，表現最低的為 87.23%
+  在計劃維護期間；處罰是自動實施的。
+- **合規噪音：** 觀察到 9 次警告時期和 3 次暫停
+  轉化為支出減少；沒有繼電器超過 12 次警告上限。
+- **操作衛生：**沒有由於丟失而跳過指標快照
+  配置、債券或重複項；沒有發出任何計算器錯誤。
 
-## Observations
+## 觀察結果
 
-- Suspensions correspond to epochs where relays entered maintenance mode. The
-  payout engine emitted zero payouts for those epochs while preserving the
-  audit trail in the shadow-run JSON.
-- Warning penalties shaved 2% off the affected payouts; the resulting
-  distribution still converges thanks to the uptime/bandwidth weights (650/350
-  per mille).
-- Bandwidth variance tracks the anonymised guard heatmap. The lowest performer
-  (`6666...6666`) retained 620 XOR across the window, above the 0.6x floor.
-- Latency-sensitive alerts (`SoranetRelayLatencySpike`) remained below warning
-  thresholds throughout the window; correlated dashboards are captured under
-  `dashboards/grafana/soranet_incentives.json`.
+- 暫停對應於繼電器進入維護模式的時期。的
+  支付引擎在這些時期發出零支付，同時保留
+  影子運行 JSON 中的審計跟踪。
+- 警告處罰使受影響的支出減少 2%；由此產生的
+  由於正常運行時間/帶寬權重（650/350
+  每千）。
+- 帶寬方差跟踪匿名防護熱圖。表現最差的人
+  (`6666...6666`) 在窗口上保留 620 XOR，高於 0.6x 下限。
+- 延遲敏感警報 (`SoranetRelayLatencySpike`) 仍低於警告
+  整個窗口的閾值；相關儀表板被捕獲在
+  `dashboards/grafana/soranet_incentives.json`。
 
-## Recommended Actions Before GA
+## 正式發布前的建議操作
 
-1. Keep running monthly shadow replays and update the artefact set and this
-   analysis if the fleet composition changes.
-2. Gate automatic payouts on the Grafana alert suite referenced in the roadmap
-   (`dashboards/alerts/soranet_incentives_rules.yml`); copy screenshots into the
-   governance minutes when seeking renewal.
-3. Re-run the economic stress test if base reward, uptime/bandwidth weights, or
-   the compliance penalty changes by >=10%.
+1. 繼續運行每月的影子重播並更新工件集和此
+   分析機隊構成是否發生變化。
+2. 在路線圖中引用的 Grafana 警報套件上進行自動支付
+   （`dashboards/alerts/soranet_incentives_rules.yml`）；將屏幕截圖複製到
+   尋求更新時的治理會議紀要。
+3. 如果基本獎勵、正常運行時間/帶寬權重或
+   合規處罰變化 >=10%。

@@ -4,62 +4,62 @@ direction: rtl
 source: docs/portal/docs/sns/registry-schema.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sns/registry_schema.md` и служит канонической копией портала. Исходный файл сохраняется для обновлений переводов.
+Эта страница отражает `docs/source/sns/registry_schema.md` ו- служит канонической копией портала. Исходный файл сохраняется для обновлений переводов.
 :::
 
 # Схема реестра Sora Name Service (SN-2a)
 
-**Статус:** Черновик 2026-03-24 -- отправлено на ревью программы SNS  
-**Ссылка на roadmap:** SN-2a "Registry schema & storage layout"  
-**Область:** Определить канонические структуры Norito, состояния жизненного цикла и события для Sora Name Service (SNS), чтобы реализации registry и registrar оставались детерминированными в контрактах, SDK и gateways.
+**סטטוס:** שרנוביק 2026-03-24 -- אופטימיזציה של מערכת SNS  
+**סכימה על מפת הדרכים:** SN-2a "סכימת רישום ופריסת אחסון"  
+**Область:** Определить канонические структуры Norito, состояния жизненного цикла и событич Service для Sora), רישום רישום ורשם מבצעים פעולות בקשר, SDK ושערים.
 
 Этот документ завершает поставку схемы для SN-2a, определяя:
 
-1. Идентификаторы и правила хеширования (`SuffixId`, `NameHash`, derivation селекторов).
-2. Norito structs/enums для записей имен, политик суффиксов, ценовых tiers, распределений доходов и событий реестра.
-3. Layout хранения и префиксы индексов для детерминированного replay.
-4. Машину состояний, охватывающую регистрацию, продление, grace/redemption, freeze и tombstone.
+1. Идентификаторы и правила хеширования (`SuffixId`, `NameHash`, גזירה селекторов).
+2. Norito מבנים/סכמות עבור записей имен, политик суффиксов, ценовых שכבות, распределений доходов и событий.
+3. פריסה хранения и префиксы индексов למשחק חוזר של детерминированного.
+4. Машину состояний, охватывающую регистрацию, продление, חסד/גאולה, הקפאה ומצבה.
 5. Канонические события, потребляемые DNS/gateway автоматизацией.
 
 ## 1. Идентификаторы и хеширование
 
 | Идентификатор | Описание | Производная |
-|------------|-------------|------------|
-| `SuffixId` (`u16`) | Идентификатор реестра для суффиксов верхнего уровня (`.sora`, `.nexus`, `.dao`). Согласован с каталогом суффиксов в [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Назначается голосованием по governance; хранится в `SuffixPolicyV1`. |
-| `SuffixSelector` | Каноническая строковая форма суффикса (ASCII, lower-case). | Пример: `.sora` -> `sora`. |
-| `NameSelectorV1` | Бинарный селектор зарегистрированного лейбла. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Лейбл в NFC + lower-case по Norm v1. |
+|------------|----------------|-------------|
+| `SuffixId` (`u16`) | Идентификатор реестра для суффиксов верхнего уровня (`.sora`, `.nexus`, `.dao`). Согласован с каталогом суффиксов в [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Назначается голосованием по ממשל; хранится в `SuffixPolicyV1`. |
+| `SuffixSelector` | Каноническая строковая форма суффикса (ASCII, אותיות קטנות). | דוגמה: `.sora` -> `sora`. |
+| `NameSelectorV1` | Бинарный селектор зарегистрированного лейбла. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Лейбл в NFC + אותיות קטנות по Norm v1. |
 | `NameHash` (`[u8;32]`) | Основной ключ поиска, используемый контрактами, событиями и кешами. | `blake3(NameSelectorV1_bytes)`. |
 
 Требования детерминизма:
 
 - Лейблы нормализуются через Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Пользовательские строки ДОЛЖНЫ быть нормализованы перед хешированием.
-- Зарезервированные лейблы (из `SuffixPolicyV1.reserved_labels`) никогда не входят в реестр; governance-only overrides выпускают события `ReservedNameAssigned`.
+- Зарезервированные лейблы (יз `SuffixPolicyV1.reserved_labels`) никогда не входят в реестр; עוקף ממשל בלבד выпускают события `ReservedNameAssigned`.
 
-## 2. Структуры Norito
+## 2. סטרוקטורות Norito
 
-### 2.1 NameRecordV1
-
-| Поле | Тип | Примечания |
-|-------|------|-----------|
-| `suffix_id` | `u16` | Ссылка на `SuffixPolicyV1`. |
+### 2.1 NameRecordV1| Поле | טיפ | Примечания |
+|-------|------|--------|
+| `suffix_id` | `u16` | סמל עבור `SuffixPolicyV1`. |
 | `selector` | `NameSelectorV1` | Сырые байты селектора для аудита/debug. |
 | `name_hash` | `[u8; 32]` | Ключ для карт/событий. |
 | `normalized_label` | `AsciiString` | Читаемый лейбл (после Norm v1). |
-| `display_label` | `AsciiString` | Casing от steward; косметика. |
+| `display_label` | `AsciiString` | מארז של דייל; косметика. |
 | `owner` | `AccountId` | Управляет продлениями/трансферами. |
-| `controllers` | `Vec<NameControllerV1>` | Ссылки на адреса аккаунтов, resolvers или metadata приложения. |
+| `controllers` | `Vec<NameControllerV1>` | הגדרות כתובות, פותרים או מטא נתונים приложения. |
 | `status` | `NameStatus` | Флаг жизненного цикла (см. Раздел 4). |
-| `pricing_class` | `u8` | Индекс в ценовых tiers суффикса (standard, premium, reserved). |
+| `pricing_class` | `u8` | Индекс в ценовых tiers суффикса (סטנדרטי, פרימיום, שמור). |
 | `registered_at` | `Timestamp` | Время блока первичной активации. |
 | `expires_at` | `Timestamp` | Конец оплаченного срока. |
-| `grace_expires_at` | `Timestamp` | Конец grace auto-renew (default +30 дней). |
-| `redemption_expires_at` | `Timestamp` | Конец окна redemption (default +60 дней). |
-| `auction` | `Option<NameAuctionStateV1>` | Присутствует при Dutch reopen или premium аукционах. |
+| `grace_expires_at` | `Timestamp` | חידוש אוטומטי של Конец חסד (ברירת מחדל +30 дней). |
+| `redemption_expires_at` | `Timestamp` | פדיון Конец окна (ברירת מחדל +60 дней). |
+| `auction` | `Option<NameAuctionStateV1>` | Присутствует при פתיחה מחדש בהולנדית או פרימיום аукционах. |
 | `last_tx_hash` | `Hash` | Детерминированный указатель на транзакцию версии. |
-| `metadata` | `Metadata` | Произвольная metadata registrar (text records, proofs). |
+| `metadata` | `Metadata` | רשם מטא נתונים של Произвольная (רשומות טקסט, הוכחות). |
 
 Поддерживающие структуры:
 
@@ -119,24 +119,24 @@ Enum AuctionKind {
 
 ### 2.2 SuffixPolicyV1
 
-| Поле | Тип | Примечания |
-|-------|------|-----------|
+| Поле | טיפ | Примечания |
+|-------|------|--------|
 | `suffix_id` | `u16` | Первичный ключ; стабилен между версиями политики. |
-| `suffix` | `AsciiString` | например, `sora`. |
-| `steward` | `AccountId` | Steward, определенный в governance charter. |
+| `suffix` | `AsciiString` | דוגמה, `sora`. |
+| `steward` | `AccountId` | דייל, определенный в governance charter. |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Актив settlement по умолчанию (например `xor#sora`). |
+| `payment_asset_id` | `AsciiString` | התנחלות Актив по умолчанию (например `xor#sora`). |
 | `pricing` | `Vec<PriceTierV1>` | Коэффициенты цен по tiers и правила длительности. |
-| `min_term_years` | `u8` | Минимальный срок покупки вне зависимости от tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
+| `min_term_years` | `u8` | Минимальный срок покупки вне зависимости от דחיפת שכבות. |
+| `grace_period_days` | `u16` | ברירת מחדל 30. |
+| `redemption_period_days` | `u16` | ברירת מחדל 60. |
 | `max_term_years` | `u8` | Максимальная длительность предоплаты. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) по charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Список от governance с инструкциями назначения. |
-| `fee_split` | `SuffixFeeSplitV1` | Доли treasury / steward / referral (basis points). |
-| `fund_splitter_account` | `AccountId` | Аккаунт escrow + распределение средств. |
+| `referral_cap_bps` | `u16` | <=1000 (10%) по צ'רטר. |
+| `reserved_labels` | `Vec<ReservedNameV1>` | תיאור של ממשל с инструкциями назначения. |
+| `fee_split` | `SuffixFeeSplitV1` | Доли אוצר / דייל / הפניה (נקודות בסיס). |
+| `fund_splitter_account` | `AccountId` | Аккаунт נאמנות + распределение средств. |
 | `policy_version` | `u16` | Увеличивается при каждом изменении. |
-| `metadata` | `Metadata` | Расширенные заметки (KPI covenant, hashes docs по compliance). |
+| `metadata` | `Metadata` | Расширенные заметки (אמנת KPI, hashes docs по ציות). |
 
 ```text
 Struct PriceTierV1 {
@@ -164,18 +164,16 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Записи доходов и settlement
+### 2.3 Записи доходов и הסדר| מבנה | Поля | Назначение |
+|--------|------|--------|
+| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, Norito, Norito. | Детерминированная запись распределенных выплат по эпохам הסדר (неделя). |
+| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Эмитируется при каждом платеже (רישום, חידוש, מכירה פומבית). |
 
-| Struct | Поля | Назначение |
-|--------|------|------------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Детерминированная запись распределенных выплат по эпохам settlement (неделя). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Эмитируется при каждом платеже (registration, renewal, auction). |
-
-Все поля `TokenValue` используют каноническое фиксированное кодирование Norito с кодом валюты из связанного `SuffixPolicyV1`.
+Все поля `TokenValue` используют каноническое фиксированное кодирование Norito с кодом валюсты `SuffixPolicyV1`.
 
 ### 2.4 События реестра
 
-Канонические события дают replay log для DNS/gateway автоматизации и аналитики.
+Канонические события дают יומן הפעלה חוזר ל-DNS/gateway автоматизации аналитики.
 
 ```text
 Struct RegistryEventV1 {
@@ -204,18 +202,18 @@ Enum RegistryEventKind {
 }
 ```
 
-События должны добавляться в replayable log (например, домен `RegistryEvents`) и зеркалироваться в gateway feeds, чтобы DNS caches инвалидировались в пределах SLA.
+События должны добавляться в replayable log (לדוגמה, домен `RegistryEvents`) ו- зеркалироваться в gateway feeds, чтобиры DNS caches пределах SLA.
 
-## 3. Layout хранения и индексы
+## 3. פריסה хранения и индексы
 
 | Ключ | Описание |
-|-----|----------|
+|-----|--------|
 | `Names::<name_hash>` | Основная карта `name_hash` -> `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Вторичный индекс для wallet UI (pagination friendly). |
+| `NamesByOwner::<AccountId, suffix_id>` | Вторичный индекс עבור ממשק המשתמש של ארנק (ידידותי לדפיון). |
 | `NamesByLabel::<suffix_id, normalized_label>` | Обнаружение конфликтов, детерминированный поиск. |
 | `SuffixPolicies::<suffix_id>` | Актуальный `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | История `RevenueShareRecordV1`. |
-| `RegistryEvents::<u64>` | Append-only log с монотонной последовательностью. |
+| `RevenueShare::<suffix_id, epoch_id>` | קובץ `RevenueShareRecordV1`. |
+| `RegistryEvents::<u64>` | יומן הוספה בלבד с монотонной последовательностью. |
 
 Все ключи сериализуются Norito tuples для детерминированного хеширования между хостами. Обновления индексов выполняются атомарно вместе с основным рекордом.
 
@@ -223,31 +221,29 @@ Enum RegistryEventKind {
 
 | Состояние | Условия входа | Допустимые переходы | Примечания |
 |-------|----------------|---------------------|------------|
-| Available | Производно, когда `NameRecord` отсутствует. | `PendingAuction` (premium), `Active` (standard registration). | Поиск доступности читает только индексы. |
-| PendingAuction | Создается, когда `PriceTierV1.auction_kind` != none. | `Active` (auction settles), `Tombstoned` (no bids). | Аукционы эмитируют `AuctionOpened` и `AuctionSettled`. |
-| Active | Регистрация или продление успешно. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` двигает переход. |
-| GracePeriod | Автоматически при `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 дней; резолвится, но помечено. |
-| Redemption | `now > grace_expires_at` но `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Команды требуют штрафного платежа. |
-| Frozen | Freeze от governance или guardian. | `Active` (после ремедиации), `Tombstoned`. | Нельзя передавать или обновлять controllers. |
-| Tombstoned | Добровольная сдача, итог спора или истекшая redemption. | `PendingAuction` (Dutch reopen) или остается tombstoned. | Событие `NameTombstoned` должно включать причину. |
+| זמין | Производно, когда `NameRecord` отсутствует. | `PendingAuction` (פרימיום), `Active` (רישום סטנדרטי). | Поиск доступности читает только индексы. |
+| מכירה פומבית בהמתנה | Создается, когда `PriceTierV1.auction_kind` != אין. | `Active` (מכירה פומבית מסתיימת), `Tombstoned` (ללא הצעות). | Аукционы эмитируют `AuctionOpened` ו-`AuctionSettled`. |
+| פעיל | Регистрация или продление успешно. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` двигает переход. |
+| תקופת חסד | Автоматически при `now > expires_at`. | `Active` (חידוש בזמן), `Redemption`, `Tombstoned`. | ברירת מחדל +30 дней; резолвится, но помечено. |
+| גאולה | `now > grace_expires_at` לא `< redemption_expires_at`. | `Active` (חידוש מאוחר), `Tombstoned`. | Команды требуют штрафного платежа. |
+| קפוא | הקפאת ניהול או אפוטרופוס. | `Active` (после ремедиации), `Tombstoned`. | Нельзя передавать или обновлять בקרים. |
+| מצבה | Добровольная сдача, итог спора или истекшая גאולה. | `PendingAuction` (פתיחה מחדש בהולנד) или остается מצבה. | Событие `NameTombstoned` должно включать причину. |Переходы состояний ДОЛЖНЫ эмитировать соответствующий `RegistryEventKind`, чтобы downstream caches оставанлисьсь с. Tombstoned имена, входящие в Dutch reopen аукционы, прикрепляют מטען `AuctionKind::DutchReopen`.
 
-Переходы состояний ДОЛЖНЫ эмитировать соответствующий `RegistryEventKind`, чтобы downstream caches оставались согласованными. Tombstoned имена, входящие в Dutch reopen аукционы, прикрепляют payload `AuctionKind::DutchReopen`.
+## 5. שער Канонические события и синхронизация
 
-## 5. Канонические события и синхронизация gateway
-
-Gateways подписываются на `RegistryEventV1` и синхронизируют DNS/SoraFS, выполняя:
+Gateways подписываются ב-`RegistryEventV1` ו- синхронизируют DNS/SoraFS, выполняя:
 
 1. Загрузка последнего `NameRecordV1`, на который указывает последовательность событий.
-2. Перегенерация resolver templates (IH58 предпочтительно + compressed (`sora`) как второй выбор, text records).
-3. Pin обновленных данных зоны через SoraDNS workflow из [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+2. תבניות פותר Перегенерация (IH58 предпочтительно + דחוס (`sora`) как второй выбор, רשומות טקסט).
+3. Pin обновленных данных зоны через זרימת העבודה של SoraDNS из [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Гарантии доставки событий:
 
-- Каждая транзакция, влияющая на `NameRecordV1`, *должна* добавить ровно одно событие со строго возрастающей `version`.
-- `RevenueSharePosted` события ссылаются на settlements из `RevenueShareRecordV1`.
-- События freeze/unfreeze/tombstone включают хеши governance артефактов в `metadata` для audit replay.
+- Каждая транзакция, влияющая на `NameRecordV1`, *должна* добавить ровно одно событие со строего вою `version`.
+- `RevenueSharePosted` события ссылаются на התנחלויות из `RevenueShareRecordV1`.
+- הקפאה/ביטול הקפאה/טומבסטון.
 
-## 6. Примеры payloads Norito
+## 6. מטענים Примеры Norito
 
 ### 6.1 Пример NameRecord
 
@@ -309,8 +305,8 @@ SuffixPolicyV1 {
 
 ## 7. Следующие шаги
 
-- **SN-2b (Registrar API & governance hooks):** открыть эти structs через Torii (Norito и JSON bindings) и привязать admission checks к governance артефактам.
-- **SN-3 (Auction & registration engine):** переиспользовать `NameAuctionStateV1` для логики commit/reveal и Dutch reopen.
-- **SN-5 (Payment & settlement):** использовать `RevenueShareRecordV1` для финансовой сверки и автоматизации отчетов.
+- **SN-2b (Registrar API & Governance Hooks):** открыть эти structs через Torii (Norito ו-JSON bindings) и привязать этифарть chez admission к governance.
+- **SN-3 (מנוע מכירות פומביות ורישום):** переиспользовать `NameAuctionStateV1` ל- логики commit/reveal и הולנדית לפתוח מחדש.
+- **SN-5 (תשלום וסילוק):** использовать `RevenueShareRecordV1` для финансовой сверки и автоматизации отчетов.
 
-Вопросы и запросы на изменения следует фиксировать вместе с обновлениями SNS roadmap в `roadmap.md` и отражать в `status.md` при слиянии.
+חיפושים ופיתוחים של מפת הדרכים של SNS ב-`roadmap.md` и отражать70X отражать70X слиянии.

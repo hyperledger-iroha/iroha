@@ -10,26 +10,27 @@ translation_last_reviewed: 2026-02-07
 title: Rust ledger flow recipe
 description: Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.
 slug: /sdks/recipes/rust-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ის იმპორტი '@site/src/components/SampleDownload'-დან;
 
-This recipe mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-but runs everything from a Rust binary. It reuses the default dev network
-(`docker compose -f defaults/docker-compose.single.yml up --build`) and the demo
-credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes one
-for one.
+ეს რეცეპტი ასახავს [CLI ledger walkthrough] (../../norito/ledger-walkthrough.md)
+მაგრამ აწარმოებს ყველაფერს Rust ბინარიდან. ის ხელახლა იყენებს დეველოპმენტის ნაგულისხმევ ქსელს
+(`docker compose -f defaults/docker-compose.single.yml up --build`) და დემო
+რწმუნებათა სიგელები `defaults/client.toml`-ში, ასე რომ თქვენ შეგიძლიათ შეადაროთ SDK და CLI ჰეშები ერთი
+ერთისთვის.
 
 <SampleDownload
   href="/sdk-recipes/rust/src/main.rs"
-  filename="src/main.rs"
-  description="Use this Rust source file as a baseline to follow along or to diff against your changes."
+  ფაილის სახელი = "src/main.rs"
+  description="გამოიყენე ეს Rust წყაროს ფაილი, როგორც საბაზისო, რათა თვალყური ადევნოთ ან განასხვავოთ თქვენი ცვლილებები."
 />
 
-## Prerequisites
+## წინაპირობები
 
-1. Run the dev peer with Docker Compose (see the [Norito quickstart](../../norito/quickstart.md)).
-2. Export the default admin/receiver accounts and the admin private key from
+1. გაუშვით დეველოპერის თანატოლი Docker Compose-ით (იხილეთ [Norito სწრაფი დაწყება](../../norito/quickstart.md)).
+2. ნაგულისხმევი ადმინისტრატორის/მიმღების ანგარიშების და ადმინისტრატორის პირადი გასაღების ექსპორტი
    `defaults/client.toml`:
 
    ```bash
@@ -38,16 +39,16 @@ for one.
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
-   The private key string is the multihash-encoded value stored under `[account].private_key`.
-3. Create a new workspace binary (or reuse an existing one):
+   პირადი გასაღების სტრიქონი არის მულტიჰაშის კოდირებული მნიშვნელობა, რომელიც ინახება `[account].private_key`-ში.
+3. შექმენით ახალი სამუშაო სივრცის ორობითი (ან ხელახლა გამოიყენეთ არსებული):
 
    ```bash
    cargo new --bin rust-ledger-recipe
    cd rust-ledger-recipe
    ```
 
-4. Add the dependencies (use a crates.io version if you are outside the
-   workspace):
+4. დაამატეთ დამოკიდებულებები (გამოიყენეთ crates.io ვერსია, თუ თქვენ გარეთ ხართ
+   სამუშაო ადგილი):
 
    ```toml title="Cargo.toml"
    [dependencies]
@@ -57,7 +58,7 @@ for one.
    iroha_data_model = { path = "../../crates/iroha_data_model", features = ["transparent_api", "json"] }
    ```
 
-## Example program
+## მაგალითი პროგრამა
 
 ```rust title="src/main.rs"
 use std::str::FromStr;
@@ -112,28 +113,28 @@ fn main() -> Result<()> {
 }
 ```
 
-## Run the recipe
+## გაუშვით რეცეპტი
 
 ```bash
 cargo run
 ```
 
-You should see log output similar to:
+თქვენ უნდა ნახოთ ჟურნალის გამომავალი მსგავსი:
 
 ```
 ih58... now holds:
   50 units of coffee#wonderland
 ```
 
-If the asset definition already exists, the register call returns a
-`ValidationError::Duplicate`. Either ignore it (the mint still succeeds) or pick
-a new name.
+თუ აქტივის განმარტება უკვე არსებობს, რეგისტრის გამოძახება აბრუნებს a
+`ValidationError::Duplicate`. ან იგნორირება გაუკეთეთ (პიტნა მაინც ახერხებს) ან აირჩიე
+ახალი სახელი.
 
-## Verify hashes and parity
+## შეამოწმეთ ჰეშები და პარიტეტი
 
-- Use `iroha --config defaults/client.toml transaction get --hash <hash>` to
-  inspect the transactions that the SDK submitted.
-- Cross-check balances with `iroha --config defaults/client.toml asset list all --table`
-  or `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Repeat the same flow from the CLI walkthrough to confirm both surfaces produce
-  the same Norito payloads and transaction statuses.
+- გამოიყენეთ `iroha --config defaults/client.toml transaction get --hash <hash>`
+  შეამოწმეთ ტრანზაქციები, რომლებიც SDK-მ წარადგინა.
+- გადაამოწმეთ ნაშთები `iroha --config defaults/client.toml asset list all --table`-ით
+  ან `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- გაიმეორეთ იგივე ნაკადი CLI-დან, რათა დაადასტუროთ ორივე ზედაპირის წარმოქმნა
+  იგივე Norito დატვირთვა და ტრანზაქციის სტატუსი.

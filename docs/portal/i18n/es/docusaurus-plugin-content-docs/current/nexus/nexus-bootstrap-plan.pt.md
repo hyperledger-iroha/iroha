@@ -4,101 +4,93 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-bootstrap-plan
-title: Bootstrap e observabilidade do Sora Nexus
-description: Plano operacional para colocar o cluster central de validadores Nexus online antes de adicionar servicos SoraFS e SoraNet.
+id: plan-bootstrap-nexus
+título: Bootstrap y observabilidad de Sora Nexus
+descripción: Plano operativo para colocar o cluster central de validadores Nexus online antes de agregar servicios SoraFS y SoraNet.
 ---
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas copias alinhadas ate que as versoes localizadas cheguem ao portal.
+:::nota Fuente canónica
+Esta página refleja `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas copias alinhadas ate que as versoes localizadas cheguem ao portal.
 :::
 
-# Plano de bootstrap e observabilidade do Sora Nexus
+# Plano de bootstrap y observabilidad de Sora Nexus
 
 ## Objetivos
-- Levantar a rede base de validadores/observadores Sora Nexus com chaves de governanca, APIs Torii e monitoramento de consenso.
-- Validar servicos centrais (Torii, consenso, persistencia) antes de habilitar deploys piggyback SoraFS/SoraNet.
-- Estabelecer workflows de CI/CD e dashboards/alertas de observabilidade para garantir a saude da rede.
+- Levantar una red base de validadores/observadores Sora Nexus con llaves de gobierno, APIs Torii y monitoreo de consenso.
+- Validar servicios centrales (Torii, consenso, persistencia) antes de habilitar despliega piggyback SoraFS/SoraNet.
+- Establecer flujos de trabajo de CI/CD y paneles/alertas de observabilidad para garantizar la seguridad de la red.
 
-## Prerequisitos
-- Material de chaves de governanca (multisig do conselho, chaves de comite) disponivel em HSM ou Vault.
-- Infraestrutura base (clusters Kubernetes ou nos bare-metal) em regioes primaria/secundaria.
-- Configuracao de bootstrap atualizada (`configs/nexus/bootstrap/*.toml`) refletindo os parametros de consenso mais recentes.
-
-## Ambientes de rede
-- Operar dois ambientes Nexus com prefixos de rede distintos:
-- **Sora Nexus (mainnet)** - prefixo de rede de producao `nexus`, hospedando governanca canonica e servicos piggyback SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefixo de rede de staging `testus`, espelhando a configuracao da mainnet para testes de integracao e validacao pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Manter arquivos genesis separados, chaves de governanca e footprints de infraestrutura para cada ambiente. Testus atua como campo de provas para rollouts SoraFS/SoraNet antes de promover para Nexus.
-- Pipelines de CI/CD devem fazer deploy primeiro em Testus, executar smoke tests automatizados e exigir promocao manual para Nexus quando os checks passarem.
-- Bundles de configuracao de referencia vivem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada um contendo `config.toml`, `genesis.json` e diretorios de admissao Torii de exemplo.
-
-## Etapa 1 - Revisao de configuracao
-1. Auditar documentacao existente:
-   - `docs/source/nexus/architecture.md` (consenso, layout de Torii).
-   - `docs/source/nexus/deployment_checklist.md` (requisitos de infraestrutura).
-   - `docs/source/nexus/governance_keys.md` (procedimentos de custodia de chaves).
-2. Validar que arquivos genesis (`configs/nexus/genesis/*.json`) alinham com o roster atual de validadores e pesos de staking.
-3. Confirmar parametros de rede:
+##Requisitos previos
+- Material de llaves de gobierno (multisig do conselho, chaves de comité) disponible en HSM o Vault.
+- Infraestructura base (clusters Kubernetes o bare-metal) en regiones primaria/secundaria.
+- Configuración de bootstrap actualizada (`configs/nexus/bootstrap/*.toml`) reflejando los parámetros de consenso más recientes.## Ambientes de red
+- Operar dos ambientes Nexus con prefijos de red distintos:
+- **Sora Nexus (mainnet)** - prefijo de red de producción `nexus`, alojando gobierno canónico y servicios a cuestas SoraFS/SoraNet (ID de cadena `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
+- **Sora Testus (testnet)** - prefijo de red de staging `testus`, implementando la configuración de mainnet para pruebas de integración y validación previa al lanzamiento (cadena UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- Manter arquivos génesis separados, chaves de gobernanza e huellas de infraestructura para cada ambiente. Testus atua como campo de pruebas para rollouts SoraFS/SoraNet antes de promover para Nexus.
+- Las tuberías de CI/CD deben implementarse primero en Testus, ejecutar pruebas de humo automatizadas y exigir el manual de promoción para Nexus cuando se pasan las comprobaciones.
+- Paquetes de configuración de referencia viven en `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada uno de los cuales contiene `config.toml`, `genesis.json` y directorios de admisión Torii de ejemplo.## Etapa 1 - Revisión de configuración
+1. Auditoría documental existente:
+   - `docs/source/nexus/architecture.md` (consenso, diseño de Torii).
+   - `docs/source/nexus/deployment_checklist.md` (requisitos de infraestructura).
+   - `docs/source/nexus/governance_keys.md` (procedimientos de custodia de chaves).
+2. Validar que arquivos genesis (`configs/nexus/genesis/*.json`) alinham con o roster actual de validadores e pesos de sizing.
+3. Confirmar parámetros de red:
    - Tamanho do comite de consenso e quorum.
-   - Intervalo de blocos / limites de finalidade.
-   - Portas do servico Torii e certificados TLS.
+   - Intervalo de bloques / límites de finalidad.
+   - Portas do servico Torii y certificados TLS.
 
-## Etapa 2 - Deploy do cluster bootstrap
-1. Provisionar nos validadores:
-   - Deploy de instancias `irohad` (validadores) com volumes persistentes.
+## Etapa 2: implementar el arranque del clúster
+1. Provisionarnos validadores:
+   - Implementar instancias `irohad` (validadores) con volúmenes persistentes.
    - Garantir que regras de firewall permitam trafego de consenso e Torii entre nos.
-2. Iniciar servicos Torii (REST/WebSocket) em cada validador com TLS.
+2. Inicie los servicios Torii (REST/WebSocket) en cada validador con TLS.
 3. Deploy de nos observadores (somente leitura) para resiliencia adicional.
-4. Executar scripts de bootstrap (`scripts/nexus_bootstrap.sh`) para distribuir genesis, iniciar consenso e registrar nos.
-5. Executar smoke tests:
-   - Enviar transacoes de teste via Torii (`iroha_cli tx submit`).
-   - Verificar producao/finalidade de blocos via telemetria.
-   - Checar replicacao do ledger entre validadores/observadores.
+4. Ejecute scripts de bootstrap (`scripts/nexus_bootstrap.sh`) para distribuir génesis, iniciar consenso y registrar nos.
+5. Ejecutar pruebas de humo:
+   - Enviar transacoes de teste vía Torii (`iroha_cli tx submit`).
+   - Verificar producción/finalidad de blocos vía telemetría.
+   - Revisar la replicación del libro mayor entre validadores/observadores.## Etapa 3 - Gobernanza y gestao de chaves
+1. Carregar configuracao multisig do conselho; confirmar que las propuestas de gobierno pueden ser submetidas y ratificadas.
+2. Armazenar com seguranca chaves de consenso/comite; configurar copias de seguridad automáticas con registro de acceso.
+3. Configurar procedimientos de rotación de chaves de emergencia (`docs/source/nexus/key_rotation.md`) y verificar el runbook.
 
-## Etapa 3 - Governanca e gestao de chaves
-1. Carregar configuracao multisig do conselho; confirmar que propostas de governanca podem ser submetidas e ratificadas.
-2. Armazenar com seguranca chaves de consenso/comite; configurar backups automaticos com logging de acesso.
-3. Configurar procedimentos de rotacao de chaves de emergencia (`docs/source/nexus/key_rotation.md`) e verificar o runbook.
-
-## Etapa 4 - Integracao CI/CD
-1. Configurar pipelines:
-   - Build e publicacao de imagens validator/Torii (GitHub Actions ou GitLab CI).
+## Etapa 4 - Integraçao CI/CD
+1. Configurar tuberías:
+   - Construir y publicar el validador de imágenes/Torii (GitHub Actions o GitLab CI).
    - Validacao automatizada de configuracao (lint de genesis, verificacao de assinaturas).
-   - Pipelines de deploy (Helm/Kustomize) para clusters de staging e producao.
-2. Implementar smoke tests no CI (subir cluster efemero, rodar suite canonica de transacoes).
-3. Adicionar scripts de rollback para deploys com falha e documentar runbooks.
-
-## Etapa 5 - Observabilidade e alertas
-1. Deploy do stack de monitoramento (Prometheus + Grafana + Alertmanager) por regiao.
-2. Coletar metricas centrais:
+   - Pipelines de implementación (Helm/Kustomize) para clusters de staging y producción.
+2. Implementar pruebas de humo no CI (subir cluster efemero, rodar suite canonica de transacoes).
+3. Agregar scripts de reversión para implementaciones con otros runbooks documentados.## Etapa 5 - Observabilidade y alertas
+1. Implemente la pila de monitoreo (Prometheus + Grafana + Alertmanager) por región.
+2. Coletar métricas centrales:
   - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK para servicos Torii e consenso.
-3. Dashboards:
-   - Saude do consenso (altura de bloco, finalidade, status de peers).
-   - Latencia e taxa de erro da API Torii.
-   - Transacoes de governanca e status de propostas.
+   - Registros vía Loki/ELK para servicios Torii y consenso.
+3. Paneles de control:
+   - Saude do consenso (altura de bloque, finalidade, estatus de pares).
+   - Latencia y taxones de error de API Torii.
+   - Transacciones de gobierno y estatus de propuestas.
 4. Alertas:
    - Parada de producao de blocos (>2 intervalos de bloco).
-   - Queda no numero de peers abaixo do quorum.
-   - Picos na taxa de erro de Torii.
-   - Backlog da fila de propostas de governanca.
+   - Queda no número de pares bajo el quórum.
+   - Picos na taxa de error de Torii.
+   - Backlog da fila de propuestas de gobierno.
 
-## Etapa 6 - Validacao e handoff
-1. Rodar validacao end-to-end:
-   - Submeter proposta de governanca (ex. mudanca de parametro).
-   - Processar a aprovacao do conselho para garantir que o pipeline de governanca funciona.
-   - Rodar diff de estado do ledger para garantir consistencia.
+## Etapa 6 - Validacao y traspaso
+1. Rodar validación de extremo a extremo:
+   - Submeter proposta degobernanca (ej. mudanca de parametro).
+   - Procesar la aprobación del consejo para garantizar que la tubería de gobierno funcione.
+   - Rodar diferencia de estado del libro mayor para garantizar consistencia.
 2. Documentar o runbook para on-call (resposta a incidentes, failover, scaling).
-3. Comunicar prontidao para equipes SoraFS/SoraNet; confirmar que deploys piggyback podem apontar para nos Nexus.
-
-## Checklist de implementacao
-- [ ] Auditoria de genesis/configuracao concluida.
-- [ ] Nos validadores e observadores deployados com consenso saudavel.
-- [ ] Chaves de governanca carregadas, proposta testada.
-- [ ] Pipelines CI/CD rodando (build + deploy + smoke tests).
-- [ ] Dashboards de observabilidade ativos com alertas.
-- [ ] Documentacao de handoff entregue aos times downstream.
+3. Comunicar prontidao para equipes SoraFS/SoraNet; Confirmar que despliega piggyback podem apontar para nos Nexus.## Lista de verificación de implementación
+- [ ] Auditorio de génesis/configuracao concluida.
+- [ ] Nos validadores y observadores implementados con consenso saudavel.
+- [ ] Chaves degobernanza carregadas, propuesta testada.
+- [ ] Tuberías CI/CD rodando (construcción + despliegue + pruebas de humo).
+- [ ] Paneles de observabilidade activos con alertas.
+- [] Documentacao de handoff entregue aos times downstream.

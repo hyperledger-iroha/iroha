@@ -8,18 +8,20 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-## Overview
+## አጠቃላይ እይታ
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+ይህ የመጫወቻ መጽሐፍ ወደ ምርት ለውጡን ከማስተዋወቁ በፊት በፓርላማ የተረጋገጠውን የቻንከር ፕሮፋይል በዝግጅት Torii ማሰማራቱ ላይ ያልፋል። የ I18NT0000002X የአስተዳደር ቻርተር እንደፀደቀ እና ቀኖናዊው ቋሚዎች በማከማቻው ውስጥ ይገኛሉ ብሎ ያስባል።
 
-## 1. Prerequisites
+## 1. ቅድመ ሁኔታዎች
 
-1. Sync the canonical fixtures and signatures:
+1. ቀኖናዊ ቋሚዎችን እና ፊርማዎችን ያመሳስሉ፡
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -28,8 +30,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. Torii ጅምር ላይ የሚያነበውን የመግቢያ ኤንቨሎፕ ማውጫ ያዘጋጁ (ለምሳሌ መንገድ)፡ `/var/lib/iroha/admission/sorafs`።
+3. የI18NT0000006X ውቅረት የግኝት መሸጎጫ እና የመግቢያ ማስፈጸሚያ ማብቃቱን ያረጋግጡ፡-
 
    ```toml
    [torii.sorafs.discovery]
@@ -47,43 +49,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. የመግቢያ ኤንቨሎፕ ያትሙ
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. በ`torii.sorafs.discovery.admission.envelopes_dir` የተጠቀሰውን የተፈቀደውን የአቅራቢ ኤንቨሎፕ ይቅዱ፡
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. I18NT0000007X እንደገና ያስጀምሩ (ወይም ጫኚውን በበረራ ላይ ዳግም ከጫኑ) SIGUP ይላኩ።
+3. የመግቢያ መልእክቶችን መዝገቦችን በጅራት ይያዙ፡
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. የግኝት ስርጭትን ያረጋግጡ
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. በእርስዎ የተፈረመውን አቅራቢ የማስታወቂያ ክፍያ (Norito ባይት) ይለጥፉ
+   አቅራቢ ቧንቧ መስመር;
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. የግኝቱን የመጨረሻ ነጥብ ይጠይቁ እና ማስታወቂያው በቀኖናዊ ተለዋጭ ስሞች መከሰቱን ያረጋግጡ።
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   `profile_aliases` `"sorafs.sf1@1.0.0"`ን እንደ መጀመሪያው ግቤት ማካተቱን ያረጋግጡ።
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. የአካል ብቃት እንቅስቃሴ መግለጫ እና የመጨረሻ ነጥቦችን ያቅዱ
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. የአንጸባራቂውን ሜታዳታ አምጡ (መግቢያ ከተተገበረ የዥረት ማስመሰያ ያስፈልገዋል)
 
    ```bash
    sorafs-fetch \
@@ -94,25 +96,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. የJSON ውፅዓትን ይፈትሹ እና ያረጋግጡ፡-
+   - `chunk_profile_handle` I18NI0000021X ነው።
+   - `manifest_digest_hex` ከመወሰኛ ዘገባ ጋር ይዛመዳል።
+   - `chunk_digests_blake3` እንደገና ከተፈጠሩት እቃዎች ጋር ይጣጣማል.
 
-## 5. Telemetry Checks
+## 5. ቴሌሜትሪ ቼኮች
 
-- Confirm Prometheus exposes the new profile metrics:
+- ያረጋግጡ I18NT0000000X አዲሱን የመገለጫ መለኪያዎች ያጋልጣል፡
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- ዳሽቦርዶች የዝግጅት አቅራቢውን በሚጠበቀው ተለዋጭ ስም ማሳየት እና ፕሮፋይሉ ንቁ በሚሆንበት ጊዜ ቡናማ መውጫ ቆጣሪዎችን በዜሮ ማቆየት አለበት።
 
-## 6. Rollout Readiness
+## 6. የመልቀቅ ዝግጁነት
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. አጭር ሪፖርት በዩአርኤሎች፣ የሰነድ መታወቂያ እና በቴሌሜትሪ ቅጽበተ ፎቶ ያንሱ።
+2. ሪፖርቱን በI18NT0000003X ልቀት ቻናል ከታቀደው የምርት ማስነሻ መስኮት ጋር ያካፍሉ።
+3. ባለድርሻ አካላት ከፈረሙ በኋላ ወደ የምርት ማረጋገጫ ዝርዝር (ክፍል 4 በ `chunker_registry_rollout_checklist.md`) ይቀጥሉ።
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+ይህን የመጫወቻ ደብተር ማዘመን እያንዳንዱ ቸንከር/የመግቢያ ልቀት በማዘጋጀት እና በምርት ላይ ተመሳሳይ ቆራጥ እርምጃዎችን እንደሚከተል ያረጋግጣል።

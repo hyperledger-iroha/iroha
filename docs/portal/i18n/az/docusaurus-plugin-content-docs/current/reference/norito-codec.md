@@ -4,62 +4,64 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Codec Reference
+# Norito Codec Referansı
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito, Iroha-in kanonik serializasiya qatıdır. Hər bir tel mesajı, diskdə
+faydalı yük və çarpaz komponent API Norito istifadə edir, beləliklə qovşaqlar eyni baytlarda razılaşır
+hətta müxtəlif aparatlarda işləyərkən belə. Bu səhifə hərəkət edən hissələri ümumiləşdirir
+və `norito.md`-də tam spesifikasiyaya işarə edir.
 
-## Core layout
+## Əsas düzən
 
-| Component | Purpose | Source |
+| Komponent | Məqsəd | Mənbə |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **Başlıq** | Faydalı yükləri sehrli/versiya/şema hash, CRC64, uzunluq və sıxılma etiketi ilə çərçivələr; v1 `VERSION_MINOR = 0x00` tələb edir və dəstəklənən maskaya qarşı başlıq bayraqlarını doğrulayır (defolt `0x00`). | `norito::header` — bax `norito.md` (“Başlıq və Bayraqlar”, depo kökü) |
+| **Çılpaq faydalı yük** | Hashing/müqayisə üçün istifadə edilən deterministik dəyər kodlaması. Tellə daşıma həmişə başlıqdan istifadə edir; çılpaq baytlar yalnız daxilidir. | `norito::codec::{Encode, Decode}` |
+| **Sıxılma** | Könüllü Zstd (və eksperimental GPU sürətləndirilməsi) başlıq sıxılma baytı vasitəsilə seçilir. | `norito.md`, “Sıxılma danışıqları” |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+Layout bayraq reyestri (paketli struktur, paketlənmiş seq, sahə bit dəsti, yığcam
+uzunluqlar) `norito::header::flags`-də yaşayır. V1 standart olaraq `0x00` bayraqlarıdır, lakin
+dəstəklənən maska daxilində açıq başlıq bayraqlarını qəbul edir; naməlum bitlərdir
+rədd edildi. `norito::header::Flags` daxili yoxlama üçün saxlanılır və
+gələcək versiyalar.
 
-## Derive support
+## Dəstək əldə edin
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` `Encode`, `Decode`, `IntoSchema` göndərir və JSON köməkçisi gəlir.
+Əsas konvensiyalar:
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- Törəmələr həm AoS, həm də paketlənmiş kod yollarını yaradır; v1 defolt olaraq AoS-ə uyğundur
+  layout (bayraqlar `0x00`) başlıq bayraqları dolu variantlara daxil olmadıqda.
+  İcra `crates/norito_derive/src/derive_struct.rs`-də yaşayır.
+- Dizayna təsir edən xüsusiyyətlər (`packed-struct`, `packed-seq`, `compact-len`)
+  başlıq bayraqları vasitəsilə daxil olun və həmyaşıdları arasında ardıcıl olaraq kodlaşdırılmalı/deşifrə edilməlidir.
+- JSON köməkçiləri (`norito::json`) üçün deterministik Norito dəstəkli JSON təmin edir.
+  API-ləri açın. `norito::json::{to_json_pretty, from_json}` istifadə edin — heç vaxt `serde_json`.
 
-## Multicodec & identifier tables
+## Multikodek və identifikator cədvəlləri
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito multikodek təyinatlarını `norito::multicodec`-də saxlayır. İstinad
+cədvəl (heshlər, əsas növlər, faydalı yük təsvirləri) `multicodec.md`-də saxlanılır
+depo kökündə. Yeni identifikator əlavə edildikdə:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` yeniləyin.
+2. `multicodec.md`-də cədvəli genişləndirin.
+3. Aşağı axın bağlamaları (Python/Java) xəritədən istifadə edərsə, bərpa edin.
 
-## Regenerating docs & fixtures
+## Sənədlərin və qurğuların bərpası
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Portalda hazırda nəsr xülasəsi var, yuxarı Markdown-dan istifadə edin
+həqiqət mənbəyi kimi mənbələr:
 
 - **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Multicodec cədvəli**: `multicodec.md`
+- **Bençmarklar**: `crates/norito/benches/`
+- **Qızıl testlər**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus avtomatlaşdırılması işə salındıqda, portal yenilənəcək.
+bunlardan məlumatları çıxaran sinxronizasiya skripti (`docs/portal/scripts/`-də izlənilir)
+fayllar. O vaxta qədər, spesifikasiyalar dəyişəndə ​​bu səhifəni əl ilə düzülmüş saxlayın.

@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Выпустить, перевести и сжечь NFT
-description: Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+سلگ:/نوریٹو/مثالوں/این ایف ٹی فلو
+عنوان: ریلیز ، منتقلی اور برن این ایف ٹی ایس
+تفصیل: شروع سے ختم ہونے تک کسی این ایف ٹی کے زندگی کے چکر میں آپ کو چلتا ہے: مالک پر رہائی ، ترجمہ ، میٹا ڈیٹا شامل کرنا ، اور جلانا۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/12_NFT_FLOW.KO
 ---
 
-Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
+شروع سے ختم ہونے تک کسی این ایف ٹی کے زندگی کے چکر سے گزرتا ہے: مالک کو جاری کرنا ، ترجمہ ، میٹا ڈیٹا شامل کرنا ، اور جلانا۔
 
-## Пошаговый обход реестра
+## قدم بہ قدم رجسٹری ٹریورسل
 
-- Убедитесь, что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, используемыми в сниппете (`ih58...`, `ih58...`).
-- Вызовите точку входа `nft_issue_and_transfer`, чтобы выпустить NFT, перевести его от Alice к Bob и прикрепить флаг метаданных, описывающий выпуск.
-- Проверьте состояние NFT-реестра через `iroha_cli ledger nfts list --account <id>` или эквиваленты SDK, чтобы подтвердить перевод, затем убедитесь, что актив удаляется после выполнения инструкции burn.
+- اس بات کو یقینی بنائیں کہ این ایف ٹی تعریف (مثال کے طور پر `n0#wonderland`) اسنیپٹ (`ih58...` ، `ih58...`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ موجود ہے۔
+- کال انٹری پوائنٹ `nft_issue_and_transfer` NFT کو جاری کرنے کے لئے ، اسے ایلس سے باب میں منتقل کریں ، اور رہائی کی وضاحت کرنے والے میٹا ڈیٹا پرچم منسلک کریں۔
+- منتقلی کی تصدیق کے ل I `iroha_cli ledger nfts list --account <id>` یا SDK کے مساویوں کے ذریعے NFT رجسٹری کی حیثیت کو چیک کریں ، پھر اس بات کو یقینی بنائیں کہ برن ہدایت پر عمل درآمد کے بعد اثاثہ حذف ہو گیا ہے۔
 
-## Связанные руководства SDK
+## متعلقہ SDK سبق
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [کوئیک اسٹارٹ مورچا SDK] (/sdks/rust)
+- [کوئک اسٹارٹ ازگر ایس ڈی کے] (/sdks/python)
+- [کوئیک اسٹارٹ جاوا اسکرپٹ SDK] (/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/nft-flow.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

@@ -11,135 +11,97 @@ id: node-storage
 title: SoraFS Node Storage Design
 sidebar_label: Node Storage Design
 description: Storage architecture, quotas, and lifecycle hooks for Torii nodes hosting SoraFS data.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-## SoraFS Node Storage Design (Draft)
+## I18NT000000012X Төйөн һаҡлау дизайны (Скадка)
 
-This note refines how an Iroha (Torii) node can opt-in to the SoraFS data
-availability layer and dedicate a slice of local disk for storing and serving
-chunks. It complements the `sorafs_node_client_protocol.md` discovery spec and
-the SF-1b fixture work by outlining the storage-side architecture, resource
-controls, and configuration plumbing that must land in the node and gateway
-code paths. Practical operator drills live in the
-[Node Operations Runbook](./node-operations).
+Был иҫкәрмә нисек I18NT00000000018X (I18NT0000000021X) төйөн SoraFS мәғлүмәттәрен ҡабул итә ала.
+барлыҡ ҡатламы һәм һаҡлау һәм хеҙмәт итеү өсөн локаль диск киҫәген бағышларға
+өлөштәр. Ул I18NI0000000033X асыш спецификацияһын тулыландыра һәм
+SF-1b ҡоролмаһы һаҡлау яғынан архитектураны, ресурсты билдәләп,
+контроль, һәм конфигурация сантехника, тип төйөн һәм шлюзға төшөргә тейеш
+код юлдары. Практик оператор күнекмәләре 2019 йылда йәшәй.
+[Төньяҡ операциялары жанрҙар] (./node-operations).
 
-### Goals
+### Маҡсаттар
 
-- Allow any validator or auxiliary Iroha process to expose spare disk as a
-  SoraFS provider without affecting the core ledger responsibilities.
-- Keep the storage module deterministic and Norito-driven: manifests,
-  chunk plans, Proof-of-Retrievability (PoR) roots, and provider adverts are the
-  source of truth.
-- Enforce operator-defined quotas so a node cannot exhaust its own resources by
-  accepting too many pin or fetch requests.
-- Surface health/telemetry (PoR sampling, chunk fetch latency, disk pressure)
-  back to governance and clients.
+- Рөхсәт теләһә ниндәй валидатор йәки ярҙамсы I18NT00000000019X процесы, запас диск фашлау өсөн а
+  I18NT000000014X провайдеры төп леджер яуаплылыҡтарына йоғонто яһамай.
+- Һаҡлау модуле детерминистик һәм I18NT00000000001X-двигателдәр: манифест,
+  өлөшө пландары, иҫбатлау-алыусанлыҡ (PoR) тамырҙары, һәм провайдер рекламаһы был
+  хәҡиҡәт сығанағы.
+- Оператор билдәләгән квоталарҙы үтәргә, шуға күрә төйөн үҙ ресурстарын 2012 йылға тиклем бөтөрә алмай.
+  ҡабул итеү бик күп булавка йәки алыу өсөн үтенестәр.
+- Ер өҫтө һаулыҡ/телеметрия (PoR үлсәү, өлөшө fetch latency, диск баҫымы)
+  кире идара итеү һәм клиенттар.
 
-### High-level Architecture
+### Юғары кимәлдәге архитектура
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         Iroha/Torii Node                             │
-│                                                                      │
-│  ┌──────────────┐      ┌────────────────────┐                        │
-│  │  Torii APIs  │◀────▶│   SoraFS Gateway   │◀───────────────┐       │
-│  └──────────────┘      │ (Norito endpoints) │                │       │
-│                        └────────┬───────────┘                │       │
-│                                 │                            │       │
-│                        ┌────────▼────────┐                   │       │
-│                        │  Pin Registry   │◀───── manifests   │       │
-│                        │ (State / DB)    │                   │       │
-│                        └────────┬────────┘                   │       │
-│                                 │                            │       │
-│                        ┌────────▼────────┐                   │       │
-│                        │  Chunk Storage  │◀──── chunk plans  │       │
-│                        │  (ChunkStore)   │                   │       │
-│                        └────────┬────────┘                   │       │
-│                                 │                            │       │
-│                        ┌────────▼────────┐                   │       │
-│                        │  Disk Quota/IO  │─Pin/serve chunks─▶│ Fetch │
-│                        │  Scheduler      │                   │ Clients│
-│                        └─────────────────┘                   │       │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
+I18NF000000029X.
 
-Key modules:
+Төп модулдәр:
 
-- **Gateway**: exposes Norito HTTP endpoints for pin proposals, chunk fetch
-  requests, PoR sampling, and telemetry. It validates Norito payloads and
-  marshals requests into the chunk store. Reuses the existing Torii HTTP stack
-  to avoid a new daemon.
-- **Pin Registry**: the manifest pin state tracked in `iroha_data_model::sorafs`
-  and `iroha_core`. When a manifest is accepted the registry records the
-  manifest digest, chunk plan digest, PoR root, and provider capability flags.
-- **Chunk Storage**: disk-backed `ChunkStore` implementation that ingests
-  signed manifests, materialises chunk plans using `ChunkProfile::DEFAULT`, and
-  persists chunks under a deterministic layout. Each chunk is associated with a
-  content fingerprint and PoR metadata so sampling can re-validate without
-  re-reading the entire file.
-- **Quota/Scheduler**: enforces operator-configured limits (maximum disk bytes,
-  maximum outstanding pins, maximum parallel fetches, chunk TTL) and coordinates
-  IO so the node's ledger duties are not starved. The scheduler is also
-  responsible for serving PoR proofs and sampling requests with bounded CPU.
+- **Шлюз**: I18NT00000000003X HTTP ос нөктәләре өсөн штекер тәҡдимдәре, өлөшө фетч
+  үтенестәр, PoR үлсәү, һәм телеметрия. Ул I18NT000000004X файҙалы йөктәрҙе раҫлай һәм
+  маршалдар өлөшө магазинға инә. Ҡабаттан ҡулланыла ғәмәлдәге I18NT0000000024X HTTP стека
+  яңы демондан ҡотолоу өсөн.
+- **Пин Реестр**: I18NI000000034X-та күҙәтелгән манифест штекер хәле
+  һәм I18NI000000035X. Ҡасан ҡабул итеү өсөн реестр теркәүҙәр the
+  асыҡ distest, өлөшө планы үҙләштереү, PoR тамыр, һәм провайдер мөмкинлектәре флагтары.
+- **Түгел һаҡлау**: диск-арҡа I18NI0000000036X XX тормошҡа ашырыу, тип ex
+  ҡул ҡуйылған манифестар, матдилаштырыу өлөшө пландары ҡулланып I18NI00000000037X, һәм
+  детерминистик планировка аҫтында өлөштәр һаҡлана. Һәр өлөшө менән бәйле а.
+  йөкмәткеһе бармаҡ эҙҙәре һәм PoR метамағлүмәттәр шулай өлгөләр алыу мөмкин ҡабаттан раҫлай ала
+  бөтә файлды яңынан уҡыу.
+- **Quota/График**: оператор-конфигурацияланған сиктәрҙе үтәй (максималь диск байттар,
+  максималь күренекле булавкалар, максималь параллель фетч, өлөш TTL) һәм координата
+  IO шулай төйөндөң баш китабы бурыстары аслыҡтан үлмәгән. Шулай уҡ планлаштырыусы ла .
+  PoR иҫбатлауҙары һәм өлгөләр алыу өсөн яуаплы хеҙмәт итеү өсөн яуаплы сикләнгән процессор менән.
 
-### Configuration
+### Конфигурация
 
-Add a new section to `iroha_config`:
+I18NI000000038X тиклем яңы бүлек өҫтәй:
 
-```toml
-[sorafs.storage]
-enabled = false
-data_dir = "/var/lib/iroha/sorafs"
-max_capacity_bytes = "100 GiB"
-max_parallel_fetches = 32
-max_pins = 10_000
-por_sample_interval_secs = 600
-alias = "tenant.alpha"            # optional human friendly tag
-adverts:
-  stake_pointer = "stake.pool.v1:0x1234"
-  availability = "hot"
-  max_latency_ms = 500
-  topics = ["sorafs.sf1.primary:global"]
-```
+I18NF000000030X
 
-- `enabled`: participation toggle. When false the gateway returns a 503 for
-  storage endpoints and the node does not advertise in discovery.
-- `data_dir`: root directory for chunk data, PoR trees, and fetch telemetry.
-  Defaults to `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: hard limit for pinned chunk data. A background task
-  rejects new pins when the limit is reached.
-- `max_parallel_fetches`: concurrency cap enforced by the scheduler to balance
-  bandwidth/disk IO against validator workload.
-- `max_pins`: maximum number of manifest pins the node accepts before applying
-  eviction/back pressure.
-- `por_sample_interval_secs`: cadence for automatic PoR sampling jobs. Each job
-  samples `N` leaves (configurable per manifest) and emits telemetry events.
-  Governance can scale `N` deterministically by setting the capacity metadata
-  key `profile.sample_multiplier` (integer `1-4`). The value may be a single
-  number/string or an object with per-profile overrides, e.g.
+- I18NI00000039Х: ҡатнашыу toggle. Ҡасан ялған шлюз ҡайтара 503 өсөн .
+  һаҡлау ос нөктәләре һәм төйөн асышта реклама түгел.
+- I18NI000000040X: өлөшлө мәғлүмәттәр өсөн тамыр каталогы, PoR ағастары һәм телеметрия алыу.
+  `<iroha.data_dir>/sorafs` тиклем ғәҙәттәгесә.
+- I18NI000000042X: ҡаты сик өсөн пинированный өлөшө мәғлүмәттәр. Фондтағы бурыс
+  сиккә еткәндә яңы булавкалар кире ҡаға.
+- I18NI000000043X: планлаштырыусы тарафынан баланслаштырыу өсөн үтәлгән конкурентлыҡ ҡапҡасы
+  пропускной способность/диск IO ҡаршы валитатор эш нагрузкаһы.
+- I18NI000000044X: төйөндәрҙең ғариза биргәнсе ҡабул иткән максималь һаны асыҡ булавка
+  сығарыу/арҡа баҫымы.
+- I18NI000000045X: автоматик PoR үлсәү өсөн каденция. Һәр эш
+  өлгөләре I18NI000000046X япраҡтары (конфигурацияланған бер манифест) һәм телеметрия ваҡиғаларын сығара.
+  Идара итеү масштабы ала I18NI00000000047X детерминистик ҡөҙрәт метамағлүмәттәрен ҡуйып
+  асҡыс I18NI000000048X (бөтөнист I18NI000000049X). Ҡиммәте бер генә булыуы мөмкин
+  һан/стрелка йәки пер-профиль өҫтөндәге объект, мәҫ.
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: structure used by the provider advert generator to fill
-  `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
-  node uses defaults from the governance registry.
+- I18NI000000051X: структураһы ҡулланыла провайдер реклама генераторы тултырырға
+  `ProviderAdvertV1` яландары (перчатка күрһәткесе, QoS кәңәштәре, темалар). Әгәр ҙә ҡалдырылған
+  төйөн идара итеү реестрынан ғәҙәттәгесә ҡулланыла.
 
-Config plumbing:
+Конфиг сантехника:
 
-- `[sorafs.storage]` is defined in `iroha_config` as `SorafsStorage` and is
-  loaded from the node config file.
-- `iroha_core` and `iroha_torii` thread the storage config into the gateway
-  builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- `[sorafs.storage]` I18NI0000000054X-та I18NI000000055X тип билдәләнә һәм 1990 йылдарҙа 1990 йылдарҙа билдәләнә.
+  тейәлгән төйөн конфигурация файлы.
+- I18NI000000056X һәм I18NI0000000057X еп һаҡлау конфигында шлюзға
+  төҙөүсе һәм стартапта магазин өлөшө.
+- Dev/тест env oversireds бар (`SORAFS_STORAGE_*`, I18NI000000059X), әммә
+  етештереүҙе таратыу конфигурация файлына таянырға тейеш.
 
-### CLI Utilities
+### CLI коммуналь хужалыҡтары
 
-While Torii’s HTTP surface is still being wired, the `sorafs_node` crate ships a
-thin CLI so operators can script ingestion/export drills against the persistent
-backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+Әммә I18NT0000000025X’s HTTP өҫтө һаман да сымлы, I18NI000000060X йәшник суднолары а
+нәҙек CLI шулай операторҙар сценарий ашау/экспорт күнекмәләренә ҡаршы ныҡышмалы
+бэкэнд.【крат/сорафтар_төймә/срк/бин/сорафтар-төйөн.р. 1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -149,106 +111,104 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
-  bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
-  enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
-- `export` accepts a manifest ID and writes the stored manifest/payload to disk
-  (with optional plan JSON) so fixtures remain reproducible across environments.
+- I18NI000000061X I18NT000000005X-кодланған манифест I18NI0000000062X файл плюс тап килгән файҙалы йөк көтә.
+  байт. Ул реконструкциялау өлөшө планы манифест’s chunking профиле,
+  үҙләштереү паритетын үтәй, өлөшләтә файлдарҙы һаҡлана, һәм теләк буйынса сығара а
+  I18NI0000000063X JSON тап шулай аҫҡы инструменттарҙы инструменттарҙы аҡыл-тикшерергә мөмкин-тикшерергә мөмкин
+  ойоштороу.
+- I18NI0000000064X ҡабул итә, манифест идентификаторы һәм яҙа һаҡланған манифест/түләү disk .
+  (факультатив план менән JSON) шулай итеп, ҡорамалдар мөхиттәр буйынса ҡабатлана.
 
-Both commands print a Norito JSON summary to stdout, making it easy to pipe into
-scripts. The CLI is covered by an integration test to ensure manifests and
-payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tests/cli.rs:1】
+Ике команда ла I18NT0000000006X JSON резюмеһын баҫтырып сығарыу өсөн stdout, еңел торбаға инә
+сценарийҙары. CLI интеграция һынауы менән ҡаплана, манифест һәм
+18NANT00000026X API-лар еренә тиклем таҙа йүгәнле йүләр.
 
-> HTTP parity
+> HTTP паритеты
 >
-> The Torii gateway now exposes read-only helpers backed by the same
+> I18NT0000000027X шлюз хәҙер фашлай уҡыу өсөн генә ярҙамсылар шул уҡ ярҙам
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
->   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - I18NI0000000066X — һаҡланғанын ҡайтара
+> I18NT000000007X манифест (база64) менән бер рәттән distest/метамагай
+> - I18NI000000067X — детерминистик ҡайтара
+> өлөшө планы JSON (I18NI0000000068X) өсөн аҫҡы инструменттар.【крат/ироха_тории/срк/сораф/апи.р. р.1259】
 >
-> These endpoints mirror the CLI output so pipelines can switch from local
-> scripts to HTTP probes without changing parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> Был ос нөктәләре көҙгө CLI сығыш шулай торбалар локаль күсә ала .
+> Скрипттар HTTP зондтар үҙгәрмәйенсә анализдар.【крат/ироха_тории/сраф/апи.р.р.:1207】【крат/ироха_тории/срк/сорафтар/апи.р.р.р. 1259】
 
-### Node Lifecycle
+### Төйөн йәшәү циклы
 
-1. **Startup**:
-   - If storage is enabled the node initialises the chunk store with the
-     configured directory and capacity. This includes verifying or creating the
-     PoR manifest database and replaying pinned manifests to warm caches.
-   - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
-     fetch, PoR sample, telemetry).
-   - Spawn the PoR sampling worker and quota monitor.
-2. **Discovery / Adverts**:
-   - Generate `ProviderAdvertV1` documents using current capacity/health, sign
-     them with the council-approved key, and publish via the discovery channel.
-     available.
-3. **Pin Workflow**:
-   - Gateway receives a signed manifest (including chunk plan, PoR root, council
-     signatures). Validate the alias list (`sorafs.sf1@1.0.0` required) and
-     ensure the chunk plan matches the manifest metadata.
-   - Check quotas. If capacity/pin limits would be exceeded respond with a
-     policy error (Norito structured).
-   - Stream chunk data into the `ChunkStore`, verifying digests as we ingest.
-     Update PoR trees and store manifest metadata in the registry.
-4. **Fetch Workflow**:
-   - Serve chunk range requests from disk. Scheduler enforces
-     `max_parallel_fetches` and returns `429` when saturated.
-   - Emit structured telemetry (Norito JSON) with latency, bytes served, and
-     error counts for downstream monitoring.
-5. **PoR Sampling**:
-   - Worker selects manifests proportional to weight (e.g., bytes stored) and
-     runs deterministic sampling using the chunk store's PoR tree.
-   - Persist results for governance audits and include summaries in provider
-     adverts / telemetry endpoints.
-6. **Eviction / Quota Enforcement**:
-   - When capacity is reached the node rejects new pins by default. Optionally,
-     operators may configure eviction policies (e.g., TTL-based, LRU) once the
-     governance model is agreed; for now the design assumes strict quotas and
-     operator-initiated unpin operations.
+1. **Стартап**:
+   - Әгәр һаҡлау ҡоролмаһы төйөн инициализациялау өлөшө магазин менән 2012 йылғы
+     каталогы һәм һыйҙырышлылығы конфигурацияланған. Был тикшерергә йәки булдырыуҙы үҙ эсенә ала
+     PoR манифест базаһы һәм реплей пинированный манифест йылы кэштарға.
+   - I18NT0000000016X шлюз маршруттарын теркәү (I18NT0000000008X JSON POST/GET ос нөктәләре өсөн булавка,
+     фетч, PoR өлгөһө, телеметрия).
+   - PoR үлсәү эшсеһе һәм квота мониторы менән үрсетергә.
+2. **Асыш / Реклама**:
+   - I18NI000000069XX документтарын ағымдағы һыйҙырышлылыҡ/һаулыҡ ҡулланып генерациялау, билдә.
+     уларҙы совет раҫлаған асҡыс менән, һәм асыш каналы аша баҫтырып сығара.
+     асыҡ.
+3. **Пин эш ағымы**:
+   - Ҡапҡа ҡул ҡуйылған манифест ала (шул иҫәптән өлөшө планы, PoR тамыр, совет
+     ҡултамғалар). псевдонимдар исемлеген раҫлау (`sorafs.sf1@1.0.0` кәрәк) һәм
+     тәьмин итеү өлөшө планы тап килә асыҡ метамағлүмәттәр.
+   - Квоталарҙы ҡарағыҙ. Әгәр ҙә ҡәҙерле/талак сиктәре артып китер ине, яуап менән яуап
+     сәйәсәт хатаһы (Norito структуралы).
+   - Stream өлөшө мәғлүмәттәре I18NI000000071X, тикшерергә наркотиктар, беҙ нисек ингест.
+     Яңыртыу PoR ағастары һәм һаҡлағыс метамағлүмәттәрҙе һаҡлау реестрында.
+4. **Эш ағымы**:
+   - Дисктан өлөш диапазоны хеҙмәтен тәьмин итегеҙ. Графиксы үтәй
+     `max_parallel_fetches` һәм ҡайтарыу I18NI000000073X ҡасан туйындырылған.
+   - структуралы телеметрия (I18NT0000000010X JSON) латентлыҡ менән, байттар хеҙмәт итә, һәм
+     хаталар һаны өсөн аҫҡы ағым мониторингы.
+5. **PoR үлсәү**:
+   - Эшсе һайлау ауырлыҡҡа пропорциональ күренә (мәҫәлән, байттар һаҡланған) һәм
+     йүгерә детерминистик үлсәү ҡулланып, магазин магазин&#8217;s PoR ағасы.
+   - Идара итеү аудиттары өсөн ныҡлы һөҙөмтәләр һәм провайдерҙа резюмеларҙы үҙ эсенә ала
+     реклама / телеметрия остары.
+6. **Көлә / Квота үтәү**:
+   - Ҡасан ҡөҙрәткә еткән төйөн яңы булавкаларҙы кире ҡаға, ғәҙәттәгесә. Һорау буйынса,
+     операторҙары мөмкин конфигурациялау сәйәсәте (мәҫәлән, TTL-нигеҙендә, LRU) бер тапҡыр
+     идара итеү моделе килешелә; әлегә дизайн ҡәтғи квоталарҙы үҙ эсенә ала һәм
+     оператор-башланған unpin операциялар.
 
-### Capacity Declaration & Scheduling Integration
+### Ҡыйыулыҡ декларацияһы & планлаштырыу интеграцияһы- I18NT000000028X хәҙер `CapacityDeclarationRecord` яңыртыуҙары I18NI000000075X .
+  I18NI000000076X встраиваемыйға, шуға күрә һәр төйөн уның хәтерҙә күренешен төҙөй.
+  үҙ өҫтөнә алынған өлөшө һәм һыҙат бүленә. Етәксе уҡыу өсөн генә снимоктарҙы фашлай
+  телеметрия өсөн (`GET /v1/sorafs/capacity/state`) һәм профилле йәки һыҙат буйынса көс бирә
+  яңы заказдар ҡабул ителгәнгә тиклем бронирование.【крат/sorafs_node/src/srcity.rs:1】【крат/сорафтар_төнлөк/src/lib.rs:60】
+- I18NI000000078X осонда идара итеүҙе ҡабул итә-`ReplicationOrderV1`X XX .
+  файҙалы йөктәр. Ҡасан заказ маҡсатлы урындағы провайдер менеджер өсөн тикшерә
+  дубликаты планлаштырыу, тикшерергә өлөшө/һыҙыҡ ҡөҙрәте, запас киҫәк, һәм
+  Ҡайта I18NI000000080X ҡалған ҡөҙрәтте һүрәтләү, шулай оркестрлаштырыу ҡоралдары
+  ашау менән дауам итә ала. Башҡа провайдерҙар өсөн заказдар менән таныла
+  `ignored` яуапты еңеләйтеү өсөн күп оператор эш ағымы.【крат/ироха_тории/срк/маршрутлау.р.:4845】
+- тамамланыу ҡармаҡтар (мәҫәлән, ашау уңышлы һуң ҡабыҙылған) хит
+  I18NI000000082X аша бронированиелар сығарыу өсөн
+  `CapacityManager::complete_order`. Яуапҡа I18NI000000084X инә.
+  снимок (йөкмәткеһе ҡалған, өлөшө/һыҙыҡ ҡалдыҡтары) шулай оркестрлаштырыу инструменталь мөмкин
+  сираттағы бойороҡты һорау алыуһыҙ сират. Һуңынан эш был сым буласаҡ өлөшөнә
+  торба үткәргес бер тапҡыр логика ерҙәрен ашау.【крат/ироха_тории/срк/маршрутлау.р.:4885】【крат/sorafs_node/src/carcity.rs:90】
+- Встроенный I18NI0000000085X мутация мөмкин аша .
+  I18NI000000086X, рөхсәт фон хеҙмәткәрҙәре яҙырға PoR/uptime өлгөләре
+  һәм, ахыр сиктә, канон I18NI0000000087X файҙалы йөктәрҙе тейәп, теймәй
+  142】【крат/sorafs_node/src/телеметрия.р.:1】
 
-- Torii now relays `CapacityDeclarationRecord` updates from `/v1/sorafs/capacity/declare`
-  to the embedded `CapacityManager`, so each node builds an in-memory view of its
-  committed chunker and lane allocations. The manager exposes read-only snapshots
-  for telemetry (`GET /v1/sorafs/capacity/state`) and enforces per-profile or per-lane
-  reservations before new orders are accepted.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- The `/v1/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
-  payloads. When the order targets the local provider the manager checks for
-  duplicate scheduling, verifies chunker/lane capacity, reserves the slice, and
-  returns a `ReplicationPlan` describing remaining capacity so orchestration tools
-  can proceed with ingestion. Orders for other providers are acknowledged with an
-  `ignored` response to ease multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (e.g., triggered after ingestion succeeds) hit
-  `POST /v1/sorafs/capacity/complete` to release reservations via
-  `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
-  snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
-  queue the next order without polling. Follow-up work will wire this into the chunk
-  store pipeline once ingestion logic lands.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- The embedded `TelemetryAccumulator` can be mutated through
-  `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
-  and eventually derive canonical `CapacityTelemetryV1` payloads without touching the
-  scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+### Интеграциялар & Киләсәк эше
 
-### Integrations & Future Work
+- **Идара итеү**: һаҡлау телеметрияһы менән I18NI00000000088X
+  (PoR уңыш ставкаһы, диск утилизацияһы). Ҡабул итеү сәйәсәте минималь талап итә ала
+  ҡәҙерле йәки минималь PoR уңыш ставкаһы реклама ҡабул ителгәнсе.
+- **Клиент SDKs**: яңы һаҡлау конфигын фашлау (диск сиктәре, псевдоним) шулай
+  идара итеү инструменттары bootstrap төйөндәре программалы була ала.
+- **Телеметрия**: булған метрика стегы менән интеграция (I18NT000000000X /
+  OpenTelemetry) шуға күрә һаҡлау метрикаһы күҙәтелә торған приборҙар таҡталарында барлыҡҡа килә.
+- **Хәүефһеҙлек**: бағышланған асинк эш пулы эсендә һаҡлау модулен эшләтеү
+  Арҡа баҫымы һәм ҡом йәшниктәре өлөшө аша уҡый io_uring йәки токио&#8217;s
+  сикләнгән бассейндар, зарарлы клиенттарҙы арытыу өсөн иҫкәртергә.
 
-- **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
-  (PoR success rate, disk utilisation). Admission policies can require minimum
-  capacity or minimum PoR success rate before adverts are accepted.
-- **Client SDKs**: expose the new storage config (disk limits, alias) so
-  management tooling can bootstrap nodes programmatically.
-- **Telemetry**: integrate with the existing metrics stack (Prometheus /
-  OpenTelemetry) so storage metrics appear in observability dashboards.
-- **Security**: run the storage module inside a dedicated async task pool with
-  back-pressure and consider sandboxing chunk reads via io_uring or tokio's
-  bounded pools to prevent malicious clients from exhausting resources.
-
-This design keeps the storage module optional and deterministic while giving
-operators the knobs they need to participate in the SoraFS data availability
-layer. Implementing it will involve changes across `iroha_config`, `iroha_core`,
-`iroha_torii`, and the Norito gateway, plus the provider advert tooling.
+Был дизайн һаҡлау модуле опциональ һәм детерминистик һаҡлай, шул уҡ ваҡытта .
+операторҙар ручкалар уларҙы ҡатнашырға кәрәк I18NT00000000000017X мәғлүмәттәрҙең булыуы
+ҡат. Уны тормошҡа ашырыу I18NI000000089X, I18NI0000000000000000000000000090 X, 1890 йылдарҙа үҙгәрештәрҙе үҙ эсенә аласаҡ.
+`iroha_torii`, һәм I18NT000000011X шлюз, өҫтәүенә провайдер реклама инструменттары.

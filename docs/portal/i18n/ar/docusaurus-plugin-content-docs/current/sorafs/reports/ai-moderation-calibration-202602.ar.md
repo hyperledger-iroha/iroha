@@ -4,65 +4,65 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: تقرير معايرة إشراف الذكاء الاصطناعي (2026-02)
-summary: مجموعة بيانات معايرة أساسية وعتبات ولوحة نتائج لأول إصدار حوكمة MINFO-1.
+العنوان: تقرير تجديد الذكاء الاصطناعي (2026-02)
+ملخص: مجموعة البيانات المجددة لجوجل وعتبات ولوحة والإصدارات الأولى هي MINFO-1.
 ---
 
-# تقرير معايرة إشراف الذكاء الاصطناعي - فبراير 2026
+#تقرير تجديد الذكاء الاصطناعي - فبراير 2026
 
-يجمع هذا التقرير قطع معايرة البداية لـ **MINFO-1**. تم إنتاج dataset وmanifest وscoreboard
-في 2026-02-05، وتمت مراجعتها من مجلس الوزارة في 2026-02-10، وتم تثبيتها في DAG الحوكمة
+جمع هذا التقرير القطعي المتجدد لـ **MINFO-1**. تم إنتاج مجموعة البيانات والبيان ولوحة النتائج
+في 2026-02-05، وتمت مراجعتها من مجلس الوزارة في 2026-02-10، وتم تثبيتها في DAG ال تور
 على الارتفاع `912044`.
 
-## Manifest مجموعة البيانات
+## بيان مجموعة البيانات
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **مرجع مجموعة البيانات:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **السبيكة:** `ai-moderation-calibration-202602`
+- **الإدخالات:** البيان 480، القطعة 12,800، البيانات الوصفية 920، الصوت 160
+- **مزيج التصنيف:** آمن بنسبة 68%، ومشتبه به بنسبة 19%، ومتصاعد بنسبة 13%
+- **ملخص المصنوعات:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **التوزيع:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-يتوفر manifest الكامل في `docs/examples/ai_moderation_calibration_manifest_202602.json`
-ويتضمن توقيع الحوكمة بالإضافة إلى hash الخاص بالـ runner الملتقط وقت الإصدار.
+يسمى البيان الكامل في `docs/examples/ai_moderation_calibration_manifest_202602.json`
+واشترك في التوقيع بالإضافة إلى hash الخاص بالـ runner المختار وقت الإصدار.
 
-## ملخص scoreboard
+## لوحة النتائج ملخص
 
-تم تشغيل المعايرات باستخدام opset 17 ومسار البذور الحتمي. يسجل JSON الكامل للـ scoreboard
-(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) hashes وdigests الخاصة بـ telemetry؛
-الجدول أدناه يبرز أهم المقاييس.
-
-| النموذج (العائلة) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+تم تشغيل المعايرات باستخدام opset 17 ومسار عازل حتمي. تسجيل JSON الكامل للوحة النتائج
+(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) التجزئة والملخصات الخاصة بـ القياس عن بعد؛
+الجدول أدناه يبرز أهم المعايير.| نموذج (العائلة) | برير | اللجنة الاقتصادية لأوروبا | أوروك | الدقة @ الحجر الصحي | استدعاء @ التصعيد |
 | --------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 السلامة (الرؤية) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| LLaVA-1.6 34B السلامة (متعدد الوسائط) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+| المجموعة الإدراكية (الإدراك الحسي) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-المقاييس المجمعة: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. كان توزيع
-الأحكام عبر نافذة المعايرة هو pass 91.2% وquarantine 6.8% وescalate 2.0%، وهو مطابق
-لتوقعات السياسة المسجلة في ملخص manifest. ظل backlog للإيجابيات الكاذبة عند الصفر،
-وبقي drift score (7.1%) أقل بكثير من عتبة التنبيه 20%.
+المقاييس المجمعة: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. توزيع كان
+الإنقاذ عبر النافذة التجديد هو تمرير 91.2% والحجر الصحي 6.8% والتصعيد 2.0%، وهو يتوافق مع
+لتوقعات الجغرافية الجديدة في بيان ملخص. ظل تراكم للإيجابيات الكاذبة عند الصفر،
+وبقي درجة الانجراف (7.1%) أقل بكثير من تنبيه التنبيه 20%.
 
 ## العتبات والمصادقة
 
-- `thresholds.quarantine = 0.42`
-- `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+-`thresholds.quarantine = 0.42`
+-`thresholds.escalate = 0.78`
+- اقتراح الحوكمة: `MINFO-2026-02-07`
+- تم التوقيع عليه بواسطة `ministry-council-seat-03` في `2026-02-10T11:33:12Z`
 
 خزنت CI الحزمة الموقعة في `artifacts/ministry/ai_moderation/2026-02/` مع ثنائيات
-moderation runner. يجب الرجوع إلى digest الخاص بالـ manifest وhashes الخاصة بالـ scoreboard
-أعلاه أثناء عمليات التدقيق والاستئناف.
+عداء الاعتدال. يجب الرجوع إلى الملخص الخاص بالـ البيان والتجزئات الخاصة بالـ لوحة النتائج
+أثناء عمليات التفتيش والاستئناف.
 
 ## لوحات المتابعة والتنبيهات
 
-على SREs الخاصة بالموديريشن استيراد لوحة Grafana من
-`dashboards/grafana/ministry_moderation_overview.json` وقواعد تنبيهات Prometheus في
-`dashboards/alerts/ministry_moderation_rules.yml` (تغطية الاختبارات موجودة في
-`dashboards/alerts/tests/ministry_moderation_rules.test.yml`). تصدر هذه
-القطع تنبيهات لتوقفات ingestion وارتفاعات drift ونمو طابور quarantine، وتلبي متطلبات
+على SREs الخاصة بالموديريش قم باستيراد اللوحة Grafana من
+`dashboards/grafana/ministry_moderation_overview.json` وقواعد التنبيهات Prometheus في
+`dashboards/alerts/ministry_moderation_rules.yml` (التغطية الأصلية موجودة في
+`dashboards/alerts/tests/ministry_moderation_rules.test.yml`). هذه هي الحال
+تنبيهات لتوقفات الابتلاع ومنها الانجراف ونمو طابور الحجر الصحي، وتتطلب الأمر
 المراقبة المشار إليها في
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+[مواصفات مشغل الاعتدال AI](../../ministry/ai-moderation-runner.md).

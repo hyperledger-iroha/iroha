@@ -10,25 +10,26 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
 slug: /sdks/recipes/javascript-governance-iso
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+'@site/src/components/SampleDownload' မှ SampleDownload ကို တင်သွင်းပါ။
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
-`docs/source/sdk/js/governance_iso_examples.md`.
+ဤစာရွက်သည် JS5 လမ်းပြမြေပုံတွင် ခေါ်သော အဆင့်မြင့်လုပ်ငန်းအသွားအလာနှစ်ခုကို စုစည်းထားသည်။
+အကြောင်းအရာများ- အစမှအဆုံး အုပ်ချုပ်မှုအထောက်အပံများ (အဆိုပြုချက်များ၊ မဲများ၊ ကောင်စီလျှပ်တစ်ပြက်ပုံများ)
+နှင့် ISO 20022 တံတားလမ်းညွှန်ချက် (pacs.008/pacs.009)။ နမူနာတစ်ခုစီသည် အလုပ်လုပ်သည်။
+ထုတ်ဝေထားသော `@iroha/iroha-js` ပက်ကေ့ဂျ်ကိုဆန့်ကျင်ပြီး အတိုအထွာများကို အလင်းပြန်ပေးပါ။
+`docs/source/sdk/js/governance_iso_examples.md`။
 
-## Governance helper sample
+## အုပ်ချုပ်မှုအကူအညီနမူနာ
 
-<SampleDownload
+<နမူနာဒေါင်းလုဒ်လုပ်ပါ။
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  ဖိုင်အမည် = "governance.mjs"
+  description="ဤစာရွက်တွင် ကိုးကားထားသော လုပ်ဆောင်နိုင်သော အုပ်ချုပ်မှုအကူအညီကို ဒေါင်းလုဒ်လုပ်ပါ။"
 />
 
-### Prerequisites
+### ကြိုတင်လိုအပ်ချက်များ
 
 ```bash
 npm install @iroha/iroha-js
@@ -42,10 +43,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+I18NT000000012X ကို Torii သို့ လက်မှတ်ရေးထိုးထားသော လွှဲပြောင်းမှုများ တင်သွင်းရန် နှင့်
+တင်ပြပြီးနောက် ရရှိလာသော အုပ်ချုပ်မှုအခြေအနေကို စစ်ဆေးရန် `GOV_FETCH=1`။
 
-### Example script
+### ဥပမာ ဇာတ်ညွှန်း
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -225,26 +226,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### လည်ပတ်ပြီး စောင့်ကြည့်ပါ။
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
-  `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- hash များကိုသာထုတ်ပေးရန် `node governance.mjs` ကိုလုပ်ဆောင်ပါ။ `GOV_SUBMIT=1` သို့ ထည့်ပါ။
+  တိုက်ရိုက်အုပ်ချုပ်မှုအခြေအနေသို့ဝင်ရောက်ရန် Torii နှင့် `GOV_FETCH=1` တွင် ငွေပေးငွေယူမှုများကို ပို့စ်တင်ပါ
+  (`getGovernanceProposal*`၊ `getGovernanceReferendum`၊ `getGovernanceLocks` နှင့်
+  `getGovernanceCouncilCurrent`)။
+- CI မှတ်တမ်းများတွင် အဆုံးအဖြတ်ရှိသော hashe များကို ဖမ်းယူပါ။ အဆင့်တိုင်းတွင် လက်မှတ်ထိုးထားသော byte ကို ပရင့်ထုတ်သည်။
+  ရွေးချယ်နိုင်သော ဇာတိအကူအညီကို ရနိုင်သောအခါတွင် အရှည်နှင့် ပြန်လည်တွက်ချက်ထားသော hash။
+- စာရင်းစစ်များသည် ခြေရာခံနိုင်စေရန် အုပ်ချုပ်မှုပြန်လည်သုံးသပ်ခြင်းထုပ်ပိုးမှုများတွင် ကွန်ဆိုးအထွက်ကို ပူးတွဲပါ။
+  အဆိုပြုချက် / ပြည်လုံးကျွတ်ဆန္ဒခံယူပွဲ ID များကို ပြန်လည်ထုတ်လုပ်နိုင်သော CLI အထောက်အထားများ။
 
-## ISO bridge sample
+## ISO တံတားနမူနာ
 
-<SampleDownload
+<နမူနာဒေါင်းလုဒ်လုပ်ပါ။
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  ဖိုင်အမည် = "iso-bridge.mjs"
+  description="ဤစာရွက်တွင်ဖော်ပြထားသော runnable ISO 20022 အကူအညီကို ဒေါင်းလုဒ်လုပ်ပါ။"
 />
 
-### Prerequisites
+### ကြိုတင်လိုအပ်ချက်များ
 
 ```bash
 npm install @iroha/iroha-js
@@ -256,11 +257,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+တင်သွင်းမှုကို ကျော်ပြီး သိရှိသူကိုသာ ကောက်ယူလိုသောအခါတွင် `ISO_MESSAGE_ID` ကို သတ်မှတ်ပါ
+အမှတ်အသား။ တံတားအမှတ်အသားကို အမြန်ဆုံးထွက်ရန် `ISO_RESOLVE_ON_ACCEPTED=1` ကိုသုံးပါ။
+ငွေပေးငွေယူ hash သည် အပြီးသတ်မပြီးသေးသော်လည်း `Accepted` ၏ entry တစ်ခု။
 
-### Example script
+### ဥပမာ ဇာတ်ညွှန်း
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -360,22 +361,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### လည်ပတ်ပြီး စောင့်ကြည့်ပါ။
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- နမူနာ payload တင်သွင်းရန် `node iso-bridge.mjs` ကို လုပ်ဆောင်ပါ။ သတ်မှတ်
+  PvP စီးဆင်းမှုကို လေ့ကျင့်ရန် `ISO_MESSAGE_KIND=pacs.009` သို့မဟုတ် `ISO_MESSAGE_ID` သို့
+  ပြန်မတင်ဘဲ လက်ရှိတင်ပြမှုကို စစ်တမ်းကောက်ယူပါ။
+- အကူအညီပေးသူက `wait.onPoll` မှတစ်ဆင့် စစ်တမ်းတစ်ခုစီတိုင်းကို လွယ်ကူစွာ မှတ်သားထားပြီး၊
+  CI မှတ်တမ်းများတွင် လက်ခံမှုအချိန်ဇယားများကို ဖမ်းယူပါ။
+- နောက်ဆုံးအခြေအနေ + ငွေပေးငွေယူ hash ကို ISO ပေါင်းကူး runbooks သို့ တွဲ၍ စာရင်းစစ်သူများ၊
+  pacs.008/pacs.009 ပေးပို့မှုများကို ပြန်လည်ထုတ်လုပ်နိုင်သော payloads အဖြစ် ခြေရာခံနိုင်သည်
+  JS5 လမ်းပြမြေပုံမှ လိုအပ်သည်
 
-## Offline allowances & transfers
+## အော့ဖ်လိုင်းထောက်ပံ့ကြေးများနှင့် လွှဲပြောင်းမှုများ
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js` တွင် ကိုးကားဖော်ပြထားသော တူညီသောထောက်ပံ့ကြေး/လွှဲပြောင်းကူညီသူများကို ပို့ဆောင်ပေးသည်
+အော့ဖ်လိုင်း လမ်းပြမြေပုံ အတန်းများ။ ခိုင်မာမှုမူဝါဒများကို စစ်ဆေးရန် ၎င်းတို့ကို အသုံးပြုပါ (အမှတ်အသားသော့၊ Play
+တိကျမှု၊ မက်တာဒေတာကို ခွဲခြမ်းစိတ်ဖြာခြင်းမရှိဘဲ စီမံထားသော)၊
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -403,19 +404,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+Torii က စီမံထားသော ထောက်ပံ့ကြေးကို အစီရင်ခံသောအခါ စစ်ဆေးရေးမှူး အများသူငှာသော့ကို ထင်ရှားစွာပြပါ၊
+schema၊ optional version၊ TTL နှင့် digest အောက်တွင် တိုက်ရိုက်ထုတ်လွှင့်သည်။
+`integrity_metadata.provisioned`၊ လိုအပ်သည်များကိုပူးတွဲရန်အသေးအဖွဲဖြစ်စေသည်။
+မက်တာဒေတာသည် OA10.3 အထောက်အထားထုပ်များ။
 
-## Next steps
+## နောက်တစ်ဆင့်
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- `javascript/iroha_js/recipes/governance.mjs` နှင့် စူးစမ်းလေ့လာပါ။
+  ချဲ့ထွင်ထားသော ဥပမာများအတွက် `javascript/iroha_js/recipes/iso_bridge.mjs` (sig ပေါင်းများစွာ
+  မဲများ၊ ကောင်စီ VRF ဆင်းသက်လာမှု၊ ထပ်စမ်းကြည့်ပါ မူဝါဒများ)။
+- Norito-side documentation in ကို ပြန်သုံးသပ်ပါ။
+  `docs/source/sdk/js/governance_iso_examples.md` နှင့်
+  Canonical အကွက်အတွက် `docs/source/finance/settlement_iso_mapping.md`
+  ဤအကူအညီပေးသူများမှကိုးကားထားသောမြေပုံများ။
+- လုပ်ဆောင်နေသောမှတ်တမ်းများကိုဖမ်းယူပြီး ၎င်းတို့အား ကျေနပ်စေရန် အုပ်ချုပ်မှု/ ISO အတည်ပြုချက်များတွင် ပူးတွဲပါရှိသည်။
+  JS5 သည် `roadmap.md` တွင် ကိုးကားထားသော "စာရွက်စာတမ်း + ထုတ်ဝေခြင်း" လိုအပ်ချက်။

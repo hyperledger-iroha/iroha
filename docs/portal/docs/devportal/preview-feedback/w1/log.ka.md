@@ -11,80 +11,81 @@ id: preview-feedback-w1-log
 title: W1 feedback & telemetry log
 sidebar_label: W1 feedback log
 description: Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.
+translator: machine-google-reviewed
 ---
 
-This log keeps the invite roster, telemetry checkpoints, and reviewer feedback for the
-**W1 partner preview** that accompanies the acceptance tasks in
-[`preview-feedback/w1/plan.md`](./plan.md) and the wave tracker entry in
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Update it whenever an invite
-is sent, telemetry snapshot recorded, or feedback item triaged so governance reviewers can replay
-the evidence without chasing external tickets.
+ეს ჟურნალი ინახავს მოწვევის სიას, ტელემეტრიის გამშვებ პუნქტებს და მიმომხილველთა გამოხმაურებას
+**W1 პარტნიორის გადახედვა**, რომელიც თან ახლავს მიღების ამოცანებს
+[`preview-feedback/w1/plan.md`](./plan.md) და ტალღის ტრეკერის შესვლა
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). განაახლეთ იგი მოწვევისას
+იგზავნება, ტელემეტრიის სნეპშოტი ჩაწერილია ან გამოხმაურების ერთეული ტრიაჟირებულია, რათა მმართველობის მიმომხილველებმა შეძლონ ხელახლა დაკვრა
+მტკიცებულება გარე ბილეთების დევნის გარეშე.
 
-## Cohort roster
+## კოჰორტის სია
 
-| Partner ID | Request ticket | NDA received | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
+| პარტნიორის ID | ბილეთის მოთხოვნა | NDA-მ მიიღო | მოწვევა გაგზავნილია (UTC) | დადასტურება/პირველი შესვლა (UTC) | სტატუსი | შენიშვნები |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Completed 2025-04-26 | sorafs-op-01; focused on orchestrator doc parity evidence. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Completed 2025-04-26 | sorafs-op-02; validated Norito/telemetry cross-links. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Completed 2025-04-26 | sorafs-op-03; ran multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Completed 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Completed 2025-04-26 | torii-int-02; paired on Try it screenshot update (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Completed 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Completed 2025-04-26 | sdk-partner-02; compliance cleared 2025-04-11, focused on Connect/telemetry notes. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Completed 2025-04-26 | gateway-ops-01; audited gateway ops guide + anonymised Try it proxy flow. |
+| პარტნიორი-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ დასრულდა 2025-04-26 | sorafs-op-01; ორიენტირებულია ორკესტრატორის დოკუმენტის პარიტეტის მტკიცებულებებზე. |
+| პარტნიორი-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ დასრულდა 2025-04-26 | sorafs-op-02; დადასტურებული Norito/ტელემეტრიის ჯვარედინი ბმულები. |
+| პარტნიორი-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ დასრულდა 2025-04-26 | sorafs-op-03; ჩაატარა მრავალ წყაროს მარცხის წვრთნები. |
+| პარტნიორი-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ დასრულდა 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + სცადეთ კულინარიული წიგნის მიმოხილვა. |
+| პარტნიორი-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ დასრულდა 2025-04-26 | torii-int-02; დაწყვილებულია Try it სკრინშოტის განახლებაზე (docs-preview/w1 #2). |
+| პარტნიორი-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ დასრულდა 2025-04-26 | sdk-partner-01; JS/Swift კულინარიული წიგნის გამოხმაურება + ISO ხიდის საღი აზრის შემოწმება. |
+| პარტნიორი-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ დასრულდა 2025-04-26 | sdk-partner-02; შესაბამისობა გასუფთავდა 2025-04-11, ორიენტირებულია დაკავშირების/ტელემეტრიის შენიშვნებზე. |
+| პარტნიორი-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ დასრულდა 2025-04-26 | gateway-ops-01; აუდიტირებული კარიბჭის ოპერაციების სახელმძღვანელო + ანონიმური სცადეთ პროქსის ნაკადი. |
 
-Populate the **Invite sent** and **Ack** timestamps as soon as the outbound email is issued.
-Anchor the times to the UTC schedule defined in the W1 plan.
+შეავსეთ **მიწვევის გაგზავნილი** და **Ack** დროის შტამპები, როგორც კი გამავალი ელფოსტა გაიცემა.
+W1 გეგმაში განსაზღვრული დროის UTC განრიგზე დამაგრება.
 
-## Telemetry checkpoints
+## ტელემეტრიის საგუშაგოები
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
+| დროის ანაბეჭდი (UTC) | დაფები / ზონდები | მფლობელი | შედეგი | არტეფაქტი |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards above + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards above + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ სულ მწვანე | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` ტრანსკრიპტი | Ops | ✅ დადგმული | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ წინასწარი მოწვევის სნეპშოტი, რეგრესიების გარეშე | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | დაფები ზემოთ + სცადეთ პროქსის შეყოვნების განსხვავება | Docs/DevRel წამყვანი | ✅ შუა წერტილის შემოწმება გაიარა (0 გაფრთხილება; სცადეთ შეყოვნება p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 | დაფები ზემოთ + გასასვლელი ზონდი | Docs/DevRel + მმართველობის მეკავშირე | ✅ გამოსვლის სნეპშოტი, ნულოვანი გამოჩენილი გაფრთხილებები | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Daily office-hour samples (2025-04-13 → 2025-04-25) are bundled as NDJSON + PNG exports under
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` with filenames
-`docs-preview-integrity-<date>.json` and corresponding screenshots.
+ყოველდღიური სამუშაო საათების ნიმუშები (2025-04-13 → 2025-04-25) შეფუთულია, როგორც NDJSON + PNG ექსპორტი ქვეშ
+`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` ფაილის სახელებით
+`docs-preview-integrity-<date>.json` და შესაბამისი ეკრანის ანაბეჭდები.
 
-## Feedback & issue log
+## გამოხმაურება და პრობლემების ჟურნალი
 
-Use this table to summarise reviewer-submitted findings. Link each entry to the GitHub/discuss
-ticket plus the structured form captured via
+გამოიყენეთ ეს ცხრილი რეფერენტის მიერ გამოგზავნილი დასკვნების შესაჯამებლად. დააკავშირეთ თითოეული ჩანაწერი GitHub-თან/დისკუსიასთან
+ბილეთი პლუს სტრუქტურირებული ფორმა დაჭერილი მეშვეობით
 [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
 
-| Reference | Severity | Owner | Status | Notes |
+| მითითება | სიმძიმე | მფლობელი | სტატუსი | შენიშვნები |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Clarified Try it nav wording + sidebar anchor (`docs/source/sorafs/tryit.md` updated with new label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Refreshed Try it screenshot + caption per reviewer request; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 Closed | Remaining comments were Q&A-only; captured in each partner’s feedback form under `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | დაბალი | Docs-core-02 | ✅ მოგვარებულია 2025-04-18 | დაზუსტებულია სცადეთ ნავი ფორმულირება + გვერდითი ზოლის წამყვანი (`docs/source/sorafs/tryit.md` განახლებულია ახალი ლეიბლით). |
+| `docs-preview/w1 #2` | დაბალი | Docs-core-03 | ✅ მოგვარებულია 2025-04-19 | განახლებულია Try it სკრინშოტი + წარწერა თითო მიმომხილველის მოთხოვნაზე; არტეფაქტი `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| — | ინფორმაცია | Docs/DevRel წამყვანი | 🢢 დახურულია | დარჩენილი კომენტარები იყო მხოლოდ კითხვა-პასუხი; აღბეჭდილია თითოეული პარტნიორის გამოხმაურების ფორმაში `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`-ში. |
 
-## Knowledge check & survey tracking
+## ცოდნის შემოწმება და გამოკითხვის თვალყურის დევნება
 
-1. Record quiz scores (target ≥90 %) for every reviewer; attach the exported CSV alongside the
-   invite artefacts.
-2. Collect the qualitative survey answers captured with the feedback form template and mirror them
-   under `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Schedule remediation calls for anyone scoring below threshold and log them in this file.
+1. ჩაწერეთ ვიქტორინის ქულები (სამიზნე ≥90%) თითოეული რეფერენტისთვის; მიამაგრეთ ექსპორტირებული CSV გვერდით
+   მოიწვიე არტეფაქტები.
+2. შეაგროვეთ გამოკითხვის თვისებრივი პასუხები, რომლებიც აღბეჭდილია უკუკავშირის ფორმის შაბლონით და ასახეთ ისინი
+   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/` ქვეშ.
+3. დაგეგმეთ გამოსწორების მოწოდება ყველასთვის, ვინც მიაღწია ზღურბლს ქვემოთ და შეიტანეთ ისინი ამ ფაილში.
 
-All eight reviewers scored ≥94 % on the knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No remediation calls
-were required; survey exports for each partner live under
+რვავე მიმომხილველმა მიიღო ≥94% ცოდნის შემოწმებაზე (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). სარემონტო ზარები არ არის
+საჭირო იყო; კვლევის ექსპორტი თითოეული პარტნიორისთვის ცხოვრობს ქვეშ
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Artefact inventory
+## არტეფაქტის ინვენტარი
 
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: place reviewer-specific folders under
+- წინასწარი სკრიპტორის/საკონტროლო ჯამის ნაკრები: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- ზონდი + ბმულის შემოწმების შეჯამება: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- სცადეთ პროქსის ცვლილების ჟურნალი: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- ტელემეტრიის ექსპორტი: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- ყოველდღიური საოფისე საათების ტელემეტრიის ნაკრები: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- გამოხმაურება + გამოკითხვის ექსპორტი: განათავსეთ მიმომხილველის სპეციფიკური საქაღალდეები ქვემოთ
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV and summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- ცოდნის შემოწმება CSV და შეჯამება: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Keep the inventory in sync with the tracker issue. Attach hashes when copying artefacts to the
-governance ticket so auditors can verify the files without shell access.
+შეინახეთ ინვენტარი სინქრონიზებული ტრეკერის პრობლემასთან. მიამაგრეთ ჰეშები არტეფაქტების კოპირებისას
+მმართველობის ბილეთი, რათა აუდიტორებმა შეძლონ ფაილების გადამოწმება ჭურვის წვდომის გარეშე.

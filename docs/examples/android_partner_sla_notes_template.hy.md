@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android Partner SLA Discovery Notes — Կաղապար
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+Օգտագործեք այս ձևանմուշը AND8 SLA հայտնաբերման յուրաքանչյուր նստաշրջանի համար: Պահպանեք լրացված պատճենը
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`-ի ներքո
+և կցել օժանդակ արտեֆակտներ (հարցաթերթիկի պատասխաններ, երախտագիտություն,
+հավելվածները) նույն գրացուցակում:
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. Օրակարգ և համատեքստ
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- Նիստի նպատակը (փորձնական շրջանակ, թողարկման պատուհան, հեռաչափության ակնկալիքներ):
+- Զանգից առաջ տարածված տեղեկատու փաստաթղթեր (աջակցում է խաղատախտակին, թողարկման օրացույցին,
+  հեռաչափության վահանակներ):
 
-## 2. Workload Overview
+## 2. Ծանրաբեռնվածության ակնարկ
 
-| Topic | Notes |
+| Թեմա | Ծանոթագրություններ |
 |-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| Նպատակային ծանրաբեռնվածություն / շղթաներ | |
+| Գործարքների ակնկալվող ծավալը | |
+| Բիզնեսի կարևոր պատուհաններ / անջատման ժամանակաշրջաններ | |
+| Կարգավորող ռեժիմներ (GDPR, MAS, FISC և այլն) | |
+| Պահանջվող լեզուներ / տեղայնացում | |
 
-## 3. SLA Discussion
+## 3. SLA քննարկում
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA դաս | Գործընկերոջ ակնկալիք | Դելտա ելակետից? | Պահանջվում է գործողություն |
+|------------------------------------------------------|------------------|
+| Կրիտիկական ամրագրում (48ժ) | | Այո/Ոչ | |
+| Բարձր խստություն (5 աշխատանքային օր) | | Այո/Ոչ | |
+| Տեխնիկական սպասարկում (30 օր) | | Այո/Ոչ | |
+| Կտրման ծանուցում (60 օր) | | Այո/Ոչ | |
+| Միջադեպի կապի կադենս | | Այո/Ոչ | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+Փաստաթղթավորեք գործընկերոջ կողմից պահանջվող SLA-ի ցանկացած լրացուցիչ դրույթ (օրինակ՝ նվիրված
+հեռախոսային կամուրջ, հեռաչափության լրացուցիչ արտահանում):
 
-## 4. Telemetry & Access Requirements
+## 4. Հեռաչափություն և մուտքի պահանջներ
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus մուտքի կարիք ունի.
+- Տեղեկամատյանների/հետքի արտահանման պահանջները.
+- Անցանց ապացույցներ կամ դոսյեի ակնկալիքներ.
 
-## 5. Compliance & Legal Notes
+## 5. Համապատասխանություն և իրավական նշումներ
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- Իրավասության ծանուցման պահանջներ (կանոնադրություն + ժամկետներ):
+- Միջադեպի թարմացումների համար անհրաժեշտ իրավական կապեր:
+- Տվյալների ռեզիդենտության սահմանափակումներ / պահպանման պահանջներ:
 
-## 6. Decisions & Action Items
+## 6. Որոշումներ և գործողությունների կետեր
 
-| Item | Owner | Due | Notes |
+| Նյութ | Սեփականատեր | Ժամկետային | Ծանոթագրություններ |
 |------|-------|-----|-------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. Երախտագիտություն
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- Գործընկերը ճանաչե՞լ է ելակետային SLA: (Y/N)
+- Հետագա ճանաչման մեթոդը (էլ. փոստ / տոմս / ստորագրություն).
+- Փակելուց առաջ այս գրացուցակին կցեք հաստատող էլ.փոստը կամ հանդիպման րոպեները:

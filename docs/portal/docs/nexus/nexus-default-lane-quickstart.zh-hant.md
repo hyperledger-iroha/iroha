@@ -11,34 +11,35 @@ id: nexus-default-lane-quickstart
 title: Default lane quickstart (NX-5)
 sidebar_label: Default Lane Quickstart
 description: Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/quickstart/default_lane.md`. Keep both copies
-aligned until the localization sweep lands in the portal.
+:::注意規範來源
+此頁面鏡像 `docs/source/quickstart/default_lane.md`。保留兩份副本
+對齊，直到定位掃描落在門戶中。
 :::
 
-# Default Lane Quickstart (NX-5)
+# 默認車道快速入門 (NX-5)
 
-> **Roadmap context:** NX-5 — default public lane integration. The runtime now
-> exposes a `nexus.routing_policy.default_lane` fallback so Torii REST/gRPC
-> endpoints and every SDK can safely omit a `lane_id` when the traffic belongs
-> on the canonical public lane. This guide walks operators through configuring
-> the catalog, verifying the fallback in `/status`, and exercising the client
-> behaviour end to end.
+> **路線圖背景：** NX-5 — 默認公共車道集成。現在的運行時間
+> 公開 `nexus.routing_policy.default_lane` 回退，因此 Torii REST/gRPC
+> 當流量所屬時，端點和每個 SDK 都可以安全地省略 `lane_id`
+> 在規範的公共車道上。本指南引導操作員完成配置
+> 目錄，驗證 `/status` 中的回退，並鍛煉客戶端
+> 端到端的行為。
 
-## Prerequisites
+## 先決條件
 
-- A Sora/Nexus build of `irohad` (run with `irohad --sora --config ...`).
-- Access to the configuration repository so you can edit `nexus.*` sections.
-- `iroha_cli` configured to talk to the target cluster.
-- `curl`/`jq` (or equivalent) to inspect the Torii `/status` payload.
+- `irohad` 的 Sora/Nexus 版本（與 `irohad --sora --config ...` 一起運行）。
+- 訪問配置存儲庫，以便您可以編輯 `nexus.*` 部分。
+- `iroha_cli` 配置為與目標集群通信。
+- `curl`/`jq`（或等效項），用於檢查 Torii `/status` 有效負載。
 
-## 1. Describe the lane and dataspace catalog
+## 1. 描述通道和數據空間目錄
 
-Declare the lanes and dataspaces that should exist on the network. The snippet
-below (trimmed from `defaults/nexus/config.toml`) registers three public lanes
-plus matching dataspace aliases:
+聲明網絡上應存在的通道和數據空間。片段
+下面（從 `defaults/nexus/config.toml` 修剪）註冊了三個公共車道
+加上匹配的數據空間別名：
 
 ```toml
 [nexus]
@@ -81,17 +82,17 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+每個 `index` 必須是唯一且連續的。數據空間 id 是 64 位值；
+為了清楚起見，上面的示例使用與車道索引相同的數值。
 
-## 2. Set routing defaults and optional overrides
+## 2. 設置路由默認值和可選覆蓋
 
-The `nexus.routing_policy` section controls the fallback lane and lets you
-override routing for specific instructions or account prefixes. If no rule
-matches, the scheduler routes the transaction to the configured `default_lane`
-and `default_dataspace`. The router logic lives in
-`crates/iroha_core/src/queue/router.rs` and applies the policy transparently to
-Torii REST/gRPC surfaces.
+`nexus.routing_policy` 部分控制後備通道並讓您
+覆蓋特定指令或帳戶前綴的路由。如果沒有規則
+匹配，調度程序將事務路由到配置的 `default_lane`
+和 `default_dataspace`。路由器邏輯位於
+`crates/iroha_core/src/queue/router.rs` 並將策略透明地應用於
+Torii REST/gRPC 表面。
 
 ```toml
 [nexus.routing_policy]
@@ -113,31 +114,31 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-When you later add new lanes, update the catalog first, then extend the routing
-rules. The fallback lane should continue to point at the public lane that holds
+當您稍後添加新車道時，請先更新目錄，然後擴展路線
+規則。後備車道應繼續指向公共車道
 
-## 3. Boot a node with the policy applied
+## 3. 啟動應用了策略的節點
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-The node logs the derived routing policy during startup. Any validation errors
-(missing indexes, duplicated aliases, invalid dataspace ids) are surfaced before
-gossip begins.
+節點在啟動期間記錄派生的路由策略。任何驗證錯誤
+（缺少索引、重複的別名、無效的數據空間 ID）在之前出現
+八卦開始了。
 
-## 4. Confirm lane governance state
+## 4.確認車道治理狀態
 
-Once the node is online, use the CLI helper to verify that the default lane is
-sealed (manifest loaded) and ready for traffic. The summary view prints one row
-per lane:
+節點上線後，使用 CLI 幫助程序驗證默認通道是否為
+密封（已裝載艙單）並準備運輸。摘要視圖打印一行
+每車道：
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+輸出示例：
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -146,20 +147,20 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-If the default lane shows `sealed`, follow the lane governance runbook before
-allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
+如果默認通道顯示 `sealed`，請按照之前的通道治理操作手冊進行操作
+允許外部流量。 `--fail-on-sealed` 標誌對於 CI 來說很方便。
 
-## 5. Inspect Torii status payloads
+## 5. 檢查 Torii 狀態負載
 
-The `/status` response exposes both the routing policy and the per-lane scheduler
-snapshot. Use `curl`/`jq` to confirm the configured defaults and to check that
-the fallback lane is producing telemetry:
+`/status` 響應公開了路由策略和每通道調度程序
+快照。使用 `curl`/`jq` 確認配置的默認值並檢查
+後備通道正在生成遙測數據：
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+示例輸出：
 
 ```json
 {
@@ -172,7 +173,7 @@ Sample output:
 }
 ```
 
-To inspect the live scheduler counters for lane `0`:
+要檢查通道 `0` 的實時調度程序計數器：
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -180,37 +181,37 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-This confirms that the TEU snapshot, alias metadata, and manifest flags align
-with the configuration. The same payload is what Grafana panels use for the
-lane-ingest dashboard.
+這確認了 TEU 快照、別名元數據和清單標誌對齊
+與配置。 Grafana 面板使用相同的有效負載
+車道攝取儀表板。
 
-## 6. Exercise client defaults
+## 6. 執行客戶端默認設置
 
-- **Rust/CLI.** `iroha_cli` and the Rust client crate omit the `lane_id` field
-  when you do not pass `--lane-id` / `LaneSelector`. The queue router therefore
-  falls back to `default_lane`. Use explicit `--lane-id`/`--dataspace-id` flags
-  only when targeting a non-default lane.
-- **JS/Swift/Android.** Latest SDK releases treat `laneId`/`lane_id` as optional
-  and fall back to the value advertised by `/status`. Keep the routing policy in
-  sync across staging and production so mobile apps do not need emergency
-  reconfigurations.
-- **Pipeline/SSE tests.** The transaction event filters accept
-  `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
-  without an explicit lane arrive under the fallback lane id.
+- **Rust/CLI.** `iroha_cli` 和 Rust 客戶端包省略了 `lane_id` 字段
+  當您未通過 `--lane-id` / `LaneSelector` 時。因此隊列路由器
+  回落至 `default_lane`。使用顯式 `--lane-id`/`--dataspace-id` 標誌
+  僅當定位非默認車道時。
+- **JS/Swift/Android。 **最新的 SDK 版本將 `laneId`/`lane_id` 視為可選
+  並回退到 `/status` 所公佈的值。保留路由策略
+  跨階段和生產同步，因此移動應用程序不需要緊急情況
+  重新配置。
+- **管道/SSE 測試。 ** 交易事件過濾器接受
+  `tx_lane_id == <u32>` 謂詞（請參閱 `docs/source/pipeline.md`）。訂閱
+  `/v1/pipeline/events/transactions` 使用該過濾器來證明寫入已發送
+  沒有明確的車道到達後備車道 ID 下。
 
-## 7. Observability and governance hooks
+## 7. 可觀察性和治理掛鉤
 
-- `/status` also publishes `nexus_lane_governance_sealed_total` and
-  `nexus_lane_governance_sealed_aliases` so Alertmanager can warn whenever a
-  lane loses its manifest. Keep those alerts enabled even for devnets.
-- The scheduler telemetry map and the lane governance dashboard
-  (`dashboards/grafana/nexus_lanes.json`) expect the alias/slug fields from the
-  catalog. If you rename an alias, relabel the corresponding Kura directories so
-  auditors keep deterministic paths (tracked under NX-1).
-- Parliament approvals for default lanes should include a rollback plan. Record
-  the manifest hash and governance evidence alongside this quickstart in your
-  operator runbook so future rotations do not guess the required state.
+- `/status` 還發布了 `nexus_lane_governance_sealed_total` 和
+  `nexus_lane_governance_sealed_aliases` 因此 Alertmanager 可以在任何時候發出警告
+  車道失去其清單。即使對於開發網絡也保持啟用這些警報。
+- 調度程序遙測地圖和車道治理儀表板
+  (`dashboards/grafana/nexus_lanes.json`) 期望別名/slug 字段來自
+  目錄。如果重命名別名，請重新標記相應的 Kura 目錄，以便
+  審計員保持確定性路徑（在 NX-1 下跟踪）。
+- 議會對默認車道的批准應包括回滾計劃。記錄
+  清單哈希和治理證據以及本快速入門
+  操作員運行手冊，以便將來的輪換不會猜測所需的狀態。
 
-Once these checks pass you can treat `nexus.routing_policy.default_lane` as the
-code paths on the network.
+一旦這些檢查通過，您就可以將 `nexus.routing_policy.default_lane` 視為
+網絡上的代碼路徑。

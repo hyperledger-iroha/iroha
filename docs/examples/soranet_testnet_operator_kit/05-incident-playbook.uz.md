@@ -7,36 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2fbce156952c669e73d74c13284fca317013d706ee401359028c3638341d34b
 source_last_modified: "2025-12-29T18:16:35.091815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Brownout / Downgrade Response Playbook
 
-1. **Detect**
-   - Alert `soranet_privacy_circuit_events_total{kind="downgrade"}` fires or
-     brownout webhook triggers from governance.
-   - Confirm via `kubectl logs soranet-relay` or systemd journal within 5 mins.
+1. **Aniqlash**
+   - Ogohlantirish `soranet_privacy_circuit_events_total{kind="downgrade"}` yong'inlari yoki
+     Brownout webhook boshqaruvdan kelib chiqadi.
+   - 5 daqiqa ichida `kubectl logs soranet-relay` yoki tizim jurnali orqali tasdiqlang.
 
-2. **Stabilise**
-   - Freeze guard rotation (`relay guard-rotation disable --ttl 30m`).
-   - Enable direct-only override for affected clients
+2. **Barqarorlash**
+   - Muzlatish himoyasi aylanishi (`relay guard-rotation disable --ttl 30m`).
+   - Ta'sirlangan mijozlar uchun faqat to'g'ridan-to'g'ri bekor qilishni yoqing
      (`sorafs fetch --transport-policy direct-only --write-mode read-only`).
-   - Capture current compliance config hash (`sha256sum compliance.toml`).
+   - Joriy muvofiqlik konfiguratsiyasi xeshini oling (`sha256sum compliance.toml`).
 
-3. **Diagnose**
-   - Collect latest directory snapshot and relay metrics bundle:
+3. **Tashxis qo‘yish**
+   - Eng so'nggi katalog snapshotini to'plang va ko'rsatkichlar to'plamini o'tkazing:
      `soranet-relay support-bundle --output /tmp/bundle.tgz`.
-   - Note PoW queue depth, throttle counters, and GAR category spikes.
-   - Identify whether PQ deficit, compliance override, or relay failure caused the event.
+   - PoW navbatining chuqurligiga, gaz kelebeği hisoblagichlariga va GAR toifasidagi keskinliklarga e'tibor bering.
+   - Hodisaga PQ tanqisligi, muvofiqlikni bekor qilish yoki o'rni nosozligi sabab bo'lganligini aniqlang.
 
-4. **Escalate**
-   - Notify the governance bridge (`#soranet-incident`) with summary and bundle hash.
-   - Open incident ticket linking to the alert, including timestamps and mitigation steps.
+4. **Eskalatsiya**
+   - Boshqaruv ko'prigini (`#soranet-incident`) xulosa va to'plam xesh bilan xabardor qiling.
+   - Ogohlantirish bilan bog'langan voqea chiptasini oching, shu jumladan vaqt belgilari va yumshatish bosqichlari.
 
-5. **Recover**
-   - Once root cause addressed, re-enable rotation
-     (`relay guard-rotation enable`) and revert direct-only overrides.
-   - Monitor KPIs for 30 minutes; ensure no new brownouts appear.
+5. **Qayta tiklash**
+   - Asl sabab bartaraf etilgandan so'ng, aylanishni qayta yoqing
+     (`relay guard-rotation enable`) va faqat to'g'ridan-to'g'ri bekor qilishni qaytaring.
+   - KPIlarni 30 daqiqa davomida kuzatib borish; yangi jigarrang dog'lar paydo bo'lmasligiga ishonch hosil qiling.
 
-6. **Postmortem**
-   - Submit incident report within 48 hours using governance template.
-   - Update runbooks if new failure mode discovered.
+6. **O'limdan keyingi**
+   - Boshqaruv shablonidan foydalangan holda 48 soat ichida voqea hisobotini yuboring.
+   - Agar yangi xato rejimi aniqlansa, runbook-larni yangilang.

@@ -4,103 +4,103 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: Checklist de rollout del registro de chunker de SoraFS
-sidebar_label: Checklist de rollout de chunker
-description: Plan de rollout paso a paso para actualizaciones del registro de chunker.
+id: lista de verificação de implementação de registro de chunker
+título: Checklist de implementação do registro de chunker de SoraFS
+sidebar_label: Lista de verificação de implementação do chunker
+description: Plano de implementação passo a passo para atualizações do registro do chunker.
 ---
 
-:::note Fuente canónica
-Refleja `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantén ambas copias sincronizadas hasta que se retire el conjunto de documentación Sphinx heredado.
+:::nota Fonte canônica
+Reflexo `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantenha ambas as cópias sincronizadas até que o conjunto de documentação Sphinx herdado seja retirado.
 :::
 
-# Checklist de rollout del registro de SoraFS
+# Checklist de implementação do registro de SoraFS
 
-Este checklist captura los pasos necesarios para promover un nuevo perfil de chunker
-o un bundle de admisión de proveedores desde revisión a producción después de que la
-carta de gobernanza haya sido ratificada.
+Esta lista de verificação captura os passos necessários para promover um novo perfil de chunker
+ou um pacote de admissão de provedores desde revisão e produção após que
+carta de governo foi ratificada.
 
-> **Alcance:** Aplica a todas las releases que modifican
-> `sorafs_manifest::chunker_registry`, los sobres de admisión de proveedores o los
-> bundles de fixtures canónicos (`fixtures/sorafs_chunker/*`).
+> **Alcance:** Aplicar a todos os lançamentos que foram modificados
+> `sorafs_manifest::chunker_registry`, as sobres de admissão de provadores ou os
+> pacotes de luminárias canônicas (`fixtures/sorafs_chunker/*`).
 
-## 1. Validación previa
+## 1. Validação prévia
 
-1. Regenera fixtures y verifica el determinismo:
+1. Regenera fixtures e verifica o determinismo:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirma que los hashes de determinismo en
-   `docs/source/sorafs/reports/sf1_determinism.md` (o el reporte de perfil relevante)
-   coinciden con los artefactos regenerados.
-3. Asegura que `sorafs_manifest::chunker_registry` compila con
-   `ensure_charter_compliance()` ejecutando:
+2. Confirme os hashes de determinismo em
+   `docs/source/sorafs/reports/sf1_determinism.md` (ou o relatório de perfil relevante)
+   coincide com os artefatos regenerados.
+3. Certifique-se de que `sorafs_manifest::chunker_registry` compila com
+   `ensure_charter_compliance()` executando:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Actualiza el dossier de la propuesta:
-   - `docs/source/sorafs/proposals/<profile>.json`
-   - Entrada de actas del consejo en `docs/source/sorafs/council_minutes_*.md`
-   - Reporte de determinismo
+4. Atualize o dossiê da proposta:
+   -`docs/source/sorafs/proposals/<profile>.json`
+   - Entrada de atos do conselho em `docs/source/sorafs/council_minutes_*.md`
+   - Relatório de determinismo
 
-## 2. Aprobación de gobernanza
+## 2. Aprovação de governo
 
-1. Presenta el informe del Tooling Working Group y el digest de la propuesta al
-   Sora Parliament Infrastructure Panel.
-2. Registra los detalles de aprobación en
+1. Apresenta o relatório do Grupo de Trabalho de Ferramentas e o resumo da proposta
+   Painel de Infraestrutura do Parlamento Sora.
+2. Registre os detalhes de aprovação em
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publica el sobre firmado por el Parlamento junto a los fixtures:
+3. Publica a mensagem firmada pelo Parlamento junto com os jogos:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verifica que el sobre sea accesible vía el helper de fetch de gobernanza:
+4. Verifique se o mar está acessível por meio do ajudante de busca de governo:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Rollout en staging
+## 3. Implementação na preparação
 
-Consulta el [playbook de manifest en staging](./staging-manifest-playbook) para un
-recorrido detallado de estos pasos.
+Consulte o [manual de manifesto em teste](./staging-manifest-playbook) para um
+recorrido detalhado de esses passos.
 
-1. Despliega Torii con discovery `torii.sorafs` habilitado y la aplicación de
-   admisión activada (`enforce_admission = true`).
-2. Sube los sobres de admisión de proveedores aprobados al directorio de registro
+1. Desplie Torii com descoberta `torii.sorafs` habilitado e o aplicativo de
+   admissão ativada (`enforce_admission = true`).
+2. Sube as sobres de admissão de provedores aprovados no diretório de registro
    de staging referenciado por `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verifica que los provider adverts se propaguen vía la API de discovery:
+3. Verifique se os anúncios do provedor são propagados por meio da API de descoberta:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Ejecuta los endpoints de manifest/plan con headers de gobernanza:
+4. Execute os endpoints do manifesto/plano com cabeçalhos de governo:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirma que los dashboards de telemetría (`torii_sorafs_*`) y las reglas de
-   alerta reporten el nuevo perfil sin errores.
+5. Confirme os painéis de telemetria (`torii_sorafs_*`) e as regras de
+   alerta reportar o novo perfil sem erros.
 
-## 4. Rollout en producción
+## 4. Implementação na produção
 
-1. Repite los pasos de staging contra los nodos Torii de producción.
-2. Anuncia la ventana de activación (fecha/hora, periodo de gracia, plan de rollback)
-   a los canales de operadores y SDK.
-3. Fusiona el PR de release que contiene:
-   - Fixtures y sobre actualizados
-   - Cambios de documentación (referencias a la carta, reporte de determinismo)
-   - Refresh de roadmap/status
-4. Etiqueta la release y archiva los artefactos firmados para la procedencia.
+1. Repita os passos de preparação contra os nós de produção Torii.
+2. Anuncie a janela de ativação (fecha/hora, período de graça, plano de reversão)
+   nos canais de operadores e SDK.
+3. Combine o PR de lançamento que contém:
+   - Luminárias e sobre atualizados
+   - Mudanças de documentação (referências à carta, relatório de determinismo)
+   - Atualizar roteiro/status
+4. Etiqueta a liberação e arquiva os artefatos firmados para a procedência.
 
-## 5. Auditoría post-rollout
-
-1. Captura métricas finales (conteos de discovery, tasa de éxito de fetch,
-   histogramas de error) 24 h después del rollout.
-2. Actualiza `status.md` con un resumen corto y un enlace al reporte de determinismo.
-3. Registra cualquier tarea de seguimiento (p. ej., más guía de autoría de perfiles)
-   en `roadmap.md`.
+## 5. Auditoria pós-lançamento1. Captura de métricas finais (conteúdos de descoberta, taxa de sucesso de busca,
+   histogramas de erro) 24 horas após o lançamento.
+2. Atualize `status.md` com um resumo curto e um link para o relatório de determinismo.
+3. Registre qualquer tarefa de acompanhamento (p. ej., mais guia de autoria de perfis)
+   em `roadmap.md`.

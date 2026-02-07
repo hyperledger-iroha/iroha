@@ -6,63 +6,64 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8de31f9e066b729fda8324b8847badba23de926888574d02a44fb0e6d4472f77
 source_last_modified: "2026-01-18T05:31:56+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito הפניה ל-Codec
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito היא שכבת הסריאליזציה הקנונית של Iroha. כל הודעה על חוט, בדיסק
+עומס, וממשק API חוצה רכיבים משתמש ב-Norito כך שהצמתים מסכימים על בתים זהים
+גם כשהם פועלים על חומרה שונה. עמוד זה מסכם את החלקים הנעים
+ומצביע על המפרט המלא ב-`norito.md`.
 
-## Core layout
+## פריסת ליבה
 
-| Component | Purpose | Source |
+| רכיב | מטרה | מקור |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **כותרת** | מסגרות מטענים עם hash של קסם/גרסה/סכמה, CRC64, אורך ותג דחיסה; v1 דורש `VERSION_MINOR = 0x00` ומאמת את דגלי הכותרת מול המסכה הנתמכת (ברירת המחדל `0x00`). | `norito::header` — ראה `norito.md` ("כותרת ודגלים", שורש מאגר) |
+| **מטען חשוף** | קידוד ערך דטרמיניסטי המשמש לגיבוב/השוואה. הובלה על חוט משתמשת תמיד בכותרת; בתים חשופים הם פנימיים בלבד. | `norito::codec::{Encode, Decode}` |
+| **דחיסה** | Zstd אופציונלי (והאצת GPU ניסיוני) שנבחרה באמצעות בייט דחיסת הכותרת. | `norito.md`, "משא ומתן דחיסה" |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+רישום דגל הפריסה (packed-struct, packed-seq, field bitset, compact
+longs) חי ב-`norito::header::flags`. ברירת המחדל של V1 היא דגלים `0x00` אבל
+מקבל דגלי כותרת מפורשים בתוך המסכה הנתמכת; ביטים לא ידועים הם
+נדחה. `norito::header::Flags` נשמר לבדיקה פנימית ו
+גרסאות עתידיות.
 
-## Derive support
+## קבל תמיכה
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` נשלחים ל-`Encode`, `Decode`, `IntoSchema` ו-JSON עוזר נגזרת.
+מוסכמות מפתח:
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- נגזרות מייצרות גם AoS וגם נתיבי קוד ארוזים; ברירת המחדל של v1 היא AoS
+  פריסה (דגלים `0x00`) אלא אם כן דגלי כותרת יבחרו בגרסאות עמוסות.
+  היישום מתקיים ב-`crates/norito_derive/src/derive_struct.rs`.
+- תכונות המשפיעות על פריסה (`packed-struct`, `packed-seq`, `compact-len`) הן
+  הצטרפות באמצעות דגלי כותרת וחייב להיות מקודד/פענוח באופן עקבי בין עמיתים.
+- עוזרי JSON (`norito::json`) מספקים JSON דטרמיניסטי עם גיבוי Norito עבור
+  ממשקי API פתוחים. השתמש ב-`norito::json::{to_json_pretty, from_json}` - לעולם לא ב-`serde_json`.
 
-## Multicodec & identifier tables
+## מולטי-קודקים וטבלאות מזהים
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito שומר את הקצאות המולטי-קודקים שלו ב-`norito::multicodec`. ההתייחסות
+טבלה (hashes, סוגי מפתחות, מתארי מטען) נשמרת ב-`multicodec.md`
+בשורש המאגר. כאשר מוסיפים מזהה חדש:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. עדכון `norito::multicodec::registry`.
+2. הרחב את הטבלה ב-`multicodec.md`.
+3. צור מחדש קישורים במורד הזרם (Python/Java) אם הם צורכים את המפה.
 
-## Regenerating docs & fixtures
+## חידוש מסמכים ומתקנים
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+כאשר הפורטל מארח כעת סיכום פרוזה, השתמש ב-Markdown במעלה הזרם
+מקורות כמקור האמת:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **מפרט**: `norito.md`
+- **שולחן מולטי-קודק**: `multicodec.md`
+- **אמות מידה**: `crates/norito/benches/`
+- **מבחני זהב**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+כאשר האוטומציה Docusaurus תעלה לאוויר, הפורטל יעודכן באמצעות
+סקריפט סינכרון (במעקב ב-`docs/portal/scripts/`) שמושך את הנתונים מאלה
+קבצים. עד אז, השאר את הדף הזה מיושר באופן ידני בכל פעם שהמפרט משתנה.

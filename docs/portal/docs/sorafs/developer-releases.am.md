@@ -9,99 +9,100 @@ source_last_modified: "2026-01-05T09:28:11.867590+00:00"
 translation_last_reviewed: 2026-02-07
 title: Release Process
 summary: Run the CLI/SDK release gate, apply the shared versioning policy, and publish canonical release notes.
+translator: machine-google-reviewed
 ---
 
-# Release Process
+# የመልቀቅ ሂደት
 
-SoraFS binaries (`sorafs_cli`, `sorafs_fetch`, helpers) and SDK crates
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) ship together. The release
-pipeline keeps the CLI and libraries aligned, ensures lint/test coverage, and
-captures artefacts for downstream consumers. Run the checklist below for every
-candidate tag.
+SoraFS ሁለትዮሽ (`sorafs_cli`፣ `sorafs_fetch`፣ ረዳቶች) እና ኤስዲኬ ሳጥኖች
+(`sorafs_car`፣ `sorafs_manifest`፣ `sorafs_chunker`) አንድ ላይ ይርከብ። የተለቀቀው
+የቧንቧ መስመር CLI እና ቤተ-መጻሕፍትን ያቆያል፣ የሊንት/የሙከራ ሽፋንን ያረጋግጣል፣ እና
+ለታችኛው ተፋሰስ ተጠቃሚዎች ቅርሶችን ይይዛል። ለእያንዳንዱ ከዚህ በታች ያለውን የማረጋገጫ ዝርዝር ያሂዱ
+የእጩ መለያ.
 
-## 0. Confirm security review sign-off
+## 0. የደህንነት ግምገማ ማቋረጥን ያረጋግጡ
 
-Before executing the technical release gate, capture the latest security review
-artefacts:
+የቴክኒካዊ መልቀቂያ በርን ከመፈፀምዎ በፊት የቅርብ ጊዜውን የደህንነት ግምገማ ይያዙ
+ቅርሶች፡-
 
-- Download the most recent SF-6 security review memo ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  and record its SHA256 hash in the release ticket.
-- Attach the remediation ticket link (e.g., `governance/tickets/SF6-SR-2026.md`) and note the sign-off
-  approvers from Security Engineering and the Tooling Working Group.
-- Verify that the remediation checklist in the memo is closed; unresolved items block the release.
-- Prepare to upload parity harness logs (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
-  alongside the manifest bundle.
-- Confirm the signing command you plan to run includes both `--identity-token-provider` and an explicit
-  `--identity-token-audience=<aud>` so Fulcio scope is captured in the release evidence.
+- በጣም የቅርብ ጊዜውን የ SF-6 የደህንነት ግምገማ ማስታወሻ አውርድ ([ሪፖርቶች/sf6-የደህንነት-ግምገማ](./reports/sf6-security-review.md))
+  እና የእሱን SHA256 hash በመልቀቂያ ቲኬቱ ውስጥ ይመዝግቡ።
+- የማሻሻያ ትኬት ማገናኛን (ለምሳሌ `governance/tickets/SF6-SR-2026.md`) ያያይዙ እና መቋረጥን ያስተውሉ
+  ከደህንነት ምህንድስና እና ከመሳሪያ ስራ ቡድን አጽዳቂዎች።
+- በማስታወሻው ውስጥ ያለው የማገገሚያ ዝርዝር መዘጋቱን ያረጋግጡ; ያልተፈቱ ነገሮች ልቀቱን ያግዱታል።
+- የተመጣጣኝ መታጠቂያ ምዝግብ ማስታወሻዎችን ለመስቀል ያዘጋጁ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+  ከአንጸባራቂው ጥቅል ጋር።
+- ለማስኬድ ያቀዱትን የፊርማ ትዕዛዝ ያረጋግጡ `--identity-token-provider` እና ግልጽ
+  `--identity-token-audience=<aud>` ስለዚህ Fulcio scope የሚለቀቀው ማስረጃ ውስጥ ተያዘ.
 
-Include these artefacts when notifying governance and publishing the release.
+አስተዳደርን ሲያስታውቁ እና ልቀቱን ሲያትሙ እነዚህን ቅርሶች ያካትቱ።
 
-## 1. Execute the release/test gate
+## 1. የመልቀቂያውን/የፈተናውን በር ያስፈጽሙ
 
-The `ci/check_sorafs_cli_release.sh` helper runs formatting, Clippy, and tests
-across the CLI and SDK crates with a workspace-local target directory (`.target`)
-to avoid permission conflicts when executing inside CI containers.
+የ`ci/check_sorafs_cli_release.sh` ረዳት ቅርጸት መስራትን፣ ክሊፒን እና ሙከራዎችን ይሰራል።
+በCLI እና ኤስዲኬ ሳጥኖች ከስራ ቦታ-አካባቢያዊ ዒላማ ማውጫ (`.target`) ጋር
+በ CI ኮንቴይነሮች ውስጥ በሚከናወኑበት ጊዜ የፍቃድ ግጭቶችን ለማስወገድ።
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-The script performs the following assertions:
+ስክሪፕቱ የሚከተሉትን ማረጋገጫዎች ይፈጽማል፡-
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` for `sorafs_car` (with the `cli` feature),
-  `sorafs_manifest`, and `sorafs_chunker`
-- `cargo test --locked --all-targets` for those same crates
+- `cargo fmt --all -- --check` (የስራ ቦታ)
+- `cargo clippy --locked --all-targets` ለ `sorafs_car` (ከ`cli` ባህሪ ጋር)
+  `sorafs_manifest`፣ እና `sorafs_chunker`
+- `cargo test --locked --all-targets` ለእነዚያ ተመሳሳይ ሳጥኖች
 
-If any step fails, fix the regression before tagging. Release builds must be
-continuous with main; do not cherry-pick fixes into release branches. The gate
-also checks that keyless signing flags (`--identity-token-issuer`, `--identity-token-audience`)
-are provided where applicable; missing arguments fail the run.
+ማንኛውም እርምጃ ካልተሳካ፣ መለያ ከመስጠትዎ በፊት ተሃድሶውን ያስተካክሉት። የመልቀቂያ ግንባታዎች መሆን አለባቸው
+ከዋናው ጋር ቀጣይነት ያለው; ወደ መልቀቂያ ቅርንጫፎች የቼሪ-አስተካክል አይምረጡ. በሩ
+እንዲሁም ቁልፍ አልባ ፊርማ ባንዲራዎችን ይፈትሻል (`--identity-token-issuer`፣ `--identity-token-audience`)
+በሚተገበርበት ቦታ ይሰጣሉ; የጎደሉ ክርክሮች ሩጫውን ወድቀዋል።
 
-## 2. Apply the versioning policy
+## 2. የስርጭት ፖሊሲን ይተግብሩ
 
-All SoraFS CLI/SDK crates use SemVer:
+ሁሉም SoraFS CLI/SDK ሳጥኖች SemVer ይጠቀማሉ፡
 
-- `MAJOR`: Introduced for the first 1.0 release. Before 1.0 the `0.y` minor bump
-  **indicates breaking changes** in the CLI surface or Norito schemas.
-  fields gated behind optional policy, telemetry additions).
-- `PATCH`: Bug fixes, documentation-only releases, and dependency updates that
-  do not change observable behaviour.
+- `MAJOR`: ለመጀመሪያው 1.0 ልቀት አስተዋውቋል። ከ 1.0 በፊት የ I18NI0000031X ጥቃቅን እብጠት
+  ** በ CLI ወለል ወይም I18NT0000000X እቅዶች ላይ መበላሸት ለውጦችን ያሳያል።
+  ከአማራጭ ፖሊሲ ጀርባ የተከለሉ መስኮች፣ የቴሌሜትሪ ተጨማሪዎች)።
+- `PATCH`፡ የሳንካ ጥገናዎች፣ የሰነድ-ብቻ ልቀቶች እና የጥገኝነት ዝማኔዎች
+  የሚታይ ባህሪን አይቀይሩ.
 
-Always keep `sorafs_car`, `sorafs_manifest`, and `sorafs_chunker` on the same
-version so downstream SDK consumers can depend on a single aligned version
-string. When bumping versions:
+ሁልጊዜ `sorafs_car`፣ `sorafs_manifest` እና I18NI0000035Xን በተመሳሳይ ያቆዩ።
+ሥሪት ስለዚህ የታችኛው የኤስዲኬ ሸማቾች በአንድ የተስተካከለ ሥሪት ላይ ሊመኩ ይችላሉ።
+ሕብረቁምፊ. ስሪቶችን በሚያደናቅፉበት ጊዜ፡-
 
-1. Update `version =` fields in each crate’s `Cargo.toml`.
-2. Regenerate the `Cargo.lock` via `cargo update -p <crate>@<new-version>` (the
-   workspace enforces explicit versions).
-3. Run the release gate again to ensure no stale artefacts remain.
+1. በእያንዳንዱ የሣጥን `Cargo.toml` የI18NI0000036X መስኮችን ያዘምኑ።
+2. `Cargo.lock` በ `cargo update -p <crate>@<new-version>` በኩል ያድሱ (የ
+   የስራ ቦታ ግልጽ ስሪቶችን ያስፈጽማል).
+3. የቆዩ ቅርሶች እንዳልቀሩ ለማረጋገጥ የመልቀቂያውን በር እንደገና አስኪዱ።
 
-## 3. Prepare release notes
+## 3. የመልቀቂያ ማስታወሻዎችን ያዘጋጁ
 
-Every release must publish a markdown changelog that highlights CLI, SDK, and
-governance-impacting changes. Use the template in
-`docs/examples/sorafs_release_notes.md` (copy it to your release artifacts
-directory and fill in the sections with concrete details).
+እያንዳንዱ ልቀት CLIን፣ ኤስዲኬን እናን የሚያደምቅ የማርክ ማድረጊያ ሎግ ማተም አለበት።
+የአስተዳደር-ተፅዕኖ ለውጦች. አብነቱን በ ውስጥ ይጠቀሙ
+`docs/examples/sorafs_release_notes.md` (ወደ የተለቀቁት ቅርሶችዎ ይቅዱት።
+ማውጫ እና ክፍሎቹን በተጨባጭ ዝርዝሮች ይሙሉ).
 
-Minimum content:
+ዝቅተኛ ይዘት፡
 
-- **Highlights**: feature headlines for CLI and SDK consumers.
-  requirements.
-- **Upgrade steps**: TL;DR commands for bumping cargo dependencies and rerunning
-  deterministic fixtures.
-- **Verification**: command output hashes or envelopes and the exact
-  `ci/check_sorafs_cli_release.sh` revision executed.
+- ** ዋና ዋና ዜናዎች *** ለ CLI እና SDK ሸማቾች የባህሪ አርዕስተ ዜናዎች።
+  መስፈርቶች.
+- ** ደረጃዎችን አሻሽል ***: TL; DR የጭነት ጥገኛዎችን ለማደናቀፍ እና እንደገና ለመሮጥ ትዕዛዞችን ይሰጣል
+  የሚወስኑ ቋሚዎች.
+- ** ማረጋገጫ ***: የትዕዛዝ ውጤት hashes ወይም ኤንቨሎፕ እና ትክክለኛው
+  `ci/check_sorafs_cli_release.sh` ክለሳ ተፈፅሟል።
 
-Attach the filled release notes to the tag (e.g., GitHub release body) and store
-them alongside deterministically generated artefacts.
+የተሞሉትን የመልቀቂያ ማስታወሻዎች ከመለያው ጋር ያያይዙ (ለምሳሌ፣ GitHub የተለቀቀው አካል) እና ማከማቻ
+በቆራጥነት ከተፈጠሩ ቅርሶች ጋር።
 
-## 4. Execute release hooks
+## 4. የመልቀቂያ መንጠቆዎችን ያስፈጽም
 
-Run `scripts/release_sorafs_cli.sh` to generate the signature bundle and
-verification summary that ship with every release. The wrapper builds the CLI
-when necessary, calls `sorafs_cli manifest sign`, and immediately replays
-`manifest verify-signature` so failures surface before tagging. Example:
+የፊርማ ቅርቅቡን ለማመንጨት `scripts/release_sorafs_cli.sh` ን ያሂዱ
+የማረጋገጫ ማጠቃለያ ከእያንዳንዱ ልቀት ጋር። መጠቅለያው CLI ን ይገነባል።
+አስፈላጊ ሲሆን `sorafs_cli manifest sign` ይደውላል እና ወዲያውኑ እንደገና ያጫውታል።
+`manifest verify-signature` ስለዚህ መለያ ከመስጠትዎ በፊት ወድቋል። ምሳሌ፡-
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -115,31 +116,31 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Tips:
+ጠቃሚ ምክሮች
 
-- Track release inputs (payload, plans, summaries, expected token hash) in your
-  repo or deployment config so the script remains reproducible. The CI fixture
-  bundle under `fixtures/sorafs_manifest/ci_sample/` shows the canonical layout.
-- Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
-  release gate, invokes the script above, and archives bundles/signatures as
-  workflow artefacts. Mirror the same command order (release gate → sign →
-  verify) in other CI systems so audit logs line up with the generated hashes.
-- Keep the generated `manifest.bundle.json`, `manifest.sig`,
-  `manifest.sign.summary.json`, and `manifest.verify.summary.json` together—they
-  form the packet referenced in the governance notification.
-- When the release updates canonical fixtures, copy the refreshed manifest,
-  chunk plan, and summaries into `fixtures/sorafs_manifest/ci_sample/` (and update
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) before tagging.
-  Downstream operators depend on the committed fixtures to reproduce the release
-  bundle.
-- Capture the run log for `sorafs_cli proof stream` bounded-channel verification and attach it to the
-  release packet to demonstrate proof streaming safeguards remain active.
-- Record the exact `--identity-token-audience` used during signing in the release notes; governance
-  cross-checks the audience against Fulcio policy before approving publication.
+- የመልቀቂያ ግብዓቶችን (የክፍያ ጭነት፣ ዕቅዶች፣ ማጠቃለያዎች፣ የሚጠበቀው ቶከን ሃሽ) በእርስዎ ውስጥ ይከታተሉ
+  ስክሪፕቱ ሊባዛ የሚችል ሆኖ እንዲቆይ repo ወይም ማሰማራት ውቅር። የሲ.አይ.ፒ
+  ጥቅል በ `fixtures/sorafs_manifest/ci_sample/` ስር ቀኖናዊውን አቀማመጥ ያሳያል።
+- ቤዝ CI አውቶሜሽን በ `.github/workflows/sorafs-cli-release.yml`; የሚለውን ያስኬዳል
+  የመልቀቂያ በር፣ ከላይ ያለውን ስክሪፕት ጠርቶ፣ እና ቅርቅቦችን/ፊርማዎችን በማህደር እንደ
+  የስራ ሂደት ቅርሶች. ተመሳሳዩን የትእዛዝ ቅደም ተከተል ያንጸባርቁ (የልቀት በር → ምልክት →
+  ማረጋገጥ) በሌሎች CI ስርዓቶች ስለዚህ የኦዲት ምዝግብ ማስታወሻዎች ከተፈጠረው ሃሽ ጋር ይሰለፋሉ።
+- የተፈጠረውን I18NI0000047X፣ `manifest.sig`፣
+  `manifest.sign.summary.json` እና `manifest.verify.summary.json` አንድ ላይ - እነሱ
+  በአስተዳደር ማስታወቂያ ውስጥ የተጠቀሰውን ፓኬት ይመሰርቱ።
+- የተለቀቀው ቀኖናዊ መጫዎቻዎችን ሲያዘምን ፣ የታደሰውን አንጸባራቂ ይቅዱ ፣
+  chunk plan፣ እና ወደ `fixtures/sorafs_manifest/ci_sample/` (እና ማዘመን
+  `docs/examples/sorafs_ci_sample/manifest.template.json`) መለያ ከመስጠትዎ በፊት።
+  የታችኛው ተፋሰስ ኦፕሬተሮች ልቀቱን እንደገና ለማባዛት በቁርጠኝነት በተቀመጡት ዕቃዎች ላይ ይወሰናሉ።
+  ጥቅል።
+- ለI18NI0000053X ወሰን-ሰርጥ ማረጋገጫ የሩጫ ምዝግብ ማስታወሻን ያንሱ እና ከ
+  የማስረጃ ዥረት መከላከያዎችን ለማሳየት የመልቀቂያ ፓኬት ገቢር ሆኖ ይቆያል።
+- በመልቀቂያ ማስታወሻዎች ውስጥ በሚፈርሙበት ጊዜ ጥቅም ላይ የዋለውን ትክክለኛውን I18NI0000054X ይመዝግቡ; አስተዳደር
+  ህትመቱን ከማጽደቁ በፊት ተመልካቾችን በፉልሲዮ ፖሊሲ ላይ ያጣራል።
 
-Use `scripts/sorafs_gateway_self_cert.sh` when the release also carries a
-gateway rollout. Point it at the same manifest bundle to prove the attestation
-matches the candidate artefact:
+ልቀቱ ሀ ሲይዝ `scripts/sorafs_gateway_self_cert.sh` ይጠቀሙ
+መግቢያ በር መልቀቅ. ምስክሩን ለማረጋገጥ በተመሳሳዩ አንጸባራቂ ጥቅል ላይ ያመልክቱ
+ከእጩው ቅርስ ጋር ይዛመዳል
 
 ```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
@@ -147,42 +148,42 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Tag and publish
+## 5. መለያ ስጥ እና አትም
 
-After the checks pass and hooks complete:
+ቼኮች ካለፉ እና መንጠቆዎቹ ከተጠናቀቀ በኋላ፡-
 
-1. Run `sorafs_cli --version` and `sorafs_fetch --version` to confirm binaries
-   report the new version.
-2. Prepare the release configuration in a checked-in `sorafs_release.toml`
-   (preferred) or another config file tracked by your deployment repo. Avoid
-   relying on ad-hoc environment variables; pass paths to the CLI with
-   `--config` (or equivalent) so the release inputs are explicit and
-   reproducible.
-3. Create a signed tag (preferred) or annotated tag:
+1. ሁለትዮሾችን ለማረጋገጥ `sorafs_cli --version` እና I18NI0000057X ን ያሂዱ
+   አዲሱን ስሪት ሪፖርት ያድርጉ.
+2. የመልቀቂያ ውቅር በተረጋገጠ `sorafs_release.toml` ውስጥ ያዘጋጁ
+   (የተሻለ) ወይም ሌላ የማዋቀር ፋይል በእርስዎ የማሰማራት ሪፖ ክትትል የሚደረግበት። አስወግዱ
+   በአድ-ሆክ የአካባቢ ተለዋዋጮች ላይ መተማመን; ወደ CLI መንገዶችን ማለፍ
+   `--config` (ወይም ተመጣጣኝ) ስለዚህ የመልቀቂያ ግብዓቶች ግልጽ እና
+   ሊባዛ የሚችል.
+3. የተፈረመ መለያ (የተመረጠ) ወይም የተብራራ መለያ ይፍጠሩ፡
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Upload artefacts (CAR bundles, manifests, proof summaries, release notes,
-   attestation outputs) to the project registry following the governance
-   checklist in [deployment guide](./developer-deployment.md). If the release
-   minted new fixtures, push them to the shared fixture repo or object store so
-   audit automation can diff the published bundle against source control.
-5. Notify the governance channel with links to the signed tag, release notes,
-   manifest bundle/signature hashes, the archived `manifest.sign/verify` summaries,
-   and any attestation envelopes. Include the CI job URL (or log archive) that
-   ran `ci/check_sorafs_cli_release.sh` and `scripts/release_sorafs_cli.sh`. Update
-   the governance ticket so auditors can trace approvals to artefacts; when the
-   `.github/workflows/sorafs-cli-release.yml` job posts notifications, link the
-   recorded hash outputs rather than pasting ad-hoc summaries.
+4. ቅርሶችን ይስቀሉ (የ CAR ቅርቅቦች፣ መግለጫዎች፣ የማረጋገጫ ማጠቃለያዎች፣ የመልቀቂያ ማስታወሻዎች፣
+   የማረጋገጫ ውጤቶች) ከአስተዳደሩ በኋላ ለፕሮጀክት መዝገብ ቤት
+   የማረጋገጫ ዝርዝር በ [የማሰማራት መመሪያ](./developer-deployment.md)። ከተለቀቀ
+   አዳዲስ መገልገያዎችን ፈጥረው፣ ወደ የተጋራው fixture repo ወይም የነገር ማከማቻ ይግፏቸው
+   ኦዲት አውቶማቲክ የታተመውን ጥቅል ከምንጭ ቁጥጥር ጋር ሊለያይ ይችላል።
+5. ከተፈረመበት መለያ ጋር አገናኞችን ለአስተዳደር ጣቢያው ያሳውቁ ፣ ማስታወሻዎችን ይልቀቁ ፣
+   አንጸባራቂ ቅርቅብ/ፊርማ hashes፣ በማህደር የተቀመጠ `manifest.sign/verify` ማጠቃለያ፣
+   እና ማንኛውም የማረጋገጫ ኤንቨሎፕ። ያንን የCI job URL (ወይም የመዝገብ መዝገብ) ያካትቱ
+   `ci/check_sorafs_cli_release.sh` እና `scripts/release_sorafs_cli.sh` ሮጧል። አዘምን
+   የአስተዳደር ትኬቱ ኦዲተሮች ከቅርሶች ጋር ማፅደቂያ ማግኘት እንዲችሉ፣ መቼ
+   `.github/workflows/sorafs-cli-release.yml` የስራ ልጥፎች ማሳወቂያዎች፣ ያገናኙት።
+   የአድ-ሆክ ማጠቃለያዎችን ከመለጠፍ ይልቅ የተመዘገቡ የሃሽ ውጤቶች።
 
-## 6. Post-release follow-up
+## 6. ከተለቀቀ በኋላ ክትትል
 
-- Ensure documentation pointing at the new version (quickstarts, CI templates)
-  is updated or confirm no changes are required.
-- File roadmap entries if follow-on work (e.g., migration flags, deprecation of
-- Archive the release gate output logs for auditors—store them beside the signed
-  artefacts.
+- ወደ አዲሱ ስሪት የሚጠቁሙ ሰነዶችን ያረጋግጡ (ፈጣን ጅምር ፣ CI አብነቶች)
+  ተዘምኗል ወይም ምንም ለውጦች አያስፈልጉም ያረጋግጡ።
+- ከተከታታይ ሥራ (ለምሳሌ፣ የፍልሰት ባንዲራዎች፣ መቋረጥ) የመንገድ ካርታ ግቤቶችን ያቅርቡ
+- ለኦዲተሮች የመልቀቂያ በር የውጤት መዝገቦችን በማህደር ያስቀምጡ - ከተፈረመው አጠገብ ያከማቹ
+  ቅርሶች.
 
-Following this pipeline keeps the CLI, SDK crates, and governance collateral in
-lock-step for each release cycle.
+ይህንን የቧንቧ መስመር ተከትሎ የ CLI፣ ኤስዲኬ ሳጥኖች እና የአስተዳደር ዋስትናን ያቆያል
+ለእያንዳንዱ የመልቀቂያ ዑደት የመቆለፊያ ደረጃ.

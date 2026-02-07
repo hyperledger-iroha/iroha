@@ -7,57 +7,58 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a79487a5e7e8268f3a94580716a603580f17fd0d0223f10646ecda6aad2e2482
 source_last_modified: "2025-12-29T18:16:35.063907+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Examples (Rust App/Wallet)
+## Iroha დაკავშირების მაგალითები (Rust აპლიკაცია/საფულე)
 
-Run the two Rust examples end‑to‑end with a Torii node.
+გაუშვით Rust-ის ორი მაგალითი ბოლომდე-ბოლომდე Torii კვანძით.
 
-Prerequisites
-- Torii node with `connect` enabled at `http://127.0.0.1:8080`.
-- Rust toolchain (stable).
-- Python 3.9+ with the `iroha-python` package installed (for the CLI helper below).
+წინაპირობები
+- Torii კვანძი `connect`-ით ჩართული `http://127.0.0.1:8080`-ზე.
+- ჟანგის ხელსაწყოების ჯაჭვი (სტაბილური).
+- Python 3.9+ დაყენებული `iroha-python` პაკეტით (ქვემოთ CLI დამხმარესთვის).
 
-Examples
-- App example: `crates/iroha_torii_shared/examples/connect_app.rs`
-- Wallet example: `crates/iroha_torii_shared/examples/connect_wallet.rs`
-- Python CLI helper: `python -m iroha_python.examples.connect_flow`
+მაგალითები
+- აპლიკაციის მაგალითი: `crates/iroha_torii_shared/examples/connect_app.rs`
+- საფულის მაგალითი: `crates/iroha_torii_shared/examples/connect_wallet.rs`
+- Python CLI დამხმარე: `python -m iroha_python.examples.connect_flow`
 
-Order of startup
-1) Terminal A — App (prints sid + tokens, connects WS, sends SignRequestTx):
+გაშვების ბრძანება
+1) ტერმინალი A — აპლიკაცია (ბეჭდავს sid + ჟეტონებს, აკავშირებს WS-ს, აგზავნის SignRequestTx):
 
-    cargo run -p iroha_torii_shared --example connect_app -- --node http://127.0.0.1:8080 --role app
+    ტვირთის გაშვება -p iroha_torii_shared --მაგალითი connect_app -- --node http://127.0.0.1:8080 -- როლური აპლიკაცია
 
-   Sample output:
+   ნიმუშის გამომავალი:
 
     sid=Z4... token_app=KJ... token_wallet=K0...
-    WS connected
-    app: sent SignRequestTx
-    (waiting for reply)
+    WS დაკავშირებულია
+    აპლიკაცია: გაგზავნილი SignRequestTx
+    (ველოდები პასუხს)
 
-2) Terminal B — Wallet (connect with token_wallet, replies with SignResultOk):
+2) ტერმინალი B — საფულე (დაკავშირება token_wallet-თან, პასუხები SignResultOk-ით):
 
-    cargo run -p iroha_torii_shared --example connect_wallet -- --node http://127.0.0.1:8080 --sid Z4... --token K0...
+    ტვირთის გაშვება -p iroha_torii_shared --მაგალითი connect_wallet -- --node http://127.0.0.1:8080 --sid Z4... --token K0...
 
-   Sample output:
+   ნიმუშის გამომავალი:
 
-    wallet: connected WS
-    wallet: SignRequestTx len=3 at seq 1
-    wallet: sent SignResultOk
+    საფულე: დაკავშირებული WS
+    საფულე: SignRequestTx len=3 მე-1-ზე
+    საფულე: გაიგზავნა SignResultOk
 
-3) App terminal prints the result:
+3) აპლიკაციის ტერმინალი ბეჭდავს შედეგს:
 
-    app: got SignResultOk algo=ed25519 sig=deadbeef
+    აპლიკაცია: მივიღე SignResultOk algo=ed25519 sig=deadbeef
 
-  Use the new `connect_norito_decode_envelope_sign_result_alg` helper (and the
-  Swift/Kotlin wrappers in this folder) to retrieve the algorithm string when
-  decoding the payload.
+  გამოიყენეთ ახალი `connect_norito_decode_envelope_sign_result_alg` დამხმარე (და
+  Swift/Kotlin wrappers ამ საქაღალდეში) ალგორითმის სტრიქონის მოსაძიებლად, როდესაც
+  ტვირთის გაშიფვრა.
 
-Notes
-- Examples derive demo ephemerals from `sid` so app/wallet interoperate automatically. Do not use in production.
-- SDK enforces AEAD AAD binding and seq‑as‑nonce; post‑approval control frames should be encrypted.
-- For Swift clients, see `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` and validate with `make swift-ci` so dashboard telemetry stays aligned with Rust examples and Buildkite metadata (`ci/xcframework-smoke:<lane>:device_tag`) remains intact.
-- Python CLI helper usage:
+შენიშვნები
+- მაგალითები იღებენ დემო ეფემერულებს `sid`-დან, ასე რომ აპლიკაცია/საფულე ავტომატურად ურთიერთქმედებს. არ გამოიყენოთ წარმოებაში.
+- SDK ახორციელებს AEAD AAD სავალდებულო და თანმიმდევრულად არაერთხელ; დამტკიცების შემდგომი კონტროლის ჩარჩოები უნდა იყოს დაშიფრული.
+- Swift-ის კლიენტებისთვის იხილეთ `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` და დაადასტურეთ `make swift-ci`-ით, რათა დაფის ტელემეტრია დარჩეს Rust-ის მაგალითებთან და Buildkite მეტამონაცემები (I18NI000000020X) დარჩეს.
+- Python CLI დამხმარე გამოყენება:
 
     ```bash
     python -m iroha_python.examples.connect_flow \
@@ -71,4 +72,4 @@ Notes
       --status-json-output connect-status.json
     ```
 
-  The CLI prints the typed session info, dumps the Connect status snapshot, and emits the Norito-encoded `ConnectControlOpen` frame. Pass `--send-open` to post the payload back to Torii, use `--frame-output-format binary` to write raw bytes, `--frame-json-output` for a base64-friendly JSON blob, and `--status-json-output` when you need a typed snapshot for automation. You can also load application metadata from a JSON file via `--app-metadata-file metadata.json` containing `name`, `url`, and `icon_hash` fields (see `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`). Generate a fresh template with `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json`. For telemetry-only runs, you can skip session creation entirely with `--status-only` and optionally dump JSON via `--status-json-output status.json`.
+  CLI ბეჭდავს აკრეფილ სესიის ინფორმაციას, ათავსებს Connect სტატუსის სურათს და გამოსცემს Norito-ში დაშიფრულ `ConnectControlOpen` ჩარჩოს. გადაიტანეთ `--send-open` ტვირთის დასაბრუნებლად Torii-ზე, გამოიყენეთ `--frame-output-format binary` ნედლეული ბაიტების დასაწერად, `--frame-json-output` base64-ისთვის შესაფერისი JSON blob-ისთვის და I18NI000000025-ისთვის ავტომატიზაცია. თქვენ ასევე შეგიძლიათ ჩატვირთოთ აპლიკაციის მეტამონაცემები JSON ფაილიდან `--app-metadata-file metadata.json`-ით, რომელიც შეიცავს `name`, `url` და `icon_hash` ველებს (იხ. `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`). შექმენით ახალი შაბლონი `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json`-ით. მხოლოდ ტელემეტრიით გაშვებისთვის, შეგიძლიათ მთლიანად გამოტოვოთ სესიის შექმნა `--status-only`-ით და სურვილისამებრ გამოაგდოთ JSON `--status-json-output status.json`-ის საშუალებით.

@@ -7,27 +7,29 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Swift ledger flow recipe
 description: Use IrohaSwift to mint and transfer assets with the default dev network.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ı '@site/src/components/SampleDownload'dan idxal edin;
 
-> IrohaSwift’s encoder currently exposes mint/transfer helpers; asset-definition
-> registration still happens through the CLI. Run the CLI command in step 1 once
-> before executing the Swift sample.
+> IrohaSwift-in kodlayıcısı hazırda nanə/transfer köməkçilərini ifşa edir; aktiv tərifi
+> qeydiyyat hələ də CLI vasitəsilə baş verir. 1-ci addımda CLI əmrini bir dəfə işə salın
+> Swift nümunəsini icra etməzdən əvvəl.
 
-<SampleDownload
+<Nümunə Yüklə
   href="/sdk-recipes/swift/Sources/LedgerFlow/main.swift"
-  filename="Sources/LedgerFlow/main.swift"
-  description="Download the async/await example so you can open it in Xcode or paste it into your Swift package."
+  fayl adı = "Mənbələr/LedgerFlow/main.swift"
+  description="Async/await nümunəsini yükləyin ki, onu Xcode-da aça və ya Swift paketinizə yapışdıra biləsiniz."
 />
 
-## 1. Register the asset (CLI)
+## 1. Aktivi qeydiyyatdan keçirin (CLI)
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Prepare credentials
+## 2. Etibarnamələri hazırlayın
 
 ```bash
 # raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
@@ -36,15 +38,15 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-## 3. Add IrohaSwift to your package
+## 3. Paketinizə IrohaSwift əlavə edin
 
 ```swift title="Package.swift"
 .package(name: "IrohaSwift", path: "../../IrohaSwift")
 ```
 
-or use the Git URL (`https://github.com/hyperledger/iroha-swift`) in Xcode.
+və ya Xcode-da Git URL (`https://github.com/hyperledger/iroha-swift`) istifadə edin.
 
-## 4. Example program
+## 4. Nümunə proqram
 
 ```swift title="Sources/LedgerFlow/main.swift"
 import Foundation
@@ -109,11 +111,11 @@ struct LedgerFlow {
 }
 ```
 
-Build with `swift build -c release` and run using `swift run LedgerFlow`.
+`swift build -c release` ilə qurun və `swift run LedgerFlow` istifadə edərək işə salın.
 
-## 5. Verify parity
+## 5. Pariteti yoxlayın
 
-- Inspect the transactions through `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Compare holdings with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Combine this recipe with the Rust/Python/JavaScript ones to confirm every SDK
-  produces the same hashes for the demo flow.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` vasitəsilə əməliyyatları yoxlayın.
+- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` ilə holdinqləri müqayisə edin.
+- Hər SDK-nı təsdiqləmək üçün bu resepti Rust/Python/JavaScript reseptləri ilə birləşdirin
+  demo axını üçün eyni hashları istehsal edir.

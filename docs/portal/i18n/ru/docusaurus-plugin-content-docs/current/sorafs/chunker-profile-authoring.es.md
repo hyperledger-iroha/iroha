@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-profile-authoring.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-profile-authoring
-title: Guía de autoría de perfiles de chunker de SoraFS
-sidebar_label: Guía de autoría de chunker
-description: Checklist para proponer nuevos perfiles y fixtures de chunker de SoraFS.
+id: авторство профиля-чанкера
+title: Руководство по авторизации файлов фрагментов SoraFS
+Sidebar_label: Руководство по авторизации фрагмента
+описание: Контрольный список для предложения новых файлов и приспособлений для блоков SoraFS.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/chunker_profile_authoring.md`. Mantén ambas copias sincronizadas hasta que se retire el conjunto de documentación Sphinx heredado.
+:::примечание Фуэнте каноника
+Эта страница отражает `docs/source/sorafs/chunker_profile_authoring.md`. Нам пришлось скопировать синхронизированные копии, чтобы удалить комплект документации Sphinx.
 :::
 
-# Guía de autoría de perfiles de chunker de SoraFS
+# Руководство по авторизации файлов фрагментов SoraFS
 
-Esta guía explica cómo proponer y publicar nuevos perfiles de chunker para SoraFS.
-Complementa el RFC de arquitectura (SF-1) y la referencia del registro (SF-2a)
-con requisitos concretos de autoría, pasos de validación y plantillas de propuesta.
-Para un ejemplo canónico, consulta
+Это объяснение, которое предлагает и публикует новые файлы фрагментов для SoraFS.
+Дополнение к RFC по архитектуре (SF-1) и ссылке на реестр (SF-2a)
+с требованиями к конкретным авторам, требованиям к проверке и плантациям собственности.
+Для канонического примера, проконсультируйтесь
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
-y el registro de dry-run asociado en
+и в реестре участников сухого пробега в
 `docs/source/sorafs/reports/sf1_determinism.md`.
 
-## Resumen
+## Резюме
 
-Cada perfil que entra en el registro debe:
+Если вы хотите войти в реестр, выполните следующие действия:
 
-- anunciar parámetros CDC deterministas y ajustes de multihash idénticos entre
-  arquitecturas;
-- entregar fixtures reproducibles (JSON Rust/Go/TS + corpora fuzz + testigos PoR) que
-  los SDKs downstream puedan verificar sin tooling a medida;
-- incluir metadatos listos para gobernanza (namespace, name, semver) junto con guía de rollout
-  y ventanas operativas; y
-- pasar la suite de diff determinista antes de la revisión del consejo.
+- объявление параметров CDC, определяющих и настраивающих мультихэш-идентификаторы между всеми
+  архитектуры;
+- воспроизводимые фикстуры (JSON Rust/Go/TS + corpora fuzz + testigos PoR)
+  последующие SDK можно проверить без использования инструментов medida;
+- включить списки метаданных для управления (пространство имен, имя, имя) вместе с руководством по развертыванию.
+  у вентанас оперативас; й
+- пройдите набор определений различий до пересмотра совета.
 
-Sigue el checklist de abajo para preparar una propuesta que cumpla esas reglas.
+Используйте контрольный список, чтобы подготовиться к выполнению этих правил.
 
-## Resumen de la carta del registro
+## Резюме карты регистрации
 
-Antes de redactar una propuesta, confirma que cumple la carta del registro aplicada
-por `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
+Перед редактированием заявки подтвердите, что вы завершили приложение к карте регистрации.
+пор `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
-- Los IDs de perfil son enteros positivos que aumentan de forma monótona sin huecos.
-- El handle canónico (`namespace.name@semver`) debe aparecer en la lista de alias
-  y **debe** ser la primera entrada. Siguen los alias heredados (p. ej., `sorafs.sf1@1.0.0`).
-- Ningún alias puede colisionar con otro handle canónico ni aparecer más de una vez.
-- Los alias deben ser no vacíos y recortados de espacios en blanco.
+- Los IDs de perfil son enteros positivos que aumentan de forma monotona sin huecos.
+- Ручка canónico (`namespace.name@semver`) может отображаться в списке псевдонимов.
+  и **debe** ser la primera entrada. Siguen los alias heredados (стр. ej., `sorafs.sf1@1.0.0`).
+- Псевдоним Ningún может столкнуться с другим ручным управлением, которое больше не будет отображаться.
+- Лос-псевдоним должен быть пустым и записанным на белом фоне.
 
-Ayudas útiles de CLI:
+Доступные функции CLI:
 
 ```bash
 # Listado JSON de todos los descriptores registrados (ids, handles, aliases, multihash)
@@ -63,75 +65,71 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
-Estos comandos mantienen las propuestas alineadas con la carta del registro y proporcionan los
-metadatos canónicos necesarios en las discusiones de gobernanza.
+Estos comandos mantienen las propuestas alineadas con la carta del registero y proporcionan los
+метаданные канонические необходимые в дискуссиях правительства.
 
-## Metadatos requeridos
-
-| Campo | Descripción | Ejemplo (`sorafs.sf1@1.0.0`) |
+## Требуемые метаданные| Кампо | Описание | Пример (`sorafs.sf1@1.0.0`) |
 |-------|-------------|------------------------------|
-| `namespace` | Agrupación lógica de perfiles relacionados. | `sorafs` |
-| `name` | Etiqueta legible para humanos. | `sf1` |
-| `semver` | Cadena de versión semántica para el conjunto de parámetros. | `1.0.0` |
-| `profile_id` | Identificador numérico monótono asignado una vez que el perfil entra. Reserva el siguiente id pero no reutilices números existentes. | `1` |
-| `profile_aliases` | Handles adicionales opcionales (nombres heredados, abreviaturas) expuestos a clientes durante la negociación. Incluye siempre el handle canónico como la primera entrada. | `["sorafs.sf1@1.0.0"]` |
-| `profile.min_size` | Longitud mínima de chunk en bytes. | `65536` |
-| `profile.target_size` | Longitud objetivo de chunk en bytes. | `262144` |
-| `profile.max_size` | Longitud máxima de chunk en bytes. | `524288` |
-| `profile.break_mask` | Máscara adaptativa usada por el rolling hash (hex). | `0x0000ffff` |
-| `profile.polynomial` | Constante del polinomio gear (hex). | `0x3da3358b4dc173` |
-| `gear_seed` | Seed usada para derivar la tabla gear de 64 KiB. | `sorafs-v1-gear` |
-| `chunk_multihash.code` | Código multihash para digests por chunk. | `0x1f` (BLAKE3-256) |
-| `chunk_multihash.digest` | Digest del bundle canónico de fixtures. | `13fa...c482` |
-| `fixtures_root` | Directorio relativo que contiene los fixtures regenerados. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed para el muestreo PoR determinista (`splitmix64`). | `0xfeedbeefcafebabe` (ejemplo) |
+| `namespace` | Логическое объединение связанных файлов. | `sorafs` |
+| `name` | Этикет разборчивый для людей. | `sf1` |
+| `semver` | Семантическая информация о версии для соединения параметров. | `1.0.0` |
+| `profile_id` | Цифровой идентификатор назначается только для того, чтобы войти в систему. Reserva el siguiente id pero no reuses numeros existentes. | `1` |
+| `profile_aliases` | Указывает дополнительные дополнительные параметры (номера наследников, сокращения), которые используются клиентами во время переговоров. Включите каноническую ручку в качестве первого входа. | `["sorafs.sf1@1.0.0"]` |
+| `profile.min_size` | Минимальная длина фрагмента в байтах. | `65536` |
+| `profile.target_size` | Объектная длина фрагмента в байтах. | `262144` |
+| `profile.max_size` | Максимальная длина фрагмента в байтах. | `524288` |
+| `profile.break_mask` | Адаптивная тушь для использования с скользящей решеткой (шестнадцатеричной). | `0x0000ffff` |
+| `profile.polynomial` | Шестерня Constante del polinomio (шестигранная). | `0x3da3358b4dc173` |
+| `gear_seed` | Начальное значение используется для получения таблицы передач размером 64 КиБ. | `sorafs-v1-gear` |
+| `chunk_multihash.code` | Código multihash для дайджеста порций. | `0x1f` (BLAKE3-256) |
+| `chunk_multihash.digest` | Сборник канонических светильников. | `13fa...c482` |
+| `fixtures_root` | Относительное направление, в котором содержатся восстановленные светильники. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
+| `por_seed` | Начальное значение для определенного PoR (`splitmix64`). | `0xfeedbeefcafebabe` (пример) |
 
-Los metadatos deben aparecer tanto en el documento de propuesta como dentro de los fixtures
-regenerados para que el registro, el tooling de CLI y la automatización de gobernanza puedan
-confirmar los valores sin cruces manuales. Si hay dudas, ejecuta los CLIs de chunk-store y
-manifest con `--json-out=-` para transmitir los metadatos calculados a las notas de revisión.
+Метаданные должны быть доступны в документации, как в устройствах
+регенерируется для реестра, инструментов CLI и автоматизации управления
+подтвердите лос-ценности без крестов вручную. Если вы хотите, извлеките CLI из chunk-store и
+Манифест с `--json-out=-` для передачи рассчитанных метаданных в заметки о пересмотре.
 
-### Puntos de contacto de CLI y registro
+### Пункты контакта CLI и регистрации
 
-- `sorafs_manifest_chunk_store --profile=<handle>` — volver a ejecutar metadata de chunk,
-  digest de manifest y checks PoR con los parámetros propuestos.
-- `sorafs_manifest_chunk_store --json-out=-` — transmitir el reporte de chunk-store a
-  stdout para comparaciones automatizadas.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — confirmar que manifests y planes CAR
-  embeben el handle canónico más los alias.
-- `sorafs_manifest_stub --plan=-` — volver a alimentar el `chunk_fetch_specs` previo para
-  verificar offsets/digests después del cambio.
+- `sorafs_manifest_chunk_store --profile=<handle>` — позволяет извлечь фрагмент метаданных,
+  дайджест манифеста и проверка PoR с нужными параметрами.
+- `sorafs_manifest_chunk_store --json-out=-` — передать отчет о сохранении фрагментов
+  стандартный вывод для автоматического сравнения.
+- `sorafs_manifest_stub --chunker-profile=<handle>` — подтверждение того, что заявлены самолеты CAR
+  вставьте дескриптор canonico под большим псевдонимом.
+- `sorafs_manifest_stub --plan=-` — можно использовать в пищу `chunk_fetch_specs` предыдущий пункт
+  проверка смещений/дайджестов после камбио.
 
-Registra la salida de comandos (digests, raíces PoR, hashes de manifest) en la propuesta para que
-los revisores puedan reproducirlos textualmente.
+Зарегистрируйте данные команд (дайджесты, результаты PoR, хэши манифеста) в папке, которая будет нужна
+Лос-ревизоры могут быть воспроизведены в тексте.
 
-## Checklist de determinismo y validación
-
-1. **Regenerar fixtures**
+## Контрольный список детерминированности и проверки1. **Регенерировать приспособления**
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
-2. **Ejecutar la suite de paridad** — `cargo test -p sorafs_chunker` y el arnés diff
-   entre lenguajes (`crates/sorafs_chunker/tests/vectors.rs`) deben estar en verde con los
-   nuevos fixtures en su lugar.
-3. **Reproducir corpora fuzz/back-pressure** — ejecuta `cargo fuzz list` y el arnés de
-   streaming (`fuzz/sorafs_chunker`) contra los activos regenerados.
-4. **Verificar testigos Proof-of-Retrievability** — ejecuta
-   `sorafs_manifest_chunk_store --por-sample=<n>` usando el perfil propuesto y confirma que las
-   raíces coinciden con el manifest de fixtures.
-5. **Dry run de CI** — invoca `ci/check_sorafs_fixtures.sh` localmente; el script
-   debe tener éxito con los nuevos fixtures y el `manifest_signatures.json` existente.
-6. **Confirmación cross-runtime** — asegura que los bindings Go/TS consumen el JSON regenerado
-   y emiten límites y digests idénticos.
+2. **Ejecutar la suite de paridad** — `cargo test -p sorafs_chunker` и другие различия
+   На разных языках (`crates/sorafs_chunker/tests/vectors.rs`) нужно быть уверенным в зелени с лос
+   новые светильники в своем доме.
+3. **Воспроизведение пуха/противодавления тел** — выброс `cargo fuzz list` и el arnés de
+   потоковая передача (`fuzz/sorafs_chunker`) против восстановленных действий.
+4. **Verificar testigos Доказательство возможности восстановления** — ejecuta
+   `sorafs_manifest_chunk_store --por-sample=<n>` использовать пропуск и подтвердить его
+   некоторые совпадения с манифестом светильников.
+5. **Пробный запуск CI** — локальный вызов `ci/check_sorafs_fixtures.sh`; эль сценарий
+   debe tener éxito с новыми светильниками и существующим `manifest_signatures.json`.
+6. **Подтверждение перекрестной среды выполнения** – подтверждение того, что привязки Go/TS используются после регенерации JSON.
+   вы излучаете ограничения и перевариваете идентичные вещи.
 
-Documenta los comandos y los digests resultantes en la propuesta para que el Tooling WG pueda
-repetirlos sin conjeturas.
+Документация команд и дайджестов результатов в папке, которую может предоставить Tooling WG.
+повторил грех замысла.
 
-### Confirmación de manifest / PoR
+### Подтверждение манифеста / PoR
 
-Después de regenerar fixtures, ejecuta el pipeline completo de manifest para asegurar que los
-metadatos CAR y las pruebas PoR sigan siendo consistentes:
+После восстановления приспособлений полностью извлеките трубопровод, чтобы обеспечить его безопасность.
+метаданные CAR и las pruebas PoR sigan siendo соответствует:
 
 ```bash
 # Validar metadata de chunk + PoR con el nuevo perfil
@@ -155,45 +153,43 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-Reemplaza el archivo de entrada con cualquier corpus representativo usado por tus fixtures
-(p. ej., el stream determinista de 1 GiB) y adjunta los digests resultantes a la propuesta.
+Замените входной архив с любым представительским корпусом для ваших светильников
+(стр. например, определенный поток размером 1 ГиБ) и дополнительные дайджесты, полученные в соответствии с собственными требованиями.
 
-## Plantilla de propuesta
+## Плантилья де пропуэста
 
-Las propuestas se envían como registros Norito `ChunkerProfileProposalV1` registrados en
-`docs/source/sorafs/proposals/`. La plantilla JSON de abajo ilustra la forma esperada
+Свойства отправляются как зарегистрированные Norito `ChunkerProfileProposalV1` зарегистрированные ru
+`docs/source/sorafs/proposals/`. Растение JSON де Абахо иллюстрирует форму ожидания
 (sustituye tus valores según sea necesario):
 
 
-Proporciona un reporte Markdown correspondiente (`determinism_report`) que capture la
-salida de comandos, los digests de chunk y cualquier desviación encontrada durante la validación.
+Соответствующий отчет Markdown (`determinism_report`) для захвата
+команды, дайджесты фрагментов и различные варианты отправки во время проверки.
 
-## Flujo de gobernanza
+## Флюхо де гобернанса
 
-1. **Enviar PR con propuesta + fixtures.** Incluye los assets generados, la propuesta
-   Norito y las actualizaciones a `chunker_registry_data.rs`.
-2. **Revisión del Tooling WG.** Los revisores reejecutan el checklist de validación y
-   confirman que la propuesta se alinea con las reglas del registro (sin reutilización de id,
-   determinismo satisfecho).
-3. **Sobre del consejo.** Una vez aprobado, los miembros del consejo firman el digest de
-   la propuesta (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) y anexan sus
-   firmas al sobre del perfil guardado junto a los fixtures.
-4. **Publicación del registro.** El merge actualiza el registro, los docs y los fixtures. El
-   CLI por defecto permanece en el perfil previo hasta que la gobernanza declare la migración
-   lista.
-5. **Seguimiento de deprecación.** Después de la ventana de migración, actualiza el registro
-   migration ledger.
+1. **Предложите PR с собственностью + светильниками.** Включите созданные активы, собственность
+   Norito и актуализируются `chunker_registry_data.rs`.
+2. **Revisión del Tooling WG.** Внесенные изменения повторно вносятся в контрольный список проверки и
+   Подтвердите, что собственность указана в соответствии с правилами регистрации (без повторного использования идентификатора,
+   детерминизм удовлетворительный).
+3. **Сообщение о совете.** Очень хорошо, лос-мимброс-дель-совет твердят в дайджесте.
+   la propuesta (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) и anexan sus
+   фирмы, которые охраняют перила от оборудования.
+4. **Публикация реестра.** Объединяет актуализированный реестр, документы и данные. Эль
+   CLI для постоянного дефекта в предварительном файле, прежде чем правительство объявит миграцию
+   список.
+5. **Следует устаревать.** После выхода из миграции актуализировать реестр
+   миграционную книгу.
 
-## Consejos de autoría
-
-- Prefiere límites de potencia de dos pares para minimizar comportamiento de chunking en casos borde.
-- Evita cambiar el código multihash sin coordinar consumidores de manifest y gateway; incluye una
+## Авторский совет- Предпочтительные ограничения мощности пар, чтобы свести к минимуму удобство измельчения на куски в разных случаях.
+- Эвита заменяет мультихеш-код без координат потребителей манифеста и шлюза; включая одну
   nota operativa cuando lo hagas.
-- Mantén las seeds de la tabla gear legibles para humanos pero globalmente únicas para simplificar
-  auditorías.
-- Guarda cualquier artefacto de benchmarking (p. ej., comparaciones de throughput) bajo
-  `docs/source/sorafs/reports/` para referencia futura.
+- Возьмите семена табличного механизма, разборчивые для людей, для глобальных уникальных людей для упрощения.
+  аудитории.
+- Проверка артефактов сравнительного анализа (например, сравнение пропускной способности) ниже
+  `docs/source/sorafs/reports/` для будущей ссылки.
 
-Para expectativas operativas durante el rollout consulta el migration ledger
-(`docs/source/sorafs/migration_ledger.md`). Para reglas de conformidad en runtime ver
+Для ожидаемой работы во время развертывания, проконсультируйтесь с миграционным реестром
+(`docs/source/sorafs/migration_ledger.md`). Для соблюдения требований во время выполнения
 `docs/source/sorafs/chunker_conformance.md`.

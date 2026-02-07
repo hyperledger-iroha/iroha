@@ -8,136 +8,138 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Pin Registry Implementation Plan
 sidebar_label: Pin Registry Plan
 description: SF-4 implementation plan covering registry state machine, Torii facade, tooling, and observability.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-# SoraFS Pin Registry Implementation Plan (SF-4)
+# SoraFS პინის რეესტრის განხორციელების გეგმა (SF-4)
 
-SF-4 delivers the Pin Registry contract and supporting services that store
-manifest commitments, enforce pin policies, and expose APIs to Torii, gateways,
-and orchestrators. This document expands the validation plan with concrete
-implementation tasks, covering on-chain logic, host-side services, fixtures,
-and operational requirements.
+SF-4 აწვდის Pin Registry კონტრაქტს და დამხმარე სერვისებს, რომლებიც ინახება
+გამოავლინეთ ვალდებულებები, განახორციელეთ პინის წესები და გაამჟღავნეთ API-ები Torii, კარიბჭეებისთვის,
+და ორკესტრატორები. ეს დოკუმენტი აფართოებს ვალიდაციის გეგმას ბეტონით
+განხორციელების ამოცანები, რომელიც მოიცავს ჯაჭვის ლოგიკას, მასპინძლის სერვისებს, მოწყობილობებს,
+და ოპერატიული მოთხოვნები.
 
-## Scope
+## სფერო
 
-1. **Registry state machine**: Norito-defined records for manifests, aliases,
-   successor chains, retention epochs, and governance metadata.
-2. **Contract implementation**: deterministic CRUD operations for pin lifecycle
-   (`ReplicationOrder`, `Precommit`, `Completion`, eviction).
-3. **Service facade**: gRPC/REST endpoints backed by the registry that Torii
-   and SDKs consume, including pagination and attestation.
-4. **Tooling & fixtures**: CLI helpers, test vectors, and documentation to keep
-   manifests, aliases, and governance envelopes in sync.
-5. **Telemetry & ops**: metrics, alerts, and runbooks for registry health.
+1. **რეგისტრის სახელმწიფო მანქანა**: Norito-განსაზღვრული ჩანაწერები მანიფესტებისთვის, მეტსახელებისთვის,
+   მემკვიდრე ჯაჭვები, შეკავების ეპოქები და მმართველობის მეტამონაცემები.
+2. **კონტრაქტის განხორციელება**: დეტერმინისტული CRUD ოპერაციები პინის სასიცოცხლო ციკლისთვის
+   (`ReplicationOrder`, `Precommit`, `Completion`, გამოსახლება).
+3. **მომსახურების ფასადი**: gRPC/REST ბოლო წერტილები, რომლებიც მხარდაჭერილია რეესტრით, რომელიც Torii
+   და SDK-ები მოიხმარენ, მათ შორის პაგინაცია და ატესტაცია.
+4. **ინსტრუმენტები და მოწყობილობები **: CLI დამხმარეები, ტესტის ვექტორები და დოკუმენტაცია შესანახად
+   მანიფესტები, მეტსახელები და მმართველობის კონვერტები სინქრონულად.
+5. **ტელემეტრია და ოპერაციები**: მეტრიკა, გაფრთხილებები და წიგნები რეესტრის ჯანმრთელობისთვის.
 
-## Data Model
+## მონაცემთა მოდელი
 
-### Core Records (Norito)
+### ძირითადი ჩანაწერები (Norito)
 
-| Struct | Description | Fields |
-|--------|-------------|--------|
-| `PinRecordV1` | Canonical manifest entry. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
+| სტრუქტურა | აღწერა | ველები |
+|--------|------------|--------|
+| `PinRecordV1` | კანონიკური მანიფესტის ჩანაწერი. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, I18NI0000000030X, I18NI0000000030X `governance_envelope_hash`. |
 | `AliasBindingV1` | Maps alias -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Instruction for providers to pin manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Provider acknowledgement. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | Governance policy snapshot. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+| `ReplicationOrderV1` | ინსტრუქცია პროვაიდერებისთვის, რომ დაამაგრონ მანიფესტი. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
+| `ReplicationReceiptV1` | პროვაიდერის აღიარება. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
+| `ManifestPolicyV1` | მმართველობის პოლიტიკის სურათი. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
-Implementation reference: see `crates/sorafs_manifest/src/pin_registry.rs` for the
-Rust Norito schemas and validation helpers backing these records. Validation
-mirrors the manifest tooling (chunker registry lookup, pin policy gating) so the
-contract, Torii facades, and CLI share identical invariants.
+განხორციელების მითითება: იხილეთ `crates/sorafs_manifest/src/pin_registry.rs`
+Rust Norito სქემები და ვალიდაციის დამხმარეები, რომლებიც მხარს უჭერენ ამ ჩანაწერებს. ვალიდაცია
+ასახავს მანიფესტის ხელსაწყოებს (ჩუნკერის რეესტრის ძიება, პოლიტიკის დამაგრების შეყვანა) ასე რომ
+კონტრაქტი, Torii ფასადები და CLI იზიარებენ იდენტურ უცვლელებს.
 
-Tasks:
-- Finalise Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs`.
-- Generate code (Rust + other SDKs) using Norito macros.
-- Update docs (`sorafs_architecture_rfc.md`) once schemas land.
+ამოცანები:
+- დაასრულეთ Norito სქემები `crates/sorafs_manifest/src/pin_registry.rs`-ში.
+- შექმენით კოდი (Rust + სხვა SDK-ები) Norito მაკროების გამოყენებით.
+- განაახლეთ დოკუმენტები (`sorafs_architecture_rfc.md`) სქემების ჩამოსვლის შემდეგ.
 
-## Contract Implementation
+## ხელშეკრულების განხორციელება
 
-| Task | Owner(s) | Notes |
+| ამოცანა | მფლობელ(ებ)ი | შენიშვნები |
 |------|----------|-------|
-| Implement registry storage (sled/sqlite/off-chain) or smart contract module. | Core Infra / Smart Contract Team | Provide deterministic hashing, avoid floating point. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Leverage `ManifestValidator` from validation plan. Alias binding now flows through `RegisterPinManifest` (Torii DTO surfacing) while dedicated `bind_alias` remains planned for successive updates. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness. | Governance Council / Core Infra | Alias uniqueness, retention limits, and predecessor approval/retirement checks now live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection and replication bookkeeping remain open. |
-| Governed parameters: load `ManifestPolicyV1` from config/governance state; allow updates via governance events. | Governance Council | Provide CLI for policy updates. |
-| Event emission: emit Norito events for telemetry (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Define event schema + logging. |
+| რეესტრის შენახვის (sled/sqlite/off-chain) ან ჭკვიანი კონტრაქტის მოდულის დანერგვა. | Core Infra / Smart Contract Team | მიაწოდეთ დეტერმინისტული ჰეშირება, მოერიდეთ მცურავ წერტილს. |
+| შესვლის პუნქტები: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | ძირითადი ინფრა | გამოიყენეთ `ManifestValidator` ვალიდაციის გეგმიდან. Alias-ის სავალდებულო ახლა მიედინება `RegisterPinManifest`-ში (Torii DTO ზედაპირი), ხოლო გამოყოფილი `bind_alias` რჩება დაგეგმილი თანმიმდევრული განახლებისთვის. |
+| სახელმწიფოთა გადასვლები: აღასრულოს მემკვიდრეობა (მანიფესტი A -> B), შეკავების ეპოქები, მეტსახელი უნიკალურობა. | მმართველობის საბჭო / Core Infra | მეტსახელის უნიკალურობა, შენახვის ლიმიტები და წინამორბედის დამტკიცების/პენსიაზე გასვლის ჩეკები ახლა მოქმედებს `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`-ში; მრავალ ჰოპ თანმიმდევრობის გამოვლენა და რეპლიკაციის აღრიცხვა ღია რჩება. |
+| რეგულირებადი პარამეტრები: ჩატვირთვა `ManifestPolicyV1` კონფიგურაციის/მართვის მდგომარეობიდან; განახლებების დაშვება მმართველობითი ღონისძიებების საშუალებით. | მმართველობის საბჭო | მიაწოდეთ CLI პოლიტიკის განახლებისთვის. |
+| მოვლენის ემისია: გამოსცემს Norito მოვლენებს ტელემეტრიისთვის (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | დაკვირვებადობა | მოვლენის სქემის განსაზღვრა + შესვლა. |
 
-Testing:
-- Unit tests for each entry point (positive + rejection).
-- Property tests for succession chain (no cycles, monotonic epochs).
-- Fuzz validation by generating random manifests (bounded).
+ტესტირება:
+- ერთეულის ტესტები თითოეული შესვლის წერტილისთვის (დადებითი + უარყოფა).
+- საკუთრების ტესტები მემკვიდრეობის ჯაჭვისთვის (ციკლების გარეშე, მონოტონური ეპოქები).
+- Fuzz ვალიდაცია შემთხვევითი მანიფესტების გენერირებით (შეზღუდული).
 
-## Service Facade (Torii/SDK Integration)
+## სერვისის ფასადი (Torii/SDK ინტეგრაცია)
 
-| Component | Task | Owner(s) |
+| კომპონენტი | ამოცანა | მფლობელ(ებ)ი |
 |-----------|------|----------|
-| Torii Service | Expose `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Provide pagination + filtering. | Networking TL / Core Infra |
-| Attestation | Include registry height/hash in responses; add Norito attestation struct consumed by SDKs. | Core Infra |
-| CLI | Extend `sorafs_manifest_stub` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Generate client bindings (Rust/Go/TS) from Norito schema; add integration tests. | SDK Teams |
+| Torii სერვისი | გამოაქვეყნეთ `/v1/sorafs/pin` (გაგზავნა), `/v1/sorafs/pin/{cid}` (მოძიება), `/v1/sorafs/aliases` (სია/შეკვრა), `/v1/sorafs/replication` (შეკვეთები/შეკვეთები). უზრუნველყოს პაგინაცია + ფილტრაცია. | ქსელის TL / Core Infra |
+| ატესტაცია | ჩართეთ რეესტრის სიმაღლე/ჰეში პასუხებში; დაამატეთ SDK-ების მიერ მოხმარებული Norito ატესტაციის სტრუქტურა. | ძირითადი ინფრა |
+| CLI | გააფართოვეთ `sorafs_manifest_stub` ან ახალი `sorafs_pin` CLI `pin submit`, `alias bind`, `order issue`, `registry export`. | ინსტრუმენტები WG |
+| SDK | კლიენტის საკინძების გენერირება (Rust/Go/TS) Norito სქემიდან; ინტეგრაციის ტესტების დამატება. | SDK გუნდები |
 
-Operations:
-- Add caching layer/ETag for GET endpoints.
-- Provide rate limiting / auth consistent with Torii policies.
+ოპერაციები:
+- დაამატეთ ქეშირების ფენა/ETag GET ბოლო წერტილებისთვის.
+- უზრუნველყოთ განაკვეთის შეზღუდვა / ავტორიზაცია, რომელიც შეესაბამება Torii პოლიტიკას.
 
-## Fixtures & CI
+## მოწყობილობები და CI
 
-- Fixtures directory: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` stores signed manifest/alias/order snapshots regenerated by `cargo run -p iroha_core --example gen_pin_snapshot`.
-- CI step: `ci/check_sorafs_fixtures.sh` regenerates the snapshot and fails if diffs appear, keeping CI fixtures aligned.
-- Integration tests (`crates/iroha_core/tests/pin_registry.rs`) exercise the happy path plus duplicate-alias rejection, alias approval/retention guards, mismatched chunker handles, replica-count validation, and successor-guard failures (unknown/pre-approved/retired/self pointers); see `register_manifest_rejects_*` cases for coverage details.
-- Unit tests now cover alias validation, retention guards, and successor checks in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection once state machine lands.
-- Golden JSON for events used by observability pipelines.
+- მოწყობილობების დირექტორია: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` ინახავს ხელმოწერილი მანიფესტის/ალიასი/შეკვეთის სნეპშოტებს, რომლებიც რეგენერირებულია `cargo run -p iroha_core --example gen_pin_snapshot`-ის მიერ.
+- CI ნაბიჯი: `ci/check_sorafs_fixtures.sh` აღადგენს სნეპშოტს და წარუმატებელია, თუ განსხვავებები გამოჩნდება, რაც CI მოწყობილობების გასწორებას ინარჩუნებს.
+- ინტეგრაციის ტესტები (`crates/iroha_core/tests/pin_registry.rs`) ახორციელებს ბედნიერ გზას, პლუს დუბლიკატის ალიასის უარყოფა, მეტსახელის დამტკიცების/შეკავების მცველები, შეუსაბამო ცუნკერის სახელურები, რეპლიკა-რიცხვის ვალიდაცია და მემკვიდრე-მცველი წარუმატებლობა (უცნობი/წინასწარ დამტკიცებული/გადასული/თვითმაჩვენებლები); დაფარვის დეტალებისთვის იხილეთ `register_manifest_rejects_*` ქეისები.
+- ერთეულის ტესტები ახლა მოიცავს მეტსახელის ვალიდაციას, შეკავების მცველებს და მემკვიდრეობის შემოწმებას `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`-ში; მრავალ ჰოპ თანმიმდევრობის გამოვლენა მას შემდეგ, რაც სახელმწიფო მანქანა დაეშვება.
+- ოქროს JSON მოვლენებისთვის, რომლებიც გამოიყენება დაკვირვებადობის მილსადენებით.
 
-## Telemetry & Observability
+## ტელემეტრია და დაკვირვება
 
-Metrics (Prometheus):
+მეტრიკა (Prometheus):
 - `torii_sorafs_registry_manifests_total{status="pending|approved|retired"}`
 - `torii_sorafs_registry_aliases_total`
 - `torii_sorafs_registry_orders_total{status="pending|completed|expired"}`
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- Existing provider telemetry (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) remains in scope for end-to-end dashboards.
+- არსებული პროვაიდერის ტელემეტრია (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) რჩება საზღვრებში ბოლოდან ბოლომდე დაფებისთვის.
 
-Logs:
-- Structured Norito event stream for governance audits (signed?).
+ჟურნალები:
+- სტრუქტურირებული Norito ღონისძიებების ნაკადი მმართველობითი აუდიტისთვის (ხელმოწერილია?).
 
-Alerts:
-- Pending replication orders exceeding SLA.
-- Alias expiry < threshold.
-- Retention violations (manifest not renewed before expiry).
+გაფრთხილებები:
+- მოლოდინში რეპლიკაციის ბრძანებები, რომლებიც აღემატება SLA-ს.
+- მეტსახელი გასვლის < ბარიერი.
+- შეკავების დარღვევები (მანიფესტი არ არის განახლებული ვადის გასვლამდე).
 
-Dashboards:
-- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` tracks manifest lifecycle totals, alias coverage, backlog saturation, SLA ratio, latency vs slack overlays, and missed-order rates for on-call review.
+დაფები:
+- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` ასახავს მანიფესტის სასიცოცხლო ციკლის ჯამებს, მეტსახელის დაფარვას, ნარჩენების გაჯერებას, SLA თანაფარდობას, შეყოვნებას და სუსტ გადაფარვებს და გამოტოვებული შეკვეთის ტარიფებს გამოძახების განხილვისთვის.
 
 ## Runbooks & Documentation
 
-- Update `docs/source/sorafs/migration_ledger.md` to include registry status updates.
-- Operator guide: `docs/source/sorafs/runbooks/pin_registry_ops.md` (now published) covering metrics, alerting, deployment, backup, and recovery flows.
-- Governance guide: describe policy parameters, approval workflow, dispute handling.
-- API reference pages for each endpoint (Docusaurus docs).
+- განაახლეთ `docs/source/sorafs/migration_ledger.md` რეესტრის სტატუსის განახლებისთვის.
+- ოპერატორის სახელმძღვანელო: `docs/source/sorafs/runbooks/pin_registry_ops.md` (ახლა გამოქვეყნებულია), რომელიც მოიცავს მეტრიკას, გაფრთხილებას, განლაგებას, სარეზერვო და აღდგენის ნაკადებს.
+- მმართველობის სახელმძღვანელო: აღწერეთ პოლიტიკის პარამეტრები, დამტკიცების სამუშაო პროცესი, დავების განხილვა.
+- API საცნობარო გვერდები თითოეული საბოლოო წერტილისთვის (Docusaurus დოკუმენტები).
 
-## Dependencies & Sequencing
+## დამოკიდებულებები და თანმიმდევრობა
 
-1. Complete validation plan tasks (ManifestValidator integration).
-2. Finalise Norito schema + policy defaults.
-3. Implement contract + service, wire telemetry.
-4. Regenerate fixtures, run integration suites.
-5. Update docs/runbooks and mark roadmap items complete.
+1. დაასრულეთ ვალიდაციის გეგმის ამოცანები (ManifestValidator ინტეგრაცია).
+2. დაასრულეთ Norito სქემა + პოლიტიკის ნაგულისხმევი პარამეტრები.
+3. განახორციელოს ხელშეკრულება + მომსახურება, მავთულის ტელემეტრია.
+4. განაახლეთ მოწყობილობები, გაუშვით ინტეგრაციის კომპლექტები.
+5. განაახლეთ Docs/Runbooks და მონიშნეთ საგზაო რუქის ელემენტები დასრულებულად.
 
-Each roadmap checklist item under SF-4 should reference this plan when progress is made.
-The REST façade now ships with attested listing endpoints:
+ყოველი საგზაო რუქის საკონტროლო სიის პუნქტი SF-4-ში უნდა მიუთითებდეს ამ გეგმაზე, როდესაც მიიღწევა პროგრესი.
+REST ფასადი ახლა იგზავნება დამოწმებული ჩამონათვალის ბოლო წერტილებით:
 
-- `GET /v1/sorafs/pin` and `GET /v1/sorafs/pin/{digest}` return manifests with
-  alias bindings, replication orders, and an attestation object derived from the
-  latest block hash.
-- `GET /v1/sorafs/aliases` and `GET /v1/sorafs/replication` expose the active
-  alias catalogue and replication order backlog with consistent pagination and
-  status filters.
+- `GET /v1/sorafs/pin` და `GET /v1/sorafs/pin/{digest}` დაბრუნება გამოიხატება
+  ფსევდონიმების შეკვრა, რეპლიკაციის ბრძანებები და ატესტაციის ობიექტი, რომელიც მიღებულია
+  უახლესი ბლოკის ჰეში.
+- `GET /v1/sorafs/aliases` და `GET /v1/sorafs/replication` ამჟღავნებს აქტიურს
+  ფსევდონიმების კატალოგი და რეპლიკაციის შეკვეთის ჩანაწერი თანმიმდევრული პაგინაცია და
+  სტატუსის ფილტრები.
 
-The CLI wraps these calls (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`) so operators can script registry audits without touching
-lower-level APIs.
+CLI აფუჭებს ამ ზარებს (`iroha app sorafs pin list`, `pin show`, `alias list`,
+`replication list`), რათა ოპერატორებმა შეძლონ რეესტრის აუდიტის დაწერა შეხების გარეშე
+ქვედა დონის API-ები.

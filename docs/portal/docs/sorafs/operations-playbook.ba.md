@@ -11,189 +11,190 @@ id: operations-playbook
 title: SoraFS Operations Playbook
 sidebar_label: Operations Playbook
 description: Incident response guides and chaos drill procedures for SoraFS operators.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.md`. Keep both copies in sync until the Sphinx documentation set is fully migrated.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Был бит `docs/source/sorafs_ops_playbook.md` буйынса һаҡланған runbook-ты көҙгөләй. Ике күсермәһен дә синхронлаштырығыҙ, тик Sphinx документацияһы йыйылмаһы тулыһынса күсеп килә.
+::: 1990 й.
 
-## Key References
+## Төп Һылтанмалар
 
-- Observability assets: refer to the Grafana dashboards under `dashboards/grafana/` and Prometheus alert rules in `dashboards/alerts/`.
-- Metric catalog: `docs/source/sorafs_observability_plan.md`.
-- Orchestrator telemetry surfaces: `docs/source/sorafs_orchestrator_plan.md`.
+- Күҙәтеүсәнлек активтары: I18NI000000008X буйынса I18NT0000001X приборҙар таҡталарына мөрәжәғәт итегеҙ һәм `dashboards/alerts/` X-тағы I18NI0000008X һәм I18NT00000000000000000000000000000000009.
+- Метрика каталогы: `docs/source/sorafs_observability_plan.md`.
+- Оркестратор телеметрия өҫтө: `docs/source/sorafs_orchestrator_plan.md`.
 
-## Escalation Matrix
+## Эскалация матрицаһы
 
-| Priority | Trigger examples | Primary on-call | Backup | Notes |
-|----------|------------------|-----------------|--------|-------|
-| P1 | Global gateway outage, PoR failure rate > 5% (15 min), replication backlog doubling every 10 min | Storage SRE | Observability TL | Engage governance council if impact exceeds 30 min. |
-| P2 | Regional gateway latency SLO breach, orchestrator retry spike without SLA impact | Observability TL | Storage SRE | Continue rollout but gate new manifests. |
-| P3 | Non-critical alerts (manifest staleness, capacity 80–90%) | Intake triage | Ops guild | Address within next business day. |
+| Өҫтөнлөк | Триггер миҫалдары | Беренсел шылтыратыу | Резерв | Иҫкәрмәләр |
+|---------|-----------------------------------|--------|------------|
+| Р1 | Глобаль шлюз өҙөлгән, PoR етешһеҙлектәре ставкаһы > 5% (15 мин), репликация артҡа икеләтә 10 мин | Һаҡлау SRE | Күҙәтеүсәнлек TL | Ҡатнашыу идара итеү советы, әгәр йоғонто 30 мин артып китә. |
+| Р2 | Төбәк шлюз латентлығы SLO боҙоу, оркестрҙа ҡабаттан өҙөү шпик SLA һуғыуһыҙ | Күҙәтеүсәнлек TL | Һаҡлау SRE | Дауам итеү таратыу, әммә ҡапҡа яңы манифесттары. |
+| Р3 | Тәнҡитле булмаған иҫкәртмәләр (иғтибарлы стадия, ҡәҙерлелек 80–90%) | Ҡулланыу триаж | Опс гильдия | Киләһе эш көнө эсендә адрес. |
 
-## Gateway Outage / Degraded Availability
+## Ҡапҡа өҙөлгән / Деградацияланған доступность
 
-**Detection**
+**Асыҡлау**
 
-- Alerts: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+- Иҫкәртмәләр: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
+- приборҙар таҡтаһы: `dashboards/grafana/sorafs_gateway_overview.json`.
 
-**Immediate actions**
+**Тиҙ арала ғәмәлдәр**
 
-1. Confirm scope (single provider vs fleet) via request-rate panel.
-2. Switch Torii routing to healthy providers (if multi-provider) by toggling `sorafs_gateway_route_weights` in the ops config (`docs/source/sorafs_gateway_self_cert.md`).
-3. If all providers impacted, enable “direct fetch” fallback for CLI/SDK clients (`docs/source/sorafs_node_client_protocol.md`).
+1. Раҫлау даирәһе (бер провайдер vs флот) аша запрос-ставка панелендә.
+2. Switch I18NT000000002Х маршрутлаштырыу өсөн һау провайдерҙар (әгәр күп провайнер) toggling I18NI0000000015X опс конфигында (I18NI000000016X).
+3. Әгәр бөтә провайдерҙар йоғонто яһай, мөмкинлек бирә “туранан-тура фетч” CLI/SDK клиенттар өсөн fallback (`docs/source/sorafs_node_client_protocol.md`).
 
-**Triage**
+**Хәҙерге**
 
-- Check stream token utilisation against `sorafs_gateway_stream_token_limit`.
-- Inspect gateway logs for TLS or admission errors.
-- Run `scripts/telemetry/run_schema_diff.sh` to ensure the gateway exported schema matches the expected version.
+- Тикшерергә ағым токен утилләштереү ҡаршы I18NI0000000018X.
+- TLS йәки ҡабул итеү хаталары өсөн шлюз журналдарын тикшерергә.
+- Йүгереп I18NI000000019X шлюз экспортлау схемаһы тәьмин итеү өсөн көтөлгән версия тура килә.
 
-**Remediation options**
+**Яңырыу варианттары**
 
-- Restart only the affected gateway process; avoid recycling the entire cluster unless multiple providers are failing.
-- Increase stream token limit by 10–15% temporarily if saturation is confirmed.
-- Re-run self-cert (`scripts/sorafs_gateway_self_cert.sh`) after stabilisation.
+- Ҡазаланған шлюз процесын ғына яңынан эшләтеп ебәрегеҙ; ҡотолоу өсөн бөтә кластерҙы ҡабаттан эшкәртергә, әгәр бер нисә провайдерҙар уңышһыҙлыҡҡа осрай.
+- Әгәр ҙә туйындырыу раҫланһа, 10–15% ваҡытлыса ағымдың сиген арттырыу.
+- Ҡабаттан идара итеү үҙ-үҙен сертификат (`scripts/sorafs_gateway_self_cert.sh`) тотороҡландырыуҙан һуң.
 
-**Post-incident**
+**Пост-инцидент**
 
-- File a P1 postmortem using `docs/source/sorafs/postmortem_template.md`.
-- Schedule follow-up chaos drill if remediation relied on manual interventions.
+- I18NI000000021X ҡулланып, р1-ҙән һуң р1-се урынды биләй.
+- Әгәр ҙә ҡул ҡыҫылыуҙарына таянһа, әгәр ҙә төҙәтеүҙәрҙең графигы.
 
-## Proof Failure Spike (PoR / PoTR)
+## Дәлилдәр етешмәүе шпик (PoR / PoTR)
 
-**Detection**
+**Асыҡлау**
 
-- Alerts: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
-- Telemetry: `torii_sorafs_proof_stream_events_total` and `sorafs.fetch.error` events with `provider_reason=corrupt_proof`.
+- Иҫкәртмәләр: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
+- приборҙар таҡтаһы: `dashboards/grafana/sorafs_proof_integrity.json`.
+- Телеметрия: I18NI0000025X һәм I18NI000000027X менән I18NI000000026X.
 
-**Immediate actions**
+**Тиҙ арала ғәмәлдәр**
 
-1. Freeze new manifest admissions by flagging the manifest registry (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notify Governance to pause incentives for affected providers.
+.
+2. Идара итеү тураһында хәбәр итеү өсөн пауза стимулдар өсөн зыян күргән провайдерҙар.
 
-**Triage**
+**Хәҙерге**
 
-- Check PoR challenge queue depth vs `sorafs_node_replication_backlog_total`.
-- Validate proof verification pipeline (`crates/sorafs_node/src/potr.rs`) for recent deployments.
-- Compare provider firmware versions with the operator registry.
+- Тикшерергә PoR һынау сират тәрәнлеге vs I18NI000000029X.
+- Һуңғы ваҡытта таратыу өсөн раҫлаусы торба үткәргес (I18NI0000000030X) раҫлау.
+- Оператор реестры менән провайдер прошивка версияларын сағыштырырға.
 
-**Remediation options**
+**Яңырыу варианттары**
 
-- Trigger PoR replays using `sorafs_cli proof stream` with the latest manifest.
-- If proofs consistently fail, remove provider from active set by updating the governance registry and forcing orchestrator scoreboards to refresh.
+- Trigger PoR реплейы ҡулланып I18NI0000000031X менән һуңғы манифест.
+- Әгәр ҙә дәлилдәр эҙмә-эҙлекле уңышһыҙлыҡҡа осраһа, идара итеү реестрын яңыртыу һәм оркестрҙа таблоларҙы яңыртыуҙы мәжбүр итеү юлы менән провайдерҙы алып ташларға.
 
-**Post-incident**
+**Пост-инцидент**
 
-- Run the PoR chaos drill scenario before the next production deploy.
-- Capture lessons in the postmortem template and update provider qualification checklist.
+- PoR хаос быраулау сценарийын йүгерергә тиклем сираттағы етештереү таратыу.
+- Үлемдән һуңғы шаблон һәм яңыртыу провайдер квалификацияһы тикшерелгән исемлектә тотоу.
 
-## Replication Lag / Backlog Growth
+## репликация лаг / Артҡы үҫеш
 
-**Detection**
+**Асыҡлау**
 
-- Alerts: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Import
-  `dashboards/alerts/sorafs_capacity_rules.yml` and run
-  `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  before promotion so Alertmanager reflects the documented thresholds.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-- Metrics: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+- Иҫкәртмәләр: I18NI000000032X, `SoraFSCapacityPressure`. Импорт
+  I18NI000000034X һәм йүгерә
+  I18NI000000035X
+  промоушенға тиклем шулай Alertmanager документлаштырылған сиктәрҙе сағылдыра.
+- приборҙар таҡтаһы: `dashboards/grafana/sorafs_capacity_health.json`.
+- Метрика: `sorafs_node_replication_backlog_total`, I18NI000000038X.
 
-**Immediate actions**
+**Тиҙ арала ғәмәлдәр**
 
-1. Verify backlog scope (single provider or fleet) and pause non-essential replication tasks.
-2. If backlog is isolated, temporarily reassign new orders to alternate providers via the replication scheduler.
+1. Артҡы даирәһен тикшерергә (яңғыҙ провайдер йәки автопарк) һәм туҡталыш кәрәкмәгән репликация бурыстарын.
+2. Әгәр артта ҡалыу изоляцияланған, ваҡытлыса яңы заказдарҙы ҡабаттан тәғәйенләү өсөн алмашлап провайдерҙар аша репликация планлаштырыусы.
 
-**Triage**
+**Хәҙерге**
 
-- Inspect orchestrator telemetry for retry bursts that may cascade backlog.
-- Confirm storage targets have sufficient headroom (`sorafs_node_capacity_utilisation_percent`).
-- Review recent configuration changes (chunk profile updates, proof cadence).
+- Тикшерергә оркестр телеметрияһы өсөн ҡабаттан ярсыҡтар, улар каскад артта ҡала ала.
+- Һаҡлауҙы раҫлаусы маҡсаттар етерлек баш бүлмәһе бар (`sorafs_node_capacity_utilisation_percent`).
+- Һуңғы конфигурация үҙгәрештәрен ҡабатлау (профиль яңыртыу, иҫбатлау каденцияһы).
 
-**Remediation options**
+**Яңырыу варианттары**
 
-- Run `sorafs_cli` with the `--rebalance` option to redistribute content.
-- Scale replication workers horizontally for the impacted provider.
-- Trigger manifest refresh to re-align TTL windows.
+- `sorafs_cli` Run i18NI000000041X варианты менән контентты ҡайтанан бүлергә.
+- масштаблы репликация эшселәре горизонталь өсөн йоғонто провайдеры.
+- Триггер манифест яңыртыу өсөн яңынан тура килтереп TTL тәҙрә.
 
-**Post-incident**
+**Пост-инцидент**
 
-- Schedule a capacity drill focusing on provider saturation failure.
-- Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
+- Һайлау быраулау планы провайдер туйындырыу етешһеҙлектәренә йүнәлтелгән.
+- Яңыртыу репликацияһы SLA документацияһы I18NI000000042X.
 
-## Repair Backlog & SLA Breaches
+## Ремонт фон & SLA боҙоуҙары
 
-**Detection**
+**Асыҡлау**
 
-- Alerts:
-  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
-  - `SoraFSRepairEscalations` (> 3 escalations/hour).
-  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
-  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- Иҫкәртмәләр:
+  - `SoraFSRepairBacklogHigh` (сират тәрәнлеге > 50 йәки иң боронғо сират йәше > 4h 10м).
+  - `SoraFSRepairEscalations` (> 3 эскалациялар/сәғәт).
+  - I18NI000000045X (> 5 ҡуртымға срогы/сәғәт).
+  - `SoraFSRetentionBlockedEvictions`X (һуңғы 15м-ҙа әүҙем ремонтлау менән блоклана).
+- приборҙар таҡтаһы: `dashboards/grafana/sorafs_capacity_health.json`.
 
-**Immediate actions**
+**Тиҙ арала ғәмәлдәр**
 
-1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
-2. Verify repair worker liveness and increase worker concurrency if safe.
+1. Һанлы провайдерҙарҙы билдәләү (сират тәрән шпицтар) һәм улар өсөн яңы булавкалар/репликация заказдары туҡталыш.
+2. Ремонтлау эшсе йәнлелек һәм эшсе конкурентлығын арттырыу, әгәр хәүефһеҙ.
 
-**Triage**
+**Хәҙерге**
 
-- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
-- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
-- Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
+- `torii_sorafs_repair_backlog_oldest_age_seconds` 4h SLA тәҙрәһенә ҡаршы сағыштырырға.
+- Авария/сәғәт-скью өлгөләре өсөн I18NI000000049X X.
+- Ҡабатланған манифест/провайдер парҙары өсөн билеттарҙы тикшерергә һәм дәлилдәр өйөмдәрен раҫлағыҙ.
 
-**Remediation options**
+**Яңырыу варианттары**
 
-- Reassign or restart stalled repair workers; clear orphaned leases via the normal claim flow.
-- Throttle new pins while repairs drain to prevent additional SLA pressure.
-- Escalate to governance if escalations persist and attach the repair audit artefacts.
+- Ҡабаттан тәғәйенләү йәки туҡтатылған ремонт эшселәре; асыҡ етем ҡуртымға аша ғәҙәти дәғүә ағымы.
+- Өҫтәмә SLA баҫымын булдырмау өсөн дренаж ремонтлау ваҡытында яңы булавкалар дроссель.
+- Әгәр эскалациялар һаҡланһа һәм ремонт аудиторы артефакттарын беркетһә, идара итеүгә эскалация.
 
-## Retention / GC Inspection (Read-only)
+## Һаҡлау / GC тикшерергә (Уҡыу ғына)
 
-**Detection**
+**Асыҡлау**
 
-- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- Иҫкәртмәләр: `SoraFSCapacityPressure` йәки I18NI000000051X > 90% тотолған.
+- приборҙар таҡтаһы: `dashboards/grafana/sorafs_capacity_health.json`.
 
-**Immediate actions**
+**Тиҙ арала ғәмәлдәр**
 
-1. Run a local retention snapshot:
+1. Урындағы һаҡлау снимок йүгерергә:
    ```bash
    iroha app sorafs gc inspect --data-dir /var/lib/sorafs
    ```
-2. Capture an expired-only view for triage:
+2. триаж өсөн генә сроклы ҡарашты ҡулға алығыҙ:
    ```bash
    iroha app sorafs gc dry-run --data-dir /var/lib/sorafs
    ```
-3. Attach the JSON outputs to the incident ticket for auditability.
+3. JSON сығыштарын инцидент билетына аудит өсөн беркетергә.
 
-**Triage**
+**Хәҙерге**
 
-- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
-- Use `retention_sources` in the GC JSON output to see which constraint set the effective
-  retention (`deal_end`, `governance_cap`, `pin_policy`, or `unbounded`). Deal and governance caps
-  are supplied via manifest metadata keys `sorafs.retention.deal_end_epoch` and
+- 18NI000000053X отчеты (ваҡыт юҡ) ҡаршы сроктары булғандар тураһында хәбәр итә.
+- GC JSON сығышында I18NI000000054X ҡулланыу ниндәй сикләүҙәрҙең һөҙөмтәлелеген билдәләү өсөн
+  Һаҡлау (`deal_end`, `governance_cap`, `pin_policy`, йәки I18NI000000058X). Килешеү һәм идара итеү ҡапҡастары
+  I18NI000000059X һәм 1990 йылдарҙа асыҡ метамағлүмәт асҡыстары аша бирелә һәм
   `sorafs.retention.governance_cap_epoch`.
-- If `dry-run` reports expired manifests but capacity remains pinned, verify no
-  active repairs or retention policy overrides block eviction.
-  Capacity-triggered sweeps evict expired manifests by least-recently-used order with
-  `manifest_id` tie-breakers.
+- Әгәр I18NI0000000061X хәбәр итеүҙәренең ваҡыты үткән, әммә ҡәҙерле булып ҡала, тип раҫлай юҡ
+  әүҙем ремонт йәки һаҡлау сәйәсәте блокты күсерергә өҫтөнлөк бирә.
+  Ҡыйыулыҡ-триггер һепертке һепертке экультацияланған срогы срогы иң аҙ-һуңыраҡ ҡулланылған тәртип менән .
+  I18NI000000062X тайпевсылар.
 
-**Remediation options**
+**Яңырыу варианттары**
 
-- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
-- Escalate to governance for retention policy adjustments or capacity expansion
-  when expired data accumulates without automated eviction.
+- ГК CLI тик уҡыу. Ҡул менән етештереүҙә манифест йәки өлөштәрҙе юйырға ярамай.
+- Һаҡлау сәйәсәтен төҙәтеү йәки ҡөҙрәттәрҙе киңәйтеү өсөн идара итеүгә көсәйергә
+  срогы үткән мәғлүмәттәр автоматлаштырылған сығарыуһыҙ туплана.
 
-## Chaos Drill Cadence
+## Хаос быраулау каденцияһы
 
-- **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.
-- **Biannual**: PoR/PoTR failure injection across two providers with recovery.
-- **Monthly spot-check**: Replication lag scenario using staging manifests.
-- Track drills in the shared runbook log (`ops/drill-log.md`) via:
+- **Квартал **: Ҡапҡа өҙөлгән өҙөлгән + оркестрҙа ҡабаттан эшләүсе дауыл моделләштереүе.
+- **Бианнуаль**: PoR/PoTR етешһеҙлектәре инъекцияһы буйынса ике провайдер менән һауығыу.
+- **Айлыҡ тап-тикшерергә**: репликация лаг сценарийы ҡулланыу стажировка манифесттары.
+- Дөйөм runbook журналында тректар тренингы (I18NI0000000063X) аша:
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -206,15 +207,15 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Validate the log before commits with:
+- Бүрәнде раҫлау алдынан ҡылғансы:
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
   ```
 
-- Use `--status scheduled` for upcoming drills, `pass`/`fail` for completed runs, and `follow-up` when action items remain open.
-- Override the destination with `--log` for dry-runs or automated verification; without it the script continues to update `ops/drill-log.md`.
+- Ҡулланыу I18NI00000000064X өсөн буласаҡ күнекмәләр, I18NI00000000065X/I18NI000000066X өсөн тамамланған йүгерә, һәм `follow-up` ҡасан ғәмәлдәр асыҡ ҡала.
+- Ҡоро йүгерә йәки автоматлаштырылған тикшерелгән өсөн I18NI000000068X менән тәғәйенләнеште өҫтөнлөк бирергә; унан башҡа сценарий I18NI000000069XX XX.
 
-## Postmortem Template
+## Үлемдән һуңғы ҡалыбы
 
-Use `docs/source/sorafs/postmortem_template.md` for every P1/P2 incident and for chaos drill retrospectives. The template covers timeline, impact quantification, contributing factors, corrective actions, and follow-up verification tasks.
+Ҡулланыу I18NI000000070X өсөн һәр P1/P2 инцидент һәм хаос өсөн бурау ретроспективтары. Ҡалып ваҡыт һыҙығын ҡаплай, миҡдар буйынса йоғонто яһау, өлөш индереүсе факторҙар, төҙәтеү ғәмәлдәре һәм эҙмә-эҙлекле тикшерелгән бурыстарҙы үҙ эсенә ала.

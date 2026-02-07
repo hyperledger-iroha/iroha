@@ -7,25 +7,27 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+ներմուծել SampleDownload-ից '@site/src/components/SampleDownload';
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+Այս բաղադրատոմսը միավորում է JS5 ճանապարհային քարտեզում նշված երկու առաջադեմ աշխատանքային հոսքերը
+կետեր՝ կառավարման վերջնական օգնականներ (առաջարկներ, քվեաթերթիկներ, ավագանու ակնթարթներ)
+և ISO 20022 կամուրջը (pacs.008/pacs.009): Յուրաքանչյուր նմուշ աշխատում է
+հրապարակված `@iroha/iroha-js` փաթեթի դեմ և արտացոլում է հատվածները
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## Կառավարման օգնականի նմուշ
 
-<SampleDownload
+<Նմուշի ներբեռնում
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  filename = "governance.mjs"
+  description="Ներբեռնեք այս բաղադրատոմսում նշված runnable կառավարման օգնականը։"
 />
 
-### Prerequisites
+### Նախադրյալներ
 
 ```bash
 npm install @iroha/iroha-js
@@ -39,10 +41,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+Սահմանեք `GOV_SUBMIT=1`՝ ստորագրված գործարքները ներկայացնելու համար Torii և
+`GOV_FETCH=1`՝ ստուգելու արդյունքում ստացված կառավարման վիճակը ներկայացնելուց հետո:
 
-### Example script
+### Օրինակ սցենար
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -222,26 +224,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Գործարկել և վերահսկել
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
-  `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- Կատարեք `node governance.mjs`՝ միայն հեշեր ստեղծելու համար: Ավելացնել `GOV_SUBMIT=1`
+  փակցրեք գործարքները Torii և `GOV_FETCH=1` հասցեներով՝ կառավարման վիճակի գրանցման համար
+  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks` և
+  `getGovernanceCouncilCurrent`):
+- Վերցրեք դետերմինիստական ​​հեշերը CI տեղեկամատյաններում; յուրաքանչյուր քայլ տպում է ստորագրված բայթը
+  երկարությունը գումարած վերահաշվարկված հեշը, երբ հասանելի է կամընտիր բնիկ օգնականը:
+- Կցեք վահանակի ելքը կառավարման վերանայման փաթեթներին, որպեսզի աուդիտորները կարողանան հետևել
+  առաջարկի/հանրաքվեի ID-ները վերադառնում են վերարտադրվող CLI ապացույցներին:
 
-## ISO bridge sample
+## ISO կամուրջի նմուշ
 
-<SampleDownload
+<Նմուշի ներբեռնում
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  filename = "iso-bridge.mjs"
+  description="Ներբեռնեք այս բաղադրատոմսում նշված ISO 20022 օգնականը։"
 />
 
-### Prerequisites
+### Նախադրյալներ
 
 ```bash
 npm install @iroha/iroha-js
@@ -253,11 +255,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+Սահմանեք `ISO_MESSAGE_ID`, երբ ցանկանում եք բաց թողնել ներկայացումը և միայն հարցում կատարել հայտնի
+նույնացուցիչ. Օգտագործեք `ISO_RESOLVE_ON_ACCEPTED=1`՝ դուրս գալու համար, հենց որ կամուրջը նշվի
+`Accepted` մուտք, նույնիսկ եթե գործարքի հեշը դեռ վերջնականացված չէ:
 
-### Example script
+### Օրինակ սցենար
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -357,22 +359,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Գործարկել և վերահսկել
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- Կատարեք `node iso-bridge.mjs`՝ նմուշի օգտակար բեռ ներկայացնելու համար: Սահմանել
+  `ISO_MESSAGE_KIND=pacs.009`՝ PvP հոսքը իրականացնելու համար կամ `ISO_MESSAGE_ID` դեպի
+  հարցում կատարեք առկա ներկայացման վերաբերյալ՝ առանց այն նորից հրապարակելու:
+- Օգնականը գրանցում է հարցման յուրաքանչյուր փորձ `wait.onPoll`-ի միջոցով՝ հեշտացնելով
+  գրավել ընդունման ժամանակացույցերը CI տեղեկամատյաններում:
+- Կցեք վերջնական կարգավիճակը + գործարքի հեշը ISO-ի կամուրջի վազքագրքերին, որպեսզի աուդիտորները
+  կարող է հետագծել pacs.008/pacs.009 առաքումները դեպի վերարտադրվող օգտակար բեռներ, ինչպես
+  պահանջվում է JS5 ճանապարհային քարտեզի արդյունքներով:
 
-## Offline allowances & transfers
+## Անցանց նպաստներ և փոխանցումներ
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js`-ը առաքում է նույն նպաստի/փոխանցման օգնականներին, որոնք նշված են
+անցանց ճանապարհային քարտեզի տողեր: Օգտագործեք դրանք՝ ստուգելու ամբողջականության քաղաքականությունը (մարկերի ստեղն, Play
+Ամբողջականություն, HMS Safety Detect, Provisioned) առանց չմշակված մետատվյալների վերլուծության.
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -400,19 +402,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+Երբ Torii-ը հաղորդում է տրամադրված արտոնություն, տեսուչի հանրային բանալին դրսևորվում է
+սխեման, կամընտիր տարբերակ, TTL և ներածություն ուղիղ եթերում
+`integrity_metadata.provisioned`, ինչը չնչին է դարձնում պահանջվողը կցելը
+մետատվյալներ OA10.3 ապացույցների փաթեթներին:
 
-## Next steps
+## Հաջորդ քայլերը
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- Ուսումնասիրեք `javascript/iroha_js/recipes/governance.mjs` և
+  `javascript/iroha_js/recipes/iso_bridge.mjs` ընդլայնված օրինակների համար (բազմաթիվ սիգ
+  քվեաթերթիկներ, խորհրդի VRF-ի ածանցում, նորից փորձի քաղաքականություն):
+- Դիտեք Norito կողմի փաստաթղթերը
+  `docs/source/sdk/js/governance_iso_examples.md` և
+  `docs/source/finance/settlement_iso_mapping.md` կանոնական դաշտի համար
+  այս օգնականների կողմից նշված քարտեզները:
+- Գրեք գործարկման տեղեկամատյանները և կցեք դրանք կառավարման / ISO հաստատումներին՝ բավարարելու համար
+  JS5 «փաստաթղթավորում + հրապարակում» պահանջը, որը նշված է `roadmap.md`-ում:

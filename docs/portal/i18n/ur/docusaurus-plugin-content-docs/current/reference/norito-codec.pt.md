@@ -4,45 +4,47 @@ direction: rtl
 source: docs/portal/docs/reference/norito-codec.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Referencia do codec Norito
+# کوڈیک حوالہ Norito
 
-Norito e a camada canonica de serializacao do Iroha. Toda mensagem on-wire, payload em disco e API entre componentes usa Norito para que os nos concordem em bytes identicos mesmo quando rodam em hardware diferente. Esta pagina resume as partes principais e aponta para a especificacao completa em `norito.md`.
+Norito Iroha کی کیننیکل سیریلائزیشن پرت ہے۔ ہر آن وائر پیغام ، ڈسک پر پے لوڈ اور اجزاء کے مابین API Norito استعمال کرتا ہے تاکہ نوڈس مختلف ہارڈ ویئر پر چلتے وقت بھی ایک جیسی بائٹس پر متفق ہوں۔ اس صفحے میں اہم حصوں کا خلاصہ کیا گیا ہے اور `norito.md` پر مکمل تصریح کی نشاندہی کی گئی ہے۔
 
-## Layout base
+## بیس لے آؤٹ
 
-| Componente | Proposito | Fonte |
+| اجزاء | مقصد | ماخذ |
 | --- | --- | --- |
-| **Header** | Enquadra payloads com magic/version/schema hash, CRC64, length e tag de compressao; v1 requer `VERSION_MINOR = 0x00` e valida header flags contra a mascara suportada (default `0x00`). | `norito::header` - ver `norito.md` ("Header & Flags", raiz do repositorio) |
-| **Payload sem header** | Codificacao deterministica de valores usada para hashing/comparacao. O transporte on-wire sempre usa header; bytes sem header sao apenas internos. | `norito::codec::{Encode, Decode}` |
-| **Compressao** | Zstd opcional (e aceleracao GPU experimental) selecionada via o byte de compressao do header. | `norito.md`, "Compression negotiation" |
+| ** ہیڈر ** | جادو/ورژن/اسکیما ہیش ، CRC64 ، لمبائی اور کمپریشن ٹیگ کے ساتھ فریم پے لوڈ۔ V1 کو `VERSION_MINOR = 0x00` کی ضرورت ہوتی ہے اور معاون ماسک (ڈیفالٹ `0x00`) کے خلاف ہیڈر کے جھنڈوں کی توثیق کرتا ہے۔ | `norito::header` - `norito.md` دیکھیں ("ہیڈر اور جھنڈے" ، ذخیرہ جڑ) |
+| ** ہیڈر کے بغیر پے لوڈ ** | ہیشنگ/موازنہ کے لئے استعمال ہونے والی اقدار کا تعی .ن انکوڈنگ۔ آن وائر ٹرانسپورٹ ہمیشہ ہیڈر استعمال کرتی ہے۔ ہیڈر کے بغیر بائٹس صرف اندرونی ہیں۔ | `norito::codec::{Encode, Decode}` |
+| ** کمپریشن ** | ہیڈر کمپریشن بائٹ کے ذریعے منتخب کردہ اختیاری ZSTD (اور تجرباتی GPU ایکسلریشن) کا انتخاب کیا گیا۔ | `norito.md` ، "کمپریشن مذاکرات" |
 
-O registro de flags de layout (packed-struct, packed-seq, field bitset, compact lengths) fica em `norito::header::flags`. V1 usa flags `0x00` por padrao mas aceita header flags explicitas dentro da mascara suportada; bits desconhecidos sao rejeitados. `norito::header::Flags` e mantido para inspecao interna e versoes futuras.
+لے آؤٹ پرچم رجسٹر (پیکڈ اسٹراٹ ، پیکڈ سیک ، فیلڈ بیٹسیٹ ، کمپیکٹ لمبائی) `norito::header::flags` میں ہے۔ V1 `0x00` جھنڈوں کو بطور ڈیفالٹ استعمال کرتا ہے لیکن تائید شدہ ماسک کے اندر واضح ہیڈر جھنڈوں کو قبول کرتا ہے۔ نامعلوم بٹس کو مسترد کردیا جاتا ہے۔ `norito::header::Flags` داخلی معائنہ اور مستقبل کے اجراء کے لئے برقرار ہے۔
 
-## Suporte a derive
+## سپورٹ حاصل کریں
 
-`norito_derive` fornece derives `Encode`, `Decode`, `IntoSchema` e helpers JSON. Convencoes principais:
+`norito_derive` `Encode` ، `Decode` ، `IntoSchema` مشتق اور JSON مددگار فراہم کرتا ہے۔ اہم کنونشن:
 
-- Derives geram caminhos AoS e packed; v1 usa layout AoS por padrao (flags `0x00`) a menos que header flags optem por variantes packed. Implementacao em `crates/norito_derive/src/derive_struct.rs`.
-- Recursos que afetam layout (`packed-struct`, `packed-seq`, `compact-len`) sao opt-in via header flags e devem ser codificados/decodificados de forma consistente entre peers.
-- JSON helpers (`norito::json`) fornecem JSON deterministico apoiado em Norito para APIs abertas. Use `norito::json::{to_json_pretty, from_json}` - nunca `serde_json`.
+- اخذ کردہ AOS اور بھری راستے پیدا کرتے ہیں۔ V1 AOS لے آؤٹ کو بطور ڈیفالٹ (جھنڈے `0x00`) استعمال کرتا ہے جب تک کہ ہیڈر کے جھنڈے بھری مختلف حالتوں کا انتخاب نہ کریں۔ `crates/norito_derive/src/derive_struct.rs` میں عمل درآمد۔
+- وہ وسائل جو لے آؤٹ کو متاثر کرتے ہیں (`packed-struct` ، `packed-seq` ، `compact-len`) ہیڈر جھنڈوں کے ذریعہ آپٹ ان ہیں اور ہم عمروں کے مابین مستقل طور پر انکوڈ/ڈیکوڈ کیا جانا چاہئے۔
+- JSON مددگار (`norito::json`) کھلی APIs کے لئے Norito کے ذریعہ ڈٹرمینسٹک JSON فراہم کرتا ہے۔ `norito::json::{to_json_pretty, from_json}` استعمال کریں - کبھی `serde_json` نہیں۔
 
-## Multicodec e tabelas de identificadores
+## ملٹی کوڈیک اور شناخت کنندہ میزیں
 
-Norito mantem suas atribuicoes de multicodec em `norito::multicodec`. A tabela de referencia (hashes, tipos de chave, descritores de payload) e mantida em `multicodec.md` na raiz do repositorio. Quando um novo identificador e adicionado:
+Norito اپنے ملٹی کوڈک اسائنمنٹس کو `norito::multicodec` میں رکھتا ہے۔ ریفرنس ٹیبل (ہیش ، کلیدی اقسام ، پے لوڈ ڈسریکٹرز) کو ریپوزٹری کی جڑ میں `multicodec.md` پر برقرار رکھا جاتا ہے۔ جب ایک نیا شناخت کنندہ شامل کیا جاتا ہے:
 
-1. Atualize `norito::multicodec::registry`.
-2. Estenda a tabela em `multicodec.md`.
-3. Regenere bindings downstream (Python/Java) se consumirem o mapa.
+1. `norito::multicodec::registry` کو اپ ڈیٹ کریں۔
+2. ٹیبل کو `multicodec.md` میں بڑھاؤ۔
+3. اگر وہ نقشہ کھاتے ہیں تو بہاو بائنڈنگز (ازگر/جاوا) کو دوبارہ تخلیق کریں۔
 
-## Regenerar docs e fixtures
+## دستاویزات اور فکسچر کو دوبارہ تیار کریں
 
-Com o portal hospedando um resumo em prosa, use as fontes Markdown upstream como fonte de verdade:
+پورٹل کے ساتھ ایک پروس سمری کی میزبانی کرنے کے ساتھ ، اپ اسٹریم مارک ڈاون فونٹس کو سچائی کے ذریعہ کے طور پر استعمال کریں:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- ** مخصوص **: `norito.md`
+- ** ملٹی کوڈیک ٹیبل **: `multicodec.md`
+- ** بینچ مارک **: `crates/norito/benches/`
+- ** گولڈن ٹیسٹ **: `crates/norito/tests/`
 
-Quando a automacao de Docusaurus entrar no ar, o portal sera atualizado via um script de sync (rastreado em `docs/portal/scripts/`) que extrai os dados desses arquivos. Ate la, mantenha esta pagina alinhada manualmente sempre que a spec mudar.
+جب Docusaurus آٹومیشن رواں دواں ہوجاتا ہے تو ، پورٹل کو مطابقت پذیری اسکرپٹ (`docs/portal/scripts/` میں ٹریک کردہ) کے ذریعے اپ ڈیٹ کیا جائے گا جو ان فائلوں سے ڈیٹا نکالتا ہے۔ اس وقت تک ، جب بھی اسپیک تبدیل ہوتا ہے تو اس صفحے کو دستی طور پر منسلک رکھیں۔

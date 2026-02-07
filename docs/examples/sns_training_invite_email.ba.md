@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e9bf7a41f46d220502776b77d0e2cf86ba19874da9ea373ea440706e531b661
 source_last_modified: "2025-12-29T18:16:35.078745+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-Subject: [SNS Training] <suffix> cohort briefing — <date>
+Субъект: [SNS уҡытыу] <послок> когорталы брифинг — <дата>
 
-Hi <name/team>,
+Һаумыһығыҙ <исем/команда>,
 
-You are scheduled for the upcoming Sora Name Service training covering the
-<suffix> suffix launch.
+Һеҙ планлаштырылған өсөн буласаҡ Сора Исем хеҙмәте тренингы ҡаплау .
+<аффикс> суффикс старт.
 
-**Details**
-- **Date / Time:** <weekday, UTC offset + link to calendar invite>
-- **Duration:** 2 hours (includes labs + annex capture)
-- **Format:** Live workshop + breakout rooms
-- **Language:** <language> (simultaneous interpretation available: <yes/no>)
+**Тулыраҡ мәғлүмәт**
+- **Дата / Ваҡыт:** <аҙғына, UTC офсет + һылтанма календарь саҡыра>
+- **Дурацион:** 2 сәғәт (лабораторияларҙы үҙ эсенә ала + ҡушымта тотоу)
+- **Формат:** Тере оҫтахана + өҙөлгән бүлмәләр
+- **Тел:** <тел> (бер үк ваҡытта интерпретация бар: <эйе/но>)
 
-**Pre-work (30 minutes)**
-1. Read `docs/source/sns/onboarding_kit.md`.
-2. Skim the KPI walkthrough (`docs/portal/docs/sns/kpi-dashboard.md`).
-3. Install the tooling listed in `docs/source/sns/training_collateral.md#13-lab-prerequisites`.
+**Эш алдынан (30 минут)**
+1. `docs/source/sns/onboarding_kit.md` уҡыу.
+2. Ским KPI проходка (`docs/portal/docs/sns/kpi-dashboard.md`).
+3. I18NI000000002X-та исемлеккә индерелгән инструменттарҙы ҡуйыу.
 
-**What to expect**
-- KPI dashboard orientation and registrar SLA review.
-- Manifest + resolver exercises with live validation.
-- Dispute drill covering guardian + council workflows.
-- KPI annex automation via `cargo xtask sns-annex`.
+**Нимә көтөргә**
+- KPI приборҙар таҡтаһы йүнәлеше һәм регистратор SLA обзор.
+- Манифест + тура эфирҙа раҫлау менән күнекмәләр.
+- Опека + совет эш ағымын ҡаплаған бәхәсле бурау.
+- KPI ҡушымта автоматлаштырыу аша I18NI0000000003X.
 
-Please confirm attendance by replying to this email or accepting the calendar
-invite. If you cannot attend, nominate a delegate and copy governance so we can
-keep the readiness log accurate.
+Зинһар, был электрон почтаға яуап биреп йәки календарҙы ҡабул итеп, йөрөүҙе раҫлағыҙ.
+саҡырырға. Әгәр һеҙ ҡатнаша алмай, делегат тәҡдим һәм күсермә идара итеү, шулай итеп, беҙ мөмкин
+әҙерлек журналын теүәл тоторға.
 
-Thanks,  
+Рәхмәт,  
 `sns-training@sora.org`

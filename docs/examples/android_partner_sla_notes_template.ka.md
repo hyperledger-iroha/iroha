@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android Partner SLA Discovery Notes — შაბლონი
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+გამოიყენეთ ეს შაბლონი AND8 SLA აღმოჩენის ყოველი სესიისთვის. შეინახეთ შევსებული ასლი
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` ქვეშ
+და დაურთოთ დამხმარე არტეფაქტები (კითხვის პასუხები, აღიარება,
+დანართები) იმავე დირექტორიაში.
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. დღის წესრიგი და კონტექსტი
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- სესიის მიზანი (პილოტის ფარგლები, გამოშვების ფანჯარა, ტელემეტრიის მოლოდინი).
+- საცნობარო დოკუმენტები გაზიარებული ზარის წინ (მხარდაჭერა სათამაშო წიგნი, გამოშვების კალენდარი,
+  ტელემეტრიის დაფები).
 
-## 2. Workload Overview
+## 2. დატვირთვის მიმოხილვა
 
-| Topic | Notes |
+| თემა | შენიშვნები |
 |-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| სამიზნე დატვირთვები / ჯაჭვები | |
+| მოსალოდნელი ტრანზაქციის მოცულობა | |
+| კრიტიკული ბიზნეს ფანჯრები / გათიშვის პერიოდები | |
+| მარეგულირებელი რეჟიმები (GDPR, MAS, FISC და სხვ.) | |
+| საჭირო ენები / ლოკალიზაცია | |
 
-## 3. SLA Discussion
+## 3. SLA დისკუსია
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA კლასი | პარტნიორის მოლოდინი | დელტა საწყისიდან? | საჭიროა ქმედება |
+|-----------|----------------------------------------|-----------------|
+| კრიტიკული შესწორება (48სთ) | | დიახ/არა | |
+| მაღალი სიმძიმის (5 სამუშაო დღე) | | დიახ/არა | |
+| ტექნიკური მომსახურება (30 დღე) | | დიახ/არა | |
+| შეწყვეტის შეტყობინება (60 დღე) | | დიახ/არა | |
+| ინციდენტის კომუნიკაციების კადენცია | | დიახ/არა | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+დაასაბუთეთ პარტნიორის მიერ მოთხოვნილი ნებისმიერი დამატებითი SLA პუნქტი (მაგ. გამოყოფილი
+სატელეფონო ხიდი, დამატებითი ტელემეტრიის ექსპორტი).
 
-## 4. Telemetry & Access Requirements
+## 4. ტელემეტრია და წვდომის მოთხოვნები
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus წვდომას საჭიროებს:
+- ჟურნალის/კვალი ექსპორტის მოთხოვნები:
+- ოფლაინ მტკიცებულება ან დოსიეს მოლოდინი:
 
-## 5. Compliance & Legal Notes
+## 5. შესაბამისობა და სამართლებრივი შენიშვნები
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- იურისდიქციული შეტყობინების მოთხოვნები (დებულება + დრო).
+- საჭირო იურიდიული კონტაქტები ინციდენტის განახლებისთვის.
+- მონაცემთა რეზიდენტობის შეზღუდვები / შენახვის მოთხოვნები.
 
-## 6. Decisions & Action Items
+## 6. გადაწყვეტილებები და ქმედებები
 
-| Item | Owner | Due | Notes |
+| ნივთი | მფლობელი | ვადა | შენიშვნები |
 |------|-------|-----|-------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. აღიარება
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- პარტნიორმა აღიარა საბაზისო SLA? (Y/N)
+- შემდგომი დადასტურების მეთოდი (ელფოსტა / ბილეთი / ხელმოწერა):
+- მიამაგრეთ დამადასტურებელი ელფოსტა ან შეხვედრის წუთები ამ დირექტორიაში დახურვამდე.

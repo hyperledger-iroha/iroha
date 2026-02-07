@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/intro.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# рәхим итегеҙ I18NT0000000020X I18NT000000014X Төҙөүсе порталы
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository. The landing page now carries
-themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
-Norito Streaming reference so contributors can find the streaming control-plane
-contract without digging through the root spec.
+I18NT000000021X I18NT000000015X порталь өйөмдәре интерактив документация, SDK
+өйрәтмәләр, һәм API һылтанмалар өсөн I18NT00000000016X операторҙары һәм I18NT000000000000000000000013Х X
+өлөш индереүселәр. Ул төп docs сайтын тулыландыра, өҫкө йөҙөндәге етәкселәр
+һәм туранан-тура был һаҡлағыстан спецификациялар генерацияланған. Десант бите хәҙер йөрөтә
+тематик Norito/I18NT000000010X инеү пункттары, OpenAPI снимоктарына ҡул ҡуйҙы, ә бағышланған
+I18NT00000000006X Стриминг белешмә, шулай итеп, өлөш индереүселәр таба ала потоковый идара итеү-яҫылыҡ
+cout root spec аша ҡаҙылмай.
 
-## What you can do here
+## Бында нимә эшләй алаһығыҙ
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **Өйрәнеү I18NT00000000007X** – обзор менән башлай һәм тиҙ башлау өсөн аңларға
+  сериялаштырыу моделе һәм байткод инструменттары.
+- **Ботстрап SDKs** – JavaScript һәм Rust өсөн тиҙ башлаусыларҙы күҙәтеп бөгөн; Питон,
+  Свифт, һәм Android етәкселәр уларҙы ҡушыласаҡ, сөнки рецепттар күсеп килә.
+- **Брауза API һылтанмалар** – I18NT00000000018X I18NT000000003X битендә һуңғы REST күрһәтә.
+  спецификацияһы, һәм конфигурация таблицалары һылтанма кире канон Markdown
+  сығанаҡтары.
+- **Әҙерләнеүҙе әҙерләү** – оператив йүнсел (телеметрия, ҡасаба, I18NT0000000017X .
+  өҫтәмәләр) I18NI000000022X порты һәм был урында 1800 й.
+  миграция үҫешә.
 
-## Current status
+## Ағымдағы статусы
 
-- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
-  hero/cards, and resource tiles that include the Norito Streaming summary.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
-  checks and CSP guards enforced by `buildSecurityHeaders`.
-- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
-  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
-  and the reference checklists before artifacts are published.
-- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
-  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
-  land here as they are authored.
+- ✅ Тема I18NT0000000001X v3 десант менән яңыртылған типография, градиент-двигателдәр
+  герой/карталар, һәм ресурс плиталар, улар I18NT000000008X Streaming резюмеһы инә.
+- ✅ Torii I18NT00000000004X плагин сымлы I18NI000000023X, ҡултамға снимок менән
+  чектар һәм CSP һаҡсылары I18NI000000024X тарафынан үтәлгән.
+- ✅ CI-ла алдан ҡарау һәм зонд ҡаплауы (`docs-portal-preview.yml` +
+  I18NI000000026X), хәҙер ҡапҡа стриминг doc, I18NT0000000011X caverstarts,
+  һәм артефакттар баҫылып сыҡҡансы һылтанма тикшерелгән исемлектәр.
+- ✅ I18NT0000000009X, I18NT000000012X, һәм SDK quickstarts плюс һылтанма бүлектәре тура эфирҙа.
+  ян панелендә; яңы импорт I18NI000000027X (стриминг, оркестрлаштырыу, runbooks)
+  ер бында улар авторы кеүек.
 
-## Getting involved
+##
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
-  `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- Урындағы үҫеш командалары өсөн I18NI000000028X ҡарағыҙ (I18NI000000029X,
+  I18NI000000030X, I18NI000000031X).
+- Йөкмәтке миграция бурыстары I18NI000000032X юл картаһы әйберҙәре менән бер рәттән күҙәтелә.
+  Иғәнә ҡабул ителә-порт бүлектәре I18NI000000033X һәм битте өҫтәй
+  ян панеленә тиклем.
+- Әгәр һеҙ генерацияланған артефакт өҫтәй (спектар, конфигурация таблицалары), документ төҙөү .
+  команда шулай буласаҡ өлөш индереүселәр уны еңел генә яңырта ала.

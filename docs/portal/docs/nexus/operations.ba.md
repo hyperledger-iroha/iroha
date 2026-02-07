@@ -10,85 +10,86 @@ translation_last_reviewed: 2026-02-07
 id: nexus-operations
 title: Nexus operations runbook
 description: Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`.
+translator: machine-google-reviewed
 ---
 
-Use this page as the quick-reference sibling of
-`docs/source/nexus_operations.md`. It distils the operational checklist, change
-management hooks, and telemetry coverage requirements that Nexus operators must
-follow.
+Был битте тиҙ белешмә туғаны итеп ҡулланығыҙ.
+`docs/source/nexus_operations.md`. Ул оператив тикшерелгән исемлекте дистилляциялай, үҙгәртә
+идара итеү ҡармаҡтары, һәм телеметрия ҡаплау талаптары, тип I18NT0000000002X операторҙары тейеш
+эйәрергә.
 
-## Lifecycle checklist
+## Йәшәү циклы тикшерелгән исемлек
 
-| Stage | Actions | Evidence |
-|-------|--------|----------|
-| Pre-flight | Verify release hashes/signatures, confirm `profile = "iroha3"`, and prepare config templates. | `scripts/select_release_profile.py` output, checksum log, signed manifest bundle. |
-| Catalog alignment | Update `[nexus]` catalog, routing policy, and DA thresholds per council-issued manifest, then capture `--trace-config`. | `irohad --sora --config … --trace-config` output stored with onboarding ticket. |
-| Smoke & cutover | Run `irohad --sora --config … --trace-config`, execute CLI smoke (`FindNetworkStatus`), validate telemetry exports, and request admission. | Smoke-test log + Alertmanager confirmation. |
-| Steady state | Monitor dashboards/alerts, rotate keys per governance cadence, and sync configs/runbooks whenever manifests change. | Quarterly review minutes, dashboard screenshots, rotation ticket IDs. |
+| Этап | Эштәр | Дәлилдәр |
+|------|---------|----------|
+| Алдан осоу | Тикшерергә сығарыу хештар/ҡултамсылар, раҫлау I18NI000000022Х, һәм әҙерләү өсөн конфигурация ҡалыптары. | `scripts/select_release_profile.py` сығыш, чемпионерҙар суммаһы журналы, ҡул ҡуйылған манифест өйөмө. |
+| Каталог тура килтереп | Яңыртыу I18NI0000000024X каталогы, маршрутлаштырыу сәйәсәте, һәм DA сиктәре совет тарафынан бирелгән манифест, һуңынан I18NI000000255X тотоу. | I18NI000000026X сығышы менән һаҡланған onboarding билет. |
+| Төтөн & өҙөк | `irohad --sora --config … --trace-config`, CLI төтөн башҡарыу (`FindNetworkStatus`), телеметрия экспортын раҫлау, һәм ҡабул итеүҙе һорай. | Төтөн-һынау журналы + Иҫкәртмәсенең раҫлауы. |
+| Тотороҡло дәүләт | Монитор приборҙар таҡталары/иҫкәртмәләр, идара итеү каденцияһына асҡыстарҙы әйләндереп, һәм синхронлаштырыу конфигурациялары/йүгереп, ҡасан үҙгәрә күренә. | Кварталь тикшерелгән минуттар, приборҙар панелендә скриншоттар, әйләнеш билет идентификаторҙары. |
 
-Detailed onboarding (key replacement, routing templates, release profile steps)
-remain in `docs/source/sora_nexus_operator_onboarding.md`.
+Ентекле onboarding (төп алмаштырыу, маршрутлаштырыу ҡалыптары, профиль аҙымдарын сығарыу)
+`docs/source/sora_nexus_operator_onboarding.md`-та ҡала.
 
-## Change management
+## Үҙгәрештәр менән идара итеү
 
-1. **Release updates** – track announcements in `status.md`/`roadmap.md`; attach
-   the onboarding checklist to every release PR.
-2. **Lane manifest changes** – verify signed bundles from the Space Directory and
-   archive them under `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Configuration deltas** – every `config/config.toml` change requires a ticket
-   referencing the lane/data-space. Store a redacted copy of the effective config
-   whenever nodes join or upgrade.
-4. **Rollback drills** – quarterly rehearse stop/restore/smoke procedures; log
-   outcomes under `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Compliance approvals** – private/CBDC lanes must secure compliance sign-off
-   before modifying DA policy or telemetry redaction knobs (see
+1. **Яңыртыуҙарҙы сығарыу** – I18NI000000030X/I18NI000000031X-та трек иғландар; беркетергә
+   onboarding тикшерелгән исемлек һәр релиз пиар.
+2. **Лейн манифест үҙгәрештәре** – йыһан каталогынан ҡул ҡуйылған өйөмдәрҙе раҫлағыҙ һәм
+   уларҙы I18NI000000032X буйынса архив.
+3. **Конфигурация дельтаһы** – һәр I18NI000000033X үҙгәрештәр билет талап итә .
+   һыҙат/мәғлүмәттәр-киңлеккә һылтанма яһау. Һөҙөмтәле конфигурацияның редакцияланған күсермәһен һаҡлағыҙ
+   ҡасан ғына төйөндәр ҡушыла йәки яңыртыу.
+4. **Роллбек күнекмәләр ** – квартал һайын репетиция туҡталыш/тергеҙеү/төтөн процедуралары; бүрәнә
+   һөҙөмтәләре буйынса I18NI000000034X.
+5. **Танытыу раҫлау ** – шәхси/CBDC һыҙаттары үтәү тейеш үтәү ҡул ҡуйыу-офф .
+   DA сәйәсәтен йәки телеметрияны редакция ручкаларын үҙгәртеү алдынан (ҡара:
    `docs/source/cbdc_lane_playbook.md`).
 
-## Telemetry & SLOs
+## Телеметрия & СЛО
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, plus
-  SDK-specific views (e.g., `android_operator_console.json`).
-- Alerts: `dashboards/alerts/nexus_audit_rules.yml` and Torii/Norito transport
-  rules (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metrics to watch:
-  - `nexus_lane_height{lane_id}` – alert on zero progress for three slots.
-  - `nexus_da_backlog_chunks{lane_id}` – alert above lane-specific thresholds
-    (default 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` – alert when P99 exceeds 900 ms
-    (public) or 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` – alert if 5-minute error
-    ratio >2 %.
-  - `telemetry_redaction_override_total` – Sev 2 immediately; ensure overrides
-    have compliance tickets.
-- Run the telemetry remediation checklist in
-  [Nexus telemetry remediation plan](./nexus-telemetry-remediation) at least
-  quarterly and attach the filled form to operations review notes.
+- Приборҙар таҡталары: I18NI000000036X, I18NI0000000037X, плюс
+  SDK-специфик ҡараштар (мәҫәлән, I18NI000000038X).
+- Иҫкәртмәләр: I18NI000000039X һәм I18NT0000000013X/I18NT000000001X транспорты
+  ҡағиҙәләре (I18NI000000040X).
+- ҡарарға метрика:
+  - `nexus_lane_height{lane_id}` – өс слот өсөн нуль алға китеш тураһында иҫкәртмә.
+  - I18NI000000042X – һыҙатҡа хас сиктәрҙән юғарыраҡ иҫкәртмә
+    ( 64 йәмәғәт / 8 шәхси).
+  - I18NI000000043X – P99 900мс артып киткәндә иҫкәртмә
+    (йәмәғәт) йәки 1200мс (шәхси).
+  - I18NI000000044X – 5 минутлыҡ хата булһа, иҫкәртмә
+    нисбәте >2%.
+  - I18NI000000045X – Sev2 шунда уҡ; өҫтөнлөктәрен тәьмин итеү
+    үтәлеше билеттары бар.
+- Телеметрияны үҙгәртеп ҡороу тикшерелгән исемлеген 2019 йылда эшләтеп ебәрегеҙ.
+  [I18NT0000000003X телеметрияны үҙгәртеп ҡороу планы] (./nexus-telemetry-remediation) кәмендә 1990 й.
+  квартал һайын һәм тултырылған форма беркетергә операциялар тикшерелгән иҫкәрмәләр.
 
-## Incident matrix
+## Инцидент матрицаһы
 
-| Severity | Definition | Response |
-|----------|------------|----------|
-| Sev 1 | Data-space isolation breach, settlement halt >15 min, or governance vote corruption. | Page Nexus Primary + Release Engineering + Compliance, freeze admission, collect artefacts, publish comms ≤60 min, RCA ≤5 business days. |
-| Sev 2 | Lane backlog SLA breach, telemetry blind spot >30 min, failed manifest rollout. | Page Nexus Primary + SRE, mitigate ≤4 h, file follow-ups within 2 business days. |
-| Sev 3 | Non-blocking drift (docs, alerts). | Log in tracker, schedule fix inside the sprint. |
+| Ауырлыҡ | Билдәләү | Яуап |
+|---------|------------|---------- |
+| Сев1 | Мәғлүмәттәр-киңлек изоляцияһы боҙоу, иҫәп-хисап туҡтау >15мин, йәки идара итеү тауыш коррупцияһы. | I18NT000000004X Примерация + Релиз инженерияһы + үтәү, туңдырыу ҡабул итеү, йыйыу артефакттар, баҫтырып сығарыу комм ≤60мин, RCA ≤5 эш көнө. |
+| Сев2 | Лейн артҡы өлөшө SLA боҙоу, телеметрия һуҡыр тап >30мин, уңышһыҙ манифест таратыу. | I18NT000000005X Беренсел + SRE, йомшартыу ≤4h, файл күҙәтеүҙәре 2 эш көнө эсендә. |
+| Sev3 | Блокацияһыҙ дрейф (докторҙар, иҫкәртмәләр). | Трекер журналы, график төҙәтеү эсендә спринт. |
 
-Incident tickets must record affected lane/data-space IDs, manifest hashes,
-timeline, supporting metrics/logs, and follow-up tasks/owners.
+Инцидент билеттары теркәлергә тейеш ҡағылған һыҙат/мәғлүмәттәр-киңлек идентификаторҙары, асыҡ хеш,
+ваҡыт һыҙығы, ярҙамсы метрика/логтар, һәм эҙмә-эҙлекле бурыстар/хужалары.
 
-## Evidence archive
+## Дәлилдәр архивы
 
-- Store bundles/manifests/telemetry exports under `artifacts/nexus/<lane>/<date>/`.
-- Keep redacted configs + `--trace-config` output for each release.
-- Attach council minutes + signed decisions when config or manifest changes land.
-- Preserve weekly Prometheus snapshots relevant to Nexus metrics for 12 months.
-- Record runbook edits in `docs/source/project_tracker/nexus_config_deltas/README.md`
-  so auditors know when responsibilities changed.
+- I18NI000000046X буйынса магазин өйөмдәре/манифест/телеметрия экспорты.
+- Һәр релиз өсөн редакцияланған конфигтар + I18NI000000047X сығышын дауам итегеҙ.
+- Беркетергә совет протоколе + ҡул ҡуйҙы ҡарарҙар ҡабул иткәндә йәки үҙгәргән үҙгәрештәр ер.
+- 12 ай дауамында I18NT00000000006X метрикаһына ҡағылышлы I18NT000000000000000000000000000000000000000000-гә тиклем.
+- I18NI000000048X-тағы runbook редакциялары яҙып алыу
+  тимәк, аудиторҙар белә, ҡасан яуаплылыҡ үҙгәргән.
 
-## Related material
+## Бәйләнешле материал
 
-- Overview: [Nexus overview](./nexus-overview)
-- Specification: [Nexus spec](./nexus-spec)
-- Lane geometry: [Nexus lane model](./nexus-lane-model)
-- Transition & routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Operator onboarding: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Telemetry remediation: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- Обзор: [I18NT000000007X дөйөмләштереү] (./nexus-overview)
+- Спецификация: [I18NT0000000008X спецификацияһы] (./nexus-spec)
+- Лейн геометрияһы: [I18NT0000000009X һыҙат моделе] (./nexus-lane-model)
+- Күсеш һәм маршрутлаштырыу шашкалар: [I18NT000000010X күсеү иҫкәрмәләр] (./nexus-transition-notes)
+- Оператор onboarding: [Сора I18NT00000000011X операторы onboarding](./nexus-operator-onboarding)
+- Телеметрияны төҙәтеү: [I18NT000000012X телеметрияны төҙәтеү планы] (./nexus-telemetry-remediation)

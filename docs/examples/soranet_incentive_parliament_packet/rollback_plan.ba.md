@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 47b6ac4be21202943d4145c604557a2ee50823acc139633dd6cf690a81cbce8e
 source_last_modified: "2026-01-22T14:35:37.885394+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Relay Incentive Rollback Plan
+# Эстафет дәртләндерә торған роллбек планы
 
-Use this playbook to disable automatic relay payouts if governance requests a
-halt or if the telemetry guardrails fire.
+Был playbook ҡулланыу өсөн автоматик реле түләүҙәрҙе өҙөү өсөн, әгәр идара итеү үтенесе а
+туҡтатып йәки телеметрия ҡоршауҙары ут.
 
-1. **Freeze automation.** Stop the incentives daemon on every orchestrator host
-   (`systemctl stop soranet-incentives.service` or the equivalent container
-   deployment) and confirm the process is no longer running.
-2. **Drain pending instructions.** Run
+1. **Автоматлаштырыуҙы туҡландырыу.** Һәр оркестр хужаһында стимулдарҙы туҡтатығыҙ.
+   (`systemctl stop soranet-incentives.service` йәки эквивалентлы һауыт
+   таратыу) һәм процестың башҡа эшләмәүен раҫлау.
+2. **Дренажға инструкцияларҙы көтөп.** Йүгерергә
    `iroha app sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
-   to ensure there are no outstanding payout instructions. Archive the resulting
-   Norito payloads for audit.
-3. **Revoke governance approval.** Edit `reward_config.json`, set
-   `"budget_approval_id": null`, and redeploy the configuration with
-   `iroha app sorafs incentives service init` (or `update-config` if running a
-   long-lived daemon). The payout engine now fails closed with
-   `MissingBudgetApprovalId`, so the daemon refuses to mint payouts until a new
-   approval hash is restored. Record the git commit and the SHA-256 of the
-   modified config in the incident log.
-4. **Notify Sora Parliament.** Attach the drained payout ledger, the shadow-run
-   report, and a short incident summary. Parliament minutes must note the hash
-   of the revoked configuration and the time the daemon was halted.
-5. **Rollback validation.** Keep the daemon disabled until:
-   - telemetry alerts (`soranet_incentives_rules.yml`) are green for >=24 h,
-   - the treasury reconciliation report shows zero missing transfers, and
-   - Parliament approves a new budget hash.
+   тәьмин итеү өсөн, унда бер ниндәй ҙә түләнмәгән түләү күрһәтмәләре юҡ. Архивланған һөҙөмтәлә
+   I18NT00000000000 аудит өсөн файҙалы йөктәр.
+3. **Мөхәрәте менән идара итеүҙе кире ҡағыу.** Ревок
+   I18NI000000004X, һәм конфигурацияны үҙгәртеп ҡороу менән
+   I18NI0000000005X (йәки I18NI000000006X, әгәр ҙә эшләһә,
+   оҙон ғүмерле демон). Түләү двигателе хәҙер 2012 йылда ябыла.
+   I18NI000000007X, шуға күрә демон яңы тиклем түләүҙәрҙән баш тарта.
+   раҫлау хеш тергеҙелә. Яҙма git ҡылған һәм SHA-256 .
+   үҙгәртелгән конфиг инцидент журналында.
+4. **Сора парламенты тураһында хәбәр итеү.** Беркетелгән дренажланған түләү леджеры, күләгә-йүгерергә
+   отчет, һәм ҡыҫҡа инцидент резюме. Парламент минуттары хеш билдәләргә тейеш
+   конфигурацияның кире ҡағыуының һәм демондың туҡтаған ваҡытының.
+5. **Роллбек раҫлау.** Демонды өҙөүгә тиклем:
+   - телеметрия иҫкәртмәләре (`soranet_incentives_rules.yml`) йәшел төҫтә >=24 сәғәт,
+   - ҡаҙна ярашыу тураһында отчет нуль юғалған күсермәләрен күрһәтә, ә
+   — Парламент яңы бюджет хешын хуплай.
 
-Once governance re-issues a budget approval hash, update `reward_config.json`
-with the new digest, re-run the `shadow-run` command on the latest telemetry,
-and restart the incentives daemon.
+Бер тапҡыр идара итеү яңынан бюджет раҫлау хеш бирә, яңыртыу I18NI000000009X .
+яңы һеңдереү менән, яңынан идара итеү I18NI00000000010X командаһы һуңғы телеметрия,
+һәм стимулдарҙы ҡабыҙырға демон.

@@ -8,80 +8,82 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 feedback & telemetry log
 sidebar_label: W1 feedback log
 description: Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This log keeps the invite roster, telemetry checkpoints, and reviewer feedback for the
-**W1 partner preview** that accompanies the acceptance tasks in
-[`preview-feedback/w1/plan.md`](./plan.md) and the wave tracker entry in
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Update it whenever an invite
-is sent, telemetry snapshot recorded, or feedback item triaged so governance reviewers can replay
-the evidence without chasing external tickets.
+Был журнал саҡыра саҡырыу исемлеге, телеметрия тикшерелгән пункттар, һәм рецензент кире бәйләнеш өсөн
+**W1 партнер алдан ҡарау**, тип ҡабул итеү бурыстарын оҙатып 2019 йылда.
+[I18NI000000013X] (I18NU000000010X) һәм тулҡын трекер инеүе 2012 йылда.
+[`../../preview-invite-tracker.md`] (../../preview-invite-tracker.md). Яңыртыу, ҡасан да булһа саҡырыу .
+ебәрелә, телеметрия снимок теркәлгән, йәки кире бәйләнеш элемент трипированный шулай идара итеү рецензенттар реплей мөмкин
+тышҡы билеттарҙы ҡыумайынса дәлилдәр.
 
-## Cohort roster
+## Когорта исемлеге
 
-| Partner ID | Request ticket | NDA received | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
+| Партнер идентификаторы | Закон билет | NDA алды | Саҡырыу ебәрелгән (UTC) | Ак/беренсе логин (UTC) | Статус | Иҫкәрмәләр |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Completed 2025-04-26 | sorafs-op-01; focused on orchestrator doc parity evidence. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Completed 2025-04-26 | sorafs-op-02; validated Norito/telemetry cross-links. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Completed 2025-04-26 | sorafs-op-03; ran multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Completed 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Completed 2025-04-26 | torii-int-02; paired on Try it screenshot update (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Completed 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Completed 2025-04-26 | sdk-partner-02; compliance cleared 2025-04-11, focused on Connect/telemetry notes. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Completed 2025-04-26 | gateway-ops-01; audited gateway ops guide + anonymised Try it proxy flow. |
+| партнер-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ 2025-04-26 тамамланды | сора-оп-01; оркестр doc паритет дәлилдәренә йүнәлтелгән. |
+| партнер-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ 2025-04-26 тамамланды | сора-оп-02; раҫланған I18NT000000000000е/телеметрия һылтанмалар. |
+| партнер-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ 2025-04-26 тамамланды | сора-оп-03; йүгерҙе күп сығанаҡлы авариялар күнекмәләре. |
+| партнер-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ 2025-04-26 тамамланды | тори-инт-01; Torii `/v1/pipeline`X + Аш-һыу китабы тикшерелеүен һынап ҡарағыҙ. |
+| партнер-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ 2025-04-26 тамамланды | тори-инт-02; парлы скриншот яңыртыу һынап ҡарағыҙ (док-превизор/w1 #2). |
+| партнер-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ 2025-04-26 тамамланды | sdk-партнер-01; JS/Swift аш-һыу китабы кире бәйләнеш + ISO күпер аҡыл тикшерергә. |
+| партнер-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ 2025-04-26 тамамланды | sdk-партнер-02; үтәлеше 2025-04-11-се, йүнәлтелгән Connect/телеметрия иҫкәрмәләренә йүнәлтелгән. |
+| партнер-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ 2025-04-26 тамамланды | шлюз-опс-01; аудит шлюз опс етәксеһе + анонимлаштырылған тырышып ҡарағыҙ, уны прокси ағымы. |
 
-Populate the **Invite sent** and **Ack** timestamps as soon as the outbound email is issued.
-Anchor the times to the UTC schedule defined in the W1 plan.
+**Саҡытыусы ебәрелгән** һәм **Ак** ваҡыт маркалары тураһында һүҙ барғанда, тиҙ генә сығыу электрон почтаһы сығарыла.
+W1 планында билдәләнгән UTC графигына ваҡыттарҙы якорь.
 
-## Telemetry checkpoints
+## Телеметрия тикшерелгән пункттары
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
+| Ваҡыт тамғаһы (UTC) | Приборҙар таҡталары / зондтар | Хужа | Һөҙөмтә | Артефакт |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards above + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards above + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Док/ДевРель + Ops | ✅ Барыһы ла йәшел | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` стенограммаһы | Ops | ✅ Институт | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | I18NI000000030X, `TryItProxyErrors`, I18NI000000032X, I18NI000000033X | Док/ДевРель + Ops | ✅ Алдан саҡырыу снимок, регрессиялар юҡ | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | Приборҙар таҡталары өҫтөндә + Тырышып ҡарағыҙ, уны прокси латентность дифф | Док/ДевРел лидеры | ✅ Урта чек үткән (0 иҫкәртмә; Уны һынап ҡарағыҙ латентлыҡ p95=410мс) | I18NI000000035X |
+| 2025-04-26 16:25 | Өҫтәге приборҙар таҡталары + сығыу зонды | Док/ДевРель + идара итеү бәйләнеше | ✅ Сығыу снимок, нуль иҫ киткес иҫкәртмәләр | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Daily office-hour samples (2025-04-13 → 2025-04-25) are bundled as NDJSON + PNG exports under
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` with filenames
-`docs-preview-integrity-<date>.json` and corresponding screenshots.
+Көндәлек офис-сәғәт өлгөләре (2025-04-13 → 2025-04-25) NDJSON + PNG экспорты булараҡ йыйылған.
+I18NI0000000037X файл исемдәре менән
+`docs-preview-integrity-<date>.json` һәм тейешле скриншоттар.
 
-## Feedback & issue log
+## Кире бәйләнеш & мәсьәлә журналы
 
-Use this table to summarise reviewer-submitted findings. Link each entry to the GitHub/discuss
-ticket plus the structured form captured via
-[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
+Был таблицаны ҡулланып, рецензент биргән табыштарҙы дөйөмләштерергә. Һәр яҙма GitHub/фекер алышыуға һылтанма
+билет плюс структуралы форма аша тотолған
+[I18NI000000039X] (../../../../../examples/docs_preview_feedback_form.md).
 
-| Reference | Severity | Owner | Status | Notes |
+| Һылтанма | Ауырлыҡ | Хужа | Статус | Иҫкәрмәләр |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Clarified Try it nav wording + sidebar anchor (`docs/source/sorafs/tryit.md` updated with new label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Refreshed Try it screenshot + caption per reviewer request; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 Closed | Remaining comments were Q&A-only; captured in each partner’s feedback form under `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | Түбән | Док-ядро-02 | ✅ 2025-04-18 хәл ителгән | Асыҡланған тырышып ҡарағыҙ, уны nav формулировка + ян панелендә якорь (`docs/source/sorafs/tryit.md` яңы ярлыҡ менән яңыртылған). |
+| `docs-preview/w1 #2` | Түбән | Док-ядро-03 | ✅ 2025-04-19 хәл ителгән | Яңыртылған һынап ҡарағыҙ, уны скриншот + титул бер рецензент запросы; артефакт `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| — | Инфо | Док/ДевРел лидеры | 🟢 Ябыҡ | Ҡалған комментарийҙар Q&A-тик; һәр партнерҙа әсирлеккә’ кире бәйләнеш формаһында I18NI000000044X. |
 
-## Knowledge check & survey tracking
+## Белем тикшерергә & тикшерелгән күҙәтеү
 
-1. Record quiz scores (target ≥90 %) for every reviewer; attach the exported CSV alongside the
-   invite artefacts.
-2. Collect the qualitative survey answers captured with the feedback form template and mirror them
-   under `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Schedule remediation calls for anyone scoring below threshold and log them in this file.
+1. Рекорд викторина баллдары (маҡсат ≥90%) һәр рецензент өсөн; экспортланған КСВ-ны беркетергә
+   артефакттарҙы саҡырырға.
+2. Һайлау сифатлы тикшерелгән яуаптар менән тотолған кире бәйләнеш формаһында шаблон һәм уларҙы көҙгө
+   I18NI000000045X буйынса.
+3. Графикты төҙәтеү өсөн өндәй, һәр кем өсөн гол аҫтында порог һәм уларҙы был файлға теркәү.
 
-All eight reviewers scored ≥94 % on the knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No remediation calls
-were required; survey exports for each partner live under
+Һигеҙ рецензенттың барыһы ла белемде тикшерергә ≥94% балл йыйҙы (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv` X). Бер ниндәй ҙә ремедиация шылтыратыуҙары
+кәрәк ине; тикшерелгән экспорт өсөн һәр партнер өсөн йәшәй йәш
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Artefact inventory
+## Артефакт инвентаризацияһы
 
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: place reviewer-specific folders under
+- Алдан ҡарау дескрипторы/чексум өйөмө: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`.
+- зонд + һылтанма-тикшерелгән резюме: I18NI000000049XX
+- Һынап ҡарағыҙ, ул прокси үҙгәрештәр журналы: I18NI000000050X
+- Телеметрия экспорты: I18NI000000051X
+- Көндәлек офис-сәғәт телеметрия пакеты: I18NI000000052X
+- Кире бәйләнеш + тикшерелгән экспорт: урын рецензент-конкрет папкалар буйынса .
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV and summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- Белем чек CSV һәм резюме: I18NI000000054X
 
-Keep the inventory in sync with the tracker issue. Attach hashes when copying artefacts to the
-governance ticket so auditors can verify the files without shell access.
+Инвентарь менән синхронизациялау трекер мәсьәләһе. Һөжүм итеү хештар ҡасан күсерергә артефакттар .
+идара итеү билеты шулай аудиторҙар раҫлай ала файлдарҙы ҡабырсаҡһыҙ инеү.

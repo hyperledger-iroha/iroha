@@ -4,64 +4,62 @@ direction: ltr
 source: docs/portal/docs/devportal/reviewer-onboarding.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Onboarding de revisores do preview
+# Onboarding de revisores hacer vista previa
 
-## Visao geral
+## Visao general
 
-DOCS-SORA acompanha um lancamento em fases do portal de desenvolvedores. Builds com gate de checksum
-(`npm run serve`) e fluxos Try it reforcados destravam o proximo marco:
-onboarding de revisores validados antes de o preview publico se abrir amplamente. Este guia
-descreve como coletar solicitacoes, verificar elegibilidade, provisionar acesso e fazer offboarding
-de participantes com seguranca. Consulte o
-[preview invite flow](./preview-invite-flow.md) para o planejamento de coortes, a
-cadencia de convites e exports de telemetria; os passos abaixo focam nas acoes
-a tomar quando um revisor ja foi selecionado.
+DOCS-SORA acompaña un lanzamiento en fases del portal de desarrolladores. Construye con gate de checksum
+(`npm run serve`) e fluxos Pruébalo reforcados destravam o proximo marco:
+onboarding de revisores validados antes de o vista previa pública se abrirá ampliamente. Esta guia
+descreve como coletar solicitudes, verificar elegibilidade, provisionar acesso y fazer offboarding
+de participantes com seguranca. Consulta o
+[vista previa del flujo de invitación](./preview-invite-flow.md) para el planeamiento de coortes, a
+cadencia de invitaciones y exportaciones de telemetría; os passos abaixo focam nas acoes
+a tomar quando um revisor ja foi seleccionado.
 
-- **Escopo:** revisores que precisam de acesso ao preview de docs (`docs-preview.sora`,
-  builds do GitHub Pages ou bundles de SoraFS) antes de GA.
-- **Fora do escopo:** operadores de Torii ou SoraFS (cobertos por seus proprios kits de onboarding)
+- **Escopo:** revisores que necesitan acceso a la vista previa de documentos (`docs-preview.sora`,
+  compilaciones de páginas de GitHub o paquetes de SoraFS) antes de GA.
+- **Foro do escopo:** operadores de Torii o SoraFS (cobertos por sus propios kits de onboarding)
   e implantacoes do portal em producao (ver
   [`devportal/deploy-guide`](./deploy-guide.md)).
 
-## Papeis e prerequisitos
-
-| Papel | Objetivos tipicos | Artefatos requeridos | Notas |
+## Papeles y requisitos previos| Papel | Objetivos típicos | Artefatos requeridos | Notas |
 | --- | --- | --- | --- |
-| Core maintainer | Verificar novos guias, executar smoke tests. | GitHub handle, contato Matrix, CLA assinada em arquivo. | Geralmente ja esta no time GitHub `docs-preview`; ainda assim registre uma solicitacao para que o acesso seja auditavel. |
-| Partner reviewer | Validar snippets de SDK ou conteudo de governanca antes do release publico. | Email corporativo, POC legal, termos de preview assinados. | Deve reconhecer requisitos de telemetria + tratamento de dados. |
-| Community volunteer | Fornecer feedback de usabilidade sobre guias. | GitHub handle, contato preferido, fuso horario, aceitacao do CoC. | Mantenha coortes pequenas; priorize revisores que assinaram o acordo de contribuicao. |
+| Mantenedor principal | Verificar novos guías, ejecutar pruebas de humo. | Identificador de GitHub, contacto Matrix, CLA asociado en archivo. | Generalmente ja esta no hay tiempo GitHub `docs-preview`; Aún así registre una solicitud para que el acceso seja auditavel. |
+| Revisor socio | Validar fragmentos de SDK o contenido de gobierno antes de publicarlos. | Email corporativo, POC legal, termos de vista previa asinados. | Deve reconhecer requisitos de telemetria + tratamento de datos. |
+| Voluntario comunitario | Fornecer feedback de usabilidade sobre guías. | Mango de GitHub, contacto preferido, fuso horario, aceitacao do CoC. | Mantenha coortes pequeñas; priorize revisores que assinaram o acordo de contribuicao. |
 
-Todos os tipos de revisores devem:
+Todos los tipos de revisores deben ser:
 
-1. Reconhecer a politica de uso aceitavel para artefatos de preview.
+1. Reconhecer a politica de uso aceitavel para artefactos de vista previa.
 2. Ler os apendices de seguranca/observabilidade
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md)).
-3. Concordar em executar `docs/portal/scripts/preview_verify.sh` antes de servir qualquer
-   snapshot localmente.
+3. Concordar em ejecutar `docs/portal/scripts/preview_verify.sh` antes de servir qualquer
+   instantánea localmente.
 
-## Fluxo de intake
-
-1. Pedir ao solicitante que preencha o
+## Flujo de ingesta1. Pedir ao solicitante que preencha o
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   formulario (ou copiar/colar em uma issue). Capturar ao menos: identidade, metodo de contato,
-   GitHub handle, datas previstas de revisao e confirmacao de que os docs de seguranca foram lidos.
-2. Registrar a solicitacao no tracker `docs-preview` (issue GitHub ou ticket de governanca)
-   e atribuir um aprovador.
-3. Validar prerequisitos:
-   - CLA / acordo de contribuicao em arquivo (ou referencia de contrato partner).
+   formulario (ou copiar/colar en un problema). Capturar ao menos: identidade, método de contacto,
+   Maneja GitHub, datos previstos de revisión y confirmación de que os docs de seguranca foram lidos.
+2. Registre una solicitud sin rastreador `docs-preview` (emita GitHub o ticket de gobierno)
+   e atribuir un aprobador.
+3. Validar requisitos previos:
+   - CLA / acuerdo de contribución en archivo (ou referencia de contrato de socio).
    - Reconhecimento de uso aceitavel armazenado na solicitacao.
-   - Avaliacao de risco completa (por exemplo, revisores partner aprovados pelo Legal).
-4. O aprovador faz o sign-off na solicitacao e vincula a issue de tracking a qualquer entrada de
-   change-management (exemplo: `DOCS-SORA-Preview-####`).
+   - Avaliacao de risco completa (por ejemplo, socios revisores aprovados pelo Legal).
+4. O aprovador faz o sign-off na solicitacao e vincula a issues de tracking a qualquer entrada de
+   gestión de cambios (ejemplo: `DOCS-SORA-Preview-####`).
 
-## Provisionamento e ferramentas
+## Aprovisionamiento y ferramentas
 
-1. **Compartilhar artefatos** - Fornecer o descriptor + arquivo de preview mais recente do workflow
-   de CI ou do pin SoraFS (artefato `docs-portal-preview`). Lembrar os revisores de executar:
+1. **Compartilhar artefatos** - Fornecer o descriptor + archivo de vista previa más reciente del flujo de trabajo
+   de CI o pin SoraFS (artefato `docs-portal-preview`). Lembrar os revisores de ejecutar:
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -70,59 +68,53 @@ Todos os tipos de revisores devem:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Servir com enforcement de checksum** - Apontar os revisores para o comando com gate de checksum:
+2. **Servir com cumplimiento de checksum** - Apontar os revisores para o comando com gate de checksum:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
    Isso reutiliza `scripts/serve-verified-preview.mjs` para que nenhum build nao verificado
-   seja iniciado por acidente.
+   seja iniciado por accidente.3. **Conceder acceso a GitHub (opcional)** - Se revisores precisarem de sucursales nao publicadas,
+   Adiciona-los ao time GitHub `docs-preview` durante a revisao e registra a mudanca de membresía
+   na solicitaçao.
 
-3. **Conceder acesso GitHub (opcional)** - Se revisores precisarem de branches nao publicadas,
-   adiciona-los ao time GitHub `docs-preview` durante a revisao e registrar a mudanca de membership
-   na solicitacao.
-
-4. **Comunicar canais de suporte** - Compartilhar o contato on-call (Matrix/Slack) e o procedimento
+4. **Comunicar canais de suporte** - Compartir el contacto de guardia (Matrix/Slack) y el procedimiento
    de incidentes de [`incident-runbooks`](./incident-runbooks.md).
 
-5. **Telemetria + feedback** - Lembrar os revisores que analytics anonimizada e coletada
-   (ver [`observability`](./observability.md)). Fornecer o formulario de feedback ou template de issue
-   citado no convite e registrar o evento com o helper
-   [`preview-feedback-log`](./preview-feedback-log) para manter o resumo da onda atualizado.
+5. **Telemetria + feedback** - Lembrar os revisores que analítica anonimizada y coletada
+   (ver [`observability`](./observability.md)). Fornecer o formulario de comentarios o plantilla de problema
+   citado no convite e registrador o evento com o ayudante
+   [`preview-feedback-log`](./preview-feedback-log) para mantener el resumen de la onda actualizado.
 
-## Checklist do revisor
+## Lista de verificación del revisor
 
-Antes de acessar o preview, revisores devem completar:
+Antes de acceder a la vista previa, los revisores deben completar:
 
-1. Verificar os artefatos baixados (`preview_verify.sh`).
-2. Iniciar o portal via `npm run serve` (ou `serve:verified`) para garantir que o guard de checksum esta ativo.
+1. Verificar os artefactos bajos (`preview_verify.sh`).
+2. Inicie el portal a través de `npm run serve` (o `serve:verified`) para garantizar que o guard de checksum está activo.
 3. Ler as notas de seguranca e observabilidade vinculadas acima.
-4. Testar a console OAuth/Try it usando device-code login (se aplicavel) e evitar reutilizar tokens de producao.
+4. Pruebe una consola OAuth/Pruébelo usando el inicio de sesión con código de dispositivo (se aplica) y evite reutilizar tokens de producción.
 5. Registrar achados no tracker acordado (issue, doc compartilhado ou formulario) e taguea-los com
-   o tag de release do preview.
+   o etiqueta de lanzamiento hacer vista previa.
 
-## Responsabilidades de maintainers e offboarding
-
-| Fase | Acoes |
+## Responsabilidades de mantenedores y offboarding| Fase | Acoes |
 | --- | --- |
-| Kickoff | Confirmar que a checklist de intake esta anexada a solicitacao, compartilhar artefatos + instrucoes, adicionar uma entrada `invite-sent` via [`preview-feedback-log`](./preview-feedback-log), e agendar um sync de meio periodo se a revisao durar mais de uma semana. |
-| Monitoring | Monitorar telemetria de preview (procure trafego Try it incomum, falhas de probe) e seguir o runbook de incidentes se algo suspeito ocorrer. Registrar eventos `feedback-submitted`/`issue-opened` conforme os achados chegarem para manter as metricas da onda precisas. |
-| Offboarding | Revogar acesso temporario a GitHub ou SoraFS, registrar `access-revoked`, arquivar a solicitacao (incluir resumo de feedback + acoes pendentes), e atualizar o registro de revisores. Solicitar ao revisor que remova builds locais e anexar o digest gerado a partir de [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| Inicio | Confirmar que una lista de verificación de admisión está anexada a solicitud, compartir artefatos + instrucciones, agregar una entrada `invite-sent` vía [`preview-feedback-log`](./preview-feedback-log), y agendar una sincronización de meio período se a revisaro durará más de una semana. |
+| Monitoreo | Monitorear telemetría de vista previa (procure trafego Try it incomum, falhas de probe) y seguir el runbook de incidentes se algo sospechoso ocorrer. Registrar eventos `feedback-submitted`/`issue-opened` conforme os achados chegarem para manter as metrics da onda precisas. |
+| Baja de embarque | Revogar acesso temporario a GitHub o SoraFS, registrar `access-revoked`, archivar una solicitud (incluir resumo de feedback + acoes pendentes), y actualizar el registro de revisores. Solicitar al revisor que elimine las compilaciones locales y anexar el resumen generado a partir de [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
 
-Use o mesmo processo ao rotacionar revisores entre ondas. Manter o rastro no repo (issue + templates)
-ajuda o DOCS-SORA a permanecer auditavel e permite que a governanca confirme que o acesso de preview
-seguiu os controles documentados.
+Utilice el mismo proceso para rotar revisores entre ondas. Manter o rastro no repo (edición + plantillas)
+ajuda o DOCS-SORA a permanecer auditavel y permite que un gobierno confirme que o acceso de vista previa
+siga los controles documentados.
 
-## Templates de convite e tracking
-
-- Inicie todo outreach com o arquivo
+## Plantillas de invitación y seguimiento- Inicia toda la divulgación con el archivo.
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md).
-  Ele captura o minimo de linguagem legal, instrucoes de checksum de preview e a expectativa de que
+  La captura del mínimo de idioma legal, instrucciones de suma de verificación de vista previa y una expectativa de que
   revisores reconhecam a politica de uso aceitavel.
-- Ao editar o template, substitua os placeholders de `<preview_tag>`, `<request_ticket>` e canais de contato.
-  Guarde uma copia da mensagem final no ticket de intake para que revisores, aprovadores e auditores possam
-  referenciar o texto exato enviado.
-- Depois de enviar o convite, atualize a planilha de tracking ou issue com o timestamp `invite_sent_at` e a data
-  de encerramento esperada para que o relatorio
-  [preview invite flow](./preview-invite-flow.md) possa identificar a coorte automaticamente.
+- Para editar la plantilla, sustituye los marcadores de posición de `<preview_tag>`, `<request_ticket>` y canales de contacto.
+  Guarde una copia del mensaje final sin ticket de admisión para que revisores, aprovadores y auditores puedan
+  referenciar o texto exacto enviado.
+- Después de enviar o invitar, actualizar un plan de seguimiento o emitir con la marca de tiempo `invite_sent_at` y un dato.
+  de encerramento esperado para que o relatorio
+  [vista previa del flujo de invitación](./preview-invite-flow.md) se puede identificar una cohorte automáticamente.

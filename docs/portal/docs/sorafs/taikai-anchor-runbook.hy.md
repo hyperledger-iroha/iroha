@@ -7,58 +7,59 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 50261b1f3173cd3916b29c81e85cc92ed8c14c38a0e0296be38397fe9b5c0596
 source_last_modified: "2025-12-29T18:16:35.204852+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Taikai Anchor Observability Runbook
 
-This portal copy mirrors the canonical runbook in
-[`docs/source/taikai_anchor_monitoring.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/taikai_anchor_monitoring.md).
-Use it when rehearsing SN13-C routing-manifest (TRM) anchors so SoraFS/SoraNet
-operators can correlate spool artefacts, Prometheus telemetry, and governance
-evidence without leaving the portal preview build.
+Այս պորտալի պատճենը արտացոլում է կանոնական մատյանը
+[`docs/source/taikai_anchor_monitoring.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/taikai_anchor_monitoring.md):
+Օգտագործեք այն SN13-C երթուղային մանիֆեստի (TRM) խարիսխները կրկնելիս, որպեսզի SoraFS/SoraNet
+օպերատորները կարող են փոխկապակցել կծիկի արտեֆակտները, Prometheus հեռաչափությունը և կառավարումը
+ապացույցներ՝ առանց պորտալի նախադիտման կառուցումը թողնելու:
 
-## Scope & Owners
+## Շրջանակ և սեփականատերեր
 
-- **Program:** SN13-C — Taikai manifests & SoraNS anchors.
-- **Owners:** Media Platform WG, DA Program, Networking TL, Docs/DevRel.
-- **Goal:** Provide a deterministic playbook for Sev 1/Sev 2 alerts, telemetry
-  validation, and evidence capture while Taikai routing manifests roll forward
-  across aliases.
+- **Ծրագիր.** SN13-C — Taikai-ի դրսևորումներ և SoraNS խարիսխներ:
+- **Սեփականատերեր.** Media Platform WG, DA Program, Networking TL, Docs/DevRel:
+- ** Նպատակ. ** Տրամադրել դետերմինիստական խաղագիրք Sev1/Sev2 ահազանգերի, հեռաչափության համար
+  վավերացում և ապացույցների հավաքում, մինչ Taikai երթուղիների դրսևորումները առաջ են շարժվում
+  փոխանունների միջով:
 
-## Quickstart (Sev 1/Sev 2)
+## Արագ մեկնարկ (Sev1/Sev2)
 
-1. **Capture spool artefacts** — copy the latest
-   `taikai-anchor-request-*.json`, `taikai-trm-state-*.json`, and
-   `taikai-lineage-*.json` files from
-   `config.da_ingest.manifest_store_dir/taikai/` before restarting workers.
-2. **Dump `/status` telemetry** — record the
-   `telemetry.taikai_alias_rotations` array to prove which manifest window is
-   active:
+1. **Սպանել կծիկի արտեֆակտները** — պատճենել վերջինը
+   `taikai-anchor-request-*.json`, `taikai-trm-state-*.json` և
+   `taikai-lineage-*.json` ֆայլեր
+   `config.da_ingest.manifest_store_dir/taikai/` նախքան աշխատողներին վերագործարկելը:
+2. **Թափել `/status` հեռաչափությունը** — գրանցել
+   `telemetry.taikai_alias_rotations` զանգված՝ ապացուցելու, թե որն է մանիֆեստի պատուհանը
+   ակտիվ:
    ```bash
    curl -sSf "$TORII/status" | jq '.telemetry.taikai_alias_rotations'
    ```
-3. **Check dashboards and alerts** — load
-   `dashboards/grafana/taikai_viewer.json` (cluster + stream filters) and note
-   whether any rules in
-   `dashboards/alerts/taikai_viewer_rules.yml` fired (`TaikaiLiveEdgeDrift`,
-   `TaikaiIngestFailure`, `TaikaiCekRotationLag`, SoraFS proof-health events).
-4. **Inspect Prometheus** — run the queries in §“Metric reference” to confirm
-   ingest latency/drift and alias-rotation counters behave as expected. Escalate
-   if `taikai_trm_alias_rotations_total` stalls for multiple windows or if
-   error counters increase.
+3. **Ստուգեք վահանակները և ազդանշանները** — բեռնել
+   `dashboards/grafana/taikai_viewer.json` (կլաստեր + հոսքի զտիչներ) և նշում
+   արդյոք որևէ կանոն կա
+   `dashboards/alerts/taikai_viewer_rules.yml` կրակված (`TaikaiLiveEdgeDrift`,
+   `TaikaiIngestFailure`, `TaikaiCekRotationLag`, SoraFS ապացույց-առողջական իրադարձություններ):
+4. **Ստուգեք Prometheus** — գործարկեք հարցումները §«Մետրական հղում»՝ հաստատելու համար
+   ingest latency/drift և alias-rotation հաշվիչներն իրենց պահում են այնպես, ինչպես սպասվում էր: Էսկալացիա
+   եթե `taikai_trm_alias_rotations_total`-ը փակ է մի քանի պատուհանների համար, կամ եթե
+   սխալների հաշվիչներն ավելանում են:
 
-## Metric reference
+## Մետրային հղում
 
-| Metric | Purpose |
+| Մետրական | Նպատակը |
 | --- | --- |
-| `taikai_ingest_segment_latency_ms` | CMAF ingest latency histogram per cluster/stream (target: p95 < 750 ms, p99 < 900 ms). |
-| `taikai_ingest_live_edge_drift_ms` | Live-edge drift between encoder and anchor workers (pages at p99 > 1.5 s for 10 min). |
-| `taikai_ingest_segment_errors_total{reason}` | Error counters by reason (`decode`, `manifest_mismatch`, `lineage_replay`, …). Any increase triggers `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Increments whenever `/v1/da/ingest` accepts a new TRM for an alias; use `rate()` to validate rotation cadence. |
-| `/status → telemetry.taikai_alias_rotations[]` | JSON snapshot with `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total`, and timestamps for evidence bundles. |
-| `taikai_viewer_*` (rebuffer, CEK rotation age, PQ health, alerts) | Viewer-side KPIs to ensure CEK rotation + PQ circuits remain healthy during anchors. |
+| `taikai_ingest_segment_latency_ms` | CMAF-ը ներծծում է հետաձգման հիստոգրամ մեկ կլաստերի/հոսքի համար (նպատակը՝ p95<750ms, p99<900ms): |
+| `taikai_ingest_live_edge_drift_ms` | Կոդավորիչի և խարիսխի աշխատողների միջև ուղիղ շեղում (էջեր p99>1,5 վրկ 10 րոպեի համար): |
+| `taikai_ingest_segment_errors_total{reason}` | Սխալները հաշվվում են ըստ պատճառի (`decode`, `manifest_mismatch`, `lineage_replay`,…): Ցանկացած աճ առաջացնում է `TaikaiIngestFailure`: |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Աճում է ամեն անգամ, երբ `/v1/da/ingest`-ն ընդունում է նոր TRM կեղծանունը. օգտագործեք `rate()` ռոտացիայի արագությունը հաստատելու համար: |
+| `/status → telemetry.taikai_alias_rotations[]` | JSON լուսանկար՝ `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` և ապացույցների փաթեթների ժամանակային դրոշմանիշներով: |
+| `taikai_viewer_*` (rebuffer, CEK պտտման տարիք, PQ առողջություն, ահազանգեր) | Դիտողի կողմից KPI-ները՝ ապահովելու համար CEK ռոտացիան + PQ սխեմաները խարիսխների ընթացքում առողջ մնալու համար: |
 
-### PromQL snippets
+### PromQL հատվածներ
 
 ```promql
 histogram_quantile(
@@ -81,54 +82,54 @@ rate(
 )
 ```
 
-## Dashboards & alerts
+## Վահանակներ և ահազանգեր
 
-- **Grafana viewer board:** `dashboards/grafana/taikai_viewer.json` — p95/p99
-  latency, live-edge drift, segment errors, CEK rotation age, viewer alerts.
-- **Grafana cache board:** `dashboards/grafana/taikai_cache.json` — hot/warm/cold
-  promotions and QoS denials when alias windows rotate.
-- **Alertmanager rules:** `dashboards/alerts/taikai_viewer_rules.yml` — drift
-  paging, ingest failure warnings, CEK rotation lag, and SoraFS proof-health
-  penalties/cooldowns. Ensure receivers exist for every production cluster.
+- **Grafana դիտող տախտակ.** `dashboards/grafana/taikai_viewer.json` — p95/p99
+  ուշացում, ուղիղ եզրերի շեղում, հատվածի սխալներ, CEK պտտման տարիք, դիտողների ազդանշաններ:
+- **Grafana քեշ տախտակ:** `dashboards/grafana/taikai_cache.json` — տաք/տաք/սառը
+  առաջխաղացումները և QoS-ի մերժումները, երբ պտտվում են կեղծանունները:
+- **Alertmanager կանոններ.** `dashboards/alerts/taikai_viewer_rules.yml` — դրեյֆ
+  Էջավորում, խափանման նախազգուշացումներ, CEK ռոտացիայի հետաձգում և SoraFS հաստատված առողջություն
+  տույժեր/սառեցումներ. Համոզվեք, որ ընդունիչներ կան յուրաքանչյուր արտադրական կլաստերի համար:
 
-## Evidence bundle checklist
+## Ապացույցների փաթեթի ստուգաթերթ
 
-- Spool artefacts (`taikai-anchor-request-*`, `taikai-trm-state-*`,
-  `taikai-lineage-*`).
-- Run `cargo xtask taikai-anchor-bundle --spool <manifest_dir>/taikai --copy-dir <bundle_dir> --signing-key <ed25519_hex>` to emit a signed JSON inventory of pending/delivered envelopes and copy request/SSM/TRM/lineage files into the drill bundle. The default spool path is `storage/da_manifests/taikai` from `torii.toml`.
-- `/status` snapshot covering `telemetry.taikai_alias_rotations`.
-- Prometheus exports (JSON/CSV) for the metrics above over the incident window.
-- Grafana screenshots with filters visible.
-- Alertmanager IDs referencing the relevant rule fires.
-- Link to `docs/examples/taikai_anchor_lineage_packet.md` describing the
-  canonical evidence packet.
+- Կծիկավոր արտեֆակտներ (`taikai-anchor-request-*`, `taikai-trm-state-*`,
+  `taikai-lineage-*`):
+- Գործարկեք `cargo xtask taikai-anchor-bundle --spool <manifest_dir>/taikai --copy-dir <bundle_dir> --signing-key <ed25519_hex>`՝ առկախ/առաքված ծրարների ստորագրված JSON գույքագրումը և պատճենեք հարցումը/SSM/TRM/տոհմային ֆայլերը փորված փաթեթում: Լռելյայն պտույտի ուղին `storage/da_manifests/taikai` է `torii.toml`-ից:
+- `/status` լուսանկար, որը ծածկում է `telemetry.taikai_alias_rotations`:
+- Prometheus արտահանում է (JSON/CSV) վերը նշված չափումների համար միջադեպի պատուհանի վրա:
+- Grafana սքրինշոթներ՝ տեսանելի զտիչներով:
+- Alertmanager ID-ները, որոնք վկայակոչում են համապատասխան կանոնների հրդեհները:
+- Հղում դեպի `docs/examples/taikai_anchor_lineage_packet.md`, որը նկարագրում է
+  կանոնական ապացույցների փաթեթ:
 
-## Dashboard mirroring & drill cadence
+## Վահանակի հայելիավորում և փորված արագություն
 
-Satisfying the SN13-C roadmap requirement means proving that the Taikai
-viewer/cache dashboards are reflected inside the portal **and** that the anchor
-evidence drill runs on a predictable cadence.
+SN13-C ճանապարհային քարտեզի պահանջը բավարարելը նշանակում է ապացուցել, որ Taikai-ն
+հեռուստադիտողի/քեշի վահանակները արտացոլվում են պորտալի ներսում **և** որ խարիսխը
+ապացույցների վարժանքն ընթանում է կանխատեսելի արագությամբ:
 
-1. **Portal mirroring.** Whenever `dashboards/grafana/taikai_viewer.json` or
-   `dashboards/grafana/taikai_cache.json` changes, summarise the deltas in
-   `sorafs/taikai-monitoring-dashboards` (this portal) and note the JSON
-   checksums in the portal PR description. Highlight new panels/thresholds so
-   reviewers can correlate with the managed Grafana folder.
-2. **Monthly drill.**
-   - Run the drill on the first Tuesday of each month at 15:00 UTC so evidence
-     lands before the SN13 governance sync.
-   - Capture spool artefacts, `/status` telemetry, and Grafana screenshots inside
+1. **Պորտալի հայելավորում։** Ամեն անգամ, երբ `dashboards/grafana/taikai_viewer.json` կամ
+   `dashboards/grafana/taikai_cache.json` փոփոխություններ, ամփոփեք դելտաները
+   `sorafs/taikai-monitoring-dashboards` (այս պորտալը) և նշեք JSON-ը
+   չեկային գումարներ պորտալի PR նկարագրության մեջ: Այսպես ընդգծեք նոր վահանակները/շեմերը
+   վերանայողները կարող են փոխկապակցվել կառավարվող Grafana թղթապանակի հետ:
+2. **Ամսական փորված.**
+   - Վարժությունը կատարեք յուրաքանչյուր ամսվա առաջին երեքշաբթի օրը, ժամը 15:00 UTC-ին, որպեսզի ապացուցեք
+     հողերը նախքան SN13 կառավարման համաժամացումը:
+   - Ներսում նկարեք կծիկի արտեֆակտներ, `/status` հեռաչափություն և Grafana սքրինշոթներ
      `artifacts/sorafs_taikai/drills/<YYYYMMDD>/`.
-   - Log the execution with
+   - Մուտքագրեք կատարումը
      `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor`.
-3. **Review & publish.** Within 48 hours, review alerts/false positives with the
-   DA Program + NetOps, record follow-up items in the drill log, and link the
-   governance bucket upload from `docs/source/sorafs/runbooks-index.md`.
+3. **Վերանայեք և հրապարակեք:** 48 ժամվա ընթացքում ստուգեք ծանուցումները/կեղծ պոզիտիվները
+   DA Program + NetOps, գրանցեք հետագա տարրերը փորված մատյանում և կապեք
+   կառավարման դույլի վերբեռնում `docs/source/sorafs/runbooks-index.md`-ից:
 
-If either dashboards or drills fall behind, SN13-C cannot exit 🈺; keep this
-section up to date whenever cadence or evidence expectations change.
+Եթե ​​վահանակները կամ վարժանքները հետ են մնում, SN13-C-ն չի կարող դուրս գալ 🈺; պահիր սա
+բաժինը թարմացվում է ամեն անգամ, երբ փոխվում են կադենսը կամ ապացույցների ակնկալիքները:
 
-## Helpful commands
+## Օգտակար հրամաններ
 
 ```bash
 # Snapshot alias rotation telemetry to an artefact directory
@@ -144,5 +145,5 @@ jq '.error_context | select(.reason == "lineage_replay")' \
   "$MANIFEST_DIR/taikai/taikai-ssm-20260405T153000Z.norito"
 ```
 
-Keep this portal copy in sync with the canonical runbook whenever Taikai
-anchoring telemetry, dashboards, or governance evidence requirements change.
+Պահպանեք այս պորտալի պատճենը կանոնական գրքի հետ համաժամեցված, երբ Taikai
+խարսխված հեռաչափության, վահանակների կամ կառավարման ապացույցների պահանջները փոխվում են:

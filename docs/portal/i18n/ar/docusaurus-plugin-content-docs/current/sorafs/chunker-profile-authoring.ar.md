@@ -4,53 +4,53 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-profile-authoring.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-profile-authoring
-title: دليل تأليف ملفات chunker في SoraFS
-sidebar_label: دليل تأليف chunker
-description: قائمة تحقق لاقتراح ملفات chunker جديدة و fixtures في SoraFS.
+المعرف: تأليف ملف تعريف مقسم
+العنوان: دليل تأليف ملفات Chunker في SoraFS
+Sidebar_label: دليل التأليف Chunker
+الوصف: قائمة الاختيار لاقتراح ملفات Chunker الجديدة والتركيبات في SoraFS.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/chunker_profile_authoring.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة توثيق Sphinx القديمة.
+:::ملحوظة المصدر مؤهل
+احترام هذه الصفحة `docs/source/sorafs/chunker_profile_authoring.md`. احرص على جميع النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
 :::
 
-# دليل تأليف ملفات chunker في SoraFS
+# دليل تأليف ملفات Chunker في SoraFS
 
-يشرح هذا الدليل كيفية اقتراح ونشر ملفات chunker جديدة لـ SoraFS.
-وهو يكمل RFC المعمارية (SF-1) ومرجع السجل (SF-2a)
-بمتطلبات تأليف واضحة وخطوات تحقق وقوالب مقترح.
-للاطلاع على مثال معتمد، راجع
+يشرح هذا الدليل كيفية تكوين و ملفات chunker جديدة لـ SoraFS.
+وهو يكمل RFC Turner (SF-1) ومرجع السجل (SF-2a)
+بمتطلبات التأليف تحديد وخطوات تحقق وقوالب الصنع.
+مرجع على سبيل المثال، مرجع
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
-وسجل dry-run المرافق في
+بالاضافة الى التشغيل الجاف في
 `docs/source/sorafs/reports/sf1_determinism.md`.
 
 ## نظرة عامة
 
-يجب أن يحقق كل ملف يدخل السجل ما يلي:
+يجب أن تنتج كل ملف الإدخالات ما يلي:
 
-- الإعلان عن معلمات CDC حتمية وإعدادات multihash متطابقة عبر المعماريات؛
-- شحن fixtures قابلة لإعادة التشغيل (JSON Rust/Go/TS + corpora fuzz + شهود PoR) يمكن لـ SDKs downstream
-  التحقق منها دون tooling مخصص؛
-- تضمين بيانات جاهزة للحوكمة (namespace, name, semver) مع إرشادات الهجرة ونوافذ التوافق؛ و
-- اجتياز حزمة diff الحتمية قبل مراجعة المجلس.
+- الإعلان عن معلمات CDC حتمية وإعدادات متعددة متطابقة عبر المعماريات؛
+- شحن تركيبات قابلة لإعادة التشغيل (JSON Rust/Go/TS + corpora fuzz + شهود PoR) يمكن لـ SDKs downstream
+  التحقق منها دون الأدوات المخصصة؛
+- تضمين بيانات الاتصال للموقع (مساحة الاسم، الاسم، الفصل) مع إرشادات الهجرة و نافذة التوافق؛ و
+- أجتياز حزمة مختلفة الحامية قبل مراجعة المجلس.
 
-اتبع قائمة التحقق أدناه لإعداد مقترح يستوفي هذه القواعد.
+اتبع القائمة أدناه للإعدادات واستوفي هذه التعليمات.
 
-## ملخص ميثاق السجل
+## ملخص سجل السجل
 
-قبل صياغة المقترح، تأكد من مطابقته لميثاق السجل الذي تفرضه
-`sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
-
-- معرفات الملفات أعداد صحيحة موجبة تزيد بشكل رتيب دون فجوات.
-- يجب أن يظهر المقبض المعتمد (`namespace.name@semver`) في قائمة البدائل
+تم الاتفاق مسبقًا على ذلك، والتأكد من مطابقته لميثاق السجل الذي قام به
+`sorafs_manifest::chunker_registry::ensure_charter_compliance()`:- سجلات البيانات المسجلة صحيحة مشخصا بشكل رتيب دون فجوات.
+- يجب أن يظهر المقبض المؤهل (`namespace.name@semver`) في قائمة البدائل
   وأن يكون **الأول**. تليه البدائل القديمة (مثل `sorafs.sf1@1.0.0`).
-- لا يجوز لأي alias أن يتعارض مع handle معتمد آخر أو أن يتكرر.
-- يجب أن تكون alias غير فارغة ومقصوصة من المسافات.
+- لا يجوز لأي شخص أن يعارض مع مقبض معتمد آخر أو يتكرر.
+- يجب أن تكون اسم مستعار غير فارغ ومقرصوصة من المسافات.
 
-مساعدات CLI المفيدة:
+مساعدات CLI رقم:
 
 ```bash
 # قائمة JSON بكل descripors المسجلة (ids, handles, aliases, multihash)
@@ -61,72 +61,66 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
-تحافظ هذه الأوامر على توافق المقترحات مع ميثاق السجل وتوفر البيانات المعتمدة
-اللازمة لنقاشات الحوكمة.
+حافظ على هذه موافقتك على الموافقة على ميثاق تسجيل البيانات المعتمدة
+ضرورية لنقاشات ال تور.
 
-## البيانات المطلوبة
-
-| الحقل | الوصف | مثال (`sorafs.sf1@1.0.0`) |
-|-------|-------|---------------------------|
+## البيانات المطلوبة| الحقل | الوصف | مثال (`sorafs.sf1@1.0.0`) |
+|-------|-------|--------------------------|
 | `namespace` | تجميع منطقي للملفات ذات الصلة. | `sorafs` |
-| `name` | تسمية مقروءة للبشر. | `sf1` |
-| `semver` | سلسلة نسخة دلالية لمجموعة المعلمات. | `1.0.0` |
-| `profile_id` | معرف رقمي رتيب يُسند عند إدخال الملف. احجز المعرف التالي ولا تعِد استخدام الأرقام الحالية. | `1` |
-| `profile_aliases` | مقابض إضافية اختيارية (أسماء قديمة، اختصارات) تُعرض للعملاء أثناء التفاوض. يجب تضمين المقبض المعتمد أولاً. | `["sorafs.sf1@1.0.0"]` |
-| `profile.min_size` | طول chunk الأدنى بالبايت. | `65536` |
-| `profile.target_size` | طول chunk المستهدف بالبايت. | `262144` |
-| `profile.max_size` | طول chunk الأقصى بالبايت. | `524288` |
-| `profile.break_mask` | قناع تكيفي يستخدمه rolling hash (hex). | `0x0000ffff` |
-| `profile.polynomial` | ثابت gear polynomial (hex). | `0x3da3358b4dc173` |
-| `gear_seed` | Seed لاشتقاق جدول gear بحجم 64 KiB. | `sorafs-v1-gear` |
-| `chunk_multihash.code` | كود multihash لِـ digests لكل chunk. | `0x1f` (BLAKE3-256) |
-| `chunk_multihash.digest` | Digest لحزمة fixtures المعتمدة. | `13fa...c482` |
-| `fixtures_root` | مسار نسبي يحتوي على fixtures المعاد توليدها. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed لعيّنات PoR الحتمية (`splitmix64`). | `0xfeedbeefcafebabe` (مثال) |
-
-يجب أن تظهر البيانات الوصفية في وثيقة المقترح وداخل fixtures المولدة حتى يتمكن السجل
-و tooling الـ CLI وأتمتة الحوكمة من تأكيد القيم دون مطابقة يدوية. عند الشك، شغّل
-CLIs الخاصة بـ chunk-store و manifest مع `--json-out=-` لبث البيانات المحسوبة إلى
-ملاحظات المراجعة.
+| `name` | تسمية مسجلة للبشرة. | `sf1` |
+| `semver` | سلسلة نسخة دلالية للمعلمات. | `1.0.0` |
+| `profile_id` | معرف رقمي رتيب يُسند عند إرسال الملف. اطلب المعرف التالي ولا تعرف استخدام الأرقام الحالية. | `1` |
+| `profile_aliases` | مقيدات إضافية اختيارية (أسماء طويلة، اختصارات) تُعرض إلا أثناء الاتصال. يجب أن تشمل المقيدات الجديدة. | `["sorafs.sf1@1.0.0"]` |
+| `profile.min_size` | قطعة طويلة بالبايت. | `65536` |
+| `profile.target_size` | قطعة طويلة تستهدف بالبايت. | `262144` |
+| `profile.max_size` | طول القطعة الأقصى بالبايت. | `524288` |
+| `profile.break_mask` | قناع التكيف يستخدمه المتداول التجزئة (ست عشري). | `0x0000ffff` |
+| `profile.polynomial` | متعدد الحدود للعتاد الثابت (ست عشري). | `0x3da3358b4dc173` |
+| `gear_seed` | بذرة لاشتقاق جدول جير بحجم 64 كيلو بايت. | `sorafs-v1-gear` |
+| `chunk_multihash.code` | كود multihash لـ هضم لكل قطعة. | `0x1f` (BLAKE3-256) |
+| `chunk_multihash.digest` | ملخص لزمة التركيبات المعتمدة. | `13fa...c482` |
+| `fixtures_root` | مسار نسبي يحتوي على تركيبات المعاد توليدها. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
+| `por_seed` | بذور لعيّنات PoR الحتمية (`splitmix64`). | `0xfeedbeefcafebabe` (مثال) |يجب أن يتم حجز البيانات الوصفية في الاتفاقية المقترحة وداخل التركيبات المولدة حتى سجل السجل
+والأدوات الـ CLI ورسوم المطبوعات من القيم دون الخبرة اليدوية. عند الشك، شغّل
+CLIs الخاصة بـchunk-store والبيان مع `--json-out=-` لبث البيانات المحسوبة إلى
+مراجعة المراجعة.
 
 ### نقاط تماس CLI والسجل
 
-- `sorafs_manifest_chunk_store --profile=<handle>` — إعادة تشغيل بيانات chunk و digest
-  للـ manifest وفحوص PoR مع المعلمات المقترحة.
-- `sorafs_manifest_chunk_store --json-out=-` — بث تقرير chunk-store إلى stdout
-  للمقارنات الآلية.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — تأكيد أن manifests وخطط CAR
-  تتضمن المقبض المعتمد والبدائل.
-- `sorafs_manifest_stub --plan=-` — إعادة تغذية `chunk_fetch_specs` السابق للتحقق من
-  offsets/digests بعد التغيير.
+- `sorafs_manifest_chunk_store --profile=<handle>` — إعادة تشغيل بيانات القطعة والملخص
+  للـ المانيفست و فحوصات PoR مع المعلمات.
+- `sorafs_manifest_chunk_store --json-out=-` — تقرير استجابة لـchunk-store إلى stdout
+  خطة المقارنة.
+- `sorafs_manifest_stub --chunker-profile=<handle>` — بالتأكيد بيانات وخطط CAR
+  تشمل المقبض والبدائل.
+- `sorafs_manifest_stub --plan=-` — إعادة `chunk_fetch_specs` رد السابق من
+  تعويضات/ملخصات بعد التغيير.
 
-سجّل مخرجات الأوامر (digests، جذور PoR، hashes للـ manifest) في المقترح كي يستطيع
-المراجعون إعادة إنتاجها حرفياً.
+سجل مخرجات مميز (الملخصات، وضوح PoR، التجزئات للـ Manifest) في مقترح يمكنك اختياره
+المراجع إعادة إنتاجها باحترافية.
 
-## قائمة تحقق الحتمية والتحقق
-
-1. **إعادة توليد fixtures**
+## قائمة تحقق الحتمية والتحقق1. ** إعادة توليد التركيبات **
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
-2. **تشغيل مجموعة التكافؤ** — يجب أن تكون `cargo test -p sorafs_chunker` و harness diff
-   عبر اللغات (`crates/sorafs_chunker/tests/vectors.rs`) باللون الأخضر مع fixtures الجديدة.
-3. **إعادة تشغيل corpora fuzz/back-pressure** — نفّذ `cargo fuzz list` و harness البث
+2. **تشغيل مجموعة التكافؤ** — يجب أن تكون `cargo test -p sorafs_chunker` و Harness diff
+   عبر اللغات (`crates/sorafs_chunker/tests/vectors.rs`) أخضر مع التركيبات الجديدة.
+3. **إعادة تشغيل الزغب الجسدي/الضغط الخلفي** — نفّذ `cargo fuzz list` و Harness Television
    (`fuzz/sorafs_chunker`) على الأصول المُعاد توليدها.
-4. **التحقق من شهود Proof-of-Retrievability** — شغّل
-   `sorafs_manifest_chunk_store --por-sample=<n>` باستخدام الملف المقترح وأكد تطابق الجذور
-   مع manifest الخاص بالـ fixtures.
-5. **Dry run للـ CI** — شغّل `ci/check_sorafs_fixtures.sh` محلياً؛ يجب أن ينجح
-   مع fixtures الجديدة و `manifest_signatures.json` الحالي.
-6. **تأكيد cross-runtime** — تأكد من أن ربط Go/TS يستهلك JSON المُعاد توليده ويُخرج
-   حدود chunk و digests متطابقة.
+4. **التحقق من شهود إثبات الاسترجاع** — شغّل
+   `sorafs_manifest_chunk_store --por-sample=<n>` باستخدام الملف المقترح المعتمد ليتم الموافقة عليه
+   مع البيان الخاص بالـ تركيبات.
+5. **Dry run للـ CI** — شغّل `ci/check_sorafs_fixtures.sh` محلياً؛ يجب أن تنجح
+   مع التركيبات الجديدة و `manifest_signatures.json` الحالية.
+6. **تأكيد cross runtime** — تأكد من أن Go/TS يستهلك JSON المُعاد توليده ومن يخرج
+   حدود القطعة و الهضم متطابقة.
 
-وثّق الأوامر والـ digests الناتجة في المقترح كي يستطيع Tooling WG إعادة تشغيلها دون تخمين.
+وثيقة تفضل والـ Digests المقترح الذي يمكنك من خلاله Tooling WG إعادة تشغيلها دون اشتراك.
 
-### تأكيد Manifest / PoR
+### تأكيد البيان / PoR
 
-بعد إعادة توليد fixtures، شغّل مسار manifest بالكامل لضمان بقاء بيانات CAR و PoR متسقة:
+بعد إعادة إنشاء التركيبات، مسار شغّل واضح بشكل كامل وبقاء بيانات CAR وPoR متسقة:
 
 ```bash
 # التحقق من بيانات chunk + PoR مع الملف الجديد
@@ -150,40 +144,38 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-استبدل ملف الإدخال بأي corpus ممثل مستخدم في fixtures الخاصة بك
-(مثلاً stream حتمي بحجم 1 GiB) وأرفق digests الناتجة في المقترح.
+استبدل ملف الإدخال بأي شكل من الأشكال ممثل مستخدم في التركيبات الخاصة بك
+(مثلاً تيار حتمي بحجم 1 جيجا بايت) وأرفق الملخصات في المقترح.
 
-## قالب المقترح
+##القالب المقترح
 
-يتم تقديم المقترحات كسجلات Norito من نوع `ChunkerProfileProposalV1` محفوظة ضمن
-`docs/source/sorafs/proposals/`. يوضح قالب JSON أدناه الشكل المتوقع
+يتم تقديم المقترحات كسجلات Norito من النوع `ChunkerProfileProposalV1` المحفوظة ضمنا
+`docs/source/sorafs/proposals/`. يوضح القالب JSON أدناه الشكل الرئيسي
 (استبدل القيم حسب الحاجة):
 
 
-قدّم تقرير Markdown مطابقاً (`determinism_report`) يسجل مخرجات الأوامر و digests للـ chunk وأي
+تقرير تسجيل العلامات التجارية وفقا لذلك (`determinism_report`) يسجل مخرجات لاسلكية وهضم للـ Chunk وأيها
 انحرافات تمت ملاحظتها أثناء التحقق.
 
-## سير عمل الحوكمة
-
-1. **تقديم PR مع المقترح + fixtures.** ضمّن الأصول المولدة، مقترح Norito، وتحديثات
+## سير عمل ال تور1. ** تقديم العلاقات العامة مع المقترح + التركيبات . ** أجزاء الأصول المولدة، الآلة Norito، وتحديثات
    `chunker_registry_data.rs`.
-2. **مراجعة Tooling WG.** يعيد المراجعون تشغيل قائمة التحقق ويتأكدون من أن المقترح
-   يتوافق مع قواعد السجل (لا إعادة لاستخدام المعرفات، الحتمية متحققة).
-3. **ظرف المجلس.** بعد الموافقة، يوقع أعضاء المجلس digest المقترح
+2. **مراجعة Tooling WG.** إعادة المراجعون لإجراء قائمة التحقق والتأكدون من المقترح
+   أهلاً بمتطلبات السجل (لا إعادة استخدام المعرفات، الحتمية متحققة).
+3. **ظرف المجلس.** بعد الموافقة، يشترك أعضاء ملخص المجلس المقترح
    (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) ويضيفون توقيعاتهم إلى
-   ظرف الملف المخزن مع fixtures.
-4. **نشر السجل.** يؤدي الدمج إلى تحديث السجل والوثائق والـ fixtures. يظل CLI الافتراضي
-   على الملف السابق حتى تعلن الحوكمة أن الهجرة جاهزة.
-   وأبلغ المشغلين عبر migration ledger.
+   ظرف الملف المخزن مع التجهيزات.
+4. **نشر السجل.** يؤدي إلى تحديث السجل والوثائق والـ المباريات. يختفي CLI افتراضيا
+   على الملف السابق حتى تعلن عن هجرتها.
+   وبلغم تشغيلين عبر دفتر حسابات الهجرة.
 
 ## نصائح التأليف
 
-- فضّل حدوداً من قوى اثنين زوجية لتقليل سلوك chunking في الحالات الطرفية.
-- تجنب تغيير كود multihash دون تنسيق مع مستهلكي manifest و gateway؛ وأضف ملاحظة توافق عند ذلك.
-- اجعل seeds لجدول gear قابلة للقراءة لكنها فريدة عالمياً لتسهيل التدقيق.
-- خزّن أي artefacts قياس أداء (مثل مقارنات throughput) ضمن
+- ولا يقتصر الأمر على قوى زوجية رئيسية للتحكم في الحالات الطرفية.
+- تجنب تغيير رمز multihash دون التنسيق مع مستهلكي البيان و البوابة؛ وأضف موافقًا عند ذلك.
+- جعل البذور لجدول والعتاد قابلة للقراءة مختلفة مختلفة لتسهيل التمييز.
+- خزين أي مصنوعات قياس الأداء (مثل مقارنات الإنتاجية) ضمنا
   `docs/source/sorafs/reports/` للرجوع لاحقاً.
 
-لتوقعات التشغيل أثناء rollout راجع migration ledger
-(`docs/source/sorafs/migration_ledger.md`). لقواعد المطابقة وقت التشغيل راجع
+لتوقعات التشغيل أثناء إعادة النظر في دفتر أستاذ ترحيل الطرح
+(`docs/source/sorafs/migration_ledger.md`). لقواعد المطابقة لوقت العمل
 `docs/source/sorafs/chunker_conformance.md`.

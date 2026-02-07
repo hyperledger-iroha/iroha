@@ -4,26 +4,28 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: وصفات CI لـ SoraFS
-sidebar_label: وصفات CI
-description: شغّل واجهة SoraFS CLI داخل خطوط أنابيب GitHub وGitLab مع توقيع دون مفاتيح.
+identifiant : développeur-ci
+titre : وصفات CI لـ SoraFS
+sidebar_label : comme CI
+description : La CLI SoraFS est également compatible avec GitHub et GitLab.
 ---
 
 :::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/ci.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+Il s'agit de la référence `docs/source/sorafs/developer/ci.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
 :::
 
 # وصفات CI
 
 تستفيد خطوط أنابيب SoraFS من التجزئة الحتمية، وتوقيع المانيفست، والتحقق من الأدلة. يحافظ سطح أوامر
-`sorafs_cli` على قابلية نقل تلك الخطوات بين مزودي CI. تسلط هذه الصفحة الضوء على الوصفات المعتمدة وتشير
+`sorafs_cli` على قابلية نقل تلك الخطوات byين مزودي CI. تسلط هذه الصفحة الضوء على الوصفات المعتمدة وتشير
 إلى قوالب جاهزة للاستخدام.
 
-## GitHub Actions (بدون مفاتيح)
+## Actions GitHub (par دون مفاتيح)
 
 ```yaml
 name: sorafs-artifacts
@@ -98,11 +100,11 @@ jobs:
 
 نقاط أساسية:
 
-- لا تُخزَّن مفاتيح توقيع ثابتة؛ تُجلب رموز OIDC عند الطلب.
+- لا تُخزَّن مفاتيح توقيع ثابتة؛ تُجلب رموز OIDC عند الطلب.
 - تُرفع الآرتيفاكتات (CAR، المانيفست، الحزمة، ملخصات الأدلة) للمراجعة.
 - تعيد المهمة استخدام مخططات Norito نفسها المستخدمة في عمليات الإطلاق الإنتاجية.
 
-## GitLab CI
+## GitLabCI
 
 ```yaml
 stages:
@@ -136,12 +138,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- زوّد `SIGSTORE_ID_TOKEN` عبر اتحاد هوية workload في GitLab أو سر مختوم قبل تنفيذ مرحلة النشر.
+- J'utilise `SIGSTORE_ID_TOKEN` pour la charge de travail de GitLab et je suis en train de créer une charge de travail.
 - يؤدي فشل أي خطوة في CLI إلى إيقاف خط الأنابيب، مع الحفاظ على آرتيفاكتات متسقة.
 
 ## موارد إضافية
 
-- قوالب end-to-end (تتضمن مساعدات Bash، وإعداد هوية اتحادية، وخطوات تنظيف): `docs/examples/sorafs_ci.md`
+- Fonction de bout en bout (transfert de Bash et conversion de bout en bout) : `docs/examples/sorafs_ci.md`
 - مرجع CLI الذي يغطي كل الخيارات: `docs/source/sorafs_cli.md`
-- متطلبات الحوكمة/الأسماء المستعارة قبل الإرسال:
+- متطلبات الحوكمة/الأسماء المستعارة قبل الإرسال :
   `docs/source/sorafs/provider_admission_policy.md`

@@ -4,11 +4,13 @@ direction: rtl
 source: docs/portal/docs/sdks/nexus-quickstarts.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-الدليل الكامل موجود في `docs/source/nexus_sdk_quickstarts.md`. يسلط هذا الملخص في البوابة الضوء على المتطلبات المشتركة والاوامر لكل SDK حتى يتمكن المطورون من التحقق من اعداداتهم بسرعة.
+الدليل الكامل موجود في `docs/source/nexus_sdk_quickstarts.md`. يسلط هذا الملخص في البوابة الضوء على المتطلبات المشتركة والوامر لكل SDK حتى يتمكن المتقدمون من التحقق من إعداداتهم بسرعة.
 
-## الاعداد المشترك
+## الاعداد
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-قم بتنزيل حزمة تهيئة Nexus، وثبت تبعيات كل SDK، وتاكد من تطابق شهادات TLS مع ملف الاصدار (انظر `docs/source/sora_nexus_operator_onboarding.md`).
+قم بتنزيل حزمة تهيئة Nexus، وتوافق تبعيات كل SDK، وتأكد من تطابق شهادات TLS مع ملف الاصدار (انظر `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## الصدأ
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -30,15 +32,15 @@ cargo run --bin nexus_quickstart \
 
 المراجع: `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+## جافا سكريبت / تايب سكريبت
 
 ```bash
 npm run demo:nexus
 ```
 
-يقوم السكربت بتهيئة `ToriiClient` باستخدام متغيرات البيئة اعلاه ويطبع اخر كتلة.
+يقوم السكربت بتهيئة `ToriiClient` باستخدام متغيرات البيئة علاه ويطبع اخر كتلة.
 
-## Swift
+## سويفت
 
 ```bash
 make swift-nexus-demo
@@ -46,7 +48,7 @@ make swift-nexus-demo
 
 يستخدم `Torii.Client` من `IrohaSwift` لجلب `FindNetworkStatus`.
 
-## Android
+## أندرويد
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -54,9 +56,9 @@ make swift-nexus-demo
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-يشغل اختبار الجهاز المدار الذي يستهدف نقطة نهاية staging لنكسس.
+الغرض من اختبار الجهاز المستهدف هو نقطة نهاية التدريج لنكسس.
 
-## CLI
+## كلي
 
 ```bash
 iroha_cli app nexus quickstart \
@@ -67,8 +69,8 @@ iroha_cli app nexus quickstart \
 
 ## استكشاف الاخطاء واصلاحها
 
-- اعطال TLS -> تاكد من حزمة CA القادمة من tarball اصدار Nexus.
-- `ERR_UNKNOWN_LANE` -> مرر `--lane-id`/`--dataspace-id` عندما يتم فرض التوجيه متعدد المسارات.
-- `ERR_SETTLEMENT_PAUSED` -> راجع [Nexus operations](../nexus/nexus-operations) لعملية الحوادث؛ قد تكون الحوكمة اوقفت المسار.
+- إعطاءال TLS -> متأكد من حزمة CA القادمة من tarball Nexus.
+- `ERR_UNKNOWN_LANE` -> مرر `--lane-id`/`--dataspace-id` عندما يتم فرض توجيه المسارات المتعددة.
+- `ERR_SETTLEMENT_PAUSED` -> راجع [عمليات Nexus](../nexus/nexus-operations) الخطوة التالية؛ قد تكون لا توقف المسار.
 
-للسياق الاضافي والشروح الخاصة بكل SDK راجع `docs/source/nexus_sdk_quickstarts.md`.
+للسياق الاضافي والشروح الخاصة بكل SDK `docs/source/nexus_sdk_quickstarts.md`.

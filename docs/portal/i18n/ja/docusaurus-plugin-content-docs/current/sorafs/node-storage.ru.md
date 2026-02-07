@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-storage.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-storage
-title: Дизайн хранения узла SoraFS
-sidebar_label: Дизайн хранения узла
-description: Архитектура хранения, квоты и lifecycle hooks для Torii узлов, хостящих данные SoraFS.
+ID: ノードストレージ
+タイトル: Дизайн хранения узла SoraFS
+サイドバーラベル: Дизайн хранения узла
+説明: Архитектура хранения、квоты およびライフサイクル フック для Torii узлов、хостящих данные SoraFS。
 ---
 
 :::note Канонический источник
@@ -19,24 +21,24 @@ description: Архитектура хранения, квоты и lifecycle ho
 ## Дизайн хранения узла SoraFS (Черновик)
 
 Эта записка уточняет, как узел Iroha (Torii) может подключиться к слою
-availability данных SoraFS и выделить часть локального диска для хранения и
-обслуживания чанков. Она дополняет discovery-спецификацию
-`sorafs_node_client_protocol.md` и работу по fixtures SF-1b, описывая архитектуру
+空室状況 данных SoraFS и выделить часть локального диска для хранения и
+обслуживания чанков。ディスカバリー最低のホテル
+`sorafs_node_client_protocol.md` は、器具 SF-1b を備えています。
 сториджа, ресурсные ограничения и конфигурационную проводку, которые должны
-появиться в узле и gateway-коде. Практические операционные процедуры описаны в
-[Runbook операций узла](./node-operations).
+ゲートウェイと接続します。 Практические операционные процедуры описаны в
+[ランブック операций узла](./node-operations)。
 
 ### Цели
 
-- Разрешить любому валидатору или вспомогательному Iroha процессу публиковать
-  свободный диск как провайдер SoraFS без влияния на обязанности ledger.
-- Держать модуль хранения детерминированным и управляемым Norito: манифесты,
-  планы чанков, корни Proof-of-Retrievability (PoR) и advert провайдеров — это
-  источник истины.
+- Разрезить любому валидатору или вспомогательному Iroha процессу публиковать
+  свободный диск как провайдер SoraFS без влияния на обязанности 元帳。
+- メッセージが表示されます。 Norito: メッセージが表示されます。
+  取得可能性証明 (PoR) と広告の表示 — это
+  источник истины。
 - Применять операторские квоты, чтобы узел не исчерпал свои ресурсы из-за
-  слишком большого количества запросов pin или fetch.
-- Отдавать здоровье/телеметрию (PoR sampling, latency fetch чанков, давление на
-  диск) обратно в governance и клиентам.
+  ピンとフェッチを実行します。
+- Отдавать здоровье/телеметрию (PoR サンプリング、レイテンシーフェッチ чанков、давление на)
+  диск) обратно в ガバナンス и клиентам。
 
 ### Архитектура высокого уровня
 
@@ -67,28 +69,28 @@ availability данных SoraFS и выделить часть локально
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Ключевые модули:
+メッセージ:
 
-- **Gateway**: открывает Norito HTTP эндпоинты для предложений pin, запросов fetch
-  чанков, PoR sampling и телеметрии. Валидирует Norito payloads и направляет
-  запросы в chunk store. Переиспользует существующий HTTP стек Torii, чтобы не
-  вводить новый демон.
-- **Pin Registry**: состояние pin манифестов в `iroha_data_model::sorafs` и
-  `iroha_core`. При принятии манифеста регистр хранит digest манифеста, digest
-  плана чанков, корень PoR и флаги возможностей провайдера.
-- **Chunk Storage**: дисковая реализация `ChunkStore`, которая принимает подписанные
-  манифесты, материализует планы чанков через `ChunkProfile::DEFAULT`, и сохраняет
-  чанки в детерминированном layout. Каждый чанк связан с fingerprint контента и
-  PoR метаданными, поэтому sampling может повторно валидировать без перечитывания
-  всего файла.
-- **Quota/Scheduler**: применяет лимиты оператора (макс. байты диска, макс. pins
-  в очереди, макс. параллельные fetch, TTL чанков) и координирует IO, чтобы задачи
-  ledger не были вытеснены. Scheduler также отвечает за выдачу PoR proof и запросы
-  sampling с ограниченным CPU.
+- **ゲートウェイ**: открывает Norito HTTP эндпоинты для предложений ピン、запросов フェッチ
+  PoR サンプリングと телеметрии。 Norito ペイロードと詳細
+  チャンクストアと同じです。 HTTP セキュリティ Torii、認証済み
+  Сводить новый демон.
+- **ピン レジストリ**: ピン番号と `iroha_data_model::sorafs` および
+  `iroha_core`。 При принятии манифеста регистр хранит ダイジェスト манифеста, ダイジェスト
+  плана чанков、корень PoR и флаги возможностей провайдера.
+- **チャンク ストレージ**: дисковая реализация `ChunkStore`, которая принимает подписанные
+  манифесты、материализует планы чанков через `ChunkProfile::DEFAULT`、и сохраняет
+  レイアウトが異なります。 Каждый чанк связан с 指紋 контента и
+  PoR メソッド、サンプリング メソッド、жвторно валидировать без перечитывания
+  всего файла。
+- **クォータ/スケジューラ**: применяет лимиты оператора (макс. байты диска, макс. pins)
+  в очереди、макс。フェッチ、TTL чанков) および IO、чтобы задачи
+  台帳。スケジューラーは、PoR 証明とテストを実行します。
+  サンプリングは CPU を使用します。
 
 ### Конфигурация
 
-Добавьте новую секцию в `iroha_config`:
+`iroha_config` のメッセージ:
 
 ```toml
 [sorafs.storage]
@@ -104,41 +106,39 @@ adverts:
   availability = "hot"
   max_latency_ms = 500
   topics = ["sorafs.sf1.primary:global"]
-```
-
-- `enabled`: переключатель участия. Когда false, gateway возвращает 503 для storage
-  эндпоинтов и узел не объявляется в discovery.
-- `data_dir`: корневая директория для чанков, PoR деревьев и телеметрии fetch.
-  По умолчанию `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: жесткий лимит на pin-данные. Фоновая задача отклоняет
-  новые pins при достижении лимита.
-- `max_parallel_fetches`: лимит конкурентности, накладываемый scheduler, чтобы
-  балансировать сеть/IO диска с нагрузкой валидатора.
-- `max_pins`: максимум manifest pins, которые принимает узел до применения
-  eviction/back pressure.
-- `por_sample_interval_secs`: каденция автоматических PoR sampling jobs. Каждый
-  job выбирает `N` листьев (настраивается per manifest) и эмитит телеметрию.
-  Governance может детерминированно масштабировать `N`, задавая ключ
-  `profile.sample_multiplier` (целое `1-4`). Значение может быть числом/строкой
-  или объектом с override по профилю, например `{"default":2,"sorafs.sf2@1.0.0":3}`.
+```- `enabled`: を確認してください。 false、ゲートウェイ、503 для ストレージ
+  発見です。
+- `data_dir`: корневая директория для чанков、PoR деревьев и телеметрии フェッチ。
+  По умолчанию `<iroha.data_dir>/sorafs`。
+- `max_capacity_bytes`: ピン番号が表示されます。 Фоновая задача отклоняет
+  ピンを押してください。
+- `max_parallel_fetches`: конкурентности、накладываемый スケジューラ、чтобы
+  Салансировать сеть/IO диска с нагрузкой валидатора.
+- `max_pins`: максимум マニフェスト ピン、которые принимает узел до применения
+  立ち退き/バックプレッシャー。
+- `por_sample_interval_secs`: PoR サンプリング ジョブ。 Каждый
+  ジョブ `N` листьев (マニフェストごとのнастраивается) と эмитит телеметрию。
+  ガバナンス `N`, задавая ключ
+  `profile.sample_multiplier` (`1-4`)。 Значение может быть числом/строкой
+  `{"default":2,"sorafs.sf2@1.0.0":3}` をオーバーライドします。
 - `adverts`: структура, используемая генератором advert для заполнения полей
-  `ProviderAdvertV1` (stake pointer, QoS hints, topics). Если опущено, узел берет
-  defaults из governance registry.
+  `ProviderAdvertV1` (ステーク ポインター、QoS ヒント、トピック)。 Если опущено, узел берет
+  デフォルトとガバナンスレジストリ。
 
 Прокладка конфигурации:
 
-- `[sorafs.storage]` определен в `iroha_config` как `SorafsStorage` и загружается
-  из конфигурационного файла узла.
-- `iroha_core` и `iroha_torii` прокидывают storage config в gateway builder и chunk
-  store при старте.
-- Существуют dev/test overrides (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), но
-  в production следует использовать конфиг-файл.
+- `[sorafs.storage]` と `iroha_config` と `SorafsStorage` および загружается
+  из конфигурационного файла узла。
+- `iroha_core` と `iroha_torii` のストレージ構成、ゲートウェイ ビルダー、チャンク
+  ストアに掲載されています。
+- 開発/テストのオーバーライド (`SORAFS_STORAGE_*`、`SORAFS_STORAGE_PIN_*`)、
+  制作は、Сонфиг-файл です。
 
-### CLI утилиты
+### CLI の使用
 
-Пока HTTP поверхность Torii еще подключается, crate `sorafs_node` поставляет
-тонкий CLI, чтобы операторы могли скриптовать ingestion/export drills против
-персистентного backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+HTTP 応答 Torii 応答、クレート `sorafs_node` 応答
+тонкий CLI、取り込み/エクスポート ドリルの機能
+バックエンド。【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -148,104 +148,100 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` ожидает Norito-encoded manifest `.to` плюс соответствующие payload bytes.
+- `ingest` ожидает Norito でエンコードされたマニフェスト `.to` ペイロード バイト。
   Он восстанавливает план чанков из профиля чанкинга манифеста, проверяет паритет
-  digest, сохраняет файлы чанков и опционально эмитит JSON `chunk_fetch_specs`, чтобы
-  downstream инструменты могли проверить layout.
-- `export` принимает manifest ID и пишет сохраненные manifest/payload на диск
-  (с опциональным plan JSON), чтобы fixtures оставались воспроизводимыми.
+  ダイジェスト、файлы чанков и опционально эмитит JSON `chunk_fetch_specs`、чтобы
+  ダウンストリームレイアウト。
+- `export` マニフェスト ID とマニフェスト/ペイロードの両方
+  (プラン JSON)、フィクスチャが必要です。
 
-Обе команды печатают Norito JSON summary в stdout, что удобно для скриптов. CLI
-покрыт интеграционным тестом, который подтверждает корректный round-trip manifests
-и payloads до появления Torii API.【crates/sorafs_node/tests/cli.rs:1】
-
-> HTTP паритет
+Norito JSON 概要と標準出力、最新の情報が表示されます。 CLI
+покрыт интеграционным тестом、который подтверждает корректный 往復マニフェスト
+и ペイロード до появления Torii API.【crates/sorafs_node/tests/cli.rs:1】> HTTP プロトコル
 >
-> Torii gateway теперь предоставляет read-only helpers на основе того же
+> Torii ゲートウェイ теперь предоставляет 読み取り専用ヘルパー на основе того же
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — возвращает сохраненный
->   Norito manifest (base64) вместе с digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — возвращает детерминированный
->   JSON план чанков (`chunk_fetch_specs`) для downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — Созвращает сохраненный
+> Norito マニフェスト (base64) のダイジェスト/メタデータ。【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — Созвращает детерминированный
+> JSON чанков (`chunk_fetch_specs`) ダウンストリーム ツール。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Эти эндпоинты повторяют CLI вывод, поэтому пайплайны могут перейти от локальных
-> скриптов к HTTP probes без смены парсеров.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> скриптов к HTTP プローブ без смены парсеров.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
 ### Жизненный цикл узла
 
-1. **Startup**:
-   - При включенном storage узел инициализирует chunk store с заданной директорией
-     и емкостью. Это включает проверку/создание PoR базы манифестов и replay pin
-     манифестов для прогрева кэшей.
-   - Зарегистрировать маршруты SoraFS gateway (Norito JSON POST/GET эндпоинты для pin,
-     fetch, PoR sampling, телеметрии).
-   - Запустить PoR sampling worker и монитор квот.
-2. **Discovery / Adverts**:
+1. **起動**:
+   - チャンク ストアを保存し、ストレージを保存します。
+     и емкостью。 Это включает проверку/создание PoR базы манифестов и Reply pin
+     Панифестов для прогрева кэгей.
+   - SoraFS ゲートウェイ (Norito JSON POST/GET эндпоинты для ピン、
+     フェッチ、PoR サンプリング、телеметрии)。
+   - PoR サンプリング ワーカーの役割を果たします。
+2. **発見/広告**:
    - Сформировать `ProviderAdvertV1` на основе текущей емкости/здоровья, подписать
-     ключом, одобренным советом, и опубликовать через discovery канал.
+     発見、発見、発見。
      оставались доступными.
-3. **Pin Workflow**:
-   - Gateway получает подписанный manifest (с планом чанков, корнем PoR и подписями
-     совета). Валидирует список alias (`sorafs.sf1@1.0.0` обязателен) и убеждается,
-     что план чанков соответствует метаданным манифеста.
-   - Проверяет квоты. При превышении capacity/pin лимитов отвечает политикой ошибки
-     (структурированный Norito).
-   - Стримит chunk данные в `ChunkStore`, проверяя digests на ingest. Обновляет PoR
-     деревья и хранит metadata манифеста в registry.
-4. **Fetch Workflow**:
-   - Отдает запросы range чанков с диска. Scheduler применяет `max_parallel_fetches`
-     и возвращает `429` при насыщении.
-   - Эмитит структурированную телеметрию (Norito JSON) с latency, bytes served и
-     счетчиками ошибок для downstream мониторинга.
-5. **PoR Sampling**:
-   - Worker выбирает манифесты пропорционально весу (например, байтам хранения) и
-     запускает детерминированный sampling через PoR дерево chunk store.
-   - Сохраняет результаты для governance аудита и включает сводки в provider adverts
-     / telem endpoint.
-6. **Eviction / квоты**:
-   - При достижении емкости узел по умолчанию отклоняет новые pins. Опционально
-     операторы смогут настроить политики eviction (например, TTL, LRU) после
-     согласования модели governance; пока дизайн предполагает строгие квоты и
-     unpin операции, инициируемые оператором.
+3. **ピンのワークフロー**:
+   - ゲートウェイのマニフェスト (с планом чанков, корнем PoR и подписями)
+     ソ）。 Валидирует список エイリアス (`sorafs.sf1@1.0.0` обязателен) と убеждается、
+     Їто план чанков соответствует метаданным манифеста.
+   - Проверяет квоты。容量/ピンの数は、1 ピンあたりの容量です。
+     (структурированный Norito)。
+   - `ChunkStore` のチャンクをダイジェストし、取り込みます。 Обновляет PoR
+     レジストリのメタデータを確認します。
+4. **フェッチワークフロー**:
+   - Отдает запросы range чанков с диска.スケジューラ `max_parallel_fetches`
+     `429` を確認してください。
+   - Эмитит структурированную телеметрию (Norito JSON) 待機時間、提供バイト数、
+     下流の道路を通過します。
+5. **PoR サンプリング**:
+   - 労働者 выбирает манифесты пропорционально весу (например, байтам хранения) и
+     サンプリングと PoR チャンク ストアの両方を備えています。
+   - ガバナンスとプロバイダー広告の管理
+     /テレムエンドポイント。
+6. **立ち退き / квоты**:
+   - ピンをピンに追加します。 Опционально
+     追い出し (TTL、LRU) を実行する必要があります。
+     統治。 пока дизайн предполагает строгие квоты и
+     ピンを外して、инициируемые оператором。
 
-### Интеграция деклараций емкости и scheduling
-
-- Torii теперь ретранслирует обновления `CapacityDeclarationRecord` из `/v1/sorafs/capacity/declare`
-  во встроенный `CapacityManager`, так что каждый узел строит in-memory представление своих
-  зафиксированных chunker/lane аллокаций. Менеджер публикует read-only snapshots для телеметрии
-  (`GET /v1/sorafs/capacity/state`) и применяет резервы per-profile/per-lane до принятия новых
+### スケジュールを設定する- Torii теперь ретранслирует обновления `CapacityDeclarationRecord` または `/v1/sorafs/capacity/declare`
+  `CapacityManager` を使用して、メモリ内のデータを取得します。
+  зафиксированных チャンカー/レーン аллокаций。読み取り専用スナップショットを取得する
+  (`GET /v1/sorafs/capacity/state`) プロファイルごと/レーンごとの処理
   заказов.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Эндпоинт `/v1/sorafs/capacity/schedule` принимает governance-issued `ReplicationOrderV1`
-  payloads. Когда заказ нацелен на локального провайдера, менеджер проверяет дублирование
-  расписаний, валидирует емкость chunker/lane, резервирует слот и возвращает `ReplicationPlan`
-  с описанием оставшейся емкости, чтобы оркестрация могла продолжить ingestion. Заказы для
-  других провайдеров подтверждаются ответом `ignored`, упрощая multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (например, после успешной ingest) вызывают
-  `POST /v1/sorafs/capacity/complete` для освобождения резерва через
-  `CapacityManager::complete_order`. Ответ включает snapshot `ReplicationRelease`
-  (остаточные totals, остатки chunker/lane), чтобы orchestration tooling могло
-  ставить следующий заказ без polling. Дальнейшая работа подключит это к pipeline
-  chunk store, как только ingestion логика появится.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- ガバナンス発行 `/v1/sorafs/capacity/schedule` ガバナンス発行 `ReplicationOrderV1`
+  ペイロード。 Когда заказ нацелен на локального провайдера, менеджер проверяет дублирование
+  チャンカー/レーン、`ReplicationPlan` のチャンカー/レーンを表示します。
+  摂取する必要があります。 Заказы для
+  других провайдеров подтверждаются ответом `ignored`、マルチオペレーターワークフロー。【crates/iroha_torii/src/routing.rs:4845】
+- 完了フック (インジェスト、取り込み)
+  `POST /v1/sorafs/capacity/complete` は、 освобождения резерва через
+  `CapacityManager::complete_order`。スナップショット `ReplicationRelease`
+  (合計、チャンカー/レーン)、オーケストレーション ツールの機能
+  投票を行ってください。パイプラインを実行する
+  チャンクストア、как только ingestion логика появится.[crates/iroha_torii/src/routing.rs:4885][crates/sorafs_node/src/capacity.rs:90]
 - Встроенный `TelemetryAccumulator` можно обновлять через `NodeHandle::update_telemetry`,
-  что позволяет background workers фиксировать PoR/uptime samples и со временем
-  выводить канонические `CapacityTelemetryV1` payloads без изменения внутренних
-  частей scheduler.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+  バックグラウンド ワーカーの機能と PoR/稼働時間のサンプル機能
+  `CapacityTelemetryV1` ペイロードの数を確認します。
+  частей スケジューラー。【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### Интеграции и будущая работа
 
-- **Governance**: расширить `sorafs_pin_registry_tracker.md` телеметрией хранения
-  (PoR success rate, disk utilization). Политики допуска могут требовать минимальную
-  емкость или минимальный PoR success rate до принятия adverts.
-- **Client SDKs**: раскрыть новую storage config (лимиты диска, alias), чтобы
-  management tooling могло bootstrapper узлы программно.
-- **Telemetry**: интегрировать с существующим metrics stack (Prometheus /
-  OpenTelemetry), чтобы метрики хранения были видимы в observability dashboards.
-- **Security**: запускать модуль хранения в отдельном async task pool с back-pressure
-  и рассмотреть sandboxing чтения чанков через io_uring или ограниченные tokio pools,
-  чтобы злоумышленники не исчерпали ресурсы.
+- **ガバナンス**: раслеметрией хранения `sorafs_pin_registry_tracker.md` телеметрией хранения
+  (PoR 成功率、ディスク使用率)。 Политики допуска могут требовать минимальную
+  PoR 成功率と広告を表示します。
+- **クライアント SDK**: ストレージ構成 (лимиты диска、エイリアス)、чтобы
+  管理ツール ブートストラップ ツール。
+- **テレメトリ**: メトリクス スタック (Prometheus /
+  OpenTelemetry)、可観測性ダッシュボードの機能。
+- **セキュリティ**: 非同期タスク プールのバックプレッシャーとの関係
+  サンドボックス化、io_uring、東京プール、
+  Їтобы злоумыленники не исчерпали ресурсы。
 
 Этот дизайн сохраняет модуль хранения опциональным и детерминированным, давая
-операторам нужные knobs для участия в слое доступности данных SoraFS. Реализация
-потребует изменений в `iroha_config`, `iroha_core`, `iroha_torii` и Norito gateway,
-а также tooling для provider advert.
+ノブは SoraFS に対応しています。 Реализация
+`iroha_config`、`iroha_core`、`iroha_torii` および Norito ゲートウェイ、
+ツールとプロバイダーの広告。

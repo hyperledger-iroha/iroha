@@ -7,56 +7,57 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cb0a770fac1086462d949dbf17dd5a05f133169e57d50b0d90ddb48ae05f2853
 source_last_modified: "2026-01-05T09:28:11.822642+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Dependency Audit Summary
+//! Зависимый аудит резюме
 
-Date: 2025-09-01
+Дата: 2025-09-01.
 
-Scope: Workspace-wide review of all crates declared in Cargo.toml files and resolved in Cargo.lock. Performed with cargo-audit against the RustSec advisory DB plus manual review for crate legitimacy and “main crate” choices for algorithms.
+Скоп: Эш киңлеге буйынса тикшерелгән бөтә йәшниктәр иғлан ителгән Cargo.toml файлдар һәм Cargo.lock-та хәл ителгән. Йөк-аудит менән башҡарылған RustSec консультация DB плюс ҡул менән тикшерелгән йәшник легитимлығы һәм “төп йәшник” һайлау алгоритмдар.
 
-Tools/commands run:
-- `cargo tree -d --workspace --locked --offline` – inspected duplicate versions
-- `cargo audit` – scanned Cargo.lock for known vulnerabilities and yanked crates
+Ҡоралдар/командалар йүгерә:
+- I18NI000000001X – дубликатлы версияларҙы тикшергән
+- I18NI000000002X – сканерланған Cargo.lock өсөн билдәле уязвимость һәм яндырылған йәшниктәр
 
-Security advisories found (now 0 vulns; 2 warnings):
-- crossbeam-channel — RUSTSEC-2025-0024
-  - Fixed: bumped to `0.5.15` in `crates/ivm/Cargo.toml`.
+Хәүефһеҙлек кәңәштәре табылған (хәҙер 0 вульнс; 2 иҫкәртмә):
+- кросс балта-канал — RUSTSEC-2025-0024
+  - Ҡабатланған: `0.5.15` `crates/ivm/Cargo.toml`-ҡа тиклем бәрелгән.
 
-  - Fixed: flipped `pprof` to `prost-codec` in `crates/iroha_torii/Cargo.toml`.
+  - 18NI0000000006X I18NI00000000007X-та `pprof`-ты ҡамап алды.
 
-- ring — RUSTSEC-2025-0009
-  - Fixed: bumped QUIC/TLS stack (`quinn 0.11`, `rustls 0.23`, `tokio-rustls 0.26`) and updated WS stack to `tungstenite/tokio-tungstenite 0.24`. Forced lock to `ring 0.17.12` via `cargo update -p ring --precise 0.17.12`.
+- ринг — РУСТСЕК-2025-0009
+  - Ҡабатланған: QUIC/TLS стекаһы ҡабартылған (`quinn 0.11`, I18NI000000009X, `tokio-rustls 0.26`) һәм WS стегы `tungstenite/tokio-tungstenite 0.24` тиклем яңыртылған. `ring 0.17.12` тиклем мәжбүри йоҙаҡ аша `cargo update -p ring --precise 0.17.12` аша.
 
-Remaining advisories: none. Remaining warnings: `backoff` (unmaintained), `derivative` (unmaintained).
+Ҡалған кәңәштәр: бер ниндәй ҙә. Ҡалған иҫкәртмәләр: `backoff` (тамамланмаған), `derivative` (нигеҙһеҙ).
 
-Legitimacy and “main crate” assessment (spotlight):
-- Hashing: `sha2` (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (widely used) — canonical choices.
-- AEAD/Symmetric: `aes-gcm`, `chacha20poly1305`, `aead` traits (RustCrypto) — canonical.
-- Signatures/ECC: `ed25519-dalek`, `x25519-dalek` (dalek project), `k256` (RustCrypto), `secp256k1` (libsecp bindings) — all legitimate; prefer a single secp256k1 stack (`k256` for pure Rust or `secp256k1` for libsecp) to reduce surface area.
-- BLS12-381/ZK: `blstrs`, `halo2_*` — widely used in production ZK ecosystems; legitimate.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — legit reference crates.
-- TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — canonical modern Rust TLS stack.
-- Noise: `snow` — canonical implementation.
-- Serialization: `parity-scale-codec` is canonical for SCALE. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
-- FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate; prefer Rustls over OpenSSL in production paths (current code already does).
+Законлылыҡ һәм “төп йәшник” баһаһы (спотлайм):
+- Хэшинг: I18NI000000016X (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (киң ҡулланылған) — канон һайлау.
+- AEAD/Симметрик: `aes-gcm`, `chacha20poly1305`, I18NI00000021Х һыҙаттары (RustCrypto) — канонлы.
+- Ҡултамғалар/ЭКК: I18NI000000022X, `x25519-dalek` (далек проекты), `k256` (RustCrypto), `secp256k1` (libsecp бәйләүҙәре) — бөтә законлы; өҫтөнлөк бирергә бер secp256k1 стека (`k256` өсөн саф Rust йәки `secp256k1` өсөн libsecp) ер өҫтө майҙанын кәметергә.
+- BLS12-381/ZK: `blstrs`, I18NI000000029X — ZK экосистемаларында киң ҡулланыла; законлы.
+- PQ: `pqcrypto-dilithium`, I18NI000000031X — легаль белешмә йәшниктәре.
+- TLS: I18NI000000032X, `tokio-rustls`, I18NI000000034X — канон заманса Rust TLS стекаһы.
+- Тауыш: I18NI000000035X — канон тормошҡа ашырыу.
+- Сериализация: I18NI000000036X XCALE өсөн канонлы. Серде етештереү бәйлелектәренән эш урыны буйынса сығарылған; Norito сыға/яҙыусылар һәр йөрөү юлын ҡаплай. Ҡалдыҡ Серд һылтанмалар тарихи документацияла, ҡоршау сценарийҙарында йәки һынау-тик рөхсәт исемлектәрендә йәшәй.
+- FFI/libs: I18NI000000037X, I18NI000000038X — законлы; өҫтөнлөк Rustls өҫтөндә OpenSSL етештереү юлдарында (ағымдағы код инде эшләй).
 
-Recommendations:
-- Address warnings:
-  - Consider replacing `backoff` with `retry`/`futures-retry` or a local exponential backoff helper.
-  - Replace `derivative` derives with manual impls or `derive_more` where applicable.
-- Medium: unify on either `k256` or `secp256k1` where possible to reduce duplicate implementations (leave both only if genuinely required).
-- Medium: review `poseidon-primitives 0.2.0` provenance for ZK usage; if feasible, consider aligning with an Arkworks/Halo2-native Poseidon implementation to minimize parallel ecosystems.
+Тәҡдимдәр:
+-Дәүләтегеҙ тураһында иҫкәртмәләр:
+  - I18NI000000039X XNI000000040X/`futures-retry` йәки урындағы экспоненциаль ярҙамсы ярҙамсыһын алмаштырыуҙы уйлап ҡарағыҙ.
+  - `derivative`-ны ҡул менән импульстар йәки I18NI000000043X менән алмаштырыу ҡайҙа ҡулланыла.
+- Урта: йәки I18NI0000004X йәки I18NI000000045X тураһында берләштереү мөмкин булғанда дубликаттарҙы тормошҡа ашырыуҙы кәметергә (ысынбарлыҡ кәрәк булһа ғына ҡалдырырға).
+- Урта: ZK ҡулланыу өсөн провенанс I18NI000000046X обзор; әгәр ҙә мөмкин булһа, параллель экосистемаларҙы минималь кимәлгә еткерер өсөн Аркворктар/Halo2-тыуған Посейдонды тормошҡа ашырыу менән тура килтереп ҡарарға.
 
-Notes:
-- `cargo tree -d` shows expected duplicate major versions (`bitflags` 1/2, multiple `ring`), not by itself a security risk but increases build surface.
-- No typosquat-like crates were observed; all names and sources resolve to well-known ecosystem crates or internal workspace members.
-- Experimental: added `iroha_crypto` feature `bls-backend-blstrs` to begin migrating BLS to a blstrs‑only backend (removes dependence on arkworks when enabled). Default remains `w3f-bls` to avoid behavior/encoding changes. Alignment plan:
-  - Add round-trip fixtures in `crates/iroha_crypto/tests/bls_backend_compat.rs` that derive keys once and assert equality across both backends, covering `SecretKey`, `PublicKey`, and signature aggregation.
+Иҫкәрмәләр:
+- I18NI000000047X көтөлгән дубликаттар төп версияларын күрһәтә (I18NI000000048X 1/2, бер нисә `ring`), үҙенән-үҙе хәүефһеҙлек хәүефе түгел, ә төҙөү өҫтөн арттыра.
+- типопоскват кеүек йәшниктәр күҙәтелмәне; бөтә исемдәр һәм сығанаҡтар билдәле экосистема йәшниктәре йәки эске эш урыны ағзаларына ҡарар ҡабул итә.
+- Эксперименталь: `iroha_crypto` функцияһы I18NI000000051X функцияһы BLS-ты blstrs-ҡа ғына бэкэндҡа күсерергә башлай (эшләгәндә arkworks-ҡа бәйлелек). Ғәҙәттәгесә ҡала I18NI000000052X тәртип/кодлау үҙгәрештәренән ҡотолоу өсөн. Таплау планы:
+  - I18NI000000053X-та түңәрәк сәйәхәт ҡорамалдары өҫтәү, улар бер тапҡыр асҡыстарҙы ала һәм ике бэкэндтар буйынса тигеҙлекте раҫлай, `SecretKey`, `PublicKey` һәм ҡултамға агрегацияһын ҡаплай.
 
-Follow-ups (proposed work items):
-- Keep the Serde guardrails in CI (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) so new production usages cannot be introduced.
+Эҙ-эҙ-эҙ-өҫкә (тәҡдим ителгән эш әйберҙәре):
+- CI (`scripts/check_no_direct_serde.sh`, I18NI000000057X) Серд ҡоршауҙарын һаҡлау өсөн яңы етештереүҙе ҡулланыуҙы индереп булмай.
 
-Testing performed for this audit:
-- Ran `cargo audit` with the latest advisory DB; verified the four advisories and their dependency trees.
-- Searched for direct dependency declarations of affected crates to pinpoint fix locations.
+Был аудит өсөн башҡарылған һынау:
+- Һуңғы консультатив ДБ менән Ran `cargo audit`; дүрт кәңәште һәм уларҙы бәйлелек ағастарын раҫланы.
+- Эҙләү өсөн туранан-тура бәйлелек декларациялары зарарланған йәшниктәр аныҡ төҙәтеү урындарын билдәләү өсөн.

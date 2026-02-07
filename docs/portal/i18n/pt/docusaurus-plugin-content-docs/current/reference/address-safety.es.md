@@ -4,43 +4,43 @@ direction: ltr
 source: docs/portal/docs/reference/address-safety.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Seguridad y accesibilidad de direcciones
-description: Requisitos de UX para presentar y compartir direcciones de Iroha con seguridad (ADDR-6c).
+título: Segurança e acessibilidade de direções
+description: Requisitos de UX para apresentar e compartilhar direções de Iroha com segurança (ADDR-6c).
 ---
 
-Esta pagina captura el entregable de documentacion ADDR-6c. Aplica estas restricciones a wallets, explorers, herramientas de SDK y cualquier superficie del portal que renderice o acepte direcciones orientadas a personas. El modelo de datos canonico vive en `docs/account_structure.md`; la checklist de abajo explica como exponer esos formatos sin comprometer seguridad o accesibilidad.
+Esta página captura a entrega da documentação ADDR-6c. Aplique essas restrições a carteiras, exploradores, ferramentas de SDK e qualquer superfície do portal que renderize ou aceite direções orientadas a pessoas. O modelo de dados canônico vive em `docs/account_structure.md`; a lista de verificação abaixo explica como expor esses formatos sem comprometer segurança ou acessibilidade.
 
-## Flujos seguros de comparticion
+## Fluxos seguros de partição
 
-- Por defecto, cada accion de copiar/compartir debe usar la direccion IH58. Muestra el dominio resuelto como contexto de apoyo para que la cadena con checksum permanezca al frente.
-- Ofrece una accion "Compartir" que incluya la direccion en texto plano y un QR derivado del mismo payload. Permite que las personas inspeccionen ambos antes de confirmar.
-- Cuando el espacio obligue a truncar (tarjetas pequenas, notificaciones), conserva el prefijo legible, muestra puntos suspensivos y reten los ultimos 4-6 caracteres para que sobreviva el ancla del checksum. Provee un toque/atajo de teclado para copiar la cadena completa sin truncamiento.
-- Evita la desincronizacion del portapapeles emitiendo un toast de confirmacion que previsualice la cadena IH58 exacta que se copio. Donde haya telemetria, cuenta intentos de copia versus acciones de compartir para detectar regresiones de UX rapido.
+- Por defeito, cada ação de copiar/compartilhar deve usar a direção IH58. Exibe o domínio resultante como contexto de apoio para que a cadeia com checksum permaneça na frente.
+- Oferece uma ação "Compartilhar" que inclui a direção em texto plano e um QR derivado do mesmo payload. Permite que as pessoas inspecionem ambos antes de confirmar.
+- Quando o espaço obriga a truncar (cartões pequenos, notificações), mantenha o prefixo legível, mostre pontos suspensivos e retenha os últimos 4-6 caracteres para que sobreviva a ancla do checksum. Experimente um toque/ataque de teclado para copiar a cadeia completa sem truncamento.
+- Evite a desincronização dos porta-papéis emitindo um brinde de confirmação que pré-visualiza a cadeia IH58 exata que se copio. Onde há telemetria, existem intenções de cópia versus ações de partição para detectar regressões de UX rapidamente.
 
-## IME y salvaguardas de entrada
+## IME e segurança de entrada
 
-- Rechaza entradas no ASCII en campos de direccion. Cuando aparezcan artefactos de composicion IME (full width, Kana, marcas de tono), muestra una advertencia inline que explique como cambiar el teclado a entrada en latin antes de reintentar.
-- Provee una zona de pegado en texto plano que elimine marcas combinantes y reemplace espacios en blanco por espacios ASCII antes de validar. Esto evita que la persona pierda progreso cuando desactiva el IME a mitad de flujo.
-- Endurece la validacion contra zero-width joiners, variation selectors y otros puntos de codigo Unicode sigilosos. Registra la categoria del punto de codigo rechazado para que los fuzzing suites puedan importar la telemetria.
+- Rechaza entradas no ASCII em campos de direção. Quando aparecem artefatos de composição IME (largura total, Kana, marcas de tom), mostra uma advertência inline que explica como alterar o teclado para entrada em latim antes de tentar novamente.
+- Prove uma zona de texto plano que elimine marcas combinadas e substitua espaços em branco por espaços ASCII antes de validar. Isso evita que a pessoa perca o progresso quando o IME é desativado no meio do fluxo.
+- Suportar a validação contra marceneiros de largura zero, seletores de variação e outros pontos de código Unicode sigilosos. Registre a categoria do ponto de código rechazado para que as suítes fuzzing possam importar a telemetria.
 
-## Expectativas de tecnologia asistiva
+## Expectativas de tecnologia assistiva
 
-- Anota cada bloque de direccion con `aria-label` o `aria-describedby` que deletree el prefijo legible y agrupe el payload en bloques de 4-8 caracteres ("ih dash b three two ..."). Esto evita que los lectores de pantalla produzcan un flujo ininteligible de caracteres.
-- Anuncia los eventos de copia/comparticion exitosos mediante una actualizacion de live region en modo polite. Incluye el destino (portapapeles, hoja de compartir, QR) para que la persona sepa que la accion se completo sin mover el foco.
-- Provee texto `alt` descriptivo para las vistas previas de QR (p. ej., "Direccion IH58 para `<account>` en la cadena `0x1234`"). Incluye un fallback "Copiar direccion como texto" junto al canvas de QR para personas con baja vision.
+- Anote cada bloco de direção com `aria-label` ou `aria-describedby` que exclui o prefixo legível e agrupa a carga útil em blocos de 4 a 8 caracteres ("ih traço b três dois ..."). Isso evita que os leitores de tela produzam um fluxo de caracteres ininteligíveis.
+- Anuncia os eventos de cópia/compartição exitosos por meio de uma atualização da região ao vivo no modo educado. Inclua o destino (porta-papeles, hoja de compartir, QR) para que a pessoa separe que a ação se completa sem mover o foco.
+- Fornecer texto `alt` descritivo para as vistas anteriores de QR (p. ej., "Direção IH58 para `<account>` na cadeia `0x1234`"). Inclui um substituto "Copiar direção como texto" junto com a tela de QR para pessoas com baixa visão.## Direções comprimidas solo Sora
 
-## Direcciones comprimidas solo Sora
+- Gating: oculta a cadeia comprimida `sora...` após uma confirmação explícita. A confirmação deve reiterar que o formato só funciona nas cadeias Sora Nexus.
+- Etiquetado: cada aparição deve incluir uma insígnia visível "Solo Sora" e uma dica de ferramenta que explica que outras redes exigem o formato IH58.
+- Guardrails: se o discriminante de cadeia ativo não for a atribuição de Nexus, rechaza gerar a direção comprimida e dirigir a pessoa de volta para IH58.
+- Telemetria: registre-se com a frequência solicitada e copie o formulário comprometido para que o manual de incidentes detecte picos de participação acidental.
 
-- Gating: oculta la cadena comprimida `sora...` detras de una confirmacion explicita. La confirmacion debe reiterar que el formato solo funciona en cadenas Sora Nexus.
-- Etiquetado: cada aparicion debe incluir una insignia visible "Solo Sora" y un tooltip que explique por que otras redes requieren la forma IH58.
-- Guardrails: si el discriminante de cadena activo no es la asignacion de Nexus, rechaza generar la direccion comprimida y dirige a la persona de vuelta a IH58.
-- Telemetria: registra con que frecuencia se solicita y se copia la forma comprimida para que el playbook de incidentes detecte picos de comparticion accidental.
+## Portões de qualidade
 
-## Quality gates
-
-- Extiende las pruebas UI automatizadas (o suites de a11y en storybook) para afirmar que los componentes de direcciones exponen la metadata ARIA requerida y que los mensajes de rechazo por IME aparecen.
-- Incluye escenarios de QA manual para entrada IME (kana, pinyin), pase de lector de pantalla (VoiceOver/NVDA) y copia de QR en temas de alto contraste antes del release.
-- Refleja estas comprobaciones en las checklists de release junto a las pruebas de paridad IH58 para que las regresiones sigan bloqueadas hasta corregirse.
+- Estenda as verificações UI automatizadas (ou suítes de a11y em storybook) para afirmar que os componentes de direções expõem os metadados ARIA requeridos e que as mensagens de rechazo por IME aparecem.
+- Inclui cenários de manual de controle de qualidade para entrada IME (kana, pinyin), leitor de tela (VoiceOver/NVDA) e cópia de QR em temas de alto contraste antes do lançamento.
+- Reflita sobre essas verificações nas listas de verificação de liberação junto com as verificações de paridade IH58 para que as regiões sigam bloqueadas até serem corrigidas.

@@ -4,79 +4,79 @@ direction: ltr
 source: docs/portal/docs/sorafs/signing-ceremony.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: signing-ceremony
-title: Sustitucion de la ceremonia de firma
-description: Como el Parlamento de Sora aprueba y distribuye fixtures del chunker de SoraFS (SF-1b).
-sidebar_label: Ceremonia de firma
+идентификатор: церемония подписания
+Название: Суституцион де ла церемония де фирма
+описание: Как парламент Соры, а также распределяет оборудование для блоков SoraFS (SF-1b).
+Sidebar_label: Церемония фирмы
 ---
 
-> Roadmap: **SF-1b — aprobaciones de fixtures del Parlamento de Sora.**
-> El flujo del Parlamento reemplaza la antigua “ceremonia de firma del consejo” offline.
+> Дорожная карта: **SF-1b — апробация решений Парламента Соры.**
+> Эль-флухо-дель-Парламенто повторно заменяет «церемонию фирмы совета» в автономном режиме.
 
-El ritual manual de firmas usado para los fixtures del chunker de SoraFS queda retirado. Todas
+Ритуальное руководство по использованию фирменного приспособления для устройства SoraFS было удалено. Тодас
 las aprobaciones ahora pasan por el **Parlamento de Sora**, la DAO basada en sorteo que gobierna
-Nexus. Los miembros del Parlamento fianzan XOR para obtener ciudadania, rotan entre paneles y
-emiten votos on-chain que aprueban, rechazan o revierten releases de fixtures. Esta guia explica
-el proceso y el tooling para developers.
+Nexus. Los miembros del Parlamento fianzan XOR для получения гражданства, вращаются между панелями и
+в цепочке проголосовано, что будет одобрено, изменено или возобновлено выпуск светильников. Это объяснение
+процесс и инструменты для разработчиков.
 
-## Resumen del Parlamento
+## Резюме парламента
 
-- **Ciudadania** — Los operadores fianzan el XOR requerido para inscribirse como ciudadanos y
-  volverse elegibles para sorteo.
-- **Paneles** — Las responsabilidades se dividen en paneles rotativos (Infraestructura,
-  Moderacion, Tesoreria, …). El Panel de Infraestructura es el dueno de las aprobaciones de
-  fixtures de SoraFS.
-- **Sorteo y rotacion** — Los asientos de panel se reasignan con la cadencia especificada en
-  la constitucion del Parlamento para que ningun grupo monopolice las aprobaciones.
+- **Ciudadania** — Оперативники должны выполнить XOR, чтобы вписать их как граждане и
+  volverse elegibles для сортировки.
+- **Панели** — Ответственность разделена на вращающиеся панели (Infraestructura,
+  Модерасьон, Тесорерия, …). Панель инфраструктуры является предметом проверки
+  светильники SoraFS.
+- **Сортировка и вращение** — Los asientos de Panel se resignan con la Cadencia especificada en
+  Конституция Парламента для того, чтобы ни одна группа монополистов не подвергалась испытаниям.
 
-## Flujo de aprobacion de fixtures
+## Flujo де апробация светильников
 
-1. **Envio de propuesta**
-   - El WG de Tooling sube el bundle candidato `manifest_blake3.json` mas el diff del fixture
-     al registro on-chain via `sorafs.fixtureProposal`.
-   - La propuesta registra el digest BLAKE3, la version semantica y las notas de cambio.
-2. **Revision y votacion**
+1. **Предложение о собственности**
+   - Рабочая группа по инструментам включает в себя предполагаемый комплект `manifest_blake3.json`, поскольку разница между приспособлениями
+     Аль-регистр в цепочке через `sorafs.fixtureProposal`.
+   - Зарегистрировано имя дайджеста BLAKE3, семантическая версия и камбийские примечания.
+2. **Пересмотр и голосование**
    - El Panel de Infraestructura recibe la asignacion a traves de la cola de tareas del
-     Parlamento.
-   - Los miembros del panel inspeccionan artefactos de CI, corren tests de paridad y emiten
-     votos ponderados on-chain.
-3. **Finalizacion**
-   - Una vez alcanzado el quorum, el runtime emite un evento de aprobacion que incluye el
-     digest canonico del manifest y el compromiso Merkle del payload del fixture.
-   - El evento se refleja en el registry de SoraFS para que los clientes puedan obtener el
-     manifest mas reciente aprobado por el Parlamento.
-4. **Distribucion**
-   - Los helpers de CLI (`cargo xtask sorafs-fetch-fixture`) traen el manifest aprobado desde
-     Nexus RPC. Las constantes JSON/TS/Go del repositorio se mantienen sincronizadas al
-     re-ejecutar `export_vectors` y validar el digest contra el registro on-chain.
+     Парламенто.
+   - Los miembros del Panel Inspectionan Artefactos de CI, Corren Tests de Paridad y Emiten
+     votos ponderados в цепочке.
+3. **Завершение**
+   - Когда вы выбрали кворум, среда выполнения генерирует событие апробации, которое включает в себя
+     дайджест канонического манифеста и компромиссный вариант полезной нагрузки приспособления.
+   - Событие отображается в реестре SoraFS, чтобы клиенты могли получить его.
+     Манифест mas reciente aprobado por el Parlamento.
+4. **Распространение**
+   - Помощники CLI (`cargo xtask sorafs-fetch-fixture`) проходят одобренный манифест.
+     Nexus RPC. Константы JSON/TS/Go из репозитория будут синхронизированы со всеми
+     повторно извлеките `export_vectors` и проверьте дайджест против реестра в цепочке.
 
-## Flujo de trabajo para developers
+## Работа для разработчиков
 
-- Regenera fixtures con:
+- Светильники Regenera с:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Usa el helper de fetch del Parlamento para descargar el envelope aprobado, verificar
-  firmas y refrescar fixtures locales. Apunta `--signatures` al envelope publicado por el
-  Parlamento; el helper resuelve el manifest acompanante, recomputa el digest BLAKE3 e
-  impone el perfil canonico `sorafs.sf1@1.0.0`.
+- Используйте помощника по доставке парламента для подтверждения конверта, проверки.
+  фирмы и региональные обновления светильников. Apunta `--signatures` в публичном конверте
+  Парламент; Помощник перезагружает сопровождающий манифест, пересчитывает дайджест BLAKE3 e
+  импоне el perfil canonico `sorafs.sf1@1.0.0`.
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
   --signatures https://nexus.example/api/sorafs/manifest_signatures.json \
   --out fixtures/sorafs_chunker
-```
+```Pasa `--manifest`, если манифест живет на другом URL-адресе. Конверты не повреждены
+Залп, который нужно настроить `--allow-unsigned` для локалей, запускаемых дымом.
 
-Pasa `--manifest` si el manifest vive en otra URL. Los envelopes sin firma se rechazan
-salvo que se configure `--allow-unsigned` para smoke runs locales.
-
-- Al validar un manifest a traves de un gateway de staging, apunta a Torii en vez de payloads
-  locales:
+- При подтверждении манифеста через промежуточный шлюз, добавлен Torii и все полезные нагрузки.
+  локали:
 
 ```bash
 sorafs-fetch \
@@ -87,31 +87,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- El CI local ya no requiere un roster `signer.json`.
-  `ci/check_sorafs_fixtures.sh` compara el estado del repo contra el ultimo compromiso
-  on-chain y falla cuando divergen.
+- Местный CI не требует списка `signer.json`.
+  `ci/check_sorafs_fixtures.sh` сравнить состояние репо с последним компромиссом
+  он-чейн и Falla Cuando расходятся.
 
 ## Notas de gobernanza
 
-- La constitucion del Parlamento gobierna quorum, rotacion y escalamiento; no se requiere
-  configuracion a nivel de crate.
-- Los rollbacks de emergencia se manejan a traves del panel de moderacion del Parlamento.
-  El Panel de Infraestructura presenta una propuesta de revert que referencia el digest
-  previo del manifest, reemplazando la release una vez aprobada.
-- Las aprobaciones historicas permanecen disponibles en el registry de SoraFS para
-  replay forense.
+- Конституция парламента: кворум, ротация и подъем; нет необходимости
+  Конфигурация до уровня ящика.
+- Откат экстренной ситуации происходит через панель модерации парламента.
+  Панель инфраструктуры представляет возможность возврата к ссылке на дайджест
+  Прежде чем манифест, повторно замените выпуск очень пробадным.
+- Постоянные исторические подтверждения доступны в реестре SoraFS для
+  переиграть форенс.
 
-## FAQ
+## Часто задаваемые вопросы
 
 - **A donde se fue `signer.json`?**  
-  Se elimino. Toda la atribucion de firmas vive on-chain; `manifest_signatures.json`
-  en el repositorio es solo un fixture de developer que debe coincidir con el ultimo
-  evento de aprobacion.
+  Если вы удалили. Toda la atribucion de Firmas vive on-chain; `manifest_signatures.json`
+  в репозитории есть только приспособление разработчика, которое может совпасть с последним
+  даже де апробасьон.
 
-- **Seguimos requiriendo firmas Ed25519 locales?**  
-  No. Las aprobaciones del Parlamento se almacenan como artefactos on-chain. Los fixtures
-  locales existen para reproducibilidad, pero se validan contra el digest del Parlamento.
+- **Требуются ли региональные стандарты Ed25519?**  
+  Нет. Las aprobaciones del Parlamento se almacenan как артефакты в цепочке. Лос-Анджелес расписание
+  локали существуют для воспроизводства, но они действительны против дайджеста парламента.
 
-- **Como monitorean las aprobaciones los equipos?**  
-  Suscribanse al evento `ParliamentFixtureApproved` o consulten el registry via Nexus RPC
-  para recuperar el digest actual del manifest y el roll call del panel.
+- **Как контролировать испытания оборудования?**  
+  Подпишитесь на событие `ParliamentFixtureApproved` или обратитесь к реестру через Nexus RPC.
+  для восстановления актуального дайджеста манифеста и переклички панели.

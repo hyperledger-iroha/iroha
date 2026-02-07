@@ -9,13 +9,14 @@ source_last_modified: "2026-01-03T19:37:11.140795+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CI Cookbook
 summary: Reference GitHub Actions workflow bundling sign + verify steps with review notes.
+translator: machine-google-reviewed
 ---
 
-# SoraFS CI Cookbook
+# SoraFS CI 食譜
 
-This snippet mirrors the guidance in `docs/source/sorafs_ci_templates.md` and
-demonstrates how to integrate signing, verification, and proof checks into a
-single GitHub Actions job.
+此片段反映了 `docs/source/sorafs_ci_templates.md` 中的指導和
+演示如何將簽名、驗證和證明檢查集成到
+單個 GitHub Actions 作業。
 
 ```yaml
 name: sorafs-cli-release
@@ -78,18 +79,18 @@ jobs:
         run: cosign verify-blob --bundle artifacts/manifest.bundle.json artifacts/manifest.to
 ```
 
-## Notes
+## 註釋
 
-- `sorafs_cli` must be available on the runner (e.g., `cargo install --path crates/sorafs_car --features cli` prior to these steps).
-- The workflow must supply an explicit OIDC audience (here `sorafs`); adjust `--identity-token-audience` to match your Fulcio policy.
-- The release pipeline should archive `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, and `artifacts/proof.json` for governance review.
-- Deterministic sample artefacts live in `fixtures/sorafs_manifest/ci_sample`; copy them into tests when you need golden manifests, chunk plans, or bundle JSON without recomputing the pipeline.
+- `sorafs_cli` 必須在運行器上可用（例如，執行這些步驟之前的 `cargo install --path crates/sorafs_car --features cli`）。
+- 工作流程必須提供明確的 OIDC 受眾（此處為 `sorafs`）；調整 `--identity-token-audience` 以匹配您的 Fulcio 策略。
+- 發布管道應存檔 `artifacts/manifest.bundle.json`、`artifacts/manifest.sig` 和 `artifacts/proof.json` 以供治理審查。
+- 確定性樣本工件位於 `fixtures/sorafs_manifest/ci_sample` 中；當您需要黃金清單、塊計劃或捆綁 JSON 時，將它們複製到測試中，而無需重新計算管道。
 
-## Fixture Verification
+## 夾具驗證
 
-Deterministic artefacts for this workflow live under
-`fixtures/sorafs_manifest/ci_sample`. Pipelines can replay the steps above and
-diff their outputs against the canonical files, for example:
+此工作流程的確定性工件位於
+`fixtures/sorafs_manifest/ci_sample`。管道可以重播上述步驟並
+將其輸出與規範文件進行比較，例如：
 
 ```bash
 diff -u fixtures/sorafs_manifest/ci_sample/car_summary.json artifacts/car_summary.json
@@ -100,7 +101,7 @@ diff -u fixtures/sorafs_manifest/ci_sample/manifest.verify.summary.json artifact
 diff -u fixtures/sorafs_manifest/ci_sample/proof.json artifacts/proof.json
 ```
 
-Empty diffs confirm the build produced byte-identical manifests, plans, and
-signature bundles. See `fixtures/sorafs_manifest/ci_sample/README.md` for a full
-directory listing and tips on templating release notes from the captured
-summaries.
+空差異確認構建產生了字節相同的清單、計劃和
+簽名包。完整信息請參見 `fixtures/sorafs_manifest/ci_sample/README.md`
+目錄列表和有關從捕獲的模板化發行說明的提示
+總結。

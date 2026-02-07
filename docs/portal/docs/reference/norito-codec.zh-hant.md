@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8de31f9e066b729fda8324b8847badba23de926888574d02a44fb0e6d4472f77
 source_last_modified: "2026-01-16T17:12:51.444585+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito 編解碼器參考
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito 是 Iroha 的規範序列化層。磁盤上的每一條線上消息
+有效負載，跨組件 API 使用 Norito，因此節點同意相同的字節
+即使它們在不同的硬件上運行。本頁總結了移動部件
+並指向 `norito.md` 中的完整規範。
 
-## Core layout
+## 核心佈局
 
-| Component | Purpose | Source |
-| --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+|組件|目的|來源 |
+| ---| ---| ---|
+| **標題** |使用 magic/version/schema 哈希、CRC64、長度和壓縮標籤構建有效負載； v1 需要 `VERSION_MINOR = 0x00` 並根據支持的掩碼（默認 `0x00`）驗證標頭標誌。 | `norito::header` — 請參閱 `norito.md`（“標頭和標誌”，存儲庫根）|
+| **裸負載** |用於散列/比較的確定性值編碼。在線傳輸始終使用標頭；裸字節僅供內部使用。 | `norito::codec::{Encode, Decode}` |
+| **壓縮** |通過標頭壓縮字節選擇可選的 Zstd（和實驗性 GPU 加速）。 | `norito.md`，“壓縮協商” |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+佈局標誌註冊表（packed-struct、packed-seq、field bitset、compact
+長度）位於 `norito::header::flags` 中。 V1 默認為標誌 `0x00` 但
+接受受支持掩碼內的顯式標頭標誌；未知位是
+被拒絕了。 `norito::header::Flags` 保留用於內部檢查和
+未來的版本。
 
-## Derive support
+## 獲得支持
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` 附帶 `Encode`、`Decode`、`IntoSchema` 和 JSON 幫助程序派生。
+主要約定：
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- 派生生成 AoS 和打包代碼路徑； v1 默認為 AoS
+  佈局（標誌 `0x00`），除非標頭標誌選擇打包變體。
+  實現位於 `crates/norito_derive/src/derive_struct.rs` 中。
+- 影響佈局的功能（`packed-struct`、`packed-seq`、`compact-len`）是
+  通過標頭標誌選擇加入，並且必須在對等點之間一致地編碼/解碼。
+- JSON 助手 (`norito::json`) 提供確定性 Norito 支持的 JSON
+  開放 API。使用 `norito::json::{to_json_pretty, from_json}` — 切勿使用 `serde_json`。
 
-## Multicodec & identifier tables
+## 多編解碼器和標識符表
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito 將其多編解碼器分配保留在 `norito::multicodec` 中。參考資料
+表（哈希值、密鑰類型、有效負載描述符）維護在 `multicodec.md` 中
+在存儲庫根目錄下。添加新標識符時：
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1.更新`norito::multicodec::registry`。
+2. 擴展`multicodec.md` 中的表。
+3. 如果下游綁定 (Python/Java) 消耗了映射，則重新生成下游綁定。
 
-## Regenerating docs & fixtures
+## 重新生成文檔和裝置
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+由於門戶當前託管散文摘要，請使用上游 Markdown
+來源作為真理的來源：
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **規格**：`norito.md`
+- **多編解碼器表**：`multicodec.md`
+- **基準**：`crates/norito/benches/`
+- **黃金測試**：`crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+當 Docusaurus 自動化上線時，門戶將通過
+從這些數據中提取數據的同步腳本（在 `docs/portal/scripts/` 中跟踪）
+文件。在此之前，只要規範發生變化，請手動保持此頁面對齊。

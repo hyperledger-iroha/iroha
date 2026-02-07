@@ -4,27 +4,29 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Recetas de CI de SoraFS
+ID: desarrollador-ci
+título: Recetas de CI de SoraFS
 sidebar_label: Recetas de CI
-description: Ejecuta el CLI de SoraFS en pipelines de GitHub y GitLab con firma sin claves.
+descripción: Ejecuta el CLI de SoraFS en pipelines de GitHub y GitLab con firma sin claves.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/ci.md`. Mantén ambas versiones sincronizadas hasta que los docs heredados se retiren.
+:::nota Fuente canónica
+Esta página refleja `docs/source/sorafs/developer/ci.md`. Mantén ambas versiones sincronizadas hasta que los documentos heredados se retiren.
 :::
 
-# Recetas de CI
+#Recetas de CI
 
 Los pipelines de SoraFS se benefician del chunking determinista, la firma de manifests y la
-verificación de proofs. La superficie de comandos de `sorafs_cli` mantiene esos pasos
-portables entre proveedores de CI. Esta página resalta las recetas canónicas y apunta a
-plantillas listas para usar.
+verificación de pruebas. La superficie de comandos de `sorafs_cli` mantiene esos pasos
+portátiles entre proveedores de CI. Esta página resalta las recetas canónicas y apunta a
+listas de plantillas para usar.
 
-## GitHub Actions (sin claves)
+## Acciones de GitHub (sin claves)
 
 ```yaml
 name: sorafs-artifacts
@@ -100,8 +102,8 @@ jobs:
 Puntos clave:
 
 - No se almacenan claves de firma estáticas; los tokens OIDC se obtienen bajo demanda.
-- Los artefactos (CAR, manifest, bundle, resúmenes de proofs) se suben para revisión.
-- El job reutiliza los mismos esquemas Norito usados en los rollouts de producción.
+- Los artefactos (CAR, manifiesto, paquete, resúmenes de pruebas) se suben para revisión.
+- El trabajo reutiliza los mismos esquemas Norito usados ​​en los rollouts de producción.
 
 ## GitLab CI
 
@@ -137,14 +139,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Aprovisiona `SIGSTORE_ID_TOKEN` mediante la federación de identidad de workload de GitLab o un
-  secreto sellado antes de ejecutar la etapa de publish.
+- Aprovisiona `SIGSTORE_ID_TOKEN` mediante la federación de identidad de carga de trabajo de GitLab o un
+  secreto sellado antes de ejecutar la etapa de publicación.
 - El fallo de cualquier paso del CLI hace que el pipeline se detenga, preservando
   artefactos consistentes.
 
-## Recursos adicionales
-
-- Plantillas end-to-end (incluye helpers Bash, configuración de identidad federada y
+## Recursos adicionales- Plantillas de extremo a extremo (incluye ayudantes Bash, configuración de identidad federada y
   pasos de limpieza): `docs/examples/sorafs_ci.md`
 - Referencia del CLI con todas las opciones: `docs/source/sorafs_cli.md`
 - Requisitos de gobernanza/alias antes del envío:

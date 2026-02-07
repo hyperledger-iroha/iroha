@@ -11,65 +11,66 @@ id: registry-schema
 title: Sora Name Service Registry Schema
 sidebar_label: Registry schema
 description: Norito data structures, lifecycle rules, and event contracts for SNS registry smart contracts (SN-2a).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registry_schema.md` and now serves as the
-canonical portal copy. The source file remains for translation updates.
+:::შენიშვნა კანონიკური წყარო
+ეს გვერდი ასახავს `docs/source/sns/registry_schema.md` და ახლა ემსახურება როგორც
+კანონიკური პორტალის ასლი. წყაროს ფაილი რჩება თარგმანის განახლებისთვის.
 :::
 
 # Sora Name Service Registry Schema (SN-2a)
 
-**Status:** Drafted 2026-03-24 -- submitted for SNS program review  
-**Roadmap link:** SN-2a “Registry schema & storage layout”  
-**Scope:** Define the canonical Norito structures, lifecycle states, and emitted events for the Sora Name Service (SNS) so registry and registrar implementations stay deterministic across contracts, SDKs, and gateways.
+** სტატუსი: ** შედგენილია 2026-03-24 -- წარდგენილია SNS პროგრამის განსახილველად  
+**საგზაო რუკის ბმული:** SN-2a „რეგისტრის სქემა და შენახვის განლაგება“  
+**ფარგლები:** განსაზღვრეთ კანონიკური Norito სტრუქტურები, სასიცოცხლო ციკლის მდგომარეობები და ემიტირებული მოვლენები Sora Name Service (SNS)-ისთვის, რათა რეესტრისა და რეგისტრატორის იმპლემენტაციები დარჩეს განმსაზღვრელი კონტრაქტებში, SDK-ებსა და კარიბჭეებში.
 
-This document completes the schema deliverable for SN-2a by specifying:
+ეს დოკუმენტი ავსებს SN-2a-სთვის მიწოდების სქემას მითითებით:
 
-1. Identifiers and hashing rules (`SuffixId`, `NameHash`, selector derivation).
-2. Norito structs/enums for name records, suffix policies, pricing tiers, revenue splits, and registry events.
-3. Storage layout and index prefixes for deterministic replay.
-4. A state machine covering registration, renewal, grace/redemption, freezes, and tombstones.
-5. Canonical events consumed by DNS/gateway automation.
+1. იდენტიფიკატორები და ჰეშირების წესები (`SuffixId`, `NameHash`, სელექტორის დერივაცია).
+2. Norito სტრუქტურები/რიცხვები სახელების ჩანაწერებისთვის, სუფიქსის პოლიტიკისთვის, ფასების რიგებისთვის, შემოსავლების გაყოფისა და რეესტრის მოვლენებისთვის.
+3. შენახვის განლაგება და ინდექსის პრეფიქსები დეტერმინისტული გამეორებისთვის.
+4. სახელმწიფო მანქანა, რომელიც მოიცავს რეგისტრაციას, განახლებას, მადლს/გამოსყიდვას, ყინვებს და საფლავის ქვებს.
+5. DNS/gateway ავტომატიზაციის მიერ მოხმარებული კანონიკური მოვლენები.
 
-## 1. Identifiers & Hashing
+## 1. იდენტიფიკატორები და ჰეშინგი
 
-| Identifier | Description | Derivation |
+| იდენტიფიკატორი | აღწერა | დერივაცია |
 |------------|-------------|------------|
-| `SuffixId` (`u16`) | Registry-wide identifier for top-level suffixes (`.sora`, `.nexus`, `.dao`). Aligned with the suffix catalog in [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Assigned by governance vote; stored in `SuffixPolicyV1`. |
-| `SuffixSelector` | Canonical string form of the suffix (ASCII, lower-case). | Example: `.sora` → `sora`. |
-| `NameSelectorV1` | Binary selector for the registered label. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Label is NFC + lower-case per Norm v1. |
-| `NameHash` (`[u8;32]`) | Primary lookup key used by contracts, events, and caches. | `blake3(NameSelectorV1_bytes)`. |
+| `SuffixId` (`u16`) | რეესტრის მასშტაბით იდენტიფიკატორი ზედა დონის სუფიქსებისთვის (`.sora`, `.nexus`, `.dao`). გასწორებულია სუფიქსის კატალოგთან [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | დანიშნულია მმართველობის კენჭისყრით; ინახება `SuffixPolicyV1`-ში. |
+| `SuffixSelector` | სუფიქსის კანონიკური სიმებიანი ფორმა (ASCII, მცირე რეგისტრი). | მაგალითი: `.sora` → `sora`. |
+| `NameSelectorV1` | ორობითი სელექტორი რეგისტრირებული ეტიკეტისთვის. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. ლეიბლი არის NFC + პატარა რეგისტრები Normv1-ზე. |
+| `NameHash` (`[u8;32]`) | ძირითადი საძიებო გასაღები გამოიყენება კონტრაქტების, მოვლენებისა და ქეშების მიერ. | `blake3(NameSelectorV1_bytes)`. |
 
-Determinism requirements:
+დეტერმინიზმის მოთხოვნები:
 
-- Labels are normalised via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Incoming user strings MUST be normalised before hashing.
-- Reserved labels (from `SuffixPolicyV1.reserved_labels`) never enter the registry; governance-only overrides emit `ReservedNameAssigned` events.
+- ლეიბლები ნორმალიზდება Normv1-ის საშუალებით (UTS-46 მკაცრი, STD3 ASCII, NFC). შემომავალი მომხმარებლის სტრიქონები უნდა იყოს ნორმალიზებული ჰეშირებამდე.
+- რეზერვირებული ეტიკეტები (`SuffixPolicyV1.reserved_labels`-დან) არასოდეს შედის რეესტრში; მხოლოდ მმართველობის უგულებელყოფა ასხივებს `ReservedNameAssigned` მოვლენებს.
 
-## 2. Norito Structures
+## 2. Norito სტრუქტურები
 
 ### 2.1 NameRecordV1
 
-| Field | Type | Notes |
+| ველი | ტიპი | შენიშვნები |
 |-------|------|-------|
-| `suffix_id` | `u16` | References `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Raw selector bytes for audit/debug. |
-| `name_hash` | `[u8; 32]` | Key for maps/events. |
-| `normalized_label` | `AsciiString` | Human-readable label (post Norm v1). |
-| `display_label` | `AsciiString` | Steward-provided casing; optional cosmetics. |
-| `owner` | `AccountId` | Controls renewals/transfers. |
-| `controllers` | `Vec<NameControllerV1>` | References target account addresses, resolvers, or application metadata. |
-| `status` | `NameStatus` | Lifecycle flag (see Section 4). |
-| `pricing_class` | `u8` | Index into suffix pricing tiers (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Block timestamp of the initial activation. |
-| `expires_at` | `Timestamp` | End of paid term. |
-| `grace_expires_at` | `Timestamp` | End of auto-renew grace (default +30 days). |
-| `redemption_expires_at` | `Timestamp` | End of redemption window (default +60 days). |
-| `auction` | `Option<NameAuctionStateV1>` | Present when Dutch reopen or premium auctions are active. |
-| `last_tx_hash` | `Hash` | Deterministic pointer to the transaction that produced this version. |
-| `metadata` | `Metadata` | Arbitrary registrar metadata (text records, proofs). |
+| `suffix_id` | `u16` | მითითებები `SuffixPolicyV1`. |
+| `selector` | `NameSelectorV1` | ნედლეული სელექტორი ბაიტები აუდიტის/გამართვისთვის. |
+| `name_hash` | `[u8; 32]` | გასაღები რუკებისთვის/მოვლენებისთვის. |
+| `normalized_label` | `AsciiString` | ადამიანისთვის წასაკითხი ეტიკეტი (პოსტ Normv1). |
+| `display_label` | `AsciiString` | სტიუარდის მიერ მოწოდებული გარსაცმები; სურვილისამებრ კოსმეტიკა. |
+| `owner` | `AccountId` | აკონტროლებს განახლებას/ტრანსფერებს. |
+| `controllers` | `Vec<NameControllerV1>` | ცნობები მიზნად ისახავს ანგარიშის მისამართებს, გადამწყვეტებს ან აპლიკაციის მეტამონაცემებს. |
+| `status` | `NameStatus` | სასიცოცხლო ციკლის დროშა (იხილეთ ნაწილი 4). |
+| `pricing_class` | `u8` | ინდექსირება სუფიქსის ფასების რიგებში (სტანდარტული, პრემია, დაჯავშნილი). |
+| `registered_at` | `Timestamp` | საწყისი აქტივაციის დროის ანაბეჭდის დაბლოკვა. |
+| `expires_at` | `Timestamp` | ფასიანი ვადის დასრულება. |
+| `grace_expires_at` | `Timestamp` | ავტომატური განახლების მადლის დასრულება (ნაგულისხმევი +30 დღე). |
+| `redemption_expires_at` | `Timestamp` | გამოსყიდვის ფანჯრის დასასრული (ნაგულისხმევი +60 დღე). |
+| `auction` | `Option<NameAuctionStateV1>` | წარმოადგინეთ, როდესაც ჰოლანდიის ხელახალი გახსნა ან პრემიუმ აუქციონები აქტიურია. |
+| `last_tx_hash` | `Hash` | დეტერმინისტული მაჩვენებელი ტრანზაქციის შესახებ, რომელმაც შექმნა ეს ვერსია. |
+| `metadata` | `Metadata` | თვითნებური რეგისტრატორის მეტამონაცემები (ტექსტური ჩანაწერები, მტკიცებულებები). |
 
-Supporting structs:
+დამხმარე სტრუქტურები:
 
 ```text
 Enum NameStatus {
@@ -125,26 +126,26 @@ Enum AuctionKind {
 }
 ```
 
-### 2.2 SuffixPolicyV1
+### 2.2 სუფიქსიპოლიტიკაV1
 
-| Field | Type | Notes |
+| ველი | ტიპი | შენიშვნები |
 |-------|------|-------|
-| `suffix_id` | `u16` | Primary key; stable across policy versions. |
-| `suffix` | `AsciiString` | e.g., `sora`. |
-| `steward` | `AccountId` | Steward defined in the governance charter. |
+| `suffix_id` | `u16` | ძირითადი გასაღები; სტაბილურია პოლიტიკის ვერსიებში. |
+| `suffix` | `AsciiString` | მაგ., `sora`. |
+| `steward` | `AccountId` | მმართველობის წესდებაში განსაზღვრული სტიუარდი. |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset identifier (for example `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
-| `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) per charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
-| `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
-| `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |
-| `policy_version` | `u16` | Incremented on every change. |
-| `metadata` | `Metadata` | Extended notes (KPI covenant, compliance doc hashes). |
+| `payment_asset_id` | `AsciiString` | ნაგულისხმევი ანგარიშსწორების აქტივის იდენტიფიკატორი (მაგალითად, `xor#sora`). |
+| `pricing` | `Vec<PriceTierV1>` | დონის ფასების კოეფიციენტები და ხანგრძლივობის წესები. |
+| `min_term_years` | `u8` | სართული შეძენილი ვადით, განურჩევლად იარუსის გადაფარვისა. |
+| `grace_period_days` | `u16` | ნაგულისხმევი 30. |
+| `redemption_period_days` | `u16` | ნაგულისხმევი 60. |
+| `max_term_years` | `u8` | მაქსიმალური წინა განახლების სიგრძე. |
+| `referral_cap_bps` | `u16` | <=1000 (10%) თითო ჩარტერზე. |
+| `reserved_labels` | `Vec<ReservedNameV1>` | მმართველობამ მიაწოდა სია დავალების ინსტრუქციებით. |
+| `fee_split` | `SuffixFeeSplitV1` | ხაზინა / სტიუარდი / რეფერალური აქციები (საბაზისო ქულები). |
+| `fund_splitter_account` | `AccountId` | ანგარიში, რომელიც შეიცავს ესქროს + ანაწილებს სახსრებს. |
+| `policy_version` | `u16` | ყოველ ცვლილებაზე მატულობს. |
+| `metadata` | `Metadata` | გაფართოებული შენიშვნები (KPI შეთანხმება, შესაბამისობის დოკუმენტის ჰეშები). |
 
 ```text
 Struct PriceTierV1 {
@@ -172,18 +173,18 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Revenue & Settlement Records
+### 2.3 შემოსავლების და ანგარიშსწორების ჩანაწერები
 
-| Struct | Fields | Purpose |
-|--------|--------|---------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
+| სტრუქტურა | ველები | დანიშნულება |
+|--------|-------|---------|
+| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, I18NI000001813X. | განმსაზღვრელი გადახდების დეტერმინისტული ჩანაწერი ანგარიშსწორების ეპოქაში (ყოველკვირეული). |
+| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | ემიტირებული ყოველ ჯერზე გადახდის პოსტებზე (რეგისტრაცია, განახლება, აუქციონი). |
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+ყველა `TokenValue` ველი იყენებს Norito-ის კანონიკურ ფიქსირებული წერტილის დაშიფვრას ვალუტის კოდით დეკლარირებული ასოცირებულ `SuffixPolicyV1`-ში.
 
-### 2.4 Registry Events
+### 2.4 რეესტრის ღონისძიებები
 
-Canonical events provide a replay log for DNS/gateway automation and analytics.
+კანონიკური მოვლენები უზრუნველყოფს გამეორების ჟურნალს DNS/კარიბჭის ავტომატიზაციისა და ანალიტიკისთვის.
 
 ```text
 Struct RegistryEventV1 {
@@ -212,52 +213,52 @@ Enum RegistryEventKind {
 }
 ```
 
-Events must be appended to a replayable log (e.g., `RegistryEvents` domain) and mirrored to gateway feeds so DNS caches invalidate within SLA.
+მოვლენები უნდა დაერთოს ხელახლა დაკვრავად ჟურნალს (მაგ., `RegistryEvents` დომენი) და ასახული იყოს კარიბჭის არხებზე, რათა DNS ქეში გაუქმდეს SLA-ში.
 
-## 3. Storage Layout & Indexes
+## 3. შენახვის განლაგება და ინდექსები
 
-| Key | Description |
+| გასაღები | აღწერა |
 |-----|-------------|
-| `Names::<name_hash>` | Primary map from `name_hash` to `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Secondary index for wallet UI (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detect conflicts, power deterministic search. |
-| `SuffixPolicies::<suffix_id>` | Latest `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` history. |
-| `RegistryEvents::<u64>` | Append-only log keyed by monotonically increasing sequence. |
+| `Names::<name_hash>` | ძირითადი რუკა `name_hash`-დან `NameRecordV1`-მდე. |
+| `NamesByOwner::<AccountId, suffix_id>` | მეორადი ინდექსი საფულის UI-სთვის (გვერდზე მეგობრული). |
+| `NamesByLabel::<suffix_id, normalized_label>` | კონფლიქტების აღმოჩენა, დეტერმინისტული ძიება. |
+| `SuffixPolicies::<suffix_id>` | უახლესი `SuffixPolicyV1`. |
+| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` ისტორია. |
+| `RegistryEvents::<u64>` | მონოტონურად გაზრდილი თანმიმდევრობით ჩასმული მხოლოდ დამატებული ჟურნალი. |
 
-All keys serialise using Norito tuples to keep hashing deterministic across hosts. Index updates occur atomically alongside the primary record.
+ყველა კლავიშის სერიალირება ხდება Norito ტოპების გამოყენებით, რათა ჰეშირება განმსაზღვრელი იყოს ჰოსტებში. ინდექსის განახლებები ხდება ატომურად პირველად ჩანაწერთან ერთად.
 
-## 4. Lifecycle State Machine
+## 4. სიცოცხლის ციკლის მდგომარეობის მანქანა
 
-| State | Entry Conditions | Allowed Transitions | Notes |
-|-------|-----------------|---------------------|-------|
-| Available | Derived when `NameRecord` absent. | `PendingAuction` (premium), `Active` (standard register). | Availability search reads indexes only. |
-| PendingAuction | Created when `PriceTierV1.auction_kind` ≠ none. | `Active` (auction settles), `Tombstoned` (no bids). | Auctions emit `AuctionOpened` and `AuctionSettled`. |
-| Active | Registration or renewal succeeded. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` drives transition. |
-| GracePeriod | Automatically when `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 days; still resolves but flagged. |
-| Redemption | `now > grace_expires_at` but `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Commands require penalty fee. |
-| Frozen | Governance or guardian freeze. | `Active` (after remediation), `Tombstoned`. | Cannot transfer or update controllers. |
-| Tombstoned | Voluntary surrender, permanent dispute outcome, or expired redemption. | `PendingAuction` (Dutch reopen) or remains tombstoned. | Event `NameTombstoned` must include reason. |
+| სახელმწიფო | შესვლის პირობები | ნებადართული გადასვლები | შენიშვნები |
+|-------|----------------|-------------------|-------|
+| ხელმისაწვდომია | მიღებულია, როდესაც `NameRecord` არ არის. | `PendingAuction` (პრემიუმი), `Active` (სტანდარტული რეგისტრი). | ხელმისაწვდომობის ძიება მხოლოდ ინდექსებს კითხულობს. |
+| მომლოდინე აუქციონი | შეიქმნა, როდესაც `PriceTierV1.auction_kind` ≠ არცერთი. | `Active` (აუქციონი ანაზღაურდება), `Tombstoned` (წინადადებების გარეშე). | აუქციონებზე გამოდის `AuctionOpened` და `AuctionSettled`. |
+| აქტიური | რეგისტრაცია ან განახლება წარმატებით დასრულდა. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` დისკების გადასვლას. |
+| საშეღავათო პერიოდი | ავტომატურად, როდესაც `now > expires_at`. | `Active` (დროულად განახლება), `Redemption`, `Tombstoned`. | ნაგულისხმევი +30 დღე; მაინც წყვეტს, მაგრამ დროშით მონიშნული. |
+| გამოსყიდვა | `now > grace_expires_at` მაგრამ `< redemption_expires_at`. | `Active` (გვიანდელი განახლება), `Tombstoned`. | ბრძანებები მოითხოვს ჯარიმას. |
+| გაყინული | მმართველობის ან მეურვის გაყინვა. | `Active` (რემედიაციის შემდეგ), `Tombstoned`. | კონტროლერების გადაცემა ან განახლება შეუძლებელია. |
+| საფლავის ქვები | ნებაყოფლობითი ჩაბარება, მუდმივი დავის შედეგი ან ვადაგასული გამოსყიდვა. | `PendingAuction` (ჰოლანდიური ხელახლა გახსნა) ან რჩება საფლავის ქვები. | მოვლენა `NameTombstoned` უნდა შეიცავდეს მიზეზს. |
 
-State transitions MUST emit the corresponding `RegistryEventKind` so downstream caches stay coherent. Tombstoned names entering Dutch reopen auctions attach an `AuctionKind::DutchReopen` payload.
+მდგომარეობების გადასვლებმა უნდა გამოსცეს შესაბამისი `RegistryEventKind`, რათა ქვედა დინების ქეშები დარჩეს თანმიმდევრული. ჰოლანდიის ხელახლა გახსნილ აუქციონებზე შემოსული საფლავის ქვები ერთვის `AuctionKind::DutchReopen` დატვირთვას.
 
 ## 5. Canonical Events & Gateway Sync
 
-Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
+გეითვეიები გამოიწერენ `RegistryEventV1`-ს და სინქრონიზდებიან DNS/SoraFS-ზე:
 
-1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
-3. Pinning updated zone data via the SoraDNS workflow described in [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+1. უახლესი `NameRecordV1`-ის მიღება, რომელიც მითითებულია მოვლენების თანმიმდევრობით.
+2. გადამწყვეტი შაბლონების რეგენერაცია (სასურველია IH58 + მეორე საუკეთესო შეკუმშული (`sora`) მისამართები, ტექსტური ჩანაწერები).
+3. განახლებული ზონის მონაცემების ჩამაგრება SoraDNS სამუშაო ნაკადის მეშვეობით, რომელიც აღწერილია [`soradns_registry_rfc.md`]-ში (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
-Event delivery guarantees:
+ღონისძიების მიწოდების გარანტია:
 
-- Every transaction affecting a `NameRecordV1` *must* append exactly one event with a strictly increasing `version`.
-- `RevenueSharePosted` events reference settlements emitted by `RevenueShareRecordV1`.
-- Freeze/unfreeze/tombstone events include governance artefact hashes inside `metadata` for audit replay.
+- ყოველი ტრანზაქცია, რომელიც გავლენას ახდენს `NameRecordV1`-ზე *უნდა* დაურთოს ზუსტად ერთ მოვლენას მკაცრად მზარდი `version`-ით.
+- `RevenueSharePosted` `RevenueShareRecordV1`-ის მიერ გამოსხივებული მოვლენების მითითების დასახლებები.
+- გაყინვა/გაყინვა/საფლავის ქვის ღონისძიებები მოიცავს მმართველობის არტეფაქტის ჰეშებს `metadata`-ში აუდიტის განმეორებისთვის.
 
-## 6. Example Norito Payloads
+## 6. მაგალითი Norito Payloads
 
-### 6.1 NameRecord Example
+### 6.1 NameRecord მაგალითი
 
 ```text
 NameRecordV1 {
@@ -287,7 +288,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 SuffixPolicy Example
+### 6.2 სუფიქსიპოლიტიკის მაგალითი
 
 ```text
 SuffixPolicyV1 {
@@ -315,10 +316,8 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Next Steps
+## 7. შემდეგი ნაბიჯები- **SN-2b (რეგისტრატორის API და მმართველობის კაკვები):** გამოავლინეთ ეს სტრუქტურები Torii (Norito და JSON საკინძები) და სადენიანი დაშვების შემოწმებების მეშვეობით მმართველობის არტეფაქტებზე.
+- **SN-3 (აუქციონისა და რეგისტრაციის ძრავა):** ხელახლა გამოიყენეთ `NameAuctionStateV1` ვალდებულების/გამოვლენის და ჰოლანდიური ხელახალი გახსნის ლოგიკის განსახორციელებლად.
+- **SN-5 (გადახდა და ანგარიშსწორება):** ბერკეტი `RevenueShareRecordV1` ფინანსური შერიგებისა და ანგარიშგების ავტომატიზაციისთვის.
 
-- **SN-2b (Registrar API & governance hooks):** expose these structs via Torii (Norito and JSON bindings) and wire admission checks to governance artefacts.
-- **SN-3 (Auction & registration engine):** reuse `NameAuctionStateV1` to implement commit/reveal and Dutch reopen logic.
-- **SN-5 (Payment & settlement):** leverage `RevenueShareRecordV1` for finance reconciliation and reporting automation.
-
-Questions or change requests should be filed alongside the SNS roadmap updates in `roadmap.md` and mirrored in `status.md` when merged.
+კითხვები ან ცვლილებების მოთხოვნები უნდა შეიტანოს SNS საგზაო რუქის განახლებებთან ერთად `roadmap.md`-ში და ასახული იყოს `status.md`-ში გაერთიანებისას.

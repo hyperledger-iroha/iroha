@@ -4,66 +4,64 @@ direction: rtl
 source: docs/portal/docs/sorafs/gateway-dns-runbook.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS گیٹ وے اور DNS کک آف رن بک
+# SoraFS الشبكة وDNS
 
-یہ پورٹل کاپی کینونیکل رن بک کو منعکس کرتی ہے جو
-[`docs/source/sorafs_gateway_dns_design_runbook.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_design_runbook.md) میں ہے۔
-یہ Decentralized DNS & Gateway ورک اسٹریم کے آپریشنل گارڈ ریلز کو سمیٹتی ہے تاکہ
-نیٹ ورکنگ، آپس، اور ڈاکیومنٹیشن لیڈز 2025-03 کے کک آف سے پہلے آٹومیشن اسٹیک کی
-مشقیق کر سکیں۔
+إنها لعبة كمبيوتر محمول تمنع منع البطاقات تمامًا
+[`docs/source/sorafs_gateway_dns_design_runbook.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_design_runbook.md) .
+إنها شبكة DNS وبوابة لا مركزية تعمل على شبكة الإنترنت الآمنة
+نيويورك، آبس، ونهاية 2025-03 هي أحدث صيحات الموضة
+مشقي كر سكي..
 
-## اسکوپ اور ڈلیوریبلز
+## اسكوپ و ڈليوريبلز
 
-- DNS (SF-4) اور gateway (SF-5) milestones کو جوڑنا، جس میں deterministic host derivation،
-  resolver directory releases، TLS/GAR automation، اور evidence capture کی مشق شامل ہو۔
-- کک آف ان پٹس (agenda، invite، attendance tracker، GAR telemetry snapshot) کو
-  تازہ ترین owner assignments کے ساتھ ہم آہنگ رکھنا۔
-- گورننس ریویورز کے لیے قابلِ آڈٹ artefact bundle تیار کرنا: resolver directory
-  release notes، gateway probe logs، conformance harness output، اور Docs/DevRel summary۔
+- معالم DNS (SF-4) والبوابة (SF-5) التي يتم تحديدها، وهي اشتقاق المضيف الحتمي،
+  إصدارات دليل المحلل، وأتمتة TLS/GAR، والتقاط الأدلة هي أمور معقدة تشمل الجميع.
+- کک اف ان پٹس (جدول الأعمال، دعوة، تعقب الحضور، لقطة القياس عن بعد GAR) کو
+  لقد أصبحت الآن أحدث تعيينات المالك.
+- ريوورز تحتوي على حزمة أعمال فنية قابلة للتنفيذ: دليل المحلل
+  ملاحظات الإصدار، وسجلات مسبار البوابة، ومخرجات مجموعة أدوات التوافق، وملخص المستندات/DevRel۔
 
-## رولز اور ذمہ داریاں
+## رولز وذمہ دارياں| العمل | ذہ دارياں | مطلوبہ تحف |
+|------------|-----------|------------------|
+| شبكات TL (مكدس DNS) | خطة المضيف الحتمية برقرار رکھنا، إصدارات دليل RAD چلانا، مدخلات القياس عن بعد للمحلل شاع کرنا۔ | `artifacts/soradns_directory/<ts>/`، `docs/source/soradns/deterministic_hosts.md` هو الفرق، وبيانات تعريف RAD. |
+| قائد أتمتة العمليات (البوابة) | تدريبات التشغيل الآلي TLS/ECH/GAR چلانا، `sorafs-gateway-probe` چلانا، خطافات PagerDuty پڈیٹ کرنا. | `artifacts/sorafs_gateway_probe/<ts>/`، مسبار JSON، إدخالات `ops/drill-log.md`۔ |
+| ضمان الجودة والأدوات WG | `ci/check_sorafs_gateway_conformance.sh` Đlana، التركيبات کیوریٹ كرنا، Norito حزم الشهادة الذاتية آرکائیو کرنا. | `artifacts/sorafs_gateway_conformance/<ts>/`، `artifacts/sorafs_gateway_attest/<ts>/`. |
+| مستندات / ديفريل | دقيقة من سجل كرنا، تصميم قراءة مسبقة + ملاحق اپڈیٹ کرنا، وملخص الأدلة الشائع کرنا. | تمت الإشارة إليه مع `docs/source/sorafs_gateway_dns_design_*.md` الفائض وملاحظات الطرح. |
 
-| ورک اسٹریم | ذمہ داریاں | مطلوبہ artefacts |
-|------------|------------|------------------|
-| Networking TL (DNS stack) | deterministic host plan برقرار رکھنا، RAD directory releases چلانا، resolver telemetry inputs شائع کرنا۔ | `artifacts/soradns_directory/<ts>/`, `docs/source/soradns/deterministic_hosts.md` کے diffs، اور RAD metadata۔ |
-| Ops Automation Lead (gateway) | TLS/ECH/GAR automation drills چلانا، `sorafs-gateway-probe` چلانا، PagerDuty hooks اپڈیٹ کرنا۔ | `artifacts/sorafs_gateway_probe/<ts>/`, probe JSON، `ops/drill-log.md` entries۔ |
-| QA Guild & Tooling WG | `ci/check_sorafs_gateway_conformance.sh` چلانا، fixtures کیوریٹ کرنا، Norito self-cert bundles آرکائیو کرنا۔ | `artifacts/sorafs_gateway_conformance/<ts>/`, `artifacts/sorafs_gateway_attest/<ts>/`. |
-| Docs / DevRel | minutes ریکارڈ کرنا، design pre-read + appendices اپڈیٹ کرنا، اور اسی پورٹل میں evidence summary شائع کرنا۔ | اپڈیٹ شدہ `docs/source/sorafs_gateway_dns_design_*.md` فائلز اور rollout notes۔ |
+## ان پٹس و پري ريكويرمنٹس
 
-## ان پٹس اور پری ریکوائرمنٹس
+- مواصفات المضيف الحتمية (`docs/source/soradns/deterministic_hosts.md`) والمحلل
+  سقالات التصديق (`docs/source/soradns/resolver_attestation_directory.md`).
+- مصنوعات البوابة: دليل المشغل، مساعدي أتمتة TLS/ECH، توجيه الوضع المباشر،
+  وسير عمل الشهادة الذاتية هو `docs/source/sorafs_gateway_*` تحت ہے.
+- الأدوات: `cargo xtask soradns-directory-release`،
+  `cargo xtask sorafs-gateway-probe`، `scripts/telemetry/run_soradns_transparency_tail.sh`،
+  `scripts/sorafs_gateway_self_cert.sh`، ومساعدي CI
+  (`ci/check_sorafs_gateway_conformance.sh`، `ci/check_sorafs_gateway_probe.sh`).
+- الأسرار: مفتاح إصدار GAR، بيانات اعتماد DNS/TLS ACME، مفتاح توجيه PagerDuty،
+  ويقوم المحلل بجلب رمز المصادقة Torii.
 
-- deterministic host spec (`docs/source/soradns/deterministic_hosts.md`) اور resolver
-  attestation scaffolding (`docs/source/soradns/resolver_attestation_directory.md`).
-- gateway artefacts: operator handbook، TLS/ECH automation helpers، direct-mode guidance،
-  اور self-cert workflow جو `docs/source/sorafs_gateway_*` کے تحت ہے۔
-- Tooling: `cargo xtask soradns-directory-release`,
-  `cargo xtask sorafs-gateway-probe`, `scripts/telemetry/run_soradns_transparency_tail.sh`,
-  `scripts/sorafs_gateway_self_cert.sh`, اور CI helpers
-  (`ci/check_sorafs_gateway_conformance.sh`, `ci/check_sorafs_gateway_probe.sh`).
-- Secrets: GAR release key، DNS/TLS ACME credentials، PagerDuty routing key،
-  اور resolver fetches کے لیے Torii auth token۔
+## پری فلائٹ چیک لٹ1. `docs/source/sorafs_gateway_dns_design_attendance.md` الشركة وجدول الأعمال
+   قم بقراءة جدول الأعمال وجدول الأعمال الموجود (`docs/source/sorafs_gateway_dns_design_agenda.md`).
+2.`artifacts/sorafs_gateway_dns/<YYYYMMDD>/` و
+   `artifacts/soradns_directory/<YYYYMMDD>/` جذور المصنوعات اليدوية.
+3. التركيبات (بيانات GAR، إثباتات RAD، حزم توافق البوابة)
+   هذه هي المرة الأولى التي يتم فيها استخدام علامة `git submodule` كعلامة بروفة.
+4. الأسرار (مفتاح الإصدار Ed25519، ملف حساب ACME، رمز PagerDuty)
+   المجاميع الاختبارية للقبو هي نفس الشيء.
+5. حفر أهداف القياس عن بعد (نقطة نهاية بوابة الدفع، لوحة GAR Grafana) لاختبار الدخان.
 
-## پری فلائٹ چیک لسٹ
+## آٹومیشن خطوات البروفة
 
-1. `docs/source/sorafs_gateway_dns_design_attendance.md` اپڈیٹ کر کے شرکاء اور agenda
-   کنفرم کریں اور موجودہ agenda (`docs/source/sorafs_gateway_dns_design_agenda.md`) شیئر کریں۔
-2. `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` اور
-   `artifacts/soradns_directory/<YYYYMMDD>/` جیسے artefact roots تیار کریں۔
-3. fixtures (GAR manifests، RAD proofs، gateway conformance bundles) ریفریش کریں اور
-   یقینی بنائیں کہ `git submodule` کی حالت تازہ ترین rehearsal tag سے میچ کرتی ہے۔
-4. secrets (Ed25519 release key، ACME account file، PagerDuty token) ویریفائی کریں اور
-   vault checksums کے ساتھ میچ کریں۔
-5. drill سے پہلے telemetry targets (Pushgateway endpoint، GAR Grafana board) کا smoke-test کریں۔
+### خريطة المضيف الحتمية وإصدار دليل RAD
 
-## آٹومیشن rehearsal steps
-
-### deterministic host map اور RAD directory release
-
-1. تجویز کردہ manifests سیٹ کے خلاف deterministic host derivation helper چلائیں اور
-   تصدیق کریں کہ `docs/source/soradns/deterministic_hosts.md` کے مقابلے میں کوئی drift نہیں۔
-2. resolver directory bundle تیار کریں:
+1. يظهر البحث عن بعض الأخطاء في مساعد اشتقاق المضيف الحتمي
+   لا يوجد تصديق على `docs/source/soradns/deterministic_hosts.md` مقابل الانجراف.
+2. سلسلة دليل المحلل:
 
 ```bash
 cargo xtask soradns-directory-release \
@@ -74,66 +72,60 @@ cargo xtask soradns-directory-release \
   --note "dns-kickoff-20250303"
 ```
 
-3. پرنٹ شدہ directory ID، SHA-256، اور output paths کو
-   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` اور kickoff minutes میں ریکارڈ کریں۔
+3. معرف الدليل الأصلي، SHA-256، ومسارات الإخراج
+   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` ودقائق البداية تساعد في تسجيل الأهداف.
 
-### DNS telemetry capture
+### التقاط القياس عن بعد DNS
 
-- resolver transparency logs کو ≥10 منٹ تک tail کریں:
+- سجلات شفافية المحلل التي تزيد عن ≥10 دقائق:
   `scripts/telemetry/run_soradns_transparency_tail.sh --mode staging`.
-- Pushgateway metrics export کریں اور NDJSON snapshots کو run ID directory کے ساتھ آرکائیو کریں۔
+- تقوم مقاييس Pushgateway بتصدير لقطات CRIC و NDJSON لتشغيل دليل المعرفات، مما يؤدي إلى إنشاء سجل إحصائي.
 
-### Gateway automation drills
+### تدريبات أتمتة البوابة
 
-1. TLS/ECH probe چلائیں:
+1. مسبار TLS/ECH:
 
 ```bash
 cargo xtask sorafs-gateway-probe \
   --config configs/sorafs_gateway/probe.staging.toml \
   --output artifacts/sorafs_gateway_probe/<run-id>.json
-```
+```2. حزام المطابقة (`ci/check_sorafs_gateway_conformance.sh`) ومساعد الشهادة الذاتية
+   (`scripts/sorafs_gateway_self_cert.sh`) قم بتجديد حزمة الشهادات Norito.
+3. تقوم أحداث PagerDuty/Webhook بالتقاط خاصية الحركة التلقائية من طرف إلى طرف بشكل ثابت.
 
-2. conformance harness (`ci/check_sorafs_gateway_conformance.sh`) اور self-cert helper
-   (`scripts/sorafs_gateway_self_cert.sh`) چلائیں تاکہ Norito attestation bundle ریفریش ہو۔
-3. PagerDuty/Webhook events capture کریں تاکہ آٹومیشن پاتھ end-to-end ثابت ہو۔
+### تغليف الأدلة
 
-### Evidence packaging
+- `ops/drill-log.md` يحتوي على الطوابع الزمنية والمشاركين وتجزئات التحقيق.
+- تشغيل أدلة المعرفات التي تتضمن عناصر محفوظات کریں ودقائق Docs/DevRel عبارة عن ملخص تنفيذي شاع کریں.
+- مراجعة انطلاقة سلسلة من تذكرة الحوكمة تحتوي على حزمة الأدلة لنك كري.
 
-- `ops/drill-log.md` میں timestamps، participants اور probe hashes اپڈیٹ کریں۔
-- run ID directories میں artefacts محفوظ کریں اور Docs/DevRel minutes میں executive summary شائع کریں۔
-- kickoff review سے پہلے governance ticket میں evidence bundle لنک کریں۔
+## سیشن فیسلیٹیشن وتسليم الأدلة- **الجدول الزمني للمشرف:**
+  - T-24 h — إدارة البرنامج `#nexus-steering` تذكير + لقطة جدول الأعمال/الحضور پوسٹ کرے۔
+  - T-2 h — لقطة القياس عن بعد لشبكة TL GAR محدثة `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` من دلتا التسجيل.
+  - T-15 m — جاهزية مسبار أتمتة العمليات ومعرف التشغيل النشط `artifacts/sorafs_gateway_dns/current` مفعل.
+  - كل کے دوران — المشرف هو أكثر كرے وتعيين الكاتب المباشر کرے؛ يتم تسجيل عناصر العمل المضمنة في Docs/DevRel.
+- **نموذج الدقيقة:**
+  `docs/source/sorafs_gateway_dns_design_minutes.md` عبارة عن هيكل عظمي للكريات (تتوفر حزمة البوابة أيضًا) ويتم الالتزام بشبكة لمثيل كامل. قائمة الحضور، والقرارات، وعناصر العمل، وتجزئات الأدلة، والمخاطر القائمة
+- **تحميل الأدلة:** دليل بروفة `runbook_bundle/` ملف مضغوط، محضر تقديم PDF إرفاق ملف، دقائق + جدول أعمال SHA-256 تجزئات، والتحميلات بعد الاسم المستعار لمراجع الإدارة ping زائر `s3://sora-governance/sorafs/gateway_dns/<date>/` في بانشا جاي.
 
-## سیشن فیسلیٹیشن اور evidence hand-off
+## لقطة الأدلة (بداية مارس 2025)
 
-- **Moderator timeline:**
-  - T-24 h — Program Management `#nexus-steering` میں reminder + agenda/attendance snapshot پوسٹ کرے۔
-  - T-2 h — Networking TL GAR telemetry snapshot ریفریش کر کے `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` میں deltas ریکارڈ کرے۔
-  - T-15 m — Ops Automation probe readiness ویریفائی کر کے فعال run ID کو `artifacts/sorafs_gateway_dns/current` میں لکھے۔
-  - کال کے دوران — Moderator یہ رن بک شیئر کرے اور live scribe assign کرے؛ Docs/DevRel inline action items ریکارڈ کرے۔
-- **Minute template:**
-  `docs/source/sorafs_gateway_dns_design_minutes.md` سے skeleton کاپی کریں (portal bundle میں بھی ہے) اور ہر سیشن کے لیے ایک مکمل instance commit کریں۔ attendee roll، decisions، action items، evidence hashes، اور outstanding risks شامل کریں۔
-- **Evidence upload:** rehearsal کے `runbook_bundle/` directory کو zip کریں، rendered minutes PDF attach کریں، minutes + agenda میں SHA-256 hashes لکھیں، اور uploads کے بعد governance reviewer alias کو ping کریں جب فائلز `s3://sora-governance/sorafs/gateway_dns/<date>/` میں پہنچ جائیں۔
+خريطة الطريق والدقائق التي تم إجراؤها هي أفضل بروفة/مصنوعات حية
+`s3://sora-governance/sorafs/gateway_dns/` دلو. نیچے دیے گئے التجزئات
+البيان القانوني (`artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/evidence_manifest_*.json`) يعكس القانون.- **التشغيل التجريبي — 02-03-2025 (`artifacts/sorafs_gateway_dns/20250302/`)**
+  - حزمة القطران: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`
+  - المحضر PDF: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`
+- **ورشة عمل مباشرة — 03-03-2025 (`artifacts/sorafs_gateway_dns/20250303/runbook_bundle/`)**
+  -`bc83e6a014c2d223433f04ddc3c588bfeff33ee5cdcb15aad6527efeba582a1c  minutes_20250303.md`
+  -`030a98fb3e3a52dbb0fcf25a6ea4365b11d9487707bb6700cb632710f7c082e4  gar_snapshot_20250303.json`
+  -`5ac17e684976d6862628672627f229f7719da74235aa0a5f0ce994dad34cb3c4  sorafs_gateway_dns_design_metrics_20250303.prom`
+  -`5c6163d0ae9032c2d52ca2ecca4037dfaddcc503eb56239b53c5e9c4000997cf  probe_20250303.json`
+  -`87f6341896bfb830966a4a5d0fc9158fabcc135ba16ef0d53882e558de77ba49  probe_20250303_webhook.jsonl`
+  -`9b968b0bf4ca654d466ec2be5291936f1441908354e9d2da4d0a52f1568bbe03  probe.staging.toml`
+  - _(في انتظار التحميل: `gateway_dns_minutes_20250303.pdf` — Docs/DevRel PDF آنے پر SHA-256 شامل کرے گا.)_
 
-## Evidence snapshot (March 2025 kickoff)
+## مواد ذات صلة
 
-roadmap اور minutes میں حوالہ دیے گئے تازہ ترین rehearsal/live artefacts
-`s3://sora-governance/sorafs/gateway_dns/` bucket میں ہیں۔ نیچے دیے گئے hashes
-canonical manifest (`artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/evidence_manifest_*.json`) کو reflect کرتے ہیں۔
-
-- **Dry run — 2025-03-02 (`artifacts/sorafs_gateway_dns/20250302/`)**
-  - Bundle tarball: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`
-  - Minutes PDF: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`
-- **Live workshop — 2025-03-03 (`artifacts/sorafs_gateway_dns/20250303/runbook_bundle/`)**
-  - `bc83e6a014c2d223433f04ddc3c588bfeff33ee5cdcb15aad6527efeba582a1c  minutes_20250303.md`
-  - `030a98fb3e3a52dbb0fcf25a6ea4365b11d9487707bb6700cb632710f7c082e4  gar_snapshot_20250303.json`
-  - `5ac17e684976d6862628672627f229f7719da74235aa0a5f0ce994dad34cb3c4  sorafs_gateway_dns_design_metrics_20250303.prom`
-  - `5c6163d0ae9032c2d52ca2ecca4037dfaddcc503eb56239b53c5e9c4000997cf  probe_20250303.json`
-  - `87f6341896bfb830966a4a5d0fc9158fabcc135ba16ef0d53882e558de77ba49  probe_20250303_webhook.jsonl`
-  - `9b968b0bf4ca654d466ec2be5291936f1441908354e9d2da4d0a52f1568bbe03  probe.staging.toml`
-  - _(Pending upload: `gateway_dns_minutes_20250303.pdf` — Docs/DevRel PDF آنے پر SHA-256 شامل کرے گا۔)_
-
-## Related material
-
-- [Gateway operations playbook](./operations-playbook.md)
-- [SoraFS observability plan](./observability-plan.md)
-- [Decentralized DNS & Gateway tracker](https://github.com/hyperledger-iroha/iroha/blob/master/roadmap.md#core-workstreams)
+- [دليل تشغيل عمليات البوابة](./operations-playbook.md)
+- [خطة إمكانية المراقبة SoraFS](./observability-plan.md)
+- [متعقب DNS والبوابة اللامركزي](https://github.com/hyperledger-iroha/iroha/blob/master/roadmap.md#core-workstreams)

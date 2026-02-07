@@ -11,102 +11,69 @@ id: developer-sdk-rust
 title: Rust SDK Snippets
 sidebar_label: Rust snippets
 description: Minimal Rust examples for consuming proof streams and manifests.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-The Rust crates in this repository power the CLI and can be embedded inside
-custom orchestrators or services. The snippets below highlight the helpers most
-developers ask for.
+འདི་ མཛོད་ཁང་གི་ནུས་ཤུགས་ CLI ནང་ཡོད་པའི་ Rust crets དང་ ནང་ན་བཙུགས་ཚུགས།
+སྲོལ་སྒྲིག་སྒྲ་དབྱངས་ཡང་ན་ཞབས་ཏོག། འོག་གི་ཆ་ཤས་ཚུ་ གྲོགས་རམ་པ་མང་ཤོས་ཅིག་ གསལ་སྟོན་འབདཝ་ཨིན།
+གོང་འཕེལ་གཏང་མི་ཚུ་གིས་ ཞུ་དོ་ཡོདཔ་ཨིན།
 
-## Proof stream helper
+## བདེན་པའི་རྒྱུན་ལམ་རོགས་སྐྱོར།
 
-Reuse the existing proof stream parser to aggregate metrics from an HTTP
-response:
+ཨེཆ་ཊི་ཊི་པི་ཅིག་ལས་ མེ་ཊིགསི་ཚུ་ བསྡོམས་རྩིས་འབད་ནི་ལུ་ ད་ལྟོ་ཡོད་པའི་བདེན་དཔང་རྒྱུན་ལམ་དབྱེ་དཔྱད་པ་འདི་ ལོག་ལག་ལེན་འཐབ།
+ལན་གསལ:
 
-```rust
-use std::error::Error;
-use std::io::{BufRead, BufReader};
+I18NF0000002X
 
-use reqwest::blocking::Response;
-use sorafs_car::proof_stream::{ProofStreamItem, ProofStreamMetrics, ProofStreamSummary};
+ཐོན་རིམ་ཆ་ཚང་ (བརྟག་དཔྱད་དང་བཅས་) `docs/examples/sorafs_rust_proof_stream.rs` ནང་སྡོད་ཡོད།
+`ProofStreamSummary::to_json()` གིས་ CLI དང་འདྲ་བའི་ མེ་ཊིག་ཚུ་ JSON འདི་ བཟོཝ་ཨིན།
+བལྟ་རྟོགས་འབད་ཚུགས་པའི་རྒྱབ་རྟེན་ཡང་ན་ CI བདེན་བཤད་ཚུ་ འཇམ་ཏོང་ཏོ་ཨིན།
 
-/// Consume an NDJSON proof stream and return aggregated metrics.
-pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, Box<dyn Error>> {
-    if !response.status().is_success() {
-        return Err(format!("gateway returned {}", response.status()).into());
-    }
+## ཐོན་ཁུངས་མང་པོའི་ཐོབ་ཐང་སྐུགས་སྐུལ།
 
-    let mut reader = BufReader::new(response);
-    let mut line = String::new();
-    let mut metrics = ProofStreamMetrics::default();
-    let mut failures = Vec::new();
+I18NI000000007X ཚད་གཞི་འདི་གིས་ དུས་མཉམ་མེན་པའི་ ཕེཆ་གི་དུས་ཚོད་བཀོད་མི་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+CLI གིས་ལག་ལེན་འཐབ་ཡོདཔ། `sorafs_car::multi_fetch::ScorePolicy` ལག་ལེན་འཐབ་ཞིནམ་ལས་ བརྒྱུད་དེ་འགྱོ་དགོ།
+བརྒྱུད་དེ་ `FetchOptions::score_policy` གིས་ བྱིན་མི་བཀའ་རྒྱ་ལུ་ བསྒྱུར་བཅོས་འབདཝ་ཨིན། ཡུ་ནིཊ་བརྟག་དཔྱད།
+I18NI000000010X གིས་ བསྟར་སྤྱོད་འབད་ཐངས་སྟོནམ་ཨིན།
+སྲོལ་སྒྲིག་དགའ་གདམ་ཚུ།
 
-    while reader.read_line(&mut line)? != 0 {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            line.clear();
-            continue;
-        }
-        let item = ProofStreamItem::from_ndjson(trimmed.as_bytes())?;
-        if item.status.is_failure() && failures.len() < 5 {
-            failures.push(item.clone());
-        }
-        metrics.record(&item);
-        line.clear();
-    }
+གཞན་ཡང་ མཛུབ་མོ་མེ་ལོང་ CLI དར་ཚད།
 
-    Ok(ProofStreamSummary::new(metrics, failures))
-}
-```
+- I18NI000000011X སི་ཨའི་གི་དོན་ལུ་ `--retry-budget` དར་ཆ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+  བསམ་བཞིན་དུ་ retris ཚུ་ བཀག་འཛིན་འབདཝ་ཨིན།
+- I18NI000000013X འདི་ I18NI000000014X དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབད་དེ་ དེ་ མཐོ་ཚད་ལུ་ཨིན།
+  དུས་མཉམ་བྱིན་མི་ཚུ་གི་གྲངས།
+- I18NI000000015X ངོ་རྟགས་ཚུ།
+  I18NI000000016X མེ་ཊིགསི་,
+  I18NI000000017X གིས་ སི་ཨེལ་ཨའི་ མེ་ལོང་བཟོཝ་ཨིན།
+  `--transport-policy` དར་། I18NI000000019X ད་ལྟ་
+  CLI/SDK ཁ་ཐོག་ཚུ་ནང་ སྔོན་སྒྲིག་འདི་; I18NI00000020 1017 རྐྱངམ་ཅིག་ལག་ལེན་འཐབ།
+  མར་ཕབ་ཅིག་རྩེད་པའི་སྐབས་ ཡང་ན་ བསྟར་སྤྱོད་བཀོད་རྒྱ་རྗེས་སུ་འབྲངས་པའི་སྐབས་དང་ གསོག་འཇོག་འབད་ནི།
+  I18NI000000021X གསལ་ཏོག་ཏོ་སྦེ་ གནང་བ་ཡོད་པའི་ པི་ཀིའུ་རྐྱངམ་གཅིག་གི་ མཁའ་འགྲུལ་པ་ཚུ་གི་དོན་ལུ་ཨིན།
+- `སོ་རེསི་གེ་ཊི་ཝེ་ཕེཊ་ཆི་དངོས་པོ་ཚུ་གཞི་སྒྲིག་འབད།::འབྲི་ནི་_མོ་ཌི་_ཧོནཊི་ = གཞི་སྒྲིག་འབད།
+  ལ་ལུ་ཅིག་(བྲིས་པའི་མོ་ཌི་ཧིནཊི་::ཨཔ་ཨཔ་པི་ཀིའུ་ཨོན་ལི་)` པི་ཀིའུ་རྐྱངམ་ཅིག་སྐྱེལ་བཙུགས་ཚུ་བཙན་ཤེད་འབད་ནི་ལུ་; རོགས་རམ་འབད་འོང་།
+  རང་བཞིན་གྱིས་ སྐྱེལ་འདྲེན་/མིང་མ་བཀོད་པའི་སྲིད་བྱུས་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་ ཡར་འཕེལ་གཏང་དགོ།
+  དབང་བཟུང་འབད་ཡོདཔ།
+- གནས་སྐབས་སྐྱེལ་འདྲེན་ཅིག་ འབད་ནིའི་དོན་ལུ་ I18NI0000022X ལག་ལེན་འཐབ།
+  ཡང་ན་ ཞུ་བ་གཅིག་གི་དོན་ལུ་ མིང་མ་བཀོད་པའི་རིམ་པ་; ས་སྒོའི་གོམ་པ་ གཉིས་ཀ་བཀྲམ་སྤེལ་འབད་ནི།
+  རྒྱ་སྨུག་འདི་ ཉམས་རྒུད་དང་ ཞུ་བ་འབད་མི་ རིམ་པ་དེ་ བསམ་པ་མ་རྫོགས་པའི་སྐབས་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
+- པའི་ཐོན་ (I18NI0000023X / I18NI0000024X) དང་།
+  ཇ་བ་ཨིསི་ཀིརིཔཊི་ (I18NI0000025X) བཱའིན་ཌིཔ་ཚུ་ དུས་ཚོད་བཀོད་མི་གཅིག་པ་དེ་ ལོག་ལག་ལེན་འཐབ།
+  རྩིས་སྟོན་ཡོད་པའི་ལྗིད་ཚད་ཚུ་ ལོག་ཐོབ་ནིའི་དོན་ལུ་ གྲོགས་རམ་འབད་མི་དེ་ཚུ་ནང་ I18NI000000026X གཞི་སྒྲིག་འབད།
+  དེ་དང་གཅིག་ཁར་ ཆ་ཤས་ཀྱི་ བྱུང་འཛིན་ཚུ།
+- I18NI000000027X OTLP ཐོ་བཀོད་འབདཝ་ཨིན།
+  བུ་ལོན་གྱི་ བང་སྒྲིག་ཅིག་བཟོ་མི་ རྒྱུན་རྟོག། བཀོ་བཞག་པའི་སྐབས་ མཁོ་མངགས་འབད་མི་འདི་ལས་ཐོན་འགྱོཝ་ཨིན།
+  `region:<telemetry_region>` (ཡང་ན་ `chain:<chain_id>`) རང་བཞིན་གྱིས་ དེ་སྦེ་ མེ་ཊ་ཌེ་ཊ་
+  ཨ་རྟག་རང་ འགྲེལ་བཤད་ཀྱི་ཁ་ཡིག་ཅིག་ འབག་འོང་།
 
-The full version (with tests) lives in `docs/examples/sorafs_rust_proof_stream.rs`.
-`ProofStreamSummary::to_json()` renders the same metrics JSON as the CLI, making
-it easy to feed observability backends or CI assertions.
+## `iroha::Client` བརྒྱུད་དེ་ ཕེཆ་།
 
-## Multi-source fetch scoring
-
-The `sorafs_car::multi_fetch` module exposes the asynchronous fetch scheduler
-used by the CLI. Implement `sorafs_car::multi_fetch::ScorePolicy` and pass it
-via `FetchOptions::score_policy` to tune provider ordering. The unit test
-`multi_fetch::tests::score_policy_can_filter_providers` shows how to enforce
-custom preferences.
-
-Other knobs mirror CLI flags:
-
-- `FetchOptions::per_chunk_retry_limit` matches the `--retry-budget` flag for CI
-  runs that intentionally constrain retries.
-- Combine `FetchOptions::global_parallel_limit` with `--max-peers` to cap the
-  number of concurrent providers.
-- `OrchestratorConfig::with_telemetry_region("region")` tags the
-  `sorafs_orchestrator_*` metrics, while
-  `OrchestratorConfig::with_transport_policy` mirrors the CLI
-  `--transport-policy` flag. `TransportPolicy::SoranetPreferred` now ships as
-  the default across CLI/SDK surfaces; use `TransportPolicy::DirectOnly` only
-  when staging a downgrade or following a compliance directive, and reserve
-  `SoranetStrict` for PQ-only pilots with explicit approval.
-- Set `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` to force PQ-only uploads; the helper will
-  automatically promote the transport/anonymity policies unless explicitly
-  overridden.
-- Use `SorafsGatewayFetchOptions::policy_override` to pin a temporary transport
-  or anonymity tier for a single request; supplying either field skips the
-  brownout demotion and fails when the requested tier cannot be satisfied.
-- The Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) and
-  JavaScript (`sorafsMultiFetchLocal`) bindings reuse the same scheduler, so
-  set `return_scoreboard=true` in those helpers to retrieve the computed weights
-  alongside chunk receipts.
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` records the OTLP
-  stream that produced an adoption bundle. When omitted, the client derives
-  `region:<telemetry_region>` (or `chain:<chain_id>`) automatically so metadata
-  always carries a descriptive label.
-
-## Fetch via `iroha::Client`
-
-The Rust SDK bundles the gateway fetch helper; provide a manifest plus provider
-descriptors (including stream tokens) and let the client drive the multi-source
-fetch:
+Rust SDK གིས་ འཛུལ་སྒོ་ཕེཆ་གྲོགས་རམ་པ་ བསྡུ་སྒྲིག་འབདཝ་ཨིན། གསལ་སྟོན་པ་ དང་ བྱིན་མི་ཅིག་བྱིན།
+འགྲེལ་བཤད་པ་ཚུ་ (རྒྱུན་ལམ་བརྡ་མཚོན་ཚུ་རྩིས་ཏེ་) དེ་ལས་ མཁོ་སྤྲོད་པ་གིས་ སྣ་མང་འབྱུང་ཁུངས་འདི་ འདྲེན་འབད་བཅུག།
+ལེན་འབག་འོང་ནི:
 
 ```rust
 use eyre::Result;
@@ -155,38 +122,25 @@ pub async fn fetch_payload(
 }
 ```
 
-Set `transport_policy` to `Some(TransportPolicy::SoranetStrict)` when uploads
-must refuse classical relays, or `Some(TransportPolicy::DirectOnly)` when SoraNet
-must be bypassed entirely. Point `scoreboard.persist_path` at the release
-artefact directory, optionally fix `scoreboard.now_unix_secs`, and populate
-`scoreboard.metadata` with capture context (fixture labels, Torii target, etc.)
-so `cargo xtask sorafs-adoption-check` consumes deterministic JSON across SDKs
-with the provenance blob SF-6c expects.
-`Client::sorafs_fetch_via_gateway` now augments that metadata with the manifest
-identifier, optional manifest CID expectation, and the
-`gateway_manifest_provided` flag by inspecting the supplied
-`GatewayFetchConfig`, so captures that include a signed manifest envelope satisfy
-the SF-6c evidence requirement without duplicating those fields manually.
+སྐྱེལ་བཙུགས་འབད་བའི་སྐབས་ `transport_policy` ལས་ `Some(TransportPolicy::SoranetStrict)` གཞི་སྒྲིག་འབད།
+སྔར་སྲོལ་གྱི་ རི་ལེ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ ཡང་ན་ སོ་ར་ནེཊ་གི་སྐབས་ལུ་ `Some(TransportPolicy::DirectOnly)`
+ཡོངས་རྫོགས་སྦེ་ བརྒལ་དགོ། ས་ཚིགས་ I18NI000000034X གསར་བཏོན་ནང་།
+ཅ་མཛོད་སྣོད་ཐོ། གདམ་ཁ་ཅན་སྦེ་ I18NI000000035X དང་ མི་རློབས་ཚུ་ བཅོ་ཁ་རྐྱབ།
+I18NI000000036X འཛིན་བཟུང་སྐབས་དོན་ (གཏན་བཟོའི་ཁ་ཡིག་ Torii དམིགས་གཏད་ ལ་སོགས་པ་ཚུ་)།
+དེ་འབདཝ་ལས་ I18NI000000037X གིས་ ཨེསི་ཌི་ཀེ་ཨེསི་ཚུ་ནང་ ཇེ་ཨེསི་ཨོ་ཨེན་ གཏན་འབེབས་བཟོཝ་ཨིན།
+with with bainnance blob SF-6c དང་།
+I18NI000000038X ད་ལྟ་ གསལ་སྟོན་དང་བཅས་པའི་མེ་ཊ་ཌེ་ཊ་དེ་ ཡར་སེང་འབདཝ་ཨིན།
+ངོས་འཛིན་འབད་མི་, གདམ་ཁ་ཅན་གྱི་ གསལ་སྟོན་སི་ཨའི་ཌི་རེ་བ་, དང་ཨིན།
+`gateway_manifest_provided` བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ བརྟག་ཞིབ་ཐོག་ལས་ དར་ཚད།
+`GatewayFetchConfig`, དེ་འབདཝ་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ གསལ་སྟོན་ཡིག་ཤུབས་ཅིག་ བསྒྲུབ་ཚུགས་པའི་ འཛིན་བཟུང་འབདཝ་ཨིན།
+ལག་ཐོག་ལས་ ས་ཁོངས་དེ་ཚུ་ འདྲ་བཤུས་མ་རྐྱབ་པར་ SF-6c སྒྲུབ་བྱེད་ཀྱི་ དགོས་མཁོ།
 
-## Manifest helpers
+## ངོ་མཚར་ཅན་གྱི་རོགས་རམ་པ།
 
-`ManifestBuilder` remains the canonical way to assemble Norito payloads
-programmatically:
+I18NI000000041X འདི་ I18NT0000000X གི་ འབབ་ཁུངས་ཚུ་ བསྡུ་སྒྲིག་འབད་ནི་གི་ ཁྲིམས་ལུགས་ཐབས་ལམ་ཅིག་སྦེ་ ལུས་ཡོདཔ་ཨིན།
+ལས་རིམ་གྱི་ཐོག་ལས་:
 
-```rust
-use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
+I18NF0000004X
 
-fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>> {
-    let mut builder = ManifestBuilder::new();
-    builder.pin_policy(PinPolicy {
-        min_streams: 3,
-        storage_class: StorageClass::Warm,
-        retention_epoch: Some(48),
-    });
-    builder.payload(bytes)?;
-    Ok(builder.build()?)
-}
-```
-
-Embed the builder wherever services need to generate manifests on the fly; the
-CLI remains the recommended path for deterministic pipelines.
+ཞབས་ཏོག་ཚུ་ ག་སྟེ་ལུ་དགོཔ་ཨིན་ན་ འཕུར་འགྲུལ་འབད་དགོ་སར་ བཟོ་བསྐྲུན་པ་འདི་ བཙུགས་དགོ། ཚིག༌ཕྲད
+CLI འདི་ གཏན་འབེབས་ཀྱི་ ཆུ་ལམ་གྱི་དོན་ལུ་ རྒྱབ་སྣོན་ལམ་ཅིག་སྦེ་ ལུས་ཡོདཔ་ཨིན།

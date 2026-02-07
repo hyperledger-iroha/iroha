@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a2037fed472e37a06559e7cd871c1b916b514b9804f309413fc369d5ded662b6
 source_last_modified: "2025-12-29T18:16:35.095373+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Taikai Anchor Lineage Packet Template (SN13-C)
+# Taikai Anchor Lineage 数据包模板 (SN13-C)
 
-Roadmap item **SN13-C — Manifests & SoraNS anchors** requires every alias
-rotation to ship a deterministic evidence bundle. Copy this template into your
-rollout artefact directory (for example
-`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md`) and replace
-the placeholders before submitting the packet to governance.
+路线图项目 **SN13-C — 清单和 SoraNS 锚点** 需要每个别名
+轮换以发送确定性证据包。将此模板复制到您的
+推出工件目录（例如
+`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md`) 并替换
+将数据包提交给治理之前的占位符。
 
-## 1. Metadata
+## 1. 元数据
 
-| Field | Value |
-|-------|-------|
-| Event ID | `<taikai.event.launch-2026-07-10>` |
-| Stream / rendition | `<main-stage>` |
-| Alias namespace / name | `<sora / docs>` |
-| Evidence directory | `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
-| Operator contact | `<name + email>` |
-| GAR / RPT ticket | `<governance ticket or GAR digest>` |
+|领域|价值|
+|--------|--------|
+|事件 ID | `<taikai.event.launch-2026-07-10>` |
+|流媒体/演绎| `<main-stage>` |
+|别名命名空间/名称 | `<sora / docs>` |
+|证据目录| `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
+|运营商联系方式 | `<name + email>` |
+| GAR / RPT 机票 | `<governance ticket or GAR digest>` |
 
-## Bundle helper (optional)
+## 捆绑助手（可选）
 
-Copy the spool artefacts and emit a JSON (optionally signed) summary before
-filling in the remaining sections:
+复制 spool 工件并在之前发出 JSON（可选签名）摘要
+填写剩余部分：
 
 ```bash
 cargo xtask taikai-anchor-bundle \
@@ -45,67 +46,67 @@ cargo xtask taikai-anchor-bundle \
   --signing-key <hex-ed25519-optional>
 ```
 
-The helper pulls `taikai-anchor-request-*`, `taikai-trm-state-*`,
-`taikai-lineage-*`, envelopes, and sentinels out of the Taikai spool directory
-(`config.da_ingest.manifest_store_dir/taikai`) so the evidence folder already
-contains the exact files referenced below.
+助手拉`taikai-anchor-request-*`，`taikai-trm-state-*`，
+`taikai-lineage-*`、Taikai 假脱机目录中的信封和哨兵
+（`config.da_ingest.manifest_store_dir/taikai`）所以证据文件夹已经
+包含下面引用的确切文件。
 
-## 2. Lineage ledger & hint
+## 2. 血统账本和提示
 
-Attach both the on-disk lineage ledger and the hint JSON Torii wrote for this
-window. These come directly from
-`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` and
-`taikai-lineage-<lane>-<epoch>-<sequence>-<storage_ticket>-<fingerprint>.json`.
+附上磁盘上的沿袭分类帐和为此编写的提示 JSON Torii
+窗口。这些直接来自
+`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` 和
+`taikai-lineage-<lane>-<epoch>-<sequence>-<storage_ticket>-<fingerprint>.json`。
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Lineage ledger | `taikai-trm-state-docs.json` | `<sha256>` | Proves the previous manifest digest/window. |
-| Lineage hint | `taikai-lineage-l1-140-6a-b2b.json` | `<sha256>` | Captured before uploading to SoraNS anchor. |
+|文物|文件| SHA-256 |笔记|
+|----------|------|---------|--------|
+|血统分类账 | `taikai-trm-state-docs.json` | `<sha256>` |证明先前的清单摘要/窗口。 |
+|血统提示 | `taikai-lineage-l1-140-6a-b2b.json` | `<sha256>` |在上传到 SoraNS 锚点之前捕获。 |
 
 ```bash
 sha256sum artifacts/taikai/anchor/<event>/<alias>/<ts>/taikai-trm-state-*.json \
   | tee artifacts/taikai/anchor/<event>/<alias>/<ts>/hashes/lineage.sha256
 ```
 
-## 3. Anchor payload capture
+## 3. 锚点有效负载捕获
 
-Record the POST payload that Torii delivered to the anchor service. The payload
-includes `envelope_base64`, `ssm_base64`, `trm_base64`, and the inline
-`lineage_hint` object; audits rely on this capture to prove the hint that was
-sent to SoraNS. Torii now writes this JSON automatically as
+记录 Torii 传递给锚点服务的 POST 负载。有效载荷
+包括 `envelope_base64`、`ssm_base64`、`trm_base64` 和内联
+`lineage_hint` 对象；审计依靠此捕获来证明所暗示的内容
+发送至 SoraNS。 Torii 现在自动将此 JSON 写入为
 `taikai-anchor-request-<lane>-<epoch>-<sequence>-<ticket>-<fingerprint>.json`
-inside the Taikai spool directory (`config.da_ingest.manifest_store_dir/taikai/`), so
-operators can copy it directly instead of scraping HTTP logs.
+在 Taikai spool 目录（`config.da_ingest.manifest_store_dir/taikai/`）内，所以
+操作员可以直接复制它，而不是抓取 HTTP 日志。
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Anchor POST | `requests/2026-07-10T18-00Z.json` | `<sha256>` | Raw request copied from `taikai-anchor-request-*.json` (Taikai spool). |
+|文物|文件| SHA-256 |笔记|
+|----------|------|---------|--------|
+|锚定帖子 | `requests/2026-07-10T18-00Z.json` | `<sha256>` |从 `taikai-anchor-request-*.json`（Taikai 线轴）复制的原始请求。 |
 
-## 4. Manifest digest acknowledgement
+## 4. 清单摘要确认
 
-| Field | Value |
-|-------|-------|
-| New manifest digest | `<hex digest>` |
-| Previous manifest digest (from hint) | `<hex digest>` |
-| Window start / end | `<start seq> / <end seq>` |
-| Acceptance timestamp | `<ISO8601>` |
+|领域|价值|
+|--------|--------|
+|新清单摘要 | `<hex digest>` |
+|先前的清单摘要（来自提示）| `<hex digest>` |
+|窗口开始/结束 | `<start seq> / <end seq>` |
+|接受时间戳| `<ISO8601>` |
 
-Reference the ledger/hint hashes recorded above so reviewers can verify the
-window that was superseded.
+参考上面记录的账本/提示哈希值，以便审核者可以验证
+被取代的窗口。
 
-## 5. Metrics / `taikai_alias_rotations`
+## 5. 指标 / `taikai_alias_rotations`
 
-- `taikai_trm_alias_rotations_total` snapshot: `<Prometheus query + export path>`
-- `/status taikai_alias_rotations` dump (per alias): `<file path + hash>`
+- `taikai_trm_alias_rotations_total` 快照：`<Prometheus query + export path>`
+- `/status taikai_alias_rotations` 转储（每个别名）：`<file path + hash>`
 
-Provide the Prometheus/Grafana export or `curl` output that shows the counter
-increment and the `/status` array for this alias.
+提供显示计数器的 Prometheus/Grafana 导出或 `curl` 输出
+增量和此别名的 `/status` 数组。
 
-## 6. Manifest for the evidence directory
+## 6. 证据目录清单
 
-Generate a deterministic manifest of the evidence directory (spool files,
-payload capture, metrics snapshots) so governance can verify every hash without
-unpacking the archive.
+生成证据目录的确定性清单（假脱机文件，
+有效负载捕获、指标快照），因此治理可以验证每个哈希，而无需
+解压存档。
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -114,19 +115,19 @@ python3 scripts/repo_evidence_manifest.py \
   --output artifacts/taikai/anchor/<event>/<alias>/<ts>/manifest.json
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Attach this to the governance packet / GAR. |
+|文物|文件| SHA-256 |笔记|
+|----------|------|---------|--------|
+|证据清单 | `manifest.json` | `<sha256>` |将此附加到治理数据包/GAR。 |
 
-## 7. Checklist
+## 7. 清单
 
-- [ ] Lineage ledger copied + hashed.
-- [ ] Lineage hint copied + hashed.
-- [ ] Anchor POST payload captured and hashed.
-- [ ] Manifest digest table filled in.
-- [ ] Metrics snapshots exported (`taikai_trm_alias_rotations_total`, `/status`).
-- [ ] Manifest generated with `scripts/repo_evidence_manifest.py`.
-- [ ] Packet uploaded to governance with hashes + contact info.
+- [ ] 谱系分类帐复制 + 散列。
+- [ ] 沿袭提示已复制+散列。
+- [ ] 捕获并散列锚点 POST 有效负载。
+- [ ] 已填写清单摘要表。
+- [ ] 导出的指标快照（`taikai_trm_alias_rotations_total`、`/status`）。
+- [ ] 使用 `scripts/repo_evidence_manifest.py` 生成的清单。
+- [ ] 数据包上传至治理，包含哈希值 + 联系信息。
 
-Maintaining this template for every alias rotation keeps the SoraNS governance
-bundle reproducible and ties lineage hints directly to the GAR/RPT evidence.
+为每个别名轮换维护此模板可以保持 SoraNS 治理
+捆绑可重复性并将谱系提示直接与 GAR/RPT 证据联系起来。

@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
 source_last_modified: "2026-01-22T16:26:46.504508+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Getting Started
+# I18NT000000005X башланған
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+Был тиҙ ҡулланма күрһәтә, минималь эш ағымы өсөн төҙөү I18NT0000000000000000000.
+генерацияланған I18NT00000000006X байт-кодты тикшергән, уны урындағы кимәлдә алып барыу һәм уны таратыу
+Iroha төйөнөнә тиклем.
 
-## Prerequisites
+## Алдан шарттар
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha_cli` – used for contract deployment via Torii
+1. Rust инструменттар слет (1.76 йәки яңы) ҡуйып, был һаҡлағысты тикшерергә.
+2. Төҙөү йәки скачать ярҙамсы бинар:
+   - I18NI000000029X – Kotodama компиляторы, ул IVM X/Norito байтекодты сығара.
+   - I18NI0000000030X һәм I18NI000000031X – урындағы башҡарыу һәм тикшерелгән коммуналь хеҙмәттәр
+   - I18NI000000032X – I18NT0000000015X аша контракт ҡуйыу өсөн ҡулланыла
 
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
+   Репозиторий Makefile был бинарҙарҙы I18NI000000033X-та көтә. Һеҙ йәки мөмкин
+   скачать алдан төҙөлгән артефакттар йәки уларҙы сығанаҡтан төҙөү. Әгәр һеҙ компиляция .
+   Ҡораллы сылбыр урындағы, күрһәтеү Makefile ярҙамсылары бинар:
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha_cli` profile (`~/.config/iroha/cli.toml`).
+. 1990 й.
+   миҫалдар түбәндә фаразлай I18NT00000000016X URL-адресы һеҙҙең конфигурацияланған һеҙҙең
+   I18NI000000034X профиле (I18NI000000035X).
 
-## 1. Compile a Kotodama contract
+## 1. I18NT000000002X контракт төҙөү
 
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+Репозиторий суднолар минималь “һаумыһығыҙ донъя” контракты 2019 йылда.
+`examples/hello/hello.ko`. Уны I18NT0000000008X/I18NT000000021X байтекодҡа (I18NI00000000037X) төҙөү:
 
 ```sh
 mkdir -p target/examples
@@ -48,42 +49,40 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Key flags:
+Төп флагтар:
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+- I18NI0000000038X контрактты 1-се версияһына ABI-ға бикләп ҡуя (берҙән-бер ярҙам версияһында
+  яҙыу ваҡыты).
+- `--max-cycles 0` X сикһеҙ башҡарыу үтенесе; ыңғай һан ҡуйығыҙ, бәйләү өсөн
+  цикл нуль-белемле дәлилдәр өсөн прокладка.
 
-## 2. Inspect the Norito artifact (optional)
+## 2. I18NT0000000009X артефактын тикшерергә (төҙөү)
 
-Use `ivm_tool` to verify the header and embedded metadata:
+Ҡулланыу I18NI0000000040X раҫлау өсөн баш һәм индерелгән метамағлүмәттәр:
 
-```sh
-ivm_tool inspect target/examples/hello.to
-```
+I18NF000000025X
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+Һеҙ тейеш күрергә ABI версияһы, мөмкинлек биргән функция флагтар, һәм экспортҡа инеү яҙмаһы .
+мәрәйҙәр. Был тиҙ аҡыллы тикшерергә, таратыу алдынан.
 
-## 3. Run the contract locally
+## 3. Килешәүҙе урындағы кимәлдә йүгертегеҙ
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+I18NI000000041X менән байт-кодты башҡарығыҙ, тәртипте раҫлау өсөн, ҡағылмай
+төйөн:
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+I18NI000000042X миҫалы сәләмләү һәм `SET_ACCOUNT_DETAIL` syscall сығара.
+Урындағы йүгереүҙең файҙалы, шул уҡ ваҡытта итерацион контракт логикаһы баҫтырыу алдынан
+ул сылбырҙа.
 
-## 4. Deploy via `iroha_cli`
+## 4. I18NI000000044X аша таратыу
 
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+Ҡасан һеҙ ҡәнәғәт килешеп, уны таратыу төйөн ҡулланып CLI.
+Власть иҫәбенә, уның ҡул ҡуйыу асҡысы һәм йәки I18NI000000045X файл йәки .
+База64 файҙалы йөк:
 
 ```sh
 iroha_cli app contracts deploy \
@@ -92,38 +91,35 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve manifests or list instances:
+Команда I18NT0000000010X манифест тапшыра + baytecode өйөмө өҫтөндә I18NT00000000017X һәм баҫмалар .
+һөҙөмтәлә транзакция статусы. Бер тапҡыр транзакция ҡылынған, код
+хеш күрһәтелгән яуап ҡулланырға мөмкин, тип алыу өсөн манифест йәки исемлек экземплярҙары:
 
-```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
-```
+I18NF000000028X
 
-## 5. Run against Torii
+## 5. Йүгерергә ҡаршы I18NT00000000018X
 
-With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli ledger transaction submit`
-or your application client). Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+Байтекод менән теркәлгән, һеҙ уны саҡырырға мөмкин, инструкция тапшырып .
+тип һылтанмалар һаҡланған код (мәҫәлән, I18NI000000046X аша
+йәки һеҙҙең ҡушымта клиент). Иҫәп рөхсәттәрен тәьмин итеү мөмкинлеге бирә теләк
+syscalls (I18NI000000047X, I18NI000000048X һ.б.).
 
-## Tips & troubleshooting
+## Кәңәштәр & проблемаларҙы хәл итеү
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
+- I18NI000000049X X-сы ҡулланыу, бер тапҡыр бирелгән миҫалдарҙы төҙөү һәм башҡарыу өсөн
+  атыу. I18NI000000050X/I18NI0000000051X мөхит үҙгәртеүселәре өҫтөнлөк итә, әгәр бинарҙар 2012 йылда булмаһа.
   `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli tools crypto keypair`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+- Әгәр I18NI000000053X ABI версияһын кире ҡаға, тип раҫлай, тип компилятор һәм төйөн .
+  икеһе лә маҡсатлы АБИ v1 (йүгереп I18NI0000000054X аргументһыҙ исемлеккә
+  ярҙам).
+- CLI ҡабул итә йәки hex йәки Base64 ҡул ҡуйыу асҡыстары. Һынау өсөн, һеҙ ҡулланырға мөмкин
+  асҡыстары I18NI000000055X тарафынан сығарылған.
+- Ҡасан отладка I18NT0000000011X файҙалы йөкләмәләр, I18NI000000056X подкомандаһы ярҙам итә
+  I18NT000000003X сығанағы менән корреляция күрһәтмәләре.
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+Был ағым CI һәм интеграция һынауҙарында ҡулланылған аҙымдарҙы көҙгөләй. Тәрәнерәк өсөн
+һыу инеү I18NT00000000004X грамматика, syscall карталары, һәм I18NT000000012X эске, ҡарағыҙ:
 
-- `docs/source/kotodama_grammar.md`
-- `docs/source/kotodama_examples.md`
-- `norito.md`
+- I18NI000000057X
+- I18NI000000058X
+- I18NI000000059X

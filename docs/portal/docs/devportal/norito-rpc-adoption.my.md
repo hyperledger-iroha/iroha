@@ -11,48 +11,49 @@ id: norito-rpc-adoption
 title: Norito-RPC Adoption Schedule
 sidebar_label: Norito-RPC adoption
 description: Cross-SDK rollout plan, evidence checklist, and automation hooks for roadmap item NRPC-4.
+translator: machine-google-reviewed
 ---
 
-> Canonical planning notes live in `docs/source/torii/norito_rpc_adoption_schedule.md`.  
-> This portal copy distils the rollout expectations for SDK authors, operators, and reviewers.
+> Canonical Planning မှတ်စုများသည် `docs/source/torii/norito_rpc_adoption_schedule.md` တွင် နေထိုင်ပါသည်။  
+> ဤပေါ်တယ်မိတ္တူသည် SDK စာရေးဆရာများ၊ အော်ပရေတာများနှင့် ပြန်လည်သုံးသပ်သူများအတွက် ဖြန့်ချိရေးမျှော်လင့်ချက်များကို ကွဲပြားစေသည်။
 
-## Objectives
+## ရည်ရွယ်ချက်များ
 
-- Align every SDK (Rust CLI, Python, JavaScript, Swift, Android) on the binary Norito-RPC transport ahead of the AND4 production toggle.
-- Keep phase gates, evidence bundles, and telemetry hooks deterministic so governance can audit the rollout.
-- Make it trivial to capture fixture and canary evidence with the shared helpers that roadmap NRPC-4 calls out.
+- AND4 ထုတ်လုပ်မှုခလုတ်မတိုင်မီ binary Norito-RPC သယ်ယူပို့ဆောင်ရေးတွင် SDK (Rust CLI၊ Python၊ JavaScript၊ Swift၊ Android) တိုင်းကို ချိန်ညှိပါ။
+- အဆင့်ဂိတ်များ၊ သက်သေအစုအဝေးများနှင့် တယ်လီမီတာချိတ်များကို အဆုံးအဖြတ်အတိုင်း ထားရှိထားပါက အုပ်ချုပ်မှုစနစ်သည် စတင်ထုတ်ဝေမှုကို စစ်ဆေးနိုင်သည်။
+- လမ်းပြမြေပုံ NRPC-4 ခေါ်ဆိုသော မျှဝေထားသော ကူညီသူများနှင့်အတူ မီးပုံးပျံနှင့် ကိန္နရီအထောက်အထားများကို ဖမ်းယူရန် အသေးအဖွဲလေးဖြစ်အောင် ပြုလုပ်ပါ။
 
-## Phase timeline
+## အဆင့်အချိန်ဇယား
 
-| Phase | Window | Scope | Exit Criteria |
-|-------|--------|-------|---------------|
-| **P0 – Lab parity** | Q2 2025 | Rust CLI + Python smoke suites run `/v1/norito-rpc` in CI, JS helper passes unit tests, Android mock harness exercises dual transports. | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` and `javascript/iroha_js/test/noritoRpcClient.test.js` green in CI; Android harness wired into `./gradlew test`. |
-| **P1 – SDK preview** | Q3 2025 | Shared fixture bundle checked in, `scripts/run_norito_rpc_fixtures.sh --sdk <label>` records logs + JSON in `artifacts/norito_rpc/`, optional Norito transport flags exposed in SDK samples. | Fixture manifest signed, README updates show opt-in usage, Swift preview API available behind the IOS2 flag. |
-| **P2 – Staging / AND4 preview** | Q1 2026 | Staging Torii pools prefer Norito, Android AND4 preview clients and Swift IOS2 parity suites default to the binary transport, telemetry dashboard `dashboards/grafana/torii_norito_rpc_observability.json` populated. | `docs/source/torii/norito_rpc_stage_reports.md` captures the canary, `scripts/telemetry/test_torii_norito_rpc_alerts.sh` passes, Android mock harness replay captures success/error cases. |
-| **P3 – Production GA** | Q4 2026 | Norito becomes the default transport for all SDKs; JSON remains a brownout fallback. Release jobs archive parity artefacts with every tag. | Release checklist bundles Norito smoke output for Rust/JS/Python/Swift/Android; Alert thresholds for Norito vs JSON error-rate SLOs enforced; `status.md` and release notes cite GA evidence. |
+| အဆင့် | ပြတင်းပေါက် | နယ်ပယ် | သတ်မှတ်ချက် | ထွက်ရန်
+|---------|--------|-------|----------------|
+| **P0 – Lab parity** | Q22025 | Rust CLI + Python smoke suites သည် CI တွင် `/v1/norito-rpc` ကို run သည်၊ JS helper သည် ယူနစ်စမ်းသပ်မှုများ အောင်မြင်သည်၊ Android mock harness လေ့ကျင့်ခန်းသည် သယ်ယူပို့ဆောင်မှုနှစ်ခုကို လုပ်ဆောင်သည်။ | CI တွင် `python/iroha_python/scripts/run_norito_rpc_smoke.sh` နှင့် `javascript/iroha_js/test/noritoRpcClient.test.js` အစိမ်းရောင်၊ Android ကြိုးကြိုးကို `./gradlew test` သို့ ကြိုးတပ်ထားသည်။ |
+| **P1 – SDK အစမ်းကြည့်ရှုခြင်း** | Q32025 | မျှဝေထားသော အတွဲအစပ်၊ `scripts/run_norito_rpc_fixtures.sh --sdk <label>` မှတ်တမ်းများ + `artifacts/norito_rpc/` တွင် JSON၊ ရွေးချယ်နိုင်သော Norito သယ်ယူပို့ဆောင်ရေးအလံများကို SDK နမူနာများတွင် ပြသထားသည်။ | Fixture manifest တွင် လက်မှတ်ထိုးထားပြီး၊ README အပ်ဒိတ်များတွင် ရွေးချယ်အသုံးပြုမှုကို ပြသသည်၊ IOS2 အလံနောက်တွင် ရနိုင်သော Swift preview API။ |
+| **P2 – Staging / AND4 အကြိုကြည့်ရှုခြင်း** | Q12026 | Staging Torii pools များသည် Norito၊ Android AND4 အစမ်းကြည့်ရှုသော client များနှင့် Swift IOS2 parity suites များကို binary transport၊ telemetry dashboard `dashboards/grafana/torii_norito_rpc_observability.json` တွင် default အနေဖြင့် ဦးစားပေးပါသည်။ | `docs/source/torii/norito_rpc_stage_reports.md` သည် ကိန္နရီကို ဖမ်းယူသည်၊ `scripts/telemetry/test_torii_norito_rpc_alerts.sh` ဖြတ်သန်းမှုများ၊ Android ပုံသဏ္ဍန်ကြိုးကြိုး ပြန်လည်ပြသခြင်းသည် အောင်မြင်မှု/အမှားအယွင်းများကို ဖမ်းယူသည်။ |
+| **P3 – ထုတ်လုပ်မှု GA** | Q42026 | Norito သည် SDK များအားလုံးအတွက် မူရင်းသယ်ယူပို့ဆောင်ရေးဖြစ်လာသည်။ JSON သည် နောက်ပြန်ဆုတ်မှုတစ်ခုအဖြစ် ကျန်ရှိနေပါသေးသည်။ တဂ်တိုင်းဖြင့် အလုပ်များကို မော်ကွန်းတင်ထားသော တူညီသည့် တူညီသည့်အရာများကို ထုတ်ဝေပါ။ | Rust/JS/Python/Swift/Android အတွက် Norito မီးခိုးထွက်ရှိမှု စစ်ဆေးစာရင်း အစုအဝေးများကို ထုတ်ပြန်ပါ။ Norito နှင့် JSON အမှား-နှုန်း SLO များအတွက် သတိပေးချက် ကန့်သတ်ချက်များ၊ `status.md` နှင့် ထုတ်ပြန်သည့် မှတ်စုများသည် GA အထောက်အထားများကို ကိုးကားပါသည်။ |
 
-## SDK deliverables & CI hooks
+## SDK နှင့် CI ချိတ်များ
 
-- **Rust CLI & integration harness** – extend `iroha_cli pipeline` smoke tests to force the Norito transport once `cargo xtask norito-rpc-verify` lands. Guard with `cargo test -p integration_tests -- norito_streaming` (lab) and `cargo xtask norito-rpc-verify` (staging/GA), storing artefacts under `artifacts/norito_rpc/`.
-- **Python SDK** – default the release smoke (`python/iroha_python/scripts/release_smoke.sh`) to Norito RPC, keep `run_norito_rpc_smoke.sh` as the CI entrypoint, and document parity handling in `python/iroha_python/README.md`. CI target: `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
-- **JavaScript SDK** – stabilise `NoritoRpcClient`, let governance/query helpers default to Norito when `toriiClientConfig.transport.preferred === "norito_rpc"`, and capture end-to-end samples in `javascript/iroha_js/recipes/`. CI must run `npm test` plus the dockerised `npm run test:norito-rpc` job before publish; provenance uploads Norito smoke logs under `javascript/iroha_js/artifacts/`.
-- **Swift SDK** – wire the Norito bridge transport behind the IOS2 flag, mirror the fixture cadence, and ensure the Connect/Norito parity suite runs inside the Buildkite lanes referenced in `docs/source/sdk/swift/index.md`.
-- **Android SDK** – AND4 preview clients and the mock Torii harness adopt Norito, with retry/backoff telemetry documented in `docs/source/sdk/android/networking.md`. The harness shares fixtures with other SDKs via `scripts/run_norito_rpc_fixtures.sh --sdk android`.
+- **Rust CLI နှင့် ပေါင်းစပ်ကြိုး** – `cargo xtask norito-rpc-verify` သည် `cargo xtask norito-rpc-verify` တစ်ကြိမ် ဆင်းသက်လာသည်နှင့်တစ်ပြိုင်နက် Norito သယ်ယူပို့ဆောင်ရေးကို တွန်းအားပေးရန် `iroha_cli pipeline` မီးခိုးစမ်းသပ်မှုများကို သက်တမ်းတိုးပါ။ `cargo test -p integration_tests -- norito_streaming` (ဓာတ်ခွဲခန်း) နှင့် `cargo xtask norito-rpc-verify` (staging/GA)၊ `artifacts/norito_rpc/` အောက်တွင် ရှေးဟောင်းပစ္စည်းများကို သိမ်းဆည်းခြင်း။
+- **Python SDK** – ထွက်လာသည့်မီးခိုး (`python/iroha_python/scripts/release_smoke.sh`) ကို Norito RPC သို့ ပုံသေသတ်မှတ်ပြီး I18NI000000036X ကို CI ဝင်ခွင့်အမှတ်အဖြစ် ထားရှိကာ `python/iroha_python/README.md` တွင် စာရွက်စာတမ်း ညီမျှခြင်း ကိုင်တွယ်မှု။ CI ပစ်မှတ်- `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`။
+- **JavaScript SDK** – `NoritoRpcClient` ကို တည်ငြိမ်အောင်ပြုလုပ်ပြီး အုပ်ချုပ်မှု/မေးမြန်းမှုအကူအညီများကို `toriiClientConfig.transport.preferred === "norito_rpc"` တွင် ပုံသေအဖြစ် Norito အဖြစ် သတ်မှတ်ပေးပြီး `javascript/iroha_js/recipes/` တွင် အဆုံးမှအစနမူနာများကို ရိုက်ကူးခွင့်ပြုပါ။ CI သည် ထုတ်ဝေခြင်းမပြုမီ `npm test` နှင့် dockerised `npm run test:norito-rpc` အလုပ်တို့ကို လုပ်ဆောင်ရပါမည်။ သက်သေပြချက်သည် Norito မီးခိုးမှတ်တမ်းများကို `javascript/iroha_js/artifacts/` အောက်တွင် အပ်လုဒ်လုပ်သည်။
+- **Swift SDK** - IOS2 အလံနောက်ကွယ်ရှိ Norito တံတားသယ်ယူပို့ဆောင်ရေးကို ကြိုးဖြင့် သွယ်တန်းကာ တပ်ဆင်မှုပုံစံကို ရောင်ပြန်ဟပ်ကာ Connect/Norito parity suite သည် I18NI000000045X တွင် ရည်ညွှန်းထားသော Buildkite လမ်းကြောင်းများအတွင်းတွင် အလုပ်လုပ်ကြောင်း သေချာပါစေ။
+- **Android SDK** – AND4 အစမ်းကြည့်ရှုသည့် ဖောက်သည်များနှင့် အတုအယောင် Torii ကြိုးသိုင်းသည် Norito ကို `docs/source/sdk/android/networking.md` တွင် မှတ်တမ်းတင်ထားသော ပြန်စမ်းခြင်း/အလှည့်ကျ တယ်လီမီတာဖြင့် မှတ်တမ်းတင်ထားသော Norito ကို လက်ခံပါသည်။ သံကြိုးသည် `scripts/run_norito_rpc_fixtures.sh --sdk android` မှတစ်ဆင့် အခြား SDK များနှင့် ပစ္စည်းများ မျှဝေပါသည်။
 
-## Evidence & automation
+## အထောက်အထားနှင့် အလိုအလျောက်စနစ်
 
-- `scripts/run_norito_rpc_fixtures.sh` wraps `cargo xtask norito-rpc-verify`, captures stdout/stderr, and emits `fixtures.<sdk>.summary.json` so SDK owners have a deterministic artefact to attach to `status.md`. Use `--sdk <label>` and `--out artifacts/norito_rpc/<stamp>/` to keep CI bundles tidy.
-- `cargo xtask norito-rpc-verify` enforces schema hash parity (`fixtures/norito_rpc/schema_hashes.json`) and fails if Torii returns `X-Iroha-Error-Code: schema_mismatch`. Pair every failure with a JSON fallback capture for debugging.
-- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` and `dashboards/grafana/torii_norito_rpc_observability.json` define the alert contracts for NRPC-2. Run the script after every dashboard edit and store the `promtool` output in the canary bundle.
-- `docs/source/runbooks/torii_norito_rpc_canary.md` describes the staging and production drills; update it whenever fixture hashes or alert gates change.
+- `scripts/run_norito_rpc_fixtures.sh` သည် `cargo xtask norito-rpc-verify` ကို ခြုံငုံပြီး stdout/stderr ဖမ်းယူကာ `fixtures.<sdk>.summary.json` ကို ထုတ်လွှတ်သောကြောင့် SDK ပိုင်ရှင်များသည် `status.md` နှင့် ပူးတွဲရန် အဆုံးအဖြတ်ပေးသည့် လက်ရာတစ်ခုရှိသည်။ CI အစုအဝေးများကို သပ်ရပ်အောင်ထားရန် `--sdk <label>` နှင့် `--out artifacts/norito_rpc/<stamp>/` ကိုသုံးပါ။
+- `cargo xtask norito-rpc-verify` သည် schema hash parity (`fixtures/norito_rpc/schema_hashes.json`) ကို တွန်းအားပေးပြီး Torii သည် `X-Iroha-Error-Code: schema_mismatch` သို့ ပြန်သွားပါက မအောင်မြင်ပါ။ အမှားရှာပြင်ခြင်းအတွက် JSON တုံ့ပြန်မှုဖမ်းယူမှုဖြင့် ရှုံးနိမ့်မှုတိုင်းကို တွဲချိတ်ပါ။
+- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` နှင့် `dashboards/grafana/torii_norito_rpc_observability.json` သည် NRPC-2 အတွက် သတိပေးချက် စာချုပ်များကို သတ်မှတ်ပါသည်။ ဒက်ရှ်ဘုတ်တိုင်းကို တည်းဖြတ်ပြီးနောက် script ကို run ပြီး `promtool` output ကို canary bundle တွင် သိမ်းဆည်းပါ။
+- `docs/source/runbooks/torii_norito_rpc_canary.md` သည် ဇာတ်ခုံနှင့် ထုတ်လုပ်မှုလေ့ကျင့်ခန်းများကို ဖော်ပြသည်။ fixture hashes သို့မဟုတ် alert gates ပြောင်းလဲသည့်အခါတိုင်း ၎င်းကို update လုပ်ပါ။
 
-## Reviewer checklist
+## သုံးသပ်သူစာရင်း
 
-Before ticking an NRPC-4 milestone, confirm:
+NRPC-4 မှတ်တိုင်ကို မစစ်ဆေးမီ အတည်ပြုပါ-
 
-1. Latest fixture bundle hashes match `fixtures/norito_rpc/schema_hashes.json` and the corresponding CI artefact recorded under `artifacts/norito_rpc/<stamp>/`.
-2. SDK README / portal docs describe how to force JSON fallback and cite the Norito transport default.
-3. Telemetry dashboards show dual-stack error-rate panels with alert links, and the Alertmanager dry run (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) is attached to the tracker.
-4. The adoption schedule here matches the tracker entry (`docs/source/torii/norito_rpc_tracker.md`) and the roadmap (NRPC-4) references the same evidence bundle.
+1. နောက်ဆုံးထွက်ရှိထားသောအတွဲများ ဟက်ခ်များသည် `fixtures/norito_rpc/schema_hashes.json` နှင့် `artifacts/norito_rpc/<stamp>/` အောက်တွင် မှတ်တမ်းတင်ထားသော သက်ဆိုင်ရာ CI ပစ္စည်းများနှင့် ကိုက်ညီပါသည်။
+2. SDK README / portal docs သည် JSON ဆုတ်ယုတ်မှုကို မည်သို့တွန်းအားပေးရမည်ကို ဖော်ပြပြီး Norito သယ်ယူပို့ဆောင်ရေးမူရင်းကို ကိုးကားဖော်ပြသည်။
+3. တယ်လီမီတာ ဒက်ရှ်ဘုတ်များသည် သတိပေးချက်လင့်ခ်များပါရှိသော အမှားအယွင်း-နှုန်းအကန့်နှစ်ခုကို ပြသထားပြီး Alertmanager dry run (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) ကို ခြေရာခံကိရိယာတွင် တွဲထားသည်။
+4. ဤနေရာ၌ မွေးစားခြင်းအချိန်ဇယားသည် ခြေရာခံဝင်ရောက်မှု (`docs/source/torii/norito_rpc_tracker.md`) နှင့် ကိုက်ညီပြီး လမ်းပြမြေပုံ (NRPC-4) သည် တူညီသောအထောက်အထားအစုအဝေးကို ရည်ညွှန်းပါသည်။
 
-Staying disciplined on the schedule keeps cross-SDK behaviour predictable and lets governance audit Norito-RPC adoption without bespoke requests.
+အချိန်ဇယားအတိုင်း စည်းကမ်းရှိရှိနေထိုင်ခြင်းသည် SDK ဖြတ်ကျော်သည့်အပြုအမူကို ခန့်မှန်းနိုင်စေပြီး အုပ်ချုပ်မှုစာရင်းစစ် Norito-RPC မွေးစားခြင်းကို စိတ်ကြိုက်တောင်းဆိုမှုများမပါဘဲ ခွင့်ပြုပေးပါသည်။

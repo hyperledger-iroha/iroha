@@ -7,86 +7,88 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus data-space operator onboarding
 description: Mirror of `docs/source/sora_nexus_operator_onboarding.md`, tracking the end-to-end release checklist for Nexus operators.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sora_nexus_operator_onboarding.md`. Keep both copies aligned until the localized editions arrive in the portal.
+:::note Կանոնական աղբյուր
+Այս էջը արտացոլում է `docs/source/sora_nexus_operator_onboarding.md`: Պահպանեք երկու օրինակները հավասարեցված, մինչև տեղայնացված հրատարակությունները հասնեն պորտալ:
 :::
 
 # Sora Nexus Data-Space Operator Onboarding
 
-This guide captures the end-to-end flow Sora Nexus data-space operators must follow once a release is announced. It complements the dual-track runbook (`docs/source/release_dual_track_runbook.md`) and the artefact selection note (`docs/source/release_artifact_selection.md`) by describing how to align downloaded bundles/images, manifests, and configuration templates with the global lane expectations before bringing a node online.
+Այս ուղեցույցը նկարագրում է Sora Nexus տվյալների տարածության օպերատորների միջև ծայրից ծայր հոսքը, որը պետք է հետևեն թողարկման հայտարարվելուց հետո: Այն լրացնում է կրկնակի հետքերով վազքագիրքը (`docs/source/release_dual_track_runbook.md`) և արտեֆակտի ընտրության նշումը (`docs/source/release_artifact_selection.md`)՝ նկարագրելով, թե ինչպես կարելի է ներբեռնված փաթեթները/պատկերները, մանիֆեստները և կազմաձևման ձևանմուշները հավասարեցնել գլոբալ գծի ակնկալիքներին՝ նախքան հանգույց առցանց բերելը:
 
-## Audience & prerequisites
-- You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
-- You can access the signed release artefacts published by Release Engineering (tarballs, images, manifests, signatures, public keys).
-- You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
-- You can reach the existing Sora Nexus peers that will bootstrap your node.
+## Հանդիսատես և նախադրյալներ
+- Դուք հաստատվել եք Nexus ծրագրի կողմից և ստացել եք ձեր տվյալների տարածության հանձնարարությունը (գծի ինդեքս, տվյալների տարածության ID/փոխանուն և երթուղային քաղաքականության պահանջներ):
+- Դուք կարող եք մուտք գործել ստորագրված թողարկման արտեֆակտներ, որոնք հրապարակվել են Release Engineering-ի կողմից (tarballs, պատկերներ, մանիֆեստներ, ստորագրություններ, հանրային բանալիներ):
+- Դուք ստեղծել կամ ստացել եք արտադրական բանալի նյութ ձեր վավերացնողի/դիտորդի դերի համար (Ed25519 հանգույցի նույնականացում; BLS կոնսենսուսի բանալին + PoP վավերացնողների համար, գումարած ցանկացած գաղտնի հատկանիշի անջատումներ):
+- Դուք կարող եք հասնել գոյություն ունեցող Sora Nexus հասակակիցներին, որոնք կբեռնեն ձեր հանգույցը:
 
-## Step 1 — Confirm the release profile
-1. Identify the network alias or chain ID you were given.
-2. Run `scripts/select_release_profile.py --network <alias>` (or `--chain-id <id>`) on a checkout of this repository. The helper consults `release/network_profiles.toml` and prints the profile to deploy. For Sora Nexus the response must be `iroha3`. For any other value, stop and contact Release Engineering.
-3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
+## Քայլ 1 — Հաստատեք թողարկման պրոֆիլը
+1. Նշեք ցանցի կեղծանունը կամ շղթայի ID-ն, որը ձեզ տրվել է:
+2. Գործարկեք `scripts/select_release_profile.py --network <alias>` (կամ `--chain-id <id>`) այս պահոցից դուրս գալու համար: Օգնականը խորհրդակցում է `release/network_profiles.toml`-ի հետ և տպում պրոֆիլը՝ տեղակայելու համար: Sora Nexus-ի համար պատասխանը պետք է լինի `iroha3`: Ցանկացած այլ արժեքի համար կանգ առեք և դիմեք Release Engineering-ին:
+3. Ուշադրություն դարձրեք թողարկման հայտարարության վրա նշված տարբերակի պիտակին (օրինակ՝ `iroha3-v3.2.0`); դուք կօգտագործեք այն արտեֆակտներ և մանիֆեստներ բերելու համար:
 
-## Step 2 — Retrieve and validate artefacts
-1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its companion files (`.sha256`, optional `.sig/.pub`, `<profile>-<version>-manifest.json`, and `<profile>-<version>-image.json` if you deploy containers).
-2. Validate integrity before unpacking:
+## Քայլ 2 — Առբերեք և հաստատեք արտեֆակտները
+1. Ներբեռնեք `iroha3` փաթեթը (`<profile>-<version>-<os>.tar.zst`) և դրա ուղեկցող ֆայլերը (`.sha256`, կամընտիր `.sig/.pub`, `<profile>-<version>-manifest.json`, և I180000000, եթե դուք I180000000)
+2. Վավերացրեք ամբողջականությունը փաթեթավորումից առաջ.
    ```bash
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
    openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
        -signature iroha3-<version>-linux.tar.zst.sig \
        iroha3-<version>-linux.tar.zst
    ```
-   Replace `openssl` with the organisation-approved verifier if you use a hardware-backed KMS.
-3. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
+   Փոխարինեք `openssl`-ը կազմակերպության կողմից հաստատված ստուգիչով, եթե օգտագործում եք ապարատային ապահովված KMS:
+3. Ստուգեք `PROFILE.toml`-ը tarball-ի ներսում և JSON մանիֆեստը՝ հաստատելու համար.
    - `profile = "iroha3"`
-   - The `version`, `commit`, and `built_at` fields match the release announcement.
-   - The OS/architecture match your deployment target.
-4. If you use the container image, repeat the hash/signature verification for `<profile>-<version>-<os>-image.tar` and confirm the image ID recorded in `<profile>-<version>-image.json`.
+   - `version`, `commit` և `built_at` դաշտերը համապատասխանում են թողարկման հայտարարությանը:
+   - ՕՀ/ճարտարապետությունը համապատասխանում է ձեր տեղակայման նպատակին:
+4. Եթե օգտագործում եք կոնտեյների պատկերը, կրկնեք հեշ/ստորագրության ստուգումը `<profile>-<version>-<os>-image.tar`-ի համար և հաստատեք `<profile>-<version>-image.json`-ում գրանցված պատկերի ID-ն:
 
-## Step 3 — Stage configuration from templates
-1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
-2. Treat the files under `config/` as templates:
-   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
-   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned.
-   - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
-3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
-4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.
+## Քայլ 3 — Փուլային կազմաձևում կաղապարներից
+1. Քաղեք փաթեթը և պատճենեք `config/`-ը այն վայրում, որտեղ հանգույցը կկարդա իր կոնֆիգուրացիան:
+2. Վերաբերվեք `config/` տակ գտնվող ֆայլերին որպես կաղապարներ.
+   - Փոխարինեք `public_key`/`private_key` ձեր արտադրության Ed25519 ստեղներով: Հեռացրեք անձնական բանալիները սկավառակից, եթե հանգույցը դրանք կհեռացնի HSM-ից; թարմացրեք կազմաձևը՝ փոխարենը ուղղելու HSM միակցիչին:
+   - Կարգավորեք `trusted_peers`, `network.address` և `torii.address`, որպեսզի դրանք արտացոլեն ձեր հասանելի միջերեսները և bootstrap գործընկերները, որոնք ձեզ հանձնարարվել են:
+   - Թարմացրեք `client.toml`-ը օպերատորին ուղղված Torii վերջնակետով (ներառյալ TLS կոնֆիգուրացիան, եթե կիրառելի է) և հավատարմագրերը, որոնք դուք տրամադրում եք գործառնական գործիքավորման համար:
+3. Պահպանեք շղթայի ID-ն, որը տրված է փաթեթում, եթե Կառավարությունն այլ բան չի հրահանգում. գլոբալ գոտին ակնկալում է մեկ կանոնական շղթայի նույնացուցիչ:
+4. Պլանավորեք հանգույցը սկսել Sora պրոֆիլի դրոշակով՝ `irohad --sora --config <path>`: Կազմաձևման բեռնիչը կմերժի SoraFS կամ բազմագոտի կարգավորումները, երբ դրոշակը բացակայում է:
 
-## Step 4 — Align data-space metadata and routing
-1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
-   - `lane_count` must equal the total lanes enabled in the current epoch.
-   - Every entry in `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]` must contain a unique `index`/`id` and the agreed aliases. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
-   - Ensure each dataspace entry includes `fault_tolerance (f)`; lane-relay committees are sized at `3f+1`.
-2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
-3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
-4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
+## Քայլ 4 — Հավասարեցրեք տվյալների տարածության մետատվյալները և երթուղավորումը
+1. Խմբագրել `config/config.toml`-ը, որպեսզի `[nexus]` բաժինը համապատասխանի Nexus խորհրդի տրամադրած տվյալների տարածության կատալոգին.
+   - `lane_count`-ը պետք է հավասար լինի ընթացիկ դարաշրջանում միացված ընդհանուր գոտիներին:
+   - `[[nexus.lane_catalog]]` և `[[nexus.dataspace_catalog]]`-ի յուրաքանչյուր մուտք պետք է պարունակի եզակի `index`/`id` և համաձայնեցված մականունները: Մի ջնջեք գոյություն ունեցող գլոբալ գրառումները. ավելացրեք ձեր պատվիրակված կեղծանունները, եթե խորհուրդը լրացուցիչ տվյալների տարածքներ է հատկացրել:
+   - Համոզվեք, որ տվյալների տարածության յուրաքանչյուր մուտքագրում ներառված է `fault_tolerance (f)`; Lane-relay կոմիտեների չափերը `3f+1` են:
+2. Թարմացրեք `[[nexus.routing_policy.rules]]`-ը՝ ձեզ տրված քաղաքականությունը նկարագրելու համար: Կանխադրված ձևանմուշը կառավարման հրահանգները ուղղորդում է դեպի `1`, իսկ պայմանագրերի տեղակայումները դեպի `2` գոտի; լրացնել կամ փոփոխել կանոնները, որպեսզի ձեր տվյալների տարածության համար նախատեսված երթևեկությունը փոխանցվի ճիշտ գծի և այլանունների: Համակարգեք Release Engineering-ի հետ՝ նախքան կանոնների կարգը փոխելը:
+3. Վերանայեք `[nexus.da]`, `[nexus.da.audit]` և `[nexus.da.recovery]` շեմերը: Ակնկալվում է, որ օպերատորները կպահպանեն խորհրդի կողմից հաստատված արժեքները. միայն կարգավորել դրանք, եթե վավերացվի նորացված քաղաքականությունը:
+4. Գրանցեք վերջնական կոնֆիգուրացիան ձեր գործառնությունների հետքերում: Կրկնակի հետքերով թողարկման վազքագիրքը պահանջում է կցել արդյունավետ `config.toml` (գաղտնիքները վերամշակված) մուտքի տոմսին:
 
-## Step 5 — Pre-flight validation
-1. Run the built-in configuration validator before joining the network:
+## Քայլ 5 — Թռիչքից առաջ վավերացում
+1. Նախքան ցանցին միանալը գործարկեք ներկառուցված կազմաձևման վավերացուցիչը.
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
-2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
-3. Check logs for warnings about placeholder lane/data-space identifiers. If any appear, revisit Step 4—production deployments must not rely on the placeholder IDs that ship with the templates.
-4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
+   Սա տպում է լուծված կոնֆիգուրացիան և վաղաժամ ձախողում է, եթե կատալոգի/երթուղային գրառումները անհամապատասխան են կամ եթե ծագումն ու կազմաձևը համաձայն չեն:
+2. Եթե տեղադրում եք կոնտեյներներ, գործարկեք նույն հրամանը պատկերի ներսում՝ այն `docker load -i <profile>-<version>-<os>-image.tar`-ով բեռնելուց հետո (հիշեք, որ ներառեք `--sora`):
+3. Ստուգեք տեղեկամատյանները՝ տեղապահի գոտիների/տվյալների տարածության նույնացուցիչների մասին նախազգուշացումների համար: Եթե ​​որևէ մեկը հայտնվի, նորից այցելեք Քայլ 4. արտադրական տեղակայումները չպետք է հիմնվեն կաղապարների հետ առաքվող տեղապահների ID-ների վրա:
+4. Կատարեք ձեր տեղական ծխի ընթացակարգը (օրինակ՝ ուղարկեք `FindNetworkStatus` հարցում `iroha_cli`-ով, հաստատեք, որ հեռաչափության վերջնակետերը ցույց են տալիս `nexus_lane_state_total`-ը, և ստուգեք, որ հոսքային ստեղները պտտվել կամ ներմուծվել են ըստ պահանջի):
 
-## Step 6 — Cutover and hand-off
-1. Store the verified `manifest.json` and signature artifacts in the release ticket so auditors can reproduce your checks.
-2. Notify Nexus Operations that the node is ready to be introduced; include:
-   - Node identity (peer ID, hostnames, Torii endpoint).
-   - Effective lane/data-space catalogue and routing policy values.
-   - Hashes of the binaries/images you verified.
-3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
-4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
+## Քայլ 6 — Կտրում և հանձնում
+1. Պահպանեք ստուգված `manifest.json` և ստորագրության արտեֆակտները թողարկման տոմսում, որպեսզի աուդիտորները կարողանան վերարտադրել ձեր չեկերը:
+2. Տեղեկացնել Nexus Գործողություններին, որ հանգույցը պատրաստ է ներդրման; ներառում են՝
+   - Հանգույցի նույնականացում (նույնականացման նույնականացում, հոսթների անուններ, Torii վերջնակետ):
+   - Արդյունավետ գոտիների/տվյալների տարածության կատալոգ և երթուղային քաղաքականության արժեքներ:
+   - Ձեր ստուգած երկուականների/պատկերների հեշերը:
+3. Համակարգեք հասակակիցների վերջնական ընդունումը (բամբասանքի սերմեր և գծի նշանակում) `@nexus-core`-ի հետ: Մի միացեք ցանցին մինչև հաստատում չստանաք. Sora Nexus-ը պարտադրում է դետերմինիստական ​​գոտիների զբաղվածությունը և պահանջում է նորացված ընդունելության մանիֆեստ:
+4. Հանգույցի ակտիվացումից հետո թարմացրեք ձեր runbooks-ը ձեր ներդրած ցանկացած վերափոխումներով և նշեք թողարկման պիտակը, որպեսզի հաջորդ կրկնությունը սկսվի այս ելակետից:
 
-## Reference checklist
-- [ ] Release profile validated as `iroha3`.
-- [ ] Bundle/image hashes and signatures verified.
-- [ ] Keys, peer addresses, and Torii endpoints updated to production values.
-- [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
-- [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.
-- [ ] Manifests/signatures archived in the onboarding ticket and Ops notified.
+## Հղումների ստուգաթերթ
+- [ ] Թողարկման պրոֆիլը վավերացված է որպես `iroha3`:
+- [ ] Փաթեթի/պատկերի հեշերը և ստորագրությունները ստուգված են:
+- [ ] Բանալիները, գործընկերների հասցեները և Torii վերջնակետերը թարմացվել են արտադրական արժեքներին:
+- [ ] Nexus գծի/տվյալների տարածության կատալոգ և երթուղային քաղաքականության համընկնման խորհրդի հանձնարարություն:
+- [ ] Կազմաձևման վավերացուցիչը (`irohad --sora --config … --trace-config`) անցնում է առանց նախազգուշացման:
+- [ ] Մանիֆեստներ/ստորագրություններ արխիվացված մուտքի տոմսում և ծանուցված Գործողություններ:
 
-For broader context on Nexus migration phases and telemetry expectations, review [Nexus transition notes](./nexus-transition-notes).
+Nexus միգրացիայի փուլերի և հեռաչափության ակնկալիքների ավելի լայն համատեքստի համար վերանայեք [Nexus անցումային նշումներ](./nexus-transition-notes):

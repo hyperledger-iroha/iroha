@@ -11,54 +11,55 @@ id: preview-feedback-w0-summary
 title: W0 midpoint feedback digest
 sidebar_label: W0 feedback (midpoint)
 description: Midpoint checkpoints, findings, and action items for the core-maintainer preview wave.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| ნივთი | დეტალები |
 | --- | --- |
-| Wave | W0 — Core maintainers |
-| Digest date | 2025‑03‑27 |
-| Review window | 2025‑03‑25 → 2025‑04‑08 |
-| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Artefact tag | `preview-2025-03-24` |
+| ტალღა | W0 — ძირითადი დამხმარეები |
+| დაიჯესტის თარიღი | 2025-03-27 |
+| განხილვის ფანჯარა | 2025‑03‑25 → 2025‑04‑08 |
+| მონაწილეები | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
+| არტეფაქტის ტეგი | `preview-2025-03-24` |
 
-## Highlights
+## მაჩვენებლები
 
-1. **Checksum workflow** — All reviewers confirmed `scripts/preview_verify.sh`
-   succeeded against the shared descriptor/archive pair. No manual overrides
-   required.
-2. **Navigation feedback** — Two minor sidebar ordering issues were filed
-   (`docs-preview/w0 #1–#2`). Both are routed to Docs/DevRel and do not block the
-   wave.
-3. **SoraFS runbook parity** — sorafs-ops-01 requested clearer cross-links
-   between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. Follow-up
-   issue filed; to be addressed before W1.
-4. **Telemetry review** — observability-01 confirmed `docs.preview.integrity`,
-   `TryItProxyErrors`, and Try-it proxy logs stayed green; no alerts fired.
+1. **შემოწმების სამუშაო მიმდინარეობა** — ყველა მიმომხილველმა დაადასტურა `scripts/preview_verify.sh`
+   წარმატებით დასრულდა საერთო აღწერის/არქივის წყვილის წინააღმდეგ. არ არის სახელმძღვანელო უგულებელყოფა
+   საჭირო.
+2. **ნავიგაციის გამოხმაურება** — დაფიქსირდა ორი უმნიშვნელო გვერდითი ზოლის შეკვეთის პრობლემა
+   (`docs-preview/w0 #1–#2`). ორივე გადაყვანილია Docs/DevRel-ზე და არ ბლოკავს მას
+   ტალღა.
+3. **SoraFS runbook პარიტეტი** — sorafs-ops-01 მოითხოვა უფრო მკაფიო ჯვარედინი ბმულები
+   `sorafs/orchestrator-ops`-სა და `sorafs/multi-source-rollout`-ს შორის. შემდგომი დაკვირვება
+   შეტანილი საკითხი; W1-მდე განსახილველი.
+4. **ტელემეტრიული მიმოხილვა** — დაკვირვებადობა-01 დადასტურებულია `docs.preview.integrity`,
+   `TryItProxyErrors` და Try-it proxy ჟურნალები დარჩა მწვანე; არ არის გაშვებული გაფრთხილებები.
 
-## Action items
+## სამოქმედო ელემენტი
 
-| ID | Description | Owner | Status |
+| ID | აღწერა | მფლობელი | სტატუსი |
 | --- | --- | --- | --- |
-| W0-A1 | Reorder devportal sidebar entries to surface reviewer-focused docs (`preview-invite-*` group together). | Docs-core-01 | ✅ Completed — sidebar now lists the reviewer docs contiguously (`docs/portal/sidebars.js`). |
-| W0-A2 | Add explicit cross-link between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. | Sorafs-ops-01 | ✅ Completed — each runbook now links to the other so operators see both guides during rollouts. |
-| W0-A3 | Share telemetry snapshots + query bundle with governance tracker. | Observability-01 | ✅ Completed — bundle attached to `DOCS-SORA-Preview-W0`. |
+| W0-A1 | გადააწყვეთ დეპორტალური გვერდითი ზოლის ჩანაწერები ზედა მიმომხილველზე ორიენტირებულ დოკუმენტებზე (`preview-invite-*` ჯგუფი ერთად). | Docs-core-01 | ✅ დასრულებულია — გვერდითი ზოლი ახლა ჩამოთვლის მიმომხილველის დოკუმენტებს (`docs/portal/sidebars.js`). |
+| W0-A2 | დაამატეთ აშკარა ჯვარედინი კავშირი `sorafs/orchestrator-ops`-სა და `sorafs/multi-source-rollout`-ს შორის. | Sorafs-ops-01 | ✅ დასრულებულია — ახლა ყოველი წიგნაკი უკავშირდება მეორეს, რათა ოპერატორებმა დაინახონ ორივე სახელმძღვანელო გაშვების დროს. |
+| W0-A3 | გააზიარეთ ტელემეტრიის სნეპშოტები + შეკითხვის ნაკრები მმართველობის ტრეკერთან. | დაკვირვებადობა-01 | ✅ დასრულებული — პაკეტი მიმაგრებულია `DOCS-SORA-Preview-W0`-ზე. |
 
-## Exit summary (2025-04-08)
+## გამოსვლის შეჯამება (2025-04-08)
 
-- All five reviewers confirmed completion, purged local builds, and exited the
-  preview window; access revocations recorded in `DOCS-SORA-Preview-W0`.
-- No incidents or alerts fired during the wave; telemetry dashboards stayed
-  green for the full period.
-- Navigation + cross-link actions (W0-A1/A2) are implemented and reflected in
-  the docs above; telemetry evidence (W0-A3) is attached to the tracker.
-- Evidence bundle archived: telemetry screenshots, invite acknowledgements, and
-  this digest are linked from the tracker issue.
+- ხუთივე მიმომხილველმა დაადასტურა დასრულება, გაწმინდა ადგილობრივი შენობები და გავიდა
+  გადახედვის ფანჯარა; `DOCS-SORA-Preview-W0`-ში ჩაწერილი წვდომის გაუქმება.
+- ტალღის დროს არანაირი ინციდენტი ან გაფრთხილება არ არის გაშვებული; ტელემეტრიის დაფები დარჩა
+  მწვანე მთელი პერიოდისთვის.
+- ნავიგაცია + ჯვარედინი მოქმედებები (W0-A1/A2) განხორციელებულია და აისახება
+  ზემოთ მოყვანილი დოკუმენტები; ტელემეტრიული მტკიცებულება (W0-A3) მიმაგრებულია ტრეკერზე.
+- მტკიცებულებების ნაკრები დაარქივებულია: ტელემეტრიის ეკრანის ანაბეჭდები, მოწვევის აღიარება და
+  ეს დაიჯესტი უკავშირდება ტრეკერის საკითხს.
 
-## Next steps
+## შემდეგი ნაბიჯები
 
-- Implement W0 action items before opening W1.
-- Obtain legal approval and proxy staging slot, then follow the partner-wave
-  preflight steps outlined in the [preview invite flow](../../preview-invite-flow.md).
+- W0 სამოქმედო ელემენტების დანერგვა W1-ის გახსნამდე.
+- მიიღეთ კანონიერი დამტკიცება და მარიონეტული დადგმის სლოტი, შემდეგ მიჰყევით პარტნიორის ტალღას
+  წინასწარი ფრენის საფეხურები, რომლებიც ასახულია [მოწვევის ნაკადის გადახედვისას] (../../preview-invite-flow.md).
 
-_This digest is linked from the [preview invite tracker](../../preview-invite-tracker.md) to
-keep the DOCS-SORA roadmap traceable._
+_ეს დაიჯესტი მიბმულია [გადახედვის მოწვევის ტრეკერიდან](../../preview-invite-tracker.md)
+შეინახეთ DOCS-SORA საგზაო რუკა მიკვლევად._

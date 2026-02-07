@@ -7,57 +7,58 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a79487a5e7e8268f3a94580716a603580f17fd0d0223f10646ecda6aad2e2482
 source_last_modified: "2025-12-29T18:16:35.063907+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Examples (Rust App/Wallet)
+## Iroha Միացման օրինակներ (Rust հավելված/դրամապանակ)
 
-Run the two Rust examples end‑to‑end with a Torii node.
+Գործարկեք Rust-ի երկու օրինակները ծայրից ծայր Torii հանգույցով:
 
-Prerequisites
-- Torii node with `connect` enabled at `http://127.0.0.1:8080`.
-- Rust toolchain (stable).
-- Python 3.9+ with the `iroha-python` package installed (for the CLI helper below).
+Նախադրյալներ
+- Torii հանգույց՝ `connect`-ով միացված `http://127.0.0.1:8080`-ում:
+- Rust գործիքաշղթա (կայուն):
+- Python 3.9+՝ տեղադրված `iroha-python` փաթեթով (ներքևում գտնվող CLI օգնականի համար):
 
-Examples
-- App example: `crates/iroha_torii_shared/examples/connect_app.rs`
-- Wallet example: `crates/iroha_torii_shared/examples/connect_wallet.rs`
-- Python CLI helper: `python -m iroha_python.examples.connect_flow`
+Օրինակներ
+- Հավելվածի օրինակ՝ `crates/iroha_torii_shared/examples/connect_app.rs`
+- Դրամապանակի օրինակ՝ `crates/iroha_torii_shared/examples/connect_wallet.rs`
+- Python CLI օգնական՝ `python -m iroha_python.examples.connect_flow`
 
-Order of startup
-1) Terminal A — App (prints sid + tokens, connects WS, sends SignRequestTx):
+Գործարկման կարգը
+1) Տերմինալ A — Հավելված (տպում է sid + նշաններ, միացնում է WS-ը, ուղարկում SignRequestTx):
 
-    cargo run -p iroha_torii_shared --example connect_app -- --node http://127.0.0.1:8080 --role app
+    բեռի գործարկում -p iroha_torii_shared -- օրինակ connect_app -- -- հանգույց http://127.0.0.1:8080 -- դերային հավելված
 
-   Sample output:
+   Նմուշի ելք.
 
     sid=Z4... token_app=KJ... token_wallet=K0...
-    WS connected
-    app: sent SignRequestTx
-    (waiting for reply)
+    WS միացված է
+    հավելված՝ ուղարկված SignRequestTx
+    (սպասում եմ պատասխանի)
 
-2) Terminal B — Wallet (connect with token_wallet, replies with SignResultOk):
+2) Տերմինալ B — Դրամապանակ (միացեք token_wallet-ի հետ, պատասխաններ SignResultOk-ով):
 
-    cargo run -p iroha_torii_shared --example connect_wallet -- --node http://127.0.0.1:8080 --sid Z4... --token K0...
+    cargo run -p iroha_torii_shared --օրինակ connect_wallet -- -- հանգույց http://127.0.0.1:8080 --sid Z4... --token K0...
 
-   Sample output:
+   Նմուշի ելք.
 
-    wallet: connected WS
-    wallet: SignRequestTx len=3 at seq 1
-    wallet: sent SignResultOk
+    դրամապանակ՝ միացված WS
+    դրամապանակ՝ SignRequestTx len=3 հաջորդ 1-ում
+    դրամապանակ՝ ուղարկված SignResultOk
 
-3) App terminal prints the result:
+3) Հավելվածի տերմինալը տպում է արդյունքը.
 
-    app: got SignResultOk algo=ed25519 sig=deadbeef
+    հավելված՝ ստացել է SignResultOk algo=ed25519 sig=deadbeef
 
-  Use the new `connect_norito_decode_envelope_sign_result_alg` helper (and the
-  Swift/Kotlin wrappers in this folder) to retrieve the algorithm string when
-  decoding the payload.
+  Օգտագործեք նոր `connect_norito_decode_envelope_sign_result_alg` օգնականը (և
+  Swift/Kotlin wrappers այս թղթապանակում) ալգորիթմի տողը առբերելու համար, երբ
+  օգտակար բեռի վերծանում.
 
-Notes
-- Examples derive demo ephemerals from `sid` so app/wallet interoperate automatically. Do not use in production.
-- SDK enforces AEAD AAD binding and seq‑as‑nonce; post‑approval control frames should be encrypted.
-- For Swift clients, see `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` and validate with `make swift-ci` so dashboard telemetry stays aligned with Rust examples and Buildkite metadata (`ci/xcframework-smoke:<lane>:device_tag`) remains intact.
-- Python CLI helper usage:
+Նշումներ
+- Օրինակները բխում են ցուցադրական էֆեմերալներից `sid`-ից, որպեսզի հավելվածը/դրամապանակը փոխգործակցեն ինքնաբերաբար: Մի օգտագործեք արտադրության մեջ:
+- SDK-ն պարտադրում է AEAD AAD-ի պարտադիր և հետևողականությունը. հետհաստատման հսկողության շրջանակները պետք է գաղտնագրված լինեն:
+- Swift-ի հաճախորդների համար տե՛ս `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` և վավերացրե՛ք `make swift-ci`-ով, որպեսզի վահանակի հեռաչափությունը համահունչ մնա Rust օրինակների հետ, իսկ Buildkite մետատվյալները (I18NI000000020X) մնան անփոփոխ:
+- Python CLI օգնականի օգտագործումը.
 
     ```bash
     python -m iroha_python.examples.connect_flow \
@@ -71,4 +72,4 @@ Notes
       --status-json-output connect-status.json
     ```
 
-  The CLI prints the typed session info, dumps the Connect status snapshot, and emits the Norito-encoded `ConnectControlOpen` frame. Pass `--send-open` to post the payload back to Torii, use `--frame-output-format binary` to write raw bytes, `--frame-json-output` for a base64-friendly JSON blob, and `--status-json-output` when you need a typed snapshot for automation. You can also load application metadata from a JSON file via `--app-metadata-file metadata.json` containing `name`, `url`, and `icon_hash` fields (see `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`). Generate a fresh template with `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json`. For telemetry-only runs, you can skip session creation entirely with `--status-only` and optionally dump JSON via `--status-json-output status.json`.
+  CLI-ն տպում է մուտքագրված նստաշրջանի տվյալները, տեղադրում է Connect կարգավիճակի լուսանկարը և թողարկում Norito կոդավորված `ConnectControlOpen` շրջանակը: Անցեք `--send-open`՝ ծանրաբեռնվածությունը հետ ուղարկելու համար Torii, օգտագործեք `--frame-output-format binary`՝ չմշակված բայթեր գրելու համար, `--frame-json-output`՝ base64-ի համար հարմար JSON բլբի համար, և I18NI000000025X-ի համար օգտագործեք ավտոմատացում: Կարող եք նաև բեռնել հավելվածի մետատվյալները JSON ֆայլից `--app-metadata-file metadata.json`-ի միջոցով, որը պարունակում է `name`, `url` և `icon_hash` դաշտերը (տես `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`): Ստեղծեք թարմ ձևանմուշ `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json`-ով: Միայն հեռաչափության գործարկումների համար դուք կարող եք ամբողջությամբ բաց թողնել նիստի ստեղծումը `--status-only`-ով և ցանկության դեպքում հեռացնել JSON-ը `--status-json-output status.json`-ի միջոցով:

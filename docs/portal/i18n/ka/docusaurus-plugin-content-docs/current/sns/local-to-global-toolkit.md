@@ -5,25 +5,27 @@ source: docs/portal/docs/sns/local-to-global-toolkit.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Local → Global Address Toolkit
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page mirrors [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
-from the mono-repo. It packages the CLI helpers and runbooks required by roadmap item **ADDR-5c**.
+ეს გვერდი ასახავს [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
+მონორეპოდან. ის აფუთებს CLI დამხმარეებსა და წიგნებს, რომლებიც საჭიროა საგზაო რუქის პუნქტით **ADDR-5c**.
 
-## Overview
+## მიმოხილვა
 
-- `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
-  - `audit.json` — structured output from `iroha tools address audit --format json`.
-  - `normalized.txt` — converted preferred IH58 / second-best compressed (`sora`) literals for every Local-domain selector.
-- Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
-  and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
-  Local-12 cutover is safe. Watch the Local-8 and Local-12 collision panels plus the
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, and `AddressInvalidRatioSlo` alerts before
-  promoting manifest changes.
-- Reference the [Address Display Guidelines](address-display-guidelines.md) and the
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) for UX and incident-response context.
+- `scripts/address_local_toolkit.sh` ახვევს `iroha` CLI-ს, რომ აწარმოოს:
+  - `audit.json` — სტრუქტურირებული გამომავალი `iroha tools address audit --format json`-დან.
+  - `normalized.txt` — გადაკეთდა სასურველი IH58 / მეორე საუკეთესო შეკუმშული (`sora`) ლიტერალები ლოკალური დომენის ყველა ამომრჩეველისთვის.
+- დააწყვილეთ სკრიპტი მისამართების ჩაწერის დაფასთან (`dashboards/grafana/address_ingest.json`)
+  და Alertmanager წესები (`dashboards/alerts/address_ingest_rules.yml`) Local-8-ის დასამტკიცებლად
+  Local-12 cutover უსაფრთხოა. უყურეთ Local-8 და Local-12 შეჯახების პანელებს პლუს
+  `AddressLocal8Resurgence`, `AddressLocal12Collision` და `AddressInvalidRatioSlo` გაფრთხილებები ადრე
+  აშკარა ცვლილებების ხელშეწყობა.
+- მიმართეთ [Address Display Guidelines] (address-display-guidelines.md) და
+  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) UX და ინციდენტზე რეაგირების კონტექსტში.
 
-## Usage
+## გამოყენება
 
 ```bash
 scripts/address_local_toolkit.sh \
@@ -33,24 +35,24 @@ scripts/address_local_toolkit.sh \
   --format ih58
 ```
 
-Options:
+პარამეტრები:
 
-- `--format compressed` for `sora…` output instead of IH58.
-- `--no-append-domain` to emit bare literals.
-- `--audit-only` to skip the conversion step.
-- `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
+- `--format compressed` `sora…` გამოსასვლელად IH58-ის ნაცვლად.
+- `--no-append-domain` შიშველი ლიტერალების გამოსაცემად.
+- `--audit-only`, რომ გამოტოვოთ კონვერტაციის ნაბიჯი.
+- `--allow-errors` სკანირების გასაგრძელებლად, როდესაც არასწორი რიგები გამოჩნდება (შეესაბამება CLI ქცევას).
 
-The script writes the artefact paths at the end of the run. Attach both files to
-your change-management ticket alongside the Grafana screenshot that proves zero
-Local-8 detections and zero Local-12 collisions for ≥30 days.
+სცენარი წერს არტეფაქტის ბილიკებს გაშვების ბოლოს. მიამაგრეთ ორივე ფაილი
+თქვენი ცვლილებების მართვის ბილეთი Grafana ეკრანის ანაბეჭდთან ერთად, რომელიც ადასტურებს ნულს
+ლოკალური-8 აღმოჩენები და ნულოვანი ლოკალური-12 შეჯახება ≥30 დღის განმავლობაში.
 
-## CI integration
+## CI ინტეგრაცია
 
-1. Run the script in a dedicated job and upload its outputs.
-2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
-   at its default `true` value (only override to `false` on dev/test clusters when
-   diagnosing regressions) and add
-   `iroha tools address normalize --fail-on-warning --only-local` to CI so regression
-   attempts fail before hitting production.
+1. გაუშვით სკრიპტი სპეციალურ სამუშაოში და ატვირთეთ მისი შედეგები.
+2. ბლოკი გაერთიანდება, როდესაც `audit.json` აცნობებს ლოკალურ სელექტორებს (`domain.kind = local12`).
+   ნაგულისხმევი `true` მნიშვნელობით (მხოლოდ `false`-ზე გადახვევა დეველ/ტესტი კლასტერებზე, როდესაც
+   რეგრესიების დიაგნოსტიკა) და დაამატეთ
+   `iroha tools address normalize --fail-on-warning --only-local` CI-მდე ასე რეგრესია
+   მცდელობები წარუმატებელი ხდება წარმოებამდე.
 
-See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.
+იხილეთ საწყისი დოკუმენტი დამატებითი დეტალებისთვის, მტკიცებულებათა საკონტროლო სიების ნიმუში და გამოშვების შენიშვნის ფრაგმენტი, რომელიც შეგიძლიათ ხელახლა გამოიყენოთ კლიენტებისთვის შეწყვეტის გამოცხადებისას.

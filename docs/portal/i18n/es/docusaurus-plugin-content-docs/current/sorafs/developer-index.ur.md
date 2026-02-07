@@ -4,19 +4,21 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-index.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
-title: SoraFS developer guides
-description: SoraFS developer documentation, samples اور automation references کے لیے landing page۔
-sidebar_label: Developer overview
+id: índice-desarrollador
+título: guías para desarrolladores SoraFS
+descripción: documentación para desarrolladores SoraFS, ejemplos y referencias de automatización en la página de inicio
+sidebar_label: descripción general del desarrollador
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 :::
 
-# SoraFS developer guides
+# SoraFS guías para desarrolladores
 
 ```{toctree}
 :caption: Getting started

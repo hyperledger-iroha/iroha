@@ -4,85 +4,85 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/log.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-log
-title: سجل الملاحظات والقياس W1
-sidebar_label: سجل W1
-description: قائمة مجمعة، نقاط قياس، وملاحظات المراجعين لموجة معاينة الشركاء الاولى.
+ID: プレビュー-フィードバック-w1-log
+タイトル: ニュース W1
+サイドバーラベル: W1
+説明: قائمة مجمعة، نقاط قياس، وملاحظات المراجعين لموجة معاينة الشركاء الاولى。
 ---
 
 يحفظ هذا السجل قائمة الدعوات ونقاط القياس وملاحظات المراجعين لموجة **معاينة الشركاء W1**
 المرافقة لمهام القبول في [`preview-feedback/w1/plan.md`](./plan.md) ومدخل متتبع الموجة في
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). حدثه عند ارسال دعوة،
-او تسجيل لقطة قياس، او تصنيف بند ملاحظات حتى يتمكن مراجعو الحوكمة من اعادة تشغيل
-الادلة دون ملاحقة تذاكر خارجية.
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md)。 حدثه عند ارسال دعوة،
+القسجيل لقطة قياس، او تصنيف بند ملاحظات حتى يتمكن مراجعو الحوكمة من اعادة تشغيل
+重要な問題は、次のとおりです。
 
 ## قائمة الدفعة
 
-| معرف الشريك | تذكرة الطلب | استلام NDA | ارسال الدعوة (UTC) | اقرار/اول دخول (UTC) | الحالة | ملاحظات |
+| और देखेंニュース | ニュースNDA | 秘密保持契約を締結する世界時間 (UTC) |世界/世界 (UTC) |ああ |重要 |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ مكتمل 2025-04-26 | sorafs-op-01; ركز على ادلة تكافؤ وثائق orchestrator. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ مكتمل 2025-04-26 | sorafs-op-02; تحقق من الروابط المتقاطعة بين Norito/telemetry. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ مكتمل 2025-04-26 | sorafs-op-03; نفذ تمارين failover متعددة المصادر. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ مكتمل 2025-04-26 | torii-int-01; مراجعة دليل Torii `/v1/pipeline` و cookbook Try it. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ مكتمل 2025-04-26 | torii-int-02; شارك في تحديث لقطة Try it (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ مكتمل 2025-04-26 | sdk-partner-01; ملاحظات cookbooks لـ JS/Swift + فحوصات sanity لجسر ISO. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ مكتمل 2025-04-26 | sdk-partner-02; تم انهاء الامتثال 2025-04-11، ركز على ملاحظات Connect/telemetry. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ مكتمل 2025-04-26 | gateway-ops-01; دقق دليل عمليات gateway + مسار proxy Try it المجهول. |
+|パートナー-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ مكتمل 2025-04-26 | sorafs-op-01;オーケストレーター。 |
+|パートナー-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ مكتمل 2025-04-26 | sorafs-op-02; Norito/テレメトリ。 |
+|パートナー-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ مكتمل 2025-04-26 | sorafs-op-03;フェイルオーバーが発生しました。 |
+|パートナー-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ مكتمل 2025-04-26 |鳥居-int-01; مراجعة دليل Torii `/v1/pipeline` و 料理本 試してみてください。 |
+|パートナー-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ مكتمل 2025-04-26 |鳥居-int-02;試してみてください (docs-preview/w1 #2)。 |
+|パートナー-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ مكتمل 2025-04-26 | SDK-パートナー-01;重要なクックブックは JS/Swift + 健全性 ISO です。 |
+|パートナー-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ مكتمل 2025-04-26 | SDK-パートナー-02;接続/テレメトリ。 |
+|パートナー-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ مكتمل 2025-04-26 |ゲートウェイ-ops-01;ゲートウェイ + セキュリティ プロキシ 試してみてください。 |
 
-املأ تواريخ **ارسال الدعوة** و **الاقرار** فور اصدار البريد الصادر.
-اربط الاوقات بجدول UTC المحدد في خطة W1.
+ログインしてください。** ログインしてください。
+UTC 時間 W1。
 
-## نقاط القياس
+## いいえ
 
-| الطابع الزمني (UTC) | لوحات / probes | المالك | النتيجة | الاثر |
+|世界時間 (UTC) |プローブ / プローブ |ああ |認証済み |認証済み |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ كلها خضراء | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | نص `npm run manage:tryit-proxy -- --stage preview-w1` | Ops | ✅ تم التجهيز | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | اللوحات اعلاه + `probe:portal` | Docs/DevRel + Ops | ✅ لقطة قبل الدعوة، بلا تراجعات | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | اللوحات اعلاه + فرق زمن Try it | Docs/DevRel lead | ✅ اجتاز فحص منتصف الموجة (0 تنبيهات; زمن Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | اللوحات اعلاه + probe خروج | Docs/DevRel + Governance liaison | ✅ لقطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals` |ドキュメント/DevRel + オペレーション | ✅ كلها خضراء | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` |作戦 | ✅ いいえ | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | और देखेंドキュメント/DevRel + オペレーション | ✅ قطة قبل الدعوة، بلا تراجعات | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 |試してみる |ドキュメント/DevRel リード | ✅ اجتاز فحص منتصف الموجة (0 تنبيهات; زمن Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 |ニュース + プローブ ニュース |ドキュメント/DevRel + ガバナンス連携 | ✅ قطة خروج، صفر تنبيهات متبقية | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + PNG تحت
+`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` ログイン
+`docs-preview-integrity-<date>.json` です。
 
-عينات ساعات المكتب اليومية (2025-04-13 -> 2025-04-25) مجمعة كصادرات NDJSON + PNG تحت
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` مع اسماء ملفات
-`docs-preview-integrity-<date>.json` واللقطات المقابلة.
+## और देखें
 
-## سجل الملاحظات والتذاكر
+あなたのことを忘れないでください。 GitHub/ディスカッションする
+ニュース ニュース ニュース ニュース ニュース
+[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)。
 
-استخدم هذا الجدول لتلخيص الملاحظات المقدمة من المراجعين. اربط كل بند بتذكرة GitHub/discuss
-بالاضافة الى النموذج المهيكل الملتقط عبر
-[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
-
-| المرجع | الشدة | المالك | الحالة | ملاحظات |
+|ああ |ああ |ああ |ああ |重要 |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ تم الحل 2025-04-18 | تم توضيح صياغة تنقل Try it + مرساة الشريط الجانبي (تم تحديث `docs/source/sorafs/tryit.md` بالوسم الجديد). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ تم الحل 2025-04-19 | تم تحديث لقطة Try it + التسمية حسب طلب المراجع؛ اثر `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 مغلق | كانت التعليقات المتبقية اسئلة/اجابات فقط؛ تم التقاطها في نموذج ملاحظات كل شريك تحت `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` |低い |ドキュメント-コア-02 | ✅ 2025-04-18 | 2025 年 4 月 18 日試してみる + مرساة الشريط الجانبي (تم تحديث `docs/source/sorafs/tryit.md` بالوسم الجديد)。 |
+| `docs-preview/w1 #2` |低い |ドキュメントコア-03 | ✅ 2025-04-19 | 2025 年 4 月 19 日試してみる + 試してみる + 試してみる + 試してみる`artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`。 |
+| — |情報 |ドキュメント/DevRel リード | 🟢 और देखें كانت التعليقات المتبقية اسئلة/اجابات فقط؛ `artifacts/docs_preview/W1/preview-2025-04-12/feedback/` を参照してください。 |
 
-## تتبع اختبار المعرفة والاستبيان
+## عرض المزيد المزيد المزيد
 
-1. سجل درجات الاختبار (الهدف >=90%) لكل مراجع؛ وارفق ملف CSV المصدر بجانب اثار الدعوة.
-2. اجمع اجابات الاستبيان النوعية الملتقطة عبر نموذج الملاحظات وكررها تحت
-   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
+1. 評価 (評価 >=90%) 評価CSV 形式のファイル。
+2. ログイン アカウント登録 ログイン アカウントを作成する
+   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`。
 3. جدولة مكالمات المعالجة لمن يقل عن الحد وادونها في هذا الملف.
 
-سجل جميع المراجعين الثمانية >=94% في اختبار المعرفة (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). لم تكن هناك مكالمات
-معالجة مطلوبة؛ صادرات الاستبيان لكل شريك محفوظة تحت
-`artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
+率 % % % % % (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`)。 ã‚¹ã‚¤ã‚¹ã‚¿
+重要な情報最高のパフォーマンスを見せてください。
+`artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`。
 
-## جرد الاثار
+## いいえ
 
-- حزمة preview descriptor/checksum: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- ملخص probe + link-check: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- سجل تغيير proxy Try it: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- صادرات القياس: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- حزمة قياس يومية لساعات المكتب: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- صادرات الملاحظات والاستبيان: ضع مجلدات كل مراجع تحت
+- プレビュー記述子/チェックサム: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- プローブ + リンクチェック: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- プロキシ 試してみてください: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- 番号: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- メッセージ: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- ログイン: ログイン: ログイン: ログイン
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- CSV اختبار المعرفة وملخصه: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- CSV 番号: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-حافظ على الجرد متزامنا مع تذكرة المتتبع. ارفق الهاشات عند نسخ الاثار الى تذكرة الحوكمة
-حتى يتمكن المدققون من التحقق من الملفات دون وصول للصدفة.
+حافظ على الجرد متزامنا مع تذكرة المتتبع. عند نسخ الاثار الى تذكرة الحوكمة
+最高のパフォーマンスを見せてください。

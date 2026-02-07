@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 47b6ac4be21202943d4145c604557a2ee50823acc139633dd6cf690a81cbce8e
 source_last_modified: "2026-01-22T14:35:37.885394+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Relay Incentive Rollback Plan
+# བརྒྱུད་འཕྲིན་སྐུལ་སློང་ཐོ་འགོད་འཆར་གཞི།
 
-Use this playbook to disable automatic relay payouts if governance requests a
-halt or if the telemetry guardrails fire.
+གཞུང་སྐྱོང་ཞུ་བ་འབད་བ་ཅིན་ རང་བཞིན་གྱིས་ རི་ལེ་གླ་ཆ་ཚུ་ ལྕོགས་མིན་བཟོ་ནི་ལུ་ རྩེད་དེབ་འདི་ལག་ལེན་འཐབ།
+halt ཡང་ན་ telemetry གི་སྲུང་སྐྱོབ་མེ་རྐྱེན་བྱུང་ན།
 
-1. **Freeze automation.** Stop the incentives daemon on every orchestrator host
-   (`systemctl stop soranet-incentives.service` or the equivalent container
-   deployment) and confirm the process is no longer running.
-2. **Drain pending instructions.** Run
-   `iroha app sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
-   to ensure there are no outstanding payout instructions. Archive the resulting
-   Norito payloads for audit.
-3. **Revoke governance approval.** Edit `reward_config.json`, set
-   `"budget_approval_id": null`, and redeploy the configuration with
-   `iroha app sorafs incentives service init` (or `update-config` if running a
-   long-lived daemon). The payout engine now fails closed with
-   `MissingBudgetApprovalId`, so the daemon refuses to mint payouts until a new
-   approval hash is restored. Record the git commit and the SHA-256 of the
-   modified config in the incident log.
-4. **Notify Sora Parliament.** Attach the drained payout ledger, the shadow-run
-   report, and a short incident summary. Parliament minutes must note the hash
-   of the revoked configuration and the time the daemon was halted.
-5. **Rollback validation.** Keep the daemon disabled until:
-   - telemetry alerts (`soranet_incentives_rules.yml`) are green for >=24 h,
-   - the treasury reconciliation report shows zero missing transfers, and
-   - Parliament approves a new budget hash.
+1. **ཕི་རི་ཛི་རང་འགུལ་།** སྙན་ཆའི་སྡེ་ཚན་ག་རའི་ནང་ སེམས་ཤུགས་བསྐྱེད་བཅུག་མི་ ཌེ་མཱོན་འདི་བཀག་བཞག།
+   (`systemctl stop soranet-incentives.service` ཡང་ན་ འདྲ་མཉམ་གྱི་དོན།
+   བཀྲམ་སྤེལ་) དང་ ལས་སྦྱོར་འདི་ ད་ལས་ཕར་ གཡོག་བཀོལ་མི་བཏུབ་ཟེར་ ངེས་གཏན་བཟོ།
+2. **ཆུ་ཤོག་བཀག་པའི་བཀོད་རྒྱ་ཚུ་།** གཡོག་བཀོལ།
+   I18NI0000002X
+   གླ་ཆ་སྤྲོད་ཐངས་ཀྱི་བཀོད་རྒྱ་མེདཔ་ངེས་གཏན་བཟོ་ནི། གྲུབ་འབྲས་འདི་ཡིག་མཛོད་ནང་བཀོད་ནི།
+   རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ I18NT0000000X དངུལ་སྤྲོད་ལེན་ཚུ།
+3. **གཞུང་སྐྱོང་ཆ་འཇོག་འབད་ནི།** ཞུན་དག་ I18NI0000003X, set
+   `"budget_approval_id": null`, དང་ རིམ་སྒྲིག་འདི་དང་གཅིག་ཁར་ བསྐྱར་བཟོ་འབད།
+   `iroha app sorafs incentives service init` (ཡང་ན་ I18NI000000006X གལ་ཏེ་ a གཡོག་བཀོལ།
+   ཡུན་རིང་བའི་ཌེ་མཱོན་)། ད་ལྟོ་གླ་ཆ་འཕྲུལ་འཁོར་འདི་ སྒོ་བསྡམ་མ་ཚུགས།
+   `MissingBudgetApprovalId`, དེ་འབདཝ་ལས་ ཌེ་མཱོན་གྱིས་ གསརཔ་ཚུན་ཚོད་ གླ་ཆ་སྤྲོད་ནི་ལུ་ ངོས་ལེན་མ་འབད་བས།
+   ཆ་འཇོག་ཧ་ཤི་འདི་སླར་གསོ་འབདཝ་ཨིན། གིཊ་ཁས་བླངས་དང་ ཨེས་ཨེཆ་ཨེ་-༢༥༦ གི་ གིས།
+   བྱུང་ལས་དྲན་དེབ་ནང་ ལེགས་བཅོས་འབད་ཡོདཔ།
+4. **ནོ་ཊི་ཕི་སོ་ར་སྤྱི་ཚོགས་།** ཆུ་བཏོན་པའི་དངུལ་ཕོགས་སྤྲོད་ལེན་གྱི་ གྱིབ་མ་འདི་ གྱིབ་མ་གིས་གཡོག་བཀོལ་ནི།
+   སྙན་ཞུ་དང་ བྱུང་རྐྱེན་ཐུང་ཀུ་ཅིག་ཨིན། སྤྱི་ཚོགས་ཀྱི་སྐར་མ་ཚུ་གིས་ ཧེ་ཤི་འདི་ དྲན་འཛིན་འབད་དགོ།
+   བསྐྱར་བཟོ་འབད་ཡོད་པའི་རིམ་སྒྲིག་དང་ ཌེ་མཱོན་འདི་ བཀག་ཆ་འབད་བའི་དུས་ཚོད་ཨིན།
+5. **Rollback བདེན་དཔྱད།** ཌེ་མཱོན་འདི་ ལྕོགས་མིན་བཟོ་དགོ།
+   - ཊེ་ལི་མི་ཊི་ཉེན་བརྡ་ (I18NI0000008X) འདི་ >=24 h གི་དོན་ལུ་ ལྗང་ཁུ་ཡོདཔ་ཨིན།
+   - དངུལ་ཁང་མཐུན་སྒྲིག་སྙན་ཞུ་ནང་ གནས་སྤོ་མེད་པའི་ ཀླད་ཀོར་སྟོནམ་ཨིན།
+   - སྤྱི་ཚོགས་ཀྱིས་ འཆར་དངུལ་གསརཔ་ ཆ་འཇོག་འབདཝ་ཨིན།
 
-Once governance re-issues a budget approval hash, update `reward_config.json`
-with the new digest, re-run the `shadow-run` command on the latest telemetry,
-and restart the incentives daemon.
+གཞུང་སྐྱོང་གིས་ འཆར་དངུལ་ཆ་འཇོག་འབད་མི་ ཧེ་ཤི་འདི་ ལོག་བཏོན་ཚརཝ་ད་ I18NI0000009X དུས་མཐུན་བཟོ་དགོ།
+ཟས་བཅུད་གསརཔ་དང་གཅིག་ཁར་ I18NI000000010X བརྡ་བཀོད་འདི་ ཊེ་ལི་མི་ཊི་གསརཔ་གུ་ལོག་སྟེ་གཡོག་བཀོལ་དགོ།
+དང་ སྐུལ་སློང་ཌེ་མཱོན་ ལོག་འགོ་བཙུགས།

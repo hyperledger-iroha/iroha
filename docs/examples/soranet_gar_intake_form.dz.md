@@ -7,46 +7,45 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6cd4da7e590d581719ed2607994d7d9eb16d153fbd06f85655d0da37c727853a
 source_last_modified: "2025-12-29T18:16:35.085419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+I18NH0000000X
 
-# SoraNet GAR Intake Template
+# སོ་ར་ནེཊ་ ཇི་ཨར་ ནང་བསྐྱོད་ ཊེམ་པེལེཊ་
 
-Use this intake form when requesting a GAR action (purge, ttl override, rate
-ceiling, moderation directive, geofence, or legal hold). The submitted form
-should be pinned alongside the `gar_controller` outputs so audit logs and
-receipts cite the same evidence URIs.
+ཇི་ཨེ་ཨར་ བྱ་བ་ཅིག་ཞུ་བ་འབད་བའི་སྐབས་ འདི་བཟུམ་མའི་འབྲི་ཤོག་འདི་ལག་ལེན་འཐབ།
+ཐོག་ཁེབས་དང་ བར་མཚམས་བཀོད་རྒྱ་ ས་ཆ་ ཡང་ན་ ཁྲིམས་མཐུན་འཛིན་ཐབས།) འབྲི་ཤོག་བཙུགས་ནི།
+`gar_controller` ཐོན་འབྲས་ཚུ་དང་གཅིག་ཁར་ བཙུགས་ཏེ་ཡོདཔ་ལས་ དྲན་ཐོ་ཚུ་ རྩིས་ཞིབ་འབད།
+ཐོབ་མི་ཚུ་གིས་ སྒྲུབ་བྱེད་གཅིགཔོ་འདི་ URIs.
 
-| Field | Value | Notes |
-|-------|-------|-------|
-| Request ID |  | Guardian/ops ticket id. |
-| Requested by |  | Account + contact. |
-| Date/time (UTC) |  | When the action should start. |
-| GAR name |  | e.g., `docs.sora`. |
-| Canonical host |  | e.g., `docs.gw.sora.net`. |
-| Action |  | `ttl_override` / `rate_limit_override` / `purge_static_zone` / `geo_fence` / `legal_hold` / `moderation`. |
-| TTL override (seconds) |  | Required only for `ttl_override`. |
-| Rate ceiling (RPS) |  | Required only for `rate_limit_override`. |
-| Allowed regions |  | ISO region list when requesting `geo_fence`. |
-| Denied regions |  | ISO region list when requesting `geo_fence`. |
-| Moderation slugs |  | Match the GAR moderation directives. |
-| Purge tags |  | Tags that must be purged before serving. |
-| Labels |  | Machine labels (incident id, drill name, pop scope). |
-| Evidence URIs |  | Logs/dashboards/specs backing the request. |
-| Audit URI |  | Per-pop audit URI if different from defaults. |
-| Requested expiry |  | Unix timestamp or RFC3339; leave blank for default. |
-| Reason |  | User-facing explanation; appears in receipts and dashboards. |
-| Approver |  | Guardian/committee approver for the request. |
+| ཕིལཌ་ | གནས་གོང་ | དྲན་ཐོ། |
+|---------|------------|-----------------------------------------------------
+| ཞུ་བ་ ID |  | གཱར་ཌི་ཡན་/ཨོཔ་ ཊིཀཊ་ཨའི་ཌི། |
+| ཞུ་བ་འབད་མི་ |  | རྩིས་ཐོ་ + འབྲེལ་འཐུས། |
+| ཚེས་གྲངས་/དུས་ཚོད་ (UTC) |  | བྱ་བ་འགོ་བཙུགས་དགོ་པའི་སྐབས། |
+| GAR མིག |  | དཔེར་ན་ I18NI0000002X. |
+| ཀེན་ནོ་ཀལ་གཙོ་འཛིན། |  | དཔེར་ན་ `docs.gw.sora.net`. |
+| བྱ་བ་ |  | / I18NI000000004X / `rate_limit_override` / I18NI000000006X / I18NI000000007X / I18NI000000008X / `moderation`. |
+| ཊི་ཊི་ཨེལ་གྱིས་བཀག་ཆ་ (སྐར་ཆ) |  | `ttl_override` གི་དོན་ལུ་རྐྱངམ་ཅིག་དགོཔ་ཨིན། |
+| རིན་གོང་ (RPS) |  | `rate_limit_override` གི་དོན་ལུ་རྐྱངམ་ཅིག་དགོཔ་ཨིན། |
+| འབད་ཆོག་པའི་ལུང་ཕྱོགས་ |  | `geo_fence` ཞུ་བ་འབད་བའི་སྐབས་ ISO ལུང་ཕྱོགས་ཀྱི་ཐོ་ཡིག་། |
+| ངོས་ལེན་ཡོད་པའི་ལུང་ཕྱོགས་ |  | I18NI0000013X ཞུ་བ་འབད་བའི་སྐབས་ ISO ལུང་ཕྱོགས་ཀྱི་ཐོ་ཡིག་། |
+| བར་མཚམས་ slugs |  | ཇི་ཨར་ བར་མའི་བཀོད་རྒྱ་ཚུ་ མཐུན་སྒྲིག་འབད། |
+| Purge tats |  | ཕྱག་ཞུ་མ་ཚར་བའི་ཧེ་མ་ གཙང་སྦྲ་འབད་དགོ་པའི་ ངོ་རྟགས་ཚུ། |
+| ཁ་ཡིག་ཚུ། |  | འཕྲུལ་ཆས་ཀྱི་ཁ་ཡིག་ཚུ་ (བྱུང་རྐྱེན་ཨའི་ཌི་, སྦྱོང་ལཱ་མིང་, པོཔ་ཁྱབ་ཁོངས་))། |
+| སྒྲུབ་བྱེད་ ཡུ་ཨར་ཨའི་ |  | ནང་བསྐྱོད་/ཌེཤ་བོརཌི་/ཞུ་བ་ལུ་རྒྱབ་ཐག་བརྐྱབ། |
+| རྩིས་ཞིབ་ཡུ་ཨར་ཨའི་ |  | Per-pop རྩིས་ཞིབ་ཡུ་ཨར་ཨའི་ སྔོན་སྒྲིག་ལས་སོ་སོ་ཅིག་ཨིན་པ་ཅིན་། |
+| ཞུ་བ་འབད་མི་ དུས་ཚོད་ |  | ཡུ་ནིགསི་དུས་ཚོད་མཚོན་རྟགས་ཡང་ན་ RFC3339; སྔོན་སྒྲིག་དོན་ལུ་སྟོངམ་བཞག་། |
+| རྒྱུ་མཚན་ |  | ལག་ལེན་པའི་གདོང་ཕྱོགས་འགྲེལ་བཤད་; བྱུང་འཛིན་དང་ བརྡ་དོན་བཀོད་སྒྲིག་ཚུ་ནང་ འབྱུངམ་ཨིན། |
+| བཀོལ་སྤྱོད་པ། |  | ཞུ་བ་གི་དོན་ལུ་ གཱར་ཌི་ཡན་/ཚོགས་ཆུང་གི་ ཆ་འཇོག་འབད་མི། |
 
-### Submission steps
+### ཕུལ་བའི་རིམ་པ་།
 
-1. Fill the table and attach it to the governance ticket.
-2. Update the GAR controller config (`policies`/`pops`) with matching
-   `labels`/`evidence_uris`/`expires_at_unix`.
-3. Run `cargo xtask soranet-gar-controller ...` to emit events/receipts.
-4. Drop `gar_controller_summary.json`, `gar_reconciliation_report.json`,
-   `gar_metrics.prom`, and `gar_audit_log.jsonl` into the same ticket. The
-   approver confirms the receipt count matches the PoP list before dispatch.
+1. ཐབ་ཚང་བཀང་སྟེ་ གཞུང་སྐྱོང་གི་ཤོག་འཛིན་ལུ་ མཐུད་དགོ།
+2. ཇི་ཨར་ ཚད་འཛིན་རིམ་སྒྲིག་ (`policies`/`pops`) མཐུན་སྒྲིག་དང་བཅས་ དུས་མཐུན་བཟོ།
+   `labels`/`evidence_uris`/I18NI0000018X.
+༣ བྱུང་རིམ་/ཐོབ་ཚུལ་ཚུ་ བཏོན་གཏང་ནིའི་དོན་ལུ་ `cargo xtask soranet-gar-controller ...` གཡོག་བཀོལ།
+4. Drop I18NI000000020X, I18NI000000021X,
+   I18NI0000002X, དང་ `gar_audit_log.jsonl` གིས་ ཤོག་འཛིན་གཅིག་ནང་ལུ། ཚིག༌ཕྲད
+   ཆ་འཇོག་འདི་གིས་ འཐོབ་པའི་གྲངས་ཚད་འདི་ བཏོན་གཏང་པའི་ཧེ་མ་ པོ་པི་ཐོ་ཡིག་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།

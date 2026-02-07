@@ -8,169 +8,154 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview feedback logging
 sidebar_label: Feedback logging
 description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
-
-function FeedbackSummaryTable() {
-  const waves = previewFeedbackSummary?.waves ?? [];
-  if (waves.length === 0) {
-    return (
-      <p>
-        No preview feedback entries have been recorded in
-        {' '}
-        <code>{previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+ནང་འདྲེན་གྱི་སྔོན་ལྟའི་ཕིཌི་བེག་བསྡོམས་རྩིས་འདི་ '@site/src/data/previewFeedbackSummary.json' ལས་ ལས་ལས་འགན་ འཆར་བཤད་བཅུད་དོན་ཐིག་ཁྲམ་() { {
+  contraves = སྔོན་ལྟ་ཕིཊ་ སཱམ་མ་རི་?.waves ?? [];
+  if (waves.རིང་ཚད་ == ༠) {
+    ལོག་པ (
+       ;
+        སྔོན་ལྟའི་བསམ་བཀོད་ཐོ་འགོད་ཚུ་ ༢༠༠༨ ལུ་ སྒྲ་བཟུང་མ་འབད་བས།
+        {''}
+        {previewFeedbackSummary?.འབྱུང་ཁུངས་ ?? 'artifacts/docs_portal_preview/eadback_log.json'}
         .
-      </p>
-    );
-  }
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Wave</th>
-          <th>Status</th>
-          <th>Total events</th>
-          <th>Invites</th>
-          <th>Open invites</th>
-          <th>Acknowledged</th>
-          <th>Revoked</th>
-          <th>Feedback</th>
-          <th>Issues</th>
-          <th>Completion %</th>
-          <th>Ack %</th>
-          <th>Response rate</th>
-          <th>Ack latency (avg h)</th>
-          <th>Feedback latency (avg h)</th>
-          <th>Last event</th>
-          <th>Days since last event</th>
-        </tr>
-      </thead>
-      <tbody>
-        {waves.map((wave) => {
-          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
-          const issues = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
-          const acknowledgements =
-            wave.acknowledgements ?? wave.eventCounts?.acknowledged ?? 0;
-          const revocations =
-            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
-          const responseRate =
-            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
-          const completionPercent =
-            wave.inviteCompletionPercent == null
+      །
+    ;
+  } # .
+  ལོག་པ (
+    ༥ 
+          དཀའ་ངལ།
+          གནས་ལུགས་།
+          །
+          མགྲོན་འབོད་།
+          །
+          །
+          །
+          བསམ་འཆ།
+          འདོན་པ།
+          མཇུག་བསྡུ་ %།
+          ཨེཀ %།
+          །
+          Ack བར་ཆད་ (avg h)
+          བསམ་བློའི་འཕྲོ་བརླག་ (avgh)།
+          མཇུག་གི་བྱུང་ལས་།
+          ཉིན་མཇུག་ལས་ ཉིན་བ།
+         དང་།
+        {waves.map(((waves) => {
+          const བསམ་འཆར། = wave.feedbackCount ?? wave.eventCounts?.[འདྲི་བའི་རྒྱབ་ལོག་སྤྲོད་ཀྱི་’] ?? ༠;
+          cont affee = རླབས་.གནད་དོན་གཉེར་བ། ?? wave.evonts?.['issue-oped'] ?? ༠;
+          const acgaless = .
+            wave.ངོས་འཛིན། ?? wave.eventCounts?.ངོས་ལེན་འབད་ཡོདཔ་ ?? ༠;
+          const ཆ་མེད་ཚུ་ = ཨིན།
+            wave.ཆ་མེད་ ?? wave.eventCounts?.['འཛུལ་ཞུགས་-ཕྱིར་འཐེན་'] ?? ༠;
+          མཐུད་ལམ་ལན་གསལ་ཚད་ཚད།wave.ལན་ལོག་ཚད་གཞིའི་ == null ? '—' : I18NI0000015X;
+          canst མཇུག་བསྡུ།
+            wave.invite Compleation བརྒྱ་ཆ == ནུས་མེད་
               ? '—'
               : `${wave.inviteCompletionPercent}%`;
-          const ackPercent =
-            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
-          const ackLatency =
-            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
-          const feedbackLatency =
-            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
-          return (
-            <tr key={wave.wave}>
-              <td>{wave.wave}</td>
-              <td>{wave.status ?? 'pending'}</td>
-              <td>{wave.totalEvents}</td>
-              <td>{wave.invites?.total ?? 0}</td>
-              <td>{wave.invites?.open ?? 0}</td>
-              <td>{acknowledgements}</td>
-              <td>{revocations}</td>
-              <td>{feedback}</td>
-              <td>{issues}</td>
-              <td>{completionPercent}</td>
-              <td>{ackPercent}</td>
-              <td>{responseRate}</td>
-              <td title={wave.ackLatencyHoursP95 == null ? undefined : `p95 ${wave.ackLatencyHoursP95}h`}>
+          const ackPercent = .
+            wave.acRatePercent == ནུས་མེད་ ? '—' : `${wave.ackRatePercent}%`;
+          canst ackLatency = .
+            wave.acLatency HoursAvg == ནུས་མེད་ ? '—' : wave.ackLatency HoursAvg;
+          cant བསམ་ལན་ལེནཊི་ = .
+            རྦ་རླབས་.feedbackLatency HoursAvg == ཀླད་ཀོར་ ? '—' : རླབས་. ཕིཌ་བེག་ལེནཊི་ཆུ་ཚོད་ཨེ་ཝི་ཇི་;
+          ལོག་པ (
+            
+              {wave.wave}།
+              {wave.གནས་ཚད་ ?? འpbན་འཐབ།}།
+              {wave.བསྡོམས་པའི་བྱུང་ལས་}།
+              {wave.inveites?..བསྡོམས་ ?? 0}།
+              {wave.inveites?.ཨོཔ་ ?? 0}།
+              ག {ངོས་འཛིན།}།
+              ག {འགྲིགས་ }།
+              {འ ོ ན་བ ་ །
+              ག{གནད་དོན་}།
+              {completion བརྒྱ་ཆའི་}།
+              {ackPercent}།
+              ག{ལན་གསལ་ཚད་གཞི}།
+              
                 {ackLatency}
-              </td>
+              །
               <td
                 title={
-                  wave.feedbackLatencyHoursP95 == null
-                    ? undefined
+                  རྦ་རླབས་.ཕིཌི་བེག་ལེནཊེན་སི་ཆུ་ཚོད་༩༥ == སྟོང་།
+                    ? འགྲེལ་བཤད་ མ་རྐྱབ་
                     : `p95 ${wave.feedbackLatencyHoursP95}h`
-                }
-              >
+                } # .>
                 {feedbackLatency}
-              </td>
-              <td>{wave.lastEventTimestamp ?? '—'}</td>
-              <td>{wave.daysSinceLastEvent ?? '—'}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
+              །
+              {wave.lateventTimestamp ?? འ—འ}།
+              {wave.daySinceLastAvent ?? འ—འ}།
+             .
+    
+  ;
+} # .
 
-The roadmap calls for verifiable evidence whenever we invite reviewers into the
-docs portal preview. This note explains how to capture that evidence with the
-`preview-feedback-log` helper, how to share the resulting artefacts with
-governance, and where to file digests once a wave closes.
+ལམ་གྱི་ས་ཁྲ་འདི་གིས་ ང་བཅས་ཀྱིས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་ ༡ ལུ་འབོཝ་ད་ བདེན་དཔྱད་འབད་ཚུགས་པའི་ སྒྲུབ་བྱེད་ཚུ་ འབོཝ་ཨིན།
+docs དྲྭ་ཐོག་སྔོན་ལྟ། དྲན་ཐོ་འདི་གིས་ སྒྲུབ་བྱེད་དེ་ འདི་དང་གཅིག་ཁར་ ག་དེ་སྦེ་ བཟུང་ཚུགསཔ་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+I18NI0000000X རོགས་སྐྱོར།, གྲུབ་འབྲས་ཐོན་རྫས་ཚུ་ ག་དེ་སྦེ་བགོ་བཤའ་རྐྱབ་ཚུགསཔ་ཨིན་ན།
+གཞུང་སྐྱོང་དང་ རླབས་འདི་ཁ་བསྡམས་པའི་སྐབས་ བཞུ་བཅུག་ནི།
 
-## Why we log feedback
+## ང་བཅས་ཀྱིས་བསམ་ལན་ནང་བསྐྱོད་འབད་དགོ་མི་ཚུ།
 
-- **Compliance:** every invite must record who accessed the preview, when they
-  acknowledged the acceptable-use policy, and when their access was revoked.
-- **Telemetry correlation:** the log lets us correlate portal telemetry spikes
-  or Try it traffic with specific invite cohorts.
-- **Governance evidence:** each DOCS-SORA checkpoint needs a machine-readable
-  summary showing invite counts, open reviewers, and the state of outstanding
-  issues.
+- **བསྒྲིགས་པ་:** མགྲོན་བརྡ་རེ་རེ་གིས་ སྔོན་ལྟ་ སུ་འཛུལ་སྤྱོད་འབད་མི་ ག་གིས་ འཛུལ་སྤྱོད་འབད་ཡི་ག་ དེ་ཚུ་ ག་དུས་ལུ་ ཐོ་བཀོད་འབད་དགོ།
+  ངོས་ལེན་འབད་བཏུབ་པའི་ལག་ལེན་གྱི་སྲིད་བྱུས་འདི་ངོས་ལེན་འབད་དེ་ ཁོང་གི་འཛུལ་སྤྱོད་འདི་ ཆ་མེད་བཏང་ཡོདཔ་ཨིན།
+- **ཊེ་ལི་མི་ཊི་རི་ འབྲེལ་མཐུན་:** དྲན་ཐོ་འདི་གིས་ འབྲེལ་མཐུན་གྱི་ ཊེ་ལི་མི་ཊི་སི་པི་ཀེས་ཚུ་ ལག་ལེན་འཐབ་བཅུགཔ་ཨིན།
+  ཡང་ན་ དམིགས་བསལ་གྱི་མགྲོན་བརྡ་སྡེ་ཚན་ཚུ་དང་གཅིག་ཁར་ འགྲུལ་སྐྱོད་འབད་རྩོལ་བསྐྱེད།
+- **གཞུང་སྐྱོང་སྒྲུབ་བྱེད་:** DOCS-I18NT0000002X བརྟག་དཔྱད་ས་ཚིགས་ལུ་འཕྲུལ་ཆས་ལྷག་ཚུགསཔ་ཅིག་དགོཔ་ཨིན།
+  བཅུད་བསྡུས་སྟོན་པའི་འབོད་སྒྲའི་གྲངས་འབོར་དང་།
+  སྟབས༌མ༌བདེཝ།
 
-All evidence lives under `artifacts/docs_portal_preview/` so it can be attached
-to the invite wave ticket or governance review without scraping CI logs.
+སྒྲུབ་བྱེད་ཆ་མཉམ་ `artifacts/docs_portal_preview/` གི་འོག་ལུ་སྡོད་ཡོདཔ་ལས་ མཐུད་ཚུགས།
+CI དྲན་ཐོ་ཚུ་ མ་བཏོན་པར་ མགྲོན་བརྡ་འབད་མི་ རླབས་ཤོག་ཡང་ན་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་ལུ།
 
-## Live invite summary
+## འཁོད་པའི་འབོད་བརྡ་བསྡུས།
 
-`docs/portal/scripts/preview-feedback-summary.mjs` ingests the shared log and
-writes `src/data/previewFeedbackSummary.json` during `npm run build`. The table
-below renders that JSON so reviewers can see the current invite footprint
-without running the CLI helper.
+`docs/portal/scripts/preview-feedback-summary.mjs` བགོ་བཤའ་རྐྱབ་ཡོད་པའི་དྲན་ཐོ་འདི་བཙུགས་ཡོདཔ་ཨིན།
+`src/data/previewFeedbackSummary.json` འདི་ `npm run build` གི་སྐབས་ལུ་བྲིས། ཐིག་ཁྲམ་འདི།
+འོག་གི་བརྡ་སྟོན་པ་ JSON གིས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ད་ལྟོའི་མགྲོན་བརྡ་གི་རྐང་རྗེས་འདི་མཐོང་ཚུགས།
+CLI གྲོགས་རམ་འདི་ གཡོག་མ་བཀོལ་བ།
 
-<FeedbackSummaryTable />
+མགྲོན་འབོད་བསྡོམས་པས་ད་ལྟ་བཅུད་བསྡུས་འདི་ངོས་ལེན་དང་།
+ཆ་མེད་བཏང་བའི་གྱངས་ཁ་, ཐོན་པའི་ལན་འདེབས་ཚད་ (འདྲི་དཔྱད་ཀྱི་ཕུལ་གཞི་གིས་ ཆ་མེད་བཏང་ཡོདཔ།
+བསྡོམས་འབོར་གྱི་འབོད་བཀུར་ཚུ་) དང་ ཆ་སྙོམས་ཀྱི་ འཕྲོ་མཐུད་(གཡོ་འགུལ་ཅན་གྱི་ p95) གི་བར་ན་ཡོདཔ་ཨིན།
+མགྲོན་བརྡ་དང་ བསྐྱར་ཞིབ་པ་གི་ངོས་ལེན་ཡང་ན་ བསམ་འཆར་ཕུལ་ནི། གསརཔ་འདི།
+**མཇུག་བསྡོམ་ %** ཀེར་ཐིག་གིས་ མགྲོན་བརྡ་ག་དེ་ཁ་བསྡམས་ཡོདཔ་ཨིན་ན་ (ངོས་ལེན་འབད་ཡོདཔ་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ཅི
+ཆ་མེད་བཏང་ཡོདཔ་) དང་ **Ack %** གིས་ ཐོབ་མི་ག་དེམ་ཅིག་གིས་ གསལ་ཏོག་ཏོ་སྦེ་ ངེས་དཔྱད་འབད་ཡོདཔ་ཨིན་ན་ འོད་རྟགས་འབདཝ་ཨིན།
+ངོས་ལེན་འབད་བཏུབ་པའི་ལག་ལེན་གྱི་གོམ་པ་ཚུ། འདི་ལས་ཐོན་པའི་བརྒྱ་ཆའི་—JSON-རྐྱངམ་གཅིག།
+ཆ་མེད་གཏང་/གནད་དོན་གྱི་ཚད་གཞི། བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ངེས་གཏན་བཟོ་ཚུགས།
+བཅའ་མར་གཏོགས་མི་གནས་རིམ་དང་ དུས་ཚོད་གཉིས་ཆ་ར་ སི་ཨེལ་ཨའི་གྲོགས་རམ་མ་འབད་བར་ཡོདཔ་ཨིན།
+**Status** ཀེར་ཐིག་འདི་གིས་ རླབས་ཅིག་ད་ལྟོ་ཡང་ཡོད་མེད་འོད་རྟགས་བཀོདཔ་ཨིན།
+ཤུགས་ལྡན་ (I18NI0000025X), ཁ་བསྡམས་ཡོད་རུང་ ཉིནམ་༡༤ གི་ལྟ་རྟོག་སྒོ་སྒྲིག་ (I18NI0000026X) ཡང་ན་ ནང་འཁོད་ལུ་ ཡང་ན་
+གཏན་མཛོད་ཀྱི་དོན་ལུ་ གྲ་སྒྲིག་ཡོདཔ་ཨིན་ (I18NI0000027X). **ཉིནམ་ཚུ་གིས་ མཇུག་གི་བྱུང་ལས་** མེ་ཊིག་ཚུ་གིས་ ག་དེ་སྦེ་སྟོནམ་ཨིན།
+མཐའ་མའི་མགྲོན་བརྡ་/བསམ་འཆར་གྱི་བྱ་སྤྱོད་ལས་ཡུན་རིངམོ་སྦེ་ཡོདཔ་ལས་ ཚོགས་སྡེ་ཚུ་གིས་ ཤེས་ཚུགས།
+རྦ་རླབས་ཚུ་ བཀབ་དགོཔ་དང་ ཡང་ན་ ལོག་སྟེ་བཙུགས་དགོ་པའི་ ལངས་མི་ ལེན་མི་ཚུ་ཨིན།
 
-In addition to the invite totals, the summary now surfaces acknowledgement and
-revocation counts, the derived response rate (feedback submissions divided by
-total invites), and the average latency (with a hoverable p95) between an
-invite and the reviewer’s acknowledgement or feedback submission. The new
-**Completion %** column shows how many invites have been closed (acknowledged or
-revoked), while **Ack %** highlights how many recipients explicitly confirmed
-the acceptable-use steps. These derived percentages—plus the JSON-only
-revocation/issue rates—feed the governance dashboards so reviewers can confirm
-both participation levels and turnaround time without running the CLI helper.
-The **Status** column highlights whether a wave is still
-active (`active`), closed but within the 14-day monitoring window (`closed`), or
-ready for archival (`archived`). The **Days since last event** metric shows how
-long it has been since the final invite/feedback action so councils can spot
-waves that need to be wrapped up or re-engage lingering recipients.
+### རླབས་ I18NI0000028X བསྐྱར་ཞིབ།- **Scope:** དངུལ་འབྲེལ་བེ་ཊ་དང་ བལྟ་བརྟོག་འབད་བཏུབ་པའི་ ཨོཔ་ ཨེསི་ཌི་ཀེ་ མཉམ་འབྲེལ་པ་ དེ་ལས་ སྐྱེ་ལྡན་རིམ་ལུགས་ཀྱི་ སྐུལ་ཁྱབ་བརྡ་སྤྲོད་པ་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་ **2026‐02‐18** གུ་འབོ་ཡོདཔ་ཨིན།
+- **མེ་ཊིགསི་:** འདྲེན་བཀོལ་ ༤ ཆ་འཇོག་༤ ཆ་མེད་གཏང་མི་༤ དང་ བསམ་འཆར་ཕུལ་མི་༤ (`responseRatePercent = 100`) གིས་ བརྟག་ཞིབ་ཀྱི་སྡེ་ཚན་གྱིས་ ཞུ་ཡིག་བཙུགས་ཡོདཔ་ཨིན།
+- **བདེན་དཔང:** `artifacts/docs_portal_preview/feedback_log.json` གིས་ ད་ལྟོ་ རླབས་འདི་གི་དོན་ལུ་ བྱུང་ལས་ཀྱི་དུས་ཚོད་ཁ་གསལ་ཚུ་ ཚུད་དེ་ཡོདཔ་ད་ `artifacts/docs_portal_preview/preview-20260218-summary.json` གིས་ ང་བཅས་ཀྱིས་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ཚུ་ལུ་ མཉམ་བསྡོམས་འབད་མི་ སྤྱིར་བཏང་བཟོ་ཡོད་པའི་ མེཊིཀ་ཚུ་ བཟུང་ཡོདཔ་ཨིན། `npm run --prefix docs/portal preview:log -- --summary --summary-json` བརྒྱུད་དེ་ དྲྭ་ཚིགས་གནས་སྡུད་འདི་ བསྐྱར་བཟོ་འབད་མི་འདི་གིས་ ཨང་གྲངས་ཚུ་ `src/data/previewFeedbackSummary.json` ནང་ལུ་ འཐེན་དོ་ཡོདཔ་ཨིན།
+- **wave porter:** I18NI000000035X གིས་ གོམ་པ་གཅིག་ནང་ རླབས་རེ་གི་བཅུད་བསྡུས་དང་ བཞུ་བཅོས་ དེ་ལས་ གསར་བསྐྲུན་འབད་མི་ དྲྭ་ཚིགས་གནད་སྡུད་ཚུ་ བཏོནམ་ཨིན།
+- **རྗེས་སུ་འཇུག་པའི་བསམ་འཆར་གྱིས་ ཞུ་བ་ཚུ་འབད་རྩོལ་བསྐྱེད་ནིའི་དོན་ལུ་ སི་ཨེསི་པི་ཁ་སྐོང་ཚུ་ ཁྱབ་ཁོངས་འབད་ཡོདཔ་ཨིན། ཌོཀ་/ཌི་ཝི་རེལ་གྱིས་ `docs/portal/docs/sorafs/observability-plan.md` (§༤.༢) གི་འོག་ལུ་ འབྲི་ནི་འདི་ བརྟག་ཞིབ་འབད་དོ་ཡོདཔ་ལས་ ཤུལ་མའི་མགྲོན་བརྡ་རླབས་འདི་གིས་ བཅོ་ཁ་འདི་ བདེན་དཔྱད་འབད་ཚུགས། བསྐྱར་ཞིབ་ཆ་ཚང་ [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) ནང་ལུ་ [I18NI0000000038X](I18NU00000000010X) ནང་ལུ་བཙུགས་ཡོདཔ་ཨིན།
 
-### Wave `preview-20260218` recap
-
-- **Scope:** Finance beta, observability ops, SDK partner, and ecosystem advocate reviewers invited on **2026‑02‑18** ahead of the next DOCS-SORA checkpoint.
-- **Metrics:** 4 invites, 4 acknowledgements, 4 revocations, and 4 feedback submissions (`responseRatePercent = 100`) with a single follow-up issue (`DOCS-SORA-Preview-20260218`) filed by the observability cohort.
-- **Evidence:** `artifacts/docs_portal_preview/feedback_log.json` now includes the detailed event timeline for this wave and `artifacts/docs_portal_preview/preview-20260218-summary.json` captures the normalized metrics we attach to governance packets. Regenerating the portal data via `npm run --prefix docs/portal preview:log -- --summary --summary-json` pulls the same numbers into `src/data/previewFeedbackSummary.json`.
-- **Wave helper:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` emits the per-wave summary, digest, and refreshed portal data in one step.
-- **Follow-ups:** Observability feedback scoped additional CSP examples for Try it requests; Docs/DevRel are tracking the write-up under `docs/portal/docs/sorafs/observability-plan.md` (§4.2) so the next invite wave can validate the fix. The full recap lives in [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) with the timeline captured in [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
-
-## Event taxonomy
-
-| Event | When to record it | Notes |
+## བྱུང་རིམ་དབྱེ་ཁང༌།| བྱུང་ལས། | ག་དུས་ཐོ་བཀོད་བྱེད་དགོས་ | དྲན་ཐོ། |
 | --- | --- | --- |
-| `invite-sent` | Immediately after sending an invite email. | Append one entry per recipient so invite counts stay accurate. |
-| `acknowledged` | When the reviewer confirms they read the security/observability docs and ran the checksum gate. | Optional but recommended for partner cohorts. |
-| `feedback-submitted` | When a reviewer files a finding via the agreed tracker. | Include the issue/link in the `--notes` field. |
-| `issue-opened` | When DOCS-SORA files a follow-up issue derived from feedback. | Helps governance correlate roadmap items to preview feedback. |
-| `access-revoked` | Once the reviewer’s preview window ends or access is revoked early. | Required so the “open recipients” count stays accurate. |
+| I18NI0000039X | འབོད་བརྡ་གཏང་ཞིནམ་ལས་ དེ་འཕྲོ་ལས་ཨིན། | ཐོབ་མི་རེ་ལུ་ འཛུལ་ཞུགས་གཅིག་ མཐུད་ཡོདཔ་ལས་ མགྲོན་བརྡ་ཚུ་ གཏན་གཏན་སྦེ་སྡོད། |
+| I18NI0000040X | བསྐྱར་ཞིབ་འབད་མི་གིས་ ཉེན་སྲུང་/བལྟ་བརྟོག་འབད་བཏུབ་པའི་ ཡིག་ཆ་ཚུ་ལྷག་སྟེ་ ཅེག་སམ་སྒོ་འདི་ བརྒྱུགས་ཡོདཔ་ཨིན། | གདམ་ཁ་ཅན་འབད་རུང་ མཉམ་འབྲེལ་པ་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ གྲོས་འཆར་བཀོད་ཡོདཔ། |
+| I18NI0000041X | བསྐྱར་ཞིབ་པ་ཅིག་གིས་ མོས་མཐུན་འབད་མི་ ཊེག་ཊར་བརྒྱུད་དེ་ འཚོལ་ཞིབ་ཅིག་ ཡིག་སྣོད་འབད་བའི་སྐབས། | I18NI0000042X ས་སྒོ་ནང་གནད་དོན་/འབྲེལ་ལམ་ཚུ་བཙུགས། |
+| I18NI0000043X | DOCS-I1NT00000005X ཚུ་ བསམ་ལན་ལས་ ཐོན་མི་ རྗེས་འཇུག་གནད་དོན་ཅིག་ ཡིག་སྣོད་ནང་ལུ། | གཞུང་སྐྱོང་གྲོགས་རམ་ཚུ་གིས་ ལམ་སྟོན་གྱི་ ཅ་ཆས་ཚུ་ བསམ་འཆར་ཚུ་ སྔོན་ལྟ་འབད་ནི་ལུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན། |
+| I18NI0000044X | བསྐྱར་ཞིབ་པ་གི་སྔོན་ལྟའི་སྒོ་སྒྲིག་འདི་མཇུག་བསྡུ་ཞིནམ་ལས་ ཡང་ན་ འཛུལ་སྤྱོད་འདི་ ཧེ་མ་ལས་ ཆ་མེད་བཏང་ཚརཝ་ཨིན། | དེ་ལས་ “ཁ་ཕྱེ” གྱངས་ཁ་འདི་ གཏན་གཏན་སྦེ་བཞགཔ་ཨིན། |
 
-If you need an additional event, add it to
-`VALID_EVENTS` inside `docs/portal/scripts/preview-feedback-log.mjs` and update
-this table in the same change.
+ཁྱོད་ལུ་ཁ་སྐོང་བྱུང་ལས་དགོ་པ་ཅིན་ ལུ་ཁ་སྐོང་རྐྱབས།
+`VALID_EVENTS` `docs/portal/scripts/preview-feedback-log.mjs` ནང་དུ་དང་དུས་མཐུན་ནང་།
+འ་ནི་ཐིག་ཁྲམ་འདི་ བསྒྱུར་བཅོས་གཅིག་ནང་ཨིན།
 
-## Logging workflow
+## ལཱ་གི་རྒྱུན་རིམ་ནང་བསྐྱོད་འབད་དོ།
 
-The helper behind `npm run preview:log` writes a single JSON log that captures
-all events. Each entry contains the wave label, recipient, event, timestamp, and
-optional notes. Example:
+I18NI000000047X གི་རྒྱབ་ལུ་ཡོད་པའི་གྲོགས་རམ་པ་དེ་གིས་ འཛིན་བཟུང་འབད་མི་ JSON དྲན་ཐོ་ཅིག་བྲིས།
+བྱུང་རིམ་ཆ་ཚང་། ཐོ་བཀོད་རེ་རེ་ལུ་ རླབས་ཀྱི་ཁ་ཡིག་ ལེན་མི་ བྱུང་ལས་ དུས་མཉམ་རྟགས་དང་ དང་ དང་ དང་ དང་ དེ་ལས་ ཡོདཔ་ཨིན།
+གདམ་ཁ་ཅན་གྱི་དྲན་འཛིན་ཚུ། དཔེ:
 
 ```json
 {
@@ -195,81 +180,49 @@ optional notes. Example:
 }
 ```
 
-Commands:
+བརྡ་བཀོད་ཚུ།
 
-```bash
-# Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
-npm run --prefix docs/portal preview:log -- \
-  --wave preview-20260204 \
-  --recipient alice@example.com \
-  --event invite-sent \
-  --notes "seed reviewer"
+I18NF0000008X
 
-# Produce a text summary for the current repo
-npm run --prefix docs/portal preview:log -- --summary
+ཐབས་ལམ:- ཁྱད་རྣམ་ཡན་ལག་ཅིག་ནང་ལཱ་འབད་བའི་སྐབས་ ཐོན་རིམ་ཚད་འཛིན་འོག་ལུ་ཡོད་པའི་དྲན་ཐོ་འདི་བཞག།
+  བདག་འཛིན་འཐབ་མི་ཚུ་གིས་ བསྒྱུར་བཅོས་ཚུ་བསྐྱར་ཞིབ་འབད་ཚུགས། ཡུན་རིངམོ་སྦེ་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ དྲན་ཐོ་འདི་ ནང་ གསོག་འཇོག་འབད།
+  གཞུང་སྐྱོང་གི་ཤོག་འཛིན་དང་ མཐའ་མའི་ཐོན་རིམ་འདི་ བཏོན་གཏང་ནིའི་ཅ་ཆས་ཚུ་ལུ་ མཉམ་སྦྲགས་འབད་ནི།
+- `preview:log` ཁྱོད་ཀྱིས་ཐད་ཀར་དུ་ནང་བསྐྱོད་འབད་དགོ་པའི་སྐབས་ `--log <path>` འདི་ ཅིག་གི་ནང་ན་འཛུལ་དགོཔ་ཨིན།
+  SoraFS བཱན་ཌལ་ ཡང་ན་ སི་ཨའི་ ལཱ་གི་ས་སྒོ་།
+- ཨ་རྟག་ར་ `--notes` བརྡ་སྟོན་ (གནད་དོན་འབྲེལ་ལམ་ གིཊི་ཧབ་འཛིན་ཆས་ ཀོརཊི་ཨའི་ཌི་) ཚུ་ཚུདཔ་ཨིན།
+  བཅུད་བསྡུས་འདི་ བསྐྱར་ཞིབ་ཀྱི་སྐབས་ལུ་ ཕན་ཐོགས་ཅན་ཅིག་ཨིན།
+- ཁྱོད་ལུ་ གཏན་འབེབས་བཅུད་ཀྱི་དུས་ཚོད་མཚོན་རྟགས་ཚུ་དགོཔ་ད་ (CI ཡང་ན་ docs པར་ཚུ་ཚུ་གི་དོན་ལུ་)
+  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` བཅུད་དོན་འདི་ གཡོག་མ་བཀོལ་བའི་ཧེ་མ་ཨིན།
+  གྲོགས་རམ་པ། འདི་གིས་ `generatedAt` དང་ གནས་ཚད་ དེ་ལས་ ཉིན་མའི་གྱངས་ཁ་ཚུ་ རིམ་མཐུན་སྦེ་བཞགཔ་ཨིན།
+  བསྐྱར་བཟོའི་ནང་།
 
-# Emit machine-readable summary for a specific wave
-npm run --prefix docs/portal preview:log -- \
-  --summary --summary-json --filter-wave preview-20260204 \
-  > artifacts/docs_portal_preview/preview-20260204-summary.json
+## བཅུད་བསྡུས།1. **Per-wave བཅུད་དོན་:** JSON བཅུད་བསྡུས་འདི་བཟོ་བཏོན་འབད་དེ་ མགྲོན་བརྡ་ལུ་མཉམ་སྦྲགས་འབད།
+   དྲན་ཐོ་ངོ་མ་དང་གཅིག་ཁར་ ཊིཀ། བཅུད་བསྡུས་འདི་གིས་ བསྡོམས་འབོར་གྱི་མགྲོན་བརྡ་ཚུ་ གྲངས་སུ་བཏོནམ་ཨིན།
+   ཐོབ་མི་དང་ བསམ་ལན་ཚུ་ ང་བཅས་ཀྱིས་ ག་ར་བཟུང་ཡོདཔ་ཨིན་ན་ ངེས་གཏན་བཟོ་ཚུགས།
+   བསྐྱར་ཞིབ་པ། དྲྭ་ཚིགས་འདི་གིས་ སྤྱིར་སྙོམས་བཅུད་བསྡུས་ཅིག་ཡང་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+   SORA དེ་འབདཝ་ལས་ འབྲེལ་གཏོགས་ཅན་ཚུ་གིས་ ད་ལྟོའི་གནས་སྟངས་བལྟ་ཚུགས།
+   སི་ཨེལ་ཨའི་ གཡོག་མ་བཀོལ་བར་པར་བཏབ།
+2. **བདུན་ཕྲག་རེའི་བཞུ་བཅོས་:** རན་ I18NI0000004X
+   མརཀ་ཌའོན་མེ་ཊིག་ཚུ་ སྔོན་སྒྲིག་འབད་ནིའི་དོན་ལུ་ དེ་ལས་ ས་གནས་འཛིན་མི་ དབྱེ་ཚན་ཚུ་ བསྟུན་དགོ།
+   ཊེམ་པེལེཊི་ནང་ལག་ལེན་འཐབ་སྟེ།
+   [I18NI0000055X](../../../examples/docs_preview_feedback_digest.md)
+   བཅའ་མར་གཏོགས་མི་ཚུ་དང་གཅིག་ཁར་ བརྗེ་སོར་འབད་བའི་ཧེ་མ་ཨིན། ཉུང་མཐའ་ལུ་: རླབས་ཁ་ཡིག་, ཁ་ཕྱེ་ནི།
+   བསྐྱར་ཞིབ་འབད་མི་དང་ གལ་གནད་ཅན་གྱི་ཤེས་རྟོགས་ དེ་ལས་ ཤུལ་མམ་གྱི་བྱ་བ་ཚུ་ཨིན།
+3. **ཡིག་ཆ།:** ཁ་བསྡམས་ཡོད་པའི་རླབས་ནང་དྲན་ཐོ་ཚུ་ནང་ལུ་སྤོ་བཤུད་འབད།
+   I18NI0000005X དང་ འཕྲལ་གྱི་ རྐྱངམ་ཅིག་བཞག་དགོ།
+   རྩ་བའི་ནང་ ཤུགས་ལྡན་རླབས་ . འདི་གིས་ CI ཅ་རྙིང་ཆུང་ཀུ་སྦེ་བཞག་པའི་སྐབས་ འདི་ཉམས་སྲུང་འབདཝ་ཨིན།
+   རྩིས་ཞིབ་ལམ་སྟོན།
 
-# Regenerate the portal summary data file
-npm run --prefix docs/portal generate:preview-summary
+## ལམ་གྱི་ས་ཁྲ་དང་འབྲེལ་མཐུད་འབད་ནི།- ཡིག་ཆ་འདི་ ཁྱོད་ཀྱིས་དྲིས་པའི་སྐབས་ འབོད་བརྡ་དང་ རྩེད་དེབ་ཚུ་ལས་ གཞི་བསྟུན་འབད།
+  ཡིག་སྣོད་བསམ་འཆར་ལུ་བསྐྱར་ཞིབ་འབད་མི་ཚུ་ (see
+  [I18NI0000057X](./preview-invite-flow.md), .
+  [`reviewer-onboarding`](./reviewer-onboarding.md) དང་།
+  [I18NI0000059X](I18NU0000014X)).
+- རླབས་ཅིག་ཁ་བསྡམས་པའི་སྐབས་ DOCS-I18NT0000006X ནང་ `status.md` ནང་ བཟོ་ཡོད་པའི་བཅུད་བསྡུས་འདི་ བཤདཔ་ཨིན།
+  ལམ་གྱི་ས་ཁྲ་ (དཔེར་ན་ DOCS-1b/2b/3c) གིས་ ཅ་ཆས་འདི་ བཀོད་ཚུགས།
+- ཧེཤ་འདི་ I18NT0000001X ལུ་སྐྱེལ་བཙུགས་འབད་བའི་སྐབས་ བཅུད་བསྡུས་ཀྱི་མཉམ་དུ་ བཞུ་བཅུགཔ་ཨིན།
+  བསྐྱར་ཞིབ་པ་ཚུ་གིས་ སྒྲུབ་བྱེད་ཚུ་ བདེན་དཔྱད་འབད་ཚུགས།
 
-# Generate a Markdown digest skeleton for a wave
-npm run --prefix docs/portal preview:digest -- \
-  --wave preview-20260204 \
-  --invite-start 2026-02-04T00:00:00Z \
-  --invite-end 2026-02-18T00:00:00Z \
-  --dashboard "https://grafana.example/d/docs-preview?var-wave=preview-20260204" \
-  --out artifacts/docs_portal_preview/preview-20260204-digest.md
-```
-
-Tips:
-
-- Place the log under version control when working in a feature branch so other
-  maintainers can review changes. For long-running waves store the log in the
-  governance ticket and attach the final version to the release artefacts.
-- `preview:log` accepts `--log <path>` when you need to log directly inside a
-  SoraFS bundle or CI workspace.
-- Always include a `--notes` hint (issue link, GitHub handle, cohort ID) so the
-  summary is useful during the retrospective.
-- When you need deterministic summary timestamps (for CI or docs snapshots),
-  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` before running the summary
-  helper. This keeps the `generatedAt`, status, and day counters consistent
-  across rebuilds.
-
-## Summaries, digests, and archives
-
-1. **Per-wave summary:** generate the JSON summary and attach it to the invite
-   ticket together with the raw log. The summary enumerates total invites, open
-   recipients, and feedback counts so governance can confirm we captured every
-   reviewer. The portal build also publishes an aggregate summary at
-   `src/data/previewFeedbackSummary.json` so stakeholders can see the current
-   snapshot without running the CLI.
-2. **Weekly digest:** run `npm run --prefix docs/portal preview:digest -- --wave <label>`
-   to pre-populate the Markdown metrics, then tailor the placeholder sections
-   using the template in
-   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   before sharing it with stakeholders. Include at least: wave label, open
-   reviewers, notable findings, and next actions.
-3. **Archival:** move closed-wave logs into
-   `artifacts/docs_portal_preview/archive/<wave>/` and keep only the most recent
-   active wave at the root. This keeps CI artefacts small while preserving the
-   audit trail.
-
-## Linking to the roadmap
-
-- Reference this document from invite and onboarding playbooks whenever you ask
-  reviewers to file feedback (see
-  [`preview-invite-flow`](./preview-invite-flow.md),
-  [`reviewer-onboarding`](./reviewer-onboarding.md), and
-  [`public-preview-invite`](./public-preview-invite.md)).
-- Mention the generated summary in `status.md` when closing a wave so DOCS-SORA
-  roadmap items (e.g., DOCS-1b/2b/3c) can cite the artefact.
-- Store hash digests alongside the summary when uploading to SoraFS so external
-  reviewers can verify the evidence bundle.
-
-Keeping the logging workflow codified here unblocks the roadmap requirement to
-“capture feedback/telemetry for governance” and reduces the time spent
-reconstructing invite history at every milestone.
+འདི་ཁར་ ནང་བསྐྱོད་ཀྱི་ལཱ་གི་རྒྱུན་རིམ་འདི་ གསང་ཨང་བཀོད་བཞག་མི་འདི་གིས་ ལམ་སྟོན་གྱི་དགོས་མཁོ་འདི་ བཀག་ཆ་འབདཝ་ཨིན།
+“གཞུང་སྐྱོང་གི་དོན་ལུ་ བསམ་ལན་/འཕྲུལ་རིག” དང་ དུས་ཚོད་བཏང་མི་འདི་ མར་ཕབ་འབདཝ་ཨིན།
+མགྲོན་བརྡ་བྱུང་རབས་འདི་ ལམ་རིམ་རེ་རེ་ནང་ བསྐྱར་བཟོ་འབད་ནི།

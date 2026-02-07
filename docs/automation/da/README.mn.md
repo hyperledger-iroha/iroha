@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8757f0bf8699b532ece29437af953353526b3201b4b129ebec7d6bf5d224f038
 source_last_modified: "2025-12-29T18:16:35.061402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Data-Availability Threat-Model Automation (DA-1)
+# Өгөгдлийн хүртээмжийн аюулын загварын автоматжуулалт (DA-1)
 
-Roadmap item DA-1 and `status.md` call for a deterministic automation loop that
-produces the Norito PDP/PoTR threat-model summaries surfaced in
-`docs/source/da/threat_model.md` and the Docusaurus mirror. This directory
-captures the artefacts referenced by:
+Замын зургийн DA-1 ба `status.md` зүйл нь тодорхойлогч автоматжуулалтын давталтыг шаарддаг.
+дээр гарсан Norito PDP/PoTR аюул заналын загварын хураангуйг гаргадаг.
+`docs/source/da/threat_model.md` болон Docusaurus толь. Энэ лавлах
+иш татсан олдворуудыг авдаг:
 
 - `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`
 - `.github/workflows/da-threat-model-nightly.yml`
-- `make docs-da-threat-model` (which runs `scripts/docs/render_da_threat_model_tables.py`)
+- `make docs-da-threat-model` (`scripts/docs/render_da_threat_model_tables.py` ажилладаг)
 - `cargo xtask da-commitment-reconcile --receipt <path> --block <path> [--json-out <path|->]`
 - `cargo xtask da-privilege-audit --config <torii.toml> [--extra-path <path> ...] [--json-out <path|->]`
 
-## Flow
+## Урсгал
 
-1. **Generate the report**
+1. **Тайлан гаргах**
    ```bash
    cargo xtask da-threat-model-report \
      --config configs/da/threat_model.toml \
      --out artifacts/da/threat_model_report.json
    ```
-   The JSON summary records the simulated replication failure rate, chunker
-   thresholds, and any policy violations detected by the PDP/PoTR harness in
+   JSON хураангуй нь дуурайлган хуулбарлах алдааны хувь, chunker-ийг бүртгэдэг
+   босго, PDP/PoTR-аас илрүүлсэн аливаа бодлогын зөрчил
    `integration_tests/src/da/pdp_potr.rs`.
-2. **Render the Markdown tables**
+2. **Markdown хүснэгтүүдийг гаргах**
    ```bash
    make docs-da-threat-model
    ```
-   This runs `scripts/docs/render_da_threat_model_tables.py` to rewrite
-   `docs/source/da/threat_model.md` and `docs/portal/docs/da/threat-model.md`.
-3. **Archive the artefact** by copying the JSON report (and optional CLI log) to
-   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. When
-   governance decisions rely on a specific run, include the git commit hash and
-   simulator seed in a sibling `<timestamp>-metadata.md`.
+   Энэ нь дахин бичихийн тулд `scripts/docs/render_da_threat_model_tables.py`-г ажиллуулдаг
+   `docs/source/da/threat_model.md` ба `docs/portal/docs/da/threat-model.md`.
+3. JSON тайланг (болон нэмэлт CLI бүртгэл) хуулж **олдворыг архивлана уу**
+   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. Хэзээ
+   засаглалын шийдвэрүүд нь тодорхой гүйлтэд тулгуурладаг, үүнд git commit hash болон
+   `<timestamp>-metadata.md` дүүгийн симулятор үр.
 
-## Evidence Expectations
+## Нотлох баримтын хүлээлт
 
-- JSON files should remain <100 KiB so they can live in git. Larger execution
-  traces belong in external storage—reference their signed hash in the metadata
-  note if needed.
-- Each archived file must list the seed, config path, and simulator version so
-  reruns can be reproduced exactly when auditing DA release gates.
-- Link back to the archived file from `status.md` or the roadmap entry whenever
-  the DA-1 acceptance criteria advance, ensuring reviewers can verify the
-  baseline without rerunning the harness.
+- JSON файлууд <100 КиБ хэвээр байх ёстой бөгөөд ингэснээр git-д амьдрах боломжтой. Илүү том гүйцэтгэл
+  ул мөр нь гадаад санах ойд харьяалагддаг - мета өгөгдөл дэх тэдгээрийн гарын үсэгтэй хэшийг лавлана
+  шаардлагатай бол тэмдэглэ.
+- Архивлагдсан файл бүр нь үр, тохиргооны зам, симулятор хувилбарыг жагсаасан байх ёстой
+  DA хувилбарын хаалгыг аудит хийх үед дахин давталтыг яг таг хуулбарлаж болно.
+- `status.md`-аас архивлагдсан файл эсвэл замын газрын зураг руу хүссэн үедээ холбоно уу.
+  DA-1-ийг хүлээн авах шалгуурыг ахиулах нь хянагчдыг баталгаажуулах боломжийг олгоно
+  оосорыг дахин ажиллуулахгүйгээр үндсэн .
 
-## Commitment Reconciliation (Sequencer Omission)
+## Үүрэг даалгаврыг нэгтгэх (дараалагчийг орхигдуулсан)
 
-Use `cargo xtask da-commitment-reconcile` to compare DA ingest receipts against
-DA commitment records, catching sequencer omission or tampering:
+DA хүлээн авсан баримтыг харьцуулахын тулд `cargo xtask da-commitment-reconcile` ашиглана уу
+DA-ийн амлалтын бүртгэл, дараалал тогтоогчийн орхигдуулсан эсвэл хөндлөнгийн оролцоо:
 
 ```bash
 cargo xtask da-commitment-reconcile \
@@ -71,19 +72,19 @@ cargo xtask da-commitment-reconcile \
   --json-out artifacts/da/commitment_reconciliation.json
 ```
 
-- Accepts receipts in Norito or JSON form and commitments from
-  `SignedBlockWire`, `.norito`, or JSON bundles.
-- Fails when any ticket is missing from the block log or when hashes diverge;
-  `--allow-unexpected` ignores block-only tickets when you intentionally scope
-  the receipt set.
-- Attach the emitted JSON to governance packets/Alertmanager for omission
-  alerts; defaults to `artifacts/da/commitment_reconciliation.json`.
+- Norito эсвэл JSON маягтын баримт, амлалтуудыг хүлээн авна.
+  `SignedBlockWire`, `.norito`, эсвэл JSON багцууд.
+- Блокны бүртгэлээс тасалбар дутуу эсвэл хэш ялгарах үед амжилтгүй болно;
+  Таныг санаатайгаар хамрах үед `--allow-unexpected` зөвхөн блоклох тасалбарыг үл тоомсорлодог.
+  баримтын багц.
+- Гаргасан JSON-г орхигдуулсан тохиолдолд удирдлагын пакет/Alertmanager-д хавсаргана уу
+  сэрэмжлүүлэг; анхдагч нь `artifacts/da/commitment_reconciliation.json`.
 
-## Privilege Audit (Quarterly Access Review)
+## Давуу эрхийн аудит (Улирал тутмын хандалтын хяналт)
 
-Use `cargo xtask da-privilege-audit` to scan the DA manifest/replay directories
-(plus optional extra paths) for missing, non-directory, or world-writable
-entries:
+DA манифест/дахин тоглуулах лавлахуудыг скан хийхийн тулд `cargo xtask da-privilege-audit` ашиглана уу
+(нэмэх нэмэлт замууд) байхгүй, лавлахгүй эсвэл дэлхийн хэмжээнд бичигдэх боломжтой
+оруулгууд:
 
 ```bash
 cargo xtask da-privilege-audit \
@@ -92,9 +93,9 @@ cargo xtask da-privilege-audit \
   --json-out artifacts/da/privilege_audit.json
 ```
 
-- Reads the DA ingest paths from the provided Torii config and inspects Unix
-  permissions where available.
-- Flags missing/not-a-directory/world-writable paths and returns a non-zero exit
-  code when issues are present.
-- Sign and attach the JSON bundle (`artifacts/da/privilege_audit.json` by
-  default) to quarterly access-review packets and dashboards.
+- Өгөгдсөн Torii тохиргооноос DA залгих замыг уншиж, Unix-ийг шалгана
+  боломжтой бол зөвшөөрөл.
+- Дутуу/санал биш/дэлхийд бичигдэх замуудыг тэмдэглэж, тэгээс өөр гарцыг буцаана
+  асуудал гарсан тохиолдолд кодчилно.
+- JSON багцад гарын үсэг зурж хавсаргана (`artifacts/da/privilege_audit.json` by
+  анхдагч) пакетууд болон хяналтын самбаруудад улирал тутам хандалт хийх.

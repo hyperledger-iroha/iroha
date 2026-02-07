@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W2 community feedback & status
 sidebar_label: W2 summary
 description: Live digest for the community preview wave (W2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| ንጥል | ዝርዝሮች |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Invite window | 2025‑06‑15 → 2025‑06‑29 |
-| Artefact tag | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
-| Participants | comm-vol-01 … comm-vol-08 |
+| ማዕበል | W2 - የማህበረሰብ ገምጋሚዎች |
+| የግብዣ መስኮት | 2025-06-15 → 2025-06-29 |
+| Artefact መለያ | `preview-2025-06-15` |
+| የመከታተያ ጉዳይ | `DOCS-SORA-Preview-W2` |
+| ተሳታፊዎች | comm-vol-01 … comm-vol-08 |
 
-## Highlights
+## ድምቀቶች
 
-1. **Governance & tooling** — Community intake policy unanimously approved on 2025‑05‑20; updated request template with motivation/timezone fields lives under `docs/examples/docs_preview_request_template.md`.
-2. **Preflight evidence** — Try it proxy change `OPS-TRYIT-188` ran 2025‑06‑09, Grafana dashboards captured, and `preview-2025-06-15` descriptor/checksum/probe outputs archived under `artifacts/docs_preview/W2/`.
-3. **Invite wave** — Eight community reviewers invited 2025‑06‑15, with acknowledgements logged in the tracker invite table; all completed checksum verification before browsing.
-4. **Feedback** — `docs-preview/w2 #1` (tooltip wording) and `#2` (localization sidebar order) were filed on 2025‑06‑18 and resolved by 2025‑06‑21 (Docs-core-04/05); no incidents occurred during the wave.
+1. **መስተዳድር እና መገልገያ** - የማህበረሰብ ቅበላ ፖሊሲ በ2025-05-20 በሙሉ ድምፅ ጸድቋል። የተዘመነ የጥያቄ አብነት በተነሳሽነት/ የሰዓት ሰቅ መስኮች በ`docs/examples/docs_preview_request_template.md` ስር ይኖራሉ።
+2. **የቅድመ በረራ ማስረጃ** — ተኪ ለውጥ ይሞክሩት `OPS-TRYIT-188` ሮጦ 2025‑06‑09፣ Grafana ዳሽቦርዶች ተይዘዋል፣ እና `preview-2025-06-15` ገላጭ/checksum/probe ውፅዓት10NIX0909 ስር
+3. ** ሞገድ ጋብዝ *** - ስምንት የማህበረሰብ ገምጋሚዎች 2025-06-15 ተጋብዘዋል፣ ምስጋናዎች በመከታተያ የግብዣ ሠንጠረዥ ውስጥ ገብተዋል፤ ከማሰስዎ በፊት ሁሉም የተጠናቀቀ የቼክሰም ማረጋገጫ።
+4. ** ግብረ መልስ *** — `docs-preview/w2 #1` (የመሳሪያ ቃላቶች) እና `#2` (አካባቢያዊ የጎን አሞሌ ቅደም ተከተል) በ2025-06-18 ቀርበው በ2025-06-21 (ሰነዶች/05-0) ተፈትተዋል፤ በማዕበል ወቅት ምንም አይነት ክስተቶች አልተከሰቱም.
 
-## Action items
+## የእርምጃ ዕቃዎች
 
-| ID | Description | Owner | Status |
+| መታወቂያ | መግለጫ | ባለቤት | ሁኔታ |
 | --- | --- | --- | --- |
-| W2-A1 | Address `docs-preview/w2 #1` (tooltip wording). | Docs-core-04 | ✅ Completed 2025‑06‑21 |
-| W2-A2 | Address `docs-preview/w2 #2` (localization sidebar). | Docs-core-05 | ✅ Completed 2025‑06‑21 |
-| W2-A3 | Archive exit evidence + update roadmap/status. | Docs/DevRel lead | ✅ Completed 2025‑06‑29 |
+| W2-A1 | አድራሻ `docs-preview/w2 #1` (የመሳሪያ ቃላቶች)። | ሰነዶች-ኮር-04 | ✅ ተጠናቀቀ 2025-06-21 |
+| W2-A2 | አድራሻ `docs-preview/w2 #2` (አካባቢያዊ የጎን አሞሌ)። | ሰነዶች-ኮር-05 | ✅ ተጠናቀቀ 2025-06-21 |
+| W2-A3 | የማህደር መውጫ ማስረጃ + የመንገድ ካርታ/ሁኔታን አዘምን። | ሰነዶች/DevRel አመራር | ✅ ተጠናቀቀ 2025-06-29 |
 
-## Exit summary (2025-06-29)
+## የመውጣት ማጠቃለያ (2025-06-29)
 
-- All eight community reviewers confirmed completion and had preview access revoked; acknowledgements recorded in the tracker invite log.
-- Final telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) remained green; logs plus Try it proxy transcripts attached to `DOCS-SORA-Preview-W2`.
-- Evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) archived under `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- Tracker W2 checkpoint log updated through exit, ensuring the roadmap keeps an auditable record before W3 planning begins.
+- ሁሉም ስምንቱ የማህበረሰብ ገምጋሚዎች መጠናቀቁን አረጋግጠዋል እና የቅድመ እይታ መዳረሻ ተሰርዟል። በክትትል የግብዣ ምዝግብ ማስታወሻ ውስጥ የተመዘገቡ ምስጋናዎች።
+- የመጨረሻ ቴሌሜትሪ ቅጽበተ-ፎቶዎች (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) አረንጓዴ ሆነው ቆይተዋል; logs plus እሱን ይሞክሩት ከ`DOCS-SORA-Preview-W2` ጋር የተያያዙ የተኪ ግልባጮች።
+- የማስረጃ ጥቅል (ገላጭ፣ የቼክ መዝገብ፣ የፍተሻ ውፅዓት፣ የአገናኝ ዘገባ፣ Grafana ቅጽበታዊ ገጽ እይታዎች፣ የግብዣ እውቅናዎች) በ`artifacts/docs_preview/W2/preview-2025-06-15/` ስር ተቀምጧል።
+- የመከታተያ W2 የፍተሻ ነጥብ ምዝግብ ማስታወሻ በመውጫው በኩል ተዘምኗል፣ ይህም የመንገድ ካርታው W3 እቅድ ከማውጣቱ በፊት ኦዲት ሊደረግ የሚችል መዝገብ መያዙን ያረጋግጣል።

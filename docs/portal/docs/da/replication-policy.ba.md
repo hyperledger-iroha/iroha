@@ -7,65 +7,66 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7aff8ba5247591a8c241a2b99393591ea0a2b11aed49ef15a23f008284b5ff05
 source_last_modified: "2026-01-22T14:35:36.738164+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-title: Data Availability Replication Policy
-sidebar_label: Replication Policy
-description: Governance-enforced retention profiles applied to all DA ingest submissions.
+исем: Мәғлүмәттәр булыуы репликация сәйәсәте
+sidebar_label: репликация сәйәсәте
+тасуирлама: Идара итеү менән тәьмин итеү профилдәре ҡулланыла бөтә DA gingest тапшырыуҙары.
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# Data Availability Replication Policy (DA-4)
+# Мәғлүмәттәр булыуы репликация сәйәсәте (DA-4)
 
-_Status: In Progress — Owners: Core Protocol WG / Storage Team / SRE_
+_Статус: Прогресс — Хужалар: Ядро протоколы WG / Һаҡлау командаһы / SRE_
 
-The DA ingestion pipeline now enforces deterministic retention targets for
-every blob class described in `roadmap.md` (workstream DA-4). Torii refuses to
-persist caller-provided retention envelopes that do not match the configured
-policy, guaranteeing that every validator/storage node retains the required
-number of epochs and replicas without relying on submitter intent.
+DA ингестия торбаһы хәҙер детерминистик һаҡлау маҡсаттарын үтәй.
+һәр блоб класы һүрәтләнгән I18NI000000014X (эш ағымы DA-4). I18NT000000003X 2012 йылға баш тарта.
+шылтыратыусы-шылтыратыу биргән һаҡлау конверттары, улар тура килмәй конфигурацияланған
+сәйәсәт, гарантия бирә, тип, һәр валидатор/һаҡлау төйөндәре кәрәкле һаҡлап ҡала
+эпоха һәм репликалар һаны тапшырыусы ниәтенә таянмай.
 
-## Default policy
+## Ғәҙәттәгесә сәйәсәт
 
-| Blob class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|------------|---------------|----------------|-------------------|----------------|----------------|
-| `taikai_segment` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 hours | 7 days | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 hours | 180 days | 3 | `cold` | `da.governance` |
-| _Default (all other classes)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
+| Блоб класы | Ҡайнар һаҡлау | Һалҡын һаҡлау | Кәрәкле репликалар | Һаҡлау класы | Идара итеү тегы |
+|----------------------------------------------------------------------------- |------------------------ |
+| `taikai_segment` | 24 сәғәт | 14 көн | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6 сәғәт | 7 көн | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 сәғәт | 180 көн | 3 | `cold` | `da.governance` |
+| _Күбәйә (башҡа кластар барыһы ла)_ | 6 сәғәт | 30 көн | 3 | `warm` | `da.default` |
 
-These values are embedded in `torii.da_ingest.replication_policy` and applied to
-all `/v1/da/ingest` submissions. Torii rewrites manifests with the enforced
-retention profile and emits a warning when callers provide mismatched values so
-operators can detect stale SDKs.
+Был ҡиммәттәр I18NI000000026X XX һеңдерелгән һәм 2012 йылға ҡулланыла.
+бөтә `/v1/da/ingest` тапшырыуҙары. I18NT0000000004Х перезагрузкалар мәжбүри менән күренә
+һаҡлау профиле һәм иҫкәртмә сығара, ҡасан шылтыратыусылар тап килмәгән ҡиммәттәр бирә, шулай
+операторҙары иҫке СДК-ларҙы асыҡлай ала.
 
-### Taikai availability classes
+### Тайкай доступность кластары
 
-Taikai routing manifests (`taikai.trm`) declare an `availability_class`
-(`hot`, `warm`, or `cold`). Torii enforces the matching policy before chunking
-so operators can scale replica counts per stream without editing the global
-table. Defaults:
+Тайкай маршрутлаштырыу манифестары (I18NI000000028X) `availability_class` тип иғлан итә.
+(`hot`, `warm`, йәки I18NI000000032X). I18NT0000000005Х тап килгән сәйәсәтте үтәй
+шулай итеп, операторҙар масштаблы реплика иҫәптәр һаны бер ағым глобаль мөхәррирләүһеҙ .
+өҫтәл. Ғәҙәттәгесә:
 
-| Availability class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|--------------------|---------------|----------------|-------------------|----------------|----------------|
-| `hot` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 hours | 30 days | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hour | 180 days | 3 | `cold` | `da.taikai.archive` |
+| Доступность класы | Ҡайнар һаҡлау | Һалҡын һаҡлау | Кәрәкле репликалар | Һаҡлау класы | Идара итеү тегы |
+|-------------------- |-------------------------------------------------------------------|-------------------------------леб.
+| `hot` | 24 сәғәт | 14 көн | 5 | `hot` | I18NI000000035X |
+| `warm` | 6 сәғәт | 30 көн | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1 сәғәт | 180 көн | 3 | `cold` | `da.taikai.archive` |
 
-Missing hints default to `hot` so live broadcasts retain the strongest policy.
-Override the defaults via
-`torii.da_ingest.replication_policy.taikai_availability` if your network uses
-different targets.
+I18NI000000042X-ҡа тиклем ғәҙәттәгесә юғалған өндәүҙәр шулай тура эфирҙа иң көслө сәйәсәт һаҡлай.
+Ғәҙәттәгесәләрҙе өҫтөнән үткәреү аша .
+I18NI000000043X әгәр һеҙҙең селтәр ҡуллана
+төрлө маҡсаттар.
 
-## Configuration
+## Конфигурация
 
-The policy lives under `torii.da_ingest.replication_policy` and exposes a
-*default* template plus an array of per-class overrides. Class identifiers are
-case-insensitive and accept `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, or `custom:<u16>` for governance-approved extensions.
-Storage classes accept `hot`, `warm`, or `cold`.
+Сәйәсәт I18NI000000044X буйынса йәшәй һәм фашлай
+* ғәҙәттәгесә * шаблон плюс массив өсөн класлы өҫтөнлөктәре. Класс идентификаторҙары булып тора.
+ҡабул итеү һәм ҡабул итеү I18NI000000045X, I18NI000000046X,
+I18NI000000047X, йәки I18NI000000048X идара итеү өсөн раҫланған оҙайтыу өсөн.
+Һаҡлау дәрестәре `hot`, `warm`, йәки I18NI000000051X ҡабул итә.
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -83,13 +84,13 @@ cold_retention_secs = 1209600       # 14 d
 required_replicas = 5
 storage_class = "hot"
 governance_tag = "da.taikai.live"
-```
+``` X
 
-Leave the block untouched to run with the defaults listed above. To tighten a
-class, update the matching override; to change the baseline for new classes,
-edit `default_retention`.
+Ҡалдырырға блок тейелмәгән йүгерергә йүгерергә ғәҙәттәгесә өҫтә күрһәтелгән. Аҙыҡлау өсөн а .
+класс, тап килгән өҫтөнлөктө яңыртыу; яңы кластар өсөн база линияһын үҙгәртергә,
+`default_retention` мөхәррире.
 
-Taikai availability classes can be overridden independently via
+Тайкай доступность кластары үҙ аллы өҫтөнлөк бирергә мөмкин .
 `torii.da_ingest.replication_policy.taikai_availability`:
 
 ```toml
@@ -103,30 +104,30 @@ storage_class = "cold"
 governance_tag = "da.taikai.archive"
 ```
 
-## Enforcement semantics
+## Ҡабул итеү семантикаһы
 
-- Torii replaces the user-supplied `RetentionPolicy` with the enforced profile
-  before chunking or manifest emission.
-- Pre-built manifests that declare a mismatched retention profile are rejected
-  with `400 schema mismatch` so stale clients cannot weaken the contract.
-- Every override event is logged (`blob_class`, submitted vs expected policy)
-  to surface non-compliant callers during rollout.
+- I18NT00000000006X ҡулланыусы менән тәьмин ителгән I18NI000000054X-ты мәжбүри профиль менән алмаштыра
+  йәки эмиссияны асыҡлағансы йәки асыҡланғансы.
+- Алдан төҙөлгән нәтижәләр, улар тап килмәгән һаҡлау профилен иғлан итә, кире ҡағыла
+  `400 schema mismatch` менән шулай иҫке клиенттар контрактты көсһөҙләндерә алмай.
+- Һәр өҫтөнлөклө сара теркәлә (`blob_class`, көтөлгән сәйәсәт тапшырылған)
+  өҫкө ҡатламға ҡаршы тороусан шылтыратыусыларҙы таратыу ваҡытында.
 
-See [Data Availability Ingest Plan](ingest-plan.md) (Validation checklist) for the updated gate
-covering retention enforcement.
+Ҡарағыҙ [Мәғлүмәттәр доступность ингест планы](ingest-plan.md) (Валидация тикшерелгән исемлеге) өсөн яңыртылған ҡапҡа .
+ҡаплау һаҡлау һаҡлау органдары.
 
-## Re-replication workflow (DA-4 follow-up)
+## Репликация эш ағымы (ДА-4 күҙәтеү)
 
-Retention enforcement is only the first step. Operators must also prove that
-live manifests and replication orders stay aligned with the configured policy so
-that SoraFS can automatically re-replicate out-of-compliance blobs.
+Һаҡлау органдары – тәүге аҙым ғына. Операторҙар шулай уҡ иҫбатларға тейеш, тип
+йәшәү өсөн нәфис һәм репликация заказдары ҡала менән тура килә конфигурацияланған сәйәсәт шулай
+тип I18NT0000000001X автоматик рәүештә ҡабаттан ҡабатлау өсөн тыш-ҡаршы таптар.
 
-1. **Watch for drift.** Torii emits
-   `overriding DA retention policy to match configured network baseline` whenever
-   a caller submits stale retention values. Pair that log with
-   `torii_sorafs_replication_*` telemetry to spot replica shortfalls or delayed
-   redeployments.
-2. **Diff intent vs live replicas.** Use the new audit helper:
+1. **Дрейф өсөн күҙәтеү.** I18NT000000007X эмиссия
+   I18NI000000057X ҡасан булһа ла.
+   шылтыратыусы иҫке һаҡлау ҡиммәттәрен тапшыра. Пар, тип журнал менән .
+   I18NI000000058X телеметрияһы реплика етешһеҙлектәрен күрергә йәки тотҡарланған
+   үҙгәртеп ҡороуҙар.
+2. **Дифф ниәт vs тере репликалар.** Яңы аудит ярҙамсыһын ҡулланыу:
 
    ```bash
    cargo xtask da-replication-audit \
@@ -136,29 +137,29 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
      --json-out artifacts/da/replication_audit.json
    ```
 
-   The command loads `torii.da_ingest.replication_policy` from the provided
-   config, decodes each manifest (JSON or Norito), and optionally matches any
-   `ReplicationOrderV1` payloads by manifest digest. The summary flags two
-   conditions:
+   Команда йөктәре I18NI0000000059X бирелгәндән һуң
+   конфиг, һәр манифест (JSON йәки I18NT00000000000Х) декодлау һәм теләк буйынса теләһә ниндәй тап килә
+   I18NI000000060X файҙалы йөктәр асыҡ һеңдерелгән. Йыйынтыҡ флагтар ике
+   шарттар:
 
-   - `policy_mismatch` – the manifest retention profile diverges from the enforced
-     policy (this should never happen unless Torii is misconfigured).
-   - `replica_shortfall` – the live replication order requests fewer replicas than
-     `RetentionPolicy.required_replicas` or provides fewer assignments than its
-     target.
+   - I18NI000000061X – манифест һаҡлау профиле мәжбүр ителгәндән айырыла
+     сәйәсәт (был бер ҡасан да булырға тейеш түгел, әгәр Torii дөрөҫ булмаған конфигурацияланмаған).
+   - I18NI000000062X – тура репликация заказы репликаларға ҡарағанда аҙыраҡ репликалар һорай.
+     I18NI000000063X йәки заданиелар аҙыраҡ тәьмин итеү, уның ҡарағанда
+     маҡсат.
 
-   A non-zero exit status indicates an active shortfall so CI/on-call automation
-   can page immediately. Attach the JSON report to the
-   `docs/examples/da_manifest_review_template.md`
-   packet for Parliament votes.
-3. **Trigger re-replication.** When the audit reports a shortfall, issue a fresh
-   `ReplicationOrderV1` via the governance tooling described in
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md) and re-run the audit
-   until the replica set converges. For emergency overrides, pair the CLI output
-   with `iroha app da prove-availability` so that SREs can reference the same digest
-   and PDP evidence.
+   Нулдән тыш сығыу статусы әүҙем етешһеҙлек күрһәтә, шуға күрә CI/шылтыратыу автоматлаштырыу .
+   шунда уҡ бит ала. JSON отчеты менән беркетергә
+   I18NI000000064X
+   пакет өсөн Парламент тауыштары.
+3. **Триггер ҡабаттан репликация.** Ревизияла етешһеҙлек тураһында хәбәр иткәндә, яңы сығарыла
+   I18NI0000000065X аша идара итеү инструменттары 2012 йылда һүрәтләнгән.
+   [I18NT0000000002X һаҡлау ҡомары баҙары] (I18NU000000013X) һәм яңынан идара итеү
+   реплика ҡуйылғанға тиклем йыйыла. Ғәҙәттән тыш хәлдәр өсөн өҫтөнлөктәр өсөн, пар CLI сығыш
+   I18NI000000066X менән, шулай итеп, SREs шул уҡ distest һылтанма яһай ала
+   һәм ПДП дәлилдәре.
 
-Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;
-the suite submits a mismatched retention policy to `/v1/da/ingest` and verifies
-that the fetched manifest exposes the enforced profile instead of the caller
-intent.
+Регрессия яҡтыртыу йәшәй I18NI000000067X;
+люкс тап килмәгән һаҡлау сәйәсәтен тапшыра I18NI0000000068X һәм раҫлай
+тип, ветированный манифест фашлай мәжбүри профиль урынына шылтыратыусы .
+ниәт.

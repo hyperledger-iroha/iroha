@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Snapshot de prioridades — marzo de 2025 (Beta)
-description: Espejo del snapshot de steering de Nexus 2025-03; pendiente de ACKs antes del rollout publico.
+идентификатор: приоритет-снимок-2025-03
+заголовок: Снимок приоритетов — март 2025 г. (бета-версия)
+описание: Снимок рулевого управления Nexus 2025-03; отложенные ACK перед публичным развертыванием.
 ---
 
-> Fuente canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Фуэнте каноника: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Estado: **Beta / esperando ACKs de steering** (Networking, Storage, Docs leads).
+> Статус: **Бета-версия/подтверждения управления** (ведущие по сети, хранилищу и документации).
 
-## Resumen
+## Резюме
 
-El snapshot de marzo mantiene las iniciativas de docs/content-network alineadas
-con las pistas de entrega de SoraFS (SF-3, SF-6b, SF-9). Una vez que todos los
-leads confirmen el snapshot en el canal de steering de Nexus, elimina la nota
-“Beta” de arriba.
+Снимок марта mantiene las iniciativas de docs/content-network alineadas
+с входными точками SoraFS (SF-3, SF-6b, SF-9). Una vez que allos los
+ведет к подтверждению снимка на канале управления Nexus, удалению примечания
+«Бета» де Арриба.
 
 ### Hilos de enfoque
 
-1. **Circular snapshot de prioridades** — recopilar acknowledgements y
-   registrarlos en las minutas del council del 2025-03-05.
-2. **Cierre del kickoff de Gateway/DNS** — ensayar el nuevo kit de facilitacion
-   (Seccion 6 del runbook) antes del workshop 2025-03-03.
-3. **Migracion de runbooks de operadores** — el portal `Runbook Index` esta live;
-   expone la URL de beta preview despues del sign-off de onboarding de reviewers.
-4. **Hilos de entrega de SoraFS** — alinear el trabajo restante de SF-3/6b/9 con
-   el plan/roadmap:
-   - Worker de ingesta PoR + endpoint de estado en `sorafs-node`.
-   - Pulido de bindings CLI/SDK en integraciones de orchestrator Rust/JS/Swift.
-   - Cableado de runtime del coordinador PoR y eventos de GovernanceLog.
+1. **Циркулярный снимок приоритетов** — соответствующие благодарности y
+   Зарегистрируйтесь в последние минуты совета от 05 марта 2025 г.
+2. **Начало шлюза/DNS** — новый набор упрощенных процедур
+   (Раздел 6 учебного пособия) перед семинаром 3 марта 2025 г.
+3. **Миграция операционных книг Runbook** — портал `Runbook Index` работает;
+   Отобразите URL-адрес бета-предварительного просмотра после завершения регистрации рецензентов.
+4. **Hilos de entrega de SoraFS** — линейная оставшаяся работа SF-3/6b/9 с
+   Эл-план/дорожная карта:
+   - Рабочий прием PoR + конечная точка состояния в `sorafs-node`.
+   - Добавлены привязки CLI/SDK и интеграция оркестратора Rust/JS/Swift.
+   - Кабельное соединение времени выполнения координатора PoR и событий GovernanceLog.
 
-Consulta el archivo fuente para la tabla completa, el checklist de distribucion
-y las entradas de log.
+Проконсультируйтесь с архивом для полной таблицы и контрольным списком распространения.
+и входы в журнал.

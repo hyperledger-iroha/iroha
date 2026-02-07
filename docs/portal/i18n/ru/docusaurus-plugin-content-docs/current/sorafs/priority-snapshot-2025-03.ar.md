@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: لقطة الأولويات — مارس 2025 (بيتا)
-description: نسخة مرآة من لقطة توجيه Nexus 2025-03؛ بانتظار ACKs قبل الطرح العام.
+идентификатор: приоритет-снимок-2025-03
+Название: لقطة الأولويات — Май 2025 (Берег)
+описание: Добавлено в каталог Nexus 2025-03; Бэтмен ACKs в субботу.
 ---
 
-> المصدر المعتمد: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Имя пользователя: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> الحالة: **بيتا / بانتظار ACKs التوجيه** (Networking, Storage, Docs leads).
+> Ответы: **Ответы / Поддержка ACKs التوجيه** (лидеры по работе в сети, хранилище, документации).
 
 ## نظرة عامة
 
-تحافظ لقطة مارس على اتساق مبادرات docs/content-network مع مسارات تسليم SoraFS
-(SF-3, SF-6b, SF-9). بمجرد إقرار جميع القادة باللقطة في قناة Nexus steering،
-أزل ملاحظة “Beta” أعلاه.
+Откройте файл docs/content-network для просмотра SoraFS
+(СФ-3, СФ-6б, СФ-9). Установлено рулевое управление Nexus,
+أزل ملاحظة «Бета».
 
 ### محاور التركيز
 
-1. **تعميم لقطة الأولويات** — جمع acknowledgements وتسجيلها في محاضر المجلس بتاريخ
-   2025-03-05.
-2. **إغلاق kickoff Gateway/DNS** — التدرب على حزمة التيسير الجديدة (القسم 6 في
-   runbook) قبل ورشة 2025-03-03.
-3. **ترحيل runbook للمشغلين** — بوابة `Runbook Index` أصبحت live؛ اكشف رابط
-   المعاينة beta بعد توقيع reviewer onboarding.
-4. **مسارات تسليم SoraFS** — مواءمة العمل المتبقي لـ SF-3/6b/9 مع plan/roadmap:
-   - عامل ingestion لـ PoR + endpoint الحالة في `sorafs-node`.
-   - صقل bindings الخاصة بـ CLI/SDK عبر تكاملات orchestrator في Rust/JS/Swift.
-   - توصيل runtime لمنسق PoR وأحداث GovernanceLog.
+1. **تعميم لقطة الأولويات** — слова благодарности, сделанные в журнале المجلس بتاريخ
+   05.03.2025.
+2. **Начало шлюза/DNS** – создание резервной копии сервера (6 минут).
+   runbook) от 3 марта 2025 г.
+3. **Создание Runbook للمشغلين** — بوابة `Runbook Index` в прямом эфире; اكشف رابط
+   Прошел бета-тестирование рецензента.
+4. **Программа SoraFS** — план/дорожная карта для SF-3/6b/9:
+   - Прием данных в PoR + конечная точка для `sorafs-node`.
+   - Дополнительные привязки для CLI/SDK и оркестратора Rust/JS/Swift.
+   - Среда выполнения отображается в PoR в GovernanceLog.
 
-راجع الملف المصدر للجدول الكامل وقائمة التوزيع وسجلات الإدخال.
+Он сказал:

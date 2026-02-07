@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+::: Canonical Source ကို သတိပြုပါ။
+မှန်ချပ်များ `docs/source/sorafs_repair_plan.md`။ Sphinx သတ်မှတ်မှု အနားမယူမချင်း ဗားရှင်းနှစ်မျိုးလုံးကို ထပ်တူကျအောင်ထားပါ။
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## အုပ်ချုပ်မှု ဆုံးဖြတ်ချက် ဘဝသံသရာ
+1. မြှင့်တင်ပြုပြင်မှုများသည် မျဉ်းစောင်း အဆိုပြုချက်မူကြမ်းကို ဖန်တီးပြီး အငြင်းပွားမှုဝင်းဒိုးကို ဖွင့်ပါ။
+2. အုပ်ချုပ်မှုဆိုင်ရာ မဲဆန္ဒရှင်များသည် အငြင်းပွားမှုပြတင်းပေါက်အတွင်း အတည်ပြု/ပယ်ချမဲများ တင်သွင်းခြင်း။
+3. `escalated_at_unix + dispute_window_secs` တွင် ဆုံးဖြတ်ချက်ကို အဆုံးအဖြတ်ဖြင့် တွက်ချက်သည်- အနည်းဆုံး မဲဆန္ဒရှင်များ၊ အတည်ပြုချက်များသည် ပယ်ချခံရခြင်းထက် ကျော်လွန်ပြီး အတည်ပြုမှုအချိုးသည် အထမြောက်မှု သတ်မှတ်ချက်နှင့် ကိုက်ညီပါသည်။
+4. အတည်ပြုထားသော ဆုံးဖြတ်ချက်များသည် အယူခံဝင်သည့် ဝင်းဒိုးကို ဖွင့်ပေးသည်။ `approved_at_unix + appeal_window_secs` မတိုင်မီ မှတ်တမ်းတင်ထားသော အယူခံဝင်မှုများသည် အယူခံဝင်သည့် ဆုံးဖြတ်ချက်ကို အမှတ်အသားပြုသည်။
+5. ပြစ်ဒဏ်ချမှတ်မှုသည် အဆိုပြုချက်အားလုံးတွင် အကျုံးဝင်ပါသည်။ ဦးထုပ်အထက်တင်ပြချက်များကို ပယ်ချပါသည်။
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## အုပ်ချုပ်မှုမြှင့်တင်ရေးမူဝါဒ
+တိုးမြှင့်ခြင်းမူဝါဒကို `iroha_config` တွင် `governance.sorafs_repair_escalation` မှ အရင်းခံပြီး ပြုပြင်မှုမျဉ်းစောင်း အဆိုပြုချက်တိုင်းအတွက် ပြဌာန်းထားသည်။
 
-| Setting | Default | Meaning |
+| ဆက်တင် | ပုံသေ | အဓိပ္ပါယ် |
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 | ရေတွက်သည့်မဲများကြားတွင် အနည်းဆုံး ထောက်ခံမှုအချိုး (အခြေခံအချက်များ)။ |
+| `minimum_voters` | 3 | ဆုံးဖြတ်ချက်တစ်ခုကို ဖြေရှင်းရန်အတွက် ကွဲပြားသောမဲဆန္ဒရှင်ဦးရေ အနည်းဆုံး လိုအပ်သည်။ |
+| `dispute_window_secs` | 86400 | မဲများ အပြီးသတ်ခြင်းမပြုမီ အရှိန်မြှင့်ပြီးနောက် အချိန် (စက္ကန့်)။ |
+| `appeal_window_secs` | 604800 | အယူခံဝင်ချိန်အတွင်း အတည်ပြုချက်ရပြီးချိန် (စက္ကန့်)။ |
+| `max_penalty_nano` | 1,000,000,000 | ပြုပြင်ခြင်း (nano-XOR) အတွက် အမြင့်ဆုံး မျဉ်းစောင်း ဒဏ်ကြေးကို ခွင့်ပြုသည်။ |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- အစီအစဉ်ဆွဲသူ-ထုတ်ပေးသော အဆိုပြုချက်များကို `max_penalty_nano` တွင် ကန့်သတ်ထားသည်။ ဦးထုပ်အထက် စာရင်းစစ်တင်ပြချက်များကို ပယ်ချပါသည်။
+- မဲစာရင်းများကို `repair_state.to` တွင် အဆုံးအဖြတ်ပေးသည့် အစီအစဉ် (`voter_id` စီခြင်း) ဖြင့် သိမ်းဆည်းထားသောကြောင့် node များအားလုံးသည် တူညီသော ဆုံးဖြတ်ချက်အချိန်တံဆိပ်နှင့် ရလဒ်ကို ရရှိမည်ဖြစ်သည်။

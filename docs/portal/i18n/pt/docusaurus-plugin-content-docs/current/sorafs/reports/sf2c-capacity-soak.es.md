@@ -4,56 +4,58 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Informe de soak de acumulación de capacidad SF-2c
+# Informe de absorção de acumulação de capacidade SF-2c
 
-Fecha: 2026-03-21
+Data: 21/03/2026
 
 ## Alcance
 
-Este informe registra las pruebas determinísticas de soak de acumulación de capacidad SoraFS y pagos
-solicitadas bajo la hoja de ruta SF-2c.
+Este relatório registra os testes determinísticos de absorção de acumulação de capacidade SoraFS e pagamentos
+solicitados abaixo da estrada SF-2c.
 
-- **Soak multi-provider de 30 días:** Ejecutado por
-  `capacity_fee_ledger_30_day_soak_deterministic` en
+- **Soak multi-provedor de 30 dias:** Ejecutado por
+  `capacity_fee_ledger_30_day_soak_deterministic` pt
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  El harness instancia cinco providers, abarca 30 ventanas de settlement y
-  valida que los totales del ledger coincidan con una proyección de referencia
-  calculada de forma independiente. La prueba emite un digest Blake3
-  (`capacity_soak_digest=...`) para que CI pueda capturar y comparar el snapshot
-  canónico.
+  El chicote instância cinco provedores, abarca 30 janelas de liquidação e
+  valida que os totais do razão coincidem com uma projeção de referência
+  cálculo de forma independente. A tentativa de emitir um resumo Blake3
+  (`capacity_soak_digest=...`) para que o CI possa capturar e comparar o snapshot
+  canônico.
 - **Penalizaciones por subentrega:** Impuestas por
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (mismo archivo). La prueba confirma que los umbrales de strikes, cooldowns,
-  slashes de collateral y contadores del ledger permanecen determinísticos.
+  (mismo arquivo). A tentativa confirma que os guarda-chuvas de golpes, cooldowns,
+  barras de garantia e contadores do razão permanecem determinísticos.
 
-## Ejecución
+## Execução
 
-Ejecuta las validaciones de soak localmente con:
+Execute as validações de imersão localmente com:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Las pruebas completan en menos de un segundo en un portátil estándar y no requieren
-fixtures externas.
+Os testes são realizados em menos de um segundo em um laptop padrão e não exigem
+luminárias externas.
 
-## Observabilidad
+## Observabilidade
 
-Torii ahora expone snapshots de crédito de providers junto a fee ledgers para que los dashboards
-puedan gatear sobre saldos bajos y penalty strikes:
+Torii agora exponha snapshots de crédito de provedores junto com registros de taxas para os painéis
+puedan gatear sobre saldos baixos e pênaltis:
 
-- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
-  reflejan los campos del ledger verificados en la prueba de soak. Ver
+- REST: `GET /v1/sorafs/capacity/state` devolve entradas `credit_ledger[*]` que
+  reflita sobre os campos do razão selecionado na tentativa de imersão. Ver
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Importación de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` grafica los
-  contadores de strikes exportados, totales de penalizaciones y collateral en garantía para que el
-  equipo on-call pueda comparar los baselines de soak con entornos en vivo.
+- Importação de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` gráficos
+  contadores de greves exportados, totais de penalizações e garantias para que o
+  O equipamento on-call pode comparar as linhas de base de imersão com ambientes ao vivo.
 
-## Seguimiento
+## Seguimento
 
-- Programar ejecuciones de gate semanales en CI para reejecutar la prueba de soak (smoke-tier).
-- Extender el tablero de Grafana con objetivos de scrape de Torii cuando las exportaciones de
-  telemetry de producción estén disponibles.
+- Programar ejecuciones de gate semanales en CI para reejecutar a tentativa de molho (smoke-tier).
+- Estenda a mesa de Grafana com objetivos de raspar de Torii quando exportar
+  a telemetria de produção está disponível.

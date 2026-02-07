@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/sorafs/quickstart.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Inicio rápido de SoraFS
+# Démarrage rapide de SoraFS
 
-Esta guía práctica recorre el perfil determinista de chunker SF-1,
-la firma de manifiestos y el flujo de recuperación multi-proveedor que sustentan el
-pipeline de almacenamiento de SoraFS. Complétala con el
-[análisis profundo del pipeline de manifiestos](manifest-pipeline.md)
-para notas de diseño y referencia de flags de la CLI.
+Ce guide pratique recorre le profil déterministe du chunker SF-1,
+la société de manifestes et le flux de récupération multi-fournisseurs qui soutiennent le
+pipeline de stockage de SoraFS. Complète avec le
+[analyse approfondie du pipeline des manifestes](manifest-pipeline.md)
+pour les notes de conception et la référence aux drapeaux de la CLI.
 
-## Requisitos previos
+## Conditions préalables
 
-- Toolchain de Rust (`rustup update`), workspace clonado localmente.
-- Opcional: [par de claves Ed25519 generado con OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  para firmar manifiestos.
-- Opcional: Node.js ≥ 18 si planeas previsualizar el portal de Docusaurus.
+- Toolchain de Rust (`rustup update`), espace de travail cloné localement.
+- Facultatif : [par des clés Ed25519 générées avec OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  para firmar manifestes.
+- Facultatif : Node.js ≥ 18 si vous planifiez de prévisualiser le portail de Docusaurus.
 
-Define `export RUST_LOG=info` mientras experimentas para mostrar mensajes útiles de la CLI.
+Définissez `export RUST_LOG=info` pendant vos expériences pour afficher les messages utiles de la CLI.
 
-## 1. Actualiza los fixtures deterministas
+## 1. Actualisation des rencontres déterministes
 
-Regenera los vectores canónicos de chunking SF-1. El comando también emite
-sobres de manifiesto firmados cuando se proporciona `--signing-key`; usa
-`--allow-unsigned` solo durante el desarrollo local.
+Régénère les vecteurs canoniques de chunking SF-1. Le commandant émet également
+sobres de manifiesto firmados cuando se proporciona `--signing-key` ; Etats-Unis
+`--allow-unsigned` seul pendant le développement local.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
@@ -35,14 +37,14 @@ cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 
 Salidas:
 
-- `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
-- `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (si se firmó)
-- `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
+-`fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
+-`fixtures/sorafs_chunker/manifest_blake3.json`
+- `fixtures/sorafs_chunker/manifest_signatures.json` (si ferme)
+-`fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Fragmenta un payload e inspecciona el plan
+## 2. Fragmenter une charge utile et inspecter le plan
 
-Usa `sorafs_chunker` para fragmentar un archivo o un archivo comprimido arbitrario:
+Utilisez `sorafs_chunker` pour fragmenter un fichier ou un fichier compressé arbitrairement :
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -50,23 +52,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Campos clave:
+Clé de Campos :
 
-- `profile` / `break_mask` – confirma los parámetros de `sorafs.sf1@1.0.0`.
-- `chunks[]` – offsets ordenados, longitudes y digests BLAKE3 de los chunks.
+- `profile` / `break_mask` – confirme les paramètres de `sorafs.sf1@1.0.0`.
+- `chunks[]` – compense les ordres, les longitudes et digère BLAKE3 des morceaux.
 
-Para fixtures más grandes, ejecuta la regresión respaldada por proptest para
-garantizar que el chunking en streaming y por lotes se mantenga sincronizado:
+Pour les rencontres les plus grandes, la régression est exécutée par proptest pour
+garantir que le chunking en streaming et pour beaucoup soit synchronisé :
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Construye y firma un manifiesto
+## 3. Construire et annoncer un manifeste
 
-Envuelve el plan de chunks, los alias y las firmas de gobernanza en un manifiesto usando
-`sorafs-manifest-stub`. El comando de abajo muestra un payload de un solo archivo; pasa
-una ruta de directorio para empaquetar un árbol (la CLI lo recorre en orden lexicográfico).
+Envoyez le plan de morceaux, les alias et les entreprises de gouvernement dans un manifeste d'utilisation
+`sorafs-manifest-stub`. Le commandant de bord doit afficher une charge utile d'un seul fichier ; pasa
+un itinéraire de répertoire pour empaqueter un arbre (la CLI l'enregistrera dans l'ordre lexicográfico).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -78,20 +80,20 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Revisa `/tmp/docs.report.json` para:
+Révision `/tmp/docs.report.json` para :
 
-- `chunking.chunk_digest_sha3_256` – digest SHA3 de offsets/longitudes, coincide con los
-  fixtures del chunker.
-- `manifest.manifest_blake3` – digest BLAKE3 firmado en el sobre del manifiesto.
-- `chunk_fetch_specs[]` – instrucciones de recuperación ordenadas para los orquestadores.
+- `chunking.chunk_digest_sha3_256` – résumé SHA3 des décalages/longitudes, coïncide avec les
+  luminaires del chunker.
+- `manifest.manifest_blake3` – digérer BLAKE3 confirmé dans le cadre du manifeste.
+- `chunk_fetch_specs[]` – instructions de récupération ordonnées pour les orchestres.
 
-Cuando estés listo para aportar firmas reales, añade los argumentos `--signing-key` y
-`--signer`. El comando verifica cada firma Ed25519 antes de escribir el sobre.
+Lorsque cette liste est destinée à porter des entreprises réelles, ajoutez les arguments `--signing-key` et
+`--signer`. La commande vérifie chaque entreprise Ed25519 avant d'écrire sur le sujet.
 
-## 4. Simula la recuperación multi-proveedor
+## 4. Simula la récupération multi-fournisseur
 
-Usa la CLI de fetch de desarrollo para reproducir el plan de chunks contra uno o más
-proveedores. Es ideal para smoke tests de CI y prototipos de orquestador.
+Utilisez la CLI pour récupérer le téléchargement pour reproduire le plan de morceaux contre un ou plus
+fournisseurs. Il est idéal pour les tests de fumée de CI et les prototypes d'orquestador.
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -101,27 +103,25 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Comprobaciones:
+Comprobations :- `payload_digest_hex` doit coïncider avec l'information du manifeste.
+- `provider_reports[]` doit contenir des contes d'exito/fallo por provenedor.
+- Un `chunk_retry_total` distinct de zéro permet de régler la contre-pression.
+- Pas `--max-peers=<n>` pour limiter le nombre de fournisseurs programmés pour une exécution
+  et maintenir les simulations de CI enfocadas chez les candidats principaux.
+- `--retry-budget=<n>` indique le constat de défaut de réintention du morceau (3) pour
+  détecter les régressions les plus rapides de l'observateur des chutes d'injecteurs.
 
-- `payload_digest_hex` debe coincidir con el informe del manifiesto.
-- `provider_reports[]` muestra conteos de éxito/fallo por proveedor.
-- Un `chunk_retry_total` distinto de cero destaca ajustes de back-pressure.
-- Pasa `--max-peers=<n>` para limitar la cantidad de proveedores programados para una ejecución
-  y mantener las simulaciones de CI enfocadas en los candidatos principales.
-- `--retry-budget=<n>` sobrescribe el recuento por defecto de reintentos por chunk (3) para
-  detectar más rápido regresiones del orquestador al inyectar fallos.
+Ajouter `--expect-payload-digest=<hex>` et `--expect-payload-len=<bytes>` pour une chute rapide
+lorsque la charge sera reconstruite à la fin du manifeste.
 
-Añade `--expect-payload-digest=<hex>` y `--expect-payload-len=<bytes>` para fallar rápido
-cuando la carga reconstruida se desvíe del manifiesto.
+## 5. Suivantes étapes
 
-## 5. Siguientes pasos
-
-- **Integración de gobernanza** – canaliza el digest del manifiesto y
-  `manifest_signatures.json` en el flujo del consejo para que el Pin Registry pueda
-  anunciar disponibilidad.
-- **Negociación del registro** – consulta [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  antes de registrar nuevos perfiles. La automatización debe preferir manejadores canónicos
-  (`namespace.name@semver`) sobre IDs numéricos.
-- **Automatización de CI** – añade los comandos anteriores a los pipelines de release para que
-  la documentación, fixtures y artefactos publiquen manifiestos deterministas junto con
-  metadatos firmados.
+- **Integración de gobernanza** – canaliser le résumé du manifeste et
+  `manifest_signatures.json` dans le flux du conseil pour que le registre Pin puisse être
+  annonce la disponibilité.
+- **Négociation du registre** – consultation [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  antes de registrar nouveaux profils. L'automatisation doit préférer les opérateurs canoniques
+  (`namespace.name@semver`) sur les identifiants numériques.
+- **Automatización de CI** – ajouter les commandes antérieures aux pipelines de publication pour cela
+  la documentation, les installations et les artefacts publics manifestes déterminants conjointement avec
+  métadonnées firmados.

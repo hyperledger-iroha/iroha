@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5c10cd7eda24260bfd1319c7b8ac23dba2a1c8a1cb39ea49f0f1a64427ca15db
 source_last_modified: "2025-12-29T18:16:35.086260+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraGlobal Gateway Billing Reconciliation
+# SoraGlobal шлюз биллингы ярашыу
 
-- **Window:** `<from>/<to>`
-- **Tenant:** `<tenant-id>`
-- **Catalog Version:** `<catalog-version>`
-- **Usage Snapshot:** `<path or hash>`
-- **Guardrails:** soft cap `<soft-cap-xor> XOR`, hard cap `<hard-cap-xor> XOR`, alert threshold `<alert-threshold>%`
-- **Payer -> Treasury:** `<payer>` -> `<treasury>` in `<asset-definition>`
-- **Total Due:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
+- **Тәҙ:** `<from>/<to>`
+- **Артант:** `<tenant-id>`
+- **Каталог версияһы:** `<catalog-version>`
+- **Снимок ҡулланыу:** `<path or hash>`
+- **Гвардия:** йомшаҡ ҡапҡас I18NI000000005X, ҡаты ҡапҡас `<hard-cap-xor> XOR`, иҫкәртмә сиге `<alert-threshold>%`
+- **Түләүсе -> Ҡаҙна:** `<treasury>` X-та `<payer>` -> `<asset-definition>` .
+- **Тоталь тейешле:** I18NI000000011X (`<total-micros>` микро-XOR)
 
-## Line Item Checks
-- [ ] Usage entries cover only catalog meter ids and valid billing regions
-- [ ] Quantity units match catalog definitions (requests, GiB, ms, etc.)
-- [ ] Region multipliers and discount tiers applied as per catalog
-- [ ] CSV/Parquet exports match the JSON invoice line items
+## һыҙыҡ пункты тикшерә
+- [ ] Ҡулланыу яҙмалары каталог счетчик идентификаторы һәм дөрөҫ биллинг төбәктәрен генә үҙ эсенә ала
+- [ ] Күләм берәмектәре каталог билдәләмәләренә тап килә (запростар, ГБ, мс һ.б.)
+- [ ] Төбәк множитель һәм ташлама ярустары каталог буйынса ҡулланыла
+- [ ] CSV/Паркет экспорты тура килә JSON счет-фактура һыҙығы пункттары .
 
-## Guardrail Evaluation
-- [ ] Soft cap alert threshold reached? `<yes/no>` (attach alert evidence if yes)
-- [ ] Hard cap exceeded? `<yes/no>` (if yes, attach override approval)
-- [ ] Minimum invoice floor satisfied
+## Гвардия баһалау
+- [ ] Йомшаҡ ҡапҡас иҫкәртмәһе сиге еткән? `<yes/no>` (беркетергә иҫкәртмә дәлилдәре, әгәр эйе)
+- [ ] Ҡаты ҡапҡас артып китте? `<yes/no>` (әгәр ҙә эйе, өҫтөнлөк раҫлау беркетергә)
+- [ ] Минималь счет-фактура иҙән ҡәнәғәт
 
-## Ledger Projection
-- [ ] Transfer batch total equals `total_micros` in invoice
-- [ ] Asset definition matches billing currency
-- [ ] Payer and treasury accounts match tenant and operator of record
-- [ ] Norito/JSON artefacts attached for audit replay
+## Бүләк проекцияһы
+- [ ] Партияны тапшырыу дөйөм I18NI000000015X счет-фактурала тигеҙ.
+- [ ] Активтар билдәләмәһе биллинг валютаһына тап килә
+- [ ] Түләү һәм ҡаҙна иҫәптәре матч арендатор һәм оператор рекорд .
+- [ ] I18NT00000000000000000е/JSON артефакттар өсөн беркетелгән аудит реплей
 
-## Dispute/Adjustment Notes
-- Observed variance: `<variance detail>`
-- Proposed adjustment: `<delta and rationale>`
-- Supporting evidence: `<logs/dashboards/alerts>`
+## Бәхәс/Көйләү Иҫкәрмәләр
+- Күҙәтелгән дисперсия: `<variance detail>`
+- Тәҡдим ителгән көйләү: I18NI000000017X
+- Ярҙамсы дәлилдәр: I18NI000000018X
 
-## Approvals
-- Billing analyst: `<name + signature>`
-- Treasury reviewer: `<name + signature>`
-- Governance packet hash: `<hash/reference>`
+## раҫлауҙар
+- Биллинг аналитигы: I18NI000000019X
+- ҡаҙна рецензент: I18NI000000020X
+- Идаралыҡ пакеты хеш: `<hash/reference>`

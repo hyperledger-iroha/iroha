@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 035600f179f4dd225778fae57c927b2a6c9a0f1c45ca949e3536b99283c2dde3
 source_last_modified: "2026-01-28T17:11:30.697433+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Rust SDK Quickstart
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+Rust კლიენტის API ცხოვრობს `iroha` ყუთში, რომელიც ავლენს `client::Client`-ს
+აკრიფეთ Torii-თან სასაუბროდ. გამოიყენეთ ის, როდესაც გჭირდებათ ტრანზაქციის წარდგენა,
+გამოიწერეთ ღონისძიებები, ან მოითხოვეთ მდგომარეობა Rust აპლიკაციიდან.
 
-## 1. Add the crate
+## 1. დაამატეთ კრატი
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+სამუშაო სივრცის მაგალითი განბლოკავს კლიენტის მოდულს `client` ფუნქციის მეშვეობით. თუ თქვენ
+მოიხმარეთ გამოქვეყნებული ყუთი, შეცვალეთ `path` ატრიბუტი მიმდინარე
+ვერსიის სტრიქონი.
 
-## 2. Configure the client
+## 2. კლიენტის კონფიგურაცია
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` ასახავს CLI კონფიგურაციის ფაილს: მოიცავს Torii და
+ტელემეტრიის URL-ები, ავთენტიფიკაციის მასალა, ვადები და სერიული პარამეტრები.
 
-## 3. Submit a transaction
+## 3. წარადგინეთ ტრანზაქცია
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+ქუდის ქვეშ კლიენტი იყენებს Norito-ს ტრანზაქციის დატვირთვის დაშიფვრად მანამდე
+განთავსდება Torii-ზე. თუ წარდგენა წარმატებით დასრულდა, დაბრუნებული ჰეში შეიძლება გამოყენებულ იქნას
+ტრეკის სტატუსი `client.poll_transaction_status(hash)`-ის საშუალებით.
 
-## 4. Submit DA blobs
+## 4. წარადგინეთ DA blobs
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+როდესაც გჭირდებათ Norito ტვირთის შემოწმება ან შენარჩუნება მის გაგზავნის გარეშე
+Torii, დარეკეთ `client.build_da_ingest_request(...)` ხელმოწერილი მოთხოვნის მისაღებად
+და გადაიყვანეთ როგორც JSON/ბაიტი, `iroha app da submit --no-submit`-ის ასახვით.
 
-## 5. Query data
+## 5. შეკითხვის მონაცემები
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+მოთხოვნები მიჰყვება მოთხოვნის/პასუხის შაბლონს: შექმენით შეკითხვის ტიპი
+`iroha_data_model::query`, გაგზავნეთ `client.request`-ით და გაიმეორეთ
+შედეგები. პასუხებში გამოიყენება Norito მხარდაჭერილი JSON, ამიტომ მავთულის ფორმატი განმსაზღვრელია.
 
-## 6. Explorer QR snapshots
+## 6. Explorer QR სნეპშოტები
 
 ```rust
 use iroha::client::{
@@ -160,15 +161,15 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the literal rendered with the
-requested format, network prefix/error-correction metadata, QR dimensions, and
-the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+`ExplorerAccountQrSnapshot` ასახავს `/v1/explorer/accounts/{id}/qr` JSON-ს
+ზედაპირი: მასში შედის ანგარიშის კანონიკური id, სიტყვასიტყვით გადმოცემული the
+მოთხოვნილი ფორმატი, ქსელის პრეფიქსი/შეცდომის გამოსწორების მეტამონაცემები, QR ზომები და
+inline SVG დატვირთვა, რომელიც საფულეებს/გამომძიებლებს შეუძლიათ პირდაპირ ჩასვან. გამოტოვეთ
+`ExplorerAccountQrOptions` ნაგულისხმევად არის სასურველი IH58 გამომავალი ან ნაკრები
+`address_format: Some(AddressFormat::Compressed)` მეორე საუკეთესოს მისაღებად
+`sora…` ვარიანტი, რომელსაც იყენებს ADDR-6b.
 
-## 7. Subscribe to events
+## 7. გამოიწერეთ ღონისძიებები
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -188,29 +189,29 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+კლიენტი ავლენს ასინქრონულ ნაკადებს Torii-ის SSE ბოლო წერტილებისთვის, მილსადენის ჩათვლით
+მოვლენები, მონაცემთა მოვლენები და ტელემეტრიის არხები.
 
-## More examples
+## მეტი მაგალითი
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- ბოლოდან ბოლომდე ნაკადები ცხოვრობს `tests/` ქვეშ `crates/iroha`-ში. მოძებნეთ ინტეგრაცია
+  ტესტები, როგორიცაა `transaction_submission.rs` უფრო მდიდარი სცენარისთვის.
+- CLI (`iroha_cli`) იყენებს იმავე კლიენტის მოდულს; დაათვალიერეთ
+  `crates/iroha_cli/src/`, რათა ვნახო, როგორია ავთენტიფიკაცია, ჯგუფური და ხელახალი ცდები
+  დამუშავებული წარმოების ხელსაწყოებში.
+- გაითვალისწინეთ Norito: კლიენტი არასოდეს იბრუნებს `serde_json`-ს. როცა შენ
+  გააფართოვეთ SDK, დაეყრდნოთ `norito::json` დამხმარეებს JSON ბოლო წერტილებისთვის და
+  `norito::codec` ბინარული დატვირთვისთვის.
 
-## Related Norito examples
+## დაკავშირებული Norito მაგალითები
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
-  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
-  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — demonstrates the
-  `transfer_asset` syscall with the same account IDs the SDK quickstarts use.
+- [Hajimari შესვლის წერტილის ჩონჩხი] (../norito/examples/hajimari-entrypoint) - შედგენა, გაშვება და დანერგვა
+  მინიმალური Kotodama ხარაჩო, რომელიც ასახავს დაყენების ფაზას ამ სწრაფი დაწყებისას.
+- [დომენის და ზარაფხანის აქტივების რეგისტრაცია] (../norito/examples/register-and-mint) — შეესაბამება
+  `Register` + `Mint` ნაკადი ნაჩვენებია ზემოთ, ასე რომ თქვენ შეგიძლიათ გაიმეოროთ იგივე ოპერაციები კონტრაქტიდან.
+- [აქტივის გადარიცხვა ანგარიშებს შორის] (../norito/examples/transfer-asset) — აჩვენებს
+  `transfer_asset` syscall იგივე ანგარიშის ID-ებით, რომლებსაც SDK სწრაფი სტარტები იყენებს.
 
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+ამ სამშენებლო ბლოკებით შეგიძლიათ Torii ინტეგრირდეთ Rust სერვისებში ან CLI-ებში.
+იხილეთ გენერირებული დოკუმენტაცია და მონაცემთა მოდელის ყუთები სრული ნაკრებისთვის
+ინსტრუქციები, შეკითხვები და მოვლენები.

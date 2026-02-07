@@ -11,43 +11,44 @@ id: deploy-guide
 title: SoraFS Deployment Guide
 sidebar_label: Deployment Guide
 description: Promote the developer portal through the SoraFS pipeline with deterministic builds, Sigstore signing, and rollback drills.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## སྤྱི་མཐོང་།
 
-This playbook converts roadmap items **DOCS-7** (SoraFS publishing) and **DOCS-8**
-(CI/CD pin automation) into an actionable procedure for the developer portal.
-It covers the build/lint phase, SoraFS packaging, Sigstore-backed manifest
-signing, alias promotion, verification, and rollback drills so every preview and
-release artefact is reproducible and auditable.
+རྩེད་དེབ་འདི་གིས་ ལམ་གྱི་ས་ཁྲ་རྣམ་གྲངས་ **DOCS-7** (SoraFS དཔར་བསྐྲུན་) དང་ **DOCS-8** གཞི་བསྒྱུར་འབདཝ་ཨིན།
+(CI/CD pin རང་བཞིན་) གོང་འཕེལ་གཏང་མི་དྲྭ་ཚིགས་ཀྱི་དོན་ལུ་ ལག་ལེན་འཐབ་བཏུབ་པའི་བྱ་རིམ་ཅིག་ནང་།
+འདི་གིས་ བཟོ་བསྐྲུན་/ལིན་ཊི་གནས་རིམ་ SoraFS ཐུམ་སྒྲིལ་ ཐུམ་སྒྲིལ་ I18NT0000000003X-backed གསལ་སྟོན་ཚུ་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+མཚན་རྟགས་བཀོད་ནི་དང་ མིང་གཞན་ཁྱབ་སྤེལ་ བདེན་དཔྱད་དང་ ལོག་བསྐོར་གྱི་སྦྱོང་བརྡར་ཚུ་ དེ་འབདཝ་ལས་ སྔོན་ལྟ་ག་ར་དང་།
+གསར་བཏོན་འབད་མི་ ཅ་ཆས་འདི་ བསྐྱར་བཟོ་འབད་ཚུགསཔ་དང་ རྩིས་ཞིབ་འབད་ཚུགས།
 
-The flow assumes you have the `sorafs_cli` binary (built with
-`--features cli`), access to a Torii endpoint with pin-registry permissions, and
-OIDC credentials for Sigstore. Store long-lived secrets (`IROHA_PRIVATE_KEY`,
-`SIGSTORE_ID_TOKEN`, Torii tokens) in your CI vault; local runs can source them
-from shell exports.
+རྒྱུན་རིམ་འདི་གིས་ ཁྱོད་ལུ་ `sorafs_cli` གཉིས་ལྡན་ཡོདཔ་སྦེ་ མནོ་བསམ་གཏངམ་ཨིན།
+`--features cli`), Torii མཐའ་ཐིག་ལུ་འཛུལ་སྤྱོད་འབད་ནི།
+I18NT0000052X Sigstore གི་ཡིག་ཆ་ཚུ། རིང་བའི་གསང་བ་ (`IROHA_PRIVATE_KEY`,
+ཁྱོད་ཀྱི་སི་ཨའི་ བོལཊ་ནང་ Sigstore, I18NT0000040X ཊོ་ཀེན་ཚུ་); ས་གནས་ཀྱི་རྒྱུག་འགྲན་ཚུ་གིས་ཁོང་ཚུ་འབྱུང་ཁུངས་བཟོ་ཚུགས།
+ཤེལ་ཕྱིར་ཕྱིར་གཏོང་ལས་།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Node 18.18+ with `npm` or `pnpm`.
-- `sorafs_cli` from `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- Torii URL that exposes `/v1/sorafs/*` plus an authority account/private key
-  that can submit manifests and aliases.
-- OIDC issuer (GitHub Actions, GitLab, workload identity, etc.) to mint a
+- མཐུད་མཚམས་༡༨.༡༨+ དང་ `npm` ཡང་ན་ `pnpm`.
+- `sorafs_cli` ལས་ `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- Torii ཡུ་ཨར་ཨེལ་ I18NI000000093X དང་ དབང་འཛིན་རྩིས་ཐོ་/སྒེར་གྱི་ལྡེ་མིག་ཅིག་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  དེ་གིས་ གསལ་སྟོན་དང་ མིང་ཚིག་ཚུ་ བཙུགས་ཚུགས།
+- OIDC བཏོན་མི་ (GitHub actiss, GitLab, ལཱ་གི་འབོར་ཚད་ངོ་རྟགས་ལ་སོགས་པ་ཚུ་) ལུ་ བཀོད་སྒྲིག་འབད་ནི་ལུ་ a ;
   `SIGSTORE_ID_TOKEN`.
-- Optional: `examples/sorafs_cli_quickstart.sh` for dry runs and
-  `docs/source/sorafs_ci_templates.md` for GitHub/GitLab workflow scaffolding.
-- Configure the Try it OAuth variables (`DOCS_OAUTH_*`) and run the
-  [security-hardening checklist](./security-hardening.md) before promoting a build
-  outside the lab. The portal build now fails when these variables are missing
-  or when the TTL/polling knobs fall outside the enforced windows; export
-  `DOCS_OAUTH_ALLOW_INSECURE=1` only for disposable local previews. Attach the
-  pen-test evidence to the release ticket.
+- གདམ་ཁ་ཅན་: སྐམ་རྒྱུག་ཚུ་གི་དོན་ལུ་ I18NI0000095X དང་།
+  I18NI000000096X གི་ཊི་ཧབ་/ཇི་ཊི་ལེབ་ལཱ་གི་རྒྱུན་རིམ་གྱི་དོན་ལུ་ཨིན།
+- དེ་ OAuth འགྱུར་ཅན་ (I18NI0000097X) རིམ་སྒྲིག་འབད་ཞིནམ་ལས་ འདི་གཡོག་བཀོལ།
+  [བདེ་འཇགས་འགོག་པའི་ཞིབ་དཔྱད་ཐོ་ཡིག་](I18NU0000083X) བཟོ་བསྐྲུན་ཅིག་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ།
+  །ཕྱི་རོལ་ཁང་གི་ཕྱིར། འགྱུར་ཅན་འདི་ཚུ་མེད་པའི་སྐབས་ལུ་ དྲྭ་ལམ་བཟོ་བསྐྲུན་འདི་ ད་ལྟོ་འཐུས་ཤོར་འབྱུང་དོ་ཡོདཔ་ཨིན།
+  ཡང་ན་ ཊི་ཊི་ཨེལ་/པོ་ལིང་ མཛུབ་མོ་ཚུ་ བསྟར་སྤྱོད་འབད་ཡོད་པའི་སྒོ་སྒྲིག་ཚུ་གི་ཕྱི་ཁར་ འབབ་པའི་སྐབས། ཕྱིར་བཙོང་
+  `DOCS_OAUTH_ALLOW_INSECURE=1` བཀོལ་སྤྱོད་འབད་བཏུབ་པའི་ཉེ་གནས་སྔོན་ལྟ་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན། འདི་མཉམ་སྦྲགས་འབད།
+  གསར་བཏོན་གྱི་ ཤོག་འཛིན་ལུ་ par-test སྒྲུབ་བྱེད།
 
-## Step 0 — Capture a Try it proxy bundle
+## གོམ་པ་༠ — འདི་ ངོ་ཚབ་འབད་རྩོལ་བསྐྱེད།
 
-Before promoting a preview to Netlify or the gateway, stamp the Try it proxy
-sources and signed OpenAPI manifest digest into a deterministic bundle:
+ནེཊི་ལའིཕ་ ཡང་ན་ འཛུལ་སྒོ་ལུ་ སྔོན་ལྟ་ཅིག་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ དེ་ ངོ་ཚབ་འབད་རྩོལ་བསྐྱེད།
+འབྱུང་ཁུངས་དང་མཚན་རྟགས་བཀོད་ཡོད། I18NT0000014X བཞུ་བཅུད་འདི་ སེམས་ཐག་བཅད་པའི་བང་སྒྲིག་ནང་ལུ་ མངོན་གསལ་འབད་ཡོདཔ་ཨིན།
 
 ```bash
 cd docs/portal
@@ -57,14 +58,14 @@ npm run release:tryit-proxy -- \
   --label preview-2026-02-14
 ```
 
-`scripts/tryit-proxy-release.mjs` copies the proxy/probe/rollback helpers,
-verifies the OpenAPI signature, and writes `release.json` plus
-`checksums.sha256`. Attach this bundle to the Netlify/SoraFS gateway promotion
-ticket so reviewers can replay the exact proxy sources and Torii target hints
-without rebuilding. The bundle also records whether client-supplied bearers were
-enabled (`allow_client_auth`) to keep the rollout plan and CSP rules in sync.
+`scripts/tryit-proxy-release.mjs` གིས་ པོརོག་སི་/འཚོལ་ཞིབ་/རོལ་ལོག་རོགས་སྐྱོར་ཚུ་འདྲ་བཤུས་རྐྱབ་ཨིན།
+I18NT0000015X མཚན་རྟགས་བདེན་དཔྱད་འབད་དེ་ `release.json` plus བྲིས།
+`checksums.sha256`. བཱན་ཌལ་འདི་ ནེཊ་ལི་ཕི་/SoraFS སྒོ་སྒྲིག་ཁྱབ་སྤེལ་ལུ་མཉམ་སྦྲགས་འབད།
+དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ངོ་ཚབ་ཀྱི་འབྱུང་ཁུངས་ངོ་མ་དང་ Torii དམིགས་གཏད་ཀྱི་བརྡ་སྟོན་ཚུ་ ལོག་རྩེད་ཚུགས།
+བསྐྱར་བཟོ་མེད་པར་། བཱན་ཌལ་གྱིས་ མཁོ་མངགས་འབད་མི་གིས་ བཀྲམ་སྤེལ་འབད་མི་ འབག་མི་ཚུ་ཨིན་ན་མེན་ན་ ཐོ་བཀོད་འབདཝ་ཨིན།
+ལྕོགས་ཅན་ (`allow_client_auth`) འདི་ བསྐོར་ཐེངས་འཆར་གཞི་དང་ སི་ཨེསི་པི་ལམ་ལུགས་ཚུ་ མཉམ་འབྱུང་བཞག་ནི་ལུ་ བཞག་ནི་ལུ་ .
 
-## Step 1 — Build and lint the portal
+## གོ་རིམ་༡ — དྲ་རྒྱ་བཞེངས་ཞིནམ་ལས་ ནང་ཐིག་།
 
 ```bash
 cd docs/portal
@@ -77,19 +78,19 @@ npm run check:links
 npm run build
 ```
 
-`npm run build` automatically executes `scripts/write-checksums.mjs`, producing:
+`npm run build` གིས་ རང་བཞིན་གྱིས་ I18NI000000104X གིས་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
 
-- `build/checksums.sha256` — SHA256 manifest suitable for `sha256sum -c`.
-- `build/release.json` — metadata (`tag`, `generated_at`, `source`) pinned into
-  every CAR/manifest.
+- I18NI000000105X — SHA256 གིས་ `sha256sum -c` གི་དོན་ལུ་འོས་འབབ་ཡོདཔ་ཨིན།
+- `build/release.json` — མེ་ཊ་ཌེ་ཊ་ (`tag`, `generated_at`, I18NI000000010X)
+  CAR/difest རེ་རེ་བཞིན་དུ།
 
-Archive both files alongside the CAR summary so reviewers can diff preview
-artefacts without rebuilding.
+བསྐྱར་ཞིབ་པ་ཚུ་གིས་ སྔོན་ལྟ་འབད་ཚུགསཔ་ལས་ སི་ཨར་བཅུད་བསྡུས་དང་གཅིག་ཁར་ ཡིག་སྣོད་གཉིས་ཆ་རང་ གཏན་མཛོད་འབད་དགོ།
+བསྐྱར་བཟོ་མ་འབད་བར་ ཅ་རྙིང་ཚུ།
 
-## Step 2 — Package the static assets
+## གོམ་པ་ ༢ — གནས་སྟངས་རྒྱུ་དངོས་ཚུ་ ཐུམ་སྒྲིལ་འབད།
 
-Run the CAR packer against the Docusaurus output directory. The example below
-writes all artefacts under `artifacts/devportal/`.
+I18NT0000002X ཐོན་འབྲས་སྣོད་ཐོ་ལུ་འགོག་པའི་ CAR བསྡུ་སྒྲིག་འབད་མི་འདི་གཡོག་བཀོལ། གཤམ་གྱི་དཔེ་ནི།
+`artifacts/devportal/` གི་འོག་ལུ་ ཅ་རྙིང་ཚུ་ག་ར་བྲིས།
 
 ```bash
 OUT=artifacts/devportal
@@ -103,25 +104,25 @@ sorafs_cli car pack \
   --chunker-handle sorafs.sf1@1.0.0
 ```
 
-The summary JSON captures chunk counts, digests, and proof-planning hints that
-`manifest build` and CI dashboards reuse later.
+བཅུད་བསྡུས་ JSON གིས་ ཆ་ཤས་གྱངས་ཁ་དང་ བཞུ་ནི་ དེ་ལས་ བདེན་ཁུངས་འཆར་གཞི་བརྩམས་ཡོད་པའི་ བརྡ་སྟོན།
+`manifest build` དང་ སི་ཨའི་ ཌེཤ་བོརཌི་ཚུ་ ཤུལ་ལས་ ལོག་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
 
-## Step 2b — Package OpenAPI and SBOM companions
+## གོམ་པ་ ༢ཁ — ཐུམ་སྒྲིལ་ I18NT0000016X དང་ SBOM ཆ་རོགས་ཚུ།
 
-DOCS-7 requires publishing the portal site, OpenAPI snapshot, and SBOM payloads
-as distinct manifests so gateways can staple `Sora-Proof`/`Sora-Content-CID`
-headers for each artefact. The release helper
-(`scripts/sorafs-pin-release.sh`) already packages the OpenAPI directory
-(`static/openapi/`) and SBOMs emitted via `syft` into separate
-`openapi.*`/`*-sbom.*` CARs and records the metadata in
-`artifacts/sorafs/portal.additional_assets.json`. When running the manual flow,
-repeat Steps 2–4 for each payload with its own prefixes and metadata labels
-(for example `--car-out "$OUT"/openapi.car` plus
-`--metadata alias_label=docs.sora.link/openapi`). Register every manifest/alias
-pair in Torii (site, OpenAPI, portal SBOM, OpenAPI SBOM) before switching DNS so
-the gateway can serve stapled proofs for all published artefacts.
+DOCS-7 ལུ་ དྲྭ་ཚིགས་ས་ཁོངས་ OpenAPI པར་ལེན་དང་ SBOM པེ་ལོཌི་ཚུ་ དཔར་བསྐྲུན་འབད་དགོཔ་ཨིན།
+འཛུལ་སྒོ་འདི་གིས་ `Sora-Proof`/`Sora-Content-CID` འདི་ གཞི་བསྟུན་འབད་ཚུགས།
+ཅ་ཆས་རེ་རེ་གི་དོན་ལུ་ མགོ་ཡིག་ཚུ། གློད་གྲོལ་ལེན་མི་འདི།
+(`scripts/sorafs-pin-release.sh`) ཧེ་མ་ལས་རང་ I18NT0000018X སྣོད་ཐོ་འདི་ཐུམ་སྒྲིལ་འབདཝ་ཨིན།
+(I18NI000000116X) དང་ SBOMs ཚུ་ I18NI000000117X སོ་སོ་སྦེ་སོ་སོ་སྦེ་བཟོ་ཡོདཔ།
+I18NI000000118X/`*-sbom.*` ཀེར་ཚུ་དང་ མེ་ཊ་ཌེ་ཊ་འདི་ ༢༠༠༨ ལུ་ཐོ་བཀོད་འབདཝ་ཨིན།
+`artifacts/sorafs/portal.additional_assets.json`. ལག་དེབ་རྒྱུན་བསྒྲུབ་པའི་ཚེ།།
+བསྐྱར་ལོག་ རང་གི་སྔོན་འཇུག་དང་ མེ་ཊ་ཌེ་ཊ་ ཁ་ཡིག་ཚུ་དང་གཅིག་ཁར་ པེ་ལོཌི་རེ་རེ་གི་དོན་ལུ་ གོ་རིམ་༢–༤ གོ་རིམ་ཚུ།
+(དཔེར་ན་ `--car-out "$OUT"/openapi.car` དང་།
+`--metadata alias_label=docs.sora.link/openapi`). གསལ་སྟོན་རེ་རེ་བཞིན་/མིང་གཞན་ཐོ་བཀོད་འབད།
+ཆ་གཅིག་ Torii (ས་ཁོངས་, I18NT0000019X, དྲྭ་ཚིགས་ SBOM, OpenAPI SBOM) དེ་ལས་ DNS སོར་བསྒྱུར་མ་འབད་བའི་ཧེ་མ།
+འཛུལ་སྒོ་འདི་གིས་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ག་ར་གི་དོན་ལུ་ བདེན་ཁུངས་ཚུ་ བཀྲམ་སྤེལ་འབད་ཚུགས།
 
-## Step 3 — Build the manifest
+## གོ་རིམ་༣ པ་ — མངོན་རྟགས་བཀལ།
 
 ```bash
 sorafs_cli manifest build \
@@ -134,10 +135,10 @@ sorafs_cli manifest build \
   --metadata alias_label=docs.sora.link
 ```
 
-Tune pin-policy flags to your release window (for example, `--pin-storage-class
-hot` for canaries). The JSON variant is optional but convenient for code review.
+ཁྱོད་ཀྱི་གསར་བཏོན་སྒོ་སྒྲིག་ལུ་ པིན་པིརསི་ དར་ཆ་ཚུ་ ཐུན་ (དཔེར་ན་ `--pin-storage-class)
+ཀེ་ན་རི་གི་དོན་ལུ་ ཚ་དྲོད་)། JSON དབྱེ་བ་འདི་ གདམ་ཁ་ཅན་ཨིན་རུང་ གསང་ཡིག་བསྐྱར་ཞིབ་འབད་ནི་ལུ་ སྟབས་བདེ་ཏོག་ཏོ་ཨིན།
 
-## Step 4 — Sign with Sigstore
+## གོ་རིམ་ ༤ — I18NT0000005X དང་བཅས་རྟགས་བཀོད།
 
 ```bash
 sorafs_cli manifest sign \
@@ -149,17 +150,17 @@ sorafs_cli manifest sign \
   --identity-token-audience sorafs-devportal
 ```
 
-The bundle records the manifest digest, chunk digests, and a BLAKE3 hash of the
-OIDC token without persisting the JWT. Keep both the bundle and detached
-signature; production promotions can reuse the same artefacts instead of resigning.
-Local runs can replace the provider flags with `--identity-token-env` (or set
-`SIGSTORE_ID_TOKEN` in the environment) when an external OIDC helper issues the
-token.
+བཱན་ཌལ་གྱིས་ གསལ་སྟོན་གྱི་ བཞུ་ཁུ་དང་ ཆ་ཤས་འཇུ་བྱེད་ དེ་ལས་ BLAKE3 ཧེཤ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+OIDC ཊོ་ཀེན་འདི་ ཇེ་ཌབ་ལུ་ཊི་ལུ་ མ་གནས་པར་ . བང་རིམ་གཉིས་ཀ་དང་ བཀོ་བཞག།
+ས༌ཡིག; ཐོན་སྐྱེད་ཡར་འཕེལ་གྱིས་ དགོངས་ཞུ་འབད་ནིའི་ཚབ་ལུ་ ཅ་ཆས་གཅིག་མཚུངས་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཚུགས།
+ཉེ་གནས་རྒྱུགས་ཀྱིས་ བྱིན་མི་ དར་ཚིག་ཚུ་ `--identity-token-env` དང་བཅས་ ཚབ་བཙུགས་ཚུགས།(ཡང་ན་ གཞི་སྒྲིག་འབད་ནི།
+མཐའ་འཁོར་ནང་ `SIGSTORE_ID_TOKEN`) ཕྱིའི་ཕྱི་རོལ་གྱི་ I18NT0000055X རོགས་རམ་བྱེད་པའི་རོགས་རམ།
+རྟགས་མཚན་།
 
-## Step 5 — Submit to the pin registry
+## གོམ་པ་༥ — པིན་ཐོ་བཀོད་ལུ་བཙུགས།
 
-Submit the signed manifest (and chunk plan) to Torii. Always request a summary
-so the resulting registry entry/alias proof is auditable.
+མཚན་རྟགས་བཀོད་ཡོད་པའི་གསལ་སྟོན་(དང་ཆ་ཤས་འཆར་གཞི་) འདི་ I18NT0000044X ལུ་ཕུལ་དགོ། ཨ་རྟག་ར་བཅུད་དོན་ཅིག་ཞུ་བ་འབད།
+དེ་འབདཝ་ལས་ གྲུབ་འབྲས་ཐོ་བཀོད་ཐོ་བཀོད་/མིང་གཞན་བདེན་ཁུངས་འདི་ རྩིས་ཞིབ་འབད་ཚུགས།
 
 ```bash
 sorafs_cli manifest submit \
@@ -176,21 +177,21 @@ sorafs_cli manifest submit \
   --response-out "$OUT"/portal.submit.response.json
 ```
 
-When rolling out a preview or canary alias (`docs-preview.sora`), repeat the
-submission with a unique alias so QA can verify content before production
-promotion.
+སྔོན་ལྟའི་ཡང་ན་ ཀེ་རི་ལྟ་བའི་མིང་གཞན་ (`docs-preview.sora`) བསྐོར་བའི་སྐབས་ བསྐྱར་ལོག་འབད།
+གཞན་དང་མ་འདྲ་བའི་མིང་གཞན་དང་མཉམ་དུ་ QA གིས་ བཟོ་བསྐྲུན་མ་འབད་བའི་ཧེ་མར་ ནང་དོན་བདེན་དཔྱད་འབད་ཚུགས།
+གོ༌གནས༌ཡར༌སེང།
 
-Alias binding requires three fields: `--alias-namespace`, `--alias-name`, and
-`--alias-proof`. Governance produces the proof bundle (base64 or Norito bytes)
-when the alias request is approved; store it in CI secrets and surface it as a
-file before invoking `manifest submit`. Leave the alias flags unset when you
-only intend to pin the manifest without touching DNS.
+ཨ་ལི་ཡས་བཱའིན་ཌིང་ལུ་ ས་སྒོ་གསུམ་དགོཔ་ཨིན་ དེ་ཡང་ `--alias-namespace`, `--alias-name`, དང་།
+`--alias-proof`. གཞུང་སྐྱོང་གིས་ བདེན་ཁུངས་ཀྱི་བཱན་ཌལ་ (base64 ཡང་ན་ I18NT0000033X bytes) བཏོནམ་ཨིན།
+མིང་གཞན་གྱི་ཞུ་བ་འདི་ཆ་འཇོག་འབད་བའི་སྐབས། CI གསང་བ་ནང་ གསོག་འཇོག་འབད་དེ་ དེ་ ༡ ལུ་ཐོན་དགོ།
+ཡིག་སྣོད་ `manifest submit` ལུ་ འབོད་བརྡ་མ་འབད་བའི་ཧེ་མ་. ཁྱོད་ཀྱི་སྐབས་ལུ་ མིང་གཞན་གྱི་དར་ཆ་ཚུ་ མ་བཞག་པར་བཞག།
+ཌི་ཨེན་ཨེསི་ མ་ལག་པར་ གསལ་སྟོན་འབད་ནི་ལུ་ རྐྱངམ་ཅིག་ དམིགས་ཡུལ་བསྐྱེདཔ་ཨིན།
 
-## Step 5b — Generate a governance proposal
+## གོ་རིམ་༥བ — གཞུང་སྐྱོང་གྲོས་འཆར་བཟོ་ནི།
 
-Every manifest should travel with a Parliament-ready proposal so that any Sora
-citizen can introduce the change without borrowing privileged credentials.
-After the submit/sign steps, run:
+གསལ་སྟོན་རེ་རེ་གིས་ སྤྱི་ཚོགས་ཀྱི་གྲ་སྒྲིག་གྲོས་འཆར་ཐོག་ལས་ འགྱོ་དགོཔ་ལས་ སོ་ར་གང་རུང་ཅིག་ལུ་ཨིན།
+མི་སེར་གྱིས་ ཐོབ་དབང་གི་ཡིག་ཆ་ཚུ་ སྐྱིན་འགྲུལ་མ་ལེན་པར་ བསྒྱུར་བཅོས་འདི་ ངོ་སྤྲོད་འབད་ཚུགས།
+བཙུགས་/མིང་རྟགས་བཀོད་པའི་ཤུལ་ལས་ གཡོག་བཀོལ།
 
 ```bash
 sorafs_cli manifest proposal \
@@ -201,15 +202,15 @@ sorafs_cli manifest proposal \
   --proposal-out "$OUT"/portal.pin.proposal.json
 ```
 
-`portal.pin.proposal.json` captures the canonical `RegisterPinManifest`
-instruction, chunk digest, policy, and alias hint. Attach it to the governance
-ticket or Parliament portal so delegates can diff the payload without rebuilding
-the artefacts. Because the command never touches the Torii authority key, any
-citizen can draft the proposal locally.
+I18NI000000130X གིས་ ཀེ་ནོ་ནིག་ `RegisterPinManifest` གིས་ བཟུང་ཡོདཔ་ཨིན།
+བཀོད་རྒྱ། ཆ་ཤས་འཇུ་བྱེད་སྲིད་བྱུས་དང་ མིང་གཞན་བརྡ་སྟོན་ཚུ་ཨིན། གཞུང་སྐྱོང་ལུ་མཉམ་སྦྲགས་འབད།
+དེ་བཟུམ་མའི་སྐུ་ཚབ་ཚུ་གིས་ བསྐྱར་བཟོ་མ་འབད་བར་ འཐུས་འབབ་ཀྱི་ འབབ་ཁུངས་ཚུ་ དབྱེ་བ་ཕྱེ་ཚུགས།
+ཅ་རྙིང་ཚུ། ག་ཅི་འབད་ཟེར་བ་ཅིན་ བརྡ་བཀོད་འདི་གིས་ ནམ་ཡང་ Torii དབང་ཚད་ལྡེ་མིག་ལུ་ ཨེབ་གཏང་འབདཝ་ཨིན།
+མི་སེར་ཚུ་གིས་ གྲོས་འཆར་འདི་ ས་གནས་ནང་ ཟིན་བྲིས་འབད་ཚུགས།
 
-## Step 6 — Verify proofs and telemetry
+## གོམ་པ་ ༦ — བདེན་དཔང་དང་ བརྒྱུད་འཕྲིན་བདེན་དཔྱད་འབད་ནི།
 
-After pinning, run the deterministic verification steps:
+པིན་ནིང་འབད་བའི་ཤུལ་ལས་ གཏན་འབེབས་བདེན་དཔྱད་ཀྱི་གོ་རིམ་ཚུ་ གཡོག་བཀོལ།
 
 ```bash
 sorafs_cli proof verify \
@@ -223,18 +224,18 @@ sorafs_cli manifest verify-signature \
   --chunk-plan "$OUT"/portal.plan.json
 ```
 
-- Check `torii_sorafs_gateway_refusals_total` and
-  `torii_sorafs_replication_sla_total{outcome="missed"}` for anomalies.
-- Run `npm run probe:portal` to exercise the Try-It proxy and recorded links
-  against the newly pinned content.
-- Capture the monitoring evidence described in
-  [Publishing & Monitoring](./publishing-monitoring.md) so DOCS-3c’s
-  observability gate is satisfied alongside the publishing steps. The helper
-  now accepts multiple `bindings` entries (site, OpenAPI, portal SBOM, OpenAPI
-  SBOM) and enforces `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` on the target
-  host via the optional `hostname` guard. The invocation below writes both a
-  single JSON summary and the evidence bundle (`portal.json`, `tryit.json`,
-  `binding.json`, and `checksums.sha256`) under the release directory:
+- `torii_sorafs_gateway_refusals_total` བརྟག་དཔྱད་འབད།
+  `torii_sorafs_replication_sla_total{outcome="missed"}` མ་འགྲིག་པའི་དོན་ལུ་ཨིན།
+- `npm run probe:portal` འདི་ Try-It ངོ་ཚབ་དང་སྒྲ་བཟུང་འབད་ཡོད་པའི་འབྲེལ་ལམ་ཚུ་ གཡོག་བཀོལ།
+  གསར་པའི་ནང་དོན་ལུ་རྒྱབ་འགལ་འབད།
+- སྤྱི་ལོ་ ༢༠༢༠ ལུ་གསལ་བཀོད་འབད་ཡོད་པའི་ ལྟ་རྟོག་སྒྲུབ་བྱེད་ཚུ་ བཟུང་ནི།
+  [དཔེ་སྐྲུན་དང་ལྟ་རྟོག་](I18NU0000084X) དེ་འབདཝ་ལས་ DOCS-3c’s
+  བལྟ་རྟོག་འབད་བཏུབ་པའི་སྒོ་འདི་ དཔར་བསྐྲུན་གྱི་གོ་རིམ་ཚུ་གི་སྦོ་ལོགས་ཁར་ བསམ་པ་རྫོགས་ཏེ་ཡོདཔ་ཨིན། རོགས་རམ་པ།
+  ད་ལྟ་ `bindings` ཐོ་འགོད་མང་པོ་ངོས་ལེན་བྱེད་ཀྱི་ཡོད། (དྲ་ཚིགས་, OpenAPI, portal SBOM, OpenAPI
+  SBOM) དང་ དམིགས་ཚད་ཐོག་ལུ་ `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` ལུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  གདམ་ཁ་ཅན་གྱི་ `hostname` སྲུང་སྐྱོབ། འོག་གི་འབོད་བརྡ་འདི་གིས་ གཉིས་ཆ་ར་བྲིས་ཡོདཔ་ཨིན།
+  རྐྱང་པ་ JSON བཅུད་བསྡུས་དང་ སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ (`portal.json`, I18NI000000141X,
+  གསར་བཏོན་སྣོད་ཐོ་འོག་ལུ་ `binding.json`, དང་ `checksums.sha256`) འོག་ལུ་:
 
   ```bash
   npm run monitor:publishing -- \
@@ -243,12 +244,12 @@ sorafs_cli manifest verify-signature \
     --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
   ```
 
-## Step 6a — Plan gateway certificates
+## གོ་རིམ་ ༦ཀ — འཆར་གཞི་གི་སྒོ་ལམ་ལག་ཁྱེར་ཚུ།
 
-Derive the TLS SAN/challenge plan before creating GAR packets so the gateway
-team and DNS approvers review the same evidence. The new helper mirrors the
-DG-3 automation inputs by enumerating canonical wildcard hosts,
-pretty-host SANs, DNS-01 labels, and recommended ACME challenges:
+ཇི་ཨར་ ཐུམ་སྒྲིལ་ཚུ་ གསར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ ཊི་ཨེལ་ཨེསི་ སན་/གདོང་ལེན་འཆར་གཞི་འདི་ བཏོན་གཏང་ནི་ དེ་འབདཝ་ལས་ འཛུལ་སྒོ་འདི་ འཛུལ་སྒོ་འདི་ཨིན།
+སྡེ་ཚན་དང་ DNS ཆ་འཇོག་འབད་མི་ཚུ་གིས་ སྒྲུབ་བྱེད་གཅིག་པ་བསྐྱར་ཞིབ་འབདཝ་ཨིན། རོགས་རམ་པ་གསརཔ་འདི་གིས་ མེ་ལོང་བཟོཝ་ཨིན།
+ཌི་ཇི་-༣ རང་བཞིན་ཨིན་པུཊི་ཚུ་ ཀེ་ནོ་ནིག་ཝའིལ་ཀར་ཌི་ཧོསིཊི་ཚུ་ རྩིས་རྐྱབ་ཐོག་ལས་ ཨིན།
+མཛེས་སྡུག་ལྡན་པའི་ SANs, DNS-01 ཁ་ཡིག་, དང་ ACME གདོང་ལེན་ཚུ་ གྲོས་འཆར་བཀོད་ཡོདཔ།
 
 ```bash
 cargo xtask soradns-acme-plan \
@@ -256,20 +257,20 @@ cargo xtask soradns-acme-plan \
   --json-out artifacts/sorafs/portal.acme-plan.json
 ```
 
-Commit the JSON alongside the release bundle (or upload it with the change
-ticket) so operators can paste the SAN values into Torii’s
-`torii.sorafs_gateway.acme` configuration and GAR reviewers can confirm the
-canonical/pretty mappings without re-running host derivations. Add additional
-`--name` arguments for each suffix promoted in the same release.
+གསར་བཏོན་བཱན་ཌལ་དང་གཅིག་ཁར་ ཇེ་ཨེསི་ཨོ་ཨེན་འདི་ མཉམ་བསྡོམས་འབད་ (ཡང་ན་ བསྒྱུར་བཅོས་དང་གཅིག་ཁར་ སྐྱེལ་བཙུགས་འབད།
+དེ་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ SAN གནས་གོང་ཚུ་ I18NT0000046X གི་ནང་ལུ་སྦྱར་ཚུགས།
+`torii.sorafs_gateway.acme` རིམ་སྒྲིག་དང་ GAR བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ངེས་དཔྱད་འབད་ཚུགས།
+ཀེ་ནོ་ནིལ་/སྔོན་མའི་སབ་ཁྲ་ཚུ་ ལོག་གཡོག་བཀོལ་མི་ ཧོསིཊི་ བྱུང་རྐྱེན་ཚུ་ མེདཔ་ཨིན། ཁ་སྐོང་རྐྱབས།
+`--name` འདི་ གསར་བཏོན་གཅིག་ནང་ ཁྱབ་སྤེལ་འབད་མི་ རྗེས་འཇུག་རེ་རེ་གི་དོན་ལུ་ རྙིང་མའི་ སྒྲུབ་རྟགས་ཚུ།
 
-## Step 6b — Derive canonical host mappings
+## གོམ་པ་ ༦ཁ — ཀེ་ནོ་ནིག་ཧོསཊི་མེཔ་པིང་ཚུ་ བཏོན་གཏང་།
 
-Before templating GAR payloads, record the deterministic host mapping for every
-alias. `cargo xtask soradns-hosts` hashes each `--name` into its canonical
-label (`<base32>.gw.sora.id`), emits the required wildcard
-(`*.gw.sora.id`), and derives the pretty host (`<alias>.gw.sora.name`). Persist
-the output in the release artefacts so DG-3 reviewers can diff the mapping
-alongside the GAR submission:
+ཇི་ཨར་ པེ་ལོཌི་ཚུ་ ཏན་ཏན་མ་འབད་བའི་ཧེ་མ་ ག་ར་གི་དོན་ལུ་ གཏན་འབེབས་བཟོ་མི་ ཧོསིཊི་སབ་ཁྲ་བཟོ་ནི་འདི་ ཐོ་བཀོད་འབད།
+༤ ལོ། I18NI000000146X རེ་རེ་བཞིན་གྱི་ ཀེ་ནོ་ནིག་ནང་ `--name` རེ་རེ་བཞིན་ ཧ་ཤེཝ་ཨིན།
+fart (`<base32>.gw.sora.id`), དགོས་མཁོའི་ཝའིལ་ཀཌི་འདི་བཏོནམ་ཨིན།
+(`*.gw.sora.id`) དང་ མཛེས་སྡུག་ལྡན་པའི་ཧོསིཊི་ (`<alias>.gw.sora.name`) ལས་ཐོབ་ཡོད། བརྩོན་ཤུགས་; བརྩོན་འགྲུས་
+གསར་བཏོན་འབད་བའི་ཅ་ཆས་ཚུ་ནང་ ཐོན་འབྲས་འདི་ DG-3 བསྐྱར་ཞིབ་པ་ཚུ་གིས་ སབ་ཁྲ་བཟོ་ནི་འདི་ དབྱེ་བ་ཕྱེ་ཚུགས།
+ཇི་ཨར་ ཕུལ་བའི་མཉམ་དུ་:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -277,10 +278,10 @@ cargo xtask soradns-hosts \
   --json-out artifacts/sorafs/portal.canonical-hosts.json
 ```
 
-Use `--verify-host-patterns <file>` to fail fast whenever a GAR or gateway
-binding JSON omits one of the required hosts. The helper accepts multiple
-verification files, making it easy to lint both the GAR template and the
-stapled `portal.gateway.binding.json` in the same invocation:
+`--verify-host-patterns <file>` ལག་ལེན་འཐབ།
+bind JSON གིས་ དགོ་པའི་ ཧོསིཊི་ཚུ་ལས་ གཅིག་བཏོན་གཏངམ་ཨིན། གྲོགས་རམ་པ་དེ་གིས་སྣ་མང་དང་ལེན་འབདཝ་ཨིན།
+བདེན་དཔྱད་ཡིག་སྣོད་ཚུ་ ཇི་ཨེ་ཨར་ ཊེམ་པེལེཊི་དང་ གཉིས་ཆ་རང་ གཉིས་ཆ་རའི་ ལྕོག་ཅན་བཟོཝ་ཨིན།
+fipled `portal.gateway.binding.json` འདི་ འབོད་བརྡ་གཅིག་ནང་:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -290,38 +291,36 @@ cargo xtask soradns-hosts \
   --verify-host-patterns artifacts/sorafs/portal.gateway.binding.json
 ```
 
-Attach the summary JSON and verification log to the DNS/gateway change ticket so
-auditors can confirm the canonical, wildcard, and pretty hosts without re-running
-the derivation scripts. Re-run the command whenever new aliases are added to the
-bundle so subsequent GAR updates inherit the same evidence trail.
+བཅུད་བསྡུས་ JSON དང་ བདེན་དཔྱད་དྲན་ཐོ་ DNS/gateway འགྱུར་བའི་ཤོག་བྱང་འདི་ So ལུ་མཉམ་སྦྲགས་འབད།
+རྩིས་ཞིབ་པ་ཚུ་གིས་ ཀེ་ནོ་ནིཀ་དང་ ཝའིལ་ཀརཌ་ དེ་ལས་ ལོག་སྟེ་མ་བརྒྱུགས་པའི་ མཛེས་སྡུག་ཅན་གྱི་ གཙོ་བོ་ཚུ་ ངེས་གཏན་བཟོ་ཚུགས།
+འབྱུང་ཁུངས་ཡིག་ཚུགས་ཚུ། ག་དུས་གསརཔ་སྦེ་ཁ་སྐོང་བརྐྱབ་པའི་སྐབས་ བརྡ་བཀོད་འདི་ ལོག་གཡོག་བཀོལ།
+དེ་འབདཝ་ལས་ ཤུལ་ལས་ GAR དུས་མཐུན་བཟོ་མི་འདི་གིས་ སྒྲུབ་བྱེད་ཀྱི་ལམ་འདི་ ཤུལ་འཛིན་འབདཝ་ཨིན།
 
-## Step 7 — Generate the DNS cutover descriptor
+## གོ་རིམ་ ༧ པ་ — ཌི་ཨེན་ཨེསི་ བཏོག་བཏང་ནི་གི་འགྲེལ་བཤད་འདི་ བཏོན་གཏང་།
 
-Production cutovers require an auditable change packet. After a successful
-submission (alias binding), the helper emits
-`artifacts/sorafs/portal.dns-cutover.json`, capturing:
+བཟོ་བསྐྲུན་གྱི་བཀག་ཆ་ཚུ་ལུ་ རྩིས་ཞིབ་འབད་བཏུབ་པའི་བསྒྱུར་བཅོས་ཐུམ་སྒྲིལ་དགོཔ་ཨིན། མཐར་ཕྱིན་པའི་རྗེས་སུ།
+ཞུ་ཡིག་ (alias bind), གྲོགས་རམ་པ་ བཏོནམ་ཨིན།
+`artifacts/sorafs/portal.dns-cutover.json`, བཟུང་བ།:- མིང་གཞན་གྱི་མེ་ཊ་ཌེ་ཊ་ (མིང་ས་སྟོང་/མིང་/བདེན་དཔང་, གསལ་སྟོན་, I18NT0000004X URL,
+  བཙུགས་ཡོད་པའི་དུས་རབས་ དབང་ཚད།);
+- གསར་བཏོན་སྐབས་དོན་ (རྟགས་, མིང་བྱང་ཁ་ཡིག་, གསལ་སྟོན་/སི་ཨར་ འགྲུལ་ལམ་, ཆ་ཤས་འཆར་གཞི་, I18NT0000006X
+  བམ་ཆག);
+- བདེན་དཔྱད་དཔག་བྱེད་ (འཚོལ་ཞིབ་བརྡ་བཀོད་, མིང་གཞན་ + Sigstore མཐའ་མཚམས་); དང༌
+- གདམ་ཁ་ཅན་གྱི་བསྒྱུར་བཅོས་-ཚད་འཛིན་ས་སྒོ་ཚུ་ (ཊིག་ཀེཊི་ཨའི་ཌི་, བཏོག་ནིའི་སྒོ་སྒྲིག་, ཨོཔ་ཨོཔ་ཚུ་དང་འབྲེལ་བ་འཐབ་ཨིན།
+  ཐོན་སྐྱེད་ཀྱི་ཧོསིཊི་མིང་/ས་ཁོངས་);
+- གཞི་རྟེན་ `Sora-Route-Binding` ལས་བྱུང་བའི་འགྲུལ་ལམ་ཁྱབ་སྤེལ་གྱི་མེ་ཊ་ཌེ་ཊ་
+  མགོ་ཡིག་ (ཀེར་ནིག་ཧོསིཊི་/སི་ཨའི་ཌི་, མགོ་ཡིག་ + བཱའིན་ཌིང་འགྲུལ་ལམ་ཚུ་, བདེན་དཔྱད་བརྡ་བཀོད་)།
+  ཇི་ཨར་ ཁྱབ་སྤེལ་དང་ མགུ་ཐོམ་པའི་སྦྱོང་བརྡར་ཚུ་ སྒྲུབ་བྱེད་གཅིག་ལུ་ གཞི་བསྟུན་འབད་ནི།
+- བཏོན་ཡོད་པའི་ལམ་ཐིག་འཕྲུལ་འཁོར་གྱི་ཅ་ཆས། (`gateway.route_plan.json`,
+  མགོ་ཡིག་ཊེམ་པེལེཊི་ཚུ་དང་ གདམ་ཁ་ཅན་གྱི་བཤུད་སྒྲིལ་མགོ་ཡིག་ཚུ་) དེ་འབདཝ་ལས་ ཤོག་འཛིན་དང་ སི་ཨའི་བསྒྱུར་བཅོས་འབད།
+  ལིན་ཊི་ཧུཀ་ཚུ་གིས་ ཌི་ཇི་-༣ སྦུང་ཚན་རེ་རེ་གིས་ ཀེ་ནོ་ནིག་གཞི་བསྟུན་འབདཝ་ཨིནམ་བདེན་དཔྱད་འབད་ཚུགས།
+  ཆ་འཇོག་མ་འབད་བའི་ཧེ་མར་ ཡར་འཕེལ་/རྒྱབ་བཤུད་ཀྱི་འཆར་གཞི་;
+- གདམ་ཁ་ཅན་གྱི་ འདྲ་མཛོད་ཆ་མེད་ མེ་ཊ་ཌེ་ཊ་ (purge མཐའ་མཚམས་, auth འགྱུར་ཅན་, JSON
+  པེ་ལོཌི་དང་ དཔེ་ `curl` བརྡ་བཀོད་); དང༌
+- ཧེ་མའི་འགྲེལ་བཤད་ལུ་ དཔག་བྱེད་འབད་མི་ (ངོ་རྟགས་དང་གསལ་སྟོན་བཏོན་གཏང་ནི།
+  ཌའི་གེསི་) དེ་འབདཝ་ལས་ ཤོག་འཛིན་ཚུ་ བསྒྱུར་བཅོས་འབད།
 
-- alias binding metadata (namespace/name/proof, manifest digest, Torii URL,
-  submitted epoch, authority);
-- release context (tag, alias label, manifest/CAR paths, chunk plan, Sigstore
-  bundle);
-- verification pointers (probe command, alias + Torii endpoint); and
-- optional change-control fields (ticket id, cutover window, ops contact,
-  production hostname/zone);
-- route promotion metadata derived from the stapled `Sora-Route-Binding`
-  header (canonical host/CID, header + binding paths, verification commands),
-  ensuring GAR promotion and fallback drills refer to the same evidence;
-- the generated route-plan artefacts (`gateway.route_plan.json`,
-  header templates, and optional rollback headers) so change tickets and CI
-  lint hooks can verify that every DG-3 packet references the canonical
-  promotion/rollback plans before approval;
-- optional cache invalidation metadata (purge endpoint, auth variable, JSON
-  payload, and example `curl` command); and
-- rollback hints pointing at the previous descriptor (release tag and manifest
-  digest) so change tickets capture a deterministic fallback path.
-
-When the release requires cache purges, generate a canonical plan alongside the
-cutover descriptor:
+བཏོན་གཏང་ནི་ལུ་ འདྲ་མཛོད་དགོཔ་ད་ མཉམ་དུ་ ཀེ་ནོ་ནིག་འཆར་གཞི་བཟོ་དགོ།
+བཏོག་པའི་འགྲེལ་བཤད་:
 
 ```bash
 cargo xtask soradns-cache-plan \
@@ -333,15 +332,15 @@ cargo xtask soradns-cache-plan \
   --json-out artifacts/sorafs/portal.cache_plan.json
 ```
 
-Attach the resulting `portal.cache_plan.json` to the DG-3 packet so operators
-have deterministic hosts/paths (and the matching auth hints) when issuing
-`PURGE` requests. The descriptor’s optional cache metadata section can reference
-this file directly, keeping change-control reviewers aligned on exactly which
-endpoints are flushed during a cutover.
+གྲུབ་འབྲས་ `portal.cache_plan.json` འདི་ ཌི་ཇི་-༣ སྦུང་ཚན་ལུ་ བཀོལ་སྤྱོད་པ་ཚུ་ མཉམ་སྦྲགས་འབད།
+གཏན་འབེབས་ཧོས/ལམ་ཚུ་ཡོདཔ་ཨིན། (དང་མཐུན་སྒྲིག་བདེན་བཤད་ཀྱི་བརྡ་སྟོན་ཚུ་)
+`PURGE` ཞུ་བ་ཚུ། འགྲེལ་བཤད་ཀྱི་ འདྲ་མཛོད་མེ་ཊ་ཌེ་ཊ་ དབྱེ་ཚན་གྱིས་ གཞི་བསྟུན་འབད་ཚུགས།
+ཡིག་སྣོད་འདི་ཐད་ཀར་དུ་ བསྒྱུར་བཅོས་ཚད་འཛིན་བསྐྱར་ཞིབ་པ་ཚུ་ ག་དེ་ལུ་ཕྲང་སྒྲིག་འབད་བཞག་དགོ།
+མཐའ་མའི་དུས་ཚོད་ཚུ་ བཏོག་བཏོགཔ་གི་སྐབས་ལུ་ ཕུལཝ་ཨིན།
 
-Every DG-3 packet also needs a promotion + rollback checklist. Generate it via
-`cargo xtask soradns-route-plan` so change-control reviewers can trace the exact
-preflight, cutover, and rollback steps per alias:
+ཌི་ཇི་-༣ སྦུང་ཚན་རེ་ལུ་ ཡར་འཕེལ་དང་ བསྐོར་རྒྱབ་ཀྱི་ བརྟག་ཞིབ་ཐོ་ཡིག་ཡང་དགོཔ་ཨིན། བརྒྱུད་དེ་བཟོ་བཏོན་འབད།
+`cargo xtask soradns-route-plan` དེ་འབདཝ་ལས་ བསྒྱུར་བཅོས་ཚད་འཛིན་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཏག་ཏག་འདི་ འཚོལ་ཞིབ་འབད་ཚུགས།
+འཕུར་འགྲུལ་དང་ བཏོག་ནི་ དེ་ལས་ བསྐོར་རྒྱབ་ཀྱི་གོ་རིམ་ཚུ་ མིང་གཞན་རེ་ལུ་:
 
 ```bash
 cargo xtask soradns-route-plan \
@@ -349,14 +348,14 @@ cargo xtask soradns-route-plan \
   --json-out artifacts/sorafs/gateway.route_plan.json
 ```
 
-The emitted `gateway.route_plan.json` captures canonical/pretty hosts, staged
-health-check reminders, GAR binding updates, cache purges, and rollback actions.
-Bundle it with the GAR/binding/cutover artefacts before submitting the change
-ticket so Ops can rehearse and sign off on the same scripted steps.
+བཏོན་ཡོད་པའི་ `gateway.route_plan.json` འཛིན་བཟུང་ཚུ་ ཀེ་ནོ་ནིག་/པརཊི་ཊི་ཧོསིཊི་ཚུ་ གོ་རིམ་ཡོདཔ།
+གསོ་བའི་ཞིབ་དཔྱད་དྲན་སྐུལ་དང་ ཇི་ཨར་ བཱའིན་ཌིང་དུས་མཐུན་ འདྲ་མཛོད་བཏོག་ནི་ དེ་ལས་ ལོག་བསྐོར་བའི་བྱ་བ་ཚུ་ཨིན།
+བསྒྱུར་བཅོས་འདི་མ་བཙུགས་པའི་ཧེ་མ་ GAR/binding/cutover artects དང་ཅིག་ཁར་བསྡམ་བཞག།
+ཤོག་འཛིན་ Ops གིས་ སྦྱོང་བརྡར་འབད་དེ་ ཡིག་གཟུགས་ཀྱི་ གོ་རིམ་གཅིག་ནང་ མཚན་རྟགས་བཀོད་ཚུགས།
 
-`scripts/generate-dns-cutover-plan.mjs` powers this descriptor and runs
-automatically from `sorafs-pin-release.sh`. To regenerate or customize it
-manually:
+`scripts/generate-dns-cutover-plan.mjs` འགྲེལ་བཤད་འདི་དང་གཡོག་བཀོལ་འབདཝ་ཨིན།
+རང་བཞིན་གྱིས་ `sorafs-pin-release.sh` ལས་ཨིན། བསྐྱར་བཟོ་ཡང་ན་ སྲོལ་སྒྲིག་འབད་ནིའི་དོན་ལུ།
+ལག་ཐོག་ལས་:
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -371,74 +370,74 @@ node scripts/generate-dns-cutover-plan.mjs \
   --previous-dns-plan artifacts/sorafs/previous.dns-cutover.json
 ```
 
-Populate the optional metadata via environment variables before running the pin
-helper:
+པིན་འདི་གཡོག་མ་བཀོལ་བའི་ཧེ་མར་ མཐའ་འཁོར་འགྱུར་ཅན་བརྒྱུད་དེ་ གདམ་ཁའི་མེ་ཊ་ཌེ་ཊ་འདི་ འོས་འདེམས་འབད།
+རོགས་རང:
 
-| Variable | Purpose |
-|----------|---------|
-| `DNS_CHANGE_TICKET` | Ticket ID stored in the descriptor. |
-| `DNS_CUTOVER_WINDOW` | ISO8601 cutover window (e.g., `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
-| `DNS_HOSTNAME`, `DNS_ZONE` | Production hostname + authoritative zone. |
-| `DNS_OPS_CONTACT` | On-call alias or escalation contact. |
-| `DNS_CACHE_PURGE_ENDPOINT` | Cache purge endpoint recorded in the descriptor. |
-| `DNS_CACHE_PURGE_AUTH_ENV` | Env var containing the purge token (defaults to `CACHE_PURGE_TOKEN`). |
-| `DNS_PREVIOUS_PLAN` | Path to the prior cutover descriptor for rollback metadata. |
+| འགྱུར་ཅན་ | དམིགས་ཡུལ། |
+|-----------------------------------------------------------------------------------------------------------------------------------------
+| `DNS_CHANGE_TICKET` | འགྲེལ་བཤད་ནང་གསོག་འཇོག་འབད་ཡོད་པའི་ ཤོག་འཛིན་ཨའི་ཌི། |
+| `DNS_CUTOVER_WINDOW` | ISO8601 གི་བཏོག་བཏོགཔ་ (དཔེར་ན་ `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
+| `DNS_HOSTNAME`, `DNS_ZONE` | ཐོན་སྐྱེད་ཧོསཊི་མིང་ + དབང་ཚད་ཅན་གྱི་ས་ཁོངས། |
+| `DNS_OPS_CONTACT` | On-call alias ཡང་ན་ ཡར་འཕར་གྱི་འབྲེལ་བ་འཐབ་ནི། |
+| `DNS_CACHE_PURGE_ENDPOINT` | འགྲེལ་བཤད་ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ འདྲ་མཛོད་ གཙང་མ་བཟོ་ནི། |
+| `DNS_CACHE_PURGE_AUTH_ENV` | Env var ཡོད་པའི་ གཙང་སྦྲའི་ཊོ་ཀེན་ (`CACHE_PURGE_TOKEN` ལུ་སྔོན་སྒྲིག་) ཡོདཔ་ཨིན། |
+| `DNS_PREVIOUS_PLAN` | ལོག་བསྐོར་རྐྱབ་ནིའི་མེ་ཊ་ཌེ་ཊ་གི་དོན་ལུ་ སྔོན་བཤེར་གསལ་སྟོན་པ་ལུ་འགྲུལ་ལམ་། |
 
-Attach the JSON to the DNS change review so approvers can verify manifest
-digests, alias bindings, and probe commands without scraping CI logs.
-CLI flags `--dns-change-ticket`, `--dns-cutover-window`, `--dns-hostname`,
+ཌི་ཨེན་ཨེསི་བསྒྱུར་བཅོས་བསྐྱར་ཞིབ་ལུ་ ཇེ་ཨེསི་ཨོ་ཨེན་འདི་མཉམ་སྦྲགས་འབད་ནི་ཨིནམ་ལས་ ཆ་འཇོག་འབད་མི་ཚུ་གིས་ གསལ་སྟོན་བདེན་དཔྱད་འབད་ཚུགས།
+CI དྲན་ཐོ་ཚུ་ བཤུད་མ་བཅུག་པར་ བཞུ་ནི་དང་ མིང་གཞན་ བཱའིན་ཌིང་ཚུ་ དེ་ལས་ འཚོལ་ཞིབ་བརྡ་བཀོད་ཚུ་ འབདཝ་ཨིན།
+CLI དར་ཆ་ `--dns-change-ticket`, I18NI0000000174X, I18NI000000175X,
 `--dns-zone`, `--ops-contact`, `--cache-purge-endpoint`,
-`--cache-purge-auth-env`, and `--previous-dns-plan` provide the same overrides
-when running the helper outside CI.
+`--cache-purge-auth-env`, དང་ `--previous-dns-plan` གིས་ དེ་བཟུམ་མའི་ དབང་ཆ་ཚུ་ བྱིནམ་ཨིན།
+གྲོགས་རམ་པ་དེ་ སི་ཨའི་ཕྱི་ཁར་གཡོག་བཀོལ་བའི་སྐབས།
 
-## Step 8 — Emit the resolver zonefile skeleton (optional)
+## གོ་རིམ་༨ པ་ — ཐག་གཅོད་འབད་མི་ས་ཁོངས་ཡིག་སྣོད་ཀེང་རུས་ (གདམ་ཁ་ཅན་) ལུ་འཐུ།
 
-When the production cutover window is known, the release script can emit the
-SNS zonefile skeleton and resolver snippet automatically. Pass the desired DNS
-records and metadata via either environment variables or CLI options; the helper
-will call `scripts/sns_zonefile_skeleton.py` immediately after the cutover
-descriptor is generated. Provide at least one A/AAAA/CNAME value and the GAR
-digest (BLAKE3-256 of the signed GAR payload). If the zone/hostname are known
-and `--dns-zonefile-out` is omitted, the helper writes to
-`artifacts/sns/zonefiles/<zone>/<hostname>.json` and populates
-`ops/soradns/static_zones.<hostname>.json` as the resolver snippet.
+བཟོ་བསྐྲུན་བཏོག་ནིའི་སྒོ་སྒྲིག་འདི་ཤེས་པའི་སྐབས་ གསར་བཏོན་ཡིག་གཟུགས་འདི་གིས་ བཏོན་གཏང་ཚུགས།
+ཨེསི་ཨེན་ཨེསི་ས་ཁོངས་ཡིག་སྣོད་ཀྱི་ཀེང་རུས་དང་ ཐག་གཅོད་འབད་མི་ ཆ་ཤས་ཚུ་ རང་བཞིན་གྱིས་ཨིན། རེ་འདུན་ཡོད་པའི་ཌི་ཨེན་ཨེསི་འདི་སྤྲོད།
+ཐོ་བཀོད་དང་ མེ་ཊ་ཌེ་ཊ་ཚུ་ མཐའ་འཁོར་འགྱུར་ཅན་ ཡང་ན་ སི་ཨེལ་ཨའི་གདམ་ཁ་ཚུ་གི་ཐོག་ལས་; རོགས་རམ་པ།
+`scripts/sns_zonefile_skeleton.py` གིས་ འཕྲལ་མགྱོགས་རང་ ཁ་པར་བཏང་འོང་།
+འགྲེལ་བཤད་འདི་བཟོ་བཏོན་འབད་ཡོདཔ་ཨིན། ཉུང་མཐའ་ A/AAAA/CNAME དང་ GAR ཉུང་མཐའ་གཅིག་བྱིན།
+བཅུད་ལྡན་ (BLAKE3-256 མཚན་རྟགས་བཀོད་པའི་ GAR པེ་ལོཌི)། ས་ཁོངས་/ཧོསིཊི་མིང་ཤེས་པ་ཅིན།
+དང་ `--dns-zonefile-out` འདི་ བཀོ་བཞག་ཡོདཔ་ཨིན།
+`artifacts/sns/zonefiles/<zone>/<hostname>.json` དང་མི་རློབས་ཚུ།
+`ops/soradns/static_zones.<hostname>.json` ཐག་གཅོད་བྱེད་པའི་ཆ་ཤས་སྦེ།
 
-| Variable / flag | Purpose |
-|-----------------|---------|
-| `DNS_ZONEFILE_OUT`, `--dns-zonefile-out` | Path for the generated zonefile skeleton. |
-| `DNS_ZONEFILE_RESOLVER_SNIPPET`, `--dns-zonefile-resolver-snippet` | Resolver snippet path (defaults to `ops/soradns/static_zones.<hostname>.json` when omitted). |
-| `DNS_ZONEFILE_TTL`, `--dns-zonefile-ttl` | TTL applied to generated records (default: 600 seconds). |
-| `DNS_ZONEFILE_IPV4`, `--dns-zonefile-ipv4` | IPv4 addresses (comma-separated env or repeatable CLI flag). |
-| `DNS_ZONEFILE_IPV6`, `--dns-zonefile-ipv6` | IPv6 addresses. |
-| `DNS_ZONEFILE_CNAME`, `--dns-zonefile-cname` | Optional CNAME target. |
-| `DNS_ZONEFILE_SPKI`, `--dns-zonefile-spki-pin` | SHA-256 SPKI pins (base64). |
-| `DNS_ZONEFILE_TXT`, `--dns-zonefile-txt` | Additional TXT entries (`key=value`). |
-| `DNS_ZONEFILE_VERSION`, `--dns-zonefile-version` | Override the computed zonefile version label. |
-| `DNS_ZONEFILE_EFFECTIVE_AT`, `--dns-zonefile-effective-at` | Force the `effective_at` timestamp (RFC3339) instead of the cutover window start. |
-| `DNS_ZONEFILE_PROOF`, `--dns-zonefile-proof` | Override the proof literal recorded in the metadata. |
-| `DNS_ZONEFILE_CID`, `--dns-zonefile-cid` | Override the CID recorded in the metadata. |
-| `DNS_ZONEFILE_FREEZE_STATE`, `--dns-zonefile-freeze-state` | Guardian freeze state (soft, hard, thawing, monitoring, emergency). |
-| `DNS_ZONEFILE_FREEZE_TICKET`, `--dns-zonefile-freeze-ticket` | Guardian/council ticket reference for freezes. |
-| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`, `--dns-zonefile-freeze-expires-at` | RFC3339 timestamp for thawing. |
-| `DNS_ZONEFILE_FREEZE_NOTES`, `--dns-zonefile-freeze-note` | Additional freeze notes (comma-separated env or repeatable flag). |
-| `DNS_GAR_DIGEST`, `--dns-gar-digest` | BLAKE3-256 digest (hex) of the signed GAR payload. Required whenever gateway bindings are present. |
+| འགྱུར་ཅན་ / རྒྱལ་དར་ | དམིགས་ཡུལ། |
+|--------------------------------------- |
+| `DNS_ZONEFILE_OUT`, `--dns-zonefile-out` | བཟོ་བཏོན་འབད་ཡོད་པའི་ ས་ཁོངས་ནང་ཡིག་སྣོད་ཀྱི་ཀེང་རུས་ཀྱི་དོན་ལུ་ ལམ། |
+| `DNS_ZONEFILE_RESOLVER_SNIPPET`, `--dns-zonefile-resolver-snippet` | སེལ་བྱེད་ཀྱི་ བརྡ་རྟགས་འགྲུལ་ལམ་ (བཏོན་གཏང་པའི་སྐབས་ `ops/soradns/static_zones.<hostname>.json` ལུ་སྔོན་སྒྲིག་ཚུ།) |
+| `DNS_ZONEFILE_TTL`, `--dns-zonefile-ttl` | བཟོ་བཏོན་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ལུ་ ཊི་ཊི་ཨེལ་ (སྔོན་སྒྲིག་: སྐར་ཆ་༦༠༠)། |
+| `DNS_ZONEFILE_IPV4`, `--dns-zonefile-ipv4` | IPv4 ཁ་བྱང་ཚུ་ (comma-sparated env ཡང་ན་ བསྐྱར་ལོག་འབད་བཏུབ་པའི་ CLI དར་ཚིག)། |
+| `DNS_ZONEFILE_IPV6`, `--dns-zonefile-ipv6` | IPv6 ཁ་བྱང་། |
+| `DNS_ZONEFILE_CNAME`, `--dns-zonefile-cname` | གདམ་ཁ་ཅན་གྱི་ CNAMe དམིགས་ཚད། |
+| `DNS_ZONEFILE_SPKI`, `--dns-zonefile-spki-pin` | SHA-256 SPKI པིན་ (base64). |
+| `DNS_ZONEFILE_TXT`, `--dns-zonefile-txt` | ཁ་སྐོང་ཊི་ཨེགསི་ཊི་ཐོ་བཀོད་ (`key=value`). |
+| `DNS_ZONEFILE_VERSION`, `--dns-zonefile-version` | རྩིས་སྟོན་འབད་ཡོད་པའི་ས་ཁོངས་ཡིག་སྣོད་ཐོན་རིམ་ཁ་ཡིག་འདི་བཀག་བཞག། |
+| `DNS_ZONEFILE_EFFECTIVE_AT`, `--dns-zonefile-effective-at` | ཀིཊི་ཝར་སྒོ་སྒྲིག་འགོ་བཙུགས་ནིའི་ཚབ་ལུ་ `effective_at` དུས་ཚོད་བཀོད་པ་ (RFC3339) འདི་བཙན་གནོན་འབད། |
+| `DNS_ZONEFILE_PROOF`, `--dns-zonefile-proof` | མེ་ཊ་ཌེ་ཊ་ནང་ ཐོ་བཀོད་འབད་ཡོད་པའི་ བདེན་ཁུངས་ཀྱི་ ཚིག་དོན་འདི་ ཆ་མེད་གཏང་། |
+| `DNS_ZONEFILE_CID`, I18NI000002111X | མེ་ཊ་ཌེ་ཊ་ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ སི་ཨའི་ཌི་འདི་ ཆ་མེད་གཏང་། |
+| `DNS_ZONEFILE_FREEZE_STATE`, `--dns-zonefile-freeze-state` | གཱར་ཌི་ཡན་གྱིས་ གྱང་ཤུགས་ཅན་གྱི་གནས་སྟངས་ (མཉེན་ཆས་དང་ སྲ་ཀྲག་ ཐགཔ་ ལྟ་རྟོག་ གློ་བུར་) ཚུ་ཨིན། |
+| `DNS_ZONEFILE_FREEZE_TICKET`, `--dns-zonefile-freeze-ticket` | གྱང་ཁོག་གྱི་དོན་ལུ་ གཱར་ཌི་ཡན་/ཀོའུན་སིལ་ཤོག་བྱང་གཞི་བསྟུན། |
+| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`, `--dns-zonefile-freeze-expires-at` | RFC3339 དུས་ཚོད་མཚོན་རྟགས་འདི་ མེ་ཏོག་བཏང་ནིའི་དོན་ལུ་ཨིན། |
+| `DNS_ZONEFILE_FREEZE_NOTES`, `--dns-zonefile-freeze-note` | ཁ་སྐོང་གྱང་ཤུགས་ཅན་གྱི་དྲན་འཛིན་ཚུ་ (comma དབྱེ་བ་ཕྱེ་ཡོད་པའི་ env ཡང་ན་ བསྐྱར་ལོག་འབད་བཏུབ་པའི་རྒྱལ་དར་)། |
+| `DNS_GAR_DIGEST`, `--dns-gar-digest` | མཚན་རྟགས་བཀོད་པའི་ GAR པེ་ལོཌ་གི་ BLAKE3-256 བཞུ་ (ཧེགསི་)། འཛུལ་སྒོ་ཚུ་ ནམ་རང་འབད་རུང་ ག་དུས་དགོཔ་ཨིན། |
 
-The GitHub Actions workflow reads these values from repository secrets so every production pin emits the zonefile artefacts automatically. Configure the following secrets (strings may contain comma-separated lists for multi-value fields):
+GitHub Actions ལཱ་གི་རྒྱུན་རིམ་འདི་གིས་ མཛོད་ཁང་གི་གསང་བ་ལས་ གནས་གོང་འདི་ཚུ་ལྷགཔ་ཨིནམ་ལས་ བཟོ་བསྐྲུན་ག་ར་གིས་ རང་བཞིན་གྱིས་ ས་ཁོངས་ཡིག་སྣོད་ཚུ་ རང་བཞིན་གྱིས་ བཏོནམ་ཨིན། འོག་གི་གསང་བ་ཚུ་ (ཡིག་རྒྱུན་ཚུ་ནང་ སྣ་མང་-གནས་གོང་ས་སྒོ་ཚུ་གི་དོན་ལུ་ ལྷོད་རྟགས་སོ་སོ་སྦེ་ཐོ་ཡིག་ཚུ་ཡོདཔ་འོང་):
 
-| Secret | Purpose |
-|--------|---------|
-| `DOCS_SORAFS_DNS_HOSTNAME`, `DOCS_SORAFS_DNS_ZONE` | Production hostname/zone passed to the helper. |
-| `DOCS_SORAFS_DNS_OPS_CONTACT` | On-call alias stored in the descriptor. |
-| `DOCS_SORAFS_ZONEFILE_IPV4`, `DOCS_SORAFS_ZONEFILE_IPV6` | IPv4/IPv6 records to publish. |
-| `DOCS_SORAFS_ZONEFILE_CNAME` | Optional CNAME target. |
-| `DOCS_SORAFS_ZONEFILE_SPKI` | Base64 SPKI pins. |
-| `DOCS_SORAFS_ZONEFILE_TXT` | Additional TXT entries. |
-| `DOCS_SORAFS_ZONEFILE_FREEZE_STATE/TICKET/EXPIRES_AT/NOTES` | Freeze metadata recorded in the skeleton. |
-| `DOCS_SORAFS_GAR_DIGEST` | Hex-encoded BLAKE3 digest of the signed GAR payload. |
+| གསང་བ་ | དམིགས་ཡུལ། |
+|----------|--------------------------------------------------------------------
+| I18NI000002222X, `DOCS_SORAFS_DNS_ZONE` | ཐོན་སྐྱེད་ཧོསཊི་/ས་ཁོངས་འདི་ གྲོགས་རམ་པ་ལུ་སྤྲོད་ཡོདཔ་ཨིན། |
+| I18NI0000024X | འགྲེལ་བཤད་ནང་ བསག་བཞག་སྟེ་ཡོད་མི་ On-call ཚུ། |
+| `DOCS_SORAFS_ZONEFILE_IPV4`, `DOCS_SORAFS_ZONEFILE_IPV6` | དཔར་བསྐྲུན་འབད་ནི་ལུ་ IPv4/IPv6 དྲན་ཐོ་ཚུ། |
+| `DOCS_SORAFS_ZONEFILE_CNAME` | གདམ་ཁ་ཅན་གྱི་ CNAMe དམིགས་ཚད། |
+| `DOCS_SORAFS_ZONEFILE_SPKI` | Base64 SPKI པིན་ཚུ། |
+| `DOCS_SORAFS_ZONEFILE_TXT` | ཁ་སྐོང་ཊི་ཨེགསི་ཊི་ཐོ་བཀོད་ཚུ། |
+| I18NI0000230X | ཀེང་རུས་ནང་ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ རང་དབང་གི་མེ་ཊ་ཌེ་ཊ་ཚུ། |
+| I18NI0000231X | Hex-encoded BLAKE3 མཚན་རྟགས་བཀོད་པའི་ GAR པེ་ལོཌ་གི་ བཞུ་བཅོས་འབད་ཡོདཔ། |
 
-When triggering `.github/workflows/docs-portal-sorafs-pin.yml`, provide the `dns_change_ticket` and `dns_cutover_window` inputs so the descriptor/zonefile inherit the correct change window metadata. Leave them blank only when running dry runs.
+I18NI000000232X འགོ་བཙུགས་པའི་སྐབས་ I18NI000000233X དང་ `dns_cutover_window` ཨིན་པུཊི་ཚུ་བྱིན་ཏེ་ འགྲེལ་བཤད་/ཟོན་ཡིག་སྣོད་འདི་གིས་ འགྱུར་བའི་སྒོ་སྒྲིག་མེ་ཊ་ཌེ་ཊ་ངེས་བདེན་འདི་ ཤུལ་འཛིན་འབདཝ་ཨིན། སྐམ་པའི་གཡོག་བཀོལ་བའི་སྐབས་རྐྱངམ་ཅིག་སྟོངམ་སྦེ་བཞག།
 
-Typical invocation (matching the SN-7 owner runbook):
+སྤྱིར་བཏང་འབོད་བརྡ་ (SN-7 ཇོ་བདག་རྔོན་དེབ་དང་མཐུན་སྒྲིག་འབད་ནི།):
 
 ```bash
 ./docs/portal/scripts/sorafs-pin-release.sh \
@@ -453,42 +452,42 @@ Typical invocation (matching the SN-7 owner runbook):
   …other flags…
 ```
 
-The helper automatically carries over the change ticket as a TXT entry and
-inherits the cutover window start as the `effective_at` timestamp unless
-overridden. For the full operational workflow, see
+གྲོགས་རམ་པ་གིས་ ཊི་ཨེགསི་ཊི་ཐོ་བཀོད་དང་ བསྒྱུར་བཅོས་འབད་ཡོད་པའི་ ཤོག་བྱང་འདི་ རང་བཞིན་གྱིས་ འབག་འོང་།
+མ་གཏོགས་ `effective_at` གི་དུས་ཚོད་རྟགས་བཀོད་པའི་སྐབས་ བཏོག་ནིའི་སྒོ་སྒྲིག་འདི་འགོ་བཙུགསཔ་ཨིན།
+དབང་བཟུང་འབད་ཡོདཔ། བཀོལ་སྤྱོད་ལཱ་གི་རྒྱུན་རིམ་ཆ་ཚང་གི་དོན་ལུ་ བལྟ།
 `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
-### Public DNS delegation note
+### སྤྱི་པའི་ཌི་ཨེན་ཨེསི་སྐུ་ཚབ་དྲན་ཐོ།
 
-The zonefile skeleton only defines authoritative records for the zone. You
-still need to configure parent-zone NS/DS delegation at your registrar or DNS
-provider so the regular internet can discover the nameservers.
+ས་ཁོངས་ཡིག་སྣོད་ཀྱི་ཀེང་རུས་འདི་གིས་ ས་ཁོངས་འདི་གི་དོན་ལུ་ དབང་ཚད་ཅན་གྱི་ཐོ་བཀོད་ཚུ་རྐྱངམ་ཅིག་ ངེས་ཚིག་བརྗོདཔ་ཨིན། ཁྱོད
+ཕ་མ་-ས་ཁོངས་ཨེན་ཨེསི་/ཌི་ཨེསི་སྐུ་ཚབ་འདི་ ཁྱོད་རའི་ཐོ་བཀོད་ཡང་ན་ ཌི་ཨེན་ཨེསི་ལུ་ རིམ་སྒྲིག་འབད་དགོ།
+མཁོ་སྤྲོད་འབད་མི་དེ་གིས་ དུས་རྒྱུན་གྱི་ཡོངས་འབྲེལ་གྱིས་ མིང་བལྟ་རྟོག་པ་ཚུ་ འཚོལ་ཞིབ་འབད་ཚུགས།
 
-- For apex/TLD cutovers, use ALIAS/ANAME (provider-specific) or publish A/AAAA
-  records pointing at the gateway anycast IPs.
-- For subdomains, publish a CNAME to the derived pretty host
+- ཨེ་པེགསི་/ཊི་ཨེལ་ཌི་ མཐུད་མཚམས་ཚུ་གི་དོན་ལུ་ ALIAS/ANAME (བྱིན་མི་-དམིགས་བསལ་) ལག་ལེན་འཐབ། ཡང་ན་ A/AAA དཔར་བསྐྲུན་འབད།
+  འཛུལ་སྒོ་གི་ཨོར་ཀཱསིཊི་ཨའི་པི་ཚུ་ནང་ལུ་ བརྡ་བཀོད་འབད་མི་དྲན་ཐོ་ཚུ།
+- ཡན་ལག་མངའ་ཁོངས་ཚུ་གི་དོན་ལུ་ འབྱུང་ཁུངས་མཛེས་སྡུག་ཧོསིཊི་ལུ་ སི་ཨེན་ཨེ་ཨེམ་ཅིག་དཔར་བསྐྲུན་འབད།
   (`<fqdn>.gw.sora.name`).
-- The canonical host (`<hash>.gw.sora.id`) stays under the gateway domain and
-  is not published inside your public zone.
+- ཀེ་ནོ་ཀཱལ་ཧོསིཊི་ (`<hash>.gw.sora.id`) འདི་ སྒོ་སྒྲིག་མངའ་ཁོངས་དང་ འོག་ལུ་སྡོདཔ་ཨིན།
+  འདི་ ཁྱོད་རའི་མི་མང་ས་ཁོངས་ནང་ལུ་ དཔར་བསྐྲུན་འབད་མི་བཏུབ།
 
-### Gateway header template
+### སྒོ་ཁའི་མགོ་ཡིག་ཊེམ་པེལེཊི་།
 
-The deploy helper also emits `portal.gateway.headers.txt` and
-`portal.gateway.binding.json`, two artefacts that satisfy DG-3’s
-gateway-content-binding requirement:
+བཀོལ་སྤྱོད་འབད་མི་གྲོགས་རམ་པ་འདི་གིས་ `portal.gateway.headers.txt` དང་།
+`portal.gateway.binding.json`, DG-3’s གི་ཡིད་ཚིམས་པའི་ ཅ་ཆས།
+འཛུལ་སྒོ་ནང་དོན་བསྡམས་པའི་དགོས་མཁོ།
 
-- `portal.gateway.headers.txt` contains the full HTTP header block (including
-  `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS, and the
-  `Sora-Route-Binding` descriptor) that edge gateways must staple onto every
-  response.
-- `portal.gateway.binding.json` records the same information in machine-readable
-  form so change tickets and automation can diff host/cid bindings without
-  scraping shell output.
+- `portal.gateway.headers.txt` ནང་ ཨེཆ་ཊི་ཊི་པི་མགོ་ཡིག་ཆ་ཚང་ (རྩིས་ཏེ་ ཆ་ཚང་ཡོདཔ་ཨིན།
+  `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS, དང་
+  `Sora-Route-Binding` འགྲེལ་བཤད་) མཐའ་མཚམས་ཀྱི་སྒོ་ར་ཚུ་གིས་ ག་ར་ལུ་ བཀྲམ་སྤེལ་དགོཔ་ཨིན།
+  ལན་གསལ།
+- I18NI000000246X འཕྲུལ་ཆས་ལྷག་བཏུབ་མི་ནང་ བརྡ་དོན་གཅིག་མཚུངས་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན།
+  བསྒྱུར་བཅོས་འབད་ནི་འདི་གིས་ ཤོག་འཛིན་དང་ རང་བཞིན་གྱིས་ ཧོསཊི་/སིཌ་བཱའིན་ཌིང་ཚུ་ མེད་པར་ ཁྱབ་སྤེལ་འབད་ཚུགས།
+  ཤེལ་གྱི་ཐོན་འབྲས་ཚུ་བཤུབ་གཏང་དོ་ཡོདཔ།
 
-They are generated automatically via
+དེ་ཚུ་ རང་བཞིན་གྱིས་བཟོ་བཏོན་འབདཝ་ཨིན།
 `cargo xtask soradns-binding-template`
-and capture the alias, manifest digest, and gateway hostname that were supplied
-to `sorafs-pin-release.sh`. To regenerate or customise the header block, run:
+དེ་ལས་ མིང་གཞན་དང་ བཞུ་ནི་ དེ་ལས་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ འཛུལ་སྒོ་གི་མིང་ཚུ་ བཟུང་དགོ།
+ལས་ `sorafs-pin-release.sh`. མགོ་ཡིག་སྡེབ་ཚན་འདི་ བསྐྱར་བཟོ་ཡང་ན་ སྲོལ་སྒྲིག་འབད་ནི་ལུ་ གཡོག་བཀོལ།
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -500,18 +499,18 @@ cargo xtask soradns-binding-template \
   --headers-out artifacts/sorafs/portal.gateway.headers.txt
 ```
 
-Pass `--csp-template`, `--permissions-template`, or `--hsts-template` to override
-the default header templates when a specific deployment needs additional
-directives; combine them with the existing `--no-*` switches to drop a header
-entirely.
+`--csp-template`, `--permissions-template`, ཡང་ན་ I18NI000000251X འདི་བཀག་ཆ་འབད་ནི།
+དམིགས་བསལ་བཀྲམ་སྤེལ་ཅིག་ཁ་སྐོང་དགོ་པའི་སྐབས་ སྔོན་སྒྲིག་མགོ་ཡིག་ཊེམ་པེལེཊི་ཚུ།
+བཀོད་རྒྱ།; མགོ་ཡིག་ཅིག་བཀོག་བཞག་ནིའི་དོན་ལུ་ ད་ལྟོ་ཡོད་པའི་ `--no-*` སོར་བསྒྱུར་ཚུ་དང་གཅིག་ཁར་ མཉམ་སྡེབ་འབད།
+ཆ་ཚང་
 
-Attach the header snippet to the CDN change request and feed the JSON document
-into the gateway automation pipeline so the actual host promotion matches the
-release evidence.
+སི་ཌི་ཨེན་བསྒྱུར་བཅོས་ཀྱི་ཞུ་བ་ལུ་ མགོ་ཡིག་ཕྲེང་བ་འདི་མཉམ་སྦྲགས་འབད་ཞིནམ་ལས་ ཇེ་ཨེསི་ཨོ་ཨེན་ ཡིག་ཆ་འདི་ལུ་ ལྟོ་བྱིན་དགོ།
+འདོན་སྤེལ།: ༢༠༡༠/༠༧/༠༣ རིག་པ།(༠) འདི་ཡང་ གཟའ་ཉི་མའི་ཉིན།
+གསར་བཏོན་སྒྲུབ་བྱེད་ .
 
-The release script runs the verification helper automatically so DG-3 tickets
-always include recent evidence. Re-run it manually whenever you tweak the
-binding JSON by hand:
+གསར་བཏོན་ཡིག་ཚུགས་འདི་གིས་ བདེན་བཤད་འབད་མི་ གྲོགས་རམ་པ་འདི་ རང་བཞིན་གྱིས་ གཡོག་བཀོལཝ་ལས་ ཌི་ཇི་-༣ ཤོག་འཛིན་ཚུ་ གཡོག་བཀོལཝ་ཨིན།
+རྟག་བུ་རང་ འཕྲལ་གྱི་སྒྲུབ་བྱེད་ཚུ་ཚུདཔ་ཨིན། ཁྱོད་ཀྱིས་ བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ ལོག་སྟེ་ གཡོག་བཀོལ།
+ལགཔ་གིས་ JSON བསྡམ་བཞག་།
 
 ```bash
 cargo xtask soradns-verify-binding \
@@ -522,26 +521,24 @@ cargo xtask soradns-verify-binding \
   --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
-The command validates the `Sora-Proof` payload captured in the binding bundle,
-ensures the `Sora-Route-Binding` metadata matches the manifest CID + hostname,
-and fails fast if any header drifts. Archive the console output next to the
-other deployment artefacts whenever you run the command outside CI so DG-3
-reviewers have proof that the binding was validated prior to cutover.
+བརྡ་བཀོད་ཀྱིས་ བཱའིན་ཌིང་བཱན་ཌལ་ནང་ བཟུང་ཡོད་པའི་ `Sora-Proof` པེ་ལོཌི་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+`Sora-Route-Binding` མེ་ཊ་ཌེ་ཊ་གིས་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་སི་ཨའི་ཌི་+ ཧོསིཊི་མིང་འདི་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+དང་ མགོ་ཡིག་གི་འཕྱེལ་འགྱོ་བ་ཅིན་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འགྱོཝ་ཨིན། དེ་གི་སྦོ་ལོགས་ཁར་ ཀོན་སོལ་ཨའུཊི་པུཊི་ ཞུན་དག་འབད།
+ཁྱོད་ཀྱིས་ CI དེ་ DG-3 གི་ཕྱི་ཁར་ བརྡ་བཀོད་གཡོག་བཀོལ་བའི་སྐབས་ གཞན་བཀྲམ་སྤེལ་ཅ་ཆ།
+བསྐྱར་ཞིབ་འབད་མི་ཚུ་ལུ་ འབྲེལ་མཐུན་འདི་ བཏོག་མ་བཏང་པའི་ཧེ་མ་ བདེན་དཔྱད་འབད་ཡོདཔ་སྦེ་ བདེན་ཁུངས་ཡོདཔ་ཨིན།> **DNS འགྲེལ་བཤད་མཉམ་བསྡོམས་:** `portal.dns-cutover.json` ད་ལྟ་ a བཙུགསཔ་ཨིན།
+> I18NI0000256X དབྱེ་ཚན་འདི་དག་ལ་འདི་དག་ལ་མཚོན་བྱེད་ (འགྲུལ་ལམ་ཚུ་, ནང་དོན་སི་ཨའི་ཌི།,
+> བདེན་དཔང་གནས་རིམ་དང་ ཡིག་ཆའི་མགོ་ཡིག་ཊེམ་པེལེཊི་) **དང་** a `route_plan` བརྡ་རྟགས་།
+> `gateway.route_plan.json` དང་ གཙོ་བོ་+བསྐོར་སྐྱོད་མགོ་ཡིག་ཚུ་གཞི་བསྟུན་འབདཝ་ཨིན།
+> ཊེམ་པེལེཊི་ཚུ། བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ཌི་ཇི་-༣ བསྒྱུར་བཅོས་ཀྱི་ ཤོག་འཛིན་རེ་རེ་ནང་ བཀག་ཆ་འབད་མི་ཚུ་ ཚུད་དགོ།
+> ཏན་ཏན་སྦེ་ `Sora-Name/Sora-Proof/CSP` གནས་གོང་ཚུ་ ཁ་ཕྱེ་ཞིནམ་ལས་ འགྲུལ་ལམ་འདི་ ངེས་དཔྱད་འབད།
+> ཡར་འཕེལ་/རོལ་ལོག་འཆར་གཞི་ཚུ་ བཟོ་བསྐྲུན་འདི་ཁ་ཕྱེ་མ་དགོ་པར་ སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+> ཡིག་མཛོད་པ།
 
-> **DNS descriptor integration:** `portal.dns-cutover.json` now embeds a
-> `gateway_binding` section pointing at these artefacts (paths, content CID,
-> proof status, and the literal header template) **and** a `route_plan` stanza
-> referencing `gateway.route_plan.json` plus the main + rollback header
-> templates. Include those blocks in every DG-3 change ticket so reviewers can
-> diff the exact `Sora-Name/Sora-Proof/CSP` values and confirm that the route
-> promotion/rollback plans match the evidence bundle without opening the build
-> archive.
+## གོམ་པ་༩ — པར་སྐྲུན་འབད་ནི།
 
-## Step 9 — Run publishing monitors
-
-Roadmap task **DOCS-3c** requires continuous evidence that the portal, Try it
-proxy, and gateway bindings stay healthy after a release. Run the consolidated
-monitor immediately after Steps 7–8 and wire it into your scheduled probes:
+ལམ་སྟོན་ལཱ་ **DOCS-3c**
+proxy, དང་ འཛུལ་སྒོ་གི་བསྡམ་ཐག་ཚུ་ བཏོན་གཏང་པའི་ཤུལ་ལས་ བདེ་ཏོག་ཏོ་སྦེ་སྡོདཔ་ཨིན། མཉམ་བསྡོམས་འབད་ཡོད་མི་གཡོག་བཀོལ།
+གོམ་པ་༧-༨ གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ བལྟ་རྟོག་འབད་ཞིནམ་ལས་ ཁྱོད་རའི་དུས་ཚོད་བཀོད་ཡོད་པའི་འཚོལ་ཞིབ་ཚུ་ནང་ གློག་ཐག་འཐབ།
 
 ```bash
 cd docs/portal
@@ -551,89 +548,86 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/${RELEASE_TAG}/monitoring
 ```
 
-- `scripts/monitor-publishing.mjs` loads the config file (see
-  `docs/portal/docs/devportal/publishing-monitoring.md` for the schema) and
-  executes three checks: portal path probes + CSP/Permissions-Policy validation,
-  Try it proxy probes (optionally hitting its `/metrics` endpoint), and the
-  gateway binding verifier (`cargo xtask soradns-verify-binding`) which checks
-  the captured binding bundle against the expected alias, host, proof status,
-  and manifest JSON.
-- The command exits non-zero whenever any probe fails so CI, cron jobs, or
-  runbook operators can halt a release before promoting aliases.
-- Passing `--json-out` writes a single summary JSON payload with per-target
-  status; `--evidence-dir` emits `summary.json`, `portal.json`, `tryit.json`,
-  `binding.json`, and `checksums.sha256` so governance reviewers can diff the
-  results without re-running the monitors. Archive this directory under
-  `artifacts/sorafs/<tag>/monitoring/` alongside the Sigstore bundle and DNS
-  cutover descriptor.
-- Include the monitor output, Grafana export (`dashboards/grafana/docs_portal.json`),
-  and Alertmanager drill ID in the release ticket so the DOCS-3c SLO can be
-  audited later. The dedicated publishing monitor playbook lives at
+- I18NI000000260X རིམ་སྒྲིག་ཡིག་སྣོད་(se) མངོན་གསལ་འབདཝ་ཨིན།
+  ལས་འཆར་གྱི་དོན་ལུ་ `docs/portal/docs/devportal/publishing-monitoring.md`) དང་།
+  ཞིབ་དཔྱད་གསུམ་ལག་ལེན་འཐབ་ཨིན་: དྲྭ་ལམ་འགྲུལ་ལམ་འདི་གིས་ འཚོལ་ཞིབ་ཚུ་ + CSP/Permissions-Policy བདེན་དཔྱད་,
+  འདི་ངོ་ཚབ་འཚོལ་ཞིབ་ (གདམ་ཁ་ཅན་སྦེ་ `/metrics` མཐའ་མཚམས་ལུ་ཕོག་ཡོདཔ་ཨིན།) དང་ དེ་ལས་
+  འཛུལ་སྒོ་བཱའིན་ཌིང་བདེན་དཔྱད་ (`cargo xtask soradns-verify-binding`) གིས་ ཞིབ་དཔྱད་འབདཝ་ཨིན།
+  རེ་བ་བསྐྱེད་པའི་བཱའིན་ཌིང་བཱན་ཌལ་འདི་ རེ་བ་བསྐྱེད་མི་ མིང་གཞན་དང་ གཙོ་འཛིན་ བདེན་དཔང་གནས་རིམ་ཚུ་ཨིན།
+  དང་ JSON གསལ་སྟོན་འབད།
+- བརྡ་བཀོད་འདི་གིས་ འཚོལ་ཞིབ་གང་རུང་ཅིག་འཐུས་ཤོར་འབྱུང་པ་ཅིན་ ཀླད་ཀོར་མེན་པའི་ཕྱིར་འཐོན་འབདཝ་ཨིན་ དེ་འབདཝ་ལས་ CI དང་ cron ལཱ་གཡོག་ཚུ་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་
+  རན་བུཀ་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མིང་གཞན་ཚུ་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ བཏོན་གཏང་ནི་བཀག་ཆ་འབད་ཚུགས།
+- I18NI000000264X དམིགས་གཏད་རེ་རེ་བཞིན་ JSON payload འདི་ བཅུད་བསྡུས་རྐྱང་པ་ཅིག་བྲིས།
+  གནས་ཚད; I18NI000000265X གིས་ `summary.json`, I18NI0000000267X, I18NI0000000268X, ཨིན།
+  `binding.json`, དང་ `checksums.sha256` དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ དབྱེ་བ་ཕྱེ་ཚུགས།
+  བལྟ་རྟོག་པ་ཚུ་ལོག་སྟེ་མ་བརྒྱུགས། འོག་གི་སྣོད་ཐོ་འདི་ འོག་ལུ་ ཡིག་མཛོད་འབད།
+  `artifacts/sorafs/<tag>/monitoring/` Sigstore བཱན་ཌལ་དང་ཌི་ཨེན་ཨེསི་དང་གཅིག་ཁར་ཨིན།
+  cutover འགྲེལ་བཤད།
+- བལྟ་རྟོག་པའི་ཨའུཊི་པུཊི་འདི་ བཙུགས་དགོ། Grafana ཕྱིར་འདྲེན་ (`dashboards/grafana/docs_portal.json`).
+  དང་ གསར་བཏོན་ཤོག་བྱང་ནང་ ཨེལ་ཨེར་ཊི་མ་ནར་གྱི་ ཨིཌི་ ཨའི་ཌི་ དེ་འབདཝ་ལས་ ཌི་ཨོ་སི་-༣ སི་ ཨེསི་ཨེལ་ཨོ་འདི་ འབད་ཚུགས།
+  ཤུལ་ལས་རྩིས་ཞིབ་འབད་ཡོདཔ། བརྩོན་ཤུགས་ཅན་གྱི་དཔེ་སྐྲུན་ལྟ་རྟོག་དེབ་འདི་ ༢༠༡༦ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
   `docs/portal/docs/devportal/publishing-monitoring.md`.
 
-Portal probes require HTTPS and reject `http://` base URLs unless
-`allowInsecureHttp` is set in the monitor config; keep production/staging
-targets on TLS and only enable the override for local previews.
+དྲྭ་ཐོག་འཚོལ་ཞིབ་ཚུ་ལུ་ ཨེཆ་ཊི་ཊི་པི་ཨེསི་དགོཔ་དང་ `http://` གཞི་རྟེན་ཡུ་ཨར་ཨེལ་ཚུ་མ་གཏོགས་ གཞན་ག་ནི་ཡང་མེདཔ་ཨིན།
+`allowInsecureHttp` འདི་ ལྟ་རྟོག་རིམ་སྒྲིག་ནང་གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན། བཟོ་བསྐྲུན་/གནས་རིམ་བཞག་ནི།
+ཊི་ཨེལ་ཨེསི་གུ་དམིགས་གཏད་ཚུ་དང་ ཉེ་གནས་སྔོན་ལྟ་ཚུ་གི་དོན་ལུ་ བཀག་ཆ་འབད་མི་འདི་རྐྱངམ་ཅིག་ལྕོགས་ཅན་བཟོ།
 
-Automate the monitor via `npm run monitor:publishing` in Buildkite/cron once the
-portal is live. The same command, pointed at production URLs, feeds the ongoing
-health checks that SRE/Docs rely on between releases.
+བལྟ་རྟོག་པ་འདི་ `npm run monitor:publishing` བརྒྱུད་དེ་ བཱའིཊི་ཀི་ཊི་/ཀྲོ་རོན་ནང་ ཚར་གཅིག་ ནང་འཐབ།
+portal འདི་ ཐད་རི་བ་རི་ཨིན། བརྡ་བཀོད་གཅིགཔོ་འདི་ བཟོ་བསྐྲུན་ཡུ་ཨར་ཨེལ་ཚུ་ལུ་དཔག་ཡོད་པའི་ བརྡ་བཀོད་འདི་ འཕྲོ་མཐུད་དེ་ཡོད་མི་ལུ་ ལྟོ་བྱིནམ་ཨིན།
+གསོ་བའི་བརྟག་དཔྱད་འདི་ SRE/Docs འདི་ གསར་བཏོན་ཚུ་གི་བར་ན་ བརྟེན་དོ་ཡོདཔ་ཨིན་ན་ བརྟག་དཔྱད་འབདཝ་ཨིན།
 
-## Automating with `sorafs-pin-release.sh`
+## I18NI0000277X དང་བཅས་རང་འཇལ།
 
-`docs/portal/scripts/sorafs-pin-release.sh` encapsulates Steps 2–6. It:
+`docs/portal/scripts/sorafs-pin-release.sh` གིས་ གོ་རིམ་༢ལས་༦གི་བར་ན་ ཚུད་དེ་ཡོདཔ་ཨིན། འདི:
 
-1. archives `build/` into a deterministic tarball,
-2. runs `car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`,
-   and `proof verify`,
-3. optionally executes `manifest submit` (including alias binding) when Torii
-   credentials are present, and
-4. writes `artifacts/sorafs/portal.pin.report.json`, the optional
-  `portal.pin.proposal.json`, the DNS cutover descriptor (after submissions),
-  and the gateway binding bundle (`portal.gateway.binding.json` plus the
-  text header block) so governance, networking, and ops teams can diff the
-  evidence bundle without scraping CI logs.
+1. གཏན་མཛོད་ `build/` འདི་ ཐག་གཅོད་ཀྱི་ ཊར་བཱོལ་ཅིག་ལུ་ འགྱུར་ཡོདཔ་ཨིན།
+2. `car pack`, `manifest build`, I18NI000000282X, `manifest verify-signature`,
+   དང་ `proof verify`,
+3. གདམ་ཁ་ཅན་སྦེ་ `manifest submit` (མིང་གཞན་བཱའིན་ཌིང་ཚུ་རྩིས་ཏེ་) I18NT0000049X འབད་བའི་སྐབས་ ལག་ལེན་འཐབ་ཨིན།
+   ཡིད་ཆེས་ཡོད་པའི་ཡིག་ཆ་ཚུ་ཡོདཔ་ཨིན།
+4. `artifacts/sorafs/portal.pin.report.json` བྲིས།, གདམ་ཁ་ཅན།
+  `portal.pin.proposal.json`, ཌི་ཨེན་ཨེསི་ བཏོག་བཏང་པའི་འགྲེལ་བཤད་ (ཕུལ་བའི་ཤུལ་ལས་)།
+  དང་ འཛུལ་སྒོ་བསྡམས་པའི་ བསྡམས་ (`portal.gateway.binding.json` དང་།
+  ཚིག་ཡིག་མགོ་ཡིག་སྡེབ་ཚན་) དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་དང་ ཡོངས་འབྲེལ་ དེ་ལས་ ཨོཔ་སྡེ་ཚན་ཚུ་གིས་ ཁ་ཕྱེ་ཚུགས།
+  CI གི་དྲན་ཐོ་ཚུ་ མ་བཏོན་པར་ སྒྲུབ་བྱེད་བཱན་ཌ།
 
-Set `PIN_ALIAS`, `PIN_ALIAS_NAMESPACE`, `PIN_ALIAS_NAME`, and (optionally)
-`PIN_ALIAS_PROOF_PATH` before invoking the script. Use `--skip-submit` for dry
-runs; the GitHub workflow described below toggles this via the `perform_submit`
-input.
+`PIN_ALIAS`, `PIN_ALIAS_NAMESPACE`, `PIN_ALIAS_NAME`, དང་ (གདམ་ཁ་ཅན་སྦེ་) གཞི་སྒྲིག་འབད།
+`PIN_ALIAS_PROOF_PATH` ཡིག་ཆ་འདི་ འབོད་བརྡ་མ་འབད་བའི་ཧེ་མ་ཨིན། སྐམ་པའི་དོན་ལུ་ `--skip-submit` ལག་ལེན་འཐབ།
+རན་ཚུ་; འདི་གི་འོག་ལུ་གསལ་བཀོད་འབད་ཡོད་པའི་ GitHub ལཱ་གི་རྒྱུན་རིམ་འདི་ `perform_submit` བརྒྱུད་དེ་ སོར་བསྒྱུར་འབདཝ་ཨིན།
+ཨིན་པུཊ་.
 
-## Step 8 — Publish OpenAPI specs & SBOM bundles
+## གོ་རིམ་ ༨ — I18NT0000023X ཁྱད་ཚད་དང་ SBOM བང་སྒྲིག།
 
-DOCS-7 requires the portal build, OpenAPI spec, and SBOM artefacts to travel
-through the same deterministic pipeline. The existing helpers cover all three:
+DOCS-7 ལུ་ དྲྭ་ཚིགས་བཟོ་བསྐྲུན་དང་ I18NT0000024X ཁྱད་ཚད་དང་ འགྲུལ་སྐྱོད་འབད་ནིའི་དོན་ལུ་ SBOM ཅ་ཆས་ཚུ་དགོཔ་ཨིན།
+གཅིག་པའི་གཏན་འབེབས་ཀྱི་ཆུ་ཐིག་བརྒྱུད་དེ་། ད་ལྟོ་ཡོད་པའི་གྲོགས་རམ་པ་ཚུ་གིས་ གསུམ་ཆ་ར་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
 
-1. **Regenerate & sign the spec.**
+༡ **བསྐྱར་གསོ་འབད་དེ་ ཁྱད་ཚད་ལུ་ མཚན་རྟགས་བཀོད།**
 
-   ```bash
-   npm run sync-openapi -- --version=2025-q3 --mirror=current --latest
-   cargo xtask openapi --sign docs/portal/static/openapi/manifest.json
-   ```
+   I18NF0000007X
 
-   Pass a release label via `--version=<label>` whenever you want to preserve a
-   historical snapshot (for example `2025-q3`). The helper writes the snapshot
-   to `static/openapi/versions/<label>/torii.json`, mirrors it into
-   `versions/current`, and records the metadata (SHA-256, manifest status, and
-   updated timestamp) in `static/openapi/versions.json`. The developer portal
-   reads that index so the Swagger/RapiDoc panels can present a version picker
-   and display the associated digest/signature info inline. Omitting
-   `--version` keeps the previous release labels intact and only refreshes the
-   `current` + `latest` pointers.
+   ཁྱོད་ཀྱིས་ ག་དུས་འབད་རུང་ `--version=<label>` བརྒྱུད་དེ་ གསར་བཏོན་ཁ་ཡིག་ཅིག་ བརྒྱུད་དེ་ ཅིག་ ཉམས་སྲུང་འབད་དགོ་མནོཝ་ད་ བརྒྱུད་གཏང་།
+   ལོ་རྒྱུས་ཀྱི་པར་རིས། (དཔེར་ན་ `2025-q3`). གྲོགས་རམ་པ་འདི་གིས་ པར་འདི་བྲིས།
+   to `static/openapi/versions/<label>/torii.json`, ནང་དུ་མེ་ལོང་།
+   `versions/current`, དེ་ལས་ མེ་ཊ་ཌེ་ཊ་ (SHA-256, གསལ་སྟོན་གནས་རིམ་, དང་ དེ་ལས་ ཐོ་བཀོད་འབདཝ་ཨིན།
+   དུས་མཐུན་བཟོ་ཡོད་པའི་དུས་ཚོད་བརྡ་རྟགས་) ནང་ `static/openapi/versions.json`. གོང་འཕེལ་གཏོང་མཁན་གྱི་དྲ་ཁྱབ།
+   ཟུར་ཐོ་དེ་ལྷག
+   དང་ འབྲེལ་ཡོད་ བཞུ་བཅོས་/མཚན་རྟགས་བརྡ་དོན་ ནང་ཐིག་བཀྲམ་སྟོན་འབད། བདོག་གཏད།
+   `--version` གིས་ ཧེ་མའི་གསར་བཏོན་ཁ་ཡིག་ཚུ་ ཉམས་མ་བཅུགཔ་ལས་རྐྱངམ་ཅིག་ གསར་བསྐྲུན་འབདཝ་ཨིན།
+   `current` + `latest` དཔག་བྱེད་ཚུ།
 
-   The manifest captures SHA-256/BLAKE3 digests so the gateway can staple
-   `Sora-Proof` headers for `/reference/torii-swagger`.
+   མངོན་རྟགས་འདི་གིས་ SHA-256/BLAKE3 བཞུ་བཅུག་དོ་ཡོདཔ་ལས་ འཛུལ་སྒོ་འདི་གིས་ བཞུ་ཚུགས།
+   `Sora-Proof` མགོ་ཡིག་ `/reference/torii-swagger`.
 
-2. **Emit CycloneDX SBOMs.** The release pipeline already expects syft-based
-   SBOMs per `docs/source/sorafs_release_pipeline_plan.md`. Keep the output
-   next to the build artefacts:
+2. **རླུང་འཚུབ་DX SBOMs.** གསར་བཏོན་པའི་མདོང་ལམ་འདི་ཧེ་མ་ལས་རང་རེ་བ་བསྐྱེདཔ་ཨིན།
+   `docs/source/sorafs_release_pipeline_plan.md` ལུ་ SBOMs. ཐོན་འབྲས་འདི་བཞག།
+   བཟོ་བསྐྲུན་གྱི་ཅ་རྙིང་ཚུ་ལུ།
 
    ```bash
    syft dir:build -o json > "$OUT"/portal.sbom.json
    syft file:docs/portal/static/openapi/torii.json -o json > "$OUT"/openapi.sbom.json
    ```
 
-3. **Pack each payload into a CAR.**
+3. **པེ་ལོཌི་རེ་རེ་བཞིན་ CAR ནང་།**
 
    ```bash
    sorafs_cli car pack \
@@ -649,32 +643,32 @@ through the same deterministic pipeline. The existing helpers cover all three:
      --summary-out "$OUT"/portal.sbom.car.json
    ```
 
-   Follow the same `manifest build` / `manifest sign` steps as the main site,
-   tuning aliases per asset (for example, `docs-openapi.sora` for the spec and
-   `docs-sbom.sora` for the signed SBOM bundle). Maintaining distinct aliases
-   keeps SoraDNS proofs, GARs, and rollback tickets scoped to the exact payload.
+   `manifest build` / I18NI000000307X ས་ཁོངས་ངོ་མ་དང་འདྲ་བའི་རིམ་པ་ལུ་བལྟ།
+   རྒྱུ་དངོས་རེ་ལུ་ མིང་གཞན་ཚུ་ (དཔེར་ན་ `docs-openapi.sora` དང་ ཁྱད་ཚད་དང་ དང་།
+   མིང་རྟགས་བཀོད་པའི་ཨེསི་བི་ཨོ་ཨེམ་བཱན་ཌལ་གྱི་དོན་ལུ་ `docs-sbom.sora`)། ཁྱད་དུ་འཕགས་པ་ཚུ་བདག་འཛིན་འཐབ་ནི།
+   SoraDNS གི་བདེན་ཁུངས་དང་ GARs དེ་ལས་ ཕྱིར་ལོག་གི་ཤོག་འཛིན་ཚུ་ པེ་ལོཌ་ངོ་མ་ལུ་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
 
-4. **Submit and bind.** Reuse the existing authority + Sigstore bundle, but
-   record the alias tuple in the release checklist so auditors can track which
-   Sora name maps to which manifest digest.
+4. ** ད་ལྟོ་ཡོད་པའི་དབང་ཚད་ + I18NT0000008X བཱན་ཌལ་ ཡང་བསྐྱར་ལག་ལེན་འཐབ།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ བཏོན་གཏང་མི་ བརྟག་ཞིབ་ཐོ་ཡིག་ནང་ མིང་གཞན་ ཊུཔ་ལི་འདི་ ཐོ་བཀོད་འབད།
+   Sora གིས་ མངོན་གསལ་ཅན་གྱི་ བཞུ་བཅུག་སའི་ས་ཁྲ་ཚུ།
 
-Archiving the spec/SBOM manifests alongside the portal build ensures every
-release ticket contains the full artefact set without rerunning the packer.
+དྲྭ་ཚིགས་འདི་གི་སྦོ་ལོགས་ཁར་ ཁྱད་ཚད་/ཨེསི་བི་ཨོ་ཨེམ་འདི་ གཏན་མཛོད་བརྐྱབ་མི་འདི་གིས་ ག་ར་ངེས་གཏན་བཟོཝ་ཨིན།
+བཏོན་པའི་ཤོག་བྱང་ནང་ ཐུམ་སྒྲིལ་འདི་ ལོག་མ་བཙུགས་པར་ བཀོད་སྒྲིག་ཆ་ཚང་སྦེ་ཡོདཔ་ཨིན།
 
-### Automation helper (CI/package script)
+### རང་བཞིན་རོགས་སྐྱོར་ (སི་ཨའི་/ཐུམ་སྒྲིལ་ཡིག་ཚུགས་)།
 
-`./ci/package_docs_portal_sorafs.sh` codifies Steps 1–8 so roadmap item
-**DOCS‑7** can be exercised with a single command. The helper:
+`./ci/package_docs_portal_sorafs.sh` གིས་ Peསྟེགས་༡–༨ གིས་ ལམ་སྟོན་འབདཝ་ཨིན།
+**DOCS‐7** འདི་ བརྡ་བཀོད་གཅིག་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་བཏུབ། གྲོགས་རམ་པ།
 
-- runs the required portal prep (`npm ci`, OpenAPI/norito sync, widget tests);
-- emits the portal, OpenAPI, and SBOM CARs + manifest pairs via `sorafs_cli`;
-- optionally runs `sorafs_cli proof verify` (`--proof`) and Sigstore signing
-  (`--sign`, `--sigstore-provider`, `--sigstore-audience`);
-- drops every artefact under `artifacts/devportal/sorafs/<timestamp>/` and
-  writes `package_summary.json` so CI/release tooling can ingest the bundle; and
-- refreshes `artifacts/devportal/sorafs/latest` to point at the most recent run.
+- དགོས་མཁོའི་དྲྭ་ཐོག་སྔོན་སྒྲིག་ (`npm ci`, OpenAPI/norito sync, ཝིཌི་གེཊི་བརྟག་དཔྱད་ཚུ་);
+- དྲྭ་ཚིགས་དང་ OpenAPI དེ་ལས་ SBOM CARs + གིས་ `sorafs_cli` བརྒྱུད་དེ་ གསལ་སྟོན་ཆ་གཅིག་བཏོནམ་ཨིན།
+- གདམ་ཁ་ཅན་སྦེ་ `sorafs_cli proof verify` (I18NI000000314X) དང་ Sigstore མཚན་རྟགས་བཀོད་ཡོདཔ།
+  (I 18NI00000315X, `--sigstore-provider`, `--sigstore-audience`);
+- `artifacts/devportal/sorafs/<timestamp>/` གི་འོག་ལུ་ ཅ་ཆས་ག་ར་བཀོག་བཞགཔ་ཨིན།
+  `package_summary.json` བྲིས་ཡོདཔ་ལས་ CI/བཏོན་གཏང་ནི་གི་ལག་ཆས་འདི་གིས་ བཱན་ཌལ་འདི་བཙུགས་ཚུགས། དང༌
+- འཕྲལ་ཁམས་ཅིག་ཁར་ གཡོག་བཀོལ་མི་ལུ་ བརྡ་སྟོན་ནིའི་དོན་ལུ་ `artifacts/devportal/sorafs/latest` ལུ་ གསར་བསྐྲུན་འབད།
 
-Example (full pipeline with Sigstore + PoR):
+དཔེ་ (I18NT0000010X + POR) དང་བཅས་པའི་མདོང་ལམ་ཆ་ཚང་།
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -684,45 +678,45 @@ Example (full pipeline with Sigstore + PoR):
   --sigstore-audience=sorafs-devportal
 ```
 
-Flags worth knowing:
+ཤེས་དགོ་པའི་དར་ཆ།
 
-- `--out <dir>` – override the artefact root (default keeps timestamped folders).
-- `--skip-build` – reuse an existing `docs/portal/build` (handy when CI cannot
-  rebuild due to offline mirrors).
-- `--skip-sync-openapi` – skip `npm run sync-openapi` when `cargo xtask openapi`
-  cannot reach crates.io.
-- `--skip-sbom` – avoid calling `syft` when the binary is not installed (the
-  script prints a warning instead).
-- `--proof` – run `sorafs_cli proof verify` for each CAR/manifest pair. Multi-
-  file payloads still require chunk-plan support in the CLI, so leave this flag
-  unset if you hit `plan chunk count` errors and verify manually once the
-  upstream gate lands.
-- `--sign` – invoke `sorafs_cli manifest sign`. Provide a token with
-  `SIGSTORE_ID_TOKEN` (or `--sigstore-token-env`) or let the CLI fetch it using
+- `--out <dir>` – ཅ་མཛོད་རྩ་བ་ (སྔོན་སྒྲིག་གིས་ དུས་ཚོད་རྟགས་བཀོད་ཡོད་པའི་སྣོད་འཛིན་ཚུ་བཞག་བཞགཔ་ཨིན།)
+- `--skip-build` – ད་ལྟོ་ཡོད་པའི་ I18NI000000323X (CI འབད་མ་ཚར་བའི་སྐབས།
+  གློག་མེད་ཀྱི་མེ་ལོང་ཚུ་ལས་བརྟེན་ཏེ་ ལོག་སྟེ་བཟོ་བསྐྲུན་འབད།)
+- `--skip-sync-openapi` – `npm run sync-openapi` གིས་ `cargo xtask openapi` ལུ།
+  crates.io.
+- `--skip-sbom` – གཉིས་ལྡན་འདི་གཞི་བཙུགས་མ་འབད་བའི་སྐབས་ I18NI000000328X འབོ་ནི་ལས་འཛེམ་དགོ།
+  ཡིག་གཟུགས་འདི་གིས་ ཉེན་བརྡ་ཅིག་དཔར་བསྐྲུན་འབདཝ་ཨིན་)།
+- `--proof` – སི་ཨར་/མནར་གཅོད་ཆ་རེ་རེའི་དོན་ལུ་ `sorafs_cli proof verify` གཡོག་བཀོལ། སྣ་མང་-
+  ཡིག་སྣོད་པེ་ལོསི་ཚུ་ ད་ལྟོ་ཡང་ སི་ཨེལ་ཨའི་ནང་ ཅངཀ་-འཆར་གཞི་རྒྱབ་སྐྱོར་དགོཔ་ལས་ དར་འདི་བཞག་དགོ།
+  ཁྱོད་ཀྱིས་ `plan chunk count` འཛོལ་བ་ཚུ་ཨེབ་སྟེ་ ལག་ཐོག་ལས་ ཚར་གཅིག་བདེན་དཔྱད་འབད།
+  ཡར་འཕེལ་གྱི་སྒོ་ཁའི་ས་ཆ།
+- `--sign` – `sorafs_cli manifest sign` ལུ་ འབོད་བརྡ་འབདཝ་ཨིན། རྟགས་གཅིག་དང་བཅས་པ་བྱིན།
+  `SIGSTORE_ID_TOKEN` (ཡང་ན་ `--sigstore-token-env`) ཡང་ན་ སི་ཨེལ་ཨའི་གིས་ ལག་ལེན་འཐབ་བཅུག།
   `--sigstore-provider/--sigstore-audience`.
 
-When shipping production artefacts use `docs/portal/scripts/sorafs-pin-release.sh`.
-It now packages the portal, OpenAPI, and SBOM payloads, signs each manifest, and
-records extra asset metadata in `portal.additional_assets.json`. The helper
-understands the same optional knobs used by the CI packager plus the new
-`--openapi-*`, `--portal-sbom-*`, and `--openapi-sbom-*` switches so you can
-assign alias tuples per artefact, override the SBOM source via
-`--openapi-sbom-source`, skip certain payloads (`--skip-openapi`/`--skip-sbom`),
-and point at a non-default `syft` binary with `--syft-bin`.
+སྐྱེལ་འདྲེན་འབད་བའི་སྐབས་ `docs/portal/scripts/sorafs-pin-release.sh` ལག་ལེན་འཐབ།
+ད་ལྟོ་འདི་གིས་ དྲྭ་ཚིགས་དང་ OpenAPI དེ་ལས་ SBOM པེ་ལོཌི་ཚུ་ གསལ་སྟོན་རེ་རེ་ལུ་ མཚན་རྟགས་རེ་རེ་ལུ་ ཐུམ་སྒྲིལ་འབདཝ་ཨིན།
+`portal.additional_assets.json` ནང་ ཁ་སྐོང་རྒྱུ་དངོས་མེ་ཊ་ཌེ་ཊ་ ཐོ་བཀོད་འབདཝ་ཨིན། རོགས་རམ་པ།
+སི་ཨའི་ཐུམ་སྒྲིལ་གྱིས་ལག་ལེན་འཐབ་མི་གདམ་ཁ་ཅན་གྱི་མཐེབ་གཟེར་ཚུ་ཧ་གོ་ཚུགས།
+`--openapi-*`, `--portal-sbom-*`, དང་ `--openapi-sbom-*` བསྒྱུར་ནས་ཁྱོད་ཀྱིས་འབད་ཚུགས།
+ཅ་རྙིང་རེ་རེ་ལུ་ ཊུཔ་ལི་ཚུ་ འགན་སྤྲོད་འབད་དེ་ ཨེསི་བི་ཨོ་ཨེམ་འབྱུང་ཁུངས་འདི་ བརྒྱུད་དེ་ བཀག་ཆ་འབདཝ་ཨིན།
+`--openapi-sbom-source`, གླ་ཆ་ཁ་ཤས་ (I18NI000000343X/`--skip-sbom`),
+དང་ སྔོན་སྒྲིག་མེན་པའི་ `syft` གཉིས་ལྡན་གྱི་ `--syft-bin` ལུ་ མཚོན་རྟགས་བཀོད།
 
-The script surfaces every command it runs; copy the log into the release ticket
-alongside `package_summary.json` so reviewers can diff CAR digests, plan
-metadata, and Sigstore bundle hashes without spelunking ad‑hoc shell output.
+ཡིག་ཚུགས་འདི་གིས་ བརྡ་བཀོད་རེ་རེ་བཞིན་ གཡོག་བཀོལ་འབདཝ་ཨིན། གསར་བཏོན་ཤོག་བྱང་ནང་ལུ་ དྲན་ཐོ་འདི་འདྲ་བཤུས་རྐྱབས།
+མཉམ་དུ་ `package_summary.json` བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ CAR བཞུ་བཅུག་ནིའི་འཆར་གཞི་བཟོ་ཚུགས།
+མེ་ཊ་ཌེ་ཊ་, དང་ Sigstore བརྡ་རྟགས་མེད་པའི་ ཨེ་ཌི་ཧོག་ཤུལ་ཨའུཊི་པུཊི་མེད་པར་ བཱན་ཌལ་ཧེ་ཤེལ།
 
-## Step 9 — Gateway + SoraDNS verification
+## གོ་རིམ་༩ — འཛུལ་སྒོ་ + སོ་ར་ཌི་ཨེན་ཨེསི་བདེན་དཔྱད་འབད་ནི།
 
-Before announcing a cutover, prove the new alias resolves via SoraDNS and that
-gateways staple fresh proofs:
+བརྡ་དོན་འདི་ གསལ་བསྒྲགས་མ་འབད་བའི་ཧེ་མ་ སོ་ར་ཌི་ཨེན་ཨེསི་དང་ དེ་བརྒྱུད་དེ་ མིང་གཞན་གསརཔ་འདི་ བདེན་དཔང་འབད།
+འཛུལ་སྒོ་ཚུ་ བདེན་ཁུངས་གསརཔ་ཚུ།
 
-1. **Run the probe gate.** `ci/check_sorafs_gateway_probe.sh` exercises
-   `cargo xtask sorafs-gateway-probe` against the demo fixtures in
-   `fixtures/sorafs_gateway/probe_demo/`. For real deployments, point the probe
-   at the target hostname:
+1. **འཚོལ་ཞིབ་ཀྱི་སྒོ་ར་བརྒྱུད།** `ci/check_sorafs_gateway_probe.sh` ལུས་སྦྱོང་།
+   I18NI000000349X ནང་དུ་བརྗོད་པའི་སྒྲིག་བཀོད་དང་རྒྱབ་འགལ་གྱི་ཡོད།
+   `fixtures/sorafs_gateway/probe_demo/`. བཀྲམ་སྤེལ་ངོ་མ་ཚུ་གི་དོན་ལུ་ འཚོལ་ཞིབ་འདི་སྟོན།
+   དམིགས་གཏད་ཧོསཊི་མིང་ནང་:
 
    ```bash
    ./ci/check_sorafs_gateway_probe.sh -- \
@@ -734,201 +728,182 @@ gateways staple fresh proofs:
      --report-json artifacts/sorafs_gateway_probe/ci/docs.json
    ```
 
-   The probe decodes `Sora-Name`, `Sora-Proof`, and `Sora-Proof-Status` per
-   `docs/source/sorafs_alias_policy.md` and fails when the manifest digest,
-   TTLs, or GAR bindings drift.
+   འཚོལ་ཞིབ་འདི་ `Sora-Name`, I18NI000000352X, དང་ I18NI000000353X
+   `docs/source/sorafs_alias_policy.md` དང་ གསལ་སྟོན་བཞུ་བའི་སྐབས་ འཐུས་ཤོར་འབྱུང་།
+   TTLs, ཡང་ན་ GAR བཅིངས་པའི་ གཡོ་འགུལ་ .
 
-   For lightweight spot checks (for example, when only the binding bundle
-   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
-   The helper validates the captured binding bundle and is handy for release
-   tickets that only need binding confirmation instead of a full probe drill.
+   ལྗིད་མེད་ས་ཁོངས་ཞིབ་དཔྱད་ཀྱི་དོན་ལུ་ (དཔེར་ན་ བསྡམས་པའི་བཱན་ཌི་རྐྱངམ་ཅིག་སྐབས།
+   འགྱུར་བཅོས་) `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>` གཡོག་བཀོལ།
+   གྲོགས་རམ་པ་འདི་གིས་ འཛིན་བཟུང་འབད་ཡོད་པའི་བཱའིན་ཌིང་བཱན་ཌལ་འདི་ བདེན་དཔྱད་འབདཝ་ཨིནམ་དང་ བཏོན་གཏང་ནི་ལུ་ ལག་ལེན་འཐབ་བཏུབ།
+   འཚོལ་ཞིབ་སྦྱོང་བརྡར་ཆ་ཚང་འབད་ནིའི་ཚབ་ལུ་ བསྡམས་པའི་བདེན་ཁུངས་དགོ་པའི་ ཤོག་འཛིན་ཚུ།
 
-2. **Capture drill evidence.** For operator drills or PagerDuty dry runs, wrap
-   the probe with `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario
-   devportal-rollout -- …`. The wrapper stores headers/logs under
-   `artifacts/sorafs_gateway_probe/<stamp>/`, updates `ops/drill-log.md`, and
-   (optionally) triggers rollback hooks or PagerDuty payloads. Set
-   `--host docs.sora` to validate the SoraDNS path instead of hard-coding an IP.
-
-3. **Verify DNS bindings.** When governance publishes the alias proof, record
-   the GAR file referenced in the probe (`--gar`) and attach it to the release
-   evidence. Resolver owners can mirror the same input through
-   `tools/soradns-resolver` to ensure cached entries honour the new manifest.
-   Before attaching the JSON, run
+2. **ཚད་ལྡན་སྦྱོང་བརྡར་གྱི་སྒྲུབ་བྱེད་ཡོདཔ།** བཀོལ་སྤྱོད་པའི་སྦྱོང་བརྡར་ཡང་ན་ པེ་གར་ཌུ་ཊི་སྐམ་རྒྱུག་ཚུ་གི་དོན་ལུ་ བཀབ་དགོ།
+   `ཡིག་གཟུགས་/ཊེ་ལི་མི་ཊི་/རན_སོ་རཕ་_གེ་ཊི་ཝེ་_པོརོ་བེ.sh --scenario དང་ཅིག་ཁར་ འཚོལ་ཞིབ་འདི་།
+   devportal-rolutout -- ...`. wrapper གིས་ མགོ་ཡིག་ཚུ་/དྲན་ཐོ་ཚུ་ གཤམ་གསལ་ཚུ་ཨིན།
+   `artifacts/sorafs_gateway_probe/<stamp>/`, དུས་མཐུན་བཟོ་མི་ I18NI000000357X, དང་།
+   (གདམ་ཁ་ཅན་སྦེ་) བཤུད་སྒྲིལ་གྱི་ཧུཀ་ཡང་ན་ པེ་གར་ཌུ་ཊི་པེ་ལོཌི་ཚུ་ འབྱུང་བཅུགཔ་ཨིན། སྡེ༌ཚན
+   I18NI000000358X འདི་ IP ལུ་ ཧརཌི་ཀོ་ཌིང་འབད་ནིའི་ཚབ་ལུ་ སོ་ར་ཌི་ཨེན་ཨེསི་འགྲུལ་ལམ་འདི་ བདེན་དཔྱད་འབད་ནི་ལུ་ཨིན།3. **DNS བཅིངས་བཞག་ཚུ་བདེན་དཔྱད་འབད། གཞུང་སྐྱོང་གིས་ མིང་གཞན་བདེན་ཁུངས་དཔར་བསྐྲུན་འབད་བའི་སྐབས་ ཐོ་བཀོད་འབད།
+   འཚོལ་ཞིབ་ནང་ (`--gar`) གཞི་བསྟུན་འབད་དེ་ བཏོན་གཏང་ནི་ལུ་ མཉམ་སྦྲགས་འབད་ཡོདཔ་ཨིན།
+   སྒྲུབ་བྱེད། སེལ་མི་ཇོ་བདག་ཚུ་གིས་ ཨིན་པུཊི་གཅིགཔོ་འདི་ བརྒྱུད་དེ་ མེ་ལོང་བཟོ་ཚུགས།
+   I18NI000000360X གིས་ འདྲ་མཛོད་ཀྱི་ཐོ་བཀོད་ཚུ་ལུ་ གསལ་སྟོན་གསརཔ་ལུ་གུས་ཞབས་འབད་ཚུགསཔ་བཟོ་ནི།
+   JSON མཉམ་སྦྲགས་མ་འབད་བའི་ཧེ་མ་ གཡོག་བཀོལ།
    `cargo xtask soradns-verify-gar --gar <path> --name <alias> [--manifest-cid <cid>] [--telemetry-label <label>]`
-   so the deterministic host mapping, manifest metadata, and telemetry labels are
-   validated offline. The helper can emit a `--json-out` summary alongside the
-   signed GAR so reviewers have verifiable evidence without opening the binary.
-  When drafting a new GAR, prefer
+   དེ་འབདཝ་ལས་ གཏན་འབེབས་ཧོསིཊི་སབ་ཁྲ་བཟོ་ནི་དང་ གསལ་སྟོན་མེ་ཊ་ཌེ་ཊ་ དེ་ལས་ བརྒྱུད་འཕྲིན་གྱི་ཁ་ཡིག་ཚུ་ཨིན།
+   བདེན་དཔྱད་འབད་ཡོད་པའི་ ཕྱིར་ལོག་། གྲོགས་རམ་པ་འདི་གིས་ `--json-out` བཅུད་བསྡུས་ཅིག་ དེ་དང་གཅིག་ཁར་ བཏོན་གཏང་ཚུགས།
+   མཚན་རྟགས་བཀོད་མི་ GAR གིས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་ལུ་ གཉིས་ལྡན་མ་ཕྱེ་བར་ བདེན་དཔྱད་འབད་ཚུགས་པའི་ སྒྲུབ་བྱེད་ཡོདཔ་ཨིན།
+  GAR གསརཔ་ཅིག་བཟོ་བའི་སྐབས་ དགའ་དགོ།
   `cargo xtask soradns-gar-template --name <alias> --manifest <portal.manifest.json> --telemetry-label <label> ...`
-  (fall back to `--manifest-cid <cid>` only when a manifest file is not
-  available). The helper now derives the CID **and** BLAKE3 digest directly from
-  the manifest JSON, trims whitespace, deduplicates repeated `--telemetry-label`
-  flags, sorts the labels, and emits the default CSP/HSTS/Permissions-Policy
-  templates before writing the JSON so the payload stays deterministic even when
-  operators capture labels from different shells.
+  (གསལ་རྟགས་ཡིག་སྣོད་ཅིག་མེན་པའི་སྐབས་རྐྱངམ་ཅིག་ `--manifest-cid <cid>` ལུ་ལོག་འགྱོ།
+  ཡོད༌པ)། ད་ལྟོ་ གྲོགས་རམ་པ་འདི་གིས་ སི་ཨའི་ཌི་ **དང་** BLAKE3 བཞུ་བཅོས་འདི་ ཐད་ཀར་དུ་ ལས་ བཏོནམ་ཨིན།
+  གསལ་སྟོན་འདི་ JSON, དཀརཔོ་གི་ས་སྒོ་འདི་ བཏོག་བཏོགཔ་ཨིན།
+  དར་ཆ་ཚུ་, ཁ་ཡིག་ཚུ་དབྱེ་སེལ་འབདཝ་ཨིནམ་དང་ སྔོན་སྒྲིག་ CSP/HSTS/Permissions-Policy འདི་བཏོནམ་ཨིན།
+  ཊེམ་པེལེཊི་ཚུ་ ཇེ་ཨེསི་ཨེན་མ་བྲིས་པའི་ཧེ་མ་ཨིནམ་ལས་ པེ་ལོཌ་འདི་ ནམ་ནཝ་ཡང་ གཏན་འབེབས་བཟོཝ་ཨིན།
+  བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཤེལ་སོ་སོ་ལས་ ཁ་ཡིག་ཚུ་ བཟུང་དོ་ཡོདཔ་ཨིན།
 
-4. **Watch alias metrics.** Keep `torii_sorafs_alias_cache_refresh_duration_ms`
-   and `torii_sorafs_gateway_refusals_total{profile="docs"}` on screen while the
-   probe is running; both series are charted in
+4. **wach alia metric.** `torii_sorafs_alias_cache_refresh_duration_ms` བཞག་དགོ།
+   དང་ I18NI000000367X གསལ་གཞིའི་ཐོག་ལུ་ཡོདཔ་ཨིན།
+   འཚོལ་ཞིབ་འདི་རྒྱུག་བཞིན་ཡོད། རིམ་སྒྲིག་གཉིས་ཆ་ར་ནང་ ཐིག་ཁྲམ་བཀོད་དེ་ཡོད།
    `dashboards/grafana/docs_portal.json`.
 
-## Step 10 — Monitoring & evidence bundling
+## གོམ་པ་ ༡༠ — ལྟ་རྟོག་དང་སྒྲུབ་བྱེད་བསྡམས།
 
-- **Dashboards.** Export `dashboards/grafana/docs_portal.json` (portal SLOs),
-  `dashboards/grafana/sorafs_gateway_observability.json` (gateway latency +
-  proof health), and `dashboards/grafana/sorafs_fetch_observability.json`
-  (orchestrator health) for every release. Attach the JSON exports to the
-  release ticket so reviewers can replay the Prometheus queries.
-- **Probe archives.** Keep `artifacts/sorafs_gateway_probe/<stamp>/` in git-annex
-  or your evidence bucket. Include the probe summary, headers, and PagerDuty
-  payload captured by the telemetry script.
-- **Release bundle.** Store the portal/SBOM/OpenAPI CAR summaries, manifest
-  bundles, Sigstore signatures, `portal.pin.report.json`, Try-It probe logs, and
-  link-check reports under a single timestamped folder (for example,
+- **གནད་སྡུད་བཀོད་སྒྲིག་ཚུ་.** ཕྱིར་འདྲེན་ `dashboards/grafana/docs_portal.json` (partal SLOs).
+  `dashboards/grafana/sorafs_gateway_observability.json` (gateway latence +
+  བདེན་དཔང་འཕྲོད་བསྟེན་) དང་ `dashboards/grafana/sorafs_fetch_observability.json`
+  (orchestrator Peolution) གསར་བཏོན་ག་ར་གི་དོན་ལུ་ཨིན། ཇེ་ཨེསི་ཨོ་ཨེན་ ཕྱིར་འདྲེན་ཚུ་ ༡ ལུ་མཉམ་སྦྲགས་འབད།
+  བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ Prometheus འདྲི་དཔྱད་ཚུ་ ལོག་རྩེད་ཚུགས།
+- **འཚོལ་ཞིབ་ཡིག་མཛོད་ཚུ།** གིཊི་ཨེན་ནེགསི་ནང་ `artifacts/sorafs_gateway_probe/<stamp>/` བཞག་དགོ།
+  ཡང་ན་ཁྱོད་ཀྱི་སྒྲུབ་བྱེད་ཀྱི་བཱ་ཀེཊ། འཚོལ་ཞིབ་བཅུད་དོན་དང་མགོ་ཡིག་ དེ་ལས་ པེ་གར་ཌུ་ཊི་ཚུ་ གྲངས་སུ་བཙུགས་དགོ།
+  ཊེ་ལི་མི་ཊི་ཡིག་ཆ་གིས་ བཟུང་ཡོདཔ།
+- ** བཏོན་གཏང་ནི་ བཱན་ཌལ་.** དྲྭ་ཚིགས་/ཨེསི་བི་ཨོ་ཨེམ་/OpenAPI སི་ཨར་ བཅུད་བསྡུས་, གསལ་སྟོན་འབད།
+  bundles, Sigstore མཚན་རྟགས་ I18NI000000373X, དཔྱད་ཞིབ་ཀྱི་དྲན་ཐོ་ དང་།
+  འབྲེལ་ལམ་-ཞིབ་དཔྱད་ཚུ་ དུས་ཚོད་རྟགས་བཀོད་ཡོད་པའི་སྣོད་འཛིན་ (དཔེར་ན་,
   `artifacts/sorafs/devportal/20260212T1103Z/`).
-- **Drill log.** When probes are part of a drill, let
-  `scripts/telemetry/run_sorafs_gateway_probe.sh` append to `ops/drill-log.md`
-  so the same evidence satisfies the SNNet-5 chaos requirement.
-- **Ticket links.** Reference the Grafana panel IDs or attached PNG exports in
-  the change ticket, together with the probe report path, so change-reviewers
-  can cross-check the SLOs without shell access.
+- **Drill log.** འཚོལ་ཞིབ་ཚུ་ དམག་སྦྱོང་གི་ཆ་ཤས་ཅིག་ཨིན་པའི་སྐབས།
+  `scripts/telemetry/run_sorafs_gateway_probe.sh` `ops/drill-log.md` ལུ་ མཐུད་ཡོདཔ་ཨིན།
+  དེ་འབདཝ་ལས་ སྒྲུབ་བྱེད་འདི་གིས་ SNNet-5 ཟང་ཟིང་དགོས་མཁོ་འདི་ གྲུབ་ཚུགསཔ་ཨིན།
+- **Ticket འབྲེལ་ལམ་ཚུ།** ༢༠༠༨ ལུ་ Grafana པེ་ནཱལ་ཨའི་ཌི་ཚུ་ ཡང་ན་ མཉམ་སྦྲགས་འབད་ཡོད་པའི་པི་ཨེན་ཇི་ཕྱིར་འདྲེན་ཚུ་ ༢༠༠༨ ལུ་ གཞི་བསྟུན་འབད།
+  བསྒྱུར་བཅོས་ཀྱི་ཤོག་བྱང་ འཚོལ་ཞིབ་སྙན་ཞུ་ལམ་དང་མཉམ་དུ་ བསྒྱུར་བཅོས་བསྐྱར་ཞིབ་འབད་མི་ཚུ་ཨིན།
+  ཤེལ་གྱི་འཛུལ་སྤྱོད་མེད་པར་ ཨེསི་ཨེལ་ཨོ་ཚུ་ བརྒལ་ཚུགས།
 
-## Step 11 — Multi-source fetch drill & scoreboard evidence
+## གོམ་པ་ ༡༡ — ཐོན་ཁུངས་མང་བའི་ ཕིཆ་སྦྱོང་བརྡར་དང་ སྐུགས་བོརཌི་གི་སྒྲུབ་བྱེད།
 
-Publishing to SoraFS now requires multi-source fetch evidence (DOCS-7/SF-6)
-alongside the DNS/gateway proofs above. After pinning the manifest:
+ད་ལྟོ་ I18NT000000037X ལུ་དཔར་བསྐྲུན་འབད་ནི་ལུ་ ཐོན་ཁུངས་སྣ་ཚོགས་ཀྱི་ ཕེཆ་སྒྲུབ་བྱེད་ (DOCS-7/SF-6) དགོཔ་ཨིན།
+གོང་ལུ་ DNS/སྒོ་ཁའི་བདེན་ཁུངས་ཚུ་གི་མཉམ་ལུ། གསལ་སྟོན་འདི་བཙུགས་པའི་ཤུལ་ལུ།
 
-1. **Run `sorafs_fetch` against the live manifest.** Use the same plan/manifest
-   artefacts produced in Steps 2–3 plus the gateway credentials issued for each
-   provider. Persist every output so auditors can replay the orchestrator
-   decision trail:
+1.*དངོས་མཐོང་གསལ་སྟོན་ལུ་འགོག་པའི་ `sorafs_fetch` འཆར་གཞི་གཅིག་པ་ལག་ལེན་འཐབ།
+   གོ་རིམ་༢པ་ལས་༣པ་ནང་ལུ་བཟོ་མི་ ཅ་ཆས་ཚུ་དང་ རེ་རེ་གི་དོན་ལུ་ འཛུལ་སྒོ་གི་ཡིག་ཆ་ཚུ་ བཏོན་ཡོདཔ་ཨིན།
+   སྤྲོད་ནི རྩིས་ཞིབ་པ་ཚུ་གིས་ སྙན་ཆའི་སྡེ་ཚན་འདི་ ལོག་རྩེད་ཚུགས།
+   ཐག་གཅོད་ལམ་ལུགས།
 
-   ```bash
-   OUT=artifacts/sorafs/devportal
-   FETCH_OUT="$OUT/fetch/$(date -u +%Y%m%dT%H%M%SZ)"
-   mkdir -p "$FETCH_OUT"
+   I18NF0000082X
 
-   cargo run -p sorafs_car --bin sorafs_fetch -- \
-     --plan "$OUT/portal.plan.json" \
-     --manifest-json "$OUT/portal.manifest.json" \
-     --gateway-provider name=docs-us,provider-id="$DOCS_US_PROVIDER_ID",base-url="$DOCS_US_GATEWAY",stream-token="$DOCS_US_STREAM_TOKEN" \
-     --gateway-provider name=docs-eu,provider-id="$DOCS_EU_PROVIDER_ID",base-url="$DOCS_EU_GATEWAY",stream-token="$DOCS_EU_STREAM_TOKEN" \
-     --scoreboard-out "$FETCH_OUT/scoreboard.json" \
-     --provider-metrics-out "$FETCH_OUT/providers.ndjson" \
-     --json-out "$FETCH_OUT/fetch.json" \
-     --chunk-receipts-out "$FETCH_OUT/chunk_receipts.ndjson" \
-     --telemetry-json artifacts/sorafs/provider_telemetry.json \
-     --max-peers=3 \
-     --retry-budget=4
-   ```
-
-   - Fetch the provider adverts referenced by the manifest first (for example
+   - གསལ་སྟོན་ལུ་གཞི་བསྟུན་འབད་མི་ བྱིན་མི་ ཁྱབ་བསྒྲགས་འདི་ དང་པ་རང་ (དཔེར་ན་ (དཔེར་ན་ ལུ་ བཙུགས།
      `sorafs_cli manifest describe --provider-adverts-out artifacts/sorafs/provider_adverts/`)
-     and pass them via `--provider-advert name=path` so the scoreboard can
-     evaluate capability windows deterministically. Use
-     `--allow-implicit-provider-metadata` **only** when replaying fixtures in
-     CI; production drills must cite the signed adverts that landed with the
-     pin.
-   - When the manifest references additional regions, repeat the command with
-     the corresponding provider tuples so every cache/alias has a matching
-     fetch artefact.
+     དེ་ལས་ I18NI000000379X བརྒྱུད་དེ་ དེ་ཚུ་བརྒྱུད་དེ་ གཏང་ཚུགས།
+     བརྟག་ཞིབ་ལྕོགས་གྲུབ་སྒོ་སྒྲིག་ཚུ་གིས་ གཏན་འབེབས་བཟོཝ་ཨིན། ལག་ལེན་འཐབ་ནི
+     `--allow-implicit-provider-metadata` **lyly**
+     CI; བཟོ་སྐྲུན་སྦྱོང་བརྡར་ཚུ་གིས་ མིང་རྟགས་བཀོད་ཡོད་པའི་བརྡ་ཁྱབ་ཚུ་ ༡ དང་གཅིག་ཁར་ ཆགས་ཡོད་པའི་བརྡ་ཁྱབ་ཚུ་ བཀོད་དགོ།
+     ང༌འཛིན༌ཨང།
+   - གསལ་སྟོན་གྱི་གཞི་བསྟུན་ཚུ་ ཁ་སྐོང་ལུང་ཕྱོགས་ཚུ་ཨིན་པའི་སྐབས་ བརྡ་བཀོད་འདི་དང་གཅིག་ཁར་བསྐྱར་ལོག་འབད།
+     འབྲེལ་མཐུན་བྱིན་མི་ ཊུཔ་ལི་ཚུ་ དེ་འབདཝ་ལས་ འདྲ་མཛོད་/མིང་གཞན་ག་ར་ལུ་ མཐུན་སྒྲིག་ཡོདཔ་ཨིན།
+     ཅ་རྙིང་ལེན་ནི།
 
-2. **Archive the outputs.** Store `scoreboard.json`,
-   `providers.ndjson`, `fetch.json`, and `chunk_receipts.ndjson` under the
-   release evidence folder. These files capture the peer weighting, retry
-   budget, latency EWMA, and per-chunk receipts that the governance packet must
-   retain for SF-7.
+2. ** ཐོན་འབྲས་ཚུ་ ཡིག་བསྒྱུར་འབད།** གསོག་འཇོག་ `scoreboard.json`,
+   `providers.ndjson`, `fetch.json`, དང་ I18NI000000384X གི་འོག་ལུ་ཡོདཔ་ཨིན།
+   སྒྲུབ་བྱེད་ཀྱི་སྣོད་འཛིན་གསར་བཏོན་འབད་ནི། ཡིག་སྣོད་འདི་ཚུ་གིས་ མཉམ་རོགས་ཀྱི་ལྗིད་ཚད་འདི་བཟུང་དོ་ཡོདཔ།
+   འཆར་དངུལ་དང་ འཕྲོ་མཐུད་ EWMA དང་ ཆུ་རེའི་འཐུས་ཚུ་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་འདི་ དགོཔ་ཨིན།
+   SF-7 གི་དོན་ལུ་ reped.
 
-3. **Update telemetry.** Import the fetch outputs into the **SoraFS Fetch
-   Observability** dashboard (`dashboards/grafana/sorafs_fetch_observability.json`),
-   watching `torii_sorafs_fetch_duration_ms`/`_failures_total` and the
-   provider-range panels for anomalies. Link the Grafana panel snapshots to the
-   release ticket alongside the scoreboard path.
+3. **ཊེ་ལི་མི་ཊི་རི་ དུས་མཐུན་བཟོ་ནི།** ཕིཊི་ཨའུཊི་པུཊི་ཚུ་ **SoraFS Fetch ནང་ལུ་ནང་འདྲེན་འབད།
+   བལྟ་རྟོག་འབད་ཚུགསཔ་** ཌེཤ་བོརཌི་ (`dashboards/grafana/sorafs_fetch_observability.json`);
+   `torii_sorafs_fetch_duration_ms`/`_failures_total` བལྟ་ཡོད།
+   མ་འདྲ་བའི་དོན་ལུ་ བྱིན་མི་-ཁྱབ་ཚད་ཀྱི་ པེ་ནཱལ། Grafana ལུ་ པེ་ནཱལ་པར་ལེན་ཚུ་ འབྲེལ་མཐུད་འབད།
+   སྐུགས་ཤོག་ལམ་དང་གཅིག་ཁར་ གསར་བཏོན་འབད་ཡོདཔ།
 
-4. **Smoke the alert rules.** Run `scripts/telemetry/test_sorafs_fetch_alerts.sh`
-   to validate the Prometheus alert bundle before closing the release. Attach
-   the promtool output to the ticket so DOCS-7 reviewers can confirm the stall
-   and slow-provider alerts remain armed.
+༤. **ཉེན་བརྡ་ལམ་ལུགས་ཚུ་ སྦྱར་དགོ།** `scripts/telemetry/test_sorafs_fetch_alerts.sh` གཡོག་བཀོལ།
+   གསར་བཏོན་འདི་ཁ་མ་བསྡམས་པའི་ཧེ་མ་ I18NT0000001X དྲན་སྐུལ་བཱན་ཌལ་འདི་ བདེན་དཔྱད་འབད་ནི་ལུ་ཨིན། སྦྱར༌ནི
+   ཤོག་འཛིན་ལུ་ པོརོམ་ཊོལ་ཨའུཊི་པུཊི་འབདཝ་ལས་ ཌི་ཨོ་སི་-༧ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཚོང་ཁང་འདི་ ངེས་གཏན་བཟོ་ཚུགས།
+   དང་ མགྱོགས་དྲགས་སྦེ་ བྱིན་མི་ ཉེན་བརྡ་ཚུ་ མཚོན་ཆ་སྦེ་ ལུས་ཡོདཔ་ཨིན་པས།
 
-5. **Wire into CI.** The portal pin workflow keeps a `sorafs_fetch` step behind
-   the `perform_fetch_probe` input; enable it for staging/production runs so the
-   fetch evidence is produced alongside the manifest bundle without manual
-   intervention. Local drills can reuse the same script by exporting the
-   gateway tokens and setting `PIN_FETCH_PROVIDERS` to the comma-separated
-   provider list.
+5. **གློག་ཐག་ནང་ལུ་ CI.** དྲྭ་ཐོག་པིན་གྱི་ལཱ་འདི་གིས་ `sorafs_fetch` གོམ་པ་རྒྱབ་ལུ་བཞགཔ་ཨིན།
+   the `perform_fetch_probe` ཨིན་པུཊི་; གནས་རིམ་/བཟོ་སྐྲུན་གྱི་དོན་ལུ་ལྕོགས་ཅན་བཟོ་ དེ་འབདཝ་ལས་ འདི་ཨིན།
+   ལག་དེབ་མེད་པའི་ གསལ་སྟོན་གྱི་ བརྩེགས་ཚད་ཀྱི་ མཉམ་དུ་ ལེན་པའི་སྒྲུབ་བྱེད་ བཏོནམ་ཨིན།
+   བར་འཛུལ་འབད་ནི། ཉེ་གནས་སྦྱོང་བརྡར་ཚུ་གིས་ འདི་ཕྱིར་འདྲེན་ཐོག་ལས་ ཡིག་ཚུགས་གཅིག་པ་ལོག་ལག་ལེན་འཐབ་བཏུབ།
+   འཛུལ་སྒོ་ཊོ་ཀེན་ཚུ་དང་ ལྷོད་རྟགས་ཁ་ཕྱེ་ཡོད་མི་ལུ་ `PIN_FETCH_PROVIDERS` གཞི་སྒྲིག་འབད་ནི།
+   བྱིན་མི་ཐོ་ཡིག།
 
-## Promotion, observability, and rollback
+## ཁྱབ་སྤེལ་དང་ བལྟ་རྟོག་འབད་ཚུགསཔ་ དེ་ལས་ ལོག་བསྐོར་རྐྱབ་ནི།
 
-1. **Promotion:** keep separate staging and production aliases. Promote by
-   re-running `manifest submit` with the same manifest/bundle, swapping
-   `--alias-namespace/--alias-name` to point at the production alias. This
-   avoids rebuilding or resigning once QA approves the staging pin.
-2. **Monitoring:** import the pin-registry dashboard
-   (`docs/source/grafana_sorafs_pin_registry.json`) plus the portal-specific
-   probes (see `docs/portal/docs/devportal/observability.md`). Alert on checksum
-   drift, failed probes, or proof retry spikes.
-3. **Rollback:** to revert, resubmit the previous manifest (or retire the
-   current alias) using `sorafs_cli manifest submit --alias ... --retire`.
-   Always keep the last known-good bundle and CAR summary so rollback proofs can
-   be recreated if the CI logs rotate.
+༡ **ཁྱབ་སྤེལ་:** གོ་རིམ་དང་ཐོན་སྐྱེད་ཀྱི་མིང་གཞན་སོ་སོ་སྦེ་བཞག་དགོ། ཡར་འཕེལ་འདི་ གིས་
+   re--runing `manifest submit` གསལ་སྟོན་/བང་རིམ་གཅིག་པ་དང་གཅིག་ཁར་ བརྗེ་སོར་འབདཝ་ཨིན།
+   `--alias-namespace/--alias-name` ཐོན་སྐྱེད་མིང་གཞན་ལུ་སྟོན་ནིའི་དོན་ལུ་ཨིན། ཨ་ནཱི
+   QA གིས་ གནས་རིམ་གྱི་ པིན་འདི་ ཆ་འཇོག་འབད་ཚརཝ་ད་ བསྐྱར་བཟོ་ཡང་ན་ དགོངས་ཞུ་འབད་ནི་ལས་ འཛེམ་དགོ།
+2. ** ལྟ་རྟོག་:** པིན་ཐོ་བཀོད་ཀྱི་ ཌེཤ་བོརཌི་ནང་འདྲེན་འབད།
+   (`docs/source/grafana_sorafs_pin_registry.json`) དང་ དྲྭ་ཚིགས་དམིགས་བསལ་གྱི་
+   འཚོལ་ཞིབ་ (`docs/portal/docs/devportal/observability.md` བལྟ།) ཅེག་སམ་གུ་ཉེན་བརྡ་འབད།
+   འདྲེན་པ་ འཐུས་ཤོར་བྱུང་མི་ ཡང་ན་ བདེན་ཁུངས་ལོག་སྟེ་འབད་རྩོལ་བསྐྱེད་ནི།
+3. **Rollback:** སླར་ལོག་འབད་ནིའི་དོན་ལུ་ ཧེ་མའི་མངོན་རྟགས་འདི་ལོག་སྒྲིག་འབད། (ཡང་ན་ དགོངས་ཞུ་འབད།
+   ད་ལྟའི་མིང་གཞན་) `sorafs_cli manifest submit --alias ... --retire` ལག་ལེན་འཐབ་སྟེ་།
+   མཇུག་གི་ཤེས་རྟོགས་ཡོད་པའི་ལེགས་ཤོམ་གྱི་བང་རིམ་དང་ CAR བཅུད་བསྡུས་འདི་ དུས་རྒྱུན་དུ་རང་བཞག་ཚུགས།
+   CI དྲན་ཐོ་ཚུ་བསྒྱིར་པ་ཅིན་ ལོག་གསར་བསྐྲུན་འབད་དགོ།
 
-## CI workflow template
+## CI ལཱ་གི་རྒྱུན་རིམ་ཊེམ་པེལེཊི་།
 
-At minimum, your pipeline should:
+ཉུང་མཐའ་ལུ་ ཁྱོད་ཀྱི་ མདོང་ལམ་འདི་:
 
-1. Build + lint (`npm ci`, `npm run build`, checksum generation).
-2. Package (`car pack`) and compute manifests.
-3. Sign using the job-scoped OIDC token (`manifest sign`).
-4. Upload artefacts (CAR, manifest, bundle, plan, summaries) for auditing.
-5. Submit to the pin registry:
-   - Pull requests → `docs-preview.sora`.
-   - Tags / protected branches → production alias promotion.
-6. Run probes + proof verification gates before exiting.
+1. བཟོ་བསྐྲུན་+ ལིནཊི་ (`npm ci`, `npm run build`, ཅེག་སམ་བཟོ་བཀོད།)
+2. ཐུམ་སྒྲིལ་ (I18NI000000399X) དང་ གློག་རིག་གི་གསལ་སྟོན་ཚུ།
+༣ ལཱ་གཡོག་གི་ཁྱབ་ཁོངས་ I18NT0000056X ཊོ་ཀེན་ (`manifest sign`) ལག་ལེན་འཐབ་སྟེ་ ནང་བསྐྱོད་འབད་དགོ།
+༤ རྩིས་ཞིབ་འབད་ནིའི་དོན་ལུ་ ཅ་ཆས་ཚུ་ སྐྱེལ་བཙུགས་འབད་ནི།
+༥ པིན་ཐོ་བཀོད་ལུ་ཕུལ་ནི།
+   - འཐེན་ཞུ་བ་ → `docs-preview.sora`.
+   - ངོ་རྟགས་/སྲུང་སྐྱོབ་ཡན་ལག་ཚུ་ → ཐོན་སྐྱེད་གཞན་གོང་འཕེལ།
+༦ ཕྱིར་ཐོན་མ་འགྱོ་བའི་ཧེ་མ་ བརྟག་དཔྱད་+ བདེན་ཁུངས་བདེན་དཔྱད་ཀྱི་སྒོ་ཚུ་ གཡོག་བཀོལ།
 
-`.github/workflows/docs-portal-sorafs-pin.yml` wires all of these steps together
-for manual releases. The workflow:
+`.github/workflows/docs-portal-sorafs-pin.yml` གོམ་པ་འདི་དག་ཚང་མ་མཉམ་དུ།
+ལག་དེབ་གསར་བཏོན་ཚུ་གི་དོན་ལུ་ཨིན། ལཱ་གི་རྒྱུན་རིམ་འདི་:
 
-- builds/tests the portal,
-- packages the build via `scripts/sorafs-pin-release.sh`,
-- signs/verifies the manifest bundle using GitHub OIDC,
-- uploads the CAR/manifest/bundle/plan/proof summaries as artifacts, and
-- (optionally) submits the manifest + alias binding when secrets are present.
+- དྲྭ་ཚིགས་འདི་བཟོ་བསྐྲུན་/བརྟག་དཔྱད་འབདཝ་ཨིན།
+- `scripts/sorafs-pin-release.sh` བརྒྱུད་དེ་ བཟོ་བསྐྲུན་འདི་ ཐུམ་སྒྲིལ་འབདཝ་ཨིན།
+- རྟགས་མཚན་/བདེན་བཤད་/བདེན་དཔྱད་འབདཝ་ཨིན་ བདེན་བཤད་འབདཝ་ཨིན།
+- CAR/manifest/bundle/plan/proogn བཅུད་བསྡུས་ཚུ་ ཅ་རྙིང་སྦེ་ སྐྱེལ་བཙུགས་འབདཝ་ཨིན།
+- (གདམ་ཁ་ཅན་སྦེ་) གསང་བ་ཡོད་པའི་སྐབས་ལུ་ གསལ་སྟོན་ + མིང་གཞན་བཀག་ཆ་འདི་ བཙུགསཔ་ཨིན།
 
-Configure the following repository secrets/variables before triggering the job:
+ལཱ་འདི་ འགོ་བཙུགས་པའི་ཧེ་མ་ འོག་གི་ མཛོད་ཁང་གསང་བ་/འགྱུར་ལྡོག་ཚུ་ རིམ་སྒྲིག་འབད།
 
-| Name | Purpose |
-|------|---------|
-| `DOCS_SORAFS_TORII_URL` | Torii host that exposes `/v1/sorafs/pin/register`. |
-| `DOCS_SORAFS_SUBMITTED_EPOCH` | Epoch identifier recorded with submissions. |
-| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Signing authority for the manifest submission. |
-| `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Alias tuple bound to the manifest when `perform_submit` is `true`. |
-| `DOCS_SORAFS_ALIAS_PROOF_B64` | Base64-encoded alias proof bundle (optional; omit to skip alias binding). |
-| `DOCS_ANALYTICS_*` | Existing analytics/probe endpoints reused by other workflows. |
+| མིང | དམིགས་ཡུལ། |
+|------|--------------------------------------------------------------------
+| `DOCS_SORAFS_TORII_URL` | Torii ཧོསཊི་ `/v1/sorafs/pin/register` གསལ་སྟོན་འབདཝ་ཨིན། |
+| `DOCS_SORAFS_SUBMITTED_EPOCH` | ཞུ་ཡིག་ཚུ་དང་བཅས་སྒྲ་བཟུང་འབད་ཡོད་པའི་ Epoch ངོས་འཛིན་པ། |
+| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | གསལ་སྟོན་ཕུལ་ནིའི་དོན་ལུ་ དབང་ཚད་མིང་རྟགས་བཀོད་དོ། |
+| I18NI0000409X / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` འདི་ `true` ཡིན་པའི་སྐབས་ ཊུཔ་ལི་འདི་ གསལ་སྟོན་ལུ་མཐུད་ཡོདཔ་ཨིན། |
+| I18NI0000413X | Base64-incoded allias བདེན་དཔང་འབད་བའི་ བང་རིམ་ (གདམ་ཁ་ཅན་; མིང་གཞན་བཀག་ཆ་འབད་ནི་འདི་ བཏོན་གཏང་ནི།) |
+| I18NI0000414X | ད་ལྟོ་ཡོད་པའི་དབྱེ་དཔྱད་/འཚོལ་ཞིབ་མཇུག་ཚུ་ ལཱ་གི་རྒྱུན་རིམ་གཞན་ཚུ་གིས་ ལོག་ལག་ལེན་འཐབ་ཨིན། |
 
-Trigger the workflow via the Actions UI:
+ལཱ་གི་རྒྱུན་རིམ་འདི་ བྱ་བ་ཚུ་ ཡུ་ཨའི་ བརྒྱུད་དེ་ འཕྲོ་འཐུད།
 
-1. Provide `alias_label` (e.g., `docs.sora.link`), optional `proposal_alias`,
-   and an optional `release_tag` override.
-2. Leave `perform_submit` unchecked to generate artefacts without touching Torii
-   (useful for dry runs) or enable it to publish directly to the configured
-   alias.
+1. `alias_label` (དཔེར་ན་ `docs.sora.link`) གདམ་ཁའི་`proposal_alias` བྱིན་དགོ།
+   དང་ གདམ་ཁ་ཅན་གྱི་ `release_tag` གིས་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན།
+2. `perform_submit` གིས་ Torii མ་ལག་པར་ ལག་ཆ་བཟོ་ནི་གི་དོན་ལུ་ བརྟག་དཔྱད་མ་འབད་བར་ བཞག་དགོ།
+   (use dracy rins གི་དོན་ལུ་) ཡང་ན་ རིམ་སྒྲིག་འབད་ཡོད་པའི་རིམ་སྒྲིག་ལུ་ཐད་ཀར་དཔར་བསྐྲུན་འབད་ནི་ལུ་ལྕོགས་ཅན་བཟོ།
+   ༤ ལོ།
 
-`docs/source/sorafs_ci_templates.md` still documents the generic CI helpers for
-projects outside this repository, but the portal workflow should be preferred
-for day-to-day releases.
+`docs/source/sorafs_ci_templates.md` ད་དུང་ཡང་སྤྱིར་བཏང་གི་ CI རོགས་རམ་པ་ for for for for for for four
+ལས་འགུལ་འདི་ མཛོད་ཁང་འདི་གི་ཕྱི་ཁར་ཨིན་རུང་ དྲྭ་ཐོག་ལཱ་གི་རྒྱུན་རིམ་འདི་ གདམ་ཁ་རྐྱབ་དགོ།
+ཉིན་བསྟར་གྱི་གསར་བཏོན་ཚུ་གི་དོན་ལུ་ཨིན།
 
-## Checklist
+## ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-- [ ] `npm run build`, `npm run test:*`, and `npm run check:links` are green.
-- [ ] `build/checksums.sha256` and `build/release.json` captured in artefacts.
-- [ ] CAR, plan, manifest, and summary generated under `artifacts/`.
-- [ ] Sigstore bundle + detached signature stored with logs.
-- [ ] `portal.manifest.submit.summary.json` and `portal.manifest.submit.response.json`
-      captured when submissions occur.
-- [ ] `portal.pin.report.json` (and optional `portal.pin.proposal.json`)
-      archived alongside CAR/manifest artefacts.
-- [ ] `proof verify` and `manifest verify-signature` logs archived.
-- [ ] Grafana dashboards updated + Try-It probes successful.
-- [ ] Rollback notes (previous manifest ID + alias digest) attached to the
-      release ticket.
+- [ ] I18NI0000421X, `npm run test:*`, དང་`npm run check:links` ནི་ལྗང་ཁུ་ཡིན།
+- [ ] I18NI0000424X དང་ I18NI000000425X གིས་ ཅ་རྙིང་ཚུ་ནང་ བཟུང་ཡོདཔ་ཨིན།
+- [ ] CAR དང་འཆར་གཞི་ གསལ་སྟོན་དང་ བཅུད་བསྡུས་ `artifacts/` འོག་ལུ་ཐོན་པའི་བཅུད་དོན།
+- [ ] I18NT0000013X བཱན་ཌལ་ + མཐའ་མཚམས་མིང་རྟགས་དྲན་ཐོ་ཚུ་དང་གཅིག་ཁར་གསོག་འཇོག་འབད་ཡོདཔ།
+- [ ] I18NI0000427X དང་`portal.manifest.submit.response.json`
+      ཞུ་ཡིག་བཙུགས་པའི་སྐབས་ པར་ལེན་ཡོདཔ།
+- [ ] I18NI0000429X (དང་གདམ་ཁ་ཅན་གྱི་`portal.pin.proposal.json`)
+      CAR/difet གི་ཅ་རྙིང་ཚུ་དང་གཅིག་ཁར་ གཏན་མཛོད་འབད་ཡོདཔ།
+- [ ] `proof verify` དང་I18NI000000432X ཡིག་མཛོད་ཅན།
+- [ ] Grafana དྲ་ཚིགས་ཚུ་དུས་མཐུན་བཟོ་ཡོདཔ།
+- [ ] བསྐོར་བའི་དྲན་ཐོ། (སྔོན་མའི་མངོན་རྟགས་ID + alias digest) ལུ་མཉམ་སྦྲགས་འབད་ཡོདཔ།
+      གསར་བཏོན་ཤོག་བྱང་།

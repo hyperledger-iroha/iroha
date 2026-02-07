@@ -4,50 +4,50 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry
-title: SoraFS chunker profile registry
-sidebar_label: Chunker registry
-description: SoraFS chunker registry کے لیے profile IDs، parameters اور negotiation plan۔
+id: registro fragmentador
+título: Registro de perfil fragmentador SoraFS
+sidebar_label: registro de fragmentos
+descripción: registro fragmentador SoraFS con ID de perfil, parámetros y plan de negociación
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 :::
 
-## SoraFS chunker profile registry (SF-2a)
+## Registro de perfil fragmentador SoraFS (SF-2a)
 
-SoraFS stack chunking behavior کو ایک چھوٹے namespaced registry کے ذریعے negotiate کرتا ہے۔
-ہر profile deterministic CDC parameters، semver metadata اور expected digest/multicodec assign کرتا ہے جو manifests اور CAR archives میں استعمال ہوتا ہے۔
+SoraFS Comportamiento de fragmentación de pila کو ایک چھوٹے registro con espacio de nombres کے ذریعے negociar کرتا ہے۔
+ہر parámetros CDC deterministas del perfil, metadatos semver اور resumen esperado/asignación multicodec کرتا ہے جو manifiestos اور archivos CAR میں استعمال ہوتا ہے۔
 
-Profile authors کو
+Autores del perfil کو
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-میں مطلوبہ metadata، validation checklist اور proposal template دیکھنا چاہیے قبل اس کے کہ وہ نئی entries submit کریں۔
-جب governance تبدیلی approve کر دے تو
-[registry rollout checklist](./chunker-registry-rollout-checklist.md) اور
-[staging manifest playbook](./staging-manifest-playbook) کے مطابق fixtures کو staging اور production میں promote کریں۔
+میں مطلوبہ metadatos, lista de verificación de validación اور plantilla de propuesta دیکھنا چاہیے قبل اس کے کہ وہ نئی entradas enviadas کریں۔
+جب gobernanza تبدیلی aprobar کر دے تو
+[lista de verificación de implementación del registro](./chunker-registry-rollout-checklist.md)
+[libro de jugadas del manifiesto de puesta en escena](./staging-manifest-playbook) کے مطابق accesorios کو puesta en escena اور producción میں promover کریں۔
 
-### Profiles
+### Perfiles
 
-| Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
+| Espacio de nombres | Nombre | SemVer | ID de perfil | Mín. (bytes) | Destino (bytes) | Máx. (bytes) | Romper máscara | Multihash | Alias ​​| Notas |
 |-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | SF-1 fixtures میں استعمال ہونے والا canonical profile |
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | Accesorios SF-1 میں استعمال ہونے والا perfil canónico |El código de registro میں `sorafs_manifest::chunker_registry` کے طور پر موجود ہے (جسے [`chunker_registry_charter.md`](./chunker-registry-charter.md) gobierna کرتا ہے)۔ ہر entrada ایک `ChunkerProfileDescriptor` کے طور پر ظاہر ہوتی ہے جس میں:
 
-Registry code میں `sorafs_manifest::chunker_registry` کے طور پر موجود ہے (جسے [`chunker_registry_charter.md`](./chunker-registry-charter.md) govern کرتا ہے)۔ ہر entry ایک `ChunkerProfileDescriptor` کے طور پر ظاہر ہوتی ہے جس میں:
+* `namespace` – Múltiples perfiles کی agrupación lógica (مثلاً `sorafs`)۔
+* `name` – انسان کے لیے etiqueta de perfil legible (`sf1`, `sf1-fast`,…)۔
+* `semver` – conjunto de parámetros کے لیے cadena de versión semántica۔
+* `profile` – como `ChunkProfile` (min/target/max/mask)۔
+* `multihash_code` – resúmenes de fragmentos بناتے وقت استعمال ہونے والا multihash (`0x1f`
+  SoraFS predeterminado کے لیے)۔
 
-* `namespace` – متعلقہ profiles کی logical grouping (مثلاً `sorafs`)۔
-* `name` – انسان کے لیے readable profile label (`sf1`, `sf1-fast`, …)۔
-* `semver` – parameter set کے لیے semantic version string۔
-* `profile` – اصل `ChunkProfile` (min/target/max/mask)۔
-* `multihash_code` – chunk digests بناتے وقت استعمال ہونے والا multihash (`0x1f`
-  SoraFS default کے لیے)۔
+Manifiesto `ChunkingProfileV1` کے ذریعے perfiles کو serializar کرتا ہے۔ یہ estructura de metadatos del registro
+(espacio de nombres, nombre, semver) کو parámetros CDC sin procesar اور اوپر دکھائی گئی lista de alias کے ساتھ registro کرتا ہے۔
+Los consumidores usan `profile_id`, buscan en el registro, usan ID desconocidos, tienen parámetros en línea y tienen respaldo, tienen ID desconocidos.
 
-Manifest `ChunkingProfileV1` کے ذریعے profiles کو serialize کرتا ہے۔ یہ structure registry metadata
-(namespace, name, semver) کو raw CDC parameters اور اوپر دکھائی گئی alias list کے ساتھ record کرتا ہے۔
-Consumers کو پہلے `profile_id` کے ذریعے registry lookup کرنا چاہیے اور اگر unknown IDs آئیں تو inline parameters پر fallback کرنا چاہیے؛
-
-Registry کو tooling سے inspect کرنے کے لیے helper CLI چلائیں:
+Herramientas de registro سے inspeccionar کرنے کے لیے CLI auxiliar چلائیں:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -68,10 +68,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 ```
 
 CLI کے وہ تمام flags جو JSON لکھتے ہیں (`--json-out`, `--por-json-out`, `--por-proof-out`,
-`--por-sample-out`) path کے طور پر `-` قبول کرتے ہیں، جس سے payload stdout پر stream ہوتا ہے بجائے فائل بنانے کے۔
-یہ tooling میں data pipe کرنا آسان بناتا ہے جبکہ main report کو پرنٹ کرنے والا default behavior برقرار رہتا ہے۔
-
-```
+`--por-sample-out`) ruta کے طور پر `-` قبول کرتے ہیں، جس سے carga útil stdout پر stream ہوتا ہے بجائے فائل بنانے کے۔
+یہ herramientas میں canalización de datos کرنا آسان بناتا ہے جبکہ informe principal کو پرنٹ کرنے والا comportamiento predeterminado برقرار رہتا ہے۔```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
@@ -109,16 +107,16 @@ CAR data request کرتے وقت clients کو `Accept-Chunker` header بھیجن
 
 ```
 
-Gateways mutually supported profile منتخب کرتے ہیں (default `sorafs.sf1@1.0.0`) اور فیصلہ `Content-Chunker` response header کے ذریعے reflect کرتے ہیں۔ Manifests منتخب profile embed کرتے ہیں تاکہ downstream nodes HTTP negotiation پر انحصار کیے بغیر chunk layout validate کر سکیں۔
+Perfil de puerta de enlace mutuamente compatible منتخب کرتے ہیں (predeterminado `sorafs.sf1@1.0.0`) اور فیصلہ `Content-Chunker` encabezado de respuesta کے ذریعے refleja کرتے ہیں۔ Manifiestos منتخب perfil incrustado کرتے ہیں تاکہ nodos posteriores Negociación HTTP پر انحصار کیے بغیر diseño de fragmentos validar کر سکیں۔
 
 
 
-* **Primary path** – CARv2، BLAKE3 payload digest (`0x1f` multihash)،
-  `MultihashIndexSorted`، اور chunk profile اوپر کے مطابق record ہوتا ہے۔
+* **Ruta principal**: CARv2, resumen de carga útil BLAKE3 (`0x1f` multihash),
+  `MultihashIndexSorted`، اور perfil de fragmento اوپر کے مطابق registro ہوتا ہے۔
 
 
-### Conformance
+### Conformidad
 
-* `sorafs.sf1@1.0.0` profile public fixtures (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت register corpora سے match کرتا ہے۔ End-to-end parity Rust، Go اور Node میں دیے گئے tests سے exercise کی جاتی ہے۔
-* `chunker_registry::lookup_by_profile` assert کرتا ہے کہ descriptor parameters `ChunkProfile::DEFAULT` سے match کریں تاکہ accidental divergence سے بچا جا سکے۔
-* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifests میں registry metadata شامل ہوتی ہے۔
+* `sorafs.sf1@1.0.0` accesorios públicos de perfil (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت registrar corpus سے coincidencia کرتا ہے۔ Paridad de extremo a extremo Rust, Go اور Node میں دیے گئے tests سے ejercicio کی جاتی ہے۔
+* `chunker_registry::lookup_by_profile` afirmar کرتا ہے کہ parámetros del descriptor `ChunkProfile::DEFAULT` سے coincide کریں تاکہ divergencia accidental سے بچا جا سکے۔
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifiesta میں metadatos de registro شامل ہوتی ہے۔

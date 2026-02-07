@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# Փաստաթղթերի նախադիտման հետադարձ կապի ձև (W1 գործընկեր ալիք)
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
+Օգտագործեք այս ձևանմուշը W1-ի գրախոսներից կարծիքներ հավաքելիս: Կրկնօրինակեք այն մեկ
+գործընկեր, լրացրեք մետատվյալները և պահեք ավարտված պատճենը տակ
 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 
-## Reviewer metadata
+## Գրախոսի մետատվյալներ
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- **Գործընկերոջ ID`** `partner-w1-XX`
+- **Պահանջել տոմս՝** `DOCS-SORA-Preview-REQ-PXX`
+- **Հրավերն ուղարկված է (UTC):** `YYYY-MM-DD hh:mm`
+- **Հաստատված ստուգման գումար (UTC):** `YYYY-MM-DD hh:mm`
+- **Առաջնային ուշադրության ոլորտները.** (օրինակ _SoraFS նվագախմբի փաստաթղթեր_, _Torii ISO հոսքեր_)
 
-## Telemetry & artefact confirmations
+## Հեռաչափություն և արտեֆակտ հաստատումներ
 
-| Checklist item | Result | Evidence |
+| Ստուգացանկի կետ | Արդյունք | Ապացույցներ |
 | --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+| Ստուգիչ գումարի ստուգում | ✅ / ⚠️ | Մատյան տանող ուղի (օրինակ՝ `build/checksums.sha256`) |
+| Փորձեք այն proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` տառադարձման հատված |
+| Grafana վահանակի վերանայում | ✅ / ⚠️ | Սքրինշոթ ուղի(ներ) |
+| Պորտալի հետաքննության հաշվետվության վերանայում | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
 
-Add rows for any additional SLOs a reviewer inspects.
+Ավելացրեք տողեր ցանկացած լրացուցիչ SLO-ի համար, որը ստուգողը ստուգում է:
 
-## Feedback log
+## Հետադարձ կապի մատյան
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
+| Տարածք | Խստություն (ինֆորմացիա/փոքր/մաժոր/արգելափակող) | Նկարագրություն | Առաջարկվող ուղղում կամ հարց | Հետագծողի խնդիր |
 | --- | --- | --- | --- | --- |
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+Նախադիտման համար նշեք GitHub-ի խնդիրը կամ ներքին տոմսը վերջին սյունակում
+tracker-ը կարող է հետ կապել վերականգնման տարրերը այս ձևին:
 
-## Survey summary
+## Հարցման ամփոփում
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+1. **Որքա՞ն վստահ եք ստուգման գումարի ուղղորդման և հրավիրելու գործընթացում:** (1–5)
+2. **Ո՞ր փաստաթղթերն էին ամենաշատը/քիչ օգտակարը:** (կարճ պատասխան)
+3. **Կա՞ն արգելափակողներ, որոնք մուտք են գործել Try it վստահված անձի կամ հեռաչափության վահանակներ:**
+4. **Արդյո՞ք լրացուցիչ տեղայնացում կամ մատչելիության բովանդակություն է պահանջվում:**
+5. **Որևէ այլ մեկնաբանություն ԳԱ-ից առաջ:**
 
-Capture short answers and attach raw survey exports if you use an external form.
+Գրեք կարճ պատասխաններ և կցեք չմշակված հարցման արտահանումները, եթե օգտագործում եք արտաքին ձև:
 
-## Knowledge check
+## Գիտելիքների ստուգում
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+- Միավորը՝ `__/10`
+- Սխալ հարցեր (եթե այդպիսիք կան). `[#1, #4, …]`
+- Հետագա գործողություններ (եթե միավորը < 9/10). ծրագրվա՞ծ է վերականգնման կանչ: y/n
 
-## Sign-off
+## Գրանցվել
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- Գրախոսի անունը և ժամանակի դրոշմը.
+- Փաստաթղթեր/DevRel վերանայող և ժամադրոշմ.
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+Պահպանեք ստորագրված պատճենը համապատասխան արտեֆակտների հետ, որպեսզի աուդիտորները կարողանան վերարտադրել դրանք
+ալիք առանց լրացուցիչ համատեքստի.

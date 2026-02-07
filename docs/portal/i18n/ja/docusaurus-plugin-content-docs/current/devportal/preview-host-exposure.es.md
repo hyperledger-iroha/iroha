@@ -4,20 +4,22 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-host-exposure.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Guia de exposicion del host de preview
+# ホストのプレビューに関する説明
 
-El roadmap DOCS-SORA exige que cada preview publico use el mismo bundle verificado por checksum que los revisores prueban localmente. Usa este runbook despues de completar el onboarding de revisores (y el ticket de aprobacion de invitaciones) para poner en linea el host de preview beta.
+ロードマップ DOCS-SORA の証明書プレビュー公開では、ミスモ バンドルのチェックサム検証を使用して、ローカルの改訂を確認してください。米国のランブックは、完全なオンボーディングと改訂 (招待チケットと招待状) とプレビュー ベータ版のホストを作成します。
 
-## Requisitos previos
+## 以前の要件
 
-- Ola de onboarding de revisores aprobada y registrada en el tracker de preview.
-- Ultimo build del portal presente en `docs/portal/build/` y checksum verificado (`build/checksums.sha256`).
-- Credenciales de preview SoraFS (URL de Torii, autoridad, llave privada, epoch enviado) almacenadas en variables de entorno o en un config JSON como [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- Ticket de cambio DNS abierto con el hostname deseado (`docs-preview.sora.link`, `docs.iroha.tech`, etc.) mas contactos on-call.
+- プレビューのトラッカーの登録とオンボーディングの改訂を行います。
+- `docs/portal/build/` およびチェックサム検証 (`build/checksums.sha256`) でポータルを提示するウルティモ ビルド。
+- プレビュー SoraFS の認証情報 (Torii の URL、autoridad、llave privada、epoch enviado) は、変数と設定 JSON の組み合わせ [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json) を参照します。
+- オンコールの連絡先としてホスト名を指定して DNS チケット (`docs-preview.sora.link`、`docs.iroha.tech` など) を設定します。
 
-## Paso 1 - Construir y verificar el bundle
+## 手順 1 - バンドルの構築と検証
 
 ```bash
 cd docs/portal
@@ -27,11 +29,11 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-El script de verificacion se niega a continuar cuando el manifiesto de checksum falta o fue manipulado, manteniendo auditado cada artefacto de preview.
+スクリプトの検証は継続的に行われ、チェックサム ファルタまたはフエのマニピュレートをマニフェストし、プレビューの監査結果を管理します。
 
-## Paso 2 - Empaquetar los artefactos SoraFS
+## パソ 2 - エンパケタール ロス アーティファクトス SoraFS
 
-Convierte el sitio estatico en un par CAR/manifest determinista. `ARTIFACT_DIR` por defecto es `docs/portal/artifacts/`.
+CAR/マニフェスト決定者によるサイトの情報を確認します。 `ARTIFACT_DIR` は `docs/portal/artifacts/` に欠陥があります。
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --skip-submit
@@ -39,43 +41,43 @@ Convierte el sitio estatico en un par CAR/manifest determinista. `ARTIFACT_DIR` 
 node scripts/generate-preview-descriptor.mjs       --manifest artifacts/checksums.sha256       --archive artifacts/sorafs/portal.tar.gz       --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Adjunta `portal.car`, `portal.manifest.*`, el descriptor y el manifiesto de checksum al ticket de la ola de preview.
+付属品 `portal.car`、`portal.manifest.*`、記述子およびプレビューのチェックサム チケットをマニフェストします。
 
-## Paso 3 - Publicar el alias de preview
+## Paso 3 - プレビューの別名公開
 
-Repite el helper de pin **sin** `--skip-submit` cuando estes listo para exponer el host. Proporciona el config JSON o flags CLI explicitos:
+ヘルパー デ ピン **罪** `--skip-submit` cuando estes listo para exponer el host を繰り返します。 JSON 設定または CLI 明示的なフラグの設定:
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --config ~/secrets/sorafs_preview_publish.json
 ```
 
-El comando escribe `portal.pin.report.json`, `portal.manifest.submit.summary.json` y `portal.submit.response.json`, que deben viajar con el bundle de evidencia de invitaciones.
+コマンドは `portal.pin.report.json`、`portal.manifest.submit.summary.json` および `portal.submit.response.json` を記述し、jar 経由で招待状の証拠バンドルを参照してください。
 
-## Paso 4 - Generar el plan de corte DNS
+## パソ 4 - 一般的な DNS 計画
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs       --dns-hostname docs.iroha.tech       --dns-zone sora.link       --dns-change-ticket DOCS-SORA-Preview       --dns-cutover-window "2026-03-05 18:00Z"       --dns-ops-contact "pagerduty:sre-docs"       --manifest artifacts/sorafs/portal.manifest.to       --cache-purge-endpoint https://cache.api/purge       --cache-purge-auth-env CACHE_PURGE_TOKEN       --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Comparte el JSON resultante con Ops para que el cambio DNS referencie el digest del manifiesto exacto. Cuando reutilices un descriptor anterior como fuente de rollback, agrega `--previous-dns-plan path/to/previous.json`.
+操作パラレルの JSON 結果を比較し、DNS 参照とダイジェストを正確にマニフェストします。 Cuando はロールバックの前の記述子を再利用し、agrega `--previous-dns-plan path/to/previous.json` を実行します。
 
-## Paso 5 - Probar el host desplegado
+## パソ 5 - プロバー エル ホスト デスプレガド
 
 ```bash
 npm run probe:portal --       --base-url=https://docs-preview.sora.link       --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-El probe confirma el tag de release servido, headers CSP y metadatos de firma. Repite el comando desde dos regiones (o adjunta la salida de curl) para que los auditores vean que el edge cache esta caliente.
+リリース サービスのタグ、ヘッダー CSP、および企業のメタデータをプローブします。地域のコマンド (またはカールの補助) を繰り返し、エッジ キャッシュを確認してください。
 
-## Bundle de evidencia
+## 証拠のバンドル
 
-Incluye los siguientes artefactos en el ticket de la ola de preview y referencialos en el email de invitacion:
+招待状のプレビューおよび参照用のチケットのシグエンテス アートファクトが含まれています:
 
-| Artefacto | Proposito |
-|----------|-----------|
-| `build/checksums.sha256` | Demuestra que el bundle coincide con el build de CI. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Payload canonico SoraFS + manifiesto. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Muestra que el envio del manifiesto + el alias binding se completaron. |
-| `artifacts/sorafs/portal.dns-cutover.json` | Metadatos DNS (ticket, ventana, contactos), resumen de promocion de ruta (`Sora-Route-Binding`), el puntero `route_plan` (plan JSON + plantillas de header), info de purge de cache e instrucciones de rollback para Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Descriptor firmado que enlaza el archive + checksum. |
-| Salida de `probe` | Confirma que el host en vivo anuncia el tag de release esperado. |
+|アーティファクト |プロポジト |
+|----------|----------|
+| `build/checksums.sha256` |バンドルの実装は、CI のビルドと一致します。 |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` |ペイロード canonico SoraFS + マニフェスト。 |
+| `portal.pin.report.json`、`portal.manifest.submit.summary.json`、`portal.submit.response.json` | Muestra que el envio del manifyto + el alias binding se completaron。 |
+| `artifacts/sorafs/portal.dns-cutover.json` |メタデータ DNS (チケット、ベンタナ、コンタクト)、プロモーションの再開 (`Sora-Route-Binding`)、エルプンテロ `route_plan` (プラン JSON + ヘッダーのプラント)、キャッシュのパージ情報、および運用時のロールバック命令の情報。 |
+| `artifacts/sorafs/preview-descriptor.json` |記述子 armado que enlaza el archive + チェックサム。 |
+|サリダ デ `probe` |生体内でのホストのリリース タグを確認します。 |

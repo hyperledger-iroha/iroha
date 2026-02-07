@@ -4,43 +4,43 @@ direction: rtl
 source: docs/portal/docs/reference/address-safety.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Seguridad y accesibilidad de direcciones
-description: Requisitos de UX para presentar y compartir direcciones de Iroha con seguridad (ADDR-6c).
+عنوان: ایڈریس سیکیورٹی اور رسائ
+تفصیل: Iroha ایکس ایڈریس (EDDR-6C) کو محفوظ طریقے سے پیش کرنے اور شیئر کرنے کے لئے UX کی ضروریات۔
 ---
 
-Esta pagina captura el entregable de documentacion ADDR-6c. Aplica estas restricciones a wallets, explorers, herramientas de SDK y cualquier superficie del portal que renderice o acepte direcciones orientadas a personas. El modelo de datos canonico vive en `docs/account_structure.md`; la checklist de abajo explica como exponer esos formatos sin comprometer seguridad o accesibilidad.
+اس صفحے نے EDDR-6C دستاویزات کی فراہمی کے قابل قبضہ کیا ہے۔ ان پابندیوں کا اطلاق بٹوے ، ایکسپلورر ، ایس ڈی کے ٹولز ، اور کسی بھی پورٹل سطح پر کریں جو لوگوں کا سامنا کرنے والے پتے پیش کرتا ہے یا قبول کرتا ہے۔ کیننیکل ڈیٹا ماڈل `docs/account_structure.md` میں رہتا ہے۔ نیچے دیئے گئے چیک لسٹ میں بتایا گیا ہے کہ سیکیورٹی یا رسائ پر سمجھوتہ کیے بغیر ان فارمیٹس کو کس طرح بے نقاب کیا جائے۔
 
-## Flujos seguros de comparticion
+## محفوظ شیئرنگ فلوز
 
-- Por defecto, cada accion de copiar/compartir debe usar la direccion IH58. Muestra el dominio resuelto como contexto de apoyo para que la cadena con checksum permanezca al frente.
-- Ofrece una accion "Compartir" que incluya la direccion en texto plano y un QR derivado del mismo payload. Permite que las personas inspeccionen ambos antes de confirmar.
-- Cuando el espacio obligue a truncar (tarjetas pequenas, notificaciones), conserva el prefijo legible, muestra puntos suspensivos y reten los ultimos 4-6 caracteres para que sobreviva el ancla del checksum. Provee un toque/atajo de teclado para copiar la cadena completa sin truncamiento.
-- Evita la desincronizacion del portapapeles emitiendo un toast de confirmacion que previsualice la cadena IH58 exacta que se copio. Donde haya telemetria, cuenta intentos de copia versus acciones de compartir para detectar regresiones de UX rapido.
+- پہلے سے طے شدہ طور پر ، ہر کاپی/شیئر ایکشن کو IH58 ایڈریس کا استعمال کرنا چاہئے۔ حل شدہ ڈومین کو معاون سیاق و سباق کے طور پر ظاہر کرتا ہے تاکہ چیکڈسم سٹرنگ سامنے رہے۔
+- ایک "شیئر" ایکشن پیش کریں جس میں سادہ متن میں پتہ اور اسی پے لوڈ سے اخذ کردہ کیو آر شامل ہے۔ تصدیق کرنے سے پہلے لوگوں کو دونوں کا معائنہ کرنے کی اجازت دیں۔
+- جب جگہ کو تراشنے (چھوٹے کارڈ ، اطلاعات) کی ضرورت ہوتی ہے تو ، سابقہ ​​پڑھنے کے قابل رکھیں ، بیضوی شکل دکھائیں اور آخری 4-6 حروف کو برقرار رکھیں تاکہ چیکسم اینکر زندہ رہے۔ بغیر کسی تراشے کے پورے سٹرنگ کو کاپی کرنے کے لئے ٹچ/کی بورڈ شارٹ کٹ فراہم کرتا ہے۔
+- ایک تصدیقی ٹوسٹ جاری کرکے کلپ بورڈ ڈیسنکرنائزیشن کو روکیں جو کاپی کیا گیا تھا اس کے عین مطابق IH58 سٹرنگ کا پیش نظارہ کرتا ہے۔ جہاں ٹیلی میٹری موجود ہے ، UX رجعتوں کا جلد پتہ لگانے کے لئے COUNT کاپی کی کوششوں کے مقابلے میں حصص کے مقابلے میں۔
 
-## IME y salvaguardas de entrada
+## IME اور ان پٹ حفاظتی انتظامات
 
-- Rechaza entradas no ASCII en campos de direccion. Cuando aparezcan artefactos de composicion IME (full width, Kana, marcas de tono), muestra una advertencia inline que explique como cambiar el teclado a entrada en latin antes de reintentar.
-- Provee una zona de pegado en texto plano que elimine marcas combinantes y reemplace espacios en blanco por espacios ASCII antes de validar. Esto evita que la persona pierda progreso cuando desactiva el IME a mitad de flujo.
-- Endurece la validacion contra zero-width joiners, variation selectors y otros puntos de codigo Unicode sigilosos. Registra la categoria del punto de codigo rechazado para que los fuzzing suites puedan importar la telemetria.
+- ایڈریس فیلڈز میں غیر ASCII ان پٹ کو مسترد کریں۔ جب آئی ایم ای مرکب نمونے (مکمل چوڑائی ، کنا ، پچ مارکس) ظاہر ہوتے ہیں تو ، ایک ان لائن انتباہ ظاہر کریں جس میں یہ بتایا گیا ہے کہ دوبارہ کوشش کرنے سے پہلے کی بورڈ کو لاطینی ان پٹ میں تبدیل کرنے کا طریقہ۔
+- سادہ متن میں ایک پیسٹ زون فراہم کرتا ہے جو مماثل نشانات کو ہٹاتا ہے اور توثیق سے پہلے وائٹ اسپیس کو ASCII خالی جگہوں سے تبدیل کرتا ہے۔ جب اس شخص کو آئی ایم ای مڈ اسٹریم بند کردیتے ہیں تو اس سے ترقی کھونے سے روکتا ہے۔
+- صفر چوڑائی کے جوائنرز ، تغیرات کے سلیکٹرز اور دیگر چپکے والے یونیکوڈ کوڈ پوائنٹس کے خلاف ہارڈن توثیق۔ مسترد شدہ کوڈ پوائنٹ کے زمرے کو ریکارڈ کرتا ہے تاکہ فوزنگ سوئٹ ٹیلی میٹری کو درآمد کرسکیں۔
 
-## Expectativas de tecnologia asistiva
+## معاون ٹیکنالوجی کی توقعات
 
-- Anota cada bloque de direccion con `aria-label` o `aria-describedby` que deletree el prefijo legible y agrupe el payload en bloques de 4-8 caracteres ("ih dash b three two ..."). Esto evita que los lectores de pantalla produzcan un flujo ininteligible de caracteres.
-- Anuncia los eventos de copia/comparticion exitosos mediante una actualizacion de live region en modo polite. Incluye el destino (portapapeles, hoja de compartir, QR) para que la persona sepa que la accion se completo sin mover el foco.
-- Provee texto `alt` descriptivo para las vistas previas de QR (p. ej., "Direccion IH58 para `<account>` en la cadena `0x1234`"). Incluye un fallback "Copiar direccion como texto" junto al canvas de QR para personas con baja vision.
+- `aria-label` یا `aria-describedby` کے ساتھ ہر ایڈریس بلاک کی تشریح کریں جو پڑھنے کے قابل پریفکس کی منتقلی کرتا ہے اور پے لوڈ کو 4-8 حروف کے بلاکس میں گروپ کرتا ہے ("IH ڈیش بی تین دو ...")۔ اس سے اسکرین کے قارئین کو کرداروں کے ناقابل فہم سلسلے کی تیاری سے روکتا ہے۔
+- شائستہ وضع میں براہ راست خطے کی تازہ کاری کے ذریعہ کامیاب کاپی/شیئر ایونٹس کا اعلان کریں۔ منزل (کلپ بورڈ ، شیئر شیٹ ، کیو آر) کو شامل کریں تاکہ وہ شخص جانتا ہو کہ توجہ مرکوز کیے بغیر کارروائی مکمل ہوگئی۔
+- QR پیش نظارہ کے لئے وضاحتی `alt` متن فراہم کرتا ہے (جیسے "`<account>` کے لئے `<account>` کے لئے IH58 ایڈریس `0x1234`")۔ کم وژن والے لوگوں کے لئے QR کینوس کے ساتھ ہی "متن کے بطور کاپی ایڈریس" فال بیک شامل ہے۔## سکیڑا ہوا پتے صرف سورہ
 
-## Direcciones comprimidas solo Sora
+- گیٹنگ: ایک واضح عہد کے پیچھے کمپریسڈ سٹرنگ `sora...` کو چھپائیں۔ کمٹ کو اس بات کا اعادہ کرنا چاہئے کہ فارمیٹ صرف SORA Nexus ڈور پر کام کرتا ہے۔
+- لیبلنگ: ہر ظاہری شکل میں ایک مرئی "سورہ صرف" بیج اور ایک ٹول ٹپ شامل ہونا ضروری ہے جس میں بتایا گیا ہے کہ دوسرے نیٹ ورکس کو IH58 فارم کی ضرورت کیوں ہے۔
+- محافظ: اگر فعال چین کا امتیازی سلوک Nexus اسائنمنٹ نہیں ہے تو ، یہ کمپریسڈ ایڈریس تیار کرنے سے انکار کرتا ہے اور اس شخص کو IH58 کی طرف ہدایت کرتا ہے۔
+- ٹیلی میٹری: ریکارڈ کرتا ہے کہ کتنی بار کمپریسڈ فارم کی درخواست کی جاتی ہے اور اس کاپی کیا جاتا ہے تاکہ واقعہ پلے بوک حادثاتی اشتراک کی چوٹیوں کا پتہ لگائے۔
 
-- Gating: oculta la cadena comprimida `sora...` detras de una confirmacion explicita. La confirmacion debe reiterar que el formato solo funciona en cadenas Sora Nexus.
-- Etiquetado: cada aparicion debe incluir una insignia visible "Solo Sora" y un tooltip que explique por que otras redes requieren la forma IH58.
-- Guardrails: si el discriminante de cadena activo no es la asignacion de Nexus, rechaza generar la direccion comprimida y dirige a la persona de vuelta a IH58.
-- Telemetria: registra con que frecuencia se solicita y se copia la forma comprimida para que el playbook de incidentes detecte picos de comparticion accidental.
+## کوالٹی گیٹس
 
-## Quality gates
-
-- Extiende las pruebas UI automatizadas (o suites de a11y en storybook) para afirmar que los componentes de direcciones exponen la metadata ARIA requerida y que los mensajes de rechazo por IME aparecen.
-- Incluye escenarios de QA manual para entrada IME (kana, pinyin), pase de lector de pantalla (VoiceOver/NVDA) y copia de QR en temas de alto contraste antes del release.
-- Refleja estas comprobaciones en las checklists de release junto a las pruebas de paridad IH58 para que las regresiones sigan bloqueadas hasta corregirse.
+- خودکار UI ٹیسٹ (یا اسٹوری بوک میں A11Y سوئٹ) میں توسیع کرتا ہے تاکہ اس بات کو یقینی بنایا جاسکے کہ ایڈریس کے اجزاء مطلوبہ اریہ میٹا ڈیٹا کو بے نقاب کرتے ہیں اور یہ کہ آئی ایم ای مسترد ہونے والے پیغامات ظاہر ہوتے ہیں۔
+- IME ان پٹ (کانا ، پنین) ، اسکرین ریڈر پاس (وائس اوور/این وی ڈی اے) اور کیو آر کاپی کے لئے دستی QA منظرنامے شامل ہیں۔
+- IH58 برابری کے ٹیسٹوں کے ساتھ رہائی کی چیک لسٹ میں ان چیکوں کی عکاسی کریں تاکہ جب تک درست نہ ہونے تک رجعتیں مسدود رہیں۔

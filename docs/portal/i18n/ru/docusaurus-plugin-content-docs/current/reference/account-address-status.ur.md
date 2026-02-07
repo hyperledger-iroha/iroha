@@ -4,17 +4,19 @@ direction: ltr
 source: docs/portal/docs/reference/account-address-status.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: account-address-status
-title: اکاؤنٹ ایڈریس تعمیل
-description: ADDR-2 fixture ورک فلو کا خلاصہ اور SDK ٹیموں کی ہم آہنگی کیسے برقرار رہتی ہے۔
+id: статус-адрес-аккаунта
+Название: اکاؤنٹ ایڈریس تعمیل
+описание: Прибор ADDR-2 может быть установлен в SDK или установлен на устройстве.
 ---
 
-canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature, اور negative fixtures کو capture کرتا ہے۔ ہر SDK + Torii surface اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ portal readers بغیر mono-repo میں کھوج لگائے workflow دیکھ سکیں۔
+канонический пакет ADDR-2 (`fixtures/account/address_vectors.json`) IH58 (предпочтительный), сжатый (`sora`, второй лучший; половинная/полная ширина), мультисигнатура, отрицательные фиксаторы и возможность захвата ہر SDK + Torii поверхность JSON и кодек, дрейф кодека и др. پکڑا جا سکے۔ یہ صفحہ اندرونی краткое описание статуса (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو зеркало کرتا ہے تاکہ читателей портала بغیر Использование монорепозитория для рабочего процесса
 
-## Bundle کو regenerate یا verify کریں
+## Bundle کو восстановить یا проверить کریں
 
 ```bash
 # Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
@@ -24,30 +26,30 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Flags:
+Флаги:
 
-- `--stdout` — ad-hoc inspection کیلئے JSON کو stdout پر emit کرتا ہے۔
+- `--stdout` — специальная проверка JSON со стандартным выводом и испускаемым потоком.
 - `--out <path>` — مختلف path پر لکھتا ہے (مثلا لوکل diff کے وقت)۔
-- `--verify` — working copy کو تازہ generate شدہ content کے ساتھ compare کرتا ہے (`--stdout` کے ساتھ combine نہیں ہو سکتا)۔
+- `--verify` — рабочая копия, позволяющая генерировать контент и сравнивать данные (`--stdout` позволяет объединить все файлы). سکتا)۔
 
-CI workflow **Address Vector Drift** `cargo xtask address-vectors --verify`
-ہر بار چلاتا ہے جب fixture، generator، یا docs بدلیں تاکہ reviewers کو فوراً alert کیا جا سکے۔
+Рабочий процесс CI **Дрейф вектора адреса** `cargo xtask address-vectors --verify`
+Используйте инструменты, генератор, документы и рецензенты, а также оповещения о них.
 
-## Fixture کون استعمال کرتا ہے؟
+## Крепеж для установки
 
-| Surface | Validation |
+| Поверхность | Проверка |
 |---------|------------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
-| Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
+| Модель данных Rust | `crates/iroha_data_model/tests/account_address_vectors.rs` |
+| Torii (сервер) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-ہر harness canonical bytes + IH58 + compressed (`sora`, second-best) encodings کا round-trip کرتا ہے اور negative cases کیلئے Norito-style error codes کو fixture کے ساتھ match کرتا ہے۔
+Использование канонических байтов + IH58 + сжатых (`sora`, второй лучший) кодировок. Возможность двустороннего обхода. Возможность устранения отрицательных случаев. Коды ошибок в стиле Norito. کرتا ہے۔
 
-## Automation چاہئے؟
+## Автоматизация
 
-Release tooling fixture refreshes کو `scripts/account_fixture_helper.py` کے ذریعے script کر سکتی ہے، جو copy/paste کے بغیر canonical bundle fetch یا verify کرتا ہے:
+Обновление инструмента выпуска для `scripts/account_fixture_helper.py` или скрипта для копирования и вставки, а также для извлечения канонического пакета и проверки:
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -63,9 +65,9 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-Helper `--source` overrides یا `IROHA_ACCOUNT_FIXTURE_URL` environment variable قبول کرتا ہے تاکہ SDK CI jobs اپنے پسندیدہ mirror کی طرف اشارہ کر سکیں۔ جب `--metrics-out` دیا جاتا ہے تو helper `account_address_fixture_check_status{target="…"}` کے ساتھ canonical SHA-256 digest (`account_address_fixture_remote_info`) لکھتا ہے تاکہ Prometheus textfile collectors اور Grafana dashboard `account_address_fixture_status` ہر surface کی sync ثابت کر سکیں۔ جب کوئی target `0` رپورٹ کرے تو alert کریں۔ multi-surface automation کیلئے wrapper `ci/account_fixture_metrics.sh` استعمال کریں (repeatable `--target label=path[::source]` قبول کرتا ہے) تاکہ on-call teams node-exporter textfile collector کیلئے ایک consolidated `.prom` فائل publish کر سکیں۔
+Helper `--source` переопределяет переменную среды `IROHA_ACCOUNT_FIXTURE_URL`. Задание в SDK CI. Задание зеркала. کر سکیں۔ `--metrics-out` и помощник `account_address_fixture_check_status{target="…"}` могут быть использованы для канонического дайджеста SHA-256 (`account_address_fixture_remote_info`). Prometheus коллекторы текстовых файлов Grafana приборная панель `account_address_fixture_status` Поверхность для синхронизации и синхронизации. Выберите target `0` и установите оповещение. многоповерхностная автоматизация оболочка `ci/account_fixture_metrics.sh` استعمال کریں (повторяемый `--target label=path[::source]` قبول کرتا ہے) Сборщик текстовых файлов команд по вызову Консолидированный `.prom` для публикации.
 
-## مکمل brief چاہئے؟
+## Краткое описание
 
-ADDR-2 compliance status (owners، monitoring plan، open action items) کی مکمل تفصیل
-ریپوزٹری میں `docs/source/account_address_status.md` کے ساتھ Address Structure RFC (`docs/account_structure.md`) میں موجود ہے۔ اس صفحہ کو quick operational reminder کے طور پر استعمال کریں؛ تفصیلی رہنمائی کیلئے repo docs دیکھیں۔
+Статус соответствия ADDR-2 (владельцы, план мониторинга, открытые действия)
+Проверьте структуру адреса RFC (`docs/account_structure.md`) для `docs/source/account_address_status.md`. Быстрое напоминание о работе Доступ к репозиторию документов.

@@ -8,131 +8,131 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview invite tracker
 sidebar_label: Preview tracker
 description: Wave-by-wave status log for the checksum-gated docs portal preview program.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This tracker records every docs portal preview wave so DOCS-SORA owners and
-governance reviewers can see which cohort is active, who approved the invites,
-and which artefacts still need attention. Update it whenever invites are sent,
-revoked, or deferred so the audit trail stays inside the repository.
+Энэ трекер нь баримт бичгийн порталыг урьдчилан харах долгион бүрийг бүртгэдэг тул DOCS-SORA эзэмшигчид болон
+засаглалын тоймчид аль когорт идэвхтэй байгааг, урилгыг хэн зөвшөөрсөн,
+мөн ямар олдворуудад анхаарал хандуулах шаардлагатай хэвээр байна. Урилга илгээх бүрт үүнийг шинэчилж,
+хүчингүй болгосон, эсвэл хойшлуулсан тул аудитын мөр нь агуулах дотор үлдэх болно.
 
-## Wave status
+## Долгион байдал
 
-| Wave | Cohort | Tracker issue | Approver(s) | Status | Target window | Notes |
+| Долгион | Когорт | Tracker асуудал | Зөвшөөрөгч(үүд) | Статус | Зорилтот цонх | Тэмдэглэл |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs + SDK maintainers validating checksum flow | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel lead + Portal TL | 🈴 Completed | Q2 2025 weeks 1–2 | Invites sent 2025‑03‑25, telemetry stayed green, exit summary published 2025‑04‑08. |
-| **W1 – Partners** | SoraFS operators, Torii integrators under NDA | `DOCS-SORA-Preview-W1` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q2 2025 week 3 | Invites ran 2025‑04‑12 → 2025‑04‑26 with all eight partners acked; evidence captured in [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) and the exit digest in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 – Community** | Curated community waitlist (≤25 at a time) | `DOCS-SORA-Preview-W2` | Docs/DevRel lead + Community manager | 🈴 Completed | Q3 2025 week 1 (tentative) | Invites ran 2025‑06‑15 → 2025‑06‑29 with telemetry green throughout; evidence + findings captured in [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 – Beta cohorts** | Finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q1 2026 week 8 | Invites ran 2026‑02‑18 → 2026‑02‑28; digest + portal data generated via `preview-20260218` wave (see [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| **W0 – Үндсэн засварлагч** | Docs + SDK засварлагчид шалгах нийлбэрийн урсгалыг баталгаажуулдаг | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel тэргүүлэх + Портал TL | 🈴 Дууссан | 2025 оны 2-р улирал 1–2 долоо хоног | 2025‑03‑25-нд урилга илгээсэн, телеметр ногоон хэвээр байна, гаралтын хураангуйг 2025‑04‑08-нд нийтэлсэн. |
+| **W1 – Түншүүд** | SoraFS операторууд, NDA дагуу Torii интеграторууд | `DOCS-SORA-Preview-W1` | Docs/DevRel ахлагч + Засаглалын холбоо | 🈴 Дууссан | 2025 оны 2-р улирал 3 дахь долоо хоног | Урилгууд 2025‑04‑12 → 2025‑04‑26-д нийт найман түншийг хүлээн зөвшөөрсөн; [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) болон [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md)-д гарсан нотлох баримтыг цуглуулсан. |
+| **W2 – Нийгэмлэг** | Олон нийтийн хүлээлгийн жагсаалт (нэг удаад ≤25) | `DOCS-SORA-Preview-W2` | Docs/DevRel удирдагч + Олон нийтийн менежер | 🈴 Дууссан | 2025 оны 3-р улирал 1 дэх долоо хоног (урьдчилсан) | Урилгууд 2025‑06‑15 → 2025‑06‑29 онуудад телеметрийн ногоон өнгөтэй; [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md)-д авсан нотлох баримт + олдворууд. |
+| **W3 – Бета бүлэг** | Санхүү/ажиглалтын бета хувилбар + SDK түнш + экосистемийн өмгөөлөгч | `DOCS-SORA-Preview-W3` | Docs/DevRel ахлагч + Засаглалын холбоо | 🈴 Дууссан | 2026 оны 1-р улирал 8 дахь долоо хоног | Урилгууд 2026‑02‑18 → 2026‑02‑28; digest + `preview-20260218` долгионоор үүсгэсэн портал өгөгдөл ([`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) -г үзнэ үү). |
 
-> Note: link each tracker issue to the corresponding preview request tickets and
-> archive them under the `docs-portal-preview` project so approvals remain
-> discoverable.
+> Тайлбар: мөрдөгчийн асуудал бүрийг харгалзах урьдчилан үзэх хүсэлтийн тасалбартай холбоно уу
+> `docs-portal-preview` төслийн дагуу тэдгээрийг архивлах тул зөвшөөрөл хэвээр үлдэнэ
+> илрүүлэх боломжтой.
 
-## Active tasks (W0)
+## Идэвхтэй даалгавар (W0)
 
-- ✅ Preflight artefacts refreshed (GitHub Actions `docs-portal-preview` run 2025‑03‑24, descriptor verified via `scripts/preview_verify.sh` using tag `preview-2025-03-24`).
-- ✅ Telemetry baselines captured (`docs.preview.integrity`, `TryItProxyErrors` dashboards snapshot saved to the W0 tracker issue).
-- ✅ Outreach copy locked using [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) with preview tag `preview-2025-03-24`.
-- ✅ Intake requests logged for the first five maintainers (tickets `DOCS-SORA-Preview-REQ-01` … `-05`).
-- ✅ First five invites sent 2025‑03‑25 10:00–10:20 UTC after seven consecutive green telemetry days; acknowledgements stored in `DOCS-SORA-Preview-W0`.
-- ✅ Monitor telemetry + host office hours (daily check-ins through 2025‑03‑31; checkpoint log below).
-- ✅ Collect midpoint feedback / issues and tag them `docs-preview/w0` (see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ Publish wave summary + invite exit confirmations (exit bundle dated 2025‑04‑08; see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ W3 beta wave tracked; future waves scheduled as needed after governance review.
+- ✅ Нислэгийн өмнөх олдворуудыг шинэчилсэн (GitHub Үйлдлүүд `docs-portal-preview` 2025‑03‑24-д ажилладаг, тодорхойлогч `preview-2025-03-24` шошгыг ашиглан `scripts/preview_verify.sh`-р баталгаажуулсан).
+- ✅ Телеметрийн суурь үзүүлэлтүүдийг авсан (`docs.preview.integrity`, `TryItProxyErrors` хяналтын самбарын агшин зургийг W0 трекерийн асуудалд хадгалсан).
+- ✅ Өргөдлийн хуулбарыг [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) ашиглан `preview-2025-03-24` урьдчилан харах шошготойгоор түгжээ.
+- ✅ Эхний таван үйлчилгээ үзүүлэгчийн хүсэлтийг бүртгэсэн (тасалбар `DOCS-SORA-Preview-REQ-01` … `-05`).
+- ✅ Эхний таван урилгыг 2025‑03‑25 10:00–10:20 UTC дараалсан ногоон телеметрийн долоо хоногийн дараа илгээсэн; `DOCS-SORA-Preview-W0`-д хадгалагдсан талархал.
+- ✅ Телеметрийн хяналт + хост ажлын цаг (2025‑03‑31 хүртэл өдөр бүр бүртгүүлэх; хяналтын цэгийн бүртгэл доор).
+- ✅ Дунд цэгийн санал хүсэлт / асуудлуудыг цуглуулж, тэдгээрийг `docs-preview/w0` гэж тэмдэглэнэ үү ([W0 digest](./preview-feedback/w0/summary.md)-ыг үзнэ үү).
+- ✅ Давалгааны хураангуй + урилга гарах баталгаажуулалтыг нийтлэх (2025‑04‑08-ны өдрийн гаралтын багц; [W0 тойм](./preview-feedback/w0/summary.md)-г үзнэ үү).
+- ✅ W3 бета долгионыг хянадаг; засаглалыг хянан үзсэний дараа шаардлагатай бол төлөвлөсөн ирээдүйн давалгаа.
 
-## W1 partner wave summary
+## W1 түншийн долгионы хураангуй
 
-- ✅ **Legal & governance approvals.** Partner addendum signed 2025‑04‑05; approvals uploaded to `DOCS-SORA-Preview-W1`.
-- ✅ **Telemetry + Try it staging.** Change ticket `OPS-TRYIT-147` executed 2025‑04‑06 with Grafana snapshots for `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` archived.
-- ✅ **Artefact + checksum prep.** `preview-2025-04-12` bundle verified; descriptor/checksum/probe logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- ✅ **Invite roster + dispatch.** All eight partner requests (`DOCS-SORA-Preview-REQ-P01…P08`) approved; invites sent 2025‑04‑12 15:00–15:21 UTC with acknowledgements logged per reviewer.
-- ✅ **Feedback instrumentation.** Daily office hours + telemetry checkpoints recorded; see [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) for the digest.
-- ✅ **Final roster/exit log.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) now records invite/ack timestamps, telemetry evidence, quiz exports, and artefact pointers as of 2025‑04‑26 so governance can replay the wave.
+- ✅ **Хууль ба засаглалын зөвшөөрөл.** Түншийн нэмэлт бичигт 2025‑04‑05-нд гарын үсэг зурсан; `DOCS-SORA-Preview-W1`-д байршуулсан зөвшөөрлүүд.
+- ✅ **Телеметрийн + Тайлбарыг туршаад үзээрэй.** `OPS-TRYIT-147` тасалбарыг 2025‑04‑06-д гүйцэтгэсэн Grafana агшин зуурын агшинд `docs.preview.integrity`, I18NI000000000000000000000018NI000000000000000000018NI0000000000000000000000000000000000 архивласан.
+- ✅ **Artefact + checksum prep.** `preview-2025-04-12` багцыг баталгаажуулсан; `artifacts/docs_preview/W1/preview-2025-04-12/` доор хадгалагдсан тодорхойлогч / шалгах нийлбэр / шалгалтын бүртгэл.
+- ✅ **Урилгын жагсаалт + илгээх.** Бүх найман түншийн хүсэлтийг (`DOCS-SORA-Preview-REQ-P01…P08`) зөвшөөрсөн; 2025‑04‑12 15:00–15:21UTC хооронд илгээсэн урилга, шүүмжлэгч бүрт бүртгүүлсэн талархалтай.
+- ✅ **Санал хүсэлтийн багаж хэрэгсэл.** Өдөр тутмын ажлын цаг + телеметрийн хяналтын цэгүүдийг бүртгэсэн; Тайлбарыг [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) үзнэ үү.
+- ✅ **Эцсийн жагсаалт/гарах бүртгэл.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) одоо 2025‑04‑26-ны байдлаар урилга/хүлээн авах цагийн тэмдэг, телеметрийн нотлох баримт, шалгалтын экспорт болон олдворын заагчийг бүртгэснээр засаглал давалгааг дахин тоглуулах боломжтой.
 
-## Invite log — W0 core maintainers
+## Урилгын бүртгэл — W0 үндсэн засварлагч
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| Шүүгчийн ID | Үүрэг | Тасалбар хүсэх | Урилга илгээсэн (UTC) | Хүлээгдэж буй гарц (UTC) | Статус | Тэмдэглэл |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025‑03‑25 10:05 | 2025‑04‑08 10:00 | Active | Acked checksum verification; focusing on nav/sidebar review. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025‑03‑25 10:08 | 2025‑04‑08 10:00 | Active | Testing SDK recipes + Norito quickstarts. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025‑03‑25 10:12 | 2025‑04‑08 10:00 | Active | Validating Try it console + ISO flows. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025‑03‑25 10:15 | 2025‑04‑08 10:00 | Active | Auditing SoraFS runbooks + orchestration docs. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025‑03‑25 10:18 | 2025‑04‑08 10:00 | Active | Reviewing telemetry/incident appendices; owns Alertmanager coverage. |
+| docs-core-01 | Портал хөтлөгч | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Идэвхтэй | Баталгаажсан шалгах нийлбэрийн баталгаажуулалт; Nav/sidebar тойм дээр анхаарлаа хандуулж байна. |
+| sdk-rust-01 | Rust SDK тэргүүлэх | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Идэвхтэй | SDK жорыг туршиж байна + Norito хурдан эхлүүлэх. |
+| sdk-js-01 | JS SDK засварлагч | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | Идэвхтэй | Баталгаажуулж байна Консол + ISO урсгалыг туршиж үзээрэй. |
+| sorafs-ops-01 | SoraFS операторын холбоо | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Идэвхтэй | Аудит SoraFS runbooks + orchestration docs. |
+| ажиглалт-01 | Ажиглах чадвар TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Идэвхтэй | Телеметрийн / ослын хавсралтыг шалгах; Alertmanager хамрах хүрээг эзэмшдэг. |
 
-All invites reference the same `docs-portal-preview` artefact (run 2025‑03‑24,
-tag `preview-2025-03-24`) and the verification transcript captured in
-`DOCS-SORA-Preview-W0`. Any additions/pauses must be logged in both the table
-above and the tracker issue before proceeding to the next wave.
+Бүх урилга нь ижил `docs-portal-preview` олдворыг иш татдаг (2025‑03‑24-ийг ажиллуулна,
+шошго `preview-2025-03-24`) ба баталгаажуулалтын хуулбарыг авсан
+`DOCS-SORA-Preview-W0`. Аливаа нэмэлт/түр зогсолтыг хүснэгтэд хоёуланд нь бүртгэсэн байх ёстой
+дээрх болон дараагийн давалгаанд шилжихээс өмнө трекерийн асуудал.
 
-## Checkpoint log — W0
+## Шалгах цэгийн бүртгэл — W0
 
-| Date (UTC) | Activity | Notes |
+| Огноо (UTC) | Үйл ажиллагаа | Тэмдэглэл |
 | --- | --- | --- |
-| 2025‑03‑26 | Telemetry baseline review + office hours | `docs.preview.integrity` + `TryItProxyErrors` remained green; office hours confirmed all reviewers completed checksum verification. |
-| 2025‑03‑27 | Midpoint feedback digest posted | Summary captured in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); two minor nav issues logged as `docs-preview/w0` labels, no incidents reported. |
-| 2025‑03‑31 | Final week telemetry spot check | Last pre-exit office hours; reviewers confirmed remaining docs tasks on track, no alerts fired. |
-| 2025‑04‑08 | Exit summary + invite closures | Acknowledged completed reviews, revoked temporary access, archived findings in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker updated before prepping W1. |
+| 2025-03-26 | Телеметрийн суурь тойм + ажлын цаг | `docs.preview.integrity` + `TryItProxyErrors` ногоон хэвээр үлдсэн; ажлын цагийн хуваарь бүх хянагч шалгалтын дүнг баталгаажуулж дууссаныг баталгаажуулсан. |
+| 2025-03-27 | Дунд цэгийн санал хүсэлтийн тойм нийтлэгдсэн | Хураангуйг [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md)-д авсан; Хоёр жижиг навигацийн асуудал `docs-preview/w0` хаягаар бүртгэгдсэн бөгөөд ямар ч осол гараагүй байна. |
+| 2025-03-31 | Сүүлийн долоо хоногт телеметрийн спот шалгах | Гарахаас өмнөх ажлын сүүлийн цаг; Шүүгчид баримт бичгийн үлдсэн ажлуудыг замдаа хийж байгааг баталж, ямар ч анхааруулга өгөөгүй. |
+| 2025-04-08 | Гарах хураангуй + хаагдахыг урих | Хүлээн зөвшөөрөгдсөн дууссан шүүмж, түр зуурын хандалтыг цуцалсан, архивлагдсан олдворууд [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); Tracker W1-ийг бэлтгэхээс өмнө шинэчлэгдсэн. |
 
-## Invite log — W1 partners
+## Урилгын бүртгэл — W1 түншүүд
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| Шүүгчийн ID | Үүрэг | Тасалбар хүсэх | Урилга илгээсэн (UTC) | Хүлээгдэж буй гарц (UTC) | Статус | Тэмдэглэл |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025‑04‑12 15:00 | 2025‑04‑26 15:00 | Completed | Delivered orchestrator ops feedback 2025‑04‑20; exit ack 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025‑04‑12 15:03 | 2025‑04‑26 15:00 | Completed | Logged rollout guidance comments in `docs-preview/w1`; exit ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025‑04‑12 15:06 | 2025‑04‑26 15:00 | Completed | Dispute/blacklist edits filed; exit ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025‑04‑12 15:09 | 2025‑04‑26 15:00 | Completed | Try it auth walkthrough accepted; exit ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025‑04‑12 15:12 | 2025‑04‑26 15:00 | Completed | RPC/OAuth doc comments logged; exit ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025‑04‑12 15:15 | 2025‑04‑26 15:00 | Completed | Preview integrity feedback merged; exit ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025‑04‑12 15:18 | 2025‑04‑26 15:00 | Completed | Telemetry/redaction review done; exit ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025‑04‑12 15:21 | 2025‑04‑26 15:00 | Completed | Gateway DNS runbook comments filed; exit ack 15:24 UTC. |
+| sorafs-op-01 | SoraFS оператор (ЕХ) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Дууссан | Оркестрийн үйлдлийн санал хүсэлтийг хүргэсэн 2025‑04‑20; 15:05UTC цагт гарах. |
+| sorafs-op-02 | SoraFS оператор (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Дууссан | `docs-preview/w1` дээр бүртгэлтэй танилцуулах зааварчилгаа; 15:10UTC-д гарна. |
+| sorafs-op-03 | SoraFS оператор (АНУ) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Дууссан | Маргаан/хар жагсаалтын засвар хийсэн; 15:12UTC-д гарна. |
+| torii-int-01 | Torii интегратор | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Дууссан | Оролдоод үзэх боломжтой. 15:14UTC цагт гарна. |
+| torii-int-02 | Torii интегратор | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Дууссан | RPC/OAuth doc тайлбарыг бүртгэсэн; 15:16UTC-д гарах. |
+| sdk-partner-01 | SDK түнш (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Дууссан | Урьдчилан харах бүрэн бүтэн байдлын санал хүсэлтийг нэгтгэсэн; 15:18UTC цагт гарна. |
+| sdk-partner-02 | SDK түнш (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Дууссан | Телеметрийн/редакцийн хяналт хийгдсэн; 15:22UTC-д гарна. |
+| gateway-ops-01 | Gateway оператор | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Дууссан | Gateway DNS runbook-ийн тайлбарыг оруулсан; 15:24UTC цагт гарна. |
 
-## Checkpoint log — W1
+## Шалгах цэгийн бүртгэл — W1
 
-| Date (UTC) | Activity | Notes |
+| Огноо (UTC) | Үйл ажиллагаа | Тэмдэглэл |
 | --- | --- | --- |
-| 2025‑04‑12 | Invite dispatch + artefact verification | All eight partners emailed with `preview-2025-04-12` descriptor/archive; acknowledgements stored in tracker. |
-| 2025‑04‑13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards reviewed — green across the board; office hours confirmed checksum verification completed. |
-| 2025‑04‑18 | Mid-wave office hours | `docs.preview.integrity` remained green; two doc nits logged under `docs-preview/w1` (nav wording + Try it screenshot). |
-| 2025‑04‑22 | Final telemetry spot check | Proxy + dashboards still healthy; no new issues raised, noted in tracker ahead of exit. |
-| 2025‑04‑26 | Exit summary + invite closures | All partners confirmed review completion, invites revoked, evidence archived in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025-04-12 | Урилга илгээх + олдворын баталгаажуулалт | Бүх найман түншүүд `preview-2025-04-12` тодорхойлогч/архиваар имэйл илгээсэн; Tracker-д хадгалагдсан талархал. |
+| 2025-04-13 | Телеметрийн суурь тойм | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` хяналтын самбаруудыг хянасан - бүхэл бүтэн ногоон; ажлын цаг баталгаажуулсан шалгах нийлбэр баталгаажуулалт дууссан. |
+| 2025-04-18 | Дунд долгионы ажлын цаг | `docs.preview.integrity` ногоон хэвээр үлдсэн; `docs-preview/w1` доор нэвтэрсэн хоёр doc nits (nav text + үзээрэй дэлгэцийн агшин). |
+| 2025-04-22 | Телеметрийн эцсийн шалгалт | Прокси + хяналтын самбарууд эрүүл хэвээр байна; Шинэ асуудал гараагүй, гарахын өмнө трекер дээр тэмдэглэсэн. |
+| 2025-04-26 | Гарах хураангуй + хаагдахыг урих | Бүх түншүүд хянуулж дууссаныг баталгаажуулсан, урилгыг хүчингүй болгосон, нотлох баримтыг [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26)-д архивласан. |
 
-## W3 beta cohort recap
+## W3 бета когортын тойм
 
-- ✅ Invites sent 2026‑02‑18 with checksum verification + acknowledgements logged the same day.
-- ✅ Feedback collected under `docs-preview/20260218` with governance issue `DOCS-SORA-Preview-20260218`; digest + summary generated via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- ✅ Access revoked 2026‑02‑28 after the final telemetry check; tracker + portal tables updated to show W3 as completed.
+- ✅ 2026‑02‑18-д илгээсэн урилга, шалгах нийлбэр баталгаажуулалт + нэг өдөр нэвтэрсэн талархалтай.
+- ✅ `DOCS-SORA-Preview-20260218` засаглалын асуудалтай `docs-preview/20260218` дагуу санал хүсэлтийг цуглуулсан; digest + `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`-ээр үүсгэсэн хураангуй.
+- ✅ Телеметрийн эцсийн шалгалтын дараа 2026‑02‑28-нд нэвтрэх эрхийг цуцалсан; tracker + портал хүснэгтүүдийг W3-г дууссан гэж харуулахын тулд шинэчилсэн.
 
-## Invite log — W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## Урилгын бүртгэл — W2 нийгэмлэг| Шүүгчийн ID | Үүрэг | Тасалбар хүсэх | Урилга илгээсэн (UTC) | Хүлээгдэж буй гарц (UTC) | Статус | Тэмдэглэл |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025‑06‑15 16:00 | 2025‑06‑29 16:00 | Completed | Ack 16:06 UTC; focusing on SDK quickstarts; exit confirmed 2025‑06‑29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025‑06‑15 16:03 | 2025‑06‑29 16:00 | Completed | Governance/SNS review done; exit confirmed 2025‑06‑29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025‑06‑15 16:06 | 2025‑06‑29 16:00 | Completed | Norito walkthrough feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025‑06‑15 16:09 | 2025‑06‑29 16:00 | Completed | SoraFS runbook review done; exit ack 2025‑06‑29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025‑06‑15 16:12 | 2025‑06‑29 16:00 | Completed | Accessibility/UX notes shared; exit ack 2025‑06‑29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025‑06‑15 16:15 | 2025‑06‑29 16:00 | Completed | Localization feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025‑06‑15 16:18 | 2025‑06‑29 16:00 | Completed | Mobile SDK doc checks delivered; exit ack 2025‑06‑29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025‑06‑15 16:21 | 2025‑06‑29 16:00 | Completed | Observability appendix review done; exit ack 2025‑06‑29. |
+| comm-vol-01 | Олон нийтийн тоймч (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Дууссан | Ака 16:06UTC; SDK хурдан эхлүүлэхэд анхаарлаа хандуулах; гарцыг 2025-06-29-нд баталгаажуулсан. |
+| comm-vol-02 | Олон нийтийн тоймч (Засаглал) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Дууссан | Засаглал/SNS-ийн хяналт хийсэн; гарцыг 2025-06-29-нд баталгаажуулсан. |
+| comm-vol-03 | Олон нийтийн тоймч (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Дууссан | Norito дэлгэрэнгүй санал хүсэлтийг бүртгэсэн; гарах акк 2025-06-29. |
+| comm-vol-04 | Олон нийтийн тоймч (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Дууссан | SoraFS runbook тойм хийгдсэн; гарах акк 2025-06-29. |
+| comm-vol-05 | Олон нийтийн тоймч (Хүртээмж) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Дууссан | Хүртээмж/UX тэмдэглэл хуваалцсан; гарах акк 2025-06-29. |
+| comm-vol-06 | Олон нийтийн тоймч (Нутгалчлал) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Дууссан | Локалчлалын санал хүсэлтийг бүртгэсэн; гарах акк 2025-06-29. |
+| comm-vol-07 | Олон нийтийн тоймч (Мобайл) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Дууссан | Гар утасны SDK баримтын шалгалтыг хүргэсэн; гарах акк 2025-06-29. |
+| comm-vol-08 | Олон нийтийн тоймч (Ажиглах боломжтой) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Дууссан | Ажиглалтын хавсралтын хяналт хийгдсэн; гарах акк 2025-06-29. |
 
-## Checkpoint log — W2
+## Шалгах цэгийн бүртгэл — W2
 
-| Date (UTC) | Activity | Notes |
+| Огноо (UTC) | Үйл ажиллагаа | Тэмдэглэл |
 | --- | --- | --- |
-| 2025‑06‑15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive shared with 8 community reviewers; acknowledgements stored in tracker. |
-| 2025‑06‑16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards green; Try it proxy logs show community tokens active. |
-| 2025‑06‑18 | Office hours & issue triage | Collected two suggestions (`docs-preview/w2 #1` tooltip wording, `#2` localization sidebar) — both routed to Docs. |
-| 2025‑06‑21 | Telemetry check + doc fixes | Docs addressed `docs-preview/w2 #1/#2`; dashboards still green, no incidents. |
-| 2025‑06‑24 | Final week office hours | Reviewers confirmed remaining feedback submissions; no alert fire. |
-| 2025‑06‑29 | Exit summary + invite closures | Acks recorded, preview access revoked, telemetry snapshots + artefacts archived (see [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025‑04‑15 | Office hours & issue triage | Two documentation suggestions logged under `docs-preview/w1`; no incidents or alerts triggered. |
+| 2025-06-15 | Урилга илгээх + олдворын баталгаажуулалт | `preview-2025-06-15` тодорхойлогч/архивыг олон нийтийн 8 тоймчтой хуваалцсан; Tracker-д хадгалагдсан талархал. |
+| 2025-06-16 | Телеметрийн суурь тойм | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` хяналтын самбар ногоон; Оролдоод үзээрэй прокси лог нь олон нийтийн жетоныг идэвхтэй харуулдаг. |
+| 2025-06-18 | Ажлын цаг, асуудлыг шийдвэрлэх | Хоёр зөвлөмжийг цуглуулсан (`docs-preview/w2 #1` хэрэгслийн зөвлөмжийн үг, `#2` нутагшуулах талбар) - хоёуланг нь Докс руу чиглүүлсэн. |
+| 2025-06-21 | Телеметрийн шалгалт + баримт бичгийн засварууд | `docs-preview/w2 #1/#2` хаягтай бичиг баримтууд; хяналтын самбарууд ногоон хэвээр байна, ямар ч осол гараагүй. |
+| 2025-06-24 | Сүүлийн долоо хоногийн ажлын цаг | Шүүгчид үлдсэн санал хүсэлтийг баталгаажуулсан; дохиоллын гал байхгүй. |
+| 2025-06-29 | Гарах хураангуй + хаагдахыг урих | Бүртгэгдсэн, урьдчилан үзэх хандалтыг цуцалсан, телеметрийн агшин зуурын зураг + олдворуудыг архивласан ([`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)-г үзнэ үү). |
+| 2025-04-15 | Ажлын цаг, асуудлыг шийдвэрлэх | `docs-preview/w1` доор бүртгэгдсэн хоёр баримт бичгийн санал; ямар ч осол, сэрэмжлүүлэг үүсгээгүй. |
 
-## Reporting hooks
+## Мэдээллийн дэгээ
 
-- Each Wednesday, update the tracker table above plus the active invite issue
-  with a short status note (invites sent, active reviewers, incidents).
-- When a wave closes, append the feedback summary path (for example,
-  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) and link it from
+- Лхагва гараг бүр дээрх трекерийн хүснэгт болон идэвхтэй урилгын асуудлыг шинэчил
+  богино статусын тэмдэглэл (илгээсэн урилга, идэвхтэй тоймчид, тохиолдлууд).
+- Долгион хаагдах үед санал хүсэлтийн хураангуй замыг нэмнэ үү (жишээлбэл,
+  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) болон үүнийг холбоно уу
   `status.md`.
-- If any pause criteria from the [preview invite flow](./preview-invite-flow.md)
-  trigger, add the remediation steps here before resuming invites.
+- Хэрэв [урьдчилан үзэх урилга] (./preview-invite-flow.md)-аас түр зогсоох шалгуур байвал
+  гох, урилгыг үргэлжлүүлэхийн өмнө засах алхмуудыг энд нэмнэ үү.

@@ -4,25 +4,27 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-sdk-rust.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-rust
-title: مقتطفات Rust SDK
-sidebar_label: مقتطفات Rust
+identifiant : développeur-sdk-rust
+titre : Mise à jour du SDK Rust
+sidebar_label : contient Rust
 description: أمثلة Rust دنيا لاستهلاك تدفقات الأدلة والمانيفستات.
 ---
 
 :::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/sdk/rust.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
+Il s'agit de la référence `docs/source/sorafs/developer/sdk/rust.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
 :::
 
-تغذّي حزم Rust في هذا المستودع واجهة CLI ويمكن تضمينها داخل مُنسِّقات أو خدمات مخصّصة.
+Vous pouvez utiliser Rust avec la CLI et la CLI pour créer des applications et des applications.
 تسلط المقتطفات التالية الضوء على المساعدات التي يطلبها معظم المطورين.
 
 ## مساعد تدفق الأدلة
 
-أعد استخدام محلل تدفق الأدلة الحالي لتجميع المقاييس من استجابة HTTP:
+Si vous utilisez le protocole HTTP :
 
 ```rust
 use std::error::Error;
@@ -60,45 +62,43 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-تتوفر النسخة الكاملة (مع الاختبارات) في `docs/examples/sorafs_rust_proof_stream.rs`.
-تنتج `ProofStreamSummary::to_json()` نفس JSON للمقاييس الذي يصدره CLI، ما يسهل تغذية
+Il s'agit d'un numéro de téléphone (مع الاختبارات) dans `docs/examples/sorafs_rust_proof_stream.rs`.
+Utiliser `ProofStreamSummary::to_json()` pour JSON pour la CLI en ligne
 منصات الرصد أو فرضيات CI.
 
 ## تقييم الجلب متعدد المصادر
 
 يعرض الموديول `sorafs_car::multi_fetch` مُجدول الجلب غير المتزامن المستخدم في CLI.
-نفّذ `sorafs_car::multi_fetch::ScorePolicy` ومرّره عبر `FetchOptions::score_policy`
+نفّذ `sorafs_car::multi_fetch::ScorePolicy` et `FetchOptions::score_policy`
 لضبط ترتيب المزوّدين. يوضح اختبار الوحدة
-`multi_fetch::tests::score_policy_can_filter_providers` كيفية فرض تفضيلات مخصصة.
+`multi_fetch::tests::score_policy_can_filter_providers` est la solution idéale.
 
-عناصر أخرى تعكس أعلام CLI:
-
-- `FetchOptions::per_chunk_retry_limit` يطابق علم `--retry-budget` لتشغيلات CI التي
+Utilisez la CLI :- `FetchOptions::per_chunk_retry_limit` يطابق علم `--retry-budget` لتشغيلات CI تي
   تحد عدد المحاولات عمدًا.
 - اجمع بين `FetchOptions::global_parallel_limit` و`--max-peers` لتقييد عدد المزوّدين
   المتزامنين.
-- يقوم `OrchestratorConfig::with_telemetry_region("region")` بوسم مقاييس
-  `sorafs_orchestrator_*`، بينما يعكس `OrchestratorConfig::with_transport_policy`
-  علم CLI `--transport-policy`. تُشحن `TransportPolicy::SoranetPreferred` كافتراضي عبر
-  أسطح CLI/SDK؛ استخدم `TransportPolicy::DirectOnly` فقط عند اختبار downgrade أو اتباع
-  توجيه امتثال، واحجز `SoranetStrict` لطيارين PQ-only بموافقة صريحة.
-- اضبط `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` لفرض رفع PQ-only؛ سيعزز المساعد سياسات
+- يقوم `OrchestratorConfig::with_telemetry_region("region")` par مقاييس
+  `sorafs_orchestrator_*`, pour `OrchestratorConfig::with_transport_policy`
+  Voir CLI `--transport-policy`. تُشحن `TransportPolicy::SoranetPreferred` كافتراضي عبر
+  Utiliser CLI/SDK Utiliser `TransportPolicy::DirectOnly` pour passer à une version antérieure et à un déclassement
+  Utilisez le modèle `SoranetStrict` pour PQ uniquement.
+- Exemple `SorafsGatewayFetchOptions::write_mode_hint =
+  Some(WriteModeHint::UploadPqOnly)` pour utiliser PQ uniquement سيعزز المساعد سياسات
   النقل/إخفاء الهوية تلقائيًا ما لم يتم تجاوزها صراحةً.
 - استخدم `SorafsGatewayFetchOptions::policy_override` لتثبيت طبقة نقل أو إخفاء هوية
   مؤقتة لطلب واحد؛ تمرير أي حقل يتجاوز تخفيض brownout ويفشل عندما يتعذر تلبية الطبقة
   المطلوبة.
-- تستخدم روابط Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) وJavaScript
+- Utilisation de Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) et JavaScript
   (`sorafsMultiFetchLocal`) نفس المُجدول، لذا اضبط `return_scoreboard=true` في تلك المساعدات
-  لاسترجاع الأوزان المحسوبة مع إيصالات الـ chunk.
+  Il s'agit d'un morceau.
 - يسجل `SorafsGatewayScoreboardOptions::telemetry_source_label` تدفق OTLP الذي أنتج
   حزمة تبنٍ. عند الإغفال، يستنتج العميل `region:<telemetry_region>` (أو `chain:<chain_id>`) تلقائيًا
   حتى تحمل الميتاداتا دائمًا وسمًا وصفيًا.
 
 ## الجلب عبر `iroha::Client`
 
-تضم حزمة Rust SDK مساعد الجلب عبر البوابة؛ مرر مانيفست مع أوصاف المزوّدين
-(بما في ذلك رموز البث) ودع العميل يدير الجلب متعدد المصادر:
+Utiliser Rust SDK à partir de maintenant مرر مانيفست مع أوصاف المزوّدين
+(بما في ذلك رموز البث) ودع العميل يدير الجلب متعدد المصادر :
 
 ```rust
 use eyre::Result;
@@ -145,22 +145,20 @@ pub async fn fetch_payload(
         .await?;
     Ok(outcome.assemble_payload())
 }
-```
-
-اضبط `transport_policy` إلى `Some(TransportPolicy::SoranetStrict)` عندما يجب أن ترفض
-الرفوعات المرحلات الكلاسيكية، أو `Some(TransportPolicy::DirectOnly)` عندما يجب تجاوز
-SoraNet بالكامل. وجّه `scoreboard.persist_path` إلى دليل آرتيفاكتات الإصدار، واضبط
-اختياريًا `scoreboard.now_unix_secs`، واملأ `scoreboard.metadata` بسياق الالتقاط
-(وسوم fixtures، هدف Torii، إلخ) حتى يستهلك `cargo xtask sorafs-adoption-check` JSON
-حتميًا عبر SDKs مع ملف المصدر الذي يتوقعه SF-6c.
+```اضبط `transport_policy` pour `Some(TransportPolicy::SoranetStrict)` عندما يجب أن ترفض
+عندما يجب تجاوز `Some(TransportPolicy::DirectOnly)` `Some(TransportPolicy::DirectOnly)`
+SoraNet est disponible. وجّه `scoreboard.persist_path` إلى دليل آرتيفاكتات الإصدار، واضبط
+اختياريًا `scoreboard.now_unix_secs`, واملأ `scoreboard.metadata` pour le téléchargement
+(pour les luminaires, Torii, pour) est `cargo xtask sorafs-adoption-check` JSON
+Les SDK sont également compatibles avec SF-6c.
 تقوم `Client::sorafs_fetch_via_gateway` الآن بإثراء تلك الميتاداتا بمعرف المانيفست،
-وتوقع CID المانيفست الاختياري، وعلم `gateway_manifest_provided` عبر فحص
-`GatewayFetchConfig` المقدم، بحيث تلبي الالتقاطات التي تتضمن ظرف مانيفست موقع متطلبات
-دليل SF-6c دون تكرار تلك الحقول يدويًا.
+Le CID est en cours de réalisation et `gateway_manifest_provided` est disponible.
+`GatewayFetchConfig` المقدم، بحيث تلبي التقاطات التي تتضمن ظرف مانيفست موقع متطلبات
+Le SF-6c est un produit de qualité.
 
 ## مساعدات المانيفست
 
-يظل `ManifestBuilder` الطريقة المعتمدة لتجميع حمولات Norito برمجيًا:
+يظل `ManifestBuilder` الطريقة المعتمدة لتجميع حمولات Norito byرمجيًا:
 
 ```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};

@@ -4,62 +4,64 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Codec Reference
+# I18NT000000001X Codec Һылтанма
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito I18NT000000006X’s канон сериализация ҡатламы. Һәр сымлы хәбәр, диск өҫтөндә
+файҙалы йөк, һәм кросс-компонент API ҡуллана I18NT00000000003X шулай төйөндәр менән килешә бер үк байт
+хатта улар төрлө аппаратта йүгергәндә лә. Был биттә хәрәкәт итеүсе өлөштәре дөйөмләштерелә .
+һәм `norito.md`-та тулы спецификацияға күрһәтә.
 
-## Core layout
+## Ядро планировкаһы
 
-| Component | Purpose | Source |
+| Компонент | Маҡсат | Сығанаҡ |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **Башыраҡ** | Кадрҙар файҙалы йөктәр менән тылсымлы/версия/схема хеш, CRC64, оҙонлоғо, һәм ҡыҫыу тег; v1 талап итә `VERSION_MINOR = 0x00` һәм раҫлай баш флагы ҡаршы ярҙам битлек (подлуҫ I18NI000000009X). | `norito::header` — ҡарағыҙ `norito.md` (“Баш һәм флагтар”, һаҡлағыс тамыр) |
+| **Яланғас файҙалы йөк** | Детерминистик ҡиммәт кодлау өсөн ҡулланылған хеширование/сағыштырыу. Сымлы транспорт һәр ваҡыт башлыҡ ҡуллана; яланғас байттар эске-тик. | I18NI0000012X |
+| **Ҡыҫыу** | Опциональ Zstd (һәм эксперименталь GPU тиҙләнеше) баш ҡыҫыу байт аша һайланған. | `norito.md`, “Ҡыҫыу һөйләшеүҙәре” |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+Макет флагы реестры (пакет-структура, ҡапланған-seq, ялан бит, компакт
+оҙонлоғо) `norito::header::flags`-та йәшәй. V1 ғәҙәттәгесә флагтар I18NI000000015X әммә
+ҡабул итә асыҡ баш флагтар эсендә терәк битлек; билдәһеҙ биттар -
+кире ҡаҡты. `norito::header::Flags` эске тикшерелеү өсөн һаҡлана һәм
+киләсәк версиялары.
 
-## Derive support
+## Ярҙам алыу
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` суднолары I18NI000000018X, I18NI000000019X, `IntoSchema`, һәм JSON ярҙамсы сыға.
+Төп конвенциялар:
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- Һыу алыуҙар AoS һәм ҡапланған код юлдарын генерациялай; v1 ғәҙәттәгесә AoS
+  макеты (флагтар `0x00`), әгәр баш флагтары ҡапланған варианттарға һайлау.
+  Ғәмәлгә ашырыу `crates/norito_derive/src/derive_struct.rs`-та йәшәй.
+- Макетҡа зыян килтергән функциялар (I18NI000000023X, I18NI000000024X, I18NI000000025X X)
+  баш флагтары аша опт-ин һәм кодировка булырға тейеш/дөрөҫкә эҙмә-эҙлекле тиҫтерҙәре буйынса.
+- JSON ярҙамсылары (`norito::json`) детерминистик I18NT0000000004X-арҡа JSON өсөн тәьмин итеү өсөн.
+  асыҡ API-лар. Ҡулланыу I18NI000000027X — бер ҡасан да `serde_json`.
 
-## Multicodec & identifier tables
+## Мультодек һәм идентификатор таблицалары
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito үҙенең күп кодекслы заданиеларын һаҡлай `norito::multicodec`. Һылтанма
+таблица (хаштар, төп төрҙәре, файҙалы йөк тасуирламалары) I18NI0000000300X-та һаҡлана.
+һаҡлағыс тамырында урынлашҡан. Яңы идентификатор өҫтәлгәндә:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. Яңыртыу I18NI000000031X.
+2. I18NI000000032X-тағы таблицаны оҙайтырға.
+3. Регенерациялау нижестоящий бәйләү (Python/Java) әгәр улар карта ҡулланыу.
 
-## Regenerating docs & fixtures
+## Регенерациялаусы docs & ҡорамалдар
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Портал менән әлеге ваҡытта проза резюме хостинг, өҫкө ағымында Markdown ҡулланыу .
+хәҡиҡәт сығанағы булараҡ сығанаҡтар:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Спек**: I18NI000000333X
+- **Мультикодек таблицаһы**: I18NI000000034X
+- **Бенчмарктар**: I18NI000000035X
+- **Алтын һынауҙар**: I18NI000000036X XX
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Ҡасан I18NT00000000000X автоматлаштырыу тура эфирға сыға, портал аша яңыртыласаҡ а
+синхронлаштырыу сценарийы (I18NI0000000037X-та күҙәтелә), был мәғлүмәттәрҙе быларҙан тарта
+файлдар. Шуға тиклем был битте ҡул менән тура килтереп, ҡасан спец үҙгәргән.

@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6c819c8d2a9517f1235a66a4661efd061a166ea89c953fd599e102b3cfd9157b
 source_last_modified: "2025-12-29T18:16:35.072254+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Invite (Template)
+# 文档门户预览邀请（模板）
 
-Use this template when sending preview access instructions to reviewers. Replace
-the placeholders (`<...>`) with the relevant values, attach the descriptor +
-archive artefacts referenced in the message, and store the final text inside
-the corresponding intake ticket.
+向审阅者发送预览访问说明时使用此模板。更换
+占位符 (`<...>`) 以及相关值，附加描述符 +
+归档消息中引用的工件，并将最终文本存储在其中
+相应的入场券。
 
 ```text
 Subject: [DOCS-SORA] docs portal preview <preview_tag> invite for <reviewer/org>

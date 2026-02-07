@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/sns/registrar-api.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 یہ صفحہ `docs/source/sns/registrar_api.md` کی عکاسی کرتا ہے اور اب پورٹل
 کی کینونیکل کاپی ہے۔ سورس فائل ترجمہ PRs کے لئے برقرار رہتی ہے۔
 :::
 
-# SNS Registrar API اور گورننس hooks (SN-2b)
+# API do registrador SNS e ganchos (SN-2b)
 
 **حالت:** 2026-03-24 مسودہ - Nexus Core ریویو کے تحت  
-**روڈمیپ لنک:** SN-2b "Registrar API & governance hooks"  
+**روڈمیپ لنک:** SN-2b "API do registrador e ganchos de governança"  
 **پیشگی شرائط:** اسکیمہ تعریفیں [`registry-schema.md`](./registry-schema.md) میں۔
 
-یہ نوٹ Torii endpoints، gRPC services، request/response DTOs اور governance
-artefacts کی وضاحت کرتا ہے جو Sora Name Service (SNS) registrar چلانے کے لئے
-درکار ہیں۔ یہ SDKs، wallets اور automation کے لئے مستند معاہدہ ہے جو SNS نام
-رجسٹر، renew یا manage کرنا چاہتے ہیں۔
+Não há endpoints Torii, serviços gRPC, DTOs de solicitação/resposta e governança
+artefatos کی وضاحت کرتا ہے جو registrador Sora Name Service (SNS) چلانے کے لئے
+درکار ہیں۔ یہ SDKs, carteiras e automação کے لئے مستند معاہدہ ہے جو SNS نام
+رجسٹر، renovar یا gerenciar کرنا چاہتے ہیں۔
 
 ## 1. ٹرانسپورٹ اور توثیق
 
 | شرط | تفصیل |
 |-----|-------|
-| پروٹوکولز | REST `/v1/sns/*` کے تحت اور gRPC service `sns.v1.Registrar`۔ دونوں Norito-JSON (`application/json`) اور Norito-RPC بائنری (`application/x-norito`) قبول کرتے ہیں۔ |
-| Auth | `Authorization: Bearer` tokens یا mTLS certificates ہر suffix steward کی طرف سے جاری۔ governance-sensitive endpoints (freeze/unfreeze, reserved assignments) کے لئے `scope=sns.admin` لازم ہے۔ |
-| ریٹ حدود | Registrars `torii.preauth_scheme_limits` buckets JSON callers کے ساتھ شیئر کرتے ہیں اور ہر suffix کے لئے burst caps: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`۔ |
-| ٹیلیمیٹری | Torii registrar handlers کے لئے `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` ظاہر کرتا ہے (`scheme="norito_rpc"` پر filter)؛ API بھی `sns_registrar_status_total{result, suffix_id}` بڑھاتی ہے۔ |
+| پروٹوکولز | REST `/v1/sns/*` کے تحت اور serviço gRPC `sns.v1.Registrar`۔ O Norito-JSON (`application/json`) e o Norito-RPC são de alta qualidade (`application/x-norito`) |
+| Autenticação | Tokens `Authorization: Bearer` یا certificados mTLS ہر suffix steward کی طرف سے جاری۔ endpoints sensíveis à governança (congelar/descongelar, atribuições reservadas) کے لئے `scope=sns.admin` لازم ہے۔ |
+| ریٹ حدود | Registradores `torii.preauth_scheme_limits` agrupam chamadores JSON کے ساتھ شیئر کرتے ہیں اور ہر sufixo کے لئے burst caps: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`۔ |
+| ٹیلیمیٹری | Manipuladores de registrador Torii کے لئے `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` ظاہر کرتا ہے (`scheme="norito_rpc"` filtro de filtro) ؛ API بھی `sns_registrar_status_total{result, suffix_id}` بڑھاتی ہے۔ |
 
 ## 2. DTO خلاصہ
 
-فیلڈز [`registry-schema.md`](./registry-schema.md) میں متعین canonical structs کو refer کرتی ہیں۔ تمام payloads `NameSelectorV1` + `SuffixId` شامل کرتی ہیں تاکہ مبہم routing سے بچا جا سکے۔
+فیلڈز [`registry-schema.md`](./registry-schema.md) میں متعین estruturas canônicas کو consulte کرتی ہیں۔ Cargas úteis `NameSelectorV1` + `SuffixId` são usadas para roteamento de dados
 
 ```text
 Struct RegisterNameRequestV1 {
@@ -101,27 +103,25 @@ Struct ReservedAssignmentRequestV1 {
 }
 ```
 
-## 3. REST endpoints
+## 3. Terminais REST
 
-| Endpoint | طریقہ | Payload | تفصیل |
+| Ponto final | طریقہ | Carga útil | تفصیل |
 |----------|-------|---------|-------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | نام رجسٹر یا دوبارہ کھولنا۔ pricing tier حل کرتا ہے، payment/governance proofs کی توثیق کرتا ہے، registry events emit کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے grace/redemption windows نافذ کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | حکمرانی approvals لگنے کے بعد ownership منتقل کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | controllers کا سیٹ بدلتا ہے؛ signed account addresses کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | guardian/council freeze۔ guardian ticket اور governance docket کا حوالہ درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | remediation کے بعد unfreeze؛ council override ریکارڈ ہونے کو یقینی بناتا ہے۔ |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | reserved names کی steward/council کی طرف سے assignment۔ |
-| `/v1/sns/policies/{suffix_id}` | GET | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (cacheable)۔ |
-| `/v1/sns/registrations/{selector}` | GET | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
+| `/v1/sns/registrations` | POSTAR | `RegisterNameRequestV1` | Não há nenhum problema com você nível de preços حل کرتا ہے، provas de pagamento/governança کی توثیق کرتا ہے، eventos de registro emitem کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/renew` | POSTAR | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے janelas de graça/redenção نافذ کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/transfer` | POSTAR | `TransferNameRequestV1` | حکمرانی aprovações لگنے کے بعد propriedade منتقل کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/controllers` | COLOCAR | `UpdateControllersRequestV1` | controladores endereços de contas assinadas کی توثیق کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/freeze` | POSTAR | `FreezeNameRequestV1` | guardião/conselho congelar۔ bilhete de guardião ou súmula de governança کا حوالہ درکار۔ |
+| `/v1/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | remediação کے بعد descongelar؛ substituição do conselho ریکارڈ ہونے کو یقینی بناتا ہے۔ |
+| `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | nomes reservados کی administrador/conselho کی طرف سے atribuição۔ |
+| `/v1/sns/policies/{suffix_id}` | OBTER | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (armazenável em cache)۔ |
+| `/v1/sns/registrations/{selector}` | OBTER | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
-**Selector encoding:** `{selector}` path segment IH58، compressed (`sora`) یا canonical hex ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalize کرتا ہے۔
+**Codificação do seletor:** `{selector}` segmento de caminho IH58, compactado (`sora`) یا hexadecimal canônico ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalizar کرتا ہے۔**Modelo de erro:** Defina os endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Códigos میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
 
-**Error model:** تمام endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Codes میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
+### 3.1 Auxiliares CLI (N0 دستی registrador ضرورت)
 
-### 3.1 CLI helpers (N0 دستی registrar ضرورت)
-
-Closed-beta stewards اب CLI کے ذریعے registrar استعمال کر سکتے ہیں بغیر ہاتھ سے JSON بنانے کے:
+Administradores beta fechados اب CLI کے ذریعے registrador استعمال کر سکتے ہیں بغیر ہاتھ سے JSON بنانے کے:
 
 ```bash
 iroha sns register \
@@ -134,19 +134,19 @@ iroha sns register \
   --payment-signature '"steward-signature"'
 ```
 
-- `--owner` بطور ڈیفالٹ CLI config account؛ اضافی controller accounts کے لئے `--controller` کو دہرائيں (default `[owner]`).
-- Inline payment flags براہ راست `PaymentProofV1` سے map ہوتے ہیں؛ جب structured receipt ہو تو `--payment-json PATH` دیں۔ Metadata (`--metadata-json`) اور governance hooks (`--governance-json`) بھی اسی انداز میں ہیں۔
+- `--owner` بطور ڈیفالٹ conta de configuração CLI; As contas do controlador são `--controller` e دہرائيں (padrão `[owner]`).
+- Sinalizadores de pagamento em linha براہ راست `PaymentProofV1` سے mapa ہوتے ہیں؛ جب recibo estruturado ہو تو `--payment-json PATH` دیں۔ Metadados (`--metadata-json`) e ganchos de governança (`--governance-json`) بھی اسی انداز میں ہیں۔
 
-Read-only helpers rehearsals کو مکمل کرتے ہیں:
+Ensaios de ajudantes somente leitura کو مکمل کرتے ہیں:
 
 ```bash
 iroha sns registration --selector makoto.sora
 iroha sns policy --suffix-id 1
 ```
 
-Implementation کے لئے `crates/iroha_cli/src/commands/sns.rs` دیکھیں؛ commands اس دستاویز میں بیان کردہ Norito DTOs دوبارہ استعمال کرتے ہیں تاکہ CLI output Torii responses کے ساتھ byte-for-byte میل کھائے۔
+Implementação کے لئے `crates/iroha_cli/src/commands/sns.rs` دیکھیں؛ comandos اس دستاویز میں بیان کردہ Norito DTOs دوبارہ استعمال کرتے ہیں تاکہ CLI saída Torii respostas O que significa byte por byte
 
-Additional helpers renewals, transfers اور guardian actions کو کور کرتے ہیں:
+Renovações, transferências de ajudantes adicionais e ações do guardião کو کور کرتے ہیں:
 
 ```bash
 # Renew an expiring name
@@ -176,9 +176,9 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (proposal id، vote hashes، steward/guardian signatures)۔ ہر کمانڈ متعلقہ `/v1/sns/registrations/{selector}/...` endpoint کی عکاسی کرتی ہے تاکہ beta operators بالکل وہی Torii surfaces rehearse کر سکیں جو SDKs کال کریں گے۔
+`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (id da proposta, hashes de voto, assinaturas do administrador/guardião)۔ ہر کمانڈ متعلقہ `/v1/sns/registrations/{selector}/...` endpoint کی عکاسی کرتی ہے تاکہ beta operadores بالکل وہی Torii superfícies ensaiam کر O que há de melhor em SDKs
 
-## 4. gRPC service
+## 4. serviço gRPC
 
 ```text
 service Registrar {
@@ -194,83 +194,81 @@ service Registrar {
 }
 ```
 
-Wire-format: compile-time Norito schema hash
-`fixtures/norito_rpc/schema_hashes.json` میں درج ہے (rows `RegisterNameRequestV1`,
+Formato de conexão: hash de esquema Norito em tempo de compilação
+`fixtures/norito_rpc/schema_hashes.json` میں درج ہے (linhas `RegisterNameRequestV1`,
 `RegisterNameResponseV1`, `NameRecordV1`, وغیرہ).
 
-## 5. Governance hooks اور evidence
+## 5. Ganchos de governança e evidências
 
-ہر mutating call کو replay کے لئے موزوں evidence منسلک کرنا ہوتا ہے:
+ہر chamada mutante کو repetição کے لئے موزوں evidência منسلک کرنا ہوتا ہے:
 
-| Action | Required governance data |
+| Ação | Dados de governação necessários |
 |--------|--------------------------|
-| Standard register/renew | Settlement instruction کو refer کرنے والی payment proof؛ council vote کی ضرورت نہیں جب تک tier کو steward approval نہ چاہئے۔ |
-| Premium tier register / reserved assignment | `GovernanceHookV1` جو proposal id + steward acknowledgement refer کرتا ہے۔ |
-| Transfer | Council vote hash + DAO signal hash؛ guardian clearance جب transfer dispute resolution سے trigger ہو۔ |
-| Freeze/Unfreeze | Guardian ticket signature کے ساتھ council override (unfreeze)۔ |
+| Registo/renovação padrão | Instruções de liquidação کو consulte کرنے والی comprovante de pagamento؛ votação do conselho کی ضرورت نہیں جب تک nível کو aprovação do administrador نہ چاہئے۔ |
+| Registro de nível premium/atribuição reservada | `GovernanceHookV1` ou ID da proposta + confirmação do administrador, consulte کرتا ہے۔ |
+| Transferência | Hash de votação do conselho + hash de sinal DAO؛ autorização do guardião جب resolução de disputas de transferência سے gatilho ہو۔ |
+| Congelar/descongelar | Assinatura do tíquete do guardião کے ساتھ substituição do conselho (descongelar)۔ |
 
-Torii proofs کو جانچتے ہوئے چیک کرتا ہے:
+Provas Torii کو جانچتے ہوئے چیک کرتا ہے:
 
-1. proposal id governance ledger (`/v1/governance/proposals/{id}`) میں موجود ہے اور status `Approved` ہے۔
-2. hashes ریکارڈ شدہ vote artefacts سے match کرتے ہیں۔
-3. steward/guardian signatures `SuffixPolicyV1` سے متوقع public keys کو refer کرتے ہیں۔
+1. livro razão de governança de identificação de proposta (`/v1/governance/proposals/{id}`) موجود ہے اور status `Approved` ہے۔
+2. hashes ریکارڈ شدہ artefatos de votação سے correspondência کرتے ہیں۔
+3. assinaturas do administrador/guardião `SuffixPolicyV1` سے متوقع chaves públicas کو consulte کرتے ہیں۔
 
-Failed checks `sns_err_governance_missing` واپس کرتے ہیں۔
+Verificações falhadas `sns_err_governance_missing` واپس کرتے ہیں۔
 
-## 6. Workflow examples
+## 6. Exemplos de fluxo de trabalho
 
-### 6.1 Standard Registration
-
-1. Client `/v1/sns/policies/{suffix_id}` کو query کرتا ہے تاکہ pricing، grace اور دستیاب tiers حاصل کرے۔
-2. Client `RegisterNameRequestV1` بناتا ہے:
-   - `selector` ترجیحی IH58 یا second‑best compressed (`sora`) label سے derived ہے۔
+### 6.1 Registro Padrão1. Cliente `/v1/sns/policies/{suffix_id}` کو consulta کرتا ہے تاکہ preços, graça e دستیاب níveis حاصل کرے۔
+2. Cliente `RegisterNameRequestV1` بناتا ہے:
+   - `selector` ترجیحی IH58 یا segundo melhor rótulo compactado (`sora`) سے derivado ہے۔
    - `term_years` پالیسی حدود میں۔
-   - `payment` treasury/steward splitter transfer کو refer کرتا ہے۔
-3. Torii validate کرتا ہے:
-   - Label normalization + reserved list۔
-   - Term/gross price vs `PriceTierV1`.
-   - Payment proof amount >= computed price + fees۔
+   - `payment` transferência de divisão de tesouraria/administrador کو consulte کرتا ہے۔
+3. Torii validar o valor:
+   - Normalização de rótulos + lista reservada۔
+   - Prazo/preço bruto vs `PriceTierV1`.
+   - Valor do comprovante de pagamento >= preço calculado + taxas۔
 4. کامیابی پر Torii:
    - `NameRecordV1` محفوظ کرتا ہے۔
-   - `RegistryEventV1::NameRegistered` emit کرتا ہے۔
-   - `RevenueAccrualEventV1` emit کرتا ہے۔
-   - نیا record + events واپس کرتا ہے۔
+   - `RegistryEventV1::NameRegistered` emite کرتا ہے۔
+   - `RevenueAccrualEventV1` emite کرتا ہے۔
+   - Nenhum registro + eventos واپس کرتا ہے۔
 
-### 6.2 Renewal During Grace
+### 6.2 Renovação durante a graça
 
-Grace renewals میں standard request کے ساتھ penalty detection شامل ہے:
+Renovações de carência میں solicitação padrão کے ساتھ detecção de penalidade شامل ہے:
 
-- Torii `now` vs `grace_expires_at` چیک کرتا ہے اور `SuffixPolicyV1` سے surcharge tables شامل کرتا ہے۔
-- Payment proof کو surcharge cover کرنا ہوگا۔ Failure => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` نیا `expires_at` ریکارڈ کرتا ہے۔
+- Torii `now` vs `grace_expires_at` چیک کرتا ہے اور `SuffixPolicyV1` سے tabelas de sobretaxa شامل کرتا ہے۔
+- Comprovante de pagamento کو cobertura de sobretaxa کرنا ہوگا۔ Falha => `sns_err_payment_mismatch`.
+- `RegistryEventV1::NameRenewed` `expires_at` ریکارڈ کرتا ہے۔
 
-### 6.3 Guardian Freeze & Council Override
+### 6.3 Congelamento do Guardião e Substituição do Conselho
 
-1. Guardian `FreezeNameRequestV1` submit کرتا ہے جس میں incident id کا حوالہ دینے والا ticket ہوتا ہے۔
-2. Torii record کو `NameStatus::Frozen` میں منتقل کرتا ہے، `NameFrozen` emit کرتا ہے۔
-3. Remediation کے بعد council override جاری کرتا ہے؛ operator DELETE `/v1/sns/registrations/{selector}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
-4. Torii override validate کرتا ہے، `NameUnfrozen` emit کرتا ہے۔
+1. Guardian `FreezeNameRequestV1` enviar کرتا ہے جس میں ID do incidente کا حوالہ دینے والا ticket ہوتا ہے۔
+2. Registro Torii کو `NameStatus::Frozen` میں منتقل کرتا ہے, `NameFrozen` emite کرتا ہے۔
+3. Remediação کے بعد substituição do conselho جاری کرتا ہے؛ operador DELETE `/v1/sns/registrations/{selector}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
+4. Torii substituir validar کرتا ہے, `NameUnfrozen` emitir کرتا ہے۔
 
-## 7. Validation & Error Codes
+## 7. Validação e códigos de erro
 
-| Code | Description | HTTP |
+| Código | Descrição | http |
 |------|-------------|------|
-| `sns_err_reserved` | Label reserved یا blocked ہے۔ | 409 |
-| `sns_err_policy_violation` | Term, tier یا controllers کا سیٹ پالیسی کی خلاف ورزی کرتا ہے۔ | 422 |
-| `sns_err_payment_mismatch` | Payment proof میں value یا asset mismatch۔ | 402 |
-| `sns_err_governance_missing` | Required governance artefacts غائب/invalid ہیں۔ | 403 |
-| `sns_err_state_conflict` | موجودہ lifecycle state میں operation allowed نہیں۔ | 409 |
+| `sns_err_reserved` | Rótulo reservado یا bloqueado ہے۔ | 409 |
+| `sns_err_policy_violation` | Prazo, controladores de nível یا کا سیٹ پالیسی کی خلاف ورزی کرتا ہے۔ | 422 |
+| `sns_err_payment_mismatch` | Comprovante de pagamento میں valor یا incompatibilidade de ativos۔ | 402 |
+| `sns_err_governance_missing` | Artefatos de governança necessários غائب/ہیں۔ inválidos | 403 |
+| `sns_err_state_conflict` | موجودہ estado do ciclo de vida میں operação permitida نہیں۔ | 409 |
 
-تمام codes `X-Iroha-Error-Code` اور structured Norito JSON/NRPC envelopes کے ذریعے surface ہوتے ہیں۔
+Códigos `X-Iroha-Error-Code` e envelopes Norito JSON/NRPC estruturados کے ذریعے superfície ہوتے ہیں۔
 
-## 8. Implementation Notes
+## 8. Notas de implementação
 
-- Torii pending auctions کو `NameRecordV1.auction` میں رکھتا ہے اور `PendingAuction` کے دوران direct registration attempts کو reject کرتا ہے۔
-- Payment proofs Norito ledger receipts دوبارہ استعمال کرتے ہیں؛ treasury services helper APIs (`/v1/finance/sns/payments`) فراہم کرتی ہیں۔
-- SDKs کو ان endpoints کو strongly typed helpers سے wrap کرنا چاہئے تاکہ wallets واضح error reasons (`ERR_SNS_RESERVED`, وغیرہ) دکھا سکیں۔
+- Torii leilões pendentes کو `NameRecordV1.auction` میں رکھتا ہے اور `PendingAuction` کے دوران tentativas diretas de registro کو rejeitar کرتا ہے۔
+- Comprovantes de pagamento Norito recibos contábeis دوبارہ استعمال کرتے ہیں؛ APIs auxiliares de serviços de tesouraria (`/v1/finance/sns/payments`) فراہم کرتی ہیں۔
+- SDKs کو ان endpoints کو auxiliares fortemente digitados سے wrap کرنا چاہئے تاکہ carteiras واضح motivos de erro (`ERR_SNS_RESERVED`, وغیرہ) دکھا سکیں۔
 
-## 9. Next Steps
+## 9. Próximas etapas
 
-- SN-3 auctions کے بعد Torii handlers کو اصل registry contract سے wire کریں۔
-- SDK-specific guides (Rust/JS/Swift) شائع کریں جو اس API کو refer کریں۔
-- [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) کو governance hook evidence fields کے cross-links کے ساتھ extend کریں۔
+- Leilões SN-3 کے بعد manipuladores Torii کو اصل contrato de registro سے wire کریں۔
+- Guias específicos do SDK (Rust/JS/Swift) شائع کریں جو اس API کو consulte کریں۔
+- [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) کو campos de evidência de gancho de governança کے links cruzados کے ساتھ estender کریں۔

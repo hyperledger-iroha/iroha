@@ -5,25 +5,27 @@ source: docs/portal/docs/sns/local-to-global-toolkit.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Local → Global Address Toolkit
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page mirrors [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
-from the mono-repo. It packages the CLI helpers and runbooks required by roadmap item **ADDR-5c**.
+Был бит көҙгө [`docs/source/sns/local_to_global_toolkit.md`] (../../../source/sns/local_to_global_toolkit.md)
+моно-репонан. Ул CLI ярҙамсыларын һәм юл картаһы әйбере талап иткән runbooks-ты пакеттар **ADDR-5c**.
 
-## Overview
+## Обзор
 
-- `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
-  - `audit.json` — structured output from `iroha tools address audit --format json`.
-  - `normalized.txt` — converted preferred IH58 / second-best compressed (`sora`) literals for every Local-domain selector.
-- Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
-  and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
-  Local-12 cutover is safe. Watch the Local-8 and Local-12 collision panels plus the
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, and `AddressInvalidRatioSlo` alerts before
-  promoting manifest changes.
-- Reference the [Address Display Guidelines](address-display-guidelines.md) and the
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) for UX and incident-response context.
+- I18NI000000006X I18NI000000007X CLI етештереү өсөн урап:
+  - `audit.json` — структуралы сығыш `iroha tools address audit --format json`.
+  - `normalized.txt` — IH58 / икенсе иң яҡшы ҡыҫылған үҙгәртелгән (I18NI0000000011X) һәр урындағы домен селекторы өсөн тура һүҙлеләр.
+- Сценарийҙы парлы приборҙар таҡтаһы (`dashboards/grafana/address_ingest.json`) менән парлаштырырға
+  һәм иҫкәртмәндәр ҡағиҙәләре (`dashboards/alerts/address_ingest_rules.yml`) урындағы-8 /
+  Урындағы-12 өҙөклөк хәүефһеҙ. Урындағы-8 һәм урындағы-12 бәрелеш панелдәрен ҡарағыҙ плюс
+  I18NI000000014X, `AddressLocal12Collision`, һәм I18NI000000016X иҫкәртмәләргә тиклем.
+  асыҡ үҙгәрештәрҙе пропагандалау.
+- Һылтанма [Адресс дисплей йүнәлештәре] (I18NU000000003X) һәм
+  [Adress Manifest runbook](../../../source/runbooks/address_manifest_ops.md) өсөн UX һәм инциденттар-яуап контекста.
 
-## Usage
+## Ҡулланыу
 
 ```bash
 scripts/address_local_toolkit.sh \
@@ -33,24 +35,24 @@ scripts/address_local_toolkit.sh \
   --format ih58
 ```
 
-Options:
+Варианттар:
 
-- `--format compressed` for `sora…` output instead of IH58.
-- `--no-append-domain` to emit bare literals.
-- `--audit-only` to skip the conversion step.
-- `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
+- IH58 урынына I18NI0000000018X өсөн I18NI000000017X.
+- I18NI000000019X X Xea mare литералдар сығарыу өсөн.
+- `--audit-only` конверсия аҙымын үткәреү өсөн.
+- `--allow-errors` сканерлауҙы һаҡлау өсөн, ҡасан дөрөҫ формалаштырылған рәттәр барлыҡҡа килә (CLI тәртибенә тап килә).
 
-The script writes the artefact paths at the end of the run. Attach both files to
-your change-management ticket alongside the Grafana screenshot that proves zero
-Local-8 detections and zero Local-12 collisions for ≥30 days.
+Сценарий йүгерә аҙағында артефакт юлдарын яҙа. Ике файлды ла беркетергә
+һеҙҙең үҙгәрештәр-идара итеү билеты менән бергә I18NT000000000000000Х скриншот, тип иҫбатлай нуль
+Урындағы-8 асыҡлау һәм нуль урындағы-12 бәрелештәр өсөн ≥30 көн.
 
-## CI integration
+## CI интеграцияһы
 
-1. Run the script in a dedicated job and upload its outputs.
-2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
-   at its default `true` value (only override to `false` on dev/test clusters when
-   diagnosing regressions) and add
-   `iroha tools address normalize --fail-on-warning --only-local` to CI so regression
-   attempts fail before hitting production.
+1. Сценарийҙы махсус эштә эшләтеп, уның сығыштарын тейәгеҙ.
+2. Блок берләшә, ҡасан `audit.json` урындағы селекторҙар тураһында хәбәр итә (`domain.kind = local12`).
+   ҡиммәте I18NI00000000024X ҡиммәте (тик өҫтөндә йөрөү I18NI0000000025X өҫтөндә dev/һынау кластерҙары ҡасан
+   регрессияларҙы диагностикалау) һәм өҫтәү
+   I18NI000000026X CI шулай регрессия
+   тырышлыҡтар етештереүгә һуҡҡансы уңышһыҙлыҡҡа осрай.
 
-See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.
+Ҡарағыҙ сығанаҡ документы өсөн тулыраҡ мәғлүмәт, өлгө дәлилдәр тикшерелгән исемлектәр, һәм релиз-иҫкәрмә өҙөк һеҙ ҡабаттан ҡулланырға мөмкин, ҡасан иғлан өҙөү клиенттарға.

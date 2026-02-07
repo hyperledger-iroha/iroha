@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cd018a94197722adfbb9d54bf02f1c486147078174ba4c81f32e9d93b8c3f6d5
 source_last_modified: "2026-01-22T16:26:46.473419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Repo Governance Packet Template (Roadmap F1)
+# 回購協議治理包模板（路線圖 F1）
 
-Use this template when preparing the artefact bundle required by roadmap item
-F1 (repo lifecycle documentation & tooling). The goal is to hand reviewers a
-single Markdown file that lists every input, hash, and evidence bundle so the
-governance council can replay the bytes referenced in the proposal.
+準備路線圖項所需的工件包時使用此模板
+F1（存儲庫生命週期文檔和工具）。目標是向審稿人提供
+列出每個輸入、哈希值和證據包的單個 Markdown 文件，以便
+治理委員會可以重播提案中引用的字節。
 
-> Copy the template into your own evidence directory (for example
-> `artifacts/finance/repo/2026-03-15/packet.md`), replace the placeholders, and
-> commit/upload it next to the hashed artefacts referenced below.
+> 將模板複製到您自己的證據目錄中（例如
+> `artifacts/finance/repo/2026-03-15/packet.md`)，替換佔位符，並且
+> 將其提交/上傳到下面引用的散列工件旁邊。
 
-## 1. Metadata
+## 1. 元數據
 
-| Field | Value |
-|-------|-------|
-| Agreement/change identifier | `<repo-yyMMdd-XX>` |
-| Prepared by / date | `<desk lead> – 2026-03-15T10:00Z` |
-| Reviewed by | `<dual-control reviewer(s)>` |
-| Change type | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
-| Custodian(s) | `<custodian id(s)>` |
-| Linked proposal / referendum | `<governance ticket id or GAR link>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+|領域|價值|
+|--------|--------|
+|協議/變更標識符 | `<repo-yyMMdd-XX>` |
+|準備時間/日期 | `<desk lead> – 2026-03-15T10:00Z` |
+|評論者 | `<dual-control reviewer(s)>` |
+|更改類型 | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
+|託管人 | `<custodian id(s)>` |
+|鏈接提案/公投 | `<governance ticket id or GAR link>` |
+|證據目錄| ``artifacts/finance/repo/<slug>/`` |
 
-## 2. Instruction Payloads
+## 2. 指令有效負載
 
-Record the staged Norito instructions that desks signed off on via
-`iroha app repo ... --output`. Each entry should include the hash of the emitted
-file and a short description of the action that will be submitted once the vote
-passes.
+記錄各服務台通過以下方式簽署的分階段 Norito 指令
+`iroha app repo ... --output`。每個條目應包含發出的哈希值
+文件以及投票後將提交的操作的簡短描述
+通過。
 
-| Action | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Initiate | `instructions/initiate.json` | `<sha256>` | Contains the cash/collateral legs approved by desk + counterparty. |
-| Margin call | `instructions/margin_call.json` | `<sha256>` | Captures cadence + participant id that triggered the call. |
-| Unwind | `instructions/unwind.json` | `<sha256>` | Proof of the reverse-leg once conditions are met. |
+|行動|文件| SHA-256 |筆記|
+|--------|------|---------|--------|
+|發起| `instructions/initiate.json` | `<sha256>` |包含經服務台+交易對手批准的現金/抵押品。 |
+|追加保證金通知 | `instructions/margin_call.json` | `<sha256>` |捕獲觸發呼叫的節奏 + 參與者 ID。 |
+|放鬆 | `instructions/unwind.json` | `<sha256>` |一旦條件滿足，反向腿的證明。 |
 
 ```bash
 # Example hash helper (repeat per instruction file)
@@ -55,28 +56,28 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json \
   | tee artifacts/finance/repo/<slug>/hashes/initiate.sha256
 ```
 
-## 2.1 Custodian Acknowledgements (tri-party only)
+## 2.1 託管人確認（僅限三方）
 
-Complete this section whenever a repo uses `--custodian`. The governance packet
-must include a signed acknowledgement from each custodian plus the hash of the
-file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
+每當存儲庫使用 `--custodian` 時，請完成此部分。治理包
+必須包含每個託管人的簽名確認以及哈希值
+`docs/source/finance/repo_ops.md` §2.8 中引用的文件。
 
-| Custodian | File | SHA-256 | Notes |
-|-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+|託管人 |文件| SHA-256 |筆記|
+|------------|------|---------|--------|
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` |簽署的 SLA 涵蓋託管窗口、路由賬戶和鑽探聯繫人。 |
 
-> Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
-> so `scripts/repo_evidence_manifest.py` records the file in the same tree as
-> the staged instructions and config snippets. See
-> `docs/examples/finance/repo_custodian_ack_template.md` for a ready-to-fill
-> template that matches the governance evidence contract.
+> 將確認信息存儲在其他證據旁邊 (`artifacts/finance/repo/<slug>/`)
+> 所以 `scripts/repo_evidence_manifest.py` 將文件記錄在同一棵樹中
+> 分階段說明和配置片段。參見
+> `docs/examples/finance/repo_custodian_ack_template.md` 表示可立即灌裝
+> 與治理證據合約相匹配的模板。
 
-## 3. Configuration Snippet
+## 3. 配置片段
 
-Paste the `[settlement.repo]` TOML block that will land on the cluster (including
-`collateral_substitution_matrix`). Store the hash next to the snippet so
-auditors can confirm the runtime policy that was active when the repo booking
-was approved.
+粘貼將登陸集群的 `[settlement.repo]` TOML 塊（包括
+`collateral_substitution_matrix`）。將哈希存儲在代碼片段旁邊，以便
+審計員可以確認回購預訂時處於活動狀態的運行時策略
+獲得批准。
 
 ```toml
 [settlement.repo]
@@ -89,12 +90,12 @@ default_margin_percent = "0.025"
 
 `SHA-256 (config snippet): <sha256>`
 
-### 3.1 Post-Approval Configuration Snapshots
+### 3.1 批准後配置快照
 
-After the referendum or governance vote completes and the `[settlement.repo]`
-change is rolled out, capture `/v1/configuration` snapshots from every peer so
-auditors can prove the approved policy is live across the cluster (see
-`docs/source/finance/repo_ops.md` §2.9 for the evidence workflow).
+公投或治理投票完成後，`[settlement.repo]`
+更改已推出，從每個對等方捕獲 `/v1/configuration` 快照，以便
+審計員可以證明批准的政策在整個集群中有效（參見
+`docs/source/finance/repo_ops.md` §2.9 證據工作流程）。
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
@@ -103,38 +104,38 @@ curl -fsSL https://peer01.example/v1/configuration \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
-| Peer / source | File | SHA-256 | Block height | Notes |
-|---------------|------|---------|--------------|-------|
-| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot captured immediately after the config rollout. |
-| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | Confirms `[settlement.repo]` matches the staged TOML. |
+|同行/來源|文件| SHA-256 |區塊高度 |筆記|
+|----------------|------|---------|----------------|--------|
+| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` |配置推出後立即捕獲的快照。 |
+| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` |確認 `[settlement.repo]` 與暫存的 TOML 匹配。 |
 
-Record the digests alongside the peer ids in `hashes.txt` (or the equivalent
-summary) so reviewers can trace which nodes ingested the change. The snapshots
-live under `config/peers/` next to the TOML snippet and will be picked up
-automatically by `scripts/repo_evidence_manifest.py`.
+將摘要與對等 ID 一起記錄在 `hashes.txt`（或等效的
+摘要），以便審閱者可以跟踪哪些節點吸收了更改。快照
+位於 TOML 片段旁邊的 `config/peers/` 下，並將被拾取
+由 `scripts/repo_evidence_manifest.py` 自動生成。
 
-## 4. Deterministic Test Artefacts
+## 4. 確定性測試工件
 
-Attach the latest outputs from:
+附上最新的輸出：
 
 - `cargo test -p iroha_core -- repo_deterministic_lifecycle_proof_matches_fixture`
 - `cargo test --package integration_tests --test repo`
 
-Record file paths + hashes for the log bundles or JUnit XML produced by your CI
-system.
+記錄 CI 生成的日誌包或 JUnit XML 的文件路徑 + 哈希值
+系統。
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Lifecycle proof log | `tests/repo_lifecycle.log` | `<sha256>` | Captured with `--nocapture` output. |
-| Integration test log | `tests/repo_integration.log` | `<sha256>` | Includes substitution + margin cadence coverage. |
+|文物|文件| SHA-256 |筆記|
+|----------|------|---------|--------|
+|生命週期證明日誌| `tests/repo_lifecycle.log` | `<sha256>` |使用 `--nocapture` 輸出捕獲。 |
+|集成測試日誌| `tests/repo_integration.log` | `<sha256>` |包括替代+邊際節奏覆蓋。 |
 
-## 5. Lifecycle Proof Snapshot
+## 5. 生命週期證明快照
 
-Every packet must include the deterministic lifecycle snapshot exported from
-`repo_deterministic_lifecycle_proof_matches_fixture`. Run the harness with the
-export knobs enabled so reviewers can diff the JSON frame and digest against
-the fixture tracked in `crates/iroha_core/tests/fixtures/` (see
-`docs/source/finance/repo_ops.md` §2.7).
+每個數據包必須包含從以下位置導出的確定性生命週期快照
+`repo_deterministic_lifecycle_proof_matches_fixture`。運行線束
+啟用導出旋鈕，以便審閱者可以區分 JSON 框架並摘要
+`crates/iroha_core/tests/fixtures/` 中跟踪的夾具（參見
+`docs/source/finance/repo_ops.md` §2.7)。
 
 ```bash
 REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<slug>/repo_proof_snapshot.json \
@@ -143,24 +144,24 @@ cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
 ```
 
-Or use the pinned helper to regenerate the fixtures and copy them into your
-evidence bundle in one step:
+或者使用固定的助手重新生成燈具並將它們複製到您的
+一步收集證據：
 
 ```bash
 scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
   --bundle-dir artifacts/finance/repo/<slug>
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Snapshot JSON | `repo_proof_snapshot.json` | `<sha256>` | Canonical lifecycle frame emitted by the proof harness. |
-| Digest file | `repo_proof_digest.txt` | `<sha256>` | Uppercase hex digest mirrored from `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`; attach even when unchanged. |
+|文物 |文件| SHA-256 |筆記|
+|----------|------|---------|--------|
+|快照 JSON | `repo_proof_snapshot.json` | `<sha256>` |由證明線束髮出的規範生命週期框架。 |
+|摘要文件 | `repo_proof_digest.txt` | `<sha256>` |大寫十六進制摘要鏡像自 `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`；即使未更改也要附加。 |
 
-## 6. Evidence Manifest
+## 6. 證據清單
 
-Generate the manifest for the entire evidence directory so auditors can verify
-hashes without unpacking the archive. The helper mirrors the workflow described
-in `docs/source/finance/repo_ops.md` §3.2.
+生成整個證據目錄的清單，以便審核員可以驗證
+散列而不解壓存檔。助手反映了所描述的工作流程
+在 `docs/source/finance/repo_ops.md` §3.2 中。
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -169,40 +170,40 @@ python3 scripts/repo_evidence_manifest.py \
   --output artifacts/finance/repo/<slug>/manifest.json
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Include the checksum in the governance ticket / referendum notes. |
+|文物|文件| SHA-256 |筆記|
+|----------|------|---------|--------|
+|證據清單 | `manifest.json` | `<sha256>` |將校驗和包含在治理票/公投註釋中。 |
 
-## 7. Telemetry & Event Snapshot
+## 7. 遙測和事件快照
 
-Export the relevant `AccountEvent::Repo(*)` entries and any dashboards or CSV
-exports referenced in `docs/source/finance/repo_ops.md`. Record the files +
-hashes here so reviewers can jump straight to the evidence.
+導出相關的 `AccountEvent::Repo(*)` 條目和任何儀表板或 CSV
+`docs/source/finance/repo_ops.md` 中引用的導出。記錄文件+
+這裡有哈希值，以便審閱者可以直接跳到證據。
 
-| Export | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Repo events JSON | `evidence/repo_events.ndjson` | `<sha256>` | Raw Torii event stream filtered to the desk accounts. |
-| Telemetry CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | Exported from Grafana using the Repo Margin panel. |
+|出口|文件| SHA-256 |筆記|
+|--------|------|---------|--------|
+|回購事件 JSON | `evidence/repo_events.ndjson` | `<sha256>` |原始 Torii 事件流已過濾到桌面帳戶。 |
+|遙測 CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` |使用回購保證金面板從 Grafana 導出。 |
 
-## 8. Approvals & Signatures
+## 8. 批准和簽名
 
-- **Dual-control signers:** `<names + timestamps>`
-- **GAR / minutes digest:** `<sha256>` of the signed GAR PDF or minutes upload.
-- **Storage location:** `governance://finance/repo/<slug>/packet/`
+- **雙控簽名者：** `<names + timestamps>`
+- **GAR / 分鐘摘要：** `<sha256>` 簽名的 GAR PDF 或分鐘上傳。
+- **存儲位置：** `governance://finance/repo/<slug>/packet/`
 
-## 9. Checklist
+## 9. 清單
 
-Mark each item once complete.
+完成後標記每個項目。
 
-- [ ] Instruction payloads staged, hashed, and attached.
-- [ ] Configuration snippet hash recorded.
-- [ ] Deterministic test logs captured + hashed.
-- [ ] Lifecycle snapshot + digest exported.
-- [ ] Evidence manifest generated and hash recorded.
-- [ ] Event/telemetry exports captured + hashed.
-- [ ] Dual-control acknowledgements archived.
-- [ ] GAR/minutes uploaded; digest recorded above.
+- [ ] 指令有效負載已暫存、散列並附加。
+- [ ] 記錄配置片段哈希值。
+- [ ] 捕獲+散列的確定性測試日誌。
+- [ ] 生命週期快照 + 導出摘要。
+- [ ] 生成證據清單並記錄哈希值。
+- [ ] 事件/遙測導出捕獲+散列。
+- [ ] 雙控制確認已存檔。
+- [ ] GAR/分鐘上傳；上面記錄了摘要。
 
-Maintaining this template alongside every packet keeps the governance DAG
-deterministic and provides auditors with a portable manifest for repo lifecycle
-decisions.
+與每個數據包一起維護此模板可以保留治理 DAG
+確定性，並為審計人員提供回購生命週期的便攜式清單
+決定。

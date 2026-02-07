@@ -4,115 +4,115 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-refactor-plan.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-refactor-plan
-title: Sora Nexus لیجر ری فیکٹر پلان
-description: `docs/source/nexus_refactor_plan.md` کا آئینہ، جو Iroha 3 کوڈ بیس کی مرحلہ وار صفائی کے کام کی تفصیل دیتا ہے۔
+المعرف: خطة إعادة بناء العلاقة
+العنوان: Sora Nexus خطة لیجر ری فیکٹر
+description: `docs/source/nexus_refactor_plan.md` هو هذا، وهو Iroha 3 وهو ما يمثل رحلة حرب فائضة لتفاصيل ديتا.
 ---
 
-:::note کینونیکل ماخذ
-یہ صفحہ `docs/source/nexus_refactor_plan.md` کی عکاسی کرتا ہے۔ لوکلائزڈ ایڈیشنز پورٹل تک پہنچنے تک دونوں نقول ہم آہنگ رکھیں۔
+:::ملاحظة کینونیکل مأخذ
+هذه هي الصفحة `docs/source/nexus_refactor_plan.md`. لا تفوّت فرصة الحصول على أفضل النتائج.
 :::
 
-# Sora Nexus Ledger Refactor Plan
+# Sora Nexus خطة إعادة هيكلة دفتر الأستاذ
 
-یہ دستاویز Sora Nexus Ledger ("Iroha 3") کے ری فیکٹر کے لئے فوری roadmap کو محفوظ کرتی ہے۔ یہ موجودہ ریپوزٹری layout اور genesis/WSV bookkeeping، Sumeragi consensus، smart-contract triggers، snapshot queries، pointer-ABI host bindings اور Norito codecs میں دیکھی گئی regressions کی عکاسی کرتی ہے۔ مقصد یہ ہے کہ تمام fixes کو ایک بڑے monolithic patch میں اتارنے کے بجائے ایک مربوط، قابل ٹیسٹ architecture تک پہنچا جائے۔
+دستاویز سورا Nexus Ledger ("Iroha 3") کے ری فیکٹر کے لئے فوری خريطة الطريق کو محفوظ کرتی ہے. يتوفر تخطيط مسجل ومسك الدفاتر Genesis/WSV وإجماع Sumeragi ومشغلات العقود الذكية واستعلامات اللقطة وارتباطات مضيف مؤشر ABI وبرامج الترميز Norito التي تحتوي على المزيد من الانحدارات الرائعة. تم تصميم كل هذه الإصلاحات من خلال تصحيح متآلف يمكّنك من الوصول إلى جزيرة بجاية، وهو عبارة عن هندسة معمارية مناسبة تمامًا.
 
 ## 0. رہنما اصول
-- مختلف ہارڈویئر پر deterministic رویہ برقرار رکھیں; acceleration صرف opt-in feature flags کے ذریعے اور ایک جیسے fallbacks کے ساتھ استعمال کریں۔
-- Norito serialization layer ہے۔ کسی بھی state/schema تبدیلی میں Norito encode/decode round-trip tests اور fixture updates شامل ہونے چاہئیں۔
-- configuration `iroha_config` (user -> actual -> defaults) کے ذریعے گزرتی ہے۔ پروڈکشن paths سے ad-hoc environment toggles ہٹا دیں۔
-- ABI policy V1 پر قائم اور غیر قابل گفت و شنید ہے۔ hosts کو نامعلوم pointer types/syscalls کو deterministic انداز میں رد کرنا ہوگا۔
-- `cargo test --workspace` اور golden tests (`ivm`, `norito`, `integration_tests`) ہر milestone کے لئے بنیادی gate رہیں گے۔
+- طرق مختلفة للتغيير الحتمي; يتم استخدام إشارات ميزة التسريع فقط والخيارات الاحتياطية التي يتم استخدامها حاليًا.
+- طبقة التسلسل Norito ہے۔ يتم أيضًا تغيير الحالة/المخطط Norito في تشفير/فك تشفير اختبارات الرحلة ذهابًا وإيابًا وتحديثات التركيبات التي تتضمن المزيد من الأشياء.
+- التكوين `iroha_config` (المستخدم -> الفعلي -> الإعدادات الافتراضية) کے ذریعے گزرتی ہے۔ يتم إنشاء مسارات المشروع بواسطة تبديل البيئة المخصصة.
+- سياسة ABI V1 قائمة قائمة وغير قابلة للتمديد والتشغيل. يستضيف المضيفون أنواع مؤشرات/استدعاءات النظام الحتمية التي تحددها.
+- `cargo test --workspace` والاختبارات الذهبية (`ivm`, `norito`, `integration_tests`) هي علامة فارقة لبوابة بنياد.
 
-## 1. ریپوزٹری ٹاپولوجی اسنیپ شاٹ
-- `crates/iroha_core`: Sumeragi actors، WSV، genesis loader، pipelines (query, overlay, zk lanes)، اور smart-contract host glue۔
-- `crates/iroha_data_model`: on-chain data اور queries کے لئے authoritative schema۔
-- `crates/iroha`: client API جو CLI، tests، SDK میں استعمال ہوتا ہے۔
-- `crates/iroha_cli`: آپریٹر CLI، جو اس وقت `iroha` کی متعدد APIs کو mirror کرتا ہے۔
-- `crates/ivm`: Kotodama bytecode VM، pointer-ABI host integration entry points۔
-- `crates/norito`: serialization codec جس میں JSON adapters اور AoS/NCB backends شامل ہیں۔
-- `integration_tests`: cross-component assertions جو genesis/bootstrap، Sumeragi، triggers، pagination وغیرہ کو کور کرتے ہیں۔
-- Docs پہلے ہی Sora Nexus Ledger اہداف (`nexus.md`, `new_pipeline.md`, `ivm.md`) بیان کرتے ہیں، مگر implementation ٹکڑوں میں ہے اور کوڈ کے مقابلے میں جزوی طور پر پرانی ہے۔
+## 1. ٹاپولوجى اسنيپ شاٹ
+- `crates/iroha_core`: الجهات الفاعلة Sumeragi، WSV، محمل التكوين، خطوط الأنابيب (الاستعلام، التراكب، ممرات zk)، والغراء المضيف للعقد الذكي۔
+- `crates/iroha_data_model`: البيانات والاستعلامات الموجودة على السلسلة للمخطط الرسمي.
+- `crates/iroha`: Client API جو CLI، الاختبارات، SDK يتم استخدامها.
+- `crates/iroha_cli`: أعلى CLI، وهو `iroha` وهو عبارة عن واجهات برمجة التطبيقات المتعددة التي تعكس الصورة الحالية.
+- `crates/ivm`: Kotodama رمز البايت VM، نقاط دخول تكامل مضيف المؤشر-ABI۔
+- `crates/norito`: برنامج ترميز التسلسل ومحولات JSON والواجهات الخلفية AoS/NCB تتضمن المزيد.
+- `integration_tests`: التأكيدات عبر المكونات في Genesis/bootstrap، Sumeragi، المشغلات، ترقيم الصفحات وما إلى ذلك.
+- تم تحديث المستندات إلى Sora Nexus Ledger (`nexus.md`، `new_pipeline.md`، `ivm.md`) مع الاستمرار في التنفيذ. والطريقة التي نتعامل بها هي في حالة تأهب.
 
-## 2. ری فیکٹر ستون اور milestones
+## 2. ری فيکٹر الحجر والمعالم
 
-### Phase A - Foundations and Observability
-1. **WSV Telemetry + Snapshots**
-   - `state` میں canonical snapshot API (trait `WorldStateSnapshot`) قائم کریں جسے queries، Sumeragi اور CLI استعمال کریں۔
-   - `scripts/iroha_state_dump.sh` استعمال کریں تاکہ `iroha state dump --format norito` کے ذریعے deterministic snapshots بنیں۔
-2. **Genesis/Bootstrap Determinism**
-   - genesis ingestion کو اس طرح ری فیکٹر کریں کہ یہ ایک واحد Norito-powered pipeline (`iroha_core::genesis`) سے گزرے۔
-   - integration/regression coverage شامل کریں جو genesis اور پہلے بلاک کو replay کرے اور arm64/x86_64 کے درمیان یکساں WSV roots ثابت کرے (ٹریک: `integration_tests/tests/genesis_replay_determinism.rs`)۔
-3. **Cross-crate Fixity Tests**
-   - `integration_tests/tests/genesis_json.rs` کو بڑھائیں تاکہ WSV، pipeline اور ABI invariants کو ایک harness میں validate کیا جا سکے۔
-   - `cargo xtask check-shape` scaffold متعارف کریں جو schema drift پر panic کرے (DevEx tooling backlog میں ٹریک; `scripts/xtask/README.md` کی action item دیکھیں)۔
+### المرحلة أ - الأسس وقابلية الملاحظة
+1. **قياس WSV عن بعد + لقطات**
+   - `state` هو API لقطة قانونية (السمة `WorldStateSnapshot`) قائم على الاستعلامات، Sumeragi واستخدام CLI.
+   - `scripts/iroha_state_dump.sh` استخدام اللقطات الحتمية `iroha state dump --format norito`.
+2. ** حتمية التكوين/التمهيد **
+   - Genesis الابتلاع هو خط أنابيب واحد يعمل بالطاقة Norito (`iroha_core::genesis`) واحد.
+   - تغطية التكامل/الانحدار تشتمل على نشأة الطبيعة واللون الأسود وإعادة التشغيل وarm64/x86_64 لجذور WSV الثابتة الثابتة (الإصدار: `integration_tests/tests/genesis_replay_determinism.rs`).
+3. **اختبارات الثبات عبر الصناديق**
+   - `integration_tests/tests/genesis_json.rs` الذي يعمل على WSV وخطوط الأنابيب وثوابت ABI التي يمكن التحقق من صحة أي منها.
+   - `cargo xtask check-shape` سقالة متعارفة حول انجراف المخطط للذعر (تراكم أدوات DevEx; `scripts/xtask/README.md` هو بند الإجراء دیكھیں).
 
-### Phase B - WSV اور Query Surface
-1. **State Storage Transactions**
-   - `state/storage_transactions.rs` کو ایک transactional adapter میں سمیٹیں جو commit ordering اور conflict detection نافذ کرے۔
-   - unit tests اب تصدیق کرتے ہیں کہ asset/world/triggers کی تبدیلیاں ناکامی پر rollback ہوں۔
-2. **Query Model Refactor**
-   - pagination/cursor logic کو `crates/iroha_core/src/query/` کے تحت reusable components میں منتقل کریں۔ `iroha_data_model` میں Norito representations کو align کریں۔
-   - triggers، assets اور roles کے لئے deterministic ordering کے ساتھ snapshot queries شامل کریں (موجودہ coverage `crates/iroha_core/tests/snapshot_iterable.rs` میں ٹریک ہے)۔
-3. **Snapshot Consistency**
-   - یقینی بنائیں کہ `iroha ledger query` CLI وہی snapshot path استعمال کرے جو Sumeragi/fetchers استعمال کرتے ہیں۔
-   - CLI snapshot regression tests `tests/cli/state_snapshot.rs` میں ہیں (slow runs کے لئے feature-gated)۔
+### المرحلة ب - WSV وسطح الاستعلام
+1. **معاملات تخزين الحالة**
+   - `state/storage_transactions.rs` وهو محول المعاملات الذي يسمح بتنفيذ الطلب واكتشاف التعارض بشكل فعال.
+   - اختبارات الوحدة هي أحدث طريقة لتحديث الأصول/العالم/المشغلات قبل التراجع.
+2. ** مُعاد بناء نموذج الاستعلام **
+   - ينتقل منطق ترقيم الصفحات/المؤشر إلى `crates/iroha_core/src/query/` الموجود تحت المكونات القابلة لإعادة الاستخدام. تمثيلات `iroha_data_model` Norito تتماشى مع الشكل.
+   - المشغلات والأصول والأدوار للترتيب الحتمي بالإضافة إلى استعلامات لقطة تتضمن القراءة (توجد تغطية `crates/iroha_core/tests/snapshot_iterable.rs` في هذا الشأن).
+3. **تناسق اللقطة**
+   - يستخدم هذا الدليل `iroha ledger query` CLI واستخدام مسار اللقطة باستخدام Sumeragi/fetchers.
+   - اختبارات انحدار لقطة CLI `tests/cli/state_snapshot.rs` (عمليات التشغيل البطيئة ذات ميزة بوابات).
 
-### Phase C - Sumeragi Pipeline
-1. **Topology اور Epoch Management**
-   - `EpochRosterProvider` کو ایک trait میں نکالیں جس کی implementations WSV stake snapshots پر مبنی ہوں۔
-   - `WsvEpochRosterAdapter::from_peer_iter` benches/tests کے لئے ایک سادہ mock-friendly constructor فراہم کرتا ہے۔
-2. **Consensus Flow Simplification**
-   - `crates/iroha_core/src/sumeragi/*` کو ماڈیولز میں ری آرگنائز کریں: `pacemaker`, `aggregation`, `availability`, `witness` اور مشترکہ types کو `consensus` کے تحت رکھیں۔
-   - ad-hoc message passing کو typed Norito envelopes سے بدلیں اور view-change property tests متعارف کریں (Sumeragi messaging backlog میں ٹریک)۔
-3. **Lane/Proof Integration**
-   - lane proofs کو DA commitments کے ساتھ align کریں اور یقینی بنائیں کہ RBC gating یکساں ہو۔
-   - end-to-end integration test `integration_tests/tests/extra_functional/seven_peer_consistency.rs` اب RBC-enabled path کو verify کرتا ہے۔
+### المرحلة ج - خط الأنابيب Sumeragi
+1. **الطوبولوجيا وإدارة العصر**
+   - `EpochRosterProvider` وهي إحدى السمات المميزة وهي عبارة عن لقطات حصة WSV متاحة للجميع.
+   - `WsvEpochRosterAdapter::from_peer_iter` مقاعد/اختبارات منشئ بسيط وسهل الاستخدام.
+2. **تبسيط تدفق الإجماع**
+   - `crates/iroha_core/src/sumeragi/*` التي تم تصنيفها على أنها: `pacemaker`، `aggregation`، `availability`، `witness` وأنواع المنتجات الأخرى `consensus` قيد الإنشاء.
+   - تمرير رسالة مخصصة مثل مغلفات Norito سے بدلیں واختبارات خاصية تغيير العرض متعارف کریں (Sumeragi messages backlog میں ٹریک).
+3. **تكامل المسار/الدليل**
+   - إثباتات المسار والتزامات DA التي تعمل على محاذاة كريات الدم والأدوات اللازمة لبوابة RBC.
+   - اختبار التكامل من طرف إلى طرف `integration_tests/tests/extra_functional/seven_peer_consistency.rs` عبر المسار الممكّن لـ RBC والتحقق من کرتا ہے۔
 
-### Phase D - Smart Contracts اور Pointer-ABI Hosts
-1. **Host Boundary Audit**
-   - pointer-type checks (`ivm::pointer_abi`) اور host adapters (`iroha_core::smartcontracts::ivm::host`) کو consolidate کریں۔
-   - pointer table expectations اور host manifest bindings کو `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` اور `ivm_host_mapping.rs` کور کرتے ہیں، جو golden TLV mappings کو exercise کرتے ہیں۔
-2. **Trigger Execution Sandbox**
-   - triggers کو اس طرح ری فیکٹر کریں کہ وہ مشترکہ `TriggerExecutor` کے ذریعے چلیں جو gas، pointer validation، اور event journaling نافذ کرتا ہے۔
-   - call/time triggers کے لئے regression tests شامل کریں جو failure paths کو کور کرتے ہیں (ٹریک: `crates/iroha_core/tests/trigger_failure.rs`)۔
-3. **CLI اور Client Alignment**
-   - یقینی بنائیں کہ CLI operations (`audit`, `gov`, `sumeragi`, `ivm`) drift سے بچنے کے لئے shared `iroha` client functions پر انحصار کریں۔
-   - CLI JSON snapshot tests `tests/cli/json_snapshot.rs` میں ہیں؛ انہیں اپ ٹو ڈیٹ رکھیں تاکہ core command output canonical JSON reference سے match کرتا رہے۔
+### المرحلة د - العقود الذكية ومضيفات Pointer-ABI
+1. **تدقيق حدود المضيف**
+   - عمليات فحص نوع المؤشر (`ivm::pointer_abi`) ومحولات المضيف (`iroha_core::smartcontracts::ivm::host`) لتوحيد البيانات.
+   - توقعات جدول المؤشر وارتباطات بيان المضيف `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` و`ivm_host_mapping.rs` هي البطاقة التي تستخدمها تعيينات TLV الذهبية.
+2. **وضع الحماية للتنفيذ**
+   - مشغلات خطة إعادة النشر والنشر `TriggerExecutor` لتنشيط الغاز والتحقق من صحة المؤشر وتسجيل الأحداث بشكل فعال.
+   - مشغلات الاتصال/الوقت تتضمن اختبارات الانحدار التي تتضمن مسارات فشل البطاقة (المركزي: `crates/iroha_core/tests/trigger_failure.rs`).
+3. **CLI ومحاذاة العميل**
+   - عمليات CLI التالية (`audit`, `gov`, `sumeragi`, `ivm`) الانجراف المشترك لوظائف العميل `iroha` للتوسع کریں۔
+   - اختبارات لقطة CLI JSON `tests/cli/json_snapshot.rs` میں ہیں؛ يحتوي هذا التطبيق على بعض الميزات التي تتطابق مع مخرجات الأوامر الأساسية ومرجع JSON الأساسي.
 
-### Phase E - Norito Codec Hardening
-1. **Schema Registry**
-   - `crates/norito/src/schema/` کے تحت Norito schema registry بنائیں تاکہ core data types کے لئے canonical encodings دستیاب ہوں۔
-   - sample payload encoding کو verify کرنے والے doc tests شامل کریں (`norito::schema::SamplePayload`)۔
-2. **Golden Fixtures Refresh**
-   - `crates/norito/tests/*` کے golden fixtures کو اپ ڈیٹ کریں تاکہ refactor کے بعد نئی WSV schema سے match ہوں۔
-   - `scripts/norito_regen.sh` helper `norito_regen_goldens` کے ذریعے Norito JSON goldens کو deterministic طور پر regenerate کرتا ہے۔
-3. **IVM/Norito Integration**
-   - Kotodama manifest serialization کو Norito کے ذریعے end-to-end validate کریں، تاکہ pointer ABI metadata مستقل رہے۔
-   - `crates/ivm/tests/manifest_roundtrip.rs` manifests کے لئے Norito encode/decode parity برقرار رکھتا ہے۔
+### المرحلة E - Norito تصلب الترميز
+1. ** سجل المخطط **
+   - `crates/norito/src/schema/` الموجود ضمن سجل المخطط Norito يستخدم أنواع البيانات الأساسية للترميزات الأساسية.
+   - عينة من ترميز الحمولة النافعة والتحقق من اختبارات المستندات التي تتضمن كريں (`norito::schema::SamplePayload`).
+2. ** تحديث التركيبات الذهبية **
+   - `crates/norito/tests/*` ستتطابق التركيبات الذهبية التي تم إعادة بناءها بعد مخطط WSV الجديد.
+   - `scripts/norito_regen.sh` helper `norito_regen_goldens` ذریعے Norito JSON golds الحتمية لتجديد الكرتا ہے.
+3. **تكامل IVM/Norito**
+   - Kotodama تسلسل البيان الذي Norito هو التحقق من صحة النهاية من النهاية إلى النهاية، بالإضافة إلى بيانات تعريف مؤشر ABI المستقلة.
+   - `crates/ivm/tests/manifest_roundtrip.rs` يظهر کے لئے Norito تشفير/فك تشفير التكافؤ برقرار رکھتا ہے۔
 
-## 3. Cross-cutting امور
-- **Testing Strategy**: ہر phase unit tests -> crate tests -> integration tests کو فروغ دیتا ہے۔ failing tests موجودہ regressions کو پکڑتے ہیں؛ نئے tests انہیں واپس آنے سے روکتے ہیں۔
-- **Documentation**: ہر phase کے اترنے کے بعد `status.md` اپ ڈیٹ کریں اور کھلے items کو `roadmap.md` میں منتقل کریں، جبکہ مکمل شدہ کام prune کریں۔
-- **Performance Benchmarks**: `iroha_core`, `ivm` اور `norito` میں موجود benches برقرار رکھیں؛ refactor کے بعد baseline measurements شامل کریں تاکہ regressions نہ ہوں۔
-- **Feature Flags**: crate-level toggles صرف ان backends کے لئے رکھیں جنہیں بیرونی toolchains چاہیے (`cuda`, `zk-verify-batch`)۔ CPU SIMD paths ہمیشہ build ہوتے اور runtime پر منتخب ہوتے ہیں؛ unsupported hardware کے لئے deterministic scalar fallbacks فراہم کریں۔
+## 3. امور شاملة
+- **استراتيجية الاختبار**: اختبارات وحدة الطور -> اختبارات الصناديق -> اختبارات التكامل کو فروج دیتا ہے۔ اختبارات الفشل موجودة في الانحدارات؛ يتم إجراء اختبارات جديدة على الويب.
+- **الوثائق**: ستنتقل المرحلة التالية التي تلي `status.md` إلى إنشاء عناصر وعناصر أخرى إلى `roadmap.md`، وتم الانتهاء من تقليمها بالكامل.
+- **مقاييس الأداء**: `iroha_core` و`ivm` و`norito` هي مقاعد موجودة بالفعل. إعادة البناء بعد قياسات خط الأساس لا تتضمن انحدارات دقيقة.
+- **أعلام الميزات**: يتم استخدام عمليات التبديل على مستوى الصناديق في الواجهات الخلفية لسلاسل الأدوات مثل (`cuda`, `zk-verify-batch`). مسارات SIMD لوحدة المعالجة المركزية (CPU) تم إنشاؤها ووقت التشغيل حسب الاختيار؛ الأجهزة غير المدعومة تستخدم الاحتياطيات العددية الحتمية.
 
-## 4. فوری اگلے اقدامات
-- Phase A scaffolding (snapshot trait + telemetry wiring) - roadmap updates میں actionable tasks دیکھیں۔
-- `sumeragi`, `state`, اور `ivm` کی حالیہ defect audit نے درج ذیل highlights سامنے لائے:
-  - `sumeragi`: dead-code allowances view-change proof broadcast، VRF replay state، اور EMA telemetry export کو guard کرتے ہیں۔ یہ Phase C کے consensus flow simplification اور lane/proof integration deliverables اترنے تک gated رہیں گے۔
-  - `state`: `Cell` cleanup اور telemetry routing Phase A کے WSV telemetry track پر منتقل ہوتے ہیں، جبکہ SoA/parallel-apply نوٹس Phase C pipeline optimization backlog میں شامل ہوتے ہیں۔
-  - `ivm`: CUDA toggle exposure، envelope validation، اور Halo2/Metal coverage Phase D کے host-boundary کام اور cross-cutting GPU acceleration theme سے میپ ہوتے ہیں؛ kernels تیار ہونے تک dedicated GPU backlog پر رہتے ہیں۔
-- invasive code changes اترنے سے پہلے اس پلان کا خلاصہ دینے والا cross-team RFC تیار کریں تاکہ sign-off مل سکے۔
-
-## 5. کھلے سوالات
-- کیا RBC کو P1 کے بعد بھی optional رہنا چاہیے، یا Nexus ledger lanes کے لئے لازمی ہے؟ stakeholder فیصلہ درکار ہے۔
-- کیا ہم P1 میں DS composability groups نافذ کریں یا lane proofs کے mature ہونے تک انہیں disable رکھیں؟
-- ML-DSA-87 parameters کی canonical location کیا ہے؟ امیدوار: نیا crate `crates/fastpq_isi` (pending creation)۔
+## 4. فوری اگلے الإجراءات
+- المرحلة أ السقالات (سمة لقطة + أسلاك القياس عن بعد) - تحديثات خارطة الطريق توفر مهام قابلة للتنفيذ.
+- `sumeragi`، و`state`، و`ivm` تسلط الضوء على حالات تدقيق العيوب في الدرج التالي:
+  - `sumeragi`: بث إثبات تغيير عرض بدلات الكود الميت، وحالة إعادة تشغيل VRF، وتصدير القياس عن بعد EMA وحماية البيانات. هذه المرحلة ج هي تبسيط التدفق المتفق عليه وتسليمات تكامل المسار/الدليل.
+  - `state`: `Cell` تنظيف وتوجيه القياس عن بعد، المرحلة أ، مسار القياس عن بعد WSV، تم الانتقال إليه مؤخرًا، قبل تطبيق SoA/التطبيق المتوازي، تتضمن قائمة المهام المتراكمة لتحسين خط أنابيب المرحلة C.
+  - `ivm`: CUDA تبديل التعرض، والتحقق من صحة المغلف، وتغطية Halo2/Metal المرحلة D وحدود المضيف وموضوع تسريع GPU المتقاطع؛ يتم تطوير النواة من خلال تراكم GPU مخصص.
+- تغييرات التعليمات البرمجية الغازية يتم إجراؤها باستخدام خطة الخلاص والتسجيل عبر فريق RFC من خلال تسجيل الخروج.## 5. كل سوالات
+- ما هو RBC الذي هو P1 الذي هو مطلوب بعد ذلك، أو Nexus ممرات دفتر الأستاذ المطلوبة؟ أصحاب المصلحة فيصل درکار.
+- ما هي مجموعات P1 للتكوين DS الناجحة أو إثباتات المسار التي أصبحت ناضجة والتي تم تعطيلها؟
+- معلمات ML-DSA-87 الموقع المتعارف عليه کیا ہے؟ امیدوار: نیا قفص `crates/fastpq_isi` (في انتظار الإنشاء)۔
 
 ---
 
-_آخری اپ ڈیٹ: 2025-09-12_
+_آخر تاريخ: 2025-09-12_

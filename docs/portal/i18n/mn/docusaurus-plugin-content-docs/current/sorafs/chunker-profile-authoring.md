@@ -8,46 +8,48 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Profile Authoring Guide
 sidebar_label: Chunker Authoring Guide
 description: Checklist for proposing new SoraFS chunker profiles and fixtures.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-# SoraFS Chunker Profile Authoring Guide
+# SoraFS Chunker профайлыг бичих гарын авлага
 
-This guide explains how to propose and publish new chunker profiles for SoraFS.
-It complements the architecture RFC (SF-1) and the registry reference (SF-2a)
-with concrete authoring requirements, validation steps, and proposal templates.
-For a canonical example, see
+Энэхүү гарын авлага нь SoraFS-д зориулсан шинэ chunker профайлыг хэрхэн санал болгож, нийтлэхийг тайлбарладаг.
+Энэ нь архитектурын RFC (SF-1) болон бүртгэлийн лавлагаа (SF-2a) -ийг нөхдөг.
+Зохиогчийн тодорхой шаардлага, баталгаажуулалтын үе шат, саналын загвартай.
+Каноник жишээг үзнэ үү
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
-and the accompanying dry-run log in
+болон дагалдах хуурай гүйлтийн нэвтрэлт
 `docs/source/sorafs/reports/sf1_determinism.md`.
 
-## Overview
+## Тойм
 
-Every profile that enters the registry must:
+Бүртгэлд орсон профайл бүр нь:
 
-- advertise deterministic CDC parameters and multihash settings identical across
-  architectures;
-- ship replayable fixtures (Rust/Go/TS JSON + fuzz corpora + PoR witnesses) that
-  downstream SDKs can verify without bespoke tooling;
-- include governance-ready metadata (namespace, name, semver) plus migration
-- pass the deterministic diff suite before council review.
+- ижил төстэй CDC параметрүүд болон олон хэш тохиргоонуудыг сурталчлах
+  архитектур;
+- дахин тоглуулах боломжтой хөлөг онгоц (Rust/Go/TS JSON + fuzz corpora + PoR гэрчүүд)
+  доод урсгалын SDK нь захиалгат багаж хэрэгсэлгүйгээр баталгаажуулах боломжтой;
+- засаглалд бэлэн мета өгөгдөл (нэрийн орон зай, нэр, север) болон шилжих хөдөлгөөнийг багтаана
+- Зөвлөлийн хянан үзэхээс өмнө детерминистик ялгаатай багцыг давах.
 
-Follow the checklist below to prepare a proposal that satisfies those rules.
+Эдгээр дүрэмд нийцсэн санал бэлтгэхийн тулд доорх хяналтын хуудсыг дагана уу.
 
-## Registry Charter Snapshot
+## Бүртгэлийн дүрмийн агшин зураг
 
-Before drafting a proposal, confirm it conforms to the registry charter enforced
-by `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
+Санал боловсруулахын өмнө түүнийг мөрдөж буй бүртгэлийн дүрэмд нийцэж байгаа эсэхийг баталгаажуулна
+`sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
-- Profile IDs are positive integers that increase monotonically without gaps.
-- The canonical handle (`namespace.name@semver`) must appear in the alias list
-  and **must** be the first entry.
-- No alias may collide with another canonical handle or appear more than once.
-- Aliases must be non-empty and trimmed of whitespace.
+- Профайлын ID нь хоосон зайгүй монотоноор өсдөг эерэг бүхэл тоо юм.
+- Каноник бариул (`namespace.name@semver`) нэрийн жагсаалтад гарч ирэх ёстой.
+  ба **заавал** эхний оруулга байх ёстой.
+- Ямар ч хуурамч нэр өөр каноник бариултай мөргөлдөх эсвэл нэгээс олон удаа гарч ирж болохгүй.
+- Гадна нэр нь хоосон биш байх ёстой бөгөөд хоосон зайгаар таслагдсан байх ёстой.
 
-Handy CLI helpers:
+Хэрэгтэй CLI туслахууд:
 
 ```bash
 # JSON listing of all registered descriptors (ids, handles, aliases, multihash)
@@ -58,76 +60,76 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
-These commands keep proposals aligned with the registry charter and provide the
-canonical metadata needed in governance discussions.
+Эдгээр тушаалууд нь саналуудыг бүртгэлийн дүрэмд нийцүүлэн хадгалж, хангадаг
+засаглалын хэлэлцүүлэгт шаардлагатай каноник мета өгөгдөл.
 
-## Required Metadata
+## Шаардлагатай мета өгөгдөл
 
-| Field | Description | Example (`sorafs.sf1@1.0.0`) |
+| Талбай | Тодорхойлолт | Жишээ (`sorafs.sf1@1.0.0`) |
 |-------|-------------|------------------------------|
-| `namespace` | Logical grouping for related profiles. | `sorafs` |
-| `name` | Human-readable label. | `sf1` |
-| `semver` | Semantic version string for the parameter set. | `1.0.0` |
-| `profile_id` | Monotonic numeric identifier assigned once the profile lands. Reserve the next id but do not reuse existing numbers. | `1` |
-| `profile_aliases` | Optional additional handles exposed to clients during negotiation. Always include the canonical handle as the first entry. | `["sorafs.sf1@1.0.0"]` |
-| `profile.min_size` | Minimum chunk length in bytes. | `65536` |
-| `profile.target_size` | Target chunk length in bytes. | `262144` |
-| `profile.max_size` | Maximum chunk length in bytes. | `524288` |
-| `profile.break_mask` | Adaptive mask used by the rolling hash (hex). | `0x0000ffff` |
-| `profile.polynomial` | Gear polynomial constant (hex). | `0x3da3358b4dc173` |
-| `gear_seed` | Seed used to derive the 64 KiB gear table. | `sorafs-v1-gear` |
-| `chunk_multihash.code` | Multihash code for per-chunk digests. | `0x1f` (BLAKE3-256) |
-| `chunk_multihash.digest` | Digest of the canonical fixtures bundle. | `13fa...c482` |
-| `fixtures_root` | Relative directory containing the regenerated fixtures. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed for deterministic PoR sampling (`splitmix64`). | `0xfeedbeefcafebabe` (example) |
+| `namespace` | Холбогдох профайлын логик бүлэглэл. | `sorafs` |
+| `name` | Хүн унших боломжтой шошго. | `sf1` |
+| `semver` | Параметрийн багцын семантик хувилбарын мөр. | `1.0.0` |
+| `profile_id` | Профайл газардсаны дараа өгөгдсөн монотон тоон танигч. Дараагийн ID-г нөөцлөх боловч одоо байгаа дугаарыг дахин бүү ашигла. | `1` |
+| `profile_aliases` | Хэлэлцээрийн явцад үйлчлүүлэгчдэд нээлттэй нэмэлт бариулууд. Каноник бариулыг үргэлж эхний оруулга болгон оруулаарай. | `["sorafs.sf1@1.0.0"]` |
+| `profile.min_size` | Байт дахь хамгийн бага багцын урт. | `65536` |
+| `profile.target_size` | Зорилтот хэсгийн уртыг байтаар илэрхийлнэ. | `262144` |
+| `profile.max_size` | Байтаар илэрхийлэгдэх хамгийн их хэсэгийн урт. | `524288` |
+| `profile.break_mask` | Дасан зохицох маск нь өнхрөх хэш (hex). | `0x0000ffff` |
+| `profile.polynomial` | Араа олон гишүүнт тогтмол (hex). | `0x3da3358b4dc173` |
+| `gear_seed` | 64KiB арааны хүснэгтийг гаргахад ашигласан үр. | `sorafs-v1-gear` |
+| `chunk_multihash.code` | Хэсэг болгон задлахад зориулсан олон хэш код. | `0x1f` (BLAKE3-256) |
+| `chunk_multihash.digest` | Каноник бэхэлгээний багцын тойм. | `13fa...c482` |
+| `fixtures_root` | Сэргээгдсэн бэхэлгээг агуулсан харьцангуй лавлах. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
+| `por_seed` | Тодорхойлолттой PoR дээж авахад зориулсан үр (`splitmix64`). | `0xfeedbeefcafebabe` (жишээ) |
 
-The metadata must appear both in the proposal document and inside the generated
-fixtures so the registry, CLI tooling, and governance automation can confirm the
-values without manual cross-referencing. When in doubt, run the chunk-store and
-manifest CLIs with `--json-out=-` to stream the computed metadata into review
-notes.
+Мета өгөгдөл нь саналын баримт бичиг болон үүсгэсэн дотор хоёуланд нь харагдах ёстой
+бүртгэл, CLI хэрэгсэл, засаглалын автоматжуулалт нь баталгаажуулах боломжтой
+гарын авлагын хөндлөн лавлагаагүйгээр утгууд. Хэрэв эргэлзэж байвал chunk-store болон ажиллуулна уу
+Тооцоолсон мета өгөгдлийг хянахын тулд `--json-out=-`-тэй манифест CLI
+тэмдэглэл.
 
-### CLI & Registry Touchpoints
+### CLI & Бүртгэлийн холбоо барих цэгүүд
 
-- `sorafs_manifest_chunk_store --profile=<handle>` – re-run chunk metadata,
-  manifest digest, PoR checks with the proposed parameters.
-- `sorafs_manifest_chunk_store --json-out=-` – stream the chunk-store report to
-  stdout for automated comparisons.
-- `sorafs_manifest_stub --chunker-profile=<handle>` – confirm manifests and CAR
-  plans embed the canonical handle plus aliases.
-- `sorafs_manifest_stub --plan=-` – feed the previous `chunk_fetch_specs` back
-  in to verify offsets/digests post-change.
+- `sorafs_manifest_chunk_store --profile=<handle>` – хэсэгчилсэн мета өгөгдлийг дахин ажиллуулах,
+  манифест дижест, PoR нь санал болгож буй параметрүүдийг шалгадаг.
+- `sorafs_manifest_chunk_store --json-out=-` – chunk-store тайланг дамжуулах
+  stdout автоматжуулсан харьцуулалт.
+- `sorafs_manifest_stub --chunker-profile=<handle>` – манифест болон CAR-г баталгаажуулна
+  төлөвлөгөөнд каноник бариул болон бусад нэрүүдийг суулгасан болно.
+- `sorafs_manifest_stub --plan=-` – өмнөх `chunk_fetch_specs`-ийг буцааж өгнө
+  Өөрчлөлтийн дараах офсет/диджестийг шалгахын тулд.
 
-Record the command output (digests, PoR roots, manifest hashes) in the proposal
-so reviewers can reproduce them verbatim.
+Командын гаралтыг (диджест, PoR үндэс, манифест хэш) саналд бичнэ үү.
+Тиймээс тоймчид тэдгээрийг үгчлэн хуулбарлах боломжтой.
 
-## Determinism & Validation Checklist
+## Тодорхойлолт ба баталгаажуулалтын хяналтын хуудас
 
-1. **Regenerate fixtures**
+1. **Бэхэлгээг сэргээх**
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
-2. **Run the parity suite** – `cargo test -p sorafs_chunker` and the
-   cross-language diff harness (`crates/sorafs_chunker/tests/vectors.rs`) must be
-   green with the new fixtures in place.
-3. **Replay fuzz/back-pressure corpora** – execute `cargo fuzz list` and the
-   streaming harness (`fuzz/sorafs_chunker`) against the regenerated assets.
-4. **Verify Proof-of-Retrievability witnesses** – run
-   `sorafs_manifest_chunk_store --por-sample=<n>` using the proposed profile and
-   confirm the roots match the fixture manifest.
-5. **CI dry run** – invoke `ci/check_sorafs_fixtures.sh` locally; the script
-   should succeed with the new fixtures and existing `manifest_signatures.json`.
-6. **Cross-runtime confirmation** – ensure Go/TS bindings consume the regenerated
-   JSON and emit identical chunk boundaries and digests.
+2. **Parity suite-г ажиллуул** – `cargo test -p sorafs_chunker` ба
+   Хэл хоорондын дифференциал (`crates/sorafs_chunker/tests/vectors.rs`) байх ёстой
+   шинэ бэхэлгээтэй ногоон өнгөтэй.
+3. **Fuzz/back-pressure corpora-г дахин тоглуулах** – `cargo fuzz list` болон
+   сэргээсэн хөрөнгийн эсрэг урсгалын бэхэлгээ (`fuzz/sorafs_chunker`).
+4. **Татаж авах боломжтой гэрчүүдийг шалгах** – гүйх
+   `sorafs_manifest_chunk_store --por-sample=<n>` санал болгож буй профайлыг ашиглан болон
+   үндэс нь бэхэлгээний манифесттэй тохирч байгааг баталгаажуул.
+5. **CI хуурай гүйлт** – `ci/check_sorafs_fixtures.sh`-г дотооддоо дуудах; скрипт
+   шинэ бэхэлгээ болон одоо байгаа `manifest_signatures.json`-ээр амжилтанд хүрэх ёстой.
+6. **Ажиллах цагийн баталгаажуулалт** – Go/TS холболтууд нь шинэчлэгдсэнийг хэрэглэж байгаа эсэхийг шалгах
+   JSON болон ижил хэсгүүдийн хил хязгаар болон дижестийг ялгаруулдаг.
 
-Document the commands and resulting digests in the proposal so the Tooling WG
-can re-run them without guesswork.
+Санал болгож буй тушаалуудыг баримтжуулж, үр дүнд нь нэгтгэх АХ-д оруулна уу
+Таамаглалгүйгээр тэдгээрийг дахин ажиллуулж болно.
 
-### Manifest / PoR Confirmation
+### Манифест / PoR баталгаажуулалт
 
-After regenerating fixtures, run the full manifest pipeline to ensure CAR
-metadata and PoR proofs remain consistent:
+Бэхэлгээг сэргээсний дараа CAR-ыг баталгаажуулахын тулд бүрэн манифест дамжуулах хоолойг ажиллуулна уу
+мета өгөгдөл болон PoR нотолгоо нь тогтвортой хэвээр байна:
 
 ```bash
 # Validate chunk metadata + PoR with the new profile
@@ -151,44 +153,44 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-Replace the input file with any representative corpus used by your fixtures
-(e.g., the 1 GiB deterministic stream) and attach the resulting digests to the
-proposal.
+Оролтын файлыг өөрийн эд хогшлоор ашигладаг аливаа төлөөлөгчийн корпусаар солино уу
+(жишээ нь, 1GiB детерминистик урсгал) ба үр дүнд бий болсон шингээлтийг хавсаргана
+санал.
 
-## Proposal Template
+## Саналын загвар
 
-Proposals are submitted as `ChunkerProfileProposalV1` Norito records checked into
-`docs/source/sorafs/proposals/`. The JSON template below illustrates the expected
-shape (substitute your values as needed):
+Саналуудыг `ChunkerProfileProposalV1` Norito бүртгэлээр шалгасан байдлаар ирүүлсэн.
+`docs/source/sorafs/proposals/`. Доорх JSON загвар нь хүлээгдэж буй зүйлийг харуулж байна
+хэлбэр (шаардлагатай бол өөрийн утгыг орлуулах):
 
 
-Provide a matching Markdown report (`determinism_report`) that captures the
-command output, chunk digests, and any deviations encountered during validation.
+Тохирох Markdown тайланг (`determinism_report`) гаргаж өгнө үү.
+тушаалын гаралт, бөөгнөрөл болон баталгаажуулалтын явцад гарсан аливаа хазайлт.
 
-## Governance Workflow
+## Засаглалын ажлын урсгал
 
-1. **Submit PR with proposal + fixtures.** Include the generated assets, the
-   Norito proposal, and updates to `chunker_registry_data.rs`.
-2. **Tooling WG review.** Reviewers re-run the validation checklist and confirm
-   the proposal aligns with registry rules (no id reuse, determinism satisfied).
-3. **Council envelope.** Once approved, council members sign the proposal digest
-   (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) and append their
-   signatures to the profile envelope stored alongside the fixtures.
-4. **Registry publish.** Merge bumps the registry, docs, and fixtures. The
-   default CLI remains on the previous profile until governance declares the
-   migration ready.
-5. **Deprecation tracking.** After the migration window, update the registry to
-   ledger.
+1. **Санал + бэхэлгээний хамт PR илгээнэ үү.** Үүсгэсэн хөрөнгө,
+   Norito санал, `chunker_registry_data.rs` шинэчлэлт.
+2. **Хэрэгслийн ажлын хэсгийн хяналт.** Шүүгчид баталгаажуулалтын хяналтын хуудсыг дахин ажиллуулж баталгаажуулна
+   Энэ санал нь бүртгэлийн дүрэмтэй нийцэж байна (ид дахин ашиглахгүй, детерминизм хангагдсан).
+3. **Зөвлөлийн дугтуй.** Батлагдсаны дараа зөвлөлийн гишүүд саналын хураангуйд гарын үсэг зурна
+   (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) ба тэдгээрийн хавсаргана
+   бэхэлгээний хажууд хадгалагдсан профилын дугтуйнд гарын үсэг зурна.
+4. **Бүртгэлийг нийтлэх.** Нэгтгэх нь бүртгэл, баримт бичиг, бэхэлгээг тасалдуулж өгдөг. The
+   үндсэн CLI нь засаглал зарлах хүртэл өмнөх профайл дээр хэвээр байна
+   шилжихэд бэлэн байна.
+5. **Эмгэгдлийг хянах.** Шилжүүлэх цонхны дараа бүртгэлийг шинэчилнэ үү
+   дэвтэр.
 
-## Authoring Tips
+## Зохиогчийн зөвлөмж
 
-- Prefer even power-of-two bounds to minimise edge-case chunking behaviour.
-- Avoid changing the multihash code without coordinating manifest and gateway
-- Keep gear table seeds human-readable but globally unique to simplify audit
-  trails.
-- Store any benchmarking artefacts (e.g., throughput comparisons) under
-  `docs/source/sorafs/reports/` for future reference.
+- Захын жижиг хэсгүүдийг багасгахын тулд бүр хоёрын хүчийг илүүд үзээрэй.
+- Манифест болон гарцыг зохицуулахгүйгээр multihash кодыг өөрчлөхөөс зайлсхий
+- Аудитыг хялбарчлахын тулд араа хүснэгтийн үрийг хүн унших боломжтой, гэхдээ дэлхий дахинд өвөрмөц байлгах
+  мөрүүд.
+- Аливаа жишиг олдворыг (жишээ нь, нэвтрүүлэх чадварын харьцуулалт) доор хадгална
+  Цаашид лавлах зорилгоор `docs/source/sorafs/reports/`.
 
-For operational expectations during rollout refer to the migration ledger
-(`docs/source/sorafs/migration_ledger.md`). For runtime conformance rules see
+Дамжуулах явцад үйл ажиллагааны хүлээлтийг шилжилт хөдөлгөөний дэвтэрээс харна уу
+(`docs/source/sorafs/migration_ledger.md`). Ажиллах цагийн нийцлийн дүрмийг үзнэ үү
 `docs/source/sorafs/chunker_conformance.md`.

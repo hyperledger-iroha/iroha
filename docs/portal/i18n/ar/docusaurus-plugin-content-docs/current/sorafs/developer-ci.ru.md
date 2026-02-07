@@ -4,25 +4,27 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-ci.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Рецепты CI для SoraFS
-sidebar_label: Рецепты CI
-description: Запускайте CLI SoraFS в пайплайнах GitHub и GitLab с бесключевой подписью.
+المعرف: المطور-ci
+العنوان: إيصالات CI لـ SoraFS
+Sidebar_label: إيصالات CI
+الوصف: قم بتثبيت CLI SoraFS في GitHub وGitLab العاديين في قائمة خاصة.
 ---
 
 :::note Канонический источник
 :::
 
-# Рецепты CI
+# الإيصالات CI
 
-Пайплайны SoraFS выигрывают от детерминированного chunking, подписи manifest и проверки proofs.
-Поверхность команд `sorafs_cli` делает эти шаги переносимыми между CI провайдерами. Эта страница
-подчеркивает канонические рецепты и указывает на готовые к использованию шаблоны.
+يتم التحقق من صفحتي SoraFS من تحديد القطع وتقديم البيان والتحقق من البراهين.
+يقوم الأمر العلوي `sorafs_cli` بتنفيذ هذه التغييرات من خلال اختبار CI. هذه هي المنطقة
+يدعم الوصايا الكنسية ويصرح بأهمية استخدام الدروس.
 
-## GitHub Actions (keyless)
+## إجراءات GitHub (بدون مفتاح)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,13 +97,13 @@ jobs:
           path: artifacts/
 ```
 
-Ключевые моменты:
+لحظات رئيسية:
 
-- Статические ключи подписи не хранятся; токены OIDC запрашиваются по требованию.
-- Артефакты (CAR, manifest, bundle, сводки proofs) загружаются для ревью.
-- Job повторно использует те же схемы Norito, что и в продакшен-роллаутах.
+- لا تتأرجح المفاتيح الإحصائية؛ يتم إرسال الرموز المميزة OIDC إلى الطلب.
+- القطع الأثرية (السيارة، البيان، الحزمة، البراهين المائية) محمية من أجل المراجعة.
+- تستخدم الوظيفة مرة أخرى المخططات Norito، والتي يتم عرضها.
 
-## GitLab CI
+## جيتلاب سي آي
 
 ```yaml
 stages:
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Подготовьте `SIGSTORE_ID_TOKEN` через workload identity federation GitLab или sealed secret до запуска стадии publish.
-- Сбой любого шага CLI останавливает pipeline, сохраняя согласованные артефакты.
+- أدخل `SIGSTORE_ID_TOKEN` من خلال اتحاد هوية عبء العمل GitLab أو سر مختوم من أجل النشر.
+- كل ما تحبه هو CLI الذي يدعم خط الأنابيب، والقطع الأثرية المصاحبة.
 
-## Дополнительные ресурсы
+## الموارد الإضافية
 
-- End-to-end шаблоны (включают Bash helpers, конфигурацию федеративной идентичности и шаги очистки): `docs/examples/sorafs_ci.md`
-- Справочник CLI, покрывающий все опции: `docs/source/sorafs_cli.md`
-- Требования governance/alias перед отправкой:
+- عناصر شاملة (تتضمن مساعدات Bash وتكوينات الهوية الفيدرالية والتفاصيل): `docs/examples/sorafs_ci.md`
+- واجهة سطر الأوامر (CLI) الصحيحة، التي تدعم جميع الخيارات: `docs/source/sorafs_cli.md`
+- إدارة العمل/الاسم المستعار قبل التنفيذ:
   `docs/source/sorafs/provider_admission_policy.md`

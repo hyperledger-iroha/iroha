@@ -11,108 +11,109 @@ id: node-plan
 title: SoraFS Node Implementation Plan
 sidebar_label: Node Implementation Plan
 description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii process into a SoraFS storage provider. Use this plan alongside the [node storage guide](node-storage.md), [provider admission policy](provider-admission-policy.md), and [storage capacity marketplace roadmap](storage-capacity-marketplace.md) when sequencing deliverables.
+SF-3 Iroha/Torii ሂደትን ወደ SoraFS ማከማቻ አቅራቢ የሚቀይረውን `sorafs-node` crate ያቀርባል። ማቅረቢያዎችን በቅደም ተከተል ሲያስቀምጡ ይህንን እቅድ ከ[መስቀለኛ ማከማቻ መመሪያ](node-storage.md)፣ [የአቅራቢዎች መግቢያ ፖሊሲ](provider-admission-policy.md) እና [የማከማቻ አቅም የገበያ ቦታ መንገድ ካርታ](storage-capacity-marketplace.md) ጋር ይጠቀሙ።
 
-## Target Scope (Milestone M1)
+## የዒላማ ወሰን (ሚልስቶን M1)
 
-1. **Chunk store integration.** Wrap `sorafs_car::ChunkStore` with a persistent backend that stores chunk bytes, manifests, and PoR trees in the configured data directory.
-2. **Gateway endpoints.** Expose Norito HTTP endpoints for pin submission, chunk fetch, PoR sampling, and storage telemetry within the Torii process.
-3. **Configuration plumbing.** Add a `SoraFsStorage` config struct (enabled flag, capacity, directories, concurrency limits) wired through `iroha_config`, `iroha_core`, and `iroha_torii`.
-4. **Quota/scheduling.** Enforce operator-defined disk/parallelism limits and queue requests with back-pressure.
-5. **Telemetry.** Emit metrics/logs for pin success, chunk fetch latency, capacity utilisation, and PoR sampling results.
+1. **Chunk Store ውህደት።** `sorafs_car::ChunkStore` በተዋቀረው የውሂብ መዝገብ ውስጥ ቸንክ ባይት፣ መግለጫዎች እና የPoR ዛፎችን በሚያከማች ቀጣይነት ባለው ጀርባ ይሸፍኑ።
+2. **የጌትዌይ የመጨረሻ ነጥቦች።** የI18NT0000002X HTTP የመጨረሻ ነጥቦችን ለፒን ማቅረቢያ፣ ቸንክ ፈልሳፊ፣ የPoR ናሙና እና የማከማቻ ቴሌሜትሪ በTorii ሂደት ውስጥ ያጋልጡ።
+3. **የማዋቀር ቧንቧ።** በ`iroha_config`፣ `iroha_core`፣ እና `iroha_torii` በኩል የተገጠመ የ`SoraFsStorage` ውቅር (የነቃ ባንዲራ፣ አቅም፣ ማውጫዎች፣ የኮንፈረንስ ገደቦች) ያክሉ።
+4. **ኮታ/መርሐግብር።** በኦፕሬተር የተገለጸውን የዲስክ/ትይዩነት ገደቦችን እና የወረፋ ጥያቄዎችን ከኋላ ግፊት ጋር ያስፈጽሙ።
+5. **ቴሌሜትሪ።** ሜትሪክስ/ሎግ ለፒን ስኬት፣ ቸንክ ማምጣት መዘግየት፣ የአቅም አጠቃቀም እና የPoR ናሙና ውጤቶች።
 
-## Work Breakdown
+##የስራ መፈራረስ
 
 ### A. Crate & Module Structure
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (user → actual → defaults). | Storage Team / Config WG | Ensure the Norito/`iroha_config` layers remain deterministic. |
-| Provide a `NodeHandle` facade Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals and async plumbing. |
+| ተግባር | ባለቤት(ዎች) | ማስታወሻ |
+|-------------|---|
+| `crates/sorafs_node` በሞጁሎች ይፍጠሩ፡ `config`፣ `store`፣ `gateway`፣ `scheduler`፣ `telemetry`። | የማከማቻ ቡድን | ለ Torii ውህደት እንደገና ጥቅም ላይ ሊውሉ የሚችሉ ዓይነቶችን ወደ ውጭ መላክ። |
+| ከ `SoraFsStorage` (ተጠቃሚ → ትክክለኛ → ነባሪዎች) የተቀረፀውን `StorageConfig` ይተግብሩ። | የማከማቻ ቡድን / ውቅር WG | የNorito/`iroha_config` ንብርብሮች የሚወስኑ መሆናቸውን ያረጋግጡ። |
+| የ`NodeHandle` ፊት ለፊት Torii ፒን/ማስጠፊያዎችን ለማስገባት ይጠቅማል። | የማከማቻ ቡድን | የማጠራቀሚያ ውስጠ-ቁሳቁሶችን እና ያልተመሳሰሉ የቧንቧ መስመሮችን ይሸፍኑ. |
 
-### B. Persistent Chunk Store
+### B. የማያቋርጥ ቸንክ መደብር
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Build a disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (`sled`/`sqlite`). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Maintain PoR metadata (64 KiB/4 KiB trees) using `ChunkStore::sample_leaves`. | Storage Team | Support replay after restart; fail fast on corruption. |
-| Implement integrity replay on startup (rehash manifests, prune incomplete pins). | Storage Team | Block Torii start until replay completes. |
+| ተግባር | ባለቤት(ዎች) | ማስታወሻ |
+|-------------|---|
+| የዲስክ ጀርባ መጠቅለያ `sorafs_car::ChunkStore` በዲስክ አንጸባራቂ መረጃ ጠቋሚ (`sled`/I18NI0000046X) ይገንቡ። | የማከማቻ ቡድን | ቆራጥ አቀማመጥ፡ `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
+| I18NI0000048X በመጠቀም የPoR ሜታዳታ (64KiB/4KiB ዛፎች) አቆይ። | የማከማቻ ቡድን | እንደገና ከተጀመረ በኋላ እንደገና ማጫወትን ይደግፉ; በሙስና ላይ በፍጥነት መውደቅ. |
+| በሚነሳበት ጊዜ የታማኝነት ድግግሞሹን ይተግብሩ (መግለጫዎችን እንደገና ያሻሽሉ ፣ ያልተሟሉ ፒኖችን ይቁረጡ)። | የማከማቻ ቡድን | ድጋሚ ማጫወት እስኪያልቅ ድረስ Torii አግድ። |
 
-### C. Gateway Endpoints
+### ሐ. ጌትዌይ የመጨረሻ ነጥቦች
 
-| Endpoint | Behaviour | Tasks |
-|----------|-----------|-------|
-| `POST /sorafs/pin` | Accept `PinProposalV1`, validate manifests, queue ingestion, respond with manifest CID. | Validate chunk profile, enforce quotas, stream data via chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Serve chunk bytes with `Content-Chunker` headers; respect range capability spec. | Use scheduler + stream budgets (tie into SF-2d range capability). |
-| `POST /sorafs/por/sample` | Run PoR sampling for a manifest and return proof bundle. | Reuse chunk store sampling, respond with Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Summaries: capacity, PoR success, fetch error counts. | Provide data for dashboards/operators. |
+| የመጨረሻ ነጥብ | ባህሪ | ተግባራት |
+|-------------|------|
+| `POST /sorafs/pin` | `PinProposalV1`ን ተቀበል፣ አንጸባራቂዎችን አረጋግጥ፣ ወረፋ መግባቱን፣ በአንጸባራቂ CID ምላሽ ይስጡ። | የ chunk መገለጫን ያረጋግጡ፣ ኮታዎችን ያስፈጽሙ፣ ውሂብን በchunk ማከማቻ ያሰራጩ። |
+| `GET /sorafs/chunks/{cid}` + ክልል መጠይቅ | ከ`Content-Chunker` ራስጌዎች ጋር ቸንክ ባይት ያገልግሉ፤ አክብሮት ክልል ችሎታ spek. | የጊዜ መርሐግብር + የዥረት በጀቶችን ይጠቀሙ (ከ SF-2d ክልል አቅም ጋር ይገናኙ)። |
+| `POST /sorafs/por/sample` | ለማንፀባረቂያ እና የመመለሻ ማረጋገጫ ጥቅል የPoR ናሙናን ያሂዱ። | የ chunk ማከማቻ ናሙና እንደገና ተጠቀም፣ በNorito JSON ጭነቶች ምላሽ ይስጡ። |
+| `GET /sorafs/telemetry` | ማጠቃለያዎች፡ አቅም፣ የPoR ስኬት፣ የስህተት ቆጠራዎች። | ለዳሽቦርዶች/ኦፕሬተሮች ውሂብ ያቅርቡ። |
 
-Runtime plumbing threads PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` metrics reflect governance verdicts without bespoke Torii logic.【crates/sorafs_node/src/scheduler.rs#L147】
+የአሂድ ቧንቧዎች በ `sorafs_node::por` በኩል የPoR ግንኙነቶችን ይከተላሉ፡ መከታተያው እያንዳንዱን `PorChallengeV1`፣ `PorProofV1` እና `AuditVerdictV1` ይመዘግባል ስለዚህ I18NI000000059X ሜትሪክስ `CapacityMeter` ሜትሪክስ ያለአስተዳደር ፍርዶች00 ያንፀባርቃል አመክንዮ።【crates/sorafs_node/src/scheduler.rs#L147】
 
-Implementation notes:
+የትግበራ ማስታወሻዎች፡-
 
-- Use Torii’s Axum stack with `norito::json` payloads.
-- Add Norito schemas for responses (`PinResultV1`, `FetchErrorV1`, telemetry structs).
+- የToriiን የአክሱም ቁልል ከ`norito::json` ጭነቶች ጋር ይጠቀሙ።
+- ለምላሾች Norito ንድፎችን ያክሉ (`PinResultV1`፣ `FetchErrorV1`፣ telemetry structs)።
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now exposes backlog depth plus the oldest epoch/deadline and
-  the most recent success/failure timestamps for each provider, powered by
-  `sorafs_node::NodeHandle::por_ingestion_status`, and Torii records the
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges for dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ I18NI0000063X አሁን የኋለኛውን ጥልቀት እና በጣም ጥንታዊውን ዘመን/የመጨረሻ ጊዜ እና አጋለጠ።
+  ለእያንዳንዱ አገልግሎት አቅራቢ የቅርብ ጊዜ የስኬት/የመውደቅ የጊዜ ማህተም፣ የተጎላበተ
+  `sorafs_node::NodeHandle::por_ingestion_status` እና Torii መዝግቧል
+  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` መለኪያዎች ለ ዳሽቦርዶች።【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【telecrates/srcrates/srcrates
 
-### D. Scheduler & Quota Enforcement
+### D. መርሐግብር እና ኮታ ማስፈጸሚያ
 
-| Task | Details |
-|------|---------|
-| Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) plus per-provider budgets sourced from SF-2d range caps. |
-| Pin queue | Limit outstanding ingestion jobs; expose Norito status endpoints for queue depth. |
-| PoR cadence | Background worker driven by `por_sample_interval_secs`. |
+| ተግባር | ዝርዝሮች |
+|------|--------|
+| የዲስክ ኮታ | በዲስክ ላይ ባይት ይከታተሉ; `max_capacity_bytes` ሲያልፍ አዲስ ፒኖችን ውድቅ ያድርጉ። ለወደፊት ፖሊሲዎች የማስወጣት መንጠቆዎችን ያቅርቡ። |
+| ተጓዳኝ አምጡ | ግሎባል ሴማፎር (`max_parallel_fetches`) እና የአቅራቢዎች በጀቶች ከSF-2d ክልል ካፕ የወጡ። |
+| የፒን ወረፋ | እጅግ በጣም ጥሩ የሆኑ የምግብ ስራዎችን ይገድቡ; ለወረፋ ጥልቀት የNorito ሁኔታ የመጨረሻ ነጥቦችን ያጋልጡ። |
+| PoR cadence | የበስተጀርባ ሰራተኛ በ`por_sample_interval_secs` የሚመራ። |
 
-### E. Telemetry & Logging
+### ኢ ቴሌሜትሪ እና ሎግ
 
-Metrics (Prometheus):
+መለኪያዎች (Prometheus)
 
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histogram with `result` labels)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
+- `sorafs_pin_success_total`፣ `sorafs_pin_failure_total`
+- `sorafs_chunk_fetch_duration_seconds` (ሂስቶግራም ከ I18NI0000073X መለያዎች ጋር)
+- `torii_sorafs_storage_bytes_used`፣ `torii_sorafs_storage_bytes_capacity`
+- `torii_sorafs_storage_pin_queue_depth`፣ `torii_sorafs_storage_fetch_inflight`
 - `torii_sorafs_storage_fetch_bytes_per_sec`
 - `torii_sorafs_storage_por_inflight`
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
+- `torii_sorafs_storage_por_samples_success_total`፣ `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / events:
+መዝገቦች / ክስተቶች
 
-- Structured Norito telemetry for governance ingestion (`StorageTelemetryV1`).
-- Alerts when utilisation > 90% or PoR failure streak exceeds threshold.
+- የተዋቀረ I18NT0000007X ቴሌሜትሪ ለአስተዳደር ማስመጫ (`StorageTelemetryV1`)።
+- ሲጠቀሙ ማንቂያዎች>90% ወይም የPoR አለመሳካት ደረጃ ከገደቡ ሲያልፍ።
 
-### F. Testing Strategy
+### F. የሙከራ ስልት
 
-1. **Unit tests.** Chunk store persistence, quota calculations, scheduler invariants (see `crates/sorafs_node/src/scheduler.rs`).  
-2. **Integration tests** (`crates/sorafs_node/tests`). Pin → fetch round trip, restart recovery, quota rejection, PoR sampling proof verification.  
-3. **Torii integration tests.** Run Torii with storage enabled, exercise HTTP endpoints via `assert_cmd`.  
-4. **Chaos roadmap.** Future drills simulate disk exhaustion, slow IO, provider removal.
+1. ** የዩኒት ሙከራዎች።** ቸንክ ሱቅ ጽናት፣ ኮታ ስሌቶች፣ የጊዜ መርሐግብር ልዩነቶች (`crates/sorafs_node/src/scheduler.rs` ይመልከቱ)።  
+2. ** የውህደት ሙከራዎች *** (`crates/sorafs_node/tests`). ፒን → የዙር ጉዞን አምጡ፣ መልሶ ማግኘትን እንደገና ያስጀምሩ፣ የኮታ ውድቅ ማድረግ፣ የPoR ናሙና ማረጋገጫ ማረጋገጫ።  
+3. **Torii የመዋሃድ ሙከራዎች።** Torii ን ከማከማቻው ጋር ያሂዱ፣ የኤችቲቲፒ የመጨረሻ ነጥቦችን በ`assert_cmd` ያካሂዱ።  
+4. ** ትርምስ የመንገድ ካርታ።** የወደፊት ልምምዶች የዲስክን ድካም፣ ቀርፋፋ አይኦ፣ የአቅራቢዎችን ማስወገድን ያስመስላሉ።
 
-## Dependencies
+## ጥገኛዎች
 
-- SF-2b admission policy — ensure nodes verify admission envelopes before advertising.  
-- SF-2c capacity marketplace — tie telemetry back into capacity declarations.  
-- SF-2d advert extensions — consume range capability + stream budgets once available.
+- SF-2b የመግቢያ ፖሊሲ - አንጓዎች ከማስታወቂያ በፊት የመግቢያ ፖስታዎችን እንደሚያረጋግጡ ያረጋግጡ።  
+- SF-2c የአቅም የገበያ ቦታ - ቴሌሜትሪ ወደ የአቅም መግለጫዎች መልሰው ማሰር።  
+- SF-2d የማስታወቂያ ማራዘሚያዎች - አንዴ ከተገኘ የክልል አቅም + የዥረት በጀቶችን ይጠቀሙ።
 
-## Milestone Exit Criteria
+## ወሳኝ ደረጃ መውጫ መስፈርት
 
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.  
-- Torii builds with `--features sorafs-storage` and passes integration tests.  
-- Documentation ([node storage guide](node-storage.md)) updated with configuration defaults + CLI examples; operator runbook available.  
-- Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
+- `cargo run -p sorafs_node --example pin_fetch` ከአካባቢያዊ መገልገያዎች ጋር ይሰራል።  
+- Torii በ `--features sorafs-storage` ይገነባል እና የውህደት ፈተናዎችን አልፏል።  
+- ሰነድ ([መስቀለኛ ማከማቻ መመሪያ](node-storage.md)) በማዋቀር ነባሪዎች + CLI ምሳሌዎች የዘመነ; ከዋኝ runbook ይገኛል.  
+- ቴሌሜትሪ በፕላስተር ዳሽቦርዶች ውስጥ ይታያል; ለአቅም ሙሌት እና ለPoR ውድቀቶች የተዋቀሩ ማንቂያዎች።
 
-## Documentation & Ops Deliverables
+## ሰነዶች እና ኦፕስ ማቅረቢያዎች
 
-- Update the [node storage reference](node-storage.md) with configuration defaults, CLI usage, and troubleshooting steps.  
-- Keep the [node operations runbook](node-operations.md) aligned with the implementation as SF-3 evolves.  
-- Publish API references for `/sorafs/*` endpoints inside the developer portal and wire them into the OpenAPI manifest once Torii handlers land.
+- [የመስቀለኛ ማከማቻ ማጣቀሻ](node-storage.md) በማዋቀር ነባሪዎች፣ የCLI አጠቃቀም እና የመላ መፈለጊያ ደረጃዎችን ያዘምኑ።  
+- SF-3 እየተሻሻለ ሲመጣ [መስቀለኛ ኦፕሬሽኖች runbook](node-operations.md) ከትግበራው ጋር እንዲጣጣም ያድርጉ።  
+- የኤፒአይ ማጣቀሻዎችን ለ`/sorafs/*` የመጨረሻ ነጥቦችን በገንቢ ፖርታል ውስጥ ያትሙ እና ወደ OpenAPI ማኒፌስት አንድ ጊዜ Torii ተቆጣጣሪዎች ያርቁዋቸው።

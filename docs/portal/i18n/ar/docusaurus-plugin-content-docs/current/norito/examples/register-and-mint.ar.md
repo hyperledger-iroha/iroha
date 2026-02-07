@@ -4,24 +4,26 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: تسجيل نطاق وسك الأصول
-description: يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سبيكة: /norito/examples/register-and-mint
+العنوان: تسجيل نطاق وسك الأصول
+description: يوضح إنشاء النطاقات المصرح وتسجيل الأصول والسك الحتمي.
+المصدر: صناديق/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
+يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والككتمي.
 
-## جولة دفتر الأستاذ
+## جولة أستاذ الأستاذ
 
-- تأكد من وجود حساب الوجهة (مثل `ih58...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
-- استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
-- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح السك.
+- التأكد من وجود حساب الوجه (مثل `ih58...`) بما في ذلك التحقق من صحة كل بدء سريع لـ SDK.
+- فوراِ نقطة الدخول `register_and_mint` لتعريف التعريف الأصلي ROSE وسك 250 وحدة لأليس في فارة واحدة.
+- تحقق من الرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح السك.
 
-## أدلة SDK ذات صلة
+## دليل SDK ذات صلة
 
 - [البدء السريع لـ Rust SDK](/sdks/rust)
 - [البدء السريع لـ Python SDK](/sdks/python)

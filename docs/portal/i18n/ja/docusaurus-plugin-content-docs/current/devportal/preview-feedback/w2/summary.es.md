@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-summary
-title: Resumen de feedback y estado W2
-sidebar_label: Resumen W2
-description: Resumen en vivo para la ola de preview comunitaria (W2).
+id: プレビュー-フィードバック-w2-まとめ
+タイトル: フィードバックと W2 の履歴書
+サイドバーラベル: 履歴書 W2
+説明: プレビュー コミュニティ (W2) での生体内での履歴書。
 ---
 
-| Item | Detalles |
+|アイテム |詳細 |
 | --- | --- |
-| Ola | W2 - Reviewers comunitarios |
-| Ventana de invitacion | 2025-06-15 -> 2025-06-29 |
-| Tag de artefacto | `preview-2025-06-15` |
-| Issue del tracker | `DOCS-SORA-Preview-W2` |
-| Participantes | comm-vol-01 ... comm-vol-08 |
+|オラ | W2 - 査読者コミュニティ |
+|ベンタナ・デ・インビタシオン | 2025-06-15 -> 2025-06-29 |
+|タグ・デ・アーティファクト | `preview-2025-06-15` |
+|問題デルトラッカー | `DOCS-SORA-Preview-W2` |
+|参加者 | comm-vol-01 ... comm-vol-08 |
 
-## Destacados
+## デスタカドス
 
-1. **Gobernanza y tooling** - La politica de intake comunitario fue aprobada por unanimidad el 2025-05-20; el template de solicitud actualizado con campos de motivacion/zona horaria vive en `docs/examples/docs_preview_request_template.md`.
-2. **Evidencia de preflight** - El cambio del proxy Try it `OPS-TRYIT-188` se ejecuto el 2025-06-09, dashboards de Grafana capturados, y los outputs de descriptor/checksum/probe de `preview-2025-06-15` archivados bajo `artifacts/docs_preview/W2/`.
-3. **Ola de invitaciones** - Ocho reviewers comunitarios invitados el 2025-06-15, con acknowledgements registrados en la tabla de invitaciones del tracker; todos completaron verificacion de checksum antes de navegar.
-4. **Feedback** - `docs-preview/w2 #1` (wording de tooltip) y `#2` (orden de sidebar de localizacion) se registraron el 2025-06-18 y se resolvieron para 2025-06-21 (Docs-core-04/05); no hubo incidentes durante la ola.
+1. **Gobernanza y tools** - 2025 年 5 月 20 日、国民の意見を取り入れた政治政策。 `docs/examples/docs_preview_request_template.md` のテンプレートは、実際の勧誘活動の動機/ゾーン ホラリア ライブをサポートします。
+2. **プリフライトの証拠** - プロキシで試してみてください `OPS-TRYIT-188` は、2025 年 6 月 9 日、Grafana キャプチャのダッシュボード、`preview-2025-06-15` アーカイブの出力の記述子/チェックサム/プローブを出力します`artifacts/docs_preview/W2/`。
+3. **招待状** - Ocho 査読者共同体、2025 年 6 月 15 日、招待状追跡者の登録に対する承認。チェックサムの検証を完了する必要があります。
+4. **フィードバック** - `docs-preview/w2 #1` (ツールチップの文言) および `#2` (ローカル化のためのサイドバーの指示) 登録日 2025-06-18 および解決日 2025-06-21 (Docs-core-04/05);デュランテ・ラ・オラの事件はありません。
 
-## Acciones
+## アクシオネス
 
-| ID | Descripcion | Responsable | Estado |
+| ID |説明 |責任者 |エスタード |
 | --- | --- | --- | --- |
-| W2-A1 | Atender `docs-preview/w2 #1` (wording de tooltip). | Docs-core-04 | Completado 2025-06-21 |
-| W2-A2 | Atender `docs-preview/w2 #2` (sidebar de localizacion). | Docs-core-05 | Completado 2025-06-21 |
-| W2-A3 | Archivar evidencia de salida + actualizar roadmap/status. | Docs/DevRel lead | Completado 2025-06-29 |
+| W2-A1 | Atender `docs-preview/w2 #1` (ツールチップの文言)。 |ドキュメント-コア-04 |完全な情報 2025-06-21 |
+| W2-A2 | `docs-preview/w2 #2` (ローカライズのサイドバー) に参加します。 |ドキュメント-コア-05 |完全な情報 2025-06-21 |
+| W2-A3 | Archivar evidencia de salida +actualizar のロードマップ/ステータス。 |ドキュメント/DevRel リード |完全版 2025-06-29 |
 
-## Resumen de salida (2025-06-29)
+## サリダの履歴書 (2025-06-29)
 
-- Los ocho reviewers comunitarios confirmaron finalizacion y se les revoco el acceso al preview; acknowledgements registrados en el log de invitaciones del tracker.
-- Los snapshots finales de telemetria (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) se mantuvieron verdes; logs y transcripts del proxy Try it adjuntos a `DOCS-SORA-Preview-W2`.
-- Bundle de evidencia (descriptor, checksum log, probe output, link report, screenshots de Grafana, acknowledgements de invitacion) archivado bajo `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- El log de checkpoints W2 del tracker se actualizo hasta el cierre, asegurando que el roadmap mantenga un registro auditable antes de iniciar la planificacion de W3.
+- ロス・オチョの査読者コミュニティは最終的なプレビューを確認します。トラッカーの招待状登録に関する謝辞。
+- テレメトリアの最終スナップショット (`docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals`) の管理状況。プロキシからのログ y トランスクリプト `DOCS-SORA-Preview-W2` に追加して試してみてください。
+- 証拠のバンドル (記述子、チェックサム ログ、プローブ出力、リンク レポート、Grafana のスクリーンショット、招待状の確認) `artifacts/docs_preview/W2/preview-2025-06-15/` をアーカイブします。
+- チェックポイント W2 デル トラッカーは、W3 の計画を開始するための実際の監査、監査可能なロードマップ管理を管理します。

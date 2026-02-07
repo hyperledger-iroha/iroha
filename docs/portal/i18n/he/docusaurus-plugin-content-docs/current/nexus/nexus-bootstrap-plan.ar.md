@@ -4,12 +4,14 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-bootstrap-plan
+מזהה: nexus-bootstrap-plan
 title: اقلاع Sora Nexus والمراقبة
-description: خطة تشغيلية لتشغيل عنقود المدققين الاساسي لـ Nexus قبل اضافة خدمات SoraFS وSoraNet.
+description: خطة تشغيلية لتشغيل عنقود المدققين الاساسي لـ Nexus قبل اضافة خدمات SoraFS ו-SoraNet.
 ---
 
 :::note المصدر القانوني
@@ -23,7 +25,7 @@ description: خطة تشغيلية لتشغيل عنقود المدققين ال
 - التحقق من الخدمات الاساسية (Torii، الاجماع، الاستمرارية) قبل تمكين عمليات نشر SoraFS/SoraNet المتراكبة.
 - تاسيس workflows لـ CI/CD ولوحات/تنبيهات المراقبة لضمان صحة الشبكة.
 
-## المتطلبات المسبقة
+## ‏‎
 - مادة مفاتيح الحوكمة (multisig للمجلس، مفاتيح اللجنة) متاحة في HSM او Vault.
 - بنية تحتية اساسية (عناقيد Kubernetes او عقد bare-metal) في مناطق اساسية/ثانوية.
 - تكوين bootstrap محدث (`configs/nexus/bootstrap/*.toml`) يعكس احدث معلمات الاجماع.
@@ -54,12 +56,10 @@ description: خطة تشغيلية لتشغيل عنقود المدققين ال
 2. تشغيل خدمات Torii (REST/WebSocket) على كل مدقق باستخدام TLS.
 3. نشر عقد مراقبة (قراءة فقط) لمرونة اضافية.
 4. تشغيل سكربتات bootstrap (`scripts/nexus_bootstrap.sh`) لتوزيع genesis وبدء الاجماع وتسجيل العقد.
-5. تنفيذ smoke tests:
+5. בדיקות עשן:
    - ارسال معاملات اختبار عبر Torii (`iroha_cli tx submit`).
    - التحقق من انتاج/نهائية الكتل عبر التليمتري.
-   - فحص تكرار السجل بين المدققين/المراقبين.
-
-## الخطوة 3 - الحوكمة وادارة المفاتيح
+   - فحص تكرار السجل بين المدققين/المراقبين.## الخطوة 3 - الحوكمة وادارة المفاتيح
 1. تحميل تكوين multisig للمجلس; التاكد من امكانية ارسال واقرار مقترحات الحوكمة.
 2. تخزين مفاتيح الاجماع/اللجنة بشكل امن; اعداد نسخ احتياطية تلقائية مع تسجيل وصول.
 3. اعداد اجراءات تدوير مفاتيح الطوارئ (`docs/source/nexus/key_rotation.md`) والتحقق من runbook.

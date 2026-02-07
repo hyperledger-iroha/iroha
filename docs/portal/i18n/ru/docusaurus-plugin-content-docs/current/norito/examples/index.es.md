@@ -4,18 +4,20 @@ direction: ltr
 source: docs/portal/docs/norito/examples/index.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Ejemplos de Norito
-description: Fragmentos de Kotodama seleccionados con recorridos del libro mayor.
-slug: /norito/examples
+Название: Ejemplos de Norito
+описание: Фрагменты Kotodama, выбранные с записями мэра библиотеки.
+слизень: /норито/examples
 ---
 
-Estos ejemplos reflejan los quickstarts de los SDK y los recorridos del libro mayor. Cada fragmento incluye una lista de verificación del libro mayor y enlaza a las guías de Rust, Python y JavaScript para que puedas repetir el mismo escenario de principio a fin.
+В этой статье представлены краткие руководства по SDK и записи библиотеки мэра. Этот фрагмент включает в себя список проверки библиотеки мэра и ссылку на руководства по Rust, Python и JavaScript, чтобы можно было повторить основной сценарий в конце.
 
-- **[Esqueleto del entrypoint Hajimari](./hajimari-entrypoint)** — Andamiaje mínimo de contrato Kotodama con un único entrypoint público y un manejador de estado.
-- **[Registrar dominio y acuñar activos](./register-and-mint)** — Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
-- **[Invocar transferencia del host desde Kotodama](./call-transfer-asset)** — Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
-- **[Transferir activo entre cuentas](./transfer-asset)** — Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.
-- **[Acuñar, transferir y quemar un NFT](./nft-flow)** — Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencias, etiquetado de metadatos y quema.
+- **[Эскелет точки входа Хаджимари](./hajimari-entrypoint)** — Минимальный контракт Kotodama с единственной публичной точкой входа и управляющим государством.
+- **[Registrar dominio y acuñar activos](./register-and-mint)** — Demuestra la creación de dominios con Permisos, el registro de activos y la acuñación determinista.
+- **[Вызов передачи хоста от Kotodama](./call-transfer-asset)** — Демонстрация точки входа Kotodama может привести к инструкциям хоста `transfer_asset` по проверке метаданных в режиме онлайн.
+- **[Transferir activo entre cuentas](./transfer-asset)** — Flujo Directo de Transferencia de Activos que que refleja los Quickstarts de los SDK и los recorridos del libro mayor.
+- **[Acuñar, Transferir y quemar un NFT](./nft-flow)** — Восстановите цикл жизни NFT в крайнем случае: учет собственности, передача, этикет метаданных и quema.

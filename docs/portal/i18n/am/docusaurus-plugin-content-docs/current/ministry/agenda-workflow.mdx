@@ -6,83 +6,85 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Agenda Council Workflow
 description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import CodeBlock from '@theme/CodeBlock';
-import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
+CodeBlockን ከ'@ገጽታ/ኮድብሎክ' አስመጣ፤
+የማስመጣት ምደባ ማጠቃለያ ከ'@site/docs/emples/ministry/agenda_sortition_summary_example.json';
 
-const summary = sortitionSummary;
+const ማጠቃለያ = sortition ማጠቃለያ;
 
-function SortitionSummaryTable({rows}) {
-  return (
-    <table>
-      <thead>
+ተግባር ደርድር ማጠቃለያ ሰንጠረዥ({ረድፎች}) {
+  መመለስ (
+    <ጠረጴዛ>
+      <ርዕስ>
         <tr>
-          <th>Slot</th>
-          <th>Member</th>
-          <th>Role</th>
+          <th>ማስገቢያ</th>
+          <th>አባል</th>
+          <th>ሚና </th>
           <th>Org</th>
-          <th>Weight</th>
-          <th>Entropy (truncated)</th>
+          <th>ክብደት</th>
+          <th>ኢንትሮፒ (የተቆረጠ)</th>
         </tr>
-      </thead>
+      </ thead>
       <tbody>
-        {rows.map((row, index) => (
-          <tr key={`${row.member_id}-${row.draw_position}`}>
-            <td>{index + 1}</td>
+        {rows.map((ረድፍ፣ ማውጫ) => (
+          <tr key={I18NI0000007X}>
+            <td>{ኢንዴክስ + 1}</td>
             <td><code>{row.member_id}</code></td>
             <td>{row.role}</td>
             <td>{row.organization}</td>
             <td>{row.weight}</td>
             <td><code>{row.draw_entropy_hex.slice(0, 16)}…</code></td>
           </tr>
-        ))}
+        )))
       </tbody>
-    </table>
+    </ ሠንጠረዥ>
   );
 }
 
-## Overview
+## አጠቃላይ እይታ
 
-Roadmap item **MINFO-2** requires a deterministic path from proposal linting to
-public sortition evidence so anyone can confirm how a case reached the agenda
-council. This page wires the previously landed CLI helpers directly into the
-developer portal so proposers, auditors, and platform teams can follow the same
-checklist without spelunking the mono-repo.
+የፍኖተ ካርታ ንጥል **MINFO-2** ከፕሮፖዛል ሽፋን ወደ ወሳኙ መንገድ ይፈልጋል
+ማንም ሰው ጉዳዩ እንዴት አጀንዳው ላይ እንደደረሰ ማረጋገጥ እንዲችል የህዝብ መለያ ማስረጃ
+ምክር ቤት. ይህ ገጽ ከዚህ ቀደም ያረፉትን የCLI ረዳቶችን በቀጥታ ወደ
+የገንቢ ፖርታል ስለዚህ ሃሳብ ሰጪዎች፣ ኦዲተሮች እና የመድረክ ቡድኖች ተመሳሳይ መከተል ይችላሉ።
+ሞኖ-ሪፖን ሳይገልጹ የማረጋገጫ ዝርዝር።
 
-The workflow covers three repeatable steps:
+የአሰራር ሂደቱ ሶስት ተደጋጋሚ እርምጃዎችን ያካትታል.
 
-1. Validate `AgendaProposalV1` payloads locally and reject duplicate hashes
-   before the submission reaches the moderation queue.
-2. Publish duplicate-registry hits alongside the proposal so council staff can
-   trace earlier cases without losing determinism.
-3. Run the sortition helper, capture the Merkle proof bundle, and surface the
-   selected roster inside the portal so citizens can replay the draw.
+1. የ`AgendaProposalV1` ክፍያዎችን በአገር ውስጥ ያረጋግጡ እና የተባዙ ሃሽዎችን ውድቅ ያድርጉ።
+   ማስረከቡ የአማካኝነት ወረፋ ከመድረሱ በፊት.
+2. የምክር ቤት ሰራተኞች እንዲችሉ ከፕሮፖዛሉ ጋር የተባዙ-የመዝገብ ቤቶችን ያትሙ
+   ቆራጥነትን ሳያጡ የቀደሙ ጉዳዮችን ይፈልጉ ።
+3. የመደርደር አጋዥን ያሂዱ፣ የመርክል ማረጋገጫ ቅርቅቡን ያዙ እና ገጹን ላይ ያድርጉት
+   ዜጎች ስዕሉን እንደገና መጫወት እንዲችሉ በፖርታሉ ውስጥ የተመረጠ ዝርዝር።
 
-All helpers live in `cargo xtask ministry-agenda`; the Norito schema is
-documented under `docs/source/ministry/agenda_council_proposal.md`.
+ሁሉም ረዳቶች በ I18NI0000009X ውስጥ ይኖራሉ; የ Norito እቅድ ነው።
+በ `docs/source/ministry/agenda_council_proposal.md` ስር ተመዝግቧል።
 
-## 1. Validate proposals locally
+## 1. ሀሳቦችን በአገር ውስጥ ያረጋግጡ
 
-Use the CLI to lint JSON payloads and assert that required evidence (hash
-families, digest lengths, language tag, submitter contact) is present. The
-validator shares code with the Torii ingestion path, so a proposal that passes
-here will also pass when uploaded through the portal.
+JSON ሸክሞችን ለመጫን እና አስፈላጊውን ማስረጃ ለማረጋገጥ CLI ን ይጠቀሙ (ሀሽ
+ቤተሰቦች፣ የመፍጨት ርዝማኔዎች፣ የቋንቋ መለያ፣ የአስገቢ ግንኙነት) አሉ። የ
+አረጋጋጭ ኮድን ከI18NT0000003X የማስገቢያ ዱካ ያካፍላል፣ ስለዚህ የሚያልፍ ሀሳብ
+እዚህ በፖርታሉ ውስጥ ሲሰቀልም ያልፋል።
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda validate \\
-  --proposal docs/examples/ministry/agenda_proposal_example.json \\
-  --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
+<CodeBlock language="bash">{`ካርጎ xtask ሚኒስቴር-አጀንዳ ይረጋገጣል \\
+  --የፕሮፖዛል ሰነዶች/ምሳሌዎች/ሚኒስትሪ/አጀንዳ_ፕሮፖዛል_example.json \\
+  --መዝገብ ቤት ሰነዶች/ምሳሌዎች/ሚኒስትሪ/አጀንዳ_duplicate_registry.json`}</ CodeBlock>
 
-- Add `--allow-registry-conflicts` when triaging historical payloads; new
-  submissions should fail fast when a fingerprint already exists.
-- The examples directory ships the reference proposal and registry so SDKs can
-  adopt the format without hard-coding private payloads.
+- ታሪካዊ ክፍያዎችን በሚወስኑበት ጊዜ `--allow-registry-conflicts` ይጨምሩ; አዲስ
+  የጣት አሻራ አስቀድሞ ሲኖር ማስረከብ በፍጥነት መውደቅ አለበት።
+- የምሳሌዎች ማውጫው ኤስዲኬዎች እንዲችሉ የማመሳከሪያ ፕሮፖዛል እና መዝገቡን ይልካል
+  ያለ ሃርድ-ኮድ የግል ክፍያ ቅርጸቱን ተጠቀም።
 
-## 2. Publish duplicate-registry context
+## 2. የተባዛ-የመዝገብ አውድ ያትሙ
 
-Every accepted proposal includes the registry digest that was consulted before
-ingest. Capture the SoraFS CID or Torii manifest path for that registry and add
-it to your submission metadata so council reviewers can verify the same JSON.
+እያንዳንዱ ተቀባይነት ያለው ሀሳብ ከዚህ በፊት ምክክር የተደረገውን የመመዝገቢያ ምግብን ያካትታል
+አስገባ። ለዚያ መዝገብ የSoraFS CID ወይም Torii አንጸባራቂ መንገድን ያንሱ እና ያክሉ
+የምክር ቤት ገምጋሚዎች ተመሳሳዩን JSON እንዲያረጋግጡ ወደ እርስዎ ያስገቡት ሜታዳታ።
 
 ```json title="Duplicate registry (excerpt)"
 {
@@ -97,81 +99,81 @@ it to your submission metadata so council reviewers can verify the same JSON.
 }
 ```
 
-When the CLI reports a collision, the portal shows the linked proposal IDs so
-operators can merge or reject resubmissions deterministically.
+CLI ግጭትን ሲዘግብ፣ ፖርታሉ የተገናኙትን የፕሮፖዛል መታወቂያዎችን ያሳያል
+ኦፕሬተሮች እንደገና ግቤትን በቆራጥነት ማዋሃድ ወይም ውድቅ ማድረግ ይችላሉ።
 
-## 3. Run and publish the sortition summary
+## 3. የመደርደር ማጠቃለያውን ያሂዱ እና ያትሙ
 
-Once a docket is ready, run the deterministic sortition helper. It consumes the
-roster JSON, seed, and target slot count, then emits a Merkle-proof-backed
-summary. The summary JSON is what the portal renders in the **Council draw**
-panel.
+አንድ ዶክ ከተዘጋጀ በኋላ የሚወስነውን የመለየት ረዳት ያሂዱ። ይበላል።
+የስም ዝርዝር JSON፣ ዘር እና ዒላማ ማስገቢያ ቆጠራ፣ ከዚያም በመርክል-ማስረጃ የተደገፈ ያመነጫል።
+ማጠቃለያ JSON ማጠቃለያው ፖርታል በ **ካውንስል ስዕል** ውስጥ የሚያቀርበው ነው።
+ፓነል.
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda sortition \\
-  --roster docs/examples/ministry/agenda_council_roster.json \\
-  --slots 3 \\
-  --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
-  --output artifacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
+<CodeBlock language="bash">{`ካርጎ xtask ሚኒስቴር-አጀንዳ ምደባ \\
+  --ሮስተር ሰነዶች/ምሳሌዎች/ሚኒስትሪ/አጀንዳ_ካውንስል_roster.json \\
+  -- ቦታዎች 3 \\
+  --ዘር 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
+  --ውፅዓት ቅርሶች/ሚኒስትሪ/መደብ/2026-03-12.json`}</ CodeBlock>
 
-Store the resulting JSON on SoraFS (or alongside the signed agenda packet) and
-link the CID in the proposal tracker. The developer portal consumes the same
-JSON structure; the example below renders the bundled
+የተገኘውን JSON በ I18NT0000002X (ወይም ከተፈረመው የአጀንዳ ፓኬት ጋር) ያከማቹ እና
+በፕሮፖዛል መከታተያ ውስጥ ያለውን CID ያገናኙ። የገንቢው መግቢያው ተመሳሳይ ነው የሚበላው።
+JSON መዋቅር; ከታች ያለው ምሳሌ የተጠቃለለ ያደርገዋል
 `agenda_sortition_summary_example.json`.
 
-### Example council draw
+### ምሳሌ የምክር ቤት ዕጣ
 
-<table>
-  <thead>
+<ጠረጴዛ>
+  <ርዕስ>
     <tr>
-      <th>Field</th>
-      <th>Value</th>
+      <th>መስክ</th>
+      <th>ዋጋ </th>
     </tr>
-  </thead>
+  </ thead>
   <tbody>
     <tr>
-      <td>Algorithm</td>
+      <td>አልጎሪዝም</td>
       <td><code>{summary.algorithm}</code></td>
     </tr>
     <tr>
-      <td>Roster digest (BLAKE3)</td>
+      <td>የሮስተር መፍጨት (BLAKE3)</td>
       <td><code>{summary.roster_digest.blake3_hex}</code></td>
     </tr>
     <tr>
-      <td>Roster digest (SHA-256)</td>
+      <td>የሮስተር መፍጨት (SHA-256)</td>
       <td><code>{summary.roster_digest.sha256_hex}</code></td>
     </tr>
     <tr>
-      <td>Seed</td>
+      <td>ዘር</td>
       <td><code>{summary.seed_hex}</code></td>
     </tr>
     <tr>
-      <td>Slots</td>
+      <td>ስሎቶች</td>
       <td>{summary.slots}</td>
     </tr>
     <tr>
-      <td>Eligible members</td>
+      <td>ብቁ አባላት</td>
       <td>{summary.eligible_members}</td>
     </tr>
     <tr>
-      <td>Merkle root</td>
+      <td>የመርክል ሥር</td>
       <td><code>{summary.merkle_root_hex}</code></td>
     </tr>
   </tbody>
-</table>
+</ ሠንጠረዥ>
 
-<SortitionSummaryTable rows={summary.selected} />
+<SummarySummaryTable rows={summary.selected} />
 
-Each selected member includes:
+እያንዳንዱ የተመረጠው አባል የሚከተሉትን ያጠቃልላል
 
-- `draw_entropy_hex` (32 BLAKE3 bytes) so anyone can recompute the RNG output.
-- `eligible_index` and `original_index` so auditors can prove that opt-outs were
-  honored.
-- A Merkle proof covering the roster leaf; reproducing the tree confirms the
-  roster published inside the packet matches the draw.
+- `draw_entropy_hex` (32 BLAKE3 ባይት) ስለዚህ ማንም ሰው የ RNG ውፅዓትን እንደገና ማስላት ይችላል።
+- `eligible_index` እና `original_index` ስለዚህ ኦዲተሮች መርጦ መውጣቱን ማረጋገጥ ይችላሉ።
+  የተከበረ.
+- የሮስተር ቅጠልን የሚሸፍን የ Merkle ማረጋገጫ; ዛፉን እንደገና ማባዛት ያረጋግጣል
+  በፓኬቱ ውስጥ የታተመ ዝርዝር ከስዕሉ ጋር ይዛመዳል።
 
-### Decision log
+### የውሳኔ መዝገብ
 
-When the council votes on a proposal, attach the decision memo and the
-sortition summary CID to the governance action (Torii `/v1/gov/*` entry). Portal
-pages link the memo, the vote tally, and the JSON shown above so every action
-contains the full evidence chain required by **MINFO-2**.
+ምክር ቤቱ በውሳኔ ሃሳብ ላይ ድምጽ ሲሰጥ የውሳኔውን ማስታወሻ እና የ
+የመለየት ማጠቃለያ CID ለአስተዳደር እርምጃ (Torii I18NI0000016X ግቤት)። ፖርታል
+ገጾቹ ማስታወሻውን፣ የድምጽ መጠኑን እና ከላይ የሚታየውን JSON ያገናኛሉ ስለዚህ እያንዳንዱን ድርጊት
+በ **MINFO-2** የሚያስፈልገውን ሙሉ ማስረጃ ሰንሰለት ይዟል።

@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-cli.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-cli
-title: Receitas de CLI da SoraFS
-sidebar_label: Receitas de CLI
-description: Guia focado em tarefas da superficie consolidada de `sorafs_cli`.
+identifiant : développeur-cli
+titre : Receitas de CLI da SoraFS
+sidebar_label : Recettes de CLI
+description : Guia focado em tarefas da superficie consolidada de `sorafs_cli`.
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/cli.md`. Mantenha ambas as copias sincronizadas.
+Cette page espelha `docs/source/sorafs/developer/cli.md`. Mantenha ambas comme copies synchronisées.
 :::
 
-A superficie consolidada `sorafs_cli` (fornecida pelo crate `sorafs_car` com o recurso `cli` habilitado) expoe cada etapa necessaria para preparar artefatos da SoraFS. Use este cookbook para ir direto a workflows comuns; combine com o pipeline de manifest e os runbooks do orquestrador para contexto operacional.
+La surface consolidée `sorafs_cli` (fornecida pelo crate `sorafs_car` com o recurso `cli` habilité) expose toute l'étape nécessaire pour préparer les artefatos da SoraFS. Utilisez ce livre de recettes directement sur les flux de travail communs ; combinez le pipeline de manifeste et les runbooks de l'explorateur pour le contexte opérationnel.
 
-## Empacotar payloads
+## Charges utiles Empacotar
 
-Use `car pack` para produzir arquivos CAR deterministas e planos de chunk. O comando seleciona automaticamente o chunker SF-1, a menos que um handle seja fornecido.
+Utilisez `car pack` pour produire des archives CAR déterministes et des plans de bloc. La commande sélectionne automatiquement le chunker SF-1, à moins qu'une poignée ne soit fournie.
 
 ```bash
 sorafs_cli car pack \
@@ -31,11 +33,11 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Handle de chunker padrao: `sorafs.sf1@1.0.0`.
-- Entradas de diretorio sao percorridas em ordem lexicografica para que os checksums fiquem estaveis entre plataformas.
-- O resumo JSON inclui digests do payload, metadados por chunk e o CID raiz reconhecido pelo registro e pelo orquestrador.
+- Poignée de chunker padrao : `sorafs.sf1@1.0.0`.
+- Entrées du répertoire sao percorridas dans l'ordre lexicographique pour que les sommes de contrôle soient enregistrées entre les plates-formes.
+- Le résumé JSON inclut les résumés de la charge utile, les métadonnées du morceau et le CID qui a été reconnu par l'enregistreur et par l'explorateur.
 
-## Construir manifests
+## Construir manifeste
 
 ```bash
 sorafs_cli manifest build \
@@ -45,13 +47,11 @@ sorafs_cli manifest build \
   --pin-retention-epoch 96 \
   --manifest-out artifacts/video.manifest.to \
   --manifest-json-out artifacts/video.manifest.json
-```
+```- Opcoes `--pin-*` mapeiam directement pour les champs `PinPolicy` à `sorafs_manifest::ManifestBuilder`.
+- Forneca `--chunk-plan` lorsque vous souhaitez que la CLI recalcule le résumé SHA3 du morceau avant l'envoi ; caso contrario, il réutilise le digest embutido no CV.
+- JSON a déclaré la charge utile Norito pour les différences simples lors des révisions.
 
-- Opcoes `--pin-*` mapeiam diretamente para campos `PinPolicy` em `sorafs_manifest::ManifestBuilder`.
-- Forneca `--chunk-plan` quando quiser que o CLI recalcule o digest SHA3 do chunk antes do envio; caso contrario ele reutiliza o digest embutido no resumo.
-- A saida JSON espelha o payload Norito para diffs simples durante as revisoes.
-
-## Assinar manifests sem chaves de longa duracao
+## Assinar manifeste sem chaves de longa duracao
 
 ```bash
 sorafs_cli manifest sign \
@@ -61,11 +61,11 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Aceita tokens inline, variaveis de ambiente ou fontes baseadas em arquivos.
-- Adiciona metadados de procedencia (`token_source`, `token_hash_hex`, digest de chunk) sem persistir o JWT bruto, a menos que `--include-token=true`.
-- Funciona bem em CI: combine com OIDC do GitHub Actions definindo `--identity-token-provider=github-actions`.
+- Jetons Aceita en ligne, variables d'ambiance ou polices basées sur les archives.
+- Ajout de métadonnées de procédure (`token_source`, `token_hash_hex`, digest de chunk) qui persiste sur le brut JWT, à moins que `--include-token=true`.
+- Fonctionne avec CI : combinez avec OIDC et les actions GitHub définissent `--identity-token-provider=github-actions`.
 
-## Enviar manifests para o Torii
+## Enviar manifeste para o Torii
 
 ```bash
 sorafs_cli manifest submit \
@@ -80,11 +80,11 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Faz decodificacao Norito para alias proofs e verifica se correspondem ao digest do manifest antes de enviar via POST ao Torii.
-- Recalcula o digest SHA3 do chunk a partir do plano para evitar ataques de divergencia.
-- Os resumos de resposta capturam status HTTP, headers e payloads do registro para auditoria posterior.
+- Faz décodificacao Norito pour les preuves d'alias et vérifiez leur correspondance avec le résumé du manifeste avant d'envoyer via POST vers Torii.
+- Recalculez le résumé SHA3 du morceau à partir du plan pour éviter les attaques de divergence.
+- Les résumés de réponse capturent le statut HTTP, les en-têtes et les charges utiles à enregistrer pour les auditoires postérieurs.
 
-## Verificar conteudos de CAR e proofs
+## Vérifier les conteudos de CAR et les preuves
 
 ```bash
 sorafs_cli proof verify \
@@ -93,10 +93,10 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Reconstroi a arvore PoR e compara digests do payload com o resumo do manifest.
-- Captura contagens e identificadores exigidos ao enviar proofs de replicacao para governanca.
+- Reconstruisez le PoR et comparez les résumés de la charge utile avec le résumé du manifeste.
+- Capturer les contagiens et les identifiants requis pour envoyer des preuves de réplication pour le gouvernement.
 
-## Transmitir telemetria de proofs
+## Transmettre la télémétrie des preuves
 
 ```bash
 sorafs_cli proof stream \
@@ -107,16 +107,14 @@ sorafs_cli proof stream \
   --stream-token "$(cat stream.token)" \
   --summary-out artifacts/video.proof_stream.json \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
-```
+```- Émettez des éléments NDJSON pour chaque transmission de preuve (désatif ou replay avec `--emit-events=false`).
+- Regrouper les taux de succès/échecs, les histogrammes de latence et les échecs enregistrés sans résumé JSON pour que les tableaux de bord puissent tracer les résultats dans leurs journaux.
+- Sai com codigo nao zero quando o gateway reporta falhas ou quando a verificacao PoR local (via `--por-root-hex`) rejeita proofs. Ajustez les limites avec `--max-failures` et `--max-verification-failures` pour l'exécution des analyses.
+- Soutenir PoR aujourd'hui ; PDP et PoTR réutilisent l'enveloppe mémo lorsque vous utilisez SF-13/SF-14.
+- `--governance-evidence-dir` contient le rendu du résumé, les métadonnées (horodatage, version de la CLI, URL de la passerelle, résumé du manifeste) et une copie du manifeste dans le répertoire fourni pour que les paquets de gouvernance fournissent des preuves du flux de preuve lors de l'exécution.
 
-- Emite itens NDJSON para cada proof transmitido (desative o replay com `--emit-events=false`).
-- Agrega contagens de sucesso/falha, histogramas de latencia e falhas amostradas no resumo JSON para que dashboards possam plotar resultados sem ler logs.
-- Sai com codigo nao zero quando o gateway reporta falhas ou quando a verificacao PoR local (via `--por-root-hex`) rejeita proofs. Ajuste os limiares com `--max-failures` e `--max-verification-failures` para execucoes de ensaio.
-- Suporta PoR hoje; PDP e PoTR reutilizam o mesmo envelope quando SF-13/SF-14 chegarem.
-- `--governance-evidence-dir` grava o resumo renderizado, metadados (timestamp, versao do CLI, URL do gateway, digest do manifest) e uma copia do manifest no diretorio fornecido para que pacotes de governanca arquivem a evidencia do proof-stream sem repetir a execucao.
+## Références supplémentaires
 
-## Referencias adicionais
-
-- `docs/source/sorafs_cli.md` - documentacao exaustiva de flags.
-- `docs/source/sorafs_proof_streaming.md` - esquema de telemetria de proofs e template de dashboard Grafana.
-- `docs/source/sorafs/manifest_pipeline.md` - mergulho profundo em chunking, composicao de manifest e manejo de CAR.
+- `docs/source/sorafs_cli.md` - documentation exhaustive des drapeaux.
+- `docs/source/sorafs_proof_streaming.md` - esquema de télémétrie de preuves et modèle de tableau de bord Grafana.
+- `docs/source/sorafs/manifest_pipeline.md` - fusion profonde dans le chunking, composition du manifeste et de la gestion de la CAR.

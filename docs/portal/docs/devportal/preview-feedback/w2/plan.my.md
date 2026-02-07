@@ -11,39 +11,40 @@ id: preview-feedback-w2-plan
 title: W2 community intake plan
 sidebar_label: W2 plan
 description: Intake, approvals, and evidence checklist for the community preview cohort.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
-| --- | --- |
-| Wave | W2 — Community reviewers |
-| Target window | Q3 2025 week 1 (tentative) |
-| Artefact tag (planned) | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
+| အမျိုးအမည် | အသေးစိတ် |
+| ---| ---|
+| လှိုင်း | W2 — အသိုင်းအဝိုင်း သုံးသပ်သူများ |
+| ပစ်မှတ် window | Q3 2025 ရက်သတ္တပတ် 1 (တွေဝေ) |
+| Artefact tag (စီစဉ်ထားသည်) | `preview-2025-06-15` |
+| Tracker ပြဿနာ | `DOCS-SORA-Preview-W2` |
 
-## Objectives
+## ရည်ရွယ်ချက်များ
 
-1. Define the community intake criteria and vetting workflow.
-2. Obtain governance approval for the proposed roster and acceptable-use addendum.
-3. Refresh the checksum-verified preview artefact and telemetry bundle for the new window.
-4. Stage the Try it proxy + dashboards ahead of invite dispatch.
+1. ရပ်ရွာစားသုံးမှုစံနှုန်းများနှင့် စစ်ဆေးခြင်းလုပ်ငန်းအသွားအလာကို သတ်မှတ်ပါ။
+2. အဆိုပြုထားသော စာရင်းဇယားနှင့် လက်ခံနိုင်သော အသုံးပြုမှုဆိုင်ရာ နောက်ဆက်တွဲအတွက် အုပ်ချုပ်မှုဆိုင်ရာ အတည်ပြုချက်ကို ရယူပါ။
+3. ဝင်းဒိုးအသစ်အတွက် checksum-အတည်ပြုထားသော အကြိုကြည့်ရှုခြင်းဆိုင်ရာ artefact နှင့် telemetry အတွဲကို ပြန်လည်စတင်ပါ။
+4. ဖိတ်ကြားချက်ပေးပို့ခြင်းမတိုင်မီ စမ်းသုံးကြည့်ပါ ပရောက်စီ + ဒက်ရှ်ဘုတ်များကို အဆင့်မြှင့်တင်ပါ။
 
-## Task breakdown
+## အလုပ်ပျက်ခြင်း။
 
-| ID | Task | Owner | Due | Status | Notes |
-| --- | --- | --- | --- | --- | --- |
-| W2-P1 | Draft community intake criteria (eligibility, max slots, CoC requirements) and circulate to governance | Docs/DevRel lead | 2025‑05‑15 | ✅ Completed | Intake policy merged into `DOCS-SORA-Preview-W2` and endorsed at the 2025‑05‑20 council meeting. |
-| W2-P2 | Update request template with community-specific questions (motivation, availability, localization needs) | Docs-core-01 | 2025‑05‑18 | ✅ Completed | `docs/examples/docs_preview_request_template.md` now includes the Community section, referenced in the intake form. |
-| W2-P3 | Secure governance approval for the intake plan (meeting vote + recorded minutes) | Governance liaison | 2025‑05‑22 | ✅ Completed | Vote passed unanimously on 2025‑05‑20; minutes + roll call linked in `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Schedule Try it proxy staging + telemetry capture for the W2 window (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025‑06‑05 | ✅ Completed | Change ticket `OPS-TRYIT-188` approved and executed 2025‑06‑09 02:00–04:00 UTC; Grafana screenshots archived with ticket. |
-| W2-P5 | Build/verify new preview artefact tag (`preview-2025-06-15`) and archive descriptor/checksum/probe logs | Portal TL | 2025‑06‑07 | ✅ Completed | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` ran 2025‑06‑10; outputs stored under `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Assemble community invite roster (≤25 reviewers, staged batches) with governance-approved contact info | Community manager | 2025‑06‑10 | ✅ Completed | First cohort of 8 community reviewers approved; request IDs `DOCS-SORA-Preview-REQ-C01…C08` logged in the tracker. |
+| ID | တာဝန် | ပိုင်ရှင် | စူးစူး | အဆင့်အတန်း | မှတ်စုများ |
+| ---| ---| ---| ---| ---| ---|
+| W2-P1 | ရပ်ရွာစားသုံးမှုစံနှုန်းမူကြမ်း (အရည်အချင်းပြည့်မီမှု၊ အများဆုံးအပေါက်များ၊ CoC လိုအပ်ချက်များ) နှင့် အုပ်ချုပ်မှုသို့ ပျံ့နှံ့ရောက်ရှိ | Docs/DevRel ဦးဆောင် | 2025-05-15 | ✅ ပြီးစီး | စားသုံးမှုမူဝါဒကို `DOCS-SORA-Preview-W2` တွင် ပေါင်းစည်းပြီး 2025-05-20 ကောင်စီအစည်းအဝေးတွင် ထောက်ခံခဲ့သည်။ |
+| W2-P2 | ရပ်ရွာအလိုက် မေးခွန်းများ (လှုံ့ဆော်မှု၊ ရရှိနိုင်မှု၊ ဒေသဆိုင်ရာ လိုအပ်ချက်များ) | Docs-core-01 | 2025-05-18 | ✅ ပြီးစီး | ယခု `docs/examples/docs_preview_request_template.md` တွင် စားသုံးမှုပုံစံတွင် ကိုးကားထားသော ကွန်မြူနတီကဏ္ဍ ပါဝင်ပါသည်။ |
+| W2-P3 | စားသုံးမှုအစီအစဉ်အတွက် လုံခြုံသောအုပ်ချုပ်မှုအတည်ပြုချက် (အစည်းအဝေးမဲ + မှတ်တမ်းတင်ထားသောမိနစ်) | အုပ်ချုပ်မှုဆက်ဆံရေးရုံး | 2025-05-22 | ✅ ပြီးစီး | 2025-05-20 ရက်နေ့တွင် တညီတညွတ်တည်းမဲဖြင့် အတည်ပြုခဲ့ပါသည်။ `DOCS-SORA-Preview-W2` တွင် ချိတ်ဆက်ထားသော မိနစ် + ခေါ်ဆိုမှု။ |
+| W2-P4 | အချိန်ဇယားဆွဲကြည့်ပါ W2 window အတွက် proxy staging + telemetry capture (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ ပြီးစီး | လက်မှတ်ပြောင်းလဲမှု `OPS-TRYIT-188` အတည်ပြုပြီး 2025-06-09 02:00–04:00UTC; လက်မှတ်နှင့်အတူ သိမ်းဆည်းထားသော Grafana ဖန်သားပြင်ဓာတ်ပုံများ။ |
+| W2-P5 | အစမ်းကြည့်ရှုခြင်း လက်ရာတဂ်အသစ် (`preview-2025-06-15`) ကို တည်ဆောက်/အတည်ပြုပါ Portal TL | 2025-06-07 | ✅ ပြီးစီး | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` ပြေးသည် 2025-06-10; `artifacts/docs_preview/W2/preview-2025-06-15/` အောက်တွင် သိမ်းဆည်းထားသော အထွက်များ။ |
+| W2-P6 | အုပ်ချုပ်မှု-အတည်ပြုထားသော အဆက်အသွယ်အချက်အလက်များပါရှိသော ရပ်ရွာဖိတ်ကြားမှုစာရင်းဇယား (≤25 ပြန်လည်သုံးသပ်သူများ၊ အဆင့်လိုက်အုပ်စုများ) စုစည်းပါ | ရပ်ရွာမန်နေဂျာ | 2025-06-10 | ✅ ပြီးစီး | ကွန်မြူနတီသုံးသပ်သူ ၈ ဦး၏ ပထမအုပ်စုကို အတည်ပြုပြီး၊ တောင်းဆိုချက် IDs `DOCS-SORA-Preview-REQ-C01…C08` သည် ခြေရာခံကိရိယာတွင် အကောင့်ဝင်ထားသည်။ |
 
-## Evidence checklist
+## သက်သေစာရင်း
 
-- [x] Governance approval record (meeting notes + vote link) attached to `DOCS-SORA-Preview-W2`.
-- [x] Updated request template committed under `docs/examples/`.
-- [x] `preview-2025-06-15` descriptor, checksum log, probe output, link report, and Try it proxy transcript stored under `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) captured for the W2 preflight window.
-- [x] Invite roster table with reviewer IDs, request tickets, and approval timestamps populated before dispatch (see tracker W2 section).
+- [x] `DOCS-SORA-Preview-W2` တွင် ပူးတွဲပါရှိသော အုပ်ချုပ်မှုအတည်ပြုချက်မှတ်တမ်း (အစည်းအဝေးမှတ်စုများ + မဲလင့်ခ်)။
+- [x] `docs/examples/` အရ အပ်ဒိတ်လုပ်ထားသော တောင်းဆိုချက်ပုံစံပုံစံ။
+- [x] `preview-2025-06-15` ဖော်ပြချက်၊ checksum မှတ်တမ်း၊ စုံစမ်းစစ်ဆေးမှုအထွက်၊ လင့်ခ်အစီရင်ခံစာ၊ နှင့် `artifacts/docs_preview/W2/` အောက်တွင် သိမ်းဆည်းထားသည့် ပရောက်စီမှတ်တမ်းကို စမ်းသုံးကြည့်ပါ။
+- [x] Grafana ဖန်သားပြင်ဓာတ်ပုံများ (`docs.preview.integrity`၊ `TryItProxyErrors`၊ `DocsPortal/GatewayRefusals`) W2 အကြိုပျံသန်းမှုဝင်းဒိုးအတွက် ရိုက်ကူးထားသည်။
+- [x] ပြန်လည်သုံးသပ်သူ ID များ၊ တောင်းဆိုချက်လက်မှတ်များနှင့် ခွင့်ပြုချက်အချိန်တံဆိပ်များပါရှိသော စာရင်းဇယားကို ဖိတ်ခေါ်ပါ (မပို့မီ ခြေရာခံ W2 ကဏ္ဍကိုကြည့်ပါ)။
 
-Keep this plan updated; the tracker references it so the DOCS-SORA roadmap can see exactly what remains before W2 invitations go out.
+ဤအစီအစဉ်ကို အပ်ဒိတ်လုပ်ထားပါ။ ခြေရာခံသူက ၎င်းကို ကိုးကားသောကြောင့် DOCS-SORA လမ်းပြမြေပုံသည် W2 ဖိတ်ကြားချက်များမထွက်မီ ကျန်ရှိနေသေးသည်များကို အတိအကျမြင်နိုင်သည်။

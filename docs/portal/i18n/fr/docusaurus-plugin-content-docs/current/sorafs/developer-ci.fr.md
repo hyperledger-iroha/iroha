@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Recettes CI SoraFS
-sidebar_label: Recettes CI
-description: Exécuter le CLI SoraFS dans des pipelines GitHub et GitLab avec signature sans clé.
+identifiant : développeur-ci
+titre : Recettes CI SoraFS
+sidebar_label : Recettes CI
+description : Exécuter le CLI SoraFS dans des pipelines GitHub et GitLab avec signature sans clé.
 ---
 
 :::note Source canonique
@@ -19,11 +21,11 @@ description: Exécuter le CLI SoraFS dans des pipelines GitHub et GitLab avec si
 # Recettes CI
 
 Les pipelines SoraFS bénéficient du chunking déterministe, de la signature de manifest et de
-la vérification des proofs. La surface de commandes `sorafs_cli` garde ces étapes portables
+la vérification des preuves. La surface de commandes `sorafs_cli` garde ces étapes portables
 entre fournisseurs de CI. Cette page met en avant les recettes canoniques et pointe vers des
 modèles prêts à l'emploi.
 
-## GitHub Actions (sans clé)
+## Actions GitHub (sans clé)
 
 ```yaml
 name: sorafs-artifacts
@@ -99,10 +101,10 @@ jobs:
 Points clés :
 
 - Aucune clé de signature statique n'est stockée ; les jetons OIDC sont obtenus à la demande.
-- Les artefacts (CAR, manifest, bundle, résumés de proofs) sont uploadés pour revue.
-- Le job réutilise les mêmes schémas Norito que ceux utilisés lors des rollouts en production.
+- Les artefacts (CAR, manifeste, bundle, résumés de preuves) sont téléchargés pour revue.
+- Le travail réutilise les mêmes schémas Norito que ceux utilisés lors des déploiements en production.
 
-## GitLab CI
+## GitLabCI
 
 ```yaml
 stages:
@@ -137,12 +139,10 @@ sorafs:publish:
 ```
 
 - Fournissez `SIGSTORE_ID_TOKEN` via la fédération d'identité de workload GitLab ou un
-  secret scellé avant d'exécuter l'étape de publish.
+  secret scellé avant d'exécuter l'étape de publication.
 - L'échec de toute étape CLI stoppe le pipeline, préservant des artefacts cohérents.
 
-## Ressources supplémentaires
-
-- Templates end-to-end (inclut des helpers Bash, la configuration d'identité fédérée
+## Ressources supplémentaires- Modèles de bout en bout (incluant les helpers Bash, la configuration d'identité fédérée
   et des étapes de nettoyage) : `docs/examples/sorafs_ci.md`
 - Référence CLI couvrant chaque option : `docs/source/sorafs_cli.md`
 - Exigences de gouvernance/alias avant soumission :

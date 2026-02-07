@@ -11,36 +11,37 @@ id: preview-integrity-plan
 title: Checksum-Gated Preview Plan
 sidebar_label: Preview Integrity Plan
 description: Implementation roadmap for securing the docs portal preview pipeline with checksum validation and notarised artefacts.
+translator: machine-google-reviewed
 ---
 
-This plan outlines the remaining work required to make every portal preview artefact verifiable before publication. The goal is to guarantee that reviewers download the exact snapshot built in CI, that the checksum manifest is immutable, and that the preview is discoverable through SoraFS with Norito metadata.
+Այս պլանը ուրվագծում է մնացած աշխատանքները, որոնք անհրաժեշտ են պորտալի նախադիտման արտեֆակտը ստուգելի դարձնելու համար մինչև հրապարակումը: Նպատակն է երաշխավորել, որ վերանայողները ներբեռնեն CI-ում կառուցված ճշգրիտ պատկերը, որ ստուգիչ գումարի մանիֆեստն անփոփոխ է, և որ նախադիտումը հնարավոր է հայտնաբերել SoraFS-ի միջոցով՝ Norito մետատվյալներով:
 
-## Objectives
+## Նպատակներ
 
-- **Deterministic builds:** Ensure `npm run build` produces reproducible output and always emits `build/checksums.sha256`.
-- **Verified previews:** Require every preview artefact to ship with a checksum manifest and refuse publication when verification fails.
-- **Norito-published metadata:** Persist preview descriptors (commit metadata, checksum digest, SoraFS CID) as Norito JSON so governance tooling can audit releases.
-- **Operator tooling:** Provide a one-step verification script that consumers can run locally (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); the script now wraps the checksum + descriptor validation flow end-to-end. The standard preview command (`npm run serve`) now invokes this helper automatically before `docusaurus serve` so local snapshots stay checksum-gated (with `npm run serve:verified` kept as an explicit alias).
+- **Դետերմինիստական կառուցվածքներ.** Համոզվեք, որ `npm run build`-ն արտադրում է վերարտադրվող արդյունք և միշտ թողարկում է `build/checksums.sha256`:
+- **Ստուգված նախադիտումներ.** Պահանջեք, որ յուրաքանչյուր նախադիտման արտեֆակտ ուղարկվի ստուգիչ գումարի մանիֆեստով և մերժվի հրապարակումը, երբ ստուգումը ձախողվի:
+- **Norito-հրապարակված մետատվյալներ.** Մշտական ​​նախադիտման նկարագրիչներ (կատարել մետատվյալներ, ստուգիչ գումարի ամփոփում, SoraFS CID) որպես Norito JSON, որպեսզի կառավարման գործիքակազմը կարողանա ստուգել թողարկումները:
+- **Օպերատորի գործիքավորում. ** Տրամադրել մեկ քայլ ստուգման սկրիպտ, որը սպառողները կարող են գործարկել տեղում (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); սցենարն այժմ փաթաթում է ստուգիչ գումարը + նկարագրիչի վավերացման հոսքը ծայրից ծայր: Ստանդարտ նախադիտման հրամանը (`npm run serve`) այժմ ավտոմատ կերպով կանչում է այս օգնականին `docusaurus serve`-ից առաջ, այնպես որ տեղական snapshot-ները մնան ստուգիչ գումարով (`npm run serve:verified`-ով պահվում է որպես բացահայտ կեղծանուն):
 
-## Phase 1 — CI Enforcement
+## Փուլ 1 — CI-ի կատարում
 
-1. Update `.github/workflows/docs-portal-preview.yml` to:
-   - Run `node docs/portal/scripts/write-checksums.mjs` after the Docusaurus build (already invoked locally).
-   - Execute `cd build && sha256sum -c checksums.sha256` and fail the job on mismatch.
-   - Package the build directory as `artifacts/preview-site.tar.gz`, copy the checksum manifest, call `scripts/generate-preview-descriptor.mjs`, and execute `scripts/sorafs-package-preview.sh` with a JSON config (see `docs/examples/sorafs_preview_publish.json`) so the workflow emits both metadata and a deterministic SoraFS bundle.
-   - Upload the static site, metadata artefacts (`docs-portal-preview`, `docs-portal-preview-metadata`), and the SoraFS bundle (`docs-portal-preview-sorafs`) so the manifest, CAR summary, and plan can be inspected without re-running the build.
-2. Add a CI badge comment summarising the checksum verification result in pull requests (✅ implemented via `docs-portal-preview.yml` GitHub Script comment step).
-3. Document the workflow in `docs/portal/README.md` (CI section) and link to the verification steps in the publishing checklist.
+1. Թարմացրեք `.github/workflows/docs-portal-preview.yml`-ը՝
+   - Գործարկեք `node docs/portal/scripts/write-checksums.mjs`-ը Docusaurus-ի կառուցումից հետո (արդեն կանչվել է տեղում):
+   - Կատարեք `cd build && sha256sum -c checksums.sha256` և ձախողեք աշխատանքը անհամապատասխանության պատճառով:
+   - Փաթեթավորեք կառուցման գրացուցակը որպես `artifacts/preview-site.tar.gz`, պատճենեք ստուգիչ գումարի մանիֆեստը, զանգահարեք `scripts/generate-preview-descriptor.mjs` և գործարկեք `scripts/sorafs-package-preview.sh`-ը JSON կոնֆիգուրով (տես `docs/examples/sorafs_preview_publish.json`), այնպես որ աշխատանքային հոսքը թողարկի և՛ determistical0000, և՛ NT800001 մետատվյալներ: կապոց.
+   - Վերբեռնեք ստատիկ կայքը, մետատվյալների արտեֆակտները (`docs-portal-preview`, `docs-portal-preview-metadata`) և SoraFS փաթեթը (`docs-portal-preview-sorafs`), որպեսզի մանիֆեստը, CAR ամփոփագիրը և պլանը հնարավոր լինի ստուգել առանց նորից ստուգելու:
+2. Ավելացրեք CI կրծքանշանի մեկնաբանություն, որն ամփոփում է ստուգիչ գումարի ստուգման արդյունքը ձգվող հարցումներում (✅ իրականացվել է `docs-portal-preview.yml` GitHub Script մեկնաբանության քայլի միջոցով):
+3. Փաստաթղթավորեք աշխատանքի ընթացքը `docs/portal/README.md`-ում (CI բաժնում) և հղում կատարեք հաստատման քայլերին հրապարակման ստուգաթերթում:
 
-## Verification Script
+## Ստուգման սցենար
 
-`docs/portal/scripts/preview_verify.sh` validates downloaded preview artefacts without requiring manual `sha256sum` invocations. Use `npm run serve` (or the explicit `npm run serve:verified` alias) to run the script and launch `docusaurus serve` in one step when sharing local snapshots. The verification logic:
+`docs/portal/scripts/preview_verify.sh`-ը վավերացնում է ներբեռնված նախադիտման արտեֆակտները՝ չպահանջելով ձեռքով `sha256sum` կանչեր: Օգտագործեք `npm run serve` (կամ բացահայտ `npm run serve:verified` կեղծանունը)՝ սկրիպտը գործարկելու և `docusaurus serve`-ը մեկ քայլով գործարկելու համար, երբ կիսվում եք տեղական նկարներով: Ստուգման տրամաբանությունը.
 
-1. Runs the appropriate SHA tool (`sha256sum` or `shasum -a 256`) against `build/checksums.sha256`.
-2. Optionally compares the preview descriptor’s `checksums_manifest` digest/filename and, when provided, the preview archive digest/filename.
-3. Exits non-zero when any mismatch is detected so reviewers can block tampered previews.
+1. Գործարկում է համապատասխան SHA գործիքը (`sha256sum` կամ `shasum -a 256`) `build/checksums.sha256`-ի դեմ:
+2. Ընտրովի համեմատում է նախադիտման նկարագրիչի `checksums_manifest` ամփոփումը/ֆայլի անունը և, երբ տրամադրվում է, նախադիտման արխիվի ամփոփումը/ֆայլի անունը:
+3. Դուրս է գալիս ոչ զրոյական, երբ հայտնաբերվում է որևէ անհամապատասխանություն, որպեսզի վերանայողները կարողանան արգելափակել կեղծված նախադիտումները:
 
-Example usage (after extracting the CI artefacts):
+Օգտագործման օրինակ (CI արտեֆակտները հանելուց հետո).
 
 ```bash
 ./docs/portal/scripts/preview_verify.sh \
@@ -49,37 +50,37 @@ Example usage (after extracting the CI artefacts):
   --archive artifacts/preview-site.tar.gz
 ```
 
-CI and release engineers should call the script whenever they download a preview bundle or attach artefacts to a release ticket.
+CI և թողարկման ինժեներները պետք է զանգահարեն սցենարը, երբ նրանք ներբեռնեն նախադիտման փաթեթ կամ կցեն արտեֆակտներ թողարկման տոմսին:
 
-## Phase 2 — SoraFS Publishing
+## Փուլ 2 — SoraFS Հրատարակչություն
 
-1. Extend the preview workflow with a job that:
-   - Uploads the built site to the SoraFS staging gateway using `sorafs_cli car pack` and `manifest submit`.
-   - Captures the returned manifest digest and SoraFS CID.
-   - Serialises `{ commit, branch, checksum_manifest, cid }` into Norito JSON (`docs/portal/preview/preview_descriptor.json`).
-2. Store the descriptor alongside the build artefact and expose the CID in the pull-request comment.
-3. Add integration tests that exercise `sorafs_cli` in dry-run mode to ensure future changes keep the metadata schema stable.
+1. Ընդլայնել նախադիտման աշխատանքային հոսքը այնպիսի աշխատանքով, որը.
+   - Վերբեռնում է կառուցված կայքը SoraFS բեմականացման դարպասում՝ օգտագործելով `sorafs_cli car pack` և `manifest submit`:
+   - Լուսանկարում է վերադարձված մանիֆեստը և SoraFS CID-ը:
+   - `{ commit, branch, checksum_manifest, cid }`-ը սերիականացնում է Norito JSON-ի (`docs/portal/preview/preview_descriptor.json`):
+2. Պահեք նկարագրիչը կառուցման արտեֆակտի կողքին և ցուցադրեք CID-ը pull-request մեկնաբանության մեջ:
+3. Ավելացրեք ինտեգրման թեստեր, որոնք իրականացնում են `sorafs_cli` չոր գործարկման ռեժիմում՝ ապահովելու համար, որ ապագա փոփոխությունները կպահեն մետատվյալների սխեման կայուն:
 
-## Phase 3 — Governance & Auditing
+## Փուլ 3 — Կառավարում և աուդիտ
 
-1. Publish a Norito schema (`PreviewDescriptorV1`) describing the descriptor structure under `docs/portal/schemas/`.
-2. Update the DOCS-SORA publishing checklist to require:
-   - Running `sorafs_cli manifest verify` against the uploaded CID.
-   - Recording the checksum manifest digest and CID in the release PR description.
-3. Wire the governance automation to cross-check the descriptor against the checksum manifest during release votes.
+1. Հրապարակեք Norito սխեման (`PreviewDescriptorV1`), որը նկարագրում է նկարագրիչի կառուցվածքը `docs/portal/schemas/` տակ:
+2. Թարմացրեք DOCS-SORA հրապարակման ստուգաթերթը՝ պահանջելու համար.
+   - Աշխատում է `sorafs_cli manifest verify`-ը վերբեռնված CID-ի դեմ:
+   - Ստուգիչ գումարի մանիֆեստի և CID-ի գրանցում թողարկման PR նկարագրության մեջ:
+3. Միացրեք կառավարման ավտոմատացումը՝ ազատ արձակման քվեարկության ժամանակ նկարագրիչը ստուգելու ցուցիչի հետ ստուգելու համար:
 
-## Deliverables & Ownership
+## Առաքման և սեփականության իրավունք
 
-| Milestone | Owner(s) | Target | Notes |
+| Հիմք | Սեփականատեր(ներ) | Թիրախային | Ծանոթագրություններ |
 |-----------|----------|--------|-------|
-| CI checksum enforcement landed | Docs Infrastructure | Week 1 | Adds failure gate + artefact uploads. |
-| SoraFS preview publishing | Docs Infrastructure / Storage Team | Week 2 | Requires access to staging credentials and Norito schema updates. |
-| Governance integration | Docs/DevRel Lead / Governance WG | Week 3 | Publishes schema + updates checklists and roadmap entries. |
+| CI checksum enforcement landed | Փաստաթղթերի ենթակառուցվածք | Շաբաթ 1 | Ավելացնում է ձախողման դարպաս + արտեֆակտի վերբեռնումներ: |
+| SoraFS նախադիտման հրատարակում | Փաստաթղթերի ենթակառուցվածք / Պահպանման թիմ | 2-րդ շաբաթ | Պահանջում է մուտք դեպի բեմադրության հավատարմագրերը և Norito սխեմայի թարմացումները: |
+| Կառավարման ինտեգրում | Docs/DevRel Առաջատար / Կառավարման WG | Շաբաթ 3 | Հրապարակում է սխեման + թարմացումների ստուգաթերթերը և ճանապարհային քարտեզի գրառումները: |
 
-## Open Questions
+## Բաց Հարցեր
 
-- Which SoraFS environment should hold preview artefacts (staging vs. dedicated preview lane)?
-- Do we need dual signatures (Ed25519 + ML-DSA) on the preview descriptor before publication?
-- Should the CI workflow pin the orchestrator configuration (`orchestrator_tuning.json`) when running `sorafs_cli` to keep manifests reproducible?
+- Ո՞ր SoraFS միջավայրը պետք է պարունակի նախադիտման արտեֆակտներ (բեմադրությունն ընդդեմ նախադիտման հատուկ գծի):
+- Արդյո՞ք մեզ անհրաժեշտ են կրկնակի ստորագրություններ (Ed25519 + ML-DSA) նախադիտման նկարագրության վրա մինչև հրապարակումը:
+- Արդյո՞ք CI աշխատանքային հոսքը պետք է ամրացնի նվագախմբի կազմաձևը (`orchestrator_tuning.json`), երբ աշխատում է `sorafs_cli`, որպեսզի մանիֆեստները վերարտադրելի լինեն:
 
-Capture decisions in `docs/portal/docs/reference/publishing-checklist.md` and update this plan once the unknowns are resolved.
+Վերցրեք որոշումները `docs/portal/docs/reference/publishing-checklist.md`-ում և թարմացրեք այս պլանը, երբ անհայտները լուծվեն:

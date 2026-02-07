@@ -7,25 +7,27 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-г '@site/src/components/SampleDownload'-аас импортлох;
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+Энэхүү жор нь JS5 замын зураглалд дурдсан хоёр дэвшилтэт ажлын урсгалыг нэгтгэдэг
+зүйлс: төгсгөлийн засаглалын туслахууд (санал, саналын хуудас, зөвлөлийн хормын хувилбар)
+болон ISO 20022 гүүрний танилцуулга (pacs.008/pacs.009). Дээж бүр ажилладаг
+нийтлэгдсэн `@iroha/iroha-js` багцын эсрэг бөгөөд хэсэгчилсэн хэсгүүдийг тусгадаг
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## Засаглалын туслагчийн жишээ
 
-<SampleDownload
+<Жишээ татаж авах
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  файлын нэр = "governance.mjs"
+  description="Энэ жор дээр дурдсан удирдаж болох засаглалын туслахыг татаж авна уу."
 />
 
-### Prerequisites
+### Урьдчилсан нөхцөл
 
 ```bash
 npm install @iroha/iroha-js
@@ -39,10 +41,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+Гарын үсэг зурсан гүйлгээг Torii руу илгээхийн тулд `GOV_SUBMIT=1`-г тохируулж,
+`GOV_FETCH=1` өргөн мэдүүлсний дараа үүссэн засаглалын төлөвийг шалгах.
 
-### Example script
+### Жишээ скрипт
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -222,26 +224,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Ажиллаж, хянах
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
+- Зөвхөн хэш үүсгэхийн тулд `node governance.mjs`-г ажиллуул. `GOV_SUBMIT=1` дээр нэмнэ үү
+  шууд засаглалын төлөвийг бүртгэхийн тулд гүйлгээг Torii болон `GOV_FETCH=1` руу илгээнэ үү.
+  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, ба
   `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- CI логууд дахь детерминистик хэшүүдийг авах; алхам бүр гарын үсэг зурсан байтыг хэвлэдэг
+  нэмэлт эх туслах боломжтой үед урт болон дахин тооцоолсон хэш.
+- Консолын гаралтыг засаглалын хяналтын багцад хавсаргаснаар аудиторууд мөшгих боломжтой
+  санал / бүх нийтийн санал асуулгын ID-г хуулбарлах боломжтой CLI нотлох баримтууд руу буцаана.
 
-## ISO bridge sample
+## ISO гүүрний дээж
 
-<SampleDownload
+<Жишээ татаж авах
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  файлын нэр = "iso-bridge.mjs"
+  description="Энэ жоронд дурдсан ажиллах боломжтой ISO 20022 туслах програмыг татаж авна уу."
 />
 
-### Prerequisites
+### Урьдчилсан нөхцөл
 
 ```bash
 npm install @iroha/iroha-js
@@ -253,11 +255,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+Илгээмжийг алгасахдаа `ISO_MESSAGE_ID`-г тохируулж, зөвхөн мэдэгдэж буй санал асуулга явуулна уу.
+танигч. Гүүр тэмдэглэгдсэн даруйд гарахын тулд `ISO_RESOLVE_ON_ACCEPTED=1` ашиглана уу
+гүйлгээний хэш хараахан дуусаагүй байсан ч гэсэн `Accepted` оруулга.
 
-### Example script
+### Жишээ скрипт
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -357,22 +359,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Ажиллаж, хянах
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- Дээжийн ачааллыг оруулахын тулд `node iso-bridge.mjs`-г ажиллуул. Тохируулах
+  PvP урсгалыг ашиглахын тулд `ISO_MESSAGE_KIND=pacs.009` эсвэл `ISO_MESSAGE_ID`
+  Одоо байгаа материалыг дахин нийтлэхгүйгээр санал асуулга явуулах.
+- Туслах нь санал асуулгын оролдлого бүрийг `wait.onPoll`-ээр бүртгэдэг бөгөөд ингэснээр үүнийг хийхэд хялбар болгодог.
+  CI бүртгэлд хүлээн авах хугацааг бичих.
+- Эцсийн статус + гүйлгээний хэшийг ISO bridge runbook-д хавсаргаснаар аудиторууд
+  pacs.008/pacs.009 хүргэлтийг дахин давтагдах боломжтой ачааллыг хянах боломжтой.
+  JS5 замын газрын зургийн үр дүнд шаардлагатай.
 
-## Offline allowances & transfers
+## Офлайн тэтгэмж, шилжүүлэг
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js`-д дурдсан ижил тэтгэмж/шилжүүлэх туслахуудыг илгээдэг.
+офлайн замын зургийн мөр. Бүрэн бүтэн байдлын бодлогыг шалгахын тулд тэдгээрийг ашиглана уу (тэмдэглэгээний түлхүүр, Play
+бүрэн бүтэн байдал, HMS Safety Detect, Provisioned) нь түүхий мета өгөгдлийг задлахгүйгээр:
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -400,19 +402,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+Torii өгөгдсөн тэтгэмжийн талаар мэдээлэх үед байцаагчийн нийтийн түлхүүр, манифест
+схем, нэмэлт хувилбар, TTL, болон дижест дор амьдардаг
+`integrity_metadata.provisioned`, шаардлагатай хавсаргах нь өчүүхэн болгодог
+OA10.3 нотолгооны багцын мета өгөгдөл.
 
-## Next steps
+## Дараагийн алхамууд
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- `javascript/iroha_js/recipes/governance.mjs` болон
+  Өргөтгөсөн жишээнүүдийн хувьд `javascript/iroha_js/recipes/iso_bridge.mjs` (олон сиг
+  саналын хуудас, зөвлөлийн VRF үүсмэл, дахин оролдох бодлого).
+- Norito талын баримт бичгийг шалгана уу
+  `docs/source/sdk/js/governance_iso_examples.md` ба
+  Каноник талбарт зориулсан `docs/source/finance/settlement_iso_mapping.md`
+  эдгээр туслахуудын иш татсан зураглал.
+- Ашиглалтын бүртгэлийг авч, тэдгээрийг засаглалын / ISO зөвшөөрөлд хавсаргана
+  JS5 "баримт бичиг + нийтлэх" шаардлагыг `roadmap.md`-д иш татсан.

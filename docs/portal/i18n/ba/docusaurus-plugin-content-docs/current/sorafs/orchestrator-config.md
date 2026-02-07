@@ -8,33 +8,35 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Orchestrator Configuration
 sidebar_label: Orchestrator Configuration
 description: Configure the multi-source fetch orchestrator, interpret failures, and debug telemetry output.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# Multi-Source Fetch Orchestrator Guide
+# Күп сығанаҡлы Фетч оркестры етәксеһе
 
-The SoraFS multi-source fetch orchestrator drives deterministic, parallel
-downloads from the provider set published in governance-backed adverts. This
-guide explains how to configure the orchestrator, what failure signals to expect
-during rollouts, and which telemetry streams expose health indicators.
+I18NT0000000009X күп сығанаҡлы фетч оркестры драйвтар детерминистик, параллель
+скачивания провайдер йыйылмаһы баҫылған идара итеү-ярҙам реклама. Ошо
+етәксе аңлата, нисек конфигурациялау оркестр, ниндәй уңышһыҙлыҡ сигналдар көтөргә
+ролл-ауттар ваҡытында, ниндәй телеметрия ағымы һаулыҡ һаҡлау күрһәткестәрен фашлай.
 
-## 1. Configuration Overview
+## 1. Конфигурациялау дөйөмләштереү
 
-The orchestrator merges three sources of configuration:
+Оркестратор өс конфигурация сығанағын берләштерә:
 
-| Source | Purpose | Notes |
-|--------|---------|-------|
-| `OrchestratorConfig.scoreboard` | Normalises provider weights, validates telemetry freshness, and persists the JSON scoreboard used for audits. | Backed by `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
-| `OrchestratorConfig.fetch` | Applies runtime limits (retry budgets, concurrency bounds, verification toggles). | Maps to `FetchOptions` in `crates/sorafs_car::multi_fetch`. |
-| CLI / SDK parameters | Cap the number of peers, attach telemetry regions, and surface deny/boost policies. | `sorafs_cli fetch` exposes these flags directly; SDKs thread them via `OrchestratorConfig`. |
+| Сығанаҡ | Маҡсат | Иҫкәрмәләр |
+|-------|---------|-------|
+| `OrchestratorConfig.scoreboard` | Нормализация провайдеры ауырлыҡтары, телеметрия яңылығын раҫлай, һәм JSON таблоһы һаҡланған аудит өсөн ҡулланылған. | I18NI000000019X менән бергә. |
+| `OrchestratorConfig.fetch` | Ҡулланыу ваҡыты сиктәре (эшләү бюджеттары, конкурентлыҡ сиктәре, тикшерелгән toggles). | Карталар `FetchOptions` I18NI000000022Х. |
+| CLI / SDK параметрҙары | Ҡапҡа һаны тиҫтерҙәре, беркетергә телеметрия төбәктәре, һәм ер өҫтө инҡар итеү/буст сәйәсәте. | `sorafs_cli fetch` был флагтарҙы туранан-тура фашлай; SDKs уларҙы еп аша I18NI000000024X. |
 
-The JSON helpers in `crates/sorafs_orchestrator::bindings` serialise the entire
-configuration into Norito JSON, making it portable across SDK bindings and
-automation.
+JSON ярҙамсылары I18NI0000000025X сериялы бөтә
+I18NT000000001X JSON-ға конфигурациялау, уны SDK бәйләүҙәре һәм
+автоматлаштырыу.
 
-### 1.1 Sample JSON Configuration
+### 1.1 Өлгө JSON конфигурацияһы
 
 ```json
 {
@@ -57,17 +59,17 @@ automation.
 }
 ```
 
-Persist the file through the usual `iroha_config` layering (`defaults/`, user,
-actual) so deterministic deployments inherit the same limits across nodes.
-For a direct-only fallback profile that aligns with the SNNet-5a rollout,
-consult `docs/examples/sorafs_direct_mode_policy.json` and the companion
-guidance in `docs/source/sorafs/direct_mode_pack.md`.
+Фактты ғәҙәти I18NI000000026X ҡатламы (I18NI0000000027X, ҡулланыусы,
+ысынбарлыҡта) шулай детерминистик таратыуҙар төйөндәр буйынса бер үк сиктәрҙе мираҫ итеп ала.
+Тура ғына-тик fallback профиле өсөн, тип тура килә SNNet-5a ролл-аут,
+I18NI000000028X һәм иптәш менән кәңәшләшергә
+етәкселек I18NI000000029X.
 
-### 1.2 Compliance Overrides
+### 1.2 үтәү өҫтөнлөклө
 
-SNNet-9 threads governance-driven compliance into the orchestrator. A new
-`compliance` object in the Norito JSON configuration captures the carve-outs
-that force the fetch pipeline into direct-only mode:
+SNNet-9 ептәр идара итеү-двигателдәр үтәү оркестрға. Яңы
+I18NI0000000030X объекты I18NT00000000002X JSON конфигурацияһында уйылған-ауттарҙы тота
+тип мәжбүр итеү өсөн туранан-тура режимға форм-ҡатыш үткәргес торба:
 
 ```json
 "compliance": {
@@ -80,123 +82,121 @@ that force the fetch pipeline into direct-only mode:
 }
 ```
 
-- `operator_jurisdictions` declares the ISO‑3166 alpha‑2 codes where this
-  orchestrator instance operates. Codes are normalised to uppercase during
-  parsing.
-- `jurisdiction_opt_outs` mirrors the governance register. When any operator
-  jurisdiction appears on the list, the orchestrator enforces
-  `transport_policy=direct-only` and emits the policy fallback reason
+- I18NI000000031X ISO‐3166 альфа-2 кодтарын иғлан итә, унда был .
+  оркестр экземпляры эшләй. Кодтар 2019 йылда ҙур хәрефкә нормалаштырылған.
+  анализлау.
+- I18NI00000032Х идара итеү реестрын көҙгөләй. Ҡасан теләһә ниндәй оператор
+  юрисдикцияһы исемлектә күренә, оркестрҙы үтәүсе
+  I18NI000000033ХХ һәм сәйәсәттең сәбәбен сығара.
   `compliance_jurisdiction_opt_out`.
-- `blinded_cid_opt_outs` lists manifest digests (blinded CIDs, encoded as
-  uppercase hex). Matching payloads also force direct-only scheduling and
-  surface the `compliance_blinded_cid_opt_out` fallback in telemetry.
-- `audit_contacts` records the URIs governance expects operators to publish in
-  their GAR playbooks.
-- `attestations` captures the signed compliance packets backing the policy.
-  Each entry defines an optional `jurisdiction` (ISO-3166 alpha-2 code), a
-  `document_uri`, the canonical 64-character `digest_hex`, the issuance
-  timestamp `issued_at_ms`, and an optional `expires_at_ms`. These artefacts
-  flow into the orchestrator’s audit checklist so governance tooling can link
-  overrides to the signed paperwork.
+- I18NI0000000035X исемлектәре асыҡланған диссекциялар (һуҡыр CIDs, кодланған, тип
+  ҙур хәрефтәр). Матч файҙалы йөктәр шулай уҡ туранан-тура ғына планлаштырыу һәм мәжбүр итеү һәм
+  өҫкө I18NI000000036X телеметрия fallback.
+- I18NI000000037X 2012 йылда операторҙарҙы баҫтырып сығарыуҙы көтә URIs идара итеүе.
+  уларҙы ГАР плейбуктары.
+- I18NI000000038X сәйәсәтте нығытыусы ҡул ҡуйылған үтәү пакеттарын тота.
+  Һәр яҙма опциональ I18NI000000039X (ISO-3166 альфа-2 коды) билдәләй, а
+  I18NI000000040X, канонлы 64-характер I18NI000000041X, эмиссия
+  ваҡыт билдәһе I18NI000000042X, һәм өҫтәмә `expires_at_ms`. Был артефакттар
+  ағымы оркестрҙа’аутист тикшерелгән исемлек, шулай итеп, идара итеү инструменталь звено мөмкин
+  ҡул ҡуйылған ҡағыҙ эштәренә өҫтөнлөк итә.
 
-Provide the compliance block via the usual configuration layering so operators
-receive deterministic overrides. The orchestrator applies compliance _after_
-write-mode hints: even if an SDK requests `upload-pq-only`, jurisdictional or
-manifest opt-outs still fall back to direct-only transport and fail fast when no
-compliant providers exist.
+Ғәҙәти конфигурация ҡатламы аша үтәү блогын тәьмин итеү, шулай операторҙар .
+детерминистик өҫтөнлөк ала. Оркестратор _һуңғы_ үтәлешен ҡуллана.
+яҙыу-режимында кәңәштәр: хатта SDK `upload-pq-only`, юрисдикция йәки һораһа ла, йәки
+асыҡтан-асыҡ опт-ауттар һаман да туранан-тура ғына транспортҡа кире төшә һәм тиҙ уңышһыҙлыҡҡа осрай, ҡасан юҡ
+тейешле провайдерҙар бар.
 
-Canonical opt-out catalogues live under
-`governance/compliance/soranet_opt_outs.json`; the Governance Council publishes
-updates via tagged releases. A complete example configuration (including
-attestations) is available in `docs/examples/sorafs_compliance_policy.json`, and
-the operational process is captured in the
-[GAR compliance playbook](../../../source/soranet/gar_compliance_playbook.md).
+Канонлы каталогтар 2012 йылда йәшәй.
+`governance/compliance/soranet_opt_outs.json`; идара итеү советы баҫтыра
+яңыртыуҙар аша теглы релиздар. Тулы миҫал конфигурацияһы (шул иҫәптән
+аттестациялары) I18NI000000046X, һәм
+оператив процесс 2012 йылда төшөрөлгән.
+[ГАР үтәү плейбук](../../../source/soranet/gar_compliance_playbook.md).
 
-### 1.3 CLI & SDK Knobs
+### 1.3 CLI & SDK ручкалары
 
-| Flag / Field | Effect |
-|--------------|--------|
-| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limits how many providers survive the scoreboard filter. Set to `None` to use every eligible provider. |
-| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Caps retries per chunk. Exceeding the limit raises `MultiSourceError::ExhaustedRetries`. |
-| `--telemetry-json` | Injects latency/failure snapshots into the scoreboard builder. Stale telemetry beyond `telemetry_grace_secs` marks providers ineligible. |
-| `--scoreboard-out` | Persists the computed scoreboard (eligible + ineligible providers) for post-run inspection. |
-| `--scoreboard-now` | Overrides the scoreboard timestamp (Unix seconds) so fixture captures remain deterministic. |
-| `--deny-provider` / score policy hook | Deterministically exclude providers from scheduling without deleting adverts. Useful for fast-response blacklisting. |
-| `--boost-provider=name:delta` | Adjust the weighted round-robin credits for a provider while leaving governance weights untouched. |
-| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Labels emitted metrics and structured logs so dashboards can pivot by geography or rollout wave. |
-| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | Defaults to `soranet-first` now that the multi-source orchestrator is baseline. Use `direct-only` when staging a downgrade or following a compliance directive, and reserve `soranet-strict` for PQ-only pilots; compliance overrides still act as the hard ceiling. |
+| Флаг / Ялан | Эффект |
+|-------------|--------|
+| `--max-peers` / `OrchestratorConfig::with_max_providers` X | Сикләй, күпме провайдерҙар йәшәй табло фильтр. I18NI000000049X X-ға ҡуйылған, һәр хоҡуҡлы провайдер ҡулланыу. |
+| `--retry-budget` / I18NI000000051X | Ҡапҡалар бер өлөшөнә ҡайтанан ҡайта. Сиктән артып, `MultiSourceError::ExhaustedRetries` йыя. |
+| `--telemetry-json` | Инъекция латентлыҡ/уңышһыҙлыҡ снимоктары табло төҙөүсегә. 18NI000000054X маркалары провайдерҙары хоҡуғына эйә булмаған. |
+| `--scoreboard-out` | Презистый иҫәпләнгән табло (хоҡуҡлы + хоҡуҡһыҙ провайдерҙар) өсөн тикшерелгәндән һуң тикшерелгән. |
+| `--scoreboard-now` | Ҡайһы бер осраҡта был осраҡта ла был йәһәттән ҡатмарлыҡтар тыуа. |
+| `--deny-provider` / балл сәйәсәт ҡармаҡ | Детерминистик яҡтан провайдерҙарҙы рекламаларҙы юймайынса планлаштырыуҙан сығарып ташлай. Тиҙ яуап ҡара исемлек өсөн файҙалы. |
+| `--boost-provider=name:delta` | Көйләү өсөн ауырлыҡлы түңәрәк-робин кредиттар өсөн провайдер, шул уҡ ваҡытта идара итеү ауырлыҡтарын ҡалдырып, тейелмәгән. |
+| `--telemetry-region` / I18NI000000060X | Ярлыҡтар метрика һәм структуралы логтар сығара, шуға күрә приборҙар таҡталары география йәки ролл-аут тулҡыны буйынса шарнир итә ала. |
+| `--transport-policy` / I18NI0000000062X | `soranet-first` тиклем ғәҙәттәгесә, хәҙер күп сығанаҡлы оркестрҙа база һыҙығы. Ҡулланыу I18NI0000000064X ҡасан стадиялау йәки үтәү директиваһын үтәү, һәм запас I18NI000000065X өсөн PQ-тик осоусылар; үтәү өҫтөнлөктәре һаман да ҡаты түшәм булып эшләй. |
 
-SoraNet-first is now the shipping default, and rollbacks must cite the relevant SNNet blocker. After SNNet-4/5/5a/5b/6a/7/8/12/13 graduate, governance will ratchet the required posture forward (toward `soranet-strict`); until then, only incident-driven overrides should prioritise `direct-only`, and they must be recorded in the rollout log.
+SoraNet-беренсе хәҙер ташыу ғәҙәттәгесә, һәм кире ҡайтарыу тейешле SNNet блокировщик килтерергә тейеш. SNNet-4/5/5b/6а/7/12/13 сығарылыш уҡыусыһынан һуң идара итеү кәрәкле позаны алға рейтлай (I18NI000000666-ға табан); тиклем, тик инцидент-двигателдәр өҫтөнлөктәре I18NI000000067X өҫтөнлөк бирергә тейеш, һәм улар теркәлергә тейеш ролик журналында.
 
-All flags above accept `--`-style syntax in both `sorafs_cli fetch` and the
-developer-facing `sorafs_fetch` binary. SDKs expose the same options via typed
-builders.
+Бөтә флагтар өҫтә ҡабул итеү I18NI000000000068X-стиль синтаксис икеһе лә I18NI000000069X һәм .
+эшләүселәргә ҡаршы `sorafs_fetch` бинар. SDKs аша бер үк варианттарҙы фашлау территория .
+төҙөүселәр.
 
-### 1.4 Guard Cache Management
+### 1.4 Һаҡсы кэш менән идара итеү
 
-The CLI now wires in the SoraNet guard selector so operators can pin entry
-relays deterministically ahead of the full SNNet-5 transport rollout. Three
-new flags control the workflow:
+CLI хәҙер сымдар SoraNet һаҡсы селекторында, шулай итеп, операторҙары индереү мөмкин.
+релелар детерминистик алдан тулы SNNet-5 транспорт таратыу. Өс
+яңы флагтар эш ағымын контролдә тота:
 
-| Flag | Purpose |
-|------|---------|
-| `--guard-directory <PATH>` | Points to a JSON file describing the latest relay consensus (subset shown below). Passing the directory refreshes the guard cache before executing the fetch. |
-| `--guard-cache <PATH>` | Persists the Norito-encoded `GuardSet`. Subsequent runs reuse the cache even when no new directory is supplied. |
-| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Optional overrides for the number of entry guards to pin (default 3) and the retention window (default 30 days). |
-| `--guard-cache-key <HEX>` | Optional 32-byte key used to tag guard caches with a Blake3 MAC so the file can be verified before reuse. |
+| Флаг | Маҡсат |
+|-----|---------|
+| `--guard-directory <PATH>` | Һуңғы реле консенсусын һүрәтләгән JSON файлына нөктәләр (түбәндә күрһәтелгән подсетаж). Каталогты үтеп, һаҡсы кэшты яңырта, был фетчты башҡарыр алдынан. |
+| `--guard-cache <PATH>` | Norito-кодировка `GuardSet`. Артабанғы йүгерә кэшты ҡабаттан ҡуллана, хатта яңы каталог бирелмәһә лә. |
+| `--guard-target <COUNT>` / I18NI000000075X | Һанлы өҫтөнлөктәр өсөн инеү һаҡсылары һаны шынкыла (30 көн) һаҡлау тәҙрәһе (30 көн ғәҙәттәгесә). |
+| `--guard-cache-key <HEX>` | 32-байтлы асҡыс ҡулланыла, һаҡсы кэштарҙы тег менән Blake3 MAC шулай итеп, файлды ҡабаттан ҡулланыр алдынан раҫларға мөмкин. |
 
-Guard directory payloads use a compact schema:
+Һаҡсы каталогы файҙалы йөктәр компакт схема ҡуллана:
 
-The `--guard-directory` flag now expects a Norito-encoded
-`GuardDirectorySnapshotV2` payload. The binary snapshot contains:
+I18NI000000077X флагы хәҙер I18NT000000004X-кодировка көтә.
+`GuardDirectorySnapshotV2` файҙалы йөк. Бинар снимокта:
 
-- `version` — schema version (currently `2`).
-- `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — consensus
-  metadata that must match every embedded certificate.
-- `validation_phase` — certificate policy gate (`1` = allow single Ed25519 signature,
-  `2` = prefer dual signatures, `3` = require dual signatures).
-- `issuers` — governance issuers with `fingerprint`, `ed25519_public`, and `mldsa65_public`.
-  Fingerprints are computed as
+- `version` — схема версияһы (әлеге ваҡытта `2`).
+- `directory_hash`, `published_at_unix`, I18NI000000083X, `valid_until_unix` — консенсус
+  метамағлүмәттәр, улар һәр встроенный сертификат тура килергә тейеш.
+- I18NI000000085X — сертификат сәйәсәте ҡапҡаһы (I18NI000000086X = рөхсәт итеү өсөн яңғыҙ Ed25519 ҡултамғаһы,
+  `2` = икеләтә ҡултамғаларҙы өҫтөн күрә, I18NI000000088X = ике ҡултамға талап итә).
+- `issuers` — I18NI000000090X, `ed25519_public` һәм I18NI00000092Х менән идара итеүселәр.
+  Бармаҡ эҙҙәре тип иҫәпләнә.
   `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
-- `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::to_cbor()` output). Each bundle
-  carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
-  signatures.
+- `relays` — SRCv2 өйөмдәре исемлеге (I18NI000000955X сығыш). Һәр өйөм
+  йөрөтә реле дескриптор, мөмкинлектәре флагы, ML-KEM сәйәсәте, һәм ике Ed25519/ML-DSA-65
+  ҡултамғалар.
 
-The CLI verifies every bundle against the declared issuer keys before merging the directory with
+CLI раҫлай, һәр өйөмгә ҡаршы иғлан эмитенты асҡыстары каталогты берләштереү алдынан .
 
-Invoke the CLI with `--guard-directory` to merge the latest consensus with the
-existing cache. The selector preserves pinned guards that are still within the
-retention window and eligible in the directory; new relays replace expired
-entries. After a successful fetch the updated cache is written back to the path
-supplied via `--guard-cache`, keeping subsequent sessions deterministic. SDKs
-can reproduce the same behaviour by calling
-`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` and
-threading the resulting `GuardSet` through `SorafsGatewayFetchOptions`.
+I18NI0000000096X менән CLI-ға саҡырыу өсөн һуңғы консенсусты берләштереү өсөн
+булған кэш. Һайлаусы һаҡлай, тип пинированный һаҡсылар, улар һаман да эсендә
+һаҡлау тәҙрәһе һәм каталогта хоҡуҡлы; яңы эстафеталар ваҡыты үткән.
+яҙмалар. Уңышлы булғандан һуң яңыртылған кэшты юлға кире яҙыла
+`--guard-cache` аша тәьмин ителгән, артабанғы сессияларҙы детерминистик тота. СДК-лар
+өндәшеп, шул уҡ тәртипте ҡабатлай ала
+`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` һәм .
+18NI0000009X X аша I18NI00000001000X аша еп.
 
-`ml_kem_public_hex` enables the selector to prioritise PQ-capable guards during
-the SNNet-5 rollout. Stage toggles (`anon-guard-pq`, `anon-majority-pq`,
-`anon-strict-pq`) now demote classical relays automatically: when a PQ guard is
-available the selector drops excess classical pins so subsequent sessions favour
-hybrid handshakes. CLI/SDK summaries surface the resulting mix via
+I18NI000000101X селектор мөмкинлек бирә, өҫтөнлөклө PQ-баҫалҡылар ваҡытында 2012 йыл.
+SNNet-5 таратыу. Стаж toggles (`anon-guard-pq`, `anon-majority-pq`,
+I18NI000000104X) хәҙер классик релеларҙы автоматик рәүештә төшөрөп ебәрә: ҡасан PQ һаҡсыһы
+Һайлаусылар артыҡ классик булавкалар төшөрә, шуға күрә артабанғы сессиялар ярҙам итә
+гибрид ҡул ҡыҫыша. CLI/SDK йомғаҡтары өҫтөндә барлыҡҡа килгән ҡатнашма аша
 `anonymity_status`/`anonymity_reason`, `anonymity_effective_policy`,
 `anonymity_pq_selected`,
-`anonymity_classical_selected`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and the companion candidate/deficit/supply delta
-fields, making brownouts and classical fallbacks explicit.
+`anonymity_classical_selected` X, I18NI000000110X, .
+I18NI000000111X, һәм иптәш кандидат/дефицит/тәьмин итеү дельта
+яландар, браунуттар һәм классик fallbacks асыҡ.
 
-Guard directories may now embed a complete SRCv2 bundle via
-`certificate_base64`. The orchestrator decodes every bundle, re-validates the
-Ed25519/ML-DSA signatures, and retains the parsed certificate alongside the
-guard cache. When a certificate is present it becomes the canonical source for
-PQ keys, handshake suite preferences, and weighting; expired certificates are
-propagate through circuit lifecycle management and are surfaced via
-`telemetry::sorafs.guard` and `telemetry::sorafs.circuit`, which record the
-validity window, handshake suites, and whether dual signatures were observed for
-each guard.
+Гвардия каталогтары хәҙер тулы SRCv2 өйөмө аша индереү мөмкин
+`certificate_base64`. Оркестратор һәр өйөмөн декодлай, яңынан раҫлай
+Ed25519/ML-DSA ҡултамғалары, һәм анализ сертификаты менән бергә һаҡлай.
+һаҡ кэш. Сертификат булғанда ул 2019 йылға канонлы сығанаҡҡа әйләнә.
+PQ төймәләре, ҡул ҡыҫыу люкс өҫтөнлөктәре, һәм ауырлыҡ; срогы тамамланған таныҡлыҡтары 1990 й.
+схема аша схема йәшәү циклы менән идара итеү һәм аша өҫкә сыға
+I18NI000000113X һәм I18NI000000114X
+дөрөҫлөк тәҙрәһе, ҡул ҡыҫыу люкстары, һәм ике ҡултамғалар өсөн күҙәтелгәнме.
+һәр һаҡсы.
 
-Use the CLI helpers to keep snapshots in sync with publishers:
-
-```bash
+CLI ярҙамсыларын нәшриәтселәр менән синхронлаштырыу өсөн снимок тотоу өсөн ҡулланыу:```bash
 sorafs_cli guard-directory fetch \
   --url https://directory.soranet.dev/mainnet_snapshot.norito \
   --output ./state/guard_directory.norito \
@@ -207,23 +207,23 @@ sorafs_cli guard-directory verify \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-`fetch` downloads and verifies the SRCv2 snapshot before writing it to disk,
-while `verify` replays the validation pipeline for artefacts sourced from other
-teams, emitting a JSON summary that mirrors the CLI/SDK guard selector output.
+I18NI000000115X скачать һәм SRCv2 снимоктарын дискҡа яҙыр алдынан раҫлай,
+ә I18NI0000000116X реплитиция торбаһы өсөн артефакттар реплейы башҡа сығанаҡтарҙан
+командалары, JSON резюме сығарыу, тип көҙгө CLI/SDK һаҡсы селектор сығыш.
 
-### 1.5 Circuit Lifecycle Manager
+### 1.5 цирк йәшәү циклы менеджеры
 
-When both a relay directory and guard cache are provided, the orchestrator
-activates the circuit lifecycle manager to pre-build and renew SoraNet circuits
-before each fetch. Configuration lives in `OrchestratorConfig`
-(`crates/sorafs_orchestrator/src/lib.rs:305`) via two new fields:
+Ҡасан да эстафета каталогы һәм һаҡсы кэш бирелгән, оркестр .
+әүҙемләштереү схемаһы йәшәү циклы менеджеры алдан төҙөү һәм яңыртыу өсөн SoraNet схемалары .
+һәр фетч алдынан. Конфигурация йәшәй I18NI000000117X
+(I18NI000000118X) ике яңы ялан аша:
 
-- `relay_directory`: carries the SNNet-3 directory snapshot so middle/exit hops
-  can be selected deterministically.
-- `circuit_manager`: optional configuration (enabled by default) controlling the
-  circuit TTL.
+- I18NI000000119X: SNNet-3 каталогы снимок йөрөтә, шуға күрә урта/сығыу hops
+  детерминистик һайларға мөмкин.
+- I18NI000000120X: опциональ конфигурация (подъезд менән бирелгән) идара итеү
+  схема ТТЛ.
 
-Norito JSON now accepts a `circuit_manager` block:
+I18NT000000005X JSON хәҙер ҡабул итә I18NI000000121X блок:
 
 ```json
 "circuit_manager": {
@@ -232,30 +232,30 @@ Norito JSON now accepts a `circuit_manager` block:
 }
 ```
 
-SDKs forward directory data through
+SDKs алға каталог мәғлүмәттәре аша .
 `SorafsGatewayFetchOptions::relay_directory`
-(`crates/iroha/src/client.rs:320`), and the CLI wires it automatically whenever
-`--guard-directory` is supplied (`crates/iroha_cli/src/commands/sorafs.rs:365`).
+(`crates/iroha/src/client.rs:320`), һәм CLI сымдар уны автоматик рәүештә ҡасан
+`--guard-directory` тәьмин ителә (I18NI000000125X).
 
-The manager renews circuits whenever guard metadata changes (endpoint, PQ key,
-or pinned timestamp) or the TTL elapses. The helper `refresh_circuits`
-invoked ahead of each fetch (`crates/sorafs_orchestrator/src/lib.rs:1346`)
-emits `CircuitEvent` logs so operators can trace lifecycle decisions. The soak
-test `circuit_manager_latency_soak_remains_stable_across_rotations`
-(`crates/sorafs_orchestrator/src/soranet.rs:1479`) demonstrates stable latency
-across three guard rotations; see the accompanying report at
+Етәксе яңыртыу схемалары ҡасан һаҡсыл метамағлүмәттәр үҙгәрә (осонда, PQ асҡысы,
+йәки ҡыҫтырылған ваҡыт маркаһы) йәки ТТЛ аша үткән. Ярҙамсы I18NI000000126X
+һәр фетчтан алда саҡырылған (I18NI000000127X)
+`CircuitEvent` журналдар сығара, шуға күрә операторҙар йәшәү циклы ҡарарҙарын эҙләй ала. Һыу һибеү .
+тест I18NI000000129X
+(`crates/sorafs_orchestrator/src/soranet.rs:1479`) тотороҡло латентлыҡ күрһәтә
+өс һаҡсы әйләнеше аша; оҙатыусы отчетты ҡарағыҙ
 `docs/source/soranet/reports/circuit_stability.md:1`.
 
-### 1.6 Local QUIC Proxy
+### 1.6 Урындағы QUIC Прокси
 
-The orchestrator can optionally spawn a local QUIC proxy so browser extensions
-and SDK adapters do not have to manage certificates or guard cache keys. The
-proxy binds to a loopback address, terminates QUIC connections, and returns a
-Norito manifest describing the certificate and optional guard cache key to the
-client. Transport events emitted by the proxy are counted via
+Оркестратор теләк буйынса локаль QUIC прокси тыуҙырырға мөмкин, шулай браузер оҙайтыуҙары .
+һәм SDK адаптерҙары сертификаттар менән идара итергә йәки һаҡсы кэш асҡыстары менән идара итергә тейеш түгел. 1990 й.
+прокси-хәл менән бәйләнә, QUIC тоташыуҙарын туҡтатыу һәм кире ҡайтара а .
+I18NT0000000006X спектакль һүрәтләү сертификат һәм өҫтәмә һаҡсы кэш асҡысы .
+клиент. Транспорт ваҡиғалары сығарылған прокси аша иҫәпләнә .
 `sorafs_orchestrator_transport_events_total`.
 
-Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
+Оркестрҙа яңы I18NI000000133X блогы аша прокси-ҡураны индереү:
 
 ```json
 "local_proxy": {
@@ -279,321 +279,326 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
 }
 ```
 
-- `bind_addr` controls where the proxy listens (use `0` port to request an
-  ephemeral port).
-- `telemetry_label` propagates into metrics so dashboards can distinguish
-  proxies from fetch sessions.
-- `guard_cache_key_hex` (optional) lets the proxy surface the same keyed guard
-  cache that the CLI/SDKs rely on, keeping browser extensions in sync.
-- `emit_browser_manifest` toggles whether the handshake returns a manifest that
-  extensions can store and validate.
-- `proxy_mode` selects whether the proxy bridges traffic locally (`bridge`) or
-  only emits metadata so SDKs can open SoraNet circuits themselves
-  (`metadata-only`). The proxy defaults to `bridge`; set `metadata-only` when a
-  workstation should expose the manifest without relaying streams.
-- `prewarm_circuits`, `max_streams_per_circuit`, and `circuit_ttl_hint_secs`
-  surface additional hints to the browser so it can budget parallel streams and
-  understand how aggressively the proxy reuses circuits.
-- `car_bridge` (optional) points at a local CAR archive cache. The `extension`
-  field controls the suffix appended when the stream target omits `*.car`; set
-  `allow_zst = true` to serve pre-compressed `*.car.zst` payloads directly.
-- `kaigi_bridge` (optional) exposes spooled Kaigi routes to the proxy. The
-  `room_policy` field advertises whether the bridge operates in `public` or
-  `authenticated` mode so browser clients can preselect the correct GAR labels.
-- `sorafs_cli fetch` exposes `--local-proxy-mode=bridge|metadata-only` and
-  `--local-proxy-norito-spool=PATH` overrides, letting operators toggle the
-  runtime mode or point at alternate spools without modifying the JSON policy.
-- `downgrade_remediation` (optional) configures the automatic downgrade hook.
-  When enabled the orchestrator watches relay telemetry for downgrade bursts
-  and, after the configured `threshold` within `window_secs`, forces the local
-  proxy into the `target_mode` (default `metadata-only`). Once downgrades stop
-  the proxy reverts to `resume_mode` after `cooldown_secs`. Use the `modes`
-  array to scope the trigger to specific relay roles (defaults to entry relays).
+- I18NI000000134X идара итеү, унда прокси тыңлай (ҡулланыу I18NI000000135X порты һорау өсөн
+  эфемер порты).
+- I18NI000000136X метрикаға тарала, шуға күрә приборҙар таҡталары айыра ала
+  прокси-сессияларҙан алынған.
+- I18NI000000137X (факультатив) прокси өҫтөн шул уҡ ключевой һаҡсыға мөмкинлек бирә
+  кэш, тип CLI/SDKs таяна, браузер оҙайтыу синхронизация һаҡлау.
+- I18NI0000000138X X toggles ҡул ҡыҫыу ҡайтара манифест, тип
+  оҙайтыуҙар һаҡлай һәм раҫлай ала.
+- I18NI0000000139X һайлай, прокси күперҙәр трафик локаль (`bridge`) йәки .
+  тик метамағлүмәттәр сығара, шуға күрә SDKs SoraNet схемаларын аса ала
+  (`metadata-only`). `bridge` тиклем ышаныс ҡағыҙы; 18NI000000143X й.
+  эш станцияһы реле ағымдары булмаған манифестты фашларға тейеш.
+- ```bash
+sorafs_cli guard-directory fetch \
+  --url https://directory.soranet.dev/mainnet_snapshot.norito \
+  --output ./state/guard_directory.norito \
+  --expected-directory-hash <directory-hash-hex>
 
-When the proxy runs in bridge mode it serves two application services:
+sorafs_cli guard-directory verify \
+  --path ./state/guard_directory.norito \
+  --expected-directory-hash <directory-hash-hex>
+```, I18NI000000145X, һәм `circuit_ttl_hint_secs`.
+  ер өҫтө өҫтәмә кәңәштәр браузерға, шулай итеп, ул бюджет параллель ағымдар һәм
+  аңларға, нисек агрессив прокси ҡабаттан ҡулланыла схемалар.
+- `car_bridge` (факультатив) мәрәйҙәре урындағы CAR архив кэшында. I18NI000000148X
+  ялан идара итә ялғау ҡушылғанда, ҡасан ағым маҡсатлы `*.car` of of of of of of; йыйылма
+  `allow_zst = true` туранан-тура алдан ҡыҫылған I18NI000000151X файҙалы йөктәрҙе хеҙмәтләндерер өсөн.
+- `kaigi_bridge` (факультатив) Кайги маршруттарын проксиға ҡаплаған. 1990 й.
+  I18NI000000153X яланында күпер `public` йәки
+  I18NI000000155X режимы шулай браузер клиенттары дөрөҫ GAR ярлыҡтарын алдан һайлай ала.
+- I18NI000000156X `--local-proxy-mode=bridge|metadata-only` һәм
+  I18NI000000158X Xe outde, операторҙарға рөхсәт итеү toggle
+  йөрөү ваҡыты режимы йәки нөктәһе альтернатив катушкалар үҙгәртмәйенсә JSON сәйәсәте.
+- `downgrade_remediation` (факультатив) автоматик рәүештә түбәнәйгән ҡармаҡты конфигурациялай.
+  Ҡасан мөмкинлек бирҙе оркестратор сәғәттәрендә реле телеметрия өсөн түбәнге ярсыҡтар .
+  һәм, `threshold` конфигурацияланғандан һуң `window_secs` сиктәрендә, урындағы көстәр .
+  ышанысы `target_mode` (таправление `metadata-only`). Бер тапҡыр түбәнгә төшөрөүҙәр туҡтай
+  прокси-сервер `resume_mode` I18NI000000165X һуң. `modes` ҡулланыу.
+  массив масштаблы триггер аныҡ реле ролдәре (поктиловый инеү реле).
 
-- **`norito`** – the client’s stream target is resolved relative to
-  `norito_bridge.spool_dir`. Targets are sanitised (no traversal, no absolute
-  paths), and when the file lacks an extension the configured suffix is applied
-  before the payload is streamed verbatim to the browser.
-- **`car`** – stream targets resolve inside `car_bridge.cache_dir`, inherit the
-  configured default extension, and reject compressed payloads unless
-  `allow_zst` is set. Successful bridges reply with `STREAM_ACK_OK` before
-  transferring the archive bytes so clients can pipeline verification.
+Ҡасан прокси күпер режимында эшләй, ул ике ҡушымта хеҙмәте хеҙмәт итә:
 
-In both cases the proxy supplies the cache-tag HMAC (when a guard cache key was
-present during the handshake) and records `norito_*` / `car_*` telemetry reason
-codes so dashboards can differentiate successes, missing files, and sanitisation
-failures at a glance.
+- **`norito`** – клиенттың ағым маҡсаты хәл ителә.
+  `norito_bridge.spool_dir`. Маҡсаттар санитария (бер ниндәй ҙә траверс, абсолют юҡ
+  юлдар), һәм ҡасан файл етмәй оҙайтыу конфигурацияланған ялғау ҡулланыла
+  файҙалы йөк һүҙмә-һүҙ браузерға стрималь булғанға тиклем.
+- **I18NI000000169X** – ағым маҡсаттары `car_bridge.cache_dir` эсендә хәл ителә, был мираҫты мираҫ итеп ала.
+  конфигурацияланған ғәҙәттәгесә оҙайтыу, һәм ҡыҫылған файҙалы йөктәрҙе кире ҡаға, әгәр ҙә
+  `allow_zst` ҡуйылған. Уңышлы күперҙәр `STREAM_ACK_OK` менән яуап бирә.
+  архив байттарын күсерергә, шулай итеп, клиенттар торба тикшерергә мөмкин.
 
-`Orchestrator::local_proxy().await` exposes the running handle so callers can
-read the certificate PEM, fetch the browser manifest, or request a graceful
-shutdown when the application exits.
+Ике осраҡта ла прокси кэш-тег HMAC тәьмин итә (ҡасан һаҡсы кэш асҡысы булды
+ҡул ҡыҫышыу ваҡытында) һәм яҙмалар I18NI0000000173X / I18NI000000174X телеметрия сәбәбе
+кодтар шулай приборҙар таҡталары уңыштарҙы айыра ала, файлдар юҡ, һәм санитиза
+бер ҡараштан уңышһыҙлыҡтар.
 
-When enabled, the proxy now serves **manifest v2** records. Besides the existing
-certificate and guard cache key, v2 adds:
+I18NI000000175X фашлай йүгерә тотҡаһы шулай шылтыратыусылар ала
+сертификатты уҡығыҙ ПЭМ, браузер манифестын алып, йәки нәфис һорау
+өҙөлөү ҡасан ҡушымта сыға.
 
-- `alpn` (`"sorafs-proxy/1"`) and a `capabilities` array so clients can confirm
-  the stream protocol they should speak.
-- A per-handshake `session_id` and cache-tagging salt (`cache_tagging` block) to
-  derive per-session guard affinities and HMAC tags.
-- Circuit and guard-selection hints (`circuit`, `guard_selection`,
-  `route_hints`) so browser integrations can expose richer UI before streams are
-  opened.
-- `telemetry_v2` with sampling and privacy knobs for local instrumentation.
-- Each `STREAM_ACK_OK` includes `cache_tag_hex`. Clients mirror the value in
-  the `x-sorafs-cache-tag` header when issuing HTTP or TCP requests so cached
-  guard selections remain encrypted at rest.
+Ҡасан өҫтөндә, прокси хәҙер хеҙмәт итә **масса v2** яҙмалар. Бынан тыш, булған .
+сертификат һәм һаҡсы кэш асҡысы, v2 өҫтәй:
 
-continue to rely on the v1 subset.
+- I18NI000000176X (`"sorafs-proxy/1"`) һәм I18NI000000178X массивы, шулай итеп, клиенттар раҫлай ала
+  улар һөйләшергә тейешле ағым протоколы.
+- Ҡул ҡыҫышыу I18NI000000179X һәм кэш-теглау тоҙ (I18NI000000180X блок)
+  сессия һаҡсыһы яҡынлыҡ һәм HMAC тегтар килеп сыға.
+- Циркут һәм һаҡсы һайлау кәңәштәре (I18NI000000181X, `guard_selection`,
+  I18NI0000000183X) шулай браузер интеграциялары ағымдар алдынан байыраҡ UI фашлай ала
+  асылды.
+- I18NI000000184X урындағы приборҙар өсөн үлсәү һәм хосуси ручкалар менән.
+- Һәр I18NI000000185X I18NI000000186X XX. Клиенттар ҡиммәтен көҙгөләй 2019 йылда.
+  I18NI0000000187X башлығы HTTP йәки TCP запрос биргәндә шулай кэш
+  һаҡсы һайлау ял ваҡытында шифрланған булып ҡала.
 
-## 2. Failure Semantics
+v1 подмножествоһына таяныуҙы дауам итә.
 
-The orchestrator enforces strict capability and budget checks before a single
-byte is transferred. Failures fall into three categories:
+## 2. Уңышһыҙлыҡ семантикаһы
 
-1. **Eligibility failures (pre-flight).** Providers missing range capability,
-   expired adverts, or stale telemetry are logged in the scoreboard artefact and
-   omitted from scheduling. CLI summaries populate the `ineligible_providers`
-   array with reasons so operators can inspect governance drift without scraping
-   logs.
-2. **Runtime exhaustion.** Each provider tracks consecutive failures. Once the
-   configured `provider_failure_threshold` is reached, the provider is marked
-   `disabled` for the remainder of the session. If every provider transitions to
-   `disabled`, the orchestrator returns
-   `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`.
-3. **Deterministic aborts.** Hard limits surface as structured errors:
-   - `MultiSourceError::NoCompatibleProviders` — the manifest requires a chunk
-     span or alignment the remaining providers cannot honour.
-   - `MultiSourceError::ExhaustedRetries` — the per-chunk retry budget was
-     consumed.
-   - `MultiSourceError::ObserverFailed` — downstream observers (streaming hooks)
-     rejected a verified chunk.
+Оркестратор ҡәтғи мөмкинлектәрен һәм бюджет тикшерелеүен үтәй, бер алда .
+байт күсерелә. Уңышһыҙлыҡтар өс категорияға инә:
 
-Every error embeds the offending chunk index and, when available, the final
-provider failure reason. Treat these as release blockers—retries with the same
-input will reproduce the failure until the underlying advert, telemetry, or
-provider health changes.
+1. **Бер хоҡуҡ етешһеҙлектәре (осоу алдынан).** Провайдерҙар диапазоны мөмкинлектәре юҡ,
+   срогы үткән рекламалар, йәки иҫке телеметрия табло артефактына логин һәм
+   графиктан төшөрөп ҡалдырылған. CLI резюмелары I18NI000000188X XX
+   массив сәбәптәре менән, шулай итеп, операторҙар тикшерергә мөмкин идара итеү дрейф скрапһыҙ
+   журналдар.
+2. **Ран ваҡыты арыу.** Һәр провайдер эҙмә-эҙлекле етешһеҙлектәрҙе күҙәтә. Бер тапҡыр .
+   конфигурацияланған I18NI0000000189X Емергә, провайдер билдәләнгән
+   Ҡалған сессия өсөн I18NI000000190X. Әгәр һәр провайдерға күсә
+   I18NI000000191X, оркестр ҡайтара
+   I18NI000000192X.
+3. **Детерминистик аборттарҙы детерминистик.** Ҡаты ер өҫтө структуралы хаталар булараҡ сикләй:
+   - I18NI000000193X — манифест кәрәк, тип, өлөшө кәрәк
+     йәки тура килтереп ҡалған провайдерҙар хөрмәт итә алмай.
+   - I18NI0000000194X — 2-се өлөшкә ҡабаттан 1990 й.
+     ҡулланылған.
+   - I18NI0000001955 — күҙәтеүселәр (стритинг ҡармаҡтары)
+     раҫланған өлөштө кире ҡаға.
 
-### 2.1 Scoreboard Persistence
+Һәр хата рәнйеткес өлөшө индексы һәм, ҡасан бар, финал .
+провайдер уңышһыҙлыҡ аҡыл. Был хәл итеү блокировщиктар булараҡ, шул уҡ retrets .
+индереү нигеҙендә реклама, телеметрия йәки
+провайдер һаулыҡ үҙгәрештәре.
 
-When `persist_path` is configured, the orchestrator writes the final scoreboard
-after each run. The JSON document contains:
+### 2.1 Ҡараңғы ныҡлыҡ
 
-- `eligibility` (`eligible` or `ineligible::<reason>`).
-- `weight` (normalised weight assigned for this run).
-- `provider` metadata (identifier, endpoints, concurrency budget).
+Ҡасан I18NI000000196X конфигурацияланған, оркестр яҙа һуңғы табло .
+һәр йүгергәндән һуң. JSON документында:
 
-Archive scoreboard snapshots alongside release artefacts so blacklisting and
-rollout decisions remain auditable.
+- I18NI000000197X (`eligible` йәки `ineligible::<reason>`X).
+- I18NI000000200X (был йүгереүҙең нормалаштырылған ауырлығы).
+- `provider` метамағлүмәттәр (идентификация, ос нөктәләре, конкурентлыҡ бюджеты).
 
-## 3. Telemetry & Debugging
+Архив табло снимоктары менән бергә сығарыу артефакттары шулай ҡара исемлеккә һәм
+ролл-аут ҡарарҙары аудит ҡала.
 
-### 3.1 Prometheus Metrics
+## 3. Телеметрия һәм отладка
 
-The orchestrator emits the following metrics via `iroha_telemetry`:
+### 3.1 I18NNT000000000X метрика
 
-| Metric | Labels | Description |
-|--------|--------|-------------|
-| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Gauge of in-flight orchestrated fetches. |
-| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histogram recording end-to-end fetch latency. |
-| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Counter of terminal failures (retries exhausted, no providers, observer failure). |
-| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Counter of retry attempts per provider. |
-| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Counter of session-level provider failures leading to disablement. |
-| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Count of anonymity policy decisions (met vs. brownout) grouped by rollout stage and fallback reason. |
-| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Histogram of PQ relay share among the selected SoraNet set. |
-| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Histogram of PQ relay supply ratios in the scoreboard snapshot. |
-| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Histogram of the policy shortfall (gap between target and actual PQ share). |
-| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | Histogram of classical relay share used in each session. |
-| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Histogram of classical relay counts selected per session. |
+Оркестратор I18NI000000202X аша түбәндәге метрикаларҙы сығара:| Метрика | Ярлыҡтар | Тасуирлама |
+|-------|---------|-------------|
+| `sorafs_orchestrator_active_fetches` | `manifest_id`, I18NI000000205X | Осоштағы оркестрлаштырылған фетрҙарҙы үлсәү. |
+| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, I18NI000000208X | Гистограмма яҙмаһы ос-остан-аҙағы латентлыҡ. |
+| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, I18NI0000002121X | Клемма етешһеҙлектәргә ҡаршы (ретриттар арыған, провайдерҙар юҡ, күҙәтеүселәр етешһеҙлеге). |
+| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Ҡаршы ҡабаттан тырышып тырышлыҡтар бер провайдер. |
+| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Сенсионный сеанс кимәлендә провайдер уңышһыҙлыҡтар өҙөүгә килтерә. |
+| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, I18NI0000000224X, I18NI000000225X | Һан анонимлыҡ сәйәсәте ҡарарҙары (метировать ҡаршы. браундт) төркөмләнгән стадияһы һәм fallback сәбәп. |
+| `sorafs_orchestrator_pq_ratio` | `region`, I18NI000000228X | Гистограмма PQ эстафета өлөшө араһында һайланған SoraNet комплекты. |
+| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Гистограмма PQ реле тәьмин итеү нисбәттәре табло снимок. |
+| `sorafs_orchestrator_pq_deficit_ratio` | `region`, I18NI000000234X | Сәйәсәт етешмәүенең гистограммаһы (маҡсат һәм ысын PQ өлөшө араһындағы айырма). |
+| `sorafs_orchestrator_classical_ratio` | `region`, `stage` X | Гистограмма классик эстафета өлөшө ҡулланыла һәр сессияла. |
+| `sorafs_orchestrator_classical_selected` | `region`, I18NI000000240X | Гистограмма классик эстафета һандары һайлап алынған сеанс. |
 
-Integrate the metrics into staging dashboards before flipping production knobs.
-The recommended layout mirrors the SF-6 observability plan:
+Интеграция метрика стадиялау таҡталарына етештереү ручкаларын әйләндереп.
+Тәҡдим ителгән макет көҙгө SF-6 күҙәтеү планы:
 
-1. **Active fetches** — alerts if the gauge climbs without matching completions.
-2. **Retry ratio** — warns when `retry` counters exceed historical baselines.
-3. **Provider failures** — triggers pager alerts when any provider crosses
-   `session_failure > 0` within 15 minutes.
+1. **Әүҙем фетр ** — иҫкәртмәләр, әгәр датчик тура килмәйенсә күтәрелһә, тамамлау.
+2. **Пренажный нисбәт** — иҫкәртә, ҡасан I18NI000000241X иҫәпләүселәр тарихи база һыҙыҡтарынан артып китә.
+3. **Уңышһыҙлыҡтарҙы тәьмин итеү** — ниндәй ҙә булһа провайдер аша үткәндә пейджер иҫкәртмәләрен тыуҙыра
+   минут эсендә `session_failure > 0`.
 
-### 3.2 Structured Log Targets
+### 3.2 Структуралы лог Маҡсаттар
 
-The orchestrator publishes structured events to deterministic targets:
+Оркестратор структуралы ваҡиғаларҙы детерминистик маҡсаттарға баҫтыра:
 
-- `telemetry::sorafs.fetch.lifecycle` — `start` and `complete` lifecycle
-  markers with chunk counts, retries, and total duration.
-- `telemetry::sorafs.fetch.retry` — retry events (`provider`, `reason`,
-  `attempts`) for feeding into manual triage.
-- `telemetry::sorafs.fetch.provider_failure` — providers disabled due to
-  repeated errors.
-- `telemetry::sorafs.fetch.error` — terminal failures summarised with
-  `reason` and optional provider metadata.
+- I18NI000000243X — I18NI000000244X һәм I18NI000000245X йәшәү циклы
+  маркерҙар менән өлөшө иҫәптәр, ретиялар, һәм дөйөм оҙайлылыҡ.
+- I18NI000000246X — ҡабаттан һынап ҡарау саралары (I18NI000000247X, `reason`,
+  `attempts`) ҡул триажына туҡландырыу өсөн.
+- I18NI000000250X — провайдерҙар 2012 йылға бәйле өҙөлгән.
+  ҡабатланған хаталар.
+- I18NI000000251X — терминаль етешһеҙлектәр менән дөйөмләштерелә.
+  `reason` һәм факультатив провайдер метамағлүмәттәр.
 
-Forward these streams to the existing Norito log pipeline so incident response
-has a single source of truth. Lifecycle events expose the PQ/classical mix via
-`anonymity_effective_policy`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and their companion counters,
-making it straightforward to wire dashboards without scraping metrics. During
-GA rollouts, pin the log level to `info` for lifecycle/retry events and rely on
-`warn` for terminal errors.
+Был һыу ағымдарын ғәмәлдәге I18NT0000000007X журнал торбаһына алға шулай инцидент яуап
+хәҡиҡәт сығанағына эйә. Йәшәү циклы ваҡиғалары PQ/классик микс аша фашлана
+I18NI000000253X, I18NI000000254X,
+I18NI000000255X, һәм уларҙы иптәш иҫәпләүселәр,
+уны туранан-тура сымлы приборҙар панелдәрен ҡырҡыу метрикаһыҙ эшләү. Ваҡытында
+GA ролл-ауттар, лог кимәлен шпилька I18NI000000256X өсөн йәшәү циклы/ҡабат-ҡабатлау саралары һәм таянып .
+терминаль хаталар өсөн I18NI000000257X.
 
-### 3.3 JSON Summaries
+### 3.3 JSON Йәмғеһе
 
-Both `sorafs_cli fetch` and the Rust SDK return a structured summary containing:
+I18NI000000258X һәм Rust SDK кире ҡайтарыу структуралы резюме составында составында:
 
-- `provider_reports` with success/failure counts and whether a provider was
-  disabled.
-- `chunk_receipts` detailing which provider satisfied each chunk.
-- `retry_stats` and `ineligible_providers` arrays.
+- I18NI0000000259X уңыш менән/уңышһыҙлыҡтар менән иҫәпләнә һәм провайдер булдымы
+  эшкә яраҡһыҙ.
+- `chunk_receipts` ентекләп, улар һәр өлөштө ҡәнәғәтләндерә.
+- `retry_stats` һәм `ineligible_providers` массивтары.
 
-Archive the summary file when debugging misbehaving providers—the receipts map
-directly to the log metadata above.
+Архив резюме файлы ҡасан отладка тәртибе дөрөҫ түгел провайдерҙар-квитанциялар картаһы .
+туранан-тура лог метамағлүмәттәре өҫтә.
 
-## 4. Operational Checklist
+## 4. Оператив тикшерелгән исемлек
 
-1. **Stage configuration in CI.** Run `sorafs_fetch` with the target
-   configuration, pass `--scoreboard-out` to capture the eligibility view, and
-   diff against the previous release. Any unexpected ineligible provider halts
-   the promotion.
-2. **Validate telemetry.** Ensure the deployment exports `sorafs.fetch.*`
-   metrics and structured logs before enabling multi-source fetches for users.
-   The absence of metrics typically indicates the orchestrator facade was not
-   invoked.
-3. **Document overrides.** When applying emergency `--deny-provider` or
-   `--boost-provider` settings, commit the JSON (or CLI invocation) to your
-   change log. Rollbacks must revert the override and capture a new scoreboard
-   snapshot.
-4. **Re-run smoke tests.** After modifying retry budgets or provider caps,
-   re-fetch the canonical fixture (`fixtures/sorafs_manifest/ci_sample/`) and
-   verify chunk receipts remain deterministic.
+1. **Стаж конфигурацияһы CI.** Йүгереп I18NI00000000263X менән маҡсат менән
+   конфигурация, үткән I18NI0000000264X хоҡуҡи ҡарашты тотоу өсөн, һәм
+   дифф ҡаршы алдағы релиз. Теләһә ниндәй көтөлмәгән хоҡуҡһыҙ провайдер туҡтата
+   промоушен.
+2. **Телеметрияны раҫлау.** Экспортты таратыуҙы тәьмин итеү `sorafs.fetch.*`
+   метрика һәм структуралы журналдар ҡулланыусылар өсөн күп сығанаҡлы феттарҙы мөмкинлек биргәнсе.
+   Мистиканың булмауы, ғәҙәттә, оркестр фасадын күрһәтә.
+   тип аталған.
+3. **Документ өҫтөнлөк итә.** Ғәҙәттән тыш хәл ҡулланғанда I18NI000002666 йәки .
+   I18NI000000267X параметрҙары, JSON (йәки CLI саҡырыу) һеҙҙең өсөн йөкмәтә
+   үҙгәреш журналы. Rollbacks тейеш ҡайтып өҫтөнлөк һәм яңы табло тотоп .
+   снимок.
+4. **Төтөн һынауҙарҙы ҡабаттан эшләтеү.** Ҡайтанан эшләнгән бюджеттарҙы йәки провайдер ҡапҡастарын үҙгәрткәндән һуң,
+   канонлы ҡоролма (`fixtures/sorafs_manifest/ci_sample/`X) һәм
+   раҫлау өлөшө квитанциялары детерминистик булып ҡала.
 
-Following the steps above keeps orchestrator behaviour reproducible across
-staged rollouts and provides the telemetry necessary for incident response.
+Һуңынан өҫтәге аҙымдар оркестр тәртибен һаҡлай ҡабатлау буйынса .
+сәхнәләштерелгән таратыуҙар һәм инциденттарға яуап бирер өсөн кәрәкле телеметрияны тәьмин итә.
 
-### 4.1 Policy Overrides
+### 4.1 Сәйәсәт өҫтөнлөклө
 
-Operators can pin the active transport/anonymity stage without editing the
-base configuration by setting `policy_override.transport_policy` and
-`policy_override.anonymity_policy` in their `orchestrator` JSON (or supplying
-`--transport-policy-override=` / `--anonymity-policy-override=` to
-`sorafs_cli fetch`). When either override is present the orchestrator skips the
-usual brownout fallback: if the requested PQ tier cannot be satisfied, the
-fetch fails with `no providers` instead of quietly downgrading. Rollback to the
-default behaviour is as simple as clearing the override fields.
+Операторҙар әүҙем транспорт/анонимлыҡ этабын монтажлауһыҙ ҡаҙаҡлай ала
+база конфигурацияһы I18NI000000269X һәм
+`policy_override.anonymity_policy` улар I18NI000000271X JSON (йәки тәьмин итеү
+I18NI000000272X / I18NI000000273X тиклем
+`sorafs_cli fetch`). Ҡасан ике өҫтөнлөк бар, оркестратор һикереп тора
+ғәҙәти браунут fallback: әгәр һораған PQ ярус ҡәнәғәтләндерә алмай, был
+fetch менән уңышһыҙлыҡҡа осрай I18NI000000275X урынына тыныс ҡына түбәнәйтергә. 1990 й.
+ғәҙәттәгесә тәртип өҫтөндәге ҡырҙарҙы таҙартыу кеүек ябай.
 
-The standard `iroha_cli app sorafs fetch` command exposes the same override flags,
-forwarding them to the gateway client so ad-hoc fetches and automation scripts
-share the identical stage pinning behaviour.
+`iroha_cli app sorafs fetch` стандарты шул уҡ өҫтөнлөк флагтарын фашлай,
+уларҙы шлюз клиентына йүнәлтергә, шулай итеп, махсус рәүештә скрипттар һәм автоматлаштырыу скрипттары
+бер үк этапта пининг тәртибе менән бүлешергә.
 
-Cross-SDK fixtures live under `fixtures/sorafs_gateway/policy_override/`. The
-CLI, Rust client, JavaScript bindings, and Swift harness decode
-`override.json` in their parity suites so any change to the override payloads
-must update that fixture and re-run `cargo test -p iroha`, `npm test`, and
-`swift test` to keep the SDKs aligned. Always attach the regenerated fixture to
-change review so downstream consumers can diff the override contract.
+Cross-SDK ҡоролмалары I18NI0000002777X аҫтында йәшәй. 1990 й.
+CLI, Rust клиент, JavaScript бәйләүҙәр, һәм Свифт жгут декод
+I18NI000000278X үҙҙәренең паритет люкстарында, шуға күрә ниндәй ҙә булһа үҙгәрештәр өҫтөнлөклө файҙалы йөкләмәләр
+был ҡоролманы яңыртырға һәм яңынан эшләтеп, I18NI000000279X, I18NI000000280X, һәм
+`swift test` СДК-ларҙы тура килтереп тотоу өсөн. Һәр ваҡыт беркетергә регенерацияланған ҡоролма .
+үҙгәрештәрҙе тикшерергә, шулай итеп, аҫҡы ҡулланыусыларҙы айыра ала өҫтөнлөк килешеп.
 
-Governance requires a runbook entry for every override. Record the reason,
-expected duration, and rollback trigger in your change log, notify the PQ
-ratchet rotation channel, and append the signed approval to the same artifact
-bundle that stores the scoreboard snapshot. Overrides are intended for short
-emergencies (e.g., PQ guard brownouts); long-running policy changes must go
-through the normal council vote so nodes converge on the new default.
+Идара итеү һәр өҫтөнлөк өсөн runbook яҙмаһын талап итә. Сәбәбен яҙып алығыҙ,
+көтөлгән оҙайлылыҡ, һәм һеҙҙең үҙгәрештәр журналында кире ҡайтарыу триггер, хәбәр итеү PQ
+трещот әйләнеш каналы, һәм ҡул ҡуйылған раҫлауҙы шул уҡ артефактҡа ҡушыу
+өйөм, тип һаҡлай табло снимок. Овердтар ҡыҫҡа өсөн тәғәйенләнгән .
+ғәҙәттән тыш хәлдәр (мәҫәлән, PQ һаҡсыһы браунатс); оҙайлы сәйәсәт үҙгәрештәре барырға тейеш
+ғәҙәти совет тауышы аша шулай төйөндәр яңы ғәҙәттәгесә йыйыла.
 
-### 4.2 PQ Ratchet Fire Drill
+### 4.2 PQ Рейтт янғын дренаж
 
-- **Runbook:** Follow `docs/source/soranet/pq_ratchet_runbook.md` for the
-  promotion/demotion rehearsal, including guard-directory handling and rollback.
-- **Dashboard:** Import `dashboards/grafana/soranet_pq_ratchet.json` to monitor
-  `sorafs_orchestrator_policy_events_total`, brownout rate, and PQ ratio mean
-  during the drill.
-- **Automation:** `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`
-  exercises the same transitions and verifies that metrics increment as
-  expected before operators run the live drill.
+- **Ранбук:**
+  промоушен/үлсәм репетицияһы, шул иҫәптән һаҡсы-каталог менән эш итеү һәм кире ҡайтарыу.
+- ** Приборҙар таҡтаһы:** Импорт I18NI0000000283X монитор
+  I18NI000000284X, браунот ставкаһы, һәм PQ нисбәте уртаса
+  бура ваҡытында.
+- **Автоматизация:** I18NI000000285X
+  шул уҡ күсештәрҙе күнекмәләр һәм метрикаларҙы өҫтәү тип раҫлай
+  көтөлгән операторҙары тура эфирҙа бурауҙы етәкләгәнсе.
 
-## 5. Rollout Playbooks
+## 5.
 
-The SNNet-5 transport rollout introduces new guard selection, governance
-attestations, and policy fallbacks. The playbooks below codify the sequence to
-follow before enabling multi-source fetches for end users, plus the downgrade
-path back to direct mode.
+SNNet-5 транспорт таратыу яңы һаҡсы һайлау индерә, идара итеү
+аттестация, һәм сәйәсәт fallbacks. Түбәндәге плейбуктар эҙмә-эҙлеклелекте кодификациялай.
+эйәреп, рөхсәт итеү алдынан күп сығанаҡлы fets өсөн аҙаҡҡы ҡулланыусылар, өҫтәүенә, түбәнгә .
+юл кире туранан-тура режимға.
 
-### 5.1 Developer Pre-Flight (CI / Staging)
+### 5.1 Төҙөүсе алдынан осоу (CI / сәхнәләштереү)
 
-1. **Regenerate scoreboards in CI.** Run `sorafs_cli fetch` (or the SDK
-   equivalent) against the `fixtures/sorafs_manifest/ci_sample/` manifest with
-   the candidate configuration. Persist the scoreboard via
-   `--scoreboard-out=artifacts/sorafs/scoreboard.json` and assert:
-   - `anonymity_status=="met"` and the `anonymity_pq_ratio` meets the targeted
-     stage (`anon-guard-pq`, `anon-majority-pq`, or `anon-strict-pq`).
-   - The deterministic chunk receipts still match the golden set committed to
-     the repository.
-2. **Verify manifest governance.** Inspect the CLI / SDK summary and ensure the
-   newly surfaced `manifest_governance.council_signatures` array contains the
-   expected Council fingerprints. This confirms gateway responses ship the GAR
-   envelope and that `validate_manifest` accepted it.
-3. **Exercise compliance overrides.** Load each jurisdictional profile from
-   `docs/examples/sorafs_compliance_policy.json` and assert the orchestrator
-   emits the correct policy fallback (`compliance_jurisdiction_opt_out` or
-   `compliance_blinded_cid_opt_out`). Record the resulting fetch failure when no
-   compliant transports are available.
-4. **Simulate downgrade.** Flip `transport_policy` to `direct-only` in the
-   configuration under test and re-run the fetch to ensure the orchestrator
-   falls back to Torii/QUIC without touching SoraNet relays. Keep this JSON
-   variant under version control so it can be promoted rapidly during an
-   incident.
+1. **CI.** Run I18NI0000000286X (йәки SDK
+   эквивалент) ҡаршы I18NI00000000287X менән маскировка .
+   кандидат конфигурацияһы. Презист : 2012 йыл
+   `--scoreboard-out=artifacts/sorafs/scoreboard.json` һәм раҫлау:
+   - I18NI000000289X һәм I18NI0000000290X маҡсатлы осраған
+     Этап (`anon-guard-pq`, `anon-majority-pq`, йәки `anon-strict-pq`).
+   - Детерминистик өлөш квитанциялары һаман да алтын комплектҡа тап килә.
+     һаҡлағыс.
+2. **Проператив идара итеүҙе раҫлау.** CLI / SDK резюмеһын тикшерергә һәм тәьмин итеү
+   яңы ер өҫтөндә I18NI0000000294X массивы бар.
+   көткән Совет бармаҡ эҙҙәре. Был шлюз яуаптарын раҫлай, ГАР судноһы .
+   конверт һәм был I18NI000000295X уны ҡабул итте.
+3. **Күнекмә үтәү өҫтөнлөклө.** Йөкләмә һәр юрисдикция профиле .
+   I18NI000000296X һәм оркестрҙы раҫлау
+   дөрөҫ сәйәси ҡолау сығара (`compliance_jurisdiction_opt_out` йәки
+   `compliance_blinded_cid_opt_out` X). Һөҙөмтәлә барлыҡҡа килгән етешһеҙлектәрҙе теркәү, ҡасан юҡ
+   үтәлешле транспорт бар.
+4. **Дүртенсе моделләштереү.** Flip I18NI000000299X X-ға тиклем I18NI0000003000.
+   һынау аҫтында конфигурация һәм яңынан йүгерә фетч, оркестрҙы тәьмин итеү өсөн
+   ҡайтып I18NT00000000010X/QUIC теймәйенсә, SoraNet эстафетаһы. Был JSON һаҡлау
+   варианты аҫтында версия контроле, шулай итеп, уны тиҙ пропагандалау мөмкин ваҡытында ан
+   инцидент.
 
-### 5.2 Operator Rollout (Production Waves)
+### 5.2 Оператор рулеты (етештереү тулҡындары)1. **I18NI0000000301X аша конфигурацияны сәхнәләштерегеҙ.** Ҡулланылған теүәл JSON баҫығыҙ
+   CI-ла I18NI000000302X ҡатламы булараҡ өҫтөнлөк итә. Оркестрик под / бинар раҫлау
+   яңы конфигурация хешын стартапта теркәй.
+2. **Прайм һаҡсы кэштары.** Яңыртыу реле каталогы аша I18NI000000303X .
+   һәм I18NT000008X һаҡсы кэшын I18NI000000304X менән һаҡлап ҡала. Кэшты тикшерергә
+   ҡул ҡуйылған (әгәр I18NI0000000305X конфигурацияланған) һәм версияһында һаҡлана
+   үҙгәреш контроле.
+3. **Телеметрия панелдәрен индереү.** Ҡулланыусылар трафикын хеҙмәтләндерер алдынан, тәьмин итеү
+   мөхит `sorafs.fetch.*`, I18NI000000307X, һәм
+   прокси метрикаһы (урындағы QUIC проксиһын ҡулланғанда). Сигнализацияларҙы 2019 йылға бәйләргә кәрәк.
+   `anonymity_brownout_effective` һәм үтәү fallback иҫәпләүселәр.
+4. **Йәшергә тура төтөн һынауҙары.** Идара итеү раҫланған һәр береһе аша күренеп тора
+   провайдер когортаһы (PQ, классик, һәм туранан-тура) һәм раҫлау өлөшө квитанциялар,
+   CAR disistes, һәм совет ҡултамғалары тура килә CI база һыҙығы.
+5. ** Аралашыу активацияһы.** Яңыртыу менән ролл-аут трекер менән
+   I18NI000000309X артефакт, һаҡ кэш бармаҡ эҙе, һәм һылтанма
+   логтар күрһәтеү өсөн асыҡ идара итеү тикшерелгән өсөн беренсе етештереү фетч.
 
-1. **Stage the configuration via `iroha_config`.** Publish the exact JSON used
-   in CI as an `actual` layer override. Confirm the orchestrator pod / binary
-   logs the new configuration hash on startup.
-2. **Prime guard caches.** Refresh the relay directory via `--guard-directory`
-   and persist the Norito guard cache with `--guard-cache`. Verify the cache is
-   signed (if `--guard-cache-key` is configured) and stored under versioned
-   change control.
-3. **Enable telemetry dashboards.** Before serving user traffic, ensure the
-   environment publishes `sorafs.fetch.*`, `sorafs_orchestrator_policy_events_total`, and
-   the proxy metrics (when using the local QUIC proxy). Alarms should be tied to
-   `anonymity_brownout_effective` and compliance fallback counters.
-4. **Run live smoke tests.** Fetch a governance-approved manifest through each
-   provider cohort (PQ, classical, and direct) and confirm chunk receipts,
-   CAR digests, and council signatures match the CI baseline.
-5. **Communicate activation.** Update the rollout tracker with the
-   `scoreboard.json` artefact, the guard cache fingerprint, and a link to the
-   logs showing manifest governance verification for the first production fetch.
+### 5.3 Даунград / Rollback процедураһы
 
-### 5.3 Downgrade / Rollback Procedure
+Ҡасан инциденттар, PQ дефициты, йәки норматив үтенестәр мәжбүр итеү кире ҡайтарыу, эйәреп .
+был детерминистик эҙмә-эҙлеклелек:
 
-When incidents, PQ deficits, or regulatory requests force a rollback, follow
-this deterministic sequence:
+1. **Коммутатор транспорт сәйәсәте.** Ҡулланыу I18NI0000000310X (һәм, әгәр
+   шунда уҡ яңы SoraNet схема төҙөүҙе туҡтата.
+2. **Флаш һаҡсыһы хәле.** Юйырға йәки архив һаҡсы кэш файл һылтанма .
+   `operator_jurisdictions` шулай артабанғы йүгерә тырышып, ҡабаттан ҡулланырға тырышмай, шынкыла реле.
+   Был аҙымды тиҙ ҡабаттан ҡабул итеү планлаштырылғанда һәм кэш ҡала булғанда ғына үткәрегеҙ
+   ғәмәлдәк.
+3. **Икенсел урындағы прокси.** Әгәр урындағы QUIC прокси `bridge` режимында булһа,
+   I18NI000000313X менән оркестраторҙы яңынан эшләтергә йәки алып ташларға
+   `local_proxy` блок тулыһынса. Документ порт релиз шулай эш станцияһы һәм
+   браузер интеграциялары туранан-тура I18NT0000000011X инеүгә ҡайта.
+4. **Таныс үтәү өҫтөнлөк итә.** Ҡушымта юрисдикция опт-аут инеү (йәки а
+   һуҡыр-CID инеү) үтәү сәйәсәте өсөн ҡағылған файҙалы йөктәр шулай
+   автоматлаштырыу һәм приборҙар таҡталары ниәтләп туранан-тура режимда эшләүҙе сағылдыра.
+5. **Туған аудит дәлилдәре.** Йүгереп пост-үҙгәрештәр алыу менән `--scoreboard-out` .
+   һәм CLI JSON резюмеһын һаҡлау (шул иҫәптән I18NI000000316X) менән бер рәттән
+   инцидент билеты.
 
-1. **Switch transport policy.** Apply `transport_policy=direct-only` (and, if
-   immediately halts new SoraNet circuit construction.
-2. **Flush guard state.** Delete or archive the guard cache file referenced by
-   `--guard-cache` so subsequent runs do not attempt to reuse pinned relays.
-   Skip this step only when a rapid re-enable is planned and the cache remains
-   valid.
-3. **Disable local proxies.** If the local QUIC proxy was in `bridge` mode,
-   restart the orchestrator with `proxy_mode="metadata-only"` or remove the
-   `local_proxy` block entirely. Document the port release so workstation and
-   browser integrations revert to direct Torii access.
-4. **Clear compliance overrides.** Append a jurisdictional opt-out entry (or a
-   blinded-CID entry) to the compliance policy for the affected payloads so
-   automation and dashboards reflect the intentional direct-mode operation.
-5. **Capture audit evidence.** Run a post-change fetch with `--scoreboard-out`
-   and store the CLI JSON summary (including `manifest_governance`) alongside
-   the incident ticket.
+### 5.4 Көйләнгән таратыу тикшерелгән исемлеге
 
-### 5.4 Regulated Deployment Checklist
+| Тикшереү пункты | Маҡсат | Тәҡдим ителгән дәлилдәр |
+|----------|----------|----------------------|
+| Ҡабул итеү сәйәсәте ҡуйылған | Раҫлау юрисдикция уйып-out тура килә GAR файлдар. | Ҡул ҡуйылған I18NI000000317X снимок + оркестратор конфигуратор дифф. |
+| Манифест идара итеү теркәлгән | Совет ҡултамғалары иҫбатлай, һәр ҡапҡа манифест оҙата. | `sorafs_cli fetch ... --output /dev/null --summary out.json` менән I18NI000000319X архивланған. |
+| Аттестация инвентаризацияһы | I18NI000000320X-та һылтанма яһалған документтарҙы күҙәтә. | Магазин PDFs/JSON артефакттары менән бер рәттән аттестация үҙләштереү һәм ваҡыты үткән. |
+| Донград бураженный теркәлде | Тәьмин итеү кире ҡайтарыу детерминистик булып ҡала. | Квартал ҡоро-йүгереп яҙма күрһәтеү туранан-тура ғына сәйәсәт ҡулланыла һәм һаҡсы кэш таҙартылған. |
+| Телеметрия тотоу | Көйләүселәр өсөн суд-медицина мәғлүмәттәрен бирә. | I18NI000000321X раҫлаусы OTEL экспорты йәки OTEL снимоктары һәм ҡағиҙәләрҙе үтәү fallbacks һаҡлана сәйәсәт буйынса. |
 
-| Checkpoint | Purpose | Recommended Evidence |
-|------------|---------|----------------------|
-| Compliance policy staged | Confirms the jurisdictional carve-out aligns with GAR filings. | Signed `soranet_opt_outs.json` snapshot + orchestrator config diff. |
-| Manifest governance recorded | Proves Council signatures accompany every gateway manifest. | `sorafs_cli fetch ... --output /dev/null --summary out.json` with `manifest_governance.council_signatures` archived. |
-| Attestation inventory | Tracks the documents referenced in `compliance.attestations`. | Store PDFs/JSON artefacts alongside the attestation digest and expiry. |
-| Downgrade drill logged | Ensures rollback remains deterministic. | Quarterly dry-run record showing direct-only policy applied and guard cache cleared. |
-| Telemetry retention | Provides forensic data for regulators. | Dashboard export or OTEL snapshot confirming `sorafs.fetch.*` and compliance fallbacks are being retained per policy. |
-
-Operators should review the checklist prior to each rollout window and furnish
-the evidence pack to governance or regulators on request. Developers can reuse
-the same artefacts for postmortem packets when brownouts or compliance overrides
-are triggered during testing.
+Операторҙар тейеш тикшерергә тикшерелгән исемлеккә тиклем һәр ролл-аут тәҙрә һәм йыһазландырылған .
+дәлилдәр пакет идара итеү йәки көйләүселәр үтенес буйынса. Төҙөүселәр ҡабаттан ҡуллана ала .
+Ҡайһы бер осраҡта был һүҙҙәрҙе үлемдән һуңғы пакеттар йәки үтәү өҫтөнлөк иткәндә лә шул уҡ артефакттар
+һынау ваҡытында ҡабыҙыла.

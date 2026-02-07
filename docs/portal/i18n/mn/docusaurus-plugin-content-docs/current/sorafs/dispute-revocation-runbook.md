@@ -8,33 +8,35 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Dispute & Revocation Runbook
 sidebar_label: Dispute & Revocation Runbook
 description: Governance workflow for filing SoraFS capacity disputes, coordinating revocations, and evacuating data deterministically.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-## Purpose
+## Зорилго
 
-This runbook guides governance operators through filing SoraFS capacity disputes, coordinating revocations, and ensuring data evacuation completes deterministically.
+Энэхүү runbook нь SoraFS хүчин чадалтай холбоотой маргааныг гаргах, хүчингүй болгох ажлыг зохицуулах, өгөгдлийг нүүлгэн шилжүүлэх ажлыг тодорхой хэмжээгээр баталгаажуулах замаар засаглалын операторуудыг удирдан чиглүүлдэг.
 
-## 1. Assess the Incident
+## 1. Болсон явдлыг үнэл
 
-- **Trigger conditions:** detection of SLA breach (uptime/PoR failure), replication shortfall, or billing disagreement.
-- **Confirm telemetry:** capture `/v1/sorafs/capacity/state` and `/v1/sorafs/capacity/telemetry` snapshots for the provider.
-- **Notify stakeholders:** Storage Team (provider operations), Governance Council (decision body), Observability (dashboard updates).
+- **Триггерийн нөхцөл:** SLA зөрчлийг илрүүлэх (ажиллах хугацаа/PoR алдаа), хуулбарлах дутагдал эсвэл төлбөрийн үл ойлголцол.
+- **Телеметрийг баталгаажуулах:** үйлчилгээ үзүүлэгчийн хувьд `/v1/sorafs/capacity/state` болон `/v1/sorafs/capacity/telemetry` агшин зуурын зургийг авах.
+- **Оролцогч талуудад мэдэгдэх:** Хадгалах баг (үйлүүлэгчийн үйл ажиллагаа), Удирдлагын зөвлөл (шийдвэр гаргах байгууллага), Ажиглах боломжтой байдал (хяналтын самбарын шинэчлэл).
 
-## 2. Prepare Evidence Bundle
+## 2. Нотлох баримтын багц бэлтгэх
 
-1. Collect raw artefacts (telemetry JSON, CLI logs, auditor notes).
-2. Normalize into a deterministic archive (for example, a tarball); record:
-   - BLAKE3-256 digest (`evidence_digest`)
-   - Media type (`application/zip`, `application/jsonl`, and so on)
-   - Hosting URI (object storage, SoraFS pin, or Torii-accessible endpoint)
-3. Store the bundle in the governance evidence collection bucket with write-once access.
+1. Түүхий эд өлгийн зүйлс цуглуулах (телеметрийн JSON, CLI бүртгэл, аудиторын тэмдэглэл).
+2. Детерминист архив (жишээ нь, tarball) болгон хэвийн болгох; бичлэг:
+   - BLAKE3-256 дижест (`evidence_digest`)
+   - Хэвлэл мэдээллийн төрөл (`application/zip`, `application/jsonl` гэх мэт)
+   - Хостинг URI (объект хадгалах, SoraFS зүү, эсвэл Torii хандалттай төгсгөлийн цэг)
+3. Багцыг нэг удаа бичих эрхтэй засаглалын нотлох баримт цуглуулах саванд хадгална.
 
-## 3. File the Dispute
+## 3. Маргаан мэдүүлэх
 
-1. Create a spec JSON for `sorafs_manifest_stub capacity dispute`:
+1. `sorafs_manifest_stub capacity dispute`-д зориулсан тусгай JSON үүсгэх:
 
    ```json
    {
@@ -54,7 +56,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
    }
    ```
 
-2. Run the CLI:
+2. CLI-г ажиллуулна уу:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -67,38 +69,38 @@ This runbook guides governance operators through filing SoraFS capacity disputes
      --private-key=ed25519:<key>
    ```
 
-3. Review `dispute_summary.json` (confirm kind, evidence digest, timestamps).
-4. Submit the request JSON to Torii `/v1/sorafs/capacity/dispute` via the governance transaction queue. Capture the `dispute_id_hex` response value; it anchors follow-up revocation actions and audit reports.
+3. `dispute_summary.json`-г хянан үзэх (төрөл, нотлох баримт, цагийн тэмдэглэгээг баталгаажуулах).
+4. JSON хүсэлтийг Torii `/v1/sorafs/capacity/dispute` руу засаглалын гүйлгээний дарааллаар илгээнэ үү. `dispute_id_hex` хариултын утгыг авах; Энэ нь хүчингүй болгох арга хэмжээ болон аудитын тайлангуудыг зангуу болгодог.
 
-## 4. Evacuation & Revocation
+## 4. Нүүлгэн шилжүүлэх, хүчингүй болгох
 
-1. **Grace window:** notify the provider of impending revocation; allow evacuation of pinned data when policy permits.
-2. **Generate `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` with the approved reason.
-   - Verify signatures and the revocation digest.
-3. **Publish revocation:**
-   - Submit the revocation request to Torii.
-   - Ensure provider adverts are blocked (expect `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to climb).
-4. **Update dashboards:** flag the provider as revoked, reference the dispute ID, and link the evidence bundle.
+1. **Нөхцөл байдлын цонх:** үйлчилгээ үзүүлэгчид удахгүй цуцлагдах тухай мэдэгдэх; бодлого зөвшөөрвөл тогтоогдсон өгөгдлийг нүүлгэн шилжүүлэхийг зөвшөөрөх.
+2. **`ProviderAdmissionRevocationV1` үүсгэх:**
+   - Зөвшөөрөгдсөн шалтгаанаар `sorafs_manifest_stub provider-admission revoke` ашиглана уу.
+   - Гарын үсэг болон хүчингүй болгох тоймыг шалгах.
+3. **Хүчгүй болгохыг нийтлэх:**
+   - Хүчингүй болгох хүсэлтээ Torii хаягаар илгээнэ үү.
+   - Үйлчилгээ үзүүлэгчийн зарыг хаасан эсэхийг шалгаарай (`torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` авирах болно).
+4. **Хяналтын самбарыг шинэчлэх:** үйлчилгээ үзүүлэгчийг хүчингүй болгосон гэж тэмдэглэж, маргааны ID-г лавлаж, нотлох баримтын багцыг холбоно уу.
 
-## 5. Post-Mortem & Follow-Up
+## 5. Үхлийн дараах ба хяналт
 
-- Record the timeline, root cause, and remediation actions in the governance incident tracker.
-- Determine restitution (stake slashing, fee clawbacks, customer refunds).
-- Document learnings; update SLA thresholds or monitoring alerts if required.
+- Хугацаа, үндсэн шалтгаан, засч залруулах арга хэмжээг засаглалын ослыг хянах төхөөрөмжид тэмдэглэ.
+- Нөхөн төлбөрийг тодорхойлох (гадасны бууралт, хураамжийг эргүүлэн авах, харилцагчийн буцаан олголт).
+- Суралцсан зүйлээ баримтжуулах; шаардлагатай бол SLA-ийн босго оноо эсвэл хяналтын дохиог шинэчлэх.
 
-## 6. Reference Materials
+## 6. Лавлах материал
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (dispute section)
-- `docs/source/sorafs/provider_admission_policy.md` (revocation workflow)
-- Observability dashboard: `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (маргааны хэсэг)
+- `docs/source/sorafs/provider_admission_policy.md` (цуцлах ажлын урсгал)
+- Ажиглалтын хяналтын самбар: `SoraFS / Capacity Providers`
 
-## Checklist
+## Хяналтын хуудас
 
-- [ ] Evidence bundle captured and hashed.
-- [ ] Dispute payload validated locally.
-- [ ] Torii dispute transaction accepted.
-- [ ] Revocation executed (if approved).
-- [ ] Dashboards/runbooks updated.
-- [ ] Post-mortem filed with governance council.
+- [ ] Нотлох баримтын багцыг барьж аваад хэш хийсэн.
+- [ ] Маргааны ачааллыг орон нутагт баталгаажуулсан.
+- [ ] Torii маргаантай гүйлгээг хүлээн авлаа.
+- [ ] Хүчингүй болгох үйлдлийг гүйцэтгэсэн (хэрэв батлагдсан бол).
+- [ ] Хяналтын самбар/runbook шинэчлэгдсэн.
+- [ ] Захиргааны зөвлөлд нас барсан.

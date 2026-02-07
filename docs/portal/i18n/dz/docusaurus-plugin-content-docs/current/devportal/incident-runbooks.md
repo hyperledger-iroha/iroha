@@ -8,65 +8,67 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Incident Runbooks & Rollback Drills
 sidebar_label: Incident Runbooks
 description: Response guides for failed portal deployments, SoraFS replication degradation, analytics outages, and the quarterly rehearsal cadence required by DOCS-9.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Purpose
+## དགོས༌དོན
 
-Roadmap item **DOCS-9** calls for actionable playbooks plus a rehearsal plan so
-portal operators can recover from shipping failures without guessing. This note
-covers three high-signal incidents—failed deployments, replication
-degradation, and analytics outages—and documents the quarterly drills that
-prove alias rollback and synthetic validation still work end to end.
+རོ་ཊི་མེཔ་རྣམ་གྲངས་ **DOCS-9** འདི་ ལག་ལེན་འཐབ་བཏུབ་པའི་ རྩེད་དེབ་ཚུ་དང་ སྦྱོང་བརྡར་འཆར་གཞི་ཚུ་ འབོ་ཡོདཔ་ཨིན།
+དྲྭ་ཚིགས་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཕོ་ཚོད་མ་བཏབ་པར་ གྲུ་བཏང་མ་ཚུགས་པའི་ འཐུས་ཤོར་ལས་ ལོག་ཐོབ་ཚུགས། དྲན་ཐོ་འདི་
+བརྡ་མཚོན་མཐོ་བའི་བྱུང་རྐྱེན་གསུམ་ཁྱབ་ཡོད།
+ཉམས་རྒུད་དང་ དབྱེ་དཔྱད་ཚུ་ མ་ཚངམ་ལས་ ཟླཝ་གསུམ་གྱི་ སྦྱོང་བརྡར་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+ལོག་ལོག་བསྐོར་ཏེ་ བཅོས་མའི་བདེན་དཔྱད་འདི་ ད་ལྟོ་ཡང་ མཇུག་བསྡུ་ཚུན་ཚོད་ ལཱ་འབད་དོ་ཡོདཔ་ཨིན།
 
-### Related material
+### འབྲེལ་བའི་དངོས་པོ།
 
-- [`devportal/deploy-guide`](./deploy-guide) — packaging, signing, and alias
-  promotion workflow.
-- [`devportal/observability`](./observability) — release tags, analytics, and
-  probes referenced below.
+- [`devportal/deploy-guide`](I18NU000000007X) — ཐུམ་སྒྲིལ་དང་མིང་རྟགས་བཀོད་པ།
+  ཡར་འཕེལ་གྱི་ལས་རིམ།
+- [I18NI000000014X](I18NU0000008X) — གསར་བཏོན་ངོ་རྟགས་དང་ དབྱེ་དཔྱད།
+  གཤམ་གསལ་གྱི་འཚོལ་ཞིབ་ཚུ།
 - `docs/source/sorafs_node_client_protocol.md`
-  and [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
-  — registry telemetry and escalation thresholds.
-- `docs/portal/scripts/sorafs-pin-release.sh` and `npm run probe:*` helpers
-  referenced throughout the checklists.
+  དང་ [I18NI0000016X](I18NU0000009X)
+  — ཐོ་བཀོད་བརྒྱུད་འཕྲིན་དང་ ཡར་འཕར་གྱི་ཚད་གཞི་ཚུ།
+- `docs/portal/scripts/sorafs-pin-release.sh` དང་ `npm run probe:*` རོགས་རམ་འབད་མི་ཚུ།
+  བརྟག་ཞིབ་ཐོ་ཡིག་ཚུ་ནང་ གཞི་བསྟུན་འབད་ཡོདཔ།
 
-### Shared telemetry & tooling
+### བརྗེ་སྒྱུར་གྱི་བརྡ་འཕྲིན་དང་ལག་ཆས།
 
-| Signal / Tool | Purpose |
-| ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Detects replication stalls and SLA breaches. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Quantifies backlog depth and completion latency for triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Shows gateway-side failures that often follow a bad deploy. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Synthetic probes that gate releases and validate runbacks. |
-| `npm run check:links` | Broken-link gate; used after every mitigation. |
-| `sorafs_cli manifest submit … --alias-*` (wrapped by `scripts/sorafs-pin-release.sh`) | Alias promotion/reversion mechanism. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Aggregates refusal/alias/TLS/replication telemetry. PagerDuty alerts reference these panels for evidence. |
+| བརྡ་རྟགས་ / ལག་ཆས་ | དམིགས་ཡུལ། |
+| ------------- | ------ |
+| `torii_sorafs_replication_sla_total` (Met/nessed/pending) | འདྲ་དཔེ་བཟོ་ནི་གི་བཀག་ཆ་དང་ ཨེསི་ཨེལ་ཨེ་ འགལ་འཛོལ་ཚུ་ བརྟག་དཔྱད་འབདཝ་ཨིན། |
+| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ རྒྱབ་ལོག་གཏིང་ཚད་དང་ མཇུག་བསྡུ་བའི་ འཕྲོ་མཐུད་འདི་ ཚད་འཇལ་འབདཝ་ཨིན། |
+| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | འཕྲལ་འཕྲལ་སྦེ་ར་ བཀྲམ་སྤེལ་ངན་པའི་རྗེས་སུ་འབྲང་མི་ འཛུལ་སྒོ་གི་ཕྱོགས་ལུ་ འཐུས་ཤོར་ཚུ་སྟོནམ་ཨིན། |
+| `npm run probe:portal` / `npm run probe:tryit-proxy` | བཅོས་མའི་འཚོལ་ཞིབ་འདི་གིས་ སྒོ་ར་སྒོ་ར་ཚུ་བཏོན་ཞིནམ་ལས་ བདེན་དཔྱད་འབདཝ་ཨིན། |
+| `npm run check:links` | འབྲེལ་མཐུད་ཀྱི་སྒོ་བརྡུངས།; མར་ཕབ་རེ་རེ་གི་ཤུལ་ལས་ལག་ལེན་འཐབ་ཡོདཔ། |
+| `sorafs_cli manifest submit … --alias-*` (I18NI0000028X གིས་བརྡུང་ཡོདཔ།) | མིང་གཞན་ ཡར་འཕེལ་/ལོག་སྤྱོད་ཐབས་ལམ། |
+| `Docs Portal Publishing` Grafana བཀོད་སྒྲིག་ (I18NI0000000300) | བསྡོམས་རྩིས་བཀག་ཆ་/མིང་གཞན་/ཊི་ཨེལ་ཨེསི་/འདྲ་དཔེ་བརྡ་འཕྲིན་རིཊ། PagerDuty ཉེན་བརྡ་ཚུ་གིས་ འ་ནི་པེ་ནཱལ་ཚུ་ སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ་ གཞི་བསྟུན་འབདཝ་ཨིན། |
 
-## Runbook — Failed deployment or bad artefact
+## རན་བུད་ — བཀྲམ་སྤེལ་ཡང་ན་ ཅ་ཆས་ཚུ་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
 
-### Trigger conditions
+### གཟི་བརྗིད་གནས་སྟངས།
 
-- Preview/production probes fail (`npm run probe:portal -- --expect-release=…`).
-- Grafana alerts on `torii_sorafs_gateway_refusals_total` or
-  `torii_sorafs_manifest_submit_total{status="error"}` after a rollout.
-- Manual QA notices broken routes or Try-It proxy failures immediately after
-  alias promotion.
+- སྔོན་ལྟ་/ཐོན་སྐྱེད་འཚོལ་ཞིབ་འདི་འཐུས་ཤོར་ (`npm run probe:portal -- --expect-release=…`).
+- Grafana I18NI000000032X ཡང་ན་ I18NI000000001X གི་ཉེན་བརྡ།
+  `torii_sorafs_manifest_submit_total{status="error"}` འགོ་བཙུགས་པའི་ཤུལ་ལས་།
+- ལག་དེབ་ཀིའུ་ཨེ་གིས་ ལམ་ཆད་མི་ཚུ་ ཡང་ན་ ཚོད་བརྟག་འདི་ དེ་འཕྲོ་ལས་ འབད་རྩོལ་ཡོདཔ་སྦེ་ མཐོང་ཡོདཔ་ཨིན།
+  alias གོང་འཕེལ།
 
-### Immediate containment
+### འཕྲལ་མཁོ།
 
-1. **Freeze deployments:** mark the CI pipeline with `DEPLOY_FREEZE=1` (GitHub
-   workflow input) or pause the Jenkins job so no additional artefacts go out.
-2. **Capture artefacts:** download the failing build’s `build/checksums.sha256`,
-   `portal.manifest*.{json,to,bundle,sig}`, and probe output so the rollback can
-   reference exact digests.
-3. **Notify stakeholders:** storage SRE, Docs/DevRel lead, and the governance
-   duty officer for awareness (especially when `docs.sora` is impacted).
+1. ** རིན་མེད་སྟོང་པའི་བཀྲམ་སྤེལ་ཚུ་:** `DEPLOY_FREEZE=1` (GitHub
+   ལཱ་གི་རྒྱུན་རིམ་ཨིན་པུཊ་) ཡང་ན་ ཇེན་ཀིནསི་གི་ལཱ་འདི་ བཀག་བཞག་སྟེ་ ཅ་རྙིང་ཁ་སྐོང་ཚུ་ ཕྱི་ཁར་མ་འགྱོ།
+2. **ཁྱད་འཕགས་ཅན་གྱི་ཅ་རྙིང་ཚུ་:** འཐུས་ཤོར་བྱུང་བའི་བཟོ་བསྐྲུན་ `build/checksums.sha256`, ཕབ་ལེན་འབད།
+   `portal.manifest*.{json,to,bundle,sig}`, དང་ འཚོལ་ཞིབ་ཨའུཊི་པུཊི་འབདཝ་ལས་ ལོག་བསྐོར་རྐྱབ་ཚུགས།
+   གཞི་བསྟུན་ ཏག་ཏག་བཟོས་འཇུགཔ་ཨིན།
+3. **འབྲེལ་ལམ་བཞག་མི་:** གསོག་འཇོག་ SRE, Docs/DevRel འགོ་ཁྲིད་དང་ གཞུང་སྐྱོང་།
+   གོ་བ་བརྡ་སྤྲོད་ཀྱི་དོན་ལུ་ (དམིགས་བསལ་གྱིས་ `docs.sora` ལུ་ ཕན་གནོད་བྱུང་པའི་སྐབས་ལུ་)།
 
-### Rollback procedure
+### བསྐོར་རྒྱབ་ཀྱི་བྱ་རིམ།
 
-1. Identify the last-known-good (LKG) manifest. The production workflow stores
-   them under `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
-2. Rebind the alias to that manifest with the shipping helper:
+1. མཐའ་མའི་ཤེས་རྟོགས་ (LKG) མངོན་རྟགས་ངོས་འཛིན་བྱེད། ཐོན་སྐྱེད་ཀྱི་ལཱ་གི་རྒྱུན་རིམ་ཚོང་ཁང་ཚུ།
+   དེ་ཚུ་ `artifacts/devportal/<release>/sorafs/portal.manifest.to` གི་འོག་ལུ་ཨིན།
+༢ གྲུ་བཏང་མི་གྲོགས་རམ་པ་དང་གཅིག་ཁར་ གསལ་སྟོན་དེ་ལུ་ མིང་གཞན་ཚུ་ ལོག་མཚམས་འཇོག་འབད།
 
 ```bash
 cd docs/portal
@@ -103,123 +105,123 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Record the rollback summary in the incident ticket together with the LKG and
-   failed manifest digests.
+3. བྱུང་རིམ་གྱི་ཤོག་འཛིན་ནང་ བསྐོར་རྒྱབ་ཀྱི་བཅུད་དོན་འདི་ ཨེལ་ཀེ་ཇི་ དང་ མཉམ་དུ་ཐོ་བཀོད་འབད།
+   free fart value digess.
 
-### Validation
+### བདེན་དཔྱད་འབད་ནི།
 
 1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
 2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature …` and `sorafs_cli proof verify …`
-   (see the deployment guide) to confirm the re-promoted manifest still matches
-   the archived CAR.
-4. `npm run probe:tryit-proxy` to ensure the Try-It staging proxy came back.
+3. `sorafs_cli manifest verify-signature …` དང་ `sorafs_cli proof verify …`
+   (བཀྲམ་སྤེལ་ལམ་སྟོན་འདི་བལྟ་) ལོག་སྟེ་ཁྱབ་སྤེལ་འབད་ཡོད་པའི་གསལ་སྟོན་འདི་ད་ལྟོ་ཡང་མཐུན་སྒྲིག་མཐུན་སྒྲིག་འབད་ནི་ལུ་མཐུན་སྒྲིག་འབད།
+   གཏན་མཛོད་ CAR.
+4. `npm run probe:tryit-proxy` འདི་ Try-It staging toxy ལོག་འོང་ཡོདཔ་ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ཨིན།
 
-### Post-incident
+### བྱུང་བའི་རྗེས་སུ།
 
-1. Re-enable the deployment pipeline only after the root cause is understood.
-2. Backfill [`devportal/deploy-guide`](./deploy-guide) “Lessons learned”
-   entries with new gotchas, if any.
-3. File defects for the failing test suite (probe, link checker, etc.).
+༡ རྩ་བའི་རྒྱུ་རྐྱེན་འདི་ཧ་གོ་ཚར་བའི་ཤུལ་ལས་རྐྱངམ་ཅིག་ བཀྲམ་སྤེལ་གྱི་མདོང་ལམ་འདི་ལོག་སྟེ་ལྕོགས་ཅན་བཟོ།
+2. Backfill [I18NI0000044X](I18NU000000010X) “སློབ་སྦྱོང་བྱས་པའི་སློབ་སྦྱོང་།”
+   འཛུལ་ཞུགས་གསརཔ་ཚུ་དང་གཅིག་ཁར་ གང་རུང་ཅིག་ཡོད་པ་ཅིན་།
+༣ འཐུས་ཤོར་བྱུང་བའི་བརྟག་དཔྱད་ཆ་ཚན་གྱི་དོན་ལུ་ ཡིག་སྣོད་ཀྱི་སྐྱོན་ཚུ་ (འཚོལ་ཞིབ་དང་ འབྲེལ་མཐུད་བརྟག་དཔྱད་འབད་མི་ དེ་ལས་ དེ་བཟུམ་ཚུ་)།
 
-## Runbook — Replication degradation
+## རན་བུད་ — འདྲ་བཤུས་ཉམས་རྒུད།
 
-### Trigger conditions
+### གཟི་བརྗིད་གནས་སྟངས།
 
-- Alert: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
-  clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` for 10 minutes.
-- `torii_sorafs_replication_backlog_total > 10` for 10 minutes (see
-  `pin-registry-ops.md`).
-- Governance reports slow alias availability after a release.
+- དྲན་སྐུལ་: `sum(torie_sorafs_འདྲ་བཤུས་_sla_total{outotal{outotal{outousecom="met"}) /
+  clamp_min(sum(tori_sorafs_འདྲ་བཤུས་_sla_total{outotal{outotame=~"metded"}), 1) <)
+  ༠.༩༥` སྐར་མ་༡༠ གི་དོན་ལུ་ཨིན།
+- སྐར་མ་༡༠ གི་དོན་ལུ་ `torii_sorafs_replication_backlog_total > 10` (see)
+  I18NI0000046X).
+- གཞུང་སྐྱོང་གིས་ གསར་བཏོན་འབད་བའི་ཤུལ་ལས་ མིང་གཞན་ཐོབ་ཚུགས་པའི་སྙན་ཞུ་འབད་ཡོདཔ།
 
-### Triage
+### གཟེངས་རྟགས།
 
-1. Inspect [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) dashboards to confirm
-   whether the backlog is localized to a storage class or a provider fleet.
-2. Cross-check Torii logs for `sorafs_registry::submit_manifest` warnings to
-   determine whether submissions themselves are failing.
-3. Sample replica health via `sorafs_cli manifest status --manifest …` (lists
-   per-provider replication outcomes).
+1. [`sorafs/pin-registry-ops`](I18NU000000011X) བདེན་དཔང་འབད་ནིའི་དོན་ལུ་ ཌེཤ་བོརཌ་ཚུ་བརྟག་དཔྱད་འབད་དགོ།
+   རྒྱབ་ལོག་འདི་ གསོག་འཇོག་དབྱེ་རིམ་ཡང་ན་ བྱིན་མི་གྲུ་གཟིངས་ལུ་ ཉེ་གནས་ཨིན་ན་མེན་ན།
+2. I18NI0000048X ཉེན་བརྡའི་དོན་ལུ་ I18NT000000005X དྲན་ཐོ་ཚུ་ བརྡ་རྟགས་བཀོདཔ་ཨིན།
+   ཕུལ་མི་ཚུ་རང་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན་ན་མེན་ན་ གཏན་འབེབས་བཟོ།
+3. དཔེ་ཚད་འདྲ་དཔེ་གསོ་བའི་ I18NI0000004X བརྒྱུད་དེ་ (ཐོ་ཡིག་ཚུ།
+   མཁོ་སྤྲོད་འབད་མི་རེ་ལུ་ འདྲ་བཤུས་གྲུབ་འབྲས།)
 
-### Mitigation
+### ཉམས་སྲུང་།
 
-1. Reissue the manifest with higher replica count (`--pin-min-replicas 7`) using
-   `scripts/sorafs-pin-release.sh` so the scheduler spreads load across a larger
-   provider set. Record the new manifest digest in the incident log.
-2. If backlog is tied to a single provider, temporarily disable it via the
-   replication scheduler (documented in `pin-registry-ops.md`) and submit a new
-   manifest forcing the other providers to refresh the alias.
-3. When alias freshness is more critical than replication parity, rebind the
-   alias to a warm manifest already staged (`docs-preview`), then publish a
-   follow-up manifest once SRE clears the backlog.
+༡ ལག་ལེན་འཐབ་ཐོག་ལས་ འདྲ་བཤུས་གྱངས་ཁ་ (I18NI0000050X) དང་གཅིག་ཁར་ གསལ་སྟོན་འདི་ བསྐྱར་ལོག་འབད།
+   `scripts/sorafs-pin-release.sh` དེ་འབདཝ་ལས་ དུས་ཚོད་བཀོད་མི་འདི་ སྦོམ་གྱི་ནང་ལུ་ མངོན་གསལ་འབདཝ་ཨིན།
+   བྱིན་མི་སྒྲིག་ཚིག། བྱུང་རྐྱེན་དྲན་ཐོ་ནང་ གསལ་སྟོན་གསརཔ་ ཟས་བཅུད་གསརཔ་འདི་ཐོ་བཀོད་འབད།
+2. backlog འདི་ བྱིན་མི་གཅིག་ལུ་བསྡམ་བཞག་པ་ཅིན་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ ལྕོགས་མིན་བཟོ།
+   འདྲ་དཔེ་དུས་ཚོད་བཀོད་མི་ (I18NI0000002X ནང་ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ་) དང་ གསརཔ་ཅིག་བཙུགས།
+   གཞན་བྱིན་མི་ཚུ་ལུ་ མིང་གཞན་གསརཔ་བཟོ་བཅུག་ནིའི་དོན་ལུ་ མངོན་གསལ་འབད་ནི།
+༣ མིང་གཞན་གསརཔ་འདི་ འདྲ་དཔེ་ཆ་སྙོམས་ལས་ གལ་ཆེཝ་སྦེ་ཡོད་པའི་སྐབས་ལུ་ ལོག་སྟེ་བསྡམ་དགོ།
+   alias to to fort for to free to for to for to for the (`docs-preview`), དེ་ལས་ ཅིག་དཔར་བསྐྲུན་འབད།
+   རྗེས་འཇུག་གསལ་སྟོན་འདི་ SRE གིས་ backlog འདི་བཏོན་ཚརཝ་ཨིན།
 
-### Recovery & closure
+### སླར་གསོ་དང་ཁ་བསྡམས།
 
-1. Monitor `torii_sorafs_replication_sla_total{outcome="missed"}` to ensure the
-   count plateaus.
-2. Capture `sorafs_cli manifest status` output as evidence that every replica is
-   back in compliance.
-3. File or update the replication backlog post-mortem with next steps
-   (provider scaling, chunker tuning, etc.).
+1. བལྟ་རྟོག་པ་ `torii_sorafs_replication_sla_total{outcome="missed"}` འདི་ ངེས་གཏན་བཟོ་ཐབས་ལུ་ཨིན།
+   གྱངས་ཁ་མཐོ་སྒང་།
+2. I18NI0000005X ཐོན་འབྲས་འདི་ འདྲ་དཔེ་རེ་རེ་བཞིན་ཡོད་པའི་སྒྲུབ་བྱེད་སྦེ་ བཟུང་ནི།
+   ཕྱིར་ལོག་ལུ་བསྟུན་ཡོདཔ།
+3. འདྲ་དཔེ་འདི་ཤུལ་མམ་གྱི་རིམ་པ་ཚུ་དང་གཅིག་ཁར་ འདྲ་བཤུས་ཡང་ན་དུས་མཐུན་བཟོ་ནི།
+   (མཁོ་སྤྲོད་འབད་མི་འཇལ་ཚད་དང་ ཆག་ཆར་གྱི་སྒྲིག་བཀོད་ལ་སོགས་པ་ཚུ་)།
 
-## Runbook — Analytics or telemetry outage
+## རན་བུད་ — དབྱེ་དཔྱད།
 
-### Trigger conditions
+### གཟི་བརྗིད་གནས་སྟངས།
 
-- `npm run probe:portal` succeeds but dashboards stop ingesting
-  `AnalyticsTracker` events for >15 minutes.
-- Privacy review flags an unexpected increase in dropped events.
-- `npm run probe:tryit-proxy` fails on `/probe/analytics` paths.
+- `npm run probe:portal` མཐར་འཁྱོལ་ཡོད་རུང་ ཌེཤ་བོརཌི་ཚུ་ བཙུགས་ནི་འདི་བཀག་བཞགཔ་ཨིན།
+  I18NI000000057X >15minutes གི་དོན་ལུ་ `AnalyticsTracker` ལུ།
+- སྒེར་གྱི་བསྐྱར་ཞིབ་འདི་གིས་ བཀོག་བཞག་ཡོད་པའི་བྱུང་ལས་ཚུ་ནང་ རེ་བ་མེད་པའི་ཡར་སེང་ཅིག་ བརྡ་སྟོནམ་ཨིན།
+- I18NI000000058X འདི་ I18NI000000059X འགྲུལ་ལམ་ཚུ་ནང་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
 
-### Response
+### ལན་གསལ
 
-1. Verify build-time inputs: `DOCS_ANALYTICS_ENDPOINT` and
-   `DOCS_ANALYTICS_SAMPLE_RATE` in the failing release artifact (`build/release.json`).
-2. Re-run `npm run probe:portal` with `DOCS_ANALYTICS_ENDPOINT` pointing at the
-   staging collector to confirm the tracker still emits payloads.
-3. If collectors are down, set `DOCS_ANALYTICS_ENDPOINT=""` and rebuild so the
-   tracker short-circuits; record the outage window in the incident timeline.
-4. Validate `scripts/check-links.mjs` still fingerprints `checksums.sha256`
-   (analytics outages must *not* block sitemap validation).
-5. Once the collector recovers, run `npm run test:widgets` to exercise the
-   analytics helper unit tests before republishing.
+1. བཟོ་བསྐྲུན་དུས་ཚོད་ཀྱི་ཨིན་པུཊི་ཚུ་བདེན་སྦྱོར་འབད་: I18NI000000060X དང་།
+   I18NI000000061X ནང་ འཐུས་ཤོར་བྱུང་བའི་གསར་བཏོན་གྱི་ ཅ་རྙིང་ (`build/release.json`).
+2. I18NI000000064X དང་མཉམ་དུ་ I18NI000000063X འདི་ ལུ་སྟོན་ཡོདཔ་ཨིན།
+   འཚོལ་ཞིབ་པ་གིས་ ད་ལྟོ་ཡང་ པེ་ལོཌི་ཚུ་ བཏོནམ་ཨིན།
+3. བསྡུ་སྒྲིག་པ་ཚུ་མར་འབབ་སོང་པ་ཅིན་ `DOCS_ANALYTICS_ENDPOINT=""` གཞི་སྒྲིག་འབད་ཞིནམ་ལས་ ལོག་སྟེ་བཟོ་བསྐྲུན་འབད།
+   traticker གློག་རྒྱུན་ཐུང་ཀུ། བྱུང་རིམ་དུས་ཚོད་ནང་ བརླག་སྟོར་ཞུགས་མི་སྒོ་སྒྲིག་འདི་ཐོ་བཀོད་འབད།
+4. བདེན་དཔང་ `scripts/check-links.mjs` ད་དུང་མཛུབ་མོའི་པར་ `checksums.sha256` ཡིན།
+   (དབྱེ་དཔྱད་བཀག་ཆ་ཚུ་ *མེན* བཀག་ཆའི་ས་ཁོངས་སབ་ཁྲ་བདེན་དཔྱད་འབད་དགོ།)།
+༥༽ བསྡུ་སྒྲིག་འབད་མི་འདི་ ལོག་ཐོབ་ཚརཝ་ད་ `npm run test:widgets` ལག་ལེན་འཐབ་དགོ།
+   དབྱེ་དཔྱད་ཀྱི་གྲོགས་རམ་གྱི་ཡུ་ནིཊ་བརྟག་དཔྱད།
 
-### Post-incident
+### བྱུང་བའི་རྗེས་སུ།
 
-1. Update [`devportal/observability`](./observability) with any new collector
-   limitations or sampling requirements.
-2. File governance notice if any analytics data was dropped or redacted outside
-   policy.
+1. [`devportal/observability`](I18NU000000012X) བསྡུ་སྒྲིག་གསརཔ་གང་རུང་དང་བཅས་དུས་མཐུན་བཟོ་དགོ།
+   ཚད་འཛིན་ཡང་ན་དཔེ་ཚད་ཀྱི་དགོས་མཁོ།
+༢ དབྱེ་དཔྱད་གནས་སྡུད་གང་རུང་ཅིག་ཕྱི་ཁར་བཏོན་བཏང་ཡོདཔ་ ཡང་ན་ བཅོས་སྒྲིག་འབད་བ་ཅིན་ ཡིག་སྣོད་གཞུང་གིས་ བརྡ་སྟོན།
+   སྲིད༌བྱུས།
 
-## Quarterly resilience drills
+## བཞི་ཆའི་ བཀག་སྡོམ་དམག་སྦྱོང་།
 
-Run both drills during the **first Tuesday of each quarter** (Jan/Apr/Jul/Oct)
-or immediately after any major infrastructure change. Store artifacts under
+བཞི་དཔྱ་རེ་རེ་བཞིན་གྱི་ ***དང་པོ་རེས་གཟའ་ལྷག་པ་ལུ་ དམག་སྦྱོང་གཉིས་ཆ་ར་གཡོག་བཀོལ། (Jan/Apr/Jul/Oc)
+ཡང་ན་ གཞི་རྟེན་བསྒྱུར་བཅོས་སྦོམ་གང་རུང་ཅིག་གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ལུ། འོག་ལུ་ཡོད་པའི་ཅ་རྙིང་ཚུ་ གསོག་འཇོག་འབད།
 `artifacts/devportal/drills/<YYYYMMDD>/`.
 
-| Drill | Steps | Evidence |
+| དྲིལ་ | གོམ་པ་ | སྒྲུབ་བྱེད་ |
 | ----- | ----- | -------- |
-| Alias rollback rehearsal | 1. Replay the “Failed deployment” rollback using the most recent production manifest.<br/>2. Re-bind to production once probes pass.<br/>3. Record `portal.manifest.submit.summary.json` and probe logs in the drill folder. | `rollback.submit.json`, probe output, and release tag of the rehearsal. |
-| Synthetic validation audit | 1. Run `npm run probe:portal` and `npm run probe:tryit-proxy` against production and staging.<br/>2. Run `npm run check:links` and archive `build/link-report.json`.<br/>3. Attach screenshots/exports of Grafana panels confirming probe success. | Probe logs + `link-report.json` referencing the manifest fingerprint. |
+| མིང་གཞན་ བསྐོར་བའི་བསྐྱར་སྦྱོང་། | 1. འཕྲལ་གྱི་ཐོན་སྐྱེད་གསལ་སྟོན་ལག་ལེན་འཐབ་སྟེ་ “Failed seport” བཤུད་སྒྲིལ་འདི་བསྐྱར་རྩེད་འབད།<br/>2. འཚོལ་ཞིབ་ཚར་གཅིག་ཐོན་སྐྱེད་ལུ་ལོག་བསྡམས།<br/>3. I18NI000000071X དང་ འཚོལ་ཞིབ་སྣོད་འཛིན་ནང་ དྲན་ཐོ་དྲན་ཐོ་ཚུ་ ཐོ་བཀོད་འབད། | I18NI000000072X, འཚོལ་ཞིབ་ཨའུཊི་པུཊི་དང་ བསྐྱར་སྦྱོང་གི་ བཏོན་གཏང་རྟགས་ཨིན། |
+| བཅོས་མའི་བདེན་དཔྱད་རྩིས་ཞིབ་ | 1. བཟོ་སྐྲུན་དང་ གོ་རིམ་བཟོ་ནིའི་རྒྱབ་འགལ་ I18NI000000073X དང་ I18NI000000744X བརྒྱུགས། `npm run check:links` དང་ཡིག་མཛོད་ `build/link-report.json`.<br/>༣ གཡོག་བཀོལ། འཚོལ་ཞིབ་མཐར་འཁྱོལ་ངེས་གཏན་བཟོ་མི་ Grafana གི་ པེ་ནཱལ་གྱི་ གསལ་གཞི་པར་ཚུ་/ཕྱིར་ཚོང་། | འཚོལ་ཞིབ་དྲན་ཐོ་ + I18NI000000077X གསལ་སྟོན་གྱི་མཛུབ་མོའི་རྟགས་ལུ་གཞི་བསྟུན་འབད་ཡོདཔ། |
 
-Escalate missed drills to the Docs/DevRel manager and SRE governance review,
-since the roadmap requires deterministic, quarterly evidence that both alias
-rollback and portal probes remain healthy.
+ཌོག་/ཌི་ཝི་རེལ་འཛིན་སྐྱོང་པ་དང་ ཨེསི་ཨར་ཨི་གཞུང་བསྐྱར་ཞིབ་ལུ་ སྦྱོང་བརྡར་ཚུ་ འཕྲོ་བརླག་བཏང་ཡོདཔ།
+ལམ་སྟོན་འདི་ལུ་ ཐག་བཅད་དགོཔ་ལས་ ཟླཝ་གསུམ་གྱི་ནང་འཁོད་ལུ་ མིང་གཞན་གཉིས་ཆ་རའི་ སྒྲུབ་བྱེད་དགོཔ་ཨིན།
+བསྐོར་རྒྱབ་དང་ དྲྭ་ཚིགས་འཚོལ་ཞིབ་ཚུ་ གསོ་བའི་གནས་སྟངས་ལུ་བདེ་ཏོག་ཏོ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
 
-## PagerDuty & on-call coordination
+## པེ་གར་ཌུཊི་དང་ཨོན་འབོད་བརྡ་མཉམ་འབྲེལ།
 
-- PagerDuty service **Docs Portal Publishing** owns the alerts generated from
-  `dashboards/grafana/docs_portal.json`. The rules `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache`, and `DocsPortal/TLSExpiry` page the Docs/DevRel
-  primary with Storage SRE as secondary.
-- When paged, include the `DOCS_RELEASE_TAG`, attach screenshots of the affected
-  Grafana panels, and link probe/link-check output in the incident notes before
-  mitigation starts.
-- After mitigation (rollback or redeploy), re-run `npm run probe:portal`,
-  `npm run check:links`, and capture fresh Grafana snapshots showing the metrics
-  back within thresholds. Attach all evidence to the PagerDuty incident prior to
-  resolving it.
-- If two alerts fire simultaneously (for example TLS expiry plus backlog), triage
-  refuses first (stop publishing), execute the rollback procedure, then clear
-  TLS/backlog items with Storage SRE on the bridge.
+- པེ་ཇར་ཌུ་ཊི་ཞབས་ཏོག་ **ཡིག་ཆ་ པར་སྐྲུན་** གིས་ ལས་བཏོན་ཡོད་པའི་ཉེན་བརྡ་ཚུ་ བདག་དབང་འབདཝ་ཨིན།
+  `dashboards/grafana/docs_portal.json`. ལམ་ལུགས་ `DocsPortal/GatewayRefusals`,
+  `DocsPortal/AliasCache`, དང་ `DocsPortal/TLSExpiry` ཡིག་ཆ་/DevRel
+  གཞི་རིམ་དང་ གསོག་འཇོག་ SRE འདི་ གལ་གནད་ཆུང་བ།
+- ཤོག་ལེབ་བཟོ་བའི་སྐབས་ `DOCS_RELEASE_TAG` འདི་ཚུད་དེ་ གནོད་སྐྱོན་བྱུང་མི་གི་གསལ་གཞི་ཚུ་མཉམ་སྦྲགས་འབད།
+  Grafana པེ་ནཱལ་ཚུ་དང་ བྱུང་རྐྱེན་དྲན་ཐོ་ཚུ་ནང་ འབྲེལ་མཐུད་འཚོལ་ཞིབ་/འབྲེལ་ལམ་-ཞིབ་དཔྱད་ཨའུཊི་པུཊི་འདི་ ཧེ་མ་གི་ཧེ་མ་ཨིན།
+  མར་ཕབ་འགོ་བཙུགསཔ་ཨིན།
+- མར་ཕབ་ཀྱི་ཤུལ་ལས་ (རོལ་དབྱངས་ཡང་ན་ redeploy), ལོག་སྟེ་ `npm run probe:portal`,
+  `npm run check:links`, དང་ I18NT0000004X པར་ལེན་གསརཔ་ཚུ་ མེ་ཊིགསི་སྟོན་ནི།
+  ཕྱིར་ལོག་ཚད་གཞི་ནང་། ཧེ་མ་ པེ་ཇར་ཌུ་ཊི་བྱུང་རྐྱེན་ལུ་ སྒྲུབ་བྱེད་ཚུ་ག་ར་མཉམ་སྦྲགས་འབད།
+  དེ་སེལ་ཐབས་འབད་དོ།
+- གལ་སྲིད་གཉིས་ དུས་མཉམ་དུ་ ཉེན་བརྡ་འབད་བ་ཅིན་ (དཔེར་ན་ ཊི་ཨེལ་ཨེསི་ དུས་ཡུན་ཚང་མི་དང་ རྒྱབ་ལོག་) ཚད་ཚད།
+  དང་པ་རང་ ངོས་ལེན་མ་འབད་ (དཔར་བསྐྲུན་བཀག་ཆ་), དེ་ལས་ བསྐོར་རྒྱབ་ཀྱི་བྱ་རིམ་འདི་ ལག་ལེན་འཐབ་ཞིནམ་ལས་ དེ་ལས་ གསལ་ཏོག་ཏོ་ཨིན།
+  ཟམ་གུ་ཡོད་པའི་ གསོག་འཇོག་ཨེསི་ཨར་ཨི་དང་གཅིག་ཁར་ ཊི་ཨེལ་ཨེསི་/རྒྱབ་ལོག་རྣམ་གྲངས་ཚུ།

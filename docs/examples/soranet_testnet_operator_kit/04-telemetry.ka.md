@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# ტელემეტრიის მოთხოვნები
 
-## Prometheus Targets
+## Prometheus მიზნები
 
-Scrape the relay and orchestrator with the following labels:
+გადაფურცლეთ რელე და ორკესტრი შემდეგი ეტიკეტებით:
 
 ```yaml
 - job_name: "soranet-relay"
@@ -30,36 +31,36 @@ Scrape the relay and orchestrator with the following labels:
         role: "orchestrator"
 ```
 
-## Required Dashboards
+## საჭირო დაფები
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+1. `dashboards/grafana/soranet_testnet_overview.json` *(გამოქვეყნებული)* — ჩატვირთეთ JSON, შემოიტანეთ ცვლადები `region` და `relay_id`.
+2. `dashboards/grafana/soranet_privacy_metrics.json` *(არსებული SNNet-8 აქტივი)* — უზრუნველყოს კონფიდენციალურობის თაიგულის პანელები ხარვეზების გარეშე.
 
-## Alert Rules
+## გაფრთხილების წესები
 
-Thresholds must match the playbook expectation:
+ზღვრები უნდა შეესაბამებოდეს სათამაშო წიგნის მოლოდინს:
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- `soranet_privacy_circuit_events_total{kind="downgrade"}` მატება > 0 10 წუთში იწვევს `critical`.
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 30 წუთში იწვევს `warning`.
+- `up{job="soranet-relay"}` == 0 2 წუთის განმავლობაში იწვევს `critical`.
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+ჩატვირთეთ თქვენი წესები Alertmanager-ში `testnet-t0` მიმღებით; დაადასტურეთ `amtool check-config`-ით.
 
-## Metrics Evaluation
+## მეტრიკის შეფასება
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+შეაგროვეთ 14 დღიანი სნეპშოტი და მიაწოდეთ SNNet-10 ვალიდატორს:
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- შეცვალეთ ნიმუშის ფაილი თქვენი ექსპორტირებული სნეპშოტით, როდესაც მუშაობს პირდაპირ მონაცემებზე.
+- `status = fail` შედეგი ბლოკავს აქციას; მოაგვარეთ მონიშნული ჩეკი(ები) ხელახლა ცდამდე.
 
-## Reporting
+## მოხსენება
 
-Every week upload:
+ყოველ კვირას ატვირთეთ:
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- შეკითხვის სნეპშოტები (`.png` ან `.pdf`), სადაც ნაჩვენებია PQ თანაფარდობა, მიკროსქემის წარმატების მაჩვენებელი და PoW ამოხსნის ჰისტოგრამა.
+- Prometheus ჩაწერის წესის გამომავალი `soranet_privacy_throttles_per_minute`-ისთვის.
+- მოკლე ნარატივი, რომელიც აღწერს გაშვებულ ნებისმიერ გაფრთხილებას და შემარბილებელ ნაბიჯებს (შეიცავს დროის ნიშანს).

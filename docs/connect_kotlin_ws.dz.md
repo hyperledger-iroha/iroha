@@ -7,39 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b54527ff5f4376f4d8aa1562964479b44a3ebd022a0f70ca8f864d67b526af5
 source_last_modified: "2026-01-05T18:22:23.393526+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Kotlin WS Join with Tokens (OkHttp)
+## ཀོཊ་ལིན་ ཌབ་ལུ་ཨེསི་ ཊོ་ཀེན་ (OkHttp) དང་ཅིག་ཁར་ མཐུད་དགོ།
 
-Dependencies (Gradle):
+བརྟེན་པ་ (Gradle):
 ```kotlin
 dependencies {
   implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 ```
 
-```kotlin
-import okhttp3.*
+I18NF0000002X
 
-fun joinWs(node: String, sid: String, role: String, token: String, listener: WebSocketListener): WebSocket {
-  val http = node.replace("http", "ws")
-  val url = "$http/v1/connect/ws?sid=$sid&role=$role"
-  val req = Request.Builder()
-    .url(url)
-    .addHeader("Authorization", "Bearer $token")
-    .build()
-  val client = OkHttpClient()
-  return client.newWebSocket(req, listener)
-}
-
-// Example usage:
-// val ws = joinWs("http://127.0.0.1:8080", sid, "app", tokenApp, object: WebSocketListener() {
-//   override fun onOpen(webSocket: WebSocket, response: Response) { println("open") }
-//   override fun onMessage(webSocket: WebSocket, bytes: ByteString) { println("binary ${'$'}{bytes.size}") }
-// })
-```
-
-### Sealing/Opening Payloads (ChaCha20‑Poly1305 + AAD)
+### བཙུགས་ནི་/ཁ་ཕྱེ་ནིའི་དངུལ་ཕོགས་ཚུ་ (ཅ་ཅ་༢༠-པོ་ལི་༡༣༠༥ + ཨེ་ཨེ་ཌི་)
 
 ```kotlin
 import javax.crypto.Cipher

@@ -11,65 +11,66 @@ id: registry-schema
 title: Sora Name Service Registry Schema
 sidebar_label: Registry schema
 description: Norito data structures, lifecycle rules, and event contracts for SNS registry smart contracts (SN-2a).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registry_schema.md` and now serves as the
-canonical portal copy. The source file remains for translation updates.
+:::note Կանոնական աղբյուր
+Այս էջը արտացոլում է `docs/source/sns/registry_schema.md`-ը և այժմ ծառայում է որպես
+կանոնական պորտալի պատճենը: Աղբյուրի ֆայլը մնում է թարգմանության թարմացումների համար:
 :::
 
 # Sora Name Service Registry Schema (SN-2a)
 
-**Status:** Drafted 2026-03-24 -- submitted for SNS program review  
-**Roadmap link:** SN-2a “Registry schema & storage layout”  
-**Scope:** Define the canonical Norito structures, lifecycle states, and emitted events for the Sora Name Service (SNS) so registry and registrar implementations stay deterministic across contracts, SDKs, and gateways.
+**Կարգավիճակ.** Նախագծված 2026-03-24 - ներկայացվել է SNS ծրագրի վերանայման  
+**Ճանապարհային քարտեզի հղում.** SN-2a «Ռեեստրի սխեմա և պահեստավորման դասավորություն»  
+**Ծավալը.** Սահմանեք կանոնական Norito կառուցվածքները, կյանքի ցիկլի վիճակները և թողարկված իրադարձությունները Sora Name Service-ի (SNS) համար, որպեսզի գրանցամատյանի և գրանցամատյանի իրականացումները մնան որոշիչ պայմանագրերի, SDK-ների և դարպասների միջև:
 
-This document completes the schema deliverable for SN-2a by specifying:
+Այս փաստաթուղթը լրացնում է SN-2a-ի առաքման սխեման՝ նշելով.
 
-1. Identifiers and hashing rules (`SuffixId`, `NameHash`, selector derivation).
-2. Norito structs/enums for name records, suffix policies, pricing tiers, revenue splits, and registry events.
-3. Storage layout and index prefixes for deterministic replay.
-4. A state machine covering registration, renewal, grace/redemption, freezes, and tombstones.
-5. Canonical events consumed by DNS/gateway automation.
+1. Նույնացուցիչներ և հեշավորման կանոններ (`SuffixId`, `NameHash`, ընտրիչի ածանցում):
+2. Norito structs/enums անունների գրառումների, վերջածանցների քաղաքականության, գնագոյացման մակարդակների, եկամուտների բաժանումների և ռեեստրի իրադարձությունների համար:
+3. Պահպանման դասավորությունը և ինդեքսի նախածանցները դետերմինիստական ​​վերարտադրման համար:
+4. Պետական ​​մեքենա, որը ծածկում է գրանցումը, նորացումը, շնորհը/փրկումը, սառեցումները և տապանաքարերը:
+5. Կանոնական իրադարձություններ, որոնք սպառվում են DNS/gateway ավտոմատացման միջոցով:
 
-## 1. Identifiers & Hashing
+## 1. Նույնացուցիչներ և հաշինգ
 
-| Identifier | Description | Derivation |
-|------------|-------------|------------|
-| `SuffixId` (`u16`) | Registry-wide identifier for top-level suffixes (`.sora`, `.nexus`, `.dao`). Aligned with the suffix catalog in [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Assigned by governance vote; stored in `SuffixPolicyV1`. |
-| `SuffixSelector` | Canonical string form of the suffix (ASCII, lower-case). | Example: `.sora` → `sora`. |
-| `NameSelectorV1` | Binary selector for the registered label. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Label is NFC + lower-case per Norm v1. |
-| `NameHash` (`[u8;32]`) | Primary lookup key used by contracts, events, and caches. | `blake3(NameSelectorV1_bytes)`. |
+| Նույնացուցիչ | Նկարագրություն | ածանցում |
+|-------------|-----------------------------|
+| `SuffixId` (`u16`) | Վերին մակարդակի վերջածանցների ռեեստրի ամբողջ նույնացուցիչ (`.sora`, `.nexus`, `.dao`): Հավասարեցված է վերջածանցների կատալոգի հետ [`sns_suffix_governance_charter.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md): | Նշանակվել է կառավարման քվեարկությամբ; պահվում է `SuffixPolicyV1`-ում: |
+| `SuffixSelector` | Վերջածանցի կանոնական լարային ձև (ASCII, փոքրատառ): | Օրինակ՝ `.sora` → `sora`: |
+| `NameSelectorV1` | Երկուական ընտրիչ գրանցված պիտակի համար: | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Պիտակը NFC + փոքրատառ է՝ ըստ Normv1-ի: |
+| `NameHash` (`[u8;32]`) | Առաջնային որոնման բանալին օգտագործվում է պայմանագրերի, իրադարձությունների և քեշերի կողմից: | `blake3(NameSelectorV1_bytes)`. |
 
-Determinism requirements:
+Դետերմինիզմի պահանջներ.
 
-- Labels are normalised via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Incoming user strings MUST be normalised before hashing.
-- Reserved labels (from `SuffixPolicyV1.reserved_labels`) never enter the registry; governance-only overrides emit `ReservedNameAssigned` events.
+- Պիտակները նորմալացվում են Normv1-ի միջոցով (UTS-46 խիստ, STD3 ASCII, NFC): Մուտքային օգտատերերի տողերը ՊԵՏՔ Է նորմալացվեն նախքան հեշացումը:
+- Վերապահված պիտակները (`SuffixPolicyV1.reserved_labels`-ից) երբեք գրանցամատյան չեն մտնում. Միայն կառավարման համար նախատեսված անտեսումները թողարկում են `ReservedNameAssigned` իրադարձություններ:
 
-## 2. Norito Structures
+## 2. Norito կառուցվածքներ
 
 ### 2.1 NameRecordV1
 
-| Field | Type | Notes |
+| Դաշտային | Տեսակ | Ծանոթագրություններ |
 |-------|------|-------|
-| `suffix_id` | `u16` | References `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Raw selector bytes for audit/debug. |
-| `name_hash` | `[u8; 32]` | Key for maps/events. |
-| `normalized_label` | `AsciiString` | Human-readable label (post Norm v1). |
-| `display_label` | `AsciiString` | Steward-provided casing; optional cosmetics. |
-| `owner` | `AccountId` | Controls renewals/transfers. |
-| `controllers` | `Vec<NameControllerV1>` | References target account addresses, resolvers, or application metadata. |
-| `status` | `NameStatus` | Lifecycle flag (see Section 4). |
-| `pricing_class` | `u8` | Index into suffix pricing tiers (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Block timestamp of the initial activation. |
-| `expires_at` | `Timestamp` | End of paid term. |
-| `grace_expires_at` | `Timestamp` | End of auto-renew grace (default +30 days). |
-| `redemption_expires_at` | `Timestamp` | End of redemption window (default +60 days). |
-| `auction` | `Option<NameAuctionStateV1>` | Present when Dutch reopen or premium auctions are active. |
-| `last_tx_hash` | `Hash` | Deterministic pointer to the transaction that produced this version. |
-| `metadata` | `Metadata` | Arbitrary registrar metadata (text records, proofs). |
+| `suffix_id` | `u16` | Հղումներ `SuffixPolicyV1`. |
+| `selector` | `NameSelectorV1` | Հում ընտրիչ բայթեր աուդիտի/վրիպազերծման համար: |
+| `name_hash` | `[u8; 32]` | Քարտեզների/միջոցառումների բանալին: |
+| `normalized_label` | `AsciiString` | Մարդկանց համար ընթեռնելի պիտակ (Post Normv1): |
+| `display_label` | `AsciiString` | Ստյուարդի կողմից տրամադրված պատյան; ընտրովի կոսմետիկա: |
+| `owner` | `AccountId` | Վերահսկում է նորացումները/փոխանցումները: |
+| `controllers` | `Vec<NameControllerV1>` | Հղումներն ուղղված են հաշվի հասցեներին, լուծիչներին կամ հավելվածի մետատվյալներին: |
+| `status` | `NameStatus` | Կյանքի ցիկլի դրոշը (տես Բաժին 4): |
+| `pricing_class` | `u8` | Ինդեքս՝ ըստ վերջածանցների գնագոյացման մակարդակների (ստանդարտ, պրեմիում, վերապահված): |
+| `registered_at` | `Timestamp` | Արգելափակել սկզբնական ակտիվացման ժամանակացույցը: |
+| `expires_at` | `Timestamp` | Վճարովի ժամկետի ավարտը: |
+| `grace_expires_at` | `Timestamp` | Ավտոմատ թարմացման շնորհի ավարտը (կանխադրված +30 օր): |
+| `redemption_expires_at` | `Timestamp` | Հետգնման պատուհանի ավարտը (կանխադրված +60 օր): |
+| `auction` | `Option<NameAuctionStateV1>` | Ներկայացնել, երբ հոլանդական վերաբացված կամ պրեմիում աճուրդներն ակտիվ են: |
+| `last_tx_hash` | `Hash` | Դետերմինիստական ​​ցուցիչ գործարքի համար, որն արտադրել է այս տարբերակը: |
+| `metadata` | `Metadata` | Կամայական ռեգիստրի մետատվյալներ (տեքստային գրառումներ, ապացույցներ): |
 
-Supporting structs:
+Աջակցող կառույցներ.
 
 ```text
 Enum NameStatus {
@@ -125,26 +126,26 @@ Enum AuctionKind {
 }
 ```
 
-### 2.2 SuffixPolicyV1
+### 2.2 վերջածանցՔաղաքականությունV1
 
-| Field | Type | Notes |
+| Դաշտային | Տեսակ | Ծանոթագրություններ |
 |-------|------|-------|
-| `suffix_id` | `u16` | Primary key; stable across policy versions. |
-| `suffix` | `AsciiString` | e.g., `sora`. |
-| `steward` | `AccountId` | Steward defined in the governance charter. |
-| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset identifier (for example `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
-| `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) per charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
-| `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
-| `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |
-| `policy_version` | `u16` | Incremented on every change. |
-| `metadata` | `Metadata` | Extended notes (KPI covenant, compliance doc hashes). |
+| `suffix_id` | `u16` | Առաջնային բանալին; կայուն է քաղաքականության տարբերակներում: |
+| `suffix` | `AsciiString` | օրինակ՝ `sora`: |
+| `steward` | `AccountId` | Ստյուարդը սահմանված է կառավարման կանոնադրությամբ։ |
+| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`: |
+| `payment_asset_id` | `AsciiString` | Կանխադրված հաշվարկային ակտիվի նույնացուցիչ (օրինակ՝ `xor#sora`): |
+| `pricing` | `Vec<PriceTierV1>` | Շերտավոր գնագոյացման գործակիցներ և տևողության կանոններ: |
+| `min_term_years` | `u8` | Հարկ գնված ժամկետի համար՝ անկախ մակարդակի վերացումից: |
+| `grace_period_days` | `u16` | Կանխադրված 30. |
+| `redemption_period_days` | `u16` | Կանխադրված 60. |
+| `max_term_years` | `u8` | Առաջնային նորացման առավելագույն երկարությունը: |
+| `referral_cap_bps` | `u16` | <=1000 (10%) մեկ կանոնադրության համար: |
+| `reserved_labels` | `Vec<ReservedNameV1>` | Կառավարման տրամադրված ցուցակ՝ հանձնարարականների ցուցումներով: |
+| `fee_split` | `SuffixFeeSplitV1` | Գանձապետական ​​/ կառավարիչ / ուղղորդման բաժնետոմսեր (հիմնական միավորներ): |
+| `fund_splitter_account` | `AccountId` | Հաշիվ, որը պահում է պահուստ + միջոցները բաշխում է: |
+| `policy_version` | `u16` | Ավելացել է յուրաքանչյուր փոփոխության վրա: |
+| `metadata` | `Metadata` | Ընդլայնված նշումներ (KPI դաշնագիր, համապատասխանության փաստաթղթերի հեշեր): |
 
 ```text
 Struct PriceTierV1 {
@@ -172,18 +173,18 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Revenue & Settlement Records
+### 2.3 Եկամուտների և հաշվարկների գրառումներ
 
-| Struct | Fields | Purpose |
+| Կառուցվածք | Դաշտեր | Նպատակը |
 |--------|--------|---------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
+| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, I18NI000001810X, I18NI000001813X. | Մեկ հաշվարկային դարաշրջանի համար ուղղորդված վճարումների դետերմինիստիկ գրառում (շաբաթական): |
+| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`: | Թողարկվել է ամեն անգամ, երբ վճարային գրառում է կատարվում (գրանցում, նորացում, աճուրդ): |
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+Բոլոր `TokenValue` դաշտերն օգտագործում են Norito-ի կանոնական ֆիքսված կետի կոդավորումը՝ արտարժույթի կոդով, որը հայտարարված է առնչվող `SuffixPolicyV1`-ում:
 
-### 2.4 Registry Events
+### 2.4 Գրանցման իրադարձություններ
 
-Canonical events provide a replay log for DNS/gateway automation and analytics.
+Կանոնական իրադարձությունները ապահովում են DNS/gateway ավտոմատացման և վերլուծությունների կրկնօրինակման մատյան:
 
 ```text
 Struct RegistryEventV1 {
@@ -212,52 +213,52 @@ Enum RegistryEventKind {
 }
 ```
 
-Events must be appended to a replayable log (e.g., `RegistryEvents` domain) and mirrored to gateway feeds so DNS caches invalidate within SLA.
+Իրադարձությունները պետք է կցվեն վերարտադրվող մատյանին (օրինակ՝ `RegistryEvents` տիրույթ) և արտացոլվեն դարպասների հոսքերին, որպեսզի DNS քեշերը անվավեր ճանաչվեն SLA-ում:
 
-## 3. Storage Layout & Indexes
+## 3. Պահպանման դասավորություն և ինդեքսներ
 
-| Key | Description |
+| Բանալի | Նկարագրություն |
 |-----|-------------|
-| `Names::<name_hash>` | Primary map from `name_hash` to `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Secondary index for wallet UI (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detect conflicts, power deterministic search. |
-| `SuffixPolicies::<suffix_id>` | Latest `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` history. |
-| `RegistryEvents::<u64>` | Append-only log keyed by monotonically increasing sequence. |
+| `Names::<name_hash>` | Առաջնային քարտեզ `name_hash`-ից մինչև `NameRecordV1`: |
+| `NamesByOwner::<AccountId, suffix_id>` | Երկրորդական ինդեքս դրամապանակի UI-ի համար (էջադրման համար հարմար): |
+| `NamesByLabel::<suffix_id, normalized_label>` | Հայտնաբերել կոնֆլիկտներ, ուժի դետերմինիստական ​​որոնում: |
+| `SuffixPolicies::<suffix_id>` | Վերջին `SuffixPolicyV1`. |
+| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` պատմություն. |
+| `RegistryEvents::<u64>` | Միայն հավելվածի գրանցամատյանը՝ միապաղաղ աճող հաջորդականությամբ: |
 
-All keys serialise using Norito tuples to keep hashing deterministic across hosts. Index updates occur atomically alongside the primary record.
+Բոլոր ստեղները սերիականացվում են՝ օգտագործելով Norito բազմապատիկները՝ հոսթինգը որոշիչ պահելու համար: Ինդեքսների թարմացումները տեղի են ունենում ատոմային եղանակով առաջնային գրառումների հետ մեկտեղ:
 
 ## 4. Lifecycle State Machine
 
-| State | Entry Conditions | Allowed Transitions | Notes |
-|-------|-----------------|---------------------|-------|
-| Available | Derived when `NameRecord` absent. | `PendingAuction` (premium), `Active` (standard register). | Availability search reads indexes only. |
-| PendingAuction | Created when `PriceTierV1.auction_kind` ≠ none. | `Active` (auction settles), `Tombstoned` (no bids). | Auctions emit `AuctionOpened` and `AuctionSettled`. |
-| Active | Registration or renewal succeeded. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` drives transition. |
-| GracePeriod | Automatically when `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 days; still resolves but flagged. |
-| Redemption | `now > grace_expires_at` but `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Commands require penalty fee. |
-| Frozen | Governance or guardian freeze. | `Active` (after remediation), `Tombstoned`. | Cannot transfer or update controllers. |
-| Tombstoned | Voluntary surrender, permanent dispute outcome, or expired redemption. | `PendingAuction` (Dutch reopen) or remains tombstoned. | Event `NameTombstoned` must include reason. |
+| Պետական ​​| Մուտքի պայմանները | Թույլատրված անցումներ | Ծանոթագրություններ |
+|-------|----------------|--------------------|-------|
+| Հասանելի | Ստացվում է, երբ `NameRecord` բացակայում է: | `PendingAuction` (պրեմիում), `Active` (ստանդարտ ռեգիստր): | Հասանելիության որոնումը կարդում է միայն ինդեքսները: |
+| Սպասվող Աճուրդ | Ստեղծվել է, երբ `PriceTierV1.auction_kind` ≠ ոչ մեկը: | `Active` (աճուրդը մարվում է), `Tombstoned` (առանց հայտերի): | Աճուրդները թողարկում են `AuctionOpened` և `AuctionSettled`: |
+| Ակտիվ | Գրանցումը կամ երկարաձգումը հաջողվեց: | `GracePeriod`, `Frozen`, `Tombstoned`: | `expires_at` կրիչներ անցում. |
+| GracePeriod | Ավտոմատ, երբ `now > expires_at`: | `Active` (ժամանակին թարմացում), `Redemption`, `Tombstoned`: | Կանխադրված +30 օր; դեռ լուծում է, բայց դրոշակավորված: |
+| Փրկում | `now > grace_expires_at` բայց `< redemption_expires_at`: | `Active` (ուշ թարմացում), `Tombstoned`: | Հրամանները պահանջում են տուգանք. |
+| Սառեցված | Կառավարման կամ խնամակալի սառեցում: | `Active` (վերականգնումից հետո), `Tombstoned`: | Հնարավոր չէ փոխանցել կամ թարմացնել կարգավորիչները: |
+| տապանաքար | Կամավոր հանձնում, մշտական ​​վեճի արդյունք կամ ժամկետանց մարում: | `PendingAuction` (հոլանդերեն վերաբացվել) կամ մնում է տապանաքար: | Իրադարձությունը `NameTombstoned` պետք է ներառի պատճառ: |
 
-State transitions MUST emit the corresponding `RegistryEventKind` so downstream caches stay coherent. Tombstoned names entering Dutch reopen auctions attach an `AuctionKind::DutchReopen` payload.
+Պետությունների անցումները ՊԵՏՔ Է թողարկեն համապատասխան `RegistryEventKind`, որպեսզի հոսանքով ներքև գտնվող քեշերը մնան համահունչ: Հոլանդիայի վերաբացված աճուրդներում հայտնված շիրմաքար անունները կցում են `AuctionKind::DutchReopen` օգտակար բեռ:
 
 ## 5. Canonical Events & Gateway Sync
 
-Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
+Դարպասները բաժանորդագրվում են `RegistryEventV1`-ին և համաժամացվում DNS/SoraFS-ի հետ՝
 
-1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
-3. Pinning updated zone data via the SoraDNS workflow described in [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+1. Վերցվում է վերջին `NameRecordV1`-ը, որը վկայակոչված է իրադարձությունների հաջորդականությամբ:
+2. Վերականգնվող լուծիչների կաղապարներ (նախընտրելի IH58 + երկրորդ լավագույն սեղմված (`sora`) հասցեներ, տեքստային գրառումներ):
+3. Գոտու թարմացված տվյալների ամրացում SoraDNS աշխատանքային հոսքի միջոցով, որը նկարագրված է [`soradns_registry_rfc.md`]-ում (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md):
 
-Event delivery guarantees:
+Միջոցառումների առաքման երաշխիքներ.
 
-- Every transaction affecting a `NameRecordV1` *must* append exactly one event with a strictly increasing `version`.
-- `RevenueSharePosted` events reference settlements emitted by `RevenueShareRecordV1`.
-- Freeze/unfreeze/tombstone events include governance artefact hashes inside `metadata` for audit replay.
+- `NameRecordV1`-ի վրա ազդող յուրաքանչյուր գործարք *պետք է* կցել ուղիղ մեկ իրադարձություն՝ խիստ աճող `version`-ով:
+- `RevenueSharePosted` իրադարձությունների հղման կարգավորումներ, որոնք թողարկվել են `RevenueShareRecordV1`-ի կողմից:
+- Սառեցնել/ապասառեցնել/տապանաքարի իրադարձությունները ներառում են կառավարման արտեֆակտի հեշեր `metadata`-ի ներսում՝ աուդիտի վերարտադրման համար:
 
-## 6. Example Norito Payloads
+## 6. Օրինակ Norito Օգտակար բեռներ
 
-### 6.1 NameRecord Example
+### 6.1 NameRecord Օրինակ
 
 ```text
 NameRecordV1 {
@@ -287,7 +288,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 SuffixPolicy Example
+### 6.2 վերջածանցՔաղաքականության օրինակ
 
 ```text
 SuffixPolicyV1 {
@@ -315,10 +316,8 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Next Steps
+## 7. Հաջորդ քայլերը- **SN-2b (Գրանցող API և կառավարման կեռիկներ).** ցուցադրել այս կառուցվածքները Torii-ի (Norito և JSON կապեր) և կառավարման արտեֆակտների համար մուտքի հաղորդագրության ստուգումների միջոցով:
+- **SN-3 (Աճուրդի և գրանցման շարժիչ):** նորից օգտագործեք `NameAuctionStateV1`-ը` կատարելագործելու/բացահայտելու և հոլանդական վերաբացման տրամաբանությունը:
+- **SN-5 (Վճարում և հաշվարկ).** լծակ `RevenueShareRecordV1` ֆինանսական հաշտեցման և հաշվետվությունների ավտոմատացման համար:
 
-- **SN-2b (Registrar API & governance hooks):** expose these structs via Torii (Norito and JSON bindings) and wire admission checks to governance artefacts.
-- **SN-3 (Auction & registration engine):** reuse `NameAuctionStateV1` to implement commit/reveal and Dutch reopen logic.
-- **SN-5 (Payment & settlement):** leverage `RevenueShareRecordV1` for finance reconciliation and reporting automation.
-
-Questions or change requests should be filed alongside the SNS roadmap updates in `roadmap.md` and mirrored in `status.md` when merged.
+Հարցերը կամ փոփոխության հարցումները պետք է ներկայացվեն SNS-ի ճանապարհային քարտեզի թարմացումների հետ մեկտեղ `roadmap.md`-ում և արտացոլվեն `status.md`-ում՝ միավորվելիս:

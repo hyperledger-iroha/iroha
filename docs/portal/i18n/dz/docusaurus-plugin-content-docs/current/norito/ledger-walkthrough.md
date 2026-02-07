@@ -7,42 +7,44 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This walkthrough complements the [Norito quickstart](./quickstart.md) by showing
-how to mutate and inspect ledger state with the `iroha` CLI. You will register a
-new asset definition, mint some units into the default operator account, transfer
-part of the balance to another account, and verify the resulting transactions
-and holdings. Each step mirrors the flows covered in the Rust/Python/JavaScript
-SDK quickstarts so you can confirm parity between CLI and SDK behaviour.
+འདི་གིས་ [Norito མགྱོགས་དྲགས་འགོ་བཙུགས་](./quickstart.md) སྟོན་ཐོག་ལས་ ལྷན་ཐབས་འབདཝ་ཨིན།
+`iroha` CLI དང་མཉམ་དུ་ ལག་ལེ་ཇར་གྱི་མངའ་སྡེ་ གང་འདྲ་བྱས་ནས་བརྟག་དཔྱད་བྱེད་དགོས། ཁྱོད་ཀྱིས་ཐོ་བཀོད་འབད་འོང་།
+རྒྱུ་དངོས་ངེས་ཚིག་གསརཔ་, ཆ་ཚན་ལ་ལོ་ཅིག་ སྔོན་སྒྲིག་བཀོལ་སྤྱོད་རྩིས་ཐོ་ནང་ བཏོན་གཏང་། སྤོ་བཤུད་འབད། སྤོ་བཤུད་འབད།
+ལྷག་ལུས་ཀྱི་ཆ་ཤས་ཅིག་ རྩིས་ཐོ་གཞན་ཅིག་ལུ་དང་ གྲུབ་འབྲས་ཐོན་མི་ཚོང་འབྲེལ་ཚུ་བདེན་སྦྱོར་འབད།
+།དང་འཛིན་པ་དང་། གོ་རིམ་རེ་རེ་བཞིན་ མེ་ལོང་རེ་རེ་བཞིན་ རསཊ་/པའེ་ཐོན་/ཇ་བ་ཨིསི་ཀིརིཔ་ནང་ བཀབ་པའི་ བཞུར་རྒྱུན་ཚུ་ འབྱུངམ་ཨིན།
+SDK མགྱོགས་དྲགས་འགོ་འཛིན། ཁྱོད་ཀྱིས་ CLI དང་ SDK གི་སྤྱོད་ལམ་གྱི་བར་ན་ ཆ་སྙོམས་འདི་ ངེས་གཏན་བཟོ་ཚུགས།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Follow the [quickstart](./quickstart.md) to boot the single-peer network via
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Ensure `iroha` (the CLI) is built or downloaded and that you can reach the
-  peer using `defaults/client.toml`.
-- Optional helpers: `jq` (formatting JSON responses) and a POSIX shell for the
-  environment-variable snippets used below.
+- [./quickstart.md) བརྒྱུད་དེ་ པི་རེ་པིར་ཡོངས་འབྲེལ་འདི་ བུཊི་འབད་ནིའི་དོན་ལུ་ [ཁིག་སི་ཊརཊི་](I18NU0000017X) ལུ་བལྟ།
+  I18NI0000002X.
+- I18NI000000023X (The CLI) བཟོ་བསྐྲུན་ཡང་ན་ཕབ་ལེན་འབད་དེ་ ཁྱོད་ཀྱིས་ ལྷོད་ཚུགས།
+  Peer ལག་ལེན་འཐབ་སྟེ་ `defaults/client.toml`.
+- གདམ་ཁ་ཅན་གྱི་གྲོགས་རམ་པ་: `jq` (JSON ལན་ཚུ་བཟོ་བཅོས་འབད་ནི) དང་ པི་གི་དོན་ལུ་ པི་ཨོ་ཨེསི་ཨའི་ཨེགསི་ཤེལ་ཅིག།
+  འོག་ལུ་ལག་ལེན་འཐབ་མི་མཐའ་འཁོར་གནས་སྟངས་ཀྱི་ཆ་ཤས་ཚུ་ཨིན།
 
-Throughout the guide, replace `$ADMIN_ACCOUNT` and `$RECEIVER_ACCOUNT` with the
-account IDs you plan to use. The defaults bundle already includes two accounts
-derived from the demo keys:
+ལམ་སྟོན་གྱི་སྐབས་ལུ་ `$ADMIN_ACCOUNT` དང་ I18NI000000027X འདི་ ཚབ་བཙུགས་དགོ།
+རྩིས་ཐོ་ཨའི་ཌི་ ཁྱོད་ཀྱིས་ལག་ལེན་འཐབ་ནི་གི་འཆར་གཞི་ཡོད། སྔོན་སྒྲིག་བུནཌལ་དེ་གིས་ཧེ་མ་ལས་རྩིས་ཐོ་གཉིས་ཚུད་ཡོདཔ་ཨིན།
+བརྡ་སྟོན་ལྡེ་མིག་ལས་བྱུང་བ།
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirm the values by listing the first few accounts:
+གནས་གོང་ཚུ་ རྩིས་ཐོ་འགོ་དང་པ་ཚུ་ ཐོ་བཀོད་འབད་དེ་ ངེས་དཔྱད་འབད།
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspect the genesis state
+## 1. རིགས་རིགས་ཀྱི་དཔྱད་གཞི།
 
-Start by exploring the ledger the CLI is targeting:
+ལག་དེབ་འདི་འཚོལ་ཞིབ་འབད་དེ་འགོ་བཙུགས། CLI འདི་དམིགས་གཏད་ཨིན།
 
 ```sh
 # Domains registered in genesis
@@ -57,41 +59,34 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-These commands rely on Norito-backed responses, so filtering and pagination are
-deterministic and match what the SDKs receive.
+བརྡ་བཀོད་འདི་ཚུ་གིས་ Norito-backed ལན་ཚུ་ལུ་བློ་གཏད་དེ་ དེ་འབདཝ་ལས་ ཚགས་མ་དང་ ཤོག་ལེབ་འདི་ ༡.
+གཏན་འབེབས་དང་ SDKs གིས་ཐོབ་མི་དང་མཐུན་སྒྲིག་འབད།
 
-## 2. Register an asset definition
+## 2. བདོག་དད་ངེས་ཚིག་ཐོ་འགོད།
 
-Create a new, infinitely mintable asset called `coffee` inside the `wonderland`
-domain:
+`wonderland` ནང་ལུ་ `coffee` ཟེར་མི་ རྒྱུ་དངོས་གསརཔ་ཅིག་གསར་བསྐྲུན་འབད།
+མངའ༌ཁོངས:
 
-```sh
-iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
-```
+I18NF0000008X
 
-The CLI prints the submitted transaction hash (for example,
-`0x5f…`). Save it so you can query the status later.
+CLI གིས་ བཙུགས་ཡོད་པའི་ ཚོང་འབྲེལ་ཧེཤ་ (དཔེར་ན་ ,
+`0x5f…`). འདི་སྲུངས་བཞག་འབད་ དེ་འབད་ ཁྱོད་ཀྱིས་ ཤུལ་ལས་གནས་རིམ་འདི་འདྲི་དཔྱད་འབད་ཚུགས།
 
-## 3. Mint units into the operator account
+## 3. བཀོལ་སྤྱོད་རྩིས་ཐོ་ནང་ལུ་ མིན་ཊི་ཡུ་ནིཊི་ཚུ།
 
-Asset quantities live under the `(asset definition, account)` pair. Mint 250
-units of `coffee#wonderland` into `$ADMIN_ACCOUNT`:
+རྒྱུ་དངོས་འབོར་ཚད་ `(asset definition, account)` ཆ་གཅིག་གི་འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། མིན་ཊི་ ༢༥༠།
+`coffee#wonderland` གི་ཡུ་ནིཊི་ཚུ་ I18NI000000033X: ལུ།
 
-```sh
-iroha --config defaults/client.toml asset mint \
-  --id coffee#wonderland##${ADMIN_ACCOUNT} \
-  --quantity 250
-```
+I18NF0000009X
 
-Again, capture the transaction hash (`$MINT_HASH`) from the CLI output. To
-double-check the balance, run:
+ད་རུང་ སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་ལས་ ཚོང་འབྲེལ་ཧེཤ་ (I18NI0000034X) འདི་ བཟུང་དགོ། ལུ
+ལྷག་ལུས་འདི་ཞིབ་དཔྱད་འབད་, གཡོག་བཀོལ།:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-or, to target just the new asset:
+ཡང་ན་ རྒྱུ་དངོས་གསརཔ་འདི་རྐྱངམ་ཅིག་དམིགས་གཏད་བསྐྱེད་ནི།
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -99,9 +94,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfer part of the balance to another account
+## 4. ཚད་སྙོམ་པའི་ཆ་ཤས་འདི་རྩིས་ཐོའི་གཞན་དུ་སྤོ་བ།
 
-Move 50 units from the operator account to `$RECEIVER_ACCOUNT`:
+བཀོལ་སྤྱོད་རྩིས་ཐོ་ལས་ I18NI000000035X ལུ་ ཡུ་ནིཊི་༥༠ སྤོ་བཤུད་འབད།
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -110,8 +105,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Save the transaction hash as `$TRANSFER_HASH`. Query the holdings on both
-accounts to verify the new balances:
+བརྗེ་སོར་ཧེཤ་འདི་ `$TRANSFER_HASH` སྦེ་སྲུང་བཞག་འབད། གཉིས་ཀའི་བདག་དབང་འདྲི་བ།
+ལྷག་ལུས་གསརཔ་ཚུ་བདེན་དཔྱད་འབད་ནིའི་རྩིས་ཁྲ་ཚུ།
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -121,35 +116,35 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verify ledger evidence
+## 5. ལེ་ཌི་ཇར་གྱི་སྒྲུབ་བྱེད་བདེན་སྦྱོར་བྱེད་པ།
 
-Use the saved hashes to confirm that both transactions committed:
+ཚོང་འབྲེལ་གཉིས་ཆ་རང་ འབད་ཡོདཔ་ངེས་གཏན་བཟོ་ནི་ལུ་ གསོག་འཇོག་འབད་ཡོད་པའི་ ཧ་ཤེ་ཚུ་ལག་ལེན་འཐབ།
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-You can also stream recent blocks to see which block included the transfer:
+ཁྱོད་ཀྱིས་ འཕྲལ་གྱི་སྡེབ་ཚན་ཚུ་ཡང་ སྡེབ་ཚན་ག་ཅི་གིས་ གནས་སོར་འདི་ཚུད་ཡོདཔ་ཨིན་ན་ བལྟ་ནི་ལུ་ རྒྱུན་སྤེལ་འབད་ཚུགས།
 
 ```sh
 # Stream from the latest block and stop after ~5 seconds
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Every command above uses the same Norito payloads as the SDKs. If you replicate
-this flow via code (see the SDK quickstarts below), the hashes and balances will
-line up as long as you target the same network and defaults.
+གོང་འཁོད་བརྡ་བཀོད་རེ་རེ་གིས་ ཨེསི་ཌི་ཀེ་ཨེསི་ཚུ་བཟུམ་སྦེ་ I18NT0000002X གི་སྤྲོད་ལེན་ཚུ་ལག་ལེན་འཐབ་ཨིན། ཁྱོད་ཀྱིས་འདྲ་དཔེ་བཟོ་བ་ཅིན།
+འདི་ གསང་ཡིག་བརྒྱུད་དེ་ (འོག་གི་ཨེསི་ཌི་ཀེ་ མགྱོགས་དྲགས་ཚུ་བལྟ་) ཧ་ཤེ་དང་ ལྷག་ལུས་ཚུ་ འགྱོ་འོང་།
+ཁྱོད་ཀྱིས་ཡོངས་འབྲེལ་གཅིག་དང་སྔོན་སྒྲིག་ཚུ་དམིགས་གཏད་བསྐྱེད་ཚུན་ཚོད་ གྲལ་ཐིག་ཡར་འགྱོ།
 
-## SDK parity links
+## SDK ཆ་སྙོམས་འབྲེལ་མཐུད།
 
-- [Rust SDK quickstart](../sdks/rust) — demonstrates registering instructions,
-  submitting transactions, and polling status from Rust.
-- [Python SDK quickstart](../sdks/python) — shows the same register/mint
-  operations with Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — covers Torii requests,
-  governance helpers, and typed query wrappers.
+- [Rust SDK མགྱོགས་མྱུར་](../sdks/rust) — ཐོ་བཀོད་ཀྱི་བཀོད་རྒྱ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+  ཕུལ་བའི་ཚོང་འབྲེལ་དང་ Rust ལས་ འོས་བསྡུའི་གནས་ཚད།
+- [Python SDK མགྱོགས་འགོ་བཙུགས་](I18NU000000019X) — ཐོ་འགོད་/མི་ཊི་གཅིག་པ་སྟོནམ་ཨིན།
+  བཀོལ་སྤྱོད་དང་ Norito-backed JSON གྲོགས་རམ་པ།
+- [ཇ་བ་ཨིསི་ཀིརིཔ་ཨེསི་ཌི་ཀེ་ མགྱོགས་དྲགས་](../sdks/javascript) — I18NT000000004X ཞུ་བ་ཚུ་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+  གཞུང་སྐྱོང་རོགས་སྐྱོར་འབད་མི་དང་ ཡིག་དཔར་རྐྱབ་ཡོད་པའི་འདྲི་དཔྱད་བཀབ་ཆ་ཚུ།
 
-Run the CLI walkthrough first, then repeat the scenario with your preferred SDK
-to make sure both surfaces agree on transaction hashes, balances, and query
-outputs.
+དང་པ་རང་ སི་ཨེལ་ཨའི་ འགྲུལ་བསྐྱོད་འདི་གཡོག་བཀོལ་ཞིནམ་ལས་ ཁྱོད་རའི་དགའ་གདམ་ཨེསི་ཌི་ཀེ་དང་གཅིག་ཁར་ མཐོང་སྣང་འདི་བསྐྱར་ལོག་འབད།
+ཁ་ཐོག་གཉིས་ཆ་ར་གིས་ ཚོང་འབྲེལ་གྱི་ཧ་ཤི་དང་ ལྷག་ལུས་ དེ་ལས་ འདྲི་དཔྱད་ཚུ་ལུ་ ཆ་འཇོག་འབད་ནི་ལུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ཨིན།
+ཐོན་འབྲས་ཚུ།

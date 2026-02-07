@@ -7,25 +7,27 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+ናሙና አውርድን ከ'@site/src/components/SampleDownload' አስመጣ;
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+ይህ የምግብ አሰራር በJS5 የመንገድ ካርታ ውስጥ የተጠሩትን ሁለቱን የላቁ የስራ ፍሰቶች ያጠቃልላል
+እቃዎች፡- ከጫፍ እስከ ጫፍ የአስተዳደር ረዳቶች (ውሳኔዎች፣ ምርጫዎች፣ የምክር ቤት ቅጽበተ-ፎቶዎች)
+እና የ ISO 20022 ድልድይ ጉዞ (pacs.008/pacs.009)። እያንዳንዱ ናሙና ይሠራል
+በታተመው `@iroha/iroha-js` ጥቅል ላይ እና ቅንጥቦቹን ያንፀባርቃል
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## የአስተዳደር አጋዥ ናሙና
 
-<SampleDownload
+<ናሙና አውርድ
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  ፋይል ስም = "አስተዳደር.mjs"
+  description="በዚህ የምግብ አሰራር ውስጥ የተጠቀሰውን ሊሄድ የሚችል የአስተዳደር ረዳት ያውርዱ።"
 />
 
-### Prerequisites
+### ቅድመ ሁኔታ
 
 ```bash
 npm install @iroha/iroha-js
@@ -39,10 +41,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+የተፈረሙትን ግብይቶች ለTorii ለማቅረብ `GOV_SUBMIT=1` ያቀናብሩ እና
+`GOV_FETCH=1` ከተሰጠ በኋላ የተፈጠረውን የአስተዳደር ሁኔታ ለመመርመር።
 
-### Example script
+### ምሳሌ ስክሪፕት።
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -222,26 +224,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### አሂድ እና ተቆጣጠር
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
-  `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- hashes ብቻ ለማመንጨት `node governance.mjs` ን ያስፈጽሙ። `GOV_SUBMIT=1` ይጨምሩ
+  የቀጥታ የአስተዳደር ሁኔታን ለመመዝገብ ግብይቶቹን ወደ I18NT0000003X እና I18NI0000016X ይለጥፉ
+  (`getGovernanceProposal*`፣ `getGovernanceReferendum`፣ `getGovernanceLocks`፣ እና
+  I18NI0000020X)።
+- በ CI ምዝግብ ማስታወሻዎች ውስጥ የመወሰን ሃሽዎችን ይያዙ; እያንዳንዱ እርምጃ የተፈረመ ባይት ያትማል
+  አማራጭ ቤተኛ ረዳት በሚገኝበት ጊዜ ርዝመት እና እንደገና የተሰላው ሃሽ።
+- ኦዲተሮች መፈለግ እንዲችሉ የኮንሶል ውጤቱን ከአስተዳደር ግምገማ ፓኬቶች ጋር ያያይዙ
+  ፕሮፖዛል/የህዝበ ውሳኔ መታወቂያዎች ወደ ሊባዛ የሚችል የCLI ማስረጃ ይመለሳሉ።
 
-## ISO bridge sample
+## የ ISO ድልድይ ናሙና
 
-<SampleDownload
+<ናሙና አውርድ
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  ፋይል ስም = " iso-bridge.mjs"
+  description="በዚህ የምግብ አሰራር ውስጥ የተጠቀሰውን ሊሄድ የሚችል ISO 20022 አጋዥ ያውርዱ።"
 />
 
-### Prerequisites
+### ቅድመ ሁኔታ
 
 ```bash
 npm install @iroha/iroha-js
@@ -253,11 +255,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+ማስረከብን ለመዝለል ሲፈልጉ `ISO_MESSAGE_ID` ያቀናብሩ እና የሚታወቅ አስተያየት ይስጡ
+መለያ ድልድዩ ምልክት እንዳደረገ ለመውጣት `ISO_RESOLVE_ON_ACCEPTED=1` ይጠቀሙ
+አንድ ግቤት `Accepted` ምንም እንኳን የግብይቱ ሃሽ ገና ያልተጠናቀቀ ቢሆንም።
 
-### Example script
+### ምሳሌ ስክሪፕት።
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -357,22 +359,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### አሂድ እና ተቆጣጠር
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- የናሙና ክፍያ ለመጫን I18NI0000024X ያስፈጽም. አዘጋጅ
+  የPvP ፍሰትን ለመለማመድ `ISO_MESSAGE_KIND=pacs.009` ወይም `ISO_MESSAGE_ID` ወደ
+  እንደገና ሳይለጥፉ ያለውን ግቤት ይመርምሩ።
+- ረዳቱ እያንዳንዱን የሕዝብ አስተያየት ሙከራ በ`wait.onPoll` ይመዘግባል፣ ይህም ለማድረግ ቀላል ያደርገዋል።
+  በ CI ምዝግብ ማስታወሻዎች ውስጥ የመቀበያ ጊዜዎችን ይያዙ.
+- የመጨረሻውን ሁኔታ + የግብይት ሃሽ ከ ISO bridge runbooks ጋር ያያይዙ ስለዚህ ኦዲተሮች
+  can trace pacs.008/pacs.009 መላኪያዎች ወደ ሊባዙ የሚችሉ ሸክሞች ይመለሳሉ፣ እንደ
+  በJS5 የመንገድ ካርታ ማቅረቢያዎች የሚፈለግ።
 
-## Offline allowances & transfers
+## ከመስመር ውጭ አበል እና ማስተላለፎች
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js` የተጠቀሰውን ተመሳሳይ አበል/የዝውውር ረዳቶችን ይልካል
+ከመስመር ውጭ የመንገድ ካርታ ረድፎች. የአቋም መመሪያዎችን ለመፈተሽ ተጠቀምባቸው (ማርከር ቁልፍ፣ አጫውት።
+ሙሉነት፣ ኤችኤምኤስ ደህንነትን ማወቅ፣ የቀረበ) ጥሬ ሜታዳታን ሳይተነተን፡-
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -400,19 +402,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+Torii የተወሰነ አበል ሲዘግብ የተቆጣጣሪው የህዝብ ቁልፍ
+እቅድ፣ አማራጭ ስሪት፣ ቲቲኤል እና መፍጨት በስር በቀጥታ
+`integrity_metadata.provisioned`፣ የሚፈለገውን ማያያዝ ቀላል ያደርገዋል
+ሜታዳታ ወደ OA10.3 የማስረጃ እሽጎች።
 
-## Next steps
+## ቀጣይ እርምጃዎች
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- `javascript/iroha_js/recipes/governance.mjs` እና ያስሱ
+  `javascript/iroha_js/recipes/iso_bridge.mjs` ለተስፋፉ ምሳሌዎች (ባለብዙ ሲግ
+  ምርጫዎች፣ የምክር ቤት ቪአርኤፍ አመጣጥ፣ ፖሊሲዎችን እንደገና ይሞክሩ)።
+- የ I18NT0000000X ጎን ሰነዶችን ይመልከቱ
+  `docs/source/sdk/js/governance_iso_examples.md` እና
+  `docs/source/finance/settlement_iso_mapping.md` ለ ቀኖናዊ መስክ
+  በእነዚህ ረዳቶች የተጠቀሱ ካርታዎች።
+- የሩጫ ምዝግብ ማስታወሻዎችን ያንሱ እና ከአስተዳደር / ISO ማረጋገጫዎች ጋር ያያይዙት
+  JS5 "ሰነድ + ህትመት" መስፈርት በ `roadmap.md` ተጠቅሷል።

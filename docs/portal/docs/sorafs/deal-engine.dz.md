@@ -11,66 +11,67 @@ id: deal-engine
 title: SoraFS Deal Engine
 sidebar_label: Deal Engine
 description: Overview of the SF-8 deal engine, Torii integration, and telemetry surfaces.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# SoraFS Deal Engine
+# SoraFS འཕྲུལ་འཁོར་བསྟུན།
 
-The SF-8 roadmap track introduces the SoraFS deal engine, providing
-deterministic accounting for storage and retrieval agreements between
-clients and providers. Agreements are described with the Norito payloads
-defined in `crates/sorafs_manifest/src/deal.rs`, covering deal terms, bond
-locking, probabilistic micropayments, and settlement records.
+ཨེསི་ཨེཕ་-༨ ལམ་གྱི་ས་ཁྲ་འདི་གིས་ SoraFS ཚོང་འབྲེལ་འཕྲུལ་ཆས་འདི་ ངོ་སྤྲོད་འབད་དེ་ བྱིན་དོ་ཡོདཔ་ཨིན།
+༢༠༠༨ ལོའི་ བསག་བཞག་དང་ ལོག་ཐོབ་ཀྱི་ཆིངས་ཡིག་ཚུ་ རྩིས་ཁྲ་བཟོ་ནི།
+མཁོ་མངགས་འབད་མི་དང་ བྱིན་མི་ཚུ། གན་ཡིག་ཚུ་ I18NT0000000X སྤྲོད་ལེན་ཚུ་དང་གཅིག་ཁར་ འགྲེལ་བཤད་རྐྱབ་ཡོདཔ་ཨིན།
+`crates/sorafs_manifest/src/deal.rs`, གན་རྒྱ་གི་ཐ་སྙད་ བུན་གཡར་གྱི་ཁྱབ་ཁོངས།
+བསྡམ་བཞག་ནི་དང་ འབྱུང་འགྱུར་གྱི་གླ་ཆ་ཆུང་བ་དང་ གཞིས་ཆགས་ཀྱི་ཐོ་བཀོད་ཚུ།
 
-The embedded SoraFS worker (`sorafs_node::NodeHandle`) now instantiates a
-`DealEngine` instance for every node process. The engine:
+ད་ལྟ་བཙུགས་ཡོད་པའི་SoraFS ལས་བྱེད་པ་ (I18NI000000010X) ད་ལྟ་ a གི་ཆ་རྐྱེན་བཀོད་ཡོད།
+I18NI000000011 མཐུད་མཚམས་བྱ་རིམ་རེ་རེ་གི་དོན་ལུ་ དཔེ་ཚད་ཨིན། འཕྲུལ་འཁོར།
 
-- validates and registers deals using `DealTermsV1`;
-- accrues XOR-denominated charges when replication usage is reported;
-- evaluates probabilistic micropayment windows using deterministic
-  Blake3-based sampling; and
-- produces ledger snapshots and settlement payloads suitable for governance
-  publishing.
+- `DealTermsV1` ལག་ལེན་འཐབ་སྟེ་ བདེན་དཔྱད་དང་ ཐོ་བཀོད་ཀྱི་གན་རྒྱ་ཚུ་;
+- འདྲ་བཤུས་ལག་ལེན་སྙན་ཞུ་འབད་བའི་སྐབས་ XOR-denoting གློག་ཤུགས་ཚུ་ ཡར་སེང་འབདཝ་ཨིན།
+- འབྱུང་འགྱུར་ཆུང་བ་སྤྲོད་པའི་སྒོ་སྒྲིག་ཚུ་ གཏན་འབེབས་ལག་ལེན་འཐབ་སྟེ་ དབྱེ་ཞིབ་འབདཝ་ཨིན།
+  Blake3- གཞི་བཞག་པའི་དཔེ་ཚད་; དང༌
+- གཞུང་སྐྱོང་དོན་ལུ་འོས་འབབ་ཡོད་པའི་ ལེཌ་ཇར་གྱི་པར་དང་ གཞིས་ཆགས་ཀྱི་ གླ་ཆ་ཚུ་ ཐོན་སྐྱེད་འབདཝ་ཨིན།
+  དཔར་སྐྲུན་འབད་མི།
 
-Unit tests cover validation, micropayment selection, and settlement flows so
-operators can exercise the APIs with confidence. Settlements now emit
-`DealSettlementV1` governance payloads, wiring directly into the SF-12
-publishing pipeline, and update the `sorafs.node.deal_*` OpenTelemetry series
-(`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) for Torii dashboards and SLO
-enforcement. Follow-up items focus on auditor-initiated slashing automation and
-coordinating cancellation semantics with governance policy.
+ཡུ་ནིཊ་བརྟག་དཔྱད་ཚུ་གིས་ བདེན་དཔྱད་དང་ སྤྲོད་ལེན་ཆུང་བ་གདམ་ཁ་ དེ་ལས་ གཞིས་ཆགས་རྒྱུན་འབབ་ཚུ་ དེ་སྦེ་ཨིན།
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བློ་གཏད་ཐོག་ལས་ ཨེ་པི་ཨའི་ཚུ་ ལག་ལེན་འཐབ་བཏུབ། གཞིས་ཆགས་ཚུ་ད་ལྟོ་ཕྱིར་བཏོན་འབད།
+`DealSettlementV1` གཞུང་སྐྱོང་འབབ་ཁུངས་ཚུ་ ཐད་ཀར་དུ་ SF-12 ནང་ གློག་ཐག་བཏང་ནི།
+དཔར་བསྐྲུན་འབད་ནིའི་ མདོང་ལམ་དང་ `sorafs.node.deal_*` OpenTelemetry རིམ་སྒྲིག་འདི་དུས་མཐུན་བཟོ་ནི།
+(I 18NI000000015X, `deal_expected_charge_nano`, I18NI000000017X,
+I18NI0000000018X, `deal_bond_slash_nano`, I18NI00000000200
+བསྟར་སྤྱོད་འབད་ནི། རྗེས་སྙེག་ཅ་ཆས་ཚུ་ རྩིས་ཞིབ་ལས་ འགོ་བཙུགས་མི་ བརྡལ་བཤིག་གཏང་མི་ འཕྲུལ་ཆས་དང་།
+གཞུང་སྐྱོང་སྲིད་བྱུས་དང་གཅིག་ཁར་ ཆ་མེད་གཏང་བའི་ཡིག་བརྡའི་མཉམ་འབྲེལ་འབད་ནི།
 
-Usage telemetry now also feeds the `sorafs.node.micropayment_*` metrics set:
-`micropayment_charge_nano`, `micropayment_credit_generated_nano`,
-`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, and the ticket counters
-(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). These totals expose the probabilistic
-lottery flow so operators can correlate micropayment wins and credit carry-over
-with settlement outcomes.
+ད་ལྟོ་ ལག་ལེན་གྱི་ ཊེ་ལི་མི་ཊི་གིས་ཡང་ `sorafs.node.micropayment_*` གི་ ཚད་ཐིག་ཚུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན།
+I18NI0000022X, `micropayment_credit_generated_nano`,
+`micropayment_credit_applied_nano`, I18NI00000025,
+`micropayment_outstanding_nano`, དང་ ཤོག་འཛིན་གྱི་ གྱངས་ཁ་ཚུ།
+(I 18NI00000027X, I18NI0000028X,
+I18NI0000029X). འ་ནི་བསྡོམས་རྩིས་ཚུ་གིས་ འབྱུང་སྲིད་པའི་འབྱུང་འགྱུར་སྟོནམ་ཨིན།
+རྒྱན་ཤོག་བཏང་མི་ཚུ་གིས་ གླ་ཆ་ཆུང་བ་སྤྲོད་ནི་དང་ བུ་ལོན་འབག་ནི་ཚུ་ འབྲེལ་འཐུད་འབད་ཚུགས།
+གཞིས་ཆགས་གྲུབ་འབྲས་དང་གཅིག་ཁར།
 
-## Torii Integration
+## Torii མཉམ་བསྡོམས།
 
-Torii exposes dedicated endpoints so providers can report usage and drive the
-deal lifecycle without bespoke wiring:
+I18NT000000007X གིས་ བརྩོན་ཤུགས་ཅན་གྱི་མཐའ་ཐིག་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+གློག་ཐག་མེད་པར་ ཚེ་སྲོག་འཁོར་ར།
 
-- `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
-  deterministic accounting outcomes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
-  resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
-  ready for governance DAG publication.
-- Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
-  records summarising each usage submission (epoch, metered GiB-hours, ticket
-  counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`
-  records that include the canonical settlement ledger snapshot plus the
-  BLAKE3 digest/size/base64 of the on-disk governance artefact, and
-  `SorafsGatewayEvent::ProofHealth` alerts whenever PDP/PoTR thresholds are
-  exceeded (provider, window, strike/cooldown state, penalty amount). Consumers can
-  filter by provider to react to new telemetry, settlements, or proof-health alerts without polling.
+- `POST /v1/sorafs/deal/usage` དང་ལེན་འབདཝ་ཨིན།
+  རྩིས་ཁྲའི་གྲུབ་འབྲས་ (`UsageOutcome`).
+- I18NI000000033X གིས་ ད་ལྟོའི་སྒོ་སྒྲིག་འདི་མཇུག་བསྡུཝ་ཨིན་ དེ་ལས་ དེ་ རྒྱུན་སྤེལ་འབད་དོ།
+  གཞི་རྩའི་ `DealSettlementRecord` གྲུབ་འབྲས་ཐོན་ཡོད།
+  གཞུང་སྐྱོང་དོན་ལུ་ DAG དཔེ་བསྐྲུན་གྱི་དོན་ལུ་ གྲ་སྒྲིག་ཡོདཔ་ཨིན།
+- Torii ད་ལྟ་`/v1/events/sse` ད་ལྟ་`SorafsGatewayEvent::DealUsage` རྒྱང་བསྒྲགས་བྱས་ཡོད།
+  ལག་ལེན་གྱི་ ཞུ་ཡིག་རེ་རེ་ བཅུད་བསྡུས་འབད་དེ་ ཐོ་བཀོད་ཚུ་ (དཔེར་ན་ ཇི་བྷི་-ཆུ་ཚོད་ ཤོག་འཛིན་ མི་ཊར་འབད་ཡོདཔ།
+  counts, གཏན་འབེབས་གླ་ཆ་), `SorafsGatewayEvent::DealSettlement`
+  དྲན་ཐོ་ཚུ་ ཀེ་ནོ་ནིག་གཞིས་ཆགས་ཀྱི་ ལེད་ཇར་གྱི་པར་བཏབ་ནི་དང་ ཚུདཔ་ཨིན།
+  BLAKE3 འཇུ་བྱེད་/ཚད་/བེབ་སི་༦༤ ཌིཀསི་ཐོག་གཞུང་གི་ ཅ་རྙིང་དང་།
+  `SorafsGatewayEvent::ProofHealth` PDP/PoTR ཚད་གཞི་གང་འདྲ་ཞིག་ཡིན་ནམ།
+  ལས་ལྷག་སྟེ་ (བཀྲམ་སྤེལ་པ་ སྒོ་སྒྲིག་, ངོ་རྒོལ་/བསིལ་དྲོད་གནས་སྟངས་ ཉེས་ཆད་དངུལ་འབོར་)། ཉོ་སྤྱོད་པ་ ཅན།
+  ཚགས་མ་བྱིན་མི་གིས་ བརྡ་འཕྲིན་གསརཔ་དང་ གཞིས་ཆགས་ ཡང་ན་ བདེན་ཁུངས་-གསོ་བའི་ཉེན་བརྡ་ཚུ་ལུ་ ལན་གསལ་འབད་ནི་ལུ་ འོས་འདེམས་མེད་པར་ ལན་ལོག་སྤྲོད་དགོཔ་ཨིན།
 
-Both endpoints participate in the SoraFS quota framework via the new
-`torii.sorafs.quota.deal_telemetry` window, allowing operators to tune the
-allowed submission rate per deployment.
+མཐའ་མའི་གཉིས་ཆ་རང་ I18NT0000004X quato གཞི་བཀོད་ནང་ གསརཔ་བརྒྱུད་དེ་ བཅའ་མར་གཏོགསཔ་ཨིན།
+I18NI000000040X སྒོ་སྒྲིག་ དེ་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བསྒྱུར་བཅོས་འབད་བཅུགཔ་ཨིན།
+ཆོག་ཐམ་བཀྲམ་སྤེལ་རེ་ལུ་ ཕུལ་བའི་ཚད་གཞི།

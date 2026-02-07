@@ -4,25 +4,27 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-ci.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: developer-ci
-title: SoraFS CI recipes
-sidebar_label: CI recipes
+כותרת: מתכוני SoraFS CI
+sidebar_label: מתכוני CI
 description: GitHub اور GitLab pipelines میں keyless signing کے ساتھ SoraFS CLI چلائیں۔
 ---
 
 :::note مستند ماخذ
 :::
 
-# SoraFS CI recipes
+# מתכוני SoraFS CI
 
 SoraFS pipelines deterministic chunking، manifest signing اور proof verification سے فائدہ اٹھاتے ہیں۔
 `sorafs_cli` command surface ان steps کو CI providers کے درمیان portable رکھتا ہے۔ یہ صفحہ canonical
 recipes highlight کرتا ہے اور ready-to-use templates کی طرف اشارہ کرتا ہے۔
 
-## GitHub Actions (keyless)
+## פעולות GitHub (ללא מפתח)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,7 +97,7 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+נקודות מפתח:
 
 - Static signing keys store نہیں ہوتے؛ OIDC tokens on-demand fetch ہوتے ہیں۔
 - Artifacts (CAR, manifest, bundle, proof summaries) review کے لیے upload ہوتے ہیں۔
@@ -138,9 +140,9 @@ sorafs:publish:
 - `SIGSTORE_ID_TOKEN` کو GitLab workload identity federation یا sealed secret کے ذریعے provision کریں، publish stage چلانے سے پہلے۔
 - CLI کے کسی بھی step کی failure pipeline کو halt کر دیتی ہے، اور consistent artifacts محفوظ رہتے ہیں۔
 
-## Additional resources
+## משאבים נוספים
 
-- End-to-end templates (Bash helpers، federated identity configuration، اور clean-up steps شامل ہیں): `docs/examples/sorafs_ci.md`
+- תבניות מקצה לקצה (עזרי Bash, תצורת זהות מאוחדת, ועוד שלבי ניקוי קודים): `docs/examples/sorafs_ci.md`
 - CLI reference جو ہر option cover کرتا ہے: `docs/source/sorafs_cli.md`
 - Submission سے پہلے governance/alias requirements:
   `docs/source/sorafs/provider_admission_policy.md`

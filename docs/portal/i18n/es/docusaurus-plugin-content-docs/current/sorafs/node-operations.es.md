@@ -4,16 +4,18 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-operations.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-operations
-title: Runbook de operaciones del nodo
+id: operaciones de nodo
+título: Runbook de operaciones del nodo
 sidebar_label: Runbook de operaciones del nodo
-description: Valida el despliegue integrado de `sorafs-node` dentro de Torii.
+descripción: Valida el despliegue integrado de `sorafs-node` dentro de Torii.
 ---
 
-:::note Fuente canónica
+:::nota Fuente canónica
 Esta página refleja `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Mantén ambas versiones sincronizadas hasta que se retire el conjunto de Sphinx.
 :::
 
@@ -23,7 +25,7 @@ Este runbook guía a los operadores en la validación de un despliegue `sorafs-n
 
 ## 1. Prerrequisitos
 
-- Habilita el worker de almacenamiento en `torii.sorafs.storage`:
+- Habilita el trabajador de almacenamiento en `torii.sorafs.storage`:
 
   ```toml
   [torii.sorafs.storage]
@@ -41,9 +43,9 @@ Este runbook guía a los operadores en la validación de un despliegue `sorafs-n
   por_success_alpha = 0.25
   ```
 
-- Asegúrate de que el proceso Torii tenga acceso de lectura/escritura a `data_dir`.
+- Asegúrese de que el proceso Torii tenga acceso de lectura/escritura a `data_dir`.
 - Confirma que el nodo anuncia la capacidad esperada vía `GET /v1/sorafs/capacity/state` una vez que se haya registrado una declaración.
-- Cuando el suavizado está habilitado, los dashboards exponen tanto los contadores GiB·hour/PoR en bruto como los suavizados para resaltar tendencias sin jitter junto a los valores instantáneos.
+- Cuando el suavizado está habilitado, los tableros exponen tanto los contadores GiB·hour/PoR en bruto como los suavizados para resaltar tendencias sin jitter junto a los valores instantáneos.
 
 ### Ejecución en seco de CLI (opcional)
 
@@ -60,9 +62,7 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --manifest-id <hex> \
   --manifest-out ./out/manifest.to \
   --payload-out ./out/payload.bin
-```
-
-Los comandos imprimen resúmenes Norito JSON y rechazan discrepancias de perfil de chunk o digest, lo que los hace útiles para smoke checks de CI antes de cablear Torii.【crates/sorafs_node/tests/cli.rs#L1】
+```Los comandos imprimen resúmenes Norito JSON y rechazan discrepancias de perfil de chunk o digest, lo que los hace útiles para smoke checks de CI antes de cablear Torii.【crates/sorafs_node/tests/cli.rs#L1】
 
 ### Ensayo de pruebas PoR
 
@@ -76,18 +76,16 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
   --verdict ./fixtures/sorafs_manifest/por/verdict_v1.to
 ```
 
-El comando emite un resumen JSON (digest del manifiesto, id del proveedor, digest de prueba, cantidad de muestras y resultado de veredicto opcional). Proporciona `--manifest-id=<hex>` para asegurar que el manifiesto almacenado coincide con el digest del desafío, y `--json-out=<path>` cuando quieras archivar el resumen con los artefactos originales como evidencia de auditoría. Incluir `--verdict` te permite ensayar todo el flujo desafío → prueba → veredicto offline antes de llamar a la API HTTP.
+El comando emite un resumen JSON (resumen del manifiesto, id del proveedor, resumen de prueba, cantidad de muestras y resultado de veredicto opcional). Proporciona `--manifest-id=<hex>` para asegurar que el manifiesto almacenado coincida con el resumen del desafío, y `--json-out=<path>` cuando quiera archivar el resumen con los artefactos originales como evidencia de auditoría. Incluir `--verdict` te permite ensayar todo el flujo desafío → prueba → veredicto offline antes de llamar a la API HTTP.
 
-Una vez que Torii está activo puedes recuperar los mismos artefactos vía HTTP:
+Una vez que Torii esté activo puedes recuperar los mismos artefactos vía HTTP:
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Ambos endpoints son servidos por el worker de almacenamiento embebido, así que los smoke tests de CLI y las sondas del gateway permanecen sincronizados.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
-
-## 2. Recorrido Pin → Fetch
+Ambos puntos finales son servidos por el trabajador de almacenamiento embebido, así que las pruebas de humo de CLI y las sondas del gateway permanecen sincronizadas.## 2. Recorrido Pin → Recuperar
 
 1. Genera un paquete de manifiesto + payload (por ejemplo con `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Envía el manifiesto con codificación base64:
@@ -98,8 +96,8 @@ Ambos endpoints son servidos por el worker de almacenamiento embebido, así que 
      -d @pin_request.json
    ```
 
-   El JSON de la solicitud debe contener `manifest_b64` y `payload_b64`. Una respuesta exitosa devuelve `manifest_id_hex` y el digest del payload.
-3. Recupera los datos fijados:
+   El JSON de la solicitud debe contener `manifest_b64` y `payload_b64`. Una respuesta exitosa devuelve `manifest_id_hex` y el resumen del payload.
+3. Recuperar los datos fijados:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -111,28 +109,26 @@ Ambos endpoints son servidos por el worker de almacenamiento embebido, así que 
      }'
    ```
 
-   Decodifica en base64 el campo `data_b64` y verifica que coincida con los bytes originales.
+   Decodifica en base64 el campo `data_b64` y verifica que coincide con los bytes originales.
 
 ## 3. Simulacro de recuperación tras reinicio
 
 1. Fija al menos un manifiesto como arriba.
-2. Reinicia el proceso Torii (o el nodo completo).
-3. Reenvía la solicitud de fetch. El payload debe seguir siendo recuperable y el digest devuelto debe coincidir con el valor previo al reinicio.
-4. Inspecciona `GET /v1/sorafs/storage/state` para confirmar que `bytes_used` refleja los manifiestos persistidos tras el reinicio.
+2. Reinicie el proceso Torii (o el nodo completo).
+3. Reenvía la solicitud de buscar. El payload debe seguir siendo recuperable y el digest devuelto debe coincidir con el valor previo al reinicio.
+4. Inspecciona `GET /v1/sorafs/storage/state` para confirmar que `bytes_used` refleja los manifiestos persistentes tras el reinicio.
 
 ## 4. Prueba de rechazo por cuota
 
-1. Reduce temporalmente `torii.sorafs.storage.max_capacity_bytes` a un valor pequeño (por ejemplo el tamaño de un solo manifiesto).
+1. Reduzca temporalmente `torii.sorafs.storage.max_capacity_bytes` a un valor pequeño (por ejemplo el tamaño de un solo manifiesto).
 2. Fija un manifiesto; la solicitud debe tener éxito.
-3. Intenta fijar un segundo manifiesto de tamaño similar. Torii debe rechazar la solicitud con HTTP `400` y un mensaje de error que incluya `storage capacity exceeded`.
-4. Restaura el límite de capacidad normal al finalizar.
+3. Intente fijar un segundo manifiesto de tamaño similar. Torii debe rechazar la solicitud con HTTP `400` y un mensaje de error que incluye `storage capacity exceeded`.
+4. Restablezca el límite de capacidad normal al finalizar.
 
 ## 5. Sonda de muestreo PoR
 
 1. Fija un manifiesto.
-2. Solicita un muestreo PoR:
-
-   ```bash
+2. Solicita un muestreo PoR:```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
@@ -142,7 +138,7 @@ Ambos endpoints son servidos por el worker de almacenamiento embebido, así que 
      }'
    ```
 
-3. Verifica que la respuesta contiene `samples` con el conteo solicitado y que cada prueba valida contra la raíz del manifiesto almacenado.
+3. Verifique que la respuesta contenga `samples` con el contenido solicitado y que cada prueba valida contra la raíz del manifiesto almacenado.
 
 ## 6. Ganchos de automatización
 
@@ -153,10 +149,10 @@ Ambos endpoints son servidos por el worker de almacenamiento embebido, así que 
   ```
 
   que cubren `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` y `por_sampling_returns_verified_proofs`.
-- Los dashboards deben seguir:
+- Los tableros deben seguir:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` y `torii_sorafs_storage_fetch_inflight`
   - contadores de éxito/fallo de PoR expuestos vía `/v1/sorafs/capacity/state`
-  - intentos de publicación de settlement vía `sorafs_node_deal_publish_total{result=success|failure}`
+  - intentos de publicación de liquidación vía `sorafs_node_deal_publish_total{result=success|failure}`
 
-Seguir estos ejercicios garantiza que el worker de almacenamiento embebido pueda ingerir datos, sobrevivir reinicios, respetar cuotas configuradas y generar pruebas PoR deterministas antes de que el nodo anuncie capacidad a la red más amplia.
+Seguir estos ejercicios garantiza que el trabajador de almacenamiento embebido pueda ingerir datos, sobrevivir reinicios, respetar cuotas configuradas y generar pruebas PoR deterministas antes de que el nodo anuncie capacidad a la red más amplia.

@@ -10,60 +10,61 @@ translation_last_reviewed: 2026-02-07
 id: nexus-lane-model
 title: Nexus lane model
 description: Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.
+translator: machine-google-reviewed
 ---
 
-# Nexus Lane Model & WSV Partitioning
+# Nexus Zolaq Modeli və WSV Bölmə
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** NX-1 in `roadmap.md`
+> **Status:** NX-1 təhvil verilə bilər — zolaq taksonomiyası, konfiqurasiya həndəsəsi və saxlama sxemi həyata keçirməyə hazırdır.  
+> **Sahiblər:** Nexus Əsas İş Qrupu, İdarəetmə İş Qrupu  
+> **Yol xəritəsi arayışı:** `roadmap.md`-də NX-1
 
-This portal page mirrors the canonical `docs/source/nexus_lanes.md` brief so Sora
-Nexus operators, SDK owners, and reviewers can read the lane guidance without
-diving into the mono-repo tree. The target architecture keeps the world state
-deterministic while allowing individual data spaces (lanes) to run public or
-private validator sets with isolated workloads.
+Bu portal səhifəsi Sora kanonik `docs/source/nexus_lanes.md` qısasını əks etdirir
+Nexus operatorları, SDK sahibləri və rəyçilər zolaqlı təlimatı olmadan oxuya bilərlər
+mono-repo ağacına dalmaq. Hədəf memarlığı dünya vəziyyətini saxlayır
+fərdi məlumat fəzalarının (zolaqların) ictimai və ya işləməsinə icazə verərkən deterministik
+təcrid olunmuş iş yükləri ilə şəxsi validator dəstləri.
 
-## Concepts
+## Konsepsiyalar
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and
-  execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share
-  compliance, routing, and settlement policies.
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA
-  policy, gas token, settlement rules, and routing permissions.
-- **Global Commitment:** Proof emitted by a lane summarising new state roots,
-  settlement data, and optional cross-lane transfers. The global NPoS ring
-  orders commitments.
+- **Lane:** Öz təsdiqləyici dəsti ilə Nexus kitabçasının məntiqi parçası və
+  icra geriliyi. Stabil `LaneId` ilə müəyyən edilmişdir.
+- **Məlumat Məkanı:** Paylaşılan bir və ya daha çox zolağı qruplaşdıran İdarəetmə qutusu
+  uyğunluq, marşrutlaşdırma və hesablaşma siyasətləri.
+- **Lane Manifest:** Validatorları təsvir edən idarəetmə tərəfindən idarə olunan metadata, DA
+  siyasət, qaz nişanı, hesablaşma qaydaları və marşrutlaşdırma icazələri.
+- **Qlobal Öhdəlik:** Yeni dövlət köklərini ümumiləşdirən zolaq tərəfindən yayılan sübut,
+  hesablaşma məlumatları və isteğe bağlı zolaqlar arası köçürmələr. Qlobal NPoS halqası
+  sifariş öhdəlikləri.
 
-## Lane taxonomy
+## Zolaq taksonomiyası
 
-Lane types canonically describe their visibility, governance surface, and
-settlement hooks. The configuration geometry (`LaneConfig`) captures these
-attributes so nodes, SDKs, and tooling can reason about the layout without
-bespoke logic.
+Zolaq növləri qanuni olaraq onların görünürlüyünü, idarəetmə səthini və
+məskunlaşma qarmaqları. Konfiqurasiya həndəsəsi (`LaneConfig`) bunları tutur
+atributlar, beləliklə qovşaqlar, SDK-lar və alətlər layout olmadan əsaslandıra bilər
+sifarişli məntiq.
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| Zolaq növü | Görünüş | Validator üzvlük | WSV məruz qalma | Defolt idarəetmə | Hesablaşma siyasəti | Tipik istifadə |
+|----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
+| `default_public` | ictimai | İcazəsiz (qlobal pay) | Tam dövlət replikası | SORA Parlament | `xor_global` | Əsas ictimai kitab |
+| `public_custom` | ictimai | İcazəsiz və ya pay qapılı | Tam dövlət replikası | Pay ölçülmüş modul | `xor_lane_weighted` | Yüksək məhsuldarlıqlı ictimai proqramlar |
+| `private_permissioned` | məhdudlaşdırılmış | Sabit validator dəsti (idarəetmə təsdiqlənib) | Öhdəliklər və sübutlar | Federasiya Şurası | `xor_hosted_custody` | CBDC, konsorsium iş yükləri |
+| `hybrid_confidential` | məhdudlaşdırılmış | Qarışıq üzvlük; ZK sübutlarını sarar | Öhdəliklər + seçmə açıqlama | Proqramlaşdırıla bilən pul modulu | `xor_dual_fund` | Məxfiliyi qoruyan proqramlaşdırıla bilən pul |
 
-All lane types must declare:
+Bütün zolaq növləri bəyan etməlidir:
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
-- Governance handle — identifier resolved through `Nexus.governance.modules`.
-- Settlement handle — identifier consumed by the settlement router to debit XOR
-  buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced
-  through `/status` and dashboards.
+- Dataspace ləqəbi — uyğunluq siyasətlərini birləşdirən insan tərəfindən oxuna bilən qruplaşma.
+- İdarəetmə dəstəyi — identifikator `Nexus.governance.modules` vasitəsilə həll edilir.
+- Hesablaşma dəstəyi — XOR debetinə hesablaşma marşrutlaşdırıcısı tərəfindən istehlak edilən identifikator
+  tamponlar.
+- Əlavə telemetriya metadatası (təsvir, əlaqə, biznes sahəsi) ortaya çıxdı
+  `/status` və idarə panelləri vasitəsilə.
 
-## Lane configuration geometry (`LaneConfig`)
+## Zolaq konfiqurasiya həndəsəsi (`LaneConfig`)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It
-does **not** replace governance manifests; instead it provides deterministic
-storage identifiers and telemetry hints for every configured lane.
+`LaneConfig` təsdiqlənmiş zolaq kataloqundan əldə edilmiş icra vaxtı həndəsəsidir. Bu
+idarəetmə manifestlərini ** əvəz etmir**; əvəzinə deterministik təmin edir
+hər konfiqurasiya edilmiş zolaq üçün yaddaş identifikatorları və telemetriya göstərişləri.
 
 ```text
 LaneConfigEntry {
@@ -80,112 +81,112 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recomputes the geometry whenever configuration is
-  loaded (`State::set_nexus`).
-- Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric
-  characters collapse into `_`. If the alias yields an empty slug we fall back
-  to `lane{id}`.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting
-  to `lane_id`) and drives the persisted shard cursor journal to keep DA replay
-  deterministic across restarts/resharding.
-- Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the
-  same backend is shared.
-- Kura segment names are deterministic across hosts; auditors can cross-check
-  segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and
-  global state commitments for that lane.
+- `LaneConfig::from_catalog` konfiqurasiya olduqda həndəsəni yenidən hesablayır
+  yükləndi (`State::set_nexus`).
+- Ləqəblər kiçik şlaklara sanitarlaşdırılır; ardıcıl qeyri-rəqəmsal
+  simvollar `_`-ə yığılır. Əgər ləqəb boş bir şlak verirsə, geri çəkilirik
+  `lane{id}` üçün.
+- `shard_id` kataloq metadata açarından əldə edilib `da_shard_id` (defolt
+  `lane_id`) və DA təkrarını saxlamaq üçün davamlı qırıq kursor jurnalını idarə edir
+  yenidən başlamalar/yenidən paylaşma üzrə deterministik.
+- Açar prefikslər, WSV-nin hər bir zolaqlı açar diapazonlarını bir-birindən ayrı saxlamasını təmin edir
+  eyni arxa uç paylaşılır.
+- Kür seqment adları hostlar arasında deterministikdir; auditorlar çarpaz yoxlaya bilərlər
+  xüsusi alətlər olmadan seqment kataloqları və manifestləri.
+- Birləşmə seqmentləri (`lane_{id:03}_merge`) ən son birləşmə işarəsi köklərinə malikdir və
+  bu zolaq üçün qlobal dövlət öhdəlikləri.
 
-## World-state partitioning
+## Dünya dövlətlərinin bölünməsi
 
-- The logical Nexus world state is the union of per-lane state spaces. Public
-  lanes persist full state; private/confidential lanes export Merkle/commitment
-  roots to the merge ledger.
-- MV storage prefixes every key with the 4-byte lane prefix from
-  `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++
+- Məntiqi Nexus dünya vəziyyəti hər zolaqlı vəziyyət fəzalarının birliyidir. İctimai
+  zolaqlar tam vəziyyətdə qalır; özəl/məxfi zolaqlar ixracı Merkle/öhdəlik
+  birləşmə kitabçasına köklər.
+- MV yaddaşı 4 baytlıq zolaq prefiksi ilə hər düyməyə prefiks verir
+  `LaneConfigEntry::key_prefix`, `[00 00 00 01] ++ kimi açarlar verir
   PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store
-  entries grouped by lane prefix, keeping range scans deterministic.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint
-  roots and reduced global state roots to `lane_{id:03}_merge`, allowing
-  targeted retention or eviction when a lane retires.
-- Cross-lane indexes (account aliases, asset registries, governance manifests)
-  store explicit lane prefixes so operators can reconcile entries quickly.
-- **Retention policy** — public lanes retain full block bodies; commitment-only
-  lanes may compact older bodies after checkpoints because commitments are
-  authoritative. Confidential lanes keep ciphertext journals in dedicated
-  segments to avoid blocking other workloads.
-- **Tooling** — maintenance utilities (`kagami`, CLI admin commands) should
-  reference the slugged namespace when exposing metrics, Prometheus labels, or
-  archiving Kura segments.
+- Paylaşılan cədvəllər (hesablar, aktivlər, tetikler, idarəetmə qeydləri) buna görə də saxlanılır
+  girişlər zolaq prefiksi ilə qruplaşdırılıb, diapazon skanlarını deterministik saxlayaraq.
+- Birləşdirmə jurnalının metadatası eyni tərtibatı əks etdirir: hər bir zolaq birləşmə göstərişini yazır
+  kökləri və azaldılmış qlobal dövlət kökləri `lane_{id:03}_merge`, imkan verir
+  zolaqdan çıxdıqda məqsədli saxlama və ya çıxarılma.
+- Çarpaz indekslər (hesab ləqəbləri, aktiv reyestrləri, idarəetmə manifestləri)
+  operatorların girişləri tez bir zamanda uzlaşdıra bilməsi üçün açıq zolaq prefikslərini saxlayın.
+- **Saxlama siyasəti** — ictimai zolaqlar tam blok gövdələri saxlayır; yalnız öhdəlik
+  zolaqlar nəzarət məntəqələrindən sonra köhnə cisimləri sıxışdıra bilər, çünki öhdəliklər belədir
+  nüfuzlu. Məxfi zolaqlar şifrəli mətn jurnallarını xüsusi olaraq saxlayır
+  digər iş yüklərini bloklamamaq üçün seqmentlər.
+- **Tooling** — texniki xidmət proqramları (`kagami`, CLI admin əmrləri)
+  ölçüləri, Prometheus etiketlərini ifşa edərkən ləngimiş ad sahəsinə istinad edin və ya
+  Kür seqmentlərinin arxivləşdirilməsi.
 
-## Routing & APIs
+## Marşrutlaşdırma və API
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
+- Torii REST/gRPC son nöqtələri isteğe bağlı `lane_id` qəbul edir; yoxluğu nəzərdə tutur
   `lane_default`.
-- SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
-  the lane catalog.
-- Routing rules operate on the validated catalog and may pick both lane and
-  dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
-  logs.
+- SDK yerüstü zolaq seçiciləri və istifadəçi dostu ləqəbləri istifadə edərək `LaneId` ilə əlaqələndirin
+  zolaq kataloqu.
+- Marşrutlaşdırma qaydaları təsdiqlənmiş kataloqda işləyir və həm zolağı, həm də zolağı seçə bilər
+  məlumat məkanı. `LaneConfig` tablosuna telemetriyaya uyğun ləqəblər təqdim edir və
+  loglar.
 
-## Settlement & fees
+## Hesablaşma və ödənişlər
 
-- Every lane pays XOR fees to the global validator set. Lanes may collect native
-  gas tokens but must escrow XOR equivalents alongside commitments.
-- Settlement proofs include amount, conversion metadata, and proof of escrow
-  (for example, transfer to the global fee vault).
-- The unified settlement router (NX-3) debits buffers using the same lane
-  prefixes, so settlement telemetry lines up with storage geometry.
+- Hər bir zolaq qlobal validator dəstinə XOR haqqı ödəyir. Zolaqlar yerli toplaya bilər
+  qaz tokenləri, lakin öhdəliklərlə yanaşı XOR ekvivalentlərini əmanət etməlidir.
+- Hesablaşma sübutlarına məbləğ, konvertasiya metadatası və əmanət sübutu daxildir
+  (məsələn, qlobal ödəniş kassasına köçürmə).
+- Vahid hesablaşma marşrutlaşdırıcısı (NX-3) eyni zolaqdan istifadə edərək buferləri debet edir
+  prefikslər, beləliklə, məskunlaşma telemetriyası saxlama həndəsəsi ilə üst-üstə düşür.
 
-## Governance
+## İdarəetmə
 
-- Lanes declare their governance module via the catalog. `LaneConfigEntry`
-  carries the original alias and slug to keep telemetry and audit trails
-  readable.
-- The Nexus registry distributes signed lane manifests that include the
-  `LaneId`, dataspace binding, governance handle, settlement handle, and
+- Zolaqlar kataloq vasitəsilə idarəetmə modulunu elan edirlər. `LaneConfigEntry`
+  telemetriya və audit yollarını saxlamaq üçün orijinal ləqəbi və şlakı daşıyır
+  oxunaqlı.
+- Nexus reyestri imzalanmış zolaqlı manifestləri paylayır.
+  `LaneId`, məlumat məkanının bağlanması, idarəetmə dəstəyi, hesablaşma dəstəyi və
   metadata.
-- Runtime-upgrade hooks continue to enforce governance policies
-  (`gov_upgrade_id` by default) and log diffs via the telemetry bridge
-  (`nexus.config.diff` events).
+- İş vaxtı təkmilləşdirmə qarmaqları idarəetmə siyasətlərini tətbiq etməyə davam edir
+  (standart olaraq `gov_upgrade_id`) və telemetriya körpüsü vasitəsilə log fərqləri
+  (`nexus.config.diff` hadisələri).
 
-## Telemetry & status
+## Telemetriya və status
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and
-  settlement profiles, derived from the catalog and `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so
-  operators can map backlog and TEU pressure quickly.
-- `nexus_lane_configured_total` counts the number of derived lane entries and is
-  recomputed when configuration changes. Telemetry emits signed diffs whenever
-  lane geometry changes.
-- Dataspace backlog gauges include the alias/description metadata to help
-  operators associate queue pressure with business domains.
+- `/status` zolaq ləqəblərini, məlumat məkanı bağlamalarını, idarəetmə tutacaqlarını və
+  Kataloqdan və `LaneConfig`-dən əldə edilən hesablaşma profilləri.
+- Planlayıcı ölçüləri (`nexus_scheduler_lane_teu_*`) zolaq ləqəblərini/şlaklarını göstərir
+  operatorlar geriləmə və TEU təzyiqini tez bir zamanda xəritələyə bilər.
+- `nexus_lane_configured_total` əldə edilmiş zolaq girişlərinin sayını hesablayır və
+  konfiqurasiya dəyişdikdə yenidən hesablanır. Telemetriya istənilən vaxt işarəli fərqlər buraxır
+  zolaq həndəsəsi dəyişir.
+- Dataspace backlog ölçüləri kömək etmək üçün ləqəb/təsvir metadata daxildir
+  operatorlar növbə təzyiqini biznes domenləri ilə əlaqələndirirlər.
 
-## Configuration & Norito types
+## Konfiqurasiya və Norito növləri
 
-- `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-format structures for
-  manifests and SDKs.
-- `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
-  automatically from the catalog; it does not require Norito encoding because it
-  is an internal runtime helper.
-- The user-facing configuration (`iroha_config::parameters::user::Nexus`)
-  continues to accept declarative lane and dataspace descriptors; parsing now
-  derives the geometry and rejects invalid aliases or duplicate lane IDs.
+- `LaneCatalog`, `LaneConfig` və `DataSpaceCatalog` yaşayır
+  `iroha_data_model::nexus` və Norito formatlı strukturları təmin edin.
+  manifestlər və SDK-lar.
+- `LaneConfig` `iroha_config::parameters::actual::Nexus`-də yaşayır və əldə edilir
+  avtomatik olaraq kataloqdan; Norito kodlamasını tələb etmir, çünki o
+  daxili iş vaxtı köməkçisidir.
+- İstifadəçiyə yönəlmiş konfiqurasiya (`iroha_config::parameters::user::Nexus`)
+  deklarativ zolağı və verilənlər məkanı deskriptorlarını qəbul etməyə davam edir; indi təhlil edir
+  həndəsə əldə edir və etibarsız ləqəbləri və ya dublikat zolağı identifikatorlarını rədd edir.
 
-## Outstanding work
+## Görkəmli iş
 
-- Integrate settlement router updates (NX-3) with the new geometry so XOR buffer
-  debits and receipts are tagged by lane slug.
-- Extend admin tooling to list column families, compact retired lanes, and
-  inspect per-lane block logs using the slugged namespace.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and
-  attach regression fixtures for cross-lane replay.
-- Add compliance hooks for whitelists/blacklists and programmable-money
-  policies (tracked under NX-12).
+- XOR buferi üçün hesablaşma marşrutlaşdırıcısı yeniləmələrini (NX-3) yeni həndəsə ilə inteqrasiya edin
+  debet və qəbzlər zolaqlı şlak ilə işarələnir.
+- Sütun ailələrini, yığcam təqaüdçü zolaqları siyahıya almaq üçün admin alətlərini genişləndirin və
+  slugged ad boşluğundan istifadə edərək hər zolaqlı blok qeydlərini yoxlayın.
+- Birləşmə alqoritmini yekunlaşdırın (sifariş, budama, münaqişənin aşkarlanması) və
+  zolaqlararası təkrar oynatma üçün reqressiya qurğuları əlavə edin.
+- Ağ siyahılar/qara siyahılar və proqramlaşdırıla bilən pullar üçün uyğunluq qarmaqları əlavə edin
+  siyasətlər (NX-12 altında izlənilir).
 
 ---
 
-*This page will continue to track NX-1 follow-ups as NX-2 through NX-18 land.
-Please surface open questions in `roadmap.md` or the governance tracker so the
-portal stays aligned with the canonical docs.*
+*Bu səhifə NX-1 təqiblərini NX-2-dən NX-18-ə qədər izləməyə davam edəcək.
+Lütfən, açıq sualları `roadmap.md` və ya idarəetmə izləyicisində göstərin.
+portal kanonik sənədlərə uyğun olaraq qalır.*

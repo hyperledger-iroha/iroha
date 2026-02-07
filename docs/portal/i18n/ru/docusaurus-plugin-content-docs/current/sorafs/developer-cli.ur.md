@@ -4,23 +4,25 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-cli.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-cli
-title: SoraFS CLI cookbook
-sidebar_label: CLI cookbook
-description: Consolidated `sorafs_cli` surface کا task-focused walkthrough۔
+идентификатор: разработчик-cli
+title: SoraFS Рецепты CLI
+Sidebar_label: кулинарная книга CLI
+описание: Консолидированное поверхностное руководство `sorafs_cli`, ориентированное на задачи.
 ---
 
-:::note مستند ماخذ
+:::примечание
 :::
 
-Consolidated `sorafs_cli` surface (جو `sorafs_car` crate کے ذریعے `cli` feature کے ساتھ فراہم ہوتا ہے) SoraFS artifacts تیار کرنے کے لیے درکار ہر قدم expose کرتا ہے۔ اس cookbook کو عام workflows پر سیدھا جانے کے لیے استعمال کریں؛ operational context کے لیے اسے manifest pipeline اور orchestrator runbooks کے ساتھ pair کریں۔
+Консолидированная поверхность `sorafs_cli` (ящик `sorafs_car` имеет функцию `cli`, которая может быть использована в случае необходимости) SoraFS артефакты تیار کرنے کے لیے درکار ہر قدم выставить کرتا ہے۔ Поваренная книга и рабочие процессы операционный контекст, конвейер манифестов, Runbook оркестратора, пара.
 
-## Package payloads
+## Полезные данные пакета
 
-Deterministic CAR archives اور chunk plans بنانے کے لیے `car pack` استعمال کریں۔ اگر handle فراہم نہ ہو تو command خودکار طور پر SF-1 chunker منتخب کرتا ہے۔
+Детерминированные архивы CAR и планы фрагментов `car pack` کریں۔ Ручка فراہم نہ ہو تو خودکار طور پر SF-1 chunker منتخب کرتا ہے۔
 
 ```bash
 sorafs_cli car pack \
@@ -30,11 +32,11 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs lexicographic order میں walk ہوتے ہیں تاکہ checksums مختلف پلیٹ فارمز پر بھی stable رہیں۔
-- JSON summary میں payload digests، فی chunk metadata، اور registry/orchestrator کے ذریعے پہچانا گیا root CID شامل ہوتا ہے۔
+— Дескриптор чанкера по умолчанию: `sorafs.sf1@1.0.0`.
+- Входные данные каталога в лексикографическом порядке, ходьба, контрольные суммы, контрольные суммы, стабильный результат.
+- Сводка JSON, дайджесты полезной нагрузки, метаданные фрагментов, реестр/оркестратор, а также корневой CID или корневой CID.
 
-## Construct manifests
+## Создание манифестов
 
 ```bash
 sorafs_cli manifest build \
@@ -46,11 +48,11 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options براہ راست `sorafs_manifest::ManifestBuilder` میں `PinPolicy` fields سے map ہوتے ہیں۔
-- `--chunk-plan` تب دیں جب آپ چاہتے ہوں کہ CLI submission سے پہلے SHA3 chunk digest دوبارہ compute کرے؛ ورنہ وہ summary میں embed شدہ digest reuse کرتا ہے۔
-- JSON output Norito payload کی عکاسی کرتا ہے تاکہ reviews کے دوران diffs سیدھے ہوں۔
+- `--pin-*` options براہ راست `sorafs_manifest::ManifestBuilder` میں `PinPolicy` поля سے карта ہوتے ہیں۔
+- `--chunk-plan` может быть использован для отправки CLI и дайджеста фрагмента SHA3 для вычислений. ورنہ وہ summary میں embed شدہ дайджест повторное использование کرتا ہے۔
+- Выходные данные JSON Norito. Полезная нагрузка. Возможность просмотра обзоров и различий.
 
-## Sign manifests without long-lived keys
+## Подписывать манифесты без долгоживущих ключей
 
 ```bash
 sorafs_cli manifest sign \
@@ -60,11 +62,11 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Inline tokens، environment variables یا file-based sources قبول کرتا ہے۔
-- Provenance metadata (`token_source`, `token_hash_hex`, chunk digest) شامل کرتا ہے اور raw JWT کو محفوظ نہیں کرتا، جب تک `--include-token=true` نہ ہو۔
-- CI میں بہتر کام کرتا ہے: GitHub Actions OIDC کے ساتھ `--identity-token-provider=github-actions` استعمال کریں۔
+- Встроенные токены, переменные среды, файловые источники и многое другое.
+- Метаданные происхождения (`token_source`, `token_hash_hex`, дайджест фрагментов). `--include-token=true` نہ ہو۔
+- Поддержка CI: GitHub Actions OIDC или `--identity-token-provider=github-actions`.
 
-## Submit manifests to Torii
+## Отправьте манифесты на Torii
 
 ```bash
 sorafs_cli manifest submit \
@@ -79,11 +81,11 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Alias proofs کے لیے Norito decoding کرتا ہے اور Torii کو POST کرنے سے پہلے انہیں manifest digest سے match کرتا ہے۔
-- Plan سے chunk SHA3 digest دوبارہ compute کرتا ہے تاکہ mismatch attacks روکے جا سکیں۔
-- Response summaries بعد کی auditing کے لیے HTTP status، headers، اور registry payloads محفوظ کرتی ہیں۔
+- Доказательства псевдонимов и Norito, декодирование и Torii, и POST, и проверка соответствия дайджеста манифеста. کرتا ہے۔
+- Планирование дайджеста SHA3 фрагмента и вычисление атак на несоответствие в случае несоответствия.
+- Сводки ответов, аудит, статус HTTP, заголовки, полезные данные реестра и многое другое.
 
-## Verify CAR contents and proofs
+## Проверьте содержимое и доказательства CAR
 
 ```bash
 sorafs_cli proof verify \
@@ -92,10 +94,10 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- PoR tree دوبارہ بناتا ہے اور payload digests کو manifest summary کے ساتھ compare کرتا ہے۔
-- Replication proofs کو governance میں submit کرتے وقت مطلوبہ counts اور identifiers capture کرتا ہے۔
+- Дерево PoR позволяет просмотреть дайджесты полезной нагрузки и сводку манифеста, а также сравнить результаты.
+- Доказательства репликации для управления и отправки данных для подсчета идентификаторов и захвата идентификаторов.
 
-## Stream proof telemetry
+## Потоковая телеметрия
 
 ```bash
 sorafs_cli proof stream \
@@ -106,16 +108,14 @@ sorafs_cli proof stream \
   --stream-token "$(cat stream.token)" \
   --summary-out artifacts/video.proof_stream.json \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
-```
+```- ہر потоковое доказательство کے لیے NDJSON элементы излучают کرتا ہے (`--emit-events=false` سے replay بند کریں)۔
+- Подсчет успехов/неуспехов, гистограммы задержек, выборочные неудачи и сводные данные в формате JSON, агрегированные данные и журналы информационных панелей, очистка журналов и т. д.
+- Отчет об ошибках шлюза کرے یا локальная проверка PoR (`--por-root-hex` کے ذریعے) доказательства отклонения کرے تو ненулевой выход دیتا ہے۔ репетиция کے لیے `--max-failures` اور `--max-verification-failures` سے регулировка порогов کریں۔
+- Поддержка PoR всегда доступна. PDP и PoTR SF-13/SF-14 в конверте с возможностью повторного использования
+- `--governance-evidence-dir` отображает сводку, метаданные (метка времени, версия CLI, URL-адрес шлюза, дайджест манифеста), копию манифеста и копию каталога, а также пакеты управления, подтверждающие поток доказательств. Можно запустить архив и создать архив.
 
-- ہر streamed proof کے لیے NDJSON items emit کرتا ہے (`--emit-events=false` سے replay بند کریں)۔
-- Success/failure counts، latency histograms، اور sampled failures کو summary JSON میں aggregate کرتا ہے تاکہ dashboards logs scrape کیے بغیر نتائج دکھا سکیں۔
-- جب gateway failures report کرے یا local PoR verification (`--por-root-hex` کے ذریعے) proofs reject کرے تو non-zero exit دیتا ہے۔ rehearsal runs کے لیے `--max-failures` اور `--max-verification-failures` سے thresholds adjust کریں۔
-- آج PoR کو support کرتا ہے؛ PDP اور PoTR SF-13/SF-14 آنے پر اسی envelope کو reuse کریں گے۔
-- `--governance-evidence-dir` rendered summary، metadata (timestamp, CLI version, gateway URL, manifest digest)، اور manifest کی ایک copy فراہم کردہ directory میں لکھتا ہے تاکہ governance packets proof-stream evidence کو run دوبارہ کیے بغیر archive کر سکیں۔
-
-## Additional references
+## Дополнительные ссылки
 
 - `docs/source/sorafs_cli.md` — تمام flags کی جامع دستاویزات۔
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema اور Grafana dashboard template۔
-- `docs/source/sorafs/manifest_pipeline.md` — chunking، manifest composition، اور CAR handling پر تفصیلی جائزہ۔
+- `docs/source/sorafs_proof_streaming.md` — схема проверки телеметрии и шаблон информационной панели Grafana.
+- `docs/source/sorafs/manifest_pipeline.md` — фрагментирование, композиция манифеста, обработка CAR и другие функции.

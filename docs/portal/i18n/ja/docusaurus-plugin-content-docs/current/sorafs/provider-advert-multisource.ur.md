@@ -4,87 +4,89 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-advert-multisource.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# ملٹی سورس پرووائیڈر adverts اور شیڈولنگ
+# ملٹی سورس پرووائیڈر 広告 اور شیڈولنگ
 
-یہ صفحہ درج ذیل دستاویز میں موجود canonical spec کو خلاصہ کرتا ہے:
-[`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Norito schemas اور changelogs کے لیے اسی دستاویز کو حرف بہ حرف استعمال کریں؛ portal کی کاپی
-آپریٹر گائیڈنس، SDK نوٹس، اور ٹیلیمیٹری حوالہ جات کو SoraFS کے باقی runbooks کے قریب رکھتی ہے۔
+正規仕様の標準仕様:
+[`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)。
+Norito スキーマ 変更履歴 ٩ے لیے اسی دستاویز کو حرف بہ حرف استعمال کریں؛ポータル
+SDK の開発と開発 SoraFS のランブックの開発୨୧୨୧୨୧
 
-## Norito schema میں اضافے
+## Norito スキーマ
 
-### Range capability (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` – فی درخواست سب سے بڑا مسلسل span (bytes)، `>= 1`.
-- `min_granularity` – seek ریزولوشن، `1 <= قدر <= max_chunk_span`.
-- `supports_sparse_offsets` – ایک درخواست میں غیر مسلسل offsets کی اجازت دیتا ہے۔
-- `requires_alignment` – اگر true ہو تو offsets کو `min_granularity` کے مطابق align ہونا لازم ہے۔
-- `supports_merkle_proof` – PoR witness کی سپورٹ ظاہر کرتا ہے۔
+### 範囲機能 (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` – スパン (バイト) `>= 1`。
+- `min_granularity` – `1 <= قدر <= max_chunk_span` を検索します。
+- `supports_sparse_offsets` – オフセットのオフセット
+- `requires_alignment` – 本当のオフセット `min_granularity` 位置合わせ ہونا لازم ہے۔
+- `supports_merkle_proof` – PoR 証人 سپورٹ ظاہر کرتا ہے۔
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` canonical encoding نافذ کرتے ہیں
-تاکہ gossip payloads deterministic رہیں۔
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` 正規エンコーディング
+ゴシップのペイロードが決定的になる
 
 ### `StreamBudgetV1`
-- فیلڈز: `max_in_flight`, `max_bytes_per_sec`, اختیاری `burst_bytes`.
-- Validation rules (`StreamBudgetV1::validate`):
-  - `max_in_flight >= 1`, `max_bytes_per_sec > 0`.
+- 番号: `max_in_flight`、`max_bytes_per_sec`、`burst_bytes`。
+- 検証ルール (`StreamBudgetV1::validate`):
+  - `max_in_flight >= 1`、`max_bytes_per_sec > 0`。
   - `burst_bytes` موجود ہو تو `> 0` اور `<= max_bytes_per_sec` ہونا چاہیے۔
 
 ### `TransportHintV1`
-- فیلڈز: `protocol: TransportProtocol`, `priority: u8` (0-15 کی ونڈو
-  `TransportHintV1::validate` نافذ کرتا ہے).
-- معروف protocols: `torii_http_range`, `quic_stream`, `soranet_relay`,
-  `vendor_reserved`.
-- فی provider ڈپلیکیٹ protocol entries مسترد کی جاتی ہیں۔
+- 番号: `protocol: TransportProtocol`、`priority: u8` (0-15 秒)
+  `TransportHintV1::validate` فافذ کرتا ہے)。
+- プロトコル: `torii_http_range`、`quic_stream`、`soranet_relay`、
+  `vendor_reserved`。
+- プロバイダー ڈپلیکیٹ プロトコル エントリ مسترد کی جاتی ہیں۔
 
 ### `ProviderAdvertBodyV1` میں اضافے
-- اختیاری `stream_budget: Option<StreamBudgetV1>`.
-- اختیاری `transport_hints: Option<Vec<TransportHintV1>>`.
-- دونوں فیلڈز اب `ProviderAdmissionProposalV1`، governance envelopes، CLI fixtures، اور telemetric JSON میں بہاؤ رکھتے ہیں۔
+- `stream_budget: Option<StreamBudgetV1>`。
+- `transport_hints: Option<Vec<TransportHintV1>>`。
+- 管理 `ProviderAdmissionProposalV1` ガバナンス エンベロープ、CLI フィクスチャ、テレメトリック JSON の管理
 
-## Validation اور governance binding
+## 検証とガバナンスバインディング
 
-`ProviderAdvertBodyV1::validate` اور `ProviderAdmissionProposalV1::validate`
-خراب metadata کو مسترد کرتے ہیں:
+`ProviderAdvertBodyV1::validate` `ProviderAdmissionProposalV1::validate`
+メタデータの説明:
 
-- Range capabilities کو decode ہونا چاہیے اور span/granularity limits پوری کرنی چاہئیں۔
-- Stream budgets / transport hints کے لیے `CapabilityType::ChunkRangeFetch` TLV اور non-empty hints list لازم ہے۔
-- ڈپلیکیٹ transport protocols اور غیر درست priorities gossip سے پہلے validation errors پیدا کرتے ہیں۔
-- Admission envelopes `compare_core_fields` کے ذریعے proposal/adverts کے range metadata کو compare کرتے ہیں تاکہ mismatch gossip payloads جلدی مسترد ہوں۔
+- 範囲機能、デコード、スパン/粒度制限、およびデコード機能
+- ストリームの予算/トランスポートのヒント `CapabilityType::ChunkRangeFetch` TLV 空でないヒントのリスト
+- トランスポート プロトコル、優先順位、ゴシップ、検証エラー、および検証エラー
+- 入学封筒 `compare_core_fields` 提案/広告 範囲メタデータ 比較 ゴシップ ペイロード 不一致 ゴシップ ペイロード
 
-Regression coverage یہاں موجود ہے:
-`crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
+回帰カバレッジ ٌہاں موجود ہے:
+`crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`。
 
-## Tooling اور fixtures
+## ツーリング治具
 
-- Provider advert payloads میں `range_capability`, `stream_budget`, اور `transport_hints` شامل ہونا لازم ہے۔
-  `/v1/sorafs/providers` responses اور admission fixtures کے ذریعے validate کریں؛ JSON summaries میں parsed capability، stream budget، اور hint arrays شامل ہونے چاہئیں تاکہ telemetry ingest ہو سکے۔
-- `cargo xtask sorafs-admission-fixtures` اپنے JSON artefacts میں stream budgets اور transport hints دکھاتا ہے تاکہ dashboards feature adoption track کر سکیں۔
-- `fixtures/sorafs_manifest/provider_admission/` کے تحت fixtures اب شامل کرتے ہیں:
-  - canonical multi-source adverts،
-  - `multi_fetch_plan.json` تاکہ SDK suites deterministic multi-peer fetch plan replay کر سکیں۔
+- プロバイダー広告ペイロード `range_capability`、`stream_budget`、`transport_hints` ペイロード
+  `/v1/sorafs/providers` 応答 入場設備を検証するJSON サマリー、解析機能、ストリーム予算、ヒント配列、テレメトリの取り込み、
+- `cargo xtask sorafs-admission-fixtures` JSON アーティファクト ストリーム予算 輸送ヒント ダッシュボード機能 導入トラック
+- `fixtures/sorafs_manifest/provider_admission/` のフィクスチャの数:
+  - 正規のマルチソース広告
+  - `multi_fetch_plan.json` SDK スイートの決定論的なマルチピア フェッチ プランの再生
 
-## Orchestrator اور Torii انضمام
+## オーケストレーター Torii 認証
 
-- Torii `/v1/sorafs/providers` parsed range capability metadata کے ساتھ `stream_budget` اور `transport_hints` واپس کرتا ہے۔
-  providers جب نئی metadata چھوڑ دیں تو downgrade warnings چلتے ہیں، اور gateway range endpoints براہ راست clients کے لیے یہی constraints نافذ کرتے ہیں۔
-- Multi-source orchestrator (`sorafs_car::multi_fetch`) اب range limits، capability alignment، اور stream budgets کو work assignment کے دوران enforce کرتا ہے۔ Unit tests میں chunk-too-large، sparse-seek، اور throttling scenarios شامل ہیں۔
-- `sorafs_car::multi_fetch` downgrade signals (alignment failures, throttled requests) stream کرتا ہے تاکہ operators دیکھ سکیں کہ پلاننگ کے دوران مخصوص providers کیوں skip ہوئے۔
+- Torii `/v1/sorafs/providers` 解析範囲機能メタデータ `stream_budget` 解析 `transport_hints` 解析済み範囲機能メタデータ
+  プロバイダー メタデータ ダウングレード警告 ゲートウェイ範囲エンドポイント クライアント 制約 制限やあ
+- マルチソース オーケストレーター (`sorafs_car::multi_fetch`) 範囲制限、機能調整、ストリーム予算、作業割り当て、強制適用単体テスト、チャンクが大きすぎる、スパース シーク、スロットル シナリオなど
+- `sorafs_car::multi_fetch` ダウングレード シグナル (アライメントの失敗、スロットルされたリクエスト) ストリーム オペレーター オペレーター スキップ プロバイダー スキップفوئے۔
 
-## Telemetry reference
+## テレメトリのリファレンス
 
-Torii کی range fetch instrumentation **SoraFS Fetch Observability** Grafana dashboard
-(`dashboards/grafana/sorafs_fetch_observability.json`) اور متعلقہ alert rules
-(`dashboards/alerts/sorafs_fetch_rules.yml`) کو feed کرتی ہے۔
+Torii 範囲フェッチ インストルメンテーション **SoraFS フェッチ オブザーバビリティ** Grafana ダッシュボード
+(`dashboards/grafana/sorafs_fetch_observability.json`) アラート ルール
+(`dashboards/alerts/sorafs_fetch_rules.yml`) フィード ہے۔
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Range capability features advertise کرنے والے providers۔ |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Policy کے مطابق throttled range fetch attempts۔ |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Shared concurrency budget استعمال کرنے والی active guarded streams۔ |
+|メトリック |タイプ |ラベル |説明 |
+|----------|------|----------|---------------|
+| `torii_sorafs_provider_range_capability_total` |ゲージ | `feature` (`providers`、`supports_sparse_offsets`、`requires_alignment`、`supports_merkle_proof`、`stream_budget`、`transport_hints`)範囲機能機能によりプロバイダーを宣伝します|
+| `torii_sorafs_range_fetch_throttle_events_total` |カウンター | `reason` (`quota`、`concurrency`、`byte_rate`) |ポリシーによる範囲フェッチ試行の制限|
+| `torii_sorafs_range_fetch_concurrency_current` |ゲージ | — |共有同時実行バジェット (アクティブな保護されたストリーム) |
 
-Example PromQL snippets:
+PromQL スニペットの例:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -92,4 +94,4 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Quota enforcement کی تصدیق کے لیے throttling counter استعمال کریں اس سے پہلے کہ multi-source orchestrator defaults فعال کریں، اور جب concurrency آپ کے fleet کے stream budget maxima کے قریب ہو تو alert کریں۔
+クォータの適用 スロットリング カウンター スロットリング カウンター マルチソース オーケストレーターのデフォルト 同時実行性艦隊のストリーム予算最大値の警告アラート

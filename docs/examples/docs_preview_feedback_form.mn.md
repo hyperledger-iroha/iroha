@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# Docs урьдчилан харах санал хүсэлтийн маягт (W1 түнш долгион)
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
+W1 шүүмжлэгчдээс санал хүсэлт цуглуулахдаа энэ загварыг ашиглаарай. Үүнийг нэг бүрчлэн хуулбарлана
+түнш, мета өгөгдлийг бөглөж, дууссан хуулбарыг доор хадгална уу
 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 
-## Reviewer metadata
+## Шүүгчийн мета өгөгдөл
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- **Түншийн ID:** `partner-w1-XX`
+- **Тасалбар хүсэх:** `DOCS-SORA-Preview-REQ-PXX`
+- **Урилга илгээсэн (UTC):** `YYYY-MM-DD hh:mm`
+- **Зөвшөөрсөн шалгах нийлбэр (UTC):** `YYYY-MM-DD hh:mm`
+- **Үндсэн төвлөрөл:** (жишээ нь _SoraFS orchestrator docs_, _Torii ISO flows_)
 
-## Telemetry & artefact confirmations
+## Телеметрийн болон олдворын баталгаажуулалт
 
-| Checklist item | Result | Evidence |
+| Хяналтын хуудасны зүйл | Үр дүн | Нотлох баримт |
 | --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+| Шалгалтын дүнг баталгаажуулах | ✅ / ⚠️ | Бүртгэлд орох зам (жишээ нь, `build/checksums.sha256`) |
+| Прокси утааны тестийг үзээрэй | ✅ / ⚠️ | `npm run manage:tryit-proxy …` транскриптийн хэсэг |
+| Grafana хяналтын самбарын тойм | ✅ / ⚠️ | Дэлгэцийн зургийн зам(ууд) |
+| Портал шалгалтын тайлангийн тойм | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
 
-Add rows for any additional SLOs a reviewer inspects.
+Шүүгчийн шалгадаг нэмэлт SLO-д мөр нэмнэ үү.
 
-## Feedback log
+## Санал хүсэлтийн бүртгэл
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
+| Талбай | Хүнд байдал (мэдээлэл/минор/мажор/хориглогч) | Тодорхойлолт | Санал болгож буй засвар эсвэл асуулт | Tracker асуудал |
 | --- | --- | --- | --- | --- |
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+Урьдчилан үзэхийн тулд сүүлийн баганад GitHub асуудал эсвэл дотоод тасалбарыг лавлана уу
+Tracker нь засварын зүйлсийг энэ маягт руу буцааж холбож болно.
 
-## Survey summary
+## Судалгааны хураангуй
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+1. **Та шалгах нийлбэрийн удирдамж болон урих үйл явцад хэр итгэлтэй байна вэ?** (1–5)
+2. **Аль баримтууд хамгийн их/бага тустай байсан бэ?** (богино хариулт)
+3. **Try it прокси эсвэл телеметрийн хяналтын самбарт хандах хориглогч байсан уу?**
+4. **Нэмэлт нутагшуулах эсвэл хүртээмжтэй контент шаардлагатай юу?**
+5. **ГХ-ны өмнө өөр сэтгэгдэл байна уу?**
 
-Capture short answers and attach raw survey exports if you use an external form.
+Хэрэв та гадны маягт ашиглаж байгаа бол богино хариултуудыг авч, түүхий судалгааны экспортыг хавсаргана уу.
 
-## Knowledge check
+## Мэдлэг шалгах
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+- Оноо: `__/10`
+- Буруу асуултууд (хэрэв байгаа бол): `[#1, #4, …]`
+- Хяналтын арга хэмжээ (хэрэв оноо < 9/10 бол): нөхөн сэргээх дуудлага товлогдсон уу? y/n
 
-## Sign-off
+## Гарах
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- Шүүгчийн нэр, цагийн тэмдэг:
+- Docs/DevRel хянагч ба цагийн тэмдэг:
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+Гарын үсэг зурсан хуулбарыг холбогдох олдворуудтай хамт хадгалснаар аудиторууд дахин тоглуулах боломжтой
+нэмэлт контекстгүйгээр долгион.

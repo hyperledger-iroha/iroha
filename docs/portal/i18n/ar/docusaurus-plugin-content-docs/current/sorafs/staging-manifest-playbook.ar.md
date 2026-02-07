@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/sorafs/staging-manifest-playbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: دليل مانيفست الـstaging
-sidebar_label: دليل مانيفست الـstaging
-description: قائمة تحقق لتمكين ملف chunker المصادق عليه برلمانياً على نشرات Torii الخاصة بـ staging.
+المعرف: دليل التدريج
+العنوان: دليل مانيفست الـstaging
+Sidebar_label: دليل مانيفست الـstaging
+الوصف: قم بقائمة التحقق الخاصة بك من ملف Chunker المصادق عليه سياسياً على نشرات Torii بـ staging.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. احرص على إبقاء نسخة Docusaurus ونسخة Markdown القديمة متطابقتين حتى يتم إيقاف مجموعة Sphinx بالكامل.
+:::ملحوظة المصدر مؤهل
+احترام هذه الصفحة `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. احرص على نسخة Docusaurus ونسخة Markdown القديمة متطابقتين حتى يتم إيقاف مجموعة Sphinx بالكامل.
 :::
 
 ## نظرة عامة
 
-يرشد هذا الدليل إلى تمكين ملف chunker المصادق عليه برلمانياً في نشر Torii الخاص بـ staging قبل ترقية التغيير إلى الإنتاج. يفترض أن ميثاق حوكمة SoraFS تم التصديق عليه وأن الـ fixtures المعتمدة متاحة داخل المستودع.
+يرشد هذا الدليل إلى فاس ملف Chunker المصادق عليه برلمانياً في نشر Torii الخاص بـ التدريج قبل تطوير التغيير الجديد للإنتاج. حيث أنها تعتبر ميثاقاً SoraFS تم التصديق عليه وأن الـ Installations معتمدة داخل المستودع.
 
-## 1. المتطلبات المسبقة
+## 1.المتطلبات المسبقة
 
-1. زامن الـ fixtures المعتمدة والتواقيع:
+1. زمان الـ التركيبات المعتمدة والتواقيع:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -32,8 +34,8 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
    ci/check_sorafs_fixtures.sh
    ```
 
-2. حضّر دليل أظرف القبول الذي يقرأه Torii عند الإقلاع (مسار مثال): `/var/lib/iroha/admission/sorafs`.
-3. تأكد من أن إعدادات Torii تفعّل مخبأ discovery وتطبيق القبول:
+2. حصل على دليل أظرف النسخة التي تمت نسخه Torii عند الإقلاع (مسار المثال): `/var/lib/iroha/admission/sorafs`.
+3. تأكد من أن إعدادات Torii فعّل مخبأ الاكتشاف وتطبيقات:
 
    ```toml
    [torii.sorafs.discovery]
@@ -51,42 +53,40 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
    enforce_capabilities = true
    ```
 
-## 2. نشر أظرف القبول
+## 2. نشر أظرف تقبل
 
-1. انسخ أظرف قبول المزوّدين المعتمدة إلى الدليل المشار إليه في `torii.sorafs.discovery.admission.envelopes_dir`:
+1. انسخ أظرف قبول المحاسبين المعتمدين للدليل المرسل إليه في `torii.sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. أعد تشغيل Torii (أو أرسل SIGHUP إذا كانت أداة التحميل تدعم إعادة التحميل الفورية).
-3. راقب السجلات لرسائل القبول:
+2. إعادة تشغيل Torii (أو أرسل SIGHUP إذا كانت أداة التحميل تدعم إعادة التحميل الفوري).
+3. راقب تسجيل لرسائل التراث:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. التحقق من انتشار discovery
+## 3. التحقق من اكتشاف الانتشار
 
-1. انشر حمولة provider advert الموقعة (بايتات Norito) الناتجة عن خط المزوّد:
+1. موقع إعلان مزود خدمة النشر (بايتات Norito) يحدث عن خط المتحكم:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. استعلم عن نقطة discovery وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:
-
-   ```bash
+2. استعلم عن نقطة الاكتشاف وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   تأكد من أن `profile_aliases` تتضمن `"sorafs.sf1@1.0.0"` كأول إدخال.
+   تأكد من أن `profile_aliases` تتضمن `"sorafs.sf1@1.0.0"` كأول التدفق.
 
-## 4. اختبار نقاط نهاية manifest وplan
+## 4. اختبار نقاط نهاية البيان والخطة
 
-1. اجلب بيانات manifest الوصفية (يتطلب stream token إذا كان القبول مفعّلًا):
+1. جلب البيانات الوصفية الواضحة (يطلب رمز الدفق المميز إذا كان مفعّلًا):
 
    ```bash
    sorafs-fetch \
@@ -97,25 +97,25 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
      --json-out=reports/staging_manifest.json
    ```
 
-2. افحص إخراج JSON وتحقق من:
+2. يتم فحص إخراج JSON والتحقق من:
    - أن `chunk_profile_handle` يساوي `sorafs.sf1@1.0.0`.
-   - أن `manifest_digest_hex` يطابق تقرير الحتمية.
-   - أن `chunk_digests_blake3` تتطابق مع الـ fixtures المعاد توليدها.
+   - أن `manifest_digest_hex` يتوافق مع تقرير الحتمية.
+   - أن `chunk_digests_blake3` تتطابق مع الـ تركيبات المعاد توليدها.
 
-## 5. فحوصات التليمترية
+## 5. الفحوصات التليميترية
 
-- تأكد من أن Prometheus يعرض مقاييس الملف الجديد:
+- التأكد من أن Prometheus المعدة للمعايير الملف الجديد:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- يجب أن تعرض لوحات المتابعة مزوّد staging تحت الاسم المستعار المتوقع وأن تبقى عدادات brownout عند الصفر أثناء تفعيل الملف.
+- يجب أن يتم التقاط لوحات متابعة من خلال التدريج تحت الاسم المستعار وأن تعيش عدادات Brownout عند تفعيل الملف.
 
-## 6. الجاهزية للإطلاق
+##6.جاهزية للطلاق
 
-1. التقط تقريرًا مختصرًا يتضمن عناوين URL ومعرّف manifest ولقطة التليمترية.
-2. شارك التقرير في قناة Nexus rollout مع نافذة التفعيل المخطط لها في الإنتاج.
-3. انتقل إلى قائمة التحقق الخاصة بالإنتاج (Section 4 في `chunker_registry_rollout_checklist.md`) بعد موافقة أصحاب المصلحة.
+1. تم التقاط تقريرًا مختصرًا يشمل عناوين URL ومعرف البيان ولقطة التليميرية.
+2. شارك التقرير في قناة Nexus rollout مع نافذة التفعيل فهي في الإنتاج.
+3. انتقل إلى تسجيل الشهادات الخاصة بالإنتاج (القسم 4 في `chunker_registry_rollout_checklist.md`) بعد تسجيل الأشخاص الأصليين.
 
-الحفاظ على هذا الدليل محدثًا يضمن أن كل إطلاق لـ chunker/admission يتبع نفس الخطوات الحتمية بين staging والإنتاج.
+يضمن هذا الدليل محدثًا أن كل مجموعة متكاملة لـchunker/admission تتبع نفس الخطوات الحتمية بين التدريج والإنتاج.

@@ -6,51 +6,52 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9f775ae297c910da91c6ce97e97ee36fb87f60218fcfb97639ace6eba39f2252
 source_last_modified: "2026-01-03T18:07:57+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# ברוכים הבאים לפורטל המפתחים SORA Nexus
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository. The landing page now carries
-themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
-Norito Streaming reference so contributors can find the streaming control-plane
-contract without digging through the root spec.
+פורטל המפתחים SORA Nexus מאגד תיעוד אינטראקטיבי, SDK
+מדריכים, והפניות ל-API עבור מפעילי Nexus ו-Hyperledger Iroha
+תורמים. הוא משלים את אתר המסמכים הראשי על ידי הצצה למדריכים מעשיים
+ויצר מפרטים ישירות מהמאגר הזה. דף הנחיתה נושא כעת
+נקודות כניסה עם נושא Norito/SoraFS, תצלומי מצב OpenAPI חתומים וצילום ייעודי
+Norito הפניה לסטרימינג כדי שתורמים יוכלו למצוא את מישור בקרת הסטרימינג
+להתכווץ מבלי לחפור במפרט השורש.
 
-## What you can do here
+## מה אתה יכול לעשות כאן
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **למד את Norito** - התחל עם הסקירה הכללית והתחלה מהירה כדי להבין את
+  מודל הסדרה וכלי קוד בתים.
+- **SDKs Bootstrap** - עקוב אחר התחלות מהירות עבור JavaScript ו-Rust עוד היום; פייתון,
+  מדריכי Swift ואנדרואיד יצטרפו אליהם עם הגירת המתכונים.
+- **עיין בהפניות לממשק API** - הדף Torii OpenAPI מציג את ה-REST העדכני ביותר
+  טבלאות מפרט ותצורה מקשרות חזרה ל-Markdown הקנוני
+  מקורות.
+- **הכן פריסות** - ספרי הפעלה תפעוליים (טלמטריה, יישוב, Nexus
+  שכבות-על) מועברות מ-`docs/source/` וינחתו באתר זה בתור
+  ההגירה מתקדמת.
 
-## Current status
+## מצב נוכחי
 
-- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
-  hero/cards, and resource tiles that include the Norito Streaming summary.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
-  checks and CSP guards enforced by `buildSecurityHeaders`.
-- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
-  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
-  and the reference checklists before artifacts are published.
-- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
-  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
-  land here as they are authored.
+- ✅ נחיתה בעיצוב Docusaurus v3 עם טיפוגרפיה מרעננת, מונעת שיפוע
+  גיבור/כרטיסים, ואריחי משאבים הכוללים את סיכום הסטרימינג של Norito.
+- ✅ Torii OpenAPI תוסף מחווט ל-`npm run sync-openapi`, עם תמונת מצב חתומה
+  בדיקות ושומרי CSP שנאכפו על ידי `buildSecurityHeaders`.
+- ✅ תצוגה מקדימה וכיסוי בדיקה ב-CI (`docs-portal-preview.yml` +
+  `scripts/portal-probe.mjs`), משיג כעת את מסמך הסטרימינג, התחלה מהירה של SoraFS,
+  ורשימות התיעוד לפני פרסום חפצים.
+- ✅ התחלה מהירה של Norito, SoraFS ו-SDK פלוס סעיפי הפניה פעילים ב-
+  סרגל צד; יבוא חדש מ-`docs/source/` (סטרימינג, תזמור, ספרי הפעלה)
+  נוחתים כאן כפי שהם נכתבו.
 
-## Getting involved
+## מעורבות
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
+- ראה `docs/portal/README.md` לפקודות פיתוח מקומיות (`npm install`,
   `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- מעקב אחר משימות העברת תוכן מתבצע לצד פריטי מפת הדרכים של `DOCS-*`.
+  תרומות יתקבלו בברכה - יציאת חלקים מ-`docs/source/` והוסף את הדף
+  לסרגל הצד.
+- אם אתה מוסיף חפץ שנוצר (מפרטים, טבלאות תצורה), תיעד את ה-build
+  פקודה כך שתורמים עתידיים יוכלו לרענן אותו בקלות.

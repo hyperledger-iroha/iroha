@@ -4,57 +4,59 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-conformance.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: دليل مطابقة chunker في SoraFS
-sidebar_label: مطابقة chunker
-description: متطلبات وتدفقات عمل للحفاظ على ملف chunker الحتمي SF1 عبر fixtures و SDKs.
+id: チャンカー準拠
+タイトル: دليل مطابقة チャンカー في SoraFS
+サイドバーラベル: مطابقة チャンカー
+説明: SF1 フィクスチャと SDK のチャンカー。
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/chunker_conformance.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+:::note ノート
+テストは `docs/source/sorafs/chunker_conformance.md` です。 حرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة。
 :::
 
-يوثق هذا الدليل المتطلبات التي يجب على كل تطبيق اتباعها للبقاء متوافقاً مع ملف chunker الحتمي في SoraFS (SF1).
-كما يوثق سير إعادة التوليد، وسياسة التوقيع، وخطوات التحقق كي يبقى مستهلكو fixtures عبر SDKs متزامنين.
+يوثق هذا الدليل المتطلبات التي يجب على كل تطبيق اتباعها للبقاء متوافقاً مع ملف chunker الحتمي SoraFS (SF1)。
+フィクスチャ SDK のダウンロード重要です。
 
-## الملف المعتمد
+## ああ、
 
-- مقبض الملف: `sorafs.sf1@1.0.0` (البديل القديم `sorafs.sf1@1.0.0`)
-- بذرة الإدخال (hex): `0000000000dec0ded`
-- الحجم المستهدف: 262144 bytes (256 KiB)
-- الحجم الأدنى: 65536 bytes (64 KiB)
-- الحجم الأقصى: 524288 bytes (512 KiB)
-- متعدد الحدود المتدحرج: `0x3DA3358B4DC173`
-- بذرة جدول gear: `sorafs-v1-gear`
-- قناع القطع: `0x0000FFFF`
+- メッセージ: `sorafs.sf1@1.0.0` (`sorafs.sf1@1.0.0`)
+- 数値 (16 進数): `0000000000dec0ded`
+- バイト数: 262144 バイト (256 KiB)
+- サイズ: 65536 バイト (64 KiB)
+- サイズ: 524288 バイト (512 KiB)
+- メッセージ: `0x3DA3358B4DC173`
+- ギア: `sorafs-v1-gear`
+- 番号: `0x0000FFFF`
 
-التطبيق المرجعي: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-يجب أن ينتج أي تسريع SIMD نفس الحدود والـ digests.
+番号: `sorafs_chunker::chunk_bytes_with_digests_profile`。
+SIMD のダイジェストをご覧ください。
 
-## حزمة fixtures
+## 備品
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` يعيد توليد
-fixtures ويصدر الملفات التالية ضمن `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` 評価
+備品 `fixtures/sorafs_chunker/`:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — حدود chunk المعتمدة لمستهلكي Rust و TypeScript و Go.
+- `sf1_profile_v1.{json,rs,ts,go}` — チャンク、Rust、TypeScript、Go。
   يعلن كل ملف المقبض المعتمد كأول إدخال في `profile_aliases`، يتبعه أي بدائل قديمة (مثل
-  `sorafs.sf1@1.0.0` ثم `sorafs.sf1@1.0.0`). يتم فرض الترتيب بواسطة
-  `ensure_charter_compliance` ولا يجب تغييره.
-- `manifest_blake3.json` — manifest تم التحقق منه عبر BLAKE3 ويغطي كل ملفات fixtures.
-- `manifest_signatures.json` — توقيعات المجلس (Ed25519) على digest الخاص بالـ manifest.
-- `sf1_profile_v1_backpressure.json` والـ corpora الخام داخل `fuzz/` —
-  سيناريوهات بث حتمية تُستخدم في اختبارات back-pressure للـ chunker.
+  `sorafs.sf1@1.0.0` と `sorafs.sf1@1.0.0`)。ログインしてください。
+  `ensure_charter_compliance` です。
+- `manifest_blake3.json` — マニフェストの BLAKE3 フィクスチャ。
+- `manifest_signatures.json` — テスト (Ed25519) マニフェストのダイジェスト。
+- `sf1_profile_v1_backpressure.json` コーパス الخام داخل `fuzz/` —
+  バックプレッシャーのチャンカー。
 
-### سياسة التوقيع
+### 認証済み
 
-يجب أن تشمل إعادة توليد fixtures توقيعاً صالحاً من المجلس. يرفض المولد
-الإخراج غير الموقّع ما لم يتم تمرير `--allow-unsigned` صراحة (مخصص
-للتجارب المحلية فقط). أظرف التوقيع append-only ويتم إزالة التكرارات حسب الموقّع.
+試合は、試合の日程を決定します。 और देखें
+الإخراج غير الموقّع ما لم يتم تمرير `--allow-unsigned` صراحة (مخصص)
+جارب المحلية فقط)。追加専用です。
 
-لإضافة توقيع من المجلس:
+重要な情報:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -62,32 +64,32 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## التحقق
+## ありがとう
 
 يعيد مساعد CI `ci/check_sorafs_fixtures.sh` تشغيل المولد مع
-`--locked`. إذا انحرفت fixtures أو غابت التواقيع، تفشل المهمة. استخدم
-هذا السكربت في workflows الليلية وقبل إرسال تغييرات fixtures.
+`--locked`。試合の試合結果を確認します。ああ
+ワークフローとフィクスチャ。
 
-خطوات التحقق اليدوية:
+回答:
 
-1. شغّل `cargo test -p sorafs_chunker`.
-2. نفّذ `ci/check_sorafs_fixtures.sh` محلياً.
-3. تأكد أن `git status -- fixtures/sorafs_chunker` نظيف.
+1. `cargo test -p sorafs_chunker`。
+2. `ci/check_sorafs_fixtures.sh` محلياً。
+3. 評価 `git status -- fixtures/sorafs_chunker` 。
 
 ## دليل الترقية
 
-عند اقتراح ملف chunker جديد أو تحديث SF1:
+SF1 のチャンカー:
 
-انظر أيضاً: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) لمتطلبات
-البيانات الوصفية وقوالب المقترح وقوائم التحقق.
+回答: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
+ログインしてください。
 
-1. صِغ `ChunkProfileUpgradeProposalV1` (انظر RFC SF-1) بمعلمات جديدة.
-2. أعد توليد fixtures عبر `export_vectors` وسجل digest الجديد للـ manifest.
-3. وقّع الـ manifest بحصة المجلس المطلوبة. يجب إلحاق كل التواقيع بـ `manifest_signatures.json`.
-4. حدّث fixtures الخاصة بـ SDKs المتأثرة (Rust/Go/TS) وتأكد من التكافؤ عبر بيئات التشغيل.
-5. أعد توليد corpora fuzz إذا تغيرت المعلمات.
-6. حدّث هذا الدليل بالمقبض الجديد للملف والبذور وdigest.
-7. قدّم التغيير مع الاختبارات المحدثة وتحديثات roadmap.
+1. `ChunkProfileUpgradeProposalV1` (RFC SF-1) を参照してください。
+2. フィクスチャ `export_vectors` ダイジェスト マニフェスト。
+3. マニフェストを作成する。 يجب إلحاق كل التواقيع بـ `manifest_signatures.json`。
+4. フィクスチャと SDK (Rust/Go/TS) の組み合わせ。
+5. コーパスファズを分析する。
+6. ダイジェスト。
+7. ロードマップ。
 
-التغييرات التي تؤثر على حدود الـ chunk أو الـ digests دون اتباع هذه العملية
-غير صالحة ولا يجب دمجها.
+チャンク ダイジェスト ダイジェスト チャンク ダイジェスト
+すごいです。

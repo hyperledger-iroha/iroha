@@ -11,136 +11,135 @@ id: storage-capacity-marketplace
 title: SoraFS Storage Capacity Marketplace
 sidebar_label: Capacity Marketplace
 description: SF-2c plan for the capacity marketplace, replication orders, telemetry, and governance hooks.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# SoraFS Storage Capacity Marketplace (SF-2c Draft)
+# I18NT000000015X Һаҡлау һәләте баҙары (SF-2c драфт)
 
-The SF-2c roadmap item introduces a governed marketplace where storage
-providers declare committed capacity, receive replication orders, and earn fees
-proportional to delivered availability. This document scopes the deliverables
-required for the first release and breaks them into actionable tracks.
+SF-2c юл картаһы пункты индереү менән идара ителгән баҙар, унда һаҡлау .
+провайдерҙар үҙ өҫтөнә алған ҡәҙерен иғлан итә, репликация заказдар ала, һәм гонорарҙар эшләй
+тапшырылған доступность өсөн пропорциональ. Был документ тапшырыуҙарҙы киңәйтә
+беренсе сығарылыш өсөн кәрәкле һәм уларҙы ғәмәлгә яраҡлы тректарға бүлергә.
 
-## Objectives
+## Маҡсаттар
 
-- Express provider capacity commitments (total bytes, per-lane limits, expiry)
-  in a verifiable form consumable by governance, SoraNet transport, and Torii.
-- Allocate pins across providers according to declared capacity, stake, and
-  policy constraints while maintaining deterministic behaviour.
-- Meter storage delivery (replication success, uptime, integrity proofs) and
-  export telemetry for fee distribution.
-- Provide revocation and dispute processes so dishonest providers can be
-  penalised or removed.
+- Экспресс провайдеры ҡәҙерле йөкләмәләр (дөйөм байт, бер һыҙат сиктәре, срогы)
+  тикшерелгән формала идара итеү, SoraNet транспорты һәм I18NT000000016X.
+- Провайдерҙар буйынса иғлан ителгән ҡорамалдар, ставка һәм
+  сәйәси сикләүҙәр, шул уҡ ваҡытта детерминистик тәртипте һаҡлау.
+- Счетчик һаҡлау тапшырыу (репликация уңыш, эш ваҡыты, бөтөнлөк иҫбатлау) һәм
+  экспорт телеметрияһы өсөн түләү бүлергә.
+- Ҡайтарыу һәм бәхәс процестарын тәьмин итеү, шуға күрә намыҫһыҙ провайдерҙар була ала
+  штраф йәки алынған.
 
-## Domain Concepts
+## Домен төшөнсәләре
 
-| Concept | Description | Initial Deliverable |
-|---------|-------------|---------------------|
-| `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema + validator in `sorafs_manifest::capacity`. |
-| `ReplicationOrder` | Governance-issued instruction assigning a manifest CID to one or more providers, including redundancy level and SLA metrics. | Norito schema shared with Torii + smart contract API. |
-| `CapacityLedger` | On-chain/off-chain registry tracking active capacity declarations, replication orders, performance metrics, and fee accrual. | Smart contract module or off-chain service stub with deterministic snapshot. |
-| `MarketplacePolicy` | Governance policy defining minimum stake, audit requirements, and penalty curves. | Config struct in `sorafs_manifest` + governance document. |
+| Концепция | Тасуирлама | Башланғыс тапшырыусан |
+|--------|-------------|---------------------|
+| `CapacityDeclarationV1` | Norito файҙалы йөктәрҙе һүрәтләү провайдеры идентификаторы, chunker профиле ярҙамы, ҡылған GiB, һыҙат-конкрет сиктәре, хаҡтар кәңәштәре, ставка йөкләмәһе, һәм срогы. | Схема + валитатор I18NI000000029X. |
+| I18NI000000030X | Идара итеү менән бирелгән инструкция бер йәки бер нисә провайдерға асыҡ CID тәғәйенләү, шул иҫәптән артыҡлыҡ кимәле һәм SLA метрикаһы. | I18NT000000006X схемаһы менән бүлешкән I18NT00000000017X + аҡыллы килешеп API. |
+| `CapacityLedger` | Сылбырлы/өҫтөндә сылбырлы реестр реестры әүҙем ҡәҙерлелек декларациялары, репликация заказдары, етештереүсәнлек метрикаһы, һәм түләү тигеҙ. | Аҡыллы килешеп модуль йәки офф-сылбыр хеҙмәте стаб менән детерминистик снимок. |
+| `MarketplacePolicy` | Идара итеү сәйәсәте билдәләү минималь акциялар, аудит талаптары, һәм штраф ҡойроҡтары. | I18NI000000033X + идара итеү документында конфигурация структур. |
 
-### Implemented Schemas (Status)
+### Схемаларҙы тормошҡа ашырыу (Статус)
 
-## Work Breakdown
+## Эш өҙөлгән
 
-### 1. Schema & Registry Layer
+### 1. Схема & Реестр ҡатламы
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Define `CapacityDeclarationV1`, `ReplicationOrderV1`, `CapacityTelemetryV1`. | Storage Team / Governance | Use Norito; include semantic versioning and capability references. |
-| Implement parser + validator modules in `sorafs_manifest`. | Storage Team | Enforce monotonic IDs, capacity bounds, stake requirements. |
-| Extend chunker registry metadata with `min_capacity_gib` per profile. | Tooling WG | Helps clients enforce per-profile minimum hardware requirements. |
-| Draft `MarketplacePolicy` document capturing admission guardrails and penalty schedule. | Governance Council | Publish in docs alongside policy defaults. |
+| I18NI000000034X, I18NI000000035X, I18NI000000036X. | Һаҡлау командаһы / Идара итеү | Ҡулланыу Norito; семантик версия һәм мөмкинлектәр һылтанмаларын үҙ эсенә ала. |
+| I18NI000000037X-тағы великер модулдәрен тормошҡа ашырыуҙы тормошҡа ашырыу. | Һаҡлау командаһы | Монотоник идентификаторҙарҙы, ҡәҙерле сиктәрҙе, ставка талаптарын үтәгеҙ. |
+| 18NI0000000038X менән оҙайтыу өлөшө реестры метамағлүмәттәре менән профиль. | Ҡолғау WG | Клиенттарға ярҙам итә, профиль минималь аппарат талаптарын үтәргә. |
+| Ҡабул итеү ҡоршауҙары һәм штраф графигы алыу тураһында документ. | Идара итеү советы | Сәйәсәт дефолттары менән бер рәттән docs баҫтырып сығарыу. |
 
-#### Schema Definitions (Implemented)
+#### Схема билдәләмәләре (Тамамланған)
 
-- `CapacityDeclarationV1` captures signed capacity commitments per provider, including canonical chunker handles, capability references, optional lane caps, pricing hints, validity windows, and metadata. Validation ensures non-zero stake, canonical handles, deduplicated aliases, per-lane caps within the declared total, and monotonic GiB accounting.【crates/sorafs_manifest/src/capacity.rs:28】
-- `ReplicationOrderV1` binds manifests to governance-issued assignments with redundancy targets, SLA thresholds, and per-assignment guarantees; validators enforce canonical chunker handles, unique providers, and deadline constraints before Torii or the registry ingest the order.【crates/sorafs_manifest/src/capacity.rs:301】
-- `CapacityTelemetryV1` expresses epoch snapshots (declared vs utilised GiB, replication counters, uptime/PoR percentages) that feed fee distribution. Bounds checks keep utilisation within declarations and percentages within 0 – 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
-- Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` now surfaces the on-chain snapshot via `/v1/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
-- Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- I18NI0000000040X ҡул ҡуйылған һыйҙырышлылыҡ ҡорамалдары менән тәьмин итеүсе бер провайдер, шул иҫәптән канонлы chunker ручкалар, мөмкинлектәр һылтанмалары, опциональ һыҙат ҡапҡастары, хаҡтар кәңәштәре, дөрөҫлөк windows, һәм метамағлүмәттәр. Валидация тәьмин итә, нуль булмаған ставка, канон тотҡаһы, өҙөлгән псевдоним, бер һыҙатлы ҡапҡастар эсендә иғлан ителгән дөйөм, һәм монотонный GiB бухгалтерия.【крос/сорафтар_манифест/src/src/abcity.rs:28】
+- I18NI000000041X бәйләнештәре идара итеүгә бирелгән йөкләмәләр менән избыточность маҡсаттары, SLA сиктәре, һәм пер-задание гарантиялары; валидаторҙар канонлы өлөшсә тотҡаларын, уникаль провайдерҙар һәм сроклы сикләүҙәрҙе үтәүгә тиклем I18NT00000000018X йәки реестр бойороҡто һеңдерергә.
+- I18NI000000042X эпоха снимоктарын белдерә (иделе булмаған vs GiB, репликация иҫәпләүселәре, эш ваҡыты/PoR проценттары) тип, улар ем өсөн түләү бүленә. 100% эсендә декларациялар һәм проценттар эсендә утилләштереүҙе тикшерәләр.
+- Дөйөм ярҙамсылары (`CapacityMetadataEntry`, I18NI000000044X, һыҙат/SLA валидаторҙары) детерминистик асҡыс раҫлау һәм хаталар тураһында хәбәр итә, тип CI һәм аҫҡы инструменттарҙы ҡабаттан ҡуллана ала.
+- I18NI0000000045X хәҙер I18NI000000046X аша сылбырлы снимокты күтәрә, провайдер декларацияларын һәм гонорарҙарҙы берләштерә, детерминистик I18NT0000008X-ты берләштерә. JSON.【крат/ироха_тории/срк/сораф/реестр.17】【крат/ироха_тории/срк/апи.р.с:64】
+- Валидация ҡаплау күнекмәләре канон ручка үтәү, дубликаттар асыҡлау, бер һыҙат сиктәре, репликация йөкләмәһе һаҡсылары, һәм телеметрия диапазоны тикшерелгән шулай регрессиялар өҫтө шунда уҡ CI.【крат/сорафтар_манифест/src/srcty.rs:792】
+- Оператор инструменттары: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` кеше уҡый торған спецификацияларҙы канонлы I18NT000000009X файҙалы йөкләмәләр, base64 таптар, һәм JSON резюмеһы, шулай итеп, операторҙар I18NI000000048X стадияһында, I18NI000000049X, һәм репликация заказдары менән урындағы . 18NI0000000051X, I18NI000000052Х) һәм I18NI0000000053X аша генерациялана.
 
-### 2. Control Plane Integration
+### 2. Яуыз интеграцияһы менән идара итеү
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Add `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` Torii handlers with Norito JSON payloads. | Torii Team | Mirror validator logic; reuse Norito JSON helpers. |
-| Propagate `CapacityDeclarationV1` snapshots into orchestrator scoreboard metadata and gateway fetch plans. | Tooling WG / Orchestrator team | Extend `provider_metadata` with capacity references so multi-source scoring respects lane limits. |
-| Feed replication orders into orchestrator/gateway clients to drive assignments and failover hints. | Networking TL / Gateway team | Scoreboard builder consumes governance-signed replication orders. |
-| CLI tooling: extend `sorafs_cli` with `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | Provide deterministic JSON + scoreboard outputs. |
+| Өҫтәү I18NI000000054X, `/v1/sorafs/capacity/telemetry`, I18NI000000056X I18NT0000000019X ручкаһы менән Norito JSON файҙалы йөкләмәләр. | Torii командаһы | Көҙгө валидатор логикаһы; ҡабаттан ҡулланыу I18NT000000011X JSON ярҙамсылары. |
+| `CapacityDeclarationV1` таралыуын оркестрҙа табло метамағлүмәттәре һәм шлюз пландары пландары. | Ҡолғау WG / Оркестратор командаһы | `provider_metadata` оҙайтыу менән ҡомарлы һылтанмалар шулай күп сығанаҡлы баллдарҙы хөрмәт итеү һыҙат сиктәрен. |
+| Аҙыҡ репликация заказдар оркестрға/ҡапҡа клиенттар драйвер заданиелар һәм етешһеҙлектәр кәңәштәре. | Селтәрле TL / Ҡапҡа командаһы | Артельный төҙөүсе идара итеү-ҡулланыу репликация тураһында бойороҡтар ҡуллана. |
+| CLI инструменттар: оҙайтыу I18NI000000059 X менән I18NI0000000060X, I18NI000000061X, `capacity orders import`. | Ҡолғау WG | Детерминистик JSON + табло сығыштарын тәьмин итеү. |
 
-### 3. Marketplace Policy & Governance
+### 3. Баҙар сәйәсәте һәм идара итеү
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Ratify `MarketplacePolicy` (minimum stake, penalty multipliers, audit cadence). | Governance Council | Publish in docs, capture revision history. |
-| Add governance hooks so Parliament can approve, renew, and revoke declarations. | Governance Council / Smart Contract team | Use Norito events + manifest ingestion. |
-| Implement penalty schedule (fee reduction, bond slashing) tied to telemetered SLA violations. | Governance Council / Treasury | Align with `DealEngine` settlement outputs. |
-| Document dispute process and escalation matrix. | Docs / Governance | Link to dispute runbook + CLI helpers. |
+| Ratify `MarketplacePolicy` (минималь өлөшө, штраф множитель, аудит каденцияһы). | Идара итеү советы | Доктарҙа баҫығыҙ, ҡабаттан ҡарау тарихын төшөрөү. |
+| Өҫтәү идара итеү ҡармаҡтар шулай Парламент раҫлай ала, яңырта, һәм декларацияларҙы кире ҡайтарырға. | Идара итеү советы / Аҡыллы килешәү командаһы | Norito ваҡиғалар ҡулланыу + манифест ашау. |
+| Штраф графигы тормошҡа ашырыу (түләү кәметергә, облигациялар ҡырҡыу) бәйләнгән телеметратлы SLA боҙоуҙар. | Идара итеү советы / ҡаҙна | I18NI000000064X ҡасаба продукцияһы менән тура килә. |
+| Документ бәхәс процесы һәм эскалация матрицаһы. | Доктар / Идара итеү | Һылтанма бәхәс runbook + CLI ярҙамсылары. |
 
-### 4. Metering & Fee Distribution
+### 4. Счетчик & Түләү таратыу
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Expand Torii metering ingest to accept `CapacityTelemetryV1`. | Torii Team | Validate GiB-hours, PoR success, uptime. |
-| Update `sorafs_node` metering pipeline to report per-order utilisation + SLA stats. | Storage Team | Align with replication orders and chunker handles. |
-| Settlement pipeline: convert telemetry + replication data into XOR-denominated payouts, produce governance-ready summaries, and record ledger state. | Treasury / Storage Team | Wire into Deal Engine / Treasury exports. |
-| Export dashboards/alerts for metering health (ingestion backlog, stale telemetry). | Observability | Extend Grafana pack referenced by SF-6/SF-7. |
+| Torii метрингты киңәйтеү I18NI000000065X ҡабул итеү өсөн ашнаҡсы. | Torii командаһы | ГБ-сәғәтте раҫлау, PoR уңыш, эш ваҡыты. |
+| Яңыртыу I18NI00000000066X метрлыҡ торба үткәргес тураһында хәбәр итеү өсөн пер-заказ утилләштереү + SLA статистика. | Һаҡлау командаһы | Репликация заказдары һәм өлөшө менән тура килтереп, ручка. |
+| Ҡасаба торбаһы: үҙгәртеп телеметрия + репликация мәғлүмәттәре XOR-деноминацияланған түләүҙәр, идара итеүгә әҙер резюмелар етештереү, һәм рекорд леджер хәле. | Ҡаҙна / Һаҡлау командаһы | Сымға инеү двигателдәре / ҡаҙна экспорты. |
+| Экспорт приборҙар таҡталары/иҫкәртмәләр өсөн счетчик һаулыҡ (инепетка артта, иҫке телеметрия). | Күҙәтеүсән | Grafana Пачалы SF-6/SF-7 һылтанмаһы. |
 
-- Torii now exposes `/v1/sorafs/capacity/telemetry` and `/v1/sorafs/capacity/state` (JSON + Norito) so operators can submit epoch telemetry snapshots and inspectors can retrieve the canonical ledger for auditing or evidence packaging.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
-- `PinProviderRegistry` integration ensures replication orders are accessible through the same endpoint; CLI helpers (`sorafs_cli capacity telemetry --from-file telemetry.json`) now validate/publish telemetry from automation runs with deterministic hashing and alias resolution.
-- Metering snapshots produce `CapacityTelemetrySnapshot` entries pinned to the `metering` snapshot, and Prometheus exports feed the ready-to-import Grafana board at `docs/source/grafana_sorafs_metering.json` so billing teams can monitor GiB·hour accrual, projected nano-SORA fees, and SLA compliance in real time.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
-- When metering smoothing is enabled, the snapshot includes `smoothed_gib_hours` and `smoothed_por_success_bps` so operators can compare EMA-trended values against the raw counters that governance uses for payouts.【crates/sorafs_node/src/metering.rs:401】
+- I18NT000000023X хәҙер I18NI000000067X һәм `/v1/sorafs/capacity/state` X (JSON + I18NT000000013X) фашлай, шуға күрә операторҙар эпоха телеметрия снимоктарын һәм инспекторҙарын аудит йәки дәлилдәр өсөн канонлы буй Ҡаплау.【креттар/ироха_тории/срк/сораф/апи.с:268】【крат/ироха_тории/срк/апи.р.р. р.
+- I18NI000000069X интеграцияһы репликация заказдары шул уҡ ос нөктәһе аша инеү мөмкинлеген тәьмин итә; CLI ярҙамсылары (`sorafs_cli capacity telemetry --from-file telemetry.json`) хәҙер раҫлау/баҫма телеметрия автоматлаштырыу йүгерә менән детерминистик хеш һәм псевдоним ҡарар.
+- метрлыҡ снимоктар етештереү I18NI00000000071X яҙмалар I18NI0000000072X снимоктарына ҡыҫтырылған, һәм I18NT000000000000 экспорты туҡлана әҙер-импорт I18NT00000000003X in i18NI000000073X шулай биллинг командалары GiB·ure күҙәтә ала 1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора.
+- Ҡасан иҫәпләү тигеҙләү өҫтөндә эшләй, снимок `smoothed_gib_hours` һәм I18NI000000075X шулай операторҙарҙы сағыштырырға мөмкин EMA-тренд ҡиммәттәре ҡаршы сеймал счетчиктар, тип идара итеү өсөн ҡулланыу өсөн түләүҙәр.【крат/sorafs_node/src/menting.:401】
 
-### 5. Dispute & Revocation Handling
+### 5. Бәхәс & Ҡабул итеү менән эш итеү
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Define `CapacityDisputeV1` payload (complainant, evidence, target provider). | Governance Council | Norito schema + validator. |
-| CLI support to file disputes and respond (with evidence attachments). | Tooling WG | Ensure deterministic hashing of evidence bundle. |
-| Add automated checks for repeated SLA breaches (auto-escalate to dispute). | Observability | Alert thresholds and governance hooks. |
-| Document revocation playbook (grace period, evacuation of pinned data). | Docs / Storage Team | Link to policy doc and operator runbook. |
+| `CapacityDisputeV1`-ны билдәләү (зависимый, дәлилдәр, маҡсатлы провайдер). | Идара итеү советы | Norito схемаһы + валитатор. |
+| CLI раҫлау өсөн бәхәстәр һәм яуап бирергә (дәлилдәр менән беркетелгән). | Ҡолғау WG | Тәьмин итеү детерминистик хеширование дәлилдәр өйөм. |
+| Өҫтәү өсөн автоматлаштырылған тикшерелгән өсөн ҡабатланған SLA боҙоуҙар (авто-эскалат бәхәс). | Күҙәтеүсән | Иҫкәртмә сиктәре һәм идара итеү ҡармаҡтары. |
+| Документтарҙы тартып алыу пьеса китабы (льготалы осор, пинированный мәғлүмәттәрҙе эвакуациялау). | Доктар / Һаҡлау командаһы | Сәйәсәт doc һәм оператор runbook-ҡа һылтанма. |
 
-## Testing & CI Requirements
+## Һынау & CI талаптары- Бөтә яңы схема валидаторҙары өсөн берәмек һынауҙары (I18NI000000077X).
+- Интеграция һынауҙары, улар моделләштереү: декларация → репликация тәртибе → иҫәпләү → түләү.
+- CI эш ағымы өлгө һыйҙырышлылығы/телеметрияны тергеҙеү һәм ҡултамғаларҙы синхронлаштырыуҙы тәьмин итеү өсөн (`ci/check_sorafs_fixtures.sh`-сы оҙайтыу).
+- Реестр API-һы өсөн йөктәр һынауҙары (10к провайдерҙарҙы моделләштереү, 100к заказдар).
 
-- Unit tests for all new schema validators (`sorafs_manifest`).
-- Integration tests that simulate: declaration → replication order → metering → payout.
-- CI workflow to regenerate sample capacity declarations/telemetry and ensure signatures remain in sync (extend `ci/check_sorafs_fixtures.sh`).
-- Load tests for the registry API (simulate 10k providers, 100k orders).
+## Телеметрия һәм приборҙар таҡталары
 
-## Telemetry & Dashboards
+- Приборҙар панелдәре:
+  - Һыйҙырыш иғлан ителгән vs файҙаланыла бер провайдер.
+  - Ҡабатлау тәртибе артта ҡалыу һәм уртаса йөкләмә тотҡарланыуы.
+  - SLA үтәү (өҫкә %, PoR уңыш ставкаһы).
+  - Бер эпохаға түләү һәм штрафтар.
+- Иҫкәртмәләр:
+  - Минималь ҡеүәттән түбәнерәк провайдер.
+  - Репликация тәртибе йәбешкән > СЛА.
+  - Диңгеҙ торбаһы етешһеҙлектәре.
 
-- Dashboard panels:
-  - Capacity declared vs utilised per provider.
-  - Replication order backlog and average assignment delay.
-  - SLA compliance (uptime %, PoR success rate).
-  - Fee accrual and penalties per epoch.
-- Alerts:
-  - Provider below minimum committed capacity.
-  - Replication order stuck > SLA.
-  - Metering pipeline failures.
+## Документация тапшырыусылар
 
-## Documentation Deliverables
+- Оператор етәксеһе өсөн иғлан итеү ҡәҙере, яңыртыу йөкләмәләр, һәм мониторинг утилизация.
+- Декларацияларҙы раҫлау, бойороҡтар сығарыу, бәхәстәрҙе хәл итеү өсөн идара итеү етәксеһе.
+- API һылтанма өсөн ҡәҙерле ос нөктәләре һәм репликация заказ форматында.
+- Төҙөүселәр өсөн баҙар FAQ.
 
-- Operator guide for declaring capacity, renewing commitments, and monitoring utilisation.
-- Governance guide for approving declarations, issuing orders, handling disputes.
-- API reference for the capacity endpoints and replication order format.
-- Marketplace FAQ for developers.
+## GA әҙерлек исемлеге
 
-## GA Readiness Checklist
+Юл картаһы әйбер **SF-2c** ҡапҡалар етештереү таратыу бетон дәлилдәр буйынса бухгалтерия буйынса,
+бәхәстәр менән эш итеү, һәм onboarding. Ҡабул итеү критерийҙарын һаҡлау өсөн түбәндәге артефакттар ҡулланыу
+ғәмәлгә ашырыу менән синхронлаштырыуҙа.
 
-Roadmap item **SF-2c** gates production rollout on concrete evidence across accounting,
-dispute handling, and onboarding. Use the artefacts below to keep the acceptance criteria
-in sync with the implementation.
-
-### Nightly accounting & XOR reconciliation
-- Export the capacity state snapshot and the XOR ledger export for the same window, then run:
+### Төнгө бухгалтерия & XOR яраштырыу
+- Экспорт ҡөҙрәтле хәл снимок һәм XOR леджер экспорты өсөн шул уҡ тәҙрә, һуңынан эшләй:
   ```bash
   python3 scripts/telemetry/capacity_reconcile.py \
     --snapshot artifacts/sorafs/capacity/state_$(date +%F).json \
@@ -149,36 +148,36 @@ in sync with the implementation.
     --json-out artifacts/sorafs/capacity/reconcile_$(date +%F).json \
     --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
   ```
-  The helper exits non-zero on missing/overpaid settlements or penalties and emits a Prometheus
-  textfile summary.
-- Alert `SoraFSCapacityReconciliationMismatch` (in `dashboards/alerts/sorafs_capacity_rules.yml`)
-  fires whenever reconciliation metrics report gaps; dashboards live under
+  Ярҙам нульдән тыш юғалған/артыҡ түләнгән тораҡ пункттарында йәки штрафтар буйынса сыға һәм I18NT000000001X сыға.
+  текст файлы резюмеһы.
+- Alert `SoraFSCapacityReconciliationMismatch` X (`dashboards/alerts/sorafs_capacity_rules.yml`-та)
+  уттар ҡасан да яраштырыу метрикаһы тураһында хәбәр етешһеҙлектәре; приборҙар таҡталары 1990 й.
   `dashboards/grafana/sorafs_capacity_penalties.json`.
-- Archive the JSON summary and hashes under `docs/examples/sorafs_capacity_marketplace_validation/`
-  alongside governance packets.
+- Архив JSON резюме һәм хештар аҫтында I18NI0000000082X
+  идара итеү пакеттары менән бер рәттән.
 
-### Dispute & slashing evidence
-- File disputes through `sorafs_manifest_stub capacity dispute` (tests:
-  `cargo test -p sorafs_car --test capacity_cli`) so payloads stay canonical.
-- Run `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` and the penalty
-  suites (`record_capacity_telemetry_penalises_persistent_under_delivery`) to prove disputes and
-  slashes replay deterministically.
-- Follow `docs/source/sorafs/dispute_revocation_runbook.md` for evidence capture and escalation;
-  link strike approvals back into the validation report.
+### бәхәс & ҡырҡыу дәлилдәр
+- I18NI000000083X аша файл бәхәстәре (тестар:
+  `cargo test -p sorafs_car --test capacity_cli`) шулай файҙалы йөктәр канонлы булып ҡала.
+- Йүгереп I18NI000000085X һәм штраф
+  люкс (`record_capacity_telemetry_penalises_persistent_under_delivery`) бәхәстәрҙе иҫбатлау өсөн һәм
+  слэштар детерминистик яҡтан реплей.
+- `docs/source/sorafs/dispute_revocation_runbook.md`-ты дәлилдәрҙе туплау һәм эскалациялау өсөн эйәреп;
+  һылтанма һуғыу раҫлауҙары кире раҫлау отчеты.
 
-### Provider onboarding & exit smoke tests
-- Regenerate declaration/telemetry artefacts with `sorafs_manifest_stub capacity ...` and replay
-  the CLI tests before submission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Submit via Torii (`/v1/sorafs/capacity/declare`) then capture `/v1/sorafs/capacity/state` plus
-  Grafana screenshots. Follow the exit flow in `docs/source/sorafs/capacity_onboarding_runbook.md`.
-- Archive signed artefacts and reconciliation outputs inside
+### Провайдер onboarding & сығыу төтөн һынауҙары
+- I18NI0000000088X һәм реплей менән декларация/телеметрия артефакттарын яңыртыу
+  тапшырыу алдынан CLI һынауҙары (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`X).
+- I18NT000000024X аша тапшырыла (I18NI0000000090X) һуңынан I18NI000000091X плюс тотоу
+  I18NT000000004X скриншоттары. `docs/source/sorafs/capacity_onboarding_runbook.md`-та сығыу ағымын үтәгеҙ.
+- Архив ҡул ҡуйылған артефакттар һәм ярашыу сығыштары эсендә
   `docs/examples/sorafs_capacity_marketplace_validation/`.
 
-## Dependencies & Sequencing
+## Зависимость & Секвенирование
 
-1. Finish SF-2b (admission policy) — marketplace relies on vetted providers.
-2. Implement schema + registry layer (this doc) before Torii integration.
-3. Complete metering pipeline before enabling payouts.
-4. Final step: enable governance-controlled fee distribution once metering data is verified in staging.
+1. СФ-2б тамамлау (ҡабул итеү сәйәсәте) — баҙарҙа тикшерелгән провайдерҙарға таяна.
+2. Схема тормошҡа ашырыу + реестр ҡатламы (был doc) тиклем I18NT0000000025X интеграцияһы.
+3. Түләүҙәрҙе мөмкинлек биргәнсе, счетчик торбаһы тамамлау.
+4. Һуңғы аҙым: идара итеү-контролдә тотолған түләү бүлергә мөмкинлек бирә, бер тапҡыр счетчик мәғлүмәттәре раҫланған стажировка.
 
-Progress should be tracked in the roadmap with references to this document. Update the roadmap once each major section (schema, control plane, integration, metering, dispute handling) reaches feature complete status.
+Прогресс был документҡа һылтанмалар менән юл картаһында күҙәтелергә тейеш. Яңыртыу юл картаһы бер тапҡыр һәр төп бүлек (схема, контроль яҫылыҡ, интеграция, иҫәпләү, бәхәс менән эш итеү) еткән функция тулы статус.

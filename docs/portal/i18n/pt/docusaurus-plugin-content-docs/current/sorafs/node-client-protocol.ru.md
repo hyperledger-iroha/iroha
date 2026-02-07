@@ -4,144 +4,142 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-client-protocol.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Протокол SoraFS узел ↔ клиент
+#Protocolo SoraFS usado ↔ cliente
 
-Этот гид резюмирует каноническое определение протокола в
+Este é o procedimento de configuração canônica do protocolo de implementação
 [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Используйте upstream-спецификацию для байтовых Norito layout и changelog'ов;
-портальная копия держит операционные акценты рядом с остальными runbook SoraFS.
+Use a especificação upstream para o layout Norito do banco de dados e o changelog'ов;
+A cópia do portal contém contas de operação executadas com o runbook SoraFS.
 
-## Объявления провайдера и валидация
+## Teste de verificação e validação
 
-Провайдеры SoraFS распространяют payload'ы `ProviderAdvertV1` (см.
-`crates/sorafs_manifest::provider_advert`), подписанные управляемым оператором.
+O testador SoraFS transfere a carga útil `ProviderAdvertV1` (см.
+`crates/sorafs_manifest::provider_advert`), verifique a operação.
 Объявления фиксируют метаданные обнаружения и guardrails, которые
-мульти-источниковый оркестратор применяет на рантайме.
+O multi-orquestrador inicia a sua jornada.
 
-- **Срок действия** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Провайдеры
-  должны обновлять каждые 12 часов.
-- **Capability TLV** — TLV-список рекламирует транспортные возможности (Torii,
-  QUIC+Noise, SoraNet relays, vendor extensions). Неизвестные коды можно
-  пропускать при `allow_unknown_capabilities = true`, следуя рекомендациям
-  GREASE.
-- **QoS hints** — tier `availability` (Hot/Warm/Cold), максимальная задержка
-  извлечения, лимит конкурентности и опциональный stream budget. QoS должен
-  совпадать с наблюдаемой телеметрией и проверяется при admission.
-- **Endpoints и rendezvous topics** — конкретные service URL с TLS/ALPN
-  метаданными плюс discovery topics, на которые клиенты подписываются при
-  построении guard sets.
-- **Политика разнообразия путей** — `min_guard_weight`, лимиты fan-out для
-  AS/пулов и `provider_failure_threshold` обеспечивают детерминированные
-  multi-peer fetch'и.
-- **Идентификаторы профилей** — провайдеры обязаны публиковать канонический
-  handle (например, `sorafs.sf1@1.0.0`); опциональные `profile_aliases` помогают
-  миграции старых клиентов.
+- **Срок действия** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Provadores
+  должны обновлять каждые 12 horas.
+- **Capacidade TLV** — TLV-список рекламирует транспортные возможности (Torii,
+  QUIC+Noise, relés SoraNet, extensões de fornecedores). Códigos novos podem ser
+  proposta por `allow_unknown_capabilities = true`, conforme recomendação
+  GRAXA.
+- **Dicas de QoS** — nível `availability` (Quente/Quente/Frio), максимальная задержка
+  извлечения, лимит конкурентности e опциональный orçamento de fluxo. Qualidade de QoS
+  совпадать с наблюдаемой телеметрией и проверяется при admissão.
+- **Endpoints e tópicos de encontro** — URL de serviço conectado com TLS/ALPN
+  метаданными плюс tópicos de descoberta, на которые клиенты подписываются при
+  conjuntos de guarda построении.
+- **Политика разнообразия путей** — `min_guard_weight`, limites de fan-out para
+  AS/пулов e `provider_failure_threshold` determinam a determinação
+  busca multi-peer.
+- **Perfil de identificação** — provedor de perfil público canônico
+  alça (por exemplo, `sorafs.sf1@1.0.0`); Opção `profile_aliases`
+  миграции старых clientes.
 
-Правила валидации отвергают нулевой stake, пустые списки capabilities/endpoints/topics,
-перепутанные сроки, либо отсутствующие QoS targets. Admission envelopes
-сравнивают тела объявления и предложения (`compare_core_fields`) перед
+Правила валидации отвергают нулевой stake, пустые списки capacidades/endpoints/tópicos,
+перепутанные сроки, либо отсутствующие alvos de QoS. Envelopes de admissão
+сравнивают тела объявления и предложения (`compare_core_fields`) antes
 распространением обновлений.
 
-### Расширения range fetch
+### Расширения busca de intervalo
 
 Range-совместимые провайдеры включают следующую метадату:
 
-| Поле | Назначение |
+| Pólo | Atualizado |
 |------|------------|
-| `CapabilityType::ChunkRangeFetch` | Объявляет `max_chunk_span`, `min_granularity` и флаги выравнивания/доказательств. |
-| `StreamBudgetV1` | Опциональный envelope конкурентности/throughput (`max_in_flight`, `max_bytes_per_sec`, опциональный `burst`). Требует range capability. |
-| `TransportHintV1` | Упорядоченные предпочтения транспорта (например, `torii_http_range`, `quic_stream`, `soranet_relay`). Приоритеты `0–15`, дубли отклоняются. |
+| `CapabilityType::ChunkRangeFetch` | Verifique `max_chunk_span`, `min_granularity` e coloque as bandeiras/depósitos. |
+| `StreamBudgetV1` | Conversão de envelope opcional/taxa de transferência (`max_in_flight`, `max_bytes_per_sec`, опциональный `burst`). Capacidade de alcance Требует. |
+| `TransportHintV1` | Упорядоченные предпочтения transporte (por exemplo, `torii_http_range`, `quic_stream`, `soranet_relay`). Приоритеты `0–15`, дубли отклоняются. |
 
-Поддержка tooling:
+Ferramentas adicionais:
 
-- Пайплайны provider advert должны валидировать range capability, stream budget
-  и transport hints до выпуска детерминированных payload'ов для аудитов.
-- `cargo xtask sorafs-admission-fixtures` пакует канонические multi-source
-  adverts вместе с downgrade fixtures в
+- Anúncio do fornecedor Пайплайны должны валидировать capacidade de alcance, orçamento de fluxo
+  e dicas de transporte para determinar a carga útil dos auditores.
+- `cargo xtask sorafs-admission-fixtures` pacote canônico multifonte
+  anúncios em vez de rebaixar luminárias em
   `fixtures/sorafs_manifest/provider_admission/`.
-- Range adverts без `stream_budget` или `transport_hints` отклоняются загрузчиками
-  CLI/SDK до планирования, сохраняя multi-source harness в соответствии с
-  ожиданиями admission Torii.
+- Anúncios de gama entre `stream_budget` ou `transport_hints` отклоняются загрузчиками
+  CLI/SDK para planejamento, gerenciamento de chicote de múltiplas fontes em suporte
+  admissão ожиданиями Torii.
 
-## Range endpoints gateway
+## Gateway de endpoints de intervaloOs gateways determinam a definição de protocolos HTTP, fornecendo metadados.
 
-Gateways принимают детерминированные HTTP-запросы, отражающие метаданные объявлений.
+###`GET /v1/sorafs/storage/car/{manifest_id}`
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
-
-| Требование | Детали |
+| Treino | Detalhes |
 |------------|--------|
-| **Headers** | `Range` (один интервал, выровненный по chunk offsets), `dag-scope: block`, `X-SoraFS-Chunker`, опциональный `X-SoraFS-Nonce` и обязательный base64 `X-SoraFS-Stream-Token`. |
-| **Responses** | `206` с `Content-Type: application/vnd.ipld.car`, `Content-Range`, описывающим выданный интервал, метаданными `X-Sora-Chunk-Range` и эхо headers chunker/token. |
-| **Failure modes** | `416` для неверно выровненных диапазонов, `401` для отсутствующих/невалидных токенов, `429` при превышении stream/byte budget. |
+| **Cabeçalhos** | `Range` (intervalo, usado para deslocamentos de pedaços), `dag-scope: block`, `X-SoraFS-Chunker`, opcional `X-SoraFS-Nonce` e base64 `X-SoraFS-Stream-Token`. |
+| **Respostas** | `206` com `Content-Type: application/vnd.ipld.car`, `Content-Range`, descrição do arquivo, metadaнными `X-Sora-Chunk-Range` e outros cabeçalhos pedaço/token. |
+| **Modos de falha** | `416` para novos dias úteis, `401` para novos tokens/novos tokens, `429` при превышении orçamento de fluxo/byte. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-Fetch одного chunk с теми же headers плюс детерминированный digest chunk.
-Полезно для ретраев или forensic downloads, когда CAR slices не нужны.
+Buscar um pedaço diferente com os cabeçalhos e determinar o pedaço de resumo.
+Полезно для ретраев или downloads forenses, когда CAR slices не нужны.
 
-## Workflow мульти-источникового оркестратора
+## Fluxo de trabalho multifuncional
 
-Когда включен SF-6 multi-source fetch (Rust CLI через `sorafs_fetch`,
-SDKs через `sorafs_orchestrator`):
+Como usar a busca de várias fontes SF-6 (Rust CLI é `sorafs_fetch`,
+SDKs são `sorafs_orchestrator`):
 
-1. **Собрать входные данные** — декодировать план chunk'ов manifest, получить
-   последние adverts и, опционально, передать telemetry snapshot
-   (`--telemetry-json` или `TelemetrySnapshot`).
-2. **Построить scoreboard** — `Orchestrator::build_scoreboard` оценивает
+1. **Собрать входные данные** — декодировать plano chunk'ов manifesto, получить
+   anúncios publicitários e, opcionalmente, transmitir instantâneo de telemetria
+   (`--telemetry-json` ou `TelemetrySnapshot`).
+2. **Placar de avaliação** — `Orchestrator::build_scoreboard` оценивает
    пригодность и записывает причины отказа; `sorafs_fetch --scoreboard-out`
-   сохраняет JSON.
-3. **Планировать chunk'и** — `fetch_with_scoreboard` (или `--plan`) применяет
-   range-ограничения, stream budget, лимиты retry/peer (`--retry-budget`,
-   `--max-peers`) и выпускает stream token в scope manifest для каждого запроса.
-4. **Проверить receipts** — результаты включают `chunk_receipts` и
-   `provider_reports`; CLI summary сохраняют `provider_reports`, `chunk_receipts`
-   и `ineligible_providers` для evidence bundles.
+   gera JSON.
+3. **Plaнировать chunk'и** — `fetch_with_scoreboard` (ou `--plan`) primeiro
+   faixa de alcance, orçamento de fluxo, limites de nova tentativa/peer (`--retry-budget`,
+   `--max-peers`) e use o token de fluxo no manifesto do escopo para o caso.
+4. **Verificar recibos** — результаты включают `chunk_receipts` e
+   `provider_reports`; Resumo CLI definido `provider_reports`, `chunk_receipts`
+   e `ineligible_providers` para pacotes de evidências.
 
 Распространенные ошибки, возвращаемые операторам/SDKs:
 
-| Ошибка | Описание |
+| Óscar | Descrição |
 |--------|----------|
-| `no providers were supplied` | Нет подходящих записей после фильтрации. |
-| `no compatible providers available for chunk {index}` | Несовместимость диапазона или бюджета для конкретного chunk. |
-| `retry budget exhausted after {attempts}` | Увеличьте `--retry-budget` или исключите сбойные peers. |
-| `no healthy providers remaining` | Все провайдеры отключены после повторных отказов. |
-| `streaming observer failed` | Downstream CAR writer завершился с ошибкой. |
-| `orchestrator invariant violated` | Соберите manifest, scoreboard, telemetry snapshot и CLI JSON для triage. |
+| `no providers were supplied` | Não é possível inserir filtros adicionais. |
+| `no compatible providers available for chunk {index}` | Não há necessidade de um dia ou de um pedaço de concreto. |
+| `retry budget exhausted after {attempts}` | Use `--retry-budget` ou isole peers. |
+| `no healthy providers remaining` | Cada um dos provedores pode ser usado para obter mais informações. |
+| `streaming observer failed` | Escritor CAR downstream завершился с ошибкой. |
+| `orchestrator invariant violated` | Crie manifesto, placar, instantâneo de telemetria e CLI JSON para triagem. |
 
-## Телеметрия и доказательства
+## Telemetria e doação
 
 - Метрики, эмитируемые оркестратором:  
   `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
   `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (с тегами manifest/region/provider). Укажите `telemetry_region` в config или
-  через CLI флаги, чтобы дашборды разделяли по флоту.
-- CLI/SDK fetch summaries включают сохраненный scoreboard JSON, chunk receipts и
-  provider reports, которые должны входить в rollout bundles для gate'ов SF-6/SF-7.
-- Gateway handlers публикуют `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`,
-  чтобы SRE dashboards коррелировали решения оркестратора с поведением сервера.
+  (no arquivo manifesto/região/provedor). Verifique `telemetry_region` na configuração ou
+  Ao usar a bandeira CLI, esses dados serão distribuídos na flutuação.
+- Resumos de busca CLI/SDK fornecem scoreboard JSON, recibos de pedaços e
+  relatórios do provedor, que são adicionados aos pacotes de implementação para o gate'ов SF-6/SF-7.
+- Manipuladores de gateway публикуют `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`,
+  Os painéis SRE conectam a configuração do orquestrador com o servidor principal.
 
-## CLI и REST хелперы
-
-- `iroha app sorafs pin list|show`, `alias list` и `replication list` оборачивают
-  pin-registry REST endpoints и печатают сырой Norito JSON с блоками attestation
-  для аудиторских доказательств.
-- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` принимают Norito
-  или JSON manifests плюс опциональные alias proofs и successors; malformed proofs
-  возвращают `400`, stale proofs дают `503` с `Warning: 110`, а hard-expired proofs
-  возвращают `412`.
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) включают структуры attestation, чтобы клиенты могли
-  проверить данные относительно последних block headers перед действием.
+## CLI e REST ajuda- `iroha app sorafs pin list|show`, `alias list` e `replication list` atualizados
+  endpoints REST pin-registry e печатают сырой Norito JSON com atestado de bloco
+  para o auditor.
+- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` são usados Norito
+  ou manifestos JSON плюс опциональные provas de alias e sucessores; provas malformadas
+  возвращают `400`, provas obsoletas de `503` com `Warning: 110`, uma provas expiradas
+  instale `412`.
+- Pontos de extremidade REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
+  `/v1/sorafs/replication`) включают структуры atestado, чтобы клиенты могли
+  проверить данные относительно последних block headers antes de действием.
 
 ## Ссылки
 
-- Каноническая спецификация:
+- Especificação canônica:
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Norito типы: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- CLI хелперы: `crates/iroha_cli/src/commands/sorafs.rs`,
+- Tipos Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- Ajuda CLI: `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Crate оркестратора: `crates/sorafs_orchestrator`
-- Пак дашбордов: `dashboards/grafana/sorafs_fetch_observability.json`
+- Organizador de caixa: `crates/sorafs_orchestrator`
+- Pacote de dados: `dashboards/grafana/sorafs_fetch_observability.json`

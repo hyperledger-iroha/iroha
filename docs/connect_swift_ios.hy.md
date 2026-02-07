@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e3f492c3253124b1066f1ca4389c5ccf4b96a723a2cd9c30ca28ec92775eeaf4
 source_last_modified: "2026-01-05T18:22:23.396018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Recommended SDK Flow (ConnectClient + Norito bridge)
+## Առաջարկվող SDK հոսք (ConnectClient + Norito կամուրջ)
 
-Need a full Xcode integration walkthrough (SPM/CocoaPods, XCFramework wiring, ChaChaPoly helpers)?
-See `docs/connect_swift_integration.md` for the end-to-end packaging guide.
+Ցանկանու՞մ եք Xcode-ի ամբողջական ինտեգրման ուղեցույց (SPM/CocoaPods, XCFramework լարեր, ChaChaPoly օգնականներ):
+Տե՛ս `docs/connect_swift_integration.md`՝ վերջից մինչև վերջ փաթեթավորման ուղեցույցի համար:
 
-The Swift SDK ships a Norito-backed Connect stack:
+Swift SDK-ն առաքում է Norito-ով ապահովված Connect փաթեթ.
 
-- `ConnectClient` maintains the WebSocket (`/v1/connect/ws?...`) transport on top of
+- `ConnectClient`-ը պահպանում է WebSocket (`/v1/connect/ws?...`) տրանսպորտը վերևում
   `URLSessionWebSocketTask`.
-- `ConnectSession` orchestrates the lifecycle (open → approve/reject → sign → close) and
-  decrypts ciphertext frames once direction keys are installed.
-- `ConnectCrypto` exposes X25519 key generation plus Norito-compliant direction-key
-  derivation so apps never have to implement HKDF/HMAC plumbing manually.
-- `ConnectEnvelope`/`ConnectControl` represent the typed Norito frames emitted by the
-  Rust bridge (`connect_norito_bridge`); ciphertext envelopes are decrypted via the
-  same FFI helpers used on Android/Rust, guaranteeing parity.
+- `ConnectSession`-ը կազմակերպում է կյանքի ցիկլը (բաց → հաստատել/մերժել → ստորագրել → փակել) և
+  վերծանում է գաղտնագրված տեքստի շրջանակները, երբ տեղադրվեն ուղղության ստեղները:
+- `ConnectCrypto`-ը բացահայտում է X25519 բանալիների առաջացումը գումարած Norito-ին համապատասխանող ուղղության բանալին
+  ածանցում, այնպես որ հավելվածները երբեք ստիպված չեն լինում ձեռքով իրականացնել HKDF/HMAC սանտեխնիկա:
+- `ConnectEnvelope`/`ConnectControl` ներկայացնում է տպագրված Norito շրջանակները, որոնք թողարկվել են
+  Ժանգի կամուրջ (`connect_norito_bridge`); գաղտնագրված տեքստի ծրարները վերծանվում են միջոցով
+  նույն FFI օգնականները, որոնք օգտագործվում են Android/Rust-ում, երաշխավորելով հավասարություն:
 
-Before starting a session:
-1. Derive the 32-byte session identifier (`sid`) using the same BLAKE2b recipe as other
-   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
-2. Generate a Connect key pair via `ConnectCrypto.generateKeyPair()` or reuse a stored
-   private key (public keys can be recomputed with `ConnectCrypto.publicKey(fromPrivateKey:)`).
-3. Create the WebSocket client and start it inside an async context.
+Նիստը սկսելուց առաջ.
+1. Ստացե՛ք 32 բայթանոց նիստի նույնացուցիչը (`sid`)՝ օգտագործելով նույն BLAKE2b բաղադրատոմսը, ինչպես մյուսները
+   SDK-ներ (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`):
+2. Ստեղծեք Connect բանալիների զույգ `ConnectCrypto.generateKeyPair()`-ի միջոցով կամ նորից օգտագործեք պահվածը
+   մասնավոր բանալի (հանրային բանալիները կարող են վերահաշվարկվել `ConnectCrypto.publicKey(fromPrivateKey:)`-ով):
+3. Ստեղծեք WebSocket հաճախորդը և գործարկեք այն համաժամանակյա համատեքստում:
 
 ```swift
 import IrohaSwift
@@ -79,15 +80,15 @@ Task {
 }
 ```
 
-`ConnectSession` throws `ConnectSessionError.missingDecryptionKeys` if ciphertext frames
-arrive before direction keys are installed; derive them immediately after processing an
-`Approve` control (wallet public key is included in the payload). To inspect ciphertext
-frames manually, call `ConnectEnvelope.decrypt(frame:symmetricKey:)` with the directional
-key that matches the frame’s direction.
+`ConnectSession`-ը նետում է `ConnectSessionError.missingDecryptionKeys`, եթե ծածկագրված տեքստի շրջանակներ
+ժամանել նախքան ուղղության ստեղները տեղադրելը. ստացեք դրանք մշակելուց անմիջապես հետո
+`Approve` հսկողություն (դրամապանակի հանրային բանալին ներառված է ծանրաբեռնվածության մեջ): Գաղտնագրված տեքստը ստուգելու համար
+շրջանակներ ձեռքով, զանգահարեք `ConnectEnvelope.decrypt(frame:symmetricKey:)` ուղղորդմամբ
+բանալին, որը համապատասխանում է շրջանակի ուղղությանը:
 
-> **Tip:** When the Norito bridge is missing (e.g., Swift Package Manager builds without
-> the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
-> (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
+> **Խորհուրդ.** Երբ Norito կամուրջը բացակայում է (օրինակ՝ Swift Package Manager-ը կառուցվում է առանց
+> XCFramework), SDK-ն ավտոմատ կերպով վերադառնում է JSON շեմին: Գաղտնագրման օգնականներ
+> (`ConnectCrypto.*`) պահանջում է կամուրջ, այնպես որ միացրեք XCFramework-ը արտադրական հավելվածներում:
 
 ```swift
 import Foundation
@@ -287,19 +288,19 @@ let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: r
 let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
 ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
 ```
-## CI validation
+## CI վավերացում
 
-- Before making Connect or bridge integration changes, run:
+- Նախքան Connect կամ Bridge ինտեգրման փոփոխություններ կատարելը, գործարկեք.
 
   ```bash
   make swift-ci
   ```
 
-  The command validates Swift fixtures, checks the dashboard feeds, and renders the CLI
-  summaries. The CI workflow relies on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
-  StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
-  appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
-  `mobile_ci` output to determine which lane needs regeneration or further incident
-  handling.
+  Հրամանը վավերացնում է Swift-ի հարմարանքները, ստուգում է վահանակի թարմացումները և ներկայացնում է CLI
+  ամփոփումներ. CI աշխատանքային հոսքը հիմնված է Buildkite մետատվյալների վրա
+  (`ci/xcframework-smoke:<lane>:device_tag`) արդյունքները քարտեզագրելու համար դեպի սիմուլյատոր կամ
+  StrongBox երթուղիներ. խողովակաշարերը կամ գործակալների պիտակները փոխելուց հետո հաստատեք մետատվյալները
+  հայտնվում է տեղեկամատյաններում:
+- Եթե գործարկումը ձախողվի, հետևեք `docs/source/swift_parity_triage.md`-ին և ստուգեք
+  `mobile_ci` ելք՝ որոշելու համար, թե որ գոտին է վերականգնման կամ հետագա միջադեպի կարիք ունի
+  բեռնաթափում.

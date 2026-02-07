@@ -11,108 +11,109 @@ id: security-hardening
 title: Security hardening & pen-test checklist
 sidebar_label: Security hardening
 description: Harden the developer portal before exposing the Try it sandbox outside the lab.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## Umumiy ko'rinish
 
-Roadmap item **DOCS-1b** requires OAuth device-code login, strong content
-security policies, and repeatable penetration tests before the preview portal
-can run on non-lab networks. This appendix explains the threat model, the
-controls implemented in the repo, and the go-live checklist that gate reviews
-must execute.
+“Yo‘l xaritasi” bandi **DOCS-1b** uchun OAuth qurilma kodiga kirish, kuchli kontent talab qilinadi
+xavfsizlik siyosatlari va oldindan ko'rish portalidan oldin takrorlanadigan penetratsion testlar
+laboratoriya bo'lmagan tarmoqlarda ishlashi mumkin. Ushbu ilova tahdid modelini tushuntiradi
+repoda amalga oshirilgan boshqaruvlar va ko'rib chiqishga imkon beruvchi jonli nazorat ro'yxati
+bajarishi kerak.
 
-- **Scope:** the Try it proxy, embedded Swagger/RapiDoc panels, and the custom
-  Try it console rendered by `docs/portal/src/components/TryItConsole.jsx`.
-- **Out-of-scope:** Torii itself (covered by Torii readiness reviews) and SoraFS
-  publishing (covered by DOCS-3/7).
+- **Qoʻl:** Sinab koʻring proksi-server, oʻrnatilgan Swagger/RapiDoc panellari va maxsus
+  `docs/portal/src/components/TryItConsole.jsx` tomonidan taqdim etilgan konsolni sinab ko'ring.
+- ** Qo'llash doirasi tashqarisida:** Toriining o'zi (Torii tayyorgarlik ko'rib chiqishlari bilan qamrab olingan) va SoraFS
+  nashriyot (DOCS-3/7 tomonidan qamrab olingan).
 
-## Threat model
+## Tahdid modeli
 
-| Asset | Risk | Mitigation |
+| Aktiv | Xavf | Yumshatish |
 | --- | --- | --- |
-| Torii bearer tokens | Theft or reuse outside the docs sandbox | Device-code login (`DOCS_OAUTH_*`) mints short-lived tokens, the proxy redacts headers, and the console auto-expires cached credentials. |
-| Try it proxy | Abuse as an open relay or bypass of Torii rate limits | `scripts/tryit-proxy*.mjs` enforce origin allowlists, rate limiting, health probes, and explicit `X-TryIt-Auth` forwarding; no credentials are persisted. |
-| Portal runtime | Cross-site scripting or malicious embeds | `docusaurus.config.js` injects Content-Security-Policy, Trusted Types, and Permissions-Policy headers; inline scripts are restricted to the Docusaurus runtime. |
-| Observability data | Missing telemetry or tampering | `docs/portal/docs/devportal/observability.md` documents the probes/dashboards; `scripts/portal-probe.mjs` runs in CI before publishing. |
+| Torii tashuvchi tokenlari | Docs sandbox tashqarisida o'g'irlik yoki qayta foydalanish | Qurilma kodiga kirish (`DOCS_OAUTH_*`) qisqa muddatli tokenlarni chiqaradi, proksi-server sarlavhalarni o'zgartiradi va konsol keshlangan hisob ma'lumotlarini avtomatik ravishda tugatadi. |
+| Sinab ko'ring proksi | Ochiq reley sifatida suiiste'mol qilish yoki Torii tezligi chegaralarini chetlab o'tish | `scripts/tryit-proxy*.mjs` kelib chiqishiga ruxsat beruvchi roʻyxatlar, tariflarni cheklash, sogʻliqni tekshirishlar va aniq `X-TryIt-Auth` yoʻnaltirishni amalga oshirish; hech qanday hisobga olish ma'lumotlari saqlanib qolmaydi. |
+| Portal ish vaqti | Saytlararo skript yoki zararli o'rnatish | `docusaurus.config.js` Kontent-Xavfsizlik-Siyosat, Ishonchli turlar va Ruxsatlar-Siyosat sarlavhalarini kiritadi; inline skriptlar Docusaurus ish vaqti bilan cheklangan. |
+| Kuzatish ma'lumotlari | Telemetriya etishmayotgan yoki o'zgartirish | `docs/portal/docs/devportal/observability.md` problarni/boshqaruv panelini hujjatlashtiradi; `scripts/portal-probe.mjs` nashrdan oldin CI da ishlaydi. |
 
-Adversaries include curious users viewing the public preview, malicious actors
-testing stolen links, and compromised browsers attempting to scrape stored
-credentials. All controls must work on commodity browsers without trusted
-networks.
+Dushmanlar orasida ommaga oldindan ko'rishni ko'rayotgan qiziquvchan foydalanuvchilar, zararli aktyorlar kiradi
+o'g'irlangan havolalarni sinovdan o'tkazish va saqlangan qirqishga urinayotgan buzilgan brauzerlar
+hisobga olish ma'lumotlari. Barcha boshqaruv elementlari ishonchli brauzerlarsiz ishlashi kerak
+tarmoqlar.
 
-## Required controls
+## Kerakli boshqaruv elementlari
 
-1. **OAuth device-code login**
-   - Configure `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL`,
-     `DOCS_OAUTH_CLIENT_ID`, and related knobs in the build environment.
-   - The Try it card renders a sign-in widget (`OAuthDeviceLogin.jsx`) that
-     fetches the device code, polls the token endpoint, and auto-clears tokens
-     once they expire. Manual Bearer overrides remain available for emergency
-     fallback.
-   - Builds now fail when the OAuth configuration is missing or when the
-     fallback TTLs drift outside the 300 s–900 s window mandated by DOCS-1b;
-     set `DOCS_OAUTH_ALLOW_INSECURE=1` only for disposable local previews.
-2. **Proxy guardrails**
-   - `scripts/tryit-proxy.mjs` enforces allowed origins, rate limits, request
-     size caps, and upstream timeouts while tagging traffic with
-     `X-TryIt-Client` and redacting tokens from logs.
+1. **OAuth qurilma kodiga kirish**
+   - `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL` sozlang,
+     `DOCS_OAUTH_CLIENT_ID` va qurilish muhitidagi tegishli tugmalar.
+   - Sinab ko'ring kartasi tizimga kirish vidjetini (`OAuthDeviceLogin.jsx`) ko'rsatadi.
+     qurilma kodini oladi, token so‘nggi nuqtasini so‘raydi va tokenlarni avtomatik tozalaydi
+     ular muddati tugagandan keyin. Manual Bearer bekor qilish favqulodda holatlar uchun mavjud bo'lib qoladi
+     qaytish.
+   - OAuth konfiguratsiyasi yo'q bo'lganda yoki endi tuzilmalar muvaffaqiyatsiz tugadi
+     zaxira TTLlar DOCS-1b tomonidan belgilangan 300-900-yillar oynasidan tashqariga siljiydi;
+     `DOCS_OAUTH_ALLOW_INSECURE=1` ni faqat bir martalik mahalliy oldindan ko'rish uchun o'rnating.
+2. **Proksi himoyasi**
+   - `scripts/tryit-proxy.mjs` ruxsat etilgan manbalar, tarif cheklovlari, so'rovlarni amalga oshiradi
+     o'lcham cheklari va trafikni belgilashda yuqori oqimdagi taymoutlar
+     `X-TryIt-Client` va jurnallardan tokenlarni tahrirlash.
    - `scripts/tryit-proxy-probe.mjs` plus `docs/portal/docs/devportal/observability.md`
-     define the liveness probe and dashboard rules; run them before every
-     rollout.
-3. **CSP, Trusted Types, Permissions-Policy**
-   - `docusaurus.config.js` now exports deterministic security headers:
-     `Content-Security-Policy` (default-src self, strict connect/img/script
-     lists, Trusted Types requirements), `Permissions-Policy`, and
+     jonli zond va asboblar paneli qoidalarini aniqlang; ularni har safar oldin ishga tushiring
+     tarqatish.
+3. **CSP, ishonchli turlar, ruxsatnomalar siyosati**
+   - `docusaurus.config.js` endi deterministik xavfsizlik sarlavhalarini eksport qiladi:
+     `Content-Security-Policy` (sukut bo'yicha o'z-o'zidan, qattiq ulanish/img/skript
+     ro'yxatlar, Ishonchli turlar talablari), `Permissions-Policy` va
      `Referrer-Policy: no-referrer`.
-   - The CSP connect list whitelists the OAuth device-code and token endpoints
-     (HTTPS only unless `DOCS_SECURITY_ALLOW_INSECURE=1`) so device login works
-     without relaxing the sandbox for other origins.
-   - The headers are embedded directly in the generated HTML so static hosts do
-     not need extra configuration. Keep inline scripts limited to the
-     Docusaurus bootstrap.
-4. **Runbooks, observability, and rollback**
-   - `docs/portal/docs/devportal/observability.md` describes the probes and
-     dashboards that watch login failures, proxy response codes, and request
-     budgets.
-   - `docs/portal/docs/devportal/incident-runbooks.md` covers the escalation
-     path if the sandbox is abused; combine it with
-     `scripts/tryit-proxy-rollback.mjs` to flip endpoints safely.
+   - CSP ulanish ro'yxati OAuth qurilma kodi va token so'nggi nuqtalarini oq ro'yxatga oladi
+     (Faqat `DOCS_SECURITY_ALLOW_INSECURE=1` bo'lmasa HTTPS), shuning uchun qurilmaga kirish ishlaydi
+     boshqa kelib chiqishi uchun qum qutisini bo'shashtirmasdan.
+   - Sarlavhalar to'g'ridan-to'g'ri yaratilgan HTML-ga joylashtirilgan, shuning uchun statik xostlar
+     qo'shimcha konfiguratsiyani talab qilmaydi. Inline skriptlari bilan cheklangan holda saqlang
+     Docusaurus yuklash tizimi.
+4. **Runbooks, kuzatuvchanlik va orqaga qaytarish**
+   - `docs/portal/docs/devportal/observability.md` problarni tasvirlaydi va
+     tizimga kirishda xatoliklarni, proksi-server javob kodlarini va so'rovni kuzatuvchi asboblar paneli
+     byudjetlar.
+   - `docs/portal/docs/devportal/incident-runbooks.md` eskalatsiyani qamrab oladi
+     agar qum qutisi suiiste'mol qilingan bo'lsa, yo'l; bilan birlashtiring
+     Oxirgi nuqtalarni xavfsiz aylantirish uchun `scripts/tryit-proxy-rollback.mjs`.
 
-## Pen-test & release checklist
+## Qalam sinovi va chiqarish nazorat ro'yxati
 
-Complete this list for every preview promotion (attach results to the release
-ticket):
+Har bir oldindan koʻrish reklamasi uchun ushbu roʻyxatni toʻldiring (natijalarni nashrga ilova qiling
+chipta):
 
-1. **Verify OAuth wiring**
-   - Run `npm run start` locally with the production `DOCS_OAUTH_*` exports.
-   - From a clean browser profile, open the Try it console and confirm the
-     device-code flow mints a token, counts down the lifetime, and clears the
-     field after expiry or sign-out.
-2. **Probe the proxy**
-   - `npm run tryit-proxy` against staging Torii, then execute
-     `npm run probe:tryit-proxy` with the configured sample path.
-   - Check logs for `authSource=override` entries and confirm rate limiting
-     increments counters when you exceed the window.
-3. **Confirm CSP/Trusted Types**
-   - `npm run build` and open `build/index.html`. Ensure the `<meta
-     http-equiv="Content-Security-Policy">` tag matches the expected directives
-     and that DevTools shows no CSP violations when loading the preview.
-   - Use `npm run probe:portal` (or curl) to fetch the deployed HTML; the probe
-     now fails when the `Content-Security-Policy`, `Permissions-Policy`, or
-     `Referrer-Policy` meta tags are missing or differ from the values declared
-     in `docusaurus.config.js`, so governance reviewers can rely on the exit
-     code instead of eyeballing curl output.
-4. **Review observability**
-   - Verify the Try it proxy dashboard is green (rate limits, error ratios,
-     health probe metrics).
-   - Run the incident drill in `docs/portal/docs/devportal/incident-runbooks.md`
-     if the host changed (new Netlify/SoraFS deployment).
-5. **Document the results**
-   - Attach screenshots/logs to the release ticket.
-   - Capture each finding in the remediation report template
+1. **OAuth simlarini tekshiring**
+   - `DOCS_OAUTH_*` eksporti bilan `npm run start` ni mahalliy sifatida ishga tushiring.
+   - Toza brauzer profilidan Sinab ko'ring konsolni oching va tasdiqlang
+     qurilma-kod oqimi tokenni chiqaradi, ishlash muddatini hisoblaydi va tozalaydi
+     muddati tugagandan yoki tizimdan chiqqandan keyin maydon.
+2. **Proksi-serverni tekshirish**
+   - `npm run tryit-proxy` Torii bosqichiga qarshi, keyin bajaring
+     Sozlangan namuna yo'li bilan `npm run probe:tryit-proxy`.
+   - `authSource=override` yozuvlari uchun jurnallarni tekshiring va tezlikni cheklashni tasdiqlang
+     oynadan oshib ketganingizda hisoblagichlarni oshiradi.
+3. **CSP/Ishonchli turlarni tasdiqlang**
+   - `npm run build` va `build/index.html` ni oching. `<meta
+     http-equiv="Content-Security-Policy">` tegi kutilgan ko'rsatmalarga mos keladi
+     va DevTools oldindan ko'rishni yuklashda hech qanday CSP buzilishlarini ko'rsatmaydi.
+   - O'rnatilgan HTMLni olish uchun `npm run probe:portal` (yoki curl) dan foydalaning; prob
+     endi `Content-Security-Policy`, `Permissions-Policy` yoki
+     `Referrer-Policy` meta teglari yoʻq yoki eʼlon qilingan qiymatlardan farq qiladi
+     `docusaurus.config.js` da, shuning uchun boshqaruv sharhlovchilari chiqishga ishonishlari mumkin
+     eyeballing curl chiqishi o'rniga kod.
+4. **Kuzatilish imkoniyatini ko‘rib chiqish**
+   - Sinab ko'ring proksi boshqaruv paneli yashil rangda ekanligini tekshiring (stavkalar chegaralari, xato nisbatlari,
+     sog'liqni tekshirish ko'rsatkichlari).
+   - `docs/portal/docs/devportal/incident-runbooks.md` da voqea matkapini bajaring
+     agar xost o'zgargan bo'lsa (yangi Netlify/SoraFS joylashtirish).
+5. **Natijalarni hujjatlash**
+   - Chiptaga skrinshotlar/jurnallarni biriktiring.
+   - Har bir topilmani tuzatish hisoboti shablonida yozib oling
      ([`docs/examples/pentest_remediation_report_template.md`](../../../examples/pentest_remediation_report_template.md))
-     so owners, SLAs, and retest evidence are easy to audit later.
-   - Link back to this checklist so the DOCS-1b roadmap item stays auditable.
+     shuning uchun egalar, SLA va qayta sinovdan o'tgan dalillarni keyinroq tekshirish oson.
+   - DOCS-1b yoʻl xaritasi bandi tekshirilishi mumkin boʻlib qolishi uchun ushbu nazorat roʻyxatiga qayta havola qiling.
 
-If any step fails, halt the promotion, file a blocking issue, and note the
-remediation plan in `status.md`.
+Agar biron bir qadam muvaffaqiyatsiz bo'lsa, reklamani to'xtating, blokirovka qilish muammosini yozing va e'tibor bering
+`status.md` da tuzatish rejasi.

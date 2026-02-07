@@ -4,57 +4,59 @@ direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Publishing Checklist
+# የህትመት ማረጋገጫ ዝርዝር
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+የገንቢ መግቢያውን ባዘመኑ ቁጥር ይህንን የማረጋገጫ ዝርዝር ይጠቀሙ። መሆኑን ያረጋግጣል
+CI ግንባታ፣ የ GitHub ገፆች መዘርጋት እና በእጅ የሚጨሱ ሙከራዎች እያንዳንዱን ክፍል ይሸፍናሉ።
+ከመልቀቂያ ወይም የመንገድ ካርታ ወሳኝ መሬት በፊት።
 
-## 1. Local validation
+## 1. የአካባቢ ማረጋገጫ
 
-- `npm run sync-openapi -- --version=current --latest` (add one or more
-  `--mirror=<label>` flags when Torii OpenAPI changes for a frozen snapshot).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` – verify the
-  checksum manifest (add `--descriptor`/`--archive` when testing downloaded CI
-  artefacts).
-- `npm run serve` – launches the checksum-gated preview helper which verifies
-  the manifest before calling `docusaurus serve`, so reviewers never browse an
-  unsigned snapshot (the `serve:verified` alias remains for explicit calls).
-- Spot-check the markdown you touched via `npm run start` and the live reload
-  server.
+- `npm run sync-openapi -- --version=current --latest` (አንድ ወይም ከዚያ በላይ ይጨምሩ
+  `--mirror=<label>` ባንዲራዎች I18NT0000007X OpenAPI ለቀዘቀዘ ቅጽበታዊ እይታ ሲቀየር)።
+- `npm run build` - የ `Build on Iroha with confidence` ጀግና ቅጂ አሁንም ያረጋግጡ
+  በ `build/index.html` ውስጥ ይታያል.
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` - ያረጋግጡ
+  checksum መግለጫ (የወረደውን CI ሲሞክር `--descriptor`/`--archive` ይጨምሩ
+  ቅርሶች)።
+- `npm run serve` - የሚያረጋግጥ የቼክ-ጋድ ቅድመ እይታ አጋዥን ይጀምራል
+  መግለጫው ወደ `docusaurus serve` ከመደወል በፊት ስለዚህ ገምጋሚዎች በጭራሽ አያስሱም።
+  ያልተፈረመ ቅጽበታዊ ገጽ እይታ (የ`serve:verified` ተለዋጭ ስም ለግልጽ ጥሪዎች ይቀራል)።
+- በ`npm run start` የነካከውን ምልክት ማድረጊያ እና ቀጥታውን እንደገና መጫን
+  አገልጋይ.
 
-## 2. Pull request checks
+## 2. የጥያቄ ቼኮችን ይጎትቱ
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  the preview verification script succeeded (CI logs show the
-  `scripts/preview_verify.sh` output).
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- በ `.github/workflows/check-docs.yml` ውስጥ የ I18NI0000021X ሥራ እንደተሳካ ያረጋግጡ።
+- I18NI0000023X ሩጫን ያረጋግጡ (CI ምዝግብ ማስታወሻዎች የጀግናውን ጭስ መፈተሽ ያሳያሉ)።
+- የቅድመ እይታ የስራ ፍሰት አንጸባራቂ (`build/checksums.sha256`) መሰቀሉን ያረጋግጡ እና
+  የቅድመ እይታ ማረጋገጫ ስክሪፕት ተሳክቷል (CI ምዝግብ ማስታወሻዎች የ
+  I18NI0000025X ውፅዓት)።
+- የታተመውን ቅድመ እይታ URL ከ GitHub ገጾች አካባቢ ወደ PR ያክሉ
+  መግለጫ.
 
-## 3. Section sign-off
+## 3. ክፍል ማቋረጥ
 
-| Section | Owner | Checklist |
-|---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
-| Security & Try it sandbox | Docs/DevRel · Security | OAuth device-code login configured (`DOCS_OAUTH_*`), `security-hardening.md` checklist executed, CSP/Trusted Types headers verified via `npm run build` or `npm run probe:portal`. |
+| ክፍል | ባለቤት | የማረጋገጫ ዝርዝር |
+|--------|-------|-------|
+| መነሻ ገጽ | DevRel | የጀግና ቅጂዎች፣ የፈጣን ጅምር ካርዶች ወደ ትክክለኛ መንገዶች ይገናኛሉ፣ የሲቲኤ አዝራሮች ይፈታሉ። |
+| Norito | Norito WG | አጠቃላይ እይታ እና ጅምር መመሪያዎች የቅርብ ጊዜውን የCLI ባንዲራዎች እና I18NT0000003X schema ሰነዶችን ይጠቅሳሉ። |
+| SoraFS | የማከማቻ ቡድን | Quickstart ለማጠናቀቅ ይሰራል፣ የሰነድ የሰነድ ማስረጃዎች ናቸው፣ የማስመሰል መመሪያዎች ተረጋግጠዋል። |
+| የኤስዲኬ መመሪያዎች | ኤስዲኬ ይመራል | Rust/Python/JS መመሪያዎች የአሁኑን ምሳሌዎች ያጠናቅራሉ እና ከቀጥታ ሪፖስ ጋር ይገናኛሉ። |
+| ዋቢ | ሰነዶች/DevRel | ማውጫ አዲሱን ዝርዝሮች ይዘረዝራል፣ Norito የኮዴክ ማመሳከሪያ ከ`norito.md` ጋር ይዛመዳል። |
+| ቅድመ ዕይታ ቅርስ | ሰነዶች/DevRel | `docs-portal-preview` ቅርስ ከ PR ጋር ተያይዟል፣ የጭስ ቼኮች ማለፊያ፣ አገናኝ ከገምጋሚዎች ጋር ተጋርቷል። |
+| ደህንነት እና ይሞክሩት ማጠሪያ | ሰነዶች/DevRel · ደህንነት | OAuth መሣሪያ-የመግቢያ ኮድ ተዋቅሯል (`DOCS_OAUTH_*`)፣ `security-hardening.md` ማረጋገጫ ዝርዝር ተፈፅሟል፣ CSP/የታመኑ ዓይነቶች ራስጌዎች በ`npm run build` ወይም I18NI0000031X ተረጋግጠዋል። |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+እያንዳንዱን ረድፍ እንደ የእርስዎ PR ግምገማ አካል ምልክት ያድርጉ ወይም ማንኛውንም የክትትል ተግባራት ሁኔታን ያስታውሱ
+መከታተል ትክክለኛ ሆኖ ይቆያል።
 
-## 4. Release notes
+## 4. የመልቀቂያ ማስታወሻዎች
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- `https://docs.iroha.tech/` (ወይም የአካባቢ ዩአርኤልን) ያካትቱ
+  ከማሰማራት ሥራ) በመልቀቂያ ማስታወሻዎች እና በሁኔታ ዝመናዎች ውስጥ።
+- የታችኞቹ ቡድኖች የት እንዳሉ እንዲያውቁ ማንኛውንም አዲስ ወይም የተቀየሩ ክፍሎችን በግልፅ ይደውሉ
+  የራሳቸውን የጭስ ሙከራዎች እንደገና ለማካሄድ.

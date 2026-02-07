@@ -4,42 +4,44 @@ direction: ltr
 source: docs/portal/docs/norito/overview.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# نظرة عامة على Norito
+# Код запроса Norito
 
-Norito هي طبقة التسلسل الثنائي المستخدمة عبر Iroha: فهي تحدد كيف تُشفَّر هياكل البيانات على الشبكة، وتُحفظ على القرص، وتتبادل بين العقود والمضيفين. تعتمد كل crate في مساحة العمل على Norito بدلا من `serde` حتى تنتج العقد على عتاد مختلف بايتات متطابقة.
+Norito в режиме онлайн-обновления Iroha: В случае необходимости Он выступил в роли Сэнсэя в фильме "Страна" и в "Старом городе", а также в Сан-Франциско. Нэнси. Вы можете положить ящик в ящик Norito, чтобы установить `serde`. Он был убит в 2007 году.
 
-تلخص هذه النظرة العامة المكونات الاساسية وتربط بالمراجع القياسية.
+Он был выбран в качестве посредника в борьбе за права человека.
 
 ## لمحة عن البنية
 
-- **الرأس + الحمولة** – يبدأ كل message Norito برأس تفاوض للميزات (flags, checksum) يتبعه payload خام. تُتفاوض التخطيطات المعبأة والضغط عبر بتات الرأس.
-- **الترميز الحتمي** – `norito::codec::{Encode, Decode}` تنفذ الترميز العاري. يعاد استخدام التخطيط نفسه عند تغليف payloads في الرؤوس حتى يبقى التجزئة والتوقيع حتميين.
-- **المخطط + derives** – `norito_derive` يولد تطبيقات `Encode` و`Decode` و`IntoSchema`. تُفعَّل البنى/السلاسل المعبأة افتراضيا ومذكورة في `norito.md`.
-- **سجل multicodec** – معرّفات الهاش وأنواع المفاتيح ووصفات payload موجودة في `norito::multicodec`. يتم الحفاظ على الجدول المعتمد في `multicodec.md`.
+- **الرأس + الحمولة** – вызывает сообщение Norito برأس تفاوض للميزات (флаги, контрольная сумма) и отображает полезную нагрузку. Вы можете сделать это в ближайшее время.
+- **Уведомление об ошибке** – `norito::codec::{Encode, Decode}`. Для получения информации о полезных нагрузках в программе "Полезные нагрузки" в разделе "Полезные нагрузки" Уиллоу Дэвис.
+- **المخطط+ выводит** – `norito_derive` для `Encode` и `Decode` и `IntoSchema`. Установите/запустите приложение для `norito.md`.
+- **Мультикодек** – используется для создания полезной нагрузки в `norito::multicodec`. Он был создан для `multicodec.md`.
 
 ## الادوات
 
-| المهمة | الامر / API | ملاحظات |
+| المهمة | Интерфейс / API | ملاحظات |
 | --- | --- | --- |
-| فحص الرأس/الاقسام | `ivm_tool inspect <file>.to` | يعرض نسخة ABI و flags و entrypoints. |
-| الترميز/فك الترميز في Rust | `norito::codec::{Encode, Decode}` | منفذة لكل الانواع الاساسية في data model. |
-| interop JSON | `norito::json::{to_json_pretty, from_json}` | JSON حتمي مدعوم بقيم Norito. |
-| توليد docs/specs | `norito.md`, `multicodec.md` | توثيق مصدر الحقيقة في جذر المستودع. |
+| فحص الرأس/الاقسام | `ivm_tool inspect <file>.to` | Используйте ABI, флаги и точки входа. |
+| Предыдущая/встроенная версия в Rust | `norito::codec::{Encode, Decode}` | Откройте для себя модель данных. |
+| взаимодействие JSON | `norito::json::{to_json_pretty, from_json}` | JSON создается в формате Norito. |
+| Документы/спецификации | `norito.md`, `multicodec.md` | Он был убит в фильме "Старый мир". |
 
 ## سير عمل التطوير
 
-1. **اضافة derives** – فضل `#[derive(Encode, Decode, IntoSchema)]` للهياكل الجديدة. تجنب المسلسلات اليدوية الا عند الضرورة القصوى.
-2. **التحقق من التخطيطات المعبأة** – استخدم `cargo test -p norito` (ومصفوفة packed features في `scripts/run_norito_feature_matrix.sh`) للتأكد من ان التخطيطات الجديدة تبقى مستقرة.
-3. **اعادة توليد docs** – عند تغير الترميز، حدّث `norito.md` وجدول multicodec، ثم حدّث صفحات البوابة (`/reference/norito-codec` وهذا الملخص).
-4. **ابقاء الاختبارات Norito-first** – يجب ان تستخدم اختبارات التكامل مساعدات JSON من Norito بدلا من `serde_json` حتى تمر عبر المسارات نفسها في الانتاج.
+1. **Происходит ** – от `#[derive(Encode, Decode, IntoSchema)]` до исходного кода. Он ответил на вопрос, как это сделать.
+2. **Поддержка встроенного программного обеспечения** — `cargo test -p norito` (упакованные функции есть в `scripts/run_norito_feature_matrix.sh`) Это было сделано в 2017 году.
+3. **Загрузка документов** – Информационная поддержка `norito.md` и мультикодек, поддержка صفحات البوابة (`/reference/norito-codec` وهذا الملخص).
+4. **Создание файла Norito-first** – создание файла JSON в формате JSON. Norito создан для `serde_json`, и он был установлен в США.
 
 ## روابط سريعة
 
-- المواصفة: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- تعيينات multicodec: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- سكربت مصفوفة features: `scripts/run_norito_feature_matrix.sh`
-- امثلة التخطيطات المعبأة: `crates/norito/tests/`
+- Сообщение: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- Поддержка мультикодека: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- Дополнительные функции: `scripts/run_norito_feature_matrix.sh`
+- Дополнительная информация: `crates/norito/tests/`.
 
-اربط هذه النظرة العامة مع دليل البدء السريع (`/norito/getting-started`) للحصول على جولة عملية لتجميع وتشغيل bytecode الذي يستخدم payloads من Norito.
+Установите флажок для встроенного программного обеспечения (`/norito/getting-started`) Отобразится байт-код, отвечающий за полезные нагрузки, в Norito.

@@ -8,20 +8,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet PQ Ratchet Fire Drill
 sidebar_label: PQ Ratchet Runbook
 description: On-call rehearsal steps for promoting or demoting the staged PQ anonymity policy with deterministic telemetry validation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-## Purpose
+## Նպատակը
 
-This runbook guides the fire-drill sequence for SoraNet's staged post-quantum (PQ) anonymity policy. Operators rehearse both promotion (Stage A -> Stage B -> Stage C) and controlled demotion back to Stage B/A when PQ supply drops. The drill validates telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) and collects artefacts for the incident rehearsal log.
+Այս գրքույկը առաջնորդում է SoraNet-ի հետքվանտային (PQ) անանունության քաղաքականության բեմականացված կրակային հորատման հաջորդականությունը: Օպերատորները կրկնում են և՛ առաջխաղացումը (Փուլ A -> Փուլ B -> Փուլ C), և՛ վերահսկվող իջեցումը դեպի B/A փուլ, երբ PQ մատակարարումը նվազում է: Հորատումը վավերացնում է հեռաչափական կեռիկները (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) և հավաքում է արտեֆակտներ միջադեպերի փորձերի մատյանում:
 
-## Prerequisites
+## Նախադրյալներ
 
-- Latest `sorafs_orchestrator` binary with capability-weighting (commit at or after the drill reference shown in `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- Access to the Prometheus/Grafana stack serving `dashboards/grafana/soranet_pq_ratchet.json`.
-- Nominal guard directory snapshot. Fetch and verify a copy prior to the drill:
+- Վերջին `sorafs_orchestrator` երկուական հնարավորությունների կշռումով (կատարել `docs/source/soranet/reports/pq_ratchet_validation.md`-ում ցուցադրված հորատման հղումը կամ դրանից հետո):
+- Մուտք դեպի Prometheus/Grafana `dashboards/grafana/soranet_pq_ratchet.json` սպասարկող կույտ:
+- Անվանական պահակային գրացուցակի լուսանկար: Վերցրեք և հաստատեք պատճենը նախքան վարումը.
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -30,9 +32,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-If the source directory only publishes JSON, re-encode it to Norito binary with `soranet-directory build` before running the rotation helpers.
+Եթե աղբյուրի գրացուցակը հրապարակում է միայն JSON, ապա պտտման օգնականները գործարկելուց առաջ այն նորից կոդավորեք Norito երկուական տարբերակով՝ `soranet-directory build`-ով:
 
-- Capture metadata and pre-stage issuer rotation artefacts with the CLI:
+- Վերցրեք մետատվյալները և թողարկողի ռոտացիայի նախնական փուլային արտեֆակտները CLI-ով.
 
 ```bash
 soranet-directory inspect \
@@ -43,67 +45,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- Change window approved by networking and observability on-call teams.
+- Փոփոխել պատուհանը, որը հաստատվել է ցանցային և դիտորդական հերթապահ թիմերի կողմից:
 
-## Promotion steps
+## Խթանման քայլեր
 
-1. **Stage audit**
+1. **Փուլային աուդիտ**
 
-   Record the starting stage:
+   Գրանցեք մեկնարկային փուլը.
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Expect `anon-guard-pq` before promotion.
+   Սպասեք `anon-guard-pq` առաջխաղացմանը:
 
-2. **Promote to Stage B (Majority PQ)**
+2. **Առաջարկեք B փուլ (մեծամասնության PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - Wait >=5 minutes for manifests to refresh.
-   - In Grafana (`SoraNet PQ Ratchet Drill` dashboard) confirm the "Policy Events" panel shows `outcome=met` for `stage=anon-majority-pq`.
-   - Capture a screenshot or panel JSON and attach it to the incident log.
+   - Սպասեք >=5 րոպե, մինչև մանիֆեստները թարմացվեն:
+   - Grafana-ում (`SoraNet PQ Ratchet Drill` վահանակ) հաստատեք «Քաղաքական իրադարձություններ» վահանակը ցույց է տալիս `outcome=met` `stage=anon-majority-pq`-ի համար:
+   - Լուսանկարեք սքրինշոթ կամ վահանակ JSON և կցեք այն միջադեպերի մատյանին:
 
-3. **Promote to Stage C (Strict PQ)**
+3. **Առաջարկեք C փուլ (խիստ PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - Verify `sorafs_orchestrator_pq_ratio_*` histograms trend to 1.0.
-   - Confirm the brownout counter remains flat; otherwise follow the demotion steps.
+   - Ստուգեք `sorafs_orchestrator_pq_ratio_*` հիստոգրամների միտումը դեպի 1.0:
+   - Հաստատեք, որ շագանակագույն հաշվիչը մնում է հարթ; հակառակ դեպքում հետևեք իջեցման քայլերին:
 
-## Demotion / brownout drill
+|
 
-1. **Induce a synthetic PQ shortage**
+1. **Սինթետիկ PQ դեֆիցիտ առաջացնել **
 
-   Disable PQ relays in the playground environment by trimming the guard directory to classical entries only, then reload the orchestrator cache:
+   Անջատեք PQ ռելեները խաղահրապարակի միջավայրում՝ կրճատելով պահակային գրացուցակը միայն դասական գրառումների վրա, այնուհետև վերաբեռնեք նվագախմբի քեշը.
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Observe brownout telemetry**
+2. **Դիտարկեք շեղման հեռաչափությունը**
 
-   - Dashboard: panel "Brownout Rate" spikes above 0.
-   - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` should report `anonymity_outcome="brownout"` with `anonymity_reason="missing_majority_pq"`.
+   - Վահանակ. «Brownout Rate» վահանակը բարձրանում է 0-ից:
+   - PromQL՝ `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
+   - `sorafs_fetch`-ը պետք է զեկուցի `anonymity_outcome="brownout"` `anonymity_reason="missing_majority_pq"`-ի հետ:
 
-3. **Demote to Stage B / Stage A**
+3. **Նվազեցում B փուլ / փուլ A **
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   If PQ supply is still insufficient, demote to `anon-guard-pq`. The drill completes once brownout counters settle and promotions can be reapplied.
+   Եթե PQ մատակարարումը դեռևս անբավարար է, իջեցրեք `anon-guard-pq`: Զորավարժությունն ավարտվում է այն բանից հետո, երբ լուծվեն բրոնխային հաշվիչներ, և առաջխաղացումները կարող են կրկին կիրառվել:
 
-4. **Restore guard directory**
+4. **Վերականգնել պահակային գրացուցակը**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -111,14 +113,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry & artefacts
+## Հեռամետրիա և արտեֆակտներ
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Prometheus alerts:** ensure `sorafs_orchestrator_policy_events_total` brownout alert stays below the configured SLO (&lt;5% across any 10 minute window).
-- **Incident log:** append the captured telemetry snippets and operator notes to `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **Signed capture:** use `cargo xtask soranet-rollout-capture` to copy the drill log and scoreboard into `artifacts/soranet_pq_rollout/<timestamp>/`, compute BLAKE3 digests, and produce a signed `rollout_capture.json`.
+- **Վահանակ՝** `dashboards/grafana/soranet_pq_ratchet.json`
+- **Prometheus ահազանգեր.** ապահովել, որ `sorafs_orchestrator_policy_events_total` խափանման ազդանշանը մնա կազմաձևված SLO-ից ցածր (<5% ցանկացած 10 րոպեանոց պատուհանում):
+- **Միջադեպերի մատյան.** կցեք նկարահանված հեռաչափության հատվածները և օպերատորի նշումները `docs/examples/soranet_pq_ratchet_fire_drill.log`-ին:
+- **Ստորագրված նկարում.** օգտագործեք `cargo xtask soranet-rollout-capture`՝ հորատման գրանցամատյանը և ցուցատախտակը `artifacts/soranet_pq_rollout/<timestamp>/`-ում պատճենելու համար, հաշվարկեք BLAKE3 բովանդակությունը և ստացեք ստորագրված `rollout_capture.json`:
 
-Example:
+Օրինակ՝
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -130,12 +132,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Attach the generated metadata and signature to the governance packet.
+Ստեղծված մետատվյալները և ստորագրությունը կցեք կառավարման փաթեթին:
 
-## Rollback
+## Վերադարձ
 
-If the drill uncovers real PQ shortages, remain on Stage A, notify the Networking TL, and attach the collected metrics plus guard directory diffs to the incident tracker. Use the guard directory export captured earlier to restore normal service.
+Եթե փորվածքը բացահայտի PQ-ի իրական դեֆիցիտը, մնացեք Ա փուլում, տեղեկացրեք Ցանցային TL-ին և կցեք հավաքագրված չափումները, ինչպես նաև պահակային գրացուցակի տարբերությունները միջադեպերի հետագծողին: Օգտագործեք պահակային գրացուցակի արտահանումը, որը գրավել է ավելի վաղ՝ նորմալ ծառայությունը վերականգնելու համար:
 
-:::tip Regression Coverage
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` provides the synthetic validation backing this drill.
+:::tip Ռեգրեսիայի ծածկույթ
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`-ն ապահովում է սինթետիկ վավերացում, որն ապահովում է այս փորվածքը:
 :::

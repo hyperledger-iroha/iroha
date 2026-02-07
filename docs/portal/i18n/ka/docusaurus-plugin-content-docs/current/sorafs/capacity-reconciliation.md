@@ -7,19 +7,21 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Capacity Reconciliation
 description: Nightly workflow for matching capacity fee ledgers to XOR transfer exports.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Roadmap item **SF-2c** mandates that treasury proves the capacity fee ledger
-matches the XOR transfers executed each night. Use the
-`scripts/telemetry/capacity_reconcile.py` helper to compare the
-`/v1/sorafs/capacity/state` snapshot against the executed transfer batch and
-emit Prometheus textfile metrics for Alertmanager.
+საგზაო რუქის პუნქტი **SF-2c** ავალდებულებს, რომ ხაზინა დაამტკიცოს შესაძლებლობების საკომისიო წიგნი
+ემთხვევა ყოველ ღამე შესრულებულ XOR გადარიცხვებს. გამოიყენეთ
+`scripts/telemetry/capacity_reconcile.py` დამხმარე შედარება
+`/v1/sorafs/capacity/state` სნეპშოტი შესრულებული გადაცემის პარტიასთან და
+გამოსცემს Prometheus ტექსტური ფაილის მეტრიკას Alertmanager-ისთვის.
 
-## Prerequisites
-- Capacity state snapshot (`fee_ledger` entries) exported from Torii.
-- Ledger export for the same window (JSON or NDJSON with `provider_id_hex`,
-  `kind` = settlement/penalty, and `amount_nano`).
-- Path to the node_exporter textfile collector if you want alerts.
+## წინაპირობები
+- სიმძლავრის მდგომარეობის სნეპშოტი (`fee_ledger` ჩანაწერები) ექსპორტირებულია Torii-დან.
+- ლეჯერის ექსპორტი იმავე ფანჯრისთვის (JSON ან NDJSON `provider_id_hex`-ით,
+  `kind` = ანგარიშსწორება/ჯარიმა და `amount_nano`).
+- გზა node_exporter ტექსტური ფაილების შემგროვებლისკენ, თუ გსურთ გაფრთხილებები.
 
 ## Runbook
 ```bash
@@ -31,25 +33,25 @@ python3 scripts/telemetry/capacity_reconcile.py \
   --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
 ```
 
-- Exit codes: `0` on a clean match, `1` when settlements/penalties are missing
-  or overpaid, `2` on invalid inputs.
-- Attach the JSON summary + hashes to the treasury packet in
+- გასასვლელი კოდები: `0` სუფთა მატჩზე, `1` როცა ანგარიშსწორებები/ჯარიმები აკლია
+  ან ზედმეტად გადახდილი, `2` არასწორ შეყვანებზე.
+- მიამაგრეთ JSON რეზიუმე + ჰეშები სახაზინო პაკეტს
   `docs/examples/sorafs_capacity_marketplace_validation/`.
-- When the `.prom` file lands in the textfile collector, the alert
-  `SoraFSCapacityReconciliationMismatch` (see
-  `dashboards/alerts/sorafs_capacity_rules.yml`) fires whenever missing,
-  overpaid, or unexpected provider transfers are detected.
+- როდესაც `.prom` ფაილი დაეშვება ტექსტის ფაილების კოლექციონერში, გაფრთხილება
+  `SoraFSCapacityReconciliationMismatch` (იხ
+  `dashboards/alerts/sorafs_capacity_rules.yml`) ისვრის, როცა არ არის,
+  ზედმეტად გადახდილი, ან პროვაიდერის მოულოდნელი გადარიცხვები გამოვლინდა.
 
-## Outputs
-- Per-provider statuses with diffs for settlements and penalties.
-- Totals exported as gauges:
+## გამომავალი
+- თითო პროვაიდერის სტატუსები ანგარიშსწორებისა და ჯარიმების განსხვავებებით.
+- ლიანდაგების სახით ექსპორტირებული ჯამები:
   - `sorafs_capacity_reconciliation_missing_total{kind}`
   - `sorafs_capacity_reconciliation_overpaid_total{kind}`
   - `sorafs_capacity_reconciliation_unexpected_transfers_total`
   - `sorafs_capacity_reconciliation_expected_nano{kind}`
   - `sorafs_capacity_reconciliation_actual_nano{kind}`
 
-## Expected Ranges and Tolerances
-- Reconciliation is exact: expected vs actual settlement/penalty nanos should match with zero tolerance. Any non-zero diff should page operators.
-- CI pins a 30-day soak digest for the capacity fee ledger (test `capacity_fee_ledger_30_day_soak_deterministic`) to `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`. Refresh the digest only when pricing or cooldown semantics change.
-- In the soak profile (`penalty_bond_bps=0`, `strike_threshold=u32::MAX`) penalties stay at zero; production should only emit penalties when utilisation/uptime/PoR floors are breached and respect the configured cooldown before successive slashes.
+## მოსალოდნელი დიაპაზონი და ტოლერანტობა
+- შერიგება ზუსტია: მოსალოდნელი და რეალური ანგარიშსწორება/ჯარიმის ნანო უნდა შეესაბამებოდეს ნულოვანი ტოლერანტობით. ნებისმიერი არანულოვანი განსხვავება უნდა იყოს გვერდის ოპერატორები.
+- CI ამაგრებს 30-დღიან გაჟღენთვას ტევადობის საკომისიო წიგნისთვის (ტესტი `capacity_fee_ledger_30_day_soak_deterministic`) `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`-ზე. განაახლეთ დაიჯესტი მხოლოდ მაშინ, როდესაც იცვლება ფასების ან გაგრილების სემანტიკა.
+- გაჟღენთის პროფილში (`penalty_bond_bps=0`, `strike_threshold=u32::MAX`) ჯარიმები ნულზე რჩება; წარმოებამ უნდა გამოიტანოს ჯარიმები მხოლოდ უტილიზაციის/გამოყენების/PoR სართულების დარღვევის შემთხვევაში და პატივს სცემს კონფიგურირებულ გაგრილებას თანმიმდევრულ დახრილობამდე.

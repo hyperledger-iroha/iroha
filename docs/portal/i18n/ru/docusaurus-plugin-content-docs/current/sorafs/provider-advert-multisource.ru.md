@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-advert-multisource.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Мульти-источниковые объявления провайдеров и планирование
+# Мультиисточниковые объявления провайдеров и планирование
 
-Эта страница сводит каноническую спецификацию в
+Эта страница содержит стандартную спецификацию
 [`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Используйте этот документ для дословных схем Norito и changelog; версия портала
-держит рядом операционные инструкции, заметки SDK и ссылки на телеметрию для остального
-набора runbooks SoraFS.
+Используйте этот документ для дословных схем Norito и журнала изменений; версия портала
+держите рядом операционные инструкции, заметки SDK и ссылки на телеметрию для остального
+набор Runbook SoraFS.
 
 ## Дополнения к схеме Norito
 
 ### Диапазонная возможность (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` – максимальный непрерывный интервал (байты) на запрос, `>= 1`.
-- `min_granularity` – разрешение seek, `1 <= значение <= max_chunk_span`.
-- `supports_sparse_offsets` – допускает несмежные offsets в одном запросе.
-- `requires_alignment` – если true, offsets должны выравниваться по `min_granularity`.
-- `supports_merkle_proof` – указывает поддержку свидетельств PoR.
+- `max_chunk_span` – максимальный непрерывный интервал (байты) в запросе, `>= 1`.
+- `min_granularity` – поиск разрешения, `1 <= значение <= max_chunk_span`.
+- `supports_sparse_offsets` – допускает несмежные смещения в одном запросе.
+- `requires_alignment` – если true, зачеты должны соревноваться по `min_granularity`.
+- `supports_merkle_proof` – подтверждает подтверждение PoR.
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` обеспечивают каноническое
-кодирование, чтобы payloads gossip оставались детерминированными.
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` соответствует каноническому
+кодирование, чтобы сплетни полезной нагрузки были частично определены.
 
 ### `StreamBudgetV1`
 - Поля: `max_in_flight`, `max_bytes_per_sec`, опциональный `burst_bytes`.
 - Правила валидации (`StreamBudgetV1::validate`):
-  - `max_in_flight >= 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes`, если задан, должен быть `> 0` и `<= max_bytes_per_sec`.
+  - И18НИ00000027Х, И18НИ00000028Х.
+  - `burst_bytes`, если задано, должны быть `> 0` и `<= max_bytes_per_sec`.
 
 ### `TransportHintV1`
-- Поля: `protocol: TransportProtocol`, `priority: u8` (окно 0-15 контролируется
+- Поля: `protocol: TransportProtocol`, `priority: u8` (окно 0-15 контролируется)
   `TransportHintV1::validate`).
 - Известные протоколы: `torii_http_range`, `quic_stream`, `soranet_relay`,
   `vendor_reserved`.
@@ -42,63 +44,61 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ### Дополнения к `ProviderAdvertBodyV1`
 - Опциональный `stream_budget: Option<StreamBudgetV1>`.
 - Опциональный `transport_hints: Option<Vec<TransportHintV1>>`.
-- Оба поля проходят через `ProviderAdmissionProposalV1`, governance envelopes,
-  CLI fixtures и телеметрический JSON.
+- Оба поля транзита через `ProviderAdmissionProposalV1`, конверты управления,
+  CLI-фиксаторы и телеметрический JSON.
 
-## Валидация и привязка к governance
+## Валидация и привязка к управлению
 
 `ProviderAdvertBodyV1::validate` и `ProviderAdmissionProposalV1::validate`
-отклоняют поврежденные метаданные:
+отклонить поврежденные метаданные:
 
-- Диапазонные возможности должны корректно декодироваться и соблюдать лимиты
-  диапазона/гранулярности.
-- Stream budgets / transport hints требуют TLV `CapabilityType::ChunkRangeFetch`
-  и непустого списка hints.
-- Дублирующиеся транспортные протоколы и некорректные приоритеты вызывают ошибки
-  валидации до gossip рассылки adverts.
-- Admission envelopes сравнивают proposal/adverts по диапазонным метаданным через
-  `compare_core_fields`, чтобы несовпадающие gossip payloads отклонялись заранее.
+- Расширенные возможности должны корректно декодироваться и соблюдать лимиты.
+  настройки/гранулярности.
+- Бюджеты потоков/подсказки по транспортировке требуют TLV `CapabilityType::ChunkRangeFetch`
+  и непустого списка подсказок.
+- Дублирование транспортных протоколов и некорректированных приоритетов вызывает ошибки.
+  валидации до сплетен, рассылки рекламы.
+- Приемные конверты сравнивают предложения/объявления по широкому спектру метаданных через
+  `compare_core_fields`, чтобы несовпадающие сплетни отклонялись заранее.
 
 Регрессионное покрытие находится в
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Инструменты и fixtures
+##Инструменты и приспособления
 
-- Payloads объявлений провайдеров должны включать `range_capability`, `stream_budget`
-  и `transport_hints`. Проверяйте через ответы `/v1/sorafs/providers` и admission fixtures;
-  JSON-резюме должны включать разобранную capability, stream budget и массивы hints
-  для телеметрического ingest.
-- `cargo xtask sorafs-admission-fixtures` выводит stream budgets и transport hints
-  в своих JSON artefacts, чтобы dashboards отслеживали внедрение функций.
-- Fixtures в `fixtures/sorafs_manifest/provider_admission/` теперь включают:
-  - канонические мульти-источниковые adverts,
-  - `multi_fetch_plan.json`, чтобы SDK наборы могли воспроизводить детерминированный
-    multi-peer fetch план.
+- Полезные нагрузки бесплатных провайдеров должны включать `range_capability`, `stream_budget`.
+  и `transport_hints`. Проверяйте через ответы `/v1/sorafs/providers` и приемные приспособления;
+  JSON-резюме должно включать в себя разобранную возможность, бюджет потока и подсказки по массивам.
+  для телеметрического приема.
+- `cargo xtask sorafs-admission-fixtures` выводит бюджеты потоков и подсказки по транспортировке
+  в своих артефактах JSON, чтобы информационные панели отслеживали добавления функций.
+- Светильники в `fixtures/sorafs_manifest/provider_admission/` теперь включают:
+  - стандартные мульти-источниковые объявления,
+  - `multi_fetch_plan.json`, чтобы наборы SDK могли воспроизвести определенный
+    план многоранговой выборки.
 
-## Интеграция с оркестратором и Torii
-
-- Torii `/v1/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
-  вместе с `stream_budget` и `transport_hints`. Предупреждения downgrade срабатывают, когда
-  провайдеры пропускают новые метаданные, а range endpoints шлюза применяют те же ограничения
+## Интеграция с оркестратором и Torii- Torii `/v1/sorafs/providers` возвращает разобранные метаданные разнообразные возможности
+  вместе с `stream_budget` и `transport_hints`. Предупреждения о понижении рейтинга сработают, когда
+  провайдеры пропускают новые метаданные, диапазон конечных точек шлюза с теми же ограничениями
   для прямых клиентов.
-- Мульти-источниковый оркестратор (`sorafs_car::multi_fetch`) теперь применяет лимиты диапазона,
-  выравнивание возможностей и stream budgets при распределении работы. Unit-тесты покрывают
-  случаи слишком больших chunk, разреженного seek и throttling.
-- `sorafs_car::multi_fetch` передает сигналы downgrade (ошибки выравнивания,
-  throttled запросы), чтобы операторы могли понимать, почему конкретные провайдеры
+- Мульти-источниковый оркестратор (`sorafs_car::multi_fetch`) теперь применяется лимиты связи,
+  спортивные возможности и поток бюджетов при распределении работы. Юнит-тесты раскрывают
+  бывает слишком большой кусок, разреженного поиска и дросселирования.
+- `sorafs_car::multi_fetch` передает сигналы понижения рейтинга (ошибки спортсменния,
+  регулируемые запросы), чтобы операторы понимали, почему конкретные провайдеры
   были пропущены при планировании.
 
 ## Справочник телеметрии
 
-Инструментация range fetch в Torii питает Grafana dashboard **SoraFS Fetch Observability**
-(`dashboards/grafana/sorafs_fetch_observability.json`) и соответствующие правила алертов
+Инструментарий выборки диапазона в Torii питает Grafana приборную панель **SoraFS Fetch Observability**
+(`dashboards/grafana/sorafs_fetch_observability.json`) и соответствующие правила оповещений
 (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
 | Метрика | Тип | Метки | Описание |
 |---------|-----|-------|----------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Провайдеры, объявляющие функции диапазонной возможности. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Попытки range fetch с throttling, сгруппированные по политике. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Активные защищенные потоки, потребляющие общий бюджет конкуренции. |
+| `torii_sorafs_provider_range_capability_total` | Калибр | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Провайдеры, объявляющие функции широкого спектра возможностей. |
+| `torii_sorafs_range_fetch_throttle_events_total` | Счетчик | `reason` (`quota`, `concurrency`, `byte_rate`) | Эксперименты по выборке диапазона с регулированием, сгруппированные по политике. |
+| `torii_sorafs_range_fetch_concurrency_current` | Калибр | — | Активные защищенные потоки, потребляющие общую бюджетную конкуренцию. |
 
 Примеры PromQL:
 
@@ -108,6 +108,6 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Используйте счетчик throttling, чтобы подтвердить применение квот перед включением
-дефолтов мульти-источникового оркестратора, и поднимайте алерты, когда конкуренция
-приближается к максимальным значениям stream budget по вашей флотилии.
+Используйте регулирование счетчика, чтобы надежно применить квоту перед включением.
+дефолтов мульти-источникового оркестратора и поднимайте тревогу при конкуренции
+Это соответствует максимальным значениям потока бюджета вашей флотилии.

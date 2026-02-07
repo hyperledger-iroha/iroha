@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 59948351a84b27efe0d9741545d8f93c7525fa5f545605a0942d9f2f574f6f06
 source_last_modified: "2025-12-29T18:16:35.072823+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Access Request (Template)
+# Փաստաթղթերի պորտալի նախադիտման մուտքի հարցում (կաղապար)
 
-Use this template when capturing reviewer details before granting access to the
-public preview environment. Copy the markdown into an issue or request form and
-replace the placeholder values.
+Օգտագործեք այս ձևանմուշը՝ գրախոսի մանրամասները գրավելիս՝ նախքան դրան մուտքի թույլտվություն տալը
+հանրային նախադիտման միջավայր: Պատճենեք նշումը խնդրի կամ հարցման ձևի մեջ և
+փոխարինել տեղապահի արժեքները:
 
 ```markdown
 ## Request Summary
@@ -44,9 +45,9 @@ replace the placeholder values.
 
 ---
 
-## Community-Specific Questions (W2+)
-- Motivation for preview access (one sentence):
-- Primary review focus (SDK, governance, Norito, SoraFS, other):
-- Weekly time commitment & availability window (UTC):
-- Localization or accessibility needs (yes/no + details):
-- Community Code of Conduct + preview acceptable-use addendum acknowledged (yes/no):
+## Համայնքի հատուկ հարցեր (W2+)
+- Նախադիտման մուտքի մոտիվացիա (մեկ նախադասություն).
+- Առաջնային վերանայման կենտրոնացում (SDK, կառավարում, Norito, SoraFS, այլ).
+- Շաբաթական ժամանակի պարտավորություն և հասանելիության պատուհան (UTC):
+- Տեղայնացման կամ մատչելիության կարիքներ (այո/ոչ + մանրամասներ).
+- Համայնքի վարքագծի կանոններ + ընդունելի օգտագործման հավելվածի նախադիտումը հաստատված է (այո/ոչ).

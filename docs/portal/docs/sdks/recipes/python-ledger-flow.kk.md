@@ -10,21 +10,22 @@ translation_last_reviewed: 2026-02-07
 title: Python ledger flow recipe
 description: Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.
 slug: /sdks/recipes/python-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload файлын '@site/src/components/SampleDownload' ішінен импорттау;
 
-This Python snippet mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-and the [Rust recipe](./rust-ledger-flow.md). It uses the default Docker
-compose network plus the demo credentials bundled in `defaults/client.toml`.
+Бұл Python үзіндісі [CLI кітапшасының шолуын](../../norito/ledger-walkthrough.md) көрсетеді.
+және [Тот рецепті](./rust-ledger-flow.md). Ол әдепкі Docker пайдаланады
+желіні және `defaults/client.toml` жинағындағы демонстрациялық тіркелгі деректерін құрастырыңыз.
 
-<SampleDownload
+<Үлгі жүктеп алу
   href="/sdk-recipes/python/ledger_flow.py"
-  filename="ledger_flow.py"
-  description="Download the script showcased in this recipe to run it without copying code by hand."
+  файл атауы = "ledger_flow.py"
+  description="Кодты қолмен көшірмей іске қосу үшін осы рецептте көрсетілген сценарийді жүктеп алыңыз."
 />
 
-## Prerequisites
+## Алғышарттар
 
 ```bash
 pip install iroha-python
@@ -33,7 +34,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## Сценарий үлгісі
 
 ```python title="ledger_flow.py"
 import os
@@ -103,12 +104,12 @@ for asset in result.items:
         print("Receiver holds", asset.value, "units of", asset.id.definition)
 ```
 
-Run with `python ledger_flow.py`. The output should report the transaction hash
-(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
-the register instruction is rejected while the mint/transfer continue to succeed.
+`python ledger_flow.py` арқылы іске қосыңыз. Шығару транзакция хэшін хабарлауы керек
+(түбіртектің пайдалы жүктемесінен), одан кейін жаңа қабылдаушы балансы. Актив анықтамасы бұрыннан бар болса,
+тізілім туралы нұсқау беру/аудару сәтті жалғасуда қабылданбайды.
 
-## Verify parity
+## Тепе-теңдікті тексеріңіз
 
-Use the same CLI commands from the Norito walkthrough to cross-check hashes and
-balances. When you run the JavaScript and Rust recipes, all three SDKs should
-agree on transaction hashes and Norito payloads for the shared flow.
+Norito шолуындағы бірдей CLI пәрмендерін хэштерді және өзара тексеру үшін пайдаланыңыз.
+баланстар. JavaScript және Rust рецепттерін іске қосқан кезде, барлық үш SDK қажет
+ортақ ағын үшін транзакция хэштері мен Norito пайдалы жүктемелері туралы келісіңіз.

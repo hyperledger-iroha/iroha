@@ -7,44 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 79a048e6061f7054e14a471004cf7da0dddd3f9bf627d9f1d20ff63803cb0979
 source_last_modified: "2026-01-05T09:28:11.908615+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Quickstart
+# SoraFS མགྱོགས་པོ།
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+འདི་ལག་ཐོག་ལུ་ལམ་སྟོན་འདི་ གཏན་འབེབས་ SF-1 གི་ཆ་ཤས་ཚུ་བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+གསལ་སྟོན་དང་ སྣ་མང་མཁོ་སྤྲོད་འབད་མི་ སྣ་མང་མཁོ་སྤྲོད་འབད་མི་ འཕྲོ་མཐུད་རྒྱུན་རིམ།
+བསག་བཞག་སའི་ལམ་ཐིག་། [I18NU000009X) [མདོང་ལམ་གཏིང་ཟབ་པའི་མཆོངས་འགྲན་པ་ངོ་མའི་ནང་དུ་མཆོངས།
+བཟོ་བཀོད་དྲན་འཛིན་དང་ CLI དར་རྒྱབ་གཞི་བསྟུན་རྒྱུ་ཆ་ཚུ་གི་དོན་ལུ་ཨིན།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- རསཊི་ལག་ཆས་རྒྱུན་ (`rustup update`) གིས་ ལཱ་གི་ས་སྒོ་ རིགས་མཚུངས་བཟོ་བཅོས་འབད་ཡོདཔ་ཨིན།
+- གདམ་ཁ་ཅན་: [ཁ་ཕྱེ་ཡོད་པའི་ Ed25519 ལྡེ་མིག](I18NU0000010X)
+  མཚན་རྟགས་བཀོད་པའི་དོན་ལུ།
+- གདམ་ཁ་ཅན་: Node.js ≥ 18 ཁྱོད་ཀྱིས་ Docusaurus གི་ portal སྔོན་ལྟ་འབད་ནི་ལུ་འཆར་གཞི་བརྩམས་པ་ཅིན།
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+ཁ་ཐོག་ལུ་ཕན་ཐོགས་པའི་ CLI འཕྲིན་དོན་ཚུ་ བརྟག་དཔྱད་འབད་བའི་སྐབས་ `export RUST_LOG=info` གཞི་སྒྲིག་འབད།
 
-## 1. Refresh the deterministic fixtures
+## 1. གཏན་འབེབས་ཀྱི་སྒྲིག་སྟངས་གསར་བསྐྲུན།
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+ཁྲིམས་ལུགས་ཀྱི་ SF-1 ཆ་ཤས་ཀྱི་ནད་འབུཔ་ཚུ་ ལོག་བཟོ་ནི། བརྡ་བཀོད་ཀྱིས་ཡང་མིང་རྟགས་བཀོད་ཡོདཔ།
+`--signing-key` བཀྲམ་སྤེལ་འབད་བའི་སྐབས་ གསལ་སྟོན་གྱི་ ཡིག་ཆ་ཚུ། `--allow-unsigned` ལག་ལེན་འཐབ།
+ས་གནས་གོང་འཕེལ་གྱི་སྐབས་ལུ་རྐྱངམ་ཅིག་ཨིན།
 
-```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
-```
+I18NF0000004X
 
-Outputs:
+ཐོན་འབྲས་ཚུ།
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json` (གལ་སྲིད་མིང་རྟགས་བཀོད་པ་ཅིན།)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. འབབ་བླངས་ཏེ་འཆར་གཞིའི་ཞིབ་བཤེར་།
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+ཁུངས་མེད་པའི་ཡིག་སྣོད་ཡང་ན་ཡིག་མཛོད་ཅིག་ཆ་ཤས་འབད་ནི་ལུ་ `sorafs_chunker` ལག་ལེན་འཐབ།
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -52,23 +51,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+ལྡེ་མིག་ས་སྒོ་ཚུ་:
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- I18NI000000021X / `break_mask` – I18NI000000023X ཚད་གཞི་ཚུ་ངེས་གཏན་བཟོཝ་ཨིན།
+- `chunks[]` – བཀོད་སྒྲིག་འབད་ཡོད་པའི་ཨོཕ་སེཊི་དང་རིང་ཚད་ དེ་ལས་ ཆུམ་བི་ཨེལ་ཀེ་༣ བཞུ་ནི།
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+གཏན་འཇགས་སྦོམ་ཚུ་གི་དོན་ལུ་ རྒྱུན་ལམ་དང་ རྒྱུན་སྤེལ་ངེས་གཏན་བཟོ་ནི་ལུ་ proptest-backed regression གཡོག་བཀོལ།
+batch chunking མཉམ་མཐུན་ནང་སྡོད་ནི།
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. གསལ་སྟོན་དང་མཚན་རྟགས་བཀོད་པ།
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+ཆ་ཤས་འཆར་གཞི་དང་ མིང་གཞན་དང་ གཞུང་སྐྱོང་མཚན་རྟགས་ཚུ་ ལག་ལེན་འཐབ་སྟེ་ མངོན་གསལ་ལུ་ གསལ་སྟོན་འབད།
+`sorafs-manifest-stub`. འོག་གི་བརྡ་བཀོད་འདི་གིས་ ཡིག་སྣོད་གཅིག་པའི་ པེ་ལོཌི་ཅིག་སྟོནམ་ཨིན། མཐར༌འཁྱོལ༌
+ཤིང་ཅིག་ཐུམ་སྒྲིལ་འབད་ནིའི་དོན་ལུ་ སྣོད་ཐོ་འགྲུལ་ལམ་ (CLI གིས་ ཚིག་མཛོད་ཀྱི་ འགྲུལ་བསྐྱོད་འབདཝ་ཨིན།)།
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -80,51 +79,45 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+བསྐྱར་ཞིབ་ `/tmp/docs.report.json` གི་དོན་ལུ་:
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- I18NI000000027X – SHA3 ཨོཕ་སེཊི་/རིང་ཚད་ཚུ་ བཞུ་བཅུག་,
+  chunker སྒྲིག་ཆས།
+- `manifest.manifest_blake3` – BLAKE3 བཞུ་རྫས་ གསལ་སྟོན་ཡིག་ཤུབས་ནང་ མཚན་རྟགས་བཀོད་ཡོདཔ།
+- `chunk_fetch_specs[]` – སྙན་ཆའི་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ བཀོད་རྒྱ་ཚུ་ བཀོད་སྒྲིག་འབད་ཡོདཔ་ཨིན།
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+མཚན་རྟགས་ངོ་མ་བཀྲམ་སྤེལ་འབད་ནི་ལུ་གྲ་སྒྲིག་ཡོད་པའི་སྐབས་ I18NI000000030X དང་ `--signer` ཁ་སྐོང་འབད།
+རྩོད་པ་ཚུ། བརྡ་བཀོད་འདི་གིས་ འདི་འབྲི་མ་ཚར་བའི་ཧེ་མ་ Ed25519 མཚན་རྟགས་རེ་རེ་བཞིན་བདེན་དཔང་འབདཝ་ཨིན།
+ཡིག༌ཤུབས།
 
-## 4. Simulate multi-provider retrieval
+## 4. སྣ་མང་མཁོ་སྤྲོད་པ་བསྐྱར་བཟོ་འབད་ནི།
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+ཆ་ཤས་འཆར་གཞི་འདི་གཅིག་ཡང་ན་མངམ་ལུ་བསྐྱར་རྩེད་འབད་ནི་ལུ་ གོང་འཕེལ་གཏང་མི་ CLI ལག་ལེན་འཐབ།
+བྱིན་མི་ཚུ། འདི་ CI གི་ཐ་མག་བརྟག་དཔྱད་དང་ སྙན་ཆའི་སྡེ་ཚན་ དཔེ་ཚད་བཟོ་ནི་གི་དོན་ལུ་ ལེགས་ཤོམ་ཅིག་ཨིན།
 
-```bash
-cargo run -p sorafs_car --bin sorafs_fetch -- \
-  --plan=/tmp/docs.report.json \
-  --provider=primary=/tmp/docs.txt \
-  --output=/tmp/docs.reassembled \
-  --json-out=/tmp/docs.fetch-report.json
-```
+I18NF0000008X
 
-Assertions:
+བདེན་དཔང་ཚུ།
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex` གིས་ གསལ་སྟོན་སྙན་ཞུ་དང་མཐུན་དགོ།
+- `provider_reports[]` ཁ་ཐོག་འདི་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་གྲངས་འབོར་བྱིན་མི་རེ་ལུ་ འཐུས་ཤོར་འབདཝ་ཨིན།
+- ཀླད་ཀོར་མེན་པའི་ I18NI000000034X གིས་ རྒྱབ་ལོག་གནོན་ཤུགས་བདེ་སྒྲིག་ཚུ་ གཙོ་བོར་བཏོནམ་ཨིན།
+- གཡོག་བཀོལ་ནིའི་དོན་ལུ་ དུས་ཚོད་བཀོད་ཡོད་པའི་བྱིན་མི་ཚུ་གི་གྱངས་ཁ་ཚད་འཛིན་འབད་ནིའི་དོན་ལུ་ I18NI000000035X བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+  དང་ CI བརྡ་སྟོན་ཚུ་ འདེམས་ངོ་གཙོ་བོ་ཚུ་ལུ་གཙོ་བོར་བསྟེན་དགོ།
+- I18NI000000036X གིས་ སྔོན་སྒྲིག་ཆུ་རེའི་བསྐྱར་ལོག་གྲངས་ཚད་ (༣) འདི་ བཀག་བཞགཔ་ཨིན།
+  འཐུས་ཤོར་བཙུགས་པའི་སྐབས་ ཁ་ཐོག་ལུ་ རོལ་དབྱངས་ཀྱི་ འགྱུར་ལྡོག་ཚུ་ མགྱོགས་དྲགས་སྦེ་ འབད་ཚུགས།
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+`--expect-payload-digest=<hex>` དང་ I18NI000000038X འདི་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
+བསྐྱར་བཟོ་འབད་བའི་ འབབ་ཁུངས་འདི་ གསལ་སྟོན་ལས་ ཐ་དད་སྦེ་འགྱོ་བའི་སྐབས་ལུ་ མགྱོགས་པ་ཨིན།
 
-## 5. Next steps
+## 5. གོམ་པ་ཤུལ་མམ།
 
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
-  metadata.
+- **གཞུང་སྐྱོང་མཉམ་བསྡོམས་** – གསལ་སྟོན་གྱི་ བཞུར་རྫས་དང་ མདའ་གཞུ་ དང་།
+  I18NI000000039X ཚོགས་སྡེའི་ལཱ་གི་རྒྱུན་རིམ་ནང་ པིན་ཐོ་བཀོད་ཀྱིས་ འབད་ཚུགས།
+  ཁྱབ་བསྒྲགས་འབད་ནི།
+- **ཐོ་བཀོད་གྲོས་བསྟུན་** – [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md) དང་གྲོས་བསྟུན་འབད།
+  གསལ་སྡུད་གསརཔ་ཚུ་ཐོ་བཀོད་མ་འབད་བའི་ཧེ་མ་ལུ། རང་བཞིན་གྱིས་ ཀེ་ནོ་ནིག་བཤེད་བཟུང་ཚུ་དགའ་དགོ།
+  (`namespace.name@semver`) ཨང་གྲངས་ཀྱི་ཨའི་ཌི་ཚུ་གུ་ལུ་.
+- **CI རང་བཞིན་** – མདོང་ལམ་ཚུ་བཏོན་གཏང་ནི་ལུ་ གོང་འཁོད་བརྡ་བཀོད་ཚུ་ཁ་སྐོང་འབད།
+  སྒྲིག་ཆས་དང་ ཅ་རྙིང་ཚུ་གིས་ མཚན་རྟགས་བཀོད་མི་དང་གཅིག་ཁར་ སེམས་ཐག་བཅད་མི་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  མེ་ཊ་ཌེ་ཊ་.

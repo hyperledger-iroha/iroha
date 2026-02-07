@@ -4,71 +4,71 @@ direction: ltr
 source: docs/portal/docs/sorafs/deal-engine.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: deal-engine
-title: Движок сделок SoraFS
-sidebar_label: Движок сделок
-description: Обзор движка сделок SF-8, интеграции Torii и телеметрических поверхностей.
+id: mecanismo de negociação
+título: Движок сделок SoraFS
+sidebar_label: Link da barra lateral
+descrição: Обзор движка сделок SF-8, интеграции Torii e телеметрических поверхностей.
 ---
 
-:::note Канонический источник
+:::nota História Canônica
 :::
 
 # Движок сделок SoraFS
 
-Роадмап SF-8 вводит движок сделок SoraFS, обеспечивающий
-детерминированный учет соглашений на хранение и извлечение между
-клиентами и провайдерами. Соглашения описываются Norito payloads,
-определенными в `crates/sorafs_manifest/src/deal.rs`, покрывая условия сделки,
-блокировку bonds, вероятностные микроплатежи и записи расчетов.
+A estrada SF-8 é um conjunto de peças SoraFS, compatível
+determinar a configuração da configuração e do método de instalação
+clientes e provadores. Cargas úteis Norito,
+instalado em `crates/sorafs_manifest/src/deal.rs`, usando a chave de fenda,
+блокировку títulos, вероятностные микроплатежи e записи расчетов.
 
-Встроенный SoraFS worker (`sorafs_node::NodeHandle`) теперь создает
-экземпляр `DealEngine` для каждого процесса узла. Движок:
+Trabalhador SoraFS (`sorafs_node::NodeHandle`)
+экземпляр `DealEngine` para o processo de fabricação. Diabo:
 
-- валидирует и регистрирует сделки через `DealTermsV1`;
-- начисляет charges в XOR при отчетах об использовании репликации;
+- validar e registrar o arquivo `DealTermsV1`;
+- начисляет encargos no XOR при отчетах об использовании репликации;
 - оценивает окна вероятностных микроплатежей с помощью детерминированного
-  sampling на основе BLAKE3; и
-- формирует snapshots ledger и payloads расчетов, пригодные для публикации в governance.
+  amostragem por BLAKE3; e
+- формирует snapshots razão e payloads расчетов, пригодные для публикации в governança.
 
-Юнит-тесты покрывают валидацию, выбор микроплатежей и расчетные потоки, чтобы
-операторы могли уверенно проверять API. Расчеты теперь выпускают governance payloads
-`DealSettlementV1`, напрямую подключаясь к pipeline публикации SF-12, и обновляют серию
-OpenTelemetry `sorafs.node.deal_*`
+Юнит-тесты покрывают валидацию, você микроплатежей e расчетные потоки, чтобы
+операторы могли уверенно проверять API. Расчеты теперь выпускают cargas úteis de governança
+`DealSettlementV1`, instalado no pipeline público SF-12, e instalado em série
+OpenTelemetria `sorafs.node.deal_*`
 (`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) для дашбордов Torii и
-SLO enforcement. Следующие шаги фокусируются на автоматизации slashing, инициируемой
-аудиторами, и согласовании семантики отмены с политикой governance.
+`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) para дашбордов Torii e
+Aplicação de SLO. Você pode se concentrar em cortar automaticamente, iniciar
+аудиторами, и согласовании семантики отмены с политикой governança.
 
-Телеметрия использования также питает набор метрик `sorafs.node.micropayment_*`:
+A telemetria usada também é a métrica `sorafs.node.micropayment_*`:
 `micropayment_charge_nano`, `micropayment_credit_generated_nano`,
 `micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, а также счетчики билетов
+`micropayment_outstanding_nano`, e também uma cópia de um bilhete
 (`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). Эти totals раскрывают вероятностный
+`micropayment_tickets_duplicate_total`). Эти totais раскрывают вероятностный
 лотерейный поток, чтобы операторы могли коррелировать выигрыши микроплатежей и
 перенос кредитов с результатами расчетов.
 
-## Интеграция Torii
+## Integração Torii
 
-Torii предоставляет выделенные endpoints, чтобы провайдеры могли отправлять usage и вести
-жизненный цикл сделок без специального wiring:
-
-- `POST /v1/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращает
+Torii fornece endpoints valiosos, isso prova o uso e o uso
+жизненный цикл сделок без специального fiação:- `POST /v1/sorafs/deal/usage` fornece o telefone `DealUsageReport` e retorna
   детерминированные результаты учета (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` завершает текущий window, стримя
-  итоговый `DealSettlementRecord` вместе с base64-кодированным `DealSettlementV1`,
-  готовым к публикации в governance DAG.
-- Лента Torii `/v1/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
-  суммирующие каждую отправку usage (epoch, измеренные GiB-hours, счетчики билетов,
-  детерминированные charges), записи `SorafsGatewayEvent::DealSettlement`,
+- `POST /v1/sorafs/deal/settle` janela de proteção de segurança, janela
+  O `DealSettlementRecord` é baseado em base64-кодированным `DealSettlementV1`,
+  готовым к публикации в governança DAG.
+-Lente Torii `/v1/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
+  суммирующие каждую отправку uso (época, измеренные GiB-horas, счетчики билетов,
+  taxas de determinação), nome `SorafsGatewayEvent::DealSettlement`,
   включающие канонический snapshot ledger расчетов плюс BLAKE3 digest/size/base64
-  governance артефакта на диске, и алерты `SorafsGatewayEvent::ProofHealth` при превышении
-  порогов PDP/PoTR (провайдер, окно, состояние strike/cooldown, сумма штрафа). Потребители могут
-  фильтровать по провайдеру, чтобы реагировать на новую телеметрию, расчеты или proof-health алерты без polling.
+  artefato de governança no disco e alertas `SorafsGatewayEvent::ProofHealth` sobre previsões
+  порогов PDP/PoTR (провайдер, окно, состояние strike/cooldown, сумма штрафа). Pode ser melhorado
+  фильтровать по провайдеру, чтобы реагировать на новую телеметрию, расчеты или алерты prova-saúde алерты без polling.
 
-Оба endpoints участвуют в SoraFS quota framework через новое окно
-`torii.sorafs.quota.deal_telemetry`, позволяя операторам настраивать допустимую
+Os endpoints disponíveis estão na estrutura de cotas SoraFS em um novo momento
+`torii.sorafs.quota.deal_telemetry`, operação de operação de transferência
 частоту отправки для каждого деплоя.

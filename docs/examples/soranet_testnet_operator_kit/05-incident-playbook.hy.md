@@ -7,36 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2fbce156952c669e73d74c13284fca317013d706ee401359028c3638341d34b
 source_last_modified: "2025-12-29T18:16:35.091815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Brownout / Downgrade Response Playbook
+# Brownout / Կրճատել արձագանքման գրքույկ
 
-1. **Detect**
-   - Alert `soranet_privacy_circuit_events_total{kind="downgrade"}` fires or
-     brownout webhook triggers from governance.
-   - Confirm via `kubectl logs soranet-relay` or systemd journal within 5 mins.
+1. **Հայտնաբերել**
+   - Զգուշացում `soranet_privacy_circuit_events_total{kind="downgrade"}` հրդեհների կամ
+     brownout webhook triggers է կառավարման.
+   - Հաստատեք `kubectl logs soranet-relay` կամ համակարգված ամսագրի միջոցով 5 րոպեի ընթացքում:
 
-2. **Stabilise**
-   - Freeze guard rotation (`relay guard-rotation disable --ttl 30m`).
-   - Enable direct-only override for affected clients
-     (`sorafs fetch --transport-policy direct-only --write-mode read-only`).
-   - Capture current compliance config hash (`sha256sum compliance.toml`).
+2. **Կայունացնել**
+   - Սառեցման պահակի ռոտացիա (`relay guard-rotation disable --ttl 30m`):
+   - Ազդեցության ենթարկված հաճախորդների համար միացնել միայն ուղղակի անտեսումը
+     (`sorafs fetch --transport-policy direct-only --write-mode read-only`):
+   - Ներգրավել ընթացիկ համապատասխանության կազմաձևերի հեշը (`sha256sum compliance.toml`):
 
-3. **Diagnose**
-   - Collect latest directory snapshot and relay metrics bundle:
+3. **Ախտորոշում**
+   - Հավաքեք վերջին գրացուցակի նկարը և ռելեի չափման փաթեթը.
      `soranet-relay support-bundle --output /tmp/bundle.tgz`.
-   - Note PoW queue depth, throttle counters, and GAR category spikes.
-   - Identify whether PQ deficit, compliance override, or relay failure caused the event.
+   - Ուշադրություն դարձրեք PoW հերթի խորությանը, շնչափողի հաշվիչներին և GAR կատեգորիայի հասկերին:
+   - Բացահայտեք՝ արդյոք PQ-ի դեֆիցիտը, համապատասխանության խախտումը կամ ռելեի ձախողումը առաջացրել են իրադարձությունը:
 
-4. **Escalate**
-   - Notify the governance bridge (`#soranet-incident`) with summary and bundle hash.
-   - Open incident ticket linking to the alert, including timestamps and mitigation steps.
+4. **Աճել**
+   - Տեղեկացրեք կառավարման կամուրջին (`#soranet-incident`) ամփոփագրի և փաթեթի հեշի միջոցով:
+   - Բացեք միջադեպի տոմսը, որը կապում է ահազանգին, ներառյալ ժամադրոշմները և մեղմացման քայլերը:
 
-5. **Recover**
-   - Once root cause addressed, re-enable rotation
-     (`relay guard-rotation enable`) and revert direct-only overrides.
-   - Monitor KPIs for 30 minutes; ensure no new brownouts appear.
+5. **Վերականգնել **
+   - Երբ արմատական պատճառն ուղղվի, նորից միացրեք ռոտացիան
+     (`relay guard-rotation enable`) և ետ վերադարձնել միայն ուղղակի անտեսումները:
+   - Վերահսկել KPI-ները 30 րոպե; համոզվեք, որ նոր այտուցներ չհայտնվեն:
 
-6. **Postmortem**
-   - Submit incident report within 48 hours using governance template.
-   - Update runbooks if new failure mode discovered.
+6. **Հետմահվան**
+   - Ներկայացրեք միջադեպի մասին հաշվետվություն 48 ժամվա ընթացքում՝ օգտագործելով կառավարման ձևանմուշը:
+   - Թարմացրեք runbooks-ը, եթե հայտնաբերվի ձախողման նոր ռեժիմ:

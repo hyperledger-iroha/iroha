@@ -9,71 +9,72 @@ source_last_modified: "2025-12-29T18:16:35.201601+00:00"
 translation_last_reviewed: 2026-02-07
 title: SF-6 Security Review
 summary: Findings and follow-up items from the independent assessment of keyless signing, proof streaming, and manifest submission pipelines.
+translator: machine-google-reviewed
 ---
 
-# SF-6 Security Review
+# SF-6 უსაფრთხოების მიმოხილვა
 
-**Assessment window:** 2026-02-10 → 2026-02-18  
-**Review leads:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Scope:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, Sigstore/OIDC integration, CI release hooks.  
-**Artifacts:**  
-- CLI source and tests (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
-- Torii manifest/proof handlers (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`, [SoraFS Orchestrator GA Parity Report](./orchestrator-ga-parity.md))
+**შეფასების ფანჯარა:** 2026-02-10 → 2026-02-18  
+** მიმოხილვა: ** უსაფრთხოების ინჟინერიის გილდია (`@sec-eng`), ინსტრუმენტების სამუშაო ჯგუფი (`@tooling-wg`)  
+** ფარგლები:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), მტკიცებულების ნაკადის API, Torii მანიფესტის მართვა, Sigstore/OIDC ინტეგრაცია, CI გამოშვების კაკვები.  
+**არტეფაქტები:**  
+- CLI წყარო და ტესტები (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
+- Torii მანიფესტის/პროფილური დამმუშავებლები (`crates/iroha_torii/src/sorafs/api.rs`)  
+- გამოშვების ავტომატიზაცია (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
+- დეტერმინისტული პარიტეტის აღკაზმულობა (`crates/sorafs_car/tests/sorafs_cli.rs`, [SoraFS Orchestrator GA პარიტეტის ანგარიში] (./orchestrator-ga-parity.md))
 
-## Methodology
+## მეთოდოლოგია
 
-1. **Threat modelling workshops** mapped attacker capabilities for developer workstations, CI systems, and Torii nodes.  
-2. **Code review** focused on credential surfaces (OIDC token exchange, keyless signing), Norito manifest validation, and proof streaming back-pressure.  
-3. **Dynamic testing** replayed fixture manifests and simulated failure modes (token replay, manifest tampering, truncated proof streams) using the parity harness and bespoke fuzz drives.  
-4. **Configuration inspection** validated `iroha_config` defaults, CLI flag handling, and release scripts to ensure deterministic, auditable runs.  
-5. **Process interview** confirmed remediation flow, escalation paths, and audit evidence capture with Tooling WG release owners.
+1. **საფრთხის მოდელირების სემინარებმა** შეადგინეს თავდამსხმელის შესაძლებლობები დეველოპერის სამუშაო სადგურებისთვის, CI სისტემებისთვის და Torii კვანძებისთვის.  
+2. **კოდის მიმოხილვა** ორიენტირებულია რწმუნებათა სიგელების ზედაპირებზე (OIDC ჟეტონების გაცვლა, ღილაკების ხელმოწერა), Norito მანიფესტის ვალიდაცია და მტკიცებულების ნაკადის უკანა წნევა.  
+3. **დინამიური ტესტირება** განახლებული მოწყობილობების მანიფესტების და იმიტირებული წარუმატებლობის რეჟიმები (token replay, manifest tampering, truncated proof streams) პარიტეტული აღკაზმულობის და შეკვეთილი fuzz დისკების გამოყენებით.  
+4. **კონფიგურაციის ინსპექტირება** დადასტურდა `iroha_config` ნაგულისხმევი ნაგულისხმევი, CLI დროშის დამუშავება და გამოშვების სკრიპტები დეტერმინისტული, აუდიტორული გაშვებების უზრუნველსაყოფად.  
+5. **პროცესის გასაუბრება** დაადასტურა გამოსწორების ნაკადი, ესკალაციის გზები და აუდიტის მტკიცებულება Tooling WG გამოშვების მფლობელებთან.
 
-## Findings Summary
+## აღმოჩენების შეჯამება
 
-| ID | Severity | Area | Finding | Resolution |
-|----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | OIDC token audience defaults were implicit in CI templates, risking cross-tenant replay. | Added explicit `--identity-token-audience` enforcement in release hooks and CI templates ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI now fails when the audience is omitted. |
-| SF6-SR-02 | Medium | Proof streaming | Back-pressure paths accepted unbounded subscriber buffers, enabling memory exhaustion. | `sorafs_cli proof stream` enforces bounded channel sizes with deterministic truncation, logging Norito summaries and aborting the stream; Torii mirror updated to bound response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Medium | Manifest submission | CLI accepted manifests without verifying embedded chunk plans when `--plan` was absent. | `sorafs_cli manifest submit` now recomputes and compares CAR digests unless `--expect-plan-digest` is provided, rejecting mismatches and surfacing remediation hints. Tests cover success/failure cases (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Low | Audit trail | Release checklist lacked a signed approval log for the security review. | Added [release process](../developer-releases.md) section requiring attachment of review memo hashes and sign-off ticket URL before GA. |
+| ID | სიმძიმე | ფართობი | მოძიება | რეზოლუცია |
+|----|----------|------|--------|------------|
+| SF6-SR-01 | მაღალი | გასაღების გარეშე ხელმოწერა | OIDC ტოკენის აუდიტორიის ნაგულისხმევი ნაგულისხმევი იყო CI შაბლონებში, რაც საფრთხეს უქმნის ჯვარედინი დამქირავებელთა გამეორებას. | დამატებულია აშკარა `--identity-token-audience` აღსრულება გამოშვების კაუჭებსა და CI შაბლონებში ([გამოშვების პროცესი](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI ახლა ვერ ხერხდება, როდესაც აუდიტორია გამოტოვებულია. |
+| SF6-SR-02 | საშუალო | მტკიცებულება ნაკადი | უკანა წნევის ბილიკები იღებდნენ აბონენტის შეუზღუდავ ბუფერებს, რაც მეხსიერების ამოწურვის საშუალებას იძლევა. | `sorafs_cli proof stream` ახორციელებს შეზღუდული არხის ზომებს დეტერმინისტული შეკვეცით, Norito შეჯამებების აღრიცხვა და ნაკადის შეწყვეტა; Torii სარკე განახლებულია შეკრული პასუხის ნაწილებად (`crates/iroha_torii/src/sorafs/api.rs`). |
+| SF6-SR-03 | საშუალო | მანიფესტი წარდგენა | CLI-მ მიიღო მანიფესტები ჩაშენებული ნაწილის გეგმების გადამოწმების გარეშე, როდესაც `--plan` არ იყო. | `sorafs_cli manifest submit` ახლა ხელახლა ითვლის და ადარებს CAR-ის შეგროვებას, თუ არ არის მოწოდებული `--expect-plan-digest`, უარყოფს შეუსაბამობებს და ასახავს ზედაპირული გამოსწორების მინიშნებებს. ტესტები მოიცავს წარმატების/მარცხის შემთხვევებს (`crates/sorafs_car/tests/sorafs_cli.rs`). |
+| SF6-SR-04 | დაბალი | აუდიტის ბილიკი | გამოშვების საკონტროლო სიას აკლდა ხელმოწერილი დამტკიცების ჟურნალი უსაფრთხოების განხილვისთვის. | დამატებულია [გამოშვების პროცესი] (../developer-releases.md) განყოფილება, რომელიც მოითხოვს მიმოხილვის მემორანდუმის ჰეშების და გაფორმების ბილეთის URL-ს GA-მდე მიმაგრებას. |
 
-All high/medium findings were fixed during the review window and validated through the existing parity harness. No latent critical issues remain.
+ყველა მაღალი/საშუალო დასკვნა დაფიქსირდა განხილვის ფანჯრის დროს და დადასტურდა არსებული პარიტეტული აღმართის მეშვეობით. ლატენტური კრიტიკული საკითხები არ რჩება.
 
-## Control Validation
+## კონტროლის დადასტურება
 
-- **Credential scope:** Default CI templates now mandate explicit audience and issuer assertions; the CLI and release helper both fail fast unless `--identity-token-audience` accompanies `--identity-token-provider`.  
-- **Deterministic replay:** Updated tests cover positive/negative manifest submission flows, ensuring mismatched digests remain non-deterministic failures and are surfaced before touching the network.  
-- **Proof streaming back-pressure:** Torii now streams PoR/PoTR items over bounded channels, and the CLI retains only truncated latency samples + five failure exemplars, preventing unbounded subscriber growth while keeping deterministic summaries.  
-- **Observability:** Proof streaming counters (`torii_sorafs_proof_stream_*`) and CLI summaries capture abort reasons, providing operators with audit breadcrumbs.  
-- **Documentation:** Developer guides ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) call out security-sensitive flags and escalation workflows.
+- ** რწმუნებათა სიგელის ფარგლები: ** ნაგულისხმევი CI შაბლონები ახლა ავალდებულებს აუდიტორიისა და ემიტენტის მკაფიო განცხადებებს; CLI და გამოშვების დამხმარე ორივე სწრაფად იშლება, თუ `--identity-token-audience` არ ახლავს `--identity-token-provider`.  
+- **დეტერმინისტული გამეორება:** განახლებული ტესტები მოიცავს დადებითი/უარყოფითი მანიფესტის წარდგენის ნაკადებს, რაც უზრუნველყოფს, რომ შეუსაბამო დაჯესტები დარჩეს არადეტერმინისტული წარუმატებლობები და გამოჩნდება ზედაპირზე ქსელთან შეხებამდე.  
+- **სტრიმინგის დამადასტურებელი უკანა წნევა:** Torii ახლა გადასცემს PoR/PoTR ელემენტებს შემოსაზღვრულ არხებზე და CLI ინარჩუნებს მხოლოდ შეყოვნებულ შეყოვნების ნიმუშებს + ხუთ წარუმატებლობის მაგალითს, რაც ხელს უშლის აბონენტების შეუზღუდავ ზრდას, ხოლო დეტერმინისტული შეჯამებების შენახვას.  
+- **დაკვირვებადობა:** მტკიცებულების ნაკადის მრიცხველები (`torii_sorafs_proof_stream_*`) და CLI რეზიუმეები ასახავს შეწყვეტის მიზეზებს, რაც ოპერატორებს აწვდის აუდიტის ნამსხვრევებს.  
+- **დოკუმენტაცია:** დეველოპერის მეგზურები ([დეველოპერის ინდექსი](../developer-index.md), [CLI მითითება](../developer-cli.md)) მოწოდებენ უსაფრთხოების მიმართ მგრძნობიარე დროშებს და ესკალაციის სამუშაო ნაკადებს.
 
-## Release Checklist Additions
+## გამოუშვით საკონტროლო სიის დამატებები
 
-Release managers **must** attach the following evidence when promoting a GA candidate:
+გათავისუფლების მენეჯერებმა ** უნდა** დაურთონ შემდეგი მტკიცებულებები GA კანდიდატის დაწინაურებისას:
 
-1. Hash of the latest security review memo (this document).  
-2. Link to the tracked remediation ticket (e.g., `governance/tickets/SF6-SR-2026.md`).  
-3. Output of `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` showing explicit audience/issuer arguments.  
-4. Captured logs from the parity harness (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Confirmation that Torii release notes include bounded proof streaming telemetry counters.
+1. უსაფრთხოების უახლესი მიმოხილვის მემორანდუმის ჰეში (ეს დოკუმენტი).  
+2. ბმული აღდგენის ბილეთზე (მაგ., `governance/tickets/SF6-SR-2026.md`).  
+3. გამომავალი `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...`, რომელიც აჩვენებს აუდიტორიის/გამომცემის აშკარა არგუმენტებს.  
+4. აღებული მორები პარიტეტული აღკაზმულობიდან (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
+5. დადასტურება, რომ Torii გამოშვების შენიშვნები მოიცავს შეზღუდული მტკიცებულების ნაკადის ტელემეტრიის მრიცხველებს.
 
-Failure to collect the artefacts above blocks GA sign-off.
+ზემოთ მოყვანილი არტეფაქტების შეგროვება ბლოკავს GA-ს ხელმისაწვდომობას.
 
-**Reference artefact hashes (2026-02-20 sign-off):**
+**მინიშნება არტეფაქტის ჰეშები (2026-02-20 ხელმოწერა):**
 
 - `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
 
-## Outstanding Follow-ups
+## გამორჩეული შემდგომი
 
-- **Threat model refresh:** Repeat this review quarterly or before major CLI flag additions.  
-- **Fuzzing coverage:** Proof streaming transport encodings are fuzzed via `fuzz/proof_stream_transport`, covering identity, gzip, deflate, and zstd payloads.  
-- **Incident rehearsal:** Schedule an operator exercise simulating token compromise and manifest rollback, ensuring documentation reflects practised procedures.
+- **საფრთხის მოდელის განახლება:** გაიმეორეთ ეს მიმოხილვა კვარტალურად ან CLI-ის ძირითადი დროშის დამატებამდე.  
+- **გაურკვეველი დაფარვა:** დამადასტურებელი ნაკადის სატრანსპორტო კოდირებები დაბნეულია `fuzz/proof_stream_transport`-ის საშუალებით, რომელიც მოიცავს იდენტურობას, gzip-ს, deflate-ს და zstd დატვირთვას.  
+- **ინციდენტის რეპეტიცია:** დაგეგმეთ ოპერატორის სავარჯიშო, რომელიც სიმულაციას უწევს ნიშნის კომპრომისს და ცხადყოფს უკან დაბრუნებას, დარწმუნდით, რომ დოკუმენტაცია ასახავს პრაქტიკულ პროცედურებს.
 
-## Approval
+## დამტკიცება
 
-- Security Engineering Guild representative: @sec-eng (2026-02-20)  
-- Tooling Working Group representative: @tooling-wg (2026-02-20)
+- უსაფრთხოების ინჟინერიის გილდიის წარმომადგენელი: @sec-eng (2026-02-20)  
+- Tooling სამუშაო ჯგუფის წარმომადგენელი: @tooling-wg (2026-02-20)
 
-Store signed approvals alongside the release artefact bundle.
+შეინახეთ ხელმოწერილი ნებართვები გამოშვების არტეფაქტის პაკეტთან ერთად.

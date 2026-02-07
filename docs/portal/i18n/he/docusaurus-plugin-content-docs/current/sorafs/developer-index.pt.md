@@ -4,16 +4,18 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-index.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
-title: Guias para desenvolvedores de SoraFS
-description: Pagina inicial para a documentacao de desenvolvedores de SoraFS, exemplos e referencias de automacao.
+מזהה: מפתח מפתח
+כותרת: Guias para desenvolvedores de SoraFS
+תיאור: דף ראשוני עבור דוקומנטרי דה desenvolvedores de SoraFS, דוגמאות e references de automacao.
 sidebar_label: Visao geral de desenvolvedores
 ---
 
-:::note Fonte canonica
+:::שים לב Fonte canonica
 Esta pagina espelha `docs/source/sorafs/developer/index.md`. Mantenha ambas as copias sincronizadas.
 :::
 

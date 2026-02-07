@@ -4,33 +4,35 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-default-lane-quickstart.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-default-lane-quickstart
-title: Guia rapida del lane predeterminado (NX-5)
-sidebar_label: Guia rapida del lane predeterminado
-description: Configura y verifica el fallback del lane predeterminado de Nexus para que Torii y los SDK puedan omitir lane_id en lanes publicas.
+المعرف: nexus-default-lane-quickstart
+العنوان: الطريق السريع المحدد مسبقًا (NX-5)
+Sidebar_label: دليل المسار السريع المحدد مسبقًا
+الوصف: قم بتكوين المسار الاحتياطي Nexus والتحقق منه مسبقًا حتى يتمكن Torii وSDK من حذف معرف المسار في الممرات العامة.
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/quickstart/default_lane.md`. Manten ambas copias alineadas hasta que el barrido de localizacion llegue al portal.
+:::ملاحظة فوينتي كانونيكا
+هذه الصفحة تعكس `docs/source/quickstart/default_lane.md`. احتفظ بنسخ متجددة حتى يصل حاجز التوطين إلى البوابة.
 :::
 
-# Guia rapida del lane predeterminado (NX-5)
+# دليل المسار السريع المحدد مسبقًا (NX-5)
 
-> **Contexto del roadmap:** NX-5 - integracion del lane publico predeterminado. El runtime ahora expone un fallback `nexus.routing_policy.default_lane` para que los endpoints REST/gRPC de Torii y cada SDK puedan omitir con seguridad un `lane_id` cuando el trafico pertenece al lane publico canonico. Esta guia lleva a los operadores a configurar el catalogo, verificar el fallback en `/status` y ejercitar el comportamiento del cliente de extremo a extremo.
+> **سياق خريطة الطريق:** NX-5 - تكامل المسار العام المحدد مسبقًا. يعرض وقت التشغيل الآن احتياطيًا `nexus.routing_policy.default_lane` حتى تتمكن نقاط النهاية REST/gRPC الخاصة بـ Torii وكل SDK من حذف `lane_id` بأمان عندما تكون حركة المرور على المسار العام الكنسي. تساعد هذه الأداة المشغلين على تكوين الكتالوج والتحقق من الإجراء الاحتياطي في `/status` وتفعيل معاملة العميل من أقصى الحدود.
 
-## Prerrequisitos
+## المتطلبات الأساسية
 
-- Un build de Sora/Nexus de `irohad` (ejecuta `irohad --sora --config ...`).
-- Acceso al repositorio de configuracion para poder editar secciones `nexus.*`.
-- `iroha_cli` configurado para hablar con el cluster objetivo.
-- `curl`/`jq` (o equivalente) para inspeccionar el payload `/status` de Torii.
+- إنشاء Sora/Nexus من `irohad` (إخراج `irohad --sora --config ...`).
+- قم بالوصول إلى مستودع التكوين حتى تتمكن من تحرير الأقسام `nexus.*`.
+- تم تكوين `iroha_cli` للتحدث مع أهداف المجموعة.
+- `curl`/`jq` (أو ما يعادله) لفحص الحمولة النافعة `/status` من Torii.
 
-## 1. Describe el catalogo de lanes y dataspaces
+## 1. وصف كتالوج الممرات ومساحات البيانات
 
-Declara los lanes y dataspaces que deben existir en la red. El fragmento siguiente (recortado de `defaults/nexus/config.toml`) registra tres lanes publicas mas los alias de dataspace correspondientes:
+أعلن عن الممرات ومساحات البيانات التي يجب أن تكون موجودة باللون الأحمر. الجزء التالي (المسجل في `defaults/nexus/config.toml`) يسجل ثلاث ممرات منشورة بالإضافة إلى الاسم المستعار لمساحة البيانات المقابلة:
 
 ```toml
 [nexus]
@@ -73,11 +75,11 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Cada `index` debe ser unico y contiguo. Los ids de dataspace son valores de 64 bits; los ejemplos anteriores usan los mismos valores numericos que los indices de lane para mayor claridad.
+كل `index` يجب أن يكون فريدًا ومتواصلًا. تبلغ قيمة معرفات مساحة البيانات 64 بت؛ تستخدم الأمثلة السابقة نفس القيم الرقمية التي تجعل مؤشرات الممرات أكثر وضوحًا.
 
-## 2. Configura los valores predeterminados de enrutamiento y las sobreescrituras opcionales
+## 2. تكوين قيم الإعداد المحددة مسبقًا والقواعد الاختيارية
 
-La seccion `nexus.routing_policy` controla el lane de fallback y te permite sobrescribir el enrutamiento para instrucciones especificas o prefijos de cuenta. Si ninguna regla coincide, el scheduler enruta la transaccion al `default_lane` y `default_dataspace` configurados. La logica del router vive en `crates/iroha_core/src/queue/router.rs` y aplica la politica de forma transparente a las superficies REST/gRPC de Torii.
+يتحكم القسم `nexus.routing_policy` في المسار الاحتياطي ويسمح لك بالاشتراك في التعليمات لتعليمات محددة أو بادئات الحساب. إذا لم يتم ضبطه في نفس الوقت، يقوم المجدول بإعادة المعاملة إلى `default_lane` و`default_dataspace`. منطق جهاز التوجيه الحي في `crates/iroha_core/src/queue/router.rs` وتطبيق السياسة الشكلية الشفافة على أسطح REST/gRPC في Torii.
 
 ```toml
 [nexus.routing_policy]
@@ -99,26 +101,26 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-Cuando mas adelante agregues nuevas lanes, actualiza primero el catalogo y luego extiende las reglas de enrutamiento. El lane de fallback debe seguir apuntando al lane publico que concentra la mayor parte del trafico de usuarios para que los SDKs heredados sigan funcionando.
+عندما يتم إضافة مسارات جديدة، قم بتحديث الكتالوج الأول وتوسيع نطاق أنظمة التشغيل. يجب أن يستمر المسار الاحتياطي عبر المسار العام الذي يركز على الجزء الأكبر من حركة مرور المستخدمين حتى تعمل حزم SDK المتوارثة.
 
-## 3. Arranca un nodo con la politica aplicada
+## 3. عقد عقدة مع تطبيق السياسة
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-El nodo registra la politica de enrutamiento derivada durante el arranque. Cualquier error de validacion (indices faltantes, alias duplicados, ids de dataspace invalidos) se muestra antes de que comience el gossip.
+العقدة تسجل سياسة التوجيه المستمدة أثناء التشغيل. يظهر أي خطأ في التحقق (المؤشرات الخاطئة، والأسماء المستعارة المكررة، ومعرفات مساحة البيانات غير الصالحة) قبل بدء النميمة.
 
-## 4. Confirma el estado de gobernanza del lane
+## 4. تأكيد حالة إدارة الممر
 
-Una vez que el nodo este en linea, usa el helper del CLI para verificar que el lane predeterminado este sellado (manifest cargado) y listo para trafico. La vista de resumen imprime una fila por lane:
+بمجرد أن تكون العقدة على الخط، استخدم مساعد CLI للتحقق من أن المسار المحدد مسبقًا تم بيعه (بيان الشحنة) وقائمة المرور. مشهد السيرة الذاتية ينشئ فيلا في الممر:
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+مثال الإخراج:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -127,17 +129,17 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-Si el lane predeterminado muestra `sealed`, sigue el runbook de gobernanza de lanes antes de permitir trafico externo. El flag `--fail-on-sealed` es util para CI.
+إذا كان المسار المحدد مسبقًا `sealed`، فتابع دليل إدارة الممرات قبل السماح بحركة المرور الخارجية. العلم `--fail-on-sealed` يستخدم لـ CI.
 
-## 5. Inspecciona los payloads de estado de Torii
+## 5. فحص حمولات الحالة Torii
 
-La respuesta `/status` expone tanto la politica de enrutamiento como la instantanea del scheduler por lane. Usa `curl`/`jq` para confirmar los valores predeterminados configurados y comprobar que el lane de fallback esta produciendo telemetria:
+توضح الإجابة `/status` سياسة التشغيل مثل عملية الجدولة الفورية. Usa `curl`/`jq` لتأكيد القيم المحددة مسبقًا والتحقق من أن المسار الاحتياطي ينتج القياس عن بعد:
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+إخراج العينة:
 
 ```json
 {
@@ -150,7 +152,7 @@ Sample output:
 }
 ```
 
-Para inspeccionar los contadores en vivo del scheduler para el lane `0`:
+لفحص المحولات الحية للجدولة للمسار `0`:
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -158,18 +160,18 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-Esto confirma que la instantanea de TEU, los metadatos de alias y los flags de manifest se alinean con la configuracion. El mismo payload es el que usan los paneles de Grafana para el dashboard de lane-ingest.
+يؤكد هذا أن لحظية TEU والبيانات الاسمية المستعارة وعلامات البيان غير متوافقة مع التكوين. نفس الحمولة هي التي تستخدم لوحات Grafana للوحة القيادة الخاصة بإدخال المسار.
 
-## 6. Ejercita los valores predeterminados del cliente
+## 6. اختبر قيم العميل المحددة مسبقًا
 
-- **Rust/CLI.** `iroha_cli` y el crate cliente de Rust omiten el campo `lane_id` cuando no pasas `--lane-id` / `LaneSelector`. El router de colas por lo tanto recurre a `default_lane`. Usa los flags explicitos `--lane-id`/`--dataspace-id` solo cuando apuntes a una lane no predeterminada.
-- **JS/Swift/Android.** Las ultimas versiones de los SDK tratan `laneId`/`lane_id` como opcionales y hacen fallback al valor anunciado por `/status`. Manten la politica de enrutamiento sincronizada entre staging y produccion para que las apps moviles no necesiten reconfiguraciones de emergencia.
-- **Pipeline/SSE tests.** Los filtros de eventos de transacciones aceptan predicados `tx_lane_id == <u32>` (ver `docs/source/pipeline.md`). Suscribete a `/v1/pipeline/events/transactions` con ese filtro para demostrar que las escrituras enviadas sin un lane explicito llegan bajo el id de lane de fallback.
+- **Rust/CLI.** `iroha_cli` ويحذف صندوق الصدأ العميل المجال `lane_id` عندما لا يمر `--lane-id` / `LaneSelector`. يتكرر جهاز توجيه الكولا لهذا الغرض `default_lane`. الأعلام الصريحة هي `--lane-id`/`--dataspace-id` فقط عند فتح مسار غير محدد مسبقًا.
+- **JS/Swift/Android.** الإصدارات الأخيرة من SDK تستخدم `laneId`/`lane_id` كخيارات اختيارية وتم الإعلان عنها بالقيمة الاحتياطية لـ `/status`. حافظ على مزامنة سياسة الإعداد بين التدريج والإنتاج حتى لا تحتاج التطبيقات المتحركة إلى إعادة تكوين في حالات الطوارئ.
+- **اختبارات الأنابيب/SSE.** تقبل مرشحات أحداث المعاملات `tx_lane_id == <u32>` (الإصدار `docs/source/pipeline.md`). قم بالاشتراك في `/v1/pipeline/events/transactions` باستخدام هذا الفلتر لإظهار أن الكتب المرسلة بدون مسار واضح يمكن الرجوع إليها أسفل معرف المسار الاحتياطي.
 
-## 7. Observabilidad y ganchos de gobernanza
+## 7. إمكانية المراقبة وفعاليات الحكومة
 
-- `/status` tambien publica `nexus_lane_governance_sealed_total` y `nexus_lane_governance_sealed_aliases` para que Alertmanager pueda avisar cuando una lane pierde su manifest. Manten esas alertas habilitadas incluso en devnets.
-- El mapa de telemetria del scheduler y el dashboard de gobernanza de lanes (`dashboards/grafana/nexus_lanes.json`) esperan los campos alias/slug del catalogo. Si renombras un alias, vuelve a etiquetar los directorios Kura correspondientes para que los auditores mantengan rutas deterministas (seguido bajo NX-1).
-- Las aprobaciones parlamentarias para lanes predeterminadas deben incluir un plan de rollback. Registra el hash del manifest y la evidencia de gobernanza junto con este quickstart en tu runbook de operador para que las rotaciones futuras no tengan que adivinar el estado requerido.
+- `/status` يتم أيضًا نشر `nexus_lane_governance_sealed_total` و`nexus_lane_governance_sealed_aliases` حتى يتمكن Alertmanager من رؤيته عند فتح مسار آخر لبيانه. احتفظ بهذه التنبيهات المؤهلة بما في ذلك شبكات التطوير.
+- خريطة القياس عن بعد للجدولة ولوحة التحكم في الممرات (`dashboards/grafana/nexus_lanes.json`) تعرض الاسم المستعار/رابط الكتالوج. إذا قمت بإعادة تسمية اسم مستعار، فقم بكتابة أدلة Kura المقابلة حتى يتمكن المدققون من الحفاظ على محدداتهم (يتبع NX-1).
+- يجب أن تتضمن الموافقات البرلمانية للممرات المحددة مسبقًا خطة للتراجع. قم بتسجيل تجزئة البيان وأدلة الإدارة جنبًا إلى جنب مع هذا البدء السريع في دليل المشغل الخاص بك حتى لا تتمكن الدورات المستقبلية من تحقيق الحالة المطلوبة.
 
-Una vez que estas comprobaciones pasen puedes tratar `nexus.routing_policy.default_lane` como la fuente de verdad para la configuracion de los SDK y empezar a deshabilitar las rutas de codigo heredadas de lane unico en la red.
+بمجرد أن تمر هذه الاختبارات، يمكنك استخدام `nexus.routing_policy.default_lane` كقوة حقيقية لتكوين SDK والتمكن من إلغاء تحديد مسارات التعليمات البرمجية المتوارثة في المسار الفريد باللون الأحمر.

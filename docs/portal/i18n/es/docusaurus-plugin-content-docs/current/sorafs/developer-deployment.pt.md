@@ -4,62 +4,60 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-deployment.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-deployment
-title: Notas de deployment da SoraFS
-sidebar_label: Notas de deployment
-description: Checklist para promover o pipeline da SoraFS de CI para producao.
+id: implementación de desarrollador
+título: Notas de implementación de SoraFS
+sidebar_label: Notas de implementación
+descripción: Lista de verificación para promover o tubería da SoraFS de CI para producción.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas as copias sincronizadas.
+:::nota Fuente canónica
+Esta página espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas como copias sincronizadas.
 :::
 
-# Notas de deployment
+# Notas de implementación
 
-O workflow de empacotamento da SoraFS fortalece o determinismo, entao a passagem de CI para producao requer principalmente guardrails operacionais. Use esta checklist ao levar as ferramentas para gateways e provedores de armazenamento reais.
+El flujo de trabajo de empaquetado de SoraFS fortalece el determinismo, entre ellos un pasaje de CI para producir que requiera principalmente barreras operativas. Utilice esta lista de verificación para levantar como herramientas para puertas de enlace y proveedores de armazenamento real.
 
-## Pre-flight
+## Pre-vuelo
 
 - **Alinhamento do registro** - confirme que os perfis de chunker e manifests referenciam a mesma tupla `namespace.name@semver` (`docs/source/sorafs/chunker_registry.md`).
-- **Politica de admission** - revise os provider adverts assinados e alias proofs necessarios para `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
-- **Runbook do pin registry** - mantenha `docs/source/sorafs/runbooks/pin_registry_ops.md` por perto para cenarios de recuperacao (rotacao de alias, falhas de replicacao).
+- **Política de admisión** - revisar los anuncios de proveedores assinados y alias pruebas necesarias para `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
+- **Runbook do pin registro** - mantenha `docs/source/sorafs/runbooks/pin_registry_ops.md` por perto para escenarios de recuperación (rotacao de alias, falhas de replicacao).
 
-## Configuracao do ambiente
+## Configuración del ambiente- Las puertas de enlace deben habilitar el punto final de transmisión de prueba (`POST /v1/sorafs/proof/stream`) para que la CLI emita resúmenes de telemetría.
+- Configure una política `sorafs_alias_cache` usando los padroes en `iroha_config` o el ayudante de CLI (`sorafs_cli manifest submit --alias-*`).
+- Tokens de flujo Forneca (o credenciales Torii) a través de un administrador secreto seguro.
+- Habilite los exportadores de telemetría (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) y envie para su pila Prometheus/OTel.
 
-- Gateways devem habilitar o endpoint de proof streaming (`POST /v1/sorafs/proof/stream`) para que o CLI emita resumos de telemetria.
-- Configure a politica `sorafs_alias_cache` usando os padroes em `iroha_config` ou o helper do CLI (`sorafs_cli manifest submit --alias-*`).
-- Forneca stream tokens (ou credenciais Torii) via um secret manager seguro.
-- Habilite exporters de telemetria (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) e envie para seu stack Prometheus/OTel.
+## Estrategia de implementación
 
-## Estrategia de rollout
+1. **Se manifiesta azul/verde**
+   - Utilice `manifest submit --summary-out` para archivar respuestas de cada implementación.
+   - Observe `torii_sorafs_gateway_refusals_total` para captar desajustes de capacidade cedo.
+2. **Validación de pruebas**
+   - Trate falhas em `sorafs_cli proof stream` como bloqueadores de implementación; Los picos de latencia personalizados indican aceleración del proveedor o niveles mal configurados.
+   - `proof verify` debe hacer parte de la prueba de humo pos-pin para garantizar que el CAR hospedado pelos provedores ainda corresponda al resumen del manifiesto.
+3. **Paneles de telemetría**
+   - Importar `docs/examples/sorafs_proof_streaming_dashboard.json` no Grafana.
+   - Adicione Paineis para saude do pin registro (`docs/source/sorafs/runbooks/pin_registry_ops.md`) y estadísticas de rango de fragmentos.
+4. **Habilitacao de múltiples fuentes**
+   - Siga los pasos de implementación en etapas en `docs/source/sorafs/runbooks/multi_source_rollout.md` para activar el orquestador y archivar artefatos de marcador/telemetría para auditorios.
 
-1. **Manifests blue/green**
-   - Use `manifest submit --summary-out` para arquivar respostas de cada rollout.
-   - Observe `torii_sorafs_gateway_refusals_total` para captar mismatches de capacidade cedo.
-2. **Validacao de proofs**
-   - Trate falhas em `sorafs_cli proof stream` como bloqueadores de deployment; picos de latencia costumam indicar throttling do provedor ou tiers mal configurados.
-   - `proof verify` deve fazer parte do smoke test pos-pin para garantir que o CAR hospedado pelos provedores ainda corresponde ao digest do manifest.
-3. **Dashboards de telemetria**
-   - Importe `docs/examples/sorafs_proof_streaming_dashboard.json` no Grafana.
-   - Adicione paineis para saude do pin registry (`docs/source/sorafs/runbooks/pin_registry_ops.md`) e estatisticas de chunk range.
-4. **Habilitacao multi-source**
-   - Siga os passos de rollout em etapas em `docs/source/sorafs/runbooks/multi_source_rollout.md` ao ativar o orquestrador e arquive artefatos de scoreboard/telemetria para auditorias.
-
-## Tratamento de incidentes
-
-- Siga os caminhos de escalonamento em `docs/source/sorafs/runbooks/`:
-  - `sorafs_gateway_operator_playbook.md` para quedas de gateway e esgotamento de stream-token.
-  - `dispute_revocation_runbook.md` quando ocorrerem disputas de replicacao.
+## Tratamiento de incidentes- Siga los caminos de escalamiento en `docs/source/sorafs/runbooks/`:
+  - `sorafs_gateway_operator_playbook.md` para quedas de gateway y almacenamiento de stream-token.
+  - `dispute_revocation_runbook.md` cuando se detectan disputas de replicación.
   - `sorafs_node_ops.md` para manutencao no nivel de nodo.
-  - `multi_source_rollout.md` para overrides do orquestrador, blacklisting de peers e rollouts em etapas.
-- Registre falhas de proofs e anomalias de latencia no GovernanceLog via as APIs de PoR tracker existentes para que a governanca avalie o desempenho dos provedores.
+  - `multi_source_rollout.md` para anular el orquestador, incluir en listas negras de pares y desplegar en etapas.
+- Registre falhas de pruebas y anomalías de latencia en GovernanceLog a través de las API de PoR tracker existentes para que un gobierno avalie o desempenho dos proveedores.
 
-## Proximos passos
+## Próximos pasos
 
-- Integre a automacao do orquestrador (`sorafs_car::multi_fetch`) quando o orquestrador de multi-source fetch (SF-6b) chegar.
-- Acompanhe upgrades de PDP/PoTR sob SF-13/SF-14; o CLI e a documentacao vao evoluir para expor prazos e selecao de tiers quando essas proofs estabilizarem.
+- Integre el automático del orquestador (`sorafs_car::multi_fetch`) cuando compruebe el orquestador de búsqueda de fuentes múltiples (SF-6b).
+- Actualizaciones complementarias de PDP/PoTR en SF-13/SF-14; El CLI y la documentación van a evolucionar para exportar precios y seleccionar niveles cuando esas pruebas se estabilizan.
 
-Ao combinar estas notas de deployment com o quickstart e as receitas de CI, as equipes podem passar de experimentos locais para pipelines SoraFS em producao com um processo repetivel e observavel.
+Además de combinar estas notas de implementación con inicio rápido y recetas de CI, los equipos pueden pasar experimentos ubicados para tuberías SoraFS en producción con un proceso repetitivo y observable.

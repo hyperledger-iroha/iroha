@@ -10,41 +10,42 @@ translation_last_reviewed: 2026-02-07
 id: nexus-settlement-faq
 title: Settlement FAQ
 description: Operator-facing answers covering settlement routing, XOR conversion, telemetry, and audit evidence.
+translator: machine-google-reviewed
 ---
 
-This page mirrors the internal settlement FAQ (`docs/source/nexus_settlement_faq.md`)
-so portal readers can review the same guidance without digging through the
-mono-repo. It explains how the Settlement Router processes payouts, what metrics
-to monitor, and how SDKs should integrate the Norito payloads.
+Bu sahifa ichki hisob-kitoblarni aks ettiradi (`docs/source/nexus_settlement_faq.md`)
+shuning uchun portal o'quvchilari bir xil yo'riqnomani qazib olmagan holda ko'rib chiqishlari mumkin
+mono-repo. Bu Settlement Router to'lovlarni qanday amalga oshiradi, qanday ko'rsatkichlarni tushuntiradi
+monitoring qilish va SDKlar Norito foydali yuklarini qanday birlashtirishi kerak.
 
-## Highlights
+## E'tiborga molik
 
-1. **Lane mapping** — each data space declares a `settlement_handle`
-   (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody`, or
-   `xor_dual_fund`). Consult the latest lane catalog under
+1. **Line xaritalash** — har bir maʼlumot maydoni `settlement_handle` ni eʼlon qiladi
+   (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody` yoki
+   `xor_dual_fund`). Eng so'nggi yo'lak katalogiga qarang
    `docs/source/project_tracker/nexus_config_deltas/`.
-2. **Deterministic conversion** — the router converts all settlements to XOR via
-   the governance-approved liquidity sources. Private lanes pre-fund XOR buffers;
-   haircuts apply only when buffers drift outside policy.
-3. **Telemetry** — watch `nexus_settlement_latency_seconds`, conversion counters,
-   and haircut gauges. Dashboards live in `dashboards/grafana/nexus_settlement.json`
-   and alerts in `dashboards/alerts/nexus_audit_rules.yml`.
-4. **Evidence** — archive configs, router logs, telemetry exports, and
-   reconciliation reports for audits.
-5. **SDK responsibilities** — every SDK must expose settlement helpers, lane IDs,
-   and Norito payload encoders to keep parity with the router.
+2. **Deterministik konversiya** — router orqali barcha hisob-kitoblarni XOR ga o'zgartiradi
+   boshqaruv tomonidan tasdiqlangan likvidlik manbalari. Xususiy yo'llar XOR buferlarini oldindan moliyalashtiradi;
+   Sartaroshlar faqat buferlar siyosatdan tashqariga chiqqanda qo'llaniladi.
+3. **Telemetriya** — soat `nexus_settlement_latency_seconds`, konversiya hisoblagichlari,
+   va soch o'lchagichlari. Boshqaruv panellari `dashboards/grafana/nexus_settlement.json` da yashaydi
+   va `dashboards/alerts/nexus_audit_rules.yml` da ogohlantirishlar.
+4. **Dalillar** — arxiv konfiguratsiyasi, router jurnallari, telemetriya eksporti va
+   audit uchun solishtirish hisobotlari.
+5. **SDK mas'uliyati** — har bir SDK hisob-kitob yordamchilarini, qator identifikatorlarini,
+   va marshrutizator bilan tenglikni saqlash uchun Norito foydali yuk enkoderlari.
 
-## Example flows
+## Oqimlarga misol
 
-| Lane type | Evidence to capture | What it proves |
-|-----------|--------------------|----------------|
-| Private `xor_hosted_custody` | Router log + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | CBDC buffers debit deterministic XOR and haircuts stay within policy. |
-| Public `xor_global` | Router log + DEX/TWAP reference + latency/conversion metrics | Shared liquidity path priced the transfer at the published TWAP with zero haircut. |
-| Hybrid `xor_dual_fund` | Router log showing public vs shielded split + telemetry counters | Shielded/public mix respected governance ratios and recorded the haircut applied to each leg. |
+| Yo'lak turi | Qo'lga olish uchun dalillar | Bu nimani isbotlaydi |
+|----------|--------------------|----------------|
+| Shaxsiy `xor_hosted_custody` | Router jurnali + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | CBDC buferlari debet deterministik XOR va soch turmagi siyosat doirasida qoladi. |
+| Ommaviy `xor_global` | Router jurnali + DEX/TWAP ma'lumotnomasi + kechikish/konversiya ko'rsatkichlari | Birgalikda likvidlik yo'li nashr etilgan TWAPda o'tkazma narxini nol sochlar bilan belgiladi. |
+| Gibrid `xor_dual_fund` | Router jurnali umumiy va himoyalangan split + telemetriya hisoblagichlarini ko'rsatadi | Himoyalangan/ommaviy aralash boshqaruv nisbatlariga rioya qildi va har bir oyoqqa qo'llaniladigan soch turmagini qayd etdi. |
 
-## Need more detail?
+## Batafsil ma'lumot kerakmi?
 
-- Full FAQ: `docs/source/nexus_settlement_faq.md`
-- Settlement router spec: `docs/source/settlement_router.md`
-- CBDC policy playbook: `docs/source/cbdc_lane_playbook.md`
-- Operations runbook: [Nexus operations](./nexus-operations)
+- To'liq tez-tez so'raladigan savollar: `docs/source/nexus_settlement_faq.md`
+- Hisob-kitob marshrutizatorining xususiyatlari: `docs/source/settlement_router.md`
+- CBDC siyosati kitobi: `docs/source/cbdc_lane_playbook.md`
+- Operatsiyalar kitobi: [Nexus operatsiyalar](./nexus-operations)

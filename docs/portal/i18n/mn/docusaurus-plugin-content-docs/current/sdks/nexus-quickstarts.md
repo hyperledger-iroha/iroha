@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus SDK quickstarts
 description: Minimal steps for Rust/JS/Swift/Android/CLI SDKs to connect to Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The full quickstart lives at `docs/source/nexus_sdk_quickstarts.md`. This portal
-summary highlights the shared prerequisites and per-SDK commands so developers
-can verify their setup quickly.
+Бүрэн хурдан эхлүүлэх нь `docs/source/nexus_sdk_quickstarts.md` дээр амьдардаг. Энэ портал
+хураангуй хуваалцсан урьдчилсан нөхцөл болон нэг SDK тушаалуудыг онцлон хөгжүүлэгчид
+тохиргоог хурдан шалгаж болно.
 
-## Shared setup
+## Хуваалцсан тохиргоо
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -22,11 +24,11 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Download the Nexus config bundle, install each SDK’s dependencies, and ensure
-TLS certificates match the release profile (see
+Nexus тохиргооны багцыг татаж аваад SDK тус бүрийн хамаарлыг суулгаж, баталгаажуулна уу.
+TLS гэрчилгээ нь хувилбарын профайлтай таарч байна (харна уу
 `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## Зэв
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -43,16 +45,16 @@ Refs: `docs/source/sdk/rust.md`
 npm run demo:nexus
 ```
 
-The script instantiates `ToriiClient` with the env vars above and prints the
-latest block.
+Скрипт нь `ToriiClient`-г дээрх env vars-уудаар үүсгэн хэвлэнэ.
+хамгийн сүүлийн блок.
 
-## Swift
+## Хурдан
 
 ```bash
 make swift-nexus-demo
 ```
 
-Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
+`FindNetworkStatus`-г татахын тулд `IrohaSwift`-аас `Torii.Client`-г ашигладаг.
 
 ## Android
 
@@ -62,7 +64,7 @@ Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Runs the managed-device test hitting the Nexus staging endpoint.
+Nexus шатлалын төгсгөлийн цэгийг давах удирдлагатай төхөөрөмжийн тестийг ажиллуулдаг.
 
 ## CLI
 
@@ -73,13 +75,13 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Troubleshooting
+## Алдааг олж засварлах
 
-- TLS failures → confirm the CA bundle from the Nexus release tarball.
-- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` once multi-lane routing
-  is enforced.
-- `ERR_SETTLEMENT_PAUSED` → check [Nexus operations](../nexus/nexus-operations) for the
-  incident process; governance may have paused the lane.
+- TLS алдаа → Nexus хувилбараас CA багцыг баталгаажуулна уу.
+- `ERR_UNKNOWN_LANE` → `--lane-id`/`--dataspace-id` нэг удаа олон эгнээний чиглүүлэлт хийх
+  хэрэгждэг.
+- `ERR_SETTLEMENT_PAUSED` → [Nexus үйлдлийн](../nexus/nexus-operations)-г шалгана уу.
+  ослын үйл явц; засаглал энэ эгнээг түр зогсоосон байж магадгүй.
 
-For deeper context and SDK-specific explanations see
+Илүү гүнзгий контекст болон SDK-д зориулсан тайлбарыг үзнэ үү
 `docs/source/nexus_sdk_quickstarts.md`.

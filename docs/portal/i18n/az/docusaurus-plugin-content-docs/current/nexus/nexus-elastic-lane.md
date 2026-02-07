@@ -8,37 +8,39 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Elastic lane provisioning (NX-7)
 sidebar_label: Elastic Lane Provisioning
 description: Bootstrap workflow for creating Nexus lane manifests, catalog entries, and rollout evidence.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_elastic_lane.md`. Keep both copies aligned until the translation sweep lands in the portal.
+:::Qeyd Kanonik Mənbə
+Bu səhifə `docs/source/nexus_elastic_lane.md`-i əks etdirir. Tərcümə portala düşənə qədər hər iki nüsxəni düzülmüş saxlayın.
 :::
 
-# Elastic Lane Provisioning Toolkit (NX-7)
+# Elastik Zolaq Təminetmə Alətlər dəsti (NX-7)
 
-> **Roadmap item:** NX-7 — Elastic lane provisioning tooling  
-> **Status:** Tooling complete — generates manifests, catalog snippets, Norito payloads, smoke tests,
-> and the load-test bundle helper now stitches slot latency gating + evidence manifests so validator
-> load runs can be published without bespoke scripting.
+> **Yol xəritəsi elementi:** NX-7 — Elastik zolaq təmin edən alətlər  
+> **Status:** Alət tamamlandı — manifestlər, kataloq parçaları, Norito yükləri, tüstü testləri,
+> və yükləmə testi paketinin köməkçisi indi yuvanın gecikmə qapağını tikir + sübut belə təsdiqləyici göstərir
+> yükləmə işləri sifarişli skript olmadan dərc edilə bilər.
 
-This guide walks operators through the new `scripts/nexus_lane_bootstrap.sh` helper that automates
-lane manifest generation, lane/dataspace catalog snippets, and rollout evidence. The goal is to make
-it easy to spin up new Nexus lanes (public or private) without hand-editing multiple files or
-re-deriving the catalog geometry by hand.
+Bu təlimat operatorları avtomatlaşdıran yeni `scripts/nexus_lane_bootstrap.sh` köməkçisi vasitəsilə gəzdirir.
+zolaqlı manifest generasiyası, zolaq/dataspace kataloq fraqmentləri və yayılma sübutları. Məqsəd etməkdir
+birdən çox faylı əl ilə redaktə etmədən yeni Nexus zolaqlarını (ictimai və ya özəl) fırlatmaq asandır.
+kataloq həndəsəsini əl ilə yenidən çıxarmaq.
 
-## 1. Prerequisites
+## 1. İlkin şərtlər
 
-1. Governance approval for the lane alias, dataspace, validator set, fault tolerance (`f`), and settlement policy.
-2. A finalized validator list (account IDs) and protected namespace list.
-3. Access to the node configuration repository so you can append the generated snippets.
-4. Paths for the lane manifest registry (see `nexus.registry.manifest_directory` and
+1. Zolaq ləqəbi, məlumat məkanı, validator dəsti, nasazlığa dözümlülük (`f`) və hesablaşma siyasəti üçün idarəetmə təsdiqi.
+2. Tamamlanmış təsdiqləyici siyahısı (hesab identifikatorları) və qorunan ad sahəsi siyahısı.
+3. Yaradılmış fraqmentləri əlavə etmək üçün node konfiqurasiya repozitoriyasına daxil olun.
+4. Zolaqlı manifest reyestri üçün yollar (bax: `nexus.registry.manifest_directory` və
    `cache_directory`).
-5. Telemetry contacts/PagerDuty handles for the lane so alerts can be wired as soon as the lane
-   comes online.
+5. Zolaq üçün telemetriya kontaktları/PagerDuty tutacaqları beləliklə, siqnallar zolağa çıxan kimi ötürülə bilər
+   onlayn gəlir.
 
-## 2. Generate lane artefacts
+## 2. Zolaq artefaktları yaradın
 
-Run the helper from the repository root:
+Repository kökündən köməkçini işə salın:
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -60,60 +62,60 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-Key flags:
+Əsas bayraqlar:
 
-- `--lane-id` must match the new entry’s index in `nexus.lane_catalog`.
-- `--dataspace-alias` and `--dataspace-id/hash` control the dataspace catalog entry (defaults to the
-  lane id when omitted).
-- `--validator` can be repeated or sourced from `--validators-file`.
-- `--route-instruction` / `--route-account` emit ready-to-paste routing rules.
-- `--metadata key=value` (or `--telemetry-contact/channel/runbook`) capture runbook contacts so
-  dashboards immediately list the right owners.
-- `--allow-runtime-upgrades` + `--runtime-upgrade-*` add the runtime-upgrade hook to the manifest
-  when the lane requires extended operator controls.
-- `--encode-space-directory` invokes `cargo xtask space-directory encode` automatically. Pair it with
-  `--space-directory-out` when you want the encoded `.to` file somewhere other than the default.
+- `--lane-id` `nexus.lane_catalog`-də yeni qeydin indeksinə uyğun olmalıdır.
+- `--dataspace-alias` və `--dataspace-id/hash` məlumat məkanı kataloquna girişi idarə edir (defolt olaraq
+  buraxıldıqda zolaq identifikatoru).
+- `--validator` təkrarlana və ya `--validators-file`-dən əldə edilə bilər.
+- `--route-instruction` / `--route-account` yapışdırmağa hazır marşrutlaşdırma qaydalarını yayır.
+- `--metadata key=value` (və ya `--telemetry-contact/channel/runbook`) runbook kontaktlarını ələ keçirin.
+  tablosuna dərhal doğru sahibləri siyahıya alır.
+- `--allow-runtime-upgrades` + `--runtime-upgrade-*` manifestə iş vaxtı təkmilləşdirmə çəngəlini əlavə edin
+  zolaq uzadılmış operator nəzarətini tələb etdikdə.
+- `--encode-space-directory` `cargo xtask space-directory encode`-i avtomatik çağırır. ilə cütləşdirin
+  `--space-directory-out` kodlanmış `.to` faylını standartdan başqa yerdə istədiyiniz zaman.
 
-The script produces three artefacts inside the `--output-dir` (defaults to the current directory),
-plus an optional fourth when encoding is enabled:
+Skript `--output-dir` daxilində üç artefakt yaradır (defolt olaraq cari qovluq üçün),
+kodlaşdırma aktiv olduqda əlavə dördüncü:
 
-1. `<slug>.manifest.json` — lane manifest containing the validator quorum, protected namespaces, and
-   optional runtime-upgrade hook metadata.
-2. `<slug>.catalog.toml` — a TOML snippet with `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]`,
-   and any requested routing rules. Ensure `fault_tolerance` is set on the dataspace entry to size
-   the lane-relay committee (`3f+1`).
-3. `<slug>.summary.json` — audit summary describing the geometry (slug, segments, metadata) plus the
-   required rollout steps and the exact `cargo xtask space-directory encode` command (under
-   `space_directory_encode.command`). Attach this JSON to the onboarding ticket for evidence.
-4. `<slug>.manifest.to` — emitted when `--encode-space-directory` is set; ready for Torii’s
-   `iroha app space-directory manifest publish` flow.
+1. `<slug>.manifest.json` — təsdiqləyici kvorumu, qorunan ad boşluqlarını və ehtiva edən zolaqlı manifest
+   isteğe bağlı iş vaxtı təkmilləşdirmə çəngəl metadatası.
+2. `<slug>.catalog.toml` — `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]` ilə TOML fraqmenti,
+   və istənilən marşrutlaşdırma qaydaları. `fault_tolerance`-in məlumat məkanı girişində ölçüyə uyğun olduğundan əmin olun
+   zolaqlı relay komitəsi (`3f+1`).
+3. `<slug>.summary.json` — həndəsəni (slug, seqmentlər, metaməlumatlar) təsvir edən audit xülasəsi
+   tələb olunan buraxılış addımları və dəqiq `cargo xtask space-directory encode` əmri (
+   `space_directory_encode.command`). Sübut üçün bu JSON-u uçuş biletinə əlavə edin.
+4. `<slug>.manifest.to` — `--encode-space-directory` təyin edildikdə yayılır; Torii üçün hazırdır
+   `iroha app space-directory manifest publish` axını.
 
-Use `--dry-run` to preview the JSON/ snippets without writing files, and `--force` to overwrite
-existing artefacts.
+Faylları yazmadan JSON/ fraqmentlərinə baxmaq üçün `--dry-run`, üzərinə yazmaq üçün isə `--force` istifadə edin.
+mövcud artefaktlar.
 
-## 3. Apply the changes
+## 3. Dəyişiklikləri tətbiq edin
 
-1. Copy the manifest JSON into the configured `nexus.registry.manifest_directory` (and into the cache
-   directory if the registry mirrors remote bundles). Commit the file if manifests are versioned in
-   your configuration repo.
-2. Append the catalog snippet to `config/config.toml` (or the appropriate `config.d/*.toml`). Ensure
-   `nexus.lane_count` is at least `lane_id + 1`, and update any `nexus.routing_policy.rules` that
-   should point at the new lane.
-3. Encode (if you skipped `--encode-space-directory`) and publish the manifest to the Space Directory
-   using the command captured in the summary (`space_directory_encode.command`). This produces the
-   `.manifest.to` payload Torii expects and records the evidence for auditors; submit via
+1. Manifest JSON-u konfiqurasiya edilmiş `nexus.registry.manifest_directory`-ə (və keş- yaddaşa) kopyalayın
+   reyestr uzaq paketləri əks etdirirsə qovluq). Manifestlər versiyadadırsa, faylı daxil edin
+   konfiqurasiya repo.
+2. Kataloq parçasını `config/config.toml` (və ya müvafiq `config.d/*.toml`) əlavə edin. təmin etmək
+   `nexus.lane_count` ən azı `lane_id + 1`-dir və istənilən `nexus.routing_policy.rules`-i yeniləyin
+   yeni zolağa işarə etməlidir.
+3. Kodlaşdırın (əgər siz `--encode-space-directory`-i atlasanız) və manifesti Kosmik Kataloqda dərc edin
+   xülasədə çəkilmiş əmrdən istifadə edərək (`space_directory_encode.command`). Bu istehsal edir
+   `.manifest.to` faydalı yük Torii auditorlar üçün sübut gözləyir və qeyd edir; vasitəsilə təqdim edin
    `iroha app space-directory manifest publish`.
-4. Run `irohad --sora --config path/to/config.toml --trace-config` and archive the trace output in
-   the rollout ticket. This proves the new geometry matches the generated slug/kura segments.
-5. Restart the validators assigned to the lane once the manifest/catalog changes are deployed. Keep
-   the summary JSON in the ticket for future audits.
+4. `irohad --sora --config path/to/config.toml --trace-config`-i işə salın və iz çıxışını arxivləşdirin
+   buraxılış bileti. Bu, yeni həndəsənin yaradılan şlak/kura seqmentlərinə uyğun olduğunu sübut edir.
+5. Manifest/kataloq dəyişiklikləri tətbiq edildikdən sonra zolağa təyin edilmiş validatorları yenidən işə salın. Saxla
+   gələcək auditlər üçün biletdəki xülasə JSON.
 
-## 4. Build a registry distribution bundle
+## 4. Reyestr paylama paketini yaradın
 
-Package the generated manifest and overlay so operators can distribute lane governance data without
-editing configs on every host. The bundler helper copies manifests into the canonical layout,
-produces an optional governance catalog overlay for `nexus.registry.cache_directory`, and can emit a
-tarball for offline transfers:
+Yaradılmış manifest və üst-üstə düşməni paketləyin ki, operatorlar zolaqlı idarəetmə məlumatlarını olmadan paylaya bilsinlər
+hər hostda konfiqurasiyaları redaktə etmək. Bundler köməkçisi manifestləri kanonik tərtibata köçürür,
+`nexus.registry.cache_directory` üçün isteğe bağlı idarəetmə kataloqu örtüyü istehsal edir və
+oflayn köçürmələr üçün tarball:
 
 ```bash
 scripts/nexus_lane_registry_bundle.sh \
@@ -124,25 +126,25 @@ scripts/nexus_lane_registry_bundle.sh \
   --bundle-out artifacts/nexus/payments_lane/registry_bundle.tar.gz
 ```
 
-Outputs:
+Çıxışlar:
 
-1. `manifests/<slug>.manifest.json` — copy these into the configured
+1. `manifests/<slug>.manifest.json` — bunları konfiqurasiya edilmişlərə kopyalayın
    `nexus.registry.manifest_directory`.
-2. `cache/governance_catalog.json` — drop into `nexus.registry.cache_directory`. Every `--module`
-   entry becomes a pluggable module definition, enabling governance-module swap-outs (NX-2) by
-   updating the cache overlay instead of editing `config.toml`.
-3. `summary.json` — includes hashes, overlay metadata, and operator instructions.
-4. Optional `registry_bundle.tar.*` — ready for SCP, S3, or artifact trackers.
+2. `cache/governance_catalog.json` — `nexus.registry.cache_directory`-ə düşür. Hər `--module`
+   giriş qoşula bilən modul tərifinə çevrilərək idarəetmə modulunun dəyişdirilməsinə (NX-2) imkan verir.
+   `config.toml`-i redaktə etmək əvəzinə keş örtüyünün yenilənməsi.
+3. `summary.json` — heşlər, üst-üstə düşən metadata və operator təlimatları daxildir.
+4. Könüllü `registry_bundle.tar.*` — SCP, S3 və ya artefakt izləyiciləri üçün hazırdır.
 
-Sync the entire directory (or the archive) to each validator, extract on air-gapped hosts, and copy
-the manifests + cache overlay into their registry paths before restarting Torii.
+Bütün kataloqu (və ya arxivi) hər bir təsdiqləyici ilə sinxronlaşdırın, hava boşluğu olan hostlarda çıxarın və kopyalayın
+manifestlər + Torii-i yenidən başlatmazdan əvvəl onların reyestr yollarına keş örtüyü.
 
-## 5. Validator smoke tests
+## 5. Validator tüstü testləri
 
-After Torii restarts, run the new smoke helper to verify the lane reports `manifest_ready=true`,
-metrics expose the expected lane count, and the sealed gauge is clear. Lanes that require manifests
-must expose a non-empty `manifest_path`; the helper now fails immediately when the path is missing so
-every NX-7 deployment record includes the signed manifest evidence:
+Torii yenidən işə salındıqdan sonra, `manifest_ready=true` zolaq hesabatlarını yoxlamaq üçün yeni tüstü köməkçisini işə salın,
+ölçülər gözlənilən zolaq sayını göstərir və möhürlənmiş ölçü aydındır. Manifest tələb edən zolaqlar
+boş olmayan `manifest_path`-i ifşa etməlidir; yol belə itkin zaman köməkçi indi dərhal uğursuz
+hər NX-7 yerləşdirmə qeydinə imzalanmış açıq sübutlar daxildir:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -165,15 +167,15 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Add `--insecure` when testing self-signed environments. The script exits non-zero if the lane is
-missing, sealed, or metrics/telemetry drift from the expected values. Use the
-`--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog`, and
-`--max-headroom-events` knobs to keep per-lane block height/finality/backlog/headroom telemetry
-within your operational envelopes, and couple them with `--max-slot-p95` / `--max-slot-p99`
-(plus `--min-slot-samples`) to enforce the NX‑18 slot-duration targets without leaving the helper.
+Öz-özünə imzalanmış mühitləri sınaqdan keçirərkən `--insecure` əlavə edin. Zolaq varsa, skript sıfırdan çıxır
+gözlənilən dəyərlərdən əskik, möhürlənmiş və ya ölçülər/telemetriya sürüşməsi. istifadə edin
+`--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog` və
+`--max-headroom-events` düymələri hər zolaqlı blokun hündürlüyünü/sonluğu/arxa planı/baxış yeri telemetriyasını saxlamaq üçün
+əməliyyat zərfləriniz daxilində və onları `--max-slot-p95` / `--max-slot-p99` ilə birləşdirin
+(plus `--min-slot-samples`) köməkçidən ayrılmadan NX‑18 slot müddəti hədəflərini tətbiq etmək.
 
-For air-gapped validations (or CI) you can replay a captured Torii response instead of hitting a live
-endpoint:
+Hava boşluqlu doğrulamalar (və ya CI) üçün canlı yayım yerinə vurmaq əvəzinə çəkilmiş Torii cavabını təkrarlaya bilərsiniz.
+son nöqtə:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -197,16 +199,16 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-The recorded fixtures under `fixtures/nexus/lanes/` mirror the artefacts produced by the bootstrap
-helper so new manifests can be linted without bespoke scripting. CI exercises the same flow via
-`ci/check_nexus_lane_smoke.sh` and `ci/check_nexus_lane_registry_bundle.sh`
-(alias: `make check-nexus-lanes`) to prove the NX-7 smoke helper stays aligned with the published
-payload format and to ensure bundle digests/overlays remain reproducible.
+`fixtures/nexus/lanes/` altında qeydə alınmış qurğular bootstrap tərəfindən istehsal olunan artefaktları əks etdirir
+köməkçi, belə ki, yeni manifestlər sifarişli skript olmadan rənglənə bilər. CI vasitəsilə eyni axını həyata keçirir
+`ci/check_nexus_lane_smoke.sh` və `ci/check_nexus_lane_registry_bundle.sh`
+(ləqəb: `make check-nexus-lanes`) NX-7 tüstü yardımçısının dərc edilmiş sənədlərlə uyğunlaşdığını sübut etmək üçün
+faydalı yük formatı və paketin həzmlərinin/örtmələrinin təkrarlana bilən qalmasını təmin etmək.
 
-When a lane is renamed, capture the `nexus.lane.topology` telemetry events (for example with
-`journalctl -u irohad -o json | jq 'select(.msg=="nexus.lane.topology")'`) and feed them back into
-the smoke helper. The `--telemetry-file/--from-telemetry` flag accepts the newline-delimited log and
-`--require-alias-migration old:new` asserts that a `alias_migrated` event recorded the rename:
+Zolağın adı dəyişdirildikdə, `nexus.lane.topology` telemetriya hadisələrini çəkin (məsələn,
+`journalctl -u irohad -o json | jq 'select(.msg=="nexus.lane.topology")'`) və onları geri qaytarın
+tüstü köməkçisi. `--telemetry-file/--from-telemetry` bayrağı yeni sətirlə ayrılmış jurnalı qəbul edir və
+`--require-alias-migration old:new` iddia edir ki, `alias_migrated` hadisəsi adının dəyişdirilməsini qeyd edib:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -232,14 +234,14 @@ scripts/nexus_lane_smoke.py \
   --require-alias-migration core:payments
 ```
 
-The `telemetry_alias_migrated.ndjson` fixture bundles the canonical rename sample so CI can verify
-the telemetry parsing path without contacting a live node.
+`telemetry_alias_migrated.ndjson` qurğusu, CI-nin yoxlaya bilməsi üçün kanonik adlandırma nümunəsini birləşdirir
+canlı node ilə əlaqə olmadan telemetriya təhlili yolu.
 
-## Validator load tests (NX-7 evidence)
+## Validator yük testləri (NX-7 sübutu)
 
-Roadmap **NX-7** requires every new lane to ship a reproducible validator load run. Use
-`scripts/nexus_lane_load_test.py` to stitch the smoke checks, slot-duration gates, and slot bundle
-manifest into a single artefact set that governance can replay:
+Yol xəritəsi **NX-7**, təkrarlana bilən validator yük əməliyyatını göndərmək üçün hər yeni zolağı tələb edir. istifadə edin
+`scripts/nexus_lane_load_test.py` tüstü yoxlamalarını, yuva müddəti qapılarını və yuva paketini tikmək üçün
+idarəetmənin təkrarlaya biləcəyi tək artefakt dəstinə çevrilir:
 
 ```bash
 scripts/nexus_lane_load_test.py \
@@ -255,26 +257,26 @@ scripts/nexus_lane_load_test.py \
   --out-dir artifacts/nexus/load/payments-2026q2
 ```
 
-The helper enforces the same DA quorum, oracle, settlement buffer, TEU, and slot-duration gates used
-by the smoke helper and writes `smoke.log`, `slot_summary.json`, a slot bundle manifest, and
-`load_test_manifest.json` into the chosen `--out-dir` so load runs can be attached directly to
-rollout tickets without bespoke scripting.
+Köməkçi eyni DA kvorumunu, oracle, hesablaşma buferini, TEU və slot müddəti qapılarını tətbiq edir.
+tüstü köməkçisi tərəfindən və `smoke.log`, `slot_summary.json`, yuva paketi manifestini yazır və
+`load_test_manifest.json` seçilmiş `--out-dir`-ə daxil edilir, beləliklə yük qaçışları birbaşa olaraq əlavə edilə bilər
+sifarişli skript olmadan satış biletləri.
 
-## 6. Telemetry & governance follow-ups
+## 6. Telemetriya və idarəetmə təqibləri
 
-- Update the lane dashboards (`dashboards/grafana/nexus_lanes.json` and related overlays) with the
-  new lane id and metadata. The generated metadata keys (`contact`, `channel`, `runbook`, etc.) make
-  it simple to pre-fill labels.
-- Wire PagerDuty/Alertmanager rules for the new lane before enabling admission. The `summary.json`
-  next-steps array mirrors the checklist in [Nexus operations](./nexus-operations).
-- Register the manifest bundle in the Space Directory once the validator set is live. Use the same
-  manifest JSON generated by the helper, signed according to the governance runbook.
-- Follow [Sora Nexus operator onboarding](./nexus-operator-onboarding) for smoke tests (FindNetworkStatus, Torii
-  reachability) and capture the evidence with the artefact set produced above.
+- Zolaqlı idarə panellərini (`dashboards/grafana/nexus_lanes.json` və əlaqəli örtüklər) yeniləyin
+  yeni zolaq id və metadata. Yaradılmış metadata açarları (`contact`, `channel`, `runbook` və s.)
+  etiketləri əvvəlcədən doldurmaq asandır.
+- Qəbuldan əvvəl yeni zolaq üçün PagerDuty/Alertmanager qaydalarını yazın. `summary.json`
+  sonrakı addımlar massivi [Nexus əməliyyatlarında](./nexus-operations) yoxlama siyahısını əks etdirir.
+- Validator dəsti aktiv olduqdan sonra manifest paketini Space Directory-də qeyd edin. Eyni istifadə edin
+  köməkçi tərəfindən yaradılan manifest JSON idarəçilik kitabına uyğun olaraq imzalanır.
+- Tüstü testləri üçün [Sora Nexus operatoru](./nexus-operator-onboarding) izləyin (FindNetworkStatus, Torii
+  əlçatanlıq) və yuxarıda hazırlanmış artefakt dəsti ilə sübutları əldə edin.
 
-## 7. Dry-run example
+## 7. Quru qaçış nümunəsi
 
-To preview the artefacts without writing files:
+Faylları yazmadan artefaktları nəzərdən keçirmək üçün:
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -288,14 +290,12 @@ scripts/nexus_lane_bootstrap.sh \
   --dry-run
 ```
 
-The command prints the JSON summary and the TOML snippet to stdout, allowing quick iteration during
-planning.
+Əmr JSON xülasəsini və TOML parçasını stdout-a çap edir, bu da əməliyyat zamanı tez təkrarlamağa imkan verir.
+planlaşdırma.
 
 ---
 
-For additional context see:
-
-- [Nexus operations](./nexus-operations) — operational checklist and telemetry requirements.
-- [Sora Nexus operator onboarding](./nexus-operator-onboarding) — detailed onboarding flow that references the
-  new helper.
-- [Nexus lane model](./nexus-lane-model) — lane geometry, slugs, and storage layout used by the tool.
+Əlavə kontekst üçün bax:- [Nexus əməliyyatları](./nexus-operations) — əməliyyat yoxlama siyahısı və telemetriya tələbləri.
+- [Sora Nexus operatorun işə salınması](./nexus-operator-onboarding) — aşağıdakılara istinad edən ətraflı bort axını
+  yeni köməkçi.
+- [Nexus zolaqlı model](./nexus-lane-model) — alət tərəfindən istifadə edilən zolaq həndəsəsi, şlaklar və saxlama planı.

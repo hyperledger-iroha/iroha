@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Снимок приоритетов — март 2025 (Бета)
-description: Зеркало steering snapshot Nexus 2025-03; ожидает ACKs перед публичным rollout.
+ID: instantánea-prioritaria-2025-03
+título: Снимок приоритетов — marzo de 2025 (Бета)
+descripción: Зеркало instantánea de dirección Nexus 2025-03; ожидает ACKs перед публичным lanzamiento.
 ---
 
-> Канонический источник: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Idioma canónico: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Статус: **Бета / ожидаются ACKs steering** (Networking, Storage, Docs leads).
+> Estado: **Бета / ожидаются Dirección de ACK** (redes, almacenamiento, contactos de documentos).
 
-## Обзор
+## Objeto
 
-Мартовский snapshot удерживает инициативы docs/content-network в согласии с
+La instantánea de Martov se utiliza para iniciar sesión en docs/content-network en aplicaciones
 доставочными треками SoraFS (SF-3, SF-6b, SF-9). Как только все leads подтвердят
-snapshot в канале steering Nexus, удалите примечание “Beta” выше.
+instantánea en el canal de dirección Nexus, удалите примечание “Beta” выше.
 
-### Фокусные темы
+### Temas enfocados
 
-1. **Распространить snapshot приоритетов** — собрать acknowledgements и
-   зафиксировать их в minutes совета от 2025-03-05.
-2. **Закрыть kickoff Gateway/DNS** — отрепетировать новый facilitation kit (Раздел 6
-   в runbook) до воркшопа 2025-03-03.
-3. **Миграция операторских runbooks** — портал `Runbook Index` уже live; открыть beta
-   preview URL после sign-off onboarding для reviewers.
+1. **Распространить instantáneas приоритетов** — собрать agradecimientos y
+   зафиксировать их в minutos совета от 2025-03-05.
+2. **Закрыть kickoff Gateway/DNS** — отрепетировать новый kit de facilitación (Раздел 6
+   en runbook) de воркшопа 2025-03-03.
+3. **Runbooks de operadores de Rusia** — portal `Runbook Index` en vivo; открыть beta
+   URL de vista previa después de la incorporación de aprobación para los revisores.
 4. **Треки доставки SoraFS** — согласовать оставшуюся работу SF-3/6b/9 с планом/roadmap:
-   - Worker ingestion PoR + status endpoint в `sorafs-node`.
-   - Полировка CLI/SDK bindings в интеграциях orchestrator Rust/JS/Swift.
-   - Wiring runtime для координатора PoR и события GovernanceLog.
+   - Punto final de estado PoR + ingesta de trabajadores en `sorafs-node`.
+   - Enlaces CLI/SDK integrados en el orquestador integrado Rust/JS/Swift.
+   - Tiempo de ejecución del cableado para el coordinador PoR y el software GovernanceLog.
 
-См. исходный файл для полной таблицы, distribution checklist и log entries.
+См. исходный файл для полной таблицы, lista de verificación de distribución y entradas de registro.

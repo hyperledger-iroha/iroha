@@ -4,42 +4,40 @@ direction: ltr
 source: docs/portal/docs/norito/overview.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Обзор Norito
+# Objet Norito
 
-Norito — бинарный слой сериализации, используемый во всем Iroha: он определяет, как структуры данных кодируются в сети, сохраняются на диске и обмениваются между контрактами и хостами. Каждый crate в workspace опирается на Norito вместо `serde`, чтобы пиры на разном оборудовании производили идентичные байты.
+Norito — Version binaire de la série, utilisée avec l'Iroha : pour l'exploitation, les structures doivent être configurées En fait, il s'occupe du disque et prend en charge les contrats et les hôtes. Lorsque Crate dans l'espace de travail fonctionne sur Norito vers `serde`, vous pouvez utiliser l'option d'identification des batteries.
 
-Этот обзор суммирует ключевые части и ссылается на канонические материалы.
+C'est ce qui résume les choses clés et l'étude du matériel canonique.
 
-## Архитектура в общих чертах
+## Architecture dans les bureaux
 
-- **Заголовок + payload** – Каждое сообщение Norito начинается с заголовка согласования features (flags, checksum), за которым следует голый payload. Упакованные раскладки и сжатие согласуются через биты заголовка.
-- **Детерминированное кодирование** – `norito::codec::{Encode, Decode}` реализуют базовое кодирование. Тот же layout используется при оборачивании payloads в заголовки, поэтому хеширование и подпись остаются детерминированными.
-- **Схема + derives** – `norito_derive` генерирует реализации `Encode`, `Decode` и `IntoSchema`. Упакованные структуры/последовательности включены по умолчанию и описаны в `norito.md`.
-- **Реестр multicodec** – Идентификаторы хешей, типов ключей и описателей payload находятся в `norito::multicodec`. Авторитетная таблица поддерживается в `multicodec.md`.
+- **Ajouter + charge utile** – La mise à jour Norito indique les fonctionnalités de gestion de la charge utile (drapeaux, somme de contrôle) pour la charge utile suivante. Les vêtements et les vêtements sont bien rangés à cause des petits morceaux de papier.
+- **Codification de base** – `norito::codec::{Encode, Decode}` réalise la codification de base. Cette disposition permet de gérer les charges utiles dans les locaux, de les utiliser et de les détecter.
+- **Схема + dérive** – `norito_derive` génère la réalisation de `Encode`, `Decode` et `IntoSchema`. Les structures et les fonctionnalités avancées sont décrites dans l'article et l'article `norito.md`.
+- **Utilisation multicodec** – Les identifiants sont disponibles, les types clés et la charge utile disponible dans `norito::multicodec`. La table des autorités est disponible dans `multicodec.md`.
 
-## Инструменты
-
-| Задача | Команда / API | Примечания |
+## Instruments| Задача | Commande / API | Première |
 | --- | --- | --- |
-| Проверить заголовок/секции | `ivm_tool inspect <file>.to` | Показывает версию ABI, flags и entrypoints. |
-| Кодировать/декодировать в Rust | `norito::codec::{Encode, Decode}` | Реализовано для всех основных типов data model. |
-| Interop JSON | `norito::json::{to_json_pretty, from_json}` | Детерминированный JSON на основе значений Norito. |
-| Генерировать docs/specs | `norito.md`, `multicodec.md` | Документация-источник истины в корне репозитория. |
+| Vérifier l'emplacement/le service | `ivm_tool inspect <file>.to` | Trouvez la version ABI, les drapeaux et les points d'entrée. |
+| Coder/décoder dans Rust | `norito::codec::{Encode, Decode}` | Réalisé pour tous les types de modèles de données. |
+| Interopérabilité JSON | `norito::json::{to_json_pretty, from_json}` | La définition de JSON est la suivante: Norito. |
+| Générer des documents/spécifications | `norito.md`, `multicodec.md` | Documentation de l'histoire dans le répertoire de films. |
 
-## Процесс разработки
+## Processus de démarrage
 
-1. **Добавить derives** – Предпочитайте `#[derive(Encode, Decode, IntoSchema)]` для новых структур данных. Избегайте ручных сериализаторов, если это не абсолютно необходимо.
-2. **Проверить упакованные layouts** – Используйте `cargo test -p norito` (и матрицу packed features в `scripts/run_norito_feature_matrix.sh`), чтобы убедиться, что новые layouts остаются стабильными.
-3. **Перегенерировать docs** – Когда кодирование меняется, обновите `norito.md` и таблицу multicodec, затем обновите страницы портала (`/reference/norito-codec` и этот обзор).
-4. **Держать тесты Norito-first** – Интеграционные тесты должны использовать JSON хелперы Norito вместо `serde_json`, чтобы проходить те же пути, что и продакшн.
+1. **Dérivez les dérivés** – Sélectionnez `#[derive(Encode, Decode, IntoSchema)]` pour les nouvelles structures. N'hésitez pas à acheter des sérialiseurs, sinon ce n'est absolument pas nécessaire.
+2. **Provérifier les mises en page supplémentaires** – Utilisez `cargo test -p norito` (et les fonctionnalités emballées dans `scripts/run_norito_feature_matrix.sh`), pour savoir quelles nouvelles mises en page sont disponibles стабильными.
+3. **Générer des documents** – Pour créer des menus, ouvrez `norito.md` et la table multicodec, puis ouvrez les pages du port (`/reference/norito-codec`). et c'est ce qui se passe).
+4. **Tests Norito-first** – Les tests d'intégration peuvent utiliser l'aide JSON Norito avec `serde_json`, чтобы проходить те же пути, что и продакшн.
 
 ## Быстрые ссылки
 
-- Спецификация: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Назначения multicodec: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Скрипт матрицы features: `scripts/run_norito_feature_matrix.sh`
-- Примеры packed layouts: `crates/norito/tests/`
-
-Сочетайте этот обзор с руководством быстрого старта (`/norito/getting-started`) для практического прохождения компиляции и запуска байткода, использующего payloads Norito.
+- Spécification : [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- Nom du multicodec : [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- Caractéristiques des matrices de script : `scripts/run_norito_feature_matrix.sh`
+- Exemples de mises en page emballées : `crates/norito/tests/`Сочетайте этот обзор руководством быстрого старта (`/norito/getting-started`) pour la préparation pratique de la compilation et de la mise en service du code de batterie, использующего charges utiles Norito.

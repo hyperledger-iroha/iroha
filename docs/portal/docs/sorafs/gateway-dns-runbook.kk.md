@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 672a5e3a6f0c3e8999400bc6fa8c66cc3be1ba2119431c5fd26f6d9a436f767f
 source_last_modified: "2025-12-29T18:16:35.187152+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Gateway & DNS Kickoff Runbook
+# SoraFS шлюз және DNS Kickoff Runbook
 
-This portal copy mirrors the canonical runbook in
+Бұл портал көшірмесі канондық жұмыс кітабын көрсетеді
 [`docs/source/sorafs_gateway_dns_design_runbook.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_design_runbook.md).
-It captures the operational guardrails for the Decentralized DNS & Gateway
-workstream so networking, ops, and documentation leads can rehearse the
-automation stack ahead of the 2025‑03 kickoff.
+Ол орталықтандырылмаған DNS және шлюз үшін операциялық қоршауларды басып алады
+жұмыс ағыны, сондықтан желі, операциялар және құжаттама жетекшілері қайталай алады
+2025-03 басталуының алдында автоматтандыру стек.
 
-## Scope & Deliverables
+## Қолдану аясы және жеткізілімдері
 
-- Bind the DNS (SF‑4) and gateway (SF‑5) milestones by rehearsing deterministic
-  host derivation, resolver directory releases, TLS/GAR automation, and evidence
-  capture.
-- Keep the kickoff inputs (agenda, invite, attendance tracker, GAR telemetry
-  snapshot) synchronized with the latest owner assignments.
-- Produce an auditable artefact bundle for governance reviewers: resolver
-  directory release notes, gateway probe logs, conformance harness output, and
-  the Docs/DevRel summary.
+- Детерминистикалық репетиция арқылы DNS (SF‑4) және шлюз (SF‑5) кезеңдерін байланыстырыңыз
+  хост туындысы, шешуші каталогының шығарылымдары, TLS/GAR автоматтандыруы және дәлелдер
+  басып алу.
+- Бастама кірістерін сақтаңыз (күн тәртібі, шақыру, қатысуды бақылаушы, GAR телеметриясы
+  сурет) соңғы иесі тағайындауларымен синхрондалған.
+- Басқаруды тексерушілер үшін тексерілетін артефакт жинағын жасаңыз: шешуші
+  каталогтың шығарылым жазбалары, шлюзді тексеру журналдары, сәйкестік белдеуінің шығысы және
+  Docs/DevRel қорытындысы.
 
-## Roles & Responsibilities
+## Рөлдер мен жауапкершіліктер
 
-| Workstream | Responsibilities | Required artefacts |
+| Жұмыс ағыны | Міндеттері | Қажетті артефактілер |
 |------------|------------------|--------------------|
-| Networking TL (DNS stack) | Maintain deterministic host plan, run RAD directory releases, publish resolver telemetry inputs. | `artifacts/soradns_directory/<ts>/`, diffs for `docs/source/soradns/deterministic_hosts.md`, RAD metadata. |
-| Ops Automation Lead (gateway) | Execute TLS/ECH/GAR automation drills, run `sorafs-gateway-probe`, update PagerDuty hooks. | `artifacts/sorafs_gateway_probe/<ts>/`, probe JSON, `ops/drill-log.md` entries. |
-| QA Guild & Tooling WG | Run `ci/check_sorafs_gateway_conformance.sh`, curate fixtures, archive Norito self-cert bundles. | `artifacts/sorafs_gateway_conformance/<ts>/`, `artifacts/sorafs_gateway_attest/<ts>/`. |
-| Docs / DevRel | Capture minutes, update the design pre-read + appendices, and publish the evidence summary in this portal. | Updated `docs/source/sorafs_gateway_dns_design_*.md` files and rollout notes. |
+| Желілік TL (DNS стегі) | Детерминирленген хост жоспарын сақтаңыз, RAD каталогының шығарылымдарын іске қосыңыз, шешуші телеметрия кірістерін жариялаңыз. | `artifacts/soradns_directory/<ts>/`, `docs/source/soradns/deterministic_hosts.md` үшін айырмашылықтар, RAD метадеректері. |
+| Ops Automation Lead (шлюз) | TLS/ECH/GAR автоматтандыру жаттығуларын орындаңыз, `sorafs-gateway-probe` іске қосыңыз, PagerDuty ілмектерін жаңартыңыз. | `artifacts/sorafs_gateway_probe/<ts>/`, JSON зонды, `ops/drill-log.md` жазбалары. |
+| QA Guild & Tooling WG | `ci/check_sorafs_gateway_conformance.sh` іске қосыңыз, құрылғыларды өңдеңіз, Norito өзін-өзі растау жинақтарын мұрағатлаңыз. | `artifacts/sorafs_gateway_conformance/<ts>/`, `artifacts/sorafs_gateway_attest/<ts>/`. |
+| Құжаттар / DevRel | Хаттамаларды жазып алыңыз, дизайнды алдын ала оқылған + қосымшаларды жаңартыңыз және осы порталда дәлелдер жиынтығын жариялаңыз. | `docs/source/sorafs_gateway_dns_design_*.md` файлдары мен шығару жазбалары жаңартылды. |
 
-## Inputs & Prerequisites
+## Енгізулер және алғышарттар
 
-- Deterministic host spec (`docs/source/soradns/deterministic_hosts.md`) and the
-  resolver attestation scaffolding (`docs/source/soradns/resolver_attestation_directory.md`).
-- Gateway artefacts: operator handbook, TLS/ECH automation helpers,
-  direct‑mode guidance, and self-cert workflow under `docs/source/sorafs_gateway_*`.
-- Tooling: `cargo xtask soradns-directory-release`,
+- Детерминистік хост спецификациясы (`docs/source/soradns/deterministic_hosts.md`) және
+  шешуші аттестаттау тірегі (`docs/source/soradns/resolver_attestation_directory.md`).
+- Шлюз артефактілері: оператор анықтамалығы, TLS/ECH автоматтандыру көмекшілері,
+  тікелей режим нұсқаулығы және `docs/source/sorafs_gateway_*` астында өзін-өзі сертификаттау жұмыс процесі.
+- Құралдар: `cargo xtask soradns-directory-release`,
   `cargo xtask sorafs-gateway-probe`, `scripts/telemetry/run_soradns_transparency_tail.sh`,
-  `scripts/sorafs_gateway_self_cert.sh`, and CI helpers
+  `scripts/sorafs_gateway_self_cert.sh` және CI көмекшілері
   (`ci/check_sorafs_gateway_conformance.sh`, `ci/check_sorafs_gateway_probe.sh`).
-- Secrets: GAR release key, DNS/TLS ACME credentials, PagerDuty routing key,
-  Torii auth token for resolver fetches.
+- Құпиялар: GAR шығару кілті, DNS/TLS ACME тіркелгі деректері, PagerDuty бағыттау кілті,
+  Шешушілерді алу үшін Torii аутентификация белгісі.
 
-## Pre-flight Checklist
+## Ұшу алдындағы бақылау тізімі
 
-1. Confirm attendees and agenda by updating
-   `docs/source/sorafs_gateway_dns_design_attendance.md` and circulating the
-   current agenda (`docs/source/sorafs_gateway_dns_design_agenda.md`).
-2. Stage artefact roots such as
-   `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` and
+1. Қатысушылар мен күн тәртібін жаңарту арқылы растаңыз
+   `docs/source/sorafs_gateway_dns_design_attendance.md` және айналымда
+   ағымдағы күн тәртібі (`docs/source/sorafs_gateway_dns_design_agenda.md`).
+2. Сахналық артефакті тамырлар сияқты
+   `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` және
    `artifacts/soradns_directory/<YYYYMMDD>/`.
-3. Refresh fixtures (GAR manifests, RAD proofs, gateway conformance bundles) and
-   ensure `git submodule` state matches the latest rehearsal tag.
-4. Verify secrets (Ed25519 release key, ACME account file, PagerDuty token) are
-   present and match vault checksums.
-5. Smoke-test telemetry targets (Pushgateway endpoint, GAR Grafana board) prior
-   to the drill.
+3. Жаңарту құрылғылары (GAR манифесттері, RAD дәлелдері, шлюз сәйкестік бумалары) және
+   `git submodule` күйінің соңғы репетиция тегіне сәйкес келетініне көз жеткізіңіз.
+4. Құпияларды тексеріңіз (Ed25519 шығару кілті, ACME тіркелгі файлы, PagerDuty белгісі)
+   қойманың бақылау сомасын көрсету және сәйкестендіру.
+5. Түтінге қарсы телеметрия мақсаттары (Pushgateway соңғы нүктесі, GAR Grafana тақтасы) бұрын
+   бұрғыға.
 
-## Automation Rehearsal Steps
+## Автоматтандыруды қайталау қадамдары
 
-### Deterministic host map & RAD directory release
+### Детерминистік хост картасы және RAD каталогының шығарылымы
 
-1. Run the deterministic host derivation helper against the proposed manifest
-   set and confirm there is no drift from
+1. Ұсынылған манифестке қарсы детерминирленген хост туынды көмекшісін іске қосыңыз
+   орнатыңыз және ешбір ауытқудың жоқтығын растаңыз
    `docs/source/soradns/deterministic_hosts.md`.
-2. Generate a resolver directory bundle:
+2. Шешуші каталогтар бумасын жасаңыз:
 
 ```bash
 cargo xtask soradns-directory-release \
@@ -83,20 +84,20 @@ cargo xtask soradns-directory-release \
   --note "dns-kickoff-20250303"
 ```
 
-3. Record the printed directory ID, SHA-256, and output paths inside
-   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` and the kickoff
-   minutes.
+3. Басып шығарылған каталог идентификаторын, SHA-256 және ішіндегі шығыс жолдарын жазыңыз
+   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` және старт
+   минут.
 
-### DNS telemetry capture
+### DNS телеметриясын түсіру
 
-- Tail resolver transparency logs for ≥10 minutes using
+- Қолдану арқылы ≥10 минутқа арналған құйрықты шешуші мөлдірлік журналдары
   `scripts/telemetry/run_soradns_transparency_tail.sh --mode staging`.
-- Export Pushgateway metrics and archive the NDJSON snapshots alongside the run
-  ID directory.
+- Pushgateway метрикасын экспорттаңыз және NDJSON суреттерін іске қосумен бірге мұрағаттаңыз
+  ID каталогы.
 
-### Gateway automation drills
+### Шлюзді автоматтандыру жаттығулары
 
-1. Execute the TLS/ECH probe:
+1. TLS/ECH зондын орындаңыз:
 
 ```bash
 cargo xtask sorafs-gateway-probe \
@@ -104,55 +105,55 @@ cargo xtask sorafs-gateway-probe \
   --output artifacts/sorafs_gateway_probe/<run-id>.json
 ```
 
-2. Run the conformance harness (`ci/check_sorafs_gateway_conformance.sh`) and
-   the self-cert helper (`scripts/sorafs_gateway_self_cert.sh`) to refresh the
-   Norito attestation bundle.
-3. Capture PagerDuty/Webhook events to prove the automation path works end to
-   end.
+2. Сәйкестік сымын (`ci/check_sorafs_gateway_conformance.sh`) және іске қосыңыз
+   жаңарту үшін өзін-өзі растау көмекшісі (`scripts/sorafs_gateway_self_cert.sh`).
+   Norito аттестаттау жинағы.
+3. Автоматтандыру жолының соңына дейін жұмыс істейтінін дәлелдеу үшін PagerDuty/Webhook оқиғаларын түсіріңіз
+   соңы.
 
-### Evidence packaging
+### Дәлелдемелерді орау
 
-- Update `ops/drill-log.md` with timestamps, participants, and probe hashes.
-- Store artefacts under the run ID directories and publish an executive summary
-  in the Docs/DevRel meeting minutes.
-- Link the evidence bundle in the governance ticket before the kickoff review.
+- `ops/drill-log.md` уақыт белгілерімен, қатысушылармен және зерттеу хэштерімен жаңартыңыз.
+- Артефактілерді іске қосу идентификаторы каталогтары астында сақтаңыз және атқарушы қорытындыны жариялаңыз
+  Docs/DevRel жиналысының хаттамаларында.
+- Бастауды қарау алдында басқару билетіндегі дәлелдер жинағын байланыстырыңыз.
 
-## Session facilitation & evidence hand-off
+## Сеансты жеңілдету және дәлелдемелерді тапсыру
 
-- **Moderator timeline:**  
-  - T‑24 h — Program Management posts the reminder + agenda/attendance snapshot in `#nexus-steering`.  
-  - T‑2 h — Networking TL refreshes the GAR telemetry snapshot and records deltas in `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`.  
-  - T‑15 m — Ops Automation verifies probe readiness and writes the active run ID into `artifacts/sorafs_gateway_dns/current`.  
-  - During the call — Moderator shares this runbook and assigns a live scribe; Docs/DevRel capture action items inline.
-- **Minute template:** Copy the skeleton from
-  `docs/source/sorafs_gateway_dns_design_minutes.md` (also mirrored in the portal
-  bundle) and commit one filled instance per session. Include attendee roll,
-  decisions, action items, evidence hashes, and outstanding risks.
-- **Evidence upload:** Zip the `runbook_bundle/` directory from the rehearsal,
-  attach the rendered minutes PDF, record SHA-256 hashes in the minutes + agenda,
-  then ping the governance reviewer alias once uploads land in
+- **Модератор хронологиясы:**  
+  - T‑24h — Бағдарламаны басқару `#nexus-steering` ішінде еске салғыш + күн тәртібі/қатысу суретін орналастырады.  
+  - T‑2h — Networking TL GAR телеметрия суретін жаңартады және дельталарды `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` ішінде жазады.  
+  - T‑15m — Ops Automation зондтың дайындығын тексереді және `artifacts/sorafs_gateway_dns/current` ішіне белсенді іске қосу идентификаторын жазады.  
+  - Қоңырау кезінде — Модератор осы runbook-пен бөліседі және тірі жазушыны тағайындайды; Docs/DevRel түсіру әрекет элементтерін кірістірілген.
+- **Минут үлгісі:** Қаңқаны мына жерден көшіріңіз
+  `docs/source/sorafs_gateway_dns_design_minutes.md` (сонымен қатар порталда көрсетілген
+  бума) және сеансқа бір толтырылған дананы орындаңыз. Қатысушылар тізімін қосыңыз,
+  шешімдер, әрекет элементтері, дәлелдемелердің хэштері және өтелмеген тәуекелдер.
+- **Дәлелдерді жүктеп салу:** Жаттығудан `runbook_bundle/` каталогын көшіріп алыңыз,
+  көрсетілген PDF хаттамаларын тіркеңіз, SHA-256 хэштерін хаттамаға жазыңыз + күн тәртібі,
+  содан кейін жүктеп салғаннан кейін басқару шолушысы бүркеншік атына пинг жасаңыз
   `s3://sora-governance/sorafs/gateway_dns/<date>/`.
 
-## Evidence snapshot (March 2025 kickoff)
+## Дәлелдердің суреті (2025 жылғы наурыздың басталуы)
 
-The latest rehearsal/live artefacts referenced in the roadmap and governance
-minutes live under the `s3://sora-governance/sorafs/gateway_dns/` bucket. Hashes
-below mirror the canonical manifest (`artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/evidence_manifest_*.json`).
+Жол картасында және басқаруда сілтеме жасалған соңғы репетиция/тірі артефактілер
+минут `s3://sora-governance/sorafs/gateway_dns/` шелегі астында тұрады. Хэштер
+төменде канондық манифестті көрсетеді (`artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/evidence_manifest_*.json`).
 
-- **Dry run — 2025-03-02 (`artifacts/sorafs_gateway_dns/20250302/`)**
-  - Bundle tarball: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`
-  - Minutes PDF: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`
-- **Live workshop — 2025-03-03 (`artifacts/sorafs_gateway_dns/20250303/runbook_bundle/`)**
+- **Құрғақ жүгіру — 2025-03-02 (`artifacts/sorafs_gateway_dns/20250302/`)**
+  - Топтама тарбол: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`
+  - PDF минуттары: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`
+- **Тікелей семинар — 03.03.2025 (`artifacts/sorafs_gateway_dns/20250303/runbook_bundle/`)**
   - `bc83e6a014c2d223433f04ddc3c588bfeff33ee5cdcb15aad6527efeba582a1c  minutes_20250303.md`
   - `030a98fb3e3a52dbb0fcf25a6ea4365b11d9487707bb6700cb632710f7c082e4  gar_snapshot_20250303.json`
   - `5ac17e684976d6862628672627f229f7719da74235aa0a5f0ce994dad34cb3c4  sorafs_gateway_dns_design_metrics_20250303.prom`
   - `5c6163d0ae9032c2d52ca2ecca4037dfaddcc503eb56239b53c5e9c4000997cf  probe_20250303.json`
   - `87f6341896bfb830966a4a5d0fc9158fabcc135ba16ef0d53882e558de77ba49  probe_20250303_webhook.jsonl`
   - `9b968b0bf4ca654d466ec2be5291936f1441908354e9d2da4d0a52f1568bbe03  probe.staging.toml`
-  - _(Pending upload: `gateway_dns_minutes_20250303.pdf` — Docs/DevRel will append the SHA-256 once the rendered PDF lands in the bundle.)_
+  - _(Жүктеп салуды күтуде: `gateway_dns_minutes_20250303.pdf` — Docs/DevRel SHA-256 файлын көрсетілген PDF жинаққа кірген кезде қосады.)_
 
-## Related Material
+## Қатысты материал
 
-- [Gateway operations playbook](./operations-playbook.md)
-- [SoraFS observability plan](./observability-plan.md)
-- [Decentralized DNS & Gateway tracker](https://github.com/hyperledger-iroha/iroha/blob/master/roadmap.md#core-workstreams)
+- [Шлюз операцияларының оқу кітабы](./operations-playbook.md)
+- [SoraFS бақылау жоспары](./observability-plan.md)
+- [Орталықтандырылмаған DNS және шлюз трекері](https://github.com/hyperledger-iroha/iroha/blob/master/roadmap.md#core-workstreams)

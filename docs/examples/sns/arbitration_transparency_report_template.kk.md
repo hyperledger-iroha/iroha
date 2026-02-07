@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
-# SNS Arbitration Transparency Report — <Month YYYY>
+# SNS арбитражының ашықтығы туралы есеп — <ЖЖЖЖ айы>
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- **Суффикс:** `<.sora / .nexus / .dao>`
+- **Есеп беру терезесі:** `<ISO start>` → `<ISO end>`
+- **Дайындаған:** `<Council liaison>`
+- **Бастапқы артефактілер:** `cases.ndjson` SHA256 `<hash>`, бақылау тақтасының экспорты `<filename>.json`
 
-## 1. Executive Summary
+## 1. Қорытынды
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- Жалпы жаңа жағдайлар: `<count>`
+- Осы кезеңде жабылған істер: `<count>`
+- SLA сәйкестігі: `<ack %>` мойындау / `<resolution %>` шешімі
+- Қамқоршының қайта анықтаулары шығарылды: `<count>`
+- Орындалған аударымдар/қайтарулар: `<count>`
 
 ## 2. Case Mix
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
-|--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| Дау түрі | Жаңа жағдайлар | Жабық істер | Орташа ажыратымдылық (күндер) |
+|-------------|----------|--------------|--------------------------|
+| Меншік | 0 | 0 | 0 |
+| Саясаттың бұзылуы | 0 | 0 | 0 |
+| Қиянат | 0 | 0 | 0 |
+| Есепшот ұсыну | 0 | 0 | 0 |
+| Басқа | 0 | 0 | 0 |
 
-## 3. SLA Performance
+## 3. SLA өнімділігі
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
+| Басымдық | SLA растау | қол жеткізілді | SLA ажыратымдылығы | қол жеткізілді | Бұзушылықтар |
 |----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| Жедел | ≤ 2сағ | 0% | ≤ 72 сағ | 0% | 0 |
+| Жоғары | ≤ 8сағ | 0% | ≤ 10d | 0% | 0 |
+| Стандартты | ≤ 24 сағ | 0% | ≤ 21d | 0% | 0 |
+| Ақпарат | ≤ 3d | 0% | ≤ 30d | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+Кез келген бұзушылықтардың негізгі себептерін сипаттаңыз және түзету билеттеріне сілтеме жасаңыз.
 
-## 4. Case Register
+## 4. Істер тіркелімі
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
+| Іс идентификаторы | селектор | Басымдық | Күй | Нәтиже | Ескертпелер |
 |---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| SNS-ЖЖЖЖ-НННН | `label.suffix` | Стандартты | Жабық | Қолдады | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+Анонимді фактілерге немесе көпшілік дауыс беру сілтемелеріне сілтеме жасайтын бір жолды ескертпелер беріңіз. Мөр
+қажет болған жағдайда және қолданылған түзетулерді атаңыз.
 
-## 5. Actions & Remedies
+## 5. Әрекеттер және емдеу әдістері
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- **Мұздатады/шығарады:** `<counts + case ids>`
+- **Трансферттер:** `<counts + assets moved>`
+- **Төлемді түзетулер:** `<credits/debits>`
+- **Саясатты бақылау:** `<tickets or RFCs opened>`
 
-## 6. Appeals & Guardian Overrides
+## 6. Апелляциялар және қамқоршының қайта анықтаулары
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+Қамқоршылық кеңеске жіберілген кез келген өтініштерді, соның ішінде уақыт белгілерін және
+шешімдер (бекіту/бас тарту). `sns governance appeal` жазбаларына немесе кеңесіне сілтеме
+дауыс.
 
-## 7. Outstanding Items
+## 7. Таңдаулы заттар
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- `<Action item>` — Иесі `<name>`, ETA `<date>`
+- `<Action item>` — Иесі `<name>`, ETA `<date>`
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+Осы есепте сілтеме жасалған NDJSON, Grafana экспорттарын және CLI журналдарын тіркеңіз.

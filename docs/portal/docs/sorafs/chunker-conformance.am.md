@@ -11,53 +11,54 @@ id: chunker-conformance
 title: SoraFS Chunker Conformance Guide
 sidebar_label: Chunker Conformance
 description: Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-This guide codifies the requirements every implementation must follow to stay
-aligned with the SoraFS deterministic chunker profile (SF1). It also
-documents the regeneration workflow, signing policy, and verification steps so
-fixture consumers across SDKs remain in sync.
+ይህ መመሪያ እያንዳንዱ ትግበራ ለመቆየት መከተል ያለባቸውን መስፈርቶች ያዘጋጃል።
+ከI18NT0000000X መወሰኛ chunker መገለጫ (SF1) ጋር የተስተካከለ። እንዲሁም
+የሥራ ሂደትን ፣ የመፈረሚያ ፖሊሲን እና የማረጋገጫ ደረጃዎችን ይመዘግባል
+በሁሉም ኤስዲኬዎች ውስጥ ያሉ ቋሚ ሸማቾች እንደተመሳሰሉ ይቆያሉ።
 
-## Canonical Profile
+## ቀኖናዊ መገለጫ
 
-- Profile handle: `sorafs.sf1@1.0.0`
-- Input seed (hex): `0000000000dec0ded`
-- Target size: 262 144 bytes (256 KiB)
-- Minimum size: 65 536 bytes (64 KiB)
-- Maximum size: 524 288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Gear table seed: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- የመገለጫ እጀታ: I18NI0000003X
+- የግቤት ዘር (ሄክስ): `0000000000dec0ded`
+- የዒላማ መጠን፡ 262144 ባይት (256ኪባ)
+ዝቅተኛ መጠን፡ 65536 ባይት (64ኪባ)
+ከፍተኛ መጠን፡ 524288 ባይት (512ኪባ)
+- ሮሊንግ ፖሊኖሚል፡ `0x3DA3358B4DC173`
+- የማርሽ ሰንጠረዥ ዘር: `sorafs-v1-gear`
+- መስበር ጭምብል: I18NI0000007X
 
-Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Any SIMD acceleration must produce identical boundaries and digests.
+የማጣቀሻ ትግበራ፡ `sorafs_chunker::chunk_bytes_with_digests_profile`.
+ማንኛውም የሲምዲ ማጣደፍ አንድ አይነት ወሰኖች እና መፍጨት አለበት።
 
-## Fixture Bundle
+## ቋሚ ጥቅል
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenerates the
-fixtures and emits the following files under `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` እንደገና ያድሳል
+የሚከተሉትን ፋይሎች በ`fixtures/sorafs_chunker/` ያዘጋጃል እና ያወጣል፡
 
-- `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
-  TypeScript, and Go consumers. Each file advertises the canonical handle as the
-  first (and only) entry in `profile_aliases`. The ordering is enforced by
-  `ensure_charter_compliance` and MUST NOT be altered.
-- `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
-- `manifest_signatures.json` — Council signatures (Ed25519) over the manifest
-  digest.
-- `sf1_profile_v1_backpressure.json` and raw corpora inside `fuzz/` —
-  deterministic streaming scenarios used by chunker back-pressure tests.
+- `sf1_profile_v1.{json,rs,ts,go}` - ቀኖናዊ ቁርጥራጭ ድንበሮች ለዝገት ፣
+  TypeScript እና Go ሸማቾች እያንዳንዱ ፋይል ቀኖናዊ እጀታውን እንደ የ
+  በ `profile_aliases` ውስጥ የመጀመሪያ (እና ብቻ) ግቤት። ትዕዛዙ የሚተገበረው በ
+  `ensure_charter_compliance` እና መቀየር የለበትም።
+- `manifest_blake3.json` — BLAKE3-የተረጋገጠ አንጸባራቂ እያንዳንዱን ቋሚ ፋይል ይሸፍናል።
+- `manifest_signatures.json` - የምክር ቤት ፊርማዎች (Ed25519) ከማንፀባረቂያው በላይ
+  መፈጨት ።
+- `sf1_profile_v1_backpressure.json` እና ጥሬ ኮርፖራ በ `fuzz/` ውስጥ -
+  በ chunker የኋላ-ግፊት ሙከራዎች ጥቅም ላይ የሚውሉ ቆራጥ የዥረት ሁኔታዎች።
 
-### Signing Policy
+### የመፈረም ፖሊሲ
 
-Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+ቋሚ ዳግም መወለድ ** አለበት *** ትክክለኛ የምክር ቤት ፊርማ ማካተት አለበት። ጀነሬተር
+`--allow-unsigned` በግልጽ ካልተላለፈ በስተቀር ያልተፈረመ ውፅዓት ውድቅ ያደርጋል (የታሰበ)
+ለአካባቢያዊ ሙከራዎች ብቻ). የፊርማ ፖስታዎች አባሪ ብቻ እና ናቸው።
+በአንድ ፈራሚ የተቀነሰ።
 
-To add a council signature:
+የምክር ቤት ፊርማ ለመጨመር፡-
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -65,33 +66,33 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verification
+## ማረጋገጫ
 
-The CI helper `ci/check_sorafs_fixtures.sh` replays the generator with
-`--locked`. If fixtures drift or signatures are missing, the job fails. Use
-this script in nightly workflows and before submitting fixture changes.
+የ CI አጋዥ I18NI0000019X ጄነሬተርን በድጋሚ ያጫውታል።
+`--locked`. የቤት እቃዎች ተንሸራታች ወይም ፊርማዎች ከጠፉ ስራው አይሳካም። ተጠቀም
+ይህ ስክሪፕት በምሽት የስራ ፍሰቶች እና የቋሚ ለውጦችን ከማቅረቡ በፊት።
 
-Manual verification steps:
+በእጅ የማረጋገጫ ደረጃዎች:
 
-1. Run `cargo test -p sorafs_chunker`.
-2. Invoke `ci/check_sorafs_fixtures.sh` locally.
-3. Confirm `git status -- fixtures/sorafs_chunker` is clean.
+1. `cargo test -p sorafs_chunker` አሂድ.
+2. በአገር ውስጥ I18NI0000022X ይደውሉ።
+3. I18NI0000023X ንጹህ መሆኑን ያረጋግጡ።
 
-## Upgrade Playbook
+## Playbookን አሻሽል።
 
-When proposing a new chunker profile or updating SF1:
+አዲስ chunker መገለጫ ሲያቀርቡ ወይም SF1 ሲያዘምኑ፡-
 
-See also: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) for
-metadata requirements, proposal templates, and validation checklists.
+በተጨማሪ ይመልከቱ፡ [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) ለ
+የሜታዳታ መስፈርቶች፣ የፕሮፖዛል አብነቶች እና የማረጋገጫ ዝርዝሮች።
 
-1. Draft a `ChunkProfileUpgradeProposalV1` (see RFC SF‑1) with new parameters.
-2. Regenerate fixtures via `export_vectors` and record the new manifest digest.
-3. Sign the manifest with the required council quorum. All signatures must be
-   appended to `manifest_signatures.json`.
-4. Update affected SDK fixtures (Rust/Go/TS) and ensure cross-runtime parity.
-5. Regenerate fuzz corpora if parameters change.
-6. Update this guide with the new profile handle, seeds, and digest.
-7. Submit the change alongside updated tests and roadmap updates.
+1. I18NI0000025X (RFC SF-1 ይመልከቱ) በአዲስ መመዘኛዎች ይቀርጹ።
+2. መገልገያዎችን በ `export_vectors` በኩል ያድሱ እና አዲሱን አንጸባራቂ መፍጨት ይቅዱ።
+3. መግለጫውን ከሚፈለገው የምክር ቤት ምልአተ ጉባኤ ጋር ይፈርሙ። ሁሉም ፊርማዎች መሆን አለባቸው
+   ከ `manifest_signatures.json` ጋር ተያይዟል።
+4. የተጎዱ የኤስዲኬ መጫዎቻዎችን (Rust/Go/TS) ያዘምኑ እና የአሂድ ጊዜ ተሻጋሪነትን ያረጋግጡ።
+5. መለኪያዎች ከተቀየሩ fuzz corpora ያድሱ።
+6. ይህንን መመሪያ በአዲሱ የመገለጫ እጀታ፣ ዘሮች እና መፍጨት ያዘምኑት።
+7. ለውጡን ከተዘመኑ ሙከራዎች እና የመንገድ ካርታ ማሻሻያዎች ጋር ያቅርቡ።
 
-Changes that affect chunk boundaries or digests without following this process
-are invalid and must not be merged.
+ይህን ሂደት ሳይከተሉ የቁርጥ ድንበሮችን ወይም መፈጨትን የሚነኩ ለውጦች
+ልክ ያልሆኑ ናቸው እና መዋሃድ የለባቸውም።

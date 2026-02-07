@@ -11,39 +11,40 @@ id: preview-feedback-w2-plan
 title: W2 community intake plan
 sidebar_label: W2 plan
 description: Intake, approvals, and evidence checklist for the community preview cohort.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| ნივთი | დეტალები |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Target window | Q3 2025 week 1 (tentative) |
-| Artefact tag (planned) | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
+| ტალღა | W2 — საზოგადოების მიმომხილველები |
+| სამიზნე ფანჯარა | Q3 2025 კვირა 1 (სავარაუდო) |
+| არტეფაქტის ტეგი (დაგეგმილი) | `preview-2025-06-15` |
+| ტრეკერის საკითხი | `DOCS-SORA-Preview-W2` |
 
-## Objectives
+## მიზნები
 
-1. Define the community intake criteria and vetting workflow.
-2. Obtain governance approval for the proposed roster and acceptable-use addendum.
-3. Refresh the checksum-verified preview artefact and telemetry bundle for the new window.
-4. Stage the Try it proxy + dashboards ahead of invite dispatch.
+1. განსაზღვრეთ საზოგადოების მიღების კრიტერიუმები და შემოწმების სამუშაო პროცესი.
+2. მიიღეთ მმართველობითი თანხმობა შემოთავაზებული ჩამონათვალისა და მისაღები გამოყენების დანამატისთვის.
+3. განაახლეთ საკონტროლო ჯამით დამოწმებული წინასწარი გადახედვის არტეფაქტი და ტელემეტრიის ნაკრები ახალი ფანჯრისთვის.
+4. დააყენეთ Try it proxy + დაფები მოწვევის გაგზავნამდე.
 
-## Task breakdown
+## დავალების დაშლა
 
-| ID | Task | Owner | Due | Status | Notes |
+| ID | ამოცანა | მფლობელი | ვადა | სტატუსი | შენიშვნები |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Draft community intake criteria (eligibility, max slots, CoC requirements) and circulate to governance | Docs/DevRel lead | 2025‑05‑15 | ✅ Completed | Intake policy merged into `DOCS-SORA-Preview-W2` and endorsed at the 2025‑05‑20 council meeting. |
-| W2-P2 | Update request template with community-specific questions (motivation, availability, localization needs) | Docs-core-01 | 2025‑05‑18 | ✅ Completed | `docs/examples/docs_preview_request_template.md` now includes the Community section, referenced in the intake form. |
-| W2-P3 | Secure governance approval for the intake plan (meeting vote + recorded minutes) | Governance liaison | 2025‑05‑22 | ✅ Completed | Vote passed unanimously on 2025‑05‑20; minutes + roll call linked in `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Schedule Try it proxy staging + telemetry capture for the W2 window (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025‑06‑05 | ✅ Completed | Change ticket `OPS-TRYIT-188` approved and executed 2025‑06‑09 02:00–04:00 UTC; Grafana screenshots archived with ticket. |
-| W2-P5 | Build/verify new preview artefact tag (`preview-2025-06-15`) and archive descriptor/checksum/probe logs | Portal TL | 2025‑06‑07 | ✅ Completed | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` ran 2025‑06‑10; outputs stored under `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Assemble community invite roster (≤25 reviewers, staged batches) with governance-approved contact info | Community manager | 2025‑06‑10 | ✅ Completed | First cohort of 8 community reviewers approved; request IDs `DOCS-SORA-Preview-REQ-C01…C08` logged in the tracker. |
+| W2-P1 | შეადგინეთ თემის მიღების კრიტერიუმები (შესაბამისობა, მაქსიმალური სლოტები, CoC მოთხოვნები) და გადაეცემა მმართველობას | Docs/DevRel წამყვანი | 2025-05-15 | ✅ დასრულებული | მიღების პოლიტიკა გაერთიანდა `DOCS-SORA-Preview-W2`-ში და დამტკიცდა 2025-05-20 საბჭოს სხდომაზე. |
+| W2-P2 | განაახლეთ მოთხოვნის შაბლონი საზოგადოების სპეციფიკური კითხვებით (მოტივაცია, ხელმისაწვდომობა, ლოკალიზაციის საჭიროებები) | Docs-core-01 | 2025-05-18 | ✅ დასრულებული | `docs/examples/docs_preview_request_template.md` ახლა მოიცავს საზოგადოების განყოფილებას, რომელიც მითითებულია მიღების ფორმაში. |
+| W2-P3 | უსაფრთხო მმართველობის დამტკიცება მიღების გეგმისთვის (შეხვედრის ხმა + ჩაწერილი წუთები) | მმართველობითი კავშირი | 2025-05-22 | ✅ დასრულებული | კენჭისყრა ერთხმად მიიღეს 2025-05-20; წუთი + განმეორებითი ზარი დაკავშირებულია `DOCS-SORA-Preview-W2`-ში. |
+| W2-P4 | განრიგი სცადეთ პროქსი დადგმა + ტელემეტრიული აღბეჭდვა W2 ფანჯრისთვის (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ დასრულებული | ბილეთის შეცვლა `OPS-TRYIT-188` დამტკიცებული და შესრულებული 2025-06-09 02:00-04:00UTC; Grafana ეკრანის ანაბეჭდები დაარქივებულია ბილეთით. |
+| W2-P5 | შექმენით/დაამოწმეთ ახალი წინასწარი გადახედვის არტეფაქტის ტეგი (`preview-2025-06-15`) და არქივის აღმწერი/შემოწმების ჯამი/გამოძიების ჟურნალები | პორტალი TL | 2025-06-07 | ✅ დასრულებული | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` გაიქცა 2025-06-10; შედეგები ინახება `artifacts/docs_preview/W2/preview-2025-06-15/` ქვეშ. |
+| W2-P6 | შეიკრიბეთ საზოგადოების მოწვევის სია (≤25 მიმომხილველი, დადგმული პარტიები) მმართველობის მიერ დამტკიცებული საკონტაქტო ინფორმაციით | საზოგადოების მენეჯერი | 2025-06-10 | ✅ დასრულებული | დაამტკიცა 8 საზოგადოების მიმომხილველის პირველი ჯგუფი; მოითხოვეთ ID `DOCS-SORA-Preview-REQ-C01…C08` შესული ტრეკერში. |
 
-## Evidence checklist
+## მტკიცებულებათა ჩამონათვალი
 
-- [x] Governance approval record (meeting notes + vote link) attached to `DOCS-SORA-Preview-W2`.
-- [x] Updated request template committed under `docs/examples/`.
-- [x] `preview-2025-06-15` descriptor, checksum log, probe output, link report, and Try it proxy transcript stored under `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) captured for the W2 preflight window.
-- [x] Invite roster table with reviewer IDs, request tickets, and approval timestamps populated before dispatch (see tracker W2 section).
+- [x] მმართველობის დამტკიცების ჩანაწერი (შეხვედრის შენიშვნები + ხმის მიცემის ბმული) მიმაგრებულია `DOCS-SORA-Preview-W2`-ზე.
+- [x] განახლებული მოთხოვნის შაბლონი შესრულებულია `docs/examples/`-ის ფარგლებში.
+- [x] `preview-2025-06-15` აღმწერი, საკონტროლო ჯამის ჟურნალი, გამოძიების გამომავალი, ბმული ანგარიში და სცადეთ პროქსის ტრანსკრიპტი, რომელიც ინახება `artifacts/docs_preview/W2/`-ში.
+- [x] Grafana ეკრანის ანაბეჭდები (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) გადაღებული W2 ფრენის წინა ფანჯრისთვის.
+- [x] მოიწვიეთ ჩამონათვალის ცხრილი მიმომხილველის პირადობის მოწმობებით, მოითხოვეთ ბილეთები და დამტკიცების დროის შტამპები, რომლებიც დასახლებულია გაგზავნამდე (იხილეთ ტრეკერის W2 განყოფილება).
 
-Keep this plan updated; the tracker references it so the DOCS-SORA roadmap can see exactly what remains before W2 invitations go out.
+განაახლეთ ეს გეგმა; ტრეკერი მიუთითებს მას, ასე რომ DOCS-SORA საგზაო რუქას შეუძლია ზუსტად ნახოს რა რჩება W2 მოსაწვევების გამოსვლამდე.

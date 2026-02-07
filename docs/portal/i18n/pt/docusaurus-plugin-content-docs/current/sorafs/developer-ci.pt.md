@@ -4,23 +4,25 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Receitas de CI da SoraFS
+id: desenvolvedor-ci
+título: Receitas de CI da SoraFS
 sidebar_label: Receitas de CI
 description: Execute o CLI da SoraFS em pipelines do GitHub e GitLab com assinatura sem chaves.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as copias sincronizadas.
+:::nota Fonte canônica
+Esta página espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as cópias sincronizadas.
 :::
 
 # Receitas de CI
 
-Pipelines da SoraFS se beneficiam de chunking deterministico, assinatura de manifests e verificacao de proofs. A superficie de comandos
-`sorafs_cli` mantem esses passos portaveis entre provedores de CI. Esta pagina destaca as receitas canonicas e aponta para templates prontos para uso.
+Pipelines da SoraFS se beneficiam de chunking determinístico, assinatura de manifestos e verificação de provas. A superfície de comandos
+`sorafs_cli` mantem esses passos portáveis entre provedores de CI. Esta página destaca as receitas canônicas e aponta para templates prontos para uso.
 
 ## GitHub Actions (sem chaves)
 
@@ -97,11 +99,11 @@ jobs:
 
 Pontos chave:
 
-- Nenhuma chave de assinatura estatica e armazenada; tokens OIDC sao obtidos sob demanda.
-- Artefatos (CAR, manifest, bundle, resumos de proofs) sao enviados para revisao.
-- O job reutiliza os mesmos esquemas Norito usados nos rollouts de producao.
+- Nenhuma chave de assinatura estática e armazenada; tokens OIDC são obtidos sob demanda.
+- Artefatos (CAR, manifesto, bundle, resumos de provas) são enviados para revisão.
+- O trabalho reutiliza os mesmos esquemas Norito usados ​​nos lançamentos de produção.
 
-## GitLab CI
+## CI do GitLab
 
 ```yaml
 stages:
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provisione `SIGSTORE_ID_TOKEN` via federacao de identidade de workload do GitLab ou um segredo selado antes de executar a etapa de publish.
-- A falha de qualquer etapa do CLI faz o pipeline parar, preservando artefatos consistentes.
+- Forneça `SIGSTORE_ID_TOKEN` via federação de identidade de carga de trabalho do GitLab ou um segredo selado antes de executar uma etapa de publicação.
+- Uma falha de qualquer etapa da CLI faz o pipeline parar, preservando artefatos consistentes.
 
 ## Recursos adicionais
 
-- Templates end-to-end (inclui helpers Bash, configuracao de identidade federada e passos de limpeza): `docs/examples/sorafs_ci.md`
-- Referencia do CLI cobrindo todas as opcoes: `docs/source/sorafs_cli.md`
-- Requisitos de governanca/alias antes do envio:
+- Templates ponta a ponta (inclui ajudantes de identidade Bash, configuração de federação e passos de limpeza): `docs/examples/sorafs_ci.md`
+- Referência do CLI cobrindo todas as opções: `docs/source/sorafs_cli.md`
+- Requisitos de governança/alias antes do envio:
   `docs/source/sorafs/provider_admission_policy.md`

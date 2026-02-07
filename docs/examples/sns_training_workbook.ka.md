@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d6965998c392217380a1722e49098f831438e2f4499b9e3258398a66f905a35
 source_last_modified: "2025-12-29T18:16:35.080069+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Workbook Template
+# SNS სასწავლო სამუშაო წიგნის შაბლონი
 
-Use this workbook as the canonical handout for each training cohort. Replace
-placeholders (`<...>`) before distributing to attendees.
+გამოიყენეთ ეს სამუშაო წიგნი, როგორც კანონიკური მასალა თითოეული სასწავლო ჯგუფისთვის. ჩანაცვლება
+ჩანაცვლების დამფუძნებლები (`<...>`) დამსწრეებისთვის გავრცელებამდე.
 
-## Session details
-- Suffix: `<.sora | .nexus | .dao>`
-- Cycle: `<YYYY-MM>`
-- Language: `<ar/es/fr/ja/pt/ru/ur>`
-- Facilitator: `<name>`
+## სესიის დეტალები
+- სუფიქსი: `<.sora | .nexus | .dao>`
+- ციკლი: `<YYYY-MM>`
+- ენა: `<ar/es/fr/ja/pt/ru/ur>`
+- ფასილიტატორი: `<name>`
 
-## Lab 1 — KPI export
-1. Open the portal KPI dashboard (`docs/portal/docs/sns/kpi-dashboard.md`).
-2. Filter by suffix `<suffix>` and time range `<window>`.
-3. Export PDF + CSV snapshots.
-4. Record SHA-256 of the exported JSON/PDF here: `______________________`.
+## ლაბორატორია 1 - KPI ექსპორტი
+1. გახსენით პორტალის KPI დაფა (`docs/portal/docs/sns/kpi-dashboard.md`).
+2. გაფილტვრა სუფიქსით `<suffix>` და დროის დიაპაზონით `<window>`.
+3. PDF + CSV სნეპშოტების ექსპორტი.
+4. ჩაწერეთ SHA-256 ექსპორტირებული JSON/PDF აქ: `______________________`.
 
-## Lab 2 — Manifest drill
-1. Fetch the sample manifest from `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`.
-2. Validate with `cargo run --bin sns_manifest_check -- --input <file>`.
-3. Generate resolver skeleton with `scripts/sns_zonefile_skeleton.py`.
-4. Paste the diff summary:
+## ლაბორატორია 2 - მანიფესტის საბურღი
+1. მიიღეთ ნიმუშის მანიფესტი `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`-დან.
+2. დამოწმება `cargo run --bin sns_manifest_check -- --input <file>`-ით.
+3. შექმენით გადამწყვეტი ჩონჩხი `scripts/sns_zonefile_skeleton.py`-ით.
+4. ჩასვით განსხვავების შეჯამება:
    ```
    <git diff output>
    ```
 
-## Lab 3 — Dispute simulation
-1. Use guardian CLI to start a freeze (case id `<case-id>`).
-2. Record the dispute hash: `______________________`.
-3. Upload the evidence log to `artifacts/sns/training/<suffix>/<cycle>/logs/`.
+## ლაბორატორია 3 - დავის სიმულაცია
+1. გამოიყენეთ guardian CLI გაყინვის დასაწყებად (საქმის ID `<case-id>`).
+2. ჩაწერეთ დავის ჰეში: `______________________`.
+3. ატვირთეთ მტკიცებულებათა ჟურნალი `artifacts/sns/training/<suffix>/<cycle>/logs/`-ზე.
 
-## Lab 4 — Annex automation
-1. Export the Grafana dashboard JSON and copy it into `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`.
-2. Run:
+## ლაბორატორია 4 — დანართის ავტომატიზაცია
+1. გაიყვანეთ Grafana დაფა JSON და დააკოპირეთ `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`-ში.
+2. სირბილი:
    ```bash
    cargo xtask sns-annex \
      --suffix <suffix> \
@@ -53,12 +54,12 @@ placeholders (`<...>`) before distributing to attendees.
      --regulatory-entry docs/source/sns/regulatory/<memo>.md \
      --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
    ```
-3. Paste the annex path + SHA-256 output: `________________________________`.
+3. ჩასვით დანართის ბილიკი + SHA-256 გამომავალი: `________________________________`.
 
-## Feedback notes
-- What was unclear?
-- Which labs ran over time?
-- Tooling bugs observed?
+## უკუკავშირის შენიშვნები
+-რა იყო გაუგებარი?
+- რომელი ლაბორატორიები მუშაობდნენ დროთა განმავლობაში?
+- ხელსაწყოების ხარვეზები შეინიშნება?
 
-Return completed workbooks to the facilitator; they belong under
+დააბრუნეთ დასრულებული სამუშაო წიგნები ფასილიტატორს; ქვეშ ეკუთვნიან
 `artifacts/sns/training/<suffix>/<cycle>/workbooks/`.

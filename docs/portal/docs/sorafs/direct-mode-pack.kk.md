@@ -11,60 +11,61 @@ id: direct-mode-pack
 title: SoraFS Direct-Mode Fallback Pack (SNNet-5a)
 sidebar_label: Direct-Mode Fallback Pack
 description: Required configuration, compliance checks, and rollout steps when operating SoraFS in direct Torii/QUIC mode during the SNNet-5a transition.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::ескерту Канондық дереккөз
 :::
 
-SoraNet circuits remain the default transport for SoraFS, but roadmap item **SNNet-5a** requires a regulated fallback so operators can keep deterministic read-access while the anonymity rollout completes. This pack captures the CLI / SDK knobs, configuration profiles, compliance tests, and deployment checklist needed to run SoraFS in direct Torii/QUIC mode without touching the privacy transports.
+SoraNet тізбектері SoraFS үшін әдепкі тасымалдау болып қала береді, бірақ жол картасының **SNNet-5a** элементі анонимдікті шығару аяқталған кезде операторлар детерминирленген оқу рұқсатын сақтай алуы үшін реттелетін қалпына келтіруді қажет етеді. Бұл бума SoraFS режимін тікелей Torii/QUIC режимінде құпиялылық тасымалдауларына қол тигізбестен іске қосу үшін қажет CLI/SDK тұтқаларын, конфигурация профильдерін, сәйкестік сынақтарын және орналастыруды тексеру тізімін қамтиды.
 
-The fallback applies to staging and regulated production environments until SNNet-5 through SNNet-9 clear their readiness gates. Keep the artefacts below alongside the usual SoraFS deployment collateral so operators can swap between anonymous and direct modes on demand.
+Қайтару SNNet-5 және SNNet-9 олардың дайындық қақпаларын тазаламайынша кезеңдік және реттелетін өндіріс орталарына қолданылады. Төмендегі артефактілерді әдеттегі SoraFS орналастыру кепілімен бірге сақтаңыз, осылайша операторлар сұраныс бойынша анонимді және тікелей режимдер арасында ауыса алады.
 
-## 1. CLI & SDK Flags
+## 1. CLI және SDK жалаулары
 
-- `sorafs_cli fetch --transport-policy=direct-only …` disables relay scheduling and enforces Torii/QUIC transports. CLI help now lists `direct-only` as an accepted value.
-- SDKs must set `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` whenever they expose a “direct mode” toggle. The generated bindings in `iroha::ClientOptions` and `iroha_android` forward the same enum.
-- Gateway harnesses (`sorafs_fetch`, Python bindings) can parse the direct-only toggle via the shared Norito JSON helpers so automation receives identical behaviour.
+- `sorafs_cli fetch --transport-policy=direct-only …` релелік жоспарлауды өшіреді және Torii/QUIC тасымалдауларын қамтамасыз етеді. CLI анықтамасы енді қабылданған мән ретінде `direct-only` тізімін береді.
+- SDK «тікелей режим» ауыстырып-қосқышын ашқан сайын `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` орнатуы керек. `iroha::ClientOptions` және `iroha_android` ішіндегі жасалған байланыстар бірдей нөмірді жібереді.
+- Шлюз қосқыштары (`sorafs_fetch`, Python байланыстырулары) ортақ Norito JSON көмекшілері арқылы тікелей қосқышты талдай алады, осылайша автоматтандыру бірдей әрекетті алады.
 
-Document the flag in partner-facing runbooks and wire feature toggles through `iroha_config` rather than environment variables.
+Жалаушаны серіктеске арналған жұмыс кітапшаларында құжаттаңыз және ортаның айнымалы мәндері емес, `iroha_config` арқылы сым мүмкіндігі ауысады.
 
-## 2. Gateway Policy Profiles
+## 2. Шлюз саясаты профильдері
 
-Use Norito JSON to persist deterministic orchestrator configuration. The example profile in `docs/examples/sorafs_direct_mode_policy.json` encodes:
+Детерминирленген оркестр конфигурациясын сақтау үшін Norito JSON пайдаланыңыз. `docs/examples/sorafs_direct_mode_policy.json` ішіндегі мысал профилі кодтайды:
 
-- `transport_policy: "direct_only"` — reject providers that only advertise SoraNet relay transports.
-- `max_providers: 2` — cap direct peers to the most reliable Torii/QUIC endpoints. Adjust based on regional compliance allowances.
-- `telemetry_region: "regulated-eu"` — label emitted metrics so telemetry dashboards and audits distinguish fallback runs.
-- Conservative retry budgets (`retry_budget: 2`, `provider_failure_threshold: 3`) to avoid masking misconfigured gateways.
+- `transport_policy: "direct_only"` — тек SoraNet релелік тасымалдауларын жарнамалайтын провайдерлерді қабылдамайды.
+- `max_providers: 2` — ең сенімді Torii/QUIC соңғы нүктелеріне тікелей сәйкестіктер. Аймақтық сәйкестік жеңілдіктеріне қарай реттеңіз.
+- `telemetry_region: "regulated-eu"` — телеметрия бақылау тақталары мен аудиттер қалпына келтіруді ажырататындай етіп шығарылатын көрсеткіштерді жапсырма.
+- Қате конфигурацияланған шлюздерді маскировкаламау үшін консервативті қайталау бюджеттері (`retry_budget: 2`, `provider_failure_threshold: 3`).
 
-Load the JSON through `sorafs_cli fetch --config` (automation) or the SDK bindings (`config_from_json`) before exposing the policy to operators. Persist the scoreboard output (`persist_path`) for audit trails.
+Саясатты операторларға көрсетпес бұрын JSON файлын `sorafs_cli fetch --config` (автоматтандыру) немесе SDK байланыстары (`config_from_json`) арқылы жүктеңіз. Аудит жолдары үшін көрсеткіштер тақтасының шығысын (`persist_path`) сақтау.
 
-Gateway-side enforcement knobs are captured in `docs/examples/sorafs_gateway_direct_mode.toml`. The template mirrors the output from `iroha app sorafs gateway direct-mode enable`, disabling envelope/admission checks, wiring rate-limit defaults, and populating the `direct_mode` table with plan-derived hostnames and manifest digests. Replace the placeholder values with your rollout plan before committing the snippet to configuration management.
+Шлюз жағындағы орындау тұтқалары `docs/examples/sorafs_gateway_direct_mode.toml` ішінде түсірілген. Үлгі `iroha app sorafs gateway direct-mode enable` шығысын көрсетеді, конверт/қабылдау тексерулерін, сымды қосу жылдамдығының шектеуінің әдепкі параметрлерін өшіреді және `direct_mode` кестесін жоспардан алынған хост атауларымен және манифест дайджесттерімен толтырады. Үзіндіні конфигурацияны басқаруға тапсырмас бұрын толтырғыш мәндерін шығару жоспарымен ауыстырыңыз.
 
-## 3. Compliance Test Suite
+## 3. Сәйкестік сынақ жинағы
 
-Direct-mode readiness now includes coverage in both the orchestrator and CLI crates:
+Тікелей режимге дайындық енді оркестрде де, CLI жәшіктерінде де қамтуды қамтиды:
 
-- `direct_only_policy_rejects_soranet_only_providers` guarantees that `TransportPolicy::DirectOnly` fails fast when every candidate advert only supports SoraNet relays.【crates/sorafs_orchestrator/src/lib.rs:7238】
-- `direct_only_policy_prefers_direct_transports_when_available` ensures Torii/QUIC transports are used when present and that SoraNet relays are excluded from the session.【crates/sorafs_orchestrator/src/lib.rs:7285】
-- `direct_mode_policy_example_is_valid` parses `docs/examples/sorafs_direct_mode_policy.json` to ensure documentation stays aligned with the helper utilities.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` exercises `sorafs_cli fetch --transport-policy=direct-only` against a mocked Torii gateway, providing a smoke test for regulated environments that pin direct transports.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
-- `scripts/sorafs_direct_mode_smoke.sh` wraps the same command with the policy JSON and scoreboard persistence for rollout automation.
+- `direct_only_policy_rejects_soranet_only_providers` әрбір үміткердің жарнамасы тек SoraNet релелерін қолдаған кезде `TransportPolicy::DirectOnly` жылдам істемейтініне кепілдік береді.【crates/sorafs_orchestrator/src/lib.rs:7238】
+- `direct_only_policy_prefers_direct_transports_when_available` бар болған кезде Torii/QUIC тасымалдауларының пайдаланылуын және SoraNet релелерінің сеанстан шығарылуын қамтамасыз етеді.【crates/sorafs_orchestrator/src/lib.rs:7285】
+- `direct_mode_policy_example_is_valid` құжаттаманың көмекші утилиталармен сәйкес келуін қамтамасыз ету үшін `docs/examples/sorafs_direct_mode_policy.json` талдайды.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_poli.jcy.j
+- `fetch_command_respects_direct_transports` `sorafs_cli fetch --transport-policy=direct-only` мысқылдаған Torii шлюзіне қарсы жаттығулар жасайды, бұл тікелей тасымалдауларды бекітетін реттелетін орталар үшін түтін сынағы.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `scripts/sorafs_direct_mode_smoke.sh` бірдей пәрменді JSON саясатымен және шығаруды автоматтандыруға арналған таблоның тұрақтылығымен қосады.
 
-Run the focused suite before publishing updates:
+Жаңартуларды жарияламас бұрын фокусталған жинақты іске қосыңыз:
 
 ```bash
 cargo test -p sorafs_orchestrator direct_only_policy
 cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```
 
-If workspace compilation fails because of upstream changes, record the blocking error in `status.md` and rerun once the dependency catches up.
+Егер жұмыс кеңістігінің компиляциясы жоғары ағындық өзгерістерге байланысты сәтсіз болса, `status.md` ішінде блоктау қатесін жазып, тәуелділік жеткенде қайта іске қосыңыз.
 
-## 4. Automated Smoke Runs
+## 4. Автоматтандырылған түтін жұмысы
 
-CLI coverage alone does not surface environment-specific regressions (e.g., gateway policy drift or manifest mismatches). A dedicated smoke helper lives in `scripts/sorafs_direct_mode_smoke.sh` and wraps `sorafs_cli fetch` with the direct-mode orchestrator policy, scoreboard persistence, and summary capture.
+Тек CLI қамтуы қоршаған ортаға тән регрессияларды (мысалы, шлюз саясатының дрейфі немесе манифест сәйкессіздіктері) көрсетпейді. Арнайы түтін көмекшісі `scripts/sorafs_direct_mode_smoke.sh` ішінде өмір сүреді және `sorafs_cli fetch` құрылғысын тікелей режим оркестрінің саясатымен, көрсеткіштер тақтасының тұрақтылығымен және жиынтық түсірілімімен қосады.
 
-Example usage:
+Қолдану мысалы:
 
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
@@ -72,57 +73,57 @@ Example usage:
   --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
 ```
 
-- The script respects both CLI flags and key=value config files (see `docs/examples/sorafs_direct_mode_smoke.conf`). Populate the manifest digest and provider advert entries with production values before running.
-- `--policy` defaults to `docs/examples/sorafs_direct_mode_policy.json`, but any orchestrator JSON produced by `sorafs_orchestrator::bindings::config_to_json` can be supplied. The CLI accepts the policy via `--orchestrator-config=PATH`, enabling reproducible runs without hand-tuning flags.
-- When `sorafs_cli` is not on `PATH` the helper builds it from the
-  `sorafs_orchestrator` crate (release profile) so smoke runs exercise the
-  shipping direct-mode plumbing.
-- Outputs:
-  - Assembled payload (`--output`, defaults to `artifacts/sorafs_direct_mode/payload.bin`).
-  - Fetch summary (`--summary`, defaults alongside the payload) containing the telemetry region and provider reports used for rollout evidence.
-  - Scoreboard snapshot persisted to the path declared in the policy JSON (e.g., `fetch_state/direct_mode_scoreboard.json`). Archive this alongside the summary in change tickets.
-- Adoption gate automation: once the fetch completes the helper invokes `cargo xtask sorafs-adoption-check` using the persisted scoreboard and summary paths. The required quorum defaults to the number of providers supplied on the command line; override it with `--min-providers=<n>` when you need a larger sample. Adoption reports are written next to the summary (`--adoption-report=<path>` can set a custom location) and the helper passes `--require-direct-only` by default (matching the fallback) and `--require-telemetry` whenever you supply the matching CLI flag. Use `XTASK_SORAFS_ADOPTION_FLAGS` to forward additional xtask arguments (for example `--allow-single-source` during an approved downgrade so the gate both tolerates and enforces the fallback). Only skip the adoption gate with `--skip-adoption-check` when running local diagnostics; the roadmap requires every regulated direct-mode run to include the adoption report bundle.
+- Сценарий CLI жалаушаларын да, кілт=мән конфигурациялау файлдарын да құрметтейді (`docs/examples/sorafs_direct_mode_smoke.conf` қараңыз). Іске қосу алдында манифест дайджесті мен провайдердің жарнама жазбаларын өндіріс мәндерімен толтырыңыз.
+- `--policy` әдепкі бойынша `docs/examples/sorafs_direct_mode_policy.json`, бірақ `sorafs_orchestrator::bindings::config_to_json` шығарған кез келген оркестрлік JSON жеткізілуі мүмкін. CLI саясатты `--orchestrator-config=PATH` арқылы қабылдайды, бұл қолмен баптау жалаушалары жоқ қайталанатын жұмыстарды қосады.
+- `sorafs_cli` `PATH` параметрінде болмаса, көмекші оны келесіден құрастырады.
+  `sorafs_orchestrator` жәшігі (шығару профилі), сондықтан түтін жүгіреді
+  тікелей режимдегі су құбырын жөнелту.
+- Шығарулар:
+  - Жиналған пайдалы жүктеме (`--output`, әдепкі бойынша `artifacts/sorafs_direct_mode/payload.bin`).
+  - шығару дәлелі үшін пайдаланылатын телеметрия аймағы мен провайдер есептерін қамтитын жиынтықты алу (`--summary`, пайдалы жүктемемен бірге әдепкі мәндер).
+  - Көрсеткіштер тақтасының суреті JSON саясатында жарияланған жолға дейін сақталды (мысалы, `fetch_state/direct_mode_scoreboard.json`). Мұны өзгерту билеттеріндегі қорытындымен бірге мұрағаттаңыз.
+- Қабылдау қақпасын автоматтандыру: алу аяқталғаннан кейін көмекші тұрақты көрсеткіштер тақтасы мен жиынтық жолдарды пайдаланып `cargo xtask sorafs-adoption-check` шақырады. Қажетті кворум әдепкі бойынша пәрмен жолында берілген провайдерлер санына сәйкес келеді; үлкенірек үлгі қажет болғанда оны `--min-providers=<n>` арқылы қайта анықтаңыз. Қабылдау есептері қорытындының қасында жазылады (`--adoption-report=<path>` реттелетін орынды орнатуы мүмкін) және көмекші `--require-direct-only` әдепкі бойынша (қайта оралғанға сәйкес) және сәйкес CLI жалауын берген сайын `--require-telemetry` жібереді. Қосымша xtask аргументтерін жіберу үшін `XTASK_SORAFS_ADOPTION_FLAGS` пайдаланыңыз (мысалы, бекітілген төмендету кезінде `--allow-single-source`, осылайша, қақпа қалпына келтіруге шыдайды және оны жүзеге асырады). Жергілікті диагностиканы іске қосқан кезде тек `--skip-adoption-check` арқылы қабылдау қақпасын өткізіп жіберіңіз; жол картасы қабылдау туралы есеп бумасын қосу үшін әрбір реттелетін тікелей режимді іске қосуды талап етеді.
 
-## 5. Rollout Checklist
+## 5. Шығарылымды тексеру тізімі
 
-1. **Configuration freeze:** Store the direct-mode JSON profile in your `iroha_config` repository and record the hash in your change ticket.
-2. **Gateway audit:** Confirm Torii endpoints enforce TLS, capability TLVs, and audit logging prior to flipping direct mode. Publish the gateway policy profile to operators.
-3. **Compliance sign-off:** Share the updated playbook with compliance / regulatory reviewers and capture approvals for running outside the anonymity overlay.
-4. **Dry run:** Execute the compliance test suite plus a staging fetch against known-good Torii providers. Archive scoreboard outputs and CLI summaries.
-5. **Production cutover:** Announce the change window, flip `transport_policy` to `direct_only` (if you had opted into `soranet-first`), and monitor the direct-mode dashboards (`sorafs_fetch` latency, provider failure counters). Document the rollback plan so you can return to SoraNet-first once SNNet-4/5/5a/5b/6a/7/8/12/13 graduate in `roadmap.md:532`.
-6. **Post-change review:** Attach scoreboard snapshots, fetch summaries, and monitoring results to the change ticket. Update `status.md` with the effective date and any anomalies.
+1. **Конфигурацияны тоқтату:** Тікелей режимдегі JSON профилін `iroha_config` репозиторийінде сақтаңыз және хэшті өзгерту билетіне жазыңыз.
+2. **Шлюз аудиті:** Torii соңғы нүктелерінің TLS, мүмкіндік TLVs және тікелей режимді аудару алдында аудит журналын қолдануын растаңыз. Шлюз саясаты профилін операторларға жариялаңыз.
+3. **Сәйкестікке қол қою:** Жаңартылған оқу кітабын сәйкестік/нормативтік тексерушілермен бөлісіңіз және анонимдік қабаттастырудан тыс жұмыс істеуге рұқсаттарды алыңыз.
+4. **Құрғақ іске қосу:** Сәйкестік сынақ жинағын және белгілі жақсы Torii провайдерлеріне қарсы кезеңді алуды орындаңыз. Мұрағат таблосының нәтижелері және CLI қорытындылары.
+5. **Өндірістің қысқаруы:** Өзгеріс терезесін жариялаңыз, `transport_policy` параметрін `direct_only` параметріне аударыңыз (егер сіз `soranet-first` параметрін таңдаған болсаңыз) және тікелей режим бақылау тақталарын бақылаңыз (I18NI000000071X, провайдердің сәтсіздігі). `roadmap.md:532` бағдарламасындағы SNNet-4/5/5a/5b/6a/7/8/12/13 түлегі бір рет SoraNet-ке қайта оралу үшін кері қайтару жоспарын құжаттаңыз.
+6. **Өзгерістерден кейінгі шолу:** Өзгеріс билетіне таблоның суретін, қорытындыларды алуды және бақылау нәтижелерін тіркеңіз. `status.md` нұсқасын күшіне ену күнімен және кез келген ауытқулармен жаңартыңыз.
 
-Keep the checklist alongside the `sorafs_node_ops` runbook so operators can rehearse the workflow before a live switchover. When SNNet-5 graduates to GA, retire the fallback after confirming parity in production telemetry.
+Бақылау парағын `sorafs_node_ops` жұмыс кітабымен бірге сақтаңыз, осылайша операторлар тікелей ауысудан бұрын жұмыс процесін қайталайды. SNNet-5 GA-ны бітірген кезде, өндірістік телеметриядағы паритетті растағаннан кейін резервті өшіріңіз.
 
-## 6. Evidence & Adoption Gate Requirements
+## 6. Дәлелдеме және бала асырап алу қақпасына қойылатын талаптар
 
-Direct-mode captures still need to satisfy the SF-6c adoption gate. Bundle the
-scoreboard, summary, manifest envelope, and adoption report for every run so
-`cargo xtask sorafs-adoption-check` can validate the fallback posture. Missing
-fields force the gate to fail, so record the expected metadata in change
-tickets.
+Тікелей режимде түсіру әлі де SF-6c қабылдау қақпасын қанағаттандыруы керек. Жинақтаңыз
+табло, қорытынды, манифест конверті және әрбір іске қосу туралы есеп
+`cargo xtask sorafs-adoption-check` қалпына келтіру қалпын тексере алады. Жоқ
+өрістер қақпаның істен шығуына мәжбүр етеді, сондықтан өзгерісте күтілетін метадеректерді жазыңыз
+билеттер.
 
-- **Transport metadata:** `scoreboard.json` must declare
-  `transport_policy="direct_only"` (and flip `transport_policy_override=true`
-  when you forced the downgrade). Keep the paired anonymity policy fields
-  populated even when they inherit defaults so reviewers can see whether you
-  deviated from the staged anonymity plan.
-- **Provider counters:** Gateway-only sessions must persist `provider_count=0`
-  and populate `gateway_provider_count=<n>` with the number of Torii providers
-  used. Avoid hand-editing the JSON—the CLI/SDK already derives the counts and
-  the adoption gate rejects captures that omit the split.
-- **Manifest evidence:** When Torii gateways participate, pass the signed
-  `--gateway-manifest-envelope <path>` (or SDK equivalent) so
-  `gateway_manifest_provided` plus the `gateway_manifest_id`/`gateway_manifest_cid`
-  are recorded in `scoreboard.json`. Ensure `summary.json` carries the matching
-  `manifest_id`/`manifest_cid`; the adoption check fails if either file is
-  missing the pair.
-- **Telemetry expectations:** When telemetry accompanies the capture, run the
-  gate with `--require-telemetry` so the adoption report proves the metrics were
-  emitted. Air-gapped rehearsals can omit the flag, but CI and change tickets
-  should document the absence.
+- **Тасымалдау метадеректері:** `scoreboard.json` хабарлауы керек
+  `transport_policy="direct_only"` (және `transport_policy_override=true` аударыңыз
+  төмендетуге мәжбүрлеген кезде). Жұпталған анонимдік саясат өрістерін сақтаңыз
+  олар әдепкі мәндерді иеленсе де толтырылады, осылайша тексерушілер сізді көре алады
+  кезеңдік анонимдік жоспардан ауытқыған.
+- **Провайдер есептегіштері:** Тек шлюз сеанстары `provider_count=0` сақталуы керек
+  және `gateway_provider_count=<n>` нөмірін Torii провайдерлерінің санымен толтырыңыз
+  пайдаланылады. JSON қолмен өңдеуден аулақ болыңыз — CLI/SDK және санауларын әлдеқашан шығарады
+  қабылдау қақпасы бөлуді өткізбейтін түсірулерді қабылдамайды.
+- **Айқын дәлел:** Torii шлюздері қатысқанда, қол қойылған құжатты өткізіңіз
+  `--gateway-manifest-envelope <path>` (немесе SDK баламасы) сондықтан
+  `gateway_manifest_provided` плюс `gateway_manifest_id`/`gateway_manifest_cid`
+  `scoreboard.json` ішінде жазылған. `summary.json` сәйкестікті тасымалдайтынына көз жеткізіңіз
+  `manifest_id`/`manifest_cid`; егер файлдардың бірі болса, қабылдауды тексеру сәтсіз аяқталады
+  жұпты сағыну.
+- **Телеметриялық күтулер:** Телеметрия түсірумен бірге болған кезде, іске қосыңыз
+  `--require-telemetry` қақпасы бар, сондықтан қабылдау есебі метриканың болғанын дәлелдейді
+  шығарылады. Ауа аралығы бар жаттығулар жалаушаны алып тастауы мүмкін, бірақ CI және билеттерді өзгерту
+  жоқтығын құжаттау керек.
 
-Example:
+Мысалы:
 
 ```bash
 cargo xtask sorafs-adoption-check \
@@ -132,9 +133,7 @@ cargo xtask sorafs-adoption-check \
   --require-direct-only \
   --json-out artifacts/sorafs_direct_mode/adoption_report.json \
   --require-telemetry
-```
-
-Attach `adoption_report.json` alongside the scoreboard, summary, manifest
-envelope, and smoke log bundle. These artefacts mirror what the CI adoption job
-(`ci/check_sorafs_orchestrator_adoption.sh`) enforces and keep direct-mode
-downgrades auditable.
+````adoption_report.json` таблоға, қорытындыға, манифестке тіркеңіз
+конверт және түтін журналының бумасы. Бұл артефактілер CI қабылдау жұмысын көрсетеді
+(`ci/check_sorafs_orchestrator_adoption.sh`) тікелей режимді қамтамасыз етеді және сақтайды
+төмендетеді аудиторлық.

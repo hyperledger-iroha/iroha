@@ -10,39 +10,40 @@ translation_last_reviewed: 2026-02-07
 title: Confidential Gas Calibration Ledger
 description: Release-quality measurements backing the confidential gas schedule.
 slug: /nexus/confidential-gas-calibration
+translator: machine-google-reviewed
 ---
 
-# Confidential Gas Calibration Baselines
+# Құпия газды калибрлеудің негізгі көрсеткіштері
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
+Бұл кітап құпия газ калибрлеуінің расталған нәтижелерін бақылайды
+эталондар. Әрбір жол түсірілген шығару сапасы өлшем жинағын құжаттайды
+[Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates) бөлімінде сипатталған процедура.
 
-| Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
+| Күні (UTC) | Міндеттеме | Профиль | `ns/op` | `gas/op` | `ns/gas` | Ескертпелер |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-12 | pending | baseline-simd-neutral | — | — | — | Scheduled x86_64 neutral run on CI host `bench-x86-neon0`; see ticket GAS-214. Results will be added once the bench window completes (pre-merge checklist targets release 2.1). |
-| 2026-04-13 | pending | baseline-avx2 | — | — | — | Follow-up AVX2 calibration using the same commit/build as the neutral run; requires host `bench-x86-avx2a`. GAS-214 covers both runs with delta comparison against `baseline-neon`. |
+| 18.10.2025 | 3c70a7d3 | базалық-неон | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (хост ақпараты); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| 12.04.2026 | күтуде | baseline-simd-neutral | — | — | — | `bench-x86-neon0` CI хостында жоспарланған x86_64 бейтарап іске қосу; GAS-214 билетін қараңыз. Нәтижелер стендтік терезе аяқталғаннан кейін қосылады (алдын ала біріктіру бақылау тізімінің мақсаттары шығарылымы 2.1). |
+| 13.04.2026 | күтуде | baseline-avx2 | — | — | — | Бейтарап іске қосу сияқты бірдей орындау/құрастыру арқылы AVX2 калибрлеуін бақылау; `bench-x86-avx2a` хостын қажет етеді. GAS-214 `baseline-neon` нұсқасымен дельта салыстыру арқылы екі жұмысты да қамтиды. |
 
-`ns/op` aggregates the median wall-clock per instruction measured by Criterion;
-`gas/op` is the arithmetic mean of the corresponding schedule costs from
-`iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
-the summed gas across the nine-instruction sample set.
+`ns/op` Шартпен өлшенген нұсқау үшін медианалық қабырға сағатын біріктіреді;
+`gas/op` - сәйкес кесте шығындарының орташа арифметикалық мәні
+`iroha_core::gas::meter_instruction`; `ns/gas` жиынтық наносекундтарды келесіге бөледі
+тоғыз инструкциялық үлгі жинағы бойынша қосынды газ.
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*Ескертпе.* Ағымдағы arm64 хосты `raw.csv` шартының қорытындыларын шығармайды.
+қорап; a белгілеу алдында `CRITERION_OUTPUT_TO=csv` немесе жоғары ағынды түзету арқылы қайта іске қосыңыз
+қабылдауды тексеру парағы талап ететін артефактілер қоса тіркелетін етіп шығарыңыз.
+`target/criterion/` `--save-baseline` кейін әлі жоқ болса, жүгірісті жинаңыз.
+Linux хостында немесе консоль шығысын шығарылым жинағына сериялау үшін
+уақытша үзіліс. Анықтама үшін, соңғы іске қосылғаннан arm64 консоль журналы
+`docs/source/confidential_assets_calibration_neon_20251018.log` мекен-жайында тұрады.
 
-Per-instruction medians from the same run (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+Бір орындаудағы әрбір нұсқаудың медианалары (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+| Нұсқау | медианасы `ns/op` | кестесі `gas` | `ns/gas` |
 | --- | --- | --- | --- |
 | RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
+| Register Account | 3.15e5 | 200 | 1.58e3 |
 | RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
 | SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
 | GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
@@ -51,6 +52,6 @@ Per-instruction medians from the same run (`cargo bench -p iroha_core --bench is
 | MintAsset | 1.56e5 | 150 | 1.04e3 |
 | TransferAsset | 3.68e5 | 180 | 2.04e3 |
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+Кесте бағаны `gas::tests::calibration_bench_gas_snapshot` арқылы орындалады
+(тоғыз нұсқаулық жиынтығы бойынша барлығы 1,413 газ) және болашақ патчтар пайда болған жағдайда өшіріледі
+калибрлеу аспаптарын жаңартпай өлшеуді өзгерту.

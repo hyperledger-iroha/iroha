@@ -5,12 +5,14 @@ source: docs/portal/docs/norito-streaming-roadmap.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito Streaming Roadmap
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The following backlog captures the near-term work items the Streaming Working
-Group tracks for Norito audio/video delivery. Values are updated alongside
-`status.md` and shared here for portal consumers who prefer a machine-friendly
-view.
+የሚከተለው የኋላ መዝገብ በቅርብ ጊዜ ያሉትን የስራ እቃዎች የዥረት ስራን ይይዛል
+የቡድን ትራኮች ለ I18NT0000000X ኦዲዮ/ቪዲዮ አቅርቦት። እሴቶች ጎን ለጎን ተዘምነዋል
+`status.md` እና ለማሽን ተስማሚ ለሚመርጡ የፖርታል ተጠቃሚዎች እዚህ ተጋርቷል።
+እይታ.
 
 ```json
 [

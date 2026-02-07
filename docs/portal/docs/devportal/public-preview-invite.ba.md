@@ -11,69 +11,70 @@ id: public-preview-invite
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
 ---
 
-## Program goals
+## Программа маҡсаттары
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+Был playbook аңлата, нисек иғлан итеү һәм йәмәғәтселек алдан ҡарау бер тапҡыр бер тапҡыр
+рецензент onboarding эш ағымы тура эфир. Ул DOCS-I18NT000000002X юл картаһы намыҫын һаҡлай.
+тәьмин итеү һәр саҡырыу караптар менән тикшерелгән артефакттар, хәүефһеҙлек йүнәлеше, һәм а
+асыҡ кире бәйләнеш юлы.
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **Тамашасы:** кураторлыҡ исемлеге йәмәғәтселек ағзалары, партнерҙар, һәм хеҙмәтләндергәндәр, кем
+  ҡул ҡуйҙы алдан ҡарау ҡабул итеү-ҡулланыу сәйәсәте.
+- **Түбәләр:** ғәҙәттә тулҡындың ҙурлығы ≤ 25 рецензенттар, 14 көнлөк инеү тәҙрәһе, ваҡиға
+  24h эсендә яуап.
 
-## Launch gating checklist
+## Ҡапҡа тикшерелгән исемлеген башлау
 
-Complete these tasks before sending any invitation:
+Был эштәрҙе ниндәйҙер саҡырыу ебәрер алдынан тултырығыҙ:
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+1. Һуңғы алдан ҡарау артефакттары тейәлгән CI (I18NI000000018X,
+   чемпионаттың асыҡ, дескрипторы, I18NT00000000000000000000).
+2. `npm run --prefix docs/portal serve` (checksum-gated) шул уҡ тегта һыналған.
+3. Рецензент onboarding билеттары раҫланған һәм саҡырыу тулҡынына бәйле.
+4. Хәүефһеҙлек, күҙәтеүсәнлек, һәм инцидент документтары раҫланған
+   ([`security-hardening`] (./security-hardening.md X),
+   [`observability`] (./observability.md),
+   [`incident-runbooks`] (./incident-runbooks.md)).
+5. Кире бәйләнеш формаһы йәки әҙерләнгән шаблон әҙерләнгән (ауырлыҡ өсөн ҡырҙарҙы үҙ эсенә ала,
+   үрсеү аҙымдары, скриншоттар, һәм тирә-яҡ мөхит мәғлүмәттәре).
+6. Иғлан күсермәһе тикшерелгән Docs/DevRel + идара итеү.
 
-## Invite package
+## Саҡырыу пакеты
 
-Every invite must include:
+Һәр саҡырыу тейеш үҙ эсенә ала:
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **Терелгән артефакттар** — I18NT0000000001X манифест/план йәки GitHub артефакт тәьмин итеү
+   һылтанмалар плюс тикшерелгән сумма манифест һәм дескриптор. Һылтанма тикшерелгән
+   командаһы асыҡтан-асыҡ шулай рецензенттар уны эшләй ала, уны сайтты эшләтеп ебәрер алдынан.
+2. **Хеҙмәтләндереүҙең күрһәтмәләре** — чек-сумка-ҡапҡалы алдан ҡарау командаһын индерегеҙ:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **Хәүефһеҙлек иҫкәртмәләре** — шылтыратыу, тип жетон автоматик рәүештә тамамлана, һылтанмалар
+   бүлешергә ярамай, ваҡиғаларҙы шунда уҡ хәбәр итергә кәрәк.
+4. **Кейем-ҡушымта канал** — Һылтанма мәсьәлә шаблон/форма һәм асыҡлыҡ индереү яуап .
+   ваҡыт өмөттәре.
+5. **Программа даталар** — Башланғыс/аҙағы даталары, офис сәғәттәре йәки синхронлаштырыу осрашыуҙары,
+   һәм сираттағы яңыртыу тәҙрәһе.
 
-The sample email in
-[`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+Өлгө электрон почта 2019 йылда.
+[`docs/examples/docs_preview_invite_template.md`] (../../../examples/docs_preview_invite_template.md)
+был талаптарҙы ҡаплай. Урын хужалары (даталар, URL-адрестар, контакттар) яңыртығыҙ.
+ебәрер алдынан.
 
-## Expose the preview host
+## Алдан ҡарау хостын фашлау
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+Тик пропагандалау алдан ҡарау хост бер тапҡыр onboarding тамамланды һәм үҙгәрештәр билет .
+раҫлана. Ҡарағыҙ [алғын ҡарау хост экспозицияһы буйынса ҡулланма](./preview-host-exposure.md)
+өсөн ос-ос төҙөү/баҫма/тикшерергә аҙымдар был бүлектә ҡулланылған.
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. **Төҙөү һәм пакет:** Штамп релиз тег һәм етештереү детерминистик .
+   артефакттары.
 
    ```bash
    cd docs/portal
@@ -92,18 +93,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   18NI0000024X, I18NI0000000025X, I18NI000000026X тип яҙа.
+   һәм I18NI0000027X I18NI000000028X буйынса. Шул файлдарҙы беркетергә
+   саҡырырға тулҡын шулай һәр рецензент шул уҡ биттарҙы раҫлай ала.
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. **Публиц алдан ҡарау псевдонимы:** I18NI000000029X X
+   (тәьмин итеү I18NI000000000300, I18NI000000031X, I18NI000000032X, һәм был
+   идара итеү менән бирелгән псевдонимға дәлил). Сценарий манифестты бәйләйәсәк.
+   I18NI000000033X һәм I18NI000000034X плюс сығарыу
+   I18NI000000035X өсөн дәлилдәр өйөмө.
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. **Бер зонд таратыу:** Раҫлау псевдонимы хәл итә һәм тикшерелгән сумма матчтар .
+   саҡырыуҙар ебәрер алдынан бирка.
 
    ```bash
    npm run probe:portal -- \
@@ -111,26 +112,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   I18NI000000036X (I18NI0000000037X) ҡулайлы, тип ҡулайлы.
+   fallback шулай рецензенттар локаль күсермәһен әйләндерә ала, әгәр алдан ҡарау сите blips.
 
-## Communications timeline
+## Элемтә ваҡыт һыҙығы
 
-| Day | Action | Owner |
+| Көн | Эш | Хужа |
 | --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| D-3 | Һуңғы саҡырыу күсермәһе, яңыртыу артефакттары, ҡоро-йүгереп тикшерелгән | Док/ДевРел |
+| D-2 | Идара итеү ҡултамғаһы + үҙгәрештәр билеты | Док/ДевРель + идара итеү |
+| D-1 | Ебәрергә саҡыра ҡулланып шаблон, яңыртыу трекер менән алыусы исемлеге | Док/ДевРел |
+| D | Kickoff шылтыратыу / офис сәғәттәре, монитория телеметрия приборҙар таҡтаһы | Док/ДевРель + Он-шылтыратыу |
+| D+7 | Урта нөктә кире бәйләнеш үҙләштереү, триаж блокировка мәсьәләләре | Док/ДевРел |
+| D+14 | Ябыҡ тулҡын, ваҡытлыса инеүҙе кире ҡағыу, I18NI000000038X-та резюме баҫтырыу | Док/ДевРел |
 
-## Access tracking & telemetry
+## инеү күҙәтеү & телеметрия
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+.
+   алдан ҡарау кире бәйләнеш журналгеры (ҡара
+   [I18NI0000000039X X](I18NU000000014X)) шулай итеп, һәр тулҡын бүлешә
+   шул уҡ дәлилдәр эҙ:
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -141,41 +142,41 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   Ярҙамсы саралар — I18NI000000040X, `acknowledged`, .
+   `feedback-submitted`, `issue-opened`, һәм `access-revoked`. Бүрән 2012 йылдың 1000 йылдарҙа йәшәй.
+   I18NI000000045X ғәҙәттәгесә; уны беркетергә
+   саҡырыу тулҡын билеты ризалыҡ формалары менән бергә. Йыйынтыҡ ярҙамсыһын ҡулланығыҙ
+   яҡындан килгән иҫкәрмә алдынан аудитлы ролл етештереү өсөн:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
-   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   JSON йомғаҡлау иҫәп-хисап бер тулҡынға саҡыра, асыҡ алыусылар, кире бәйләнеш
+   һанала, һәм иң һуңғы ваҡиғаның ваҡыт тамғаһы. Ярҙамсыға ярҙам итә.
+   [I18NI000000046X X] (../../scripts/preview-feedback-log.mjs),
+   тимәк, шул уҡ эш ағымы урындағы йәки CI эшләй ала. 1990 йылда дигест шаблонын ҡулланығыҙ.
+   [I18NI000000047X] (I18NU000000016X)
+   тулҡын резюмеһын баҫтырғанда.
+2. Tag телеметрия приборҙар таҡталары менән I18NI00000000048X тулҡын өсөн ҡулланыла, шулай
+   шпиктарҙы саҡырыу когорталары менән бәйләргә мөмкин.
+3. Йүгерергә I18NI00000000049X һуң таратыу өсөн .
+   раҫлау алдан ҡарау мөхите реклама дөрөҫ сығарыу метамағлүмәттәр.
+4. Йүгереп китап шаблонында ниндәй ҙә булһа ваҡиғаларҙы тотоп, уларҙы когортаға бәйләгеҙ.
 
-## Feedback & close-out
+## Кире бәйләнеш & яҡын-аут
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+1. Дөйөм doc йәки сығарыу таҡтаһында кире бәйләнеш агрегат. Ярлыҡ әйберҙәре менән .
+   `docs-preview/<wave>` шулай юл картаһы хужалары уларҙы еңел генә эҙләй ала.
+2. Ҡулланыу алдан ҡарау логгер’s йыйнаҡ сығыш өсөн тулҡын отчет тултырыу, һуңынан
+   дөйөмләштереү когортаһы I18NI0000000051X (ҡатнашыусылар, ҙур табыштар, планлаштырылған
+   төҙәтеүҙәр) һәм яңыртыу I18NI000000052Х, әгәр DOCS-I18NT000000003X ҙурлыҡ үҙгәргән.
+3.
+   [I18NI000000053X] (I18NU000000017X): рөхсәт алыу, архив
+   үтенестәр, һәм ҡатнашыусыларға рәхмәт.
+4. Киләһе тулҡынды яңыртыу артефакттарын әҙерләгеҙ, тикшерелгән сумма ҡапҡаларын яңынан йүгертегеҙ,
+   һәм яңы даталар менән саҡырыу шаблонын яңыртыу.
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+Был playbook ҡулланыу эҙмә-эҙлекле ҡулланыу алдан ҡарау программаһы аудит һәм
+Docs/DevRel бирә ҡабатланған ысул масштаблы саҡыра, сөнки портал яҡынлаша GA.

@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cd018a94197722adfbb9d54bf02f1c486147078174ba4c81f32e9d93b8c3f6d5
 source_last_modified: "2026-01-22T16:26:46.473419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
--->
+--> X
 
-# Repo Governance Packet Template (Roadmap F1)
+# Репо идара итеү пакет ҡалыптары (Род картаһы F1)
 
-Use this template when preparing the artefact bundle required by roadmap item
-F1 (repo lifecycle documentation & tooling). The goal is to hand reviewers a
-single Markdown file that lists every input, hash, and evidence bundle so the
-governance council can replay the bytes referenced in the proposal.
+Был ҡалыпты ҡулланып, юл картаһы әйбере талап иткән артефакт өйөмөн әҙерләгеҙ
+F1 (репо йәшәү циклы документацияһы & инструменттар). Маҡсат-рецензиялаусыларҙы ҡуллау а
+бер Markdown файл, тип исемлеккә һәр индереү, хеш, һәм дәлилдәр өйөм шулай .
+идара итеү советы тәҡдимдә һылтанма яһалған байттарҙы яңынан уйнай ала.
 
-> Copy the template into your own evidence directory (for example
-> `artifacts/finance/repo/2026-03-15/packet.md`), replace the placeholders, and
-> commit/upload it next to the hashed artefacts referenced below.
+> Күсерергә шаблон үҙ дәлилдәр каталогы (мәҫәлән,
+> `artifacts/finance/repo/2026-03-15/packet.md`), урын хужаларын алмаштырырға, һәм
+> йөкләмә/йөкләү уны эргәһендә хешированный артефакттар һылтанма түбән.
 
-## 1. Metadata
+## 1. Метадата
 
-| Field | Value |
-|-------|-------|
-| Agreement/change identifier | `<repo-yyMMdd-XX>` |
-| Prepared by / date | `<desk lead> – 2026-03-15T10:00Z` |
-| Reviewed by | `<dual-control reviewer(s)>` |
-| Change type | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
-| Custodian(s) | `<custodian id(s)>` |
-| Linked proposal / referendum | `<governance ticket id or GAR link>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+| Ялан | Ҡиммәте |
+|------|-------|
+| Килешеү/үҙгәреш идентификаторы | I18NI0000011X |
+| / дата менән әҙерләнгән | I18NI0000012X |
+| | I18NI0000013X |
+| Тип үҙгәртеү | I18NI0000014X |
+| Һаҡлаусы(ы) | `<custodian id(s)>` |
+| Һылтанмалы тәҡдим / референдум | `<governance ticket id or GAR link>` |
+| Дәлилдәр каталогы | ``artifacts/finance/repo/<slug>/`` |
 
-## 2. Instruction Payloads
+## 2. Инструкция түләү йөкләмәләр
 
-Record the staged Norito instructions that desks signed off on via
-`iroha app repo ... --output`. Each entry should include the hash of the emitted
-file and a short description of the action that will be submitted once the vote
-passes.
+Яҙма стадияһында I18NT00000000001X инструкциялары, өҫтәлдәр аша ҡул ҡуйылған .
+`iroha app repo ... --output`. Һәр яҙма тейеш ине хеш хеш
+файл һәм ҡыҫҡаса тасуирлама ғәмәл, улар тапшырыласаҡ бер тапҡыр тауыш биреү
+үтә.
 
-| Action | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Initiate | `instructions/initiate.json` | `<sha256>` | Contains the cash/collateral legs approved by desk + counterparty. |
-| Margin call | `instructions/margin_call.json` | `<sha256>` | Captures cadence + participant id that triggered the call. |
-| Unwind | `instructions/unwind.json` | `<sha256>` | Proof of the reverse-leg once conditions are met. |
+| Эш | Файл | SHA-256 | Иҫкәрмәләр |
+|-------|------|----------|-------|
+| Инициатив | `instructions/initiate.json` | `<sha256>` | Үҙ составында аҡса/залог аяҡтары раҫланған өҫтәл + контрагент. |
+| Маргин шылтыратыу | `instructions/margin_call.json` | `<sha256>` | Ҡатнашыусылар каденция + ҡатнашыусы id, тип шылтыратыуҙы тыуҙырҙы. |
+| Образ | `instructions/unwind.json` | `<sha256>` | Шарттар үтәлгәс, кире аяҡтың иҫбатлауы. |
 
 ```bash
 # Example hash helper (repeat per instruction file)
@@ -55,28 +56,28 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json \
   | tee artifacts/finance/repo/<slug>/hashes/initiate.sha256
 ```
 
-## 2.1 Custodian Acknowledgements (tri-party only)
+## 2.1 Һаҡлаусы таныу (три-партия ғына)
 
-Complete this section whenever a repo uses `--custodian`. The governance packet
-must include a signed acknowledgement from each custodian plus the hash of the
-file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
+Был бүлекте тултырырға, ҡасан да булһа репо ҡулланыу I18NI000000025X. Идара итеү пакеты
+тейеш, һәр һаҡсы плюс хеш ҡул ҡуйылған таныуҙы үҙ эсенә ала
+файл һылтанма §2.8 `docs/source/finance/repo_ops.md`.
 
-| Custodian | File | SHA-256 | Notes |
-|-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+| Һаҡсы | Файл | SHA-256 | Иҫкәрмәләр |
+|---------|-------|----------|-------|
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Ҡул ҡуйылған SLA ҡаплау опека тәҙрә, маршрутлаштырыу иҫәбенә, һәм быраулау контакт. |
 
-> Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
-> so `scripts/repo_evidence_manifest.py` records the file in the same tree as
-> the staged instructions and config snippets. See
-> `docs/examples/finance/repo_custodian_ack_template.md` for a ready-to-fill
-> template that matches the governance evidence contract.
+> Һаҡлау таныу эргәһендә башҡа дәлилдәр (I18NI000000030X)
+> шулай I18NI0000000031X файлды шул уҡ ағаста теркәй.
+> сәхнәләштерелгән күрһәтмәләр һәм конфигурация өҙөктәре. Күрергә
+> I18NI0000000032X әҙер өсөн әҙер
+> шаблон, тип тап килә идара итеү дәлилдәре килешеп.
 
-## 3. Configuration Snippet
+## 3. Конфигурация өҙөк
 
-Paste the `[settlement.repo]` TOML block that will land on the cluster (including
-`collateral_substitution_matrix`). Store the hash next to the snippet so
-auditors can confirm the runtime policy that was active when the repo booking
-was approved.
+Кластерға төшәсәк I18NI000000033X TOML блогын йәбештереү (шул иҫәптән
+`collateral_substitution_matrix`). Һаҡлау хеш эргәһендә өҙөк шулай
+аудиторҙар раҫлай ала йүгерә сәйәсәте, был әүҙем булды, ҡасан репо бронирование
+раҫланды.
 
 ```toml
 [settlement.repo]
@@ -87,14 +88,14 @@ default_margin_percent = "0.025"
 "bond#wonderland" = ["bill#wonderland"]
 ```
 
-`SHA-256 (config snippet): <sha256>`
+I18NI000000035X
 
-### 3.1 Post-Approval Configuration Snapshots
+### 3.1 Пост-раҫлау конфигурацияһы осҡостары
 
-After the referendum or governance vote completes and the `[settlement.repo]`
-change is rolled out, capture `/v1/configuration` snapshots from every peer so
-auditors can prove the approved policy is live across the cluster (see
-`docs/source/finance/repo_ops.md` §2.9 for the evidence workflow).
+Референдум йәки идара итеү тауыш биреүҙән һуң тамамлана һәм I18NI000000036XX .
+үҙгәрештәр йәйелдерелгән, тотоу I18NI000000000037X снимоктар һәр тиҫтерҙәрҙән шулай
+аудиторҙар иҫбатлай ала раҫланған сәйәсәт тура эфирҙа кластер (ҡара
+`docs/source/finance/repo_ops.md` §2.9 өсөн дәлилдәр эш ағымы).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
@@ -103,37 +104,37 @@ curl -fsSL https://peer01.example/v1/configuration \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
-| Peer / source | File | SHA-256 | Block height | Notes |
-|---------------|------|---------|--------------|-------|
-| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot captured immediately after the config rollout. |
-| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | Confirms `[settlement.repo]` matches the staged TOML. |
+| Тиҫтер / сығанаҡ | Файл | SHA-256 | Блок бейеклеге | Иҫкәрмәләр |
+|------------|--------------------------------|--------|
+| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot конфигурацияланғандан һуң шунда уҡ төшөрөлгән. |
+| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | `[settlement.repo]` раҫланған сәхнәләштерелгән ТОМЛ-ға тап килә. |
 
-Record the digests alongside the peer ids in `hashes.txt` (or the equivalent
-summary) so reviewers can trace which nodes ingested the change. The snapshots
-live under `config/peers/` next to the TOML snippet and will be picked up
-automatically by `scripts/repo_evidence_manifest.py`.
+Яҙыу distests менән бергә тиҫтерҙәре ids I18NI0000000048X (йәки эквивалентлы
+резюме) шулай рецензенттар эҙләй ала, ниндәй төйөндәр үҙгәреш ашаған. Снимоктар
+йәшәү I18NI0000000049X аҫтында эргәһендә TOML өҙөк һәм йыйып аласаҡ
+автоматик рәүештә I18NI000000050X.
 
-## 4. Deterministic Test Artefacts
+## 4. Детерминистик һынау артефакттары
 
-Attach the latest outputs from:
+Һуңғы сығыштарҙы беркетергә:
 
-- `cargo test -p iroha_core -- repo_deterministic_lifecycle_proof_matches_fixture`
-- `cargo test --package integration_tests --test repo`
+- I18NI000000051X
+- I18NI000000052X
 
-Record file paths + hashes for the log bundles or JUnit XML produced by your CI
-system.
+Яҙма файл юлдары + хештар өсөн лог өйөмдәре йәки JUnit XML етештерелгән һеҙҙең CI .
+система.
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Lifecycle proof log | `tests/repo_lifecycle.log` | `<sha256>` | Captured with `--nocapture` output. |
-| Integration test log | `tests/repo_integration.log` | `<sha256>` | Includes substitution + margin cadence coverage. |
+| Артефакт | Файл | SHA-256 | Иҫкәрмәләр |
+|--------|-------|----------|-------|
+| Йәшәү циклы иҫбатлау журналы | `tests/repo_lifecycle.log` | `<sha256>` | I18NI000000055Х сығышы менән төшөрөлгән. |
+| Интеграция тест журналы | `tests/repo_integration.log` | `<sha256>` | Алмаштырыуҙы үҙ эсенә ала + маржа каденцияһын ҡаплау. |
 
-## 5. Lifecycle Proof Snapshot
+## 5. Тормош циклы иҫбатлау Снимок
 
-Every packet must include the deterministic lifecycle snapshot exported from
-`repo_deterministic_lifecycle_proof_matches_fixture`. Run the harness with the
-export knobs enabled so reviewers can diff the JSON frame and digest against
-the fixture tracked in `crates/iroha_core/tests/fixtures/` (see
+Һәр пакетта 2012 йылдан экспортланған детерминистик тормош циклы снимоктарын үҙ эсенә алырға тейеш.
+`repo_deterministic_lifecycle_proof_matches_fixture`. Йүгерҙе менән йүгерергә
+экспорт ручкалары өҫтөндә эшләй, шуға күрә рецензенттар JSON рамкаһын һәм үҙләштереүгә ҡаршы айыра ала
+матч I18NI000000059X-та күҙәтелә (ҡара:
 `docs/source/finance/repo_ops.md` §2.7).
 
 ```bash
@@ -143,24 +144,24 @@ cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
 ```
 
-Or use the pinned helper to regenerate the fixtures and copy them into your
-evidence bundle in one step:
+Йәки ҡулланыу өсөн ярҙамсы пинировать тергеҙергә ҡоролмалары һәм уларҙы күсерергә һеҙҙең
+дәлилдәр бер аҙымда бәйләнгән:
 
 ```bash
 scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
   --bundle-dir artifacts/finance/repo/<slug>
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Snapshot JSON | `repo_proof_snapshot.json` | `<sha256>` | Canonical lifecycle frame emitted by the proof harness. |
-| Digest file | `repo_proof_digest.txt` | `<sha256>` | Uppercase hex digest mirrored from `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`; attach even when unchanged. |
+| Артефакт | Файл | SHA-256 | Иҫкәрмәләр |
+|--------|-------|----------|-------|
+| Snapshot JSON | `repo_proof_snapshot.json` | `<sha256>` | Канонлы тормош циклы рамкаһы иҫбатлау йүгәне менән сығарылған. |
+| Дайджест файлы | `repo_proof_digest.txt` | `<sha256>` | Өҫкө hex distest көҙгө I18NI000000065X; үҙгәрешһеҙ хатта беркетергә. |
 
-## 6. Evidence Manifest
+## 6. Дәлилдәр манифесы
 
-Generate the manifest for the entire evidence directory so auditors can verify
-hashes without unpacking the archive. The helper mirrors the workflow described
-in `docs/source/finance/repo_ops.md` §3.2.
+генерациялау өсөн манифест бөтә дәлилдәр каталогы, шулай итеп, аудиторҙар раҫлай ала
+хештар архивты сисмәйенсә. Ярҙам эш ағымын көҙгөләй һүрәтләй
+I18NI000000666X §3.2.
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -169,40 +170,40 @@ python3 scripts/repo_evidence_manifest.py \
   --output artifacts/finance/repo/<slug>/manifest.json
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Include the checksum in the governance ticket / referendum notes. |
+| Артефакт | Файл | SHA-256 | Иҫкәрмәләр |
+|--------|-------|----------|-------|
+| Дәлилдәр манифест | `manifest.json` | `<sha256>` | Тикшерелеү суммаһы идара итеү билет / референдум иҫкәрмәләрен индереү. |
 
-## 7. Telemetry & Event Snapshot
+## 7. Телеметрия & Ваҡиға снимок
 
-Export the relevant `AccountEvent::Repo(*)` entries and any dashboards or CSV
-exports referenced in `docs/source/finance/repo_ops.md`. Record the files +
-hashes here so reviewers can jump straight to the evidence.
+Экспорт тейешле I18NI0000000069X X яҙмалар һәм теләһә ниндәй приборҙар таҡтаһы йәки CSV
+экспорты `docs/source/finance/repo_ops.md`-та һылтанма яһала. Файлдарҙы яҙып алыу + .
+хеш бында шулай рецензенттар туранан-тура дәлилдәргә һикерә ала.
 
-| Export | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Repo events JSON | `evidence/repo_events.ndjson` | `<sha256>` | Raw Torii event stream filtered to the desk accounts. |
-| Telemetry CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | Exported from Grafana using the Repo Margin panel. |
+| Экспорт | Файл | SHA-256 | Иҫкәрмәләр |
+|-------|------|----------|-------|
+| Репо ваҡиғалар JSON | `evidence/repo_events.ndjson` | `<sha256>` | Өҫтәл иҫәптәренә фильтрланған сеймал Torii ваҡиға ағымы. |
+| Телеметрия CSV | I18NI0000073X | `<sha256>` | I18NT000000000X экспортланған Repo Margin панелендә ҡулланып. |
 
-## 8. Approvals & Signatures
+## 8. Раҫлауҙар һәм ҡултамғалар
 
-- **Dual-control signers:** `<names + timestamps>`
-- **GAR / minutes digest:** `<sha256>` of the signed GAR PDF or minutes upload.
-- **Storage location:** `governance://finance/repo/<slug>/packet/`
+- **Ике-контроль ҡул ҡуйыусылар:** `<names + timestamps>`
+- **ГАР / минут һеңдереүҙең:** `<sha256>` ҡултамғалы GAR PDF йәки минут тейәү.
+- **Һаҡлау урыны:** I18NI000000077X
 
-## 9. Checklist
+## 9.
 
-Mark each item once complete.
+Һәр әйберҙе бер тапҡыр тулы итеп билдәләгеҙ.
 
-- [ ] Instruction payloads staged, hashed, and attached.
-- [ ] Configuration snippet hash recorded.
-- [ ] Deterministic test logs captured + hashed.
-- [ ] Lifecycle snapshot + digest exported.
-- [ ] Evidence manifest generated and hash recorded.
-- [ ] Event/telemetry exports captured + hashed.
-- [ ] Dual-control acknowledgements archived.
-- [ ] GAR/minutes uploaded; digest recorded above.
+- [ ] Инструкция файҙалы йөктәр ҡуйылған, хешировать, һәм беркетелгән.
+- [ ] Конфигурация өҙөк хеш яҙылған.
+- [ ] Детерминистик тест журналдары + хешедты төшөргән.
+- [ ] Йәшәү циклы снимок + экспортланған үҙләштереү.
+- [ ] Дәлилдәр генерацияланған һәм хеш теркәлгән.
+- [ ] Ваҡиға/телеметрия экспорты төшөрөлгән + хеш.
+- [ ] Дуал-контроль таныуҙары архивланған.
+- [ ] ГАР/минут тейәп; өҫтән яҙылған дайджест.
 
-Maintaining this template alongside every packet keeps the governance DAG
-deterministic and provides auditors with a portable manifest for repo lifecycle
-decisions.
+Был ҡалыпты һаҡлау һәр пакет менән бергә идара итеү DAG тота .
+детерминистик һәм аудиторҙар менән тәьмин итеү өсөн күсмә манифест өсөн репо йәшәү циклы
+ҡарарҙары.

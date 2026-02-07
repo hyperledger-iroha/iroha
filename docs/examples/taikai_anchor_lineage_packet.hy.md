@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a2037fed472e37a06559e7cd871c1b916b514b9804f309413fc369d5ded662b6
 source_last_modified: "2025-12-29T18:16:35.095373+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Taikai Anchor Lineage Packet Template (SN13-C)
+# Taikai Anchor Lineage փաթեթի ձևանմուշ (SN13-C)
 
-Roadmap item **SN13-C — Manifests & SoraNS anchors** requires every alias
-rotation to ship a deterministic evidence bundle. Copy this template into your
-rollout artefact directory (for example
-`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md`) and replace
-the placeholders before submitting the packet to governance.
+Ճանապարհային քարտեզի կետը **SN13-C — Manifests & SoraNS anchors** պահանջում է յուրաքանչյուր այլանուն
+ռոտացիա՝ դետերմինիստական ապացույցների փաթեթ ուղարկելու համար: Պատճենեք այս ձևանմուշը ձեր մեջ
+արտեֆակտ գրացուցակի տեղադրում (օրինակ
+`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md`) և փոխարինել
+տեղապահները նախքան փաթեթը կառավարման հանձնելը:
 
-## 1. Metadata
+## 1. Մետատվյալներ
 
-| Field | Value |
+| Դաշտային | Արժեք |
 |-------|-------|
-| Event ID | `<taikai.event.launch-2026-07-10>` |
-| Stream / rendition | `<main-stage>` |
-| Alias namespace / name | `<sora / docs>` |
-| Evidence directory | `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
-| Operator contact | `<name + email>` |
-| GAR / RPT ticket | `<governance ticket or GAR digest>` |
+| Միջոցառման ID | `<taikai.event.launch-2026-07-10>` |
+| Հեռարձակում / կատարում | `<main-stage>` |
+| Այլանուն անվանատարածք / անունը | `<sora / docs>` |
+| Ապացույցների տեղեկատու | `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
+| Օպերատորի հետ կապ | `<name + email>` |
+| GAR / RPT տոմս | `<governance ticket or GAR digest>` |
 
-## Bundle helper (optional)
+## Փաթեթի օգնական (ըստ ցանկության)
 
-Copy the spool artefacts and emit a JSON (optionally signed) summary before
-filling in the remaining sections:
+Պատճենեք կծիկի արտեֆակտները և թողարկեք JSON (ըստ ցանկության ստորագրված) ամփոփագիր
+լրացնելով մնացած բաժինները.
 
 ```bash
 cargo xtask taikai-anchor-bundle \
@@ -45,67 +46,67 @@ cargo xtask taikai-anchor-bundle \
   --signing-key <hex-ed25519-optional>
 ```
 
-The helper pulls `taikai-anchor-request-*`, `taikai-trm-state-*`,
-`taikai-lineage-*`, envelopes, and sentinels out of the Taikai spool directory
-(`config.da_ingest.manifest_store_dir/taikai`) so the evidence folder already
-contains the exact files referenced below.
+Օգնականը քաշում է `taikai-anchor-request-*`, `taikai-trm-state-*`,
+`taikai-lineage-*`, ծրարներ և պահապաններ Taikai կծիկի գրացուցակից դուրս
+(`config.da_ingest.manifest_store_dir/taikai`), ուստի ապացույցների թղթապանակն արդեն
+պարունակում է ստորև նշված ճշգրիտ ֆայլերը:
 
-## 2. Lineage ledger & hint
+## 2. Տոհմային մատյան և հուշում
 
-Attach both the on-disk lineage ledger and the hint JSON Torii wrote for this
-window. These come directly from
-`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` and
+Կցեք և՛ սկավառակի տոհմային մատյանը, և՛ JSON Torii-ի ակնարկը, որը գրել է դրա համար
+պատուհան. Սրանք ուղղակիորեն գալիս են
+`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` և
 `taikai-lineage-<lane>-<epoch>-<sequence>-<storage_ticket>-<fingerprint>.json`.
 
-| Artefact | File | SHA-256 | Notes |
+| Արտեֆակտ | Ֆայլ | SHA-256 | Ծանոթագրություններ |
 |----------|------|---------|-------|
-| Lineage ledger | `taikai-trm-state-docs.json` | `<sha256>` | Proves the previous manifest digest/window. |
-| Lineage hint | `taikai-lineage-l1-140-6a-b2b.json` | `<sha256>` | Captured before uploading to SoraNS anchor. |
+| Տոհմային մատյան | `taikai-trm-state-docs.json` | `<sha256>` | Ապացուցում է նախորդ մանիֆեստի ամփոփումը/պատուհանը: |
+| Տոհմային ակնարկ | `taikai-lineage-l1-140-6a-b2b.json` | `<sha256>` | Նկարված է SoraNS խարիսխում վերբեռնելուց առաջ: |
 
 ```bash
 sha256sum artifacts/taikai/anchor/<event>/<alias>/<ts>/taikai-trm-state-*.json \
   | tee artifacts/taikai/anchor/<event>/<alias>/<ts>/hashes/lineage.sha256
 ```
 
-## 3. Anchor payload capture
+## 3. Խարիսխի օգտակար բեռի գրավում
 
-Record the POST payload that Torii delivered to the anchor service. The payload
-includes `envelope_base64`, `ssm_base64`, `trm_base64`, and the inline
-`lineage_hint` object; audits rely on this capture to prove the hint that was
-sent to SoraNS. Torii now writes this JSON automatically as
+Գրանցեք POST-ի ծանրաբեռնվածությունը, որը Torii-ը տրամադրել է խարիսխ ծառայությանը: Օգտակար բեռը
+ներառում է `envelope_base64`, `ssm_base64`, `trm_base64` և inline
+`lineage_hint` օբյեկտ; աուդիտները հիմնվում են այս գրավման վրա՝ ապացուցելու այն ակնարկը, որը եղել է
+ուղարկվել է SoraNS-ին։ Torii-ն այժմ գրում է այս JSON-ը ավտոմատ կերպով որպես
 `taikai-anchor-request-<lane>-<epoch>-<sequence>-<ticket>-<fingerprint>.json`
-inside the Taikai spool directory (`config.da_ingest.manifest_store_dir/taikai/`), so
-operators can copy it directly instead of scraping HTTP logs.
+Taikai spool գրացուցակի ներսում (`config.da_ingest.manifest_store_dir/taikai/`), այսպես
+օպերատորները կարող են այն ուղղակիորեն պատճենել՝ HTTP տեղեկամատյանները քերելու փոխարեն:
 
-| Artefact | File | SHA-256 | Notes |
+| Արտեֆակտ | Ֆայլ | SHA-256 | Ծանոթագրություններ |
 |----------|------|---------|-------|
-| Anchor POST | `requests/2026-07-10T18-00Z.json` | `<sha256>` | Raw request copied from `taikai-anchor-request-*.json` (Taikai spool). |
+| Խարիսխ ՓՈՍՏ | `requests/2026-07-10T18-00Z.json` | `<sha256>` | Հում հարցումը պատճենված է `taikai-anchor-request-*.json`-ից (Taikai spool): |
 
-## 4. Manifest digest acknowledgement
+## 4. Դիջեստի բացահայտ ճանաչում
 
-| Field | Value |
+| Դաշտային | Արժեք |
 |-------|-------|
-| New manifest digest | `<hex digest>` |
-| Previous manifest digest (from hint) | `<hex digest>` |
-| Window start / end | `<start seq> / <end seq>` |
-| Acceptance timestamp | `<ISO8601>` |
+| Նոր մանիֆեստի ամփոփում | `<hex digest>` |
+| Նախորդ մանիֆեստը մարսել (ակնարկից) | `<hex digest>` |
+| Պատուհանի սկիզբ / ավարտ | `<start seq> / <end seq>` |
+| Ընդունման ժամանակացույց | `<ISO8601>` |
 
-Reference the ledger/hint hashes recorded above so reviewers can verify the
-window that was superseded.
+Հղեք վերևում գրանցված մատյան/ակնարկ հեշերին, որպեսզի վերանայողները կարողանան ստուգել այն
+պատուհան, որը փոխարինվել է:
 
-## 5. Metrics / `taikai_alias_rotations`
+## 5. Չափումներ / `taikai_alias_rotations`
 
-- `taikai_trm_alias_rotations_total` snapshot: `<Prometheus query + export path>`
-- `/status taikai_alias_rotations` dump (per alias): `<file path + hash>`
+- `taikai_trm_alias_rotations_total` լուսանկար՝ `<Prometheus query + export path>`
+- `/status taikai_alias_rotations` աղբանոց (ըստ այլանունի)՝ `<file path + hash>`
 
-Provide the Prometheus/Grafana export or `curl` output that shows the counter
-increment and the `/status` array for this alias.
+Տրամադրեք Prometheus/Grafana արտահանումը կամ `curl` ելքը, որը ցույց է տալիս հաշվիչը
+ավելացում և `/status` զանգված այս անունի համար:
 
-## 6. Manifest for the evidence directory
+## 6. Մանիֆեստ ապացույցների գրացուցակի համար
 
-Generate a deterministic manifest of the evidence directory (spool files,
-payload capture, metrics snapshots) so governance can verify every hash without
-unpacking the archive.
+Ստեղծեք ապացույցների գրացուցակի դետերմինիստական մանիֆեստ (սպոլ ֆայլեր,
+ծանրաբեռնվածության գրավում, չափումների նկարներ), որպեսզի կառավարումը կարողանա ստուգել յուրաքանչյուր հեշ առանց
+բացել արխիվը:
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -114,19 +115,19 @@ python3 scripts/repo_evidence_manifest.py \
   --output artifacts/taikai/anchor/<event>/<alias>/<ts>/manifest.json
 ```
 
-| Artefact | File | SHA-256 | Notes |
+| Արտեֆակտ | Ֆայլ | SHA-256 | Ծանոթագրություններ |
 |----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Attach this to the governance packet / GAR. |
+| Ապացույցների դրսևորում | `manifest.json` | `<sha256>` | Կցեք սա կառավարման փաթեթին / GAR: |
 
-## 7. Checklist
+## 7. ստուգաթերթ
 
-- [ ] Lineage ledger copied + hashed.
-- [ ] Lineage hint copied + hashed.
-- [ ] Anchor POST payload captured and hashed.
-- [ ] Manifest digest table filled in.
-- [ ] Metrics snapshots exported (`taikai_trm_alias_rotations_total`, `/status`).
-- [ ] Manifest generated with `scripts/repo_evidence_manifest.py`.
-- [ ] Packet uploaded to governance with hashes + contact info.
+- [ ] Lineage մատյանը պատճենված + հաշված:
+- [ ] Lineage ակնարկը պատճենված է + հեշացված:
+- [ ] Anchor POST-ի օգտակար բեռը գրավված և հեշացված է:
+- [ ] Մանիֆեստի ամփոփման աղյուսակը լրացված է:
+- [ ] Չափման ակնարկներ արտահանված (`taikai_trm_alias_rotations_total`, `/status`):
+- [ ] Մանիֆեստը ստեղծվել է `scripts/repo_evidence_manifest.py`-ով:
+- [ ] Փաթեթը վերբեռնված է կառավարման համակարգ՝ հեշերով + կոնտակտային տվյալներով:
 
-Maintaining this template for every alias rotation keeps the SoraNS governance
-bundle reproducible and ties lineage hints directly to the GAR/RPT evidence.
+Այս ձևանմուշի պահպանումը յուրաքանչյուր այլ կեղծանունի ռոտացիայի համար պահպանում է SoraNS-ի կառավարումը
+փաթեթը վերարտադրելի է և կապում է տոհմային ակնարկները ուղղակիորեն GAR/RPT ապացույցներին:

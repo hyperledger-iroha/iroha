@@ -8,73 +8,75 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> Юл картаһы: **SF-1b — Сора парламент ҡоролмаһы раҫлауҙары.**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+Ҡулға ҡул ҡуйыу ритуалы I18NT000000000000000 өсөн ҡулланылған chunker ҡоролмалары пенсияға сыға. Бөтә
+раҫлау хәҙер аша ағып **Сора парламент**, сорттарға нигеҙләнгән DAO, тип
+Nexus идара итә. Парламент ағзалары облигациялар XOR гражданлыҡ алыу өсөн, әйләнеш аша .
+панелдәр, һәм сылбырҙа тауыш бирә, тип раҫлай, кире ҡағыу, йәки кире ҡоролма ролл
+сыға. Был ҡулланма аңлата процесы һәм эшләүсе инструменттар.
 
-## Parliament overview
+## Парламент дөйөм мәғлүмәт
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **Гражданлыҡ** — Операторҙар граждандарға яҙылыу өсөн кәрәкле XOR-ҙы бәйләй һәм
+  сорттарға хоҡуҡлы булып.
+- **Панелдар** — Яуаплылыҡтар әйләнешле панелдәр аша бүленгән (Инфраструктура,
+  Модерация, ҡаҙна, ...). Инфраструктура панелендә I18NT000000001X ҡоролмаһы бар.
+  раҫлауҙар.
+- **Сурция & әйләнеш** — Панель урындарында 1990 йылда күрһәтелгән каденцияла яңынан һыҙыла.
+  Парламент конституцияһы, шуға күрә бер төркөм монополиялар раҫлауҙар юҡ.
 
-## Fixture approval flow
+## раҫлау ағымын нығытығыҙ
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **Тәҡдимдәр тапшырыу**
+   - Ҡораллы WG кандидатты тейәп I18NI0000000011X өйөмө плюс
+     матч дифф сылбырлы реестр аша I18NI000000012X.
+   - Тәҡдимдә BLAKE3 үҙләштереү, семантик версия, һәм үҙгәртергә иҫкәрмәләр яҙылған.
+2. **Тикшерергә & тауыш биреү**
+   - Инфраструктура панелендә йөкләмәне Парламент бурысы аша ала
+     сират.
+   - Панель ағзалары CI артефакттарын тикшерә, паритет һынауҙарын йүгерә, һәм ҡойолған
+     тауыш бирә сылбыр.
+3. **Финализация**
+   - Бер тапҡыр кворум үтәлгән, эшләү ваҡыты раҫлау сараһы сығара, тип үҙ эсенә ала
+     канонлы асыҡ үҙләштереү һәм Меркл йөкләмәһенә йөкләмә.
+   - Сара I18NT0000000002X реестрына көҙгөләнә, шулай итеп клиенттар ҙа килеп сыға ала
+     һуңғы Парламент раҫлаған манифест.
+4. **Тәбәберәк**
+   - CLI ярҙамсылары (I18NI000000013X) раҫланған манифест тарта
+     Nexus РПК-нан. Репозиторий’s JSON/TS/Go константалары синхронлаштырыу буйынса ҡала.
+     ҡабаттан йүгерә `export_vectors` һәм сылбыр өҫтөндәге дигесты раҫлау
+     яҙымта.
 
-## Developer workflow
+## Үҫешселәр эш ағымы
 
-- Regenerate fixtures with:
+- Приборҙар менән регенерациялау:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- Ҡулланыу парламенты ярҙамсыһы скачать раҫланған конверт, раҫлау
+  ҡултамғалар, һәм урындағы ҡорамалдарҙы яңыртыу. I18NI000000015X нөктәһендә.
+  Парламент менән баҫылған конверт; ярҙамсыһы оҙатыусы манифестты хәл итә,
+  BLAKE3 үҙләштереүен яңынан иҫәпләү, һәм канонлы үтәй
+  `sorafs.sf1@1.0.0` профиле.
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
   --signatures https://nexus.example/api/sorafs/manifest_signatures.json \
   --out fixtures/sorafs_chunker
-```
+``` X
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+Pass `--manifest`, әгәр манифест йәшәй икенсе URL. Ҡултамғаһыҙ конверттар
+әгәр I18NI000000018X урындағы төтөн йүгерә өсөн билдәләнгән, әгәр ҙә баш тартыла.
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- Ҡасан раҫлау манифест аша сәхнәләштереү шлюз, маҡсатлы I18NT000000007X урынына .
+  урындағы файҙалы йөктәр:
 
 ```bash
 sorafs-fetch \
@@ -85,31 +87,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- Урындағы CI инде `signer.json` исемлеген талап итмәй.
+  I18NI000000020X репо дәүләтен һуңғыһына ҡаршы сағыштыра
+  сылбырлы йөкләмә һәм улар айырылғанда уңышһыҙлыҡҡа осрай.
 
-## Governance notes
+## Идара итеү тураһында иҫкәрмәләр
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- Парламент конституцияһы кворум, ротация һәм эскалация менән идара итә — юҡ
+  йәшник кимәлендә конфигурация кәрәк.
+- Ғәҙәттән тыш хәлдәрҙе кире ҡағыуҙар Парламенттың модерация панелендә эшкәртелә. 1990 й.
+  Инфраструктура панелдәре файлдар кире тәҡдимгә һылтанма алдан манифест
+  distest, ул бер тапҡыр раҫланған релизды алмаштыра.
+- I18NT0000000003X реестрында суд-медицина өсөн тарихи раҫлауҙар ҡала
+  реплей.
 
 ## FAQ
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **Ҡайҙа `signer.json` барҙы?**  
+  Уны алып ташлағандар. Бөтә ҡул ҡуйыусы атрибуция йәшәй сылбырҙа; `manifest_signatures.json`
+  һаҡлағысында тик эшләүсе ҡоролма ғына, улар һуңғыһына тап килергә тейеш
+  раҫлау сараһы.
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- **Беҙ һаман да урындағы Ed25519 ҡултамғаларын талап итәме?**  
+  Юҡ, парламент раҫлауҙары сылбырлы артефакттар булараҡ һаҡлана. Урындағы ҡорамалдар бар
+  ҡабатлаусанлыҡ өсөн, әммә Парламент һеңдереүенә ҡаршы раҫлана.
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **Командалар раҫлауҙарҙы нисек күҙәтә?**  
+  `ParliamentFixtureApproved` ваҡиғаһына яҙылығыҙ йәки реестр аша һорау аша
+  I18NT0000000006X RPC ағымдағы манифест һеңдереүҙең һәм панель ролл шылтыратыуын алыу өсөн.

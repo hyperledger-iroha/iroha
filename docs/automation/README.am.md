@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c56bacde8ee42c2427d06038a3a6ca65035d4055c42f6e5ded7e54b33c1fe921
 source_last_modified: "2025-12-29T18:16:35.060432+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Documentation Automation Baselines
+# የሰነድ አውቶሜሽን መሰረታዊ መስመሮች
 
-This directory captures the automation surfaces that roadmap items such as
-AND5/AND6 (Android Developer Experience + Release Readiness) and DA-1
-(Data-Availability threat-model automation) refer to when they call for
-auditable documentation evidence. Staging the command references and expected
-artefacts in-tree keeps the prerequisites for compliance reviews available even
-when CI pipelines or dashboards are offline.
+ይህ ማውጫ እንደ የመንገድ ካርታ ያሉትን አውቶማቲክ ወለሎችን ይይዛል
+AND5/AND6 (አንድሮይድ ገንቢ ልምድ + የመልቀቅ ዝግጁነት) እና DA-1
+(የውሂብ-ተገኝነት ስጋት-ሞዴል አውቶማቲክ) ሲጠሩ ይመልከቱ
+ሊመረመር የሚችል የሰነድ ማስረጃ. የትዕዛዝ ማጣቀሻዎችን እና የሚጠበቁትን ማዘጋጀት
+በዛፍ ውስጥ ያሉ ቅርሶች ለተገዢነት ግምገማዎች ቅድመ ሁኔታዎችን እንኳን ሳይቀር ይጠብቃሉ።
+የ CI ቧንቧዎች ወይም ዳሽቦርዶች ከመስመር ውጭ ሲሆኑ።
 
-## Directory Layout
+## ማውጫ አቀማመጥ
 
-| Path | Purpose |
-|------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
-| `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
+| መንገድ | ዓላማ |
+|------|--------|
+| `docs/automation/android/` | የi18n stub ማመሳሰል ምዝግብ ማስታወሻዎች፣ የተመጣጠነ ማጠቃለያዎች እና የኤስዲኬ ሕትመት ማስረጃን ከ AND6 ከመውጣቱ በፊት የሚያስፈልጉትን የአንድሮይድ ሰነዶች እና የትርጉም አውቶሜሽን መነሻ መስመሮች (AND5)። |
+| I18NI0000002X | በ`cargo xtask da-threat-model-report` የተጠቀሰው የውሂብ-ተገኝነት ስጋት-ሞዴል ራስ-ሰር ውጤቶች እና የምሽት ሰነዶች ያድሱ። |
 
-Each subdirectory documents the commands that produce the evidence along with
-the file layout we expect to check in (usually JSON summaries, run logs, or
-manifests). Teams drop new artefacts under the respective folder whenever an
-automation run materially changes the published docs, then link to the commit
-from the relevant status/roadmap entry.
+እያንዳንዱ ንኡስ ማውጫ ማስረጃውን የሚያቀርቡትን ትእዛዞች ይመዘግባል።
+ልንገባበት የምንጠብቀው የፋይል አቀማመጥ (ብዙውን ጊዜ JSON ማጠቃለያዎች፣ ሎግዎች ማስኬድ ወይም
+ይገለጣል)። በማንኛውም ጊዜ ቡድኖች አዳዲስ ቅርሶችን በየራሳቸው አቃፊ ውስጥ ይጥላሉ
+አውቶማቲክ ሩጫ የታተሙትን ሰነዶች በቁሳዊ መልኩ ይለውጣል፣ ከዚያ ወደ ቁርጠኝነት ያገናኙ
+ከተገቢው ሁኔታ / የመንገድ ካርታ ግቤት.
 
-## Usage
+##አጠቃቀም
 
-1. **Run the automation** using the commands described in the subdirectory
-   README (for example, `ci/check_android_fixtures.sh` or
-   `cargo xtask da-threat-model-report`).
-2. **Copy the resulting JSON/log artefacts** from `artifacts/…` into the
-   matching `docs/automation/<program>/…` folder with an ISO-8601 timestamp in
-   the filename so auditors can correlate the evidence with governance minutes.
-3. **Reference the commit** in `status.md`/`roadmap.md` when closing a roadmap
-   gate so reviewers can confirm the automation baseline used for that decision.
-4. **Keep the files lightweight**. The expectation is structured metadata,
-   manifests, or summaries—not bulk binary blobs. Larger dumps should stay in
-   object storage with the signed reference recorded here.
+1. ** አውቶማቲክን ያሂዱ ** በንዑስ ማውጫው ውስጥ የተገለጹትን ትዕዛዞች በመጠቀም
+   README (ለምሳሌ፣ `ci/check_android_fixtures.sh` ወይም
+   I18NI0000005X).
+2. ** የተገኙትን JSON/Log artefacts** ከI18NI0000006X ወደ
+   `docs/automation/<program>/…` አቃፊ ከ ISO-8601 የጊዜ ማህተም ጋር ማዛመድ
+   የፋይል ስም ስለዚህ ኦዲተሮች ማስረጃውን ከአስተዳደር ደቂቃዎች ጋር ማዛመድ ይችላሉ።
+3. **የፍኖተ ካርታውን ሲዘጉ በ`status.md`/`roadmap.md` ውስጥ ያለውን ቁርጠኝነት ያጣቅሱ።
+   በር ስለዚህ ገምጋሚዎች ለዚያ ውሳኔ ጥቅም ላይ የዋለውን አውቶሜሽን መነሻ ማረጋገጥ ይችላሉ።
+4. ** ፋይሎቹን ቀላል ያድርጓቸው**። የሚጠበቀው ነገር የተዋቀረ ሜታዳታ ነው፣
+   ይገለጻል፣ ወይም ማጠቃለያ-የጅምላ ሁለትዮሽ ብሎብስ አይደለም። ትላልቅ የቆሻሻ ማጠራቀሚያዎች መቆየት አለባቸው
+   የነገር ማከማቻ እዚህ ከተመዘገበው የተፈረመ ማጣቀሻ ጋር።
 
-By centralising these automation notes we unblock the “docs/automation baselines
-available for audit” prerequisite that AND6 calls out and give the DA threat
-model flow a deterministic home for the nightly reports and manual spot checks.
+እነዚህን አውቶሜሽን ማስታወሻዎች በማማከል የ"ሰነዶች/አውቶሜሽን መሰረታዊ መስመሮችን እናግደዋለን
+ለኦዲት ይገኛል” ብአዴን ጠርቶ ለDA ስጋት የሚሰጥ ቅድመ ሁኔታ
+ለሊት ሪፖርቶች እና በእጅ የቦታ ፍተሻዎች ሞዴል ፍሰት የሚወስን ቤት።

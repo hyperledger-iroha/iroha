@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
-title: Вызвать перенос с хоста из Kotodama
-description: Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+título: Вызвать перенос с хоста из Kotodama
+description: Показывает, как точка входа Kotodama pode ser usado para instruir este `transfer_asset` com um teste comprovado метаданных.
+fonte: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
+Verifique se o Kotodama pode ser usado para obter instruções sobre o `transfer_asset` com um teste comprovado метаданных.
 
 ## Пошаговый обход реестра
 
-- Пополните полномочия контракта (например `ih58...`) активом, который он будет переводить, и выдайте полномочию роль `CanTransfer` или эквивалентное разрешение.
-- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с аккаунта контракта на `ih58...`, отражая то, как ончейн-автоматизация может оборачивать вызовы хоста.
-- Проверьте балансы через `FindAccountAssets` или `iroha_cli ledger assets list --account ih58...` и просмотрите события, чтобы подтвердить, что guard метаданных записал контекст перевода.
+- Abra o contrato de política (por exemplo `ih58...`) ativo, feche o orçamento e выдайте use o papel `CanTransfer` ou a configuração atual.
+- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц аккаунта контракта на `ih58...`, отражая то, Como o aplicativo on-line pode ser usado para você.
+- Verifique os saldos de `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` e instale a proteção, чтобы подтвердить, что guarda O metadanных записал контекст перевода.
 
-## Связанные руководства SDK
+## Como usar o SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [Início rápido Rust SDK](/sdks/rust)
+- [Início rápido do Python SDK](/sdks/python)
+- [SDK JavaScript de início rápido](/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/call-transfer-asset.ko)
+[Kotodama](/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

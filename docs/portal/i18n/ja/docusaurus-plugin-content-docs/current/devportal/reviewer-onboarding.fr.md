@@ -4,65 +4,67 @@ direction: ltr
 source: docs/portal/docs/devportal/reviewer-onboarding.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Onboarding des relecteurs de preview
+# プレビューのオンボーディング
 
-## Vue d'ensemble
+## ヴュー・ダンサンブル
 
-DOCS-SORA suit un lancement par etapes du portail developpeur. Les builds avec gate de checksum
-(`npm run serve`) et les flux Try it durcis debloquent le prochain jalon:
-onboarding de relecteurs verifies avant que la preview publique ne s'ouvre largement. Ce guide
-decrit comment collecter les demandes, verifier l'eligibilite, provisionner l'acces et offboarder
-les participants en securite. Reportez-vous au
-[preview invite flow](./preview-invite-flow.md) pour la planification des cohortes, la cadence
-d'invitation et les exports de telemetrie; les etapes ci-dessous se concentrent sur les actions
-a prendre une fois qu'un relecteur a ete selectionne.
+DOCS-SORA スーツ アン ランスメント パー エテープ デュ ポルテイル 開発。チェックサムの平均ゲートを構築します
+(`npm run serve`) et les flux 試してみてください:
+選出者のオンボーディングは、事前のプレビュー公開の規模を検証します。 Ceガイド
+批判的なコメント収集者、要件、検証者、資格、プロビジョニング者、アクセス権、オフボーダー
+参加者は安全です。報告書
+[プレビュー招待フロー](./preview-invite-flow.md) 全体的な計画、リズムを注ぐ
+テレメトリの招待とエクスポート。 les etapes ci-dessous se concentrent sur les action
+あなたの選択は、あなたが選択するものです。
 
-- **Perimetre:** relecteurs qui ont besoin d'acces au preview docs (`docs-preview.sora`,
-  builds GitHub Pages ou bundles SoraFS) avant GA.
-- **Hors perimetre:** operateurs Torii ou SoraFS (couverts par leurs propres kits d'onboarding)
-  et deploiements de portail en production (voir
-  [`devportal/deploy-guide`](./deploy-guide.md)).
+- **周囲:** 審査員はプレビュー ドキュメントに参加する必要があります (`docs-preview.sora`,
+  GitHub ページを構築し、バンドル SoraFS) を前もって GA にします。
+- **馬の周囲:** オペレーター Torii または SoraFS (オンボーディングに必要なキットの準備)
+  ポルタイユの展開と生産 (ヴォワール)
+  [`devportal/deploy-guide`](./deploy-guide.md))。
 
-## Roles et prerequis
+## 役割と前提条件
 
-| Role | Objectifs typiques | Artefacts requis | Notes |
+|役割 |オブジェクトの種類 |アーティファクトが必要 |メモ |
 | --- | --- | --- | --- |
-| Core maintainer | Verifier les nouveaux guides, executer des smoke tests. | Handle GitHub, contact Matrix, CLA signee au dossier. | Souvent deja dans l'equipe GitHub `docs-preview`; deposer quand meme une demande pour que l'acces soit auditable. |
-| Partner reviewer | Valider des snippets SDK ou du contenu de gouvernance avant release publique. | Email corporate, POC legal, termes preview signes. | Doit reconnaitre les exigences de telemetrie + traitement des donnees. |
-| Community volunteer | Fournir du feedback d'utilisabilite sur les guides. | Handle GitHub, contact prefere, fuseau horaire, acceptation du CoC. | Garder les cohortes petites; prioriser les relecteurs ayant signe l'accord de contribution. |
+|コアメンテナー |ヌーヴォーの検証者、スモークテストの実行者。 | GitHub を処理し、Matrix に連絡し、CLA の書類に署名します。 |装備を整える GitHub `docs-preview`;追放者は、監査可能なように、要求を満たしている必要があります。 |
+|パートナーレビューアー | SDK のスニペットの内容が事前に公開されています。 |企業、POC 法務、契約プ​​レビューの署名を電子メールで送信します。 |遠隔測定の偵察と監視の訓練を行います。 |
+|地域ボランティア |実用的なガイドのフィードバックを提供します。 | GitHub を処理し、prefere に連絡し、Fuseau horaire、CoC の受け入れを処理します。 | Garder les cohortes petites;優先的に選出者が貢献に同意する必要があります。 |
 
-Tous les types de reviewers doivent:
+レビュー担当者が行うタスク:
 
-1. Reconnaitre la politique d'usage acceptable pour les artefacts de preview.
-2. Lire les annexes securite/observabilite
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-3. S'engager a executer `docs/portal/scripts/preview_verify.sh` avant de servir un
-   snapshot localement.
+1. 成果物をプレビューするために許容される使用法を政治的に偵察します。
+2. 付録のセキュリティ/監視機能
+   ([`security-hardening`](./security-hardening.md)、
+   [`observability`](./observability.md)、
+   [`incident-runbooks`](./incident-runbooks.md))。
+3. 執行者に関与する `docs/portal/scripts/preview_verify.sh` 前衛的なサービス
+   スナップショットのロケール。
 
-## Workflow d'intake
+## ワークフローの取り入れ方
 
-1. Demander au demandeur de remplir le
+1. デマンダー・オー・デマンダー・デ・レムプリル
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   formulaire (ou le copier/coller dans une issue). Capturer au minimum: identite, moyen de contact,
-   handle GitHub, dates prevues de revue, et confirmation que les docs de securite ont ete lues.
-2. Enregistrer la demande dans le tracker `docs-preview` (issue GitHub ou ticket de gouvernance)
-   et assigner un approbateur.
-3. Verifier les prerequis:
-   - CLA / accord de contribution au dossier (ou reference de contrat partner).
-   - Accuse d'usage acceptable stocke dans la demande.
-   - Evaluation des risques terminee (exemple: reviewers partner approuves par Legal).
-4. L'approbateur signe la demande et lie l'issue de suivi a toute entree de change-management
-   (exemple: `DOCS-SORA-Preview-####`).
+   Formulaire (コピー機/コレクターの問題)。最小限のキャプチャー: 同一性、連絡先、
+   GitHub を処理し、レビューの日付と安全性の確認を行います。
+2. トラッカーの要求を登録する者 `docs-preview` (GitHub ou ticket de gouvernance を発行する)
+   譲渡者と承認者。
+3. 検証者の前提条件:
+   - CLA / 文書への貢献の合意 (契約パートナーの参照)。
+   - 要求に応じて使用法を告発します。
+   - 危険な評価終了 (例: レビュー担当者のパートナーが法務部門を承認)。
+4. 変更管理の主要な問題に対する要求と嘘の承認
+   (例: `DOCS-SORA-Preview-####`)。
 
-## Provisioning et outillage
+## プロビジョニングと費用
 
-1. **Partager les artefacts** - Fournir le dernier descriptor + archive de preview depuis
-   le workflow CI ou le pin SoraFS (artefact `docs-portal-preview`). Rappeler aux reviewers
-   d'executer:
+1. **Partager les artefacts** - Fournir le dernier 記述子 + プレビュー アーカイブ
+   ファイル ワークフロー CI ファイル ピン SoraFS (アーティファクト `docs-portal-preview`)。ラペラー補助レビュアー
+   実行者:
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -71,59 +73,57 @@ Tous les types de reviewers doivent:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Servir avec enforcement de checksum** - Orienter les reviewers vers la commande gatee:
+2. **チェックサムの平均的な強制執行** - レビュアーとコマンドゲートの方向性:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   Cela reutilise `scripts/serve-verified-preview.mjs` pour qu'aucun build non verifie
-   ne soit lance par accident.
+   Cela は `scripts/serve-verified-preview.mjs` を再利用し、検証されていないビルドを実行します
+   これは事故によるものです。
 
-3. **Donner l'acces GitHub (optionnel)** - Si les reviewers ont besoin de branches non publiees,
-   les ajouter a l'equipe GitHub `docs-preview` pour la duree de la revue et consigner le changement
-   de membership dans la demande.
+3. **GitHub にアクセスする (オプション)** - 発行者以外のブランチにいるレビュー担当者、
+   GitHub `docs-preview` のレビューと委託者の変更を要求する必要があります。
+   要求に応じてメンバーシップを確立します。
 
-4. **Communiquer les canaux de support** - Partager le contact on-call (Matrix/Slack) et la
-   procedure d'incident de [`incident-runbooks`](./incident-runbooks.md).
+4. **サポートに関するコミュニケ** - オンコール連絡先 (Matrix/Slack) など
+   [`incident-runbooks`](./incident-runbooks.md) の事件の手順。
 
-5. **Telemetrie + feedback** - Rappeler aux reviewers que des analytics anonymisees sont collectees
-   (voir [`observability`](./observability.md)). Fournir le formulaire de feedback ou le template
-   d'issue mentionne dans l'invitation et journaliser l'evenement avec l'helper
-   [`preview-feedback-log`](./preview-feedback-log) pour que le resume de vague reste a jour.
+5. **テレメトリ + フィードバック** - Rappeler 補助レビュー担当者、分析対象者、匿名者、および収集者
+   (ヴォワール [`observability`](./observability.md))。フィードバックの定式化とテンプレートの作成
+   問題について言及し、招待とジャーナライザーとイベントを開催し、協力者を呼び出す
+   [`preview-feedback-log`](./preview-feedback-log) 曖昧な履歴書を一時間かけてください。
 
-## Checklist du reviewer
+## レビュー担当者のチェックリスト
 
-Avant d'acceder au preview, les reviewers doivent completer:
+事前にプレビューを行って、レビュー担当者が完了者を指示します:1. アーティファクトのテレチャージの検証 (`preview_verify.sh`)。
+2. Lancer le portail via `npm run serve` (ou `serve:verified`) は、セキュリティ チェックサムの推定を実行します。
+3. セキュリティと監視のメモは、ci-dessus を参照します。
+4. コンソールで OAuth をテストし、デバイス コード ログイン (該当する場合) を介してトークンを再利用して本番環境でテストします。
+5. 保管者は、統計情報と追跡者との協議（問題、文書の一部または公式）およびタグ付け者との協議を行う
+   リリース プレビューの平均タグ。
 
-1. Verifier les artefacts telecharges (`preview_verify.sh`).
-2. Lancer le portail via `npm run serve` (ou `serve:verified`) pour s'assurer que le guard checksum est actif.
-3. Lire les notes securite et observabilite referencees ci-dessus.
-4. Tester la console OAuth/Try it via device-code login (si applicable) et eviter de reutiliser des tokens de production.
-5. Deposer les constats dans le tracker convenu (issue, doc partage ou formulaire) et les tagger
-   avec le tag de release preview.
+## メンテナーとオフボーディングの責任
 
-## Responsabilites des maintainers et offboarding
-
-| Phase | Actions |
+|フェーズ |アクション |
 | --- | --- |
-| Kickoff | Confirmer que la checklist d'intake est jointe a la demande, partager les artefacts + instructions, ajouter une entree `invite-sent` via [`preview-feedback-log`](./preview-feedback-log), et planifier un point mi-parcours si la revue dure plus d'une semaine. |
-| Monitoring | Surveiller la telemetrie preview (trafic Try it inhabituel, echec de probe) et suivre le runbook d'incident si quelque chose parait suspect. Journaliser les evenements `feedback-submitted`/`issue-opened` au fur et a mesure que les constats arrivent pour que les metriques de vague restent exactes. |
-| Offboarding | Revoquer l'acces temporaire GitHub ou SoraFS, consigner `access-revoked`, archiver la demande (inclure resume de feedback + actions en attente), et mettre a jour le registre des reviewers. Demander au reviewer de purger les builds locaux et joindre le digest genere a partir de [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+|キックオフ |確認者は、要求に応じて摂取するチェックリストを確認し、成果物 + 説明書を作成し、[`preview-feedback-log`](./preview-feedback-log) 経由でエントリ 18NI00000043X を確認し、レビュー期間中にパルクールを計画し、レビュー期間を追加します。 |
+|モニタリング |監視員はテレメトリのプレビュー (実際に交通事故を試して調査する) と事件の実行手順書を作成し、容疑者を選択しました。 Journaliser les Evenements `feedback-submitted`/`issue-opened` 毛皮などの情報を正確に把握し、正確な情報を収集します。 |
+|オフボーディング | GitHub へのアクセス権を取り消す人は SoraFS、荷送人は `access-revoked`、要求をアーカイブする人 (フィードバックの履歴書と出席者のアクションを含む)、レビュー担当者の 1 時間の登録に応じます。要求者は、[`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md) の部分を作成し、結合したダイジェストを作成するレビュー担当者を要求します。 |
 
-Utilisez le meme processus lors de la rotation des reviewers entre vagues. Garder la trace dans le repo
-(issue + templates) aide DOCS-SORA a rester auditable et permet a la gouvernance de confirmer que l'acces
-preview a suivi les controles documentes.
+曖昧なレビュアーの回転によるミームプロセスを利用します。ガーダー・ラ・トレース・ダン・ル・レポ
+(問題 + テンプレート) 補助者 DOCS-SORA 監査可能であり、確認者による管理を許可します。
+スイビ ファイル コントロールのドキュメントをプレビューします。
 
-## Templates d'invitation et suivi
+## 招待状と招待状のテンプレート
 
-- Commencer chaque outreach avec le
+- コマーシャル チャク アウトリーチ アベック ル
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  fichier. Il capture le minimum de langage legal, les instructions de checksum preview et l'attente
-  que les reviewers reconnaissent la politique d'usage acceptable.
-- Lors de l'edition du template, remplacer les placeholders pour `<preview_tag>`, `<request_ticket>`
-  et les canaux de contact. Stocker une copie du message final dans le ticket d'intake pour que reviewers,
-  approbateurs et auditeurs puissent referencer le texte exact envoye.
-- Apres l'envoi de l'invitation, mettre a jour le spreadsheet de suivi ou l'issue avec le timestamp
-  `invite_sent_at` et la date de fin attendue pour que le rapport
-  [preview invite flow](./preview-invite-flow.md) puisse capturer la cohorte automatiquement.
+  フィシエ。法的最低限の言語、チェックサムのプレビューおよび注意事項の説明を取得します。
+  que les reviewers reconnaissent la politique d'uses は許容されます。
+- テンプレートの編集、プレースホルダーの置き換え `<preview_tag>`、`<request_ticket>`
+  連絡先を教えてください。レビュー担当者がチケットを受け取り、メッセージの最終コピーを取得し、
+  承認者と監査人は、テキストの正確な使者を直接参照します。
+- 招待状の発行後、1 時間ごとにスプレッドシートを管理し、タイムスタンプを発行します
+  `invite_sent_at` 親密な関係を築くための日付
+  [プレビュー招待フロー](./preview-invite-flow.md) 自動キャプチャー機能。

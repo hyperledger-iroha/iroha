@@ -8,61 +8,63 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> Ճանապարհային քարտեզ. **SF-1b — Sora Խորհրդարանի ամրագրման հաստատումներ:**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+Ձեռքով ստորագրման ծեսը, որն օգտագործվում էր SoraFS chunker հարմարանքների համար, դադարեցված է: Բոլորը
+հաստատումները այժմ հոսում են **Սորայի պառլամենտի** միջով, տեսակավորման վրա հիմնված DAO-ն
+ղեկավարում է Nexus. Խորհրդարանի անդամները կապում են XOR-ին՝ քաղաքացիություն ստանալու համար, պտտվում են մյուս կողմից
+վահանակներ և շղթայական ձայներ տալ, որոնք հավանություն են տալիս, մերժում կամ հետ են գցում հարմարանքը
+թողարկումներ. Այս ուղեցույցը բացատրում է գործընթացը և մշակողի գործիքավորումը:
 
-## Parliament overview
+## Խորհրդարանի ակնարկ
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **Քաղաքացիություն** — Օպերատորները կապում են պահանջվող XOR-ին` որպես քաղաքացիներ և
+  իրավասու դառնալ տեսակավորման համար:
+- **Վահանակներ** - Պարտականությունները բաշխված են պտտվող վահանակների վրա (Ենթակառուցվածք,
+  Չափավորություն, գանձապետարան, ...): Ենթակառուցվածքների վահանակին է պատկանում SoraFS սարքը
+  հաստատումներ.
+- **Տեսակավորում և պտույտ** — Վահանակի նստատեղերը նորից գծվում են նշված կետով
+  խորհրդարանի սահմանադրությունը, այնպես որ ոչ մի խումբ չի մենաշնորհում հաստատումները:
 
-## Fixture approval flow
+## Սարքավորումների հաստատման հոսք
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **Առաջարկի ներկայացում**
+   - Tooling WG-ը վերբեռնում է թեկնածու `manifest_blake3.json` փաթեթը գումարած
+     հարմարանքը տարբերվում է շղթայական ռեգիստրից՝ `sorafs.fixtureProposal`-ի միջոցով:
+   - Առաջարկը գրանցում է BLAKE3 digest-ը, իմաստային տարբերակը և փոփոխության նշումները:
+2. **Վերանայել և քվեարկել**
+   - Ենթակառուցվածքների հանձնաժողովը հանձնարարությունը ստանում է խորհրդարանի առաջադրանքի միջոցով
+     հերթ.
+   - Խմբի անդամները ստուգում են CI արտեֆակտները, կատարում են հավասարության թեստեր և ձուլում կշռում
+     ձայներ շղթայական.
+3. **Վերջնականացում**
+   - Քվորումը ապահովելուց հետո գործարկման ժամանակը թողարկում է հաստատման իրադարձություն, որը ներառում է
+     կանոնական մանիֆեստի մարսողություն և Մերկլի հավատարմությունը հարմարանքների օգտակար բեռին:
+   - Իրադարձությունը արտացոլված է SoraFS ռեեստրի մեջ, որպեսզի հաճախորդները կարողանան բեռնել
+     Խորհրդարանի կողմից հաստատված վերջին մանիֆեստը։
+4. **Բաշխում**
+   - CLI օգնականները (`cargo xtask sorafs-fetch-fixture`) քաշում են հաստատված մանիֆեստը
+     Nexus RPC-ից: Պահեստի JSON/TS/Go հաստատունները համաժամեցվում են
+     կրկին գործարկել `export_vectors` և հաստատել ներդաշնակությունը շղթայի վրա
+     արձանագրել.
 
-## Developer workflow
+## Մշակողի աշխատանքային հոսք
 
-- Regenerate fixtures with:
+- Վերականգնել հարմարանքները հետևյալով.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- Օգտագործեք Խորհրդարանի առբերման օգնականը՝ հաստատված ծրարը ներբեռնելու, ստուգելու համար
+  ստորագրությունները և թարմացնել տեղական հարմարանքները: Կետ `--signatures` հասցեում
+  Խորհրդարանի կողմից հրապարակված ծրար; օգնականը լուծում է ուղեկցող մանիֆեստը,
+  վերահաշվարկում է BLAKE3-ի մարսողությունը և պարտադրում կանոնականը
+  `sorafs.sf1@1.0.0` պրոֆիլ:
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -70,11 +72,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+Անցեք `--manifest`, եթե մանիֆեստն ապրում է այլ URL-ով: Չստորագրված ծրարներ
+մերժվում են, եթե `--allow-unsigned`-ը սահմանված չէ տեղական ծխի վազքների համար:
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- Երբ մանիֆեստը հաստատում եք բեմական դարպասի միջոցով, թիրախավորեք Torii-ի փոխարեն
+  տեղական ծանրաբեռնվածություն.
 
 ```bash
 sorafs-fetch \
@@ -85,31 +87,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- Տեղական CI-ն այլևս չի պահանջում `signer.json` ցուցակ:
+  `ci/check_sorafs_fixtures.sh`-ը համեմատում է ռեպո վիճակը վերջինի հետ
+  շղթայական պարտավորություն և ձախողվում է, երբ դրանք տարբերվում են:
 
-## Governance notes
+## Կառավարման նշումներ
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- Խորհրդարանի սահմանադրությունը կարգավորում է քվորումը, ռոտացիան և էսկալացիան
+  անհրաժեշտ է վանդակի մակարդակի կոնֆիգուրացիա:
+- Արտակարգ իրավիճակների հետադարձումները կարգավորվում են խորհրդարանի մոդերատորների վահանակի միջոցով: Այն
+  Ենթակառուցվածքի վահանակը ներկայացնում է վերադարձի առաջարկ՝ հղում կատարելով նախորդ մանիֆեստին
+  digest, որը փոխարինում է թողարկումը հաստատվելուց հետո:
+- Պատմական հաստատումները մնում են հասանելի դատաբժշկական SoraFS գրանցամատյանում
+  կրկնել.
 
-## FAQ
+## ՀՏՀ
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **Որտե՞ղ գնաց `signer.json`:**  
+  Այն հանվել է։ Բոլոր ստորագրողների վերագրումն ապրում է շղթայի վրա. `manifest_signatures.json`
+  պահոցում կա միայն մշակողի սարք, որը պետք է համապատասխանի ամենավերջինին
+  հաստատման միջոցառում:
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- **Մենք դեռ պահանջում ենք տեղական Ed25519 ստորագրություններ**  
+  Ոչ: Խորհրդարանի հաստատումները պահվում են որպես շղթայական արտեֆակտներ: Տեղական հարմարանքներ կան
+  վերարտադրելիության համար, բայց վավերացված են Խորհրդարանական դիջիստի դեմ:
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **Ինչպե՞ս են թիմերը վերահսկում հաստատումները:**  
+  Բաժանորդագրվեք `ParliamentFixtureApproved` միջոցառմանը կամ հարցում կատարեք գրանցամատյանում
+  Nexus RPC՝ ընթացիկ մանիֆեստի ամփոփումը և վահանակի անվանական զանգը ստանալու համար:

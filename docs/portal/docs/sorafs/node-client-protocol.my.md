@@ -7,152 +7,153 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e0cdd8242b45628e688d94ebec08e2d9900787ec93a81417e6683d399d43be2d
 source_last_modified: "2026-01-22T14:35:36.781385+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Node ↔ Client Protocol
+#SoraFS Node ↔ Client Protocol
 
-This guide summarises the canonical protocol definition in
-[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Use the upstream spec for byte-level Norito layouts and changelogs; the portal
-copy keeps the operational highlights close to the rest of the SoraFS runbooks.
+ဤလမ်းညွှန်တွင် canonical protocol အဓိပ္ပါယ်ဖွင့်ဆိုချက်ကို အကျဉ်းချုပ်ဖော်ပြထားသည်။
+[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)။
+byte-level Norito အပြင်အဆင်များနှင့် changelogs များအတွက် upstream spec ကိုသုံးပါ။ ပေါ်တယ်
+မိတ္တူသည် SoraFS ၏ ကျန်ရှိသော runbooks များနှင့် နီးကပ်စွာ လည်ပတ်နေသော မီးမောင်းထိုးပြမှုများကို သိမ်းဆည်းထားသည်။
 
-## Provider Adverts & Validation
+## ပံ့ပိုးပေးသူ ကြော်ငြာများနှင့် အတည်ပြုခြင်း။
 
-SoraFS providers gossip `ProviderAdvertV1` payloads (see
-`crates/sorafs_manifest::provider_advert`) signed by the governed operator.
-The adverts pin discovery metadata and the guardrails the multi-source
-orchestrator enforces at runtime.
+SoraFS ဝန်ဆောင်မှုပေးသူများ၏ အတင်းအဖျင်း `ProviderAdvertV1` ပေးဆောင်မှုများ (ကြည့်ပါ
+`crates/sorafs_manifest::provider_advert`) ကို အုပ်ချုပ်သည့် အော်ပရေတာမှ လက်မှတ်ရေးထိုးခဲ့သည်။
+ကြော်ငြာများသည် ရှာဖွေတွေ့ရှိမှု မက်တာဒေတာကို ပင်ထိုးထားပြီး guardrail သည် multi-source ကို ပေးသည်။
+သံစုံတီးဝိုင်းသည် runtime တွင်တွန်းအားပေးသည်။
 
-- **Lifetime** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Providers
-  should refresh every 12 hours.
-- **Capability TLVs** — the TLV list advertises transport features (Torii,
-  QUIC+Noise, SoraNet relays, vendor extensions). Unknown codes may be skipped
-  when `allow_unknown_capabilities = true`, following GREASE guidance.
-- **QoS hints** — `availability` tier (Hot/Warm/Cold), maximum retrieval
-  latency, concurrency limit, and optional stream budget. QoS must align with
-  observed telemetry and is audited by admission.
-- **Endpoints & rendezvous topics** — concrete service URLs with TLS/ALPN
-  metadata plus the discovery topics clients should subscribe to when building
-  guard sets.
-- **Path diversity policy** — `min_guard_weight`, AS/pool fan-out caps, and
-  `provider_failure_threshold` make deterministic multi-peer fetches possible.
-- **Profile identifiers** — providers must expose the canonical handle (e.g.
-  `sorafs.sf1@1.0.0`); optional `profile_aliases` help older clients migrate.
+- **တစ်သက်တာ** — `issued_at < expires_at ≤ issued_at + 86 400 s`။ ပံ့ပိုးပေးသည်။
+  12 နာရီတိုင်း refresh လုပ်သင့်ပါတယ်။
+- **စွမ်းဆောင်ရည် TLVs** — TLV စာရင်းသည် သယ်ယူပို့ဆောင်ရေးအင်္ဂါရပ်များ (Torii၊
+  QUIC+Noise၊ SoraNet relays၊ ရောင်းချသူ တိုးချဲ့မှုများ)။ အမည်မသိကုဒ်များကို ကျော်သွားနိုင်သည်။
+  GREASE လမ်းညွှန်ချက်အတိုင်း `allow_unknown_capabilities = true` တွင်။
+- **QoS အရိပ်အမြွက်** — `availability` အဆင့် (ပူ/နွေး/အအေး)၊ အများဆုံး ပြန်လည်ထုတ်ယူမှု
+  ကြာမြင့်ချိန်၊ တူညီသောကန့်သတ်ချက်နှင့် ရွေးချယ်နိုင်သော ထုတ်လွှင့်မှုဘတ်ဂျက်။ QoS နှင့် ချိန်ညှိရပါမည်။
+  တယ်လီမီတာကို စောင့်ကြည့်လေ့လာပြီး ဝင်ခွင့်ဖြင့် စာရင်းစစ်သည်။
+- **အဆုံးမှတ်များနှင့် ဆုံရပ်အကြောင်းအရာများ** — TLS/ALPN ဖြင့် ခိုင်မာသောဝန်ဆောင်မှု URL များ
+  မက်တာဒေတာနှင့် ရှာဖွေတွေ့ရှိမှုအကြောင်းအရာများကို သုံးစွဲသူများသည် တည်ဆောက်သည့်အခါတွင် စာရင်းသွင်းသင့်သည်။
+  အစောင့်အစုံ။
+- **Path diversity policy** — `min_guard_weight`၊ AS/pool fan-out caps နှင့်
+  `provider_failure_threshold` သည် အဆုံးအဖြတ်ပေးသော သက်တူရွယ်တူများစွာကို ထုတ်ယူနိုင်စေပါသည်။
+- **Profile identifiers** — ဝန်ဆောင်မှုပေးသူများသည် canonical handle ကို ဖော်ထုတ်ရမည် (ဥပမာ။
+  `sorafs.sf1@1.0.0`); ရွေးချယ်နိုင်သော `profile_aliases` သည် အသက်ကြီးသောဖောက်သည်များကို ရွှေ့ပြောင်းရန် ကူညီသည်။
 
-Validation rules reject zero stake, empty capability/endpoints/topic lists,
-misordered lifetimes, or missing QoS targets. Admission envelopes compare the
-advert and proposal bodies (`compare_core_fields`) before gossiping updates.
+အတည်ပြုခြင်းစည်းမျဉ်းများသည် အစုရှယ်ယာ သုည၊ အလွတ်ရနိုင်မှု/အဆုံးမှတ်များ/ခေါင်းစဉ်စာရင်းများကို ငြင်းပယ်သည်၊
+မှားယွင်းသော တစ်သက်တာ သို့မဟုတ် QoS ပစ်မှတ်များ ပျောက်ဆုံးနေပါသည်။ ဝင်ခွင့်စာအိတ်များနှင့် နှိုင်းယှဉ်ပါ။
+အတင်းအဖျင်းမွမ်းမံမှုများမပြုမီ ကြော်ငြာနှင့် အဆိုပြုချက်ကောင်များ (`compare_core_fields`)။
 
 ### Range Fetch Extensions
 
-Range-capable providers include the following metadata:
+Range-capable providers များတွင် အောက်ပါ metadata များ ပါဝင်သည်-
 
-| Field | Purpose |
-|-------|---------|
-| `CapabilityType::ChunkRangeFetch` | Declares `max_chunk_span`, `min_granularity`, and alignment/proof flags. |
-| `StreamBudgetV1` | Optional concurrency/throughput envelope (`max_in_flight`, `max_bytes_per_sec`, optional `burst`). Requires a range capability. |
-| `TransportHintV1` | Ordered transport preferences (e.g., `torii_http_range`, `quic_stream`, `soranet_relay`). Priorities are `0–15` and duplicates are rejected. |
+| လယ် | ရည်ရွယ်ချက် |
+|---------|---------|
+| `CapabilityType::ChunkRangeFetch` | `max_chunk_span`၊ `min_granularity` နှင့် ချိန်ညှိမှု/အထောက်အထား အလံများကို ကြေညာသည်။ |
+| `StreamBudgetV1` | ရွေးချယ်နိုင်သော ဆက်စပ်ငွေကြေး/ဖြတ်သန်းမှုစာအိတ် (`max_in_flight`၊ `max_bytes_per_sec`၊ ရွေးချယ်နိုင်သော `burst`)။ အကွာအဝေး စွမ်းရည်တစ်ခု လိုအပ်သည်။ |
+| `TransportHintV1` | မှာယူထားသော သယ်ယူပို့ဆောင်ရေးဦးစားပေးများ (ဥပမာ၊ `torii_http_range`၊ `quic_stream`၊ `soranet_relay`)။ ဦးစားပေးများသည် `0–15` ဖြစ်ပြီး ထပ်တူများကို ပယ်ချပါသည်။ |
 
-Tooling support:
+Tooling ပံ့ပိုးမှု-
 
-- Provider advert pipelines must validate range capability, stream budget, and
-  transport hints before emitting deterministic payloads for audits.
-- `cargo xtask sorafs-admission-fixtures` bundles canonical multi-source
-  adverts alongside downgrade fixtures under
-  `fixtures/sorafs_manifest/provider_admission/`.
-- Range-capable adverts that omit `stream_budget` or `transport_hints` are
-  rejected by the CLI/SDK loaders before scheduling, keeping the multi-source
-  harness aligned with Torii admission expectations.
+- ပံ့ပိုးပေးသူ ကြော်ငြာပိုက်လိုင်းများသည် အပိုင်းအခြား စွမ်းဆောင်ရည်၊ ထုတ်လွှင့်မှု ဘတ်ဂျက်နှင့် တရားဝင်ကြောင်း အတည်ပြုရပါမည်။
+  စာရင်းစစ်များအတွက် အဆုံးအဖြတ်ပေးသော ဝန်ထုပ်ဝန်ပိုးများကို ထုတ်လွှတ်ခြင်းမပြုမီ သယ်ယူပို့ဆောင်ရေး အရိပ်အမြွက်များ။
+- `cargo xtask sorafs-admission-fixtures` သည် canonical multi-source အစုအဝေးများ
+  အောက်တွင် အဆင့်နှိမ့်ရန် တွဲလျက် ကြော်ငြာများ
+  `fixtures/sorafs_manifest/provider_admission/`။
+- `stream_budget` သို့မဟုတ် `transport_hints` ကို ချန်လှပ်ထားသည့် အပိုင်းအခြားအလိုက် အသုံးပြုနိုင်သော ကြော်ငြာများသည်
+  ရင်းမြစ်ပေါင်းများစွာကို ထိန်းသိမ်းထားပြီး အချိန်ဇယားဆွဲခြင်းမပြုမီ CLI/SDK loaders များက ပယ်ချခဲ့သည်။
+  Torii ဝင်ခွင့်မျှော်မှန်းချက်များနှင့် ကိုက်ညီသောကြိုး။
 
-## Gateway Range Endpoints
+## Gateway Range အဆုံးမှတ်များ
 
-Gateways accept deterministic HTTP requests that mirror the advert metadata.
+Gateways သည် ကြော်ငြာမက်တာဒေတာကို ထင်ဟပ်စေသည့် တိကျသေချာသော HTTP တောင်းဆိုမှုများကို လက်ခံသည်။
 
 ### `GET /v1/sorafs/storage/car/{manifest_id}`
 
-| Requirement | Details |
+| လိုအပ်ချက် | အသေးစိတ် |
 |-------------|---------|
-| **Headers** | `Range` (single window aligned to chunk offsets), `dag-scope: block`, `X-SoraFS-Chunker`, optional `X-SoraFS-Nonce`, and mandatory base64 `X-SoraFS-Stream-Token`. |
-| **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` describing the served window, `X-Sora-Chunk-Range` metadata, and echoed chunker/token headers. |
-| **Failure modes** | `416` for misaligned ranges, `401` for missing/invalid tokens, `429` when stream/byte budgets are exceeded. |
+| **ခေါင်းစီးများ** | `Range` (အတွဲလိုက် အော့ဖ်ဆက်များဆီသို့ ချိန်ညှိထားသော ဝင်းဒိုးတစ်ခုတည်း)၊ `dag-scope: block`၊ `X-SoraFS-Chunker`၊ ချန်လှပ်ထားသော `X-SoraFS-Nonce`၊ နှင့် မဖြစ်မနေ base64 `X-SoraFS-Stream-Token`။ |
+| **တုံ့ပြန်မှုများ** | `206`၊ `Content-Type: application/vnd.ipld.car`၊ `Content-Range` ဖြင့် ဖော်ပြသည့်ဝင်းဒိုး၊ `X-Sora-Chunk-Range` မက်တာဒေတာနှင့် chunker/token ခေါင်းစီးများကို ပဲ့တင်ထပ်ထားသည်။ |
+| **ပျက်ကွက်မုဒ်များ** | မှားယွင်းနေသော အပိုင်းအခြားများအတွက် `416`၊ ပျောက်ဆုံး/မမှန်ကန်သော တိုကင်များအတွက် `401`၊ stream/byte ဘတ်ဂျက်များကို ကျော်လွန်သည့်အခါ `429`။ |
 
 ### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-Single-chunk fetch with the same headers plus the deterministic chunk digest.
-Useful for retries or forensic downloads when CAR slices are unnecessary.
+တူညီသော ခေါင်းစီးများ နှင့် အဆုံးအဖြတ် အတုံးအခဲများ နှင့် တစ်ခုတည်းသော ထုတ်ယူမှု။
+CAR အချပ်များသည် မလိုအပ်သည့်အခါ ထပ်စမ်းခြင်း သို့မဟုတ် မှုခင်းဆိုင်ရာ ဒေါင်းလုဒ်များအတွက် အသုံးဝင်သည်။
 
-## Multi-Source Orchestrator Workflow
+## Multi-Source Orchestrator အလုပ်အသွားအလာ
 
-When SF-6 multi-source fetch is enabled (Rust CLI via `sorafs_fetch`,
-SDKs via `sorafs_orchestrator`):
+SF-6 ရင်းမြစ်ပေါင်းစုံကို ရယူခြင်းကို ဖွင့်ထားသောအခါ (`sorafs_fetch` မှတဆင့် Rust CLI၊
+`sorafs_orchestrator` မှတဆင့် SDKs):
 
-1. **Collect inputs** — decode the manifest chunk plan, pull the latest adverts,
-   and optionally pass a telemetry snapshot (`--telemetry-json` or
-   `TelemetrySnapshot`).
-2. **Build a scoreboard** — `Orchestrator::build_scoreboard` evaluates
-   eligibility and records rejection reasons; `sorafs_fetch --scoreboard-out`
-   persists the JSON.
-3. **Schedule chunks** — `fetch_with_scoreboard` (or `--plan`) enforces range
-   constraints, stream budgets, retry/peer caps (`--retry-budget`,
-   `--max-peers`), and emits a manifest-scoped stream token for each request.
-4. **Verify receipts** — outputs include `chunk_receipts` and
-   `provider_reports`; CLI summaries persist `provider_reports`,
-   `chunk_receipts`, and `ineligible_providers` for evidence bundles.
+1. **ထည့်သွင်းမှုများကို စုဆောင်းပါ** — ထင်ရှားသော အတုံးအခဲ အစီအစဉ်ကို ကုဒ်လုပ်ပါ၊ နောက်ဆုံးပေါ် ကြော်ငြာများကို ဆွဲထုတ်ပါ။
+   ပြီးလျှင် တယ်လီမီတာ လျှပ်တစ်ပြက် ရိုက်ချက် (`--telemetry-json` သို့မဟုတ်
+   `TelemetrySnapshot`)။
+2. **ရမှတ်တစ်ခုတည်ဆောက်ပါ** — `Orchestrator::build_scoreboard` အကဲဖြတ်သည်
+   အရည်အချင်းပြည့်မီမှုနှင့် ငြင်းပယ်ခြင်းအကြောင်းများကို မှတ်တမ်းတင်ခြင်း၊ `sorafs_fetch --scoreboard-out`
+   JSON ကို ဆက်သုံးသည်။
+3. **အချိန်ဇယားအပိုင်းအစများ** — `fetch_with_scoreboard` (သို့မဟုတ် `--plan`) ကန့်သတ်ထားသော အပိုင်းအခြားများ
+   ကန့်သတ်ချက်များ၊ ထုတ်လွှင့်မှုဘတ်ဂျက်များ၊ ထပ်စမ်းခြင်း/မျိုးတူထုပ်များ (`--retry-budget`၊
+   `--max-peers`) ၊ တောင်းဆိုချက်တစ်ခုစီအတွက် ထင်ရှားသော-ကန့်သတ်ထားသော စီးကြောင်းတိုကင်တစ်ခုကို ထုတ်လွှတ်သည်။
+4. **ပြေစာများကို စိစစ်ပါ** — ရလဒ်များတွင် `chunk_receipts` နှင့်
+   `provider_reports`; CLI အနှစ်ချုပ် `provider_reports` ဆက်ရှိနေသည်
+   အထောက်အထားအတွဲများအတွက် `chunk_receipts` နှင့် `ineligible_providers`။
 
-Common errors raised to operators/SDKs:
+အော်ပရေတာ/SDKs များတွင် တင်လေ့ရှိသော အမှားများ-
 
-| Error | Description |
-|-------|-------------|
-| `no providers were supplied` | No eligible entries after filtering. |
-| `no compatible providers available for chunk {index}` | Range or budget mismatch for a specific chunk. |
-| `retry budget exhausted after {attempts}` | Increase `--retry-budget` or evict failing peers. |
-| `no healthy providers remaining` | All providers disabled after repeated failures. |
-| `streaming observer failed` | Downstream CAR writer aborted. |
-| `orchestrator invariant violated` | Capture manifest, scoreboard, telemetry snapshot, and CLI JSON for triage. |
+| အမှား | ဖော်ပြချက် |
+|--------|-------------|
+| `no providers were supplied` | စစ်ထုတ်ပြီးနောက် အရည်အချင်းပြည့်မီသော ထည့်သွင်းမှုများ မရှိပါ။ |
+| `no compatible providers available for chunk {index}` | သီးခြားအပိုင်းတစ်ခုအတွက် အပိုင်းအခြား သို့မဟုတ် ဘတ်ဂျက်မတူညီပါ။ |
+| `retry budget exhausted after {attempts}` | `--retry-budget` ကို တိုးပါ သို့မဟုတ် ပျက်ကွက်သော ရွယ်တူများကို နှင်ထုတ်ပါ။ |
+| `no healthy providers remaining` | ထပ်ခါတလဲလဲ မအောင်မြင်ပြီးနောက် ဝန်ဆောင်မှုပေးသူများအားလုံးကို ပိတ်ထားသည်။ |
+| `streaming observer failed` | Downstream CAR စာရေးဆရာကို ဖျက်သိမ်းလိုက်သည်။ |
+| `orchestrator invariant violated` | အစမ်းသုံးအတွက် မန်နီးဖက်စ်၊ အမှတ်စာရင်း၊ တယ်လီမီတာ လျှပ်တစ်ပြက်ရိုက်ချက်နှင့် CLI JSON။ |
 
-## Telemetry & Evidence
+## တယ်လီမီတာနှင့် အထောက်အထား
 
-- Metrics emitted by the orchestrator:  
-  `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
-  `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (tagged by manifest/region/provider). Set `telemetry_region` in config or via
-  CLI flags so dashboards partition by fleet.
-- CLI/SDK fetch summaries include persisted scoreboard JSON, chunk receipts,
-  and provider reports which must ship in rollout bundles for SF-6/SF-7 gates.
-- Gateway handlers expose `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  so SRE dashboards can correlate orchestrator decisions with server behaviour.
+- သံစုံတီးဝိုင်းမှ ထုတ်လွှတ်သော မက်ထရစ်များ  
+  `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`၊
+  `sorafs_orchestrator_retries_total`၊ `sorafs_orchestrator_provider_failures_total`
+  (မန်နီးဖက်စ်/ဒေသ/ဝန်ဆောင်မှုပေးသူမှ တဂ်လုပ်ထားသည်။ `telemetry_region` ကို config သို့မဟုတ် မှတဆင့် သတ်မှတ်ပါ။
+  CLI အလံများသည် ရေယာဉ်စုအလိုက် ဒက်ရှ်ဘုတ်များကို အပိုင်းပိုင်းခွဲထားသည်။
+- CLI/SDK ထုတ်ယူမှု အနှစ်ချုပ်များတွင် ဆက်ရှိနေသော ရမှတ်ဘုတ် JSON၊ အတုံးလိုက်ဖြတ်ပိုင်းများ ပါဝင်သည်။
+  နှင့် SF-6/SF-7 ဂိတ်များအတွက် ဖြန့်ချိမည့်အစုအဝေးတွင် တင်ပို့ရမည့် ဝန်ဆောင်မှုပေးသူ အစီရင်ခံစာများ။
+- Gateway handlers များသည် `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error` ကို ဖော်ထုတ်ပါ။
+  ထို့ကြောင့် SRE ဒက်ရှ်ဘုတ်များသည် ဆာဗာအပြုအမူနှင့် စီစဉ်သူ၏ ဆုံးဖြတ်ချက်များကို ဆက်စပ်နိုင်သည်။
 
-## CLI & REST Helpers
+## CLI & REST အကူအညီပေးသူများ
 
-- `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
-  pin-registry REST endpoints and print raw Norito JSON with attestation blocks
-  for audit evidence.
-- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
-  or JSON manifests plus optional alias proofs and successors; malformed proofs
-  raise `400`, stale proofs surface `503` with `Warning: 110`, and
-  hard-expired proofs return `412`.
-- `iroha app sorafs repair list` mirrors repair queue filters, while
-  `repair claim|complete|fail|escalate` submit signed worker actions or slash
-  proposals to Torii. Slash proposals may include a governance approval summary
-  (approve/reject/abstain vote counts plus approved_at/finalized_at
-  timestamps); when present it must satisfy quorum and dispute/appeal windows,
-  otherwise the proposal stays in dispute until votes resolve at the deadline.
-- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
-- Repair status responses include an `events` array containing base64 Norito
-  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
-  is capped to the most recent transitions.
-- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
-  retention reports from the local manifest store for audit evidence.
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) include attestation structures so clients can
-  verify data against the latest block headers before taking action.
+- `iroha app sorafs pin list|show`၊ `alias list` နှင့် `replication list`
+  pin-registry REST အဆုံးမှတ်များနှင့် ကုန်ကြမ်း Norito JSON ကို အထောက်အထားလုပ်ကွက်များဖြင့် ပရင့်ထုတ်ပါ။
+  စာရင်းစစ်အထောက်အထားအတွက်။
+- `iroha app sorafs storage pin` နှင့် `torii /v1/sorafs/pin/register` Norito လက်ခံ
+  သို့မဟုတ် JSON သည် ပေါင်း၍ ရွေးချယ်နိုင်သော alias အထောက်အထားများနှင့် ဆက်ခံသူများကို ဖော်ပြသည်။ ပုံစံမမှန်သောသက်သေများ
+  `400` ကိုမြှင့်ပါ၊ `503` ကို `Warning: 110` ဖြင့် ၊
+  သက်တမ်းကုန်ဆုံးခဲသော အထောက်အထားများ `412` ကို ပြန်ပေးသည်။
+- `iroha app sorafs repair list` မှန်များ တန်းစီနေသော ဇကာများကို ပြုပြင်နေစဉ်
+  `repair claim|complete|fail|escalate` လက်မှတ်ရေးထိုးထားသော အလုပ်သမားလုပ်ဆောင်ချက်များ သို့မဟုတ် မျဉ်းစောင်းများ တင်သွင်းပါ။
+  Torii သို့ အဆိုပြုချက်များ။ မျဉ်းစောင်း အဆိုပြုချက်များတွင် အုပ်ချုပ်မှုခွင့်ပြုချက် အနှစ်ချုပ် ပါဝင်နိုင်သည်။
+  (approve/reject/abstain vote counts plus approve_at/finalized_at
+  အချိန်တံဆိပ်တုံးများ); တင်ပြသည့်အခါ ၎င်းသည် အထမြောက်ခြင်းနှင့် အငြင်းပွားမှု/အယူခံဝင်ဒိုးများကို ကျေနပ်စေရမည်၊
+  သို့မဟုတ်ပါက အဆိုပြုချက်သည် နောက်ဆုံးသတ်မှတ်ရက်တွင် မဲမဖြေရှင်းမချင်း အငြင်းပွားနေမည်ဖြစ်သည်။
+- ပြုပြင်သည့်စာရင်းများနှင့် အလုပ်သမားတန်းစီရွေးချယ်ခြင်းကို SLA နောက်ဆုံးရက်၊ ပျက်ကွက်မှုပြင်းထန်မှုနှင့် အဆုံးအဖြတ်ပေးသော ကြိုးတန်းဖြတ်ပိုင်းများ (တန်းစီစောင့်ဆိုင်းချိန်၊ ကြေငြာချက်စာရင်း၊ လက်မှတ် ID) တို့ဖြင့် ညွှန်ကြားထားသည်။
+- ပြုပြင်မှုအခြေအနေ တုံ့ပြန်ချက်များတွင် base64 Norito ပါရှိသော `events` ခင်းကျင်းမှု ပါဝင်သည်။
+  `RepairTaskEventV1` စာရင်းစစ်လမ်းကြောင်းများအတွက် ဖြစ်ပျက်မှုအလိုက် စီထားသော ပစ္စည်းများ၊ စာရင်း
+  လတ်တလော အပြောင်းအရွှေ့များတွင် ကန့်သတ်ထားသည်။
+- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` သည် ဖတ်ရန်သာ ထုတ်ပေးသည်။
+  စာရင်းစစ်အထောက်အထားအတွက် ဒေသတွင်း ထင်ရှားသောစတိုးမှ ထိန်းသိမ်းထားသော အစီရင်ခံစာများ။
+- REST အဆုံးမှတ်များ (`/v1/sorafs/pin`၊ `/v1/sorafs/aliases`၊
+  `/v1/sorafs/replication`) ဖောက်သည်များ တတ်နိုင်သရွေ့ သက်သေခံဖွဲ့စည်းပုံများ ပါဝင်သည်။
+  အရေးယူခြင်းမပြုမီ နောက်ဆုံးပိတ်ခေါင်းစီးများနှင့် ဒေတာများကို စစ်ဆေးပါ။
 
-## References
+## ကိုးကား
 
-- Canonical spec:
+- Canonical spec-
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Norito types: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- CLI helpers: `crates/iroha_cli/src/commands/sorafs.rs`,
+- Norito အမျိုးအစားများ- `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- CLI ကူညီသူများ- `crates/iroha_cli/src/commands/sorafs.rs`၊
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Orchestrator crate: `crates/sorafs_orchestrator`
-- Dashboard pack: `dashboards/grafana/sorafs_fetch_observability.json`
+- သံစုံတီးမှုတ်သေတ္တာ- `crates/sorafs_orchestrator`
+- ဒိုင်ခွက်အထုပ်- `dashboards/grafana/sorafs_fetch_observability.json`

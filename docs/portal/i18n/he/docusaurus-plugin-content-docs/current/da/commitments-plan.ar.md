@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/da/commitments-plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note المصدر القياسي
@@ -16,7 +18,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 _مسودة: 2026-03-25 -- المالكون: Core Protocol WG / Smart Contract Team / Storage Team_
 
 يمدد DA-3 تنسيق كتلة Nexus بحيث تدمج كل lane سجلات حتمية تصف الـ blobs المقبولة
-من DA-2. توضح هذه المذكرة هياكل البيانات القياسية، ووصلات خط انابيب الكتل،
+מ DA-2. توضح هذه المذكرة هياكل البيانات القياسية، ووصلات خط انابيب الكتل،
 وبرهان العملاء الخفيفين، واسطح Torii/RPC التي يجب ان تكتمل قبل ان يعتمد
 المدققون على تعهدات DA اثناء فحوصات القبول او الحوكمة. جميع الحمولات مشفرة
 بـ Norito؛ لا SCALE ولا JSON مخصص.
@@ -100,9 +102,7 @@ setters/getters لـ `da_commitments` (راجع `BlockBuilder::set_da_commitment
 الانشاء قبل ختم الكتلة. جميع الدوال المساعدة تترك الحقل `None` حتى يمر Torii
 حزم حقيقية.
 
-### 1.3 ترميز wire
-
-- `SignedBlockWire::canonical_wire()` يضيف ترويسة Norito لـ
+### 1.3 ترميز wire- `SignedBlockWire::canonical_wire()` يضيف ترويسة Norito لـ
   `DaCommitmentBundle` مباشرة بعد قائمة المعاملات الحالية. بايت الاصدار هو
   `0x01`.
 - `SignedBlockWire::decode_wire()` يرفض الحزم ذات `version` غير معروفة، بما
@@ -130,7 +130,7 @@ setters/getters لـ `da_commitments` (راجع `BlockBuilder::set_da_commitment
 Torii يوفر ثلاثة endpoints:
 
 | المسار | الطريقة | الحمولة | ملاحظات |
-|--------|---------|---------|---------|
+|--------|--------|--------|--------|
 | `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (فلترة بنطاق lane/epoch/sequence، مع pagination) | يعيد `DaCommitmentPage` بعدد الاجمالي والتعهدات و hash الكتلة. |
 | `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash او tuple `(epoch, sequence)`). | يعيد `DaCommitmentProof` (record + مسار Merkle + hash الكتلة). |
 | `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ يستخدمه SDKs التي لا يمكنها الربط مباشرة مع `iroha_crypto`. |
@@ -148,23 +148,21 @@ handlers بجانب endpoints ingest الحالية لDA لاعادة استخد
 - تساعد اوامر CLI (`iroha_cli app da prove-commitment`) على تنفيذ دورة طلب/تحقق
   البراهين وتعرض مخارج Norito/hex للمشغلين.
 
-## 5. التخزين والفهرسة
+##
 
 يخزن WSV التعهدات في column family مخصصة بمفتاح `manifest_hash`. تغطي
 الفهارس الثانوية `(lane_id, epoch)` و`(lane_id, sequence)` كي تتجنب الاستعلامات
 مسح الحزم كاملة. يتتبع كل سجل ارتفاع الكتلة التي ختمته، مما يسمح للعقد في
 مرحلة catch-up باعادة بناء الفهرس بسرعة من سجل الكتل.
 
-## 6. القياس والرصد
+##
 
 - `torii_da_commitments_total` يزيد عند ختم كتلة تحتوي على سجل واحد على الاقل.
 - `torii_da_commitment_queue_depth` يتتبع receipts المنتظرة للتجميع (لكل lane).
 - لوحة Grafana `dashboards/grafana/da_commitments.json` تعرض ادراج الكتل وعمق
-  الطابور وthroughput البراهين حتى تتمكن بوابات اصدار DA-3 من تدقيق السلوك.
+  תפוקת תפוקה של תקשורת ותפוקה תקינה תקינה של תקשורת DA-3.
 
-## 7. استراتيجية الاختبارات
-
-1. **اختبارات وحدات** لترميز/فك ترميز `DaCommitmentBundle` وتحديثات اشتقاق hash
+## 7. استراتيجية الاختبارات1. **اختبارات وحدات** لترميز/فك ترميز `DaCommitmentBundle` وتحديثات اشتقاق hash
    الكتلة.
 2. **Fixtures golden** تحت `fixtures/da/commitments/` تلتقط bytes الحزمة
    القياسية وبراهين Merkle.
@@ -178,9 +176,9 @@ handlers بجانب endpoints ingest الحالية لDA لاعادة استخد
 ## 8. خطة الاطلاق
 
 | المرحلة | الوصف | معيار الخروج |
-|---------|-------|--------------|
+|--------|--------|-------------|
 | P0 - دمج نموذج البيانات | دمج `DaCommitmentRecord` وتحديثات ترويسة الكتلة وكودكات Norito. | `cargo test -p iroha_data_model` ينجح مع fixtures جديدة. |
-| P1 - توصيل Core/WSV | تمرير منطق الطابور + block builder، وحفظ الفهارس، وكشف handlers RPC. | `cargo test -p iroha_core` و `integration_tests/tests/da/commitments.rs` ينجحان مع اثباتات bundle proof. |
+| P1 - توصيل Core/WSV | تمرير منطق الطابور + block builder، وحفظ الفهارس، وكشف handlers RPC. | `cargo test -p iroha_core` ו-`integration_tests/tests/da/commitments.rs` הוכחת חבילה. |
 | P2 - ادوات المشغلين | شحن helpers للـ CLI ولوحة Grafana وتحديثات توثيق تحقق proof. | `iroha_cli app da prove-commitment` يعمل على devnet؛ اللوحة تعرض بيانات حية. |
 | P3 - بوابة الحوكمة | تفعيل مدقق الكتل الذي يفرض تعهدات DA على lanes المحددة في `iroha_config::nexus`. | تحديث status وroadmap يشيران الى اكتمال DA-3. |
 

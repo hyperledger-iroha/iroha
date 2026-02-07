@@ -10,47 +10,48 @@ translation_last_reviewed: 2026-02-07
 title: Sora Name Service Suffix Catalog
 sidebar_label: Suffix catalog
 description: Canonical allowlist of SNS suffixes, stewards, and pricing knobs for `.sora`, `.nexus`, and `.dao`.
+translator: machine-google-reviewed
 ---
 
-# Sora Name Service Suffix Catalog
+# Сора нэрийн үйлчилгээний дагавар каталог
 
-The SNS roadmap tracks every approved suffix (SN-1/SN-2). This page mirrors the
-source-of-truth catalog so operators running registrars, DNS gateways, or wallet
-tooling can load the same parameters without scraping status docs.
+SNS замын зураг нь батлагдсан дагавар бүрийг (SN-1/SN-2) хянадаг. Энэ хуудас нь
+Үнэний эх сурвалжийн каталог, ингэснээр операторууд бүртгэгч, DNS гарц эсвэл түрийвч ажиллуулдаг.
+хэрэгсэл нь статусын баримтыг хусахгүйгээр ижил параметрүүдийг ачаалах боломжтой.
 
-- **Snapshot:** [`docs/examples/sns/suffix_catalog_v1.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/examples/sns/suffix_catalog_v1.json)
-- **Consumers:** `iroha sns policy`, SNS onboarding kits, KPI dashboards, and
-  DNS/Gateway release scripts all read the same JSON bundle.
-- **Statuses:** `active` (registrations allowed), `paused` (temporarily gated),
-  `revoked` (announced but not currently available).
+- **Ажийн зураг:** [`docs/examples/sns/suffix_catalog_v1.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/examples/sns/suffix_catalog_v1.json)
+- **Хэрэглэгчид:** `iroha sns policy`, SNS залгах иж бүрдэл, KPI хяналтын самбар болон
+  DNS/Gateway хувилбарын скриптүүд бүгд ижил JSON багцыг уншдаг.
+- ** Статус:** `active` (бүртгүүлэхийг зөвшөөрсөн), `paused` (түр хаалгатай),
+  `revoked` (зарласан боловч одоогоор байхгүй).
 
-## Catalog schema
+## Каталогийн схем
 
-| Field | Type | Description |
+| Талбай | Төрөл | Тодорхойлолт |
 |-------|------|-------------|
-| `suffix` | string | Human-readable suffix with leading dot. |
-| `suffix_id` | `u16` | Identifier stored on-ledger in `SuffixPolicyV1::suffix_id`. |
-| `status` | enum | `active`, `paused`, or `revoked` describing launch readiness. |
-| `steward_account` | string | Account responsible for stewardship (matches registrar policy hooks). |
-| `fund_splitter_account` | string | Account that receives payments before routing per `fee_split`. |
-| `payment_asset_id` | string | Asset used for settlement (`xor#sora` for the initial cohort). |
-| `min_term_years` / `max_term_years` | integer | Purchase term bounds from the policy. |
-| `grace_period_days` / `redemption_period_days` | integer | Renewal safety windows enforced by Torii. |
-| `referral_cap_bps` | integer | Maximum referral carve-out allowed by governance (basis points). |
-| `reserved_labels` | array | Governance-protected label objects `{label, assigned_to, release_at_ms, note}`. |
-| `pricing` | array | Tier objects with `label_regex`, `base_price`, `auction_kind`, and duration bounds. |
-| `fee_split` | object | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` basis-point split. |
-| `policy_version` | integer | Monotonic counter incremented whenever governance edits the policy. |
+| `suffix` | мөр | Хүн унших боломжтой тэргүүлэх цэгтэй дагавар. |
+| `suffix_id` | `u16` | `SuffixPolicyV1::suffix_id`-д дэвтэрт хадгалагдсан танигч. |
+| `status` | тоо | `active`, `paused`, эсвэл `revoked` хөөргөхөд бэлэн байдлыг дүрсэлсэн. |
+| `steward_account` | мөр | Удирдах ажлыг хариуцах данс (бүртгүүлэгчийн бодлогын дэгээтэй таарч байна). |
+| `fund_splitter_account` | мөр | `fee_split` дагуу чиглүүлэхээс өмнө төлбөр хүлээн авдаг данс. |
+| `payment_asset_id` | мөр | Төлбөр тооцоонд ашигласан хөрөнгө (анхны бүлэгт `xor#sora`). |
+| `min_term_years` / `max_term_years` | бүхэл тоо | Бодлогоос худалдан авах хугацааны хязгаар. |
+| `grace_period_days` / `redemption_period_days` | бүхэл тоо | Шинэчлэх аюулгүй байдлын цонхыг Torii хэрэгжүүлсэн. |
+| `referral_cap_bps` | бүхэл тоо | Засаглалын зөвшөөрөгдсөн хамгийн их лавлагаа (үндсэн оноо). |
+| `reserved_labels` | массив | Засаглалаар хамгаалагдсан шошгоны объектууд `{label, assigned_to, release_at_ms, note}`. |
+| `pricing` | массив | `label_regex`, `base_price`, `auction_kind`, үргэлжлэх хугацааны хязгаар бүхий түвшний объектууд. |
+| `fee_split` | объект | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` үндсэн цэгийн хуваагдал. |
+| `policy_version` | бүхэл тоо | Удирдлага нь бодлогыг засах бүрт монотон тоолуур нэмэгддэг. |
 
-## Current catalog
+## Одоогийн каталог
 
-| Suffix | ID (`hex`) | Steward | Fund splitter | Status | Payment asset | Referral cap (bps) | Term (min – max years) | Grace / Redemption (days) | Pricing tiers (regex → base price / auction) | Reserved labels | Fee split (T/S/R/E bps) | Policy version |
-|--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|---------------------------|----------------------------------------------|-----------------|-------------------------|----------------|
-| `.sora` | `0x0001` | `ih58...` | `ih58...` | Active | `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → ih58...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `ih58...` | `ih58...` | Paused | `xor#sora` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → ih58...`, `guardian → ih58...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `ih58...` | `ih58...` | Revoked | `xor#sora` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| дагавар | ID (`hex`) | Даамал | Сан хуваагч | Статус | Төлбөрийн хөрөнгө | Referral cap (bps) | Хугацаа (мин – макс жил) | Нигүүлсэл / гэтэлгэл (өдөр) | Үнийн шатлал (regex → үндсэн үнэ / дуудлага худалдаа) | Хадгалагдсан шошго | Төлбөрийг хуваах (T/S/R/E bps) | Бодлогын хувилбар |
+|--------|------------|---------|---------------|--------|---------------|--------------------|-------------------------|--------------------------|------------------------------------|
+| `.sora` | `0x0001` | `ih58...` | `ih58...` | Идэвхтэй | `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → ih58...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `ih58...` | `ih58...` | Түр зогссон | `xor#sora` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → ih58...`, `guardian → ih58...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `ih58...` | `ih58...` | Хүчингүй болгосон | `xor#sora` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
-## JSON excerpt
+## JSON ишлэл
 
 ```json
 {
@@ -80,12 +81,12 @@ tooling can load the same parameters without scraping status docs.
 }
 ```
 
-## Automation notes
+## Автоматжуулалтын тэмдэглэл
 
-1. Load the JSON snapshot and hash/sign it before distributing to operators.
-2. Registrar tooling should surface the `suffix_id`, term limits, and pricing
-   from the catalog whenever a request hits `/v1/sns/*`.
-3. DNS/Gateway helpers read the reserved label metadata when generating GAR
-   templates so DNS responses stay aligned with governance controls.
-4. KPI annex jobs tag dashboard exports with suffix metadata so alerts match the
-   launch state recorded here.
+1. Операторуудад түгээхээсээ өмнө JSON агшин зуурын зургийг ачаалж, хэш / гарын үсэг зурна уу.
+2. Бүртгүүлэгчийн хэрэгсэл нь `suffix_id`, хугацааны хязгаарлалт, үнэ зэргийг тусгасан байх ёстой.
+   хүсэлт `/v1/sns/*` хүрэх бүрт каталогоос.
+3. DNS/Gateway туслахууд GAR үүсгэх үед нөөцлөгдсөн шошгоны мета өгөгдлийг уншдаг
+   загварууд нь DNS хариултууд нь засаглалын хяналттай нийцдэг.
+4. KPI хавсралтын ажлын шошгоны хяналтын самбарыг дагавар мета өгөгдөлтэй экспортлох тул анхааруулга нь дараахтай таарч байна
+   хөөргөх төлөвийг энд тэмдэглэв.

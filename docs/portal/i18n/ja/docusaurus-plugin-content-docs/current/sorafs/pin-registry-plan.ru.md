@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/sorafs/pin-registry-plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: pin-registry-plan
-title: План реализации Pin Registry SoraFS
-sidebar_label: План Pin Registry
-description: План реализации SF-4, охватывающий машину состояний registry, фасад Torii, tooling и наблюдаемость.
+タイトル: План реализации Pin レジストリ SoraFS
+Sidebar_label: План ピン レジストリ
+説明: SF-4、охватывающий мазоину состояний レジストリ、фасад Torii、ツールと наблюдаемость。
 ---
 
 :::note Канонический источник
 Эта страница отражает `docs/source/sorafs/pin_registry_plan.md`. Держите обе копии синхронизированными, пока наследственная документация остается активной.
 :::
 
-# План реализации Pin Registry SoraFS (SF-4)
+# ピン レジストリ SoraFS (SF-4)
 
-SF-4 поставляет контракт Pin Registry и поддерживающие сервисы, которые хранят
-обязательства manifest, применяют политики pin и предоставляют API для Torii,
-шлюзов и оркестраторов. Этот документ расширяет план валидации конкретными
-задачами реализации, охватывая on-chain логику, сервисы на стороне хоста,
-fixtures и операционные требования.
+SF-4 は、ピン レジストリとピン レジストリを表示します。
+マニフェスト、ピン、API、Torii、
+Поркестраторов 。 Этот документ раслидации конкретными план валидации конкретными
+задачами реализации, охватывая オンチェーン логику, сервисы на стороне хоста,
+備品と операционные требования。
 
 ## Область
 
-1. **Машина состояний registry**: записи Norito для manifests, aliases,
-   цепочек преемственности, эпох хранения и метаданных управления.
+1. **レジストリ**: Norito マニフェスト、エイリアス、
+   цепочек преемственности、эпох хранения и метаданных управления。
 2. **Реализация контракта**: детерминированные CRUD-операции для жизненного
-   цикла pin (`ReplicationOrder`, `Precommit`, `Completion`, eviction).
-3. **Сервисный фасад**: gRPC/REST endpoints, опирающиеся на registry и
-   используемые Torii и SDK, включая пагинацию и аттестацию.
-4. **Tooling и fixtures**: CLI helpers, тестовые векторы и документация для
-   синхронизации manifests, aliases и governance envelopes.
-5. **Телеметрия и ops**: метрики, алерты и runbooks для здоровья registry.
+   цикла ピン (`ReplicationOrder`、`Precommit`、`Completion`、エビクション)。
+3. **説明**: gRPC/REST エンドポイント、レジストリおよび
+   Torii と SDK が必要です。
+4. **ツールとフィクスチャ**: CLI ヘルパー、ツールとツール
+   マニフェスト、エイリアス、ガバナンス エンベロープ。
+5. **操作**: レジストリ、操作、Runbook のレジストリ。
 
 ## Модель данных
 
@@ -43,57 +45,55 @@ fixtures и операционные требования.
 
 | Структура | Описание | Поля |
 |----------|----------|------|
-| `PinRecordV1` | Каноническая запись manifest. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
-| `AliasBindingV1` | Сопоставляет alias -> CID manifest. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Инструкция для providers закрепить manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Подтверждение провайдера. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | Снимок политики управления. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+| `PinRecordV1` |マニフェストを作成します。 | `manifest_cid`、`chunk_plan_digest`、`por_root`、`profile_handle`、`approved_at`、`retention_epoch`、`pin_policy`、`successor_of`、 `governance_envelope_hash`。 |
+| `AliasBindingV1` |エイリアス -> CID マニフェストを選択します。 | `alias`、`manifest_cid`、`bound_at`、`expiry_epoch`。 |
+| `ReplicationOrderV1` |プロバイダーのマニフェストを確認します。 | `order_id`、`manifest_cid`、`providers`、`redundancy`、`deadline`、`policy_hash`。 |
+| `ReplicationReceiptV1` | Подтверждение провайдера。 | `order_id`、`provider_id`、`status`、`timestamp`、`por_sample_digest`。 |
+| `ManifestPolicyV1` | Снимок политики управления。 | `min_replicas`、`max_retention_epochs`、`allowed_profiles`、`pin_fee_basis_points`。 |
 
-Ссылка на реализацию: см. `crates/sorafs_manifest/src/pin_registry.rs` для схем Norito
-на Rust и helpers проверки, которые лежат в основе этих записей. Валидация
-повторяет manifest tooling (lookup chunker registry, pin policy gating), чтобы
-контракт, фасады Torii и CLI разделяли идентичные инварианты.
+Ссылка на реализацию: см. `crates/sorafs_manifest/src/pin_registry.rs` 日 Norito
+Rust とヘルパーは、両方の機能を備えています。 Валидация
+マニフェスト ツール (チャンカー レジストリのルックアップ、ピン ポリシー ゲーティング)、
+контракт、фасады Torii および CLI разделяли идентичные инварианты。
 
-Задачи:
-- Завершить схемы Norito в `crates/sorafs_manifest/src/pin_registry.rs`.
-- Сгенерировать код (Rust + другие SDK) с помощью макросов Norito.
-- Обновить документацию (`sorafs_architecture_rfc.md`) после внедрения схем.
+説明:
+- Norito と `crates/sorafs_manifest/src/pin_registry.rs` を確認してください。
+- Сгенерировать код (Rust + другие SDK) 最低 Norito。
+- Обновить документацию (`sorafs_architecture_rfc.md`) が表示されます。
 
 ## Реализация контракта
 
 | Задача | Ответственные | Примечания |
-|--------|---------------|-----------|
-| Реализовать хранение registry (sled/sqlite/off-chain) или модуль смарт-контракта. | Core Infra / Smart Contract Team | Обеспечить детерминированный hashing, избегать floating point. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Использовать `ManifestValidator` из плана валидации. Биндинг alias теперь проходит через `RegisterPinManifest` (DTO Torii), тогда как выделенный `bind_alias` остается в плане для последующих обновлений. |
-| Переходы состояния: обеспечивать преемственность (manifest A -> B), эпохи хранения, уникальность alias. | Governance Council / Core Infra | Уникальность alias, лимиты хранения и проверки одобрения/вывода предшественников живут в `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; обнаружение многошаговой преемственности и учет репликации остаются открытыми. |
-| Управляемые параметры: загружать `ManifestPolicyV1` из config/состояния управления; разрешить обновления через события управления. | Governance Council | Предоставить CLI для обновления политик. |
-| Эмиссия событий: выпускать события Norito для телеметрии (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Определить схему событий + logging. |
+|----------|------|----------|
+|レジストリ (スレッド/sqlite/オフチェーン) を参照してください。 |コアインフラ/スマートコントラクトチーム |ハッシュ化、浮動小数点を使用します。 |
+|エントリ ポイント: `submit_manifest`、`approve_manifest`、`bind_alias`、`issue_replication_order`、`complete_replication`、`evict_manifest`。 |コアインフラ | Использовать `ManifestValidator` と表示されます。別名 теперь проходит через `RegisterPinManifest` (DTO Torii)、тогда как выделенный `bind_alias` остается вありがとうございます。 |
+|例: обеспечивать преемственность (マニフェスト A -> B)、эпохи хранения、уникальность エイリアス。 |ガバナンス評議会 / コアインフラ | Уникальность エイリアス、лимиты хранения и проверки одобрения/вывода предのようにственников живут в `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; обнаружение многолыаговой преемственности и учет репликации остаются открытыми. |
+| Управляемые параметры: загружать `ManifestPolicyV1` из config/состояния управления;あなたのことを思い出してください。 |ガバナンス評議会 | Предоставить CLI для обновления политик。 |
+|例: Norito および `ManifestApproved`、`ReplicationOrderIssued`、`AliasBound`)。 |可観測性 | + ロギングを実行します。 |
 
-Тестирование:
-- Юнит-тесты для каждой entry point (позитивные + отказные сценарии).
-- Property-тесты для цепочки преемственности (без циклов, монотонные эпохи).
-- Fuzz валидации с генерацией случайных manifests (с ограничениями).
+要点:
+- Юнит-тесты для каждой エントリ ポイント (позитивные + отказные сценарии)。
+- プロパティ-тесты для цепочки преемственности (без циклов, монотонные эпохи)。
+- ファズ валидации с генерацией случайных マニフェスト (с ограничениями)。
 
-## Сервисный фасад (Интеграция Torii/SDK)
+## Сервисный фасад (Интеграция Torii/SDK)| Компонент | Задача | Ответственные |
+|----------|----------|----------|
+| Сервис Torii | Экспонировать `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領)。 Обеспечить пагинацию + фильтрацию. |ネットワーキング TL / コア インフラ |
+| Аттестация |レジストリを参照してください。 Norito、SDK を使用してください。 |コアインフラ |
+| CLI | `sorafs_manifest_stub` および CLI `sorafs_pin`、`pin submit`、`alias bind`、`order issue`、`registry export` を参照してください。 |ツーリングWG |
+| SDK | Сгенерировать клиентские バインディング (Rust/Go/TS) と Norito; добавить интеграционные тесты。 | SDK チーム |
 
-| Компонент | Задача | Ответственные |
-|-----------|--------|---------------|
-| Сервис Torii | Экспонировать `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Обеспечить пагинацию + фильтрацию. | Networking TL / Core Infra |
-| Аттестация | Включать высоту/хэш registry в ответы; добавить структуру аттестации Norito, потребляемую SDK. | Core Infra |
-| CLI | Расширить `sorafs_manifest_stub` или новый CLI `sorafs_pin` с `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Сгенерировать клиентские bindings (Rust/Go/TS) из схемы Norito; добавить интеграционные тесты. | SDK Teams |
+説明:
+- キャッシュ/ETag とエンドポイントの GET を実行します。
+- レート制限/認証を Torii で実行します。
 
-Операции:
-- Добавить слой cache/ETag для GET endpoints.
-- Предоставить rate limiting / auth в соответствии с политиками Torii.
+## 備品と CI
 
-## Fixtures и CI
-
-- Каталог fixtures: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` хранит подписанные snapshots manifest/alias/order, пересоздаваемые через `cargo run -p iroha_core --example gen_pin_snapshot`.
-- Шаг CI: `ci/check_sorafs_fixtures.sh` пересоздает snapshot и падает при diff, удерживая fixtures CI синхронными.
-- Интеграционные тесты (`crates/iroha_core/tests/pin_registry.rs`) покрывают happy path плюс отказ при дублировании alias, guards одобрения/хранения alias, несовпадающие handles chunker, проверку числа реплик и отказы guards преемственности (неизвестные/предодобренные/выведенные/самоссылки); см. кейсы `register_manifest_rejects_*` для деталей покрытия.
-- Юнит-тесты теперь покрывают валидацию alias, guards хранения и проверки преемника в `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; обнаружение многошаговой преемственности появится, когда заработает машина состояний.
-- Golden JSON для событий, используемых в пайплайнах наблюдаемости.
+- フィクスチャ: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` スナップショット マニフェスト/エイリアス/順序、`cargo run -p iroha_core --example gen_pin_snapshot` のスナップショット。
+- CI: `ci/check_sorafs_fixtures.sh` スナップショットと差分、フィクスチャ CI が表示されます。
+- Интеграционные тесты (`crates/iroha_core/tests/pin_registry.rs`) ハッピー パス плюс отказ при дублировании エイリアス、ガード одобрения/хранения エイリアス、 несовпадающие はチャンカーを処理し、ガードを保持します。 (неизвестные/предодобренные/выведенные/самоссылки);最低。 кейсы `register_manifest_rejects_*` 日、今日は。
+- Юнит-тесты теперь покрывают валидацию エイリアス、ガード хранения и проверки премника в `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; обнаружение многоственности появится, когда заработает мазина состояний.
+- Golden JSON は、最新の機能を備えています。
 
 ## Телеметрия и наблюдаемость
 
@@ -104,44 +104,44 @@ fixtures и операционные требования.
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- Существующая provider-телеметрия (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) остается в области для end-to-end дашбордов.
+- プロバイダー (`torii_sorafs_capacity_*`、`torii_sorafs_fee_projection_nanos`) をエンドツーエンドで接続します。
 
-Логи:
-- Структурированный поток событий Norito для аудиторов управления (подписанные?).
+例:
+- Структурированный поток событий Norito для аудиторов управления (подписанные?)
 
 Алерты:
-- Заказы репликации в ожидании, превышающие SLA.
-- Истечение срока alias ниже порога.
-- Нарушения хранения (manifest не продлен до истечения).
+- SLA を使用してください。
+- Истечение срока 別名 ниже порога。
+- Наруления хранения (マニフェスト не продлен до истечения)。
 
-Дашборды:
-- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` отслеживает totals жизненного цикла manifests, покрытие alias, насыщение backlog, SLA ratio, overlays latency vs slack и долю пропущенных заказов для on-call ревью.
+説明:
+- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` 合計のマニフェスト、エイリアス、バックログ、SLA 比率、オーバーレイのレイテンシとスラックの比較オンコール中です。
 
-## Runbooks и документация
+## Runbook と документация
 
-- Обновить `docs/source/sorafs/migration_ledger.md`, чтобы включить обновления статуса registry.
-- Руководство оператора: `docs/source/sorafs/runbooks/pin_registry_ops.md` (уже опубликовано) с метриками, алертингом, развертыванием, backup и восстановлением.
-- Руководство по управлению: описать параметры политики, workflow одобрения, обработку споров.
-- Страницы справочника API для каждого endpoint (Docusaurus docs).
+- Обновить `docs/source/sorafs/migration_ledger.md`、レジストリを確認してください。
+- Руководство оператора: `docs/source/sorafs/runbooks/pin_registry_ops.md` (уже опубликовано) с метриками、алертингом、развертыванием、backup およびПосстановлением。
+- Руководство по управлению: описать параметры политики、ワークフロー одобрения、обработку споров.
+- API エンドポイントの説明 (Docusaurus ドキュメント)。
 
 ## Зависимости и последовательность
 
-1. Завершить задачи плана валидации (интеграция ManifestValidator).
-2. Финализировать схему Norito + defaults политики.
+1. マニフェスト検証 (ManifestValidator) を実行します。
+2. Norito + デフォルト値を入力します。
 3. Реализовать контракт + сервис, подключить телеметрию.
-4. Перегенерировать fixtures, запустить интеграционные suite.
-5. Обновить docs/runbooks и отметить пункты roadmap как завершенные.
+4. フィクスチャ、スイートを備えています。
+5. ドキュメント/Runbook およびロードマップを参照してください。
 
-Каждый пункт чеклиста SF-4 должен ссылаться на этот план при фиксации прогресса.
-REST фасад теперь поставляется с аттестованными endpoints списка:
+SF-4 のテストが完了しました。
+REST はエンドポイントを維持します:
 
-- `GET /v1/sorafs/pin` и `GET /v1/sorafs/pin/{digest}` возвращают manifests с
-  alias bindings, orders репликации и объектом аттестации, производным от
-  хэша последнего блока.
-- `GET /v1/sorafs/aliases` и `GET /v1/sorafs/replication` публикуют активный
-  каталог alias и backlog заказов репликации с консистентной пагинацией и
-  фильтрами статуса.
+- `GET /v1/sorafs/pin` および `GET /v1/sorafs/pin/{digest}` のマニフェスト
+  エイリアス バインディング、注文 репликации и объектом аттестации、производным от
+  хэза последнего блока。
+- `GET /v1/sorafs/aliases` と `GET /v1/sorafs/replication` は、
+  別名とバックログ заказов репликации с консистентной пагинацией и
+  Єильтрами статуса。
 
-CLI оборачивает эти вызовы (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`), чтобы операторы могли автоматизировать аудиты registry
-без обращения к низкоуровневым API.
+CLI によるアクセス (`iroha app sorafs pin list`、`pin show`、`alias list`、
+`replication list`)、レジストリを取得する
+API を使用します。

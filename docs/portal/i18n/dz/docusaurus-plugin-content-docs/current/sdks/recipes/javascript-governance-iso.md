@@ -7,25 +7,27 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+filight Sample load འདི་ '@site/src/ཆ་ཤས་/ཆ་ཤས་/དཔེ་ཚད་ཕབ་ལེན་';
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+འདི་གི་ཐབས་ཤེས་འདི་གིས་ JS5 ལམ་སྟོན་ནང་ལུ་ ཡར་ཐོན་ཅན་གྱི་ལཱ་གི་རྒྱུན་རིམ་གཉིས་འདི་ བསྡམས་ཡོདཔ་ཨིན།
+རྣམ་གྲངས་: མཇུག་ལས་མཇུག་ཚུན་ཚོད་ གཞུང་སྐྱོང་རོགས་སྐྱོར་ (གྲོས་འཆར་དང་ ཚོགས་རྒྱན་ ཚོགས་སྡེའི་པར་བཏབ་ནི།)
+དང་ ISO 20022 ཟམ་གྱི་ལམ་ཐིག་ (pacs.008/pacs.009). དཔེ་ཚད་རེ་རེ་བཞིན་ གཡོག་བཀོལ།
+དཔར་བསྐྲུན་འབད་ཡོད་པའི་ `@iroha/iroha-js` ཐུམ་སྒྲིལ་དང་ ༢༠༡༦ ལུ་ ཤོག་འཛིན་ཚུ་ མེ་ལོང་ནང་ བཏོནམ་ཨིན།
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## གཞུང་སྐྱོང་རོགས་སྐྱོར་དཔེ་ཚད།
 
-<SampleDownload
-  href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
-/>
+<དཔེ་ཚད་ཕབ་ལེན་འབད།
+  href="/sdk-ལན་/ཇ་བ་སི་ཀིརིཔརིཀ་ཊི་/གཱོན་ནེནསི་.ཨེམ་ཇེ་སི།"
+  filen="governance.mjs"
+  secont="ཐབས་ཤེས་འདི་ནང་ རྒྱབ་རྟེན་འབད་མི་ གཞུང་སྐྱོང་གྲོགས་རམ་པ་ཕབ་ལེན་འབད།"
+།/>།
 
-### Prerequisites
+### སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
 ```bash
 npm install @iroha/iroha-js
@@ -39,10 +41,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+I18NI000000012X མིང་རྟགས་བཀོད་པའི་ཚོང་འབྲེལ་ཚུ་ Torii དང་ ལུ་བཙུགས་ནིའི་དོན་ལུ་ གཞི་སྒྲིག་འབད།
+I18NI0000000013X གྲུབ་འབྲས་གཞུང་སྐྱོང་མངའ་སྡེ་འདི་ བཙུགས་པའི་ཤུལ་ལས་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ཨིན།
 
-### Example script
+### དཔེར་ཡིག་།
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -222,26 +224,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### གཡོག་བཀོལ།
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
+- ཧེསི་རྐྱངམ་ཅིག་བཟོ་ནི་གི་དོན་ལུ་ `node governance.mjs` ལག་ལེན་འཐབ་དགོ། I18NI0000015X ལུ་ཁ་སྐོང་འབད།
+  ཚོང་འབྲེལ་ཚུ་ I18NT000000003X དང་ I18NI000000016X ལུ་བཙུགས་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་མངའ་སྡེ་ཚུ་ ལོག་བཏང་དགོ།
+  (I18NI0000000017X, `getGovernanceReferendum`, `getGovernanceLocks`, དང་།
   `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- སི་ཨའི་དྲན་ཐོ་ནང་ གཏན་འབེབས་ཀྱི་ ཧ་ཤེ་ཚུ་ བསྡུ་ལེན་འབད་ནི། གོ་རིམ་རེ་རེ་གིས་ མིང་རྟགས་བཀོད་ཡོད་པའི་བཱའིཊི་འདི་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  རིང་ཚད་འདི་གདམ་ཁ་ཅན་གྱི་ས་གནས་ཀྱི་རོགས་རམ་འཐོབ་ཚུགས་པའི་སྐབས་ བསྐྱར་རྩིས་འབད་ཡོད་པའི་ཧ་ཤི་འདི་ཁ་སྐོང་འབད།
+- རྩིས་ཞིབ་པ་ཚུ་གིས་ འཚོལ་ཞིབ་འབད་ཚུགས་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་ནིའི་དོན་ལུ་ ཀོན་སོལ་ཨའུཊི་པུཊི་འདི་ མཐུད་དགོ།
+  གྲོས་འཆར་ / འོས་བསྡུའི་ངོ་རྟགས་ཚུ་ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ CLI སྒྲུབ་བྱེད་ལུ་ ལོག་འོང་།
 
-## ISO bridge sample
+## ISO ཟམ་པའི་དཔེ་ཚད།
 
-<SampleDownload
-  href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
-/>
+<དཔེ་ཚད་ཕབ་ལེན་འབད།
+  href="/sdk-ལེན་འཐབ།/ཇ་བ་སི་ཀིརིཔཀྲི་/ཨའི་སོ་-ཟམ་.ཨེམ་ཇེ་སི།"
+  filen name="iso-bridge.mjs"
+  secont="བཟའ་ཐབས་འདི་ནང་ གཡོག་བཀོལ་བཏུབ་པའི་ ISO 20022 གྲོགས་རམ་པ་ ཕབ་ལེན་འབད།"
+།/>།
 
-### Prerequisites
+### སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
 ```bash
 npm install @iroha/iroha-js
@@ -253,166 +255,46 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+ཁྱོད་ཀྱིས་ ཞུ་ཡིག་བཙུགས་མ་བཏུབ་པའི་སྐབས་ `ISO_MESSAGE_ID` འདི་ གཞི་སྒྲིག་འབད་ཞིནམ་ལས་ ཤེས་མི་ཅིག་ འོས་བསྡུ།
+ངོས་འཛིན་འབད་མི། ཟམ་གྱི་སྐུགས་ཐོབ་པའི་བསྒང་ལས་ ཕྱིར་ཐོན་འབད་ནི་ལུ་ I18NI0000022X ལག་ལེན་འཐབ།
+ཐོ་བཀོད་ `Accepted` ཚོང་འབྲེལ་ཧེཤ་འདི་ད་ལྟོ་མཇུག་བསྡུ་མ་ཚུགས་རུང་ཡང་།
 
-### Example script
+### དཔེར་ཡིག་།
 
-```ts title="iso-bridge.mjs"
-#!/usr/bin/env node
+I18NF0000008X
 
-import { ToriiClient } from "@iroha/iroha-js";
+### གཡོག་བཀོལ།
 
-const TORII_URL = process.env.TORII_URL ?? "http://127.0.0.1:8080";
-const MAX_POLL_ATTEMPTS = Number(process.env.ISO_POLL_ATTEMPTS ?? 12);
-const POLL_INTERVAL_MS = Number(process.env.ISO_POLL_INTERVAL_MS ?? 2_000);
-const MESSAGE_KIND = (process.env.ISO_MESSAGE_KIND ?? "pacs.008").toLowerCase();
-const EXISTING_MESSAGE_ID = process.env.ISO_MESSAGE_ID?.trim();
-const RESOLVE_ON_ACCEPTED = process.env.ISO_RESOLVE_ON_ACCEPTED === "1";
+- དཔེ་ཚད་པེ་ལོཌི་ཅིག་བཙུགས་ནིའི་དོན་ལུ་ `node iso-bridge.mjs` ལག་ལེན་འཐབ། སྡེ༌ཚན
+  `ISO_MESSAGE_KIND=pacs.009` གིས་ PvP རྒྱུན་འགྲུལ་ཡང་ན་ `ISO_MESSAGE_ID` ལུ་ལག་ལེན་འཐབ་ནི།
+  འོས་ཤོག་འོགམ་འདི་ ལོག་མ་བཙུགས་པར་ ད་ལྟོ་ཡོད་པའི་ ཞུ་ཡིག་ཅིག།
+- གྲོགས་རམ་པ་འདི་གིས་ `wait.onPoll` བརྒྱུད་དེ་ འོས་བསྡུའི་དཔའ་བཅམ་མི་ཚུ་ག་ར་ འཇམ་ཏོང་ཏོ་བཟོཝ་ཨིན།
+  CI དྲན་ཐོ་ཚུ་ནང་ ངོས་ལེན་དུས་ཚོད་གྲལ་ཐིག་ཚུ་ འཛིན་བཟུང་འབད།
+- མཐའ་མཇུག་གི་གནས་རིམ་ + ཚོང་འབྲེལ་ཧེཤ་ ཨའི་ཨེསི་ཨོ་ཟམ་རན་དེབ་ཚུ་ལུ་དེ་སྦེ་རྩིས་ཞིབ་པ་ཚུ་མཉམ་སྦྲགས་འབད།
+  can trace.008/pacs.009 བསྐྱར་བཟོ་ཐུབ་པའི་གླ་ཆ་ལུ་ལོག་སྤྲོད་ནི།
+  JS5 roadpe གིས་ དགོས་མཁོ་ཡོདཔ།
 
-if (!["pacs.008", "pacs.009"].includes(MESSAGE_KIND)) {
-  console.error("ISO_MESSAGE_KIND must be 'pacs.008' or 'pacs.009'");
-  process.exit(1);
-}
+## ཟུར་ཐོ ་ དང་ སྤོ་བཤུད།
 
-const SAMPLE_PACS008_XML = `<?xml version="1.0" encoding="UTF-8"?>\n` +
-  `<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10">\n` +
-  "  <FIToFICstmrCdtTrf>\n" +
-  "    <GrpHdr>\n" +
-  `      <MsgId>example-${Date.now()}</MsgId>\n` +
-  "      <CreDtTm>2026-01-26T12:00:00Z</CreDtTm>\n" +
-  "    </GrpHdr>\n" +
-  "    <CdtTrfTxInf>\n" +
-  "      <PmtId>\n" +
-  "        <InstrId>example-instruction</InstrId>\n" +
-  "        <EndToEndId>example-e2e</EndToEndId>\n" +
-  "        <TxId>example-transaction</TxId>\n" +
-  "      </PmtId>\n" +
-  "      <IntrBkSttlmAmt Ccy=\"EUR\">10.00</IntrBkSttlmAmt>\n" +
-  "    </CdtTrfTxInf>\n" +
-  "  </FIToFICstmrCdtTrf>\n" +
-  "</Document>`;
+`@iroha/iroha-js` ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ འཐུས་དང་ བརྗེ་སོར་གྱི་གྲོགས་རམ་པ་ཚུ་ གཅིག་མཚུངས་སྦེ་ བཏངམ་ཨིན།
+ofline save dain གྱལ་ཚུ། དེ་ཚུ་ ཆིག་སྒྲིལ་སྲིད་བྱུས་ཚུ་ བརྟག་དཔྱད་འབད་ནི་ལུ་ ལག་ལེན་འཐབ།
+ཆིག་སྒྲིལ་དང་ ཨེཆ་ཨེམ་ཨེསི་ཉེན་སྲུང་ཤེས་རྟོགས་ དགོངས་ཞུ་འབད་ཡོདཔ་)
 
-const SAMPLE_PACS009_XML = `<?xml version="1.0" encoding="UTF-8"?>\n` +
-  `<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10">\n` +
-  "  <FICdtTrf>\n" +
-  "    <GrpHdr>\n" +
-  `      <BizMsgIdr>example-${Date.now()}</BizMsgIdr>\n` +
-  "      <MsgDefIdr>pacs.009.001.10</MsgDefIdr>\n" +
-  "      <CreDtTm>2026-01-26T12:00:00Z</CreDtTm>\n" +
-  "    </GrpHdr>\n" +
-  "    <CdtTrfTxInf>\n" +
-  "      <PmtId>\n" +
-  "        <InstrId>example-instruction</InstrId>\n" +
-  "        <TxId>example-tx</TxId>\n" +
-  "      </PmtId>\n" +
-  "      <IntrBkSttlmAmt Ccy=\"USD\">1000.00</IntrBkSttlmAmt>\n" +
-  "      <IntrBkSttlmDt>2026-01-27</IntrBkSttlmDt>\n" +
-  "      <InstgAgt>DEUTDEFF</InstgAgt>\n" +
-  "      <InstdAgt>DEUTDEFF</InstdAgt>\n" +
-  "      <Purp>SECU</Purp>\n" +
-  "    </CdtTrfTxInf>\n" +
-  "  </FICdtTrf>\n" +
-  "</Document>`;
+I18NF0000009X
 
-async function main() {
-  const client = new ToriiClient(TORII_URL);
-  const wait = {
-    maxAttempts: MAX_POLL_ATTEMPTS,
-    pollIntervalMs: POLL_INTERVAL_MS,
-    resolveOnAcceptedWithoutTransaction: RESOLVE_ON_ACCEPTED,
-    onPoll: ({ attempt, status }) => {
-      if (!status) {
-        console.log(`Attempt ${attempt}: status unavailable (retrying)`);
-        return;
-      }
-      const hash = status.transaction_hash ?? "<pending>";
-      console.log(`Attempt ${attempt}: ${status.status ?? "unknown"} tx=${hash}`);
-    },
-  };
+Torii གིས་ དགོངས་ཞུ་འབད་མི་ ཞིབ་དཔྱད་ཀྱི་འཐུས་ཅིག་ མི་མང་ལྡེ་མིག་ལུ་ སྙན་ཞུ་འབད་བའི་སྐབས་ གསལ་སྟོན་འབདཝ་ཨིན།
+ལས་འཆར་དང་ གདམ་ཁའི་ཐོན་རིམ་ ཊི་ཊི་ཨེལ་ དེ་ལས་ བཞུ་བཅོས་ཚུ་ འོག་ལུ་སྡོདཔ་ཨིན།
+`integrity_metadata.provisioned`, དགོས་མཁོ་འདི་མཉམ་སྦྲགས་འབད་ནི་ལུ་ གལ་གནད་ཅན་བཟོཝ་ཨིན།
+མེ་ཊ་ཌེ་ཊ་ ལས་ OA10.3 སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་ཚུ།
 
-  let result;
-  if (EXISTING_MESSAGE_ID) {
-    console.log(`Waiting for ISO message ${EXISTING_MESSAGE_ID}...`);
-    result = await client.waitForIsoMessageStatus(EXISTING_MESSAGE_ID, wait);
-  } else {
-    const payload = MESSAGE_KIND === "pacs.009" ? SAMPLE_PACS009_XML : SAMPLE_PACS008_XML;
-    console.log(`Submitting ${MESSAGE_KIND} payload to ${TORII_URL}`);
-    result =
-      MESSAGE_KIND === "pacs.009"
-        ? await client.submitIsoPacs009AndWait(payload, { wait })
-        : await client.submitIsoPacs008AndWait(payload, { wait });
-  }
+## ཤུལ་མམ་གྱི་གོམ་པ།
 
-  const hash = result.transaction_hash ?? "<pending>";
-  console.log(
-    `Final status for ${result.message_id}: ${result.status ?? "unknown"} tx=${hash}`,
-  );
-}
-
-main().catch((error) => {
-  console.error("ISO bridge recipe failed:", error);
-  process.exitCode = 1;
-});
-```
-
-### Run & monitor
-
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
-
-## Offline allowances & transfers
-
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
-
-```bash
-# List recent allowances and log their integrity policies
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const page = await client.listOfflineAllowances({ limit: 5 });
-  for (const entry of page.items) {
-    const policy = entry.integrity_metadata?.policy ?? "<unknown>";
-    console.log(entry.controller_display, policy);
-  }
-'
-
-# Summarize transfers + Provisioned manifest metadata
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const page = await client.listOfflineTransfers({ limit: 5 });
-  for (const entry of page.items) {
-    const manifest = entry.integrity_metadata?.provisioned?.manifest_schema ?? "<none>";
-    console.log(entry.bundle_id_hex, entry.integrity_metadata?.policy ?? "<unknown>", manifest);
-  }
-'
-```
-
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
-
-## Next steps
-
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- འཚོལ།- I18NI000000030X དང་།
+  རྒྱ་བསྐྱེད་འབད་ཡོད་པའི་དཔེ་ཚུ་གི་དོན་ལུ་ `javascript/iroha_js/recipes/iso_bridge.mjs` (multi-sig
+  ཚོགས་རྒྱན་བཙུགས་ནི་དང་ ཚོགས་སྡེ་ཝི་ཨར་ཨེཕ་ བསྐྱར་བཟོའི་སྲིད་བྱུས།)
+- སྤྱི་ལོ་༢༠༡༨ ལུ་ Norito-ཟུར་ཡིག་ཆ་ཚུ་བསྐྱར་ཞིབ་འབད།
+  `docs/source/sdk/js/governance_iso_examples.md` དང་།
+  ཀེ་ནོ་ནིག་ས་སྒོ་གི་དོན་ལུ་ `docs/source/finance/settlement_iso_mapping.md`
+  གྲོགས་རམ་འདི་ཚུ་གིས་ གཞི་བསྟུན་འབད་མི་སབ་ཁྲ་ཚུ།
+- དྲན་ཐོ་ཚུ་ བཟུང་ཞིནམ་ལས་ གཞུང་སྐྱོང་ལུ་ མཉམ་སྦྲགས་འབད་ནི།
+  JS5 “ཡིག་ཆ་ + དཔེ་སྐྲུན་” དགོས་མཁོ་ `roadmap.md` ནང་ གཞི་བསྟུན་འབད་ཡོདཔ།

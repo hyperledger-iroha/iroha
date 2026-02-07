@@ -4,187 +4,183 @@ direction: ltr
 source: docs/portal/docs/da/threat-model.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note المصدر القياسي
-يعكس `docs/source/da/threat_model.md`. ابق النسختين متزامنتين حتى يتم سحب
+`docs/source/da/threat_model.md`. ابق النسختين متزامنتين حتى يتم سحب
 الوثائق القديمة.
 :::
 
-# نموذج تهديدات توفر البيانات في Sora Nexus
+# نموذج تهديدات توفر البيانات em Sora Nexus
 
 _اخر مراجعة: 2026-01-19 -- المراجعة القادمة المجدولة: 2026-04-19_
 
-وتيرة الصيانة: Data Availability Working Group (<=90 يوما). يجب ان تظهر كل
-مراجعة في `status.md` مع روابط لتذاكر التخفيف النشطة واثار المحاكاة.
+وتيرة الصيانة: Grupo de Trabalho de Disponibilidade de Dados (<=90 dias). يجب ان تظهر كل
+A chave `status.md` pode ser usada para remover a água e o cabo.
 
 ## الهدف والنطاق
 
-برنامج Data Availability (DA) يبقي بث Taikai و blobs مسارات Nexus وادوات
-الحوكمة قابلة للاسترجاع تحت اخطاء بيزنطية، وشبكات، ومشغلين. هذا النموذج
+Disponibilidade de dados (DA) em Taikai e blobs Nexus e blobs
+Certifique-se de que o produto esteja funcionando corretamente e sem problemas. هذا النموذج
 يثبت عمل الهندسة لDA-1 (البنية ونموذج التهديدات) ويعد خط اساس لمهام DA اللاحقة
-(DA-2 حتى DA-10).
+(DA-2 em vez de DA-10).
 
-المكونات ضمن النطاق:
-- امتداد ingest في Torii وكتابة metadata Norito.
-- اشجار تخزين blobs المدعومة بSoraFS (طبقات hot/cold) وسياسات التكرار.
-- تعهدات كتل Nexus (wire formats, proofs, light-client APIs).
-- hooks enforcement لPDP/PoTR الخاصة بحمولات DA.
-- تدفقات المشغل (pinning, eviction, slashing) وخطوط الرصد.
+Nome de usuário:
+- Ingerir em Torii e metadados Norito.
+- اشجار تخزين blobs المدعومة بSoraFS (طبقات quente/frio) وسياسات التكرار.
+- تعهدات كتل Nexus (formatos de transmissão, provas, APIs de cliente leve).
+- aplicação de ganchos لPDP/PoTR الخاصة بحمولات DA.
+- تدفقات المشغل (fixação, despejo, corte) وخطوط الرصد.
 - موافقات الحوكمة التي تقبل او تزيل مشغلي DA والمحتوى.
 
 خارج النطاق لهذا المستند:
 - نمذجة الاقتصاد الكاملة (ضمن مسار DA-7).
-- بروتوكولات SoraFS الاساسية المغطاة في نموذج تهديدات SoraFS.
-- ارغونوميا SDK للعميل خارج اعتبارات سطح التهديد.
+- Coloque o SoraFS no lugar do SoraFS.
+- O SDK do SDK está disponível para download.
 
 ## نظرة عامة معمارية
 
-1. **الارسال:** يرسل العملاء blobs عبر API ingest لDA في Torii. تقوم العقدة
-   بتجزئة blobs، وترميز manifests Norito (نوع blob، lane، epoch، اعلام codec)،
-   وتخزين chunks في طبقة SoraFS الساخنة.
+1. **Efetuar:** Adicione blobs à API ingest como Torii. تقوم العقدة
+   Usando blobs, e manifestando Norito (blob, lane, época, codec de código),
+   Os pedaços são cortados no SoraFS.
 2. **الاعلان:** تنتشر نوايا pin وتلميحات التكرار الى مزودي التخزين عبر
-   registry (SoraFS marketplace) مع وسوم سياسة تحدد اهداف الاحتفاظ hot/cold.
-3. **الالتزام:** يدرج sequencers في Nexus تعهدات blobs (CID + جذور KZG اختيارية)
-   في الكتلة القياسية. يعتمد light clients على hash الالتزام والmetadata
-   المعلنة للتحقق من availability.
-4. **التكرار:** تسحب عقد التخزين الحصص/chunks المخصصة، وتلبي تحديات PDP/PoTR،
-   وتقوم بترقية البيانات بين طبقات hot وcold حسب السياسة.
-5. **الجلب:** يسترجع المستهلكون البيانات عبر SoraFS او بوابات DA-aware مع
-   التحقق من proofs ورفع طلبات اصلاح عند اختفاء النسخ.
-6. **الحوكمة:** يوافق البرلمان ولجنة الاشراف على DA على المشغلين وجداول rent
-   وتصعيدات enforcement. تحفظ ادوات الحوكمة عبر نفس مسار DA لضمان شفافية
+   registro (mercado SoraFS) pode ser usado para quente/frio.
+3. **الالتزام:** يدرج sequenciadores em Nexus armazenam blobs (CID + جذور KZG اختيارية)
+   Isso é tudo. Obter clientes leves, hash, dados e metadados
+   A disponibilidade depende da disponibilidade.
+4. **التكرار:** تسحب عقد التخزين الحصص/chunks المخصصة, وتلبي تحديات PDP/PoTR,
+   وتقوم بترقية البيانات بين طبقات quente ou frio حسب السياسة.
+5. **الجلب:** يسترجع المستهلكون البيانات عبر SoraFS e بوابات DA-aware مع
+   As provas são as mais importantes para você.
+6. **الحوكمة:** يوافق البرلمان ولجنة الاشراف على DA على المشغلين وجداول aluguel
+   وتصعيدات aplicação. تحفظ ادوات الحوكمة عبر نفس مسار DA لضمان شفافية
    العملية.
 
 ## الاصول والمالكون
 
-مقياس الاثر: **حرج** يكسر سلامة/حيوية الدفتر؛ **عال** يحجب backfill DA او
-العملاء؛ **متوسط** يخفض الجودة لكنه قابل للاسترجاع؛ **منخفض** اثر محدود.
-
-| الاصل | الوصف | السلامة | الاتاحة | السرية | المالك |
+مقياس الاثر: **حرج** يكسر سلامة/حيوية الدفتر؛ **عال** يحجب backfill DA e
+العملاء؛ **متوسط** يخفض الجودة لكنه قابل للاسترجاع؛ **منخفض** اثر محدود.| الاصل | الوصف | السلامة | الاتاحة | السرية | المالك |
 | --- | --- | --- | --- | --- | --- |
-| Blobs DA (chunks + manifests) | Blobs Taikai و lane وادوات الحوكمة المخزنة في SoraFS | حرج | حرج | متوسط | DA WG / Storage Team |
-| Manifests Norito DA | Metadata مصنفة تصف blobs | حرج | عال | متوسط | Core Protocol WG |
-| تعهدات الكتل | CIDs + جذور KZG داخل كتل Nexus | حرج | عال | منخفض | Core Protocol WG |
-| جداول PDP/PoTR | وتيرة enforcement لنسخ DA | عال | عال | منخفض | Storage Team |
-| سجل المشغلين | مزودو التخزين الموافق عليهم والسياسات | عال | عال | منخفض | Governance Council |
-| سجلات rent والحوافز | قيود الدفتر لعائدات DA والعقوبات | عال | متوسط | منخفض | Treasury WG |
-| لوحات الرصد | SLOs DA وعمق التكرار والتنبيهات | متوسط | عال | منخفض | SRE / Observability |
-| نوايا الاصلاح | طلبات لاعادة ترطيب chunks المفقودة | متوسط | متوسط | منخفض | Storage Team |
+| Blobs DA (pedaços + manifestos) | Blobs Taikai e lane وادوات الحوكمة المخزنة em SoraFS | حرج | حرج | Medição | DA WG / Equipe de Armazenamento |
+| Manifestos Norito DA | Metadados مصنفة تصف blobs | حرج | sim | Medição | GT de Protocolo Central |
+| تعهدات الكتل | CIDs + جذور KZG داخل كتل Nexus | حرج | sim | منخفض | GT de Protocolo Central |
+| Projeto PDP/PoTR | وتيرة aplicação لنسخ DA | sim | sim | منخفض | Equipe de armazenamento |
+| سجل المشغلين | Máquinas de lavar roupa | sim | sim | منخفض | Conselho de Governança |
+| Aluguer de casas e serviços | Máquinas de lavar roupa DA e equipamentos | sim | Medição | منخفض | GT Tesouraria |
+| لوحات الرصد | SLOs DA | Medição | sim | منخفض | SRE / Observabilidade |
+| Notícias | طلبات لاعادة ترطيب pedaços المفقودة | Medição | Medição | منخفض | Equipe de armazenamento |
 
 ## الخصوم والقدرات
 
 | الفاعل | القدرات | الدوافع | الملاحظات |
 | --- | --- | --- | --- |
-| عميل خبيث | ارسال blobs تالفة، اعادة تشغيل manifests قديمة، محاولة DoS على ingest. | تعطيل بث Taikai، حقن بيانات غير صحيحة. | لا مفاتيح مميزة. |
-| عقدة تخزين بيزنطية | اسقاط نسخ مخصصة، تزوير proofs PDP/PoTR، تواطؤ. | تقليص احتفاظ DA، تجنب rent، احتجاز البيانات. | يحمل بيانات اعتماد مشغل صحيحة. |
-| sequencer مخترق | حذف تعهدات، ازدواجية كتل، اعادة ترتيب metadata. | اخفاء ارسال DA، خلق عدم اتساق. | محدود باغلبية الاجماع. |
-| مشغل داخلي | اساءة استخدام الوصول للحوكمة، العبث بسياسات الاحتفاظ، تسريب بيانات اعتماد. | مكسب اقتصادي، تخريب. | وصول الى بنية hot/cold. |
-| خصم شبكة | تقسيم العقد، تاخير التكرار، حقن حركة MITM. | خفض الاتاحة، تدهور SLOs. | لا يكسر TLS لكنه يمكنه اسقاط/ابطاء الروابط. |
-| مهاجم الرصد | العبث باللوحات/التنبيهات، اخفاء الحوادث. | اخفاء انقطاعات DA. | يتطلب وصولا لخط التليمترية. |
+| عميل خبيث | Os blobs são definidos como manifestos para serem ingeridos por DoS ou ingeridos. | تعطيل بث Taikai, حقن بيانات غير صحيحة. | Não há problema. |
+| Máquinas de lavar louça | اسقاط نسخ مخصصة, تزوير provas PDP/PoTR, تواطؤ. | تقليص احتفاظ DA, تجنب aluguel, احتجاز البيانات. | Não se preocupe, você pode fazer isso. |
+| sequenciador مخترق | Você pode alterar os metadados. | اخفاء ارسال DA, خلق عدم اتساق. | محدود باغلبية الاجماع. |
+| مشغل داخلي | Certifique-se de que você está usando o telefone para obter mais informações. | مكسب اقتصادي, تخريب. | وصول الى بنية quente/frio. |
+| خصم شبكة | تقسيم العقد, تاخير التكرار, حقن حركة MITM. | خفض الاتاحة, تدهور SLOs. | Não use TLS para obter informações/serviços. |
+| مهاجم الرصد | Você pode usar/descompactar. | اخفاء انقطاعات DA. | يتطلب وصولا لخط التليمترية. |
 
 ## حدود الثقة
 
-- **حد الدخول:** العميل الى امتداد DA في Torii. يتطلب auth على مستوى الطلب،
-  تحديد المعدل، والتحقق من payload.
-- **حد التكرار:** عقد التخزين تتبادل chunks وproofs. العقد متصادقة لكنها قد
+- **حد الدخول:** العميل الى امتداد DA is Torii. يتطلب auth على مستوى الطلب،
+  تحديد المعدل, والتحقق من payload.
+- **حد التكرار:** عقد التخزين تتبادل pedaços e provas. العقد متصادقة لكنها قد
   تتصرف بشكل بيزنطي.
 - **حد الدفتر:** بيانات الكتلة الملتزمة مقابل التخزين خارج السلسلة. الاجماع
-  يحمي السلامة، لكن الاتاحة تتطلب enforcement خارج السلسلة.
-- **حد الحوكمة:** قرارات Council/Parliament لاعتماد المشغلين والميزانيات
-  والعقوبات. الاختراق هنا يؤثر مباشرة على نشر DA.
-- **حد الرصد:** جمع metrics/logs المصدرة الى لوحات/تنبيهات. العبث يخفي
+  يحمي السلامة, لكن الاتاحة تتطلب aplicação خارج السلسلة.
+- **حد الحوكمة:** قرارات Conselho/Parlamento لاعتماد المشغلين والميزانيات
+  e. الاختراق هنا يؤثر مباشرة على نشر DA.
+- **حد الرصد:** جمع métricas/logs المصدرة الى لوحات/تنبيهات. العبث يخفي
   الانقطاعات او الهجمات.
 
 ## سيناريوهات التهديد والضوابط
 
-### هجمات مسار ingest
+### هجمات مسار ingerir
 
-**السيناريو:** عميل خبيث يرسل payloads Norito تالفة او blobs كبيرة جدا لاستنزاف
-الموارد او تمرير metadata غير صحيحة.
-
-**الضوابط**
-- تحقق صارم من schema Norito مع تفاوض الاصدار؛ رفض الاعلام غير المعروفة.
-- تحديد المعدل والمصادقة على endpoint ingest في Torii.
-- حدود chunk size وترميز حتمي يفرضه chunker SoraFS.
+**Efetuar:** Você pode usar payloads Norito e blobs para obter mais informações
+Os metadados e os metadados estão disponíveis.**الضوابط**
+- تحقق صارم من esquema Norito مع تفاوض الاصدار؛ رفض الاعلام غير المعروفة.
+- Verifique o valor do endpoint ingest em Torii.
+- Aumentar o tamanho do pedaço e usar o chunker SoraFS.
 - خط القبول لا يحفظ manifests الا بعد تطابق checksum السلامة.
 - Replay cache حتمي (`ReplayCache`) يتتبع نوافذ `(lane, epoch, sequence)`،
-  يحفظ high-water marks على القرص، ويرفض التكرار/اعادة التشغيل القديمة؛
-  harnesses property وfuzz تغطي fingerprints مختلفة وارسال خارج الترتيب.
+  يحفظ marcas de água alta
+  aproveita propriedade وfuzz تغطي impressões digitais مختلفة وارسال خارج الترتيب.
   [crates/iroha_core/src/da/replay_cache.rs:1]
   [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da/ingest.rs:1]
 
 **الثغرات المتبقية**
-- يجب ان يمر Torii ingest replay cache في مسار القبول ويحفظ مؤشرات sequence عبر
+- يجب ان يمر Torii ingest replay cache في مسار القبول ويحفظ مؤشرات seqüência عبر
   اعادة التشغيل.
-- مخططات Norito DA تملك الان fuzz harness مخصصا (`fuzz/da_ingest_schema.rs`) لفحص
-  ثوابت encode/decode؛ يجب ان تنبه لوحات التغطية عند التراجع.
+- مخططات Norito DA تملك الان fuzz chicote مخصصا (`fuzz/da_ingest_schema.rs`) لفحص
+  ثوابت codificar/decodificar; Não há nenhum problema com isso.
 
 ### احتجاز التكرار
 
-**السيناريو:** مشغلو التخزين البيزنطيون يقبلون مهام pin لكنهم يسقطون chunks،
-ويمررون تحديات PDP/PoTR عبر ردود مزورة او تواطؤ.
+**السيناريو:** مشغلو التخزين البيزنطيون يقبلون مهام pin لكنهم يسقطون pedaços,
+Você pode usar PDP/PoTR para obter informações e recursos.
 
 **الضوابط**
-- جدول تحديات PDP/PoTR يمتد لحمولات DA مع تغطية لكل epoch.
-- تكرار متعدد المصادر مع عتبات quorum؛ orchestrator يكتشف shards المفقودة
+- جدول تحديات PDP/PoTR يمتد لحمولات DA مع تغطية لكل época.
+- تكرار متعدد المصادر مع عتبات quorum; orquestrador يكتشف shards المفقودة
   ويطلق اصلاحات.
-- slashing حوكمي مرتبط بفشل proofs والنسخ المفقودة.
-- مهمة مصالحة تلقائية (`cargo xtask da-commitment-reconcile`) تقارن receipts
-  بcommitments DA (SignedBlockWire, `.norito`, او JSON)، تبعث bundle JSON كدليل
-  للحوكمة، وتفشل عند فقدان/عدم تطابق tickets لكي يطلق Alertmanager تنبيهات.
+- cortando حوكمي مرتبط بفشل provas والنسخ المفقودة.
+- مهمة مصالحة تلقائية (`cargo xtask da-commitment-reconcile`) Recibos de dinheiro
+  Commitments DA (SignedBlockWire, `.norito`, e JSON) e agrupar bundle JSON
+  للحوكمة, وتفشل عند فقدان/عدم تطابق tickets no Alertmanager تنبيهات.
 
 **الثغرات المتبقية**
-- harness المحاكاة في `integration_tests/src/da/pdp_potr.rs` (مغطى عبر
-  `integration_tests/tests/da/pdp_potr_simulation.rs`) يختبر سيناريوهات تواطؤ
-  وتقسيم، ويتحقق ان جدول PDP/PoTR يكتشف السلوك البيزنطي بشكل حتمي. استمر في
-  توسيعه مع DA-5 لتغطية اسطح proof الجديدة.
-- سياسة eviction لطبقة cold تحتاج سجل تدقيق موقع لمنع الاسقاطات الخفية.
+- chicote de fios em `integration_tests/src/da/pdp_potr.rs` (مغطى عبر
+  `integration_tests/tests/da/pdp_potr_simulation.rs`)
+  Você pode usar o PDP/PoTR para obter mais informações. استمر في
+  توسيعه مع DA-5 é uma prova de prova.
+- سياسة despejo لطبقة frio تحتاج سجل تدقيق موقع لمنع الاسقاطات الخفية.
 
 ### العبث بالتعهدات
 
-**السيناريو:** sequencer مخترق ينشر كتل تحذف او تغير تعهدات DA، ما يسبب فشل
-fetch او عدم اتساق لدى light clients.
+**السيناريو:** sequenciador مخترق ينشر كتل تحذف او تغير تعهدات DA, ما يسبب فشل
+fetch e pode ser usado para clientes leves.
 
 **الضوابط**
-- الاجماع يطابق مقترحات الكتل مع قوائم ارسال DA؛ النظراء يرفضون المقترحات
-  التي تفتقد تعهدات مطلوبة.
-- light clients يتحققون من inclusion proofs قبل اظهار handles للfetch.
-- سجل تدقيق يقارن receipts الارسال بتعهدات الكتل.
-- مهمة مصالحة تلقائية (`cargo xtask da-commitment-reconcile`) تقارن receipts
-  بcommitments DA (SignedBlockWire, `.norito`, او JSON)، تبعث bundle JSON كدليل
-  للحوكمة، وتفشل عند فقدان/عدم تطابق tickets لكي يطلق Alertmanager تنبيهات.
+- الاجماع يطابق مقترحات الكتل مع قوائم ارسال DA; النظراء يرفضون المقترحات
+  Você pode fazer isso sem problemas.
+- clientes leves não possuem provas de inclusão, mas manipulam o fetch.
+- سجل تدقيق يقارن recibos الارسال بتعهدات الكتل.
+- مهمة مصالحة تلقائية (`cargo xtask da-commitment-reconcile`) Recibos de dinheiro
+  Commitments DA (SignedBlockWire, `.norito`, e JSON) e agrupar bundle JSON
+  للحوكمة, وتفشل عند فقدان/عدم تطابق tickets no Alertmanager تنبيهات.
 
 **الثغرات المتبقية**
-- مغطاة بمهمة المصالحة + hook Alertmanager؛ حزم الحوكمة تستهلك bundle JSON
+- مغطاة بمهمة المصالحة + gancho Alertmanager; Como definir o pacote JSON
   كافتراضي.
 
 ### تقسيم الشبكة والرقابة
 
-**السيناريو:** خصم يقسم شبكة التكرار، مانعا العقد من الحصول على chunks
-المخصصة او الرد على تحديات PDP/PoTR.
+**السيناريو:** خصم يقسم شبكة التكرار, مانعا العقد من الحصول على pedaços
+A solução e o problema são PDP/PoTR.
 
 **الضوابط**
-- متطلبات مزودين multi-region تضمن مسارات شبكة متنوعة.
-- نوافذ التحدي تتضمن jitter وfallback الى قنوات اصلاح خارج النطاق.
+- متطلبات مزودين multi-região تضمن مسارات شبكة متنوعة.
+- Não há jitter e fallback que possam causar problemas.
 - لوحات الرصد تراقب عمق التكرار ونجاح التحديات وزمن fetch مع عتبات تنبيه.
 
 **الثغرات المتبقية**
-- محاكاة التقسيم لاحداث Taikai المباشرة ما زالت مفقودة؛ نحتاج soak tests.
+- محاكاة التقسيم لاحداث Taikai المباشرة ما زالت مفقودة؛ Faça testes de imersão.
 - سياسة حجز سعة اصلاح لم توثق بعد.
 
-### اساءة داخلية
-
-**السيناريو:** مشغل لديه وصول للregistry يتلاعب بسياسات الاحتفاظ، ويمنح
-whitelist لمزودين خبيثين، او يخفي التنبيهات.
+### اساءة داخلية**السيناريو:** مشغل لديه وصول للregistry يتلاعب بسياسات الاحتفاظ, ويمنح
+whitelist لمزودين خبيثين, او يخفي التنبيهات.
 
 **الضوابط**
 - اعمال الحوكمة تتطلب تواقيع متعددة الاطراف وسجلات Norito موثقة.
 - تغييرات السياسة تصدر احداثا للرصد وسجلات ارشيف.
-- خط الرصد يفرض سجلات Norito append-only مع hash chaining.
+- خط الرصد يفرض سجلات Norito somente acréscimo com encadeamento de hash.
 - اتمتة مراجعة الوصول ربع السنوية (`cargo xtask da-privilege-audit`) تتفقد
-  ادلة manifest/replay (مع مسارات يحددها المشغلون)، وتعلم العناصر المفقودة/
-  غير-دليل/قابلة للكتابة عالميا، وتنتج bundle JSON موقع للوحات الحوكمة.
+  Como manifesto/repetição (مع مسارات يحددها المشغلون), e وتعلم العناصر المفقودة/
+  غير-دليل/قابلة للكتابة عالميا, وتنتج bundle JSON موقع للوحات الحوكمة.
 
 **الثغرات المتبقية**
 - ادلة العبث في اللوحات تحتاج snapshots موقعة.
@@ -193,82 +189,80 @@ whitelist لمزودين خبيثين، او يخفي التنبيهات.
 
 | الخطر | الاحتمال | الاثر | المالك | خطة التخفيف |
 | --- | --- | --- | --- | --- |
-| Replay لmanifests DA قبل وصول cache sequence في DA-2 | ممكن | متوسط | Core Protocol WG | تنفيذ sequence cache + تحقق nonce في DA-2؛ اضافة اختبارات تراجع. |
-| تواطؤ PDP/PoTR عند اختراق >f عقد | غير محتمل | عال | Storage Team | اشتقاق جدول تحديات جديد مع sampling cross-provider؛ التحقق عبر harness المحاكاة. |
-| فجوة تدقيق eviction في طبقة cold | ممكن | عال | SRE / Storage Team | ربط سجلات موقعة ووصولات on-chain لعمليات eviction؛ الرصد عبر اللوحات. |
-| زمن اكتشاف حذف sequencer | ممكن | عال | Core Protocol WG | `cargo xtask da-commitment-reconcile` ليلي يقارن receipts بالcommitments (SignedBlockWire/`.norito`/JSON) ويطلق تنبيه حوكمي عند tickets مفقودة او غير متطابقة. |
-| مقاومة التقسيم لبث Taikai المباشر | ممكن | حرج | Networking TL | تنفيذ تدريبات تقسيم؛ حجز سعة اصلاح؛ توثيق SOP للفشل. |
-| انحراف امتيازات الحوكمة | غير محتمل | عال | Governance Council | `cargo xtask da-privilege-audit` ربع سنوي (dirs manifest/replay + مسارات اضافية) مع JSON موقع + gate لوحة؛ تثبيت artefacts التدقيق على السلسلة. |
+| Repetir manifestos DA e sequência de cache em DA-2 | ممكن | Medição | GT de Protocolo Central | Usando cache de sequência + nonce em DA-2; Faça isso com cuidado. |
+| تواطؤ PDP/PoTR عند اختراق >f عقد | غير محتمل | sim | Equipe de armazenamento | اشتقاق جدول تحديات جديد مع amostragem entre provedores; Certifique-se de usar o arnês. |
+| فجوة تدقيق despejo em frio | ممكن | sim | Equipe SRE/Armazenamento | ربط سجلات موقعة ووصولات despejo on-chain عمليات; الرصد عبر اللوحات. |
+| sequenciador de software | ممكن | sim | GT de Protocolo Central | `cargo xtask da-commitment-reconcile` não recebe recibos e compromissos (SignedBlockWire/`.norito`/JSON) e envia recibos para obter tickets e tickets متطابقة. |
+| مقاومة التقسيم لبث Taikai المباشر | ممكن | حرج | Rede TL | تنفيذ تدريبات تقسيم; حجز سعة اصلاح؛ توثيق SOP للفشل. |
+| Produtos de limpeza | غير محتمل | sim | Conselho de Governança | `cargo xtask da-privilege-audit` é um arquivo (dirs manifest/replay + مسارات اضافية) com JSON موقع + gate لوحة؛ تثبيت artefatos التدقيق على السلسلة. |
 
 ## المتابعات المطلوبة
 
-1. نشر مخططات Norito لingest DA ومتجهات امثلة (منقولة الى DA-2).
-2. تمرير replay cache عبر Torii DA ingest وحفظ مؤشرات sequence عبر اعادة التشغيل.
-3. **مكتمل (2026-02-05):** harness محاكاة PDP/PoTR يمارس تواطؤ + تقسيم مع نمذجة
-   backlog QoS؛ راجع `integration_tests/src/da/pdp_potr.rs` (مع اختبارات في
-   `integration_tests/tests/da/pdp_potr_simulation.rs`) للتنفيذ والملخصات
-   الحتمية الملتقطة ادناه.
-4. **مكتمل (2026-05-29):** `cargo xtask da-commitment-reconcile` يقارن receipts
-   بالcommitments DA (SignedBlockWire/`.norito`/JSON)، ويصدر
-   `artifacts/da/commitment_reconciliation.json`، ومربوط بAlertmanager/حزم
-   الحوكمة لتنبيهات omission/tampering (`xtask/src/da.rs`).
-5. **مكتمل (2026-05-29):** `cargo xtask da-privilege-audit` يتجول في spool
-   manifest/replay (مع مسارات يحددها المشغلون)، ويحدد العناصر المفقودة/غير
-   دليل/قابلة للكتابة عالميا، وينتج bundle JSON موقع للحوكمة
-   (`artifacts/da/privilege_audit.json`), مغلقا فجوة اتمتة مراجعة الوصول.
+1. Selecione Norito para obter o DA e o arquivo (منقولة الى DA-2).
+2. Limpe o cache de repetição do Torii DA ingest e a sequência do arquivo para a sequência.
+3. **مكتمل (2026-02-05):** chicote de fios PDP/PoTR يمارس تواطؤ + تقسيم مع نمذجة
+   QoS do backlog; راجع `integration_tests/src/da/pdp_potr.rs` (مع اختبارات في
+   `integration_tests/tests/da/pdp_potr_simulation.rs`) para laptop e laptop
+   Não há problema.
+4. **مكتمل (2026-05-29):** `cargo xtask da-commitment-reconcile` recibos de dinheiro
+   Commitments DA (SignedBlockWire/`.norito`/JSON)
+   `artifacts/da/commitment_reconciliation.json`, ومربوط بAlertmanager/حزم
+   Não há omissão/adulteração (`xtask/src/da.rs`).
+5. **مكتمل (2026-05-29):** `cargo xtask da-privilege-audit` يتجول في carretel
+   manifest/replay (مع مسارات يحددها المشغلون), ويحدد العناصر المفقودة/غير
+   دليل/قابلة للكتابة عالميا, وينتج bundle JSON موقع للحوكمة
+   (`artifacts/da/privilege_audit.json`).
 
-**اين تتابع:**
-
-- replay cache واستمرار المؤشرات تم انجازهما في DA-2. راجع التنفيذ في
-  `crates/iroha_core/src/da/replay_cache.rs` (منطق cache) وتكامل Torii في
-  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر checks fingerprint عبر `/v1/da/ingest`.
-- محاكاة streaming PDP/PoTR تمارس عبر harness proof-stream في
-  `crates/sorafs_car/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
-  الفشل المشار اليها في نموذج التهديدات.
-- نتائج capacity وrepair soak موجودة في
-  `docs/source/sorafs/reports/sf2c_capacity_soak.md`، بينما مصفوفة soak Sumeragi
-  الاوسع يتم تتبعها في `docs/source/sumeragi_soak_matrix.md` (مع نسخ محلية).
-  هذه artefacts توثق التدريبات الطويلة المذكورة في سجل المخاطر.
-- اتمتة المصالحة + privilege-audit موجودة في `docs/automation/da/README.md`
+**Isso é:**- cache de repetição واستمرار المؤشرات تم انجازهما em DA-2. راجع التنفيذ في
+  `crates/iroha_core/src/da/replay_cache.rs` (cache de cache) e Torii em
+  `crates/iroha_torii/src/da/ingest.rs` O número verifica a impressão digital em `/v1/da/ingest`.
+- Transmitir streaming PDP/PoTR تمارس عبر aproveitar fluxo de prova aqui
+  `crates/sorafs_car/tests/sorafs_cli.rs`, um dispositivo de teste para PoR/PDP/PoTR e um dispositivo PoR/PDP/PoTR
+  O código de barras está disponível para download.
+- Capacidade de نتائج e imersão de reparo موجودة في
+  `docs/source/sorafs/reports/sf2c_capacity_soak.md`, بينما مصفوفة embeber Sumeragi
+  O código está em `docs/source/sumeragi_soak_matrix.md` (não disponível).
+  Existem artefatos que você pode usar em qualquer lugar.
+- Atribuição de privilégios + auditoria de privilégios em `docs/automation/da/README.md`
   والاوامر الجديدة `cargo xtask da-commitment-reconcile` /
   `cargo xtask da-privilege-audit`; استخدم المخارج الافتراضية تحت
-  `artifacts/da/` عند ارفاق الادلة بحزم الحوكمة.
+  `artifacts/da/` não é compatível com o produto.
 
-## ادلة المحاكاة ونمذجة QoS (2026-02)
+## Melhorar a QoS e QoS (2026-02)
 
-لاغلاق متابعة DA-1 #3، قمنا بتكويد harness محاكاة PDP/PoTR حتمي تحت
+Para usar o DA-1 #3, um chicote de fios de segurança para PDP/PoTR pode ser usado
 `integration_tests/src/da/pdp_potr.rs` (مغطي بواسطة
-`integration_tests/tests/da/pdp_potr_simulation.rs`). يقوم harness بتوزيع العقد
-على ثلاث مناطق، ويحقن التقسيم/التواطؤ حسب احتمالات roadmap، ويتتبع تاخر PoTR،
-ويغذي نموذج backlog للاصلاح يعكس ميزانية اصلاح طبقة hot. تشغيل السيناريو
-الافتراضي (12 epochs، 18 تحديا PDP + نافذتان PoTR لكل epoch) انتج المقاييس
-التالية:
+`integration_tests/tests/da/pdp_potr_simulation.rs`). يقوم arnês بتوزيع العقد
+على ثلاث مناطق, ويحقن التقسيم/التواطؤ حسب احتمالات roadmap, ويتتبع تاخر PoTR,
+O backlog de pendências não é quente. تشغيل السيناريو
+Período (12 épocas, 18 anos PDP + نافذتان PoTR por época) انتج المقاييس
+Nome:
 
 <!-- BEGIN_DA_SIM_TABLE -->
 <!-- AUTO-GENERATED by scripts/docs/render_da_threat_model_tables.py; do not edit manually. -->
 | المقياس | القيمة | الملاحظات |
 | --- | --- | --- |
-| PDP failures detected | 48 / 49 (98.0%) | ما زالت partitions تطلق الاكتشاف؛ فشل واحد غير مكتشف ناتج عن jitter صادق. |
-| PDP mean detection latency | 0.0 epochs | يتم اظهار الاعطال ضمن epoch الاصلي. |
-| PoTR failures detected | 28 / 77 (36.4%) | يتم اطلاق الاكتشاف عند فقدان العقدة >=2 نوافذ PoTR، مما يترك معظم الاحداث في سجل المخاطر المتبقية. |
-| PoTR mean detection latency | 2.0 epochs | يطابق عتبة تاخر مقدارها epochين مضمنة في تصعيد الارشفة. |
-| Repair queue peak | 38 manifests | يرتفع backlog عندما تتكدس partitions اسرع من اربع اصلاحات متاحة لكل epoch. |
-| Response latency p95 | 30,068 ms | يعكس نافذة تحدي 30 ثانية مع jitter +/-75 ms مطبق لاخذ عينات QoS. |
+| Falhas de PDP detectadas | 48/49 (98,0%) | As partições mais importantes Isso pode causar instabilidade e jitter. |
+| PDP significa latência de detecção | 0,0 épocas | يتم اظهار الاعطال ضمن época do ano. |
+| Falhas PoTR detectadas | 28/77 (36,4%) | يتم اطلاق الاكتشاف عند فقدان العقدة >=2 نوافذ PoTR, مما يترك معظم الاحداث في سجل المخاطر المتبقية. |
+| PoTR significa latência de detecção | Épocas 2.0 | يطابق عتبة تاخر مقدارها época مضمنة في تصعيد الارشفة. |
+| Pico na fila de reparos | 38 manifestos | يرتفع backlog عندما تتكدس partições اسرع من اربع اصلاحات متاحة لكل época. |
+| Latência de resposta p95 | 30.068ms | O intervalo de 30 dias com jitter +/-75 ms reduz a QoS. |
 <!-- END_DA_SIM_TABLE -->
 
-هذه المخرجات تقود الان نماذج لوحات DA وتفي بمعايير قبول "simulation harness +
-QoS modelling" المشار اليها في roadmap.
+هذه المخرجات تقود الانماذج لوحات DA وتفي بمعايير قبول "arnês de simulação +
+Modelagem de QoS"
 
 الان توجد الاتمتة خلف
 `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`,
-والتي تستدعي harness المشترك وتصدر Norito JSON الى
-`artifacts/da/threat_model_report.json` افتراضيا. تستخدم الوظائف الليلية هذا
-الملف لتحديث المصفوفات في هذا المستند والتنبيه عند انحراف معدلات الاكتشاف
-او طوابير الاصلاح او عينات QoS.
+Use o chicote de fios e o Norito JSON como
+`artifacts/da/threat_model_report.json`. تستخدم الوظائف الليلية هذا
+O código de barras do cartão de crédito está disponível para download e download gratuito.
+E melhor qualidade de serviço e QoS.
 
-لتحديث الجدول اعلاه للوثائق، شغل `make docs-da-threat-model`، والذي يستدعي
-`cargo xtask da-threat-model-report` ويعيد توليد
-`docs/source/da/_generated/threat_model_report.json` ويعيد كتابة هذا القسم عبر
-`scripts/docs/render_da_threat_model_tables.py`. يتم تحديث نسخة `docs/portal`
-(`docs/portal/docs/da/threat-model.md`) في نفس التمرير لكي تبقى النسختان
+Para obter mais informações, consulte `make docs-da-threat-model`, e não use
+`cargo xtask da-threat-model-report` `cargo xtask da-threat-model-report` `cargo xtask da-threat-model-report`
+`docs/source/da/_generated/threat_model_report.json` é um arquivo de código aberto
+`scripts/docs/render_da_threat_model_tables.py`. `docs/portal`
+(`docs/portal/docs/da/threat-model.md`).
 متزامنتين.

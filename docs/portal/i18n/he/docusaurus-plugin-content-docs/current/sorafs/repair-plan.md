@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::הערה מקור קנוני
+מראות `docs/source/sorafs_repair_plan.md`. שמור את שתי הגרסאות מסונכרנות עד שהסט ספינקס יפרוש.
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## מחזור חיים של החלטות ממשל
+1. תיקונים מורחבים יוצרים טיוטת הצעת חתך ופותחים את חלון המחלוקת.
+2. מצביעי ממשל מגישים הצבעות אישור/דחיה במהלך חלון המחלוקת.
+3. ב-`escalated_at_unix + dispute_window_secs` ההחלטה מחושבת באופן דטרמיניסטי: מינימום מצביעים, אישורים עולים על דחיות, ויחס האישורים עומד בסף המניין.
+4. החלטות מאושרות פותחות חלון ערעור; ערעורים שנרשמו לפני `approved_at_unix + appeal_window_secs` מסמנים את ההחלטה כערעור.
+5. תקרות ענישה חלות על כל ההצעות; הגשות מעל המכסה נדחות.
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## מדיניות הסלמה בממשל
+מדיניות ההסלמה מקורה ב-`governance.sorafs_repair_escalation` ב-`iroha_config` והיא נאכפת עבור כל הצעת תיקון.
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| הגדרה | ברירת מחדל | המשמעות |
+|--------|--------|--------|
+| `quorum_bps` | 6667 | יחס אישור מינימלי (נקודות בסיס) בין הקולות שנספרו. |
+| `minimum_voters` | 3 | המספר המינימלי של בוחרים מובהקים הנדרש להכרעה. |
+| `dispute_window_secs` | 86400 | זמן לאחר ההסלמה לפני סיום ההצבעות (שניות). |
+| `appeal_window_secs` | 604800 | זמן לאחר האישור שבמהלכו ערעורים מתקבלים (שניות). |
+| `max_penalty_nano` | 1,000,000,000 | עונש חתך מרבי מותר עבור הסלמות תיקון (nano-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- הצעות שנוצרו על ידי מתזמן מוגבלות ל-`max_penalty_nano`; הגשות מבקר מעל הגבול נדחות.
+- רשומות ההצבעה מאוחסנות ב-`repair_state.to` עם סדר דטרמיניסטי (מיון `voter_id`) כך שכל הצמתים מפיקים את אותה חותמת זמן ותוצאה של החלטה.

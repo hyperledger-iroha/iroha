@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# ཡིག་ཆ་ཚུ་སྔོན་ལྟ་བསམ་ལན་འབྲི་ཤོག་ (W1 མཉམ་འབྲེལ་རླབས་)
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
+ཌབ་ལུ་༡ བསྐྱར་ཞིབ་པ་ཚུ་ལས་ བསམ་འཆར་ཚུ་བསྡུ་ལེན་འབད་བའི་སྐབས་ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ། དེ་ ལུ་འདྲ་བཤུས་རྐྱབས།
+མཉམ་འབྲེལ་པ་ མེ་ཊ་ཌེ་ཊ་བཀང་ཞིནམ་ལས་ མཇུག་བསྡུ་ཡོད་པའི་འདྲ་བཤུས་འདི་ འོག་ལུ་གསོག་འཇོག་འབད།
 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 
-## Reviewer metadata
+## བསྐྱར་ཞིབ་མེ་ཊ་ཌེ་ཊ་
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- **མཉམ་འབྲེལ་པ་ ID:** `partner-w1-XX`
+- **ཞུ་བ་གི་ཤོག་འཛིན་:** I18NI0000004X
+- **མགྲོན་བརྡ་གཏང་ (UTC):** I18NI000005X
+- ** ཅེག་སམ་ (ཡུ་ཊི་སི):** `YYYY-MM-DD hh:mm` ལུ་ངོས་ལེན་འབད་ཡོདཔ།
+- **གཞི་རིམ་གྱི་ས་ཁོངས་:** (དཔེར་ན་ _སོ་ར་ཨེཕ་ཨེསི་ཨོར་ཀེ་ཊར་ཌོཀ་_, _ཊོ་རི་ཨའི་ཨེསི་ཨོ་རྒྱུན་འབབ་_)
 
-## Telemetry & artefact confirmations
+## བརྒྱུད་འཕྲིན་དང་ ཅ་རྙིང་བདེན་དཔྱད།
 
-| Checklist item | Result | Evidence |
+| ཞིབ་དཔྱད་ཐོ་ཡིག་རྣམ་གྲངས་ | གྲུབ་འབྲས། | སྒྲུབ་བྱེད་ |
 | --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+| བརྟག་ཞིབ་བསྡོམས་རྩིས་ | ✅ / ⚠️ | ལྕགས་ཐག་ (དཔེར་ན་ I18NI0000007X) |
+| འདི་ལུ་ཚོད་བལྟ་འབད། དུག་ཅན་གྱི་བརྟག་དཔྱད་འབད། | ✅ / ⚠️ | I18NI0000008X ཡིག་བསྒྱུར་གྱི་སྒམ་ཆུང་ |
+| Grafana བརྡ་བཀོད་བསྐྱར་ཞིབ། | ✅ / ⚠️ | གཟབ་གཞིའི་ལམ་(s) |
+| དྲྭ་ཚིགས་ཞིབ་དཔྱད་སྙན་ཞུའི་བསྐྱར་ཞིབ། | ✅ / ⚠️ | I18NI0000009X |
 
-Add rows for any additional SLOs a reviewer inspects.
+བསྐྱར་ཞིབ་འབད་མི་ཅིག་གིས་ ཁ་སྐོང་ཨེསི་ཨེལ་ཨོ་ཚུ་གང་རུང་ཅིག་གི་དོན་ལུ་ གྲལ་ཐིག་ཚུ་ཁ་སྐོང་རྐྱབས།
 
-## Feedback log
+## བསམ་འཆར།
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
+| ས་ཁོངས་ | ཚབས་ཆེན། (བརྡ་དོན་/ཆུང་ཆུང་/བཀག་ཆ།) | འགྲེལ་བཤད་ | བསམ་འཆར་བཟོས་པའི་ བདེ་སྒྲིག་ཡང་ན་ དྲི་བ་ | བརྟག་ཞིབ་ཀྱི་གནད་དོན་ |
 | --- | --- | --- | --- | --- |
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+གིཊི་ཧབ་ཀྱི་གནད་དོན་ཡང་ན་ མཇུག་གི་ཀེར་ཐིག་ནང་ ནང་འཁོད་ཤོག་བྱང་འདི་ གཞི་བསྟུན་འབད་ནི་ཨིནམ་ལས་ སྔོན་ལྟ་འདི་ཨིན།
+རྗེས་སོར་གྱི་རྣམ་གྲངས་འདི་ འབྲི་ཤོག་འདི་ལུ་ལོག་བསྡམ་ཚུགས།
 
-## Survey summary
+## ས་དཔྱད་བསྡུས་པ།
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+༡ **ཁྱོད་ཀྱིས་ ཅེག་གསུམ་ལམ་སྟོན་དང་ འབོ་བའི་བྱ་རིམ་ནང་ ག་དེ་སྦེ་ ཡིད་ཆེས་བསྐྱེདཔ་ཨིན་ན?** (༡–༥)
+2. **ཡིག་ཆ་ཚུ་ མང་ཤོས་/ཉུང་མཐའ་ལུ་ཕན་ཐོགས་ཡོདཔ་ཨིན་ན?** (ལན་ཐུང་ཀུ)།
+༣ ** དེ་ ངོ་ཚབ་ཡང་ན་ ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌི་ཚུ་ ཚོད་བརྟག་འབད་མི་ བཀག་ཆ་ཚུ་ འཛུལ་སྤྱོད་འབད་མི་ཡོདཔ་ཨིན་ན?**
+༤. **ཁ་སྐོང་ས་གནས་བཟོ་ནི་ཡང་ན་འཛུལ་སྤྱོད་འབད་བཏུབ་པའི་ནང་དོན་དགོཔ་ཨིན་ན?**
+5. **GA གི་ཧེ་མ་ བསམ་འཆར་གཞན་གང་རུང་?**
 
-Capture short answers and attach raw survey exports if you use an external form.
+ལན་ཐུང་ཀུ་དང་ ཕྱིའི་འབྲི་ཤོག་ལག་ལེན་འཐབ་པ་ཅིན་ ས་ཞིབ་ཕྱིར་འདྲེན་ཚུ་ མཉམ་སྦྲགས་འབད།
 
-## Knowledge check
+## ཤེས་བྱའི་བརྟག་དཔྱད།
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+- སྐུགས་: `__/10`
+- དྲི་བ་ནོར་འཁྲུལ་ཅན་ (གལ་སྲིད་ཡོད་ན་): I18NI0000011X
+- རྗེས་འཇུག་བྱ་བ་ཚུ་ (སྐུགས་ < ༩/༡༠) དུས་ཚོད་བཀོད་ཡོད་པའི་ བཅོ་ཁ་འབོད་བརྡ་? y/n
 
-## Sign-off
+## མཚན་རྟགས་བཀོད་པ།
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- བསྐྱར་ཞིབ་པ་མིང་དང་དུས་ཚོད།
+- Docs/DevRel བསྐྱར་ཞིབ་པ་ & དུས་ཚོད་མཚོན་རྟགས་:
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+རྩིས་ཞིབ་པ་ཚུ་གིས་ ལོག་སྟེ་ར་རྩེད་ཚུགས་པའི་ འབྲེལ་ཡོད་ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ མཚན་རྟགས་བཀོད་ཡོད་པའི་འདྲ་བཤུས་འདི་ གསོག་འཇོག་འབད།
+སྐབས་དོན་ཁ་སྐོང་མེད་པར་རླབས་བཏབ།

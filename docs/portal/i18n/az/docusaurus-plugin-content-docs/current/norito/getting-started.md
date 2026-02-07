@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Getting Started
+# Norito Başlanır
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+Bu sürətli bələdçi Kotodama müqaviləsini tərtib etmək üçün minimal iş axını göstərir,
+yaradılan Norito bayt kodunu yoxlamaq, onu yerli olaraq işə salmaq və yerləşdirmək
+Iroha qovşağına.
 
-## Prerequisites
+## İlkin şərtlər
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha_cli` – used for contract deployment via Torii
+1. Rust alətlər silsiləsi (1.76 və ya daha yeni) quraşdırın və bu anbarı yoxlayın.
+2. Dəstəkləyən ikili faylları yaradın və ya endirin:
+   - `koto_compile` – Kotodama kompilyatoru IVM/Norito bayt kodunu yayan
+   - `ivm_run` və `ivm_tool` - yerli icra və yoxlama kommunalları
+   - `iroha_cli` - Torii vasitəsilə müqavilə yerləşdirilməsi üçün istifadə olunur
 
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
+   Makefile deposu bu ikili faylları `PATH`-də gözləyir. Siz də edə bilərsiniz
+   əvvəlcədən qurulmuş artefaktları yükləyin və ya onları mənbədən qurun. Əgər tərtib etsəniz
+   alətlər silsiləsi yerli olaraq, Makefile köməkçilərini binarlara yönəldin:
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha_cli` profile (`~/.config/iroha/cli.toml`).
+3. Yerləşdirmə mərhələsinə çatdığınız zaman Iroha qovşağının işlədiyinə əmin olun. The
+   Aşağıdakı nümunələr Torii-in sizin konfiqurasiya edilmiş URL-də əldə edilə biləcəyini güman edir.
+   `iroha_cli` profili (`~/.config/iroha/cli.toml`).
 
-## 1. Compile a Kotodama contract
+## 1. Kotodama müqaviləsini tərtib edin
 
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+Depo minimal "salam dünya" müqaviləsini göndərir
+`examples/hello/hello.ko`. Onu Norito/IVM bayt koduna (`.to`) tərtib edin:
 
 ```sh
 mkdir -p target/examples
@@ -45,42 +47,42 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Key flags:
+Əsas bayraqlar:
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+- `--abi 1` müqaviləni ABI versiyası 1-ə bağlayır (yalnız dəstəklənən versiyada
+  yazı vaxtı).
+- `--max-cycles 0` məhdudiyyətsiz icra tələb edir; bağlamaq üçün müsbət ədəd təyin edin
+  sıfır bilik sübutları üçün dövrü doldurma.
 
-## 2. Inspect the Norito artifact (optional)
+## 2. Norito artefaktını yoxlayın (isteğe bağlı)
 
-Use `ivm_tool` to verify the header and embedded metadata:
+Başlığı və daxil edilmiş metadatanı yoxlamaq üçün `ivm_tool` istifadə edin:
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+Siz ABI versiyasını, aktiv funksiya bayraqlarını və ixrac edilmiş girişi görməlisiniz
+xal. Bu, yerləşdirmədən əvvəl sürətli bir ağlı başında olma yoxlanışıdır.
 
-## 3. Run the contract locally
+## 3. Müqaviləni yerli olaraq icra edin
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+Bir işarəyə toxunmadan davranışı təsdiqləmək üçün `ivm_run` ilə bayt kodunu yerinə yetirin.
+qovşaq:
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+`hello` nümunəsi salamlamanı qeyd edir və `SET_ACCOUNT_DETAIL` sistem zəngi verir.
+Lokal olaraq işləmək, dərc etməzdən əvvəl müqavilə məntiqi üzrə iterasiya zamanı faydalıdır
+zəncir üzərində.
 
-## 4. Deploy via `iroha_cli`
+## 4. `iroha_cli` vasitəsilə yerləşdirin
 
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+Müqavilədən razı qaldığınız zaman onu CLI-dən istifadə edərək qovşaqda yerləşdirin.
+Səlahiyyət hesabını, onun imza açarını və ya `.to` faylını və ya
+Base64 faydalı yükü:
 
 ```sh
 iroha_cli app contracts deploy \
@@ -89,37 +91,37 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve manifests or list instances:
+Komanda Torii üzərində Norito manifest + bayt kodu paketini təqdim edir və çap edir
+nəticədə əməliyyat statusu. Əməliyyat həyata keçirildikdən sonra kod
+Cavabda göstərilən hash manifestləri və ya siyahı nümunələrini əldə etmək üçün istifadə edilə bilər:
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
 iroha_cli app contracts instances --namespace apps --table
 ```
 
-## 5. Run against Torii
+## 5. Torii-ə qarşı işləyin
 
-With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli ledger transaction submit`
-or your application client). Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+Qeydə alınmış bayt kodu ilə siz təlimat təqdim etməklə onu işə sala bilərsiniz
+saxlanılan koda istinad edir (məsələn, `iroha_cli ledger transaction submit` vasitəsilə
+və ya proqram müştəriniz). Hesab icazələrinin istədiyinizə icazə verdiyinə əmin olun
+sistem zəngləri (`set_account_detail`, `transfer_asset` və s.).
 
-## Tips & troubleshooting
+## Məsləhətlər və problemlərin aradan qaldırılması
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
+- Təqdim olunan nümunələri bir yerdə tərtib etmək və icra etmək üçün `make examples-run` istifadə edin
+  vuruldu. İkili fayllar aktiv deyilsə, `KOTO`/`IVM` mühit dəyişənlərini ləğv edin
   `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli tools crypto keypair`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+- `koto_compile` ABI versiyasını rədd edərsə, tərtibçi və node
+  hər ikisi ABI v1-i hədəfləyir (siyahı üçün arqumentlər olmadan `koto_compile --abi`-i işə salın
+  dəstək).
+- CLI hex və ya Base64 imza açarlarını qəbul edir. Test üçün istifadə edə bilərsiniz
+  `iroha_cli tools crypto keypair` tərəfindən buraxılan açarlar.
+- Norito faydalı yükləri sazlayarkən, `ivm_tool disassemble` alt əmri kömək edir
+  təlimatları Kotodama mənbəyi ilə əlaqələndirin.
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+Bu axın CI-də istifadə olunan addımları və inteqrasiya testlərini əks etdirir. Daha dərin üçün
+Kotodama qrammatikasına, sistem zənglərinin təsvirinə və Norito daxili elementlərinə daxil olun, baxın:
 
 - `docs/source/kotodama_grammar.md`
 - `docs/source/kotodama_examples.md`

@@ -10,166 +10,165 @@ translation_last_reviewed: 2026-02-07
 id: nexus-transition-notes
 title: Nexus transition notes
 description: Mirror of `docs/source/nexus_transition_notes.md`, covering Phase B transition evidence, audit schedule, and mitigations.
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Nexus Transition Notes
+# Nexus Өтпелі жазбалар
 
-This log tracks the lingering **Phase B — Nexus Transition Foundations** work
-until the multi-lane launch checklist finishes. It supplements the milestone
-entries in `roadmap.md` and keeps the evidence referenced by B1–B4 in one place
-so governance, SRE, and SDK leads can share the same source of truth.
+Бұл журнал ұзаққа созылған **PhaseB — Nexus Transition Foundations** жұмысын бақылайды.
+көп жолақты ұшыруды тексеру тізімі аяқталғанша. Бұл маңызды кезеңді толықтырады
+`roadmap.md` жазбалары және B1–B4 сілтеме жасаған дәлелдерді бір жерде сақтайды
+сондықтан басқару, SRE және SDK жетекшілері бірдей ақиқат көзін бөлісе алады.
 
-## Scope & Cadence
+## Ауқым және ырғақ
 
-- Covers the routed-trace audits and telemetry guardrails (B1/B2), the
-  governance-approved configuration delta set (B3), and the multi-lane launch
-  rehearsal follow-ups (B4).
-- Replaces the temporary cadence note that previously lived here; as of the 2026
-  Q1 audit the detailed report resides in
-  `docs/source/nexus_routed_trace_audit_report_2026q1.md`, while this page owns
-  the running schedule and mitigation register.
-- Update the tables after each routed-trace window, governance vote, or launch
-  rehearsal. Whenever artefacts move, mirror the new location inside this page
-  so downstream docs (status, dashboards, SDK portals) can link to a stable
-  anchor.
+- Бағытталған бақылау аудиттерін және телеметриялық қоршауларды (B1/B2), the
+  басқару мақұлдаған конфигурация дельта жинағы (B3) және көп жолақты іске қосу
+  репетициядан кейінгі бақылаулар (B4).
+- бұрын осында өмір сүрген уақытша каденс нотасын ауыстырады; 2026 жылғы жағдай бойынша
+  1-тоқсанда егжей-тегжейлі есеп бар аудит
+  `docs/source/nexus_routed_trace_audit_report_2026q1.md`, бұл бетке тиесілі
+  орындау кестесі және әсерді азайту тізілімі.
+- Әрбір бағдарланған бақылау терезесінен, басқаруға дауыс беруден немесе іске қосудан кейін кестелерді жаңартыңыз
+  репетиция. Артефактілер қозғалған сайын, осы беттің ішіндегі жаңа орынды қайталаңыз
+  сондықтан төменгі ағындық құжаттар (күй, бақылау тақталары, SDK порталдары) тұрақты құжатқа сілтеме жасай алады
+  якорь.
 
-## Evidence Snapshot (2026 Q1–Q2)
+## Дәлелдер суреті (2026 жылдың 1–2 тоқсандары)
 
-| Workstream | Evidence | Owner(s) | Status | Notes |
+| Жұмыс ағыны | Дәлелдер | Ие(лер) | Күй | Ескертпелер |
 |------------|----------|----------|--------|-------|
-| **B1 — Routed-trace audits** | `docs/source/nexus_routed_trace_audit_report_2026q1.md`, `docs/examples/nexus_audit_outcomes/` | @telemetry-ops, @governance | ✅ Complete (Q1 2026) | Three audit windows recorded; TLS lag from `TRACE-CONFIG-DELTA` closed during the Q2 rerun. |
-| **B2 — Telemetry remediation & guardrails** | `docs/source/nexus_telemetry_remediation_plan.md`, `docs/source/telemetry.md`, `dashboards/alerts/nexus_audit_rules.yml` | @sre-core, @telemetry-ops | ✅ Complete | Alert pack, diff bot policy, and OTLP batch sizing (`nexus.scheduler.headroom` log + Grafana headroom panel) shipped; no open waivers. |
-| **B3 — Config delta approvals** | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`, `defaults/nexus/config.toml`, `defaults/nexus/genesis.json` | @release-eng, @governance | ✅ Complete | GOV-2026-03-19 vote captured; signed bundle feeds the telemetry pack noted below. |
-| **B4 — Multi-lane launch rehearsal** | `docs/source/runbooks/nexus_multilane_rehearsal.md`, `docs/source/project_tracker/nexus_rehearsal_2026q1.md`, `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`, `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`, `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | @nexus-core, @sre-core | ✅ Complete (Q2 2026) | Q2 canary rerun closed the TLS lag mitigation; validator manifest + `.sha256` capture slot range 912–936, workload seed `NEXUS-REH-2026Q2`, and the recorded TLS profile hash from the rerun. |
+| **B1 — Бағытталған бақылау аудиттері** | `docs/source/nexus_routed_trace_audit_report_2026q1.md`, `docs/examples/nexus_audit_outcomes/` | @telemetry-ops, @governance | ✅ Аяқталды (2026 ж. 1-тоқсан) | Үш тексеру терезесі жазылды; `TRACE-CONFIG-DELTA`-тен TLS кешігуі 2-тоқсанда қайталау кезінде жабылды. |
+| **B2 — Телеметриялық жөндеу және қоршаулар** | `docs/source/nexus_telemetry_remediation_plan.md`, `docs/source/telemetry.md`, `dashboards/alerts/nexus_audit_rules.yml` | @sre-core, @telemetry-ops | ✅ Толық | Ескерту бумасы, diff bot саясаты және OTLP пакетінің өлшемі (`nexus.scheduler.headroom` журналы + Grafana үстіңгі бөлме тақтасы) жөнелтілді; ашық бас тартулар жоқ. |
+| **B3 — Config delta мақұлдаулары** | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`, `defaults/nexus/config.toml`, `defaults/nexus/genesis.json` | @release-eng, @governance | ✅ Толық | GOV-2026-03-19 дауыс алынды; қол қойылған бума төменде көрсетілген телеметрия бумасын береді. |
+| **B4 — Көп жолақты ұшыру репетициясы** | `docs/source/runbooks/nexus_multilane_rehearsal.md`, `docs/source/project_tracker/nexus_rehearsal_2026q1.md`, `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`, `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`, `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | @nexus-core, @sre-core | ✅ Аяқталды (2026 ж. 2-тоқсан) | 2-тоқсан канарейының қайталануы TLS кешігуін азайтты; валидатор манифесті + `.sha256` түсіру ұяшығы ауқымы 912–936, жұмыс жүктемесінің тұқымы `NEXUS-REH-2026Q2` және қайта орындаудан жазылған TLS профилінің хэші. |
 
-## Quarterly Routed-Trace Audit Schedule
+## Тоқсан сайынғы Бағытталған бақылау аудитінің кестесі
 
-| Trace ID | Window (UTC) | Outcome | Notes |
+| Trace ID | Терезе (UTC) | Нәтиже | Ескертпелер |
 |----------|--------------|---------|-------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | ✅ Pass | Queue-admission P95 stayed well below the ≤750 ms target. No action required. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | ✅ Pass | OTLP replay hashes attached to `status.md`; SDK diff bot parity confirmed zero drift. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | ✅ Resolved | TLS profile lag closed during Q2 rerun; telemetry pack for `NEXUS-REH-2026Q2` records TLS profile hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` (see `artifacts/nexus/tls_profile_rollout_2026q2/`) and zero stragglers. |
-| `TRACE-MULTILANE-CANARY` | 2026-05-05 09:12–10:14 | ✅ Pass | Workload seed `NEXUS-REH-2026Q2`; telemetry pack + manifest/digest under `artifacts/nexus/rehearsals/2026q1/` (slot range 912–936) with agenda in `artifacts/nexus/rehearsals/2026q2/`. |
+| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | ✅ Өту | Кезекке рұқсат беру P95 ≤750ms межеден әлдеқайда төмен болды. Ешқандай әрекет қажет емес. |
+| `TRACE-TELEMETRY-BRIDGE` | 24.02.2026 10:00–10:45 | ✅ Өту | `status.md` файлына тіркелген OTLP қайта ойнату хэштері; SDK diff бот паритеті нөлдік дрейфті растады. |
+| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | ✅ Шешілген | TLS профилінің кешігуі Q2 қайталау кезінде жабылды; `NEXUS-REH-2026Q2` үшін телеметриялық бума TLS профиль хэшін `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` (`artifacts/nexus/tls_profile_rollout_2026q2/` қараңыз) және нөлдік страглерлерді жазады. |
+| `TRACE-MULTILANE-CANARY` | 2026-05-05 09:12–10:14 | ✅ Өту | Жұмыс жүктемесі тұқымы `NEXUS-REH-2026Q2`; `artifacts/nexus/rehearsals/2026q2/` күн тәртібімен `artifacts/nexus/rehearsals/2026q1/` (слот диапазоны 912–936) бойынша телеметриялық бума + манифест/дайджест. |
 
-Future quarters should add new rows and move the
-completed entries to an appendix when the table grows beyond the current
-quarter. Reference this section from routed-trace reports or governance minutes
-using the `#quarterly-routed-trace-audit-schedule` anchor.
+Болашақ тоқсандар жаңа жолдарды қосып, жылжыту керек
+кесте ағымдағы мәннен асып кеткенде, қосымшаға толтырылған жазбалар
+тоқсан. Бағытталған бақылау есептерінен немесе басқару хаттамаларынан осы бөлімге сілтеме жасаңыз
+`#quarterly-routed-trace-audit-schedule` якорь көмегімен.
 
-## Mitigation & Backlog Items
+## Азайту және артта қалу элементтері
 
-| Item | Description | Owner | Target | Status / Notes |
+| Элемент | Сипаттама | Иесі | Мақсат | Күй / Ескертпелер |
 |------|-------------|-------|--------|----------------|
-| `NEXUS-421` | Finish propagating the TLS profile that lagged during `TRACE-CONFIG-DELTA`, capture rerun evidence, and close the mitigation log. | @release-eng, @sre-core | Q2 2026 routed-trace window | ✅ Closed — TLS profile hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` captured in `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` + `.sha256`; rerun confirmed no stragglers. |
-| `TRACE-MULTILANE-CANARY` prep | Schedule the Q2 rehearsal, attach fixtures to the telemetry pack, and ensure SDK harnesses reuse the validated helper. | @telemetry-ops, SDK Program | Planning call 2026-04-30 | ✅ Completed — agenda stored at `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` with slot/workload metadata; harness reuse noted in the tracker. |
-| Telemetry pack digest rotation | Run `scripts/telemetry/validate_nexus_telemetry_pack.py` before each rehearsal/release and log digests next to the config delta tracker. | @telemetry-ops | Per release candidate | ✅ Completed — `telemetry_manifest.json` + `.sha256` emitted in `artifacts/nexus/rehearsals/2026q1/` (slot range `912-936`, seed `NEXUS-REH-2026Q2`); digests copied into the tracker and evidence index. |
+| `NEXUS-421` | `TRACE-CONFIG-DELTA` кезінде артта қалған TLS профилін таратуды аяқтаңыз, қайта іске қосу дәлелдерін түсіріңіз және жұмсарту журналын жабыңыз. | @release-eng, @sre-core | 2026 жылдың 2-тоқсаны бағдарланған бақылау терезесі | ✅ Жабық — `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` + `.sha256` форматында түсірілген TLS профилінің хэші; Қайта жүгіруде тайраңдаған жоқ. |
+| `TRACE-MULTILANE-CANARY` дайындық | Q2 репетициясын жоспарлаңыз, телеметрия бумасына құрылғыларды тіркеңіз және SDK сымдарының тексерілген көмекшіні қайта пайдалануын қамтамасыз етіңіз. | @telemetry-ops, SDK бағдарламасы | Жоспарлау телефоны 2026-04-30 | ✅ Аяқталды — `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` мекенжайында слот/жұмыс жүктемесі метадеректерімен сақталған күн тәртібі; трекерде белгішені қайта пайдалану көрсетілген. |
+| Телеметриялық бума дайджест айналуы | Әрбір жаттығу/шығару алдында `scripts/telemetry/validate_nexus_telemetry_pack.py` іске қосыңыз және конфигурация дельта трекерінің жанындағы дайджесттерді тіркеу. | @telemetry-ops | Әр шығарылым кандидаты | ✅ Аяқталды — `telemetry_manifest.json` + `artifacts/nexus/rehearsals/2026q1/` шығарылған `artifacts/nexus/rehearsals/2026q1/` (слот ауқымы `912-936`, `NEXUS-REH-2026Q2` тұқымы); трекерге көшірілген дайджесттер және дәлелдер индексі. |
 
-## Config Delta Bundle Integration
+## Config Delta Bundle интеграциясы
 
-- `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` remains the
-  canonical diff summary. When new `defaults/nexus/*.toml` or genesis changes
-  land, update that tracker first, then mirror the highlights here.
-- Signed config bundles feed the rehearsal telemetry pack. The pack, validated
-  by `scripts/telemetry/validate_nexus_telemetry_pack.py`, must be published
-  alongside the config delta evidence so operators can replay the exact
-  artefacts used during B4.
-- Iroha 2 bundles remain lane-free: configs with `nexus.enabled = false` now
-  reject lane/dataspace/routing overrides unless the Nexus profile is enabled
-  (`--sora`), so strip `nexus.*` sections from single-lane templates.
-- Keep the governance vote log (GOV-2026-03-19) linked from both the tracker and
-  this note so future votes can copy the format without re-discovering the
-  approval ritual.
+- `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` болып қалады
+  канондық айырмашылықтың қорытындысы. Жаңа `defaults/nexus/*.toml` немесе генезис өзгерген кезде
+  жер, алдымен сол трекерді жаңартыңыз, содан кейін осы жерде маңызды сәттерді қайталаңыз.
+- Қол қойылған конфигурация жинақтары репетициялық телеметрия бумасын береді. Пакет, расталған
+  `scripts/telemetry/validate_nexus_telemetry_pack.py` бойынша, жариялануы керек
+  конфигурация дельтасының дәлелдерімен қатар операторлар дәл қайталай алады
+  B4 кезінде пайдаланылған артефактілер.
+- Iroha 2 бума жолақсыз қалады: қазір `nexus.enabled = false` конфигурациялары
+  Nexus профилі қосылмайынша, жолақ/деректер кеңістігі/маршруттауды қайта анықтауды қабылдамау
+  (`--sora`), сондықтан `nexus.*` бөлімдерін бір жолақты үлгілерден алып тастаңыз.
+- Басқару туралы дауыс беру журналын (GOV-2026-03-19) трекерден де, екеуінен де байланыстырыңыз.
+  бұл ескертпе болашақ дауыстар пішімді қайта ашпай көшіре алады
+  мақұлдау рәсімі.
 
-## Launch Rehearsal Follow-Ups
+## Жаттығудан кейінгі әрекеттерді іске қосыңыз
 
-- `docs/source/runbooks/nexus_multilane_rehearsal.md` captures the canary plan,
-  participant roster, and rollback steps; refresh the runbook whenever the lane
-  topology or telemetry exporters change.
-- `docs/source/project_tracker/nexus_rehearsal_2026q1.md` lists every artefact
-  checked during the April 9 rehearsal and now carries the Q2 prep notes/agenda.
-  Append future rehearsals to the same tracker instead of opening one-off
-  trackers to keep evidence monotonic.
-- Publish OTLP collector snippets and Grafana exports (see `docs/source/telemetry.md`)
-  whenever the exporter batching guidance changes; the Q1 update bumped the
-  batch size to 256 samples to prevent headroom alerts.
-- Multi-lane CI/test evidence now lives in
-  `integration_tests/tests/nexus/multilane_pipeline.rs` and runs under the
-  `Nexus Multilane Pipeline` workflow
-  (`.github/workflows/integration_tests_multilane.yml`), replacing the retired
-  `pytests/nexus/test_multilane_pipeline.py` reference; keep the hash for
+- `docs/source/runbooks/nexus_multilane_rehearsal.md` канар жоспарын түсіреді,
+  қатысушылар тізімі және кері қайтару қадамдары; жолақты кез келген уақытта runbook жаңартыңыз
+  топология немесе телеметрия экспорттаушылар өзгереді.
+- `docs/source/project_tracker/nexus_rehearsal_2026q1.md` әрбір артефакті тізімдейді
+  9 сәуірдегі репетиция кезінде тексерілді және қазір 2-тоқсанға дайындық жазбалары/күн тәртібі бар.
+  Бір реттік ашудың орнына болашақ жаттығуларды сол трекерге қосыңыз
+  дәлелдерді монотонды ұстау үшін трекерлер.
+- OTLP коллектор үзінділерін және Grafana экспорттарын жариялау (`docs/source/telemetry.md` қараңыз)
+  экспорттаушы топтамалық нұсқаулық өзгерген сайын; 1-тоқсан жаңартуы кедергі жасады
+  топтама өлшемін 256 үлгіге дейін жоғары деңгей туралы ескертулерді болдырмау үшін.
+- Көп жолақты CI/сынақ дәлелдері қазір өмір сүреді
+  `integration_tests/tests/nexus/multilane_pipeline.rs` және астында жұмыс істейді
+  `Nexus Multilane Pipeline` жұмыс процесі
+  (`.github/workflows/integration_tests_multilane.yml`), зейнеткерлікке шыққанды ауыстырады
+  `pytests/nexus/test_multilane_pipeline.py` анықтамасы; үшін хэшті сақтаңыз
   `defaults/nexus/config.toml` (`nexus.enabled = true`, blake2b
-  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) in sync
-  with the tracker when refreshing rehearsal bundles.
+  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) синхрондалған
+  жаттығу бумаларын жаңарту кезінде трекермен.
 
 ## Runtime Lane Lifecycle
 
-- Runtime lane lifecycle plans now validate dataspace bindings and abort when
-  Kura/tiered storage reconciliation fails, leaving the catalog unchanged. The
-  helpers prune cached lane relays for retired lanes so merge-ledger synthesis
-  does not reuse stale proofs.
-- Apply plans through the Nexus config/lifecycle helpers (`State::apply_lane_lifecycle`,
-  `Queue::apply_lane_lifecycle`) to add/retire lanes without restart; routing,
-  TEU snapshots, and manifest registries reload automatically after a successful plan.
-- Operator guidance: when a plan fails, check for missing dataspaces or storage
-  roots that cannot be created (tiered cold root/Kura lane directories). Fix the
-  backing paths and retry; successful plans re-emit the lane/dataspace telemetry
-  diff so dashboards reflect the new topology.
+- Орындалу жолының өмірлік циклінің жоспарлары енді деректер кеңістігінің байланыстарын тексереді және қашан тоқтатады
+  Кура/деңгейлі сақтауды салыстыру сәтсіз аяқталып, каталог өзгеріссіз қалады. The
+  Көмекшілер ескірген жолақтар үшін кэштелген жолақ релесін кесіп тастайды, осылайша біріктіру журналының синтезі
+  ескірген дәлелдемелерді қайта пайдаланбайды.
+- Nexus конфигурациялау/өмір циклі көмекшілері арқылы жоспарларды қолданыңыз (`State::apply_lane_lifecycle`,
+  `Queue::apply_lane_lifecycle`) қайта қосусыз жолақтарды қосу/шығару; маршруттау,
+  TEU суреттері және манифест тізілімдері сәтті жоспардан кейін автоматты түрде қайта жүктеледі.
+- Оператор нұсқаулығы: жоспар орындалмаған кезде, деректер кеңістігінің немесе сақтаудың жоқтығын тексеріңіз
+  жасау мүмкін емес түбірлер (деңгейлі суық түбір/Кура жолағы каталогтары). түзетіңіз
+  артқы жолдар және қайталау; сәтті жоспарлар жолақ/деректер кеңістігі телеметриясын қайта шығарады
+  diff, сондықтан бақылау тақталары жаңа топологияны көрсетеді.
 
-## NPoS Telemetry & Backpressure Evidence
+## NPoS телеметриясы және кері қысымның дәлелі
 
-Phase B’s launch-rehearsal retro asked for deterministic telemetry captures that
-prove the NPoS pacemaker and gossip layers stay within their backpressure
-limits. The integration harness at
-`integration_tests/tests/sumeragi_npos_performance.rs` exercises those
-scenarios and emits JSON summaries (`sumeragi_baseline_summary::<scenario>::…`)
-whenever new metrics land. Run it locally with:
+PhaseB іске қосу-репетиция ретросы детерминирленген телеметрияны сұрады
+NPoS кардиостимуляторы мен өсек қабаттары кері қысымда қалатынын дәлелдеңіз
+шектеулер. Интеграция белгішесі
+`integration_tests/tests/sumeragi_npos_performance.rs` соларды жүзеге асырады
+сценарийлер және JSON қорытындыларын шығарады (`sumeragi_baseline_summary::<scenario>::…`)
+жаңа көрсеткіштер түскен сайын. Оны жергілікті түрде іске қосыңыз:
 
 ```bash
 cargo test -p integration_tests sumeragi_npos_performance -- --nocapture
 ```
 
-Set `SUMERAGI_NPOS_STRESS_PEERS`, `SUMERAGI_NPOS_STRESS_COLLECTORS_K`, or
-`SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R` to explore higher-stress topologies; the
-defaults mirror the 1 s/`k=3` collector profile used in B4.
+`SUMERAGI_NPOS_STRESS_PEERS`, `SUMERAGI_NPOS_STRESS_COLLECTORS_K` немесе орнатыңыз
+Жоғары кернеулі топологияларды зерттеу үшін `SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R`; the
+әдепкі мәндер B4 ішінде пайдаланылған 1s/`k=3` коллектор профилін көрсетеді.
 
-| Scenario / test | Coverage | Key telemetry |
+| Сценарий / тест | Қамту | Негізгі телеметрия |
 | --- | --- | --- |
-| `npos_baseline_1s_k3_captures_metrics` | Blocks 12 rounds with the rehearsal block time to record EMA latency envelopes, queue depths, and redundant-send gauges before serialising the evidence bundle. | `sumeragi_phase_latency_ema_ms`, `sumeragi_collectors_k`, `sumeragi_redundant_send_r`, `sumeragi_bg_post_queue_depth*`. |
-| `npos_queue_backpressure_triggers_metrics` | Floods the transaction queue to ensure admission deferrals kick in deterministically and that the queue exports capacity/saturation counters. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_pacemaker_jitter_within_band` | Samples pacemaker jitter and view timeouts until it proves the configured ±125 ‰ band is enforced. | `sumeragi_pacemaker_jitter_ms`, `sumeragi_pacemaker_view_timeout_target_ms`, `sumeragi_pacemaker_jitter_frac_permille`. |
-| `npos_rbc_store_backpressure_records_metrics` | Pushes large RBC payloads to the soft/hard store limits to show sessions and byte counters climb, back off, and settle without overrunning the store. | `sumeragi_rbc_store_pressure`, `sumeragi_rbc_store_sessions`, `sumeragi_rbc_store_bytes`, `sumeragi_rbc_backpressure_deferrals_total`. |
-| `npos_redundant_send_retries_update_metrics` | Forces retransmits so the redundant-send ratio gauges and collectors-on-target counters advance, proving the telemetry the retro requested is wired end-to-end. | `sumeragi_collectors_targeted_current`, `sumeragi_redundant_sends_total`. |
-| `npos_rbc_chunk_loss_fault_reports_backlog` | Drops deterministically spaced chunks to verify backlog monitors raise faults instead of silently draining payloads. | `sumeragi_rbc_backlog_sessions_pending`, `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`. |
+| `npos_baseline_1s_k3_captures_metrics` | Дәлелдер жинағын сериялау алдында EMA кідіріс конверттерін, кезек тереңдіктерін және артық жіберу өлшегіштерін жазу үшін репетиция блоктау уақытымен 12 айналымды блоктайды. | `sumeragi_phase_latency_ema_ms`, `sumeragi_collectors_k`, `sumeragi_redundant_send_r`, `sumeragi_bg_post_queue_depth*`. |
+| `npos_queue_backpressure_triggers_metrics` | Қабылдауды кейінге қалдырудың айқын түрде басталуын және кезектің сыйымдылықты/қанықтылық есептегіштерін экспорттауын қамтамасыз ету үшін транзакция кезегін толтырады. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`, `sumeragi_rbc_backpressure_deferrals_total`. |
+| `npos_pacemaker_jitter_within_band` | Кардиостимулятордың діріл үлгілері және конфигурацияланған ±125‰ жолағы орындалғанын дәлелдегенше күту уақытын көреді. | `sumeragi_pacemaker_jitter_ms`, `sumeragi_pacemaker_view_timeout_target_ms`, `sumeragi_pacemaker_jitter_frac_permille`. |
+| `npos_rbc_store_backpressure_records_metrics` | Сеанстарды көрсету үшін үлкен RBC пайдалы жүктемелерін жұмсақ/қатты дүкен шектеріне дейін итереді және байт есептегіштері дүкеннен асып кетпей көтеріледі, кері кетеді және реттеледі. | `sumeragi_rbc_store_pressure`, `sumeragi_rbc_store_sessions`, `sumeragi_rbc_store_bytes`, `sumeragi_rbc_backpressure_deferrals_total`. |
+| `npos_redundant_send_retries_update_metrics` | Қайта жіберуді мәжбүрлейді, осылайша артық-жіберу арақатынасының өлшегіштері мен коллекторлардың мақсатты есептегіштері алға жылжып, ретроның сұралған телеметриясының сымды сымды екенін дәлелдейді. | `sumeragi_collectors_targeted_current`, `sumeragi_redundant_sends_total`. |
+| `npos_rbc_chunk_loss_fault_reports_backlog` | Ары қарайтын мониторлар пайдалы жүктемелерді үнсіз төгудің орнына ақауларды көтеретінін тексеру үшін детерминирленген аралық бөліктерді түсіреді. | `sumeragi_rbc_backlog_sessions_pending`, `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`. |JSON сызығын Prometheus қырғышпен бірге басып шығарғыштарды бекітіңіз
+басқару кері қысымды дәлелдеуді сұраған кезде жүгіру кезінде түсіріледі
+дабылдар репетиция топологиясына сәйкес келеді.
 
-Attach the JSON lines the harness prints together with the Prometheus scrape
-captured during the run whenever governance asks for evidence that backpressure
-alarms match the rehearsal topology.
+## Тексеру тізімін жаңарту
 
-## Update Checklist
+1. Бағытталған жаңа терезелерді қосыңыз және тоқсандар ауысқанда ескілерін өшіріңіз.
+2. Әр Alertmanager бақылауынан кейін жұмсарту кестесін жаңартыңыз, тіпті егер
+   әрекет билетті жабу болып табылады.
+3. Конфигурация дельталары өзгерген кезде трекерді, осы жазбаны және телеметрияны жаңартыңыз
+   дайджест тізімін сол тарту сұрауында жинаңыз.
+4. Кез келген жаңа репетиция/телеметриялық артефактілерді осында байланыстырыңыз, бұл болашақ жол картасының күйі
+   жаңартулар шашыраңқы арнайы жазбалардың орнына бір құжатқа сілтеме жасай алады.
 
-1. Append new routed-trace windows and retire old ones as quarters roll over.
-2. Update the mitigation table after every Alertmanager follow-up, even if the
-   action is to close the ticket.
-3. When config deltas change, update the tracker, this note, and the telemetry
-   pack digest list in the same pull request.
-4. Link any new rehearsal/telemetry artefacts here so future roadmap status
-   updates can reference a single document instead of scattered ad-hoc notes.
+## Дәлелдер индексі
 
-## Evidence Index
-
-| Asset | Location | Notes |
+| Актив | Орналасқан жері | Ескертпелер |
 |-------|----------|-------|
-| Routed-trace audit report (Q1 2026) | `docs/source/nexus_routed_trace_audit_report_2026q1.md` | Canonical source for Phase B1 evidence; mirrored for the portal under `docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md`. |
-| Config delta tracker | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` | Contains the TRACE-CONFIG-DELTA diff summaries, reviewer initials, and GOV-2026-03-19 vote log. |
-| Telemetry remediation plan | `docs/source/nexus_telemetry_remediation_plan.md` | Documents the alert pack, OTLP batch sizing, and export budget guardrails tied to B2. |
-| Multi-lane rehearsal tracker | `docs/source/project_tracker/nexus_rehearsal_2026q1.md` | Lists Apr 9 rehearsal artefacts, validator manifest/digest, Q2 prep notes/agenda, and rollback evidence. |
-| Telemetry pack manifest/digest (latest) | `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json` (+ `.sha256`) | Records slot range 912–936, seed `NEXUS-REH-2026Q2`, and artefact hashes for governance bundles. |
-| TLS profile manifest | `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` (+ `.sha256`) | Hash of the approved TLS profile captured during the Q2 rerun; cite in routed-trace appendices. |
-| TRACE-MULTILANE-CANARY agenda | `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | Planning notes for the Q2 rehearsal (window, slot range, workload seed, action owners). |
-| Launch rehearsal runbook | `docs/source/runbooks/nexus_multilane_rehearsal.md` | Operational checklist for staging → execution → rollback; update when lane topology or exporter guidance changes. |
-| Telemetry pack validator | `scripts/telemetry/validate_nexus_telemetry_pack.py` | CLI referenced by B4 retro; archive digests alongside the tracker whenever the pack changes. |
-| Multilane regression | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | Proves `nexus.enabled = true` for multi-lane configs, preserves the Sora catalog hashes, and provisions lane-local Kura/merge-log paths (`blocks/lane_{id:03}_{slug}`) via `ConfigLaneRouter` before publishing artefact digests. |
+| Бағытталған бақылау аудитінің есебі (2026 ж. 1-тоқсан) | `docs/source/nexus_routed_trace_audit_report_2026q1.md` | PhaseB1 дәлелдерінің канондық көзі; `docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md` астында портал үшін шағылыстырылған. |
+| Дельта трекерді теңшеу | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` | TRACE-CONFIG-DELTA айырмашылықтарының қорытындылары, шолушының аты-жөні және GOV-2026-03-19 дауыс беру журналы бар. |
+| Телеметриялық қалпына келтіру жоспары | `docs/source/nexus_telemetry_remediation_plan.md` | Ескерту бумасын, OTLP пакетінің өлшемін және B2-ге байланысты экспорттық бюджет қоршауларын құжаттайды. |
+| Көп жолақты репетиция трекері | `docs/source/project_tracker/nexus_rehearsal_2026q1.md` | 9 сәуірдегі репетиция артефактілерін, валидатор манифестін/дайджестін, 2-тоқсанға дайындық жазбаларын/күн тәртібін және кері қайтару дәлелдерін тізімдейді. |
+| Телеметриялық бума манифест/дайджест (соңғы) | `artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json` (+ `.sha256`) | 912–936 ұяшық ауқымын, `NEXUS-REH-2026Q2` тұқымын және басқару бумаларына арналған артефакт хэштерін жазады. |
+| TLS профилінің манифесті | `artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json` (+ `.sha256`) | 2-тоқсанда қайталау кезінде түсірілген бекітілген TLS профилінің хэші; маршруттық-іздік қосымшаларда келтіріңіз. |
+| ТРЕЙС-МУЛТИЛАНЕ-КАНАР күн тәртібі | `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | 2-тоқсандағы репетицияны жоспарлау ескертпесі (терезе, ұялар ауқымы, жұмыс жүктемесінің тұқымы, әрекет иелері). |
+| Repearsal runbook | іске қосыңыз `docs/source/runbooks/nexus_multilane_rehearsal.md` | Кезеңге арналған операциялық бақылау тізімі → орындау → кері қайтару; жолақ топологиясы немесе экспорттаушы нұсқаулығы өзгерген кезде жаңарту. |
+| Телеметриялық бума валидаторы | `scripts/telemetry/validate_nexus_telemetry_pack.py` | CLI сілтемесі B4 ретро; бума өзгерген сайын мұрағат дайджесттері трекермен бірге жүреді. |
+| Көпжолақты регрессия | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | Көп жолақты конфигурациялар үшін `nexus.enabled = true` дәлелдейді, Sora каталогының хэштерін сақтайды және артефакт дайджесттерін жарияламас бұрын `ConfigLaneRouter` арқылы жолақты жергілікті Kura/біріктіру журналы жолдарын (`blocks/lane_{id:03}_{slug}`) қамтамасыз етеді. |

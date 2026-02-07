@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/norito/overview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Overview
+# Norito тойм
 
-Norito is the binary serialization layer used across Iroha: it defines how data
-structures are encoded on the wire, persisted on disk, and exchanged between
-contracts and hosts. Every crate in the workspace relies on Norito instead of
-`serde` so peers on different hardware produce identical bytes.
+Norito нь Iroha дээр ашиглагддаг хоёртын цуваа давхарга юм: энэ нь өгөгдлийг хэрхэн яаж хийхийг тодорхойлдог.
+бүтэц нь утсан дээр кодлогдсон, дискэн дээр хадгалагдаж, хоорондоо солилцдог
+гэрээ болон хостууд. Ажлын талбар дахь хайрцаг бүр оронд нь Norito дээр тулгуурладаг
+`serde` тиймээс өөр өөр тоног төхөөрөмж дээрх үе тэнгийнхэн ижил байт үүсгэдэг.
 
-This overview summarises the core pieces and links to the canonical references.
+Энэхүү тойм нь үндсэн хэсгүүдийг нэгтгэн дүгнэж, каноник эшлэлүүдийн холбоос юм.
 
-## Architecture at a glance
+## Архитектурыг нэг дороос харах
 
-- **Header + payload** – Each Norito message begins with a feature-negotiation
-  header (flags, checksum) followed by the bare payload. Packed layouts and
-  compression are negotiated via header bits.
-- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
-  bare encoding. The same layout is reused when wrapping payloads in headers so
-  hashing and signing remain deterministic.
-- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
-  `IntoSchema` implementations. Packed structs/sequences are enabled by default
-  and documented in `norito.md`.
-- **Multicodec registry** – Identifiers for hashes, key types, and payload
-  descriptors live in `norito::multicodec`. The authoritative table is
-  maintained in `multicodec.md`.
+- **Толгой + ачаалал** – Norito мессеж бүр онцлог шинж чанартай хэлэлцээрээр эхэлдэг.
+  толгой (туг, шалгах нийлбэр) дараа нь нүцгэн ачааллыг оруулна. Савласан байрлал болон
+  шахалтыг толгойн битүүдээр тохиролцдог.
+- **Дтерминист кодчилол** – `norito::codec::{Encode, Decode}`-г хэрэгжүүлнэ
+  нүцгэн кодчилол. Ачаа ачааллыг толгой хэсэгт ороох үед ижил бүдүүвчийг дахин ашигладаг
+  хэшлэх болон гарын үсэг зурах нь тодорхойлогч хэвээр байна.
+- **Схем + үүссэн** – `norito_derive` нь `Encode`, `Decode`, болон
+  `IntoSchema` хэрэгжилт. Савласан бүтэц/дараалал нь анхдагчаар идэвхждэг
+  мөн `norito.md`-д баримтжуулсан.
+- **Multicodec бүртгэл** – Хэш, түлхүүрийн төрөл, ачааллын тодорхойлогч
+  тодорхойлогч `norito::multicodec`-д амьдардаг. Эрх бүхий хүснэгт нь
+  `multicodec.md`-д хадгалагдсан.
 
-## Tooling
+## Багаж хэрэгсэл
 
-| Task | Command / API | Notes |
+| Даалгавар | Тушаал / API | Тэмдэглэл |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
-| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
-| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+| Толгой/хэсгүүдийг шалгах | `ivm_tool inspect <file>.to` | ABI хувилбар, тугнууд болон нэвтрэх цэгүүдийг харуулна. |
+| Rust-д кодлох/тайлах `norito::codec::{Encode, Decode}` | Бүх үндсэн өгөгдлийн загварын төрлүүдэд хэрэгжсэн. |
+| JSON хамтын ажиллагаа | `norito::json::{to_json_pretty, from_json}` | Norito утгуудаар баталгаажсан тодорхойлогч JSON. |
+| Docs/specs үүсгэх | `norito.md`, `multicodec.md` | Репо үндэс дэх үнэний эх сурвалжийн баримт бичиг. |
 
-## Development workflow
+## Хөгжлийн ажлын урсгал
 
-1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
-   structures. Avoid hand-written serializers unless absolutely necessary.
-2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
-   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
-   layouts remain stable.
-3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
-   multicodec table, then refresh the portal pages (`/reference/norito-codec`
-   and this overview).
-4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
-   helpers instead of `serde_json` so they exercise the same paths as production.
+1. **Үүсвэр нэмэх** – Шинэ өгөгдөлд `#[derive(Encode, Decode, IntoSchema)]`-г илүүд үзээрэй.
+   бүтэц. Онцын шаардлагагүй бол гараар бичсэн цувралаас зайлсхий.
+2. **Савласан бүдүүвчийг баталгаажуулах** – `cargo test -p norito` (ба багцалсан) ашиглах
+   `scripts/run_norito_feature_matrix.sh` дахь онцлог матриц) шинийг баталгаажуулна
+   зохион байгуулалт тогтвортой хэвээр байна.
+3. **Докс сэргээх** – Кодчилол өөрчлөгдөхөд `norito.md` болон
+   multicodec хүснэгт, дараа нь портал хуудсуудыг шинэчилнэ үү (`/reference/norito-codec`
+   ба энэ тойм).
+4. **Тестийг Norito-эхлээд байлга** – Интеграцийн тестүүд нь Norito JSON-г ашиглах ёстой.
+   `serde_json`-ийн оронд туслагчдыг ашигладаг тул үйлдвэрлэлтэй ижил замыг ашигладаг.
 
-## Quick links
+## Түргэн холбоосууд
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout examples: `crates/norito/tests/`
+- Үзүүлэлт: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- Олон кодлогчийн даалгавар: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- Онцлог матрицын скрипт: `scripts/run_norito_feature_matrix.sh`
+- Багц зохион байгуулалтын жишээ: `crates/norito/tests/`
 
-Pair this overview with the quickstart guide (`/norito/getting-started`) for a
-hands-on walkthrough of compiling and running bytecode that uses Norito
-payloads.
+Энэхүү тоймыг хурдан эхлүүлэх гарын авлагатай (`/norito/getting-started`) холбоно уу.
+Norito ашигладаг байт кодыг эмхэтгэх, ажиллуулах практик заавар
+ачаалал.

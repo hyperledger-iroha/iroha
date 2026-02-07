@@ -4,27 +4,29 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Пошаговый разбор реестра
-description: Воспроизведите детерминированный поток register -> mint -> transfer с CLI `iroha` и проверьте итоговое состояние реестра.
-slug: /norito/ledger-walkthrough
+titre : Пошаговый разбор реестра
+description : Enregistrez le fichier de dépannage -> menthe -> transfert avec CLI `iroha` et vérifiez cette restauration.
+slug : /norito/ledger-walkthrough
 ---
 
-Этот walkthrough дополняет [Norito quickstart](./quickstart.md), показывая, как менять и проверять состояние реестра с помощью CLI `iroha`. Вы зарегистрируете новую дефиницию актива, заминтите единицы на дефолтный операторский аккаунт, переведете часть баланса на другой аккаунт и проверите итоговые транзакции и владения. Каждый шаг отражает потоки, покрытые в quickstart SDK Rust/Python/JavaScript, чтобы вы могли подтвердить паритет между CLI и поведением SDK.
+Cette procédure pas à pas est complétée par [Démarrage rapide Norito] (./quickstart.md), permettant de démarrer et de vérifier la restauration à l'aide de la CLI `iroha`. Si vous enregistrez une nouvelle définition d'activité, modifiez les modifications sur le compte de l'opérateur défolt, avant de payer le solde du médicament. compte et vérification de vos transactions et de vos paiements. Si vous souhaitez découvrir les options disponibles dans le SDK de démarrage rapide Rust/Python/JavaScript, vous pouvez modifier la partie via la CLI et utiliser le SDK.
 
 ## Требования
 
-- Следуйте [quickstart](./quickstart.md), чтобы запустить одноузловую сеть через
+- Cliquez sur [démarrage rapide](./quickstart.md) pour configurer la configuration ici.
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Убедитесь, что `iroha` (CLI) собран или скачан, и что вы можете достучаться до
+- Assurez-vous que `iroha` (CLI) est connecté ou téléchargé, et que vous pouvez télécharger
   peer через `defaults/client.toml`.
-- Опциональные помощники: `jq` (форматирование JSON ответов) и POSIX shell для
+- Informations supplémentaires : `jq` (format JSON) et shell POSIX pour
   сниппетов с переменными окружения ниже.
 
-По всей инструкции заменяйте `$ADMIN_ACCOUNT` и `$RECEIVER_ACCOUNT` на нужные вам
-ID аккаунтов. В дефолтном bundle уже есть два аккаунта, полученных из demo-ключей:
+Pour toutes les instructions, indiquez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` pour votre choix.
+Cartes d'identité. Dans le bundle proposé, il y a un compte contenant un extrait de la démo :
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
@@ -37,9 +39,9 @@ export RECEIVER_ACCOUNT="ih58..."
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Осмотрите состояние genesis
+## 1. Осмотрите состояние la genèse
 
-Начните с изучения реестра, на который нацелен CLI:
+Accédez au restaurant de sécurité, à partir de la CLI :
 
 ```sh
 # Domains, зарегистрированные в genesis
@@ -52,27 +54,25 @@ iroha --config defaults/client.toml account list filter \
 
 # Asset definitions, которые уже существуют
 iroha --config defaults/client.toml asset definition list all --table
-```
+```Ces commandes fonctionnent pour Norito, puis sur la filtration et la configuration.
+Déterminez et complétez ce thème pour utiliser le SDK.
 
-Эти команды опираются на Norito-ответы, поэтому фильтрация и пагинация
-детерминированы и совпадают с тем, что получают SDK.
+## 2. Enregistrez la définition de l'activité
 
-## 2. Зарегистрируйте дефиницию актива
-
-Создайте новый бесконечно mintable актив `coffee` в домене `wonderland`:
+Ajoutez les nouvelles activités personnalisables `coffee` au domaine `wonderland` :
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-CLI выведет хэш отправленной транзакции (например, `0x5f…`). Сохраните его, чтобы
-позже проверить статус.
+La CLI vous permet de passer automatiquement (par exemple, `0x5f…`). Сохраните его, чтобы
+Vous pouvez vérifier le statut.
 
-## 3. Замитьте единицы на операторский аккаунт
+## 3. Planifiez vos modifications sur le compte de l'opérateur
 
-Количество актива живет под парой `(asset definition, account)`. Замитьте 250
-единиц `coffee#wonderland` на `$ADMIN_ACCOUNT`:
+Le colis est activé pour le `(asset definition, account)`. Замитьте 250
+Éditer `coffee#wonderland` pour `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -80,14 +80,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Снова сохраните хэш транзакции (`$MINT_HASH`) из вывода CLI. Чтобы проверить баланс,
+Veuillez prendre en compte votre transition (`$MINT_HASH`) à partir de votre CLI. Чтобы проверить баланс,
 выполните:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-или, чтобы получить только новый актив:
+ou alors, que pouvez-vous faire avec de nouvelles activités :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -95,9 +95,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Переведите часть баланса на другой аккаунт
+## 4. Prévoyez votre solde sur votre compte personnel
 
-Переведите 50 единиц с операторского аккаунта на `$RECEIVER_ACCOUNT`:
+Effectuez 50 données sur le compte de l'opérateur pour `$RECEIVER_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -106,8 +106,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Сохраните хэш транзакции как `$TRANSFER_HASH`. Запросите holdings на обоих аккаунтах,
-чтобы проверить новые балансы:
+Vérifiez votre transition vers `$TRANSFER_HASH`. Запросите holdings на обоих аккаунтах,
+que faire pour prouver de nouveaux équilibres :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -117,35 +117,33 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Проверьте доказательства реестра
+## 5. Vérifiez votre restaurant
 
-Используйте сохраненные хэши, чтобы подтвердить коммит обеих транзакций:
+Utilisez des ressources humaines pour prendre en charge le processus de transition :
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Вы также можете стримить последние блоки, чтобы увидеть, какой блок включил перевод:
+Vous pouvez alors créer des blocs après avoir vérifié que le bloc est activé avant :
 
 ```sh
 # Стрим от последнего блока и остановка через ~5 секунд
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
-```
+```Vous pouvez utiliser les charges utiles Norito, à savoir le SDK. Si vous êtes en position de pouvoir
+C'est ce qui se passe dans le code (comme le SDK Quickstarts ci-dessous), qui et les soldes sont fournis pour l'utilisation,
+C'est ce que vous avez défini et ce sont les valeurs par défaut.
 
-Все команды выше используют те же Norito payloads, что и SDK. Если вы повторите
-этот поток в коде (см. quickstarts SDK ниже), хэши и балансы совпадут при условии,
-что вы нацелены на ту же сеть и те же defaults.
+## Paramètres du SDK partagé
 
-## Ссылки на паритет SDK
+- [Démarrage rapide du SDK Rust](../sdks/rust) — démonstration des instructions d'enregistrement,
+  Ouvrir la transition et le statut d'interrogation de Rust.
+- [Démarrage rapide du SDK Python](../sdks/python) — vous permet d'utiliser votre registre/mint
+  с Assistants JSON soutenus par Norito.
+- [Démarrage rapide du SDK JavaScript](../sdks/javascript) — lance Torii,
+  aides à la gouvernance et wrappers de requêtes typés.
 
-- [Rust SDK quickstart](../sdks/rust) — демонстрирует регистрацию инструкций,
-  отправку транзакций и polling статуса из Rust.
-- [Python SDK quickstart](../sdks/python) — показывает те же операции register/mint
-  с Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — покрывает Torii запросы,
-  governance helpers и typed query wrappers.
-
-Сначала выполните walkthrough в CLI, затем повторите сценарий с предпочитаемым SDK,
-чтобы убедиться, что обе поверхности согласуются по хэшам транзакций, балансам и
+Vous pouvez utiliser la procédure pas à pas dans la CLI pour accéder au scénario avec le SDK précédent,
+Ce qui est important, c'est ce qui est important pour votre transition, votre équilibre et
 результатам запросов.

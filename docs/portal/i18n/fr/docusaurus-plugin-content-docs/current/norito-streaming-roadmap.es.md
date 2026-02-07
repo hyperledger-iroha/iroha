@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/norito-streaming-roadmap.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Hoja de ruta de Norito Streaming
+titre : Heure de route de Norito Streaming
 ---
 
-El siguiente backlog recoge los elementos de trabajo a corto plazo que el Streaming Working Group sigue para la entrega de audio/video de Norito. Los valores se actualizan junto a `status.md` y se comparten aqui para los usuarios del portal que prefieren una vista amigable para maquinas.
+L'arriéré suivant reconnaît les éléments de travail sur la place centrale que le groupe de travail sur le streaming poursuit pour l'entrée audio/vidéo de Norito. Les valeurs sont actualisées avec `status.md` et sont partagées ici pour les utilisateurs du portail qui préfèrent une vue amicale pour les machines.
 
 ```json
 [

@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript SDK quickstart
 description: Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-`@iroha/iroha-js` is the canonical Node.js package for interacting with Torii. It
-bundles Norito builders, Ed25519 helpers, pagination utilities, and a resilient
-HTTP/WebSocket client so you can mirror the CLI flows from TypeScript.
+`@iroha/iroha-js` არის კანონიკური Node.js პაკეტი Torii-თან ურთიერთობისთვის. ის
+პაკეტები Norito მშენებლები, Ed25519 დამხმარეები, პაგინაციის საშუალებები და ელასტიური
+HTTP/WebSocket კლიენტი, ასე რომ თქვენ შეგიძლიათ ასახოთ CLI ნაკადები TypeScript-დან.
 
-## Installation
+## ინსტალაცია
 
 ```bash
 npm install @iroha/iroha-js
@@ -21,10 +23,10 @@ npm install @iroha/iroha-js
 npm run build:native
 ```
 
-The build step wraps `cargo build -p iroha_js_host`. Ensure the toolchain from
-`rust-toolchain.toml` is available locally before running `npm run build:native`.
+მშენებლობის საფეხური ახვევს `cargo build -p iroha_js_host`. დარწმუნდით, რომ ხელსაწყოების ჯაჭვი
+`rust-toolchain.toml` ხელმისაწვდომია ადგილობრივად `npm run build:native`-ის გაშვებამდე.
 
-## Key management
+## გასაღების მართვა
 
 ```ts
 import {
@@ -45,10 +47,10 @@ const derived = publicKeyFromPrivate(privateKey);
 console.assert(Buffer.compare(derived, publicKey) === 0);
 ```
 
-## Build transactions
+## შექმენით ტრანზაქციები
 
-Norito instruction builders normalise identifiers, metadata, and quantities so
-encoded transactions match the Rust/CLI payloads.
+Norito ინსტრუქციების შემქმნელები ახდენს იდენტიფიკატორების, მეტამონაცემების და რაოდენობების ნორმალიზებას.
+დაშიფრული ტრანზაქციები ემთხვევა Rust/CLI დატვირთვას.
 
 ```ts
 import {
@@ -77,11 +79,11 @@ const { signedTransaction } = buildMintAndTransferTransaction({
 });
 ```
 
-## Torii client configuration
+## Torii კლიენტის კონფიგურაცია
 
-`ToriiClient` accepts retry/timeout knobs that mirror `iroha_config`. Use
-`resolveToriiClientConfig` to merge a camelCase config object (normalize
-`iroha_config` first), env overrides, and inline options.
+`ToriiClient` იღებს ხელახლა ცდის/დროის ამოღების ღილაკებს, რომლებიც ასახავს `iroha_config`-ს. გამოყენება
+`resolveToriiClientConfig` camelCase კონფიგურაციის ობიექტის გაერთიანებისთვის (ნორმალიზება
+`iroha_config` ჯერ), env გადაფარვები და ინლაინ ვარიანტები.
 
 ```ts
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";
@@ -112,31 +114,31 @@ const torii = new ToriiClient(
 );
 ```
 
-Environment variables for local dev:
+გარემოს ცვლადები ადგილობრივი დეველოპერებისთვის:
 
-| Variable | Purpose |
+| ცვლადი | დანიშნულება |
 |----------|---------|
-| `IROHA_TORII_TIMEOUT_MS` | Request timeout (milliseconds). |
-| `IROHA_TORII_MAX_RETRIES` | Maximum retry attempts. |
-| `IROHA_TORII_BACKOFF_INITIAL_MS` | Initial retry backoff. |
-| `IROHA_TORII_BACKOFF_MULTIPLIER` | Exponential backoff multiplier. |
-| `IROHA_TORII_MAX_BACKOFF_MS` | Maximum retry delay. |
-| `IROHA_TORII_RETRY_STATUSES` | Comma-separated HTTP status codes to retry. |
-| `IROHA_TORII_RETRY_METHODS` | Comma-separated HTTP methods to retry. |
-| `IROHA_TORII_API_TOKEN` | Adds `X-API-Token`. |
-| `IROHA_TORII_AUTH_TOKEN` | Adds `Authorization: Bearer …` header. |
+| `IROHA_TORII_TIMEOUT_MS` | მოთხოვნის დროის ამოწურვა (მილიწამები). |
+| `IROHA_TORII_MAX_RETRIES` | განმეორებითი ცდის მაქსიმალური მცდელობა. |
+| `IROHA_TORII_BACKOFF_INITIAL_MS` | თავდაპირველი ხელახალი უკან დაბრუნება. |
+| `IROHA_TORII_BACKOFF_MULTIPLIER` | ექსპონენციალური უკან დახევის მულტიპლიკატორი. |
+| `IROHA_TORII_MAX_BACKOFF_MS` | განმეორებითი ცდის მაქსიმალური დაგვიანება. |
+| `IROHA_TORII_RETRY_STATUSES` | მძიმით გამოყოფილი HTTP სტატუსის კოდები ხელახლა საცდელად. |
+| `IROHA_TORII_RETRY_METHODS` | მძიმით გამოყოფილი HTTP მეთოდები ხელახლა საცდელად. |
+| `IROHA_TORII_API_TOKEN` | ამატებს `X-API-Token`. |
+| `IROHA_TORII_AUTH_TOKEN` | ამატებს `Authorization: Bearer …` სათაურს. |
 
-Retry profiles mirror Android defaults and are exported for parity checks:
+პროფილები ხელახლა ასახავს Android-ის ნაგულისხმევს და ექსპორტირებულია პარიტეტის შესამოწმებლად:
 `DEFAULT_TORII_CLIENT_CONFIG`, `DEFAULT_RETRY_PROFILE_PIPELINE`,
-`DEFAULT_RETRY_PROFILE_STREAMING`. See `docs/source/sdk/js/torii_retry_policy.md`
-for the endpoint-to-profile mapping and the parameters governance audits during
+`DEFAULT_RETRY_PROFILE_STREAMING`. იხილეთ `docs/source/sdk/js/torii_retry_policy.md`
+ბოლო წერტილიდან პროფილის რუკების და პარამეტრების მართვის აუდიტის დროს
 JS4/JS7.
 
-## Iterable lists & pagination
+## გამეორებადი სიები და პაგინაცია
 
-Pagination helpers mirror the Python SDK ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, balances, asset holders, and the
-account transaction history.
+პაგინაციის დამხმარეები ასახავს Python SDK ერგონომიკას `/v1/accounts`-ისთვის,
+`/v1/domains`, `/v1/assets/definitions`, NFTs, ნაშთები, აქტივების მფლობელები და
+ანგარიშის ტრანზაქციის ისტორია.
 
 ```ts
 const { items, total } = await torii.listDomains({
@@ -175,22 +177,22 @@ const holders = await torii.listAssetHolders("rose#wonderland", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline allowances & verdict metadata
+## ოფლაინ შეღავათები და განაჩენის მეტამონაცემები
 
-Offline allowance responses expose the enriched ledger metadata up-front —
+ოფლაინ შემწეობის პასუხები ავლენს გამდიდრებულ წიგნში მეტამონაცემებს -
 `expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` are returned alongside the raw
-record so dashboards don’t have to decode the embedded Norito payloads. The new
-countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
-→ certificate) so UI badges can warn operators whenever an allowance has
-<24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
+`attestation_nonce_hex` და `remaining_amount` ბრუნდება ნედლეულთან ერთად
+ჩაწერეთ ისე, რომ დაფებს არ დასჭირდეთ ჩაშენებული Norito დატვირთვის გაშიფვრა. ახალი
+ათვლის დამხმარეები (`deadline_kind`, `deadline_state`, `deadline_ms`,
+`deadline_ms_remaining`) მონიშნეთ შემდეგი ვადა (განახლება → პოლიტიკა
+→ სერთიფიკატი) ასე რომ, UI სამკერდე ნიშნებს შეუძლიათ გააფრთხილონ ოპერატორები, როცა შემწეობა აქვს
+<24 საათი დარჩა. SDK
+ასახავს `/v1/offline/allowances`-ის მიერ გამოვლენილ REST ფილტრებს:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
-`requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
-example `onlyMissingVerdict` + `verdictIdHex`) are rejected locally before Torii
-is called.
+`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` და
+`requireVerdict` / `onlyMissingVerdict` ლოგინები. არასწორი კომბინაციები (ამისთვის
+მაგალითად `onlyMissingVerdict` + `verdictIdHex`) ადგილობრივად უარყოფილია Torii-მდე
+ეწოდება.
 
 ```ts
 const { items: allowances } = await torii.listOfflineAllowances({
@@ -209,14 +211,14 @@ for (const entry of allowances) {
 }
 ```
 
-## Offline top-ups (issue + register)
+## ოფლაინ შევსება (გამოცემა + რეგისტრაცია)
 
-Use the top-up helpers when you want to issue a certificate and immediately
-register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. There is
-no dedicated top-up endpoint; the helper chains the issue + register calls. If
-you already have a signed certificate, call `registerOfflineAllowance` (or
-`renewOfflineAllowance`) directly.
+გამოიყენეთ შევსების დამხმარეები, როდესაც გსურთ სერთიფიკატის გაცემა და დაუყოვნებლივ
+დაარეგისტრირეთ იგი წიგნში. SDK ამოწმებს გაცემულ და რეგისტრირებულ სერტიფიკატს
+ID-ები ემთხვევა დაბრუნებამდე და პასუხი მოიცავს ორივე დატვირთვას. არსებობს
+არ არის გამოყოფილი შევსების საბოლოო წერტილი; დამხმარე აკავშირებს საკითხს + დაარეგისტრირებს ზარებს. თუ
+თქვენ უკვე გაქვთ ხელმოწერილი სერთიფიკატი, დარეკეთ `registerOfflineAllowance` (ან
+`renewOfflineAllowance`) პირდაპირ.
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
@@ -238,11 +240,11 @@ const renewed = await torii.topUpOfflineAllowanceRenewal(
 console.log(renewed.registration.certificate_id_hex);
 ```
 
-## Torii queries & streaming (WebSockets)
+## Torii მოთხოვნები და ნაკადი (WebSockets)
 
-Query helpers expose status, Prometheus metrics, telemetry snapshots, and event
-streams using the Norito filter grammar. Streaming automatically upgrades to
-WebSockets and resumes when the retry budget allows.
+შეკითხვის დამხმარეები აჩვენებენ სტატუსს, Prometheus მეტრიკას, ტელემეტრიის კადრებს და მოვლენას
+ნაკადები Norito ფილტრის გრამატიკის გამოყენებით. სტრიმინგი ავტომატურად განახლდება
+WebSockets და განახლდება, როდესაც ხელახალი ცდის ბიუჯეტი საშუალებას იძლევა.
 
 ```ts
 const status = await torii.getSumeragiStatus();
@@ -262,18 +264,18 @@ for await (const event of torii.streamEvents({
 abort.abort(); // closes the underlying WebSocket cleanly
 ```
 
-Use `streamBlocks`, `streamTransactions`, or `streamTelemetry` for the other
-WebSocket endpoints. All streaming helpers surface retry attempts, so hook the
-`onReconnect` callback to feed dashboards and alerting.
+გამოიყენეთ `streamBlocks`, `streamTransactions` ან `streamTelemetry` სხვებისთვის
+WebSocket საბოლოო წერტილები. ყველა სტრიმინგის დამხმარე ზედაპირზე ხელახლა ცდის მცდელობას, ასე რომ, მიამაგრეთ
+`onReconnect` გამოძახება დაფების შესანახად და გაფრთხილებისთვის.
 
-## Explorer snapshots & QR payloads
+## Explorer-ის სნეპშოტები და QR დატვირთვები
 
-Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
-`/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
-same snapshots that power the portal. `getExplorerMetrics()` normalises the
-payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
-SVG for share buttons.
+Explorer ტელემეტრია უზრუნველყოფს აკრეფილ დამხმარეებს `/v1/explorer/metrics`-სთვის და
+`/v1/explorer/accounts/{account_id}/qr` ბოლო წერტილებია, რათა დაფამ შეძლოს მისი ხელახლა დაკვრა
+იგივე კადრები, რომლებიც აძლიერებენ პორტალს. `getExplorerMetrics()` ახდენს ნორმალიზებას
+დატვირთვა და აბრუნებს `null`, როდესაც მარშრუტი გამორთულია. დააწყვილეთ იგი
+`getExplorerAccountQr()` როცა დაგჭირდებათ IH58 (სასურველია)/სორა (მეორე საუკეთესო) ლიტერალები პლუს ინლაინ
+SVG გაზიარების ღილაკებისთვის.
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -297,20 +299,20 @@ console.log(
 );
 ```
 
-Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for the preferred IH58 output or request `ih58_qr`
-when you need the QR-safe variant. The compressed literal is the second-best
-Sora-only option for UX. The helper always returns the canonical identifier,
-the selected literal, and metadata (network prefix, QR version/modules, error
-correction tier, and inline SVG), so CI/CD can publish the same payloads that
-the Explorer surfaces without calling bespoke converters.
+`addressFormat: "compressed"`-ის გავლა ასახავს Explorer-ის ნაგულისხმევ შეკუმშვას
+სელექტორები; გამოტოვეთ უგულებელყოფა სასურველი IH58 გამომავალისთვის ან მოითხოვეთ `ih58_qr`
+როცა გჭირდებათ QR-უსაფრთხო ვარიანტი. შეკუმშული ლიტერალი მეორე საუკეთესოა
+მხოლოდ Sora-ის ვარიანტი UX-ისთვის. დამხმარე ყოველთვის აბრუნებს კანონიკურ იდენტიფიკატორს,
+არჩეული ლიტერალი და მეტამონაცემები (ქსელის პრეფიქსი, QR ვერსია/მოდულები, შეცდომა
+კორექტირების დონე და inline SVG), ასე რომ CI/CD-ს შეუძლია გამოაქვეყნოს იგივე დატვირთვები, რაც
+Explorer ზედაპირზე ჩნდება შეკვეთილი გადამყვანების გამოძახების გარეშე.
 
-## Connect sessions & queueing
+## სესიების და რიგის დაკავშირება
 
-The Connect helpers mirror `docs/source/connect_architecture_strawman.md`. The
-fastest path to a preview-ready session is `bootstrapConnectPreviewSession`,
-which stitches together deterministic SID/URI generation and the Torii
-registration call.
+Connect დამხმარე სარკე `docs/source/connect_architecture_strawman.md`. The
+უსწრაფესი გზა წინასწარი გადახედვისთვის მზად სესიისკენ არის `bootstrapConnectPreviewSession`,
+რომელიც აერთიანებს დეტერმინისტულ SID/URI თაობას და Torii-ს
+რეგისტრაციის ზარი.
 
 ```ts
 import {
@@ -333,25 +335,25 @@ console.log("wallet QR", preview.walletUri);
 console.log("Connect tokens", tokens?.wallet, tokens?.app);
 ```
 
-- Pass `register: false` when you only need deterministic URIs for QR/deeplink
-  previews.
-- `generateConnectSid` stays available when you need to derive session ids
-  without minting URIs.
-- Directional keys and ciphertext envelopes come from the native bridge; when
-  unavailable the SDK falls back to the JSON codec and throws
+- გაიარეთ `register: false`, როდესაც გჭირდებათ მხოლოდ განმსაზღვრელი URI-ები QR/deeplink-ისთვის
+  გადახედვები.
+- `generateConnectSid` რჩება ხელმისაწვდომი, როდესაც გჭირდებათ სესიის ID-ების გამომუშავება
+  URI-ების მოჭრის გარეშე.
+- მიმართულების გასაღებები და შიფრული ტექსტის კონვერტები მომდინარეობს მშობლიური ხიდიდან; როცა
+  მიუწვდომელია SDK ბრუნდება JSON კოდეკში და ისვრის
   `ConnectQueueError.bridgeUnavailable`.
-- Offline buffers are stored as Norito `.to` blobs in IndexedDB. Monitor queue
-  state via the emitted `ConnectQueueError.overflow(limit)` /
-  `.expired(ttlMs)` errors and feed `connect.queue_depth` telemetry as outlined
-  in the roadmap.
+- ოფლაინ ბუფერები ინახება როგორც Norito `.to` blobs IndexedDB-ში. მონიტორის რიგი
+  მდგომარეობა გამოსხივებული `ConnectQueueError.overflow(limit)` /
+  `.expired(ttlMs)` შეცდომები და შესანახი `connect.queue_depth` ტელემეტრია, როგორც აღწერილია
+  საგზაო რუკაში.
 
-### Connect registry & policy snapshots
+### დააკავშირეთ რეესტრისა და პოლიტიკის სნეპშოტები
 
-Platform operators can introspect and update the Connect registry without
-leaving Node.js. `iterateConnectApps()` pages through the registry, while
-`getConnectStatus()` and `getConnectAppPolicy()` expose the runtime counters and
-current policy envelope. `updateConnectAppPolicy()` accepts camelCase fields,
-so you can stage the same JSON payload that Torii expects.
+პლატფორმის ოპერატორებს შეუძლიათ დაათვალიერონ და განაახლონ Connect რეესტრის გარეშე
+ტოვებს Node.js-ს. `iterateConnectApps()` გვერდები რეესტრის მეშვეობით, ხოლო
+`getConnectStatus()` და `getConnectAppPolicy()` ავლენს გაშვების მრიცხველებს და
+მიმდინარე პოლიტიკის კონვერტი. `updateConnectAppPolicy()` იღებს camelCase ველებს,
+ასე რომ, თქვენ შეგიძლიათ დადგმოთ იგივე JSON დატვირთვა, რომელსაც Torii ელოდება.
 
 ```ts
 const status = await torii.getConnectStatus();
@@ -373,17 +375,17 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 }
 ```
 
-Always capture the latest `getConnectStatus()` snapshot before applying
-mutations—the governance checklist requires evidence that policy updates start
-from the fleet’s current limits.
+ყოველთვის გადაიღეთ უახლესი `getConnectStatus()` სნეპშოტი განაცხადის დაწყებამდე
+მუტაციები — მმართველობის საკონტროლო სია მოითხოვს მტკიცებულებას, რომ პოლიტიკის განახლებები იწყება
+ფლოტის ამჟამინდელი საზღვრებიდან.
 
-### Connect WebSocket dialling
+### შეაერთეთ WebSocket აკრეფა
 
-`ToriiClient.openConnectWebSocket()` assembles the canonical
-`/v1/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
-`http→ws` / `https→wss`, and hands the final URL to whichever WebSocket
-implementation you supply. Browsers automatically reuse the global
-`WebSocket`. Node.js callers should pass a constructor such as `ws`:
+`ToriiClient.openConnectWebSocket()` აწყობს კანონიკურს
+`/v1/connect/ws` URL (მათ შორის, `sid`, `role` და ტოკენის პარამეტრები), განახლებები
+`http→ws` / `https→wss` და გადასცემს საბოლოო URL ნებისმიერ WebSocket-ს
+განხორციელებას თქვენ აწვდით. ბრაუზერები ავტომატურად ხელახლა იყენებენ გლობალურს
+`WebSocket`. Node.js აბონენტებმა უნდა გაიარონ ისეთი კონსტრუქტორი, როგორიცაა `ws`:
 
 ```ts
 import WebSocket from "ws";
@@ -419,19 +421,19 @@ socket.addEventListener("message", (event) => {
 });
 ```
 
-When you only need the URL, call `torii.buildConnectWebSocketUrl(params)` or the
-top-level `buildConnectWebSocketUrl(baseUrl, params)` helper and reuse the
-resulting string in a custom transport/queue.
+როცა მხოლოდ URL გჭირდებათ, დარეკეთ `torii.buildConnectWebSocketUrl(params)` ან
+უმაღლესი დონის `buildConnectWebSocketUrl(baseUrl, params)` დამხმარე და ხელახლა გამოიყენეთ
+შედეგად მიღებული სტრიქონი საბაჟო ტრანსპორტის/რიგში.
 
-Looking for a complete CLI-oriented sample? The
-[Connect preview recipe](./recipes/javascript-connect-preview.md) includes a
-runnable script plus telemetry guidance that mirrors the roadmap deliverable for
-documenting the Connect queue + WebSocket flow.
+ეძებთ სრულ CLI-ზე ორიენტირებულ ნიმუშს? The
+[დაკავშირება წინასწარი გადახედვის რეცეპტი] (./recipes/javascript-connect-preview.md) მოიცავს ა
+გაშვებადი სკრიპტი პლუს ტელემეტრიის სახელმძღვანელო, რომელიც ასახავს საგზაო რუქის მიწოდებას
+Connect queue + WebSocket ნაკადის დოკუმენტირება.
 
-### Queue telemetry & alerting
+### რიგი ტელემეტრია და გაფრთხილება
 
-Wire queue metrics directly into the helper surfaces so dashboards can mirror
-the roadmap KPIs.
+მავთულის რიგის მეტრიკა პირდაპირ დამხმარე ზედაპირებზეა, რათა დაფები ასახული იყოს
+საგზაო რუკა KPIs.
 
 ```ts
 import { bootstrapConnectPreviewSession, ConnectQueueError } from "@iroha/iroha-js";
@@ -455,17 +457,17 @@ async function dialWithTelemetry(client: ToriiClient) {
 }
 ```
 
-`ConnectQueueError#toConnectError()` converts queue failures into the generic
-`ConnectError` taxonomy so shared HTTP/WebSocket interceptors can emit the
-standard `connect.queue_depth`, `connect.queue_overflow_total`, and
-`connect.queue_expired_total` metrics referenced throughout the roadmap.
+`ConnectQueueError#toConnectError()` გარდაქმნის რიგის წარუმატებლობას ზოგად
+`ConnectError` ტაქსონომია, ასე რომ გაზიარებულ HTTP/WebSocket-ის ჩამჭრელებს შეუძლიათ ასხივონ
+სტანდარტული `connect.queue_depth`, `connect.queue_overflow_total` და
+`connect.queue_expired_total` მეტრიკა მითითებულია საგზაო რუკაზე.
 
-## Streaming watchers & event cursors
+## სტრიმინგის დამკვირვებლები და მოვლენის კურსორები
 
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
-retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
-Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
-resume a stream without skipping events when a process restarts.
+`ToriiClient.streamEvents()` ავლენს `/v1/events/sse`-ს, როგორც ასინქრონულ იტერატორს ავტომატური
+ხელახლა ცდის, ასე რომ Node/Bun CLI-ებს შეუძლიათ მილსადენის აქტივობის კუდში შეყვანა ისევე, როგორც Rust CLI აკეთებს.
+შეინახეთ `Last-Event-ID` კურსორი თქვენი runbook არტეფაქტებთან ერთად, რათა ოპერატორებმა შეძლონ
+განაახლეთ ნაკადი მოვლენების გამოტოვების გარეშე, როდესაც პროცესი განახლდება.
 
 ```ts
 import fs from "node:fs/promises";
@@ -495,35 +497,33 @@ for await (const event of torii.streamEvents({
 }
 ```
 
-- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
-  `STREAM_FILTER_JSON` to replay the same filters the CLI accepts.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
-  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
-  for a smoke test.
-- `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
-  iterator honours `Last-Event-ID` the same way.
-- See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
-  env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
-  streaming/WebSocket roadmap deliverable.
+- გადართეთ `PIPELINE_STATUS` (მაგალითად `Pending`, `Applied`, ან `Approved`) ან დააყენეთ
+  `STREAM_FILTER_JSON` იგივე ფილტრების გასამეორებლად, რომლებსაც CLI იღებს.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` ინარჩუნებს იტერატორს ა
+  სიგნალი მიიღება; გაიარეთ `STREAM_MAX_EVENTS=25`, როდესაც დაგჭირდებათ მხოლოდ პირველი რამდენიმე ღონისძიება
+  კვამლის ტესტისთვის.
+- `ToriiClient.streamSumeragiStatus()` ასახავს იმავე ინტერფეისს
+  `/v1/sumeragi/status/sse` ასე რომ, კონსენსუსის ტელემეტრია შეიძლება ცალ-ცალკე განხორციელდეს და
+  iterator პატივს სცემს `Last-Event-ID`-ს იმავე გზით.
+- იხილეთ `javascript/iroha_js/recipes/streaming.mjs` ანაზრაურების CLI-სთვის (კურსორის გამძლეობა,
+  env-var ფილტრის უგულებელყოფა და `extractPipelineStatusKind` logging) გამოიყენება JS4-ში
+  ნაკადი/WebSocket საგზაო რუკის მიწოდება.
 
-## UAID portfolios & Space Directory
+## UAID პორტფოლიოები და კოსმოსური დირექტორია
 
-The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
-helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
-canonicalise them before submitting requests:
+Space Directory API-ები ასახავს უნივერსალური ანგარიშის ID (UAID) სასიცოცხლო ციკლს. The
+დამხმარეები იღებენ `uaid:<hex>` ლიტერალებს ან ნედლეულს 64-თექვსმეტიან დიჯესტს (LSB=1) და
+შეასრულეთ ისინი კანონიკურად მოთხოვნის გაგზავნამდე:
 
-- `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
-  grouping asset holdings by canonical account IDs; pass `assetId` to filter the
-  portfolio down to a single asset instance.
-- `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `sora…` literals).
-- `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
-  lifecycle status, and bound accounts for auditing.
-
-For operator evidence packs, manifest publish/revoke flows, and SDK migration
-guidance, follow the Universal Account Guide (`docs/source/universal_accounts_guide.md`)
-alongside these client helpers so the portal and source documentation remain in sync.
+- `getUaidPortfolio(uaid, { assetId })` აგროვებს ნაშთებს მონაცემთა სივრცეში,
+  აქტივების ქონების დაჯგუფება კანონიკური ანგარიშის ID-ების მიხედვით; გაფილტრეთ `assetId`
+  პორტფელი ერთ აქტივამდე.
+- `getUaidBindings(uaid, { addressFormat })` ჩამოთვლის ყველა მონაცემთა სივრცეს ↔ ანგარიშს
+  სავალდებულო (`addressFormat: "compressed"` აბრუნებს `sora…` ლიტერალებს).
+- `getUaidManifests(uaid, { dataspaceId })` აბრუნებს თითოეულ შესაძლებლობის მანიფესტს,
+  სასიცოცხლო ციკლის სტატუსი და შეკრული ანგარიშები აუდიტისთვის.ოპერატორის მტკიცებულების პაკეტებისთვის, მანიფესტის გამოქვეყნება/გაუქმება ნაკადები და SDK მიგრაცია
+მითითებები, მიჰყევით უნივერსალური ანგარიშის სახელმძღვანელოს (`docs/source/universal_accounts_guide.md`)
+კლიენტის დამხმარეებთან ერთად, ასე რომ, პორტალი და წყაროს დოკუმენტაცია სინქრონიზებული რჩება.
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -544,11 +544,11 @@ const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
 console.log("manifests", manifests.manifests[0].manifest.entries.length);
 ```
 
-Operators can also rotate manifests or execute emergency deny-wins flows without
-dropping to the CLI. Both helpers accept an optional `{ signal }` object so
-long-running submissions can be cancelled with `AbortController`; non-object
-options or non-`AbortSignal` inputs raise a synchronous `TypeError` before the
-request hits Torii:
+ოპერატორებს ასევე შეუძლიათ მანიფესტების როტაცია ან გადაუდებელი უარყოფა-გამარჯვების ნაკადების შესრულება
+ჩაშვება CLI-ზე. ორივე დამხმარე იღებს არასავალდებულო `{ signal }` ობიექტს
+ხანგრძლივი წარდგენის გაუქმება შესაძლებელია `AbortController`-ით; არაობიექტური
+ოფციები ან არა-`AbortSignal` შეყვანები ზრდის სინქრონულ `TypeError`-ს
+მოთხოვნა მოხვდება Torii:
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -583,45 +583,45 @@ await torii.revokeSpaceDirectoryManifest(
 );
 ```
 
-`publishSpaceDirectoryManifest()` accepts either raw manifest JSON (matching the
-fixtures under `fixtures/space_directory/`) or any object that serialises to the
-same structure. `privateKey`, `privateKeyHex`, or `privateKeyMultihash` map to
-the `ExposedPrivateKey` field Torii expects and default to the `ed25519`
-algorithm when no prefix is supplied. Both requests return once Torii enqueues
-the instruction (`202 Accepted`), at which point the ledger will emit the
-matching `SpaceDirectoryEvent`.
+`publishSpaceDirectoryManifest()` იღებს ან დაუმუშავებელ მანიფესტ JSON-ს (შეესაბამება
+მოწყობილობები `fixtures/space_directory/` ქვეშ) ან ნებისმიერი ობიექტი, რომელიც სერიულირდება
+იგივე სტრუქტურა. `privateKey`, `privateKeyHex`, ან `privateKeyMultihash` რუკაზე
+`ExposedPrivateKey` ველი Torii მოელის და ნაგულისხმევია `ed25519`
+ალგორითმი, როდესაც პრეფიქსი არ არის მოწოდებული. ორივე მოთხოვნა ბრუნდება ერთხელ Torii რიგში
+ინსტრუქცია (`202 Accepted`), რა დროსაც წიგნი გამოსცემს
+შესატყვისი `SpaceDirectoryEvent`.
 
-## Governance & ISO bridge
+## მმართველობა და ISO ხიდი
 
-`ToriiClient` exposes the governance APIs for inspecting contracts, staging
-proposals, submitting ballots (plain or ZK), rotating the council, and calling
+`ToriiClient` ავლენს მმართველობის API-ებს კონტრაქტების შესამოწმებლად, დადგმისთვის
+წინადადებები, ბიულეტენების წარდგენა (უბრალო ან ზ.კ.), საბჭოს როტაცია და მოწვევა
 `governanceFinalizeReferendumTyped` /
-`governanceEnactProposalTyped` without hand-written DTOs. ISO&nbsp;20022 helpers
-follow the same pattern via `buildPacs008Message`/`buildPacs009Message` and the
-`submitIso*`/`waitForIsoMessageStatus` trio.
+`governanceEnactProposalTyped` ხელით დაწერილი DTO-ების გარეშე. ISO 20022 დამხმარეები
+დაიცავით იგივე ნიმუში `buildPacs008Message`/`buildPacs009Message` და
+`submitIso*`/`waitForIsoMessageStatus` ტრიო.
 
-See the [governance & ISO bridge recipe](./recipes/javascript-governance-iso.md)
-for CLI-ready samples plus pointers back to the full field guide in
+იხილეთ [მართვისა და ISO ხიდის რეცეპტი] (./recipes/javascript-governance-iso.md)
+CLI-სთვის მზა ნიმუშებისთვის, პლუს მაჩვენებლების დაბრუნება ველის სრულ სახელმძღვანელოში
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC sampling & delivery evidence
+## RBC სინჯის აღება და მიწოდების მტკიცებულება
 
-The JS roadmap also requires Roadrunner Block Commitment (RBC) sampling so operators can
-prove that the block they fetched through Sumeragi matches the chunk proofs they verify.
-Use the built-in helpers instead of building payloads by hand:
+JS საგზაო რუკა ასევე მოითხოვს Roadrunner Block Commitment (RBC) შერჩევას, რათა ოპერატორებმა შეძლონ
+დაამტკიცეთ, რომ ბლოკი, რომელიც მათ მოიტანა Sumeragi-ით, ემთხვევა მათ მიერ დამოწმებულ ნაწილს.
+გამოიყენეთ ჩაშენებული დამხმარეები იმის ნაცვლად, რომ ააშენოთ ტვირთი ხელით:
 
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, and
-   `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
-   (the integration suite falls back to it whenever
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normalises `{blockHash,height,view}`
-   plus optional `{count,seed,apiToken}` overrides so malformed hex or negative integers never
-   reach Torii.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample`, returning chunk proofs
-   and Merkle paths (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) you should archive with
-   the rest of your adoption evidence.
-4. `getSumeragiRbcDelivered(height, view)` captures the cohort’s delivery metadata so auditors
-   can replay the proof end-to-end.
+1. `getSumeragiRbcSessions()` სარკეები `/v1/sumeragi/rbc/sessions` და
+   `findRbcSamplingCandidate()` ავტომატურად ირჩევს პირველ მიწოდებულ სესიას ბლოკის ჰეშით
+   (ინტეგრაციის კომპლექტი მას უბრუნდება ნებისმიერ დროს
+   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` არ არის დაყენებული).
+2. `ToriiClient.buildRbcSampleRequest(session, overrides)` ნორმალიზდება `{blockHash,height,view}`
+   პლუს არასავალდებულო `{count,seed,apiToken}` უგულებელყოფს ასე არასწორი თექვსმეტობით ან უარყოფით მთელ რიცხვებს არასოდეს
+   მიაღწიეთ Torii.
+3. `sampleRbcChunks()` აგზავნის მოთხოვნას `/v1/sumeragi/rbc/sample`-ზე, აბრუნებს ნაწილაკების მტკიცებულებებს
+   და მერკლის ბილიკები (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) უნდა დაარქივოთ
+   თქვენი შვილად აყვანის დანარჩენი მტკიცებულებები.
+4. `getSumeragiRbcDelivered(height, view)` იღებს კოჰორტის მიწოდების მეტამონაცემებს, ასე რომ აუდიტორები
+   შეუძლია მტკიცებულების გამეორება ბოლომდე.
 
 ```js
 import assert from "node:assert";
@@ -655,23 +655,23 @@ console.log(
 );
 ```
 
-Persist both responses under the artefact root you submit to governance. Override the
-auto-selected session via `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-whenever you need to probe a specific block, and treat failures to fetch RBC snapshots as a
-pre-flight gating error rather than silently downgrading to direct mode.
+შეინარჩუნეთ ორივე პასუხი იმ არტეფაქტის ძირის ქვეშ, რომელსაც წარუდგენთ მმართველობას. გადალახეთ
+ავტომატურად შერჩეული სესია `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`-ის საშუალებით
+როდესაც გჭირდებათ კონკრეტული ბლოკის გამოკვლევა და RBC კადრების მოტანის წარუმატებლობა, როგორც
+ფრენის წინ შეცდომა, ვიდრე ჩუმად დაქვეითება პირდაპირ რეჟიმში.
 
-## Testing & CI
+## ტესტირება და CI
 
-1. Cache cargo and npm artifacts.
-2. Run `npm run build:native`.
-3. Execute `npm test` (or `node --test` for smoke jobs).
+1. ქეში ტვირთი და npm არტეფაქტები.
+2. გაუშვით `npm run build:native`.
+3. შეასრულეთ `npm test` (ან `node --test` კვამლის სამუშაოებისთვის).
 
-The reference GitHub Actions workflow lives in
+საცნობარო GitHub Actions სამუშაო ნაკადი ცხოვრობს
 `docs/source/examples/iroha_js_ci.md`.
 
-## Next steps
+## შემდეგი ნაბიჯები
 
-- Review the generated types in `javascript/iroha_js/index.d.ts`.
-- Explore the recipes under `javascript/iroha_js/recipes/`.
-- Pair `ToriiClient` with the Norito quickstart to inspect payloads alongside
-  SDK calls.
+- გადახედეთ გენერირებულ ტიპებს `javascript/iroha_js/index.d.ts`-ში.
+- შეისწავლეთ რეცეპტები `javascript/iroha_js/recipes/`-ში.
+- დააწყვილეთ `ToriiClient` Norito სწრაფი სტარტთან, რათა შეამოწმოთ ტვირთამწეობა ერთად
+  SDK ზარები.

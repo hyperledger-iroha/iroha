@@ -4,29 +4,31 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-primitives.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-primitives
-title: Постквантовые примитивы SoraNet
-sidebar_label: PQ примитивы
-description: Обзор crate `soranet_pq` и того, как рукопожатие SoraNet использует helpers ML-KEM/ML-DSA.
+id: pq-プリミティブ
+タイトル: Постквантовые примитивы SoraNet
+サイドバーラベル: PQ の表示
+説明: クレート `soranet_pq` と、SoraNet ヘルパー ML-KEM/ML-DSA の説明。
 ---
 
 :::note Канонический источник
-Эта страница зеркалирует `docs/source/soranet/pq_primitives.md`. Держите обе копии в синхронизации, пока набор устаревшей документации не будет выведен из эксплуатации.
+Эта страница зеркалирует `docs/source/soranet/pq_primitives.md`. Собе копии в синхронизации, пока набор устаревлей документации не будет выведен из эксплуатации.
 :::
 
-Crate `soranet_pq` содержит постквантовые строительные блоки, на которые опираются все relays, clients и tooling компоненты SoraNet. Он оборачивает наборы Kyber (ML-KEM) и Dilithium (ML-DSA) на базе PQClean и добавляет дружественные протоколу helpers HKDF и hedged RNG, чтобы все поверхности разделяли идентичные реализации.
+クレート `soranet_pq` は、SoraNet のリレー、クライアント、ツールを提供します。 Kyber (ML-KEM) と Dilithium (ML-DSA) の組み合わせ、PQClean と добавляет дружественные протоколу ヘルパー HKDF とヘッジ RNG、чтобы最高です。
 
 ## Что входит в `soranet_pq`
 
-- **ML-KEM-512/768/1024:** детерминированная генерация ключей, helpers инкапсуляции и декапсуляции с распространением ошибок за константное время.
-- **ML-DSA-44/65/87:** отделенная подпись/проверка, привязанная к транскриптам с разделением домена.
-- **Помеченный HKDF:** `derive_labeled_hkdf` добавляет namespace для каждого вывода с указанием стадии рукопожатия (`DH/es`, `KEM/1`, ...), чтобы гибридные транскрипты не сталкивались.
-- **Hedged случайность:** `hedged_chacha20_rng` смешивает детерминированные seeds с живой энтропией ОС и обнуляет промежуточное состояние при освобождении.
+- **ML-KEM-512/768/1024:** детерминированная генерация ключей、ヘルパー инкапсуляции и декапсуляции с распространением овибок за константное время.
+- **ML-DSA-44/65/87:** отделенная подпись/проверка、привязанная к транскриптам с разделением домена.
+- **Помеченный HKDF:** `derive_labeled_hkdf` добавляет 名前空間 для каждого вывода с указанием стадии рукопожатия (`DH/es`, `KEM/1`, ...)、чтобы гибридные транскрипты не сталкивались。
+- **ヘッジ済み случайность:** `hedged_chacha20_rng` смезивает детерминированные 種子 с живой энтропией ОС и обнуляет промежуточное состояние при освобождении.
 
-Все секреты находятся в контейнерах `Zeroizing`, а CI запускает bindings PQClean на всех поддерживаемых платформах.
+`Zeroizing`、CI とバインディング PQClean の組み合わせが、PQClean の機能をサポートします。
 
 ```rust
 use soranet_pq::{
@@ -51,17 +53,17 @@ let okm = derive_labeled_hkdf(
 
 ## Как использовать
 
-1. **Добавьте зависимость** в crates вне корня workspace:
+1. **ワークスペースのクレート**:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Выберите правильный набор** в местах вызова. Для начальной гибридной handshaking работы используйте `MlKemSuite::MlKem768` и `MlDsaSuite::MlDsa65`.
+2. **Выберите правильный набор** в местах вызова.ハンドシェイクが `MlKemSuite::MlKem768` および `MlDsaSuite::MlDsa65` で行われます。
 
-3. **Выводите ключи с метками.** Используйте `HkdfDomain::soranet("KEM/1")` (и родственные), чтобы цепочка транскриптов оставалась детерминированной между узлами.
+3. **Выводите ключи с метками.** Используйте `HkdfDomain::soranet("KEM/1")` (и родственные)、чтобы цепочка транскриптов оставалась детерминированной между узлами。
 
-4. **Используйте hedged RNG** при выборке запасных секретов:
+4. **ヘッジ RNG** の詳細:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -69,11 +71,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-Ядро рукопожатия SoraNet и helpers ослепления CID (`iroha_crypto::soranet`) используют эти утилиты напрямую, поэтому downstream crates наследуют те же реализации без необходимости линковать bindings PQClean самостоятельно.
+SoraNet とヘルパーの CID (`iroha_crypto::soranet`) を使用して、ダウンストリーム クレートの機能を確認します。バインディング PQClean を使用してください。
 
 ## Чеклист проверки
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Проверьте примеры использования в README (`crates/soranet_pq/README.md`)
+- README (`crates/soranet_pq/README.md`) の説明
 - Обновите документ дизайна рукопожатия SoraNet после появления гибридов

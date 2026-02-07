@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་འདི་གིས་ I18NT0000005X REST API གི་དོན་ལུ་ “Try it” console ཅིག་བཏངམ་ཨིན། ལམ་སྟོན་འདི་
+རྒྱབ་སྐྱོར་གྱི་ངོ་ཚབ་འགོ་བཙུགས་ཐངས་སྐོར་ལས་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ ཀོན་སོལ་འདི་ གནས་རིམ་ཅིག་ལུ་མཐུདཔ་ཨིན།
+ཡིག་ཆ་ཚུ་ གསལ་སྟོན་མ་འབད་བར་ འཛུལ་སྒོ།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- I18NT0000004X མཛོད་ཁང་གི་ཞིབ་དཔྱད་ (ལཱ་གི་ས་སྒོ་རྩ་ཚད)།
+- Node.js 18.18+ (དྲྭ་ཐོག་གཞི་རྟེན་དང་མཐུན་སྒྲིག་འབད།)
+- ཁྱོད་རའི་ལཱ་འབད་སའི་ས་ཁོངས་ལས་ Torii མཐའ་མཚམས་ལུ་ལྷོད་ཚུགས།(གནས་རིམ་ཡང་ན་ས་གནས་)
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. OpenAPI པར་ལེན་ (གདམ་ཁ་ཅན།)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+ཀོན་སོལ་འདི་གིས་ དྲྭ་ཐོག་གཞི་བསྟུན་ཤོག་ལེབ་ཚུ་བཟུམ་སྦེ་ OpenAPI པེ་ལོཌི་འདི་ ལོག་ལག་ལེན་འཐབ་ཨིན། གལ་སྲིད
+ཁྱོད་ཀྱིས་ I18NT000000007X གི་ལམ་ཚུ་བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+ལས་འགན་འདི་གིས་ `docs/portal/static/openapi/torii.json` བྲིས།
 
-## 2. Start the Try It proxy
+## 2. འབད་རྩོལ་བསྐྱེད། འདི་ངོ་ཚབ་འབད།
 
-From the repository root:
+མཛོད་ཁང་གི་རྩ་བ་ལས།
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### ཁོར་ཡུག་འགྱུར་ཅན།
 
-| Variable | Description |
-|----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| འགྱུར་ཅན་ | འགྲེལ་བཤད་ |
+|------------------------------------
+| I18NI0000021X | Torii གཞི་རྟེན་ཡུ་ཨར་ཨེལ་ (དགོས་མཁོ།) |
+| I18NI0000022X | ལས་འབྱུང་ཁུངས་ཀྱི་ འབྱུང་ཁུངས་ཐོ་ཡིག་འདི་ ངོ་ཚབ་ལག་ལེན་འཐབ་ཆོགཔ་ཨིན། (I18NI0000023X ལུ་སྔོན་སྒྲིག་) |
+| `TRYIT_PROXY_BEARER` | གདམ་ཁ་ཅན་གྱི་སྔོན་སྒྲིག་འབག་མི་ཊོ་ཀེན་ཚུ་ པོརོ་སི་འབད་ཡོད་པའི་ཞུ་བ་ཚུ་ཆ་མཉམ་ལུ་འཇུག་སྤྱོད་འབད་ཡོདཔ་ཨིན། |
+| I18NI0000025X | ཁ་པར་བཏང་མི་གི་ `Authorization` མགོ་བརྗོད་ཚིག་གྲུབ་ཆ་སྙོམས་འདི་ གདོང་ཁར་གཏང་ནིའི་དོན་ལུ་ I18NI0000000026X ལུ་གཞི་སྒྲིག་འབད། |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | དྲན་ཚད་ནང་ཚད་ཚད་འཛིན་སྒྲིག་སྟངས་ཚུ་ (སྔོན་སྒྲིག་: ༦༠ ལུ་ཞུ་བ་ ༦༠)། |
+| `TRYIT_PROXY_MAX_BODY` | ངོས་ལེན་འབད་ཡོད་པའི་ ཞུ་བ་མཐོ་ཤོས་ པེ་ལོཌི་ (བཱའིཊིསི་, སྔོན་སྒྲིག་ ༡ཨེམ་ཨའི་བི་)། |
+| I18NI0000031X | Torii ཞུ་བ་ཚུ་གི་དོན་ལུ་ རྒྱུན་རིམ་གྱི་དུས་ཚོད་བཏོན་ (སྔོན་སྒྲིག་ 10000ms). |
 
-The proxy exposes:
+ངོ་ཚབ་འདི་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` — གྲ་སྒྲིག་བརྟག་དཔྱད།
+- `/proxy/*` — ངོ་ཚབ་འབད་དགོ་པའི་ཞུ་བ་ཚུ་ འགྲུལ་ལམ་དང་འདྲི་དཔྱད་ཡིག་རྒྱུན་ཉམས་སྲུང་འབད་ནི།
 
-## 3. Launch the portal
+## 3. དྲ་རྒྱ་འགོ་བཙུགས།
 
-In a separate terminal:
+ཊར་མི་ནཱལ་སོ་སོ་ཅིག་ནང་།
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+`http://localhost:3000/api/overview` ལུ་འོང་ཞིནམ་ལས་ དེ་ མཉེན་ཆས་འདི་ལག་ལེན་འཐབ། དེ་བཟུམ་སྦེ་
+མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་གིས་ སུ་ཝ་གར་ཡུ་ཨའི་དང་ རེཔ་ཌོག་བཙུགས་ཐངས་ཚུ་རིམ་སྒྲིག་འབདཝ་ཨིན།
 
-## 4. Running unit tests
+## 4. གཡོག་བཀོལ།
 
-The proxy exposes a fast Node-based test suite:
+ངོ་ཚབ་འདི་གིས་ མགྱོགས་དྲགས་སྦེ་ ནའུཊི་གཞི་བཞག་པའི་བརྟག་དཔྱད་ཆ་ཚང་ཅིག་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+བརྟག་དཔྱད་ཚུ་གིས་ མིང་དཔྱད་ཁ་བྱང་དབྱེ་དཔྱད་དང་ འབྱུང་ཁུངས་འཛིན་སྐྱོང་ གནས་ཚད་ཚད་འཛིན་ དེ་ལས་ འབག་མི་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+སྨན་ཁབ་བཙུགས་ནི།
 
-## 5. Probe automation & metrics
+## 5. འཚོལ་ཞིབ་རང་འགུལ་དང་མེ་ཊིགསི་།
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+`/healthz` དང་དཔེ་ཚད་ཀྱི་མཇུག་བཤུབ་ཅིག་བདེན་དཔྱད་འབད་ནི་ལུ་ བཱན་ཌི་འབད་ཡོད་པའི་འཚོལ་ཞིབ་འདི་ལག་ལེན་འཐབ།
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+ཁོར་ཡུག་གི་མཛུབ་མོ་།
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — གདམ་ཁའི་ Torii གི་ལམ་ (I18NI0000000037X མེད་པར་) ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ཨིན།
+- `TRYIT_PROXY_SAMPLE_METHOD` — I18NI000000039X ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། འབྲི་ནིའི་ལམ་ཚུ་གི་དོན་ལུ་ `POST` ལུ་གཞི་སྒྲིག་འབད་ཡོདཔ།
+- `TRYIT_PROXY_PROBE_TOKEN` — དཔེ་ཚད་འབོད་བརྡ་གི་དོན་ལུ་ གནས་སྐབས་ཀྱི་ བེ་ཊར་ཊོ་ཀེན་ཅིག་ བཙུགསཔ་ཨིན།
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — སྔོན་སྒྲིག་ ༥ཨེསི་དུས་ཚོད་རྫོགས་ནི་ ཚད་བརྒལ་འབདཝ་ཨིན།
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — I18NI000000044X/`probe_duration_seconds`.
+- `TRYIT_PROXY_PROBE_LABELS` — ལྷོད་རྟགས་ཁ་ཕྱེ་ཡོད་པའི་ `key=value` ཆ་ཚུ་ མེ་ཊིག་ཚུ་ལུ་ མཐུད་ཡོདཔ་ཨིན། (`job=tryit-proxy` དང་ I18NI000000000000000049 X ལུ་ སྔོན་སྒྲིག་ཚུ།)
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+I18NI000000050X གཞི་སྒྲིག་འབད་བའི་སྐབས་ ཡིག་ཚུགས་འདི་གིས་ ཡིག་སྣོད་འདི་ ལོག་བྲིས་ཡོདཔ་ཨིན།
+རྡུལ་ཕྲན་གྱི་ཐོག་ལས་ ཁྱོད་ཀྱི་ node_ཕྱིར་འདྲེན་འབད་མི་/ཚིག་ཡིག་ཡིག་སྣོད་བསྡུ་སྒྲིག་འབད་མི་གིས་ ཨ་རྟག་རང་ ཆ་ཚང་ཅིག་མཐོངམ་ཨིན།
+པེ་ལོཌ་. དཔེ:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+གྲུབ་འབྲས་ཀྱི་མེ་ཊིགསི་ཚུ་ Prometheus ལུ་གདོང་ཕྱོགས་འབད་ཞིནམ་ལས་ དཔེ་ཚད་ཀྱི་ཉེན་བརྡ་འདི་ ལོག་སྟེ་ལག་ལེན་འཐབ།
+I18NI000000051X I18NI000000052X ལུ་མར་ཕབ་པའི་སྐབས་ ཤོག་ལེབ་ལུ་ གོང་འཕེལ་གཏང་མི་-དྲྭ་ཐོག་ཡིག་ཆ་ཚུ།
 
-## 6. Production hardening checklist
+## 6.ཐོན་ལས་སྲ་ཀྲག་དཔྱད་ཐོབ།
 
-Before publishing the proxy beyond local development:
+ས་གནས་གོང་འཕེལ་ལས་ལྷག་པའི་ ངོ་ཚབ་འདི་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་:
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- ངོ་ཚབ་ཀྱི་གདོང་ཁར་ ཊི་ཨེལ་ཨེསི་ མཇུག་བསྡུ།
+- ལྟ་རྟོག་འབད་བཏུབ་པའི་ པའིཔ་ལའིན་ཚུ་ལུ་ གཞི་བཀོད་འབད་ཡོད་པའི་ ནང་བསྐྱོད་དང་ གདོང་ཕྱོགས་རིམ་སྒྲིག་འབད།
+- བེ་ཡར་ཊོ་ཀེན་ཚུ་ རོ་ཊེཊ་ རོ་ཊེཊ་ དང་ ཁྱོད་རའི་གསང་བའི་འཛིན་སྐྱོང་པ་ནང་ གསོག་འཇོག་འབད།
+- ངོ་ཚབ་ཀྱི་ `/healthz` མཐའ་མཚམས་དང་ བསྡོམས་རྩིས་ འཕྲོ་མཐུད་མེ་ཊིག་ཚུ་ ལྟ་རྟོག་འབད།
+- ཁྱོད་ཀྱི་ Torii སྟེགས་རིས་ཀྱི་ཚད་གཞི་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད། `Retry-After` བདེ་སྒྲིག་འབད།
+  ཐོནཊ་ལིང་འདི་ མཁོ་མངགས་འབད་མི་ཚུ་ལུ་ བརྡ་སྤྲོད་འབད་ནིའི་སྤྱོད་ལམ་ཅིག།

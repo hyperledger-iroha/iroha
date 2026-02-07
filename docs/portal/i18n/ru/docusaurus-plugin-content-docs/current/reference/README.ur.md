@@ -4,18 +4,20 @@ direction: ltr
 source: docs/portal/docs/reference/README.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: ریفرنس انڈیکس
-slug: /reference
+Название: ریفرنس انڈیکس
+слизень: /ссылка
 ---
 
-یہ سیکشن Iroha کے لئے "spec کے طور پر پڑھیں" مواد اکٹھا کرتا ہے۔ یہ صفحات مستحکم رہتے ہیں چاہے گائیڈز اور ٹیوٹوریلز ترقی کریں۔
+یہ سیکشن Iroha کے لئے "spec کے طور پر پڑھیں" مواد کٹھا کرتا ہے۔ یہ صفحات مستحکم رہتے ہیں چاہے گائیڈز اور ٹیوٹوریلز ترقی کریں۔
 
 ## آج دستیاب
 
-- **Norito codec overview** - `reference/norito-codec.md` براہ راست مستند `norito.md` specification سے لنک کرتا ہے جب تک پورٹل کی table تیار ہو رہی ہے۔
-- **Torii OpenAPI** - `/reference/torii-openapi` Redoc کے ذریعے Torii کی تازہ ترین REST specification render کرتا ہے۔ spec کو `npm run sync-openapi -- --version=current --latest` سے دوبارہ بنائیں (اضافی تاریخی versions میں snapshot کاپی کرنے کے لئے `--mirror=<label>` شامل کریں)۔
-- **Configuration tables** - مکمل parameter catalog `docs/source/references/configuration.md` میں رکھا جاتا ہے۔ جب تک پورٹل auto-import نہ دے، درست defaults اور environment overrides کے لئے اسی Markdown فائل کو دیکھیں۔
-- **Docs versioning** - navbar کا version dropdown `npm run docs:version -- <label>` سے بنے ہوئے frozen snapshots دکھاتا ہے، جس سے releases کے درمیان guidance کا موازنہ آسان ہوتا ہے۔
+- **Обзор кодека Norito** - `reference/norito-codec.md` Спецификация `norito.md` Спецификация `norito.md` پورٹل کی table تیار ہو رہی ہے۔
+- **Torii OpenAPI** - `/reference/torii-openapi` Redoc позволяет выполнить рендеринг спецификации REST Torii. Спецификация `npm run sync-openapi -- --version=current --latest` может быть использована в качестве моментального снимка версии (в зависимости от версии). `--mirror=<label>` شامل کریں)۔
+- **Таблицы конфигурации** - Каталог параметров `docs/source/references/configuration.md` Вы можете использовать автоматический импорт и задать настройки по умолчанию, а также переопределения среды, а также возможность использования Markdown.
+- **Управление версиями документов** - панель навигации и раскрывающийся список версий `npm run docs:version -- <label>` سے بنے ہوئے замороженные снимки, а также новые выпуски и руководства. موازنہ آسان ہوتا ہے۔

@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: Resumo de feedback e encerramento W1
-sidebar_label: Resumo W1
-description: Achados, acoes e evidencia de encerramento para a onda de preview de parceiros/integradores Torii.
+id: プレビュー-フィードバック-w1-まとめ
+タイトル: W1 のフィードバックとエンセラメントの再開
+サイドバーラベル: Resumo W1
+説明: Achados、パルセイロス/インテグラドレス Torii のプレビューに関する確認用の証拠。
 ---
 
-| Item | Detalhes |
+|アイテム |デタルヘス |
 | --- | --- |
-| Onda | W1 - Parceiros e integradores Torii |
-| Janela de convite | 2025-04-12 -> 2025-04-26 |
-| Tag de artefato | `preview-2025-04-12` |
-| Issue do tracker | `DOCS-SORA-Preview-W1` |
-| Participantes | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+|恩田 | W1 - パルセイロス エ インテグラドーレス Torii |
+|ジャネラ・デ・コンバイト | 2025-04-12 -> 2025-04-26 |
+|タグデアート | `preview-2025-04-12` |
+| do トラッカーの問題 | `DOCS-SORA-Preview-W1` |
+|参加者 | sorafs-op-01...03、torii-int-01...02、sdk-partner-01...02、gateway-ops-01 |
 
-## Destaques
+## デスターク
 
-1. **Fluxo de checksum** - Todos os reviewers validaram descriptor/archive via `scripts/preview_verify.sh`; logs armazenados junto aos acknowledgements de convite.
-2. **Telemetria** - Dashboards `docs.preview.integrity`, `TryItProxyErrors` e `DocsPortal/GatewayRefusals` ficaram verdes por toda a onda; nenhum incidente ou pagina de alerta.
-3. **Feedback docs (`docs-preview/w1`)** - Dois nits menores registrados:
-   - `docs-preview/w1 #1`: esclarecer wording de navegacao na secao Try it (resolvido).
-   - `docs-preview/w1 #2`: atualizar screenshot de Try it (resolvido).
-4. **Paridade de runbooks** - Operadores de SoraFS confirmaram que os novos cross-links entre `orchestrator-ops` e `multi-source-rollout` resolveram as preocupacoes de W0.
+1. **Fluxo de checksum** - Todos OS レビュー担当者は `scripts/preview_verify.sh` 経由で検証記述子/アーカイブを実行します。アルマゼナドス・ジュント・アオスの謝辞を記録します。
+2. **テレメトリア** - ダッシュボード `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals` ficaram verdes por toda a onda;事件が発生しました。ページを更新しました。
+3. **フィードバック ドキュメント (`docs-preview/w1`)** - 登録リスト:
+   - `docs-preview/w1 #1`: esclarecer の文言 de navegacao na secao 試してみてください (解決)。
+   - `docs-preview/w1 #2`: 試してみるというスクリーンショットの実物 (resolvido)。
+4. **ランブックのパリダー** - `orchestrator-ops` と `multi-source-rollout` の W0 の解決としての新しいクロスリンクの SoraFS 確認操作。
 
-## Itens de acao
+## イテンス デ アカオ
 
-| ID | Descricao | Responsavel | Status |
+| ID |説明 |返信 |ステータス |
 | --- | --- | --- | --- |
-| W1-A1 | Atualizar wording de navegacao do Try it conforme `docs-preview/w1 #1`. | Docs-core-02 | Concluido (2025-04-18). |
-| W1-A2 | Atualizar screenshot de Try it conforme `docs-preview/w1 #2`. | Docs-core-03 | Concluido (2025-04-19). |
-| W1-A3 | Resumir achados de parceiros e evidencia de telemetria em roadmap/status. | Docs/DevRel lead | Concluido (ver tracker + status.md). |
+| W1-A1 |実際の文言は `docs-preview/w1 #1` に準拠して試してみてください。 |ドキュメント-コア-02 |結論（2025-04-18）。 |
+| W1-A2 | Try it の Atualizar スクリーンショットは `docs-preview/w1 #2` に準拠しています。 |ドキュメントコア-03 |結論（2025-04-19）。 |
+| W1-A3 |ロードマップ/ステータスに関するテレメトリの証拠とパルセイロスの記録。 |ドキュメント/DevRel リード |結論 (ver tracker + status.md)。 |
 
-## Resumo de encerramento (2025-04-26)
+## レスモ・デ・エンセラメント (2025-04-26)
 
-- Todos os oito reviewers confirmaram a conclusao durante as office hours finais, limparam artefatos locais e tiveram o acesso revogado.
-- A telemetria ficou verde ate a saida; snapshots finais anexados a `DOCS-SORA-Preview-W1`.
-- O log de convites foi atualizado com acknowledgements de saida; o tracker marcou W1 como concluido e adicionou os checkpoints.
-- Bundle de evidencia (descriptor, checksum log, probe output, transcript do proxy Try it, screenshots de telemetria, feedback digest) arquivado em `artifacts/docs_preview/W1/`.
+- Todos os oito のレビュー担当者は、最終的なオフィスアワーとして結論を確認し、位置情報とアクセス方法を決定します。
+- テレメトリフィクーベルデがサイダを食べた。スナップショットは `DOCS-SORA-Preview-W1` に含まれています。
+- 発言に対する謝意を表します。 o トラッカー marcou W1 は、OS チェックポイントをまとめます。
+- 証拠のバンドル (記述子、チェックサム ログ、プローブ出力、プロキシ Try it のトランスクリプト、テレメトリのスクリーンショット、フィードバック ダイジェスト) `artifacts/docs_preview/W1/` を保存します。
 
-## Proximos passos
+## プロキシモス パソス
 
-- Preparar o plano de intake comunitario W2 (aprovacao de governanca + ajustes no template de solicitacao).
-- Atualizar o tag de artefato de preview para a onda W2 e reexecutar o script de preflight quando as datas estiverem finalizadas.
-- Levar achados aplicaveis de W1 para roadmap/status para que a onda comunitaria tenha a orientacao mais recente.
+- W2 摂取計画の準備 (政府承認 + 要請テンプレートなしの調整)。
+- W2 でのプレビュー タグの作成や再実行、プリフライト スクリプトの作成をデータとして最終的に行うことができます。
+- W1 のロードマップ/ステータスを最新の情報に基づいて報告します。

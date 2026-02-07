@@ -8,69 +8,71 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Program goals
+## Ծրագրի նպատակները
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+Այս գրքույկը բացատրում է, թե ինչպես կարելի է հայտարարել և գործարկել հանրային նախադիտումը մեկ անգամ
+վերանայողի ներբեռնման աշխատանքային հոսքը ուղիղ եթերում է: Այն ազնիվ է պահում DOCS-SORA ճանապարհային քարտեզը
+ապահովելով յուրաքանչյուր հրավիրյալ նավերի ստուգելի արտեֆակտներով, անվտանգության ուղեցույցով և ա
+հետադարձ կապի հստակ ուղի:
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **Հանդիսատես.** համայնքի անդամների, գործընկերների և սպասարկողների ընտրված ցուցակ, ովքեր
+  ստորագրել է նախադիտման ընդունելի օգտագործման քաղաքականությունը:
+- **Առաստաղներ.** լռելյայն ալիքի չափը ≤ 25 վերանայող, 14-օրյա մուտքի պատուհան, միջադեպ
+  պատասխան 24 ժամվա ընթացքում:
 
-## Launch gating checklist
+## Գործարկել դարպասների ստուգաթերթը
 
-Complete these tasks before sending any invitation:
+Նախքան որևէ հրավեր ուղարկելը կատարեք այս առաջադրանքները.
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
+1. CI-ում վերբեռնված վերջին նախադիտման արտեֆակտները (`docs-portal-preview`,
+   ստուգիչ գումարի մանիֆեստ, նկարագրիչ, SoraFS փաթեթ):
+2. `npm run --prefix docs/portal serve` (checksum-gated) փորձարկվել է նույն պիտակի վրա:
+3. Գրախոսի մուտքագրման տոմսերը հաստատված և կապված են հրավերի ալիքի հետ:
+4. Անվտանգության, դիտարկելիության և միջադեպի փաստաթղթերը վավերացված են
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+   [`incident-runbooks`](./incident-runbooks.md)):
+5. Պատրաստված է հետադարձ կապի ձևը կամ թողարկման ձևանմուշը (ներառել խստության դաշտերը,
+   վերարտադրման քայլեր, սքրինշոթներ և շրջակա միջավայրի մասին տեղեկություններ):
+6. Հայտարարության պատճենը վերանայվել է Docs/DevRel + Governance-ի կողմից:
 
-## Invite package
+## Հրավիրեք փաթեթ
 
-Every invite must include:
+Յուրաքանչյուր հրավեր պետք է ներառի.
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **Ստուգված արտեֆակտներ** — Տրամադրեք SoraFS մանիֆեստը/պլանը կամ GitHub արտեֆակտը
+   հղումներ, գումարած ստուգիչ գումարի մանիֆեստը և նկարագրիչը: Հղում կատարեք ստուգմանը
+   հրամայել հստակորեն, որպեսզի վերանայողները կարողանան գործարկել այն նախքան կայքը գործարկելը:
+2. **Ծառայել հրահանգներ** — Ներառել checksum-gated preview հրամանը.
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **Անվտանգության հիշեցումներ** — Նշեք, որ նշանները ավտոմատ կերպով սպառվում են, հղումներ
+   չպետք է տարածվի, և միջադեպերը պետք է անհապաղ տեղեկացվեն:
+4. **Հետադարձ կապի ալիք** — Հղում դեպի թողարկման ձևանմուշ/ձև և պարզաբանեք պատասխանը
+   ժամանակի ակնկալիքները.
+5. **Ծրագրի ամսաթվերը** — Տրամադրել մեկնարկի/ավարտի ամսաթվերը, աշխատանքային ժամերը կամ համաժամեցնել հանդիպումները,
+   և հաջորդ թարմացման պատուհանը:
 
-The sample email in
+Էլփոստի նմուշը մուտքագրված է
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+ծածկում է այս պահանջները: Թարմացրեք տեղապահները (ամսաթվերը, URL-ները, կոնտակտները)
+ուղարկելուց առաջ։
 
-## Expose the preview host
+## Բացահայտեք նախադիտման հյուրընկալողը
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+Խթանեք նախադիտման հաղորդավարը միայն այն բանից հետո, երբ մուտքն ավարտվի և փոխվի տոմսը
+հաստատված է։ Տե՛ս [նախադիտել հյուրընկալողի բացահայտման ուղեցույցը] (./preview-host-exposure.md)
+այս բաժնում օգտագործվող վերջնական կառուցման/հրապարակման/ստուգման քայլերի համար:
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. **Կառուցել և փաթեթավորել.** Դրոշմել թողարկման պիտակը և արտադրել դետերմինիստական
+   արտեֆակտներ.
 
    ```bash
    cd docs/portal
@@ -89,18 +91,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   Փին սկրիպտը գրում է `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
+   և `portal.dns-cutover.json` `artifacts/sorafs/`-ի տակ: Կցեք այդ ֆայլերը
+   հրավիրել ալիք, որպեսզի յուրաքանչյուր գրախոս կարողանա ստուգել նույն բիթերը:
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. **Հրապարակեք նախադիտման կեղծանունը.** Կրկնեք հրամանը առանց `--skip-submit`-ի
+   (մատակարարեք `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]` և
+   կառավարման կողմից տրված այլանուն ապացույց): Սցենարը կապելու է մանիֆեստը
+   `docs-preview.sora` և արտանետում `portal.manifest.submit.summary.json` plus
+   `portal.pin.report.json` ապացույցների փաթեթի համար:
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. **Զննեք տեղակայումը.** Հաստատեք, որ կեղծանունը լուծված է և ստուգիչ գումարը համընկնում է
+   պիտակը հրավերներ ուղարկելուց առաջ:
 
    ```bash
    npm run probe:portal -- \
@@ -108,26 +110,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   Պահպանեք `npm run serve` (`scripts/serve-verified-preview.mjs`) որպես հարմար
+   հետընտրական տարբերակ, որպեսզի գրախոսները կարողանան պտտել տեղական պատճենը, եթե նախադիտման եզրը շողում է:
 
-## Communications timeline
+## Հաղորդակցության ժամանակացույց
 
-| Day | Action | Owner |
+| Օր | Գործողություն | Սեփականատեր |
 | --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| Դ-3 | Ավարտել հրավերի պատճենը, թարմացնել արտեֆակտները, չոր գործարկման ստուգում | Փաստաթղթեր/DevRel |
+| Դ-2 | Կառավարման ստորագրում + տոմսի փոփոխություն | Փաստաթղթեր/DevRel + Կառավարում |
+| Դ-1 | Ուղարկեք հրավերներ՝ օգտագործելով ձևանմուշը, թարմացրեք թրեկերը ստացողների ցուցակով | Փաստաթղթեր/DevRel |
+| Դ | Մեկնարկային զանգ / գրասենյակային ժամեր, մոնիտորինգ հեռաչափության վահանակներ | Փաստաթղթեր/DevRel + Զանգահարող |
+| D+7 | Միջին կետի հետադարձ կապի ամփոփում, տրիաժի արգելափակման խնդիրներ | Փաստաթղթեր/DevRel |
+| D+14 | Փակել ալիքը, չեղարկել ժամանակավոր մուտքը, հրապարակել ամփոփագիրը `status.md`-ում | Փաստաթղթեր/DevRel |
 
-## Access tracking & telemetry
+## Մուտք գործեք հետևում և հեռաչափություն
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+1. Գրանցեք յուրաքանչյուր ստացողին, հրավիրեք ժամադրոշմը և չեղյալ համարելու ամսաթիվը
+   նախադիտել հետադարձ կապի գրանցիչը (տես
+   [`preview-feedback-log`](./preview-feedback-log)), ուստի յուրաքանչյուր ալիք կիսում է
+   նույն ապացույցների հետքը.
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -138,41 +140,41 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   Աջակցվող իրադարձություններն են՝ `invite-sent`, `acknowledged`,
+   `feedback-submitted`, `issue-opened` և `access-revoked`: Գերանը ապրում է
+   `artifacts/docs_portal_preview/feedback_log.json` լռելյայն; կցել այն
+   հրավերի ալիքի տոմսը համաձայնության ձևերի հետ միասին: Օգտագործեք ամփոփ օգնականը
+   փակման նշումից առաջ աուդիտորական հավաքագրում պատրաստելու համար.
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
+   JSON-ի ամփոփագիրը թվարկում է հրավերներ յուրաքանչյուր ալիքի, բաց ստացողների, հետադարձ կապի մասին
+   հաշվարկները և ամենավերջին իրադարձության ժամանակի դրոշմը: Օգնականին աջակցում է
    [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
+   այնպես որ նույն աշխատանքային հոսքը կարող է աշխատել տեղական կամ CI-ում: Օգտագործեք digest ձևանմուշը
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   ալիքի ամփոփումը հրապարակելիս:
+2. Նշեք հեռաչափության վահանակները `DOCS_RELEASE_TAG`-ով, որն օգտագործվում է ալիքի համար, որպեսզի
+   հասկերը կարող են փոխկապակցվել հրավիրյալ խմբերի հետ:
+3. Գործարկեք `npm run probe:portal -- --expect-release=<tag>`-ը տեղակայումից հետո
+   հաստատել, որ նախադիտման միջավայրը գովազդում է թողարկման ճիշտ մետատվյալները:
+4. Գրեք ցանկացած միջադեպ runbook ձևանմուշում և կապեք դրանք խմբի հետ:
 
-## Feedback & close-out
+## Հետադարձ կապ և փակում
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+1. Համատեղ արձագանքներ ընդհանուր փաստաթղթում կամ թողարկման տախտակում: Պիտակավորել իրերը
+   `docs-preview/<wave>`, որպեսզի ճանապարհային քարտեզի սեփականատերերը կարողանան հեշտությամբ հարցումներ կատարել:
+2. Օգտագործեք նախադիտման լոգերի ամփոփ ելքը՝ ալիքի հաշվետվությունը համալրելու համար, այնուհետև
+   ամփոփել խումբը `status.md`-ում (մասնակիցներ, հիմնական բացահայտումներ, պլանավորված
+   ուղղումներ) և թարմացնել `roadmap.md`-ը, եթե DOCS-SORA նշաձողը փոխվել է:
+3. Հետևեք բեռնաթափման քայլերին
+   [`reviewer-onboarding`](./reviewer-onboarding.md). չեղյալ համարել մուտքը, արխիվ
+   հարցումներ և շնորհակալություն հայտնել մասնակիցներին:
+4. Պատրաստեք հաջորդ ալիքը՝ թարմացնելով արտեֆակտները, նորից գործարկելով ստուգիչ գումարի դարպասները,
+   և հրավերի ձևանմուշը թարմացնելով նոր ամսաթվերով:
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+Այս գրքույկի հետևողական կիրառումը թույլ է տալիս ստուգել նախադիտման ծրագիրը և
+Docs/DevRel-ին տալիս է հրավերների մասշտաբավորման կրկնվող եղանակ, քանի որ պորտալը մոտենում է GA-ին:

@@ -4,66 +4,62 @@ direction: rtl
 source: docs/portal/docs/sorafs/direct-mode-pack.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: direct-mode-pack
-title: حزمة الرجوع للوضع المباشر في SoraFS ‏(SNNet-5a)
-sidebar_label: حزمة الوضع المباشر
-description: الإعدادات المطلوبة وفحوصات الامتثال وخطوات الإطلاق عند تشغيل SoraFS في وضع Torii/QUIC المباشر أثناء انتقال SNNet-5a.
+المعرف: حزمة الوضع المباشر
+العنوان: حزمة الرجوع للوضع المباشر في SoraFS ‏(SNNet-5a)
+Sidebar_label: حزمة الوضع الخفيف
+description: الإعدادات الأساسية والفحوصات الشاملة والخطوات الأساسية عند SoraFS في الوضع Torii/QUIC المباشر أثناء انتقال SNNet-5a.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/direct_mode_pack.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
+:::ملحوظة المصدر مؤهل
+احترام هذه الصفحة `docs/source/sorafs/direct_mode_pack.md`. احرص على جميع النسختين متزامنتين إلى أن يتم إيقاف تشغيل مجموعة Sphinx القديمة.
 :::
 
-تظل دوائر SoraNet هي النقل الافتراضي لـ SoraFS، لكن بند خارطة الطريق **SNNet-5a** يتطلب مسار رجوع منظم كي يحافظ المشغلون على وصول قراءة حتمي بينما يكتمل طرح الخصوصية. تلتقط هذه الحزمة مفاتيح التحكم في CLI/SDK وملفات التهيئة واختبارات الامتثال وقائمة النشر اللازمة لتشغيل SoraFS في وضع Torii/QUIC المباشر دون لمس نواقل الخصوصية.
+وتظل متابعة SoraNet هي النقل الافتراضي لـ SoraFS، لكن بند خارطة الطريق **SNNet-5a** تتطلب مسار رجوع كي منظم وتتحكم في وصول القراءة حتمي بينما يكتمل تخطيط الخصوصية. تلتقط هذه المجموعة من مفاتيح التحكم في CLI/SDK فارغة الديناميكية وتتمتع برسومات بسيطة وقائمة النشر الضرورية لتشغيل SoraFS في وضع Torii/QUIC دون لمس نواقل الخصوصية.
 
-ينطبق مسار الرجوع على بيئات staging والإنتاج المنظم إلى أن تعبر SNNet-5 حتى SNNet-9 بوابات الجاهزية. احتفظ بالمواد أدناه مع حزمة نشر SoraFS المعتادة حتى يتمكن المشغلون من التبديل بين الوضعين المجهول والمباشر عند الطلب.
+يستخدم مسار الرجوع إلى بيئات التدريج والإنتاج المنظم إلى بوابات SNNet-5 الجاهزة حتى SNNet-9. ابعت بالمواد أدناه حزمة مع نشر SoraFS محددا حتى يبدأوا من الوضع بين الوضعين المجهول والمباشر عند الطلب.
 
-## 1. أعلام CLI و SDK
+## 1.أعلام CLI وSDK- `sorafs_cli fetch --transport-policy=direct-only ...` يعطل جدول المرحلات ويفترض Torii/QUIC. تم عرض مساعدة CLI الآن `direct-only` كقيمة مقبولة.
+- يجب على ضبط SDK `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` كلما عرض مفتاح التعديل "الوضع المباشر". تقوم بتشغيل المولدة في `iroha::ClientOptions` و `iroha_android` بتمرير نفس التعداد.
+- يمكن لأدوات الـ Gateway (`sorafs_fetch` وروابط Python) مفتاح تحليل مباشر فقط عبر مساعدات Norito JSON المشترك حتى يعرف التدرب على السلوك بنفسه.
 
-- `sorafs_cli fetch --transport-policy=direct-only ...` يعطل جدولة المرحلات ويفرض نقل Torii/QUIC. تعرض مساعدة CLI الآن `direct-only` كقيمة مقبولة.
-- يجب على SDK ضبط `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` كلما عرض مفتاح تبديل "الوضع المباشر". تقوم الربوط المولدة في `iroha::ClientOptions` و `iroha_android` بتمرير نفس enum.
-- يمكن لأدوات الـ gateway (`sorafs_fetch` وروابط Python) تحليل مفتاح direct-only عبر مساعدات Norito JSON المشتركة حتى تتلقى الأتمتة السلوك نفسه.
+وثيقة العلم في طابعة تشغيل التشغيل للشركاء، ومرر مفاتيح التبديل عبر `iroha_config` بدلات متنوعة من البيئة.
 
-وثّق العلم في كتيبات التشغيل الموجهة للشركاء، ومرر مفاتيح التبديل عبر `iroha_config` بدلا من متغيرات البيئة.
+## 2. ملفات بناء الـ gate
 
-## 2. ملفات سياسة الـ gateway
+استخدم Norito JSON لإعادة الإعداد منسق حتمي. مثال على ذلك في `docs/examples/sorafs_direct_mode_policy.json` يشفر:
 
-استخدم Norito JSON لحفظ إعداد منسق حتمي. ملف المثال في `docs/examples/sorafs_direct_mode_policy.json` يشفر:
+- `transport_policy: "direct_only"` — رفض المتحكمين الذين أعلنوا فقط عن نقل رحلات SoraNet.
+- `max_providers: 2` — نأمل الأقران المباشرين إلى أكثر نقاط Torii/QUIC موثوقة. وعدل سماحات جونسون.
+- `telemetry_region: "regulated-eu"` — يوسم المعايير المصدرة بحيث يتم توزيع اللوحات متابعة ودقيقات الرجوع.
+- إعادة قياسات المحاولة للحفاظ على (`retry_budget: 2`, `provider_failure_threshold: 3`) يمنع منع بوابات سيئة الضبط.
 
-- `transport_policy: "direct_only"` — يرفض المزوّدين الذين يعلنون فقط عن نقل مرحلات SoraNet.
-- `max_providers: 2` — يحد الأقران المباشرين إلى أكثر نقاط Torii/QUIC موثوقية. عدّل وفق سماحات الامتثال الإقليمية.
-- `telemetry_region: "regulated-eu"` — يوسم المقاييس المصدرة بحيث تميز لوحات المتابعة والتدقيق تشغيلات الرجوع.
-- ميزانيات إعادة المحاولة المحافظة (`retry_budget: 2`, `provider_failure_threshold: 3`) لتجنب إخفاء بوابات سيئة الضبط.
+نتنياهو JSON عبر `sorafs_cli fetch --config` (المحاسبة) أو ربط SDK (`config_from_json`) قبل عرض السياسة على التشغيلين. تستخدم بمخرجات الـ لوحة النتائج (`persist_path`) لمارات التدقيق.تُخطِّط مفاتيح النار على جانب البوابة في `docs/examples/sorafs_gateway_direct_mode.toml`. عاكس إلكترونيات `iroha app sorafs gateway direct-mode enable`، مع فحوصات فحوصات المغلف/القبول، توصيل إعدادات معدل الحد الافتراضي، وجدول التعبئة `direct_mode` بأسماء المشتقة من بناء وملخصات البيان. استبدل القيم النائبة لسبب مختلف قبل حفظ المقتطف في إدارة التهيئة.
 
-حمّل JSON عبر `sorafs_cli fetch --config` (الأتمتة) أو ربط SDK (`config_from_json`) قبل عرض السياسة على المشغلين. احتفظ بمخرجات الـ scoreboard (`persist_path`) لمسارات التدقيق.
+## 3. مجموعة السيولة
 
-تُلتقط مفاتيح الإنفاذ على جانب الـ gateway في `docs/examples/sorafs_gateway_direct_mode.toml`. يعكس القالب مخرجات `iroha app sorafs gateway direct-mode enable`، مع تعطيل فحوصات envelope/admission، وتوصيل إعدادات rate-limit الافتراضية، وتعبئة جدول `direct_mode` بأسماء المضيفين المشتقة من الخطة وملخصات manifest. استبدل القيم النائبة بخطة الإطلاق قبل حفظ المقتطف في إدارة التهيئة.
+تتضمن استعدادية الوضع المباشر الآن في المنسق وفي حزم CLI:
 
-## 3. مجموعة اختبارات الامتثال
+- `direct_only_policy_rejects_soranet_only_providers` يضمن أن `TransportPolicy::DirectOnly` يفشل بسرعة عندما يدعم كل إعلان مرشح رحلات SoraNet فقط.[crates/sorafs_orchestrator/src/lib.rs:7238]
+- `direct_only_policy_prefers_direct_transports_when_available` ضمان استخدام نقل Torii/QUIC عند توفره تقنية الابعاد مرحلات SoraNet من الجلسة.【crates/sorafs_orchestrator/src/lib.rs:7285】
+- `direct_mode_policy_example_is_valid` يحلل `docs/examples/sorafs_direct_mode_policy.json` ودائمًا بقاء الروابط متوافقة مع أدوات المساعدة.
+- `fetch_command_respects_direct_transports` يختبر `sorafs_cli fetch --transport-policy=direct-only` أمام بوابة Torii الزائفة، موفرا دخان لبيئات اختبار منظمة تثبت التغير المباشر.[crates/sorafs_car/tests/sorafs_cli.rs:2733]
+- `scripts/sorafs_direct_mode_smoke.sh` يلف الأمر نفسه مع JSON سياسة حفظ الـ لوحة النتائج لغسل البيانات.
 
-تتضمن جاهزية الوضع المباشر الآن تغطية في المنسق وفي حزم CLI:
-
-- `direct_only_policy_rejects_soranet_only_providers` يضمن أن `TransportPolicy::DirectOnly` يفشل بسرعة عندما يدعم كل advert مرشح مرحلات SoraNet فقط.【crates/sorafs_orchestrator/src/lib.rs:7238】
-- `direct_only_policy_prefers_direct_transports_when_available` يضمن استخدام نقل Torii/QUIC عند توفره واستبعاد مرحلات SoraNet من الجلسة.【crates/sorafs_orchestrator/src/lib.rs:7285】
-- `direct_mode_policy_example_is_valid` يحلل `docs/examples/sorafs_direct_mode_policy.json` لضمان بقاء الوثائق متوافقة مع أدوات المساعدة.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` يختبر `sorafs_cli fetch --transport-policy=direct-only` أمام بوابة Torii وهمية، موفرا اختبار smoke لبيئات منظمة تثبت النقل المباشر.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
-- `scripts/sorafs_direct_mode_smoke.sh` يلف الأمر نفسه مع JSON السياسة وحفظ الـ scoreboard لأتمتة الإطلاق.
-
-شغّل المجموعة المركزة قبل نشر التحديثات:
+شغّل المجموعة المركزية قبل نشر التحديثات:
 
 ```bash
 cargo test -p sorafs_orchestrator direct_only_policy
 cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```
 
-إذا فشل تجميع الـ workspace بسبب تغييرات upstream، سجّل الخطأ الحاجز في `status.md` وأعد التشغيل عندما تلاحق التبعية.
+إذا فشلت مساحة العمل بسبب تجميع الـ عوامل المنبع، فاعتبر خطأ الدولار في `status.md` وأعد التشغيل عندما تلاحق التبعية.
 
-## 4. تشغيلات smoke مؤتمتة
-
-تغطية CLI وحدها لا تكشف الانحدارات الخاصة بالبيئة (مثل انحراف سياسة الـ gateway أو عدم تطابق manifests). يوجد مساعد smoke مخصص في `scripts/sorafs_direct_mode_smoke.sh` ويلف `sorafs_cli fetch` مع سياسة منسق الوضع المباشر وحفظ الـ scoreboard والتقاط الملخص.
+##4.تشغيلات الدخان مؤتمتةتغطية CLI وحدها لا تذكر الشارات الخاصة بالبيئة (مثل انحراف لمتابعة الـ البوابة أو عدم تطابق البيانات). يوجد مساعد دخان مخصص في `scripts/sorafs_direct_mode_smoke.sh` ويلف `sorafs_cli fetch` مع هيكل مخصص لحفظ الـ لوحة النتائج والقاطع الملخص.
 
 مثال للاستخدام:
 
@@ -71,36 +67,29 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
   --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
-```
-
-- يحترم السكربت أعلام CLI وملفات الإعداد key=value معا (راجع `docs/examples/sorafs_direct_mode_smoke.conf`). املأ digest الخاص بالـ manifest ومدخلات adverts للموفّر بقيم الإنتاج قبل التشغيل.
-- `--policy` افتراضيا `docs/examples/sorafs_direct_mode_policy.json`، لكن يمكن تمرير أي JSON منسق ينتجه `sorafs_orchestrator::bindings::config_to_json`. يقبل CLI السياسة عبر `--orchestrator-config=PATH` لتمكين تشغيلات قابلة لإعادة الإنتاج دون ضبط الأعلام يدويا.
-- عندما لا يكون `sorafs_cli` على `PATH`، يبنيه المساعد من crate `sorafs_orchestrator` (ملف release) بحيث تمارس تشغيلات smoke مسار الوضع المباشر المرسل.
+```- يحترم السكربت أعلام CLI الحجم الكبير key=value معادل (راجع `docs/examples/sorafs_direct_mode_smoke.conf`). املأ دايجست الخاص بالـ المانيفست ومدخلات الإعلانات للمتمتع بقيم الإنتاج قبل التشغيل.
+- `--policy` افتراضيا `docs/examples/sorafs_direct_mode_policy.json`، لكن لا يمكن أن يؤدي أي JSON منسقه إلى `sorafs_orchestrator::bindings::config_to_json`. تقبل CLI السياسة عبر `--orchestrator-config=PATH` وتدير تشغيلات قابلة لإعادة الإنتاج دون ضبط الأعلام اليدوية.
+- عندما لا يكون `sorafs_cli` على `PATH`، يبنيه المساعد من الصندوق `sorafs_orchestrator` (ملف الافراج) بحيث يتم تشغيل مسار الدخان الوضع المرسل المباشر.
 - المخرجات:
-  - الحمولة المجمعة (`--output`، الافتراضي `artifacts/sorafs_direct_mode/payload.bin`).
-  - ملخص الجلب (`--summary`، افتراضيا بجوار الحمولة) يحتوي على منطقة التليمترية وتقارير الموفّرين المستخدمة كدليل إطلاق.
-  - لقطة scoreboard محفوظة في المسار المعلن في JSON السياسة (مثل `fetch_state/direct_mode_scoreboard.json`). أرشفها مع الملخص في تذاكر التغيير.
-- أتمتة بوابة الاعتماد: بعد اكتمال الجلب يستدعي المساعد `cargo xtask sorafs-adoption-check` باستخدام مسارات scoreboard والملخص المحفوظة. الحد الأدنى للنصاب يساوي افتراضيا عدد الموفّرين الممررين في سطر الأوامر؛ استبدله بـ `--min-providers=<n>` عند الحاجة إلى عينة أكبر. تُكتب تقارير الاعتماد بجوار الملخص (`--adoption-report=<path>` يمكنه تحديد موقع مخصص) ويمرر المساعد `--require-direct-only` افتراضيا (مطابق لمسار الرجوع) و`--require-telemetry` عندما تمرر العلم المطابق. استخدم `XTASK_SORAFS_ADOPTION_FLAGS` لتمرير وسائط xtask إضافية (مثل `--allow-single-source` أثناء خفض معتمد حتى تتسامح البوابة مع الرجوع وتفرضه). لا تتجاوز بوابة الاعتماد باستخدام `--skip-adoption-check` إلا عند التشخيص المحلي؛ تتطلب خارطة الطريق أن تتضمن كل عملية تشغيل منظمة في الوضع المباشر حزمة تقرير الاعتماد.
+  - الحمولة المجمعة (`--output`، افتراضي `artifacts/sorafs_direct_mode/payload.bin`).
+  - ملخص الجلب (`--summary`، افتراضيا بجوار الحمولة) يحتوي على منطقة التليميترية وتقارير المحرمين المستخدم كدليل تحريري.
+  - لقطة لوحة النتائج محفوظة في المسار البائع في JSON السياسة (مثل `fetch_state/direct_mode_scoreboard.json`). أشفها مع الملخص في تذاكر التغيير.- الاعتماد على بوابة الاعتماد: بعد الجلب ويستدعي المساعدة `cargo xtask sorafs-adoption-check` باستخدام لوحة النتائج والملخص المحفوظة. الحد الأدنى للحصول على صفر يساوي عددًا افتراضيًا من المتوفرين في سطرين؛ تم استبداله بـ `--min-providers=<n>` عند الحاجة إلى تغيير أكبر. تُكتب تقارير الاعتماد بجوار الملخص (`--adoption-report=<path>` ويمكن تحديد موقع مخصص) ويمرر المساعدة `--require-direct-only` افتراضيا (وفقًا لمسار الرجوع) و`--require-telemetry` عندما تمرر العلم وفقًا لذلك. استخدم `XTASK_SORAFS_ADOPTION_FLAGS` لتمرير وسائط xtask الإضافية (مثل `--allow-single-source` أثناء المصادقة المعتمدة حتى تتسامح مع البوابة مع الرجوع وفرضه). لا تتجاوز بوابة الاعتماد باستخدام `--skip-adoption-check` إلا ​​عند التشخيص المحلي؛ تتطلب عملية خارطة الطريق أن تتضمن كل عملية منظمة في الوضع الدقيق لتقرير الاعتماد.
 
-## 5. قائمة تحقق الإطلاق
+## 5. قائمة التحقق من كل شيء1. ** تجميد الديناميكية:** خزّن ملف JSON للوضع المباشر في مستودع `iroha_config` ويكتشف الهاش في تذكرة التغيير.
+2. **تدقيق الـ gate:** تحقق من أن نقاط Torii تطبق TLS وTLVs للقدرات وتمييزات التمييز قبل تحويل الوضع البسيط. انشر ملف ابو الـ gate للمشغلين.
+3. **موافقة تماما:** شارك دليل العمال المحدث مع المراجعين/التنظيم وأكدوا موافقتهم على إخفاء الملابس.
+4. **تشغيل السوق:** ينفذ مجموعة السيولة بالإضافة إلى جذب التدريج مقابل Torii الموثوقين. أشف مخرجات لوحة النتائج وملخصات CLI.
+5. **التحويل للإنتاج:** شركة نافذة الغد، `transport_policy` إلى `direct_only` (إذا كنت قد اخترت `soranet-first`)، وراقب لوحات الوضع المباشر (زمن `sorafs_fetch`، وعدادات فشل حول المتحكمين). وثيق الخطة الرجوع إلى SoraNet-first بعد التخرج SNNet-4/5/5a/5b/6a/7/8/12/13 في `roadmap.md:532`.
+6. **مراجعة ما بعد التغيير:** أرفق لقطات لوحة النتائج وملخصات الجلب ونتائج المراقبة في تذكرة التغيير. تحديث `status.md` بتاريخ السرياني وأي شذوذات.
 
-1. **تجميد التهيئة:** خزّن ملف JSON للوضع المباشر في مستودع `iroha_config` وسجل الهاش في تذكرة التغيير.
-2. **تدقيق الـ gateway:** تحقق من أن نقاط Torii تطبق TLS وTLVs للقدرات وسجلات التدقيق قبل التحويل إلى الوضع المباشر. انشر ملف سياسة الـ gateway للمشغلين.
-3. **موافقة الامتثال:** شارك دليل التشغيل المحدث مع مراجعي الامتثال/التنظيم وسجل الموافقات على التشغيل خارج طبقة الإخفاء.
-4. **تشغيل تجريبي:** نفذ مجموعة اختبارات الامتثال بالإضافة إلى جلب staging مقابل مزودي Torii الموثوقين. أرشف مخرجات scoreboard وملخصات CLI.
-5. **التحويل للإنتاج:** أعلن نافذة التغيير، وحول `transport_policy` إلى `direct_only` (إذا كنت قد اخترت `soranet-first`)، وراقب لوحات الوضع المباشر (زمن `sorafs_fetch`، وعدادات فشل المزوّدين). وثّق خطة الرجوع إلى SoraNet-first بعد تخرج SNNet-4/5/5a/5b/6a/7/8/12/13 في `roadmap.md:532`.
-6. **مراجعة ما بعد التغيير:** أرفق لقطات scoreboard وملخصات الجلب ونتائج المراقبة في تذكرة التغيير. حدّث `status.md` بتاريخ السريان وأي شذوذات.
+احتفظ بالقائمة بجوار دليل `sorafs_node_ops` حتى يبدأ العمل من خلال التغيير الفعال. عند انتقال SNNet-5 إلى GA، توقف عن مسار الرجوع بعد تأكيد التعاون في الإنتاج التليمتري.
 
-احتفظ بالقائمة بجوار دليل `sorafs_node_ops` حتى يتمكن المشغلون من التمرين قبل التحويل الفعلي. عند انتقال SNNet-5 إلى GA، أوقف مسار الرجوع بعد تأكيد التكافؤ في تليمترية الإنتاج.
+## 6. الأدلة الأدلة وبوابة الاعتماديجب أن تفي لقطات الوضع المباشر ببوابة الاعتماد SF-6c. اجمع الـ لوحة النتائج والملخص والمغلف الخاص بالـ البيان وتقرير الاعتماد لكل تشغيل حتى `cargo xtask sorafs-adoption-check` من التحقق من وضع الرجوع. الشركة الناقصة إلى فشل البوابة، لذا سجل البيانات الوصفية لحساب في تذكرة التغيير.
 
-## 6. متطلبات الأدلة وبوابة الاعتماد
-
-يجب أن تفي لقطات الوضع المباشر ببوابة الاعتماد SF-6c. اجمع الـ scoreboard والملخص وenvelope الخاص بالـ manifest وتقرير الاعتماد لكل تشغيل حتى يتمكن `cargo xtask sorafs-adoption-check` من التحقق من وضع الرجوع. تؤدي الحقول الناقصة إلى فشل البوابة، لذا سجّل البيانات الوصفية المتوقعة في تذاكر التغيير.
-
-- **بيانات النقل الوصفية:** يجب أن يصرح `scoreboard.json` بـ `transport_policy="direct_only"` (وتبديل `transport_policy_override=true` عندما تُجبر خفض المستوى). أبقِ حقول سياسة الإخفاء المزدوجة معبأة حتى عندما ترث القيم الافتراضية كي يرى المراجعون ما إذا انحرفت عن خطة الإخفاء المرحلية.
-- **عدادات المزوّدين:** يجب أن تحفظ جلسات gateway-only `provider_count=0` وأن تملأ `gateway_provider_count=<n>` بعدد مزودي Torii المستخدمين. تجنب تعديل JSON يدويا: فـ CLI/SDK يستخرج العدادات، وبوابة الاعتماد ترفض اللقطات التي تُغفل الفصل.
-- **دليل manifest:** عندما تشارك بوابات Torii، مرر `--gateway-manifest-envelope <path>` الموقع (أو ما يعادله في SDK) حتى يتم تسجيل `gateway_manifest_provided` و`gateway_manifest_id`/`gateway_manifest_cid` داخل `scoreboard.json`. تأكد من أن `summary.json` يحمل `manifest_id`/`manifest_cid` المطابق؛ تفشل عملية الاعتماد إذا غاب الزوج من أي ملف.
-- **توقعات التليمترية:** عندما ترافق التليمترية الالتقاط، شغّل البوابة مع `--require-telemetry` حتى يثبت تقرير الاعتماد أن المقاييس أُرسلت. يمكن للتجارب المعزولة هوائيا أن تتجاوز العلم، لكن يجب على CI وتذاكر التغيير توثيق الغياب.
+- **بيانات النقل الوصفية:** يجب أن يصرح `scoreboard.json` بـ `transport_policy="direct_only"` (وتبديل `transport_policy_override=true` عندما تُجبر تراجع المستوى). أبقِ ممتلئة بإخفاء الملابس بالكامل حتى عندما ترث قيماً افتراضية كي ترى المراجعون ما إذا انحرفت عن خطة الإخفاء المرح.
+- **عدادات المتحكمين:** يجب أن تحفظ جلسات البوابة فقط `provider_count=0` وأن تملأ `gateway_provider_count=<n>` للمزيد من المستخدمين Torii. تجنب تعديل JSON يدويا: فـ CLI/SDK يستخرج العدادات، وبوابة الاعتماد لا ترفض التي تُغفل الفصل.
+- **دليل الدليل:** عندما تشارك بوابات Torii، مرر `--gateway-manifest-envelope <path>` الموقع (أو ما نفعه في SDK) حتى يتم تسجيل `gateway_manifest_provided` و`gateway_manifest_id`/`gateway_manifest_cid` داخل `scoreboard.json`. تأكد من أن `summary.json` عصر `manifest_id`/`manifest_cid` المطابق؛ يعتمد الفشل في نجاح الزوج على أي ملف.
+- **توقعات التليمترية:** عندما ترافق التليمترية الالتقاط، شغّل البوابة مع `--require-telemetry` حتى يثبت اعتماد الاعتماد على المقاييس أُرسلت. يمكن للتجارب المعزولة هوائيا أن تتجاوز العلم، لكن يجب على CI وتذاكر التغيير الغياب.
 
 مثال:
 
@@ -112,6 +101,4 @@ cargo xtask sorafs-adoption-check \
   --require-direct-only \
   --json-out artifacts/sorafs_direct_mode/adoption_report.json \
   --require-telemetry
-```
-
-أرفق `adoption_report.json` مع الـ scoreboard والملخص وenvelope الخاص بالـ manifest وحزمة سجلات smoke. تعكس هذه القطع ما يطبقه عمل الاعتماد في CI (`ci/check_sorafs_orchestrator_adoption.sh`) وتبقي عمليات خفض الوضع المباشر قابلة للتدقيق.
+```أرفق `adoption_report.json` مع الـ لوحة النتائج والملخص والمغلف الخاص بالـ بيان وزمة سجلات الدخان. مراعاة هذه القطع ما يطبقه عمل الاعتماد في CI (`ci/check_sorafs_orchestrator_adoption.sh`) وتبقي العمليات تقلل من الحجم الدقيق.

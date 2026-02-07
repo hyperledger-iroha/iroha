@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sns/local-to-global-toolkit.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # مجموعة ادوات عناوين Local -> Global
@@ -17,8 +19,8 @@ generator: docs/portal/scripts/sync-i18n.mjs
   - `normalized.txt` -- literals IH58 (المفضل) / compressed (`sora`) (الخيار الثاني) محولة لكل selector من نطاق Local.
 - استخدم السكربت مع لوحة ingest للعناوين (`dashboards/grafana/address_ingest.json`)
   وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاثبات ان cutover Local-8 /
-  Local-12 امن. راقب لوحات التصادم Local-8 و Local-12 والتنبيهات
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, و `AddressInvalidRatioSlo` قبل
+  מקומי-12 אמנה. راقب لوحات التصادم Local-8 و Local-12 والتنبيهات
+  `AddressLocal8Resurgence`, `AddressLocal12Collision`, ו-`AddressInvalidRatioSlo`
   ترقية تغييرات manifest.
 - ارجع الى [Address Display Guidelines](address-display-guidelines.md) و
   [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) لسياق UX واستجابة الحوادث.
@@ -37,7 +39,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI).
 
 يطبع السكربت مسارات artefact في نهاية التشغيل. ارفق كلا الملفين مع
-تذكرة change-management ومع لقطة Grafana التي تثبت صفر
+ניהול שינויים וניהול שינויים Grafana
 اكتشافات Local-8 وصفر تصادمات Local-12 لمدة >=30 يوما.
 
 ## تكامل CI

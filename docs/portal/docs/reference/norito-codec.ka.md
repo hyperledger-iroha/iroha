@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8de31f9e066b729fda8324b8847badba23de926888574d02a44fb0e6d4472f77
 source_last_modified: "2026-01-16T17:12:51.444585+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito კოდეკის მითითება
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito არის Iroha-ის კანონიკური სერიალიზაციის ფენა. ყოველი საკაბელო შეტყობინება, დისკზე
+payload და ჯვარედინი კომპონენტის API იყენებს Norito, ამიტომ კვანძები თანხმდებიან იდენტურ ბაიტებზე
+მაშინაც კი, როდესაც ისინი მუშაობენ სხვადასხვა აპარატურაზე. ეს გვერდი აჯამებს მოძრავ ნაწილებს
+და მიუთითებს სრულ სპეციფიკაციებზე `norito.md`-ში.
 
-## Core layout
+## ძირითადი განლაგება
 
-| Component | Purpose | Source |
+| კომპონენტი | დანიშნულება | წყარო |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **Header** | ფრეიმების დატვირთვა ჯადოსნური/ვერსიის/სქემის ჰეშით, CRC64, სიგრძით და შეკუმშვის ტეგით; v1 მოითხოვს `VERSION_MINOR = 0x00` და ამოწმებს სათაურის დროშებს მხარდაჭერილი ნიღბის წინააღმდეგ (ნაგულისხმევი `0x00`). | `norito::header` — იხილეთ `norito.md` („Header & Flags“, საცავი) |
+| ** შიშველი დატვირთვა ** | დეტერმინისტული მნიშვნელობის კოდირება, რომელიც გამოიყენება ჰეშირებისთვის/შედარებისთვის. სადენიანი ტრანსპორტი ყოველთვის იყენებს სათაურს; შიშველი ბაიტები მხოლოდ შიდაა. | `norito::codec::{Encode, Decode}` |
+| ** შეკუმშვა ** | სურვილისამებრ Zstd (და ექსპერიმენტული GPU აჩქარება) შერჩეული სათაურის შეკუმშვის ბაიტის მეშვეობით. | `norito.md`, „შეკუმშვის მოლაპარაკება“ |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+განლაგების დროშის რეესტრი (შეფუთული-struct, packed-seq, field bitsset, კომპაქტური
+სიგრძე) ცხოვრობს `norito::header::flags`-ში. V1 არის ნაგულისხმევი დროშები `0x00` მაგრამ
+იღებს აშკარა სათაურის დროშებს მხარდაჭერილი ნიღბის ფარგლებში; უცნობი ბიტებია
+უარყოფილი. `norito::header::Flags` ინახება შიდა შემოწმებისთვის და
+მომავალი ვერსიები.
 
-## Derive support
+## მიიღეთ მხარდაჭერა
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` აგზავნის `Encode`, `Decode`, `IntoSchema` და JSON დამხმარე მომდინარეობს.
+ძირითადი კონვენციები:
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- წარმოშობის გენერირება ორივე AoS და შეფუთული კოდი ბილიკები; v1 ნაგულისხმევია AoS
+  განლაგება (დროშები `0x00`), თუ სათაურის დროშები არ აირჩევენ შეფუთულ ვარიანტებს.
+  დანერგვა მუშაობს `crates/norito_derive/src/derive_struct.rs`-ში.
+- განლაგებაზე მოქმედი ფუნქციები (`packed-struct`, `packed-seq`, `compact-len`) არის
+  მონაწილეობა სათაურის დროშებით და უნდა იყოს კოდირებული/გაშიფრული თანმიმდევრულად თანატოლებში.
+- JSON დამხმარეები (`norito::json`) უზრუნველყოფენ დეტერმინისტულ Norito-ით მხარდაჭერილ JSON-ს
+  გახსენით API. გამოიყენეთ `norito::json::{to_json_pretty, from_json}` — არასოდეს `serde_json`.
 
-## Multicodec & identifier tables
+## მულტიკოდეკი და საიდენტიფიკაციო ცხრილები
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito ინახავს თავის მულტიკოდეკ დავალებებს `norito::multicodec`-ში. მითითება
+ცხრილი (ჰეშები, გასაღების ტიპები, დატვირთვის აღწერები) ინახება `multicodec.md`-ში
+საცავის ძირში. როდესაც დაემატება ახალი იდენტიფიკატორი:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. განაახლეთ `norito::multicodec::registry`.
+2. ცხრილის გაფართოება `multicodec.md`-ში.
+3. განაახლეთ ქვედა დინების აკინძები (პითონი/ჯავა), თუ ისინი მოიხმარენ რუკას.
 
-## Regenerating docs & fixtures
+## რეგენერირებადი დოკუმენტები და მოწყობილობები
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+იმ შემთხვევაში, თუ პორტალი ამჟამად მასპინძლობს პროზაულ რეზიუმეს, გამოიყენეთ Markdown-ის ზემოთ
+წყაროები, როგორც ჭეშმარიტების წყარო:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- ** სპეციფიკაცია **: `norito.md`
+- **მულტიკოდეკის ცხრილი**: `multicodec.md`
+- ** ეტალონები **: `crates/norito/benches/`
+- **ოქროს ტესტები**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+როდესაც Docusaurus ავტომატიზაცია გამოვა, პორტალი განახლდება
+სინქრონიზაციის სკრიპტი (ი18NI00000037X-ში თვალის დევნება), რომელიც აგროვებს მონაცემებს აქედან
+ფაილები. მანამდე შეინახეთ ეს გვერდი ხელით გასწორებული, როდესაც სპეციფიკაცია იცვლება.

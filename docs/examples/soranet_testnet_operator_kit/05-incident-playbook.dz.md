@@ -7,36 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2fbce156952c669e73d74c13284fca317013d706ee401359028c3638341d34b
 source_last_modified: "2025-12-29T18:16:35.091815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Brownout / Downgrade Response Playbook
+# བརའུན་ཨའུཊ་ / མར་ཕབ་ལན་འདེབས་རྩེད་དེབ་།
 
-1. **Detect**
-   - Alert `soranet_privacy_circuit_events_total{kind="downgrade"}` fires or
-     brownout webhook triggers from governance.
-   - Confirm via `kubectl logs soranet-relay` or systemd journal within 5 mins.
+1. **ཤེས་རྟོགས་**།
+   - ཉེན་བརྡ་ `soranet_privacy_circuit_events_total{kind="downgrade"}` མེ་འཕེལ།
+     གཞུང་སྐྱོང་ལས་ བཱརའོན་ཨའུཊ་ཝེབ་ཧུཀ་ འཕྲུལ་ཆས།
+   - སྐར་མ་༥ གི་ནང་འཁོད་ལུ་ I18NI000000001X ཡང་ན་ རིམ་ལུགས་ཅན་གྱི་དུས་དེབ་བརྒྱུད་དེ་ ངེས་གཏན་བཟོ།
 
-2. **Stabilise**
-   - Freeze guard rotation (`relay guard-rotation disable --ttl 30m`).
-   - Enable direct-only override for affected clients
-     (`sorafs fetch --transport-policy direct-only --write-mode read-only`).
-   - Capture current compliance config hash (`sha256sum compliance.toml`).
+2. **བརྟན་སྲུང་**
+   - གྱང་ཁོག་སྲུང་སྐྱོབ་འཁོར་སྐྱོད་ (I18NI0000002X).
+   - གནོད་སྐྱོན་ཕོག་མི་ མཁོ་མངགས་འབད་མི་ཚུ་གི་དོན་ལུ་ ཐད་ཀར་རྐྱངམ་ཅིག་ བཀག་ཆ་འབད་ནི་ ལྕོགས་ཅན་བཟོ།
+     (I 18NI0000003X).
+   - ད་ལྟོའི་བསྟར་སྤྱོད་སྒྲིག་བཀོད་ཧེཤ་ (I18NI0000004X) བཟུང་ནི།
 
-3. **Diagnose**
-   - Collect latest directory snapshot and relay metrics bundle:
+3. **ནད་བརྟག་**
+   - འཕྲལ་གྱི་སྣོད་ཐོ་གི་པར་བཏབ་ནི་དང་ རི་ལེ་མེ་ཊིགསི་བཱན་ཌལ་ཚུ་བསྡུ་སྒྲིག་འབད་ནི།
      `soranet-relay support-bundle --output /tmp/bundle.tgz`.
-   - Note PoW queue depth, throttle counters, and GAR category spikes.
-   - Identify whether PQ deficit, compliance override, or relay failure caused the event.
+   - དྲན་འཛིན་ POW གྱལ་གཏིང་ གཏིང་ཚད་ ཐོར་ཊི་ཀའུན་ཊར་ དེ་ལས་ ཇི་ཨར་ དབྱེ་རིམ་ཚུ་ ཡར་སེང་འབདཝ་ཨིན།
+   - པི་ཀིའུ་གི་ གྱོང་རྒུད་དང་ བསྟར་སྤྱོད་འབད་མི་ ཡང་ན་ རི་ལེ་ འཐུས་ཤོར་བྱུང་མི་ བྱུང་རིམ་འདི་ འབྱུང་ཡོདཔ་ཨིན་ན་ ངོས་འཛིན་འབད།
 
-4. **Escalate**
-   - Notify the governance bridge (`#soranet-incident`) with summary and bundle hash.
-   - Open incident ticket linking to the alert, including timestamps and mitigation steps.
+4. **ཨེས་ཀེ་ལེ་ཊི་**
+   - གཞུང་སྐྱོང་ཟམ་ (`#soranet-incident`) འདི་ བཅུད་བསྡུས་དང་ བཱན་ཌལ་ཧ་ཤི་དང་གཅིག་ཁར་ བརྡ་སྤྲོད་འབད།
+   - དུས་ཚོད་མཚོན་རྟགས་དང་ མར་ཕབ་ཀྱི་གོ་རིམ་ཚུ་རྩིས་ཏེ་ ཉེན་བརྡ་དང་འབྲེལ་བ་འཐབ་མི་ ཁ་ཕྱེ་ཡོད་པའི་ བྱུང་རིམ་གྱི་ ཤོག་འཛིན་ཚུ།
 
-5. **Recover**
-   - Once root cause addressed, re-enable rotation
-     (`relay guard-rotation enable`) and revert direct-only overrides.
-   - Monitor KPIs for 30 minutes; ensure no new brownouts appear.
+5. **སླར་གསོ་**།
+   - རྩ་བའི་རྒྱུ་རྐྱེན་ཚུ་ ཁ་བྱང་བཀོད་ཚརཝ་ཅིག་ འཁོར་སྐྱོད་ལོག་སྟེ་ ལྕོགས་ཅན་བཟོ།
+     (`relay guard-rotation enable`) དང་ ཐད་ཀར་རྐྱངམ་ཅིག་ ཕྱིར་ལོག་འབདཝ་ཨིན།
+   - སྐར་མ་ ༣༠ རིང་ ཀེ་པི་ཨའི་ བལྟ་རྟོག་འབད་ནི། བཱ་རཱོན་གསརཔ་ཡང་ མ་འབྱུང་པར་ ངེས་གཏན་བཟོ་དགོ།
 
-6. **Postmortem**
-   - Submit incident report within 48 hours using governance template.
-   - Update runbooks if new failure mode discovered.
+6. **པོསི་མོར་ཊེམ་**།
+   - གཞུང་སྐྱོང་ཊེམ་པེལེཊི་ལག་ལེན་འཐབ་སྟེ་ ཆུ་ཚོད་༤༨ གི་ནང་འཁོད་ལུ་ བྱུང་རྐྱེན་སྙན་ཞུ་ཕུལ་དགོ།
+   - འཐུས་ཤོར་ཐབས་ལམ་གསརཔ་འཚོལ་པ་ཅིན་ རན་བུཀ་ཚུ་དུས་མཐུན་བཟོ།

@@ -4,32 +4,34 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Отчет о soak начисления емкости SF-2c
+# Отчет о remojo начисления емкости SF-2c
 
-Дата: 2026-03-21
+Datos: 2026-03-21
 
 ## Область
 
-Этот отчет фиксирует детерминированные тесты soak начисления емкости SoraFS и выплат,
-запрошенные в дорожной карте SF-2c.
+Este dispositivo de control de temperatura está en remojo en el refrigerador SoraFS y en el plano,
+coloque en la tarjeta SF-2c.
 
-- **30-дневный multi-provider soak:** Запускается
-  `capacity_fee_ledger_30_day_soak_deterministic` в
+- **Remojo multiproveedor de 30 días:** Запускается
+  `capacity_fee_ledger_30_day_soak_deterministic`
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  Harness создает пять providers, охватывает 30 окон settlement и
+  Arnés создает пять proveedores, охватывает 30 окон liquidación и
   проверяет, что итоги ledger совпадают с независимо вычисленной эталонной
-  проекцией. Тест выводит Blake3 digest (`capacity_soak_digest=...`), чтобы CI
-  могла захватить и сравнить канонический snapshot.
+  проекцией. Prueba de resumen de Blake3 (`capacity_soak_digest=...`), чтобы CI
+  могла захватить и сравнить канонический instantánea.
 - **Штрафы за недопоставку:** Обеспечиваются
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (тот же файл). Тест подтверждает, что пороги strikes, cooldowns, slashes
-  collateral и счетчики ledger остаются детерминированными.
+  (тот же файл). Тест подтверждает, что пороги ataques, tiempos de reutilización, cortes
+  garantías y libros mayores остаются детерминированными.
 
 ## Выполнение
 
-Запустите проверки soak локально:
+Запустите проверки remojo localmente:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
@@ -37,21 +39,19 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
 Тесты завершаются меньше чем за секунду на стандартном ноутбуке и не требуют
-внешних fixtures.
+внешних accesorios.
 
 ## Наблюдаемость
 
-Torii теперь показывает snapshots кредитов providers вместе с fee ledgers, чтобы
-dashboards могли gate по низким балансам и penalty strikes:
-
-- REST: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
-  которые отражают поля ledger, проверенные в soak тесте. См.
+Torii теперь показывает instantáneas кредитов proveedores вместе с libros de tarifas, чтобы
+tableros de instrumentos могли puerta по низким балансам и penaltis:- RESTO: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
+  которые отражают поля libro mayor, проверенные в remojo prueba. См.
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` строит
-  экспортированные счетчики strikes, суммы штрафов и залог collateral, чтобы
-  дежурная команда могла сравнивать baseline soak с живыми окружениями.
+- Importación Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` estilo
+  экспортированные счетчики huelgas, суммы штрафов и залог colateral, чтобы
+  El comando habitual es utilizar el remojo de línea base con dispositivos médicos.
 
 ## Дальнейшие шаги
 
-- Запланировать еженедельные gate-прогоны в CI для воспроизведения soak теста (smoke-tier).
-- Расширить панель Grafana целями scrape Torii после запуска экспортов telemetry в прод.
+- Cierre los programas de puerta en CI para la prueba de remojo (nivel de humo).
+- Utilice el panel Grafana para raspar Torii después de descargar datos de telemetría en el producto.

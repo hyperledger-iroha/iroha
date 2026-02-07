@@ -4,39 +4,41 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-elastic-lane.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-elastic-lane
-title: تجهيز lane المرن (NX-7)
-sidebar_label: تجهيز lane المرن
-description: سير عمل bootstrap لانشاء manifests لـ Nexus lane ومدخلات الكتالوج وادلة rollout.
+идентификатор: Nexus-Elastic-Lane
+титул: تجهيز Lane المرن (NX-7)
+Sidebar_label: تجهيز Lane المرن
+описание: Запуск начальной загрузки демонстрирует развертывание линии Nexus.
 ---
 
-:::note المصدر الرسمي
-تعكس هذه الصفحة `docs/source/nexus_elastic_lane.md`. حافظ على النسختين متطابقتين حتى يصل مسح الترجمة الى البوابة.
+:::примечание
+Был установлен `docs/source/nexus_elastic_lane.md`. Он был убит в 2007 году в Колумбийском университете.
 :::
 
-# مجموعة ادوات تجهيز lane المرن (NX-7)
+# مجموعة ادوات تجهيز Lane المرن (NX-7)
 
-> **عنصر خارطة الطريق:** NX-7 - ادوات تجهيز lane المرن  
-> **الحالة:** الادوات مكتملة - تولد manifests، مقتطفات الكتالوج، حمولات Norito، اختبارات smoke،
-> ومساعد bundle لاختبارات الحمل يجمع الان بوابة زمن الاستجابة لكل slot + manifests الادلة كي تنشر اختبارات حمل المدققين
-> دون سكربتات مخصصة.
+> **Обратный доступ:** NX-7 – переулок ادوات تجهيز المرن  
+> **الحالة:** الادوات مكتملة - تولد Manifes, مقتطفات الكتالوج، حمولات Norito, اختبارات курить,
+> Пакетный пакет, созданный в соответствии со слотом + манифесты, доступные для просмотра. اختبارات حمل المدققين
+> Дэн Сэрри Сити.
 
-هذا الدليل يوجه المشغلين عبر المساعد الجديد `scripts/nexus_lane_bootstrap.sh` الذي يقوم بأتمتة توليد manifest لـ lane ومقتطفات كتالوج lane/dataspace وادلة rollout. الهدف هو تسهيل انشاء lanes جديدة في Nexus (عامة او خاصة) دون تحرير عدة ملفات يدويا ودون اعادة اشتقاق هندسة الكتالوج يدويا.
+هذا الدليل يوجه الذي يقوم بأتمتة Вы можете манифестировать развертывание полосы движения и пространства данных. Названия переулков для Nexus (на английском языке) в عدة Он был убит в 1980-х годах в Нью-Йорке.
 
-## 1. المتطلبات المسبقة
+## 1. Настройки
 
-1. موافقة الحوكمة على alias لـ lane و dataspace ومجموعة المدققين وتحمّل الاعطال (`f`) وسياسة settlement.
-2. قائمة نهائية بالمدققين (معرفات الحسابات) وقائمة namespaces المحمية.
-3. وصول الى مستودع تهيئة العقد كي تتمكن من اضافة المقتطفات المولدة.
-4. مسارات لسجل manifests الخاص بـ lane (انظر `nexus.registry.manifest_directory` و `cache_directory`).
-5. جهات اتصال للقياس عن بعد/مفاتيح PagerDuty الخاصة بالlane حتى يمكن ربط التنبيهات بمجرد دخول lane الى الخدمة.
+1. Создать псевдоним لـlane и dataspace, чтобы сохранить доступ к нему (`f`) Усадебное поселение.
+2. Создание пространства имен (معرفات الحسابات) для создания пространств имен.
+3. Позвоните по телефону, чтобы узнать больше о вещах.
+4. На экране отображается полоса пропускания (انظر `nexus.registry.manifest_directory` и `cache_directory`).
+5. Дэйв Лайн в Нью-Йорке/Миниатюра PagerDuty использует переулка, когда он работает в режиме реального времени. Пройдите по переулку в городе.
 
-## 2. توليد artefacts للـ lane
+## 2. Переулок артефактов Сейла
 
-شغّل المساعد من جذر المستودع:
+Сообщение от президента США:
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -58,36 +60,34 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-اهم الاعلام:
+Уважаемый:
 
-- `--lane-id` يجب ان يطابق index الادخال الجديد في `nexus.lane_catalog`.
-- `--dataspace-alias` و `--dataspace-id/hash` يتحكمان في ادخال كتالوج dataspace (افتراضيا يستخدم id الخاص بالlane عند الحذف).
-- `--validator` يمكن تكراره او قراءته من `--validators-file`.
+- `--lane-id` соответствует индексу исходного кода для `nexus.lane_catalog`.
+- `--dataspace-alias` и `--dataspace-id/hash` в пространстве данных Dataspace (пространство данных id الخاص بالlane) عند الحذف).
+- `--validator` для `--validators-file`.
 - `--route-instruction` / `--route-account` تصدر قواعد توجيه جاهزة للصق.
-- `--metadata key=value` (او `--telemetry-contact/channel/runbook`) تلتقط جهات اتصال الـ runbook لكي تعرض اللوحات اصحابها الصحيحين.
-- `--allow-runtime-upgrades` + `--runtime-upgrade-*` تضيف hook runtime-upgrade الى manifest عندما يحتاج lane الى ضوابط تشغيل ممتدة.
-- `--encode-space-directory` يستدعي `cargo xtask space-directory encode` تلقائيا. استخدمه مع `--space-directory-out` اذا اردت ان يوضع ملف `.to` المشفر في مسار غير الافتراضي.
+- `--metadata key=value` (او `--telemetry-contact/channel/runbook`) Откройте для себя Runbook, чтобы просмотреть его. صحيحين.
+- `--allow-runtime-upgrades` + `--runtime-upgrade-*` позволяет выполнить обновление во время выполнения манифеста, который находится в переулке, который находится в процессе выполнения.
+- `--encode-space-directory` на `cargo xtask space-directory encode`. Зарегистрируйтесь на `--space-directory-out` и нажмите на `.to` для проверки. الافتراضي.
 
-ينتج السكربت ثلاثة artefacts داخل `--output-dir` (الافتراضي هو المجلد الحالي)، مع رابع اختياري عند تفعيل encoding:
+Сохранение артефактов داخل `--output-dir` (создание и исчезновение артефактов), Кодировка اختياري عند تفعيل:
 
-1. `<slug>.manifest.json` - manifest للـ lane يحتوي quorum المدققين و namespaces المحمية وبيانات اختيارية لـ hook runtime-upgrade.
-2. `<slug>.catalog.toml` - مقتطف TOML يحتوي `[[nexus.lane_catalog]]` و `[[nexus.dataspace_catalog]]` واي قواعد توجيه مطلوبة. تاكد من تعيين `fault_tolerance` في ادخال dataspace لتحديد لجنة lane-relay (`3f+1`).
-3. `<slug>.summary.json` - ملخص تدقيق يصف الهندسة (slug والقطاعات والبيانات) وخطوات rollout المطلوبة والامر الدقيق `cargo xtask space-directory encode` (ضمن `space_directory_encode.command`). ارفق هذا JSON بتذكرة onboarding كدليل.
-4. `<slug>.manifest.to` - يصدر عند تفعيل `--encode-space-directory`؛ جاهز لتدفق `iroha app space-directory manifest publish` في Torii.
+1. `<slug>.manifest.json` — манифест для определения кворума и пространств имен для обновления среды выполнения перехватчика.
+2. `<slug>.catalog.toml` — TOML используется для `[[nexus.lane_catalog]]` и `[[nexus.dataspace_catalog]]` в автономном режиме. Используется для `fault_tolerance` в пространстве данных, подключенном к полосе-реле (`3f+1`).
+3. `<slug>.summary.json` — развертывание развертывания с помощью пули (slug والقطاعات والبيانات) Установите `cargo xtask space-directory encode` (например, `space_directory_encode.command`). Воспользуйтесь JSON, чтобы пройти адаптацию.
+4. `<slug>.manifest.to` - يصدر عند تفعيل `--encode-space-directory`; Установите `iroha app space-directory manifest publish` или Torii.
 
-استخدم `--dry-run` لمعاينة JSON/المقتطفات دون كتابة ملفات، و `--force` لاعادة الكتابة فوق artefacts الموجودة.
+Создайте `--dry-run` для JSON/экрана, чтобы просмотреть файлы и `--force`. Найдите артефакты.## 3. تطبيق التغييرات
 
-## 3. تطبيق التغييرات
+1. Создайте манифест JSON в формате `nexus.registry.manifest_directory` (каталог кэша и реестр и удаленный доступ). В фильме "Капитан Кейн" проявляется синдром исчезновения в напряжении.
+2. Установите флажок `config/config.toml` (или `config.d/*.toml`). Для `nexus.lane_count` используется `lane_id + 1` для `nexus.routing_policy.rules`, для `nexus.routing_policy.rules`. На переулке الجديد.
+3. Создайте (зарегистрируйтесь `--encode-space-directory`) манифест в каталоге Space Directory в разделе «Сводка» (`space_directory_encode.command`). Для полезной нагрузки `.manifest.to` используется Torii. ارسله عبر `iroha app space-directory manifest publish`.
+4. Введите `irohad --sora --config path/to/config.toml --trace-config` и выполните трассировку при развертывании. Его можно использовать для слизняков / кура Кура.
+5. Сделайте это в соответствии с описанием манифеста/отображения. Сводная информация в формате JSON для редактирования файлов.
 
-1. انسخ manifest JSON الى `nexus.registry.manifest_directory` المهيأ (والى cache directory اذا كان registry يطابق حزم remote). التزم بالملف اذا كانت manifests تُدار بالنسخ في مستودع التهيئة.
-2. الحق مقتطف الكتالوج في `config/config.toml` (او `config.d/*.toml` المناسب). تاكد من ان `nexus.lane_count` يساوي على الاقل `lane_id + 1` وحدّث اي `nexus.routing_policy.rules` يجب ان تشير الى lane الجديد.
-3. شفّر (اذا تجاوزت `--encode-space-directory`) وانشر manifest في Space Directory باستخدام الامر الملتقط في summary (`space_directory_encode.command`). هذا ينتج payload `.manifest.to` الذي يتوقعه Torii ويسجل الادلة للمراجعين؛ ارسله عبر `iroha app space-directory manifest publish`.
-4. شغّل `irohad --sora --config path/to/config.toml --trace-config` وارشف مخرجات trace في تذكرة rollout. هذا يثبت ان الهندسة الجديدة تطابق slug/قطاعات Kura المولدة.
-5. اعد تشغيل المدققين المخصصين للlane بعد نشر تغييرات manifest/الكتالوج. احتفظ بملف summary JSON في التذكرة للتدقيقات المستقبلية.
+## 4. Бандажная связка
 
-## 4. بناء bundle لتوزيع السجل
-
-قم بتجميع manifest المولد و overlay لكي يتمكن المشغلون من توزيع بيانات حوكمة lanes دون تعديل configs على كل مضيف. مساعد bundler ينسخ manifests الى التخطيط القانوني، وينتج overlay اختياري لكاتالوج الحوكمة لـ `nexus.registry.cache_directory`، ويمكنه اخراج tarball لنقل offline:
+В манифесте Манифеста и оверлее Лос-Анджелеса в Нью-Йорке в Нью-Йорке переулки переулков. Проверьте конфигурации здесь и сейчас. Созданный упаковщик ينسخ манифестирует оверлейное наложение الختياري لكاتالوج الحوكمة لـ. `nexus.registry.cache_directory`, а также архив tarball в автономном режиме:
 
 ```bash
 scripts/nexus_lane_registry_bundle.sh \
@@ -100,16 +100,16 @@ scripts/nexus_lane_registry_bundle.sh \
 
 المخرجات:
 
-1. `manifests/<slug>.manifest.json` - انسخها الى `nexus.registry.manifest_directory` المهيأ.
-2. `cache/governance_catalog.json` - ضعها في `nexus.registry.cache_directory`. كل ادخال `--module` يصبح تعريفا لوحدة قابلة للتبديل، ما يتيح تبديل وحدات الحوكمة (NX-2) عبر تحديث overlay الخاص بالكاش بدلا من تعديل `config.toml`.
-3. `summary.json` - يتضمن hashes وبيانات overlay وتعليمات للمشغلين.
-4. اختياري `registry_bundle.tar.*` - جاهز لـ SCP او S3 او متتبعات artefacts.
+1. `manifests/<slug>.manifest.json` — установите флажок `nexus.registry.manifest_directory`.
+2. `cache/governance_catalog.json` - ضعها في `nexus.registry.cache_directory`. В качестве `--module` было установлено защитное устройство, в котором он находится. Для (NX-2) используется наложение, установленное на `config.toml`.
+3. `summary.json` — хеш-коды и наложение хеш-кодов.
+4. Добавлен `registry_bundle.tar.*` — добавлен SCP в S3 и обнаружены артефакты.
 
-زامن المجلد بالكامل (او الارشيف) لكل مدقق، وفكّه على hosts معزولة، وانسخ manifests + overlay الكاش الى مسارات السجل قبل اعادة تشغيل Torii.
+Дэниел Билли (او الارشيف) Лил Миссури, Уинстон, хосты, معزولة, وانسخ, манифесты + оверлей Установите флажок Torii.
 
-## 5. اختبارات smoke للمدققين
+## 5. اختبارات курить للمدققين
 
-بعد اعادة تشغيل Torii، شغّل مساعد smoke الجديد للتحقق من ان lane يبلّغ `manifest_ready=true`، وان المقاييس تعرض عدد lanes المتوقع، وان مقياس sealed خال. يجب ان تعرض lanes التي تتطلب manifests قيمة `manifest_path` غير فارغة؛ ويفشل المساعد مباشرة عند غياب المسار حتى يتضمن كل نشر NX-7 دليل manifest الموقع:
+بعد اعادة تشغيل Torii, شغّل مساعد Smoke الجديد للتحقق من ان Lane يبلّغ `manifest_ready=true`, В 2008 году были закрыты переулки, а в Нью-Йорке запечатаны. يجب ان تعرض Lanes التي تتطلب манифестирует قيمة `manifest_path` غير فارغة؛ В качестве примера, приведенного в сообщении, опубликованном на сайте NX-7 в манифесте:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -132,9 +132,9 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-اضف `--insecure` عند اختبار بيئات self-signed. يخرج السكربت برمز غير صفري اذا كانت lane مفقودة او sealed او اذا انحرفت المقاييس/القياس عن القيم المتوقعة. استخدم `--min-block-height` و `--max-finality-lag` و `--max-settlement-backlog` و `--max-headroom-events` للحفاظ على القياس لكل lane (ارتفاع الكتلة/النهائية/backlog/headroom) ضمن حدود التشغيل، واربطها مع `--max-slot-p95` / `--max-slot-p99` (مع `--min-slot-samples`) لفرض اهداف مدة slot في NX-18 دون مغادرة المساعد.
+`--insecure` был установлен самоподписанным. Переулок Кейна, переулок, опечатанный и запечатанный, находится в центре города. المقاييس/القياس عن القيم المتوقعة. Установите `--min-block-height` и `--max-finality-lag` и `--max-settlement-backlog` и `--max-headroom-events`, чтобы перейти к переулку (ارتفاع) الكتلة/النهائية/backlog/headroom) ضمن حدود التشغيل, واربطها مع `--max-slot-p95` / `--max-slot-p99` (مع) `--min-slot-samples`) Закройте слот для NX-18.
 
-لعمليات التحقق air-gapped (او CI) يمكنك اعادة تشغيل استجابة Torii ملتقطة بدلا من الوصول الى endpoint حي:
+Устройство с воздушным зазором (CI) для подключения к Torii для подключения к сети Для конечной точки:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -158,4 +158,4 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-الـ fixtures المسجلة تحت `fixtures/nexus/lanes/` تعكس artefacts التي ينتجها مساعد bootstrap حتى يمكن lint manifests الجديدة دون سكربتات مخصصة. تنفذ CI نفس التدفق عبر `ci/check_nexus_lane_smoke.sh` و `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`) لاثبات ان مساعد smoke الخاص بـ NX-7 يبقى متوافقا مع صيغة payload المنشورة وللتأكد من ان digests/overlays الخاصة بالbundle قابلة لاعادة الانتاج.
+Фикстуры `fixtures/nexus/lanes/` для артефактов и файлов начальной загрузки lint манифесты Он сказал Дэну Сеймерсу. Для CI используются `ci/check_nexus_lane_smoke.sh` и `ci/check_nexus_lane_registry_bundle.sh` (псевдоним: `make check-nexus-lanes`) для дыма. NX-7 используется для создания полезной нагрузки и создания дайджестов/наложений для набора пакетов. لاعادة الانتاج.

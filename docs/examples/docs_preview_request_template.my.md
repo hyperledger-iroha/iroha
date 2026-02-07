@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 59948351a84b27efe0d9741545d8f93c7525fa5f545605a0942d9f2f574f6f06
 source_last_modified: "2025-12-29T18:16:35.072823+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Access Request (Template)
+# Docs Portal အစမ်းကြည့်ရှုခွင့် တောင်းဆိုမှု (ပုံစံ)
 
-Use this template when capturing reviewer details before granting access to the
-public preview environment. Copy the markdown into an issue or request form and
-replace the placeholder values.
+ဝေဖန်သုံးသပ်သူအသေးစိတ်အချက်အလက်များကို ဖမ်းယူသည့်အခါ ဤပုံစံခွက်ကို အသုံးပြုပါ။
+အများသူငှာ စမ်းကြည့်သော ပတ်ဝန်းကျင်။ အမှတ်အသားကို ပြဿနာတစ်ခု သို့မဟုတ် တောင်းဆိုမှုပုံစံသို့ ကူးယူပါ။
+placeholder တန်ဖိုးများကို အစားထိုးပါ။
 
 ```markdown
 ## Request Summary
@@ -44,9 +45,9 @@ replace the placeholder values.
 
 ---
 
-## Community-Specific Questions (W2+)
-- Motivation for preview access (one sentence):
-- Primary review focus (SDK, governance, Norito, SoraFS, other):
-- Weekly time commitment & availability window (UTC):
-- Localization or accessibility needs (yes/no + details):
-- Community Code of Conduct + preview acceptable-use addendum acknowledged (yes/no):
+## ရပ်ရွာ-သီးသန့်မေးခွန်းများ (W2+)
+- အစမ်းဝင်ရောက်ကြည့်ရှုမှုအတွက် လှုံ့ဆော်မှု (စာကြောင်းတစ်ကြောင်း)။
+- မူလပြန်လည်သုံးသပ်ခြင်းအာရုံ (SDK၊ အုပ်ချုပ်မှု၊ Norito၊ SoraFS၊ အခြား)-
+- အပတ်စဉ် အချိန်ကတိကဝတ်နှင့် ရရှိနိုင်မှုဝင်းဒိုး (UTC):
+- ဒေသသတ်မှတ်ခြင်း သို့မဟုတ် ဝင်ရောက်နိုင်မှု လိုအပ်ချက်များ (ဟုတ်/မဟုတ် + အသေးစိတ်အချက်များ)။
+- ကွန်မြူနတီကျင့်ထုံး + လက်ခံနိုင်သော-အသုံးပြုမှု နောက်ဆက်တွဲကို အစမ်းကြည့်ရှုခြင်း (ဟုတ်/မဟုတ်)-

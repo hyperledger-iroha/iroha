@@ -10,21 +10,22 @@ translation_last_reviewed: 2026-02-07
 title: Python ledger flow recipe
 description: Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.
 slug: /sdks/recipes/python-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+從“@site/src/components/SampleDownload”導入 SampleDownload；
 
-This Python snippet mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-and the [Rust recipe](./rust-ledger-flow.md). It uses the default Docker
-compose network plus the demo credentials bundled in `defaults/client.toml`.
+此 Python 代碼片段反映了 [CLI 賬本演練](../../norito/ledger-walkthrough.md)
+以及[生鏽配方](./rust-ledger-flow.md)。它使用默認的 Docker
+compose 網絡以及 `defaults/client.toml` 中捆綁的演示憑證。
 
-<SampleDownload
+<樣本下載
   href="/sdk-recipes/python/ledger_flow.py"
-  filename="ledger_flow.py"
-  description="Download the script showcased in this recipe to run it without copying code by hand."
+  文件名=“ledger_flow.py”
+  描述=“下載本菜譜中展示的腳本來運行它，而無需手動複製代碼。”
 />
 
-## Prerequisites
+## 先決條件
 
 ```bash
 pip install iroha-python
@@ -33,7 +34,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## 示例腳本
 
 ```python title="ledger_flow.py"
 import os
@@ -103,12 +104,12 @@ for asset in result.items:
         print("Receiver holds", asset.value, "units of", asset.id.definition)
 ```
 
-Run with `python ledger_flow.py`. The output should report the transaction hash
-(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
-the register instruction is rejected while the mint/transfer continue to succeed.
+使用 `python ledger_flow.py` 運行。輸出應報告交易哈希值
+（來自收據有效負載），然後是新的接收方餘額。如果資產定義已經存在，
+註冊指令被拒絕，而鑄幣/傳輸繼續成功。
 
-## Verify parity
+## 驗證奇偶校驗
 
-Use the same CLI commands from the Norito walkthrough to cross-check hashes and
-balances. When you run the JavaScript and Rust recipes, all three SDKs should
-agree on transaction hashes and Norito payloads for the shared flow.
+使用 Norito 演練中的相同 CLI 命令來交叉檢查哈希值和
+餘額。當您運行 JavaScript 和 Rust 配方時，所有三個 SDK 都應該
+就共享流的交易哈希和 Norito 有效負載達成一致。

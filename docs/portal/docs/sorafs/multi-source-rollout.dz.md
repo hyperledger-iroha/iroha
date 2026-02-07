@@ -11,101 +11,91 @@ id: multi-source-rollout
 title: Multi-Source Client Rollout & Blacklisting Runbook
 sidebar_label: Multi-Source Rollout Runbook
 description: Operational checklist for staged multi-source rollouts and emergency provider blacklisting.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-## Purpose
+## དགོས༌དོན
 
-This runbook guides SRE and on-call engineers through two critical workflows:
+རྔོན་དེབ་འདི་གིས་ གལ་ཅན་གྱི་ལཱ་གི་རྒྱུན་རིམ་གཉིས་བརྒྱུད་དེ་ ཨེསི་ཨར་ཨི་དང་ ཁ་པར་གྱི་བཟོ་རིག་པ་ཚུ་ལུ་ ལམ་སྟོན་འབདཝ་ཨིན།
 
-1. Rolling out the multi-source orchestrator in controlled waves.
-2. Blacklisting or de-prioritising misbehaving providers without destabilising existing sessions.
+༡ ཚད་འཛིན་འབད་ཡོད་པའི་རླབས་ཚུ་ནང་ ཐོན་ཁུངས་སྣ་ཚོགས་ཀྱི་ རོལ་དབྱངས་སྡེ་ཚན་འདི་ བསྒྱིར་ནི།
+༢ ད་ལྟོ་ཡོད་པའི་དུས་ཚོད་ཚུ་ བརྟན་ཏོག་ཏོ་མེདཔ་སྦེ་མ་བཟོ་བར་ བེ་ལཱེཀ་ཐོ་ཡིག་དང་ ཡང་ན་ གཙོ་རིམ་ཅན་གྱི་སྤྱོད་ལམ་བཏོན་མི་ཚུ་ གཙོ་རིམ་བཟུང་ནི།
 
-It assumes the orchestration stack delivered under SF-6 is already deployed (`sorafs_orchestrator`, gateway chunk-range API, telemetry exporters).
+འདི་གིས་ ཨེསི་ཨེཕ་-༦ གི་འོག་ལུ་ བཀྲམ་སྤེལ་འབད་མི་ རོལ་དབྱངས་བང་རིམ་འདི་ ཧེ་མ་ལས་རང་ བཀྲམ་སྤེལ་འབད་ཡོདཔ་སྦེ་ མནོ་བསམ་གཏངམ་ཨིན།
 
-> **See also:** The [Orchestrator Operations Runbook](./orchestrator-ops.md) dives into per-run procedures (scoreboard capture, staged rollout toggles, rollback). Use both references together during live changes.
+> **ཡང་:** [དབང་ཚད་བཀོལ་སྤྱོད་བཀོལ་སྤྱོད་ཀྱི་ རཱན་བུཀ](./orchestrator-ops.md) གིས་ གཡོག་བཀོལ་བའི་བྱ་རིམ་ཚུ་ནང་ མཆོང་ལྡིང་འབདཝ་ཨིན། ཐད་རི་བ་རི་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ གཞི་བསྟུན་གཉིས་ཆ་རང་ལག་ལེན་འཐབ།
 
-## 1. Pre-flight Validation
+## 1. འཕུར་འགྲུལ་སྔོན་གྱི་བདེན་དཔང་།
 
-1. **Confirm governance inputs.**
-   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
-   - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
-2. **Stage configuration.**
-   - Persist the orchestrator JSON config in the layered `iroha_config` tree:
+1. **གཞུང་སྐྱོང་ ཨིན་པུཊི་ཚུ་ ངེས་གཏན་བཟོ།**
+   - འདེམས་ངོ་ཆ་མཉམ་གྱིས་ `ProviderAdvertV1` གི་ ཁྱབ་ཚད་ཀྱི་ནུས་པ་དང་ རྒྱུན་ལམ་གྱི་འཆར་དངུལ་ཚུ་ དཔར་བསྐྲུན་འབད་དགོ། `/v1/sorafs/providers` བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ རེ་བ་བསྐྱེད་པའི་ལྕོགས་གྲུབ་ས་སྒོ་ཚུ་དང་ག་བསྡུར་འབད།
+   - ཊེ་ལི་མི་ཊི་པར་རིས་ཚུ་ བཀྲམ་སྤེལ་འབད་བའི་ འཕྲོ་མཐུད་/འཐུས་ཤོར་གྱི་ཚད་གཞི་ཚུ་ ཀེ་རི་རེ་རེ་གི་ཧེ་མ་ སྐར་མ་༡༥ ལས་ ཉུངམ་སྦེ་དགོ།
+2. **གནས་རིམ་རིམ་སྒྲིག་།**
+   - སྙན་ཆའི་སྡེ་ཚན་ I18NI0000009X ཤིང་ནང་ རོལ་དབྱངས་ཚོགས་པ་ JSON རིམ་སྒྲིག་འབད།
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Update the JSON with rollout-specific limits (`max_providers`, retry budgets). Feed the same file to staging/production so diffs stay small.
-3. **Exercise canonical fixtures.**
-   - Populate the manifest/token environment variables and run the deterministic fetch:
+     JSON འདི་ བསྐོར་ཐེངས་དམིགས་བསལ་ཚད་གཞི་ (`max_providers`, བསྐྱར་ལོག་འཆར་དངུལ་) དང་ཅིག་ཁར་ དུས་མཐུན་བཟོ། ཡིག་སྣོད་གཅིགཔོ་འདི་ གནས་རིམ་དང་ ཐོན་སྐྱེད་ལུ་ དབྱེ་བ་ཆུང་ཀུ་སྦེ་སྡོད་ནི་ལུ་ འབད་དགོ།
+3. **ལུས་རྩལ་གྱི་སྒྲིག་བཀོད་ཚུ།**
+   - གསལ་སྟོན་/བརྡ་མཚོན་མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་ ཕྱིར་འཐོན་འབད་ཞིནམ་ལས་ གཏན་འབེབས་བཟོ་ནིའི་ གཡོག་བཀོལ།
 
-     ```bash
-     sorafs_cli fetch \
-       --plan fixtures/sorafs_manifest/ci_sample/payload.plan.json \
-       --manifest-id "$CANARY_MANIFEST_ID" \
-       --provider name=alpha,provider-id="$PROVIDER_ALPHA_ID",base-url=https://gw-alpha.example,stream-token="$PROVIDER_ALPHA_TOKEN" \
-       --provider name=beta,provider-id="$PROVIDER_BETA_ID",base-url=https://gw-beta.example,stream-token="$PROVIDER_BETA_TOKEN" \
-       --provider name=gamma,provider-id="$PROVIDER_GAMMA_ID",base-url=https://gw-gamma.example,stream-token="$PROVIDER_GAMMA_TOKEN" \
-       --max-peers=3 \
-       --retry-budget=4 \
-       --scoreboard-out artifacts/canary.scoreboard.json \
-       --json-out artifacts/canary.fetch.json
-     ```
+     I18NF0000004X
 
-     Environment variables should contain the manifest payload digest (hex) and base64-encoded stream tokens for each provider participating in the canary.
-   - Diff `artifacts/canary.scoreboard.json` against the previous release. Any new ineligible provider or weight shift >10 % requires review.
-4. **Verify telemetry is wired.**
-   - Open the Grafana export in `docs/examples/sorafs_fetch_dashboard.json`. Ensure the `sorafs_orchestrator_*` metrics populate in staging before progressing.
+     མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་ནང་ གསལ་སྟོན་པ་ (hex) དང་ base64-encoded stream ཊོ་ཀེན་ཚུ་ ཀེ་ན་རི་ནང་ བཅའ་མར་གཏོགས་མི་ བྱིན་མི་རེ་རེ་ལུ་ འོང་དགོ།
+   - ཌིཕ་ I18NI000000011X ཧེ་མའི་གསར་བཏོན་ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན། མ་བཏུབ་པའི་བྱིན་མི་གསརཔ་ཡང་ན་ ལྗིད་ཚད་བསྒྱུར་བཅོས་ལུ་ >༡༠% ལུ་བསྐྱར་ཞིབ་འབད་དགོ།
+4. **བདེན་བཤད་འདི་ གློག་ཐག་ཅན་ཨིན།**
+   - I18NI000000012X ནང་ I18NT000000000X ཕྱིར་འདྲེན་ཁ་ཕྱེ། ཡར་འཕེལ་མ་འགྱོ་བའི་ཧེ་མ་ I18NI000000013X གི་མེ་ཊིགསི་ཚུ་ ངེས་ཏིག་བཟོ།
 
-## 2. Emergency Provider Blacklisting
+## 2. ཛ་དྲག་མཁོ་སྤྲོད་པ་ བེལེཀ་ལིགས།
 
-Follow this procedure when a provider serves corrupt chunks, times out persistently, or fails compliance checks.
+བྱིན་མི་གིས་ ངན་ལྷད་ཅན་གྱི་ཆ་ཤས་ཚུ་ ངན་ལྷད་ཅན་གྱི་ཆ་ཤས་ཚུ་ ཕྱག་ཞུ་བའི་སྐབས་ བྱ་རིམ་འདི་ རྗེས་སུ་འཇུག་སྟེ་ རྟག་བརྟན་སྦེ་ ཡང་ན་ བསྟར་སྤྱོད་འབད་མ་ཚུགས་པའི་ ཞིབ་དཔྱད་ཚུ་ འབད་མ་ཚུགསཔ་ཨིན།
 
-1. **Capture evidence.**
-   - Export the latest fetch summary (`--json-out` output). Record failing chunk indices, provider aliases, and digest mismatches.
-   - Save relevant log excerpts from `telemetry::sorafs.fetch.*` targets.
-2. **Apply an immediate override.**
-   - Mark the provider penalised in the telemetry snapshot distributed to the orchestrator (set `penalty=true` or clamp `token_health` to `0`). The next scoreboard build will exclude the provider automatically.
-   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
-   - Redeploy the updated telemetry/config bundle to the affected environment (staging → canary → production). Document the change in the incident log.
-3. **Validate the override.**
-   - Re-run the canonical fixture fetch. Confirm the scoreboard marks the provider as ineligible with reason `policy_denied`.
-   - Inspect `sorafs_orchestrator_provider_failures_total` to ensure the counter stops incrementing for the denied provider.
-4. **Escalate long-lived bans.**
-   - If the provider will remain blocked for >24 h, raise a governance ticket to rotate or suspend its advert. Until the vote passes, keep the deny list in place and refresh telemetry snapshots so the provider does not re-enter the scoreboard.
-5. **Rollback protocol.**
-   - To reinstate the provider, remove it from the deny list, redeploy, and capture a fresh scoreboard snapshot. Attach the change to the incident postmortem.
+1. **ཚད་གཞི་གི་སྒྲུབ་བྱེད་.**
+   - གསར་ཤོས་ཕིཊི་བཅུད་དོན་ (`--json-out` ཐོན་འབྲས་) ཕྱིར་འདྲེན་འབད། འཐུས་ཤོར་བྱུང་མི་ ཆ་ཤས་ཟུར་ཐོ་དང་ བྱིན་མི་ཚུ་ ཕྱིར་འཐེན་འབད་ནི་ དེ་ལས་ མ་མཐུན་མི་ཚུ་ ཐོ་བཀོད་འབད།
+   - `telemetry::sorafs.fetch.*` དམིགས་ཚད་ལས་འབྲེལ་ཡོད་དྲན་ཐོ་བཏོན་བསྡོམས།
+2.*འཕྲལ་མགྱོགས་རང་བཀག་ཐུབ་པའི་འཇུག་སྤྱོད་འབད།**
+   - བཀྲམ་སྤེལ་པ་ བརྡ་བརྒྱུདཔ་ཚུ་ལུ་ རོལ་དབྱངས་འཕྲུལ་ཆས་ལུ་ བཀྲམ་སྤེལ་འབད་མི་ བརྡ་རྟགས་བཀལ་མི་འདི་ (`penalty=true` གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན་ ཡང་ན་ བཀག་བཞག I18NI0000017X ལས་ I18NI0000018X) ཤུལ་མམ་གྱི་སྐུགས་བང་བཟོའི་བཟོ་བསྐྲུན་འདི་གིས་ བྱིན་མི་འདི་རང་བཞིན་གྱིས་ཕྱིར་བཏོན་འབད་འོང་།
+   - ad-hoc གི་ཐ་མག་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ `--deny-provider gw-alpha` ལས་ I18NI000000020X ལུ་སྤྲོད་དགོཔ་ལས་ འཐུས་ཤོར་གྱི་ལམ་འདི་ བརྒྱུད་འཕྲིན་ཁྱབ་སྤེལ་གྱི་དོན་ལུ་ བསྒུག་མ་དགོ་པར་ ལག་ལེན་འཐབ་ཨིན།
+   - དུས་མཐུན་བཟོ་ཡོད་པའི་ ཊེ་ལི་མི་ཊི་རི་/རིམ་སྒྲིག་བཱན་ཌལ་ གནོད་སྐྱོན་ཕོག་མི་མཐའ་འཁོར་ལུ་ བསྐྱར་བཟོ་འབད་ (འཁྲབ་རྩེདཔ་ → ཀེ་ན་རི་ → ཐོན་སྐྱེད)། བྱུང་ལས་དྲན་དེབ་ནང་གི་བསྒྱུར་བཅོས་འདི་ ཡིག་ཐོག་ལུ་བཀོད།
+3. **བཀག་འགོག་འདི་བདེན་དཔང་འབད།**
+   - ཀེ་ནོ་ནིག་སྒྲིག་ཆས་ལེན་ནི་འདི་ལོག་གཡོག་བཀོལ། སྐུགས་བཀོད་སྒྲིག་འདི་ བྱིན་མི་འདི་ ནུས་པ་མེདཔ་སྦེ་ ངེས་གཏན་བཟོ། རྒྱུ་མཚན་ `policy_denied`.
+   - ངོས་ལེན་མ་འབད་མི་ལུ་ གྱངས་ཁ་ཡར་སེང་འབད་ནི་ལུ་ བཀག་ཆ་འབད་ནི་ལུ་ I18NI0000002X བརྟག་དཔྱད་འབད།
+4. **གནས་ཡུན་རིང་བའི་བཀག་སྡོམ་བཀག་ཆ།**
+   - གལ་སྲིད་ བྱིན་མི་འདི་ >༢༤h གི་དོན་ལུ་ བཀག་ཆ་འབད་དེ་བཞག་པ་ཅིན་ དེ་གི་ཁྱབ་བསྒྲགས་འདི་ བསྒྱིར་ནི་ཡང་ན་ མཚམས་འཇོག་འབད་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་གི་ཤོག་འཛིན་ཡར་སེང་འབད་དགོ། ཚོགས་རྒྱན་མ་ལྷོད་ཚུན་ཚོད་ ཐོ་ཡིག་མེད་པའི་ཐོ་ཡིག་འདི་ ས་གནས་ནང་བཞག་སྟེ་ བརྡ་འཕྲིན་གྱི་པར་ཚུ་ གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ བྱིན་མི་འདི་གིས་ སྐུགས་ཀྱི་ཤོག་གུ་འདི་ ལོག་མ་བཙུགས།
+5. **རོལ་བེཀ་ མཐུན་སྒྲིག་།**
+   - བྱིན་མི་འདི་ ལོག་བཙུགས་ནིའི་དོན་ལུ་ ཐོ་ཡིག་བཀག་ཆ་ལས་ བཏོན་གཏང་ཞིནམ་ལས་ redeploy དང་ སྐུགས་གསརཔ་གི་ཐིག་ཁྲམ་གྱི་པར་ཚུ་ བཟུང་དགོ། བྱུང་རྐྱེན་གྱི་ཤུལ་ལས་ འགྱུར་བཅོས་འདི་ མཉམ་སྦྲགས་འབད།
 
-## 3. Staged Rollout Plan
+## 3. གོ་རིམ་ཅན་གྱི་ཐོ་གཞུང་འཆར་གཞི།
 
-| Phase | Scope | Required Signals | Go/No-Go Criteria |
+| དུས་རིམ་ | ཁྱབ་ཁོངས། | དགོས་མཁོའི་བརྡ་མཚོན་ | འགྱོ་/མེད་གོ་ ཚད་ཚད། |
 |-------|-------|------------------|-------------------|
-| **Lab** | Dedicated integration cluster | Manual CLI fetch against fixture payloads | All chunks succeed, provider failure counters stay at 0, retry rate < 5 %. |
-| **Staging** | Full control-plane staging | Grafana dashboard connected; alert rules in warning-only mode | `sorafs_orchestrator_active_fetches` returns to zero after each test run; no `warn/critical` alert firings. |
-| **Canary** | ≤10 % of production traffic | Pager muted but telemetry monitored in real time | Retry ratio < 10 %, provider failures isolated to known noisy peers, latency histogram matches staging baseline ±20 %. |
-| **General Availability** | 100 % roll-out | Pager rules active | Zero `NoHealthyProviders` errors for 24 h, retry ratio stable, dashboard SLA panels green. |
+| **ལབ་** | བརྩོན་ཤུགས་ཅན་གྱི་མཉམ་བསྡོམས་ཚོགས་པ་ | ལག་ཐོག་སི་ཨེལ་ཨའི་ གཏན་འཇགས་ཀྱི་ འབབ་ཁུངས་ཚུ་ལུ་ ངོ་རྒོལ་འབད་ཡོདཔ། | ཆ་ཤས་ཆ་མཉམ་མཐར་འཁྱོལ་ཅན་ བྱིན་མི་འཐུས་ཤོར་གྱི་གྱངས་ཁ་འདི་ ༠ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། |
+| **རིམ་པ་** | ཚད་འཛིན་གནམ་གྲུ་གི་གནས་རིམ་ | Grafana མཐུད་སྦྲེལ་འབད་ཡོདཔ།; ཉེན་བརྡ་རྐྱངམ་གཅིག་ཐབས་ལམ་ནང་ ཉེན་བརྡ་ལམ་ལུགས་ཚུ་ | I18NI000000023X བརྟག་དཔྱད་གཡོག་བཀོལ་བའི་ཤུལ་ལས་ ཀླད་ཀོར་ལུ་ལོག་འོང་། no `warn/critical` དྲན་སྐུལ་མེ་བཏང་བ། |
+| **ཀེ་ན་རི་** | ≤10% ཐོན་རྫས་འགྲིམ་འགྲུལ་ | Pager གིས་ སྒྲ་མེད་ དེ་འབདཝ་ད་ དུས་ཚོད་ངོ་མ་ནང་ བལྟ་རྟོག་འབད་ཡོདཔ་ཨིན། | བསྐྱར་བཟོའི་ཆ་ཚད་ < ༡༠%, མཁོ་སྤྲོད་འབད་མི་ འཐུས་ཤོར་བྱུང་མི་དང་ སྐད་ཅོར་ཅན་གྱི་མཉམ་རོགས་ དེ་ལས་ བར་ཆད་ཀྱི་ ཧིསི་ཊོ་གཱརམ་མཐུན་སྒྲིག་ཚུ་ གཞི་རྟེན་ ±༢༠% ལུ་ མཐུད་ཡོདཔ་ཨིན། |
+| **སྤྱིར་བཏང་ཐོབ་ཚུགསཔ་** | 100% བཤུད་འཕྲུལ། | ཤོག་ལེབ་ཚུ་ ཤུགས་ལྡན་ | ཀླད་ཀོར་ `NoHealthyProviders` འཛོལ་བ་ཚུ་ ཆུ་ཚོད་༢༤ གི་དོན་ལུ་ ལོག་འབད་རྩོལ་བསྐྱེད་དོ་ ཌེཤ་བོརཌི་ཨེསི་ཨེལ་ཨེ་ པེ་ནཱལ་ཚུ་ ལྗང་ཁུ་ཨིན། |
 
-For each phase:
+དུས་རིམ་རེ་རེའི་དོན་ལུ་ :
 
-1. Update the orchestrator JSON with the intended `max_providers` and retry budgets.
-2. Run `sorafs_cli fetch` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
-3. Capture scoreboard + summary artefacts and attach them to the release record.
-4. Review telemetry dashboards with the on-call engineer before promoting to the next phase.
+༡ སྙན་ཆའི་སྡེ་ཚན་ JSON འདི་ དམིགས་ཡུལ་ `max_providers` དང་ འཆར་དངུལ་ཚུ་ ལོག་འབད་རྩོལ་བསྐྱེད་དགོ།
+2. I18NI000000027X ཡང་ན་ ཨེསི་ཌི་ཀེ་ མཉམ་བསྡོམ་བརྟག་དཔྱད་ཆ་ཚང་ ཀེ་ནོ་ནིག་གཏན་འཇགས་དང་ མཐའ་འཁོར་ལས་ ངོ་ཚབ་ཀྱི་གསལ་སྟོན་ཅིག་ གཡོག་བཀོལ།
+༣ སྐུགས་ཤོག་ + བཅུད་བསྡུས་དངོས་པོ་ཚུ་ བཟུང་ཞིནམ་ལས་ གསར་བཏོན་དྲན་ཐོ་ལུ་ མཉམ་སྦྲགས་འབད།
+༤ ཤུལ་མའི་གོ་རིམ་ནང་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ ཁ་པར་ནང་བཟོ་རིག་པ་དང་གཅིག་ཁར་ བསྐྱར་ཞིབ་བརྡ་འཕྲིན་གྱི་ བརྡ་དོན་བཀོད་སྒྲིག་འབད་ནི།
 
-## 4. Observability & Incident Hooks
+## 4. བལྟ་རྟོག་དང་འབྱུང་རྐྱེན་ཟུར་ལུགས།
 
-- **Metrics:** Ensure Alertmanager monitors `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` and `sorafs_orchestrator_retries_total`. A sudden spike typically means a provider is degrading under load.
-- **Logs:** Route the `telemetry::sorafs.fetch.*` targets to the shared log aggregator. Build saved searches for `event=complete status=failed` to speed up triage.
-- **Scoreboards:** Persist every scoreboard artefact to long-term storage. The JSON doubles as the evidence trail for compliance reviews and staged rollbacks.
-- **Dashboards:** Clone the canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) into the production folder with alert rules from `docs/examples/sorafs_fetch_alerts.yaml`.
+- **Metrics:** དྲན་སྐུལ་འཕྲུལ་ཆས་ `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` དང་ `sorafs_orchestrator_retries_total` བལྟ་རྟོག་འབདཝ་ཨིན། གློ་བུར་དུ་ འཕར་ཚད་ཟེར་མི་འདི་ སྤྱིར་བཏང་ལུ་ བྱིན་མི་ཅིག་གིས་ ལྗིད་ཚད་འོག་ལུ་ ཉམས་རྒུད་འགྱོ་དོ་ཡོདཔ་ཨིན།
+- **ལོག་ཚུ་:** བགོ་བཤའ་བསྡམས་ཡོད་པའི་དྲན་ཐོ་མཉམ་བསྡོམས་འབད་མི་ལུ་ I18NI000000030X དམིགས་གཏད་ཚུ་ལམ་སྟོན། འཚོལ་ཞིབ་ཚུ་ མགྱོགས་དྲགས་བཟོ་ནི་ལུ་ `event=complete status=failed` འཚོལ་ཞིབ་ཚུ་ བསྲུང་བཞག་འབད།
+- **Scoreboards:** ཡུན་རིང་གི་གསོག་འཇོག་ལུ་ སྐུགས་བཀོད་སྒྲིག་རེ་རེ་བཞིན་ བརྩོན་ཤུགས་བསྐྱེད། JSON འདི་ བསྐྱར་ཞིབ་དང་ འཁྲབ་སྟོན་གྱི་ བསྐོར་རྒྱབ་ཀྱི་ སྒྲུབ་བྱེད་ཀྱི་ ལམ་ལུགས་ཅིག་སྦེ་ གཉིས་ལྡབ་སྦེ་ འགྱོཝ་ཨིན།
+- **ཌེཤ་བོརཌི་ཚུ་:** ཀེ་ནོ་ནིག་ཨའི་༡༨ཨེན་ཊི་༠༠༠༠༠༠༠༢ཨེགསི་བཀོད་སྒྲིག་ (I18NI000000032X) འདི་ I18NI000000033X ལས་ ཉེན་བརྡའི་ལམ་ལུགས་དང་གཅིག་ཁར་ ཐོན་སྐྱེད་སྣོད་འཛིན་ནང་ལུ་ རིགས་མཚུངས་བཟོ་བཅོས་འབད།
 
-## 5. Communication & Documentation
+## 5. བརྒྱུད་འཕྲིན་དང་ཡིག་ཆ།
 
-- Log every deny/boost change in the operations changelog with timestamp, operator, reason, and associated incident.
-- Notify SDK teams when provider weights or retry budgets change to align client-side expectations.
-- After GA completes, update `status.md` with the rollout summary and archive this runbook reference in the release notes.
+- དུས་ཚོད་མཚོན་རྟགས་དང་ བཀོལ་སྤྱོད་ རྒྱུ་མཚན་ དེ་ལས་ འབྲེལ་ཡོད་བྱུང་རིམ་ཚུ་དང་གཅིག་ཁར་ བཀོལ་སྤྱོད་བསྒྱུར་བཅོས་ལོག་ནང་ ངོས་ལེན་མ་འབད་མི་/བཱོསཊི་བསྒྱུར་བཅོས་ཆ་མཉམ་ནང་བསྐྱོད་འབད།
+- བྱིན་མི་གི་ལྗིད་ཚད་དང་ ཡང་ན་ འཆར་དངུལ་བསྒྱུར་བཅོས་ཚུ་ མཁོ་སྤྲོད་འབད་མི་-ཕྱོགས་ཀྱི་རེ་བ་ཚུ་ ཕྲང་སྒྲིག་འབད་ནི་ལུ་ འཆར་དངུལ་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ ཨེསི་ཌི་ཀེ་སྡེ་ཚན་ཚུ་ བརྡ་བསྐུལ་འབད།
+- ཇི་ཨེ་མཇུག་བསྡུ་བའི་ཤུལ་ལས་ གསར་བཏོན་དྲན་ཐོ་ཚུ་ནང་ རུལ་ཨའུཊི་བཅུད་བསྡུས་དང་ ཡིག་མཛོད་འདི་གི་གཞི་བསྟུན་འདི་དང་གཅིག་ཁར་ `status.md` དུས་མཐུན་བཟོ་དགོ།

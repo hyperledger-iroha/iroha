@@ -2079,10 +2079,11 @@ impl Actor {
         let parent_height = height.checked_sub(1)?;
         let cert = super::status::commit_qc_history()
             .into_iter()
-            .find(|candidate| {
+            .filter(|candidate| {
                 candidate.height == parent_height
                     && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-            })?;
+            })
+            .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))?;
         if cert.validator_set.is_empty() {
             return None;
         }
@@ -2145,20 +2146,22 @@ impl Actor {
             .and_then(|target_hash| {
                 super::status::commit_qc_history()
                     .into_iter()
-                    .find(|candidate| {
+                    .filter(|candidate| {
                         candidate.height == target_parent
                             && candidate.subject_block_hash == target_hash
                             && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
                     })
+                    .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))
             })
             .or_else(|| {
                 super::status::commit_qc_history()
                     .into_iter()
-                    .find(|candidate| {
+                    .filter(|candidate| {
                         candidate.height <= target_parent
                             && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
                             && candidate_matches_known_chain(candidate)
                     })
+                    .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))
             })?;
         if cert.validator_set.is_empty() {
             return None;

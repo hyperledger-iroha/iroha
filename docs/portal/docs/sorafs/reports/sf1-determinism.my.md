@@ -9,26 +9,27 @@ source_last_modified: "2026-01-04T08:19:26.498928+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS SF1 Determinism Dry-Run
 summary: Checklist and expected digests for validating the canonical `sorafs.sf1@1.0.0` chunker profile.
+translator: machine-google-reviewed
 ---
 
-# SoraFS SF1 Determinism Dry-Run
+#SoraFS SF1 Determinism Dry-Run
 
-This report captures the baseline dry-run for the canonical
-`sorafs.sf1@1.0.0` chunker profile. Tooling WG should re-run the checklist
-below when validating fixture refreshes or new consumer pipelines. Record the
-outcome of each command in the table to maintain an auditable trail.
+ဤအစီရင်ခံစာသည် canonical အတွက် အခြေခံအခြောက်ခံခြင်းအား ဖမ်းယူထားသည်။
+`sorafs.sf1@1.0.0` chunker နော်။ Tooling WG သည် checklist ကို ပြန်လည်လုပ်ဆောင်သင့်သည်။
+တပ်ဆင်မှုအား ပြန်လည်စတင်ခြင်း သို့မဟုတ် စားသုံးသူ ပိုက်လိုင်းအသစ်များကို မှန်ကန်ကြောင်း အတည်ပြုသည့်အခါ အောက်တွင်။ မှတ်တမ်းတင်ပါ။
+စာရင်းစစ်လမ်းကြောင်းကို ထိန်းသိမ်းရန် ဇယားရှိ command တစ်ခုစီ၏ ရလဒ်။
 
-## Checklist
+## စစ်ဆေးရန်စာရင်း
 
-| Step | Command | Expected Outcome | Notes |
-|------|---------|------------------|-------|
-| 1 | `cargo test -p sorafs_chunker` | All tests pass; `vectors` parity test succeeds. | Confirms canonical fixtures compile and match Rust implementation. |
-| 2 | `ci/check_sorafs_fixtures.sh` | Script exits 0; reports manifest digests below. | Verifies fixtures regenerate cleanly and signatures remain attached. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | Entry for `sorafs.sf1@1.0.0` matches registry descriptor (`profile_id=1`). | Ensures registry metadata stays in sync. |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneration succeeds without `--allow-unsigned`; manifest and signature files unchanged. | Provides determinism proof for chunk boundaries and manifests. |
-| 5 | `node scripts/check_sf1_vectors.mjs` | Reports no diff between TypeScript fixtures and Rust JSON. | Optional helper; ensure parity across runtimes (script maintained by Tooling WG). |
+| အဆင့် | အမိန့် | မျှော်လင့်ထားသောရလဒ် | မှတ်စုများ |
+|------|---------|------------------|--------|
+| ၁ | `cargo test -p sorafs_chunker` | စမ်းသပ်မှုအားလုံးအောင်မြင်; `vectors` parity စမ်းသပ်မှု အောင်မြင်သည်။ | Canonical fixtures များကို compile လုပ်ပြီး Rust အကောင်အထည်ဖော်မှုကို အတည်ပြုသည်။ |
+| 2 | `ci/check_sorafs_fixtures.sh` | Script သည် 0 ထွက်သည်; အောက်တွင် ဖော်ပြထားသော အစီရင်ခံချက်များ။ | ပစ္စည်းများကို သန့်ရှင်းသပ်ရပ်စွာ ပြန်လည်ထုတ်ပေးကြောင်း အတည်ပြုပြီး လက်မှတ်များ ပူးတွဲပါရှိမည်ဖြစ်သည်။ |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` သည် မှတ်ပုံတင်ခြင်းဖော်ပြချက် (`profile_id=1`) နှင့် ကိုက်ညီပါသည်။ | မှတ်ပုံတင်ခြင်း မက်တာဒေတာသည် တစ်ပြိုင်တည်းရှိနေကြောင်း သေချာစေပါသည်။ |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | `--allow-unsigned` မပါဘဲ ပြန်လည်ထုတ်လုပ်ခြင်းသည် အောင်မြင်သည်။ မန်နီးဖက်စ်နှင့် လက်မှတ်ဖိုင်များကို မပြောင်းလဲပါ။ | အတုံးအစည်း နယ်နိမိတ်များနှင့် သရုပ်ပြမှုများအတွက် အဆုံးအဖြတ်ပေးသည့် အထောက်အထား ပေးသည်။ |
+| 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript တပ်ဆင်မှုများနှင့် Rust JSON အကြား ကွာခြားမှုမရှိကြောင်း အစီရင်ခံပါသည်။ | ရွေးချယ်နိုင်သောအကူအညီ; runtime တစ်လျှောက် တူညီမှုရှိစေရန် (Tooling WG မှ ထိန်းသိမ်းထားသော script)။ |
 
-## Expected Digests
+## မျှော်လင့်ထားသော မှတ်တမ်းများ
 
 - Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
 - `manifest_blake3.json`: `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`
@@ -39,12 +40,12 @@ outcome of each command in the table to maintain an auditable trail.
 
 ## Sign-Off Log
 
-| Date | Engineer | Checklist Result | Notes |
-|------|----------|------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ❌ Failed | Step 1: `cargo test -p sorafs_chunker` fails `vectors` suite because fixtures are out of date. Step 2: `ci/check_sorafs_fixtures.sh` aborts—`manifest_signatures.json` missing in repo state (deleted in working tree). Step 4: `export_vectors` cannot verify signatures while the manifest file is absent. Recommend restoring the signed fixtures (or providing council key) and regenerating bindings so canonical handles are embedded as required by the tests. |
-| 2026-02-12 | Tooling (LLM) | ✅ Passed | Regenerated fixtures via `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`, producing canonical handle-only alias lists and a fresh manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`. Verified with `cargo test -p sorafs_chunker` and a clean `ci/check_sorafs_fixtures.sh` run (staged fixtures for the check). Step 5 pending until the Node parity helper lands. |
-| 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) fetched via `ci/check_sorafs_fixtures.sh`; script re-generated fixtures, confirmed manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`, and re-ran the Rust harness (Go/Node steps execute when available) with no diffs. |
+| ရက်စွဲ | အင်ဂျင်နီယာ | စာရင်းစစ်ရလဒ် | မှတ်စုများ |
+|------|----------|------------------|------|
+| 2026-02-12 | Tooling (LLM) | ❌ ပျက်ကွက် | အဆင့် 1- `cargo test -p sorafs_chunker` သည် `vectors` suite များ ခေတ်နောက်ကျနေသောကြောင့် မအောင်မြင်ပါ။ အဆင့် 2- `ci/check_sorafs_fixtures.sh` ပျက်သွားသည်—`manifest_signatures.json` သည် repo အခြေအနေတွင် ပျောက်နေသည် (အလုပ်လုပ်သစ်ပင်တွင် ဖျက်ထားသည်)။ အဆင့် 4- `export_vectors` မန်နီးဖက်စ်ဖိုင်မရှိသော်လည်း လက်မှတ်များကို အတည်မပြုနိုင်ပါ။ လက်မှတ်ထိုးထားသော ကိရိယာများကို ပြန်လည်ရယူခြင်း (သို့မဟုတ် ကောင်စီသော့ကို ပေးဆောင်ခြင်း) နှင့် စည်းနှောင်မှုများကို ပြန်လည်ထုတ်ပေးခြင်းအား စမ်းသပ်မှုများအရ လိုအပ်ချက်အရ Canonical လက်ကိုင်များကို ထည့်သွင်းထားရန် အကြံပြုအပ်ပါသည်။ |
+| 2026-02-12 | Tooling (LLM) | ✅ အောင်မြင်ပြီး | `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f` မှတစ်ဆင့် ပြန်လည်ထုတ်လုပ်ထားသော ဆက်စပ်ပစ္စည်းများ၊ canonical handle-only alias lists နှင့် အသစ်သော manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4` ကို ထုတ်လုပ်သည်။ `cargo test -p sorafs_chunker` နှင့် သန့်ရှင်းသော `ci/check_sorafs_fixtures.sh` ဖြင့် စစ်ဆေးခြင်း (စစ်ဆေးမှုအတွက် အဆင့်လိုက် တပ်ဆင်မှုများ)။ အဆင့် 5 Node parity helper ရောက်သည်အထိ ဆိုင်းငံ့ထားသည်။ |
+| 2026-02-20 | Storage Tooling CI | ✅ အောင်မြင်ပြီး | `ci/check_sorafs_fixtures.sh` မှတစ်ဆင့် ရယူခဲ့သည့် လွှတ်တော်စာအိတ် (`fixtures/sorafs_chunker/manifest_signatures.json`) ဇာတ်ညွှန်းကို ပြန်လည်ထုတ်လုပ်ထားသော ပြင်ဆင်မှုများ၊ အတည်ပြုထားသော manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`၊ နှင့် Rust ကြိုး (Go/Node အဆင့်များကို ရရှိသည့်အခါတွင် လုပ်ဆောင်ရန်) ကွဲပြားမှုမရှိပါ။ |
 
-Tooling WG should append a dated row after running the checklist. If any step
-fails, file an issue linked here and include remediation details before
-approving new fixtures or profiles.
+ကိရိယာတန်ဆာပလာ WG သည် စစ်ဆေးရန်စာရင်းကိုဖွင့်ပြီးနောက် ရက်စွဲပါအတန်းတစ်ခုကို ပေါင်းထည့်သင့်သည်။ အကြင်အဆင့်
+အဆင်မပြေပါက ဤနေရာတွင် လင့်ခ်ချိတ်ထားသော ပြဿနာကို တင်သွင်းပြီး ပြန်လည်ပြင်ဆင်ခြင်းဆိုင်ရာ အသေးစိတ်အချက်အလက်များကို မတိုင်မီ ထည့်သွင်းပါ။
+အသစ်ပြင်ဆင်မှုများ သို့မဟုတ် ပရိုဖိုင်များကို အတည်ပြုခြင်း။

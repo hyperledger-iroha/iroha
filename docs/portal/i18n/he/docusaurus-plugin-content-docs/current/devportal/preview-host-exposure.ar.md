@@ -4,13 +4,15 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-host-exposure.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # دليل تعريض مضيف المعاينة
 
 تتطلب خارطة طريق DOCS-SORA ان يعتمد كل معاينة عامة على نفس الحزمة المحققة بالـ checksum التي يختبرها المراجعون محليا. استخدم هذا الدليل بعد اكتمال تأهيل المراجعين (وتذكرة اعتماد الدعوات) لوضع مضيف المعاينة التجريبي على الشبكة.
 
-## المتطلبات المسبقة
+## ‏‎
 
 - اعتماد موجة تأهيل المراجعين وتسجيلها في متعقب المعاينة.
 - آخر بناء للبوابة موجود تحت `docs/portal/build/` وتم التحقق من checksum (`build/checksums.sha256`).
@@ -57,7 +59,7 @@ node scripts/generate-preview-descriptor.mjs       --manifest artifacts/checksum
 node scripts/generate-dns-cutover-plan.mjs       --dns-hostname docs.iroha.tech       --dns-zone sora.link       --dns-change-ticket DOCS-SORA-Preview       --dns-cutover-window "2026-03-05 18:00Z"       --dns-ops-contact "pagerduty:sre-docs"       --manifest artifacts/sorafs/portal.manifest.to       --cache-purge-endpoint https://cache.api/purge       --cache-purge-auth-env CACHE_PURGE_TOKEN       --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-شارك ملف JSON الناتج مع فريق Ops حتى يشير تغيير DNS الى digest الدقيق للـ manifest. عند اعادة استخدام واصف سابق كمصدر rollback، اضف `--previous-dns-plan path/to/previous.json`.
+شارك ملف JSON الناتج مع فريق Ops حتى يشير تغيير DNS الى digest الدقيق للـ manifest. عند اعادة استخدام واصف سابق كمصدر rollback، اضف ​​`--previous-dns-plan path/to/previous.json`.
 
 ## الخطوة 5 - فحص المضيف المنشور
 

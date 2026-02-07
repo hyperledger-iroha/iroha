@@ -6,40 +6,42 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Volunteer Briefs
 description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import VolunteerLintStatusTable from '@site/src/components/VolunteerLintStatusTable';
+VolunteerLintStatusTable ከ'@site/src/components/VolunteerLintStatusTable' አስመጣ፤
 
-## Overview
+## አጠቃላይ እይታ
 
-Volunteer briefs capture the support/oppose/context viewpoints that the Ministry of Information reviews whenever blacklist or policy changes are proposed. Every submission must follow the canonical schema implemented by `iroha_data_model::ministry::VolunteerBriefV1` (version `1`) so that:
+የበጎ ፈቃደኞች አጭር መግለጫዎች የማስታወቂያ ሚኒስቴር የተከለከሉ መዝገብ ወይም የፖሊሲ ለውጦች በቀረቡ ቁጥር የሚገመግማቸውን የድጋፍ/ተቃዋሚ/የአውድ አመለካከቶችን ይይዛሉ። እያንዳንዱ ማቅረቢያ በ`iroha_data_model::ministry::VolunteerBriefV1` (ስሪት `1`) የተተገበረውን ቀኖናዊ ንድፍ መከተል አለበት፡
 
-1. Governance dashboards can compare fact tables deterministically.
-2. Conflict-of-interest disclosures are enforced before publication.
-3. Off-topic or astroturfed submissions are suppressed without removing them from the audit trail.
+1. የአስተዳደር ዳሽቦርዶች የእውነታ ሰንጠረዦችን በቆራጥነት ማወዳደር ይችላሉ።
+2. የግጭት-ፍላጎት መግለጫዎች ከመታተማቸው በፊት ተፈጻሚ ይሆናሉ።
+3. ከርዕስ ውጪ ወይም በከዋክብት የተደገፉ ማቅረቢያዎች ከኦዲት ዱካ ሳያስወግዷቸው ይታገዳሉ።
 
-Use the template in `docs/source/ministry/volunteer_brief_template.md` or the `cargo xtask ministry-transparency ingest` helper to build a payload. The CLI validates the Norito struct, lints moderation tags, and emits a summary showing how many fact rows, citations, and disclosures were accepted.
+ጭነትን ለመገንባት አብነቱን በI18NI0000005X ወይም I18NI0000006X አጋዥ ይጠቀሙ። CLI የI18NT0000001X መዋቅርን ያጸድቃል፣የመስተካከል መለያዎችን ያዘጋጃል እና ምን ያህል የእውነታ ረድፎች፣ ጥቅሶች እና ይፋ መግለጫዎች እንደተቀበሉ የሚያሳይ ማጠቃለያ ያወጣል።
 
-## Publication pipeline & SLA
+## የህትመት ቧንቧ መስመር እና SLA
 
-| Stage | Window | Details |
-|-------|--------|---------|
-| Intake & validation | T+0 to 6 hours | Payloads are uploaded through the volunteer form or the CLI. `VolunteerBriefV1::validate` enforces the schema (version, RFC 3339 timestamp, disclosure policy, digest formatting). Failures are rejected immediately with actionable error codes. |
-| Translation & moderation | T+6 to 24 hours | Reviewers apply moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, etc.), redact contacts, and flag off-topic entries. Tags are stored in the Norito payload so downstream automation can suppress or highlight entries. |
-| Portal publication | T+24 to 48 hours | Valid briefs are published alongside the corresponding proposal page under **Volunteer Opinions**. Off-topic entries remain in the raw archive but are excluded from aggregate stance counts. |
+| መድረክ | መስኮት | ዝርዝሮች |
+|-------|--------|-----|
+| ቅበላ እና ማረጋገጫ | T+0 እስከ 6ሰአታት | ክፍያዎች የሚጫኑት በፈቃደኝነት ፎርም ወይም በCLI በኩል ነው። `VolunteerBriefV1::validate` እቅዱን ያስፈጽማል (ስሪት፣ RFC3339 የጊዜ ማህተም፣ ይፋ ማውጣት ፖሊሲ፣ የምግብ መፍጨት ሂደት)። አለመሳካቶች ሊተገበሩ በሚችሉ የስህተት ኮዶች ወዲያውኑ ውድቅ ይደረጋሉ። |
+| ትርጉም እና አወያይ | T+6 እስከ 24ሰአት | ገምጋሚዎች የሽምግልና መለያዎችን (`needs-translation`፣ `duplicate`፣ `policy-escalation`፣ ወዘተ) ይተገብራሉ፣ እውቂያዎችን ያስተካክላሉ እና ከርዕስ ውጪ ግቤቶችን ይጠቁሙ። መለያዎች በI18NT0000002X ጭነት ውስጥ ይከማቻሉ ስለዚህ የታችኛው ጅረት አውቶማቲክ ግቤቶችን ማፈን ወይም ማድመቅ ይችላል። |
+| ፖርታል ሕትመት | T+24 እስከ 48ሰአት | ትክክለኛ አጭር መግለጫዎች በ ** የበጎ ፈቃደኞች አስተያየቶች** ስር ካለው ተዛማጅ የፕሮፖዛል ገጽ ጋር ታትመዋል። ከርዕስ ውጪ ያሉ ግቤቶች በጥሬው መዝገብ ቤት ውስጥ ይቀራሉ ነገር ግን ከአጠቃላይ አቋም ቆጠራዎች የተገለሉ ናቸው። |
 
-Expedited handling (≤12 hours) is triggered automatically when the `policy-escalation` or `astroturf` tags are present. Operators can audit compliance via the Volunteer Briefs Grafana panel, which tracks the time between `submitted_at` and portal publication.
+የተፋጠነ አያያዝ (≤12ሰአታት) የ `policy-escalation` ወይም `astroturf` መለያዎች በሚገኙበት ጊዜ በራስ-ሰር ይነሳሳል። ኦፕሬተሮች በ`submitted_at` እና በፖርታል ኅትመት መካከል ያለውን ጊዜ በሚከታተለው የበጎ ፈቃደኞች አጭር መግለጫ I18NT0000000X ፓኔል በኩል ተገዢነትን ኦዲት ማድረግ ይችላሉ።
 
-## Deliverables
+## የሚደርስ
 
-- **Schema & docs:** `VolunteerBriefV1` lives in the shared data model, and the detailed field guide plus example payload reside in `docs/source/ministry/volunteer_brief_template.md` and `docs/examples/ministry/volunteer_brief_template.json`.
-- **Validation tooling:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` runs the same lints used by the portal build; `ingest --volunteer <file>` remains available when you want to stage an entire bundle for publication.
-- **Portal surfacing:** Each proposal page links to the decoded support/oppose/context briefs, making citizen opinions visible without downloading raw JSON. Moderation metadata is rendered alongside the brief so jurors understand why an entry may have been delayed or excluded.
+- ** መርሐግብር እና ሰነዶች፡** `VolunteerBriefV1` የሚኖረው በተጋራው የውሂብ ሞዴል ውስጥ ነው፣ እና ዝርዝር የመስክ መመሪያው እና ምሳሌ ክፍያ ጭነት በ`docs/source/ministry/volunteer_brief_template.md` እና I18NI0000016X ውስጥ ይኖራል።
+- ** የማረጋገጫ መሳሪያ: ** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` በፖርታል ግንባታ ጥቅም ላይ የሚውለውን ተመሳሳይ ሊንዶችን ይሰራል; አንድ ሙሉ ጥቅል ለህትመት ለማዘጋጀት ሲፈልጉ `ingest --volunteer <file>` እንዳለ ይቆያል።
+- **የፖርታል ወለል:** እያንዳንዱ የፕሮፖዛል ገጽ ከዲኮድ የተደረገው የድጋፍ/የተቃውሞ/የአውድ አጭር መግለጫዎች ጋር ያገናኛል፣የዜጎችን አስተያየት ጥሬ JSON ሳያወርዱ እንዲታዩ ያደርጋል። ጁሮዎች ግቤት ለምን እንደዘገየ ወይም እንደተገለለ እንዲረዱ የአወያይ ዲበ ዳታ ከአጭሩ ጋር ተሰርቷል።
 
-Refer to the roadmap item **MINFO-3 — Volunteer interest panel infrastructure** if additional automation (e.g., bulk import APIs or extended analytics) is required.
+የፍኖተ ካርታ ንጥሉን ይመልከቱ **MINFO-3 — የበጎ ፈቃደኞች ፍላጐት ፓነል መሠረተ ልማት** ተጨማሪ አውቶማቲክ (ለምሳሌ፡ የጅምላ አስመጪ ኤ ፒ አይዎች ወይም የተራዘመ ትንታኔ) የሚያስፈልግ ከሆነ።
 
-## Lint status dashboard
+## የሊንት ሁኔታ ዳሽቦርድ
 
-The portal build now runs `npm run generate:volunteer-lint`, which invokes `cargo xtask ministry-transparency volunteer-validate --json-output …` across every checked-in volunteer brief. The resulting manifest is rendered below so reviewers can confirm each proposal’s lint status before publishing.
+የፖርታሉ ግንባታ አሁን `npm run generate:volunteer-lint`ን ይሰራል፣ይህም `cargo xtask ministry-transparency volunteer-validate --json-output …`ን በሁሉም ተመዝግቦ በገባ የበጎ ፈቃደኝነት አጭር መግለጫ ላይ ይጠራል። የተገኘው አንጸባራቂ ከዚህ በታች ቀርቧል ስለዚህ ገምጋሚዎች ከማተምዎ በፊት የእያንዳንዱን ፕሮፖዛል ሁኔታ ማረጋገጥ ይችላሉ።
 
 <VolunteerLintStatusTable />

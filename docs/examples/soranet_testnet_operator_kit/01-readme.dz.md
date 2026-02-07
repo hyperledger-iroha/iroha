@@ -7,24 +7,25 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 74c5337171b90ea6fbac64da89c6208bf452895f69f75184db6aa3905d3bc99a
 source_last_modified: "2025-12-29T18:16:35.089470+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraNet Testnet Onboarding Kit (Phase T0)
+# SoraNet ཊེག་ཊི་ནེཊ་ཨོན་བོང་ཊིང་ཆས་ (གནས་རིམ་ T0)
 
-Welcome! You are receiving this kit as part of the closed SoraNet testnet
-(SNNet-10 phase T0). Complete every checklist item before connecting your
-relay. The Governance Council will validate your submission before whitelisting
-your descriptors.
+འབྱོན་པར་ལེགས་སོ! ཁྱོད་ཀྱིས་ ཅ་ཆས་འདི་ ཁ་བསྡམས་ཡོད་པའི་ སོ་ར་ནེཊི་ ཊེག་ནེཊི་གི་ཆ་ཤས་ཅིག་སྦེ་ ཐོབ་དོ་ཡོདཔ་ཨིན།
+(SNNet-10 དུས་རིམ་ T0). ཁྱོད་རའི་མཐུད་མ་འབད་བའི་ཧེ་མ་ ཞིབ་དཔྱད་ཐོ་ཡིག་རྣམ་གྲངས་ཆ་མཉམ་མཇུག་བསྡུ།
+རི་ལེ་ གཞུང་སྐྱོང་ཚོགས་སྡེ་གིས་ ཐོ་ཡིག་དཀརཔོ་མ་འབད་བའི་ཧེ་མ་ ཁྱོད་ཀྱི་ཞུ་ཡིག་འདི་ བདེན་དཔྱད་འབད་འོང་།
+ཁྱོད་ཀྱི་འགྲེལ་བཤད་ཚུ།
 
-Artifacts in this directory:
+སྣོད་ཐོ་འདི་ནང་ཅ་ཆས།
 
-1. `01-readme.md` — this overview.
-2. `02-checklist.md` — operator pre-flight tasks.
-3. `03-config-example.toml` — baseline relay + orchestrator configuration.
-4. `04-telemetry.md` — required dashboards and alert wiring.
-5. `05-incident-playbook.md` — brownout/downgrade response workflow.
-6. `06-verification-report.md` — template to submit after smoke tests.
-7. `07-metrics-sample.json` — example input for the SNNet-10 metrics validator.
+1. `01-readme.md` — འདི་ལྟ་སྟངས།
+2. I18NI000000001X — བཀོལ་སྤྱོད་པའི་སྔོན་འགྲོའི་ལས་ཀ་ཚུ།
+3. `03-config-example.toml` — གཞི་རྟེན་རི་ལེ་ + སྙན་ཆའི་སྒྲིག་བཀོད་རིམ་སྒྲིག་།
+4. `04-telemetry.md` — དགོས་མཁོའི་བརྡ་འཕྲིན་དང་ཉེན་བརྡ་གློག་ཐག་དགོས་པ།
+༥. `05-incident-playbook.md` — རྒྱ་སྨུག་/མར་གྱི་ལན་འདེབས་ལཱ་གི་རྒྱུན་ལམ།
+༦. `06-verification-report.md` — ཏམ་ཁུ་བརྟག་དཔྱད་འབད་བའི་ཤུལ་ལས་ ཊེམ་པེལེཊི་འབད་ནི།
+7. I18NI000000006X — ཨེསི་ཨེན་ནེཊི་-༡༠ མེ་ཊིགསི་བདེན་དཔྱད་ཀྱི་དོན་ལུ་ དཔེ་ཨིན་པུ།
 
-Keep the kit private; a signed copy will be archived by governance once your
-relay is approved.
+ཅ་ཆས་འདི་སྒེར་གྱི་བཞག། མཚན་རྟགས་བཀོད་པའི་འདྲ་བཤུས་འདི་ ཁྱོད་རའི་ཚར་ཅིག་ གཞུང་སྐྱོང་གིས་ གཏན་མཛོད་འབད་འོང་།
+རི་ལེ་འདི་ ཆ་འཇོག་འབད་ཡོདཔ་ཨིན།

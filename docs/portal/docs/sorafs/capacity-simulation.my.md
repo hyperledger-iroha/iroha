@@ -11,41 +11,42 @@ id: capacity-simulation
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+ဤအပြေးစာအုပ်သည် SF-2c စွမ်းရည်စျေးကွက် သရုပ်ဖော်ကိရိယာကို မည်သို့လုပ်ဆောင်ရမည်ကို ရှင်းပြထားပြီး ရလဒ်မက်ထရစ်များကို မြင်သာစေသည်။ ၎င်းသည် `docs/examples/sorafs_capacity_simulation/` တွင် အဆုံးအဖြတ်ပေးသော ပွဲစဉ်များကို အသုံးပြု၍ ခွဲတမ်းညှိနှိုင်းမှု၊ ရှုံးနိမ့်မှု ကိုင်တွယ်မှုနှင့် အဆုံးအဖြတ်ပေးမှုကို ဖြတ်တောက်ခြင်းတို့ကို အဆုံးအဖြတ်ပေးသည်။ Capacity payloads များသည် `sorafs_manifest_stub capacity` ကို အသုံးပြုနေဆဲဖြစ်သည်။ manifest/CAR ထုပ်ပိုးမှုစီးဆင်းမှုအတွက် `iroha app sorafs toolkit pack` ကိုသုံးပါ။
 
-## 1. Generate CLI artefacts
+## 1. CLI လက်ရာများကို ဖန်တီးပါ။
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+`run_cli.sh` သည် `sorafs_manifest_stub capacity` အား Norito ပေးချေမှုများ၊ base64 blobs၊ Torii တောင်းဆိုချက်ကောင်များနှင့် JSON အနှစ်ချုပ်များအတွက်-
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- ခွဲတမ်းညှိနှိုင်းမှုအခြေအနေတွင်ပါဝင်သော ပံ့ပိုးပေးသူကြေငြာချက်သုံးခု။
+- ထိုဝန်ဆောင်မှုပေးသူများတစ်လျှောက် အဆင့်လိုက်ဖော်ပြချက်များကို ခွဲဝေပေးသည့် ကူးယူမှုတစ်ခု။
+- ပြတ်တောက်မှုအကြိုအခြေခံလိုင်း၊ ပြတ်တောက်မှုကြားကာလနှင့် ပျက်ကွက်ပြန်လည်ရယူခြင်းအတွက် တယ်လီမီတာဓာတ်ပုံများ။
+- simulated ပြတ်တောက်ပြီးနောက် ဖြတ်တောက်ရန် တောင်းဆိုသည့် အငြင်းပွားမှုတစ်ခု။
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+ပစ္စည်းအားလုံးသည် `./artifacts` အောက်တွင် ရှိသည် (ပထမအငြင်းအခုံအဖြစ် မတူညီသောလမ်းညွှန်တစ်ခုကို ကျော်သွားခြင်းဖြင့် အစားထိုးသည်)။ လူသားဖတ်နိုင်သော အကြောင်းအရာအတွက် `_summary.json` ဖိုင်များကို စစ်ဆေးပါ။
 
-## 2. Aggregate results & emit metrics
+## 2. ရလဒ်များကို စုစည်းပြီး မက်ထရစ်များကို ထုတ်လွှတ်သည်။
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analyzer produces:
+ခွဲခြမ်းစိတ်ဖြာသူသည် ထုတ်လုပ်သည်-
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- `capacity_simulation_report.json` - စုစည်းထားသော ခွဲဝေချထားမှုများ၊ မအောင်မြင်သော မြစ်ဝကျွန်းပေါ်ဒေသများနှင့် အငြင်းပွားမှု မက်တာဒေတာ။
+- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) သည် node-exporter textfile collector သို့မဟုတ် standalone ခြစ်သည့်အလုပ်အတွက်သင့်လျော်သည်။
 
-Example Prometheus scrape configuration:
+ဥပမာ Prometheus ခြစ်ဖွဲ့စည်းမှုပုံစံ-
 
 ```yaml
 scrape_configs:
@@ -60,22 +61,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+စာသားဖိုင်စုဆောင်းသူကို `capacity_simulation.prom` တွင်ညွှန်ပြပါ (node-exporter ကိုအသုံးပြုသောအခါ `--collector.textfile.directory` မှတဆင့်ကူးယူထားသောလမ်းညွှန်ထဲသို့ ၎င်းကိုကူးယူပါ)။
 
-## 3. Import the Grafana dashboard
+## 3. Grafana ဒက်ရှ်ဘုတ်ကို တင်သွင်းပါ။
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. Grafana တွင်၊ `dashboards/grafana/sorafs_capacity_simulation.json` ကိုတင်သွင်းပါ။
+2. `Prometheus` datasource variable ကို အထက်ဖော်ပြပါ ခြစ်ပစ်ရန် စီစဉ်ထားသော ပစ်မှတ်သို့ ချည်နှောင်ပါ။
+3. အကန့်များကို စစ်ဆေးပါ-
+   - **Quota Allocation (GiB)** သည် ဝန်ဆောင်မှုပေးသူတိုင်းအတွက် ကတိကဝတ်/သတ်မှတ်ထားသော လက်ကျန်ငွေများကို ပြသသည်။
+   - **Failover Trigger** သည် ပြတ်တောက်မှု မက်ထရစ်များ စီးဝင်လာသောအခါ *Failover Active* သို့ ပြောင်းသည်။
+   - ** ပြတ်တောက်စဉ်အတွင်း Uptime Drop** သည် ဝန်ဆောင်မှုပေးသူ `alpha` အတွက် ရာခိုင်နှုန်းဆုံးရှုံးမှုကို ဇယားကွက်။
+   - **တောင်းဆိုထားသော မျဉ်းစောင်းရာခိုင်နှုန်း** သည် အငြင်းပွားမှုဖြေရှင်းချက်မှ ထုတ်နုတ်ထားသော ပြန်လည်ပြင်ဆင်မှုအချိုးကို မြင်ယောင်သည်။
 
-## 4. Expected checks
+## 4. မျှော်လင့်ထားသောစစ်ဆေးမှုများ
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` သည် `600` နှင့် ညီမျှသည်
+- `sorafs_simulation_failover_triggered` သည် `1` နှင့် အစားထိုးပေးသူမက်ထရစ်သည် `beta` ကို မီးမောင်းထိုးပြသည်။
+- `sorafs_simulation_slash_requested` သည် `0.15` (15% မျဉ်းစောင်းများ) ကို `alpha` ဝန်ဆောင်မှုပေးသူသတ်မှတ်သူအတွက် အစီရင်ခံသည်။
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+ပွဲစဉ်များကို CLI အစီအစဉ်မှ လက်ခံဆဲဖြစ်ကြောင်း အတည်ပြုရန် `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` ကိုဖွင့်ပါ။

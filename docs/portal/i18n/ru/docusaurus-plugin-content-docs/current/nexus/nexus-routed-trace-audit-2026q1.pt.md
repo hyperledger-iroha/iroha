@@ -4,66 +4,66 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-routed-trace-audit-2026q1
-title: Relatorio de auditoria routed-trace 2026 Q1 (B1)
-description: Espelho de `docs/source/nexus_routed_trace_audit_report_2026q1.md`, cobrindo os resultados trimestrais das revisoes de telemetria.
+идентификатор: nexus-routed-trace-audit-2026q1
+Название: Relatorio de Auditorium Routed-Trace 2026 Q1 (B1)
+описание: Espelho de `docs/source/nexus_routed_trace_audit_report_2026q1.md`, объединяет триместры результатов пересмотров телеметрии.
 ---
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/nexus_routed_trace_audit_report_2026q1.md`. Mantenha as duas copias alinhadas ate que as traducoes restantes cheguem.
+:::примечание Fonte canonica
+Эта страница отражает `docs/source/nexus_routed_trace_audit_report_2026q1.md`. Мантенья, как дуас копиас алинхадас, ел то, что переводил до конца.
 :::
 
-# Relatorio de auditoria Routed-Trace 2026 Q1 (B1)
+№ Аудиторского отчета Routed-Trace, 1 квартал 2026 г. (B1)
 
-O item do roadmap **B1 - Routed-Trace Audits & Telemetry Baseline** exige uma revisao trimestral do programa routed-trace do Nexus. Este relatorio documenta a janela de auditoria Q1 2026 (janeiro-marco) para que o conselho de governanca possa aprovar a postura de telemetria antes dos ensaios de lancamento Q2.
+Пункт «Дорожная карта» **B1 — Аудит маршрутизированной трассировки и базовые показатели телеметрии** требует триместральной проверки программы маршрутизированной трассировки для Nexus. Это документальный документ, посвященный первому кварталу 2026 года (Жанейро-Марко), чтобы совет управления мог утвердить положение телеметрии до начала второго квартала.
 
-## Escopo e cronograma
+## Эскопо и хронограмма
 
-| Trace ID | Janela (UTC) | Objetivo |
+| Идентификатор трассировки | Джанела (UTC) | Цель |
 |----------|--------------|-----------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00-09:45 | Verificar histogramas de admissao de lane, gossip de fila e fluxo de alertas antes da habilitacao multi-lane. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00-10:45 | Validar replay OTLP, paridade do diff bot e ingestao de telemetria de SDK antes dos marcos AND4/AND7. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00-12:30 | Confirmar deltas de `iroha_config` aprovados pela governanca e prontidao de rollback antes do corte RC1. |
+| `TRACE-LANE-ROUTING` | 2026-02-17 09:00-09:45 | Проверяйте гистограммы допуска к полосе движения, сплетни о файлах и потоки предупреждений перед использованием нескольких полос. |
+| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00-10:45 | Проверяйте воспроизведение OTLP, сравнивайте боты и получайте данные телеметрии из SDK перед марками AND4/AND7. |
+| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00-12:30 | Подтвердите изменения `iroha_config`, подтверждающие управление и запуск отката перед кортом RC1. |
 
-Cada ensaio rodou em topologia semelhante a producao com a instrumentacao routed-trace habilitada (telemetria `nexus.audit.outcome` + contadores Prometheus), regras do Alertmanager carregadas e evidencia exportada para `docs/examples/`.
+Когда вы создаете топологию самостоятельно и производите с помощью инструмента маршрутизированной трассировки (телеметрия `nexus.audit.outcome` + контакты Prometheus), проверяйте в Alertmanager запросы и экспортируйте доказательства для `docs/examples/`.
 
-## Metodologia
+## Методология
 
-1. **Coleta de telemetria.** Todos os nos emitiram o evento estruturado `nexus.audit.outcome` e as metricas associadas (`nexus_audit_outcome_total*`). O helper `scripts/telemetry/check_nexus_audit_outcome.py` fez tail do log JSON, validou o status do evento e arquivou o payload em `docs/examples/nexus_audit_outcomes/`. [scripts/telemetry/check_nexus_audit_outcome.py:1]
-2. **Validacao de alertas.** `dashboards/alerts/nexus_audit_rules.yml` e seu harness de teste garantiram que os limiares de ruido e o templating do payload permanecessem consistentes. O CI executa `dashboards/alerts/tests/nexus_audit_rules.test.yml` a cada mudanca; as mesmas regras foram exercitadas manualmente durante cada janela.
-3. **Captura de dashboards.** Operadores exportaram os paineis routed-trace de `dashboards/grafana/soranet_sn16_handshake.json` (saude de handshake) e os dashboards de visao geral de telemetria para correlacionar a saude das filas com os resultados de auditoria.
-4. **Notas de revisao.** A secretaria de governanca registrou iniciais dos revisores, decisao e tickets de mitigacao em [Nexus transition notes](./nexus-transition-notes) e no tracker de delta de configuracao (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
+1. **Сбор телеметрии.** Все исходящие данные или события, созданные `nexus.audit.outcome` и как ассоциированные метрики (`nexus_audit_outcome_total*`). Помощник `scripts/telemetry/check_nexus_audit_outcome.py` позволяет записывать журнал JSON, проверять статус события и архивировать полезную нагрузку в `docs/examples/nexus_audit_outcomes/`. [scripts/telemetry/check_nexus_audit_outcome.py:1]
+2. **Проверка предупреждений.** `dashboards/alerts/nexus_audit_rules.yml` и это гарантия того, что границы руида и шаблоны обеспечивают постоянную согласованность полезной нагрузки. O CI executa `dashboards/alerts/tests/nexus_audit_rules.test.yml` каждый раз; как mesmas regras foram exercitadas manualmente durante cada janela.
+3. **Захват информационных панелей.** Операции экспорта данных с маршрутизированной трассировкой `dashboards/grafana/soranet_sn16_handshake.json` (запись рукопожатия) и общие информационные панели телеметрии для корреляции с файлами с результатами аудитории.
+4. **Notas de revisao.** Секретарь правительственной регистрации инициирует исправления, решения и билеты по смягчению изменений в [Nexus примечания к переходу] (./nexus-transition-notes) и не отслеживает изменения конфигурации (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
 
-## Achados
-
-| Trace ID | Resultado | Evidencia | Notas |
+## Ахадос| Идентификатор трассировки | Результат | Эвиденсия | Заметки |
 |----------|---------|----------|-------|
-| `TRACE-LANE-ROUTING` | Pass | Capturas de alerta fire/recover (link interno) + replay de `dashboards/alerts/tests/soranet_lane_rules.test.yml`; diffs de telemetria registrados em [Nexus transition notes](./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | P95 de admissao da fila permaneceu em 612 ms (alvo <=750 ms). Sem follow-up. |
-| `TRACE-TELEMETRY-BRIDGE` | Pass | Payload arquivado `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` mais hash de replay OTLP registrado em `status.md`. | Os salts de redaction do SDK bateram com a base Rust; o diff bot reportou zero deltas. |
-| `TRACE-CONFIG-DELTA` | Pass (mitigation closed) | Entrada no tracker de governanca (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + manifest de perfil TLS (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + manifest do pacote de telemetria (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | A rerun Q2 hashou o perfil TLS aprovado e confirmou zero stragglers; o manifest de telemetria registra o intervalo de slots 912-936 e o workload seed `NEXUS-REH-2026Q2`. |
+| `TRACE-LANE-ROUTING` | Пройти | Запись оповещения о пожаре/восстановлении (внутренняя ссылка) + воспроизведение `dashboards/alerts/tests/soranet_lane_rules.test.yml`; зарегистрированные различия телеметрии в [Nexus примечания к переходу] (./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | P95 постоянный доступ к файлу через 612 мс (всего <= 750 мс). Последующее наблюдение за Сэмом. |
+| `TRACE-TELEMETRY-BRIDGE` | Пройти | Полезная нагрузка архивируется `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json`, а затем хэш повтора OTLP, зарегистрированный в `status.md`. | Редактирование в SDK с базой Rust; o diff-бот сообщает о нулевых дельтах. |
+| `TRACE-CONFIG-DELTA` | Пройден (устранение последствий закрыто) | Ввод без отслеживания управления (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + манифест Perfil TLS (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + манифест пакета телеметрии (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Повторный запуск Q2 должен подтвердить одобрение TLS и подтвердить отсутствие отстающих; o манифест регистрации телеметрии или интервал слотов 912–936 и o начальное значение рабочей нагрузки `NEXUS-REH-2026Q2`. |
 
-Todos os traces produziram ao menos um evento `nexus.audit.outcome` dentro de suas janelas, satisfazendo os guardrails do Alertmanager (`NexusAuditOutcomeFailure` permaneceu verde no trimestre).
+Все следы, производимые в ходе события `nexus.audit.outcome`, в день их уборки, выполняются в Alertmanager (`NexusAuditOutcomeFailure` постоянно в течение триместра).
 
-## Follow-ups
+## Последующие действия
 
-- O apendice routed-trace foi atualizado com o hash TLS `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`; a mitigacao `NEXUS-421` foi encerrada nas transition notes.
-- Continuar anexando replays OTLP brutos e artefatos de diff do Torii ao arquivo para reforcar a evidencia de paridade para revisoes Android AND4/AND7.
-- Confirmar que as proximas rehearsals `TRACE-MULTILANE-CANARY` reutilizem o mesmo helper de telemetria para que o sign-off de Q2 se beneficie do workflow validado.
+- В приложении маршрутизированная трассировка, настроенная с помощью хэша TLS `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`; чтобы уменьшить `NEXUS-421`, чтобы добавить примечания к переходу.
+- Продолжайте повторять OTLP-грубия и артефакты различий до Torii в архиве для восстановления доказательств честности для пересмотра Android AND4/AND7.
+- Подтвердите, что в ходе проксимальных репетиций `TRACE-MULTILANE-CANARY` повторно используется помощник телеметрии для завершения Q2, когда бенефициар проверяет рабочий процесс.
 
-## Indice de artefatos
+## Индекс артефатоса
 
-| Ativo | Local |
+| Ативо | Местный |
 |-------|----------|
-| Validador de telemetria | `scripts/telemetry/check_nexus_audit_outcome.py` |
-| Regras e testes de alertas | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
-| Payload de outcome de exemplo | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
-| Tracker de delta de configuracao | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
-| Cronograma e notas routed-trace | [Nexus transition notes](./nexus-transition-notes) |
+| Проверка телеметрии | `scripts/telemetry/check_nexus_audit_outcome.py` |
+| Проверка и тесты оповещения | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
+| Полезная нагрузка результата примера | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
+| Трекер изменений конфигурации | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
+| Хронограмма и заметки маршрутизированной трассировки | [Nexus примечания к переходу](./nexus-transition-notes) |
 
-Este relatorio, os artefatos acima e os exports de alertas/telemetria devem ser anexados ao log de decisao de governanca para fechar o B1 do trimestre.
+В этой связи, наши артефакты и экспорт оповещений/телеметрии должны быть добавлены к журналу решений управления для отчета или B1 в триместре.

@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/sns/local-to-global-toolkit.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Kit de direcciones Local -> Global
+# キットの指示 ローカル -> グローバル
 
-Esta pagina refleja `docs/source/sns/local_to_global_toolkit.md` del mono-repo. Empaqueta los helpers de CLI y runbooks requeridos por el item de roadmap **ADDR-5c**.
+モノレポのページ `docs/source/sns/local_to_global_toolkit.md` を参照してください。 Empaqueta は、ロードマップ **ADDR-5c** の項目に関する CLI ランブックのヘルパーを必要としています。
 
-## Resumen
+## 履歴書
 
-- `scripts/address_local_toolkit.sh` envuelve la CLI `iroha` para producir:
-  - `audit.json` -- salida estructurada de `iroha tools address audit --format json`.
-  - `normalized.txt` -- literales IH58 (preferido) / compressed (`sora`) (segunda mejor opcion) convertidos para cada selector de dominio Local.
-- Combina el script con el dashboard de ingesta de direcciones (`dashboards/grafana/address_ingest.json`)
-  y las reglas de Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para probar que el cutover Local-8 /
-  Local-12 es seguro. Observa los paneles de colision Local-8 y Local-12 y las alertas
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, y `AddressInvalidRatioSlo` antes de
-  promover cambios de manifest.
-- Referencia las [Address Display Guidelines](address-display-guidelines.md) y el
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) para contexto de UX y respuesta a incidentes.
+- `scripts/address_local_toolkit.sh` envuelve la CLI `iroha` パラ プロデューサー:
+  - `audit.json` -- `iroha tools address audit --format json` の構造。
+  - `normalized.txt` -- リテラル IH58 (preferido) / 圧縮 (`sora`) (重要なオプション) ローカルの変換セレクター。
+- ダッシュボードと指示の取り込みとスクリプトの組み合わせ (`dashboards/grafana/address_ingest.json`)
+  Local-8 のカットオーバーに関する Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) の規則
+  Local-12 エスセグロ。ローカル-8 y ローカル-12 y の衝突を観察してください
+  `AddressLocal8Resurgence`、`AddressLocal12Collision`、y `AddressInvalidRatioSlo` 前
+  プロモーターのカンビオス・デ・マニフェスト。
+- 参照先 [アドレス表示ガイドライン](address-display-guidelines.md) y el
+  [アドレス マニフェスト ランブック](../../../source/runbooks/address_manifest_ops.md) インシデントの UX 応答に関するコンテキスト。
 
-## Uso
+## うそ
 
 ```bash
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-Opciones:
+オプション:
 
-- `--format compressed (`sora`)` para salida `sora...` en lugar de IH58.
-- `--no-append-domain` para emitir literales sin dominio.
-- `--audit-only` para omitir el paso de conversion.
-- `--allow-errors` para seguir escaneando cuando aparezcan filas malformadas (coincide con el comportamiento de la CLI).
+- IH58 の `--format compressed (`sora`)` パラサリダ `sora...`。
+- `--no-append-domain` パラエミミール リテラル シン ドミニオ。
+- `--audit-only` 変換パラメータを省略します。
+- `--allow-errors` エスカネアンド クアンド アパレスカン フィラス マルフォルマダを確認してください (CLI のコンポルタミエントと一致)。
 
-El script escribe las rutas de artefactos al final de la ejecucion. Adjunta ambos archivos a
-tu ticket de gestion de cambios junto con el screenshot de Grafana que pruebe cero
-detecciones Local-8 y cero colisiones Local-12 por >=30 dias.
+このスクリプトは、最終的な射出の成果物を記述します。アジュンタ・アンボス・アルキヴォス
+チケットのカンビオス ジュント コンエル Grafana que pruebe cero のスクリーンショット
+検出ローカル 8 y cero 衝突ローカル 12、直径 30 以上。
 
-## Integracion CI
+## 統合 CI
 
-1. Ejecuta el script en un job dedicado y sube sus salidas.
-2. Bloquea merges cuando `audit.json` reporte selectores Local (`domain.kind = local12`).
-   en su valor por defecto `true` (solo override a `false` en clusters dev/test al
-   diagnosticar regresiones) y agrega
-   `iroha tools address normalize --fail-on-warning --only-local` a CI para que intentos de
-   regresion fallen antes de llegar a produccion.
+1. エジェクタ エル スクリプト en un un job dedicado y sube sus salidas.
+2. Bloquea は、cuando `audit.json` レポート セレクター ローカル (`domain.kind = local12`) をマージします。
+   欠陥のある `true` の有効性 (クラスターの開発/テストで `false` を単独でオーバーライドする)
+   診断的回帰) と集合体
+   `iroha tools address normalize --fail-on-warning --only-local` CI パラケインテント
+   回帰は、生産上の危険にさらされています。
 
-Consulta el documento fuente para mas detalles, checklists de evidencia y el snippet de
-release notes que puedes reutilizar al anunciar el cutover a clientes.
+詳細な文書、証拠およびスニペットのチェックリストを参照してください。
+リリース ノートは、クライアントのカットオーバーに関するお知らせとして再利用されます。

@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Default lane quickstart (NX-5)
 sidebar_label: Default Lane Quickstart
 description: Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/quickstart/default_lane.md`. Keep both copies
-aligned until the localization sweep lands in the portal.
+::: Canonical Source ကို သတိပြုပါ။
+ဤစာမျက်နှာသည် `docs/source/quickstart/default_lane.md` ဖြစ်သည်။ မိတ္တူ နှစ်ခုလုံးကို သိမ်းထားပါ။
+ပေါ်တယ်ရှိမြေများကို ဒေသအလိုက်ပြောင်းလဲသတ်မှတ်သည်အထိ ညှိပါ။
 :::
 
-# Default Lane Quickstart (NX-5)
+# မူရင်းလမ်းသွယ် Quickstart (NX-5)
 
-> **Roadmap context:** NX-5 — default public lane integration. The runtime now
-> exposes a `nexus.routing_policy.default_lane` fallback so Torii REST/gRPC
-> endpoints and every SDK can safely omit a `lane_id` when the traffic belongs
-> on the canonical public lane. This guide walks operators through configuring
-> the catalog, verifying the fallback in `/status`, and exercising the client
-> behaviour end to end.
+> **လမ်းပြမြေပုံအကြောင်းအရာ-** NX-5 — မူရင်းအများပြည်သူလမ်းကြား ပေါင်းစည်းမှု။ ယခု runtime
+> `nexus.routing_policy.default_lane` သည် လှည့်ကွက်ကို ထုတ်ပြသည် ထို့ကြောင့် Torii REST/gRPC
+> endpoints နှင့် SDK တစ်ခုစီတိုင်းသည် traffic ကိုပိုင်ဆိုင်သောအခါ `lane_id` ကို ဘေးကင်းစွာ ချန်လှပ်ထားနိုင်သည်
+> အများသူငါလမ်းကြား။ ဤလမ်းညွှန်ချက်သည် စီစဉ်သတ်မှတ်ခြင်းမှတစ်ဆင့် အော်ပရေတာများကို လမ်းလျှောက်ပေးသည်။
+> ကတ်တလောက်၊ `/status` တွင် ဆုတ်ယုတ်မှုကို စစ်ဆေးခြင်းနှင့် client ကို လေ့ကျင့်ခန်းလုပ်ခြင်း
+> အမူအရာ အဆုံးထိ။
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
-- A Sora/Nexus build of `irohad` (run with `irohad --sora --config ...`).
-- Access to the configuration repository so you can edit `nexus.*` sections.
-- `iroha_cli` configured to talk to the target cluster.
-- `curl`/`jq` (or equivalent) to inspect the Torii `/status` payload.
+- `irohad` (`irohad --sora --config ...`) ၏ Sora/Nexus တည်ဆောက်ခြင်း။
+- `nexus.*` ကဏ္ဍများကို တည်းဖြတ်နိုင်စေရန် ဖွဲ့စည်းမှုဆိုင်ရာ သိုလှောင်ခန်းသို့ ဝင်ရောက်ပါ။
+- `iroha_cli` ကို ပစ်မှတ်အစုအဝေးသို့ စကားပြောရန် စီစဉ်သတ်မှတ်ထားသည်။
+- `curl`/`jq` (သို့မဟုတ် ညီမျှသော) Torii `/status` ပါဝန်အား စစ်ဆေးရန်။
 
-## 1. Describe the lane and dataspace catalog
+## 1. လမ်းကြောနှင့် ဒေတာအာကာသ ကတ်တလောက်ကို ဖော်ပြပါ။
 
-Declare the lanes and dataspaces that should exist on the network. The snippet
-below (trimmed from `defaults/nexus/config.toml`) registers three public lanes
-plus matching dataspace aliases:
+ကွန်ရက်ပေါ်တွင် ရှိသင့်သော လမ်းကြောများနှင့် ဒေတာနေရာလွတ်များကို ကြေညာပါ။ အတိုအထွာ
+အောက်တွင် (`defaults/nexus/config.toml` မှ ကွပ်ထားသော) အများသုံးလမ်းသွား သုံးခုကို မှတ်ပုံတင်သည်။
+ထို့အပြင် ကိုက်ညီသော dataspace နာမည်တူများ-
 
 ```toml
 [nexus]
@@ -78,17 +80,17 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+`index` တစ်ခုစီသည် ထူးခြားပြီး တစ်ဆက်တည်းဖြစ်ရပါမည်။ Dataspace ids များသည် 64-bit တန်ဖိုးများဖြစ်သည်။
+အထက်ဖော်ပြပါ ဥပမာများသည် ရှင်းလင်းပြတ်သားမှုအတွက် လမ်းကြောညွှန်းကိန်းများကဲ့သို့ တူညီသော ဂဏန်းတန်ဖိုးများကို အသုံးပြုသည်။
 
-## 2. Set routing defaults and optional overrides
+## 2. လမ်းကြောင်းသတ်မှတ်ပုံသေများနှင့် စိတ်ကြိုက် overrides သတ်မှတ်ပါ။
 
-The `nexus.routing_policy` section controls the fallback lane and lets you
-override routing for specific instructions or account prefixes. If no rule
-matches, the scheduler routes the transaction to the configured `default_lane`
-and `default_dataspace`. The router logic lives in
-`crates/iroha_core/src/queue/router.rs` and applies the policy transparently to
-Torii REST/gRPC surfaces.
+`nexus.routing_policy` အပိုင်းသည် နောက်ပြန်လမ်းကြောကို ထိန်းချုပ်ပြီး သင့်ကိုခွင့်ပြုသည်။
+သတ်မှတ်ထားသော ညွှန်ကြားချက်များ သို့မဟုတ် အကောင့်ရှေ့ဆက်များအတွက် လမ်းကြောင်းကို အစားထိုးပါ။ စည်းကမ်းမရှိရင်
+ကိုက်ညီမှုများ၊ အချိန်ဇယားဆွဲသူက ငွေပေးငွေယူကို စီစဉ်သတ်မှတ်ထားသော `default_lane` သို့ လမ်းကြောင်းပေးသည်
+နှင့် `default_dataspace`။ Router logic သည် နေထိုင်သည်။
+`crates/iroha_core/src/queue/router.rs` နှင့် မူဝါဒကို ပွင့်လင်းမြင်သာစွာ ကျင့်သုံးပါ။
+Torii REST/gRPC မျက်နှာပြင်များ။
 
 ```toml
 [nexus.routing_policy]
@@ -110,31 +112,31 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-When you later add new lanes, update the catalog first, then extend the routing
-rules. The fallback lane should continue to point at the public lane that holds
+နောက်ပိုင်းတွင် လမ်းကြောအသစ်များ ထည့်သောအခါ၊ ကတ်တလောက်ကို ဦးစွာ အပ်ဒိတ်လုပ်ပါ၊ ထို့နောက် လမ်းကြောင်းကို တိုးချဲ့ပါ။
+စည်းကမ်း။ နောက်ပြန်လမ်းကြောသည် ထိန်းထားနိုင်သော အများသူငှာလမ်းကို ဆက်လက်ညွှန်ပြနေသင့်သည်။
 
-## 3. Boot a node with the policy applied
+## 3. အသုံးပြုထားသော မူဝါဒဖြင့် node တစ်ခုကို စတင်ပါ။
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-The node logs the derived routing policy during startup. Any validation errors
-(missing indexes, duplicated aliases, invalid dataspace ids) are surfaced before
-gossip begins.
+စတင်ချိန်တွင် node သည် ဆင်းသက်လာသောလမ်းကြောင်းပေါ်လစီကို မှတ်တမ်းတင်ပါသည်။ အတည်ပြုချက်အမှားများ
+(ပျောက်ဆုံးနေသော အညွှန်းများ၊ ပွားထားသော နာမည်တူများ၊ မမှန်ကန်သော dataspace ids) များကို ယခင်က ပေါ်လွင်စေပါသည်။
+အတင်းအဖျင်းပြောသည် ။
 
-## 4. Confirm lane governance state
+## 4. လမ်းသွားအုပ်ချုပ်မှုအခြေအနေကို အတည်ပြုပါ။
 
-Once the node is online, use the CLI helper to verify that the default lane is
-sealed (manifest loaded) and ready for traffic. The summary view prints one row
-per lane:
+node သည် အွန်လိုင်းတွင်ရှိပြီး၊ ပုံသေလမ်းကြောင်းဖြစ်ကြောင်း အတည်ပြုရန် CLI helper ကို အသုံးပြုပါ။
+အလုံပိတ် (မန်နီးဖက်စ်တင်ထားသည်) နှင့် ယာဉ်အသွားအလာအတွက် အဆင်သင့်။ အနှစ်ချုပ်မြင်ကွင်းသည် အတန်းတစ်တန်းကို ပရင့်ထုတ်သည်။
+လမ်းသွားတိုင်း-
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+နမူနာ အထွက်-
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -143,20 +145,20 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-If the default lane shows `sealed`, follow the lane governance runbook before
-allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
+ပုံသေလမ်းကြောသည် `sealed` ကိုပြသပါက၊ ရှေ့လမ်းကြောအုပ်ချုပ်မှုစာအုပ်ကို လိုက်နာပါ။
+ပြင်ပအသွားအလာခွင့်ပြုသည်။ `--fail-on-sealed` အလံသည် CI အတွက် အဆင်ပြေသည်။
 
-## 5. Inspect Torii status payloads
+## 5. Torii အခြေအနေ ပေးဆောင်မှုများကို စစ်ဆေးပါ။
 
-The `/status` response exposes both the routing policy and the per-lane scheduler
-snapshot. Use `curl`/`jq` to confirm the configured defaults and to check that
-the fallback lane is producing telemetry:
+`/status` တုံ့ပြန်မှုသည် လမ်းကြောင်းပေါ်လစီနှင့် တစ်လမ်းသွား အစီအစဉ်ဆွဲသူကို ဖော်ထုတ်ပေးသည်
+လျှပ်တစ်ပြက်။ ပြင်ဆင်ထားသော ပုံသေများကို အတည်ပြုရန်နှင့် စစ်ဆေးရန် `curl`/`jq` ကို အသုံးပြုပါ။
+နောက်ပြန်လမ်းကြောသည် တယ်လီမီတာကို ထုတ်လုပ်သည်-
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+နမူနာ အထွက်-
 
 ```json
 {
@@ -169,7 +171,7 @@ Sample output:
 }
 ```
 
-To inspect the live scheduler counters for lane `0`:
+`0` အတွက် တိုက်ရိုက် အချိန်ဇယား ကောင်တာများကို စစ်ဆေးရန်-
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -177,37 +179,37 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-This confirms that the TEU snapshot, alias metadata, and manifest flags align
-with the configuration. The same payload is what Grafana panels use for the
-lane-ingest dashboard.
+၎င်းသည် TEU လျှပ်တစ်ပြက်ရိုက်ချက်၊ alias မက်တာဒေတာနှင့် မန်နီးဖက်စ်အလံများ ကိုက်ညီကြောင်း အတည်ပြုသည်။
+configuration နှင့်အတူ။ တူညီသော payload သည် Grafana panels အသုံးပြုသည့်အရာဖြစ်သည်။
+lane-ingest ဒက်ရှ်ဘုတ်။
 
-## 6. Exercise client defaults
+## 6. အသုံးပြုသူ၏ ပုံသေများကို လေ့ကျင့်ပါ။
 
-- **Rust/CLI.** `iroha_cli` and the Rust client crate omit the `lane_id` field
-  when you do not pass `--lane-id` / `LaneSelector`. The queue router therefore
-  falls back to `default_lane`. Use explicit `--lane-id`/`--dataspace-id` flags
-  only when targeting a non-default lane.
-- **JS/Swift/Android.** Latest SDK releases treat `laneId`/`lane_id` as optional
-  and fall back to the value advertised by `/status`. Keep the routing policy in
-  sync across staging and production so mobile apps do not need emergency
-  reconfigurations.
-- **Pipeline/SSE tests.** The transaction event filters accept
-  `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
-  without an explicit lane arrive under the fallback lane id.
+- **Rust/CLI.** `iroha_cli` နှင့် Rust client crate သည် `lane_id` အကွက်ကို ချန်လှပ်ထားသည်။
+  `--lane-id` / `LaneSelector` မအောင်သောအခါ။ တန်းစီနေသော router သည် ထို့ကြောင့်
+  `default_lane` သို့ ပြန်ကျသွားသည် ။ ပြတ်သားသော `--lane-id`/`--dataspace-id` အလံများကို သုံးပါ
+  ပုံသေမဟုတ်သော လမ်းကြောတစ်ခုကို ပစ်မှတ်ထားသည့်အခါမှသာ။
+- **JS/Swift/Android။** နောက်ဆုံးထွက် SDK များသည် `laneId`/`lane_id` ကို စိတ်ကြိုက်ရွေးချယ်နိုင်သည်
+  `/status` မှ ကြော်ငြာထားသော တန်ဖိုးသို့ ပြန်ကျသွားသည်။ လမ်းကြောင်းပေါ်လစီကို ထားရှိပါ။
+  အဆင့်မြှင့်တင်ခြင်းနှင့် ထုတ်လုပ်ခြင်းတစ်လျှောက် ထပ်တူကျစေသောကြောင့် မိုဘိုင်းအက်ပ်များ အရေးပေါ်မလိုအပ်ပါ။
+  ပြင်ဆင်မှုများ။
+- **Pipeline/SSE စမ်းသပ်မှုများ။** ငွေပေးငွေယူ ကိစ္စရပ်များကို စစ်ထုတ်ခြင်း လက်ခံပါသည်။
+  `tx_lane_id == <u32>` ကြိုတင်ခန့်မှန်းချက်များ (`docs/source/pipeline.md` ကိုကြည့်ပါ)။ စာရင်းသွင်းပါ။
+  `/v1/pipeline/events/transactions` ဖြင့် ရေးထားသည်ကို သက်သေပြရန် ထို filter ကို ပေးပို့ပါ။
+  ပြတ်သားသောလမ်းကြောမရှိဘဲ လှည့်ပြန်လမ်းကြော ID အောက်တွင် ရောက်ရှိသည်။
 
-## 7. Observability and governance hooks
+## 7. Observability နှင့် governance ချိတ်
 
-- `/status` also publishes `nexus_lane_governance_sealed_total` and
-  `nexus_lane_governance_sealed_aliases` so Alertmanager can warn whenever a
-  lane loses its manifest. Keep those alerts enabled even for devnets.
-- The scheduler telemetry map and the lane governance dashboard
-  (`dashboards/grafana/nexus_lanes.json`) expect the alias/slug fields from the
-  catalog. If you rename an alias, relabel the corresponding Kura directories so
-  auditors keep deterministic paths (tracked under NX-1).
-- Parliament approvals for default lanes should include a rollback plan. Record
-  the manifest hash and governance evidence alongside this quickstart in your
-  operator runbook so future rotations do not guess the required state.
+- `/status` ကိုလည်း `nexus_lane_governance_sealed_total` နှင့် ထုတ်ဝေသည်။
+  `nexus_lane_governance_sealed_aliases` ထို့ကြောင့် Alertmanager သည် အချိန်တိုင်းသတိပေးနိုင်သည်။
+  လမ်းကြောက ထင်ရှားသည်။ devnets အတွက်ပင် ထိုသတိပေးချက်များကို ဖွင့်ထားပါ။
+- အစီအစဉ်ဆွဲသူ တယ်လီမီတာမြေပုံနှင့် လမ်းသွားအုပ်ချုပ်ရေး ဒက်ရှ်ဘုတ်
+  (`dashboards/grafana/nexus_lanes.json`) မှ alias/slug အကွက်များကို မျှော်လင့်သည်။
+  ကက်တလောက် နံမည်ပြောင်းပါက သက်ဆိုင်ရာ Kura လမ်းညွှန်များကို ပြန်တပ်ပါ။
+  စာရင်းစစ်များသည် အဆုံးအဖြတ်ပေးသည့် လမ်းကြောင်းများကို ထားရှိသည် (NX-1 အောက်တွင် ခြေရာခံသည်)။
+- ပုံသေလမ်းကြောများအတွက် လွှတ်တော်၏အတည်ပြုချက်များတွင် နောက်ပြန်ဆုတ်ခြင်းအစီအစဉ်တစ်ခု ပါဝင်သင့်သည်။ မှတ်တမ်း
+  သင့်တွင် ဤအမြန်စတင်ခြင်းနှင့်အတူ ထင်ရှားသော hash နှင့် အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထားများ
+  အော်ပရေတာ runbook ထို့ကြောင့် အနာဂတ်လည်ပတ်မှုများသည် လိုအပ်သည့်အခြေအနေကို ခန့်မှန်း၍မရပါ။
 
-Once these checks pass you can treat `nexus.routing_policy.default_lane` as the
-code paths on the network.
+ဤစစ်ဆေးမှုများပြီးသည်နှင့်သင် `nexus.routing_policy.default_lane` ကို ကုသနိုင်ပါသည်။
+ကွန်ရက်ပေါ်ရှိ ကုဒ်လမ်းကြောင်းများ။

@@ -7,57 +7,58 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a79487a5e7e8268f3a94580716a603580f17fd0d0223f10646ecda6aad2e2482
 source_last_modified: "2025-12-29T18:16:35.063907+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Examples (Rust App/Wallet)
+## Iroha Қосылу мысалдары (Rust App/Wallet)
 
-Run the two Rust examples end‑to‑end with a Torii node.
+Екі Rust мысалын Torii түйінімен соңына дейін іске қосыңыз.
 
-Prerequisites
-- Torii node with `connect` enabled at `http://127.0.0.1:8080`.
-- Rust toolchain (stable).
-- Python 3.9+ with the `iroha-python` package installed (for the CLI helper below).
+Алғы шарттар
+- `connect` бар Torii түйіні `http://127.0.0.1:8080` параметрінде қосылған.
+- Тоттан жасалған құралдар тізбегі (тұрақты).
+- `iroha-python` пакеті орнатылған Python 3.9+ (төмендегі CLI көмекшісі үшін).
 
-Examples
-- App example: `crates/iroha_torii_shared/examples/connect_app.rs`
-- Wallet example: `crates/iroha_torii_shared/examples/connect_wallet.rs`
-- Python CLI helper: `python -m iroha_python.examples.connect_flow`
+Мысалдар
+- Қолданба мысалы: `crates/iroha_torii_shared/examples/connect_app.rs`
+- Әмиян мысалы: `crates/iroha_torii_shared/examples/connect_wallet.rs`
+- Python CLI көмекшісі: `python -m iroha_python.examples.connect_flow`
 
-Order of startup
-1) Terminal A — App (prints sid + tokens, connects WS, sends SignRequestTx):
+Іске қосу тәртібі
+1) A терминалы — қолданба (sid + таңбалауыштарды басып шығарады, WS қосады, SignRequestTx жібереді):
 
-    cargo run -p iroha_torii_shared --example connect_app -- --node http://127.0.0.1:8080 --role app
+    жүк тасымалдау -p iroha_torii_shared --мысал connect_app -- --түйін http://127.0.0.1:8080 --рөл қолданбасы
 
-   Sample output:
+   Шығару үлгісі:
 
     sid=Z4... token_app=KJ... token_wallet=K0...
-    WS connected
-    app: sent SignRequestTx
-    (waiting for reply)
+    WS қосылды
+    қолданба: SignRequestTx жіберілді
+    (жауап күту)
 
-2) Terminal B — Wallet (connect with token_wallet, replies with SignResultOk):
+2) B терминалы — әмиян (token_wallet арқылы қосылыңыз, SignResultOk арқылы жауап береді):
 
-    cargo run -p iroha_torii_shared --example connect_wallet -- --node http://127.0.0.1:8080 --sid Z4... --token K0...
+    жүк жіберу -p iroha_torii_shared --мысал connect_wallet -- --түйін http://127.0.0.1:8080 --sid Z4... --token K0...
 
-   Sample output:
+   Шығару үлгісі:
 
-    wallet: connected WS
-    wallet: SignRequestTx len=3 at seq 1
-    wallet: sent SignResultOk
+    әмиян: қосылған WS
+    әмиян: SignRequestTx len=3 1-кезеңде
+    әмиян: SignResultOk жіберілді
 
-3) App terminal prints the result:
+3) Қолданба терминалы нәтижені басып шығарады:
 
-    app: got SignResultOk algo=ed25519 sig=deadbeef
+    қолданба: SignResultOk алды algo=ed25519 sig=deadbeef
 
-  Use the new `connect_norito_decode_envelope_sign_result_alg` helper (and the
-  Swift/Kotlin wrappers in this folder) to retrieve the algorithm string when
-  decoding the payload.
+  Жаңа `connect_norito_decode_envelope_sign_result_alg` көмекшісін (және
+  Осы қалтадағы Swift/Kotlin орауыштары) алгоритм жолын алу үшін
+  пайдалы жүктемені декодтау.
 
-Notes
-- Examples derive demo ephemerals from `sid` so app/wallet interoperate automatically. Do not use in production.
-- SDK enforces AEAD AAD binding and seq‑as‑nonce; post‑approval control frames should be encrypted.
-- For Swift clients, see `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` and validate with `make swift-ci` so dashboard telemetry stays aligned with Rust examples and Buildkite metadata (`ci/xcframework-smoke:<lane>:device_tag`) remains intact.
-- Python CLI helper usage:
+Ескертпелер
+- Мысалдар `sid` нұсқасынан демонстрациялық эфемерлерді алады, осылайша қолданба/әмиян автоматты түрде өзара әрекеттеседі. Өндірісте қолдануға болмайды.
+- SDK AEAD AAD байланыстыруын және ретсіздігін қамтамасыз етеді; мақұлданғаннан кейін басқару кадрлары шифрлануы керек.
+- Swift клиенттері үшін `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` бөлімін қараңыз және `make swift-ci` арқылы растаңыз, осылайша бақылау тақтасының телеметриясы Rust мысалдарымен және Buildkite метадеректері (`ci/xcframework-smoke:<lane>:device_tag`) өзгеріссіз қалады.
+- Python CLI көмекшісін пайдалану:
 
     ```bash
     python -m iroha_python.examples.connect_flow \
@@ -71,4 +72,4 @@ Notes
       --status-json-output connect-status.json
     ```
 
-  The CLI prints the typed session info, dumps the Connect status snapshot, and emits the Norito-encoded `ConnectControlOpen` frame. Pass `--send-open` to post the payload back to Torii, use `--frame-output-format binary` to write raw bytes, `--frame-json-output` for a base64-friendly JSON blob, and `--status-json-output` when you need a typed snapshot for automation. You can also load application metadata from a JSON file via `--app-metadata-file metadata.json` containing `name`, `url`, and `icon_hash` fields (see `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`). Generate a fresh template with `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json`. For telemetry-only runs, you can skip session creation entirely with `--status-only` and optionally dump JSON via `--status-json-output status.json`.
+  CLI терілген сеанс ақпаратын басып шығарады, Қосылу күйінің суретін шығарады және Norito кодталған `ConnectControlOpen` кадрын шығарады. Пайдалы жүктемені Torii ішіне қайта жіберу үшін `--send-open` өтіңіз, өңделмеген байтты жазу үшін `--frame-output-format binary` пайдаланыңыз, base64 үшін қолайлы JSON blob үшін `--frame-json-output` және автоматты түрде теру үшін I18NI00000025. `name`, `url` және `icon_hash` өрістерін қамтитын `--app-metadata-file metadata.json` арқылы JSON файлынан қолданба метадеректерін жүктей аласыз (`python/iroha_python/src/iroha_python/examples/connect_app_metadata.json` қараңыз). `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json` көмегімен жаңа үлгіні жасаңыз. Тек телеметрияға арналған іске қосулар үшін `--status-only` арқылы сеанс жасауды толығымен өткізіп жіберуге және қосымша JSON `--status-json-output status.json` арқылы тастауға болады.

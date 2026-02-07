@@ -11,38 +11,39 @@ id: pin-registry-ops
 title: Pin Registry Operations
 sidebar_label: Pin Registry Operations
 description: Monitor and triage the SoraFS pin registry and replication SLA metrics.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-## Overview
+## སྤྱི་མཐོང་།
 
-This runbook documents how to monitor and triage the SoraFS pin registry and its replication service-level agreements (SLAs). The metrics originate from `iroha_torii` and are exported via Prometheus under the `torii_sorafs_*` namespace. Torii samples the registry state on a 30 second interval in the background, so dashboards remain current even when no operators are polling the `/v1/sorafs/pin/*` endpoints. Import the curated dashboard (`docs/source/grafana_sorafs_pin_registry.json`) for a ready-to-use Grafana layout that maps directly to the sections below.
+རན་བུ་འདི་གིས་ SoraFS པིན་ཐོ་བཀོད་དང་ དེ་གི་འདྲ་བཤུས་ཞབས་ཏོག་གནས་རིམ་ཆིངས་ཡིག་ (SLAs) ཚུ་ ག་དེ་སྦེ་ ལྟ་རྟོག་དང་ འབད་ནི་ཨིན་ན་ ཡིག་ཆ་བཟོཝ་ཨིན། མེ་ཊིགསི་ཚུ་ `iroha_torii` ལས་འབྱུང་ཡོདཔ་དང་ I18NI000000019X མིང་གནས་འོག་ལུ་ I18NI0000000000X བརྒྱུད་དེ་ཕྱིར་འདྲེན་འབདཝ་ཨིན། Torii རྒྱབ་གཞི་ནང་ སྐར་ཆ་༣༠ གི་བར་མཚམས་ལུ་ ཐོ་བཀོད་གནས་སྟངས་ཀྱི་དཔེ་ཚད་ཚུ་ དཔེ་ཚད་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ `/v1/sorafs/pin/*` མཐའ་མཚམས་ཚུ་ འོས་འདེམས་འཐབ་པའི་སྐབས་ ཌེཤ་བོརཌི་ཚུ་ ད་ལྟོའི་གནས་སྟངས་ནང་ ལུས་ཡོདཔ་ཨིན། འོག་གི་དབྱེ་ཚན་ཚུ་ལུ་ཐད་ཀར་དུ་ སབ་ཁྲ་བཟོ་མི་ Grafana བཀོད་སྒྲིག་དོན་ལུ་ གཅེས་སྐྱོང་འབད་ཡོད་པའི་ ཌེཤ་བོརཌ་ (I18NI0000021X) ནང་འདྲེན་འབད།
 
-## Metric Reference
+## མེཊིག་གི་རྒྱབ་རྟེན།
 
-| Metric | Labels | Description |
+| མེ་ཊིག་ | ཁ་ཡིག་ཚུ། | འགྲེལ་བཤད་ |
 | ------ | ------ | ----------- |
-| `torii_sorafs_registry_manifests_total` | `status` (`pending` \| `approved` \| `retired`) | On-chain manifest inventory by lifecycle state. |
-| `torii_sorafs_registry_aliases_total` | — | Count of active manifest aliases recorded in the registry. |
-| `torii_sorafs_registry_orders_total` | `status` (`pending` \| `completed` \| `expired`) | Replication order backlog segmented by status. |
-| `torii_sorafs_replication_backlog_total` | — | Convenience gauge mirroring `pending` orders. |
-| `torii_sorafs_replication_sla_total` | `outcome` (`met` \| `missed` \| `pending`) | SLA accounting: `met` counts completed orders within deadline, `missed` aggregates late completions + expirations, `pending` mirrors outstanding orders. |
-| `torii_sorafs_replication_completion_latency_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Aggregated completion latency (epochs between issuance and completion). |
-| `torii_sorafs_replication_deadline_slack_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Pending-order slack windows (deadline minus issued epoch). |
+| I18NI0000022X | I18NI0000000023X (`pending` \| I18NI000000025X \|I18NI0000026X) | མི་ཚེའི་འཁོར་རིམ་གྱི་གནས་སྟངས་ཀྱིས་ རིམ་སྒྲིག་གསལ་སྟོན་ཐོ་བཀོད། |
+| I18NI0000027X | — | ཐོ་བཀོད་ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ ཤུགས་ལྡན་གྱི་གསལ་སྟོན་གྱི་གྱངས་ཁ་བཀོད། |
+| I18NI0000028X | I18NI000000000029X (I18NI000000030X \| I18NI000000031X \| `expired`) | གནས་རིམ་གྱིས་ ཆ་ཤས་འབད་ཡོད་མི་ འདྲ་བཤུས་གོ་རིམ་འདི་ རྒྱབ་གཞི་བཀོད་ནི། |
+| I18NI0000033X | — | སྟབས་བདེ་བའི་ཚད་འཇལ་མེ་ལོང་ `pending` བཀའ་རྒྱ་ཚུ། |
+| `torii_sorafs_replication_sla_total` | I18NI0000000036X (I18NI000000037X \|I18NI000000038X \|`pending`) | ཨེསི་ཨེལ་ཨེ་རྩིས་ཁྲ་: I18NI000000040X གྱངས་ཁ་ཚུ་གིས་ དུས་ཚོད་ཀྱི་ནང་འཁོད་ལུ་ བཀའ་རྒྱ་ཚུ་མཇུག་བསྡུ་ཡོདཔ་ཨིན། I18NI000000041X གིས་ མཇུག་བསྡུ་བའི་མཇུག་བསྡུའི་མཇུག་བསྡུ་ + དུས་ཡུན་ཚུ་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན། |
+| I18NI0000043X | I18NI0000000444X (I18NI000000045X \|`p95` \|I18NI0000004X \|I18NI0000000048X) | བསྡོམས་རྩིས་མཇུག་བསྡུ་བའི་ འཕྲོ་མཐུད་ (བཏོན་ནི་དང་ མཇུག་བསྡུ་བའི་བར་ན་ འགོ་བཙུགས་མི)། |
+| I18NI0000049X | (I18NI000000000051X \| I18NI000000052X \| I18NI000000053X \| I18NI0000000054X) | Pround-གོ་རིམ་གྱི་ སྒོ་སྒྲིག་ཚུ་ (དུས་ཚོད་ལས་ ཕབ་རྩིས་འདི་ epoch བཏོན་ཡོདཔ་ཨིན།) |
 
-All gauges reset on every snapshot pull, so dashboards should sample at `1m` cadence or faster.
+འཇལ་ཚད་ཆ་མཉམ་རང་ པར་རིས་འཐེན་མི་རེ་ལུ་ སླར་སྒྲིག་འབདཝ་ལས་ ཌེཤ་བོརཌི་ཚུ་གིས་ I18NI0000005X གི་ ཚད་གཞིའི་ནང་ དཔེ་ཚད་བཟོ་དགོཔ་ཨིན།
 
-## Grafana Dashboard
+## Grafana ཌེཀསི་བོཌ།
 
-The dashboard JSON ships with seven panels that cover operator workflows. The queries are listed below for quick reference if you prefer to build bespoke charts.
+ཌེཤ་བོརཌ་ཇེ་ཨེསི་ཨོ་ཨེན་གྱིས་ བཀོལ་སྤྱོད་པའི་ལཱ་ཚུ་ ཁྱབ་ཚུགས་པའི་ པེ་ནཱལ་བདུན་ཡོད་པའི་ གྲུ་ཚུ་ བཏངམ་ཨིན། འདྲི་དཔྱད་ཚུ་ ཁྱོད་ཀྱིས་ བེསི་པོཀ་ཐིག་ཁྲམ་ཚུ་བཟོ་བསྐྲུན་འབད་ནི་ལུ་དགའ་བ་ཅིན་ མགྱོགས་དྲགས་སྦེ་ གཞི་བསྟུན་འབད་ནིའི་དོན་ལུ་ འོག་ལུ་ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན།
 
-1. **Manifest lifecycle** – `torii_sorafs_registry_manifests_total` (grouped by `status`).
-2. **Alias catalogue trend** – `torii_sorafs_registry_aliases_total`.
-3. **Order queue by status** – `torii_sorafs_registry_orders_total` (grouped by `status`).
-4. **Backlog vs expired orders** – combines `torii_sorafs_replication_backlog_total` and `torii_sorafs_registry_orders_total{status="expired"}` to surface saturation.
-5. **SLA success ratio** –
+༡.
+2. **ཨ་ལི་ཡས་ཐོ་གཞུང་འགྲོས་** – I18NI0000058X.
+༣. **order གྱལ་འདི་ གནས་རིམ་** – `torii_sorafs_registry_orders_total` (I18NI000000060X གིས་སྡེ་ཚན་བཟོ་ཡོདཔ།)།
+༤. **Backlog vs དུས་ཚོད་རྫོགས་པའི་བཀའ་རྒྱ་** – ཁ་ཐོག་གི་ ཚད་གཞི་ལུ་ `torii_sorafs_replication_backlog_total` དང་ `torii_sorafs_registry_orders_total{status="expired"}` མཉམ་སྡེབ་འབདཝ་ཨིན།
+5. **SLA མཐར་འཁྱོལ་གྱི་ཆ་སྙོམས་** –
 
    ```promql
    sum(torii_sorafs_replication_sla_total{outcome="met"})
@@ -53,34 +54,34 @@ The dashboard JSON ships with seven panels that cover operator workflows. The qu
    )
    ```
 
-6. **Latency vs deadline slack** – overlay `torii_sorafs_replication_completion_latency_epochs{stat="p95"}` and `torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`. Use Grafana transformations to add `min_over_time` views when you need the absolute slack floor, for example:
+༦. **དུས་ཚོད་དང་དུས་ཚོད་ཀྱི་ slack** – བཀབ་སྟེ་ I18NI000000063X དང་ I18NI000000064X. ཁྱོད་ལུ་ དཔེར་ན་ ཆ་ཚང་སྦེ་ ལཱ་འབད་སའི་ ཐོག་ཁར་དགོ་པའི་སྐབས་ Grafana བསྒྱུར་བཅོས་ཚུ་ ལག་ལེན་འཐབ།
 
    ```promql
    min_over_time(torii_sorafs_replication_deadline_slack_epochs{stat="avg"}[15m])
    ```
 
-7. **Missed orders (1h rate)** –
+7. **བཀའ་རྒྱ་ (1h ཚད་)** –
 
    ```promql
    sum(increase(torii_sorafs_replication_sla_total{outcome="missed"}[1h]))
    ```
 
-## Alert Thresholds
+## ཉེན་བརྡ་
 
-- **SLA success < 0.95 for 15 min**
-  - Threshold: `sum(torii_sorafs_replication_sla_total{outcome="met"}) / clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) < 0.95`
-  - Action: Page SRE; start replication backlog triage.
-- **Pending backlog above 10**
-  - Threshold: `torii_sorafs_replication_backlog_total > 10` sustained for 10 min
-  - Action: Check provider availability and the Torii capacity scheduler.
-- **Expired orders > 0**
-  - Threshold: `increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0`
-  - Action: Inspect governance manifests to confirm provider churn.
-- **Completion p95 > deadline slack avg**
-  - Threshold: `torii_sorafs_replication_completion_latency_epochs{stat="p95"} > torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`
-  - Action: Verify providers are committing before deadlines; consider issuing reassignments.
+- **SLA མཐར་འཁྱོལ་ < 0.95 15min* གི་དོན་ལུ་*གི་དོན་ལུ་ཨིན།
+  - ཐེརེ་ཤོལཌི་: `sum(torii_sorafs_replication_sla_total{outcome="met"}) / clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) < 0.95`
+  - བྱ་བ་: ཤོག་ལེབ་ SRE; འདྲ་བཤུས་འདྲ་བཤུས་ལོག་ལོག་ཚོད་བརྟག་འགོ་བཙུགས།
+- **རྒྱབ་ལོག་ལོག་ལོག་ ༡༠**
+  - Treshold: I18NI000000067X སྐར་ཆ་ ༡༠ རིང་ཡུན་བརྟན་བཟོ་ཡོད།
+  - བྱ་བ་: བྱིན་མི་ཐོབ་ཐངས་དང་ I18NT0000012X ལྕོགས་གྲུབ་ཀྱི་དུས་ཚོད་བཀོད་མི་འདི་ཞིབ་དཔྱད་འབད།
+- **བཀའ་རྒྱ་ཚུ་ > ༠**
+  - ཐེརེ་ཤོལཌི་: `increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0`
+  - བྱ་བ་: བྱིན་མི་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ གཞུང་སྐྱོང་བརྟག་དཔྱད་འབདཝ་ཨིན།
+- **མཇུག་བསྡུ་ p95 > དུས་ཚོད་ཀྱི་བཀག་ཆ་ avg**
+  - ཐེརེ་ཤོལཌི་: `torii_sorafs_replication_completion_latency_epochs{stat="p95"} > torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`
+  - བྱ་བ་: དུས་ཚོད་མ་འགྱོ་བའི་ཧེ་མ་ བཀྲམ་སྤེལ་འབད་མི་ཚུ་ བདེན་དཔྱད་འབད་དོ་ཡོདཔ་ཨིན་; བསྐྱར་འགན་ཚུ་བཏོན་ནི་ལུ་བརྩི་འཇོག་འབད།
 
-### Example Prometheus Rules
+### དཔེར་བརྗོད། Prometheus བཅའ་ཁྲིམས།
 
 ```yaml
 groups:
@@ -115,43 +116,43 @@ groups:
           description: "At least one replication order expired in the last five minutes."
 ```
 
-## Triage Workflow
+## གཟེངས་བསྟོད་ལས་རིམ།
 
-1. **Identify cause**
-   - If SLA misses spike while backlog remains low, focus on provider performance (PoR failures, late completions).
-   - If backlog grows with stable misses, inspect admission (`/v1/sorafs/pin/*`) to confirm manifests awaiting council approval.
-2. **Validate provider status**
-   - Run `iroha app sorafs providers list` and verify the advertised capabilities match replication requirements.
-   - Check `torii_sorafs_capacity_*` gauges to confirm provisioned GiB and PoR success.
-3. **Reassign replication**
-   - Issue new orders via `sorafs_manifest_stub capacity replication-order` when backlog slack (`stat="avg"`) drops below 5 epochs (manifest/CAR packaging uses `iroha app sorafs toolkit pack`).
-   - Notify governance if aliases lack active manifest bindings (`torii_sorafs_registry_aliases_total` drops unexpectedly).
-4. **Document outcome**
-   - Record incident notes in the SoraFS operations log with timestamps and affected manifest digests.
-   - Update this runbook if new failure modes or dashboards are introduced.
+༡ **རྒྱུ་རྐྱེན་ངོས་འཛིན་འབད།**
+   - ཨེསི་ཨེལ་ཨེ་གིས་ རྒྱབ་ལོག་འདི་ དམའ་ཤོས་སྦེ་ལུས་པའི་སྐབས་ བརླག་སྟོར་ཤོར་པ་ཅིན་ བྱིན་མི་ལཱ་ཤུགས་ལུ་གཙོ་བོར་བསྟེན་དོ་ཡོདཔ་ཨིན།
+   - གལ་སྲིད་ རྒྱབ་ལོག་འདི་ བརྟན་ཏོག་ཏོ་སྦེ་ ཉམས་རྒུད་འགྱོ་བ་ཅིན་ ཚོགས་སྡེ་གི་ཆ་འཇོག་ལུ་ བསྒུག་སྡོད་པའི་ རྟགས་མཚན་ཚུ་ ངེས་གཏན་བཟོ་ནི་གི་དོན་ལུ་ འཛུལ་ཞུགས་ (I18NI0000070X) ཞིབ་དཔྱད་འབད།
+2. **བྱིན་མཁན་གྱི་གནས་རིམ་ནུས་ཅན་**།
+   - I18NI000000071X གཡོག་བཀོལ་ཞིནམ་ལས་ ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་ནུས་སྟོབས་མཐུན་སྒྲིག་འདྲ་བཤུས་དགོས་མཁོ་ཚུ་ བདེན་དཔྱད་འབད།
+   - I18NI0000072X གི་འཇལ་ཚད་ཚུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ GiB དང་ POR གི་མཐར་འཁྱོལ་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ ཞིབ་དཔྱད་འབད།
+3. **འདྲ་བཤུས་བསྐྱར་བཟོ་འབད།**
+   - རྒྱབ་ལོག་བཀག་ཆ་ (I18NI0000000074X) གིས་ ཨི་པོ་ཆི་ ༥ ལས་ མར་ཕབ་འབད་བའི་སྐབས་ I18NI00000000000000000073X བརྒྱུད་དེ་ བཀའ་རྒྱ་གསརཔ་ཚུ་ བཏོན་ཡོདཔ་ཨིན།
+   - གལ་སྲིད་ མིང་ཚིག་ཚུ་ལུ་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་ཚུ་ ཤུགས་ཅན་མེད་པ་ཅིན་ གཞུང་སྐྱོང་ལུ་ བརྡ་དོན་སྤྲོད་དགོ། (I18NI0000076X རེ་བ་མེད་པར་ བཀོ་བཞག།)
+༤ **ཡིག་ཆ་གྲུབ་འབྲས།**
+   - དུས་ཚོད་མཚོན་རྟགས་ཚུ་དང་གཅིག་ཁར་ SoraFS བཀོལ་སྤྱོད་དྲན་ཐོ་ནང་ བྱུང་རྐྱེན་དྲན་ཐོ་ཚུ་ ཐོ་བཀོད་དང་ གནོད་སྐྱོན་བྱུང་མི་ གསལ་སྟོན་ཚུ་ བཟུམ་འབདཝ་ཨིན།
+   - འཐུས་ཤོར་ཐབས་ལམ་གསརཔ་ ཡང་ན་ ཌེཤ་བོརཌི་ཚུ་ འགོ་བཙུགས་པ་ཅིན་ རན་བུ་འདི་ དུས་མཐུན་བཟོ་དགོ།
 
-## Rollout Plan
+## ལས་འཆར་གྱི་འཆར་གཞི།
 
-Follow this staged procedure when enabling or tightening the alias cache policy in production:
+བཟོ་བསྐྲུན་ནང་ མིང་གཞན་འདྲ་མཛོད་སྲིད་བྱུས་འདི་ ལྕོགས་ཅན་དང་ ཡང་ན་ བཀག་ཆ་འབད་བའི་སྐབས་ གོ་རིམ་ཅན་གྱི་བྱ་རིམ་འདི་ རྗེས་སུ་འཇུག་དགོ།
 
-1. **Prepare configuration**
-   - Update `torii.sorafs_alias_cache` in `iroha_config` (user → actual) with the agreed TTLs and grace windows: `positive_ttl`, `refresh_window`, `hard_expiry`, `negative_ttl`, `revocation_ttl`, `rotation_max_age`, `successor_grace`, and `governance_grace`. The defaults match the policy in `docs/source/sorafs_alias_policy.md`.
-   - For SDKs, distribute the same values through their configuration layers (`AliasCachePolicy::new(positive, refresh, hard, negative, revocation, rotation, successor, governance)` in Rust / NAPI / Python bindings) so client enforcement matches the gateway.
-2. **Dry-run in staging**
-   - Deploy the config change to a staging cluster that mirrors production topology.
-   - Run `cargo xtask sorafs-pin-fixtures` to confirm the canonical alias fixtures still decode and round-trip; any mismatch implies upstream manifest drift that must be addressed first.
-   - Exercise the `/v1/sorafs/pin/{digest}` and `/v1/sorafs/aliases` endpoints with synthetic proofs covering fresh, refresh-window, expired, and hard-expired cases. Validate the HTTP status codes, headers (`Sora-Proof-Status`, `Retry-After`, `Warning`), and JSON body fields against this runbook.
-3. **Enable in production**
-   - Roll out the new configuration via the standard change window. Apply it to Torii first, then restart gateways/SDK services once the node confirms the new policy in logs.
-   - Import `docs/source/grafana_sorafs_pin_registry.json` into Grafana (or update existing dashboards) and pin the alias cache refresh panels to the NOC workspace.
-4. **Post-deployment verification**
-   - Monitor `torii_sorafs_alias_cache_refresh_total` and `torii_sorafs_alias_cache_age_seconds` for 30 minutes. Spikes in the `error`/`expired` curves should correlate with policy refresh windows; unexpected growth means operators must inspect alias proofs and provider health before continuing.
-   - Confirm client-side logs show the same policy decisions (SDKs will surface errors when the proof is stale or expired). Absence of client warnings indicates a misconfiguration.
-5. **Fallback**
-   - If alias issuance falls behind and the refresh window trips frequently, temporarily relax the policy by increasing `refresh_window` and `positive_ttl` in config, then redeploy. Keep `hard_expiry` intact so truly stale proofs are still rejected.
-   - Revert to the prior configuration by restoring the previous `iroha_config` snapshot if telemetry continues to show elevated `error` counts, then open an incident to trace alias generation delays.
+1. **སྒྲིག་བཀོད་གྲ་སྒྲིག་**།
+   - ཆ་འཇོག་གྲུབ་པའི་ TTLs དང་ བྱིན་རླབས་སྒོ་སྒྲིག་ཚུ་དང་གཅིག་ཁར་ I18NI000000078X (user → five) ནང་ I18NI000000000000000000000000000000000000 དུས་མཐུན་བཟོ་ནི། I18NI000000083X, `rotation_max_age`, I18NI000000085X, དང་ I18NI000000086X. སྔོན་སྒྲིག་ཚུ་གིས་ I18NI0000087X ནང་ལུ་ སྲིད་བྱུས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+   - ཨེསི་ཌི་ཀེ་ཨེསི་གི་དོན་ལུ་ གནས་གོང་ཚུ་ ཁོང་རའི་རིམ་སྒྲིག་བང་རིམ་ཚུ་བརྒྱུད་དེ་བཀྲམ་སྤེལ་འབད་ (I18NI0000008X Rust / NAPI / Python binds) དེ་འབདཝ་ལས་ མཁོ་སྤྲོད་འབད་མི་འདི་གིས་ སྒོ་ར་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+༢ **འཁྲབ་སྟོན་ནང་སྐམ་བསྐྱོད་**།
+   - བཟོ་བསྐྲུན་གྱི་ཊོ་པོ་ལོ་ཇི་ལུ་ མེ་ལོང་ནང་ རིམ་སྒྲིག་བསྒྱུར་བཅོས་འདི་ བཀོད་སྒྲིག་འབད།
+   - `cargo xtask sorafs-pin-fixtures` འདི་ ཀེན་ནོ་ནིག་ཨེ་ལི་ཡསི་སྒྲིག་ཆས་ཚུ་ ད་ལྟོ་ཡང་ ཌི་ཀོཌ་དང་ སྒོར་རིམ་འགྲུལ་སྐྱོད་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ གཡོག་བཀོལ། མཐུན་སྒྲིག་མེད་པའི་ ཡར་འཕེལ་གྱི་གསལ་སྟོན་འདི་ དང་པ་རང་ ཐག་གཅད་དགོཔ་ཨིན།
+   - `/v1/sorafs/pin/{digest}` དང་ `/v1/sorafs/aliases` མཐའ་མཇུག་ཚུ་ བཅོས་མའི་བདེན་ཁུངས་ཚུ་ གསརཔ་དང་ གསརཔ་སྦེ་ སྒོ་སྒྲིག་ཚུ་ ཁྱབ་སྟེ་ དུས་ཚོད་རྫོགས་ཏེ་ དུས་ཚོད་རྫོགས་མི་ དེ་ལས་ དཀའ་ངལ་ཅན་གྱི་གནས་སྟངས་ཚུ་ ལག་ལེན་འཐབ་ཨིན། ཨེཆ་ཊི་ཊི་པི་གནས་རིམ་ཨང་རྟགས་ཚུ་ མགོ་ཡིག་ཚུ་ (`Sora-Proof-Status`, `Retry-After`, I18NI000000094X) དང་ རན་བུཀ་འདི་དང་འགལ་བའི་ ཇེ་ཨེསི་ཨོན་གཟུགས་ཀྱི་ས་སྒོ་ཚུ་ བདེན་དཔྱད་འབད།
+3. **ཐོན་སྐྱེད་ནང་ལྕོགས་ཅན་**།
+   - ཚད་ལྡན་བསྒྱུར་བཅོས་སྒོ་སྒྲིག་བརྒྱུད་དེ་ རིམ་སྒྲིག་གསརཔ་འདི་ བཤུད་འབད། དེ་ དང་པ་ར་ I18NT0000013X ལུ་འཇུག་སྤྱོད་འབད་ཞིནམ་ལས་ མཐུད་མཚམས་དེ་གིས་ དྲན་དེབ་ནང་ སྲིད་བྱུས་གསརཔ་འདི་ ངེས་དཔྱད་འབད་ཚརཝ་ད་ འཛུལ་སྒོ་/ཨེསི་ཌི་ཀེ་ཞབས་ཏོག་ཚུ་ ལོག་འགོ་བཙུགས།
+   - `docs/source/grafana_sorafs_pin_registry.json` Grafana (ཡང་ན་ ད་ལྟོ་ཡོད་པའི་ཌེཤ་བོརཌི་ཚུ་དུས་མཐུན་བཟོ་ནི་) ནང་འདྲེན་འབད་ཞིནམ་ལས་ NOC ལཱ་གི་ས་སྒོ་ལུ་ མིང་གཞན་འདྲ་མཛོད་གསརཔ་གི་པེ་ནཱལ་ཚུ་ ནང་འདྲེན་འབད།
+༤ **བཀོད་རྒྱ་སྤྲོད་པའི་བདེན་དཔང་**།
+   - སྐར་མ་ ༣༠ རིང་ `torii_sorafs_alias_cache_refresh_total` དང་ `torii_sorafs_alias_cache_age_seconds` བལྟ་རྟོག་འབད། I18NI000000098X/I18NI0000009X ནང་ལུ་ སྤྱང་ཀི་ཚུ་གིས་ སྲིད་བྱུས་གསརཔ་བཟོ་བའི་སྒོ་སྒྲིག་ཚུ་དང་ འབྲེལ་བ་འཐབ་དགོཔ་ཨིན། རེ་བ་མེད་པའི་ཡར་རྒྱས་ཟེར་མི་འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འཕྲོ་མཐུད་མ་འབད་བའི་ཧེ་མ་ མིང་གཞན་བདེན་ཁུངས་དང་ གསོ་བའི་འཕྲོད་བསྟེན་ཚུ་ བརྟག་དཔྱད་འབད་དགོཔ་ཨིན།
+   - མཁོ་སྤྲོད་པ་-ཕྱོགས་དྲན་ཐོ་ཚུ་ ངེས་དཔྱད་ཀྱིས་ སྲིད་བྱུས་གྲོས་ཐག་གཅིགཔོ་སྟོནམ་ཨིན། (བདེན་ཁུངས་འདི་ སྒྲིང་སྒྲི་ཡང་ན་ དུས་ཡུན་ཚང་བའི་སྐབས་ འཛོལ་བ་ཚུ་ ཁ་ཐོག་ལུ་ཐོན་འོང་)། མཁོ་སྤྲོད་པའི་ཉེན་བརྡ་མེད་མི་འདི་གིས་ རིམ་སྒྲིག་ལོག་སྤྱོད་འབད་བའི་བརྡ་སྟོནམ་ཨིན།
+༥ **ཕོལ་བེག་**
+   - གལ་སྲིད་ མིང་གཞན་སྤྲོད་ལེན་གྱི་ ཕྱིར་འཐེན་དང་ སྒོ་སྒྲིག་འགྲུལ་སྐྱོད་ཚུ་ འཕྲལ་འཕྲལ་སྦེ་ར་ གསརཔ་བཟོ་ཞིནམ་ལས་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ I18NI000000100X དང་ I18NI00000010101 དེ་ལས་ redeploy ཡར་སེང་འབད་དེ་ སྲིད་བྱུས་འདི་ གནས་སྐབས་ཅིག་ ངལ་གསོ་འབད་དགོ། `hard_expiry` འདི་ལྟར་བདེན་པའི་བདེན་ཁུངས་ཚུ་ ད་ལྟོ་ཡང་ ངོས་ལེན་མ་འབད་བར་ བཞག་དགོ།
+   - ཧེ་མའི་རིམ་སྒྲིག་ལུ་ ཕྱིར་ལོག་འབད་དེ་ ཧེ་མའི་ `iroha_config` པར་ལེན་འདི་ འཕྲོ་མཐུད་དེ་རང་ `error` གྱངས་ཁ་ཚུ་སྟོན་ཞིནམ་ལས་ མིང་གཞན་བཏོན་ནིའི་དོན་ལུ་ བྱུང་རྐྱེན་ཅིག་ཁ་ཕྱེ་དགོ།
 
-## Related Materials
+## འབྲེལ་བའི་རྒྱུ་ཆ།
 
-- `docs/source/sorafs/pin_registry_plan.md` — implementation roadmap and governance context.
-- `docs/source/sorafs/runbooks/sorafs_node_ops.md` — storage worker operations, complements this registry playbook.
+- `docs/source/sorafs/pin_registry_plan.md` — ལག་ལེན་འཐབ་སའི་ས་ཁྲ་དང་ གཞུང་སྐྱོང་སྐབས་དོན།
+- `docs/source/sorafs/runbooks/sorafs_node_ops.md` — གསོག་འཇོག་ལས་བྱེད་པའི་བཀོལ་སྤྱོད་ཚུ་གིས་ ཐོ་བཀོད་ཀྱི་རྩེད་དེབ་འདི་ ལྷན་ཐབས་འབདཝ་ཨིན།
