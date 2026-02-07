@@ -116,8 +116,11 @@ impl Topology {
 
     /// Index of proxy tail
     pub fn proxy_tail_index(&self) -> usize {
-        // NOTE: last element of set A
-        self.min_votes_for_commit() - 1
+        if self.0.len() <= 3 {
+            return self.min_votes_for_commit() - 1;
+        }
+        // NOTE: for larger sets, keep proxy-tail aligned with 2f position.
+        self.max_faults().saturating_mul(2)
     }
 
     /// Deterministic set of collector indices for the current topology.
@@ -415,8 +418,7 @@ impl Topology {
         }
     }
 
-    /// Add or remove peers from the topology (test helper).
-    #[cfg(test)]
+    /// Add or remove peers from the topology.
     fn update_peer_list(&mut self, new_peers: impl IntoIterator<Item = PeerId>) {
         let (old_peers, new_peers): (IndexSet<_>, IndexSet<_>) = new_peers
             .into_iter()
@@ -448,7 +450,6 @@ impl Topology {
     }
 
     /// Re-arrange the set of peers after each successful block commit.
-    #[cfg(test)]
     fn rotate_set_a(&mut self) {
         let rotate_at = self.min_votes_for_commit();
         self.0[..rotate_at].rotate_left(1);
@@ -456,20 +457,16 @@ impl Topology {
 
     /// Update topology after a block has been committed.
     ///
-    /// Peer ordering is canonicalized (sorted by `PeerId`) to keep topology
-    /// deterministic across nodes and restarts. Leader rotation is now derived
-    /// from PRF-based ordering at selection time, so the previous block hash is
-    /// no longer used here.
+    /// Set A is rotated, membership is refreshed, and final ordering is
+    /// canonicalized so all peers derive the same post-commit topology.
     pub fn block_committed(
         &mut self,
         new_peers: impl IntoIterator<Item = PeerId>,
         _prev_block_hash: HashOf<BlockHeader>,
     ) {
-        // Canonicalize ordering to keep topology deterministic across nodes and restarts.
-        let mut peers: Vec<PeerId> = new_peers.into_iter().collect();
-        peers.sort();
-        peers.dedup();
-        self.0 = peers;
+        self.rotate_set_a();
+        self.update_peer_list(new_peers);
+        self.canonicalize_order();
         self.1 = 0;
     }
 

@@ -7431,6 +7431,8 @@ pub struct Metrics {
     pub torii_contract_throttled_total: IntCounterVec,
     /// Torii contract endpoints returning errors (labeled by endpoint).
     pub torii_contract_errors_total: IntCounterVec,
+    /// SNS registrar outcomes grouped by result and suffix.
+    pub sns_registrar_status_total: IntCounterVec,
     /// Torii account address rejects grouped by endpoint/reason.
     pub torii_address_invalid_total: IntCounterVec,
     /// Torii account-domain selections grouped by endpoint/domain kind.
@@ -12870,9 +12872,18 @@ impl Default for Metrics {
             &["endpoint"],
         )
         .expect("Infallible");
+        let sns_registrar_status_total = IntCounterVec::new(
+            Opts::new(
+                "sns_registrar_status_total",
+                "SNS registrar operation outcomes grouped by result and suffix",
+            ),
+            &["result", "suffix"],
+        )
+        .expect("Infallible");
         register_guarded(&registry, &torii_proof_throttled_total);
         register_guarded(&registry, &torii_contract_throttled_total);
         register_guarded(&registry, &torii_contract_errors_total);
+        register_guarded(&registry, &sns_registrar_status_total);
         let torii_active_connections_total = GenericGaugeVec::new(
             Opts::new(
                 "torii_active_connections_total",
@@ -14281,6 +14292,7 @@ impl Default for Metrics {
             torii_proof_throttled_total,
             torii_contract_throttled_total,
             torii_contract_errors_total,
+            sns_registrar_status_total,
             torii_active_connections_total,
             torii_connect_buffered_sessions,
             torii_connect_total_buffer_bytes,
@@ -14750,6 +14762,13 @@ impl Metrics {
     pub fn inc_torii_address_invalid(&self, endpoint: &str, reason: &str) {
         self.torii_address_invalid_total
             .with_label_values(&[endpoint, reason])
+            .inc();
+    }
+
+    /// Record an SNS registrar outcome grouped by result and suffix.
+    pub fn inc_sns_registrar_status(&self, result: &str, suffix: &str) {
+        self.sns_registrar_status_total
+            .with_label_values(&[result, suffix])
             .inc();
     }
 
@@ -16655,6 +16674,27 @@ mod test {
             metrics
                 .torii_operator_auth_lockout_total
                 .with_label_values(&["gate", "invalid_session"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn records_sns_registrar_status_metrics() {
+        let metrics = Metrics::default();
+        metrics.inc_sns_registrar_status("ok", "sora");
+        metrics.inc_sns_registrar_status("error", "sora");
+        assert_eq!(
+            metrics
+                .sns_registrar_status_total
+                .with_label_values(&["ok", "sora"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sns_registrar_status_total
+                .with_label_values(&["error", "sora"])
                 .get(),
             1
         );

@@ -28,6 +28,18 @@ Current target languages:
 - Russian (`ru`, Русский, LTR)
 - Arabic (`ar`, العربية, RTL)
 - Urdu (`ur`, اردو, RTL)
+- Burmese (`my`, မြန်မာ, LTR)
+- Georgian (`ka`, ქართული, LTR)
+- Armenian (`hy`, Հայերեն, LTR)
+- Azerbaijani (`az`, Azərbaycan dili, LTR)
+- Kazakh (`kk`, Қазақ тілі, LTR)
+- Bashkir (`ba`, Башҡорт теле, LTR)
+- Amharic (`am`, አማርኛ, LTR)
+- Dzongkha (`dz`, རྫོང་ཁ, LTR)
+- Uzbek (`uz`, Oʻzbekcha, LTR)
+- Mongolian (`mn`, Монгол, LTR)
+- Chinese Traditional (`zh-hant`, 繁體中文, LTR)
+- Chinese Simplified (`zh-hans`, 简体中文, LTR)
 
 ## Generating translation stubs
 

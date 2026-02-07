@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Georgian (ka) translation. Replace this content with the full translation. -->
+
+---
+lang: ka
+direction: ltr
+source: docs/source/sorafs_gateway_conformance_backlog.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 9d01d4577391cff6d0b4c547866a0f795699fc0c0e86112a91685a98f6d22387
+source_last_modified: "2025-12-29T18:16:36.140877+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Georgian translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

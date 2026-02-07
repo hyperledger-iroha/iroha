@@ -3157,6 +3157,16 @@ async fn merge_committee_signatures_commit_merge_entry() {
         &actor.state,
         &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
     );
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let lane_peers: Vec<_> = lane_keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        insert_consensus_keys_for_peers(&mut block, &lane_peers, &lane_keypairs);
+        block.commit();
+    }
     let mut topo = actor.state.commit_topology.block();
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());
@@ -3216,6 +3226,16 @@ async fn merge_committee_accepts_remote_signature() {
         &actor.state,
         &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
     );
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let lane_peers: Vec<_> = lane_keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        insert_consensus_keys_for_peers(&mut block, &lane_peers, &lane_keypairs);
+        block.commit();
+    }
     let mut topo = actor.state.commit_topology.block();
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());

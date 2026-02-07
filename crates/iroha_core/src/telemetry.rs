@@ -6006,6 +6006,11 @@ impl Telemetry {
         }
     }
 
+    /// Record an SNS registrar outcome grouped by result and suffix.
+    pub fn inc_sns_registrar_status(&self, result: &'static str, suffix: &str) {
+        self.metrics.inc_sns_registrar_status(result, suffix);
+    }
+
     /// Record an invalid Torii address observation labeled by endpoint + reason.
     pub fn inc_torii_address_invalid(&self, endpoint: &'static str, reason: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -13336,6 +13341,14 @@ mod tests {
                 .get_sample_count(),
             1
         );
+        telemetry.inc_sns_registrar_status("ok", "sora");
+        assert_eq!(
+            metrics
+                .sns_registrar_status_total
+                .with_label_values(&["ok", "sora"])
+                .get(),
+            1
+        );
         telemetry.disable();
         telemetry.inc_torii_signature_limit_reject(10, 7, "single");
         assert_eq!(
@@ -13403,6 +13416,15 @@ mod tests {
                 .get_sample_count(),
             1,
             "disabled telemetry must not record attachment sanitize latency"
+        );
+        telemetry.inc_sns_registrar_status("ok", "sora");
+        assert_eq!(
+            metrics
+                .sns_registrar_status_total
+                .with_label_values(&["ok", "sora"])
+                .get(),
+            2,
+            "SNS registrar status must continue to track handler outcomes even when periodic telemetry is disabled"
         );
     }
 

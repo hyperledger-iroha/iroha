@@ -3210,7 +3210,7 @@ impl Actor {
             );
         }
         for peer in collector_targets {
-            self.schedule_background(BackgroundRequest::Post {
+            self.schedule_background_via_queue(BackgroundRequest::Post {
                 peer,
                 msg: BlockMessageWire::with_encoded(
                     Arc::clone(&vote_msg),
@@ -3373,7 +3373,7 @@ impl Actor {
             );
         }
         for peer in targets {
-            self.schedule_background(BackgroundRequest::Post {
+            self.schedule_background_via_queue(BackgroundRequest::Post {
                 peer,
                 msg: BlockMessageWire::with_encoded(
                     Arc::clone(&vote_msg),
@@ -3684,7 +3684,7 @@ impl Actor {
             let msg = Arc::new(msg);
             let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
             for peer in &collector_targets {
-                self.schedule_background(BackgroundRequest::Post {
+                self.schedule_background_via_queue(BackgroundRequest::Post {
                     peer: peer.clone(),
                     msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                 });

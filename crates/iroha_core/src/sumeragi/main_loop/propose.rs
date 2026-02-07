@@ -1219,6 +1219,16 @@ impl Actor {
             // Loop back consensus messages locally so the leader participates immediately.
             self.handle_proposal_hint(proposal_hint)?;
             self.handle_proposal(proposal)?;
+            // Local loopback consumes the cache entries; keep the proposal/hint cached so
+            // pacemaker rebroadcast can recover lagging peers in the same view.
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_hint(proposal_hint);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_proposal(proposal);
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();
@@ -1257,6 +1267,16 @@ impl Actor {
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
                 self.handle_block_created(block_msg, None)?;
             }
+            // `handle_block_created` can clear the slot cache while finalizing local state.
+            // Keep the proposal/hint cached for same-view pacemaker rebroadcast checks.
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_hint(proposal_hint);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_proposal(proposal);
 
             if let Some(plan) = rbc_plan.take() {
                 self.broadcast_rbc_session_plan(plan.primary)?;
@@ -1469,7 +1489,29 @@ impl Actor {
         self.subsystems.propose.backpressure_gate.refresh();
         let queue_state = self.subsystems.propose.backpressure_gate.state();
         let blocking_pending = self.blocking_pending_blocks_len_with_progress(now);
-        let active_pending = blocking_pending > self.config.pacemaker.active_pending_soft_limit;
+        let (tip_height, tip_hash) = {
+            let view = self.state.view();
+            (view.height(), view.latest_block_hash())
+        };
+        let pending_votes_or_qc = self.pending.pending_blocks.values().any(|pending| {
+            if pending.aborted
+                || !super::pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+            {
+                return false;
+            }
+            let block_hash = pending.block.hash();
+            pending.precommit_vote_sent
+                || pending.commit_qc_seen
+                || self.pending_block_has_votes(block_hash, pending.height, pending.view)
+                || self.pending_block_has_qc(block_hash, pending.height, pending.view)
+        });
+        let active_pending = pending_votes_or_qc
+            || blocking_pending > self.config.pacemaker.active_pending_soft_limit;
         let rbc_backlog_summary = self.rbc_backlog_summary();
         let mut rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
         let queue_depths = status::worker_queue_depth_snapshot();
