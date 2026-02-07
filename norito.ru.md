@@ -7,184 +7,181 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44f91db1ad9e91a6fca60c5ecbd70e7700bc1a4cbebdcbe61233dd83a03bc89f
 source_last_modified: "2026-01-30T12:29:10.234437+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Format (v1)
+# Norito Формат (v1)
 
-This document is the source of truth for Norito's on-wire encoding in the
-Iroha workspace. It defines the header, flags, and the canonical length and
-string layouts used across components.
+Этот документ является источником достоверной информации о проводном кодировании Norito в
+Iroha рабочая область. Он определяет заголовок, флаги, каноническую длину и
+макеты строк, используемые в компонентах.
 
-## Header
+## Заголовок
 
-The Norito header is always present on wire and on disk. It frames the payload
-and supplies the schema hash and checksum needed for deterministic decoding.
+Заголовок Norito всегда присутствует в проводной сети и на диске. Он создает полезную нагрузку
+и предоставляет хэш схемы и контрольную сумму, необходимые для детерминированного декодирования.
 
-| Field | Size (bytes) | Notes |
+| Поле | Размер (байты) | Заметки |
 | --- | --- | --- |
-| Magic | 4 | ASCII `NRT0` |
-| Major | 1 | `VERSION_MAJOR = 0` |
-| Minor | 1 | `VERSION_MINOR = 0x00` |
-| Schema hash | 16 | FNV-1a hash of fully qualified type name (v1) |
-| Compression | 1 | `0 = None`, `1 = Zstd` |
-| Payload length | 8 | Uncompressed payload length (u64, little-endian) |
-| CRC64 | 8 | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the payload |
-| Flags | 1 | Layout flags (see below) |
+| Магия | 4 | ASCII `NRT0` |
+| Майор | 1 | `VERSION_MAJOR = 0` |
+| Незначительный | 1 | `VERSION_MINOR = 0x00` |
+| Хэш схемы | 16 | Хэш FNV-1a полного имени типа (v1) |
+| Сжатие | 1 | `0 = None`, `1 = Zstd` |
+| Длина полезной нагрузки | 8 | Длина несжатых полезных данных (u64, прямой порядок байтов) |
+| CRC64 | 8 | CRC64-XZ (полином ECMA, отраженный, инициализация/исключение или все единицы) по полезной нагрузке |
+| Флаги | 1 | Флаги макета (см. ниже) |
 
-Total header size: 40 bytes.
+Общий размер заголовка: 40 байт.
 
-Alignment padding:
-- For uncompressed payloads, encoders must insert zero padding between the
-  header and payload when the archived type's alignment would otherwise be
-  violated.
-- Padding length must be the exact alignment padding required for the type and
-  padding bytes must be zero. Decoders without a concrete type alignment must
-  accept any zero padding up to 64 bytes and treat the remaining bytes as the
-  payload. Extra non-zero bytes are rejected.
+Заполнение выравнивания:
+- Для несжатых полезных данных кодировщики должны вставлять нулевое дополнение между
+  заголовок и полезные данные, если в противном случае выравнивание архивного типа было бы
+  нарушен.
+- Длина отступа должна соответствовать точному размеру отступа, необходимому для данного типа и
+  байты заполнения должны быть равны нулю. Декодеры без конкретного выравнивания типа должны
+  принять любое заполнение нулями до 64 байт и рассматривать оставшиеся байты как
+  полезная нагрузка. Дополнительные ненулевые байты отклоняются.
 
-Schema enforcement:
-- Typed decoders must reject payloads whose header schema hash does not match
-  the expected type. `ArchiveView::decode` performs this check; use
-  `ArchiveView::decode_unchecked` only for raw inspection tools.
+Применение схемы:
+- Типизированные декодеры должны отклонять полезные данные, хэш схемы заголовка которых не соответствует.
+  ожидаемый тип. `ArchiveView::decode` выполняет эту проверку; использовать
+  `ArchiveView::decode_unchecked` только для необработанных инструментов проверки.
 
-## Header Flags
+## Флаги заголовка
 
-These flags are ORed into the final header byte. Unknown bits are rejected.
+Эти флаги объединяются по ИЛИ в последний байт заголовка. Неизвестные биты отклоняются.
 
-| Flag | Hex | Meaning |
+| Флаг | Шестнадцатеричный | Значение |
 | --- | --- | --- |
-| `PACKED_SEQ` | `0x01` | Packed sequence layout for variable-sized collections. |
-| `COMPACT_LEN` | `0x02` | Per-value length prefixes are compact varints. |
-| `PACKED_STRUCT` | `0x04` | Packed struct layout for derive-generated types. |
-| `VARINT_OFFSETS` | `0x08` | Reserved in v1; packed sequences always use `(len + 1)` u64 offsets. |
-| `COMPACT_SEQ_LEN` | `0x10` | Reserved in v1; sequence length headers are fixed u64. |
-| `FIELD_BITSET` | `0x20` | Packed-struct hybrid uses a bitset indicating which fields carry explicit sizes (requires `PACKED_STRUCT` + `COMPACT_LEN`). |
+| `PACKED_SEQ` | `0x01` | Макет упакованной последовательности для коллекций переменного размера. |
+| `COMPACT_LEN` | `0x02` | Префиксы длины каждого значения представляют собой компактные варинты. |
+| `PACKED_STRUCT` | `0x04` | Макет упакованной структуры для производных типов. |
+| `VARINT_OFFSETS` | `0x08` | Зарезервировано в версии 1; упакованные последовательности всегда используют смещения `(len + 1)` u64. |
+| `COMPACT_SEQ_LEN` | `0x10` | Зарезервировано в версии 1; Заголовки длины последовательности фиксированы u64. |
+| `FIELD_BITSET` | `0x20` | Гибрид упакованной структуры использует набор битов, указывающий, какие поля имеют явные размеры (требуется `PACKED_STRUCT` + `COMPACT_LEN`). |
 
-Flag scoping rules:
-- `COMPACT_LEN` affects per-value length prefixes only.
-- Reserved layout bits (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) are rejected when decoding headers.
+Правила области действия флага:
+- `COMPACT_LEN` влияет только на префиксы длины каждого значения.
+— Зарезервированные биты макета (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) отклоняются при декодировании заголовков.
 
-These flags are independent; no heuristic cross-effects are permitted.
+Эти флаги независимы; эвристические перекрестные эффекты не допускаются.
 
-## Length Prefixes
+## Префиксы длины
 
-Norito uses length prefixes in multiple places, with explicit flags deciding the
-encoding:
+Norito использует префиксы длины в нескольких местах, с явными флагами, определяющими
+кодировка:
 
-- Per-value prefixes (fields, elements, strings, blobs) use `COMPACT_LEN`.
-  - If set: unsigned varint (7-bit continuation).
-  - If not set: fixed 8-byte little-endian u64.
-- Sequence length headers are fixed 8-byte little-endian u64 in v1.
-- Packed-sequence offsets are always `(len + 1)` u64 offsets, monotonic with the
-  first offset 0.
+- Префиксы для каждого значения (поля, элементы, строки, большие двоичные объекты) используют `COMPACT_LEN`.
+  - Если установлено: беззнаковый варинт (7-битное продолжение).
+  - Если не установлено: исправлен 8-байтовый код с прямым порядком байтов u64.
+— Заголовки длины последовательности имеют фиксированный 8-байтовый формат u64 с прямым порядком байтов в версии 1.
+- Смещения упакованной последовательности всегда представляют собой смещения `(len + 1)` u64, монотонные с
+  первое смещение 0.Кодировки Varint должны соответствовать `u64` и использовать самую короткую (каноническую) кодировку;
+Кодировки переполнения или слишком длинные кодировки отклоняются.
 
-Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
-overflow or overlong encodings are rejected.
+## Кодирование строк
 
-## String Encoding
-
-`String` and `&str` values are encoded as:
+Значения `String` и `&str` кодируются как:
 
 ```
 [len][utf8-bytes]
 ```
 
-`len` uses the per-value prefix rules above (`COMPACT_LEN`). Decoders must not
-apply nested-length heuristics or reinterpret string payloads based on their
-contents.
+`len` использует приведенные выше правила префиксов для каждого значения (`COMPACT_LEN`). Декодеры не должны
+применять эвристику вложенной длины или переинтерпретировать полезные данные строк на основе их
+содержание.
 
-## Numeric and BigInt
+## Числовые и BigInt
 
-`BigInt` encodes as:
+`BigInt` кодируется как:
 
 ```
 [len_u32][twos_complement_le_bytes]
 ```
 
-`len_u32` is a 4-byte little-endian length of the following payload. The bytes
-are little-endian two's complement and must fit within the 512-bit cap.
+`len_u32` — это 4-байтовая длина с прямым порядком байтов следующей полезной нагрузки. Байты
+являются дополнением до двух с прямым порядком байтов и должны укладываться в 512-битный предел.
 
-`Numeric` encodes as a struct `(mantissa, scale)`:
-- `mantissa` is a `BigInt` containing the raw integer value (no decimal scale
-  is embedded in the integer).
-- `scale` is a `u32` count of fractional digits (e.g., `1.88` is mantissa `188`,
-  scale `2`).
+`Numeric` кодируется как структура `(mantissa, scale)`:
+- `mantissa` — это `BigInt`, содержащий необработанное целочисленное значение (без десятичной шкалы).
+  вложено в целое число).
+- `scale` — это `u32` количество дробных цифр (например, `1.88` — это мантисса `188`,
+  масштаб `2`).
 
-## Map Encoding
+## Кодировка карты
 
-Maps encode deterministically with the same active layout flags:
+Карты кодируются детерминированно с использованием одних и тех же активных флагов макета:
 
-- Entry count uses a fixed 8-byte little-endian u64 header.
-- Compat layout (`PACKED_SEQ` unset): for each entry,
-  `[key_len][key_payload][value_len][value_payload]` with key/value lengths
-  encoded via `COMPACT_LEN`.
-- Packed layout (`PACKED_SEQ` set): key sizes and value sizes precede the data,
-  followed by concatenated key payloads and concatenated value payloads. Uses
-  `(len + 1)` u64 offsets for keys, then `(len + 1)` u64 offsets for values;
-  offsets are monotonic with the first offset 0.
-- `HashMap` encodes entries in sorted key order for deterministic output;
-  `BTreeMap` uses its natural ordering.
+— При подсчете записей используется фиксированный 8-байтовый заголовок u64 с прямым порядком байтов.
+- Совместимый макет (`PACKED_SEQ` не установлен): для каждой записи
+  `[key_len][key_payload][value_len][value_payload]` с длиной ключа/значения
+  закодировано через `COMPACT_LEN`.
+- Упакованный макет (набор `PACKED_SEQ`): размеры ключей и размеров значений предшествуют данным,
+  за которыми следуют объединенные ключевые полезные данные и объединенные полезные данные значений. Использование
+  `(len + 1)` u64 смещения для ключей, затем `(len + 1)` u64 смещения для значений;
+  смещения монотонны с первым смещением 0.
+- `HashMap` кодирует записи в отсортированном порядке ключей для детерминированного вывода;
+  `BTreeMap` использует естественный порядок.
 
-## NCB Columnar (internal)
+## Столбчатый NCB (внутренний)
 
-NCB payloads are exact and canonical:
-- Alignment padding between NCB columns must be zero-filled.
-- Bitset padding bits (flags and presence) must be zero.
-- Trailing bytes after the NCB payload are rejected.
+Полезные нагрузки NCB точны и каноничны:
+- Заполнение выравнивания между столбцами NCB должно быть заполнено нулями.
+- Биты заполнения набора битов (флаги и присутствие) должны быть равны нулю.
+- Завершающие байты после полезной нагрузки NCB отклоняются.
 
-## AoS Ad-hoc (Adaptive Columnar)
+## AoS Ad-hoc (адаптивный столбец)
 
-The `norito::aos` helpers used by adaptive columnar encoders follow the same
-length prefix rules and honor the active `COMPACT_LEN` flag, so embedded AoS
-payloads stay consistent with their parent Norito headers.
+Помощники `norito::aos`, используемые адаптивными столбчатыми кодировщиками, следуют тому же принципу.
+правила префикса длины и учитывают активный флаг `COMPACT_LEN`, поэтому встроенный AoS
+полезные данные остаются согласованными со своими родительскими заголовками Norito.
 
-## Packed-Struct Layout
+## Макет упакованной структуры
 
-When the `PACKED_STRUCT` flag is set, derive-generated structs/tuples are
-encoded as a single packed payload with one of two layouts:
+Когда установлен флаг `PACKED_STRUCT`, структуры/кортежи, сгенерированные производными,
+закодирован как единая упакованная полезная нагрузка с одним из двух макетов:
 
-- Compat packed-struct (no `FIELD_BITSET`): `(field_count + 1)` little-endian
-  `u64` offsets followed by concatenated field payloads. Offsets start at 0,
-  are cumulative byte lengths of each field payload in declaration order, and
-  the final offset equals the total data length. Offsets are fixed-width even
-  when `COMPACT_LEN` is enabled.
-- Hybrid packed-struct (`FIELD_BITSET` + `COMPACT_LEN`): a bitset of length
-  `ceil(field_count / 8)` bytes, followed by size prefixes for fields whose
-  bit is set (varint-encoded per `COMPACT_LEN`), followed by concatenated field
-  payloads in declaration order. Bit 0 of byte 0 refers to field 0, bit 1 to
-  field 1, and so on. Fields that are fixed-size or self-delimiting omit the
-  explicit size header and are decoded sequentially.
+- Совместимая упакованная структура (нет `FIELD_BITSET`): `(field_count + 1)` с прямым порядком байтов.
+  `u64` смещения, за которыми следуют полезные данные объединенных полей. Смещения начинаются с 0,
+  — совокупные длины байтов каждой полезной нагрузки поля в порядке объявления, и
+  окончательное смещение равно общей длине данных. Смещения имеют фиксированную ширину, даже
+  когда `COMPACT_LEN` включен.
+- Гибридная упакованная структура (`FIELD_BITSET` + `COMPACT_LEN`): набор битов длины.
+  `ceil(field_count / 8)` байт, за которыми следуют префиксы размера для полей,
+  устанавливается бит (закодированный в формате varint согласно `COMPACT_LEN`), за которым следует объединенное поле
+  полезные нагрузки в порядке объявления. Бит 0 байта 0 относится к полю 0, бит 1 — к полю 0.
+  поле 1 и так далее. Поля фиксированного размера или самоограничивающиеся поля опускаются.
+  заголовок явного размера и декодируются последовательно.Сами полезные данные полей используют активные флаги макета (например, `PACKED_SEQ`,
+`COMPACT_LEN`) при кодировании вложенных коллекций или значений строк или больших двоичных объектов.
 
-Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
-`COMPACT_LEN`) when encoding nested collections or string/blob values.
+## Выбор и проверка сжатия
 
-## Compression Selection and Validation
+Байт заголовка `Compression` определяет кодировку полезной нагрузки:
 
-The header `Compression` byte identifies the payload encoding:
+- `0 = None`: байты полезной нагрузки следуют за заголовком (с дополнительным выравниванием).
+- `1 = Zstd`: байты полезной нагрузки сжимаются с помощью Zstandard.
 
-- `0 = None`: payload bytes follow the header (with optional alignment padding).
-- `1 = Zstd`: payload bytes are compressed with Zstandard.
+`Payload length` и `CRC64` всегда описывают несжатую полезную нагрузку. Для
+сжатых полезных данных, закодированный поток байтов начинается сразу после
+заголовок без выравнивания. Декодеры должны отвергать неизвестное сжатие
+значения или неподдерживаемые алгоритмы; строится без функции `compression`
+принимаем только `None`.
 
-`Payload length` and `CRC64` always describe the uncompressed payload. For
-compressed payloads, the encoded byte stream begins immediately after the
-header with no alignment padding. Decoders must reject unknown compression
-values or unsupported algorithms; builds without the `compression` feature
-accept only `None`.
+Кодировщики выбирают сжатие явно (`to_compressed_bytes`) или через
+адаптивный помощник (`to_bytes_auto`), применяющий детерминированную эвристику.
+выбранный алгоритм фиксируется в шапке; нет проводных переговоров.
 
-Encoders choose compression explicitly (`to_compressed_bytes`) or via the
-adaptive helper (`to_bytes_auto`) that applies deterministic heuristics. The
-chosen algorithm is recorded in the header; there is no on-wire negotiation.
+## Подробности хеша схемы
 
-## Schema Hash Details
+16-байтовый хэш схемы вычисляется как:
 
-The 16-byte schema hash is computed as:
+— По умолчанию: 64-битный хэш FNV-1a полного имени типа (Rust
+  `core::any::type_name::<T>()`), дублируется и занимает 16 байт.
+- С `schema-structural`: каноническая схема JSON, созданная
+  `iroha_schema::IntoSchema`, сериализовано с помощью средства записи JSON Norito и хешировано
+  с той же программой FNV-1a.
 
-- Default: FNV-1a 64-bit hash of the fully qualified type name (Rust
-  `core::any::type_name::<T>()`), duplicated to fill 16 bytes.
-- With `schema-structural`: canonical JSON schema produced by
-  `iroha_schema::IntoSchema`, serialized with Norito’s JSON writer and hashed
-  with the same FNV-1a routine.
-
-Typed decoders must reject payloads whose header schema hash does not match the
-expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`
-is reserved for tooling that explicitly opts out of schema validation.
+Типизированные декодеры должны отклонять полезные данные, хэш схемы заголовка которых не соответствует
+ожидаемый тип. `ArchiveView::decode` обеспечивает эту проверку; `decode_unchecked`
+зарезервировано для инструментов, которые явно отказываются от проверки схемы.

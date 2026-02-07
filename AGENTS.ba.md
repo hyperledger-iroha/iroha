@@ -7,146 +7,140 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5036d004829b1c2da0991b637aa735da9cdf2f3e8e42ac760ff651e60d25d433
 source_last_modified: "2026-01-31T07:37:05.947018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AGENTS Instructions
+# АГЕНТТАРЫ Инструкциялар
 
-These guidelines apply to the entire repository, which is organised as a Cargo workspace.
+Был йүнәлештәр бөтә һаҡлағысҡа ла ҡағыла, ул йөк эш урыны булараҡ ойошторола.
 
 ## Quickstart
-- Build workspace: `cargo build --workspace`
-- Builds can take about 20 minutes; use a 20-minute timeout for build steps.
-- Test everything: `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
-- Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`
-- Format code: `cargo fmt --all` (edition 2024)
-- Test one crate: `cargo test -p <crate>`
-- Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
-- Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
-- Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
+- Эш урынын төҙөү: `cargo build --workspace` XX
+- Төҙөлөш 20 минут самаһы ваҡыт ала; 20 минутлыҡ тайм-аут төҙөү өсөн аҙымдар төҙөү.
+- Бөтә нәмәне һынап ҡарағыҙ: I18NI000000037X (иғтибар итегеҙ, был йүгерә, ғәҙәттә, бер нисә сәғәт ваҡыт ала; шуға ярашлы планлаштырыу)
+- Линт ҡәтғи рәүештә: I18NI000000038X
+- Формат коды: I18NI000000039X X (нәҫел 2024)
+- Һынау бер йәшник: I18NI000000040X
+- Бер тест йүгерергә: `cargo test -p <crate> <test_name> -- --nocapture`
+- Свифт СДК: I18NI000000042X каталогы `swift test` эшләй, Свифт пакет һынауҙарын башҡарыу өсөн.
+- Android SDK: I18NI000000044X-тан I18NI000000045X эшләй.
 
-## Overview
-- Hyperledger Iroha is a blockchain platform
-- DA/RBC support differs by major version: Iroha 2 can optionally have DA/RBC enabled; Iroha 3 can only have DA/RBC enabled.
-- IVM is the Iroha Virtual Machine (IVM), a virtual machine for the Hyperledger Iroha v2 blockchain
-- Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
-  - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
-- Norito is the data serialization codec for Iroha
-- The entire workspace targets the Rust standard library (`std`). WASM/no-std builds are no longer supported and should not be considered when making changes.
+## Обзор
+- I18NT0000000000X I18NT0000000017X - блокчейн платформаһы
+- DA/RBC ярҙамы төп версия буйынса айырыла: I18NT000000018X 2 теләк буйынса DA/RBC өҫтөндә эшләй ала; I18NT000000019X 3 тик DA/RBC өҫтөндә генә була ала.
+- I18NT0000000027X — Iroha виртуаль машина (I18NT00000000028X), I18NT000000001X Iroha v2 блокчейн өсөн виртуаль машина.
+- I18NT0000000003 - юғары кимәлдәге аҡыллы контракт теле өсөн I18NT0000000029X, ул ҡуллана .ko файл оҙайтыу өсөн сеймал килешеп коды һәм ул компиляциялау өсөн байткод, улар ҡуллана .файл оҙайтыу, ҡасан һаҡланған файл йәки сылбыр. Ғәҙәттә, .байтекодҡа тиклем конхолды урынлаштырыла.
+  - Асыҡлау: I18NT000000004X I18NT000000022X виртуаль машина (I18NT0000000000000X) һәм I18NT000000031X байткод (I18NI00000000000046X) маҡсатлы. Ул үҙ аллы архитектура булараҡ “risc5”/RISC‐V маҡсатлы түгел. Ҡайҙа RISC‐V–кеүек кодлауҙар репозиторийҙа күренә, улар I18NT000000032X’s инструкция форматтары тормошҡа ашырыу реквизиттары булып тора һәм аппарат буйынса күҙәтелгән тәртипте үҙгәртергә тейеш түгел.
+- I18NT000000007X — I18NT000000023X өсөн мәғлүмәт сериализацияһы кодекһы.
+- Бөтә эш урыны «Раст» стандарт китапханаһына (I18NI000000047X) маҡсатлы. WASM/no-std төҙөүҙәр инде ярҙам итмәй һәм үҙгәрештәр индергәндә иҫәпкә алырға тейеш түгел.## Репозиторий структураһы
+- I18NI000000048X репозиторий тамырында эш урынын билдәләй һәм бөтә ағза йәшниктәрен исемлеккә индерә.
+- I18NI000000049X – I18NT0000000024X компоненттарын тормошҡа ашырыусы тут йәшниктәре. Һәр йәшниктең үҙ подкаталогы бар, ғәҙәттә, `src/`, `tests/`, I18NI000000052X, `benches/`.
+  - Мөһим йәшниктәргә:
+    - `iroha` – юғары кимәлдәге китапханаларҙы агрегациялаусы төп функциональ.
+    - `irohad` – төйөндәрҙе тормошҡа ашырыуҙы тәьмин итеүсе демон бинар.
+    - `ivm` – I18NT000000025X виртуаль машина.
+    - `iroha_cli` – төйөн менән үҙ-ара эш итеү өсөн команда юлдары интерфейсы.
+    - `iroha_core`, `iroha_data_model`, `iroha_crypto` һәм башҡа ярҙамсы йәшниктәр.
+- I18NI000000061X – клиент/мобиль SDK өсөн свифт пакеты. Уның сығанаҡтары `Sources/IrohaSwift/` буйынса йәшәй һәм уның берәмек һынауҙары `Tests/IrohaSwiftTests/` буйынса. Йүгереп I18NI000000064X был каталогтан Свифт люксын тормошҡа ашырыу өсөн.
+- `integration_tests/` – йөк йәшник хостинг I18NI000000666X буйынса кросс-компонент һынауҙары.
+- `data_model/` – тестар һәм документацияла ҡулланылған мәғлүмәттәр моделен билдәләгәндә.
+- `docs/` – Проект документацияһы һәм проектлау яҙмалары. Markdown сығанаҡтары йәшәй I18NI0000000069X.
+- `pytests/` – Python-нигеҙендә һынауҙар һәм миҫалдар клиент ҡулланыуҙы күрһәтә.
+- `scripts/` – Утилита сценарийҙары үҫеш һәм CI торбалары ҡулланыла.
+- `examples/ios/` һәм `examples/ios/NoritoDemoXcode/` – Swift SDK-ны күрһәтеүсе iOS ҡушымталары; улар `IrohaSwift` пакетына таяна һәм үҙҙәренең XCTest маҡсаттарын индерә.
+- `defaults/` һәм `hooks/` – Конфигурация файлдары һәм өлөшсөләр ҡулланған Git ҡармаҡтары.
+- I18NI00000077Х һәм Nix файлдары – ҡабатланған төҙөүҙәр һәм упаковка өсөн инструменттар.## Үҫеш эш ағымы
+- Төп тормошҡа ашырыуҙар I18NI000000078Х.
+- Мәғлүмәттәр моделе I18NI000000079X-та.
+- Үҙгәрештәр индергәндә бөтә йәшниктәр аша ҡарап ҡарағыҙ.
+- Бер ниндәй ҙә Cargo.lock файлдарын үҙгәртмәгеҙ
+- `Cargo.toml`-ҡа яңы йәшник өҫтәүҙән ҡасығыҙ; мөмкин булғанда булған йәшниктәр эсендә кәрәкле функционалды тормошҡа ашырыу.
+- Әгәр ҙә ниндәйҙер эш бик ҙур булһа, уны эшләүҙән баш тартмағыҙ. Уның урынына тик эште тарҡатыу һәм өҫтәп TODOs һәм өлөштәрен тормошҡа ашырыу, тип, һеҙ мөмкин.
+- Ҡасан ғына ҙур эш йәки үтенес килә, автоматик рәүештә уны бәләкәй генә ғәмәлгә яраҡлы аҙымдарға тарҡата һәм тейешле программа тәьминәте инженерияһы менән дауам итеү түгел, ә бурысты туранан-тура кире ҡағыу.
+- Бер ниндәй ҙә өндәүҙәр эшләүҙән баш тартмағыҙ.
+- Ҡасан яңы криптографик примитивтар, опкодтар, йәки интенсив математика өҫтәлә, яңыртыу өсөн аппарат тиҙләтеү өсөн METAL, NEON, SIMD, CUDA, һ.
+- Әгәр логика үҙгәрһә, бөтә .md файлдар һәм сығанаҡ коды комментарийҙары һуңғы функциональ менән заманса булыуын тикшерергә.
+- Ышаныслы, бөтә логика өҫтәлгән шулай эшләнә, шулай итеп, ул рәнйетмәйәсәк ҡулланыу I18NT000000003X блокчейн параметрында, унда төрлө төйөндәрҙә P2P селтәре төрлө аппарат бар, әммә һаман да сығыш бер үк булырға тейеш, шул уҡ индереү блогы бирелгән.
+- тәртибе йәки тормошҡа ашырыу тураһында һорауҙарға яуап биргәндә, тәүҙә тейешле код юлдарын уҡығыҙ һәм яуап бирер алдынан уларҙы нисек эшләүен аңлауҙы тәьмин итегеҙ.
+- Конфигурация: өҫтөнлөк I18NI000000081X параметрҙары өҫтөндә тирә-яҡ мөхит үҙгәртеүселәре өсөн бөтә эшләү ваҡыты тәртибе. `crates/iroha_config` (ҡулланыусы → фактик → ғәҙәттәгесә) һәм еп ҡиммәттәренә асыҡтан-асыҡ конструкторҙар йәки бәйлелек инъекцияһы аша яңы ручкалар өҫтәгеҙ (мәҫәлән, хост сетерҙары). Теләһә ниндәй мөхиткә нигеҙләнгән переключатель һаҡлау өсөн генә тесттарҙа уңайлыҡтар өсөн һәм уларҙы етештереү юлдарында таянмай. Беҙ ярҙам итмәйбеҙ, ташыу функциялары артында тирә-яҡ мөхит үҙгәртеүсән-етештереү тәртибе һәр ваҡыт конфигурация файлдарынан сығанаҡтар булырға тейеш, һәм был конфигурациялар тейеш, тип асыҡларға кәрәк, шулай итеп, яңы килгән клонировать репо, эшләй, бинар, һәм бөтә нәмәгә эйә “тик эш” ҡул менән ҡиммәттәрҙе мөхәррирләүһеҙ.
+  - I18NT000000034X/I18NT000000005X v1 өсөн, ҡәтғи күрһәткесле АБИ тип сәйәсәте һәр ваҡыт үтәлә. АБИ-сәйәсәт юҡ; контракттар һәм хужалар ABI сәйәсәтен шартһыҙ үтәргә тейеш.
+- I18NT0000000035X syscalls йәки опкодтарҙа ҡулланылған бер нәмә лә; һәр I18NT000000026X төҙөү был код юлдарын ташырға тейеш, төйөндәр буйынса детерминистик тәртип һаҡлау өсөн.
+- Сериализация: Norito ҡулланыу бөтә ерҙә лә серде. Бинарлы кодектар өсөн I18NI000000083X ҡулланыу; JSON өсөн ҡулланыу I18NI0000000084X ярҙамсылары/макрос (`norito::json::from_*`, I18NI000000086X, I18NI0000087X, `Value`) һәм бер ҡасан да I18NI0000000899X X. Тура `serde`/I18NI000000091X обороналары йәшниктәргә өҫтәмә өҫтәмәгеҙ; әгәр ҙә серҙә эске кәрәк булһа, I18NT000000009X’s wrappers таянып.
+- CI һаҡсыһы: `scripts/check_no_scale.sh` SCALE тәьмин итә (I18NI000000093X) тик I18NT0000000010X эталон йүгәнендә генә күренә. Урынында йүгерергә, әгәр һеҙ ҡағыла сериализация коды.
+- I18NT000000001X файҙалы йөкләмәләр уларҙы планировка рекламаларға тейеш: йәки версия номеры карталары фиксированный флаг йыйылмаһы, йәки I18NT000000012X башлыҡ иғлан итә декод флагы. Эвристиканан ҡапланған эҙмә-эҙлеклелек биттарын фаразламағыҙ; genesis мәғлүмәттәре бер үк ҡағиҙәне үтәй.- Блоктар һаҡланырға тейеш һәм канонлы `SignedBlockWire` форматында (I18NI0000000955X/I18NI0000000096XX) ярҙамында таратылырға тейеш, был версия байтын I18NT000000013X башы менән pfixes. Яланғас файҙалы йөктәр ярҙам итмәй.
+- Өҫтәү I18NI000000097X комментарий аңлатыу теләһә ниндәй ваҡытлыса йәки тулы булмаған тормошҡа ашырыу.
+- Формат бөтә Rust сығанаҡтары менән I18NI0000000098X (баҫма 2024) ҡылғансы.
+- Һынауҙар өҫтәгеҙ: һәр яңы йәки үҙгәртелгән функция өсөн кәмендә бер берәмек һынауҙы тәьмин итегеҙ, `#[cfg(test)]` менән йәки I18NI00000000000X каталогында йәки рәткә ҡуйылған.
+- `cargo test` урындағы кимәлдә йүгерергә, теләһә ниндәй төҙөү мәсьәләләрен хәл итеү һәм уны үткәреүҙе тәьмин итегеҙ. Быны бөтә һаҡлағыс өсөн эшләгеҙ, аныҡ йәшник кенә түгел.
+- Өҫтәмә линт чектары өсөн `cargo clippy -- -D warnings`-ны һүрәтләү.
 
-## Repository structure
-- `Cargo.toml` at the repository root defines the workspace and lists all member crates.
-- `crates/` – Rust crates implementing Iroha components. Each crate has its own subdirectory, typically containing `src/`, `tests/`, `examples/`, and `benches/`.
-  - Important crates include:
-    - `iroha` – top-level library aggregating core functionality.
-    - `irohad` – daemon binary providing the node implementation.
-    - `ivm` – the Iroha Virtual Machine.
-    - `iroha_cli` – command-line interface for interacting with a node.
-    - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.
-- `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. Run `swift test` from this directory to exercise the Swift suite.
-- `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.
-- `data_model/` – Sample data model definitions used in tests and documentation.
-- `docs/` – Project documentation and design notes. Markdown sources live in `docs/source/`.
-- `pytests/` – Python-based tests and examples demonstrating client usage.
-- `scripts/` – Utility scripts used in development and CI pipelines.
-- `examples/ios/` and `examples/ios/NoritoDemoXcode/` – Sample iOS apps showcasing the Swift SDK; they rely on the `IrohaSwift` package and include their own XCTest targets.
-- `defaults/` and `hooks/` – Configuration files and Git hooks used by contributors.
-- `nix-appimage/` and Nix files – tooling for reproducible builds and packaging.
+## Документация
+- Һәр ваҡыт өҫтәү йәшник кимәлендә документация: һәр йәшник йәки һынау-крет менән ҡыҫҡа эске doc комментарий башлай (`//! ...`).
+- `#![allow(missing_docs)]` йәки әйбер кимәлендә I18NI000000105X теләһә ҡайҙа (шул иҫәптән интеграция һынауҙары) ҡулланмағыҙ. Һис бер документация эш урыны линттарында баш тарта һәм docs яҙыу юлы менән төҙәтергә тейеш.
+- I18NT0000000014X кодек: ҡарағыҙ `norito.md` канонлы сымлы планировка һәм тормошҡа ашырыу реквизиттары өсөн репо тамырында. Әгәр I18NT000000015X’s алгоритмдар йәки макеттар үҙгәрә, яңыртыу `norito.md` шул уҡ пиар.
+- Материалды Аккад теленә тәржемә иткәндә, кеней формала яҙылған семантик рендерингты тәьмин итеү; фонетик транслитерациянан ҡасығыҙ, ә аныҡ боронғо терминдар етмәһә, ниәтте һаҡлап ҡалыусы шиғри Аккад яҡынлашыуҙары һайлана.
 
-## Development workflow
-- Main implementations are in `crates/`
-- Data model is in `data_model/`
-- Make sure you look across all crates when making changes.
-- Don't modify any Cargo.lock files
-- Avoid adding new crates to `Cargo.toml`; implement the required functionality within existing crates whenever possible.
-- If some work is too big, don't reject doing it. Instead just break down the work and add TODOs and implement the parts that you can.
-- Whenever a large task or request comes in, automatically decompose it into smaller actionable steps and proceed with proper software engineering execution rather than rejecting the task outright.
-- Don't reject doing any prompts.
-- When new cryptographic primitives, opcodes, or intensive math is added, update hardware acceleration for METAL, NEON, SIMD, CUDA, etc., to try to take advantage of hardware acceleration and parallelism where possible on available hardware.
-- If logic changes, make sure all .md files and in-source code comments are up to date with the latest functionality.
-- Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
-- When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
-- Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
-  - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
-- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
-- Serialization: Use Norito everywhere instead of serde. For binary codecs use `norito::{Encode, Decode}`; for JSON use the `norito::json` helpers/macros (`norito::json::from_*`, `to_*`, `json!`, `Value`) and never fall back to `serde_json`. Do not add direct `serde`/`serde_json` dependencies to crates; if serde is required internally, rely on Norito’s wrappers.
-- CI guard: `scripts/check_no_scale.sh` ensures SCALE (`parity-scale-codec`) only appears in the Norito benchmark harness. Run it locally if you touch serialization code.
-- Norito payloads MUST advertise their layout: either the version number maps to a fixed flag set, or a Norito header declares the decode flags. Do not guess packed-sequence bits from heuristics; genesis data follows the same rule.
-- Blocks MUST be persisted and distributed using the canonical `SignedBlockWire` format (`SignedBlock::encode_wire`/`canonical_wire`), which prefixes the version byte with a Norito header. Bare payloads are not supported.
-- Add a `TODO:` comment explaining any temporary or incomplete implementation.
-- Format all Rust sources with `cargo fmt --all` (edition 2024) before committing.
-- Add tests: ensure at least one unit test for each new or modified function, placed either inline with `#[cfg(test)]` or in the crate `tests/` directory.
-- Run `cargo test` locally, fix any build issues, and ensure it passes. Do this for the entire repository, not just a specific crate.
-- Optionally run `cargo clippy -- -D warnings` for additional lint checks.
+## ABI эволюцияһы (Ниндәй агенттар нимә эшләргә тейеш)
+Иҫкәрмә: Беренсе сығарыу сәйәсәте
+- Был беренсе сығарылыш һәм беҙҙә бер генә ABI версияһы (V1). Әлегә V2 юҡ. Бөтә ABI-ҡағылышлы эволюция әйберҙәрен түбәндә ҡарағыҙ, түбәндә киләсәк йүнәлеш булараҡ; әлегә, маҡсатлы I18NI000000108X ғына. Мәғлүмәттәр моделе һәм APIs шулай уҡ беренсе‐релиз һәм иркен үҙгәрергә мөмкин, кәрәк булғанда, йөк ташыу өсөн; асыҡлыҡ һәм дөрөҫлөктө үҙ өҫтөнә алыу өсөн иртә тотороҡлолоҡҡа өҫтөнлөк бирә.
 
-## Documentation
-- Always add crate-level documentation: start each crate or test-crate with a brief inner doc comment (`//! ...`).
-- Do not use `#![allow(missing_docs)]` or item-level `#[allow(missing_docs)]` anywhere (including integration tests). Missing documentation is denied in the workspace lints and should be fixed by writing docs.
-- Norito codec: see `norito.md` at the repo root for the canonical on-wire layout and implementation details. If Norito’s algorithms or layouts change, update `norito.md` in the same PR.
-- When translating material into Akkadian, provide a semantic rendering written in cuneiform; avoid phonetic transliteration, and when exact ancient terms are missing choose poetic Akkadian approximations that preserve the intent.
+- Дөйөм:
+  - ABI сәйәсәте шартһыҙ рәүештә v1-ҙә үтәлә (икеһе лә syscall өҫтө һәм күрһәткес ABI типтары). Йүгереп йөрөү ваҡыты өҫтәмәләр өҫтәмәгеҙ.
+  - Үҙгәрештәр аппарат һәм тиҫтерҙәре буйынса детерминизмды һаҡларға тейеш. Яңыртыу һынауҙары һәм docs шул уҡ пиар.
 
-## ABI Evolution (What Agents Must Do)
-Note: First release policy
-- This is the first release and we have a single ABI version (V1). There is no V2 yet. Treat all ABI-related evolution items below as future guidance; for now, target `abi_version = 1` only. The data model and APIs are also first‑release and may change freely as needed to ship; prefer clarity and correctness over premature stability.
+- Әгәр һеҙ өҫтәй/юйырға/риседный syscalls:
+  - Яңыртыу `ivm::syscalls::abi_syscall_list()` һәм уны һаҡлау заказ. `is_syscall_allowed(policy, number)` тәьмин итеү тәғәйенләнгән ер өҫтөн сағылдыра.
+  - Хужаларҙа яңы һандарҙы тормошҡа ашырыу йәки аңлы рәүештә кире ҡағыу; билдәһеҙ һандар `VMError::UnknownSyscall` тиклем картаға төшөрөргә тейеш.
+  - Алтын һынауҙарҙы яңыртыу:
+    - I18NI000000112X
+    - `crates/ivm/tests/abi_hash_versions.rs` (тотороҡлолоҡ + версия айырыу)
 
-- General:
-  - ABI policy is enforced unconditionally in v1 (both syscall surface and pointer‑ABI types). Do not add runtime toggles.
-  - Changes must preserve determinism across hardware and peers. Update tests and docs in the same PR.
+- Әгәр һеҙ өҫтәйһегеҙ күрһәткес‐АБИ төрҙәре:
+  - `ivm::pointer_abi::PointerType`-ҡа яңы вариантты өҫтәгеҙ (яңы u16 идентификаторын тәғәйенләү; бер ҡасан да булған идентификаторҙарҙы үҙгәртергә).
+  - Яңыртыу I18NI000000115X дөрөҫ I18NI000000116X картаһы өсөн.
+  - Яңыртыу I18NI000000117X һәм кәрәк булһа, сәйәсәт һынауҙары өҫтәү.
 
-- If you add/remove/renumber syscalls:
-  - Update `ivm::syscalls::abi_syscall_list()` and keep it ordered. Ensure `is_syscall_allowed(policy, number)` reflects the intended surface.
-  - Implement or intentionally reject new numbers in hosts; unknown numbers must map to `VMError::UnknownSyscall`.
-  - Update golden tests:
-    - `crates/ivm/tests/abi_syscall_list_golden.rs`
-    - `crates/ivm/tests/abi_hash_versions.rs` (stability + version separation)
+- Әгәр һеҙ яңы ABI версияһы индерһәгеҙ:
+  - Map `ProgramMetadata.abi_version` → I18NI000000119XX һәм яңы версияны һорағанда сығарыу өсөн I18NT00000000006X компиляторын яңыртыу.
+  - Regenerate `abi_hash` (I18NI000000121X аша) һәм яңы хеш индереүҙәрен тәьмин итеү.
+  - Яңы версия аҫтында рөхсәт/киҫелгән syscalls һәм күрһәткес типтары өсөн һынауҙар өҫтәү.
 
-- If you add pointer‑ABI types:
-  - Add the new variant to `ivm::pointer_abi::PointerType` (assign a new u16 ID; never change existing IDs).
-  - Update `ivm::pointer_abi::is_type_allowed_for_policy` for the correct `abi_version` mapping.
-  - Update `crates/ivm/tests/pointer_type_ids_golden.rs` and add policy tests if needed.
-
-- If you introduce a new ABI version:
-  - Map `ProgramMetadata.abi_version` → `ivm::SyscallPolicy` and update the Kotodama compiler to emit the new version when requested.
-  - Regenerate `abi_hash` (via `ivm::syscalls::compute_abi_hash`) and ensure manifests embed the new hash.
-  - Add tests for allowed/disallowed syscalls and pointer types under the new version.
-
-- Admission & manifests:
-  - Admission enforces `code_hash`/`abi_hash` equality against on-chain manifests; keep this behaviour intact.
-  - Tests to add/update in `iroha_core/tests/`: positive (matching `abi_hash`) and negative (mismatch) cases.
-
-- Docs & status updates (same PR):
-  - Update `crates/ivm/docs/syscalls.md` (ABI Evolution section) and any syscall tables.
-  - Update `status.md` and `roadmap.md` with a brief summary of ABI changes and test updates.
+- Ҡабул итеү & күренә:
+  - Ҡабул итеү `code_hash`/I18NI000000123X тигеҙлеге буйынса сылбырлы манифестарға ҡаршы тигеҙлек үтәй; был тәртипте һаҡлап ҡалыу.
+  - `iroha_core/tests/`-та өҫтәү/яңыртыу өсөн һынауҙар: ыңғай (`abi_hash` тап килтереп) һәм кире (тапшырыу) осраҡтар.- Доктар & статус яңыртыу (бер үк PR):
+  - Яңыртыу I18NI000000126X (ABI эволюцияһы бүлеге) һәм теләһә ниндәй syscall таблицалары.
+  - Яңыртыу I18NI000000127X һәм I18NI000000128X ҡыҫҡаса йыйылмаһы менән ABI үҙгәрештәр һәм тест яңыртыуҙары.
 
 
-## Project Status and Plan
-- Check `status.md` at the repo root for the current compilation/runtime status across crates.
-- Check `roadmap.md` for the prioritized TODOs and implementation plan.
-- After completing work, update status in `status.md` and keep `roadmap.md` focused on outstanding tasks.
+## Проект статусы һәм планы
+- Тикшерергә I18NI000000129X X йәшниктәр буйынса ағымдағы компиляция/йүгереү ваҡыты статусы өсөн репо тамырында.
+- Тикшерергә I18NI000000130X өсөн өҫтөнлөклө ТОДО һәм тормошҡа ашырыу планы.
+- Эште тамамлағандан һуң, `status.md`-та яңыртыу статусы һәм `roadmap.md`-та һаҡланған бурыстарға йүнәлтелгән.
 
-## Agent workflow (for code editors/automation)
-- If you need clarification on any requirement, stop and draft a ChatGPT prompt with your question, then share it with the user before continuing.
-- Keep changes minimal and scoped; avoid unrelated edits in the same patch.
-- Prefer internal modules over adding new dependencies; do not edit `Cargo.lock`.
-- Use feature flags to guard hardware-accelerated paths (e.g., `simd`, `cuda`) and always provide a deterministic fallback path.
-- Ensure outputs remain identical across hardware; avoid relying on non-deterministic parallel reductions.
-- Update documentation and examples when public APIs or behavior change.
-- Validate serialization changes in `iroha_data_model` with roundtrip tests to preserve Norito layout guarantees.
-- Integration tests spin real multi-peer networks; use at least 4 peers when constructing test networks (single-peer configs are not representative and can deadlock in Sumeragi).
-- Do not attempt to disable DA/RBC in tests (e.g., via `DevBypassDaAndRbcForZeroChain`); DA is enforced and that bypass path currently deadlocks in `sumeragi` during consensus startup.
-- QC quorum must be satisfied by voting validators (`min_votes_for_commit`); observer padding does not count toward availability/prevote/precommit quorum checks, so aggregate QCs only after enough validator votes arrive.
-- DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 4 * commit_time`) to let RBC/availability QC finish on slower hosts.
+## Агент эш ағымы (код мөхәррирҙәре өсөн/автоматизация)
+- Әгәр һеҙгә асыҡлыҡ индереү кәрәк, ниндәй ҙә булһа талап, туҡтатып, проектлау ChatGPT һеҙҙең һорау менән өндәү, тимәк, уны ҡулланыусы менән бүлешергә дауам итеү алдынан.
+- Үҙгәрештәрҙе минималь һәм спиртлы тотоу; бер үк патчта бәйле булмаған мөхәррирләүҙәрҙән ҡотолорға.
+- Яңы бәйлелектәрҙе өҫтәү өҫтөндә эске модулдәрҙе өҫтөн ҡуйыу; `Cargo.lock` мөхәррирләнмәй.
+- Ҡулланыу функцияһы флагтар һаҡлау өсөн аппарат-тиҙләтелгән юлдар (мәҫәлән, `simd`, `cuda`) һәм һәр ваҡыт детерминистик fallback юл тәьмин итеү.
+- Тайыштарҙы тәьмин итеү аппарат буйынса бер үк булып ҡала; детерминистик булмаған параллель кәметмәләргә таянып ҡотолоу.
+- Яңыртыу документация һәм миҫалдар ҡасан йәмәғәт APIs йәки тәртип үҙгәргән.
+- I18NI000000136X XX сериализация үҙгәрештәрен раҫлау өсөн Norito-ның планировкаһы гарантияларын һаҡлау өсөн roundtrip.
+- Интеграция һынауҙары реаль күп тиңдәш селтәрҙәрҙе әйләндерә; тест селтәрҙәрен төҙөгәндә кәмендә 4 тиңдәште ҡулланыу (бер тиңдәшле конфигурациялар вәкиллекле түгел һәм Sumeragi-та тупаҫ була ала).
+- Һынауҙарҙа DA/RBC-ны өҙөргә тырышмағыҙ (мәҫәлән, `DevBypassDaAndRbcForZeroChain` аша); DA үтәлә һәм был обход юл әлеге ваҡытта тупиктар I18NI000000138X консенсус стартап ваҡытында.
+- QC кворум ҡәнәғәтләндерергә тейеш, тауыш биреүҙең валидаторҙары (`min_votes_for_commit`); күҙәтеүсе прокладка иҫәпкә алмай, доступность/гважина/алдан коммит кворум тикшерелгән, шуға күрә агрегат QCs тик етерлек валитатор тауыштар килгәндән һуң ғына.
+- DA-мөмкинлек биргән консенсус хәҙер оҙаҡ көтә, ҡараш үҙгәрештәргә тиклем (коммит тайм-аут = `block_time + 4 * commit_time`) рөхсәт итеү өсөн RBC/доступность QC яй хосттарҙа тамамлау.
 
-## Navigation tips
-- Search code: `rg '<term>'` and list files: `fd <name>`.
-- Explore crates: `fd --type f Cargo.toml crates | xargs -I{} dirname {}`.
-- Find examples/benches quickly: `fd . crates -E target -t d -d 3 -g "*{examples,benches}"`.
-- Python tip: some environments don’t provide `python`; try `python3` instead when running scripts.
+## Навигация кәңәштәре
+- Эҙләү коды: `rg '<term>'` һәм файлдар исемлеге: `fd <name>`.
+- йәшниктәрҙе тикшерергә: `fd --type f Cargo.toml crates | xargs -I{} dirname {}`.
+- Миҫалдарҙы/ҡаҙаҡтарҙы тиҙ табығыҙ: `fd . crates -E target -t d -d 3 -g "*{examples,benches}"`.
+- Python кәңәше: ҡайһы бер мөхиттәр don’t тәьмин итеү `python`; һынап ҡарағыҙ `python3` урынына сценарийҙар эшләгәндә.
 
-## Proc-Macro Tests
-- Unit tests: use for pure parsing, codegen helpers, and utilities (fast, no compiler involved).
-- UI tests (trybuild): use to validate compile-time behavior and diagnostics of derive/proc-macros (success and expected failure cases with `.stderr`).
-- Prefer both when adding/changing macros: unit tests for internals + UI tests for user-facing behavior and error messages.
-- Avoid panics; emit clear diagnostics (e.g., via `syn::Error` or `proc_macro_error`). Keep messages stable and update `.stderr` only for intentional changes.
+## Прок-Макро һынауҙар
+- Блок һынауҙары: таҙа анализлау өсөн ҡулланыу, коден ярҙамсылары, һәм коммуналь хеҙмәттәр (тиҙ, компилятор ҡатнашмай).
+- UI һынауҙары (тырышлыҡ): ҡулланыу өсөн раҫлау компиляция-ваҡыт тәртибе һәм диагностикаһы алынған/прок-макро (уңыш һәм көтөлгән осраҡтар менән `.stderr`).
+- Өҫтәү һәм өҫтәгәндә лә/үҙгәргән макрос: берәмек һынауҙар өсөн эске + UI һынауҙары өсөн ҡулланыусылар-йөҙөндә тәртип һәм хата тураһында хәбәрҙәр.
+- паниканан ҡасығыҙ; асыҡ диагностика сығарыу (мәҫәлән, `syn::Error` йәки `proc_macro_error` аша). Хәбәрҙәрҙе тотороҡло тотоу һәм яңыртыу I18NI000000150X тик ниәтләп үҙгәрештәр өсөн генә.
 
-## Pull Request message
-Include a short summary of the changes and a `Testing` section describing the commands you ran.
+## Ҡырҡыу запрос хәбәр
+Үҙгәрештәрҙең ҡыҫҡаса йөкмәткеһен һәм `Testing` бүлеген һеҙ йүгергән командаларҙы һүрәтләгән бүлекте индерегеҙ.

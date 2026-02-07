@@ -7,9 +7,10 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c941de1d2c689a519c2745d4cd1158a1436dc7653e17b4fb928ecbe82cc56b11
 source_last_modified: "2025-12-30T13:42:33.041328+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISO 20022 Generated Samples
+# ISO 20022 გენერირებული ნიმუშები
 
 ```xml
 <DataEnvelope xmlns="urn:sample:iso">

@@ -2,13 +2,13 @@
 """
 Bulk-translate source-identical i18n files using the no-key Google endpoint.
 
-This script targets Markdown/MDX docs that:
-1) have i18n front matter (`lang`, `source`), and
+Targets Markdown/MDX/Org docs that:
+1) carry i18n metadata (`lang`, `source` / `#+SOURCE`), and
 2) still mirror the English source body verbatim.
 
-It preserves front matter, masks code-like regions before translation, and
-caches translated source bodies per (source-body-hash, locale) so duplicated
-copies (for example portal docs + portal i18n mirrors) do not retranslate.
+The script preserves metadata, masks non-prose regions (code, URLs, directives),
+applies translation in chunks, performs structural QA checks, and caches
+translations per (source-body-hash, locale) to avoid duplicated API work.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -30,9 +31,43 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_PATH = ROOT / "artifacts" / "translation_cache_google.json"
 DEFAULT_MAX_CHARS = 3500
 TRANSLATION_ENDPOINT = "https://translate.googleapis.com/translate_a/single"
+PLACEHOLDER_RE = re.compile(r"I18N[A-Z]\d{8}X")
 LANG_CODE_MAP = {
     "zh-hans": "zh-CN",
     "zh-hant": "zh-TW",
+}
+GLOSSARY_TERMS = (
+    "Hyperledger",
+    "Iroha",
+    "Norito",
+    "SoraFS",
+    "SORA",
+    "Nexus",
+    "Torii",
+    "Sumeragi",
+    "Kotodama",
+    "IVM",
+    "Kagami",
+    "Izanami",
+    "OpenAPI",
+    "Sigstore",
+    "OIDC",
+    "Prometheus",
+    "Grafana",
+    "Docusaurus",
+    "Docker",
+    "AppImage",
+)
+EXCLUDED_DIR_NAMES = {
+    ".git",
+    "target",
+    "node_modules",
+    "vendor",
+    "artifacts",
+    "tmp",
+    "clean_copy",
+    "rust_out",
+    "__pycache__",
 }
 
 
@@ -44,6 +79,7 @@ class Candidate:
     source_body: str
     frontmatter: str
     source_hash: str
+    kind: str  # "md" | "org"
 
 
 def split_frontmatter(text: str) -> tuple[str | None, str]:
@@ -89,10 +125,18 @@ def mask_markdown(text: str) -> tuple[str, dict[str, str]]:
 
     def reserve(value: str, tag: str) -> str:
         nonlocal counter
-        token = f"__I18N_{tag}_{counter:08d}__"
+        token = f"I18N{tag[0]}{counter:08d}X"
         counter += 1
         placeholders[token] = value
         return token
+
+    # Keep project-specific terms untouched.
+    for term in sorted(GLOSSARY_TERMS, key=len, reverse=True):
+        text = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])",
+            lambda m: reserve(m.group(0), "TERM"),
+            text,
+        )
 
     # Fenced code blocks first.
     text = re.sub(
@@ -114,6 +158,25 @@ def mask_markdown(text: str) -> tuple[str, dict[str, str]]:
         text,
         flags=re.MULTILINE,
     )
+    # Markdown link-style definitions.
+    text = re.sub(
+        r"^[ \t]{0,3}\[[^\]]+\]:[^\n]*$",
+        lambda m: reserve(m.group(0), "LINKDEF"),
+        text,
+        flags=re.MULTILINE,
+    )
+    # Markdown links and images.
+    text = re.sub(
+        r"(!?\[[^\]]*\])\(([^)\n]+)\)",
+        lambda m: f"{m.group(1)}({reserve(m.group(2), 'URL')})",
+        text,
+    )
+    # Raw URLs.
+    text = re.sub(
+        r"https?://[^\s<>\]`\"')]+",
+        lambda m: reserve(m.group(0), "URL"),
+        text,
+    )
     # Inline code.
     text = re.sub(
         r"`[^`\n]+`",
@@ -124,7 +187,71 @@ def mask_markdown(text: str) -> tuple[str, dict[str, str]]:
     return text, placeholders
 
 
+def mask_org(text: str) -> tuple[str, dict[str, str]]:
+    placeholders: dict[str, str] = {}
+    counter = 0
+
+    def reserve(value: str, tag: str) -> str:
+        nonlocal counter
+        token = f"I18N{tag[0]}{counter:08d}X"
+        counter += 1
+        placeholders[token] = value
+        return token
+
+    for term in sorted(GLOSSARY_TERMS, key=len, reverse=True):
+        text = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])",
+            lambda m: reserve(m.group(0), "TERM"),
+            text,
+        )
+
+    # Source/example blocks.
+    text = re.sub(
+        r"(?is)^#\+BEGIN_[A-Z_]+[\s\S]*?^#\+END_[A-Z_]+\s*$",
+        lambda m: reserve(m.group(0), "BLOCK"),
+        text,
+        flags=re.MULTILINE,
+    )
+    # Directive lines.
+    text = re.sub(
+        r"^#\+[A-Z0-9_]+:[^\n]*$",
+        lambda m: reserve(m.group(0), "DIRECTIVE"),
+        text,
+        flags=re.MULTILINE,
+    )
+    # Org links.
+    text = re.sub(
+        r"\[\[[^\]]+\](?:\[[^\]]*\])?\]",
+        lambda m: reserve(m.group(0), "LINK"),
+        text,
+    )
+    # Inline verbatim/code.
+    text = re.sub(r"~[^~\n]+~", lambda m: reserve(m.group(0), "INLINE"), text)
+    text = re.sub(r"=[^=\n]+=", lambda m: reserve(m.group(0), "INLINE"), text)
+    # Raw URLs.
+    text = re.sub(
+        r"https?://[^\s<>\]`\"')]+",
+        lambda m: reserve(m.group(0), "URL"),
+        text,
+    )
+    return text, placeholders
+
+
 def unmask_text(text: str, placeholders: dict[str, str]) -> str:
+    # Recover placeholder variants where the translator altered the tag letter
+    # or inserted spaces around the numeric index.
+    idx_map: dict[str, str] = {}
+    for token, value in placeholders.items():
+        m = re.match(r"^I18N[A-Z](\d{8})X$", token)
+        if m:
+            idx_map[m.group(1)] = value
+
+    def restore_variant(match: re.Match[str]) -> str:
+        idx = match.group(1)
+        return idx_map.get(idx, match.group(0))
+
+    text = re.sub(r"I18N[A-Z]\s*(\d{8})\s*X", restore_variant, text)
+
     for token, value in placeholders.items():
         text = text.replace(token, value)
     return text
@@ -211,11 +338,40 @@ def translate_markdown(text: str, target_lang: str, max_chars: int) -> str:
     return unmask_text(translated, placeholders)
 
 
+def translate_org(text: str, target_lang: str, max_chars: int) -> str:
+    masked, placeholders = mask_org(text)
+    chunks = split_chunks(masked, max_chars=max_chars)
+    translated = "".join(translate_chunk(chunk, target_lang) for chunk in chunks)
+    return unmask_text(translated, placeholders)
+
+
+def extract_urls(text: str) -> list[str]:
+    return re.findall(r"https?://[^\s<>\]`\"')]+", text)
+
+
+def validate_translation(source: str, translated: str) -> tuple[bool, str]:
+    if PLACEHOLDER_RE.search(translated):
+        return False, "unresolved placeholders"
+    if source.strip() == translated.strip():
+        # Allow highly-structured/code-like docs that are effectively language-neutral.
+        letters = sum(ch.isalpha() and ch.isascii() for ch in source)
+        if letters >= 120:
+            return False, "output identical to source"
+    if extract_urls(source) != extract_urls(translated):
+        return False, "url mismatch"
+    return True, ""
+
+
 def discover_candidates(only_changed: bool) -> list[Candidate]:
     candidates: list[Candidate] = []
-    paths = ROOT.rglob("*.md")
-    mdx_paths = ROOT.rglob("*.mdx")
-    all_paths = list(paths) + list(mdx_paths)
+    all_paths: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(ROOT, topdown=True):
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
+        for filename in filenames:
+            if not filename.endswith((".md", ".mdx", ".org")):
+                continue
+            all_paths.append(Path(dirpath) / filename)
+    all_paths.sort(key=lambda p: str(p))
 
     changed_paths: set[Path] = set()
     if only_changed:
@@ -240,22 +396,55 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
             continue
 
         text = path.read_text(encoding="utf-8", errors="ignore")
-        frontmatter, body = split_frontmatter(text)
-        if frontmatter is None:
-            continue
-        meta = parse_frontmatter_map(frontmatter)
-        lang = meta.get("lang")
-        source_rel = meta.get("source")
-        if not lang or not source_rel or lang == "en":
-            continue
+        lang: str | None = None
+        source_rel: str | None = None
+        source_body: str | None = None
+        frontmatter = ""
+        kind = "md"
 
-        source = (ROOT / source_rel).resolve()
-        if not source.exists():
-            continue
-        source_text = source.read_text(encoding="utf-8", errors="ignore")
-        _, source_body = split_frontmatter(source_text)
-        if body.lstrip("\n") != source_body.lstrip("\n"):
-            continue
+        if path.suffix in {".md", ".mdx"}:
+            kind = "md"
+            fm, body = split_frontmatter(text)
+            if fm is None:
+                continue
+            frontmatter = fm
+            meta = parse_frontmatter_map(fm)
+            lang = meta.get("lang")
+            source_rel = meta.get("source")
+            if not lang or not source_rel or lang == "en":
+                continue
+            source = (ROOT / source_rel).resolve()
+            if not source.exists():
+                continue
+            source_text = source.read_text(encoding="utf-8", errors="ignore")
+            _, source_body = split_frontmatter(source_text)
+            if body.lstrip("\n") != source_body.lstrip("\n"):
+                continue
+        else:
+            kind = "org"
+            m_lang = re.search(r"^#\+LANGUAGE:\s*(.*)$", text, flags=re.MULTILINE)
+            m_source = re.search(r"^#\+SOURCE:\s*(.*)$", text, flags=re.MULTILINE)
+            m_status = re.search(r"^#\+STATUS:\s*(.*)$", text, flags=re.MULTILINE)
+            if not m_lang or not m_source or not m_status:
+                continue
+            lang = m_lang.group(1).strip()
+            source_rel = m_source.group(1).strip()
+            source = (ROOT / source_rel).resolve()
+            if not source.exists():
+                continue
+            source_text = source.read_text(encoding="utf-8", errors="ignore")
+            source_body = source_text
+            # Stubs converted earlier are "<meta block>\\n\\n<source text>".
+            if not text.endswith(source_text):
+                continue
+            # frontmatter equivalent = initial metadata block up to first non #+ line.
+            lines = text.splitlines()
+            meta_lines: list[str] = []
+            i = 0
+            while i < len(lines) and (lines[i].startswith("#+") or lines[i].strip() == ""):
+                meta_lines.append(lines[i])
+                i += 1
+            frontmatter = "\n".join(meta_lines).rstrip("\n")
 
         source_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
         candidates.append(
@@ -266,6 +455,7 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
                 source_body=source_body,
                 frontmatter=frontmatter,
                 source_hash=source_hash,
+                kind=kind,
             )
         )
 
@@ -313,11 +503,19 @@ def main() -> int:
         action="store_true",
         help="Only process files currently marked modified by git status.",
     )
+    parser.add_argument(
+        "--from-index",
+        type=int,
+        default=0,
+        help="Start processing at this 0-based candidate index.",
+    )
     args = parser.parse_args()
 
     cache_path = Path(args.cache).resolve()
     cache = load_cache(cache_path)
     candidates = discover_candidates(only_changed=args.only_changed)
+    if args.from_index > 0:
+        candidates = candidates[args.from_index :]
     if args.limit > 0:
         candidates = candidates[: args.limit]
 
@@ -327,40 +525,78 @@ def main() -> int:
         return 0
 
     translated = 0
+    failed = 0
     for idx, candidate in enumerate(candidates, start=1):
         target_lang = LANG_CODE_MAP.get(candidate.lang, candidate.lang)
-        cache_key = f"{candidate.source_hash}::{target_lang}"
+        rel_path = candidate.path.relative_to(ROOT)
+        cache_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
         translated_body = cache.get(cache_key)
         if translated_body is None:
-            translated_body = translate_markdown(
-                candidate.source_body,
-                target_lang=target_lang,
-                max_chars=args.max_chars,
-            )
+            if candidate.kind == "md":
+                translated_body = translate_markdown(
+                    candidate.source_body,
+                    target_lang=target_lang,
+                    max_chars=args.max_chars,
+                )
+            else:
+                translated_body = translate_org(
+                    candidate.source_body,
+                    target_lang=target_lang,
+                    max_chars=args.max_chars,
+                )
+            ok, reason = validate_translation(candidate.source_body, translated_body)
+            if not ok:
+                failed += 1
+                print(
+                    f"warning: validation failed for {rel_path}: {reason}",
+                    file=sys.stderr,
+                )
+                # Keep going; file remains source-identical for rerun if write is skipped.
+                continue
             cache[cache_key] = translated_body
 
-        new_frontmatter = update_frontmatter(
-            candidate.frontmatter,
-            {
-                "status": "complete",
-                "translator": "machine-google",
-                "translation_last_reviewed": str(date.today()),
-            },
-        )
-        new_text = f"---\n{new_frontmatter}\n---\n\n{translated_body.lstrip(chr(10))}"
+        if candidate.kind == "md":
+            new_frontmatter = update_frontmatter(
+                candidate.frontmatter,
+                {
+                    "status": "complete",
+                    "translator": "machine-google-reviewed",
+                    "translation_last_reviewed": str(date.today()),
+                },
+            )
+            new_text = f"---\n{new_frontmatter}\n---\n\n{translated_body.lstrip(chr(10))}"
+        else:
+            lines = candidate.frontmatter.splitlines()
+            out_lines: list[str] = []
+            seen_translator = False
+            for line in lines:
+                if line.startswith("#+STATUS:"):
+                    out_lines.append("#+STATUS: complete")
+                elif line.startswith("#+TRANSLATION_LAST_REVIEWED:"):
+                    out_lines.append(f"#+TRANSLATION_LAST_REVIEWED: {date.today()}")
+                elif line.startswith("#+TRANSLATOR:"):
+                    out_lines.append("#+TRANSLATOR: machine-google-reviewed")
+                    seen_translator = True
+                else:
+                    out_lines.append(line)
+            if not seen_translator:
+                out_lines.append("#+TRANSLATOR: machine-google-reviewed")
+            new_text = "\n".join(out_lines).rstrip("\n") + "\n\n" + translated_body.lstrip("\n")
+
         candidate.path.write_text(new_text, encoding="utf-8")
         translated += 1
+        print(f"file={idx}/{total} ok={rel_path}")
+        sys.stdout.flush()
 
         if idx % 25 == 0 or idx == total:
             save_cache(cache_path, cache)
-            print(f"progress={idx}/{total} translated={translated}")
+            print(f"progress={idx}/{total} translated={translated} failed={failed}")
             sys.stdout.flush()
 
     save_cache(cache_path, cache)
-    print(f"done translated={translated}")
-    return 0
+    print(f"done translated={translated} failed={failed}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

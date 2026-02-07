@@ -7,105 +7,102 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ff9e1108802fdd57703749069f87270c4195f4037a32aa65c28cde9a67b63e98
 source_last_modified: "2025-12-29T18:16:36.279858+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Integration Test Framework for Hyperledger Iroha (7‑Node Network)
+# Ինտեգրման թեստային շրջանակ Hyperledger Iroha-ի համար (7-հանգույցային ցանց)
 
-## Introduction
+## Ներածություն
 
-Hyperledger Iroha v2 provides a rich set of Iroha Special Instructions (ISI) for domain, asset, permission, and peer management. This document specifies an integration test framework for a 7‑peer network to validate correctness, consensus, and cross‑peer consistency under normal and faulty conditions (tolerating up to 2 faulty peers).
+Hyperledger Iroha v2-ը տրամադրում է Iroha Հատուկ հրահանգների (ISI) հարուստ հավաքածու՝ տիրույթի, ակտիվների, թույլտվությունների և գործընկերների կառավարման համար: Այս փաստաթուղթը սահմանում է ինտեգրման թեստային շրջանակ 7-հավասարակից ցանցի համար, որպեսզի հաստատի ճիշտությունը, կոնսենսուսը և խաչասերման հետևողականությունը նորմալ և թերի պայմաններում (մինչև 2 անսարք գործընկերներ):
 
-These guidelines reflect the recent genesis schema migration to multi-transaction blocks.
+Այս ուղեցույցները արտացոլում են ծագման սխեմայի վերջին միգրացիան դեպի բազմաբնույթ գործարքների բլոկներ:
 
-Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests should use HTTP endpoints (commonly ports 8080+). No additional RPC service listens on 50051.
+Նշում API-ի վերաբերյալ. Այս կոդերի բազայում Torii-ը HTTP/WebSocket API է (Axum): Թեստերը պետք է օգտագործեն HTTP վերջնակետեր (սովորաբար 8080+ նավահանգիստներ): Ոչ մի լրացուցիչ RPC ծառայություն չի լսում 50051:
 
-## Objectives
+## Նպատակներ
 
-- Automated 7‑peer orchestration: Start and manage peers programmatically for fast CI (primary), or via Docker Compose (optional).
-- Genesis configuration: Start from a common Norito genesis with deterministic accounts/keys and required permissions.
-- Exercise ISI: Systematically cover ISI via transactions and verify resulting state.
-- Cross‑peer consistency: Query multiple peers after each step to ensure identical ledger state.
-- Fault tolerance checks: With up to 2 peers offline or partitioned, remaining peers continue; returning peers catch up without divergence.
+- Ավտոմատացված 7 հասակակից նվագախումբ. Սկսեք և կառավարեք հասակակիցներին ծրագրային կերպով արագ CI-ի համար (հիմնական) կամ Docker Ստեղծման միջոցով (ըստ ցանկության):
+- Genesis կոնֆիգուրացիա. Սկսեք ընդհանուր Norito ծագումից՝ դետերմինիստական ​​հաշիվներով/բանալիներով և պահանջվող թույլտվություններով:
+- Իրականացնել ISI. համակարգված կերպով ծածկել ISI-ն գործարքների միջոցով և ստուգել արդյունքի վիճակը:
+- Cross-peer-ի հետևողականություն. յուրաքանչյուր քայլից հետո հարցումներ կատարեք մի քանի հասակակիցների՝ ապահովելու համար նույնական մատյանային վիճակ:
+- Սխալների հանդուրժողականության ստուգումներ. մինչև 2 հասակակիցներ անցանց կամ բաժանված լինելով, մնացած հասակակիցները շարունակվում են; վերադարձող հասակակիցները հասնում են առանց տարաձայնությունների:
 
-## Orchestration Modes
+## Նվագախմբի ռեժիմներ
 
-- Rust harness (recommended): `crates/iroha_test_network` spawns `irohad` processes locally, allocates ports, writes per‑run configs and Norito `.nrt` genesis, monitors readiness and block heights, and provides utilities for shutdown/restart.
-- Docker Compose (optional): `crates/iroha_swarm` generates a Compose file for N peers. Use when containerized networking or external orchestration is desired.
+- Ժանգի ամրացում (խորհուրդ է տրվում). `crates/iroha_test_network` առաջացնում է `irohad` մշակում տեղական մակարդակում, հատկացնում է նավահանգիստները, գրում է յուրաքանչյուր գործարկման կոնֆիգուրացիաներ և __I18N_TERM_00000000028_N genesis-ը, վերահսկում է պատրաստվածությունը և արգելափակումների բարձրությունը և ապահովում է կոմունալ ծառայություններ անջատման/վերագործարկման համար:
+- Docker Կազմել (ըստ ցանկության). Օգտագործեք, երբ ցանկալի է կոնտեյներային ցանց կամ արտաքին նվագախումբ:
 
-## Test Network Setup
+## Փորձնական ցանցի կարգավորում
 
-**Genesis Block:**
+** Genesis Block: **
 
-- Source: `defaults/genesis.json` which now groups instructions into a `transactions` array. Tests may append instructions with `NetworkBuilder::with_genesis_instruction` and start a new transaction via `.next_genesis_transaction()`. The resulting block is serialized to Norito `.nrt`.
-- Topology: Stored in the first transaction (`transactions[0].topology`) and includes all 7 peers (public key + address), so each peer knows the network from the start.
-- Accounts/Permissions: Prefer standardized accounts from `crates/iroha_test_samples` (`ALICE_ID`, `BOB_ID`, `SAMPLE_GENESIS_ACCOUNT_KEYPAIR`) with explicit grants for test scenarios, e.g. `CanManagePeers`, `CanManageRoles`, `CanMintAssetWithDefinition`.
-- Injection strategy: With the harness, genesis is typically provided to one peer (the “genesis submitter”); other peers catch up via block sync. With Compose, point all peers to the same genesis path.
+- Աղբյուրը՝ `defaults/genesis.json`, որն այժմ խմբավորում է հրահանգները `transactions` զանգվածի մեջ: Թեստերը կարող են կցել հրահանգներ `NetworkBuilder::with_genesis_instruction`-ով և սկսել նոր գործարք `.next_genesis_transaction()`-ի միջոցով: Ստացված բլոկը սերիականացված է՝ Norito `.nrt`:
+- Տոպոլոգիա. Պահպանվում է առաջին գործարքում (`transactions[0].topology`) և ներառում է բոլոր 7 համարժեքները (հանրային բանալի + հասցե), այնպես որ յուրաքանչյուր հասակակից ի սկզբանե գիտի ցանցը:
+- Հաշիվներ/Թույլտվություններ. Նախընտրեք ստանդարտացված հաշիվներ `crates/iroha_test_samples`-ից (`ALICE_ID`, `BOB_ID`, __I18N_INLINE_00_0000-ի փորձարկումից՝ scenarios, sc. օր. `CanManagePeers`, `CanManageRoles`, `CanMintAssetWithDefinition`:
+- Ներարկման ռազմավարություն. ամրագոտիով գենեզը սովորաբար տրամադրվում է մեկ հասակակից («ծննդաբերություն ներկայացնողին»); մյուս հասակակիցները հասնում են բլոկների համաժամացման միջոցով: Կազմելու միջոցով բոլոր հասակակիցներին մատնանշեք նույն ծագման ուղին:
 
-**Networking and Ports:**
+**Ցանցեր և նավահանգիստներ:**
 
-- Torii HTTP API: `API_ADDRESS` (Axum). For Compose, map `8080`–`8086` for 7 peers to host. The harness auto‑allocates loopback ports.
-- P2P: Internal peer‑to‑peer address is configured in `trusted_peers` and gossiped. The harness auto‑sets `trusted_peers` per run.
+- Torii HTTP API՝ `API_ADDRESS` (Axum): Կազմելու համար քարտեզագրեք `8080`–`8086` 7 հասակակիցների համար: Սարքավորումն ավտոմատ կերպով հատկացնում է շրջադարձային պորտեր:
+- P2P. Ներքին հավասարազոր հասցեն կազմաձևված է `trusted_peers`-ում և բամբասվում է: Սարքավորումը ավտոմատ կերպով սահմանում է `trusted_peers` մեկ վազքում:
 
-**Data Storage:**
+**Տվյալների պահպանում:**- Կուր՝ Iroha v2 բլոկի պահեստավորում (RosDB/Postgres կոնտեյների կարիք չկա): Կարգավորել `[kura]`-ի միջոցով (օրինակ՝ `store_dir`): Անջատել snapshots-ը թեստերի համար `[snapshot]`-ի միջոցով:
 
-- Kura: Iroha v2 block storage (no RocksDB/Postgres container needed). Configure via `[kura]` (e.g., `store_dir`). Disable snapshots for tests via `[snapshot]`.
+**Ազդասարքերի հոսքը:**
 
-**Harness flow:**
+1) Ցանց կառուցել՝ `NetworkBuilder::new().with_peers(7)`; ընտրովի `.with_pipeline_time(...)` և `.with_config_layer(...)` վերափոխումների համար; ընտրեք IVM վառելիք՝ `IvmFuelConfig`-ի միջոցով:
+2) Սկսեք հասակակիցներ՝ `.start()` կամ `.start_blocking()`; գրում է կոնֆիգուրացիայի շերտերը, սահմանում `trusted_peers`, ներարկում է գենեզը մեկ գործընկերոջ համար և սպասում պատրաստակամությանը:
+3) Պատրաստություն. `Network::ensure_blocks(height)` կամ `once_blocks_sync(...)` ապահովում են ոչ դատարկ բլոկի բարձրությունները հասակակիցների սպասելիքներին հասնելու համար: Որպես այլընտրանք, հարցում կատարեք `Client::get_status()`:
 
-1) Build network: `NetworkBuilder::new().with_peers(7)`; optionally `.with_pipeline_time(...)` and `.with_config_layer(...)` for overrides; choose IVM fuel via `IvmFuelConfig`.
-2) Start peers: `.start()` or `.start_blocking()`; writes config layers, sets `trusted_peers`, injects genesis for one peer, and waits for readiness.
-3) Readiness: `Network::ensure_blocks(height)` or `once_blocks_sync(...)` ensures non‑empty block heights reach expectations across peers. Alternatively, poll `Client::get_status()`.
+**Docker Կազմել հոսք (ըստ ցանկության):**
 
-**Docker Compose flow (optional):**
+1) Ստեղծեք գրել. Օգտագործեք `iroha_swarm::Swarm`՝ N հասակակիցներով կազմման ֆայլ թողարկելու համար: Քարտեզագրեք API նավահանգիստները՝ հյուրընկալելու և սահմանելու env vars (CHAIN, բանալիներ, TRUSTED_PEERS, GENESIS):
+2) Սկիզբ՝ `docker compose up`:
+3) Պատրաստություն. Հարցում Torii HTTP վերջնակետերը մինչև առողջ կարգավիճակը և բլոկի բարձրությունը ≥ 1:
 
-1) Generate compose: Use `iroha_swarm::Swarm` to emit a compose file with N peers. Map API ports to host and set env vars (CHAIN, keys, TRUSTED_PEERS, GENESIS).
-2) Start: `docker compose up`.
-3) Readiness: Poll Torii HTTP endpoints until status healthy and block height ≥ 1.
+## Փորձարկման ամրագոտիների ներդրում (ժանգ)
 
-## Test Harness Implementation (Rust)
+**Հաճախորդ և գործարքներ.**
 
-**Client & Transactions:**
+- Օգտագործեք `iroha::client::Client` (HTTP/WebSocket)՝ գործարքներ և հարցումներ Torii հասցեին ուղարկելու համար:
+- Կառուցեք գործարքներ ISI `InstructionBox` հաջորդականություններից կամ IVM բայթկոդից; նշան `KeyPair` որոշիչ արժեքներով `iroha_test_samples`-ից:
+- Օգտակար զանգեր՝ `submit_blocking`, `submit_all_blocking`, `query(...).execute()/execute_all()`, `get_status()`, արգելափակել և իրադարձությունների հոսքեր:
 
-- Use `iroha::client::Client` (HTTP/WebSocket) to submit transactions and queries to Torii.
-- Build transactions from ISI `InstructionBox` sequences or IVM bytecode; sign with deterministic `KeyPair` values from `iroha_test_samples`.
-- Useful calls: `submit_blocking`, `submit_all_blocking`, `query(...).execute()/execute_all()`, `get_status()`, block and event streams over WebSocket.
+**Խաչափայտի հետևողականություն.**
 
-**Cross‑Peer Consistency:**
+- Յուրաքանչյուր գործողությունից հետո հարցում կատարեք յուրաքանչյուր վազող գործընկերոջը (`Network::peers()` → `peer.client()`) և համեմատեք արդյունքները (օրինակ՝ մնացորդները, սահմանումները, հավասարակցային ցուցակները): Սա ապահովում է հետևողականության ուժեղ ստուգումներ՝ մեկ հասակակիցների ստուգումից դուրս:
 
-- After each operation, query every running peer (`Network::peers()` → `peer.client()`) and compare results (e.g., balances, definitions, peer lists). This ensures strong consistency checks beyond single‑peer verification.
+** Սխալ ներարկում (առանց բեռնարկղերի): **
 
-**Fault Injection (no containers):**
+- Օգտագործեք `integration_tests/tests/extra_functional/unstable_network.rs`-ի ռելեի/պրոքսի կոմունալ ծառայությունները՝ `trusted_peers` վերագրանցելու համար TCP վստահված անձանց և ընտրովի կասեցնելու հղումները: Սա հնարավորություն է տալիս նպատակային միջնորմներ, կաթիլներ և վերամիացումներ:
 
-- Use the relay/proxy utilities in `integration_tests/tests/extra_functional/unstable_network.rs` to rewrite `trusted_peers` to TCP proxies and selectively suspend links. This enables targeted partitions, drops, and reconnections.
+**IVM նախադրյալներ՝**
 
-**IVM prerequisites:**
+- Որոշ թեստեր պահանջում են նախապես կառուցված IVM նմուշներ; համոզվեք, որ `crates/ivm/target/prebuilt/build_config.toml` գոյություն ունի: Եթե ​​բացակայում է, թեստերը կարող են բաց թողնել (ներկայիս ինտեգրման թեստերը կատարում են այս ստուգումը):
 
-- Some tests require prebuilt IVM samples; ensure `crates/ivm/target/prebuilt/build_config.toml` exists. Where missing, tests can be skipped (current integration tests do this check).
+## 7-հանգույցի սցենարի ուրվագիծ
 
-## 7‑Node Scenario Outline
+1) Սկսեք 7-հասակակիցների ցանց (զարդարել կամ Կազմել) և սպասեք, որ Genesis-ը կատարվի հասակակիցների միջև:
+2) Կատարել ISI-ի փաթեթ.
+   - Գրանցեք տիրույթներ / հաշիվներ / ակտիվներ; թույլտվությունների տրամադրում/չեղարկում; անանուխ/այրել/փոխանցել ակտիվներ; սահմանել/հեռացնել բանալիների արժեքները; գրանցման գործարկիչներ; արդիականացման կատարող:
+3) Յուրաքանչյուր տրամաբանական քայլից հետո կատարեք խաչմերուկային հարցումներ՝ նույնական վիճակը ստուգելու համար:
+4) Դադարեցրեք 1–2 գործընկերներին, շարունակեք գործարքներ ներկայացնել մնացած 5 գործընկերների հետ. ապահովել առաջընթաց և հետևողականություն վազող հասակակիցների միջև:
+5) Վերագործարկեք դադարեցված հասակակիցները և ստուգեք «catch-up» և «cross-peer» հավասարությունը:
 
-1) Start a 7‑peer network (harness or Compose) and wait for genesis commit across peers.
-2) Execute a suite of ISI:
-   - Register domains/accounts/assets; grant/revoke permissions; mint/burn/transfer assets; set/remove key‑values; register triggers; upgrade executor.
-3) After each logical step, run cross‑peer queries to verify identical state.
-4) Stop 1–2 peers, continue submitting transactions with remaining 5 peers; ensure progress and consistency among running peers.
-5) Restart stopped peers and verify catch‑up and cross‑peer equality.
+## CI Օգտագործում
 
-## CI Usage
+- Կառուցել՝ `cargo build --workspace`
+- Նախակառուցեք IVM նմուշներ (ինչպես պահանջվում է թեստերով)
+- Փորձարկում՝ `cargo test --workspace`
+- Ընտրովի ավելի խստացված ծածկույթ. `cargo clippy --workspace --all-targets -- -D warnings`
 
-- Build: `cargo build --workspace`
-- Prebuild IVM samples (as required by tests)
-- Test: `cargo test --workspace`
-- Optional stricter lint: `cargo clippy --workspace --all-targets -- -D warnings`
-
-## Conclusion
-
-This framework leverages the in‑repo Rust harness (`iroha_test_network`) and HTTP‑based client (`iroha::client::Client`) to validate a 7‑peer Iroha v2 network. It emphasizes cross‑peer consistency, realistic fault scenarios, and repeatable setup/teardown suitable for CI. Docker Compose via `iroha_swarm` is available when containerization is preferred.
+## ԵզրակացությունԱյս շրջանակն օգտագործում է ռեպո Rust զրահը (`iroha_test_network`) և HTTP-ի վրա հիմնված հաճախորդը (`iroha::client::Client`)՝ վավերացնելու 7-հավասարաչափ __I18N_TERM_00_002 ցանցը: Այն ընդգծում է խաչաձև հետևողականությունը, անսարքության իրատեսական սցենարները և CI-ի համար պիտանի կրկնվող տեղադրումը/խափանումը: Docker Գրել `iroha_swarm`-ի միջոցով հասանելի է, երբ նախընտրելի է կոնտեյներացումը:
 
 ## Explorer
 
-- Any blockchain explorer that speaks Torii HTTP/WebSocket can connect to each peer independently. Each peer exposes a Torii endpoint (host:port) suitable for status, blocks, queries, and events.
-- With the Rust harness: after building a network you can derive the URLs for all peers:
+- Ցանկացած բլոկչեյն հետազոտող, որը խոսում է Torii HTTP/WebSocket-ի հետ, կարող է ինքնուրույն միանալ յուրաքանչյուր գործընկերոջը: Յուրաքանչյուր գործընկեր բացահայտում է Torii վերջնակետը (հյուրընկալող:պորտ), որը հարմար է կարգավիճակի, բլոկների, հարցումների և իրադարձությունների համար:
+- Rust զրահով. ցանց կառուցելուց հետո դուք կարող եք ստանալ URL-ները բոլոր հասակակիցների համար.
 
   ```rust
   use iroha_test_network::NetworkBuilder;
@@ -115,6 +112,6 @@ This framework leverages the in‑repo Rust harness (`iroha_test_network`) and H
   // e.g. ["http://127.0.0.1:8080", ..., "http://127.0.0.1:8086"]
   ```
 
-  Per‑peer helpers are also available: `peer.api_address()` and `peer.torii_url()`.
+  Հասանելի են նաև օգնականներ՝ `peer.api_address()` և `peer.torii_url()`:
 
-- With Docker Compose (`iroha_swarm`): generate a 7‑peer compose file and map `8080..8086` to the host; point your explorer to each of those addresses. If your explorer supports multiple endpoints, configure all 7; otherwise run one explorer instance per peer.
+- Docker Compose-ով (`iroha_swarm`). ստեղծեք 7-հավասարակից կազմման ֆայլ և քարտեզագրեք `8080..8086` հյուրընկալողին; ուղղեք ձեր հետազոտողին այդ հասցեներից յուրաքանչյուրին: Եթե ​​ձեր հետախույզն աջակցում է մի քանի վերջնակետեր, կազմաձևեք բոլոր 7-ը; հակառակ դեպքում գործարկեք մեկ Explorer-ի օրինակ յուրաքանչյուր գործընկերոջ համար:

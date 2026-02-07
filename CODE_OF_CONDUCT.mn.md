@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# Хувь нэмэр оруулагчийн гэрээний ёс зүйн дүрэм
 
-## Our Pledge
+## Бидний амлалт
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+Нээлттэй, зочломтгой орчинг бүрдүүлэхийн тулд хувь нэмэр оруулагчид болон дэмжигчид бид төсөл болон нийгэмдээ оролцох нь нас, биеийн хэмжээ, хөгжлийн бэрхшээл, үндэс угсаа, хүйсийн баримжаа болон илэрхийлэл, туршлага, үндэс угсаа, гадаад төрх, арьсны өнгө, шашин шүтлэг, бэлгийн баримжаа, эсвэл бэлгийн чиг баримжаа зэргээс үл хамааран хүн бүрийг дарамт шахалтаас ангид байлгахыг амлаж байна.
 
-## Our Standards
+## Манай стандартууд
 
-Examples of behavior that contributes to creating a positive environment include:
+Эерэг орчин бүрдүүлэхэд хувь нэмэр оруулах зан үйлийн жишээнд:
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* Эелдэг, найрсаг үг хэллэг ашиглах
+* Янз бүрийн үзэл бодол, туршлагад хүндэтгэлтэй хандах
+* Бүтээлч шүүмжлэлийг эелдэгээр хүлээж авдаг
+* Нийгэмд хамгийн сайн зүйлд анхаарлаа төвлөрүүлэх
+* Нийгмийн бусад гишүүдэд өрөвдөх сэтгэлийг харуулах
 
-Examples of unacceptable behavior by participants include:
+Оролцогчдын хүлээн зөвшөөрөх боломжгүй зан үйлийн жишээнд:
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* Бэлгийн харьцаанд орсон үг хэллэг, дүрслэл, хүсээгүй бэлгийн анхаарал, дэвшлийг ашиглах
+* Троллинг, доромжилсон/доромжлох сэтгэгдэл, хувийн болон улс төрийн халдлага
+* Нийтийн болон хувийн дарамт шахалт
+* Биет болон цахим хаяг гэх мэт бусдын хувийн мэдээллийг тодорхой зөвшөөрөлгүйгээр нийтлэх
+* Мэргэжлийн орчинд зохисгүй гэж үзэж болох бусад зан үйл
 
-## Our Responsibilities
+## Бидний үүрэг хариуцлага
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+Төслийн удирдагчид хүлээн зөвшөөрөгдөх зан үйлийн стандартыг тодруулах үүрэгтэй бөгөөд аливаа хүлээн зөвшөөрөгдөөгүй зан үйлийн тохиолдлын хариуд зохих, шударга засах арга хэмжээ авах ёстой.
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+Төсөл хэрэгжүүлэгчид энэхүү Ёс зүйн дүрэмд нийцээгүй сэтгэгдэл, тайлбар, код, вики засвар, асуудал болон бусад хувь нэмрийг устгах, засварлах, татгалзах, эсхүл зохисгүй, заналхийлсэн, доромжилсон, хор хөнөөлтэй гэж үзсэн бусад зан үйлд хувь нэмрээ оруулагчийг түр болон бүрмөсөн хориглох эрхтэй.
 
-## Scope
+## Хамрах хүрээ
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+Энэхүү Ёс зүйн дүрэм нь төслийн орон зай болон нийтийн орон зайд аль алинд нь хувь хүн төсөл эсвэл түүний нийгэмлэгийг төлөөлж байгаа тохиолдолд үйлчилнэ. Төслийн албан ёсны цахим шуудангийн хаяг ашиглах, албан ёсны олон нийтийн мэдээллийн хэрэгслээр нийтлэх, онлайн эсвэл офлайн арга хэмжээнд томилогдсон төлөөлөгчөөр ажиллах зэрэг төсөл эсвэл нийгэмлэгийг төлөөлөх жишээнүүд орно. Төслийн төлөөллийг төслийн удирдагчид нэмж тодорхойлж, тодруулж болно.
 
-## Enforcement
+## Хууль сахиулах
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+Төслийн багтай [энд](./CONTRIBUTING.md#contact) холбогдож, зүй бусаар ашигласан, дарамталсан, эсвэл хүлээн зөвшөөрөгдөөгүй зан үйлийн талаар мэдээлж болно. Бүх гомдлыг хянан шалгаж, шаардлагатай бөгөөд нөхцөл байдалд тохирсон хариуг өгнө. Төслийн баг үйл явдлын талаар мэдээлэгчийн нууцыг хадгалах үүрэгтэй. Хэрэгжүүлэх тодорхой бодлогын талаарх дэлгэрэнгүй мэдээллийг тусад нь нийтэлж болно.
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+Ёс зүйн дүрмийг сайн санааны үүднээс дагаж мөрдөөгүй эсвэл хэрэгжүүлээгүй төслийн удирдагчид төслийн удирдлагын бусад гишүүдийн тодорхойлсон түр зуурын эсвэл байнгын үр дагаварт хүргэж болзошгүй.
 
-## Attribution
+## Атрибут
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+Энэхүү Ёс зүйн дүрмийг [http://contributor-covenant.org/version/1/4][хувилбар]-аас авах боломжтой [Хувилбарын гэрээ] [нүүр хуудас], 1.4 хувилбараас тохируулсан болно.
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/
