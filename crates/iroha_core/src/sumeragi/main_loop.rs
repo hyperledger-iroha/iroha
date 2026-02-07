@@ -1302,9 +1302,7 @@ fn qc_validator_set_matches_topology(
     if HashOf::new(&qc.validator_set) != qc.validator_set_hash {
         return false;
     }
-    let mut canonical = canonical_topology.clone();
-    canonical.canonicalize_order();
-    qc.validator_set.as_slice() == canonical.as_ref()
+    qc.validator_set.as_slice() == canonical_topology.as_ref()
 }
 
 #[derive(Debug, Clone)]

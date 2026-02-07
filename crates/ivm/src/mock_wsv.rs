@@ -2624,9 +2624,19 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
 }
 
 /// Parse a JSON payload and return either the raw string value or selected field contents.
+fn parse_json_value_any(bytes: &[u8]) -> Result<njson::Value, VMError> {
+    if let Ok(raw) = core::str::from_utf8(bytes)
+        && let Ok(value) = njson::from_str(raw)
+    {
+        return Ok(value);
+    }
+    let json: Json = decode_from_bytes(bytes).map_err(|_| VMError::NoritoInvalid)?;
+    njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)
+}
+
+/// Parse a JSON payload and return either the raw string value or selected field contents.
 fn parse_json_string_any(bytes: &[u8], keys: &[&str]) -> Result<String, VMError> {
-    let json: Json = decode_from_bytes(bytes).map_err(|_| VMError::DecodeError)?;
-    let value: njson::Value = njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
+    let value = parse_json_value_any(bytes)?;
     if let Some(s) = value.as_str() {
         return Ok(s.to_string());
     }
@@ -2640,8 +2650,7 @@ fn parse_json_string_any(bytes: &[u8], keys: &[&str]) -> Result<String, VMError>
 
 /// Parse a JSON payload and extract a string array from the top-level value or one of the provided keys.
 fn parse_json_string_array_any(bytes: &[u8], keys: &[&str]) -> Result<Vec<String>, VMError> {
-    let json: Json = decode_from_bytes(bytes).map_err(|_| VMError::DecodeError)?;
-    let value: njson::Value = njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
+    let value = parse_json_value_any(bytes)?;
 
     let array = if let Some(arr) = value.as_array() {
         arr
@@ -2669,16 +2678,18 @@ fn parse_peer_any(bytes: &[u8]) -> Result<Peer, VMError> {
     Peer::from_str(&peer).map_err(|_| VMError::NoritoInvalid)
 }
 
-// Parse permission JSON into a PermissionToken using typed Norito conversions.
-fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
-    use norito::json::{self, JsonDeserializeOwned, Value};
-
-    fn parse_field<T: JsonDeserializeOwned>(map: &json::Map, key: &str) -> Result<T, VMError> {
-        let value = map.get(key).ok_or(VMError::NoritoInvalid)?;
-        json::from_value(value.clone()).map_err(|_| VMError::NoritoInvalid)
+fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMError> {
+    fn parse_target<T>(map: &njson::Map) -> Result<T, VMError>
+    where
+        T: core::str::FromStr,
+    {
+        let target = map
+            .get("target")
+            .and_then(njson::Value::as_str)
+            .ok_or(VMError::NoritoInvalid)?;
+        target.parse().map_err(|_| VMError::NoritoInvalid)
     }
 
-    let value: Value = json::from_slice(s.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
     if let Some(name) = value.as_str() {
         return parse_permission_name(name);
     }
@@ -2686,7 +2697,7 @@ fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
     let map = value.as_object().ok_or(VMError::NoritoInvalid)?;
     let kind = map
         .get("type")
-        .and_then(Value::as_str)
+        .and_then(njson::Value::as_str)
         .ok_or(VMError::NoritoInvalid)?;
 
     match kind {
@@ -2694,51 +2705,71 @@ fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
         "register_account" => Ok(PermissionToken::RegisterAccount),
         "register_asset_definition" => Ok(PermissionToken::RegisterAssetDefinition),
         "register_zk_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::RegisterZkAsset(id))
         }
         "read_assets" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId = parse_target(map)?;
             Ok(PermissionToken::ReadAccountAssets(account))
         }
         "add_signatory" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId = parse_target(map)?;
             Ok(PermissionToken::AddSignatory(account))
         }
         "remove_signatory" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId = parse_target(map)?;
             Ok(PermissionToken::RemoveSignatory(account))
         }
         "set_account_quorum" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId = parse_target(map)?;
             Ok(PermissionToken::SetAccountQuorum(account))
         }
         "set_account_detail" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId = parse_target(map)?;
             Ok(PermissionToken::SetAccountDetail(account))
         }
         "shield" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::Shield(id))
         }
         "unshield" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::Unshield(id))
         }
         "mint_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::MintAsset(id))
         }
         "burn_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::BurnAsset(id))
         }
         "transfer_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::TransferAsset(id))
         }
         _ => Err(VMError::NoritoInvalid),
     }
+}
+
+// Parse permission JSON into a PermissionToken.
+fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
+    let value: njson::Value =
+        njson::from_slice(s.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
+    parse_permission_value(&value)
+}
+
+fn parse_permission_json_any(bytes: &[u8]) -> Result<PermissionToken, VMError> {
+    let value = parse_json_value_any(bytes)?;
+    parse_permission_value(&value)
+}
+
+fn parse_permission_name_any(bytes: &[u8]) -> Result<PermissionToken, VMError> {
+    if let Ok(raw) = core::str::from_utf8(bytes) {
+        return parse_permission_name(raw);
+    }
+    let name: Name = decode_from_bytes(bytes).map_err(|_| VMError::NoritoInvalid)?;
+    parse_permission_name(name.as_ref())
 }
 
 // Keep tests at the end of the file to satisfy clippy::items_after_test_module
@@ -2846,7 +2877,8 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_DECODE_INT => {
-                // r10 = &NoritoBytes (Norito-framed i64) -> r10 = parsed i64 value
+                // r10 = &NoritoBytes (prefer Norito i64; legacy UTF-8 decimal is also accepted)
+                // -> r10 = parsed i64 value
                 let addr = vm.register(10);
                 if addr == 0 {
                     vm.set_register(10, 0);
@@ -2863,7 +2895,15 @@ impl IVMHost for WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let val: i64 = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let val: i64 = if let Ok(value) = decode_from_bytes(tlv.payload) {
+                    value
+                } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
+                    raw.parse().map_err(|_| VMError::DecodeError)?
+                } else {
+                    let raw: String =
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    raw.parse().map_err(|_| VMError::DecodeError)?
+                };
                 vm.set_register(10, val as u64);
                 Ok(0)
             }
@@ -3066,18 +3106,11 @@ impl IVMHost for WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let json: iroha_primitives::json::Json = match tlv.type_id {
-                    PointerType::NoritoBytes | PointerType::Json => {
-                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
-                    }
-                    PointerType::Blob => {
-                        let raw =
-                            std::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                        iroha_primitives::json::Json::from_str_norito(raw)
-                            .map_err(|_| VMError::NoritoInvalid)?
-                    }
-                    _ => return Err(VMError::NoritoInvalid),
-                };
+                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Json) {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let json: iroha_primitives::json::Json =
+                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -3238,7 +3271,8 @@ impl IVMHost for WsvHost {
             }
 
             crate::syscalls::SYSCALL_NAME_DECODE => {
-                // r10 = &NoritoBytes (Norito-framed Name) -> r10 = &Name
+                // r10 = &NoritoBytes (prefer Norito Name; legacy UTF-8 string is also accepted)
+                // -> r10 = &Name
                 let addr = vm.register(10);
                 if addr == 0 {
                     vm.set_register(10, 0);
@@ -3256,7 +3290,15 @@ impl IVMHost for WsvHost {
                     });
                 }
                 let nm: iroha_data_model::name::Name =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    if let Ok(name) = decode_from_bytes(tlv.payload) {
+                        name
+                    } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
+                        Name::from_str(raw).map_err(|_| VMError::NoritoInvalid)?
+                    } else {
+                        let raw: String =
+                            decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                        Name::from_str(&raw).map_err(|_| VMError::NoritoInvalid)?
+                    };
                 let body = norito::to_bytes(&nm).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
@@ -4944,16 +4986,8 @@ impl IVMHost for WsvHost {
                     let v = vm.register(11);
                     let tlv = vm.memory.validate_tlv(v)?;
                     match tlv.type_id {
-                        PointerType::Name => {
-                            let s = core::str::from_utf8(tlv.payload)
-                                .map_err(|_| VMError::NoritoInvalid)?;
-                            parse_permission_name(s)?
-                        }
-                        PointerType::Json => {
-                            let s = core::str::from_utf8(tlv.payload)
-                                .map_err(|_| VMError::NoritoInvalid)?;
-                            parse_permission_json(s)?
-                        }
+                        PointerType::Name => parse_permission_name_any(tlv.payload)?,
+                        PointerType::Json => parse_permission_json_any(tlv.payload)?,
                         _ => return Err(VMError::NoritoInvalid),
                     }
                 };
@@ -4966,16 +5000,8 @@ impl IVMHost for WsvHost {
                     let v = vm.register(11);
                     let tlv = vm.memory.validate_tlv(v)?;
                     match tlv.type_id {
-                        PointerType::Name => {
-                            let s = core::str::from_utf8(tlv.payload)
-                                .map_err(|_| VMError::NoritoInvalid)?;
-                            parse_permission_name(s)?
-                        }
-                        PointerType::Json => {
-                            let s = core::str::from_utf8(tlv.payload)
-                                .map_err(|_| VMError::NoritoInvalid)?;
-                            parse_permission_json(s)?
-                        }
+                        PointerType::Name => parse_permission_name_any(tlv.payload)?,
+                        PointerType::Json => parse_permission_json_any(tlv.payload)?,
                         _ => return Err(VMError::NoritoInvalid),
                     }
                 };
@@ -5268,7 +5294,8 @@ mod tests_permission_json {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
                 .parse()
                 .unwrap();
-        let s = format!("{{\"type\":\"read_assets\",\"target\":\"{alice}\"}}");
+        let target = njson::to_json(&alice).expect("serialize account target");
+        let s = format!("{{\"type\":\"read_assets\",\"target\":{target}}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::ReadAccountAssets(id) if id == alice));
     }
@@ -5312,7 +5339,8 @@ mod tests_permission_json {
             "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063@wonder"
                 .parse()
                 .unwrap();
-        let s = format!("{{\"type\":\"add_signatory\",\"target\":\"{bob}\"}}");
+        let target = njson::to_json(&bob).expect("serialize account target");
+        let s = format!("{{\"type\":\"add_signatory\",\"target\":{target}}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::AddSignatory(id) if id == bob));
     }
@@ -5323,7 +5351,8 @@ mod tests_permission_json {
             "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063@wonder"
                 .parse()
                 .unwrap();
-        let s = format!("{{\"type\":\"remove_signatory\",\"target\":\"{bob}\"}}");
+        let target = njson::to_json(&bob).expect("serialize account target");
+        let s = format!("{{\"type\":\"remove_signatory\",\"target\":{target}}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::RemoveSignatory(id) if id == bob));
     }
@@ -5334,7 +5363,8 @@ mod tests_permission_json {
             "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063@wonder"
                 .parse()
                 .unwrap();
-        let s = format!("{{\"type\":\"set_account_quorum\",\"target\":\"{bob}\"}}");
+        let target = njson::to_json(&bob).expect("serialize account target");
+        let s = format!("{{\"type\":\"set_account_quorum\",\"target\":{target}}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::SetAccountQuorum(id) if id == bob));
     }
@@ -5345,7 +5375,8 @@ mod tests_permission_json {
             "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063@wonder"
                 .parse()
                 .unwrap();
-        let s = format!("{{\"type\":\"set_account_detail\",\"target\":\"{bob}\"}}");
+        let target = njson::to_json(&bob).expect("serialize account target");
+        let s = format!("{{\"type\":\"set_account_detail\",\"target\":{target}}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::SetAccountDetail(id) if id == bob));
     }
