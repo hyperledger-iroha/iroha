@@ -3111,15 +3111,11 @@ fn runtime_durable_get_or_insert_default_state_map() {
         let namespaced_path = format!("{}\0\0\0\0\0\0\0{}", char::from(0x01), expected_path);
         val = host.wsv.sc_get(&namespaced_path);
     }
-    if val.is_none() {
-        // Fallback without zero padding for hosts predating the sentinel layout.
-        let compat_path = format!("{}{}", char::from(0x01), expected_path);
-        val = host.wsv.sc_get(&compat_path);
-    }
     let val = val.expect("durable state entry should exist");
     let tlv = validate_tlv_bytes(&val).expect("state entry should use NoritoBytes TLV");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(std::str::from_utf8(tlv.payload).unwrap(), "0");
+    let parsed: i64 = norito::decode_from_bytes(tlv.payload).expect("durable payload is i64");
+    assert_eq!(parsed, 0);
 }
 
 #[test]

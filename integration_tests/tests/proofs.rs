@@ -1,12 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration smoke test: submit a proof attachment and query its record via Torii.
 
-use std::{convert::TryFrom as _, str::FromStr as _};
+use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 
 use eyre::{Report, Result};
 use integration_tests::sandbox;
 use iroha_data_model::proof::{ProofId, ProofStatus};
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use reqwest::Client as HttpClient;
 use sha2::{Digest as ShaDigest, Sha256};
 
@@ -68,6 +68,61 @@ fn parse_proof_id_from_json(value: &norito::json::Value) -> Option<ProofId> {
         }
         _ => None,
     }
+}
+
+fn is_retryable_snapshot_error(err: &Report) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .and_then(reqwest::Error::status)
+            .is_some_and(|status| {
+                status == reqwest::StatusCode::NOT_FOUND
+                    || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            })
+    })
+}
+
+fn is_tx_confirmation_timeout(err: &Report) -> bool {
+    const NEEDLES: [&str; 4] = [
+        "haven't got tx confirmation within",
+        "transaction queued for too long",
+        "Connection dropped without `Committed/Applied` or `Rejected` event",
+        "fallback status check failed",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
+fn is_transient_client_error(err: &Report) -> bool {
+    const NEEDLES: [&str; 6] = [
+        "Failed to send http",
+        "error sending request for url",
+        "operation timed out",
+        "Connection refused",
+        "connection closed",
+        "connection reset",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
+fn is_duplicate_tx_error(err: &Report) -> bool {
+    const NEEDLES: [&str; 6] = [
+        "PRTRY:ALREADY_COMMITTED",
+        "PRTRY:ALREADY_ENQUEUED",
+        "already_committed",
+        "already_enqueued",
+        "transaction already committed",
+        "transaction already present in the queue",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
 }
 
 async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], ProofStatus)> {
@@ -135,6 +190,14 @@ async fn submit_proof_and_query_record() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
+    let mut peer_clients = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    if peer_clients.is_empty() {
+        peer_clients.push(client.clone());
+    }
 
     // Prepare a dummy proof under a permissive backend (debug/* returns true)
     let backend = "debug/ok";
@@ -145,9 +208,45 @@ async fn submit_proof_and_query_record() -> Result<()> {
         iroha_data_model::proof::ProofAttachment::new_inline(backend.into(), proof.clone(), vk);
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
 
-    // Submit as a transaction with a single instruction
-    let submit = client.submit_blocking(isi);
-    let Some(_hash) = sandbox::handle_result(submit, "submit_proof_and_query_record::submit")?
+    // Submit the transaction to all peers so one healthy peer can accept it
+    // even if another peer is timing out under load.
+    let tx =
+        client.build_transaction_from_items([isi], iroha_data_model::metadata::Metadata::default());
+    let mut accepted = false;
+    let mut submit_last_err: Option<Report> = None;
+    for submit_client in &peer_clients {
+        match submit_client.submit_transaction(&tx) {
+            Ok(_) => accepted = true,
+            Err(err) if is_duplicate_tx_error(&err) => accepted = true,
+            Err(err) if is_transient_client_error(&err) => {
+                submit_last_err = Some(err);
+            }
+            Err(err) if is_tx_confirmation_timeout(&err) => {
+                submit_last_err = Some(err);
+            }
+            Err(err) => {
+                let submit: Result<()> = Err(err);
+                let Some(()) =
+                    sandbox::handle_result(submit, "submit_proof_and_query_record::submit")?
+                else {
+                    return Ok(());
+                };
+            }
+        }
+    }
+    if !accepted {
+        let submit: Result<()> =
+            Err(submit_last_err.unwrap_or_else(|| Report::msg("all peers unreachable")));
+        let Some(()) = sandbox::handle_result(submit, "submit_proof_and_query_record::submit")?
+        else {
+            return Ok(());
+        };
+    }
+
+    let Some(_) = sandbox::handle_result(
+        network.ensure_blocks(2).await,
+        "submit_proof_and_query_record::wait_blocks",
+    )?
     else {
         return Ok(());
     };
@@ -161,15 +260,64 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let pid_str = format!("{pid}");
 
     // Query Torii
-    let mut url = client.torii_url.clone();
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .expect("torii_url must be a base URL");
-        segments.clear();
-        segments.extend(&["v1", "proofs", &pid_str]);
+    let proof_path = ["v1", "proofs", pid_str.as_str()];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
+    let mut last_err: Option<Report> = None;
+    let mut next_client_idx = 0usize;
+    let snapshot = loop {
+        let mut url = peer_clients[next_client_idx % peer_clients.len()]
+            .torii_url
+            .clone();
+        next_client_idx = next_client_idx.wrapping_add(1);
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .expect("torii_url must be a base URL");
+            segments.clear();
+            segments.extend(proof_path);
+        }
+
+        match fetch_proof_snapshot(url).await {
+            Ok((backend_got, proof_hash_got, status_got))
+                if status_got == iroha_data_model::proof::ProofStatus::Verified =>
+            {
+                break Ok((backend_got, proof_hash_got, status_got));
+            }
+            Ok((_backend_got, _proof_hash_got, status_got))
+                if status_got == iroha_data_model::proof::ProofStatus::Rejected =>
+            {
+                break Err(Report::msg("proof record reached Rejected status"));
+            }
+            Ok(_) => {
+                if tokio::time::Instant::now() >= deadline {
+                    break Err(Report::msg(
+                        "timed out waiting for proof record to reach Verified status",
+                    ));
+                }
+            }
+            Err(err) => {
+                if is_retryable_snapshot_error(&err) {
+                    last_err = Some(err);
+                    if tokio::time::Instant::now() >= deadline {
+                        break Err(Report::msg(
+                            "timed out waiting for proof record to become queryable",
+                        ));
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break Err(err);
+                }
+                last_err = Some(err);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    let snapshot = fetch_proof_snapshot(url).await;
+    .or_else(|err| match last_err {
+        Some(last_err) => Err(err.wrap_err(last_err)),
+        None => Err(err),
+    });
     let Some((backend_got, proof_hash_got, status_got)) =
         sandbox::handle_result(snapshot, "submit_proof_and_query_record::fetch_record")?
     else {

@@ -1013,8 +1013,7 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_DECODE_INT => {
-                // r10 = &NoritoBytes (prefer Norito i64; legacy UTF-8 decimal is also accepted)
-                // return r10 = parsed i64
+                // r10 = &NoritoBytes (Norito-framed i64) -> r10 = parsed i64
                 let addr = vm.register(10);
                 if addr == 0 {
                     if crate::dev_env::decode_trace_enabled() {
@@ -1035,15 +1034,7 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let val: i64 = if let Ok(value) = decode_from_bytes(tlv.payload) {
-                    value
-                } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
-                    raw.parse().map_err(|_| VMError::DecodeError)?
-                } else {
-                    let raw: String =
-                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                    raw.parse().map_err(|_| VMError::DecodeError)?
-                };
+                let val: i64 = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 vm.set_register(10, val as u64);
                 Ok(0)
             }
@@ -2180,7 +2171,8 @@ mod tests {
     fn decode_int_syscall_sets_register() {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
-        let tlv = make_tlv(b"12345");
+        let payload = norito::to_bytes(&12345_i64).expect("encode i64");
+        let tlv = make_tlv(&payload);
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
         let program = assemble_program(&[
             encoding::wide::encode_sys(
@@ -2193,6 +2185,41 @@ mod tests {
         vm.set_register(10, ptr);
         vm.run().expect("run");
         assert_eq!(vm.register(10), 12345);
+    }
+
+    #[test]
+    fn decode_int_syscall_rejects_non_norito_i64_payloads() {
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_DECODE_INT as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        let cases = vec![
+            ("utf8-decimal", b"-77".to_vec()),
+            (
+                "norito-string",
+                norito::to_bytes(&"-19".to_string()).expect("encode string"),
+            ),
+        ];
+
+        for (label, payload) in cases {
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(CoreHost::new());
+            let ptr = vm
+                .alloc_input_tlv(&make_tlv(&payload))
+                .expect("alloc payload tlv");
+            vm.load_program(&program).expect("load program");
+            vm.set_register(10, ptr);
+            let err = vm
+                .run()
+                .expect_err("decode_int should reject non-i64 payload");
+            assert!(
+                matches!(err, VMError::DecodeError),
+                "decode_int payload variant {label} should yield DecodeError, got {err:?}"
+            );
+        }
     }
 
     #[test]
