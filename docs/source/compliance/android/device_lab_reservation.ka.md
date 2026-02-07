@@ -7,103 +7,102 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 05dc578338882ddfcdf2410b0643774ceb8212f28739ba94ac83edf087b9b5dc
 source_last_modified: "2025-12-29T18:16:35.924530+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Reservation Procedure (AND6/AND7)
+# Android მოწყობილობის ლაბორატორიის დაჯავშნის პროცედურა (AND6/AND7)
 
-This playbook describes how the Android team books, confirms, and audits device
-lab time for milestones **AND6** (CI & compliance hardening) and **AND7**
-(observability readiness). It complements the contingency log in
-`docs/source/compliance/android/device_lab_contingency.md` by ensuring capacity
-shortfalls are avoided in the first place.
+ეს სათამაშო წიგნი აღწერს, თუ როგორ ამოწმებს Android-ის გუნდი მოწყობილობას, ადასტურებს და ამოწმებს
+ლაბორატორიული დრო ეტაპებისთვის **AND6** (CI და შესაბამისობის გამკვრივება) და **AND7**
+(დაკვირვებადობის მზადყოფნა). ის ავსებს შემთხვევით შესვლას
+`docs/source/compliance/android/device_lab_contingency.md` სიმძლავრის უზრუნველსაყოფად
+ნაკლოვანებების თავიდან აცილება თავიდანვე ხდება.
 
-## 1. Goals & Scope
+## 1. მიზნები და სფერო
 
-- Keep the StrongBox + general device pools above the roadmap-mandated 80 %
-  capacity target throughout freeze windows.
-- Provide a deterministic calendar so CI, attestation sweeps, and chaos
-  rehearsals never compete for the same hardware.
-- Capture an auditable trail (requests, approvals, post-run notes) that feeds
-  the AND6 compliance checklist and the evidence log.
+- შეინახეთ StrongBox + ზოგადი მოწყობილობების აუზები საგზაო რუქით დადგენილ 80%-ზე მაღლა
+  სიმძლავრის სამიზნე მთელ გაყინულ ფანჯრებში.
+- მიაწოდეთ განმსაზღვრელი კალენდარი, რათა მოხდეს CI, ატესტაციის გაწმენდა და ქაოსი
+  რეპეტიციები არასოდეს ეჯიბრება იმავე აპარატურას.
+- გადაიღეთ აუდიტორული ბილიკი (მოთხოვნები, დამტკიცებები, გაშვების შემდგომი შენიშვნები), რომელიც კვებავს
+  AND6 შესაბამისობის საკონტროლო სია და მტკიცებულებების ჟურნალი.
 
-This procedure covers the dedicated Pixel lanes, the shared fallback pool, and
-the external StrongBox lab retainer referenced in the roadmap. Ad‑hoc emulator
-usage is out of scope.
+ეს პროცედურა მოიცავს Pixel-ის გამოყოფილ ხაზებს, საერთო სარეზერვო აუზს და
+გარე StrongBox ლაბორატორიის დამჭერი, რომელიც მითითებულია საგზაო რუკაში. Ad-hoc ემულატორი
+გამოყენება სცილდება.
 
-## 2. Reservation Windows
+## 2. დაჯავშნა Windows
 
-| Pool / Lane | Hardware | Default Slot Length | Booking Lead Time | Owner |
-|-------------|----------|---------------------|-------------------|-------|
-| `pixel8pro-strongbox-a` | Pixel 8 Pro (StrongBox) | 4 h | 3 business days | Hardware Lab Lead |
-| `pixel8a-ci-b` | Pixel 8a (CI general) | 2 h | 2 business days | Android Foundations TL |
-| `pixel7-fallback` | Pixel 7 shared pool | 2 h | 1 business day | Release Engineering |
-| `firebase-burst` | Firebase Test Lab smoke queue | 1 h | 1 business day | Android Foundations TL |
-| `strongbox-external` | External StrongBox lab retainer | 8 h | 7 calendar days | Program Lead |
+| აუზი / შესახვევი | აპარატურა | ნაგულისხმევი სლოტის სიგრძე | დაჯავშნის დრო | მფლობელი |
+|-------------|----------|-------------------|------------------|------|
+| `pixel8pro-strongbox-a` | Pixel8Pro (StrongBox) | 4სთ | 3 სამუშაო დღე | ტექნიკის ლაბორატორია წამყვანი |
+| `pixel8a-ci-b` | Pixel8a (CI ზოგადი) | 2სთ | 2 სამუშაო დღე | Android Foundations TL |
+| `pixel7-fallback` | Pixel7 საერთო აუზი | 2სთ | 1 სამუშაო დღე | გამოშვების ინჟინერია |
+| `firebase-burst` | Firebase Test Lab კვამლის რიგი | 1სთ | 1 სამუშაო დღე | Android Foundations TL |
+| `strongbox-external` | გარე StrongBox ლაბორატორიის რეტეინერი | 8 სთ | 7 კალენდარული დღე | პროგრამის წამყვანი |
 
-Slots are booked in UTC; overlapping reservations require explicit approval
-from the Hardware Lab Lead.
+სლოტები დაჯავშნილია UTC-ში; გადახურვის დაჯავშნა მოითხოვს მკაფიო დამტკიცებას
+ტექნიკის ლაბორატორიის წამყვანიდან.
 
-## 3. Request Workflow
+## 3. მოითხოვეთ სამუშაო პროცესი
 
-1. **Prepare context**
-   - Update `docs/source/sdk/android/android_strongbox_device_matrix.md` with
-     the devices you plan to exercise and the readiness tag
+1. ** მოამზადეთ კონტექსტი **
+   - განაახლეთ `docs/source/sdk/android/android_strongbox_device_matrix.md`-ით
+     მოწყობილობები, რომელთა განხორციელებასაც აპირებთ და მზადყოფნის ტეგი
      (`attestation`, `ci`, `chaos`, `partner`).
-   - Collect the latest capacity snapshot from
+   - შეაგროვეთ უახლესი სიმძლავრის სურათი
      `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. **Submit request**
-   - File a ticket in the `_android-device-lab` queue using the template in
-     `docs/examples/android_device_lab_request.md` (owner, dates, workloads,
-     fallback requirement).
-   - Attach any regulatory dependencies (e.g. AND6 attestation sweep, AND7
-     telemetry drill) and link to the relevant roadmap entry.
-3. **Approval**
-   - Hardware Lab Lead reviews within one business day, confirms slot in the
-     shared calendar (`Android Device Lab – Reservations`), and updates the
-     `device_lab_capacity_pct` column in
+2. **მოთხოვნის გაგზავნა **
+   - შეიტანეთ ბილეთი `_android-device-lab` რიგში შაბლონის გამოყენებით
+     `docs/examples/android_device_lab_request.md` (მფლობელი, თარიღები, დატვირთვები,
+     სარეზერვო მოთხოვნა).
+   - მიამაგრეთ ნებისმიერი მარეგულირებელი დამოკიდებულება (მაგ. AND6 ატესტაციის გაწმენდა, AND7
+     ტელემეტრიული საბურღი) და ბმული შესაბამის საგზაო რუკაზე.
+3. **დამტკიცება**
+   - Hardware Lab Lead მიმოხილვები ერთი სამუშაო დღის განმავლობაში, ადასტურებს სლოტს
+     გაზიარებული კალენდარი (`Android Device Lab – Reservations`) და განახლდება
+     `device_lab_capacity_pct` სვეტი
      `docs/source/compliance/android/evidence_log.csv`.
-4. **Execution**
-   - Run the scheduled jobs; record Buildkite run IDs or tooling logs.
-   - Note any deviations (hardware swaps, overruns).
-5. **Closure**
-   - Comment on the ticket with artefacts/links.
-   - If the run was compliance-related, update
-     `docs/source/compliance/android/and6_compliance_checklist.md` and add a row
-     to `evidence_log.csv`.
+4. **აღსრულება**
+   - დაგეგმილი სამუშაოების შესრულება; ჩაწერეთ Buildkite-ის გაშვების ID ან ინსტრუმენტული ჟურნალი.
+   - გაითვალისწინეთ ნებისმიერი გადახრები (ტექნიკის გაცვლა, გადაჭარბება).
+5. ** დახურვა **
+   - კომენტარი გააკეთეთ ბილეთზე არტეფაქტებით/ბმულებით.
+   - თუ გაშვება დაკავშირებული იყო შესაბამისობასთან, განაახლეთ
+     `docs/source/compliance/android/and6_compliance_checklist.md` და დაამატეთ მწკრივი
+     `evidence_log.csv`-მდე.
 
-Requests that impact partner demos (AND8) must cc Partner Engineering.
+მოთხოვნები, რომლებიც გავლენას მოახდენს პარტნიორის დემო ვერსიაზე (AND8) უნდა შეიცავდეს პარტნიორის ინჟინერიას.
 
-## 4. Change & Cancellation
+## 4. შეცვლა და გაუქმება- **გადაგეგმეთ:** ხელახლა გახსენით ორიგინალური ბილეთი, შესთავაზეთ ახალი სლოტი და განაახლეთ
+  კალენდრის ჩანაწერი. თუ ახალი სლოტი 24 სთ-შია, ping Hardware Lab Lead + SRE
+  პირდაპირ.
+- **გადაუდებელი სიტუაციის გაუქმება:** დაიცავით საგანგებო გეგმა
+  (`device_lab_contingency.md`) და ჩაწერეთ ტრიგერის/მოქმედების/შემდეგი რიგები.
+- **გადაჭარბება:** თუ გაშვება აღემატება მის სლოტს >15 წუთით, გამოაქვეყნეთ განახლება და დაადასტურეთ
+  შეიძლება თუ არა შემდეგი ჯავშნის გაგრძელება; წინააღმდეგ შემთხვევაში გადასცეს სანაცვლოდ
+  აუზი ან Firebase ადიდებული შესახვევი.
 
-- **Reschedule:** reopen the original ticket, propose a new slot, and update the
-  calendar entry. If the new slot is within 24 h, ping Hardware Lab Lead + SRE
-  directly.
-- **Emergency cancellation:** follow the contingency plan
-  (`device_lab_contingency.md`) and record the trigger/action/follow-up rows.
-- **Overruns:** if a run exceeds its slot by >15 min, post an update and confirm
-  whether the next reservation can proceed; otherwise hand off to the fallback
-  pool or Firebase burst lane.
+## 5. მტკიცებულება და აუდიტი
 
-## 5. Evidence & Auditing
-
-| Artefact | Location | Notes |
+| არტეფაქტი | მდებარეობა | შენიშვნები |
 |----------|----------|-------|
-| Reservation tickets | `_android-device-lab` queue (Jira) | Export weekly summary; link ticket IDs in evidence log. |
-| Calendar export | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | Run `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` each Friday; the helper saves the filtered `.ics` file plus a JSON summary for the ISO week so audits can attach both artefacts without manual downloads. |
-| Capacity snapshots | `docs/source/compliance/android/evidence_log.csv` | Update after every booking/closure. |
-| Post-run notes | `docs/source/compliance/android/device_lab_contingency.md` (if contingency) or ticket comment | Required for audits. |
+| ბილეთების დაჯავშნა | `_android-device-lab` რიგი (ჯირა) | ექსპორტის ყოველკვირეული შეჯამება; დააკავშირეთ ბილეთების ID-ები მტკიცებულების ჟურნალში. |
+| კალენდრის ექსპორტი | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | გაუშვით `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` ყოველ პარასკევს; დამხმარე ინახავს გაფილტრულ `.ics` ფაილს პლუს JSON შეჯამებას ISO კვირისთვის, რათა აუდიტმა შეძლოს ორივე არტეფაქტის მიმაგრება ხელით ჩამოტვირთვის გარეშე. |
+| სიმძლავრის კადრები | `docs/source/compliance/android/evidence_log.csv` | განაახლეთ ყოველი დაჯავშნის/დახურვის შემდეგ. |
+| გაშვების შემდგომი შენიშვნები | `docs/source/compliance/android/device_lab_contingency.md` (თუ გაუთვალისწინებელია) ან ბილეთის კომენტარი | აუდიტისთვის საჭიროა. |
 
-During quarterly compliance reviews, attach the calendar export, ticket summary,
-and evidence log excerpt to the AND6 checklist submission.
+შესაბამისობის კვარტალური მიმოხილვის დროს, დაურთოთ კალენდრის ექსპორტი, ბილეთის რეზიუმე,
+და მტკიცებულებათა ჟურნალის ამონაწერი AND6 საკონტროლო სიის წარდგენისთვის.
 
-### Calendar export automation
+### კალენდრის ექსპორტის ავტომატიზაცია
 
-1. Obtain the ICS feed URL (or download a `.ics` file) for “Android Device Lab – Reservations”.
-2. Execute
+1. მიიღეთ ICS არხის URL (ან ჩამოტვირთეთ `.ics` ფაილი) „Android Device Lab – Reservations“.
+2. შეასრულეთ
 
    ```bash
    python3 scripts/android_device_lab_export.py \
@@ -111,68 +110,66 @@ and evidence log excerpt to the AND6 checklist submission.
      --week <ISO week, defaults to current>
    ```
 
-   The script writes both `artifacts/android/device_lab/<YYYY-WW>-calendar.ics`
-   and `...-calendar.json`, capturing the selected ISO week.
-3. Upload the generated files with the weekly evidence packet and reference the
-   JSON summary in `docs/source/compliance/android/evidence_log.csv` when
-   logging device-lab capacity.
+   სკრიპტი წერს ორივეს `artifacts/android/device_lab/<YYYY-WW>-calendar.ics`
+   და `...-calendar.json`, არჩეული ISO კვირის აღბეჭდვა.
+3. ატვირთეთ გენერირებული ფაილები ყოველკვირეული მტკიცებულების პაკეტით და მიუთითეთ
+   JSON შეჯამება `docs/source/compliance/android/evidence_log.csv`-ში, როდესაც
+   ჭრის მოწყობილობა-ლაბორატორიის სიმძლავრე.
 
-## 6. Escalation Ladder
+## 6. ესკალაციის კიბე
 
-1. Hardware Lab Lead (primary)
+1. აპარატურის ლაბორატორიის წამყვანი (პირველადი)
 2. Android Foundations TL
-3. Program Lead / Release Engineering (for freeze windows)
-4. External StrongBox lab contact (when retainer is invoked)
+3. პროგრამის წამყვანი / გამოშვების ინჟინერია (ყინული ფანჯრებისთვის)
+4. გარე StrongBox ლაბორატორიის კონტაქტი (როდესაც რეტეინერი გამოძახებულია)
 
-Escalations must be logged in the ticket and mirrored in the weekly Android
-status mail.
+ესკალაციები უნდა იყოს შესული ბილეთში და ასახულიყო ყოველკვირეულ Android-ში
+სტატუსის ფოსტა.
 
-## 7. Related Documents
+## 7. დაკავშირებული დოკუმენტები
 
-- `docs/source/compliance/android/device_lab_contingency.md` — incident log for
-  capacity shortfalls.
-- `docs/source/compliance/android/and6_compliance_checklist.md` — master
-  deliverables checklist.
-- `docs/source/sdk/android/android_strongbox_device_matrix.md` — hardware
-  coverage tracker.
+- `docs/source/compliance/android/device_lab_contingency.md` — ინციდენტების ჟურნალი
+  სიმძლავრის დეფიციტი.
+- `docs/source/compliance/android/and6_compliance_checklist.md` — ოსტატი
+  მიწოდების საკონტროლო სია.
+- `docs/source/sdk/android/android_strongbox_device_matrix.md` — აპარატურა
+  დაფარვის ტრეკერი.
 - `docs/source/sdk/android/android_strongbox_attestation_run_log.md` —
-  StrongBox attestation evidence referenced by AND6/AND7.
+  StrongBox ატესტაციის მტკიცებულება მითითებულ AND6/AND7-ით.
 
-Maintaining this reservation procedure satisfies the roadmap action item “define
-device-lab reservation procedure” and keeps partner-facing compliance artefacts
-in sync with the rest of the Android readiness plan.
+ამ დაჯავშნის პროცედურის შენარჩუნება აკმაყოფილებს საგზაო რუქის სამოქმედო პუნქტს „განსაზღვრა
+მოწყობილობა-ლაბორატორიის დაჯავშნის პროცედურა“ და ინახავს პარტნიორის წინაშე არსებული შესაბამისობის არტეფაქტებს
+Android-ის მზადყოფნის დანარჩენ გეგმასთან სინქრონში.
 
-## 8. Failover Drill Procedure & Contacts
+## 8. ჩავარდნის საბურღი პროცედურა და კონტაქტები
 
-Roadmap item AND6 also requires a quarterly failover rehearsal. The full,
-step-by-step instructions live in
-`docs/source/compliance/android/device_lab_failover_runbook.md`, but the high
-level workflow is summarised below so requestors can plan drills alongside
-routine reservations.
+საგზაო რუქის პუნქტი AND6 ასევე მოითხოვს კვარტალურ ჩავარდნის რეპეტიციას. სრული,
+ნაბიჯ-ნაბიჯ ინსტრუქციები პირდაპირ ეთერშია
+`docs/source/compliance/android/device_lab_failover_runbook.md`, მაგრამ მაღალი
+დონის სამუშაო ნაკადი შეჯამებულია ქვემოთ, რათა მომთხოვნებმა შეძლონ წვრთნების დაგეგმვა
+რუტინული დაჯავშნა.1. **დაგეგმეთ სავარჯიშო:** დაბლოკეთ დაზარალებული ზოლები (`pixel8pro-strongbox-a`,
+   სარეზერვო აუზი, `firebase-burst`, გარე StrongBox რეტეინერი) საზიაროში
+   კალენდარი და `_android-device-lab` რიგები სწავლებამდე მინიმუმ 7 დღით ადრე.
+2. **გათიშვის სიმულაცია:** გააფუჭეთ ძირითადი ხაზი, გააქტიურეთ PagerDuty
+   (`AND6-device-lab`) ინციდენტი და ანოტირება Buildkite-ის დამოკიდებულ სამუშაოებთან
+   საბურღი ID, რომელიც მითითებულია runbook-ში.
+3. ** წარუმატებლობა: ** დააწინაურეთ Pixel7-ის სარეზერვო ხაზი, დაიწყეთ Firebase ადიდებული
+   კომპლექტი და ჩაერთეთ გარე StrongBox პარტნიორთან 6 საათის განმავლობაში. გადაღება
+   Buildkite-ის გაშვებული URL-ები, Firebase-ის ექსპორტი და რეტეინერების აღიარება.
+4. **გადამოწმება და აღდგენა:** დაადასტურეთ ატესტაცია + CI გაშვების დრო, აღადგინეთ
+   ორიგინალური ბილიკები და განაახლეთ `device_lab_contingency.md` პლუს მტკიცებულებების ჟურნალი
+   პაკეტის ბილიკით + გამშვები ჯამები.
 
-1. **Schedule the drill:** Block the affected lanes (`pixel8pro-strongbox-a`,
-   fallback pool, `firebase-burst`, external StrongBox retainer) in the shared
-   calendar and `_android-device-lab` queue at least 7 days ahead of the drill.
-2. **Simulate outage:** Depool the primary lane, trigger the PagerDuty
-   (`AND6-device-lab`) incident, and annotate the dependent Buildkite jobs with
-   the drill ID noted in the runbook.
-3. **Fail over:** Promote the Pixel 7 fallback lane, initiate the Firebase burst
-   suite, and engage the external StrongBox partner within 6 hours. Capture
-   Buildkite run URLs, Firebase exports, and retainer acknowledgements.
-4. **Validate and restore:** Verify attestation + CI runtimes, reinstate the
-   original lanes, and update `device_lab_contingency.md` plus the evidence log
-   with the bundle path + checksums.
+### საკონტაქტო და ესკალაციის მითითება
 
-### Contact & Escalation Reference
+| როლი | პირველადი კონტაქტი | არხ(ებ)ი | ესკალაციის ორდერი |
+|------|-----------------|-----------|-----------------|
+| ტექნიკის ლაბორატორია წამყვანი | პრია რამანათან | `@android-lab` Slack · +81-3-5550-1234 | 1 |
+| Device Lab Ops | მატეო კრუზი | `_android-device-lab` რიგი | 2 |
+| Android Foundations TL | ელენა ვორობევა | `@android-foundations` Slack | 3 |
+| გამოშვების ინჟინერია | ალექსეი მოროზოვი | `release-eng@iroha.org` | 4 |
+| გარე StrongBox ლაბორატორია | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | 5 |
 
-| Role | Primary Contact | Channel(s) | Escalation Order |
-|------|-----------------|------------|------------------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | 1 |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | 2 |
-| Android Foundations TL | Elena Vorobeva | `@android-foundations` Slack | 3 |
-| Release Engineering | Alexei Morozov | `release-eng@iroha.org` | 4 |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | 5 |
-
-Escalate sequentially if the drill uncovers blocking issues or if any fallback
-lane cannot be brought online within 30 minutes. Always record the escalation
-notes in the `_android-device-lab` ticket and mirror them in the contingency log.
+გაიზარდეთ თანმიმდევრულად, თუ საბურღი აღმოაჩენს დაბლოკვის საკითხებს ან თუ არსებობს რაიმე სარეზერვო
+30 წუთში ზოლის შემოტანა შეუძლებელია. ყოველთვის ჩაწერეთ ესკალაცია
+შენიშვნები `_android-device-lab` ბილეთში და ასახეთ ისინი საგანგებო სიტუაციების ჟურნალში.

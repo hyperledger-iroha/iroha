@@ -7,62 +7,87 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bd6ab18725af866ffd2589a3fa7bd7130bab1d5efef2920408baa8e338d5d068
 source_last_modified: "2025-12-29T18:16:35.935471+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Error Taxonomy (Swift baseline)
+# འཛོལ་བའི་ ཊེག་སོ་ནོ་མི་ (ཆུ་རུད་གཞི་རྟེན་) མཐུད་།
 
-This note tracks IOS-CONNECT-010 and documents the shared error taxonomy for
-Nexus Connect SDKs. Swift now exports the canonical `ConnectError` wrapper,
-which maps all Connect-related failures to one of six categories so telemetry,
-dashboards, and UX copy stay aligned across platforms.
+དྲན་འཛིན་འདི་གིས་ IOS-CONNECT-010 བརྟག་ཞིབ་འབདཝ་ཨིནམ་དང་ འདི་གི་དོན་ལུ་ ནོར་བཅོས་འབད་བའི་འཛོལ་བ་གི་དབྱེ་ཚན་འདི་ ཡིག་ཆ་བཟོཝ་ཨིན།
+Nexus ཨེསི་ཌི་ཀེ་ཚུ་མཐུད། ད་ལྟོ་ སུའིཕཊི་གིས་ ཀེ་ནོ་ནིག་ `ConnectError` wrapper ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+འདི་ཡང་ དབྱེ་ཁག་དྲུག་ལས་གཅིག་ལུ་ མཐུད་འབྲེལ་དང་འབྲེལ་བའི་ འཐུས་ཤོར་ཚུ་ག་ར་ སབ་ཁྲ་བཟོཝ་ཨིན་མས།
+dashboard དང་ UX འདྲ་བཤུས་འདི་ སྟེགས་བུ་ཚུ་ནང་ལས་ཕར་ ཕྲང་སྒྲིག་འབད་ཡོདཔ་ཨིན།
 
-> Last updated: 2026-01-15  
-> Owner: Swift SDK Lead (taxonomy steward)  
-> Status: Swift + Android + JavaScript implementations **landed**; queue integration pending.
+> མཐའ་མའི་དུས་མཐུན་བཟོ་ཡོདཔ།: ༢༠༢༦-༠༡-༡༥  
+> ཇོ་བདག་: སུའིཕཊ་ཨེསི་ཌི་ཀེ་ ལིཌ་ (taxonomy གི་བདག་འཛིན་པ)།  
+> གནས་སྟངས་: སའིཕཊི་ + ཨེན་ཌོཌ་ + ཇ་བ་ཨིསི་ཀིརིཔཊི་ལག་ལེན་འཐབ་ཐངས་ཚུ་ **landed**; གྱལ་རིམ་གཅིག་བསྡོམས་འབད་ནི།
 
-## Categories
+## དབྱེ་རིམ།
 
-| Category | Purpose | Typical sources |
-|----------|---------|-----------------|
-| `transport` | WebSocket/HTTP transport failures that terminate a session. | `URLError(.cannotConnectToHost)`, `ConnectClient.ClientError.closed` |
-| `codec` | Serialization/bridge failures while encoding/decoding frames. | `ConnectEnvelopeError.invalidPayload`, `DecodingError` |
-| `authorization` | TLS/attestation/policy failures requiring user or operator remediation. | `URLError(.secureConnectionFailed)`, Torii 4xx responses |
-| `timeout` | Idle/offline expirations and watchdogs (queue TTL, request timeout). | `URLError(.timedOut)`, `ConnectQueueError.expired` |
-| `queueOverflow` | FIFO back-pressure signals so apps can shed load gracefully. | `ConnectQueueError.overflow(limit:)` |
-| `internal` | Everything else: SDK misuse, missing Norito bridge, corrupted journals. | `ConnectSessionError.missingDecryptionKeys`, `ConnectCryptoError.*` |
+| དབྱེ་ཁག་ | དམིགས་ཡུལ། | སྤྱིར་བཏང་གི་འབྱུང་ཁུངས། |
+|--------------------------------------------- |
+| `transport` | ལཱ་ཡུན་ཅིག་མཇུག་བསྡུ་མི་ ཝེབ་སོ་ཀེཊི་/ཨེཆ་ཊི་ཊི་པི་སྐྱེལ་འདྲེན་འཐུས་ཤོར་ཚུ། | `URLError(.cannotConnectToHost)`, `ConnectClient.ClientError.closed` |
+| `codec` | རིམ་སྒྲིག་/ཟམ་གྱི་འཐུས་ཤོར་ཚུ་ ཨིན་ཀོ་ཌིང་/ཌི་ཀོཌི་གཞི་ཁྲམ་ཚུ་ཨིན། | `ConnectEnvelopeError.invalidPayload`, `DecodingError` |
+| `authorization` | ལག་ལེན་པ་ཡང་ན་ བཀོལ་སྤྱོད་པའི་བཅོ་ཐབས་དགོ་པའི་ TLS/testation/porgicy འཐུས་ཤོར་ཚུ། | `URLError(.secureConnectionFailed)`, Torii ༤xx ལན་འདེབས་ཚུ། |
+| `timeout` | Idle/offline གི་དུས་ཡུན་དང་ བལྟ་རྟོག་པ་ཚུ་ (ཀིའུ་ཊི་ཊི་ཨེལ་ ཞུ་བ་དུས་ཚོད་མཇུག་བསྡུ་ནི།) | `URLError(.timedOut)`, `ConnectQueueError.expired` |
+| `queueOverflow` | FIFO རྒྱབ་ལོག་གནོན་ཤུགས་བརྡ་རྟགས་ཚུ་ དེ་ལས་ གློག་རིམ་ཚུ་གིས་ ལེགས་ཤོམ་སྦེ་ མངོན་གསལ་འབད་ཚུགས། | `ConnectQueueError.overflow(limit:)` |
+| `internal` | གཞན་ག་ར་: SDK འཛོལ་བ་, I1NT000000000X ཟམ་མེདཔ་ཨིན་, དུས་དེབ་ཚུ་ ངན་ལྷད་འབད་ཡོདཔ། | `ConnectSessionError.missingDecryptionKeys`, `ConnectCryptoError.*` |
 
-Every SDK publishes an error type that conforms to the taxonomy and exposes
-structured telemetry attributes: `category`, `code`, `fatal`, and optional
-metadata (`http_status`, `underlying`).
+ཨེསི་ཌི་ཀེ་རེ་རེ་གིས་ དབྱེ་རིམ་དང་གསལ་སྟོན་ལུ་མཐུན་པའི་འཛོལ་བའི་དབྱེ་བ་ཅིག་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+བཀོད་སྒྲིག་འབད་ཡོད་པའི་ བརྒྱུད་འཕྲིན་ཁྱད་ཆོས་ཚུ་: `category`, `code`, `fatal`, དང་ གདམ་ཁ་ཅན་ཨིན།
+མེ་ཊ་ཌེ་ཊ་ (`http_status`, `underlying`).
 
-## Swift mapping
+## སོར་ཆུད་ས་ཁྲ་བཟོ་ནི།
 
-Swift exports `ConnectError`, `ConnectErrorCategory`, and helper protocols in
-`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`. All public Connect error
-types conform to `ConnectErrorConvertible`, so apps can call `error.asConnectError()`
-and forward the result to telemetry/logging layers.
+སུའིཕཊ་ཕྱིར་འདྲེན་ `ConnectError`, `ConnectErrorCategory`, དང་ རོགས་རམ་མཐུན་རྐྱེན།
+`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`. མི་མང་མཐུད་པའི་འཛོལ་བ།
+དབྱེ་བ་ཚུ་ `ConnectErrorConvertible` དང་མཐུན་སྒྲིག་འབདཝ་ལས་ གློག་རིམ་ཚུ་གིས་ `error.asConnectError()` ལུ་འབོ་ཚུགས།
+དང་ གྲུབ་འབྲས་འདི་ ཊེ་ལི་མི་ཊི་རི་/དྲན་ཐོ་བང་རིམ་ཚུ་ལུ་ གདོང་བསྐྱོད་འབད།| མགྱོགས་མྱུར་འཛོལ་བ་ | དབྱེ་ཁག་ | ཨང་རྟགས་ | དྲན་ཐོ། |
+|----------------------------------------------- -------------------------------
+| `ConnectClient.ClientError.alreadyStarted` | `internal` | `client.already_started` | `start()` གཉིས་ལྡན་བརྡ་སྟོནམ་ཨིན། གོང་འཕེལ་གཏོང་མཁན་འཛོལ་བ། |
+| `ConnectClient.ClientError.closed` | `transport` | `client.closed` | སྒོ་བསྡམ་པའི་ཤུལ་ལས་ གཏང་ནི་/ལེན་པའི་སྐབས་ ཡར་འཛེགས་ཡོདཔ། |
+| `ConnectClient.ClientError.unknownPayload` | `codec` | `client.unknown_payload` | ཝེབ་སོ་ཀེཊ་གིས་ རེ་བ་བསྐྱེད་པའི་སྐབས་ ཚིག་ཡིག་གི་ པེ་ལོཌ་ཚུ་ བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན། |
+| `ConnectSessionError.streamEnded` | `transport` | `session.stream_ended` | ཕྱོགས་གྲངས་ཀྱིས་ རྒྱུན་ལམ་འདི་ རེ་བ་མེད་པར་ཁ་བསྡམས་ཡོདཔ་ཨིན། |
+| `ConnectSessionError.missingDecryptionKeys` | `internal` | `session.missing_direction_keys` | མཉམ་མཐུན་ལྡེ་མིག་ཚུ་རིམ་སྒྲིག་འབད་ནི་བརྗེད་སོང་། |
+| `ConnectEnvelopeError.invalidPayload` | `codec` | Norito | Norito འབབ་ཁུངས་མེད་པའི་ས་སྒོ། |
+| Nexus | `codec` | ```swift
+do {
+    try await session.nextEnvelope()
+} catch {
+    let connectError = error.asConnectError()
+    telemetry.emit(event: "connect.error",
+                   attributes: connectError.telemetryAttributes(fatal: true))
+    logger.error("Connect failure: \(connectError.code) – \(connectError.message)")
+}
+``` | SDK རྙིངམོ་གིས་མཐོང་མི་ མ་འོངས་པའི་ གླ་ཆ་ཚུ། |
+| ```swift
+do {
+    try await session.nextEnvelope()
+} catch {
+    let connectError = error.asConnectError()
+    telemetry.emit(event: "connect.error",
+                   attributes: connectError.telemetryAttributes(fatal: true))
+    logger.error("Connect failure: \(connectError.code) – \(connectError.message)")
+}
+``` | `ConnectError` | `codec.bridge_unavailable` / `codec.encode_failed` / `codec.decode_failed` | Norito ཟམ་ཟམ་མེདཔ་ཡང་ན་ ཡང་ན་ ཨིན་ཀོ་ཌི་/ཌི་ཀོཌི་གཞི་ཁྲམ་བཱའིཊིསི་ འབད་མ་ཚུགས། |
+| `ConnectCryptoError.*` | `internal` | `crypto.*` | ཟམ་མེད་ ཡང་ན་ མཐུན་སྒྲིག་མེད་པའི་ལྡེ་མིག་རིང་ཚད་ཚུ། |
+| `ConnectQueueError.overflow(limit:)` | `queueOverflow` | ```
+attributes = {
+  "category": "transport",
+  "code": "client.closed",
+  "fatal": "true",
+  "http_status": "101" // optional
+  "underlying": "URLError(Code=-1005 ...)" // optional
+}
+``` | རིམ་སྒྲིག་འབད་ཡོད་པའི་བང་རིམ་རིང་ཚད་འདི་རིམ་སྒྲིག་འབད་ཡོད་པའི་མཚམས་ལས་ལྷག་ཡོདཔ་ཨིན། |
+| `URLError(.timedOut)` | `timeout` | `network.timeout` | ཁ་ཐོག་ལུ་ `URLSessionWebSocketTask`. |
+| `URLError` ཊི་ཨེལ་ཨེསི་གི་གནད་དོན། | `authorization` | `network.tls_failure` | ATS/TLS མཐུན་སྒྲིག་འཐུས་ཤོར་ཚུ། |
+| `DecodingError` / `EncodingError` | `codec` | `ConnectError` | JSON ཌི་ཀོ་ཌིང་/ཨེན་ཀོ་ཌིང་འདི་ ཨེསི་ཌི་ཀེ་ནང་ ས་གནས་གཞན་ཁར་ འཐུས་ཤོར་བྱུང་ཡོདཔ། འཕྲིན་དོན་འདི་གིས་ སུའིཕཊི་ཌི་ཀོཌར་སྐབས་དོན་འདི་ལག་ལེན་འཐབ་ཨིན། |
+| གཞན་ཡང་ `Error` | `internal` | `unknown_error` | འགན་ལེན་གྱི་ ག་ར་འཛིན་དགོ། འཕྲིན་དོན་མེ་ལོང་ `LocalizedError`. |
 
-| Swift error | Category | Code | Notes |
-|-------------|----------|------|-------|
-| `ConnectClient.ClientError.alreadyStarted` | `internal` | `client.already_started` | Indicates double `start()`; developer mistake. |
-| `ConnectClient.ClientError.closed` | `transport` | `client.closed` | Raised when sending/receiving after a close. |
-| `ConnectClient.ClientError.unknownPayload` | `codec` | `client.unknown_payload` | WebSocket delivered textual payload while expecting binary. |
-| `ConnectSessionError.streamEnded` | `transport` | `session.stream_ended` | Counterparty closed the stream unexpectedly. |
-| `ConnectSessionError.missingDecryptionKeys` | `internal` | `session.missing_direction_keys` | Application forgot to configure symmetric keys. |
-| `ConnectEnvelopeError.invalidPayload` | `codec` | `envelope.invalid_payload` | Norito payload missing required fields. |
-| `ConnectEnvelopeError.unknownPayloadKind` | `codec` | `envelope.unknown_payload_kind` | Future payload seen by old SDK. |
-| `ConnectCodecError.*` | `codec` | `codec.bridge_unavailable` / `codec.encode_failed` / `codec.decode_failed` | Norito bridge missing or failed to encode/decode frame bytes. |
-| `ConnectCryptoError.*` | `internal` | `crypto.*` | Bridge unavailable or mismatched key lengths. |
-| `ConnectQueueError.overflow(limit:)` | `queueOverflow` | `queue.overflow` | Offline queue length exceeded the configured bound. |
-| `URLError(.timedOut)` | `timeout` | `network.timeout` | Surfaced by `URLSessionWebSocketTask`. |
-| `URLError` TLS cases | `authorization` | `network.tls_failure` | ATS/TLS negotiation failures. |
-| `DecodingError` / `EncodingError` | `codec` | `codec.*` | JSON decoding/encoding failed elsewhere in the SDK; message uses the Swift decoder context. |
-| Any other `Error` | `internal` | `unknown_error` | Guaranteed catch-all; message mirrors `LocalizedError`. |
+ཡན་ལག་བརྟག་དཔྱད་ (`IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift`) སྒོ་བསྡམས།
+སབ་ཁྲ་བཟོ་ནི་འདི་ མ་འོངས་པའི་བསྐྱར་བཟོ་ཚུ་གིས་ དབྱེ་རིམ་ཡང་ན་ གསང་ཡིག་ཚུ་ ཁུ་སིམ་སིམ་སྦེ་ བསྒྱུར་བཅོས་འབད་མི་ཚུགས།
 
-Unit tests (`IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift`) lock down
-the mapping so future refactors cannot silently change categories or codes.
-
-### Example usage
+###དཔེར་བརྗོད།
 
 ```swift
 do {
@@ -75,11 +100,11 @@ do {
 }
 ```
 
-## Telemetry & dashboards
+## བརྒྱུད་འཕྲིན་དང་ བརྡ་བཀོད་བཀོད་ཚོགས།
 
-The Swift SDK provides `ConnectError.telemetryAttributes(fatal:httpStatus:)`
-which returns the canonical attribute map. Exporters should forward these
-attributes into `connect.error` OTEL events with optional extras:
+སུའིཕཊི་ཨེསི་ཌི་ཀེ་གིས་ `ConnectError.telemetryAttributes(fatal:httpStatus:)` བྱིནམ་ཨིན།
+ག་ཅི་གིས་ ཀེ་ནོ་ནིག་ཁྱད་ཆོས་སབ་ཁྲ་འདི་སླར་ལོག་འབདཝ་ཨིན། ཕྱིར་འདྲེན་འབད་མི་ཚུ་གིས་ འདི་ཚུ་གདོང་བསྐྱོད་འབད་དགོ།
+གདམ་ཁ་ཅན་གྱི་ཁ་སྐོང་ཚུ་དང་གཅིག་ཁར་ `connect.error` OTEL བྱུང་ལས་ཚུ་:
 
 ```
 attributes = {
@@ -91,33 +116,31 @@ attributes = {
 }
 ```
 
-Dashboards correlate `connect.error` counters with queue depth (`connect.queue_depth`)
-and reconnect histograms to detect regressions without spelunking logs.
+ཌེཤ་བོརཌ་ཚུ་གིས་ `connect.error` གྱངས་ཁ་ཚུ་ བང་རིམ་གཏིང་ཚད་ (`connect.queue_depth`) དང་ཅིག་ཁར་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
+དང་ དྲན་ཐོ་ཚུ་མེད་པར་ འགྱུར་ལྡོག་ཚུ་ ཤེས་རྟོགས་འབད་ནི་ལུ་ ཧིསི་ཊོ་གཱརམ་ཚུ་ ལོག་མཐུད་དགོ།
 
-## Android mapping
+## ཨེན་ཌྲོའིཌ་ས་ཁྲ།Android SDK གིས་ `ConnectError`, `transport`, `ConnectErrorTelemetryOptions`, ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+`ConnectErrorOptions`, དང་རོགས་རམ་གྱི་ལག་ཆས།
+`org.hyperledger.iroha.android.connect.error`. བཟོ་བསྐྲུན་བཟོ་རྣམ་གྱི་གྲོགས་རམ་པ་ཚུ་གིས་ `Throwable` གང་རུང་ཅིག་བསྒྱུར་བཅོས་འབདཝ་ཨིན།
+དབྱེ་ཁག་དང་མཐུན་སྒྲིག་ཅན་གྱི་ པེ་ལོཌ་ནང་ སྐྱེལ་འདྲེན་/ཊི་ཨེལ་ཨེསི་/ཀོཌེག་ དམིགས་བསལ་ལས་ དབྱེ་ཁག་ཚུ་ དབྱེ་ཁག་བཟོ་ནི།
+དང་ གཏན་འབེབས་བརྡ་འཕྲིན་ཁྱད་ཆོས་ཚུ་ གསལ་སྟོན་འབདཝ་ལས་ OpenTelemetry/དཔེ་ཚད་བརྩེགས་བརྩེགས་ཚུ་གིས་ བཀོལ་སྤྱོད་འབད་ཚུགས།
+འབྲས་བུ་མེད་པར་འབྲས་བུ་། མཐུན་སྒྲིག་འབད་མི་.【jav/iroha_android/src/src/src/src/ཇ་བ་/ཨོར་ག/ཨི་རོ་ཧ/ཨན་ཌོར/ཨན་ཌོར/ཨེནཌྲོཌ། ཀ:༨】 】  】                                                                                                                         】 】 】 】 】                                                མིན་མོང་མ་ཡིན་པ/ཇ་ཝ/ཨོར་ག/ཨི་རོ་ཧ/ཨནྡྲོའི་/འཛོལ་བ་/ཀོན་ནེག་ཨེར་རར་ཇ་བ་:༢༥】
+`ConnectQueueError` གིས་ཧེ་མ་ལས་རང་ `ConnectErrorConvertible` གིས་ ཀིའུ་ཨོ་ཝར་ཕོལོ་/དུས་ཚོད་ཨའུཊི་འདི་ བཤུབ་བཏང་ཡོདཔ་ཨིན།
+འདི་ཡང་ 【jav/iroha_android/src/src/main/main/མ་ཝ་/org/hyperledger/iroha/android/ དང་ /////// ཨེནཌརའི/ཨེནཌ་ཨེནཌ་/ཨེནཌི་/ཨེནཌི་/ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌ་ཨེནཌལ་/ཀོན་ནེག་ཀའུ་ཨི་རོར.ཇ་བ་:】 དབྱེ་ཁག་ཚུ་
+ད་ལྟོ་ Android SDK README གིས་ དབྱེ་ཁག་འདི་ གཞི་བསྟུན་འབད་དེ་ སྐྱེལ་འདྲེན་གྱི་ ཁྱད་པར་ཚུ་ ག་དེ་སྦེ་ བཀབ་ཚུགསཔ་ཨིན་ན་ སྟོནམ་ཨིན།
+【java/iroha_android/README.md:167】
 
-The Android SDK exports `ConnectError`, `ConnectErrorCategory`, `ConnectErrorTelemetryOptions`,
-`ConnectErrorOptions`, and the helper utilities under
-`org.hyperledger.iroha.android.connect.error`. Builder-style helpers convert any `Throwable`
-into a taxonomy-compliant payload, infer categories from transport/TLS/codec exceptions,
-and expose deterministic telemetry attributes so OpenTelemetry/sampling stacks can consume the
-result without bespoke adapters.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectError.java:8】【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrors.java:25】
-`ConnectQueueError` already implements `ConnectErrorConvertible`, emitting the queueOverflow/timeout
-categories for overflow/expiry conditions so offline queue instrumentation can wire into the same flow.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectQueueError.java:5】
-The Android SDK README now references the taxonomy and shows how to wrap transport exceptions
-before emitting telemetry, keeping dApp guidance aligned with the Swift baseline.【java/iroha_android/README.md:167】
+## ཇ་བ་ཨིསི་ཀིརིཔཊི་སབ་ཁྲ་བཟོ་ནི།
 
-## JavaScript mapping
+Node.js/བརའུ་ཟར་གྱི་མཁོ་མངགས་འབད་མི་ཚུ་གིས་ `ConnectError`, `ConnectQueueError`, `ConnectErrorCategory`, དང་།
+`connectErrorFrom()` ལས་ `@iroha/iroha-js` ལས་། བརྗེ་སོར་གྱི་གྲོགས་རམ་པ་གིས་ ཨེཆ་ཊི་ཊི་པི་གནས་ཚད་ཀྱི་ཨང་རྟགས་ཚུ་ཞིབ་དཔྱད་འབདཝ་ཨིན།
+ནའུཊི་འཛོལ་བ་ཨང་རྟགས་ (སོ་ཀེཊི་ ཊི་ཨེལ་ཨེསི་ དུས་ཚོད་རྫོགས་ནི), `DOMException` མིང་ཚུ་ དེ་ལས་ ཀོཌེཀ་འཐུས་ཤོར་ཚུ་གིས་ བཏོན་གཏང་ནི་ལུ་ བཏོན་གཏང་།
+དྲན་འཛིན་འདི་ནང་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་དབྱེ་རིམ་/ཨང་རྟགས་ཚུ་ ཅོག་འཐདཔ་འབད་ཡོདཔ་ད་ ཊའིཔ་སི་ཀིརིཔཊི་ངེས་ཚིག་ཚུ་གིས་ ཊེ་ལི་མི་ཊི་རི་འདི་ དཔེ་སྟོན་འབདཝ་ཨིན།
+ཁྱད་ཆོས་འདི་ ལག་ཐོག་བཀལ་མ་དགོ་པར་ OTEL བྱུང་ལས་ཚུ་ བཏོནམ་ཨིན། 【javscript/iroha_js/src/connectError.js:1】】 ཨི་རོ་ཧ་_ཇེ་ཨེསི་/ཨིན་ཌེགསི་ཌི་.ཊི་ཨེསི་:༨༤༠】།
+SDK README གིས་ ལཱ་གི་རྒྱུན་རིམ་འདི་ཡིག་ཆ་བཟོ་སྟེ་ དབྱེ་ཁག་འདི་ལུ་ལོག་འབྲེལ་མཐུད་འབདཝ་ལས་ ལག་ལེན་སྡེ་ཚན་གྱིས་ འབད་ཚུགས།
+འདྲ་བཤུས་འཇོག་པའི་ཚིག་ཕྲེང་ཁ་དོན།【javascript/iroha_js/README.md:1387】།
 
-Node.js/browser clients import `ConnectError`, `ConnectQueueError`, `ConnectErrorCategory`, and
-`connectErrorFrom()` from `@iroha/iroha-js`. The shared helper inspects HTTP status codes,
-Node error codes (socket, TLS, timeout), `DOMException` names, and codec failures to emit the
-same categories/codes documented in this note, while TypeScript definitions model the telemetry
-attribute overrides so tooling can emit OTEL events without manual casting.【javascript/iroha_js/src/connectError.js:1】【javascript/iroha_js/index.d.ts:840】
-The SDK README documents the workflow and links back to this taxonomy so application teams can
-copy the instrumentation snippets verbatim.【javascript/iroha_js/README.md:1387】
+## ཤུལ་མམ་གྱི་གོམ་པ་ ("SDK)
 
-## Next steps (cross-SDK)
-
-- **Queue integration:** once the offline queue ships, ensure dequeue/drop logic
-  surfaces `ConnectQueueError` values so overflow Telemetry remains trustworthy.
+- **ཀིའུའུ་མཉམ་བསྡོམས་:** ཨོཕ་ལ་ཡིན་གྱི་གྱལ་གྲུ་ཚུ་ཚར་གཅིག་ ཀིའུ་ཌི་ཀིའུ་/བཀོག་བཞག་ཚད་མ་འདི་ངེས་གཏན་བཟོ།
+  ཁ་ཐོག་ `ConnectQueueError` གནས་གོང་ཚུ་ དེ་འབདཝ་ལས་ བློ་གཏད་ཅན་གྱི་ ཊེ་ལི་མི་ཊི་རི་ལུ་ བློ་གཏད་ཅན་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།

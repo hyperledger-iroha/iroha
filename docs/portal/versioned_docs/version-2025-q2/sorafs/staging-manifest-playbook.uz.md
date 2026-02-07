@@ -11,19 +11,20 @@ id: staging-manifest-playbook
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Keep both copies aligned across releases.
+::: Eslatma Kanonik manba
+Nometall `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Ikkala nusxani ham nashrlar bo'ylab tekislang.
 :::
 
-## Overview
+## Umumiy ko'rinish
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+Ushbu qoʻllanma ishlab chiqarishga oʻzgartirish kiritishdan oldin parlament tomonidan tasdiqlangan chunker profilini Torii bosqichma-bosqich joylashtirishda faollashtirish orqali oʻtadi. Bu SoraFS boshqaruv xartiyasi ratifikatsiya qilingan va kanonik moslamalar omborda mavjud deb taxmin qilinadi.
 
-## 1. Prerequisites
+## 1. Old shartlar
 
-1. Sync the canonical fixtures and signatures:
+1. Kanonik moslamalar va imzolarni sinxronlashtiring:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -32,8 +33,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. Torii ishga tushirilganda o'qiy oladigan qabul konverti katalogini tayyorlang (misol yo'li): `/var/lib/iroha/admission/sorafs`.
+3. Torii konfiguratsiyasi kashfiyot keshini va qabul qilish majburiyatini yoqishiga ishonch hosil qiling:
 
    ```toml
    [torii.sorafs.discovery]
@@ -51,43 +52,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. Qabul konvertlarini nashr qilish
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Tasdiqlangan provayder qabul konvertlarini `torii.sorafs.discovery.admission.envelopes_dir` tomonidan havola qilingan katalogga nusxalang:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. Torii ni qayta ishga tushiring (yoki yuklagichni tezda qayta yuklash bilan o'ralgan bo'lsangiz, SIGHUP yuboring).
+3. Qabul qilish xabarlari jurnallarini yozing:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. Discovery Propagation-ni tasdiqlash
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. Imzolangan provayderingiz tomonidan ishlab chiqarilgan reklama yukini (Norito bayt) joylashtiring.
+   provayder quvuri:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. Kashfiyot so'nggi nuqtasini so'rang va reklamaning kanonik taxalluslar bilan paydo bo'lishini tasdiqlang:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   `profile_aliases` birinchi yozuv sifatida `"sorafs.sf1@1.0.0"` kiritilganligiga ishonch hosil qiling.
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. Mashq manifesti va yakuniy nuqtalarni rejalashtirish
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. Manifest metamaʼlumotlarini oling (qabul qilish majburiy boʻlsa, oqim tokenini talab qiladi):
 
    ```bash
    sorafs-fetch \
@@ -98,25 +99,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. JSON chiqishini tekshiring va tekshiring:
+   - `chunk_profile_handle` - `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` determinizm hisobotiga mos keladi.
+   - `chunk_digests_blake3` qayta tiklangan moslamalar bilan tekislang.
 
-## 5. Telemetry Checks
+## 5. Telemetriya tekshiruvlari
 
-- Confirm Prometheus exposes the new profile metrics:
+- Prometheus yangi profil ko'rsatkichlarini ochishini tasdiqlang:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- Boshqaruv paneli kutilgan taxallus ostida staging provayderini ko'rsatishi va profil faol bo'lgan vaqtda hisoblagichlarni nolda ushlab turishi kerak.
 
-## 6. Rollout Readiness
+## 6. Chiqarishga tayyorlik
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. URL manzillari, manifest identifikatori va telemetriya surati bilan qisqa hisobotni oling.
+2. Rejalashtirilgan ishlab chiqarishni faollashtirish oynasi bilan birga Nexus tarqatish kanalida hisobotni baham ko'ring.
+3. Manfaatdor tomonlar imzo chekkandan so'ng, ishlab chiqarishni tekshirish ro'yxatiga o'ting (`chunker_registry_rollout_checklist.md` da 4-bo'lim).
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+Ushbu o'yin kitobini yangilab turish har bir chunker/qabul qilish jarayoni sahnalashtirish va ishlab chiqarish bo'yicha bir xil deterministik qadamlarni bajarishini ta'minlaydi.

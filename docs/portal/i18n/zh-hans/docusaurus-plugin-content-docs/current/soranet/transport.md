@@ -8,25 +8,27 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet transport overview
 sidebar_label: Transport Overview
 description: Handshake, salt rotation, and capability guidance for the SoraNet anonymity overlay.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC streaming, and future Nexus data lanes. The transport program (roadmap items **SNNet-1**, **SNNet-1a**, and **SNNet-1b**) defined a deterministic handshake, post-quantum (PQ) capability negotiation, and salt rotation plan so every relay, client, and gateway observes the same security posture.
+SoraNet 是支持 SoraFS 范围获取、Norito RPC 流和未来 Nexus 数据通道的匿名覆盖层。传输计划（路线图项目 **SNNet-1**、**SNNet-1a** 和 **SNNet-1b**）定义了确定性握手、后量子 (PQ) 能力协商和盐轮换计划，以便每个中继、客户端和网关观察相同的安全态势。
 
-## Goals & network model
+## 目标和网络模型
 
-- Build three-hop circuits (entry → middle → exit) over QUIC v1 so abusive peers never reach Torii directly.
-- Layer a Noise XX *hybrid* handshake (Curve25519 + Kyber768) on top of QUIC/TLS to bind session keys to the TLS transcript.
-- Require capability TLVs that advertise PQ KEM/signature support, relay role, and protocol version; GREASE unknown types to keep future extensions deployable.
-- Rotate blinded-content salts daily and pin guard relays for 30 days so directory churn cannot deanonymize clients.
-- Keep cells fixed at 1024 B, inject padding/dummy cells, and export deterministic telemetry so downgrade attempts are caught quickly.
+- 在 QUIC v1 上构建三跳电路（入口 → 中间 → 出口），因此滥用者永远不会直接到达 Torii。
+- 在 QUIC/TLS 之上分层 Noise XX *混合*握手 (Curve25519 + Kyber768)，以将会话密钥绑定到 TLS 转录本。
+- 需要通告 PQ KEM/签名支持、中继角色和协议版本的功能 TLV；润滑未知类型以保持未来扩展的可部署性。
+- 每天轮换盲内容盐，并在 30 天内固定保护继电器，以便目录流失无法使客户端匿名。
+- 将单元固定在 1024B，注入填充/虚拟单元，并导出确定性遥测数据，以便快速捕获降级尝试。
 
-## Handshake pipeline (SNNet-1a)
+## 握手管道 (SNNet-1a)
 
-1. **QUIC/TLS envelope** – clients dial relays over QUIC v1 and complete a TLS 1.3 handshake using Ed25519 certificates signed by the governance CA. The TLS exporter (`tls-exporter("soranet handshake", 64)`) seeds the Noise layer so the transcripts are inseparable.
-2. **Noise XX hybrid** – protocol string `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` with prologue = TLS exporter. Message flow:
+1. **QUIC/TLS 信封** – 客户端通过 QUIC v1 拨号中继，并使用治理 CA 签名的 Ed25519 证书完成 TLS1.3 握手。 TLS 导出器 (`tls-exporter("soranet handshake", 64)`) 播种噪声层，因此转录本是不可分割的。
+2. **噪声 XX 混合** – 协议字符串 `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256`，带有序言 = TLS 导出器。消息流程：
 
    ```
    -> e, s
@@ -34,9 +36,9 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    -> ee, se, pq_ciphertext
    ```
 
-   Curve25519 DH output and both Kyber encapsulations are mixed into the final symmetric keys. Failure to negotiate PQ material aborts the handshake outright—no classical-only fallback is permitted.
+   Curve25519 DH 输出和两种 Kyber 封装都混合到最终的对称密钥中。如果未能协商 PQ 材料，握手会彻底中止——不允许仅使用经典的后备方案。
 
-3. **Puzzle tickets & tokens** – relays can demand an Argon2id proof-of-work ticket before `ClientHello`. Tickets are length-prefixed frames that carry the hashed Argon2 solution and expire within the policy bounds:
+3. **谜题票和代币** – 中继可以在 `ClientHello` 之前要求 Argon2id 工作量证明票。票证是带有长度前缀的帧，携带散列的 Argon2 解决方案并在策略范围内过期：
 
    ```norito
    struct PowTicketV1 {
@@ -48,15 +50,15 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    }
    ```
 
-   Admission tokens prefixed with `SNTK` bypass puzzles when an ML-DSA-44 signature from the issuer validates against the active policy and revocation list.
+   当来自发行者的 ML-DSA-44 签名根据活动策略和撤销列表进行验证时，前缀为 `SNTK` 的准入令牌会绕过难题。
 
-4. **Capability TLV exchange** – the final Noise payload transports the capability TLVs described below. Clients abort the connection if any mandatory capability (PQ KEM/signature, role, or version) is missing or mismatched with the directory entry.
+4. **能力 TLV 交换** – 最终的噪声有效负载传输如下所述的能力 TLV。如果任何强制功能（PQ KEM/签名、角色或版本）丢失或与目录条目不匹配，客户端将中止连接。
 
-5. **Transcript logging** – relays log the transcript hash, TLS fingerprint, and TLV contents to feed downgrade detectors and compliance pipelines.
+5. **转录记录** – 中继记录转录哈希、TLS 指纹和 TLV 内容，以提供降级检测器和合规管道。
 
-## Capability TLVs (SNNet-1c)
+## 功能 TLV (SNNet-1c)
 
-Capabilities reuse a fixed `typ/length/value` TLV envelope:
+功能重用固定的 `typ/length/value` TLV 信封：
 
 ```norito
 struct CapabilityTLV {
@@ -66,48 +68,48 @@ struct CapabilityTLV {
 }
 ```
 
-Defined types today:
+今天定义的类型：
 
-- `snnet.pqkem` – Kyber level (`kyber768` for the current rollout).
-- `snnet.pqsig` – PQ signature suite (`ml-dsa-44`).
-- `snnet.role` – relay role (`entry`, `middle`, `exit`, `gateway`).
-- `snnet.version` – protocol version identifier.
-- `snnet.grease` – random filler entries in the reserved range to ensure future TLVs are tolerated.
+- `snnet.pqkem` – Kyber 级别（当前推出的为 `kyber768`）。
+- `snnet.pqsig` – PQ 签名套件 (`ml-dsa-44`)。
+- `snnet.role` – 继电器角色（`entry`、`middle`、`exit`、`gateway`）。
+- `snnet.version` – 协议版本标识符。
+- `snnet.grease` – 保留范围内的随机填充条目，以确保容忍未来的 TLV。
 
-Clients maintain an allow-list of required TLVs and fail handshakes that omit or downgrade them. Relays publish the same set in their directory microdescriptor so validation is deterministic.
+客户端维护所需 TLV 的允许列表，并在握手失败时忽略或降级它们。中继在其目录微描述符中发布相同的集合，因此验证是确定性的。
 
-## Salt rotation & CID blinding (SNNet-1b)
+## 盐轮换和 CID 致盲 (SNNet-1b)
 
-- Governance publishes a `SaltRotationScheduleV1` record with `(epoch_id, salt, valid_after, valid_until)` values. Relays and gateways fetch the signed schedule from the directory publisher.
-- Clients apply the new salt at `valid_after`, keep the previous salt for a 12 h grace period, and retain a 7-epoch history to tolerate delayed updates.
-- Canonical blinded identifiers use:
+- 治理发布包含 `(epoch_id, salt, valid_after, valid_until)` 值的 `SaltRotationScheduleV1` 记录。中继和网关从目录发布者获取签名的时间表。
+- 客户端在 `valid_after` 应用新的盐，将之前的盐保留 12 小时宽限期，并保留 7 纪元历史记录以容忍延迟更新。
+- 规范盲标识符使用：
 
   ```
   cache_key = BLAKE3("soranet.blinding.canonical.v1" ∥ salt ∥ cid)
   ```
 
-  Gateways accept the blinded key via `Sora-Req-Blinded-CID` and echo it in `Sora-Content-CID`. Circuit/request blinding (`CircuitBlindingKey::derive`) ships in `iroha_crypto::soranet::blinding`.
-- If a relay misses an epoch, it halts new circuits until it downloads the schedule and emits a `SaltRecoveryEventV1`, which on-call dashboards treat as a paging signal.
+  网关通过 `Sora-Req-Blinded-CID` 接受盲密钥，并在 `Sora-Content-CID` 中回显它。电路/请求致盲 (`CircuitBlindingKey::derive`) 在 `iroha_crypto::soranet::blinding` 中发货。
+- 如果继电器错过了一个纪元，它会停止新的电路，直到下载时间表并发出 `SaltRecoveryEventV1`，待命仪表板将其视为寻呼信号。
 
-## Directory data & guard policy
+## 目录数据和保护策略
 
-- Microdescriptors carry relay identity (Ed25519 + ML-DSA-65), PQ keys, capability TLVs, region tags, guard eligibility, and the currently advertised salt epoch.
-- Clients pin guard sets for 30 days and persist `guard_set` caches alongside the signed directory snapshot. CLI and SDK wrappers surface the cache fingerprint so rollout evidence can be attached to change reviews.
+- 微描述符携带中继身份（Ed25519 + ML-DSA-65）、PQ 密钥、能力 TLV、区域标签、警卫资格和当前公布的盐纪元。
+- 客户端将保护设置保留 30 天，并将 `guard_set` 缓存与签名的目录快照一起保留。 CLI 和 SDK 包装器显示缓存指纹，因此可以将推出证据附加到更改评论中。
 
-## Telemetry & rollout checklist
+## 遥测和部署清单
 
-- Metrics to export before production:
+- 生产前导出的指标：
   - `soranet_handshake_success_total{role}`
   - `soranet_handshake_failure_total{reason}`
   - `soranet_handshake_latency_seconds`
   - `soranet_capability_mismatch_total`
   - `soranet_salt_rotation_lag_seconds`
-- Alert thresholds live alongside the salt rotation SOP SLO matrix (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) and must be mirrored in Alertmanager before the network is promoted.
-- Alerts: >5 % failure rate over 5 minutes, salt lag >15 minutes, or capability mismatches observed in production.
-- Rollout steps:
-  1. Exercise relay/client interoperability tests on staging with the hybrid handshake and PQ stack enabled.
-  2. Rehearse the salt rotation SOP (`docs/source/soranet_salt_plan.md`) and attach drill artefacts to the change record.
-  3. Enable capability negotiation in the directory, then roll out to entry relays, middle relays, exits, and finally clients.
-  4. Record guard cache fingerprints, salt schedules, and telemetry dashboards for each phase; attach the evidence bundle to `status.md`.
+- 警报阈值与盐轮换 SOP SLO 矩阵 (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) 一起存在，并且必须在网络升级之前在 Alertmanager 中进行镜像。
+- 警报：5 分钟内故障率 >5%、盐滞后 >15 分钟或生产中观察到的功能不匹配。
+- 推出步骤：
+  1. 在启用混合握手和 PQ 堆栈的情况下对分段进行中继/客户端互操作性测试。
+  2. 演练盐轮换 SOP (`docs/source/soranet_salt_plan.md`) 并将钻孔工件附加到变更记录中。
+  3. 在目录中启用能力协商，然后推出到入口中继、中间中继、出口，最后是客户端。
+  4. 记录每个阶段的守卫缓存指纹、盐计划和遥测仪表板；将证据包附加到 `status.md`。
 
-Following this checklist lets operator, client, and SDK teams adopt SoraNet transports in lockstep while meeting the determinism and audit requirements captured in the SNNet roadmap.
+遵循此清单可以让运营商、客户和 SDK 团队同步采用 SoraNet 传输，同时满足 SNNet 路线图中捕获的确定性和审核要求。

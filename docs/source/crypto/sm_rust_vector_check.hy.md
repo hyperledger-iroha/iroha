@@ -7,15 +7,16 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ce2f95b8b287c18c39232418333fbefdd300c030391be9dbfa4e29a3fd5f3e14
 source_last_modified: "2025-12-29T18:16:35.946190+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes on verifying SM2 Annex D vectors using RustCrypto crates.
+//! Նշումներ RustCrypto արկղերի միջոցով SM2 հավելված D վեկտորների ստուգման վերաբերյալ:
 
-# SM2 Annex D Vector Verification (RustCrypto)
+# SM2 Հավելված D վեկտորի ստուգում (RustCrypto)
 
-This walkthrough captures the steps we used to validate (and debug) the GM/T 0003 Annex D example with RustCrypto’s `sm2` crate. The canonical Annex Example 1 data (identity `ALICE123@YAHOO.COM`, message `"message digest"`, and the published `(r, s)`) is now recorded in `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl happily verify the signature (see `sm_vectors.md`), but RustCrypto’s `sm2 v0.13.3` still rejects the point with `signature::Error`, so CLI parity is confirmed while the Rust harness remains pending an upstream fix.
+Այս ուղեցույցը նկարագրում է այն քայլերը, որոնք մենք օգտագործել ենք վավերացնելու (և կարգաբերելու) GM/T 0003 Հավելված D օրինակը RustCrypto-ի `sm2` տուփով: Հավելվածի օրինակ 1-ի կանոնական տվյալները (ինքնությունը `ALICE123@YAHOO.COM`, հաղորդագրություն `"message digest"` և հրապարակված `(r, s)`) այժմ գրանցված են `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`-ում: OpenSSL/Tongsuo/gmssl-ը ուրախությամբ ստուգում է ստորագրությունը (տես `sm_vectors.md`), սակայն RustCrypto-ի `sm2 v0.13.3`-ը դեռևս մերժում է կետը `signature::Error`-ով, այնպես որ CLI հավասարությունը հաստատվում է, մինչդեռ Rust-ի զրահը շտկվում է:
 
-## Temporary crate
+## Ժամանակավոր վանդակ
 
 ```bash
 cargo new /tmp/sm2_verify --bin
@@ -64,14 +65,14 @@ fn main() {
 }
 ```
 
-## Findings
+## Գտածոներ
 
-- Verifying against the canonical Annex Example 1 `(r, s)` currently fails because `sm2::VerifyingKey::from_sec1_bytes` returns `signature::Error`; track upstream/root cause (likely due to curve-parameter mismatch in the crate’s current release).
-- The harness compiles cleanly with `sm2 v0.13.3` and will become an automated regression test once RustCrypto (or a patched fork) accepts the Annex Example 1 point/signature pair.
-- OpenSSL/Tongsuo/gmssl verification succeeds with the commands in `sm_vectors.md`; LibreSSL (macOS default) still lacks SM2/SM3 support, hence the local gap.
+- Հաստատումը կանոնական հավելվածի օրինակով 1 `(r, s)`-ը ներկայումս ձախողվում է, քանի որ `sm2::VerifyingKey::from_sec1_bytes`-ը վերադարձնում է `signature::Error`; հետևել հոսանքին հակառակ/արմատային պատճառին (հավանաբար, կորի պարամետրերի անհամապատասխանության պատճառով արկղի ընթացիկ թողարկումում):
+- Զուգահեռը մաքուր կերպով հավաքվում է `sm2 v0.13.3`-ով և կդառնա ավտոմատացված ռեգրեսիայի թեստ, երբ RustCrypto-ն (կամ կարկատված պատառաքաղը) ընդունի Հավելվածի Օրինակ 1 միավոր/ստորագրություն զույգը:
+- OpenSSL/Tongsuo/gmssl ստուգումը հաջողվում է `sm_vectors.md`-ի հրամաններով; LibreSSL-ը (macOS լռելյայն) դեռևս չունի SM2/SM3 աջակցություն, հետևաբար տեղական բացը:
 
-## Next steps
+## Հաջորդ քայլերը
 
-1. Re-test once `sm2` exposes an API that accepts the Annex Example 1 point (or after upstream confirms the curve parameters) so the harness can pass locally.
-2. Keep a CLI sanity check (OpenSSL/Tongsuo/gmssl) in CI pipelines to guard the canonical Annex Example until the RustCrypto fix lands.
-3. Promote the harness into Iroha’s regression suite after both RustCrypto and OpenSSL parity checks succeed.
+1. Կրկին փորձարկեք, երբ `sm2`-ը բացահայտի API-ն, որն ընդունում է Հավելվածի օրինակի 1 կետը (կամ այն բանից հետո, երբ վերին հոսքը կհաստատի կորի պարամետրերը), որպեսզի ամրագոտին կարողանա տեղային անցնել:
+2. Պահպանեք CLI առողջական վիճակի ստուգում (OpenSSL/Tongsuo/gmssl) CI խողովակաշարերում՝ կանոնական Հավելվածի օրինակը պահպանելու համար, մինչև RustCrypto ամրագրումը վայրէջք կատարի:
+3. Խրախուսեք զրահը Iroha-ի ռեգրեսիոն փաթեթում՝ RustCrypto և OpenSSL հավասարության ստուգումից հետո:

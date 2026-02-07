@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8691a94d23e589f46d8e8cf2359d6d9a31f7c38c5b7bf0def69c88d2dd081765
 source_last_modified: "2026-01-22T14:35:37.510319+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential assets audit & operations playbook referenced by `roadmap.md:M4`.
+///! `roadmap.md:M4` གིས་ རྒྱབ་རྟེན་འབད་མི་ གསང་བའི་རྒྱུ་དངོས་རྩིས་ཞིབ་དང་ ལག་ལེན་གྱི་དེབ་ཚུ།
 
-# Confidential Assets Audit & Operations Runbook
+# གསང་བའི་རྒྱུ་དངོས་རྩིས་ཞིབ་དང་བཀོལ་སྤྱོད་ཀྱི་གཡོག་བཀོལ།
 
-This guide consolidates the evidence surfaces auditors and operators rely on
-when validating confidential-asset flows. It complements the rotation playbook
-(`docs/source/confidential_assets_rotation.md`) and the calibration ledger
+ལམ་སྟོན་འདི་གིས་ རྩིས་ཞིབ་པ་ཚུ་དང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བློ་གཏད་དེ་ཡོདཔ་ཨིན།
+གསང་བའི་རྒྱུ་དངོས་རྒྱུན་འབབ་བདེན་དཔྱད་འབད་བའི་སྐབས། འདི་གིས་ བསྒྱིར་ནིའི་རྩེད་དེབ་འདི་ ལྷན་ཐབས་འབདཝ་ཨིན།
+(`docs/source/confidential_assets_rotation.md`) དང་ ཚད་འཇལ་རྩིས་ལོ།
 (`docs/source/confidential_assets_calibration.md`).
 
-## 1. Selective Disclosure & Event Feeds
+## 1. གདམ་ཁའི་གསལ་སྟོན་དང་བྱུང་ལས།
 
-- Every confidential instruction emits a structured `ConfidentialEvent` payload
-  (`Shielded`, `Transferred`, `Unshielded`) captured in
-  `crates/iroha_data_model/src/events/data/events.rs:198` and serialized by the
-  executors (`crates/iroha_core/src/smartcontracts/isi/world.rs:3699`–`4021`).
-  The regression suite exercises the concrete payloads so auditors can rely on
-  deterministic JSON layouts (`crates/iroha_core/tests/zk_confidential_events.rs:19`–`299`).
-- Torii exposes these events via the standard SSE/WebSocket pipeline; auditors
-  subscribe using `ConfidentialEventFilter` (`crates/iroha_data_model/src/events/data/filters.rs:82`),
-  optionally scoping to a single asset definition. CLI example:
+- གསང་བ་བཀོད་རྒྱ་རེ་རེ་གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ `ConfidentialEvent` སྤྲོད་ལེན་ཅིག་ བཏོནམ་ཨིན།
+  (`Shielded`, `Transferred`, Grafana)
+  `crates/iroha_data_model/src/events/data/events.rs:198` གིས་ རིམ་སྒྲིག་འབད་ཡོདཔ།
+  བཀོལ་སྤྱོད་པ་ (`crates/iroha_core/src/smartcontracts/isi/world.rs:3699`–`4021`).
+  རྩིས་ཞིབ་པ་ཚུ་གིས་ བློ་གཏད་ཚུགས་པའི་ བརྟན་བརྟན་ཚུ་ ལག་ལེན་འཐབ་ཨིན།
+  གཏན་འབེབས་བཟོ་མི་ JSON བཀོད་སྒྲིག་ (`crates/iroha_core/tests/zk_confidential_events.rs:19`–`299`).
+- Torii གིས་ གནས་ཚད་ཅན་གྱི་ SSE/WebSocket pipeline བརྒྱུད་དེ་ བྱུང་ལས་འདི་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། རྩིས་ཞིབ་པ།
+  `ConfidentialEventFilter` ལག་ལེན་འཐབ་སྟེ་ (`crates/iroha_data_model/src/events/data/filters.rs:82`),
+  གདམ་ཁ་ཅན་སྦེ་ རྒྱུ་དངོས་ངེས་ཚིག་གཅིག་ལུ་ ཁ་ཕྱེ་དོ། CLI དཔེར།
 
   ```bash
   iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
   ```
 
-- Policy metadata and pending transitions are available through
+- སྲིད་བྱུས་མེ་ཊ་ཌེ་ཊ་དང་ བསྣར་ནི་བསྒྱུར་བཅོས་ཚུ་ བརྒྱུད་དེ་འཐོབ་ཚུགས།
   `GET /v1/confidential/assets/{definition_id}/transitions`
-  (`crates/iroha_torii/src/routing.rs:15205`), mirrored by the Swift SDK
-  (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) and documented in
-  both the confidential-assets design and SDK guides
-  (`docs/source/confidential_assets.md:70`, `docs/source/sdk/swift/index.md:334`).
+  (`crates/iroha_torii/src/routing.rs:15205`), སུའིཕཊ་ཨེསི་ཌི་ཀེ་གིས་ མེ་ལོང་བཟོ་ཡོདཔ་ཨིན།
+  (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) དང་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད།
+  གསང་བའི་རྒྱུ་ནོར་བཟོ་བཀོད་དང་ཨེས་ཌི་ཀེ་ལམ་སྟོན་གཉིས་ཆ་ར།
+  (I 18NI0000021X, `docs/source/sdk/swift/index.md:334`).
 
-## 2. Telemetry, Dashboards, and Calibration Evidence
+## 2. ཊེ་ལི་མི་ཊི་རི་ ཌེཤ་བོརཌ་ དེ་ལས་ ཚད་འཇལ་གྱི་ སྒྲུབ་བྱེད་ཚུ།
 
-- Runtime metrics surface tree depth, commitment/frontier history, root eviction
-  counters, and verifier-cache hit ratios
-  (`crates/iroha_telemetry/src/metrics.rs:5760`–`5815`). Grafana dashboards in
-  `dashboards/grafana/confidential_assets.json` ship the associated panels and
-  alerts, with the workflow documented in `docs/source/confidential_assets.md:401`.
-- Calibration runs (NS/op, gas/op, ns/gas) with signed logs live in
-  `docs/source/confidential_assets_calibration.md`. The latest Apple Silicon
-  NEON run is archived at
-  `docs/source/confidential_assets_calibration_neon_20260428.log`, and the same
-  ledger records the temporary waivers for SIMD-neutral and AVX2 profiles until
-  the x86 hosts come online.
+- རཱན་ཊའིམ་མེ་ཊིགསི་ ཁ་ཐོག་ཤིང་གི་གཏིང་ཚད་ ཁས་བླངས་/མཐའ་མཚམས་ལོ་རྒྱུས་ རྩ་བསྐྲད་གཏང་ནི།
+  གྱངས་ཁ་དང་ བདེན་བཤད་འབད་མི་འདྲ་མཛོད་-ཐེབས་པའི་ཚད་གཞི།
+  (I 18NI00000023X–`5815`). Grafana ནང་ བརྡ་བཀོད་ཚུ།
+  `dashboards/grafana/confidential_assets.json` འབྲེལ་ཡོད་ཀྱི་པེ་ནཱལ་དང་
+  དྲན་སྐུལ་ཚུ་ `docs/source/confidential_assets.md:401` ནང་ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ལཱ་གི་རྒྱུན་རིམ་དང་བཅས་པ།
+- མིང་རྟགས་བཀོད་ཡོད་པའི་དྲན་ཐོ་ཚུ་དང་གཅིག་ཁར་ ཚད་འཇལ་གཡོག་བཀོལ་ནི་ (NS/op, gas/op, ns/gas)
+  `docs/source/confidential_assets_calibration.md`. གསར་ཤོས་ཨེ་པཱལ་སི་ལི་ཁོན།
+  NEON རན་འདི་ གཏན་མཛོད་ནང་བཀོད་དེ་ཡོདཔ་ཨིན།
+  `docs/source/confidential_assets_calibration_neon_20260428.log`, དང་དེ་དང་འདྲ།
+  ལེཌ་ཇར་གྱིས་ སི་ཨེམ་ཌི་-ནའུ་ཊལ་དང་ ཨེ་ཝི་ཨེགསི་༢ གསལ་སྡུད་ཚུ་གི་དོན་ལུ་ གནས་སྐབས་ཀྱི་ དགོངས་ཡངས་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  x86 ཧོསིཊི་ཚུ་ ཡོངས་འབྲེལ་ཐོག་ལས་འོང་དོ་ཡོདཔ་ཨིན།
 
-## 3. Incident Response & Operator Tasks
+## 3. བྱུང་རྐྱེན་ལན་འདེབས་དང་བཀོལ་སྤྱོད་པའི་ལས་འཆར།
 
-- Rotation/upgrade procedures reside in
-  `docs/source/confidential_assets_rotation.md`, covering how to stage new
-  parameter bundles, schedule policy upgrades, and notify wallets/auditors. The
-  tracker (`docs/source/project_tracker/confidential_assets_phase_c.md`) lists
-  runbook owners and rehearsal expectations.
-- For production rehearsals or emergency windows, operators attach evidence to
-  `status.md` entries (e.g., the multi-lane rehearsal log) and include:
-  `curl` proof of policy transitions, Grafana snapshots, and the relevant event
-  digests so auditors can reconstruct mint→transfer→reveal timelines.
+- འཁོར་སྐྱོད་/ཡར་འཕར་གྱི་བྱ་རིམ་ཚུ་ སྤྱི་ལོ་༢༠༠༨ ལུ་ གནས་ཏེ་ཡོདཔ་ཨིན།
+  `docs/source/confidential_assets_rotation.md`, གསར་དུ་འགྲིག་ཐབས་ནི།
+  པེ་ར་མི་ཊར་བཱན་ཌལ་དང་ དུས་ཚོད་སྲིད་བྱུས་ཡར་འཕེལ་ཚུ་ དེ་ལས་ དངུལ་ཁུག་/རྩིས་ཞིབ་པ་ཚུ་ལུ་ བརྡ་སྤྲོད་འབད། ཚིག༌ཕྲད
+  རྗེས་སོར་ (`docs/source/project_tracker/confidential_assets_phase_c.md`) ཐོ་ཡིག་ཚུ།
+  runbook ཇོ་བདག་དང་ བསྐྱར་སྦྱོང་གི་རེ་བ་ཚུ།
+- ཐོན་སྐྱེད་སྦྱོང་བརྡར་ཡང་ན་ གློ་བུར་གྱི་སྒོ་སྒྲིག་ཚུ་གི་དོན་ལུ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ སྒྲུབ་བྱེད་ཚུ་ ༡ ལུ་ མཉམ་སྦྲགས་འབདཝ་ཨིན།
+  `status.md` ཐོ་འགོད་ཚུ་ (དཔེར་ན་ སྣ་མང་ལམ་ཐིག་བསྐྱར་སྦྱོང་དྲན་ཐོ) དེ་ལས་ འདི་ཚུ་ཡང་ འདི་ནང་ཡོདཔ་ཨིན།
+  `curl` སྲིད་བྱུས་བསྒྱུར་བཅོས་ཀྱི་བདེན་དཔང་། Grafana པར་ལེན་དང་འབྲེལ་ཡོད་བྱུང་ལས་ཚུ།
+  དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ mint→ Transfer→ Reveal དུས་ཚོད་ཀྱི་ཐིག་ཚུ་ བསྐྱར་བཟོ་འབད་ཚུགས།
 
-## 4. External Review Cadence
+## 4. ཕྱིའི་དཔྱད་གཞི།
 
-- Security review scope: confidential circuits, parameter registries, policy
-  transitions, and telemetry. This document plus the calibration ledger forms
-  the evidence packet sent to vendors; review scheduling is tracked via
-  M4 in `docs/source/project_tracker/confidential_assets_phase_c.md`.
-- Operators must keep `status.md` updated with any vendor findings or follow-up
-  action items. Until the external review completes, this runbook serves as the
-  operational baseline auditors can test against.
+- ཉེན་སྲུང་བསྐྱར་ཞིབ་ཁྱབ་ཁོངས།: གསང་བའི་གློག་ལམ་ ཚད་བཟུང་ཐོ་བཀོད་ སྲིད་བྱུས།
+  འགྱུར་བཅོས་དང་ བརྒྱུད་འཕྲིན་ཚུ། ཡིག་ཆ་འདི་དང་ ཚད་འཇལ་རྩིས་དེབ་འབྲི་ཤོག་ཚུ།
+  ཚོང་པ་ཚུ་ལུ་གཏང་མི་ སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་འདི་; བསྐྱར་ཞིབ་ལས་རིམ་འདི་ བརྒྱུད་དེ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+  M4 ནང་ `docs/source/project_tracker/confidential_assets_phase_c.md`.
+- བཀོལ་སྤྱོད་པ་ཚུ་གིས་ `status.md` དུས་མཐུན་བཟོ་སྟེ་ ཚོང་པ་ཚུ་གི་ཤེས་རྟོགས་ཡང་ན་ རྗེས་འཇུག་གང་རུང་དང་གཅིག་ཁར་ བཞག་དགོ།
+  བྱ་བའི་རྣམ་གྲངས། ཕྱིའི་བསྐྱར་ཞིབ་འདི་མཇུག་མ་བསྡུ་ཚུན་ཚོད་ རན་དེབ་འདི་གིས་ ལཱ་འབདཝ་ཨིན།
+  བཀོལ་སྤྱོད་གཞི་རྟེན་རྩིས་ཞིབ་པ་ཚུ་གིས་ བརྟག་དཔྱད་འབད་ཚུགས།

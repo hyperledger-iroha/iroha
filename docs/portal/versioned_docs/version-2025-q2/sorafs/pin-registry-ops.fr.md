@@ -6,41 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 0dc64bb4067d734250852a74a65a2100bd68e5ff35f9e8e9dbf3bd2b86f00cfa
 source_last_modified: "2026-01-22T15:38:30.656337+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/pin_registry_ops.md`. Keep both versions aligned across releases.
+:::note Source canonique
+Miroirs `docs/source/sorafs/runbooks/pin_registry_ops.md`. Gardez les deux versions alignées dans toutes les versions.
 :::
 
-## Overview
+## Aperçu
 
-This runbook documents how to monitor and triage the SoraFS pin registry and its replication service-level agreements (SLAs). The metrics originate from `iroha_torii` and are exported via Prometheus under the `torii_sorafs_*` namespace. Torii samples the registry state on a 30 second interval in the background, so dashboards remain current even when no operators are polling the `/v1/sorafs/pin/*` endpoints. Import the curated dashboard (`docs/source/grafana_sorafs_pin_registry.json`) for a ready-to-use Grafana layout that maps directly to the sections below.
+Ce runbook explique comment surveiller et trier le registre de broches SoraFS et ses accords de niveau de service (SLA) de réplication. Les métriques proviennent de `iroha_torii` et sont exportées via Prometheus sous l'espace de noms `torii_sorafs_*`. Torii échantillonne l'état du registre toutes les 30 secondes en arrière-plan, de sorte que les tableaux de bord restent à jour même lorsqu'aucun opérateur n'interroge les points de terminaison `/v1/sorafs/pin/*`. Importez le tableau de bord organisé (`docs/source/grafana_sorafs_pin_registry.json`) pour une mise en page Grafana prête à l'emploi qui correspond directement aux sections ci-dessous.
 
-## Metric Reference
+## Référence métrique
 
-| Metric | Labels | Description |
+| Métrique | Étiquettes | Descriptif |
 | ------ | ------ | ----------- |
-| `torii_sorafs_registry_manifests_total` | `status` (`pending` \| `approved` \| `retired`) | On-chain manifest inventory by lifecycle state. |
-| `torii_sorafs_registry_aliases_total` | — | Count of active manifest aliases recorded in the registry. |
-| `torii_sorafs_registry_orders_total` | `status` (`pending` \| `completed` \| `expired`) | Replication order backlog segmented by status. |
-| `torii_sorafs_replication_backlog_total` | — | Convenience gauge mirroring `pending` orders. |
-| `torii_sorafs_replication_sla_total` | `outcome` (`met` \| `missed` \| `pending`) | SLA accounting: `met` counts completed orders within deadline, `missed` aggregates late completions + expirations, `pending` mirrors outstanding orders. |
-| `torii_sorafs_replication_completion_latency_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Aggregated completion latency (epochs between issuance and completion). |
-| `torii_sorafs_replication_deadline_slack_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Pending-order slack windows (deadline minus issued epoch). |
+| `torii_sorafs_registry_manifests_total` | `status` (`pending` \| `approved` \| `retired`) | Inventaire des manifestes en chaîne par état du cycle de vie. |
+| `torii_sorafs_registry_aliases_total` | — | Nombre d'alias de manifeste actifs enregistrés dans le registre. |
+| `torii_sorafs_registry_orders_total` | `status` (`pending` \| `completed` \| `expired`) | Carnet de commandes de réplication segmenté par statut. |
+| `torii_sorafs_replication_backlog_total` | — | Jauge de commodité reflétant les commandes `pending`. |
+| `torii_sorafs_replication_sla_total` | `outcome` (`met` \| `missed` \| `pending`) | Comptabilité SLA : `met` compte les commandes terminées dans les délais, `missed` regroupe les achèvements en retard + les expirations, `pending` reflète les commandes en cours. |
+| `torii_sorafs_replication_completion_latency_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Latence d'achèvement agrégée (époques entre l'émission et l'achèvement). |
+| `torii_sorafs_replication_deadline_slack_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Fenêtres de commande en attente (délai moins époque d'émission). |
 
-All gauges reset on every snapshot pull, so dashboards should sample at `1m` cadence or faster.
+Toutes les jauges sont réinitialisées à chaque extraction d'instantané, les tableaux de bord doivent donc échantillonner à la cadence `1m` ou plus rapidement.
 
-## Grafana Dashboard
+## Grafana Tableau de bord
 
-The dashboard JSON ships with seven panels that cover operator workflows. The queries are listed below for quick reference if you prefer to build bespoke charts.
+Le tableau de bord JSON est livré avec sept panneaux qui couvrent les flux de travail des opérateurs. Les requêtes sont répertoriées ci-dessous pour une référence rapide si vous préférez créer des graphiques sur mesure.
 
-1. **Manifest lifecycle** – `torii_sorafs_registry_manifests_total` (grouped by `status`).
-2. **Alias catalogue trend** – `torii_sorafs_registry_aliases_total`.
-3. **Order queue by status** – `torii_sorafs_registry_orders_total` (grouped by `status`).
-4. **Backlog vs expired orders** – combines `torii_sorafs_replication_backlog_total` and `torii_sorafs_registry_orders_total{status="expired"}` to surface saturation.
-5. **SLA success ratio** –
+1. **Cycle de vie du manifeste** – `torii_sorafs_registry_manifests_total` (regroupé par `status`).
+2. **Tendance du catalogue d'alias** – `torii_sorafs_registry_aliases_total`.
+3. **File d'attente de commande par statut** – `torii_sorafs_registry_orders_total` (regroupée par `status`).
+4. **Backlog vs commandes expirées** – combine `torii_sorafs_replication_backlog_total` et `torii_sorafs_registry_orders_total{status="expired"}` à la saturation de la surface.
+5. **Taux de réussite des SLA** –
 
    ```promql
    sum(torii_sorafs_replication_sla_total{outcome="met"})
@@ -51,34 +51,26 @@ The dashboard JSON ships with seven panels that cover operator workflows. The qu
    )
    ```
 
-6. **Latency vs deadline slack** – overlay `torii_sorafs_replication_completion_latency_epochs{stat="p95"}` and `torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`. Use Grafana transformations to add `min_over_time` views when you need the absolute slack floor, for example:
+6. **Latence par rapport aux délais** – superposition `torii_sorafs_replication_completion_latency_epochs{stat="p95"}` et `torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`. Utilisez les transformations Grafana pour ajouter des vues `min_over_time` lorsque vous avez besoin du plancher de marge absolue, par exemple :
 
    ```promql
    min_over_time(torii_sorafs_replication_deadline_slack_epochs{stat="avg"}[15m])
    ```
 
-7. **Missed orders (1h rate)** –
+7. **Commandes manquées (tarif 1h)** –
 
    ```promql
    sum(increase(torii_sorafs_replication_sla_total{outcome="missed"}[1h]))
    ```
 
-## Alert Thresholds
+## Seuils d'alerte- **Succès SLA  0**
+  - Seuil : `increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0`
+  - Action : Inspectez les manifestes de gouvernance pour confirmer le taux de désabonnement des fournisseurs.
+- **Achèvement p95 > délai moyen slack**
+  - Seuil : `torii_sorafs_replication_completion_latency_epochs{stat="p95"} > torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`
+  - Action : Vérifier que les prestataires s'engagent avant les délais ; envisager de procéder à des réaffectations.
 
-- **SLA success < 0.95 for 15 min**
-  - Threshold: `sum(torii_sorafs_replication_sla_total{outcome="met"}) / clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) < 0.95`
-  - Action: Page SRE; start replication backlog triage.
-- **Pending backlog above 10**
-  - Threshold: `torii_sorafs_replication_backlog_total > 10` sustained for 10 min
-  - Action: Check provider availability and the Torii capacity scheduler.
-- **Expired orders > 0**
-  - Threshold: `increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0`
-  - Action: Inspect governance manifests to confirm provider churn.
-- **Completion p95 > deadline slack avg**
-  - Threshold: `torii_sorafs_replication_completion_latency_epochs{stat="p95"} > torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`
-  - Action: Verify providers are committing before deadlines; consider issuing reassignments.
-
-### Example Prometheus Rules
+### Exemple de règles Prometheus
 
 ```yaml
 groups:
@@ -113,43 +105,41 @@ groups:
           description: "At least one replication order expired in the last five minutes."
 ```
 
-## Triage Workflow
+## Flux de travail de tri
 
-1. **Identify cause**
-   - If SLA misses spike while backlog remains low, focus on provider performance (PoR failures, late completions).
-   - If backlog grows with stable misses, inspect admission (`/v1/sorafs/pin/*`) to confirm manifests awaiting council approval.
-2. **Validate provider status**
-   - Run `iroha app sorafs providers list` and verify the advertised capabilities match replication requirements.
-   - Check `torii_sorafs_capacity_*` gauges to confirm provisioned GiB and PoR success.
-3. **Reassign replication**
-   - Issue new orders via `sorafs_manifest_stub capacity replication-order` when backlog slack (`stat="avg"`) drops below 5 epochs (manifest/CAR packaging uses `iroha app sorafs toolkit pack`).
-   - Notify governance if aliases lack active manifest bindings (`torii_sorafs_registry_aliases_total` drops unexpectedly).
-4. **Document outcome**
-   - Record incident notes in the SoraFS operations log with timestamps and affected manifest digests.
-   - Update this runbook if new failure modes or dashboards are introduced.
+1. **Identifier la cause**
+   - Si le SLA manque le pic alors que le backlog reste faible, concentrez-vous sur les performances du fournisseur (échecs PoR, achèvements tardifs).
+   - Si l'arriéré augmente avec des échecs stables, inspectez l'admission (`/v1/sorafs/pin/*`) pour confirmer les manifestes en attente d'approbation par le conseil.
+2. **Valider le statut du fournisseur**
+   - Exécutez `iroha app sorafs providers list` et vérifiez que les fonctionnalités annoncées correspondent aux exigences de réplication.
+   - Vérifiez les jauges `torii_sorafs_capacity_*` pour confirmer le succès du GiB et du PoR provisionnés.
+3. **Réaffecter la réplication**
+   - Émettre de nouvelles commandes via `sorafs_manifest_stub capacity replication-order` lorsque le retard du carnet de commandes (`stat="avg"`) tombe en dessous de 5 époques (l'emballage manifeste/CAR utilise `iroha app sorafs toolkit pack`).
+   - Avertir la gouvernance si les alias manquent de liaisons de manifeste actives (`torii_sorafs_registry_aliases_total` tombe de manière inattendue).
+4. **Résultat du document**
+   - Enregistrez les notes d'incident dans le journal des opérations SoraFS avec des horodatages et des résumés de manifeste concernés.
+   - Mettez à jour ce runbook si de nouveaux modes de défaillance ou tableaux de bord sont introduits.
 
-## Rollout Plan
+## Plan de déploiement
 
-Follow this staged procedure when enabling or tightening the alias cache policy in production:
+Suivez cette procédure par étapes lors de l'activation ou du renforcement de la stratégie de cache d'alias en production :1. **Préparer la configuration**
+   - Mettre à jour `torii.sorafs_alias_cache` dans `iroha_config` (utilisateur → réel) avec les TTL et fenêtres de grâce convenues : `positive_ttl`, `refresh_window`, `hard_expiry`, `negative_ttl`, `revocation_ttl`, `rotation_max_age`, `successor_grace` et `governance_grace`. Les valeurs par défaut correspondent à la stratégie `docs/source/sorafs_alias_policy.md`.
+   - Pour les SDK, distribuez les mêmes valeurs via leurs couches de configuration (`AliasCachePolicy::new(positive, refresh, hard, negative, revocation, rotation, successor, governance)` dans les liaisons Rust/NAPI/Python) afin que l'application du client corresponde à la passerelle.
+2. **Essai à sec en préparation**
+   - Déployez la modification de configuration sur un cluster intermédiaire qui reflète la topologie de production.
+   - Exécutez `cargo xtask sorafs-pin-fixtures` pour confirmer que les appareils d'alias canoniques sont toujours décodés et aller-retour ; tout décalage implique une dérive manifeste en amont qui doit être corrigée en premier.
+   - Exercez les points de terminaison `/v1/sorafs/pin/{digest}` et `/v1/sorafs/aliases` avec des preuves synthétiques couvrant les cas récents, à fenêtre d'actualisation, expirés et définitivement expirés. Validez les codes d'état HTTP, les en-têtes (`Sora-Proof-Status`, `Retry-After`, `Warning`) et les champs de corps JSON par rapport à ce runbook.
+3. **Activer en production**
+   - Déployer la nouvelle configuration via la fenêtre de changement standard. Appliquez-le d'abord à Torii, puis redémarrez les passerelles/services SDK une fois que le nœud confirme la nouvelle stratégie dans les journaux.
+   - Importez `docs/source/grafana_sorafs_pin_registry.json` dans Grafana (ou mettez à jour les tableaux de bord existants) et épinglez les panneaux d'actualisation du cache d'alias à l'espace de travail NOC.
+4. **Vérification post-déploiement**
+   - Surveillez `torii_sorafs_alias_cache_refresh_total` et `torii_sorafs_alias_cache_age_seconds` pendant 30 minutes. Les pics dans les courbes `error`/`expired` devraient être en corrélation avec les fenêtres d'actualisation des politiques ; une croissance inattendue signifie que les opérateurs doivent inspecter les preuves d’alias et l’état des fournisseurs avant de continuer.
+   - Confirmez que les journaux côté client affichent les mêmes décisions politiques (les SDK feront apparaître des erreurs lorsque la preuve est périmée ou expirée). L'absence d'avertissements client indique une mauvaise configuration.
+5. **Retour**
+   - Si l'émission d'alias prend du retard et que la fenêtre d'actualisation se déclenche fréquemment, assouplissez temporairement la politique en augmentant `refresh_window` et `positive_ttl` dans la configuration, puis redéployez. Conservez `hard_expiry` intact afin que les épreuves véritablement périmées soient toujours rejetées.
+   - Revenez à la configuration précédente en restaurant l'instantané `iroha_config` précédent si la télémétrie continue d'afficher des nombres `error` élevés, puis ouvrez un incident pour suivre les retards de génération d'alias.
 
-1. **Prepare configuration**
-   - Update `torii.sorafs_alias_cache` in `iroha_config` (user → actual) with the agreed TTLs and grace windows: `positive_ttl`, `refresh_window`, `hard_expiry`, `negative_ttl`, `revocation_ttl`, `rotation_max_age`, `successor_grace`, and `governance_grace`. The defaults match the policy in `docs/source/sorafs_alias_policy.md`.
-   - For SDKs, distribute the same values through their configuration layers (`AliasCachePolicy::new(positive, refresh, hard, negative, revocation, rotation, successor, governance)` in Rust / NAPI / Python bindings) so client enforcement matches the gateway.
-2. **Dry-run in staging**
-   - Deploy the config change to a staging cluster that mirrors production topology.
-   - Run `cargo xtask sorafs-pin-fixtures` to confirm the canonical alias fixtures still decode and round-trip; any mismatch implies upstream manifest drift that must be addressed first.
-   - Exercise the `/v1/sorafs/pin/{digest}` and `/v1/sorafs/aliases` endpoints with synthetic proofs covering fresh, refresh-window, expired, and hard-expired cases. Validate the HTTP status codes, headers (`Sora-Proof-Status`, `Retry-After`, `Warning`), and JSON body fields against this runbook.
-3. **Enable in production**
-   - Roll out the new configuration via the standard change window. Apply it to Torii first, then restart gateways/SDK services once the node confirms the new policy in logs.
-   - Import `docs/source/grafana_sorafs_pin_registry.json` into Grafana (or update existing dashboards) and pin the alias cache refresh panels to the NOC workspace.
-4. **Post-deployment verification**
-   - Monitor `torii_sorafs_alias_cache_refresh_total` and `torii_sorafs_alias_cache_age_seconds` for 30 minutes. Spikes in the `error`/`expired` curves should correlate with policy refresh windows; unexpected growth means operators must inspect alias proofs and provider health before continuing.
-   - Confirm client-side logs show the same policy decisions (SDKs will surface errors when the proof is stale or expired). Absence of client warnings indicates a misconfiguration.
-5. **Fallback**
-   - If alias issuance falls behind and the refresh window trips frequently, temporarily relax the policy by increasing `refresh_window` and `positive_ttl` in config, then redeploy. Keep `hard_expiry` intact so truly stale proofs are still rejected.
-   - Revert to the prior configuration by restoring the previous `iroha_config` snapshot if telemetry continues to show elevated `error` counts, then open an incident to trace alias generation delays.
+## Documents connexes
 
-## Related Materials
-
-- `docs/source/sorafs/pin_registry_plan.md` — implementation roadmap and governance context.
-- `docs/source/sorafs/runbooks/sorafs_node_ops.md` — storage worker operations, complements this registry playbook.
+- `docs/source/sorafs/pin_registry_plan.md` — feuille de route de mise en œuvre et contexte de gouvernance.
+- `docs/source/sorafs/runbooks/sorafs_node_ops.md` — opérations de stockage, complète ce playbook de registre.

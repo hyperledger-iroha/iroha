@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SF-2c Capacity Accrual Soak Report
+# SF-2c Imkoniyatlarni yig'ish bo'yicha hisobot
 
-Date: 2026-03-21
+Sana: 2026-03-21
 
-## Scope
+## Qo'llash doirasi
 
-This report records the deterministic SoraFS capacity accrual and payout soak
-tests requested under the SF-2c roadmap track.
+Ushbu hisobotda SoraFS deterministik sig'imning to'planishi va to'lov so'rilishi qayd etilgan.
+SF-2c yo'l xaritasi treki ostida so'ralgan testlar.
 
-- **30-day multi-provider soak:** Exercised by
+- **30 kunlik ko'p provayder soak:** Mashq qilgan
   `capacity_fee_ledger_30_day_soak_deterministic` in
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  The harness instantiates five providers, spans 30 settlement windows, and
-  validates that ledger totals match an independently computed reference
-  projection. The test emits a Blake3 digest (`capacity_soak_digest=...`) so
-  CI can capture and diff the canonical snapshot.
-- **Under-delivery penalties:** Enforced by
+  Jabduqlar beshta provayderni amalga oshiradi, 30 ta hisob-kitob oynalarini o'z ichiga oladi va
+  buxgalteriya hisobi yig'indilari mustaqil hisoblangan ma'lumotnomaga mos kelishini tasdiqlaydi
+  proyeksiya. Sinov Blake3 dayjestini (`capacity_soak_digest=...`) chiqaradi, shuning uchun
+  CI kanonik suratni olishi va farq qilishi mumkin.
+- **To'liq yetkazib berish uchun jarimalar:** tomonidan amalga oshirilgan
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (same file). The test confirms strike thresholds, cooldowns, collateral slashes,
-  and ledger counters remain deterministic.
+  (xuddi shu fayl). Sinov ish tashlash chegaralarini, sovutish vaqtini, garov chegaralarini tasdiqlaydi,
+  va daftar hisoblagichlari deterministik bo'lib qolmoqda.
 
-## Execution
+## Amalga oshirish
 
-Run the soak validations locally with:
+Lokal tarzda singdirish tekshiruvlarini bajaring:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-The tests complete in under one second on a standard laptop and require no
-external fixtures.
+Sinovlar standart noutbukda bir soniyadan kamroq vaqt ichida yakunlanadi va yo'q
+tashqi moslamalar.
 
-## Observability
+## Kuzatish imkoniyati
 
-Torii now exposes provider credit snapshots alongside fee ledgers so dashboards
-can gate on low balances and penalty strikes:
+Torii endi provayderning kredit lavhalarini to'lovlar daftarlari bilan birga ko'rsatadi, shuning uchun asboblar paneli
+past balanslar va penaltilar bo'lishi mumkin:
 
-- REST: `GET /v1/sorafs/capacity/state` returns `credit_ledger[*]` entries that
-  mirror the ledger fields verified in the soak test. See
+- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` yozuvlarini qaytaradi
+  ho'llash testida tasdiqlangan daftar maydonlarini aks ettiring. Qarang
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` plots the
-  exported strike counters, penalty totals, and bonded collateral so on-call
-  staff can compare soak baselines with live environments.
+- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` chizmalar
+  eksport qilingan ish tashlash hisoblagichlari, jarima summalari va qo'ng'iroq bo'yicha bog'langan garov
+  xodimlar jonli muhit bilan ho'llash bazasini solishtirish mumkin.
 
-## Follow-up
+## Kuzatuv
 
-- Schedule weekly gate runs in CI to replay the soak test (smoke-tier).
-- Extend the Grafana board with Torii scrape targets once production telemetry
-  exports go live.
+- Suvga cho'milish testini (tutun darajasi) takrorlash uchun CIda haftalik shlyuzlarni rejalashtirish.
+- Ishlab chiqarish telemetriyasidan so'ng Grafana taxtasini Torii qirqish nishonlari bilan kengaytiring
+  eksport faollashadi.

@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e797879d1f77c8cfd62fcc67874d584f6bdeee9395faafe52fc33f26ce2e6a21
 source_last_modified: "2025-12-29T18:16:35.904811+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# SORA Nexus Developer Portal မှကြိုဆိုပါတယ်
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository.
+SORA Nexus ဆော့ဖ်ဝဲရေးသားသူပေါ်တယ်အစုအဝေးသည် အပြန်အလှန်အကျိုးသက်ရောက်သောစာရွက်စာတမ်း၊ SDK
+သင်ခန်းစာများနှင့် Nexus အော်ပရေတာများနှင့် Hyperledger Iroha အတွက် API ကိုးကားချက်များ
+ကူညီပံ့ပိုးသူများ။ ၎င်းသည် လက်ဖြင့်လမ်းညွှန်ချက်များကို ဖတ်ရှုခြင်းဖြင့် ပင်မစာရွက်စာတမ်းဆိုဒ်ကို ဖြည့်စွက်ပေးသည်။
+နှင့် ဤသိုလှောင်မှုမှ တိုက်ရိုက်ထုတ်လုပ်ထားသော specs များ။
 
-## What you can do here
+## ဒီမှာ မင်းဘာလုပ်နိုင်လဲ။
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **Norito** ကို လေ့လာပါ - ခြုံငုံသုံးသပ်ချက်ဖြင့် စတင်ပြီး နားလည်ရန် အမြန်စတင်ပါ။
+  အမှတ်စဉ်ပုံစံနှင့် ဘိုက်ကုဒ်ကိရိယာတန်ဆာပလာ။
+- **Bootstrap SDKs** – ယနေ့ JavaScript နှင့် Rust အတွက် အမြန်စတင်မှုများကို လုပ်ဆောင်ပါ။ စပါးအုံး၊
+  ချက်ပြုတ်နည်းများကို ရွှေ့ပြောင်းထားသောကြောင့် Swift နှင့် Android လမ်းညွှန်များသည် ၎င်းတို့နှင့် ပူးပေါင်းပါမည်။
+- **Browse API ရည်ညွှန်းချက်များ** – Torii OpenAPI စာမျက်နှာသည် နောက်ဆုံး REST ကို ပြန်ဆိုသည်
+  သတ်မှတ်ချက်များနှင့် ဖွဲ့စည်းမှုဇယားများသည် canonical Markdown သို့ ပြန်ချိတ်ဆက်သည်။
+  အရင်းအမြစ်များ။
+- ** ဖြန့်ကျက်ပြင်ဆင်ခြင်း ** - လုပ်ငန်းလည်ပတ်မှုဆိုင်ရာစာအုပ်များ (တယ်လီမီတာ၊ အခြေချမှု၊ Nexus
+  ထပ်ဆင့်များ) ကို `docs/source/` မှ ပို့ပြီး ဤဆိုဒ်အဖြစ် ဆင်းသက်ပါမည်
+  ရွှေ့ပြောင်းမှု တိုးတက်လာသည်။
 
-## Current status
+## လက်ရှိအခြေအနေ
 
-- ✅ Docusaurus v3 scaffolding with live pages for Norito and SDK quickstarts.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`.
-- ⏳ Migrating the remaining guides from `docs/source/`.
-- ⏳ Adding preview builds and linting to the documentation CI.
+- ✅ Docusaurus v3 ငြမ်းကို Norito နှင့် SDK အမြန်စတင်ရန်အတွက် တိုက်ရိုက်စာမျက်နှာများပါရှိသည်။
+- ✅ Torii OpenAPI `npm run sync-openapi` သို့ ကြိုးတပ်ထားသော ပလပ်အင်။
+- ⏳ `docs/source/` မှ ကျန်လမ်းညွှန်ချက်များကို ရွှေ့ပြောင်းခြင်း။
+- ⏳ စာရွက်စာတမ်း CI တွင် အကြိုကြည့်ရှုတည်ဆောက်မှုများနှင့် အလင်းတန်းများထည့်ခြင်း။
 
-## Getting involved
+## ပါဝင်ဆင်နွှဲခြင်း။
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
-  `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- ဒေသဆိုင်ရာ ဖွံ့ဖြိုးတိုးတက်ရေးဆိုင်ရာ အမိန့်များအတွက် `docs/portal/README.md` ကို ကြည့်ပါ (`npm install`၊
+  `npm run start`၊ `npm run build`)။
+- အကြောင်းအရာ ရွှေ့ပြောင်းခြင်း လုပ်ငန်းများကို `DOCS-*` လမ်းပြမြေပုံ ပစ္စည်းများနှင့်အတူ ခြေရာခံပါသည်။
+  ပံ့ပိုးမှုများကို ကြိုဆိုပါသည်—`docs/source/` မှ ဆိပ်ကမ်းကဏ္ဍများနှင့် စာမျက်နှာကို ပေါင်းထည့်ပါ
+  sidebar သို့။
+- အကယ်၍ သင်သည် ထုတ်လုပ်ထားသော ရှေးဟောင်းပစ္စည်း (အသေးစိတ်အချက်အလက်များ၊ config tables) ကိုထည့်ပါက build ကို မှတ်တမ်းတင်ပါ။
+  နောင်တွင် ပါဝင်ကူညီသူများသည် ၎င်းကို လွယ်ကူစွာ ပြန်လည်စတင်နိုင်စေရန် အမိန့်ပေးသည်။

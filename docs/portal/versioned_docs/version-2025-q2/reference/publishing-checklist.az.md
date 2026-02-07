@@ -7,50 +7,51 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9be80e0138e1e8aa453c703c53069837b24f29f6b463d14c846a01b015918f24
 source_last_modified: "2025-12-29T18:16:35.907815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Publishing Checklist
+# Nəşriyyat Yoxlama Siyahısı
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+Tərtibatçı portalını hər dəfə yeniləyərkən bu yoxlama siyahısından istifadə edin. Bu təmin edir
+CI quruluşu, GitHub Səhifələrinin yerləşdirilməsi və əl ilə tüstü testləri hər bölməni əhatə edir
+buraxılışdan və ya yol xəritəsinin başlanğıc nöqtəsindən əvvəl.
 
-## 1. Local validation
+## 1. Yerli yoxlama
 
-- `npm run sync-openapi` (when Torii OpenAPI changes).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `cd build && sha256sum -c checksums.sha256` – verify the checksum manifest the
-  build generated.
-- Spot-check the markdown you touched via `npm run start` and the live reload
+- `npm run sync-openapi` (Torii OpenAPI dəyişdikdə).
+- `npm run build` - hələ də `Build on Iroha with confidence` qəhrəman surətini təsdiqləyin
+  `build/index.html`-də görünür.
+- `cd build && sha256sum -c checksums.sha256` – yoxlama məbləğinin manifestini yoxlayın
+  qurulmuşdur.
+- `npm run start` və canlı yenidən yükləmə vasitəsilə toxunduğunuz işarələməni yoxlayın
   server.
 
-## 2. Pull request checks
+## 2. Sorğu yoxlamalarını çəkin
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  that `sha256sum -c` passed in CI.
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- `docs-portal-build` işinin `.github/workflows/check-docs.yml`-də müvəffəqiyyətli olduğunu yoxlayın.
+- `ci/check_docs_portal.sh` işlədiyini təsdiqləyin (CI qeydləri qəhrəmanın tüstü yoxlamasını göstərir).
+- Manifest (`build/checksums.sha256`) yüklədiyinə əmin olun və
+  `sha256sum -c` CI-də keçdi.
+- GitHub Səhifələr mühitindən dərc edilmiş önizləmə URL-ni PR-a əlavə edin
+  təsviri.
 
-## 3. Section sign-off
+## 3. Bölmənin imzalanması
 
-| Section | Owner | Checklist |
+| Bölmə | Sahibi | Yoxlama siyahısı |
 |---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
+| Əsas səhifə | DevRel | Qəhrəman surəti renderləri, sürətli başlanğıc kartları etibarlı marşrutlara keçid verir, CTA düymələri həll edir. |
+| Norito | Norito WG | İcmal və işə başlama təlimatları ən son CLI bayraqlarına və Norito sxem sənədlərinə istinad edir. |
+| SoraFS | Saxlama Komandası | Sürətli başlanğıc tamamlanana qədər işləyir, manifest hesabat sahələri sənədləşdirilib, simulyasiya təlimatlarının alınması təsdiqlənib. |
+| SDK bələdçiləri | SDK liderləri | Rust/Python/JS bələdçiləri cari nümunələri tərtib edir və canlı repolara keçid verir. |
+| İstinad | Sənədlər/DevRel | İndeks ən yeni xüsusiyyətləri sadalayır, Norito kodek istinadı `norito.md` ilə uyğun gəlir. |
+| Artefaktı önizləyin | Sənədlər/DevRel | PR-a əlavə edilmiş `docs-portal-preview` artefakt, tüstü yoxlamaları keçir, rəyçilərlə paylaşılan link. |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+Hər bir cərgəni PR icmalınızın bir hissəsi kimi qeyd edin və ya status kimi hər hansı sonrakı tapşırıqları qeyd edin
+izləmə dəqiq qalır.
 
-## 4. Release notes
+## 4. Buraxılış qeydləri
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- `https://docs.iroha.tech/` (və ya ətraf mühitin URL
+  yerləşdirmə işindən) buraxılış qeydlərində və status yeniləmələrində.
+- Hər hansı yeni və ya dəyişdirilmiş bölmələri açıq şəkildə çağırın ki, aşağı qruplar harada olduğunu bilsinlər
+  öz tüstü testlərini yenidən həyata keçirmək.

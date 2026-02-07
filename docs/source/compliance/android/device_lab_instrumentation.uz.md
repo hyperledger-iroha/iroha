@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9d384e21d09f3c4f57b7fc5181d69dc0da739dd6ed4dcb89a57ea58fd29bb898
 source_last_modified: "2025-12-29T18:16:35.924058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -15,31 +16,31 @@ translation_last_reviewed: 2026-02-07
 
 # Android Device Lab Instrumentation Hooks (AND6)
 
-This reference closes the roadmap action “stage the remaining device-lab /
-instrumentation hooks ahead of AND6 kickoff”. It explains how every reserved
-device-lab slot must capture telemetry, queue, and attestation artefacts so the
-AND6 compliance checklist, evidence log, and governance packets share the same
-deterministic workflow. Pair this note with the reservation procedure
-(`device_lab_reservation.md`) and the failover runbook when planning rehearsals.
+Ushbu ma'lumot yo'l xaritasi harakatini yopadi "qolgan qurilma-laboratoriyani bosqichga o'tkazish /
+asboblar AND6 boshlanishidan oldin ilgaklar”. Bu qanday qilib har bir zahiralanganligini tushuntiradi
+qurilma-laboratoriya uyasi telemetriya, navbat va attestatsiya artefaktlarini yozib olishi kerak
+AND6 muvofiqligini tekshirish roʻyxati, dalillar jurnali va boshqaruv paketlari bir xil boʻladi
+deterministik ish jarayoni. Ushbu eslatmani bron qilish tartibi bilan bog'lang
+(`device_lab_reservation.md`) va takroriy takroriy ishlanmalar kitobi mashqlarni rejalashtirishda.
 
-## Goals & Scope
+## Maqsadlar va qamrov
 
-- **Deterministic evidence** – all instrumentation outputs live under
-  `artifacts/android/device_lab/<slot-id>/` with SHA-256 manifests so auditors
-  can diff bundles without rerunning the probes.
-- **Script-first workflow** – reuse the existing helpers
+- **Deterministik dalillar** - barcha asboblar chiqishlari ostida ishlaydi
+  SHA-256 bilan `artifacts/android/device_lab/<slot-id>/` auditorlar shunday namoyon bo'ladi
+  problarni qayta ishga tushirmasdan to'plamlarni farqlashi mumkin.
+- **Skript-birinchi ish jarayoni** – mavjud yordamchilarni qayta ishlatish
   (`ci/run_android_telemetry_chaos_prep.sh`,
   `scripts/android_keystore_attestation.sh`, `scripts/android_override_tool.sh`)
-  instead of bespoke adb commands.
-- **Checklists stay in sync** – every run references this document from the
-  AND6 compliance checklist and appends the artefacts to
+  buyurtma adb buyruqlari o'rniga.
+- **Tekshiruv roʻyxatlari sinxronlashtiriladi** – har bir ishga tushirish ushbu hujjatga havola qiladi
+  AND6 muvofiqligini tekshirish roʻyxati va artefaktlarni unga qoʻshadi
   `docs/source/compliance/android/evidence_log.csv`.
 
-## Artifact Layout
+## Artifakt tartibi
 
-1. Pick a unique slot identifier that matches the reservation ticket, e.g.
+1. Bandlov chiptasiga mos keladigan noyob slot identifikatorini tanlang, masalan.
    `2026-05-12-slot-a`.
-2. Seed the standard directories:
+2. Standart kataloglarni ekish:
 
    ```bash
    export ANDROID_DEVICE_LAB_SLOT=2026-05-12-slot-a
@@ -47,71 +48,69 @@ deterministic workflow. Pair this note with the reservation procedure
    mkdir -p "${ANDROID_DEVICE_LAB_ROOT}"/{telemetry,attestation,queue,logs}
    ```
 
-3. Save every command log inside the matching folder (e.g.
+3. Har bir buyruq jurnalini mos keladigan papkaga saqlang (masalan,
    `telemetry/status.ndjson`, `attestation/pixel8pro.log`).
-4. Capture SHA-256 manifests once the slot closes:
+4. SHA-256 ni suratga olish uyasi yopilgandan keyin namoyon bo'ladi:
 
    ```bash
    find "${ANDROID_DEVICE_LAB_ROOT}" -type f -print0 | sort -z \
      | xargs -0 shasum -a 256 > "${ANDROID_DEVICE_LAB_ROOT}/sha256sum.txt"
    ```
 
-## Instrumentation Matrix
+## Asboblar matritsasi
 
-| Flow | Command(s) | Output location | Notes |
+| Oqim | Buyruq(lar) | Chiqish joyi | Eslatmalar |
 |------|------------|-----------------|-------|
-| Telemetry redaction + status bundle | `scripts/telemetry/check_redaction_status.py --status-url <collector> --json-out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/status.ndjson` | `telemetry/status.ndjson`, `telemetry/status.log` | Run at the start and end of the slot; attach CLI stdout to `status.log`. |
-| Pending queue + chaos prep | `ANDROID_PENDING_QUEUE_EXPORTS="pixel8=${ANDROID_DEVICE_LAB_ROOT}/queue/pixel8.bin" ci/run_android_telemetry_chaos_prep.sh --status-only` | `queue/*.bin`, `queue/*.json`, `queue/*.sha256` | Mirrors Scenario D from `readiness/labs/telemetry_lab_01.md`; extend the env var for every device in the slot. |
-| Override ledger digest | `scripts/android_override_tool.sh digest --out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/override_digest.json` | `telemetry/override_digest.json` | Required even when no overrides are active; prove the zero state. |
-| StrongBox / TEE attestation | `scripts/android_keystore_attestation.sh --device pixel8pro-strongbox-a --out "${ANDROID_DEVICE_LAB_ROOT}/attestation/pixel8pro"` | `attestation/<device>/*.{json,zip,log}` | Repeat for each reserved device (match names in `android_strongbox_device_matrix.md`). |
-| CI harness attestation regression | `scripts/android_strongbox_attestation_ci.sh --output "${ANDROID_DEVICE_LAB_ROOT}/attestation/ci"` | `attestation/ci/*` | Captures the same evidence that CI uploads; include in manual runs for symmetry. |
-| Lint / dependency baseline | `ANDROID_LINT_SUMMARY_OUT="${ANDROID_DEVICE_LAB_ROOT}/logs/jdeps-summary.txt" make android-lint` | `logs/jdeps-summary.txt`, `logs/lint.log` | Run once per freeze window; cite the summary in compliance packets. |
+| Telemetriyani tahrirlash + holat to'plami | `scripts/telemetry/check_redaction_status.py --status-url <collector> --json-out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/status.ndjson` | `telemetry/status.ndjson`, `telemetry/status.log` | Slotning boshida va oxirida ishga tushirish; CLI stdout-ni `status.log` ga biriktiring. |
+| Kutilayotgan navbat + tartibsizlikka tayyorgarlik | `ANDROID_PENDING_QUEUE_EXPORTS="pixel8=${ANDROID_DEVICE_LAB_ROOT}/queue/pixel8.bin" ci/run_android_telemetry_chaos_prep.sh --status-only` | `queue/*.bin`, `queue/*.json`, `queue/*.sha256` | `readiness/labs/telemetry_lab_01.md` dan Mirrors ScenarioD; Slotdagi har bir qurilma uchun env varni kengaytiring. |
+| Buxgalteriya jurnali dayjestini bekor qilish | `scripts/android_override_tool.sh digest --out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/override_digest.json` | `telemetry/override_digest.json` | Hech qanday bekor qilish faol bo'lmaganda ham talab qilinadi; nol holatini isbotlang. |
+| StrongBox / TEE attestatsiyasi | `scripts/android_keystore_attestation.sh --device pixel8pro-strongbox-a --out "${ANDROID_DEVICE_LAB_ROOT}/attestation/pixel8pro"` | `attestation/<device>/*.{json,zip,log}` | Har bir zahiraga olingan qurilma uchun takrorlang (`android_strongbox_device_matrix.md` da nomlar mos keladi). |
+| CI jabduqlar attestatsiyasi regressiyasi | `scripts/android_strongbox_attestation_ci.sh --output "${ANDROID_DEVICE_LAB_ROOT}/attestation/ci"` | `attestation/ci/*` | CI yuklagan bir xil dalillarni oladi; simmetriya uchun qo'lda ishlashga qo'shing. |
+| Lint / qaramlik asosi | `ANDROID_LINT_SUMMARY_OUT="${ANDROID_DEVICE_LAB_ROOT}/logs/jdeps-summary.txt" make android-lint` | `logs/jdeps-summary.txt`, `logs/lint.log` | Har bir muzlatish oynasida bir marta ishga tushirish; muvofiqlik paketlarida xulosani keltiring. |
 
-## Standard Slot Procedure
+## Slotning standart protsedurasi1. **Parvozdan oldin (T-24h)** – Chiptani bron qilishda buni tasdiqlang
+   hujjat, qurilma matritsasi yozuvini yangilang va artefakt ildizini eking.
+2. **Slot davomida**
+   - Avval telemetriya to'plamini + navbatni eksport qilish buyruqlarini ishga tushiring. O'tish
+     `--note <ticket>` dan `ci/run_android_telemetry_chaos_prep.sh` gacha, shuning uchun jurnal
+     voqea identifikatoriga havola qiladi.
+   - Har bir qurilma uchun attestatsiya skriptlarini ishga tushiring. Jabduqlar a hosil qilganda
+     `.zip`, uni artefakt ildiziga nusxalang va chop etilgan Git SHA-ni yozib oling.
+     skriptning oxiri.
+   - `make android-lint` ni CI bo'lsa ham bekor qilingan xulosa yo'li bilan bajaring
+     allaqachon yugurgan; auditorlar boshiga uyasi jurnali kutish.
+3. **Post-yugurish**
+   - Slot ichida `sha256sum.txt` va `README.md` (erkin shakldagi eslatmalar) yarating
+     bajarilgan buyruqlarni jamlagan papka.
+   - `docs/source/compliance/android/evidence_log.csv` qatoriga qator qo'shing
+     slot identifikatori, xash-manifest yo'li, Buildkite havolalari (agar mavjud bo'lsa) va eng so'nggi
+     bron taqvimi eksportidan qurilma-laboratoriya sig'imi foizi.
+   - `_android-device-lab` chiptasidagi slot papkasini AND6 bilan bog'lang
+     nazorat roʻyxati va `docs/source/android_support_playbook.md` reliz hisoboti.
 
-1. **Pre-flight (T-24 h)** – Confirm the reservation ticket references this
-   document, update the device matrix entry, and seed the artifact root.
-2. **During the slot**
-   - Run the telemetry bundle + queue export commands first. Pass
-     `--note <ticket>` to `ci/run_android_telemetry_chaos_prep.sh` so the log
-     references the incident ID.
-   - Trigger the attestation scripts per device. When the harness produces a
-     `.zip`, copy it into the artefact root and record the Git SHA printed at
-     the end of the script.
-   - Execute `make android-lint` with the overridden summary path even if CI
-     already ran; auditors expect a per-slot log.
-3. **Post-run**
-   - Generate `sha256sum.txt` and `README.md` (free-form notes) inside the slot
-     folder summarising the executed commands.
-   - Append a row to `docs/source/compliance/android/evidence_log.csv` with the
-     slot ID, hash manifest path, Buildkite references (if any), and the latest
-     device-lab capacity percentage from the reservation calendar export.
-   - Link the slot folder in the `_android-device-lab` ticket, the AND6
-     checklist, and `docs/source/android_support_playbook.md` release report.
+## Muvaffaqiyatsizlikni bartaraf etish va eskalatsiya
 
-## Failure Handling & Escalation
-
-- If any command fails, capture the stderr output under `logs/` and follow the
-  escalation ladder in `device_lab_reservation.md` §6.
-- Queue or telemetry shortfalls should immediately note the override status in
-  `docs/source/sdk/android/telemetry_override_log.md` and reference the slot ID
-  so governance can trace the drill.
-- Attestation regressions must be recorded in
+- Agar biron bir buyruq bajarilmasa, `logs/` ostidagi stderr chiqishini oling va quyidagi amallarni bajaring.
+  `device_lab_reservation.md` §6 da eskalatsiya narvonlari.
+- Navbat yoki telemetriyadagi kamchiliklar darhol bekor qilish holatini qayd etishi kerak
+  `docs/source/sdk/android/telemetry_override_log.md` va slot identifikatoriga murojaat qiling
+  shuning uchun boshqaruv matkapni kuzatishi mumkin.
+- Attestatsiya regresslari qayd etilishi kerak
   `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  with the failing device serials and the bundle paths recorded above.
+  ishlamay qolgan qurilma seriyalari va yuqorida qayd etilgan to'plam yo'llari bilan.
 
-## Reporting Checklist
+## Hisobotlarni tekshirish ro'yxati
 
-Before marking the slot complete, verify the following references are updated:
+Slot tugallanganligini belgilashdan oldin quyidagi havolalar yangilanganligini tekshiring:
 
-- `docs/source/compliance/android/and6_compliance_checklist.md` — mark the
-  instrumentation row complete and note the slot ID.
-- `docs/source/compliance/android/evidence_log.csv` — add/update the entry with
-  the slot hash and capacity reading.
-- `_android-device-lab` ticket — attach artefact links and Buildkite job IDs.
-- `status.md` — include a brief note in the next Android readiness digest so
-  roadmap readers know which slot produced the latest evidence.
+- `docs/source/compliance/android/and6_compliance_checklist.md` - belgilang
+  asboblar qatorini to'ldiring va slot identifikatoriga e'tibor bering.
+- `docs/source/compliance/android/evidence_log.csv` - yozuvni qo'shish/yangilash
+  uyasi xesh va sig'im o'qish.
+- `_android-device-lab` chiptasi - artefakt havolalari va Buildkite ish identifikatorlarini biriktiring.
+- `status.md` — Android tayyorligi haqidagi navbatdagi dayjestga qisqacha eslatma kiriting
+  yo'l xaritasi o'quvchilari qaysi uyasi so'nggi dalillarni ishlab chiqarilganini bilishadi.
 
-Following this process keeps AND6’s “device-lab + instrumentation hooks”
-milestone auditable and prevents manual divergence between booking, execution,
-and reporting.
+Ushbu jarayondan so'ng AND6 ning "qurilma-laboratoriya + asboblar ilgaklari" saqlanadi.
+muhim bosqich tekshirilishi mumkin va bron qilish, bajarish,
+va hisobot berish.

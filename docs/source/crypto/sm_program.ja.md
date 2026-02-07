@@ -6,184 +6,167 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
 source_last_modified: "2026-01-23T18:50:10.586502+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM2/SM3/SM4 enablement architecture brief for Hyperledger Iroha v2.
+//! Hyperledger Iroha v2 の SM2/SM3/SM4 有効化アーキテクチャの概要。
 
-# SM Program Architecture Brief
+# SM プログラム アーキテクチャの概要
 
-## Purpose
-Define the technical plan, supply-chain posture, and risk boundaries for introducing Chinese national cryptography (SM2/SM3/SM4) across the Iroha v2 stack while preserving deterministic execution and auditability.
+## 目的
+決定的な実行と監査可能性を維持しながら、Iroha v2 スタック全体に中国国家暗号 (SM2/SM3/SM4) を導入するための技術計画、サプライ チェーンの態勢、リスク境界を定義します。
 
-## Scope
-- **Consensus-critical paths:** `iroha_crypto`, `iroha`, `irohad`, IVM host, Kotodama intrinsics.
-- **Client SDKs and tooling:** Rust CLI, Kagami, Python/JS/Swift SDKs, genesis utilities.
-- **Configuration & serialization:** `iroha_config` knobs, Norito data model tags, manifest handling, multicodec updates.
-- **Testing & compliance:** Unit/property/interop suites, Wycheproof harnesses, performance profiling, export/regulatory guidance. *(Status: RustCrypto-backed SM stack merged; optional `sm_proptest` fuzz suite and OpenSSL parity harness available for extended CI.)*
+## 範囲
+- **コンセンサス クリティカル パス:** `iroha_crypto`、`iroha`、`irohad`、IVM ホスト、Kotodama 組み込み。
+- **クライアント SDK とツール:** Rust CLI、Kagami、Python/JS/Swift SDK、genesis ユーティリティ。
+- **設定とシリアル化:** `iroha_config` ノブ、Norito データ モデル タグ、マニフェスト処理、マルチコーデック更新。
+- **テストとコンプライアンス:** ユニット/プロパティ/相互運用スイート、Wycheproof ハーネス、パフォーマンス プロファイリング、輸出/規制ガイダンス。 *(ステータス: RustCrypto-backed SM スタックがマージされました。オプションの `sm_proptest` ファズ スイートと OpenSSL パリティ ハーネスが拡張 CI で利用可能です。)*
 
-Out of scope: PQ algorithms, non-deterministic host acceleration in consensus paths; wasm/`no_std` builds are retired.
+範囲外: PQ アルゴリズム、コンセンサス パスでの非決定的ホスト アクセラレーション。 wasm/`no_std` ビルドは廃止されました。
 
-## Algorithm Inputs & Deliverables
-| Artifact | Owner | Due | Notes |
-|----------|-------|-----|-------|
-| SM algorithm feature design (`SM-P0`) | Crypto WG | 2025-02 | Feature gating, dependency audit, risk register. |
-| Core Rust integration (`SM-P1`) | Crypto WG / Data Model | 2025-03 | RustCrypto-based verify/hash/AEAD helpers, Norito extensions, fixtures. |
-| Signing + VM syscalls (`SM-P2`) | IVM Core / SDK Program | 2025-04 | Deterministic signing wrappers, syscalls, Kotodama coverage. |
-| Optional provider & ops enablement (`SM-P3`) | Platform Ops / Performance WG | 2025-06 | OpenSSL/Tongsuo backend, ARM intrinsics, telemetry, documentation. |
+## アルゴリズムの入力と成果物
+|アーティファクト |オーナー |期限 |メモ |
+|----------|----------|-----|----------|
+| SM アルゴリズム機能設計 (`SM-P0`) |暗号WG | 2025-02 |機能ゲーティング、依存関係監査、リスク登録。 |
+|コア Rust 統合 (`SM-P1`) |暗号WG / データモデル | 2025-03 | RustCryptoベースのverify/hash/AEADヘルパー、Norito拡張機能、フィクスチャ。 |
+|署名 + VM システムコール (`SM-P2`) | IVM コア/SDK プログラム | 2025年4月 |確定的署名ラッパー、syscall、Kotodama のカバレッジ。 |
+|オプションのプロバイダーと運用の有効化 (`SM-P3`) |プラットフォーム運用/パフォーマンス WG | 2025-06 | OpenSSL/Tongsuo バックエンド、ARM 組み込み、テレメトリ、ドキュメント。 |
 
-## Selected Libraries
-- **Primary:** RustCrypto crates (`sm2`, `sm3`, `sm4`) with `rfc6979` feature enabled and SM3 bound to deterministic nonces.
-- **Optional FFI:** OpenSSL 3.x provider API or Tongsuo for deployments requiring certified stacks or hardware engines; feature-gated and disabled by default in consensus binaries.
+## 選択されたライブラリ
+- **プライマリ:** `rfc6979` 機能が有効になっており、SM3 が決定論的なノンスにバインドされている RustCrypto クレート (`sm2`、`sm3`、`sm4`)。
+- **オプションの FFI:** 認定スタックまたはハードウェア エンジンを必要とする展開用の OpenSSL 3.x プロバイダー API または Tongsuo。機能ゲート型であり、コンセンサスバイナリではデフォルトで無効になっています。### コア ライブラリの統合ステータス
+- `iroha_crypto::sm` は、統一された `sm` 機能の下で SM3 ハッシュ、SM2 検証、および SM4 GCM/CCM ヘルパーを公開し、SDK で利用できる確定的な RFC6979 署名パスを使用します。 `Sm2PrivateKey`.【crates/iroha_crypto/src/sm.rs:1049】【crates/iroha_crypto/src/sm.rs:1128】【crates/iroha_crypto/src/sm.rs:1236】
+- Norito/Norito-JSON タグとマルチコーデック ヘルパーは SM2 公開キー/署名と SM3/SM4 ペイロードをカバーするため、命令は全体にわたって決定論的にシリアル化されます。 hosts.【crates/iroha_data_model/src/isi/registry.rs:407】【crates/iroha_data_model/tests/sm_norito_roundtrip.rs:12】
+- 既知の回答スイートは RustCrypto 統合 (`sm3_sm4_vectors.rs`、`sm2_negative_vectors.rs`) を検証し、CI の `sm` 機能ジョブの一部として実行され、ノードが署名を継続している間、検証の決定性を維持します。 Ed25519.【crates/iroha_crypto/tests/sm3_sm4_vectors.rs:15】【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】
+- オプションの `sm` 機能ビルド検証: `cargo check -p iroha_crypto --features sm --locked` (コールド 7.9 秒 / ウォーム 0.23 秒) と `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` (1.0 秒) は両方とも成功します。機能を有効にすると、11 個のクレート (`base64ct`、`ghash`、`opaque-debug`、`pem-rfc7468`、`pkcs8`、`polyval`、`primeorder`、 `sm2`、`sm3`、`sm4`、`sm4-gcm`)。調査結果は `docs/source/crypto/sm_rustcrypto_spike.md` に記録されました。【docs/source/crypto/sm_rustcrypto_spike.md:1】
+- BouncyCastle/GmSSL ネガティブ検証フィクスチャは `crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json` の下で稼働し、正規の障害ケース (r=0、s=0、識別 ID の不一致、改ざんされた公開キー) が広く導入されているものと確実に一致するようにします。プロバイダー.【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】【crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json:1】
+- `sm-ffi-openssl` は、ベンダーの OpenSSL 3.x ツールチェーン (`openssl` クレート `vendored` 機能) をコンパイルするようになりました。そのため、システム LibreSSL/OpenSSL に SM アルゴリズムがない場合でも、プレビュー ビルドとテストは常に最新の SM 対応プロバイダーをターゲットにします。【crates/iroha_crypto/Cargo.toml:59】
+- `sm_accel` は、実行時に AArch64 NEON を検出し、構成ノブ `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`) を尊重しながら、x86_64/RISC-V ディスパッチを通じて SM3/SM4 フックをスレッドするようになりました。ベクターバックエンドが存在しない場合でも、ディスパッチャはスカラー RustCrypto パスを介してルーティングされるため、ベンチとポリシーの切り替えはホスト間で一貫して動作します。【crates/iroha_crypto/src/sm.rs:702】【crates/iroha_crypto/src/sm.rs:733】
 
-### Core Library Integration Status
-- `iroha_crypto::sm` exposes SM3 hashing, SM2 verification, and SM4 GCM/CCM helpers under the unified `sm` feature, with deterministic RFC 6979 signing paths available to SDKs via `Sm2PrivateKey`.【crates/iroha_crypto/src/sm.rs:1049】【crates/iroha_crypto/src/sm.rs:1128】【crates/iroha_crypto/src/sm.rs:1236】
-- Norito/Norito-JSON tags and multicodec helpers cover SM2 public keys/signatures and SM3/SM4 payloads so instructions serialize deterministically across hosts.【crates/iroha_data_model/src/isi/registry.rs:407】【crates/iroha_data_model/tests/sm_norito_roundtrip.rs:12】
-- Known-answer suites validate the RustCrypto integration (`sm3_sm4_vectors.rs`, `sm2_negative_vectors.rs`) and run as part of CI’s `sm` feature jobs, keeping verification deterministic while nodes continue signing with Ed25519.【crates/iroha_crypto/tests/sm3_sm4_vectors.rs:15】【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】
-- Optional `sm` feature build validation: `cargo check -p iroha_crypto --features sm --locked` (cold 7.9 s / warm 0.23 s) and `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` (1.0 s) both succeed; enabling the feature adds 11 crates (`base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, `sm4-gcm`). Findings recorded in `docs/source/crypto/sm_rustcrypto_spike.md`.【docs/source/crypto/sm_rustcrypto_spike.md:1】
-- BouncyCastle/GmSSL negative verification fixtures live under `crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json`, ensuring canonical failure cases (r=0, s=0, distinguishing-ID mismatch, tampered public key) stay aligned with widely deployed providers.【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】【crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json:1】
-- `sm-ffi-openssl` now compiles the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) so preview builds and tests always target a modern SM-capable provider even when system LibreSSL/OpenSSL lacks SM algorithms.【crates/iroha_crypto/Cargo.toml:59】
-- `sm_accel` now detects AArch64 NEON at runtime and threads the SM3/SM4 hooks through x86_64/RISC-V dispatch while honouring the configuration knob `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`). When vector back-ends are absent the dispatcher still routes through the scalar RustCrypto path so benches and policy toggles behave consistently across hosts.【crates/iroha_crypto/src/sm.rs:702】【crates/iroha_crypto/src/sm.rs:733】
+### Norito スキーマとデータモデル サーフェス| Norito タイプ / コンシューマー |代表 |制約と注意事項 |
+|--------------------------|----------------|----------|
+| `Sm3Digest` (`iroha_crypto::Sm3Digest`) |ベア: 32 バイト BLOB · JSON: 大文字の 16 進文字列 (`"4F4D..."`) |正規 Norito タプル ラッピング `[u8; 32]`。 JSON/Bare デコードでは長さ ≠32 が拒否されます。ラウンドトリップは `sm_norito_roundtrip::sm3_digest_norito_roundtrip` でカバーされます。 |
+| `Sm2PublicKey` / `Sm2Signature` |マルチコーデックプレフィックス付き BLOB (`0x1306` 暫定) |公開キーは非圧縮の SEC1 ポイントをエンコードします。署名は、DER 解析ガード付きの `(r∥s)` (各 32 バイト) です。 |
+| `Sm4Key` |ベア: 16 バイト BLOB | Kotodama/CLI に公開されるゼロ化ラッパー。 JSON シリアル化は意図的に省略されています。オペレーターは、BLOB (コントラクト) または CLI 16 進数 (`--key-hex`) を介してキーを渡す必要があります。 |
+| `sm4_gcm_seal/open` オペランド | 4 つの BLOB のタプル: `(key, nonce, aad, payload)` |キー = 16 バイト。ノンス = 12 バイト;タグの長さは 16 バイトに固定されています。 `(ciphertext, tag)` を返します。 Kotodama/CLI は hex ヘルパーと Base64 ヘルパーの両方を出力します。【crates/ivm/tests/sm_syscalls.rs:728】 |
+| `sm4_ccm_seal/open` オペランド | `r14` の 4 つの BLOB (キー、ノンス、aad、ペイロード) + タグの長さのタプル |ノンス 7 ～ 13 バイト。タグの長さ ∈ {4,6,8,10,12,14,16}。 `sm` 機能は、`sm-ccm` フラグの背後にある CCM を公開します。 |
+| Kotodama 組み込み (`sm::hash`、`sm::seal_gcm`、`sm::open_gcm`、…) |上記の SCALL にマップ |入力検証はホスト ルールを反映します。不正なサイズでは `ExecutionError::Type` が発生します。 |
 
-### Norito Schema & Data-Model Surfaces
+使用法のクイックリファレンス:
+- **コントラクト/テストでの SM3 ハッシュ:** `Sm3Digest::hash(b"...")` (Rust) または Kotodama `sm::hash(input_blob)`。 JSON では 64 個の 16 進文字が必要です。
+- **CLI 経由の SM4 AEAD:** `iroha tools crypto sm4 gcm-seal --key-hex <32 hex> --nonce-hex <24 hex> --plaintext-hex …` は、16 進数/base64 暗号文とタグのペアを生成します。一致する `gcm-open` を使用して復号化します。
+- **マルチコーデック文字列:** SM2 公開キー/署名は、`PublicKey::from_str`/`Signature::from_bytes` によって受け入れられるマルチベース文字列との間で解析され、Norito マニフェストとアカウント ID が SM 署名者を保持できるようになります。
 
-| Norito type / consumer | Representation | Constraints & notes |
-|------------------------|----------------|---------------------|
-| `Sm3Digest` (`iroha_crypto::Sm3Digest`) | Bare: 32-byte blob · JSON: uppercase hex string (`"4F4D..."`) | Canonical Norito tuple wrapping `[u8; 32]`. JSON/Bare decoding rejects lengths ≠ 32. Round-trips covered by `sm_norito_roundtrip::sm3_digest_norito_roundtrip`. |
-| `Sm2PublicKey` / `Sm2Signature` | Multicodec prefixed blobs (`0x1306` provisional) | Public keys encode uncompressed SEC1 points; signatures are `(r∥s)` (32 bytes each) with DER parsing guards. |
-| `Sm4Key` | Bare: 16-byte blob | Zeroizing wrapper exposed to Kotodama/CLI. JSON serialization is deliberately omitted; operators should pass keys via blobs (contracts) or CLI hex (`--key-hex`). |
-| `sm4_gcm_seal/open` operands | Tuple of 4 blobs: `(key, nonce, aad, payload)` | Key = 16 bytes; nonce = 12 bytes; tag length fixed at 16 bytes. Returns `(ciphertext, tag)`; Kotodama/CLI emit both hex and base64 helpers.【crates/ivm/tests/sm_syscalls.rs:728】 |
-| `sm4_ccm_seal/open` operands | Tuple of 4 blobs (key, nonce, aad, payload) + tag length in `r14` | Nonce 7–13 bytes; tag length ∈ {4,6,8,10,12,14,16}. `sm` feature exposes CCM behind `sm-ccm` flag. |
-| Kotodama intrinsics (`sm::hash`, `sm::seal_gcm`, `sm::open_gcm`, …) | Map to SCALLs above | Input validation mirrors host rules; malformed sizes raise `ExecutionError::Type`. |
+データモデルの利用者は、SM4 キーとタグを一時的な BLOB として扱う必要があります。生のキーをチェーン上に永続化しないでください。監査が必要な場合、契約では暗号文/タグ出力または派生ダイジェスト (キーの SM3 など) のみを保存する必要があります。
 
-Usage quick reference:
-- **SM3 hashing in contracts/tests:** `Sm3Digest::hash(b"...")` (Rust) or Kotodama `sm::hash(input_blob)`. JSON expects 64 hex characters.
-- **SM4 AEAD via CLI:** `iroha tools crypto sm4 gcm-seal --key-hex <32 hex> --nonce-hex <24 hex> --plaintext-hex …` yields hex/base64 ciphertext+tag pairs. Decrypt with matching `gcm-open`.
-- **Multicodec strings:** SM2 public keys/signatures parse from/to the multibase string accepted by `PublicKey::from_str`/`Signature::from_bytes`, enabling Norito manifests and account IDs to carry SM signatories.
+### サプライチェーンとライセンス
+|コンポーネント |ライセンス |緩和 |
+|----------|-----------|----------|
+| `sm2`、`sm3`、`sm4` | Apache-2.0 / MIT |アップストリームのコミットを追跡し、ロックステップリリースが必要な場合はベンダーを追跡し、バリデーターが GA に署名する前にサードパーティの監査をスケジュールします。 |
+| `rfc6979` | Apache-2.0 / MIT |すでに他のアルゴリズムで使用されています。 SM3 ダイジェストとの決定的な `k` 結合を確認します。 |
+|オプションの OpenSSL/Tongsuo | Apache-2.0 / BSD スタイル | `sm-ffi-openssl` 機能を維持し、明示的なオペレーターのオプトインとパッケージ化チェックリストを必要とします。 |### 機能フラグと所有権
+|表面 |デフォルト |メンテナ |メモ |
+|----------|----------|---------------|----------|
+| `iroha_crypto/sm-core`、`sm-ccm`、`sm` |オフ |暗号WG | RustCrypto SM プリミティブを有効にします。 `sm` には、認証された暗号化を必要とするクライアント用の CCM ヘルパーがバンドルされています。 |
+| `ivm/sm` |オフ | IVM コアチーム | SM システムコール (`sm3_hash`、`sm2_verify`、`sm4_gcm_*`、`sm4_ccm_*`) を構築します。ホスト ゲーティングは `crypto.allowed_signing` (`sm2` の存在) から派生します。 |
+| `iroha_crypto/sm_proptest` |オフ | QA / 暗号WG |不正な形式の署名/タグをカバーするプロパティ テスト ハーネス。拡張 CI でのみ有効になります。 |
+| `crypto.allowed_signing` + `default_hash` | `["ed25519"]`、`blake2b-256` |構成WG / オペレーターWG | `sm2` と `sm3-256` ハッシュが存在すると、SM syscall/signature が有効になります。 `sm2` を削除すると、検証専用モードに戻ります。 |
+|オプションの `sm-ffi-openssl` (プレビュー) |オフ |プラットフォーム運用 | OpenSSL/Tongsuo プロバイダー統合のためのプレースホルダー機能。認証とパッケージ化 SOP が適用されるまで無効のままです。 |
 
-Data-model consumers should treat SM4 keys and tags as transient blobs; never persist raw keys on-chain. Contracts should store only ciphertext/tag outputs or derived digests (e.g., SM3 of the key) when auditing is required.
-
-### Supply-Chain & Licensing
-| Component | License | Mitigation |
-|-----------|---------|-----------|
-| `sm2`, `sm3`, `sm4` | Apache-2.0 / MIT | Track upstream commits, vendor if lockstep releases required, schedule third-party audit before validator signing GA. |
-| `rfc6979` | Apache-2.0 / MIT | Already used in other algorithms; confirm deterministic `k` binding with SM3 digest. |
-| Optional OpenSSL/Tongsuo | Apache-2.0 / BSD-style | Keep behind `sm-ffi-openssl` feature, require explicit operator opt-in and packaging checklist. |
-
-### Feature Flags & Ownership
-| Surface | Default | Maintainer | Notes |
-|---------|---------|------------|-------|
-| `iroha_crypto/sm-core`, `sm-ccm`, `sm` | Off | Crypto WG | Enables RustCrypto SM primitives; `sm` bundles CCM helpers for clients that require authenticated encryption. |
-| `ivm/sm` | Off | IVM Core Team | Builds SM syscalls (`sm3_hash`, `sm2_verify`, `sm4_gcm_*`, `sm4_ccm_*`). Host gating derives from `crypto.allowed_signing` (presence of `sm2`). |
-| `iroha_crypto/sm_proptest` | Off | QA / Crypto WG | Property-test harness covering malformed signatures/tags. Enabled only in extended CI. |
-| `crypto.allowed_signing` + `default_hash` | `["ed25519"]`, `blake2b-256` | Config WG / Operators WG | Presence of `sm2` plus `sm3-256` hash enables SM syscalls/signatures; removing `sm2` returns to verify-only mode. |
-| Optional `sm-ffi-openssl` (preview) | Off | Platform Ops | Placeholder feature for OpenSSL/Tongsuo provider integration; remains disabled until certification & packaging SOPs land. |
-
-Network policy now exposes `network.require_sm_handshake_match` and
-`network.require_sm_openssl_preview_match` (both default to `true`). Clearing either flag allows
-mixed deployments where Ed25519-only observers connect to SM-enabled validators; mismatches are
-logged at `WARN`, but consensus nodes should keep the defaults enabled to prevent accidental
-divergence between SM-aware and SM-disabled peers.
-The CLI surfaces these toggles via `iroha_cli app sorafs handshake update
+ネットワーク ポリシーは `network.require_sm_handshake_match` を公開し、
+`network.require_sm_openssl_preview_match` (両方のデフォルトは `true`)。どちらかのフラグをクリアすると、
+Ed25519 のみのオブザーバーが SM 対応のバリデーターに接続する混合デプロイメント。不一致は
+`WARN` でログに記録されますが、コンセンサス ノードは偶発的な事故を防ぐためにデフォルトを有効にしておく必要があります。
+SM を認識するピアと SM が無効なピアの間の相違。
+CLI は、「iroha_cli app sorafs handshake update」を介してこれらの切り替えを表示します。
 --allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
-flags to restore strict enforcement.
+厳格な施行を復元するためのフラグ。#### OpenSSL/Tongsuo プレビュー (`sm-ffi-openssl`)
+- **スコープ。** OpenSSL ランタイムの可用性を検証し、オプトインのままで OpenSSL を利用した SM3 ハッシュ、SM2 検証、および SM4-GCM 暗号化/復号化を公開するプレビュー専用のプロバイダー シム (`OpenSslProvider`) を構築します。コンセンサスバイナリは RustCrypto パスを使用し続ける必要があります。 FFI バックエンドはエッジ検証/署名パイロットに対して厳密にオプトインされています。
+- **ビルドの前提条件。** `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` でコンパイルし、ツールチェーンが OpenSSL/Tongsuo 3.0+ (SM2/SM3/SM4 をサポートする `libcrypto`) に対してリンクしていることを確認します。静的リンクは推奨されません。オペレータによって管理される動的ライブラリを優先します。
+- **開発者スモーク テスト。** `scripts/sm_openssl_smoke.sh` を実行して `cargo check -p iroha_crypto --features "sm sm-ffi-openssl"` を実行し、続いて `cargo test -p iroha_crypto --features "sm sm-ffi-openssl" --test sm_openssl_smoke -- --nocapture` を実行します。 OpenSSL ≥3 開発ヘッダーが使用できない (または `pkg-config` が欠落している) 場合、ヘルパーは自動的にスキップし、スモーク出力を表示するので、開発者は SM2 検証が実行されたか Rust 実装にフォールバックしたかを確認できます。
+- **Rust スキャフォールディング** `openssl_sm` モジュールは、SM3 ハッシュ、SM2 検証 (ZA プレハッシュ + SM2 ECDSA)、および SM4 GCM 暗号化/復号化を OpenSSL 経由でルーティングするようになり、プレビューの切り替えや無効なキー/ノンス/タグの長さをカバーする構造化エラーが発生します。 SM4 CCM は、追加の FFI シムが適用されるまで純粋な Rust のみのままです。
+- **スキップ動作。** OpenSSL ≥3.0 ヘッダーまたはライブラリがない場合、スモーク テストはスキップ バナー (`-- --nocapture` 経由) を出力しますが、それでも正常に終了するため、CI は環境のギャップと本物の回帰を区別できます。
+- **ランタイム ガードレール** OpenSSL プレビューはデフォルトで無効になっています。 FFI パスを使用する前に、構成 (`crypto.enable_sm_openssl_preview` / `OpenSslProvider::set_preview_enabled(true)`) で有効にしてください。プロバイダーが卒業するまで実稼働クラスターを検証専用モード (`allowed_signing` から `sm2` を省略) に保ち、決定論的な RustCrypto フォールバックに依存し、署名パイロットを隔離された環境に限定します。
+- **パッケージ化チェックリスト** プロバイダーのバージョン、インストール パス、整合性ハッシュを展開マニフェストに文書化します。オペレーターは、承認された OpenSSL/Tongsuo ビルドをインストールし、それを OS トラスト ストアに登録し (必要な場合)、メンテナンス期間中にアップグレードを固定するインストール スクリプトを提供する必要があります。
+- **次のステップ。** 将来のマイルストーンには、決定論的な SM4 CCM FFI バインディング、CI スモーク ジョブ (`ci/check_sm_openssl_stub.sh` を参照)、およびテレメトリが追加されます。 `roadmap.md` の SM-P3.1.x で進行状況を追跡します。
 
-#### OpenSSL/Tongsuo preview (`sm-ffi-openssl`)
-- **Scope.** Builds a preview-only provider shim (`OpenSslProvider`) that validates OpenSSL runtime availability and exposes OpenSSL-backed SM3 hashing, SM2 verification, and SM4-GCM encrypt/decrypt while remaining opt-in. Consensus binaries must continue using the RustCrypto path; the FFI backend is strictly opt-in for edge verification/signing pilots.
-- **Build prerequisites.** Compile with `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` and ensure the toolchain links against OpenSSL/Tongsuo 3.0+ (`libcrypto` with SM2/SM3/SM4 support). Static linking is discouraged; prefer dynamic libraries managed by the operator.
-- **Developer smoke test.** Run `scripts/sm_openssl_smoke.sh` to execute `cargo check -p iroha_crypto --features "sm sm-ffi-openssl"` followed by `cargo test -p iroha_crypto --features "sm sm-ffi-openssl" --test sm_openssl_smoke -- --nocapture`; the helper skips automatically when OpenSSL ≥ 3 development headers are unavailable (or `pkg-config` is missing) and surfaces smoke output so developers can see whether SM2 verification ran or fell back to the Rust implementation.
-- **Rust scaffolding.** The `openssl_sm` module now routes SM3 hashing, SM2 verification (ZA prehash + SM2 ECDSA), and SM4 GCM encrypt/decrypt through OpenSSL with structured errors covering preview toggles and invalid key/nonce/tag lengths; SM4 CCM remains pure-Rust-only until additional FFI shims land.
-- **Skip behaviour.** When OpenSSL ≥ 3.0 headers or libraries are absent the smoke test prints a skip banner (via `-- --nocapture`) but still exits successfully so CI can distinguish environment gaps from genuine regressions.
-- **Runtime guardrails.** The OpenSSL preview is disabled by default; enable it via configuration (`crypto.enable_sm_openssl_preview` / `OpenSslProvider::set_preview_enabled(true)`) before attempting to use the FFI path. Keep production clusters in verify-only mode (omit `sm2` from `allowed_signing`) until the provider graduates, rely on the deterministic RustCrypto fallback, and confine signing pilots to isolated environments.
-- **Packaging checklist.** Document the provider version, installation path, and integrity hashes in deployment manifests. Operators must provide installation scripts that install the approved OpenSSL/Tongsuo build, register it with the OS trust store (if required), and pin upgrades behind maintenance windows.
-- **Next steps.** Future milestones add deterministic SM4 CCM FFI bindings, CI smoke jobs (see `ci/check_sm_openssl_stub.sh`), and telemetry. Track progress under SM-P3.1.x in `roadmap.md`.
+#### コード所有権のスナップショット
+- **暗号WG:** `iroha_crypto`、SMフィクスチャ、コンプライアンス文書。
+- **IVM コア:** syscall 実装、Kotodama 組み込み、ホスト ゲーティング。
+- **構成 WG:** 番号 `crypto.allowed_signing`/`default_hash`、番号、番号、番号。
+- **SD​​K プログラム:** CLI/Kagami/SDK にわたる SM 対応ツール、共有フィクスチャ。
+- **プラットフォーム運用およびパフォーマンス WG:** アクセラレーション フック、テレメトリ、オペレーターの有効化。
 
-#### Code Ownership Snapshot
-- **Crypto WG:** `iroha_crypto`, SM fixtures, compliance documentation.
-- **IVM Core:** syscall implementations, Kotodama intrinsics, host gating.
-- **Config WG:** קונפיגורציית `crypto.allowed_signing`/`default_hash`, ולידציית מניפסט, חיווט קבלה.
-- **SDK Program:** SM-aware tooling across CLI/Kagami/SDKs, shared fixtures.
-- **Platform Ops & Performance WG:** acceleration hooks, telemetry, operator enablement.
+## 構成移行ハンドブックEd25519 のみのネットワークから SM 対応の展開に移行するオペレータは、次のことを行う必要があります。
+～の段階的なプロセスに従う
+[`sm_config_migration.md`](sm_config_migration.md)。ガイドではビルドについて説明しています
+検証、`iroha_config` 階層化 (`defaults` → `user` → `actual`)、ジェネシス
+`kagami` オーバーライド (`kagami genesis generate --allowed-signing sm2 --default-hash sm3-256` など)、プリフライト検証、ロールバックによる再生成
+構成スナップショットとマニフェストが全体にわたって一貫性を保つように計画します。
+艦隊。
 
-## Configuration Migration Playbook
+## 決定的なポリシー
+- SDK 内のすべての SM2 署名パスおよびオプションのホスト署名に対して RFC6979 由来の nonce を強制します。検証者は正規の r∥s エンコーディングのみを受け入れます。
+- コントロール プレーン通信 (ストリーミング) は Ed25519 のままです。 SM2 は、ガバナンスが拡張を承認しない限り、データプレーン署名に限定されます。
+- 組み込み (ARM SM3/SM4) は、ランタイム機能検出およびソフトウェア フォールバックを備えた決定論的検証/ハッシュ操作に制限されています。
 
-Operators moving from Ed25519-only networks to SM-enabled deployments should
-follow the staged process in
-[`sm_config_migration.md`](sm_config_migration.md). The guide covers build
-validation, `iroha_config` layering (`defaults` → `user` → `actual`), genesis
-regeneration via `kagami` overrides (for example `kagami genesis generate --allowed-signing sm2 --default-hash sm3-256`), pre-flight validation, and rollback
-planning so configuration snapshots and manifests stay consistent across the
-fleet.
+## Norito およびエンコーディング プラン
+1. `iroha_data_model` のアルゴリズム列挙型を `Sm2PublicKey`、`Sm2Signature`、`Sm3Digest`、`Sm4Key` で拡張します。
+2. DER の曖昧さを避けるために、SM2 シグネチャをビッグエンディアン固定幅 `r∥s` 配列 (32+32 バイト) としてシリアル化します。アダプターで処理される変換。 *(完了: `Sm2Signature` ヘルパーに実装されました。Norito/JSON ラウンドトリップが導入されました。)*
+3. マルチフォーマットを使用している場合はマルチコーデック識別子 (`sm3-256`、`sm2-pub`、`sm4-key`) を登録し、フィクスチャとドキュメントを更新します。 *(進行状況: `sm2-pub` 暫定コード `0x1306` は派生キーで検証されました。SM3/SM4 コードは最終割り当て待ちで、`sm_known_answers.toml` 経由で追跡されます。)*
+4. ラウンドトリップと不正なエンコーディング (短い/長い r または s、無効な曲線パラメーター) の拒否をカバーする Norito ゴールデン テストを更新します。## ホストと VM の統合計画 (SM-2)
+1. 既存の GOST ハッシュ シムをミラーリングするホスト側 `sm3_hash` システムコールを実装します。 `Sm3Digest::hash` を再利用し、決定的なエラー パスを公開します。 *(着陸: ホストは Blob TLV を返します。`DefaultHost` 実装と `sm_syscalls.rs` リグレッションを参照してください。)*
+2. 正規の r∥s 署名を受け入れ、識別 ID を検証し、失敗を確定的なリターン コードにマップする `sm2_verify` を使用して VM syscall テーブルを拡張します。 *(完了: ホスト + Kotodama 組み込みは `1/0` を返します。回帰スイートは、切り捨てられた署名、不正な形式の公開キー、非 BLOB TLV、および UTF-8/空/不一致の `distid` ペイロードをカバーするようになりました。)*
+3. 明示的な nonce/タグ サイズ設定を使用して `sm4_gcm_seal`/`sm4_gcm_open` (およびオプションで CCM) システムコールを提供します (RFC 8998)。 *(完了: GCM は固定 12 バイト ノンス + 16 バイト タグを使用します。CCM は `r14` 経由で制御されるタグ長 {4,6,8,10,12,14,16} の 7 ～ 13 バイトのノンスをサポートします。Kotodama はこれらを `sm::seal_gcm/open_gcm` として公開し、 `sm::seal_ccm/open_ccm`.) 開発者ハンドブックに nonce 再利用ポリシーを文書化します。*
+4. ポジティブなケースとネガティブなケース (タグの変更、署名の不正、サポートされていないアルゴリズム) をカバーする Kotodama スモーク コントラクトと IVM 統合テストをワイヤリングします。 *(SM3/SM2/SM4 のホスト回帰をミラーリングする `crates/ivm/tests/kotodama_sm_syscalls.rs` 経由で実行されます。)*
+5. 新しいエントリを追加した後、syscall ホワイトリスト、ポリシー、および ABI ドキュメント (`crates/ivm/docs/syscalls.md`) を更新し、ハッシュされたマニフェストを更新します。
 
-## Deterministic Policy
-- Enforce RFC6979-derived nonces for all SM2 signing paths in SDKs and optional host signing; verifiers accept canonical r∥s encodings only.
-- Control-plane communication (streaming) remains Ed25519; SM2 limited to data-plane signatures unless governance approves expansion.
-- Intrinsics (ARM SM3/SM4) restricted to deterministic verification/hash operations with runtime feature detection and software fallback.
+### ホストと VM の統合ステータス
+- DefaultHost、CoreHost、および WsvHost は SM3/SM2/SM4 syscall を公開し、`sm_enabled` でゲートし、ランタイム フラグが次の場合に `PermissionDenied` を返します。 false.【crates/ivm/src/host.rs:915】【crates/ivm/src/core_host.rs:833】【crates/ivm/src/mock_wsv.rs:2307】
+- `crypto.allowed_signing` ゲートはパイプライン/エグゼキューター/状態を介してスレッド化されるため、運用ノードは構成を通じて決定的にオプトインします。 `sm2` を追加すると、SM ヘルパーの可用性が切り替わります。`【crates/iroha_core/src/smartcontracts/ivm/host.rs:170】【crates/iroha_core/src/state.rs:7673】【crates/iroha_core/src/executor.rs:683】
+- 回帰カバレッジは、SM3 ハッシュ、SM2 検証、SM4 GCM/CCM シール/オープンの有効パスと無効パス (DefaultHost/CoreHost/WsvHost) の両方を実行します。フロー.【crates/ivm/tests/sm_syscalls.rs:129】【crates/ivm/tests/sm_syscalls.rs:733】【crates/ivm/tests/sm_syscalls.rs:1036】
 
-## Norito & Encoding Plan
-1. Extend algorithm enums in `iroha_data_model` with `Sm2PublicKey`, `Sm2Signature`, `Sm3Digest`, `Sm4Key`.
-2. Serialize SM2 signatures as big-endian fixed-width `r∥s` arrays (32+32 bytes) to avoid DER ambiguities; conversions handled in adapters. *(Done: implemented in `Sm2Signature` helpers; Norito/JSON round-trips in place.)*
-3. Register multicodec identifiers (`sm3-256`, `sm2-pub`, `sm4-key`) if using multiformats, update fixtures and docs. *(Progress: `sm2-pub` provisional code `0x1306` now validated with derived keys; SM3/SM4 codes pending final assignment, tracked via `sm_known_answers.toml`.)*
-4. Update Norito golden tests covering roundtrips and rejection of malformed encodings (short/long r or s, invalid curve parameters).
+## 構成スレッド
+- `crypto.allowed_signing`、`crypto.default_hash`、`crypto.sm2_distid_default`、およびオプションの `crypto.enable_sm_openssl_preview` を `iroha_config` に追加します。データ モデル機能の配管が暗号クレートをミラーリングしていることを確認します (`iroha_data_model` は `sm` → `iroha_crypto/sm` を公開します)。
+- 設定をアドミッション ポリシーに関連付けて、マニフェスト/ジェネシス ファイルで許容されるアルゴリズムを定義します。コントロールプレーンはデフォルトでは Ed25519 のままです。### CLI と SDK の動作 (SM-3)
+1. **Torii CLI** (`crates/iroha_cli`): SM2 keygen/import/export (distid 対応)、SM3 ハッシュ ヘルパー、および SM4 AEAD 暗号化/復号化コマンドを追加します。インタラクティブなプロンプトとドキュメントを更新します。
+2. **Genesis ツール** (`xtask`、`scripts/`): マニフェストで許可された署名アルゴリズムとデフォルトのハッシュを宣言できるようにします。対応する構成ノブなしで SM が有効になっている場合は失敗します。 *(完了: `RawGenesisTransaction` は、`default_hash`/`allowed_signing`/`sm2_distid_default` を含む `crypto` ブロックを保持するようになりました。`ManifestCrypto::validate` と `kagami genesis validate` は、一貫性のない SM 設定を拒否し、 defaults/genesis マニフェストはスナップショットをアドバタイズします。)*
+3. **SDK サーフェス**:
+   - Rust (`iroha_client`): SM2 署名/検証ヘルパー、SM3 ハッシュ、SM4 AEAD ラッパーを決定論的なデフォルトで公開します。
+   - Python/JS/Swift: Rust API をミラーリングします。 `sm_known_answers.toml` のステージングされたフィクスチャを言語間テストに再利用します。
+4. CLI/SDK クイックスタートで SM を有効にするためのオペレーター ワークフローを文書化し、JSON/YAML 構成が新しいアルゴリズム タグを受け入れることを確認します。
 
-## Host & VM Integration Plan (SM-2)
-1. Implement host-side `sm3_hash` syscall mirroring the existing GOST hash shim; reuse `Sm3Digest::hash` and expose deterministic error paths. *(Landed: host returns Blob TLV; see `DefaultHost` implementation and `sm_syscalls.rs` regression.)*
-2. Extend the VM syscall table with `sm2_verify` that accepts canonical r∥s signatures, validates distinguishing IDs, and maps failures to deterministic return codes. *(Done: host + Kotodama intrinsics return `1/0`; regression suite now covers truncated signatures, malformed public keys, non-blob TLVs, and UTF-8/empty/mismatched `distid` payloads.)*
-3. Provide `sm4_gcm_seal`/`sm4_gcm_open` (and optionally CCM) syscalls with explicit nonce/tag sizing (RFC 8998). *(Done: GCM uses fixed 12-byte nonces + 16-byte tags; CCM supports 7–13 byte nonces with tag lengths {4,6,8,10,12,14,16} controlled via `r14`; Kotodama exposes these as `sm::seal_gcm/open_gcm` and `sm::seal_ccm/open_ccm`.) Document nonce reuse policy in the developer handbook.*
-4. Wire Kotodama smoke contracts and IVM integration tests covering positive and negative cases (altered tags, malformed signatures, unsupported algorithms). *(Done via `crates/ivm/tests/kotodama_sm_syscalls.rs` mirroring host regressions for SM3/SM2/SM4.)*
-5. Update syscall allowlists, policies, and ABI docs (`crates/ivm/docs/syscalls.md`) and refresh hashed manifests after adding the new entries.
+#### CLI の進行状況
+- `cargo run -p iroha_cli --features sm -- crypto sm2 keygen --distid CN12345678901234` は、`client.toml` スニペット (`public_key_config`、`private_key_hex`、`distid`) とともに SM2 キー ペアを記述する JSON ペイロードを発行するようになりました。このコマンドは、確定的生成のために `--seed-hex` を受け入れ、ホストによって使用される RFC 6979 派生を反映します。
+- `cargo xtask sm-operator-snippet --distid CN12345678901234` は keygen/export フローをラップし、同じ `sm2-key.json`/`client-sm2.toml` 出力を 1 ステップで書き込みます。 `--json-out <path|->` / `--snippet-out <path|->` を使用してファイルをリダイレクトするか、標準出力にストリーミングし、自動化のための `jq` 依存関係を削除します。
+- `iroha_cli tools crypto sm2 import --private-key-hex <hex> [--distid ...]` は既存の素材から同じメタデータを抽出するため、オペレーターは入場前に識別 ID を検証できます。
+- `iroha_cli tools crypto sm2 export --private-key-hex <hex> --emit-json` は、構成スニペット (`allowed_signing`/`sm2_distid_default` ガイダンスを含む) を出力し、オプションでスクリプト用の JSON キー インベントリを再発行します。
+- `iroha_cli tools crypto sm3 hash --data <string>` は任意のペイロードをハッシュします。 `--data-hex` / `--file` はバイナリ入力をカバーし、このコマンドはマニフェスト ツールの 16 進ダイジェストと Base64 ダイジェストの両方を報告します。
+- `iroha_cli tools crypto sm4 gcm-seal --key-hex <KEY> --nonce-hex <NONCE> --plaintext-hex <PT>` (および `gcm-open`) は、ホスト SM4-GCM ヘルパーをラップし、`ciphertext_hex`/`tag_hex` またはプレーンテキスト ペイロードを表示します。 `sm4 ccm-seal` / `sm4 ccm-open` は、ノンス長 (7 ～ 13 バイト) とタグ長 (4、6、8、10、12、14、16) の検証が組み込まれた CCM に同じ UX を提供します。どちらのコマンドもオプションで生のバイトをディスクに出力します。## テスト戦略
+### 単元/既知の解答テスト
+- SM3 用の GM/T 0004 および GB/T 32905 ベクター (例: `"abc"`)。
+- SM4 用の GM/T 0002 および RFC 8998 ベクトル (ブロック + GCM/CCM)。
+- SM2 の GM/T 0003/GB/T 32918 の例（Z 値、署名検証）。ID `ALICE123@YAHOO.COM` の付録例 1 を含む。
+- 暫定フィクスチャ ステージング ファイル: `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`。
+- Wycheproof 由来の SM2 回帰スイート (`crates/iroha_crypto/tests/sm2_wycheproof.rs`) には、ビットフリップ、メッセージ改ざん、および切り捨てられた署名のネガを含む決定論的フィクスチャ (付録 D、SDK シード) を階層化する 52 件のコーパスが含まれるようになりました。サニタイズされた JSON は `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json` に存在し、`sm2_fuzz.rs` はそれを直接使用するため、ハッピー パスと改ざんの両方のシナリオがファズ/プロパティの実行全体にわたって調整されます。 벡터들은 표준 곡선뿐만 아니라 Annex 영역도 다루며, 필요 시 내장 `Sm2PublicKey` 검 이 BigInt 백업 루틴이 추적을 완료합니다。
+- `cargo xtask sm-wycheproof-sync --input <wycheproof-sm2.json>` (または `--input-url <https://…>`) は、アップストリーム ドロップ (ジェネレータ タグはオプション) を決定的にトリミングし、`crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json` を書き換えます。 C2SP が公式コーパスを公開するまでは、フォークを手動でダウンロードし、ヘルパーを通じてフィードします。キー、カウント、フラグを正規化して、レビュー担当者が差分を推論できるようにします。
+- SM2/SM3 Norito ラウンドトリップは `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` で検証されました。
+- `crates/ivm/tests/sm_syscalls.rs` での SM3 ホスト システムコールの回帰 (SM 機能)。
+- SM2 は、`crates/ivm/tests/sm_syscalls.rs` でのシステムコールの回帰を検証します (成功 + 失敗のケース)。
 
-### Host & VM Integration Status
-- DefaultHost, CoreHost, and WsvHost expose the SM3/SM2/SM4 syscalls and gate them on `sm_enabled`, returning `PermissionDenied` when the runtime flag is false.【crates/ivm/src/host.rs:915】【crates/ivm/src/core_host.rs:833】【crates/ivm/src/mock_wsv.rs:2307】
-- `crypto.allowed_signing` gating is threaded through pipeline/executor/state so production nodes opt in deterministically via configuration; adding `sm2` toggles SM helper availability.`【crates/iroha_core/src/smartcontracts/ivm/host.rs:170】【crates/iroha_core/src/state.rs:7673】【crates/iroha_core/src/executor.rs:683】
-- Regression coverage exercises both enabled and disabled paths (DefaultHost/CoreHost/WsvHost) for SM3 hashing, SM2 verification, and SM4 GCM/CCM seal/open flows.【crates/ivm/tests/sm_syscalls.rs:129】【crates/ivm/tests/sm_syscalls.rs:733】【crates/ivm/tests/sm_syscalls.rs:1036】
+### プロパティと回帰テスト
+- 無効な曲線、非標準的な r/s、ノンスの再利用を拒否する SM2 のプロプテスト。 *(`crates/iroha_crypto/tests/sm2_fuzz.rs` で利用可能、`sm_proptest` の背後でゲートされ、`cargo test -p iroha_crypto --features "sm sm_proptest"` 経由で有効になります。)*
+- さまざまなモードに適応した Wycheproof SM4 ベクトル (ブロック/AES モード)。 SM2 追加のアップストリームを追跡します。 `sm3_sm4_vectors.rs` は、GCM と CCM の両方に対してタグのビット反転、切り捨てられたタグ、および暗号文の改ざんを実行するようになりました。
 
-## Configuration Threads
-- Add `crypto.allowed_signing`, `crypto.default_hash`, `crypto.sm2_distid_default`, and the optional `crypto.enable_sm_openssl_preview` to `iroha_config`. Ensure data-model feature plumbing mirrors the crypto crate (`iroha_data_model` exposes `sm` → `iroha_crypto/sm`).
-- Wire config to admission policies so manifests/genesis files define allowable algorithms; control-plane remains Ed25519 by default.
-
-### CLI & SDK Work (SM-3)
-1. **Torii CLI** (`crates/iroha_cli`): add SM2 keygen/import/export (distid aware), SM3 hashing helpers, and SM4 AEAD encrypt/decrypt commands. Update interactive prompts and docs.
-2. **Genesis tooling** (`xtask`, `scripts/`): allow manifests to declare allowed signing algorithms and default hashes, fail fast if SM is enabled without corresponding config knobs. *(Done: `RawGenesisTransaction` now carries a `crypto` block with `default_hash`/`allowed_signing`/`sm2_distid_default`; `ManifestCrypto::validate` and `kagami genesis validate` reject inconsistent SM settings and defaults/genesis manifest advertises the snapshot.)*
-3. **SDK surfaces**:
-   - Rust (`iroha_client`): expose SM2 signing/verification helpers, SM3 hashing, SM4 AEAD wrappers with deterministic defaults.
-   - Python/JS/Swift: mirror the Rust API; reuse staged fixtures in `sm_known_answers.toml` for cross-language tests.
-4. Document operator workflow for enabling SM in CLI/SDK quickstarts and ensure JSON/YAML configs accept the new algorithm tags.
-
-#### CLI progress
-- `cargo run -p iroha_cli --features sm -- crypto sm2 keygen --distid CN12345678901234` now emits a JSON payload describing the SM2 key pair together with a `client.toml` snippet (`public_key_config`, `private_key_hex`, `distid`). The command accepts `--seed-hex` for deterministic generation and mirrors the RFC 6979 derivation used by hosts.
-- `cargo xtask sm-operator-snippet --distid CN12345678901234` wraps the keygen/export flow, writing the same `sm2-key.json`/`client-sm2.toml` outputs in one step. Use `--json-out <path|->` / `--snippet-out <path|->` to redirect files or stream them to stdout, removing the `jq` dependency for automation.
-- `iroha_cli tools crypto sm2 import --private-key-hex <hex> [--distid ...]` derives the same metadata from existing material so operators can validate distinguishing IDs before admission.
-- `iroha_cli tools crypto sm2 export --private-key-hex <hex> --emit-json` prints the config snippet (including `allowed_signing`/`sm2_distid_default` guidance) and optionally re-emits the JSON key inventory for scripting.
-- `iroha_cli tools crypto sm3 hash --data <string>` hashes arbitrary payloads; `--data-hex` / `--file` cover binary inputs and the command reports both hex and base64 digests for manifest tooling.
-- `iroha_cli tools crypto sm4 gcm-seal --key-hex <KEY> --nonce-hex <NONCE> --plaintext-hex <PT>` (and `gcm-open`) wrap the host SM4-GCM helpers and surface `ciphertext_hex`/`tag_hex` or plaintext payloads. `sm4 ccm-seal` / `sm4 ccm-open` provide the same UX for CCM with nonce length (7–13 bytes) and tag length (4,6,8,10,12,14,16) validation baked in; both commands optionally emit raw bytes to disk.
-
-## Testing Strategy
-### Unit/Known Answer Tests
-- GM/T 0004 & GB/T 32905 vectors for SM3 (e.g., `"abc"`).
-- GM/T 0002 & RFC 8998 vectors for SM4 (block + GCM/CCM).
-- GM/T 0003/GB/T 32918 examples for SM2 (Z-value, signature verification), including Annex Example 1 with ID `ALICE123@YAHOO.COM`.
-- Interim fixture staging file: `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`.
-- Wycheproof-derived SM2 regression suite (`crates/iroha_crypto/tests/sm2_wycheproof.rs`) now carries a 52-case corpus that layers deterministic fixtures (Annex D, SDK seeds) with bit-flip, message-tamper, and truncated-signature negatives. The sanitized JSON lives in `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json`, and `sm2_fuzz.rs` consumes it directly so both happy-path and tamper scenarios stay aligned across fuzz/property runs. 벡터들은 표준 곡선뿐만 아니라 Annex 영역도 다루며, 필요 시 내장 `Sm2PublicKey` 검증 이후 BigInt 백업 루틴이 추적을 완료합니다.
-- `cargo xtask sm-wycheproof-sync --input <wycheproof-sm2.json>` (or `--input-url <https://…>`) deterministically trims any upstream drop (generator tag optional) and rewrites `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json`. Until C2SP publishes the official corpus, download forks manually and feed them through the helper; it normalises keys, counts, and flags so reviewers can reason over diffs.
-- SM2/SM3 Norito round-trips validated in `crates/iroha_data_model/tests/sm_norito_roundtrip.rs`.
-- SM3 host syscall regression in `crates/ivm/tests/sm_syscalls.rs` (SM feature).
-- SM2 verify syscall regression in `crates/ivm/tests/sm_syscalls.rs` (success + failure cases).
-
-### Property & Regression Tests
-- Proptest for SM2 rejecting invalid curves, non-canonical r/s, and reuse of nonces. *(Available in `crates/iroha_crypto/tests/sm2_fuzz.rs`, gated behind `sm_proptest`; enable via `cargo test -p iroha_crypto --features "sm sm_proptest"`.)*
-- Wycheproof SM4 vectors (block/AES-mode) adapted for varied modes; track upstream for SM2 additions. `sm3_sm4_vectors.rs` now exercises tag bit-flips, truncated tags, and ciphertext tampering for both GCM and CCM.
-
-### Interop & Performance
-- RustCrypto ↔ OpenSSL/Tongsuo parity suite for SM2 sign/verify, SM3 digests, and SM4 ECB/GCM lives in `crates/iroha_crypto/tests/sm_cli_matrix.rs`; invoke it with `scripts/sm_interop_matrix.sh`. CCM parity vectors now run in `sm3_sm4_vectors.rs`; CLI matrix support will follow once upstream CLIs expose CCM helpers.
-- SM3 NEON helper now runs the Armv8 compression/padding path end-to-end with runtime gating through `sm_accel::is_sm3_enabled` (feature + env overrides mirrored across SM3/SM4). Golden digests (zero/`"abc"`/long-block + randomized lengths) and forced-disable tests keep parity with the scalar RustCrypto backend, and the Criterion micro-bench (`crates/sm3_neon/benches/digest.rs`) captures scalar vs NEON throughput on AArch64 hosts.
-- Perf harness mirroring `scripts/gost_bench.sh` to compare Ed25519/SHA-2 vs SM2/SM3/SM4 and validate tolerance thresholds.
-
-#### Arm64 Baseline (local Apple Silicon; Criterion `sm_perf`, refreshed 2025-12-05)
-- `scripts/sm_perf.sh` now runs the Criterion bench and enforces medians against `crates/iroha_crypto/benches/sm_perf_baseline.json` (recorded on aarch64 macOS; tolerance 25 % by default, baseline metadata captures the host triple). The new `--mode` flag lets engineers capture scalar vs NEON vs `sm-neon-force` datapoints without editing the script; the current capture bundle (raw JSON + aggregated summary) lives under `artifacts/sm_perf/2026-03-lab/m3pro_native/` and stamps every payload with `cpu_label="m3-pro-native"`.
-- Acceleration modes now auto-select the scalar baseline as a comparison target. `scripts/sm_perf.sh` threads `--compare-baseline/--compare-tolerance/--compare-label` through `sm_perf_check`, emitting per-benchmark deltas against the scalar reference and failing when the slowdown exceeds the configured threshold. Per-benchmark tolerances from the baseline drive the comparison guard (SM3 is capped at 12 % on the Apple scalar baseline, while the SM3 comparison delta now permits up to 70 % against the scalar reference to avoid flapping); the Linux baselines reuse the same comparison map because they are exported from the `neoverse-proxy-macos` capture, and we will tighten them after a bare-metal Neoverse run if the medians differ. Pass `--compare-tolerance` explicitly when capturing stricter bounds (e.g., `--compare-tolerance 0.20`) and use `--compare-label` to annotate alternative reference hosts.
-- Baselines recorded on the CI reference machine now live in `crates/iroha_crypto/benches/sm_perf_baseline_aarch64_macos_scalar.json`, `sm_perf_baseline_aarch64_macos_auto.json`, and `sm_perf_baseline_aarch64_macos_neon_force.json`. Refresh them with `scripts/sm_perf.sh --mode scalar --write-baseline`, `--mode auto --write-baseline`, or `--mode neon-force --write-baseline` (set `SM_PERF_CPU_LABEL` before capturing) and archive the generated JSON alongside the run logs. Keep the aggregated helper output (`artifacts/.../aggregated.json`) with the PR so reviewers can audit every sample. Linux/Neoverse baselines now ship in `sm_perf_baseline_aarch64_unknown_linux_gnu_{mode}.json`, promoted from `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/aggregated.json` (CPU label `neoverse-proxy-macos`, SM3 compare tolerance 0.70 for aarch64 macOS/Linux); rerun on bare-metal Neoverse hosts when available to tighten the tolerances.
-- Baseline JSON files may now carry an optional `tolerances` object to tighten guardrails per benchmark. Example:
+### 相互運用性とパフォーマンス
+- SM2 署名/検証、SM3 ダイジェスト、SM4 ECB/GCM 用の RustCrypto ↔ OpenSSL/Tongsuo パリティ スイートは `crates/iroha_crypto/tests/sm_cli_matrix.rs` に存在します。 `scripts/sm_interop_matrix.sh` で呼び出します。 CCM パリティ ベクトルは `sm3_sm4_vectors.rs` で実行されるようになりました。アップストリーム CLI が CCM ヘルパーを公開すると、CLI マトリックス サポートが追加されます。
+- SM3 NEON ヘルパーは、`sm_accel::is_sm3_enabled` を介したランタイム ゲーティングを使用して、Armv8 圧縮/パディング パスをエンドツーエンドで実行するようになりました (SM3/SM4 全体でミラーリングされる機能 + 環境オーバーライド)。ゴールデン ダイジェスト (ゼロ/`"abc"`/ロングブロック + ランダム化された長さ) と強制無効テストは、スカラー RustCrypto バックエンドとの同等性を維持し、Criterion マイクロベンチ (`crates/sm3_neon/benches/digest.rs`) は、AArch64 ホスト上のスカラーと NEON のスループットをキャプチャします。
+- パフォーマンス ハーネス ミラーリング `scripts/gost_bench.sh` を使用して、Ed25519/SHA-2 と SM2/SM3/SM4 を比較し、許容差のしきい値を検証します。#### Arm64 ベースライン (ローカル Apple Silicon; Criterion `sm_perf`、2025 年 12 月 5 日に更新)
+- `scripts/sm_perf.sh` は Criterion ベンチを実行し、`crates/iroha_crypto/benches/sm_perf_baseline.json` に対して中央値を適用します (aarch64 macOS で記録。デフォルトでは許容値 25%、ベースライン メタデータはホスト トリプルをキャプチャします)。新しい `--mode` フラグを使用すると、エンジニアはスクリプトを編集せずに、スカラー データポイント、NEON データポイント、`sm-neon-force` データポイントをキャプチャできるようになります。現在のキャプチャ バンドル (生の JSON + 集約されたサマリー) は `artifacts/sm_perf/2026-03-lab/m3pro_native/` の下に存在し、すべてのペイロードに `cpu_label="m3-pro-native"` をスタンプします。
+- 加速モードは、比較ターゲットとしてスカラー ベースラインを自動選択するようになりました。 `scripts/sm_perf.sh` スレッド `--compare-baseline/--compare-tolerance/--compare-label` ～ `sm_perf_check` は、スカラー参照に対してベンチマークごとのデルタを発行し、速度低下が設定されたしきい値を超えると失敗します。ベースラインからのベンチマークごとの許容値により比較ガードが強化されます (SM3 は Apple スカラー ベースラインで 12% に制限されていますが、SM3 比較デルタではフラッピングを避けるためにスカラー リファレンスに対して最大 70% が許容されます)。 Linux ベースラインは、`neoverse-proxy-macos` キャプチャからエクスポートされるため、同じ比較マップを再利用します。中央値が異なる場合は、ベアメタル Neoverse の実行後にそれらを強化します。より厳密な境界 (`--compare-tolerance 0.20` など) をキャプチャする場合は、`--compare-tolerance` を明示的に渡し、代替参照ホストに注釈を付けるには `--compare-label` を使用します。
+- CI リファレンス マシンに記録されたベースラインは、`crates/iroha_crypto/benches/sm_perf_baseline_aarch64_macos_scalar.json`、`sm_perf_baseline_aarch64_macos_auto.json`、および `sm_perf_baseline_aarch64_macos_neon_force.json` に保存されるようになりました。 `scripts/sm_perf.sh --mode scalar --write-baseline`、`--mode auto --write-baseline`、または `--mode neon-force --write-baseline` (キャプチャする前に `SM_PERF_CPU_LABEL` を設定) でそれらを更新し、生成された JSON を実行ログと一緒にアーカイブします。レビュー担当者がすべてのサンプルを監査できるように、集約されたヘルパー出力 (`artifacts/.../aggregated.json`) を PR に保存します。 Linux/Neoverse ベースラインは、`artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/aggregated.json` から昇格した `sm_perf_baseline_aarch64_unknown_linux_gnu_{mode}.json` で出荷されるようになりました (CPU ラベル `neoverse-proxy-macos`、aarch64 macOS/Linux の SM3 比較許容値 0.70)。許容値を厳しくするために利用可能な場合は、ベアメタル Neoverse ホストで再実行します。
+- ベースライン JSON ファイルには、ベンチマークごとのガードレールを強化するためのオプションの `tolerances` オブジェクトが含まれるようになりました。例:
   ```json
   {
     "benchmarks": { "...": 12.34 },
@@ -193,57 +176,52 @@ fleet.
     }
   }
   ```
-  `sm_perf_check` applies these fractional limits (8 % and 12 % in the example) while using the global CLI tolerance for any benchmarks not listed.
-- Comparison guards can also honour `compare_tolerances` in the comparison baseline. Use this to allow a looser delta against the scalar reference (for example, `\"sm3_vs_sha256_hash/sm3_hash\": 0.70` in the scalar baseline) while keeping the primary `tolerances` strict for direct baseline checks.
-- The checked-in Apple Silicon baselines now ship with concrete guardrails: SM2/SM4 operations allow 12–20 % drift depending on variance, while SM3/ChaCha comparisons sit at 8–12 %. The scalar baseline’s `sm3` tolerance is now tightened to 0.12; the `unknown_linux_gnu` files mirror the `neoverse-proxy-macos` export with the same tolerance map (SM3 compare 0.70) and metadata notes indicating they are shipped for the Linux gate until a bare-metal Neoverse rerun is available.
-- SM2 signing: 298 µs per op (Ed25519: 32 µs) ⇒ ~9.2× slower; verification: 267 µs (Ed25519: 41 µs) ⇒ ~6.5× slower.
-- SM3 hashing (4 KiB payload): 11.2 µs, effectively parity with SHA-256 at 11.3 µs (≈356 MiB/s vs 353 MiB/s).
-- SM4-GCM seal/open (1 KiB payload, 12-byte nonce): 15.5 µs vs ChaCha20-Poly1305 at 1.78 µs (≈64 MiB/s vs 525 MiB/s).
-- Benchmark artefacts (`target/criterion/sm_perf*`) captured for reproducibility; the Linux baselines are sourced from `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU label `neoverse-proxy-macos`, SM3 compare tolerance 0.70) and can be refreshed on bare-metal Neoverse hosts (`SM-4c.1`) once lab time opens to tighten tolerances.
+  `sm_perf_check` は、リストされていないベンチマークに対してグローバル CLI 許容値を使用しながら、これらの小数制限 (この例では 8% と 12%) を適用します。
+- 比較ガードは、比較ベースラインで `compare_tolerances` を尊重することもできます。これを使用すると、直接ベースライン チェックに対してプライマリ `tolerances` を厳密に保ちながら、スカラー参照 (たとえば、スカラー ベースラインの `\"sm3_vs_sha256_hash/sm3_hash\": 0.70`) に対してより緩やかなデルタを許可できます。- チェックインされた Apple Silicon ベースラインには具体的なガードレールが付属しています。SM2/SM4 の操作では分散に応じて 12 ～ 20% のドリフトが許容されますが、SM3/ChaCha の比較では 8 ～ 12% にとどまります。スカラー ベースラインの `sm3` 許容値は 0.12 に厳しくなりました。 `unknown_linux_gnu` ファイルは、同じ許容マップ (SM3 比較 0.70) と、ベアメタル Neoverse 再実行が利用可能になるまで Linux ゲート用に出荷されることを示すメタデータ メモを使用して、`neoverse-proxy-macos` エクスポートをミラーリングします。
+- SM2 署名: オペレーションごとに 298µs (Ed25519: 32µs) ⇒ 約 9.2 倍遅くなります。検証: 267µs (Ed25519: 41µs) ⇒ 約 6.5 倍遅くなります。
+- SM3 ハッシュ (4KiB ペイロード): 11.2μs、11.3μs で SHA-256 と実質的に同等 (≈356MiB/s 対 353MiB/s)。
+- SM4-GCM シール/オープン (1KiB ペイロード、12 バイトノンス): 15.5μs 対 ChaCha20-Poly1305 で 1.78μs (≈64MiB/s 対 525MiB/s)。
+- 再現性を確保するためにキャプチャされたベンチマーク アーティファクト (`target/criterion/sm_perf*`)。 Linux ベースラインは `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU ラベル `neoverse-proxy-macos`、SM3 比較許容値 0.70) から取得されており、許容値を厳しくするためにラボの時間が開始されたら、ベアメタル Neoverse ホスト (`SM-4c.1`) で更新できます。
 
-#### Cross-architecture capture checklist
-- Run `scripts/sm_perf_capture_helper.sh` **on the target machine** (x86_64 workstation, Neoverse ARM server, etc.). Pass `--cpu-label <host>` to stamp the captures and (when running in matrix mode) to pre-populate the generated plan/commands for lab scheduling. The helper prints mode-specific commands that:
-  1. execute the Criterion suite with the correct feature set, and
-  2. write medians into `crates/iroha_crypto/benches/sm_perf_baseline_${arch}_${os}_${mode}.json`.
-- Capture the scalar baseline first, then re-run the helper for `auto` (and `neon-force` on AArch64 platforms). Use a meaningful `SM_PERF_CPU_LABEL` so reviewers can trace host details in the JSON metadata.
-- After each run, archive the raw `target/criterion/sm_perf*` directory and include it in the PR together with the generated baselines. Tighten per-benchmark tolerances as soon as two consecutive runs stabilise (see `sm_perf_baseline_aarch64_macos_*.json` for reference formatting).
-- Record the medians + tolerances in this section and update `status.md`/`roadmap.md` when a new architecture is covered. The Linux baselines are now checked in from the `neoverse-proxy-macos` capture (metadata notes the export to the aarch64-unknown-linux-gnu gate); rerun on bare-metal Neoverse/x86_64 hosts as follow-ups when those lab slots are available.
+#### クロスアーキテクチャキャプチャチェックリスト
+- **ターゲット マシン** (x86_64 ワークステーション、Neoverse ARM サーバーなど) で `scripts/sm_perf_capture_helper.sh` を実行します。 `--cpu-label <host>` を渡して、キャプチャをスタンプし、(マトリックス モードで実行している場合) ラボ スケジュール用に生成されたプラン/コマンドを事前に設定します。ヘルパーは、次のようなモード固有のコマンドを出力します。
+  1. 正しい機能セットを使用して Criterion スイートを実行し、
+  2. 中央値を `crates/iroha_crypto/benches/sm_perf_baseline_${arch}_${os}_${mode}.json` に書き込みます。
+- 最初にスカラー ベースラインをキャプチャし、次に `auto` (および AArch64 プラットフォームでは `neon-force`) のヘルパーを再実行します。レビュー担当者が JSON メタデータ内のホストの詳細を追跡できるように、意味のある `SM_PERF_CPU_LABEL` を使用します。
+- 各実行後に、生の `target/criterion/sm_perf*` ディレクトリをアーカイブし、生成されたベースラインとともに PR に含めます。 2 回の連続実行が安定したらすぐに、ベンチマークごとの許容値を厳しくします (参照形式については、`sm_perf_baseline_aarch64_macos_*.json` を参照)。
+- このセクションに中央値と許容値を記録し、新しいアーキテクチャがカバーされる場合は `status.md`/`roadmap.md` を更新します。 Linux ベースラインが `neoverse-proxy-macos` キャプチャからチェックインされるようになりました (メタデータには、aarch64-unknown-linux-gnu ゲートへのエクスポートが記録されています)。これらのラボ スロットが利用可能になった場合、フォローアップとしてベアメタル Neoverse/x86_64 ホストで再実行します。
 
-#### ARMv8 SM3/SM4 intrinsics vs scalar paths
-`sm_accel` (see `crates/iroha_crypto/src/sm.rs:739`) provides the runtime dispatch layer for NEON-backed SM3/SM4 helpers. The feature is guarded at three levels:
+#### ARMv8 SM3/SM4 組み込み関数とスカラー パスの比較
+`sm_accel` (`crates/iroha_crypto/src/sm.rs:739` を参照) は、NEON をサポートする SM3/SM4 ヘルパーのランタイム ディスパッチ層を提供します。この機能は 3 つのレベルで保護されています。|レイヤー |コントロール |メモ |
+|------|-------|------|
+|コンパイル時間 | `--features sm` (`aarch64` で `sm-neon` を自動的に取り込むようになりました) または `sm-neon-force` (テスト/ベンチマーク) | NEON モジュールを構築し、`sm3-neon`/`sm4-neon` をリンクします。 |
+|ランタイム自動検出 | `sm4_neon::is_supported()` | AES/PMULL 相当物を公開する CPU (Apple M シリーズ、Neoverse V1/N2 など) にのみ当てはまります。 NEON または FEAT_SM4 をマスクする VM は、スカラー コードにフォールバックします。 |
+|演算子オーバーライド | `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`)起動時に適用される構成主導のディスパッチ。 `force-enable` は信頼できる環境でのプロファイリングにのみ使用し、スカラー フォールバックを検証する場合は `force-disable` を優先します。 |
 
-| Layer | Control | Notes |
-|-------|---------|-------|
-| Compile time | `--features sm` (now pulls in `sm-neon` automatically on `aarch64`) or `sm-neon-force` (tests/benchmarks) | Builds the NEON modules and links `sm3-neon`/`sm4-neon`. |
-| Runtime auto-detect | `sm4_neon::is_supported()` | Only true on CPUs that expose AES/PMULL equivalents (e.g., Apple M-series, Neoverse V1/N2). VMs that mask NEON or FEAT_SM4 fall back to scalar code. |
-| Operator override | `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`) | Config-driven dispatch applied at startup; use `force-enable` only for profiling in trusted environments and prefer `force-disable` when validating scalar fallbacks. |
+**パフォーマンスエンベロープ (Apple M3 Pro、中央値は `sm_perf_baseline_aarch64_macos_{mode}.json` に記録):**
 
-**Performance envelope (Apple M3 Pro; medians recorded in `sm_perf_baseline_aarch64_macos_{mode}.json`):**
+|モード | SM3 ダイジェスト (4KiB) | SM4-GCM シール (1KiB) |メモ |
+|------|------|-----------|------|
+|スカラー | 11.6μs | 15.9μs |決定的な RustCrypto パス。 `sm` 機能がコンパイルされるすべての場所で使用されますが、NEON は使用できません。 |
+|ネオンオート |スカラーよりも約 2.7 倍高速 |スカラーよりも約 2.3 倍高速 |現在の NEON カーネル (SM-5a.2c) は、スケジュールを一度に 4 ワードずつ拡張し、デュアル キュー ファンアウトを使用します。正確な中央値はホストごとに異なるため、ベースラインの JSON メタデータを参照してください。 |
+|ネオンフォース | NEON auto をミラーリングしますが、フォールバックを完全に無効にします。 NEONオートと同じ | `scripts/sm_perf.sh --mode neon-force` 経由で実行されます。デフォルトでスカラー モードになるホスト上でも CI を正直に保ちます。 |
 
-| Mode | SM3 digest (4 KiB) | SM4-GCM seal (1 KiB) | Notes |
-|------|-------------------|----------------------|-------|
-| Scalar | 11.6 µs | 15.9 µs | Deterministic RustCrypto path; used everywhere the `sm` feature is compiled but NEON is unavailable. |
-| NEON auto | ~2.7× faster than scalar | ~2.3× faster than scalar | Current NEON kernels (SM-5a.2c) widen the schedule four words at a time and use dual queue fan-out; exact medians vary per host, so consult the baseline JSON metadata. |
-| NEON force | Mirrors NEON auto but disables fallback entirely | Same as NEON auto | Exercised via `scripts/sm_perf.sh --mode neon-force`; keeps CI honest even on hosts that would default to scalar mode. |
+**決定論と展開ガイダンス**
+- 組み込み関数は観察可能な結果を変更しません。`sm_accel` は、アクセラレーションされたパスが利用できないため、スカラー ヘルパーが実行される場合に `None` を返します。したがって、スカラー実装が正しい限り、コンセンサス コード パスは決定論的なままになります。
+- NEON パスが使用されたかどうかについてビジネス ロジックをゲート**しない**。加速度を純粋にパフォーマンスのヒントとして扱い、テレメトリのみを介してステータスを公開します (例: `sm_intrinsics_enabled` ゲージ)。
+- SM コードに触れた後は常に `ci/check_sm_perf.sh` (または `make check-sm-perf`) を実行して、Criterion ハーネスが各ベースライン JSON に埋め込まれた許容値を使用してスカラー パスとアクセラレーション パスの両方を検証するようにします。
+- ベンチマークまたはデバッグを行う場合は、コンパイル時フラグよりも設定ノブ `crypto.sm_intrinsics` を優先します。 `sm-neon-force` を使用して再コンパイルすると、スカラー フォールバックは完全に無効になりますが、`force-enable` は実行時の検出を微調整するだけです。
+- 選択したポリシーをリリース ノートに文書化します。実稼働ビルドではポリシーを `Auto` のままにし、同じバイナリ アーティファクトを共有しながら、各バリデータがハードウェア機能を個別に検出できるようにする必要があります。
+- 同じディスパッチおよびテスト フローを尊重しない限り、静的にリンクされたベンダー組み込み (サードパーティの SM4 ライブラリなど) を混合するバイナリの出荷を避けてください。そうしないと、ベースライン ツールでパフォーマンスの低下が検出されなくなります。#### x86_64 Rosetta ベースライン (Apple M3 Pro、2025 年 12 月 1 日にキャプチャ)
+- ベースラインは `crates/iroha_crypto/benches/sm_perf_baseline_x86_64_macos_{scalar,auto,neon_force}.json` (cpu_label=`m3-pro-rosetta`) に存在し、生のキャプチャと集約されたキャプチャは `artifacts/sm_perf/2026-03-lab/m3pro_rosetta/` の下にあります。
+- x86_64 でのベンチマークごとの許容値は、SM2 では 20%、Ed25519/SHA-256 では 15%、SM4/ChaCha では 12% に設定されています。 `scripts/sm_perf.sh` では、非 AArch64 ホストでのアクセラレーション比較許容値がデフォルトで 25% に設定されるようになりました。これにより、Neoverse の再実行が完了するまで、AArch64 で共有 `m3-pro-native` ベースラインの 5.25 のスラックを残しつつ、スカラー対自動がタイトなままになります。
 
-**Determinism & deployment guidance**
-- Intrinsics never change observable results—`sm_accel` returns `None` when the accelerated path is unavailable so the scalar helper runs. Consensus code paths therefore remain deterministic as long as the scalar implementation is correct.
-- Do **not** gate business logic on whether the NEON path was used. Treat the acceleration purely as a perf hint and expose the status via telemetry only (e.g., `sm_intrinsics_enabled` gauge).
-- Always run `ci/check_sm_perf.sh` (or `make check-sm-perf`) after touching SM code so the Criterion harness validates both scalar and accelerated paths using the tolerances embedded in each baseline JSON.
-- When benchmarking or debugging, prefer the config knob `crypto.sm_intrinsics` over compile-time flags; recompiling with `sm-neon-force` disables the scalar fallback entirely, whereas `force-enable` simply nudges runtime detection.
-- Document the chosen policy in release notes: production builds should leave the policy in `Auto`, letting each validator discover hardware capabilities independently while still sharing the same binary artefacts.
-- Avoid shipping binaries that mix statically linked vendor intrinsics (e.g., third-party SM4 libraries) unless they respect the same dispatch and testing flow—otherwise perf regressions will not be caught by our baseline tooling.
-
-#### x86_64 Rosetta baseline (Apple M3 Pro; captured 2025-12-01)
-- Baselines live in `crates/iroha_crypto/benches/sm_perf_baseline_x86_64_macos_{scalar,auto,neon_force}.json` (cpu_label=`m3-pro-rosetta`), with raw + aggregated captures under `artifacts/sm_perf/2026-03-lab/m3pro_rosetta/`.
-- Per-benchmark tolerances on x86_64 are set to 20 % for SM2, 15 % for Ed25519/SHA-256, and 12 % for SM4/ChaCha. `scripts/sm_perf.sh` now defaults the acceleration comparison tolerance to 25 % on non-AArch64 hosts so scalar-vs-auto stays tight while leaving the 5.25 slack on AArch64 for the shared `m3-pro-native` baseline until a Neoverse rerun lands.
-
-| Benchmark | Scalar | Auto | Neon-Force | Auto vs Scalar | Neon vs Scalar | Neon vs Auto |
-|-----------|--------|------|------------|----------------|---------------|--------------|
+|ベンチマーク |スカラー |自動 |ネオンフォース |オート vs スカラー |ネオン vs スカラー |ネオン vs オート |
+|----------|----------|------|----------|-----|--------------|--------------|
 | sm2_vs_ed25519_sign/ed25519_sign |    57.43 |  57.12 |      55.77 |          -0.53% |         -2.88% |        -2.36% |
 | sm2_vs_ed25519_sign/sm2_sign |   572.76 | 568.71 |     557.83 |          -0.71% |         -2.61% |        -1.91% |
-| sm2_vs_ed25519_verify/verify/ed25519 |    69.03 |  68.42 |      66.28 |          -0.88% |         -3.97% |        -3.12% |
-| sm2_vs_ed25519_verify/verify/sm2 |   521.73 | 514.50 |     502.17 |          -1.38% |         -3.75% |        -2.40% |
+| sm2_vs_ed25519_verify/検証/ed25519 |    69.03 |  68.42 |      66.28 |          -0.88% |         -3.97% |        -3.12% |
+| sm2_vs_ed25519_verify/検証/sm2 |   521.73 | 514.50 |     502.17 |          -1.38% |         -3.75% |        -2.40% |
 | sm3_vs_sha256_hash/sha256_hash |    16.78 |  16.58 |      16.16 |          -1.19% |         -3.69% |        -2.52% |
 | sm3_vs_sha256_hash/sm3_hash |    15.78 |  15.51 |      15.04 |          -1.71% |         -4.69% |        -3.03% |
 | sm4_vs_chacha20poly1305_decrypt/chacha20poly1305_decrypt |     1.96 |   1.97 |       1.97 |           0.39% |          0.16% |        -0.23% |
@@ -251,107 +229,97 @@ fleet.
 | sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt |     1.96 |   2.00 |       1.93 |           2.23% |         -1.14% |        -3.30% |
 | sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt |    16.60 |  16.58 |      16.15 |          -0.10% |         -2.66% |        -2.57% |
 
-#### x86_64 / other non-aarch64 targets
-- Current builds still ship only the deterministic RustCrypto scalar path on x86_64; keep `sm` enabled but do **not** inject external AVX2/VAES kernels until SM-4c.1b lands. Runtime policy mirrors ARM: default to `Auto`, honour `crypto.sm_intrinsics`, and surface the same telemetry gauges.
-- Linux/x86_64 captures remain to be recorded; reuse the helper on that hardware and drop the medians into `sm_perf_baseline_x86_64_unknown_linux_gnu_{mode}.json` alongside the Rosetta baselines and tolerance map above.
+#### x86_64 / その他の非 aarch64 ターゲット
+- 現在のビルドは、x86_64 上の決定論的な RustCrypto スカラー パスのみを依然として出荷します。 `sm` を有効のままにしますが、SM-4c.1b が導入されるまで外部 AVX2/VAES カーネルを挿入しないでください。ランタイム ポリシーは ARM をミラーリングします。デフォルトは `Auto`、`crypto.sm_intrinsics` を尊重し、同じテレメトリ ゲージを表示します。
+- Linux/x86_64 キャプチャは記録されたままです。そのハードウェアでヘルパーを再利用し、上記のロゼッタ ベースラインと許容値マップと並んで中央値を `sm_perf_baseline_x86_64_unknown_linux_gnu_{mode}.json` にドロップします。**よくある落とし穴**
+1. **仮想化された ARM インスタンス:** 多くのクラウドは NEON を公開しますが、`sm4_neon::is_supported()` がチェックする SM4/AES 拡張機能を非表示にします。これらの環境でのスカラー パスを予測し、それに応じてパフォーマンス ベースラインをキャプチャします。
+2. **部分的なオーバーライド:** 実行間で永続的な `crypto.sm_intrinsics` 値を混合すると、パフォーマンスの読み取り値が不一致になります。新しいベースラインを取得する前に、意図したオーバーライドを実験チケットに文書化し、構成をリセットします。
+3. **CI パリティ:** 一部の macOS ランナーでは、NEON がアクティブな間、カウンターベースのパフォーマンス サンプリングが許可されません。 `scripts/sm_perf_capture_helper.sh` 出力を PR に添付しておくと、ランナーがこれらのカウンターを非表示にしても、レビュー担当者が加速パスが実行されたことを確認できます。
+4. **将来の ISA バリアント (SVE/SVE2):** 現在のカーネルは NEON レーン形状を想定しています。 SVE/SVE2 に移植する前に、専用のバリアントで `sm_accel::NeonPolicy` を拡張し、CI、テレメトリ、およびオペレータ ノブを調整できるようにします。
 
-**Common pitfalls**
-1. **Virtualised ARM instances:** Many clouds expose NEON but hide the SM4/AES extensions that `sm4_neon::is_supported()` checks. Expect the scalar path in those environments and capture perf baselines accordingly.
-2. **Partial overrides:** Mixing persisted `crypto.sm_intrinsics` values between runs leads to inconsistent perf readings. Document the intended override in the experiment ticket and reset the config before capturing new baselines.
-3. **CI parity:** Some macOS runners do not allow counter-based perf sampling while NEON is active. Keep `scripts/sm_perf_capture_helper.sh` outputs attached to PRs so reviewers can confirm that the accelerated path was exercised even if the runner hides those counters.
-4. **Future ISA variants (SVE/SVE2):** The current kernels assume NEON lane shapes. Before porting to SVE/SVE2, extend `sm_accel::NeonPolicy` with a dedicated variant so we can keep CI, telemetry, and operator knobs aligned.
+SM-5a/SM-4c.1 で追跡されるアクション アイテムにより、CI はすべての新しいアーキテクチャのパリティ証明を確実に取得し、Neoverse/x86 ベースラインと NEON 対スカラーの許容差が収束するまでロードマップは 🈺 に留まります。
 
-Action items tracked under SM-5a/SM-4c.1 ensure that CI captures parity proofs for every new architecture, and the roadmap stays at 🈺 until Neoverse/x86 baselines and NEON-vs-scalar tolerances converge.
+## コンプライアンスと規制に関する注意事項
 
-## Compliance & Regulatory Notes
+### 標準と規範的参照
+- **GM/T 0002-2012** (SM4)、**GM/T 0003-2012** + **GB/T 32918 シリーズ** (SM2)、**GM/T 0004-2012** + **GB/T 32905/32907** (SM3)、および **RFC 8998** がアルゴリズム定義、テストを管理します。フィクスチャが消費するベクトルと KDF バインディング。【docs/source/crypto/sm_vectors.md#L79】
+- `docs/source/crypto/sm_compliance_brief.md` のコンプライアンス概要は、エンジニアリング、SRE、および法務チームの提出/輸出責任と並行して、これらの標準を相互リンクしています。 GM/T カタログが改訂されるたびに、この概要を更新してください。
 
-### Standards & Normative References
-- **GM/T 0002-2012** (SM4), **GM/T 0003-2012** + **GB/T 32918 series** (SM2), **GM/T 0004-2012** + **GB/T 32905/32907** (SM3), and **RFC 8998** govern the algorithm definitions, test vectors, and KDF bindings that our fixtures consume.【docs/source/crypto/sm_vectors.md#L79】
-- The compliance brief in `docs/source/crypto/sm_compliance_brief.md` cross-links these standards alongside the filing/export responsibilities for engineering, SRE, and legal teams; keep that brief updated whenever the GM/T catalog revises.
+### 中国本土の規制ワークフロー
+1. **製品提出 (开发备案):** SM 対応バイナリを中国本土から出荷する前に、アーティファクト マニフェスト、決定論的ビルド ステップ、および依存関係リストを省暗号管理局に提出します。ファイリング テンプレートとコンプライアンス チェックリストは、`docs/source/crypto/sm_compliance_brief.md` および添付ファイル ディレクトリ (`sm_product_filing_template.md`、`sm_sales_usage_filing_template.md`、`sm_export_statement_template.md`) にあります。
+2. **販売/使用申請 (销售/使用計画):** 陸上で SM 対応ノードを実行している事業者は、展開範囲、主要な管理体制、およびテレメトリ計画を登録する必要があります。提出する際には、署名付きマニフェストと `iroha_sm_*` メトリック スナップショットを添付してください。
+3. **認定テスト:** 重要なインフラストラクチャのオペレーターは、認定されたラボレポートを必要とする場合があります。再現可能なビルド スクリプト、SBOM エクスポート、および Wycheproof/相互運用アーティファクト (以下を参照) を提供して、下流の監査人がコードを変更せずにベクターを再現できるようにします。
+4. **ステータス追跡:** 完了した申請をリリース チケットと `status.md` に記録します。ファイリングが不足していると、検証のみから署名パイロットへの昇格が妨げられます。### 輸出と流通の姿勢
+- SM 対応バイナリを **US EAR カテゴリ 5 パート 2** および **EU 規則 2021/821 Annex 1 (5D002)** に基づく規制品目として扱います。ソースの公開は引き続きオープンソース/ENC カーブアウトの対象となりますが、禁輸対象国への再配布には依然として法的審査が必要です。
+- リリース マニフェストには、ENC/TSU ベースを参照するエクスポート ステートメントをバンドルし、FFI プレビューがパッケージ化されている場合は OpenSSL/Tongsuo ビルド識別子をリストする必要があります。
+- 通信事業者が国境を越えた転送の問題を回避するために陸上配送が必要な場合は、地域ローカルのパッケージング (例: 本土ミラー) を好みます。
 
-### Mainland China Regulatory Workflow
-1. **Product filing (开发备案):** Prior to shipping SM-enabled binaries from mainland China, submit the artifact manifest, deterministic build steps, and dependency list to the provincial cryptography administration. Filing templates and the compliance checklist live in `docs/source/crypto/sm_compliance_brief.md` and the attachments directory (`sm_product_filing_template.md`, `sm_sales_usage_filing_template.md`, `sm_export_statement_template.md`).
-2. **Sales/Usage filing (销售/使用备案):** Operators running SM-enabled nodes onshore must register their deployment scope, key management posture, and telemetry plan. Attach signed manifests plus `iroha_sm_*` metric snapshots when filing.
-3. **Accredited testing:** Critical infrastructure operators may require certified lab reports. Provide reproducible build scripts, SBOM exports, and the Wycheproof/interop artefacts (see below) so downstream auditors can reproduce the vectors without altering the code.
-4. **Status tracking:** Record completed filings in the release ticket and `status.md`; missing filings block promotion from verify-only to signing pilots.
+### オペレーターの文書と証拠
+- このアーキテクチャの概要を、`docs/source/crypto/sm_operator_rollout.md` のロールアウト チェックリストおよび `docs/source/crypto/sm_compliance_brief.md` のコンプライアンス ファイリング ガイドと組み合わせます。
+- ジェネシス/オペレーターのクイックスタートを `docs/genesis.md`、`docs/genesis.he.md`、および `docs/genesis.ja.md` 間で同期させます。 SM2/SM3 CLI ワークフローには、`crypto` マニフェストをシードするためのオペレータ向けの信頼できる情報源があります。
+- OpenSSL/Tongsuo の出所、`scripts/sm_openssl_smoke.sh` 出力、および `scripts/sm_interop_matrix.sh` パリティ ログをすべてのリリース バンドルでアーカイブするため、コンプライアンスおよび監査パートナーは決定的なアーティファクトを取得できます。
+- プログラムの状態を検出可能な状態に保つために、コンプライアンスの範囲が変更されるたびに (新しい管轄区域、提出の完了、または輸出の決定)、`status.md` を更新します。
+- `docs/source/release_dual_track_runbook.md` でキャプチャされた段階的な準備レビュー (`SM-RR1` ～ `SM-RR3`) に従ってください。検証のみ、パイロット、および GA 署名フェーズ間のプロモーションには、そこに列挙されているアーティファクトが必要です。
 
-### Export & Distribution Posture
-- Treat SM-capable binaries as controlled items under **US EAR Category 5 Part 2** and **EU Regulation 2021/821 Annex 1 (5D002)**. Publication of source continues to qualify for the open-source/ENC carve-outs, but redistribution to embargoed destinations still requires legal review.
-- Release manifests must bundle an export statement referencing the ENC/TSU basis and list the OpenSSL/Tongsuo build identifiers if the FFI preview is packaged.
-- Prefer region-local packaging (e.g., mainland mirrors) when operators need onshore distribution to avoid cross-border transfer issues.
+## 相互運用レシピ
 
-### Operator Documentation & Evidence
-- Pair this architecture brief with the rollout checklist in `docs/source/crypto/sm_operator_rollout.md` and the compliance filing guide in `docs/source/crypto/sm_compliance_brief.md`.
-- Keep the genesis/operator quickstart in sync across `docs/genesis.md`, `docs/genesis.he.md`, and `docs/genesis.ja.md`; the SM2/SM3 CLI workflow there is the operator-facing source of truth for seeding `crypto` manifests.
-- Archive OpenSSL/Tongsuo provenance, `scripts/sm_openssl_smoke.sh` output, and `scripts/sm_interop_matrix.sh` parity logs with every release bundle so compliance and audit partners have deterministic artefacts.
-- Update `status.md` whenever compliance scope changes (new jurisdictions, filing completions, or export decisions) to keep programme state discoverable.
-- Follow the staged readiness reviews (`SM-RR1`–`SM-RR3`) captured in `docs/source/release_dual_track_runbook.md`; promotion between verify-only, pilot, and GA signing phases requires the artefacts enumerated there.
+### RustCrypto ↔ OpenSSL/Tongsuo マトリックス
+1. OpenSSL/Tongsuo CLI が使用可能であることを確認します (`IROHA_SM_CLI="openssl /opt/tongsuo/bin/openssl"` では明示的なツールの選択が可能です)。
+2. `scripts/sm_interop_matrix.sh` を実行します。 `cargo test -p iroha_crypto --test sm_cli_matrix --features sm` を呼び出し、各プロバイダーに対して SM2 署名/検証、SM3 ダイジェスト、および SM4 ECB/GCM フローを実行し、存在しない CLI をスキップします。【scripts/sm_interop_matrix.sh#L1】
+3. 結果として得られる `target/debug/deps/sm_cli_matrix*.log` ファイルをリリース アーティファクトとともにアーカイブします。
 
-## Interop Recipes
+### OpenSSL プレビュー スモーク (パッケージング ゲート)
+1. OpenSSL ≥3.0 開発ヘッダーをインストールし、`pkg-config` がそれらを見つけられることを確認します。
+2. `scripts/sm_openssl_smoke.sh` を実行します。ヘルパーは `cargo check`/`cargo test --test sm_openssl_smoke` を実行し、SM3 ハッシュ、SM2 検証、および FFI バックエンドを介した SM4-GCM ラウンドトリップを実行します (テスト ハーネスはプレビューを明示的に有効にします)。【scripts/sm_openssl_smoke.sh#L1】
+3. スキップ以外の失敗はリリース ブロッカーとして扱います。監査証拠としてコンソール出力をキャプチャします。
 
-### RustCrypto ↔ OpenSSL/Tongsuo Matrix
-1. Ensure OpenSSL/Tongsuo CLIs are available (`IROHA_SM_CLI="openssl /opt/tongsuo/bin/openssl"` allows explicit tool selection).
-2. Run `scripts/sm_interop_matrix.sh`; it invokes `cargo test -p iroha_crypto --test sm_cli_matrix --features sm` and exercises SM2 sign/verify, SM3 digests, and SM4 ECB/GCM flows against each provider, skipping any CLI that is absent.【scripts/sm_interop_matrix.sh#L1】
-3. Archive the resulting `target/debug/deps/sm_cli_matrix*.log` files with the release artefacts.
+### 確定的なフィクスチャのリフレッシュ
+- 各コンプライアンス申請の前に SM フィクスチャ (`sm_vectors.md`、`fixtures/sm/…`) を再生成し、パリティ マトリックスとスモーク ハーネスを再実行して、監査人が申請と一緒に新しい決定論的な記録を受け取るようにします。## 外部監査の準備
+- `docs/source/crypto/sm_audit_brief.md` は、外部レビューのコンテキスト、範囲、スケジュール、連絡先をパッケージ化します。
+- 監査アーティファクトは、`docs/source/crypto/attachments/` (OpenSSL スモーク ログ、カーゴ ツリー スナップショット、カーゴ メタデータ エクスポート、ツールキット来歴) および `fuzz/sm_corpus_manifest.json` (既存の回帰ベクトルをソースとする決定論的 SM ファズ シード) の下に存在します。 macOS では現在、ワークスペースの依存関係サイクルにより `cargo check` が妨げられているため、スモーク ログにスキップされた実行が記録されます。サイクルのない Linux ビルドでは、プレビュー バックエンドが完全に実行されます。
+- RFQ の発送に先立って調整するために、2026 年 1 月 30 日に暗号 WG、プラットフォーム運用、セキュリティ、およびドキュメント/開発責任者に回覧されました。
 
-### OpenSSL Preview Smoke (Packaging Gate)
-1. Install OpenSSL ≥ 3.0 development headers and ensure `pkg-config` can locate them.
-2. Execute `scripts/sm_openssl_smoke.sh`; the helper runs `cargo check`/`cargo test --test sm_openssl_smoke`, exercising SM3 hashing, SM2 verification, and SM4-GCM round-trips via the FFI backend (the test harness enables the preview explicitly).【scripts/sm_openssl_smoke.sh#L1】
-3. Treat any non-skip failure as a release blocker; capture the console output for audit evidence.
+### 監査の実施状況
 
-### Deterministic Fixture Refresh
-- Regenerate SM fixtures (`sm_vectors.md`, `fixtures/sm/…`) before each compliance filing, then re-run the parity matrix and smoke harness so auditors receive fresh deterministic transcripts alongside the filings.
+- **ビットの軌跡 (CN 暗号化の実践)** — 作業記述書は **2026-02-21** に実行され、キックオフ **2026-02-24**、フィールドワーク期間 **2026-02-24–2026-03-22**、最終報告書の期限 **2026-04-15**。毎週水曜日の 09:00UTC に、Crypto WG リーダーとセキュリティ エンジニアリング担当者による週次ステータス チェックポイントが行われます。連絡先、成果物、証拠の添付ファイルについては、[`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) を参照してください。
+- **NCC グループ APAC (緊急枠)** — 追加の調査結果や規制当局の要請によりセカンドオピニオンが必要になった場合に備えて、フォローアップ/並行レビューとして 2026 年 5 月の期間を予約しました。エンゲージメントの詳細とエスカレーション フックは、`sm_audit_brief.md` の Trail of Bits エントリと一緒に記録されます。
 
-## External Audit Preparation
-- `docs/source/crypto/sm_audit_brief.md` packages the context, scope, schedule, and contacts for the external review.
-- Audit artefacts live under `docs/source/crypto/attachments/` (OpenSSL smoke log, cargo tree snapshot, cargo metadata export, toolkit provenance) and `fuzz/sm_corpus_manifest.json` (deterministic SM fuzz seeds sourced from existing regression vectors). On macOS the smoke log currently records a skipped run because the workspace dependency cycle prevents `cargo check`; Linux builds without the cycle will exercise the preview backend fully.
-- Circulated to Crypto WG, Platform Ops, Security, and Docs/DevRel leads on 2026-01-30 for alignment ahead of RFQ dispatch.
+## リスクと軽減策
 
-### Audit Engagement Status
+完全なレジスタ: 詳細については、[`sm_risk_register.md`](sm_risk_register.md) を参照してください。
+確率/影響スコアリング、モニタリングトリガー、サインオフ履歴。の
+以下の概要は、リリース エンジニアリングに浮上した見出し項目を追跡しています。
+|リスク |重大度 |オーナー |緩和 |
+|------|----------|------||----------|
+| RustCrypto SM クレートに対する外部監査の欠如 |高 |暗号WG | Bits/NCC Group の契約証跡。監査報告書が受理されるまで検証のみを保持します。 |
+| SDK 間の決定論的なノンス回帰 |高 | SDK プログラム リード | SDK CI 全体でフィクスチャを共有します。正規の r∥s エンコーディングを強制します。クロス SDK 統合テストを追加します (SM-3c で追跡)。 |
+|組み込み関数における ISA 固有のバグ |中 |パフォーマンスWG |機能ゲート組み込み、ARM 上の CI カバレッジが必要、ソフトウェア フォールバックの維持。ハードウェア検証マトリックスは `sm_perf.md` で維持されます。 |
+|コンプライアンスの曖昧さが導入を遅らせる |中 |書類と法的連絡 | GA の前にコンプライアンス概要とオペレーター チェックリスト (SM-6a/SM-6b) を公開します。法的な情報を収集します。ファイリング チェックリストは `sm_compliance_brief.md` として出荷されます。 |
+|プロバイダーの更新による FFI バックエンドのドリフト |中 |プラットフォーム運用 |プロバイダーのバージョンを固定し、パリティ テストを追加し、パッケージが安定するまで FFI バックエンドのオプトインを維持します (SM-P3)。 |## 未解決の質問/フォローアップ
+1. Rust の SM アルゴリズムに経験のある独立監査パートナーを選択します。
+   - **回答 (2026-02-24):** Trail of Bits の CN 暗号化業務は、一次監査 SOW (キックオフ 2026 年 2 月 24 日、納品 2026 年 4 月 15 日) に署名しており、NCC グループ APAC は 5 月の緊急枠を確保しているため、規制当局は調達を再開することなく 2 回目の審査を要求できます。エンゲージメント スコープ、連絡先、チェックリストは [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) に存在し、`sm_audit_vendor_landscape.md` にミラーリングされます。
+2. 公式 Wycheproof SM2 データセットを求めてアップストリームの追跡を続けます。ワークスペースは現在、厳選された 52 ケース スイート (確定的フィクスチャ + 合成されたタンパー ケース) を出荷し、それを `sm2_wycheproof.rs`/`sm2_fuzz.rs` にフィードします。上流の JSON が到着したら、`cargo xtask sm-wycheproof-sync` 経由でコーパスを更新します。
+   - Bouncy Castle および GmSSL ネガティブ ベクター スイートを追跡します。ライセンスが承認されたら、既存のコーパスを補完するために `sm2_fuzz.rs` にインポートします。
+3. SM 導入監視のためのベースライン テレメトリ (メトリクス、ログ) を定義します。
+4. Kotodama/VM エクスポージャの SM4 AEAD デフォルトが GCM であるか CCM であるかを決定します。
+5. 付属例 1 (ID `ALICE123@YAHOO.COM`) の RustCrypto/OpenSSL パリティを追跡: フィクスチャを回帰テストに昇格できるように、公開された公開鍵と `(r, s)` のライブラリ サポートを確認します。
 
-- **Trail of Bits (CN cryptography practice)** — Statement of Work executed on **2026-02-21**, kick-off **2026-02-24**, fieldwork window **2026-02-24 – 2026-03-22**, final report due **2026-04-15**. Weekly status checkpoint every Wednesday 09:00 UTC with the Crypto WG lead and Security Engineering liaison. See [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) for contacts, deliverables, and evidence attachments.
-- **NCC Group APAC (contingency slot)** — Reserved the May 2026 window as a follow-up/parallel review should additional findings or regulator requests require a second opinion. Engagement details and escalation hooks are recorded alongside the Trail of Bits entry in `sm_audit_brief.md`.
+## アクションアイテム
+- [x] 依存関係の監査を終了し、セキュリティ トラッカーでキャプチャします。
+- [x] RustCrypto SM クレートに対する監査パートナーの関与を確認します (SM-P0 フォローアップ)。 Trail of Bits (CN 暗号化実務) は、`sm_audit_brief.md` に記録されたキックオフ/納品日による一次レビューを所有し、NCC Group APAC は規制当局またはガバナンスのフォローアップを満たすために 2026 年 5 月の緊急枠を保持しました。
+- [x] SM4 CCM 改ざんケース (SM-4a) の Wycheproof 適用範囲を拡張します。
+- [x] 正規の SM2 署名フィクスチャを SDK 全体に配置し、CI (SM-3c/SM-1b.1) に接続します。 `scripts/check_sm2_sdk_fixtures.py` によって保護されています (`ci/check_sm2_sdk_fixtures.sh` を参照)。
 
-## Risks & Mitigations
+## コンプライアンス付録 (国家商用暗号化)
 
-Full register: see [`sm_risk_register.md`](sm_risk_register.md) for detailed
-probability/impact scoring, monitoring triggers, and sign-off history. The
-summary below tracks the headline items surfaced to release engineering.
-| Risk | Severity | Owner | Mitigation |
-|------|----------|-------|------------|
-| Lack of external audit for RustCrypto SM crates | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only until audit report accepted. |
-| Deterministic nonce regressions across SDKs | High | SDK Program Leads | Share fixtures across SDK CI; enforce canonical r∥s encoding; add cross-SDK integration tests (tracked in SM-3c). |
-| ISA-specific bugs in intrinsics | Medium | Performance WG | Feature-gate intrinsics, require CI coverage on ARM, maintain software fallback. Hardware validation matrix maintained in `sm_perf.md`. |
-| Compliance ambiguity delaying adoption | Medium | Docs & Legal Liaison | Publish compliance brief & operator checklist (SM-6a/SM-6b) before GA; gather legal input. Filing checklist shipped in `sm_compliance_brief.md`. |
-| FFI backend drift with provider updates | Medium | Platform Ops | Pin provider versions, add parity tests, keep FFI backend opt-in until packaging stabilises (SM-P3). |
+- **分類:** SM2/SM3/SM4 は、中国の *国家商業暗号* 制度 (中国暗号法、第 3 条) に基づいて出荷されます。これらのアルゴリズムを Iroha ソフトウェアで出荷しても、プロジェクトはコア/共通 (国家機密) 層に**ありません**。ただし、中国の展開でそれらのアルゴリズムを使用するオペレーターは、商用暗号ファイルの提出と MLPS の義務に従う必要があります。【docs/source/crypto/sm_chinese_crypto_law_brief.md:14】
+- **標準の系譜:** 公開ドキュメントを GM/T 仕様の公式 GB/T 変換と一致させます。
 
-## Open Questions / Follow-ups
-1. Select independent audit partners experienced with SM algorithms in Rust.
-   - **Answer (2026-02-24):** Trail of Bits’ CN cryptography practice signed the primary audit SOW (kick-off 2026-02-24, delivery 2026-04-15) and NCC Group APAC holds a May contingency slot so regulators can request a second review without reopening procurement. Engagement scope, contacts, and checklists live in [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) and are mirrored in `sm_audit_vendor_landscape.md`.
-2. Continue tracking upstream for an official Wycheproof SM2 dataset; the workspace currently ships a curated 52-case suite (deterministic fixtures + synthesized tamper cases) and feeds it into `sm2_wycheproof.rs`/`sm2_fuzz.rs`. Update the corpus via `cargo xtask sm-wycheproof-sync` once the upstream JSON lands.
-   - Track Bouncy Castle and GmSSL negative vector suites; import into `sm2_fuzz.rs` once licensing cleared to supplement the existing corpus.
-3. Define baseline telemetry (metrics, logging) for SM adoption monitoring.
-4. Decide whether SM4 AEAD default is GCM or CCM for Kotodama/VM exposure.
-5. Track RustCrypto/OpenSSL parity for Annex Example 1 (ID `ALICE123@YAHOO.COM`): confirm library support for the published public key and `(r, s)` so fixtures can be promoted to regression tests.
-
-## Action Items
-- [x] Finalise dependency audit and capture in the security tracker.
-- [x] Confirm audit partner engagement for the RustCrypto SM crates (SM-P0 follow-up). Trail of Bits (CN cryptography practice) owns the primary review with kickoff/delivery dates recorded in `sm_audit_brief.md`, and NCC Group APAC retained a May 2026 contingency slot to satisfy regulator or governance follow-ups.
-- [x] Extend Wycheproof coverage for SM4 CCM tamper cases (SM-4a).
-- [x] Land canonical SM2 signing fixtures across SDKs and wire into CI (SM-3c/SM-1b.1); guarded by `scripts/check_sm2_sdk_fixtures.py` (see `ci/check_sm2_sdk_fixtures.sh`).
-
-## Compliance Appendix (State Commercial Cryptography)
-
-- **Classification:** SM2/SM3/SM4 ship under China’s *state commercial cryptography* regime (PRC Cryptography Law, Art. 3). Shipping these algorithms in Iroha software does **not** place the project in the core/common (state-secret) tiers, but operators using them in PRC deployments must follow commercial-crypto filing and MLPS obligations.【docs/source/crypto/sm_chinese_crypto_law_brief.md:14】
-- **Standards lineage:** Align public documentation with the official GB/T conversions of the GM/T specs:
-
-| Algorithm | GB/T reference | GM/T origin | Notes |
-|-----------|----------------|-------------|-------|
-| SM2 | GB/T 32918 (all parts) | GM/T 0003 | ECC digital signature + key exchange; Iroha exposes verification in core nodes and deterministic signing to SDKs. |
-| SM3 | GB/T 32905 | GM/T 0004 | 256-bit hash; deterministic hashing across scalar and ARMv8 accelerated paths. |
-| SM4 | GB/T 32907 | GM/T 0002 | 128-bit block cipher; Iroha provides GCM/CCM helpers and ensures big-endian parity across implementations. |
-
-- **Capability manifest:** The Torii `/v1/node/capabilities` endpoint advertises the following JSON shape so operators and tooling can consume the SM manifest programmatically:
+|アルゴリズム | GB/T リファレンス | GM/T の起源 |メモ |
+|----------|-----|---------------|------|
+| SM2 | GB/T32918 (全パーツ) | GM/T0003 | ECC デジタル署名 + 鍵交換。 Iroha は、コア ノードでの検証と SDK への確定的署名を公開します。 |
+| SM3 | GB/T32905 | GM/T0004 | 256ビットハッシュ。スカラー パスと ARMv8 アクセラレーション パスにわたる決定論的ハッシュ。 |
+| SM4 | GB/T32907 | GM/T0002 | 128 ビットのブロック暗号。 Iroha は GCM/CCM ヘルパーを提供し、実装全体でビッグエンディアンのパリティを保証します。 |- **機能マニフェスト:** Torii `/v1/node/capabilities` エンドポイントは次の JSON 形式をアドバタイズするため、オペレーターとツールはプログラムで SM マニフェストを使用できます。
 
 ```json
 {
@@ -376,13 +344,13 @@ summary below tracks the headline items surfaced to release engineering.
 }
 ```
 
-The CLI subcommand `iroha runtime capabilities` surfaces the same payload locally, printing a one-line summary alongside the JSON advert for compliance evidence collection.
+CLI サブコマンド `iroha runtime capabilities` は、同じペイロードをローカルに表示し、コンプライアンス証拠収集のために JSON 広告と一緒に 1 行の概要を出力します。
 
-- **Documentation deliverables:** publish release notes and SBOMs that identify the algorithms/standards above, and keep the full compliance brief (`sm_chinese_crypto_law_brief.md`) bundled with release artefacts so operators can attach it to provincial filings.【docs/source/crypto/sm_chinese_crypto_law_brief.md:59】
-- **Operator hand-off:** remind deployers that MLPS 2.0/GB/T 39786-2021 require crypto application assessments, SM key-management SOPs, and ≥ 6 year evidence retention; point them to the operator checklist in the compliance brief.【docs/source/crypto/sm_chinese_crypto_law_brief.md:43】【docs/source/crypto/sm_chinese_crypto_law_brief.md:74】
+- **ドキュメントの成果物:** 上記のアルゴリズム/標準を特定するリリース ノートと SBOM を公開し、完全なコンプライアンス概要 (`sm_chinese_crypto_law_brief.md`) をリリース アーティファクトにバンドルして保管し、オペレーターが州の提出書類に添付できるようにします。【docs/source/crypto/sm_chinese_crypto_law_brief.md:59】
+- **オペレーターのハンドオフ:** MLPS2.0/GB/T39786-2021 では、暗号化アプリケーションの評価、SM キー管理 SOP、および 6 年以上の証拠保持が必要であることを導入担当者に思い出させます。コンプライアンス概要のオペレータ チェックリストを参照してください。【docs/source/crypto/sm_chinese_crypto_law_brief.md:43】【docs/source/crypto/sm_chinese_crypto_law_brief.md:74】
 
-## Communication Plan
-- **Audience:** Crypto WG core members, Release Engineering, Security Review board, SDK program leads.
-- **Artifacts:** `sm_program.md`, `sm_lock_refresh_plan.md`, `sm_vectors.md`, `sm_wg_sync_template.md`, roadmap excerpt (SM-0 .. SM-7a).
-- **Channel:** Weekly Crypto WG sync agenda + follow-up email summarising action items and requesting approval for lock refresh and dependency intake (draft circulated 2025-01-19).
-- **Owner:** Crypto WG lead (delegate acceptable).
+## コミュニケーション計画
+- **対象者:** 暗号 WG コア メンバー、リリース エンジニアリング、セキュリティ レビュー委員会、SDK プログラム リード。
+- **アーティファクト:** `sm_program.md`、`sm_lock_refresh_plan.md`、`sm_vectors.md`、`sm_wg_sync_template.md`、ロードマップの抜粋 (SM-0 .. SM-7a)。
+- **チャネル:** 毎週の Crypto WG 同期アジェンダ + アクション アイテムを要約し、ロックの更新と依存関係の取り込みの承認を要求するフォローアップ メール (草案は 2025 年 1 月 19 日に回覧されました)。
+- **オーナー:** 暗号 WG リーダー (代理人可)。

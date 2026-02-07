@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+从 '@site/src/components/RapiDocPanel.jsx' 导入 RapiDocPanel；
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` 提供了相同 Torii 的紧凑、文档优先的渲染
+OpenAPI 文档。当您需要更深入的概述或只读审查时使用它
+请求/响应模型。
 
-## Usage tips
+## 使用技巧
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
-  `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- 输入不记名令牌以启用交互式呼叫。该值被转发为
+  `X-TryIt-Auth` 标头并由代理标准化。
+- 在为门户提供交互式服务时配置 `TRYIT_PROXY_PUBLIC_URL`
+  请求通过暂存代理进行路由。当代理出现时，小部件会发出警告
+  网址缺失。
+- 使用“OpenAPI 快照”下拉列表加载发布的历史规格
+  `npm run sync-openapi`； `Latest (tracked)` 选项始终解析为
+  `/openapi/torii.json`。
+- 与“[Try it](/api/overview#try-it-sandbox-docs-3)”控制台结合使用
+  针对需要代理的分阶段网关。
 
-<RapiDocPanel />

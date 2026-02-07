@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2025-12-29T18:16:35.908874+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Python SDK Quickstart
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+የ Python ኤስዲኬ (`iroha-python`) የ Rust ደንበኛ ረዳቶችን ያንጸባርቃል ስለዚህ እንዲችሉ
+ከስክሪፕቶች፣ ከማስታወሻ ደብተሮች ወይም ከድር ጀርባዎች ከ Torii ጋር መስተጋብር መፍጠር። ይህ ፈጣን ጅምር
+ጭነትን፣ የግብይት ግቤትን እና የክስተት ዥረትን ይሸፍናል። ለበለጠ
+ሽፋን በማከማቻው ውስጥ `python/iroha_python/README.md` ይመልከቱ።
 
-## 1. Install
+## 1. ጫን
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+አማራጭ ተጨማሪዎች፡-
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp` ያልተመሳሰሉ ልዩነቶችን ለማሄድ ካቀዱ
+  የዥረት ረዳቶች.
+- ከኤስዲኬ ውጭ የ Ed25519 ቁልፍ መውጣቱን ሲፈልጉ `pip install pynacl`።
 
-## 2. Create a client and signers
+## 2. ደንበኛ እና ፈራሚዎችን ይፍጠሩ
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` እንደ `timeout_ms` ያሉ ተጨማሪ የቁልፍ ቃል ነጋሪ እሴቶችን ይቀበላል።
+`max_retries`፣ እና `tls_config`። ረዳት `resolve_torii_client_config`
+ከ Rust CLI ጋር መመሳሰል ከፈለጉ የJSON ውቅር ክፍያን ይተነትናል።
 
-## 3. Submit a transaction
+## 3. ግብይት አስገባ
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+ኤስዲኬ የማስተማሪያ ግንበኞችን እና የግብይት አጋሮችን ይልካል።
+Norito የሚጫኑ ጭነቶች በእጅ፡
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
+`build_and_submit_transaction` የተፈረመውን እና የመጨረሻውን ሁለቱንም ይመልሳል
+የታየበት ሁኔታ (ለምሳሌ፣ `Committed`፣ `Rejected`)። አስቀድሞ የተፈረመ ከሆነ
+የግብይት ኤንቨሎፕ `client.submit_transaction_envelope(envelope)` ወይም የ ይጠቀሙ
 JSON-centric `submit_transaction_json`.
 
-## 4. Query state
+## 4. የመጠይቅ ሁኔታ
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+ሁሉም የ REST የመጨረሻ ነጥቦች JSON አጋዥዎች አሏቸው እና ብዙዎቹ የተተየቡ የመረጃ ክፍሎችን አጋልጠዋል። ለ
+ለምሳሌ፣ ጎራዎችን መዘርዘር፡-
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+በገጽ የሚያውቁ ረዳቶች (ለምሳሌ፡ `list_accounts_typed`) የሚመልስ ነገር
+ሁለቱንም `items` እና `next_cursor` ይዟል።
 
-## 5. Stream events
+## 5. የዥረት ክስተቶች
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE የመጨረሻ ነጥቦች በጄነሬተሮች በኩል ይጋለጣሉ። ኤስዲኬ በራስ-ሰር ከቆመበት ይቀጥላል
+`resume=True` እና `EventCursor` ሲያቀርቡ።
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+ሌሎች የምቾት ዘዴዎች `stream_pipeline_transactions`፣
+`stream_events` (ከተተየቡ የማጣሪያ ግንበኞች ጋር) እና `stream_verifying_key_events`።
 
-## 6. Next steps
+## 6. ቀጣይ ደረጃዎች
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- ምሳሌዎችን በ `python/iroha_python/src/iroha_python/examples/` ስር ያስሱ
+  አስተዳደርን ለሚሸፍኑ ከጫፍ እስከ ጫፍ ፍሰቶች፣ የ ISO ድልድይ አጋዥ እና ኮኔክሽን።
+- ሲፈልጉ `create_torii_client`/`resolve_torii_client_config` ይጠቀሙ
+  ደንበኛውን ከ `iroha_config` JSON ፋይል ወይም አካባቢ ማስነሳት ።
+- ለNorito RPC ወይም Connect-specific APIs እንደ ልዩ ሞጁሎችን ይመልከቱ።
+  `iroha_python.norito_rpc` እና `iroha_python.connect`።
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+በነዚህ የግንባታ ብሎኮች Torii ከ Python ሳትጽፉ ልምምድ ማድረግ ትችላለህ
+የራስዎን የኤችቲቲፒ ሙጫ ወይም Norito ኮዴኮች። ኤስዲኬ ሲያድግ፣ ተጨማሪ ከፍተኛ-ደረጃ
+ግንበኞች ይጨምራሉ; በ `python/iroha_python` ውስጥ README ን ያማክሩ
+የቅርብ ጊዜ ሁኔታ እና የስደት ማስታወሻዎች ማውጫ።

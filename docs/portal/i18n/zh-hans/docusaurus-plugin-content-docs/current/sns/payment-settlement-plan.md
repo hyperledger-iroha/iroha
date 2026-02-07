@@ -8,35 +8,37 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS Payment & Settlement Plan
 sidebar_label: Payment & settlement plan
 description: Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical source: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
+> 规范来源：[`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md)。
 
-Roadmap task **SN-5 — Payment & Settlement Service** introduces a deterministic
-payment layer for the Sora Name Service. Every registration, renewal, or refund
-must emit a structured Norito payload so treasury, stewards, and governance can
-replay the financial flows without spreadsheets. This page distills the spec
-for portal audiences.
+路线图任务 **SN-5 — 支付和结算服务** 引入了确定性
+Sora 名称服务的支付层。每次注册、续订或退款
+必须发出结构化的 Norito 有效负载，以便财务部门、管理者和治理部门能够
+无需电子表格即可重播财务流。此页面提炼了规格
+面向门户受众。
 
-## Revenue model
+## 收入模式
 
-- Base fee (`gross_fee`) derives from the registrar pricing matrix.  
-- Treasury receives `gross_fee × 0.70`, stewards receive the remainder minus
-  referral bonuses (capped at 10 %).  
-- Optional holdbacks allow governance to pause steward payouts during disputes.  
-- Settlement bundles expose a `ledger_projection` block with the concrete
-  `Transfer` ISIs so automation can post XOR movements straight into Torii.
+- 基本费用 (`gross_fee`) 来自注册商定价矩阵。  
+- 财政部收到 `gross_fee × 0.70`，管家收到减去的剩余部分
+  推荐奖金（上限为 10%）。  
+- 可选的扣留允许治理在争议期间暂停管理人的支付。  
+- 定居点捆绑暴露了带有混凝土的 `ledger_projection` 块
+  `Transfer` ISI，因此自动化可以将异或运算直接发布到 Torii 中。
 
-## Services & automation
+## 服务和自动化
 
-| Component | Purpose | Evidence |
-|-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
-| Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
-| Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
+|组件|目的|证据|
+|------------|---------|----------|
+| `sns_settlementd` |应用政策、签署捆绑包、表面 `/v1/sns/settlements`。 | JSON 捆绑 + 哈希。 |
+|结算队列和写入器|由 `iroha_cli app sns settlement ledger` 驱动的幂等队列 + 账本提交器。 |捆绑哈希 ↔ tx 哈希清单。 |
+|对账工作 | `docs/source/sns/reports/` 下的每日差异 + 月度报表。 | Markdown + JSON 摘要。 |
+|退款柜台 |通过 `/settlements/{id}/refund` 获得治理批准的退款。 | `RefundRecordV1` + 票。 |
 
-CI helpers mirror these flows:
+CI 助手镜像这些流程：
 
 ```bash
 # Quote & ledger projection
@@ -49,27 +51,27 @@ iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/m
 iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
 ```
 
-## Observability & reporting
+## 可观察性和报告
 
-- Dashboards: `dashboards/grafana/sns_payment_settlement.json` for treasury vs
-  steward totals, referral payouts, queue depth, and refund latency.
-- Alerts: `dashboards/alerts/sns_payment_settlement_rules.yml` monitors pending
-  age, reconciliation failures, and ledger drift.
-- Statements: daily digests (`settlement_YYYYMMDD.{json,md}`) roll into monthly
-  reports (`settlement_YYYYMM.md`) which are uploaded both to Git and the
-  governance object store (`s3://sora-governance/sns/settlements/<period>/`).
-- Governance packets bundle dashboards, CLI logs, and approvals before council
-  sign-off.
+- 仪表板：`dashboards/grafana/sns_payment_settlement.json`（财务与财务）
+  管家总数、推荐支出、队列深度和退款延迟。
+- 警报：`dashboards/alerts/sns_payment_settlement_rules.yml` 监视器待处理
+  年龄、对账失败和账本漂移。
+- 报表：每日摘要 (`settlement_YYYYMMDD.{json,md}`) 转入每月
+  报告 (`settlement_YYYYMM.md`) 已上传到 Git 和
+  治理对象存储 (`s3://sora-governance/sns/settlements/<period>/`)。
+- 治理数据包捆绑仪表板、CLI 日志和理事会批准
+  签核。
 
-## Rollout checklist
+## 推出清单
 
-1. Prototype quote + ledger helpers and capture a staging bundle.
-2. Launch `sns_settlementd` with queue + writer, wire dashboards, and exercise
-   alert tests (`promtool test rules ...`).
-3. Deliver refund helper plus monthly statement template; mirror artefacts into
-   `docs/portal/docs/sns/reports/`.
-4. Run a partner rehearsal (full month of settlements) and capture the
-   governance vote marking SN-5 as complete.
+1. 原型报价 + 账本助手并捕获暂存包。
+2. 使用队列 + writer、wire 仪表板和练习启动 `sns_settlementd`
+   警报测试 (`promtool test rules ...`)。
+3. 提供退款助手及月结单模板；将文物镜像到
+   `docs/portal/docs/sns/reports/`。
+4. 进行合作伙伴排练（整月的结算）并捕捉
+   治理投票将 SN-5 标记为完成。
 
-Refer back to the source document for the exact schema definitions, open
-questions, and future amendments.
+请返回源文档以获取确切的模式定义，打开
+问题以及未来的修改。

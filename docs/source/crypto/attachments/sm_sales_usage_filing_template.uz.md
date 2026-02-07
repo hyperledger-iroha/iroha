@@ -7,90 +7,88 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2025-12-29T18:16:35.938696+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Sotish va foydalanish toʻgʻrisidagi hujjatlarni taqdim etish (língàng/yàngìnì) andozasi
+% Hyperledger Iroha Muvofiqlik ishchi guruhi
 % 2026-05-06
 
-# Instructions
+#Ko'rsatmalar
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+Quruqlik uchun SCA ofisiga joylashtirishdan foydalanishni topshirishda ushbu shablondan foydalaning
+operatorlar. Har bir joylashtirish klasteri yoki maʼlumotlar maydoni uchun bitta taqdimotni taqdim eting. Yangilash
+operatorga xos ma'lumotlarga ega bo'lgan joy egalari va sanab o'tilgan dalillarni ilova qiling
+nazorat ro'yxatida.
 
-# 1. Operator & Deployment Summary
+# 1. Operator va tarqatish bo'yicha xulosa
 
-| Field | Value |
+| Maydon | Qiymat |
 |-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Operator nomi | {{ OPERATOR_NAME }} |
+| Biznesni ro'yxatdan o'tkazish ID | {{ REG_ID }} |
+| Ro'yxatdan o'tgan manzil | {{ MANZIL }} |
+| Asosiy kontakt (ism / unvon / elektron pochta / telefon) | {{ ALOQA }} |
+| Joylashtirish identifikatori | {{ DEPLOYMENT_ID }} |
+| Joylashtirish joyi(lar)i | {{ JOYLASHMALAR }} |
+| Hujjat turi | Sotish/foydalanish (kàngàng/kàngàngí) |
+| Ariza topshirish sanasi | {{ YYYY-AA-KK }} |
 
-# 2. Deployment Details
+# 2. Joylashtirish tafsilotlari
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- Dasturiy ta'minot identifikatori / xesh: `{{ BUILD_HASH }}`
+- Qurilish manbasi: {{ BUILD_SOURCE }} (masalan, operator tomonidan manbadan qurilgan, sotuvchi tomonidan taqdim etilgan ikkilik).
+- Faollashtirish sanasi: {{ ACTIVATION_DATE }}
+- Rejalashtirilgan parvarishlash oynalari: {{ MAINTENANCE_CADENCE }}
+- SM imzolashda ishtirok etuvchi tugun rollari:
+  | Tugun | Rol | SM funksiyalari yoqilgan | Kalit omborining joylashuvi |
+  |------|------|--------------------|--------------------|
+  | {{ NODE_ID }} | {{ ROL }} | {{ XUSUSIYATLARI }} | {{ VAULT }} |
 
-# 3. Cryptographic Controls
+№ 3. Kriptografik boshqaruv elementlari
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
+- Ruxsat etilgan algoritmlar: {{ ALGORITMLAR }} (SM toʻplami konfiguratsiyaga mos kelishiga ishonch hosil qiling).
+- Hayotiy tsiklning asosiy xulosasi:
+  | Bosqich | Tavsif |
   |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+  | Avlod | {{ KEY_GENERATION }} |
+  | Saqlash | {{ KEY_STORAGE }} |
+  | Aylanish | {{ KEY_ROTATION }} |
+  | Bekor qilish | {{ KEY_REVOCATION }} |
+- Alohida identifikatsiya (`distid`) siyosati: {{ DISTID_POLICY }}
+- Konfiguratsiya ko'chirmasi (`crypto` bo'limi): xeshlar bilan Norito/JSON oniy tasvirini taqdim eting.
 
-# 4. Telemetry & Audit Trails
+# 4. Telemetriya va audit izlari
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- Monitoring oxirgi nuqtalari: {{ METRICS_ENDPOINTS }} (`/metrics`, asboblar paneli).
+- Jurnalga kiritilgan ko'rsatkichlar: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
+  kechikish histogramlari, xato hisoblagichlari.
+- Jurnalni saqlash siyosati: {{ LOG_RETENTION }} (≥ uch yil tavsiya etiladi).
+- Audit jurnali saqlash joyi: {{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+# 5. Hodisaga javob berish va kontaktlar
 
-| Role | Name | Phone | Email | SLA |
+| Rol | Ism | Telefon | Elektron pochta | SLA |
 |------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| Xavfsizlik operatsiyalari etakchi | {{ NAME }} | {{ TELEFON }} | {{ EMAIL }} | {{ SLA }} |
+| Qo'ng'iroq bo'yicha kripto | {{ NAME }} | {{ TELEFON }} | {{ EMAIL }} | {{ SLA }} |
+| Qonuniy / muvofiqlik | {{ NAME }} | {{ TELEFON }} | {{ EMAIL }} | {{ SLA }} |
+| Sotuvchini qo'llab-quvvatlash (agar mavjud bo'lsa) | {{ NAME }} | {{ TELEFON }} | {{ EMAIL }} | {{ SLA }} |
 
-# 6. Attachments Checklist
+№ 6. Qo'shimchalar nazorat ro'yxati- [ ] Xeshli konfiguratsiya surati (Norito + JSON).
+- [ ] Deterministik tuzilishning isboti (xeshlar, SBOM, takrorlanuvchanlik eslatmalari).
+- [ ] Telemetriya asboblar paneli eksporti va ogohlantirish taʼriflari.
+- [ ] Hodisalarga javob berish rejasi va chaqiruv bo'yicha aylanish hujjati.
+- [ ] Operator treningi tasdiqlanishi yoki runbook kvitansiyasi.
+- [ ] Yetkazib berilgan artefaktlarni aks ettiruvchi eksport-nazorat bayonoti.
+- [ ] Tegishli shartnoma kelishuvlari yoki siyosatdan voz kechishlar nusxalari.
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+№ 7. Operator deklaratsiyasi
 
-# 7. Operator Declaration
+> Yuqorida sanab o'tilgan joylashtirish XXR reklamasiga mos kelishini tasdiqlaymiz
+> kriptografiya qoidalari, SM-ni yoqadigan xizmatlar hujjatlashtirilganga amal qiladi
+> hodisalarga javob berish va telemetriya siyosati va audit artefaktlari bo'ladi
+> kamida uch yil saqlanadi.
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- Vakolatli imzolovchi: ________________________
+- Sana: ______________________

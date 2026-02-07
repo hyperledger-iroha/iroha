@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/manifest-pipeline.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # SoraFS chunking → manifest pipeline

@@ -1392,10 +1392,13 @@ impl Actor {
         mode_tag: &str,
         signature_result: Option<Result<(), VoteSignatureError>>,
     ) -> bool {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
         let roster_len = u32::try_from(signature_topology.as_ref().len()).unwrap_or(u32::MAX);
         let roster_hash = iroha_crypto::HashOf::new(&signature_topology.as_ref().to_vec());
-        let canonical_roster =
-            super::roster::canonicalize_roster(signature_topology.as_ref().to_vec());
+        let canonical_roster = super::roster::canonicalize_roster_for_mode(
+            signature_topology.as_ref().to_vec(),
+            consensus_mode,
+        );
         let membership_hash = iroha_crypto::HashOf::new(&canonical_roster);
         let peer_id = usize::try_from(vote.signer)
             .ok()

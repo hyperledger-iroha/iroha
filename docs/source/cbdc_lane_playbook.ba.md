@@ -10,33 +10,34 @@ translation_last_reviewed: 2026-02-07
 title: CBDC Lane Playbook
 sidebar_label: CBDC Lane Playbook
 description: Reference configuration, whitelist flow, and compliance evidence for permissioned CBDC lanes on SORA Nexus.
+translator: machine-google-reviewed
 ---
 
-# CBDC Private Lane Playbook (NX-6)
+# CBDC Шәхси һыҙат плейбук (NX-6)
 
-> **Roadmap linkage:** NX-6 (CBDC private lane template & whitelist flow) and NX-14 (Nexus runbooks).  
-> **Owners:** Financial Services WG, Nexus Core WG, Compliance WG.  
-> **Status:** Drafting — implementation hooks exist across `crates/iroha_data_model::nexus`, `crates/iroha_core::governance::manifest`, and `integration_tests/tests/nexus/lane_registry.rs`, but the CBDC-specific manifests, whitelists, and operator runbooks were missing. This playbook documents the reference configuration and onboarding workflow so CBDC deployments can proceed deterministically.
+> **Родка картаһы бәйләнеше:** NX-6 (CBDC шәхси һыҙат шаблон & аҡ исемлек ағымы) һәм NX-14 (Nexus runbooks).  
+> **Хужалар:** Финанс хеҙмәттәре WG, Nexus Core WG, үтәү WG.  
+> **Статус:** Һүрәтләү — тормошҡа ашырыу ҡармаҡтары бар `crates/iroha_data_model::nexus`, `crates/iroha_core::governance::manifest`, һәм `integration_tests/tests/nexus/lane_registry.rs`, әммә CBDC-специфик манифест, аҡ исемлектәр, һәм оператор runbooks юҡ ине. Был playbook документ конфигурация һәм onboarding эш ағымы, шулай итеп, CBDC таратыу детерминистик дауам итә ала.
 
-## Scope & Roles
+## Скап һәм ролдәр
 
-- **Central bank lane (“CBDC lane”):** Permissioned validators, custodial settlement buffers, and programmable-money policies. Runs as a restricted dataspace + lane pair with its own governance manifest.
-- **Wholesale/retail bank dataspaces:** Participant DS that hold UAIDs, receive capability manifests, and may be whitelisted for atomic AXT with the CBDC lane.
-- **Programmable-money dApps:** External DS that consume CBDC flows through `ComposabilityGroup` routing once whitelisted.
-- **Governance & compliance:** Parliament (or equivalent module) approves lane manifests, capability manifests, and whitelist changes; compliance stores evidence bundles alongside Norito manifests.
+- **Үҙәк банк һыҙаты (“CBDC һыҙаты”):** Рөхсәт ителгән валидаторҙар, опека ҡасаба буферҙары, һәм программаланған-аҡса сәйәсәте. Йүгереп, сикләнгән мәғлүмәттәр киңлеге + һыҙат пары менән үҙ идара итеү манифест.
+- **Көнәсәт/ваҡлап һатыу банк мәғлүмәттәре:** Ҡатнашыусылар DS, улар UAID-тар тота, мөмкинлектәрен ала, һәм атом AXT өсөн аҡ исемлеккә индереү мөмкин CBDC һыҙаты.
+- **Программа-аҡса dApps:** Тышҡы DS, ҡулланыу CBDC аша ағып `ComposabilityGroup` маршрутлаштырыу бер тапҡыр аҡ исемлеккә индерелгән.
+- **Идара итеү & үтәү:** Парламент (йәки эквивалентлы модуль) һыҙатлы һыҙаттарҙы раҫлай, мөмкинлектәрен күрһәтә, һәм аҡ исемлек үҙгәрештәре; үтәлеше магазиндары дәлилдәр менән бер рәттән Norito манифесттары менән бергә өйөмдәр.
 
-**Dependencies**
+**Тәбәп**
 
-1. Lane catalog + dataspace catalog wiring (`docs/source/nexus_lanes.md`, `defaults/nexus/config.toml`).
-2. Lane manifest enforcement (`crates/iroha_core/src/governance/manifest.rs`, queue gating in `crates/iroha_core/src/queue.rs`).
-3. Capability manifests + UAIDs (`crates/iroha_data_model/src/nexus/manifest.rs`).
-4. Scheduler TEU quotas + metrics (`integration_tests/tests/scheduler_teu.rs`, `docs/source/telemetry.md`).
+1. Каталог + мәғлүмәттәр киңлеге каталогы проводкаһы (`docs/source/nexus_lanes.md`, `defaults/nexus/config.toml`).
+2. Лейн манифесты үтәү (`crates/iroha_core/src/governance/manifest.rs`, сират ҡапҡаһы `crates/iroha_core/src/queue.rs`).
+3. Мөмкинлек күрһәтә + БАПИД (`crates/iroha_data_model/src/nexus/manifest.rs`).
+4. Сграфер ТЭУ квоталары + метрика (`integration_tests/tests/scheduler_teu.rs`, `docs/source/telemetry.md`).
 
-## 1. Reference Lane Layout
+## 1. Һылтанма лейн макеты
 
-### 1.1 Lane catalog & dataspace entries
+### 1.1 Каталог һәм мәғлүмәттәр киңлеге яҙмалары
 
-Add dedicated entries to `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]`. The example below extends `defaults/nexus/config.toml` with a CBDC lane that reserves 1 500 TEU per slot and throttles starvation to six slots, plus matching dataspace aliases for wholesale banks and retail wallets.
+Өҫтәү өсөн махсус яҙмалар Prometheus һәм `[[nexus.dataspace_catalog]]`. 1500 ТЭУ бер слот һәм дроссель аслыҡ алты слот, өҫтәүенә, күмәртәләп банктар һәм ваҡлап һатыу кошеталары өсөн мәғлүмәттәр киңлеге псевдонимы менән тап килгән.
 
 ```toml
 lane_count = 5
@@ -87,14 +88,14 @@ instruction = "cbdc::*"
 description = "Route CBDC contracts to the restricted lane"
 ```
 
-**Notes**
+**Иҫкәрмәләр**
 
-- `metadata.scheduler.teu_capacity` and `metadata.scheduler.starvation_bound_slots` feed the TEU gauges exercised by `integration_tests/tests/scheduler_teu.rs`. Operators must keep them in sync with acceptance results so `nexus_scheduler_lane_teu_capacity` matches the template.
-- Every dataspace alias above must appear in governance manifests and capability manifests (see below) so admission rejects drift automatically.
+- `metadata.scheduler.teu_capacity` һәм `metadata.scheduler.starvation_bound_slots` TEU датчиктарын `integration_tests/tests/scheduler_teu.rs` ярҙамында туҡландыра. Операторҙар уларҙы ҡабул итеү һөҙөмтәләре менән синхронлаштырырға тейеш, шуға күрә `nexus_scheduler_lane_teu_capacity` шаблонға тап килә.
+- Һәр мәғлүмәт киңлеге псевдонимы өҫтәге идара итеүҙә күренергә тейеш манифест һәм мөмкинлектәре нәжестәр (аҫта ҡарағыҙ), шулай ҡабул итеү автоматик рәүештә дрейф кире ҡаға.
 
-### 1.2 Lane manifest skeleton
+### 1.2 Лейн манифест скелеты
 
-Lane manifests live under the directory configured via `nexus.registry.manifest_directory` (see `crates/iroha_config/src/parameters/actual.rs`). File names should match lane aliases (`cbdc.manifest.json`). The schema mirrors the governance manifest tests in `integration_tests/tests/nexus/lane_registry.rs`.
+Lane манифестар каталог аҫтында тура эфирҙа конфигурацияланған `nexus.registry.manifest_directory` (ҡара: `crates/iroha_config/src/parameters/actual.rs`). Файл исемдәре һыҙат псевдонимы тура килергә тейеш (`cbdc.manifest.json`). Схема `integration_tests/tests/nexus/lane_registry.rs`-тағы идара итеү манифест һынауҙарын көҙгөләй.
 
 ```json
 {
@@ -140,16 +141,14 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
 }
 ```
 
-Key requirements:
+Төп талаптар:- Валидаторҙар **** канонлы IH58 иҫәбе идентификаторҙары булырға тейеш (юҡ `@domain`; `@domain` ҡушымтаһы каталогта бар, улар бар. `quorum` комплекты күп сиг сигенә (≥2).
+- Һаҡланған исемдәр киңлеге `Queue::push` тарафынан үтәлә (ҡара: `crates/iroha_core/src/queue.rs`), шуға күрә бөтә CBDC контракттары ла `gov_namespace`X + `gov_contract_id`X X.
+- `composability_group` яландары `docs/source/nexus.md` §8.6-ла һүрәтләнгән схема буйынса; хужаһы (CBDC һыҙаты) аҡ исемлек һәм квоталар менән тәьмин итә. Whitest исемлектәге DS маскировкалары ғына `group_id_hex` + `activation_epoch` X.
+- Манифест күсергәндән һуң, `cargo test -p integration_tests nexus::lane_registry -- --nocapture` `LaneManifestRegistry::from_config` раҫлау өсөн эшләй.
 
-- Validators **must** be canonical IH58 account IDs (no `@domain`; append `@domain` only as an explicit routing hint) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
-- Protected namespaces are enforced by `Queue::push` (see `crates/iroha_core/src/queue.rs`), so all CBDC contracts must specify `gov_namespace` + `gov_contract_id`.
-- `composability_group` fields follow the schema described in `docs/source/nexus.md` §8.6; the owner (CBDC lane) supplies the whitelist and quotas. Whitelisted DS manifests only specify the `group_id_hex` + `activation_epoch`.
-- After copying the manifest, run `cargo test -p integration_tests nexus::lane_registry -- --nocapture` to confirm `LaneManifestRegistry::from_config` loads it.
+### 1.3 Мөмкинлеклелек нәжестәре (UAID сәйәсәте)
 
-### 1.3 Capability manifests (UAID policies)
-
-Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/nexus/manifest.rs`) bind a `UniversalAccountId` to deterministic allowances. Publish them via the Space Directory so banks and dApps can fetch signed policies.
+Ҡулланыу мөмкинлеге манифестары (`AssetPermissionManifest` `crates/iroha_data_model/src/nexus/manifest.rs`) `UniversalAccountId` детерминистик пособиеларға бәйләй. Уларҙы йыһан каталогы аша баҫтырығыҙ, шуға күрә банктар һәм dApps ҡул ҡуйылған сәйәсәтте ала ала.
 
 ```json
 {
@@ -192,31 +191,29 @@ Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/
 }
 ```
 
-- Deny rules win even when an allow rule matches (`ManifestVerdict::Denied`), so place all explicit denies after the relevant allows.
-- Use `AllowanceWindow::PerSlot` for atomic payment handles and `PerMinute`/`PerDay` for rolling customer limits.
-- A single manifest per UAID/dataspace suffices; activations and expiries enforce policy rotation cadence.
-- The lane runtime now expires manifests automatically once `expiry_epoch` is reached,
-  so operations teams simply monitor `SpaceDirectoryEvent::ManifestExpired`,
-  archive the `nexus_space_directory_revision_total` delta, and verify Torii shows
-  `status = "Expired"`. The CLI `manifest expire` command remains available for
-  manual overrides or evidence backfills.
+- Ҡағиҙәләр еңә, хатта рөхсәт ҡағиҙә матчтары (`ManifestVerdict::Denied`), шуға күрә урынлаштырыу бөтә асыҡ инҡар итеү һуң актуаль мөмкинлек бирә.
+- Атом түләү тотҡалары өсөн `AllowanceWindow::PerSlot` һәм `PerMinute`/Prometheus клиенттар сиктәре өсөн роллинг өсөн ҡулланыу.
+- UAID/мәғлүмәттәр буйынса бер генә манифест; активациялар һәм сәйәсәтте ротация каденцияһын үтәүҙе дауам итә.
+- Хәҙерге һыҙат эшләү ваҡыты хәҙер автоматик рәүештә бара, бер тапҡыр `expiry_epoch` еткән,
+  тимәк, операциялар командалары ябай ғына күҙәтеү `SpaceDirectoryEvent::ManifestExpired`,
+  архив `nexus_space_directory_revision_total` дельта, һәм раҫлау Torii күрһәтә
+  `status = "Expired"`. CLI `manifest expire` командаһы өсөн 2012 йылға ҡала.
+  ҡул өҫтөндә йәки дәлилдәр кире тултырмалар.
 
-## 2. Bank Onboarding & Whitelist Workflow
+## 2. Банк Онбординг & Аҡ исемлек эш ағымы
 
-| Phase | Owner(s) | Actions | Evidence |
-|-------|----------|---------|----------|
-| 0. Intake | CBDC PMO | Collect KYC dossier, technical DS manifest, validator list, UAID mapping. | Intake ticket, signed DS manifest draft. |
-| 1. Governance approval | Parliament / Compliance | Review intake pack, countersign `cbdc.manifest.json`, approve `AssetPermissionManifest`. | Signed governance minutes, manifest commit hash. |
-| 2. Capability issuance | CBDC lane ops | Encode manifests via `norito::json::to_string_pretty`, store under Space Directory, notify operators. | Manifest JSON + norito `.to` file, BLAKE3 digest. |
-| 3. Whitelist activation | CBDC lane ops | Append DSID to `composability_group.whitelist`, bump `activation_epoch`, distribute manifest; update dataspace routing if needed. | Diff of manifest, `kagami config diff` output, governance approval ID. |
-| 4. Rollout validation | QA Guild / Ops | Run integration tests, TEU load tests, and programmable-money replay (see below). | `cargo test` logs, TEU dashboards, programmable-money fixture results. |
-| 5. Evidence archive | Compliance WG | Bundle manifests, approvals, capability digests, test outputs, and Prometheus scrapes under `artifacts/nexus/cbdc_<stamp>/`. | Evidence tarball, checksum file, council sign-off. |
+| Фаза | Хужа(тар) | Эштәр | Дәлилдәр |
+|------|-----------|----------|---------|
+| 0. Инде ҡабул итеү | CBDC ПМО | Йыйып KYC досье, техник DS манифест, валидатор исемлеге, UAID картаһы. | Ҡабул итеү билеты, ҡул ҡуйҙы DS манифест проекты. |
+| 1. Идара итеү раҫлауы | Парламент / Ҡабул итеү | Обзор ҡабул итеү пакеты, контрартаж `cbdc.manifest.json`, раҫлай `AssetPermissionManifest`. | Ҡул ҡуйылған идара итеү минуттары, асыҡ ҡылыу хеш. |
+| 2. Мөмкинлек бирә | CBDC һыҙат опс | Код `norito::json::to_string_pretty` аша нәжестәр, йыһан каталогы буйынса магазин операторҙарына хәбәр итә. | Манифест JSON + норито `.to` файлы, BLAKE3 distest. |
+| 3. Аҡ исемлек активацияһы | CBDC һыҙат опс | Ҡушымта DSID `composability_group.whitelist`, ҡабарып `activation_epoch`, таратыу манифест; кәрәк булһа, мәғлүмәттәр киңлеге маршрутлаштырыуҙы яңыртыу. | Айырылышыу, `kagami config diff` етештереү, идара итеү раҫлау идентификаторы. |
+| 4. руд-валитациялау | QA Гильдия / Опс | Интеграция һынауҙары, ТЭУ йөк һынауҙары һәм программаланған-аҡса реплей (аҫта ҡарағыҙ). | `cargo test` журналдар, ТЭУ приборҙар таҡталары, программаланған-аҡса ҡоролма һөҙөмтәләре. |
+| 5. Дәлилдәр архивы | Ҡабул итеү WG | Ҡапҡас, раҫлау, мөмкинлектәрен үҙләштереү, һынау сығыштары һәм `artifacts/nexus/cbdc_<stamp>/` буйынса Norito. | Дәлилдәр татарбол, чемпионат файлы, совет ҡул ҡуйыу-өҫтөндә. |
 
-### Audit bundle helper
-
-Use the `iroha app space-directory manifest audit-bundle` helper from the Space Directory
-playbook to snapshot each capability manifest before filing the evidence packet.
-Provide the manifest JSON (or `.to` payload) and dataspace profile:
+### Аудит өйөм ярҙамсыһы`iroha app space-directory manifest audit-bundle` ярҙамсыһы ҡулланыу йыһан каталогы
+playbook снимок өсөн һәр мөмкинлек манифестында дәлилдәр пакет биргәнсе.
+JSON (йәки `.to` файҙалы йөк) һәм мәғлүмәттәр киңлеге профилен тәьмин итеү:
 
 ```bash
 iroha app space-directory manifest audit-bundle \
@@ -226,24 +223,24 @@ iroha app space-directory manifest audit-bundle \
   --notes "CBDC wholesale refresh"
 ```
 
-The command emits canonical JSON/Norito/hash copies alongside
-`audit_bundle.json`, which records the UAID, dataspace id, activation/expiry
-epochs, manifest hash, and profile audit hooks while enforcing the required
-`SpaceDirectoryEvent` subscriptions. Drop the bundle inside the evidence
-directory so auditors and regulators can replay the exact bytes later.
+Команда канонлы JSON/Norito/hash күсермәләрен сығара.
+`audit_bundle.json`, был теркәлгән UAID, мәғлүмәт киңлеге id, активация/ваҡыт
+эпохалар, асыҡ хеш, һәм профиль аудиторлыҡ ҡармаҡтар, шул уҡ ваҡытта кәрәкле үтәү
+`SpaceDirectoryEvent` яҙылыуҙары. Дәлилдәр эсендәге өйөмдө ташлағыҙ
+каталог шулай аудиторҙар һәм көйләүселәр теүәл байттарҙы һуңыраҡ ҡабатлай ала.
 
-### 2.1 Commands & validations
+### 2.1 Командалар һәм раҫлауҙар
 
-1. **Lane manifests:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
-2. **Scheduler quotas:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Manual smoke:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` with manifest directory pointing to the CBDC files, then hit `/v1/sumeragi/status` and verify `lane_governance.manifest_ready=true` for the CBDC lane.
-4. **Whitelist consistency test:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` exercises `integration_tests/tests/nexus/cbdc_whitelist.rs`, parsing `fixtures/space_directory/profile/cbdc_lane_profile.json` and the referenced capability manifests to ensure every whitelist entry’s UAID, dataspace, activation epoch, and allowance list matches the Norito manifests under `fixtures/space_directory/capability/`. Attach the test log to the NX-6 evidence bundle whenever the whitelist or manifests change.
+1. **Лейн күрһәтә:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
+2. **График квоталары:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
+3. **Ҡулланма төтөн:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` асыҡ каталог менән CBDC файлдарына күрһәтеп, һуңынан `/v1/sumeragi/status` һәм раҫлау `lane_governance.manifest_ready=true` өсөн CBDC һыҙаты.
+4. **White исемлеге эҙмә-эҙлеклелек һынау:** Norito күнекмәләр `integration_tests/tests/nexus/cbdc_whitelist.rs`, анализлау `fixtures/space_directory/profile/cbdc_lane_profile.json` һәм һылтанмалы мөмкинлектәре манифесттарын тәьмин итеү өсөн һәр аҡ исемлеккә инеү’s UAID, мәғлүмәт киңлеге, активация эпохаһы, һәм пособие исемлеге тура килә Norito аҫтында. `fixtures/space_directory/capability/`. Һынау журналын NX-6 дәлилдәренә беркетергә, ҡасан аҡ исемлек йәки үҙгәргән һайын.
 
-### 2.2 CLI snippets
+### 2.2 CLI өҙөктәре
 
-- Generate UAID + manifest skeleton via `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale`.
-- Publish capability manifest to Torii (Space Directory) using `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (or `--manifest-json cbdc_wholesale.manifest.json`); the submitting account must hold `CanPublishSpaceDirectoryManifest` for the CBDC dataspace.
-- Publish via HTTP if the ops desk is running remote automation:
+- `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale` аша UAID + манифест скелеты генерациялау.
+- Torii (киңлек каталогы) `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (йәки `--manifest-json cbdc_wholesale.manifest.json`) ярҙамында нәшриәт мөмкинлектәрен күрһәтә; тапшырыу иҫәбенә `CanPublishSpaceDirectoryManifest` CBDC мәғлүмәт киңлеге өсөн үткәрергә тейеш.
+- HTTP аша баҫығыҙ, әгәр опс өҫтәле дистанцион автоматлаштырыуҙы эшләй:
 
   ```bash
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
@@ -256,10 +253,10 @@ directory so auditors and regulators can replay the exact bytes later.
           }'
   ```
 
-  Torii returns `202 Accepted` once the publish transaction is queued; the same
-  CIDR/API-token gates apply and the on-chain permission requirement matches the
-  CLI workflow.
-- Emergency revocation can be issued remotely by POSTing to Torii:
+  Torii ҡайтарыу `202 Accepted` бер тапҡыр баҫтырып сығарыу операцияһы сиратҡа баҫылған; шул уҡ
+  CIDR/API-токен ҡапҡалары ҡулланыла һәм рөхсәт талаптары сылбырлы тап килә
+  CLI эш ағымы.
+- Ғәҙәттән тыш хәлдәрҙе ҡайтарыуҙы Torii тиклем POSTing аша дистанцион рәүештә бирергә мөмкин:
 
   ```bash
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
@@ -274,58 +271,99 @@ directory so auditors and regulators can replay the exact bytes later.
           }'
   ```
 
-  Torii returns `202 Accepted` once the revoke transaction is queued; the same
-  CIDR/API-token gates apply as other app endpoints, and `CanPublishSpaceDirectoryManifest`
-  is still required on-chain.
-- Rotate whitelist membership: edit `cbdc.manifest.json`, bump `activation_epoch`, and redeploy via secure copy to all validators; `LaneManifestRegistry` hot-reloads on the configured poll interval.
+  Torii ҡайтарыу `202 Accepted` бер тапҡыр ҡайтарып алыу операцияһы сиратҡа баҫылған; шул уҡ
+  CIDR/API-токен ҡапҡалары башҡа ҡушымталар остары булараҡ ҡулланыла, һәм Norito .
+  һаман да сылбырҙа кәрәк.
+- ротат аҡ исемлеккә инеү: `cbdc.manifest.json` мөхәррирләү, `activation_epoch` ҡабарып, һәм бөтә валидаторҙарға хәүефһеҙ күсермәһе аша үҙгәртеп ҡороу; `LaneManifestRegistry` ҡыҙыу-перечать конфигурацияланған һорау алыу арауығында.
 
-## 3. Compliance Evidence Bundle
+## 3. Ҡабул итеү дәлилдәре пакеты
 
-Store artefacts under `artifacts/nexus/cbdc_rollouts/<YYYYMMDDThhmmZ>/` and attach the digest to the governance ticket.
+`artifacts/nexus/cbdc_rollouts/<YYYYMMDDThhmmZ>/` буйынса магазин артефакттары һәм идара итеү билетына дарыуҙарҙы беркетергә.
 
-| File | Description |
+| Файл | Тасуирлама |
 |------|-------------|
-| `cbdc.manifest.json` | Signed lane manifest with whitelist diff (before/after). |
-| `capability/<uaid>.manifest.json` & `.to` | Norito + JSON capability manifests for each UAID. |
-| `compliance/kyc_<bank>.pdf` | Regulator-facing KYC attestation. |
-| `metrics/nexus_scheduler_lane_teu_capacity.prom` | Prometheus scrape proving TEU headroom. |
-| `tests/cargo_test_nexus_lane_registry.log` | Log from the manifest test run. |
-| `tests/cargo_test_scheduler_teu.log` | Log proving TEU routing passes. |
-| `programmable_money/axt_replay.json` | Replay transcript demonstrating programmable-money interoperability (see section 4). |
-| `approvals/governance_minutes.md` | Signed approval minutes referencing manifest hash + activation epoch. |
+| `cbdc.manifest.json` | Ҡултамғалы һыҙат аҡ исемлек менән айырылып тора (алдан/аҙаҡ). |
+| `capability/<uaid>.manifest.json` & `.to` | Norito + JSON мөмкинлектәре һәр UAID өсөн манифесттар. |
+| `compliance/kyc_<bank>.pdf` | Көйләүсе-йөҙ KYC аттестация. |
+| `metrics/nexus_scheduler_lane_teu_capacity.prom` | Prometheus скреб иҫбатлау ТЭУ баш. |
+| `tests/cargo_test_nexus_lane_registry.log` | Маҡсатлы һынау йүгереүҙән журнал. |
+| `tests/cargo_test_scheduler_teu.log` | ТЭУ маршрутлаштырыу үткәнен иҫбатлаусы журнал. |
+| `programmable_money/axt_replay.json` | Ҡабатлау стенограмма күрһәтеү программалы-аҡса үҙ-ара эш итеү (ҡара: 4-се бүлек). |
+| `approvals/governance_minutes.md` | Ҡул ҡуйылған раҫлау минуттары һылтанмалар асыҡ хеш + активация эпохаһы. |**Валидация сценарийы:** йүгерергә Torii раҫлау өсөн дәлилдәр өйөмө тулы, уны идара итеү билетына беркеткәнсе. Ярҙамсы сканерлау `artifacts/nexus/cbdc_rollouts/` (йәки `CBDC_ROLLOUT_BUNDLE=<path>`) һәр `cbdc.manifest.json` өсөн, анализлау манифест/компосабельность төркөмө, тикшерергә һәр мөмкинлек манифест тура килгән Torii файл, чектар өсөн `kyc_*.pdf` аттестациялар, раҫлай TEU . метрика ҡырҡыу плюс `cargo test` журналдар, программаланған аҡса реплей раҫлай JSON, һәм раҫлау минуттарын тәьмин итә, әүҙемләштереү эпохаһы һәм асыҡ хеш килтерә. Һуңғы әйләнеш шулай уҡ NX-6-ла саҡырылған хәүефһеҙлек рельефтарын үтәй: кворум иғлан ителгән валитатор йыйылмаһынан артып китә алмай, һаҡланған исемдәр киңлеге буш булмаған телмәрҙәр булырға тейеш, ә мөмкинлектәр манифесттары ```json
+{
+  "version": 1,
+  "uaid": "uaid:5f77b4fcb89cb03a0ab8f46d98a72d585e3b115a55b6bdb2e893d3f49d9342f1",
+  "dataspace": 11,
+  "issued_ms": 1762723200000,
+  "activation_epoch": 2050,
+  "expiry_epoch": 2300,
+  "entries": [
+    {
+      "scope": {
+        "dataspace": 11,
+        "program": "cbdc.transfer",
+        "method": "transfer",
+        "asset": "CBDC#centralbank",
+        "role": "Initiator"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "1000000000",
+          "window": "PerDay"
+        }
+      },
+      "notes": "Wholesale transfer allowance (per UAID)"
+    },
+    {
+      "scope": {
+        "dataspace": 11,
+        "program": "cbdc.kit",
+        "method": "withdraw"
+      },
+      "effect": {
+        "Deny": {
+          "reason": "Withdrawals disabled for this UAID"
+        }
+      }
+    }
+  ]
+}
+```/```bash
+iroha app space-directory manifest audit-bundle \
+  --manifest-json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
+  --profile fixtures/space_directory/profile/cbdc_lane_profile.json \
+  --out-dir artifacts/nexus/cbdc/2026-02-01T00-00Z/cbdc_wholesale \
+  --notes "CBDC wholesale refresh"
+``` парҙары менән яҡшы формалашҡан парҙарҙы бер ҡатлы арттырырға тейеш. `Allow`/`Deny` эффекты. `fixtures/nexus/cbdc_rollouts/` буйынса өлгө дәлилдәр пакеты интеграция һынауы `integration_tests/tests/nexus/cbdc_rollout_bundle.rs` ярҙамында тормошҡа ашырыла, валитаторҙы CI-ға сымлы тота.
 
-**Validation script:** run `ci/check_cbdc_rollout.sh` to assert the evidence bundle is complete before attaching it to the governance ticket. The helper scans `artifacts/nexus/cbdc_rollouts/` (or `CBDC_ROLLOUT_BUNDLE=<path>`) for every `cbdc.manifest.json`, parses the manifest/composability group, verifies each capability manifest has a matching `.to` file, checks for `kyc_*.pdf` attestations, confirms the TEU metrics scrape plus `cargo test` logs, validates the programmable-money replay JSON, and ensures the approval minutes cite the activation epoch and manifest hash. The latest rev also enforces safety rails called out in NX-6: quorum cannot exceed the declared validator set, protected namespaces must be non-empty strings, and capability manifests must declare monotonically increasing `activation_epoch`/`expiry_epoch` pairs with well-formed `Allow`/`Deny` effects. A sample evidence pack under `fixtures/nexus/cbdc_rollouts/` is exercised by the integration test `integration_tests/tests/nexus/cbdc_rollout_bundle.rs`, keeping the validator wired into CI.
+## 4. Программа-аҡса үҙ-ара эш итеү мөмкинлеге
 
-## 4. Programmable-Money Interoperability
+Бер тапҡыр банк (мәғлүмәттәр 11) һәм ваҡлап һатыу dApp (мәғлүмәттәр 12) икеһе лә аҡ исемлеккә шул уҡ `ComposabilityGroupId`, программалау-аҡса ағымдары AXT өлгөһөнә эйәреп `docs/source/nexus.md` §8.6:
 
-Once a bank (dataspace 11) and retail dApp (dataspace 12) are both whitelisted in the same `ComposabilityGroupId`, programmable-money flows follow the AXT pattern from `docs/source/nexus.md` §8.6:
+. CBDC һыҙаты `AssetPermissionManifest::evaluate` аша ручканы раҫлай (инҡар итеү еңә, пособиелар үтәлгән).
+2. Ике DS ҙа шул уҡ композалылыҡ төркөмөн иғлан итә, шуға күрә маршрутлаштырыу уларҙы атом инклюзияһы өсөн CBDC һыҙатына тарҡата (`LaneRoutingPolicy`X XNI00000127X үҙ-ара аҡ исемлеккә ингәндә `group_id` ҡуллана).
+3. Башҡарғанда, CBDC DS үҙенең схемаһы эсендә AML/KYC иҫбатлауҙарын үтәй (`use_asset_handle` псевдокод `nexus.md`), шул уҡ ваҡытта dApp DS урындағы бизнес хәлен яңырта ғына CBDC фрагменты уңышлы булғандан һуң ғына.
+4. Дәлил материал (FASTPQ + DA йөкләмәләре) CBDC һыҙатында ғына ҡала; берләштереү-элемтә яҙмалары глобаль дәүләт детерминистик һаҡлай, шәхси мәғлүмәттәр ағып тормай.
 
-1. Retail dApp requests an asset handle bound to its UAID + AXT digest. The CBDC lane verifies the handle via `AssetPermissionManifest::evaluate` (deny wins, allowances enforced).
-2. Both DS declare the same composability group so routing collapses them into the CBDC lane for atomic inclusion (`LaneRoutingPolicy` uses `group_id` when mutually whitelisted).
-3. During execution, the CBDC DS enforces AML/KYC proofs inside its circuit (`use_asset_handle` pseudocode in `nexus.md`), while the dApp DS updates local business state only after the CBDC fragment succeeds.
-4. Proof material (FASTPQ + DA commitments) stays confined to the CBDC lane; merge-ledger entries keep the global state deterministic without leaking private data.
+Программалы-аҡса реплей архивына тейеш:
 
-The programmable-money replay archive should include:
+- AXT дескриптор + тотҡаһы запрос/яуаптар.
+- Norito-кодланған транзакция конверты.
+- Һөҙөмтәле квитанциялар (юл менән бәхетле, юлды инҡар итеү).
+- `telemetry::fastpq.execution_mode` өсөн телеметрия өҙөктәре, `nexus_scheduler_lane_teu_slot_committed`, һәм `lane_commitments`.
 
-- AXT descriptor + handle request/responses.
-- Norito-encoded transaction envelope.
-- Resulting receipts (happy path, deny path).
-- Telemetry snippets for `telemetry::fastpq.execution_mode`, `nexus_scheduler_lane_teu_slot_committed`, and `lane_commitments`.
+## 5. Күҙәтеүсәнлек һәм йүнһеҙҙәр
 
-## 5. Observability & Runbooks
+- **Метрика:** Монитор `nexus_scheduler_lane_teu_capacity`, `nexus_scheduler_lane_teu_slot_committed`, `nexus_scheduler_lane_teu_deferral_total{reason}`, `governance_manifest_admission_total`, һәм `lane_governance_sealed_total` (`docs/source/telemetry.md` X).
+- ** Приборҙар таҡталары:** CBDC һыҙаты менән `docs/source/grafana_scheduler_teu.json` оҙайтыу; өҫтәү өсөн панелдәр өсөн аҡ исемлек churn (аннотациялар һәр активация эпохаһы) һәм мөмкинлектәрҙең ваҡыты үткән торбалар.
+- **Иҫкәртмәләр:** Триггер ҡасан `rate(nexus_scheduler_lane_teu_deferral_total{reason="cap_exceeded"}[5m]) > 0` өсөн 15минут йәки ҡасан `lane_governance.manifest_ready=false` бер һорау алыу арауығынан тыш һаҡлана.
+- **Ронбук күрһәткестәре:** Һылтанма һаҡланған-исемдәре йүнәлеше `docs/source/governance_api.md` һәм программаланған-аҡса проблемаларын хәл итеү `docs/source/nexus.md`.
 
-- **Metrics:** Monitor `nexus_scheduler_lane_teu_capacity`, `nexus_scheduler_lane_teu_slot_committed`, `nexus_scheduler_lane_teu_deferral_total{reason}`, `governance_manifest_admission_total`, and `lane_governance_sealed_total` (see `docs/source/telemetry.md`).
-- **Dashboards:** Extend `docs/source/grafana_scheduler_teu.json` with a CBDC lane row; add panels for whitelist churn (annotations every activation epoch) and capability expiry pipelines.
-- **Alerts:** Trigger when `rate(nexus_scheduler_lane_teu_deferral_total{reason="cap_exceeded"}[5m]) > 0` for 15 minutes or when `lane_governance.manifest_ready=false` persists beyond one poll interval.
-- **Runbook pointers:** Link to protected-namespace guidance in `docs/source/governance_api.md` and programmable-money troubleshooting in `docs/source/nexus.md`.
+## 6. Ҡабул итеү тикшерелгән исемлек- [ ] CBDC һыҙаты `nexus.lane_catalog`-та иғлан ителгән ТЭУ метамағлүмәттәренә тап килгән ТЭУ һынауҙары.
+- [ ] `cbdc.manifest.json`-һы асыҡ каталогта булған, `cargo test -p integration_tests nexus::lane_registry` аша раҫланған.
+- [ ] Һәр УАИД өсөн сығарылған һәм йыһан каталогында һаҡланған мөмкинлектәрҙең мөмкинлектәре; инҡар/рөхсәт өҫтөнлөк аша тикшерелгән берәмек һынауҙары (`crates/iroha_data_model/src/nexus/manifest.rs`).
+- [ ] Аҡ исемлек активацияһы менән теркәлгән идара итеү раҫлау идентификаторы, `activation_epoch`, һәм Prometheus дәлилдәре.
+- [ ] Программалы-аҡса реплей архивланған, ручка сығарыуҙы күрһәтеү, инҡар итеү, һәм рөхсәт ағымдар.
+- [ ] Дәлилдәр өйөмдәре менән тейәп криптографик диестер, идара итеү билет һәм `status.md` бер тапҡыр NX-6 сығарылыш уҡыусылары 🈯 🈺 тиклем.
 
-## 6. Acceptance Checklist
-
-- [ ] CBDC lane declared in `nexus.lane_catalog` with TEU metadata matching TEU tests.
-- [ ] Signed `cbdc.manifest.json` present in the manifest directory, validated via `cargo test -p integration_tests nexus::lane_registry`.
-- [ ] Capability manifests issued for every UAID and stored in Space Directory; deny/allow precedence verified via unit tests (`crates/iroha_data_model/src/nexus/manifest.rs`).
-- [ ] Whitelist activation recorded with governance approval ID, `activation_epoch`, and Prometheus evidence.
-- [ ] Programmable-money replay archived, demonstrating handle issuance, denial, and allow flows.
-- [ ] Evidence bundle uploaded with cryptographic digest, linked from governance ticket and `status.md` once NX-6 graduates from 🈯 to 🈺.
-
-Following this playbook satisfies the documentation deliverable for NX-6 and unblocks future roadmap items (NX-12/NX-15) by providing a deterministic template for CBDC lane configuration, whitelist onboarding, and programmable-money interoperability.
+Был playbook-тан һуң NX-6 өсөн тапшырыуҙы ҡәнәғәтләндерә һәм киләсәктә юл картаһы әйберҙәрен (NX-12/NX-15) блоктарын аса, был CBDC һыҙат конфигурацияһы өсөн детерминистик шаблон бирә, аҡ исемлектә бортинг һәм программаланған аҡса үҙ-ара эш итеү мөмкинлеге.

@@ -6,19 +6,20 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4016b82d86dc61a9de5e345950d02aeadf26db4cc26777c60db336c57479ba15
 source_last_modified: "2026-01-03T18:07:59.250950+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Device Lab Contingency Log
+# ڈیوائس لیب ہنگامی لاگ
 
-Record every activation of the Android device-lab contingency plan here.
-Include enough detail for compliance reviews and future readiness audits.
+Android ڈیوائس-لیب ہنگامی منصوبے کی ہر ایکٹیویشن کو یہاں ریکارڈ کریں۔
+تعمیل جائزوں اور مستقبل میں تیاری کے آڈٹ کے لئے کافی تفصیل شامل کریں۔
 
-| Date | Trigger | Actions Taken | Follow-ups | Owner |
-|------|---------|---------------|------------|-------|
-| 2026-02-11 | Capacity fell to 78% after Pixel 8 Pro lane outage and delayed Pixel 8a delivery (see `android_strongbox_device_matrix.md`). | Promoted Pixel 7 lane to primary CI target, borrowed shared Pixel 6 fleet, scheduled Firebase Test Lab smoke tests for retail-wallet sample, and engaged external StrongBox lab per AND6 plan. | Replace faulty USB-C hub for Pixel 8 Pro (due 2026-02-15); confirm Pixel 8a arrival and rebaseline capacity report. | Hardware Lab Lead |
-| 2026-02-13 | Pixel 8 Pro hub replaced and Galaxy S24 approved, restoring capacity to 85%. | Returned Pixel 7 lane to secondary, re-enabled `android-strongbox-attestation` Buildkite job with tags `pixel8pro-strongbox-a` and `s24-strongbox-a`, updated readiness matrix + evidence log. | Monitor Pixel 8a delivery ETA (still pending); keep spare hub inventory documented. | Hardware Lab Lead |
+| تاریخ | ٹرگر | اقدامات کیے گئے | فالو اپ | مالک |
+| ------ | --------- | --------------- | -------------- | ------- |
+| 2026-02-11 | پکسل 8 پرو لین کی بندش اور تاخیر سے پکسل 8 اے کی ترسیل (`android_strongbox_device_matrix.md` دیکھیں) کے بعد صلاحیت 78 فیصد ہوگئی (`android_strongbox_device_matrix.md` دیکھیں)۔ | پکسل 7 لین کو پرائمری سی آئی کے ہدف میں ترقی دی ، مشترکہ پکسل 6 بیڑے ، خوردہ دیوار کے نمونے کے لئے شیڈول فائر بیس ٹیسٹ لیب دھواں ٹیسٹ ، اور فی اور 6 پلان کے مطابق بیرونی مضبوط باکس لیب میں مصروف۔ | پکسیل 8 پرو (2026-02-15 کی وجہ سے) کے لئے ناقص USB-C حب کو تبدیل کریں۔ پکسل 8 اے کی آمد اور ریبیس لائن صلاحیت کی رپورٹ کی تصدیق کریں۔ | ہارڈ ویئر لیب لیڈ |
+| 2026-02-13 | پکسل 8 پرو حب کی جگہ لے لی گئی اور گلیکسیس 24 کی منظوری دی گئی ، جس کی گنجائش 85 ٪ تک بحال ہوگئی۔ | پکسل 7 لین کو ثانوی ، دوبارہ فعال `android-strongbox-attestation` بلڈکائٹ جاب کو ٹیگز کے ساتھ `pixel8pro-strongbox-a` اور `s24-strongbox-a` ، تازہ ترین تیاری میٹرکس + شواہد لاگ کے ساتھ واپس کردیا۔ | نگرانی کریں پکسل 8 اے کی ترسیل ای ٹی اے (اب بھی زیر التواء) ؛ اسپیئر حب انوینٹری کو دستاویزی دستاویزات رکھیں۔ | ہارڈ ویئر لیب لیڈ |

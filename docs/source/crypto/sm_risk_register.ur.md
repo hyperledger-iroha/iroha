@@ -6,44 +6,45 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2026-01-03T18:07:57.078074+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! ایس ایم 2/ایس ایم 3/ایس ایم 4 کے قابل ہونے کے لئے ایس ایم پروگرام رسک رجسٹر۔
 
-# SM Program Risk Register
+# ایس ایم پروگرام رسک رجسٹر
 
-Last updated: 2025-03-12.
+آخری تازہ کاری: 2025-03-12۔
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+یہ رجسٹر `sm_program.md` میں خلاصہ پر پھیلتا ہے ، ہر خطرے کے ساتھ جوڑتا ہے
+ملکیت ، نگرانی کے محرکات ، اور موجودہ تخفیف ریاست۔ کریپٹو ڈبلیو جی
+اور کور پلیٹ فارم لیڈز اس رجسٹر کو ہفتہ وار ایس ایم کیڈینس میں جائزہ لیں۔ تبدیلیاں
+یہاں اور عوامی روڈ میپ میں دونوں کی عکاسی ہوتی ہے۔
 
-## Risk Summary
+## رسک کا خلاصہ
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| ID | خطرہ | زمرہ | امکان | اثر | شدت | مالک | تخفیف | حیثیت | ٹرگرز |
+| ------ | ------ | ------------ | ------------- | ---------- | ---------- | ------- | ------------ | -------- | ------------ |
+| R1 | Rustcrypto ایس ایم کریٹس کے لئے بیرونی آڈٹ جس پر سائننگ کرنے والے GA پر دستخط کرنے سے پہلے عمل نہیں کیا گیا سپلائی چین | میڈیم | اعلی | اعلی | کریپٹو ڈبلیو جی | بٹس/این سی سی گروپ کا معاہدہ ٹریل ، جب تک رپورٹ قبول نہ کریں تب تک صرف تصدیق کریں ترقی میں تخفیف | 2025-04-15 یا آڈٹ کی رپورٹ میں آڈٹ ساؤ کا دستخط شدہ 2025-06-01 میں تاخیر سے
+| R2 | SDKs میں تعی .ن نونس ریگریشنز | عمل درآمد | میڈیم | اعلی | اعلی | ایس ڈی کے پروگرام لیڈز | SDK CI میں فکسچر شیئر کریں ، کیننیکل R∥S انکوڈنگ کو نافذ کریں ، کراس SDK چھیڑ چھاڑ کے ٹیسٹ شامل کریں | نگرانی | ایس ایم فکسچر کے بغیر سی آئی یا ایس ڈی کے کی رہائی میں پائے جانے والے فکسچر ڈرفٹ |
+| R3 | ISA کے مخصوص کیڑے برائے اندرونی (نیین/سم ڈی) | کارکردگی | کم | میڈیم | میڈیم | کارکردگی Wg | خصوصیت کے جھنڈوں کے پیچھے گیٹ کے اندرونی حصے ، بازو پر CI کوریج کی ضرورت ہوتی ہے ، اسکیلر فال بیک کو برقرار رکھیں ترقی میں تخفیف | نیون بینچز ناکام یا ہارڈ ویئر ریگریشن نے ایس ایم پرف میٹرکس میں پردہ پوشیدہ |
+| R4 | تعمیل ابہام ایس ایم اپنانے میں تاخیر | گورننس | میڈیم | میڈیم | میڈیم | دستاویزات اور قانونی رابطہ | تعمیل بریف ، آپریٹر چیک لسٹ ، GA سے پہلے قانونی وکیل کے ساتھ رابطہ شائع کریں ترقی میں تخفیف | قانونی جائزہ 2025-05-01 کے بعد بقایا یا لاپتہ چیک لسٹ اپڈیٹس |
+| R5 | فراہم کنندہ کی تازہ کاریوں کے ساتھ FFI پسدید بڑھے | انضمام | میڈیم | میڈیم | میڈیم | پلیٹ فارم آپس | پن فراہم کرنے والے ورژن ، برابری کے ٹیسٹ شامل کریں ، اوپن ایس ایل/ٹونگسو پیش نظارہ آپٹ ان رکھیں نگرانی | پیرٹی رن یا پیش نظارہ کے بغیر پیکیج اپ ڈیٹ مل گیا جس سے باہر پائلٹ اسکوپ |
 
-## Review Cadence
+## جائزہ لینے کا جائزہ لیں
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- ہفتہ وار کریپٹو ڈبلیو جی مطابقت پذیری (اسٹینڈنگ ایجنڈا آئٹم)۔
+- تعمیل کرنسی کی تصدیق کے ل plate پلیٹ فارم او پی ایس اور دستاویزات کے ساتھ ماہانہ مشترکہ جائزہ۔
+- پری ریلیز چوکی: GA کے ساتھ بنڈل اور رسک رجسٹر منجمد اور تصدیق کا بنڈل
+  نوادرات
 
-## Sign-off
+## سائن آف
 
-| Role | Representative | Date | Notes |
-|------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| کردار | نمائندہ | تاریخ | نوٹ |
+| ------ | ---------------- | ------ | ------- |
+| کریپٹو ڈبلیو جی لیڈ | (فائل پر دستخط) | 2025-03-12 | اشاعت کے لئے منظور شدہ اور ڈبلیو جی بیکلاگ کے ساتھ مشترکہ۔ |
+| کور پلیٹ فارم لیڈ | (فائل پر دستخط) | 2025-03-12 | قبول شدہ تخفیف اور مانیٹرنگ کیڈینس۔ |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+تاریخی منظوری اور میٹنگ کے منٹوں کے لئے ، `docs/source/crypto/sm_program.md` دیکھیں
+(`Communication Plan`) اور ایس ایم ایجنڈا آرکائیو جو کرپٹو ڈبلیو جی سے منسلک ہے
+ورک اسپیس۔

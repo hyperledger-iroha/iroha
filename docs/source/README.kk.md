@@ -7,69 +7,68 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7548d481edd33d7e325d22559a5f53f261fa302ffd8710a1626acc4a5705e428
 source_last_modified: "2025-12-29T18:16:35.915400+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha VM + Kotodama Docs Index
+# Iroha VM + Kotodama құжаттар индексі
 
-This index links the main design and reference documents for IVM, Kotodama, and the IVM‑first pipeline. 日本語訳は [`README.ja.md`](./README.ja.md) を参照してください。
+Бұл индекс IVM, Kotodama және IVM-бірінші құбыр желісінің негізгі жобалау және анықтамалық құжаттарын байланыстырады. 訳は [`README.ja.md`](./README.ja.md) を参照してください。
 
-- IVM architecture and language mapping: `../../ivm.md`
-- IVM syscall ABI: `ivm_syscalls.md`
-- Generated syscall constants: `ivm_syscalls_generated.md` (run `make docs-syscalls` to refresh)
-- IVM bytecode header: `ivm_header.md`
-- Kotodama grammar and semantics: `kotodama_grammar.md`
-- Kotodama examples and syscall mappings: `kotodama_examples.md`
-- Transaction pipeline (IVM‑first): `../../new_pipeline.md`
-- Torii Contracts API (manifests): `torii_contracts_api.md`
-- Universal account/UAID operations guide: `universal_accounts_guide.md`
-- JSON query envelope (CLI / tooling): `query_json.md`
-- Norito streaming module reference: `norito_streaming.md`
-- Runtime ABI samples: `samples/runtime_abi_active.md`, `samples/runtime_abi_hash.md`, `samples/find_active_abi_versions.md`
-- ZK App API (attachments, prover, vote tally): `zk_app_api.md`
-- Torii ZK attachments/prover runbook: `zk/prover_runbook.md`
-- Torii ZK App API operator guide (attachments/prover; crate doc): `../../crates/iroha_torii/docs/zk_app_api.md`
-- VK/proof lifecycle (registry, verification, telemetry): `zk/lifecycle.md`
-- Torii Operator Aids (endpoints for visibility): `references/operator_aids.md`
-- Nexus default-lane quickstart: `quickstart/default_lane.md`
-- MOCHI supervisor quickstart & architecture: `mochi/index.md`
-- JavaScript SDK guides (quickstart, configuration, publishing): `sdk/js/index.md`
-- Swift SDK parity/CI dashboards: `references/ios_metrics.md`
-- Governance: `../../gov.md`
-- Domain endorsements (committees, policies, validation): `domain_endorsements.md`
-- JDG attestations (offline validation tooling): `jdg_attestations.md`
-- Clarification coordination prompts: `coordination_llm_prompts.md`
-- Roadmap: `../../roadmap.md`
-- Docker builder image usage: `docker_build.md`
+- IVM архитектурасы және тіл картасы: `../../ivm.md`
+- IVM ABI жүйелік қоңырауы: `ivm_syscalls.md`
+- Жасалған жүйелік қоңырау тұрақтылары: `ivm_syscalls_generated.md` (жаңарту үшін `make docs-syscalls` іске қосыңыз)
+- IVM байт коды тақырыбы: `ivm_header.md`
+- Kotodama грамматика және семантика: `kotodama_grammar.md`
+- Kotodama мысалдары мен жүйені салыстыру: `kotodama_examples.md`
+- Транзакция құбыры (IVM‑бірінші): `../../new_pipeline.md`
+- Torii Contracts API (манифесттер): `torii_contracts_api.md`
+- Әмбебап тіркелгі/UAID операциялық нұсқаулығы: `universal_accounts_guide.md`
+- JSON сұрау конверті (CLI / құрал): `query_json.md`
+- Norito ағындық модулінің анықтамасы: `norito_streaming.md`
+- Орындалу уақытының ABI үлгілері: `samples/runtime_abi_active.md`, `samples/runtime_abi_hash.md`, `samples/find_active_abi_versions.md`
+- ZK App API (тіркемелер, дәлелдеу, дауыс саны): `zk_app_api.md`
+- Torii ZK тіркемелері/prover runbook: `zk/prover_runbook.md`
+- Torii ZK App API операторының нұсқаулығы (тіркемелер/провер; жәшік құжаты): `../../crates/iroha_torii/docs/zk_app_api.md`
+- VK/proof өмірлік циклі (тізілім, тексеру, телеметрия): `zk/lifecycle.md`
+- Torii Операторға көмекші құралдар (көріну үшін соңғы нүктелер): `references/operator_aids.md`
+- Nexus әдепкі жолақты жылдам іске қосу: `quickstart/default_lane.md`
+- MOCHI супервайзері жылдам іске қосу және архитектурасы: `mochi/index.md`
+- JavaScript SDK нұсқаулықтары (жылдам іске қосу, конфигурациялау, жариялау): `sdk/js/index.md`
+- Swift SDK паритеті/CI бақылау тақталары: `references/ios_metrics.md`
+- Басқару: `../../gov.md`
+- Доменді растау (комитеттер, саясаттар, тексеру): `domain_endorsements.md`
+- JDG аттестациялары (офлайн тексеру құралы): `jdg_attestations.md`
+- Түсіндіруді үйлестіру нұсқаулары: `coordination_llm_prompts.md`
+- Жол картасы: `../../roadmap.md`
+- Docker құрастырушы кескінін пайдалану: `docker_build.md`
 
-Usage tips
-- Build and run examples in `examples/` using external tools (`koto_compile`, `ivm_run`):
-  - `make examples-run` (and `make examples-inspect` if `ivm_tool` is available)
-- Optional integration tests (ignored by default) for examples and header checks live in `integration_tests/tests/`.
+Қолдану бойынша кеңестер
+- Сыртқы құралдарды (`koto_compile`, `ivm_run`) пайдаланып `examples/` ішінде мысалдарды құрастырыңыз және іске қосыңыз:
+  - `make examples-run` (және `ivm_tool` болса, `make examples-inspect`)
+- Мысалдар мен тақырыпты тексеруге арналған қосымша біріктіру сынақтары (әдепкі бойынша еленбейді) `integration_tests/tests/`.Құбыр конфигурациясы
+- Барлық орындау уақытының әрекеті `iroha_config` файлдары арқылы конфигурацияланады. Ортаның айнымалы мәндері операторлар үшін пайдаланылмайды.
+- Ақылға қонымды әдепкілер қамтамасыз етілген; орналастырулардың көпшілігі өзгерістерді қажет етпейді.
+- `[pipeline]` астында сәйкес кілттер:
+  - `dynamic_prepass`: кіру жиындарын алу үшін IVM тек оқуға арналған алдын ала өтуді қосыңыз (әдепкі: шын).
+  - `access_set_cache_enabled`: `(code_hash, entrypoint)` үшін кэштен алынған қол жеткізу жиындары; кеңестерді жөндеуді өшіру (әдепкі: шын).
+  - `parallel_overlay`: қабаттасуды параллель құрастыру; commit детерминистік болып қалады (әдепкі: шын).
+  - `gpu_key_bucket`: `(key, tx_idx, rw_flag)` жүйесіндегі тұрақты радиксті пайдаланып жоспарлаушы алдын ала өту үшін қосымша кілттерді шелектеу; детерминирленген процессордың қалпына келуі әрқашан белсенді (әдепкі: жалған).
+  - `cache_size`: жаһандық IVM алдын ала декодтау кэшінің сыйымдылығы (декодталған ағындар сақталады). Әдепкі: 128. Көбейту қайталанатын орындалулар үшін декодтау уақытын қысқартуы мүмкін.
 
-Pipeline configuration
-- All runtime behavior is configured via `iroha_config` files. Environment variables are not used for operators.
-- Sensible defaults are provided; most deployments won’t need changes.
-- Relevant keys under `[pipeline]`:
-  - `dynamic_prepass`: enable IVM read‑only prepass to derive access sets (default: true).
-  - `access_set_cache_enabled`: cache derived access sets per `(code_hash, entrypoint)`; disable to debug hints (default: true).
-  - `parallel_overlay`: build overlays in parallel; commit remains deterministic (default: true).
-  - `gpu_key_bucket`: optional key bucketing for the scheduler prepass using a stable radix on `(key, tx_idx, rw_flag)`; deterministic CPU fallback is always active (default: false).
-  - `cache_size`: capacity of the global IVM pre‑decode cache (decoded streams kept). Default: 128. Increasing can reduce decode time for repeated executions.
-
-Docs sync checks
-- Syscall constants (docs/source/ivm_syscalls_generated.md)
-  - Regenerate: `make docs-syscalls`
-  - Check only: `bash scripts/check_syscalls_doc.sh`
-- Syscall ABI table (crates/ivm/docs/syscalls.md)
-  - Check only: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
-  - Update generated section (and code docs table): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
-- Pointer‑ABI tables (crates/ivm/docs/pointer_abi.md and ivm.md)
-  - Check only: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
-- IVM header policy and ABI hashes (docs/source/ivm_header.md)
-  - Check only: `cargo run -p ivm --bin gen_header_doc -- --check` and `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_header_doc -- --write` and `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
+Docs синхрондауды тексеру
+- Жүйелік қоңырау тұрақтылары (docs/source/ivm_syscalls_generated.md)
+  - Қайта құру: `make docs-syscalls`
+  - Тек тексеру: `bash scripts/check_syscalls_doc.sh`
+- Syscall ABI кестесі (crates/ivm/docs/syscalls.md)
+  - Тек тексеру: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Жасалған бөлімді жаңарту (және кодтық құжаттар кестесі): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
+- Pointer‑ABI кестелері (crates/ivm/docs/pointer_abi.md және ivm.md)
+  - Тек тексеру: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
+  - Жаңарту бөлімдері: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
+- IVM тақырып саясаты және ABI хэштері (docs/source/ivm_header.md)
+  - Тек тексеру: `cargo run -p ivm --bin gen_header_doc -- --check` және `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
+  - Жаңарту бөлімдері: `cargo run -p ivm --bin gen_header_doc -- --write` және `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
 
 CI
-- GitHub Actions workflow `.github/workflows/check-docs.yml` runs these checks on every push/PR and will fail if generated docs drift from the implementation.
-- [Governance Playbook](governance_playbook.md)
+- GitHub Actions жұмыс процесі `.github/workflows/check-docs.yml` бұл тексерулерді әрбір push/PR кезінде іске қосады және жасалған құжаттар іске асырудан ауытқып кетсе, сәтсіз болады.
+- [Басқару кітабы](governance_playbook.md)

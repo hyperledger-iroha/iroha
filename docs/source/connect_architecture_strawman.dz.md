@@ -7,30 +7,31 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a1a6bcc6bca3d7f70b82e35734b71d706ac46d8dc9c728351fabbd8a61dd3f31
 source_last_modified: "2026-01-05T09:28:12.003461+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Session Architecture Strawman (Swift / Android / JS)
+# མཐུད་ལམ་གྱི་བཟོ་རིགས་ སི་ཊ་ར་ སི་ཊི་ར་ (སཝིཕཊི་ / ཨེན་ཌྲོའིཌ་ / ཇེ་ཨེས།)
 
-This strawman proposal outlines the shared design for Nexus Connect workflows
-across the Swift, Android, and JavaScript SDKs. It is intended to support the
-Feb 2026 cross-SDK workshop and capture open questions before implementation.
+འ་ནི་ སིཊ་རོ་མཱན་གྱིས་ Nexus མཐུད་པའི་ལཱ་གི་རྒྱུན་རིམ་ཚུ་གི་དོན་ལུ་ བརྗེ་སོར་འབད་ཡོད་པའི་བཟོ་བཀོད་འདི་ བཀོད་སྒྲིག་འབདཝ་ཨིན།
+སུའིཕཊ་དང་ཨེན་ཌོརཌི་ དེ་ལས་ ཇ་བ་ཨིསི་ཀིརིཔ་ཨེསི་ཌི་ཀེ་ཚུ་ ཕར་ཚུར་འགྱོཝ་ཨིན། འདི་ལུ་རྒྱབ་སྐྱོར་འབད་ནིའི་དོན་ལུ་ཨིན།
+སྤྱི་ཟླ་༢ པའི་སྤྱི་ཚེས་༢༠༢༦ ལུ་ ཀོརསི་ཨེསི་ཌི་ཀེ་ལས་རིམ་དང་ ལག་ལེན་མ་འཐབ་པའི་ཧེ་མ་ དྲི་བ་ཁ་ཕྱེ་བའི་དྲི་བ་ཚུ་ བཏོན་དགོ།
 
-> Last updated: 2026-01-29  
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead  
-> Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
+> མཐའ་མའི་དུས་མཐུན་བཟོ་ཡོདཔ།: ༢༠༢༦-༠༡-༢༩  
+> Auth  
+> གནས་སྟངས་: ཚོགས་སྡེའི་བསྐྱར་ཞིབ་ཀྱི་ཟིནཔ། (ཉེན་ཁ་དཔེ་ཚད་ + གནས་སྡུད་བཞག་ཐངས་ཕྲང་སྒྲིག་འདི་ ༢༠༢༦-༠༣-༡༢ ཁ་སྐོང་བརྐྱབ།)
 
-## Goals
+## རིལ་ཚང
 
-1. Align wallet ↔ dApp session lifecycle, including connection bootstrapping,
-   approvals, signing requests, and teardown.
-2. Define the Norito envelope schema (open/approve/sign/control) shared by all
-   SDKs and ensure parity with `connect_norito_bridge`.
-3. Split responsibilities between transport (WebSocket/WebRTC), encryption
-   (Norito Connect frames + key exchange), and application layers (SDK facades).
-4. Ensure deterministic behaviour across desktop/mobile platforms, including
-   offline buffering and reconnection.
+1. ཕྲང་སྒྲིག་འབད་ ↔ dApp ལཱ་ཡུན་ཚེ་འཁོར་དང་ མཐུད་ལམ་བུཊི་སི་ཊེཔ་ཚུ་ཚུདཔ་ཨིན།
+   ཆ་འཇོག་དང་ མཚན་རྟགས་བཀོད་ནི་ དེ་ལས་ བཤིག་གཏང་ནི།
+༢ ཆ་མཉམ་གྱིས་བརྗེ་སོར་འབད་ཡོད་པའི་ Norito ཡིག་ཤུབས་འཆར་གཞི་ (ཁ་ཕྱེ་/ཆ་འཇོག་/མིང་རྟགས་/ཚད་འཛིན་) ངེས་འཛིན་འབད།
+   SDKs དང་ `connect_norito_bridge` དང་མཉམ་དུ་ ཆ་སྙོམས་ངེས་གཏན་བཟོ།
+༣ སྐྱེལ་འདྲེན་ (WebSocket/WebRTC), གསང་བཟོའི་བར་གྱི་འགན་འཁྲི།
+   (Norito གཞི་ཁྲམ་ + ལྡེ་མིག་བརྗེ་སོར་) དང་ གློག་རིམ་བང་རིམ་ (ཨེསི་ཌི་ཀེ་གདོང་བཏོན)།
+༤ ཌེཀསི་ཊོཔ་/འགྲུལ་འཕྲིན་གྱི་སྟེགས་བུ་ཚུ་ནང་ལས་ཕར་ གཏན་འབེབས་ཀྱི་སྤྱོད་ལམ་ཚུ་ ངེས་གཏན་བཟོ་ནི།
+   ཨོཕ་ལཱའིན་བཱ་ཕར་དང་ ལོག་སྟེ་མཐུད་ནི།
 
-## Session Lifecycle (High-Level)
+## ལས་འགོ འ ི་ སྲོག་འཁོར་ (མཐོ་རིམ ) .
 
 ```
 ┌────────────┐      ┌─────────────┐      ┌────────────┐
@@ -56,363 +57,342 @@ Feb 2026 cross-SDK workshop and capture open questions before implementation.
       │ 6. control frames for reject/close, error propagation, heartbeats.
 ```
 
-## Envelope/Norito Schema
+## ཡིག་ཆར/Norito ལས་རིམ།
 
-All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`:
+ཨེསི་ཌི་ཀེ་ཨེསི་ཆ་མཉམ་གྱིས་ ཀེ་ནོ་ནིག་ Norito ལས་འཆར་འདི་ `connect_norito_bridge` ནང་ངེས་འཛིན་འབད་དགོ།
 
-- `EnvelopeV1` (open / approve / sign / control)
-- `ConnectFrameV1` (ciphertext frames w/ AEAD payload)
-- Control codes:
-  - `open_ext` (metadata, permissions)
-  - `approve_ext` (account, permissions, proofs, signature)
-  - `reject`, `close`, `ping/pong`, `error`
+- `EnvelopeV1` (ཁ་ཕྱེ། / ཆ་འཇོག་འབད་ / རྟགས་ / ཚད་འཛིན་)
+- `ConnectFrameV1` (སི་ཕར་ཊེགསི་གཞི་ཁྲམ་ཚུ་ w/ AEAD པེ་ལོཌི)།
+- ཚད་འཛིན་ཨང་རྟགས་ཚུ།
+  - `open_ext` (མེ་ཊ་ཌེ་ཊ་, གནང་བ་ཚུ།)
+  - `approve_ext` (རྩིས་ཐོ།, གནང་བ་, བདེན་དཔང་།, མཚན་རྟགས།)
+  - `reject`, Norito
 
-Swift previously shipped placeholder JSON encoders (`ConnectCodec.swift`). As of Apr 2026 the SDK
-always uses the Norito bridge and fails closed when the XCFramework is missing, but this strawman
-still captures the mandate that led to the bridge integration:
+སུའིཕཊ་ཧེ་མ་གཏང་ཡོད་པའི་ས་གནས་འཛིན་མི་ ཇེ་ཨེསི་ཨོ་ཨེན་ཀོ་ཌར་ (`ConnectCodec.swift`) ཚུ། As of Apr 2026 the SDK
+རྟག་བུ་རང་ Norito ཟམ་འདི་ལག་ལེན་འཐབ་ཨིནམ་དང་ XCFramework འདི་ མ་ཐོབ་པའི་སྐབས་ ཁ་ཕྱེ་མ་ཚུགསཔ་ཨིན།
+ད་ལྟོ་ཡང་ ཟམ་མཉམ་བསྡོམས་ལུ་འབག་ཡོད་པའི་ བཀའ་རྒྱ་འདི་ བཟུང་དོ་ཡོདཔ་ཨིན།
 
-| Function | Description | Status |
-|----------|-------------|--------|
-| `connect_norito_encode_control_open_ext` | dApp open frame | Implemented in bridge |
-| `connect_norito_encode_control_approve_ext` | Wallet approval | Implemented |
-| `connect_norito_encode_envelope_sign_request_tx/raw` | Sign requests | Implemented |
-| `connect_norito_encode_envelope_sign_result_ok/err` | Sign results | Implemented |
-| `connect_norito_decode_*` | Parsing for wallets/dApps | Implemented |
+| ལས་འགན་ | འགྲེལ་བཤད་ | གནས་ཚད་ |
+|----------------------------------------- |
+| `connect_norito_encode_control_open_ext` | dApp ཁ་ཕྱེ་གཞི་ཁྲམ། | ཟམ་ནང་ལག་ལེན་འཐབ་ཡོདཔ། |
+| `connect_norito_encode_control_approve_ext` | དངུལ་ཁུག་ཆ་འཇོག་ | ལག་ལེན་འཐབ་ཡོདཔ། |
+| `connect_norito_encode_envelope_sign_request_tx/raw` | མཚན་རྟགས་ཀྱི་ཞུ་བ་ | ལག་ལེན་འཐབ་ཡོདཔ། |
+| `connect_norito_encode_envelope_sign_result_ok/err` | མཚན་རྟགས་ | ལག་ལེན་འཐབ་ཡོདཔ། |
+| `connect_norito_decode_*` | དངུལ་ཁུག་/dApps གི་དོན་ལུ་ ཆ་འཇོག་འབད་ནི། | ལག་ལེན་འཐབ་ཡོདཔ། |
 
-### Required Work
+### དགོས་མཁོའི་ལས་རིམ།
 
-- Swift: Replace placeholder `ConnectCodec` JSON helpers with bridge calls and surface
-  typed wrappers (`ConnectFrame`, `ConnectEnvelope`) using the shared Norito types. ✅ (Apr 2026)
-- Android/JS: Ensure the same wrappers exist; align error codes and metadata keys.
-- Shared: Document encryption (X25519 key exchange, AEAD) with consistent key derivation
-  per Norito spec, and provide sample integration tests using the Rust bridge.
+- Swift: ས་གནས་འཛིན་མི་ `ConnectCodec` JSON གྲོགས་རམ་པ་ཚུ་ ཟམ་འབོད་བརྡ་དང་ ཁ་ཐོག་ཡོད་པའི་ གྲོགས་རམ་པ་ཚུ་ བཙུགས།
+  ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ wrappers (`ConnectFrame`, `ConnectEnvelope`) བརྗེ་སོར་འབད་ཡོད་པའི་ Norito དབྱེ་བ་ཚུ་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། ✅ (སྤྱི་ཟླ་༤ པའི་ཚེས་༢༠༢༦)
+- Android/JS: འདྲ་མཚུངས་ཀྱི་བཀབ་ཆ་ཚུ་ཡོདཔ་ངེས་གཏན་བཟོ། འཛོལ་བའི་ཨང་རྟགས་དང་ མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ཚུ་ ཕྲང་སྒྲིག་འབད།
+- བརྗེ་སོར་: ཡིག་ཆའི་གསང་བཟོའི་ (X25519 ལྡེ་མིག་བརྗེ་སོར་, AEAD) དང་མཉམ་པའི་ལྡེ་མིག་འབྱུང་ཁུངས་དང་གཅིག་ཁར་།
+  གི་ Norito ཁྱད་ཚད་དང་ རཱསི་ཊི་ཟམ་ལག་ལེན་འཐབ་སྟེ་ དཔེ་ཚད་མཉམ་བསྡོམ་བརྟག་དཔྱད་ཚུ་ བྱིནམ་ཨིན།
 
-## Transport Contract
+### སྐྱེལ་འདྲེན་གན་འཁོར།- གཞི་རིམ་སྐྱེལ་འདྲེན་: ཝེབ་སོ་ཀེཊི་ (`/v1/connect/ws?sid=<session_id>`).
+- གདམ་ཁ་ཅན་གྱི་མ་འོངས་པ།
+- ལོག་སྟེ་མཐུད་ཐབས་: མགྱོགས་འཕེལ་གྱི་རྒྱབ་ལོག་འདི་ ཇི་ཊར་ཆ་ཚང་ (གཞི་རྟེན་༥s, མཐོ་ཤོས་ ༦༠s); Swift དང་ Android དེ་ལས་ JS ཚུ་ནང་ལུ་ བརྗེ་སོར་ཚུ་ བརྗེ་སོར་འབད་ཡོདཔ་ལས་ བསྐྱར་ལོག་ཚུ་ སྔོན་དཔག་འབད་ཚུགསཔ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
+- པིང་/པོང་གི་ལྡུམ་ར་: ༣༠ གི་སྙིང་རྩུབ་འདི་ བཟོད་བསྲན་དང་བཅསཔ་སྦེ་ ལོག་སྟེ་མཐུད་མ་ཚར་བའི་ཧེ་མ་ ཕོན་གསུམ་བརླག་སྟོར་ཞུགས་ཡོདཔ་ཨིན། ཇེ་ཨེསི་གིས་ བརའུ་ཟར་གྱི་ ཐོར་ཊི་ལམ་ལུགས་ཚུ་ བསྒྲུབ་ཐབས་ལུ་ བར་མཚམས་ཉུང་མཐའ་༡༥ ལུ་ བཀག་ཆ་འབདཝ་ཨིན།
+- Push hooks: Android ballet SDK གིས་ wake-ups གི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ FCM མཉམ་བསྡོམས་འདི་ གསལ་སྟོན་འབདཝ་ཨིནམ་ད་ JS གིས་ འོས་འདེམས་གཞི་བསྟུན་སྦེ་སྡོདཔ་ཨིན།
+- SDK འགན་འཁྲི།
+  - པིང་/པོང་གི་སྙིང་རྩ་བདག་འཛིན་ (འགྲུལ་འཕྲིན་ནང་ཆུ་བཏོན་ནིའི་གློག་རྫས་ཚུ་ བཀག་ཐབས་འབད།)
+  - ཨོཕ་ལའིན་སྐབས་ ཕྱིར་ཐོན་གཞི་ཁྲམ་ཚུ་ (མཐའ་མཚམས་ཅན་གྱི་གྱལ་རིམ་ ཌི་ཨེཔ་གི་དོན་ལུ་ རྟག་བརྟན་བཟོ་ཡོདཔ་)།
+- བྱུང་ལས་རྒྱུན་ལམ་ཨེ་པི་ཨའི་ (སུའིཕཊི་མཉམ་བསྡོམ་ `AsyncStream`, Android Flow, JS async hiter).
+- ཁ་ཐོག་ལུ་ ཧུཀ་ཚུ་ ལོག་སྟེ་མཐུད་དེ་ ལག་ཐོག་ལས་ ལོག་སྟེ་བཙུགས་བཅུག།
+- ཊེ་ལི་མི་ཊི་བསྐྱར་བཟོ་: ལཱ་ཡུན་གནས་རིམ་གྱི་ གྱངས་ཁ་རྐྱངམ་ (`sid` ཧེཤ་, ཁ་ཕྱོགས་,
+  རིམ་པ་སྒོ་སྒྲིག་, གྱལ་གཏིང་ཚད་) མཐུད་པའི་བརྡ་འཕྲིན་ནང་ཡིག་ཐོག་ལུ་བཀོད་ཡོད་མི་ཚྭ་ཚུ་དང་གཅིག་ཁར་ མཐུད་ལམ་གྱི་བརྒྱུད་འཕྲིན་ནང་།
+  ལམ༌སྟོན༌འབད༌ནི; མགོ་ཡིག་/ལྡེ་མིག་ཚུ་ དྲན་དེབ་ཚུ་ཡང་ན་ རྐྱེན་སེལ་ཡིག་རྒྱུན་ཚུ་ནང་ ནམ་ཡང་འབྱུང་མི་དགོ།
 
-- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
-- Optional future: WebRTC (TBD) – out of scope for initial strawman.
-- Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
-- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
-- Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
-- SDK responsibilities:
-  - Maintain ping/pong heartbeats (avoid draining batteries on mobile).
-  - Buffer outgoing frames when offline (bounded queue, persisted for dApp).
-- Provide event stream API (Swift Combine `AsyncStream`, Android Flow, JS async iter).
-- Surface reconnect hooks and allow manual re-subscribe.
-- Telemetry redaction: only emit session-level counters (`sid` hash, direction,
-  sequence window, queue depth) with salts documented in the Connect telemetry
-  guide; headers/keys must never appear in logs or debug strings.
+## གསང་བཟོ དང་ གཙོ་བོའི་འཛིན་སྐྱོང་།
 
-## Encryption & Key Management
+### ཚོགས་འདུའི་ངོས་འཛིན།
 
-### Session identifiers & salts
+- `sid` འདི་ `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` ལས་བྱུང་བའི་ ༣༢ བཱའིཊི་ངོས་འཛིན་ཅིག་ཨིན།  
+  Dapps གིས་ `/v1/connect/session` འབོ་མ་ཚར་བའི་ཧེ་མ་ རྩིས་སྟོན་འབདཝ་ཨིན། འདི་ཡང་ ཕྱོགས་གཉིས་ཆ་ར་གིས་ དུས་དེབ་ཚུ་ ལྡེ་མིག་དང་ རིམ་མཐུན་སྦེ་ འབད་ཚུགསཔ་ཨིན་མས།
+- ཚྭ་འདི་ ལྡེ་མིག་ལས་ཐོན་པའི་གོམ་པ་རེ་རེ་ནང་ འདྲ་མཚུངས་སྦེ་ཡོདཔ་ལས་ SDKs ཚུ་ གཞི་རྟེན་ལས་ བསྡུ་བསྒྱོམ་འབད་མི་ entropy ལུ་ ནམ་ཡང་ བརྟེན་དགོ།
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
-- The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
+### དབྱར་རྩོལ་གྱི་ལྡེ་མིག་དབང་ཆ།
 
-### Ephemeral key handling
+- ལཱ་ཡུན་རེ་རེ་གིས་ X25519 ལྡེ་མིག་དངོས་པོ་གསརཔ་ལག་ལེན་འཐབ་ཨིན།  
+  སུའིཕཊ་གིས་ `ConnectCrypto` བརྒྱུད་དེ་ Keychain/Secure Enclave ནང་ལུ་ གསོག་འཇོག་འབདཝ་ཨིན། Android གི་དངུལ་ཁུག་འདི་ StrongBox ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
+- ཁ་ཕྱེ་ནིའི་གཞི་ཁྲམ་ཚུ་ནང་ ཌི་ཨེ་པི་ ཡུན་རིའི་མི་མང་ལྡེ་མིག་དང་ གདམ་ཁ་ཅན་གྱི་བདེན་དཔང་བཱན་ཌལ་ཚུ་ཚུདཔ་ཨིན། དངུལ་ཁུག་གི་གནང་བ་ཚུ་གིས་ དངུལ་ཁུག་ཅན་གྱི་མི་མང་ལྡེ་མིག་དང་ བསྟར་སྤྱོད་ཀྱི་རྒྱུན་འགྲུལ་གྱི་དོན་ལུ་ དགོས་མཁོ་ཡོད་པའི་ མཉེན་ཆས་ག་ཅི་ར་ཨིན་རུང་ ལོག་སྤྲོདཔ་ཨིན།
+- བདེན་དཔང་འབད་མི་ གླ་ཆ་ཚུ་ ངོས་ལེན་འབད་ཡོད་པའི་ལས་རིམ་གྱི་རྗེས་སུ་འབྲང་།  
+  Norito.  
+  བརྡ་འཚོལ་ཚུ་གིས་ བཀག་ཆ་འདི་བཏོན་བཏང་འོང་། མི་སྒེར་གྱི་དངུལ་ཁུག་ཚུ་ མཐུན་རྐྱེན་རྒྱབ་སྐྱོར་གྱི་ལྡེ་མིག་ཚུ་ ལག་ལེན་འཐབ་པའི་སྐབས་ ཚུདཔ་ཨིན།
 
-- Every session uses fresh X25519 key material.  
-  Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
-- Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
-- Attestation payloads follow the accepted schema:  
-  `attestation { platform, evidence_b64, statement_hash }`.  
-  Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.
+### ལམ་སྟོན་གྱི་ལྡེ་མིག་ & AEAD
 
-### Directional keys & AEAD
+- བགོ་བཤའ་རྐྱབ་ཡོད་པའི་གསང་བ་ཚུ་ HKDF-SHA256 (Rust ཟམ་པ་རོགས་རམ་ཚུ་བརྒྱུད་དེ་) དང་ ཌོ་མེན་སོ་སོ་ཁ་ཕྱེ་ཡོད་པའི་བརྡ་དོན་ཡིག་རྒྱུན་ཚུ་དང་གཅིག་ཁར་ རྒྱ་སྐྱེད་འབདཝ་ཨིན།
+  - `iroha-connect|k_app` → གློག་རིམ་གྱིས་དངུལ་གྱི་འགྲུལ་བཞུད།
+  - `iroha-connect|k_wallet` → དངུལ་ཁུག་→ འགྲུལ་བཞུད།
+- AEAD འདི་ v1 ཡིག་ཤུབས་ཀྱི་དོན་ལུ་ ཆ་ཅ་༢༠-པོ་ལི་༡༣༠༥ ཨིན།  
+  འབྲེལ་མཐུན་གནས་སྡུད་འདྲ་མཉམ་ `("connect:v1", sid, dir, seq_le, kind=ciphertext)` དེ་འབདཝ་ལས་ མགོ་ཡིག་ཚུ་གུ་བཀག་བཞག་མི་འདི་ བརྟག་དཔྱད་འབད་ཡོདཔ་ཨིན།
+- ནོནསི་འདི་ ༦༤ བིཊ་གི་རིམ་པ་ གྱངས་ཁ་ (`nonce[0..4]=0`, `nonce[4..12]=seq_le`) ལས་ཐོབ་ཨིན། བརྗེ་སོར་འབད་ཡོད་པའི་གྲོགས་རམ་བརྟག་དཔྱད་ཚུ་གིས་ བིག་ཨིན་ཊི་/ཡུ་ཨིན་ཊི་གཞི་བསྒྱུར་ཚུ་ ཨེསི་ཌི་ཀེ་ཨེསི་ཚུ་ནང་ ཅོག་འཐདཔ་འབད་བའི་སྤྱོད་ལམ་སྟོནམ་ཨིན།
 
-- Shared secrets are expanded with HKDF-SHA256 (via the Rust bridge helpers) and domain-separated info strings:
-  - `iroha-connect|k_app` → app→wallet traffic.
-  - `iroha-connect|k_wallet` → wallet→app traffic.
-- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).  
-  Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
-- Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
+### བསྒྱིར་དང་སླར་གསོ་ལག་པ།- བསྒྱིར་ནི་གདམ་ཁ་ཅན་སྦེ་ལུས་ཡོད་རུང་ མཐུན་སྒྲིག་འདི་ངེས་འཛིན་འབད་ཡོདཔ་ཨིན་ དེ་འབདཝ་ད་ dApps གིས་ རིམ་པ་ལུ་རྒྱབ་འགལ་འབད་བའི་སྐབས་ རིམ་སྒྲིག་འགོག་སྲུང་འབད་མི་ལུ་ `Control::RotateKeys` གཞི་ཁྲམ་ཅིག་བཏོན་ཞིནམ་ལས་ དངུལ་ཁུག་ཚུ་ མི་མང་ལྡེ་མིག་གསརཔ་དང་གཅིག་ཁར་ ལན་འཇལཝ་ཨིན།
+- དངུལ་ཁུག་གི་ཕྱོགས་ལྡེ་མིག་གྱོང་གུན་ ལག་འཐུམ་གཅིག་པ་དེ་ `resume` ཚད་འཛིན་གྱི་ ཚད་འཛིན་འབདཝ་ཨིནམ་ལས་ dApps གིས་ དགོངས་ཞུ་ལྡེ་མིག་ལུ་དམིགས་གཏད་བསྐྱེད་མི་ chished cichet flutext ལུ་ཤེས་ཚུགས།
 
-### Rotation & recovery handshake
+རྒྱལ་རབས་ཅན་གྱི་ CryptoKit fallbacks ལུ་ `docs/connect_swift_ios.md` ལུ་བལྟ། ཀོཊ་ལིན་དང་ཇེ་ཨེསི་གིས་ `docs/connect_kotlin_ws*.md` གི་འོག་ལུ་ གཞི་བསྟུན་ཚུ་དང་མཐུན་སྒྲིག་ཡོདཔ་ཨིན།
 
-- Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
-- Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
+## གནང་བ་དང་བདེན་ཁུངས་ཚུ།
 
-For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS have matching references under `docs/connect_kotlin_ws*.md`.
-
-## Permissions & Proofs
-
-- Permission manifests must round-trip through the shared Norito struct exported by the bridge.  
-  Fields:
-  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — subscriptions the dApp is allowed to attach to.  
-  - `resources` — optional account/asset filters so wallets can scope access.  
-  - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
-- Compliance metadata rides alongside permissions:
-  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).  
-  - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
-- Wallet responses use the agreed codes:
+- གནང་བ་གསལ་སྟོན་ཚུ་ ཟམ་གྱིས་ཕྱིར་འདྲེན་འབད་མི་ བརྗེ་སོར་གྱི་ Norito བརྒྱུད་དེ་ སྐོར་རིམ་ཚུ་ སྐོར་ཐེངས་འབད་དགོ།  
+  ས་ཁྲ་ཚུ།
+  - `methods` — བྱ་ཚིག་ (`sign_transaction`, `sign_raw`, `submit_proof`, ...)  
+  - `events` — dApp འདི་ མཉམ་སྦྲགས་འབད་བཅུགཔ་ཨིན།  
+  - `resources` — གདམ་ཁའི་རྩིས་ཐོ་/རྒྱུ་དངོས་ཚགས་མ་ཚུ་གིས་ འཛུལ་སྤྱོད་ཀྱི་གོ་སྐབས་བྱིན་ཚུགས།  
+  - `constraints` — རིམ་སྒྲིག་ ID, TTL, ཡང་ན་ སྲོལ་སྒྲིག་སྲིད་བྱུས་ཀྱི་ མཐུད་སྒྲུབ།
+- བསྟར་སྤྱོད་ཀྱི་མེ་ཊ་ཌེ་ཊ་གིས་ གནང་བ་ཚུ་དང་གཅིག་ཁར་ ཨེབ་གཏང་འབདཝ་ཨིན།
+  - གདམ་ཁ་ཅན་གྱི་ `attachments[]` ནང་ Norito མཉམ་སྦྲགས་གཞི་བསྟུན་ (KYC bundles, ཉེན་ལེན་གྱི་འཐུས་) ཚུ་ཡོདཔ་ཨིན།  
+  - `compliance_manifest_id` གིས་ ཧེ་མ་ལས་ ཆ་འཇོག་གྲུབ་པའི་ གསལ་སྟོན་ཅིག་ལུ་ ཞུ་བ་འདི་ མཐུད་ཡོདཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འབྱུང་ཁུངས་རྩིས་ཞིབ་འབད་ཚུགས།
+- དངུལ་ཁུག་ལན་འདེབས་ཚུ་གིས་ མོས་མཐུན་འབད་ཡོད་པའི་ཨང་རྟགས་ཚུ་ལག་ལེན་འཐབ་ཨིན།
   - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
-  Each may carry a `localized_message` for UI hints plus a machine-readable `reason_code`.
-- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `offline_queue_enabled`).  
-  Rejections mirror the same schema with empty `proof` but still record the `sid` for auditability.
+  རེ་རེ་གིས་ ཡུ་ཨའི་ བརྡ་སྟོན་ཚུ་གི་དོན་ལུ་ `localized_message` འབག་འོང་།
+- ཆ་འཇོག་གཞི་ཁྲམ་ཚུ་ནང་ སེལ་འཐུ་འབད་ཡོད་པའི་རྩིས་ཐོ་/ཚད་འཛིན་ གནང་བ་བསྐྱར་སྒྲ་ བདེན་ཁུངས་ཀྱི་བཱན་ཌལ་ (ZK བདེན་ཁུངས་ཡང་ན་ བདེན་ཁུངས་བཀལ་ནི) དང་ སྲིད་བྱུས་བསྒྱུར་བཅོས་གང་རུང་ཅིག་ (དཔེར་ན་ `offline_queue_enabled`) ཚུ་ཚུདཔ་ཨིན།  
+  བཀག་ཆ་འབད་མི་ཚུ་གིས་ `proof` སྟོངམ་ཡོད་པའི་ ལས་རིམ་གཅིག་པ་ལུ་ གསལ་སྟོན་འབདཝ་ཨིན་རུང་ རྩིས་ཞིབ་འབད་ནི་གི་དོན་ལུ་ `sid` འདི་ ད་ལྟོ་ཡང་ ཐོ་བཀོད་འབདཝ་ཨིན།
 
-## SDK Facades
+## ཨེསི་ཌི་ཀེ་ཕེཌ་ཚུ།
 
-| SDK | Proposed API | Notes |
-|-----|--------------|-------|
-| Swift | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | Replace placeholders with typed wrappers + async streams. |
-| Android | Kotlin coroutines + sealed classes for frames | Align with Swift structure for portability. |
-| JS | Async iterators + TypeScript enums for frame kinds | Provide bundler-friendly SDK (browser/node). |
+| ཨེསི་ཌི་ཀེ་ | གྲོས་འཆར་ཨེ་པི་ཨའི་ | དྲན་ཐོ། |
+|------|---------------------|----------|
+| སུའིཕཊི་ | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ བཀབ་ཆ་ + async རྒྱུན་ལམ་ཚུ་དང་གཅིག་ཁར་ ས་གནས་འཛིན་མི་ཚུ་ཚབ་བཙུགས། |
+| Android | ཀོཊ་ལིན་ཀོ་རོ་ཊིན་ + གཞི་ཁྲམ་གྱི་དོན་ལུ་ བསྡམ་བཞག་ཡོད་པའི་འཛིན་གྲྭ། | འབག་བཏུབ་པའི་དོན་ལུ་ སོར་བསྒྱུར་གཞི་བཀོད་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད། |
+| ཇེ་ཨེསི་ | Asnc བསྐྱར་ལོག་འབད་མི་ + གཞི་ཁྲམ་རིགས་ཀྱི་དོན་ལུ་ དབྱེ་བ་ཡིག་གཟུགས་ཚུ་ རྩིས་རྐྱབ་ཨིན། | བཱན་ཌི་ལར་དང་མཐུན་སྒྲིག་ཅན་གྱི་ཨེསི་ཌི་ཀེ་ (བརྡ་འཚོལ་/མཐུད་མཚམས་)བྱིན། |
 
-### Common behaviours
-
-- `ConnectSession` orchestrates lifecycle:
-  1. Establish WebSocket, perform handshake.
-  2. Exchange open/approve frames.
-  3. Handle sign requests/responses.
-  4. Emit events to application layer.
-- Provide high-level helpers:
+### ཐུན་མོང་གི་སྤྱོད་ལམ།- `ConnectSession` སྲོག་ཆགས་འཁོར་རིམ་:
+  ༡ ཝེབ་སོ་ཀེཊ་གཞི་བཙུགས་འབད་དེ་ ལགཔ་འཐུད་དགོ།
+  2. ཁ་ཕྱེ་/ཆ་འཇོག་གཞི་ཁྲམ་ཚུ་བརྗེ་སོར་འབད།
+  3. ལག་རྟགས་ཀྱི་ཞུ་བ་/ལན་འདེབས་ཚུ།
+  ༤ གློག་རིམ་བང་རིམ་ལུ་ བྱུང་ལས་ཚུ་ བཏོནམ་ཨིན།
+- མཐོ་རིམ་གྲོགས་རམ་པ་ཚུ་བྱིན་ནི།
   - `requestSignature(tx, metadata)`
   - `approveSession(account, permissions)`
   - `reject(reason)`
-  - `cancelRequest(hash)` – emits a control frame acknowledged by the wallet.
-- Error handling: map Norito error codes to SDK-specific errors; include
-  domain-specific codes for UI using the shared taxonomy (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). Swift's baseline implementation + telemetry guide lives in [`connect_error_taxonomy.md`](connect_error_taxonomy.md) and is the reference for Android/JS parity.
-- Emit telemetry hooks for queue depth, reconnect counts, and request latency (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
+  - `cancelRequest(hash)` – དངུལ་ཁུག་གིས་ངོས་ལེན་འབད་མི་ ཚད་འཛིན་གཞི་ཁྲམ་ཅིག་བཏོན་གཏངམ་ཨིན།
+- འཛོལ་བའི་འཛིན་སྐྱོང་: སབ་ཁྲ་ Norito འཛོལ་བ་ཨང་རྟགས་ཚུ་ ཨེསི་ཌི་ཀེ་-དམིགས་བསལ་འཛོལ་བ་ཚུ་ལུ་; རྩིས༌ཏེ༌
+  མངའ་ཁོངས་-དམིགས་བསལ་གྱི་གསང་གྲངས་ (`Transport`, `Codec`, `Authorization`, `QueueOverflow`, `QueueOverflow`, `QueueOverflow`, `Internal`). སུའིཕཊ་གི་གཞི་རྟེན་ལག་ལེན་འཐབ་ཐངས་ + ཊེ་ལི་མི་ཊི་ལམ་སྟོན་འདི་ [Norito](connect_error_taxonomy.md) ནང་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+- བང་རིམ་གཏིང་ཚད་དང་ གྱངས་ཁ་ཚུ་ ལོག་མཐུད་ནི་ དེ་ལས་ ཞུ་བ་འབད་ནིའི་ བར་ཆད་ཚུ་གི་དོན་ལུ་ ཊེ་ལི་མི་ཊི་རི་ ཧུཀ་ཚུ་ བཏོན་དགོ།
  
-## Sequence Numbers & Flow Control
+## རིམ་ཨང་དང་ རྒྱུན་རིམ་གྱི་རྒྱུན་རིམ་།
 
-- Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
-- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Wallets advertise back-pressure via a logical window (`FlowControl` control frames). DApps dequeue only when a window token is available; wallets emit new tokens after processing ciphertext to keep pipelines bounded.
-- Resume negotiation is explicit: both sides emit `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` after reconnecting so observers can verify how much data was re-sent and whether journals contain gaps.
-- Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
+- ཕྱོགས་རེ་རེ་གིས་ ལཱ་ཡུན་འདི་ཁ་ཕྱེ་བའི་སྐབས་ ཀླད་ཀོར་ལས་འགོ་བཙུགས་མི་ ༦༤-བིཊི་ `sequence` གྱངས་ཁ་འདི་བཞགཔ་ཨིན། བརྗེ་སོར་གྱི་གྲོགས་རམ་གྱི་དབྱེ་བ་ཚུ་ ཡར་སེང་འབད་དེ་ `ConnectError.sequenceOverflow` + ལྡེ་མིག་བསྒྱིར་ནི་གི་ལགཔ་འདི་ མ་བཤུབ་པའི་ཧེ་མ་ ལེགས་ཤོམ་སྦེ་ འབྱུང་བཅུགཔ་ཨིན།
+- ནོནསི་དང་ འབྲེལ་མཐུད་ཅན་གྱི་གནད་སྡུད་ཚུ་གིས་ གོ་རིམ་ཨང་ལུ་གཞི་བསྟུན་འབདཝ་ལས་ འདྲ་བཤུས་ཚུ་ པེ་ལོཌི་ཚུ་ མིང་དཔྱད་མ་འབད་བར་ ངོས་ལེན་མ་འབད་བར་བཞག་ཚུགས། SDKs གིས་ `{sid, dir, seq, payload_hash}` གིས་ ཁོང་རའི་དུས་དེབ་ནང་ལུ་ ཉམས་བཅོས་འབད་ནི་གི་ཐག་བཅད་ནི་ལུ་ འདྲ་དཔེ་བཟོ་ནི་གི་ཐག་བཅད་ནིའི་དོན་ལུ་ གསོག་འཇོག་འབད་དགོ།
+- དངུལ་ཁུག་ཚུ་གིས་ གཏན་ཚིག་ཅན་གྱི་སྒོ་སྒྲིག་བརྒྱུད་དེ་ རྒྱབ་ལོག་གནོན་ཤུགས་ཁྱབ་བསྒྲགས་འབདཝ་ཨིན། (`FlowControl` ཚད་འཛིན་གཞི་ཁྲམ་ཚུ།) Dapps ཚུ་ སྒོ་སྒྲིག་ཅིག་འཐོབ་ཚུགས་པའི་སྐབས་རྐྱངམ་ཅིག་ གཏན་འབེབས་བཟོཝ་ཨིན། ཝལ་ཊིསི་གིས་ མཐའ་མཚམས་བཞག་ནི་གི་དོན་ལུ་ སི་ཕར་ཊེགསི་བཟོ་བའི་ཤུལ་ལས་ ཊོ་ཀེན་གསརཔ་ཚུ་ བཏོནམ་ཨིན།
+- བསྐྱར་ཞིབ་གྲོས་བསྟུན་འདི་ གསལ་ཏོག་ཏོ་སྦེ་ཡོདཔ་ཨིན། ཕྱོགས་གཉིས་ཆ་ར་གིས་ ལོག་སྟེ་མཐུད་པའི་ཤུལ་ལས་ བལྟ་རྟོག་པ་ཚུ་གིས་ གནས་སྡུད་ག་དེ་ཅིག་ ལོག་གཏང་ཡོདཔ་ཨིན་ན་དང་ དུས་དེབ་ཚུ་གི་བར་སྟོང་ཡོདཔ་ཨིན་ན་ བདེན་དཔྱད་འབད་ཚུགས།
+- འཁྲུག་རྩོད་ཚུ་ (དཔེར་ན་ `(sid, dir, seq)` ཅོག་འཐདཔ་ཨིན་རུང་ hashes སོ་སོ་ཡོད་མི་ པེ་ལོཌ་གཉིས་) འདི་གིས་ `ConnectError.Internal` ལུ་ ཡར་འཕར་འགྱོ་སྟེ་ ཁུ་སིམ་སིམ་སྦེ་ ཁ་སྟོར་མ་འགྱོ་བར་ `ConnectError.Internal` གསརཔ་བཙུགས་བཅུགཔ་ཨིན།
 
-## Threat model and data retention alignment
+## ཉེར་མཁོའི་དཔེ་ཚད་དང་ གནད་སྡུད་བདག་འཛིན་གྱི་ཕྲང་ཐངས།-*ཁ་ཐོག་ཚུ་ བརྩི་འཇོག་འབད་ཡོདཔ་ཨིན།:** ཝེབ་སོ་ཀེཊི་སྐྱེལ་འདྲེན་, I1NT00000010X ཟམ་ཨིན་ཀོཌི་/ཌི་ཀོཌི་།
+  དུས་དེབ་ཀྱི་ བརྩོན་ཤུགས་དང་ ཊེ་ལི་མི་ཊི་ཕྱིར་ཚོང་པ་ཚུ་ དེ་ལས་ གློག་རིམ་ལུ་གདོང་ལེན་འབད་མི་ ཁ་པར་ལོག་ཚུ་ འབད་ཡོདཔ།
+- **གཙོ་བོའི་དམིགས་ཡུལ་ཚུ་:** ལཱ་ཡུན་གསང་བ་ཚུ་སྲུང་སྐྱོབ་འབད་ (X25519 ལྡེ་མིག་ཚུ་, བཏོན་གཏང་ལྡེ་མིག་ཚུ།,
+  nonce/sequence counts) དྲན་ཐོ་/བརྒྱུད་འཕྲིན་ནང་ ཆུ་འཛག་ནི་ལས་ བསྐྱར་རྩེད་འབད་ནི་ལས་ བཀག་ཐབས་འབད་ནི།
+  མར་ཕབ་ཀྱི་འཇབ་རྒོལ་དང་ དུས་དེབ་དང་ མ་འདྲ་བའི་སྙན་ཞུ་ཚུ་ བཀག་བཞག་ནི།
+- **གནས་སྤོ་འབད་མི་ཚུ་ གསང་ཨང་བཀོད་ཡོདཔ།:**
+  - དུས་དེབ་ཚུ་གིས་ སི་ཕར་ཊེགསི་རྐྱངམ་ཅིག་ འབག་འོང་། མེ་ཊ་ཌེ་ཊ་ འདི་ ཧེསི་ལུ་ཚད་འཛིན་འབད་ཡོདཔ་ཨིན། རིང་ཚད་ རིང་ཚད་ཨིན།
+    ས་སྒོ་དང་ དུས་ཚོད་ དེ་ལས་ གོ་རིམ་ཨང་གྲངས།
+  - ཊེ་ལི་མི་ཊི་པེ་ལོཌི་གིས་ མགོ་ཡིག་/གླ་ཆ་སྤྲོད་མི་ ནང་དོན་གང་རུང་ཅིག་དང་ རྐྱངམ་ཅིག་ ཚུདཔ་ཨིན།
+    `sid` གི་ཚྭ་ཅན་གྱི་ཧ་ཤེ་དང་ བསྡོམས་རྩིས་བསྡོམས་རྩིས་ཚུ། redaction ཞིབ་དཔྱད་ཐོ་ཡིག་རུབ་སྤྱོད་འབད་ཡོདཔ།
+    རྩིས་ཞིབ་ཆ་སྙོམས་ཀྱི་དོན་ལུ་ SDKs བར་ན།
+  - ལཱ་ཡུན་དྲན་དེབ་ཚུ་ སྔོན་སྒྲིག་ཐོག་ལས་ ཉིན་གྲངས་༧ གྱི་ཤུལ་ལས་ བསྒྱིར་ཞིནམ་ལས་ ལོ་ཚད་བཏོན་ཡོདཔ་ཨིན། དངུལ་ཁུག་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+    a `connectLogRetentionDays` མཛུབ་མོ་ (SDK freect 7) དང་ སྤྱོད་ལམ་འདི་ཡིག་ཐོག་ལུ་བཀོད་དོ།
+    དེ་འབདཝ་ལས་ ཁྲིམས་ལུགས་བཀྲམ་སྤེལ་ཚུ་གིས་ སྒོ་སྒྲིག་ཚུ་ དམ་དམ་སྦེ་ བཙུགས་ཚུགས།
+  - ཟམ་གྱི་ཨེ་པི་ཨའི་ མ་བདེཝ་ (བསྡམས་པའི་ ངན་ལྷད་ཀྱི་ སི་ཕར་ཊེགསི་ ནུས་མེད་རིམ་པ།)
+    སླར་ལོག་ཡིག་དཔར་རྐྱབས་ཡོད་པའི་འཛོལ་བ་ཚུ་ པེ་ལོཌི་ཚུ་ ཡང་ན་ ལྡེ་མིག་ཚུ་ བསྐྱར་སྒྲོག་མ་འབད་བས།
 
-- **Surfaces considered:** WebSocket transport, Norito bridge encode/decode,
-  journal persistence, telemetry exporters, and app-facing callbacks.
-- **Primary goals:** protect session secrets (X25519 keys, derived AEAD keys,
-  nonce/sequence counters) from leaks in logs/telemetry, prevent replay and
-  downgrade attacks, and bound retention of journals and anomaly reports.
-- **Mitigations codified:**
-  - Journals carry ciphertext only; metadata stored is limited to hashes, length
-    fields, timestamps, and sequence numbers.
-  - Telemetry payloads redacts any header/payload content and includes only
-    salted hashes of `sid` plus aggregate counters; redaction checklist shared
-    between SDKs for audit parity.
-  - Session logs are rotated and age out after 7 days by default. Wallets expose
-    a `connectLogRetentionDays` knob (SDK default 7) and document the behaviour
-    so regulated deployments can pin stricter windows.
-  - Bridge API misuse (missing bindings, corrupt ciphertext, invalid sequence)
-    returns typed errors without echoing raw payloads or keys.
+བསྐྱར་ཞིབ་ལས་ དྲི་བ་ཚུ་ བསྒུག་སྟེ་ཡོད་མི་འདི་ `docs/source/sdk/swift/connect_workshop.md` ནང་ལུ་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།
+དེ་ལས་ ཚོགས་སྡེའི་སྐར་མ་ཚུ་ནང་ ཐག་བཅད་འོང་། ཚར་གཅིག་ མེ་ཏོག་འདི་ སྒོ་བསྡམ་འོང་།
+ངོས་ལེན་འབད་ནིའི་དོན་ལུ་ ཟིན་བྲིས་ལས་ ཡར་འཕར་གཏང་ཡོདཔ།
 
-Pending questions from review are tracked in `docs/source/sdk/swift/connect_workshop.md`
-and will be resolved in the council minutes; once closed the strawman will be
-promoted from draft to accepted.
+## ཕྱིར་གཏོང་བཱ་ཕར་དང་ བསྐྱར་མཐུན།
 
-## Offline Buffering & Reconnections
+### གསར་འགོད་ཀྱི་གན་རྒྱ།
 
-### Journaling contract
-
-Every SDK maintains an append-only journal per session so the dApp and wallet
-can queue frames while offline, resume without data loss, and provide evidence
-for telemetry. The contract mirrors the Norito bridge types so the same byte
-representation survives across the mobile/JS stacks.
-
-- Journals live under a hashed session identifier (`sha256(sid)`), producing two
-  files per session: `app_to_wallet.queue` and `wallet_to_app.queue`. Swift uses
-  a sandboxed file wrapper, Android stores the files via `Room`/`FileChannel`,
-  and JS writes to IndexedDB; all formats are binary and endian-stable.
-- Each record serialises as `ConnectJournalRecordV1`:
+ཨེསི་ཌི་ཀེ་རེ་རེ་གིས་ ལཱ་ཡུན་རེ་ལུ་ ཟུར་དེབ་རྐྱངམ་ཅིག་ བདག་འཛིན་འཐབ་དོ་ཡོདཔ་ལས་ ཌི་ཨེ་པི་དང་ དངུལ་ཁང་འདི་ཨིན།
+བང་རིམ་གྱི་གཞི་ཁྲམ་ཚུ་ ཡོངས་འབྲེལ་ནང་ཡོད་པའི་སྐབས་ གནས་སྡུད་བརླག་སྟོར་ཞུགས་མེད་པར་ བསྐྱར་གསོ་འབད་ནི་ དེ་ལས་ སྒྲུབ་བྱེད་ཚུ་བྱིན་ཚུགས།
+telemetry གི་དོན་ལུ་ཨིན། གན་ཡིག་འདི་གིས་ Norito ཟམ་གྱི་དབྱེ་བ་ཚུ་ གསལ་སྟོན་འབདཝ་ལས་ བཱའིཊི་གཅིག།
+ངོ་ཚབ་འདི་ འགྲུལ་འཕྲིན་/JS བང་རིམ་ཚུ་ནང་ལས་ ཐར་ཚུགསཔ་ཨིན།- དུས་དེབ་ཚུ་ ཧ་ཤིཌ་ ལཱ་ཡུན་ངོས་འཛིན་འབད་མི་ (`sha256(sid)`) གི་འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+  ལཱ་ཡུན་རེ་ལུ་ཡིག་སྣོད་ཚུ་: `app_to_wallet.queue` དང་ `wallet_to_app.queue`. སུའིཕཊི་ལག་ལེན་འཐབ་ཨིན།
+  sathboxed ཡིག་སྣོད་བཀབ་ཆ་ a Android གིས་ `Room`/`FileChannel` བརྒྱུད་དེ་ ཡིག་སྣོད་ཚུ་ གསོག་འཇོག་འབདཝ་ཨིན།
+  དང་ JS གིས་ IndexedDB ལུ་བྲིས་ཡོདཔ་ཨིན། རྩ་སྒྲིག་ཆ་མཉམ་ གཉིས་ལྡན་དང་ endian-stable ཨིན།
+- ཐོ་བཀོད་རིམ་སྒྲིག་རེ་རེ་བཞིན་ `ConnectJournalRecordV1`: སྦེ་:
   - `direction: u8` (`0 = app→wallet`, `1 = wallet→app`)
   - `sequence: u64`
-  - `payload_hash: [u8; 32]` (Blake3 of ciphertext + headers)
+  - `payload_hash: [u8; 32]` (སི་ཕར་ཊེགསི་ + མགོ་ཡིག་ཚུ་གི་ བེལེཀ་༣)
   - `ciphertext_len: u32`
   - `received_at_ms: u64`
   - `expires_at_ms: u64`
-  - `ciphertext: [u8; ciphertext_len]` (exact Norito frame already AEAD-wrapped)
-- Journals store ciphertext verbatim. We never re-encrypt the payload; AEAD
-  headers already authenticate direction keys, so persistence reduces to
-  fsyncing the appended record.
-- A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
-  bytes used, oldest/newest seq). It feeds the telemetry exporters and the
-  `FlowControl` helper.
-- Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
-  oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
-  overrides these defaults per deployment.
-- Journals retain data for 24 h (`expires_at_ms`). Background GC removes stale
-  segments eagerly so the on-disk footprint stays bounded.
-- Crash safety: append, fsync, and update the memory mirror _before_ notifying
-  the caller. On startup, SDKs scan the directory, validate record checksums,
-  and rebuild `ConnectQueueState`. Corruption causes the offending record to be
-  skipped, flagged via telemetry, and optionally quarantined for support dumps.
-- Because ciphertext already satisfies the Norito privacy envelope, the only
-  additional metadata recorded is the hashed session id. Apps wanting extra
-  privacy can opt into `telemetry_opt_in = false`, which stores journals but
-  redacts queue-depth exports and disables sharing hashed `sid` in logs.
-- SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
-  drains, and GC outcomes; this hook feeds status UIs without parsing logs.
+  - `ciphertext: [u8; ciphertext_len]` (ནུས་མེད་ Norito གཞི་ཁྲམ་འདི་ཧེ་མ་ལས་རང་ AEAD-wraped)
+- དུས་དེབ་ཚུ་གིས་ སི་ཕར་ཊེགསི་ ཚིག་ཕྲེང་འདི་ གསོག་འཇོག་འབདཝ་ཨིན། ང་བཅས་ཀྱིས་ པེ་ལོཌ་འདི་ ནམ་ཡང་ལོག་སྟེ་ གསང་བཟོ་འབདཝ་ཨིན། AEAD
+  མགོ་ཡིག་ཚུ་གིས་ ཧེ་མ་ལས་རང་ ལམ་སྟོན་ལྡེ་མིག་ཚུ་ བདེན་བཤད་འབད་ཡོདཔ་ལས་ རྟག་བརྟན་འདི་ ལུ་མར་ཕབ་འབདཝ་ཨིན།
+  fsyning ཟུར་ཐོ་ཐོ་བཀོད་འདི་ཨིན།
+- དྲན་ཚད་ནང་ `ConnectQueueState` གིས་ ཡིག་སྣོད་མེ་ཊ་ཌེ་ཊ་ (ཞིབ་ཞིབ་སྦེ་,
+  བཱའིཊི་ཚུ་ལག་ལེན་འཐབ་ཡོདཔ་, རྙིང་ཤོས་/གསར་པ/གསརཔ་མེདཔ།)། འདི་གིས་ ཊེ་ལི་མི་ཊི་ཕྱིར་ཚོང་པ་ཚུ་ལུ་ ལྟོ་བྱིནམ་ཨིན།
+  `FlowControl` རོགས་སྐྱོར།
+- དུས་དེབ་ཚུ་ གཞི་ཁྲམ་༣༢ ལུ་ ཀེར་ཕྲང་ / སྔོན་སྒྲིག་གིས་ 1MiB; མགུ་ཏོག་བཏོན་བཏང་མི་འདི་ཨིན།
+  འཛུལ་ཞུགས་རྙིང་ཤོས་ (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
+  གིས་ སྔོན་སྒྲིག་འདི་ཚུ་ བཀྲམ་སྤེལ་རེ་ལུ་ བརྡ་སྟོནམ་ཨིན།
+- དུས་དེབ་ཚུ་གིས་ ༢༤ ཆུ་ཚོད་ (`expires_at_ms`) གི་དོན་ལུ་ གནས་སྡུད་བཞག་ཡོདཔ་ཨིན། རྒྱབ་གཞིའི་ ཇི་སི་གིས་ སྒྲུང་སྒྲིག་ཚུ་ རྩ་བསྐྲད་གཏངམ་ཨིན།
+  ཆ་ཤས་ཚུ་ ཌིཀསི་གུ་ཡོད་པའི་ རྐང་རྗེས་འདི་ མཚམས་འཇོག་འབད་དེ་ སྡོད་དོ་ཡོདཔ་ཨིན།
+- ཉེན་སྲུང་འདི་ བརྡབ་གསིག་: མཐུད་མཚམས་ fsync, དང་ དྲན་ཚད་མེ་ལོང་ _fefor_ བརྡ་བསྐུལ་འབད་ནི།
+  ཁ་པར་བཏང་མི་། འགོ་བཙུགས་པའི་སྐབས་ ཨེསི་ཌི་ཀེ་ཨེསི་གིས་ སྣོད་ཐོ་འདི་ པར་ལོག་བཏབ་སྟེ་ དྲན་ཐོ་ཞིབ་དཔྱད་སམ་ཚུ་ བདེན་དཔྱད་འབད།
+  དང་ `ConnectQueueState` བསྐྱར་བཟོ་འབད་ཡོདཔ། ངན་ལྷད་ཀྱིས་ ཉེས་ཅན་དྲན་ཐོ་འདི་ འབྱུང་བཅུགཔ་ཨིན།
+  soked དང་ བརྡ་འཕྲིན་བརྒྱུད་དེ་ དར་ཁྱབ་བཏང་ཡོདཔ་མ་ཚད་ གདམ་ཁ་ཅན་སྦེ་ རྒྱབ་སྐྱོར་གྱི་ བགོ་ལ་ཚུ་ ཟུར་བཞག་ཡོདཔ་ཨིན་པས།
+- ག་ཅི་འབད་ཟེར་བ་ཅིན་ སི་ཕར་ཊེགསི་གིས་ ཧེ་མ་ལས་རང་ Norito སྒེར་དོན་གྱི་ཡིག་ཤུབས་འདི་ བསྒྲུབ་ཚུགསཔ་ཨིན།
+  ཁ་སྐོང་མེ་ཊ་ཌེ་ཊ་འདི་ ཧ་ཤིཌ་ལཱ་ཡུན་ཨའི་ཌི་ཨིན། ཁ་སྐོང་དགོ་པའི་གློག་རིམ་ཚུ།
+  སྒེར་གསང་འདི་ `telemetry_opt_in = false` ནང་ དུས་དེབ་ཚུ་ གསོག་འཇོག་འབདཝ་ཨིན།
+  གྱལ་རིམ་གཏིང་ཟབ་ཕྱིར་འདྲེན་དང་ བརྗེ་སོར་བརྗེ་སོར་ཚུ་ ལྕོགས་མིན་བཟོཝ་ཨིནམ་ད་ དྲན་ཐོ་ཚུ་ནང་ `sid` གིས་ དཀའ་ངལ་བཟོཝ་ཨིན།
+- SDKs གིས་ `ConnectQueueObserver` ཕྱིར་བཏོན་འབདཝ་ལས་ དངུལ་ཁུག་/ཌི་ཨེཔ་ཨེསི་ཚུ་གིས་ བང་རིམ་གཏིང་ཚད་བརྟག་དཔྱད་འབད་ཚུགས།
+  ཆུ་གཡུར་དང་ GC གྲུབ་འབྲས། འདི་ ཧུཀ་འདི་གིས་ དྲན་ཐོ་ཚུ་དབྱེ་དཔྱད་མ་འབད་བར་ UIs གནས་རིམ་ཚུ་བྱིནམ་ཨིན།
 
-### Replay & resume semantics
+### བསྐྱར་རྩེད་དང་ ཡིག་སྡེ།
 
-1. When reconnecting, SDKs emit `Control::Resume` with `{seq_app_max,
-   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. The hash is the
-   Blake3 digest of the append-only journal so mismatched peers can detect drift.
-2. The receiving peer compares the resume payload with its state, requests
-   retransmission when gaps exist, and acknowledges replayed frames via
+1. ལོག་སྟེ་མཐུད་པའི་སྐབས་ SDKs གིས་ `Control::Resume` འདི་ `seq_app_max, དང་ཅིག་ཁར་ བཤུབ་བཏངམ་ཨིན།
+   seq_wallet_max, ཀིའུ་ཨི་ཌི་_ཨེཔ་, ཀིའུ་ཨི་ཌི་_ཝ་ལེཊི་ དུས་དེབ་_ཧ་ཤི་}`. ཧ་ཤི་འདི་ཨིན།
+   Blake3 གིས་ མགུ་སྐོར་རྐྱངམ་ཅིག་གི་ དུས་དེབ་ཀྱི་ འཇུ་བ་འདི་གིས་ མཉམ་རོགས་ཀྱིས་ འཕྱེལ་འགྱོ་མི་འདི་ ཤེས་རྟོགས་འབད་ཚུགས།
+༢ ཐོབ་མི་ མཉམ་རོགས་ཀྱིས་ མི་ཚེའི་ལོ་རྒྱུས་ཀྱི་ པེ་ལོཌ་འདི་ དེ་གི་གནས་སྟངས་དང་གཅིག་ཁར་ ག་བསྡུར་འབདཝ་ཨིན།
+   བར་སྟོང་ཡོད་པའི་སྐབས་ བསྐྱར་གཏང་འབད་ཞིནམ་ལས་ བརྒྱུད་དེ་ གཞི་ཁྲམ་ཚུ་ ལོག་སྟེ་རྩེད་མི་ལུ་ ངོས་ལེན་འབདཝ་ཨིན།
    `Control::ResumeAck`.
-3. Replayed frames always respect insertion order (`sequence` then write-time).
-   Wallet SDKs MUST apply back-pressure by issuing `FlowControl` tokens (also
-   journaled) so dApps cannot flood the queue while offline.
-4. Journals store ciphertext verbatim, so replay simply pumps the recorded bytes
-   back through the transport and decoder. No per-SDK re-encoding is allowed.
+༣ བསྐྱར་རྩེད་འབད་མི་གཞི་ཁྲམ་ཚུ་གིས་ དུས་རྒྱུན་དུ་ བཙུགས་ནིའི་གོ་རིམ་ལུ་གུས་ཞབས་འབད་ (`sequence` དེ་ལས་ འབྲི་ནི་གི་དུས་ཚོད་)།
+   Wallet SDKs `FlowControl` ཊོ་ཀེན་ཚུ་བཏོན་ཐོག་ལས་ རྒྱབ་ལོག་གནོན་ཤུགས་འཇུག་སྤྱོད་འབད་དགོ།
+   besded) དེ་འབདཝ་ལས་ dApps གིས་ Offline འབད་བའི་སྐབས་ གྱལ་རིམ་ནང་ ཆུ་རུད་འཐོན་མི་ཚུགས།
+༤ དུས་དེབ་ཚུ་གིས་ སི་ཕར་ཊེགསི་ verbatim བསག་བཞག་དོ་ཡོདཔ་ལས་ བསྐྱར་རྩེད་འདི་གིས་ ཐོ་བཀོད་འབད་ཡོད་པའི་བཱའིཊི་ཚུ་ ཕུལཝ་ཨིན།
+   ཕྱིར་ལོག་སྐྱེལ་འདྲེན་དང་ཌི་ཀོཌར་བརྒྱུད་དེ་། ཨེསི་ཌི་ཀེ་ ལོག་སྟེ་ཨིན་ཀོ་ཌིང་འབད་མི་ཆོག།
 
-### Reconnection flow
+### བསྐྱར་མཐུད་ཀྱི་རྒྱུན་འབབ་།༡ སྐྱེལ་འདྲེན་འདི་ ཝེབ་སོ་ཀེཊི་ལོག་སྟེ་གཞི་བཙུགས་འབད་དེ་ པི་རིང་བར་མཚམས་གསརཔ་གི་སྐོར་ལས་ གྲོས་བསྟུན་འབད་དོ་ཡོདཔ་ཨིན།
+2. dApp གིས་ གོ་རིམ་བཞིན་དུ་ བང་རིམ་གཞི་ཁྲམ་ཚུ་ བསྐྱར་རྩེད་འབདཝ་ཨིན།
+   (`ConnectSession.nextControlFrame()` ཐོན་ཤུགས་`FlowControl` ཊོ་ཀེན་ཚུ།)
+༣ ཝ་ལེཊི་གིས་ བཱ་ཕར་འབད་ཡོད་པའི་གྲུབ་འབྲས་ཚུ་ གསང་བཟོ་འབདཝ་ཨིནམ་དང་ གོ་རིམ་གཅིག་པའི་ཚད་གཞི་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+   བསྒུལ་པའི་ཆ་འཇོག་ཚུ་བསྐྱར་རྩེད་འབདཝ་ཨིན།
+4. ཕྱོགས་གཉིས་ཆ་ར་གིས་ `resume` `seq_app_max`, `seq_wallet_max`, བཅུད་བསྡུ་སྟེ་ ཚད་འཛིན་འབདཝ་ཨིན།
+   དང་ ཊེ་ལི་མི་ཊི་གི་དོན་ལུ་ བང་རིམ་གཏིང་ཚད་ཚུ།
+༥ གཞི་ཁྲམ་འདྲ་བཤུས་ (མཐུན་སྒྲིག་ `sequence` + `payload_hash`) ངོས་ལེན་འབད་དེ་ བཀོག་བཞག་ཡོདཔ་ཨིན། འཁྲུག་རྩོད་ཚུ་གིས་ `ConnectError.Internal` ཡར་སེང་འབདཝ་ཨིནམ་དང་ བཙན་ཤེད་ཀྱིས་ ལཱ་ཡུན་ཚུ་ ལོག་འགོ་བཙུགས་བཅུགཔ་ཨིན།
 
-1. Transport re-establishes WebSocket and negotiates new ping interval.
-2. dApp replays queued frames in order, respecting back-pressure from wallet
-   (`ConnectSession.nextControlFrame()` yields `FlowControl` tokens).
-3. Wallet decrypts buffered results, verifies sequence monotonicity, and
-   replays pending approvals/results.
-4. Both sides emit a `resume` control summarising `seq_app_max`, `seq_wallet_max`,
-   and queue depths for telemetry.
-5. Duplicate frames (matching `sequence` + `payload_hash`) are acknowledged and dropped; conflicts raise `ConnectError.Internal` and trigger a forced session restart.
+### འཐུས་ཤོར་གྱི་ཐབས་ལམ།
 
-### Failure modes
+- ལཱ་ཡུན་འདི་ རྒྱུན་ལམ་སྦེ་བརྩི་བ་ཅིན་ (`offline_timeout_ms` སྔོན་སྒྲིག་སྐར་མ་ ༥)།
+  buffered གཞི་ཁྲམ་ཚུ་ གཙང་མ་བཟོ་ཞིནམ་ལས་ ཨེསི་ཌི་ཀེ་གིས་ `ConnectError.sessionExpired` ཡར་སེང་འབདཝ་ཨིན།
+- དུས་དེབ་ཀྱི་ངན་ལྷད་ཀྱི་གནད་དོན་ནང་ ཨེསི་ཌི་ཀེ་ཨེསི་གིས་ Norito decode ཉམས་བཅོས་འབད་ནི་གི་དཔའ་བཅམ་དོ་ཡོདཔ་ཨིན། ཐོག༌ཁར༌
+  འཐུས་ཤོར་ཁོང་གིས་ དུས་དེབ་འདི་བཏོན་བཏང་ཞིནམ་ལས་ `connect.queue_repair_failed` བརྒྱུད་འཕྲིན་འདི་ བཏོནམ་ཨིན།
+- གོ་རིམ་མི་མཐུན་པའི་འབྱུང་བ་ `ConnectError.replayDetected` དང་ དེ་ལས་ གསརཔ་ཅིག་བཙུགས་དོ་ཡོདཔ་ཨིན།
+  grughke (ཚོགས་ཐེངས་གསརཔ་ `sid`) དང་ཅིག་ཁར་ ལོག་འགོ་བཙུགས།
 
-- If the session is considered stale (`offline_timeout_ms`, default 5 minutes),
-  buffered frames are purged and the SDK raises `ConnectError.sessionExpired`.
-- In case of journal corruption, SDKs attempt a single Norito decode repair; on
-  failure they drop the journal and emit `connect.queue_repair_failed` telemetry.
-- Sequence mismatch triggers `ConnectError.replayDetected` and forces a fresh
-  handshake (session restart with new `sid`).
+### ཕར་ཐིག་བཱ་ཕར་འཆར་གཞི་དང་བཀོལ་སྤྱོད་པའི་ཚད་འཛིན།
 
-### Offline buffering plan & operator controls
+ལས་ཁང་འདི་ལུ་ ཡིག་ཆ་བཟོ་ཡོད་པའི་འཆར་གཞི་དགོཔ་ལས་ ཨེསི་ཌི་ཀེ་གྲུ་ཚུ་ག་ར་གིས་ གཅིག་མཚུངས་སྦེ་ གཅིག་མཚུངས་སྦེ་ཡོདཔ་ཨིན།
+ཕྱིར་གཏོང་འབད་ཐངས་དང་ བཅོ་ཁ་རྐྱབ་ནིའི་རྒྱུན་འགྲུལ་ དེ་ལས་ སྒྲུབ་བྱེད་ཀྱི་ཁ་ཐོག་ཚུ་ཨིན། གཤམ་གྱི་འཆར་གཞི་ནི།
+མང་ཆེ་བ་སུའིཕཊ་ (`ConnectSessionDiagnostics`), Android
+(`ConnectDiagnosticsSnapshot`) དང་ JS (`ConnectQueueInspector`).
 
-The workshop deliverable requires a documented plan so every SDK ships the same
-offline behaviour, remediation flow, and evidence surfaces. The plan below is
-common across Swift (`ConnectSessionDiagnostics`), Android
-(`ConnectDiagnosticsSnapshot`), and JS (`ConnectQueueInspector`).
-
-| State | Trigger | Automatic response | Manual override | Telemetry flag |
+| མངའ་སྡེ་ | ཊི་རི་གར་ | རང་འགུལ་ལན་འདེབས་ | ལག་ཐོག་བཀག་སྡོམ། | བརྒྱུད་འཕྲིན་དར་དར་ |
 |-------|---------|--------------------|-----------------|----------------|
-| `Healthy` | Queue usage < `disk_watermark_warn` (default 60 %) and `ttl_ok` | None | N/A | `connect.queue_state=\"healthy\"` |
-| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests, emit flow-control tokens at half rate | Apps may call `clearOfflineQueue(.app|.wallet)`; SDK re-hydrates state from peer once online | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
-| `Quarantined` | Usage ≥ `disk_watermark_drop` (default 85 %), corruption detected twice, or `offline_timeout_ms` exceeded | Stop buffering, raise `ConnectError.QueueQuarantined`, require operator acknowledgement | `ConnectSessionDiagnostics.forceReset()` deletes journals after exporting bundle | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` counter |
-
-- Thresholds live in `ConnectFeatureConfig` (`disk_watermark_warn`,
-  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`). When a host
-  omits a value, SDKs fall back to their defaults and log a warning so configs
-  can be audited from telemetry.
-- SDKs expose `ConnectQueueObserver` plus diagnostics helpers:
-  - Swift: `ConnectSessionDiagnostics.snapshot()` yields `{state, depth, bytes,
-    reason}` and `exportJournalBundle(url:)` persists both queues for support.
+| `Healthy` | གྱལ་རིམ་ལག་ལེན་  5/min | བརྡ་རྟགས་གསརཔ་གི་ཞུ་བ་ཚུ་ བཀག་བཞག་སྟེ་ གོང་ཚད་ཕྱེད་ཀ་ལུ་ ཕོལོ་ཊི་ཚད་འཛིན་ཊོ་ཀེན་ཚུ་ བཏོན་གཏང་། | Apps གིས་ `clearOfflineQueue(.app|.wallet)` ཟེར་སླབ་འོང་། ཡོངས་འབྲེལ་ཐོག་ལས་ མཉམ་རོགས་ཀྱིས་ SDK ལོག་སྟེ་ཆུ་བཏང་ཡོདཔ། | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` ཚད་འཇལ་ |
+| `Quarantined` | ལག་ལེན་ ≥ `disk_watermark_drop` (སྔོན་སྒྲིག་ ༨༥%) ངན་ལྷད་གཉིས་ ཚར་གཉིས་བརྟག་དཔྱད་བྱས། ཡང་ན་ `offline_timeout_ms` ལས་བརྒལ་ཡོད། | བཀག་ཆ་འབད་ནི་ བཀག་ཆ་འབད་ནི། `ConnectError.QueueQuarantined`, ཡར་སེང་འབད། `ConnectSessionDiagnostics.forceReset()` བཱན་ཌལ་ཕྱིར་འདྲེན་འབད་བའི་ཤུལ་ལས་ དུས་དེབ་ཚུ་བཏོན་གཏང་དོ་ཡོདཔ་ཨིན། | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` གྱངས་ཁ་ |- ཐེརེ་ཤོལཌ་ཚུ་ `ConnectFeatureConfig` (`disk_watermark_warn`, ནང་སྡོད་ཡོདཔ་ཨིན།
+  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`, གཙོ་བདག་ཅིག་གི་སྐབས།
+  གནས་གོང་ཅིག་བཏོན་གཏངམ་ཨིན་ ཨེསི་ཌི་ཀེ་ཨེསི་ཚུ་ ཁོང་རའི་སྔོན་སྒྲིག་ལུ་ལོག་འགྱོཝ་ལས་ ཉེན་བརྡའི་ནང་བསྐྱོད་འབདཝ་ཨིན།
+  ཊེ་ལི་མི་ཊི་རི་ལས་ རྩིས་ཞིབ་འབད་ཚུགས།
+- SDKs གིས་ `ConnectQueueObserver` དང་ བརྟག་དཔྱད་གྲོགས་རམ་པ་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  - Swift: `ConnectSessionDiagnostics.snapshot()` གིས་ `{state, གཏིང་ཚད་, བཱའིཊིསི།
+    རྒྱུ་མཚན་}Norito(url:)` རྒྱབ་སྐྱོར་གྱི་དོན་ལུ་གྱལ་གཉིས་ཆ་རང་ལུ་གནས་ཡུན་འབདཝ་ཨིན།
   - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
-  - JS: `ConnectQueueInspector.read()` returns the same struct and a blob handle
-    that UI code can upload to Torii support tools.
-- When an app toggles `offline_queue_enabled=false`, SDKs immediately drain and
-  purge both journals, mark the state as `Disabled`, and emit a terminal
-  telemetry event. The user-facing preference is mirrored in the Norito
-  approval frame so peers know whether they can resume buffered frames.
-- Operators run `connect queue inspect --sid <sid>` (CLI wrapper around the SDK
-  diagnostics) during chaos tests; this command prints the state transitions,
-  watermark history, and resume evidence so governance reviews do not depend on
-  platform-specific tooling.
+  - JS: `ConnectQueueInspector.read()` གིས་ བཀོད་རིས་གཅིག་པ་དང་ བློ་ཁོག་ལག་ལེན་འཐབ་ཐངས་གཅིག་སླར་ལོག་འབདཝ་ཨིན།
+    དེ་ཡང་ ཡུ་ཨའི་ཨང་རྟགས་འདི་གིས་ Torii རྒྱབ་སྐྱོར་ལག་ཆས་ཚུ་ལུ་སྐྱེལ་བཙུགས་འབད་ཚུགས།
+- གློག་རིམ་ཅིག་ `offline_queue_enabled=false` སོར་བསྒྱུར་འབད་བའི་སྐབས་ SDKs ཚུ་ དེ་འཕྲོ་ལས་ ཆུ་བཏོན་དོ་ཡོདཔ་ཨིན།
+  དུས་དེབ་གཉིས་ཆ་རང་ གཙང་མ་བཟོ་ཞིནམ་ལས་ མངའ་སྡེ་འདི་ `Disabled` ཟེར་རྟགས་བཀོད་དེ་ མཐའ་མཚམས་ཅིག་བཏོན་དགོ།
+  telementy བྱུང་ལས་། ལག་ལེན་པའི་གདོང་འཆམ་པའི་དགའ་གདམ་འདི་ Norito ནང་ལུ་མེ་ལོང་ནང་བཀོད་ཡོདཔ་ཨིན།
+  ཆ་འཇོག་གཞི་ཁྲམ་འབདཝ་ལས་ མཉམ་རོགས་ཀྱིས་ བཱ་ཕར་གཞི་ཁྲམ་ཚུ་ ལོག་འགོ་བཙུགས་ཚུགས་ག་མི་ཚུགས་ག་ཤེས།
+- བཀོལ་སྤྱོད་པ་ཚུ་གིས་ `connect queue inspect --sid <sid>` གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན།
+  ནད་བརྟག་) ཟང་ཟིང་བརྟག་དཔྱད་ཀྱི་སྐབས་; བརྡ་བཀོད་འདི་གིས་ མངའ་སྡེ་གི་འགྱུར་བ་ཚུ་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  ཆུའི་རྟགས་འབྱུང་བའི་ལོ་རྒྱུས་དང་ མི་ཚེའི་ལོ་རྒྱུས་ཀྱི་སྒྲུབ་བྱེད་ཚུ་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འདི་ ༢༠༡༧ ལུ་རག་ལསཔ་ཨིན།
+  སྟེགས་བུ་དམིགས་བསལ་གྱི་ལག་ཆས།
 
-### Evidence bundle workflow
+### བདེན་དཔང་བང་སྒྲིག ལས་རིམ།
 
-Support and compliance teams rely on deterministic evidence when auditing
-offline behaviour. Each SDK therefore implements the same three-step export:
+རྩིས་ཞིབ་འབད་བའི་སྐབས་ རྒྱབ་སྐྱོར་དང་ བསྟར་སྤྱོད་སྡེ་ཚན་ཚུ་གིས་ གཏན་འབེབས་སྒྲུབ་བྱེད་ལུ་ བརྟེན་དོ་ཡོདཔ་ཨིན།
+ཨོཕ་ལ་ཡིན་གྱི་སྤྱོད་ལམ། དེ་འབདཝ་ལས་ ཨེསི་ཌི་ཀེ་རེ་རེ་གིས་ གོ་རིམ་གསུམ་ཕྱིར་ཚོང་འཐབ་མི་འདི་ ལག་ལེན་འཐབ་ཨིན།
 
-1. `exportJournalBundle(..)` writes `{app_to_wallet,wallet_to_app}.queue` plus a
-   manifest describing the build hash, feature flags, and disk watermarks.
-2. `exportQueueMetrics(..)` emits the last 1 000 telemetry samples so dashboards
-   can be reconstructed offline. Samples include the hashed session id when the
-   user opted in.
-3. The CLI helper zips both exports and attaches a signed Norito metadata file
-   (`ConnectQueueEvidenceV1`) so Torii ingest can archive the bundle in SoraFS.
+1. `exportJournalBundle(..)` `{app_to_wallet,wallet_to_app}.queue` དང་ a བྲིས།
+   བཟོ་བསྐྲུན་གྱི་ཧེ་ཤི་དང་ ཁྱད་རྣམ་དར་ཚུ་ དེ་ལས་ ཌིཀསི་གི་ཆུ་རྟགས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ གསལ་སྟོན་འབད།
+2. `exportQueueMetrics(..)` གིས་ མཐའ་མའི་ ༡༠༠༠ ཊེ་ལི་མི་ཊི་དཔེ་ཚད་ཚུ་ བཏོནམ་ལས་ ཌེཤ་བོརཌ་ཚུ་ བཏོནམ་ཨིན།
+   ཕྱིར་ཐིག་ལས་བསྐྱར་བཟོ་ཚུགས། དཔེ་ཚད་ཚུ་གིས་ ཧམ་སི་ཌི་ལཱ་ཡུན་ཨའི་ཌི་འདི་ ཚུདཔ་ཨིན།
+   ལག་ལེན་པ་གིས་ གདམ་ཁ་རྐྱབ་ཡོདཔ།
+3. སི་ཨེལ་ཨའི་ གྲོགས་རམ་པ་ཟིཔ་འདི་གིས་ ཕྱིར་འདྲེན་དང་ མཉམ་སྦྲགས་འབད་དེ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ Norito མེ་ཊ་ཌེ་ཊ་ཡིག་སྣོད་ཅིག་ མཉམ་སྦྲགས་འབདཝ་ཨིན།
+   (`ConnectQueueEvidenceV1`) དེ་ལས་ Torii གིས་ SoraFS ནང་ བང་རིམ་འདི་ གཏན་མཛོད་བཟོ་ཚུགས།
 
-Bundles that fail validation are rejected with `connect.evidence_invalid`
-telemetry so the SDK team can reproduce and patch the exporter.
+འཐུས་ཤོར་བདེན་དཔྱད་འབད་མི་ བུནཌི་ཚུ་ `connect.evidence_invalid` གིས་ ངོས་ལེན་མི་འབད།
+བརྡ་བརྒྱུདཔ་འདི་ ཨེསི་ཌི་ཀེ་སྡེ་ཚན་གྱིས་ ཕྱིར་ཚོང་འཐབ་མི་འདི་ ལོག་བཏོན་ཞིནམ་ལས་ ཐིག་ལེ་བཟོ་ཚུགས།
 
-## Telemetry & Diagnostics
-
-- Emit Norito JSON events via shared OpenTelemetry exporters. Mandatory metrics:
-  - `connect.queue_depth{direction}` (gauge) fed by `ConnectQueueState`.
-  - `connect.queue_bytes{direction}` (gauge) for disk-backed footprint.
-  - `connect.queue_dropped_total{reason}` (counter) for `overflow|ttl|repair`.
-  - `connect.offline_flush_total{direction}` (counter) increments when queues
-    drain without transport; failures increment `connect.offline_flush_failed`.
+## བརྒྱུད་འཕྲིན་དང་བརྟག་དཔྱད།- བརྗེ་སོར་འབད་ཡོད་པའི་ OpenTelemetry ཕྱིར་འདྲེན་འབད་མི་ཚུ་བརྒྱུད་དེ་ Norito JSON བྱུང་ལས་ཚུ་ བཏོན་གཏང་། མདོར་བསྡུས་པའི་མེ་ཊིག:
+  - `connect.queue_depth{direction}` (gauge) `ConnectQueueState` ལུ་སྤྲོད་ཡོདཔ།
+  - `connect.queue_bytes{direction}` (gauge) ཌིཀསི་རྒྱབ་ལོག་འབད་ཡོད་པའི་རྐང་རྗེས་ཀྱི་དོན་ལུ་ཨིན།
+  - `connect.queue_dropped_total{reason}` (counter) `overflow|ttl|repair`.
+  - `connect.offline_flush_total{direction}` (counter) གྱལ་རིམ་ནང་ ཡར་སེང་འབདཝ་ཨིན།
+    སྐྱེལ་འདྲེན་མེད་པའི་ཆུ་རིམ། འཐུས་ཤོར་ `connect.offline_flush_failed`.
   - `connect.replay_success_total`/`connect.replay_error_total`.
-  - `connect.resume_latency_ms` histogram (time between reconnect and steady
-    state) plus `connect.resume_attempts_total`.
-  - `connect.session_duration_ms` histogram (per completed session).
-  - `connect.error` structured events with `code`, `fatal`, `telemetry_profile`.
-- Exporters MUST attach `{platform, sdk_version, feature_hash}` labels so
-  dashboards can split by SDK build. The hashed `sid` is optional and only
-  emitted when telemetry opt-in is true.
-- SDK-level hooks surface the same events so apps can export more detail:
-  - Swift: `ConnectSession.addObserver(_:) -> ConnectEvent`.
+  - `connect.resume_latency_ms` ཧིསི་ཊོ་གཱརམ་ (སླར་མཐུད་དང་ བརྟན་ཏོག་ཏོ་ཡོད་པའི་བར་གྱི་དུས་ཚོད།
+    མངའ་སྡེ་) དང་ `connect.resume_attempts_total`.
+  - `connect.session_duration_ms` ཧིསི་ཊོ་གཱརམ་ (མཇུག་བསྡུ་ཡོད་པའི་ལཱ་ཡུན་རེ་རེ)།
+  - Norito བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་རིམ་ཚུ་ `code`, `fatal`, `telemetry_profile`.
+- ཕྱིར་འདྲེན་འབད་མི་ཚུ་གིས་ `{platform, sdk_version, feature_hash}` ཁ་ཡིག་ཚུ་དེ་སྦེ་ མཉམ་སྦྲགས་འབད་དགོ།
+  dashboods SDK བཟོ་བསྐྲུན་གྱིས་ཁ་ཕྱེ་ཚུགས། hashed `sid` འདི་གདམ་ཁ་ཅན་དང་རྐྱངམ་ཅིག་ཨིན།
+  ཊེ་ལི་མི་ཊི་གདམ་ཁ་འདི་བདེན་པ་ཡོད་པའི་སྐབས་ལུ།
+- ཨེསི་ཌི་ཀེ་གནས་རིམ་ཧུཀ་ཚུ་གིས་ བྱུང་ལས་གཅིག་པ་ཚུ་ ཁ་ཐོག་ལུ་ཡོདཔ་ལས་ གློག་རིམ་ཚུ་གིས་ ཁ་གསལ་སྦེ་ཕྱིར་འདྲེན་འབད་ཚུགས།
+  - སུའིཕཊ་: `ConnectSession.addObserver(_:) -> ConnectEvent`.
   - Android: `Flow<ConnectEvent>`.
-  - JS: async iterator or callback.
-- CI gating: Swift jobs run `make swift-ci`, Android uses `./gradlew sdkConnectCi`,
-  and JS runs `npm run test:connect` so telemetry/dashboards remain green before
-  merging Connect changes.
-- Structured logs include the hashed `sid`, `seq`, `queue_depth`, and `sid_epoch`
-  values so operators can correlate client issues. Journals that fail repair emit
-  `connect.queue_repair_failed{reason}` events plus an optional crash dump path.
+  - JS: async བསྐྱར་ལོག་ཡང་ན་ ལོག་འབོད་བརྡ་གཏང་།
+- CI gating: Swift ལཱ་ཚུ་ `make swift-ci` གཡོག་བཀོལ་ཏེ་ Android གིས་ `./gradlew sdkConnectCi`, གིས་ ལག་ལེན་འཐབ་ཨིན།
+  དང་ JS གིས་ `npm run test:connect` གཡོག་བཀོལ་དོ་ཡོདཔ་ལས་ ཊེ་ལི་མི་ཊི་རི་/ཌེཤ་བོརཌི་ཚུ་ ཧེ་མ་ ལྗང་ཁུ་སྦེ་ལུས་ཡོདཔ་ཨིན།
+  མཉམ་བསྡོམས་འབད་ནི་ མཐུད་ལམ་བསྒྱུར་བཅོས་ཚུ།
+- བཀོད་སྒྲིག་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ ཧམ་པ་ `sid`, `seq`, `queue_depth`, དང་ `sid_epoch` ཚུ་ཚུདཔ་ཨིན།
+  དེ་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མཁོ་སྤྲོད་འབད་མི་གནད་དོན་ཚུ་ འབྲེལ་མཐུད་འབད་ཚུགས། ཉམས་བཅོས་འབད་མ་ཚུགས་པའི་དུས་དེབ།
+  `connect.queue_repair_failed{reason}` བྱུང་ལས་ཚུ་དང་ གདམ་ཁའི་བརྡབ་ལྷུང་ལམ་འགྲུལ་འགྲུལ་ལམ་ཅིག།
 
-### Telemetry hooks & governance evidence
+### བརྒྱུད་འཕྲིན་ཧུཀ་དང་གཞུང་སྐྱོང་གི་སྒྲུབ་བྱེད།
 
-- `connect.queue_state` doubles as the roadmap risk indicator. Dashboards group
-  by `{platform, sdk_version}` and render time-in-state so governance can sample
-  monthly drill evidence before approving staged rollouts.
-- `connect.queue_watermark` and `connect.queue_bytes` feed the Connect risk score
-  (`risk.connect.offline_buffer`), which automatically pages SRE when more than
-  5 % of sessions spend >10 minutes in `Throttled`.
-- Exporters attach `feature_hash` to every event so auditor tooling can confirm
-  that the Norito codec + offline plan match the reviewed build. SDK CI fails
-  fast when telemetry reports an unknown hash.
-- The strawman still requires a threat-model appendix; when metrics exceed the
-  policy thresholds, SDKs emit `connect.policy_violation` events summarising the
-  offending sid (hashed), state, and resolved action (`drain|purge|quarantine`).
-- Evidence captured via `exportQueueMetrics` lands in the same SoraFS namespace
-  as the Connect runbook artefacts so council reviewers can trace every drill
-  back to specific telemetry samples without requesting internal logs.
+- ལམ་གྱི་ས་ཁྲ་ཉེན་ཁ་བརྡ་སྟོན་པ་སྦེ་ `connect.queue_state` གཉིས་ལྡན་ཚུ། ཌེཤ་བོརཌི་སྡེ་ཚན་ཚུ།
+  by Norito དང་ མངའ་སྡེ་ནང་དུས་ཚོད་ཀྱི་ བརྡ་སྟོན།
+  གོ་རིམ་ཅན་གྱི་བསྐོར་རིམ་ཚུ་ ཆ་འཇོག་མ་འབད་བའི་ཧེ་མ་ ཟླཝ་རེ་ནང་ སྦྱོང་བརྡར་གྱི་ སྒྲུབ་བྱེད་ཚུ།
+- `connect.queue_watermark` དང་ Torii མཐུད་པའི་ཉེན་ཁ་གི་སྐུགས་འདི་
+  (`risk.connect.offline_buffer`), དེ་ཡང་ རང་བཞིན་གྱིས་ SRE ཤོག་ལེབ་ཚུ་ ལས་ལྷག་སྟེ་ ཤོག་ལེབ་བཟོཝ་ཨིན།
+  5% གི་དུས་ཚོད་ >10 minites `Throttled` ནང་འགྲོ་བཞིན་ཡོད།
+- ཕྱིར་འདྲེན་འབད་མི་ཚུ་གིས་ `feature_hash` འདི་ བྱུང་རིམ་ག་ར་ལུ་ མཉམ་སྦྲགས་འབད་དེ་ རྩིས་ཞིབ་པ་ལག་ཆས་འདི་གིས་ ངེས་གཏན་བཟོ་ཚུགས།
+  Norito གསང་གྲངས་ + གིས་ བསྐྱར་ཞིབ་འབད་ཡོད་པའི་བཟོ་བསྐྲུན་དང་ ཕྱི་འབྲེལ་འཆར་གཞི་མཐུན་སྒྲིག་འབདཝ་ཨིན། SDK CI འཐུས་ཤོར་བྱུང་ཡོད།
+  བརྡ་སྤྲོད་ཀྱི་ཧེ་ཤི་ཅིག་སྙན་ཞུ་འབད་བའི་སྐབས་ མགྱོགས་དྲགས་སྦེ་།
+- མེ་ཏོག་འདི་ ད་ལྟོ་ཡང་ ཉེན་ཁ་ཅན་གྱི་དཔེ་སྟོན་གྱི་ ཟུར་དེབ་དགོཔ་ཨིན། མེ་ཊིག་ཚུ་ ལས་བརྒལ་བའི་སྐབས།
+  སྲིད་བྱུས་ཚད་གཞི་, SDKs གིས་ `connect.policy_violation` འདི་ བཏོན་གཏང་།
+  ཉེས་འཛུགས་ཅན་གྱི་སིཌ་ (hashed), མངའ་སྡེ་དང་ བྱ་བ་སེལ་ཐབས་ (`drain|purge|quarantine`)།
+- `exportQueueMetrics` ས་གཞི་བརྒྱུད་དེ་ `exportQueueMetrics` མིང་གནས་གཅིག་ནང་ བཟུང་ཡོདཔ་ཨིན།
+  འདོན་སྤེལ།: ༢༠༡༠/༠༣/༠༣ རིག་པ།(༠) འདི་ཡང་ གཟའ་ཉི་མའི་ཉིན།
+  ནང་འཁོད་ཀྱི་དྲན་ཐོ་ཚུ་ཞུ་བ་མ་འབད་བར་ དམིགས་བསལ་གྱི་ཊེ་ལི་མི་ཊི་དཔེ་ཚད་ཚུ་ལུ་ལོག་འགྱོ།
 
-## Frame Ownership & Responsibilities
-
-| Frame / Control | Owner | Sequence domain | Journal persisted? | Telemetry labels | Notes |
+## གཞི་རྩའི་བདག་དབང་དང་འགན་ཁུར།| གཞི་ཁྲམ་ / ཚད་འཛིན་ | ཇོ་བདག་ | རིམ་པ་མངའ་ཁོངས་ | དུས་དེབ་འདི་ གནས་ཏེ་ཡོདཔ་ཨིན་ན? | བརྒྱུད་འཕྲིན་ཁ་ཡིག་ཚུ་ | དྲན་ཐོ། |
 |-----------------|-------|-----------------|--------------------|------------------|-------|
-| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Carries metadata + permission bitmap; wallets replay the latest open before prompts. |
-| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Includes account, proofs, signatures. Metadata version increments recorded here. |
-| `Control::Reject` | Wallet | `seq_wallet` | ✅ | `event=reject`, `reason` | Optional localized message; dApp drops pending sign requests. |
-| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet acknowledges with its own `Close`. |
-| `Control::Close` (ack) | Wallet | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Confirms teardown; GC removes journals once both sides persist the frame. |
-| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Payload hash recorded for replay conflict detection. |
-| `SignResult` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Includes BLAKE3 hash of signed bytes; failures raise `ConnectError.Signing`. |
-| `Control::Error` | Wallet (most) / dApp (transport) | matching owner domain | ✅ | `event=error`, `code` | Fatal errors force session restart; telemetry marks `fatal=true`. |
-| `Control::RotateKeys` | Wallet | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Announces new direction keys; dApp replies with `RotateKeysAck` (journaled on app side). |
-| `Control::Resume` / `ResumeAck` | Both | local domain only | ✅ | `event=resume`, `direction=app|wallet` | Summarises queue depth + seq state; hashed journal digest aids diagnosis. |
+| `Control::Open` | dapp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | ཀར་རིསི་མེ་ཊ་ཌེ་ཊ་ + གནང་བ་བིཊི་མེཔ་; བརྡ་བཀོད་མ་འབད་བའི་ཧེ་མ་ གསརཔ་ཁ་ཕྱེ་མི་ཚུ་ ལོག་རྩེད་དོ། |
+| `Control::Approve` | ཝ་ལེཊ་ | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | རྩིས་ཐོ་དང་ བདེན་ཁུངས་ མཚན་རྟགས་ཚུ་ ཚུདཔ་ཨིན། ནཱ་ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ མེ་ཊ་ཌེ་ཊ་ཐོན་རིམ་ཡར་འཕར་ཚུ། |
+| `Control::Reject` | ཝ་ལེཊ་ | `seq_wallet` | ✅ | `event=reject`, `reason` | གདམ་ཁ་ཅན་གྱི་ས་གནས་ཀྱི་འཕྲིན་དོན་; dApp གིས་ བརྡ་རྟགས་ཞུ་བ་འབད་ཡོདཔ། |
+| `Control::Close` (init) | dapp | `seq_app` | ✅ | `event=close`, `initiator=app` | ཝ་ལེཊ་གིས་ རང་སོའི་ `Close` དང་གཅིག་ཁར་ ངོས་ལེན་འབདཝ་ཨིན། |
+| `Control::Close` (ག) | ཝ་ལེཊ་ | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | བརྡལ་བཤིག་གཏང་ནི་གི་ངེས་གཏན་བཟོཝ་ཨིན། ཕྱོགས་གཉིས་ཆ་རང་ གཞི་ཁྲམ་འདི་ གནས་ཚརཝ་ཅིག་ ཇི་སི་གིས་ དུས་དེབ་ཚུ་ རྩ་བསྐྲད་གཏངམ་ཨིན། |
+| `SignRequest` | dapp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | བསྐྱར་རྩེད་ཀྱི་འཁྲུག་རྩོད་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ ཧེཤ་དྲན་ཐོ་བཀོད། |
+| `SignResult` | ཝ་ལེཊ་ | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | མཚན་རྟགས་བཀོད་པའི་བཱའིཊི་ཚུ་གི་ BLAKE3 hash ཚུདཔ་ཨིན། འཐུས་ཤོར་ `ConnectError.Signing` ཡར་སེང་། |
+| `Control::Error` | དངུལ་ཁུག་ (མང་ཤོས་) / dapp (སྐྱེལ་འདྲེན་) | མཐུན་སྒྲིག་ཅན་གྱི་ཇོ་བདག་མངའ་ཁོངས་ | ✅ | `event=error`, `code` | ཚབས་ཆེན་གྱི་འཛོལ་བ་ཚུ་གིས་ ལཱ་ཡུན་ལོག་འགོ་བཙུགས་ནི་ལུ་ ཤུགས་བཏོནམ་ཨིན། telemetry རྟགས་ `fatal=true`. |
+| `Control::RotateKeys` | ཝ་ལེཊ་ | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | ལམ་སྟོན་གསརཔ་གསལ་བསྒྲགས་འབདཝ་ཨིན། dApp གིས་ `RotateKeysAck` དང་ཅིག་ཁར་ (མཉེན་ཆས་ཕྱོགས་ལུ་བརྡ་འཕྲིན་བཏང་ཡོདཔ།) |
+| `Control::Resume` / `ResumeAck` | གཉིས་ཆ་རང་ | ས་གནས་ཀྱི་མངའ་ཁོངས་རྐྱངམ་གཅིག་ | ✅ | `event=resume`, `direction=app|wallet` | བང་རིམ་གཏིང་ཚད་ + seq གནས་སྟངས་བཅུད་བསྡུཝ་ཨིན། hashed aghe digest གྲོགས་རམ་གྱི་ནད་རྟགས་བཏབ། |
 
-- Directional cipher keys remain symmetric per role (`app→wallet`, `wallet→app`).
-  Wallet rotation proposals are advertised via `Control::RotateKeys`, and dApps
-  acknowledge by emitting `Control::RotateKeysAck`; both frames must hit disk
-  before keys swap to avoid replay gaps.
-- Metadata attachment (icons, localized names, compliance proofs) is signed by
-  the wallet and cached by the dApp; updates require a fresh approval frame with
-  incremented `metadata_version`.
-- Ownership matrix above is referenced from SDK docs so CLI/web/automation
-  clients follow the same contract and instrumentation defaults.
+- ཕྱོགས་སྟོན་གྱི་སི་ཕར་ལྡེ་མིག་ཚུ་ འགན་ཁུར་རེ་ལུ་ འདྲ་མཉམ་སྦེ་ལུསཔ་ཨིན། (`app→wallet`, `wallet→app`)
+  དངུལ་ཁུག་བསྒྱིར་ནི་གི་གྲོས་འཆར་ཚུ་ `Control::RotateKeys` དང་ dApps བརྒྱུད་དེ་ཁྱབ་བསྒྲགས་འབདཝ་ཨིན།
+  `Control::RotateKeysAck` བཏོན་ཐོག་ལས་ངོས་ལེན་འབད། གཞི་ཁྲམ་གཉིས་ཆ་ར་གིས་ ཌིཀསི་ལུ་ཨེབ་དགོ།
+  ལྡེ་མིག་ཚུ་ བསྐྱར་རྩེད་ཀྱི་བར་སྟོང་ཚུ་ བཀག་ཐབས་ལུ་ བརྗེ་སོར་མ་འབད་བའི་ཧེ་མ།
+- མེ་ཊ་ཌེ་ཊ་མཉམ་སྦྲགས་ (ངོས་དཔར་ཚུ་ ས་གནས་ཀྱི་མིང་ བསྟར་སྤྱོད་བདེན་ཁུངས་) འདི་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན།
+  དངུལ་ཁུག་དང་ ཌི་ཨེ་པི་གིས་ འདྲ་མཛོད་འབད་ཡོདཔ། དུས་མཐུན་བཟོ་ནི་ལུ་ ཆ་འཇོག་གཞི་ཁྲམ་གསརཔ་ཅིག་དང་གཅིག་ཁར་དགོཔ་ཨིན།
+  ཡར་འཕར་ `metadata_version`.
+- བདག་དབང་གི་མེ་ཊིགསི་འདི་ ཨེསི་ཌི་ཀེ་ ཌོཀསི་ལས་ གཞི་བསྟུན་འབདཝ་ལས་ CLI/web/automation
+  མཁོ་མངགས་འབད་མི་ཚུ་གིས་ གན་རྒྱ་གཅིག་དང་ ལག་ཆས་སྔོན་སྒྲིག་ཚུ་ བརྩི་འཇོག་འབདཝ་ཨིན།
 
-## Open Questions
+## དྲི་བ་ཁ་ཕྱེ།
 
-1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)
-2. **Multisig**: How are multi-sign approvals represented? (Extend sign result to support multiple signatures.)
-3. **Compliance**: Which fields are mandatory for regulated flows (per roadmap)? (Await compliance team guidance.)
-4. **SDK packaging**: Should we factor shared code (e.g., Norito Connect codecs) into a cross-platform crate? (TBD.)
+1. **ལཱ་ཡུན་གསར་འཚོལ་**: ང་བཅས་ལུ་ ཝལ་ལེཊི་ཀོན་ནེཀཊ་བཟུམ་སྦེ་ ཀིའུ་ཨར་ཨང་རྟགས་/ ལག་བཟོའི་ཕྱིར་འཐེན་དགོཔ་ཨིན་ན? (མ་འོངས་པའི་ལས་ཀ)།
+2. **Multisig**: སྣ་མང་བརྡ་རྟགས་ཆ་འཇོག་ཚུ་ག་དེ་སྦེ་ངོ་ཚབ་འབདཝ་ཨིན་ན། (མཚན་རྟགས་སྣ་མང་ལུ་རྒྱབ་སྐྱོར་འབད་ནི་ལུ་ མཚན་རྟགས་གྲུབ་འབྲས་འདི་ ཕྱིར་བཏོན་འབད།)
+3. **Compliance**: ཚད་འཛིན་གྱི་ རྒྱུན་འགྲུལ་གྱི་དོན་ལུ་ ས་ཁོངས་ག་ཅི་ མཁོ་མངགས་ཨིན་ན། (ལམ་ཕྱོགས་རེ་ལུ་)? (བསྒུག་སྡོད་སྡེ་ཚན་གྱི་ལམ་སྟོན།)
+༤. **SDK ཐུམ་སྒྲིལ་**: ང་བཅས་ཀྱིས་ བརྗེ་སོར་འབད་ཡོད་པའི་ཨང་རྟགས་ (དཔེར་ན་ Norito མཐུད་ལམ་ ཀོ་ཌེཀ་) (TBD.)
 
-## Next Steps
-
-- Circulate this strawman to the SDK council (Feb 2026 meeting).
-- Collect feedback on open questions and update doc accordingly.
-- Schedule implementation breakdown per SDK (Swift IOS7, Android AND7, JS Connect milestones).
-- Track progress via roadmap hot list; update `status.md` once strawman is ratified.
+## ཤུལ་མམ་གྱི་གོ་རིམ་ཚུ།- མེ་ཏོག་འདི་ ཨེསི་ཌི་ཀེ་ཚོགས་སྡེ་ལུ་ གློག་རྒྱུན་བཏོནམ་ཨིན། (Feb ༢༠༢༦ ཞལ་འཛོམས་)
+- ཁ་ཕྱེ་ཡོད་པའི་དྲི་བ་ཚུ་གི་ཐོག་ལུ་ བསམ་འཆར་བསྡུ་ཞིནམ་ལས་ དེ་དང་འཁྲིལ་ཏེ་ ཡིག་ཆ་དུས་མཐུན་བཟོ་དགོ།
+- ཨེསི་ཌི་ཀེ་རེ་ལུ་ དུས་ཚོད་བསྟར་སྤྱོད་ཀྱི་ བརྡལ་བཤིག་ (Swift IOS7, Android AND7, JS མཐུད་སྦྲེལ་གྱི་ ལམ་ཐིག་) ཚུ་ཨིན།
+- ལམ་གྱི་ས་ཁྲ་ཚ་དྲོད་ཐོ་ཡིག་བརྒྱུད་དེ་ ཡར་འཕེལ་འགྱོ་ནི། དུས་མཐུན་ `status.md` ཚར་ཅིག་ ཆ་འཇོག་གྲུབ་ཡོདཔ་ཨིན།

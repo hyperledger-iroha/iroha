@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
 source_last_modified: "2025-12-29T18:16:35.921274+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Bridge proofs
+# ཟམ་པའི་བདེན་དཔང་།
 
-Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
+ཟམ་གྱི་བདེན་དཔང་ཕུལ་མི་ཚུ་གིས་ གནས་ཚད་ཅན་གྱི་སློབ་སྟོན་ལམ་ལུགས་ (`SubmitBridgeProof`) དང་ བདེན་ཁུངས་ཐོ་བཀོད་ནང་ བདེན་དཔྱད་འབད་ཡོད་པའི་གནས་རིམ་ཐོག་ལས་ འགྱོཝ་ཨིན། ད་ལྟོའི་ཁ་ཐོག་འདི་གིས་ ICS-style Merkle གི་བདེན་ཁུངས་དང་ དྭངས་གསལ་-ZK གི་དངུལ་ཕོགས་ཚུ་ བཀག་བཞག་ནི་དང་ མངོན་གསལ་གྱི་བསྡམ་བཞག་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
 
-## Acceptance rules
+## ངོས་ལེན་ལམ་ལུགས་ཀྱི་ལམ་ལུགས།
 
-- Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
-- Optional height windows reject stale/future proofs: `zk.bridge_proof_max_past_age_blocks` and `zk.bridge_proof_max_future_drift_blocks` are measured against the block height that ingests the proof (0 disables the guardrails).
-- Bridge proofs may not overlap an existing proof for the same backend (pinned proofs are preserved and block overlaps).
-- Manifest hashes must be non-zero; payloads are size-capped by `zk.max_proof_size_bytes`.
-- ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function; transparent payloads must declare a non-empty backend label.
-- Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
+- ཁྱབ་ཚད་ཚུ་ བཀོད་སྒྲིག་འབད་/སྟོངམ་དང་ སྟོངམ་དང་ བརྩི་མཐོང་ `zk.bridge_proof_max_range_len` (༠ ལྕོགས་མིན་བཟོཝ་ཨིན།)
+- གདམ་ཁའི་མཐོ་ཚད་སྒོ་སྒྲིག་ཚུ་གིས་ ཕྲང་ཏང་ཏ་/མ་འོངས་པའི་བདེན་ཁུངས་ཚུ་ ངོས་ལེན་མ་འབད་བར་: `zk.bridge_proof_max_past_age_blocks` དང་ `zk.bridge_proof_max_future_drift_blocks` ཚུ་ བདེན་དཔང་འབད་མི་ སྡེབ་ཚན་གྱི་མཐོ་ཚད་ལུ་ འཇལ་ཚད་ (༠ སྲུང་སྐྱོབ་ཚུ་ ལྕོགས་མིན་བཟོཝ་ཨིན།)
+- ཟམ་གྱི་བདེན་ཁུངས་ཚུ་གིས་ རྒྱབ་ཐག་གཅིག་པའི་དོན་ལུ་ ད་ལྟོ་ཡོད་པའི་བདེན་ཁུངས་ཅིག་ གཅིག་ལུ་གཅིག་བརྩེགས་མི་འབད་ ༼པིན་འབད་ཡོད་པའི་བདེན་ཁུངས་ཚུ་ ཉམས་སྲུང་འབད་དེ་ བཀག་ཆ་ཚུ་ གཅིག་ཁར་བསྡོམས་ཏེ་ཡོདཔ་ཨིན།༽
+- མ་ཕེསཊ་ཧ་ཤེ་སི་ ཀླད་ཀོར་མེན་དགོ། པེ་ལོཌ་ཚུ་ `zk.max_proof_size_bytes` གིས་ ཚད་བཟུང་ཡོདཔ་ཨིན།
+- ICS གིས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ Merkle གཏིང་ཚད་ཀྱི་ མགུ་ཏོག་ལུ་གུས་ཞབས་འབད་ཞིནམ་ལས་ གསལ་བསྒྲགས་འབད་ཡོད་པའི་ཧེ་ཤི་ལས་འགན་ལག་ལེན་འཐབ་ཐོག་ལས་ འགྲུལ་ལམ་བདེན་དཔྱད་འབདཝ་ཨིན། དྭངས་གསལ་ཅན་གྱི་གླ་ཆ་ཚུ་གིས་ སྟོངམ་མེན་པའི་རྒྱབ་ཐག་ཁ་ཡིག་ཅིག་ གསལ་བསྒྲགས་འབད་དགོ།
+- པིན་ནའིན་གྱི་བདེན་ཁུངས་ཚུ་ བཀག་འཛིན་གྱི་ གཤག་བཅོས་ལས་ དགོངས་ཞུ་འབད་ཡོདཔ་ཨིན། unpinned བདེན་དཔང་ཚུ་གིས་ ད་ལྟོ་ཡང་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ `zk.proof_history_cap`/grace/batch སྒྲིག་སྟངས་ཚུ་ལུ་ གུས་ཞབས་འབདཝ་ཨིན།
 
-## Torii API surface
+## Torii API ངོས་འཛིན།
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
-  - `bridge_only=true` returns only bridge proofs.
-  - `bridge_pinned_only=true` narrows to pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v1/zk/proofs` དང་ `GET /v1/zk/proofs/count` དང་ལེན་གྱི་ངོས་ལེན་ཅན་གྱི་ཟམ་པའི་ཚགས་མ་ཚུ།
+  - `bridge_only=true` གིས་ ཟམ་གྱི་བདེན་ཁུངས་ཚུ་རྐྱངམ་ཅིག་སླར་ལོག་འབདཝ་ཨིན།
+  - `bridge_pinned_only=true` གིས་ ཟམ་གྱི་བདེན་དཔྱད་ཚུ་ལུ་ རྒྱ་ཆུང་ཀུ་བཟོཝ་ཨིན།
+  - `bridge_start_from_height` / `bridge_end_until_height` ཟམ་གྱི་ཁྱབ་ཚད་སྒོ་སྒྲིག་འདི་བཀག་བཞགཔ་ཨིན།
+- `GET /v1/zk/proof/{backend}/{hash}` གིས་ ཟམ་གྱི་མེ་ཊ་ཌེ་ཊ་ (ཁྱབ་ཚད་, གསལ་སྟོན་ཧེཤ་, པེ་ལོཌི་བཅུད་བསྡུས་) སླར་ལོག་འབདཝ་ཨིན།
+- Norito ཆ་ཚང་བདེན་པའི་དྲན་ཐོ་ (པེ་ལོཌ་བཱའིཊིསི་ཚུ་རྩིས་ཏེ་) ཆ་ཚང་འདི་ `GET /v1/proofs/{proof_id}` བརྒྱུད་དེ་ མཐུད་ལམ་མེད་པའི་བདེན་བཤད་ཚུ་གི་དོན་ལུ་ འཐོབ་ཚུགས།
 
-## Bridge receipt events
+## ཟམ་པའི་དངུལ་འབབ་ཀྱི་བྱུང་བ།
 
-Bridge lanes emit typed receipts via the `RecordBridgeReceipt` instruction. Executing this instruction
-records a `BridgeReceipt` payload and emits `DataEvent::Bridge(BridgeEvent::Emitted)` on the event
-stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` helper submits the
-typed instruction so indexers can consume receipts deterministically.
+ཟམ་གྱི་ལམ་ཚུ་ བཏོན་གཏང་ནི་ `RecordBridgeReceipt` བཀོད་རྒྱ་བརྒྱུད་དེ་ ཡིག་དཔར་རྐྱབས་ཡོདཔ་ཨིན། བཀོད་རྒྱ་འདི་ལག་ལེན་འཐབ་དོ།
+`BridgeReceipt` གིས་ བྱུང་རིམ་གུ་ `DataEvent::Bridge(BridgeEvent::Emitted)` ཅིག་བཟོཝ་ཨིན།
+རྒྱུན་སྤེལ་, སྔ་གོང་ནང་བསྐྱོད་རྐྱངམ་ཅིག་གི་ སྲབ་ཐག་འདི་ བསྐྱར་ལོག་འབད་དོ། CLI `iroha bridge emit-receipt` གྲོགས་རམ་འབད་མི་གིས་ ཕུལ་ཡོདཔ་ཨིན།
+དེ་འབདཝ་ལས་ ཟུར་ཐོར་ཚུ་གིས་ འོང་འབབ་ཚུ་ བཟའ་སྤྱོད་འབད་བཏུབ་པའི་ བཀོད་རྒྱ་ཡིག་དཔར་རྐྱབས།
 
-## External verification sketch (ICS)
+## ཕྱི་ཕྱོགས་བདེན་དཔྱད་ཀྱི་རི་མོ་ (ICS)
 
 ```rust
 use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};

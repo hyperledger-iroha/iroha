@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript SDK quickstart
 description: Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-`@iroha/iroha-js` is the canonical Node.js package for interacting with Torii. It
-bundles Norito builders, Ed25519 helpers, pagination utilities, and a resilient
-HTTP/WebSocket client so you can mirror the CLI flows from TypeScript.
+`@iroha/iroha-js` 是用於與 Torii 交互的規範 Node.js 包。它
+捆綁 Norito 構建器、Ed25519 幫助器、分頁實用程序和彈性
+HTTP/WebSocket 客戶端，以便您可以從 TypeScript 鏡像 CLI 流。
 
-## Installation
+## 安裝
 
 ```bash
 npm install @iroha/iroha-js
@@ -21,10 +23,10 @@ npm install @iroha/iroha-js
 npm run build:native
 ```
 
-The build step wraps `cargo build -p iroha_js_host`. Ensure the toolchain from
-`rust-toolchain.toml` is available locally before running `npm run build:native`.
+構建步驟包裝 `cargo build -p iroha_js_host`。確保工具鏈來自
+在運行 `npm run build:native` 之前，`rust-toolchain.toml` 在本地可用。
 
-## Key management
+## 密鑰管理
 
 ```ts
 import {
@@ -45,10 +47,10 @@ const derived = publicKeyFromPrivate(privateKey);
 console.assert(Buffer.compare(derived, publicKey) === 0);
 ```
 
-## Build transactions
+## 建立交易
 
-Norito instruction builders normalise identifiers, metadata, and quantities so
-encoded transactions match the Rust/CLI payloads.
+Norito 指令構建器標準化標識符、元數據和數量，以便
+編碼交易與 Rust/CLI 有效負載匹配。
 
 ```ts
 import {
@@ -77,11 +79,11 @@ const { signedTransaction } = buildMintAndTransferTransaction({
 });
 ```
 
-## Torii client configuration
+## Torii 客戶端配置
 
-`ToriiClient` accepts retry/timeout knobs that mirror `iroha_config`. Use
-`resolveToriiClientConfig` to merge a camelCase config object (normalize
-`iroha_config` first), env overrides, and inline options.
+`ToriiClient` 接受鏡像 `iroha_config` 的重試/超時旋鈕。使用
+`resolveToriiClientConfig` 合併駝峰式配置對象（規範化
+首先是 `iroha_config`）、環境覆蓋和內聯選項。
 
 ```ts
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";
@@ -112,31 +114,31 @@ const torii = new ToriiClient(
 );
 ```
 
-Environment variables for local dev:
+本地開發環境變量：
 
-| Variable | Purpose |
+|變量|目的|
 |----------|---------|
-| `IROHA_TORII_TIMEOUT_MS` | Request timeout (milliseconds). |
-| `IROHA_TORII_MAX_RETRIES` | Maximum retry attempts. |
-| `IROHA_TORII_BACKOFF_INITIAL_MS` | Initial retry backoff. |
-| `IROHA_TORII_BACKOFF_MULTIPLIER` | Exponential backoff multiplier. |
-| `IROHA_TORII_MAX_BACKOFF_MS` | Maximum retry delay. |
-| `IROHA_TORII_RETRY_STATUSES` | Comma-separated HTTP status codes to retry. |
-| `IROHA_TORII_RETRY_METHODS` | Comma-separated HTTP methods to retry. |
-| `IROHA_TORII_API_TOKEN` | Adds `X-API-Token`. |
-| `IROHA_TORII_AUTH_TOKEN` | Adds `Authorization: Bearer …` header. |
+| `IROHA_TORII_TIMEOUT_MS` |請求超時（毫秒）。 |
+| `IROHA_TORII_MAX_RETRIES` |最大重試次數。 |
+| `IROHA_TORII_BACKOFF_INITIAL_MS` |初始重試退避。 |
+| `IROHA_TORII_BACKOFF_MULTIPLIER` |指數退避乘數。 |
+| `IROHA_TORII_MAX_BACKOFF_MS` |最大重試延遲。 |
+| `IROHA_TORII_RETRY_STATUSES` |用於重試的以逗號分隔的 HTTP 狀態代碼。 |
+| `IROHA_TORII_RETRY_METHODS` |用於重試的以逗號分隔的 HTTP 方法。 |
+| `IROHA_TORII_API_TOKEN` |添加 `X-API-Token`。 |
+| `IROHA_TORII_AUTH_TOKEN` |添加 `Authorization: Bearer …` 標頭。 |
 
-Retry profiles mirror Android defaults and are exported for parity checks:
+重試配置文件鏡像 Android 默認值並導出以進行奇偶校驗：
 `DEFAULT_TORII_CLIENT_CONFIG`, `DEFAULT_RETRY_PROFILE_PIPELINE`,
-`DEFAULT_RETRY_PROFILE_STREAMING`. See `docs/source/sdk/js/torii_retry_policy.md`
-for the endpoint-to-profile mapping and the parameters governance audits during
-JS4/JS7.
+`DEFAULT_RETRY_PROFILE_STREAMING`。參見 `docs/source/sdk/js/torii_retry_policy.md`
+用於端點到配置文件映射和參數治理審計
+JS4/JS7。
 
-## Iterable lists & pagination
+## 可迭代列表和分頁
 
-Pagination helpers mirror the Python SDK ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, balances, asset holders, and the
-account transaction history.
+分頁助手反映了 `/v1/accounts` 的 Python SDK 人體工程學，
+`/v1/domains`、`/v1/assets/definitions`、NFT、餘額、資產持有者以及
+賬戶交易歷史記錄。
 
 ```ts
 const { items, total } = await torii.listDomains({
@@ -175,22 +177,22 @@ const holders = await torii.listAssetHolders("rose#wonderland", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline allowances & verdict metadata
+## 離線津貼和判決元數據
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` are returned alongside the raw
-record so dashboards don’t have to decode the embedded Norito payloads. The new
-countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
-→ certificate) so UI badges can warn operators whenever an allowance has
-<24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
+離線津貼響應預先公開豐富的賬本元數據 -
+`expires_at_ms`、`policy_expires_at_ms`、`refresh_at_ms`、`verdict_id_hex`、
+`attestation_nonce_hex` 和 `remaining_amount` 與原始數據一起返回
+記錄，以便儀表板不必解碼嵌入式 Norito 有效負載。新的
+倒計時助手（`deadline_kind`、`deadline_state`、`deadline_ms`、
+`deadline_ms_remaining`) 突出顯示下一個即將到期的截止日期（刷新→政策
+→ 證書），以便 UI 徽章可以在津貼出現時警告操作員
+剩餘時間< 24 小時。軟件開發工具包
+鏡像 `/v1/offline/allowances` 暴露的 REST 過濾器：
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
-`requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
-example `onlyMissingVerdict` + `verdictIdHex`) are rejected locally before Torii
-is called.
+`verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs` 和
+`requireVerdict` / `onlyMissingVerdict` 布爾值。無效組合（對於
+例如 `onlyMissingVerdict` + `verdictIdHex`) 在 Torii 之前被本地拒絕
+被稱為。
 
 ```ts
 const { items: allowances } = await torii.listOfflineAllowances({
@@ -209,14 +211,14 @@ for (const entry of allowances) {
 }
 ```
 
-## Offline top-ups (issue + register)
+## 線下充值（發行+註冊）
 
-Use the top-up helpers when you want to issue a certificate and immediately
-register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. There is
-no dedicated top-up endpoint; the helper chains the issue + register calls. If
-you already have a signed certificate, call `registerOfflineAllowance` (or
-`renewOfflineAllowance`) directly.
+當您想要立即頒發證書時，請使用充值助手
+將其登記在分類賬上。 SDK驗證頒發並註冊的證書
+返回前 ID 匹配，並且響應包含兩個有效負載。有
+無專用充值端點；助手鍊接問題+註冊調用。如果
+您已經擁有簽名證書，請致電 `registerOfflineAllowance`（或
+`renewOfflineAllowance`) 直接。
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
@@ -238,11 +240,11 @@ const renewed = await torii.topUpOfflineAllowanceRenewal(
 console.log(renewed.registration.certificate_id_hex);
 ```
 
-## Torii queries & streaming (WebSockets)
+## Torii 查詢和流式傳輸（WebSockets）
 
-Query helpers expose status, Prometheus metrics, telemetry snapshots, and event
-streams using the Norito filter grammar. Streaming automatically upgrades to
-WebSockets and resumes when the retry budget allows.
+查詢助手公開狀態、Prometheus 指標、遙測快照和事件
+使用 Norito 過濾語法的流。流媒體自動升級到
+WebSockets 並在重試預算允許時恢復。
 
 ```ts
 const status = await torii.getSumeragiStatus();
@@ -262,18 +264,18 @@ for await (const event of torii.streamEvents({
 abort.abort(); // closes the underlying WebSocket cleanly
 ```
 
-Use `streamBlocks`, `streamTransactions`, or `streamTelemetry` for the other
-WebSocket endpoints. All streaming helpers surface retry attempts, so hook the
-`onReconnect` callback to feed dashboards and alerting.
+將 `streamBlocks`、`streamTransactions` 或 `streamTelemetry` 用於其他
+WebSocket 端點。所有流式處理助手都表面重試嘗試，因此掛鉤
+`onReconnect` 回調以提供儀表板和警報。
 
-## Explorer snapshots & QR payloads
+## 資源管理器快照和 QR 有效負載
 
-Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
-`/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
-same snapshots that power the portal. `getExplorerMetrics()` normalises the
-payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
-SVG for share buttons.
+Explorer 遙測為 `/v1/explorer/metrics` 和
+`/v1/explorer/accounts/{account_id}/qr` 端點，以便儀表板可以重播
+為門戶提供支持的相同快照。 `getExplorerMetrics()` 標準化
+當路由被禁用時，有效負載並返回 `null`。與它配對
+`getExplorerAccountQr()` 每當您需要 IH58（首選）/sora（第二好的）文字加上內聯時
+用於共享按鈕的 SVG。
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -297,20 +299,20 @@ console.log(
 );
 ```
 
-Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for the preferred IH58 output or request `ih58_qr`
-when you need the QR-safe variant. The compressed literal is the second-best
-Sora-only option for UX. The helper always returns the canonical identifier,
-the selected literal, and metadata (network prefix, QR version/modules, error
-correction tier, and inline SVG), so CI/CD can publish the same payloads that
-the Explorer surfaces without calling bespoke converters.
+傳遞 `addressFormat: "compressed"` 鏡像資源管理器的默認壓縮
+選擇器；忽略首選 IH58 輸出的覆蓋或請求 `ih58_qr`
+當您需要二維碼安全版本時。壓縮文字是第二好的
+僅 Sora 的 UX 選項。助手總是返回規範標識符，
+所選文字和元數據（網絡前綴、QR 版本/模塊、錯誤
+校正層和內聯 SVG），因此 CI/CD 可以發布與
+Explorer 無需調用定制轉換器即可浮出水面。
 
-## Connect sessions & queueing
+## 連接會話和排隊
 
-The Connect helpers mirror `docs/source/connect_architecture_strawman.md`. The
-fastest path to a preview-ready session is `bootstrapConnectPreviewSession`,
-which stitches together deterministic SID/URI generation and the Torii
-registration call.
+Connect 幫助程序鏡像 `docs/source/connect_architecture_strawman.md`。的
+預覽就緒會話的最快路徑是 `bootstrapConnectPreviewSession`，
+它將確定性 SID/URI 生成和 Torii 縫合在一起
+登記電話。
 
 ```ts
 import {
@@ -333,25 +335,25 @@ console.log("wallet QR", preview.walletUri);
 console.log("Connect tokens", tokens?.wallet, tokens?.app);
 ```
 
-- Pass `register: false` when you only need deterministic URIs for QR/deeplink
-  previews.
-- `generateConnectSid` stays available when you need to derive session ids
-  without minting URIs.
-- Directional keys and ciphertext envelopes come from the native bridge; when
-  unavailable the SDK falls back to the JSON codec and throws
-  `ConnectQueueError.bridgeUnavailable`.
-- Offline buffers are stored as Norito `.to` blobs in IndexedDB. Monitor queue
-  state via the emitted `ConnectQueueError.overflow(limit)` /
-  `.expired(ttlMs)` errors and feed `connect.queue_depth` telemetry as outlined
-  in the roadmap.
+- 當您只需要 QR/deeplink 的確定性 URI 時，傳遞 `register: false`
+  預覽。
+- 當您需要派生會話 ID 時，`generateConnectSid` 保持可用
+  無需創建 URI。
+- 方向鍵和密文信封來自本機橋；當
+  不可用，SDK 會回退到 JSON 編解碼器並拋出異常
+  `ConnectQueueError.bridgeUnavailable`。
+- 脫機緩衝區在 IndexedDB 中存儲為 Norito `.to` blob。監控隊列
+  通過發出的 `ConnectQueueError.overflow(limit)` 狀態/
+  `.expired(ttlMs)` 錯誤並按概述饋送 `connect.queue_depth` 遙測
+  在路線圖中。
 
-### Connect registry & policy snapshots
+### 連接註冊表和策略快照
 
-Platform operators can introspect and update the Connect registry without
-leaving Node.js. `iterateConnectApps()` pages through the registry, while
-`getConnectStatus()` and `getConnectAppPolicy()` expose the runtime counters and
-current policy envelope. `updateConnectAppPolicy()` accepts camelCase fields,
-so you can stage the same JSON payload that Torii expects.
+平台運營商可以自省並更新 Connect 註冊表，而無需
+離開 Node.js。 `iterateConnectApps()` 通過註冊表進行分頁，同時
+`getConnectStatus()` 和 `getConnectAppPolicy()` 公開運行時計數器和
+當前的政策範圍。 `updateConnectAppPolicy()` 接受駝峰命名法字段，
+因此您可以暫存 Torii 期望的相同 JSON 有效負載。
 
 ```ts
 const status = await torii.getConnectStatus();
@@ -373,17 +375,17 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 }
 ```
 
-Always capture the latest `getConnectStatus()` snapshot before applying
-mutations—the governance checklist requires evidence that policy updates start
-from the fleet’s current limits.
+在應用之前始終捕獲最新的 `getConnectStatus()` 快照
+突變——治理清單需要政策更新開始的證據
+從艦隊目前的限制來看。
 
-### Connect WebSocket dialling
+### 連接WebSocket撥號
 
-`ToriiClient.openConnectWebSocket()` assembles the canonical
-`/v1/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
-`http→ws` / `https→wss`, and hands the final URL to whichever WebSocket
-implementation you supply. Browsers automatically reuse the global
-`WebSocket`. Node.js callers should pass a constructor such as `ws`:
+`ToriiClient.openConnectWebSocket()` 彙編規範
+`/v1/connect/ws` URL（包括`sid`、`role`和令牌參數）、升級
+`http→ws` / `https→wss`，並將最終 URL 交給任意一個 WebSocket
+您提供的實施。瀏覽器自動重用全局
+`WebSocket`。 Node.js 調用者應傳遞一個構造函數，例如 `ws`：
 
 ```ts
 import WebSocket from "ws";
@@ -419,19 +421,19 @@ socket.addEventListener("message", (event) => {
 });
 ```
 
-When you only need the URL, call `torii.buildConnectWebSocketUrl(params)` or the
-top-level `buildConnectWebSocketUrl(baseUrl, params)` helper and reuse the
-resulting string in a custom transport/queue.
+當您只需要 URL 時，請調用 `torii.buildConnectWebSocketUrl(params)` 或
+頂級 `buildConnectWebSocketUrl(baseUrl, params)` 幫助程序並重用
+自定義傳輸/隊列中的結果字符串。
 
-Looking for a complete CLI-oriented sample? The
-[Connect preview recipe](./recipes/javascript-connect-preview.md) includes a
-runnable script plus telemetry guidance that mirrors the roadmap deliverable for
-documenting the Connect queue + WebSocket flow.
+正在尋找完整的面向 CLI 的示例？的
+[連接預覽配方](./recipes/javascript-connect-preview.md) 包括一個
+可運行的腳本加上遙測指導，反映了路線圖的可交付成果
+記錄 Connect 隊列 + WebSocket 流程。
 
-### Queue telemetry & alerting
+### 隊列遙測和警報
 
-Wire queue metrics directly into the helper surfaces so dashboards can mirror
-the roadmap KPIs.
+將隊列指標直接連接到輔助界面，以便儀表板可以鏡像
+路線圖 KPI。
 
 ```ts
 import { bootstrapConnectPreviewSession, ConnectQueueError } from "@iroha/iroha-js";
@@ -455,17 +457,17 @@ async function dialWithTelemetry(client: ToriiClient) {
 }
 ```
 
-`ConnectQueueError#toConnectError()` converts queue failures into the generic
-`ConnectError` taxonomy so shared HTTP/WebSocket interceptors can emit the
-standard `connect.queue_depth`, `connect.queue_overflow_total`, and
-`connect.queue_expired_total` metrics referenced throughout the roadmap.
+`ConnectQueueError#toConnectError()` 將隊列故障轉換為通用故障
+`ConnectError` 分類，因此共享 HTTP/WebSocket 攔截器可以發出
+標準 `connect.queue_depth`、`connect.queue_overflow_total` 和
+整個路線圖中引用的 `connect.queue_expired_total` 指標。
 
-## Streaming watchers & event cursors
+## 流式觀察者和事件光標
 
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
-retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
-Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
-resume a stream without skipping events when a process restarts.
+`ToriiClient.streamEvents()` 將 `/v1/events/sse` 公開為具有自動功能的異步迭代器
+重試，因此 Node/Bun CLI 可以像 Rust CLI 一樣跟踪管道活動。
+將 `Last-Event-ID` 光標保留在操作手冊工件旁邊，以便操作員可以
+當進程重新啟動時，恢復流而不跳過事件。
 
 ```ts
 import fs from "node:fs/promises";
@@ -495,35 +497,33 @@ for await (const event of torii.streamEvents({
 }
 ```
 
-- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
-  `STREAM_FILTER_JSON` to replay the same filters the CLI accepts.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
-  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
-  for a smoke test.
-- `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
-  iterator honours `Last-Event-ID` the same way.
-- See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
-  env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
-  streaming/WebSocket roadmap deliverable.
+- 切換 `PIPELINE_STATUS`（例如 `Pending`、`Applied` 或 `Approved`）或設置
+  `STREAM_FILTER_JSON` 重播 CLI 接受的相同過濾器。
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` 使迭代器保持活動狀態，直到
+  收到信號；當您只需要前幾個事件時，通過 `STREAM_MAX_EVENTS=25`
+  進行冒煙測試。
+- `ToriiClient.streamSumeragiStatus()` 鏡像相同的接口
+  `/v1/sumeragi/status/sse` 因此共識遙測可以單獨進行尾部，並且
+  迭代器以同樣的方式尊重 `Last-Event-ID`。
+- 請參閱 `javascript/iroha_js/recipes/streaming.mjs` 以了解交鑰匙 CLI（光標持久性、
+  JS4 中使用的 env-var 過濾器覆蓋和 `extractPipelineStatusKind` 日誌記錄）
+  流/WebSocket 路線圖可交付成果。
 
-## UAID portfolios & Space Directory
+## UAID 組合和空間目錄
 
-The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
-helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
-canonicalise them before submitting requests:
+空間目錄 API 呈現通用帳戶 ID (UAID) 生命週期。的
+幫助程序接受 `uaid:<hex>` 文字或原始 64 十六進制摘要 (LSB=1) 和
+在提交請求之前將它們規範化：
 
-- `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
-  grouping asset holdings by canonical account IDs; pass `assetId` to filter the
-  portfolio down to a single asset instance.
-- `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `sora…` literals).
-- `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
-  lifecycle status, and bound accounts for auditing.
-
-For operator evidence packs, manifest publish/revoke flows, and SDK migration
-guidance, follow the Universal Account Guide (`docs/source/universal_accounts_guide.md`)
-alongside these client helpers so the portal and source documentation remain in sync.
+- `getUaidPortfolio(uaid, { assetId })` 聚合每個數據空間的餘額，
+  按規範賬戶 ID 對資產持有量進行分組；通過 `assetId` 來過濾
+  投資組合縮減為單個資產實例。
+- `getUaidBindings(uaid, { addressFormat })` 枚舉每個數據空間↔帳戶
+  綁定（`addressFormat: "compressed"` 返回 `sora…` 文字）。
+- `getUaidManifests(uaid, { dataspaceId })` 返回每個功能清單，
+  生命週期狀態，以及綁定賬戶進行審計。對於操作員證據包、清單發布/撤銷流程和 SDK 遷移
+指導，遵循通用賬戶指南 (`docs/source/universal_accounts_guide.md`)
+與這些客戶端助手一起，使門戶和源文檔保持同步。
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -544,11 +544,11 @@ const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
 console.log("manifests", manifests.manifests[0].manifest.entries.length);
 ```
 
-Operators can also rotate manifests or execute emergency deny-wins flows without
-dropping to the CLI. Both helpers accept an optional `{ signal }` object so
-long-running submissions can be cancelled with `AbortController`; non-object
-options or non-`AbortSignal` inputs raise a synchronous `TypeError` before the
-request hits Torii:
+操作員還可以輪換清單或執行緊急拒絕獲勝流程，而無需
+下降到 CLI。兩個助手都接受可選的 `{ signal }` 對象，因此
+可以使用 `AbortController` 取消長時間運行的提交；非對象
+選項或非 `AbortSignal` 輸入在
+請求命中 Torii：
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -583,45 +583,45 @@ await torii.revokeSpaceDirectoryManifest(
 );
 ```
 
-`publishSpaceDirectoryManifest()` accepts either raw manifest JSON (matching the
-fixtures under `fixtures/space_directory/`) or any object that serialises to the
-same structure. `privateKey`, `privateKeyHex`, or `privateKeyMultihash` map to
-the `ExposedPrivateKey` field Torii expects and default to the `ed25519`
-algorithm when no prefix is supplied. Both requests return once Torii enqueues
-the instruction (`202 Accepted`), at which point the ledger will emit the
-matching `SpaceDirectoryEvent`.
+`publishSpaceDirectoryManifest()` 接受原始清單 JSON（與
+`fixtures/space_directory/` 下的固定裝置）或序列化到的任何對象
+相同的結構。 `privateKey`、`privateKeyHex` 或 `privateKeyMultihash` 映射到
+`ExposedPrivateKey` 字段 Torii 期望並默認為 `ed25519`
+未提供前綴時的算法。一旦 Torii 入隊，兩個請求都會返回
+指令（`202 Accepted`），此時賬本將發出
+匹配 `SpaceDirectoryEvent`。
 
-## Governance & ISO bridge
+## 治理和 ISO 橋樑
 
-`ToriiClient` exposes the governance APIs for inspecting contracts, staging
-proposals, submitting ballots (plain or ZK), rotating the council, and calling
+`ToriiClient` 公開用於檢查合約、暫存的治理 API
+提案、提交選票（普通或 ZK）、輪換理事會並呼籲
 `governanceFinalizeReferendumTyped` /
-`governanceEnactProposalTyped` without hand-written DTOs. ISO&nbsp;20022 helpers
-follow the same pattern via `buildPacs008Message`/`buildPacs009Message` and the
-`submitIso*`/`waitForIsoMessageStatus` trio.
+`governanceEnactProposalTyped`，無手寫 DTO。 ISO 20022 助手
+通過 `buildPacs008Message`/`buildPacs009Message` 遵循相同的模式和
+`submitIso*`/`waitForIsoMessageStatus` 三重奏。
 
-See the [governance & ISO bridge recipe](./recipes/javascript-governance-iso.md)
-for CLI-ready samples plus pointers back to the full field guide in
-`docs/source/sdk/js/governance_iso_examples.md`.
+請參閱[治理和 ISO 橋接秘訣](./recipes/javascript-governance-iso.md)
+獲取 CLI 就緒示例以及返回完整現場指南的指針
+`docs/source/sdk/js/governance_iso_examples.md`。
 
-## RBC sampling & delivery evidence
+## RBC 採樣和交付證據
 
-The JS roadmap also requires Roadrunner Block Commitment (RBC) sampling so operators can
-prove that the block they fetched through Sumeragi matches the chunk proofs they verify.
-Use the built-in helpers instead of building payloads by hand:
+JS 路線圖還需要 Roadrunner 區塊承諾 (RBC) 抽樣，以便運營商可以
+證明他們通過 Sumeragi 獲取的塊與他們驗證的塊證明相匹配。
+使用內置的幫助程序而不是手動構建有效負載：
 
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, and
-   `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
-   (the integration suite falls back to it whenever
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normalises `{blockHash,height,view}`
-   plus optional `{count,seed,apiToken}` overrides so malformed hex or negative integers never
-   reach Torii.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample`, returning chunk proofs
-   and Merkle paths (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) you should archive with
-   the rest of your adoption evidence.
-4. `getSumeragiRbcDelivered(height, view)` captures the cohort’s delivery metadata so auditors
-   can replay the proof end-to-end.
+1. `getSumeragiRbcSessions()` 鏡像 `/v1/sumeragi/rbc/sessions`，以及
+   `findRbcSamplingCandidate()` 使用塊哈希自動選擇第一個交付的會話
+   （集成套件每當
+   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` 未設置）。
+2. `ToriiClient.buildRbcSampleRequest(session, overrides)` 標準化 `{blockHash,height,view}`
+   加上可選的 `{count,seed,apiToken}` 覆蓋，因此格式錯誤的十六進製或負整數永遠不會
+   達到 Torii。
+3. `sampleRbcChunks()` 將請求 POST 到 `/v1/sumeragi/rbc/sample`，返回塊證明
+   和 Merkle 路徑（`samples[].chunkHex`、`chunkRoot`、`payloadHash`），您應該使用
+   其餘的收養證據。
+4. `getSumeragiRbcDelivered(height, view)` 捕獲隊列的交付元數據，以便審核員
+   可以端到端地重放證明。
 
 ```js
 import assert from "node:assert";
@@ -655,23 +655,23 @@ console.log(
 );
 ```
 
-Persist both responses under the artefact root you submit to governance. Override the
-auto-selected session via `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-whenever you need to probe a specific block, and treat failures to fetch RBC snapshots as a
-pre-flight gating error rather than silently downgrading to direct mode.
+將這兩個響應保留在您提交給治理的工件根下。覆蓋
+通過 `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` 自動選擇會話
+每當您需要探測特定塊時，並將獲取 RBC 快照失敗視為
+飛行前選通錯誤，而不是默默降級到直接模式。
 
-## Testing & CI
+## 測試和持續集成
 
-1. Cache cargo and npm artifacts.
-2. Run `npm run build:native`.
-3. Execute `npm test` (or `node --test` for smoke jobs).
+1. 緩存貨物和 npm 工件。
+2. 運行 `npm run build:native`。
+3. 執行 `npm test`（或 `node --test` 用於菸霧作業）。
 
-The reference GitHub Actions workflow lives in
-`docs/source/examples/iroha_js_ci.md`.
+參考 GitHub Actions 工作流程位於
+`docs/source/examples/iroha_js_ci.md`。
 
-## Next steps
+## 後續步驟
 
-- Review the generated types in `javascript/iroha_js/index.d.ts`.
-- Explore the recipes under `javascript/iroha_js/recipes/`.
-- Pair `ToriiClient` with the Norito quickstart to inspect payloads alongside
-  SDK calls.
+- 查看 `javascript/iroha_js/index.d.ts` 中生成的類型。
+- 探索 `javascript/iroha_js/recipes/` 下的食譜。
+- 將 `ToriiClient` 與 Norito 快速入門配對，以同時檢查有效負載
+  SDK調用。

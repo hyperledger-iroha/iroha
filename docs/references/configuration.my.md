@@ -7,27 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cff283a14bf65f185f81539f8fbcd78ddcc6447c5e9045e1b46493051febaf6a
 source_last_modified: "2025-12-29T18:16:35.913045+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Acceleration
+# အရှိန်
 
-The `[accel]` section controls optional hardware acceleration for IVM and helpers. All
-accelerated paths have deterministic CPU fallbacks; if a backend fails a golden
-self‑test at runtime it is disabled automatically and execution continues on CPU.
+`[accel]` အပိုင်းသည် IVM နှင့် အကူအညီပေးသူများအတွက် ရွေးချယ်နိုင်သော ဟာ့ဒ်ဝဲအရှိန်မြှင့်မှုကို ထိန်းချုပ်သည်။ အားလုံး
+အရှိန်မြှင့်ထားသော လမ်းကြောင်းများတွင် သတ်မှတ်ထားသော CPU အမှားများပါရှိသည်။ backend တစ်ခုက ရွှေပျက်သွားရင်
+runtime တွင် self-test ၎င်းကိုအလိုအလျောက်ပိတ်ထားပြီး CPU ပေါ်တွင်ဆက်လက်လုပ်ဆောင်သည်။
 
-- `enable_cuda` (default: true) – Use CUDA when compiled and available.
-- `enable_metal` (default: true) – Use Metal on macOS when available.
-- `max_gpus` (default: 0) – Maximum GPUs to initialize; `0` means auto/no cap.
-- `merkle_min_leaves_gpu` (default: 8192) – Minimum leaves to offload Merkle
-  leaf hashing to GPU. Lower only for unusually fast GPUs.
-- Advanced (optional; usually inherit sensible defaults):
-  - `merkle_min_leaves_metal` (default: inherit `merkle_min_leaves_gpu`).
-  - `merkle_min_leaves_cuda` (default: inherit `merkle_min_leaves_gpu`).
-  - `prefer_cpu_sha2_max_leaves_aarch64` (default: 32768) – Prefer CPU SHA‑2 up to this many leaves on ARMv8 with SHA2.
-  - `prefer_cpu_sha2_max_leaves_x86` (default: 32768) – Prefer CPU SHA‑NI up to this many leaves on x86/x86_64.
+- `enable_cuda` (မူလ- မှန်) - စုစည်းပြီး ရနိုင်သည့်အခါ CUDA ကို သုံးပါ။
+- `enable_metal` (မူလ- မှန်) – ရနိုင်သည့်အခါ macOS တွင် Metal ကိုသုံးပါ။
+- `max_gpus` (မူလ- 0) – စတင်ရန် အများဆုံး GPU များ။ `0` ဆိုသည်မှာ အလိုအလျောက်/မရှိသော အထုပ်ဖြစ်သည်။
+- `merkle_min_leaves_gpu` (မူလ- 8192) – Merkle ကို ပိတ်ရန် အနည်းဆုံး အရွက်များ
+  GPU တွင် အရွက်များထည့်ထားသည်။ ပုံမှန်မဟုတ်သောမြန်သော GPU များအတွက်သာ လျှော့ပါ။
+- အဆင့်မြင့် (ချန်လှပ်ထားနိုင်သည်၊ အများအားဖြင့် ဆင်ခြင်နိုင်သော ပုံသေများကို အမွေဆက်ခံသည်)
+  - `merkle_min_leaves_metal` (မူလ- `merkle_min_leaves_gpu`)။
+  - `merkle_min_leaves_cuda` (မူလ- `merkle_min_leaves_gpu`) အမွေဆက်ခံသည်။
+  - `prefer_cpu_sha2_max_leaves_aarch64` (မူလ- 32768) – ARMv8 တွင် SHA2 ဖြင့် ဤများစွာသော အရွက်များအထိ CPU SHA-2 ကို ဦးစားပေးပါ။
+  - `prefer_cpu_sha2_max_leaves_x86` (မူလ- 32768) – x86/x86_64 တွင် ဤများစွာသော အရွက်များအထိ CPU SHA-NI ကို ဦးစားပေးပါ။
 
-Notes
-- Determinism first: acceleration never changes observable outputs; backends
-  run golden tests on init and fall back to scalar/SIMD when mismatches are detected.
-- Configure via `iroha_config`; avoid environment variables in production.
-
+မှတ်စုများ
+- အဆုံးအဖြတ်ခံယူမှု ပထမ- အရှိန်သည် မြင်နိုင်သော ရလဒ်များကို ဘယ်တော့မှ မပြောင်းလဲပါ။ နောက်ခံများ
+  init ပေါ်တွင် ရွှေရောင်စစ်ဆေးမှုများကို လုပ်ဆောင်ပြီး မကိုက်ညီမှုများကို တွေ့ရှိသောအခါ scalar/SIMD သို့ ပြန်သွားပါ။
+- `iroha_config` မှတဆင့် configure; ထုတ်လုပ်မှုတွင် ပတ်ဝန်းကျင်ပြောင်းလဲမှုများကို ရှောင်ကြဉ်ပါ။

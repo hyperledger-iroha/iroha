@@ -7,57 +7,56 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8ef338a20104dc5d15094e28a1332a604b68bdcfef1ff82fea784d43fdbd10b5
 source_last_modified: "2025-12-29T18:16:35.925474+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# GDPR DPIA Summary — Android SDK Telemetry (AND7)
+# GDPR DPIA བཅུད་བསྡུས་ — ཨེན་ཌོཌ་ཨེས་ཌི་ཀེ་ བརྒྱུད་འཕྲིན་ (AND7)
 
-| Field | Value |
-|-------|-------|
-| Assessment Date | 2026-02-12 |
-| Processing Activity | Android SDK telemetry export to shared OTLP backends |
-| Controllers / Processors | SORA Nexus Ops (controller), partner operators (joint controllers), Hyperledger Iroha Contributors (processor) |
-| Reference Docs | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| བརྟག་ཞིབ་ཚེས་གྲངས་ | ༢༠༢༦-༠༢-༡༢ |
+| ལས་སྦྱོར་གྱི་ལས་རིམ་ | Ondroid SDK བརྒྱུད་འཕྲིན་ཕྱིར་འདྲེན་ OTLP backens བརྗེ་སོར་བྱེད་པ། |
+| ཚད་འཛིན་པ་ / ལས་སྦྱོར་འབད་མི་ཚུ་ | SORA Nexus Ops (canderl), མཉམ་འབྲེལ་བཀོལ་སྤྱོད་པ་ (མཉམ་སྦྲེལ་ཚད་འཛིན་) Hyperledger Iroha ཕན་འདེབས་འབད་མི་ (ལས་སྦྱོར་འབད་མི་) |
+| དཔྱད་གཞིའི་ཡིག་ཆ་ | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, Norito
 
-## 1. Processing Description
+## 1. ལས་སྦྱོར་གྱི་འགྲེལ་བཤད།
 
-- **Purpose:** Provide operational telemetry needed to support AND7 observability (latency, retries, attestation health) while mirroring the Rust node schema (§2 of `telemetry_redaction.md`).
-- **Systems:** Android SDK instrumentation -> OTLP exporter -> shared telemetry collector managed by SRE (see Support Playbook §8).
-- **Data subjects:** Operator staff using Android SDK-based apps; downstream Torii endpoints (authority strings are hashed per telemetry policy).
+- **Purpose:** AND7 བལྟ་རྟོག་འབད་ཚུགས་ནི་ལུ་རྒྱབ་སྐྱོར་འབད་དགོ་པའི་ ལག་ལེན་གྱི་བརྡ་འཕྲིན་ཚུ་ ༼བསྐྱར་ལོག་དང་ བསྐྱར་ལོག་དང་ བདེན་ཁུངས་བཀལ་ནི་༽ ཚུ་ རཱསི་ཊི་ ནའུཌ་ལས་རིམ་ནང་ མེ་ལོང་ (`telemetry_redaction.md`) མེ་ལོང་ནང་ བཀོད་དགོ།
+- **རིམ་ལུགས་ཚུ་:** Android SDK ལག་ཆས་ -> OTLP ཕྱིར་འདྲེན་འབད་མི་ -> ཨེསི་ཨར་ཨི་གིས་ འཛིན་སྐྱོང་འཐབ་མི་ རུབ་འཕྲིན་བསྡུ་ལེན་པ་ -> མཉམ་རུབ་འབད་ཡོད་པའི་ བརྒྱུད་འཕྲིན་བསྡུ་ལེན་པ་ (རྒྱབ་སྐྱོར་པེལེ་བུཀ་ §༨ ལུ་བལྟ།)།
+- **གནད་སྡུད་ཆོས་ཚན་:** Android SDK-based apps ལག་ལེན་འཐབ་སྟེ་ བཀོལ་སྤྱོད་པ་ ལས་བྱེད་པ། reputech Torii མཐའ་མཚམས་ (རང་དབང་ཅན་གྱི་ཡིག་རྒྱུན་ཚུ་ བརྒྱུད་འཕྲིན་སྲིད་བྱུས་རེ་ལུ་ ཧ་ལས་བཏང་ཡོདཔ་ཨིན།)
 
-## 2. Data Inventory & Mitigations
+## 2. གནད་སྡུད་ཐོ་གཞུང་དང་ཉུང་འཕྲིན།
 
-| Channel | Fields | PII Risk | Mitigation | Retention |
-|---------|--------|----------|------------|-----------|
-| Traces (`android.torii.http.request`, `android.torii.http.retry`) | Route, status, latency | Low (no PII) | Authority hashed with Blake2b + rotating salt; no payload bodies exported. | 7–30 days (per telemetry doc). |
-| Events (`android.keystore.attestation.result`) | Alias label, security level, attestation digest | Medium (operational data) | Alias hashed (`alias_label`), `actor_role_masked` recorded for overrides with Norito audit tokens. | 90 days for success, 365 days for overrides/failures. |
-| Metrics (`android.pending_queue.depth`, `android.telemetry.export.status`) | Queue counts, exporter status | Low | Aggregated counts only. | 90 days. |
-| Device profile gauges (`android.telemetry.device_profile`) | SDK major, hardware tier | Medium | Bucketing (emulator/consumer/enterprise), no OEM or serial numbers. | 30 days. |
-| Network context events (`android.telemetry.network_context`) | Network type, roaming flag | Medium | Carrier name dropped entirely; supports compliance requirement to avoid subscriber data. | 7 days. |
+| རྒྱུན་ལམ་ | ཕིལཌ་ | PII ཉེན་ཁ། | མར་ཕབ་ | བདག་འཛིན་ |
+|----------------------------------------------------------------------------------------------------------------------- |
+| ཊེསི་ (`android.torii.http.request`, `android.torii.http.retry`) | ལམ།, གནས་སྟངས།, འཕྲོ་མཐུད། | དམའ་ (PII) | Blake2b + བསྒྱིར་བའི་ཚྭ་དང་གཅིག་ཁར་ དབང་ཚད་ཐོབ་ཡོདཔ། ཁྲལ་འབབ་ཀྱི་གཟུགས་ཕྱིར་གཏོང་མེདཔ། | ཉིན་གྲངས་༧–༣༠ (བརྒྱུད་འཕྲིན་ཡིག་ཆ་རེ་ལུ་)། |
+| ལས་རིམ་ (`android.keystore.attestation.result`) | མིང་བྱང་ ཁ་ཡིག་ ཉེན་སྲུང་གནས་རིམ་ བདེན་དཔང་འབད་མི་ བཞུ་ཚུགས། | བར་མཚམས་ (བཀོལ་སྤྱོད་གནས་སྡུད།) | ཨ་ལི་ཡས་ཀྱིས་ (`alias_label`), `actor_role_masked` རྩིས་ཞིབ་ཊོ་ཀེན་ཚུ་ Norito རྩིས་ཞིབ་ཊོ་ཀེན་ཚུ་དང་གཅིག་ཁར་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན། | མཐར་འཁྱོལ་གྱི་དོན་ལུ་ ཉིནམ་༩༠ , ཉིནམ་༣༦༥ བཀག་ཆ་འབད་ནི།/འཐུས་ཤོར་གྱི་དོན་ལུ་ ཉིནམ་༣༦༥། |
+| མེ་ཊིག་ (`android.pending_queue.depth`, `android.telemetry.export.status`) | Queue གྱངས་ཁ་, ཕྱིར་འདྲེན་པ་གནས་སྟངས། | དམའ་བ་ | བསྡོམས་རྩིས་རྐྱངམ་ཅིག་ཨིན། | ཉིན་གྲངས་ ༩༠། |
+| ཐབས་འཕྲུལ་གསལ་སྡུད་འཇལ་ཚད་ (`android.telemetry.device_profile`) | SDK ཆེ་འབྲིང་།, མཐུན་རྐྱེན་རིམ་པ་ | བར་མ། | བཱ་ཀེ་ཊིང་ (བརྡ་བཀོད་/ཉོ་སྤྱོད་པ་/འཛུལ་སྒོ) ཨོ་ཨི་ཨེམ་ཡང་ན་ རིམ་སྒྲིག་ཨང་གྲངས་མེདཔ་ཨིན། | ཉིན་གྲངས་ ༣༠། |
+| ཡོངས་འབྲེལ་སྐབས་དོན་བྱུང་ལས་ (`android.telemetry.network_context`) | ཡོངས་འབྲེལ་དབྱེ་བ། དར་དར་ | བར་མ། | འབག་མི་མིང་འདི་ ཡོངས་རྫོགས་སྦེ་ མར་ཕབ་འགྱོ་ཡོདཔ་ཨིན། མཁོ་མངགས་འབད་མི་གི་གནས་སྡུད་ལས་ འཛེམ་ཐབས་ལུ་ བསྟར་སྤྱོད་དགོས་མཁོ་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། | ཉིན་གྲངས་ ༧། |
 
-## 3. Lawful Basis & Rights
+## 3. འབྲེལ་གཏུགས་ཁྲིམས་དོན་དང་ཐོབ་ཐང་།
 
-- **Lawful basis:** Legitimate interest (Art. 6(1)(f)) — ensuring reliable operation of regulated ledger clients.
-- **Necessity test:** Metrics limited to operational health (no user content); hashed authority ensures parity with Rust nodes through reversible mapping available only to authorised support personnel (via override workflow).
-- **Balancing test:** Telemetry is scoped to operator-controlled devices, not end-user data. Overrides require signed Norito artefacts reviewed by Support + Compliance (Support Playbook §3 + §9).
-- **Data subject rights:** Operators contact Support Engineering (playbook §2) to request telemetry export/delete. Redaction overrides and logs (telemetry doc §Signal Inventory) enable fulfilment within 30 days.
+- **ཁྲིམས་ལུགས་ཀྱི་ཁེ་ཕན་ (Art. 6(1)(f)) — ཁྲིམས་མཐུན་གྱི་ ལག་དེབ་མཁོ་མངགས་འབད་མི་ཚུ་ བློ་གཏད་ཅན་སྦེ་ ལག་ལེན་འཐབ་ཚུགས།
+- **དགོས་མཁོ་བརྟག་དཔྱད་:** ལག་ལེན་གྱི་གསོ་བའི་ཚད་གཞི་ཚད་འཛིན་ (ལག་ལེན་པའི་ནང་དོན་མེད།) དབང་ཚད་ཅན་གྱི་རྒྱབ་སྐྱོར་ལས་བྱེདཔ་ཚུ་ལུ་རྐྱངམ་ཅིག་ཐོབ་ཚུགས་པའི་ ཕྱིར་ལོག་འབད་བཏུབ་པའི་སབ་ཁྲ་བརྒྱུད་དེ་ རཱསིཊ་ནོ་ཌིསི་ཚུ་དང་གཅིག་ཁར་ མཉམ་མཐུན་ངེས་གཏན་བཟོཝ་ཨིན། ༼ལཱ་གི་རྒྱུན་རིམ་བརྒྱུད་དེ་༽
+- **འདྲ་མཉམ་བརྟག་དཔྱད་:** ཊེ་ལི་མི་ཊི་འདི་ མཐའ་མཇུག་ལག་ལེན་པའི་གནད་སྡུད་མེན་པར་ བཀོལ་སྤྱོད་ཚད་འཛིན་འབད་མི་ ཐབས་འཕྲུལ་ཚུ་ལུ་ ཁྱབ་ཨིན། དབང་བཟུང་ཚུ་ལུ་ རྒྱབ་སྐྱོར་དང་ བསྟར་སྤྱོད་ཀྱིས་ བསྐྱར་ཞིབ་འབད་མི་ Norito གི་ ཅ་ཆས་ཚུ་ མཚན་རྟགས་བཀོད་དགོཔ་ཨིན། (རྒྱབ་སྐྱོར་ རྩེད་དེབ་ §3 + §9)
+- **གནས་སྡུད་དོན་ཚན་གྱི་ཐོབ་དབང་:** བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འཕྲུལ་རིག་རྒྱབ་སྐྱོར་བཟོ་རིག་ལུ་ འབྲེལ་བ་འཐབ་སྟེ་ བརྡ་འཕྲིན་ཕྱིར་ཚོང་/གསོག་འཇོག་འབད་དགོ་པའི་ཞུ་བ་འབད། བཅོས་སྒྱུར་དང་ དྲན་ཐོ་ཚུ་ (ཊེ་ལི་མི་ཊི་ཌོག་ §སི་ཇི་ནལ་ ཐོ་བཀོད་) གིས་ ཉིནམ་༣༠ གྱི་ནང་འཁོད་ལུ་ བསྒྲུབ་ཚུགས།
 
-## 4. Risk Assessment
+## 4. ཉེན་ཁའི་བརྟག་དཔྱད།| ཉེན་ཁ། དགའ་བ་ | ཕན་གནོད་ | ལྷག་ལུས་ཉམས་རྒུད། |
+|--|-|-|-|-|--|---------------------------------------------------- |
+| དབང་འཛིན་བརྒྱུད་དེ་ ལོག་ངོས་འཛིན་འབད། | དམའ་བ་ | བར་མ། | `android.telemetry.redaction.salt_version` བརྒྱུད་དེ་ཐོ་བཀོད་འབད་ཡོདཔ། ཉེན་སྲུང་ཅན་གྱི་དངུལ་ཕོགས་ནང་ བསག་བཞག་ཡོད་པའི་ཚྭ་ཚུ། ཟླཝ་གསུམ་གྱི་རིང་ལུ་ རྩིས་ཞིབ་འབད་ཡོདཔ། |
+| གསལ་སྡུད་ཀྱི་བཱ་ཀེཊི་ཚུ་བརྒྱུད་དེ་ ཐབས་འཕྲུལ་གྱི་མཛུབ་མོ་གི་པར་རིས། | དམའ་བ་ | བར་མ། | རིམ་པ་ + ཨེསི་ཌི་ཀེ་ ཕྱིར་འདྲེན་སྦོམ་འབད་ཡོདཔ། རྒྱབ་སྐྱོར་ Playbook གིས་ OEM/རིམ་སྒྲིག་གནས་སྡུད་ཀྱི་དོན་ལུ་ ཡར་འཕར་གྱི་ཞུ་བ་ཚུ་ བཀག་ཆ་འབདཝ་ཨིན། |
+| ངོ་རྒོལ་འབད་མི་ ལོག་སྤྱོད་འབད་མི་ PII | ཧ་ཅང་དམའ་བ། | མཐོ་ཚད་ | Norito ནང་བསྐྱོད་འབད་ཡོད་པའི་ཞུ་བ་ཚུ་ ཆུ་ཚོད་༢༤ གི་ནང་འཁོད་ལུ་ དུས་ཡུན་ཚང་མི་ ཨེསི་ཨར་ཨི་ཆ་འཇོག་དགོཔ་ཨིན། (`docs/source/android_runbook.md` §3) |
+| EU གི་ཕྱི་རོལ་གྱི་བརྒྱུད་འཕྲིན་གསོག་འཇོག་ | བར་མ། | བར་མ། | ཨི་ཡུ་ + ཇེ་པི་ལུང་ཕྱོགས་ནང་ བཀྲམ་སྤེལ་འབད་མི་ བསྡུ་གསོག་ཚུ། OTLP རྒྱབ་རྟེན་རིམ་སྒྲིག་བརྒྱུད་དེ་ བཀག་བཞག་སྲིད་བྱུས་ (རྒྱབ་སྐྱོར་ རྩེད་དེབ་ §8 ནང་ ཡིག་ཆ་བཟོ་ཡོདཔ།) |
 
-| Risk | Likelihood | Impact | Residual Mitigation |
-|------|------------|--------|---------------------|
-| Re-identification via hashed authorities | Low | Medium | Salt rotation recorded through `android.telemetry.redaction.salt_version`; salts stored in secure vault; overrides audited quarterly. |
-| Device fingerprinting via profile buckets | Low | Medium | Only tier + SDK major exported; Support Playbook prohibits escalation requests for OEM/serial data. |
-| Override misuse leaking PII | Very Low | High | Norito override requests logged, expire within 24h, require SRE approval (`docs/source/android_runbook.md` §3). |
-| Telemetry storage outside EU | Medium | Medium | Collectors deployed in EU + JP regions; retention policy enforced via OTLP backend configuration (documented in Support Playbook §8). |
+ལྷག་ལུས་ཉེན་ཁ་འདི་ གོང་འཁོད་དང་ འཕྲོ་མཐུད་དེ་རང་ ལྟ་རྟོག་འབད་བའི་བསྒང་ཡོདཔ་ལས་ ངོས་ལེན་འབད་ཚུགསཔ་སྦེ་ བརྩི་འཇོག་འབདཝ་ཨིན།
 
-Residual risk is deemed acceptable given the controls above and ongoing monitoring.
+## 5. བྱ་བ་དང་རྗེས་སུ་འབྲང་།
 
-## 5. Actions & Follow-ups
-
-1. **Quarterly review:** Validate telemetry schemas, salt rotations, and override logs; document in `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
-2. **Cross-SDK alignment:** Coordinate with Swift/JS maintainers to maintain consistent hashing/bucketing rules (tracked in roadmap AND7).
-3. **Partner comms:** Include DPIA summary in partner onboarding kits (Support Playbook §9) and link to this document from `status.md`.
+1. **དུས་ཡུན་དུས་ཡུན་བསྐྱར་ཞིབ།** ཊེ་ལི་མི་ཊི་ལས་རིམ་དང་ ཚྭ་བསྒྱིར་ནི་ དེ་ལས་ བཀག་ཆ་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ བདེན་དཔྱད་འབད། ཡིག་ཆ་ `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md` ནང་།
+2. **Cross-SDK ཕྲང་སྒྲིག་:** Swift/JS བདག་འཛིན་འཐབ་མི་ཚུ་དང་གཅིག་ཁར་ མཉམ་འབྲེལ་འབད་དེ་ ཧ་ཤིང་/བཱ་ཀེཊི་ལམ་ལུགས་ཚུ་ རིམ་མཐུན་སྦེ་ རྒྱུན་སྐྱོང་འཐབ་ནི།
+3. **ཆ་རོགས་ཚུ་:** མཉམ་འབྲེལ་ཐོག་ཆས་ཆས་ནང་ DPIA བཅུད་བསྡུས་ (Support Plabook §9) དང་ `status.md` ལས་ ཡིག་ཆ་འདི་ལུ་འབྲེལ་མཐུད་འབད།

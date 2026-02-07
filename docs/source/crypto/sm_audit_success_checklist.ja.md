@@ -6,67 +6,68 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2026-01-03T18:07:57.081283+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 監査成功基準
+% Iroha 暗号ワーキング グループ
 % 2026-01-30
 
-# Purpose
+# 目的
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+このチェックリストには、成功するために必要な具体的な基準が記載されています。
+SM2/SM3/SM4 外部監査の完了。期間中に見直す必要がある
+キックオフ、各ステータス チェックポイントで再度確認され、終了の確認に使用されます
+実稼働バリデーターの SM 署名を有効にする前の条件。
 
-# Pre-Engagement Readiness
+# エンゲージメント前の準備
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] 範囲、成果物、機密保持、および内容を含む契約に署名しました。
+      修復サポート言語。
+- [ ] 監査チームはリポジトリ ミラー アクセス、CI アーティファクト バケット、および
+      `docs/source/crypto/sm_audit_brief.md` にリストされているドキュメント バンドル。
+- [ ] 役割ごとのバックアップで連絡先を確認
+      (暗号、IVM、プラットフォーム運用、セキュリティ、ドキュメント)。
+- [ ] 社内の関係者が目標リリース日に合わせて調整し、期間を凍結します。
+- [ ] SBOM エクスポート (`cargo auditable` + CycloneDX) が生成され、共有されました。
+- [ ] OpenSSL/Tongsuo ビルド来歴パッケージが準備されました
+      (ソース tarball ハッシュ、ビルド スクリプト、再現性に関するメモ)。
+- [ ] キャプチャされた最新の決定論的テスト出力:
+      `scripts/sm_openssl_smoke.sh`、`cargo test -p iroha_crypto sm`、および
+      Norito 往復フィクスチャ。
+- [ ] Torii `/v1/node/capabilities` アドバタイズ (`iroha runtime capabilities` 経由) が記録され、`crypto.sm` マニフェスト フィールドとアクセラレーション ポリシー スナップショットが検証されました。
 
-# Engagement Execution
+# エンゲージメントの実行
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] キックオフ ワークショップは目標を共有して完了し、
+      タイムラインとコミュニケーションのリズム。
+- [ ] 毎週のステータスレポートを受信し、優先順位を付けます。リスク登録が更新されました。
+- [ ] 重大度が低い場合、発見から 1 営業日以内に報告された調査結果
+      高または重大です。
+- [ ] 監査チームは 2 つ以上の CPU アーキテクチャ (x86_64、
+      aarch64) と一致する出力。
+- [ ] サイドチャネルレビューには、一定時間の証明または経験的テストが含まれます
+      Rust と FFI パスの両方の証拠。
+- [ ] コンプライアンスと文書のレビューにより、オペレーターのガイダンスが一致していることが確認されます
+      規制上の義務。
+- [ ] リファレンス実装に対する差分テスト (RustCrypto、
+      OpenSSL/Tongsuo) は監査人の監視のもとで実行されました。
+- [ ] ファズハーネスが評価されました。ギャップが存在する場合には、新しいシード コーパスが提供されます。
 
-# Remediation & Exit
+# 修復と終了
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] すべての調査結果は重大度、影響度、悪用可能性、および
+      推奨される修復手順。
+- [ ] 高/重大な問題には、監査人の承認を得たパッチまたは緩和策が適用されます。
+      検証。残留リスクが文書化されています。
+- [ ] 監査人は修正された問題を証明する再テスト検証を提供します (diff、test
+      実行、または署名された証明書)。
+- [ ] 提出された最終レポート: エグゼクティブ サマリー、詳細な調査結果、方法論、
+      決定論的評決、コンプライアンス評決。
+- [ ] 社内承認会議で次のステップ、リリースの調整、
+      およびドキュメントの更新。
+- [ ] `status.md` が監査結果と未解決の修復で更新されました
+      フォローアップ。
+- [ ] `docs/source/crypto/sm_program.md` でキャプチャされた死後 (レッスン)
+      学習済み、将来の強化タスク)。

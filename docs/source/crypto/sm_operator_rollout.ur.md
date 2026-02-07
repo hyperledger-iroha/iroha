@@ -6,50 +6,51 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dffc2cf6c6e59f54d1fc22136ba93f75466509c699a4361a381bf7e0ce0d1dda
 source_last_modified: "2026-01-03T18:07:57.089544+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM Feature Rollout & Telemetry Checklist
+# ایس ایم فیچر رول آؤٹ اور ٹیلی میٹری چیک لسٹ
 
-This checklist helps SRE and operator teams enable the SM (SM2/SM3/SM4) feature
-set safely once the audit and compliance gates are cleared. Follow this document
-alongside the configuration brief in `docs/source/crypto/sm_program.md` and the
-legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
+یہ چیک لسٹ ایس آر ای اور آپریٹر ٹیموں کو ایس ایم (ایس ایم 2/ایس ایم 3/ایس ایم 4) کی خصوصیت کو قابل بنانے میں مدد کرتی ہے
+آڈٹ اور تعمیل کے دروازے صاف ہونے کے بعد ایک بار محفوظ طریقے سے سیٹ کریں۔ اس دستاویز پر عمل کریں
+`docs/source/crypto/sm_program.md` اور دی میں ترتیب مختصر کے ساتھ ساتھ
+`docs/source/crypto/sm_compliance_brief.md` میں قانونی/برآمد کی رہنمائی۔
 
-## 1. Pre-flight Readiness
-- [ ] Confirm the workspace release notes show `sm` as verify-only or signing,
-      depending on the rollout stage.
-- [ ] Verify the fleet is running binaries built from a commit that includes the
-      SM telemetry counters and configuration knobs. (Target release TBD; track
-      in the rollout ticket.)
-- [ ] Run `scripts/sm_perf.sh --tolerance 0.25` on a staging node (per target
-      architecture) and archive the summary output. The script now auto-selects
-      the scalar baseline as a comparison target for acceleration modes
-      (`--compare-tolerance` defaults to 5.25 while the SM3 NEON work lands);
-      investigate or block the rollout if either the primary or comparison
-      guard fails. When capturing on Linux/aarch64 Neoverse hardware, pass
+## 1۔ پرواز سے پہلے کی تیاری
+- [] ورک اسپیس ریلیز کے نوٹوں کی تصدیق کریں `sm` کو صرف تصدیق کے طور پر یا دستخط کرنے کے بطور دکھائیں ،
+      رول آؤٹ مرحلے پر منحصر ہے۔
+- [] تصدیق کریں کہ بیڑے کسی کمٹ سے بنی بائنریز چلارہے ہیں جس میں بھی شامل ہے
+      ایس ایم ٹیلی میٹری کاؤنٹرز اور کنفیگریشن نوبس۔ (ٹارگٹ ریلیز ٹی بی ڈی ؛ ٹریک
+      رول آؤٹ ٹکٹ میں۔)
+- [] اسٹیجنگ نوڈ پر `scripts/sm_perf.sh --tolerance 0.25` چلائیں (فی ہدف)
+      فن تعمیر) اور خلاصہ آؤٹ پٹ کو محفوظ کریں۔ اسکرپٹ اب آٹو سلیکٹس
+      ایکسلریشن طریقوں کے لئے موازنہ ہدف کے طور پر اسکیلر بیس لائن
+      .
+      اگر بنیادی یا موازنہ یا تو رول آؤٹ کی تحقیقات کریں یا بلاک کریں
+      گارڈ ناکام ہوجاتا ہے۔ جب لینکس/آرچ 64 نیورورس ہارڈ ویئر پر قبضہ کرتے ہو تو ، پاس کریں
       `--baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_<mode>.json --write-baseline`
-      to overwrite the exported `m3-pro-native` medians with the host’s capture
-      before shipping.
-- [ ] Ensure `status.md` and the rollout ticket record the compliance filings for
-      any nodes operating in jurisdictions that require them (see compliance brief).
-- [ ] Prepare KMS/HSM updates if validators will store SM signing keys in
-      hardware modules.
+      برآمد شدہ `m3-pro-native` میڈین کو میزبان کی گرفتاری کے ساتھ اوور رائٹ کرنے کے لئے
+      شپنگ سے پہلے
+- [] `status.md` کو یقینی بنائیں اور رول آؤٹ ٹکٹ کے لئے تعمیل فائلنگ ریکارڈ کریں
+      کسی بھی نوڈس جن کے دائرہ اختیار میں کام کیا جاتا ہے جس میں ان کی ضرورت ہوتی ہے (تعمیل مختصر دیکھیں)۔
+- [] KMS/HSM اپ ڈیٹ تیار کریں اگر توثیق کنندہ ایس ایم پر دستخط کرنے والی چابیاں میں اسٹور کریں گے
+      ہارڈ ویئر ماڈیولز۔
 
-## 2. Configuration Changes
-1. Run the xtask helper to generate the SM2 key inventory and ready-to-paste snippet:
+## 2. ترتیب تبدیلیاں
+1. ایس ایم 2 کلیدی انوینٹری اور تیار پیسٹ کے ٹکڑوں کو تیار کرنے کے لئے ایکس ٹی ایس اے ایس پی کے مددگار کو چلائیں:
    ```bash
    cargo xtask sm-operator-snippet \
      --distid CN12345678901234 \
      --json-out sm2-key.json \
      --snippet-out client-sm2.toml
    ```
-   Use `--snippet-out -` (and optionally `--json-out -`) to stream the outputs to stdout when you just need to inspect them.
-   If you prefer to drive the lower-level CLI commands manually, the equivalent flow is:
+   جب آپ کو صرف ان کا معائنہ کرنے کی ضرورت ہو تو آؤٹ پٹ کو اسٹریم کرنے کے لئے `--snippet-out -` (اور اختیاری طور پر `--json-out -`) استعمال کریں۔
+   اگر آپ نچلے درجے کے سی ایل آئی کمانڈوں کو دستی طور پر چلانے کو ترجیح دیتے ہیں تو ، مساوی بہاؤ یہ ہے کہ:
    ```bash
    cargo run -p iroha_cli --features sm -- \
      crypto sm2 keygen \
@@ -63,9 +64,9 @@ legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
      --snippet-output client-sm2.toml \
      --emit-json --quiet
    ```
-   If `jq` is unavailable, open `sm2-key.json`, copy the `private_key_hex` value, and pass it directly to the export command.
-2. Add the resulting snippet to each node’s configuration (values shown for the
-   verify-only stage; adjust per environment and keep the keys sorted as shown):
+   اگر `jq` دستیاب نہیں ہے تو ، `sm2-key.json` کھولیں ، `private_key_hex` قدر کو کاپی کریں ، اور اسے براہ راست ایکسپورٹ کمانڈ میں منتقل کریں۔
+2. ہر نوڈ کی تشکیل میں نتیجے میں ٹکڑا شامل کریں (اقدار کے لئے دکھائے گئے ہیں
+   صرف اسٹیج کی تصدیق ؛ ہر ماحول کو ایڈجسٹ کریں اور چابیاں ترتیب دیں جیسا کہ دکھایا گیا ہے):
 ```toml
 [crypto]
 default_hash = "sm3-256"
@@ -73,74 +74,70 @@ allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mod
 sm2_distid_default = "1234567812345678"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 ```
-3. Restart the node and confirm `crypto.sm_helpers_available` and (if you enabled the preview backend) `crypto.sm_openssl_preview_enabled` surface as expected in:
-   - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`).
-   - The rendered `config.toml` for each node.
-4. Update manifests/genesis entries to add SM algorithms to the allow-list if
-   signing is enabled later in the rollout. When using `--genesis-manifest-json`
-   without a pre-signed genesis block, `irohad` now seeds the runtime crypto
-   snapshot directly from the manifest’s `crypto` block—ensure the manifest is
-   checked into your change plan before rolling forward.
-
-## 3. Telemetry & Monitoring
-- Scrape Prometheus endpoints and ensure the following counters/gauges appear:
+3. نوڈ کو دوبارہ اسٹارٹ کریں اور `crypto.sm_helpers_available` اور (اگر آپ نے پیش نظارہ پسدید کو فعال کیا ہے) کی تصدیق کریں) `crypto.sm_openssl_preview_enabled` سطح کی توقع کے مطابق:
+   - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`)۔
+   - ہر نوڈ کے لئے پیش کردہ `config.toml`۔
+4. ایس ایم الگورتھم کو اجازت فہرست میں شامل کرنے کے لئے ظاہر/پیدائش کے اندراجات کو اپ ڈیٹ کریں۔
+   سائننگ بعد میں رول آؤٹ میں فعال ہے۔ جب `--genesis-manifest-json` استعمال کریں
+   پہلے سے دستخط شدہ جینیسیس بلاک کے بغیر ، `irohad` اب رن ٹائم کریپٹو کو بیج دیتا ہے
+   سنیپ شاٹ براہ راست منشور کے `crypto` بلاک سے ہے - اس بات کی یقین دہانی ہے کہ ظاہر ہے
+   آگے بڑھنے سے پہلے اپنے تبدیلی کے منصوبے کی جانچ پڑتال کی۔## 3. ٹیلی میٹری اور مانیٹرنگ
+- کھرچنا Prometheus اختتامی نکات اور یقینی بنائیں کہ مندرجہ ذیل کاؤنٹرز/گیجز ظاہر ہوں:
   - `iroha_sm_syscall_total{kind="verify"}`
   - `iroha_sm_syscall_total{kind="hash"}`
   - `iroha_sm_syscall_total{kind="seal|open",mode="gcm|ccm"}`
-  - `iroha_sm_openssl_preview` (0/1 gauge reporting the preview toggle state)
+  - `iroha_sm_openssl_preview` (0/1 گیج پیش نظارہ ٹوگل اسٹیٹ کی رپورٹنگ)
   - `iroha_sm_syscall_failures_total{kind="verify|hash|seal|open",reason="..."}`
-- Hook signing path once SM2 signing is enabled; add counters for
-  `iroha_sm_sign_total` and `iroha_sm_sign_failures_total`.
-- Create Grafana dashboards/alerts for:
-  - Spikes in failure counters (window 5m).
-  - Sudden drops in SM syscall throughput.
-  - Differences between nodes (e.g., mismatched enablement).
+- ایک بار ایس ایم 2 پر دستخط کرنے کے بعد ہک سائننگ کا راستہ۔ کے لئے کاؤنٹر شامل کریں
+  `iroha_sm_sign_total` اور `iroha_sm_sign_failures_total`۔
+- Grafana ڈیش بورڈز/انتباہات بنائیں:
+  - ناکامی کاؤنٹرز میں اسپائکس (ونڈو 5 میٹر)
+  - ایس ایم سیسکل تھرو پٹ میں اچانک قطرے۔
+  - نوڈس (جیسے ، مماثل اہلیت) کے مابین اختلافات۔
 
-## 4. Rollout Steps
-| Phase | Actions | Notes |
-|-------|---------|-------|
-| Verify-only | Update `crypto.default_hash` to `sm3-256`, leave `allowed_signing` without `sm2`, monitor verification counters. | Goal: exercise SM verification paths without risking consensus divergence. |
-| Mixed Signing Pilot | Allow limited SM signing (subset of validators); monitor signing counters and latency. | Ensure fallback to Ed25519 remains available; halt if telemetry shows mismatches. |
-| GA Signing | Extend `allowed_signing` to include `sm2`, update manifests/SDKs, and publish final runbook. | Requires closed audit findings, updated compliance filings, and stable telemetry. |
+## 4. رول آؤٹ اقدامات
+| مرحلہ | اعمال | نوٹ |
+| ------- | --------- | ------- |
+| صرف تصدیق | `sm3-256` میں `crypto.default_hash` کو اپ ڈیٹ کریں ، `allowed_signing` کے بغیر `sm2` کے بغیر چھوڑیں ، مانیٹرنگ تصدیق کاؤنٹرز۔ | مقصد: اتفاق رائے سے انحراف کو خطرے میں ڈالے بغیر ایس ایم کی توثیق کے راستے ورزش کریں۔ |
+| مخلوط دستخطی پائلٹ | محدود ایس ایم پر دستخط کرنے کی اجازت دیں (توثیق کرنے والوں کا سب سیٹ) ؛ دستخط کرنے والے کاؤنٹرز اور لیٹینسی کی نگرانی کریں۔ | یقینی بنائیں کہ ED25519 پر فال بیک دستیاب ہے۔ اگر ٹیلی میٹری مماثل دکھاتی ہے تو رکیں۔ |
+| GA دستخط | `sm2` کو شامل کرنے کے لئے `allowed_signing` میں توسیع کریں ، مینی فیسٹ/ایس ڈی کے کو اپ ڈیٹ کریں ، اور آخری رن بک شائع کریں۔ | بند آڈٹ کے نتائج ، تعمیل فائلنگز ، اور مستحکم ٹیلی میٹری کی ضرورت ہے۔ |
 
-### Readiness Reviews
-- **Verify-only readiness (SM-RR1).** Convene Release Eng, Crypto WG, Ops, and Legal. Require:
-  - `status.md` notes compliance filing status + OpenSSL provenance.
-  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / this checklist updated within the last release window.
-  - `defaults/genesis` or the environment-specific manifest shows `crypto.allowed_signing = ["ed25519","sm2"]` and `crypto.default_hash = "sm3-256"` (or the verify-only variant without `sm2` if still in stage one).
-  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` logs attached to the rollout ticket.
-  - Telemetry dashboard (`iroha_sm_*`) reviewed for steady-state behaviour.
-- **Signing pilot readiness (SM-RR2).** Additional gates:
-  - Audit report for RustCrypto SM stack closed or RFC for compensating controls signed by Security.
-  - Operator runbooks (facility-specific) updated with signing fallback/rollback steps.
-  - Genesis manifests for the pilot cohort include `allowed_signing = ["ed25519","sm2"]` and the allow-list is mirrored in each node configuration.
-  - Exit/rollback plan documented (switch `allowed_signing` back to Ed25519, restore manifests, reset dashboards).
-- **GA readiness (SM-RR3).** Requires positive pilot report, updated compliance filings for all validator jurisdictions, signed telemetry baselines, and release ticket approval from Release Eng + Crypto WG + Ops/Legal triad.
+### تیاری کے جائزے
+-** صرف تیاری کی تصدیق (SM-RR1)۔ ضرورت ہے:
+  - `status.md` نوٹس تعمیل فائلنگ کی حیثیت + اوپن ایس ایل پروویژن۔
+  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / اس چیک لسٹ نے آخری ریلیز ونڈو کے اندر تازہ کاری کی۔
+  -`defaults/genesis` یا ماحولیاتی مخصوص مینی فیسٹ `crypto.allowed_signing = ["ed25519","sm2"]` اور `crypto.default_hash = "sm3-256"` (یا اگر ابھی بھی مرحلے میں موجود ہے تو `sm2` کے بغیر تصدیق شدہ قسم)۔
+  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` لاگز رول آؤٹ ٹکٹ سے منسلک ہیں۔
+  - ٹیلی میٹری ڈیش بورڈ (`iroha_sm_*`) مستحکم ریاست کے طرز عمل کے لئے جائزہ لیا گیا۔
+- ** پائلٹ کی تیاری پر دستخط کرنا (ایس ایم آر آر 2)۔ ** اضافی دروازے:
+  - سیکیورٹی کے ذریعہ دستخط شدہ کنٹرولز کے لئے روسٹ کریپٹو ایس ایم اسٹیک بند یا آر ایف سی کے لئے آڈٹ رپورٹ۔
+  - آپریٹر رن بوکس (سہولت سے متعلق) فال بیک/رول بیک قدموں پر دستخط کرنے کے ساتھ اپ ڈیٹ ہوا۔
+  - پائلٹ کوہورٹ کے لئے جینیسیس کے ظاہر ہونے میں `allowed_signing = ["ed25519","sm2"]` شامل ہے اور ہر نوڈ کنفیگریشن میں اجازت کی فہرست کی عکس بندی کی گئی ہے۔
+  - ایگزٹ/رول بیک پلان دستاویزی دستاویزات (سوئچ `allowed_signing` ED25519 پر واپس جائیں ، ظاہر کریں ظاہر کریں ، ڈیش بورڈز کو دوبارہ ترتیب دیں)۔
+- ** جی اے تیاری (ایس ایم آر آر 3)۔## 5. پیکیجنگ اور تعمیل چیک لسٹ
+- ** بنڈل اوپن ایس ایل/ٹونگسو نمونے۔ اس ورژن کو ریکارڈ کریں ، جھنڈوں کی تعمیر کریں ، اور ریلیز میں SHA256 چیکسم مینی فیسٹ ہوں تاکہ آڈیٹر سپلائر کی تعمیر کا سراغ لگاسکیں۔
+- ** CI کے دوران تصدیق کریں۔ اگر پیش نظارہ کا جھنڈا فعال ہو تو ملازمت کو ناکام ہونا چاہئے لیکن فراہم کنندہ کو شروع نہیں کیا جاسکتا (لاپتہ ہیڈر ، غیر تعاون یافتہ الگورتھم ، وغیرہ)۔
+-** تعمیل نوٹس شائع کریں۔
+- ** آپریٹر رن بک اپڈیٹس۔ بیڑے
+- ** شواہد برقرار رکھنے۔
 
-## 5. Packaging & Compliance Checklist
-- **Bundle OpenSSL/Tongsuo artifacts.** Ship OpenSSL/Tongsuo 3.0+ shared libraries (`libcrypto`/`libssl`) with every validator package or document the exact system dependency. Record the version, build flags, and SHA256 checksums in the release manifest so auditors can trace the supplier build.
-- **Verify during CI.** Add a CI step that executes `scripts/sm_openssl_smoke.sh` against the packaged artifacts on each target platform. The job must fail if the preview flag is enabled but the provider cannot be initialised (missing headers, unsupported algorithm, etc.).
-- **Publish compliance notes.** Update release notes / `status.md` with the bundled provider version, export-control references (GM/T, GB/T), and any jurisdiction-specific filings required for SM algorithms.
-- **Operator runbook updates.** Document the upgrade flow: stage the new shared objects, restart peers with `crypto.enable_sm_openssl_preview = true`, confirm the `/status` field and `iroha_sm_openssl_preview` gauge flip to `true`, and keep a rollback plan (flip the config flag or revert the package) if preview telemetry deviates across the fleet.
-- **Evidence retention.** Archive the build logs and signing attestations for the OpenSSL/Tongsuo packages alongside the validator release artefacts so future audits can reproduce the provenance chain.
+## 6. واقعہ کا جواب
+۔
+  `allowed_signing` سے (ضرورت کے مطابق `default_hash` کو تبدیل کرنا) اور پچھلے حصے میں ناکام
+  تفتیش کے دوران رہائی. گرفتاری میں ناکام پے لوڈ ، تقابلی ہیش اور نوڈ لاگز۔
+- ** کارکردگی کے رجعتیں: ** ED25519/SHA2 بیس لائنوں کے ساتھ ایس ایم میٹرکس کا موازنہ کریں۔
+  اگر بازو کا اندرونی راستہ موڑ کا سبب بنتا ہے تو ، `crypto.sm_intrinsics = "force-disable"` سیٹ کریں
+  (فیچر ٹوگل زیر التواء نفاذ) اور نتائج کی اطلاع دیں۔
+- ** ٹیلی میٹری گیپس: ** اگر کاؤنٹر غائب ہیں یا اپ ڈیٹ نہیں کررہے ہیں تو ، کوئی مسئلہ درج کریں
+  ریلیز انجینئرنگ کے خلاف ؛ فرق تک وسیع رول آؤٹ کے ساتھ آگے نہ بڑھیں
+  حل ہے۔
 
-## 6. Incident Response
-- **Verification failure spikes:** Roll back to a build without SM support or remove `sm2`
-  from `allowed_signing` (reverting `default_hash` as needed) and fail over to the previous
-  release while investigating. Capture failed payloads, comparative hashes, and node logs.
-- **Performance regressions:** Compare SM metrics with Ed25519/SHA2 baselines.
-  If ARM intrinsic path causes divergence, set `crypto.sm_intrinsics = "force-disable"`
-  (feature toggle pending implementation) and report findings.
-- **Telemetry gaps:** If counters are missing or not updating, file an issue
-  against Release Engineering; do not proceed with wider rollout until the gap
-  is resolved.
+## 7. چیک لسٹ ٹیمپلیٹ
+- [] ترتیب ترتیب دی گئی اور ہم مرتبہ دوبارہ شروع ہوا۔
+- [] ٹیلی میٹری کاؤنٹرز مرئی اور ڈیش بورڈز تشکیل دیئے گئے ہیں۔
+- [] تعمیل/قانونی اقدامات ریکارڈ کیے گئے۔
+- [] رول آؤٹ مرحلہ کریپٹو ڈبلیو جی / ریلیز TL کے ذریعہ منظور شدہ۔
+- [] رول آؤٹ کے بعد کا جائزہ مکمل اور نتائج کو دستاویزی۔
 
-## 7. Checklist Template
-- [ ] Configuration staged and peer restarted.
-- [ ] Telemetry counters visible and dashboards configured.
-- [ ] Compliance/legal steps recorded.
-- [ ] Rollout phase approved by Crypto WG / Release TL.
-- [ ] Post-rollout review completed and findings documented.
-
-Maintain this checklist in the rollout ticket and update `status.md` when the
-fleet transitions between phases.
+اس چیک لسٹ کو رول آؤٹ ٹکٹ میں برقرار رکھیں اور جب `status.md` کو اپ ڈیٹ کریں
+مراحل کے مابین بیڑے کی منتقلی۔

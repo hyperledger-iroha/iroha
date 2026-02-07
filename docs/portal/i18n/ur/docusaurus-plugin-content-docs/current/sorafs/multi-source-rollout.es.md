@@ -4,46 +4,48 @@ direction: rtl
 source: docs/portal/docs/sorafs/multi-source-rollout.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: multi-source-rollout
-title: Runbook de despliegue multi-origen y denegación de proveedores
-sidebar_label: Runbook de despliegue multi-origen
-description: Lista de verificación operativa para despliegues multi-origen por etapas y denegación de proveedores en emergencias.
+ID: ملٹی سورس رول آؤٹ
+عنوان: ملٹی سورس تعیناتی اور وینڈر سے انکار رن بک
+سائڈبار_لیبل: ملٹی ارگین تعیناتی رن بک
+تفصیل: ہنگامی صورتحال میں مرحلہ وار ملٹی ارگین تعیناتیوں اور سپلائر انکار کے لئے آپریشنل چیک لسٹ۔
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/runbooks/multi_source_rollout.md`. Mantén ambas copias alineadas hasta que se retire el conjunto de documentación heredado.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/runbooks/multi_source_rollout.md` کی عکاسی کرتا ہے۔ جب تک میراثی دستاویزات کا سیٹ ریٹائر نہیں ہوتا اس وقت تک دونوں کاپیاں منسلک رکھیں۔
 :::
 
-## Propósito
+## مقصد
 
-Este runbook guía a los SRE y a los ingenieros de guardia a través de dos flujos críticos:
+یہ رن بک دو اہم بہاؤ کے ذریعے سروں اور آن کال انجینئروں کی رہنمائی کرتا ہے:
 
-1. Desplegar el orquestador multi-origen en oleadas controladas.
-2. Denegar o depriorizar proveedores que se comportan mal sin desestabilizar las sesiones existentes.
+1. کنٹرولڈ لہروں میں ملٹی سورس آرکسٹریٹر کو تعینات کریں۔
+2. موجودہ سیشنوں میں خلل ڈالے بغیر بد سلوکی فراہم کرنے والوں سے انکار یا ان سے محروم۔
 
-Asume que la pila de orquestación entregada bajo SF-6 ya está desplegada (`sorafs_orchestrator`, API de rango de chunks del gateway, exportadores de telemetría).
+فرض کریں کہ SF-6 کے تحت فراہم کردہ آرکیسٹریشن اسٹیک پہلے ہی تعینات ہے (`sorafs_orchestrator` ، گیٹ وے چنک رینج API ، ٹیلی میٹری برآمد کنندگان)۔
 
-> **Ver también:** El [Runbook de operaciones del orquestador](./orchestrator-ops.md) profundiza en los procedimientos por ejecución (captura de scoreboard, toggles de despliegue por etapas, rollback). Usa ambas referencias en conjunto durante cambios en vivo.
+> ** یہ بھی ملاحظہ کریں: ** [آرکسٹریٹر آپریشنز رن بک] (./orchestrator-ops.md) عملدرآمد (اسکور بورڈ کیپچر ، اسٹیجڈ تعیناتی ٹوگل ، رول بیک) کے ذریعہ طریقہ کار میں ڈھل جاتا ہے۔ براہ راست تبدیلیوں کے دوران دونوں حوالوں کو ایک ساتھ استعمال کریں۔
 
-## 1. Validación previa
+## 1. پہلے توثیق
 
-1. **Confirmar entradas de gobernanza.**
-   - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` con payloads de capacidad de rango y presupuestos de stream. Valídalo mediante `/v1/sorafs/providers` y compara con los campos de capacidad esperados.
-   - Las instantáneas de telemetría que aportan tasas de latencia/fallo deben tener menos de 15 minutos antes de cada ejecución canaria.
-2. **Preparar la configuración.**
-   - Persiste la configuración JSON del orquestador en el árbol `iroha_config` por capas:
+1. ** گورننس اندراجات کی تصدیق کریں۔ **
+   - تمام امیدوار سپلائرز کو لفافے `ProviderAdvertV1` کو رینج کی گنجائش کے پے لوڈ اور اسٹریم بجٹ کے ساتھ شائع کرنا ہوگا۔ `/v1/sorafs/providers` کا استعمال کرتے ہوئے اس کی توثیق کریں اور متوقع صلاحیت والے شعبوں سے موازنہ کریں۔
+   - ٹیلی میٹری اسنیپ شاٹس جو تاخیر/ناکامی کی شرحوں کی اطلاع دیتے ہیں ہر کینری چلانے سے 15 منٹ سے بھی کم ہونا ضروری ہے۔
+2. ** ترتیب تیار کریں۔ **
+   - پرتوں کے ذریعہ `iroha_config` درخت میں آرکسٹریٹر JSON ترتیب کو برقرار رکھیں:
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Actualiza el JSON con límites específicos del rollout (`max_providers`, presupuestos de reintentos). Usa el mismo archivo en staging/producción para que las diferencias sean mínimas.
-3. **Ejercitar los fixtures canónicos.**
-   - Rellena las variables de entorno del manifiesto/token y ejecuta el fetch determinista:
+     JSON کو مخصوص رول آؤٹ حدود (`max_providers` ، دوبارہ بجٹ) کے ساتھ تازہ کاری کرتا ہے۔ اسٹیجنگ/پروڈکشن میں ایک ہی فائل کا استعمال کریں تاکہ اختلافات کم سے کم ہوں۔
+3. ** کیننیکل فکسچر کی ورزش کریں۔ **
+   - منشور/ٹوکن ماحولیاتی متغیرات کو پُر کریں اور عصبی بازیافت کو چلائیں:
 
      ```bash
      sorafs_cli fetch \
@@ -58,55 +60,51 @@ Asume que la pila de orquestación entregada bajo SF-6 ya está desplegada (`sor
        --json-out artifacts/canary.fetch.json
      ```
 
-     Las variables de entorno deben contener el digest del payload del manifiesto (hex) y los tokens de stream codificados en base64 para cada proveedor que participe en el canary.
-   - Compara `artifacts/canary.scoreboard.json` con el release anterior. Cualquier proveedor nuevo no elegible o un cambio de peso >10% requiere revisión.
-4. **Verificar que la telemetría está conectada.**
-   - Abre la exportación de Grafana en `docs/examples/sorafs_fetch_dashboard.json`. Asegúrate de que las métricas `sorafs_orchestrator_*` se poblen en staging antes de continuar.
+     ماحولیاتی متغیرات میں کینری میں حصہ لینے والے ہر فراہم کنندہ کے لئے مینی فیسٹ پے لوڈ (ہیکس) اور بیس 64 انکوڈڈ اسٹریم ٹوکن کا ڈائجسٹ ہونا ضروری ہے۔
+   - پچھلی ریلیز کے ساتھ `artifacts/canary.scoreboard.json` کا موازنہ کریں۔ کوئی بھی نیا نااہل فراہم کنندہ یا وزن میں تبدیلی> 10 ٪ کو جائزہ لینے کی ضرورت ہے۔
+4. ** تصدیق کریں کہ ٹیلی میٹری منسلک ہے۔ **
+   - `docs/examples/sorafs_fetch_dashboard.json` میں Grafana کی برآمد کو کھولیں۔ اس بات کو یقینی بنائیں کہ `sorafs_orchestrator_*` میٹرکس جاری رکھنے سے پہلے اسٹیجنگ میں آباد ہیں۔
 
-## 2. Denegación de proveedores en emergencias
+## 2. ہنگامی صورتحال میں فراہم کنندگان سے انکار
 
-Sigue este procedimiento cuando un proveedor entregue chunks corruptos, agote tiempos de espera de forma persistente o falle comprobaciones de cumplimiento.
+اس طریقہ کار پر عمل کریں جب کوئی فراہم کنندہ بدعنوان حصوں کو فراہم کرتا ہے ، مستقل طور پر اوقات ختم ہوجاتا ہے ، یا تعمیل چیکوں میں ناکام ہوجاتا ہے۔1. ** پر قبضہ کرنے کے ثبوت۔ **
+   - سب سے حالیہ بازیافت کا خلاصہ برآمد کرتا ہے (`--json-out` کی پیداوار)۔ ناکام حصوں ، فراہم کنندہ عرفی ، اور ڈائجسٹ مماثل کے ریکارڈ اشاریہ۔
+   - `telemetry::sorafs.fetch.*` اہداف سے متعلقہ لاگ نچوڑ کو محفوظ کریں۔
+2. ** فوری اوور رائڈ کا اطلاق کریں۔ **
+   - سپلائر کو نشان زد کریں جیسا کہ ٹیلی میٹری اسنیپ شاٹ میں جرمانہ طور پر آرکیسٹریٹر میں تقسیم کیا گیا ہے (`penalty=true` سیٹ کریں یا `token_health` کو `0` پر محدود رکھیں)۔ مندرجہ ذیل اسکور بورڈ کی تعمیر خود بخود سپلائر کو خارج کردے گی۔
+   - ایڈہاک تمباکو نوشی کی جانچ کے ل I ، ٹیلی میٹری کی تشہیر کا انتظار کیے بغیر ناکامی کے راستے کو استعمال کرنے کے لئے `--deny-provider gw-alpha` کو `sorafs_cli fetch` پر منتقل کریں۔
+   - متاثرہ ماحول (اسٹیجنگ → کینری → پروڈکشن) میں تازہ ترین ٹیلی میٹری/کنفیگریشن پیکیج کو دوبارہ پیش کریں۔ واقعے کے لاگ میں تبدیلی کی دستاویز کریں۔
+3. ** اوور رائڈ کی توثیق کریں۔ **
+   - کیننیکل حقیقت کے بازیافت کو دہرائیں۔ تصدیق کریں کہ اسکور بورڈ سپلائر کو وجہ `policy_denied` کے ساتھ نااہل قرار دیتا ہے۔
+   - `sorafs_orchestrator_provider_failures_total` کا معائنہ کریں تاکہ یہ یقینی بنایا جاسکے کہ کاؤنٹر سے انکار فراہم کرنے والے کے لئے اضافہ کرنا بند ہوجاتا ہے۔
+4. ** طویل لاک ڈاؤن کو بڑھاوا دیں۔ **
+   - اگر فراہم کنندہ> 24 گھنٹوں تک بلاک رہے گا تو ، ان کے اشتہار کو گھومنے یا معطل کرنے کے لئے گورننس کا ٹکٹ کھولیں۔ جب تک ووٹ نہیں گزرتے ، انکار کی فہرست کو برقرار رکھیں اور ٹیلی میٹری اسنیپ شاٹس کو ریفریش کریں تاکہ سپلائر اسکور بورڈ میں دوبارہ داخل نہ ہو۔
+5. ** رول بیک پروٹوکول۔ **
+   - سپلائر کو دوبارہ ترتیب دینے کے ل it ، اسے انکار کی فہرست سے ہٹا دیں ، اسکور بورڈ کے ایک تازہ سنیپ شاٹ کو دوبارہ تیار کریں اور اس پر قبضہ کریں۔ واقعے کے پوسٹ مارٹم میں تبدیلی منسلک کریں۔
 
-1. **Capturar evidencias.**
-   - Exporta el resumen de fetch más reciente (salida de `--json-out`). Registra índices de chunks fallidos, alias de proveedores y desajustes de digest.
-   - Guarda extractos de logs relevantes de los targets `telemetry::sorafs.fetch.*`.
-2. **Aplicar un override inmediato.**
-   - Marca al proveedor como penalizado en la instantánea de telemetría distribuida al orquestador (establece `penalty=true` o limita `token_health` a `0`). La siguiente construcción del scoreboard excluirá automáticamente al proveedor.
-   - Para pruebas de humo ad-hoc, pasa `--deny-provider gw-alpha` a `sorafs_cli fetch` para ejercitar la ruta de fallo sin esperar a la propagación de la telemetría.
-   - Vuelve a desplegar el paquete actualizado de telemetría/configuración en el entorno afectado (staging → canary → production). Documenta el cambio en el log del incidente.
-3. **Validar el override.**
-   - Repite el fetch del fixture canónico. Confirma que el scoreboard marca al proveedor como no elegible con el motivo `policy_denied`.
-   - Inspecciona `sorafs_orchestrator_provider_failures_total` para asegurarte de que el contador deja de incrementarse para el proveedor denegado.
-4. **Escalar bloqueos prolongados.**
-   - Si el proveedor seguirá bloqueado durante >24 h, abre un ticket de gobernanza para rotar o suspender su advert. Hasta que pase la votación, mantén la lista de denegación y refresca las instantáneas de telemetría para que el proveedor no reingrese al scoreboard.
-5. **Protocolo de rollback.**
-   - Para restablecer al proveedor, elimínalo de la lista de denegación, vuelve a desplegar y captura una instantánea fresca del scoreboard. Adjunta el cambio al postmortem del incidente.
+## 3. مرحلہ وار تعیناتی منصوبہ
 
-## 3. Plan de despliegue por etapas
+| مرحلہ | دائرہ کار | مطلوبہ نشانیاں | گو/نو گو معیار |
+| ------ | --------- | ---------------------- | -------------- |
+| ** لیب ** | سرشار انضمام کلسٹر | دستی بازیافت بذریعہ CLI کے خلاف حقیقت کے پے لوڈ | تمام حصے مکمل ، فراہم کنندہ کی ناکامی کے کاؤنٹر 0 پر رہتے ہیں ، ریٹ ریٹ <5 ٪۔ |
+| ** اسٹیجنگ ** | مکمل کنٹرول طیارے کا اسٹیجنگ | Grafana ڈیش بورڈ منسلک ؛ انتباہ کے قواعد صرف انتباہ میں وضع | `sorafs_orchestrator_active_fetches` ہر ٹیسٹ رن کے بعد صفر پر واپس آتا ہے۔ `warn/critical` الرٹس متحرک نہیں ہیں۔ |
+| ** کینری ** | پیداوار ٹریفک کا ≤10 ٪ | پیجر نے خاموش کردیا لیکن ٹیلی میٹری کو حقیقی وقت میں نگرانی کی گئی دوبارہ تناسب <10 ٪ ، فراہم کنندہ کی ناکامیوں کو معروف شور ہم عمر افراد سے الگ تھلگ کیا جاتا ہے ، لیٹینسی ہسٹگرام میچ اسٹیجنگ بیس لائن ± 20 ٪۔ |
+| ** عمومی دستیابی ** | 100 ٪ رول آؤٹ | فعال پیجر قواعد | صفر `NoHealthyProviders` 24 گھنٹوں کے لئے غلطیاں ، مستحکم دوبارہ کوشش کی شرح ، سبز رنگ میں SLA ڈیش بورڈ پینل۔ |
 
-| Fase | Alcance | Señales requeridas | Criterio de Go/No-Go |
-|------|---------|--------------------|----------------------|
-| **Lab** | Clúster de integración dedicado | Fetch manual por CLI contra payloads de fixtures | Todos los chunks se completan, los contadores de fallos de proveedor permanecen en 0, tasa de reintentos < 5%. |
-| **Staging** | Staging del plano de control completo | Dashboard de Grafana conectado; reglas de alertas en modo solo warning | `sorafs_orchestrator_active_fetches` vuelve a cero después de cada ejecución de prueba; no se disparan alertas `warn/critical`. |
-| **Canary** | ≤10% del tráfico de producción | Pager silenciado pero telemetría monitorizada en tiempo real | Ratio de reintentos < 10%, fallos de proveedores aislados a peers ruidosos conocidos, histograma de latencia coincide con la línea base de staging ±20%. |
-| **Disponibilidad general** | 100% del rollout | Reglas del pager activas | Cero errores `NoHealthyProviders` durante 24 h, ratio de reintentos estable, paneles SLA del dashboard en verde. |
+ہر مرحلے کے لئے:1. `max_providers` اور متوقع دوبارہ شروع ہونے والے بجٹ کے ساتھ آرکسٹریٹر JSON کو اپ ڈیٹ کریں۔
+2. چلائیں `sorafs_cli fetch` یا SDK انٹیگریشن ٹیسٹ سویٹ کیننیکل فکسچر اور ماحولیات کے ایک واضح نمائندے کے خلاف چلائیں۔
+3. اسکور بورڈ اور سمری نمونے پر قبضہ کریں ، اور انہیں رہائی کے ریکارڈ سے منسلک کریں۔
+4. اگلے مرحلے میں فروغ دینے سے پہلے ڈیوٹی پر موجود انجینئر کے ساتھ ٹیلی میٹری ڈیش بورڈز کا جائزہ لیں۔
 
-Para cada fase:
+## 4. مشاہدہ اور واقعہ ہکس
 
-1. Actualiza el JSON del orquestador con los `max_providers` y presupuestos de reintentos previstos.
-2. Ejecuta `sorafs_cli fetch` o la suite de pruebas de integración del SDK contra el fixture canónico y un manifiesto representativo del entorno.
-3. Captura los artefactos del scoreboard y el summary, y adjúntalos al registro de release.
-4. Revisa los dashboards de telemetría con el ingeniero de guardia antes de promocionar a la siguiente fase.
+- ** میٹرکس: ** یقینی بنائیں کہ الرٹ مینجر `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` اور `sorafs_orchestrator_retries_total` پر مانیٹر کرتا ہے۔ اچانک اسپائک کا عام طور پر مطلب یہ ہوتا ہے کہ فراہم کنندہ بوجھ کے نیچے کم ہوجاتا ہے۔
+- ** لاگز: ** `telemetry::sorafs.fetch.*` اہداف کو مشترکہ لاگ ان جمع کرنے والے کی طرف جائیں۔ triage کو تیز کرنے کے لئے `event=complete status=failed` کے لئے محفوظ شدہ تلاشیں بنائیں۔
+- ** اسکور بورڈز: ** طویل مدتی اسٹوریج میں ہر اسکور بورڈ نمونے کو برقرار رکھیں۔ JSON تعمیل جائزوں اور اسٹیج رول بیکس کے لئے بھی ایک ثبوت کے راستے کا کام کرتا ہے۔
+۔
 
-## 4. Observabilidad y ganchos de incidentes
+## 5. مواصلات اور دستاویزات
 
-- **Métricas:** Asegúrate de que Alertmanager monitoree `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` y `sorafs_orchestrator_retries_total`. Un pico repentino suele significar que un proveedor se degrada bajo carga.
-- **Logs:** Enruta los targets `telemetry::sorafs.fetch.*` al agregador de logs compartido. Crea búsquedas guardadas para `event=complete status=failed` para acelerar el triage.
-- **Scoreboards:** Persiste cada artefacto de scoreboard en almacenamiento a largo plazo. El JSON también sirve como rastro de evidencia para revisiones de cumplimiento y rollbacks por etapas.
-- **Dashboards:** Clona el tablero Grafana canónico (`docs/examples/sorafs_fetch_dashboard.json`) en la carpeta de producción con las reglas de alerta de `docs/examples/sorafs_fetch_alerts.yaml`.
-
-## 5. Comunicación y documentación
-
-- Registra cada cambio de denegación/boost en el changelog de operaciones con marca de tiempo, operador, motivo e incidente asociado.
-- Notifica a los equipos de SDK cuando los pesos de proveedores o los presupuestos de reintentos cambien para alinear las expectativas del lado del cliente.
-- Después de completar GA, actualiza `status.md` con el resumen del rollout y archiva esta referencia del runbook en las notas de la versión.
+- ٹائم اسٹیمپ ، آپریٹر ، وجہ اور اس سے وابستہ واقعے کے ساتھ آپریشنز چینجلاگ میں ہر ایک سے انکار/فروغ دینے والی تبدیلی کو ریکارڈ کرتا ہے۔
+- ایس ڈی کے ٹیموں کو مطلع کریں جب وینڈر وزن یا دوبارہ کوشش کریں بجٹ کلائنٹ سائیڈ کی توقعات کو سیدھ میں لانے کے لئے تبدیل ہوجاتے ہیں۔
+- GA کو مکمل کرنے کے بعد ، رول آؤٹ سمری کے ساتھ `status.md` کو اپ ڈیٹ کریں اور ریلیز نوٹ میں اس رن بک ریفرنس کو محفوظ کریں۔

@@ -6,51 +6,51 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2026-01-03T18:07:57.071790+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 輸出管理ステートメント テンプレート
+% Hyperledger Iroha コンプライアンス ワーキング グループ
 % 2026-05-06
 
-# Usage
+# 使用法
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+リリースノート、マニフェスト、または法的通信にこの声明を埋め込んでください。
+SM 対応アーティファクトの配布。リリースに合わせてプレースホルダーを更新します。
+管轄区域、および該当するライセンスの例外。署名済みのコピーを保管してください
+リリースチェックリスト。
 
-# Statement
+# ステートメント
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **製品:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **含まれるアルゴリズム:** SM2 デジタル署名、SM3 ハッシュ、SM4 対称
+> 暗号化 (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **輸出分類:** 米国 EAR カテゴリ 5、パート 2 (5D002.c.1)。
+> 欧州連合規則 2021/821 付属書 1、5D002。
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **ライセンス例外:** {{ LICENSE_EXCEPTION }} (例: ENC §740.17(b)(2)、
+> ソース配布については TSU §740.13)。
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **配布範囲:** {{ DISTRIBUTION_SCOPE }} (例: 「グローバル、除く」
+> 15 CFR 746 にリストされている禁輸地域」）。
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **オペレーターの義務:** 受取人は該当する輸出に従う必要があります。
+> 輸入および使用規制。人民共和国内での展開
+> 中国は国家暗号局への製品および使用法の届出を要求
+> 本土のデータ常駐要件の管理と遵守。
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> **連絡先:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
 > {{ LEGAL_CONTACT_PHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> この声明は、暗号化コンプライアンス チェックリストと提出書類に付属しています。
+> `docs/source/crypto/sm_compliance_brief.md` で提供されるテンプレート。これを保管してください
+> 文書および関連する提出書類を少なくとも 3 年間保管する必要があります。
 
-# Signature
+# 署名
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- 正式な代表者: ________________________
+- タイトル: ________________________
+- 日付: ________________________

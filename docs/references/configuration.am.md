@@ -7,27 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cff283a14bf65f185f81539f8fbcd78ddcc6447c5e9045e1b46493051febaf6a
 source_last_modified: "2025-12-29T18:16:35.913045+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Acceleration
+# ማፋጠን
 
-The `[accel]` section controls optional hardware acceleration for IVM and helpers. All
-accelerated paths have deterministic CPU fallbacks; if a backend fails a golden
-self‑test at runtime it is disabled automatically and execution continues on CPU.
+የ`[accel]` ክፍል ለIVM እና አጋዥዎች አማራጭ የሃርድዌር ማጣደፍን ይቆጣጠራል። ሁሉም
+የተጣደፉ ዱካዎች የሚወስኑ የሲፒዩ ውድቀቶች አሏቸው። አንድ ጀርባ ወርቃማ ካልተሳካ
+በሂደት ጊዜ ራስን መሞከር በራስ-ሰር ተሰናክሏል እና አፈፃፀሙ በሲፒዩ ላይ ይቀጥላል።
 
-- `enable_cuda` (default: true) – Use CUDA when compiled and available.
-- `enable_metal` (default: true) – Use Metal on macOS when available.
-- `max_gpus` (default: 0) – Maximum GPUs to initialize; `0` means auto/no cap.
-- `merkle_min_leaves_gpu` (default: 8192) – Minimum leaves to offload Merkle
-  leaf hashing to GPU. Lower only for unusually fast GPUs.
-- Advanced (optional; usually inherit sensible defaults):
-  - `merkle_min_leaves_metal` (default: inherit `merkle_min_leaves_gpu`).
-  - `merkle_min_leaves_cuda` (default: inherit `merkle_min_leaves_gpu`).
-  - `prefer_cpu_sha2_max_leaves_aarch64` (default: 32768) – Prefer CPU SHA‑2 up to this many leaves on ARMv8 with SHA2.
-  - `prefer_cpu_sha2_max_leaves_x86` (default: 32768) – Prefer CPU SHA‑NI up to this many leaves on x86/x86_64.
+- `enable_cuda` (ነባሪ፡ እውነት) - ሲዘጋጅ እና ሲገኝ CUDA ይጠቀሙ።
+- `enable_metal` (ነባሪ፡ እውነት) - ሲገኝ ሜታልን በ macOS ላይ ይጠቀሙ።
+- `max_gpus` (ነባሪ: 0) - ለመጀመር ከፍተኛው ጂፒዩዎች; `0` ማለት አውቶማቲክ/ካፕ የለም ማለት ነው።
+- `merkle_min_leaves_gpu` (ነባሪ፡ 8192) - መርክልን ለማውረድ በትንሹ ቅጠሎች
+  ቅጠል ወደ ጂፒዩ. ባልተለመደ ፈጣን ጂፒዩዎች ብቻ ዝቅ አድርግ።
+- የላቀ (አማራጭ፤ ብዙውን ጊዜ አስተዋይ ነባሪዎች ይወርሳሉ)
+  - `merkle_min_leaves_metal` (ነባሪ፡ `merkle_min_leaves_gpu` ይወርሳሉ)።
+  - `merkle_min_leaves_cuda` (ነባሪ፡ `merkle_min_leaves_gpu` ይወርሳሉ)።
+  - `prefer_cpu_sha2_max_leaves_aarch64` (ነባሪ፡ 32768) – ሲፒዩ SHA‑2 እስከዚህ ብዙ ቅጠሎችን በ ARMv8 ከSHA2 ጋር ይምረጡ።
+  - `prefer_cpu_sha2_max_leaves_x86` (ነባሪ፡ 32768) – ሲፒዩ SHA‑NI እስከዚህ ድረስ በ x86/x86_64 ላይ ይምረጡ።
 
-Notes
-- Determinism first: acceleration never changes observable outputs; backends
-  run golden tests on init and fall back to scalar/SIMD when mismatches are detected.
-- Configure via `iroha_config`; avoid environment variables in production.
-
+ማስታወሻዎች
+- ቆራጥነት በመጀመሪያ: ማፋጠን የማይታዩ ውጤቶችን ፈጽሞ አይለውጥም; ጀርባዎች
+  በመግቢያው ላይ ወርቃማ ሙከራዎችን ያሂዱ እና አለመዛመጃዎች ሲገኙ ወደ scalar/SIMD ይመለሱ።
+- በ `iroha_config` በኩል ያዋቅሩ; በምርት ውስጥ የአካባቢ ተለዋዋጮችን ያስወግዱ.

@@ -7,90 +7,85 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 969ffd4cee6ee4880d5f754fb36adaf30dde532a29e4c6397cf0f358438bb57e
 source_last_modified: "2026-01-22T16:26:46.566038+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
-# Confidential Assets & ZK Transfer Design
+# གསང་བའི་རྒྱུ་དངོས་ & ZK བརྗེ་སྒྱུར་བཟོ་བཀོད།
 
-## Motivation
-- Deliver opt-in shielded asset flows so domains can preserve transactional privacy without altering transparent circulation.
-- Provide auditors and operators with lifecycle controls (activation, rotation, revocation) for circuits and cryptographic parameters.
+## བརྒྱུད༌སྐུལ
+- དྭངས་གསལ་གྱི་བརྒྱུད་འཕྲིན་བསྒྱུར་བཅོས་མ་འབད་བར་ མངའ་ཁོངས་ཚུ་གིས་ མངའ་ཁོངས་ཚུ་གིས་ ཚོང་འབྲེལ་གྱི་སྒེར་གསང་འདི་ ཉམས་སྲུང་འབད་ཚུགས།
+- གློག་ལམ་དང་ ཀིརིཔ་ཊོ་གཱ་ར་ཕིན་གི་ཚད་གཞི་ཚུ་གི་དོན་ལུ་ རྩིས་ཞིབ་པ་དང་ བཀོལ་སྤྱོད་པ་ཚུ་ མི་ཚེ་འཁོར་རིམ་ཚད་འཛིན་ (ཤུགས་ལྡན་བཟོ་ནི་ བསྐོར་འཁོར་ ཆ་མེད་གཏང་ནི་) ཚུ་བྱིན།
 
-## Threat Model
-- Validators are honest-but-curious: they execute consensus faithfully but attempt to inspect ledger/state.
-- Network observers see block data and gossiped transactions; no assumption of private gossip channels.
-- Out of scope: off-ledger traffic analysis, quantum adversaries (tracked separately under PQ roadmap), ledger availability attacks.
+## ཉེར་མཆེད་དཔེ་ཆས།
+- བདེན་དཔྱད་འབད་མི་ཚུ་ དྲང་བདེན་སྦེ་ཨིན་རུང་ དད་པ་བསྐྱེད་དེ་ མོས་མཐུན་འབདཝ་ཨིན་རུང་ ལེ་ཇར་/མངའ་སྡེ་བརྟག་དཔྱད་འབད་ནི་གི་དཔའ་བཅམ་དོ་ཡོདཔ་ཨིན།
+- ཡོངས་འབྲེལ་ལྟ་རྟོག་པ་ཚུ་གིས་ བཀག་ཆ་གནས་སྡུད་དང་ ཁ་གཏམ་གྱི་ཚོང་འབྲེལ་ཚུ་ མཐོངམ་ཨིན། སྒེར་གྱི་སྐད་ཆ་རྒྱུ་ལམ་ཚུ་གི་བསམ་ཚུལ་མེད།
+- ཁྱབ་ཁོངས་ལས་ཕྱིར་: ལྕགས་རིགས་མེད་པའི་འགྲུལ་སྐྱེལ་དབྱེ་ཞིབ་ ཚད་མེད་ཀྱི་འགྲུལ་བསྐྱོད་ཀྱི་དགྲ་བྱང་ (PQ གི་འོག་ལུ་སོ་སོ་སྦེ་བསྒུགས་བཞག་ཡོདཔ་) ལེ་ཇར་ཐོབ་ཚུགས་པའི་གནོད་སྐྱོན་ཚུ།
 
-## Design Overview
-- Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
-- Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
-  - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
-  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, independent of note ordering.
-  - Encrypted payload: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
-- Transactions transport Norito-encoded `ConfidentialTransfer` payloads containing:
-  - Public inputs: Merkle anchor, nullifiers, new commitments, asset id, circuit version.
-  - Encrypted payloads for recipients and optional auditors.
-  - Zero-knowledge proof attesting value conservation, ownership, and authorization.
-- Verifying keys and parameter sets are controlled through on-ledger registries with activation windows; nodes refuse to validate proofs that reference unknown or revoked entries.
-- Consensus headers commit to the active confidential feature digest so blocks are only accepted when registry and parameter state matches.
-- Proof construction uses a Halo2 (Plonkish) stack without trusted setup; Groth16 or other SNARK variants are intentionally unsupported in v1.
+## བཟོས་བཟོའི་གོ་དོན།
+- རྒྱུ་དངོས་ཚུ་གིས་ ད་ལྟོ་ཡོད་པའི་ དྭངས་གསལ་གྱི་ ལྷག་ལུས་ཚུ་གི་ཁ་སྐོང་ལུ་ *སྲུང་སྐྱོབ་ཆུ་རྫིང་* གསལ་བསྒྲགས་འབད་ཚུགས། བཀག་འཛིན་གྱི་ བརྒྱུད་འཕྲིན་འདི་ ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་ཁས་བླངས་བརྒྱུད་དེ་ ངོ་བཏོན་འབདཝ་ཨིན།
+- དྲན་འཛིན་ཚུ་གིས་ `(asset_id, amount, recipient_view_key, blinding, rho)` དང་མཉམ་དུ།
+  - ཁས་བླངས་: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
+  - ནུས་མེད་: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, བཀོད་སྒྲིག་ལས་རང་དབང་།
+  - གསང་བཟོས་པེ་ལོསི།: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
+- ཚོང་འབྲེལ་སྐྱེལ་འདྲེན་ Norito-encoded `ConfidentialTransfer` གླ་ཆ་ཚུ་:
+  - མི་མང་གི་ཨིན་པུཊི་: མེར་ཀལ་ཨེན་ཀོར་ ནུས་མེད་ ཁས་བླངས་གསརཔ་ རྒྱུ་དངོས་ཨའི་ཌི་ གློག་ལམ་ཐོན་རིམ་།
+  - ཐོབ་མི་དང་ གདམ་ཁ་ཅན་གྱི་རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ གསང་བཟོས་འབད་ཡོད་པའི་ པེ་ལོཌི་ཚུ།
+  - ཤེས་ཡོན་ཀླད་ཀོར་གྱིས་བདེན་དཔང་འབད་བའི་བདེན་དཔང་གནས་གོང་ཉམས་སྲུང་དང་བདག་དབང་ དེ་ལས་ གནང་བ་ཚུ་ཨིན།
+- ལྡེ་མིག་ཚུ་དང་ཚད་བཟུང་ཆ་ཚན་ཚུ་བདེན་དཔྱད་འབད་ནི་འདི་ ཤུགས་ལྡན་ཐོ་བཀོད་ཚུ་ ཤུགས་ལྡན་གྱི་སྒོ་སྒྲིག་ཚུ་དང་གཅིག་ཁར་ ཚད་འཛིན་འབདཝ་ཨིན། nodes གིས་ མ་ཤེས་པའི་ཐོ་བཀོད་ཚུ་ གཞི་བསྟུན་འབད་མི་ བདེན་ཁུངས་ཚུ་ བདེན་དཔྱད་འབད་ནི་ལུ་ ངོས་ལེན་མི་འབད།
+- མོས་མཐུན་མགོ་ཡིག་ཚུ་གིས་ ཤུགས་ལྡན་གསང་བའི་ཁྱད་རྣམ་ བཞུ་བཅུག་ནི་ལུ་ ཁས་བླངས་འབདཝ་ལས་ ཐོ་བཀོད་དང་ པེ་ར་མི་ཊར་གནས་སྟངས་གནས་སྟངས་མཐུན་སྒྲིག་ཚུ་འབད་བའི་སྐབས་རྐྱངམ་ཅིག་ བཀག་ཆ་ཚུ་ངོས་ལེན་འབདཝ་ཨིན།
+- བདེན་ཁུངས་བཟོ་བསྐྲུན་གྱིས་ བློ་གཏད་ཅན་གྱི་གཞི་སྒྲིག་མེད་པར་ ཧེ་ལོ་༢ (Plonkish) བང་རིམ་ལག་ལེན་འཐབ་ཨིན། Groth16 ཡང་ན་ SNARK གི་དབྱེ་བ་གཞན་ཚུ་ v1 ནང་ལུ་ བསམ་ཞིབ་འབད་དེ་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།
 
-### Deterministic Fixtures
+###
 
-Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
+གསང་བའི་བརྡ་ཆད་ཚུ་ ད་ལྟོ་ `fixtures/confidential/encrypted_payload_v1.json` ལུ་ ཀེ་ནོ་ནིག་སྒྲིག་ཆས་དང་གཅིག་ཁར་ བཏངམ་ཨིན། གནད་སྡུད་ཆ་ཚན་འདི་གིས་ v1 ཡིག་ཤུབས་དང་ ནོར་འཁྲུལ་ཅན་གྱི་དཔེ་ཚད་ཚུ་ ངེས་བདེན་ཨིནམ་ལས་ SDKs གིས་ འདྲ་མཉམ་གྱི་དབྱེ་དཔྱད་འབད་ཚུགས། རཱསིཊ་གནས་སྡུད་དཔེ་ཚད་བརྟག་དཔྱད་ (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) དང་ Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) གཉིས་ཆ་ར་གིས་ ཐད་ཀར་དུ་ བརྟན་ཏོག་ཏོ་འདི་ བཀལ་ཡོདཔ་ད་ Norito ཨིན་ཀོ་ཌིང་དང་ འཛོལ་བའི་ཁ་ཐོག་ དེ་ལས་ འགྱུར་ལྡོག་ཅན་གྱི་ཁྱབ་ཚད་ཚུ་ མཉམ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
 
-Swift SDKs can now emit shield instructions without bespoke JSON glue: construct a
-`ShieldRequest` with the 32-byte note commitment, encrypted payload, and debit metadata,
-then call `IrohaSDK.submit(shield:keypair:)` (or `submitAndWait`) to sign and relay the
-transaction over `/v1/pipeline/transactions`. The helper validates commitment lengths,
-threads `ConfidentialEncryptedPayload` into the Norito encoder, and mirrors the `zk::Shield`
-layout described below so wallets stay in lock-step with Rust.
+ད་ལྟ་ Swift SDKs གིས་ Bespoke JSON གུ་ལུ་: a བཟོ་བསྐྲུན་མེད་པར་ གདོང་ཕྱོགས་བཀོད་རྒྱ་ཚུ་ བཏོན་ཚུགས།
+`ShieldRequest` ༣༢-བཱའིཊི་དྲན་འཛིན་ཁས་བླངས་ གསང་བཟོས་པེ་ལོཌི་ དེ་ལས་ དངུལ་བཏོན་མེ་ཊ་ཌེ་ཊ་, དང་གཅིག་ཁར།
+དེ་ལས་ `IrohaSDK.submit(shield:keypair:)` (ཡང་ན་ `submitAndWait`) ལུ་ མཚན་རྟགས་བཀོད་ནི་དང་ ཕྱིར་འཐེན་འབད་ནི་ལུ་ འབོ།
+བརྗེ་སོར་ `/v1/pipeline/transactions`. གྲོགས་རམ་པ་གིས་ ཁས་བླངས་རིང་ཚད་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+ཐགསཔ་ `ConfidentialEncryptedPayload` Norito ཨིན་ཀོ་ཌར་ནང་ དེ་ལས་ `zk::Shield` ལུ་ མེ་ལོང་བཟོཝ་ཨིན།
+གཤམ་གསལ་གྱི་བཀོད་རིས་འདི་ རསཊ་དང་གཅིག་ཁར་ ལྕགས་ཐག་རིམ་པ་ནང་སྡོད་དགོ།## མོས་མཐུན་ཁས་བླངས་དང་ལྕོགས་གྲུབ་འཛུལ་སྒོ།
+- བཀག་ཆ་འབད་མི་མགོ་ཡིག་ཚུ་གིས་ `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` ཕྱིར་བཏོན་འབདཝ་ཨིན། ཟས་བཅུད་འདི་གིས་ མོས་མཐུན་གྱི་ ཧེ་ཤི་ནང་ བཅའ་མར་གཏོགས་དགོཔ་མ་ཚད་ ངོས་ལེན་གྱི་དོན་ལུ་ ས་གནས་ཀྱི་ཐོ་བཀོད་མཐོང་སྣང་དང་ འདྲ་མཉམ་སྦེ་ འབད་དགོཔ་ཨིན།
+- གཞུང་སྐྱོང་གིས་ མ་འོངས་པ་ `activation_height` ལས་རིམ་བཟོ་སྟེ་ `next_conf_features` ལས་རིམ་བཟོ་སྟེ་ ཡར་འཕར་འབད་ཚུགས། མཐོ་ཚད་དེ་ཚུན་ཚོད་ བཀག་ཆ་བཟོ་སྐྲུན་པ་ཚུ་གིས་ ཧེ་མའི་བཞུ་ཁུ་འདི་ འཕྲོ་མཐུད་དེ་རང་ བཏོན་དགོཔ་ཨིན།
+- བདེན་དཔྱད་མཐུད་མཚམས་ཚུ་ `confidential.enabled = true` དང་ `assume_valid = false` དང་ཅིག་ཁར་ལཱ་འབད་དགོ། འགོ་བཙུགས་ཞིབ་དཔྱད་ཚུ་གིས་ གནས་སྟངས་གང་རུང་ཅིག་ འཐུས་ཤོར་བྱུང་པ་ཅིན་ ཡང་ན་ ཉེ་གནས་ Grafana X ཁ་སྒྱུར་འབད་བ་ཅིན་ བདེན་དཔྱད་ཆ་ཚན་ནང་ མཐུད་ནི་མེདཔ་ཨིན།
+- P2P ལག་ཤེད་མེ་ཊ་ཌེ་ཊ་ ད་ལྟོ་ `{ enabled, assume_valid, conf_features }` ཚུདཔ་ཨིན། རྒྱབ་སྐྱོར་མེད་པའི་ཁྱད་རྣམ་ཚུ་ ཁྱབ་བསྒྲགས་འབད་མི་ཚུ་གིས་ `HandshakeConfidentialMismatch` གིས་ ངོས་ལེན་མ་འབད་བར་ མོས་མཐུན་བསྒྱིར་བཅོས་མ་འབད་བས།
+- བདེན་དཔྱད་མེན་པའི་ལྟ་རྟོག་པ་ཚུ་གིས་ `assume_valid = true` གཞི་སྒྲིག་འབད་ཚུགས། དེ་ཚུ་གིས་ གསང་བའི་གནས་ཚུལ་ཚུ་ མིག་བཙུམ་སྦེ་ ལག་ལེན་འཐབ་ཨིན་རུང་ མོས་མཐུན་ཉེན་སྲུང་ལུ་ ཤན་ཞུགས་མི་འབད།## རྒྱུ་ནོར་སྲིད་བྱུས།
+- རྒྱུ་དངོས་ངེས་ཚིག་རེ་རེ་གིས་ བཟོ་མི་གིས་ ཡང་ན་ གཞུང་སྐྱོང་བརྒྱུད་དེ་ གཞི་སྒྲིག་འབད་མི་ `AssetConfidentialPolicy` འབག་འོང་།
+  - `TransparentOnly`: སྔོན་སྒྲིག་ཐབས་ལམ་; དྭངས་གསལ་གྱི་བཀོད་རྒྱ་ (`MintAsset`, `TransferAsset`, ལ་སོགས་པ་ཚུ་) ཚུ་རྐྱངམ་ཅིག་ ཆོག་ཐམ་དང་ ཉེན་སྲུང་འབད་ཡོད་པའི་བཀོལ་སྤྱོད་ཚུ་ ངོས་ལེན་མ་འབད་བས།
+  - `ShieldedOnly`: བཀྲམ་སྤེལ་དང་སྤོ་བཤུད་ཆ་མཉམ་གྱིས་ གསང་བའི་བཀོད་རྒྱ་ཚུ་ལག་ལེན་འཐབ་དགོ། `RevealConfidential` བཀག་ཆ་འབད་ཡོདཔ་ལས་ མི་མང་ལུ་ ཁ་ཐོག་ལུ་ ནམ་ཡང་ འདྲ་མཉམ་བཟོཝ་ཨིན།
+  - `Convertible`: འཛིན་མི་ཚུ་གིས་ དྭངས་གསལ་དང་ ལྕགས་ཐག་གི་ངོ་ཚབ་ཚུ་གི་བར་ན་ འོག་གི་/ཨོཕ་-རམཔ་བཀོད་རྒྱ་ཚུ་ལག་ལེན་འཐབ་སྟེ་ གནས་གོང་སྤོ་བཤུད་འབད་ཚུགས།
+- སྲིད་བྱུས་ཚུ་གིས་ མ་དངུལ་བཀག་ཆ་བཀག་ཐབས་ལུ་ བཀག་ཆ་ཅན་གྱི་ FSM ལུ་ གཞི་བཞག་སྟེ་ འབད་དགོ།
+  - `TransparentOnly → Convertible` (འཕྲལ་འཕྲལ་གྱི་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ཆུ་རྫིང་།)
+  - `TransparentOnly → ShieldedOnly` (བསྒྱུར་བཅོས་དང་བསྒྱུར་བཅོས་སྒོ་སྒྲིག་དགོཔ་ཨིན།)།
+  - `Convertible → ShieldedOnly` (བསྟར་སྤྱོད་འབད་ཡོད་པའི་ཉུང་མཐའ་ཕྱིར་འགྱངས་)།
+  - `ShieldedOnly → Convertible` (གནས་སྤོ་འཆར་གཞི་དགོཔ་ལས་ ཉེན་སྲུང་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ ཟད་འགྲོ་བཏང་བཏུབ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།)
+  - `ShieldedOnly → TransparentOnly` འདི་ སྲུང་སྐྱོབ་ཀྱི་ཆུ་རྫིང་འདི་ སྟོངམ་སྦེ་ ཡང་ན་ གཞུང་སྐྱོང་གིས་ གནས་སྤོ་འགྱོ་མི་ལུ་ ངོས་ལེན་མ་འབད་བར་ བཞག་ཆོགཔ་ཨིན།
+- གཞུང་སྐྱོང་བཀོད་རྒྱ་ཚུ་ `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` གིས་ `ScheduleConfidentialPolicyTransition` ISI བརྒྱུད་དེ་ `CancelConfidentialPolicyTransition` དང་ཅིག་ཁར་ དུས་ཚོད་བཀོད་ཡོད་པའི་བསྒྱུར་བཅོས་ཚུ་ ཆ་མེད་བཏང་ཚུགས། མེམ་པོལ་བདེན་དཔྱད་འདི་གིས་ འགྱུར་བའི་མཐོ་ཚད་འདི་ རིམ་མཐུན་མེདཔ་སྦེ་ ངེས་གཏན་བཟོཝ་ཨིནམ་དང་ སྲིད་བྱུས་ཞིབ་དཔྱད་འདི་ བར་མཚམས་བཀག་ཆ་འབད་བ་ཅིན་ བཙུགས་མ་ཚུགསཔ་ཨིན།
+- བཀག་ཆ་གསརཔ་ཁ་ཕྱེ་བའི་སྐབས་ བསྒུག་སྡོད་པའི་འགྱུར་བ་ཚུ་ ཧེང་སྐལ་རང་ འཇུག་སྤྱོད་འབདཝ་ཨིན་: སྡེབ་ཚན་མཐོ་ཚད་འདི་ གཞི་བསྒྱུར་སྒོ་སྒྲིག་ནང་འཛུལ་ཚརཝ་ད་ (`ShieldedOnly` ཡར་འཕེལ་གྱི་དོན་ལུ་) ཡང་ན་ རན་དུས་ཚོད་དུས་མཐུན་བཟོ་མི་ `AssetConfidentialPolicy` ལུ་ལྷོདཔ་ད་ `AssetConfidentialPolicy` ལུ་ལྷོདཔ་ཨིན། གལ་སྲིད་ དྭངས་གསལ་ཅན་གྱི་བཀྲམ་སྤེལ་འདི་ `ShieldedOnly` འགྱུར་བ་འགྱོ་བའི་སྐབས་ལུ་ ལུས་སོང་པ་ཅིན་ རན་དུས་ཚོད་འདི་གིས་ བསྒྱུར་བཅོས་འདི་ ཆ་མེད་བཏང་ཞིནམ་ལས་ ཉེན་བརྡ་ཅིག་ ནང་བསྐྱོད་འབད་དེ་ ཧེ་མའི་ཐབས་ལམ་འདི་ མ་ཉམས་པར་བཞགཔ་ཨིན།
+- མཛུབ་མོ་ `policy_transition_delay_blocks` དང་ `policy_transition_window_blocks` གིས་ སོར་བསྒྱུར་གྱི་མཐའ་འཁོར་ལུ་ དྲན་འཛིན་ཚུ་ སོར་བསྒྱུར་འབད་བཅུག་ནིའི་དོན་ལུ་ བརྡ་དོན་དང་ བྱིན་རླབས་དུས་ཡུན་ཚུ་ ཉུང་མཐའ་བརྡ་དོན་དང་ བྱིན་རླབས་དུས་ཡུན་ཚུ་ གཞི་སྒྲིག་འབད།
+- རྩིས་ཞིབ་ལག་ལེན་ཅིག་སྦེ་ `pending_transition.transition_id` གཉིས་ལྡན་ཚུ་; གཞུང་སྐྱོང་འདི་གིས་ བསྒྱུར་བཅོས་ཚུ་ མཐའ་དཔྱད་དང་ ཡང་ན་ ཆ་མེད་གཏང་པའི་སྐབས་ ལུང་འདྲེན་འབད་དགོཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བརྡ་བཀོད་ཀྱི་སྙན་ཞུ་ཚུ་གུ་/ཨོཕ་-རམཔ་སྙན་ཞུ་ཚུ་ འབྲེལ་མཐུད་འབད་ཚུགས།
+- `policy_transition_window_blocks` སྔོན་སྒྲིག་ཚུ་ ༧༢༠ (≈12 ཆུ་ཚོད་ ༦༠ s བཀག་ཆ་དུས་ཚོད་ནང་) ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། མཐུད་མཚམས་གཞུང་གིས་ དཔའ་བཅམ་པའི་བརྡ་དོན་ཐུང་ཀུ་འབད་མི་ མཐུད་མཚམས་ཚུ་ཞུ་བ་འབདཝ་ཨིན།
+- Genesis གསལ་སྟོན་དང་ CLI རྒྱུན་འགྲུལ་གྱི་གློག་རྒྱུན་དང་ མཇུག་བསྡུའི་སྲིད་བྱུས་ཚུ་ཨིན། འཛུལ་ཞུགས་ཚད་མ་འདི་གིས་ གསང་བའི་བཀོད་རྒྱ་རེ་རེ་བཞིན་དུ་ གནང་བ་བྱིན་ནིའི་དོན་ལུ་ ལག་ལེན་འཐབ་པའི་དུས་ཚོད་ལུ་ སྲིད་བྱུས་འདི་ལྷགཔ་ཨིན།
+- གནས་སྤོ་བའི་ཞིབ་དཔྱད་ཐོ་ཡིག་ — མའིལ་སི་ཊོན་ཨེམ་༠ གིས་ གནས་རིམ་ཡར་འཕེལ་གྱི་འཆར་གཞི་གི་དོན་ལུ་ འོག་ལུ་ཡོད་པའི་ “Migration sequencing” ཟེར་མི་འདི་བལྟ།
 
-## Consensus Commitments & Capability Gating
-- Block headers expose `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; the digest participates in the consensus hash and must equal the local registry view for block acceptance.
-- Governance can stage upgrades by programming `next_conf_features` with a future `activation_height`; until that height, block producers must continue to emit the previous digest.
-- Validator nodes MUST operate with `confidential.enabled = true` and `assume_valid = false`. Startup checks refuse to join the validator set if either condition fails or if local `conf_features` diverge.
-- P2P handshake metadata now includes `{ enabled, assume_valid, conf_features }`. Peers advertising unsupported features are rejected with `HandshakeConfidentialMismatch` and never enter consensus rotation.
-- Non-validator observers may set `assume_valid = true`; they blindly apply confidential deltas but do not influence consensus safety.
+#### Torii བརྒྱུད་དེ་འཕོ་འགྱུར་ཚུ་ལྟ་རྟོག་འབད་ནི།ཤོག་འཛིན་དང་རྩིས་ཞིབ་པ་འོས་བསྡུའི་འོས་བསྡུ། `GET /v1/confidential/assets/{definition_id}/transitions` བརྟག་དཔྱད།
+ཤུགས་ལྡན་ `AssetConfidentialPolicy`. JSON པེ་ལོཌི་ནང་ ཨ་རྟག་ར་ ཀེ་ནོ་ནིག་འདི་ཚུདཔ་ཨིན།
+asset id, གསར་དུ་བལྟ་རྟོག་འབད་ཡོད་པའི་སྡེབ་ཚན་མཐོ་ཚད་ སྲིད་བྱུས་ཀྱི་ `current_mode`, འདི་ཨིན།
+མཐོ་ཚད་དེ་ལུ་ནུས་ཅན་ (བསྒྱུར་བའི་སྒོ་སྒྲིག་ཚུ་གིས་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ `Convertible`) དང་
+རེ་བ་ `vk_set_hash`/པོ་སི་ཌོན་/པེ་ཌར་སེན་ ཚད་བཟུང་ངོས་འཛིན་ཚུ། ཨེསི་ཌི་ཀེ་ ཉོ་སྤྱོད་པ་ཚུ་གིས་ ཁ་པར་གཏང་ཚུགས།
+Grafana གིས་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ཌི་ཊི་ཨོ་ཚུ་དང་འདྲ་བའི་གནད་སྡུད་གཅིག་པ་ཐོབ་ནིའི་དོན་ལུ་ཐོབ་ནིའི་དོན་ལུ་ཨིན།
+ལག་ཐོག་བྲིས་པའི་གསལ་གཞི། གཞུང་སྐྱོང་གནས་སོར་འདི་ མཇུག་བསྡུཝ་ད་ ལན་ཡང་ བཙུགས་ཚུགསཔ་ཨིན།
 
-## Asset Policies
-- Each asset definition carries an `AssetConfidentialPolicy` set by the creator or via governance:
-  - `TransparentOnly`: default mode; only transparent instructions (`MintAsset`, `TransferAsset`, etc.) are permitted and shielded operations are rejected.
-  - `ShieldedOnly`: all issuance and transfers must use confidential instructions; `RevealConfidential` is forbidden so balances never surface publicly.
-  - `Convertible`: holders may move value between transparent and shielded representations using the on/off-ramp instructions below.
-- Policies follow a constrained FSM to prevent stranding funds:
-  - `TransparentOnly → Convertible` (immediate enablement of shielded pool).
-  - `TransparentOnly → ShieldedOnly` (requires pending transition and conversion window).
-  - `Convertible → ShieldedOnly` (enforced minimum delay).
-  - `ShieldedOnly → Convertible` (migration plan required so shielded notes remain spendable).
-  - `ShieldedOnly → TransparentOnly` is disallowed unless the shielded pool is empty or governance encodes a migration that unshields outstanding notes.
-- Governance instructions set `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` via the `ScheduleConfidentialPolicyTransition` ISI and may abort scheduled changes with `CancelConfidentialPolicyTransition`. Mempool validation ensures no transaction straddles the transition height and inclusion fails deterministically if a policy check would change mid-block.
-- Pending transitions are applied automatically when a new block opens: once the block height enters the conversion window (for `ShieldedOnly` upgrades) or reaches the programmed `effective_height`, the runtime updates `AssetConfidentialPolicy`, refreshes `zk.policy` metadata, and clears the pending entry. If transparent supply remains when a `ShieldedOnly` transition matures, the runtime aborts the change and logs a warning, leaving the previous mode intact.
-- Config knobs `policy_transition_delay_blocks` and `policy_transition_window_blocks` enforce minimum notice and grace periods to let wallets convert notes around the switch.
-- `pending_transition.transition_id` doubles as an audit handle; governance must quote it when finalising or cancelling transitions so operators can correlate on/off-ramp reports.
-- `policy_transition_window_blocks` defaults to 720 (≈12 hours at 60 s block time). Nodes clamp governance requests that attempt shorter notice.
-- Genesis manifests and CLI flows surface current and pending policies. Admission logic reads the policy at execution time to confirm each confidential instruction is authorised.
-- Migration checklist — see “Migration sequencing” below for the staged upgrade plan that Milestone M0 tracks.
-
-#### Monitoring transitions via Torii
-
-Wallets and auditors poll `GET /v1/confidential/assets/{definition_id}/transitions` to inspect
-the active `AssetConfidentialPolicy`. The JSON payload always includes the canonical
-asset id, the latest observed block height, the policy’s `current_mode`, the mode that is
-effective at that height (conversion windows temporarily report `Convertible`), and the
-expected `vk_set_hash`/Poseidon/Pedersen parameter identifiers. Swift SDK consumers can call
-`ToriiClient.getConfidentialAssetPolicy` to receive the same data as typed DTOs without
-hand-written decoding. When a governance transition is pending the response also embeds:
-
-- `transition_id` — audit handle returned by `ScheduleConfidentialPolicyTransition`.
+- `transition_id` — རྩིས་ཞིབ་ཀྱི་འཛིན་སྐྱོང་ `ScheduleConfidentialPolicyTransition` གིས་སླར་ལོག་ཡོདཔ།
 - `previous_mode`/`new_mode`.
 - `effective_height`.
-- `conversion_window` and the derived `window_open_height` (the block where wallets must
-  begin conversion for ShieldedOnly cut-overs).
+- `conversion_window` དང་ འབྱུང་ཁུངས་ `window_open_height` (བཀག་ཆ་འདི་ དངུལ་ཁུག་ཚུ་ དགོས་མཁོ་བའི་ བཀག་ཆ་འདི་ཨིན།
+  ཤིལ་ཌི་ཨོན་ཨོན་ ཨོན་ བཏོག་བཏོགཔ་གི་དོན་ལུ་ བསྒྱུར་བཅོས་འགོ་བཙུགས།)
 
-Example response:
+དཔེ་ལན་:
 
 ```json
 {
@@ -112,202 +107,184 @@ Example response:
 }
 ```
 
-A `404` response indicates no matching asset definition exists. When no transition is
-scheduled the `pending_transition` field is `null`.
+`404` ལན་འདེབས་འདི་གིས་ མཐུན་སྒྲིག་རྒྱུ་དངོས་ངེས་ཚིག་མེདཔ་སྦེ་སྟོནམ་ཨིན། འཕོ་འགྱུར་མེད་པའི་སྐབས།
+དུས་ཚོད་བཀོད་ཡོད་པའི་ `pending_transition` ས་སྒོ་འདི་ `null` ཨིན།
 
-### Policy state machine
+### སྲིད་བྱུས་གནས་སྟངས་འཕྲུལ་ཆས།| ད་ལྟའི་ཐབས་ལམ་ | འོག་གི་ཐབས་ལམ་ | སྔོན་འགྲོའི་ཆ་རྐྱེན། | ཕན་ནུས་ཅན་-མཐོ་ཚད་འཛིན་སྐྱོང་ | དྲན་ཐོ། |
+|--------------------|------------------|----------------------------------------- --------------------------------------|------------------------------------------- ------------------------------------------------------------------------|--------- ----------------------------------------------------------------------------------|
+| དྭངས་གསལ་ཨོ་ལི་ | བསྒྱུར་བཅོས། | གཞུང་སྐྱོང་གིས་ བདེན་བཤད་/ཚད་གཞི་ཐོ་བཀོད་ཐོ་བཀོད་ཚུ་ ཤུགས་ལྡན་བཟོ་ཡོདཔ། Norito `effective_height ≥ current_height + policy_transition_delay_blocks` དང་། | འགྱུར་བཅོས་འདི་གིས་ Prometheus ལུ་ ཏག་ཏག་སྦེ་ལག་ལེན་འཐབ་ཨིན། ཤེལ་ཕོར་གྱི་ཆུ་རྫིང་འདི་ དེ་འཕྲོ་ལས་ འཐོབ་ཚུགསཔ་ཨིན།                   | དྭངས་གསལ་ཅན་གྱི་རྒྱུན་འབབ་བཞག་པའི་སྐབས་ གསང་བ་ལྕོགས་ཅན་བཟོ་ནི་ལུ་ སྔོན་སྒྲིག་འགྲུལ་ལམ།               |
+| དྭངས་གསལ་ཨོ་ལི་ | ལྕགས་སྒྲོག་ཨོན་རྐྱངམ་གཅིག་ | གོང་འཁོད་དང་འདྲ་བར་ `policy_transition_window_blocks ≥ 1`.                                                         | རན་དུས་ཚོད་རང་བཞིན་འཛུལ་མི་ `Convertible` ལུ་ Grafana; `ShieldedOnly` ལུ་ Grafana ལུ་ ཕིལཔ་. | དྭངས་གསལ་གྱི་བཀོད་རྒྱ་ཚུ་ ལྕོགས་མིན་བཟོ་བའི་ཧེ་མ་ གཏན་འབེབས་གཞི་བསྒྱུར་སྒོ་སྒྲིག་བྱིནམ་ཨིན།   |
+| བསྒྱུར་བཅོས། | ལྕགས་སྒྲོག་ཨོན་རྐྱངམ་གཅིག་ | `effective_height ≥ current_height + policy_transition_delay_blocks` དང་མཉམ་དུ་དུས་ཚོད་བཀོད་ཡོད། གཞུང་སྐྱོང་གིས་ རྩིས་ཞིབ་མེ་ཊ་ཌེ་ཊ་བརྒྱུད་དེ་ (`transparent_supply == 0`) ངེས་འཛིན་འབད་དགོ། runtime གིས་ འདི་བཏོག་བཏོགཔ་ཨིན། | གོང་འཁོད་ཀྱི་ཡིག་བརྡ་ངོ་མ། གལ་སྲིད་ དྭངས་གསལ་གྱི་བཀྲམ་སྤེལ་འདི་ `effective_height` ལུ་ ཀླད་ཀོར་མེན་པ་ཨིན་པ་ཅིན་ `PolicyTransitionPrerequisiteFailed` དང་ཅིག་ཁར་ འགྱུར་བཅོས་འབདཝ་ཨིན། | རྒྱུ་དངོས་འདི་ གསང་བ་སྦེ་ བརྒྱུད་སྤྲོད་འབད་ནི་གི་དོན་ལུ་ བསྡམ་བཞགཔ་ཨིན།                                     |
+| ལྕགས་སྒྲོག་ཨོན་རྐྱངམ་གཅིག་ | བསྒྱུར་བཅོས། | དུས་ཚོད་བཀོད་ཡོད་པའི་གནས་སོར་; གློ་བུར་གྱི་དངུལ་ཆ་མེད་ (`withdraw_height` གཞི་སྒྲིག་མ་འབད་བ།)                                    | མངའ་སྡེ་འདི་ `effective_height` ལུ་; བཀག་ཆ་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ ཆ་གནས་ཅན་སྦེ་ལུས་པའི་སྐབས་ རམཔ་ཚུ་ ལོག་ཁ་ཕྱེ་ཡོདཔ་སྦེ་ གསལ་སྟོན་འབད།                           | བདག་འཛིན་སྒོ་སྒྲིག་ཚུ་ཡང་ན་ རྩིས་ཞིབ་པ་བསྐྱར་ཞིབ་ཚུ་གི་དོན་ལུ་ལག་ལེན་འཐབ་ཡོདཔ།                                          |
+| ལྕགས་སྒྲོག་ཨོན་རྐྱངམ་གཅིག་ | དྭངས་གསལ་ཨོ་ལི་ | གཞུང་སྐྱོང་གིས་ Norito ཡང་ན་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ `EmergencyUnshield` འཆར་གཞི་ (རྩིས་ཞིབ་མཚན་རྟགས་དགོཔ་) ཅིག་བདེན་དཔང་འབད་དགོ། | གཡོག་བཀོལ་བའི་དུས་ཚོད་ཀྱིས་ `Convertible` སྒོ་སྒྲིག་འདི་ `effective_height` གི་གདོང་ཁར་ཁ་ཕྱེཝ་ཨིན། མཐོ་ཚད་དང་ གསང་བའི་བཀོད་རྒྱ་ཚུ་ འཐུས་ཤོར་བྱུང་ཞིནམ་ལས་ རྒྱུ་དངོས་འདི་ དྭངས་གསལ་ཅན་གྱི་ཐབས་ལམ་ལུ་ལོག་འོང་། | མཐའ་མའི་ཐོན་འབྲས་ཚུ། སྒོ་སྒྲིག་གི་སྐབས་ལུ་ གསང་བའི་དྲན་འཛིན་ག་ཅི་ར་ ཟད་འགྲོ་བཏང་པ་ཅིན་ བསྒྱུར་བཅོས་རང་བཞིན་གྱི་ ཆ་མེད་གཏང་། |
+| གང་ཡང་ | ད་ལྟོའི་བཟུམ་སྦེ་ | `CancelConfidentialPolicyTransition` བཏོན་གཏང་ནི་ མཇུག་བསྡུ།                                                        | `pending_transition` དེ་འཕྲལ་ལས་ཕྱིར་བཏོན་བྱས།                                                                          | གནས་སྟངས། ཆ་ཚང་སྦེ་སྟོན་ཡོདཔ་ཨིན།                                             |གོང་འཁོད་ཐོ་བཀོད་མ་འབད་བའི་ བསྒྱུར་བཅོས་ཚུ་ གཞུང་སྐྱོང་ཕུལ་བའི་སྐབས་ ངོས་ལེན་མ་འབད་བས། རན་དུས་ཚོད་ཀྱིས་ དུས་ཚོད་བཀོད་ཡོད་པའི་འགྱུར་བ་ཅིག་ འཇུག་སྤྱོད་མ་འབད་བའི་ཧེ་མ་ སྔོན་སྒྲིག་དགོས་མཁོ་ཚུ་ གཡས་ཞིབ་དཔྱད་འབདཝ་ཨིན། འཐུས་ཤོར་གྱི་སྔོན་སྒྲིག་ཚུ་གིས་ རྒྱུ་དངོས་འདི་ ཧེ་མའི་ཐབས་ལམ་ལུ་ལོག་སྤྲོད་དེ་ ཊེ་ལི་མི་ཊི་དང་ བཀག་ཆ་བྱུང་ལས་ཚུ་བརྒྱུད་དེ་ `PolicyTransitionPrerequisiteFailed` བཏོནམ་ཨིན།
 
-| Current mode       | Next mode        | Prerequisites                                                                 | Effective-height handling                                                                                         | Notes                                                                                     |
-|--------------------|------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| TransparentOnly    | Convertible      | Governance has activated verifier/parameter registry entries. Submit `ScheduleConfidentialPolicyTransition` with `effective_height ≥ current_height + policy_transition_delay_blocks`. | Transition executes exactly at `effective_height`; shielded pool becomes available immediately.                   | Default path for enabling confidentiality while keeping transparent flows.               |
-| TransparentOnly    | ShieldedOnly     | Same as above, plus `policy_transition_window_blocks ≥ 1`.                                                         | Runtime auto-enters `Convertible` at `effective_height - policy_transition_window_blocks`; flips to `ShieldedOnly` at `effective_height`. | Provides deterministic conversion window before transparent instructions are disabled.   |
-| Convertible        | ShieldedOnly     | Scheduled transition with `effective_height ≥ current_height + policy_transition_delay_blocks`. Governance SHOULD certify (`transparent_supply == 0`) via audit metadata; runtime enforces this at cut-over. | Identical window semantics as above. If the transparent supply is non-zero at `effective_height`, the transition aborts with `PolicyTransitionPrerequisiteFailed`. | Locks the asset into fully confidential circulation.                                     |
-| ShieldedOnly       | Convertible      | Scheduled transition; no active emergency withdrawal (`withdraw_height` unset).                                    | State flips at `effective_height`; reveal ramps reopen while shielded notes remain valid.                           | Used for maintenance windows or auditor reviews.                                          |
-| ShieldedOnly       | TransparentOnly  | Governance must prove `shielded_supply == 0` or stage a signed `EmergencyUnshield` plan (auditor signatures required). | Runtime opens a `Convertible` window ahead of `effective_height`; at the height, confidential instructions hard-fail and the asset returns to transparent-only mode. | Last-resort exit. Transition auto-cancels if any confidential note spends during the window. |
-| Any                | Same as current  | `CancelConfidentialPolicyTransition` clears pending change.                                                        | `pending_transition` removed immediately.                                                                          | Maintains status quo; shown for completeness.                                             |
+### གནས་སྤོ་གི་རིམ་པ།
 
-Transitions not listed above are rejected during governance submission. Runtime checks the prerequisites right before applying a scheduled transition; failing preconditions pushes the asset back to its previous mode and emits `PolicyTransitionPrerequisiteFailed` via telemetry and block events.
+2. **གནས་སྟངས།:* Prometheus དང་བཅས་ `effective_height` དང་མཉམ་དུ་ `policy_transition_delay_blocks` དང་། `ShieldedOnly` ལུ་སྤོ་བཤུད་འབད་བའི་སྐབས་ གཞི་བསྒྱུར་སྒོ་སྒྲིག་ (`window ≥ policy_transition_window_blocks`) གསལ་བཀོད་འབད།
+3. **དཔར་བསྐྲུན་བཀོལ་སྤྱོད་ལམ་སྟོན་:** ལོག་ཡོད་པའི་ `transition_id` དྲན་ཐོ་བཀོད། སྒོ་སྒྲིག་ཁ་ཕྱེ་བའི་མཐོ་ཚད་ལྷབ་ནིའི་དོན་ལུ་ དངུལ་ཁུག་དང་ རྩིས་ཞིབ་པ་ཚུ་གིས་ `/v1/confidential/assets/{id}/transitions` ལུ་ མིང་རྟགས་བཀོདཔ་ཨིན།
+4. **ཝིན་ཌོ་བཀག་སྡོམ་:** སྒོ་སྒྲིག་ཁ་ཕྱེ་བའི་སྐབས་ རན་ཊའིམ་གྱིས་ སྲིད་བྱུས་འདི་ `Convertible` ལུ་སོར་བསྒྱུར་འབདཝ་ཨིནམ་དང་ `PolicyTransitionWindowOpened { transition_id }` འདི་བཏོན་ཞིནམ་ལས་ གཞུང་སྐྱོང་ཞུ་བ་ལུ་འགལ་བ་བཀག་ཆ་འབད་ནི་འགོ་བཙུགསཔ་ཨིན།
+༥. **མཇུག་བསྡུའི་ཡང་ན་ བརྐོ་ནི་:** རན་དུས་ཚོད་ཀྱིས་ རན་དུས་ཚོད་ནང་ འགྱུར་བའི་དགོས་མཁོ་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། མཐར་འཁྱོལ་གྱིས་ ཞུ་བ་འབད་ཡོད་པའི་ཐབས་ལམ་ལུ་ སྲིད་བྱུས་འདི་ བསྒྱིར་དོ་ཡོདཔ་ཨིན། འཐུས་ཤོར་གྱིས་ `PolicyTransitionPrerequisiteFailed` འདི་བཏོན་ཞིནམ་ལས་ མཇུག་བསྡུའི་གནས་སོར་འདི་བསལ་ཞིནམ་ལས་ སྲིད་བྱུས་འདི་བསྒྱུར་བཅོས་མེད་པར་བཞགཔ་ཨིན།
+6. **Schema ཡར་འཕེལ་ཚུ་:** མཐར་འཁྱོལ་ཅན་གྱི་འགྱུར་བ་ཅིག་གི་ཤུལ་ལས་ གཞུང་སྐྱོང་འདི་གིས་ རྒྱུ་དངོས་ལས་རིམ་ཐོན་རིམ་ (དཔེར་ན་ `asset_definition.v2`) དང་ CLI ལག་ཆས་ལུ་ རིམ་སྒྲིག་གསལ་སྟོན་འབད་བའི་སྐབས་ `confidential_policy` དགོཔ་ཨིན། ཇེ་ནི་སིསི་ཡར་འཕེལ་ཌོཀ་ཚུ་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ བདེན་དཔྱད་འབད་མི་ཚུ་ ལོག་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ སྲིད་བྱུས་སྒྲིག་སྟངས་དང་ ཐོ་བཀོད་ཀྱི་མཛུབ་མོའི་པར་ཚུ་ཁ་སྐོང་བརྐྱབ་དགོ་པའི་ བརྡ་སྟོནམ་ཨིན།
 
-### Migration sequencing
+གསང་བ་ལས་འགོ་བཙུགས་མི་ ཡོངས་འབྲེལ་གསརཔ་ཚུ་གིས་ རིགས་མཚན་ནང་ལུ་ ཐད་ཀར་དུ་ རེ་བ་བསྐྱེད་པའི་སྲིད་བྱུས་འདི་ བཙུགས་ཚུགས་ནུག འགོ་འབྱེད་ཀྱི་ཤུལ་ལས་ ཐབས་ལམ་ཚུ་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ གོང་འཁོད་ཀྱི་ བརྟག་ཞིབ་ཐོ་ཡིག་འདི་ གཞི་བསྒྱུར་སྒོ་སྒྲིག་ཚུ་ གཏན་འབེབས་སྦེ་ལུས་ནི་དང་ དངུལ་ཁུག་ཚུ་ལུ་ བདེ་སྒྲིག་འབད་ནི་གི་དུས་ཚོད་ཡོདཔ་ཨིན།
 
-2. **Stage the transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
-3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v1/confidential/assets/{id}/transitions` to learn the window open height.
-4. **Window enforcement:** When the window opens, the runtime switches the policy to `Convertible`, emits `PolicyTransitionWindowOpened { transition_id }`, and begins rejecting conflicting governance requests.
-5. **Finalize or abort:** At `effective_height`, the runtime verifies the transition prerequisites (zero transparent supply, no emergency withdrawals, etc.). Success flips the policy to the requested mode; failure emits `PolicyTransitionPrerequisiteFailed`, clears the pending transition, and leaves the policy unchanged.
-6. **Schema upgrades:** After a successful transition, governance bumps the asset schema version (e.g., `asset_definition.v2`) and CLI tooling requires `confidential_policy` when serialising manifests. Genesis upgrade docs instruct operators to add policy settings and registry fingerprints before restarting validators.
+### Norito གསལ་སྟོན་ཐོན་རིམ་བཟོ་ནི་དང་ ཤུགས་ལྡན་བཟོ་ནི།- ཇེ་ནི་སིསི་གིས་ སྲོལ་སྒྲིག་ `confidential_registry_root` ལྡེ་མིག་གི་དོན་ལུ་ `SetParameter` འདི་ གསལ་སྟོན་འབདཝ་ཨིན། བདེན་བཤད་འདི་ `ConfidentialRegistryMeta { vk_set_hash: Option<String> }`: བདེན་དཔྱད་ཐོ་བཀོད་ཚུ་ ཤུགས་ལྡན་མེད་པའི་སྐབས་ ས་སྒོ་འདི་ཕྱིར་བཏོན་འབདཝ་ཨིན། དེ་མེན་པ་ཅིན་ ༣༢-བཱའིཊི་ཧེགསི་ཡིག་རྒྱུན་ (`0x…`) འདི་ `compute_vk_set_hash` གི་ཐོག་ལས་ བཟོ་བསྐྲུན་འབདཝ་ཨིན། བདེན་བཤད་ཀྱི་བཀོད་རྒྱ་ཚུ་ གསལ་སྟོན་ནང་བཏང་ཡོདཔ་ཨིན། ཚད་བཟུང་འདི་མེད་པ་ཅིན་ ཡང་ན་ ཨིན་ཀོཌི་འབད་ཡོད་པའི་ཐོ་བཀོད་འབྲི་མི་དང་གཅིག་ཁར་ ཧེ་ཤི་འདི་ མ་མཐུན་པ་ཅིན་ འགོ་བཙུགས་ནི་ལུ་ ངོས་ལེན་མི་འབད།
+- on-wire `ConfidentialFeatureDigest::conf_rules_version` གིས་ གསལ་སྟོན་སྒྲིག་བཀོད་ཐོན་རིམ་འདི་ བཙུགསཔ་ཨིན། v1 ཡོངས་འབྲེལ་གྱི་དོན་ལུ་ དེ་ `Some(1)` དང་ འདྲ་མཉམ་ `iroha_config::parameters::defaults::confidential::RULES_VERSION` ལུ་ལུས་དགོ། ལམ་ལུགས་འདི་ འཕེལ་འགྱུར་འགྱོ་བའི་སྐབས་ དུས་རྒྱུན་གྱི་ མངོན་གསལ་ཚུ་ བསྐྱར་བཟོ་འབད་ཞིནམ་ལས་ ལྡེ་མིག་ནང་ གཉིས་ལྡན་ཚུ་ བཤུད་བརྡར་རྐྱབ་ཨིན། སླ་བསྲེ་ཐོན་རིམ་ཚུ་གིས་ བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ སྡེབ་ཚན་ཚུ་ `ConfidentialFeatureDigestMismatch` དང་ཅིག་ཁར་ ངོས་ལེན་འབདཝ་ཨིན།
+- ཤུགས་ལྡན་བཟོ་མི་འདི་གིས་ བཱན་ཌལ་ཐོ་བཀོད་དུས་མཐུན་བཟོ་ནི་དང་ ཚད་གཞི་མི་ཚེ་འཁོར་རིམ་བསྒྱུར་བཅོས་ དེ་ལས་ སྲིད་བྱུས་བསྒྱུར་བཅོས་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན་ དེ་འབདཝ་ལས་ བཞུ་ཁུ་འདི་ རིམ་མཐུན་སྦེ་སྡོད།
+  1. འཆར་གཞི་བརྩམ་ཡོད་པའི་ཐོ་བཀོད་འགྱུར་བཅོས་ (`Publish*`, `Set*Lifecycle`) འདི་ Offline གི་གནས་སྟངས་ཀྱི་མཐོང་སྣང་ནང་ ལག་ལེན་འཐབ་ཞིནམ་ལས་ `compute_confidential_feature_digest` དང་ཅིག་ཁར་ ཤུགས་ལྡན་བཟོ་བའི་ཤུལ་ལས་ བཞུ་ཁུ་འདི་ རྩིས་རྐྱབ་དགོ།
+  ༢ གློག་རིག་ཧ་ཤི་ལག་ལེན་འཐབ་སྟེ་ `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x…"})` གིས་ མཉམ་རོགས་ཀྱིས་ བར་མཚམས་ཐོ་བཀོད་ཀྱི་བཀོད་རྒྱ་ཚུ་ མ་ཐོབ་རུང་ ཟས་བཅུད་ཚུ་ ངེས་བདེན་སྦེ་ ལོག་ཐོབ་ཚུགས།
+  ༣ `ScheduleConfidentialPolicyTransition` བཀོད་རྒྱ་ཚུ་ མཉམ་སྦྲགས་འབད་དགོ། བཀའ་སློབ་རེ་རེ་གིས་ གཞུང་སྐྱོང་གིས་ བཏོན་མི་ `transition_id` འདི་ ལུང་འདྲེན་འབད་དགོ། བསྒྲིགས་ཏེ་ གཡོག་བཀོལ་བའི་དུས་ཚོད་ཀྱིས་ ངོས་ལེན་མ་འབད་བར་བཞག་འོང་།
+  ༤ གསལ་སྟོན་གྱི་བཱའིཊིསི་དང་ ཨེསི་ཨེཆ་ཨེ་-༢༥༦ མཛུབ་མོ་གི་པར་ དེ་ལས་ ཤུགས་ལྡན་བཟོ་ནིའི་འཆར་གཞི་ནང་ལག་ལེན་འཐབ་མི་ བཞུ་བཅོས་ཚུ་ བརྩོན་ཤུགས་བསྐྱེད། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བར་བཅད་འབད་ནི་ལས་ བཀག་ཐབས་ལུ་ གསལ་སྟོན་འདི་ ཚོགས་རྒྱན་བཙུགས་པའི་ཧེ་མ་ ཅ་རྙིང་གསུམ་ཆ་ར་ བདེན་དཔྱད་འབདཝ་ཨིན།
+- བསྐོར་ར་ཚུ་ལུ་ ཕྱིར་འགྱངས་འབད་ཡོད་པའི་བཏོག་དགོཔ་ད་ དམིགས་གཏད་མཐོ་ཚད་འདི་ ཆ་རོགས་སྲོལ་སྒྲིག་ཚད་གཞི་ནང་ ཐོ་བཀོད་འབད།(དཔེར་ན་ `custom.confidential_upgrade_activation_height`) འདི་གིས་ རྩིས་ཞིབ་པ་ཚུ་ལུ་ Norito-encoded བདེན་དཔྱད་ཅིག་ བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ བཞུ་བཅོས་བསྒྱུར་བཅོས་མ་འབད་བའི་ཧེ་མ་ བརྡ་དོན་སྒོ་སྒྲིག་ལུ་ གུས་ཞབས་འབད་ཡི་ཟེར་ བདེན་ཁུངས་བྱིནམ་ཨིན།## བདེན་དཔྱད་དང་ ཚད་གཞི་གི་མི་ཚེ་འཁོར་བ།
+### ZK ཐོ་འཁོར།
+- ལེ་ཇར་ཚོང་ཁང་ `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` ནང་ `proving_system` ད་ལྟོ་ `Halo2` ལུ་གཏན་འབེབས་བཟོཝ་ཨིན།
+- `(circuit_id, version)` ཆ་གཅིག་འཛམ་གླིང་ནང་ཁྱད་པར་ཅན་ཡོད། ཐོ་བཀོད་འདི་གིས་ གློག་ལམ་མེ་ཊ་ཌེ་ཊ་གིས་ འཚོལ་ཞིབ་འབད་ནིའི་དོན་ལུ་ གཞི་རིམ་ཟུར་ཐོ་ཅིག་ བདག་འཛིན་འཐབ་ཨིན། འཛུལ་ཞུགས་ཀྱི་སྐབས་ལུ་ འདྲ་བཤུས་ཆ་གཅིག་ཐོ་བཀོད་འབད་ནི་གི་དཔའ་བཅམ་མི་འདི་ ངོས་ལེན་མ་འབད་བས།
+- `circuit_id` འདི་ སྟོངམ་མེད་མི་དང་ `public_inputs_schema_hash` འདི་ བྱིན་དགོཔ་ཨིན། (སྤྱིར་བཏང་ལུ་ བདེན་བཤད་ཀྱི་ མི་མང་ཨིན་པུཊི་ཨེན་ཀོ་ཌིང་གི་ Blake2b-32 hash ཨིན།) འཛུལ་ཞུགས་འདི་གིས་ ས་སྒོ་འདི་ཚུ་བཏོན་གཏང་མི་ཐོ་བཀོད་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+- གཞུང་སྐྱོང་གི་བཀོད་རྒྱ་ཚུ་ཡང་།
+  - མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ `Proposed` ཐོ་བཀོད་ཁ་སྐོང་འབད་ནི་ལུ་ `PUBLISH` ཨིན།
+  - ཨི་པོཆ་མཚམས་ཅིག་ནང་ ཐོ་བཀོད་ཤུགས་ལྡན་བཟོ་ནི་འདི་ དུས་ཚོད་བཀོད་ནིའི་དོན་ལུ་ `ACTIVATE { vk_id, activation_height }` ཨིན།
+  - `DEPRECATE { vk_id, deprecation_height }` གིས་ མཐའ་མཇུག་གི་མཐོ་ཚད་འདི་ བདེན་ཁུངས་ཚུ་གིས་ ཐོ་བཀོད་ལུ་གཞི་བསྟུན་འབད་ཚུགས་པའི་ རྟགས་བཀལ་ནི་ལུ་ རྟགས་བཀལ་དགོ།
+  - གློ་བུར་གྱི་སྒོ་བསྡམས་པའི་དོན་ལུ་ `WITHDRAW { vk_id, withdraw_height }`; ཐོ་བཀོད་གསརཔ་ཚུ་ ཤུགས་ལྡན་མ་བཟོ་ཚུན་ཚོད་ ཕྱིར་འཐེན་མཐོ་ཚད་ཀྱི་ཤུལ་ལས་ རྒྱུ་དངོས་ཚུ་ གྱང་ཤུགས་ཅན་གྱི་གསང་བའི་ཟད་འགྲོ་ཚུ་ ཐོ་ཕོག་ཡོདཔ་ཨིན།
+- Genesis གིས་ `confidential_registry_root` སྲོལ་སྒྲིག་ཚད་གཞི་འདི་ གསལ་སྟོན་འབདཝ་ཨིན། བདེན་དཔྱད་འདི་གིས་ མཐུད་མཚམས་ཅིག་མ་འབད་བའི་ཧེ་མ་ ས་གནས་ཀྱི་ཐོ་བཀོད་གནས་སྟངས་ལུ་ འཇུ་བྱེད་འདི་ བརྟག་དཔྱད་འབདཝ་ཨིན།
+- བདེན་དཔྱད་འབད་མི་ཅིག་ ཐོ་བཀོད་འབད་ནི་ཡང་ན་ དུས་མཐུན་བཟོ་ནི་ལུ་ `gas_schedule_id` དགོཔ་ཨིན། ཐོ་བཀོད་ཐོ་བཀོད་འདི་ `Active` ཨིན་ དེ་ཡང་ `(circuit_id, version)` ཟུར་ཐོ་ནང་ཡོདཔ་སྦེ་ཨིནམ་དང་ Halo2 གི་བདེན་ཁུངས་ཚུ་གིས་ `circuit_id`, `vk_hash`, དང་ Norito, འདི་ཨིན། ཐོ་བཀོད་དྲན་ཐོ་དང་མཐུན་སྒྲིག་འབད།
 
-New networks that start with confidentiality enabled encode the desired policy directly in genesis. They still follow the checklist above when changing modes post-launch so that conversion windows remain deterministic and wallets have time to adjust.
+### ལྡེ་མིག་ཚུ་ ཁུངས་གཏུག་འབད་ནི།
+- ལྡེ་མིག་ཚུ་ རེས་ཇར་ཨོཕ་-མེད་ དེ་འབདཝ་ད་ ནང་དོན་ཁ་བྱང་བཀོད་ཡོད་པའི་ངོས་འཛིན་འབད་མི་ (`pk_cid`, `pk_hash`, `pk_len`) བདེན་དཔྱད་འབད་མི་ མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ དཔར་བསྐྲུན་འབད་ཡོདཔ་ཨིན།
+- ཝ་ལེཊི་ཨེསི་ཌི་ཀེ་ཨེསི་ཚུ་ ཕེཆ་པི་ཀེ་ གནད་སྡུད་དང་ ཧ་ཤེ་ཚུ་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ ཉེ་གནས་ལུ་ འདྲ་མཛོད་འབད།
 
-### Norito manifest versioning & activation
+### པེ་ཌར་སེན་ & པོ་སི་ཌོན་ ཚད་བཟུང་།
+- ཐོ་བཀོད་ཚུ་ སོ་སོ་སྦེ་ (`PedersenParams`, `PoseidonParams`) མེ་ལོང་ཚད་འཛིན་ཚུ་ མེ་ལོང་ཚད་འཛིན་ཚུ་ རེ་རེ་གིས་ `params_id` དང་ གློག་ཤུགས་འཕྲུལ་ཆས་/རྒྱུན་ལམ་ཚུ་ ཤུགས་ལྡན་བཟོ་ནིའི་ མར་ཕབ་ དེ་ལས་ ཕྱིར་འཐེན་གྱི་མཐོ་ཚད་ཚུ་ཡོདཔ་ཨིན།
 
-- Genesis manifests MUST include a `SetParameter` for the custom `confidential_registry_root` key. The payload is Norito JSON matching `ConfidentialRegistryMeta { vk_set_hash: Option<String> }`: omit the field (`null`) when no verifier entries are active, otherwise supply a 32-byte hex string (`0x…`) equal to the hash produced by `compute_vk_set_hash` over the verifier instructions shipped in the manifest. Nodes refuse to start if the parameter is missing or the hash disagrees with the encoded registry writes.
-- The on-wire `ConfidentialFeatureDigest::conf_rules_version` embeds the manifest layout version. For v1 networks it MUST remain `Some(1)` and equals `iroha_config::parameters::defaults::confidential::RULES_VERSION`. When the ruleset evolves, bump the constant, regenerate manifests, and roll out binaries in lock-step; mixing versions causes validators to reject blocks with `ConfidentialFeatureDigestMismatch`.
-- Activation manifests SHOULD bundle registry updates, parameter lifecycle changes, and policy transitions so the digest stays consistent:
-  1. Apply the planned registry mutations (`Publish*`, `Set*Lifecycle`) in an offline state view and compute the post-activation digest with `compute_confidential_feature_digest`.
-  2. Emit `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x…"})` using the computed hash so lagging peers can recover the correct digest even if they miss intermediate registry instructions.
-  3. Append the `ScheduleConfidentialPolicyTransition` instructions. Each instruction must quote the governance-issued `transition_id`; manifests that forget it will be rejected by the runtime.
-  4. Persist the manifest bytes, a SHA-256 fingerprint, and the digest used in the activation plan. Operators verify all three artefacts before voting the manifest into effect to avoid partitions.
-- When rollouts require a deferred cut-over, record the target height in a companion custom parameter (for example `custom.confidential_upgrade_activation_height`). This gives auditors a Norito-encoded proof that validators honoured the notice window before the digest change took effect.
+## གཏན་འབེབས་བཀའ་རྒྱ་དང་ རྩ་མེད་པ།
+- རྒྱུ་དངོས་རེ་རེ་གིས་ `CommitmentTree` དང་ `next_leaf_index` བདག་འཛིན་འཐབ་ཨིན། བཀག་ཆ་ཚུ་ གཏན་འབེབས་གོ་རིམ་ནང་ ཁས་བླངས་ཚུ་: བཀག་ཆ་གོ་རིམ་ནང་ ཚོང་འབྲེལ་ཚུ་ བསྐྱར་ལོག་འབད། ཚོང་འབྲེལ་རེ་རེ་ནང་ རིམ་སྒྲིག་ `output_idx` ཡར་འཛེགས་ཏེ་ བསྐྱར་ལོག་འབད་བའི་ ཐོན་འབྲས་ཚུ་ བསྐྱར་ལོག་འབདཝ་ཨིན།
+- `note_position` འདི་ ཤིང་གི་ཨོཕ་སེཊི་ཚུ་ལས་ འབྱུང་ཡོདཔ་ཨིན་རུང་ **not** ཀླད་ཀོར་གྱི་ཆ་ཤས་འདི་; འདི་གིས་ བདེན་དཔང་འབད་མི་ དཔང་པོ་ནང་འཁོད་ལུ་ འཐུས་མིའི་ལམ་ལུགས་རྐྱངམ་ཅིག་ བྱིནམ་ཨིན།
+- བསྐྱར་བཟོ་འོག་ལུ་ ནལ་ལི་ཕི་ཡར་བརྟན་ཏོག་ཏོ་འདི་ པི་ཨར་ཨེཕ་བཟོ་བཀོད་ཀྱིས་ ངེས་གཏན་བཟོཝ་ཨིན། PRF གིས་ `{ nk, note_preimage_hash, asset_id, chain_id, params_id }` བསྡམ་ཞིནམ་ལས་ anchors ཚུ་གིས་ བྱུང་རབས་ཀྱི་ Merkle རྩ་ཚུ་ `max_anchor_age_blocks` གིས་ཚད་འཛིན་འབདཝ་ཨིན།## ལེབ་ཇར་ཕོལོ།
+1. **Mint Confidential { asset_id, བསྡོམས་, འཐོབ་མཁན་_hint }**
+   - རྒྱུ་དངོས་སྲིད་བྱུས་ `Convertible` ཡང་ན་ `ShieldedOnly`; འཛུལ་ཞུགས་བརྟག་དཔྱད་རྒྱུ་དངོས་དབང་ཚད་ ད་ལྟོའི་ `params_id` ལོག་ཐོབ་ཨིན། དཔེ་ཚད་ `rho` གིས་ ཁས་བླངས་བཏོན་ཞིནམ་ལས་ Merkle ཤིང་འདི་ དུས་མཐུན་བཟོཝ་ཨིན།
+   - རྩིས་ཞིབ་ལམ་ལུགས་ཚུ་གི་དོན་ལུ་ ཁས་བླངས་གསརཔ་དང་ མེར་ཀལ་རྩ་བའི་ཌེལ་ཊ་ དེ་ལས་ ཚོང་འབྲེལ་གྱི་འབོད་བརྡ་ཚུ་ བཏོནམ་ཨིན།
+2. **ཊཱན་སི་ཧྥར་སི་ཧྥར་ཨིན་ཌི་ཡལ་ { asset_id, སྒྲུབ་བྱེད་, གློག་ལམ་_ཨའི་ཌི་, ཐོན་རིམ་, ཀླད་ཀོར་བཟོ་མི་, གསརཔ་_བཀག་ཆ་ enc_payloads, anchor_root, memo }**
+   - VM syscall གིས་ ཐོ་བཀོད་ཐོ་བཀོད་ལག་ལེན་འཐབ་སྟེ་ བདེན་ཁུངས་བདེན་དཔྱད་འབདཝ་ཨིན། ཧོསཊི་གིས་ ལག་ལེན་མ་འཐབ་པར་ ནུས་མེད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+   - Ledger གི་དྲན་ཐོ་ `NullifierSet` ཐོ་བཀོད་ཚུ་ ཐོབ་མི་/རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ གསང་བཟོས་པེ་ལོཌི་ཚུ་ གསོག་འཇོག་འབད་ཡོདཔ་དང་ `ConfidentialEvent::Transferred` ཀླད་ཀོར་ཚུ་ བཅུད་བསྡུ་སྟེ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ ཐོན་འབྲས་ཚུ་ བདེན་དཔང་འབད་མི་ མེར་ཀི་ལི་རྩ་ཚུ་ བཏོནམ་ཨིན།
+3. ** RevealCInfidential { asset_id, བདེན་དཔང་, གློག་ལམ་_ཨའི་ཌི་, ཐོན་རིམ་, དངུལ་བསྡོམས་, ལེན་མི་_རྩིས་ཁྲ་, ཨེན་ཀོར་_རྩ་བ་ }**
+   - `Convertible` རྒྱུ་དངོས་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ཐོབ་ཚུགས། དྲན་ཐོ་གནས་གོང་ཚུ་ འདྲ་མཉམ་སྦེ་ གསལ་སྟོན་འབད་མི་དང་ དྭངས་གསལ་གྱི་ བུ་ལོན་ཚུ་ འདྲ་མཉམ་སྦེ་ གསལ་སྟོན་འབད་ཡོདཔ་མ་ཚད་ ཟད་འགྲོ་བཏང་མི་ ཆ་མེད་གཏང་མི་འདི་ རྟགས་བཀལ་ཏེ་ བཀག་འཛིན་འབད་ཡོད་པའི་ དྲན་ཐོ་འདི་ མེ་བཏང་ཡོདཔ་ཨིན།
+   - མི་མང་གི་དངུལ་འབོར་དང་གཅིག་ཁར་ `ConfidentialEvent::Unshielded` གིས་ བཀོལ་སྤྱོད་འབད་མི་ ཆ་མེད་བཏང་མི་དང་ བདེན་ཁུངས་ངོས་འཛིན་ དེ་ལས་ ཚོང་འབྲེལ་གྱི་ འབོད་བརྡ་ཧེ་ཤི་ཚུ་ བཏོནམ་ཨིན།
 
-## Verifier & Parameter Lifecycle
-### ZK Registry
-- Ledger stores `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` where `proving_system` is currently fixed to `Halo2`.
-- `(circuit_id, version)` pairs are globally unique; the registry maintains a secondary index for lookups by circuit metadata. Attempts to register a duplicate pair are rejected during admission.
-- `circuit_id` must be non-empty and `public_inputs_schema_hash` must be provided (typically a Blake2b-32 hash of the verifier’s canonical public-input encoding). Admission rejects records that omit these fields.
-- Governance instructions include:
-  - `PUBLISH` to add a `Proposed` entry with metadata only.
-  - `ACTIVATE { vk_id, activation_height }` to schedule entry activation at an epoch boundary.
-  - `DEPRECATE { vk_id, deprecation_height }` to mark the final height where proofs may reference the entry.
-  - `WITHDRAW { vk_id, withdraw_height }` for emergency shutdown; affected assets freeze confidential spending after the withdraw height until new entries activate.
-- Genesis manifests auto-emit a `confidential_registry_root` custom parameter whose `vk_set_hash` matches the active entries; validation cross-checks this digest against local registry state before a node can join consensus.
-- Registering or updating a verifier requires a `gas_schedule_id`; verification enforces that the registry entry is `Active`, present in the `(circuit_id, version)` index, and that Halo2 proofs provide an `OpenVerifyEnvelope` whose `circuit_id`, `vk_hash`, and `public_inputs_schema_hash` match the registry record.
+## གནད་སྡུད་དཔེ་ཚད་ཁ་སྐོང་ཚུ།
+- `ConfidentialConfig` ལྕོགས་ཅན་བཟོ་ཡོད་པའི་དར་ཆ་དང་གཅིག་ཁར་ `ConfidentialConfig` (རིམ་སྒྲིག་དབྱེ་ཚན་གསརཔ་) དང་ `assume_valid`, རླངས་རྫས་/ཚད་འཛིན་གྱི་ མཐུད་མཚམས་ anchor window, 18NI00000192X, གློག་ཐག་སྒོ་སྒྲིག་, བདེན་བཤད་རྒྱབ་ལོག་།
+- `ConfidentialNote`, `ConfidentialTransfer`, དང་ `ConfidentialMint` Norito གསལ་སྡུད་ཅན་གྱི་ཐོན་རིམ་ (I `CONFIDENTIAL_ASSET_V1 = 0x01`) དང་མཉམ་དུ།
+- `ConfidentialEncryptedPayload` གིས་ `{ version, ephemeral_pubkey, nonce, ciphertext }`, `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` ལུ་ XChaCha20-Poly1305 བཀོད་སྒྲིག་དོན་ལུ་ སྔོན་སྒྲིག་འབད་དོ་ཡོདཔ།
+- ཀེ་ནོ་ནིག་ལྡེ་མིག་འབྱུང་ཁུངས་བེག་ཊར་ཚུ་ `docs/source/confidential_key_vectors.json` ནང་སྡོད་ཡོདཔ་ཨིན། CLI དང་ Sumeragi གཉིས་ཀའི་མཐའ་མཇུག་འདི་ འདི་དག་ལ་རྒྱབ་འགལ་གྱི་ཕྱིར་ལོག་ཡོད། ཟད་འགྲོ་དང་ སྣང་མེད་བཟོ་མི་/བལྟ་ནིའི་ ཐེམ་སྐས་ཚུ་ `fixtures/confidential/keyset_derivation_v1.json` ནང་ལུ་ དཔར་བསྐྲུན་འབད་དེ་ སྐད་ཡིག་མ་འདྲཝ་གི་ ཆ་འཇོག་འབད་ནིའི་དོན་ལུ་ Rust + Swift SDK བརྟག་དཔྱད་ཀྱིས་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+- `asset::AssetDefinition` གིས་ `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }` ཐོབ་ཡོདཔ།
+- Grafana གིས་ སྤོ་བཤུད་/ལྕགས་ཐག་མེད་པའི་བདེན་བཤད་ཀྱི་དོན་ལུ་ `(backend, name, commitment)` བསྡམས་མི་འདི་ གནས་ཏེ་ཡོདཔ་ཨིན། ལག་ལེན་འཐབ་མི་འདི་གིས་ ཐོ་བཀོད་འབད་ཡོད་པའི་ཁས་བླངས་དང་མཐུན་སྒྲིག་འབད་མ་ཚུགས་མི་ གཞི་བསྟུན་ཡང་ན་ ཚིག་ཕྲང་ཕྲང་སྟེ་ བདེན་དཔྱད་འབད་མ་ཚུགས་མི་དང་ རྒྱལ་ཁབ་འདི་ འགྱུར་བཅོས་འགྱོ་བའི་ཧེ་མ་ ཐག་བཅད་ཡོད་པའི་རྒྱབ་རྟེན་ལྡེ་མིག་ལུ་ སྤོ་བཤུད་/མ་བཀག་པའི་བདེན་ཁུངས་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+- Grafana (མཐའ་མཚམས་ཞིབ་དཔྱད་ས་ཚིགས་ཚུ་དང་གཅིག་ཁར་ རྒྱུ་དངོས་རེ་ལུ་) `NullifierSet` `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams`, འཛམ་གླིང་མངའ་སྡེ་ནང་ གསོག་འཇོག་འབད་ཡོདཔ་ཨིན།
+- མེམ་པུལ་གྱིས་ དུས་ཐུང་ `NullifierIndex` དང་ `AnchorIndex` གིས་ གཉིས་ལྡན་བརྟག་དཔྱད་དང་ ཨེན་ཀོར་གྱི་ལོ་ཚད་བརྟག་དཔྱད་འབད་ནི་གི་དོན་ལུ་ བཟོ་བཀོད་ཚུ་ བདག་འཛིན་འཐབ་ཨིན།
+- Norito ལས་འཆར་དུས་མཐུན་བཟོ་བའི་སྐབས་ མི་མང་ཨིན་པུཊི་ཚུ་གི་དོན་ལུ་ ཀེ་ནོ་ནིག་གོ་རིམ་ཚུ་ཚུདཔ་ཨིན། round-trip tests གིས་ ཨེན་ཀོཌིང་ གཏན་འབེབས་བཟོ་ནི་འདི་ ངེས་གཏན་བཟོཝ་ཨིན།
+- གསང་བཟོ་འབད་ཡོད་པའི་ པེ་ལོཌ་ རུལ་རིཔ་ཚུ་ ཡུ་ནིཊ་བརྟག་དཔྱད་ (`crates/iroha_data_model/src/confidential.rs`) བརྒྱུད་དེ་ བསྡམ་བཞག་ཡོདཔ་ཨིན། `norito.md` གིས་ ཡིག་ཤུབས་ཀྱི་དོན་ལུ་ ཁ་ཕྱེ་ཡོད་པའི་མགོ་ཡིག་འདི་ཡིག་ཆ་བཟོཝ་ཨིན།## IVM མཉམ་བསྡོམས་དང་སི་སི་ཀེལ།
+- ངོ་སྤྲོད་ `VERIFY_CONFIDENTIAL_PROOF` སི་ཀཱལ་དང་ལེན་འབད་ནི།
+  - `circuit_id`, `version`, `scheme`, `public_inputs`, Torii, དང་ གྲུབ་འབྲས་Torii, དང་ གྲུབ་འབྲས་Torii.
+  - སི་ཀཱལ་གྱིས་ ཐོ་བཀོད་ལས་ བདེན་དཔྱད་འབད་མི་ མེ་ཊ་ཌེ་ཊ་ ཚད་/དུས་ཚོད་ཚད་གཞི་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན་ གློག་ཤུགས་གཏན་འབེབས་རླངས་རླུང་ཚུ་ བཀག་འཛིན་འབདཝ་ཨིནམ་དང་ བདེན་བཤད་མཐར་འཁྱོལ་ཅན་འབད་བ་ཅིན་ ཌེལ་ཊ་འཇུག་སྤྱོད་འབདཝ་ཨིན།
+- ཧོསཊི་གིས་ མར་ཀལ་རྩ་བའི་པར་དང་ ཆ་མེད་གཏང་མི་གནས་རིམ་ཚུ་ ལོག་ཐོབ་ནིའི་དོན་ལུ་ ལྷག་ནི་རྐྱངམ་ཅིག་ `ConfidentialLedger` གསལ་སྟོན་འབདཝ་ཨིན། Kotodama དཔེ་མཛོད་འདི་གིས་ དཔང་པོ་ཚོགས་སྡེ་གི་གྲོགས་རམ་དང་ ལས་རིམ་བདེན་དཔྱད་བྱིནམ་ཨིན།
+- བདེན་ཁུངས་ཅན་གྱི་བཱ་ཕར་སྒྲིག་བཀོད་དང་ ཐོ་བཀོད་ལག་ལེན་ཚུ་ གསལ་ཏོག་ཏོ་བཟོ་ནི་ལུ་ དུས་མཐུན་བཟོ་ཡོད་པའི་ པོའིན་ཊར་-ཨེ་བི་ཨའི་ ཌོཀ་ཚུ།
 
-### Proving Keys
-- Proving keys remain off-ledger but are referenced by content-addressed identifiers (`pk_cid`, `pk_hash`, `pk_len`) published alongside verifier metadata.
-- Wallet SDKs fetch PK data, verify hashes, and cache locally.
+## ནྱི་ནྱི་ ནུས་པ འ ི་ ནུས་པ ་ བ ད་ ོན།
+- Handshake advertises `feature_bits.confidential` together with a `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`. བདེན་དཔྱད་འབད་མི་ཚུ་ལུ་ `confidential.enabled=true`, `assume_valid=false` དང་འདྲ་བའི་བདེན་དཔྱད་ཀྱི་རྒྱབ་རྟེན་ངོས་འཛིན་ དེ་ལས་ མཐུན་སྒྲིག་ཅན་གྱི་བཞུ་བཅུག་ནི་ཚུ་དགོཔ་ཨིན། མ་མཐུན་མི་ཚུ་གིས་ `HandshakeConfidentialMismatch` དང་གཅིག་ཁར་ ལགཔ་འཐུདཔ་ཨིན།
+- རིམ་སྒྲིག་གིས་ ལྟ་རྟོག་པ་མཐུད་མཚམས་ཚུ་གི་དོན་ལུ་ `assume_valid` ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ བལྟ་རྟོག་པ་ཚུ་གིས་ བདེན་ཁུངས་ཚུ་ བདེན་དཔྱད་མ་འབད་བར་ མངའ་སྡེའི་ཌེལ་ཊ་ཚུ་ འཇུག་སྤྱོད་འབདཝ་ཨིན།
+- ས་གནས་ཀྱི་ལྕོགས་གྲུབ་ལྕོགས་མིན་བཟོ་བ་ཅིན་ མེམ་པུ་ལི་གིས་ གསང་བའི་ཚོང་འབྲེལ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། ཚགས་མ་ཚུ་གིས་ ལྕོགས་གྲུབ་དང་ མ་མཐུན་པའི་ མ་ཤེས་པའི་ བདེན་བཤད་འབད་མི་ IDs ཚུ་ སྦོམ་ཆུང་གི་ཚད་གཞི་ནང་ མ་མཐུན་པར་ མཉམ་རོགས་ཚུ་ལུ་ ཉེན་སྲུང་གི་ཚོང་འབྲེལ་ཚུ་ བཏང་ནི་ལས་ འཛེམ་དགོ།
 
-### Pedersen & Poseidon Parameters
-- Separate registries (`PedersenParams`, `PoseidonParams`) mirror verifier lifecycle controls, each with `params_id`, hashes of generators/constants, activation, deprecation, and withdraw heights.
+### གསལ་བསྒྲགས ་ དང་ ནུས་མེད་ཉར་མི་བཞག་པའི་སྲིད་བྱུས།
 
-## Deterministic Ordering & Nullifiers
-- Each asset maintains a `CommitmentTree` with `next_leaf_index`; blocks append commitments in deterministic order: iterate transactions in block order; within each transaction iterate shielded outputs by ascending serialized `output_idx`.
-- `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
-- Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
+གསང་བའི་རྩིས་ཁྲ་ཚུ་གིས་ གསརཔ་དང་ ལུ་ དྲན་ཐོ་བཀོད་ནིའི་དོན་ལུ་ བྱུང་རབས་ལངམ་སྦེ་ བཞག་དགོ།
+བསྐྱར་རྩེད་གཞུང་སྐྱོང་གིས་ རྩིས་ཞིབ་འབད་ནི། སྔོན་སྒྲིག་སྲིད་བྱུས་འདི་ གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ།
+`ConfidentialLedger`, ནི།
 
-## Ledger Flow
-1. **MintConfidential { asset_id, amount, recipient_hint }**
-   - Requires asset policy `Convertible` or `ShieldedOnly`; admission checks asset authority, retrieves current `params_id`, samples `rho`, emits commitment, updates Merkle tree.
-   - Emits `ConfidentialEvent::Shielded` with the new commitment, Merkle root delta, and transaction call hash for audit trails.
-2. **TransferConfidential { asset_id, proof, circuit_id, version, nullifiers, new_commitments, enc_payloads, anchor_root, memo }**
-   - VM syscall verifies proof using registry entry; host ensures nullifiers unused, commitments appended deterministically, anchor is recent.
-   - Ledger records `NullifierSet` entries, stores encrypted payloads for recipients/auditors, and emits `ConfidentialEvent::Transferred` summarising nullifiers, ordered outputs, proof hash, and Merkle roots.
-3. **RevealConfidential { asset_id, proof, circuit_id, version, nullifier, amount, recipient_account, anchor_root }**
-   - Available only for `Convertible` assets; proof validates note value equals revealed amount, ledger credits transparent balance, and burns the shielded note by marking the nullifier spent.
-   - Emits `ConfidentialEvent::Unshielded` with the public amount, consumed nullifiers, proof identifiers, and transaction call hash.
-
-## Data Model Additions
-- `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
-- `ConfidentialNote`, `ConfidentialTransfer`, and `ConfidentialMint` Norito schemas with explicit version byte (`CONFIDENTIAL_ASSET_V1 = 0x01`).
-- `ConfidentialEncryptedPayload` wraps AEAD memo bytes with `{ version, ephemeral_pubkey, nonce, ciphertext }`, defaulting to `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` for the XChaCha20-Poly1305 layout.
-- Canonical key-derivation vectors live in `docs/source/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures. Wallet-facing derivatives for the spend/nullifier/viewing ladder are published in `fixtures/confidential/keyset_derivation_v1.json` and exercised by the Rust + Swift SDK tests to guarantee cross-language parity.
-- `asset::AssetDefinition` gains `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
-- `ZkAssetState` persists the `(backend, name, commitment)` binding for transfer/unshield verifiers; execution rejects proofs whose referenced or inline verifying key fails to match the registered commitment and verifies transfer/unshield proofs against the resolved backend key before mutating state.
-- `CommitmentTree` (per asset with frontier checkpoints), `NullifierSet` keyed by `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` stored in world state.
-- Mempool maintains transient `NullifierIndex` and `AnchorIndex` structures for early duplicate detection and anchor age checks.
-- Norito schema updates include canonical ordering for public inputs; round-trip tests ensure encoding determinism.
-- Encrypted payload roundtrips are locked in via unit tests (`crates/iroha_data_model/src/confidential.rs`), and the wallet key-derivation vectors above anchor the AEAD envelope derivations for auditors. `norito.md` documents the on-wire header for the envelope.
-
-## IVM Integration & Syscall
-- Introduce `VERIFY_CONFIDENTIAL_PROOF` syscall accepting:
-  - `circuit_id`, `version`, `scheme`, `public_inputs`, `proof`, and resulting `ConfidentialStateDelta { asset_id, nullifiers, commitments, enc_payloads }`.
-  - Syscall loads verifier metadata from registry, enforces size/time limits, charges deterministic gas, and only applies delta if proof succeeds.
-- Host exposes read-only `ConfidentialLedger` trait for retrieving Merkle root snapshots and nullifier status; Kotodama library provides witness assembly helpers and schema validation.
-- Pointer-ABI docs updated to clarify proof buffer layout and registry handles.
-
-## Node Capability Negotiation
-- Handshake advertises `feature_bits.confidential` together with a `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`. Validator participation requires `confidential.enabled=true`, `assume_valid=false`, identical verifier backend identifiers, and matching digests; mismatches fail the handshake with `HandshakeConfidentialMismatch`.
-- Config supports `assume_valid` for observer nodes only: when disabled, encountering confidential instructions yields deterministic `UnsupportedInstruction` without panic; when enabled, observers apply declared state deltas without verifying proofs.
-- Mempool rejects confidential transactions if local capability is disabled. Gossip filters avoid sending shielded transactions to peers without matching capability while blind-forwarding unknown verifier IDs within size limits.
-
-### Reveal Pruning & Nullifier Retention Policy
-
-Confidential ledgers must retain enough history to prove note freshness and to
-replay governance-driven audits. The default policy, enforced by
-`ConfidentialLedger`, is:
-
-- **Nullifier retention:** keep spent nullifiers for *minimum* `730` days (24
-  months) after spend height, or the regulator-mandated window if longer.
-  Operators may extend the window via `confidential.retention.nullifier_days`.
-  Nullifiers younger than the retention window MUST remain queryable via Torii so
-  auditors can prove double-spend absence.
-- **Reveal pruning:** transparent reveals (`RevealConfidential`) prune the
-  associated note commitments immediately after the block finalises, but the
-  consumed nullifier remains subject to the retention rule above. Reveal-related
-  events (`ConfidentialEvent::Unshielded`) record the public amount, recipient,
-  and proof hash so reconstructing historic reveals does not require the pruned
+- **ནུས་མེད་བཟོ་བཅོས་:** ཉུང་མཐའ་དོན་ལུ་ *ཉུང་མཐའ་* `730` ཉིནམ་ (24
+  ཟླཝ་) མཐོ་ཚད་བཏང་པའི་ཤུལ་ལས་ ཡང་ན་ དུས་ཡུན་རིངམ་སྦེ་བཞག་པ་ཅིན་ བཀག་འཛིན་གྱི་ བཀའ་རྒྱ་གནང་མི་ སྒོ་སྒྲིག་འདི་ཨིན།
+  བཀོལ་སྤྱོད་པ་ཚུ་གིས་ `confidential.retention.nullifier_days` བརྒྱུད་དེ་ སྒོ་སྒྲིག་འདི་རྒྱ་སྐྱེད་འབད་འོང་།
+  བཀག་འཛིན་སྒོ་སྒྲིག་ལས་ ཆུང་བའི་ ནལ་ལི་ཕིར་ཚུ་ Torii བརྒྱུད་དེ་ འདྲི་དཔྱད་འབད་བཏུབ་སྦེ་སྡོད་དགོ།
+  རྩིས་ཞིབ་པ་ཚུ་གིས་ ཟད་འགྲོ་གཉིས་ལྡན་མེད་པའི་ བདེན་ཁུངས་བཀལ་ཚུགས།
+- ** གཤག་བཅོས་:** དྭངས་གསལ་གསལ་སྟོན་ (`RevealConfidential`) གིས་ གཤག་བཅོས་འབད་ཡོདཔ།
+  བཀག་ཆ་འབད་ཡོད་པའི་མཐའ་དཔྱད་ཀྱི་ཤུལ་ལས་ འབྲེལ་ཡོད་དྲན་ཐོའི་ཁས་བླངས་ཚུ་ དེ་འབདཝ་ད་
+  གོང་འཁོད་ཀྱི་བཞག་ཐངས་ལུ་གཞི་བཞག་མི་ ཆ་མེད་བཟོ་མི་འདི་ ལུས་ཡོདཔ་ཨིན། གསལ་སྟོན་དང་འབྲེལ་བ།
+  བྱུང་ལས་ (`ConfidentialEvent::Unshielded`) མི་མང་དངུལ་འབོར་ ལེན་མཁན་ དང་།
+  དང་ བདེན་ཁུངས་ ཧེཤ་ དེ་འབདཝ་ལས་ བྱུང་རབས་ཀྱི་ གསལ་སྟོན་འབད་ནི་ལུ་ གཤག་བཅོས་འབད་མི་དེ་ དགོཔ་མེདཔ་ཨིན།
   ciphertext.
-- **Frontier checkpoints:** commitment frontiers maintain rolling checkpoints
-  covering the larger of `max_anchor_age_blocks` and the retention window. Nodes
-  compact older checkpoints only after all nullifiers within the interval expire.
-- **Stale digest remediation:** if `HandshakeConfidentialMismatch` is raised due
-  to digest drift, operators should (1) verify that nullifier retention windows
-  align across the cluster, (2) run `iroha_cli app confidential verify-ledger` to
-  regenerate the digest against the retained nullifier set, and (3) redeploy the
-  refreshed manifest. Any nullifiers pruned prematurely must be restored from
-  cold storage before rejoining the network.
+- **ཕྲོན་ཊི་ཡར་ཞིབ་དཔྱད་ས་ཚིགས་:** ཁས་བླངས་ས་མཚམས་ཚུ་གིས་ བསྐོར་བའི་ཞིབ་དཔྱད་ས་ཚིགས་ཚུ་ བདག་འཛིན་འཐབ་ཨིན།
+  `max_anchor_age_blocks` དང་ བཀག་འཛིན་སྒོ་སྒྲིག་ལས་ སྦོམ་བཟོ་ནི། མཛུབ་གནོན་ཚུ།
+  བར་མཚམས་ནང་འཁོད་ལུ་ ཀླད་ཀོར་བཟོ་མི་ཆ་མཉམ་གྱི་ཤུལ་ལས་རྐྱངམ་ཅིག་ ཞིབ་དཔྱད་ས་ཚིགས་རྙིངམ་ཚུ་ ཆུང་ཀུ་བཟོ།
+- **བདུད།:** གལ་སྲིད་ `HandshakeConfidentialMismatch` འདི་ གཏན་འཁེལ་བཟོ་བ་ཅིན་
+  བཞུ་ནི་གི་དོན་ལུ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ (༡) ཀླད་ཀོར་བཞག་མི་སྒོ་སྒྲིག་ཚུ་ བདེན་དཔྱད་འབད་དགོ།
+  ཀླད་ཀོར་ཕར་ཚུར་, (༢) གཡོག་བཀོལ་ནི། `iroha_cli app confidential verify-ledger` ལུ།
+  འཇུ་བྱེད་འདི་ བཀག་བཞག་ཡོད་པའི་ ནུས་མེད་ཆ་ཚན་ལུ་ ལོག་བཟོ་ཞིནམ་ལས་ (༣) ལོག་སྟེ་བཟོ་ནི།
+  བསྐྱར་བཟློས་བྱས་པའི་མངོན་གསལ་དོད། དུས་ཚོད་མ་འགྱོ་བའི་ཧེ་མ་ལས་ དབུགས་གཏོང་ལེན་འབད་མི་ ཀླད་ཀོར་གང་རུང་ཚུ་ ལས་ སླར་གསོ་འབད་དགོ།
+  ཡོངས་འབྲེལ་ནང་མ་འཛུལ་བའི་ཧེ་མ་ བསིལ་དྲོད་གསོག་འཇོག་།བཀོལ་སྤྱོད་རྔོན་དེབ་ནང་ ས་གནས་ཀྱི་བཀག་ཆ་ཚུ་ ཡིག་ཆ་བཟོ། གཞུང་སྐྱོང་སྲིད་བྱུས།
+བཀག་འཛིན་སྒོ་སྒྲིག་གིས་ མཐུད་མཚམས་རིམ་སྒྲིག་དང་ གཏན་མཛོད་གསོག་འཇོག་འཆར་གཞི་ཚུ་ ༢༠༢༠ ལུ་དུས་མཐུན་བཟོ་དགོ།
+ལྡེ་མིག་བསྒྱིར།
 
-Document local overrides in the operations runbook; governance policies extending
-the retention window must update node configuration and archival storage plans in
-lockstep.
+### ཕྱིར་འཐེན་དང་སླར་གསོའི་རྒྱུན་འབྲེལ།
 
-### Eviction & Recovery Flow
+1. བརྡ་འཕྲིན་སྐབས་ `IrohaNetwork` གིས་ ཁྱབ་བསྒྲགས་འབད་བའི་ནུས་པ་ཚུ་ ག་བསྡུར་འབདཝ་ཨིན། མ་མཐུན་པའི་ཡར་འཕར་གང་རུང་ `HandshakeConfidentialMismatch`; མཐུད་ལམ་འདི་ཁ་བསྡམས་ཡོདཔ་ལས་ མཉམ་རོགས་འདི་ གསར་འཚོལ་གྱི་བང་རིམ་ནང་ལུ་རང་ ལུས་ཡོདཔ་ད་ དེ་ཡང་ `Ready` ལུ་ ཡར་འཕར་མ་འགྱོ་བར་ཡོདཔ་ཨིན།
+༢ འཐུས་ཤོར་འདི་ ཡོངས་འབྲེལ་ཞབས་ཏོག་དྲན་ཐོ་བརྒྱུད་དེ་ བཏོན་ཡོདཔ་ཨིན། ༼ཐག་རིང་ ཟས་བཅུད་དང་རྒྱབ་རྟེན་ཚུ་རྩིས་ཏེ་༽ དེ་ལས་ Sumeragi གིས་ གྲོས་འཆར་དང་ ཡང་ན་ ཚོགས་རྒྱན་བཙུགས་ནིའི་དོན་ལུ་ མཉམ་རོགས་ཀྱི་དུས་ཚོད་མ་བཏོནམ་ཨིན།
+3. བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བདེན་དཔྱད་ཐོ་བཀོད་དང་ ཚད་གཞི་ཆ་ཚན་ (`vk_set_hash`, `pedersen_params_id`, `poseidon_params_id`) ཡང་ན་ `next_conf_features` དང་ `activation_height` གཉིས་ བཀོད་སྒྲིག་འབད་དེ་ བཅོ་ཁ་རྐྱབ། བཅུད་ལྡན་འདི་མཐུན་སྒྲིག་འབད་ཚརཝ་ད་ ཤུལ་མམ་གྱི་ལག་བརྡ་འདི་རང་བཞིན་གྱིས་གྲུབ་ཚུགསཔ་ཨིན།
+༤ མཉམ་རོགས་ཀྱིས་ བཀག་ཆ་ཅིག་རྒྱང་བསྒྲགས་འབད་ཚུགས་པ་ཅིན་ (དཔེར་ན་ གཏན་མཛོད་བསྐྱར་རྩེད་བརྒྱུད་དེ་) བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ `BlockRejectionReason::ConfidentialFeatureDigestMismatch` དང་ཅིག་ཁར་ གཏན་འབེབས་བཟོ་སྟེ་ ངོས་ལེན་མ་འབད་བར་ ཡོངས་འབྲེལ་ནང་ལུ་ ལེ་ཇར་གནས་སྟངས་འདི་ རིམ་མཐུན་སྦེ་བཞག་དགོ།
 
-1. During dial, `IrohaNetwork` compares the advertised capabilities. Any mismatch raises `HandshakeConfidentialMismatch`; the connection is closed and the peer remains in the discovery queue without ever being promoted to `Ready`.
-2. The failure is surfaced via the network service log (including the remote digest and backend), and Sumeragi never schedules the peer for proposal or voting.
-3. Operators remediate by aligning verifier registries and parameter sets (`vk_set_hash`, `pedersen_params_id`, `poseidon_params_id`) or by staging `next_conf_features` with an agreed `activation_height`. Once the digest matches, the next handshake succeeds automatically.
-4. If a stale peer manages to broadcast a block (e.g., via archival replay), validators reject it deterministically with `BlockRejectionReason::ConfidentialFeatureDigestMismatch`, keeping ledger state consistent across the network.
+### བསྐྱར་རྩེད་-ཉེན་སྲུང་ལག་གདུགས།
 
-### Replay-safe handshake flow
+༡ ཕྱི་ཁའི་དཔའ་བཅམ་མི་རེ་རེ་གིས་ ནོའིསི་གསརཔ་/ཨེགསི་༢༥༥༡༩ ལྡེ་མིག་རྒྱུ་ཆ་ཚུ་ བགོ་བཀྲམ་འབདཝ་ཨིན། ལག་ཤེན་གྱི་ པེ་ལོཌ་ (`handshake_signature_payload`) གིས་ ས་གནས་ཀྱི་དང་ ཐག་རིང་གི་ མི་མང་ལྡེ་མིག་ཚུ་ མཉམ་བསྡོམས་འབདཝ་ཨིན། མཐུད་མཚམས་མ་བཞག་པའི་ཧེ་མ་ ཨེ་ཨེ་ཌི་-གསང་བཟོས་འབདཝ་ཨིན།
+༢ ལན་འདེབས་འབད་མི་གིས་ མཉམ་རོགས་/ས་གནས་ཀྱི་ལྡེ་མིག་བཀོད་རྒྱ་དང་གཅིག་ཁར་ པེ་ལོཌ་འདི་ ལོག་རྩིས་སྟོན་ཞིནམ་ལས་ `HandshakeHelloV1` ནང་བཙུགས་ཡོད་པའི་ Ed25519 མཚན་རྟགས་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན། ག་ཅི་འབད་ཟེར་བ་ཅིན་ དུས་ཚོད་ཀྱི་ལྡེ་མིག་དང་ ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་ཁ་བྱང་གཉིས་ཆ་ར་ མཚན་རྟགས་མངའ་ཁོངས་ཀྱི་ཆ་ཤས་ཅིག་ཨིནམ་ལས་ མཉམ་བསྡོམ་གཞན་ཅིག་ལུ་ བཟུང་ཡོད་པའི་བརྡ་འཕྲིན་འདི་ ལོག་སྟེ་རྩེད་ནི་དང་ ཡང་ན་ བསྐྱར་གསོ་འབད་མི་ མཐུད་ལམ་ཅིག་ བདེན་དཔྱད་འབད་ནི་ལུ་ བདེན་དཔྱད་འབད་མ་ཚུགསཔ་ཨིན།
+3. གསང་བའི་ནུས་པ་རྒྱལ་དར་དང་ `ConfidentialFeatureDigest` ནང་ `HandshakeConfidentialMeta` ནང་དུ་འགྲུལ་བསྐྱོད་ཀྱི་འགྲོ་སོང་། ལེན་མི་གིས་ ཊུ་པལ་ `{ enabled, assume_valid, verifier_backend, digest }` འདི་ ས་གནས་ནང་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ `ConfidentialHandshakeCaps` དང་ག་བསྡུར་འབདཝ་ཨིན། སྐྱེལ་འདྲེན་འདི་ `Ready` ལུ་མ་འགྱུར་བའི་ཧེ་མ་ `HandshakeConfidentialMismatch` དང་ཅིག་ཁར་ ཧེ་མ་ལས་ མ་མཐུནམ་སྦེ་ཡོདཔ་ཨིན།
+༤ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བཞུ་བཅོས་ (bia `compute_confidential_feature_digest`) ལོག་མཐུད་མ་ཚར་ དུས་མཐུན་བཟོ་ཡོད་པའི་ ཐོ་བཀོད་/སྲིད་བྱུས་ཚུ་དང་གཅིག་ཁར་ མཐུད་མཚམས་ཚུ་ ལོག་སྤྲོད་དགོ། མཉམ་རོགས་ཀྱིས་ བཞུ་བཅོས་རྙིངམ་ཚུ་ ཁྱབ་བསྒྲགས་འབད་བའི་སྐབས་ ལགཔ་འཐུད་ནི་འདི་ འཕྲོ་མཐུད་དེ་རང་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ལས་ བདེན་དཔྱད་ཆ་ཚན་འདི་ ལོག་སྟེ་འཛུལ་ནི་ལས་ བཀག་ཐབས་འབདཝ་ཨིན།
+༥ ལག་ཤེསཔ་ མཐར་འཁྱོལ་དང་ འཐུས་ཤོར་ཚུ་གིས་ ཚད་ལྡན་ `iroha_p2p::peer` གྱངས་ཁ་ (`handshake_failure_count`, འཛོལ་བའི་ tachonomy portiers) དང་ ཐག་རིང་གི་ མཉམ་མཐུན་ཨའི་ཌི་དང་ ལགཔ་གི་མཛུབ་མོ་གི་པར་ཚུ་ རྟགས་བཀལ་ཡོད་པའི་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ ལོག་ཐོ་བཀོད་ཚུ་ བཏོན་གཏང་། བསྐྱར་ལོག་འབད་རྩོལ་ཚུ་འཛིན་མི་ཡང་ན་ བསྐོར་འགྲུལ་གྱི་སྐབས་ལུ་ རིམ་སྒྲིག་འཛོལ་བ་ཚུ་འཛིན་བཟུང་འབད་ནི་ལུ་ བརྡ་སྟོན་འདི་ཚུ་ལྟ་རྟོག་འབད།## འཛིན་སྐྱོང་དང་དངུལ་སྤྲོད་ནི།
+- རྩིས་ཐོ་ལྡེ་མིག་ལས་ཐོན་པའི་རིམ་པ་:
+  - `sk_spend` → `nk` (nullifier ལྡེ་མིག་) `ivk` (འོང་བའི་མཐོང་སྣང་ལྡེ་མིག་) `ovk` (outgoing view ལྡེ་མིག་) `fvk`.
+- གསང་བཟོས་དྲན་འཛིན་ཚུ་ ECDH-བཏོན་ཡོད་པའི་བགོ་བཤའ་རྐྱབ་ཡོད་པའི་ལྡེ་མིག་ཚུ་དང་གཅིག་ཁར་ AEAD ལག་ལེན་འཐབ། གདམ་ཁ་ཅན་གྱི་རྩིས་ཞིབ་པ་མཐོང་སྣང་ལྡེ་མིག་ཚུ་ རྒྱུ་དངོས་སྲིད་བྱུས་རེ་ལུ་ ཐོན་འབྲས་ཚུ་ལུ་ མཐུད་འོང་།
+- CLI ཁ་སྐོང་: `confidential create-keys`, `confidential send`, `confidential export-view-key` རྩིས་ཞིབ་པ་གིས་ དྲན་ཐོ་གསང་བཟོའི་དོན་ལུ་ ལག་ཆས་དང་ `iroha app zk envelope` གྲོགས་རམ་གྱི་དོན་ལུ་ `iroha app zk envelope` གིས་ Norito བརྡ་བརྙན་ཚུ་ ཕྱིར་ཐོན་འབདཝ་ཨིན། Torii གིས་ `POST /v1/confidential/derive-keyset` བརྒྱུད་དེ་ འབྱུང་ཁུངས་ཅོག་འཐདཔ་འདི་ གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ འདི་གིས་ hex དང་ base64 འབྲི་ཤོག་གཉིས་ཆ་ར་ ལོག་སྤྲོད་ཚུགསཔ་ལས་ དངུལ་ཁུག་འདི་གིས་ ལྡེ་མིག་རིམ་པ་གི་རིམ་པ་ལེན་ཚུགས།
 
-1. Each outbound attempt allocates fresh Noise/X25519 key material. The handshake payload that is signed (`handshake_signature_payload`) concatenates the local and remote ephemeral public keys, the Norito-encoded advertised socket address, and—when compiled with `handshake_chain_id`—the chain identifier. The message is AEAD-encrypted before it leaves the node.
-2. The responder recomputes the payload with the peer/local key order reversed and verifies the Ed25519 signature embedded in `HandshakeHelloV1`. Because both ephemeral keys and the advertised address are part of the signature domain, replaying a captured message against another peer or recovering a stale connection fails verification deterministically.
-3. Confidential capability flags and the `ConfidentialFeatureDigest` travel inside `HandshakeConfidentialMeta`. The receiver compares the tuple `{ enabled, assume_valid, verifier_backend, digest }` against its locally configured `ConfidentialHandshakeCaps`; any mismatch exits early with `HandshakeConfidentialMismatch` before the transport transitions to `Ready`.
-4. Operators MUST recompute the digest (via `compute_confidential_feature_digest`) and restart nodes with the updated registries/policies before reconnecting. Peers advertising old digests continue to fail the handshake, preventing stale state from re-entering the validator set.
-5. Handshake successes and failures update the standard `iroha_p2p::peer` counters (`handshake_failure_count`, error taxonomy helpers) and emit structured log entries tagged with the remote peer ID and digest fingerprint. Monitor these indicators to catch replay attempts or misconfigurations during rollout.
-
-## Key Management & Payloads
-- Per-account key derivation hierarchy:
-  - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
-- Encrypted note payloads use AEAD with ECDH-derived shared keys; optional auditor view keys may be attached to outputs per asset policy.
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii exposes the same derivation flow via `POST /v1/confidential/derive-keyset`, returning both hex and base64 forms so wallets can fetch key hierarchies programmatically.
-
-## Gas, Limits & DoS Controls
-- Deterministic gas schedule:
-  - Halo2 (Plonkish): base `250_000` gas + `2_000` gas per public input.
-  - `5` gas per proof byte, plus per-nullifier (`300`) and per-commitment (`500`) charges.
-  - Operators may override these constants via the node configuration (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`); changes propagate at startup or when the config layer hot-reloads and are applied deterministically across the cluster.
-- Hard limits (configurable defaults):
+## རླངས་རྫས་དང་ཚད་དང་ ཌོ་ཨེསི་ཚད་འཛིན་ཚུ།
+- གཏན་འཁེལ་གྱི་རླངས་རྫས་ལས་རིམ།
+  - Halo2 (Plonkish): གཞི་རྟེན་ `250_000` རླངས་རྫས་ + `2_000` མི་མང་ཨིན་པུཊ་རེ་ལུ་ རླངས་རླུང་.
+  - བཱའིཊི་རེ་ལུ་ `5` རླངས་རླུང་དང་ ཀླད་ཀོར་རེ་ལུ་ (`300`) དང་ ཁས་བླངས་རེ་ལུ་ (`500`) འཐུས་ཚུ་ཨིན།
+  - བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མཐུད་མཚམས་རིམ་སྒྲིག་ (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`) བརྒྱུད་དེ་ འ་ནི་རྟག་བརྟན་ཚུ་ བཀག་ཆ་འབད་ཚུགས། བསྒྱུར་བཅོས་འབད་ནི་ འགོ་བཙུགས་ས་དང་ ཡང་ན་ རིམ་སྒྲིག་བང་རིམ་གྱི་ ཧོཊ་-ལོག་ཚུ་ ཧོཊ་ལོག་ཚུ་ དང་ ཀླད་ཀོར་ནང་ གཏན་འབེབས་སྦེ་ འཇུག་སྤྱོད་འབད་བའི་སྐབས་ བསྒྱུར་བཅོས་འབདཝ་ཨིན།
+- ཧརཌི་ཚད་གཞི་ (རིམ་སྒྲིག་འབད་བཏུབ་པའི་སྔོན་སྒྲིག་):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Proofs that exceed `verify_timeout_ms` abort the instruction deterministically (governance ballots emit `proof verification exceeded timeout`, `VerifyProof` returns an error).
-- Additional quotas ensure liveness: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, and `max_public_inputs` bound block builders; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) governs frontier checkpoint retention.
-- Runtime execution now rejects transactions that exceed these per-transaction or per-block limits, emitting deterministic `InvalidParameter` errors and leaving ledger state unchanged.
-- Mempool prefilters confidential transactions by `vk_id`, proof length, and anchor age before invoking the verifier to keep resource usage bounded.
-- Verification halts deterministically on timeout or bound violation; transactions fail with explicit errors. SIMD backends are optional but do not alter gas accounting.
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Sumeragi ལས་ལྷག་པའི་བདེན་ཁུངས་ཚུ་གིས་ བཀོད་རྒྱ་གཏན་འབེབས་བཟོ་ཐོག་ལས་ (གཞུང་གི་ཚོགས་རྒྱན་ཚུ་གིས་ `proof verification exceeded timeout`, `VerifyProof` འཛོལ་བ་སླར་ལོག་འབདཝ་ཨིན།)
+- ཁ་སྐོང་བསྡོམས་རྩིས་འདི་ འཚོ་བ་ངེས་གཏན་བཟོཝ་ཨིན། `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, དང་ `max_public_inputs` བཀག་ཆ་བཀག་ཆ་འབད་མི་ཚུ་ ; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) གིས་ མཐའ་མཚམས་ཀྱི་ བརྟག་ཞིབ་ས་ཚིགས་བཀག་ཆ་འབདཝ་ཨིན།
+- རཱན་ཊའིམ་ལག་ལེན་འཐབ་མི་འདི་གིས་ ད་ལྟོ་ ཚོང་འབྲེལ་རེ་ལུ་ ཡང་ན་ བཀག་ཆ་རེ་ལུ་ ཚད་གཞི་ལས་ལྷག་སྟེ་ཡོད་མི་ ཚོང་འབྲེལ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིནམ་ད་ དེ་གིས་ གཏན་འབེབས་ `InvalidParameter` འཛོལ་བ་ཚུ་ ཕྱིར་འཐེན་འབད་དེ་ ལག་དེབ་གནས་སྟངས་བསྒྱུར་བཅོས་མ་འབད་བས།
+- ཐོན་ཁུངས་ལག་ལེན་འདི་ མཐའ་མཚམས་བཞག་ནིའི་དོན་ལུ་ བདེན་བཤད་འབད་མི་འདི་ འབོད་བརྡ་མ་འབད་བའི་ཧེ་མ་ `vk_id` དང་ བདེན་ཁུངས་རིང་ཚད་ དེ་ལས་ ཨེན་ཀོར་གྱི་ལོ་ཚད་ཚུ་གིས་ གསང་བའི་ཚོང་འབྲེལ་ཚུ་ མེམ་པུལ་ མེམ་པུ་གིས་ བརྡ་ཚིག།
+- བདེན་དཔྱད་ཚུ་ དུས་ཚོད་མཇུག་བསྡུ་མི་དང་ ཡང་ན་ བསྡམས་པའི་ཁྲིམས་འགལ་གྱི་ཐོག་ལུ་ གཏན་འབེབས་བཟོ་སྟེ་ གཏན་འབེབས་བཟོཝ་ཨིན། ཚོང་འབྲེལ་ཚུ་ གསལ་རི་རི་འཛོལ་བ་ཚུ་དང་གཅིག་ཁར་ འཐུས་ཤོར་བྱུང་ཡོདཔ། SIMD backens འདི་གདམ་ཁ་ཅན་ཨིན་རུང་ རླངས་རྫས་རྩིས་ཐོ་འདི་བསྒྱུར་བཅོས་མི་འབད།
 
-### Calibration Baselines & Acceptance Gates
-- **Reference platforms.** Calibration runs MUST cover the three hardware profiles below. Runs failing to capture all profiles are rejected during review.
-
-  | Profile | Architecture | CPU / Instance | Compiler flags | Purpose |
+### ཚད་འཇལ་གཞི་རིམ་དང་ངོས་ལེན་འཛུལ་སྒོ།
+- ** གཞི་བསྟུན་གཞི་རྟེན་ཚུ་.** ཚད་འཇལ་འདི་གིས་ འོག་གི་སྲ་ཆས་གསལ་སྡུད་གསུམ་འདི་ ཁྱབ་དགོཔ་ཨིན། བསྐྱར་ཞིབ་ཀྱི་སྐབས་ལུ་ གསལ་སྡུད་ཚུ་ཆ་མཉམ་ བཟུང་མ་ཚུགས་པའི་ གཡོག་བཀོལ་མི་ཚུ་ ངོས་ལེན་མ་འབད་བས།| གསལ་སྡུད་ | བཟོ་རིག | སི་པི་ཡུ་ / གནས་སྟངས། | བསྡུ་སྒྲིག་རྒྱལ་དར་ | དམིགས་ཡུལ། |
   | --- | --- | --- | --- | --- |
-  | `baseline-simd-neutral` | `x86_64` | AMD EPYC 7B12 (32c) or Intel Xeon Gold 6430 (24c) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | Establish floor values without vector intrinsics; used to tune fallback cost tables. |
-  | `baseline-avx2` | `x86_64` | Intel Xeon Gold 6430 (24c) | default release | Validates AVX2 path; checks that SIMD speedups stay within tolerance of neutral gas. |
-  | `baseline-neon` | `aarch64` | AWS Graviton3 (c7g.4xlarge) | default release | Ensures NEON backend remains deterministic and aligned with x86 schedules. |
+  | `baseline-simd-neutral` | `x86_64` | ཨེ་ཨེམ་ཌི་ཨི་པི་ཝའི་སི་ ༧བི་༡༢ (༣༢སི་) ཡང་ན་ ཨིན་ཊེལ་ཟེའོན་གསེར་ ༦༤༣༠ (༢༤c) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | vector infrinsics མེད་པར་ ཐོག་ཁར་གནས་གོང་ཚུ་གཞི་བཙུགས་འབད། fallback ཟད་འགྲོའི་ཐིག་ཁྲམ་ཚུ་ བསྒྱུར་བཅོས་འབད་ནི་ལུ་ལག་ལེན་འཐབ་ཡོདཔ། |
+  | `baseline-avx2` | `x86_64` | ཨིན་ཊེལ་ཛོན་གསེར་ ༦༤༣༠ (༢༤c) | སྔོན་སྒྲིག་གསར་བཏོན་ | AVX2 འགྲུལ་ལམ་བདེན་དཔྱད་འབདཝ་ཨིན། SIMD མགྱོགས་ཚད་ཚུ་ བར་གནས་རླངས་རླུང་ལུ་ བཟོད་བསྲན་གྱི་ནང་འཁོད་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན་ན་ བརྟག་དཔྱད་འབདཝ་ཨིན། |
+  | `baseline-neon` | `aarch64` | AWS གྷི་ར་ཝི་ཊོན་༣ (c7g.4xlarge) | སྔོན་སྒྲིག་གསར་བཏོན་ | NEON རྒྱབ་རྟེན་ཚུ་ གཏན་འབེབས་བཟོ་སྟེ་ x86 ལས་རིམ་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་ཡོདཔ་ངེས་གཏན་བཟོཝ་ཨིན། |
 
-- **Benchmark harness.** All gas calibration reports MUST be produced with:
+- **Benchmark harness.** རླངས་རྫས་ཚད་འཇལ་སྙན་ཞུ་ཚུ་ཆ་མཉམ་དང་གཅིག་ཁར་ཐོན་སྐྱེད་འབད་དགོ།
   - `CRITERION_HOME=target/criterion cargo bench -p iroha_core isi_gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`
-  - `cargo test -p iroha_core bench_repro -- --ignored` to confirm the deterministic fixture.
-  - `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` whenever VM opcode costs change.
+  - `cargo test -p iroha_core bench_repro -- --ignored` གཏན་འབེབས་འབད་ནིའི་དོན་ལུ་ གཏན་འབེབས་བཟོ་ནི།
+  - ཝི་ཨེམ་ཨོཔ་ཀོཌི་གི་ཟད་འགྲོ་ཚུ་ ག་དུས་འབད་རུང་ `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` འདི་འགྱུར་བ་འགྱོཝ་ཨིན།
 
-- **Fixed randomness.** Export `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` before running benches so `iroha_test_samples::gen_account_in` switches to the deterministic `KeyPair::from_seed` path. The harness prints `IROHA_CONF_GAS_SEED_ACTIVE=…` once; if the variable is missing, review MUST fail. Any new calibration utilities must continue honouring this env var when introducing auxiliary randomness.
+- ** གང་བྱུང་གཏན་འཁེལ་བཟོ་ཡོདཔ།** བེན་ཆི་ཚུ་ གཡོག་བཀོལ་བའི་ཧེ་མ་ `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` ཕྱིར་འདྲེན་འབདཝ་ལས་ `iroha_test_samples::gen_account_in` གཏན་འབེབས་ `KeyPair::from_seed` འགྲུལ་ལམ་ལུ་ སོར་བསྒྱུར་འབདཝ་ཨིན། ཧར་ནིས་ཀྱིས་ `IROHA_CONF_GAS_SEED_ACTIVE=…` ཚར་གཅིག་དཔར་བསྐྲུན་འབདཝ་ཨིན། འགྱུར་ཅན་འདི་མེད་པ་ཅིན་ བསྐྱར་ཞིབ་འཐུས་ཤོར་འབྱུང་དགོ། ཚད་འཇལ་གྱི་མཐུན་རྐྱེན་གསརཔ་ག་ཅི་ར་འབད་རུང་ ལྷན་ཐབས་ཀྱི་གང་བྱུང་འགོ་བཙུགས་པའི་སྐབས་ལུ་ འ་ནི་ env var འདི་ འཕྲོ་མཐུད་དེ་རང་ གུས་ཞབས་འབད་དགོཔ་ཨིན།
 
-- **Result capture.**
-  - Upload Criterion summaries (`target/criterion/**/raw.csv`) for each profile into the release artefact.
-  - Store derived metrics (`ns/op`, `gas/op`, `ns/gas`) in `docs/source/confidential_assets_calibration.md` along with the git commit and compiler version used.
-  - Maintain the last two baselines per profile; delete older snapshots once the newest report is validated.
+- **གྲུབ་འབྲས་བཟུང་།**།
+  - གསལ་སྡུད་རེ་རེ་གི་དོན་ལུ་ གསལ་སྡུད་ཅ་མཛོད་ནང་ ཁྱད་ཚད་བཅུད་བསྡུས་ཚུ་ (`target/criterion/**/raw.csv`) སྐྱེལ་བཙུགས་འབད།
+  - འབྱུང་ཁུངས་ཚད་གཞི་ (`ns/op`, `gas/op`, `ns/gas`) ནང་ `docs/source/confidential_assets_calibration.md` ནང་ གིཊི་ཁས་བླངས་དང་ བསྡུ་སྒྲིག་འབད་མི་ཐོན་རིམ་དང་གཅིག་ཁར་ `docs/source/confidential_assets_calibration.md` ནང་།
+  - གསལ་སྡུད་རེ་ལུ་ མཇུག་གི་གཞི་རྟེན་གཉིས་བདག་འཛིན་འཐབ་ནི། སྙན་ཞུ་གསརཔ་འདི་ བདེན་དཔྱད་འབད་ཚརཝ་ད་ བཏོན་གཏང་མི་ པར་ཆས་རྙིངམ་ཚུ་ བཏོན་གཏང་།
 
-- **Acceptance tolerances.**
-  - Gas deltas between `baseline-simd-neutral` and `baseline-avx2` MUST remain ≤ ±1.5%.
-  - Gas deltas between `baseline-simd-neutral` and `baseline-neon` MUST remain ≤ ±2.0%.
-  - Calibration proposals exceeding these thresholds require either schedule adjustments or an RFC explaining the discrepancy and mitigation.
+- **ངོས་ལེན་བཟོད་བསྲན།**
+  - `baseline-simd-neutral` དང་ `baseline-avx2` བར་གྱི་རླངས་རྫས་ཌེལ་ཊསི་འདི་ ≤ ±༡.༥% ལུ་ལྷག་ལུས་ཡོདཔ་ཨིན།
+  - `baseline-simd-neutral` དང་ `baseline-neon` བར་གྱི་རླངས་རྫས་ཌེལ་ཊསི་འདི་ ≤ ±2.0% ལུ་ལྷག་ལུས་དགོཔ་ཨིན།
+  - འ་ནི་ཚད་གཞི་ལས་ལྷག་སྟེ་ ཚད་འཇལ་གྱི་གྲོས་འཆར་ཚུ་ དུས་ཚོད་བསྒྱུར་བཅོས་འབད་དགོཔ་དང་ ཡང་ན་ ཁྱད་པར་དང་ མར་ཕབ་ཀྱི་སྐོར་ལས་ འགྲེལ་བཤད་རྐྱབ་དགོཔ་ཨིན།
 
-- **Review checklist.** Submitters are responsible for:
-  - Including `uname -a`, `/proc/cpuinfo` excerpts (model, stepping), and `rustc -Vv` in the calibration log.
-  - Verifying `IROHA_CONF_GAS_SEED` echoed in the bench output (the benches print the active seed).
-  - Ensuring pacemaker and confidential verifier feature flags mirror production (`--features confidential,telemetry` when running benches with Telemetry).
+- **བསྐྱར་ཞིབ་ཞིབ་དཔྱད་ཐོ་ཡིག་.** ཕུལ་མི་ཚུ་ འགན་ཁུར་འབགཔ་ཨིན།
+  - `uname -a` ཚུ་རྩིས་ཏེ་ ཚད་འཇལ་དྲན་ཐོ་ནང་ `/proc/cpuinfo` exserps (དཔེ་ཚད་, གོམ་པ་) དང་ `rustc -Vv` ཚུ་ཨིན།
+  - བེན་ཇི་ཨའུཊི་པུཊི་ནང་ བདེན་བཤད་འབད་དོ་ཡོདཔ་ཨིན་ (བེན་ཆི་ཚུ་གིས་ ཤུགས་ལྡན་སོན་འདི་དཔར་བསྐྲུན་འབད་མི)
+  - མགྱོགས་ཚད་བཟོ་མི་དང་ གསང་བའི་བདེན་དཔྱད་ཀྱི་ཁྱད་རྣམ་དར་དར་གྱི་མེ་ལོང་ཐོན་སྐྱེད་ (`--features confidential,telemetry` གིས་ བརྒྱུད་འཕྲིན་དང་གཅིག་ཁར་ བང་ཁྲི་གཡོག་བཀོལ་བའི་སྐབས་)
 
-## Config & Operations
-- `iroha_config` gains `[confidential]` section:
+## རིམ་སྒྲིག་དང་བཀོལ་སྤྱོད།
+- `iroha_config` ཁེ་སང་ `[confidential]` དབྱེ་ཚན་:
   ```toml
   [confidential]
   enabled = true
@@ -332,64 +309,63 @@ lockstep.
   registry_max_params_entries = 32
   registry_max_delta_per_block = 4
   ```
-- Telemetry emits aggregate metrics: `confidential_proof_verified`, `confidential_verifier_latency_ms`, `confidential_proof_bytes_total`, `confidential_nullifier_spent`, `confidential_commitments_appended`, `confidential_mempool_rejected_total{reason}`, and `confidential_policy_transitions_total`, never exposing plaintext data.
-- RPC surfaces:
+- ཊེ་ལི་མི་ཊི་རི་གིས་ བསྡོམས་རྩིས་མེ་ཊིགསི་ཚུ་ བཏོནམ་ཨིན། `confidential_policy_transitions_total`, གནད་སྡུད་ངོ་མ་འདི་ ནམ་ཡང་ ཕྱིར་བཏོན་འབད་མི་བཏུབ།
+- RPC གི་ཕྱི་ངོས་:
   - `GET /confidential/capabilities`
   - `GET /confidential/zk_registry`
-  - `GET /confidential/params`
+  - ```bash
+curl -s http://127.0.0.1:8180/metrics \
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+```## བརྟག་དཔྱད།
+- གཏན་འབེབས་བཟོ་ནི: བཀག་ཆ་ནང་འཁོད་ལུ་ གང་བྱུང་སྦེ་ བརྡབ་འགྱོ་མི་འདི་གིས་ མར་ཀལ་རྩ་བ་དང་ ཀླད་ཀོར་གྱི་ཆ་ཚན་ཚུ་ ཐོན་དོ་ཡོདཔ་ཨིན།
+- བསྐྱར་བཟོ་འབད་ཚུགསཔ་: སྣ་མང་བཀག་ཆ་ བསྐྱར་སྒྲིག་ཚུ་ ཨེན་ཀོར་ཚུ་དང་གཅིག་ཁར་ དཔེ་སྟོན་འབད་ནི། ནུས་མེད་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་སྡོད་ཡོདཔ་ལས་ ཕྲང་ཕྲང་ཨིན་ཀོར་ཚུ་ ངོས་ལེན་མ་འབད་བས།
+- རླངས་རྫས་འགྱུར་ལྡོག་མེད་: SIMD མགྱོགས་ཚད་མེད་པའི་ མཐུད་མཚམས་ཚུ་ནང་ རླངས་རླུང་འདྲ་མཚུངས་བདེན་དཔྱད་འབད།
+- ས་མཚམས་བརྟག་དཔྱད།: ཚད་/རླངས་རླུང་ཐོག་ཁར་ བདེན་དཔང་།
+- མི་ཚེ་འཁོར་རིམ་: བདེན་བཤད་དང་ ཚད་བཟུང་ཤུགས་ལྡན་བཟོ་ནིའི་/ ཚོད་དཔག་མར་ཕབ་ འཁོར་སྐྱོད་ཀྱི་ཟད་འགྲོ་བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ གཞུང་སྐྱོང་བཀོལ་སྤྱོད་ཚུ།
+- སྲིད་བྱུས་ཨེཕ་ཨེསི་ཨེམ་: ཆོག་ཐམ་/མེདཔ་བཟོ་བའི་འགྱུར་བ་ཚུ་ འགྱུར་བའི་ཕྱིར་འགྱངས་ཚུ་ བསྒུག་སྟེ་ དང་ མེམ་པུལ་ ནུས་སྟོབས་ཅན་གྱི་མཐོ་ཚད་ཀྱི་སྐོར་ལས་ མེམ་པུལ་ བཀག་ཆ་ཚུ་ཨིན།
+- ཐོ་བཀོད་ཀྱི་ གློ་བུར་ཚུ་: གློ་བུར་གྱི་ དངུལ་འཛིན་གྱིས་ གྱང་ཤུགས་ལུ་ གནོད་སྐྱོན་བྱུང་ཡོདཔ་ལས་ ཤུལ་ལས་ བདེན་ཁུངས་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+- ལྕོགས་གྲུབ: བདེན་དཔྱད་འབད་མི་ བདེན་དཔྱད་འབད་མི་ `conf_features` བཀག་ཆ་བཀག་ཆ་ཚུ་; `assume_valid=true` ཡོད་པའི་བལྟ་རྟོག་པ་ཚུ་གིས་ མོས་མཐུན་ལུ་ ཐོ་མ་ཕོག་པར་ བཞག་སྟེ་ཡོདཔ་ཨིན།
+- མངའ་སྡེ་འདྲ་མཉམ་: བདེན་དཔྱད་/ཕུལ་/བལྟ་བརྟོག་པ་ མཐུད་མཚམས་ཚུ་གིས་ ཀེ་ནོ་ནིག་རིམ་སྒྲིག་གུ་ གཅིག་མཚུངས་གནས་སྟངས་ཀྱི་རྩ་བ་ཚུ་བཏོནམ་ཨིན།
+- ངན་ལྷད་ཀྱི་ མགུ་སྐོར་: སྐྱོན་ཅན་གྱི་བདེན་ཁུངས་དང་ ཚད་ལས་བརྒལ་བའི་ འབབ་ཚད་ དེ་ལས་ ཀླད་ཀོར་གྱི་ཁ་ཐུག་འདི་གིས་ གཏན་འབེབས་སྦེ་ ངོས་ལེན་མི་འབད།
 
-## Testing Strategy
-- Determinism: randomized transaction shuffling within blocks yields identical Merkle roots and nullifier sets.
-- Reorg resilience: simulate multi-block reorgs with anchors; nullifiers remain stable and stale anchors rejected.
-- Gas invariants: verify identical gas usage across nodes with and without SIMD acceleration.
-- Boundary testing: proofs at size/gas ceilings, max in/out counts, timeout enforcement.
-- Lifecycle: governance operations for verifier and parameter activation/deprecation, rotation spend tests.
-- Policy FSM: allowed/disallowed transitions, pending transition delays, and mempool rejection around effective heights.
-- Registry emergencies: emergency withdrawal freezes affected assets at `withdraw_height` and rejects proofs afterwards.
-- Capability gating: validators with mismatched `conf_features` reject blocks; observers with `assume_valid=true` keep up without affecting consensus.
-- State equivalence: validator/full/observer nodes produce identical state roots on the canonical chain.
-- Negative fuzzing: malformed proofs, oversized payloads, and nullifier collisions reject deterministically.
+## ཁྱད་པར།
+- བེན་ཇི་མཱརཀ་ ཧེ་ལོ་༢ ཚད་བཟུང་ཆ་ཚན་ཚུ་ (རྒྱུ་ལམ་སྦོམ་ཆུང་དང་ འཚོལ་ཞིབ་ཐབས་ལམ) དང་ ཚད་འཇལ་རྩེད་དེབ་ནང་ གྲུབ་འབྲས་ཚུ་ཐོ་བཀོད་འབད་དེ་ རླངས་རྫས་/དུས་ཚོད་ཀྱི་སྔོན་སྒྲིག་ཚུ་ ཤུལ་མམ་གྱི་ `confidential_assets_calibration.md` གསརཔ་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་ཚུགས།
+- རྩིས་ཞིབ་པ་བཀག་ཆ་འབད་ནིའི་སྲིད་བྱུས་དང་ འབྲེལ་མཐུད་ཅན་གྱི་མཐོང་སྣང་ཨེ་པི་ཨའི་ཚུ་ མཇུག་བསྡུ། གཞུང་སྐྱོང་ཟིན་བྲིས་འདི་ མཚན་རྟགས་བཀོད་ཚར་བའི་ཤུལ་ལས་ ཆ་འཇོག་གྲུབ་པའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ Torii ནང་ལུ་ གློག་ཐག་བརྐྱབ།
+- ཨེསི་ཌི་ཀེ་ ལག་ལེན་འཐབ་མི་ཚུ་གི་དོན་ལུ་ ཡིག་ཤུབས་རྩ་སྒྲིག་འདི་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོད་མི་ སྣ་མང་ཐོན་འབྲས་དང་ བེཊི་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ བཀབ་ནིའི་དོན་ལུ་ དཔང་པོ་གསང་བཟོའི་འཆར་གཞི་འདི་ རྒྱ་སྐྱེད་འབད།
+- ལྷན་ཚོགས་ཀྱིས་ ནང་འཁོད་རྩིས་ཞིབ་སྙན་ཞུ་ཚུ་གི་བོ་ལོག་ཁར་ གློག་ལམ་དང་ ཐོ་བཀོད་ དེ་ལས་ ཚད་གཞི་-བསྒྱིར་ནིའི་བྱ་རིམ་དང་ གཏན་མཛོད་ཚུ་ གཏན་མཛོད་འབད་ནི།
+- རྩིས་ཞིབ་པ་གིས་ ཟད་འགྲོ་མཉམ་མཐུན་ཨེ་པི་ཨའི་ཨེསི་དང་ མཐོང་སྣང་གི་གོ་སྐབས་ལམ་སྟོན་ཚུ་ དཔར་བསྐྲུན་འབད།## བཀོལ་བའི་རྗེས་འཇུག།
+1. **Phase M0 — བཀག་འགོག་-གྲུ་གཟིངས་ཧར་ཌེ་ནིང་**
+   - ✅ ནཝ་ལི་ཕིར་གྱི་འབྱུང་ཁུངས་འདི་ ད་ལྟོ་ པོ་སི་ཌོན་པི་ཨར་ཨེཕ་བཟོ་བཀོད་ (`nk`, `rho`, `asset_id`, `chain_id`) འདི་ ལག་དེབ་དུས་མཐུན་ཚུ་ནང་ བརྟན་བཞུགས་འབད་བའི་ ཁས་བླངས་གོ་རིམ་དང་གཅིག་ཁར་ རྗེས་སུ་འཇུག་དོ་ཡོདཔ་ཨིན།
+   - ✅ བདེན་བཤད་ཀྱི་ཚད་དང་ གསང་བའི་ཚད་གཞི་ཚུ་ ལག་ལེན་འཐབ་ཐོག་ལས་ གཏན་འཁེལ་གྱི་འཛོལ་བ་ཚུ་དང་གཅིག་ཁར་ འཆར་དངུལ་གྱི་ཚོང་འབྲེལ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+   - ✅ P2P ལགཔ་འཐུད་པའི་བརྡ་ཁྱབ་ `ConfidentialFeatureDigest` (backendgeal digest + ཐོ་བཀོད་ཀྱི་མཛུབ་མོའི་པར་) དང་ `HandshakeConfidentialMismatch` བརྒྱུད་དེ་ གཏན་འབེབས་བཟོ་མ་ཚུགསཔ་ཨིན།
+   - ✅ གསང་བའི་ལག་ལེན་གྱི་ འགྲུལ་ལམ་ནང་ རླངསམ་ཚུ་ བཏོན་གཏང་ཞིནམ་ལས་ ནའུཌ་ཚུ་གི་དོན་ལུ་ འགན་ཁུར་གྱི་ འཛུལ་སྒོ་ཚུ་ ཁ་སྐོང་བརྐྱབ།
+   - ⚪ བདེན་དཔྱད་དུས་ཚོད་མཇུག་བསྡུ་འཆར་དངུལ་དང་ མཐའ་མཚམས་ཞིབ་དཔྱད་ས་ཚིགས་ཚུ་གི་དོན་ལུ་ གཏིང་ཚད་ཀྱི་མཐའ་མཚམས་ཚུ་ ལོག་སྒྲིག་ནི།
+     - ✅ བདེན་དཔྱད་དུས་ཚོད་མཇུག་བསྡུ་འཆར་དངུལ་བསྟར་སྤྱོད་འབད་ཡོདཔ། ད་ལྟོ་ `verify_timeout_ms` ལས་ལྷག་སྟེ་ བདེན་ཁུངས་ཚུ་ གཏན་འབེབས་བཟོ་མ་ཚུགསཔ་ཨིན།
+     - ✅ ཕོརན་ཊི་ཡར་ཞིབ་དཔྱད་ས་ཚིགས་ཚུ་གིས་ ད་ལྟོ་ `reorg_depth_bound`, རིམ་སྒྲིག་འབད་ཡོད་པའི་སྒོ་སྒྲིག་ལས་ རྙིངམ་སྦེ་ གཤག་བཅོས་ས་ཚིགས་ཚུ་ གཏན་འབེབས་བཟོ་བའི་སྐབས་ པར་ཆས་ཚུ་བཞག་དགོ།
+   - `AssetConfidentialPolicy`, སྲིད་བྱུས་ FSM, དང་ mint/transfer/གསལ་སྟོན་བཀོད་རྒྱ་ཚུ་གི་དོན་ལུ་ བསྟར་སྤྱོད་ཀྱི་སྒོ་ཚུ་ངོ་སྤྲོད་འབད།
+   - བཀག་ཆ་མགོ་ཡིག་ནང་ `conf_features` དང་ ཐོ་བཀོད་/ཚད་གཞི་ཚུ་ བཞུ་བའི་སྐབས་ བདེན་དཔྱད་འབད་མི་ལུ་ ངོས་ལེན་མ་འབད།
+2. **Phase M1 — ཐོ་བཀོད་དང་ཚད་བཟུང་**།
+   - ས་ཆའི་`ZkVerifierEntry`, `PedersenParams`, དང་ `PoseidonParams` གཞུང་སྐྱོང་དང་ རིགས་མཚན་བཙུགས་ དེ་ལས་ འདྲ་མཛོད་འཛིན་སྐྱོང་ཡོད་པའི་ཐོ་བཀོད་ཚུ།
+   - ཐོ་བཀོད་འཚོལ་ཞིབ་དང་ རླངས་རྫས་དུས་ཚོད་ཨའི་ཌི་ དེ་ལས་ འཆར་གཞི་ཧ་ཤིང་དང་ ཚད་གཞི་ཞིབ་དཔྱད་ཚུ་ དགོཔ་ཨིན།
+   - གསང་བཟོ་འབད་ཡོད་པའི་ པེ་ལོཌ་རྩ་སྒྲིག་ v༡ དང་ དངུལ་ཁུག་ལྡེ་མིག་འབྱུང་ཁུངས་ཝེག་ཊར་ དེ་ལས་ གསང་བའི་ལྡེ་མིག་འཛིན་སྐྱོང་གི་དོན་ལུ་ སི་ཨེལ་ཨའི་རྒྱབ་སྐྱོར་ཚུ་ གྲུ་གཟིངས་ནང་།
+3. **དུས་རིམ་ M2 — རླངས་རྫས་དང་ལཱ་འགན་**
+   - གཏན་འཁེལ་གྱི་རླངས་རྫས་ལས་རིམ་དང་ བཀག་ཆ་རེ་ལུ་ གྱངས་ཁ་ དེ་ལས་ བེན་ཇ་མཱརཀ་ ཧར་ནེསི་ཚུ་ ཊེ་ལི་མི་ཊི་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ།
+   - ཧར་ཌེན་ཀམ་མཊི་ཀམ་ཊི་ཊི་རི་ ཞིབ་དཔྱད་ས་ཚིགས་ ཨེལ་ཨར་ཨུ་མངོན་གསལ་འབད་ནི་ དེ་ལས་ ཀླད་ཀོར་གྱི་ལཱ་གི་དོན་ལུ་ ནུས་མེད་ཀྱི་ཟུར་ཐོ་ཚུ།
+4. **Phase M3 — བསྒྱིར་དང་དངུལ་ཁུག་ལག་ཆས་ལག་ཆས་**
+   - སྣ་མང་ཚད་གཞི་དང་ སྣ་མང་ཐོན་རིམ་བདེན་ཁུངས་ངོས་ལེན་ལྕོགས་ཅན་བཟོ་ནི། རྒྱབ་སྐྱོར་གཞུང་སྐྱོང་གིས་ བཀོལ་སྤྱོད་འབད་མི་ ཤུགས་ལྡན་བཟོ་ནི་/འཕོ་སོར་རྒྱུག་དེབ་ཚུ་དང་གཅིག་ཁར་ རིན་གོང་མར་ཕབ་འབད།
+   - དངུལ་ཁུག་ SDK/CLI གནས་སྤོ་འགྱོ་མི་ རྩིས་ཞིབ་པ་ པར་ལེན་ལཱ་གི་རྒྱུན་རིམ་དང་ ཟད་འགྲོ་བཏང་བའི་མཐུན་སྒྲིག་ལག་ཆས་ཚུ་ བཀྲམ་སྤེལ་འབད་ནི།
+5. **དུས་རིམ་ M4 — རྩིས་ཞིབ་དང་ Ops**
+   - རྩིས་ཞིབ་པ་ལྡེ་མིག་ལཱ་གི་རྒྱུན་རིམ་དང་ སེལ་འཐུ་འབད་ཡོད་པའི་གསལ་བསྒྲགས་ཨེ་པི་ཨའི་ཚུ་ དེ་ལས་ བཀོལ་སྤྱོད་རྔོན་དེབ་ཚུ་བྱིན།
+   - ཕྱི་ཁའི་གསང་ཡིག་བསྐྱར་ཞིབ་/ཉེན་སྲུང་བསྐྱར་ཞིབ་དང་ `status.md` ནང་ གྲུབ་འབྲས་ཚུ་ དཔར་བསྐྲུན་འབད།
 
-## Outstanding Work
-- Benchmark Halo2 parameter sets (circuit size, lookup strategy) and record the results in the calibration playbook so gas/timeout defaults can be updated alongside the next `confidential_assets_calibration.md` refresh.
-- Finalize auditor disclosure policies and associated selective-viewing APIs, wiring the approved workflow into Torii once the governance draft is signed off.
-- Extend the witness encryption scheme to cover multi-recipient outputs and batched memos, documenting the envelope format for SDK implementers.
-- Commission an external security review of circuits, registries, and parameter-rotation procedures and archive the findings next to the internal audit reports.
-- Specify auditor spentness reconciliation APIs and publish view-key scope guidance so wallet vendors can implement the same attestation semantics.
+གནས་རིམ་རེ་རེ་གིས་ བཀག་ཆ་འབད་མི་ཡོངས་འབྲེལ་གྱི་དོན་ལུ་ གཏན་འབེབས་བཟོ་ནིའི་ འགན་ལེན་ཚུ་ བདག་འཛིན་འཐབ་ནིའི་དོན་ལུ་ ལམ་གྱི་ས་ཁྲ་དང་ འབྲེལ་ཡོད་བརྟག་དཔྱད་ཚུ་ དུས་མཐུན་བཟོཝ་ཨིན།
 
-## Implementation Phasing
-1. **Phase M0 — Stop-Ship Hardening**
-   - ✅ Nullifier derivation now follows the Poseidon PRF design (`nk`, `rho`, `asset_id`, `chain_id`) with deterministic commitment ordering enforced in ledger updates.
-   - ✅ Execution enforces proof size caps and per-transaction/per-block confidential quotas, rejecting over-budget transactions with deterministic errors.
-   - ✅ P2P handshake advertises `ConfidentialFeatureDigest` (backend digest + registry fingerprints) and fails mismatches deterministically via `HandshakeConfidentialMismatch`.
-   - ✅ Remove panics in confidential execution paths and add role gating for nodes without matching capability.
-   - ⚪ Enforce verifier timeout budgets and reorg depth bounds for frontier checkpoints.
-     - ✅ Verification timeout budgets enforced; proofs exceeding `verify_timeout_ms` now fail deterministically.
-     - ✅ Frontier checkpoints now respect `reorg_depth_bound`, pruning checkpoints older than the configured window while keeping deterministic snapshots.
-   - Introduce `AssetConfidentialPolicy`, policy FSM, and enforcement gates for mint/transfer/reveal instructions.
-   - Commit `conf_features` in block headers and refuse validator participation when registry/parameter digests diverge.
-2. **Phase M1 — Registries & Parameters**
-   - Land `ZkVerifierEntry`, `PedersenParams`, and `PoseidonParams` registries with governance ops, genesis anchoring, and cache management.
-   - Wire syscall to require registry lookups, gas schedule IDs, schema hashing, and size checks.
-   - Ship encrypted payload format v1, wallet key derivation vectors, and CLI support for confidential key management.
-3. **Phase M2 — Gas & Performance**
-   - Implement deterministic gas schedule, per-block counters, and benchmark harnesses with telemetry (verify latency, proof sizes, mempool rejections).
-   - Harden CommitmentTree checkpoints, LRU loading, and nullifier indices for multi-asset workloads.
-4. **Phase M3 — Rotation & Wallet Tooling**
-   - Enable multi-parameter and multi-version proof acceptance; support governance-driven activation/deprecation with transition runbooks.
-   - Deliver wallet SDK/CLI migration flows, auditor scanning workflows, and spentness reconciliation tooling.
-5. **Phase M4 — Audit & Ops**
-   - Provide auditor key workflows, selective disclosure APIs, and operational runbooks.
-   - Schedule external cryptography/security review and publish findings in `status.md`.
+### ཨེསི་ཌི་ཀེ་ དང་ ཕིག་ཅར་ཁྱབ་ཁོངས། (གནས་རིམ་ཨེམ་༡)
 
-Each phase updates roadmap milestones and associated tests to maintain deterministic execution guarantees for the blockchain network.
-
-### SDK & Fixture Coverage (Phase M1)
-
-Encrypted payload v1 now ships with canonical fixtures so every SDK produces the
-same Norito envelopes and transaction hashes. The golden artefacts live in
-`fixtures/confidential/wallet_flows_v1.json` and are exercised directly by the
-Rust and Swift suites (`crates/iroha_data_model/tests/confidential_wallet_fixtures.rs`,
+གསང་བཟོས་འབད་ཡོད་པའི་ པེ་ལོཌི་ཝི་༡ འདི་ ད་ལྟོ་ ཀེ་ནོ་ནིག་ བརྟན་ཚུགས་ཚུ་ བཏངམ་ཨིན།
+དེ་དང་འདྲ་བའི་Norito ཡིག་ཤུབས་དང་ཚོང་འབྲེལ་ཧེ་ཤེ། གསེར་གྱི་ཅ་རྙིང་ཚུ་ ༢༠༡༦ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+`fixtures/confidential/wallet_flows_v1.json` དང་ཐད་ཀར་དུ་ ལས་ བླངས།
+རསཊ་དང་ སུའིཕཊ་ཆ་ཚང་ (`crates/iroha_data_model/tests/confidential_wallet_fixtures.rs`,
 `IrohaSwift/Tests/IrohaSwiftTests/ConfidentialWalletFixturesTests.swift`):
 
 ```bash
@@ -398,22 +374,20 @@ cargo test -p iroha_data_model confidential_wallet_fixtures
 
 # Swift parity (builds the same envelopes via TxBuilder/NativeBridge)
 cd IrohaSwift && swift test --filter ConfidentialWalletFixturesTests
-```
+```སྒྲིག་ཆས་རེ་རེ་གིས་ གནད་དོན་ངོས་འཛིན་འབད་མི་དང་ མིང་རྟགས་བཀོད་ཡོད་པའི་ ཚོང་འབྲེལ་ཧེགསི་ དེ་ལས་ རེ་བ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+ཧེ། སུའིཕཊི་ཨེན་ཀོ་ཌར་གྱིས་ ད་ལྟོ་ཡང་ རྩོད་གཞི་འདི་ བཏོན་མ་ཚུགས་པའི་སྐབས་—`zk-transfer-basic` འདི་ ཨིན།
+ད་དུང་ Grafana བཟོ་སྐྲུན་པ་ —བརྟག་དཔྱད་ཁང་གིས་ `XCTSkip` གིས་ བཏོནམ་ཨིན།
+འགྲུལ་ལམ་གསལ་པོ་ཚུ་ ད་ལྟོ་ཡང་ བཅིན་བརྩེགས་ཚུ་དགོཔ་ཨིན། སྒྲིག་སྟངས་འདི་དུས་མཐུན་འབད་དོ།
+ཡིག་སྣོད་འདི་ རྩ་སྒྲིག་ཐོན་རིམ་འདི་ མ་བཤུབ་པར་ ཨེསི་ཌི་ཀེ་ཚུ་བཞག་ནི་ ཆ་ཤས་གཉིས་ཆ་ར་ འཐུས་ཤོར་འབྱུང་འོང་།
+དང་ ལྕགས་ཐག་ནང་ རཱསི་གཞི་བསྟུན་ལག་ལེན།
 
-Every fixture records the case identifier, signed transaction hex, and expected
-hash. When the Swift encoder cannot yet produce the case—`zk-transfer-basic` is
-still gated by the `ZkTransfer` builder—the test suite emits `XCTSkip` so the
-roadmap clearly tracks which flows still require bindings. Updating the fixture
-file without bumping the format version will fail both suites, keeping the SDKs
-and Rust reference implementation in lock-step.
-
-#### Swift builders
-`TxBuilder` exposes asynchronous and callback-based helpers for every
-confidential request (`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1183`).
-The builders rely on the `connect_norito_bridge` exports
+#### གཡོ་སྒྱུ་བཟོ་མི།
+`TxBuilder` དུས་མཉམ་མིན་པའི་ཁར་ འབོད་བརྡ་གཞི་བཞག་པའི་གྲོགས་རམ་ཚུ་ ག་ར་གི་དོན་ལུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+གསང་བའི་ཞུ་བ་ (`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1183`).
+བཟོ་བསྐྲུན་པ་ཚུ་གིས་ `connect_norito_bridge` ཕྱིར་འདྲེན་ལུ་བློ་གཏད་ཡོདཔ་ཨིན།
 (`crates/connect_norito_bridge/src/lib.rs:3337`,
-`IrohaSwift/Sources/IrohaSwift/NativeBridge.swift:1014`) so the generated
-payloads match the Rust host encoders byte-for-byte. Example:
+`IrohaSwift/Sources/IrohaSwift/NativeBridge.swift:1014`) དེ་འབདཝ་ལས་ བཟོ་བཏོན་འབད་མི་འདི་
+པེ་ལོཌི་ཚུ་གིས་ རཱསི་ཧོསིཊི་ཨེན་ཀོ་ཌར་ཚུ་ བཱའིཊི་གི་དོན་ལུ་ བཱའིཊི་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། དཔེ:
 
 ```swift
 let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
@@ -430,18 +404,18 @@ try await TxBuilder(client: client)
     .submit(registerZkAsset: request, keypair: keypair)
 ```
 
-Shielding/unshielding follow the same pattern (`submit(shield:)`,
-`submit(unshield:)`), and the Swift fixture tests re-run the builders with
-deterministic key material to guarantee the generated transaction hashes remain
-equal to the ones stored in `wallet_flows_v1.json`.
+སྲུང་སྐྱོབ་/མ་འགུལ་བ་འདི་ དཔེ་རིས་གཅིག་པ་ (`submit(shield:)`, (`submit(shield:)`,
+`submit(unshield:)`), དང་ སུའིཕཊི་སྒྲིག་ཆས་བརྟག་དཔྱད་ཚུ་གིས་ བཟོ་བསྐྲུན་པ་ཚུ་ ལོག་སྟེ་གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན།
+བཟོ་ཡོད་པའི་ཚོང་འབྲེལ་ཧེ་ཤེ་ཚུ་ལྷག་ལུས་ངེས་གཏན་བཟོ་ནི་ལུ་ ཐག་གཅོད་ལྡེ་མིག་རྒྱུ་ཆ་ཚུ།
+`wallet_flows_v1.json` ནང་གསོག་འཇོག་འབད་ཡོད་པའི་མི་ཚུ་དང་མཉམ་པ།
 
-#### JavaScript builders
-The JavaScript SDK mirrors the same flows via the transaction helpers exported
-from `javascript/iroha_js/src/transaction.js`. Builders such as
-`buildRegisterZkAssetTransaction` and `buildRegisterZkAssetInstruction`
-(`javascript/iroha_js/src/instructionBuilders.js:1832`) normalise verifying key
-identifiers and emit Norito payloads that the Rust host can accept without any
-adapters. Example:
+#### ཇ་བ་ཨིསི་ཀིརིཔཊི་བཟོ་མི།
+ཇ་བ་ཨིསི་ཀིརིཔཊི་ཨེསི་ཌི་ཀེ་གིས་ ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ ཚོང་འབྲེལ་རོགས་སྐྱོར་བརྒྱུད་དེ་ རྒྱུན་རིམ་གཅིགཔོ་ཚུ་ མེ་ལོང་ཚུ་མེ་ལོང་ཚུ་འབདཝ་ཨིན།
+ལས་ `javascript/iroha_js/src/transaction.js`. བཟོ་བསྐྲུན་པ་ དཔེར་ན་ བདད།
+`buildRegisterZkAssetTransaction` དང་ `buildRegisterZkAssetInstruction`
+(`javascript/iroha_js/src/instructionBuilders.js:1832`) བདེན་དཔྱད་ཀྱི་ལྡེ་མིག།
+ངོས་འཛིན་དང་ ཕྱིར་འཐེན་ Norito གླ་ཆ་ཚུ་ རཱསི་ཧོསཊི་གིས་ ག་ནི་ཡང་མེད་པར་ ངོས་ལེན་འབད་ཚུགས།
+མཐུན་སྒྲིག་འབད་མི། དཔེ:
 
 ```js
 import {
@@ -466,37 +440,35 @@ const signed = signTransaction(unsigned, myKeypair);
 await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
 ```
 
-Shield, transfer, and unshield builders follow the same pattern, giving JS
-callers the same ergonomics as Swift and Rust. Tests under
-`javascript/iroha_js/test/transactionBuilder.test.js` cover the normalisation
-logic while the fixtures above keep the signed transaction bytes consistent.
+སྲུང་སྐྱོབ་དང་ སྤོ་བཤུད་ དེ་ལས་ མ་སྦོམ་བཟོ་མི་ཚུ་གིས་ དཔེ་རིས་གཅིགཔོ་འདི་ རྗེས་སུ་འཇུག་སྟེ་ ཇེ་ཨེསི་བྱིནམ་ཨིན།
+སུའིཕཊ་དང་རསཊ་དང་གཅིག་ཁར་ ཨར་གོ་ནོ་མིག་ཚུ་ འབོཝ་ཨིན། བརྟག་དཔྱད་འོག་མ་ཚུ་གི་འོག་ལུ་
+`javascript/iroha_js/test/transactionBuilder.test.js` སྤྱིར་བཏང་བཟོ་བཅོས་ཁྱབ་ཡོད།
+གོང་འཁོད་སྒྲིག་བཀོད་ཚུ་གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ཚོང་འབྲེལ་བཱའིཊི་ཚུ་ རིམ་མཐུན་སྦེ་བཞགཔ་ཨིན།
 
-### Telemetry & Monitoring (Phase M2)
+### བརྒྱུད་འཕྲིན་དང་བལྟ་རྟོག་པ།(དུས་རིམ་ M2)
 
-Phase M2 now exports CommitmentTree health directly via Prometheus and Grafana:
+ད་ལྟོ་ གོ་རིམ་ཨེམ་༢ འདི་ ཐད་ཀར་དུ་ Prometheus དང་ Grafana བརྒྱུད་དེ་ Commitretree གསོ་བའི་ཕྱིར་འདྲེན་འབདཝ་ཨིན།
 
-- `iroha_confidential_tree_commitments`, `iroha_confidential_tree_depth`, `iroha_confidential_root_history_entries`, and `iroha_confidential_frontier_checkpoints` expose the live Merkle frontier per asset while `iroha_confidential_root_evictions_total` / `iroha_confidential_frontier_evictions_total` count the LRU trims enforced by `zk.root_history_cap` and the checkpoint depth window.
-- `iroha_confidential_frontier_last_checkpoint_height` and `iroha_confidential_frontier_last_checkpoint_commitments` publish the height + commitment count of the most recent frontier checkpoint so reorg drills and rollbacks can prove that checkpoints advance and retain the expected payload volume.
-- The Grafana board (`dashboards/grafana/confidential_assets.json`) includes a depth series, eviction-rate panels, and the existing verifier cache widgets so operators can prove that CommitmentTree depth never collapses even as checkpoints churn.
-- Alert `ConfidentialTreeDepthZero` (in `dashboards/alerts/confidential_assets_rules.yml`) trips once commitments are observed but the reported depth sticks at zero for five minutes.
+- `iroha_confidential_tree_commitments`, `iroha_confidential_tree_depth`, `iroha_confidential_root_history_entries`, དང་ `iroha_confidential_frontier_checkpoints` གིས་ མེར་ཀེལ་མཐའ་མཚམས་ཀྱི་ རྒྱུ་དངོས་རེ་ལུ་ དངོས་མཐོང་གསལ་སྟོན་འབད་བའི་སྐབས་ `iroha_confidential_root_evictions_total` / `iroha_confidential_frontier_evictions_total` གིས་ LRU གི་ བརྩམས་སྒྲུང་ཚུ་ རྩིས་རྐྱབ་ཨིན། `zk.root_history_cap` དང་ ཞིབ་དཔྱད་ས་ཚིགས་གཏིང་ཚད་སྒོ་སྒྲིག་།
+- `iroha_confidential_frontier_last_checkpoint_height` དང་ `iroha_confidential_frontier_last_checkpoint_commitments` གིས་ འཕྲལ་ཁམས་ཀྱི་ མཐའ་མཚམས་ཞིབ་དཔྱད་ས་ཚིགས་ཀྱི་མཐོ་ཚད་ + ཁས་བླངས་འདི་དཔར་བསྐྲུན་འབད་དེ་ ལོག་སྟེ་སྒྲིག་ཆས་དང་ བཤུད་བརྙན་ཚུ་གིས་ བསྐྱར་སྒྲིག་འབད་ཐངས་ཚུ་ གོང་འཕེལ་དང་ རེ་བ་བསྐྱེད་པའི་ འབབ་ཤུགས་ཀྱི་འབོར་ཚད་འདི་ གོང་འཕེལ་དང་ བདག་འཛིན་འཐབ་ཚུགསཔ་སྦེ་ བདེན་ཁུངས་བཀལ་ཚུགས།
+- Grafana བཀོད་སྒྲིག་ (`dashboards/grafana/confidential_assets.json`) གིས་ གཏིང་ཚད་རིམ་སྒྲིག་དང་ བཏོན་གཏང་ནིའི་ཚད་གཞི་གི་པེ་ནཱལ་ དེ་ལས་ ད་ལྟོ་ཡོད་པའི་བདེན་དཔྱད་ཀྱི་ འདྲ་མཛོད་ཚུ་ ཚུདཔ་ཨིནམ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བཀོལ་བཀོལ་ཊི་རི་གཏིང་ཚད་ཚུ་ ཞིབ་དཔྱད་ས་ཚིགས་ཀྱི་ བརྟག་ཞིབ་ཀྱི་ གཏིང་ཚད་བཟུམ་སྦེ་ མར་ཕབ་མ་འབད་ཟེར་ བདེན་ཁུངས་བཀལ་ཚུགས།
+- ཁས་བླངས་ཚུ་ བལྟ་ཚར་བའི་ཤུལ་ལས་ `ConfidentialTreeDepthZero` (`dashboards/alerts/confidential_assets_rules.yml`) འགྲུལ་བསྐྱོད་ལུ་ དྲན་ཤེས་བཏོན་དགོཔ་ཨིན་རུང་ སྙན་ཞུ་འབད་ཡོད་པའི་ གཏིང་ཚད་འདི་ སྐར་མ་ལྔ་གི་རིང་ལུ་ ཀླད་ཀོར་ནང་ ཡོདཔ་ཨིན།
 
-You can verify the metrics locally before wiring Grafana:
+ཁྱོད་ཀྱིས་ གློག་ཐག་ Grafana གི་ཧེ་མ་ ཉེ་གནས་ལུ་ མེ་ཊིགསི་ཚུ་ བདེན་བཤད་འབད་ཚུགས།
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
   | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
 ```
 
-Pair this with `rg 'iroha_confidential_tree_depth'` on the same scrape to confirm that depth grows with new commitments while eviction counters only increase when the history caps trim entries. These values must line up with the Grafana dashboard export you attach to governance evidence bundles.
+འདི་ཡང་ གཏིང་ཚད་འདི་ ཁས་བླངས་གསརཔ་དང་གཅིག་ཁར་ ཡར་འཕར་འགྱོ་དོ་ཡོདཔ་ད་ བཏོན་གཏང་ནི་འདི་ རྒྱལ་རབས་ཀྱི་ ཀེབ་ཚུ་གི་ཐོ་བཀོད་ཚུ་ བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ ཡར་སེང་འགྱོ་དོ་ཡོདཔ་ཨིན་མས། གནས་གོང་འདི་ཚུ་ Grafana གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་སྡེ་ཚན་ཚུ་ལུ་ མཉམ་སྦྲགས་འབད་དེ་ ཕྱིར་འདྲེན་འབད་དགོ།
 
-#### Gas schedule telemetry & alerts
+#### རླངས་རླུང་དུས་ཚོད་བརྒྱུད་འཕྲིན་དང་དྲན་སྐུལ་།གནས་རིམ་ཨེམ་༢ གིས་ རིམ་སྒྲིག་འབད་བཏུབ་པའི་ རླངས་རྫས་སྒྱུར་རྩིས་ཚུ་ ཊེ་ལི་མི་ཊི་མདོང་ལམ་ནང་ བརྡ་རྟགས་བཀོདཔ་ཨིནམ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསར་བཏོན་འབད་ནི་ལུ་ ཆ་འཇོག་མ་འབད་བའི་ཧེ་མ་ བདེན་དཔྱད་འབད་མི་རེ་རེ་གིས་ བདེན་དཔྱད་ཀྱི་འགྲོ་སོང་ཅོག་འཐདཔ་སྦེ་ བགོ་བཤའ་རྐྱབ་ཚུགས་ཟེར་ བདེན་ཁུངས་བཀལ་ཚུགས།
 
-Phase M2 also threads the configurable gas multipliers into the telemetry pipeline so operators can prove that every validator shares the same verification costs before approving a release:
+- `iroha_confidential_gas_base_verify` མེ་ལོང་ `confidential.gas.proof_base` (སྔོན་སྒྲིག་ `250_000`).
+- `iroha_confidential_gas_per_public_input`, `iroha_confidential_gas_per_proof_byte`, `iroha_confidential_gas_per_nullifier`, དང་ `iroha_confidential_gas_per_commitment` གིས་ ཁོང་རའི་ `ConfidentialConfig` ནང་ལུ་ ཁོང་རའི་ མཛུབ་མོ་ཚུ་ ཤེལ་ཕོར་ལུ་ བླུགས། འགོ་བཙུགས་-དང་ ག་དུས་ལུ་ ཧོཊ་-མངོན་གསལ་ཚུ་ རིམ་སྒྲིག་འབད་བའི་སྐབས་ གནས་གོང་ཚུ་ དུས་མཐུན་བཟོཝ་ཨིན། Prometheus (`crates/irohad/src/main.rs:1591,1642`) གིས་ `Telemetry::set_confidential_gas_schedule` བརྒྱུད་དེ་ ཤུགས་ལྡན་དུས་ཚོད་འདི་ ཨེབ་གཏང་འབདཝ་ཨིན།
 
-- `iroha_confidential_gas_base_verify` mirrors `confidential.gas.proof_base` (default `250_000`).
-- `iroha_confidential_gas_per_public_input`, `iroha_confidential_gas_per_proof_byte`, `iroha_confidential_gas_per_nullifier`, and `iroha_confidential_gas_per_commitment` mirror their respective knobs in `ConfidentialConfig`. Values update at start-up and whenever the config hot-reloads; `irohad` (`crates/irohad/src/main.rs:1591,1642`) pushes the active schedule through `Telemetry::set_confidential_gas_schedule`.
-
-Scrape the gauges alongside the CommitmentTree metrics to confirm the knobs are identical across peers:
+མཉམ་རོགས་ཚུ་ནང་ལུ་ མཛུབ་མོ་ཚུ་ ཅོག་འཐདཔ་ཨིནམ་བདེན་དཔྱད་འབད་ནི་གི་དོན་ལུ་ ཀེམ་མི་མེན་མེནཊ་ཊི་མེ་ཊིག་ཚུ་གི་སྦོ་ལོགས་ཁར་ འཇལ་ཚད་ཚུ་ བཤུབ་དགོ།
 
 ```bash
 # compare active multipliers across validators
@@ -506,11 +478,11 @@ for host in validator-a validator-b validator-c; do
 done
 ```
 
-Grafana dashboard `confidential_assets.json` now includes a “Gas Schedule” panel that renders the five gauges and highlights divergence. Alert rules in `dashboards/alerts/confidential_assets_rules.yml` cover:
-- `ConfidentialGasMismatch`: checks the max/min of each multiplier across all scrape targets and pages when any diverge for more than 3 minutes, prompting operators to align `confidential.gas` via hot-reload or redeploy.
-- `ConfidentialGasTelemetryMissing`: warns when Prometheus cannot scrape any of the five multipliers for 5 minutes, indicating a missing scrape target or disabled telemetry.
+Grafana ཌེཤ་བོརཌ་ `confidential_assets.json` གིས་ ད་ལྟོ་ “Gas Schedule” གི་པེ་ནཱལ་ཅིག་ཡོདཔ་ད་ དེ་གིས་ ཚད་འཇལ་ཆས་ལྔ་དང་ འོད་རྟགས་ཁ་སྟོར་ཚུ་ བཀྲམ་སྟོན་འབདཝ་ཨིན། `dashboards/alerts/confidential_assets_rules.yml` གི་ཁ་དོག་ནང་ དྲན་སྐུལ་ལམ་ལུགས་ཚུ།
+- `ConfidentialGasMismatch`: 3 ལས་ལྷག་པའི་དོན་ལུ་ ཁ་སྟོར་འགྱོ་བའི་སྐབས་ བཀོལ་སྤྱོད་པ་ཚུ་ ཧོཊ་རི་ཌི་ཡང་ན་ redeploy བརྒྱུད་དེ་ `confidential.gas` ཕྲང་སྒྲིག་འབད་བཅུག་མི་ བརྡ་རྟགས་དང་ཤོག་ལེབ་ཚུ་ག་རའི་ནང་ བསྒྱུར་རྩིས་རེ་རེ་གི་ མཐོ་ཤོས་/སྐར་མ་འདི་ བརྟག་དཔྱད་འབདཝ་ཨིན།
+- `ConfidentialGasTelemetryMissing`: Prometheus: སྐར་མ་༥ གི་དོན་ལུ་ བསྒྱུར་གྲངས་ལྔ་ལས་གང་རུང་ཅིག་ བཤུད་སྒྲིལ་འབད་མི་ཚུགས།
 
-Keep the following PromQL handy for on-call investigations:
+འབོད་བརྡ་ཐོག་ལུ་ཞིབ་དཔྱད་འབད་ནིའི་དོན་ལུ་ གཤམ་གསལ་གྱི་ PromQL ལག་ལེན་འཐབ་དགོ།
 
 ```promql
 # ensure every multiplier matches across validators (uses the same projection as the alert)
@@ -518,4 +490,4 @@ Keep the following PromQL handy for on-call investigations:
   - min without(instance, job) (iroha_confidential_gas_per_public_input)) == 0
 ```
 
-Deviation should remain zero outside of controlled config rollouts. When changing the gas table, capture before/after scrapes, attach them to the change request, and update `docs/source/confidential_assets_calibration.md` with the new multipliers so governance reviewers can link the telemetry evidence to the calibration report.
+ཐ་དད་འདི་ ཚད་འཛིན་འབད་ཡོད་པའི་ རིམ་སྒྲིག་འབད་ བསྐོར་རིམ་ཚུ་གི་ཕྱི་ཁར་ ཀླད་ཀོར་སྦེ་སྡོད་དགོ། རླངས་རྫས་ཐིག་ཁྲམ་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ བརྡ་བཀོད་ཀྱི་ཧེ་མ་/ཤུལ་ལས་ བསྒྱུར་བཅོས་ཀྱི་ཞུ་བ་ལུ་མཉམ་སྦྲགས་འབད་ཞིནམ་ལས་ སྒྱུར་རྩིས་གསརཔ་ `docs/source/confidential_assets_calibration.md` དུས་མཐུན་བཟོ་སྟེ་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ཚད་འཇལ་སྙན་ཞུ་ལུ་ བརྒྱུད་འཕྲིན་སྒྲུབ་བྱེད་ཚུ་ འབྲེལ་མཐུད་འབད་ཚུགས།

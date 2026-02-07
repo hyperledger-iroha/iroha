@@ -8,20 +8,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet PQ Ratchet Fire Drill
 sidebar_label: PQ Ratchet Runbook
 description: On-call rehearsal steps for promoting or demoting the staged PQ anonymity policy with deterministic telemetry validation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Eslatma Kanonik manba
 :::
 
-## Purpose
+## Maqsad
 
-This runbook guides the fire-drill sequence for SoraNet's staged post-quantum (PQ) anonymity policy. Operators rehearse both promotion (Stage A -> Stage B -> Stage C) and controlled demotion back to Stage B/A when PQ supply drops. The drill validates telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) and collects artefacts for the incident rehearsal log.
+Ushbu ish kitobi SoraNetning bosqichma-bosqich post-kvant (PQ) anonimlik siyosati uchun yong'in-mashqlar ketma-ketligini boshqaradi. Operatorlar ham yuqoriga ko‘tarilish (A-bosqich -> B bosqich -> C bosqich) va PQ ta’minoti pasayganda B/A bosqichiga boshqariladigan pasaytirishni takrorlaydi. Matkap telemetriya ilgaklarini (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) tasdiqlaydi va voqea takrorlash jurnali uchun artefaktlarni to'playdi.
 
-## Prerequisites
+## Old shartlar
 
-- Latest `sorafs_orchestrator` binary with capability-weighting (commit at or after the drill reference shown in `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- Access to the Prometheus/Grafana stack serving `dashboards/grafana/soranet_pq_ratchet.json`.
-- Nominal guard directory snapshot. Fetch and verify a copy prior to the drill:
+- So'nggi `sorafs_orchestrator` ikkilik qobiliyatini o'lchash bilan (`docs/source/soranet/reports/pq_ratchet_validation.md` da ko'rsatilgan matkap ma'lumotnomasida yoki undan keyin bajaring).
+- `dashboards/grafana/soranet_pq_ratchet.json` ga xizmat qiluvchi Prometheus/Grafana stekiga kirish.
+- Nominal qo'riqchi katalogining surati. Mashq qilishdan oldin nusxasini oling va tasdiqlang:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -30,9 +32,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-If the source directory only publishes JSON, re-encode it to Norito binary with `soranet-directory build` before running the rotation helpers.
+Agar manba katalog faqat JSON-ni nashr etsa, aylantirish yordamchilarini ishga tushirishdan oldin uni Norito ikkilik fayliga `soranet-directory build` bilan qayta kodlang.
 
-- Capture metadata and pre-stage issuer rotation artefacts with the CLI:
+- CLI yordamida metama'lumotlar va emitent aylanishdan oldingi artefaktlarni yozib oling:
 
 ```bash
 soranet-directory inspect \
@@ -43,67 +45,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- Change window approved by networking and observability on-call teams.
+- Tarmoq va kuzatuv guruhlari tomonidan tasdiqlangan o'zgartirish oynasi.
 
-## Promotion steps
+## Rag'batlantirish bosqichlari
 
-1. **Stage audit**
+1. **Bosqichli audit**
 
-   Record the starting stage:
+   Boshlanish bosqichini yozib oling:
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Expect `anon-guard-pq` before promotion.
+   Rag'batlantirishdan oldin `anon-guard-pq` kuting.
 
-2. **Promote to Stage B (Majority PQ)**
+2. **B bosqichiga ko'tarilish (ko'pchilik PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - Wait >=5 minutes for manifests to refresh.
-   - In Grafana (`SoraNet PQ Ratchet Drill` dashboard) confirm the "Policy Events" panel shows `outcome=met` for `stage=anon-majority-pq`.
-   - Capture a screenshot or panel JSON and attach it to the incident log.
+   - Manifestlar yangilanishi uchun >=5 daqiqa kuting.
+   - Grafana (`SoraNet PQ Ratchet Drill` asboblar paneli) da "Siyosat hodisalari" panelida `stage=anon-majority-pq` uchun `outcome=met` ko'rsatiladi.
+   - Skrinshot yoki JSON panelini oling va uni voqea jurnaliga biriktiring.
 
-3. **Promote to Stage C (Strict PQ)**
+3. **S bosqichiga (qattiq PQ) ko'taring**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - Verify `sorafs_orchestrator_pq_ratio_*` histograms trend to 1.0.
-   - Confirm the brownout counter remains flat; otherwise follow the demotion steps.
+   - `sorafs_orchestrator_pq_ratio_*` gistogrammalarining 1.0 ga o'tishini tekshiring.
+   - Qo'ng'irlash hisoblagichining tekisligini tasdiqlang; aks holda pasaytirish bosqichlarini bajaring.
 
-## Demotion / brownout drill
+## Pastga tushirish / burg'ulash
 
-1. **Induce a synthetic PQ shortage**
+1. **Sintetik PQ tanqisligini keltirib chiqaring**
 
-   Disable PQ relays in the playground environment by trimming the guard directory to classical entries only, then reload the orchestrator cache:
+   Qo'riqchi katalogini faqat klassik yozuvlarga qisqartirish orqali o'yin maydonchasi muhitida PQ o'rni o'chiring, keyin orkestr keshini qayta yuklang:
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Observe brownout telemetry**
+2. **Qoʻngʻirlash telemetriyasini kuzating**
 
-   - Dashboard: panel "Brownout Rate" spikes above 0.
+   - Boshqaruv paneli: "Brownout Rate" paneli 0 dan yuqori ko'tariladi.
    - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` should report `anonymity_outcome="brownout"` with `anonymity_reason="missing_majority_pq"`.
+   - `sorafs_fetch` `anonymity_outcome="brownout"` bilan `anonymity_reason="missing_majority_pq"` xabar berishi kerak.
 
-3. **Demote to Stage B / Stage A**
+3. **B bosqich / A bosqichga pasaytirish**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   If PQ supply is still insufficient, demote to `anon-guard-pq`. The drill completes once brownout counters settle and promotions can be reapplied.
+   Agar PQ ta'minoti hali ham etarli bo'lmasa, `anon-guard-pq` ga tushiring. Mashq taymerlari oʻrnashganidan soʻng yakunlanadi va aksiyalar qayta qoʻllanilishi mumkin.
 
-4. **Restore guard directory**
+4. **Qo'riqchi katalogini tiklash**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -111,14 +113,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry & artefacts
+## Telemetriya va artefaktlar
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Prometheus alerts:** ensure `sorafs_orchestrator_policy_events_total` brownout alert stays below the configured SLO (&lt;5% across any 10 minute window).
-- **Incident log:** append the captured telemetry snippets and operator notes to `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **Signed capture:** use `cargo xtask soranet-rollout-capture` to copy the drill log and scoreboard into `artifacts/soranet_pq_rollout/<timestamp>/`, compute BLAKE3 digests, and produce a signed `rollout_capture.json`.
+- **Boshqaruv paneli:** `dashboards/grafana/soranet_pq_ratchet.json`
+- **Prometheus ogohlantirishlari:** `sorafs_orchestrator_policy_events_total` ishdan chiqish ogohlantirishi sozlangan SLO (har qanday 10 daqiqali oynada <5%) ostida qolishini taʼminlang.
+- **Hodisalar jurnali:** olingan telemetriya parchalari va operator qaydlarini `docs/examples/soranet_pq_ratchet_fire_drill.log` ga qo'shing.
+- **Imzolangan suratga olish:** `cargo xtask soranet-rollout-capture` yordamida matkap jurnali va jadvalni `artifacts/soranet_pq_rollout/<timestamp>/` ga nusxalash, BLAKE3 dayjestlarini hisoblash va imzolangan `rollout_capture.json` yaratish.
 
-Example:
+Misol:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -130,12 +132,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Attach the generated metadata and signature to the governance packet.
+Yaratilgan metamaʼlumotlar va imzoni boshqaruv paketiga biriktiring.
 
-## Rollback
+## Orqaga qaytarish
 
-If the drill uncovers real PQ shortages, remain on Stage A, notify the Networking TL, and attach the collected metrics plus guard directory diffs to the incident tracker. Use the guard directory export captured earlier to restore normal service.
+Agar matkap haqiqiy PQ tanqisligini aniqlasa, A bosqichida qoling, Networking TL-ga xabar bering va yig'ilgan o'lchovlarni va qo'riqchi katalog farqlarini voqea kuzatuvchisiga biriktiring. Oddiy xizmatni tiklash uchun avval olingan qo'riqchi katalogini eksport qilishdan foydalaning.
 
-:::tip Regression Coverage
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` provides the synthetic validation backing this drill.
+:::tip Regressiya qamrovi
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` ushbu matkapni qo'llab-quvvatlovchi sintetik tekshirishni ta'minlaydi.
 :::

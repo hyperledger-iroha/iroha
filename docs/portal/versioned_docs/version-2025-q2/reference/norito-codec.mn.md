@@ -7,60 +7,61 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 38c0cedd4858656db8562c6612f9981df11a1b2292c05908c3671402ee96be9d
 source_last_modified: "2026-01-16T16:25:53.031576+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito Codec лавлагаа
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito нь Iroha-ийн канон цувралын давхарга юм. Утас дээрх мессеж бүр, дискэн дээр
+Ачаалал болон хөндлөн бүрэлдэхүүн хэсэг API нь Norito-ийг ашигладаг тул зангилаанууд ижил байт дээр тохирдог.
+өөр өөр техник хангамж дээр ажиллаж байсан ч гэсэн. Энэ хуудсанд хөдөлж буй хэсгүүдийг нэгтгэн харуулав
+мөн `norito.md` дээрх бүрэн тодорхойлолтыг зааж байна.
 
-## Core layout
+## Үндсэн зохион байгуулалт
 
-| Component | Purpose | Source |
+| Бүрэлдэхүүн хэсэг | Зорилго | Эх сурвалж |
 | --- | --- | --- |
-| **Header** | Negotiates features (packed structs/sequences, compact lengths, compression flags) and embeds a CRC64 checksum so payload integrity is checked before decode. | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. The same layout is wrapped by the header for transport. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) activated via the `compression` flag byte. | `norito.md`, “Compression negotiation” |
+| **Толгой** | Онцлогуудыг (савласан бүтэц/дараалал, авсаархан урт, шахалтын туг) тохиролцож, CRC64 шалгах нийлбэрийг оруулснаар код тайлахын өмнө ачааны бүрэн бүтэн байдлыг шалгана. | `norito::header` — `norito.md`-г үзнэ үү (“Толгой ба тугнууд”, репозиторын үндэс) |
+| **Нүцгэн ачаалал** | Хэшг/харьцуулахад ашигладаг тодорхойлогч утгын кодчилол. Үүнтэй ижил зохион байгуулалтыг тээвэрлэхэд зориулж толгойн хэсэгт ороосон байна. | `norito::codec::{Encode, Decode}` |
+| **Шахалт** | Нэмэлт Zstd (болон туршилтын GPU хурдатгал) нь `compression` туг байтаар идэвхжсэн. | `norito.md`, “Шахалтын хэлэлцээр” |
 
-The full flag registry (packed-struct, packed-seq, compact lengths, compression)
-lives in `norito::header::flags`. `norito::header::Flags` exposes convenience
-checks for runtime inspection; reserved layout bits are rejected by decoders.
+Бүрэн тугны бүртгэл (савласан бүтэц, багц-seq, авсаархан урт, шахалт)
+`norito::header::flags`-д амьдардаг. `norito::header::Flags` нь тав тухтай байдлыг харуулж байна
+ажлын цагийн шалгалтыг шалгах; Нөөцлөгдсөн байршлын битүүдийг декодерууд үгүйсгэдэг.
 
-## Derive support
+## Дэмжлэг авах
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` нь `Encode`, `Decode`, `IntoSchema`, JSON туслагчийн үүслийг илгээдэг.
+Гол конвенцууд:
 
-- Structs/enums derive packed layouts when the `packed-struct` feature is
-  enabled (default). Implementation lives in `crates/norito_derive/src/derive_struct.rs`
-  and the behaviour is documented in `norito.md` (“Packed layouts”).
-- Packed collections use fixed-width sequence headers and offsets in v1; only
-  per-value length prefixes are affected by `COMPACT_LEN`.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- `packed-struct` функц байгаа үед бүтэц/тооцууд нь багц бүтэцтэй болно.
+  идэвхжүүлсэн (өгөгдмөл). Хэрэгжилт нь `crates/norito_derive/src/derive_struct.rs`-д амьдардаг
+  мөн зан төлөвийг `norito.md` (“Багцлагдсан байршил”) баримтжуулсан болно.
+- Савласан цуглуулгууд v1-д тогтмол өргөнтэй дарааллын толгой ба офсетийг ашигладаг; зөвхөн
+  утга бүрийн уртын угтварт `COMPACT_LEN` нөлөөлнө.
+- JSON туслахууд (`norito::json`) нь тодорхойлогч Norito-д тулгуурласан JSON-г өгдөг.
+  нээлттэй API. `norito::json::{to_json_pretty, from_json}` - хэзээ ч `serde_json` ашигла.
 
-## Multicodec & identifier tables
+## Multicodec ба таних хүснэгтүүд
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito нь олон кодлогчийн даалгавраа `norito::multicodec` дээр хадгалдаг. Лавлагаа
+Хүснэгт (хэш, түлхүүр төрөл, ачааллын тодорхойлогч) нь `multicodec.md`-д хадгалагдана.
+репозиторын үндэс дээр. Шинэ танигч нэмэх үед:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry`-г шинэчил.
+2. `multicodec.md` дээр хүснэгтийг сунгана.
+3. Газрын зургийг ашиглаж байгаа бол доод талын холбоосуудыг (Python/Java) сэргээнэ үү.
 
-## Regenerating docs & fixtures
+## Баримт бичиг, засваруудыг сэргээж байна
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Портал одоогоор зохиолын хураангуйг байршуулж байгаа тул дээд талын Markdown-ийг ашиглана уу
+үнэний эх сурвалж болох эх сурвалжууд:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Үзүүлэлт**: `norito.md`
+- **Олон кодлогч хүснэгт**: `multicodec.md`
+- **Жишиг үзүүлэлт**: `crates/norito/benches/`
+- **Алтан тест**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus автоматжуулалт ажиллаж эхлэх үед порталыг дараах хаягаар шинэчлэх болно.
+Эдгээрээс өгөгдлийг татаж авдаг синхрончлолын скрипт (`docs/portal/scripts/`-д мөрддөг)
+файлууд. Тэр болтол техникийн үзүүлэлт өөрчлөгдөх бүрт энэ хуудсыг гараар зэрэгцүүлж байгаарай.

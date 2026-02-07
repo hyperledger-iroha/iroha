@@ -7,49 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dffc2cf6c6e59f54d1fc22136ba93f75466509c699a4361a381bf7e0ce0d1dda
 source_last_modified: "2025-12-29T18:16:35.943754+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM Feature Rollout & Telemetry Checklist
+# ཨེསི་ཨེམ་ ཁྱད་རྣམ་ཐོ་འགོད་དང་ བརྒྱུད་འཕྲིན་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-This checklist helps SRE and operator teams enable the SM (SM2/SM3/SM4) feature
-set safely once the audit and compliance gates are cleared. Follow this document
-alongside the configuration brief in `docs/source/crypto/sm_program.md` and the
-legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
+ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་གིས་ ཨེསི་ཨར་ཨི་དང་ བཀོལ་སྤྱོད་སྡེ་ཚན་ཚུ་གིས་ ཨེསི་ཨེམ་ (SM2/SM3/SM4) ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་ནི་ལུ་ གྲོགས་རམ་འབདཝ་ཨིན།
+རྩིས་ཞིབ་དང་ བསྟར་སྤྱོད་ཀྱི་སྒོ་ཚུ་ བཏོན་བཏང་པའི་སྐབས་ ཉེན་སྲུང་དང་ལྡནམ་སྦེ་ གཞི་སྒྲིག་འབད། ཡིག་ཆ་འདི་ལུ་རྗེས་འཇུག་འབད།
+རིམ་སྒྲིག་ཐུང་ཀུ་གི་མཉམ་དུ་ `docs/source/crypto/sm_program.md` ནང་དང་
+ཁྲིམས་དོན་/ཕྱིར་ཚོང་ལམ་སྟོན། `docs/source/crypto/sm_compliance_brief.md`.
 
-## 1. Pre-flight Readiness
-- [ ] Confirm the workspace release notes show `sm` as verify-only or signing,
-      depending on the rollout stage.
-- [ ] Verify the fleet is running binaries built from a commit that includes the
-      SM telemetry counters and configuration knobs. (Target release TBD; track
-      in the rollout ticket.)
-- [ ] Run `scripts/sm_perf.sh --tolerance 0.25` on a staging node (per target
-      architecture) and archive the summary output. The script now auto-selects
-      the scalar baseline as a comparison target for acceleration modes
-      (`--compare-tolerance` defaults to 5.25 while the SM3 NEON work lands);
-      investigate or block the rollout if either the primary or comparison
-      guard fails. When capturing on Linux/aarch64 Neoverse hardware, pass
+## 1. འཕུར་འགྲུལ་སྔོན་གྱི་ལྟེ་བ།
+- [ ] ལཱ་གི་ས་སྒོ་གསར་བཏོན་དྲན་ཐོ་ཚུ་ངེས་དཔྱད་འབད་ `sm` བདེན་བཤད་རྐྱངམ་ཅིག་ཡང་ན་མིང་རྟགས་བཀོད་ཡོདཔ་སྦེ་སྟོནམ་ཨིན།
+      བསྐོར་བའི་གནས་རིམ་ལུ་གཞི་བཞག་སྟེ་ཨིན།
+- [ ] གྲུ་གཟིངས་འདི་ ཁས་བླངས་ཅིག་ལས་ བཟོ་བསྐྲུན་འབད་དེ་ཡོད་མི་ གྲུ་གཟིངས་འདི་ བདེན་དཔྱད་འབད།
+      ཨེསི་ཨེམ་ བརྒྱུད་འཕྲིན་ གྱངས་ཁ་དང་ རིམ་སྒྲིག་གི་ མཛུབ་མོ་ཚུ། (དམིགས་གཏད་གསར་བཏོན་ TBD; རྐང་ལམ་།
+      བསྐོར་བའི་ཤོག་བྱང་ནང་།)
+- [ ] གནས་རིམ་གྱི་མཐུད་མཚམས་ཅིག་གུ་ `scripts/sm_perf.sh --tolerance 0.25` གཡོག་བཀོལ།
+      བཟོ་རིགས་) དང་ བཅུད་བསྡུས་ཐོན་འབྲས་འདི་ཡིག་མཛོད་བཟོས། ད་ལྟོ་ཡིག་གཟུགས་འདི་རང་བཞིན་གྱིས་སེལ་འཐུ་འབདཝ་ཨིན།
+      མགྱོགས་ཚད་ཐབས་ལམ་གྱི་དོན་ལུ་ ག་བསྡུར་དམིགས་གཏད་ཅིག་སྦེ་ སི་ཀེ་ལེར་གཞི་རྟེན་འདི་ཨིན།
+      (`--compare-tolerance` འདི་ ༥.༢༥ ལུ་སྔོན་སྒྲིག་འབད་བའི་སྐབས་ SM3 NEON ལཱ་གི་ས་ཆ་ཚུ་)
+      བརྟག་ཞིབ་ཡང་ན་ གཞི་རྟེན་ཡང་ན་ ག་བསྡུར་གང་རུང་ཅིག་ཨིན་པ་ཅིན་ བསྐོར་ཐེངས་འདི་བཀག་བཞག།
+      སྲུང་སྐྱོབ་འབད་མ་ཚུགས། Linux/ararch64 གུ་བཟུང་པའི་སྐབས་ མཐུན་རྐྱེན་གསརཔ་མེད་པའི་སྐབས་ འགྱོཝ་ཨིན།
       `--baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_<mode>.json --write-baseline`
-      to overwrite the exported `m3-pro-native` medians with the host’s capture
-      before shipping.
-- [ ] Ensure `status.md` and the rollout ticket record the compliance filings for
-      any nodes operating in jurisdictions that require them (see compliance brief).
-- [ ] Prepare KMS/HSM updates if validators will store SM signing keys in
-      hardware modules.
+      ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ `m3-pro-native` འདི་ གཙོ་བོ་བཟུང་མི་དང་གཅིག་ཁར་ བར་མཚམས་ཚུ་ ཚབ་བཙུགས་ནིའི་དོན་ལུ་ཨིན།
+      གྲུ་མ་བཏང་པའི་ཧེ་མ་.
+- [ ] `status.md` དང་ བསྐོར་བའི་ཤོག་བྱང་གིས་ བསྟར་སྤྱོད་ཀྱི་ཡིག་ཆ་ཚུ་ ཐོ་བཀོད་འབད།
+      གང་ལྟར་ཡང་ དབང་ཚད་ནང་ལཱ་འབད་མི་ མཐུད་མཚམས་ཚུ་ དེ་ཚུ་དགོཔ་ཨིན་ (མཐུན་སྒྲིག་ཐུང་ཀུ་བལྟ།)
+- [ ] བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ ༢༠༠༨ ལུ་ ཨེསི་ཨེམ་མིང་རྟགས་ལྡེ་མིག་ཚུ་ གསོག་འཇོག་འབད་ཚུགས་པ་ཅིན་ ཀེ་ཨེམ་ཨེསི་/ཨེཆ་ཨེསི་ཨེམ་དུས་མཐུན་བཟོ་ནི་ཚུ་གྲ་སྒྲིག་འབད།
+      སྲ་ཆས་ཚད་གཞི་ཚུ།
 
-## 2. Configuration Changes
-1. Run the xtask helper to generate the SM2 key inventory and ready-to-paste snippet:
+## 2. རིམ་སྒྲིག་བསྒྱུར་བཅོས།
+༡ ཨེསི་ཨེམ་༢ ལྡེ་མིག་ཐོ་གཞུང་དང་ གྲ་སྒྲིག་ཡོད་པའི་ སྦྱར་ཆས་ སི་ནིཔ་ཊི་ བཟོ་བཏོན་འབད་ནི་ལུ་ ཨེགསི་ཊེཀ་ གྲོགས་རམ་པ་ གཡོག་བཀོལ།
    ```bash
    cargo xtask sm-operator-snippet \
      --distid CN12345678901234 \
      --json-out sm2-key.json \
      --snippet-out client-sm2.toml
    ```
-   Use `--snippet-out -` (and optionally `--json-out -`) to stream the outputs to stdout when you just need to inspect them.
-   If you prefer to drive the lower-level CLI commands manually, the equivalent flow is:
+   ཁྱོད་ཀྱིས་བརྟག་དཔྱད་འབད་དགོཔ་ད་ ཐོན་འབྲས་ཚུ་ stdout གི་དོན་ལུ་ `--snippet-out -` (དང་གདམ་ཁ་ཅན་སྦེ་ `--json-out -`) ལག་ལེན་འཐབ།
+   ཁྱོད་ཀྱིས་ དམའ་རིམ་སི་ཨེལ་ཨའི་བརྡ་བཀོད་ཚུ་ ལག་ཐོག་ལས་ འདྲེན་འབད་ནི་ལུ་དགའ་བ་ཅིན་ འདྲ་མཉམ་གྱི་རྒྱུན་རིམ་འདི་ :
    ```bash
    cargo run -p iroha_cli --features sm -- \
      crypto sm2 keygen \
@@ -63,9 +64,9 @@ legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
      --snippet-output client-sm2.toml \
      --emit-json --quiet
    ```
-   If `jq` is unavailable, open `sm2-key.json`, copy the `private_key_hex` value, and pass it directly to the export command.
-2. Add the resulting snippet to each node’s configuration (values shown for the
-   verify-only stage; adjust per environment and keep the keys sorted as shown):
+   `jq` ཐོབ་མ་ཚུགས་པ་ཅིན་ `sm2-key.json` ཁ་ཕྱེ་ཞིནམ་ལས་ `private_key_hex` གནས་གོང་འདི་འདྲ་བཤུས་རྐྱབ་ཞིནམ་ལས་ ཐད་ཀར་དུ་ཕྱིར་འདྲེན་བརྡ་བཀོད་ལུ་སྤྲོད་དགོ།
+2. མཐུད་མཚམས་རེ་རེ་གི་རིམ་སྒྲིག་ལུ་ གྲུབ་འབྲས་ཀྱི་ཚད་གཞི་འདི་ཁ་སྐོང་བརྐྱབས་ (གནས་གོང་ཚུ་སྟོན་ཡོད་པའི་གནས་གོང་ཚུ་ .
+   བདེན་བཤད་རྐྱངམ་ཅིག་གི་གནས་རིམ་; མཐའ་འཁོར་རེ་ལུ་བདེ་སྒྲིག་འབད་ཞིནམ་ལས་ སྟོན་ཡོད་དོ་བཟུམ་སྦེ་ དབྱེ་བ་ཕྱེ་སྟེ་ལྡེ་མིག་ཚུ་བཞག།
 ```toml
 [crypto]
 default_hash = "sm3-256"
@@ -73,74 +74,95 @@ allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mod
 sm2_distid_default = "1234567812345678"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 ```
-3. Restart the node and confirm `crypto.sm_helpers_available` and (if you enabled the preview backend) `crypto.sm_openssl_preview_enabled` surface as expected in:
+3. མཐུད་མཚམས་འདི་ལོག་འགོ་བཙུགས་ཞིནམ་ལས་ `crypto.sm_helpers_available` དང་ (ཁྱོད་ཀྱིས་སྔོན་ལྟ་རྒྱབ་རྟེན་ལྕོགས་ཅན་བཟོ་བ་ཅིན་) `crypto.sm_openssl_preview_enabled` རེ་བ་བསྐྱེད་དོ་བཟུམ་སྦེ་:
    - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`).
-   - The rendered `config.toml` for each node.
-4. Update manifests/genesis entries to add SM algorithms to the allow-list if
-   signing is enabled later in the rollout. When using `--genesis-manifest-json`
-   without a pre-signed genesis block, `irohad` now seeds the runtime crypto
-   snapshot directly from the manifest’s `crypto` block—ensure the manifest is
-   checked into your change plan before rolling forward.
-
-## 3. Telemetry & Monitoring
-- Scrape Prometheus endpoints and ensure the following counters/gauges appear:
+   - མཐུད་མཚམས་རེ་རེ་གི་དོན་ལུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ `config.toml` འདི་ཨིན།
+4. ཆོག་མཐའི་གསལ་སྟོན་/རིགས་མཚན་ཐོ་བཀོད་ཚུ་གིས་ གནང་བ་ཐོ་ཡིག་ལུ་ ཨེསི་ཨེམ་ཨཱལ་གོ་རི་དམ་ཁ་སྐོང་བརྐྱབ་ནི་ལུ་ རིགས་མཚན་བཙུགས་ནི།
+   s yusting འདི་ ཤུལ་ལས་ བསྐོར་ཐེངས་ནང་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན། `--genesis-manifest-json` ལག་ལེན་འཐབ་པའི་སྐབས།
+   སྔོན་སྒྲིག་མིང་རྟགས་བཀོད་པའི་རིགས་མཚན་བཀག་ཆ་མེད་པར་ `irohad` ད་ལྟ་ རན་ཊའིམ་ཀིརིཔ་ཊོ་འདི་བཙུགས་ཡོད།
+   གསལ་སྟོན་གྱི་ `crypto` སྡེབ་ཚན་ལས་ཐད་ཀར་དུ་པར་བཏབ།— གསལ་སྟོན་འདི་ནི་ངེས་པར་དུ་ངེས་པར་བྱ།
+   གདོང་ཁར་མ་འགྱོ་བའི་ཧེ་མ་ ཁྱོད་རའི་བསྒྱུར་བཅོས་འཆར་གཞི་ནང་ བརྟག་དཔྱད་འབད་ཡི།## 3. བརྒྱུད་འཕྲིན་དང་བལྟ་རྟོག་པ།
+- Prometheus མཐའ་མཚམས་ཚུ་ བཤུད་བརྡར་འབད་དེ་ འོག་གི་ གྱངས་ཁ་/འཇལ་ཚད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
   - `iroha_sm_syscall_total{kind="verify"}`
   - `iroha_sm_syscall_total{kind="hash"}`
   - `iroha_sm_syscall_total{kind="seal|open",mode="gcm|ccm"}`
-  - `iroha_sm_openssl_preview` (0/1 gauge reporting the preview toggle state)
+  - `iroha_sm_openssl_preview` (༠/༡ ཚད་འཇལ་གྱི་སྔོན་ལྟ་སོར་སྟོན་གནས་སྟངས་སྙན་ཞུ་འབད་དོ།)
   - `iroha_sm_syscall_failures_total{kind="verify|hash|seal|open",reason="..."}`
-- Hook signing path once SM2 signing is enabled; add counters for
-  `iroha_sm_sign_total` and `iroha_sm_sign_failures_total`.
-- Create Grafana dashboards/alerts for:
-  - Spikes in failure counters (window 5m).
-  - Sudden drops in SM syscall throughput.
-  - Differences between nodes (e.g., mismatched enablement).
+- ཨེསི་ཨེམ་༢ མཚན་རྟགས་བཀོད་ནི་འདི་ལྕོགས་ཅན་བཟོ་ཚར་བའི་ཤུལ་ལས་ ཧུཀ་མིང་རྟགས་འགྲུལ་ལམ། དོན་ལུ་ གྱངས་ཁ་རྐྱབས་ ཁ་སྐོང་རྐྱབས།
+  `iroha_sm_sign_total` དང་ `iroha_sm_sign_failures_total`.
+- གི་དོན་ལུ་ Grafana བརྡ་བཀོད་ཚུ་/ཉེན་བརྡ་ཚུ་ གསར་བསྐྲུན་འབད།
+  - འཐུས་ཤོར་གྱི་གྱངས་ཁ་ནང་ སྤྱང་ཀི་ (སྒོ་སྒྲིག་ ༥m)།
+  - ཨེསི་ཨེམ་སི་ཀཱལ་ཐོན་འབྲས་ནང་ གློ་བུར་དུ་ མར་ཕབ་འབདཝ་ཨིན།
+  - མཐུད་མཚམས་ཚུ་གི་བར་ན་ཁྱད་པར་ (དཔེར་ན་ མཐུན་སྒྲིག་མ་མཐུནམ་)།
 
-## 4. Rollout Steps
-| Phase | Actions | Notes |
-|-------|---------|-------|
-| Verify-only | Update `crypto.default_hash` to `sm3-256`, leave `allowed_signing` without `sm2`, monitor verification counters. | Goal: exercise SM verification paths without risking consensus divergence. |
-| Mixed Signing Pilot | Allow limited SM signing (subset of validators); monitor signing counters and latency. | Ensure fallback to Ed25519 remains available; halt if telemetry shows mismatches. |
-| GA Signing | Extend `allowed_signing` to include `sm2`, update manifests/SDKs, and publish final runbook. | Requires closed audit findings, updated compliance filings, and stable telemetry. |
+## 4. བཤུད་རིམ་ཚུ།
+| དུས་རིམ་ | བྱ་བ་ | དྲན་ཐོ། |
+|---------|-------------|-------------------------
+| བདེན་དཔྱད་-རྐྱངམ་ཅིག་ | `crypto.default_hash` ལུ་ དུས་མཐུན་བཟོ། `sm3-256`, `allowed_signing` `sm2`, ལྟ་རྟོག་བདེན་དཔྱད་གྱངས་ཁ་ཚུ་བཞག་དགོ། | དམིགས་ཡུལ་: མོས་མཐུན་ཁ་སྟོར་གྱི་ཉེན་ཁ་མེད་པར་ SM བདེན་དཔྱད་ཀྱི་ལམ་ལུགས། |
+| མཚན་རྟགས་བཀོད་པའི་མཁའ་འགྲུལ་ | ཚད་འཛིན་ཨེསི་ཨེམ་མིང་རྟགས་བཀོད་ནི་ (བདེན་དཔྱད་འབད་མི་ཚུ་གི་ཡན་ལག་) འབད་བཅུག། sressing sounts དང་ འཕྲོ་མཐུད་དེ་ འཕྲོ་མཐུད། | Ed25519 ལུ་ ཕོལཀ་ཚུ་ འཐོབ་ཚུགསཔ་ངེས་གཏན་བཟོ། གལ་སྲིད་ ཊེ་ལི་མི་ཊི་རི་གིས་ མ་མཐུན་པ་སྟོན་པ་ཅིན་ བཀག་ཆ་འབདཝ་ཨིན། |
+| GA མཚན་རྟགས་ | `allowed_signing` རྒྱ་བསྐྱེད་འབད་ `sm2` དུས་མཐུན་བཟོ་ནི་དང་ དུས་མཐུན་བཟོ་ནི་ གསལ་སྟོན་/SDKs དེ་ལས་ མཐའ་མཇུག་གི་རའུན་དེབ་དཔར་བསྐྲུན་འབད། | རྩིས་ཞིབ་ཀྱི་ཤེས་རྟོགས་དང་ བསྟར་སྤྱོད་ཀྱི་ཡིག་ཆ་ཚུ་ དུས་མཐུན་བཟོ་དགོཔ་ དེ་ལས་ བརྟན་ཏོག་ཏོ་སྦེ་ བརྡ་འཕྲིན་གཏང་དགོཔ་ཨིན། |
 
-### Readiness Reviews
-- **Verify-only readiness (SM-RR1).** Convene Release Eng, Crypto WG, Ops, and Legal. Require:
-  - `status.md` notes compliance filing status + OpenSSL provenance.
-  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / this checklist updated within the last release window.
-  - `defaults/genesis` or the environment-specific manifest shows `crypto.allowed_signing = ["ed25519","sm2"]` and `crypto.default_hash = "sm3-256"` (or the verify-only variant without `sm2` if still in stage one).
-  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` logs attached to the rollout ticket.
-  - Telemetry dashboard (`iroha_sm_*`) reviewed for steady-state behaviour.
-- **Signing pilot readiness (SM-RR2).** Additional gates:
-  - Audit report for RustCrypto SM stack closed or RFC for compensating controls signed by Security.
-  - Operator runbooks (facility-specific) updated with signing fallback/rollback steps.
-  - Genesis manifests for the pilot cohort include `allowed_signing = ["ed25519","sm2"]` and the allow-list is mirrored in each node configuration.
-  - Exit/rollback plan documented (switch `allowed_signing` back to Ed25519, restore manifests, reset dashboards).
-- **GA readiness (SM-RR3).** Requires positive pilot report, updated compliance filings for all validator jurisdictions, signed telemetry baselines, and release ticket approval from Release Eng + Crypto WG + Ops/Legal triad.
+### གྲ་སྒྲིག་བསྐྱར་ཞིབ།
+- **བདེན་དཔྱད་རྐྱངམ་ཅིག་གྲ་སྒྲིག་ (SM-RR1),** ཀོན་ཝེན་བཏོན་གཏང་ཨིང་, ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་, ཨོཔ་, དང་ ཁྲིམས་ལུགས་ཚུ། དགོཔ:
+  - `status.md` དྲན་འཛིན་ཚུ་ ཡིག་ཆ་བཙུགས་ནིའི་གནས་རིམ་ + OpenSSL འབྱུང་ཁུངས་ མངོན་གསལ་འབདཝ་ཨིན།
+  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / མཇུག་གི་གསར་བཏོན་སྒོ་སྒྲིག་ནང་འཁོད་ལུ་ བརྟག་ཞིབ་ཐོ་ཡིག་འདི་དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
+  - `defaults/genesis` ཡང་ན་ མཐའ་འཁོར་དམིགས་བསལ་གྱི་གསལ་སྟོན་འདི་གིས་ `crypto.allowed_signing = ["ed25519","sm2"]` དང་ `crypto.default_hash = "sm3-256"` སྟོནམ་ཨིན།
+  - `scripts/sm_openssl_smoke.sh` + ```toml
+[crypto]
+default_hash = "sm3-256"
+allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mode
+sm2_distid_default = "1234567812345678"
+# enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
+``` གི་དྲན་ཐོ་ཚུ་ འགོ་བཙུགས་ཀྱི་ཤོག་བྱང་ལུ་མཉམ་སྦྲགས་འབདཝ་ཨིན།
+  - ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་ (```toml
+[crypto]
+default_hash = "sm3-256"
+allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mode
+sm2_distid_default = "1234567812345678"
+# enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
+```) གནས་སྟངས་གཏན་ཏོག་ཏོ་གི་སྤྱོད་ལམ་གྱི་དོན་ལུ་ བསྐྱར་ཞིབ་འབད་ཡོདཔ་ཨིན།
+- **གནམ་གྲུ་གྲ་སྒྲིག་འབད་ནི། (SM-RR2),** ཁ་སྐོང་སྒོ་སྒྲིག་ཚུ།
+  - ཉེན་སྲུང་གིས་ མཚན་རྟགས་བཀོད་མི་ ཚད་འཛིན་ཚུ་ རྒུད་འཐུས་སྤྲོད་ནིའི་དོན་ལུ་ རཱསི་ཊི་ཀིརིཔ་ཊོ་ཨེསི་ཨེམ་བརྩེགས་ཕུང་ ཡང་ན་ ཨར་ཨེཕ་སི་གི་དོན་ལུ་ རྩིས་ཞིབ་སྙན་ཞུ།
+  - བཀོལ་སྤྱོད་པ་རང་དེབ་ཚུ་ (མཐུན་རྐྱེན་-དམིགས་བསལ་) མཚན་རྟགས་བཀོད་པའི་ ཕོལཀ་/རོལ་ལོག་གོམ་པ་ཚུ་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་ཡོདཔ།
+  - མཁའ་འགྲུལ་སྡེ་ཚན་གྱི་དོན་ལུ་ ཇེ་ནི་སིསི་གསལ་སྟོན་ཚུ་ནང་ `allowed_signing = ["ed25519","sm2"]` ཚུ་ཚུདཔ་ཨིནམ་དང་ ཆོག་ཐམ་ཐོ་ཡིག་འདི་ མཐུད་མཚམས་རིམ་སྒྲིག་རེ་རེ་ནང་ མེ་ལོང་ནང་བཀོད་དེ་ཡོདཔ་ཨིན།
+  - ཕྱིར་ཐོན་/རོལ་ལོག་འཆར་གཞི་འདི་ ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ་ཨིན་ (`allowed_signing` ལོག་ Ed25519 ལུ་ལོག་སོར་བསྒྱུར་འབད་དེ་ གསལ་སྟོན་ཚུ་སླར་གསོ་འབད་ ཌེཤ་བོརཌི་ཚུ་སླར་སྒྲིག་འབད།)
+- **GA གྲ་སྒྲིག་ (SM-RR3),** ཚོད་ལྟའི་སྙན་ཞུ་ ངེས་གཏན་དང་ བདེན་དཔྱད་ཀྱི་དབང་ཚད་ཚུ་གི་དོན་ལུ་ བསྟར་སྤྱོད་ཀྱི་ཡིག་ཆ་ཚུ་ དུས་མཐུན་བཟོ་ཡོདཔ་ དེ་ལས་ བརྒྱུད་འཕྲིན་གྱི་གཞི་རྟེན་མཚན་རྟགས་བཀོད་ཡོད་མི་ དེ་ལས་ གསར་བཏོན་ཨིང་ + ཀིརིཔ་ཊོ་ ཌབ་ལུ་ཇི་ + Ops/Legal triad ལས་ ཤོག་འཛིན་ཆ་འཇོག་བཏོན་གཏང་།## 5. ཐུམ་སྒྲིལ་དང་མཐུན་སྒྲིག་ཞིབ་དཔྱད་ཐོ་ཡིག་།
+- **བཱན་ཌེལ་ཨོ་པཱན་ཨེསི་ཨེསི་ཨེལ་/ཊོང་སུའོ་ཅ་རྙིང་ཚུ། བརྗེ་སོར་དཔེ་མཛོད་ཚུ་ (`libcrypto`/`libssl`) བདེན་བཤད་ཐུམ་སྒྲིལ་ཡང་ན་ རིམ་ལུགས་ངོ་མ་འདི་ ཡིག་ཆ་ཆ་མཉམ་དང་གཅིག་ཁར་དང་གཅིག་ཁར་ བརྗེ་སོར་གྱི་དཔེ་མཛོད་ཚུ་ (```bash
+   cargo xtask sm-operator-snippet \
+     --distid CN12345678901234 \
+     --json-out sm2-key.json \
+     --snippet-out client-sm2.toml
+   ```/`libssl`) ཐོན་རིམ་འདི་ཐོ་བཀོད་འབད་ཞིནམ་ལས་ དར་དར་བཟོ་ནི་ དེ་ལས་ གསར་བཏོན་ནང་ལུ་ SHA256 ཞིབ་དཔྱད་ས་མཚམས་ཚུ་ གསལ་སྟོན་འབད།
+- **CI གི་སྐབས་ལུ་བདེན་དཔྱད་འབད།:* དམིགས་གཏད་ཀྱི་སྟེགས་བུ་རེ་རེ་ལུ་ ཐུམ་སྒྲིལ་འབད་ཡོད་པའི་ཅ་རྙིང་ཚུ་ལུ་ ```toml
+[crypto]
+default_hash = "sm3-256"
+allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mode
+sm2_distid_default = "1234567812345678"
+# enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
+``` ལག་ལེན་འཐབ་ཚུགས་པའི་ CI གོ་རིམ་ཅིག་ཁ་སྐོང་འབད། སྔོན་ལྟའི་དར་ཆ་འདི་ལྕོགས་ཅན་བཟོ་བ་ཅིན་ ལཱ་འདི་འཐུས་ཤོར་དགོཔ་ཨིན་རུང་ བྱིན་མི་འདི་འགོ་བཙུགས་མི་ཚུགས་ནི་ཨིན་ (མགོ་ཡིག་ཚུ་མེདཔ་དང་ རྒྱབ་སྐྱོར་མ་འབད་བའི་ཨཱལ་གོ་རི་དམ་ལ་སོགས་པ་ཚུ་)།
+- **དཔེ་བསྐྲུན་གྱི་དྲན་འཛིན་ཚུ་ དུས་མཐུན་བཟོ་ཡོད་པའི་དྲན་ཐོ་ / <!--
+  SPDX-License-Identifier: Apache-2.0
+--> འདི་ བཱན་ཌི་བྱིན་ཡོད་པའི་ཐོན་རིམ་དང་གཅིག་ཁར་ ཕྱིར་འདྲེན་-ཚད་འཛིན་གཞི་བསྟུན་ (ཇི་ཨེམ་/ཊི་ ཇི་བི་/ཊི་) དེ་ལས་ ཨེསི་ཨེམ་ཨཱལ་གོ་རི་དམ་ཚུ་གི་དོན་ལུ་དགོ་པའི་ དབང་ཚད་-དམིགས་བསལ་གྱི་ ཡིག་སྣོད་གང་རུང་ཅིག་ཨིན།
+- **Operator runbook དུས་མཐུན་བཟོ་ནི།** ཡར་འཕེལ་གྱི་རྒྱུན་འབབ་འདི་ཡིག་ཆ་བཟོ་ཞིནམ་ལས་ བརྗེ་སོར་འབད་ཡོད་པའི་དངོས་པོ་གསརཔ་ཚུ་ ཡིག་ཆ་བཟོ་ཞིནམ་ལས་ `crypto.enable_sm_openssl_preview = true` དང་གཅིག་ཁར་ མཉམ་བསྡོམས་མཉམ་རོགས་ `/status` ས་སྒོ་དང་ `iroha_sm_openssl_preview` གཱེཇ་ཕིལིཔ་ `scripts/sm_perf.sh --tolerance 0.25` ལུ་ ངེས་གཏན་བཟོ། གལ་སྲིད་ སྔོན་ལྟའི་ ཊེ་ལི་མི་ཊི་འདི་ གྲུ་གཟིངས་ནང་ལུ་ ཐ་དད་སྦེ་འགྱོཝ་ཨིན།
+- **བདེན་དཔང་འབད་བཞག་ནི།** བཟོ་བསྐྲུན་དྲན་ཐོ་ཚུ་ ཡིག་མཛོད་དང་ མཚན་རྟགས་བཀོད་ནི། བདེན་བཤད་འབད། བདེན་དཔྱད་འབད་མི་ བདེན་དཔྱད་འབད་མི་ བཏོན་གཏང་ནིའི་ ཅ་ཆས་ཚུ་གི་ ཐུམ་སྒྲིལ་ཚུ་གི་ ཐུམ་སྒྲིལ་ཚུ་གི་ ཡིག་ཆ་ཚུ་ གཏན་འཁེལ་བཟོ་ནི།
 
-## 5. Packaging & Compliance Checklist
-- **Bundle OpenSSL/Tongsuo artifacts.** Ship OpenSSL/Tongsuo 3.0+ shared libraries (`libcrypto`/`libssl`) with every validator package or document the exact system dependency. Record the version, build flags, and SHA256 checksums in the release manifest so auditors can trace the supplier build.
-- **Verify during CI.** Add a CI step that executes `scripts/sm_openssl_smoke.sh` against the packaged artifacts on each target platform. The job must fail if the preview flag is enabled but the provider cannot be initialised (missing headers, unsupported algorithm, etc.).
-- **Publish compliance notes.** Update release notes / `status.md` with the bundled provider version, export-control references (GM/T, GB/T), and any jurisdiction-specific filings required for SM algorithms.
-- **Operator runbook updates.** Document the upgrade flow: stage the new shared objects, restart peers with `crypto.enable_sm_openssl_preview = true`, confirm the `/status` field and `iroha_sm_openssl_preview` gauge flip to `true`, and keep a rollback plan (flip the config flag or revert the package) if preview telemetry deviates across the fleet.
-- **Evidence retention.** Archive the build logs and signing attestations for the OpenSSL/Tongsuo packages alongside the validator release artefacts so future audits can reproduce the provenance chain.
+## 6. བྱུང་རྐྱེན་གྱི་ལན་འདེབས།
+- **བདེན་དཔྱད་འཐུས་ཤོར་འབྱུང་མི་:** ཨེསི་ཨེམ་རྒྱབ་སྐྱོར་མེད་པའི་བཟོ་བསྐྲུན་ལུ་ལོག་འགྱོ། ཡང་ན་ `sm2` བཏོན་གཏང་།
+  from `allowed_signing` (དགོས་མཁོ་ལྟར་ `default_hash` ཕྱིར་ལོག་འབད་ནི།) དང་ཧེ་མམ་ལུ་འཐུས་ཤོར་བྱུང་ཡོདཔ།
+  ཞིབ་དཔྱད་འབད་བའི་སྐབས་ བཏོན་གཏང་། བཟུང་མི་འདི་གིས་ འཐུས་ཤོར་བྱུང་ཡོད་པའི་ འབབ་ཁུངས་དང་ ག་བསྡུར་གྱི་ཧ་ཤེ་ དེ་ལས་ མཐུད་མཚམས་དྲན་ཐོ་ཚུ་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
+- **ལཱ་འགན་འགྱུར་ལྡོག་ཚུ་:** Ed25519/SHA2 གཞི་རྟེན་ཚུ་དང་གཅིག་ཁར་ ཨེསི་ཨེམ་མེ་ཊིགསི་ཚུ་ག་བསྡུར་རྐྱབ།
+  ཨེ་ཨར་ཨེམ་ནང་ཁུལ་གྱི་ལམ་འདི་གིས་ ཁྱད་པར་ཕྱེ་བ་ཅིན་ `crypto.sm_intrinsics = "force-disable"` གཞི་སྒྲིག་འབདཝ་ཨིན།
+  (ཁྱད་ཆོས་བསྒྱུར་བཅོས་འབད་ནི་ ལག་ལེན་འཐབ་ནི་) དང་ ཞིབ་འཚོལ་གྱི་སྙན་ཞུ་ཚུ་ སྙན་ཞུ་འབད།
+- **ཊེ་ལི་མི་ཊི་བར་སྟོང་ཚུ་:** གལ་སྲིད་ ཀའུན་ཊར་ཚུ་ མེདཔ་ཨིན་ན་ ཡང་ན་ དུས་མཐུན་བཟོ་མ་ཚུགས་པ་ཅིན་ གནད་དོན་ཅིག་ ཡིག་སྣོད་འབད།
+  གསར་བཏོན་བཟོ་རིག་ལུ་རྒྱབ་འགལ་འབད་ནི། བར་སྟོང་ཚུན་ཚོད་ རྒྱ་ཆེཝ་སྦེ་ བཏོན་གཏང་ནི་དང་གཅིག་ཁར་ འཕྲོ་མཐུད་མ་འབད།
+  སེལ་ནི
 
-## 6. Incident Response
-- **Verification failure spikes:** Roll back to a build without SM support or remove `sm2`
-  from `allowed_signing` (reverting `default_hash` as needed) and fail over to the previous
-  release while investigating. Capture failed payloads, comparative hashes, and node logs.
-- **Performance regressions:** Compare SM metrics with Ed25519/SHA2 baselines.
-  If ARM intrinsic path causes divergence, set `crypto.sm_intrinsics = "force-disable"`
-  (feature toggle pending implementation) and report findings.
-- **Telemetry gaps:** If counters are missing or not updating, file an issue
-  against Release Engineering; do not proceed with wider rollout until the gap
-  is resolved.
+## 7. དཔྱད་ཐོ་ ཊེམ་པེལེཊི་།
+- [ ] གོ་རིམ་བཞིན་དུ་ རིམ་སྒྲིག་འབད་དེ་ ལོག་འགོ་བཙུགས་ཡོདཔ།
+- [ ] ཊེ་ལི་མི་ཊི་ གྱངས་ཁ་མཐོང་ཚུགསཔ་དང་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ བརྡ་བཀོད་བཀོད་སྒྲིག་ཚུ།
+- [ ] མཐུན་སྒྲིག་/ཁྲིམས་མཐུན་གྱི་གོ་རིམ་ཐོ་བཀོད་བྱས།
+- [ ] ཀིརིཔ་ཊོ་ WG / བཏོན་གཏང་ TL གིས་ ཆ་འཇོག་འབད་བའི་ བཤུད་རིམ་གྱི་ དུས་རིམ་།
+- [ ] བསྐོར་རྗེས་བསྐྱར་ཞིབ་མཇུག་བསྡུ་དང་ཤེས་རྟོགས་ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ།
 
-## 7. Checklist Template
-- [ ] Configuration staged and peer restarted.
-- [ ] Telemetry counters visible and dashboards configured.
-- [ ] Compliance/legal steps recorded.
-- [ ] Rollout phase approved by Crypto WG / Release TL.
-- [ ] Post-rollout review completed and findings documented.
-
-Maintain this checklist in the rollout ticket and update `status.md` when the
-fleet transitions between phases.
+བརྟག་ཞིབ་ཐོ་ཡིག་འདི་ འགོ་བཙུགས་ཀྱི་ཤོག་བྱང་ནང་ རྒྱུན་སྐྱོང་འབད་དེ་ `status.md` འདི་ དུས་མཐུན་བཟོ་དགོ།
+གནས་རིམ་ཚུ་གི་བར་ན་ མཚོ་གྲུའི་གནས་སྡུད།

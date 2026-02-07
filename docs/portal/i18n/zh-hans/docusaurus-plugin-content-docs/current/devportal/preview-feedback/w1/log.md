@@ -8,80 +8,82 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 feedback & telemetry log
 sidebar_label: W1 feedback log
 description: Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This log keeps the invite roster, telemetry checkpoints, and reviewer feedback for the
-**W1 partner preview** that accompanies the acceptance tasks in
-[`preview-feedback/w1/plan.md`](./plan.md) and the wave tracker entry in
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Update it whenever an invite
-is sent, telemetry snapshot recorded, or feedback item triaged so governance reviewers can replay
-the evidence without chasing external tickets.
+此日志保留邀请名册、遥测检查点和审阅者反馈
+**W1 合作伙伴预览**，伴随接受任务
+[`preview-feedback/w1/plan.md`](./plan.md) 和波形跟踪器条目
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md)。每当收到邀请时更新它
+发送、记录遥测快照或对反馈项目进行分类，以便治理审核者可以重播
+无需追寻外部票据即可获得证据。
 
-## Cohort roster
+## 队列名单
 
-| Partner ID | Request ticket | NDA received | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Completed 2025-04-26 | sorafs-op-01; focused on orchestrator doc parity evidence. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Completed 2025-04-26 | sorafs-op-02; validated Norito/telemetry cross-links. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Completed 2025-04-26 | sorafs-op-03; ran multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Completed 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Completed 2025-04-26 | torii-int-02; paired on Try it screenshot update (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Completed 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Completed 2025-04-26 | sdk-partner-02; compliance cleared 2025-04-11, focused on Connect/telemetry notes. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Completed 2025-04-26 | gateway-ops-01; audited gateway ops guide + anonymised Try it proxy flow. |
+|合作伙伴 ID |索取门票 |收到 NDA |邀请已发送 (UTC) |确认/首次登录 (UTC) |状态 |笔记|
+| ---| ---| ---| ---| ---| ---| ---|
+|合作伙伴-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ 2025-04-26 完成 |索拉夫-op-01；专注于协调器文档平价证据。 |
+|合作伙伴-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ 2025-04-26 完成 |索拉夫-op-02；已验证 Norito/遥测交叉链接。 |
+|合作伙伴-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ 2025-04-26 完成 |索拉夫-op-03；进行多源故障转移演练。 |
+|合作伙伴-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ 2025-04-26 完成 |鸟居-int-01； Torii `/v1/pipeline` + 尝试食谱评论。 |
+|合作伙伴-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ 2025-04-26 完成 |鸟居-int-02；配对尝试屏幕截图更新 (docs-preview/w1 #2)。 |
+|合作伙伴-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ 2025-04-26 完成 | SDK-合作伙伴-01； JS/Swift 食谱反馈 + ISO 桥完整性检查。 |
+|合作伙伴-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ 2025-04-26 完成 | SDK-合作伙伴-02；合规性于 2025 年 4 月 11 日通过，重点关注连接/遥测注释。 |
+|合作伙伴-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ 2025-04-26 完成 |网关-ops-01；审核网关操作指南 + 匿名尝试代理流程。 |
 
-Populate the **Invite sent** and **Ack** timestamps as soon as the outbound email is issued.
-Anchor the times to the UTC schedule defined in the W1 plan.
+发出出站电子邮件后，立即填充 **发送邀请** 和 **确认** 时间戳。
+将时间锚定到 W1 计划中定义的 UTC 时间表。
 
-## Telemetry checkpoints
+## 遥测检查点
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
-| --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards above + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards above + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+|时间戳 (UTC) |仪表板/探头|业主|结果 |文物|
+| ---| ---| ---| ---| ---|
+| 2025-04-06 18:05 | `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals` |文档/开发版本 + 操作 | ✅ 全绿色 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` 成绩单 |行动| ✅ 上演 | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals`、`probe:portal` |文档/开发版本 + 操作 | ✅ 预邀请快照，无回归 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 |上面的仪表板 + 尝试代理延迟差异 |文档/DevRel 领导 | ✅ 中点检查已通过（0 个警报；尝试一下延迟 p95=410ms）| `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 |上面的仪表板 + 出口探针 |文档/DevRel + 治理联络 | ✅ 退出快照，零未完成警报 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Daily office-hour samples (2025-04-13 → 2025-04-25) are bundled as NDJSON + PNG exports under
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` with filenames
-`docs-preview-integrity-<date>.json` and corresponding screenshots.
+每日办公时间样本 (2025-04-13 → 2025-04-25) 捆绑为 NDJSON + PNG 导出，位于
+`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` 与文件名
+`docs-preview-integrity-<date>.json` 和相应的屏幕截图。
 
-## Feedback & issue log
+## 反馈和问题日志
 
-Use this table to summarise reviewer-submitted findings. Link each entry to the GitHub/discuss
-ticket plus the structured form captured via
-[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
+使用此表总结审稿人提交的发现。将每个条目链接到 GitHub/讨论
+票证加上通过捕获的结构化表格
+[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)。
 
-| Reference | Severity | Owner | Status | Notes |
-| --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Clarified Try it nav wording + sidebar anchor (`docs/source/sorafs/tryit.md` updated with new label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Refreshed Try it screenshot + caption per reviewer request; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 Closed | Remaining comments were Q&A-only; captured in each partner’s feedback form under `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+|参考|严重性 |业主|状态 |笔记|
+| ---| ---| ---| ---| ---|
+| `docs-preview/w1 #1` |低|文档核心-02 | ✅ 2025-04-18 解决 |澄清“尝试一下”导航措辞 + 侧边栏锚点（`docs/source/sorafs/tryit.md` 使用新标签更新）。 |
+| `docs-preview/w1 #2` |低|文档核心-03 | ✅ 2025-04-19 解决 |根据审阅者请求刷新尝试屏幕截图 + 标题；人工制品 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`。 |
+| — |信息 |文档/DevRel 领导 | 🟢 已关闭 |其余评论仅限问答；在 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/` 下每个合作伙伴的反馈表中获取。 |
 
-## Knowledge check & survey tracking
+## 知识检查和调查跟踪
 
-1. Record quiz scores (target ≥90 %) for every reviewer; attach the exported CSV alongside the
-   invite artefacts.
-2. Collect the qualitative survey answers captured with the feedback form template and mirror them
-   under `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Schedule remediation calls for anyone scoring below threshold and log them in this file.
+1.记录每位审稿人的测验分数（目标≥90%）；将导出的 CSV 附加到
+   邀请文物。
+2. 收集通过反馈表模板捕获的定性调查答案并进行镜像
+   在 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/` 下。
+3. 为得分低于阈值的任何人安排补救电话，并将其记录在此文件中。
 
-All eight reviewers scored ≥94 % on the knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No remediation calls
-were required; survey exports for each partner live under
-`artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
+所有八位审稿人在知识检查中得分均≥94%（CSV：
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`）。没有接到任何补救电话
+被要求；调查每个合作伙伴的出口情况
+`artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`。
 
-## Artefact inventory
+## 文物清单
 
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: place reviewer-specific folders under
+- 预览描述符/校验和包：`artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- 探测 + 链路检查摘要：`artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- 尝试代理更改日志：`artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- 遥测导出：`artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- 每日办公时间遥测捆绑包：`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- 反馈 + 调查导出：将审阅者特定的文件夹放置在
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV and summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- 知识检查 CSV 和摘要：`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Keep the inventory in sync with the tracker issue. Attach hashes when copying artefacts to the
-governance ticket so auditors can verify the files without shell access.
+保持库存与跟踪器问题同步。将工件复制到时附加哈希值
+治理票证，以便审计员无需 shell 访问即可验证文件。

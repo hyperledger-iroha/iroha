@@ -7,66 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2025-12-29T18:16:35.940844+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
-% 2026-01-30
+% SM2/SM3/SM4 စာရင်းစစ် အောင်မြင်မှု သတ်မှတ်ချက်
+% Iroha Crypto အလုပ်အဖွဲ့
+ရာခိုင်နှုန်း 2026-01-30
 
-# Purpose
+#ရည်ရွယ်ချက်
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+ဤစစ်ဆေးမှုစာရင်းသည် အောင်မြင်မှုအတွက် လိုအပ်သော ခိုင်မာသော စံနှုန်းများကို ဖမ်းယူပါသည်။
+SM2/SM3/SM4 ပြင်ပစာရင်းစစ် ပြီးမြောက်ခြင်း။ ကာလအတွင်း ပြန်လည်သုံးသပ်သင့်သည်။
+စတင်ခြင်း၊ အခြေအနေစစ်ဆေးရေးဂိတ်တစ်ခုစီတွင် ပြန်လည်ကြည့်ရှုပြီး ထွက်ပေါက်ကို အတည်ပြုရန် အသုံးပြုသည်။
+ထုတ်လုပ်မှုတရားဝင်မှုအတွက် SM လက်မှတ်ရေးထိုးခြင်းကို မဖွင့်မီ အခြေအနေများ။
 
-# Pre-Engagement Readiness
+# စေ့စပ်ရေးအကြိုပြင်ဆင်မှု
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] အတိုင်းအတာ၊ ပေးအပ်နိုင်မှု၊ လျှို့ဝှက်ထားမှုနှင့် အပါအဝင် ချုပ်ဆိုထားသော စာချုပ်
+      ပြန်လည်ပြင်ဆင်ရေး အထောက်အပံ့ ဘာသာစကား။
+- [ ] စာရင်းစစ်အဖွဲ့သည် သိုလှောင်မှုကြေးမုံဝင်ရောက်ခွင့်၊ CI ပစ္စည်းများပုံးနှင့် တို့ကို လက်ခံရရှိသည်
+      `docs/source/crypto/sm_audit_brief.md` တွင်ဖော်ပြထားသောစာရွက်စာတမ်းအတွဲ။
+- [ ] အခန်းကဏ္ဍတစ်ခုစီအတွက် အရန်ထားရှိမှုဖြင့် အတည်ပြုထားသော အဆက်အသွယ်အမှတ်များ
+      (crypto၊ IVM၊ ပလပ်ဖောင်း ops၊ လုံခြုံရေး၊ docs)။
+- [ ] အတွင်းပိုင်းပါဝင်ပတ်သက်သူများသည် ပစ်မှတ်ထုတ်လွှတ်သည့်ရက်စွဲတွင် ချိန်ညှိကာ ဝင်းဒိုးများကို အေးခဲစေသည်။
+- [ ] SBOM တင်ပို့မှု (`cargo auditable` + CycloneDX) ထုတ်ပေးပြီး မျှဝေသည်။
+- [ ] OpenSSL/Tongsuo build provenance package ပြင်ဆင်ပြီး
+      (ရင်းမြစ် tarball hash၊ ဇာတ်ညွှန်းတည်ဆောက်မှု၊ ပြန်လည်ထုတ်လုပ်နိုင်မှုမှတ်စုများ)။
+- [ ] နောက်ဆုံး အဆုံးအဖြတ်ပေးသော စမ်းသပ်မှုရလဒ်များကို ဖမ်းယူထားသည်-
+      `scripts/sm_openssl_smoke.sh`၊ `cargo test -p iroha_crypto sm` နှင့်
+      Norito အသွားအပြန် ပွဲစဉ်များ။
+- [ ] Torii `/v1/node/capabilities` (`iroha runtime capabilities` မှတဆင့်) မှတ်တမ်းတင်ပြီး `crypto.sm` မန်နီးဖက်စ်အကွက်များနှင့် အရှိန်မြှင့်ခြင်းဆိုင်ရာ မူဝါဒလျှပ်တစ်ပြက်ရိုက်ချက်အား စစ်ဆေးအတည်ပြုခြင်း။
 
-# Engagement Execution
+# ထိတွေ့ဆက်ဆံမှု အကောင်အထည်ဖော်ခြင်း။
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] ရည်မှန်းချက်များကို မျှဝေနားလည်မှုဖြင့် ပြီးဆုံးသွားသော အလုပ်ရုံဆွေးနွေးပွဲ စတင်ခြင်း၊
+      အချိန်ဇယားများနှင့် ဆက်သွယ်ရေးလမ်းကြောင်းများ။
+- [ ] အပတ်စဉ် အခြေအနေအစီရင်ခံစာများ လက်ခံရရှိပြီး စမ်းသပ်စစ်ဆေးခြင်း၊ အန္တရာယ်စာရင်းကို အပ်ဒိတ်လုပ်ထားသည်။
+- [ ] တွေ့ရှိမှုများသည် ပြင်းထန်လာသောအခါတွင် ရှာဖွေတွေ့ရှိမှု တစ်ရက်အတွင်း ဆက်သွယ်ခဲ့သည်။
+      မြင့်မားသည် သို့မဟုတ် ဝေဖန်သည်။
+- [ ] စာရင်းစစ်အဖွဲ့သည် ≥2 CPU ဗိသုကာများ (x86_64၊
+      aarch64) ကိုက်ညီသော output များ။
+- [ ] ဘေးထွက်ချန်နယ် ပြန်လည်သုံးသပ်ခြင်းတွင် အဆက်မပြတ်အချိန် အထောက်အထားများ သို့မဟုတ် လက်တွေ့စမ်းသပ်ခြင်း ပါဝင်သည်။
+      Rust နှင့် FFI လမ်းကြောင်းနှစ်ခုလုံးအတွက် အထောက်အထားများ။
+- [ ] လိုက်နာမှုနှင့် စာရွက်စာတမ်းများကို ပြန်လည်သုံးသပ်ခြင်းသည် အော်ပရေတာလမ်းညွှန်ချက်နှင့်ကိုက်ညီကြောင်း အတည်ပြုသည်။
+      စည်းမျဉ်းစည်းကမ်းများ။
+- [ ] ရည်ညွှန်းအကောင်အထည်ဖော်မှုများအပေါ် ကွဲပြားသောစမ်းသပ်ခြင်း (RustCrypto၊
+      OpenSSL/Tongsuo) စာရင်းစစ်ကြီးကြပ်မှုဖြင့် လုပ်ဆောင်သည်။
+- [ ] Fuzz ကြိုးများကို အကဲဖြတ်ပြီး၊ ကွက်လပ်တည်ရှိသည့်နေရာတွင် မျိုးစေ့ကော်ပိုရာအသစ်ကို ပံ့ပိုးပေးသည်။
 
-# Remediation & Exit
+# ပြန်လည်ပြင်ဆင်ခြင်းနှင့် ထွက်ပေါက်
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] တွေ့ရှိချက်အားလုံးကို ပြင်းထန်မှု၊ ထိခိုက်မှု၊ အသုံးချနိုင်မှု၊ နှင့် အမျိုးအစားခွဲထားသည်။
+      ပြန်လည်ပြင်ဆင်ရေး အဆင့်များကို အကြံပြုထားသည်။
+- [ ] မြင့်မားသော/အရေးပါသောပြဿနာများသည် စာရင်းစစ်မှအတည်ပြုချက်ဖြင့် ဖာထေးမှုများ သို့မဟုတ် လျော့ပါးစေမှုများကို လက်ခံရရှိသည်
+      အတည်ပြုချက် လက်ကျန်အန္တရာယ်များကို မှတ်တမ်းတင်ထားသည်။
+- [ ] စာရင်းစစ်သည် ပုံသေပြဿနာများကို သက်သေပြခြင်း (ကွဲပြားမှု၊ စမ်းသပ်မှု
+      အလုပ်လုပ်ခြင်း သို့မဟုတ် လက်မှတ် ရေးထိုးခြင်း)။
+- [ ] နောက်ဆုံးအစီရင်ခံစာပေးပို့သည်- အမှုဆောင်အနှစ်ချုပ်၊ အသေးစိတ်တွေ့ရှိချက်များ၊ နည်းစနစ်၊
+      အဆုံးအဖြတ်စီရင်ချက်၊ လိုက်နာမှုစီရင်ချက်။
+- [ ] ပြည်တွင်းလက် မှတ်ရေးပိတ်အစည်းအဝေးသည် နောက်အဆင့်များ နိဂုံးချုပ်သည်၊ ထုတ်ပြန်သည့် ပြုပြင်ပြောင်းလဲမှုများ၊
+      နှင့်စာရွက်စာတမ်းအပ်ဒိတ်များ။
+- [ ] `status.md` ကို စာရင်းစစ်ရလဒ်နှင့် ထူးထူးခြားခြား ပြုပြင်မှုများဖြင့် အပ်ဒိတ်လုပ်ထားသည်
+      နောက်ဆက်တွဲ။
+- [ ] `docs/source/crypto/sm_program.md` (သင်ခန်းစာများ
+      သင်ယူ၊ အနာဂတ် ခိုင်မာစေမည့် အလုပ်များ)။

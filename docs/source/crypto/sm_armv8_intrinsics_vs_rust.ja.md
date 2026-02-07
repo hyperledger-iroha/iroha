@@ -6,81 +6,76 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 40185fd79a4d6bcb2a7f35cbb4a14ca8feb82f31e62b4e51f9a6f1657f524ed4
 source_last_modified: "2026-01-03T18:07:57.096028+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% ARMv8 SM3/SM4 Intrinsics vs Pure Rust Implementations
-% Iroha Crypto Working Group
+% ARMv8 SM3/SM4 組み込みと純粋な Rust 実装
+% Iroha 暗号ワーキング グループ
 % 2026-02-12
 
-# Prompt
+# プロンプト
 
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background:  
-> - Hyperledger Iroha is a Rust-based permissioned blockchain where every validator must execute deterministically so consensus cannot diverge.  
-> - Iroha uses the Chinese GM/T cryptographic primitives SM2 (signatures), SM3 (hash), and SM4 (block cipher) for certain regulatory deployments.  
-> - The team ships two SM3/SM4 implementations inside the validator stack:  
->   1. Pure Rust, bit-sliced, constant-time scalar code that runs on any CPU.  
->   2. ARMv8 NEON accelerated kernels that rely on the optional `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY` instructions exposed on newer Apple M-series and Arm server CPUs.  
-> - Accelerated code is behind runtime feature detection using `core::arch::aarch64` intrinsics; the system must avoid non-deterministic behaviour when threads migrate across big.LITTLE cores or when replicas are built with different compiler flags.  
-> Requested analysis:  
-> Compare the ARMv8 intrinsic implementations with the pure Rust fallbacks for deterministic blockchain verification. Discuss throughput/latency gains, determinism pitfalls (feature detection, heterogeneous cores, SIGILL risk, alignment, mixing execution paths), constant-time properties, and the operational safeguards—tests, manifests, telemetry, operator documentation—needed to keep all validators in sync even when some hardware supports the instructions and others do not.
+> あなたは、LLM が Hyperledger Iroha 暗号化チームの専門アドバイザーとして活動しています。  
+> 背景:  
+> - Hyperledger Iroha は Rust ベースの許可型ブロックチェーンであり、コンセンサスが発散できないように、すべてのバリデーターが決定論的に実行する必要があります。  
+> - Iroha は、特定の規制展開のために中国の GM/T 暗号化プリミティブ SM2 (署名)、SM3 (ハッシュ)、および SM4 (ブロック暗号) を使用します。  
+> - チームはバリデータースタック内に 2 つの SM3/SM4 実装を出荷します。  
+> 1. あらゆる CPU 上で実行できる、純粋な Rust、ビットスライスされた定数時間スカラー コード。  
+> 2. 新しい Apple M シリーズおよび Arm で公開されているオプションの `SM3PARTW1`、`SM3PARTW2`、`SM3SS1`、`SM3SS2`、`SM4E`、および `SM4EKEY` 命令に依存する ARMv8 NEON アクセラレーション カーネルサーバーCPU。  
+> - 高速化されたコードは、`core::arch::aarch64` 組み込み関数を使用したランタイム機能検出の背後にあります。システムは、スレッドが big.LITTLE コア間で移行する場合、またはレプリカが異なるコンパイラ フラグを使用して構築される場合、非決定的な動作を回避する必要があります。  
+> リクエストされた分析:  
+> 決定論的なブロックチェーン検証のために、ARMv8 の組み込み実装と純粋な Rust フォールバックを比較します。スループット/レイテンシーの向上、決定論の落とし穴 (機能検出、異種コア、SIGILL リスク、アライメント、実行パスの混合)、定数時間プロパティ、および一部のハードウェアがその命令をサポートし、他のハードウェアがサポートしていない場合でも、すべてのバリデーターの同期を保つために必要な運用上の安全策 (テスト、マニフェスト、テレメトリ、オペレーター文書) について説明します。
 
-# Summary
+# まとめ
 
-ARMv8-A devices that expose the optional `SM3` (`SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`) and `SM4` (`SM4E`, `SM4EKEY`) instruction sets can accelerate the GM/T hash and block cipher primitives substantially. However, deterministic blockchain execution demands tight control over feature detection, fallback parity, and constant-time behaviour. The following guidance covers how the two implementation strategies compare and what the Iroha stack must enforce.
+オプションの `SM3` (`SM3PARTW1`、`SM3PARTW2`、`SM3SS1`、`SM3SS2`) および `SM4` (`SM4E`、 `SM4EKEY`) 命令セットは、GM/T ハッシュおよびブロック暗号プリミティブを大幅に高速化できます。ただし、決定論的なブロックチェーンの実行には、機能検出、フォールバック パリティ、定数時間の動作を厳密に制御する必要があります。次のガイダンスでは、2 つの実装戦略を比較する方法と、Iroha スタックが強制する必要がある内容について説明します。
 
-# Implementation Comparison
+# 実装比較|側面 | ARMv8 組み込み (AArch64 インライン ASM/`core::arch::aarch64`) Pure Rust (ビットスライス/テーブルフリー) |
+|---------------------|------------------------------------------------------------|-------------------------------------|
+|スループット | Apple M シリーズおよび Neoverse V1 では、コアあたり SM3 ハッシュが 3 ～ 5 倍、SM4 ECB/CTR が最大 8 倍高速になります。メモリ制限がある場合、ゲインは徐々に減少します。 |ベースライン スループットはスカラー ALU によって制限され、回転します。 `aarch64` SHA 拡張機能 (コンパイラの自動ベクトル化経由) の恩恵を受ける場合もありますが、通常は NEON よりも同様の 3 ～ 8 倍の差があります。 |
+|レイテンシ |組み込みを使用した M2 での単一ブロックのレイテンシは約 30 ～ 40ns。システムコールでのショートメッセージハッシュと小さなブロック暗号化に適しています。 |ブロックあたり 90 ～ 120ns。競争力を維持するにはアンローリングが必要になる場合があり、命令キャッシュのプレッシャーが高まります。 |
+|コードサイズ |デュアル コード パス (組み込み + スカラー) とランタイム ゲーティングが必要です。 `cfg(target_feature)` を使用する場合、組み込みパスはコンパクトになります。 |単一パス。手動スケジュール テーブルにより若干大きくなりますが、ゲート ロジックはありません。 |
+|決定論 |ランタイムディスパッチを決定的な結果にロックし、クロススレッド機能プローブ競合を回避し、異種コアが異なる場合 (big.LITTLE など)、CPU アフィニティを固定する必要があります。 |デフォルトでは決定的です。ランタイム機能は検出されません。 |
+|一定時間の姿勢 |ハードウェアユニットはコアラウンドでは定数時間ですが、ラッパーはフォールバックまたはテーブルを混合するときにシークレットに依存した選択を回避する必要があります。 | Rust で完全に制御されます。正しくコード化されていれば、構築 (ビット スライス) によって定数時間が保証されます。 |
+|携帯性 | `aarch64` + オプション機能が必要です。 x86_64 および RISC-V は自動的にフォールバックします。 |どこでも使えます。パフォーマンスはコンパイラの最適化に依存します。 |
 
-| Aspect | ARMv8 Intrinsics (AArch64 Inline ASM/`core::arch::aarch64`) | Pure Rust (bit-sliced / table-free) |
-|--------|-------------------------------------------------------------|--------------------------------------|
-| Throughput | 3–5× faster SM3 hashing and up to 8× faster SM4 ECB/CTR per core on Apple M-series and Neoverse V1; gains taper when memory-bound. | Baseline throughput bound by scalar ALU and rotates; occasionally benefits from `aarch64` SHA extensions (via compiler auto-vectorisation) but usually lags NEON by similar 3–8× gap. |
-| Latency | Single-block latency ~30–40 ns on M2 with intrinsics; suits short-message hashing and small block encryption in syscalls. | 90–120 ns per block; may require unrolling to stay competitive, increasing instruction cache pressure. |
-| Code size | Requires dual code paths (intrinsics + scalar) and runtime gating; intrinsic path compact if using `cfg(target_feature)`. | Single path; slightly larger due to manual schedule tables but no gating logic. |
-| Determinism | Must lock runtime dispatch to deterministic outcome, avoid cross-thread feature probing races, and pin CPU affinity if heterogeneous cores differ (e.g., big.LITTLE). | Deterministic by default; no runtime feature detection. |
-| Constant-time posture | Hardware unit is constant-time for core rounds but wrapper must avoid secret-dependent selection when falling back or mixing tables. | Fully controlled in Rust; constant-time ensured by construction (bit-slicing) if coded correctly. |
-| Portability | Requires `aarch64` + optional features; x86_64 and RISC-V fall back automatically. | Works everywhere; performance depends on compiler optimisations. |
+# ランタイムディスパッチの落とし穴
 
-# Runtime Dispatch Pitfalls
+1. **非決定的な特徴プローブ**
+   - 問題: 異種の big.LITTLE SoC で `is_aarch64_feature_detected!("sm4")` をプローブすると、コアごとに異なる答えが得られる可能性があり、クロススレッドのワークスチールによって 1 つのブロック内のパスが混在する可能性があります。
+   - 軽減策: ノードの初期化中にハードウェア機能を 1 回だけキャプチャし、`OnceLock` を通じてブロードキャストし、VM または暗号クレート内で高速化されたカーネルを実行するときに CPU アフィニティとペアリングします。コンセンサスが重要な作業が開始された後は、機能フラグに基づいて分岐しないでください。
 
-1. **Non-deterministic feature probing**
-   - Problem: probing `is_aarch64_feature_detected!("sm4")` on heterogeneous big.LITTLE SoCs can yield different answers per core, and cross-thread work-stealing may mix paths inside one block.
-   - Mitigation: capture hardware capability exactly once during node initialisation, broadcast through `OnceLock`, and pair with CPU affinity when executing accelerated kernels inside the VM or crypto crates. Never branch on feature flags after consensus-critical work starts.
+2. **レプリカ間での混合精度**
+   - 問題: 異なるコンパイラで構築されたノードは、本質的な可用性に関して一致しない可能性があります (`target_feature=+sm4` コンパイル時有効化と実行時検出)。実行が異なるコード パスを経由する場合、マイクロアーキテクチャのタイミングが pow ベースのバックオフやレート リミッターに漏洩する可能性があります。
+   - 軽減策: 明示的な `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE` を使用して正規のビルド プロファイルを配布し、決定論的なフォールバック順序付けを要求し (たとえば、構成でハードウェアが有効にならない限りスカラーを優先します)、構成証明用のマニフェストに構成ハッシュを含めます。3. **Apple と Linux で利用可能な命令**
+   - 問題: Apple は、最新のシリコンおよび OS リリースでのみ SM4 命令を公開しています。 Linux ディストリビューションは、輸出承認が保留されているカーネルをマスクするためにカーネルにパッチを適用する場合があります。ガードせずに組み込み関数に依存すると、SIGILL が発生します。
+   - 軽減策: `std::arch::is_aarch64_feature_detected!` を介してゲートし、スモーク テストで `SIGILL` をキャッチし、欠落している組み込み関数を予期されたフォールバックとして処理します (依然として決定論的)。
 
-2. **Mixed precision across replicas**
-   - Problem: nodes built with different compilers may disagree on intrinsic availability (`target_feature=+sm4` compile-time enable vs runtime detection). If execution goes through different code paths, micro-architectural timing can leak into pow-based backoffs or rate limiters.
-   - Mitigation: distribute canonical build profiles with explicit `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE`, require deterministic fallback ordering (e.g., prefer scalar unless config enables hardware), and include a config hash in manifests for attestation.
+4. **並列チャンクとメモリの順序付け**
+   - 問題: 高速化されたカーネルは、反復ごとに複数のブロックを処理することがよくあります。アライメントされていない入力で NEON ロード/ストアを使用すると、Norito デシリアライズされたバッファーから供給されるときにエラーが発生したり、明示的なアライメント修正が必要になったりする可能性があります。
+   - 軽減策: ブロックにアライメントされた割り当て (`aligned_alloc` ラッパーを介した `SM4_BLOCK_SIZE` の倍数など) を維持し、デバッグ ビルドでアライメントを検証し、アライメントがずれている場合はスカラーにフォールバックします。
 
-3. **Instruction availability on Apple vs Linux**
-   - Problem: Apple exposes SM4 instructions only in newest silicon and OS releases; Linux distros may patch kernels to mask them pending export approvals. Relying on intrinsics without guard causes SIGILLs.
-   - Mitigation: gate via `std::arch::is_aarch64_feature_detected!`, catch `SIGILL` on smoke tests, and treat missing intrinsics as expected fallback (still deterministic).
+5. **命令キャッシュポイズニング攻撃**
+   - 問題: コンセンサスを持つ攻撃者は、弱いコア上の小さな I キャッシュ ラインをスラッシングするワークロードを作成し、アクセラレーションされたパスとスカラー パスの間のレイテンシの差を拡大する可能性があります。
+   - 軽減策: 決定的なチャンク サイズにスケジューリングを修正し、予測できない分岐を回避するためのパッド ループを修正し、ジッターが許容範囲内に収まることを確認するためのマイクロベンチ回帰テストを含めます。
 
-4. **Parallel chunking and memory ordering**
-   - Problem: accelerated kernels often process multiple blocks per iteration; using NEON loads/stores with unaligned inputs can fault or require explicit alignment fixes when fed by Norito-deserialised buffers.
-   - Mitigation: keep block-aligned allocations (e.g., `SM4_BLOCK_SIZE` multiples via `aligned_alloc` wrappers), validate alignment in debug builds, and fall back to scalar when misaligned.
+# 決定的な導入に関する推奨事項
 
-5. **Instruction cache poisoning attacks**
-   - Problem: consensus adversaries may craft workloads that thrash tiny I-cache lines on weaker cores, widening latency difference between accelerated and scalar paths.
-   - Mitigation: fix scheduling to deterministic chunk sizes, pad loops to avoid unpredictable branching, and include microbench regression tests to ensure jitter stays within tolerance windows.
+- **コンパイル時ポリシー:** リリース ビルドではデフォルトで有効になっている機能フラグ (`sm_accel_neon` など) の背後にあるアクセラレーション コードを維持しますが、パリティ カバレッジが成熟するまではテストネットの構成で明示的なオプトインが必要です。
+- **フォールバック パリティ テスト:** 加速パスとスカラー パスを連続して実行するゴールデン ベクトルを維持します (現在の `sm_neon_check` ワークフロー)。プロバイダーのサポートが開始されたら、SM3/SM4 GCM モードをカバーするように拡張します。
+- **マニフェスト構成証明:** ノードの Norito マニフェストに加速ポリシー (`hardware=sm-neon|scalar`) を含めて、ピア アドミッション中に相違を検出できるようにします。
+- **テレメトリ:** 両方のパスにわたる通話ごとの遅延を比較するメトリクスを出力します。発散が所定のしきい値 (例: >5% ジッター) を超えた場合に警告を発し、ハードウェア ドリフトの可能性を示します。
+- **ドキュメント:** 組み込み関数を有効または無効にする手順を含むオペレーター ガイダンス (`sm_operator_rollout.md`) を最新の状態に保ち、パスに関係なく決定的な動作が維持されることに注意してください。
 
-# Deterministic Deployment Recommendations
+# 参考文献
 
-- **Compile-time policy:** keep accelerated code behind a feature flag (e.g., `sm_accel_neon`) enabled by default in release builds, but require an explicit opt-in in configs for testnets until parity coverage is mature.
-- **Fallback parity tests:** maintain golden vectors that run accelerated and scalar paths back-to-back (current `sm_neon_check` workflow); extend to cover SM3/SM4 GCM modes once provider support lands.
-- **Manifest attestation:** include the acceleration policy (`hardware=sm-neon|scalar`) in the node’s Norito manifest to make divergence detectable during peer admission.
-- **Telemetry:** emit metrics comparing per-call latency across both paths; alert if divergence exceeds predetermined thresholds (e.g., >5 % jitter), signalling possible hardware drift.
-- **Documentation:** keep operator guidance (`sm_operator_rollout.md`) up to date with instructions for enabling/disabling intrinsics, and note that deterministic behaviour is preserved regardless of the path.
+- `crates/iroha_crypto/src/sm.rs` — NEON とスカラー実装フック。
+- `.github/workflows/sm-neon-check.yml` — パリティを保証する強制 NEON CI レーン。
+- `docs/source/crypto/sm_program.md` — ガードレールとパフォーマンス ゲートを解放します。
+- Arm アーキテクチャ リファレンス マニュアル、Armv8-A、セクション D13 (SM3/SM4 命令)。
+- GM/T 0002-2012、GM/T 0003-2012 — 比較テスト用の公式 SM3/SM4 仕様。
 
-# References
-
-- `crates/iroha_crypto/src/sm.rs` — NEON vs scalar implementation hooks.
-- `.github/workflows/sm-neon-check.yml` — forced-NEON CI lane ensuring parity.
-- `docs/source/crypto/sm_program.md` — release guardrails and performance gates.
-- Arm Architecture Reference Manual, Armv8-A, Section D13 (SM3/SM4 instructions).
-- GM/T 0002-2012, GM/T 0003-2012 — official SM3/SM4 specifications for comparison testing.
-
-## Standalone Prompt (Copy/Paste)
-
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background: Hyperledger Iroha is a Rust-based permissioned blockchain that requires deterministic execution across validators. The platform supports the Chinese GM/T SM2/SM3/SM4 cryptography suite. For SM3 and SM4, the codebase ships two implementations: (a) pure Rust bit-sliced constant-time scalar code that runs everywhere, and (b) ARMv8 NEON accelerated kernels that depend on the optional instructions `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY`. Accelerated paths are enabled via runtime feature detection using `core::arch::aarch64`; they must not introduce non-determinism when threads migrate across heterogeneous big.LITTLE cores or when replicas are built with different `target_feature` flags.  
-> Task: Compare the intrinsic-powered implementations with the scalar fallbacks for deterministic blockchain verification. Detail throughput and latency differences, enumerate determinism hazards (feature detection, heterogeneous cores, SIGILL behaviour, alignment, mixed execution paths), comment on constant-time posture, and recommend safeguards (testing strategy, manifest/attestation fields, telemetry, operator documentation) that ensure all validators remain in sync even if hardware capabilities differ.
+## スタンドアロン プロンプト (コピー/ペースト)> あなたは、LLM が Hyperledger Iroha 暗号化チームの専門アドバイザーとして活動しています。  
+> 背景: Hyperledger Iroha は、バリデータ間での決定的な実行を必要とする Rust ベースの許可型ブロックチェーンです。このプラットフォームは、中国の GM/T SM2/SM3/SM4 暗号化スイートをサポートしています。 SM3 および SM4 の場合、コードベースには 2 つの実装が同梱されています。(a) どこでも実行できる純粋な Rust ビットスライス定数時間スカラー コード、(b) オプションの命令 `SM3PARTW1`、`SM3PARTW2`、`SM3SS1`、`SM3SS2`、に依存する ARMv8 NEON アクセラレーション カーネル。 `SM4E`、および `SM4EKEY`。高速パスは、`core::arch::aarch64` を使用したランタイム機能検出によって有効になります。異種の big.LITTLE コア間でスレッドが移行する場合、または異なる `target_feature` フラグを使用してレプリカが構築される場合、非決定性を導入してはなりません。  
+> タスク: 決定論的なブロックチェーン検証のために、組み込みベースの実装とスカラー フォールバックを比較します。スループットとレイテンシーの違いを詳細に説明し、決定論上の危険性 (機能検出、異種コア、SIGILL の動作、アラインメント、混合実行パス) を列挙し、定数時間の姿勢についてコメントし、ハードウェア機能が異なる場合でもすべてのバリデーターの同期を確保するための安全策 (テスト戦略、マニフェスト/認証フィールド、テレメトリ、オペレーター文書) を推奨します。

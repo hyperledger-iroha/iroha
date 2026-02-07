@@ -7,54 +7,55 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2025-12-29T18:16:35.926037+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+# AND6 EU ཁྲིམས་ལུགས་མཚན་རྟགས་བཀག་པའི་རྗེས་དྲན་དཔེ་ཚད།
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+དྲན་ཐོ་འདི་གིས་ ལམ་གྱི་སབ་ཁྲ་གི་རྣམ་གྲངས་ **AND6** འདི་གི་ཧེ་མ་ལས་ ཁྲིམས་དོན་བསྐྱར་ཞིབ་འདི་ ཐོ་བཀོད་འབདཝ་ཨིན།
+EU (ETSI/GDPR) ཅ་རྙིང་ཐུམ་སྒྲིལ་འདི་ ཁྲིམས་ལུགས་ཚུ་ལུ་ ཕུལཝ་ཨིན། བསླབ་སྟོན་གྱིས་རིགས་མཚུངས་བཟོ་དགོ།
+འདི་ཊེམ་པེལེཊི་རེ་ལུ་ གསར་བཏོན་འབད་མི་རེ་ལུ་ མི་རློབས་བཏོནམ་ཨིནམ་དང་ འོག་གི་ས་སྒོ་ཚུ་ མི་རློབས་འབདཝ་ཨིནམ་དང་ མཚན་རྟགས་བཀོད་ཡོད་པའི་འདྲ་བཤུས་འདི་གསོག་འཇོག་འབད།
+བརྗེད་ཐོ་ནང་ལུ་ བསྒྱུར་བཅོས་འབད་མ་ཚུགས་པའི་ ཅ་རྙིང་ཚུ་དང་མཉམ་དུ།
 
-## Summary
+## བཅུད༌བསྡུ
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- **གསར་བཏོན་ / རླངས་འཁོར་:** `<e.g., 2026.1 GA>`
+- **བསྐྱར་ཞིབ་ཚེས་གྲངས་:** `<YYYY-MM-DD>`
+- **ཀོན་སེལ་ / བསྐྱར་ཞིབ་པ་:** `<name + organisation>`
+- **ཁྱབ་ཁོངས།:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- **མཐུན་འབྲེལ་གྱི་ཤོག་འཛིན་:** `<governance or legal issue IDs>`
 
-## Artefact Checklist
+## ཅ་རྙིང་དཔྱད་གཞི།
 
-| Artefact | SHA-256 | Location / Link | Notes |
-|----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+| ཅ་ཆས། | SHA-256 | ས་གནས་ / འབྲེལ་མཐུད། | དྲན་ཐོ། |
+|--------------------------------------------------------------------------------------
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + གཞུང་སྐྱོང་ཡིག་མཛོད་ | བཏོན་གཏང་ངོས་འཛིན་དང་ཉེན་ཁ་དཔེ་ཚད་བདེ་སྒྲིག་ཚུ་ངེས་གཏན་བཟོ། |
+| `gdpr_dpia_summary.md` | `<hash>` | སྣོད་ཐོ་གཅིག་པ་ / ས་གནས་ཀྱི་མེ་ལོང་ཚུ། | བསྐྱར་བཟོ་སྲིད་བྱུས་གཞི་བསྟུན་ཚུ་ `sdk/android/telemetry_redaction.md` མཐུན་སྒྲིག་འབད། |
+| `sbom_attestation.md` | `<hash>` | སྣོད་ཐོ་གཅིག་ + སྒྲུབ་བྱེད་བཱ་ཀེཊི་ནང་ བཱན་ཌལ་བསྡམས། | CycloneDX + འབྱུང་ཁུངས་མིང་རྟགས་ཚུ་བདེན་དཔྱད་འབད། |
+| སྒྲུབ་བྱེད་དྲན་དེབ་གྲལ་ཐིག་ | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | གྲལ་ཐིག་ཨང་ `<n>` |
+| ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་གི་ གློ་བུར་གྱི་ བུན་ཌལ་ | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | གསར་བཏོན་འདི་ལུ་བསྡམ་ཡོད་པའི་ འཐུས་ཤོར་གྱི་བསྐྱར་སྦྱོང་འདི་ ངེས་གཏན་བཟོཝ་ཨིན། |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> སྦུང་ཚན་ནང་ ཡིག་སྣོད་མངམ་ཡོད་པ་ཅིན་ (དཔེར་ན་ སྒེར་གསང་ཚུ་ཡོད་པ་ཅིན་ ཁ་སྐོང་གྲལ་ཐིག་ཚུ་མཐུད།
+> ཟུར་ཐོ་ཡང་ན་ཌི་པི་ཨའི་ཨེ་སྐད་སྒྱུར་ཚུ། ཅ་རྙིང་རེ་རེ་གིས་ དེ་གི་བསྒྱུར་བཅོས་མ་འབད་དགོ།
+> དམིགས་ཚད་དང་ དེ་བཟོ་མི་ བཟོ་བསྐྲུན་གྱི་ལཱ་འདི་ སྐྱེལ་བཙུགས་འབད།
 
-## Findings & Exceptions
+## ཐོང་མ་དང་ཁྱད་པར།
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(`None.` *(`None.` *(`None.` *(ལྷག་ལུས་ཉེན་ཁ་ཚུ་ཁྱབ་སྟེ་ མདའ་ཐོ་དང་གཅིག་ཁར་ཚབ་བཙུགས་ཏེ་ རྒུད་འཐུས་སྤྲོད་ནི།
+  ཚད་འཛིན་ཚུ་ ཡང་ན་ དགོས་མཁོ་བའི་ རྗེས་འཇུག་བྱ་བ་ཚུ།)*
 
-## Approval
+## གནང༌བ
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- **གྲོས་ཆོད་:** `<Approved / Approved with conditions / Blocked>`
+- **མཚན་རྟགས་ / དུས་ཚོད་:** `<digital signature or email reference>`
+- **རྗེས་སུ་འབྲང་པའི་ཇོ་བདག་:** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+མཐའ་མའི་དྲན་ཐོ་འདི་ གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་ བཱ་ཀེཊ་ལུ་ སྐྱེལ་བཙུགས་འབད་ཞིནམ་ལས་ ཨེསི་ཨེཆ་ཨེ་-༢༥༦ འདི་ འདྲ་བཤུས་རྐྱབས།
+`docs/source/compliance/android/evidence_log.csv`, ནང་ སྐྱེལ་བཙུགས་ལམ་འདི་ ༢༠༠༨ ལུ་འབྲེལ་མཐུད་འབད།
+`status.md`. གལ་ཏེ་ཐག་གཅོད་འདི་ “Blocked” ཡིན་ན།
+ཚོགས་ཆུང་དང་ཡིག་ཆའི་བཅོས་ཐབས་ཀྱི་གོ་རིམ་ཚུ་ ལམ་སྟོན་ས་ཁྲ་དང་ ལམ་སྟོན་གྱི་ ཚ་དྲོད་ཐོ་ཡིག་དང་ གཉིས་ཆ་ར་ནང་
+ཐབས་འཕྲུལ་-བརྟག་དཔྱད་ཁང་ནང་ གློ་བུར་དྲན་ཐོ་།

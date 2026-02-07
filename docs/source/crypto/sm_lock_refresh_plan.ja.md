@@ -6,49 +6,48 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2026-01-03T18:07:57.085103+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+//! SM スパイクに必要な Cargo.lock 更新をスケジュールする手順。
 
-# SM Feature `Cargo.lock` Refresh Plan
+# SM 機能 `Cargo.lock` リフレッシュ プラン
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+`--locked` が適用されている間、`iroha_crypto` の `sm` 機能スパイクは当初、`cargo check` を完了できませんでした。このメモは、認可された `Cargo.lock` アップデートの調整手順を記録し、そのニーズの現在のステータスを追跡します。
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **2026-02-12 更新:** 最近の検証では、オプションの `sm` 機能が既存のロックファイルを使用してビルドされるようになりました (`cargo check -p iroha_crypto --features sm --locked` は 7.9 秒のコールド/0.23 秒のウォームで成功します)。依存関係セットにはすでに `base64ct`、`ghash`、`opaque-debug`、`pem-rfc7468`、`pkcs8`、`polyval`、`primeorder`、 `sm2`、`sm3`、`sm4`、および `sm4-gcm` ため、即時のロック更新は必要ありません。将来の依存関係のバンプや新しいオプションのクレートに備えて、以下の手順をスタンバイしておいてください。
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## 更新が必要な理由
+- スパイクの以前の反復では、ロックファイルに欠落しているオプションのクレートを追加する必要がありました。現在のロック スナップショットには、すでに RustCrypto スタック (`sm2`、`sm3`、`sm4`、サポート コーデック、および AES ヘルパー) が含まれています。
+- リポジトリ ポリシーは依然として便宜的なロックファイル編集をブロックします。将来的に依存関係のアップグレードが必要な場合でも、以下の手順が引き続き適用されます。
+- 新しい SM 関連の依存関係が導入された場合、または既存の依存関係のバージョンアップが必要な場合に、チームが制御された更新を実行できるように、この計画を維持します。
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
+## 提案された調整手順
+1. **Crypto WG + Release Eng sync でリクエストを提起します (所有者: @crypto-wg リーダー)。**
+   - `docs/source/crypto/sm_program.md` を参照し、機能のオプションの性質に注意してください。
+   - 同時ロックファイル変更ウィンドウ (依存関係のフリーズなど) がないことを確認します。
+2. **ロック差分を含むパッチを準備します (所有者: @release-eng)。**
+   - `scripts/sm_lock_refresh.sh` (承認後) を実行して、必要なクレートのみを更新します。
+   - `cargo tree -p iroha_crypto --features sm` 出力をキャプチャします (スクリプトは `target/sm_dep_tree.txt` を出力します)。
+3. **セキュリティレビュー (所有者: @security-reviews)**
+   - 新しいクレート/バージョンが監査登録およびライセンスの期待と一致していることを確認します。
+   - サプライチェーントラッカーにハッシュを記録します。
+4. **マージウィンドウの実行。**
+   - ロックファイル デルタ、依存関係ツリーのスナップショット (アーティファクトとして添付)、および更新された監査メモのみを含む PR を送信します。
+   - マージ前に CI が `cargo check -p iroha_crypto --features sm` で実行されていることを確認します。
+5. **フォローアップタスク**
+   - `docs/source/crypto/sm_program.md` アクション項目チェックリストを更新します。
+   - この機能が `--features sm` を使用してローカルでコンパイルできることを SDK チームに通知します。## タイムラインと所有者
+|ステップ |ターゲット |オーナー |ステータス |
+|------|--------|------|----------|
+|次回の暗号WGコールでアジェンダスロットをリクエスト | 2025-01-22 |暗号WGリーダー | ✅ 完了 (レビューが完了したスパイクは更新せずに続行できます) |
+|ドラフト選択的 `cargo update` コマンド + サニティ差分 | 2025-01-24 |リリースエンジニアリング | ⚪ スタンバイ中 (新しいクレートが表示されたら再アクティブ化) |
+|新しいクレートのセキュリティレビュー | 2025-01-27 |セキュリティレビュー | ⚪ スタンバイ中 (更新再開時に監査チェックリストを再利用) |
+|ロックファイルの更新 PR をマージ | 2025-01-29 |リリースエンジニアリング | ⚪ スタンバイ中 |
+| SM プログラムのドキュメント チェックリストを更新 |マージ後 |暗号WGリーダー | ✅ `docs/source/crypto/sm_program.md` エントリ経由で対処 (2026-02-12) |
 
-## Timeline & owners
-| Step | Target | Owner | Status |
-|------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
-
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## 注意事項
+- 今後の更新を上記の SM 関連クレート (および `rfc6979` などのサポート ヘルパー) に制限し、ワークスペース全体の `cargo update` を回避します。
+- 推移的な依存関係によって MSRV ドリフトが発生する場合は、マージ前にそれを表面化します。
+- マージしたら、一時的な CI ジョブを有効にして、`sm` 機能のビルド時間を監視します。

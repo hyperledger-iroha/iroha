@@ -4,101 +4,99 @@ direction: rtl
 source: docs/portal/docs/sorafs/orchestrator-tuning.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-tuning
-title: Rollout e ajuste do orquestrador
-sidebar_label: Ajuste do orquestrador
-description: Padrões práticos, orientação de ajuste e checkpoints de auditoria para levar o orquestrador multi-origem à GA.
+ID: آرکسٹریٹر ٹوننگ
+عنوان: آرکسٹریٹر رول آؤٹ اور ٹیوننگ
+سائڈبار_لیبل: آرکسٹریٹر ٹیوننگ
+تفصیل: عملی معیارات ، ٹیوننگ رہنمائی ، اور ملٹی سورس آرکسٹریٹر کو GA میں لانے کے لئے آڈٹ چوکیاں۔
 ---
 
-:::note Fonte canônica
-Espelha `docs/source/sorafs/developer/orchestrator_tuning.md`. Mantenha as duas cópias alinhadas até que a documentação alternativa seja aposentada.
+::: نوٹ کینونیکل ماخذ
+آئینہ `docs/source/sorafs/developer/orchestrator_tuning.md`۔ متبادل دستاویزات ریٹائر ہونے تک دونوں کاپیاں منسلک رکھیں۔
 :::
 
-# Guia de rollout e ajuste do orquestrador
+# آرکسٹریٹر رول آؤٹ اور ٹیوننگ گائیڈ
 
-Este guia se baseia na [referência de configuração](orchestrator-config.md) e no
-[runbook de rollout multi-origem](multi-source-rollout.md). Ele explica
-como ajustar o orquestrador para cada fase de rollout, como interpretar os
-artefatos do scoreboard e quais sinais de telemetria devem estar prontos antes
-de ampliar o tráfego. Aplique as recomendações de forma consistente na CLI, nos
-SDKs e na automação para que cada nó siga a mesma política de fetch determinística.
+یہ گائیڈ [کنفیگریشن ریفرنس] (orchestrator-config.md) اور دی پر مبنی ہے
+[ملٹی سورس رول آؤٹ رن بک] (multi-source-rollout.md)۔ وہ وضاحت کرتا ہے
+ہر رول آؤٹ مرحلے کے لئے آرکسٹریٹر کو ایڈجسٹ کرنے کا طریقہ ، اس کی ترجمانی کیسے کریں
+اسکور بورڈ نمونے اور کون سے ٹیلی میٹری سگنل پہلے تیار رہنا چاہئے
+ٹریفک بڑھانے کے لئے. CLI میں مستقل طور پر سفارشات کا اطلاق کریں ،
+ایس ڈی کے اور آٹومیشن تاکہ ہر نوڈ ایک ہی ڈٹرمینسٹک بازیافت پالیسی کی پیروی کرے۔
 
-## 1. Conjuntos de parâmetros base
+## 1. بیس پیرامیٹر سیٹ
 
-Parta de um template de configuração compartilhado e ajuste um pequeno conjunto
-de knobs à medida que o rollout avança. A tabela abaixo captura os valores
-recomendados para as fases mais comuns; os valores não listados voltam aos
-padrões de `OrchestratorConfig::default()` e `FetchOptions::default()`.
+مشترکہ کنفیگریشن ٹیمپلیٹ سے شروع کریں اور ایک چھوٹا سا سیٹ موافقت کریں
+جیسے جیسے رول آؤٹ ترقی کرتا ہے۔ نیچے دیئے گئے جدول نے اقدار کو اپنی گرفت میں لیا ہے
+عام مراحل کے لئے تجویز کردہ ؛ اقدار درج نہیں ہیں
+`OrchestratorConfig::default()` اور `FetchOptions::default()` کے نمونے۔
 
-| Fase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notas |
-|------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Um limite de latência e uma janela de graça estreitos expõem telemetria ruidosa rapidamente. Mantenha retries baixos para revelar manifestos inválidos mais cedo. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Espelha os padrões de produção deixando folga para peers exploratórios. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Igual aos padrões; defina `telemetry_region` para que os dashboards possam separar o tráfego canário. |
-| **Disponibilidade geral** | `None` (usar todos os elegíveis) | `4` | `4` | `5000` | `900` | Aumente os limiares de retry e falha para absorver falhas transitórias enquanto as auditorias continuam reforçando o determinismo. |
+| مرحلہ | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | نوٹ |
+| ------ | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| ** لیب / سی آئی ** | `3` | `2` | `2` | `2500` | `300` | ایک تنگ تاخیر کی دہلیز اور فضل کی کھڑکی تیزی سے شور والے ٹیلی میٹری کو بے نقاب کرتی ہے۔ جلد ہی غلط ظاہر ہونے کو ظاہر کرنے کے لئے کوششیں کم رکھیں۔ |
+| ** اسٹیجنگ ** | `4` | `3` | `3` | `4000` | `600` | آئینہ کی پیداوار کے نمونے تلاش کرنے والے ساتھیوں کے لئے جگہ چھوڑ رہے ہیں۔ |
+| ** کینری ** | `6` | `3` | `3` | `5000` | `900` | معیارات کی طرح ؛ `telemetry_region` سیٹ کریں تاکہ ڈیش بورڈز کینری ٹریفک کو الگ کرسکیں۔ |
+| ** عمومی دستیابی ** | `None` (تمام اہل استعمال کریں) | `4` | `4` | `5000` | `900` | عارضی ناکامیوں کو جذب کرنے کے لئے دوبارہ کوشش اور ناکامی کی حد میں اضافہ کریں جبکہ آڈٹ عزم کو نافذ کرتے رہتے ہیں۔ |
 
-- `scoreboard.weight_scale` permanece no padrão `10_000` a menos que um sistema downstream exija outra resolução inteira. Aumentar a escala não altera a ordenação dos provedores; apenas emite uma distribuição de créditos mais densa.
-- Ao migrar entre fases, persista o bundle JSON e use `--scoreboard-out` para que a trilha de auditoria registre o conjunto exato de parâmetros.
+- `scoreboard.weight_scale` پہلے سے طے شدہ `10_000` پر رہتا ہے جب تک کہ کسی بہاو نظام کو کسی اور انٹیجر ریزولوشن کی ضرورت نہ ہو۔ پیمانے میں اضافے سے فراہم کنندگان کی ترتیب کو تبدیل نہیں کیا جاتا ہے۔ یہ صرف کریڈٹ کی تزئین کی تقسیم جاری کرتا ہے۔
+- جب مراحل کے مابین ہجرت کرتے ہو تو ، JSON بنڈل کو برقرار رکھیں اور `--scoreboard-out` استعمال کریں تاکہ آڈٹ ٹریل پیرامیٹرز کا عین مطابق سیٹ ریکارڈ کرے۔
 
-## 2. Higiene do scoreboard
+## 2. اسکور بورڈ حفظان صحت
 
-O scoreboard combina requisitos do manifesto, anúncios de provedores e telemetria.
-Antes de avançar:
+اسکور بورڈ ظاہر کی ضروریات ، فراہم کنندہ کے اعلانات اور ٹیلی میٹری کو یکجا کرتا ہے۔
+آگے بڑھنے سے پہلے:1. ** ٹیلی میٹری کی تازگی کی توثیق کریں۔ ** یقینی بنائیں کہ اسنیپ شاٹس کا حوالہ دیا گیا ہے
+   `--telemetry-json` تشکیل شدہ گریس ونڈو میں پکڑا گیا تھا۔ اندراجات
+   `telemetry_grace_secs` سے زیادہ پرانی `TelemetryStale { last_updated }` کے ساتھ ناکام۔
+   اس کو سخت لاک کی طرح سلوک کریں اور آگے بڑھنے سے پہلے ٹیلی میٹری برآمد کو اپ ڈیٹ کریں۔
+2. ** اہلیت کی وجوہات کا معائنہ کریں۔ ** نمونے کو برقرار رکھیں
+   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`۔ ہر اندراج
+   ناکامی کی صحیح وجہ کے ساتھ ایک بلاک `eligibility` لاتا ہے۔ اوور رائٹ نہ کریں
+   صلاحیت سے مماثلت یا میعاد ختم ہونے والے اشتہارات ؛ اپ اسٹریم پے لوڈ کو ٹھیک کریں۔
+3. ** وزن میں تبدیلیوں کا جائزہ لیں۔ ** فیلڈ `normalised_weight` کو ریلیز سے موازنہ کریں
+   پچھلا تبدیلیاں> 10 ٪ اشتہارات میں جان بوجھ کر تبدیلیوں کے ساتھ وابستہ ہونا چاہئے
+   یا ٹیلی میٹری اور رول آؤٹ لاگ میں ریکارڈ کرنے کی ضرورت ہے۔
+4. ** آرکائیو نمونے
+   حتمی اسکور بورڈ اسنیپ شاٹ جاری کریں۔ نوادرات کو ریلیز ریکارڈ سے منسلک کریں
+   ظاہر اور ٹیلی میٹری کے بنڈل کے آگے۔
+5. ** فراہم کنندہ مکس کے ریکارڈ ثبوت۔ ** `scoreboard.json` _e_ کا میٹا ڈیٹا
+   اسی طرح `summary.json` کو `provider_count` ، `gateway_provider_count` کو بے نقاب کرنا چاہئے
+   اور جائزہ لینے والوں کے لئے اخذ کردہ لیبل `provider_mix` یہ ثابت کرنے کے لئے کہ عملدرآمد تھا یا نہیں
+   `direct-only` ، `gateway-only` یا `mixed`۔ گیٹ وے کی گرفتاری رپورٹ `provider_count=0`
+   اور `provider_mix="gateway-only"` ، جبکہ مخلوط رنز کی ضرورت نہیں ہوتی ہے
+   دونوں ذرائع کے لئے صفر۔ `cargo xtask sorafs-adoption-check` ان شعبوں کو نافذ کرتا ہے
+   (اور جب گنتی/لیبل ڈائیورج ہوتا ہے تو ناکام ہوجاتا ہے) ، لہذا ہمیشہ ساتھ ساتھ چلائیں
+   `ci/check_sorafs_orchestrator_adoption.sh` یا آپ کی گرفتاری اسکرپٹ تیار کرنے کے لئے
+   `adoption_report.json` ثبوت بنڈل۔ جب Torii گیٹ وے ہیں
+   اس میں شامل ، `gateway_manifest_id`/`gateway_manifest_cid` کو کے میٹا ڈیٹا میں رکھیں
+   اسکور بورڈ تاکہ گود لینے کا گیٹ مینی فیسٹ لفافے سے باہمی تعلق رکھ سکے
+   پکڑے گئے فراہم کنندہ مکس کے ساتھ۔
 
-1. **Valide a frescura da telemetria.** Garanta que os snapshots referenciados por
-   `--telemetry-json` foram capturados dentro da janela de graça configurada. Entradas
-   mais antigas que `telemetry_grace_secs` falham com `TelemetryStale { last_updated }`.
-   Trate isso como um bloqueio rígido e atualize a exportação de telemetria antes de seguir.
-2. **Inspecione razões de elegibilidade.** Persista artefatos via
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Cada entrada
-   traz um bloco `eligibility` com a causa exata da falha. Não sobrescreva
-   desajustes de capacidade ou anúncios expirados; corrija o payload upstream.
-3. **Revise mudanças de peso.** Compare o campo `normalised_weight` com o release
-   anterior. Mudanças >10 % devem correlacionar com alterações deliberadas em anúncios
-   ou telemetria e precisam ser registradas no log de rollout.
-4. **Arquive artefatos.** Configure `scoreboard.persist_path` para que cada execução
-   emita o snapshot final do scoreboard. Anexe o artefato ao registro de release
-   junto ao manifesto e ao bundle de telemetria.
-5. **Registre evidências de mix de provedores.** A metadata de `scoreboard.json` _e_ o
-   `summary.json` correspondente devem expor `provider_count`, `gateway_provider_count`
-   e o label derivado `provider_mix` para que os revisores provem se a execução foi
-   `direct-only`, `gateway-only` ou `mixed`. Capturas gateway reportam `provider_count=0`
-   e `provider_mix="gateway-only"`, enquanto execuções mistas exigem contagens não
-   zero para ambas as fontes. `cargo xtask sorafs-adoption-check` impõe esses campos
-   (e falha quando contagens/labels divergem), então execute-o sempre junto com
-   `ci/check_sorafs_orchestrator_adoption.sh` ou seu script de captura para produzir
-   o bundle de evidência `adoption_report.json`. Quando gateways Torii estiverem
-   envolvidos, mantenha `gateway_manifest_id`/`gateway_manifest_cid` na metadata do
-   scoreboard para que o gate de adoção consiga correlacionar o envelope do manifesto
-   com o mix de provedores capturado.
+تفصیلی فیلڈ تعریفوں کے لئے ، دیکھیں
+`crates/sorafs_car/src/scoreboard.rs` اور CLI سمری ڈھانچہ بذریعہ بے نقاب
+`sorafs_cli fetch --json-out`۔
 
-Para definições detalhadas de campos, veja
-`crates/sorafs_car/src/scoreboard.rs` e a estrutura de resumo do CLI exposta por
-`sorafs_cli fetch --json-out`.
+## سی ایل آئی اور ایس ڈی کے جھنڈوں کا حوالہ
 
-## Referência de flags da CLI e SDK
+`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` دیکھیں) اور ریپر
+`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) شیئر کریں
+ایک ہی آرکیسٹریٹر کنفیگریشن سطح۔ مندرجہ ذیل جھنڈوں کا استعمال کریں
+رول آؤٹ شواہد پر قبضہ کرنا یا کیننیکل فکسچر کو دوبارہ چلاتے وقت:
 
-`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) e o wrapper
-`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) compartilham
-a mesma superfície de configuração do orquestrador. Use os seguintes flags ao
-capturar evidências de rollout ou ao reproduzir os fixtures canônicos:
+ملٹی سورس کے جھنڈوں کا مشترکہ حوالہ (CLI مدد اور دستاویزات رکھیں
+صرف اس فائل میں ترمیم کرکے مطابقت پذیر):- `--max-peers=<count>` محدود ہے کہ کتنے اہل فراہم کنندگان اسکور بورڈ فلٹر سے بچتے ہیں۔ تمام اہل فراہم کنندگان سے اسٹریم کرنے کے لئے اسے غیر مصدقہ چھوڑ دیں ، اور `1` صرف اس وقت مرتب کریں جب آپ جان بوجھ کر سنگل سورس فال بیک کو استعمال کررہے ہو۔ `maxPeers` KNOB کو SDKs (`SorafsGatewayFetchOptions.maxPeers` ، `SorafsGatewayFetchOptions.max_peers`) میں آئینہ دیتا ہے۔
+- `--retry-budget=<count>` `FetchOptions` کے ذریعہ لاگو ہونے والی ہر چیز کی بحالی کی حد کو آگے بڑھاتا ہے۔ تجویز کردہ اقدار کے لئے ٹیوننگ گائیڈ میں رول آؤٹ ٹیبل کا استعمال کریں۔ سی ایل آئی رنز جو ثبوت جمع کرتے ہیں وہ برابری کو برقرار رکھنے کے لئے ایس ڈی کے کے معیارات سے مماثل ہیں۔
+- `--telemetry-region=<label>` Prometheus `sorafs_orchestrator_*` سیریز (اور OTLP ریلے) کو خطے/ماحولیات کے لیبل کے ساتھ لیبل لگاتا ہے تاکہ ڈیش بورڈز علیحدہ لیب ، اسٹیجنگ ، کینری اور جی اے ٹریفک کو الگ کریں۔
+- `--telemetry-json=<path>` اسکور بورڈ کے ذریعہ حوالہ کردہ اسنیپ شاٹ کو انجیکشن دیتا ہے۔ اسکور بورڈ کے ساتھ ساتھ JSON کو برقرار رکھیں تاکہ آڈیٹر عملدرآمد کو دوبارہ چلاسکیں (اور `cargo xtask sorafs-adoption-check --require-telemetry` کے لئے یہ ثابت کرنے کے لئے کہ کون سے OTLP اسٹریم نے گرفتاری کو کھلایا ہے)۔
+- `--local-proxy-*` (`--local-proxy-mode` ، `--local-proxy-norito-spool` ، `--local-proxy-kaigi-spool` ، `--local-proxy-kaigi-policy`) پل آبزرور ہکس کو فعال کریں۔ جب سیٹ کیا جاتا ہے تو ، آرکسٹریٹر مقامی Norito/KAIGI پراکسی کے ذریعے حصوں کو بہلاتا ہے تاکہ براؤزر کے مؤکل ، گارڈ کیچز ، اور کیگی کمرے مورچا کے ذریعہ جاری کردہ وہی رسیدیں وصول کریں۔
+- `--scoreboard-out=<path>` (اختیاری طور پر `--scoreboard-now=<unix_secs>` کے ساتھ) آڈیٹرز کے لئے اہلیت کی سنیپ شاٹ برقرار ہے۔ رہائی کے ٹکٹ میں حوالہ کردہ مینی فیسٹ اور ٹیلی میٹری نمونے کے ساتھ مستقل JSON کو جوڑا۔
+- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` AD میٹا ڈیٹا میں تعی .ن ایڈجسٹمنٹ کا اطلاق کریں۔ ان جھنڈوں کو صرف مشقوں کے لئے استعمال کریں۔ پیداوار میں کمی کو گورننس نمونے کے ذریعے جانا چاہئے تاکہ ہر نوڈ ایک ہی پالیسی کے بنڈل کا اطلاق کرے۔
+- `--provider-metrics-out` / `--chunk-receipts-out` رول آؤٹ چیک لسٹ کے ذریعہ حوالہ کردہ حصوں کے لئے فراہم کنندہ اور رسیدوں کے ذریعہ صحت کی پیمائش برقرار رکھیں۔ گود لینے کے ثبوت ریکارڈ کرتے وقت دونوں نمونے منسلک کریں۔
 
-Referência compartilhada de flags multi-origem (mantenha a ajuda da CLI e os docs
-sincronizados editando apenas este arquivo):
-
-- `--max-peers=<count>` limita quantos provedores elegíveis sobrevivem ao filtro do scoreboard. Deixe sem configurar para fazer streaming de todos os provedores elegíveis e defina `1` apenas quando estiver exercitando deliberadamente o fallback de fonte única. Espelha o knob `maxPeers` nos SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` encaminha para o limite de retries por chunk aplicado por `FetchOptions`. Use a tabela de rollout no guia de ajuste para os valores recomendados; execuções de CLI que coletam evidências devem corresponder aos padrões dos SDKs para manter a paridade.
-- `--telemetry-region=<label>` rotula as séries Prometheus `sorafs_orchestrator_*` (e relés OTLP) com um label de região/ambiente para que os dashboards separem tráfego de lab, staging, canary e GA.
-- `--telemetry-json=<path>` injeta o snapshot referenciado pelo scoreboard. Persista o JSON ao lado do scoreboard para que auditores possam reproduzir a execução (e para que `cargo xtask sorafs-adoption-check --require-telemetry` prove qual stream OTLP alimentou a captura).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) habilitam os hooks do observador bridge. Quando definidos, o orquestrador transmite chunks através do proxy Norito/Kaigi local para que clientes de navegador, guard caches e salas Kaigi recebam os mesmos recibos emitidos por Rust.
-- `--scoreboard-out=<path>` (opcionalmente com `--scoreboard-now=<unix_secs>`) persiste o snapshot de elegibilidade para auditores. Sempre emparelhe o JSON persistido com os artefatos de telemetria e manifesto referenciados no ticket de release.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` aplicam ajustes determinísticos sobre a metadata de anúncios. Use esses flags apenas para ensaios; downgrades de produção devem passar por artefatos de governança para que cada nó aplique o mesmo bundle de política.
-- `--provider-metrics-out` / `--chunk-receipts-out` retêm métricas de saúde por provedor e recibos de chunks referenciados pela checklist de rollout; anexe ambos os artefatos ao registrar a evidência de adoção.
-
-Exemplo (usando o fixture publicado):
+مثال (شائع شدہ حقیقت کا استعمال کرتے ہوئے):
 
 ```bash
 sorafs_cli fetch \
@@ -115,111 +113,107 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-Os SDKs consomem a mesma configuração via `SorafsGatewayFetchOptions` no cliente
-Rust (`crates/iroha/src/client.rs`), nos bindings JS
-(`javascript/iroha_js/src/sorafs.js`) e no SDK Swift
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Mantenha esses helpers em
-sincronia com os padrões da CLI para que operadores possam copiar políticas entre
-automação sem camadas de tradução sob medida.
+ایس ڈی کے کلائنٹ پر `SorafsGatewayFetchOptions` کے ذریعہ ایک ہی ترتیب کا استعمال کرتے ہیں
+JS پابندیوں میں ، مورچا (`crates/iroha/src/client.rs`)
+(`javascript/iroha_js/src/sorafs.js`) اور سوئفٹ SDK میں
+(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`)۔ ان مددگاروں کو اندر رکھیں
+سی ایل آئی کے معیار کے ساتھ مطابقت پذیری تاکہ آپریٹرز پالیسیوں کے درمیان کاپی کرسکیں
+بیسپوک ٹرانسلیشن پرتوں کے بغیر آٹومیشن۔
 
-## 3. Ajuste da política de fetch
+## 3. بازیافت کی پالیسی کو ایڈجسٹ کرنا
 
-`FetchOptions` controla retry, concorrência e verificação. Ao ajustar:
+`FetchOptions` دوبارہ کوشش ، ہم آہنگی ، اور توثیق کو کنٹرول کرتا ہے۔ جب ایڈجسٹ کرتے ہو:- ** دوبارہ کوششیں: ** `per_chunk_retry_limit` کو بڑھانا `4` میں اضافہ کرتا ہے
+  بازیابی ، لیکن فراہم کنندہ کی ناکامیوں کو ماسک کر سکتی ہے۔ `4` کو بطور رکھنے کو ترجیح دیں
+  کمزوروں کو بے نقاب کرنے کے لئے چھت اور فراہم کنندہ کی گردش پر انحصار کریں۔
+- ** ناکامی کی دہلیز: ** `provider_failure_threshold` وضاحت کرتا ہے جب کوئی فراہم کنندہ ہوتا ہے
+  سیشن کے بقیہ حصے کے لئے غیر فعال۔ اس قدر کو دوبارہ کوشش کرنے کی پالیسی کے ساتھ سیدھ کریں:
+  دوبارہ کوشش کرنے والے بجٹ سے کم دہلیز آرکسٹریٹر کو ایک ہم مرتبہ نکالنے پر مجبور کرتی ہے
+  تمام کوششوں کو ختم کرنے سے پہلے۔
+- **Concurrency:** Leave `global_parallel_limit` undefined (`None`) unless
+  ایک مخصوص ماحول اشتہار کی حدود کو پورا نہیں کرسکتا۔ جب سیٹ ،
+  اس بات کو یقینی بنائیں کہ قیمت ≤ فراہم کنندگان کے اسٹریم بجٹ کا مجموعہ ہے
+  فاقہ کشی سے بچیں۔
+- ** ٹوگل چیک کریں: ** `verify_lengths` اور `verify_digests` رہنا چاہئے
+  پیداوار میں فعال. جب وہ مخلوط بیڑے ہوتے ہیں تو وہ عزم کی ضمانت دیتے ہیں
+  فراہم کرنے والے ؛ صرف ان کو مبہم ماحول میں غیر فعال کریں۔
 
-- **Retries:** Elevar `per_chunk_retry_limit` acima de `4` aumenta o tempo de
-  recuperação, mas pode mascarar falhas de provedores. Prefira manter `4` como
-  teto e confiar na rotação de provedores para expor os fracos.
-- **Limiar de falhas:** `provider_failure_threshold` define quando um provedor é
-  desabilitado pelo restante da sessão. Alinhe esse valor à política de retry:
-  um limiar menor que o orçamento de retry força o orquestrador a ejetar um peer
-  antes de esgotar todos os retries.
-- **Concorrência:** Deixe `global_parallel_limit` sem definir (`None`) a menos que
-  um ambiente específico não consiga saturar os ranges anunciados. Quando definido,
-  garanta que o valor seja ≤ à soma dos orçamentos de streams dos provedores para
-  evitar starvation.
-- **Toggles de verificação:** `verify_lengths` e `verify_digests` devem permanecer
-  habilitados em produção. Eles garantem determinismo quando há frotas mistas de
-  provedores; desative-os apenas em ambientes isolados de fuzzing.
+## 4. ٹرانسپورٹ اسٹیج اور گمنامی
 
-## 4. Estágio de transporte e anonimato
+فیلڈز `rollout_phase` ، `anonymity_policy` اور `transport_policy` سے استعمال کریں
+رازداری کے موقف کی نمائندگی کریں:
 
-Use os campos `rollout_phase`, `anonymity_policy` e `transport_policy` para
-representar a postura de privacidade:
+- `rollout_phase="snnet-5"` کو ترجیح دیں اور پہلے سے طے شدہ گمنامی کی پالیسی کو قابل بنائیں
+  Snnet-5 سنگ میل کو ٹریک کریں۔ صرف `anonymity_policy_override` کے ذریعے تبدیل کریں
+  جب گورننس ایک دستخط شدہ ہدایت جاری کرتا ہے۔
+- `transport_policy="soranet-first"` کو بیس کے طور پر رکھیں جبکہ SNNET-4/5/5A/5B/6A/7/8/8/12/13 ہیں 🈺
+  (`roadmap.md` دیکھیں)۔ صرف ڈاون گریڈ کے لئے `transport_policy="direct-only"` استعمال کریں
+  دستاویزات یا تعمیل کی مشقیں اور اس سے پہلے پی کیو کوریج کے جائزے کا انتظار کریں
+  `transport_policy="soranet-strict"` کو فروغ دینے کے لئے - یہ سطح صرف اگر صرف اگر صرف ناکام ہوجاتی ہے
+  کلاسیکی ریلے باقی ہے۔
+- `write_mode="pq-only"` کو صرف اس وقت نافذ کیا جانا چاہئے جب ہر لکھنے کا راستہ (SDK ،
+  آرکسٹریٹر ، گورننس ٹولنگ) پی کیو کی ضروریات کو پورا کرسکتا ہے۔ کے دوران
+  رول آؤٹ ، ہنگامی ردعمل کے ل I `write_mode="allow-downgrade"` رکھیں
+  براہ راست راستوں کا استعمال کرسکتے ہیں جبکہ ٹیلی میٹری ڈاون گریڈ کا اشارہ کرتی ہے۔
+- گارڈ کا انتخاب اور سرکٹ اسٹیجنگ سورنیٹ ڈائرکٹری پر منحصر ہے۔
+  `relay_directory` کے دستخط شدہ اسنیپ شاٹ فراہم کریں اور `guard_set` کے کیشے کو برقرار رکھیں
+  تاکہ گارڈ منشور متفقہ برقرار رکھنے والی ونڈو میں رہتا ہے۔ تاثر
+  `sorafs_cli fetch` کے ذریعہ ریکارڈ کردہ کیشے فنگر پرنٹ رول آؤٹ شواہد کا ایک حصہ ہے۔
 
-- Prefira `rollout_phase="snnet-5"` e permita que a política de anonimato padrão
-  acompanhe os marcos do SNNet-5. Substitua via `anonymity_policy_override` apenas
-  quando a governança emitir uma diretiva assinada.
-- Mantenha `transport_policy="soranet-first"` como base enquanto SNNet-4/5/5a/5b/6a/7/8/12/13 estiverem 🈺
-  (veja `roadmap.md`). Use `transport_policy="direct-only"` somente para downgrades
-  documentados ou exercícios de compliance e aguarde a revisão de cobertura PQ antes
-  de promover `transport_policy="soranet-strict"` — esse nível falha rápido se apenas
-  relés clássicos permanecerem.
-- `write_mode="pq-only"` só deve ser imposto quando cada caminho de escrita (SDK,
-  orquestrador, tooling de governança) puder satisfazer requisitos PQ. Durante
-  rollouts, mantenha `write_mode="allow-downgrade"` para que respostas de emergência
-  possam usar rotas diretas enquanto a telemetria sinaliza o downgrade.
-- A seleção de guards e o staging de circuitos dependem do diretório SoraNet.
-  Forneça o snapshot assinado de `relay_directory` e persista o cache de `guard_set`
-  para que o churn de guards permaneça na janela de retenção acordada. A impressão
-  digital do cache registrada por `sorafs_cli fetch` faz parte da evidência de rollout.
+## 5. ڈاون گریڈ اور تعمیل ہکس
 
-## 5. Hooks de downgrade e compliance
+دو آرکیسٹریٹر سب سسٹم آپ کو دستی مداخلت کے بغیر پالیسی نافذ کرنے میں مدد کرتے ہیں:- ** ڈاؤن گریڈ تدارک ** (`downgrade_remediation`): واقعات کی نگرانی کرتا ہے
+  `handshake_downgrade_total` ، اور تشکیل شدہ `threshold` کے بعد سے تجاوز کر گیا ہے
+  `window_secs` ، مقامی پراکسی کو `target_mode` پر مجبور کرتا ہے (صرف میٹا ڈیٹا صرف بطور ڈیفالٹ)۔
+  ڈیفالٹس (`threshold=3` ، `window=300` ، `cooldown=900`) رکھیں
+  واقعے کے جائزے ایک اور نمونہ کی نشاندہی کرتے ہیں۔ میں کسی بھی اوور رائڈ کو دستاویز کریں
+  رول آؤٹ لاگ اور یقینی بنائیں کہ ڈیش بورڈز ٹریک `sorafs_proxy_downgrade_state`۔
+- ** تعمیل پالیسی ** (`compliance`): دائرہ اختیار اور ظاہر کارف آؤٹ
+  گورننس کے زیر انتظام آپٹ آؤٹ فہرستوں کے ذریعے بہاؤ۔ کبھی بھی ایڈہاک اوور رائڈز داخل نہ کریں
+  کنفیگریشن بنڈل میں ؛ اس کے بجائے ، سے دستخط شدہ اپ ڈیٹ کی درخواست کریں
+  `governance/compliance/soranet_opt_outs.json` اور دوبارہ تیار کردہ JSON کو دوبارہ پیش کریں۔
 
-Dois subsistemas do orquestrador ajudam a impor a política sem intervenção manual:
+دونوں سسٹمز کے لئے ، نتیجے میں کنفیگریشن بنڈل کو برقرار رکھیں اور اسے شامل کریں
+ریلیز شواہد میں تاکہ آڈیٹر ٹریک کرسکیں کہ کمی کتنی کمی تھی
+چالو.
 
-- **Remediação de downgrade** (`downgrade_remediation`): monitora eventos
-  `handshake_downgrade_total` e, após o `threshold` configurado ser excedido em
-  `window_secs`, força o proxy local para `target_mode` (metadata-only por padrão).
-  Mantenha os padrões (`threshold=3`, `window=300`, `cooldown=900`) a menos que
-  revisões de incidentes indiquem outro padrão. Documente qualquer override no
-  log de rollout e garanta que os dashboards acompanhem `sorafs_proxy_downgrade_state`.
-- **Política de compliance** (`compliance`): carve-outs de jurisdição e manifesto
-  fluem por listas de opt-out geridas pela governança. Nunca insira overrides ad hoc
-  no bundle de configuração; em vez disso, solicite uma atualização assinada de
-  `governance/compliance/soranet_opt_outs.json` e reimplante o JSON gerado.
+## 6. ٹیلی میٹری اور ڈیش بورڈز
 
-Para ambos os sistemas, persista o bundle de configuração resultante e inclua-o
-nas evidências de release para que auditores possam rastrear como as reduções foram
-acionadas.
+رول آؤٹ کو وسعت دینے سے پہلے ، تصدیق کریں کہ مندرجہ ذیل سگنل اس پر سرگرم ہیں
+ہدف ماحول:
 
-## 6. Telemetria e dashboards
-
-Antes de ampliar o rollout, confirme que os seguintes sinais estão ativos no
-ambiente alvo:
-
-- `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  deve estar em zero após a conclusão do canary.
-- `sorafs_orchestrator_retries_total` e
-  `sorafs_orchestrator_retry_ratio` — devem se estabilizar abaixo de 10 % durante
-  o canary e permanecer abaixo de 5 % após GA.
-- `sorafs_orchestrator_policy_events_total` — valida que a etapa de rollout esperada
-  está ativa (label `stage`) e registra brownouts via `outcome`.
+- `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` -
+  کینری مکمل ہونے کے بعد صفر پر ہونا چاہئے۔
+- `sorafs_orchestrator_retries_total` اور
+  `sorafs_orchestrator_retry_ratio` - اس کے دوران 10 ٪ سے نیچے مستحکم ہونا ضروری ہے
+  کینری اور GA کے بعد 5 ٪ سے نیچے رہیں۔
+- `sorafs_orchestrator_policy_events_total` - اس کی توثیق کرتا ہے کہ متوقع رول آؤٹ مرحلہ
+  فعال ہے (لیبل `stage`) اور `outcome` کے ذریعے براؤن آؤٹ رجسٹر کرتا ہے۔
 - `sorafs_orchestrator_pq_candidate_ratio` /
-  `sorafs_orchestrator_pq_deficit_ratio` — acompanham o suprimento de relés PQ em
-  relação às expectativas da política.
-- Alvos de log `telemetry::sorafs.fetch.*` — devem ser enviados ao agregador de logs
-  compartilhado com buscas salvas para `status=failed`.
+  `sorafs_orchestrator_pq_deficit_ratio` - میں پی کیو ریلے کی فراہمی میں شامل ہے
+  پالیسی کی توقعات کے سلسلے میں۔
+- لاگ ان اہداف `telemetry::sorafs.fetch.*` - لاگ ان جمع کرنے والے کو بھیجا جانا چاہئے
+  `status=failed` کے لئے محفوظ شدہ تلاشی کے ساتھ مشترکہ ہے۔
 
-Carregue o dashboard Grafana canônico em
-`dashboards/grafana/sorafs_fetch_observability.json` (exportado no portal em
-**SoraFS → Fetch Observability**) para que os seletores de região/manifesto, o
-heatmap de retries por provedor, os histogramas de latência de chunks e os
-contadores de stall correspondam ao que o SRE revisa durante os burn-ins. Conecte
-as regras do Alertmanager em `dashboards/alerts/sorafs_fetch_rules.yml` e valide a
-sintaxe do Prometheus com `scripts/telemetry/test_sorafs_fetch_alerts.sh` (o helper
-executa `promtool test rules` localmente ou em Docker). As passagens de alertas
-exigem o mesmo bloco de roteamento que o script imprime para que operadores possam
-anexar a evidência ao ticket de rollout.
+کیننیکل Grafana ڈیش بورڈ میں لوڈ کریں
+`dashboards/grafana/sorafs_fetch_observability.json` (پورٹل پر برآمد ہوا
+** SoraFS → بازیافت کی بازیافت **) تاکہ اس خطے/ظاہر سلیکٹرز ، دی
+ہر فراہم کنندہ ، حصہ لیٹینسی ہسٹگرامس اور کی بحالی کا ہیٹ میپ
+اسٹال کاؤنٹرز سے ملتے ہیں جو برن انز کے دوران SRE کا جائزہ لیتے ہیں۔ جڑیں
+`dashboards/alerts/sorafs_fetch_rules.yml` میں الرٹ مینجر کے قواعد ہیں اور اس کی توثیق کریں
+`scripts/telemetry/test_sorafs_fetch_alerts.sh` (مددگار
+`promtool test rules` مقامی طور پر یا Docker پر چلتا ہے)۔ انتباہ کے حصے
+وہی روٹنگ بلاک کی ضرورت ہے جو اسکرپٹ پرنٹ کرتا ہے تاکہ آپریٹرز کرسکیں
+ثبوت رول آؤٹ ٹکٹ سے منسلک کریں۔
 
-### Fluxo de burn-in de telemetria
+### ٹیلی میٹری برن ان فلو
 
-O item de roadmap **SF-6e** exige um burn-in de telemetria de 30 dias antes de
-alternar o orquestrador multi-origem para seus padrões GA. Use os scripts do
-repositório para capturar um bundle de artefatos reproduzível para cada dia da
-janela:
+روڈ میپ آئٹم ** SF-6E ** اس سے پہلے 30 دن کے ٹیلی میٹری برن ان کی ضرورت ہے
+ملٹی سورس آرکسٹریٹر کو اپنے GA ڈیفالٹس میں تبدیل کریں۔ اسکرپٹس کا استعمال کریں
+کے ہر دن کے لئے نمونے کے تولیدی بنڈل پر قبضہ کرنے کے لئے ذخیرہ
+ونڈو:
 
-1. Execute `ci/check_sorafs_orchestrator_adoption.sh` com as variáveis de burn-in
-   configuradas. Exemplo:
+1. برن ان متغیرات کے ساتھ `ci/check_sorafs_orchestrator_adoption.sh` چلائیں
+   تشکیل شدہ مثال:
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -228,42 +222,40 @@ janela:
    SORAFS_BURN_IN_DAY=7 \
    SORAFS_BURN_IN_WINDOW_DAYS=30 \
    ci/check_sorafs_orchestrator_adoption.sh
-   ```
+   ```مددگار `fixtures/sorafs_orchestrator/multi_peer_parity_v1` کھیلتا ہے ،
+   `scoreboard.json` ، `summary.json` ، `provider_metrics.json` لکھتا ہے ،
+   `chunk_receipts.json` اور `adoption_report.json` in
+   `artifacts/sorafs_orchestrator/<timestamp>/` ، اور کم از کم تعداد مسلط کرتا ہے
+   `cargo xtask sorafs-adoption-check` کے ذریعے اہل فراہم کنندہ۔
+2. جب برن ان متغیرات موجود ہوں تو ، اسکرپٹ بھی آؤٹ پزیر ہوتا ہے
+   `burn_in_note.json` ، لیبل پر قبضہ کرنا ، دن کا انڈیکس ، مینی فیسٹ ID ،
+   ٹیلی میٹری کا ماخذ اور نمونے ہضم ہوتا ہے۔ اس JSON کو لاگ میں شامل کریں
+   یہ واضح کرنے کے لئے رول آؤٹ 30 دن کی ونڈو کے ہر دن کونسی کیچ مطمئن کرتا ہے۔
+3. تازہ ترین Grafana ڈیش بورڈ (`dashboards/grafana/sorafs_fetch_observability.json`) درآمد کریں
+   اسٹیجنگ/پروڈکشن ورک اسپیس کے لئے ، اسے برن ان لیبل کے ساتھ نشان زد کریں اور تصدیق کریں
+   ہر پین ٹیسٹ کے تحت ظاہر/خطے کے نمونے دکھاتا ہے۔
+4. چلائیں `scripts/telemetry/test_sorafs_fetch_alerts.sh` (یا `promtool test rules …`)
+   جب بھی `dashboards/alerts/sorafs_fetch_rules.yml` اس دستاویز میں تبدیل ہوتا ہے
+   الرٹ روٹنگ برن ان کے دوران برآمد شدہ میٹرکس سے مساوی ہے۔
+5. ڈیش بورڈ اسنیپ شاٹ ، الرٹ ٹیسٹ آؤٹ پٹ ، اور لاگ ٹیل کو محفوظ شدہ دستاویزات
+   `telemetry::sorafs.fetch.*` آرکسٹریٹر نمونے کے خلاف تلاش کرتا ہے
+   کہ گورننس سسٹم سے میٹرکس نکالے بغیر شواہد کو دوبارہ پیش کرسکتی ہے
+   پیداوار میں
 
-   O helper reproduz `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   grava `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json` e `adoption_report.json` em
-   `artifacts/sorafs_orchestrator/<timestamp>/`, e impõe um número mínimo de
-   provedores elegíveis via `cargo xtask sorafs-adoption-check`.
-2. Quando as variáveis de burn-in estão presentes, o script também emite
-   `burn_in_note.json`, capturando o label, o índice do dia, o id do manifesto,
-   a fonte de telemetria e os digests dos artefatos. Anexe esse JSON ao log de
-   rollout para deixar claro qual captura satisfez cada dia da janela de 30 dias.
-3. Importe o dashboard Grafana atualizado (`dashboards/grafana/sorafs_fetch_observability.json`)
-   para o workspace de staging/produção, marque-o com o label de burn-in e confirme
-   que cada painel exibe amostras para o manifesto/região em teste.
-4. Execute `scripts/telemetry/test_sorafs_fetch_alerts.sh` (ou `promtool test rules …`)
-   sempre que `dashboards/alerts/sorafs_fetch_rules.yml` mudar para documentar que
-   o roteamento de alertas corresponde às métricas exportadas durante o burn-in.
-5. Arquive o snapshot do dashboard, a saída do teste de alertas e o tail de logs
-   das buscas `telemetry::sorafs.fetch.*` junto aos artefatos do orquestrador para
-   que a governança possa reproduzir a evidência sem extrair métricas de sistemas
-   em produção.
+## 7. رول آؤٹ چیک لسٹ
 
-## 7. Checklist de rollout
+1. امیدواروں کی تشکیل کا استعمال کرتے ہوئے سی آئی میں اسکور بورڈز کو دوبارہ تخلیق کریں اور اس پر قبضہ کریں
+   ورژن کنٹرول کے تحت نمونے۔
+2. ہر ماحول میں فکسچر کی عصبی بازیافت کو چلائیں (لیب ، اسٹیجنگ ،
+   کینری ، پروڈکشن) اور نمونے `--scoreboard-out` اور `--json-out` کو منسلک کریں
+   رول آؤٹ ریکارڈ۔
+3. آن کال انجینئر کے ساتھ ٹیلی میٹری ڈیش بورڈز کا جائزہ لیں ، اس بات کو یقینی بنائیں
+   مذکورہ بالا تمام میٹرکس میں براہ راست نمونے ہیں۔
+4. حتمی ترتیب کا راستہ ریکارڈ کریں (عام طور پر `iroha_config` کے ذریعے) اور
+   اعلانات اور تعمیل کے لئے استعمال ہونے والے گورننس ریکارڈ کا گٹ کمٹ۔
+5. رول آؤٹ ٹریکر کو اپ ڈیٹ کریں اور نئی کی ایس ڈی کے ٹیموں کو مطلع کریں
+   کسٹمر انضمام کو منسلک رکھنے کے لئے معیارات۔
 
-1. Regenere scoreboards em CI usando a configuração candidata e capture os
-   artefatos sob controle de versão.
-2. Execute o fetch determinístico dos fixtures em cada ambiente (lab, staging,
-   canary, produção) e anexe os artefatos `--scoreboard-out` e `--json-out` ao
-   registro de rollout.
-3. Revise dashboards de telemetria com o engenheiro de plantão, garantindo que
-   todas as métricas acima tenham amostras ao vivo.
-4. Registre o caminho final de configuração (geralmente via `iroha_config`) e o
-   commit git do registro de governança usado para anúncios e compliance.
-5. Atualize o tracker de rollout e notifique as equipes de SDK sobre os novos
-   padrões para manter as integrações de clientes alinhadas.
-
-Seguir este guia mantém os deployments do orquestrador determinísticos e
-passíveis de auditoria, enquanto fornece ciclos de feedback claros para ajustar
-orçamentos de retries, capacidade de provedores e postura de privacidade.
+اس گائیڈ کی پیروی کرنے سے آرکیسٹریٹر کی تعیناتیوں کا تعی .ن ہوتا ہے اور
+قابل اظہار ، جبکہ ایڈجسٹ کرنے کے لئے واضح آراء لوپ فراہم کرتے ہیں
+بجٹ ، فراہم کنندہ کی گنجائش اور رازداری کی کرنسی کی کوشش کرتا ہے۔

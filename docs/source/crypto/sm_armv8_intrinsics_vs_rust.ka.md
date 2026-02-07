@@ -7,80 +7,75 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 40185fd79a4d6bcb2a7f35cbb4a14ca8feb82f31e62b4e51f9a6f1657f524ed4
 source_last_modified: "2025-12-29T18:16:35.940026+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 % ARMv8 SM3/SM4 Intrinsics vs Pure Rust Implementations
-% Iroha Crypto Working Group
+% Iroha კრიპტო სამუშაო ჯგუფი
 % 2026-02-12
 
-# Prompt
+# მოწოდება
 
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background:  
-> - Hyperledger Iroha is a Rust-based permissioned blockchain where every validator must execute deterministically so consensus cannot diverge.  
-> - Iroha uses the Chinese GM/T cryptographic primitives SM2 (signatures), SM3 (hash), and SM4 (block cipher) for certain regulatory deployments.  
-> - The team ships two SM3/SM4 implementations inside the validator stack:  
->   1. Pure Rust, bit-sliced, constant-time scalar code that runs on any CPU.  
->   2. ARMv8 NEON accelerated kernels that rely on the optional `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY` instructions exposed on newer Apple M-series and Arm server CPUs.  
-> - Accelerated code is behind runtime feature detection using `core::arch::aarch64` intrinsics; the system must avoid non-deterministic behaviour when threads migrate across big.LITTLE cores or when replicas are built with different compiler flags.  
-> Requested analysis:  
-> Compare the ARMv8 intrinsic implementations with the pure Rust fallbacks for deterministic blockchain verification. Discuss throughput/latency gains, determinism pitfalls (feature detection, heterogeneous cores, SIGILL risk, alignment, mixing execution paths), constant-time properties, and the operational safeguards—tests, manifests, telemetry, operator documentation—needed to keep all validators in sync even when some hardware supports the instructions and others do not.
+> თქვენ ხართ LLM, მოქმედებს როგორც Hyperledger Iroha კრიპტო გუნდის ექსპერტი მრჩეველი.  
+> ფონი:  
+> - Hyperledger Iroha არის Rust-ზე დაფუძნებული ნებადართული ბლოკჩეინი, სადაც ყველა ვალიდატორმა უნდა იმუშაოს დეტერმინისტულად, რათა კონსენსუსი არ განსხვავდებოდეს.  
+> - Iroha იყენებს ჩინურ GM/T კრიპტოგრაფიულ პრიმიტივებს SM2 (ხელმოწერები), SM3 (ჰეში) და SM4 (ბლოკის შიფრი) გარკვეული მარეგულირებელი განლაგებისთვის.  
+> - გუნდი აგზავნის ორ SM3/SM4 იმპლემენტაციას ვალიდატორის დასტაში:  
+> 1. Pure Rust, ბიტიანი, მუდმივი დროის სკალარული კოდი, რომელიც მუშაობს ნებისმიერ CPU-ზე.  
+> 2. ARMv8 NEON დაჩქარებული ბირთვები, რომლებიც ეყრდნობა არასავალდებულო `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, Hyperledger, Hyperledger, და Hyperledger, Hyperledger, და Iroha, Hyperledger, და M-სერიის და Arm სერვერის პროცესორები.  
+> - `core::arch::aarch64` შიგთავსის გამოყენებით დაჩქარებული კოდი დგას გაშვების ფუნქციის გამოვლენის უკან; სისტემამ თავიდან უნდა აიცილოს არადეტერმინისტული ქცევა, როდესაც ძაფები გადადიან დიდ. LITTLE ბირთვებზე ან როდესაც რეპლიკა აგებულია სხვადასხვა შემდგენელი დროშებით.  
+> მოთხოვნილი ანალიზი:  
+> შეადარეთ ARMv8-ის შინაგანი იმპლემენტაციები სუფთა Rust-ის სანაცვლოდ დეტერმინისტული ბლოკჩეინის შემოწმებისთვის. განიხილეთ გამტარუნარიანობის/დაყოვნების მიღწევები, დეტერმინიზმის ხარვეზები (ფუნქციების გამოვლენა, ჰეტეროგენული ბირთვები, SIGILL რისკი, გასწორება, შესრულების გზების შერევა), მუდმივი დროის თვისებები და ოპერაციული გარანტიები - ტესტები, მანიფესტები, ტელემეტრია, ოპერატორის დოკუმენტაცია - საჭიროა ყველა ვალიდატორის სინქრონიზაციისთვის მაშინაც კი, როცა ზოგიერთი სხვა აპარატურა ინსტრუქციებს არ უჭერს მხარს.
 
-# Summary
+#რეზიუმე
 
-ARMv8-A devices that expose the optional `SM3` (`SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`) and `SM4` (`SM4E`, `SM4EKEY`) instruction sets can accelerate the GM/T hash and block cipher primitives substantially. However, deterministic blockchain execution demands tight control over feature detection, fallback parity, and constant-time behaviour. The following guidance covers how the two implementation strategies compare and what the Iroha stack must enforce.
+ARMv8-A მოწყობილობები, რომლებიც ამჟღავნებენ არასავალდებულო `SM3` (`SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`) და `SM3` (`SM4`) `SM4EKEY`) ინსტრუქციების კომპლექტს შეუძლია დააჩქაროს GM/T ჰეში და შიფრის პრიმიტივების არსებითად დაბლოკვა. თუმცა, დეტერმინისტული ბლოკჩეინის შესრულება მოითხოვს მჭიდრო კონტროლს ფუნქციების გამოვლენაზე, სარეზერვო პარიტეტზე და მუდმივ დროში ქცევაზე. შემდეგი ინსტრუქცია მოიცავს, თუ როგორ არის შედარებული ორი განხორციელების სტრატეგია და რა უნდა განახორციელოს Iroha დასტამ.
 
-# Implementation Comparison
-
-| Aspect | ARMv8 Intrinsics (AArch64 Inline ASM/`core::arch::aarch64`) | Pure Rust (bit-sliced / table-free) |
-|--------|-------------------------------------------------------------|--------------------------------------|
-| Throughput | 3–5× faster SM3 hashing and up to 8× faster SM4 ECB/CTR per core on Apple M-series and Neoverse V1; gains taper when memory-bound. | Baseline throughput bound by scalar ALU and rotates; occasionally benefits from `aarch64` SHA extensions (via compiler auto-vectorisation) but usually lags NEON by similar 3–8× gap. |
-| Latency | Single-block latency ~30–40 ns on M2 with intrinsics; suits short-message hashing and small block encryption in syscalls. | 90–120 ns per block; may require unrolling to stay competitive, increasing instruction cache pressure. |
-| Code size | Requires dual code paths (intrinsics + scalar) and runtime gating; intrinsic path compact if using `cfg(target_feature)`. | Single path; slightly larger due to manual schedule tables but no gating logic. |
-| Determinism | Must lock runtime dispatch to deterministic outcome, avoid cross-thread feature probing races, and pin CPU affinity if heterogeneous cores differ (e.g., big.LITTLE). | Deterministic by default; no runtime feature detection. |
-| Constant-time posture | Hardware unit is constant-time for core rounds but wrapper must avoid secret-dependent selection when falling back or mixing tables. | Fully controlled in Rust; constant-time ensured by construction (bit-slicing) if coded correctly. |
-| Portability | Requires `aarch64` + optional features; x86_64 and RISC-V fall back automatically. | Works everywhere; performance depends on compiler optimisations. |
+# განხორციელების შედარება| ასპექტი | ARMv8 Intrinsics (AArch64 Inline ASM/`core::arch::aarch64`) | სუფთა ჟანგი (ნაჭრებად დაჭრილი / სუფრის გარეშე) |
+|--------|---------------------------------------------------------|
+| გამტარუნარიანობა | 3–5× უფრო სწრაფი SM3 ჰეშირება და 8× უფრო სწრაფი SM4 ECB/CTR თითო ბირთვზე Apple M-სერიასა და Neoverse V1-ზე; მეხსიერების შებოჭვისას იკლებს. | საბაზისო გამტარუნარიანობა შეკრულია სკალარული ALU-ით და ბრუნავს; ხანდახან სარგებლობს `aarch64` SHA გაფართოებებით (შემდგენელის ავტომატური ვექტორიზაციის საშუალებით), მაგრამ ჩვეულებრივ ჩამორჩება NEON-ს მსგავსი 3–8× უფსკრულით. |
+| შეყოვნება | ერთბლოკიანი შეყოვნება ~30–40ns M2-ზე შინაგანი მახასიათებლებით; შეესაბამება მოკლე შეტყობინებების ჰეშინგს და მცირე ბლოკის დაშიფვრას syscalls-ში. | 90–120ns თითო ბლოკზე; კონკურენტუნარიანობის შესანარჩუნებლად შეიძლება მოითხოვოს გადახვევა, რაც ზრდის ინსტრუქციის ქეში წნევას. |
+| კოდის ზომა | მოითხოვს ორმაგი კოდის ბილიკებს (შინაგანი + სკალარი) და გაშვების კარიბჭე; შიდა გზა კომპაქტურია, თუ იყენებთ `cfg(target_feature)`. | ერთი გზა; ოდნავ უფრო დიდი განრიგის სახელმძღვანელო ცხრილების გამო, მაგრამ არ არის კარიბჭის ლოგიკა. |
+| დეტერმინიზმი | უნდა დაიბლოკოს გაშვების დრო დეტერმინისტული შედეგისთვის, თავიდან იქნას აცილებული ჯვარედინი ძაფების გამოკვლევის რბოლები და CPU-ის მიახლოება, თუ ჰეტეროგენული ბირთვები განსხვავდება (მაგ., big.LITTLE). | დეტერმინისტული ნაგულისხმევად; არ არის გაშვების ფუნქციის ამოცნობა. |
+| მუდმივი პოზა | ტექნიკის ერთეული არის მუდმივი დრო ძირითადი რაუნდებისთვის, მაგრამ შეფუთვამ თავიდან უნდა აიცილოს საიდუმლოზე დამოკიდებულ არჩევანს უკან დაბრუნებისას ან ცხრილების შერევისას. | სრულად კონტროლირებადი რუსთში; მუდმივი დრო, რომელიც უზრუნველყოფილია კონსტრუქციით (ბიტი-მოჭრით), თუ სწორად არის კოდირებული. |
+| პორტაბელურობა | საჭიროებს `aarch64` + არჩევით ფუნქციებს; x86_64 და RISC-V ავტომატურად იშლება უკან. | მუშაობს ყველგან; შესრულება დამოკიდებულია შემდგენელის ოპტიმიზაციებზე. |
 
 # Runtime Dispatch Pitfalls
 
-1. **Non-deterministic feature probing**
-   - Problem: probing `is_aarch64_feature_detected!("sm4")` on heterogeneous big.LITTLE SoCs can yield different answers per core, and cross-thread work-stealing may mix paths inside one block.
-   - Mitigation: capture hardware capability exactly once during node initialisation, broadcast through `OnceLock`, and pair with CPU affinity when executing accelerated kernels inside the VM or crypto crates. Never branch on feature flags after consensus-critical work starts.
+1. ** არადეტერმინისტული მახასიათებლის ზონდირება **
+   - პრობლემა: `is_aarch64_feature_detected!("sm4")`-ის დათვალიერება ჰეტეროგენულ დიდზე. LITTLE SoC-ებს შეუძლიათ სხვადასხვა პასუხის გაცემა თითო ბირთვზე და ჯვარედინი სამუშაოს მოპარვამ შეიძლება აერიოს ბილიკები ერთ ბლოკში.
+   - შერბილება: აიღეთ აპარატურის შესაძლებლობები ზუსტად ერთხელ კვანძის ინიციალიზაციის დროს, გადაიცემა `OnceLock`-ის მეშვეობით და დააწყვილეთ CPU-ს აფინურობასთან VM-ში ან კრიპტო კრატებში დაჩქარებული ბირთვების შესრულებისას. არასოდეს განშტოდეთ მხატვრულ დროშებზე კონსენსუსის კრიტიკული სამუშაოს დაწყების შემდეგ.
 
-2. **Mixed precision across replicas**
-   - Problem: nodes built with different compilers may disagree on intrinsic availability (`target_feature=+sm4` compile-time enable vs runtime detection). If execution goes through different code paths, micro-architectural timing can leak into pow-based backoffs or rate limiters.
-   - Mitigation: distribute canonical build profiles with explicit `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE`, require deterministic fallback ordering (e.g., prefer scalar unless config enables hardware), and include a config hash in manifests for attestation.
+2. ** შერეული სიზუსტე რეპლიკებს შორის **
+   - პრობლემა: სხვადასხვა შემდგენლებით აგებულ კვანძებს შეიძლება არ ეთანხმებოდეს შინაგანი ხელმისაწვდომობა (`target_feature=+sm4` კომპილაციის დროის ჩართვა და გაშვების გამოვლენა). თუ შესრულება გადის სხვადასხვა კოდის ბილიკს, მიკროარქიტექტურულმა დრომ შეიძლება გაჟონოს pow-ზე დაფუძნებულ უკანა მხარეს ან განაკვეთის შემზღუდველებში.
+   - შერბილება: გაავრცელეთ კანონიკური აწყობის პროფილები აშკარა `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE`-ით, მოითხოვეთ განმსაზღვრელი სარეზერვო შეკვეთა (მაგ., უპირატესობა მიანიჭეთ სკალარს, თუ კონფიგურაცია არ ჩართავს აპარატურას) და ჩართეთ კონფიგურაციის ჰეში მანიფესტებში ატესტაციისთვის.3. **ინსტრუქციის ხელმისაწვდომობა Apple vs Linux-ზე **
+   - პრობლემა: Apple აქვეყნებს SM4 ინსტრუქციებს მხოლოდ უახლესი სილიკონის და OS გამოშვებებში; Linux-ის დისტრიბუტორებმა შეიძლება დააყენონ ბირთვები, რათა შენიღბონ ისინი ექსპორტის დამტკიცების მოლოდინში. მცველის გარეშე შინაგან ელემენტებზე დაყრდნობა იწვევს SIGILL-ებს.
+   - შერბილება: კარიბჭის გაღება `std::arch::is_aarch64_feature_detected!`-ით, დაჭერა `SIGILL` კვამლის ტესტებზე და გამოტოვებული შინაგანი ნაწილების მკურნალობა, როგორც მოსალოდნელია (ჯერ კიდევ განმსაზღვრელი).
 
-3. **Instruction availability on Apple vs Linux**
-   - Problem: Apple exposes SM4 instructions only in newest silicon and OS releases; Linux distros may patch kernels to mask them pending export approvals. Relying on intrinsics without guard causes SIGILLs.
-   - Mitigation: gate via `std::arch::is_aarch64_feature_detected!`, catch `SIGILL` on smoke tests, and treat missing intrinsics as expected fallback (still deterministic).
+4. **პარალელური ბლოკირება და მეხსიერების შეკვეთა **
+   - პრობლემა: დაჩქარებული ბირთვები ხშირად ამუშავებენ მრავალ ბლოკს თითო გამეორებაზე; NEON იტვირთება/საწყობების გამოყენებამ გაუსწორებელი შეყვანებით შეიძლება გამოიწვიოს გაუმართაობა ან მოითხოვოს აშკარა გასწორება, როდესაც იკვებება Norito-დესერიალიზებული ბუფერებით.
+   - შერბილება: შეინახეთ ბლოკთან გასწორებული გამოყოფები (მაგ., `SM4_BLOCK_SIZE` მრავლობითი `aligned_alloc` გარსაცმების მეშვეობით), დაადასტურეთ გასწორება გამართვის კონსტრუქციებში და დაუბრუნდით სკალარს, როდესაც არასწორია.
 
-4. **Parallel chunking and memory ordering**
-   - Problem: accelerated kernels often process multiple blocks per iteration; using NEON loads/stores with unaligned inputs can fault or require explicit alignment fixes when fed by Norito-deserialised buffers.
-   - Mitigation: keep block-aligned allocations (e.g., `SM4_BLOCK_SIZE` multiples via `aligned_alloc` wrappers), validate alignment in debug builds, and fall back to scalar when misaligned.
+5. **ინსტრუქციის ქეშის მოწამვლის შეტევები **
+   - პრობლემა: კონსენსუსმა მოწინააღმდეგეებმა შეიძლება შექმნან დატვირთვები, რომლებიც ანაწილებენ I-cache ხაზებს სუსტ ბირთვებზე, აფართოებენ ლატენტურ განსხვავებას აჩქარებულ და სკალარ ბილიკებს შორის.
+   - შერბილება: დააფიქსირეთ განრიგი ნაწილაკების დეტერმინისტულ ზომებზე, ბალიშების მარყუჟები, რათა თავიდან აიცილოთ არაპროგნოზირებადი განშტოება და ჩართეთ მიკროსკოპის რეგრესიის ტესტები, რათა უზრუნველყოფილიყოთ, რომ ჯიტერი დარჩეს ტოლერანტობის ფანჯრებში.
 
-5. **Instruction cache poisoning attacks**
-   - Problem: consensus adversaries may craft workloads that thrash tiny I-cache lines on weaker cores, widening latency difference between accelerated and scalar paths.
-   - Mitigation: fix scheduling to deterministic chunk sizes, pad loops to avoid unpredictable branching, and include microbench regression tests to ensure jitter stays within tolerance windows.
+# განლაგების განმსაზღვრელი რეკომენდაციები
 
-# Deterministic Deployment Recommendations
+- **შედგენის დროის პოლიტიკა:** შეინახეთ დაჩქარებული კოდი ფუნქციის დროშის მიღმა (მაგ., `sm_accel_neon`), რომელიც ჩართულია ნაგულისხმევად გამოშვების ვერსიებში, მაგრამ მოითხოვეთ ცალსახად ჩართვა კონფიგურაციებში ტესტის ქსელებისთვის, სანამ პარიტეტული დაფარვა არ იქნება მომწიფებული.
+- **შებრუნებული პარიტეტის ტესტები:** ინარჩუნებს ოქროს ვექტორებს, რომლებიც აწარმოებენ აჩქარებულ და სკალარული ბილიკებს უკან-უკან (მიმდინარე `sm_neon_check` სამუშაო ნაკადი); გაფართოვდეს SM3/SM4 GCM რეჟიმების დასაფარად, როგორც კი პროვაიდერის მხარდაჭერა დასრულდება.
+- **მანიფესტური ატესტაცია:** ჩართეთ აჩქარების პოლიტიკა (`hardware=sm-neon|scalar`) კვანძის Norito მანიფესტში, რათა განსხვავებები გამოვლინდეს თანატოლების მიღების დროს.
+- **ტელემეტრია:** გამოსცემს მეტრიკას, რომელიც ადარებს თითო ზარის შეყოვნებას ორივე გზაზე; გაფრთხილება, თუ განსხვავებები აჭარბებს წინასწარ განსაზღვრულ ზღვრებს (მაგ., >5% ჟიტერი), რაც მიუთითებს შესაძლო ტექნიკის დრეიფზე.
+- **დოკუმენტაცია:** განაახლეთ ოპერატორის მითითებები (`sm_operator_rollout.md`) ინსტრუქციებით ინსტრუქციების ჩართვა/გამორთვასთან დაკავშირებით და გაითვალისწინეთ, რომ დეტერმინისტული ქცევა შენარჩუნებულია გზის მიუხედავად.
 
-- **Compile-time policy:** keep accelerated code behind a feature flag (e.g., `sm_accel_neon`) enabled by default in release builds, but require an explicit opt-in in configs for testnets until parity coverage is mature.
-- **Fallback parity tests:** maintain golden vectors that run accelerated and scalar paths back-to-back (current `sm_neon_check` workflow); extend to cover SM3/SM4 GCM modes once provider support lands.
-- **Manifest attestation:** include the acceleration policy (`hardware=sm-neon|scalar`) in the node’s Norito manifest to make divergence detectable during peer admission.
-- **Telemetry:** emit metrics comparing per-call latency across both paths; alert if divergence exceeds predetermined thresholds (e.g., >5 % jitter), signalling possible hardware drift.
-- **Documentation:** keep operator guidance (`sm_operator_rollout.md`) up to date with instructions for enabling/disabling intrinsics, and note that deterministic behaviour is preserved regardless of the path.
+# ცნობები
 
-# References
+- `crates/iroha_crypto/src/sm.rs` — NEON წინააღმდეგ სკალარული განხორციელების კაკვები.
+- `.github/workflows/sm-neon-check.yml` — იძულებითი-NEON CI ზოლი, რომელიც უზრუნველყოფს პარიტეტს.
+- `docs/source/crypto/sm_program.md` — გაათავისუფლეთ დამცავი ღობეები და შესრულების კარიბჭე.
+- Arm Architecture Reference Manual, Armv8-A, Section D13 (SM3/SM4 ინსტრუქციები).
+- GM/T 0002-2012, GM/T 0003-2012 — ოფიციალური SM3/SM4 სპეციფიკაციები შედარების ტესტირებისთვის.
 
-- `crates/iroha_crypto/src/sm.rs` — NEON vs scalar implementation hooks.
-- `.github/workflows/sm-neon-check.yml` — forced-NEON CI lane ensuring parity.
-- `docs/source/crypto/sm_program.md` — release guardrails and performance gates.
-- Arm Architecture Reference Manual, Armv8-A, Section D13 (SM3/SM4 instructions).
-- GM/T 0002-2012, GM/T 0003-2012 — official SM3/SM4 specifications for comparison testing.
-
-## Standalone Prompt (Copy/Paste)
-
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background: Hyperledger Iroha is a Rust-based permissioned blockchain that requires deterministic execution across validators. The platform supports the Chinese GM/T SM2/SM3/SM4 cryptography suite. For SM3 and SM4, the codebase ships two implementations: (a) pure Rust bit-sliced constant-time scalar code that runs everywhere, and (b) ARMv8 NEON accelerated kernels that depend on the optional instructions `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY`. Accelerated paths are enabled via runtime feature detection using `core::arch::aarch64`; they must not introduce non-determinism when threads migrate across heterogeneous big.LITTLE cores or when replicas are built with different `target_feature` flags.  
-> Task: Compare the intrinsic-powered implementations with the scalar fallbacks for deterministic blockchain verification. Detail throughput and latency differences, enumerate determinism hazards (feature detection, heterogeneous cores, SIGILL behaviour, alignment, mixed execution paths), comment on constant-time posture, and recommend safeguards (testing strategy, manifest/attestation fields, telemetry, operator documentation) that ensure all validators remain in sync even if hardware capabilities differ.
+## დამოუკიდებელი მოთხოვნა (კოპირება/ჩასმა)> თქვენ ხართ LLM, მოქმედებს როგორც Hyperledger Iroha კრიპტო გუნდის ექსპერტი მრჩეველი.  
+> ფონი: Hyperledger Iroha არის Rust-ზე დაფუძნებული ნებადართული ბლოკჩეინი, რომელიც მოითხოვს დეტერმინისტულ შესრულებას ვალიდატორებში. პლატფორმა მხარს უჭერს ჩინურ GM/T SM2/SM3/SM4 კრიპტოგრაფიის კომპლექტს. SM3-ისთვის და SM4-ისთვის, კოდების ბაზა აგზავნის ორ იმპლემენტაციას: (ა) სუფთა Rust bit-დაჭრილი მუდმივი დროის სკალარული კოდი, რომელიც მუშაობს ყველგან და (ბ) ARMv8 NEON დაჩქარებული ბირთვები, რომლებიც დამოკიდებულია არასავალდებულო ინსტრუქციებზე `SM3PARTW1`, Hyperledger `SM3SS2`, `SM4E` და `SM4EKEY`. დაჩქარებული ბილიკები ჩართულია გაშვების ფუნქციის ამოცნობის მეშვეობით `core::arch::aarch64`-ის გამოყენებით; მათ არ უნდა შემოიტანონ არადეტერმინიზმი, როდესაც ძაფები გადადიან ჰეტეროგენულ დიდ.პატარა ბირთვებზე ან როდესაც რეპლიკა აგებულია სხვადასხვა `target_feature` დროშებით.  
+> ამოცანა: შეადარეთ შინაგანი ენერგიის განხორციელებები სკალარულ ჩანაცვლებებთან დეტერმინისტული ბლოკჩეინის შემოწმებისთვის. დეტალების გამტარუნარიანობა და შეყოვნების განსხვავებები, ჩამოთვალეთ დეტერმინიზმის საშიშროება (ფუნქციების გამოვლენა, ჰეტეროგენული ბირთვები, SIGILL ქცევა, გასწორება, შესრულების შერეული ბილიკები), კომენტარი გააკეთეთ მუდმივ დროში პოზაზე და რეკომენდაცია გაუწიეთ დაცვას (ტესტირების სტრატეგია, მანიფესტის/ატესტაციის ველები, ტელემეტრია, ოპერატორის დოკუმენტაცია), რომელიც უზრუნველყოფს ყველა ვალიდატორების სინქრონიზაციას, თუ კი დისტანციური ტევადობა რჩება.

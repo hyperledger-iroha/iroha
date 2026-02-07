@@ -8,21 +8,23 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Orchestrator Operations Runbook
 sidebar_label: Orchestrator Ops Runbook
 description: Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-This runbook guides SREs through preparing, rolling out, and operating the multi-source fetch orchestrator. It complements the developer guide with procedures tuned for production rollouts, including staged enablement and peer blacklisting.
+本操作手冊指導 SRE 準備、部署和操作多源獲取編排器。它對開發人員指南進行了補充，提供了針對生產部署進行調整的程序，包括分階段啟用和對等黑名單。
 
-> **See also:** The [Multi-Source Rollout Runbook](./multi-source-rollout.md) focuses on fleet-wide rollout waves and emergency provider denial. Reference it for governance / staging coordination while using this document for day-to-day orchestrator operations.
+> **另請參閱：** [多源推出運行手冊](./multi-source-rollout.md) 重點關注整個艦隊的推出浪潮和緊急提供商拒絕。在使用本文檔進行日常協調器操作時，請參考它進行治理/分階段協調。
 
-## 1. Pre-flight Checklist
+## 1. 飛行前檢查清單
 
-1. **Collect provider inputs**
-   - Latest provider adverts (`ProviderAdvertV1`) and telemetry snapshot for the target fleet.
-   - Payload plan (`plan.json`) derived from the manifest under test.
-2. **Render a deterministic scoreboard**
+1. **收集提供商的輸入**
+   - 目標車隊的最新提供商廣告 (`ProviderAdvertV1`) 和遙測快照。
+   - 有效負載計劃 (`plan.json`) 源自測試中的清單。
+2. **渲染確定性記分板**
 
    ```bash
    sorafs_fetch \
@@ -35,30 +37,30 @@ This runbook guides SREs through preparing, rolling out, and operating the multi
      --json-out artifacts/session.summary.json
    ```
 
-   - Validate that `artifacts/scoreboard.json` lists every production provider as `eligible`.
-   - Archive the summary JSON alongside the scoreboard; auditors rely on the chunk retry counters when certifying the change request.
-3. **Dry-run with fixtures** — Exercise the same command against the public fixtures in `docs/examples/sorafs_ci_sample/` to ensure the orchestrator binary matches the expected version before touching production payloads.
+   - 驗證 `artifacts/scoreboard.json` 將每個生產提供商列為 `eligible`。
+   - 將摘要 JSON 與記分板一起存檔；審核員在驗證變更請求時依賴塊重試計數器。
+3. **使用固定裝置進行試運行** — 對 `docs/examples/sorafs_ci_sample/` 中的公共固定裝置執行相同的命令，以確保編排器二進製文件在接觸生產負載之前與預期版本匹配。
 
-## 2. Staged Rollout Procedure
+## 2. 分階段推出程序
 
-1. **Canary stage (≤2 providers)**
-   - Rebuild the scoreboard and run with `--max-peers=2` to clamp the orchestrator to a small subset.
-   - Monitor:
+1. **金絲雀階段（≤2個提供商）**
+   - 重建記分板並使用 `--max-peers=2` 運行以將協調器限制為一個小子集。
+   - 監控：
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Proceed once retry rates remain below 1% for a complete manifest fetch and no provider accumulates failures.
-2. **Ramp stage (50% providers)**
-   - Increase `--max-peers` and rerun with a fresh telemetry snapshot.
-   - Persist every run with `--provider-metrics-out` and `--chunk-receipts-out`. Retain the artefacts for ≥7 days.
-3. **Full rollout**
-   - Remove `--max-peers` (or set it to the full eligible count).
-   - Enable orchestrator mode in client deployments: distribute the persisted scoreboard and configuration JSON via your configuration management system.
-   - Update dashboards to display `sorafs_orchestrator_fetch_duration_ms` p95/p99 and retry histograms per region.
+   - 一旦完整清單獲取的重試率保持在 1% 以下並且沒有提供商累積失敗，則繼續。
+2. **斜坡階段（50%提供商）**
+   - 增加 `--max-peers` 並使用新的遙測快照重新運行。
+   - 堅持每次運行 `--provider-metrics-out` 和 `--chunk-receipts-out`。文物保留≥7天。
+3. **全面推出**
+   - 刪除 `--max-peers`（或將其設置為完整的合格計數）。
+   - 在客戶端部署中啟用協調器模式：通過配置管理系統分發持久記分板和配置 JSON。
+   - 更新儀表板以顯示 `sorafs_orchestrator_fetch_duration_ms` p95/p99 並重試每個區域的直方圖。
 
-## 3. Peer Blacklisting & Boosting
+## 3. 對等黑名單和提升
 
-Use the CLI’s scoring policy overrides to triage unhealthy providers without waiting for governance updates.
+使用 CLI 的評分策略覆蓋來對不健康的提供商進行分類，而無需等待治理更新。
 
 ```bash
 sorafs_fetch \
@@ -72,33 +74,33 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` removes the listed alias from consideration for the current session.
-- `--boost-provider=<alias>=<weight>` raises the provider’s scheduler weight. Values are additive to the normalised scoreboard weight and apply only to the local run.
-- Record overrides in the incident ticket and attach the JSON outputs so the owning team can reconcile state once the underlying issue is fixed.
+- `--deny-provider` 從當前會話的考慮中刪除列出的別名。
+- `--boost-provider=<alias>=<weight>` 提高了提供商的調度程序權重。這些值會添加到標準化記分板權重中，並且僅適用於本地運行。
+- 在事件票證中記錄覆蓋並附加 JSON 輸出，以便所有者團隊在根本問題得到解決後可以協調狀態。
 
-For permanent changes, amend the source telemetry (mark the offender penalised) or refresh the advert with updated stream budgets before clearing the CLI overrides.
+對於永久性更改，請在清除 CLI 覆蓋之前修改源遙測（將違規者標記為受處罰）或使用更新的流預算刷新廣告。
 
-## 4. Failure Triage
+## 4. 故障分類
 
-When a fetch fails:
+當獲取失敗時：
 
-1. Capture the following artefacts before rerunning:
+1. 在重新運行之前捕獲以下工件：
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspect `session.summary.json` for the human-readable error string:
-   - `no providers were supplied` → verify provider paths and adverts.
-   - `retry budget exhausted ...` → increase `--retry-budget` or remove unstable peers.
-   - `no compatible providers available ...` → audit the offending provider’s range capability metadata.
-3. Correlate the provider name with `sorafs_orchestrator_provider_failures_total` and create a follow-up ticket if the metric spikes.
-4. Replay the fetch offline with `--scoreboard-json` and the captured telemetry to reproduce the failure deterministically.
+2. 檢查 `session.summary.json` 中是否有人類可讀的錯誤字符串：
+   - `no providers were supplied` → 驗證提供商路徑和廣告。
+   - `retry budget exhausted ...` → 增加 `--retry-budget` 或刪除不穩定的對等點。
+   - `no compatible providers available ...` → 審核違規提供商的範圍能力元數據。
+3. 將提供商名稱與 `sorafs_orchestrator_provider_failures_total` 相關聯，並在指標出現峰值時創建後續票證。
+4. 使用 `--scoreboard-json` 和捕獲的遙測數據重放離線獲取，以確定性地重現故障。
 
-## 5. Rollback
+## 5.回滾
 
-To revert an orchestrator rollout:
+要恢復 Orchestrator 推出：
 
-2. Remove any `--boost-provider` overrides so the scoreboard reverts to neutral weighting.
-3. Continue scraping the orchestrator metrics for at least one day to confirm no residual fetches are in-flight.
+2. 刪除所有 `--boost-provider` 覆蓋，以便記分板恢復為中性權重。
+3. 繼續抓取 Orchestrator 指標至少一天，以確認沒有正在進行的剩餘提取。
 
-Maintaining disciplined artefact capture and staged rollouts ensures the multi-source orchestrator can be operated safely across heterogeneous provider fleets while keeping observability and audit requirements intact.
+保持嚴格的工件捕獲和分階段部​​署可確保多源編排器可以跨異構提供商群安全運行，同時保持可觀察性和審計要求完好無損。

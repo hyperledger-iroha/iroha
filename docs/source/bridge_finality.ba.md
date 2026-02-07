@@ -7,119 +7,118 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
 source_last_modified: "2026-01-08T21:52:45.509525+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
--->
+--> X
 
-# Bridge finality proofs
+# Күпер финалында дәлилдәр
 
-This document describes the initial bridge finality proof surface for Iroha.
-The goal is to let external chains or light clients verify that an Iroha block
-is finalized without off‑chain computation or trusted relays.
+Был документта Iroha өсөн күперҙең финалына ҡаршы сығыу өҫтөн һүрәтләнә.
+Маҡсат-тышҡы сылбыр йәки еңел клиенттар рөхсәт итеү, тип раҫлай Iroha блок .
+сылбырлы иҫәпләүҙәрһеҙ йәки ышаныслы эстафетаһыҙ тамамлана.
 
-## Proof format
+## Дәғүә форматында
 
-`BridgeFinalityProof` (Norito/JSON) contains:
+`BridgeFinalityProof` (Norito/JSON) составында:
 
-- `height`: block height.
-- `chain_id`: Iroha chain identifier to prevent cross-chain replay.
-- `block_header`: canonical `BlockHeader`.
-- `block_hash`: hash of the header (clients recompute to validate).
-- `commit_certificate`: validator set + signatures that finalized the block.
-- `validator_set_pops`: Proof-of-Possession bytes aligned with the validator set
-  order (required for BLS aggregate verification).
+- `height`: блок бейеклеге.
+- `chain_id`: Iroha сылбырлы идентификаторы, сылбырлы реплейҙы булдырмау өсөн.
+- `block_header`: канонлы `BlockHeader`.
+- `block_hash`: башлыҡ хеш (клиенттар раҫлау өсөн яңынан иҫәпләнә).
+- `commit_certificate`: валитатор ҡуйыу + ҡултамғалар, улар блокты тамамлай.
+- `validator_set_pops`: Валитатор йыйылмаһы менән тура килтерелгән проф-поссессия байттары
+  бойороҡ (BLS агрегат тикшерелеүе өсөн кәрәк).
 
-The proof is self‑contained; no external manifests or opaque blobs are required.
-Retention: Torii serves finality proofs for the recent commit-certificate window
-(bounded by the configured history cap; defaults to 512 entries via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Clients
-should cache or anchor proofs if they need longer horizons.
-The canonical tuple is `(block_header, block_hash, commit_certificate)`: the
-hash of the header must match the hash inside the commit certificate, and the
-chain id binds the proof to a single ledger. Servers reject and log a
-`CommitCertificateHashMismatch` when the certificate points to a different block
-hash.
+Дәлил үҙ-үҙенә эйә; тышҡы манифест йәки асыҡ булмаған таптар кәрәкмәй.
+Һаҡлау: Torii хеҙмәтләндерә, һуңғы дәлилдәр өсөн һуңғы ваҡытта коммит-сертификат тәҙрә
+(конфигурацияланған тарих ҡапҡасы менән сикләнгән; 512 яҙмаға тиклем ғәҙәттәгесә.
+`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP` X). Клиенттар
+тейеш кэш йәки якорь дәлилдәре, әгәр улар оҙонораҡ офоҡтар кәрәк.
+Канон кортежы `(block_header, block_hash, commit_certificate)`: .
+хеш башлыҡ тура килергә тейеш хеш эсендә ҡылған сертификат, һәм
+сылбыр идентификацияһы бер баш китапҡа дәлил бәйләй. Серверҙар кире ҡаға һәм журнал а
+`CommitCertificateHashMismatch` ҡасан сертификат икенсе блокҡа күрһәтә
+хеш.
 
-## Commitment bundle
+## йөкләмәһе өйөмө
 
-`BridgeFinalityBundle` (Norito/JSON) extends the basic proof with an explicit
-commitment and justification:
+`BridgeFinalityBundle` (Norito/JSON) асыҡтан-асыҡ төп дәлилде оҙайта.
+йөкләмә һәм аҡлау:
 
 - `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: signatures from the authority set over the commitment
-  payload (reuses the commit-certificate signatures).
-- `block_header`, `commit_certificate`: same as the basic proof.
+- `justification`: йөкләмә буйынса билдәләнгән вәкәләттән ҡултамғалар
+  файҙалы йөк (ҡабаттан ҡулланыла коммит-сертификат ҡултамғалары).
+- `block_header`, `commit_certificate`: төп дәлилдәр менән бер үк.
 
-Current placeholder: `mmr_root`/`mmr_peaks` are derived by recomputing a
-block-hash MMR in memory; inclusion proofs are not yet returned. Clients can
-still verify the same hash via the commitment payload today.
+Ағымдағы урын: `mmr_root`/`mmr_peaks` X-ты ҡабаттан иҫәпләү юлы менән сығарыла.
+блок-хэш ММР хәтерҙә; инклюзия дәлилдәре әлегә ҡайтарылмаған. Клиенттар ала
+һаман да раҫлау аша шул уҡ хеш аша йөкләмә файҙалы йөк бөгөн.
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+ММР түбәләренә һулдан уңға заказ бирелә. Ҡабаттан `mmr_root` ҡапҡасы пиктары ярҙамында
+уңдан һулға: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
 API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
-Verification is analogous to the basic proof: recompute `block_hash` from the
-header, verify the commit-certificate signatures, and check the commitment
-fields match the certificate and block hash. The bundle adds a commitment/
-justification wrapper for bridge protocols that prefer the separation.
+Тикшеренеүҙең төп дәлиле менән аналоглы: `block_hash` ҡабаттан иҫәпләү.
+баш, раҫлау өсөн коммит-сертификат ҡултамғалар, һәм тикшерергә йөкләмә
+баҫыуҙары сертификат һәм блок хешҡа тап килә. Ҡапҡа өҫтәй йөкләмә/
+айырыуҙы өҫтөн күргән күпер протоколдары өсөн аҡлау уратып.
 
-## Verification steps
+## Тикшереү аҙымдары1. `block_hash` ҡабаттан иҫәпләү `block_header`; тап килмәү тураһында кире ҡағыу.
+2. Тикшерергә `commit_certificate.block_hash` матчтар ҡабаттан иҫәпләнгән `block_hash`;
+   тура килмәгән башлыҡ/коммит сертификат парҙарын кире ҡағыу.
+3. Тикшерергә `chain_id` матчтар көтөлгән Iroha сылбыр.
+4. `validator_set_hash` ҡабаттан иҫәпләү `commit_certificate.validator_set` һәм
+   тикшерергә, ул тура килә яҙылған хеш/версия.
+5. `validator_set_pops` оҙонлоғо валидатор йыйылмаһы һәм раҫлауын тәьмин итеү
+   һәр PoP ҡаршы уның BLS асыҡ асҡыс.
+6. Ҡултамғаларҙы раҫлау өсөн йөкләмә сертификаты ҡаршы баш хеш ҡулланыу .
+   һылтанмалы валитатор асыҡ асҡыстар һәм индекстар; кворумды үтәү
+   (`2f+1` ҡасан `n>3`, башҡа `n`) һәм дубликаты/сығарылған индекстарҙы кире ҡаға.
+7. Ышаныслы тикшерелгән пунктҡа бәйләнә, валидатор комплекты хеш сағыштырыу,
+   якорь ҡиммәтенә тиклем (көсһөҙ‐субъективлыҡ якорь).
+8. Опциональ рәүештә көтөлгән эпоха якорь менән бәйләй, шулай иҫбатлауҙар оло/яңыраҡ .
+   эпохалар якорь аңлы рәүештә әйләндерелгәнсе кире ҡағыла.
 
-1. Recompute `block_hash` from `block_header`; reject on mismatch.
-2. Check `commit_certificate.block_hash` matches the recomputed `block_hash`;
-   reject mismatched header/commit certificate pairs.
-3. Check `chain_id` matches the expected Iroha chain.
-4. Recompute `validator_set_hash` from `commit_certificate.validator_set` and
-   check it matches the recorded hash/version.
-5. Ensure `validator_set_pops` length matches the validator set and validate
-   each PoP against its BLS public key.
-6. Verify signatures in the commit certificate against the header hash using
-   the referenced validator public keys and indices; enforce quorum
-   (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range indices.
-7. Optionally bind to a trusted checkpoint by comparing the validator set hash
-   to an anchored value (weak‑subjectivity anchor).
-8. Optionally bind to an expected epoch anchor so proofs from older/newer
-   epochs are rejected until the anchor is rotated intentionally.
+`BridgeFinalityVerifier` (`iroha_data_model::bridge`-та) был чектарҙы ҡуллана,
+сылбырлы-ид/бейеклек дрейфын кире ҡағыу, валидатор-комплект хеш/версия тап килмәүе, юҡ
+йәки дөрөҫ булмаған PoPs, дубликаты/диапазондан тыш ҡул ҡуйыусылар, дөрөҫ булмаған ҡултамғалар, һәм
+көтөлмәгән эпохалар кворумды иҫәпләү алдынан, шулай итеп, еңел клиенттар бер тапҡыр ҡабаттан ҡуллана ала
+тикшерелгән.
 
-`BridgeFinalityVerifier` (in `iroha_data_model::bridge`) applies these checks,
-rejecting chain-id/height drift, validator-set hash/version mismatches, missing
-or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
-unexpected epochs before counting quorum so light clients can reuse a single
-verifier.
+## Һылтанма тикшерергә
 
-## Reference verifier
+`BridgeFinalityVerifier` ҡабул итә көтөлгән `chain_id` плюс опциональ ышаныслы
+валидатор-комплект һәм эпоха якорь. Ул башлыҡты үтәй/блок-хэш/
+коммит-сертификатлы кортеж, раҫлаусы валидатор-комплект хеш/версия, чек
+ҡултамғалар/кворум ҡаршы рекламаланған валитатор исемлеге, һәм һуңғы күҙәтә
+бейеклеге иҫке/үткәрелгән дәлилдәрҙе кире ҡағыу өсөн. Ҡасан якорь менән тәьмин ителә, ул кире ҡаға
+реплей аша эпоха/ростерҙар менән асыҡ `UnexpectedEpoch`/
+`UnexpectedValidatorSet` хаталары; якорьһыҙ ул беренсе дәлилде ҡабул итә.
+валидатор-комплект хеш һәм эпоха дауам итеү алдынан үтәү дубликаты/out-of-
+диапазоны/етерлек ҡултамғалар менән детерминистик хаталар.
 
-`BridgeFinalityVerifier` accepts an expected `chain_id` plus optional trusted
-validator-set and epoch anchors. It enforces the header/block-hash/
-commit-certificate tuple, validates validator-set hash/version, checks
-signatures/quorum against the advertised validator roster, and tracks the latest
-height to reject stale/skipped proofs. When anchors are supplied it rejects
-replays across epochs/rosters with explicit `UnexpectedEpoch`/
-`UnexpectedValidatorSet` errors; without anchors it adopts the first proof's
-validator-set hash and epoch before continuing to enforce duplicate/out-of-
-range/insufficient signatures with deterministic errors.
+## API өҫтө
 
-## API surface
+- `GET /v1/bridge/finality/{height}` – ҡайтарыу `BridgeFinalityProof` өсөн .
+  тип һораған блок бейеклеге. Йөкмәтке һөйләшеүҙәр аша `Accept` ярҙам итә Norito йәки .
+  ЙСОН.
+- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` ҡайтарыуҙар
+  (эшләү + аҡлау + баш/сертификат) өсөн һоралған бейеклек.
 
-- `GET /v1/bridge/finality/{height}` – returns `BridgeFinalityProof` for the
-  requested block height. Content negotiation via `Accept` supports Norito or
-  JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – returns `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) for the requested height.
+## Иҫкәрмәләр һәм эйәреп.
 
-## Notes and follow‑ups
-
-- Proofs are currently derived from stored commit certificates. The bounded
-  history follows the commit certificate retention window; clients should cache
-  anchor proofs if they need longer horizons. Requests outside the window return
-  `CommitCertificateNotFound(height)`; surface the error and fall back to an
-  anchored checkpoint.
-- A replayed or forged proof with mismatched `block_hash` (header vs.
-  certificate) is rejected with `CommitCertificateHashMismatch`; clients should
-  perform the same tuple check before signature verification and discard
-  mismatched payloads.
-- Future work can add MMR/authority‑set commitment chains to reduce proof size
-  the commit certificate inside richer commitment envelopes.
+- Әлегә дәлилдәр һаҡланған ҡылған сертификаттарҙан алынған. Сикләнгән
+  тарих үтәй йөкләмә сертификат һаҡлау тәҙрәһе; клиенттар кэш тейеш
+  якорь дәлилдәре, әгәр улар оҙонораҡ офоҡтар кәрәк. Тәҙрә ҡайтарыуҙан тыш үтенестәр
+  `CommitCertificateNotFound(height)` X; хаталарҙы өҫтө һәм кире төшөү
+  якорь тикшерелгән пункт.
+- `block_hash` менән тап килмәгән реплей йәки ялған дәлил (башы ҡаршы.
+  сертификат) `CommitCertificateHashMismatch` менән кире ҡағыла; клиенттар тейеш
+  бер үк кортеж тикшерергә алдынан ҡултамға тикшерелгән һәм ташлау
+  тап килмәгән файҙалы йөктәр.
+- Киләсәктә эш өҫтәй ала ММР/власть‐сетчиктар йөкләмә сылбырҙары кәметергә күләме иҫбатлау күләме .
+  коммит сертификаты эсендә байыраҡ йөкләмә конверттары.

@@ -7,90 +7,88 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2025-12-29T18:16:35.938696+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+% SM2/SM3/SM4 ཚོང་དང་ལག་ལེན་གྱི་ཤོག་གུ་ (销售/使用备案) ཊེམ་པེལེཊ་
+% Hyperledger Iroha བསྟུན་སྒྲིག་ལས་བྱེད་སྡེ་ཚན།
+% ༢༠༢༦-༠༥-༠༦
 
-# Instructions
+# བཀོད༌རྒྱ
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+མཚོའི་མཐའ་མར་ ཨེསི་སི་ཨེ་ཡིག་ཚང་ཅིག་དང་གཅིག་ཁར་ བཀྲམ་སྤེལ་ལག་ལེན་གྱི་ ཡིག་ཆ་བཙུགས་པའི་སྐབས་ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ།
+བཀོལ་སྤྱོད་པ་ཚུ། བཀྲམ་སྤེལ་ཀླད་ཀོར་ཡང་ན་ གནད་སྡུད་བར་སྟོང་རེ་ལུ་ ཞུ་ཡིག་གཅིག་རེ་བྱིན། དུས༌མཐུན༌བཟོ༌ནི
+བཀོལ་སྤྱོད་པའི་དམིགས་བསལ་ཁ་གསལ་ཡོད་པའི་ས་གནས་འཛིན་མི་ཚུ་དང་ ཐོ་བཀོད་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་ཚུ་མཉམ་སྦྲགས་འབདཝ་ཨིན།
+བརྟག་ཞིབ་ཐོ་ཡིག་ནང་།
 
-# 1. Operator & Deployment Summary
+# 1. བཀོལ་འཁོར ་དང་བཙོངས་པའི་གནད་བསྡུས།
 
-| Field | Value |
-|-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| བཀོལ་སྤྱོད་པའི་མིང་ | { { བཀོད_NAME }} |
+| ཚོང་ལས་ཐོ་བཀོད་ཀྱི་ ID | { REG_ID }} |
+| ཐོ་བཀོད་འབད་ཡོད་པའི་ཁ་བྱང་། | {{ ADDRESS .} |
+| གཞི་རིམ་འབྲེལ་བ་ (མིང་ / མགོ་ཡིག་ / གློག་འཕྲིན་ / ཁ་པར་) | {{ CONTACT }} |
+| བཀྲམ་སྤེལ་ངོས་འཛིན་ | { DEPLOYMENT_ID }} |
+| བཀྲམ་སྤེལ་ས་གནས་(ཚུ་) | { LOCATIONS 7} |
+| ཡིག་སྣོད་དབྱེ་བ་ | ཚིག / ལག་ལེན (销售/使用备案) |
+| ཡིག་ཆའི་ཚེས་གྲངས་ | {YYYY-MM-DD |
 
-# 2. Deployment Details
+# 2. བཀྲམ་སྤེལ་ཁ་གསལ།
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- མཉེན་ཆས་བཟོ་བསྐྲུན་ཨའི་ཌི་ / ཧེ།: `{{ BUILD_HASH }}`
+- འབྱུང་ཁུངས་བཟོ་བསྐྲུན་: { BUILD_SOURCE }} (དཔེར་ན་ འབྱུང་ཁུངས་ལས་ བཀོལ་སྤྱོད་པ་-བཟོ་བསྐྲུན་འབད་ཡོད་མི་ ཚོང་པ་-བྱིན་ཡོད་པའི་གཉིས་ལྡན་)།
+- ཤུགས་ལྡན་བཟོ་ནིའི་ཚེས་གྲངས།
+- འཆར་གཞི་བཟོ་ཡོད་པའི་ བདག་འཛིན་སྒོ་སྒྲིག་: { MAINTENENCE_CADENCE }}
+- ཨེསི་ཨེམ་མིང་རྟགས་བཀོད་པའི་སྐབས་ བཅའ་མར་གཏོགས་མི་ མཐུད་མཚམས་འགན་ཁུར།
+  | ནད། | འགན་ཁུར་ | ཨེསི་ཨེམ་ཁྱད་རྣམ་ལྕོགས་ཅན་བཟོ་ཡོདཔ། | ལྡེ་མིག་ས་གནས་ |
+  |
+  | { NODE_ID }} | {་ རོ་ལེ }} | {{ ཁེ་དབང་ | {{ VAULT } |
 
-# 3. Cryptographic Controls
+# 3. ཀྲུམ་རྩོམ་ཚོད་འཛིན།
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
-  |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+- གནང་བ་བྱིན་ཆོག་པའི་ཨཱལ་གོ་རི་དམ་: {{ ALGORITHMS ,} (མཐོང་གསལ་ཨེསི་ཨེམ་ཆ་ཚན་མཐུན་སྒྲིག་རིམ་སྒྲིག་)།
+- ལྡེ་མིག་མི་ཚེ་འཁོར་རིམ་གྱི་བཅུད་བསྡུས།
+  | གནས་སྟངས། | འགྲེལ་བཤད་ |
+  |----------------------------------------------------------------------------------------------
+  | མི་རབས་ | {{ ཀེས་_ཇི་ཨི་རེ་ཊི་ }} |
+  | གསོག་འཇོག་ | { KEY_STORAGE }} |
+  | འཁོར་སྐྱོད་ | { KEY_ROTATION }} |
+  | ཆ་འཇོག་འབད་ནི། | { KEY_REVOCATION |
+- ཁྱད་ཚད་ངོ་རྟགས་ (`distid`) སྲིད་བྱུས་: {{ DISTID_POLICY }}
+- རིམ་སྒྲིག་ཨེགསི་སེརཊི་ (`crypto` དབྱེ་ཚན་): Norito/JSON འདི་ ཧ་ཤི་དང་གཅིག་ཁར་ པར་ལེན་འབད།
 
-# 4. Telemetry & Audit Trails
+# 4. བརྒྱུད་འཕྲིན་དང་རྩིས་ཞིབ་ཀྱི་ལམ་ལུགས།
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- བལྟ་རྟོག་འབད་ནིའི་མཐའ་ཐིག་: { མེཊི་རིཀ་_ཨེན་ཌི་པི་ཨོ་ཨའི་ཨེན་ཊི་ཨེསི་ }} (`/metrics`, ཌེཤ་བོརཌི་ཚུ།
+- ནང་བསྐྱོད་མེ་ཊིགསི་: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
+  བར་ཆད་ཀྱི་ཧིསི་ཊོ་གཱརམ་ འཛོལ་བའི་གྱངས་ཁ་ཚུ།
+- དྲན་ཐོ་བཞག་ནིའི་སྲིད་བྱུས་: {{ LOG_RETENTION }} (≥ ལོ་གསུམ་གྱི་གྲོས་འཆར་)།
+- རྩིས་ཞིབ་དྲན་ཐོ་གསོག་འཇོག་གནས་ཁོངས་: {{ AUDIT_STORAGE }}.
 
-# 5. Incident Response & Contacts
+# 5. བྱུང་རྐྱེན་ལན་འདེབས་དང་འབྲེལ་འཐུད་པ།
 
-| Role | Name | Phone | Email | SLA |
-|------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| འགན་ཁུར་ | མིང | ཁ་པར་ | གློག་འཕྲིན་ | ཨེསི་ཨེལ་ཨེ་ |
+|--|-|-|---------------------------------------- |
+| བདེ་འཇགས་བཀོལ་སྤྱོད་འགོ་ཁྲིད་ | {་་་་་་་་ }} | {        }} | {{ ཨེ་ཨེམ་ཨེ་ཨེལ་ }} | { SLA }} |
+| ཀིརིཔ་ཊོ་ཨོན་-འབོད་བརྡ་ | {་་་་་་་་ }} | {        }} | {{ ཨེ་ཨེམ་ཨེ་ཨེལ་ }} | { SLA }} |
+| ཁྲིམས་དོན་ / བསྟར་སྤྱོད་འབད་ནི། | {་་་་་་་་ }} | {        }} | {{ ཨེ་ཨེམ་ཨེ་ཨེལ་ }} | { SLA }} |
+| ཚོང་པ་རྒྱབ་སྐྱོར། (གལ་སྲིད་ འཇུག་སྤྱོད་འབད་ཚུགས་པ་ཅིན་) | {་་་་་་་་ }} | {        }} | {{ ཨེ་ཨེམ་ཨེ་ཨེལ་ }} | { SLA }} |
 
-# 6. Attachments Checklist
+# 6. མཉམ་མཐུད་དཔྱད་གཞི།- [ ] རིམ་སྒྲིག་པར་ལེན་ (Norito + JSON) དང་ཧ་ཤེ་ཚུ་དང་གཅིག་ཁར་།
+- [ ] གཏན་འབེབས་བཟོ་བའི་བདེན་དཔང་ (hash, SBOM, བསྐྱར་བཟོ་འབད་བཏུབ་པའི་དྲན་ཐོ།)
+- [ ] ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་ཕྱིར་ཚོང་དང་ ཉེན་བརྡའི་ངེས་ཚིག་ཚུ།
+- [ ] བྱུང་རྐྱེན་ལན་འདེབས་འཆར་གཞི་དང་ ཁ་པར་བསྒྱིར་བའི་ཡིག་ཆ།
+- [ ] བཀོལ་སྤྱོད་པའི་སྦྱོང་བརྡར་ངོས་ལེན་སམ་བང་དེབ་ཀྱི་ཐོབ་ཐང་།
+- [ ] ཕྱིར་འདྲེན་ཚད་འཛིན་གསལ་བསྒྲགས།
+- [ ] འབྲེལ་ཡོད་གན་འཛིན་གན་ཡིག་ ཡང་ན་ སྲིད་བྱུས་ཆ་མེད་ཀྱི་འདྲ་བཤུས།
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. བཀོལ་སྤྱོད་གསལ་བསྒྲགས།
 
-# 7. Operator Declaration
+> གོང་འཁོད་ཐོ་བཀོད་འབད་ཡོད་པའི་བཀྲམ་སྤེལ་འདི་ པི་ཨར་སི་ཚོང་འབྲེལ་དང་གཅིག་ཁར་ མཐུན་སྒྲིག་འབདཝ་ཨིནམ་འདི་ ང་བཅས་ཀྱིས་ ངེས་གཏན་བཟོཝ་ཨིན།
+> ཀིརིཔ་ཊོ་གཱ་ར་ཕི་གི་སྒྲིག་གཞི་ ཨེསི་ཨེམ་ལྕོགས་ཅན་ཞབས་ཏོག་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+> བྱུང་རྐྱེན་ལན་འདེབས་དང་ བརྒྱུད་འཕྲིན་སྲིད་བྱུས་ཚུ་ དེ་ལས་ རྩིས་ཞིབ་ཀྱི་ ཅ་ཆས་ཚུ་ཨིན།
+> ཉུང་མཐར་ཡང་ལོ་གསུམ་རིང་བཞག་ཡོད།
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- དབང་ཚད་ཡོད་པའི་མིང་རྟགས་བཀོད་མི་: _________________________
+- སྤྱི་ཚེས: ________________________

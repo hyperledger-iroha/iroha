@@ -11,19 +11,20 @@ id: node-operations
 title: Node Operations Runbook
 sidebar_label: Node Operations Runbook
 description: Validate the embedded `sorafs-node` deployment inside Torii.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Keep both copies aligned across releases.
+::: Eslatma Kanonik manba
+Nometall `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Ikkala nusxani ham nashrlar bo'ylab tekislang.
 :::
 
-## Overview
+## Umumiy ko'rinish
 
-This runbook walks operators through validating an embedded `sorafs-node` deployment inside Torii. Each section maps directly to the SF-3 deliverables: pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
+Ushbu runbook operatorlarga Torii ichiga o'rnatilgan `sorafs-node` o'rnatilishini tekshirish orqali boradi. Har bir bo'lim to'g'ridan-to'g'ri SF-3 etkazib berish natijalariga mos keladi: pin/olib kelish, qayta tiklashni qayta boshlash, kvotani rad etish va PoR namunasini olish.
 
-## 1. Prerequisites
+## 1. Old shartlar
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- `torii.sorafs.storage` da saqlash ishchisini yoqing:
 
   ```toml
   [torii.sorafs.storage]
@@ -41,13 +42,13 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   por_success_alpha = 0.25
   ```
 
-- Ensure the Torii process has read/write access to `data_dir`.
-- Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
-- When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
+- Torii jarayonining `data_dir` ga o'qish/yozish ruxsati borligiga ishonch hosil qiling.
+- Deklaratsiya qayd etilgandan so'ng, tugun kutilgan quvvatni `GET /v1/sorafs/capacity/state` orqali reklama qilishini tasdiqlang.
+- Yumshoqlash yoqilganda, asboblar panellari nuqta qiymatlari bilan bir qatorda jittersiz tendentsiyalarni ta'kidlash uchun ham xom, ham silliqlangan GiB·soat/PoR hisoblagichlarini ko'rsatadi.
 
-### CLI Dry Run (Optional)
+### CLI quruq yugurish (ixtiyoriy)
 
-Before exposing HTTP endpoints you can sanity-check the storage backend with the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+HTTP so'nggi nuqtalarini ko'rsatishdan oldin siz to'plamdagi CLI bilan saqlash orqa qismini aqlliligini tekshirishingiz mumkin.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -62,21 +63,21 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-The commands print Norito JSON summaries and refuse chunk-profile or digest mismatches, making them useful for CI smoke checks ahead of Torii wiring.【crates/sorafs_node/tests/cli.rs#L1】
+Buyruqlar Norito JSON xulosalarini chop etadi va chunk-profil yoki digest nomuvofiqliklarini rad etadi, bu ularni Torii simlarini ulashdan oldin CI tutunini tekshirish uchun foydali qiladi.【crates/sorafs_node/tests/cli.rs#L1】
 
-Once Torii is live you can retrieve the same artefacts via HTTP:
+Torii jonli efirga chiqqach, HTTP orqali bir xil artefaktlarni olishingiz mumkin:
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+Ikkala so'nggi nuqta ham o'rnatilgan saqlash xodimi tomonidan xizmat qiladi, shuning uchun CLI tutun sinovlari va shlyuz problari sinxronlashtiriladi.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#1】L
 
-## 2. Pin → Fetch Round Trip
+## 2. PIN → Bog'lanishni olib kelish
 
-1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
+1. Manifest + foydali yuk to'plamini yarating (masalan, `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json` bilan).
+2. Manifestni base64 kodlash bilan yuboring:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -84,8 +85,8 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      -d @pin_request.json
    ```
 
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+   JSON soʻrovida `manifest_b64` va `payload_b64` boʻlishi kerak. Muvaffaqiyatli javob `manifest_id_hex` va foydali yuk hazm qilishni qaytaradi.
+3. Belgilangan ma'lumotlarni oling:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -97,26 +98,26 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+   Base64-`data_b64` maydonini dekodlang va uning asl baytlarga mos kelishini tekshiring.
 
-## 3. Restart Recovery Drill
+## 3. Qayta tiklash matkapini qayta ishga tushiring
 
-1. Pin at least one manifest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
+1. Yuqoridagi kabi kamida bitta manifestni mahkamlang.
+2. Torii jarayonini (yoki butun tugunni) qayta ishga tushiring.
+3. Olib olish so‘rovini qayta yuboring. Foydali yuk hali ham olinishi mumkin va qaytarilgan dayjest qayta ishga tushirishdan oldingi qiymatga mos kelishi kerak.
+4. `bytes_used` qayta ishga tushirilgandan keyin davom etuvchi manifestlarni aks ettirishini tasdiqlash uchun `GET /v1/sorafs/storage/state` ni tekshiring.
 
-## 4. Quota Rejection Test
+## 4. Kvotani rad etish testi
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
-4. Restore the normal capacity limit when finished.
+1. `torii.sorafs.storage.max_capacity_bytes` ni vaqtincha kichik qiymatga tushiring (masalan, bitta manifest hajmi).
+2. Bitta manifestni belgilang; so'rov muvaffaqiyatli bo'lishi kerak.
+3. Shunga o'xshash o'lchamdagi ikkinchi manifestni o'rnatishga harakat qiling. Torii soʻrovni HTTP `400` va `storage capacity exceeded` oʻz ichiga olgan xato xabari bilan rad qilishi kerak.
+4. Tugatgandan so'ng normal sig'im chegarasini tiklang.
 
-## 5. PoR Sampling Probe
+## 5. PoR namuna olish probi
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. Manifestni mahkamlang.
+2. PoR namunasini talab qiling:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -128,21 +129,19 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
+3. Javobda so'ralgan hisob bilan `samples` borligini va har bir dalil saqlangan manifest ildiziga nisbatan tasdiqlanishini tekshiring.
 
-## 6. Automation Hooks
+## 6. Avtomatlashtirish ilgaklari
 
-- CI / smoke tests can reuse the targeted checks added in:
+- CI/tutun testlari qo'shilgan maqsadli tekshiruvlardan qayta foydalanishi mumkin:
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
-  ```
-
-  which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
-- Dashboards should track:
+  ````pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` va `por_sampling_returns_verified_proofs` ni qamrab oladi.
+- Boshqaruv paneli quyidagilarni kuzatishi kerak:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
-  - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
+  - `torii_sorafs_storage_pin_queue_depth` va `torii_sorafs_storage_fetch_inflight`
+  - PoR muvaffaqiyat/qobiliyatsiz hisoblagichlari `/v1/sorafs/capacity/state` orqali paydo bo'ldi
+  - `sorafs_node_deal_publish_total{result=success|failure}` orqali hisob-kitoblarni nashr etish urinishlari
 
-Following these drills ensures the embedded storage worker can ingest data, survive restarts, respect configured quotas, and generate deterministic PoR proofs before the node advertises capacity to the wider network.
+Ushbu mashqlardan so'ng, o'rnatilgan xotira xodimi ma'lumotlarni qabul qilishini, qayta ishga tushirishda omon qolishini, sozlangan kvotani hurmat qilishini va tugun kengroq tarmoqqa sig'imini reklama qilishdan oldin aniqlangan PoR dalillarini yaratishini ta'minlaydi.

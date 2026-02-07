@@ -4,41 +4,43 @@ direction: rtl
 source: docs/portal/docs/sorafs/dispute-revocation-runbook.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: dispute-revocation-runbook
-title: Runbook des litiges et révocations SoraFS
-sidebar_label: Runbook litiges et révocations
-description: Flux de gouvernance pour déposer des litiges de capacité SoraFS, coordonner les révocations et évacuer les données de manière déterministe.
+ID: تنازعہ کی بحالی کی کتاب
+عنوان: تنازعات اور منسوخیاں رن بک SoraFS
+سائڈبار_لیبل: تنازعات اور منسوخیاں رن بک
+تفصیل: گورننس کا بہاؤ SoraFS صلاحیت کے تنازعات کو فائل کرنے ، اصلاحات کو مربوط کرنے ، اور اعداد و شمار کو طے شدہ طور پر خالی کرنے کے لئے۔
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/dispute_revocation_runbook.md`. Gardez les deux copies synchronisées jusqu’à ce que la documentation Sphinx héritée soit retirée.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/dispute_revocation_runbook.md` کی عکاسی کرتا ہے۔ جب تک میراثی اسفنکس دستاویزات ریٹائر نہیں ہوجاتی اس وقت تک دونوں کاپیاں مطابقت پذیری میں رکھیں۔
 :::
 
-## Objectif
+## مقصد
 
-Ce runbook guide les opérateurs de gouvernance dans la création de litiges de capacité SoraFS, la coordination des révocations et la garantie d’une évacuation déterministe des données.
+یہ رن بک SoraFS صلاحیت کے تنازعات کو تشکیل دینے ، منسوخ کرنے کو مربوط کرنے ، اور اعداد و شمار کے انخلا کو یقینی بنانے میں گورننس آپریٹرز کی رہنمائی کرتا ہے۔
 
-## 1. Évaluer l’incident
+## 1. واقعے کا اندازہ کریں
 
-- **Conditions de déclenchement :** détection d’une violation du SLA (disponibilité/échec PoR), déficit de réplication ou désaccord de facturation.
-- **Confirmer la télémétrie :** capturer les snapshots `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` pour le fournisseur.
-- **Notifier les parties prenantes :** Storage Team (opérations du fournisseur), Governance Council (organe décisionnel), Observability (mises à jour des dashboards).
+- ** ٹرگر شرائط: ** ایس ایل اے کی خلاف ورزی (دستیابی/پور کی ناکامی) ، نقل کی خسارہ یا بلنگ اختلاف کا پتہ لگانا۔
+- ** ٹیلی میٹری کی تصدیق کریں: ** فراہم کنندہ کے لئے اسنیپ شاٹس `/v1/sorafs/capacity/state` اور `/v1/sorafs/capacity/telemetry` پر قبضہ کریں۔
+- ** اسٹیک ہولڈرز کو مطلع کریں: ** اسٹوریج ٹیم (سپلائر آپریشنز) ، گورننس کونسل (فیصلہ سازی باڈی) ، مشاہدہ (ڈیش بورڈ اپ ڈیٹ)۔
 
-## 2. Préparer le bundle de preuves
+## 2. ثبوت بنڈل تیار کریں
 
-1. Collecter les artefacts bruts (telemetry JSON, logs CLI, notes d’audit).
-2. Normaliser dans une archive déterministe (par exemple, un tarball) ; consigner :
-   - digest BLAKE3-256 (`evidence_digest`)
-   - type de média (`application/zip`, `application/jsonl`, etc.)
-   - URI d’hébergement (object storage, pin SoraFS ou endpoint accessible via Torii)
-3. Stocker le bundle dans le bucket de collecte des preuves de gouvernance avec un accès write-once.
+1. خام نمونے جمع کریں (ٹیلی میٹری JSON ، CLI لاگز ، آڈٹ نوٹ)۔
+2. ایک عزم آرکائو میں معمول بنائیں (مثال کے طور پر ، ایک ٹربال) ؛ ریکارڈ:
+   - ڈائجسٹ بلیک 3-256 (`evidence_digest`)
+   - میڈیا کی قسم (`application/zip` ، `application/jsonl` ، وغیرہ)
+   - ہوسٹنگ یو آر آئی (آبجیکٹ اسٹوریج ، پن SoraFS یا اختتامی نقطہ Torii کے ذریعے قابل رسائی)
+3. گورننس شواہد کلیکشن بالٹی میں بنڈل کو لکھنے کے لئے ایک بار رسائی کے ساتھ اسٹور کریں۔
 
-## 3. Déposer le litige
+## 3. تنازعہ فائل کریں
 
-1. Créez un JSON spec pour `sorafs_manifest_stub capacity dispute` :
+1. `sorafs_manifest_stub capacity dispute` کے لئے JSON مخصوص بنائیں:
 
    ```json
    {
@@ -58,7 +60,7 @@ Ce runbook guide les opérateurs de gouvernance dans la création de litiges de 
    }
    ```
 
-2. Lancez la CLI :
+2. سی ایل آئی لانچ کریں:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -71,38 +73,36 @@ Ce runbook guide les opérateurs de gouvernance dans la création de litiges de 
      --private-key=ed25519:<key>
    ```
 
-3. Vérifiez `dispute_summary.json` (confirmez le type, le digest des preuves, les timestamps).
-4. Soumettez le JSON de requête à Torii `/v1/sorafs/capacity/dispute` via la file de transactions de gouvernance. Capturez la valeur de réponse `dispute_id_hex` ; elle ancre les actions de révocation suivantes et les rapports d’audit.
+3. `dispute_summary.json` چیک کریں (تصدیق کی قسم ، شواہد ڈائجسٹ ، ٹائم اسٹیمپس)۔
+4. گورننس ٹرانزیکشن قطار کے ذریعے JSON JSON کو Torii `/v1/sorafs/capacity/dispute` پر جمع کروائیں۔ ردعمل کی قیمت `dispute_id_hex` پر قبضہ کریں ؛ یہ بعد میں منسوخی کے اقدامات اور آڈٹ رپورٹس کو لنگر انداز کرتا ہے۔
 
-## 4. Évacuation et révocation
+## 4۔ انخلا اور منسوخی
 
-1. **Fenêtre de grâce :** avertissez le fournisseur de la révocation imminente ; autorisez l’évacuation des données épinglées lorsque la politique le permet.
-2. **Générez `ProviderAdmissionRevocationV1` :**
-   - Utilisez `sorafs_manifest_stub provider-admission revoke` avec la raison approuvée.
-   - Vérifiez les signatures et le digest de révocation.
-3. **Publiez la révocation :**
-   - Soumettez la requête de révocation à Torii.
-   - Assurez-vous que les adverts du fournisseur sont bloqués (attendez une hausse de `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`).
-4. **Mettez à jour les dashboards :** signalez le fournisseur comme révoqué, référencez l’ID du litige et liez le bundle de preuves.
+1. ** گریس ونڈو: ** آنے والی منسوخی کے فراہم کنندہ کو مطلع کریں ؛ جب پالیسی کی اجازت ہو تو پن والے ڈیٹا کو انخلا کی اجازت دیں۔
+2. ** `ProviderAdmissionRevocationV1` پیدا کریں: **
+   - منظور شدہ وجہ کے ساتھ `sorafs_manifest_stub provider-admission revoke` استعمال کریں۔
+   - دستخطوں اور منسوخی ڈائجسٹ کو چیک کریں۔
+3. ** منسوخی کو شائع کریں: **
+   - منسوخی کی درخواست Torii پر جمع کروائیں۔
+   - اس بات کو یقینی بنائیں کہ فراہم کنندہ کے اشتہارات کو مسدود کردیا گیا ہے (`torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` کے اضافے کا انتظار کریں)۔
+4. ** ڈیش بورڈز کو اپ ڈیٹ کریں: ** سپلائر کو منسوخ کے طور پر نشان زد کریں ، تنازعہ کی شناخت کا حوالہ دیں اور ثبوت کے بنڈل کو جوڑیں۔
 
-## 5. Post-mortem et suivi
+## 5. پوسٹ مارٹم اور فالو اپ- گورننس واقعہ ٹریکر میں ٹائم لائن ، جڑ کی وجہ اور تدارک کی کارروائیوں کو ریکارڈ کریں۔
+- بحالی کا تعین کریں (داؤ پر لگا ہوا ، فیس کلاو بیکس ، کسٹمر معاوضے)۔
+- اسباق کی دستاویز کریں ؛ اگر ضروری ہو تو ایس ایل اے کی دہلیز یا نگرانی کے انتباہات کو اپ ڈیٹ کریں۔
 
-- Enregistrez la chronologie, la cause racine et les actions de remédiation dans le tracker d’incidents de gouvernance.
-- Déterminez la restitution (slashing du stake, clawbacks de frais, remboursements clients).
-- Documentez les leçons ; mettez à jour les seuils SLA ou les alertes de monitoring si nécessaire.
-
-## 6. Documents de référence
+## 6. حوالہ دستاویزات
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (section litiges)
-- `docs/source/sorafs/provider_admission_policy.md` (workflow de révocation)
-- Dashboard d’observabilité : `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (تنازعات کا سیکشن)
+- `docs/source/sorafs/provider_admission_policy.md` (منسوخی کا ورک فلو)
+- مشاہدہ ڈیش بورڈ: `SoraFS / Capacity Providers`
 
-## Checklist
+## چیک لسٹ
 
-- [ ] Bundle de preuves capturé et haché.
-- [ ] Payload de litige validé localement.
-- [ ] Transaction de litige Torii acceptée.
-- [ ] Révocation exécutée (si approuvée).
-- [ ] Dashboards/runbooks mis à jour.
-- [ ] Post-mortem déposé auprès du conseil de gouvernance.
+- [] ثبوت کے بنڈل پکڑے گئے اور کٹی ہوئی۔
+- [] تنازعہ پے لوڈ مقامی طور پر توثیق شدہ۔
+- [] تنازعات کا تصفیہ Torii قبول کیا گیا۔
+- [] منسوخی کو پھانسی دے دی گئی (اگر منظور شدہ)۔
+- [] ڈیش بورڈز/رن بوکس اپ ڈیٹ۔
+- [] پوسٹ مارٹم گورننس بورڈ میں دائر کیا گیا۔

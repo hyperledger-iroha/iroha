@@ -6,139 +6,134 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 73f5ca7a7484a26e901102dd6950b7110a18e7fa215a46540c7189c919e0958f
 source_last_modified: "2026-01-03T18:07:57.080817+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM2/SM3/SM4 Compliance & Export Brief
+# ملخص التصدير والامتثال لـ SM2/SM3/SM4
 
-This brief supplements the architecture notes in `docs/source/crypto/sm_program.md`
-and provides actionable guidance for engineering, Ops, and legal teams as the
-GM/T algorithm family moves from verify-only preview to broader enablement.
+يكمل هذا الموجز ملاحظات البنية في `docs/source/crypto/sm_program.md`
+ويوفر إرشادات قابلة للتنفيذ للفرق الهندسية والعمليات والقانونية مثل
+تنتقل عائلة خوارزمية GM/T من معاينة التحقق فقط إلى التمكين الأوسع.
 
-## Summary
-- **Regulatory basis:** China’s *Cryptography Law* (2019), *Cybersecurity Law*, and
-  *Data Security Law* classify SM2/SM3/SM4 as “commercial cryptography” when deployed
-  onshore. Operators must file usage reports, and certain sectors require accredited
-  testing prior to production use.
-- **International controls:** Outside China the algorithms fall under US EAR Category
-  5 Part 2, EU 2021/821 Annex 1 (5D002), and similar national regimes. Open-source
-  publication typically qualifies for license exceptions (ENC/TSU), but binaries
-  shipped to embargoed regions remain controlled exports.
-- **Project policy:** SM features remain disabled by default. Signing functionality
-  will only be enabled after external audit closure, deterministic perf/telemetry
-  gating, and operator documentation (this brief) land.
+## ملخص
+- **الأساس التنظيمي:** *قانون التشفير* في الصين* (2019)، *قانون الأمن السيبراني*، و
+  *قانون أمن البيانات* يصنف SM2/SM3/SM4 على أنه "تشفير تجاري" عند نشره
+  البرية. يجب على المشغلين تقديم تقارير الاستخدام، وتتطلب بعض القطاعات اعتماداً
+  اختبار قبل استخدام الإنتاج.
+- **الضوابط الدولية:** تقع الخوارزميات خارج الصين ضمن فئة EAR الأمريكية
+  5 الجزء 2، الاتحاد الأوروبي 2021/821 الملحق 1 (5D002)، والأنظمة الوطنية المماثلة. مفتوح المصدر
+  النشر عادة ما يكون مؤهلا لاستثناءات الترخيص (ENC/TSU)، ولكن الثنائيات
+  وتظل الصادرات التي يتم شحنها إلى المناطق المحظورة خاضعة للرقابة.
+- **سياسة المشروع:** تظل ميزات SM معطلة بشكل افتراضي. وظيفة التوقيع
+  لن يتم تمكينه إلا بعد إغلاق التدقيق الخارجي والأداء الحتمي/القياس عن بعد
+  البوابات، ووثائق المشغل (هذا الموجز) الأرض.
 
-## Required Actions by Function
-| Team | Responsibilities | Artifacts | Owners |
-|------|------------------|-----------|--------|
-| Crypto WG | Track GM/T spec updates, coordinate third-party audits, maintain deterministic policy (nonce derivation, canonical r∥s). | `sm_program.md`, audit reports, fixture bundles. | Crypto WG lead |
-| Release Engineering | Gate SM features behind explicit config, maintain verify-only default, manage feature rollout checklist. | `release_dual_track_runbook.md`, release manifests, rollout ticket. | Release TL |
-| Ops / SRE | Provide SM enablement checklist, telemetry dashboards (usage, error rates), incident response plan. | Runbooks, Grafana dashboards, onboarding tickets. | Ops/SRE |
-| Legal Liaison | File PRC development/usage reports when nodes run in mainland China; review export posture for each bundle. | Filing templates, export statements. | Legal contact |
-| SDK Program | Surface SM algorithm support consistently, enforce deterministic behaviour, propagate compliance notes to SDK docs. | SDK release notes, docs, CI gating. | SDK leads |
+## الإجراءات المطلوبة حسب الوظيفة
+| فريق | المسؤوليات | التحف | أصحاب |
+|------|------------------|----------|--------|
+| مجموعة عمل التشفير | تتبع تحديثات مواصفات GM/T، وتنسيق عمليات تدقيق الجهات الخارجية، والحفاظ على السياسة الحتمية (الاشتقاق غير الموحد، r∥s الأساسي). | `sm_program.md`، تقارير التدقيق، حزم التركيبات. | قيادة مجموعة العمل المشفرة |
+| هندسة الإصدار | ميزات Gate SM خلف التكوين الصريح، والحفاظ على التحقق الافتراضي فقط، وإدارة قائمة التحقق من طرح الميزات. | `release_dual_track_runbook.md`، بيانات الإصدار، تذكرة الطرح. | الافراج عن TL |
+| العمليات / SRE | توفير قائمة مرجعية لتمكين SM ولوحات معلومات القياس عن بعد (الاستخدام ومعدلات الخطأ) وخطة الاستجابة للحوادث. | سجلات التشغيل، ولوحات المعلومات Grafana، وتذاكر الصعود. | العمليات/SRE |
+| الاتصال القانوني | تقديم تقارير التطوير/الاستخدام في جمهورية الصين الشعبية عند تشغيل العقد في الصين القارية؛ مراجعة وضعية التصدير لكل حزمة. | قوالب الايداع وبيانات التصدير. | الاتصال القانوني |
+| برنامج اس دي كيه | تدعم خوارزمية Surface SM بشكل متسق، وتفرض السلوك الحتمي، وتنشر ملاحظات الامتثال إلى مستندات SDK. | ملاحظات إصدار SDK والمستندات وبوابات CI. | يؤدي SDK |## متطلبات التوثيق وحفظ الملفات (الصين)
+1. **تسجيل المنتج (开发备案):** للتطوير البري، أرسل وصف المنتج،
+   بيان توفر المصدر وقائمة التبعية وخطوات البناء الحتمية
+   إدارة التشفير الإقليمية قبل الإصدار.
+2. **تسجيل المبيعات/الاستخدام (销售/使用备案):** يجب على المشغلين الذين يقومون بتشغيل العقد التي تدعم SM-
+   تسجيل نطاق الاستخدام وإدارة المفاتيح وجمع القياس عن بعد بنفس الشيء
+   السلطة. توفير معلومات الاتصال واتفاقيات مستوى الخدمة للاستجابة للحوادث.
+3. **الشهادة (检测/认证):** قد يطلبها مشغلو البنية التحتية الحيوية
+   اختبار معتمد. توفير نصوص بناء قابلة للتكرار، وSBOM، وتقارير الاختبار
+   حتى يتمكن المتكاملون النهائيون من إكمال الشهادة دون تغيير التعليمات البرمجية.
+4. **الاحتفاظ بالسجلات:** أرشفة الملفات والموافقات في أداة تعقب الامتثال.
+   قم بتحديث `status.md` عندما تكمل المناطق أو المشغلون الجدد العملية.
 
-## Documentation & Filing Requirements (China)
-1. **Product filing (开发备案):** For onshore development, submit product description,
-   source availability statement, dependency list, and deterministic build steps to
-   the provincial cryptography administration before release.
-2. **Sales/Usage filing (销售/使用备案):** Operators running SM-enabled nodes must
-   register usage scope, key management, and telemetry collection with the same
-   authority. Provide contact info and incident response SLAs.
-3. **Certification (检测/认证):** Critical infrastructure operators may require
-   accredited testing. Provide reproducible build scripts, SBOM, and test reports
-   so downstream integrators can complete certification without altering code.
-4. **Record-keeping:** Archive filings and approvals in the compliance tracker.
-   Update `status.md` when new regions or operators complete the process.
+## قائمة التحقق من الامتثال
 
-## Compliance Checklist
+### قبل تمكين ميزات SM
+- [ ] التأكد من قيام المستشار القانوني بمراجعة مناطق النشر المستهدفة.
+- [ ] التقاط تعليمات البناء الحتمية، وبيانات التبعية، وSBOM
+      الصادرات لإدراجها مع الإيداعات.
+- [ ] محاذاة `crypto.allowed_signing`، `crypto.default_hash`، والقبول
+      تظهر السياسة مع تذكرة الطرح.
+- [ ] إنتاج اتصالات المشغل التي تصف نطاق ميزات SM،
+      متطلبات التمكين الأساسية، والخطط الاحتياطية للتعطيل.
+- [] تصدير لوحات معلومات القياس عن بعد التي تغطي عدادات التحقق/التوقيع SM،
+      معدلات الخطأ ومقاييس الأداء (`sm3`، `sm4`، توقيت syscall).
+- [ ] إعداد جهات اتصال الاستجابة للحوادث ومسارات التصعيد على الشاطئ
+      المشغلين وCrypto WG.
 
-### Before enabling SM features
-- [ ] Confirm legal counsel reviewed the target deployment regions.
-- [ ] Capture deterministic build instructions, dependency manifests, and SBOM
-      exports for inclusion with filings.
-- [ ] Align `crypto.allowed_signing`, `crypto.default_hash`, and admission
-      policy manifests with the rollout ticket.
-- [ ] Produce operator communications describing SM feature scope,
-      enablement prerequisites, and fallback plans for disablement.
-- [ ] Export telemetry dashboards covering SM verification/signature counters,
-      error rates, and perf metrics (`sm3`, `sm4`, syscall timing).
-- [ ] Prepare incident response contacts and escalation paths for onshore
-      operators and the Crypto WG.
+### الاستعداد لتقديم الملفات والتدقيق
+- [ ] حدد قالب التسجيل المناسب (المنتج مقابل المبيعات/الاستخدام) وقم بملئه
+      في البيانات الوصفية للإصدار قبل الإرسال.
+- [ ] قم بإرفاق أرشيفات SBOM، ونصوص الاختبار الحتمية، والتجزئة الواضحة.
+- [ ] التأكد من أن بيان مراقبة التصدير يعكس القطع الأثرية الدقيقة
+      تم تسليمه ويستشهد باستثناءات الترخيص المعتمدة (ENC/TSU).
+- [ ] التحقق من تقارير التدقيق وتتبع الإصلاح ودفاتر تشغيل المشغل
+      ترتبط من حزمة الملفات.
+- [ ] تخزين الملفات الموقعة والموافقات والمراسلات في حالة الامتثال
+      تعقب مع مراجع الإصدار.
 
-### Filing & audit readiness
-- [ ] Select the appropriate filing template (product vs. sales/usage) and fill
-      in the release metadata before submission.
-- [ ] Attach SBOM archives, deterministic test transcripts, and manifest hashes.
-- [ ] Ensure the export-control statement reflects the exact artefacts being
-      delivered and cites license exceptions relied upon (ENC/TSU).
-- [ ] Verify that audit reports, remediation tracking, and operator runbooks
-      are linked from the filing packet.
-- [ ] Store signed filings, approvals, and correspondence in the compliance
-      tracker with versioned references.
+### عمليات ما بعد الموافقة
+- [ ] قم بتحديث `status.md` وتذكرة الطرح بمجرد قبول التسجيل.
+- [ ] أعد تشغيل التحقق من صحة القياس عن بعد لتأكيد تطابقات تغطية إمكانية الملاحظة
+      مدخلات الايداع.
+- [ ] جدولة المراجعة الدورية (سنويًا على الأقل) للإيداعات وتقارير التدقيق،
+      وتصدير البيانات لالتقاط تحديثات المواصفات/التنظيمية.
+- [ ] تشغيل ملفات الإضافات عند التكوين أو نطاق الميزة أو الاستضافة
+      تتغير البصمة ماديا.## إرشادات التصدير والتوزيع
+- قم بتضمين بيان تصدير قصير في ملاحظات الإصدار/البيانات التي تشير إلى الاعتماد
+  على ENC/TSU. مثال:
+  > "يحتوي هذا الإصدار على تطبيقات SM2/SM3/SM4. التوزيع يتبع ENC
+  > (15 CFR الجزء 742) / الاتحاد الأوروبي 2021/821 الملحق 1 5D002. يجب على المشغلين ضمان الامتثال
+  > مع قوانين التصدير والاستيراد المحلية.
+- بالنسبة للبنيات المستضافة داخل الصين، قم بالتنسيق مع العمليات لنشر القطع الأثرية منها
+  البنية التحتية البرية؛ تجنب النقل عبر الحدود للثنائيات التي تدعم SM ما لم
+  التراخيص المناسبة موجودة.
+- عند النسخ المطابق لمستودعات الحزم، قم بتسجيل العناصر التي تتضمن ميزات SM
+  لتبسيط الإبلاغ عن الامتثال.
 
-### Post-approval operations
-- [ ] Update `status.md` and the rollout ticket once the filing is accepted.
-- [ ] Re-run telemetry validation to confirm observability coverage matches
-      the filing inputs.
-- [ ] Schedule periodic review (at least annually) of filings, audit reports,
-      and export statements to capture spec/regulatory updates.
-- [ ] Trigger filing addendums whenever configuration, feature scope, or hosting
-      footprint changes materially.
+## قائمة مراجعة المشغل
+- [ ] تأكيد ملف تعريف الإصدار (`scripts/select_release_profile.py`) + علامة ميزة SM.
+- [ ] مراجعة `sm_program.md` وهذا الموجز؛ التأكد من تسجيل الإيداعات القانونية.
+- [ ] قم بتمكين ميزات SM من خلال التحويل البرمجي مع `sm`، وتحديث `crypto.allowed_signing` ليشمل `sm2`، وتبديل `crypto.default_hash` إلى `sm3-256` فقط بعد وضع ضمانات الحتمية وحالة التدقيق باللون الأخضر.
+- [ ] تحديث لوحات المعلومات/التنبيهات الخاصة بالقياس عن بعد لتشمل عدادات SM (فشل التحقق،
+      طلبات التوقيع ومقاييس الأداء).
+- [ ] احتفظ بالبيانات وإثباتات التجزئة/التوقيع وتأكيدات الإيداع المرفقة بها
+      تذكرة الطرح.
 
-## Export & Distribution Guidance
-- Include a short export statement in release notes/manifests referencing reliance
-  on ENC/TSU. Example:
-  > “This release contains SM2/SM3/SM4 implementations. Distribution follows ENC
-  > (15 CFR Part 742) / EU 2021/821 Annex 1 5D002. Operators must ensure compliance
-  > with local export/import laws.”
-- For builds hosted inside China, coordinate with Ops to publish artifacts from
-  onshore infrastructure; avoid cross-border transfer of SM-enabled binaries unless
-  the appropriate licenses are in place.
-- When mirroring to package repositories, record which artefacts include SM features
-  to simplify compliance reporting.
+## نموذج لنماذج الإيداع
 
-## Operator Checklist
-- [ ] Confirm release profile (`scripts/select_release_profile.py`) + SM feature flag.
-- [ ] Review `sm_program.md` and this brief; ensure legal filings are recorded.
-- [ ] Enable SM features by compiling with `sm`, updating `crypto.allowed_signing` to include `sm2`, and switching `crypto.default_hash` to `sm3-256` only after determinism safeguards are in place and audit status is green.
-- [ ] Update telemetry dashboards/alerts to include SM counters (verification failures,
-      signing requests, perf metrics).
-- [ ] Keep manifests, hash/signature proofs, and filing confirmations attached to
-      the rollout ticket.
-
-## Sample Filing Templates
-
-Templates live under `docs/source/crypto/attachments/` for easy inclusion in
-filing packets. Copy the relevant Markdown template into the operator’s change
-log or export it to PDF as required by local authorities.
+توجد القوالب ضمن `docs/source/crypto/attachments/` لسهولة التضمين فيها
+حزم الايداع. انسخ قالب Markdown ذي الصلة إلى تغيير عامل التشغيل
+قم بتسجيله أو تصديره إلى PDF كما هو مطلوب من قبل السلطات المحلية.
 
 - [`sm_product_filing_template.md`](attachments/sm_product_filing_template.md) —
-  provincial product filing (开发备案) form capturing release metadata, algorithms,
-  SBOM references, and support contacts.
+  نموذج تسجيل المنتجات الإقليمية (开发备案) الذي يلتقط البيانات الوصفية للإصدار، والخوارزميات،
+  مراجع SBOM وجهات اتصال الدعم.
 - [`sm_sales_usage_filing_template.md`](attachments/sm_sales_usage_filing_template.md) —
-  operator sales/usage filing (销售/使用备案) outlining deployment footprint,
-  key management, telemetry, and incident response procedures.
+  تسجيل مبيعات/استخدام المشغل (销售/使用备案) يحدد أثر النشر،
+  إجراءات الإدارة الرئيسية والقياس عن بعد والاستجابة للحوادث.
 - [`sm_export_statement_template.md`](attachments/sm_export_statement_template.md) —
-  export-control declaration suitable for release notes, manifests, or legal
-  correspondence relying on ENC/TSU license exceptions.
+  إعلان مراقبة الصادرات مناسب لمذكرات الإصدار أو البيانات أو القانونية
+  المراسلات التي تعتمد على استثناءات ترخيص ENC/TSU.## المعايير والاستشهادات
+- **GM/T 0002-2012 / GB/T 32907-2016** — تشفير كتلة SM4 ومعلمات AEAD (ECB/GCM/CCM). يطابق المتجهات التي تم التقاطها في `docs/source/crypto/sm_vectors.md`.
+- **GM/T 0003-2012 / GB/T 32918.x-2016** — تشفير المفتاح العام SM2، ومعلمات المنحنى، وعملية التوقيع/التحقق، واختبارات الإجابة المعروفة في الملحق "د".
+- **GM/T 0004-2012 / GB/T 32905-2016** — مواصفات وظيفة تجزئة SM3 ومتجهات التوافق.
+- **RFC 8998** — تبادل مفاتيح SM2 واستخدام التوقيع في TLS؛ استشهد عند توثيق التشغيل التفاعلي مع OpenSSL/Tongsuo.
+- **قانون التشفير لجمهورية الصين الشعبية (2019)**، **قانون الأمن السيبراني (2017)**، **قانون أمن البيانات (2021)** — الأساس القانوني لسير عمل تقديم الملفات المذكور أعلاه.
+- ** فئة EAR الأمريكية 5 الجزء 2 ** و ** لائحة الاتحاد الأوروبي 2021/821 الملحق 1 (5D002) ** — أنظمة مراقبة التصدير التي تحكم الثنائيات التي تدعم SM.
+- **عناصر Iroha:** توفر `scripts/sm_interop_matrix.sh` و`scripts/sm_openssl_smoke.sh` نصوص التشغيل المتداخل الحتمية التي يمكن للمدققين إعادة تشغيلها قبل التوقيع على تقارير الامتثال.
 
-## Standards & Citations
-- **GM/T 0002-2012 / GB/T 32907-2016** — SM4 block cipher and AEAD parameters (ECB/GCM/CCM). Matches the vectors captured in `docs/source/crypto/sm_vectors.md`.
-- **GM/T 0003-2012 / GB/T 32918.x-2016** — SM2 public-key cryptography, curve parameters, signature/verification process, and Annex D known-answer tests.
-- **GM/T 0004-2012 / GB/T 32905-2016** — SM3 hash function specification and conformance vectors.
-- **RFC 8998** — SM2 key exchange and signature use in TLS; cite when documenting interop with OpenSSL/Tongsuo.
-- **Cryptography Law of the People’s Republic of China (2019)**, **Cybersecurity Law (2017)**, **Data Security Law (2021)** — Legal basis for the filing workflow noted above.
-- **US EAR Category 5 Part 2** and **EU Regulation 2021/821 Annex 1 (5D002)** — Export-control regimes governing SM-enabled binaries.
-- **Iroha artefacts:** `scripts/sm_interop_matrix.sh` and `scripts/sm_openssl_smoke.sh` provide deterministic interop transcripts that auditors can replay before signing compliance reports.
+## المراجع
+- `docs/source/crypto/sm_program.md` - البنية التقنية والسياسة.
+- `docs/source/release_dual_track_runbook.md` - عملية إطلاق البوابات والبدء.
+- `docs/source/sora_nexus_operator_onboarding.md` - نموذج لتدفق تأهيل المشغل.
+- GM/T 0002-2012، GM/T 0003-2012، GM/T 0004-2012، سلسلة GB/T 32918، RFC 8998.
 
-## References
-- `docs/source/crypto/sm_program.md` — technical architecture and policy.
-- `docs/source/release_dual_track_runbook.md` — release gating and rollout process.
-- `docs/source/sora_nexus_operator_onboarding.md` — sample operator onboarding flow.
-- GM/T 0002-2012, GM/T 0003-2012, GM/T 0004-2012, GB/T 32918 series, RFC 8998.
-
-Questions? Contact the Crypto WG or Legal liaison via the SM rollout tracker.
+أسئلة؟ اتصل بـ Crypto WG أو جهة الاتصال القانونية عبر أداة تعقب طرح SM.

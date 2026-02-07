@@ -6,92 +6,91 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: fd1e43316c492cc96ed107f6318841ad8db160735d4698c4f05562ff6127fda9
 source_last_modified: "2026-01-22T15:38:30.658859+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential asset rotation playbook referenced by `roadmap.md:M3`.
+//! Manual de estrategia de rotación de activos confidencial al que se hace referencia en `roadmap.md:M3`.
 
-# Confidential Asset Rotation Runbook
+# Runbook confidencial de rotación de activos
 
-This playbook explains how operators schedule and execute confidential asset
-rotations (parameter sets, verifying keys, and policy transitions) while
-ensuring wallets, Torii clients, and mempool guards remain deterministic.
+Este manual explica cómo los operadores programan y ejecutan activos confidenciales.
+rotaciones (conjuntos de parámetros, claves de verificación y transiciones de políticas) mientras
+garantizar que las billeteras, los clientes Torii y los protectores de mempool sigan siendo deterministas.
 
-## Lifecycle & Statuses
+## Ciclo de vida y estados
 
-Confidential parameter sets (`PoseidonParams`, `PedersenParams`, verifying keys)
-lattice and helper used to derive the effective status at a given height live in
-`crates/iroha_core/src/state.rs:7540`–`7561`. Runtime helpers sweep pending
-transitions as soon as the target height is reached and log failures for later
-rebroadcasts (`crates/iroha_core/src/state.rs:6725`–`6765`).
+Conjuntos de parámetros confidenciales (`PoseidonParams`, `PedersenParams`, claves de verificación)
+celosía y ayudante utilizados para derivar el estado efectivo a una altura determinada viven en
+`crates/iroha_core/src/state.rs:7540`–`7561`. Barrido de ayudantes en tiempo de ejecución pendiente
+transiciones tan pronto como se alcanza la altura objetivo y registra fallas para más adelante
+retransmisiones (`crates/iroha_core/src/state.rs:6725`–`6765`).
 
-Asset policies embed
+Las políticas de activos incorporan
 `pending_transition { transition_id, new_mode, effective_height, conversion_window }`
-so governance can schedule upgrades via
-`ScheduleConfidentialPolicyTransition` and cancel them if required. See
-`crates/iroha_data_model/src/asset/definition.rs:320` and the Torii DTO mirrors
+para que la gobernanza pueda programar actualizaciones a través de
+`ScheduleConfidentialPolicyTransition` y cancélelos si es necesario. Ver
+`crates/iroha_data_model/src/asset/definition.rs:320` y los espejos DTO Torii
 (`crates/iroha_torii/src/routing.rs:1539`–`1580`).
 
-## Rotation Workflow
+## Flujo de trabajo de rotación
 
-1. **Publish new parameter bundles.** Operators submit
-   `PublishPedersenParams`/`PublishPoseidonParams` instructions (CLI
-   `iroha app zk params publish ...`) to stage new generator sets with metadata,
-   activation/deprecation windows, and status markers. The executor rejects
-   duplicate IDs, non-increasing versions, or bad status transitions per
-   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
-   registry tests cover the failure modes (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
-2. **Register/verifying-key updates.** `RegisterVerifyingKey` enforces backend,
-   commitment, and circuit/version constraints before a key can enter the
-   registry (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).
-   Updating a key automatically deprecates the old entry and wipes inline bytes,
-   as exercised by `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1`.
-3. **Schedule asset-policy transitions.** Once the new parameter IDs are live,
-   governance calls `ScheduleConfidentialPolicyTransition` with the desired
-   mode, transition window, and audit hash. The executor refuses conflicting
-   transitions or assets with outstanding transparent supply. Tests such as
-   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` verify that
-   aborted transitions clear `pending_transition`, while
-   `confidential_policy_transition_reaches_shielded_only_on_schedule` at
-   lines 385–433 confirms scheduled upgrades flip to `ShieldedOnly` exactly at
-   the effective height.
-4. **Policy application & mempool guard.** The block executor sweeps all pending
-   transitions at the start of each block (`apply_policy_if_due`) and emits
-   telemetry if a transition fails so operators can reschedule. During admission
-   the mempool refuses transactions whose effective policy would change mid-block,
-   ensuring deterministic inclusion across the transition window
+1. **Publicar nuevos paquetes de parámetros.** Los operadores envían
+   Instrucciones `PublishPedersenParams`/`PublishPoseidonParams` (CLI
+   `iroha app zk params publish ...`) para preparar nuevos grupos electrógenos con metadatos,
+   ventanas de activación/desuso y marcadores de estado. El ejecutor rechaza
+   ID duplicados, versiones que no aumentan o transiciones de estado incorrectas por
+   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, y el
+   Las pruebas de registro cubren los modos de falla (`crates/iroha_core/tests/confidential_params_registry.rs:93` – `226`).
+2. **Actualizaciones de registro/verificación de claves.** `RegisterVerifyingKey` aplica el backend,
+   compromiso y restricciones de circuito/versión antes de que una clave pueda ingresar al
+   registro (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067` – `2137`).
+   La actualización de una clave desaproba automáticamente la entrada anterior y borra los bytes en línea,
+   ejercido por `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1`.
+3. **Programar transiciones de políticas de activos.** Una vez que los nuevos ID de parámetros estén activos,
+   llamadas de gobierno `ScheduleConfidentialPolicyTransition` con el deseado
+   modo, ventana de transición y hash de auditoría. El albacea se niega en conflicto.
+   transiciones o activos con oferta transparente sobresaliente. Pruebas como
+   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` verifique que
+   las transiciones abortadas borran `pending_transition`, mientras que
+   `confidential_policy_transition_reaches_shielded_only_on_schedule` en
+   Las líneas 385–433 confirman que las actualizaciones programadas cambian a `ShieldedOnly` exactamente en
+   la altura efectiva.
+4. **Aplicación de políticas y protección de mempool.** El ejecutor de bloques barre todos los pendientes
+   transiciones al inicio de cada bloque (`apply_policy_if_due`) y emite
+   telemetría si una transición falla para que los operadores puedan reprogramarla. Durante la admisión
+   el mempool rechaza transacciones cuya política efectiva cambiaría a mitad del bloque,
+   garantizar la inclusión determinista a lo largo de la ventana de transición
    (`docs/source/confidential_assets.md:60`).
 
-## Wallet & SDK Requirements
+## Requisitos de billetera y SDK- Swift y otros SDK móviles exponen los ayudantes Torii para recuperar la política activa
+  además de cualquier transición pendiente, para que las billeteras puedan advertir a los usuarios antes de firmar. Ver
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) y los asociados
+  pruebas en `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`.
+- La CLI refleja los mismos metadatos a través de `iroha ledger assets data-policy get` (ayudante en
+  `crates/iroha_cli/src/main.rs:1497`–`1670`), permitiendo a los operadores auditar el
+  ID de política/parámetro conectados a una definición de activo sin desvelar el
+  tienda de bloques.
 
-- Swift and other mobile SDKs expose Torii helpers to fetch the active policy
-  plus any pending transition, so wallets can warn users before signing. See
-  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) and the associated
-  tests at `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`.
-- The CLI mirrors the same metadata via `iroha ledger assets data-policy get` (helper in
-  `crates/iroha_cli/src/main.rs:1497`–`1670`), enabling operators to audit the
-  policy/parameter IDs wired into an asset definition without spelunking the
-  block store.
+## Cobertura de pruebas y telemetría
 
-## Test & Telemetry Coverage
+- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` verifica esa política
+  las transiciones se propagan en instantáneas de metadatos y se borran una vez aplicadas.
+- `crates/iroha_core/tests/zk_dedup.rs:1` demuestra que el caché `Preverify`
+  rechaza gastos dobles/pruebas dobles, incluidos escenarios de rotación en los que
+  los compromisos difieren.
+- `crates/iroha_core/tests/zk_confidential_events.rs` y
+  `zk_shield_transfer_audit.rs` cubrir escudo de extremo a extremo → transferir → desproteger
+  fluye, asegurando que la pista de auditoría sobreviva a través de las rotaciones de parámetros.
+- `dashboards/grafana/confidential_assets.json` y
+  `docs/source/confidential_assets.md:401` documenta el árbol de compromisos y
+  medidores de caché de verificador que acompañan a cada ejecución de calibración/rotación.
 
-- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` verifies that policy
-  transitions propagate into metadata snapshots and clear once applied.
-- `crates/iroha_core/tests/zk_dedup.rs:1` proves that the `Preverify` cache
-  rejects double-spends/double-proofs, including rotation scenarios where
-  commitments differ.
-- `crates/iroha_core/tests/zk_confidential_events.rs` and
-  `zk_shield_transfer_audit.rs` cover end-to-end shield → transfer → unshield
-  flows, ensuring the audit trail survives across parameter rotations.
-- `dashboards/grafana/confidential_assets.json` and
-  `docs/source/confidential_assets.md:401` document the CommitmentTree &
-  verifier-cache gauges that accompany every calibration/rotation run.
+## Propiedad del runbook
 
-## Runbook Ownership
-
-- **DevRel / Wallet SDK Leads:** maintain SDK snippets + quickstarts that show
-  how to surface pending transitions and replay the mint → transfer → reveal
-  tests locally (tracked under `docs/source/project_tracker/confidential_assets_phase_c.md:M3.2`).
-- **Program Mgmt / Confidential Assets TL:** approve transition requests, keep
-  `status.md` updated with upcoming rotations, and ensure waivers (if any) are
-  recorded alongside the calibration ledger.
+- **DevRel / Wallet SDK Leads:** mantiene fragmentos de SDK + inicios rápidos que muestran
+  cómo sacar a la superficie las transiciones pendientes y reproducir la menta → transferir → revelar
+  pruebas localmente (seguidas bajo `docs/source/project_tracker/confidential_assets_phase_c.md:M3.2`).
+- **Gestión de programas/Activos confidenciales TL:** aprobar solicitudes de transición, mantener
+  `status.md` actualizado con las próximas rotaciones y garantizar que las exenciones (si las hay) estén
+  registrado junto con el libro de calibración.

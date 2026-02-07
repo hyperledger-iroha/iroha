@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7fab384ae80e1993b1e54d6addc82fd3dc652fb6e3958bea6a04e057a1805b57
 source_last_modified: "2025-12-29T18:16:35.939573+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GOST Performance Workflow
+# ГОСТ етештереүсәнлеге эш ағымы
 
-This note documents how we track and enforce the performance envelope for the
-TC26 GOST signing backend.
+Был иҫкәрмә документында, нисек беҙ күҙәтеп һәм үтәү өсөн конверт өсөн етештереү
+TC26 GOST ҡул ҡуйыу бекэнд.
 
-## Running locally
+## Урындағы йүгереүҙе
 
 ```bash
 make gost-bench                     # run benches + tolerance check
@@ -23,49 +24,49 @@ make gost-dudect                    # run the constant-time timing guard
 ./scripts/update_gost_baseline.sh   # bench + rebaseline helper
 ```
 
-Behind the scenes both targets call `scripts/gost_bench.sh`, which:
+Күренештәр артында ике маҡсатлы шылтыратыу `scripts/gost_bench.sh`, улар:
 
-1. Executes `cargo bench -p iroha_crypto --bench gost_sign --features gost -- --noplot`.
-2. Runs `gost_perf_check` against `target/criterion`, verifying medians against the
-   checked-in baseline (`crates/iroha_crypto/benches/gost_perf_baseline.json`).
-3. Injects the Markdown summary into `$GITHUB_STEP_SUMMARY` when available.
+1. `cargo bench -p iroha_crypto --bench gost_sign --features gost -- --noplot` башҡарҙары.
+.
+   тикшерелгән-база һыҙығы (`crates/iroha_crypto/benches/gost_perf_baseline.json`).
+.
 
-To refresh the baseline after approving a regression/improvement, run:
+Регрессия/яҡшыртыуҙы раҫлауҙан һуң база һыҙығын яңыртыу өсөн, йүгерергә:
 
 ```bash
 make gost-bench-update
 ```
 
-or directly:
+йәки туранан-тура:
 
 ```bash
 ./scripts/gost_bench.sh --write-baseline \
   --baseline crates/iroha_crypto/benches/gost_perf_baseline.json
 ```
 
-`scripts/update_gost_baseline.sh` runs the bench + checker, overwrites the baseline JSON, and prints
-the new medians. Always commit the updated JSON alongside the decision record in
+`scripts/update_gost_baseline.sh` эскәмйә + шашка эшләй, JSON база линияһы өҫтөнә яҙа, һәм баҫмалар
+яңы медианалар. Һәр ваҡыт яңыртылған JSON 2012 йылда ҡарар ҡабул итеү яҙмаһы менән бер рәттән үтә.
 `crates/iroha_crypto/docs/gost_backend.md`.
 
-### Current reference medians
+### Ағымдағы белешмә медианалары
 
-| Algorithm            | Median (µs) |
-|----------------------|-------------|
-| ed25519              | 69.67       |
-| gost256_paramset_a   | 1136.96     |
-| gost256_paramset_b   | 1129.05     |
-| gost256_paramset_c   | 1133.25     |
-| gost512_paramset_a   | 8944.39     |
-| gost512_paramset_b   | 8963.60     |
-| secp256k1            | 160.53      |
+| Алгоритм | Медиан (μs) |
+|--------------------|-------------|
+| ed25519 | 69.67 |
+| gost256_paramset_a | 1136.96 |
+| gost256_paramset_b | 1129.05 |
+| gost256_paramset_c | 1133.25 |
+| gost512_paramet_a | 8944.39 |
+| gost512_paramset_b | 8963.60 |
+| secp256к1 | 160.53 |
 
 ## CI
 
-`.github/workflows/gost-perf.yml` uses the same script and also runs the dudect timing guard.
-CI fails when the measured median exceeds the baseline by more than the configured tolerance
-(20% by default) or when the timing guard detects a leak, so regressions are caught automatically.
+`.github/workflows/gost-perf.yml` шул уҡ сценарийҙы ҡуллана һәм шулай уҡ дудект ваҡыт һаҡсыһы эшләй.
+CI уңышһыҙлыҡҡа осрай, ҡасан үлсәү медианаһы база линияһынан артып, күберәк конфигурацияланған толерантлыҡ .
+(20% ғәҙәттәгесә) йәки ваҡыт һаҡсыһы һыу ағыуын асыҡлағанда, шуға күрә регрессиялар автоматик рәүештә тотола.
 
-## Summary output
+## Йәмғеһе сығыш
 
-`gost_perf_check` prints the comparison table locally and appends the same content to
-`$GITHUB_STEP_SUMMARY`, so CI job logs and run summaries share the same numbers.
+`gost_perf_check` сағыштырыу таблицаһын локаль рәүештә баҫтыра һәм шул уҡ йөкмәткене 2012 йылға
+`$GITHUB_STEP_SUMMARY`, шуға күрә CI эш урындары журналдары һәм резюме йүгерә бер үк һандар менән уртаҡлаша.

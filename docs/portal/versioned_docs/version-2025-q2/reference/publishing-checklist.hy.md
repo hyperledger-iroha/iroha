@@ -7,50 +7,51 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9be80e0138e1e8aa453c703c53069837b24f29f6b463d14c846a01b015918f24
 source_last_modified: "2025-12-29T18:16:35.907815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Publishing Checklist
+# Հրապարակման ստուգաթերթ
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+Օգտագործեք այս ստուգաթերթը, երբ թարմացնում եք մշակողների պորտալը: Այն ապահովում է, որ
+CI կառուցումը, GitHub Pages-ի տեղակայումը և ծխի ձեռքով փորձարկումներն ընդգրկում են յուրաքանչյուր բաժին
+նախքան թողարկման կամ ճանապարհային քարտեզի ուղենիշը վայրէջք կատարել:
 
-## 1. Local validation
+## 1. Տեղական վավերացում
 
-- `npm run sync-openapi` (when Torii OpenAPI changes).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `cd build && sha256sum -c checksums.sha256` – verify the checksum manifest the
-  build generated.
-- Spot-check the markdown you touched via `npm run start` and the live reload
-  server.
+- `npm run sync-openapi` (երբ Torii OpenAPI փոխվում է):
+- `npm run build` – հաստատեք `Build on Iroha with confidence` հերոսի պատճենը դեռ
+  հայտնվում է `build/index.html`-ում:
+- `cd build && sha256sum -c checksums.sha256` – ստուգեք ստուգիչ գումարի դրսևորումը
+  ստեղծվել է կառուցում:
+- Ստուգեք ձեր նշած նշանը `npm run start`-ի և ուղիղ վերաբեռնման միջոցով
+  սերվեր.
 
-## 2. Pull request checks
+## 2. Քաշեք հարցումների ստուգումները
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  that `sha256sum -c` passed in CI.
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- Ստուգեք, որ `docs-portal-build` աշխատանքը հաջողվել է `.github/workflows/check-docs.yml`-ում:
+- Հաստատեք `ci/check_docs_portal.sh` վազքը (CI տեղեկամատյանները ցույց են տալիս հերոսի ծխի ստուգումը):
+- Համոզվեք, որ նախադիտման աշխատանքային հոսքը վերբեռնել է մանիֆեստ (`build/checksums.sha256`) և
+  որ `sha256sum -c` անցել է CI.
+- PR-ին ավելացրեք հրապարակված նախադիտման URL-ը GitHub Էջերի միջավայրից
+  նկարագրությունը.
 
-## 3. Section sign-off
+## 3. Բաժնի ստորագրում
 
-| Section | Owner | Checklist |
+| Բաժին | Սեփականատեր | Ստուգաթերթ |
 |---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
+| Գլխավոր էջ | DevRel | Հերոսների պատճենները, արագ մեկնարկի քարտերը հղում են դեպի վավեր երթուղիներ, լուծում են CTA կոճակները: |
+| Norito | Norito WG | Ընդհանուր ակնարկ և սկսելու ուղեցույցները հղում են կատարում վերջին CLI դրոշակներին և Norito սխեմայի փաստաթղթերին: |
+| SoraFS | Պահպանման թիմ | Quickstart-ը ավարտվում է, մանիֆեստի հաշվետվության դաշտերը փաստաթղթավորվում են, մոդելավորման հրահանգները ստուգվում են: |
+| SDK ուղեցույցներ | SDK-ն տանում է | Rust/Python/JS ուղեցույցները կազմում են ընթացիկ օրինակները և հղվում կենդանի ռեպոներին: |
+| Տեղեկանք | Փաստաթղթեր/DevRel | Ինդեքսում թվարկված են նորագույն սպեկտրները, Norito կոդեկի հղումը համապատասխանում է `norito.md`-ին: |
+| Նախադիտել արտեֆակտ | Փաստաթղթեր/DevRel | `docs-portal-preview` արտեֆակտ կցված է PR-ին, ծխի ստուգման անցաթուղթը, հղումը կիսվել է գրախոսների հետ: |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+Նշեք յուրաքանչյուր տող որպես ձեր PR վերանայման մաս կամ նշեք որևէ հետագա առաջադրանք, որպեսզի կարգավիճակը
+հետևելը մնում է ճշգրիտ:
 
-## 4. Release notes
+## 4. Թողարկման նշումներ
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- Ներառեք `https://docs.iroha.tech/` (կամ շրջակա միջավայրի URL
+  տեղակայման աշխատանքից) թողարկման նշումներում և կարգավիճակի թարմացումներում:
+- Հստակորեն զանգահարեք ցանկացած նոր կամ փոփոխված բաժին, որպեսզի ներքևի թիմերը իմանան, թե որտեղ
+  վերսկսել իրենց ծխի թեստերը:

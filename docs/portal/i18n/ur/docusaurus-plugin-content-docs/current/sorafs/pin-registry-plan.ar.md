@@ -4,141 +4,139 @@ direction: rtl
 source: docs/portal/docs/sorafs/pin-registry-plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pin-registry-plan
-title: خطة تنفيذ Pin Registry في SoraFS
-sidebar_label: خطة Pin Registry
-description: خطة تنفيذ SF-4 التي تغطي آلة الحالات للـ registry وواجهة Torii والتولنغ والرصد.
+ID: پن رجسٹری پلان
+عنوان: SoraFS میں پن رجسٹری کے نفاذ کا منصوبہ
+سائڈبار_لیبل: پن رجسٹری پلان
+تفصیل: اسٹیٹ مشین رجسٹری ، Torii انٹرفیس ، ٹولنگ ، اور نگرانی کا احاطہ کرنے والا SF-4 عمل درآمد کا منصوبہ۔
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/pin_registry_plan.md`. حافظ على النسختين متزامنتين ما دامت الوثائق القديمة نشطة.
+::: منظور شدہ ماخذ کو نوٹ کریں
+یہ صفحہ `docs/source/sorafs/pin_registry_plan.md` کی عکاسی کرتا ہے۔ جب تک پرانی دستاویزات فعال ہوں تب تک دونوں ورژن کو مطابقت پذیر رکھیں۔
 :::
 
-# خطة تنفيذ Pin Registry في SoraFS (SF-4)
+SoraFS (SF-4) میں # پن رجسٹری پر عمل درآمد کا منصوبہ
 
-يقدّم SF-4 عقد Pin Registry والخدمات المساندة التي تخزن التزامات manifest،
-وتفرض سياسات pin، وتكشف واجهات API لـ Torii والبوابات وادوات التنسيق.
-يوسّع هذا المستند خطة التحقق بمهام تنفيذية ملموسة تغطي المنطق on-chain،
-وخدمات المضيف، والـ fixtures، والمتطلبات التشغيلية.
+SF-4 پن رجسٹری نوڈس اور معاون خدمات مہیا کرتا ہے جو ظاہر ہوتا ہے کہ ظاہر ہوتا ہے۔
+یہ پن کی پالیسیاں نافذ کرتا ہے ، اور Torii APIs ، گیٹ ویز ، اور آرکسٹریٹرز کو بے نقاب کرتا ہے۔
+اس دستاویز میں توثیق کی اسکیم میں توسیع کی گئی ہے جس میں کنکریٹ کے نفاذ کے کاموں میں آن چین کی منطق کا احاطہ کیا گیا ہے ،
+میزبان خدمات ، فکسچر ، اور آپریشنل ضروریات۔
 
-## النطاق
+## رینج
 
-1. **آلة حالات registry**: سجلات Norito للـ manifests والـ aliases وسلاسل الخلفاء
-   وعصور الاحتفاظ وبيانات الحوكمة الوصفية.
-2. **تنفيذ العقد**: عمليات CRUD حتمية لدورة حياة pin (`ReplicationOrder`, `Precommit`,
-   `Completion`, eviction).
-3. **واجهة الخدمة**: نقاط نهاية gRPC/REST مدعومة بالـ registry تستهلكها Torii وSDKs،
-   وتشمل الترقيم والاتستاشن.
-4. **التولنغ والـ fixtures**: مساعدات CLI ومتجهات اختبار ووثائق تحافظ على تزامن
-   manifests وaliases وenvelopes الخاصة بالحوكمة.
-5. **التليمتري وعمليات التشغيل**: مقاييس وتنبيهات وrunbooks لصحة registry.
+1. ** رجسٹری اسٹیٹ مشین **: Norito منشور ، عرفی اور جانشین کی زنجیروں کے لئے رجسٹر
+   برقرار رکھنے کے زمانے اور گورننس میٹا ڈیٹا۔
+2.
+   `Completion` ، بے دخلی)۔
+3. ** سروس انٹرفیس **: رجسٹری سے چلنے والے GRPC/REST اختتامی نقطہ Torii اور SDKs کے ذریعہ استعمال کیا جاتا ہے ،
+   نمبر اور تعینات شامل ہے۔
+4. ** ٹولنگ اور فکسچر **: سی ایل آئی مددگار ، ٹیسٹ ویکٹرز ، اور دستاویزات جو ہم آہنگی میں رہتے ہیں
+   گورننس ظاہر ہوتا ہے ، عرفی اور لفافے۔
+5.
 
-## نموذج البيانات
+## ڈیٹا ماڈل
 
-### السجلات الاساسية (Norito)
+### بنیادی ریکارڈ (Norito)
 
-| البنية | الوصف | الحقول |
-|--------|-------|--------|
-| `PinRecordV1` | مدخل manifest كنسي. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
-| `AliasBindingV1` | ربط alias -> CID الخاص بالـ manifest. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | تعليمات للمزوّدين لتثبيت manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | اقرار المزوّد. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | لقطة سياسة الحوكمة. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+| ڈھانچہ | تفصیل | فیلڈز |
+| -------- | ------- | -------- |
+| `PinRecordV1` | کیننیکل مینی فیسٹ انٹری۔ | Norito `governance_envelope_hash`۔ |
+| `AliasBindingV1` | الیاس کو پابند کریں -> منشور کا سی آئی ڈی۔ | `alias` ، `manifest_cid` ، `bound_at` ، `expiry_epoch`۔ |
+| `ReplicationOrderV1` | فراہم کنندگان کو منشور انسٹال کرنے کے لئے ہدایات۔ | `order_id` ، `manifest_cid` ، `providers` ، `redundancy` ، `deadline` ، `policy_hash`۔ |
+| `ReplicationReceiptV1` | فراہم کنندہ کا اعتراف۔ | `order_id` ، `provider_id` ، `status` ، `timestamp` ، `por_sample_digest`۔ |
+| `ManifestPolicyV1` | گورننس پالیسی اسنیپ شاٹ۔ | `min_replicas` ، `max_retention_epochs` ، `allowed_profiles` ، `pin_fee_basis_points`۔ |
 
-مرجع التنفيذ: راجع `crates/sorafs_manifest/src/pin_registry.rs` لمخططات Norito في Rust
-ومساعدات التحقق التي تدعم هذه السجلات. التحقق يعكس tooling الخاص بالـ manifest
-(lookup لــ chunker registry وpin policy gating) لضمان ان العقد وواجهات Torii وCLI
-تتقاسم نفس invariants.
+نفاذ کا حوالہ: مورچا میں Norito اسکیموں کے لئے `crates/sorafs_manifest/src/pin_registry.rs` دیکھیں
+اور توثیق ایڈز جو ان ریکارڈوں کی حمایت کرتے ہیں۔ توثیق منشور کے ٹولنگ کی عکاسی کرتی ہے
+(چنکر رجسٹری اور پن پالیسی گیٹنگ کے لئے تلاش کریں) اس بات کو یقینی بنانے کے لئے کہ نوڈس اور انٹرفیس Torii اور CLI
+وہ ایک ہی حملہ آوروں کا اشتراک کرتے ہیں۔
 
-المهام:
-- انهاء مخططات Norito في `crates/sorafs_manifest/src/pin_registry.rs`.
-- توليد الشفرة (Rust + SDKs اخرى) باستخدام ماكرو Norito.
-- تحديث الوثائق (`sorafs_architecture_rfc.md`) بعد تثبيت المخططات.
+کام:
+- `crates/sorafs_manifest/src/pin_registry.rs` میں Norito اسکیموں کا خاتمہ۔
+- میکرو Norito کا استعمال کرتے ہوئے کوڈ (زنگ + دیگر SDKs) تیار کریں۔
+- اسکیمیٹکس انسٹال کرنے کے بعد دستاویزات (`sorafs_architecture_rfc.md`) کو اپ ڈیٹ کریں۔
 
-## تنفيذ العقد
+## معاہدے پر عمل درآمد| ٹاسک | مالک/s | نوٹ |
+| -------- | -------------------- | ------------------------------ |
+| رجسٹری اسٹوریج (سلیج/اسکیلائٹ/آف چین) یا سمارٹ معاہدہ ماڈیول نافذ کریں۔ | کور انفرا / سمارٹ معاہدہ ٹیم | عصبی ہیشنگ فراہم کریں اور تیرتے نقطہ سے بچیں۔ |
+| انٹری پوائنٹس: `submit_manifest` ، `approve_manifest` ، `bind_alias` ، `issue_replication_order` ، `complete_replication` ، `evict_manifest`۔ | کور انفرا | تصدیق کے منصوبے سے `ManifestValidator` استعمال کریں۔ عرف کو پابند کرنا اب `RegisterPinManifest` (Torii کے DTO) سے گزرتا ہے جبکہ کسٹم `bind_alias` بعد کی تازہ کاریوں کے لئے منصوبہ بنا ہوا ہے۔ |
+| ریاستی منتقلی: جانشینی کا نفاذ (منشور A -> B) ، برقرار رکھنے کے دور ، عرف کی انفرادیت۔ | گورننس کونسل / کور انفرا | عرف کی انفرادیت ، برقرار رکھنے کی حدود ، اور پیشگی منظوری/واپسی کے چیک `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` میں ہیں۔ ملٹی ہاپ تسلسل کا پتہ لگانے اور فالتو پن لیجر ابھی بھی کھلے ہیں۔ |
+| حکومت کے پیرامیٹرز: تشکیل/گورننس کی حیثیت سے `ManifestPolicyV1` لوڈ کریں۔ گورننس ایونٹس کے ذریعے اپ ڈیٹ کرنے کی اجازت دیں۔ | گورننس کونسل | پالیسی کی تازہ کاریوں کے لئے CLI فراہم کریں۔ |
+| واقعہ کی ریلیز: ٹیلی میٹری کے لئے ایونٹ ریلیز Norito (`ManifestApproved` ، `ReplicationOrderIssued` ، `AliasBound`)۔ | مشاہدہ | ایونٹ پلانر + رجسٹریشن کی تعریف۔ |
 
-| المهمة | المالك/المالكون | الملاحظات |
-|--------|------------------|-----------|
-| تنفيذ تخزين registry (sled/sqlite/off-chain) او وحدة smart contract. | Core Infra / Smart Contract Team | توفير hashing حتمي وتجنب الفاصلة العائمة. |
-| نقاط الدخول: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | استخدام `ManifestValidator` من خطة التحقق. ربط alias يمر الان عبر `RegisterPinManifest` (DTO من Torii) بينما يبقى `bind_alias` المخصص مخططا لتحديثات لاحقة. |
-| انتقالات الحالة: فرض التعاقب (manifest A -> B)، عصور الاحتفاظ، تفرد alias. | Governance Council / Core Infra | تفرد alias وحدود الاحتفاظ وفحوصات اعتماد/سحب السلف موجودة في `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`؛ كشف التعاقب متعدد القفزات ودفاتر التكرار ما زالت مفتوحة. |
-| المعلمات المحكومة: تحميل `ManifestPolicyV1` من config/حالة الحوكمة؛ السماح بالتحديث عبر احداث الحوكمة. | Governance Council | توفير CLI لتحديثات السياسة. |
-| اصدار الاحداث: اصدار احداث Norito للتليمتري (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | تعريف مخطط الاحداث + التسجيل. |
+ٹیسٹ:
+- ہر اندراج نقطہ کے لئے یونٹ ٹیسٹ (مثبت + مسترد)۔
+- جانشینی سیریز کی خصوصیات کے ٹیسٹ (کوئی سائیکل نہیں ، چڑھائی والے دور)۔
+- بے ترتیب (مجبوری) ظاہر کرکے تصدیق کے لئے فز۔
 
-الاختبارات:
-- اختبارات وحدة لكل نقطة دخول (ايجابي + رفض).
-- اختبارات خصائص لسلسلة التعاقب (بدون دورات، عصور متصاعدة).
-- Fuzz للتحقق عبر توليد manifests عشوائية (مقيدة).
+## سروس انٹرفیس (Torii/SDK انضمام)
 
-## واجهة الخدمة (تكامل Torii/SDK)
+| اجزاء | ٹاسک | مالک/s |
+| -------- | -------- | -------------------- |
+| خدمت Torii | `/v1/sorafs/pin` (جمع کروائیں) ، `/v1/sorafs/pin/{cid}` (تلاش) ، `/v1/sorafs/aliases` (فہرست/پابند) ، `/v1/sorafs/replication` (آرڈرز/رسیدیں) کا پتہ لگائیں۔ نمبر + فلٹرنگ فراہم کریں۔ | نیٹ ورکنگ TL / کور انفرا |
+| اسٹیشن | ردعمل میں اونچائی/ہیش رجسٹری شامل کریں۔ SDKs کے ذریعہ استعمال ہونے والے اسٹیشن میں Norito کو شامل کیا گیا۔ | کور انفرا |
+| Cli | `sorafs_manifest_stub` یا نیا CLI `sorafs_pin` کے ساتھ `pin submit` ، `alias bind` ، `order issue` ، `registry export` کو بڑھاؤ۔ | ٹولنگ ڈبلیو جی |
+| SDK | نقشہ Norito سے کلائنٹ بائنڈنگ (زنگ/GO/TS) تیار کریں۔ انضمام کے ٹیسٹ شامل کریں۔ | ایس ڈی کے ٹیمیں |
 
-| المكون | المهمة | المالك/المالكون |
-|--------|--------|------------------|
-| خدمة Torii | كشف `/v1/sorafs/pin` (submit)، `/v1/sorafs/pin/{cid}` (lookup)، `/v1/sorafs/aliases` (list/bind)، `/v1/sorafs/replication` (orders/receipts). توفير ترقيم + ترشيح. | Networking TL / Core Infra |
-| الاتستاشن | تضمين ارتفاع/هاش registry في الاستجابات؛ اضافة بنية Norito للاتستاشن تستهلكها SDKs. | Core Infra |
-| CLI | توسيع `sorafs_manifest_stub` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | توليد bindings للعميل (Rust/Go/TS) من مخطط Norito؛ اضافة اختبارات تكامل. | SDK Teams |
+آپریشنز:
+- اختتامی نکات حاصل کرنے کے لئے کیشے/ایٹگ پرت شامل کریں۔
+- Torii پالیسیوں کے مطابق شرح کی حد/تصنیف فراہم کریں۔
 
-العمليات:
-- اضافة طبقة cache/ETag لنقاط نهاية GET.
-- توفير rate limiting / auth بما يتوافق مع سياسات Torii.
+## فکسچر اور سی آئی
 
-## Fixtures و CI
+- فکسچر ڈائرکٹری: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` اسٹورز نے منشور/عرف/آرڈر کے اسنیپ شاٹس پر دستخط کیے ہیں جو `cargo run -p iroha_core --example gen_pin_snapshot` کے ذریعے دوبارہ پیدا ہوتے ہیں۔
+- CI مرحلہ: `ci/check_sorafs_fixtures.sh` اسنیپ شاٹ کو دوبارہ تخلیق کرتا ہے اور جب تضادات ہوتے ہیں تو ، CI فکسچر کو ایک جیسے رکھنے کے لئے ناکام ہوجاتا ہے۔
+-انضمام ٹیسٹ (`crates/iroha_core/tests/pin_registry.rs`) ڈپلیکیٹ عرف مسترد ، عرف کی منظوری/برقرار رکھنے کے تحفظ ، چنکر مماثل ہینڈلز ، کاپی گنتی کی جانچ پڑتال ، اور جھرن کے تحفظات کی ناکامی (گمنام/پہلے سے منظور شدہ/پیچھے/خود حوالہ والے پوائنٹس) کے ساتھ خوشگوار راستے کا احاطہ کرنا۔ کوریج کی تفصیلات کے ل cases معاملات `register_manifest_rejects_*` دیکھیں۔
+- یونٹ ٹیسٹوں میں اب `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` میں عرف کی جانچ ، برقرار رکھنے کے تحفظات ، اور جانشینی کی جانچ پڑتال کا احاطہ کیا گیا ہے۔ ریاستی مشین آمد پر ملٹی ہاپ تسلسل کا پتہ لگانا۔
+- پائپ لائنوں کی نگرانی میں استعمال ہونے والے واقعات کے لئے گولڈ جے ایس او این۔
 
-- دليل fixtures: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` يخزن لقطات موقعة لـ manifest/alias/order يعاد توليدها عبر `cargo run -p iroha_core --example gen_pin_snapshot`.
-- خطوة CI: `ci/check_sorafs_fixtures.sh` تعيد توليد اللقطة وتفشل عند وجود اختلافات، لتحافظ على تماهي fixtures الخاصة بـ CI.
-- اختبارات التكامل (`crates/iroha_core/tests/pin_registry.rs`) تغطي المسار السعيد مع رفض alias المكرر، وحمايات اعتماد/احتفاظ alias، وhandles غير متطابقة لـ chunker، والتحقق من عدد النسخ، وفشل حمايات التعاقب (مؤشرات مجهولة/موافَق عليها مسبقا/مسحوبة/ذاتية الاشارة)؛ راجع حالات `register_manifest_rejects_*` لتفاصيل التغطية.
-- اختبارات الوحدة تغطي الان التحقق من alias وحمايات الاحتفاظ وفحوصات الخلف في `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`؛ كشف التعاقب متعدد القفزات عند وصول آلة الحالات.
-- JSON ذهبي للاحداث المستخدمة في خطوط مراقبة الرصد.
+## ٹیلی میٹری اور نگرانی
 
-## التليمتري والرصد
-
-المقاييس (Prometheus):
+بینچ مارک (Prometheus):
 - `torii_sorafs_registry_manifests_total{status="pending|approved|retired"}`
 - `torii_sorafs_registry_aliases_total`
 - `torii_sorafs_registry_orders_total{status="pending|completed|expired"}`
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- تليمتري المزود الحالي (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) تبقى ضمن النطاق للوحـات end-to-end.
+-موجودہ فراہم کردہ ٹیلی میٹری (`torii_sorafs_capacity_*` ، `torii_sorafs_fee_projection_nanos`) اختتام سے آخر والے بورڈز کی حدود میں ہے۔ریکارڈز:
+- ایونٹ اسٹریم Norito گورننس آڈٹ (سائٹ؟) کے لئے تشکیل دیا گیا ہے۔
 
-السجلات:
-- تيار احداث Norito منظم لتدقيقات الحوكمة (موقع؟).
+انتباہات:
+- زیر التواء دہرائے جانے والے احکامات جو ایس ایل اے سے تجاوز کرتے ہیں۔
+- عرف کی میعاد ختم ہونے کی دہلیز سے کم ہے۔
+- برقرار رکھنے کی خلاف ورزیوں (تکمیل سے پہلے تجدید نہیں)۔
 
-التنبيهات:
-- اوامر تكرار معلقة تتجاوز SLA.
-- انتهاء صلاحية alias اقل من العتبة.
-- مخالفات الاحتفاظ (manifest لم يجدد قبل الانتهاء).
+انفارمیشن پینل:
+- Grafana JSON فائل `docs/source/grafana_sorafs_pin_registry.json` مینی فیسٹ ، عرفیوس کوریج ، بیک بلاگ سنترپتی ، ایس ایل اے تناسب ، لیٹینسی بمقابلہ سلیک ، اور کسی حملے کے دوران جائزہ لینے کے لئے ناکام کمانڈ کی شرحوں کی کل لائف سائیکل کو ٹریک کرتا ہے۔
 
-لوحات المعلومات:
-- ملف Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` يتتبع اجمالي دورة حياة manifests، تغطية aliases، تشبع backlog، نسبة SLA، تراكب latency مقابل slack، ومعدلات الاوامر الفاشلة للمراجعة اثناء النوبة.
+## رن بکس اور دستاویزات
 
-## Runbooks والوثائق
+- رجسٹری کی حیثیت کی تازہ کاریوں کو شامل کرنے کے لئے `docs/source/sorafs/migration_ledger.md` کو اپ ڈیٹ کیا گیا۔
+- آپریٹر کا دستی: `docs/source/sorafs/runbooks/pin_registry_ops.md` (فی الحال شائع شدہ) میٹرکس ، انتباہ ، تعیناتی ، بیک اپ ، اور خدمت کی بازیابی کا احاطہ کرتا ہے۔
+- گورننس گائیڈ: پالیسی پیرامیٹرز ، منظوری کے ورک فلو ، اور تنازعہ سے نمٹنے کی تفصیل۔
+- ہر اختتامی نقطہ (Docusaurus دستاویزات) کے لئے API حوالہ صفحات۔
 
-- تحديث `docs/source/sorafs/migration_ledger.md` لتضمين تحديثات حالة registry.
-- دليل المشغل: `docs/source/sorafs/runbooks/pin_registry_ops.md` (منشور حاليا) يغطي المقاييس والتنبيه والنشر والنسخ الاحتياطي واستعادة الخدمة.
-- دليل الحوكمة: وصف معلمات السياسة وسير عمل الاعتماد ومعالجة النزاعات.
-- صفحات مرجع API لكل نقطة نهاية (وثائق Docusaurus).
+## انحصار اور سیریلائزیشن
 
-## الاعتماديات والتسلسل
+1. توثیق کے مکمل منصوبے کے مکمل کام (مینی فیسٹ ویلیڈیٹر انضمام)۔
+2. اختتامی اسکیم Norito + ڈیفالٹ پالیسی اقدار۔
+3. معاہدہ + سروس اور ٹیلی میٹرک کنکشن کا نفاذ۔
+4. فکسچر کو دوبارہ تخلیق کریں اور انضمام کے ٹیسٹ چلائیں۔
+5. دستاویزات/رن بکس کو اپ ڈیٹ کریں اور روڈ میپ آئٹمز کو مکمل طور پر مکمل کریں۔
 
-1. اكمال مهام خطة التحقق (دمج ManifestValidator).
-2. انهاء مخطط Norito + قيم السياسة الافتراضية.
-3. تنفيذ العقد + الخدمة وربط التليمتري.
-4. اعادة توليد fixtures وتشغيل اختبارات التكامل.
-5. تحديث الوثائق/runbooks ووضع علامة اكتمال على عناصر خارطة الطريق.
+SF-4 کے اندر ہر چیک لسٹ کو پیشرفت ریکارڈ کرتے وقت اس منصوبے کا حوالہ دینا چاہئے۔
+باقی انٹرفیس اب اٹسٹیشن کے ساتھ فہرست کے اختتامی مقامات فراہم کرتا ہے:
 
-يجب ان تشير كل قائمة تحقق ضمن SF-4 الى هذه الخطة عند تسجيل التقدم.
-واجهة REST توفر الان نقاط نهاية قائمة مع اتستاشن:
+- `GET /v1/sorafs/pin` اور `GET /v1/sorafs/pin/{digest}` کے ساتھ ظاہر ہوتا ہے
+  لنک عرفیسس ، دہرائیں کمانڈز ، اور آخری بلاک کے ہیش سے اخذ کردہ ایک اسٹیشن آبجیکٹ۔
+- `GET /v1/sorafs/aliases` اور `GET /v1/sorafs/replication` عرف کیٹلاگ کو ظاہر کرتا ہے
+  فکسڈ نمبرنگ اور اسٹیٹس فلٹرز کے ساتھ فعال اور جمع شدہ دہرانے والے کمانڈز۔
 
-- `GET /v1/sorafs/pin` و `GET /v1/sorafs/pin/{digest}` تعيدان manifests مع
-  ربط aliases واوامر التكرار وكائن اتستاشن مشتق من هاش اخر كتلة.
-- `GET /v1/sorafs/aliases` و `GET /v1/sorafs/replication` تكشفان كتالوج alias
-  النشط وتراكم اوامر التكرار بترقيم ثابت ومرشحات حالة.
-
-تغلف CLI هذه الاستدعاءات (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`) حتى يتمكن المشغلون من اتمتة تدقيقات registry بدون لمس
-واجهات API منخفضة المستوى.
+سی ایل آئی ان کالوں (`iroha app sorafs pin list` ، `pin show` ، `alias list` ،
+`replication list`) لہذا آپریٹرز ٹچ لیس رجسٹری آڈٹ کو خود کار بناسکتے ہیں
+نچلے درجے کے APIs۔

@@ -7,54 +7,55 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2025-12-29T18:16:35.926037+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+# AND6 ԵՄ իրավական գրանցման հուշագրի ձևանմուշ
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+Այս հուշագիրը գրանցում է իրավական վերանայումը, որը պահանջվում է ճանապարհային քարտեզի **AND6** կետով նախքան
+ԵՄ (ETSI/GDPR) արտեֆակտ փաթեթը ներկայացվում է կարգավորող մարմիններին: Փաստաբանը պետք է կլոնավորի
+այս ձևանմուշը յուրաքանչյուր թողարկման համար, լրացրեք ներքևի դաշտերը և պահեք ստորագրված պատճենը
+հուշագրում հիշատակված անփոփոխ արտեֆակտների կողքին:
 
-## Summary
+## Ամփոփում
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- **Թողարկում / Գնացք:** `<e.g., 2026.1 GA>`
+- **Վերանայման ամսաթիվը.** `<YYYY-MM-DD>`
+- **Խորհրդական / Գրախոս.** `<name + organisation>`
+- **Շրջանակ՝** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- **Համապատասխան տոմսեր.** `<governance or legal issue IDs>`
 
-## Artefact Checklist
+## Արտեֆակտ ստուգաթերթ
 
-| Artefact | SHA-256 | Location / Link | Notes |
+| Արտեֆակտ | SHA-256 | Գտնվելու վայրը / Հղում | Ծանոթագրություններ |
 |----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + կառավարման արխիվ | Հաստատեք թողարկման նույնացուցիչները և սպառնալիքների մոդելի ճշգրտումները: |
+| `gdpr_dpia_summary.md` | `<hash>` | Նույն գրացուցակը / տեղայնացման հայելիներ | Համոզվեք, որ խմբագրման քաղաքականության հղումները համապատասխանում են `sdk/android/telemetry_redaction.md`-ին: |
+| `sbom_attestation.md` | `<hash>` | Նույն գրացուցակը + համանշանային փաթեթ ապացույցների դույլով | Ստուգեք CycloneDX + ծագման ստորագրությունները: |
+| Ապացույցների մատյան շարք | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Շարքի համարը `<n>` |
+| Սարք-լաբորատոր անսպասելիության փաթեթ | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Հաստատում է այս թողարկման հետ կապված անհաջող փորձը: |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> Կցեք լրացուցիչ տողեր, եթե փաթեթը պարունակում է ավելի շատ ֆայլեր (օրինակ՝ գաղտնիություն
+> հավելվածներ կամ DPIA թարգմանություններ): Յուրաքանչյուր արտեֆակտ պետք է հղում կատարի իր անփոփոխելիությանը
+> վերբեռնել թիրախը և Buildkite աշխատանքը, որն արտադրել է այն:
 
-## Findings & Exceptions
+## Գտածոներ և բացառություններ
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(Փոխարինեք մնացորդային ռիսկերը ծածկող պարբերաթերթերով՝ փոխհատուցելով
+  վերահսկում կամ պահանջվող հետագա գործողություններ։)*
 
-## Approval
+## Հաստատում
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- **Որոշում`** `<Approved / Approved with conditions / Blocked>`
+- **Ստորագրություն / Ժամացույց՝ ** `<digital signature or email reference>`
+- **Հետևող սեփականատերեր.** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+Վերբեռնեք վերջնական հուշագիրը կառավարման ապացույցների դույլում, պատճենեք SHA-256-ը
+`docs/source/compliance/android/evidence_log.csv` և միացրեք վերբեռնման ուղին
+`status.md`. Եթե որոշումը «արգելափակված» է, անցեք դեպի AND6 ղեկ
+հանձնաժողովի և փաստաթղթերի շտկման քայլերը ինչպես ճանապարհային քարտեզի թեժ ցուցակում, այնպես էլ փաստաթղթում
+սարք-լաբորատորիա արտակարգ իրավիճակների մատյան.

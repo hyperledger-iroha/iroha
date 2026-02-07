@@ -6,81 +6,80 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 01bfdc70f601098acaefc60c6a3b4c464218b8c6f01f2f20eb3632994ff7110f
 source_last_modified: "2026-01-03T18:07:57.759135+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Confidential Gas Calibration Baselines
+# Líneas base de calibración de gas confidenciales
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in `docs/source/confidential_assets.md#calibration-baselines--acceptance-gates`.
+Este libro de contabilidad rastrea los resultados validados de la calibración de gas confidencial.
+puntos de referencia. Cada fila documenta un conjunto de mediciones de calidad de liberación capturado con
+el procedimiento descrito en `docs/source/confidential_assets.md#calibration-baselines--acceptance-gates`.
 
-| Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
+| Fecha (UTC) | Comprometerse | Perfil | `ns/op` | `gas/op` | `ns/gas` | Notas |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-28 | 8ea9b2a7 | baseline-neon-20260428 | 4.29e6 | 1.57e2 | 2.73e4 | Darwin 25.0.0 arm64 (`rustc 1.91.0`). Command: `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; log at `docs/source/confidential_assets_calibration_neon_20260428.log`. x86_64 parity runs (SIMD-neutral + AVX2) are scheduled for the 2026-03-19 Zurich lab slot; artefacts will land under `artifacts/confidential_assets_calibration/2026-03-x86/` with matching commands and will be merged into the baseline table once captured. |
-| 2026-04-28 | — | baseline-simd-neutral | — | — | — | **Waived** on Apple Silicon—`ring` enforces NEON for the platform ABI, so `RUSTFLAGS="-C target-feature=-neon"` fails before the bench can run (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`). Neutral data stays gated on CI host `bench-x86-neon0`. |
-| 2026-04-28 | — | baseline-avx2 | — | — | — | **Deferred** until an x86_64 runner is available. `arch -x86_64` cannot spawn binaries on this machine (“Bad CPU type in executable”; see `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`). CI host `bench-x86-avx2a` remains the source of record. |
+| 2025-10-18 | 3c70a7d3 | línea de base-neón | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (información del host); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| 2026-04-28 | 8ea9b2a7 | línea de base-neón-20260428 | 4.29e6 | 1.57e2 | 2.73e4 | Darwin 25.0.0 arm64 (`rustc 1.91.0`). Comando: `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; inicie sesión en `docs/source/confidential_assets_calibration_neon_20260428.log`. Las ejecuciones de paridad x86_64 (SIMD-neutral + AVX2) están programadas para el espacio del laboratorio de Zurich del 2026-03-19; Los artefactos aterrizarán en `artifacts/confidential_assets_calibration/2026-03-x86/` con comandos coincidentes y se fusionarán en la tabla de referencia una vez capturados. |
+| 2026-04-28 | — | línea base-simd-neutral | — | — | — | **Exento** en Apple Silicon: `ring` aplica NEON para la plataforma ABI, por lo que `RUSTFLAGS="-C target-feature=-neon"` falla antes de que se pueda ejecutar el banco (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`). Los datos neutrales permanecen cerrados en el host CI `bench-x86-neon0`. |
+| 2026-04-28 | — | línea de base-avx2 | — | — | — | **Diferido** hasta que haya un corredor x86_64 disponible. `arch -x86_64` no puede generar archivos binarios en esta máquina (“Tipo de CPU incorrecto en el ejecutable”; consulte `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`). El host de CI `bench-x86-avx2a` sigue siendo la fuente de registro. |
 
-`ns/op` aggregates the median wall-clock per instruction measured by Criterion;
-`gas/op` is the arithmetic mean of the corresponding schedule costs from
-`iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
-the summed gas across the nine-instruction sample set.
+`ns/op` agrega el reloj de pared mediano por instrucción medida por Criterion;
+`gas/op` es la media aritmética de los costos de programación correspondientes de
+`iroha_core::gas::meter_instruction`; `ns/gas` divide los nanosegundos sumados por
+el gas sumado en el conjunto de muestra de nueve instrucciones.
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*Nota.* El host arm64 actual no emite resúmenes del Criterio `raw.csv` fuera de
+la caja; Vuelva a ejecutar con `CRITERION_OUTPUT_TO=csv` o una solución ascendente antes de etiquetar un
+liberación por lo que se adjuntan los artefactos requeridos por la lista de verificación de aceptación.
+Si todavía falta `target/criterion/` después de `--save-baseline`, recopile la ejecución
+en un host Linux o serializar la salida de la consola en el paquete de lanzamiento como un
+solución temporal. Como referencia, el registro de la consola arm64 de la última ejecución
+vive en `docs/source/confidential_assets_calibration_neon_20251018.log`.
 
-Per-instruction medians from the same run (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+Medianas por instrucción de la misma ejecución (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+| Instrucción | mediana `ns/op` | horario `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
-| RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
-| SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
-| GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
-| RevokeAccountRole | 3.12e5 | 96 | 3.25e3 |
-| ExecuteTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
-| MintAsset | 1.56e5 | 150 | 1.04e3 |
-| TransferAsset | 3.68e5 | 180 | 2.04e3 |
+| RegistrarDominio | 3.46e5 | 200 | 1.73e3 |
+| RegistrarseCuenta | 3.15e5 | 200 | 1.58e3 |
+| RegistrarAssetDef | 3.41e5 | 200 | 1.71e3 |
+| Establecer cuentaKV_small | 3.28e5 | 67 | 4.90e3 |
+| Función de cuenta de concesión | 3.33e5 | 96 | 3.47e3 |
+| Revocar función de cuenta | 3.12e5 | 96 | 3.25e3 |
+| EjecutarTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
+| Activo de menta | 1.56e5 | 150 | 1.04e3 |
+| Transferir activo | 3.68e5 | 180 | 2.04e3 |
 
-### 2026-04-28 (Apple Silicon, NEON enabled)
+### 2026-04-28 (Apple Silicon, NEON habilitado)
 
-Median latencies for the 2026-04-28 refresh (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):
-
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+Latencias medias para la actualización del 28 de abril de 2026 (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):| Instrucción | mediana `ns/op` | horario `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 8.58e6 | 200 | 4.29e4 |
-| RegisterAccount | 4.40e6 | 200 | 2.20e4 |
-| RegisterAssetDef | 4.23e6 | 200 | 2.12e4 |
-| SetAccountKV_small | 3.79e6 | 67 | 5.66e4 |
-| GrantAccountRole | 3.60e6 | 96 | 3.75e4 |
-| RevokeAccountRole | 3.76e6 | 96 | 3.92e4 |
-| ExecuteTrigger_empty_args | 2.71e6 | 224 | 1.21e4 |
-| MintAsset | 3.92e6 | 150 | 2.61e4 |
-| TransferAsset | 3.59e6 | 180 | 1.99e4 |
+| RegistrarDominio | 8.58e6 | 200 | 4.29e4 |
+| RegistrarseCuenta | 4.40e6 | 200 | 2.20e4 |
+| RegistrarAssetDef | 4.23e6 | 200 | 2.12e4 |
+| Establecer cuentaKV_small | 3.79e6 | 67 | 5.66e4 |
+| Función de cuenta de concesión | 3.60e6 | 96 | 3.75e4 |
+| Revocar función de cuenta | 3.76e6 | 96 | 3.92e4 |
+| EjecutarTrigger_empty_args | 2.71e6 | 224 | 1.21e4 |
+| Activo de menta | 3.92e6 | 150 | 2.61e4 |
+| Transferir activo | 3.59e6 | 180 | 1.99e4 |
 
-`ns/op` and `ns/gas` aggregates in the table above are derived from the sum of
-these medians (total `3.85717e7` ns across the nine-instruction set and 1,413
-gas units).
+Los agregados `ns/op` e `ns/gas` en la tabla anterior se derivan de la suma de
+estas medianas (total `3.85717e7`ns en el conjunto de nueve instrucciones y 1,413
+unidades de gas).
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+La columna de programación la aplica `gas::tests::calibration_bench_gas_snapshot`
+(un total de 1.413 gases en el conjunto de nueve instrucciones) y se disparará si se actualizan futuros parches.
+cambiar la medición sin actualizar los accesorios de calibración.
 
-## Commitment Tree Telemetry Evidence (M2.2)
+## Evidencia de telemetría del árbol de compromiso (M2.2)
 
-Per roadmap task **M2.2**, every calibration run must capture the new
-commitment-tree gauges and eviction counters to prove the Merkle frontier stays
-within configured bounds:
+Por tarea de hoja de ruta **M2.2**, cada ejecución de calibración debe capturar el nuevo
+medidores de árbol de compromiso y contadores de desalojo para demostrar que la frontera de Merkle permanece
+dentro de los límites configurados:
 
 - `iroha_confidential_tree_commitments{asset_id}`
-- `iroha_confidential_tree_depth{asset_id}`
+-`iroha_confidential_tree_depth{asset_id}`
 - `iroha_confidential_root_history_entries{asset_id}`
 - `iroha_confidential_frontier_checkpoints{asset_id}`
 - `iroha_confidential_frontier_last_checkpoint_height{asset_id}`
@@ -89,44 +88,44 @@ within configured bounds:
 - `iroha_confidential_frontier_evictions_total{asset_id}`
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
-Record the values immediately before and after the calibration workload. A
-single command per asset is sufficient; example for `xor#wonderland`:
+Registre los valores inmediatamente antes y después de la carga de trabajo de calibración. un
+un solo comando por activo es suficiente; ejemplo para `xor#wonderland`:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
   | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
 ```
 
-Attach the raw output (or Prometheus snapshot) to the calibration ticket so the
-governance reviewer can confirm root-history caps and checkpoint intervals are
-honoured. The telemetry guide in `docs/source/telemetry.md#confidential-tree-telemetry-m22`
-expands on alerting expectations and the associated Grafana panels.
+Adjunte la salida sin procesar (o la instantánea Prometheus) al ticket de calibración para que el
+El revisor de gobernanza puede confirmar que los límites del historial de raíces y los intervalos de los puntos de control son
+honrado. La guía de telemetría en `docs/source/telemetry.md#confidential-tree-telemetry-m22`
+amplía las expectativas de alerta y los paneles Grafana asociados.
 
-Include the verifier cache counters in the same scrape so reviewers can confirm
-the miss ratio stayed below the 40 % warning threshold:
+Incluya los contadores de caché del verificador en el mismo borrador para que los revisores puedan confirmar
+el índice de errores se mantuvo por debajo del umbral de advertencia del 40 %:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \\
   | rg 'iroha_zk_verifier_cache_events_total{cache="vk",event="(hit|miss)"}'
 ```
 
-Document the derived ratio (`miss / (hit + miss)`) inside the calibration note
-to show the SIMD-neutral cost modelling exercises reused warm caches instead of
-thrashing the Halo2 verifier registry.
+Documente la relación derivada (`miss / (hit + miss)`) dentro de la nota de calibración.
+para mostrar que los ejercicios de modelado de costos neutrales SIMD reutilizaron cachés calientes en lugar de
+destruyendo el registro del verificador de Halo2.
 
-## Neutral & AVX2 Waiver
+## Neutral y exención AVX2
 
-SDK Council granted a temporary waiver for the Phase C gate requiring
-`baseline-simd-neutral` and `baseline-avx2` measurements:
+El Consejo SDK otorgó una exención temporal para la puerta PhaseC que requiere
+Medidas `baseline-simd-neutral` e `baseline-avx2`:
 
-- **SIMD-neutral:** On Apple Silicon the `ring` crypto backend enforces NEON for
-  ABI correctness. Disabling the feature (`RUSTFLAGS="-C target-feature=-neon"`)
-  aborts the build before the bench binary is produced (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`).
-- **AVX2:** The local toolchain cannot spawn x86_64 binaries (`arch -x86_64 rustc -V`
-  → “Bad CPU type in executable”; see
+- **SIMD-neutral:** En Apple Silicon, el backend criptográfico `ring` aplica NEON para
+  Corrección del ABI. Deshabilitar la función (`RUSTFLAGS="-C target-feature=-neon"`)
+  cancela la compilación antes de que se produzca el binario del banco (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`).
+- **AVX2:** La cadena de herramientas local no puede generar archivos binarios x86_64 (`arch -x86_64 rustc -V`
+  → “Tipo de CPU incorrecto en el ejecutable”; ver
   `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`).
 
-Until CI hosts `bench-x86-neon0` and `bench-x86-avx2a` are online, the NEON run
-above plus the telemetry evidence satisfy the Phase C acceptance criteria.
-The waiver is recorded in `status.md` and will be revisited once x86 hardware is
-available.
+Hasta que los hosts CI `bench-x86-neon0` e `bench-x86-avx2a` estén en línea, la ejecución NEON
+anterior más la evidencia de telemetría satisfacen los criterios de aceptación de PhaseC.
+La exención está registrada en `status.md` y se revisará una vez que el hardware x86 esté disponible.
+disponible.

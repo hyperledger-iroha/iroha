@@ -6,83 +6,85 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Agenda Council Workflow
 description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import CodeBlock from '@theme/CodeBlock';
+CodeBlock-ni '@theme/CodeBlock' dan import qiling;
 import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
 
 const summary = sortitionSummary;
 
-function SortitionSummaryTable({rows}) {
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Slot</th>
-          <th>Member</th>
-          <th>Role</th>
-          <th>Org</th>
-          <th>Weight</th>
-          <th>Entropy (truncated)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => (
-          <tr key={`${row.member_id}-${row.draw_position}`}>
-            <td>{index + 1}</td>
-            <td><code>{row.member_id}</code></td>
-            <td>{row.role}</td>
-            <td>{row.organization}</td>
-            <td>{row.weight}</td>
-            <td><code>{row.draw_entropy_hex.slice(0, 16)}…</code></td>
-          </tr>
+Funktsiya SortitionSummaryTable({satr}) {
+  qaytish (
+    
+      
+        
+          Slot
+          A'zo
+          Rol
+          Tashkilot
+          Og'irligi
+          Entropiya (kesilgan)
+        
+      
+      
+        {rows.map((satr, indeks) => (
+          
+            {indeks + 1}
+            {row.member_id}
+            {row.role}
+            {row.organization}
+            {row.weight}
+            {row.draw_entropy_hex.slice(0, 16)}…
+          
         ))}
-      </tbody>
-    </table>
+      
+    
   );
 }
 
-## Overview
+## Umumiy ko'rinish
 
-Roadmap item **MINFO-2** requires a deterministic path from proposal linting to
-public sortition evidence so anyone can confirm how a case reached the agenda
-council. This page wires the previously landed CLI helpers directly into the
-developer portal so proposers, auditors, and platform teams can follow the same
-checklist without spelunking the mono-repo.
+“Yoʻl xaritasi” bandi **MINFO-2** taklifdan tortib togacha aniq yoʻlni talab qiladi
+ommaviy saralash dalillari, shuning uchun har kim ishning kun tartibiga qanday etib kelganini tasdiqlashi mumkin
+kengash. Bu sahifa avval qo'yilgan CLI yordamchilarini to'g'ridan-to'g'ri tarmoqqa ulaydi
+ishlab chiquvchilar portali, shuning uchun taklifchilar, auditorlar va platforma guruhlari xuddi shunday amal qilishi mumkin
+mono-repo haqida gapirmasdan nazorat ro'yxati.
 
-The workflow covers three repeatable steps:
+Ish jarayoni uchta takrorlanadigan bosqichni o'z ichiga oladi:
 
-1. Validate `AgendaProposalV1` payloads locally and reject duplicate hashes
-   before the submission reaches the moderation queue.
-2. Publish duplicate-registry hits alongside the proposal so council staff can
-   trace earlier cases without losing determinism.
-3. Run the sortition helper, capture the Merkle proof bundle, and surface the
-   selected roster inside the portal so citizens can replay the draw.
+1. `AgendaProposalV1` foydali yuklarini mahalliy sifatida tekshiring va takroriy xeshlarni rad qiling
+   topshirish moderatsiya navbatiga yetguncha.
+2. Kengash xodimlari uchun taklif bilan birga dublikat-reestr xitlarini e'lon qiling.
+   determinizmni yo'qotmasdan oldingi holatlarni kuzatib boring.
+3. Saralash yordamchisini ishga tushiring, Merkle proof to'plamini oling va sirtini o'rnating
+   fuqarolar qur'a tashlashni takrorlashi uchun portal ichida tanlangan ro'yxat.
 
-All helpers live in `cargo xtask ministry-agenda`; the Norito schema is
-documented under `docs/source/ministry/agenda_council_proposal.md`.
+Barcha yordamchilar `cargo xtask ministry-agenda` da yashaydi; Norito sxemasi
+`docs/source/ministry/agenda_council_proposal.md` ostida hujjatlashtirilgan.
 
-## 1. Validate proposals locally
+## 1. Takliflarni mahalliy darajada tasdiqlash
 
-Use the CLI to lint JSON payloads and assert that required evidence (hash
-families, digest lengths, language tag, submitter contact) is present. The
-validator shares code with the Torii ingestion path, so a proposal that passes
-here will also pass when uploaded through the portal.
+JSON foydali yuklarini to'ldirish va kerakli dalillarni tasdiqlash uchun CLI dan foydalaning (xesh
+oilalar, dayjest uzunligi, til yorlig'i, yuboruvchi kontakti) mavjud. The
+validator kodni Torii qabul qilish yoʻli bilan baham koʻradi, shuning uchun taklif oʻtadi
+bu erda ham portal orqali yuklanganda o'tadi.
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda validate \\
+{`yuk xtask vazirligi-kun tartibini tasdiqlash \\
   --proposal docs/examples/ministry/agenda_proposal_example.json \\
-  --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
+  --registry docs/examples/ministry/agenda_duplicate_registry.json`}
 
-- Add `--allow-registry-conflicts` when triaging historical payloads; new
-  submissions should fail fast when a fingerprint already exists.
-- The examples directory ships the reference proposal and registry so SDKs can
-  adopt the format without hard-coding private payloads.
+- Tarixiy foydali yuklarni trianglashda `--allow-registry-conflicts` qo'shing; yangi
+  Agar barmoq izi allaqachon mavjud bo'lsa, arizalar tezda muvaffaqiyatsiz bo'lishi kerak.
+- Misollar katalogi ma'lumotnoma taklifi va registrni SDK'lar uchun yuboradi
+  qattiq kodlashsiz shaxsiy yuklamalarsiz formatni qabul qiling.
 
-## 2. Publish duplicate-registry context
+## 2. Ikki nusxadagi registr kontekstini nashr qilish
 
-Every accepted proposal includes the registry digest that was consulted before
-ingest. Capture the SoraFS CID or Torii manifest path for that registry and add
-it to your submission metadata so council reviewers can verify the same JSON.
+Qabul qilingan har bir taklif avval maslahat qilingan reestr dayjestini o'z ichiga oladi
+yutish. Ushbu registr uchun SoraFS CID yoki Torii manifest yo'lini oling va qo'shing
+Kengash ko'rib chiquvchilari bir xil JSONni tekshirishlari uchun uni taqdim etgan metama'lumotlaringizga kiriting.
 
 ```json title="Duplicate registry (excerpt)"
 {
@@ -95,83 +97,81 @@ it to your submission metadata so council reviewers can verify the same JSON.
     }
   ]
 }
-```
+```CLI to'qnashuv haqida xabar berganida, portal bog'langan taklif identifikatorlarini ko'rsatadi
+operatorlar qat'iy ravishda qayta yuborishni birlashtirishi yoki rad etishi mumkin.
 
-When the CLI reports a collision, the portal shows the linked proposal IDs so
-operators can merge or reject resubmissions deterministically.
+## 3. Saralash xulosasini ishga tushiring va chop eting
 
-## 3. Run and publish the sortition summary
+Docket tayyor bo'lgach, deterministik tartiblash yordamchisini ishga tushiring. ni iste'mol qiladi
+roster JSON, urug 'va maqsadli uyalar soni, keyin Merkle-dalil-qo'llab-quvvatlanadigan chiqaradi
+xulosa. Xulosa JSON - bu portal **Kengash o'yinida** ko'rsatadigan narsa
+paneli.
 
-Once a docket is ready, run the deterministic sortition helper. It consumes the
-roster JSON, seed, and target slot count, then emits a Merkle-proof-backed
-summary. The summary JSON is what the portal renders in the **Council draw**
-panel.
-
-<CodeBlock language="bash">{`cargo xtask ministry-agenda sortition \\
+{`yuk xtask vazirligi-kun tartibini tartiblash \\
   --roster docs/examples/ministry/agenda_council_roster.json \\
-  --slots 3 \\
+  --slotlar 3 \\
   --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
-  --output artifacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
+  --output artefacts/ministry/sortition/2026-03-12.json`}
 
-Store the resulting JSON on SoraFS (or alongside the signed agenda packet) and
-link the CID in the proposal tracker. The developer portal consumes the same
-JSON structure; the example below renders the bundled
+Olingan JSONni SoraFS da (yoki imzolangan kun tartibi paketi yonida) saqlang va
+taklif kuzatuvchisida CID-ni bog'lang. Ishlab chiquvchi portali ham xuddi shunday iste'mol qiladi
+JSON tuzilishi; quyidagi misol to'plamni ko'rsatadi
 `agenda_sortition_summary_example.json`.
 
-### Example council draw
+### Kengash o'yini namunasi
 
-<table>
-  <thead>
-    <tr>
-      <th>Field</th>
-      <th>Value</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Algorithm</td>
-      <td><code>{summary.algorithm}</code></td>
-    </tr>
-    <tr>
-      <td>Roster digest (BLAKE3)</td>
-      <td><code>{summary.roster_digest.blake3_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Roster digest (SHA-256)</td>
-      <td><code>{summary.roster_digest.sha256_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Seed</td>
-      <td><code>{summary.seed_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Slots</td>
-      <td>{summary.slots}</td>
-    </tr>
-    <tr>
-      <td>Eligible members</td>
-      <td>{summary.eligible_members}</td>
-    </tr>
-    <tr>
-      <td>Merkle root</td>
-      <td><code>{summary.merkle_root_hex}</code></td>
-    </tr>
-  </tbody>
-</table>
 
-<SortitionSummaryTable rows={summary.selected} />
+  
+    
+      Maydon
+      Qiymat
+    
+  
+  
+    
+      Algoritm
+      {summary.algorithm}
+    
+    
+      Roster dayjesti (BLAKE3)
+      {summary.roster_digest.blake3_hex}
+    
+    
+      Roster dayjesti (SHA-256)
+      {summary.roster_digest.sha256_hex}
+    
+    
+      Urug'
+      {summary.seed_hex}
+    
+    
+      Slotlar
+      {summary.slots}
+    
+    
+      Maqbul a'zolar
+      {summary.eligible_members}
+    
+    
+      Merkle root
+      {summary.merkle_root_hex}
+    
+  
 
-Each selected member includes:
 
-- `draw_entropy_hex` (32 BLAKE3 bytes) so anyone can recompute the RNG output.
-- `eligible_index` and `original_index` so auditors can prove that opt-outs were
-  honored.
-- A Merkle proof covering the roster leaf; reproducing the tree confirms the
-  roster published inside the packet matches the draw.
 
-### Decision log
 
-When the council votes on a proposal, attach the decision memo and the
-sortition summary CID to the governance action (Torii `/v1/gov/*` entry). Portal
-pages link the memo, the vote tally, and the JSON shown above so every action
-contains the full evidence chain required by **MINFO-2**.
+Har bir tanlangan a'zo quyidagilarni o'z ichiga oladi:
+
+- `draw_entropy_hex` (32 BLAKE3 bayt), shuning uchun har kim RNG chiqishini qayta hisoblashi mumkin.
+- `eligible_index` va `original_index`, shuning uchun auditorlar rad etishlar bekor qilinganligini isbotlashlari mumkin.
+  sharaflangan.
+- Ro'yxat bargini qoplaydigan Merkle isboti; daraxtni ko'paytirish buni tasdiqlaydi
+  paket ichida chop etilgan ro'yxat qur'a tashlashga mos keladi.
+
+### Qarorlar jurnali
+
+Kengash taklif bo'yicha ovoz berganda, qaror eslatmasini va uni ilova qiling
+saralash xulosasi CID boshqaruv harakatiga (Torii `/v1/gov/*` yozuvi). Portal
+sahifalar eslatma, ovozlar soni va yuqorida ko'rsatilgan JSON bilan bog'lanadi, shuning uchun har bir harakat
+**MINFO-2** talab qiladigan to'liq dalillar zanjirini o'z ichiga oladi.

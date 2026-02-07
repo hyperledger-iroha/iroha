@@ -6,64 +6,66 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: AI Moderation Calibration Report (2026-02)
 summary: Baseline calibration dataset, thresholds, and scoreboard for the first MINFO-1 governance release.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# AI Moderation Calibration Report - February 2026
+# AI Moderatsiyasi kalibrlash hisoboti - 2026 yil fevral
 
-This report packages the inaugural calibration artefacts for **MINFO-1**. The
-dataset, manifest, and scoreboard were produced on 2026-02-05, reviewed by the
-Ministry council on 2026-02-10, and anchored in the governance DAG at height
+Ushbu hisobot **MINFO-1** uchun dastlabki kalibrlash artefaktlarini jamlaydi. The
+ma'lumotlar to'plami, manifest va reyting jadvali 2026-02-05 da ishlab chiqarilgan,
+2026-02-10 da vazirlik kengashi va balandlikda DAG boshqaruvida langar.
 `912044`.
 
-## Dataset Manifest
+## Maʼlumotlar toʻplami manifest
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **Maʼlumotlar majmuasi maʼlumotnomasi:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
 - **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
+- **Yozuvlar:** manifest 480, parcha 12800, metamaʼlumotlar 920, audio 160
+- **Yorliq aralashmasi:** xavfsiz 68%, shubhali 19%, eskalatsiya 13%
 - **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **Tarqatish:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-The full manifest lives in `docs/examples/ai_moderation_calibration_manifest_202602.json`
-and contains the governance signature plus runner hash captured at release
-time.
+To'liq manifest `docs/examples/ai_moderation_calibration_manifest_202602.json` da yashaydi
+va boshqaruv imzosi va chop etish vaqtida olingan yuguruvchi xeshini o'z ichiga oladi
+vaqt.
 
-## Scoreboard Summary
+## Hisoblar jadvali xulosasi
 
-Calibrations ran with opset 17 and the deterministic seed pipeline. The
-complete scoreboard JSON (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-records the hashes and telemetry digests; the table below highlights the most
-important metrics.
+Kalibrlash opset 17 va deterministik urug'lik quvuri bilan amalga oshirildi. The
+JSON to'liq skorbord (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+xeshlar va telemetriya dayjestlarini qayd qiladi; Quyidagi jadval eng ko'p ta'kidlangan
+muhim ko'rsatkichlar.
 
-| Model (family) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+| Model (oila) | Brier | ECE | AUROC | Precision@Karantin | Recall@Escalate |
 | -------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 Xavfsizlik (ko'rish) | 0,141 | 0,031 | 0,987 | 0,964 | 0,912 |
+| LLaVA-1.6 34B Xavfsizlik (multimodal) | 0,118 | 0,028 | 0,978 | 0,942 | 0,904 |
+| Pertseptiv ansambli (pertseptual) | 0,162 | 0,047 | 0,953 | 0,883 | 0,861 |
 
-Combined metrics: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. The verdict
-distribution across the calibration window was pass 91.2%, quarantine 6.8%,
-escalate 2.0%, matching the policy expectations recorded in the manifest
-summary. False-positive backlog remained at zero, and the drift score (7.1%)
-fell well below the 20% alert threshold.
+Birlashtirilgan ko'rsatkichlar: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. Hukm
+kalibrlash oynasi bo'ylab taqsimlash 91,2%, karantin 6,8%,
+manifestda qayd etilgan siyosat kutilmalariga mos keladigan 2,0% ga oshadi
+xulosa. Yolg'on-musbat kechikish nol darajasida qoldi va drift ball (7,1%)
+20% ogohlantirish chegarasidan ancha pastga tushdi.
 
-## Thresholds & Sign-off
+## Eshiklar va ro'yxatdan o'tish
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- Boshqaruv harakati: `MINFO-2026-02-07`
+- `ministry-council-seat-03` tomonidan imzolangan `2026-02-10T11:33:12Z`
 
-CI stored the signed bundle in `artifacts/ministry/ai_moderation/2026-02/`
-alongside the moderation runner binaries. The manifest digest and scoreboard
-hashes above must be referenced during audits and appeals.
+CI imzolangan paketni `artifacts/ministry/ai_moderation/2026-02/` da saqladi
+moderatsiya yuguruvchisi ikkiliklari bilan birga. Manifest dayjesti va reyting jadvali
+Yuqoridagi xeshlarga auditlar va apellyatsiyalar paytida murojaat qilish kerak.
 
-## Dashboards & Alerts
+## Boshqaruv paneli va ogohlantirishlar
 
-Moderation SREs should import the Grafana dashboard at
-`dashboards/grafana/ministry_moderation_overview.json` and the matching
-Prometheus alert rules in `dashboards/alerts/ministry_moderation_rules.yml`
-(test coverage lives under `dashboards/alerts/tests/ministry_moderation_rules.test.yml`).
-These artifacts emit alerts for ingest stalls, drift spikes, and quarantine
-queue growth, satisfying the monitoring requirements called out in
-the [AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+Moderatsiya SRElari Grafana asboblar panelini quyidagi manzilga import qilishlari kerak
+`dashboards/grafana/ministry_moderation_overview.json` va moslik
+`dashboards/alerts/ministry_moderation_rules.yml` da Prometheus ogohlantirish qoidalari
+(sinov qamrovi `dashboards/alerts/tests/ministry_moderation_rules.test.yml` ostida ishlaydi).
+Bu artefaktlar yutish joylari, drift spikleri va karantin haqida ogohlantirishlar chiqaradi
+navbatdagi o'sish, chaqirilgan monitoring talablarini qondirish
+[AI Moderation Runner Spetsifikatsiyasi](../../ministry/ai-moderation-runner.md).

@@ -7,91 +7,90 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fd1e43316c492cc96ed107f6318841ad8db160735d4698c4f05562ff6127fda9
 source_last_modified: "2026-01-22T14:35:37.492932+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential asset rotation playbook referenced by `roadmap.md:M3`.
+//！ `roadmap.md:M3` 引用的机密资产轮换手册。
 
-# Confidential Asset Rotation Runbook
+# 机密资产轮换操作手册
 
-This playbook explains how operators schedule and execute confidential asset
-rotations (parameter sets, verifying keys, and policy transitions) while
-ensuring wallets, Torii clients, and mempool guards remain deterministic.
+本手册解释了操作员如何安排和执行机密资产
+轮换（参数集、验证密钥和策略转换），同时
+确保钱包、Torii 客户端和内存池守卫保持确定性。
 
-## Lifecycle & Statuses
+## 生命周期和状态
 
-Confidential parameter sets (`PoseidonParams`, `PedersenParams`, verifying keys)
-lattice and helper used to derive the effective status at a given height live in
-`crates/iroha_core/src/state.rs:7540`–`7561`. Runtime helpers sweep pending
-transitions as soon as the target height is reached and log failures for later
-rebroadcasts (`crates/iroha_core/src/state.rs:6725`–`6765`).
+机密参数集（`PoseidonParams`、`PedersenParams`、验证密钥）
+用于导出给定高度的有效状态的格子和助手住在
+`crates/iroha_core/src/state.rs:7540`–`7561`。运行时助手清除待处理的
+一旦达到目标高度就进行转换并记录稍后的失败
+重播 (`crates/iroha_core/src/state.rs:6725`–`6765`)。
 
-Asset policies embed
+资产政策嵌入
 `pending_transition { transition_id, new_mode, effective_height, conversion_window }`
-so governance can schedule upgrades via
-`ScheduleConfidentialPolicyTransition` and cancel them if required. See
-`crates/iroha_data_model/src/asset/definition.rs:320` and the Torii DTO mirrors
-(`crates/iroha_torii/src/routing.rs:1539`–`1580`).
+因此治理可以通过以下方式安排升级
+`ScheduleConfidentialPolicyTransition` 并根据需要取消它们。参见
+`crates/iroha_data_model/src/asset/definition.rs:320` 和 Torii DTO 镜像
+（`crates/iroha_torii/src/routing.rs:1539`–`1580`）。
 
-## Rotation Workflow
+## 轮换工作流程
 
-1. **Publish new parameter bundles.** Operators submit
-   `PublishPedersenParams`/`PublishPoseidonParams` instructions (CLI
-   `iroha app zk params publish ...`) to stage new generator sets with metadata,
-   activation/deprecation windows, and status markers. The executor rejects
-   duplicate IDs, non-increasing versions, or bad status transitions per
-   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
-   registry tests cover the failure modes (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
-2. **Register/verifying-key updates.** `RegisterVerifyingKey` enforces backend,
-   commitment, and circuit/version constraints before a key can enter the
-   registry (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).
-   Updating a key automatically deprecates the old entry and wipes inline bytes,
-   as exercised by `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1`.
-3. **Schedule asset-policy transitions.** Once the new parameter IDs are live,
-   governance calls `ScheduleConfidentialPolicyTransition` with the desired
-   mode, transition window, and audit hash. The executor refuses conflicting
-   transitions or assets with outstanding transparent supply. Tests such as
-   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` verify that
-   aborted transitions clear `pending_transition`, while
-   `confidential_policy_transition_reaches_shielded_only_on_schedule` at
-   lines 385–433 confirms scheduled upgrades flip to `ShieldedOnly` exactly at
-   the effective height.
-4. **Policy application & mempool guard.** The block executor sweeps all pending
-   transitions at the start of each block (`apply_policy_if_due`) and emits
-   telemetry if a transition fails so operators can reschedule. During admission
-   the mempool refuses transactions whose effective policy would change mid-block,
-   ensuring deterministic inclusion across the transition window
-   (`docs/source/confidential_assets.md:60`).
+1. **发布新的参数包。** 运营商提交
+   `PublishPedersenParams`/`PublishPoseidonParams` 指令（CLI
+   `iroha app zk params publish ...`）使用元数据上演新的发电机组，
+   激活/弃用窗口和状态标记。执行人拒绝
+   重复的 ID、不增加的版本或每个错误的状态转换
+   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`，以及
+   注册表测试涵盖故障模式 (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`)。
+2. **注册/验证密钥更新。** `RegisterVerifyingKey` 强制后端，
+   密钥可以进入之前的承诺和电路/版本约束
+   注册表（`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`）。
+   更新密钥会自动弃用旧条目并擦除内联字节，
+   由 `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1` 行使。
+3. **安排资产政策转换。** 新参数 ID 生效后，
+   治理调用 `ScheduleConfidentialPolicyTransition` 并提供所需的信息
+   模式、转换窗口和审核哈希。执行人拒绝冲突
+   具有出色的透明供应的过渡或资产。测试如
+   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` 验证
+   中止转换清除 `pending_transition`，同时
+   `confidential_policy_transition_reaches_shielded_only_on_schedule` 在
+   第 385-433 行确认预定的升级翻转到 `ShieldedOnly` 恰好在
+   有效高度。
+4. **策略应用和mempool守卫。** 区块执行器清除所有待处理的区块
+   在每个块的开始处转换（`apply_policy_if_due`）并发出
+   如果转换失败，则进行遥测，以便操作员可以重新安排。入院期间
+   内存池拒绝有效政策会在区块中改变的交易，
+   确保整个过渡窗口的确定性包含
+   （`docs/source/confidential_assets.md:60`）。
 
-## Wallet & SDK Requirements
+## 钱包和 SDK 要求- Swift 和其他移动 SDK 公开 Torii 帮助程序来获取活动策略
+  加上任何待处理的转换，因此钱包可以在签名之前警告用户。参见
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) 和相关的
+  在 `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591` 进行测试。
+- CLI 通过 `iroha ledger assets data-policy get`（帮助程序）镜像相同的元数据
+  `crates/iroha_cli/src/main.rs:1497`–`1670`)，使操作员能够审核
+  策略/参数 ID 连接到资产定义中，无需深入探究
+  块存储。
 
-- Swift and other mobile SDKs expose Torii helpers to fetch the active policy
-  plus any pending transition, so wallets can warn users before signing. See
-  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) and the associated
-  tests at `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`.
-- The CLI mirrors the same metadata via `iroha ledger assets data-policy get` (helper in
-  `crates/iroha_cli/src/main.rs:1497`–`1670`), enabling operators to audit the
-  policy/parameter IDs wired into an asset definition without spelunking the
-  block store.
+## 测试和遥测覆盖范围
 
-## Test & Telemetry Coverage
+- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` 验证该策略
+  转换传播到元数据快照并在应用后清除。
+- `crates/iroha_core/tests/zk_dedup.rs:1`证明`Preverify`缓存
+  拒绝双花/双证明，包括轮换场景
+  承诺不同。
+- `crates/iroha_core/tests/zk_confidential_events.rs` 和
+  `zk_shield_transfer_audit.rs` 覆盖端到端屏蔽→传输→取消屏蔽
+  流，确保审计跟踪在参数轮换中得以保留。
+- `dashboards/grafana/confidential_assets.json` 和
+  `docs/source/confidential_assets.md:401` 记录承诺树 &
+  伴随每次校准/旋转运行的验证器缓存仪表。
 
-- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` verifies that policy
-  transitions propagate into metadata snapshots and clear once applied.
-- `crates/iroha_core/tests/zk_dedup.rs:1` proves that the `Preverify` cache
-  rejects double-spends/double-proofs, including rotation scenarios where
-  commitments differ.
-- `crates/iroha_core/tests/zk_confidential_events.rs` and
-  `zk_shield_transfer_audit.rs` cover end-to-end shield → transfer → unshield
-  flows, ensuring the audit trail survives across parameter rotations.
-- `dashboards/grafana/confidential_assets.json` and
-  `docs/source/confidential_assets.md:401` document the CommitmentTree &
-  verifier-cache gauges that accompany every calibration/rotation run.
+## 运行手册所有权
 
-## Runbook Ownership
-
-- **DevRel / Wallet SDK Leads:** maintain SDK snippets + quickstarts that show
-  how to surface pending transitions and replay the mint → transfer → reveal
-  tests locally (tracked under `docs/source/project_tracker/confidential_assets_phase_c.md:M3.2`).
-- **Program Mgmt / Confidential Assets TL:** approve transition requests, keep
-  `status.md` updated with upcoming rotations, and ensure waivers (if any) are
-  recorded alongside the calibration ledger.
+- **DevRel / Wallet SDK Leads：** 维护 SDK 片段 + 显示的快速入门
+  如何显示待处理的过渡并重放薄荷 → 传输 → 显示
+  本地测试（在 `docs/source/project_tracker/confidential_assets_phase_c.md:M3.2` 下跟踪）。
+- **计划管理/机密资产 TL：** 批准过渡请求，保留
+  `status.md` 更新了即将到来的轮换，并确保豁免（如果有）
+  与校准分类账一起记录。

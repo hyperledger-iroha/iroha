@@ -4,44 +4,46 @@ direction: rtl
 source: docs/portal/docs/sorafs/quickstart.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# البدء السريع في SoraFS
+# SoraFS میں فوری آغاز کریں
 
-يرشدك هذا الدليل العملي عبر ملف تعريف الـ chunker الحتمي SF-1،
-وتوقيع المانيفست، ومسار الجلب متعدد المزوّدين الذي يدعم خط أنابيب تخزين SoraFS.
-وازنه مع [التعمّق في خط أنابيب المانيفست](manifest-pipeline.md)
-للحصول على ملاحظات التصميم ومرجع أعلام سطر الأوامر.
+یہ عملی گائیڈ آپ کو SF-1 ڈٹرمینسٹک چنکر پروفائل کے ذریعے چلتا ہے ،
+منشور پر دستخط کرنے ، ملٹی فراہم کرنے والے بازیافت کا راستہ جو SoraFS اسٹوریج پائپ لائن کی حمایت کرتا ہے۔
+اس کو [منشور پائپ لائن میں ڈوبکی] کے ساتھ متوازن کریں (manifest-pipeline.md)
+ڈیزائن نوٹ اور کمانڈ لائن جھنڈوں کے حوالہ کے لئے۔
 
-## المتطلبات الأساسية
+## بنیادی ضروریات
 
-- أداة Rust (`rustup update`) مع نسخ مساحة العمل محليًا.
-- اختياري: [زوج مفاتيح Ed25519 متوافق مع OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  لتوقيع المانيفستات.
-- اختياري: Node.js ≥ 18 إذا كنت تخطط لمعاينة بوابة Docusaurus.
+- مقامی طور پر کاپی شدہ ورک اسپیس کے ساتھ زنگ ٹول (`rustup update`)۔
+- اختیاری: [اوپن ایس ایس ایل مطابقت پذیر ED25519 کلیدی جوڑی] (https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  منشور پر دستخط کرنے کے لئے۔
+- اختیاری: اگر آپ Docusaurus گیٹ وے کا پیش نظارہ کرنے کا ارادہ رکھتے ہیں تو نوڈ ڈاٹ جے ایس ≥ 18۔
 
-اضبط `export RUST_LOG=info` أثناء التجربة لإظهار رسائل CLI المفيدة.
+مفید CLI پیغامات کو ظاہر کرنے کے لئے تجربے کے دوران `export RUST_LOG=info` سیٹ کریں۔
 
-## 1. تحديث الـ fixtures الحتمية
+## 1. ضروری فکسچر کو اپ ڈیٹ کریں
 
-أعد توليد متجهات التقسيم (chunking) القياسية لـ SF-1. كما يُصدر الأمر مظاريف
-مانيفست موقعة عند تزويد `--signing-key`؛ استخدم `--allow-unsigned` أثناء التطوير
-المحلي فقط.
+معیاری SF-1 chunking ویکٹرز کو دوبارہ تخلیق کریں۔ آرڈر لفافے بھی جاری کرتا ہے
+جب `--signing-key` فراہم کیا گیا تو منشور پر دستخط ہوئے۔ ترقی کے دوران `--allow-unsigned` استعمال کریں
+صرف مقامی۔
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-المخرجات:
+نتائج:
 
-- `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
-- `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (إذا تم التوقيع)
+-`fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
+-`fixtures/sorafs_chunker/manifest_blake3.json`
+- `fixtures/sorafs_chunker/manifest_signatures.json` (اگر دستخط شدہ)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. قسّم payload وافحص الخطة
+## 2۔ پے لوڈ کو تقسیم کریں اور منصوبہ چیک کریں
 
-استخدم `sorafs_chunker` لتقسيم ملف أو أرشيف عشوائي:
+بے ترتیب فائل یا محفوظ شدہ دستاویزات کو تقسیم کرنے کے لئے `sorafs_chunker` استعمال کریں:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -49,23 +51,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-الحقول الأساسية:
+بنیادی فیلڈز:
 
-- `profile` / `break_mask` – يؤكد معاملات `sorafs.sf1@1.0.0`.
-- `chunks[]` – إزاحات وأطوال مرتبة وبصمات BLAKE3 للـ chunks.
+- `profile` / `break_mask` - `sorafs.sf1@1.0.0` ٹرانزیکشنز کی تصدیق کرتا ہے۔
+- `chunks[]` - آفسیٹس ، آرڈرڈ لمبائی اور بلیک 3 فنگر پرنٹ۔
 
-لـ fixtures الأكبر، شغّل اختبار الانحدار المبني على proptest لضمان تزامن التقسيم
-بالتدفق وبالدفعات:
+بڑے فکسچر کے ل ، ، یہ یقینی بنانے کے لئے کہ تقسیم کی بنیاد پر مبنی رجعت ٹیسٹ چلائیں
+بہاؤ اور بیچوں کے ذریعہ:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. ابنِ ووقّع مانيفست
+## 3. ایک منشور کی تعمیر اور دستخط کریں
 
-لفّ خطة الـ chunks والكنى وتواقيع الحوكمة في مانيفست باستخدام
-`sorafs-manifest-stub`. يوضح الأمر أدناه payload لملف واحد؛ مرّر مسار دليل لحزم
-شجرة (تسير CLI ترتيبًا معجميًا).
+ٹکڑوں ، عرفی ناموں اور گورننس کے دستخطوں کو ایک منشور میں استعمال کرتے ہوئے ...
+`sorafs-manifest-stub`۔ نیچے دیئے گئے کمانڈ میں ایک فائل کے لئے پے لوڈ کو ظاہر کیا گیا ہے۔ پیکیجوں تک ڈائریکٹری کا راستہ پاس کریں
+درخت (سی ایل آئی لغت میں چلتا ہے)۔
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -77,20 +79,20 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-راجع `/tmp/docs.report.json` من أجل:
+`/tmp/docs.report.json` دیکھیں:
 
-- `chunking.chunk_digest_sha3_256` – بصمة SHA3 للإزاحات/الأطوال، تطابق fixtures الخاصة
-  بالـ chunker.
-- `manifest.manifest_blake3` – بصمة BLAKE3 الموقعة ضمن ظرف المانيفست.
-- `chunk_fetch_specs[]` – تعليمات جلب مرتبة للأوركستراتورات.
+- `chunking.chunk_digest_sha3_256` - SHA3 آفسیٹس/لمبائی کا فنگر پرنٹ ، مخصوص فکسچر سے ملاپ کرنا
+  چنکر کے ساتھ
+- `manifest.manifest_blake3` - بلیک 3 کے فنگر پرنٹ نے منشور لفافے میں دستخط کیے۔
+- `chunk_fetch_specs[]` - آرکیسٹریٹرز کے لئے لینے کی ہدایات کا آرڈر دیں۔
 
-عندما تكون جاهزًا لتقديم تواقيع حقيقية، أضف الوسيطين `--signing-key` و `--signer`.
-يتحقق الأمر من كل توقيع Ed25519 قبل كتابة الظرف.
+جب آپ حقیقی دستخط فراہم کرنے کے لئے تیار ہوں تو ، دلائل `--signing-key` اور `--signer` شامل کریں۔
+کمانڈ لفافے کو لکھنے سے پہلے ہر دستخط ED25519 کی تصدیق کرتا ہے۔
 
-## 4. حاكِ الاسترجاع متعدد المزوّدين
+## 4. ملٹی سرور لوپ بیک سمیلیٹر
 
-استخدم CLI الجلب التطويري لإعادة تشغيل خطة الـ chunks مقابل مزوّد واحد أو أكثر.
-هذا مثالي لاختبارات الدخان في CI ولنمذجة الأوركستراتور.
+ایک یا زیادہ فراہم کنندگان کے خلاف حصوں کے منصوبے کو دوبارہ چلانے کے لئے ڈویلپمنٹ بازیافت سی ایل آئی کا استعمال کریں۔
+یہ CI میں اور آرکیسٹرل ماڈلنگ میں دھواں کے ٹیسٹوں کے لئے مثالی ہے۔
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -100,25 +102,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-التحققات:
+تصدیق:
 
-- `payload_digest_hex` يجب أن يطابق تقرير المانيفست.
-- `provider_reports[]` تعرض أعداد النجاح/الفشل لكل مزود.
-- قيمة `chunk_retry_total` غير الصفرية تُبرز تعديلات back-pressure.
-- مرّر `--max-peers=<n>` لتقييد عدد المزوّدين المجدولين للتشغيل وإبقاء محاكاة CI مركّزة
-  على المرشحين الأساسيين.
-- `--retry-budget=<n>` يتجاوز العدد الافتراضي لمحاولات إعادة المحاولة لكل chunk (3)
-  لتسريع كشف تراجعات الأوركستراتور عند حقن الأعطال.
+- `payload_digest_hex` کو مینی فیسٹ رپورٹ سے ملنا چاہئے۔
+- `provider_reports[]` ہر فراہم کنندہ کے لئے پاس/فیل نمبر دکھاتا ہے۔
+-`chunk_retry_total` کی ایک غیر صفر قیمت بیک پریشر ایڈجسٹمنٹ کو نمایاں کرتی ہے۔
+- `--max-peers=<n>` پاس کریں تاکہ فراہم کرنے والوں کی تعداد کو محدود کیا جاسکے اور CI تخروپن کو مرکوز رکھنے کے لئے شیڈول کیا جائے
+  پرائمری امیدواروں پر۔
+- `--retry-budget=<n>` فی حصہ دوبارہ کوششوں کی پہلے سے طے شدہ تعداد سے تجاوز کر گیا ہے (3)
+  جب غلطیوں کو انجیکشن لگاتے ہو تو آرکسٹریٹر ڈپس کی کھوج کو تیز کرنے کے ل .۔
 
-أضف `--expect-payload-digest=<hex>` و `--expect-payload-len=<bytes>` للفشل بسرعة
-عندما ينحرف payload المعاد بناؤه عن المانيفست.
+فوری طور پر ناکام ہونے کے لئے `--expect-payload-digest=<hex>` اور `--expect-payload-len=<bytes>` شامل کریں
+جب تعمیر نو پے لوڈ منشور سے انحراف کرتا ہے۔
 
-## 5. الخطوات التالية
-
-- **تكامل الحوكمة** – مرّر بصمة المانيفست و`manifest_signatures.json` إلى سير عمل المجلس
-  لكي يتمكن Pin Registry من إعلان التوافر.
-- **التفاوض مع السجل** – راجع [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  قبل تسجيل ملفات تعريف جديدة. ينبغي للأتمتة تفضيل المعالجات القياسية
-  (`namespace.name@semver`) على المعرفات الرقمية.
-- **أتمتة CI** – أضف الأوامر أعلاه إلى خطوط إصدار النشر حتى تنشر المستندات والـ fixtures
-  والآرتيفاكت مانيفستات حتمية جنبًا إلى جنب مع بيانات وصفية موقعة.
+## 5. اگلے اقدامات- ** گورننس انضمام ** - مینی فیسٹ فنگر پرنٹ اور `manifest_signatures.json` بورڈ ورک فلو کو منتقل کریں
+  تاکہ پن رجسٹری دستیابی کا اعلان کرسکے۔
+- ** رجسٹری کے ساتھ بات چیت کرنا ** - دیکھیں [`sorafs/chunker_registry.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  نئے پروفائلز رجسٹر کرنے سے پہلے۔ آٹومیشن کو معیاری پروسیسرز کے حق میں ہونا چاہئے
+  (`namespace.name@semver`) ڈیجیٹل IDs پر۔
+- ** سی آئی آٹومیشن ** - دستاویزات اور فکسچر شائع کرنے کے لئے تعیناتی کی رہائی پائپ لائنوں میں مذکورہ بالا احکامات شامل کریں
+  دستخط شدہ میٹا ڈیٹا کے ساتھ نمونے کا مظہر لازمی ہے۔

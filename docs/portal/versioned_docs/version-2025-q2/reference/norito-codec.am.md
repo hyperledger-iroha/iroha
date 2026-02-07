@@ -7,60 +7,61 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 38c0cedd4858656db8562c6612f9981df11a1b2292c05908c3671402ee96be9d
 source_last_modified: "2026-01-16T16:25:53.031576+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito ኮዴክ ማጣቀሻ
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito የ Iroha ቀኖናዊ ተከታታይ ንብርብር ነው። እያንዳንዱ ሽቦ ላይ መልእክት፣ በዲስክ ላይ
+የመጫኛ ጭነት፣ እና ተሻጋሪ አካል ኤፒአይ Norito ይጠቀማል ስለዚህ አንጓዎች በተመሳሳይ ባይት ይስማማሉ።
+በተለያዩ ሃርድዌር ላይ ሲሰሩ እንኳን. ይህ ገጽ ተንቀሳቃሽ ክፍሎችን ያጠቃልላል
+እና በ `norito.md` ውስጥ ወደ ሙሉ ዝርዝር መግለጫው ይጠቁማል.
 
-## Core layout
+## ዋና አቀማመጥ
 
-| Component | Purpose | Source |
+| አካል | ዓላማ | ምንጭ |
 | --- | --- | --- |
-| **Header** | Negotiates features (packed structs/sequences, compact lengths, compression flags) and embeds a CRC64 checksum so payload integrity is checked before decode. | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. The same layout is wrapped by the header for transport. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) activated via the `compression` flag byte. | `norito.md`, “Compression negotiation” |
+| **ራስጌ** | የመደራደር ባህሪያት (የታሸጉ መዋቅሮች/ተከታታዮች፣ የታመቁ ርዝመቶች፣የመጭመቂያ ባንዲራዎች) እና CRC64 ቼክ ድምርን ስለሚጨምር የመጫኛ ትክክለኛነት ከኮድ መፍታት በፊት ይፈተሻል። | `norito::header` - ይመልከቱ `norito.md` ("ራስጌ እና ባንዲራዎች", የማከማቻ ስር) |
+| ** ባዶ ጭነት** | ለሃሺንግ/ለማነፃፀር ጥቅም ላይ የሚውል ቆራጥ እሴት ኢንኮዲንግ። ለመጓጓዣ ተመሳሳይ አቀማመጥ በርዕሱ ተጠቅልሏል. | `norito::codec::{Encode, Decode}` |
+| **መጭመቅ** | አማራጭ Zstd (እና የሙከራ ጂፒዩ ማጣደፍ) በ`compression` ባንዲራ ባይት በኩል ገብሯል። | `norito.md`, "የመጭመቂያ ድርድር" |
 
-The full flag registry (packed-struct, packed-seq, compact lengths, compression)
-lives in `norito::header::flags`. `norito::header::Flags` exposes convenience
-checks for runtime inspection; reserved layout bits are rejected by decoders.
+ሙሉው የባንዲራ መዝገብ (የታሸገ - የተዋቀረ፣ የታሸገ - ሴክ፣ የታመቀ ርዝመቶች፣ መጭመቂያ)
+በ `norito::header::flags` ይኖራል። `norito::header::Flags` ምቾትን ያጋልጣል
+ለአሂድ ጊዜ ፍተሻ ቼኮች; የተያዙ የአቀማመጥ ቢትስ በዲኮደሮች ውድቅ ይደረጋሉ።
 
-## Derive support
+## ድጋፍ ያግኙ
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` መርከቦች `Encode`, `Decode`, `IntoSchema` እና JSON አጋዥ ያስገኛል.
+ቁልፍ ስምምነቶች፡-
 
-- Structs/enums derive packed layouts when the `packed-struct` feature is
-  enabled (default). Implementation lives in `crates/norito_derive/src/derive_struct.rs`
-  and the behaviour is documented in `norito.md` (“Packed layouts”).
-- Packed collections use fixed-width sequence headers and offsets in v1; only
-  per-value length prefixes are affected by `COMPACT_LEN`.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- የ `packed-struct` ባህሪ ሲሆን የታሸጉ አቀማመጦችን ያዘጋጃል/ኢነም
+  ነቅቷል (ነባሪ)። ትግበራ በ`crates/norito_derive/src/derive_struct.rs` ውስጥ ይኖራል
+  እና ባህሪው በ `norito.md` ("የታሸጉ አቀማመጦች") ውስጥ ተመዝግቧል.
+- የታሸጉ ክምችቶች በ v1 ውስጥ ቋሚ-ስፋት ተከታታይ ራስጌዎችን እና ማካካሻዎችን ይጠቀማሉ; ብቻ
+  የየእሴት ርዝመት ቅድመ ቅጥያዎች በ`COMPACT_LEN` ተጎድተዋል።
+- JSON አጋዥዎች (`norito::json`) የሚወስነው Norito የሚደገፍ JSON ለ
+  ኤፒአይዎችን ይክፈቱ። `norito::json::{to_json_pretty, from_json}` ይጠቀሙ — በጭራሽ `serde_json`።
 
-## Multicodec & identifier tables
+## መልቲኮዴክ እና መለያ ሰንጠረዦች
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito መልቲኮዴክ ስራዎቹን በ`norito::multicodec` ውስጥ ያቆያል። ማጣቀሻው
+ሠንጠረዥ (ሃሽ፣ ቁልፍ ዓይነቶች፣ የክፍያ ጭነት ገላጭዎች) በ`multicodec.md` ውስጥ ተጠብቀዋል።
+በማጠራቀሚያ ስር. አዲስ መለያ ሲታከል፡-
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` አዘምን.
+2. ጠረጴዛውን በ `multicodec.md` ውስጥ ያራዝሙ.
+3. ካርታውን ከበሉ የታችኛው ተፋሰስ ማሰሪያዎችን (Python/Java) ያድሱ።
 
-## Regenerating docs & fixtures
+## ሰነዶችን እና ዕቃዎችን እንደገና በማመንጨት ላይ
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+ፖርታሉ በአሁኑ ጊዜ የስድ ማጠቃለያን እያስተናገደ፣ የላይ ያለውን ማርክዳውን ተጠቀም
+ምንጮች እንደ እውነት ምንጭ:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- ** ዝርዝር ***: `norito.md`
+- ** መልቲኮዴክ ጠረጴዛ ***: `multicodec.md`
+- ** ካስማዎች ***: `crates/norito/benches/`
+- ** ወርቃማ ሙከራዎች ***: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+የDocusaurus አውቶሜሽን በቀጥታ ሲሰራ ፖርታሉ በኤ.
+መረጃውን ከእነዚህ የሚጎትት የማመሳሰል ስክሪፕት (በ`docs/portal/scripts/` ውስጥ ተከታትሏል)
+ፋይሎች. እስከዚያ ድረስ ዝርዝሩ በተቀየረ ቁጥር ይህን ገጽ እራስዎ እንዲሰምር ያድርጉት።

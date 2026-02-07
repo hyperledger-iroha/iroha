@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Արտահանման վերահսկման հայտարարագրի ձևանմուշ
+% Hyperledger Iroha Համապատասխանության աշխատանքային խումբ
 % 2026-05-06
 
-# Usage
+# Օգտագործում
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+Տեղադրեք այս հայտարարությունը թողարկման նշումներում, մանիֆեստներում կամ իրավական նամակագրության մեջ, երբ
+SM միացված արտեֆակտների բաշխում: Թարմացրեք տեղապահները՝ թողարկմանը համապատասխանելու համար,
+իրավասությունը և կիրառելի լիցենզիայի բացառությունները: Պահպանեք ստորագրված պատճենը
+թողարկման ստուգաթերթ.
 
-# Statement
+#Հայտարարություն
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **Ապրանք.** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> ** Ներառված են ալգորիթմներ. ** SM2 թվային ստորագրություն, SM3 հեշինգ, SM4 սիմետրիկ
+> գաղտնագրում (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **Արտահանման դասակարգում.** Միացյալ Նահանգների EAR Կատեգորիա 5, Մաս 2 (5D002.c.1);
+> Եվրոպական միության կանոնակարգ 2021/821 Հավելված 1, 5D002:
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **Լիցենզիայի բացառություն(ներ):** {{ LICENSE_EXCEPTION }} (օրինակ՝ ENC §740.17(b)(2),
+> TSU §740.13 աղբյուրի բաշխման համար):
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **Բաշխման շրջանակը.** {{ DISTRIBUTION_SCOPE }} (օրինակ՝ «Գլոբալ, բացառությամբ
+> էմբարգոյի տակ գտնվող տարածքներ, որոնք թվարկված են 15 CFR 746»):
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **Օպերատորի պարտավորություններ.** Ստացողները պետք է համապատասխանեն կիրառելի արտահանմանը,
+> ներմուծման և օգտագործման կանոնակարգեր: Տեղակայումներ Ժողովրդական Հանրապետությունում
+> Չինաստանը պահանջում է ապրանքների և օգտագործման փաստաթղթեր պետական կրիպտոգրաֆիայի հետ
+> Կառավարում և պահպանում մայրցամաքային տվյալների բնակության պահանջները:
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> **Կապ.** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
 > {{ LEGAL_CONTACT_PHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> Այս հայտարարությունը ուղեկցում է ծածկագրման համապատասխանության ստուգաթերթին և ներկայացմանը
+> `docs/source/crypto/sm_compliance_brief.md`-ում տրված կաղապարներ: Պահպանեք սա
+> փաստաթղթերը և հարակից փաստաթղթերը առնվազն երեք տարվա համար:
 
-# Signature
+#Ստորագրություն
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- Լիազոր ներկայացուցիչ՝ ________________________
+- Վերնագիր: ________________________
+- Ամսաթիվ՝ ________________________

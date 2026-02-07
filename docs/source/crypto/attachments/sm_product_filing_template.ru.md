@@ -6,95 +6,93 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2026-01-03T18:07:57.069144+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+% Шаблон регистрации продукта SM2/SM3/SM4 (开发备案)
+% Hyperledger Iroha Рабочая группа по обеспечению соответствия
+% 06.05.2026
 
-# Instructions
+# Инструкции
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+Используйте этот шаблон при подаче *заявки на разработку продукта* в провинциальный орган.
+или муниципальном офисе Государственного управления криптографии (SCA) перед распространением
+Двоичные файлы с поддержкой SM или исходные артефакты из материкового Китая. Замените
+заполнители с подробностями проекта, экспортируйте заполненную форму в формате PDF, если
+необходимо, и прикрепите артефакты, указанные в контрольном списке.
 
-# 1. Applicant & Product Summary
+№ 1. Краткое описание заявителя и продукта
 
-| Field | Value |
+| Поле | Значение |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Название организации | {{ ОРГАНИЗАЦИЯ }} |
+| Юридический адрес | {{ АДРЕС }} |
+| Законный представитель | {{ LEGAL_REP }} |
+| Основной контакт (имя/должность/адрес электронной почты/телефон) | {{ КОНТАКТ }} |
+| Название продукта | Hyperledger Iroha {{ RELEASE_NAME }} |
+| Версия продукта/идентификатор сборки | {{ ВЕРСИЯ }} |
+| Тип подачи | Разработка продукта (开发备案) |
+| Дата подачи | {{ ГГГГ-ММ-ДД }} |
 
-# 2. Cryptography Usage Overview
+# 2. Обзор использования криптографии
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
+- Поддерживаемые алгоритмы: `SM2`, `SM3`, `SM4` (приведите матрицу использования ниже).
+- Контекст использования:
+  | Алгоритм | Компонент | Цель | Детерминированные гарантии |
   |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+  | СМ2 | {{ КОМПОНЕНТ }} | {{ ЦЕЛЬ }} | RFC6979 + каноническое соблюдение r∥s |
+  | СМ3 | {{ КОМПОНЕНТ }} | {{ ЦЕЛЬ }} | Детерминированное хеширование через `Sm3Digest` |
+  | СМ4 | {{ КОМПОНЕНТ }} | {{ ЦЕЛЬ }} | AEAD (GCM/CCM) с принудительной политикой nonce |
+- Алгоритмы, не относящиеся к SM, в сборке: {{ OTHER_ALGORITHMS }} (для полноты).
 
-# 3. Development & Supply Chain Controls
+№ 3. Разработка и контроль цепочки поставок
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
-  1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+- Репозиторий исходного кода: {{ REPOSITORY_URL }}.
+- Инструкции по детерминированной сборке:
+  1. И18НИ00000008Х
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (отрегулируйте по мере необходимости).
+  3. SBOM генерируется через `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
+- Краткое описание среды непрерывной интеграции:
+  | Товар | Значение |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | Сборка ОС/версия | {{ BUILD_OS }} |
+  | Набор инструментов компилятора | {{ ТУЛЧЕЙН }} |
+  | Источник OpenSSL/Tongsuo | {{ OPENSSL_SOURCE }} |
+  | Контрольная сумма воспроизводимости | {{ КОНТРОЛЬНАЯ СУММА }} |
 
-# 4. Key Management & Security
+# 4. Управление ключами и безопасность
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+– Функции SM, включенные по умолчанию: {{ DEFAULTS }} (например, только проверка).
+- Флаги конфигурации, необходимые для подписи: {{ CONFIG_FLAGS }}.
+- Подход к хранению ключей:
+  | Товар | Подробности |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | Инструмент генерации ключей | {{ KEY_TOOL }} |
+  | Носитель данных | {{ STORAGE_MEDIUM }} |
+  | Политика резервного копирования | {{ BACKUP_POLICY }} |
+  | Контроль доступа | {{ ACCESS_CONTROLS }} |
+- Контакты реагирования на инциденты (24/7):
+  | Роль | Имя | Телефон | Электронная почта |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | Крипто-лидер | {{ ИМЯ }} | {{ ТЕЛЕФОН }} | {{ ЭЛЕКТРОННАЯ ПОЧТА }} |
+  | Операции платформы | {{ ИМЯ }} | {{ ТЕЛЕФОН }} | {{ ЭЛЕКТРОННАЯ ПОЧТА }} |
+  | Юридическая связь | {{ ИМЯ }} | {{ ТЕЛЕФОН }} | {{ ЭЛЕКТРОННАЯ ПОЧТА }} |
 
-# 5. Attachments Checklist
+# 5. Контрольный список вложений- [ ] Снимок исходного кода (`{{ SOURCE_ARCHIVE }}`) и хэш.
+- [ ] Детерминированный сценарий сборки / примечания по воспроизводимости.
+- [ ] SBOM (`{{ SBOM_PATH }}`) и манифест зависимостей (отпечаток `Cargo.lock`).
+- [ ] Транскрипты детерминированных тестов (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] Экспорт панели телеметрии, демонстрирующий наблюдаемость SM.
+- [ ] Заявление об экспортном контроле (см. отдельный шаблон).
+- [ ] Отчеты об аудите или оценки третьих сторон (если они уже завершены).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+№ 6. Декларация заявителя
 
-# 6. Applicant Declaration
+> Подтверждаю, что вышеуказанная информация достоверна, что раскрытая
+> криптографическая функциональность соответствует применимым законам и правилам КНР,
+> и что организация будет хранить представленные артефакты как минимум
+> три года.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- Подпись (законного представителя): ________________________
+- Дата: ________________________

@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7fab384ae80e1993b1e54d6addc82fd3dc652fb6e3958bea6a04e057a1805b57
 source_last_modified: "2025-12-29T18:16:35.939573+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GOST Performance Workflow
+# GOST Performans İş Akışı
 
-This note documents how we track and enforce the performance envelope for the
-TC26 GOST signing backend.
+Bu qeyd performans zərfini necə izlədiyimizi və tətbiq etdiyimizi sənədləşdirir
+TC26 GOST imzalama arxa hissəsi.
 
-## Running locally
+## Yerli olaraq çalışır
 
 ```bash
 make gost-bench                     # run benches + tolerance check
@@ -23,49 +24,49 @@ make gost-dudect                    # run the constant-time timing guard
 ./scripts/update_gost_baseline.sh   # bench + rebaseline helper
 ```
 
-Behind the scenes both targets call `scripts/gost_bench.sh`, which:
+Pərdə arxasında hər iki hədəf `scripts/gost_bench.sh`-ə zəng edir, hansı ki:
 
-1. Executes `cargo bench -p iroha_crypto --bench gost_sign --features gost -- --noplot`.
-2. Runs `gost_perf_check` against `target/criterion`, verifying medians against the
-   checked-in baseline (`crates/iroha_crypto/benches/gost_perf_baseline.json`).
-3. Injects the Markdown summary into `$GITHUB_STEP_SUMMARY` when available.
+1. `cargo bench -p iroha_crypto --bench gost_sign --features gost -- --noplot` yerinə yetirir.
+2. `gost_perf_check`-i `target/criterion`-ə qarşı işlədir, medianları təsdiqləyir
+   yoxlanılmış baza (`crates/iroha_crypto/benches/gost_perf_baseline.json`).
+3. Markdown xülasəsini mövcud olduqda `$GITHUB_STEP_SUMMARY`-ə daxil edir.
 
-To refresh the baseline after approving a regression/improvement, run:
+Reqressiya/təkmilləşdirməni təsdiq etdikdən sonra baza xəttini yeniləmək üçün aşağıdakıları yerinə yetirin:
 
 ```bash
 make gost-bench-update
 ```
 
-or directly:
+və ya birbaşa:
 
 ```bash
 ./scripts/gost_bench.sh --write-baseline \
   --baseline crates/iroha_crypto/benches/gost_perf_baseline.json
 ```
 
-`scripts/update_gost_baseline.sh` runs the bench + checker, overwrites the baseline JSON, and prints
-the new medians. Always commit the updated JSON alongside the decision record in
+`scripts/update_gost_baseline.sh` dəzgah + yoxlayıcısını işlədir, əsas JSON-un üzərinə yazır və çap edir
+yeni medianlar. Həmişə qərar qeydinin yanında yenilənmiş JSON-u təhvil verin
 `crates/iroha_crypto/docs/gost_backend.md`.
 
-### Current reference medians
+### Cari istinad medianları
 
-| Algorithm            | Median (µs) |
+| Alqoritm | Median (µs) |
 |----------------------|-------------|
-| ed25519              | 69.67       |
-| gost256_paramset_a   | 1136.96     |
-| gost256_paramset_b   | 1129.05     |
-| gost256_paramset_c   | 1133.25     |
-| gost512_paramset_a   | 8944.39     |
-| gost512_paramset_b   | 8963.60     |
-| secp256k1            | 160.53      |
+| ed25519 | 69.67 |
+| gost256_paramset_a | 1136.96 |
+| gost256_paramset_b | 1129.05 |
+| gost256_paramset_c | 1133.25 |
+| gost512_paramset_a | 8944.39 |
+| gost512_paramset_b | 8963.60 |
+| secp256k1 | 160.53 |
 
 ## CI
 
-`.github/workflows/gost-perf.yml` uses the same script and also runs the dudect timing guard.
-CI fails when the measured median exceeds the baseline by more than the configured tolerance
-(20% by default) or when the timing guard detects a leak, so regressions are caught automatically.
+`.github/workflows/gost-perf.yml` eyni skriptdən istifadə edir və həmçinin dudect zamanlama qoruyucusunu idarə edir.
+Ölçülmüş median konfiqurasiya edilmiş tolerantlıqdan daha çox əsas xətti keçdikdə CI uğursuz olur
+(standart olaraq 20%) və ya vaxt qoruyucusu sızma aşkar etdikdə, reqressiyalar avtomatik olaraq tutulur.
 
-## Summary output
+## Xülasə çıxışı
 
-`gost_perf_check` prints the comparison table locally and appends the same content to
-`$GITHUB_STEP_SUMMARY`, so CI job logs and run summaries share the same numbers.
+`gost_perf_check` müqayisə cədvəlini yerli olaraq çap edir və eyni məzmunu əlavə edir
+`$GITHUB_STEP_SUMMARY`, buna görə də CI iş qeydləri və icra xülasələri eyni nömrələri paylaşır.

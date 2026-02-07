@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
 source_last_modified: "2025-12-29T18:16:35.921274+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Bridge proofs
+# ხიდის მტკიცებულებები
 
-Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
+ხიდის მტკიცებულების წარდგენები გადის სტანდარტული ინსტრუქციის გზაზე (`SubmitBridgeProof`) და დაფიქსირდა მტკიცებულების რეესტრში დამოწმებული სტატუსით. მიმდინარე ზედაპირი მოიცავს ICS-ის სტილის Merkle-ის მტკიცებულებებს და გამჭვირვალე-ZK დატვირთვას დამაგრებული შეკავებითა და მანიფესტური შეკვრით.
 
-## Acceptance rules
+## მიღების წესები
 
-- Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
-- Optional height windows reject stale/future proofs: `zk.bridge_proof_max_past_age_blocks` and `zk.bridge_proof_max_future_drift_blocks` are measured against the block height that ingests the proof (0 disables the guardrails).
-- Bridge proofs may not overlap an existing proof for the same backend (pinned proofs are preserved and block overlaps).
-- Manifest hashes must be non-zero; payloads are size-capped by `zk.max_proof_size_bytes`.
-- ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function; transparent payloads must declare a non-empty backend label.
-- Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
+- დიაპაზონები უნდა იყოს შეკვეთილი/არა ცარიელი და პატივი სცეს `zk.bridge_proof_max_range_len` (0 გამორთავს თავსახურს).
+- სურვილისამებრ სიმაღლის ფანჯრები უარყოფენ მოძველებულ/მომავალ მტკიცებულებებს: `zk.bridge_proof_max_past_age_blocks` და `zk.bridge_proof_max_future_drift_blocks` იზომება ბლოკის სიმაღლის მიხედვით, რომელიც შთანთქავს მტკიცებულებას (0 გამორთავს დაცვას).
+- ხიდის მტკიცებულებები შეიძლება არ ემთხვეოდეს არსებულ მტკიცებულებას იმავე უკანა ნაწილისთვის (დამაგრებული მტკიცებულებები შენარჩუნებულია და ბლოკავს გადახურვებს).
+- მანიფესტის ჰეშები არ უნდა იყოს ნულოვანი; ტვირთამწეობა იფარება `zk.max_proof_size_bytes`-ით.
+- ICS payloads პატივს სცემს კონფიგურირებულ Merkle-ს სიღრმის თავს და ამოწმებს გზას დეკლარირებული ჰეშის ფუნქციის გამოყენებით; გამჭვირვალე ტვირთამწეობამ უნდა გამოაცხადოს არაცარიელი საფონდო ლეიბლი.
+- დამაგრებული მტკიცებულებები თავისუფლდება შეკავების მორთვისაგან; დაუმაგრებელი მტკიცებულებები კვლავ პატივს სცემს გლობალურ `zk.proof_history_cap`/grace/batch პარამეტრებს.
 
-## Torii API surface
+## Torii API ზედაპირი
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
-  - `bridge_only=true` returns only bridge proofs.
-  - `bridge_pinned_only=true` narrows to pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v1/zk/proofs` და `GET /v1/zk/proofs/count` იღებენ ხიდის შემეცნებით ფილტრებს:
+  - `bridge_only=true` აბრუნებს მხოლოდ ხიდის მტკიცებულებებს.
+  - `bridge_pinned_only=true` ვიწროვდება დამაგრებული ხიდის მტკიცებულებამდე.
+  - `bridge_start_from_height` / `bridge_end_until_height` დაამაგრეთ ხიდის დიაპაზონის ფანჯარა.
+- `GET /v1/zk/proof/{backend}/{hash}` აბრუნებს ხიდის მეტამონაცემებს (დიაპაზონი, მანიფესტის ჰეში, დატვირთვის შეჯამება) მტკიცებულების id/სტატუსის/VK აკინძებთან ერთად.
+- სრული Norito მტკიცებულება ჩანაწერი (მათ შორის, დატვირთვის ბაიტი) ხელმისაწვდომი რჩება `GET /v1/proofs/{proof_id}`-ის მეშვეობით კვანძების გარეშე შემმოწმებლებისთვის.
 
-## Bridge receipt events
+## ხიდის მიღების ღონისძიებები
 
-Bridge lanes emit typed receipts via the `RecordBridgeReceipt` instruction. Executing this instruction
-records a `BridgeReceipt` payload and emits `DataEvent::Bridge(BridgeEvent::Emitted)` on the event
-stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` helper submits the
-typed instruction so indexers can consume receipts deterministically.
+ხიდის ზოლები გამოსცემს აკრეფილ ქვითრებს `RecordBridgeReceipt` ინსტრუქციის მეშვეობით. ამ ინსტრუქციის შესრულება
+ჩაწერს `BridgeReceipt` დატვირთვას და გამოსცემს `DataEvent::Bridge(BridgeEvent::Emitted)` ღონისძიებაზე
+ნაკადი, ჩაანაცვლა მხოლოდ ჟურნალის წინა ნამუშევარი. CLI `iroha bridge emit-receipt` დამხმარე წარადგენს
+აკრეფილი ინსტრუქცია, რათა ინდექსერებმა შეძლონ ქვითრების დეტერმინისტულად გამოყენება.
 
-## External verification sketch (ICS)
+## გარე დადასტურების ესკიზი (ICS)
 
 ```rust
 use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};

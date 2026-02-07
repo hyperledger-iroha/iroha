@@ -4,50 +4,52 @@ direction: rtl
 source: docs/portal/docs/sns/local-to-global-toolkit.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Kit de direcciones Local -> Global
+# مقامی -> عالمی ایڈریس کٹ
 
-Esta pagina refleja `docs/source/sns/local_to_global_toolkit.md` del mono-repo. Empaqueta los helpers de CLI y runbooks requeridos por el item de roadmap **ADDR-5c**.
+یہ صفحہ مونو-ریپو سے `docs/source/sns/local_to_global_toolkit.md` کی عکاسی کرتا ہے۔ پیکیجز سی ایل آئی مددگار اور رن بوکس ** ایڈ آر -5 سی ** روڈ میپ آئٹم کے ذریعہ درکار ہیں۔
 
-## Resumen
+## خلاصہ
 
-- `scripts/address_local_toolkit.sh` envuelve la CLI `iroha` para producir:
-  - `audit.json` -- salida estructurada de `iroha tools address audit --format json`.
-  - `normalized.txt` -- literales IH58 (preferido) / compressed (`sora`) (segunda mejor opcion) convertidos para cada selector de dominio Local.
-- Combina el script con el dashboard de ingesta de direcciones (`dashboards/grafana/address_ingest.json`)
-  y las reglas de Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para probar que el cutover Local-8 /
-  Local-12 es seguro. Observa los paneles de colision Local-8 y Local-12 y las alertas
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, y `AddressInvalidRatioSlo` antes de
-  promover cambios de manifest.
-- Referencia las [Address Display Guidelines](address-display-guidelines.md) y el
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) para contexto de UX y respuesta a incidentes.
+- `scripts/address_local_toolkit.sh` پیدا کرنے کے لئے `iroha` CLI لپیٹ گیا:
+  - `audit.json` - `iroha tools address audit --format json` کی تشکیل شدہ آؤٹ پٹ۔
+  - `normalized.txt` - ہر مقامی ڈومین سلیکٹر کے لئے تبدیل شدہ IH58 (ترجیحی) / کمپریسڈ (`sora`) (دوسرا بہترین) لٹرلز۔
+- اسکرپٹ کو ایڈریس انجشن ڈیش بورڈ (`dashboards/grafana/address_ingest.json`) کے ساتھ جوڑیں
+  اور الرٹ مینجر قواعد (`dashboards/alerts/address_ingest_rules.yml`) اس لوکل -8/کٹ اوور کو جانچنے کے لئے
+  مقامی 12 محفوظ ہے۔ لوکل -8 اور لوکل -12 تصادم پینل اور الرٹس کا مشاہدہ کریں
+  `AddressLocal8Resurgence` ، `AddressLocal12Collision` ، اور `AddressInvalidRatioSlo` سے پہلے
+  واضح تبدیلیوں کو فروغ دیں۔
+- [ایڈریس ڈسپلے کے رہنما خطوط] (address-display-guidelines.md) اور دی کا حوالہ دیں
+  [ایڈریس مینی فیسٹ رن بک] (../../../source/runbooks/address_manifest_ops.md) UX سیاق و سباق اور واقعہ کے جواب کے لئے۔
 
-## Uso
+## استعمال
 
 ```bash
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-Opciones:
+اختیارات:
 
-- `--format compressed (`sora`)` para salida `sora...` en lugar de IH58.
-- `--no-append-domain` para emitir literales sin dominio.
-- `--audit-only` para omitir el paso de conversion.
-- `--allow-errors` para seguir escaneando cuando aparezcan filas malformadas (coincide con el comportamiento de la CLI).
+- `--format compressed (`SORA`)` `sora...` کے لئے IH58 کے بجائے آؤٹ پٹ۔
+- `--no-append-domain` بغیر ڈومین کے لغویوں کو خارج کرنے کے لئے۔
+- تبادلوں کے قدم کو چھوڑنے کے لئے `--audit-only`۔
+- `--allow-errors` اسکیننگ جاری رکھنے کے لئے جب خراب شدہ قطاریں نمودار ہوتی ہیں (CLI کے طرز عمل سے مماثل ہوتی ہے)۔
 
-El script escribe las rutas de artefactos al final de la ejecucion. Adjunta ambos archivos a
-tu ticket de gestion de cambios junto con el screenshot de Grafana que pruebe cero
-detecciones Local-8 y cero colisiones Local-12 por >=30 dias.
+اسکرپٹ پھانسی کے اختتام پر نمونے والے راستے لکھتا ہے۔ دونوں فائلوں کو منسلک کریں
+Grafana ایکس کے اسکرین شاٹ کے ساتھ آپ کا تبدیلی کے انتظام کا ٹکٹ جو صفر ثابت کرتا ہے
+> = 30 دن کے لئے لوکل -8 کا پتہ لگانے اور صفر لوکل -12 تصادم۔
 
-## Integracion CI
+## CI انضمام
 
-1. Ejecuta el script en un job dedicado y sube sus salidas.
-2. Bloquea merges cuando `audit.json` reporte selectores Local (`domain.kind = local12`).
-   en su valor por defecto `true` (solo override a `false` en clusters dev/test al
-   diagnosticar regresiones) y agrega
-   `iroha tools address normalize --fail-on-warning --only-local` a CI para que intentos de
-   regresion fallen antes de llegar a produccion.
+1. اسکرپٹ کو کسی سرشار ملازمت میں چلائیں اور اس کے آؤٹ پٹ کو اپ لوڈ کریں۔
+2. بلاک ضم ہوجاتا ہے جب `audit.json` مقامی سلیکٹرز (`domain.kind = local12`) کی اطلاع دیتا ہے۔
+   اس کی ڈیفالٹ ویلیو `true` پر (صرف `false` کو دیو/ٹیسٹ کلسٹرز میں اوور رائڈ
+   رجعت پسندی کی تشخیص کریں) اور شامل کریں
+   `iroha tools address normalize --fail-on-warning --only-local` to CI تاکہ یہ کوشش کرے
+   پیداوار تک پہنچنے سے پہلے رجعت ناکام ہوجاتی ہے۔
 
-Consulta el documento fuente para mas detalles, checklists de evidencia y el snippet de
-release notes que puedes reutilizar al anunciar el cutover a clientes.
+مزید تفصیلات ، شواہد چیک لسٹس اور اس کے ٹکڑے کے لئے ماخذ دستاویز سے مشورہ کریں
+نوٹ جاری کریں جو آپ کے مؤکلوں کو کٹور کا اعلان کرتے وقت دوبارہ استعمال کرسکتے ہیں۔

@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5fa5e39b0e758b38e27855fcfcae9a6e31817df4fdb9d5394b4b63d2f5164516
 source_last_modified: "2026-01-22T14:35:37.742189+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Payload v1 rollout approval (SDK Council, 2026-04-28).
-//!
-//! Captures the SDK Council decision memo required by `roadmap.md:M1` so the
-//! encrypted payload v1 rollout has an auditable record (deliverable M1.4).
+//！ Payload v1 推出批准（SDK 委員會，2026-04-28）。
+//！
+//！捕獲 `roadmap.md:M1` 所需的 SDK 委員會決策備忘錄，以便
+//！加密有效負載 v1 部署具有可審核記錄（可交付 M1.4）。
 
-# Payload v1 Rollout Decision (2026-04-28)
+# Payload v1 推出決定 (2026-04-28)
 
-- **Chair:** SDK Council Lead (M. Takemiya)
-- **Voting members:** Swift Lead, CLI Maintainer, Confidential Assets TL, DevRel WG
-- **Observers:** Program Mgmt, Telemetry Ops
+- **主席：** SDK 委員會負責人 (M. Takemiya)
+- **投票成員：** Swift Lead、CLI 維護者、Confidential Assets TL、DevRel WG
+- **觀察員：** 計劃管理、遙測操作
 
-## Inputs Reviewed
+## 已審核的輸入
 
-1. **Swift bindings & submitters** — `ShieldRequest`/`UnshieldRequest`, async submitters, and Tx builder helpers landed with parity tests and docs.【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389】【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006】
-2. **CLI ergonomics** — `iroha app zk envelope` helper covers encode/inspect workflows plus failure diagnostics, aligned with the roadmap ergonomics requirement.【crates/iroha_cli/src/zk.rs:1256】
-3. **Deterministic fixtures & parity suites** — shared fixture + Rust/Swift validation to keep Norito bytes/error surfaces aligned.【fixtures/confidential/encrypted_payload_v1.json:1】【crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1】【IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73】
+1. **Swift 綁定和提交者** — `ShieldRequest`/`UnshieldRequest`、異步提交者和 Tx 構建器助手通過奇偶校驗測試和文檔登陸。 【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389】【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006】
+2. **CLI 人體工程學** — `iroha app zk envelope` 幫助程序涵蓋編碼/檢查工作流程以及故障診斷，符合路線圖人體工程學要求。 【crates/iroha_cli/src/zk.rs:1256】
+3. **確定性固定裝置和奇偶校驗套件** - 共享固定裝置 + Rust/Swift 驗證以保留 Norito 字節/錯誤表面對齊。 【fixtures/confidential/encrypted_payload_v1.json:1】【crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1】【IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73】
 
-## Decision
+## 決定
 
-- **Approve payload v1 rollout** for SDKs and CLI, enabling Swift wallets to originate confidential envelopes without bespoke plumbing.
-- **Conditions:** 
-  - Keep parity fixtures under CI drift alerts (tied to `scripts/check_norito_bindings_sync.py`).
-  - Document the operational playbook in `docs/source/confidential_assets.md` (already updated via the Swift SDK PR).
-  - Record calibration + telemetry evidence before flipping any production flags (tracked under M2).
+- **批准 SDK 和 CLI 的有效負載 v1 推出**，使 Swift 錢包能夠在無需定制管道的情況下生成機密信封。
+- **條件：** 
+  - 將奇偶校驗裝置置於 CI 漂移警報之下（與 `scripts/check_norito_bindings_sync.py` 相關）。
+  - 在 `docs/source/confidential_assets.md` 中記錄操作手冊（已通過 Swift SDK PR 更新）。
+  - 在翻轉任何生產標誌之前記錄校準+遙測證據（在 M2 下跟踪）。
 
-## Action Items
+## 行動項目
 
-| Owner | Item | Due |
-|-------|------|-----|
-| Swift Lead | Announce GA availability + README snippets | 2026-05-01 |
-| CLI Maintainer | Add `iroha app zk envelope --from-fixture` helper (optional) | Backlog (not blocking) |
-| DevRel WG | Update wallet quickstarts with payload v1 instructions | 2026-05-05 |
+|業主|項目 |到期|
+|--------|------|-----|
+|迅速領先 |宣布 GA 可用性 + 自述文件片段 | 2026-05-01 |
+| CLI 維護者 |添加 `iroha app zk envelope --from-fixture` 幫助程序（可選）|積壓（不阻塞）|
+|開發相關工作組 |使用有效負載 v1 說明更新錢包快速入門 | 2026-05-05 |
 
-> **Note:** This memo supersedes the temporary “pending council approval” call-out in `roadmap.md:2426` and satisfies tracker item M1.4. Update `status.md` whenever follow-up action items close.
+> **注：** 本備忘錄取代 `roadmap.md:2426` 中臨時的“等待理事會批准”標註，並滿足跟踪器項目 M1.4。每當後續行動項目結束時更新 `status.md`。

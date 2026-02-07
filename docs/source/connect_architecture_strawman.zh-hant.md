@@ -7,30 +7,31 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a1a6bcc6bca3d7f70b82e35734b71d706ac46d8dc9c728351fabbd8a61dd3f31
 source_last_modified: "2026-01-05T09:28:12.003461+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Session Architecture Strawman (Swift / Android / JS)
+# 連接會話架構 Strawman (Swift / Android / JS)
 
-This strawman proposal outlines the shared design for Nexus Connect workflows
-across the Swift, Android, and JavaScript SDKs. It is intended to support the
-Feb 2026 cross-SDK workshop and capture open questions before implementation.
+這個稻草人提案概述了 Nexus Connect 工作流程的共享設計
+跨 Swift、Android 和 JavaScript SDK。其目的是支持
+2026 年 2 月跨 SDK 研討會並在實施前捕獲懸而未決的問題。
 
-> Last updated: 2026-01-29  
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead  
-> Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
+> 最後更新: 2026-01-29  
+> 作者：Swift SDK 主管、Android 網絡 TL、JS 主管  
+> 狀態：供理事會審查的草案（2026 年 3 月 12 日添加威脅模型 + 數據保留調整）
 
-## Goals
+## 目標
 
-1. Align wallet ↔ dApp session lifecycle, including connection bootstrapping,
-   approvals, signing requests, and teardown.
-2. Define the Norito envelope schema (open/approve/sign/control) shared by all
-   SDKs and ensure parity with `connect_norito_bridge`.
-3. Split responsibilities between transport (WebSocket/WebRTC), encryption
-   (Norito Connect frames + key exchange), and application layers (SDK facades).
-4. Ensure deterministic behaviour across desktop/mobile platforms, including
-   offline buffering and reconnection.
+1. 調整錢包 ↔ dApp 會話生命週期，包括連接引導，
+   批准、簽署請求和拆除。
+2.定義所有人共享的Norito信封模式（打開/批准/簽署/控制）
+   SDK 並確保與 `connect_norito_bridge` 同等。
+3. 傳輸（WebSocket/WebRTC）、加密之間的職責劃分
+   （Norito 連接框架+密鑰交換）和應用程序層（SDK 外觀）。
+4. 確保跨桌面/移動平台的確定性行為，包括
+   離線緩沖和重新連接。
 
-## Session Lifecycle (High-Level)
+## 會話生命週期（高級）
 
 ```
 ┌────────────┐      ┌─────────────┐      ┌────────────┐
@@ -56,363 +57,342 @@ Feb 2026 cross-SDK workshop and capture open questions before implementation.
       │ 6. control frames for reject/close, error propagation, heartbeats.
 ```
 
-## Envelope/Norito Schema
+## 信封/Norito 架構
 
-All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`:
+所有 SDK 必須使用 `connect_norito_bridge` 中定義的規範 Norito 模式：
 
-- `EnvelopeV1` (open / approve / sign / control)
-- `ConnectFrameV1` (ciphertext frames w/ AEAD payload)
-- Control codes:
-  - `open_ext` (metadata, permissions)
-  - `approve_ext` (account, permissions, proofs, signature)
-  - `reject`, `close`, `ping/pong`, `error`
+- `EnvelopeV1`（打開/批准/簽名/控制）
+- `ConnectFrameV1`（帶有 AEAD 有效負載的密文幀）
+- 控制代碼：
+  - `open_ext`（元數據、權限）
+  - `approve_ext`（賬戶、權限、證明、簽名）
+  - `reject`、`close`、`ping/pong`、`error`
 
-Swift previously shipped placeholder JSON encoders (`ConnectCodec.swift`). As of Apr 2026 the SDK
-always uses the Norito bridge and fails closed when the XCFramework is missing, but this strawman
-still captures the mandate that led to the bridge integration:
+Swift 之前發布了佔位符 JSON 編碼器 (`ConnectCodec.swift`)。截至 2026 年 4 月 SDK
+總是使用 Norito 橋，並且當 XCFramework 丟失時關閉失敗，但是這個稻草人
+仍然抓住了導致橋樑集成的任務：
 
-| Function | Description | Status |
+|功能|描述 |狀態 |
 |----------|-------------|--------|
-| `connect_norito_encode_control_open_ext` | dApp open frame | Implemented in bridge |
-| `connect_norito_encode_control_approve_ext` | Wallet approval | Implemented |
-| `connect_norito_encode_envelope_sign_request_tx/raw` | Sign requests | Implemented |
-| `connect_norito_encode_envelope_sign_result_ok/err` | Sign results | Implemented |
-| `connect_norito_decode_*` | Parsing for wallets/dApps | Implemented |
+| `connect_norito_encode_control_open_ext` | dApp 開放框架 |在橋中實施 |
+| `connect_norito_encode_control_approve_ext` |錢包審批 |已實施 |
+| `connect_norito_encode_envelope_sign_request_tx/raw` |簽署請求 |已實施 |
+| `connect_norito_encode_envelope_sign_result_ok/err` |簽署結果|已實施 |
+| `connect_norito_decode_*` |解析錢包/dApp |已實施 |
 
-### Required Work
+### 所需工作
 
-- Swift: Replace placeholder `ConnectCodec` JSON helpers with bridge calls and surface
-  typed wrappers (`ConnectFrame`, `ConnectEnvelope`) using the shared Norito types. ✅ (Apr 2026)
-- Android/JS: Ensure the same wrappers exist; align error codes and metadata keys.
-- Shared: Document encryption (X25519 key exchange, AEAD) with consistent key derivation
-  per Norito spec, and provide sample integration tests using the Rust bridge.
+- Swift：用橋接調用和表面替換佔位符 `ConnectCodec` JSON 助手
+  使用共享 Norito 類型的類型化包裝器（`ConnectFrame`、`ConnectEnvelope`）。 ✅（2026 年 4 月）
+- Android/JS：確保存在相同的包裝器；對齊錯誤代碼和元數據鍵。
+- 共享：具有一緻密鑰派生的文檔加密（X25519 密鑰交換，AEAD）
+  根據 Norito 規範，並使用 Rust 橋提供示例集成測試。
 
-## Transport Contract
+## 運輸合同- 主要傳輸：WebSocket (`/v1/connect/ws?sid=<session_id>`)。
+- 可選的未來：WebRTC（TBD）——超出了最初稻草人的範圍。
+- 重新連接策略：帶完全抖動的指數退避（基本 5 秒，最大 60 秒）； Swift、Android 和 JS 之間共享常量，因此重試仍然是可預測的。
+- Ping/pong 節奏：30 秒心跳，在重新連接之前可以容忍 3 次錯過的 Pong； JS 將最小間隔限制為 15 秒以滿足瀏覽器限制規則。
+- 推送掛鉤：Android 錢包 SDK 公開了用於喚醒的可選 FCM 集成，而 JS 保持基於輪詢（已記錄的瀏覽器推送權限限制）。
+- SDK職責：
+  - 保持乒乓心跳（避免耗盡手機電池）。
+  - 離線時緩衝傳出幀（有界隊列，為 dApp 保留）。
+- 提供事件流API（Swift Couple `AsyncStream`、Android Flow、JS async iter）。
+- 表面重新連接掛鉤並允許手動重新訂閱。
+- 遙測編輯：僅發出會話級計數器（`sid` 哈希、方向、
+  序列窗口、隊列深度）以及 Connect 遙測中記錄的鹽
+  指導；標頭/鍵絕不能出現在日誌或調試字符串中。
 
-- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
-- Optional future: WebRTC (TBD) – out of scope for initial strawman.
-- Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
-- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
-- Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
-- SDK responsibilities:
-  - Maintain ping/pong heartbeats (avoid draining batteries on mobile).
-  - Buffer outgoing frames when offline (bounded queue, persisted for dApp).
-- Provide event stream API (Swift Combine `AsyncStream`, Android Flow, JS async iter).
-- Surface reconnect hooks and allow manual re-subscribe.
-- Telemetry redaction: only emit session-level counters (`sid` hash, direction,
-  sequence window, queue depth) with salts documented in the Connect telemetry
-  guide; headers/keys must never appear in logs or debug strings.
+## 加密和密鑰管理
 
-## Encryption & Key Management
+### 會話標識符和鹽
 
-### Session identifiers & salts
+- `sid` 是從 `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` 派生的 32 字節標識符。  
+  DApp 在調用 `/v1/connect/session` 之前計算它；錢包在 `approve` 幀中回應它，因此雙方可以一致地輸入日誌和遙測數據。
+- 相同的鹽提供每個密鑰派生步驟，因此 SDK 從不依賴於從主機平台獲取的熵。
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
-- The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
+### 臨時密鑰處理
 
-### Ephemeral key handling
+- 每個會話都使用新的 X25519 密鑰材料。  
+  Swift 通過 `ConnectCrypto` 將其存儲在 Keychain/Secure Enclave 中，Android 錢包默認為 StrongBox（回退到 TEE 支持的密鑰庫），JS 需要安全上下文 WebCrypto 實例或本機 `iroha_js_host` 插件。
+- 開放框架包括 dApp 臨時公鑰以及可選的證明捆綁包。錢包批准會返回錢包公鑰以及合規流程所需的任何硬件證明。
+- 證明有效負載遵循可接受的架構：  
+  `attestation { platform, evidence_b64, statement_hash }`。  
+  瀏覽器可能會忽略該塊；每當使用硬件支持的密鑰時，本機錢包都會包含它。
 
-- Every session uses fresh X25519 key material.  
-  Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
-- Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
-- Attestation payloads follow the accepted schema:  
-  `attestation { platform, evidence_b64, statement_hash }`.  
-  Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.
+### 方向鍵和 AEAD
 
-### Directional keys & AEAD
+- 使用 HKDF-SHA256（通過 Rust 橋助手）和域分隔的信息字符串擴展共享密鑰：
+  - `iroha-connect|k_app` → 應用→錢包流量。
+  - `iroha-connect|k_wallet`→錢包→應用程序流量。
+- AEAD 是 v1 信封的 ChaCha20-Poly1305（`connect_norito_bridge` 在每個平台上公開助手）。  
+  關聯數據等於 `("connect:v1", sid, dir, seq_le, kind=ciphertext)`，因此檢測到對標頭的篡改。
+- 隨機數源自 64 位序列計數器（`nonce[0..4]=0`、`nonce[4..12]=seq_le`）。共享幫助程序測試可確保 BigInt/UInt 轉換在 SDK 中的行為相同。
 
-- Shared secrets are expanded with HKDF-SHA256 (via the Rust bridge helpers) and domain-separated info strings:
-  - `iroha-connect|k_app` → app→wallet traffic.
-  - `iroha-connect|k_wallet` → wallet→app traffic.
-- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).  
-  Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
-- Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
+### 旋轉和恢復握手- 輪換仍然是可選的，但協議已定義：當序列計數器接近包裝防護時，dApp 會發出 `Control::RotateKeys` 幀，錢包使用新的公鑰和簽名的確認進行響應，雙方立即派生新的方向密鑰而不關閉會話。
+- 錢包端密鑰丟失會觸發相同的握手，然後是 `resume` 控制，因此 dApp 知道要刷新針對已停用密鑰的緩存密文。
 
-### Rotation & recovery handshake
+有關歷史 CryptoKit 回退，請參閱 `docs/connect_swift_ios.md`； Kotlin 和 JS 在 `docs/connect_kotlin_ws*.md` 下有匹配的引用。
 
-- Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
-- Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
+## 權限和證明
 
-For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS have matching references under `docs/connect_kotlin_ws*.md`.
+- 權限清單必須通過橋導出的共享 Norito 結構進行往返。  
+  領域：
+  - `methods` — 動詞（`sign_transaction`、`sign_raw`、`submit_proof`，...）。  
+  - `events` — 允許 dApp 附加的訂閱。  
+  - `resources` — 可選帳戶/資產過濾器，以便錢包可以限制訪問範圍。  
+  - `constraints` — 鏈 ID、TTL 或錢包在簽名前強制執行的自定義策略旋鈕。
+- 合規性元數據與權限並存：
+  - 可選 `attachments[]` 包含 Norito 附件參考（KYC 捆綁包、監管機構收據）。  
+  - `compliance_manifest_id` 將請求與先前批准的清單聯繫起來，以便操作員可以審核出處。
+- 錢包響應使用約定的代碼：
+  - `user_declined`、`permissions_mismatch`、`compliance_failed`、`internal_error`。  
+  每個可能攜帶一個用於 UI 提示的 `localized_message` 以及一個機器可讀的 `reason_code`。
+- 批准框架包括選定的帳戶/控制器、權限回顯、證明包（ZK 證明或證明）以及任何策略切換（例如 `offline_queue_enabled`）。  
+  拒絕鏡像具有空 `proof` 的相同架構，但仍記錄 `sid` 以供審核。
 
-## Permissions & Proofs
+## SDK 外觀
 
-- Permission manifests must round-trip through the shared Norito struct exported by the bridge.  
-  Fields:
-  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — subscriptions the dApp is allowed to attach to.  
-  - `resources` — optional account/asset filters so wallets can scope access.  
-  - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
-- Compliance metadata rides alongside permissions:
-  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).  
-  - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
-- Wallet responses use the agreed codes:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
-  Each may carry a `localized_message` for UI hints plus a machine-readable `reason_code`.
-- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `offline_queue_enabled`).  
-  Rejections mirror the same schema with empty `proof` but still record the `sid` for auditability.
+| SDK |提議的 API |筆記|
+|-----|--------------|--------|
+|斯威夫特 | `ConnectClient`、`ConnectSession`、`ConnectRequest`、`ConnectApproval` |用類型化包裝器 + 異步流替換佔位符。 |
+|安卓 | Kotlin 協程 + 框架的密封類 |與 Swift 結構保持一致以實現可移植性。 |
+| JS |框架類型的異步迭代器 + TypeScript 枚舉 |提供捆綁器友好的 SDK（瀏覽器/節點）。 |
 
-## SDK Facades
-
-| SDK | Proposed API | Notes |
-|-----|--------------|-------|
-| Swift | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | Replace placeholders with typed wrappers + async streams. |
-| Android | Kotlin coroutines + sealed classes for frames | Align with Swift structure for portability. |
-| JS | Async iterators + TypeScript enums for frame kinds | Provide bundler-friendly SDK (browser/node). |
-
-### Common behaviours
-
-- `ConnectSession` orchestrates lifecycle:
-  1. Establish WebSocket, perform handshake.
-  2. Exchange open/approve frames.
-  3. Handle sign requests/responses.
-  4. Emit events to application layer.
-- Provide high-level helpers:
+### 常見行為- `ConnectSession` 協調生命週期：
+  1. 建立WebSocket，進行握手。
+  2. 交換開放/批准框架。
+  3. 處理簽名請求/響應。
+  4. 向應用層發送事件。
+- 提供高級幫手：
   - `requestSignature(tx, metadata)`
   - `approveSession(account, permissions)`
   - `reject(reason)`
-  - `cancelRequest(hash)` – emits a control frame acknowledged by the wallet.
-- Error handling: map Norito error codes to SDK-specific errors; include
-  domain-specific codes for UI using the shared taxonomy (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). Swift's baseline implementation + telemetry guide lives in [`connect_error_taxonomy.md`](connect_error_taxonomy.md) and is the reference for Android/JS parity.
-- Emit telemetry hooks for queue depth, reconnect counts, and request latency (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
+  - `cancelRequest(hash)` – 發出錢包確認的控制幀。
+- 錯誤處理：將 Norito 錯誤代碼映射到 SDK 特定錯誤；包括
+  使用共享分類法的 UI 的域特定代碼（`Transport`、`Codec`、`Authorization`、`Timeout`、`QueueOverflow`、`Internal`）。 Swift 的基線實現 + 遙測指南位於 [`connect_error_taxonomy.md`](connect_error_taxonomy.md) 中，是 Android/JS 奇偶校驗的參考。
+- 發出隊列深度、重新連接計數和請求延遲的遙測掛鉤（`connect.queue_depth`、`connect.reconnects_total`、`connect.latency_ms`）。
  
-## Sequence Numbers & Flow Control
+## 序列號和流量控制
 
-- Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
-- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Wallets advertise back-pressure via a logical window (`FlowControl` control frames). DApps dequeue only when a window token is available; wallets emit new tokens after processing ciphertext to keep pipelines bounded.
-- Resume negotiation is explicit: both sides emit `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` after reconnecting so observers can verify how much data was re-sent and whether journals contain gaps.
-- Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
+- 每個方向都保留一個專用的 64 位 `sequence` 計數器，該計數器在會話打開時從零開始。共享幫助程序類型會限制增量並在計數器迴繞之前觸發 `ConnectError.sequenceOverflow` + 密鑰旋轉握手。
+- 隨機數和關聯數據引用序列號，因此可以在不解析有效負載的情況下拒絕重複項。 SDK 必須將 `{sid, dir, seq, payload_hash}` 存儲在其日誌中，以使重複數據刪除在重新連接時具有確定性。
+- 錢包通過邏輯窗口（`FlowControl` 控制幀）通告背壓。僅當窗口令牌可用時，DApp 才會出隊；錢包在處理密文後發出新的代幣以保持管道的邊界。
+- 恢復協商是明確的：雙方在重新連接後都會發出 `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }`，以便觀察者可以驗證重新發送了多少數據以及日誌是否包含間隙。
+- 衝突（例如，兩個有效負載具有相同的 `(sid, dir, seq)` 但不同的哈希值）升級為 `ConnectError.Internal` 並強制使用新的 `sid` 以避免靜默分歧。
 
-## Threat model and data retention alignment
+## 威脅模型和數據保留一致性- **考慮的表面：** WebSocket 傳輸、Norito 橋編碼/解碼、
+  日誌持久性、遙測導出器和麵向應用程序的回調。
+- **主要目標：** 保護會話機密（X25519 密鑰、派生 AEAD 密鑰、
+  隨機數/序列計數器）免受日誌/遙測洩漏的影響，防止重放和
+  降級攻擊，並限制日誌和異常報告的保留。
+- **已編纂的緩解措施：**
+  - 期刊僅攜帶密文；存儲的元數據僅限於哈希值、長度
+    字段、時間戳和序列號。
+  - 遙測有效負載會編輯任何標頭/有效負載內容，並且僅包含
+    `sid` 加鹽哈希加上聚合計數器；共享修訂清單
+    SDK 之間的審核奇偶校驗。
+  - 默認情況下，會話日誌會輪換並在 7 天后過期。錢包暴露
+    `connectLogRetentionDays` 旋鈕（SDK 默認 7）並記錄行為
+    因此，受監管的部署可以固定更嚴格的窗口。
+  - Bridge API 濫用（缺少綁定、損壞的密文、無效序列）
+    返回鍵入的錯誤，而不回顯原始有效負載或密鑰。
 
-- **Surfaces considered:** WebSocket transport, Norito bridge encode/decode,
-  journal persistence, telemetry exporters, and app-facing callbacks.
-- **Primary goals:** protect session secrets (X25519 keys, derived AEAD keys,
-  nonce/sequence counters) from leaks in logs/telemetry, prevent replay and
-  downgrade attacks, and bound retention of journals and anomaly reports.
-- **Mitigations codified:**
-  - Journals carry ciphertext only; metadata stored is limited to hashes, length
-    fields, timestamps, and sequence numbers.
-  - Telemetry payloads redacts any header/payload content and includes only
-    salted hashes of `sid` plus aggregate counters; redaction checklist shared
-    between SDKs for audit parity.
-  - Session logs are rotated and age out after 7 days by default. Wallets expose
-    a `connectLogRetentionDays` knob (SDK default 7) and document the behaviour
-    so regulated deployments can pin stricter windows.
-  - Bridge API misuse (missing bindings, corrupt ciphertext, invalid sequence)
-    returns typed errors without echoing raw payloads or keys.
+審核中的待決問題在 `docs/source/sdk/swift/connect_workshop.md` 中進行跟踪
+並將在理事會會議記錄中予以解決；一旦關閉，稻草人將
+從草稿晉升為接受。
 
-Pending questions from review are tracked in `docs/source/sdk/swift/connect_workshop.md`
-and will be resolved in the council minutes; once closed the strawman will be
-promoted from draft to accepted.
+## 離線緩沖和重新連接
 
-## Offline Buffering & Reconnections
+### 日記合同
 
-### Journaling contract
-
-Every SDK maintains an append-only journal per session so the dApp and wallet
-can queue frames while offline, resume without data loss, and provide evidence
-for telemetry. The contract mirrors the Norito bridge types so the same byte
-representation survives across the mobile/JS stacks.
-
-- Journals live under a hashed session identifier (`sha256(sid)`), producing two
-  files per session: `app_to_wallet.queue` and `wallet_to_app.queue`. Swift uses
-  a sandboxed file wrapper, Android stores the files via `Room`/`FileChannel`,
-  and JS writes to IndexedDB; all formats are binary and endian-stable.
-- Each record serialises as `ConnectJournalRecordV1`:
+每個 SDK 都會為每個會話維護一個僅附加日誌，因此 dApp 和錢包
+可以在離線時對幀進行排隊、在不丟失數據的情況下恢復並提供證據
+用於遙測。該合約鏡像 Norito 橋接類型，因此具有相同的字節
+表示在移動/JS 堆棧中仍然存在。- 日誌存在於散列會話標識符 (`sha256(sid)`) 下，產生兩個
+  每個會話的文件：`app_to_wallet.queue` 和 `wallet_to_app.queue`。斯威夫特使用
+  沙盒文件包裝器，Android 通過 `Room`/`FileChannel` 存儲文件，
+  JS寫入IndexedDB；所有格式都是二進制且字節序穩定。
+- 每條記錄序列化為 `ConnectJournalRecordV1`：
   - `direction: u8` (`0 = app→wallet`, `1 = wallet→app`)
   - `sequence: u64`
-  - `payload_hash: [u8; 32]` (Blake3 of ciphertext + headers)
+  - `payload_hash: [u8; 32]`（Blake3密文+標頭）
   - `ciphertext_len: u32`
   - `received_at_ms: u64`
   - `expires_at_ms: u64`
-  - `ciphertext: [u8; ciphertext_len]` (exact Norito frame already AEAD-wrapped)
-- Journals store ciphertext verbatim. We never re-encrypt the payload; AEAD
-  headers already authenticate direction keys, so persistence reduces to
-  fsyncing the appended record.
-- A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
-  bytes used, oldest/newest seq). It feeds the telemetry exporters and the
-  `FlowControl` helper.
-- Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
-  oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
-  overrides these defaults per deployment.
-- Journals retain data for 24 h (`expires_at_ms`). Background GC removes stale
-  segments eagerly so the on-disk footprint stays bounded.
-- Crash safety: append, fsync, and update the memory mirror _before_ notifying
-  the caller. On startup, SDKs scan the directory, validate record checksums,
-  and rebuild `ConnectQueueState`. Corruption causes the offending record to be
-  skipped, flagged via telemetry, and optionally quarantined for support dumps.
-- Because ciphertext already satisfies the Norito privacy envelope, the only
-  additional metadata recorded is the hashed session id. Apps wanting extra
-  privacy can opt into `telemetry_opt_in = false`, which stores journals but
-  redacts queue-depth exports and disables sharing hashed `sid` in logs.
-- SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
-  drains, and GC outcomes; this hook feeds status UIs without parsing logs.
+  - `ciphertext: [u8; ciphertext_len]`（確切的 Norito 框架已經 AEAD 包裝）
+- 日誌逐字存儲密文。我們從不重新加密有效負載； AEAD
+  標頭已經驗證了方向鍵，因此持久性減少為
+  fsyncing 附加記錄。
+- 內存中的 `ConnectQueueState` 結構鏡像文件元數據（深度、
+  使用的字節數，最舊/最新的序列）。它為遙測出口商和
+  `FlowControl` 幫助者。
+- 默認情況下，日誌上限為 32 幀/1MiB；擊中上限將驅逐
+  最舊的條目 (`reason=overflow`)。 `ConnectFeatureConfig.max_queue_len`
+  每個部署都會覆蓋這些默認值。
+- 日誌保留數據 24 小時 (`expires_at_ms`)。後台 GC 刪除陳舊內容
+  急切地進行分段，以便磁盤上的足跡保持有限。
+- 崩潰安全：在通知之前追加、fsync 和更新內存鏡像
+  來電者。啟動時，SDK 會掃描目錄，驗證記錄校驗和，
+  並重建 `ConnectQueueState`。腐敗導致違規記錄
+  跳過，通過遙測標記，並可選擇隔離支持轉儲。
+- 因為密文已經滿足 Norito 隱私信封，唯一
+  記錄的附加元數據是散列會話 ID。需要額外的應用程序
+  隱私可以選擇 `telemetry_opt_in = false`，它存儲日誌，但是
+  編輯隊列深度導出並禁用在日誌中共享散列 `sid`。
+- SDK 公開 `ConnectQueueObserver`，以便錢包/dApp 可以檢查隊列深度，
+  排水管和 GC 結果；該鉤子提供狀態 UI，而不解析日誌。
 
-### Replay & resume semantics
+### 重放和恢復語義
 
-1. When reconnecting, SDKs emit `Control::Resume` with `{seq_app_max,
-   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. The hash is the
-   Blake3 digest of the append-only journal so mismatched peers can detect drift.
-2. The receiving peer compares the resume payload with its state, requests
-   retransmission when gaps exist, and acknowledges replayed frames via
-   `Control::ResumeAck`.
-3. Replayed frames always respect insertion order (`sequence` then write-time).
-   Wallet SDKs MUST apply back-pressure by issuing `FlowControl` tokens (also
-   journaled) so dApps cannot flood the queue while offline.
-4. Journals store ciphertext verbatim, so replay simply pumps the recorded bytes
-   back through the transport and decoder. No per-SDK re-encoding is allowed.
+1. 重新連接時，SDK 會發出 `Control::Resume` 和 `{seq_app_max,
+   seq_wallet_max、queued_app、queued_wallet、journal_hash}`。哈希值是
+   Blake3 僅附加日誌的摘要，因此不匹配的同行可以檢測漂移。
+2. 接收方將恢復負載與其狀態進行比較，請求
+   存在間隙時重傳，並通過以下方式確認重播幀
+   `Control::ResumeAck`。
+3. 重放的幀始終遵循插入順序（`sequence`，然後是寫入時間）。
+   錢包 SDK 必須通過發行 `FlowControl` 代幣（也
+   日誌），因此 dApp 無法在離線狀態下淹沒隊列。
+4. 日誌逐字存儲密文，因此重放只是泵送記錄的字節
+   通過傳輸和解碼器返回。不允許按 SDK 重新編碼。
 
-### Reconnection flow
+### 重連流程1. Transport 重新建立 WebSocket 並協商新的 ping 間隔。
+2. dApp 按順序重放排隊的幀，尊重錢包的背壓
+   （`ConnectSession.nextControlFrame()` 生成 `FlowControl` 代幣）。
+3. 錢包解密緩衝結果，驗證序列單調性，並
+   重播待批准/結果。
+4.雙方發出一個`resume`控制總結`seq_app_max`，`seq_wallet_max`，
+   和遙測的隊列深度。
+5. 重複幀（匹配 `sequence` + `payload_hash`）被確認並丟棄；衝突引發 `ConnectError.Internal` 並觸發強制會話重新啟動。
 
-1. Transport re-establishes WebSocket and negotiates new ping interval.
-2. dApp replays queued frames in order, respecting back-pressure from wallet
-   (`ConnectSession.nextControlFrame()` yields `FlowControl` tokens).
-3. Wallet decrypts buffered results, verifies sequence monotonicity, and
-   replays pending approvals/results.
-4. Both sides emit a `resume` control summarising `seq_app_max`, `seq_wallet_max`,
-   and queue depths for telemetry.
-5. Duplicate frames (matching `sequence` + `payload_hash`) are acknowledged and dropped; conflicts raise `ConnectError.Internal` and trigger a forced session restart.
+### 故障模式
 
-### Failure modes
+- 如果會話被視為過時（`offline_timeout_ms`，默認 5 分鐘），
+  緩衝幀被清除，SDK 引發 `ConnectError.sessionExpired`。
+- 如果日誌損壞，SDK 會嘗試單個 Norito 解碼修復；上
+  如果失敗，他們會丟棄日誌並發出 `connect.queue_repair_failed` 遙測數據。
+- 序列不匹配觸發 `ConnectError.replayDetected` 並強制重新啟動
+  握手（使用新的 `sid` 重新啟動會話）。
 
-- If the session is considered stale (`offline_timeout_ms`, default 5 minutes),
-  buffered frames are purged and the SDK raises `ConnectError.sessionExpired`.
-- In case of journal corruption, SDKs attempt a single Norito decode repair; on
-  failure they drop the journal and emit `connect.queue_repair_failed` telemetry.
-- Sequence mismatch triggers `ConnectError.replayDetected` and forces a fresh
-  handshake (session restart with new `sid`).
+### 離線緩衝計劃和操作員控制
 
-### Offline buffering plan & operator controls
+研討會交付成果需要一份書面計劃，以便每個 SDK 都提供相同的
+線下行為、補救流程和證據表面。下面的計劃是
+Swift (`ConnectSessionDiagnostics`)、Android 中常見
+（`ConnectDiagnosticsSnapshot`）和JS（`ConnectQueueInspector`）。
 
-The workshop deliverable requires a documented plan so every SDK ships the same
-offline behaviour, remediation flow, and evidence surfaces. The plan below is
-common across Swift (`ConnectSessionDiagnostics`), Android
-(`ConnectDiagnosticsSnapshot`), and JS (`ConnectQueueInspector`).
+|狀態|觸發|自動回复 |手動操作|遙測標誌|
+|--------|---------|--------------------|-----------------|----------------|
+| `Healthy` |隊列使用率  5/分鐘 |暫停新的簽名請求，以一半的速率發出流量控制令牌 |應用程序可能會調用 `clearOfflineQueue(.app|.wallet)`；一旦上線，SDK 就會重新獲取對等方的狀態 | `connect.queue_state=\"throttled\"`、`connect.queue_watermark` 儀表 |
+| `Quarantined` |使用率 ≥ `disk_watermark_drop`（默認 85%），檢測到損壞兩次，或超出 `offline_timeout_ms` |停止緩衝，引發 `ConnectError.QueueQuarantined`，需要操作員確認 | `ConnectSessionDiagnostics.forceReset()` 導出捆綁包後刪除日誌 | `connect.queue_state=\"quarantined\"`、`connect.queue_quarantine_total` 計數器 |- 閾值位於 `ConnectFeatureConfig` (`disk_watermark_warn`,
+  `disk_watermark_drop`、`max_disk_bytes`、`offline_timeout_ms`）。當主持人
+  省略一個值，SDK 會回退到默認值並記錄警告，以便配置
+  可以通過遙測進行審核。
+- SDK 公開 `ConnectQueueObserver` 以及診斷助手：
+  - Swift：`ConnectSessionDiagnostics.snapshot()` 產生“{狀態，深度，字節，
+    Reason}` and `exportJournalBundle(url:)` 保留兩個隊列以獲取支持。
+  - 安卓：`ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`。
+  - JS: `ConnectQueueInspector.read()` 返回相同的結構和 blob 句柄
+    該UI代碼可以上傳到Torii支持工具。
+- 當應用程序切換 `offline_queue_enabled=false` 時，SDK 會立即耗盡並
+  清除兩個日誌，將狀態標記為 `Disabled`，並發出一個終端
+  遙測事件。面向用戶的偏好反映在 Norito 中
+  批准幀，以便同行知道他們是否可以恢復緩衝的幀。
+- 操作員運行 `connect queue inspect --sid <sid>`（SDK 周圍的 CLI 包裝器）
+  混沌測試期間的診斷）；該命令打印狀態轉換，
+  水印歷史記錄，並恢復證據，以便治理審查不依賴於
+  特定於平台的工具。
 
-| State | Trigger | Automatic response | Manual override | Telemetry flag |
-|-------|---------|--------------------|-----------------|----------------|
-| `Healthy` | Queue usage < `disk_watermark_warn` (default 60 %) and `ttl_ok` | None | N/A | `connect.queue_state=\"healthy\"` |
-| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests, emit flow-control tokens at half rate | Apps may call `clearOfflineQueue(.app|.wallet)`; SDK re-hydrates state from peer once online | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
-| `Quarantined` | Usage ≥ `disk_watermark_drop` (default 85 %), corruption detected twice, or `offline_timeout_ms` exceeded | Stop buffering, raise `ConnectError.QueueQuarantined`, require operator acknowledgement | `ConnectSessionDiagnostics.forceReset()` deletes journals after exporting bundle | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` counter |
+### 證據包工作流程
 
-- Thresholds live in `ConnectFeatureConfig` (`disk_watermark_warn`,
-  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`). When a host
-  omits a value, SDKs fall back to their defaults and log a warning so configs
-  can be audited from telemetry.
-- SDKs expose `ConnectQueueObserver` plus diagnostics helpers:
-  - Swift: `ConnectSessionDiagnostics.snapshot()` yields `{state, depth, bytes,
-    reason}` and `exportJournalBundle(url:)` persists both queues for support.
-  - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
-  - JS: `ConnectQueueInspector.read()` returns the same struct and a blob handle
-    that UI code can upload to Torii support tools.
-- When an app toggles `offline_queue_enabled=false`, SDKs immediately drain and
-  purge both journals, mark the state as `Disabled`, and emit a terminal
-  telemetry event. The user-facing preference is mirrored in the Norito
-  approval frame so peers know whether they can resume buffered frames.
-- Operators run `connect queue inspect --sid <sid>` (CLI wrapper around the SDK
-  diagnostics) during chaos tests; this command prints the state transitions,
-  watermark history, and resume evidence so governance reviews do not depend on
-  platform-specific tooling.
+支持和合規團隊在審計時依賴確定性證據
+離線行為。因此，每個 SDK 都實現相同的三步導出：
 
-### Evidence bundle workflow
+1. `exportJournalBundle(..)` 寫入 `{app_to_wallet,wallet_to_app}.queue` 加一個
+   描述構建哈希、功能標誌和磁盤水印的清單。
+2. `exportQueueMetrics(..)` 發出最後 1000 個遙測樣本，以便儀表板
+   可以離線重建。示例包括哈希會話 ID，當
+   用戶選擇加入。
+3. CLI 幫助程序壓縮導出並附加簽名的 Norito 元數據文件
+   (`ConnectQueueEvidenceV1`) 因此 Torii 攝取可以將捆綁包存檔在 SoraFS 中。
 
-Support and compliance teams rely on deterministic evidence when auditing
-offline behaviour. Each SDK therefore implements the same three-step export:
+驗證失敗的捆綁包將被拒絕，並顯示 `connect.evidence_invalid`
+遙測，以便 SDK 團隊可以重現並修補導出器。
 
-1. `exportJournalBundle(..)` writes `{app_to_wallet,wallet_to_app}.queue` plus a
-   manifest describing the build hash, feature flags, and disk watermarks.
-2. `exportQueueMetrics(..)` emits the last 1 000 telemetry samples so dashboards
-   can be reconstructed offline. Samples include the hashed session id when the
-   user opted in.
-3. The CLI helper zips both exports and attaches a signed Norito metadata file
-   (`ConnectQueueEvidenceV1`) so Torii ingest can archive the bundle in SoraFS.
+## 遙測和診斷- 通過共享 OpenTelemetry 導出器發出 Norito JSON 事件。強制性指標：
+  - `connect.queue_depth{direction}`（表壓）由 `ConnectQueueState` 供給。
+  - `connect.queue_bytes{direction}`（規格）用於磁盤支持的佔用空間。
+  - `connect.queue_dropped_total{reason}`（計數器）用於 `overflow|ttl|repair`。
+  - `connect.offline_flush_total{direction}`（計數器）在排隊時遞增
+    無需運輸即可排出；故障增量為 `connect.offline_flush_failed`。
+  - `connect.replay_success_total`/`connect.replay_error_total`。
+  - `connect.resume_latency_ms` 直方圖（重新連接和穩定之間的時間
+    狀態）加上 `connect.resume_attempts_total`。
+  - `connect.session_duration_ms` 直方圖（每個已完成的會話）。
+  - `connect.error` 與 `code`、`fatal`、`telemetry_profile` 結構化事件。
+- 出口商必須貼上 `{platform, sdk_version, feature_hash}` 標籤，以便
+  儀表板可以按 SDK 版本進行拆分。散列 `sid` 是可選的，並且是唯一的
+  當遙測選擇加入為真時發出。
+- SDK 級掛鉤呈現相同的事件，以便應用程序可以導出更多詳細信息：
+  - 斯威夫特：`ConnectSession.addObserver(_:) -> ConnectEvent`。
+  - 安卓：`Flow<ConnectEvent>`。
+  - JS：異步迭代器或回調。
+- CI 門控：Swift 作業運行 `make swift-ci`，Android 使用 `./gradlew sdkConnectCi`，
+  並且 JS 運行 `npm run test:connect`，因此遙測/儀表板之前保持綠色
+  合併連接更改。
+- 結構化日誌包括散列 `sid`、`seq`、`queue_depth` 和 `sid_epoch`
+  值，以便操作員可以關聯客戶問題。修復失敗的日誌會發出
+  `connect.queue_repair_failed{reason}` 事件以及可選的故障轉儲路徑。
 
-Bundles that fail validation are rejected with `connect.evidence_invalid`
-telemetry so the SDK team can reproduce and patch the exporter.
+### 遙測掛鉤和治理證據
 
-## Telemetry & Diagnostics
+- `connect.queue_state` 兼作路線圖風險指示器。儀表板組
+  通過 `{platform, sdk_version}` 並呈現狀態時間，以便治理可以採樣
+  在批准分階段部署之前每月進行演習證據。
+- `connect.queue_watermark` 和 `connect.queue_bytes` 提供 Connect 風險評分
+  (`risk.connect.offline_buffer`)，當超過
+  5% 的會話在 `Throttled` 中花費超過 10 分鐘。
+- 出口商將 `feature_hash` 附加到每個事件，以便審核工具可以確認
+  Norito 編解碼器 + 離線計劃與審核的版本匹配。 SDK CI 失敗
+  當遙測報告未知哈希值時速度很快。
+- 稻草人仍然需要威脅模型附錄；當指標超過
+  策略閾值，SDK 會發出 `connect.policy_violation` 事件，總結
+  有問題的 sid（散列）、狀態和已解決的操作 (`drain|purge|quarantine`)。
+- 通過 `exportQueueMetrics` 捕獲的證據位於相同的 SoraFS 命名空間中
+  作為 Connect 操作手冊的工件，以便理事會審查者可以跟踪每一次演習
+  返回特定的遙測樣本，無需請求內部日誌。
 
-- Emit Norito JSON events via shared OpenTelemetry exporters. Mandatory metrics:
-  - `connect.queue_depth{direction}` (gauge) fed by `ConnectQueueState`.
-  - `connect.queue_bytes{direction}` (gauge) for disk-backed footprint.
-  - `connect.queue_dropped_total{reason}` (counter) for `overflow|ttl|repair`.
-  - `connect.offline_flush_total{direction}` (counter) increments when queues
-    drain without transport; failures increment `connect.offline_flush_failed`.
-  - `connect.replay_success_total`/`connect.replay_error_total`.
-  - `connect.resume_latency_ms` histogram (time between reconnect and steady
-    state) plus `connect.resume_attempts_total`.
-  - `connect.session_duration_ms` histogram (per completed session).
-  - `connect.error` structured events with `code`, `fatal`, `telemetry_profile`.
-- Exporters MUST attach `{platform, sdk_version, feature_hash}` labels so
-  dashboards can split by SDK build. The hashed `sid` is optional and only
-  emitted when telemetry opt-in is true.
-- SDK-level hooks surface the same events so apps can export more detail:
-  - Swift: `ConnectSession.addObserver(_:) -> ConnectEvent`.
-  - Android: `Flow<ConnectEvent>`.
-  - JS: async iterator or callback.
-- CI gating: Swift jobs run `make swift-ci`, Android uses `./gradlew sdkConnectCi`,
-  and JS runs `npm run test:connect` so telemetry/dashboards remain green before
-  merging Connect changes.
-- Structured logs include the hashed `sid`, `seq`, `queue_depth`, and `sid_epoch`
-  values so operators can correlate client issues. Journals that fail repair emit
-  `connect.queue_repair_failed{reason}` events plus an optional crash dump path.
+## 框架所有權和責任|框架/控制|業主|序列域|日記堅持了嗎？ |遙測標籤|筆記|
+|----------------|--------------------|-----------------|--------------------|--------------------|-------|
+| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` |攜帶元數據+權限位圖；錢包重放最近一次打開之前的提示。 |
+| `Control::Approve` |錢包| `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` |包括賬戶、證明、簽名。此處記錄元數據版本增量。 |
+| `Control::Reject` |錢包| `seq_wallet` | ✅ | `event=reject`，`reason` |可選的本地化消息； dApp 會刪除待處理的簽名請求。 |
+| `Control::Close`（初始化）| dApp | `seq_app` | ✅ | `event=close`，`initiator=app` |錢包用自己的 `Close` 進行確認。 |
+| `Control::Close`（確認）|錢包| `seq_wallet` | ✅ | `event=close`，`initiator=wallet` |確認拆解；一旦雙方都堅持框架，GC 就會移除軸頸。 |
+| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`，`payload_hash` |記錄有效負載哈希以進行重播衝突檢測。 |
+| `SignResult` |錢包| `seq_wallet` | ✅ | `event=sign_result`，`status=ok|err` |包括簽名字節的 BLAKE3 哈希值；故障引發 `ConnectError.Signing`。 |
+| `Control::Error` |錢包（大多數）/dApp（交通）|匹配所有者域 | ✅ | `event=error`、`code` |致命錯誤迫使會話重新啟動；遙測標記 `fatal=true`。 |
+| `Control::RotateKeys` |錢包| `seq_wallet` | ✅ | `event=rotate_keys`，`reason` |宣布新的方向鍵； dApp 回复 `RotateKeysAck`（在應用程序端記錄）。 |
+| `Control::Resume` / `ResumeAck` |兩者 |僅本地域 | ✅ | `event=resume`、`direction=app|wallet` |總結隊列深度+seq狀態；散列期刊摘要有助於診斷。 |
 
-### Telemetry hooks & governance evidence
+- 每個角色的定向密碼密鑰保持對稱（`app→wallet`、`wallet→app`）。
+  錢包輪換提案通過 `Control::RotateKeys` 和 dApp 發布
+  通過發出 `Control::RotateKeysAck` 進行確認；兩個幀都必須擊中磁盤
+  在密鑰交換之前避免重播間隙。
+- 元數據附件（圖標、本地化名稱、合規性證明）由以下人員簽名
+  錢包並由 dApp 緩存；更新需要新的批准框架
+  遞增 `metadata_version`。
+- 上面的所有權矩陣是從 SDK 文檔中引用的，因此 CLI/web/automation
+  客戶遵循相同的合同和儀器默認值。
 
-- `connect.queue_state` doubles as the roadmap risk indicator. Dashboards group
-  by `{platform, sdk_version}` and render time-in-state so governance can sample
-  monthly drill evidence before approving staged rollouts.
-- `connect.queue_watermark` and `connect.queue_bytes` feed the Connect risk score
-  (`risk.connect.offline_buffer`), which automatically pages SRE when more than
-  5 % of sessions spend >10 minutes in `Throttled`.
-- Exporters attach `feature_hash` to every event so auditor tooling can confirm
-  that the Norito codec + offline plan match the reviewed build. SDK CI fails
-  fast when telemetry reports an unknown hash.
-- The strawman still requires a threat-model appendix; when metrics exceed the
-  policy thresholds, SDKs emit `connect.policy_violation` events summarising the
-  offending sid (hashed), state, and resolved action (`drain|purge|quarantine`).
-- Evidence captured via `exportQueueMetrics` lands in the same SoraFS namespace
-  as the Connect runbook artefacts so council reviewers can trace every drill
-  back to specific telemetry samples without requesting internal logs.
+## 開放問題
 
-## Frame Ownership & Responsibilities
+1. **會話發現**：我們是否需要像 WalletConnect 那樣的二維碼/帶外握手？ （未來的工作。）
+2. **多重簽名**：多重簽名批准如何表示？ （擴展簽名結果以支持多個簽名。）
+3. **合規性**：哪些字段對於受監管的流量是強制性的（根據路線圖）？ （等待合規團隊指導。）
+4. **SDK 打包**：我們是否應該將共享代碼（例如 Norito Connect 編解碼器）納入跨平台 crate 中？ （待定。）
 
-| Frame / Control | Owner | Sequence domain | Journal persisted? | Telemetry labels | Notes |
-|-----------------|-------|-----------------|--------------------|------------------|-------|
-| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Carries metadata + permission bitmap; wallets replay the latest open before prompts. |
-| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Includes account, proofs, signatures. Metadata version increments recorded here. |
-| `Control::Reject` | Wallet | `seq_wallet` | ✅ | `event=reject`, `reason` | Optional localized message; dApp drops pending sign requests. |
-| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet acknowledges with its own `Close`. |
-| `Control::Close` (ack) | Wallet | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Confirms teardown; GC removes journals once both sides persist the frame. |
-| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Payload hash recorded for replay conflict detection. |
-| `SignResult` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Includes BLAKE3 hash of signed bytes; failures raise `ConnectError.Signing`. |
-| `Control::Error` | Wallet (most) / dApp (transport) | matching owner domain | ✅ | `event=error`, `code` | Fatal errors force session restart; telemetry marks `fatal=true`. |
-| `Control::RotateKeys` | Wallet | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Announces new direction keys; dApp replies with `RotateKeysAck` (journaled on app side). |
-| `Control::Resume` / `ResumeAck` | Both | local domain only | ✅ | `event=resume`, `direction=app|wallet` | Summarises queue depth + seq state; hashed journal digest aids diagnosis. |
-
-- Directional cipher keys remain symmetric per role (`app→wallet`, `wallet→app`).
-  Wallet rotation proposals are advertised via `Control::RotateKeys`, and dApps
-  acknowledge by emitting `Control::RotateKeysAck`; both frames must hit disk
-  before keys swap to avoid replay gaps.
-- Metadata attachment (icons, localized names, compliance proofs) is signed by
-  the wallet and cached by the dApp; updates require a fresh approval frame with
-  incremented `metadata_version`.
-- Ownership matrix above is referenced from SDK docs so CLI/web/automation
-  clients follow the same contract and instrumentation defaults.
-
-## Open Questions
-
-1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)
-2. **Multisig**: How are multi-sign approvals represented? (Extend sign result to support multiple signatures.)
-3. **Compliance**: Which fields are mandatory for regulated flows (per roadmap)? (Await compliance team guidance.)
-4. **SDK packaging**: Should we factor shared code (e.g., Norito Connect codecs) into a cross-platform crate? (TBD.)
-
-## Next Steps
-
-- Circulate this strawman to the SDK council (Feb 2026 meeting).
-- Collect feedback on open questions and update doc accordingly.
-- Schedule implementation breakdown per SDK (Swift IOS7, Android AND7, JS Connect milestones).
-- Track progress via roadmap hot list; update `status.md` once strawman is ratified.
+## 後續步驟- 將此稻草人傳給 SDK 委員會（2026 年 2 月的會議）。
+- 收集有關未解決問題的反饋並相應更新文檔。
+- 按 SDK 安排實施細目（Swift IOS7、Android AND7、JS Connect 里程碑）。
+- 通過路線圖熱門列表跟踪進度；一旦稻草人獲得批准，請更新 `status.md`。

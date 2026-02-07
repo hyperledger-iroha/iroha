@@ -7,49 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dffc2cf6c6e59f54d1fc22136ba93f75466509c699a4361a381bf7e0ce0d1dda
 source_last_modified: "2025-12-29T18:16:35.943754+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM Feature Rollout & Telemetry Checklist
+# SM мүмкіндігін шығару және телеметрия бақылау тізімі
 
-This checklist helps SRE and operator teams enable the SM (SM2/SM3/SM4) feature
-set safely once the audit and compliance gates are cleared. Follow this document
-alongside the configuration brief in `docs/source/crypto/sm_program.md` and the
-legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
+Бұл бақылау тізімі SRE және оператор топтарына SM (SM2/SM3/SM4) мүмкіндігін қосуға көмектеседі
+аудит және сәйкестік қақпалары тазартылғаннан кейін қауіпсіз орнатыңыз. Осы құжатты орындаңыз
+`docs/source/crypto/sm_program.md` ішіндегі конфигурация туралы қысқаша және
+`docs/source/crypto/sm_compliance_brief.md` құжатындағы заңды/экспорттық нұсқаулық.
 
-## 1. Pre-flight Readiness
-- [ ] Confirm the workspace release notes show `sm` as verify-only or signing,
-      depending on the rollout stage.
-- [ ] Verify the fleet is running binaries built from a commit that includes the
-      SM telemetry counters and configuration knobs. (Target release TBD; track
-      in the rollout ticket.)
-- [ ] Run `scripts/sm_perf.sh --tolerance 0.25` on a staging node (per target
-      architecture) and archive the summary output. The script now auto-selects
-      the scalar baseline as a comparison target for acceleration modes
-      (`--compare-tolerance` defaults to 5.25 while the SM3 NEON work lands);
-      investigate or block the rollout if either the primary or comparison
-      guard fails. When capturing on Linux/aarch64 Neoverse hardware, pass
+## 1. Ұшу алдындағы дайындық
+- [ ] Жұмыс кеңістігінің шығарылым жазбаларын `sm` көрсету тек растау немесе қол қою ретінде растаңыз,
+      шығару кезеңіне байланысты.
+- [ ] Флоттың қосылатын міндеттемеден жасалған екілік файлдарды іске қосып жатқанын тексеріңіз
+      SM телеметриялық есептегіштері және конфигурация тұтқалары. (ТБД мақсатты шығару; трек
+      шығару билетінде.)
+- [ ] Кезеңдік түйінде `scripts/sm_perf.sh --tolerance 0.25` іске қосыңыз (әр мақсат үшін
+      архитектурасы) және қорытынды нәтижені мұрағаттау. Сценарий енді автоматты түрде таңдалады
+      жеделдету режимдері үшін салыстыру мақсаты ретінде скалярлық базалық сызық
+      (SM3 NEON жұмыс қонған кезде `--compare-tolerance` әдепкі мәні 5,25);
+      бастапқы немесе салыстыру болса, оны зерттеңіз немесе блоктаңыз
+      күзет сәтсіз аяқталды. Linux/aarch64 Neoverse аппараттық құралында түсіру кезінде өтіңіз
       `--baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_<mode>.json --write-baseline`
-      to overwrite the exported `m3-pro-native` medians with the host’s capture
-      before shipping.
-- [ ] Ensure `status.md` and the rollout ticket record the compliance filings for
-      any nodes operating in jurisdictions that require them (see compliance brief).
-- [ ] Prepare KMS/HSM updates if validators will store SM signing keys in
-      hardware modules.
+      экспортталған `m3-pro-native` медиандарын хосттың түсіруімен қайта жазу үшін
+      жөнелту алдында.
+- [ ] `status.md` және шығару билетінің сәйкестік өтінімдерін жазуын қамтамасыз етіңіз
+      оларды талап ететін юрисдикцияларда жұмыс істейтін кез келген түйіндер (сәйкестік туралы қысқаша ақпаратты қараңыз).
+- [ ] Егер валидаторлар SM кіру кілттерін сақтаса, KMS/HSM жаңартуларын дайындаңыз
+      аппараттық модульдер.
 
-## 2. Configuration Changes
-1. Run the xtask helper to generate the SM2 key inventory and ready-to-paste snippet:
+## 2. Конфигурация өзгерістері
+1. SM2 кілт тізімдемесін және қоюға дайын үзіндіні жасау үшін xtask көмекшісін іске қосыңыз:
    ```bash
    cargo xtask sm-operator-snippet \
      --distid CN12345678901234 \
      --json-out sm2-key.json \
      --snippet-out client-sm2.toml
    ```
-   Use `--snippet-out -` (and optionally `--json-out -`) to stream the outputs to stdout when you just need to inspect them.
-   If you prefer to drive the lower-level CLI commands manually, the equivalent flow is:
+   Тек тексеру қажет болғанда шығыстарды stdout жүйесіне ағынмен жіберу үшін `--snippet-out -` (және қосымша `--json-out -`) пайдаланыңыз.
+   Төменгі деңгейдегі CLI пәрмендерін қолмен басқаруды қаласаңыз, баламалы ағын:
    ```bash
    cargo run -p iroha_cli --features sm -- \
      crypto sm2 keygen \
@@ -63,9 +64,9 @@ legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
      --snippet-output client-sm2.toml \
      --emit-json --quiet
    ```
-   If `jq` is unavailable, open `sm2-key.json`, copy the `private_key_hex` value, and pass it directly to the export command.
-2. Add the resulting snippet to each node’s configuration (values shown for the
-   verify-only stage; adjust per environment and keep the keys sorted as shown):
+   `jq` қолжетімсіз болса, `sm2-key.json` ашыңыз, `private_key_hex` мәнін көшіріп, оны тікелей экспорттау пәрменіне беріңіз.
+2. Алынған үзіндіні әрбір түйіннің конфигурациясына қосыңыз (мәндер
+   Тек тексеру кезеңі; ортаға сәйкес реттеңіз және пернелерді көрсетілгендей сұрыптаңыз):
 ```toml
 [crypto]
 default_hash = "sm3-256"
@@ -73,74 +74,70 @@ allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mod
 sm2_distid_default = "1234567812345678"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 ```
-3. Restart the node and confirm `crypto.sm_helpers_available` and (if you enabled the preview backend) `crypto.sm_openssl_preview_enabled` surface as expected in:
+3. Түйінді қайта іске қосыңыз және `crypto.sm_helpers_available` және (егер сіз алдын ала қарау серверін қосқан болсаңыз) `crypto.sm_openssl_preview_enabled` бетін келесіде күтілгендей растаңыз:
    - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`).
-   - The rendered `config.toml` for each node.
-4. Update manifests/genesis entries to add SM algorithms to the allow-list if
-   signing is enabled later in the rollout. When using `--genesis-manifest-json`
-   without a pre-signed genesis block, `irohad` now seeds the runtime crypto
-   snapshot directly from the manifest’s `crypto` block—ensure the manifest is
-   checked into your change plan before rolling forward.
-
-## 3. Telemetry & Monitoring
-- Scrape Prometheus endpoints and ensure the following counters/gauges appear:
+   - Әрбір түйін үшін көрсетілген `config.toml`.
+4. Рұқсат етілген тізімге SM алгоритмдерін қосу үшін манифесттерді/генезис жазбаларын жаңартыңыз, егер
+   қол қою кейінірек шығарылымда қосылады. `--genesis-manifest-json` пайдаланған кезде
+   алдын ала қол қойылған генезистік блоксыз, `irohad` енді орындалу уақытының криптосын шығарады
+   манифесттің `crypto` блогынан тікелей сурет — манифесттің болуын қамтамасыз етіңіз
+   алға жылжытпас бұрын өзгерту жоспарыңызды тексеріңіз.## 3. Телеметрия және бақылау
+- Prometheus соңғы нүктелерін қырыңыз және келесі есептегіштер/өлшеуіштер пайда болуын қамтамасыз етіңіз:
   - `iroha_sm_syscall_total{kind="verify"}`
   - `iroha_sm_syscall_total{kind="hash"}`
   - `iroha_sm_syscall_total{kind="seal|open",mode="gcm|ccm"}`
-  - `iroha_sm_openssl_preview` (0/1 gauge reporting the preview toggle state)
+  - `iroha_sm_openssl_preview` (0/1 габарит алдын ала қарау ауыстырып-қосқыш күйін хабарлайды)
   - `iroha_sm_syscall_failures_total{kind="verify|hash|seal|open",reason="..."}`
-- Hook signing path once SM2 signing is enabled; add counters for
-  `iroha_sm_sign_total` and `iroha_sm_sign_failures_total`.
-- Create Grafana dashboards/alerts for:
-  - Spikes in failure counters (window 5m).
-  - Sudden drops in SM syscall throughput.
-  - Differences between nodes (e.g., mismatched enablement).
+- SM2 қолтаңбасы қосылғаннан кейін ілмекке қол қою жолы; үшін есептегіштерді қосыңыз
+  `iroha_sm_sign_total` және `iroha_sm_sign_failures_total`.
+- Grafana бақылау тақталарын/ескертулерін жасаңыз:
+  - істен шығу есептегіштеріндегі тітіркенулер (терезе 5м).
+  - SM жүйесіндегі өткізу қабілетінің кенет төмендеуі.
+  - Түйіндер арасындағы айырмашылықтар (мысалы, сәйкес келмейтін қосу).
 
-## 4. Rollout Steps
-| Phase | Actions | Notes |
+## 4. Іске қосу қадамдары
+| кезең | Әрекеттер | Ескертпелер |
 |-------|---------|-------|
-| Verify-only | Update `crypto.default_hash` to `sm3-256`, leave `allowed_signing` without `sm2`, monitor verification counters. | Goal: exercise SM verification paths without risking consensus divergence. |
-| Mixed Signing Pilot | Allow limited SM signing (subset of validators); monitor signing counters and latency. | Ensure fallback to Ed25519 remains available; halt if telemetry shows mismatches. |
-| GA Signing | Extend `allowed_signing` to include `sm2`, update manifests/SDKs, and publish final runbook. | Requires closed audit findings, updated compliance filings, and stable telemetry. |
+| Тек тексеруге арналған | `crypto.default_hash`-ті `sm3-256` нұсқасына жаңартыңыз, `allowed_signing`-ті `sm2`сыз қалдырыңыз, тексеру есептегіштерін бақылаңыз. | Мақсат: консенсус айырмашылығына қауіп төндірмей, SM тексеру жолдарын жүзеге асыру. |
+| Аралас қол қою ұшқышы | Шектеулі SM қол қоюға рұқсат ету (валидаторлардың ішкі жиыны); қол қою есептегіштерін және кідіріс уақытын бақылау. | Ed25519 қалпына келтіру қолжетімді болып қала береді; телеметрия сәйкессіздіктерді көрсетсе, тоқтатыңыз. |
+| GA қол қою | `allowed_signing` кеңейтімін `sm2` қосу, манифесттерді/SDK жаңартуларын және соңғы жұмыс кітабын жариялау. | Жабық аудит нәтижелерін, жаңартылған сәйкестік құжаттарын және тұрақты телеметрияны талап етеді. |
 
-### Readiness Reviews
-- **Verify-only readiness (SM-RR1).** Convene Release Eng, Crypto WG, Ops, and Legal. Require:
-  - `status.md` notes compliance filing status + OpenSSL provenance.
-  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / this checklist updated within the last release window.
-  - `defaults/genesis` or the environment-specific manifest shows `crypto.allowed_signing = ["ed25519","sm2"]` and `crypto.default_hash = "sm3-256"` (or the verify-only variant without `sm2` if still in stage one).
-  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` logs attached to the rollout ticket.
-  - Telemetry dashboard (`iroha_sm_*`) reviewed for steady-state behaviour.
-- **Signing pilot readiness (SM-RR2).** Additional gates:
-  - Audit report for RustCrypto SM stack closed or RFC for compensating controls signed by Security.
-  - Operator runbooks (facility-specific) updated with signing fallback/rollback steps.
-  - Genesis manifests for the pilot cohort include `allowed_signing = ["ed25519","sm2"]` and the allow-list is mirrored in each node configuration.
-  - Exit/rollback plan documented (switch `allowed_signing` back to Ed25519, restore manifests, reset dashboards).
-- **GA readiness (SM-RR3).** Requires positive pilot report, updated compliance filings for all validator jurisdictions, signed telemetry baselines, and release ticket approval from Release Eng + Crypto WG + Ops/Legal triad.
+### Дайындық туралы шолулар
+- **Тек дайындығын тексеру (SM-RR1).** Convene Release Eng, Crypto WG, Ops, and Legal. Талап ету:
+  - `status.md` сәйкестік беру күйін ескертеді + OpenSSL шығу тегі.
+  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / бұл бақылау тізімі соңғы шығарылым терезесінде жаңартылды.
+  - `defaults/genesis` немесе ортаға арнайы манифест `crypto.allowed_signing = ["ed25519","sm2"]` және `crypto.default_hash = "sm3-256"` көрсетеді (немесе `sm2` жоқ тек тексеруге арналған нұсқа әлі бірінші кезеңде).
+  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` журналдары шығару билетіне тіркелген.
+  - Телеметриялық бақылау тақтасы (`iroha_sm_*`) тұрақты күй тәртібіне қаралды.
+- **Ұшқыштың дайындығына қол қою (SM-RR2).** Қосымша қақпалар:
+  - RustCrypto SM стек жабылған немесе Қауіпсіздік қол қойған өтемдік басқару элементтеріне арналған RFC үшін аудит есебі.
+  - Қайтару/қайтару қадамдарына қол қою арқылы жаңартылған оператордың жұмыс кітаптары (орынға арналған).
+  - Пилоттық когортқа арналған генезис манифестеріне `allowed_signing = ["ed25519","sm2"]` кіреді және рұқсат беру тізімі әрбір түйін конфигурациясында бейнеленеді.
+  - Шығу/қайтару жоспары құжатталған (`allowed_signing` қайта Ed25519 нұсқасына ауысыңыз, манифесттерді қалпына келтіріңіз, бақылау тақталарын қалпына келтіріңіз).
+- **GA дайындығы (SM-RR3).** Оң пилоттық есепті, барлық валидатор юрисдикциялары үшін жаңартылған сәйкестік өтінімдерін, қол қойылған телеметриялық базаларды және Release Eng + Crypto WG + Ops/Legal триадынан шығарылым билетін бекітуді талап етеді.## 5. Қаптама және сәйкестікті тексеру тізімі
+- **OpenSSL/Tongsuo артефактілерін жинаңыз.** OpenSSL/Tongsuo 3.0+ ортақ кітапханаларын (`libcrypto`/`libssl`) әрбір валидатор пакетімен бірге жеткізіңіз немесе нақты жүйе тәуелділігін құжаттаңыз. Аудиторлар жеткізушінің құрылымын қадағалай алуы үшін нұсқаны, құрастыру жалауларын және SHA256 бақылау сомасын шығарылым манифестіне жазыңыз.
+- **CI кезінде растаңыз.** Әрбір мақсатты платформадағы бума артефактілерге қарсы `scripts/sm_openssl_smoke.sh` орындайтын CI қадамын қосыңыз. Алдын ала қарау жалаушасы қосылған, бірақ провайдерді инициализациялау мүмкін болмаса, тапсырма орындалмауы керек (жоғалған тақырыптар, қолдау көрсетілмейтін алгоритм және т.б.).
+- **Сәйкестік ескертпелерін жариялау.** Шығарылым ескертпелерін / `status.md` пакеттік провайдер нұсқасымен, экспортты бақылау сілтемелерімен (GM/T, GB/T) және SM алгоритмдері үшін талап етілетін кез келген юрисдикцияға тән файлдармен жаңарту.
+- **Оператордың runbook жаңартулары.** Жаңарту ағынын құжаттаңыз: жаңа ортақ нысандарды кезеңге қойыңыз, `crypto.enable_sm_openssl_preview = true` арқылы теңдестілерді қайта іске қосыңыз, `/status` өрісін және `iroha_sm_openssl_preview` көрсеткішін `iroha_sm_openssl_preview` күйіне айналдырыңыз және жоспарды қайталаңыз пакет) егер алдын ала қарау телеметриясы флот бойынша ауытқыса.
+- **Дәлелдерді сақтау.** Болашақ аудиттер шығу тізбегін қайта жасай алуы үшін OpenSSL/Tongsuo пакеттері үшін құрастыру журналдарын және қол қою аттестацияларын валидатор шығарылымының артефактілерімен бірге мұрағаттаңыз.
 
-## 5. Packaging & Compliance Checklist
-- **Bundle OpenSSL/Tongsuo artifacts.** Ship OpenSSL/Tongsuo 3.0+ shared libraries (`libcrypto`/`libssl`) with every validator package or document the exact system dependency. Record the version, build flags, and SHA256 checksums in the release manifest so auditors can trace the supplier build.
-- **Verify during CI.** Add a CI step that executes `scripts/sm_openssl_smoke.sh` against the packaged artifacts on each target platform. The job must fail if the preview flag is enabled but the provider cannot be initialised (missing headers, unsupported algorithm, etc.).
-- **Publish compliance notes.** Update release notes / `status.md` with the bundled provider version, export-control references (GM/T, GB/T), and any jurisdiction-specific filings required for SM algorithms.
-- **Operator runbook updates.** Document the upgrade flow: stage the new shared objects, restart peers with `crypto.enable_sm_openssl_preview = true`, confirm the `/status` field and `iroha_sm_openssl_preview` gauge flip to `true`, and keep a rollback plan (flip the config flag or revert the package) if preview telemetry deviates across the fleet.
-- **Evidence retention.** Archive the build logs and signing attestations for the OpenSSL/Tongsuo packages alongside the validator release artefacts so future audits can reproduce the provenance chain.
+## 6. Оқиғаға жауап беру
+- **Тексеру қатесі:** SM қолдауынсыз құрастыруға оралыңыз немесе `sm2` жойыңыз
+  `allowed_signing` (қажет болған жағдайда `default_hash` қайтарылады) және алдыңғысына өтпейді
+  тергеу кезінде босату. Сәтсіз пайдалы жүктемелерді, салыстырмалы хэштерді және түйін журналдарын түсіріңіз.
+- **Өнімділік регрессиялары:** SM көрсеткіштерін Ed25519/SHA2 базалық көрсеткіштерімен салыстырыңыз.
+  Егер ARM ішкі жолы дивергенция тудырса, `crypto.sm_intrinsics = "force-disable"` орнатыңыз
+  (орындалуды күтудегі мүмкіндікті ауыстырып-қосқыш) және нәтижелерді хабарлаңыз.
+- **Телеметриялық бос орындар:** Есептегіштер жоқ болса немесе жаңартылмаса, мәселені жіберіңіз
+  Release Engineering қарсы; алшақтыққа дейін кеңірек жылжытуды жалғастырмаңыз
+  шешіледі.
 
-## 6. Incident Response
-- **Verification failure spikes:** Roll back to a build without SM support or remove `sm2`
-  from `allowed_signing` (reverting `default_hash` as needed) and fail over to the previous
-  release while investigating. Capture failed payloads, comparative hashes, and node logs.
-- **Performance regressions:** Compare SM metrics with Ed25519/SHA2 baselines.
-  If ARM intrinsic path causes divergence, set `crypto.sm_intrinsics = "force-disable"`
-  (feature toggle pending implementation) and report findings.
-- **Telemetry gaps:** If counters are missing or not updating, file an issue
-  against Release Engineering; do not proceed with wider rollout until the gap
-  is resolved.
+## 7. Тексеру парағының үлгісі
+- [ ] Конфигурация кезеңге қойылды және тең дәрежеде қайта іске қосылды.
+- [ ] Телеметриялық есептегіштер көрінетін және бақылау тақталары конфигурацияланған.
+- [ ] Сәйкестік/заңды қадамдар жазылған.
+- [ ] Crypto WG / Release TL мақұлдаған шығару кезеңі.
+- [ ] Шығарылымнан кейінгі шолу аяқталды және нәтижелер құжатталды.
 
-## 7. Checklist Template
-- [ ] Configuration staged and peer restarted.
-- [ ] Telemetry counters visible and dashboards configured.
-- [ ] Compliance/legal steps recorded.
-- [ ] Rollout phase approved by Crypto WG / Release TL.
-- [ ] Post-rollout review completed and findings documented.
-
-Maintain this checklist in the rollout ticket and update `status.md` when the
-fleet transitions between phases.
+Бұл бақылау парағын шығару билетінде сақтаңыз және `status.md` жаңартыңыз.
+фазалар арасындағы флоттық ауысулар.

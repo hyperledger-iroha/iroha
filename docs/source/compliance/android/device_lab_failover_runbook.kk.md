@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 473b2b49d32c32d2b884b670ba35e9aa3d0606cfd451d441a7ca927c1160311d
 source_last_modified: "2025-12-29T18:16:35.923579+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -15,114 +16,110 @@ translation_last_reviewed: 2026-02-07
 
 # Android Device Lab Failover Drill Runbook (AND6/AND7)
 
-This runbook captures the procedure, evidence requirements, and contact matrix
-used when exercising the **device-lab contingency plan** referenced in
-`roadmap.md` (§“Regulatory artefact approvals & lab contingency”). It complements
-the reservation workflow (`device_lab_reservation.md`) and the incident log
-(`device_lab_contingency.md`) so compliance reviewers, legal counsel, and SRE
-have a single source of truth for how we validate failover readiness.
+Бұл жұмыс кітабы процедураны, дәлел талаптарын және контакт матрицасын қамтиды
+сілтеме жасалған **құрылғы-зертхананың төтенше жағдайлар жоспарын** орындау кезінде пайдаланылады
+`roadmap.md` (§«Нормативтік артефакттарды мақұлдау және зертханалық жағдай»). Ол толықтырады
+брондау жұмыс процесі (`device_lab_reservation.md`) және оқиға журналы
+(`device_lab_contingency.md`) сәйкестіктерді тексерушілер, заң кеңесшілері және SRE
+істен шығуға дайындығын қалай тексеретініміз туралы жалғыз ақиқат көзі бар.
 
-## Purpose & Cadence
+## Мақсат және жылдамдық
 
-- Demonstrate that the Android StrongBox + general device pools can fail over
-  to the fallback Pixel lanes, shared pool, Firebase Test Lab burst queue, and
-  external StrongBox retainer without missing AND6/AND7 SLAs.
-- Produce an evidence bundle that legal can attach to ETSI/FISC submissions
-  ahead of the Feb compliance review.
-- Run at least once per quarter, plus any time the lab hardware roster changes
-  (new devices, retirement, or maintenance longer than 24 h).
+- Android StrongBox + жалпы құрылғы пулдарының істен шығуы мүмкін екенін көрсетіңіз
+  қосалқы Pixel жолақтарына, ортақ пулға, Firebase Test Lab жарылыс кезегіне және
+  AND6/AND7 SLA жоқ сыртқы StrongBox ұстағышы.
+- ETSI/FISC өтініштеріне заңды бекіте алатын дәлелдер жинағын жасаңыз
+  ақпандағы сәйкестікті тексеру алдында.
+- Кем дегенде тоқсанына бір рет, сонымен қатар зертханалық жабдық тізімі өзгерген кез келген уақытта орындаңыз
+  (жаңа құрылғылар, жұмыстан шығу немесе техникалық қызмет көрсету 24 сағаттан ұзақ).
 
-| Drill ID | Date | Scenario | Evidence Bundle | Status |
+| Бұрғылау идентификаторы | Күні | Сценарий | Дәлелдер жинағы | Күй |
 |----------|------|----------|-----------------|--------|
-| DR-2026-02-Q1 | 2026-02-20 | Simulated Pixel 8 Pro lane outage + attestation backlog with AND7 telemetry rehearsal | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ Completed — bundle hashes recorded in `docs/source/compliance/android/evidence_log.csv`. |
-| DR-2026-05-Q2 | 2026-05-22 (scheduled) | StrongBox maintenance overlap + Nexus rehearsal | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(pending)* — `_android-device-lab` ticket **AND6-DR-202605** holds the reservations; bundle will be populated post-drill. | 🗓 Scheduled — calendar block added to “Android Device Lab – Reservations” per AND6 cadence. |
+| DR-2026-02-Q1 | 2026-02-20 | Симулирленген Pixel8Pro жолағындағы үзіліс + AND7 телеметриялық репетициясы бар аттестаттау кеші | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ Аяқталды — `docs/source/compliance/android/evidence_log.csv` ішінде жазылған бума хэштері. |
+| DR-2026-05-Q2 | 22.05.2026 (жоспарлы) | StrongBox техникалық қызмет көрсету қабаттасуы + Nexus репетициясы | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(күтуде)* — `_android-device-lab` билеті **AND6-DR-202605** брондауларға ие; бума жаттығулардан кейін толтырылады. | 🗓 Жоспарланған — күнтізбе блогы AND6 каденциясы үшін "Android Device Lab – Reservations" бөліміне қосылды. |
 
-## Procedure
+## Процедура
 
-### 1. Pre-drill preparation
+### 1. Бұрғылау алдындағы дайындық
 
-1. Confirm baseline capacity in `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. Export the reservation calendar for the target ISO week via
+1. `docs/source/sdk/android/android_strongbox_capture_status.md` ішінде базалық сыйымдылықты растаңыз.
+2. арқылы мақсатты ISO аптасының брондау күнтізбесін экспорттаңыз
    `python3 scripts/android_device_lab_export.py --week <ISO week>`.
-3. File `_android-device-lab` ticket
-   `AND6-DR-<YYYYMM>` with scope (“failover drill”), planned slots, and affected
-   workloads (attestation, CI smoke, telemetry chaos).
-4. Update the contingency log template in `device_lab_contingency.md` with a
-   placeholder row for the drill date.
+3. `_android-device-lab` файлы билеті
+   `AND6-DR-<YYYYMM>` ауқымы («ауыспалы бұрғылау»), жоспарланған ұяшықтары және әсер еткен
+   жұмыс жүктемелері (аттестация, CI түтіні, телеметрия хаосы).
+4. `device_lab_contingency.md` ішіндегі төтенше жағдайлар журналының үлгісін жаңартыңыз.
+   бұрғылау күніне арналған толтырғыш қатары.
 
-### 2. Simulate failure conditions
+### 2. Сәтсіздік жағдайларын имитациялаңыз
 
-1. Disable or depool the primary lane (`pixel8pro-strongbox-a`) inside the lab
-   scheduler and tag the reservation entry as “drill”.
-2. Trigger a mock outage alert in PagerDuty (`AND6-device-lab` service) and
-   capture the notification export for the evidence bundle.
-3. Annotate the Buildkite jobs that normally consume the lane
-   (`android-strongbox-attestation`, `android-ci-e2e`) with the drill ID.
+1. Зертхана ішіндегі негізгі жолақты (`pixel8pro-strongbox-a`) өшіріңіз немесе қордан шығарыңыз
+   жоспарлаушы және брондау жазбасын «бұрғылау» ретінде белгілеңіз.
+2. PagerDuty (`AND6-device-lab` қызметі) ішінде жалған үзіліс ескертуін іске қосыңыз және
+   дәлелдер жинағы үшін хабарландыру экспортын түсіріңіз.
+3. Әдетте жолақты тұтынатын Buildkite тапсырмаларына түсініктеме беріңіз
+   (`android-strongbox-attestation`, `android-ci-e2e`) бұрғы идентификаторымен.
 
-### 3. Failover execution
+### 3. Тапсырманы орындау1. Негізгі CI мақсатына қалпына келтіру Pixel7 жолағын жылжытыңыз және оны жоспарлаңыз
+   оған қарсы жоспарланған жұмыс жүктемелері.
+2. `firebase-burst` жолағы арқылы Firebase Test Lab сериясын іске қосыңыз.
+   StrongBox қамтуы ортақ пайдалануға көшкен кезде бөлшек әмиян түтінін тексереді
+   жолақ. Тексеру билетінде CLI шақыруын (немесе консоль экспортын) түсіріңіз
+   паритет.
+3. Қысқаша аттестацияны тексеру үшін сыртқы StrongBox зертханасының ұстағышын қосыңыз;
+   төменде сипатталғандай контактіні растауды журналға енгізіңіз.
+4. Барлық Buildkite іске қосу идентификаторларын, Firebase тапсырмасының URL мекенжайларын және сақтаушы транскрипттерін мына қалтаға жазыңыз.
+   `_android-device-lab` билеті және дәлелдер бумасы манифест.
 
-1. Promote the fallback Pixel 7 lane to primary CI target and schedule the
-   planned workloads against it.
-2. Trigger the Firebase Test Lab burst suite via the `firebase-burst` lane for
-   the retail-wallet smoke tests while StrongBox coverage moves to the shared
-   lane. Capture the CLI invocation (or console export) in the ticket for audit
-   parity.
-3. Engage the external StrongBox lab retainer for a short attestation sweep;
-   log contact acknowledgement as described below.
-4. Record all Buildkite run IDs, Firebase job URLs, and retainer transcripts in
-   the `_android-device-lab` ticket and the evidence bundle manifest.
+### 4. Тексеру және кері қайтару
 
-### 4. Validation & rollback
+1. Аттестация/CI орындалу уақыттарын бастапқы деңгеймен салыстырыңыз; жалаушаның дельталары >10% дейін
+   Аппараттық зертхана жетекшісі.
+2. Негізгі жолақты қалпына келтіріп, сыйымдылық суретін және дайындығын жаңартыңыз
+   матрица валидация өткеннен кейін.
+3. Соңғы жолды `device_lab_contingency.md` триггерімен, әрекеттерімен,
+   және кейінгі әрекеттер.
+4. `docs/source/compliance/android/evidence_log.csv` жаңартыңыз:
+   бума жолы, SHA-256 манифесті, Buildkite іске қосу идентификаторлары, PagerDuty экспорт хэші және
+   шолушының шығуы.
 
-1. Compare attestation/CI runtimes against baseline; flag deltas >10 % to the
-   Hardware Lab Lead.
-2. Restore the primary lane and update the capacity snapshot plus the readiness
-   matrix once validation passes.
-3. Append the final row to `device_lab_contingency.md` with trigger, actions,
-   and follow-ups.
-4. Update `docs/source/compliance/android/evidence_log.csv` with:
-   bundle path, SHA-256 manifest, Buildkite run IDs, PagerDuty export hash, and
-   reviewer sign-off.
+## Дәлелдер жинағының орналасуы
 
-## Evidence Bundle Layout
-
-| File | Description |
+| Файл | Сипаттама |
 |------|-------------|
-| `README.md` | Summary (drill ID, scope, owners, timeline). |
-| `bundle-manifest.json` | SHA-256 map for every file in the bundle. |
-| `calendar-export.{ics,json}` | ISO-week reservation calendar from the export script. |
-| `pagerduty/incident_<id>.json` | PagerDuty incident export showing alert + acknowledgement timeline. |
-| `buildkite/<job>.txt` | Buildkite run URLs & logs for affected jobs. |
-| `firebase/burst_report.json` | Firebase Test Lab burst execution summary. |
-| `retainer/acknowledgement.eml` | Confirmation from the external StrongBox lab. |
-| `photos/` | Optional photos/screenshots of lab topology if hardware was re-cabled. |
+| `README.md` | Жиынтық (бұрғылау идентификаторы, ауқым, иелері, уақыт шкаласы). |
+| `bundle-manifest.json` | Бумадағы әрбір файл үшін SHA-256 картасы. |
+| `calendar-export.{ics,json}` | Экспорттау сценарийінен ISO апталық брондау күнтізбесі. |
+| `pagerduty/incident_<id>.json` | Ескерту + растау хронологиясын көрсететін PagerDuty оқиғасының экспорты. |
+| `buildkite/<job>.txt` | Buildkite іске қосылған жұмыстардың URL мекенжайлары мен журналдары. |
+| `firebase/burst_report.json` | Firebase Test Lab серпінді орындалу жиыны. |
+| `retainer/acknowledgement.eml` | Сыртқы StrongBox зертханасынан растау. |
+| `photos/` | Лабораториялық топологияның қосымша фотосуреттері/скриншоттары, егер аппараттық құрал қайта кабельде болса. |
 
-Store the bundle at
-`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` and record
-the manifest checksum inside the evidence log plus the AND6 compliance checklist.
+Буманы сақтаңыз
+`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` және жазу
+дәлелдер журналындағы манифест бақылау сомасы және AND6 сәйкестігін тексеру тізімі.
 
-## Contact & Escalation Matrix
+## Байланыс және эскалация матрицасы
 
-| Role | Primary Contact | Channel(s) | Notes |
+| Рөл | Негізгі байланыс | Арна(лар) | Ескертпелер |
 |------|-----------------|------------|-------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | Owns on-site actions and calendar updates. |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | Coordinates reservation tickets + bundle uploads. |
-| Release Engineering | Alexei Morozov | Release Eng Slack · `release-eng@iroha.org` | Validates Buildkite evidence + publishes hashes. |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | Retainer contact; confirm availability within 6 h. |
-| Firebase Burst Coordinator | Tessa Wright | `@android-ci` Slack | Triggers Firebase Test Lab automation when fallback is needed. |
+| Аппараттық зертхана жетекшісі | Прия Раманатан | `@android-lab` Slack · +81-3-5550-1234 | Сайттағы әрекеттер мен күнтізбе жаңартуларына иелік етеді. |
+| Device Lab Ops | Матео Круз | `_android-device-lab` кезек | Брондау билеттерін + жүктеп салуды үйлестіреді. |
+| Release Engineering | Алексей Морозов | Eng Slack шығарыңыз · `release-eng@iroha.org` | Buildkite дәлелдерін растайды + хэштерді жариялайды. |
+| Сыртқы StrongBox зертханасы | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | Ұстағыш контакті; 6 сағат ішінде қолжетімділігін растаңыз. |
+| Firebase Burst координаторы | Тесса Райт | `@android-ci` Slack | Қайтару қажет болғанда Firebase сынақ зертханасының автоматтандыруын іске қосады. |
 
-Escalate in the following order if a drill uncovers blocking issues:
-1. Hardware Lab Lead
+Егер жаттығу блоктау мәселелерін анықтаса, келесі ретпен жоғарылатыңыз:
+1. Аппараттық зертхана жетекшісі
 2. Android Foundations TL
-3. Program Lead / Release Engineering
-4. Compliance Lead + Legal Counsel (if drill reveals regulatory risk)
+3. Бағдарлама жетекшісі / шығарылым инженериясы
+4. Сәйкестік жетекші + заң кеңесшісі (егер тәжірибе реттеуші тәуекелді анықтаса)
 
-## Reporting & Follow-Ups
-
-- Link this runbook alongside the reservation procedure whenever referencing
-  failover readiness in `roadmap.md`, `status.md`, and governance packets.
-- Email the quarterly drill recap to Compliance + Legal with the evidence bundle
-  hash table and attach the `_android-device-lab` ticket export.
-- Mirror key metrics (time-to-failover, workloads restored, outstanding actions)
-  inside `status.md` and the AND7 hot-list tracker so reviewers can trace the
-  dependency to a concrete rehearsal.
+## Есеп беру және бақылау- Сілтеме жасау кезінде осы жұмыс кітабын брондау процедурасымен бірге байланыстырыңыз
+  `roadmap.md`, `status.md` және басқару пакеттеріндегі істен шығуға дайындығы.
+- Тоқсандық жаттығулардың қорытындысын Сәйкестік + Заңға дәлелдер жинағымен электрондық пошта арқылы жіберіңіз
+  хэш кестесін және `_android-device-lab` билет экспортын тіркеңіз.
+- Негізгі көрсеткіштерді айна (жұмысқа дейінгі уақыт, қалпына келтірілген жұмыс жүктемелері, орындалмаған әрекеттер)
+  `status.md` және AND7 ыстық тізім трекері ішінде шолушылар қадағалай алады.
+  нақты репетицияға тәуелділік.

@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9d384e21d09f3c4f57b7fc5181d69dc0da739dd6ed4dcb89a57ea58fd29bb898
 source_last_modified: "2026-01-03T18:07:59.259775+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Instrumentation Hooks (AND6)
+# Хуки для инструментов лаборатории устройств Android (AND6)
 
-This reference closes the roadmap action “stage the remaining device-lab /
-instrumentation hooks ahead of AND6 kickoff”. It explains how every reserved
-device-lab slot must capture telemetry, queue, and attestation artefacts so the
-AND6 compliance checklist, evidence log, and governance packets share the same
-deterministic workflow. Pair this note with the reservation procedure
-(`device_lab_reservation.md`) and the failover runbook when planning rehearsals.
+Эта ссылка завершает действие дорожной карты «стадия оставшегося устройства-лаборатории /
+инструментальные крючки перед началом AND6». Это объясняет, как каждый зарезервированный
+Слот устройства-лаборатории должен захватывать телеметрию, очередь и артефакты аттестации, чтобы
+Контрольный список соответствия требованиям AND6, журнал доказательств и пакеты управления используют одни и те же
+детерминированный рабочий процесс. Соедините это примечание с процедурой бронирования.
+(`device_lab_reservation.md`) и книгу аварийного переключения при планировании репетиций.
 
-## Goals & Scope
+## Цели и объем
 
-- **Deterministic evidence** – all instrumentation outputs live under
-  `artifacts/android/device_lab/<slot-id>/` with SHA-256 manifests so auditors
-  can diff bundles without rerunning the probes.
-- **Script-first workflow** – reuse the existing helpers
+- **Детерминистические данные** – все результаты приборов соответствуют
+  `artifacts/android/device_lab/<slot-id>/` с SHA-256 проявляется так аудиторы
+  может различать пакеты без повторного запуска зондов.
+- **Рабочий процесс на основе сценариев** – повторное использование существующих помощников.
   (`ci/run_android_telemetry_chaos_prep.sh`,
-  `scripts/android_keystore_attestation.sh`, `scripts/android_override_tool.sh`)
-  instead of bespoke adb commands.
-- **Checklists stay in sync** – every run references this document from the
-  AND6 compliance checklist and appends the artefacts to
+  И18НИ00000006Х, И18НИ00000007Х)
+  вместо специальных команд adb.
+- **Контрольные списки остаются синхронизированными**: каждый запуск ссылается на этот документ из
+  Контрольный список соответствия AND6 и добавляет артефакты к
   `docs/source/compliance/android/evidence_log.csv`.
 
-## Artifact Layout
+## Макет артефакта
 
-1. Pick a unique slot identifier that matches the reservation ticket, e.g.
+1. Выберите уникальный идентификатор слота, соответствующий билету бронирования, например.
    `2026-05-12-slot-a`.
-2. Seed the standard directories:
+2. Заполните стандартные каталоги:
 
    ```bash
    export ANDROID_DEVICE_LAB_SLOT=2026-05-12-slot-a
@@ -47,71 +48,69 @@ deterministic workflow. Pair this note with the reservation procedure
    mkdir -p "${ANDROID_DEVICE_LAB_ROOT}"/{telemetry,attestation,queue,logs}
    ```
 
-3. Save every command log inside the matching folder (e.g.
+3. Сохраните каждый журнал команд в соответствующей папке (например,
    `telemetry/status.ndjson`, `attestation/pixel8pro.log`).
-4. Capture SHA-256 manifests once the slot closes:
+4. Захват SHA-256 проявляется после закрытия слота:
 
    ```bash
    find "${ANDROID_DEVICE_LAB_ROOT}" -type f -print0 | sort -z \
      | xargs -0 shasum -a 256 > "${ANDROID_DEVICE_LAB_ROOT}/sha256sum.txt"
    ```
 
-## Instrumentation Matrix
+## Матрица инструментов
 
-| Flow | Command(s) | Output location | Notes |
+| Поток | Команда(ы) | Расположение выхода | Заметки |
 |------|------------|-----------------|-------|
-| Telemetry redaction + status bundle | `scripts/telemetry/check_redaction_status.py --status-url <collector> --json-out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/status.ndjson` | `telemetry/status.ndjson`, `telemetry/status.log` | Run at the start and end of the slot; attach CLI stdout to `status.log`. |
-| Pending queue + chaos prep | `ANDROID_PENDING_QUEUE_EXPORTS="pixel8=${ANDROID_DEVICE_LAB_ROOT}/queue/pixel8.bin" ci/run_android_telemetry_chaos_prep.sh --status-only` | `queue/*.bin`, `queue/*.json`, `queue/*.sha256` | Mirrors Scenario D from `readiness/labs/telemetry_lab_01.md`; extend the env var for every device in the slot. |
-| Override ledger digest | `scripts/android_override_tool.sh digest --out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/override_digest.json` | `telemetry/override_digest.json` | Required even when no overrides are active; prove the zero state. |
-| StrongBox / TEE attestation | `scripts/android_keystore_attestation.sh --device pixel8pro-strongbox-a --out "${ANDROID_DEVICE_LAB_ROOT}/attestation/pixel8pro"` | `attestation/<device>/*.{json,zip,log}` | Repeat for each reserved device (match names in `android_strongbox_device_matrix.md`). |
-| CI harness attestation regression | `scripts/android_strongbox_attestation_ci.sh --output "${ANDROID_DEVICE_LAB_ROOT}/attestation/ci"` | `attestation/ci/*` | Captures the same evidence that CI uploads; include in manual runs for symmetry. |
-| Lint / dependency baseline | `ANDROID_LINT_SUMMARY_OUT="${ANDROID_DEVICE_LAB_ROOT}/logs/jdeps-summary.txt" make android-lint` | `logs/jdeps-summary.txt`, `logs/lint.log` | Run once per freeze window; cite the summary in compliance packets. |
+| Редактирование телеметрии + пакет статуса | `scripts/telemetry/check_redaction_status.py --status-url <collector> --json-out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/status.ndjson` | `telemetry/status.ndjson`, `telemetry/status.log` | Запуск в начале и конце слота; прикрепите стандартный вывод CLI к `status.log`. |
+| Ожидающая очередь + подготовка к хаосу | `ANDROID_PENDING_QUEUE_EXPORTS="pixel8=${ANDROID_DEVICE_LAB_ROOT}/queue/pixel8.bin" ci/run_android_telemetry_chaos_prep.sh --status-only` | `queue/*.bin`, `queue/*.json`, `queue/*.sha256` | Зеркала ScenarioD от `readiness/labs/telemetry_lab_01.md`; расширьте переменную env для каждого устройства в слоте. |
+| Переопределить дайджест бухгалтерской книги | `scripts/android_override_tool.sh digest --out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/override_digest.json` | `telemetry/override_digest.json` | Требуется, даже если никакие переопределения не активны; доказать нулевое состояние. |
+| Аттестация StrongBox/TEE | `scripts/android_keystore_attestation.sh --device pixel8pro-strongbox-a --out "${ANDROID_DEVICE_LAB_ROOT}/attestation/pixel8pro"` | `attestation/<device>/*.{json,zip,log}` | Повторите эти действия для каждого зарезервированного устройства (соответствуйте именам в `android_strongbox_device_matrix.md`). |
+| Регрессия аттестации CI | `scripts/android_strongbox_attestation_ci.sh --output "${ANDROID_DEVICE_LAB_ROOT}/attestation/ci"` | `attestation/ci/*` | Собирает те же доказательства, которые загружает CI; включить в ручные прогоны для симметрии. |
+| Базовый уровень Lint/зависимостей | `ANDROID_LINT_SUMMARY_OUT="${ANDROID_DEVICE_LAB_ROOT}/logs/jdeps-summary.txt" make android-lint` | `logs/jdeps-summary.txt`, `logs/lint.log` | Запускать один раз за окно заморозки; цитируйте резюме в пакетах соответствия. |
 
-## Standard Slot Procedure
+## Стандартная процедура слота1. **Предполетная подготовка (T-24h)** – подтвердите, что это указано в билете на бронирование.
+   документ, обновите запись матрицы устройств и заполните корень артефакта.
+2. **Во время слота**
+   - Сначала запустите пакет телеметрии + команды экспорта очереди. Пройти
+     `--note <ticket>` — `ci/run_android_telemetry_chaos_prep.sh`, поэтому журнал
+     ссылается на идентификатор инцидента.
+   - Запуск сценариев аттестации для каждого устройства. Когда жгут производит
+     `.zip`, скопируйте его в корень артефакта и запишите Git SHA, напечатанный по адресу
+     конец сценария.
+   - Выполните `make android-lint` с переопределенным суммарным путем, даже если CI
+     уже побежал; аудиторы ожидают журнал для каждого слота.
+3. **После запуска**
+   - Сгенерируйте `sha256sum.txt` и `README.md` (заметки произвольной формы) внутри слота.
+     папка со сводкой выполненных команд.
+   - Добавьте строку к `docs/source/compliance/android/evidence_log.csv` с помощью
+     идентификатор слота, путь хеш-манифеста, ссылки на Buildkite (если есть) и последнюю версию
+     Процент мощности лаборатории устройств из экспорта календаря резервирования.
+   - Свяжите папку слота в билете `_android-device-lab`, AND6.
+     контрольный список и отчет о выпуске `docs/source/android_support_playbook.md`.
 
-1. **Pre-flight (T-24 h)** – Confirm the reservation ticket references this
-   document, update the device matrix entry, and seed the artifact root.
-2. **During the slot**
-   - Run the telemetry bundle + queue export commands first. Pass
-     `--note <ticket>` to `ci/run_android_telemetry_chaos_prep.sh` so the log
-     references the incident ID.
-   - Trigger the attestation scripts per device. When the harness produces a
-     `.zip`, copy it into the artefact root and record the Git SHA printed at
-     the end of the script.
-   - Execute `make android-lint` with the overridden summary path even if CI
-     already ran; auditors expect a per-slot log.
-3. **Post-run**
-   - Generate `sha256sum.txt` and `README.md` (free-form notes) inside the slot
-     folder summarising the executed commands.
-   - Append a row to `docs/source/compliance/android/evidence_log.csv` with the
-     slot ID, hash manifest path, Buildkite references (if any), and the latest
-     device-lab capacity percentage from the reservation calendar export.
-   - Link the slot folder in the `_android-device-lab` ticket, the AND6
-     checklist, and `docs/source/android_support_playbook.md` release report.
+## Обработка и эскалация сбоев
 
-## Failure Handling & Escalation
-
-- If any command fails, capture the stderr output under `logs/` and follow the
-  escalation ladder in `device_lab_reservation.md` §6.
-- Queue or telemetry shortfalls should immediately note the override status in
-  `docs/source/sdk/android/telemetry_override_log.md` and reference the slot ID
-  so governance can trace the drill.
-- Attestation regressions must be recorded in
+- Если какая-либо команда завершится неудачно, запишите выходные данные stderr под `logs/` и следуйте инструкциям.
+  лестница эскалации в `device_lab_reservation.md` §6.
+- При недостатке очереди или телеметрии следует немедленно отметить статус переопределения в
+  `docs/source/sdk/android/telemetry_override_log.md` и укажите идентификатор слота.
+  чтобы руководство могло отслеживать ход учений.
+- Регрессии аттестации должны регистрироваться в
   `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  with the failing device serials and the bundle paths recorded above.
+  с неисправными серийными номерами устройств и путями пакетов, записанными выше.
 
-## Reporting Checklist
+## Контрольный список отчетности
 
-Before marking the slot complete, verify the following references are updated:
+Прежде чем пометить слот как завершенный, убедитесь, что обновлены следующие ссылки:
 
-- `docs/source/compliance/android/and6_compliance_checklist.md` — mark the
-  instrumentation row complete and note the slot ID.
-- `docs/source/compliance/android/evidence_log.csv` — add/update the entry with
-  the slot hash and capacity reading.
-- `_android-device-lab` ticket — attach artefact links and Buildkite job IDs.
-- `status.md` — include a brief note in the next Android readiness digest so
-  roadmap readers know which slot produced the latest evidence.
+- `docs/source/compliance/android/and6_compliance_checklist.md` — отметьте
+  строка инструментов завершена и запишите идентификатор слота.
+- `docs/source/compliance/android/evidence_log.csv` — добавить/обновить запись с помощью
+  хэш слота и чтение емкости.
+- Билет `_android-device-lab` — прикрепите ссылки на артефакты и идентификаторы заданий Buildkite.
+- `status.md` — включите краткое примечание в следующий дайджест готовности Android, чтобы
+  Читатели дорожной карты знают, какой слот предоставил последние доказательства.
 
-Following this process keeps AND6’s “device-lab + instrumentation hooks”
-milestone auditable and prevents manual divergence between booking, execution,
-and reporting.
+Следуя этому процессу, AND6 сохраняет «привязки устройств-лабораторий + инструментов».
+контрольные этапы проверяются и предотвращают расхождения вручную между резервированием, исполнением,
+и отчетность.

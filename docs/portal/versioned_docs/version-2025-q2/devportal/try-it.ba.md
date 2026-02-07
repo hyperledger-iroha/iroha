@@ -7,49 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c389a2121f577bcf8893a0d5c0b898ec2ff5330f2f1727de3387da98f8369915
 source_last_modified: "2025-12-29T18:16:35.904297+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Try It sandbox
+# Ул ҡом йәшниктәрен һынап ҡарағыҙ
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+Төҙөүсе порталы караптары факультатив “Бына уны һынап ҡарағыҙ” консоль, шулай итеп, һеҙ шылтырата аласыз Torii .
+документациянан сыҡмайынса ла ос нөктәләре. Консоль релелар үтенестәре
+аша йыйып алынған прокси шулай браузерҙар урап үтергә мөмкин CORS сиктәрен, ә әле лә
+ставка сиктәре һәм аутентификацияны үтәү.
 
-## Prerequisites
+## Алдан шарттар
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 йәки яңы (портал төҙөү талаптарына тап килә)
+- Селтәр инеү Torii стажировка мөхитенә
+- Һеҙҙең менән шөғөлләнергә планлаштырған Torii маршруттарына шылтырата алған несущий токен
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+Бөтә прокси конфигурацияһы тирә-яҡ мөхит үҙгәртеүселәре аша эшләнә. Түбәндәге таблица
+иң мөһим ручкалар исемлеге:
 
-| Variable | Purpose | Default |
+| Үҙгәртеүсән | Маҡсат | Ғәҙәттәгесә |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
+| `TRYIT_PROXY_TARGET` | База Torii URL, тип прокси-форвардтар үтенестәре | **Кәрәк** |
+| `TRYIT_PROXY_LISTEN` | Урындағы үҫеш өсөн тыңлау адресы (формат `host:port` йәки `[ipv6]:port`) | `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | Комма-айырылған исемлек сығышы, тип атау мөмкин прокси | `http://localhost:3000` |
+| `TRYIT_PROXY_BEARER` | Ғәҙәттәгесә йөрөтөүсе токен Torii тиклем ебәрелгән | _бут_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Ҡулланыу рөхсәт итеү өсөн аҙаҡҡы ҡулланыусылар үҙ токен аша тәьмин итеү өсөн `X-TryIt-Auth` | `0` |
+| `TRYIT_PROXY_MAX_BODY` | Максималь үтенес тән ҙурлығы (байттар) | `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` | Миллисекундтарҙа өҫкө ағым тайм-аут | `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` | Запростар рөхсәт ителә ставка тәҙрә клиент IP | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` | Слайд тәҙрә өсөн ставка сикләү (мс) | `60000` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+Прокси шулай уҡ `GET /healthz` X, структуралы JSON хаталарын ҡайтара, һәм
+1990 йылдарҙа был йүнәлештәге эштәрҙе логин сығарыуҙан реконструкциялай.
 
-## Start the proxy locally
+## локаль прокси-прокси-сервис башлағыҙ
 
-Install dependencies the first time you set up the portal:
+Зависимость монтаж беренсе тапҡыр һеҙ портал ҡуйҙы:
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+Һеҙҙең Torii экземплярында прокси һәм уны күрһәтегеҙ:
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -59,13 +60,13 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+Сценарийҙа бәйләнгән адрес һәм форвардтар `/proxy/*` XX .
+конфигурацияланған Torii сығышы.
 
-## Wire the portal widgets
+## Сым портал виджеттары
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+Ҡасан һеҙ төҙөү йәки хеҙмәтләндерергә портал төҙөүсе, URL-адрес, тип виджеттар ҡуйырға .
+прокси өсөн ҡулланырға тейеш:
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -73,29 +74,27 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+Түбәндәге компоненттар был ҡиммәттәрҙе `docusaurus.config.js`-тан уҡый:
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; uses a request
-  interceptor to attach bearer tokens automatically.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field
-  and supports try-it requests against the proxy.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Сваггер UI** — `/reference/torii-swagger`-та күрһәтелгән; үтенес ҡуллана
+  перехватчик беркетергә несущий жетон автоматик.
+- **РапиДок** — `/reference/torii-rapidoc`-та күрһәтелгән; жетон яланын көҙгөләй
+  һәм тырнаҡ-ул үтенестәрен яҡлай ҡаршы прокси.
+- **Уны консоль** һынап ҡарағыҙ — API дөйөм ҡараш битендә индерелгән; һеҙгә заказ бирергә мөмкинлек бирә
+  үтенестәр, башлыҡтарҙы ҡарау һәм яуап органдарын тикшерергә.
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+Теләһә ниндәй виджетта үҙгәртеү тик хәҙерге браузер сессияһына йоғонто яһай; был
+прокси бер ҡасан да һаҡланмай йәки логин тәьмин ителгән токен.
 
-## Observability & operations
+## Күҙәтеүсәнлек һәм операциялар
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+Һәр үтенес бер тапҡыр ысул, юл, сығышы, өҫкө ағымдағы статусы һәм
+аутентификация сығанағы (`override`, `default`, йәки `client`). Токендар бер ҡасан да түгел
+һаҡланған — йөрөтөүсе башлыҡтары ла, `X-TryIt-Auth` ҡиммәттәре лә 2012 йылға тиклем үҙгәртелә.
+логин-шулай итеп, һеҙ алға stdout үҙәк коллекционер тураһында борсолмай
+серҙәре ағып сыға.
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+### Һаулыҡ зондтары & иҫкәртмәЙүгереп зонд ваҡытында йәки график буйынса таратыу:
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -104,18 +103,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+Тирә-яҡ мөхит ручкалары:
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — опциональ Torii маршруты (`/proxy` X) күнекмәләр өсөн.
+- `TRYIT_PROXY_SAMPLE_METHOD` — `GET` тиклем ғәҙәттәгесә; яҙырға маршруттар өсөн `POST` ҡуйылған.
+- `TRYIT_PROXY_PROBE_TOKEN` — өлгө шылтыратыу өсөн ваҡытлыса йөрөтөүсе токен индерә.
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — 5s тайм-аут ғәҙәттәгесә өҫтөнлөк итә.
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — I18NNNNNNNNNNNNNNNita `probe_success`/`probe_duration_seconds` өсөн опциональ стаканлы йүнәлеш.
+- `TRYIT_PROXY_PROBE_LABELS` — метрикаларға (`job=tryit-proxy` һәм `instance=<proxy URL>`-ҡа тиклем ғәҙәттәгесә ғәҙәттәгесә `key=value` парҙары бойоҡ.
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+Һөҙөмтәләрҙе зондты яҙма рәүештә күрһәтеп, текст файлы коллекторына туҡландырығыҙ
+юл (мәҫәлән, `/var/lib/node_exporter/textfile_collector/tryit.prom`) һәм
+теләһә ниндәй ҡулланыусылар өсөн ярлыҡтар өҫтәү:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -124,11 +123,11 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+Сценарий метрика файлы атомлы яңынан яҙа, шулай итеп, һеҙҙең коллекционер һәр ваҡыт уҡый а
+тулы файҙалы йөк.
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+Еңел иҫкәрткән өсөн, зонд сым һеҙҙең мониторинг стека. Prometheus
+ике рәттән уңышһыҙлыҡтан һуң биттәрҙе миҫал:
 
 ```yaml
 groups:
@@ -145,11 +144,11 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Rollback automation
+### Rollback автоматлаштырыу
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+Идара итеү ярҙамсыһы ҡулланыу өсөн яңыртыу йәки тергеҙергә маҡсатлы Torii URL. Сценарий
+һаҡлана, элекке конфигурация `.env.tryit-proxy.bak` шулай итеп, recongrobbleks был
+бер команда.
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -159,5 +158,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+`--env` йәки `TRYIT_PROXY_ENV` менән env файл юлына өҫтөнлөк бирегеҙ, әгәр һеҙҙең таратыу
+башҡа урындарҙа конфигурация һаҡлай.

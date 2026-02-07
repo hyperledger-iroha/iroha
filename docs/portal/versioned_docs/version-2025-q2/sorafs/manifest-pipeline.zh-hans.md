@@ -7,53 +7,54 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e77b792e19fbfa8e1efeddd042adbe68a48287a582a1be76aa518af7830774e2
 source_last_modified: "2026-01-05T09:28:11.996979+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Chunking → Manifest Pipeline
+# SoraFS 分块 → 清单管道
 
-This companion to the quickstart traces the end-to-end pipeline that turns raw
-bytes into Norito manifests suitable for the SoraFS Pin Registry. The content is
-adapted from [`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-consult that document for the canonical specification and changelog.
+快速入门的这个配套文件跟踪了将原始数据转化为数据的端到端管道
+Norito 清单中的字节适合 SoraFS Pin 注册表。内容是
+改编自[`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md)；
+请查阅该文档以获取规范规范和变更日志。
 
-## 1. Chunk deterministically
+## 1. 确定性分块
 
-SoraFS uses the SF-1 (`sorafs.sf1@1.0.0`) profile: a FastCDC-inspired rolling
-hash with a 64 KiB minimum chunk size, 256 KiB target, 512 KiB maximum, and a
-`0x0000ffff` break mask. The profile is registered in
-`sorafs_manifest::chunker_registry`.
+SoraFS 使用 SF-1 (`sorafs.sf1@1.0.0`) 配置文件：受 FastCDC 启发的滚动
+具有 64KiB 最小块大小、256KiB 目标、512KiB 最大大小和
+`0x0000ffff` 破坏掩码。该个人资料注册于
+`sorafs_manifest::chunker_registry`。
 
-### Rust helpers
+### Rust 助手
 
-- `sorafs_car::CarBuildPlan::single_file` – Emits chunk offsets, lengths, and
-  BLAKE3 digests while preparing CAR metadata.
-- `sorafs_car::ChunkStore` – Streams payloads, persists chunk metadata, and
-  derives the 64 KiB / 4 KiB Proof-of-Retrievability (PoR) sampling tree.
-- `sorafs_chunker::chunk_bytes_with_digests` – Library helper behind both CLIs.
+- `sorafs_car::CarBuildPlan::single_file` – 发出块偏移量、长度和
+  BLAKE3 在准备 CAR 元数据时进行摘要。
+- `sorafs_car::ChunkStore` – 流式传输有效负载，保留块元数据，以及
+  派生 64KiB / 4KiB 可检索性证明 (PoR) 采样树。
+- `sorafs_chunker::chunk_bytes_with_digests` – 两个 CLI 背后的库助手。
 
-### CLI tooling
+### CLI 工具
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-The JSON contains the ordered offsets, lengths, and chunk digests. Persist the
-plan when constructing manifests or orchestrator fetch specifications.
+JSON 包含有序偏移量、长度和块摘要。坚持
+在构建清单或协调器获取规范时进行规划。
 
-### PoR witnesses
+### PoR 见证人
 
-`ChunkStore` exposes `--por-proof=<chunk>:<segment>:<leaf>` and
-`--por-sample=<count>` so auditors can request deterministic witness sets. Pair
-those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
+`ChunkStore` 暴露 `--por-proof=<chunk>:<segment>:<leaf>` 和
+`--por-sample=<count>`，以便审核员可以请求确定性见证集。配对
+这些带有 `--por-proof-out` 或 `--por-sample-out` 的标志来记录 JSON。
 
-## 2. Wrap a manifest
+## 2. 包装清单
 
-`ManifestBuilder` combines chunk metadata with governance attachments:
+`ManifestBuilder` 将块元数据与治理附件相结合：
 
-- Root CID (dag-cbor) and CAR commitments.
-- Alias proofs and provider capability claims.
-- Council signatures and optional metadata (e.g., build IDs).
+- 根 CID (dag-cbor) 和 CAR 承诺。
+- 别名证明和提供商能力声明。
+- 委员会签名和可选元数据（例如构建 ID）。
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -64,57 +65,57 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-Important outputs:
+重要输出：
 
-- `payload.manifest` – Norito-encoded manifest bytes.
-- `payload.report.json` – Human/automation readable summary, including
-  `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and alias metadata.
-- `payload.manifest_signatures.json` – Envelope containing manifest BLAKE3
-  digest, chunk-plan SHA3 digest, and sorted Ed25519 signatures.
+- `payload.manifest` – Norito 编码的清单字节。
+- `payload.report.json` – 人类/自动化可读摘要，包括
+  `chunk_fetch_specs`、`payload_digest_hex`、CAR 摘要和别名元数据。
+- `payload.manifest_signatures.json` – 包含清单 BLAKE3 的信封
+  摘要、块计划 SHA3 摘要和排序的 Ed25519 签名。
 
-Use `--manifest-signatures-in` to verify envelopes supplied by external
-signatories before writing them back out, and `--chunker-profile-id` or
-`--chunker-profile=<handle>` to lock the registry selection.
+使用 `--manifest-signatures-in` 验证外部提供的信封
+签署人之前将其写回，以及 `--chunker-profile-id` 或
+`--chunker-profile=<handle>` 锁定注册表选择。
 
-## 3. Publish and pin
+## 3. 发布并固定
 
-1. **Governance submission** – Provide the manifest digest and signature
-   envelope to the council so the pin can be admitted. External auditors should
-   store the chunk-plan SHA3 digest alongside the manifest digest.
-2. **Pin payloads** – Upload the CAR archive (and optional CAR index) referenced
-   in the manifest to the Pin Registry. Ensure the manifest and CAR share the
-   same root CID.
-3. **Record telemetry** – Persist the JSON report, PoR witnesses, and any fetch
-   metrics in release artifacts. These records feed operator dashboards and
-   help reproduce issues without downloading large payloads.
+1. **治理提交** – 提供清单摘要和签名
+   将信封寄给理事会，以便允许使用密码。外部审计师应
+   将块计划 SHA3 摘要与清单摘要一起存储。
+2. **Pin 有效负载** – 上传引用的 CAR 存档（和可选的 CAR 索引）
+   在 Pin 注册表的清单中。确保清单和 CAR 共享
+   相同的根 CID。
+3. **记录遥测** – 保留 JSON 报告、PoR 见证和任何获取
+   发布工件中的指标。这些记录提供给操作员仪表板和
+   帮助重现问题，而无需下载大量负载。
 
-## 4. Multi-provider fetch simulation
+## 4. 多提供商获取模拟
 
 `cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
   --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
   --output=payload.bin --json-out=fetch_report.json`
 
-- `#<concurrency>` increases per-provider parallelism (`#4` above).
-- `@<weight>` tunes scheduling bias; defaults to 1.
-- `--max-peers=<n>` caps the number of providers scheduled for a run when
-  discovery yields more candidates than desired.
-- `--expect-payload-digest` and `--expect-payload-len` guard against silent
-  corruption.
-- `--provider-advert=name=advert.to` verifies provider capabilities before
-  using them in the simulation.
-- `--retry-budget=<n>` overrides the per-chunk retry count (default: 3) so CI
-  can surface regressions faster when testing failure scenarios.
+- `#<concurrency>` 增加了每个提供者的并行性（上面的 `#4`）。
+- `@<weight>` 调整调度偏差；默认为 1。
+- `--max-peers=<n>` 限制了计划运行的提供者数量
+  发现产生的候选者数量超出了预期。
+- `--expect-payload-digest` 和 `--expect-payload-len` 防范静音
+  腐败。
+- `--provider-advert=name=advert.to` 之前验证提供商的能力
+  在模拟中使用它们。
+- `--retry-budget=<n>` 覆盖每个块的重试计数（默认值：3），因此 CI
+  在测试故障场景时可以更快地发现回归。
 
-`fetch_report.json` surfaces aggregated metrics (`chunk_retry_total`,
-`provider_failure_rate`, etc.) suitable for CI assertions and observability.
+`fetch_report.json` 显示聚合指标 (`chunk_retry_total`,
+`provider_failure_rate`等）适合CI断言和可观察性。
 
-## 5. Registry updates & governance
+## 5. 注册表更新和治理
 
-When proposing new chunker profiles:
+当提出新的分块配置文件时：
 
-1. Author the descriptor in `sorafs_manifest::chunker_registry_data`.
-2. Update `docs/source/sorafs/chunker_registry.md` and related charters.
-3. Regenerate fixtures (`export_vectors`) and capture signed manifests.
-4. Submit the charter compliance report with governance signatures.
+1. 在 `sorafs_manifest::chunker_registry_data` 中编写描述符。
+2.更新`docs/source/sorafs/chunker_registry.md`及相关章程。
+3. 重新生成装置 (`export_vectors`) 并捕获签名清单。
+4. 提交带有治理签名的章程合规报告。
 
-Automation should prefer canonical handles (`namespace.name@semver`) and fall
+自动化应该更喜欢规范句柄（`namespace.name@semver`）并下降

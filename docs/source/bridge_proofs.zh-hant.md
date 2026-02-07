@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
 source_last_modified: "2025-12-29T18:16:35.921274+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Bridge proofs
+# 橋接證明
 
-Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
+橋接證明提交通過標準指令路徑 (`SubmitBridgeProof`) 並以經過驗證的狀態登陸證明註冊表。當前表面涵蓋 ICS 風格的 Merkle 證明和具有固定保留和清單綁定的透明 ZK 有效負載。
 
-## Acceptance rules
+## 驗收規則
 
-- Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
-- Optional height windows reject stale/future proofs: `zk.bridge_proof_max_past_age_blocks` and `zk.bridge_proof_max_future_drift_blocks` are measured against the block height that ingests the proof (0 disables the guardrails).
-- Bridge proofs may not overlap an existing proof for the same backend (pinned proofs are preserved and block overlaps).
-- Manifest hashes must be non-zero; payloads are size-capped by `zk.max_proof_size_bytes`.
-- ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function; transparent payloads must declare a non-empty backend label.
-- Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
+- 範圍必須有序/非空並遵守 `zk.bridge_proof_max_range_len`（0 禁用上限）。
+- 可選高度窗口拒絕過時/未來的證明：`zk.bridge_proof_max_past_age_blocks` 和 `zk.bridge_proof_max_future_drift_blocks` 是根據攝取證明的塊高度進行測量的（0 禁用護欄）。
+- 橋接證明不得與同一後端的現有證明重疊（保留固定證明並塊重疊）。
+- 清單哈希值必須非零；有效負載的大小上限為 `zk.max_proof_size_bytes`。
+- ICS 有效負載遵循配置的 Merkle 深度上限並使用聲明的哈希函數驗證路徑；透明有效負載必須聲明一個非空後端標籤。
+- 固定證明免於保留修剪；未固定的校樣仍然遵循全局 `zk.proof_history_cap`/grace/batch 設置。
 
-## Torii API surface
+## Torii API 表面
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
-  - `bridge_only=true` returns only bridge proofs.
-  - `bridge_pinned_only=true` narrows to pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v1/zk/proofs` 和 `GET /v1/zk/proofs/count` 接受橋接感知過濾器：
+  - `bridge_only=true` 僅返回橋接證明。
+  - `bridge_pinned_only=true` 縮小為固定橋校樣。
+  - `bridge_start_from_height` / `bridge_end_until_height` 夾緊橋範圍窗口。
+- `GET /v1/zk/proof/{backend}/{hash}` 返回橋元數據（範圍、清單哈希、有效負載摘要）以及證明 id/狀態/VK 綁定。
+- 完整的 Norito 證明記錄（包括有效負載字節）仍然可以通過 `GET /v1/proofs/{proof_id}` 供離線驗證者使用。
 
-## Bridge receipt events
+## 橋接接收事件
 
-Bridge lanes emit typed receipts via the `RecordBridgeReceipt` instruction. Executing this instruction
-records a `BridgeReceipt` payload and emits `DataEvent::Bridge(BridgeEvent::Emitted)` on the event
-stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` helper submits the
-typed instruction so indexers can consume receipts deterministically.
+橋車道通過 `RecordBridgeReceipt` 指令發出打印的收據。執行該指令
+記錄 `BridgeReceipt` 有效負載並在事件上發出 `DataEvent::Bridge(BridgeEvent::Emitted)`
+流，取代了之前的僅日誌存根。 CLI `iroha bridge emit-receipt` 幫助程序提交
+鍵入指令，以便索引器可以確定地消耗收據。
 
-## External verification sketch (ICS)
+## 外部驗證草圖（ICS）
 
 ```rust
 use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};

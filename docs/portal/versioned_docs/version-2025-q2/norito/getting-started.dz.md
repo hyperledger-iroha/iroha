@@ -7,38 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
 source_last_modified: "2026-01-22T16:26:46.562262+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Getting Started
+# I18NT00000005 འགོ་འཛུགས་འབད་དོ།
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+འ་ནི་མགྱོགས་དྲགས་ལམ་སྟོན་འདི་གིས་ I18NT0000000X གན་རྒྱ་འདི་བསྡུ་སྒྲིག་འབད་ནིའི་དོན་ལུ་ ལཱ་གི་རྒྱུན་རིམ་ཉུང་ཤོས་སྟོནམ་ཨིན།
+བཏོན་ཡོད་པའི་ Norito བཱའིཊི་ཀོཌ་འདི་ ནང་འཁོད་ལས་གཡོག་བཀོལ་ཞིནམ་ལས་ བཀྲམ་སྤེལ་འབད་ནི།
+ལས་ I18NT000000013X མཐུད་མཚམས་ཅིག་ལུ།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha_cli` – used for contract deployment via Torii
+༡ རསཊི་ལག་ཆས་རྒྱུན་རིམ་ (༡.༧༦ ཡང་ན་ གསརཔ་) གཞི་བཙུགས་འབད་ཞིནམ་ལས་ མཛོད་ཁང་འདི་བལྟ།
+༢ རྒྱབ་སྐྱོར་འབད་མི་གཉིས་ལྡན་ཚུ་བཟོ་བསྐྲུན་ཡང་ན་ཕབ་ལེན་འབད་ནི།
+   - I18NI000000029X - Kotodama བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ I18NT0000019X/I18NT0000007X བཱའིཊི་ཀོཌི་བཏོན་ཡོདཔ།
+   - I18NI000000030X དང་ I18NI000000031X – ས་གནས་ཀྱི་ལག་བསྟར་དང་ཞིབ་བཤེར།
+   - `iroha_cli` – གན་རྒྱ་བཀོལ་སྤྱོད་ཀྱི་དོན་ལུ་ I18NT0000015X བརྒྱུད་དེ་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
 
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
+   མཛོད་ཁང་གིས་ འ་ནི་གཉིས་ལྡན་ཚུ་ `PATH` ལུ་རེ་བ་བསྐྱེདཔ་ཨིན། ཁྱོད་ཀྱིས་ཡང་འབད་ཚུགས།
+   སྔོན་བཟོའི་ཅ་རྙིང་ཚུ་ཕབ་ལེན་འབད་ནི་དང་ ཡང་ན་ འབྱུང་ཁུངས་ལས་བཟོ་བསྐྲུན་འབད། ཁྱོད་ཀྱིས་བསྡུ་སྒྲིག་འབད་བ་ཅིན།
+   ལག་ཆས་རྒྱུན་ས་གནས་ནང་ ཨེམ་སི་ཡིག་སྣོད་ཀྱི་གྲོགས་རམ་པ་ གཉིས་ལྡན་ནང་ མཚོན་རྟགས་བཀོད།
 
-   ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
-   ```
+   I18NF0000023X
 
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha_cli` profile (`~/.config/iroha/cli.toml`).
+3. ཁྱོད་ཀྱིས་ བཀྲམ་སྤེལ་རིམ་པ་ལུ་ལྷོདཔ་ད་ I18NT0000014X མཐུད་མཚམས་འདི་གཡོག་བཀོལ་དོ་ཡོདཔ་ངེས་གཏན་བཟོ། ཚིག༌ཕྲད
+   འོག་གི་དཔེ་ཚུ་ ཁྱོད་རའི་ནང་རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཡུ་ཨར་ཨེལ་ལུ་ ལྷོད་ཚུགསཔ་ཨིན་ I18NT0000016X འདི་ ལྷོད་ཚུགསཔ་ཨིན།
+   `iroha_cli` གསལ་སྡུད་ (I18NI0000035X).
 
-## 1. Compile a Kotodama contract
+## 1. I18NT0000002X གན་རྒྱ་བཤུད།
 
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+མཛོད་ཁང་འདི་གིས་ “hello world” གི་གན་རྒྱ་འདི་ ཉུང་ཤོས་རང་ བཏངམ་ཨིན།
+`examples/hello/hello.ko`. དེ་ཡང་ Norito/IVM བཱའིཊི་ཀོཌི་ (I18NI000000037X) ལུ་བསྡུ་སྒྲིག་འབད་དགོ།
 
 ```sh
 mkdir -p target/examples
@@ -48,42 +47,42 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Key flags:
+གཙོ་བོའི་རྒྱལ་དར་ཚུ།
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+- `--abi 1` གན་རྒྱ་འདི་ ཨེ་བི་ཨའི་ཐོན་རིམ་༡ པ་ལུ་བསྡམ་བཞགཔ་ཨིན།
+  འབྲི་བའི་དུས་ཚོད།)
+- `--max-cycles 0` ཞུ་བ་ཚུ་ མཚམས་འཇོག་མེད་པའི་ ལག་ལེན་ཚུ་; མཐའ་མཚམས་ལུ་ ངེས་གཏན་ཨང་གྲངས་ཅིག་གཞི་སྒྲིག་འབད།
+  ཀླད་ཀོར་ཤེས་རྟོགས་བདེན་དཔང་ཚུ་གི་དོན་ལུ་ འཁོར་རིམ་པེ་ཌིང་།
 
-## 2. Inspect the Norito artifact (optional)
+## 2. I18NT0000009X ཅ་རྙིང་བརྟག་དཔྱད་འབད། (གདམ་ཁ་ཅན།)
 
-Use `ivm_tool` to verify the header and embedded metadata:
+མགོ་ཡིག་བདེན་དཔྱད་འབད་ནིའི་དོན་ལུ་ `ivm_tool` ལག་ལེན་འཐབ།
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+ཁྱོད་ཀྱིས་ ཨེ་བི་ཨའི་ཐོན་རིམ་དང་ ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ཁྱད་རྣམ་དར་ཆ་ཚུ་ དེ་ལས་ ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ཐོ་བཀོད་ཚུ་བལྟ་དགོ།
+point. འདི་བཀྲམ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ མགྱོགས་དྲགས་ཀྱི་ བློ་རིག་ཞིབ་དཔྱད་ཅིག་ཨིན།
 
-## 3. Run the contract locally
+## 3. གན་རྒྱ་འདི་ས་གནས་ནང་གཡོག་བཀོལ།
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+བཱའིཊི་ཀོཌི་འདི་ `ivm_run` དང་གཅིག་ཁར་ ལག་ལེན་འཐབ།
+མཐུད་མཚམས་:
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+I18NI000000042X དཔེ་འདི་གིས་ འཚམས་འདྲི་ཅིག་ ནང་བསྐྱོད་འབདཝ་ཨིནམ་དང་ `SET_ACCOUNT_DETAIL` syscall ཅིག་བཏོནམ་ཨིན།
+ནང་འཁོད་ལས་རྒྱུག་ནི་འདི་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ གན་རྒྱ་ཚད་མ་ལུ་ བསྐྱར་ལོག་འབད་བའི་སྐབས་ ཕན་ཐོགས་ཅན་ཅིག་ཨིན།
+དེ་on-la-.
 
-## 4. Deploy via `iroha_cli`
+## 4. I18NI0000044X བརྒྱུད་དེ་བཀྲམ་སྤེལ་འབད།
 
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+ཁྱོད་ཀྱིས་ གན་རྒྱ་འདི་ བསམ་པ་རྫོགས་པའི་སྐབས་ སི་ཨེལ་ཨའི་ལག་ལེན་འཐབ་སྟེ་ མཐུད་མཚམས་ཅིག་ལུ་ བཀྲམ་སྤེལ་འབད།
+དབང་འཛིན་རྩིས་ཐོ་དང་ དེ་གི་མིང་རྟགས་ལྡེ་མིག་ དེ་ལས་ ཡང་ན་ I18NI0000045X ཡིག་སྣོད་ཡང་ན་ ཡང་ན་ ཡང་ཅིན་ ཡང་ན་ ཡང་ཅིན།
+Base64 དངུལ་སྤྲོད་འབབ་ཁུངས།
 
 ```sh
 iroha_cli app contracts deploy \
@@ -92,38 +91,35 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve manifests or list instances:
+བརྡ་བཀོད་ཀྱིས་ Norito གསལ་སྟོན་ + བཱའིཊི་ཀོཌི་བཱན་ཌི་འདི་ I18NT000000017X གུ་དང་ དཔར་བསྐྲུན་ཚུ།
+གྲུབ་འབྲས་ཚོང་འབྲེལ་གྱི་གནས་ཚད། ཚོང་འབྲེལ་འདི་འབད་ཚརཝ་ད་ གསང་གྲངས་འདི།
+ལན་ནང་ལུ་སྟོན་ཡོད་མི་ ཧེཤ་འདི་ གསལ་སྟོན་ཚུ་ཡང་ན་ཐོ་ཡིག་གནས་སྟངས་ཚུ་སླར་འདྲེན་འབད་ནི་ལུ་ལག་ལེན་འཐབ་བཏུབ།
 
-```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
-```
+I18NF0000028X
 
-## 5. Run against Torii
+## 5. I18NT0000018X ལུ་རྒྱབ་འགལ་འབད།
 
-With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli ledger transaction submit`
-or your application client). Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+བཱའིཊི་ཀོཌི་ཐོ་འགོད་འབད་ཞིནམ་ལས་ ཁྱོད་ཀྱིས་ བཀོད་རྒྱ་ཕུལ་ཐོག་ལས་ འབོད་བརྡ་གཏང་ཚུགས།
+དེ་གིས་ གསོག་འཇོག་འབད་ཡོད་པའི་ཨང་རྟགས་ (དཔེར་ན་ `iroha_cli ledger transaction submit` བརྒྱུད་དེ་ གཞི་བསྟུན་འབདཝ་ཨིན།
+ཡང་ན་ ཁྱོད་ཀྱི་གློག་རིམ་མཁོ་སྤྲོད་པ་)། རྩིས་ཐོ་གི་གནང་བ་ཚུ་ དགོ་འདོད་ཡོད་མི་དེ་ ངེས་ཏིག་བཟོ།
+syscalls (I18NI0000004X, `transfer_asset` ལ་སོགས་པ།).
 
-## Tips & troubleshooting
+## བསླབ་བྱ་དང་དཀའ་ངལ་སེལ་བ།
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
-  `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli tools crypto keypair`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+- བྱིན་ཡོད་པའི་དཔེ་ཚུ་ གཅིག་ནང་ བསྡུ་སྒྲིག་འབད་ནི་དང་ ལག་ལེན་འཐབ་ནི་ལུ་ `make examples-run` ལག་ལེན་འཐབ།
+  ཀྲོབ༌མདའ༌རྐྱབ༌པ། གལ་སྲིད་ གཉིས་ལྡན་ཚུ་ གུ་མེད་པ་ཅིན་ I18NI0000000050X/`IVM` མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན།
+  I18NI0000002X.
+- I18NI000000053X གིས་ ཨེ་བི་ཨའི་ཐོན་རིམ་འདི་ ངོས་ལེན་མ་འབད་བར་ བསྡུ་སྒྲིག་འབད་མི་དང་ ནའུཊི་འདི་ཨིན་ན་ བདེན་དཔྱད་འབད།
+  གཉིས་ཆ་རང་ ABI v1 (རུབ་སྤྱོད་ `koto_compile --abi` འདི་ཐོ་ཡིག་ནང་མེད་པའི་སྒྲུབ་རྟགས་ཚུ་མེད་པར་ བཀོདཔ་ཨིན།
+  རྒྱབ༌སྐྱོར)།
+- སི་ཨེལ་ཨའི་གིས་ ཧེགསི་ཡང་ན་ བེསི་༦༤ མཚན་རྟགས་ལྡེ་མིག་ཚུ་ངོས་ལེན་འབདཝ་ཨིན། བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ ཁྱོད་ཀྱིས་ལག་ལེན་འཐབ་བཏུབ།
+  ལྡེ་མིག་ཚུ་ Norito གིས་བཏོན་ཡོདཔ་ཨིན།
+- Norito གླ་ཆ་ཚུ་ རྐྱེན་སེལ་འབད་བའི་སྐབས་ `ivm_tool disassemble` ཡན་ལག་བརྡ་བཀོད་ཆུང་བ་འདི་གིས་ གྲོགས་རམ་འབདཝ་ཨིན།
+  Kotodama འབྱུང་ཁུངས་དང་མཉམ་དུ་བཀོད་རྒྱ་ཚུ་འབྲེལ་འཐུད་འབད།
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+འདི་གིས་ སི་ཨའི་དང་ མཉམ་བསྡོམ་བརྟག་དཔྱད་ནང་ ལག་ལེན་འཐབ་མི་ གོ་རིམ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། གཏིང་ཟབ་པའི་དོན་ལུ།
+Kotodama ཡིག་གཟུགས་དང་ སི་ཀཱལ་སབ་ཁྲ་ དེ་ལས་ Norito ནང་ཁུལ་ཚུ་ནང་ བལྟ།
 
-- `docs/source/kotodama_grammar.md`
+- I18NI0000007X
 - `docs/source/kotodama_examples.md`
 - `norito.md`

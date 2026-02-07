@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
 source_last_modified: "2025-12-29T18:16:35.921274+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Bridge proofs
+# Күпер .
 
-Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
+Күпер иҫбатлаусы тапшырыуҙар стандарт инструкция юлы аша үтә (`SubmitBridgeProof`) һәм раҫланған статуслы иҫбатлау реестрында ер. Ток өҫтө ҡаплай ICS-стиль Merkle иҫбатлау һәм үтә күренмәле-ZK файҙалы йөктәр менән пинированный һаҡлау һәм асыҡ бәйләү.
 
-## Acceptance rules
+## Ҡабул итеү ҡағиҙәләре
 
-- Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
-- Optional height windows reject stale/future proofs: `zk.bridge_proof_max_past_age_blocks` and `zk.bridge_proof_max_future_drift_blocks` are measured against the block height that ingests the proof (0 disables the guardrails).
-- Bridge proofs may not overlap an existing proof for the same backend (pinned proofs are preserved and block overlaps).
-- Manifest hashes must be non-zero; payloads are size-capped by `zk.max_proof_size_bytes`.
-- ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function; transparent payloads must declare a non-empty backend label.
-- Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
+- Диапазондарҙы заказ бирергә/бушҡа һәм хөрмәт итергә кәрәк `zk.bridge_proof_max_range_len` (0 ҡапҡасты өҙөп).
+- Опциональ бейеклектәге тәҙрәләр иҫке/киләсәктә дәлилдәрҙе кире ҡаға: `zk.bridge_proof_max_past_age_blocks` һәм `zk.bridge_proof_max_future_drift_blocks` блок бейеклегенә ҡаршы үлсәнә, улар иҫбатлауҙы ингестировать (0 ҡоршауҙарҙы өҙөп).
+- Күпер дәлилдәре шул уҡ бэкэнд өсөн булған дәлилде ҡапламауы ла ихтимал (пеннированный дәлилдәр һаҡлана һәм ҡапланыуҙы блоклай).
+- Манифест хештары нуль булмаған булырға тейеш; файҙалы йөктәр ҙурлыҡтағы `zk.max_proof_size_bytes` менән ҡапланған.
+- ICS файҙалы йөкләмәләр настроить конфигурацияланған Merkle тәрәнлеге ҡапҡасы һәм юлды раҫлау ҡулланып иғлан ителгән хеш функцияһы; үтә күренмәле файҙалы йөктәр иғлан итергә тейеш, буш булмаған бэкэнд ярлыҡ.
+- Пиннированный дәлилдәр һаҡлауҙан азат ителә; unpinned дәлилдәр һаман да донъя `zk.proof_history_cap`/рәхмәт/партия параметрҙарын хөрмәт итә.
 
-## Torii API surface
+## Torii API өҫтө
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
-  - `bridge_only=true` returns only bridge proofs.
-  - `bridge_pinned_only=true` narrows to pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v1/zk/proofs` һәм `GET /v1/zk/proofs/count` күпер-аңлы фильтрҙар ҡабул итә:
+  - `bridge_only=true` күперле дәлилдәрҙе генә ҡайтара.
+  - `bridge_pinned_only=true` тарайтыу өсөн күперле дәлилдәрҙе ҡыҫтырылған.
+  - `bridge_start_from_height` / `bridge_end_until_height` күпер диапазоны тәҙрәһен ҡыҫҡыс.
+- `GET /v1/zk/proof/{backend}/{hash}` ҡайтарыу күпер метамағлүмәттәр (диапазон, асыҡ хеш, файҙалы йөк резюме) менән бер рәттән иҫбатлау id/статус/ВК бәйләүҙәр.
+- Тулы Norito дәлил яҙмаһы (шул иҫәптән файҙалы йөк байттары) `GET /v1/proofs/{proof_id}` аша төйөндән тыш тикшерелеүселәр өсөн мөмкин.
 
-## Bridge receipt events
+## Күпер квитанция саралары
 
-Bridge lanes emit typed receipts via the `RecordBridgeReceipt` instruction. Executing this instruction
-records a `BridgeReceipt` payload and emits `DataEvent::Bridge(BridgeEvent::Emitted)` on the event
-stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` helper submits the
-typed instruction so indexers can consume receipts deterministically.
+Күпер һыҙаттары `RecordBridgeReceipt` инструкцияһы аша тип квитанциялар сығара. Был күрһәтмә башҡарыу
+18NI000000018X файҙалы йөкләмәһен теркәй һәм сарала `DataEvent::Bridge(BridgeEvent::Emitted)` сығарыла
+ағым, алмаштырыу өсөн алдан лог-тик стаб. CLI `iroha bridge emit-receipt` ярҙамсыһы тапшыра
+тип инструкция шулай индексерҙар ҡуллана ала квитанциялар детерминистик.
 
-## External verification sketch (ICS)
+## Тышҡы тикшерелгән эскиз (ИКС)
 
 ```rust
 use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};

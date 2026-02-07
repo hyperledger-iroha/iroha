@@ -6,58 +6,57 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8ef338a20104dc5d15094e28a1332a604b68bdcfef1ff82fea784d43fdbd10b5
 source_last_modified: "2026-01-03T18:07:59.202230+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# GDPR DPIA Summary — Android SDK Telemetry (AND7)
+# Resumen de GDPR DPIA: telemetría del SDK de Android (AND7)
 
-| Field | Value |
+| Campo | Valor |
 |-------|-------|
-| Assessment Date | 2026-02-12 |
-| Processing Activity | Android SDK telemetry export to shared OTLP backends |
-| Controllers / Processors | SORA Nexus Ops (controller), partner operators (joint controllers), Hyperledger Iroha Contributors (processor) |
-| Reference Docs | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
+| Fecha de evaluación | 2026-02-12 |
+| Actividad de procesamiento | Exportación de telemetría del SDK de Android a backends OTLP compartidos |
+| Controladores / Procesadores | SORA Nexus Ops (controlador), operadores socios (controladores conjuntos), Hyperledger Iroha Contribuyentes (procesador) |
+| Documentos de referencia | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
 
-## 1. Processing Description
+## 1. Descripción del procesamiento
 
-- **Purpose:** Provide operational telemetry needed to support AND7 observability (latency, retries, attestation health) while mirroring the Rust node schema (§2 of `telemetry_redaction.md`).
-- **Systems:** Android SDK instrumentation -> OTLP exporter -> shared telemetry collector managed by SRE (see Support Playbook §8).
-- **Data subjects:** Operator staff using Android SDK-based apps; downstream Torii endpoints (authority strings are hashed per telemetry policy).
+- **Propósito:** Proporcionar la telemetría operativa necesaria para admitir la observabilidad de AND7 (latencia, reintentos, estado de la certificación) mientras se refleja el esquema del nodo Rust (§2 de `telemetry_redaction.md`).
+- **Sistemas:** Instrumentación SDK de Android -> Exportador OTLP -> Recolector de telemetría compartido administrado por SRE (consulte el Manual de soporte §8).
+- **Asuntos interesados:** Personal del operador que utiliza aplicaciones basadas en SDK de Android; puntos finales Torii descendentes (las cadenas de autoridad tienen un hash según la política de telemetría).
 
-## 2. Data Inventory & Mitigations
+## 2. Inventario de datos y mitigaciones
 
-| Channel | Fields | PII Risk | Mitigation | Retention |
+| Canal | Campos | Riesgo de PII | Mitigación | Retención |
 |---------|--------|----------|------------|-----------|
-| Traces (`android.torii.http.request`, `android.torii.http.retry`) | Route, status, latency | Low (no PII) | Authority hashed with Blake2b + rotating salt; no payload bodies exported. | 7–30 days (per telemetry doc). |
-| Events (`android.keystore.attestation.result`) | Alias label, security level, attestation digest | Medium (operational data) | Alias hashed (`alias_label`), `actor_role_masked` recorded for overrides with Norito audit tokens. | 90 days for success, 365 days for overrides/failures. |
-| Metrics (`android.pending_queue.depth`, `android.telemetry.export.status`) | Queue counts, exporter status | Low | Aggregated counts only. | 90 days. |
-| Device profile gauges (`android.telemetry.device_profile`) | SDK major, hardware tier | Medium | Bucketing (emulator/consumer/enterprise), no OEM or serial numbers. | 30 days. |
-| Network context events (`android.telemetry.network_context`) | Network type, roaming flag | Medium | Carrier name dropped entirely; supports compliance requirement to avoid subscriber data. | 7 days. |
+| Rastros (`android.torii.http.request`, `android.torii.http.retry`) | Ruta, estado, latencia | Baja (sin PII) | Autoridad procesada con Blake2b + sal rotativa; no se exportan cuerpos de carga útil. | 7 a 30 días (por documento de telemetría). |
+| Eventos (`android.keystore.attestation.result`) | Etiqueta de alias, nivel de seguridad, resumen de atestación | Medio (datos operativos) | Alias ​​hash (`alias_label`), `actor_role_masked` registrado para anulaciones con tokens de auditoría Norito. | 90 días para el éxito, 365 días para anulaciones/fallos. |
+| Métricas (`android.pending_queue.depth`, `android.telemetry.export.status`) | Recuento de colas, estado del exportador | Bajo | Sólo recuentos agregados. | 90 días. |
+| Medidores de perfil del dispositivo (`android.telemetry.device_profile`) | SDK principal, nivel de hardware | Medio | Bucketing (emulador/consumidor/empresa), sin OEM ni números de serie. | 30 días. |
+| Eventos de contexto de red (`android.telemetry.network_context`) | Tipo de red, bandera de itinerancia | Medio | El nombre del operador desapareció por completo; admite el requisito de cumplimiento para evitar los datos del suscriptor. | 7 días. |
 
-## 3. Lawful Basis & Rights
+## 3. Bases legales y derechos
 
-- **Lawful basis:** Legitimate interest (Art. 6(1)(f)) — ensuring reliable operation of regulated ledger clients.
-- **Necessity test:** Metrics limited to operational health (no user content); hashed authority ensures parity with Rust nodes through reversible mapping available only to authorised support personnel (via override workflow).
-- **Balancing test:** Telemetry is scoped to operator-controlled devices, not end-user data. Overrides require signed Norito artefacts reviewed by Support + Compliance (Support Playbook §3 + §9).
-- **Data subject rights:** Operators contact Support Engineering (playbook §2) to request telemetry export/delete. Redaction overrides and logs (telemetry doc §Signal Inventory) enable fulfilment within 30 days.
+- **Base jurídica:** Interés legítimo (Art. 6(1)(f)): garantizar el funcionamiento confiable de los clientes de libros contables regulados.
+- **Prueba de necesidad:** Métricas limitadas al estado operativo (sin contenido de usuario); La autoridad hash garantiza la paridad con los nodos de Rust a través de un mapeo reversible disponible solo para el personal de soporte autorizado (mediante un flujo de trabajo de anulación).
+- **Prueba de equilibrio:** La telemetría se centra en dispositivos controlados por el operador, no en datos del usuario final. Las anulaciones requieren artefactos Norito firmados y revisados ​​por Soporte + Cumplimiento (Manual de soporte §3 + §9).
+- **Derechos del interesado:** Los operadores se comunican con Ingeniería de soporte (libro de estrategias §2) para solicitar la exportación/eliminación de telemetría. Los registros y anulaciones de redacción (documento de telemetría §Inventario de señales) permiten el cumplimiento en un plazo de 30 días.
 
-## 4. Risk Assessment
-
-| Risk | Likelihood | Impact | Residual Mitigation |
+## 4. Evaluación de riesgos| Riesgo | Probabilidad | Impacto | Mitigación residual |
 |------|------------|--------|---------------------|
-| Re-identification via hashed authorities | Low | Medium | Salt rotation recorded through `android.telemetry.redaction.salt_version`; salts stored in secure vault; overrides audited quarterly. |
-| Device fingerprinting via profile buckets | Low | Medium | Only tier + SDK major exported; Support Playbook prohibits escalation requests for OEM/serial data. |
-| Override misuse leaking PII | Very Low | High | Norito override requests logged, expire within 24h, require SRE approval (`docs/source/android_runbook.md` §3). |
-| Telemetry storage outside EU | Medium | Medium | Collectors deployed in EU + JP regions; retention policy enforced via OTLP backend configuration (documented in Support Playbook §8). |
+| Reidentificación a través de autoridades hash | Bajo | Medio | Rotación de sal registrada a través de `android.telemetry.redaction.salt_version`; sales almacenadas en bóveda segura; anulaciones auditadas trimestralmente. |
+| Toma de huellas digitales del dispositivo a través de grupos de perfiles | Bajo | Medio | Solo se exporta el nivel + SDK principal; Support Playbook prohíbe solicitudes de escalamiento de datos OEM/serie. |
+| Anular el mal uso y la filtración de PII | Muy bajo | Alto | Norito solicitudes de anulación registradas, caducan en 24 horas, requieren aprobación de SRE (`docs/source/android_runbook.md` §3). |
+| Almacenamiento de telemetría fuera de la UE | Medio | Medio | Recolectores desplegados en regiones UE + JP; política de retención aplicada a través de la configuración de backend de OTLP (documentada en el Manual de soporte §8). |
 
-Residual risk is deemed acceptable given the controls above and ongoing monitoring.
+El riesgo residual se considera aceptable dados los controles anteriores y el seguimiento continuo.
 
-## 5. Actions & Follow-ups
+## 5. Acciones y seguimientos
 
-1. **Quarterly review:** Validate telemetry schemas, salt rotations, and override logs; document in `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
-2. **Cross-SDK alignment:** Coordinate with Swift/JS maintainers to maintain consistent hashing/bucketing rules (tracked in roadmap AND7).
-3. **Partner comms:** Include DPIA summary in partner onboarding kits (Support Playbook §9) and link to this document from `status.md`.
+1. **Revisión trimestral:** Validar esquemas de telemetría, rotaciones de sal y anular registros; documento en `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
+2. **Alineación entre SDK:** Coordine con los mantenedores de Swift/JS para mantener reglas de hash/bucketing consistentes (seguidas en la hoja de ruta AND7).
+3. **Comunicaciones de socios:** Incluya un resumen de DPIA en los kits de incorporación de socios (Manual de estrategias de soporte §9) y un enlace a este documento desde `status.md`.

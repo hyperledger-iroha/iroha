@@ -4,50 +4,52 @@ direction: rtl
 source: docs/portal/docs/sorafs/runbooks-index.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: runbooks-index
-title: Индекс операторских ранбуков
-sidebar_label: Индекс ранбуков
-description: Каноническая точка входа для мигрированных операторских ранбуков SoraFS.
+ID: رن بوکس انڈیکس
+عنوان: آپریٹر رین بکس کا انڈیکس
+سائڈبار_لیبل: رن بک انڈیکس
+تفصیل: ہجرت شدہ آپریٹر رن بکس SoraFS کے لئے کیننیکل انٹری پوائنٹ۔
 ---
 
-> Отражает реестр владельцев, который находится в `docs/source/sorafs/runbooks/`.
-> Каждое новое руководство по операциям SoraFS должно быть связано здесь после публикации в
-> сборке портала.
+> مالک کی رجسٹری کی عکاسی کرتی ہے ، جو `docs/source/sorafs/runbooks/` میں واقع ہے۔
+> ہر نیا آپریشن دستی SoraFS میں اشاعت کے بعد یہاں منسلک ہونا چاہئے
+> پورٹل اسمبلی۔
 
-Используйте эту страницу, чтобы проверить, какие ранбуки завершили миграцию из устаревшего
-дерева документации в портал. Каждая запись содержит владельцев, канонический путь источника
-и копию в портале, чтобы ревьюеры могли сразу перейти к нужному руководству во время бета‑превью.
+اس صفحے کو یہ چیک کرنے کے لئے استعمال کریں کہ کون سی رن بکس نے اپنی میراثی ہجرت کو مکمل کیا ہے
+پورٹل میں دستاویزات کا درخت۔ ہر اندراج میں مالکان ، کیننیکل ماخذ کا راستہ ہوتا ہے
+اور پورٹل میں ایک کاپی تاکہ جائزہ لینے والے بیٹا پیش نظارہ کے دوران اپنی ضرورت کے رہنما میں سیدھے کود سکیں۔
 
-## Хост бета‑превью
+## میزبان بیٹا پیش نظارہ
 
-Волна DocOps уже повысила одобренный ревьюерами хост бета‑превью на `https://docs.iroha.tech/`.
-Когда направляете операторов или ревьюеров к мигрированному ранбуку, используйте это имя
-хоста, чтобы они работали со снимком портала, защищённым контрольной суммой. Процедуры
-публикации/отката находятся в
-[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
+دستاویزات کی لہر نے پہلے ہی جائزہ لینے والے سے منظور شدہ بیٹا پیش نظارہ میزبان کو `https://docs.iroha.tech/` میں فروغ دیا ہے۔
+آپریٹرز یا جائزہ نگاروں کو ہجرت شدہ رن بک کی ہدایت کرتے وقت ، اس نام کا استعمال کریں
+میزبان تاکہ وہ چیکسم کے ذریعہ محفوظ پورٹل کے اسنیپ شاٹ کے ساتھ کام کریں۔ طریقہ کار
+اشاعت/رول بیکس میں ہیں
+[`devportal/preview-host-exposure`] (../devportal/preview-host-exposure.md)۔
 
-| Ранбук | Владельцы | Копия в портале | Источник |
-|--------|-----------|-----------------|----------|
-| Запуск gateway и DNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| Плейбук операций SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Сверка ёмкости | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Операции реестра пинов | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Чеклист операций узла | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Ранбук споров и отзывов | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Плейбук staging‑манифестов | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Наблюдаемость якоря Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| رن بک | مالکان | پورٹل میں کاپی | ماخذ |
+| -------- | ------------ | ----------------- | ------------ |
+| گیٹ وے اور ڈی این ایس لانچنگ | نیٹ ورکنگ ٹی ایل ، او پی ایس آٹومیشن ، دستاویزات/ڈیورل | [`sorafs/gateway-dns-runbook`] (./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| آپریشنز پلے بوک SoraFS | دستاویزات/ڈیوریل | [`sorafs/operations-playbook`] (./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| صلاحیت کی توثیق | ٹریژری/سری | [`sorafs/capacity-reconciliation`] (./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| پن رجسٹری آپریشنز | ٹولنگ ڈبلیو جی | [`sorafs/pin-registry-ops`] (./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| نوڈ آپریشنز چیک لسٹ | اسٹوریج ٹیم ، SRE | [`sorafs/node-operations`] (./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| تنازعات اور جائزوں کی رن بک | گورننس کونسل | [`sorafs/dispute-revocation-runbook`] (./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| اسٹیجنگ منشور کی پلے بک | دستاویزات/ڈیوریل | [`sorafs/staging-manifest-playbook`] (./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| تائکائی اینکر مشاہدہ | میڈیا پلیٹ فارم WG / DA پروگرام / نیٹ ورکنگ TL | [`sorafs/taikai-anchor-runbook`] (./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Чеклист проверки
+## چیک لسٹ
 
-- [x] Сборка портала ссылается на этот индекс (элемент боковой панели).
-- [x] Каждый мигрированный ранбук указывает канонический путь источника, чтобы держать
-  ревьюеров согласованными во время ревизии документации.
-- [x] Пайплайн предварительного просмотра DocOps блокирует слияния, когда перечисленный
-  ранбук отсутствует в выводе портала.
+- [x] پورٹل اسمبلی اس انڈیکس (سائڈبار عنصر) کا حوالہ دیتا ہے۔
+- [x] ہر ہجرت شدہ رن بک رکھنے کے لئے کیننیکل سورس کا راستہ بتاتا ہے
+  جائزہ لینے والوں نے دستاویزات کے جائزے کے دوران اتفاق کیا۔
+- [x] درج ہونے پر dopops پیش نظارہ پائپ لائن بلاکس ضم ہوجاتے ہیں
+  رن بوک پورٹل آؤٹ پٹ سے غائب ہے۔
 
-Будущие миграции (например, новые хаос‑дрили или приложения по управлению) должны добавить
-строку в таблицу выше и обновить чеклист DocOps, встроенный в
-`docs/examples/docs_preview_request_template.md`.
+مستقبل میں ہجرت (مثال کے طور پر ، نئی افراتفری کی مشقیں یا انتظامی ایپلی کیشنز) کو شامل کرنا چاہئے
+مذکورہ جدول میں لائن کریں اور میں تعمیر کردہ دستاویزات چیک لسٹ کو اپ ڈیٹ کریں
+`docs/examples/docs_preview_request_template.md`۔

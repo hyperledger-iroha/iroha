@@ -7,25 +7,26 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2025-12-29T18:16:35.933651+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Client API Configuration Reference
+## Client API тохиргооны лавлагаа
 
-This document tracks the Torii client-facing configuration knobs that are
-surfaces through `iroha_config::parameters::user::Torii`. The section below
-focuses on the Norito-RPC transport controls introduced for NRPC-1; future
-client API settings should extend this file.
+Энэ баримт бичиг нь Torii үйлчлүүлэгч рүү чиглэсэн тохиргооны товчлууруудыг дагаж мөрддөг.
+гадаргуу `iroha_config::parameters::user::Torii` дамжуулан. Доорх хэсэг
+NRPC-1-д нэвтрүүлсэн Norito-RPC тээврийн удирдлагад анхаарлаа хандуулдаг; ирээдүй
+клиент API тохиргоо нь энэ файлыг өргөтгөх ёстой.
 
 ### `torii.transport.norito_rpc`
 
-| Key | Type | Default | Description |
+| Түлхүүр | Төрөл | Өгөгдмөл | Тодорхойлолт |
 |-----|------|---------|-------------|
-| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
-| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
-| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
-| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+| `enabled` | `bool` | `true` | Хоёртын Norito код тайлахыг идэвхжүүлдэг мастер шилжүүлэгч. `false` үед Torii нь `403 norito_rpc_disabled`-тай Norito-RPC хүсэлт бүрээс татгалздаг. |
+| `stage` | `string` | `"disabled"` | Дамжуулах шат: `disabled`, `canary`, эсвэл `ga`. Үе шатууд элсэлтийн шийдвэр болон `/rpc/capabilities` гаралтыг удирддаг. |
+| `require_mtls` | `bool` | `false` | Norito-RPC зөөвөрлөхөд mTLS-ийг хэрэгжүүлдэг: `true` үед Torii нь mTLS тэмдэглэгээний толгой агуулаагүй Norito-RPC хүсэлтээс татгалздаг (жишээ нь, I000030X). Дарцаг нь `/rpc/capabilities`-ээр гарч ирдэг тул SDK нь буруу тохируулагдсан орчинд анхааруулах боломжтой. |
+| `allowed_clients` | `array<string>` | `[]` | Канарын зөвшөөрөгдсөн жагсаалт. `stage = "canary"` үед зөвхөн энэ жагсаалтад байгаа `X-API-Token` гарчигтай хүсэлтийг хүлээн авна. |
 
-Example configuration:
+Жишээ тохиргоо:
 
 ```toml
 [torii.transport.norito_rpc]
@@ -35,16 +36,16 @@ stage = "canary"
 allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 ```
 
-Stage semantics:
+Тайзны семантик:
 
-- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
-  receive `403 norito_rpc_disabled`.
-- **canary** — Requests must include an `X-API-Token` header that matches one
-  of the `allowed_clients`. All other requests receive `403
+- **идэвхгүй** — Norito-RPC нь `enabled = true` байсан ч боломжгүй. Үйлчлүүлэгчид
+  `403 norito_rpc_disabled` хүлээн авах.
+- **канар** — Хүсэлтэд нэгтэй таарах `X-API-Token` толгой хэсгийг агуулсан байх ёстой.
+  `allowed_clients`. Бусад бүх хүсэлтүүд `403-ыг хүлээн авдаг
   norito_rpc_canary_denied`.
-- **ga** — Norito-RPC is available to every authenticated caller (subject to the
-  usual rate and pre-auth limits).
+- **ga** — Norito-RPC нь баталгаажсан дуудлага хийгч бүрт боломжтой (хэрэгтэй.
+  ердийн хувь хэмжээ ба баталгаажуулалтын өмнөх хязгаарлалт).
 
-Operators can update these values dynamically through `/v1/config`. Each change
-is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
-dashboards to show the live transport posture.
+Операторууд `/v1/config`-ээр дамжуулан эдгээр утгыг динамикаар шинэчлэх боломжтой. Өөрчлөлт бүр
+`/rpc/capabilities`-д нэн даруй тусгагдсан бөгөөд SDK болон ажиглагдах боломжтой
+шууд тээврийн байрлалыг харуулах хяналтын самбар.

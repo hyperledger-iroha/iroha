@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d04af2ad3ae5cc6a9254236f5627850aab7c6517308e9f3a09650cbc1490168
 source_last_modified: "2026-01-05T18:22:23.401292+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -15,34 +16,34 @@ translation_last_reviewed: 2026-02-07
 
 # Connect Session Preview Runbook (IOS7 / JS4)
 
-This runbook documents the end-to-end procedure for staging, validating, and
-tearing down Connect preview sessions as required by roadmap milestones **IOS7**
-and **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Follow these steps whenever
-you demo the Connect strawman (`docs/source/connect_architecture_strawman.md`),
-exercise the queue/telemetry hooks promised in the SDK roadmaps, or collect
-evidence for `status.md`.
+ეს წიგნაკი ადასტურებს ინსცენირების, ვალიდაციის და ბოლომდე მიყვანის პროცედურას
+დაკავშირების წინასწარი გადახედვის სესიების დანგრევა, როგორც ეს მოითხოვს საგზაო რუქის ეტაპებს **IOS7**
+და **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). მიჰყევით ამ ნაბიჯებს ნებისმიერ დროს
+თქვენ დემო Connect strawman (`docs/source/connect_architecture_strawman.md`),
+განახორციელეთ SDK-ის საგზაო რუქებში დაპირებული რიგი/ტელემეტრიის კაკვები, ან შეაგროვეთ
+მტკიცებულება `status.md`-ისთვის.
 
-## 1. Preflight Checklist
+## 1. წინასწარი ფრენის ჩამონათვალი
 
-| Item | Details | References |
+| ნივთი | დეტალები | ლიტერატურა |
 |------|---------|------------|
-| Torii endpoint + Connect policy | Confirm the Torii base URL, `chain_id`, and Connect policy (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Capture the JSON snapshot in the runbook ticket. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
-| Fixture + bridge versions | Note the Norito fixture hash and bridge build you will use (Swift requires `NoritoBridge.xcframework`, JS requires `@iroha/iroha-js` ≥ the version that shipped `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
-| Telemetry dashboards | Ensure the dashboards that chart `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event`, etc., are reachable (Grafana `Android/Swift Connect` board + exported Prometheus snapshots). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
-| Evidence folders | Pick a destination such as `docs/source/status/swift_weekly_digest.md` (weekly digest) and `docs/source/sdk/swift/connect_risk_tracker.md` (risk tracker). Store logs, metrics screenshots, and acknowledgements under `docs/source/sdk/swift/readiness/archive/<date>/connect/`. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
+| Torii ბოლო წერტილი + დაკავშირების პოლიტიკა | დაადასტურეთ Torii საბაზისო URL, `chain_id` და დაკავშირების პოლიტიკა (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). გადაიღეთ JSON სნეპშოტი runbook ბილეთში. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
+| არმატურა + ხიდის ვერსიები | გაითვალისწინეთ Norito მოწყობილობების ჰეში და ხიდის კონსტრუქცია, რომელსაც გამოიყენებთ (Swift მოითხოვს `NoritoBridge.xcframework`, JS მოითხოვს `@iroha/iroha-js` ≥ ვერსიას, რომლითაც გაიგზავნება `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
+| ტელემეტრიის დაფები | დარწმუნდით, რომ დაფები, რომლებზეც დიაგრამა `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event` და ა.შ. ხელმისაწვდომია (Grafana Grafana Norito კადრები). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
+| მტკიცებულებათა საქაღალდეები | აირჩიეთ დანიშნულების ადგილი, როგორიცაა `docs/source/status/swift_weekly_digest.md` (კვირის შეჯამება) და `docs/source/sdk/swift/connect_risk_tracker.md` (რისკების ტრეკერი). შეინახეთ ჟურნალები, მეტრიკის ეკრანის ანაბეჭდები და დადასტურებები `docs/source/sdk/swift/readiness/archive/<date>/connect/`-ში. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
 
-## 2. Bootstrap the Preview Session
+## 2. ჩატვირთეთ წინასწარი გადახედვის სესია
 
-1. **Validate policy + quotas.** Call:
+1. **პოლიტიკის დამოწმება + კვოტები.** დარეკეთ:
    ```js
    const status = await torii.getConnectStatus();
    console.log(status.policy.queue_max, status.policy.offline_timeout_ms);
    ```
-   Fail the run if `queue_max` or TTL differs from the config you planned to
-   test.
-2. **Generate deterministic SID/URIs.** The `@iroha/iroha-js`
-   `bootstrapConnectPreviewSession` helper ties SID/URI generation to Torii
-   session registration; use it even when Swift will drive the WebSocket layer.
+   გაშვება ვერ მოხერხდება, თუ `queue_max` ან TTL განსხვავდება კონფიგურაციისგან, რომელიც დაგეგმეთ
+   ტესტი.
+2. **შექმენით დეტერმინისტული SID/URI.** `@iroha/iroha-js`
+   `bootstrapConnectPreviewSession` დამხმარე აკავშირებს SID/URI თაობას Torii-თან
+   სესიის რეგისტრაცია; გამოიყენეთ ის მაშინაც კი, როცა Swift ამოძრავებს WebSocket ფენას.
    ```js
    import {
      ToriiClient,
@@ -58,16 +59,14 @@ evidence for `status.md`.
    });
    console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
-   - Set `register: false` to dry-run QR/deep-link scenarios.
-   - Persist the returned `sidBase64Url`, deeplink URLs, and `tokens` blob in the
-     evidence folder; the governance review expects these artefacts.
-3. **Distribute secrets.** Share the deeplink URI with the wallet operator
-   (swift dApp sample, Android wallet, or QA harness). Never paste raw tokens
-   into chat; use the encrypted vault documented in the enablement packet.
+   - დააყენეთ `register: false` მშრალი გაშვების QR/ღრმა ბმულის სცენარებზე.
+   - განაგრძეთ დაბრუნებული `sidBase64Url`, ღრმა ბმული URL და `tokens` ბლოგები
+     მტკიცებულების საქაღალდე; მმართველობის მიმოხილვა მოელის ამ არტეფაქტებს.
+3. **გაავრცელეთ საიდუმლოებები.** გაუზიარეთ deeplink URI საფულის ოპერატორს
+   (swift dApp ნიმუში, Android საფულე ან QA აღკაზმულობა). არასოდეს ჩასვათ ნედლეული ჟეტონები
+   ჩატში; გამოიყენეთ დაშიფრული სარდაფი, რომელიც დოკუმენტირებულია ჩართვის პაკეტში.
 
-## 3. Drive the Session
-
-1. **Open the WebSocket.** Swift clients typically use:
+## 3. მართეთ სესია1. **გახსენით WebSocket.** Swift კლიენტები ჩვეულებრივ იყენებენ:
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
@@ -79,77 +78,75 @@ evidence for `status.md`.
    })
    try client.open()
    ```
-   Reference `docs/connect_swift_integration.md` for additional setup (bridge
-   imports, concurrency adapters).
-2. **Approve + sign flows.** DApps call `ConnectSession.requestSignature(...)`,
-   while wallets respond via `approveSession` / `reject`. Each approval must log
-   the hashed alias + permissions to match the Connect governance charter.
-3. **Exercise queue + resume paths.** Toggle network connectivity or suspend the
-   wallet to ensure the bounded queue and replay hooks log entries. JS/Android
-   SDKs emit `ConnectQueueError.overflow(limit)` /
-   `.expired(ttlMs)` when they drop frames; Swift should observe the same once
-   IOS7 queue scaffolding lands (`docs/source/connect_architecture_strawman.md`).
-   After you record at least one reconnect, run
+   მითითება `docs/connect_swift_integration.md` დამატებითი დაყენებისთვის (ხიდი
+   იმპორტი, კონკურენტული გადამყვანები).
+2. **დამტკიცება + ნიშნის ნაკადები.** DApps რეკავს `ConnectSession.requestSignature(...)`,
+   ხოლო საფულეები პასუხობენ `approveSession` / `reject` მეშვეობით. ყოველი დამტკიცება უნდა იყოს შესული
+   ჰეშირებული მეტსახელი + Connect-ის მმართველობის წესდების შესატყვისი ნებართვები.
+3. **სავარჯიშოების რიგი + განახლების ბილიკები.** ქსელის კავშირის გადართვა ან შეჩერება
+   საფულე, რათა უზრუნველყოს შემოსაზღვრული რიგი და ხელახლა დაკვრა კაკვების ჟურნალის ჩანაწერები. JS/Android
+   SDK-ები ასხივებენ `ConnectQueueError.overflow(limit)` /
+   `.expired(ttlMs)` კადრების ჩამოყრისას; სვიფტმა იგივე უნდა დააკვირდეს ერთხელ
+   IOS7 რიგის ხარაჩოების მიწები (`docs/source/connect_architecture_strawman.md`).
+   მას შემდეგ, რაც ჩაწერთ მინიმუმ ერთ ხელახლა დაკავშირებას, გაუშვით
    ```bash
    iroha connect queue inspect --sid "$SID" --root ~/.iroha/connect --metrics
    ```
-   (or pass the export directory returned by `ConnectSessionDiagnostics`) and
-   attach the rendered table/JSON to the runbook ticket. The CLI reads the same
-   `state.json` / `metrics.ndjson` pair that `ConnectQueueStateTracker` produces,
-   so governance reviewers can trace drill evidence without bespoke tooling.
+   (ან გაიარეთ `ConnectSessionDiagnostics`-ის მიერ დაბრუნებული ექსპორტის დირექტორია) და
+   მიამაგრეთ გამოსახული ცხრილი/JSON runbook ბილეთს. CLI იგივეს კითხულობს
+   `state.json` / `metrics.ndjson` წყვილი, რომელსაც `ConnectQueueStateTracker` აწარმოებს,
+   ასე რომ, მმართველობის მიმომხილველებს შეუძლიათ მოძებნონ სავარჯიშო მტკიცებულება შეკვეთილი ინსტრუმენტების გარეშე.
 
-## 4. Telemetry & Observability
+## 4. ტელემეტრია და დაკვირვება
 
-- **Metrics to capture:**
-  - `connect.queue_depth{direction}` gauge (should stay below policy cap).
-  - `connect.queue_dropped_total{reason="overflow|ttl"}` counter (non-zero only
-    during fault-injection).
-  - `connect.resume_latency_ms` histogram (record the p95 after forcing a
-    reconnect).
+- ** მეტრიკა გადასაღებად:**
+  - `connect.queue_depth{direction}` ლიანდაგი (უნდა დარჩეს პოლიტიკის ზღვარზე ქვემოთ).
+  - `connect.queue_dropped_total{reason="overflow|ttl"}` მრიცხველი (მხოლოდ ნულოვანი
+    შეცდომით ინექციის დროს).
+  - `connect.resume_latency_ms` ჰისტოგრამა (ჩაწერეთ p95 იძულებით
+    ხელახლა დაკავშირება).
   - `connect.replay_success_total` / `connect.replay_error_total`.
-  - Swift-specific `swift.connect.session_event` and
-    `swift.connect.frame_latency` exports (`docs/source/sdk/swift/telemetry_redaction.md`).
-- **Dashboards:** Update the Connect board bookmarks with annotation markers.
-  Attach screenshots (or JSON exports) to the evidence folder alongside the raw
-  OTLP/Prometheus snapshots pulled via the telemetry exporter CLI.
-- **Alerting:** If any Sev 1/2 thresholds trigger (per `docs/source/android_support_playbook.md` §5),
-  page the SDK Program Lead and document the PagerDuty incident ID in the runbook
-  ticket before continuing.
+  - Swift-ის სპეციფიკური `swift.connect.session_event` და
+    `swift.connect.frame_latency` ექსპორტი (`docs/source/sdk/swift/telemetry_redaction.md`).
+- **Dashboards:** განაახლეთ Connect board სანიშნეები ანოტაციის მარკერებით.
+  მიამაგრეთ ეკრანის ანაბეჭდები (ან JSON ექსპორტი) მტკიცებულების საქაღალდეში ნედლეულის გვერდით
+  OTLP/Prometheus სნეპშოტები ამოღებული ტელემეტრიის ექსპორტიორის CLI-ით.
+- **გაფრთხილება:** თუ რაიმე Sev1/2 ზღურბლები ამოქმედდება (`docs/source/android_support_playbook.md` §5-ზე),
+  გვერდი SDK პროგრამის წამყვანი და დაასაბუთეთ PagerDuty ინციდენტის ID წიგნში
+  ბილეთი გაგრძელებამდე.
 
-## 5. Cleanup & Rollback
+## 5. გასუფთავება და დაბრუნება
 
-1. **Delete staged sessions.** Always delete preview sessions so queue depth
-   alarms remain meaningful:
+1. **დადგმული სესიების წაშლა.** ყოველთვის წაშალეთ სესიების გადახედვისას რიგის სიღრმე
+   სიგნალიზაცია რჩება მნიშვნელოვანი:
    ```js
    await client.deleteConnectSession(preview.sidBase64Url);
    ```
-   For Swift-only test runs, call the same endpoint through the Rust/CLI helper.
-2. **Purge journals.** Remove any persisted queue journals
-   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB stores, etc.) so the
-   next run starts clean. Record the file hash before deletion if you need to
-   debug a replay issue.
-3. **File incident notes.** Summarise the run in:
-   - `docs/source/status/swift_weekly_digest.md` (deltas block),
-   - `docs/source/sdk/swift/connect_risk_tracker.md` (clear or downgrade CR-2
-     once telemetry is in place),
-   - the JS SDK changelog or recipe if new behaviour was validated.
-4. **Escalate failures:**
-   - Queue overflow without injected faults ⇒ file a bug against the SDK whose
-     policy diverged from Torii.
-   - Resume errors ⇒ attach `connect.queue_depth` + `connect.resume_latency_ms`
-     snapshots to the incident report.
-   - Governance mismatches (tokens reused, TTL exceeded) ⇒ raise with the SDK
-     Program Lead and annotate `roadmap.md` during the next revision.
+   მხოლოდ Swift-ის სატესტო გაშვებისთვის, გამოიძახეთ იგივე საბოლოო წერტილი Rust/CLI დამხმარე საშუალებით.
+2. ** ჟურნალების გასუფთავება. ** წაშალეთ მუდმივი რიგის ჟურნალები
+   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB მაღაზიები და ა.შ.) ასე რომ
+   შემდეგი გაშვება იწყება სუფთად. საჭიროების შემთხვევაში ჩაწერეთ ფაილის ჰეში წაშლამდე
+   გამეორების პრობლემის გამართვა.
+3. **ჩაწერეთ ინციდენტის შენიშვნები.** შეაჯამეთ გაშვება შემდეგში:
+   - `docs/source/status/swift_weekly_digest.md` (დელტას ბლოკი),
+   - `docs/source/sdk/swift/connect_risk_tracker.md` (გასუფთავება ან შემცირება CR-2
+     ტელემეტრიის დაყენების შემდეგ),
+   - JS SDK ცვლილებების ჟურნალი ან რეცეპტი, თუ ახალი ქცევა დადასტურდა.
+4. ** წარუმატებლობის ესკალაცია:**
+   - რიგის გადადინება შეყვანილი ხარვეზების გარეშე ⇒ შეიტანეთ შეცდომა SDK-ის წინააღმდეგ, რომლის
+     პოლიტიკა განსხვავდებოდა Torii-დან.
+   - განაახლეთ შეცდომები ⇒ მიამაგრეთ `connect.queue_depth` + `connect.resume_latency_ms`
+     ინციდენტის მოხსენების კადრები.
+   - მმართველობის შეუსაბამობები (ჟეტონები ხელახლა გამოიყენება, TTL გადაჭარბებულია) ⇒ გაზრდა SDK-ით
+     პროგრამა წარმართავს და ანოტირებს `roadmap.md` მომდევნო გადასინჯვისას.
 
-## 6. Evidence Checklist
-
-| Artefact | Location |
+## 6. მტკიცებულებათა ჩამონათვალი| არტეფაქტი | მდებარეობა |
 |----------|----------|
 | SID/deeplink/tokens JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
-| Dashboard exports (`connect.queue_depth`, etc.) | `.../metrics/` subfolder |
-| PagerDuty / incident IDs | `.../notes.md` |
-| Cleanup confirmation (Torii delete, journal wipe) | `.../cleanup.log` |
+| დაფის ექსპორტი (`connect.queue_depth` და ა.შ.) | `.../metrics/` ქვესაქაღალდე |
+| PagerDuty / ინციდენტის ID | `.../notes.md` |
+| გასუფთავების დადასტურება (Torii წაშლა, ჟურნალის წაშლა) | `.../cleanup.log` |
 
-Completing this checklist satisfies the “docs/runbooks updated” exit criterion
-for IOS7/JS4 and gives governance reviewers a deterministic trail for every
-Connect preview session.
+ამ საკონტროლო სიის შევსება აკმაყოფილებს „docs/runbooks განახლებულია“ გასასვლელის კრიტერიუმს
+IOS7/JS4-ისთვის და მმართველობის მიმომხილველებს აძლევს განმსაზღვრელ კვალს ყველასთვის
+გადახედვის სესიის დაკავშირება.

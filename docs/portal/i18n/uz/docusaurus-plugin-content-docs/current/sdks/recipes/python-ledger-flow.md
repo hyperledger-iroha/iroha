@@ -7,21 +7,23 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Python ledger flow recipe
 description: Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownloadni '@site/src/components/SampleDownload'dan import qilish;
 
-This Python snippet mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-and the [Rust recipe](./rust-ledger-flow.md). It uses the default Docker
-compose network plus the demo credentials bundled in `defaults/client.toml`.
+Ushbu Python parchasi [CLI ledger walkthrough](../../norito/ledger-walkthrough.md) ni aks ettiradi
+va [Rust retsepti](./rust-ledger-flow.md). U standart Docker dan foydalanadi
+tarmoqni va `defaults/client.toml` da toʻplangan demo hisob maʼlumotlarini tuzing.
 
-<SampleDownload
+<Namunani yuklab olish
   href="/sdk-recipes/python/ledger_flow.py"
-  filename="ledger_flow.py"
-  description="Download the script showcased in this recipe to run it without copying code by hand."
+  fayl nomi = "ledger_flow.py"
+  description="Ushbu retseptda ko'rsatilgan skriptni yuklab oling va uni kodni qo'lda nusxalamasdan ishga tushiring."
 />
 
-## Prerequisites
+## Old shartlar
 
 ```bash
 pip install iroha-python
@@ -30,7 +32,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## Misol skript
 
 ```python title="ledger_flow.py"
 import os
@@ -100,12 +102,12 @@ for asset in result.items:
         print("Receiver holds", asset.value, "units of", asset.id.definition)
 ```
 
-Run with `python ledger_flow.py`. The output should report the transaction hash
-(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
-the register instruction is rejected while the mint/transfer continue to succeed.
+`python ledger_flow.py` bilan ishga tushiring. Chiqish tranzaksiya xeshini bildirishi kerak
+(kvitansiyaning foydali yukidan) keyin yangi qabul qiluvchi balansi. Agar aktiv ta'rifi allaqachon mavjud bo'lsa,
+yalpiz/o'tkazish muvaffaqiyatli davom etayotganda ro'yxatga olish yo'riqnomasi rad etiladi.
 
-## Verify parity
+## Paritetni tekshiring
 
-Use the same CLI commands from the Norito walkthrough to cross-check hashes and
-balances. When you run the JavaScript and Rust recipes, all three SDKs should
-agree on transaction hashes and Norito payloads for the shared flow.
+Xeshlarni oʻzaro tekshirish va Norito koʻrsatmalaridagi bir xil CLI buyruqlaridan foydalaning.
+balanslar. JavaScript va Rust retseptlarini ishga tushirganingizda, uchta SDK ham bo'lishi kerak
+umumiy oqim uchun tranzaksiya xeshlari va Norito foydali yuklarni kelishib oling.

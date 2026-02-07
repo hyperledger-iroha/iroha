@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 5fa5e39b0e758b38e27855fcfcae9a6e31817df4fdb9d5394b4b63d2f5164516
 source_last_modified: "2026-01-22T15:38:30.658233+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Payload v1 rollout approval (SDK Council, 2026-04-28).
+//! Aprovação da implementação do Payload v1 (Conselho SDK, 28/04/2026).
 //!
-//! Captures the SDK Council decision memo required by `roadmap.md:M1` so the
-//! encrypted payload v1 rollout has an auditable record (deliverable M1.4).
+//! Captura o memorando de decisão do SDK Council exigido por `roadmap.md:M1` para que o
+//! a implementação de carga útil criptografada v1 tem um registro auditável (entregável M1.4).
 
-# Payload v1 Rollout Decision (2026-04-28)
+# Decisão de implementação da carga útil v1 (28/04/2026)
 
-- **Chair:** SDK Council Lead (M. Takemiya)
-- **Voting members:** Swift Lead, CLI Maintainer, Confidential Assets TL, DevRel WG
-- **Observers:** Program Mgmt, Telemetry Ops
+- **Presidente:** Líder do Conselho SDK (M. Takemiya)
+- **Membros votantes:** Swift Lead, CLI Mantenedor, Confidential Assets TL, DevRel WG
+- **Observadores:** Gerenciamento de Programa, Operações de Telemetria
 
-## Inputs Reviewed
+## Entradas revisadas
 
-1. **Swift bindings & submitters** — `ShieldRequest`/`UnshieldRequest`, async submitters, and Tx builder helpers landed with parity tests and docs.【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389】【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006】
-2. **CLI ergonomics** — `iroha app zk envelope` helper covers encode/inspect workflows plus failure diagnostics, aligned with the roadmap ergonomics requirement.【crates/iroha_cli/src/zk.rs:1256】
-3. **Deterministic fixtures & parity suites** — shared fixture + Rust/Swift validation to keep Norito bytes/error surfaces aligned.【fixtures/confidential/encrypted_payload_v1.json:1】【crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1】【IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73】
+1. **Ligações rápidas e remetentes** — `ShieldRequest`/`UnshieldRequest`, remetentes assíncronos e ajudantes do construtor Tx chegaram com testes de paridade e docs.【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389】【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006】
+2. **Ergonomia CLI** — O auxiliar `iroha app zk envelope` cobre fluxos de trabalho de codificação/inspeção, além de diagnóstico de falhas, alinhado com os requisitos de ergonomia do roteiro.【crates/iroha_cli/src/zk.rs:1256】
+3. **Aparelhos determinísticos e conjuntos de paridade** - aparelho compartilhado + validação Rust/Swift para manter bytes/superfícies de erro Norito alinhado.【fixtures/confidential/encrypted_payload_v1.json:1】【crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1】【IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73】
 
-## Decision
+## Decisão
 
-- **Approve payload v1 rollout** for SDKs and CLI, enabling Swift wallets to originate confidential envelopes without bespoke plumbing.
-- **Conditions:** 
-  - Keep parity fixtures under CI drift alerts (tied to `scripts/check_norito_bindings_sync.py`).
-  - Document the operational playbook in `docs/source/confidential_assets.md` (already updated via the Swift SDK PR).
-  - Record calibration + telemetry evidence before flipping any production flags (tracked under M2).
+- **Aprovar a implementação do payload v1** para SDKs e CLI, permitindo que as carteiras Swift originem envelopes confidenciais sem nenhum encanamento personalizado.
+- **Condições:** 
+  - Mantenha os equipamentos de paridade sob alertas de desvio de CI (vinculados a `scripts/check_norito_bindings_sync.py`).
+  - Documente o playbook operacional em `docs/source/confidential_assets.md` (já atualizado via Swift SDK PR).
+  - Registre a calibração + evidências de telemetria antes de lançar qualquer sinalizador de produção (rastreado em M2).
 
-## Action Items
+## Itens de ação
 
-| Owner | Item | Due |
+| Proprietário | Artigo | Vencimento |
 |-------|------|-----|
-| Swift Lead | Announce GA availability + README snippets | 2026-05-01 |
-| CLI Maintainer | Add `iroha app zk envelope --from-fixture` helper (optional) | Backlog (not blocking) |
-| DevRel WG | Update wallet quickstarts with payload v1 instructions | 2026-05-05 |
+| Liderança rápida | Anuncie a disponibilidade do GA + trechos README | 01/05/2026 |
+| Mantenedor CLI | Adicionar auxiliar `iroha app zk envelope --from-fixture` (opcional) | Backlog (sem bloqueio) |
+| GT DevRel | Atualizar os guias de início rápido da carteira com instruções de carga útil v1 | 05/05/2026 |
 
-> **Note:** This memo supersedes the temporary “pending council approval” call-out in `roadmap.md:2426` and satisfies tracker item M1.4. Update `status.md` whenever follow-up action items close.
+> **Nota:** Este memorando substitui a chamada temporária “pendente de aprovação do conselho” em `roadmap.md:2426` e satisfaz o item M1.4 do rastreador. Atualize `status.md` sempre que os itens de ação de acompanhamento forem encerrados.

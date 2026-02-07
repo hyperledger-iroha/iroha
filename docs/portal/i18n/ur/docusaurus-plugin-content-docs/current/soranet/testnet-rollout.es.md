@@ -4,90 +4,86 @@ direction: rtl
 source: docs/portal/docs/soranet/testnet-rollout.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: testnet-rollout
-title: Despliegue de testnet de SoraNet (SNNet-10)
-sidebar_label: Despliegue de testnet (SNNet-10)
-description: Plan de activacion por fases, kit de onboarding y gates de telemetria para promociones de testnet de SoraNet.
+ID: ٹیسٹ نیٹ-رول آؤٹ
+عنوان: سورانیٹ ٹیس نیٹ تعیناتی (SNNET-10)
+سائڈبار_لیبل: ٹیسٹ نیٹ تعیناتی (SNNET-10)
+تفصیل: مرحلہ وار ایکٹیویشن پلان ، سورنیٹ ٹیس نیٹ پروموشنز کے لئے بورڈنگ کٹ اور ٹیلی میٹری گیٹس۔
 ---
 
-:::note Fuente canonica
-Esta pagina refleja el plan de rollout SNNet-10 en `docs/source/soranet/testnet_rollout_plan.md`. Mantengan ambas copias alineadas hasta que los docs heredados se retiren.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/soranet/testnet_rollout_plan.md` پر SNNET-10 رول آؤٹ پلان کی عکاسی کرتا ہے۔ جب تک میراثی دستاویزات ریٹائر نہ ہوں دونوں کاپیاں منسلک رکھیں۔
 :::
 
-SNNet-10 coordina la activacion escalonada del overlay de anonimato de SoraNet en toda la red. Usa este plan para traducir el bullet del roadmap en entregables concretos, runbooks y gates de telemetria para que cada operador entienda las expectativas antes de que SoraNet sea el transporte por defecto.
+SNNET-10 پورے نیٹ ورک میں سورانیٹ گمنامی کے اوورلے کی مرحلہ وار چالو کرنے کو مربوط کرتا ہے۔ اس منصوبے کا استعمال روڈ میپ گولی کو کنکریٹ کی فراہمی ، رن بکس اور ٹیلی میٹری گیٹس میں ترجمہ کرنے کے لئے کریں تاکہ ہر آپریٹر پہلے سے طے شدہ ٹرانسپورٹ ہونے سے پہلے توقعات کو سمجھ سکے۔
 
-## Fases de lanzamiento
+## لانچ مراحل
 
-| Fase | Cronograma (objetivo) | Alcance | Artefactos requeridos |
-|-------|-------------------|-------|--------------------|
-| **T0 - Testnet cerrado** | Q4 2026 | 20-50 relays en >=3 ASNs operados por contribuyentes core. | Kit de onboarding de testnet, smoke suite de guard pinning, baseline de latencia + metricas de PoW, log de brownout drill. |
-| **T1 - Beta publica** | Q1 2027 | >=100 relays, guard rotation habilitada, exit bonding enforced, SDK betas por defecto en SoraNet con `anon-guard-pq`. | Kit de onboarding actualizado, checklist de verificacion de operadores, SOP de publicacion de directory, paquete de dashboards de telemetria, reportes de rehearsal de incidentes. |
-| **T2 - Mainnet por defecto** | Q2 2027 (condicionado a completar SNNet-6/7/9) | La red de produccion por defecto en SoraNet; transportes obfs/MASQUE y enforcement de PQ ratchet habilitados. | Minutas de aprobacion de governance, procedimiento de rollback direct-only, alarmas de downgrade, reporte firmado de metricas de exito. |
+| مرحلہ | ٹائم لائن (گول) | دائرہ کار | مطلوبہ نمونے |
+| ------- | -------- | ------- | --------------------- |
+| ** T0 - ٹیسٹ نیٹ بند ** | Q4 2026 | بنیادی شراکت کاروں کے ذریعہ چلائے گئے> = 3 ASNs میں 20-50 ریلے۔ | ٹیس نیٹ آن بورڈنگ کٹ ، گارڈ پننگ سگریٹ سویٹ ، لیٹینسی بیس لائن + پی او پی میٹرکس ، براؤن آؤٹ ڈرل لاگ۔ |
+| ** T1 - عوامی بیٹا ** | Q1 2027 | > = 100 ریلے ، گارڈ گھماؤ فعال ، ایگزٹ بانڈنگ نافذ کیا گیا ، SDK Betas `anon-guard-pq` کے ساتھ سورانیٹ میں بطور ڈیفالٹ۔ | آن بورڈنگ کٹ ، آپریٹر کی توثیق چیک لسٹ ، ڈائریکٹری پبلیکیشن ایس او پی ، ٹیلی میٹری ڈیش بورڈ پیکیج ، واقعہ کی ریہرسل رپورٹس کو اپ ڈیٹ کیا گیا۔ |
+| ** T2 - مینٹ بذریعہ ڈیفالٹ ** | Q2 2027 (SNNET-6/7/9 مکمل کرنے پر مشروط) | سورانیٹ میں ڈیفالٹ پروڈکشن نیٹ ورک ؛ OBFs/مسک ٹرانسپورٹ اور PQ Ratchet انفورسمنٹ قابل۔ | گورننس کی منظوری کے منٹ ، براہ راست صرف رول بیک طریقہ کار ، الارموں کو گھٹایا گیا ، دستخط شدہ کامیابی میٹرکس کی رپورٹ۔ |
 
-No hay **ruta de salto**: cada fase debe entregar la telemetria y los artefactos de governance de la etapa anterior antes de la promocion.
+یہاں کوئی ** چھلانگ کا راستہ ** نہیں ہے: ہر مرحلے میں تشہیر سے پہلے پچھلے مرحلے سے ٹیلی میٹری اور گورننس نمونے دینا ضروری ہے۔
 
-## Kit de onboarding de testnet
+## ٹیسٹ نیٹ آن بورڈنگ کٹ
 
-Cada operador de relay recibe un paquete deterministico con los siguientes archivos:
+ہر ریلے آپریٹر مندرجہ ذیل فائلوں کے ساتھ ایک ڈٹرمینسٹک پیکٹ وصول کرتا ہے:
 
-| Artefacto | Descripcion |
-|----------|-------------|
-| `01-readme.md` | Resumen, puntos de contacto y cronograma. |
-| `02-checklist.md` | Checklist de pre-flight (hardware, reachability de red, verificacion de guard policy). |
-| `03-config-example.toml` | Configuracion minima de relay + orchestrator SoraNet alineada con bloques de compliance SNNet-9, incluyendo un bloque `guard_directory` que fija el hash del snapshot de guard mas reciente. |
-| `04-telemetry.md` | Instrucciones para cablear los dashboards de privacy metrics de SoraNet y los thresholds de alertas. |
-| `05-incident-playbook.md` | Procedimiento de respuesta a brownout/downgrade con matriz de escalamiento. |
-| `06-verification-report.md` | Plantilla que los operadores completan y devuelven una vez que pasan los smoke tests. |
+| نمونہ | تفصیل |
+| ---------- | --------------- |
+| `01-readme.md` | خلاصہ ، ٹچ پوائنٹ اور ٹائم لائن۔ |
+| `02-checklist.md` | پری فلائٹ چیک لسٹ (ہارڈ ویئر ، نیٹ ورک کی رسائ ، گارڈ پالیسی کی توثیق)۔ |
+| `03-config-example.toml` | کم سے کم سورانیٹ ریلے + آرکیسٹریٹر ترتیب SNNET-9 تعمیل بلاکس کے ساتھ منسلک ہے ، جس میں `guard_directory` بلاک بھی شامل ہے جو حالیہ گارڈ اسنیپ شاٹ کا ہیش طے کرتا ہے۔ |
+| `04-telemetry.md` | وائرنگ سورنیٹ پرائیویسی میٹرکس ڈیش بورڈز اور الرٹ دہلیز کے لئے ہدایات۔ |
+| `05-incident-playbook.md` | ایسکلیشن میٹرکس کے ساتھ براؤن آؤٹ/ڈاون گریڈ ردعمل کا طریقہ کار۔ |
+| `06-verification-report.md` | ٹیمپلیٹ جو آپریٹرز مکمل اور واپس آجاتے ہیں جب وہ دھواں کے ٹیسٹ پاس کرتے ہیں۔ |
 
-Una copia renderizada vive en `docs/examples/soranet_testnet_operator_kit/`. Cada promocion refresca el kit; los numeros de version siguen la fase (por ejemplo, `testnet-kit-vT0.1`).
+ایک مہی .ا کاپی `docs/examples/soranet_testnet_operator_kit/` پر رہتی ہے۔ ہر پروموشن کٹ کو تازہ کرتا ہے۔ ورژن نمبر مرحلے کی پیروی کرتے ہیں (مثال کے طور پر ، `testnet-kit-vT0.1`)۔پبلک بیٹا (ٹی 1) آپریٹرز کے لئے ، `docs/source/soranet/snnet10_beta_onboarding.md` میں جامع مختصر شرائط ، ٹیلی میٹری کی فراہمی اور شپنگ کے بہاؤ کا خلاصہ کیا گیا ہے ، جبکہ اس نے عین مطابق کٹ اور توثیق کے مددگاروں کی طرف اشارہ کیا ہے۔
 
-Para operadores de beta publica (T1), el brief conciso en `docs/source/soranet/snnet10_beta_onboarding.md` resume prerequisitos, entregables de telemetria y el flujo de envio, mientras apunta al kit deterministico y a los helpers de validacion.
+`cargo xtask soranet-testnet-feed` JSON فیڈ تیار کرتا ہے جس میں پروموشن ونڈو ، ریلے روسٹر ، میٹرکس رپورٹ ، ڈرل ثبوت اور منسلک ہیشوں کو اسٹیج گیٹ ٹیمپلیٹ کے ذریعہ حوالہ دیا گیا ہے۔ پہلے `cargo xtask soranet-testnet-drill-bundle` کے ساتھ ڈرل لاگز اور منسلکات پر دستخط کریں تاکہ فیڈ `drill_log.signed = true` رجسٹر ہوجائے۔
 
-`cargo xtask soranet-testnet-feed` genera el feed JSON que agrega la ventana de promocion, roster de relays, reporte de metricas, evidencia de drills y hashes de adjuntos referenciados por la plantilla de stage-gate. Firma los drill logs y adjuntos con `cargo xtask soranet-testnet-drill-bundle` primero para que el feed registre `drill_log.signed = true`.
+## کامیابی کی پیمائش
 
-## Metricas de exito
+مراحل کے مابین ترقی کو مندرجہ ذیل ٹیلی میٹری کے ساتھ فعال کیا جاتا ہے ، جو کم سے کم دو ہفتوں کے لئے جمع کیا جاتا ہے:
 
-La promocion entre fases se habilita con la siguiente telemetria, recolectada por un minimo de dos semanas:
+- `soranet_privacy_circuit_events_total`: 95 ٪ سرکٹس بغیر براؤن آؤٹ یا ڈاون گریڈ واقعات کے مکمل۔ باقی 5 ٪ پی کیو سپلائی کے ذریعہ محدود ہے۔
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`:  = 99 ٪ 3 s ہدف ونڈو کے اندر ؛ `soranet_privacy_throttles_total{scope="congestion"}` کے ذریعے رپورٹ کیا گیا۔
+- لیٹینسی (95 ویں فیصد) خطے کے لحاظ سے: <200 ایم ایس ایک بار جب سرکٹس مکمل طور پر مسلح ہوجاتے ہیں ، `soranet_privacy_rtt_millis{percentile="p95"}` کے ذریعے پکڑے جاتے ہیں۔
 
-- `soranet_privacy_circuit_events_total`: 95% de los circuits completan sin eventos de brownout o downgrade; el 5% restante se limita por el supply PQ.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: <1% de las sesiones de fetch por dia activan brownout fuera de drills programados.
-- `soranet_privacy_gar_reports_total`: variacion dentro de +/-10% del mix esperado de categorias GAR; los picos deben explicarse por updates de policy aprobados.
-- Tasa de exito de tickets PoW: >=99% dentro de la ventana objetivo de 3 s; reportado via `soranet_privacy_throttles_total{scope="congestion"}`.
-- Latencia (percentil 95) por region: <200 ms una vez que los circuits estan completamente armados, capturado via `soranet_privacy_rtt_millis{percentile="p95"}`.
+ڈیش بورڈ اور الرٹ ٹیمپلیٹس `dashboard_templates/` اور `alert_templates/` میں رہتے ہیں۔ اپنے ٹیلی میٹری کے ذخیرے میں ان کی عکاسی کریں اور انہیں CI لنٹ چیکوں میں شامل کریں۔ ترقی کی درخواست کرنے سے پہلے حکمرانی کے لئے رپورٹ تیار کرنے کے لئے `cargo xtask soranet-testnet-metrics` استعمال کریں۔
 
-Los templates de dashboards y alertas viven en `dashboard_templates/` y `alert_templates/`; reflejalos en tu repositorio de telemetria y agregalos a checks de lint de CI. Usa `cargo xtask soranet-testnet-metrics` para generar el reporte de cara a governance antes de pedir promocion.
+اسٹیج گیٹ گذارشات کو `docs/source/soranet/snnet10_stage_gate_template.md` پر عمل کرنا چاہئے ، جو کاپی کے لئے تیار مارک ڈاون فارم کو `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md` کے تحت جوڑتا ہے۔
 
-Las presentaciones de stage-gate deben seguir `docs/source/soranet/snnet10_stage_gate_template.md`, que enlaza el formulario Markdown listo para copiar bajo `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
+## توثیق چیک لسٹ
 
-## Checklist de verificacion
+آپریٹرز کو ہر مرحلے میں داخل ہونے سے پہلے درج ذیل کو منظور کرنا ہوگا:
 
-Los operadores deben aprobar lo siguiente antes de entrar en cada fase:
+- ✅ موجودہ داخلہ لفافے کے ساتھ دستخط شدہ ریلے اشتہار۔
+- ✅ سگریٹ نوشی گارڈ گردش ٹیسٹ (`tools/soranet-relay --check-rotation`) منظور شدہ۔
+- ✅ `guard_directory` نے حالیہ نمونے `GuardDirectorySnapshotV2` اور `expected_directory_hash_hex` کی طرف اشارہ کیا ہے کمیٹی ڈائجسٹ سے ملتی ہے (ریلے اسٹارٹ اپ نے توثیق شدہ ہیش کو ریکارڈ کیا ہے)۔
+- P PQ Ratchet میٹرکس (`sorafs_orchestrator_pq_ratio`) مطلوبہ مرحلے کے لئے ہدف کی حد سے اوپر رہتا ہے۔
+- Gar GAR تعمیل کنفیگ حالیہ ٹیگ سے مماثل ہے (SNNET-9 کیٹلاگ دیکھیں)۔
+- ✅ الارم کی تخروپن (جمع کرنے والوں کو غیر فعال کریں ، 5 منٹ میں الرٹ کا انتظار کریں)۔
+- ✅ POW/DOS ڈرل دستاویزی تخفیف اقدامات کے ساتھ پھانسی دی گئی۔
 
-- ✅ Relay advert firmado con el admission envelope actual.
-- ✅ Smoke test de guard rotation (`tools/soranet-relay --check-rotation`) aprobado.
-- ✅ `guard_directory` apunta al artefacto `GuardDirectorySnapshotV2` mas reciente y `expected_directory_hash_hex` coincide con el digest del comite (el arranque del relay registra el hash validado).
-- ✅ Las metricas de PQ ratchet (`sorafs_orchestrator_pq_ratio`) se mantienen por encima de los thresholds objetivo para la etapa solicitada.
-- ✅ El config de compliance GAR coincide con el tag mas reciente (ver el catalogo SNNet-9).
-- ✅ Simulacion de alarma de downgrade (deshabilitar collectors, esperar alerta en 5 min).
-- ✅ Drill PoW/DoS ejecutado con pasos de mitigacion documentados.
+پہلے سے بھرا ہوا ٹیمپلیٹ آن بورڈنگ کٹ میں شامل ہے۔ آپریٹرز پیداوار کی اسناد حاصل کرنے سے پہلے مکمل رپورٹ گورننس ہیلپ ڈیسک پر جمع کرواتے ہیں۔
 
-Una plantilla prellenada se incluye en el kit de onboarding. Los operadores envian el reporte completado a la mesa de ayuda de governance antes de recibir credenciales de produccion.
+## گورننس اور رپورٹنگ۔
+۔
+۔
 
-## Governance y reportes
+## سپورٹ اثاثے
 
-- **Control de cambios:** las promociones requieren aprobacion del Governance Council registrada en las minutas del consejo y adjunta a la pagina de estado.
-- **Resumen de estado:** publicar actualizaciones semanales que resuman conteo de relays, ratio PQ, incidentes de brownout y action items pendientes (se almacenan en `docs/source/status/soranet_testnet_digest.md` cuando inicie la cadencia).
-- **Rollbacks:** mantener un plan de rollback firmado que regrese la red a la fase anterior en 30 minutos, incluyendo invalidacion de DNS/guard cache y plantillas de comunicacion con clients.
+- `cargo xtask soranet-testnet-kit [--out <dir>]` `xtask/templates/soranet_testnet/` سے منزل کی ڈائرکٹری (بطور ڈیفالٹ `docs/examples/soranet_testnet_operator_kit/`) پر جہاز پر سوار کٹ کو تیار کرتا ہے۔
+- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` SNNET-10 کی کامیابی کی پیمائش کا اندازہ کرتا ہے اور گورننس کے جائزوں کے لئے موزوں ایک ساختی پاس/فیل رپورٹ جاری کرتا ہے۔ ایک مثال سنیپ شاٹ `docs/examples/soranet_testnet_metrics_sample.json` پر رہتا ہے۔
+- Grafana اور الرٹ مینجر ٹیمپلیٹس `dashboard_templates/soranet_testnet_overview.json` اور `alert_templates/soranet_testnet_rules.yml` پر رہتے ہیں۔ انہیں اپنے ٹیلی میٹری کے ذخیرے سے کاپی کریں یا سی آئی میں لنٹ چیکوں سے مربوط ہوں۔
+- ایس ڈی کے/پورٹل پیغامات کے لئے ڈاون گریڈ مواصلات کا ٹیمپلیٹ `docs/source/soranet/templates/downgrade_communication_template.md` میں رہتا ہے۔
+- ہفتہ وار اسٹیٹس ڈائجسٹس کو `docs/source/status/soranet_testnet_weekly_digest.md` کو بطور کیننیکل شکل استعمال کرنا چاہئے۔
 
-## Activos de soporte
-
-- `cargo xtask soranet-testnet-kit [--out <dir>]` materializa el kit de onboarding desde `xtask/templates/soranet_testnet/` hacia el directorio destino (por defecto `docs/examples/soranet_testnet_operator_kit/`).
-- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` evalua las metricas de exito SNNet-10 y emite un reporte estructurado pass/fail adecuado para revisiones de governance. Un snapshot de ejemplo vive en `docs/examples/soranet_testnet_metrics_sample.json`.
-- Las plantillas de Grafana y Alertmanager viven en `dashboard_templates/soranet_testnet_overview.json` y `alert_templates/soranet_testnet_rules.yml`; copialas en tu repositorio de telemetria o conectalas a checks de lint en CI.
-- La plantilla de comunicacion de downgrade para mensajes de SDK/portal reside en `docs/source/soranet/templates/downgrade_communication_template.md`.
-- Los digests semanales de estado deben usar `docs/source/status/soranet_testnet_weekly_digest.md` como forma canonica.
-
-Los pull requests deben actualizar esta pagina junto con cualquier cambio de artefactos o telemetria para que el plan de rollout se mantenga canonico.
+پل کی درخواستوں کو کسی بھی نمونے یا ٹیلی میٹری میں تبدیلیوں کے ساتھ اس صفحے کو اپ ڈیٹ کرنا ہوگا تاکہ رول آؤٹ پلان کیننیکل رہے۔

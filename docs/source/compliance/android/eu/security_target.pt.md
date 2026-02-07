@@ -6,85 +6,82 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 385d17a55579d2b0b365e21090ee081ded79e44655690b2abfbf54068c9b55b0
 source_last_modified: "2026-01-03T18:07:59.195967+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android SDK Security Target — ETSI EN 319 401 Alignment
+# Alvo de segurança do Android SDK – Alinhamento ETSI EN 319 401
 
-| Field | Value |
+| Campo | Valor |
 |-------|-------|
-| Document Version | 0.1 (2026-02-12) |
-| Scope | Android SDK (client libraries under `java/iroha_android/` plus supporting scripts/docs) |
-| Owner | Compliance & Legal (Sofia Martins) |
-| Reviewers | Android Program Lead, Release Engineering, SRE Governance |
+| Versão do documento | 0,1 (12/02/2026) |
+| Escopo | Android SDK (bibliotecas cliente sob `java/iroha_android/` mais scripts/documentos de suporte) |
+| Proprietário | Compliance & Jurídico (Sofia Martins) |
+| Revisores | Líder do programa Android, engenharia de lançamento, governança de SRE |
 
-## 1. TOE Description
+## 1. Descrição do dedo do pé
 
-The Target of Evaluation (TOE) comprises the Android SDK library code (`java/iroha_android/src/main/java`), its configuration surface (`ClientConfig` + Norito ingestion), and the operational tooling referenced in `roadmap.md` for milestones AND2/AND6/AND7.
+O Target of Evaluation (TOE) compreende o código da biblioteca Android SDK (`java/iroha_android/src/main/java`), sua superfície de configuração (`ClientConfig` + ingestão Norito) e as ferramentas operacionais referenciadas em `roadmap.md` para marcos AND2/AND6/AND7.
 
-Primary components:
+Componentes primários:
 
-1. **Configuration ingestion** — `ClientConfig` threads Torii endpoints, TLS policies, retries, and telemetry hooks from the generated `iroha_config` manifest and enforces immutability post-initialisation (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`).
-2. **Key management / StrongBox** — Hardware-backed signing is implemented via `SystemAndroidKeystoreBackend` and `AttestationVerifier`, with policies documented in `docs/source/sdk/android/key_management.md`. Attestation capture/validation uses `scripts/android_keystore_attestation.sh` and the CI helper `scripts/android_strongbox_attestation_ci.sh`.
-3. **Telemetry & redaction** — Instrumentation funnels through the shared schema described in `docs/source/sdk/android/telemetry_redaction.md`, exporting hashed authorities, bucketed device profiles, and override auditing hooks enforced by the Support Playbook.
-4. **Operations runbooks** — `docs/source/android_runbook.md` (operator response) and `docs/source/android_support_playbook.md` (SLA + escalation) harden the TOE’s operational footprint with deterministic overrides, chaos drills, and evidence capture.
-5. **Release provenance** — Gradle-based builds use the CycloneDX plugin plus reproducible build flags as captured in `docs/source/sdk/android/developer_experience_plan.md` and the AND6 compliance checklist. Release artefacts are signed and cross-referenced in `docs/source/release/provenance/android/`.
+1. **Ingestão de configuração** — `ClientConfig` encadeia endpoints Torii, políticas TLS, novas tentativas e ganchos de telemetria do manifesto `iroha_config` gerado e impõe imutabilidade pós-inicialização (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`).
+2. **Gerenciamento de chaves/StrongBox** — A assinatura apoiada por hardware é implementada via `SystemAndroidKeystoreBackend` e `AttestationVerifier`, com políticas documentadas em `docs/source/sdk/android/key_management.md`. A captura/validação de atestado usa `scripts/android_keystore_attestation.sh` e o auxiliar de CI `scripts/android_strongbox_attestation_ci.sh`.
+3. **Telemetria e redação** — A instrumentação canaliza por meio do esquema compartilhado descrito em `docs/source/sdk/android/telemetry_redaction.md`, exportando autoridades com hash, perfis de dispositivos agrupados e substituindo ganchos de auditoria aplicados pelo Manual de suporte.
+4. **Runbooks de operações** — `docs/source/android_runbook.md` (resposta do operador) e `docs/source/android_support_playbook.md` (SLA + escalonamento) fortalecem a pegada operacional do TOE com substituições determinísticas, exercícios de caos e captura de evidências.
+5. **Procedência da versão** — As compilações baseadas em Gradle usam o plug-in CycloneDX, além de sinalizadores de compilação reproduzíveis, conforme capturado em `docs/source/sdk/android/developer_experience_plan.md` e na lista de verificação de conformidade AND6. Os artefatos de liberação são assinados e referenciados em `docs/source/release/provenance/android/`.
 
-## 2. Assets & Assumptions
+## 2. Ativos e premissas
 
-| Asset | Description | Security Objective |
+| Ativo | Descrição | Objetivo de segurança |
 |-------|-------------|--------------------|
-| Configuration manifests | Norito-derived `ClientConfig` snapshots distributed with apps. | Authenticity, integrity, and confidentiality at rest. |
-| Signing keys | Keys generated or imported through StrongBox/TEE providers. | StrongBox preference, attestation logging, no key export. |
-| Telemetry streams | OTLP traces/logs/metrics exported from SDK instrumentation. | Pseudonymisation (hashed authorities), minimised PII, override auditing. |
-| Ledger interactions | Norito payloads, admission metadata, Torii network traffic. | Mutual authentication, replay-resistant requests, deterministic retries. |
+| Manifestos de configuração | Instantâneos `ClientConfig` derivados de Norito distribuídos com aplicativos. | Autenticidade, integridade e confidencialidade em repouso. |
+| Chaves de assinatura | Chaves geradas ou importadas através de provedores StrongBox/TEE. | Preferência do StrongBox, registro de atestado, sem exportação de chave. |
+| Fluxos de telemetria | Rastreios/logs/métricas OTLP exportados da instrumentação do SDK. | Pseudonimização (autoridades com hash), PII minimizadas, substituem a auditoria. |
+| Interações contábeis | Cargas úteis Norito, metadados de admissão, tráfego de rede Torii. | Autenticação mútua, solicitações resistentes à repetição, novas tentativas determinísticas. |
 
-Assumptions:
+Suposições:
 
-- Mobile OS provides standard sandboxing + SELinux; StrongBox devices implement Google’s keymaster interface.
-- Operators provision Torii endpoints with TLS certificates signed by council-trusted CAs.
-- Build infrastructure honours reproducible-build requirements before publishing to Maven.
+- O sistema operacional móvel fornece sandboxing padrão + SELinux; Os dispositivos StrongBox implementam a interface keymaster do Google.
+- As operadoras fornecem endpoints Torii com certificados TLS assinados por CAs confiáveis.
+- A infraestrutura de construção atende aos requisitos de construção reproduzível antes de publicar no Maven.
 
-## 3. Threats & Controls
-
-| Threat | Control | Evidence |
+## 3. Ameaças e controles| Ameaça | Controle | Evidência |
 |--------|---------|----------|
-| Tampered configuration manifests | `ClientConfig` validates manifests (hash + schema) before applying and logs denied reloads via `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
-| Compromise of signing keys | StrongBox-required policies, attestation harnesses, and device-matrix audits identify drift; overrides documented per incident. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
-| PII leakage in telemetry | Blake2b-hashed authorities, bucketed device profiles, carrier omission, override logging. | `docs/source/sdk/android/telemetry_redaction.md`; Support Playbook §8. |
-| Replay or downgrade on Torii RPC | `/v1/pipeline` request builder enforces TLS pinning, noise channel policy, and retry budgets with hashed authority context. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (planned). |
-| Unsigned or non-reproducible releases | CycloneDX SBOM + Sigstore attestations gated by AND6 checklist; release RFCs require evidence in `docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
-| Incomplete incident handling | Runbook + playbook define overrides, chaos drills, and escalation tree; telemetry overrides require signed Norito requests. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
+| Manifestos de configuração adulterados | `ClientConfig` valida manifestos (hash + esquema) antes de aplicar e registra recargas negadas por meio de `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
+| Compromisso de assinatura de chaves | Políticas exigidas pelo StrongBox, equipamentos de atestado e auditorias de matriz de dispositivos identificam desvios; substituições documentadas por incidente. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
+| Vazamento de PII em telemetria | Autoridades com hash Blake2b, perfis de dispositivos agrupados, omissão de operadora, registro de substituição. | `docs/source/sdk/android/telemetry_redaction.md`; Manual de suporte §8. |
+| Repetir ou fazer downgrade em Torii RPC | O construtor de solicitações `/v1/pipeline` impõe fixação de TLS, política de canal de ruído e orçamentos de repetição com contexto de autoridade com hash. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (planejado). |
+| Lançamentos não assinados ou não reproduzíveis | Atestados CycloneDX SBOM + Sigstore controlados pela lista de verificação AND6; liberar RFCs exigem evidências em `docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
+| Tratamento incompleto de incidentes | Runbook + playbook definem substituições, exercícios de caos e árvore de escalonamento; substituições de telemetria exigem solicitações Norito assinadas. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
-## 4. Evaluation Activities
+## 4. Atividades de avaliação
 
-1. **Design review** — Compliance + SRE verify that configuration, key management, telemetry, and release controls map to ETSI security objectives.
-2. **Implementation checks** — Automated tests:
-   - `scripts/android_strongbox_attestation_ci.sh` verifies captured bundles for every StrongBox device listed in the matrix.
-   - `scripts/check_android_samples.sh` and Managed Device CI ensure sample apps honour `ClientConfig`/telemetry contracts.
-3. **Operational validation** — Quarterly chaos drills per `docs/source/sdk/android/telemetry_chaos_checklist.md` (redaction + override exercises).
-4. **Evidence retention** — Artefacts stored under `docs/source/compliance/android/` (this folder) and referenced from `status.md`.
+1. **Revisão de projeto** — Conformidade + SRE verificam se a configuração, o gerenciamento de chaves, a telemetria e os controles de liberação correspondem aos objetivos de segurança do ETSI.
+2. **Verificações de implementação** — Testes automatizados:
+   - `scripts/android_strongbox_attestation_ci.sh` verifica pacotes capturados para cada dispositivo StrongBox listado na matriz.
+   - `scripts/check_android_samples.sh` e Managed Device CI garantem que os aplicativos de amostra cumpram os contratos `ClientConfig`/telemetria.
+3. **Validação operacional** — Exercícios de caos trimestrais de acordo com `docs/source/sdk/android/telemetry_chaos_checklist.md` (exercícios de redação + substituição).
+4. **Retenção de evidências** — Artefatos armazenados em `docs/source/compliance/android/` (esta pasta) e referenciados em `status.md`.
 
-## 5. ETSI EN 319 401 Mapping
-
-| EN 319 401 Clause | SDK Control |
+## 5. Mapeamento ETSI EN 319 401| Cláusula EN 319 401 | Controle SDK |
 |-------------------|-------------|
-| 7.1 Security policy | Documented in this security target + Support Playbook. |
-| 7.2 Organisational security | RACI + on-call ownership in Support Playbook §2. |
-| 7.3 Asset management | Configuration, key, and telemetry asset objectives defined in §2 above. |
-| 7.4 Access control | StrongBox policies + override workflow requiring signed Norito artefacts. |
-| 7.5 Cryptographic controls | Key generation, storage, and attestation requirements from AND2 (key management guide). |
-| 7.6 Operations security | Telemetry hashing, chaos rehearsals, incident response, and release evidence gating. |
-| 7.7 Communications security | `/v1/pipeline` TLS policy + hashed authorities (telemetry redaction doc). |
-| 7.8 System acquisition / development | Reproducible Gradle builds, SBOMs, and provenance gates in AND5/AND6 plans. |
-| 7.9 Supplier relationships | Buildkite + Sigstore attestations recorded alongside third-party dependency SBOMs. |
-| 7.10 Incident management | Runbook/Playbook escalation, override logging, telemetry fail counters. |
+| 7.1 Política de segurança | Documentado neste alvo de segurança + Manual de suporte. |
+| 7.2 Segurança organizacional | Propriedade de plantão RACI + no Support Playbook §2. |
+| 7.3 Gestão de ativos | Objetivos de configuração, chave e ativos de telemetria definidos no §2 acima. |
+| 7.4 Controle de acesso | Políticas do StrongBox + fluxo de trabalho de substituição que exige artefatos Norito assinados. |
+| 7.5 Controles criptográficos | Requisitos de geração, armazenamento e atestado de chaves do AND2 (guia de gerenciamento de chaves). |
+| 7.6 Segurança das operações | Hashing de telemetria, ensaios de caos, resposta a incidentes e liberação de evidências. |
+| 7.7 Segurança das comunicações | Política TLS `/v1/pipeline` + autoridades com hash (documento de redação de telemetria). |
+| 7.8 Aquisição/desenvolvimento de sistema | Construções Gradle reproduzíveis, SBOMs e portas de proveniência em planos AND5/AND6. |
+| 7.9 Relacionamento com fornecedores | Atestados Buildkite + Sigstore registrados junto com SBOMs de dependência de terceiros. |
+| 7.10 Gestão de incidentes | Escalonamento de Runbook/Playbook, registro de substituição, contadores de falhas de telemetria. |
 
-## 6. Maintenance
+## 6. Manutenção
 
-- Update this document whenever the SDK introduces new cryptographic algorithms, telemetry categories, or release automation changes.
-- Link signed copies in `docs/source/compliance/android/evidence_log.csv` with SHA-256 digests and reviewer sign-offs.
+- Atualize este documento sempre que o SDK introduzir novos algoritmos criptográficos, categorias de telemetria ou alterações na automação de lançamento.
+- Vincule cópias assinadas em `docs/source/compliance/android/evidence_log.csv` com resumos SHA-256 e assinaturas do revisor.

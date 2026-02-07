@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Storage Design
 sidebar_label: Node Storage Design
 description: Storage architecture, quotas, and lifecycle hooks for Torii nodes hosting SoraFS data.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Eslatma Kanonik manba
 :::
 
-## SoraFS Node Storage Design (Draft)
+## SoraFS tugunni saqlash dizayni (qoralama)
 
-This note refines how an Iroha (Torii) node can opt-in to the SoraFS data
-availability layer and dedicate a slice of local disk for storing and serving
-chunks. It complements the `sorafs_node_client_protocol.md` discovery spec and
-the SF-1b fixture work by outlining the storage-side architecture, resource
-controls, and configuration plumbing that must land in the node and gateway
-code paths. Practical operator drills live in the
-[Node Operations Runbook](./node-operations).
+Bu eslatma Iroha (Torii) tugunining SoraFS maʼlumotlariga qanday ulanishi mumkinligini aniqlaydi.
+mavjudlik qatlami va saqlash va xizmat ko'rsatish uchun mahalliy diskning bir bo'lagini ajrating
+bo'laklar. U `sorafs_node_client_protocol.md` kashfiyot spetsifikatsiyasini to'ldiradi va
+SF-1b armatura saqlash tomoni arxitekturasini, resursini belgilash orqali ishlaydi
+boshqaruv elementlari va tugun va shlyuzga tushishi kerak bo'lgan konfiguratsiya sanitariya-tesisat
+kod yo'llari. Amaliy operator matkaplari yashaydi
+[Tugun operatsiyalari Runbook](./node-operations).
 
-### Goals
+### Maqsadlar
 
-- Allow any validator or auxiliary Iroha process to expose spare disk as a
-  SoraFS provider without affecting the core ledger responsibilities.
-- Keep the storage module deterministic and Norito-driven: manifests,
-  chunk plans, Proof-of-Retrievability (PoR) roots, and provider adverts are the
-  source of truth.
-- Enforce operator-defined quotas so a node cannot exhaust its own resources by
-  accepting too many pin or fetch requests.
-- Surface health/telemetry (PoR sampling, chunk fetch latency, disk pressure)
-  back to governance and clients.
+- Har qanday validator yoki yordamchi Iroha jarayoniga zaxira disk sifatida foydalanishga ruxsat bering.
+  SoraFS provayderi daftarning asosiy majburiyatlariga ta'sir qilmasdan.
+- Saqlash modulini deterministik va Norito boshqaruvida saqlang: manifestlar,
+  chunk rejalari, Proof-of-Retrievability (PoR) ildizlari va provayder reklamalari
+  haqiqat manbai.
+- Tugun o'z resurslarini sarflamasligi uchun operator tomonidan belgilangan kvotalarni qo'llash
+  juda ko'p pin yoki olish so'rovlarini qabul qilish.
+- Yuzaki sog'liq/telemetriya (PoR namunasi, bo'laklarni olish kechikishi, disk bosimi)
+  boshqaruv va mijozlarga qaytish.
 
-### High-level Architecture
+### Yuqori darajadagi arxitektura
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -64,28 +66,28 @@ code paths. Practical operator drills live in the
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Key modules:
+Asosiy modullar:
 
-- **Gateway**: exposes Norito HTTP endpoints for pin proposals, chunk fetch
-  requests, PoR sampling, and telemetry. It validates Norito payloads and
-  marshals requests into the chunk store. Reuses the existing Torii HTTP stack
-  to avoid a new daemon.
-- **Pin Registry**: the manifest pin state tracked in `iroha_data_model::sorafs`
-  and `iroha_core`. When a manifest is accepted the registry records the
-  manifest digest, chunk plan digest, PoR root, and provider capability flags.
-- **Chunk Storage**: disk-backed `ChunkStore` implementation that ingests
-  signed manifests, materialises chunk plans using `ChunkProfile::DEFAULT`, and
-  persists chunks under a deterministic layout. Each chunk is associated with a
-  content fingerprint and PoR metadata so sampling can re-validate without
-  re-reading the entire file.
-- **Quota/Scheduler**: enforces operator-configured limits (maximum disk bytes,
-  maximum outstanding pins, maximum parallel fetches, chunk TTL) and coordinates
-  IO so the node's ledger duties are not starved. The scheduler is also
-  responsible for serving PoR proofs and sampling requests with bounded CPU.
+- **Gateway**: pin takliflari, parchalarni olish uchun Norito HTTP so'nggi nuqtalarini ochib beradi
+  so'rovlar, PoR namunalarini olish va telemetriya. U Norito foydali yuklarni tasdiqlaydi va
+  marshallar parchalar do'koniga so'rovlar yuboradi. Mavjud Torii HTTP stekini qayta ishlatadi
+  yangi demondan qochish uchun.
+- **Pin registri**: `iroha_data_model::sorafs` da kuzatilgan manifest pin holati
+  va `iroha_core`. Manifest qabul qilinganda, ro'yxatga olish kitobi qayd qiladi
+  manifest dayjesti, chunk plan dayjesti, PoR ildizi va provayder qobiliyati bayroqlari.
+- **Chunk Storage**: disk tomonidan qo'llab-quvvatlanadigan `ChunkStore` ilovasi qabul qilinadi
+  imzolangan manifestlar, `ChunkProfile::DEFAULT` yordamida parcha rejalarini amalga oshiradi va
+  deterministik tartib ostida bo'laklarni saqlaydi. Har bir bo'lak a bilan bog'langan
+  kontent barmoq izi va PoR metadata, shuning uchun namuna olishsiz qayta tekshirish mumkin
+  butun faylni qayta o'qish.
+- **Kvota/Scheduler**: operator tomonidan sozlangan chegaralarni (maksimal disk baytlari,
+  maksimal ajoyib pinlar, maksimal parallel olishlar, chunk TTL) va koordinatalar
+  IO, shuning uchun tugunning hisob kitobi vazifalari och qolmaydi. Rejalashtiruvchi ham
+  Cheklangan CPU bilan PoR dalillari va namuna olish so'rovlariga xizmat ko'rsatish uchun javobgar.
 
-### Configuration
+### Konfiguratsiya
 
-Add a new section to `iroha_config`:
+`iroha_config` ga yangi bo'lim qo'shing:
 
 ```toml
 [sorafs.storage]
@@ -103,39 +105,39 @@ adverts:
   topics = ["sorafs.sf1.primary:global"]
 ```
 
-- `enabled`: participation toggle. When false the gateway returns a 503 for
-  storage endpoints and the node does not advertise in discovery.
-- `data_dir`: root directory for chunk data, PoR trees, and fetch telemetry.
-  Defaults to `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: hard limit for pinned chunk data. A background task
-  rejects new pins when the limit is reached.
-- `max_parallel_fetches`: concurrency cap enforced by the scheduler to balance
-  bandwidth/disk IO against validator workload.
-- `max_pins`: maximum number of manifest pins the node accepts before applying
-  eviction/back pressure.
-- `por_sample_interval_secs`: cadence for automatic PoR sampling jobs. Each job
-  samples `N` leaves (configurable per manifest) and emits telemetry events.
-  Governance can scale `N` deterministically by setting the capacity metadata
-  key `profile.sample_multiplier` (integer `1-4`). The value may be a single
-  number/string or an object with per-profile overrides, e.g.
+- `enabled`: ishtirok etish tugmasi. False bo'lsa, shlyuz 503 for ni qaytaradi
+  saqlash so'nggi nuqtalari va tugun kashfiyotda reklama qilmaydi.
+- `data_dir`: parcha ma'lumotlari, PoR daraxtlari va telemetriyani olish uchun ildiz katalogi.
+  Standart `<iroha.data_dir>/sorafs`.
+- `max_capacity_bytes`: mahkamlangan bo'lak ma'lumotlari uchun qattiq chegara. Fon vazifasi
+  chegaraga yetganda yangi pinlarni rad etadi.
+- `max_parallel_fetches`: muvozanat uchun rejalashtiruvchi tomonidan qo'llaniladigan parallellik chegarasi
+  validator ish yukiga qarshi tarmoqli kengligi/disk IO.
+- `max_pins`: qo'llashdan oldin tugun qabul qiladigan manifest pinlarining maksimal soni
+  evakuatsiya / orqaga bosim.
+- `por_sample_interval_secs`: avtomatik PoR namuna olish ishlari uchun kadans. Har bir ish
+  `N` namunalari (har bir manifestda sozlanishi) tark etadi va telemetriya hodisalarini chiqaradi.
+  Boshqaruv `N` sig‘im metama’lumotlarini o‘rnatish orqali qat’iy ravishda masshtablashi mumkin
+  kalit `profile.sample_multiplier` (butun son `1-4`). Qiymat bitta bo'lishi mumkin
+  raqam/string yoki har bir profilni bekor qiluvchi ob'ekt, masalan.
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: structure used by the provider advert generator to fill
-  `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
-  node uses defaults from the governance registry.
+- `adverts`: to'ldirish uchun provayder reklama generatori tomonidan ishlatiladigan tuzilma
+  `ProviderAdvertV1` maydonlari (qoida ko'rsatkichi, QoS bo'yicha maslahatlar, mavzular). Agar o'tkazib yuborilgan bo'lsa
+  tugun boshqaruv registridagi standart sozlamalardan foydalanadi.
 
-Config plumbing:
+Santexnika konfiguratsiyasi:
 
-- `[sorafs.storage]` is defined in `iroha_config` as `SorafsStorage` and is
-  loaded from the node config file.
-- `iroha_core` and `iroha_torii` thread the storage config into the gateway
-  builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- `[sorafs.storage]` `iroha_config` da `SorafsStorage` sifatida belgilangan va
+  tugun konfiguratsiya faylidan yuklangan.
+- `iroha_core` va `iroha_torii` saqlash konfiguratsiyasini shlyuzga ulang
+  ishga tushirilganda quruvchi va chunk do'koni.
+- Dev/test env bekor qilishlari mavjud (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), lekin
+  ishlab chiqarishni joylashtirish konfiguratsiya fayliga tayanishi kerak.
 
 ### CLI Utilities
 
-While Torii’s HTTP surface is still being wired, the `sorafs_node` crate ships a
-thin CLI so operators can script ingestion/export drills against the persistent
+Torii ning HTTP yuzasi hali ham simli bo'lsa-da, `sorafs_node` qutisi
+yupqa CLI, shuning uchun operatorlar doimiy ma'lumotlarga qarshi matkaplarni qabul qilish/eksport qilishlari mumkin.
 backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
 ```bash
@@ -146,106 +148,104 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
-  bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
-  enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
-- `export` accepts a manifest ID and writes the stored manifest/payload to disk
-  (with optional plan JSON) so fixtures remain reproducible across environments.
+- `ingest` Norito kodli manifest `.to` faylini va unga mos keladigan yukni kutadi
+  bayt. U manifestning bo'linish profilidan bo'lak rejasini qayta tiklaydi,
+  digest paritetini ta'minlaydi, parcha fayllarni davom ettiradi va ixtiyoriy ravishda a chiqaradi
+  `chunk_fetch_specs` JSON blob, shuning uchun quyi oqim asboblari aql-idrokni tekshirishi mumkin
+  tartib.
+- `export` manifest identifikatorini qabul qiladi va saqlangan manifest/foydali yukni diskka yozadi
+  (ixtiyoriy JSON rejasi bilan), shuning uchun armatura muhitlar bo'ylab takrorlanishi mumkin.
 
-Both commands print a Norito JSON summary to stdout, making it easy to pipe into
-scripts. The CLI is covered by an integration test to ensure manifests and
-payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tests/cli.rs:1】
+Ikkala buyruq ham Norito JSON xulosasini stdout-ga bosib chiqaradi, bu esa uni o'tkazishni osonlashtiradi.
+skriptlar. CLI manifestlarni ta'minlash uchun integratsiya testi bilan qoplangan
+foydali yuklar Torii API'lari qo'nmasdan oldin bo'ylab toza.【crates/sorafs_node/tests/cli.rs:1】
 
-> HTTP parity
+> HTTP pariteti
 >
-> The Torii gateway now exposes read-only helpers backed by the same
+> Torii shlyuzi endi faqat oʻqish uchun moʻljallangan yordamchilarni ochib beradi.
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
->   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — saqlanganni qaytaradi
+> Norito manifest (base64) digest/metadata bilan birga.【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — deterministikni qaytaradi
+> quyi oqim asboblari uchun JSON (`chunk_fetch_specs`) bo'lak rejasi.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
-> These endpoints mirror the CLI output so pipelines can switch from local
-> scripts to HTTP probes without changing parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> Ushbu so'nggi nuqtalar CLI chiqishini aks ettiradi, shuning uchun quvurlar mahalliydan o'tishlari mumkin
+> skriptlarni tahlil qiluvchilarni oʻzgartirmasdan HTTP problariga.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
-### Node Lifecycle
+### Tugunning hayot aylanishi
 
-1. **Startup**:
-   - If storage is enabled the node initialises the chunk store with the
-     configured directory and capacity. This includes verifying or creating the
-     PoR manifest database and replaying pinned manifests to warm caches.
-   - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
-     fetch, PoR sample, telemetry).
-   - Spawn the PoR sampling worker and quota monitor.
-2. **Discovery / Adverts**:
-   - Generate `ProviderAdvertV1` documents using current capacity/health, sign
-     them with the council-approved key, and publish via the discovery channel.
-     available.
-3. **Pin Workflow**:
-   - Gateway receives a signed manifest (including chunk plan, PoR root, council
-     signatures). Validate the alias list (`sorafs.sf1@1.0.0` required) and
-     ensure the chunk plan matches the manifest metadata.
-   - Check quotas. If capacity/pin limits would be exceeded respond with a
-     policy error (Norito structured).
-   - Stream chunk data into the `ChunkStore`, verifying digests as we ingest.
-     Update PoR trees and store manifest metadata in the registry.
-4. **Fetch Workflow**:
-   - Serve chunk range requests from disk. Scheduler enforces
-     `max_parallel_fetches` and returns `429` when saturated.
-   - Emit structured telemetry (Norito JSON) with latency, bytes served, and
-     error counts for downstream monitoring.
-5. **PoR Sampling**:
-   - Worker selects manifests proportional to weight (e.g., bytes stored) and
-     runs deterministic sampling using the chunk store's PoR tree.
-   - Persist results for governance audits and include summaries in provider
-     adverts / telemetry endpoints.
-6. **Eviction / Quota Enforcement**:
-   - When capacity is reached the node rejects new pins by default. Optionally,
-     operators may configure eviction policies (e.g., TTL-based, LRU) once the
-     governance model is agreed; for now the design assumes strict quotas and
-     operator-initiated unpin operations.
+1. **Ishga tushirish**:
+   - Agar saqlash yoqilgan bo'lsa, tugun parchalar do'konini ishga tushiradi
+     sozlangan katalog va imkoniyatlar. Bunga tekshirish yoki yaratish kiradi
+     PoR manifest ma'lumotlar bazasi va biriktirilgan manifestlarni issiq keshlarga qayta o'ynash.
+   - SoraFS shlyuz marshrutlarini ro'yxatdan o'tkazing (pin uchun Norito JSON POST/GET so'nggi nuqtalari,
+     olish, PoR namunasi, telemetriya).
+   - PoR namuna olish ishchisi va kvota monitorini yarating.
+2. **Kashfiyot / Reklamalar**:
+   - Joriy imkoniyatlar/salomatlikdan foydalangan holda `ProviderAdvertV1` hujjatlarini yarating, belgilang
+     ularni kengash tomonidan tasdiqlangan kalit bilan va kashfiyot kanali orqali nashr eting.
+     mavjud.
+3. **Pin ish jarayoni**:
+   - Gateway imzolangan manifestni oladi (jumladan, bo'lak rejasi, PoR ildizi, kengash
+     imzolar). Taxallus ro'yxatini tasdiqlang (`sorafs.sf1@1.0.0` kerak) va
+     chunk rejasi manifest metama'lumotlariga mos kelishiga ishonch hosil qiling.
+   - Kvotalarni tekshiring. Imkoniyatlar/pin chegaralari oshib ketgan bo'lsa, a bilan javob bering
+     siyosat xatosi (Norito tuzilgan).
+   - `ChunkStore`-ga parcha ma'lumotlarini uzating, biz qabul qilganimizda hazm qilishni tekshiramiz.
+     PoR daraxtlarini yangilang va manifest metama'lumotlarini ro'yxatga olish kitobida saqlang.
+4. **Ish jarayonini olish**:
+   - Diskdan bo'lak diapazoni so'rovlariga xizmat ko'rsatish. Rejalashtiruvchi amal qiladi
+     `max_parallel_fetches` va to'yingan bo'lsa `429` qaytaradi.
+   - Strukturaviy telemetriyani (Norito JSON) kechikish, xizmat koʻrsatish baytlari va
+     quyi oqim monitoringi uchun xatoliklarni hisoblash.
+5. **PoR namunasi**:
+   - Ishchi og'irligiga mutanosib manifestlarni tanlaydi (masalan, saqlangan baytlar) va
+     chunk do'konining PoR daraxti yordamida deterministik namuna olishni amalga oshiradi.
+   - Boshqaruv tekshiruvlari natijalarini davom ettirish va provayderga xulosalarni kiritish
+     reklamalar / telemetriya so'nggi nuqtalari.
+6. **Ko‘chirish/kvota ijrosi**:
+   - Imkoniyatga erishilganda tugun sukut bo'yicha yangi pinlarni rad etadi. Majburiy emas,
+     operatorlar ko'chirish siyosatini (masalan, TTL-ga asoslangan, LRU) bir marta sozlashi mumkin
+     boshqaruv modeli kelishilgan; hozircha dizayn qat'iy kvotalarni o'z zimmasiga oladi va
+     operator tashabbusi bilan olib tashlash operatsiyalari.
 
-### Capacity Declaration & Scheduling Integration
+### Imkoniyatlar deklaratsiyasi va rejalashtirish integratsiyasi- Torii endi `/v1/sorafs/capacity/declare` dan `CapacityDeclarationRecord` yangilanishlarini uzatadi
+  o'rnatilgan `CapacityManager` ga, shuning uchun har bir tugun o'zining xotiradagi ko'rinishini yaratadi
+  chunker va yo'laklarni ajratishni amalga oshirdi. Menejer faqat o'qish uchun mo'ljallangan suratlarni ko'rsatadi
+  telemetriya uchun (`GET /v1/sorafs/capacity/state`) va har bir profil yoki har bir qator uchun amal qiladi
+  yangi buyurtmalar qabul qilinishidan oldin bandlovlar.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v1/sorafs/capacity/schedule` oxirgi nuqtasi boshqaruv tomonidan chiqarilgan `ReplicationOrderV1` ni qabul qiladi
+  foydali yuklar. Buyurtma mahalliy provayderga mo'ljallangan bo'lsa, menejer tekshiradi
+  takroriy rejalashtirish, chunker/yo'l sig'imini tekshiradi, bo'lakni zahiraga oladi va
+  `ReplicationPlan` ni qaytaradi, bu esa qolgan quvvatni tavsiflaydi, shuning uchun orkestrlash vositalari
+  yutish bilan davom etishi mumkin. Boshqa provayderlar uchun buyurtmalar a bilan tasdiqlanadi
+  Ko'p operatorli ish oqimlarini osonlashtirish uchun `ignored` javobi.【crates/iroha_torii/src/routing.rs:4845】
+- Tugatish ilgaklari (masalan, qabul qilish muvaffaqiyatli bo'lganidan keyin ishga tushiriladi) uriladi
+  `POST /v1/sorafs/capacity/complete` orqali bandlovlarni chiqarish
+  `CapacityManager::complete_order`. Javobda `ReplicationRelease` mavjud
+  oniy tasvir (qolgan jami, chunker/bo'lak qoldiqlari), shuning uchun orkestrlash vositalari
+  keyingi buyurtmani ovoz berishsiz navbatga qo'ying. Keyingi ishlar buni bo'lakka o'tkazadi
+  do'kon quvur liniyasi bir marta yutish mantiq erlari.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- O'rnatilgan `TelemetryAccumulator` orqali mutatsiyaga uchragan bo'lishi mumkin
+  `NodeHandle::update_telemetry`, fon ishchilariga PoR/ish vaqti namunalarini yozib olish imkonini beradi
+  va oxir-oqibat, `CapacityTelemetryV1` kanonik foydali yuklarini teginmasdan oling.
+  rejalashtiruvchining ichki qismlari.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-- Torii now relays `CapacityDeclarationRecord` updates from `/v1/sorafs/capacity/declare`
-  to the embedded `CapacityManager`, so each node builds an in-memory view of its
-  committed chunker and lane allocations. The manager exposes read-only snapshots
-  for telemetry (`GET /v1/sorafs/capacity/state`) and enforces per-profile or per-lane
-  reservations before new orders are accepted.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- The `/v1/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
-  payloads. When the order targets the local provider the manager checks for
-  duplicate scheduling, verifies chunker/lane capacity, reserves the slice, and
-  returns a `ReplicationPlan` describing remaining capacity so orchestration tools
-  can proceed with ingestion. Orders for other providers are acknowledged with an
-  `ignored` response to ease multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (e.g., triggered after ingestion succeeds) hit
-  `POST /v1/sorafs/capacity/complete` to release reservations via
-  `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
-  snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
-  queue the next order without polling. Follow-up work will wire this into the chunk
-  store pipeline once ingestion logic lands.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- The embedded `TelemetryAccumulator` can be mutated through
-  `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
-  and eventually derive canonical `CapacityTelemetryV1` payloads without touching the
-  scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+### Integratsiya va kelajak ishlari
 
-### Integrations & Future Work
+- **Boshqaruv**: saqlash telemetriyasi bilan `sorafs_pin_registry_tracker.md`ni kengaytiring
+  (PoR muvaffaqiyat darajasi, diskdan foydalanish). Qabul qilish qoidalari minimal talab qilishi mumkin
+  sig'im yoki reklama qabul qilinishidan oldin minimal PoR muvaffaqiyat darajasi.
+- **Client SDKs**: yangi xotira konfiguratsiyasini (disk chegaralari, taxallus) oching
+  boshqaruv vositalari tugunlarni dasturiy ravishda yuklashi mumkin.
+- **Telemetriya**: mavjud ko'rsatkichlar to'plami bilan integratsiyalash (Prometheus /
+  OpenTelemetry) shuning uchun saqlash ko'rsatkichlari kuzatuv panelida ko'rinadi.
+- **Xavfsizlik**: saqlash modulini maxsus asenkron vazifa hovuzida ishga tushiring
+  orqaga bosim o'tkazing va io_uring yoki tokio's orqali sandboxing qismini o'qishni ko'rib chiqing
+  zararli mijozlarning resurslarni sarflashini oldini olish uchun cheklangan hovuzlar.
 
-- **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
-  (PoR success rate, disk utilisation). Admission policies can require minimum
-  capacity or minimum PoR success rate before adverts are accepted.
-- **Client SDKs**: expose the new storage config (disk limits, alias) so
-  management tooling can bootstrap nodes programmatically.
-- **Telemetry**: integrate with the existing metrics stack (Prometheus /
-  OpenTelemetry) so storage metrics appear in observability dashboards.
-- **Security**: run the storage module inside a dedicated async task pool with
-  back-pressure and consider sandboxing chunk reads via io_uring or tokio's
-  bounded pools to prevent malicious clients from exhausting resources.
-
-This design keeps the storage module optional and deterministic while giving
-operators the knobs they need to participate in the SoraFS data availability
-layer. Implementing it will involve changes across `iroha_config`, `iroha_core`,
-`iroha_torii`, and the Norito gateway, plus the provider advert tooling.
+Ushbu dizayn saqlash modulini berishda ixtiyoriy va deterministik saqlaydi
+operatorlar SoraFS ma'lumotlarining mavjudligida ishtirok etishlari kerak bo'lgan tugmalar
+qatlam. Uni amalga oshirish `iroha_config`, `iroha_core`,
+`iroha_torii` va Norito shlyuzi, shuningdek, provayder reklama vositalari.

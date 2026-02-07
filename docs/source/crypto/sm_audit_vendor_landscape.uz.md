@@ -7,99 +7,98 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0f39199767280be0fdd582301cdc3e8929497cf372a96f9f300e718f827000a7
 source_last_modified: "2025-12-29T18:16:35.941305+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 % SM Audit Vendor Landscape
-% Iroha Crypto Working Group
+% Iroha Kripto ishchi guruhi
 % 2026-02-12
 
-# Overview
+# Umumiy ko'rinish
 
-The Crypto Working Group needs a standing bench of independent reviewers who
-understand both Rust cryptography and the Chinese GM/T (SM2/SM3/SM4) standards.
-This note catalogues firms with relevant references and summarises the audit
-scope we typically request so request-for-proposal (RFP) cycles stay fast and
-consistent.
+Kripto ishchi guruhiga mustaqil sharhlovchilarning doimiy skameykasi kerak
+Rust kriptografiyasi va Xitoy GM/T (SM2/SM3/SM4) standartlarini tushuning.
+Ushbu eslatma tegishli ma'lumotnomalar bilan firmalarni kataloglaydi va audit natijalarini umumlashtiradi
+biz odatda so'raymiz, shuning uchun taklif so'rovi (RFP) sikllari tez va davom etadi
+izchil.
 
-# Candidate Firms
+# Nomzod firmalar
 
-## Trail of Bits (CN Cryptography Practice)
+## Bitlar izi (CN kriptografiya amaliyoti)
 
-- Documented engagements: 2023 security review of Ant Group’s Tongsuo
-  (SM-enabled OpenSSL distribution) and repeated audits of Rust-based
-  blockchains such as Diem/Libra, Sui, and Aptos.
-- Strengths: dedicated Rust cryptography team, automated constant-time
-  analysis tooling, experience validating deterministic execution and hardware
-  dispatch policies.
-- Fit for Iroha: can extend the current SM audit SOW or perform independent
-  re-tests; comfortable operating with Norito fixtures and IVM syscall
-  surfaces.
+- Hujjatlashtirilgan majburiyatlar: 2023 yilda Ant Group kompaniyasining Tongsuo xavfsizligini ko'rib chiqish
+  (SM-yoqilgan OpenSSL tarqatish) va Rust-ga asoslangan takroriy auditlar
+  Diem/Libra, Sui va Aptos kabi blokcheynlar.
+- Kuchli tomonlari: maxsus Rust kriptografiya jamoasi, avtomatlashtirilgan doimiy vaqt
+  tahlil vositalari, deterministik bajarilishini tekshirish tajribasi va apparat
+  jo'natish siyosati.
+- Iroha uchun mos: joriy SM audit SOWni uzaytirishi yoki mustaqil ravishda bajarishi mumkin
+  qayta sinovlar; Norito moslamalari va IVM tizimi bilan qulay ishlash
+  yuzalar.
 
-## NCC Group (APAC Cryptography Services)
+## NCC guruhi (APAC kriptografiya xizmatlari)
 
-- Documented engagements: gm/T (SM) code examinations for regional payment
-  networks and HSM vendors; prior Rust reviews for Parity Substrate, Polkadot,
-  and Libra components.
-- Strengths: large APAC bench with bilingual reporting, ability to combine
-  compliance-style process checks with deep code review.
-- Fit for Iroha: ideal for second-opinion assessments or governance-driven
-  validation alongside Trail of Bits findings.
+- Hujjatlangan majburiyatlar: mintaqaviy to'lov uchun gm/T (SM) kodini tekshirish
+  tarmoqlar va HSM sotuvchilari; Parity Substrate, Polkadot uchun Rustning oldingi sharhlari,
+  va Libra komponentlari.
+- Kuchli tomonlari: ikki tilli hisobotga ega katta APAC dastgohi, birlashtirish qobiliyati
+  chuqur kodni ko'rib chiqish bilan muvofiqlik uslubidagi jarayonni tekshirish.
+- Iroha uchun mos: ikkinchi fikr yoki boshqaruvga asoslangan baholash uchun ideal
+  Trail of Bits topilmalari bilan bir qatorda tasdiqlash.
 
-## SECBIT Labs (Beijing)
+## SECBIT Labs (Pekin)
 
-- Documented engagements: maintainers of the open-source `libsm` Rust crate
-  used by Nervos CKB and CITA; audited Guomi enablement for Nervos, Muta, and
-  FISCO BCOS Rust components with bilingual deliverables.
-- Strengths: engineers who actively ship SM primitives in Rust, strong
-  property-testing capabilities, deep familiarity with domestic compliance
-  requirements.
-- Fit for Iroha: valuable when we need reviewers who can supply comparative
-  test vectors and implementation guidance alongside findings.
+- Hujjatlangan majburiyatlar: ochiq manbali `libsm` Rust sandiqini ta'minlovchilar
+  Nervos CKB va CITA tomonidan qo'llaniladi; Nervos, Muta va uchun Guomi faolligini tekshirdi
+  Ikki tilda yetkazib beriladigan FISCO BCOS Rust komponentlari.
+- Kuchli tomonlar: Rustda SM ibtidoiylarini faol ravishda jo'natadigan muhandislar, kuchli
+  mulkni sinovdan o'tkazish qobiliyati, ichki muvofiqlik bilan chuqur tanishish
+  talablar.
+- Iroha uchun mos: qiyosiy tahlillarni taqdim eta oladigan sharhlovchilar kerak bo'lganda qimmatlidir
+  sinov vektorlari va topilmalar bilan bir qatorda amalga oshirish bo'yicha ko'rsatmalar.
 
 ## SlowMist Security (Chengdu)
 
-- Documented engagements: Substrate/Polkadot Rust security reviews including
-  Guomi forks for Chinese operators; routine assessments of SM2/SM3/SM4 wallet
-  and bridge code used by exchanges.
-- Strengths: blockchain-focused audit practice, integrated incident response,
-  guidance that spans core protocol code and operator tooling.
-- Fit for Iroha: helpful for validating SDK parity and operational touchpoints
-  in addition to core crates.
+- Hujjatlashtirilgan majburiyatlar: Substrate/Polkadot Rust xavfsizlik tekshiruvlari, shu jumladan
+  Xitoy operatorlari uchun Guomi vilkalar; SM2/SM3/SM4 hamyonini muntazam baholash
+  va birjalar tomonidan ishlatiladigan ko'prik kodi.
+- Kuchli tomonlari: blokcheynga yo'naltirilgan audit amaliyoti, hodisalarga integratsiyalashgan javob,
+  asosiy protokol kodi va operator vositalarini qamrab oluvchi yo'riqnoma.
+- Iroha uchun mos: SDK pariteti va operatsion aloqa nuqtalarini tekshirish uchun foydalidir
+  asosiy qutilarga qo'shimcha ravishda.
 
-## Chaitin Tech (QAX 404 Security Lab)
+## Chaitin Tech (QAX 404 xavfsizlik laboratoriyasi)- Hujjatlangan majburiyatlar: GmSSL/Tongsuo hardning va SM2/SM3/ga hissa qo'shuvchilar
+  Mahalliy moliya institutlari uchun SM4ni amalga oshirish bo'yicha qo'llanma; tashkil etilgan
+  TLS steklari va kriptografik kutubxonalarni qamrab oluvchi zang auditi amaliyoti.
+- Kuchli tomonlari: chuqur kriptoanaliz foni, rasmiy tekshirishni juftlashtirish qobiliyati
+  qo'lda ko'rib chiqishga ega artefaktlar, uzoq muddatli regulyator munosabatlari.
+- Iroha uchun mos: me'yoriy imzolanganda yoki rasmiy isbotlangan artefaktlar uchun mos keladi
+  standart kodni ko'rib chiqish hisobotiga hamroh bo'lishi kerak.
 
-- Documented engagements: contributors to GmSSL/Tongsuo hardening and SM2/SM3/
-  SM4 implementation guidance for domestic financial institutions; established
-  Rust audit practice covering TLS stacks and cryptographic libraries.
-- Strengths: deep cryptanalysis background, ability to pair formal verification
-  artefacts with manual review, long-standing regulator relationships.
-- Fit for Iroha: suitable when regulatory sign-off or formal proof artefacts
-  need to accompany the standard code review report.
+# Odatdagi audit doirasi va yetkazib berish
 
-# Typical Audit Scope & Deliverables
+- ** Spetsifikatsiyaga muvofiqligi:** SM2 ZA hisobini tasdiqlash, imzo
+  kanoniklashtirish, SM3 toʻldirish/siqish va SM4 kalit jadvali va IV bilan ishlash
+  GM/T 0003-2012, GM/T 0004-2012 va GM/T 0002-2012 ga qarshi.
+- **Determinizm va doimiy vaqtdagi xatti-harakatlar:** dallanishni, qidirishni ko'rib chiqing
+  jadvallar va apparat xususiyatlari eshiklari (masalan, NEON, SM4 ko'rsatmalari) ta'minlash uchun
+  Rust va FFI jo'natmalari qo'llab-quvvatlanadigan uskunada deterministik bo'lib qolmoqda.
+- **FFI va provayder integratsiyasi:** OpenSSL/Tongsuo ulanishlarini ko'rib chiqing,
+  PKCS#11/HSM adapterlari va konsensus xavfsizligi uchun xato tarqalish yo'llari.
+- **Sinov va armatura qamrovi:** noaniq jabduqlarni baholash, Norito bo'ylab sayohatlar,
+  deterministik tutun testlari va bo'shliqlar bo'lgan joyda differentsial testlarni tavsiya eting
+  paydo bo'ladi.
+- **Tobelik va ta'minot zanjiri tekshiruvi:** ishlab chiqarish kelib chiqishini, sotuvchini tasdiqlang
+  yamoq siyosati, SBOM aniqligi va qayta tiklanadigan qurish ko'rsatmalari.
+- **Hujjatlar va operatsiyalar:** operatorning ish kitoblarini tasdiqlash, muvofiqlik
+  qisqacha ma'lumotlar, konfiguratsiya standartlari va orqaga qaytarish protseduralari.
+- **Hisobot kutishlari:** xavf reytingi bilan ijrochi xulosa, batafsil
+  topilmalar kodli havolalar va tuzatish bo'yicha ko'rsatmalar, qayta sinov rejasi va
+  determinizm kafolatlarini o'z ichiga olgan attestatsiyalar.
 
-- **Specification conformance:** validate SM2 ZA calculation, signature
-  canonicalisation, SM3 padding/compression, and SM4 key schedule & IV handling
-  against GM/T 0003-2012, GM/T 0004-2012, and GM/T 0002-2012.
-- **Determinism and constant-time behaviour:** examine branching, lookup
-  tables, and hardware feature gates (e.g., NEON, SM4 instructions) to ensure
-  Rust and FFI dispatch remain deterministic across supported hardware.
-- **FFI and provider integration:** review OpenSSL/Tongsuo bindings,
-  PKCS#11/HSM adapters, and error propagation paths for consensus safety.
-- **Test and fixture coverage:** assess fuzz harnesses, Norito round-trips,
-  deterministic smoke tests, and recommend differential testing where gaps
-  appear.
-- **Dependency and supply-chain review:** confirm build provenance, vendor
-  patch policies, SBOM accuracy, and reproducible build instructions.
-- **Documentation and operations:** validate operator runbooks, compliance
-  briefs, configuration defaults, and rollback procedures.
-- **Reporting expectations:** executive summary with risk rating, detailed
-  findings with code references & remediation guidance, retest plan, and
-  attestations covering determinism guarantees.
+# Keyingi qadamlar
 
-# Next Steps
-
-- Use this vendor roster during RFQ cycles; adjust the scope checklist above to
-  match the active SM milestone before issuing an RFP.
-- Record engagement outcomes in `docs/source/crypto/sm_audit_brief.md` and
-  surface status updates in `status.md` once contracts are executed.
+- RFQ davrlarida ushbu sotuvchilar ro'yxatidan foydalaning; yuqoridagi nazorat ro'yxatini sozlang
+  RFP berishdan oldin faol SM bosqichiga mos keling.
+- Ishlash natijalarini `docs/source/crypto/sm_audit_brief.md` va
+  shartnomalar bajarilgandan so'ng `status.md` da sirt holati yangilanishi.

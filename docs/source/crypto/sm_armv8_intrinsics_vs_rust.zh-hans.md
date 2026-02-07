@@ -7,80 +7,75 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 40185fd79a4d6bcb2a7f35cbb4a14ca8feb82f31e62b4e51f9a6f1657f524ed4
 source_last_modified: "2025-12-29T18:16:35.940026+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% ARMv8 SM3/SM4 Intrinsics vs Pure Rust Implementations
-% Iroha Crypto Working Group
+% ARMv8 SM3/SM4 内在函数 vs 纯 Rust 实现
+% Iroha 加密工作组
 % 2026-02-12
 
-# Prompt
+# 提示
 
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background:  
-> - Hyperledger Iroha is a Rust-based permissioned blockchain where every validator must execute deterministically so consensus cannot diverge.  
-> - Iroha uses the Chinese GM/T cryptographic primitives SM2 (signatures), SM3 (hash), and SM4 (block cipher) for certain regulatory deployments.  
-> - The team ships two SM3/SM4 implementations inside the validator stack:  
->   1. Pure Rust, bit-sliced, constant-time scalar code that runs on any CPU.  
->   2. ARMv8 NEON accelerated kernels that rely on the optional `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY` instructions exposed on newer Apple M-series and Arm server CPUs.  
-> - Accelerated code is behind runtime feature detection using `core::arch::aarch64` intrinsics; the system must avoid non-deterministic behaviour when threads migrate across big.LITTLE cores or when replicas are built with different compiler flags.  
-> Requested analysis:  
-> Compare the ARMv8 intrinsic implementations with the pure Rust fallbacks for deterministic blockchain verification. Discuss throughput/latency gains, determinism pitfalls (feature detection, heterogeneous cores, SIGILL risk, alignment, mixing execution paths), constant-time properties, and the operational safeguards—tests, manifests, telemetry, operator documentation—needed to keep all validators in sync even when some hardware supports the instructions and others do not.
+> 您是法学硕士，担任 Hyperledger Iroha 加密团队的专家顾问。  
+> 背景：  
+> - Hyperledger Iroha 是一个基于 Rust 的许可区块链，其中每个验证器都必须确定性地执行，以便共识不会出现分歧。  
+> - Iroha 使用中国 GM/T 加密原语 SM2（签名）、SM3（哈希）和 SM4（分组密码）进行某些监管部署。  
+> - 该团队在验证器堆栈中提供了两个 SM3/SM4 实现：  
+> 1. 纯 Rust、位切片、恒定时间标量代码，可在任何 CPU 上运行。  
+> 2. ARMv8 NEON 加速内核依赖于较新 Apple M 系列和 Arm 服务器上公开的可选 `SM3PARTW1`、`SM3PARTW2`、`SM3SS1`、`SM3SS2`、`SM4E` 和 `SM4EKEY` 指令CPU。  
+> - 使用 `core::arch::aarch64` 内在函数进行运行时特征检测的背后是加速代码；当线程跨 big.LITTLE 核心迁移或使用不同编译器标志构建副本时，系统必须避免非确定性行为。  
+> 要求分析：  
+> 将 ARMv8 内在实现与纯 Rust 回退进行比较，以进行确定性区块链验证。讨论吞吐量/延迟增益、确定性陷阱（功能检测、异构核心、SIGILL 风险、对齐、混合执行路径）、恒定时间属性以及操作保障措施（测试、清单、遥测、操作员文档），即使某些硬件支持指令而其他硬件不支持，也需要保持所有验证器同步。
 
-# Summary
+# 总结
 
-ARMv8-A devices that expose the optional `SM3` (`SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`) and `SM4` (`SM4E`, `SM4EKEY`) instruction sets can accelerate the GM/T hash and block cipher primitives substantially. However, deterministic blockchain execution demands tight control over feature detection, fallback parity, and constant-time behaviour. The following guidance covers how the two implementation strategies compare and what the Iroha stack must enforce.
+公开可选 `SM3`（`SM3PARTW1`、`SM3PARTW2`、`SM3SS1`、`SM3SS2`）和 `SM4`（`SM4E`、 `SM4EKEY`) 指令集可以大幅加速 GM/T 哈希和分组密码原语。然而，确定性区块链执行需要对特征检测、回退奇偶校验和恒定时间行为进行严格控制。以下指南介绍了两种实施策略的比较以及 Iroha 堆栈必须强制执行的内容。
 
-# Implementation Comparison
+# 实现比较|方面| ARMv8 内在函数（AArch64 内联 ASM/`core::arch::aarch64`）|纯 Rust（位切片/无表）|
+|--------------------|--------------------------------------------------------------------------|----------------------------------------|
+|吞吐量| Apple M 系列和 Neoverse V1 上每个内核的 SM3 哈希速度提高 3-5 倍，SM4 ECB/CTR 速度提高 8 倍；当内存受限时增益逐渐减小。 |基线吞吐量受标量 ALU 限制并旋转；有时会受益于 `aarch64` SHA 扩展（通过编译器自动向量化），但通常落后 NEON 类似的 3-8× 差距。 |
+|延迟 |具有内在函数的 M2 上的单块延迟约为 30–40ns；适合系统调用中的短消息哈希和小块加密。 |每块 90–120ns；可能需要展开以保持竞争力，从而增加指令缓存压力。 |
+|代码大小|需要双代码路径（内在函数+标量）和运行时门控；如果使用 `cfg(target_feature)`，则内部路径紧凑。 |单路径；由于手动调度表而稍大一些，但没有门控逻辑。 |
+|决定论|必须将运行时调度锁定为确定性结果，避免跨线程功能探测竞争，并在异构核心不同时固定 CPU 关联性（例如，big.LITTLE）。 |默认是确定性的；没有运行时特征检测。 |
+|恒定时间姿势|硬件单元对于核心回合来说是恒定时间的，但包装器在回退或混合表时必须避免依赖于秘密的选择。 |完全由 Rust 控制；如果编码正确，则通过构造（位切片）确保恒定时间。 |
+|便携性|需要 `aarch64` + 可选功能； x86_64 和 RISC-V 自动回退。 |无处不在；性能取决于编译器优化。 |
 
-| Aspect | ARMv8 Intrinsics (AArch64 Inline ASM/`core::arch::aarch64`) | Pure Rust (bit-sliced / table-free) |
-|--------|-------------------------------------------------------------|--------------------------------------|
-| Throughput | 3–5× faster SM3 hashing and up to 8× faster SM4 ECB/CTR per core on Apple M-series and Neoverse V1; gains taper when memory-bound. | Baseline throughput bound by scalar ALU and rotates; occasionally benefits from `aarch64` SHA extensions (via compiler auto-vectorisation) but usually lags NEON by similar 3–8× gap. |
-| Latency | Single-block latency ~30–40 ns on M2 with intrinsics; suits short-message hashing and small block encryption in syscalls. | 90–120 ns per block; may require unrolling to stay competitive, increasing instruction cache pressure. |
-| Code size | Requires dual code paths (intrinsics + scalar) and runtime gating; intrinsic path compact if using `cfg(target_feature)`. | Single path; slightly larger due to manual schedule tables but no gating logic. |
-| Determinism | Must lock runtime dispatch to deterministic outcome, avoid cross-thread feature probing races, and pin CPU affinity if heterogeneous cores differ (e.g., big.LITTLE). | Deterministic by default; no runtime feature detection. |
-| Constant-time posture | Hardware unit is constant-time for core rounds but wrapper must avoid secret-dependent selection when falling back or mixing tables. | Fully controlled in Rust; constant-time ensured by construction (bit-slicing) if coded correctly. |
-| Portability | Requires `aarch64` + optional features; x86_64 and RISC-V fall back automatically. | Works everywhere; performance depends on compiler optimisations. |
+# 运行时调度陷阱
 
-# Runtime Dispatch Pitfalls
+1. **非确定性特征探测**
+   - 问题：在异构 big.LITTLE SoC 上探测 `is_aarch64_feature_detected!("sm4")` 可能会为每个内核产生不同的答案，并且跨线程工作窃取可能会混合一个块内的路径。
+   - 缓解措施：在节点初始化期间捕获一次硬件功能，通过 `OnceLock` 进行广播，并在虚拟机或加密箱内执行加速内核时与 CPU 亲和力配对。在关键共识工作开始后，切勿在功能标志上进行分支。
 
-1. **Non-deterministic feature probing**
-   - Problem: probing `is_aarch64_feature_detected!("sm4")` on heterogeneous big.LITTLE SoCs can yield different answers per core, and cross-thread work-stealing may mix paths inside one block.
-   - Mitigation: capture hardware capability exactly once during node initialisation, broadcast through `OnceLock`, and pair with CPU affinity when executing accelerated kernels inside the VM or crypto crates. Never branch on feature flags after consensus-critical work starts.
+2. **跨副本的混合精度**
+   - 问题：使用不同编译器构建的节点可能在内在可用性方面存在分歧（`target_feature=+sm4` 编译时启用与运行时检测）。如果执行通过不同的代码路径，微架构时序可能会泄漏到基于 pow 的退避或速率限制器中。
+   - 缓解措施：使用显式 `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE` 分发规范构建配置文件，需要确定性回退排序（例如，除非配置启用硬件，否则首选标量），并在清单中包含配置哈希以进行证明。3. **Apple 与 Linux 上的指令可用性**
+   - 问题：Apple 仅在最新的芯片和操作系统版本中公开 SM4 指令； Linux 发行版可能会修补内核以掩盖它们等待的出口批准。依赖没有防护的内在函数会导致 SIGILL。
+   - 缓解措施：通过 `std::arch::is_aarch64_feature_detected!` 进行控制，在冒烟测试中捕获 `SIGILL`，并将缺失的内在函数视为预期的回退（仍然是确定性的）。
 
-2. **Mixed precision across replicas**
-   - Problem: nodes built with different compilers may disagree on intrinsic availability (`target_feature=+sm4` compile-time enable vs runtime detection). If execution goes through different code paths, micro-architectural timing can leak into pow-based backoffs or rate limiters.
-   - Mitigation: distribute canonical build profiles with explicit `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE`, require deterministic fallback ordering (e.g., prefer scalar unless config enables hardware), and include a config hash in manifests for attestation.
+4. **并行分块和内存排序**
+   - 问题：加速内核每次迭代通常处理多个块；当由 Norito 反序列化缓冲区提供数据时，使用具有未对齐输入的 NEON 加载/存储可能会出现故障或需要显式对齐修复。
+   - 缓解措施：保持块对齐分配（例如，通过 `aligned_alloc` 包装器实现 `SM4_BLOCK_SIZE` 倍数），验证调试版本中的对齐情况，并在未对齐时回退到标量。
 
-3. **Instruction availability on Apple vs Linux**
-   - Problem: Apple exposes SM4 instructions only in newest silicon and OS releases; Linux distros may patch kernels to mask them pending export approvals. Relying on intrinsics without guard causes SIGILLs.
-   - Mitigation: gate via `std::arch::is_aarch64_feature_detected!`, catch `SIGILL` on smoke tests, and treat missing intrinsics as expected fallback (still deterministic).
+5. **指令缓存中毒攻击**
+   - 问题：共识对手可能会设计工作负载，在较弱的核心上破坏微小的 I-cache 线，从而扩大加速路径和标量路径之间的延迟差异。
+   - 缓解措施：将调度修复为确定性块大小，填充循环以避免不可预测的分支，并包括微基准回归测试以确保抖动保持在容差窗口内。
 
-4. **Parallel chunking and memory ordering**
-   - Problem: accelerated kernels often process multiple blocks per iteration; using NEON loads/stores with unaligned inputs can fault or require explicit alignment fixes when fed by Norito-deserialised buffers.
-   - Mitigation: keep block-aligned allocations (e.g., `SM4_BLOCK_SIZE` multiples via `aligned_alloc` wrappers), validate alignment in debug builds, and fall back to scalar when misaligned.
+# 确定性部署建议
 
-5. **Instruction cache poisoning attacks**
-   - Problem: consensus adversaries may craft workloads that thrash tiny I-cache lines on weaker cores, widening latency difference between accelerated and scalar paths.
-   - Mitigation: fix scheduling to deterministic chunk sizes, pad loops to avoid unpredictable branching, and include microbench regression tests to ensure jitter stays within tolerance windows.
+- **编译时策略：**将加速代码保留在发布版本中默认启用的功能标志（例如，`sm_accel_neon`）后面，但需要在测试网的配置中明确选择加入，直到奇偶校验覆盖范围成熟。
+- **回退奇偶校验测试：** 维护背靠背运行加速和标量路径的黄金向量（当前 `sm_neon_check` 工作流程）；一旦提供商支持落地，即可扩展至覆盖 SM3/SM4 GCM 模式。
+- **清单证明：** 在节点的 Norito 清单中包含加速策略 (`hardware=sm-neon|scalar`)，以便在对等准入期间检测分歧。
+- **遥测：**发出比较两条路径上每次调用延迟的指标；如果偏差超过预定阈值（例如，>5% 抖动），则发出警报，发出可能的硬件漂移信号。
+- **文档：**使操作员指南 (`sm_operator_rollout.md`) 保持最新，包含启用/禁用内在函数的说明，并注意无论路径如何，都会保留确定性行为。
 
-# Deterministic Deployment Recommendations
+# 参考文献
 
-- **Compile-time policy:** keep accelerated code behind a feature flag (e.g., `sm_accel_neon`) enabled by default in release builds, but require an explicit opt-in in configs for testnets until parity coverage is mature.
-- **Fallback parity tests:** maintain golden vectors that run accelerated and scalar paths back-to-back (current `sm_neon_check` workflow); extend to cover SM3/SM4 GCM modes once provider support lands.
-- **Manifest attestation:** include the acceleration policy (`hardware=sm-neon|scalar`) in the node’s Norito manifest to make divergence detectable during peer admission.
-- **Telemetry:** emit metrics comparing per-call latency across both paths; alert if divergence exceeds predetermined thresholds (e.g., >5 % jitter), signalling possible hardware drift.
-- **Documentation:** keep operator guidance (`sm_operator_rollout.md`) up to date with instructions for enabling/disabling intrinsics, and note that deterministic behaviour is preserved regardless of the path.
+- `crates/iroha_crypto/src/sm.rs` — NEON 与标量实现挂钩。
+- `.github/workflows/sm-neon-check.yml` — 强制 NEON CI 通道确保奇偶校验。
+- `docs/source/crypto/sm_program.md` — 释放护栏和性能门。
+- Arm 架构参考手册，Armv8-A，D13 节（SM3/SM4 指令）。
+- GM/T 0002-2012、GM/T 0003-2012 — 用于比较测试的官方 SM3/SM4 规范。
 
-# References
-
-- `crates/iroha_crypto/src/sm.rs` — NEON vs scalar implementation hooks.
-- `.github/workflows/sm-neon-check.yml` — forced-NEON CI lane ensuring parity.
-- `docs/source/crypto/sm_program.md` — release guardrails and performance gates.
-- Arm Architecture Reference Manual, Armv8-A, Section D13 (SM3/SM4 instructions).
-- GM/T 0002-2012, GM/T 0003-2012 — official SM3/SM4 specifications for comparison testing.
-
-## Standalone Prompt (Copy/Paste)
-
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background: Hyperledger Iroha is a Rust-based permissioned blockchain that requires deterministic execution across validators. The platform supports the Chinese GM/T SM2/SM3/SM4 cryptography suite. For SM3 and SM4, the codebase ships two implementations: (a) pure Rust bit-sliced constant-time scalar code that runs everywhere, and (b) ARMv8 NEON accelerated kernels that depend on the optional instructions `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY`. Accelerated paths are enabled via runtime feature detection using `core::arch::aarch64`; they must not introduce non-determinism when threads migrate across heterogeneous big.LITTLE cores or when replicas are built with different `target_feature` flags.  
-> Task: Compare the intrinsic-powered implementations with the scalar fallbacks for deterministic blockchain verification. Detail throughput and latency differences, enumerate determinism hazards (feature detection, heterogeneous cores, SIGILL behaviour, alignment, mixed execution paths), comment on constant-time posture, and recommend safeguards (testing strategy, manifest/attestation fields, telemetry, operator documentation) that ensure all validators remain in sync even if hardware capabilities differ.
+## 独立提示（复制/粘贴）> 您是法学硕士，担任 Hyperledger Iroha 加密团队的专家顾问。  
+> 背景：Hyperledger Iroha 是一个基于 Rust 的许可区块链，需要跨验证器确定性执行。该平台支持中国GM/T SM2/SM3/SM4密码套件。对于 SM3 和 SM4，代码库提供了两种实现：(a) 随处运行的纯 Rust 位片恒定时间标量代码，以及 (b) 依赖于可选指令 `SM3PARTW1`、`SM3PARTW2`、`SM3SS1`、`SM3SS2` 的 ARMv8 NEON 加速内核， `SM4E` 和 `SM4EKEY`。使用 `core::arch::aarch64` 通过运行时特征检测启用加速路径；当线程跨异构 big.LITTLE 核心迁移或使用不同的 `target_feature` 标志构建副本时，它们不得引入非确定性。  
+> 任务：将内在驱动的实现与标量回退进行比较，以进行确定性区块链验证。详细说明吞吐量和延迟差异，列举确定性风险（功能检测、异构核心、SIGILL 行为、对齐、混合执行路径），评论恒定时间状态，并推荐保护措施（测试策略、清单/证明字段、遥测、操作员文档），以确保即使硬件功能不同，所有验证器也保持同步。
