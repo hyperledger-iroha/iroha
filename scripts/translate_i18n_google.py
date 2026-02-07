@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures as futures
 import hashlib
+import html
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -30,8 +32,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_PATH = ROOT / "artifacts" / "translation_cache_google.json"
-DEFAULT_MAX_CHARS = 3500
-TRANSLATION_ENDPOINT = "https://translate.googleapis.com/translate_a/single"
+DEFAULT_MAX_CHARS = 1400
+TRANSLATION_ENDPOINT = "https://translate.google.com/m"
 PLACEHOLDER_RE = re.compile(r"I18N[A-Z]\d{8}X")
 LANG_CODE_MAP = {
     "zh-hans": "zh-CN",
@@ -306,12 +308,10 @@ def split_chunks(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def translate_chunk(chunk: str, target_lang: str, retries: int = 5) -> str:
+def translate_chunk(chunk: str, target_lang: str, retries: int = 8) -> str:
     params = {
-        "client": "gtx",
         "sl": "en",
         "tl": target_lang,
-        "dt": "t",
         "q": chunk,
     }
     url = f"{TRANSLATION_ENDPOINT}?{urllib.parse.urlencode(params)}"
@@ -324,17 +324,31 @@ def translate_chunk(chunk: str, target_lang: str, retries: int = 5) -> str:
                 url,
                 headers={
                     "User-Agent": "Mozilla/5.0",
-                    "Accept": "application/json",
+                    "Accept": "text/html",
                 },
             )
             with urllib.request.urlopen(request, timeout=30) as response:
                 payload = response.read().decode("utf-8")
-            data = json.loads(payload)
-            return "".join(item[0] for item in data[0])
+            m = re.search(r'<div class="result-container">(.*?)</div>', payload, flags=re.DOTALL)
+            if not m:
+                raise ValueError("missing result-container")
+            translated = html.unescape(m.group(1))
+            translated = re.sub(r"<[^>]+>", "", translated)
+            if not translated:
+                raise ValueError("empty translation")
+            return translated
+        except HTTPError as exc:
+            last_exc = exc
+            # Back off aggressively on provider throttling.
+            if exc.code == 429:
+                time.sleep(min(backoff * 3, 90.0))
+            else:
+                time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
         except Exception as exc:  # noqa: BLE001 - network retries
             last_exc = exc
             time.sleep(backoff)
-            backoff = min(backoff * 2, 10.0)
+            backoff = min(backoff * 2, 30.0)
 
     assert last_exc is not None
     raise last_exc

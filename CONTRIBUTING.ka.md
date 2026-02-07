@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 71baf5d038cbe6518fd294fcc1b279dff8aaf092e4a83f6159b699a378e51467
 source_last_modified: "2025-12-29T18:16:34.772429+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributing Guide
+# დამხმარე გზამკვლევი
 
-Thank you for taking the time to contribute to Iroha 2!
+გმადლობთ, რომ დაუთმეთ დრო Iroha 2-ში წვლილისთვის!
 
-Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
+გთხოვთ, წაიკითხოთ ეს სახელმძღვანელო, რათა გაიგოთ, თუ როგორ შეგიძლიათ წვლილი შეიტანოთ და რომელ მითითებებს ველით, რომ მიჰყვებით. ეს მოიცავს მითითებებს კოდისა და დოკუმენტაციის შესახებ, ისევე როგორც ჩვენს კონვენციებს git სამუშაო პროცესთან დაკავშირებით.
 
-Reading these guidelines will save you time later.
+ამ სახელმძღვანელოების წაკითხვა დაზოგავს თქვენს დროს მოგვიანებით.
 
-## How Can I Contribute?
+## როგორ შემიძლია წვლილი შევიტანო?
 
-There are a lot of ways you could contribute to our project:
+არსებობს მრავალი გზა, რითაც შეგიძლიათ წვლილი შეიტანოთ ჩვენს პროექტში:
 
-- Report [bugs](#reporting-bugs) and [vulnerabilities](#reporting-vulnerabilities)
-- [Suggest improvements](#suggesting-improvements) and implement them
-- [Ask questions](#asking-questions) and engage with the community
+- შეატყობინეთ [შეცდომებს](#reporting-bugs) და [დაუცველობებს](#reporting-vulnerabilities)
+- [გაუმჯობესებების შეთავაზება](#suggesting-improvements) და განახორციელეთ ისინი
+- [დასვით შეკითხვები](#asking-questions) და ჩაერთეთ საზოგადოებასთან
 
-New to our project? [Make your first contribution](#your-first-code-contribution)!
+ახალი ხართ ჩვენს პროექტში? [შეიტანეთ თქვენი პირველი წვლილი](#your-first-code-contribution)!
 
-### TL;DR
+### TL; DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Fix your issue of choice.
-- Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
+- იპოვეთ [ZenHub] (https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
+- ჩანგალი [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
+- მოაგვარეთ თქვენი არჩევანის საკითხი.
+- დარწმუნდით, რომ მიჰყევით ჩვენს [სტილის სახელმძღვანელოებს] (#style-guides) კოდისა და დოკუმენტაციისთვის.
+- ჩაწერეთ [ტესტები] (https://doc.rust-lang.org/cargo/commands/cargo-test.html). დარწმუნდით, რომ ისინი ყველა გაივლიან (`cargo test --workspace`). თუ შეეხებით SM კრიპტოგრაფიის დასტას, ასევე გაუშვით `cargo test -p iroha_crypto --features "sm sm_proptest"` არჩევითი fuzz/საკუთრების აღკაზმვის შესასრულებლად.
+  - შენიშვნა: ტესტები, რომლებიც ახორციელებენ IVM შემსრულებელს, ავტომატურად სინთეზირებენ მინიმალურ, დეტერმინისტულ შემსრულებლის ბაიტეკოდს, თუ `defaults/executor.to` არ არის. წინასწარი ნაბიჯი არ არის საჭირო ტესტების გასაშვებად. პარიტეტისთვის კანონიკური ბაიტეკოდის შესაქმნელად, შეგიძლიათ გაუშვათ:
     - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
-- If you change derive/proc-macro crates, run the trybuild UI suites via
-  `make check-proc-macro-ui` (or
-  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
-  `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
-- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
-- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
-  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
-  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
-- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
-- Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
-- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+- თუ თქვენ შეცვლით derive/proc-macro crates, გაუშვით trybuild UI კომპლექტები მეშვეობით
+  `make check-proc-macro-ui` (ან
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) და განაახლეთ
+  `.stderr` აწყობს, როდესაც დიაგნოსტიკა იცვლება შეტყობინებების სტაბილურობის შესანარჩუნებლად.
+- გაუშვით `make dev-workflow` (შეფუთვა `scripts/dev_workflow.sh`-ის გარშემო) fmt/clippy/build/ტესტი შესასრულებლად `--locked` პლუს `swift test`-ით; ველით, რომ `cargo test --workspace` საათებს მიიღებს და გამოიყენებს `--skip-tests` მხოლოდ სწრაფი ლოკალური მარყუჟებისთვის. იხილეთ `docs/source/dev_workflow.md` სრული runbook-ისთვის.
+- დააწესეთ დამცავი მოაჯირები `make check-agents-guardrails`-ით `Cargo.lock` რედაქტირებისა და ახალი სამუშაო სივრცის ყუთების დასაბლოკად, `make check-dependency-discipline` ახალ დამოკიდებულებებზე წარუმატებლობისთვის, თუ ცალსახად არ არის ნებადართული, და I18NI000001300130X-ის თავიდან აცილება კრატის დონის დოკუმენტები შეხებულ ყუთებზე, ან ახალი საჯარო ნივთები დოკუმენტის კომენტარების გარეშე (მცველი განაახლებს `docs/source/agents/missing_docs_inventory.{json,md}`-ს `scripts/inventory_missing_docs.py`-ის მეშვეობით). დაამატეთ `make check-tests-guard`, ასე რომ შეცვლილი ფუნქციები ვერ მოხერხდება, თუ ერთეულის ტესტები არ მიუთითებენ მათზე (inline `#[cfg(test)]`/`#[test]` ბლოკები ან ყუთი `tests/`; არსებული დაფარვის რაოდენობა, I18NI00000000014) და I18NI0000000014. მეტრიკა/დაფები. შეინახეთ TODO აღსრულება `make check-todo-guard`-ის მეშვეობით, რათა TODO მარკერები არ ჩამოაგდეს თანმხლები დოკუმენტების/ტესტების გარეშე. `make check-env-config-surface` აღადგენს env-toggle ინვენტარს და ახლა ვერ ხერხდება, როდესაც ახალი **წარმოების** env shims გამოჩნდება `AGENTS_BASE_REF`-თან შედარებით; დააყენეთ `ENV_CONFIG_GUARD_ALLOW=1` მხოლოდ მიგრაციის ტრეკერში განზრახ დამატებების დოკუმენტირების შემდეგ. `make check-serde-guard` აახლებს სერდების ინვენტარს და წარუმატებელია ძველ კადრებზე ან ახალი წარმოების `serde`/`serde_json` ჰიტებზე; დააყენეთ `SERDE_GUARD_ALLOW=1` მხოლოდ დამტკიცებული მიგრაციის გეგმით. შეინახეთ დიდი გადავადები ხილული TODO breadcrumbs-ის და შემდგომი ბილეთების მეშვეობით, ჩუმად გადადების ნაცვლად. გაუშვით `make check-std-only`, რათა დაიჭიროთ `no_std`/`wasm32` cfgs და `make check-status-sync`, რათა უზრუნველყოთ `roadmap.md` ღია ერთეულები დარჩეს მხოლოდ ღია და რომ საგზაო რუკა/სტატუსები ერთად ცვლის მიწას; დააყენეთ `STATUS_SYNC_ALLOW_UNPAIRED=1` მხოლოდ იშვიათ სტატუსზე დაწერილი შეცდომების გამოსწორებისთვის `AGENTS_BASE_REF` ჩამაგრების შემდეგ. ერთი გამოძახებისთვის გამოიყენეთ `make agents-preflight` ყველა დამცავი მოაჯირის ერთად გასაშვებად.
+- გაუშვით ადგილობრივი სერიული მცველები, სანამ დააყენებთ: `make guards`.
+  - ეს უარყოფს პირდაპირ `serde_json`-ს წარმოების კოდში, აკრძალავს ახალი პირდაპირი სერდი დეპების დაშვების სიის გარეთ და ხელს უშლის ad-hoc AoS/NCB დამხმარეებს `crates/norito`-ის გარეთ.
+- სურვილისამებრ მშრალი გაშვების Norito ფუნქციის მატრიცა ლოკალურად: `make norito-matrix` (იყენებს სწრაფ ქვეჯგუფს).
+  - სრული დაფარვისთვის, გაუშვით `scripts/run_norito_feature_matrix.sh` `--fast`-ის გარეშე.
+  - ქვედა დინების კვამლის ჩართვა თითო კომბინაციით (ნაგულისხმევი ყუთი `iroha_data_model`): `make norito-matrix-downstream` ან `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
+- პროკ-მაკრო ყუთებისთვის, დაამატეთ `trybuild` UI აღკაზმულობა (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) და ჩაიტარეთ `.stderr` დიაგნოსტიკა ფაზაში. შეინახეთ დიაგნოსტიკა სტაბილური და პანიკური; განაახლეთ მოწყობილობები `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests`-ით და დაიცავით ისინი `cfg(all(feature = "trybuild-tests", not(coverage)))`-ით.
+- შეასრულეთ წინასწარი ჩართვის რუტინა, როგორიცაა ფორმატირება და არტეფაქტების რეგენერაცია (იხ. [`pre-commit.sample`](./hooks/pre-commit.sample))
+- `upstream` დაყენებული თვალყურის დევნებისთვის [Hyperledger Iroha საცავი](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, I18NI000001780000017000001700, I18NI000001770X, I18NI000001770, I18NI000001700001 მოთხოვნა](https://github.com/hyperledger-iroha/iroha/compare) `main` ფილიალში. დარწმუნდით, რომ ის მიჰყვება [მოთხოვნის მითითებებს] (#pull-request-etiquette).
 
-### AGENTS workflow quickstart
+### AGENTS სამუშაო ნაკადის სწრაფი დაწყება
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
-- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
+- გაუშვით `make dev-workflow` (შეფუთვა `scripts/dev_workflow.sh`-ის გარშემო, დოკუმენტირებულია `docs/source/dev_workflow.md`-ში). იგი ახვევს `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (ტესტებს შეიძლება დასჭირდეს რამდენიმე საათი) და `swift test`.
+- გამოიყენეთ `scripts/dev_workflow.sh --skip-tests` ან `--skip-swift` უფრო სწრაფი გამეორებისთვის; გაიმეორეთ სრული თანმიმდევრობა გაყვანის მოთხოვნის გახსნამდე.
+- დამცავი ფრაგმენტები: მოერიდეთ `Cargo.lock`-ს შეხებას, ახალი სამუშაო სივრცის წევრების დამატებას, ახალი დამოკიდებულებების დანერგვას, ახალი `#[allow(missing_docs)]` შიგთავსის დამატებას, კრატის დონის დოკუმენტების გამოტოვებას, ფუნქციების შეცვლისას ტესტების გამოტოვებას, TODO მარკერების ჩამოგდებას, ხელახალი ტესტირების გარეშე. `no_std`/`wasm32` cfgs დამტკიცების გარეშე. გაუშვით `make check-agents-guardrails` (ან `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) პლუს `make check-dependency-discipline`, `make check-missing-docs` (განახლებს `docs/source/agents/missing_docs_inventory.{json,md}`), I18NI000000198X (არ იცვლება მისი ერთეულის ტესტის მტკიცებულების გარეშე ან არ იცვლება წარმოების მტკიცებულების გარეშე. ტესტები უნდა მიუთითებდეს ფუნქციაზე), `make check-docs-tests-metrics` (მარცხდება, როდესაც საგზაო რუქის ცვლილებებს აკლია დოკუმენტები/ტესტები/მეტრიკის განახლებები), `make check-todo-guard`, I18NI000000201X (შეიძლება შემორჩენილი ინვენტარი ან ახალი პროდუქციის ჩანაცვლება; მხოლოდ I08-ის შემდეგ გადაინაცვლებს NI020Xc-ს) `make check-serde-guard` (დაუვარდება მოძველებულ სერდეის ინვენტარს ან ახალი წარმოების სერდების ჰიტებს; გადააჭარბეთ `SERDE_GUARD_ALLOW=1` მხოლოდ დამტკიცებული მიგრაციის გეგმით) ლოკალურად ადრეული სიგნალისთვის, `make check-std-only` მხოლოდ std მცველისთვის და შეინახეთ I1018000060I1800006 სინქრონიზებულია `make check-status-sync`-თან (დააყენეთ `STATUS_SYNC_ALLOW_UNPAIRED=1` მხოლოდ იშვიათ სტატუსზე დაწერილი შეცდომების გამოსწორებისთვის `AGENTS_BASE_REF`-ის ჩამაგრების შემდეგ). გამოიყენეთ `make agents-preflight`, თუ ​​გსურთ ერთი ბრძანება ყველა მცველის გასაშვებად PR-ის გახსნამდე.
 
-### Reporting Bugs
+### შეცდომების შესახებ შეტყობინება
 
-A *bug* is an error, design flaw, failure or fault in Iroha that causes it to produce an incorrect, unexpected, or unintended result or behaviour.
+*ბუგი* არის შეცდომა, დიზაინის ხარვეზი, წარუმატებლობა ან გაუმართაობა Iroha-ში, რომელიც იწვევს მას არასწორ, მოულოდნელ ან გაუთვალისწინებელ შედეგს ან ქცევას.
 
-We track Iroha bugs via [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) labeled with the `Bug` tag.
+ჩვენ თვალყურს ვადევნებთ Iroha შეცდომებს [GitHub Issues] (https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) მეშვეობით, რომელიც იარლიყით `Bug` ტეგით.
 
-When you create a new issue, there is a template for you to fill in. Here's the checklist of what you should do when you are reporting bugs:
-- [ ] Add the `Bug` tag
-- [ ] Explain the issue
-- [ ] Provide a minimum working example
-- [ ] Attach a screenshot
+როდესაც თქვენ შექმნით ახალ პრობლემას, არის შაბლონი, რომელიც უნდა შეავსოთ. აქ არის ჩამონათვალი იმისა, თუ რა უნდა გააკეთოთ შეცდომების შესახებ მოხსენებისას:
+- [ ] დაამატეთ `Bug` ტეგი
+- [ ] ახსენით საკითხი
+- [ ] მიუთითეთ მინიმალური სამუშაო მაგალითი
+- [ ] მიამაგრეთ ეკრანის სურათი
 
-<details> <summary>Minimum working example</summary>
+<details> <summary>მინიმალური სამუშაო მაგალითი</summary>
 
-For each bug, you should provide a [minimum working example](https://en.wikipedia.org/wiki/Minimal_working_example). For example:
+თითოეული შეცდომისთვის უნდა მიუთითოთ [მინიმალური სამუშაო მაგალითი] (https://en.wikipedia.org/wiki/Minimal_working_example). მაგალითად:
 
 ```
 # Minting negative Assets with value spec `Numeric`.
@@ -95,33 +96,33 @@ not to be able to mint negative values
 <paste a screenshot>
 ```
 
-</details>
+</დეტალები>
 
 ---
-**Note:** Issues such as outdated documentation, insufficient documentation, or feature requests should use the `Documentation` or `Enhancement` labels. They are not bugs.
+**შენიშვნა:** ისეთ საკითხებში, როგორიცაა მოძველებული დოკუმენტაცია, არასაკმარისი დოკუმენტაცია ან ფუნქციების მოთხოვნები უნდა გამოიყენონ `Documentation` ან `Enhancement` ლეიბლები. ისინი არ არიან შეცდომები.
 
 ---
 
-### Reporting Vulnerabilities
+### მოწყვლადობის მოხსენება
 
-While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
+მიუხედავად იმისა, რომ ჩვენ პროაქტიულები ვართ უსაფრთხოების პრობლემების პრევენციაში, შესაძლებელია, რომ თქვენ შეგხვდეთ უსაფრთხოების დაუცველობა ჩვენამდე.
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- პირველი ძირითადი გამოშვებამდე (2.0) ყველა დაუცველობა ითვლება შეცდომად, ასე რომ, მოგერიდებათ წარადგინოთ ისინი შეცდომების სახით [ზემოთ მოყვანილი ინსტრუქციების შემდეგ] (#reporting-bugs).
+- პირველი ძირითადი გამოშვების შემდეგ, გამოიყენეთ ჩვენი [bug bounty program] (https://hackerone.com/hyperledger), რათა წარადგინოთ დაუცველობა და მიიღოთ თქვენი ჯილდო.
 
-:exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
+:exclamation: უსაფრთხოების გაუხსნელი დაუცველობით გამოწვეული ზიანის შესამცირებლად, თქვენ უნდა გაამჟღავნოთ დაუცველობა პირდაპირ Hyperledger-ს რაც შეიძლება მალე და ** მოერიდოთ იგივე დაუცველობის საჯაროდ გამჟღავნებას** გონივრული დროის განმავლობაში.
 
-If you have any questions regarding our handling of security vulnerabilities, please feel free to contact any of the currently active maintainers in Rocket.Chat private messages.
+თუ თქვენ გაქვთ რაიმე შეკითხვა უსაფრთხოების დაუცველობასთან დაკავშირებულ ჩვენს დამუშავებასთან დაკავშირებით, გთხოვთ, თავისუფლად დაუკავშირდეთ Rocket.Chat-ის რომელიმე ამჟამად აქტიურ შემსრულებელს პირად შეტყობინებებში.
 
-### Suggesting Improvements
+### გთავაზობთ გაუმჯობესებას
 
-Create [an issue](https://github.com/hyperledger-iroha/iroha/issues/new) on GitHub with the appropriate tags (`Optimization`, `Enhancement`) and describe the improvement you are suggesting. You may leave this idea for us or someone else to develop, or you may implement it yourself.
+შექმენით [საკითხი](https://github.com/hyperledger-iroha/iroha/issues/new) GitHub-ზე შესაბამისი ტეგებით (`Optimization`, `Enhancement`) და აღწერეთ გაუმჯობესება, რომელსაც თქვენ გვთავაზობთ. თქვენ შეგიძლიათ დატოვოთ ეს იდეა ჩვენთვის ან ვინმეს განსავითარებლად, ან თავად განახორციელოთ იგი.
 
-If you intend to implement the suggestion yourself, do the following:
+თუ თქვენ თვითონ აპირებთ წინადადების განხორციელებას, გააკეთეთ შემდეგი:
 
-1. Assign the issue you created to yourself **before** you start working on it.
-2. Work on the feature you suggested and follow our [guidelines for code and documentation](#style-guides).
-3. When you are ready to open a pull request, make sure you follow the [pull request guidelines](#pull-request-etiquette) and mark it as implementing the previously created issue:
+1. შენს მიერ შექმნილ საკითხს მიეცი შენს თავს **სანამ** დაიწყებ მასზე მუშაობას.
+2. იმუშავეთ თქვენს მიერ შემოთავაზებულ ფუნქციაზე და მიჰყევით ჩვენს [კოდისა და დოკუმენტაციის სახელმძღვანელო მითითებებს] (#style-guides).
+3. როდესაც მზად ხართ გაყვანის მოთხოვნის გასახსნელად, დარწმუნდით, რომ მიჰყევით [გაყვანის მოთხოვნის სახელმძღვანელო მითითებებს] (#pull-request-etiquette) და მონიშნეთ, როგორც ადრე შექმნილი საკითხის განხორციელების სახით:
 
    ```
    feat: Description of the feature
@@ -131,157 +132,153 @@ If you intend to implement the suggestion yourself, do the following:
    Closes #1234
    ```
 
-4. If your change requires an API change, use the `api-changes` tag.
+4. თუ თქვენი ცვლილება მოითხოვს API ცვლილებას, გამოიყენეთ `api-changes` ტეგი.
 
-   **Note:** features that require API changes may take longer to implement and approve as they require Iroha library makers to update their code.
+   **შენიშვნა:** ფუნქციებს, რომლებიც საჭიროებენ API-ს ცვლილებებს, შეიძლება უფრო მეტი დრო დასჭირდეს დანერგვას და დამტკიცებას, რადგან მათ Iroha ბიბლიოთეკის შემქმნელებისგან უნდა განაახლონ კოდი.### კითხვების დასმა
 
-### Asking Questions
+კითხვა არის ნებისმიერი დისკუსია, რომელიც არ არის არც შეცდომა, არც ფუნქცია ან ოპტიმიზაციის მოთხოვნა.
 
-A question is any discussion that is neither a bug nor a feature or optimization request.
+<details> <summary> როგორ დავსვა შეკითხვა? </summary>
 
-<details> <summary> How do I ask a question? </summary>
+გთხოვთ, გამოაქვეყნოთ თქვენი შეკითხვები [ჩვენი მყისიერი შეტყობინებების ერთ-ერთ პლატფორმაზე] (#contact), რათა თანამშრომლებმა და საზოგადოების წევრებმა დროულად დაგეხმარონ.
 
-Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
+თქვენ, როგორც ზემოხსენებული საზოგადოების ნაწილი, უნდა იფიქროთ სხვების დახმარებაზეც. თუ დახმარებას გადაწყვეტთ, გთხოვთ, ეს გააკეთოთ [პატივისცემით] (CODE_OF_CONDUCT.md).
 
-You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
+</დეტალები>
 
-</details>
+## თქვენი პირველი კოდის წვლილი
 
-## Your First Code Contribution
+1. იპოვეთ დამწყებთათვის შესაფერისი საკითხი [good-first-issue] (https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) ეტიკეტის მქონე საკითხებს შორის.
+2. დარწმუნდით, რომ სხვა არავინ მუშაობს თქვენს მიერ არჩეულ საკითხებზე, ამოწმებთ, რომ ეს არ არის ვინმესთვის მინიჭებული.
+3. დაავალეთ ეს საკითხი საკუთარ თავს, რათა სხვებმა დაინახონ, რომ ვინმე მუშაობს მასზე.
+4. წაიკითხეთ ჩვენი [Rust Style Guide] (#rust-style-guide) სანამ კოდის წერას დაიწყებთ.
+5. როდესაც მზად იქნებით ცვლილებების შესასრულებლად, წაიკითხეთ [მოთხოვნის მითითებები] (#pull-request-etiquette).
 
-1. Find a beginner-friendly issue among issues with the [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) label.
-2. Make sure that no one else is working on the issues you have chosen by checking that it is not assigned to anybody.
-3. Assign the issue to yourself so that others can see that someone is working on it.
-4. Read our [Rust Style Guide](#rust-style-guide) before you start writing code.
-5. When you are ready to commit your changes, read the [pull request guidelines](#pull-request-etiquette).
+## გაიყვანეთ მოთხოვნის ეტიკეტი
 
-## Pull Request Etiquette
+გთხოვთ, [გაამაგროთ](https://docs.github.com/en/get-started/quickstart/fork-a-repo) [საცავი](https://github.com/hyperledger-iroha/iroha/tree/main) და [შექმენით ფუნქციების ფილიალი](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) თქვენი წვლილისთვის. ** ჩანგლების PR-ებთან მუშაობისას შეამოწმეთ [ეს სახელმძღვანელო] (https://help.github.com/articles/checking-out-pull-requests-locally).
 
-Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions. When working with **PRs from forks**, check [this manual](https://help.github.com/articles/checking-out-pull-requests-locally).
+#### მუშაობა კოდის წვლილს:
+- მიჰყევით [Rust Style Guide] (#rust-style-guide) და [Documentation Style Guide] (#documentation-style-guide).
+- დარწმუნდით, რომ თქვენს მიერ დაწერილი კოდი დაფარულია ტესტებით. თუ თქვენ გამოასწორეთ ხარვეზი, გთხოვთ გადააქციოთ მინიმალური სამუშაო მაგალითი, რომელიც ასახავს შეცდომას ტესტად.
+- დერიივ/პროკ-მაკრო უჯრებთან შეხებისას გაუშვით `make check-proc-macro-ui` (ან
+  ფილტრი `PROC_MACRO_UI_CRATES="crate1 crate2"`-ით) ამიტომ სცადეთ UI მოწყობილობების აშენება
+  დარჩით სინქრონიზებული და დიაგნოსტიკა სტაბილური რჩება.
+- ახალი საჯარო API-ების დოკუმენტირება (კრატის დონის `//!` და `///` ახალ ელემენტებზე) და გაუშვით
+  `make check-missing-docs` დამცავი მოაჯირის შესამოწმებლად. გამოიძახეთ დოკუმენტები/ტესტი
+  დამატებულია თქვენი მოთხოვნის აღწერაში.
 
-#### Working on code contribution:
-- Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
-- Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
-- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
-  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
-  stay in sync and diagnostics remain stable.
-- Document new public APIs (crate-level `//!` and `///` on new items), and run
-  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
-  added in your pull request description.
+#### თქვენი სამუშაოს შესრულება:
+- მიჰყევით [Git Style Guide] (#git-workflow).
+- გაანადგურეთ თქვენი ვალდებულებები [ან ადრე] (https://www.git-tower.com/learn/git/faq/git-squash/) ან [შერწყმის დროს] (https://rietta.com/blog/github-merge-types/).
+- თუ თქვენი გაყვანის მოთხოვნის მომზადებისას თქვენი ფილიალი მოძველდა, შეცვალეთ იგი ადგილობრივად `git pull --rebase upstream main`-ით. ალტერნატიულად, შეგიძლიათ გამოიყენოთ ჩამოსაშლელი მენიუ `Update branch` ღილაკისთვის და აირჩიოთ `Update with rebase` ვარიანტი.
 
-#### Committing your work:
-- Follow the [Git Style Guide](#git-workflow).
-- Squash your commits [either before](https://www.git-tower.com/learn/git/faq/git-squash/) or [during the merge](https://rietta.com/blog/github-merge-types/).
-- If during the preparation of your pull request your branch got out of date, rebase it locally with `git pull --rebase upstream main`. Alternatively, you may use the drop-down menu for the `Update branch` button and choose the `Update with rebase` option.
+  ამ პროცესის ყველასთვის გაადვილების ინტერესისთვის, შეეცადეთ არ გქონდეთ რამდენიმე მუჭაზე მეტი ვალდებულება pull-ის მოთხოვნაზე და მოერიდეთ ფუნქციების განშტოებების ხელახლა გამოყენებას.
 
-  In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
+#### მოზიდვის მოთხოვნის შექმნა:
+- გამოიყენეთ გაყვანის მოთხოვნის შესაბამისი აღწერილობა განყოფილებაში [Pull Request Etiquette] (#pull-request-etiquette) მითითებების შესაბამისად. თუ ეს შესაძლებელია, მოერიდეთ ამ სახელმძღვანელოებიდან გადახვევას.
+- დაამატეთ სათანადო ფორმატირებული [მოთხოვნის სათაური] (#pull-request-titles).
+- თუ ფიქრობთ, რომ თქვენი კოდი მზად არ არის შერწყმისთვის, მაგრამ გსურთ, რომ შემსრულებლებმა გადახედონ მას, შექმენით pull-ის მოთხოვნის პროექტი.
 
-#### Creating a pull request:
-- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
-- Add an appropriately formatted [pull request title](#pull-request-titles).
-- If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
+#### თქვენი სამუშაოს შერწყმა:
+- გაყვანის მოთხოვნამ უნდა გაიაროს ყველა ავტომატური შემოწმება გაერთიანებამდე. მინიმუმ, კოდი უნდა იყოს ფორმატირებული, გაიაროს ყველა ტესტი, ასევე არ ჰქონდეს გამორჩეული `clippy` ლინტები.
+- ამოღების მოთხოვნა არ შეიძლება გაერთიანდეს აქტიური შემსრულებლების ორი დამტკიცების მიმოხილვის გარეშე.
+- თითოეული გაყვანის მოთხოვნა ავტომატურად აცნობებს კოდის მფლობელებს. მიმდინარე შემსრულებლების განახლებული სია შეგიძლიათ ნახოთ [MAINTAINERS.md] (MAINTAINERS.md).
 
-#### Merging your work:
-- A pull request must pass all automated checks before being merged. At a minimum, the code must be formatted, passing all tests, as well as having no outstanding `clippy` lints.
-- A pull request cannot be merged without two approving reviews from the active maintainers.
-- Each pull request will automatically notify the code owners. An up to date list of current maintainers can be found in [MAINTAINERS.md](MAINTAINERS.md).
+#### მიმოხილვის ეტიკეტი:
+- საუბარს დამოუკიდებლად ნუ მოაგვარებ. მიეცით უფლება მიმომხილველს მიიღოს გადაწყვეტილება.
+- აღიარეთ მიმოხილვის კომენტარები და ჩაერთეთ მიმომხილველთან (ვეთანხმები, არ ვეთანხმები, დაზუსტება, ახსნა და ა.შ.). ნუ უგულებელყოფთ კომენტარებს.
+- კოდის შეცვლის მარტივი შემოთავაზებისთვის, თუ მათ პირდაპირ გამოიყენებთ, შეგიძლიათ გადაწყვიტოთ საუბარი.
+- მოერიდეთ თქვენი წინა ვალდებულებების გადაწერას ახალი ცვლილებების განხორციელებისას. ის აბნელებს იმას, რაც შეიცვალა ბოლო განხილვის შემდეგ და აიძულებს მიმომხილველს დაიწყოს ნულიდან. ვალდებულებები იშლება, სანამ ავტომატურად გაერთიანდება.
 
-#### Review etiquette:
-- Do not resolve a conversation on your own. Let the reviewer make a decision.
-- Acknowledge review comments and engage with the reviewer (agree, disagree, clarify, explain, etc.). Do not ignore comments.
-- For simple code change suggestions, if you apply them directly, you can resolve the conversation.
-- Avoid overwriting your previous commits when pushing new changes. It obfuscates what changed since the last review and forces the reviewer to start from scratch. Commits are squashed before merging automatically.
+### გაიყვანეთ მოთხოვნის სათაურები
 
-### Pull Request Titles
+ჩვენ ვაანალიზებთ ყველა გაერთიანებული pull მოთხოვნის სათაურებს ცვლილებების ჟურნალების გენერირებისთვის. ჩვენ ასევე ვამოწმებთ, რომ სათაური შეესაბამება კონვენციას *`check-PR-title`* შემოწმების მეშვეობით.
 
-We parse the titles of all the merged pull requests to generate changelogs. We also check that the title follows the convention via the *`check-PR-title`* check.
+*`check-PR-title`* შემოწმების გასავლელად, გაყვანის მოთხოვნის სათაური უნდა შეესაბამებოდეს შემდეგ მითითებებს:
 
-To pass the *`check-PR-title`* check, the pull request title must adhere to the following guidelines:
+<details> <summary> გააფართოვეთ დეტალური სათაურის სახელმძღვანელოების წასაკითხად</summary>
 
-<details> <summary> Expand to read the detailed title guidelines</summary>
+1. მიჰყევით [ჩვეულებრივი ვალდებულებების] (https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) ფორმატს.
 
-1. Follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) format.
+2. თუ pull მოთხოვნას აქვს ერთჯერადი ჩადენა, PR სათაური უნდა იყოს იგივე, რაც commit გაგზავნა.
 
-2. If the pull request has a single commit, the PR title should be the same as the commit message.
-
-</details>
+</დეტალები>
 
 ### Git Workflow
 
-- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions.
-- [Configure the remote](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) to sync your fork with the [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Use the [Git Rebase Workflow](https://git-rebase.io/). Avoid using `git pull`. Use `git pull --rebase` instead.
-- Use the provided [git hooks](./hooks/) to ease the development process.
+- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) [საცავი](https://github.com/hyperledger-iroha/iroha/tree/main) და [შექმენით ფუნქციების ფილიალი](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) თქვენი წვლილისთვის.
+- [დისტანციური მართვის კონფიგურაცია](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) თქვენი ჩანგლის სინქრონიზაციისთვის [Hyperledger Iroha საცავთან](https://github.com/hyperledger-iroha/iroha/tree/main).
+- გამოიყენეთ [Git Rebase Workflow] (https://git-rebase.io/). მოერიდეთ `git pull` გამოყენებას. ამის ნაცვლად გამოიყენეთ `git pull --rebase`.
+- გამოიყენეთ მოწოდებული [git hooks] (./hooks/) განვითარების პროცესის გასაადვილებლად.
 
-Follow these commit guidelines:
+მიჰყევით ამ საკომისიოს მითითებებს:
 
-- **Sign-off every commit**. If you don't, [DCO](https://github.com/apps/dco) will not let you merge.
+- ** ყოველი ვალდებულების გაფორმება **. თუ არა, [DCO](https://github.com/apps/dco) არ მოგცემთ გაერთიანების საშუალებას.
 
-  Use `git commit -s` to automatically add `Signed-off-by: $NAME <$EMAIL>` as the final line of your commit message. Your name and email should be the same as specified in your GitHub account.
+  გამოიყენეთ `git commit -s`, რათა ავტომატურად დაამატოთ `Signed-off-by: $NAME <$EMAIL>`, როგორც თქვენი commit შეტყობინების საბოლოო ხაზი. თქვენი სახელი და ელფოსტა უნდა იყოს იგივე, რაც მითითებულია თქვენს GitHub ანგარიშში.
 
-  We also encourage you to sign your commits with GPG key using `git commit -sS` ([learn more](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
+  ჩვენ ასევე მოგიწოდებთ, ხელი მოაწეროთ თქვენს ვალდებულებებს GPG გასაღებით `git commit -sS`-ის გამოყენებით ([შეიტყვეთ მეტი](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
 
-  You may use [the `commit-msg` hook](./hooks/) to automatically sign-off your commits.
+  თქვენ შეგიძლიათ გამოიყენოთ [`commit-msg` Hook](./hooks/) თქვენი ვალდებულებების ავტომატურად გასაფორმებლად.
 
-- Commit messages must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) and the same naming schema as for [pull request titles](#pull-request-titles). This means:
-  - **Use present tense** ("Add feature", not "Added feature")
-  - **Use imperative mood** ("Deploy to docker..." not "Deploys to docker...")
-- Write a meaningful commit message.
-- Try keeping a commit message short.
-- If you need to have a longer commit message:
-  - Limit the first line of your commit message to 50 characters or less.
-  - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
-- Try to stick to one commit per meaningful change.
-  - If you fixed several issues in one PR, give them separate commits.
-  - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
-  - Add tests for functionality in the same commit as that functionality.
+- ვალდებულების შეტყობინებები უნდა შეესაბამებოდეს [ჩვეულებრივ ვალდებულებებს] (https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) და იგივე დასახელების სქემას, როგორც [მოთხოვნის სათაურების ამოღება] (#pull-request-titles). ეს ნიშნავს:
+  - **გამოიყენე აწმყო დრო** ("ფუნქციის დამატება", არა "დამატებული ფუნქცია")
+  - **გამოიყენეთ იმპერატიული განწყობა** ("Deploy to docker..." და არა "Deploys to docker...")
+- დაწერე მნიშვნელოვანი ჩაბარების შეტყობინება.
+- შეეცადეთ მოკლედ შეინახოთ ვალდებულების შეტყობინება.
+- თუ თქვენ გჭირდებათ უფრო გრძელი დავალებების გაგზავნა:
+  - შეზღუდეთ თქვენი ჩაწერის შეტყობინების პირველი ხაზი 50 სიმბოლოთი ან ნაკლები.
+  - თქვენი ვალდებულების შეტყობინების პირველი ხაზი უნდა შეიცავდეს თქვენს მიერ შესრულებული სამუშაოს შეჯამებას. თუ გჭირდებათ ერთზე მეტი ხაზი, დატოვეთ ცარიელი ხაზი თითოეულ აბზაცს შორის და აღწერეთ თქვენი ცვლილებები შუაში. ბოლო ხაზი უნდა იყოს გაფორმება.
+- თუ თქვენ შეცვლით სქემას (შეამოწმეთ სქემის გენერირებით `kagami schema`-ით და განსხვავებულად), თქვენ უნდა შეიტანოთ ყველა ცვლილება სქემაში ცალკე დავალებით მესიჯით `[schema]`.
+- შეეცადეთ დაიცვან ერთი ვალდებულება ყოველი მნიშვნელოვანი ცვლილებისთვის.
+  - თუ ერთ პიარში რამდენიმე საკითხი მოაგვარეთ, ცალკე ვალდებულებები მიეცით.
+  - როგორც უკვე აღვნიშნეთ, `schema`-სა და API-ში ცვლილებები უნდა განხორციელდეს შესაბამისი ვალდებულებებით, თქვენი დანარჩენი სამუშაოსგან განცალკევებით.
+  - დაამატეთ ტესტები ფუნქციონალურობისთვის იმავე ფუნქციებში.
 
-## Tests and Benchmarks
+## ტესტები და ნიშნები
 
-- To run the source-code based tests, execute [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) in the Iroha root. Note that this is a long process.
-- To run benchmarks, execute [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) from the Iroha root. To help debug benchmark outputs, set the `debug_assertions` environment variable like so: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
-- If you are working on a particular component, be mindful that when you run `cargo test` in a [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html), it will only run the tests for that workspace, which usually doesn't include any [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing).
-- If you want to test your changes on a minimal network, the provided [`docker-compose.yml`](defaults/docker-compose.yml) creates a network of 4 Iroha peers in docker containers that can be used to test consensus and asset propagation-related logic. We recommend interacting with that network using either [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python), or the included Iroha client CLI.
-- Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
-- If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
+- წყაროზე დაფუძნებული ტესტების გასაშვებად, შეასრულეთ [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) Iroha root-ში. გაითვალისწინეთ, რომ ეს ხანგრძლივი პროცესია.
+- საორიენტაციო ნიშნების გასაშვებად, შეასრულეთ [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) Iroha ფესვიდან. საორიენტაციო შედეგების გამართვის დასახმარებლად, დააყენეთ `debug_assertions` გარემოს ცვლადი ასე: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
+- თუ კონკრეტულ კომპონენტზე მუშაობთ, გაითვალისწინეთ, რომ როდესაც `cargo test`-ს აწარმოებთ [სამუშაო სივრცეში](https://doc.rust-lang.org/cargo/reference/workspaces.html), ის მხოლოდ ამ სამუშაო სივრცის ტესტებს გაუშვებს, რომელიც ჩვეულებრივ არ შეიცავს [ინტეგრაციის ტესტებს](https://www.testingxperts.com/blog/what-is-integration-testing).
+- თუ გსურთ შეამოწმოთ თქვენი ცვლილებები მინიმალურ ქსელში, მოწოდებული [`docker-compose.yml`](defaults/docker-compose.yml) ქმნის 4 Iroha ქსელს დოკერის კონტეინერებში, რომლებიც შეიძლება გამოყენებულ იქნას კონსენსუსისა და აქტივების გავრცელებასთან დაკავშირებული ლოგიკის შესამოწმებლად. ჩვენ გირჩევთ ამ ქსელთან ინტერაქციას [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python) ან Iroha კლიენტის CLI-ის გამოყენებით.
+- არ ამოიღოთ წარუმატებელი ტესტები. ტესტებიც კი, რომლებიც იგნორირებულია, საბოლოოდ განხორციელდება ჩვენს მილსადენში.
+- თუ შესაძლებელია, გთხოვთ, შეაფასოთ თქვენი კოდი როგორც ცვლილებების შეტანამდე, ისე მის შემდეგ, რადგან შესრულების მნიშვნელოვანმა რეგრესმა შეიძლება დაარღვიოს არსებული მომხმარებლების ინსტალაციები.
 
-### Serialization guard checks
+### სერიალიზაციის მცველი ამოწმებს
 
-Run `make guards` to validate repository policies locally:
+გაუშვით `make guards` საცავის პოლიტიკის ადგილობრივად დასადასტურებლად:
 
-- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
-- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
-- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
+- უარი თქვით ჩამოთვალეთ პირდაპირი `serde_json` წარმოების წყაროებში (აურჩიეთ `norito::json`).
+- აიკრძალოს პირდაპირი `serde`/`serde_json` დამოკიდებულებები/იმპორტი დაშვებული სიის გარეთ.
+- თავიდან აიცილეთ ad-hoc AoS/NCB დამხმარეების ხელახალი დანერგვა `crates/norito`-ის გარეთ.
 
-### Debugging tests
+### გამართვის ტესტები
 
-<details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
+<details> <summary> გააფართოვეთ, რომ შეიტყოთ, როგორ შეცვალოთ ჟურნალის დონე ან ჩაწეროთ ჟურნალები JSON-ზე.</summary>
 
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
+თუ თქვენი ერთ-ერთი ტესტი წარუმატებელია, შეიძლება დაგჭირდეთ შემცირების მაქსიმალური დონე. ნაგულისხმევად, Iroha აღრიცხავს მხოლოდ `INFO` დონის შეტყობინებებს, მაგრამ ინარჩუნებს `DEBUG` და `TRACE` დონის ჟურნალების წარმოების უნარს. ეს პარამეტრი შეიძლება შეიცვალოს ან `LOG_LEVEL` გარემოს ცვლადის გამოყენებით კოდზე დაფუძნებული ტესტებისთვის, ან `/configuration` საბოლოო წერტილის გამოყენებით ერთ-ერთ თანატოლზე განლაგებულ ქსელში.მიუხედავად იმისა, რომ `stdout`-ში დაბეჭდილი ჟურნალები საკმარისია, თქვენ შეიძლება უფრო მოსახერხებელი აღმოჩნდეთ `json` ფორმატირებული ჟურნალების ცალკე ფაილში დამუშავება და მათი გაანალიზება ან [node-bunyan](https://www.npmjs.com/package/bunyan) ან [rust-N10](I08).
 
-While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
+დააყენეთ `LOG_FILE_PATH` გარემოს ცვლადი შესაბამის ადგილას, რათა შეინახოთ ჟურნალები და გააანალიზოთ ისინი ზემოაღნიშნული პაკეტების გამოყენებით.
 
-Set the `LOG_FILE_PATH` environment variable to an appropriate location to store the logs and parse them using the above packages.
+</დეტალები>
 
-</details>
+### გამართვა tokio კონსოლის გამოყენებით
 
-### Debugging using tokio console
+<details> <summary> გააფართოვეთ, რომ ისწავლოთ Iroha-ის შედგენა tokio-ს კონსოლის მხარდაჭერით.</summary>
 
-<details> <summary> Expand to learn how to compile Iroha with tokio console support.</summary>
+ზოგჯერ შეიძლება სასარგებლო იყოს გამართვისთვის tokio ამოცანების ანალიზი [tokio-console] (https://github.com/tokio-rs/console) გამოყენებით.
 
-Sometimes it might be helpful for debugging to analyze tokio tasks using [tokio-console](https://github.com/tokio-rs/console).
-
-In this case you should compile Iroha with support of tokio console like that:
+ამ შემთხვევაში თქვენ უნდა შეადგინოთ Iroha tokio კონსოლის მხარდაჭერით ასე:
 
 ```bash
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 ```
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+პორტი tokio კონსოლისთვის შეიძლება კონფიგურირებული იყოს `LOG_TOKIO_CONSOLE_ADDR` კონფიგურაციის პარამეტრის (ან გარემოს ცვლადის) მეშვეობით.
+Tokio კონსოლის გამოყენება მოითხოვს ჟურნალის დონეს იყოს `TRACE`, შეიძლება ჩართოთ კონფიგურაციის პარამეტრის ან გარემოს ცვლადის `LOG_LEVEL` მეშვეობით.
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+Iroha-ის გაშვების მაგალითი tokio კონსოლის მხარდაჭერით `scripts/test_env.sh`-ის გამოყენებით:
 
 ```bash
 # 1. Compile Iroha
@@ -292,29 +289,29 @@ LOG_LEVEL=TRACE ./scripts/test_env.sh setup
 tokio-console http://127.0.0.1:5555
 ```
 
-</details>
+</დეტალები>
 
-### Profiling
+### პროფილირება
 
-<details> <summary> Expand to learn how to profile Iroha. </summary>
+<details> <summary> გააფართოვეთ, რომ ისწავლოთ Iroha პროფილის შექმნა. </summary>
 
-To optimize performance it's useful to profile Iroha.
+მუშაობის ოპტიმიზაციისთვის სასარგებლოა პროფილის Iroha.
 
-Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
+პროფილირების კონსტრუქციები ამჟამად საჭიროებს ღამის ინსტრუმენტთა ჯაჭვს. ერთის მოსამზადებლად შეადგინეთ Iroha `profiling` პროფილით და ფუნქციით `cargo +nightly`-ის გამოყენებით:
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
 ```
 
-Then start Iroha and attach profiler of your choice to the Iroha pid.
+შემდეგ დაიწყეთ Iroha და მიამაგრეთ თქვენი არჩევანის პროფილი Iroha pid-ზე.
 
-Alternatively it's possible to build Iroha inside docker with profiler support and profile Iroha this way.
+ალტერნატიულად შესაძლებელია Iroha-ის აწყობა დოკერის შიგნით პროფილის მხარდაჭერით და პროფილის Iroha ამ გზით.
 
 ```bash
 docker build -f Dockerfile.glibc --build-arg="PROFILE=profiling" --build-arg='RUSTFLAGS=-C force-frame-pointers=on' --build-arg='FEATURES=profiling' --build-arg='CARGOFLAGS=-Z build-std' -t iroha:profiling .
 ```
 
-E.g. using perf (available only on linux):
+მაგ. perf-ის გამოყენებით (ხელმისაწვდომია მხოლოდ ლინუქსზე):
 
 ```bash
 # to capture profile
@@ -323,15 +320,15 @@ sudo perf record -g -p <PID>
 sudo perf report
 ```
 
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
+Iroha პროფილის დროს შემსრულებლის პროფილზე დასაკვირვებლად, შემსრულებელი უნდა იყოს შედგენილი სიმბოლოების ამოღების გარეშე.
+ეს შეიძლება გაკეთდეს გაშვებით:
 
 ```bash
 # compile executor without optimizations
 cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
-With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
+ჩართული პროფილირების ფუნქციით Iroha ავლენს საბოლოო წერტილს ჯართის პროფილების მიმართ:
 
 ```bash
 # profile Iroha for 30 seconds and download the profile data
@@ -340,94 +337,94 @@ curl host:port/debug/pprof/profile?seconds=30 -o profile.pb
 go tool pprof -web profile.pb
 ```
 
-</details>
+</დეტალები>
 
-## Style Guides
+## სტილის სახელმძღვანელო
 
-Please follow these guidelines when you make code contributions to our project:
+გთხოვთ, მიჰყვეთ ამ ინსტრუქციებს, როდესაც კოდს შეაქვთ ჩვენს პროექტში:
 
-### Git Style Guide
+### Git სტილის სახელმძღვანელო
 
-:book: [Read git guidelines](#git-workflow)
+:book: [წაიკითხეთ git ინსტრუქციები] (#git-workflow)
 
-### Rust Style Guide
+### Rust სტილის სახელმძღვანელო
 
-<details> <summary> :book: Read code guidelines</summary>
+<details> <summary> :book: წაიკითხეთ კოდის მითითებები</summary>
 
-- Use `cargo fmt --all` (edition 2024) to format code.
+- გამოიყენეთ `cargo fmt --all` (გამოცემა 2024) კოდის დასაფორმებლად.
 
-Code guidelines:
+კოდის მითითებები:
 
-- Unless otherwise specified, refer to [Rust best practices](https://github.com/mre/idiomatic-rust).
-- Use the `mod.rs` style. [Self-named modules](https://rust-lang.github.io/rust-clippy/master/) will not pass static analysis, except as [`trybuild`](https://crates.io/crates/trybuild) tests.
-- Use a domain-first modules structure.
+- თუ სხვა რამ არ არის მითითებული, იხილეთ [ჟანგის საუკეთესო პრაქტიკა] (https://github.com/mre/idiomatic-rust).
+- გამოიყენეთ `mod.rs` სტილი. [თვითსახელწოდებული მოდულები] (https://rust-lang.github.io/rust-clippy/master/) არ გაივლის სტატიკურ ანალიზს, გარდა [`trybuild`](https://crates.io/crates/trybuild) ტესტებისა.
+- გამოიყენეთ დომენის პირველი მოდულის სტრუქტურა.
 
-  Example: don't do `constants::logger`. Instead, invert the hierarchy, putting the object for which it is used first: `iroha_logger::constants`.
-- Use [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) with an explicit error message or proof of infallibility instead of `unwrap`.
-- Never ignore an error. If you can't `panic` and can't recover, it at least needs to be recorded in the log.
-- Prefer to return a `Result` instead of `panic!`.
-- Group related functionality spatially, preferably inside appropriate modules.
+  მაგალითი: არ გააკეთოთ `constants::logger`. ამის ნაცვლად, შეცვალეთ იერარქია, პირველ რიგში დააყენეთ ობიექტი, რომლისთვისაც ის გამოიყენება: `iroha_logger::constants`.
+- გამოიყენეთ [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) აშკარა შეცდომის შეტყობინებით ან უტყუარობის დადასტურებით, ნაცვლად `unwrap`.
+- არასოდეს უგულებელყო შეცდომა. თუ ვერ ახერხებთ `panic`-ს და ვერ ახერხებთ აღდგენას, ის მაინც უნდა ჩაიწეროს ჟურნალში.
+- ამჯობინეთ დააბრუნოთ `Result` `panic!`-ის ნაცვლად.
+- დააჯგუფეთ დაკავშირებული ფუნქციები სივრცულად, სასურველია შესაბამისი მოდულების შიგნით.
 
-  For example, instead of having a block with `struct` definitions and then `impl`s for each individual struct, it is better to have the `impl`s related to that `struct` next to it.
-- Declare before implementation: `use` statements and constants at the top, unit tests at the bottom.
-- Try to avoid `use` statements if the imported name is used only once. This makes moving your code into a different file easier.
-- Do not silence `clippy` lints indiscriminately. If you do, explain your reasoning with a comment (or `expect` message).
-- Prefer  `#[outer_attribute]` to `#![inner_attribute]` if either is available.
-- If your function doesn't mutate any of its inputs (and it shouldn't mutate anything else), mark it as `#[must_use]`.
-- Avoid `Box<dyn Error>` if possible (we prefer strong typing).
-- If your function is a getter/setter, mark it `#[inline]`.
-- If your function is a constructor (i.e., it's creating a new value from the input parameters and calls `default()`), mark it `#[inline]`.
-- Avoid tying your code to concrete data structures; `rustc` is smart enough to turn a `Vec<InstructionExpr>` into `impl IntoIterator<Item = InstructionExpr>` and vice versa when it needs to.
+  მაგალითად, იმის ნაცვლად, რომ გქონდეთ ბლოკი `struct` განმარტებებით და შემდეგ `impl`s თითოეული ცალკეული სტრუქტურისთვის, უმჯობესია მის გვერდით იყოს `impl`s დაკავშირებული იმ `struct`.
+- განაცხადეთ განხორციელებამდე: `use` განცხადებები და მუდმივები ზევით, ერთეული ტესტები ქვედა.
+- შეეცადეთ თავიდან აიცილოთ `use` განცხადებები, თუ იმპორტირებული სახელი გამოიყენება მხოლოდ ერთხელ. ეს აადვილებს თქვენი კოდის სხვა ფაილში გადატანას.
+- არ გააჩუმოთ `clippy` ლინტები განურჩევლად. თუ ასეა, ახსენით თქვენი მსჯელობა კომენტარით (ან `expect` შეტყობინებით).
+- უპირატესობა მიანიჭეთ `#[outer_attribute]`-ს `#![inner_attribute]`-ს, თუ რომელიმე მათგანი ხელმისაწვდომია.
+- თუ თქვენი ფუნქცია არ ახდენს მუტაციას მის რომელიმე შენატანს (და არ უნდა მოახდინოს მუტაცია სხვა რამეზე), მონიშნეთ როგორც `#[must_use]`.
+- მოერიდეთ `Box<dyn Error>`-ს, თუ ეს შესაძლებელია (მირჩევნია ძლიერი აკრეფა).
+- თუ თქვენი ფუნქცია არის მიმღები/სეთერი, მონიშნეთ იგი `#[inline]`.
+- თუ თქვენი ფუნქცია არის კონსტრუქტორი (ანუ ის ქმნის ახალ მნიშვნელობას შეყვანის პარამეტრებიდან და მოუწოდებს `default()`), მონიშნეთ იგი `#[inline]`.
+- მოერიდეთ თქვენი კოდის კონკრეტულ მონაცემთა სტრუქტურებთან მიბმას; `rustc` საკმარისად ჭკვიანია იმისათვის, რომ `Vec<InstructionExpr>` გადააქციოს `impl IntoIterator<Item = InstructionExpr>`-ად და პირიქით, როცა ეს საჭიროა.
 
-Naming guidelines:
-- Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
-  - The name is local (e.g. closure arguments).
-  - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
-  - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
-  - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
-- If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.
+დასახელების მითითებები:
+- გამოიყენეთ მხოლოდ სრული სიტყვები *public* სტრუქტურის, ცვლადის, მეთოდის, თვისების, მუდმივის და მოდულის სახელებში. თუმცა, აბრევიატურები დასაშვებია, თუ:
+  - სახელი ლოკალურია (მაგ. დახურვის არგუმენტები).
+  - სახელი შემოკლებულია Rust-ის კონვენციით (მაგ. `len`, `typ`).
+  - სახელი არის მიღებული აბრევიატურა (მაგ. `tx`, `wsv` და ა.შ.); იხილეთ [პროექტის ლექსიკონი] (https://docs.iroha.tech/reference/glossary.html) კანონიკური აბრევიატურებისთვის.
+  - სრული სახელი დაჩრდილული იქნებოდა ადგილობრივი ცვლადით (მაგ. `msg <- message`).
+  - სრული სახელი გახდის კოდს უხერხულს და მასში 5-6 სიტყვაზე მეტია (მაგ. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
+- თუ შეცვლით დასახელების კონვენციებს, დარწმუნდით, რომ ახალი სახელი, რომელიც არჩეულია, არის _ ბევრად უფრო მკაფიო, ვიდრე ადრე გვქონდა.
 
-Comment guidelines:
-- When writing non-doc comments, instead of describing *what* your function does, try to explain *why* it does something in a particular way. This will save you and the reviewer time.
-- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+კომენტარების მითითებები:
+- არადოკუმენტური კომენტარების წერისას, იმის ნაცვლად, რომ აღწეროთ *რა* თქვენი ფუნქცია ასრულებს, შეეცადეთ ახსნათ *რატომ* აკეთებს რაღაცას კონკრეტულად. ეს დაზოგავს თქვენ და მიმომხილველს დროს.
+- შეგიძლიათ დატოვოთ `TODO` მარკერები კოდში, თუ თქვენ მიუთითებთ საკითხზე, რომელიც თქვენ შექმენით მისთვის. პრობლემის არ შექმნა ნიშნავს, რომ ის არ გაერთიანდება.
 
-We use pinned dependencies. Follow these guidelines for versioning:
+ჩვენ ვიყენებთ დამაგრებულ დამოკიდებულებებს. მიჰყევით ამ ინსტრუქციას ვერსიისთვის:
 
-- If your work depends on a particular crate, see if it wasn't already installed using [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (use `bat` or `grep`), and try to use that version, instead of the latest version.
-- Use the full version "X.Y.Z" in `Cargo.toml`.
-- Provide version bumps in a separate PR.
+- თუ თქვენი სამუშაო დამოკიდებულია კონკრეტულ ყუთზე, ნახეთ, თუ ის უკვე არ იყო დაინსტალირებული [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) გამოყენებით (გამოიყენეთ `bat` ან `grep`) და სცადეთ გამოიყენოთ ეს ვერსია უახლესი ვერსიის ნაცვლად.
+- გამოიყენეთ სრული ვერსია "X.Y.Z" `Cargo.toml`-ში.
+- მიაწოდეთ ვერსია მუწუკებს ცალკე პიარში.
 
-</details>
+</დეტალები>
 
-### Documentation Style Guide
+### დოკუმენტაციის სტილის გზამკვლევი
 
-<details> <summary> :book: Read documentation guidelines</summary>
-
-
-- Use the [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) format.
-- Prefer the single-line comment syntax. Use `///` above inline modules and `//!` for file-based modules.
-- If you can link to a structure/module/function's docs, do it.
-- If you can provide an example of usage, do it. This [is also a test](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
-- If a function can error or panic, avoid modal verbs. Example: `Fails if disk IO fails` instead of `Can possibly fail, if disk IO happens to fail`.
-- If a function can error or panic for more than one reason, use a bulleted list of failure conditions, with the appropriate `Error` variants (if any).
-- Functions *do* things. Use imperative mood.
-- Structures *are* things. Get to the point. For example `Log level for reloading from the environment` is better than `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
-- Structures have fields, which also *are* things.
-- Modules *contain* things, and we know that. Get to the point. Example: use `Logger-related traits.` instead of `Module which contains logger-related logic`.
+<details> <summary> :book: წაიკითხეთ დოკუმენტაციის სახელმძღვანელოები</summary>
 
 
-</details>
+- გამოიყენეთ [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) ფორმატი.
+- უპირატესობა მიანიჭეთ ერთსტრიქონიანი კომენტარის სინტაქსს. გამოიყენეთ `///` შიდა მოდულების ზემოთ და `//!` ფაილზე დაფუძნებული მოდულებისთვის.
+- თუ შეგიძლიათ სტრუქტურის/მოდულის/ფუნქციის დოკუმენტების დაკავშირება, გააკეთეთ ეს.
+- თუ შეგიძლიათ გამოყენების მაგალითის მოყვანა, გააკეთეთ ეს. ეს [ასევე ტესტია] (https://doc.rust-lang.org/rustdoc/documentation-tests.html).
+- თუ ფუნქცია შეიძლება შეცდეს ან პანიკა, მოერიდეთ მოდალურ ზმნებს. მაგალითი: `Fails if disk IO fails` `Can possibly fail, if disk IO happens to fail`-ის ნაცვლად.
+- თუ ფუნქცია შეიძლება შეცდეს ან პანიკა ერთზე მეტი მიზეზის გამო, გამოიყენეთ წარუმატებლობის პირობების ბურთულებიანი სია, შესაბამისი `Error` ვარიანტებით (ასეთის არსებობის შემთხვევაში).
+- ფუნქციები *აკეთე* საქმეები. გამოიყენეთ იმპერატიული განწყობა.
+- სტრუქტურები *არის* ნივთები. გადადით აზრამდე. მაგალითად `Log level for reloading from the environment` უკეთესია ვიდრე `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
+- სტრუქტურებს აქვთ ველები, რომლებიც ასევე *არის.
+- მოდულები *შეიცავს* ნივთებს და ჩვენ ეს ვიცით. გადადით აზრამდე. მაგალითი: გამოიყენეთ `Logger-related traits.` `Module which contains logger-related logic`-ის ნაცვლად.
 
-## Contact
 
-Our community members are active at:
+</დეტალები>
 
-| Service       | Link                                                               |
-|---------------|--------------------------------------------------------------------|
-| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha       |
-| Mailing List  | https://lists.lfdecentralizedtrust.org/g/iroha                     |
-| Telegram      | https://t.me/hyperledgeriroha                                      |
-| Discord       | https://discord.com/channels/905194001349627914/905205848547155968 |
+## კონტაქტი
+
+ჩვენი საზოგადოების წევრები აქტიურობენ:
+
+| სერვისი | ბმული |
+|----------------------------------------------------------------------------------|
+| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha |
+| საფოსტო სია | https://lists.lfdecentralizedtrust.org/g/iroha |
+| ტელეგრამა | https://t.me/hyperledgeriroha |
+| უთანხმოება | https://discord.com/channels/905194001349627914/905205848547155968 |
 
 ---
