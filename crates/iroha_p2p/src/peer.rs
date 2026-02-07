@@ -2163,16 +2163,24 @@ mod run {
         }
     }
 
-    /// Cancellation-safe way to read messages from tcp stream
-    struct MessageReader<E: Enc> {
+    /// Cancellation-safe way to read messages from tcp stream.
+    ///
+    /// This reader supports "batched frames": a single encrypted frame may
+    /// contain multiple Norito-framed messages concatenated back-to-back.
+    /// This reduces the encrypted frame rate and therefore lowers Tokio IO
+    /// driver overhead under high message volumes (e.g. NPoS consensus).
+    struct MessageReader<E: Enc, M: Pload> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
         decrypted: Vec<u8>,
         cryptographer: Cryptographer<E>,
+        pending: VecDeque<(M, usize)>,
+        framed_schema: [u8; 16],
+        framed_padding: usize,
         max_frame_bytes: usize,
     }
 
-    impl<E: Enc> MessageReader<E> {
+    impl<E: Enc, M: Pload> MessageReader<E, M> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
 
         fn new(
@@ -2183,11 +2191,21 @@ mod run {
             let prealloc = max_frame_bytes.min(DEFAULT_MESSAGE_PREALLOC_CAP);
             let capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc.saturating_add(Self::U32_SIZE));
             let decrypt_capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
+            let align = core::mem::align_of::<ncore::Archived<M>>();
+            let framed_padding = if align <= 1 {
+                0
+            } else {
+                let rem = ncore::Header::SIZE % align;
+                if rem == 0 { 0 } else { align - rem }
+            };
             Self {
                 read,
                 cryptographer,
                 buffer: BytesMut::with_capacity(capacity),
                 decrypted: Vec::with_capacity(decrypt_capacity),
+                pending: VecDeque::new(),
+                framed_schema: M::schema_hash(),
+                framed_padding,
                 max_frame_bytes,
             }
         }
@@ -2215,11 +2233,16 @@ mod run {
         /// - Fail in case reading from stream fails
         /// - Connection is closed by there is still unfinished message in buffer
         /// - Forward errors from [`Self::parse_message`]
-        async fn read_message<T: Pload>(&mut self) -> Result<Option<(T, usize)>, Error> {
+        async fn read_message(&mut self) -> Result<Option<(M, usize)>, Error> {
+            if let Some(msg) = self.pending.pop_front() {
+                return Ok(Some(msg));
+            }
             loop {
                 // Try to get full message
-                if let Some(msg) = self.parse_message()? {
-                    return Ok(Some(msg));
+                if self.parse_next_encrypted_frame()? {
+                    if let Some(msg) = self.pending.pop_front() {
+                        return Ok(Some(msg));
+                    }
                 }
                 self.reserve_for_frame()?;
                 if 0 == self.read.read_buf(&mut self.buffer).await? {
@@ -2231,16 +2254,16 @@ mod run {
             }
         }
 
-        /// Parse message
+        /// Parse the next encrypted frame from `self.buffer` and enqueue decoded messages.
         ///
         /// # Errors
         /// - Fail to decrypt message
         /// - Fail to decode message
-        fn parse_message<T: Pload>(&mut self) -> Result<Option<(T, usize)>, Error> {
+        fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
             let mut buf = &self.buffer[..];
             if buf.remaining() < Self::U32_SIZE {
                 // Not enough data to read u32
-                return Ok(None);
+                return Ok(false);
             }
             let size = buf.get_u32() as usize;
             if size > self.max_frame_bytes {
@@ -2248,31 +2271,60 @@ mod run {
             }
             if buf.remaining() < size {
                 // Not enough data to read the whole data
-                return Ok(None);
+                return Ok(false);
             }
 
             let data = &buf[..size];
             let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
-            let encoded_len = decrypted.len();
-            let decoded = match ncore::decode_from_bytes::<T>(decrypted) {
-                Ok(value) => value,
-                Err(err) => {
-                    iroha_logger::warn!(error = ?err, "Failed to decode peer message");
-                    return Err(Error::Format);
-                }
-            };
+            let decrypted_len = decrypted.len();
+            if decrypted_len == 0 {
+                return Err(Error::Format);
+            }
+
+            // Decrypted payload may contain multiple Norito-framed messages.
+            let mut offset = 0usize;
+            while offset < decrypted_len {
+                let remaining = decrypted
+                    .get(offset..)
+                    .ok_or(Error::Format)?;
+                let frame_len = framed_message_len::<M>(
+                    remaining,
+                    self.framed_schema,
+                    self.framed_padding,
+                )?;
+                let frame = remaining.get(..frame_len).ok_or(Error::Format)?;
+                let decoded = match ncore::decode_from_bytes::<M>(frame) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        iroha_logger::warn!(error = ?err, "Failed to decode peer message");
+                        return Err(Error::Format);
+                    }
+                };
+                self.pending.push_back((decoded, frame_len));
+                offset = offset.saturating_add(frame_len);
+            }
+            if offset != decrypted_len {
+                return Err(Error::Format);
+            }
 
             self.buffer.advance(size + Self::U32_SIZE);
 
-            Ok(Some((decoded, encoded_len)))
+            Ok(true)
         }
     }
 
     struct MessageSender<E: Enc> {
         write: Box<dyn AsyncWrite + Send + Unpin>,
         cryptographer: Cryptographer<E>,
-        /// Reusable buffer to encode messages
+        /// Reusable buffer to encode a single Norito-framed message.
         buffer: Vec<u8>,
+        /// Accumulated plaintext bytes for the next high-priority encrypted frame.
+        plain_high: Vec<u8>,
+        plain_high_msgs: usize,
+        plain_high_class: Option<HighBatchClass>,
+        /// Accumulated plaintext bytes for the next low-priority encrypted frame.
+        plain_low: Vec<u8>,
+        plain_low_msgs: usize,
         /// Reusable buffer for encrypted payloads (nonce || ciphertext || tag).
         encrypted: Vec<u8>,
         /// Reusable buffers for framing outbound messages.
@@ -2288,12 +2340,31 @@ mod run {
         max_frame_bytes: usize,
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum HighBatchClass {
+        Control,
+        ConsensusChunk,
+        Other,
+    }
+
+    fn classify_high_batch(topic: Topic) -> HighBatchClass {
+        match topic {
+            Topic::Control => HighBatchClass::Control,
+            Topic::ConsensusChunk => HighBatchClass::ConsensusChunk,
+            _ => HighBatchClass::Other,
+        }
+    }
+
     impl<E: Enc> MessageSender<E> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
         const FRAME_POOL_MAX: usize = 32;
         const MAX_BATCH_FRAMES: usize = 16;
         const MAX_BATCH_BYTES: usize = 64 * 1024;
         const MAX_BATCH_HI_BURST: usize = 4;
+        const MAX_PLAINTEXT_MSGS_HI: usize = 16;
+        const MAX_PLAINTEXT_MSGS_LO: usize = 32;
+        const MAX_PLAINTEXT_BYTES_HI: usize = 64 * 1024;
+        const MAX_PLAINTEXT_BYTES_LO: usize = 256 * 1024;
 
         fn new(
             write: Box<dyn AsyncWrite + Send + Unpin>,
@@ -2307,6 +2378,11 @@ mod run {
                 write,
                 cryptographer,
                 buffer: Vec::with_capacity(capacity),
+                plain_high: Vec::with_capacity(capacity),
+                plain_high_msgs: 0,
+                plain_high_class: None,
+                plain_low: Vec::with_capacity(capacity),
+                plain_low_msgs: 0,
                 encrypted: Vec::with_capacity(capacity),
                 frame_pool: Vec::new(),
                 queue_high: VecDeque::new(),
@@ -2321,28 +2397,76 @@ mod run {
         ///
         /// # Errors
         /// - If encryption fail.
-        fn prepare_message<T: Pload>(&mut self, msg: &T, priority: Priority) -> Result<(), Error> {
+        fn prepare_message<T>(&mut self, msg: &T, priority: Priority) -> Result<(), Error>
+        where
+            T: Pload + ClassifyTopic,
+        {
             ncore::to_bytes_in(msg, &mut self.buffer)?;
-            let encrypted = self
-                .cryptographer
-                .encrypt_into(&self.buffer, &mut self.encrypted)?;
 
-            let size = encrypted.len();
-            if size > self.max_frame_bytes {
+            let topic = msg.topic();
+            let max_plaintext = crate::frame_plaintext_cap(self.max_frame_bytes);
+            let msg_len = self.buffer.len();
+            if msg_len > max_plaintext {
                 return Err(Error::FrameTooLarge);
             }
-            let mut frame = self.frame_pool.pop().unwrap_or_default();
-            frame.clear();
-            let needed = size.saturating_add(Self::U32_SIZE);
-            if frame.capacity() < needed {
-                frame.reserve(needed.saturating_sub(frame.len()));
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            frame.put_u32(size as u32);
-            frame.put_slice(encrypted);
+
             match priority {
-                Priority::High => self.queue_high.push_back(frame),
-                Priority::Low => self.queue_low.push_back(frame),
+                Priority::High => {
+                    let class = classify_high_batch(topic);
+                    // Control traffic should not be delayed behind other high batches.
+                    if class == HighBatchClass::Control {
+                        self.flush_plain_high()?;
+                        self.enqueue_encrypted(&self.buffer, Priority::High)?;
+                        return Ok(());
+                    }
+
+                    if self.plain_high_class.is_some_and(|c| c != class) {
+                        self.flush_plain_high()?;
+                    }
+                    self.plain_high_class = Some(class);
+
+                    let cap = Self::MAX_PLAINTEXT_BYTES_HI.min(max_plaintext);
+                    let would_exceed_bytes = !self.plain_high.is_empty()
+                        && self
+                            .plain_high
+                            .len()
+                            .saturating_add(msg_len)
+                            > cap;
+                    let would_exceed_msgs = self.plain_high_msgs >= Self::MAX_PLAINTEXT_MSGS_HI;
+                    if would_exceed_bytes || would_exceed_msgs {
+                        self.flush_plain_high()?;
+                    }
+
+                    // If the single message exceeds the high cap, still send it as its own frame.
+                    if self.plain_high.is_empty() && msg_len > cap {
+                        self.enqueue_encrypted(&self.buffer, Priority::High)?;
+                        return Ok(());
+                    }
+
+                    self.plain_high.extend_from_slice(&self.buffer);
+                    self.plain_high_msgs = self.plain_high_msgs.saturating_add(1);
+                }
+                Priority::Low => {
+                    let cap = Self::MAX_PLAINTEXT_BYTES_LO.min(max_plaintext);
+                    let would_exceed_bytes = !self.plain_low.is_empty()
+                        && self
+                            .plain_low
+                            .len()
+                            .saturating_add(msg_len)
+                            > cap;
+                    let would_exceed_msgs = self.plain_low_msgs >= Self::MAX_PLAINTEXT_MSGS_LO;
+                    if would_exceed_bytes || would_exceed_msgs {
+                        self.flush_plain_low()?;
+                    }
+
+                    if self.plain_low.is_empty() && msg_len > cap {
+                        self.enqueue_encrypted(&self.buffer, Priority::Low)?;
+                        return Ok(());
+                    }
+
+                    self.plain_low.extend_from_slice(&self.buffer);
+                    self.plain_low_msgs = self.plain_low_msgs.saturating_add(1);
+                }
             }
             Ok(())
         }
@@ -2353,6 +2477,10 @@ mod run {
         /// # Errors
         /// - If write to `stream` fail.
         async fn send(&mut self) -> Result<(), Error> {
+            // Ensure pending plaintext batches are flushed into encrypted frames.
+            self.flush_plain_high()?;
+            self.flush_plain_low()?;
+
             if self.batch_offset >= self.batch.len() {
                 self.fill_batch();
             }
@@ -2375,8 +2503,56 @@ mod run {
         /// Check if message sender has data ready to be sent.
         fn ready(&self) -> bool {
             self.batch_offset < self.batch.len()
+                || !self.plain_high.is_empty()
+                || !self.plain_low.is_empty()
                 || !self.queue_high.is_empty()
                 || !self.queue_low.is_empty()
+        }
+
+        fn flush_plain_high(&mut self) -> Result<(), Error> {
+            if self.plain_high.is_empty() {
+                return Ok(());
+            }
+            self.enqueue_encrypted(&self.plain_high, Priority::High)?;
+            self.plain_high.clear();
+            self.plain_high_msgs = 0;
+            self.plain_high_class = None;
+            Ok(())
+        }
+
+        fn flush_plain_low(&mut self) -> Result<(), Error> {
+            if self.plain_low.is_empty() {
+                return Ok(());
+            }
+            self.enqueue_encrypted(&self.plain_low, Priority::Low)?;
+            self.plain_low.clear();
+            self.plain_low_msgs = 0;
+            Ok(())
+        }
+
+        fn enqueue_encrypted(&mut self, plaintext: &[u8], priority: Priority) -> Result<(), Error> {
+            let encrypted = self
+                .cryptographer
+                .encrypt_into(plaintext, &mut self.encrypted)?;
+
+            let size = encrypted.len();
+            if size > self.max_frame_bytes {
+                return Err(Error::FrameTooLarge);
+            }
+            let mut frame = self.frame_pool.pop().unwrap_or_default();
+            frame.clear();
+            let needed = size.saturating_add(Self::U32_SIZE);
+            if frame.capacity() < needed {
+                frame.reserve(needed.saturating_sub(frame.len()));
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            frame.put_u32(size as u32);
+            frame.put_slice(encrypted);
+            match priority {
+                Priority::High => self.queue_high.push_back(frame),
+                Priority::Low => self.queue_low.push_back(frame),
+            }
+            Ok(())
         }
 
         fn fill_batch(&mut self) {
@@ -2432,6 +2608,17 @@ mod run {
         Pong,
     }
 
+    impl<T: ClassifyTopic> ClassifyTopic for Message<T> {
+        fn topic(&self) -> Topic {
+            match self {
+                Self::Data(payload) => payload.topic(),
+                // Pings are internal to the peer and should not block other
+                // traffic. Classify them as `Health` to keep them low-impact.
+                Self::Ping | Self::Pong => Topic::Health,
+            }
+        }
+    }
+
     impl<'a, T> ncore::DecodeFromSlice<'a> for Message<T>
     where
         T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
@@ -2450,6 +2637,51 @@ mod run {
         ncore::to_bytes(&message)
             .map(|bytes| bytes.len())
             .unwrap_or(usize::MAX)
+    }
+
+    fn framed_message_len<M: Pload>(
+        bytes: &[u8],
+        expected_schema: [u8; 16],
+        padding: usize,
+    ) -> Result<usize, Error> {
+        const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
+        if bytes.len() < ncore::Header::SIZE {
+            return Err(Error::Format);
+        }
+        if bytes[..4] != ncore::MAGIC {
+            return Err(Error::Format);
+        }
+        if bytes.get(4) != Some(&ncore::VERSION_MAJOR)
+            || bytes.get(5) != Some(&ncore::VERSION_MINOR)
+        {
+            return Err(Error::Format);
+        }
+        // schema hash: bytes[6..22]
+        let schema = bytes.get(6..22).ok_or(Error::Format)?;
+        if schema != expected_schema.as_slice() {
+            return Err(Error::Format);
+        }
+        // compression: bytes[22]
+        if bytes.get(22) != Some(&(ncore::Compression::None as u8)) {
+            return Err(Error::Format);
+        }
+        // payload length u64 LE: bytes[23..31]
+        let len_bytes = bytes.get(LEN_OFF..LEN_OFF + 8).ok_or(Error::Format)?;
+        let mut b = [0u8; 8];
+        b.copy_from_slice(len_bytes);
+        let payload_len_u64 = u64::from_le_bytes(b);
+        if payload_len_u64 > ncore::max_archive_len() {
+            return Err(Error::Format);
+        }
+        let payload_len = usize::try_from(payload_len_u64).map_err(|_| Error::Format)?;
+        let total = ncore::Header::SIZE
+            .checked_add(padding)
+            .and_then(|x| x.checked_add(payload_len))
+            .ok_or(Error::Format)?;
+        if total > bytes.len() {
+            return Err(Error::Format);
+        }
+        Ok(total)
     }
 
     #[cfg(test)]
