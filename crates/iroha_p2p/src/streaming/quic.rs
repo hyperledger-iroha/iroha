@@ -218,12 +218,11 @@ impl StreamingServer {
         let cert_der = cert.der().clone().into_owned();
         let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
 
-        let mut rustls_config = rustls::ServerConfig::builder_with_protocol_versions(&[
-            &rustls::version::TLS13,
-        ])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der], priv_key.into())
-            .map_err(|e| Error::TlsServer(e.to_string()))?;
+        let mut rustls_config =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], priv_key.into())
+                .map_err(|e| Error::TlsServer(e.to_string()))?;
         rustls_config.max_early_data_size = u32::MAX;
         rustls_config.alpn_protocols = vec![ALPN.to_vec()];
         let rustls_config = Arc::new(rustls_config);
@@ -337,8 +336,11 @@ impl StreamingConnection {
             .open_uni()
             .await
             .map_err(|e| Error::Io(std::io::Error::from(e)))?;
-        let recv = connection.accept_uni().await?;
         let control_send = ControlStreamWriter::new(send, role.outgoing_direction()).await?;
+        // QUIC streams are created implicitly when the first frame is sent. If we wait on
+        // `accept_uni()` before writing anything to our outgoing stream, both endpoints can
+        // deadlock waiting for the other side to "open" its control stream.
+        let recv = connection.accept_uni().await?;
         let control_recv = ControlStreamReader::new(recv, role.incoming_direction()).await?;
 
         Ok(Self {
@@ -920,7 +922,9 @@ mod tests {
                     .await
                     .expect("incoming");
                 let connecting = incoming.accept().expect("incoming.accept");
-                let connection = within("server.handshake", connecting).await.expect("handshake");
+                let connection = within("server.handshake", connecting)
+                    .await
+                    .expect("handshake");
                 let mut conn = within(
                     "server.streaming_conn",
                     StreamingConnection::new(connection, EndpointRole::Publisher, settings),
@@ -998,8 +1002,8 @@ mod tests {
             tls_config.enable_early_data = true;
             tls_config.alpn_protocols = vec![ALPN.to_vec()];
             let tls_config = Arc::new(tls_config);
-            let crypto = QuinnRustlsClientConfig::try_from(Arc::clone(&tls_config))
-                .expect("tls config");
+            let crypto =
+                QuinnRustlsClientConfig::try_from(Arc::clone(&tls_config)).expect("tls config");
             let mut client_config = ClientConfig::new(Arc::new(crypto));
             let transport = build_transport_config(settings).expect("transport");
             client_config.transport_config(transport);
@@ -1009,7 +1013,9 @@ mod tests {
             let connecting = endpoint
                 .connect(server_addr, &parsed.server_name)
                 .expect("connect start");
-            let connection = within("client.handshake", connecting).await.expect("handshake");
+            let connection = within("client.handshake", connecting)
+                .await
+                .expect("handshake");
             let connection = within(
                 "client.streaming_conn",
                 StreamingConnection::new(connection, EndpointRole::Viewer, settings),
@@ -1069,9 +1075,12 @@ mod tests {
                 Some(transport_resolution.capabilities_hash())
             );
 
-            let frame = within("next_control_frame", client.connection().next_control_frame())
-                .await
-                .unwrap();
+            let frame = within(
+                "next_control_frame",
+                client.connection().next_control_frame(),
+            )
+            .await
+            .unwrap();
             match frame {
                 ControlFrame::ManifestAnnounce(frame) => {
                     assert_eq!(frame.manifest.stream_id, hash(1));
@@ -1112,7 +1121,9 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = within("server.accept", server.accept()).await.expect("accept");
+                let mut conn = within("server.accept", server.accept())
+                    .await
+                    .expect("accept");
                 let mut session = StreamingSession::new(CapabilityRole::Publisher);
 
                 let publisher_caps = TransportCapabilities::kyber768_default();
@@ -1257,6 +1268,14 @@ mod tests {
             .await
             .expect("send report");
 
+            // Wait for the publisher to process frames and close the connection before we tear down
+            // our endpoint. Closing immediately can race with stream delivery and spuriously abort
+            // the server-side receive loop.
+            let _ = within(
+                "wait_server_close",
+                client.connection().quic_connection().closed(),
+            )
+            .await;
             within("client.close", client.close()).await;
         };
 
@@ -1281,7 +1300,9 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = within("server.accept", server.accept()).await.expect("accept");
+                let mut conn = within("server.accept", server.accept())
+                    .await
+                    .expect("accept");
 
                 let mut publisher_caps = TransportCapabilities::kyber768_default();
                 publisher_caps.max_segment_datagram_size = 1100;
@@ -1312,7 +1333,7 @@ mod tests {
                 .await
                 .expect("ack");
 
-                conn.close();
+                let _ = within("wait_client_close", conn.quic_connection().closed()).await;
             }
         };
 
@@ -1366,10 +1387,12 @@ mod tests {
             assert!(client.connection().datagram_enabled());
 
             let payload = vec![0_u8; 901];
-            let err =
-                within("send_oversized_datagram", client.connection().send_datagram(&payload))
-                    .await
-                    .unwrap_err();
+            let err = within(
+                "send_oversized_datagram",
+                client.connection().send_datagram(&payload),
+            )
+            .await
+            .unwrap_err();
             match err {
                 Error::DatagramTooLarge { max, .. } => assert_eq!(max, 900),
                 other => panic!("unexpected error: {other:?}"),
@@ -1399,7 +1422,9 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = within("server.accept", server.accept()).await.expect("accept");
+                let mut conn = within("server.accept", server.accept())
+                    .await
+                    .expect("accept");
 
                 let mut publisher_caps = TransportCapabilities::kyber768_default();
                 publisher_caps.supports_datagram = false;
@@ -1428,7 +1453,7 @@ mod tests {
                 .await
                 .expect("ack");
 
-                conn.close();
+                let _ = within("wait_client_close", conn.quic_connection().closed()).await;
             }
         };
 

@@ -3961,22 +3961,35 @@ mod state {
                 endpoint: &str,
                 connection_id: ConnectionId,
                 dial_timeout: Duration,
+                tls_enabled: bool,
             ) -> Option<Connection> {
-                let wss =
-                    tokio::time::timeout(dial_timeout, crate::transport::ws::connect_wss(endpoint))
-                        .await;
-                if let Ok(Ok(ws)) = wss {
-                    crate::network::inc_ws_outbound();
-                    let (r, w) = tokio::io::split(ws);
-                    return Some(Connection::from_split(connection_id, r, w));
-                }
-                let ws =
-                    tokio::time::timeout(dial_timeout, crate::transport::ws::connect_ws(endpoint))
-                        .await;
-                if let Ok(Ok(ws)) = ws {
-                    crate::network::inc_ws_outbound();
-                    let (r, w) = tokio::io::split(ws);
-                    return Some(Connection::from_split(connection_id, r, w));
+                // Avoid probing WSS first unless TLS is explicitly enabled. Some WS bridges (tests,
+                // sidecars) accept a single connection and will tear down the listener after a
+                // failed handshake, making subsequent WS attempts fail with connection refused.
+                let order = if tls_enabled {
+                    [true, false]
+                } else {
+                    [false, true]
+                };
+                for use_wss in order {
+                    let res = if use_wss {
+                        tokio::time::timeout(
+                            dial_timeout,
+                            crate::transport::ws::connect_wss(endpoint),
+                        )
+                        .await
+                    } else {
+                        tokio::time::timeout(
+                            dial_timeout,
+                            crate::transport::ws::connect_ws(endpoint),
+                        )
+                        .await
+                    };
+                    if let Ok(Ok(ws)) = res {
+                        crate::network::inc_ws_outbound();
+                        let (r, w) = tokio::io::split(ws);
+                        return Some(Connection::from_split(connection_id, r, w));
+                    }
                 }
                 None
             }
@@ -4140,25 +4153,41 @@ mod state {
             #[cfg(not(feature = "p2p_ws"))]
             let ws_tried = true;
 
-            if let iroha_primitives::addr::SocketAddr::Host(host) = &peer_addr {
-                #[cfg(feature = "p2p_ws")]
-                if prefer_ws_fallback {
-                    ws_tried = true;
-                    let endpoint = format!("{}:{}", host.host.as_ref(), host.port);
-                    if let Some(conn) = dial_ws(&endpoint, connection_id, dial_timeout).await {
-                        return Ok(ConnectedTo {
-                            our_public_address,
-                            key_pair,
-                            connection: conn,
-                            chain_id,
-                            consensus_caps,
-                            confidential_caps,
-                            crypto_caps,
-                            soranet_handshake,
-                            trust_gossip,
-                            relay_role,
-                        });
+            #[cfg(feature = "p2p_ws")]
+            fn ws_endpoint(peer_addr: &iroha_primitives::addr::SocketAddr) -> String {
+                match peer_addr {
+                    iroha_primitives::addr::SocketAddr::Ipv4(addr) => {
+                        format!("{}:{}", addr.ip, addr.port)
                     }
+                    iroha_primitives::addr::SocketAddr::Ipv6(addr) => {
+                        // URLs require brackets around IPv6 literals.
+                        format!("[{}]:{}", addr.ip, addr.port)
+                    }
+                    iroha_primitives::addr::SocketAddr::Host(addr) => {
+                        format!("{}:{}", addr.host.as_ref(), addr.port)
+                    }
+                }
+            }
+
+            #[cfg(feature = "p2p_ws")]
+            if prefer_ws_fallback {
+                ws_tried = true;
+                let endpoint = ws_endpoint(&peer_addr);
+                if let Some(conn) =
+                    dial_ws(&endpoint, connection_id, dial_timeout, tls_enabled).await
+                {
+                    return Ok(ConnectedTo {
+                        our_public_address,
+                        key_pair,
+                        connection: conn,
+                        chain_id,
+                        consensus_caps,
+                        confidential_caps,
+                        crypto_caps,
+                        soranet_handshake,
+                        trust_gossip,
+                        relay_role,
+                    });
                 }
             }
 
@@ -4244,10 +4273,12 @@ mod state {
                 Err(err) => {
                     #[cfg(feature = "p2p_ws")]
                     if !ws_tried {
-                        if let iroha_primitives::addr::SocketAddr::Host(host) = &peer_addr {
-                            let endpoint = format!("{}:{}", host.host.as_ref(), host.port);
+                        let should_try_ws = prefer_ws_fallback
+                            || matches!(peer_addr, iroha_primitives::addr::SocketAddr::Host(_));
+                        if should_try_ws {
+                            let endpoint = ws_endpoint(&peer_addr);
                             if let Some(conn) =
-                                dial_ws(&endpoint, connection_id, dial_timeout).await
+                                dial_ws(&endpoint, connection_id, dial_timeout, tls_enabled).await
                             {
                                 return Ok(ConnectedTo {
                                     our_public_address,

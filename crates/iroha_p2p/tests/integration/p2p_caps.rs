@@ -856,7 +856,7 @@ async fn ws_global_frame_cap_disconnects() {
         16 * 1024,
     );
     dialer_cfg.prefer_ws_fallback = true;
-    let (mut net_dialer, _child_dialer) = match NetworkHandle::<BigMsg>::start(
+    let (net_dialer, _child_dialer) = match NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
         dialer_cfg,
         Some(chain.clone()),
