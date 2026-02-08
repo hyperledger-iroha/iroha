@@ -150,6 +150,10 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     fn finish_tx(&mut self) -> Result<crate::host::AccessLog, VMError> {
         self.inner.finish_tx()
     }
+
+    fn access_logging_supported(&self) -> bool {
+        self.inner.access_logging_supported()
+    }
 }
 
 /// Shared host wrapper used when cloning VMs across worker threads.
@@ -211,6 +215,14 @@ impl IVMHost for SharedHost {
             .as_mut()
             .map(|h| h.finish_tx())
             .unwrap_or_else(|| Ok(crate::host::AccessLog::default()))
+    }
+
+    fn access_logging_supported(&self) -> bool {
+        let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        guard
+            .as_ref()
+            .map(|h| h.access_logging_supported())
+            .unwrap_or(false)
     }
 }
 
