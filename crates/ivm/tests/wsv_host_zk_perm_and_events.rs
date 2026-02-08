@@ -145,7 +145,7 @@ fn zk_register_shield_permissions_and_events() {
     ]);
     let shield_payload = json_object([
         ("asset", json_value(&ad.to_string())),
-        ("from", json_value(&alice.to_string())),
+        ("from", json_value(&alice)),
         ("amount", json_value(&3u64)),
         ("note_commitment", note_commitment.clone()),
         ("enc_payload", enc_payload),
@@ -206,7 +206,7 @@ fn unshield_requires_verify_even_with_permission() {
             "payload",
             json_object([
                 ("asset", json_value(&ad.to_string())),
-                ("to", json_value(&alice.to_string())),
+                ("to", json_value(&alice)),
                 ("public_amount", json_value(&1u64)),
                 ("inputs", inputs_val),
                 ("proof", attach_val),

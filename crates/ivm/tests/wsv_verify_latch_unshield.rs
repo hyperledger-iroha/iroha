@@ -136,7 +136,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
                 "payload",
                 json_object([
                     ("asset", json_value(&asset.to_string())),
-                    ("to", json_value(&caller.to_string())),
+                    ("to", json_value(&caller)),
                     ("public_amount", json_value(&1u64)),
                     ("inputs", inputs_json.clone()),
                     ("proof", proof_json.clone()),
@@ -191,7 +191,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
         (
             "payload",
             json_object([
-                ("account_id", json_value(&caller.to_string())),
+                ("account_id", json_value(&caller)),
                 ("asset_id", json_value(&asset.to_string())),
             ]),
         ),
@@ -207,11 +207,13 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     let tlv_out = vm.memory.validate_tlv(p_out).expect("out tlv");
     assert_eq!(tlv_out.type_id, PointerType::Json);
     let val: norito::json::Value = common::json_from_payload(tlv_out.payload);
-    let bal = val
+    let bal: iroha_primitives::numeric::Numeric = val
         .get("balance")
-        .and_then(|v| v.as_u64())
-        .expect("balance present");
-    assert_eq!(bal, 1u64);
+        .and_then(|v| v.as_str())
+        .expect("balance present")
+        .parse()
+        .expect("parse numeric balance");
+    assert_eq!(bal, iroha_primitives::numeric::Numeric::from(1u64));
 }
 
 #[test]
@@ -272,7 +274,7 @@ fn unshield_rejects_mismatched_verifying_key() {
             "payload",
             json_object([
                 ("asset", json_value(&asset.to_string())),
-                ("to", json_value(&caller.to_string())),
+                ("to", json_value(&caller)),
                 ("public_amount", json_value(&1u64)),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&proof).unwrap()),
@@ -349,7 +351,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
             "payload",
             json_object([
                 ("asset", json_value(&asset.to_string())),
-                ("to", json_value(&caller.to_string())),
+                ("to", json_value(&caller)),
                 ("public_amount", json_value(&1u64)),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&good_attachment).unwrap()),
@@ -397,7 +399,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
             "payload",
             json_object([
                 ("asset", json_value(&asset.to_string())),
-                ("to", json_value(&caller.to_string())),
+                ("to", json_value(&caller)),
                 ("public_amount", json_value(&1u64)),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&bad_attachment).unwrap()),
