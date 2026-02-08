@@ -1811,6 +1811,10 @@ mod qc_build_tests {
 
     #[test]
     fn block_sync_qc_for_uses_cached_record() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_precommit_signer_history_for_tests();
+
         let chain_id = ChainId::from("block-sync-qc");
         let mode_tag = PERMISSIONED_TAG;
         let keypairs = vec![
@@ -1945,6 +1949,10 @@ mod qc_build_tests {
 
     #[test]
     fn block_sync_qc_for_accepts_nonzero_epoch() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_precommit_signer_history_for_tests();
+
         let chain_id = ChainId::from("block-sync-qc-epoch");
         let mode_tag = NPOS_TAG;
         let keypairs = vec![
