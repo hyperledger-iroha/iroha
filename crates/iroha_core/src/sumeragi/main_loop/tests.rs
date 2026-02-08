@@ -14,10 +14,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
     net::SocketAddr,
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::PathBuf,
     sync::{
-        Arc, Mutex, MutexGuard, OnceLock,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
@@ -1709,22 +1709,17 @@ impl Drop for TestTempDir {
 
 struct LocalRemovedGuard {
     previous: bool,
-    _lock: MutexGuard<'static, ()>,
+    _guard: crate::sumeragi::status::TestLockGuard,
 }
-
-static LOCAL_REMOVED_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 impl LocalRemovedGuard {
     fn new(removed: bool) -> Self {
-        let lock = LOCAL_REMOVED_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("local removed test lock poisoned");
+        let guard = super::status::local_removed_test_guard();
         let previous = super::status::local_peer_removed();
         super::status::set_local_removed_from_world(removed);
         Self {
             previous,
-            _lock: lock,
+            _guard: guard,
         }
     }
 }
@@ -1882,6 +1877,10 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     super::status::reset_commit_certs_for_tests();
     super::status::reset_validator_checkpoints_for_tests();
     super::status::reset_precommit_signer_history_for_tests();
+    {
+        let _guard = super::status::local_removed_test_guard();
+        super::status::set_local_removed_from_world(false);
+    }
 
     let shutdown = ShutdownSignal::new();
     let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("socket address parses");
@@ -58264,8 +58263,12 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
     let domain: DomainId = "wonderland".parse().expect("domain id");
     let account = AccountId::new(domain, kp.public_key().clone());
 
-    let tx_a = TransactionBuilder::new(chain_id.clone(), account.clone()).sign(kp.private_key());
-    let tx_b = TransactionBuilder::new(chain_id, account).sign(kp.private_key());
+    let mut tx_a_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
+    tx_a_builder.set_nonce(NonZeroU32::new(1).expect("nonce must be non-zero"));
+    let tx_a = tx_a_builder.sign(kp.private_key());
+    let mut tx_b_builder = TransactionBuilder::new(chain_id, account);
+    tx_b_builder.set_nonce(NonZeroU32::new(2).expect("nonce must be non-zero"));
+    let tx_b = tx_b_builder.sign(kp.private_key());
     let txs = vec![tx_a.clone(), tx_b.clone()];
 
     let (requeued, failures, duplicate_failures, gossip_hashes) =

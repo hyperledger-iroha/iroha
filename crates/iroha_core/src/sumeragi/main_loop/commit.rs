@@ -6982,6 +6982,8 @@ mod tests {
 
     #[test]
     fn recover_qc_from_kura_block_falls_back_to_roster() {
+        let _guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_commit_certs_for_tests();
         let chain: ChainId = "recover-qc-from-kura".parse().expect("chain id parses");
         let kura = Kura::blank_kura_for_testing();
         let block = sample_block(1, 0);
@@ -7038,6 +7040,7 @@ mod tests {
         assert_eq!(recovered.view, qc_header.view);
         assert_eq!(recovered.subject_block_hash, qc_header.subject_block_hash);
         assert_eq!(recovered.aggregate.signers_bitmap, signers_bitmap);
+        crate::sumeragi::status::reset_commit_certs_for_tests();
     }
 
     #[test]
