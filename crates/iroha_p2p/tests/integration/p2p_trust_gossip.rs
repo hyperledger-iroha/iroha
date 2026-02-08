@@ -62,7 +62,7 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         address: WithOrigin::inline(addr.clone()),
         public_address: WithOrigin::inline(addr.clone()),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: ActualSoranetHandshake {
             descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
@@ -97,6 +97,13 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(4096).expect("non-zero"),

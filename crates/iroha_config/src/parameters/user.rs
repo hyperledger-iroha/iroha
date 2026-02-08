@@ -192,6 +192,11 @@ pub enum RelayMode {
     Hub,
     /// Relay spoke; dial only the hub and rely on forwarding.
     Spoke,
+    /// Relay assist; connect directly when possible but keep a hub connection for relay fallback.
+    ///
+    /// This is useful when only some peers must rely on a relay (e.g., behind NAT/firewalls),
+    /// while others still form direct connections.
+    Assist,
 }
 
 impl json::JsonSerialize for RelayMode {
@@ -200,6 +205,7 @@ impl json::JsonSerialize for RelayMode {
             Self::Disabled => "disabled",
             Self::Hub => "hub",
             Self::Spoke => "spoke",
+            Self::Assist => "assist",
         };
         json::write_json_string(variant, out);
     }
@@ -214,9 +220,10 @@ impl json::JsonDeserialize for RelayMode {
             "disabled" => Ok(Self::Disabled),
             "hub" => Ok(Self::Hub),
             "spoke" => Ok(Self::Spoke),
+            "assist" => Ok(Self::Assist),
             other => Err(json::Error::InvalidField {
                 field: "relay_mode".into(),
-                message: format!("expected disabled, hub, or spoke, got {other}"),
+                message: format!("expected disabled, hub, spoke, or assist, got {other}"),
             }),
         }
     }
@@ -7827,11 +7834,15 @@ pub struct Network {
     /// Will be gossiped to connected peers so that they can gossip it to other peers.
     #[config(env = "P2P_PUBLIC_ADDRESS")]
     pub public_address: WithOrigin<SocketAddr>,
-    /// P2P relay role (disabled/hub/spoke) for constrained topologies.
+    /// P2P relay role (disabled/hub/spoke/assist) for constrained topologies.
     #[config(default = "RelayMode::Disabled")]
     pub relay_mode: RelayMode,
-    /// Relay hub address to dial when in `spoke` mode.
-    pub relay_hub_address: Option<WithOrigin<SocketAddr>>,
+    /// Relay hub addresses to dial when in `spoke` or `assist` mode (priority order).
+    ///
+    /// When set, values are attempted in order and the node may fall back to
+    /// subsequent entries if the preferred hub is unreachable.
+    #[config(default)]
+    pub relay_hub_addresses: Vec<WithOrigin<SocketAddr>>,
     /// Hop limit for relayed frames.
     #[config(default = "defaults::network::RELAY_TTL")]
     pub relay_ttl: u8,
@@ -7926,7 +7937,28 @@ pub struct Network {
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
-    /// Optional HTTP CONNECT proxy URL for outbound TCP dials (e.g., `http://user:pass@host:port`).
+    /// Enable QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
+    ///
+    /// When enabled and QUIC is negotiated, small best-effort frames (gossip/health)
+    /// may be sent over QUIC datagrams instead of streams to avoid retransmission and
+    /// head-of-line blocking.
+    #[config(default = "defaults::network::QUIC_DATAGRAMS_ENABLED")]
+    pub quic_datagrams_enabled: bool,
+    /// Upper bound (bytes) for QUIC datagram payloads.
+    ///
+    /// Applied as a conservative cap even if the QUIC path MTU supports larger datagrams.
+    #[config(default = "defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES")]
+    pub quic_datagram_max_payload_bytes: NonZeroUsize,
+    /// Total receive buffer reserved for QUIC datagrams (bytes).
+    #[config(default = "defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES")]
+    pub quic_datagram_receive_buffer_bytes: NonZeroUsize,
+    /// Total send buffer reserved for QUIC datagrams (bytes).
+    #[config(default = "defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES")]
+    pub quic_datagram_send_buffer_bytes: NonZeroUsize,
+    /// Optional outbound proxy URL for TCP-based dials (e.g., `http://user:pass@host:port`,
+    /// `https://host:port`, `socks5://user:pass@host:port`, or `socks5h://host:port`).
+    ///
+    /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
     pub p2p_proxy: Option<String>,
     /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
     #[config(default)]
@@ -8109,7 +8141,7 @@ impl Network {
             address,
             public_address,
             relay_mode,
-            relay_hub_address,
+            relay_hub_addresses: user_relay_hub_addresses,
             relay_ttl,
             soranet_handshake,
             soranet_privacy: user_soranet_privacy,
@@ -8143,6 +8175,10 @@ impl Network {
             dns_refresh_interval_ms: dns_refresh_interval,
             dns_refresh_ttl_ms: dns_refresh_ttl,
             quic_enabled,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
+            quic_datagram_receive_buffer_bytes,
+            quic_datagram_send_buffer_bytes,
             p2p_proxy,
             p2p_no_proxy,
             tls_enabled,
@@ -8200,6 +8236,25 @@ impl Network {
             quic_max_idle_timeout_ms,
             ..
         } = self;
+
+        let mut relay_hub_addresses: Vec<SocketAddr> = user_relay_hub_addresses
+            .into_iter()
+            .map(WithOrigin::into_value)
+            .collect();
+        // Deduplicate while preserving operator-supplied order.
+        if relay_hub_addresses.len() > 1 {
+            use std::collections::HashSet;
+            let mut seen: HashSet<String> = HashSet::new();
+            relay_hub_addresses.retain(|addr| seen.insert(addr.to_string()));
+        }
+
+        if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist)
+            && relay_hub_addresses.is_empty()
+        {
+            panic!(
+                "network.relay_hub_addresses must be set when network.relay_mode is spoke or assist"
+            );
+        }
 
         let transaction_gossip_restricted_target_cap = transaction_gossip_restricted_target_cap
             .or(defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP);
@@ -8307,8 +8362,9 @@ impl Network {
                     RelayMode::Disabled => actual::RelayMode::Disabled,
                     RelayMode::Hub => actual::RelayMode::Hub,
                     RelayMode::Spoke => actual::RelayMode::Spoke,
+                    RelayMode::Assist => actual::RelayMode::Assist,
                 },
-                relay_hub_address: relay_hub_address.map(WithOrigin::into_value),
+                relay_hub_addresses,
                 relay_ttl,
                 idle_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
@@ -8326,6 +8382,10 @@ impl Network {
                 p2p_proxy,
                 p2p_no_proxy,
                 quic_enabled,
+                quic_datagrams_enabled,
+                quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes.get(),
+                quic_datagram_receive_buffer_bytes: quic_datagram_receive_buffer_bytes.get(),
+                quic_datagram_send_buffer_bytes: quic_datagram_send_buffer_bytes.get(),
                 tls_enabled,
                 tls_listen_address,
                 prefer_ws_fallback,

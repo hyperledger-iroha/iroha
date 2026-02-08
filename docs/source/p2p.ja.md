@@ -109,14 +109,68 @@ p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
 - メッセージペイロードは `iroha_p2p::network::message::ClassifyTopic` を実装してトピックを提供し、`iroha_core::NetworkMessage` がコアメッセージの割り当てを定義します。
 - 小さなフェアネス予算により、高優先度 traffic が継続している場合でも低優先度トピックが前進できるようにします。
 
-### プロキシサポート（HTTP CONNECT）
+### プロキシサポート（HTTP CONNECT / SOCKS5）
 
-- P2P ダイアラーはシステムプロキシ設定を利用した HTTP CONNECT トンネリングをサポートします。Iroha 固有の環境変数トグルは不要で、オペレーターにも推奨されません。
-- システムプロキシが構成されており対象ホストが除外されていない場合、`CONNECT host:port` 経由でトンネルします。
+- 設定（`[network]`）:
+  - `p2p_proxy`（文字列; 任意）: アウトバウンドプロキシ URL（例: `http://user:pass@proxy.example.com:8080`、`https://proxy.example.com:8443`、`socks5://user:pass@proxy.example.com:1080`）。
+  - `p2p_no_proxy`（文字列配列）: プロキシをバイパスするホストサフィックス（例: `.example.com`, `localhost`）。
+- `p2p_proxy` が設定され、対象ホストが除外されていない場合、以下でトンネルします:
+  - `http://...` / `https://...`: HTTP `CONNECT host:port`
+    - `http://...` はプロキシまで平文 TCP で接続します。
+    - `https://...` は `CONNECT` の前にプロキシへの接続自体を TLS で保護します（`iroha_p2p/p2p_tls` を有効にしたビルドが必要）。
+  - `socks5://...` / `socks5h://...`: SOCKS5 `CONNECT`
 - 注意:
-  - ベーシック認証は未対応。IP 許可リスト型のプロキシを推奨。
-  - 除外は単純なホストサフィックスで照合（例: `.example.com`, `localhost`）。
+  - ベーシック認証はプロキシ URL の `user:pass@...` として指定できます。
+  - 除外は単純なホストサフィックスで照合します。
+  - プロキシは TCP ベースのダイヤル（TCP/TLS/WS）にのみ適用されます。QUIC（UDP）はプロキシをバイパスするため、必ずプロキシ経由にしたい場合は `quic_enabled=false` にしてください。
   - プロキシ未設定時は直接接続します。
+
+### リレーモード（Hub/Spoke/Assist）
+
+Iroha は、NAT/ファイアウォール配下や検閲下のネットワークにいる一部のピアの到達性を改善するため、任意でリレーハブを利用できます。これはアプリケーションレベルのリレー（暗号化フレームの転送）であり、インターネット上の特別な経路制御ではありません。
+
+- 設定（`[network]`）:
+  - `relay_mode`（文字列; `disabled` | `hub` | `spoke` | `assist`）
+    - `disabled`: 既定。ピア同士が直接接続するメッシュ。
+    - `hub`: スポークを受け入れ、ピア間のトラフィックを転送します。
+    - `spoke`: ハブにのみダイヤルし、転送に依存します（受信接続が難しい環境向け）。
+    - `assist`: 可能な限り直接接続しつつハブ接続も維持し、対象ピアに直接接続していない場合はハブ経由でルーティングします。
+  - `relay_hub_addresses`（ソケットアドレス配列; `spoke` と `assist` で必須）
+    - ダイヤルする hub のアドレス一覧（`relay_mode=\"hub\"` で動作しているピア）。複数指定した場合は順に試行し、到達不能時は後続の hub にフォールバックします。
+  - `relay_ttl`（u8; 既定 8）
+    - 転送フレームのホップ制限（リレーループ防止）。
+
+推奨デプロイ:
+- 安定した公開アドレス上で少なくとも 1 台の hub を運用（例: データセンターノード）。
+- 制約のあるノードは `spoke` として hub へのアウトバウンド接続のみを必要にする。
+- バリデータ／接続性の高いノードは `assist` にして、全員をリレー必須にせず spokes に到達できるようにする。
+
+`config.toml` 例:
+
+```toml
+[network]
+relay_mode = "hub"
+```
+
+```toml
+[network]
+relay_mode = "spoke"
+relay_hub_addresses = ["hub.example.com:1337"]
+```
+
+```toml
+[network]
+relay_mode = "assist"
+relay_hub_addresses = ["hub.example.com:1337"]
+```
+
+複数ハブ例（検閲/フェイルオーバー）:
+
+```toml
+[network]
+relay_mode = "assist"
+relay_hub_addresses = ["hub1.example.com:1337", "hub2.example.com:1337"]
+```
 
 ### ダイヤル戦略（Happy Eyeballs）
 

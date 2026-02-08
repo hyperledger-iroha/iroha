@@ -295,7 +295,7 @@ fn minimal_config_snapshot() {
                     },
                 },
                 relay_mode: Disabled,
-                relay_hub_address: None,
+                relay_hub_addresses: [],
                 relay_ttl: 8,
                 soranet_handshake: SoranetHandshake {
                     descriptor_commit: WithOrigin {
@@ -352,6 +352,7 @@ fn minimal_config_snapshot() {
                 require_sm_openssl_preview_match: true,
                 idle_timeout: 300s,
                 connect_startup_delay: 0ns,
+                dial_timeout: 5s,
                 peer_gossip_period: 1s,
                 peer_gossip_max_period: 30s,
                 trust_gossip: true,
@@ -361,7 +362,13 @@ fn minimal_config_snapshot() {
                 trust_min_score: -20,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
+                p2p_proxy: None,
+                p2p_no_proxy: [],
                 quic_enabled: false,
+                quic_datagrams_enabled: true,
+                quic_datagram_max_payload_bytes: 1200,
+                quic_datagram_receive_buffer_bytes: 1048576,
+                quic_datagram_send_buffer_bytes: 1048576,
                 tls_enabled: false,
                 tls_listen_address: None,
                 prefer_ws_fallback: false,
@@ -994,8 +1001,7 @@ fn minimal_config_snapshot() {
                 },
                 block: SumeragiBlock {
                     max_transactions: None,
-                    fast_gas_limit_per_block:
-                        iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
+                    fast_gas_limit_per_block: None,
                     max_payload_bytes: None,
                     proposal_queue_scan_multiplier: 4,
                 },
@@ -1210,6 +1216,7 @@ fn minimal_config_snapshot() {
                     max_disk_usage_bytes: Bytes(
                         274877906944,
                     ),
+                    budget_enforce_interval_blocks: 10,
                     max_wsv_memory_bytes: Bytes(
                         8589934592,
                     ),
@@ -1427,10 +1434,10 @@ fn minimal_config_snapshot() {
                 debug_trace_scheduler_inputs: false,
                 debug_trace_tx_eval: false,
                 signature_batch_max: 0,
-                signature_batch_max_ed25519: 0,
-                signature_batch_max_secp256k1: 0,
-                signature_batch_max_pqc: 0,
-                signature_batch_max_bls: 4,
+                signature_batch_max_ed25519: 64,
+                signature_batch_max_secp256k1: 16,
+                signature_batch_max_pqc: 8,
+                signature_batch_max_bls: 16,
                 cache_size: 128,
                 ivm_cache_max_decoded_ops: 8000000,
                 ivm_cache_max_bytes: 67108864,
@@ -1675,7 +1682,7 @@ fn minimal_config_snapshot() {
                 zstd_level_gpu: 1,
                 large_threshold: 32768,
                 allow_gpu_compression: true,
-                max_archive_len: 536870912,
+                max_archive_len: 2147483648,
                 aos_ncb_small_n: 64,
             },
             hijiri: Hijiri {

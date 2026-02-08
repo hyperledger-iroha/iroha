@@ -74,7 +74,7 @@ struct Answers {
     torii_port: u16,
     trusted_peers: Vec<String>,
     relay_mode: RelayMode,
-    relay_hub: Option<String>,
+    relay_hub_addresses: Vec<String>,
     output_dir: PathBuf,
 }
 
@@ -83,6 +83,7 @@ enum RelayMode {
     Disabled,
     Hub,
     Spoke,
+    Assist,
 }
 
 impl fmt::Display for RelayMode {
@@ -91,6 +92,7 @@ impl fmt::Display for RelayMode {
             RelayMode::Disabled => write!(f, "disabled (full mesh)"),
             RelayMode::Hub => write!(f, "hub (static IP)"),
             RelayMode::Spoke => write!(f, "spoke (dial hub only)"),
+            RelayMode::Assist => write!(f, "assist (direct + hub fallback)"),
         }
     }
 }
@@ -228,15 +230,20 @@ fn gather_answers(args: &Args) -> Result<Answers> {
     let torii_port = resolve_number("Torii port", defaults.torii_port, args.non_interactive)?;
 
     let relay_mode = resolve_relay_mode(args.non_interactive)?;
-    let relay_hub = if matches!(relay_mode, RelayMode::Spoke) {
-        Some(resolve_text(
-            "Relay hub address (host:port)",
+    let relay_hub_addresses = if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist) {
+        let raw = resolve_text(
+            "Relay hub addresses (comma separated host:port)",
             None,
             format!("{}:{}", defaults.host, defaults.p2p_port),
             args.non_interactive,
-        )?)
+        )?;
+        raw.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
     } else {
-        None
+        Vec::new()
     };
 
     let default_trusted = defaults.trusted_peers.join(", ");
@@ -266,7 +273,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         torii_port,
         trusted_peers,
         relay_mode,
-        relay_hub,
+        relay_hub_addresses,
         output_dir: args.output_dir.clone(),
     })
 }
@@ -452,8 +459,13 @@ fn resolve_relay_mode(non_interactive: bool) -> Result<RelayMode> {
         return Ok(RelayMode::Disabled);
     }
     Select::new(
-        "Relay mode (use hub/spoke when only one static IP is available)",
-        vec![RelayMode::Disabled, RelayMode::Hub, RelayMode::Spoke],
+        "Relay mode (hub/spoke for constrained topologies; assist adds hub fallback without forcing all peers)",
+        vec![
+            RelayMode::Disabled,
+            RelayMode::Hub,
+            RelayMode::Spoke,
+            RelayMode::Assist,
+        ],
     )
     .prompt()
     .wrap_err("failed to read relay mode selection")
@@ -581,16 +593,42 @@ fn apply_overrides(
         RelayMode::Disabled => {
             network.remove("relay_mode");
             network.remove("relay_hub_address");
+            network.remove("relay_hub_addresses");
         }
         RelayMode::Hub => {
             network.insert("relay_mode".into(), TomlValue::String("hub".to_owned()));
             network.remove("relay_hub_address");
+            network.remove("relay_hub_addresses");
         }
         RelayMode::Spoke => {
             network.insert("relay_mode".into(), TomlValue::String("spoke".to_owned()));
-            if let Some(hub) = &answers.relay_hub {
-                network.insert("relay_hub_address".into(), TomlValue::String(hub.clone()));
-            }
+            network.remove("relay_hub_address");
+            network.insert(
+                "relay_hub_addresses".into(),
+                TomlValue::Array(
+                    answers
+                        .relay_hub_addresses
+                        .iter()
+                        .cloned()
+                        .map(TomlValue::String)
+                        .collect(),
+                ),
+            );
+        }
+        RelayMode::Assist => {
+            network.insert("relay_mode".into(), TomlValue::String("assist".to_owned()));
+            network.remove("relay_hub_address");
+            network.insert(
+                "relay_hub_addresses".into(),
+                TomlValue::Array(
+                    answers
+                        .relay_hub_addresses
+                        .iter()
+                        .cloned()
+                        .map(TomlValue::String)
+                        .collect(),
+                ),
+            );
         }
     }
     set_table(config, "network", network);
@@ -930,7 +968,7 @@ mod tests {
             torii_port: 8080,
             trusted_peers: vec![format!("{}@127.0.0.1:1338", other.public_key())],
             relay_mode: RelayMode::Disabled,
-            relay_hub: None,
+            relay_hub_addresses: Vec::new(),
             output_dir: PathBuf::from("out"),
         };
         let args = Args {

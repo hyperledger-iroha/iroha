@@ -254,6 +254,7 @@ fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> Re
         iroha_config::parameters::actual::RelayMode::Disabled => RelayRole::Disabled,
         iroha_config::parameters::actual::RelayMode::Hub => RelayRole::Hub,
         iroha_config::parameters::actual::RelayMode::Spoke => RelayRole::Spoke,
+        iroha_config::parameters::actual::RelayMode::Assist => RelayRole::Disabled,
     }
 }
 
@@ -1728,7 +1729,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             address: listen_addr,
             public_address,
             relay_mode,
-            relay_hub_address,
+            relay_hub_addresses,
             relay_ttl,
             soranet_handshake,
             idle_timeout,
@@ -1737,6 +1738,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             peer_gossip_period,
             trust_gossip,
             quic_enabled,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
+            quic_datagram_receive_buffer_bytes,
+            quic_datagram_send_buffer_bytes,
             tls_enabled,
             prefer_ws_fallback,
             p2p_queue_cap_high,
@@ -1811,6 +1816,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                         "0.0.0.0:0".parse().expect("valid bind addr"),
                         crate::transport::quic::DialerConfig {
                             max_idle_timeout: quic_max_idle_timeout,
+                            datagram_receive_buffer: quic_datagrams_enabled
+                                .then_some(quic_datagram_receive_buffer_bytes),
+                            datagram_send_buffer: if quic_datagrams_enabled {
+                                quic_datagram_send_buffer_bytes
+                            } else {
+                                0
+                            },
                             ..Default::default()
                         },
                     ) {
@@ -1830,6 +1842,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             #[cfg(not(feature = "quic"))]
             {
                 let _ = quic_enabled;
+                let _ = quic_datagrams_enabled;
+                let _ = quic_datagram_max_payload_bytes;
+                let _ = quic_datagram_receive_buffer_bytes;
+                let _ = quic_datagram_send_buffer_bytes;
                 let _ = quic_max_idle_timeout;
                 None
             }
@@ -1908,6 +1924,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 service_message_sender.clone(),
                 idle_timeout,
                 quic_max_idle_timeout,
+                quic_datagrams_enabled,
+                quic_datagram_max_payload_bytes,
+                quic_datagram_receive_buffer_bytes,
+                quic_datagram_send_buffer_bytes,
                 chain_id.clone(),
                 consensus_caps.clone(),
                 confidential_caps.clone(),
@@ -1939,6 +1959,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     p2p_post_queue_cap.get(),
                     trust_gossip,
                     max_frame_bytes,
+                    quic_datagrams_enabled,
+                    quic_datagram_max_payload_bytes,
                     soranet_runtime.clone(),
                     relay_role,
                     tcp_nodelay,
@@ -1973,8 +1995,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             public_address: public_address.into_value(),
             relay_role,
             relay_mode,
-            relay_hub_address,
+            relay_hub_addresses,
             relay_hub_peer: None,
+            relay_trusted_peers: HashSet::new(),
             relay_ttl,
             trust_gossip_config,
             trust_gossip,
@@ -2028,6 +2051,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             topology_update_interval: peer_gossip_period.max(Duration::from_millis(1)),
             dns_pending_refresh: HashSet::new(),
             quic_enabled,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
             tls_enabled,
             prefer_ws_fallback,
             proxy_policy,
@@ -2615,7 +2640,7 @@ mod accept_stream_tests {
             address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             public_address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,
             soranet_handshake: ActualSoranetHandshake {
                 descriptor_commit: iroha_config_base::WithOrigin::inline(
@@ -2654,6 +2679,11 @@ mod accept_stream_tests {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled:
+                iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             prefer_ws_fallback: false,
@@ -2912,6 +2942,8 @@ mod accept_stream_tests {
             8,
             true,
             max_frame_bytes,
+            false,
+            0,
             soranet.clone(),
             RelayRole::Disabled,
             true,
@@ -3109,8 +3141,9 @@ mod accept_stream_tests {
             public_address: listen_addr_std.into(),
             relay_role: RelayRole::Disabled,
             relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_hub_peer: None,
+            relay_trusted_peers: HashSet::new(),
             relay_ttl: DEFAULT_RELAY_TTL,
             trust_gossip_config: true,
             trust_gossip: true,
@@ -3152,6 +3185,8 @@ mod accept_stream_tests {
             dns_last_refresh: HashMap::new(),
             dns_pending_refresh: HashSet::new(),
             quic_enabled: false,
+            quic_datagrams_enabled: false,
+            quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
@@ -3298,6 +3333,10 @@ mod accept_stream_tests {
             service_tx,
             Duration::from_secs(1),
             None,
+            false,
+            0,
+            0,
+            0,
             None,
             None,
             None,
@@ -3430,8 +3469,9 @@ mod accept_stream_tests {
             public_address: listen_addr_std.into(),
             relay_role: RelayRole::Disabled,
             relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_hub_peer: None,
+            relay_trusted_peers: HashSet::new(),
             relay_ttl: DEFAULT_RELAY_TTL,
             trust_gossip_config: true,
             trust_gossip: true,
@@ -3478,6 +3518,8 @@ mod accept_stream_tests {
             dns_last_refresh: HashMap::new(),
             dns_pending_refresh: HashSet::new(),
             quic_enabled: false,
+            quic_datagrams_enabled: false,
+            quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
@@ -3619,8 +3661,9 @@ mod accept_stream_tests {
                 public_address: listen_addr_std.into(),
                 relay_role: RelayRole::Disabled,
                 relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-                relay_hub_address: None,
+                relay_hub_addresses: Vec::new(),
                 relay_hub_peer: None,
+                relay_trusted_peers: HashSet::new(),
                 relay_ttl: DEFAULT_RELAY_TTL,
                 trust_gossip_config: true,
                 trust_gossip: true,
@@ -3667,6 +3710,8 @@ mod accept_stream_tests {
                 dns_last_refresh: HashMap::new(),
                 dns_pending_refresh: HashSet::new(),
                 quic_enabled: false,
+                quic_datagrams_enabled: false,
+                quic_datagram_max_payload_bytes: 0,
                 quic_dialer: None,
                 tls_enabled: false,
                 prefer_ws_fallback: false,
@@ -3823,8 +3868,9 @@ mod accept_stream_tests {
             public_address: listen_addr_std.into(),
             relay_role: RelayRole::Disabled,
             relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_hub_peer: None,
+            relay_trusted_peers: HashSet::new(),
             relay_ttl: DEFAULT_RELAY_TTL,
             trust_gossip_config: true,
             trust_gossip: true,
@@ -3871,6 +3917,8 @@ mod accept_stream_tests {
             dns_last_refresh: HashMap::new(),
             dns_pending_refresh: HashSet::new(),
             quic_enabled: false,
+            quic_datagrams_enabled: false,
+            quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
@@ -4131,6 +4179,10 @@ async fn start_quic_listener<T, K, E>(
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
     quic_max_idle_timeout: Option<std::time::Duration>,
+    quic_datagrams_enabled: bool,
+    quic_datagram_max_payload_bytes: usize,
+    quic_datagram_receive_buffer_bytes: usize,
+    quic_datagram_send_buffer_bytes: usize,
     chain_id: Option<iroha_data_model::ChainId>,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -4179,6 +4231,10 @@ where
         transport.max_idle_timeout(Some(idle));
     }
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+    if quic_datagrams_enabled {
+        transport.datagram_receive_buffer_size(Some(quic_datagram_receive_buffer_bytes));
+        transport.datagram_send_buffer_size(quic_datagram_send_buffer_bytes);
+    }
     server_config.transport_config(Arc::new(transport));
 
     let endpoint = quinn::Endpoint::server(server_config, *addr)
@@ -4266,6 +4322,7 @@ where
                             key_pair,
                             Connection::from_quic(
                                 conn_id,
+                                new_conn.clone(),
                                 send_hi,
                                 recv_hi,
                                 send_low,
@@ -4283,6 +4340,8 @@ where
                             relay_role,
                             trust_gossip,
                             max_frame_bytes,
+                            quic_datagrams_enabled,
+                            quic_datagram_max_payload_bytes,
                         );
                     }
                     Err(e) => {
@@ -4331,6 +4390,10 @@ mod quic_tests {
             tx,
             std::time::Duration::from_secs(1),
             None,
+            false,
+            0,
+            0,
+            0,
             None,
             None,
             None,
@@ -4370,6 +4433,8 @@ async fn start_tls_listener<T, K, E>(
     post_capacity: usize,
     trust_gossip: bool,
     max_frame_bytes: usize,
+    quic_datagrams_enabled: bool,
+    quic_datagram_max_payload_bytes: usize,
     soranet_handshake: Arc<SoranetHandshakeConfig>,
     relay_role: RelayRole,
     tcp_nodelay: bool,
@@ -4426,6 +4491,8 @@ where
             let relay_role = relay_role;
             let tcp_nodelay = tcp_nodelay;
             let tcp_keepalive = tcp_keepalive;
+            let quic_datagrams_enabled = quic_datagrams_enabled;
+            let quic_datagram_max_payload_bytes = quic_datagram_max_payload_bytes;
 
             tokio::spawn(async move {
                 let conn_id = id_alloc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4469,6 +4536,8 @@ where
                             relay_role,
                             trust_gossip,
                             max_frame_bytes,
+                            quic_datagrams_enabled,
+                            quic_datagram_max_payload_bytes,
                         );
                     }
                     Err(e) => {
@@ -4492,10 +4561,18 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     relay_role: RelayRole,
     /// Relay mode configured for this node.
     relay_mode: iroha_config::parameters::actual::RelayMode,
-    /// Optional hub address for spokes.
-    relay_hub_address: Option<SocketAddr>,
+    /// Relay hub addresses to dial when in `spoke` / `assist` mode (priority order).
+    ///
+    /// When multiple hubs are provided, the network may rotate through them to
+    /// maintain reachability in the presence of firewalls/censorship.
+    relay_hub_addresses: Vec<SocketAddr>,
     /// Hub peer id resolved from topology/address book (spoke mode).
     relay_hub_peer: Option<PeerId>,
+    /// Trusted relay peers derived from `relay_hub_addresses` and peer address mapping.
+    ///
+    /// Peers in this set are allowed to send frames where `origin != incoming_peer_id`
+    /// (i.e., forwarded/relayed frames).
+    relay_trusted_peers: HashSet<PeerId>,
     /// Hop limit for forwarded frames.
     relay_ttl: u8,
     /// Configured trust-gossip capability for this node.
@@ -4585,6 +4662,10 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Enable QUIC transport based on config at runtime.
     #[allow(dead_code)]
     quic_enabled: bool,
+    /// Enable QUIC DATAGRAM support for best-effort topics when using QUIC.
+    quic_datagrams_enabled: bool,
+    /// Upper bound (bytes) for QUIC datagram payloads.
+    quic_datagram_max_payload_bytes: usize,
     /// Shared outbound QUIC dialer endpoint (feature-gated).
     #[allow(dead_code)]
     quic_dialer: Option<crate::transport::QuicDialer>,
@@ -4868,6 +4949,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                                 self.relay_role,
                                 self.trust_gossip,
                                 self.max_frame_bytes,
+                                self.quic_datagrams_enabled,
+                                self.quic_datagram_max_payload_bytes,
                             );
                         }
                     }
@@ -5039,6 +5122,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.relay_role,
             self.trust_gossip,
             self.max_frame_bytes,
+            self.quic_datagrams_enabled,
+            self.quic_datagram_max_payload_bytes,
         );
     }
 
@@ -5058,17 +5143,34 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 true
             })
             .collect();
-        if matches!(
-            self.relay_mode,
-            iroha_config::parameters::actual::RelayMode::Spoke
-        ) {
-            if let Some(hub) = self.ensure_hub_peer() {
-                topology.insert(hub);
-            } else {
-                iroha_logger::warn!(
-                    "relay_mode=Spoke but hub peer id is unknown; retaining provided topology"
-                );
+        match self.relay_mode {
+            iroha_config::parameters::actual::RelayMode::Spoke => {
+                // In spoke mode, we only dial the hub and rely on forwarding.
+                let hub = self.ensure_hub_peer();
+                topology.clear();
+                if let Some(hub) = hub {
+                    topology.insert(hub);
+                } else {
+                    iroha_logger::warn!(
+                        relay_hub_addresses=?self.relay_hub_addresses,
+                        "relay_mode=spoke requires at least one reachable hub peer id; topology is empty"
+                    );
+                }
             }
+            iroha_config::parameters::actual::RelayMode::Assist => {
+                // In assist mode, keep the provided topology but ensure we also connect to a hub
+                // for relay fallback when a target is not directly connected.
+                if let Some(hub) = self.ensure_hub_peer() {
+                    topology.insert(hub);
+                } else {
+                    iroha_logger::warn!(
+                        relay_hub_addresses=?self.relay_hub_addresses,
+                        "relay_mode=assist requires at least one reachable hub peer id; retaining provided topology"
+                    );
+                }
+            }
+            iroha_config::parameters::actual::RelayMode::Disabled
+            | iroha_config::parameters::actual::RelayMode::Hub => {}
         }
         self.current_topology = topology;
         self.apply_trusted_observers();
@@ -5117,12 +5219,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             total = peers.len(),
             local_known = self.peers.len(),
             relay_mode = ?self.relay_mode,
-            ?self.relay_hub_address,
+            relay_hub_addresses = ?self.relay_hub_addresses,
             "Network receive new peers addresses",
         );
         let preserved_hub = if matches!(
             self.relay_mode,
             iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
         ) {
             self.relay_hub_peer.as_ref().and_then(|hub| {
                 self.address_book
@@ -5136,19 +5239,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         self.address_book.clear();
         for (pid, addr) in &peers {
             self.address_book.insert(pid.clone(), addr.clone());
-            if matches!(
-                self.relay_mode,
-                iroha_config::parameters::actual::RelayMode::Spoke
-            ) {
-                if let Some(hub_addr) = &self.relay_hub_address {
-                    // Treat address as hub if it matches exactly or shares host/port pair (hostname vs IP).
-                    let same_port = addr.port() == hub_addr.port();
-                    let same_host = addr.host_str() == hub_addr.host_str();
-                    if addr == hub_addr || (same_port && same_host) {
-                        self.relay_hub_peer.get_or_insert_with(|| pid.clone());
-                    }
-                }
-            }
         }
         self.current_peers_addresses = peers;
         if let Some((hub_id, hub_addr)) = preserved_hub {
@@ -5163,6 +5253,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 self.current_peers_addresses.push((hub_id, hub_addr));
             }
         }
+        // Recompute the set of peers allowed to relay frames (origin mismatch).
+        self.relay_trusted_peers.clear();
+        if !self.relay_hub_addresses.is_empty() {
+            for (pid, addr) in &self.current_peers_addresses {
+                if self.configured_hub_matches(addr) {
+                    self.relay_trusted_peers.insert(pid.clone());
+                }
+            }
+        }
         // Apply address updates immediately to reduce startup latency and
         // speed up recovery after gossip/DNS refresh. This keeps connection
         // attempts responsive instead of waiting for the periodic tick.
@@ -5171,6 +5270,35 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
     fn update_topology(&mut self) {
         let now = tokio::time::Instant::now();
+        // Keep hub selection fresh so spoke/assist modes can fail over between multiple hubs.
+        self.refresh_relay_hub_peer(now);
+        match self.relay_mode {
+            iroha_config::parameters::actual::RelayMode::Spoke => {
+                // Spokes should only keep a hub connection.
+                let hub = self.relay_hub_peer.clone();
+                self.current_topology.clear();
+                if let Some(hub) = hub {
+                    self.current_topology.insert(hub);
+                }
+            }
+            iroha_config::parameters::actual::RelayMode::Assist => {
+                // Ensure only one configured hub is kept in topology to avoid duplicate relay paths.
+                if !self.relay_trusted_peers.is_empty() {
+                    if let Some(selected) = self.relay_hub_peer.as_ref() {
+                        self.current_topology
+                            .retain(|id| !self.relay_trusted_peers.contains(id) || id == selected);
+                    } else {
+                        self.current_topology
+                            .retain(|id| !self.relay_trusted_peers.contains(id));
+                    }
+                }
+                if let Some(hub) = self.relay_hub_peer.clone() {
+                    self.current_topology.insert(hub);
+                }
+            }
+            iroha_config::parameters::actual::RelayMode::Disabled
+            | iroha_config::parameters::actual::RelayMode::Hub => {}
+        }
         // Group candidate addresses by peer id for staggered parallel attempts
         let mut by_peer: HashMap<PeerId, Vec<SocketAddr>> = HashMap::new();
         for (id, address) in &self.current_peers_addresses {
@@ -5241,24 +5369,91 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     }
 
     fn ensure_hub_peer(&mut self) -> Option<PeerId> {
-        if let Some(hub) = self.relay_hub_peer.clone() {
-            return Some(hub);
-        }
-        let Some(hub_addr) = &self.relay_hub_address else {
-            return None;
-        };
-        if let Some((pid, _)) = self.address_book.iter().find(|(_, addr)| *addr == hub_addr) {
-            let pid = pid.clone();
-            self.relay_hub_peer = Some(pid.clone());
-            return Some(pid);
-        }
-        None
+        self.refresh_relay_hub_peer(tokio::time::Instant::now());
+        self.relay_hub_peer.clone()
     }
 
-    fn hub_handle(&self) -> Option<(&PeerId, &RefPeer<WireMessage<T>>)> {
-        self.relay_hub_peer
-            .as_ref()
-            .and_then(|hub| self.peers.get_key_value(hub))
+    fn configured_hub_matches(&self, addr: &SocketAddr) -> bool {
+        self.relay_hub_addresses.iter().any(|hub_addr| {
+            addr == hub_addr
+                || (addr.port() == hub_addr.port() && addr.host_str() == hub_addr.host_str())
+        })
+    }
+
+    fn refresh_relay_hub_peer(&mut self, now: tokio::time::Instant) {
+        if !matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
+        ) {
+            self.relay_hub_peer = None;
+            return;
+        }
+        if self.relay_hub_addresses.is_empty() {
+            self.relay_hub_peer = None;
+            return;
+        }
+
+        // If the selected hub is already connected or in-flight, keep it.
+        if let Some(selected) = self.relay_hub_peer.as_ref() {
+            if self.peers.contains_key(selected)
+                || self.connecting_peers.values().any(|p| p.id() == selected)
+            {
+                return;
+            }
+        }
+
+        let hub_addr_matches = |hub_addr: &SocketAddr, addr: &SocketAddr| {
+            addr == hub_addr
+                || (addr.port() == hub_addr.port() && addr.host_str() == hub_addr.host_str())
+        };
+
+        // Pick the first candidate hub that is connected, connecting, or ready to retry.
+        for hub_addr in &self.relay_hub_addresses {
+            // Resolve the configured hub address into a peer id via the current peer mapping.
+            let Some((pid, addr)) = self
+                .current_peers_addresses
+                .iter()
+                .find(|(_, addr)| hub_addr_matches(hub_addr, addr))
+            else {
+                continue;
+            };
+
+            // If we have a resolved allowlist of trusted relays, enforce it.
+            if !self.relay_trusted_peers.is_empty() && !self.relay_trusted_peers.contains(pid) {
+                continue;
+            }
+
+            if self.peers.contains_key(pid)
+                || self
+                    .connecting_peers
+                    .values()
+                    .any(|p| (p.id(), p.address()) == (pid, addr))
+                || self.ready_to_retry_addr(pid, addr, now)
+            {
+                self.relay_hub_peer = Some(pid.clone());
+                return;
+            }
+        }
+
+        self.relay_hub_peer = None;
+    }
+
+    fn is_configured_hub_peer(&self, peer: &Peer, relay_role: RelayRole) -> bool {
+        if !matches!(relay_role, RelayRole::Hub) {
+            return false;
+        }
+        // Prefer peer-id based matching when we can resolve configured hubs into peer ids.
+        if !self.relay_trusted_peers.is_empty() {
+            return self.relay_trusted_peers.contains(peer.id());
+        }
+        self.configured_hub_matches(peer.address())
+    }
+
+    fn hub_handle(&mut self) -> Option<(&PeerId, &RefPeer<WireMessage<T>>)> {
+        self.refresh_relay_hub_peer(tokio::time::Instant::now());
+        let hub = self.relay_hub_peer.as_ref()?;
+        self.peers.get_key_value(hub)
     }
 
     fn resolve_origin_peer(&self, origin: &PeerId, via: &Peer) -> Peer {
@@ -5533,6 +5728,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.tcp_keepalive,
             self.proxy_policy.clone(),
             self.quic_dialer.clone(),
+            self.quic_datagrams_enabled,
+            self.quic_datagram_max_payload_bytes,
         );
     }
 
@@ -5565,29 +5762,54 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         self.connecting_peers.remove(&connection_id);
 
         if !self.current_topology.contains(peer.id()) {
-            let permissioned = self.is_permissioned_consensus();
-            let trusted = self.peer_reputations.is_trusted(peer.id());
-            if permissioned && !trusted {
-                iroha_logger::warn!(peer=%peer.id(), "Dropping untrusted observer in permissioned network");
-                return;
-            }
-            if !permissioned {
-                iroha_logger::debug!(peer=%peer.id(), "Accepting observer outside topology for public network");
-                self.current_topology.insert(peer.id().clone());
-            }
             if matches!(
                 self.relay_mode,
                 iroha_config::parameters::actual::RelayMode::Spoke
-            ) && matches!(relay_role, RelayRole::Hub)
-            {
-                iroha_logger::debug!(peer=%peer.id(), "Accepting hub outside advertised topology due to spoke mode");
-                self.current_topology.insert(peer.id().clone());
-            } else if self.current_topology.is_empty() && !permissioned {
-                iroha_logger::debug!(peer=%peer.id(), "Bootstrapping topology from first inbound peer");
-                self.current_topology.insert(peer.id().clone());
-            } else if permissioned && !trusted {
-                iroha_logger::warn!(peer=%peer.id(), topology=?self.current_topology, "Peer not present in topology is trying to connect");
-                return;
+            ) {
+                // Spokes only accept the configured hub(s). Do not expand topology from
+                // inbound connections in this mode.
+                if self.is_configured_hub_peer(&peer, relay_role) {
+                    iroha_logger::debug!(
+                        peer=%peer.id(),
+                        "Accepting configured relay hub outside advertised topology due to spoke mode"
+                    );
+                    self.current_topology.insert(peer.id().clone());
+                } else {
+                    iroha_logger::warn!(
+                        peer=%peer.id(),
+                        role=?relay_role,
+                        "Spoke mode only accepts configured hub peers; dropping peer"
+                    );
+                    return;
+                }
+            } else {
+                let permissioned = self.is_permissioned_consensus();
+                let trusted = self.peer_reputations.is_trusted(peer.id());
+                if permissioned && !trusted {
+                    iroha_logger::warn!(peer=%peer.id(), "Dropping untrusted observer in permissioned network");
+                    return;
+                }
+                if !permissioned {
+                    iroha_logger::debug!(peer=%peer.id(), "Accepting observer outside topology for public network");
+                    self.current_topology.insert(peer.id().clone());
+                }
+                if matches!(
+                    self.relay_mode,
+                    iroha_config::parameters::actual::RelayMode::Assist
+                ) && self.is_configured_hub_peer(&peer, relay_role)
+                {
+                    iroha_logger::debug!(
+                        peer=%peer.id(),
+                        "Accepting configured relay hub outside advertised topology due to relay mode"
+                    );
+                    self.current_topology.insert(peer.id().clone());
+                } else if self.current_topology.is_empty() && !permissioned {
+                    iroha_logger::debug!(peer=%peer.id(), "Bootstrapping topology from first inbound peer");
+                    self.current_topology.insert(peer.id().clone());
+                } else if permissioned && !trusted {
+                    iroha_logger::warn!(peer=%peer.id(), topology=?self.current_topology, "Peer not present in topology is trying to connect");
+                    return;
+                }
             }
         }
 
@@ -5605,10 +5827,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         if matches!(
             self.relay_mode,
             iroha_config::parameters::actual::RelayMode::Spoke
-        ) && !matches!(relay_role, RelayRole::Hub)
-            && !self.current_topology.contains(peer.id())
+        ) && !self.is_configured_hub_peer(&peer, relay_role)
         {
-            iroha_logger::warn!(peer=%peer.id(), role=?relay_role, "Spoke mode only accepts hub connections; dropping peer");
+            iroha_logger::warn!(
+                peer=%peer.id(),
+                role=?relay_role,
+                "Spoke mode only accepts configured hub connections; dropping peer"
+            );
             return;
         }
 
@@ -5617,9 +5842,16 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         if matches!(
             self.relay_mode,
             iroha_config::parameters::actual::RelayMode::Spoke
-        ) && matches!(relay_role, RelayRole::Hub)
+                | iroha_config::parameters::actual::RelayMode::Assist
+        ) && self.is_configured_hub_peer(&peer, relay_role)
         {
-            self.relay_hub_peer.get_or_insert_with(|| peer.id().clone());
+            let promote = self
+                .relay_hub_peer
+                .as_ref()
+                .is_none_or(|selected| selected == peer.id() || !self.peers.contains_key(selected));
+            if promote {
+                self.relay_hub_peer = Some(peer.id().clone());
+            }
             self.address_book
                 .entry(peer.id().clone())
                 .or_insert_with(|| peer.address().clone());
@@ -5762,6 +5994,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         if matches!(
             self.relay_mode,
             iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
         ) {
             if let Some(hub_id) = self.hub_handle().map(|(id, _)| id.clone()) {
                 let frame = frame_for(RelayTarget::Direct(peer_id));
@@ -5769,7 +6002,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             } else {
                 iroha_logger::warn!(
                     peer=%peer_id,
-                    "Spoke mode could not route post because hub is unavailable"
+                    "Relay mode could not route post because hub is unavailable"
                 );
             }
         }
@@ -5888,24 +6121,19 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             priority,
             payload,
         } = msg.payload;
-        let mut allow_origin_mismatch = false;
-        if matches!(
-            self.relay_mode,
+        // Most peers must send frames where `origin` matches their peer id. We only accept
+        // relayed frames (origin mismatch) from explicitly trusted relay peers.
+        let allow_origin_mismatch = match self.relay_mode {
             iroha_config::parameters::actual::RelayMode::Spoke
-        ) {
-            let hub_peer = self
+            | iroha_config::parameters::actual::RelayMode::Assist => self
                 .relay_hub_peer
-                .clone()
-                .or_else(|| self.ensure_hub_peer());
-            if hub_peer
                 .as_ref()
-                .is_some_and(|hub| hub == incoming_peer.id())
-            {
-                allow_origin_mismatch = true;
-            } else if let Some(hub_addr) = self.relay_hub_address.as_ref() {
-                allow_origin_mismatch = hub_addr == incoming_peer.address();
+                .is_some_and(|hub| hub == incoming_peer.id()),
+            iroha_config::parameters::actual::RelayMode::Hub => {
+                self.relay_trusted_peers.contains(incoming_peer.id())
             }
-        }
+            iroha_config::parameters::actual::RelayMode::Disabled => false,
+        };
         if origin != *incoming_peer.id() && !allow_origin_mismatch {
             iroha_logger::warn!(
                 peer = %incoming_peer,
@@ -6601,8 +6829,9 @@ mod tests {
             public_address: listen_addr_std.into(),
             relay_role: RelayRole::Disabled,
             relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_hub_peer: None,
+            relay_trusted_peers: HashSet::new(),
             relay_ttl: DEFAULT_RELAY_TTL,
             trust_gossip_config: true,
             trust_gossip: true,
@@ -6651,6 +6880,8 @@ mod tests {
             tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
             quic_enabled: false,
+            quic_datagrams_enabled: false,
+            quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
@@ -7471,6 +7702,23 @@ pub mod message {
         Other,
     }
 
+    impl Topic {
+        /// Whether this topic may be delivered as best-effort traffic.
+        ///
+        /// Best-effort topics may use QUIC DATAGRAM when available; reliable topics
+        /// always stay on streams.
+        pub const fn is_best_effort(self) -> bool {
+            matches!(
+                self,
+                Topic::TxGossip
+                    | Topic::TxGossipRestricted
+                    | Topic::PeerGossip
+                    | Topic::TrustGossip
+                    | Topic::Health
+            )
+        }
+    }
+
     /// Classification hook for payload types to indicate their logical topic.
     ///
     /// By default, all messages are classified as `Topic::Other`. Crates that
@@ -7733,13 +7981,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         if matches!(
             self.relay_mode,
             iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
         ) {
             if let Some(hub_id) = self.hub_handle().map(|(id, _)| id.clone()) {
                 let _ = send_with_throttle(self, &hub_id, frame_for(RelayTarget::Direct(peer_id)));
             } else {
                 iroha_logger::warn!(
                     peer=%peer_id,
-                    "Spoke mode could not route low post because hub is unavailable"
+                    "Relay mode could not route low post because hub is unavailable"
                 );
             }
         }

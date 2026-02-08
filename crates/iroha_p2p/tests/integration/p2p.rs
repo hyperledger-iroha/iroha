@@ -115,7 +115,7 @@ fn trust_config(
         address: WithOrigin::inline(addr.clone()),
         public_address: WithOrigin::inline(addr),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: default_soranet_handshake(),
         soranet_privacy: SoranetPrivacy::default(),
@@ -143,6 +143,13 @@ fn trust_config(
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
@@ -220,6 +227,9 @@ fn trust_config(
 async fn network_create() {
     let delay = Duration::from_millis(200);
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     info!("Starting network tests...");
     let address = socket_addr!(127.0.0.1: {next_port()});
     let key_pair = KeyPair::random();
@@ -230,7 +240,7 @@ async fn network_create() {
         address: WithOrigin::inline(address.clone()),
         public_address: WithOrigin::inline(address.clone()),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: default_soranet_handshake(),
         soranet_privacy: SoranetPrivacy::default(),
@@ -258,6 +268,13 @@ async fn network_create() {
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
@@ -361,6 +378,9 @@ async fn network_create() {
 #[allow(clippy::too_many_lines)]
 async fn trust_gossip_opt_out_blocks_trust_frames() {
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let chain = ChainId::from("trust_gate_opt_out");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
@@ -516,6 +536,9 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trust_gossip_enabled_flows_through() {
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let chain = ChainId::from("trust_gate_enabled");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
@@ -627,6 +650,9 @@ async fn ws_fallback_connects_and_handshakes() {
     use tokio_tungstenite::accept_async;
 
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
 
     // Force the dialer to take the WebSocket path for Host addresses.
 
@@ -640,7 +666,7 @@ async fn ws_fallback_connects_and_handshakes() {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -669,6 +695,10 @@ async fn ws_fallback_connects_and_handshakes() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
@@ -891,7 +921,7 @@ async fn ws_fallback_connects_and_handshakes() {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -920,6 +950,10 @@ async fn ws_fallback_connects_and_handshakes() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
@@ -1114,6 +1148,9 @@ async fn two_networks() {
     let delay = Duration::from_millis(1_000);
     let idle_timeout = Duration::from_secs(60);
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let key_pair1 = KeyPair::random();
     let public_key1 = key_pair1.public_key().clone();
     let key_pair2 = KeyPair::random().clone();
@@ -1125,7 +1162,7 @@ async fn two_networks() {
         address: WithOrigin::inline(address1.clone()),
         public_address: WithOrigin::inline(address1.clone()),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: default_soranet_handshake(),
         soranet_privacy: SoranetPrivacy::default(),
@@ -1153,6 +1190,13 @@ async fn two_networks() {
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
@@ -1242,7 +1286,7 @@ async fn two_networks() {
         address: WithOrigin::inline(address2.clone()),
         public_address: WithOrigin::inline(address2.clone()),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: default_soranet_handshake(),
         soranet_privacy: SoranetPrivacy::default(),
@@ -1270,6 +1314,13 @@ async fn two_networks() {
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
@@ -1430,6 +1481,9 @@ async fn two_networks() {
 #[allow(clippy::too_many_lines)]
 async fn update_peers_triggers_immediate_connect() {
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let idle_timeout = Duration::from_secs(60);
     let chain_id = ChainId::from("test_chain");
 
@@ -1446,7 +1500,7 @@ async fn update_peers_triggers_immediate_connect() {
             address: WithOrigin::inline(address1.clone()),
             public_address: WithOrigin::inline(address1.clone()),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -1475,6 +1529,10 @@ async fn update_peers_triggers_immediate_connect() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
@@ -1565,7 +1623,7 @@ async fn update_peers_triggers_immediate_connect() {
             address: WithOrigin::inline(address2.clone()),
             public_address: WithOrigin::inline(address2.clone()),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -1594,6 +1652,10 @@ async fn update_peers_triggers_immediate_connect() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
@@ -1714,6 +1776,9 @@ async fn update_peers_triggers_immediate_connect() {
 #[allow(clippy::too_many_lines)]
 async fn happy_eyeballs_parallel_dials() {
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let idle_timeout = Duration::from_secs(60);
     let chain_id = ChainId::from("test_chain");
 
@@ -1726,7 +1791,7 @@ async fn happy_eyeballs_parallel_dials() {
             address: WithOrigin::inline(address2.clone()),
             public_address: WithOrigin::inline(address2.clone()),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -1755,6 +1820,10 @@ async fn happy_eyeballs_parallel_dials() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
@@ -1846,7 +1915,7 @@ async fn happy_eyeballs_parallel_dials() {
             address: WithOrigin::inline(address1.clone()),
             public_address: WithOrigin::inline(address1.clone()),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -1875,6 +1944,10 @@ async fn happy_eyeballs_parallel_dials() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
@@ -1992,6 +2065,9 @@ async fn happy_eyeballs_parallel_dials() {
 #[allow(clippy::too_many_lines)]
 async fn low_topics_do_not_starve_each_other() {
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let idle_timeout = Duration::from_secs(30);
     let chain_id = ChainId::from("test_chain");
 
@@ -2004,7 +2080,7 @@ async fn low_topics_do_not_starve_each_other() {
             address: WithOrigin::inline(addr_b.clone()),
             public_address: WithOrigin::inline(addr_b.clone()),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -2033,6 +2109,10 @@ async fn low_topics_do_not_starve_each_other() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
@@ -2124,7 +2204,7 @@ async fn low_topics_do_not_starve_each_other() {
             address: WithOrigin::inline(addr_a.clone()),
             public_address: WithOrigin::inline(addr_a.clone()),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -2153,6 +2233,10 @@ async fn low_topics_do_not_starve_each_other() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
@@ -2316,6 +2400,9 @@ async fn low_topics_do_not_starve_each_other() {
 #[allow(clippy::too_many_lines)]
 async fn relay_hub_routes_consensus_between_spokes() {
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let idle_timeout = Duration::from_secs(30);
     let chain_id = ChainId::from("test_chain");
 
@@ -2334,12 +2421,12 @@ async fn relay_hub_routes_consensus_between_spokes() {
     let make_config =
         |address: iroha_primitives::addr::SocketAddr,
          relay_mode: RelayMode,
-         relay_hub_address: Option<iroha_primitives::addr::SocketAddr>| {
+         relay_hub_addresses: Vec<iroha_primitives::addr::SocketAddr>| {
             Config {
             address: WithOrigin::inline(address.clone()),
             public_address: WithOrigin::inline(address),
             relay_mode,
-            relay_hub_address,
+            relay_hub_addresses,
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -2368,6 +2455,10 @@ async fn relay_hub_routes_consensus_between_spokes() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
             tls_listen_address: None,
             p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
@@ -2440,7 +2531,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
 
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
         hub_kp.clone(),
-        make_config(hub_addr.clone(), RelayMode::Hub, None),
+        make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
         Some(chain_id.clone()),
         None,
         None,
@@ -2459,7 +2550,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
         make_config(
             spoke1_addr.clone(),
             RelayMode::Spoke,
-            Some(hub_addr.clone()),
+            vec![hub_addr.clone()],
         ),
         Some(chain_id.clone()),
         None,
@@ -2479,7 +2570,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
         make_config(
             spoke2_addr.clone(),
             RelayMode::Spoke,
-            Some(hub_addr.clone()),
+            vec![hub_addr.clone()],
         ),
         Some(chain_id.clone()),
         None,
@@ -2549,6 +2640,273 @@ async fn relay_hub_routes_consensus_between_spokes() {
         .expect("message channel closed");
     assert_eq!(received.peer.id(), spoke1_peer.id());
     assert_eq!(received.payload.0, payload.0);
+}
+
+/// Ensure relay hub can route consensus traffic between a spoke and an assist node.
+///
+/// This models mixed deployments where only constrained peers run as spokes, while
+/// validators/observers use `Assist` to reach them without forcing the entire
+/// network onto a relay-only topology.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn relay_hub_routes_consensus_between_spoke_and_assist() {
+    setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
+    let idle_timeout = Duration::from_secs(30);
+    let chain_id = ChainId::from("test_chain");
+
+    let hub_addr = socket_addr!(127.0.0.1: {next_port()});
+    let spoke_addr = socket_addr!(127.0.0.1: {next_port()});
+    let assist_addr = socket_addr!(127.0.0.1: {next_port()});
+
+    let hub_kp = KeyPair::random();
+    let spoke_kp = KeyPair::random();
+    let assist_kp = KeyPair::random();
+
+    let hub_peer = Peer::new(hub_addr.clone(), hub_kp.public_key().clone());
+    let spoke_peer = Peer::new(spoke_addr.clone(), spoke_kp.public_key().clone());
+    let assist_peer = Peer::new(assist_addr.clone(), assist_kp.public_key().clone());
+
+    let make_config =
+        |address: iroha_primitives::addr::SocketAddr,
+         relay_mode: RelayMode,
+         relay_hub_addresses: Vec<iroha_primitives::addr::SocketAddr>| {
+            Config {
+                address: WithOrigin::inline(address.clone()),
+                public_address: WithOrigin::inline(address),
+                relay_mode,
+                relay_hub_addresses,
+                relay_ttl: RELAY_TTL,
+                soranet_handshake: default_soranet_handshake(),
+                soranet_privacy: SoranetPrivacy::default(),
+                soranet_vpn: SoranetVpn::default(),
+                lane_profile: LaneProfile::Core,
+                require_sm_handshake_match: true,
+                require_sm_openssl_preview_match: true,
+                idle_timeout,
+                connect_startup_delay:
+                    iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+                dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+                peer_gossip_period: PEER_GOSSIP_PERIOD,
+                peer_gossip_max_period: PEER_GOSSIP_PERIOD,
+                trust_decay_half_life:
+                    iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
+                trust_penalty_bad_gossip:
+                    iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
+                trust_penalty_unknown_peer:
+                    iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
+                trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+                trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+                prefer_ws_fallback: false,
+                p2p_proxy: None,
+                p2p_no_proxy: vec![],
+                happy_eyeballs_stagger: Duration::from_millis(50),
+                addr_ipv6_first: false,
+                dns_refresh_interval: None,
+                dns_refresh_ttl: None,
+                quic_enabled: false,
+                quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+                quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+                quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+                quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+                tls_enabled: false,
+                tls_listen_address: None,
+                p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
+                p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
+                p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+                p2p_subscriber_queue_cap:
+                    iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+                consensus_ingress_rate_per_sec:
+                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+                consensus_ingress_burst:
+                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
+                consensus_ingress_bytes_per_sec:
+                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+                consensus_ingress_bytes_burst:
+                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+                consensus_ingress_critical_rate_per_sec: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+                consensus_ingress_critical_burst:
+                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+                consensus_ingress_critical_bytes_per_sec: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+                consensus_ingress_critical_bytes_burst: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
+                consensus_ingress_rbc_session_limit: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
+                consensus_ingress_penalty_threshold: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+                consensus_ingress_penalty_window: Duration::from_millis(
+                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+                ),
+                consensus_ingress_penalty_cooldown: Duration::from_millis(
+                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+                ),
+                max_incoming: None,
+                max_total_connections: None,
+                accept_rate_per_ip_per_sec: None,
+                accept_burst_per_ip: None,
+                max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
+                accept_bucket_idle:
+                    iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
+                accept_prefix_v4_bits:
+                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
+                accept_prefix_v6_bits:
+                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
+                accept_rate_per_prefix_per_sec: None,
+                accept_burst_per_prefix: None,
+                low_priority_rate_per_sec: None,
+                low_priority_burst: None,
+                low_priority_bytes_per_sec: None,
+                low_priority_bytes_burst: None,
+                allowlist_only: false,
+                allow_keys: vec![],
+                deny_keys: vec![],
+                allow_cidrs: vec![],
+                deny_cidrs: vec![],
+                disconnect_on_post_overflow: true,
+                max_frame_bytes: 1_048_576,
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+                max_frame_bytes_consensus: 262_144,
+                max_frame_bytes_control: 262_144,
+                max_frame_bytes_block_sync: 1_048_576,
+                max_frame_bytes_tx_gossip: 262_144,
+                max_frame_bytes_peer_gossip: 131_072,
+                max_frame_bytes_health: 65_536,
+                max_frame_bytes_other: 262_144,
+                tls_only_v1_3: true,
+                quic_max_idle_timeout: None,
+            }
+        };
+
+    let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
+        hub_kp.clone(),
+        make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
+        Some(chain_id.clone()),
+        None,
+        None,
+        ShutdownSignal::new(),
+    )
+    .await
+    {
+        Ok(ok) => ok,
+        Err(e) => {
+            eprintln!("Skipping relay_hub_routes_consensus_between_spoke_and_assist (hub): {e:?}");
+            return;
+        }
+    };
+    let (mut spoke_net, _spoke_child) = match NetworkHandle::<ConsensusMessage>::start(
+        spoke_kp.clone(),
+        make_config(spoke_addr.clone(), RelayMode::Spoke, vec![hub_addr.clone()]),
+        Some(chain_id.clone()),
+        None,
+        None,
+        ShutdownSignal::new(),
+    )
+    .await
+    {
+        Ok(ok) => ok,
+        Err(e) => {
+            eprintln!(
+                "Skipping relay_hub_routes_consensus_between_spoke_and_assist (spoke): {e:?}"
+            );
+            return;
+        }
+    };
+    let (mut assist_net, _assist_child) = match NetworkHandle::<ConsensusMessage>::start(
+        assist_kp.clone(),
+        make_config(
+            assist_addr.clone(),
+            RelayMode::Assist,
+            vec![hub_addr.clone()],
+        ),
+        Some(chain_id.clone()),
+        None,
+        None,
+        ShutdownSignal::new(),
+    )
+    .await
+    {
+        Ok(ok) => ok,
+        Err(e) => {
+            eprintln!(
+                "Skipping relay_hub_routes_consensus_between_spoke_and_assist (assist): {e:?}"
+            );
+            return;
+        }
+    };
+
+    let (spoke_tx, mut spoke_rx) = mpsc::channel(4);
+    if let Err(sender) = spoke_net.subscribe_to_peers_messages(spoke_tx) {
+        drop(sender);
+        panic!("failed to subscribe spoke to messages");
+    }
+    let (assist_tx, mut assist_rx) = mpsc::channel(4);
+    if let Err(sender) = assist_net.subscribe_to_peers_messages(assist_tx) {
+        drop(sender);
+        panic!("failed to subscribe assist to messages");
+    }
+
+    update_topology_and_peers_addresses(&hub_net, &[spoke_peer.clone(), assist_peer.clone()]);
+    update_topology_and_peers_addresses(&spoke_net, std::slice::from_ref(&hub_peer));
+    update_topology_and_peers_addresses(&assist_net, std::slice::from_ref(&hub_peer));
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while hub_net.online_peers(HashSet::len) < 2 {
+            hub_net
+                .wait_online_peers_update(HashSet::len)
+                .await
+                .expect("online peers channel closed");
+        }
+    })
+    .await
+    .expect("connection deadline exceeded");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while spoke_net.online_peers(HashSet::len) < 1 {
+            spoke_net
+                .wait_online_peers_update(HashSet::len)
+                .await
+                .expect("online peers channel closed");
+        }
+    })
+    .await
+    .expect("connection deadline exceeded");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while assist_net.online_peers(HashSet::len) < 1 {
+            assist_net
+                .wait_online_peers_update(HashSet::len)
+                .await
+                .expect("online peers channel closed");
+        }
+    })
+    .await
+    .expect("connection deadline exceeded");
+
+    let payload_a = ConsensusMessage(11);
+    assist_net.post(Post {
+        data: payload_a.clone(),
+        peer_id: spoke_peer.id().clone(),
+        priority: Priority::High,
+    });
+
+    let received = tokio::time::timeout(Duration::from_secs(10), spoke_rx.recv())
+        .await
+        .expect("spoke should receive consensus via hub")
+        .expect("message channel closed");
+    assert_eq!(received.peer.id(), assist_peer.id());
+    assert_eq!(received.payload.0, payload_a.0);
+
+    let payload_b = ConsensusMessage(12);
+    spoke_net.post(Post {
+        data: payload_b.clone(),
+        peer_id: assist_peer.id().clone(),
+        priority: Priority::High,
+    });
+
+    let received = tokio::time::timeout(Duration::from_secs(10), assist_rx.recv())
+        .await
+        .expect("assist should receive consensus via hub")
+        .expect("message channel closed");
+    assert_eq!(received.peer.id(), spoke_peer.id());
+    assert_eq!(received.payload.0, payload_b.0);
 }
 #[allow(dead_code)]
 async fn multiple_networks() {
@@ -2643,7 +3001,7 @@ async fn start_network(
         address: WithOrigin::inline(address.clone()),
         public_address: WithOrigin::inline(address.clone()),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: default_soranet_handshake(),
         soranet_privacy: SoranetPrivacy::default(),
@@ -2671,6 +3029,13 @@ async fn start_network(
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
@@ -2806,6 +3171,9 @@ async fn tls_inbound_listener_smoke() {
     use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 
     setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let idle_timeout = Duration::from_secs(30);
     let chain_id = ChainId::from("test_chain");
 
@@ -2832,7 +3200,7 @@ async fn tls_inbound_listener_smoke() {
         address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
         public_address: WithOrigin::inline(public_host_addr.clone()),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: default_soranet_handshake(),
         soranet_privacy: SoranetPrivacy::default(),
@@ -2860,6 +3228,13 @@ async fn tls_inbound_listener_smoke() {
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: true,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
@@ -2956,7 +3331,7 @@ async fn tls_inbound_listener_smoke() {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             relay_mode: RelayMode::Disabled,
-            relay_hub_address: None,
+            relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
             soranet_handshake: default_soranet_handshake(),
             soranet_privacy: SoranetPrivacy::default(),
@@ -2985,6 +3360,10 @@ async fn tls_inbound_listener_smoke() {
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             quic_enabled: false,
+            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: true,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),

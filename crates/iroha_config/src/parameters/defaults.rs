@@ -755,6 +755,20 @@ pub mod network {
     /// Default stagger between parallel dial attempts for multiple addresses (Happy Eyeballs)
     pub const HAPPY_EYEBALLS_STAGGER: Duration = Duration::from_millis(100);
 
+    // QUIC datagram settings (best-effort gossip/health delivery).
+    /// Whether QUIC DATAGRAM support is enabled when QUIC transport is in use.
+    ///
+    /// Datagrams are used only for best-effort topics; reliable topics keep using streams.
+    pub const QUIC_DATAGRAMS_ENABLED: bool = true;
+    /// Upper bound (bytes) for a single QUIC datagram payload.
+    ///
+    /// Chosen conservatively to avoid IP fragmentation on typical Internet paths.
+    pub const QUIC_DATAGRAM_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1200_usize);
+    /// Total receive buffer reserved for QUIC datagrams (bytes).
+    pub const QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+    /// Total send buffer reserved for QUIC datagrams (bytes).
+    pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+
     // P2P bounded queue capacities (always enforced)
     // Defaults tuned for ~20,000 TPS environments: prioritize headroom for gossip/low-priority
     // traffic while keeping consensus/control queues responsive.

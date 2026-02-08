@@ -616,7 +616,7 @@ mod tests {
                 address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
                 public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
                 relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-                relay_hub_address: None,
+                relay_hub_addresses: Vec::new(),
                 relay_ttl: defaults::network::RELAY_TTL,
                 soranet_handshake: ActualSoranetHandshake {
                     descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
@@ -635,6 +635,7 @@ mod tests {
                 require_sm_openssl_preview_match: true,
                 idle_timeout: std::time::Duration::from_secs(5),
                 connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
+                dial_timeout: defaults::network::DIAL_TIMEOUT,
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -644,7 +645,16 @@ mod tests {
                 trust_gossip: defaults::network::TRUST_GOSSIP,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
+                p2p_proxy: None,
+                p2p_no_proxy: Vec::new(),
                 quic_enabled: false,
+                quic_datagrams_enabled: defaults::network::QUIC_DATAGRAMS_ENABLED,
+                quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES
+                    .get(),
+                quic_datagram_receive_buffer_bytes:
+                    defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+                quic_datagram_send_buffer_bytes:
+                    defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
                 tls_enabled: false,
                 tls_listen_address: None,
                 prefer_ws_fallback: false,

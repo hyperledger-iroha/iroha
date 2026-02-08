@@ -24,7 +24,8 @@ fn setvl_sets_logical_length() {
     assert_eq!(vm.vector_length(), 1);
 
     // Gas consumed equals cost_of_with_params for SETVL + HALT (0)
-    let expected = cost_of_with_params(setvl, /*vl*/ 1, 0).expect("valid opcode must have gas cost");
+    let expected =
+        cost_of_with_params(setvl, /*vl*/ 1, 0).expect("valid opcode must have gas cost");
     assert_eq!(10 - vm.remaining_gas(), expected);
 }
 

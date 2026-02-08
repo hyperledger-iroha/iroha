@@ -109,14 +109,68 @@ p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
 - טיפוסי מטען מיישמים `iroha_p2p::network::message::ClassifyTopic`; `iroha_core::NetworkMessage` מספק את המיפוי למסריי הליבה.
 - תקציב הוגנות קטן מבטיח שגם בנוכחות תעבורת עדיפות גבוהה מתמשכת, הנושאים הנמוכים יתקדמו.
 
-### תמיכה בפרוקסי (HTTP CONNECT)
+### תמיכה בפרוקסי (HTTP CONNECT / SOCKS5)
 
-- הדיילר יכול להשתמש בהגדרות הפרוקסי של המערכת (tunneling עם HTTP CONNECT). אין צורך במתגי סביבה ספציפיים ל-Iroha.
-- אם מוגדר פרוקסי מערכת והיעד לא מוחרג, נעשה שימוש ב-`CONNECT host:port`.
+- הגדרות (`[network]`):
+  - `p2p_proxy` (מחרוזת; אופציונלי): כתובת URL לפרוקסי יציאה (למשל `http://user:pass@proxy.example.com:8080`, ‏`https://proxy.example.com:8443` או `socks5://user:pass@proxy.example.com:1080`).
+  - `p2p_no_proxy` (מערך מחרוזות): סיומות מארח לעקיפת הפרוקסי (למשל `.example.com`, ‏`localhost`).
+- כאשר `p2p_proxy` מוגדר והיעד לא מוחרג, החייגן מבצע מנהור דרך:
+  - HTTP `CONNECT host:port` עבור `http://...` / `https://...`
+    - `http://...` משתמש ב־TCP לא מוצפן אל הפרוקסי.
+    - `https://...` עוטף את החיבור אל הפרוקסי ב־TLS לפני `CONNECT` (דורש בנייה עם `iroha_p2p/p2p_tls`).
+  - SOCKS5 `CONNECT` עבור `socks5://...` / `socks5h://...`
 - שימו לב:
-  - אימות בסיסי לא נתמך; העדיפו פרוקסי עם allowlist.
-  - חריגים נבדקים לפי סיומת מארח (למשל `.example.com`, ‏`localhost`).
+  - אימות בסיסי נתמך דרך `user:pass@...` בתוך כתובת ה־URL של הפרוקסי.
+  - חריגים נבדקים לפי סיומת מארח.
+  - הפרוקסי חל רק על חיבורים מבוססי TCP (TCP/TLS/WS). QUIC (UDP) עוקף את הפרוקסי; אם חייבים לעבוד תמיד דרך פרוקסי, הגדירו `quic_enabled=false`.
   - בהיעדר פרוקסי, החיבור ישיר.
+
+### מצב ריליי (Hub/Spoke/Assist)
+
+Iroha יכולה להשתמש באופן אופציונלי ב־relay hub כדי לשפר נגישות כאשר חלק מהעמיתים נמצאים מאחורי NAT/חומות אש או ברשתות מצונזרות. זהו ריליי ברמת האפליקציה (העברת פריימים מוצפנים), ולא מנגנון ניתוב מיוחד באינטרנט.
+
+- הגדרות (`[network]`):
+  - `relay_mode` (מחרוזת; `disabled` | `hub` | `spoke` | `assist`)
+    - `disabled`: ברירת מחדל; mesh ישיר בין עמיתים.
+    - `hub`: מקבל חיבורים נכנסים ומעביר תעבורה בין עמיתים.
+    - `spoke`: מחייג רק ל־hub ונשען על העברה (מתאים כשאין קישוריות נכנסת).
+    - `assist`: שומר חיבורים ישירים כשאפשר, אך מחזיק גם חיבור ל־hub ומנתב דרך ה־hub כאשר היעד אינו מחובר ישירות.
+  - `relay_hub_addresses` (מערך כתובות socket; חובה עבור `spoke` ו־`assist`)
+    - כתובות ה־hub(ים) לחיוג (peers שמריצים `relay_mode=\"hub\"`). אם מסופקות מספר כתובות, הערכים נבדקים לפי הסדר והצומת יכול לבצע פייל-אובר ל־hub הבא במקרה שה־hub המועדף אינו נגיש.
+  - `relay_ttl` (u8; ברירת מחדל 8)
+    - מגבלת קפיצות למסגרות מועברות (מונע לולאות ריליי).
+
+תבנית פריסה מומלצת:
+- הריצו לפחות hub אחד בכתובת ציבורית יציבה (למשל node בדאטה־סנטר).
+- הריצו nodes מוגבלים כ־`spoke` כך שיידרש רק חיבור יוצא ל־hub.
+- הריצו validators / peers מחוברים היטב כ־`assist` כדי שיוכלו להגיע ל־spokes בלי לחייב את כל הרשת לעבוד דרך ריליי.
+
+דוגמאות `config.toml`:
+
+```toml
+[network]
+relay_mode = "hub"
+```
+
+```toml
+[network]
+relay_mode = "spoke"
+relay_hub_addresses = ["hub.example.com:1337"]
+```
+
+```toml
+[network]
+relay_mode = "assist"
+relay_hub_addresses = ["hub.example.com:1337"]
+```
+
+דוגמה למספר hubs (צנזורה/פייל-אובר):
+
+```toml
+[network]
+relay_mode = "assist"
+relay_hub_addresses = ["hub1.example.com:1337", "hub2.example.com:1337"]
+```
 
 ### אסטרטגיית חיוג (Happy Eyeballs)
 

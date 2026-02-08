@@ -74,7 +74,7 @@ fn make_config(
         address: WithOrigin::inline(addr.clone()),
         public_address: WithOrigin::inline(public.clone()),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: default_soranet_handshake(),
         soranet_privacy: SoranetPrivacy::default(),
@@ -102,6 +102,13 @@ fn make_config(
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
@@ -533,9 +540,17 @@ async fn quic_global_frame_cap_disconnects() {
     let kp_dialer = KeyPair::random();
 
     // Reserve a UDP/TCP port for QUIC + TCP listener pair.
-    let probe = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-        .expect("bind probe udp socket");
-    let port = probe.local_addr().unwrap().port();
+    let probe = match std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
+        Ok(sock) => sock,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "Skipping quic_global_frame_cap_disconnects: cannot bind UDP probe socket: {e}"
+            );
+            return;
+        }
+        Err(e) => panic!("bind probe udp socket: {e}"),
+    };
+    let port = probe.local_addr().expect("probe local addr").port();
     drop(probe);
 
     let listen_addr = socket_addr!(127.0.0.1: {port});

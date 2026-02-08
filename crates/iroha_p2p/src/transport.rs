@@ -80,6 +80,10 @@ pub mod quic {
         pub max_idle_timeout: Option<Duration>,
         /// QUIC keep-alive interval, if set.
         pub keep_alive_interval: Option<Duration>,
+        /// Total receive buffer reserved for QUIC datagrams (bytes). `None` disables datagrams.
+        pub datagram_receive_buffer: Option<usize>,
+        /// Total send buffer reserved for QUIC datagrams (bytes). Set to 0 to disable.
+        pub datagram_send_buffer: usize,
     }
 
     impl Default for DialerConfig {
@@ -88,6 +92,8 @@ pub mod quic {
                 max_idle_timeout: None,
                 // A small keep-alive keeps common NAT mappings fresh and reduces idle drops.
                 keep_alive_interval: Some(Duration::from_secs(10)),
+                datagram_receive_buffer: None,
+                datagram_send_buffer: 0,
             }
         }
     }
@@ -182,6 +188,8 @@ pub mod quic {
             transport.max_idle_timeout(Some(idle));
         }
         transport.keep_alive_interval(cfg.keep_alive_interval);
+        transport.datagram_receive_buffer_size(cfg.datagram_receive_buffer);
+        transport.datagram_send_buffer_size(cfg.datagram_send_buffer);
         Ok(Arc::new(transport))
     }
 }
@@ -192,6 +200,13 @@ pub type QuicDialer = quic::Dialer;
 /// Stub QUIC dialer type when QUIC support is not compiled in.
 #[cfg(not(feature = "quic"))]
 pub type QuicDialer = ();
+
+/// QUIC connection handle type.
+#[cfg(feature = "quic")]
+pub type QuicConnection = quinn::Connection;
+/// Stub QUIC connection handle type when QUIC support is not compiled in.
+#[cfg(not(feature = "quic"))]
+pub type QuicConnection = ();
 
 #[cfg(feature = "p2p_tls")]
 pub mod tls {
@@ -208,7 +223,7 @@ pub mod tls {
         client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
         pki_types::{CertificateDer, ServerName, UnixTime},
     };
-    use tokio::net::TcpStream;
+    use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_rustls::{TlsConnector, client::TlsStream};
 
     #[derive(Debug)]
@@ -256,10 +271,10 @@ pub mod tls {
     }
 
     /// Upgrade an already-connected TCP stream to TLS 1.3.
-    pub async fn connect_tls(
-        host: &str,
-        tcp: TcpStream,
-    ) -> tokio::io::Result<TlsStream<TcpStream>> {
+    pub async fn connect_tls<S>(host: &str, tcp: S) -> tokio::io::Result<TlsStream<S>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         // Build a permissive client config
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
         let config = ClientConfig::builder()
@@ -269,9 +284,16 @@ pub mod tls {
         let config = Arc::new(config);
         let connector = TlsConnector::from(config);
 
-        let server_name = ServerName::try_from(host)
-            .map_err(|_| tokio::io::Error::new(tokio::io::ErrorKind::InvalidInput, "invalid SNI"))?
-            .to_owned();
+        let server_name = if let Ok(name) = ServerName::try_from(host) {
+            name.to_owned()
+        } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            ServerName::IpAddress(ip.into())
+        } else {
+            return Err(tokio::io::Error::new(
+                tokio::io::ErrorKind::InvalidInput,
+                "invalid SNI",
+            ));
+        };
         let tls = connector.connect(server_name, tcp).await?;
         Ok(tls)
     }
@@ -283,7 +305,7 @@ pub mod ws {
     use futures::{Sink as _, Stream as _};
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_tungstenite::{
-        MaybeTlsStream,
+        MaybeTlsStream, client_async_tls_with_config,
         tungstenite::{Message, client::IntoClientRequest},
     };
 
@@ -307,6 +329,27 @@ pub mod ws {
                 write_buf: Vec::new(),
             }
         }
+    }
+
+    /// Perform a websocket client handshake over an already-established stream.
+    ///
+    /// This is useful for applying custom TCP dial logic (proxies, socket options) while
+    /// still speaking WebSocket/WSS at the HTTP layer.
+    pub async fn connect_with_stream<R, S>(
+        request: R,
+        stream: S,
+    ) -> std::io::Result<WsDuplex<MaybeTlsStream<S>>>
+    where
+        R: IntoClientRequest + Unpin,
+        S: 'static + AsyncRead + AsyncWrite + Send + Unpin,
+        MaybeTlsStream<S>: Unpin,
+    {
+        let (ws_stream, _resp) = client_async_tls_with_config(request, stream, None, None)
+            .await
+            .map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+            })?;
+        Ok(WsDuplex::new(ws_stream))
     }
 
     impl<S> AsyncRead for WsDuplex<S>
@@ -623,7 +666,7 @@ use tokio::{
 
 use crate::sampler::LogSampler;
 
-/// HTTP CONNECT proxy configuration for outbound TCP dials.
+/// Outbound proxy configuration for TCP-based dials (HTTP CONNECT / SOCKS5).
 #[derive(Debug, Clone, Default)]
 pub struct ProxyPolicy {
     proxy: Option<Proxy>,
@@ -728,8 +771,28 @@ impl Default for TcpConnectOptions {
     }
 }
 
+/// TCP-like outbound stream returned by [`connect`].
+///
+/// Most dials return a plain [`TcpStream`]. When tunnelling through an `https://`
+/// proxy, the connection to the proxy is wrapped in TLS.
+pub enum TcpConnectStream {
+    /// Plain TCP stream (direct or proxied).
+    Plain(TcpStream),
+    /// TLS-wrapped stream to the proxy (`https://` proxies only).
+    #[cfg(feature = "p2p_tls")]
+    Tls(tokio_rustls::client::TlsStream<TcpStream>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyKind {
+    HttpConnect,
+    HttpConnectTls,
+    Socks5,
+}
+
 #[derive(Debug, Clone)]
 struct Proxy {
+    kind: ProxyKind,
     host: String,
     port: u16,
     auth: Option<(String, String)>,
@@ -737,10 +800,20 @@ struct Proxy {
 
 fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
     let mut s = raw;
+    let mut kind = ProxyKind::HttpConnect;
     if let Some(rest) = s.strip_prefix("http://") {
         s = rest;
     } else if let Some(rest) = s.strip_prefix("https://") {
-        s = rest; // we still do a plain HTTP CONNECT; TLS to proxy not supported here
+        s = rest;
+        kind = ProxyKind::HttpConnectTls;
+    } else if let Some(rest) = s.strip_prefix("socks5://") {
+        s = rest;
+        kind = ProxyKind::Socks5;
+    } else if let Some(rest) = s.strip_prefix("socks5h://") {
+        // `socks5h` indicates remote DNS resolution. When the target is a hostname,
+        // we already forward it as a domain name, so this behaves the same as `socks5`.
+        s = rest;
+        kind = ProxyKind::Socks5;
     }
     // Strip credentials if present
     let mut auth: Option<(String, String)> = None;
@@ -754,9 +827,23 @@ fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
             auth = Some((user, pass));
         }
     }
-    let (host, port_str) = s
-        .split_once(':')
-        .ok_or_else(|| "proxy URL missing port".to_string())?;
+    let (host, port_str) = if let Some(rest) = s.strip_prefix('[') {
+        let (host, rest) = rest
+            .split_once(']')
+            .ok_or_else(|| "proxy URL has unterminated IPv6 host".to_string())?;
+        let port_str = rest
+            .strip_prefix(':')
+            .ok_or_else(|| "proxy URL missing port".to_string())?;
+        (host, port_str)
+    } else {
+        // If the host contains multiple ':' characters, treat it as an IPv6 literal missing brackets.
+        // Require bracketed form to avoid ambiguity with the port delimiter.
+        if s.matches(':').count() > 1 {
+            return Err("proxy URL has ambiguous IPv6 host; use [addr]:port".to_string());
+        }
+        s.rsplit_once(':')
+            .ok_or_else(|| "proxy URL missing port".to_string())?
+    };
     if host.is_empty() {
         return Err("proxy URL missing host".to_string());
     }
@@ -764,6 +851,7 @@ fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
         .parse()
         .map_err(|_| "proxy URL has invalid port".to_string())?;
     Ok(Proxy {
+        kind,
         host: host.to_string(),
         port,
         auth,
@@ -786,6 +874,206 @@ fn build_connect_request(target: &str, proxy: &Proxy) -> String {
     headers
 }
 
+async fn socks5_connect<S>(stream: &mut S, proxy: &Proxy, target: &SocketAddr) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // RFC 1928: SOCKS5 version/method negotiation
+    // Advertise "no auth" always, and "username/password" if configured.
+    let mut methods: Vec<u8> = vec![0x00];
+    if proxy.auth.is_some() {
+        methods.push(0x02);
+    }
+    if methods.len() > u8::MAX as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SOCKS5 method list too long",
+        ));
+    }
+    let mut greeting = Vec::with_capacity(2 + methods.len());
+    greeting.push(0x05);
+    greeting.push(u8::try_from(methods.len()).unwrap_or(u8::MAX));
+    greeting.extend_from_slice(&methods);
+    stream.write_all(&greeting).await?;
+    stream.flush().await?;
+
+    let mut choice = [0u8; 2];
+    stream.read_exact(&mut choice).await?;
+    if choice[0] != 0x05 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SOCKS5 bad version",
+        ));
+    }
+    match choice[1] {
+        0x00 => {}
+        0x02 => {
+            let (user, pass) = proxy.auth.as_ref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "SOCKS5 proxy requires username/password",
+                )
+            })?;
+            if user.len() > u8::MAX as usize || pass.len() > u8::MAX as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "SOCKS5 credentials too long",
+                ));
+            }
+            // RFC 1929: username/password authentication
+            let mut auth_req = Vec::with_capacity(3 + user.len() + pass.len());
+            auth_req.push(0x01);
+            auth_req.push(user.len() as u8);
+            auth_req.extend_from_slice(user.as_bytes());
+            auth_req.push(pass.len() as u8);
+            auth_req.extend_from_slice(pass.as_bytes());
+            stream.write_all(&auth_req).await?;
+            stream.flush().await?;
+            let mut auth_resp = [0u8; 2];
+            stream.read_exact(&mut auth_resp).await?;
+            if auth_resp[0] != 0x01 || auth_resp[1] != 0x00 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "SOCKS5 authentication failed",
+                ));
+            }
+        }
+        0xFF => {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "SOCKS5 no acceptable auth methods",
+            ));
+        }
+        m => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("SOCKS5 unsupported auth method {m}"),
+            ));
+        }
+    }
+
+    // RFC 1928: CONNECT request
+    let mut req = Vec::with_capacity(32);
+    req.push(0x05); // version
+    req.push(0x01); // CMD=CONNECT
+    req.push(0x00); // RSV
+    match target {
+        SocketAddr::Ipv4(v4) => {
+            req.push(0x01); // ATYP=IPv4
+            let ip: std::net::Ipv4Addr = v4.ip.into();
+            req.extend_from_slice(&ip.octets());
+            req.extend_from_slice(&v4.port.to_be_bytes());
+        }
+        SocketAddr::Ipv6(v6) => {
+            req.push(0x04); // ATYP=IPv6
+            let ip: std::net::Ipv6Addr = v6.ip.into();
+            req.extend_from_slice(&ip.octets());
+            req.extend_from_slice(&v6.port.to_be_bytes());
+        }
+        SocketAddr::Host(host) => {
+            let name = host.host.as_ref();
+            if name.len() > u8::MAX as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "SOCKS5 target hostname too long",
+                ));
+            }
+            req.push(0x03); // ATYP=DOMAIN
+            req.push(name.len() as u8);
+            req.extend_from_slice(name.as_bytes());
+            req.extend_from_slice(&host.port.to_be_bytes());
+        }
+    }
+    stream.write_all(&req).await?;
+    stream.flush().await?;
+
+    // Reply: VER, REP, RSV, ATYP, BND.ADDR, BND.PORT
+    let mut head = [0u8; 4];
+    stream.read_exact(&mut head).await?;
+    if head[0] != 0x05 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SOCKS5 bad reply version",
+        ));
+    }
+    if head[1] != 0x00 {
+        // Keep it short; include the code for debugging.
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("SOCKS5 connect failed (rep={})", head[1]),
+        ));
+    }
+    match head[3] {
+        0x01 => {
+            let mut bnd = [0u8; 4];
+            stream.read_exact(&mut bnd).await?;
+        }
+        0x04 => {
+            let mut bnd = [0u8; 16];
+            stream.read_exact(&mut bnd).await?;
+        }
+        0x03 => {
+            let mut len = [0u8; 1];
+            stream.read_exact(&mut len).await?;
+            let mut bnd = vec![0u8; len[0] as usize];
+            stream.read_exact(&mut bnd).await?;
+        }
+        atyp => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("SOCKS5 bad reply ATYP {atyp}"),
+            ));
+        }
+    }
+    let mut port = [0u8; 2];
+    stream.read_exact(&mut port).await?;
+
+    Ok(())
+}
+
+async fn http_connect_tunnel<S>(
+    stream: &mut S,
+    proxy: &Proxy,
+    target: &SocketAddr,
+    proxy_endpoint: &str,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let target = target.to_string();
+    let req = build_connect_request(&target, proxy);
+    stream.write_all(req.as_bytes()).await?;
+    // Read until end of headers (\r\n\r\n) or small cap
+    let mut buf = vec![0u8; 1024];
+    let mut acc = Vec::with_capacity(1024);
+    loop {
+        let n = stream.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        acc.extend_from_slice(&buf[..n]);
+        if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+        if acc.len() > 8192 {
+            break;
+        }
+    }
+    // Crude status check
+    let text = String::from_utf8_lossy(&acc);
+    if !(text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200")) {
+        static PROXY_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
+        let sampler = PROXY_CONNECT_SAMPLER.get_or_init(|| Mutex::new(LogSampler::new()));
+        if let Ok(mut s) = sampler.lock() {
+            if let Some(supp) = s.should_log(tokio::time::Duration::from_millis(500)) {
+                iroha_logger::warn!(status=%text.lines().next().unwrap_or("?"), proxy=%proxy_endpoint, target=%target, suppressed=supp, "HTTP CONNECT to proxy failed");
+            }
+        }
+        return Err(io::Error::other("proxy CONNECT failed"));
+    }
+    Ok(())
+}
+
 /// Connect to a peer using the default transport (TCP).
 ///
 /// When the `quic` feature is enabled, this remains a placeholder and
@@ -794,60 +1082,58 @@ fn build_connect_request(target: &str, proxy: &Proxy) -> String {
 /// # Errors
 ///
 /// Returns an `io::Error` if TCP connect fails, proxy handshake fails, or I/O operations error.
-pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpStream> {
+pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpConnectStream> {
     // If a proxy is configured and the target is not in NO_PROXY, tunnel via HTTP CONNECT.
     if let Some(proxy) = opts.proxy.pick_proxy_for_target(addr) {
-        let mut stream = match TcpStream::connect(format!("{}:{}", proxy.host, proxy.port)).await {
+        let proxy_endpoint = if proxy.host.contains(':') {
+            format!("[{}]:{}", proxy.host, proxy.port)
+        } else {
+            format!("{}:{}", proxy.host, proxy.port)
+        };
+        let mut stream = match TcpStream::connect(proxy_endpoint.as_str()).await {
             Ok(s) => s,
             Err(e) => {
                 static PROXY_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
                 let sampler = PROXY_CONNECT_SAMPLER.get_or_init(|| Mutex::new(LogSampler::new()));
                 if let Ok(mut s) = sampler.lock() {
                     if let Some(supp) = s.should_log(tokio::time::Duration::from_millis(500)) {
-                        iroha_logger::warn!(%e, proxy=%format!("{}:{}", proxy.host, proxy.port), suppressed=supp, "Failed to connect to HTTP proxy");
+                        iroha_logger::warn!(%e, proxy=%proxy_endpoint, suppressed=supp, "Failed to connect to proxy");
                     }
                 }
                 return Err(e);
             }
         };
         apply_tcp_socket_options(&stream, opts.tcp_nodelay, opts.tcp_keepalive);
-        let target = addr.to_string();
-        let req = build_connect_request(&target, &proxy);
-        stream.write_all(req.as_bytes()).await?;
-        // Read until end of headers (\r\n\r\n) or small cap
-        let mut buf = vec![0u8; 1024];
-        let mut acc = Vec::with_capacity(1024);
-        loop {
-            let n = stream.read(&mut buf).await?;
-            if n == 0 {
-                break;
+        match proxy.kind {
+            ProxyKind::HttpConnect => {
+                http_connect_tunnel(&mut stream, proxy, addr, &proxy_endpoint).await?;
             }
-            acc.extend_from_slice(&buf[..n]);
-            if acc.windows(4).any(|w| w == b"\r\n\r\n") {
-                break;
-            }
-            if acc.len() > 8192 {
-                break;
-            }
-        }
-        // Crude status check
-        let text = String::from_utf8_lossy(&acc);
-        if !(text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200")) {
-            static PROXY_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
-            let sampler = PROXY_CONNECT_SAMPLER.get_or_init(|| Mutex::new(LogSampler::new()));
-            if let Ok(mut s) = sampler.lock() {
-                if let Some(supp) = s.should_log(tokio::time::Duration::from_millis(500)) {
-                    iroha_logger::warn!(status=%text.lines().next().unwrap_or("?"), target=%target, suppressed=supp, "HTTP CONNECT to proxy failed");
+            ProxyKind::HttpConnectTls => {
+                #[cfg(feature = "p2p_tls")]
+                {
+                    let mut tls = crate::transport::tls::connect_tls(&proxy.host, stream).await?;
+                    http_connect_tunnel(&mut tls, proxy, addr, &proxy_endpoint).await?;
+                    return Ok(TcpConnectStream::Tls(tls));
+                }
+                #[cfg(not(feature = "p2p_tls"))]
+                {
+                    let _ = proxy_endpoint;
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "https proxy requires a build with the `iroha_p2p/p2p_tls` feature",
+                    ));
                 }
             }
-            return Err(io::Error::other("proxy CONNECT failed"));
+            ProxyKind::Socks5 => {
+                socks5_connect(&mut stream, proxy, addr).await?;
+            }
         }
-        Ok(stream)
+        Ok(TcpConnectStream::Plain(stream))
     } else {
         match TcpStream::connect(addr.to_string()).await {
             Ok(stream) => {
                 apply_tcp_socket_options(&stream, opts.tcp_nodelay, opts.tcp_keepalive);
-                Ok(stream)
+                Ok(TcpConnectStream::Plain(stream))
             }
             Err(e) => {
                 static DIRECT_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
@@ -868,10 +1154,17 @@ pub(crate) fn apply_tcp_socket_options(
     tcp_nodelay: bool,
     tcp_keepalive: Option<std::time::Duration>,
 ) {
-    let _ = stream.set_nodelay(tcp_nodelay);
+    apply_tcp_socket_options_sockref(SockRef::from(stream), tcp_nodelay, tcp_keepalive);
+}
+
+fn apply_tcp_socket_options_sockref(
+    sock_ref: SockRef<'_>,
+    tcp_nodelay: bool,
+    tcp_keepalive: Option<std::time::Duration>,
+) {
+    let _ = sock_ref.set_nodelay(tcp_nodelay);
     if let Some(idle) = tcp_keepalive {
         // Best-effort: keepalive knobs vary across OSes. Socket2 provides a safe wrapper.
-        let sock_ref = SockRef::from(stream);
         let keepalive = TcpKeepalive::new().with_time(idle);
         let _ = sock_ref.set_tcp_keepalive(&keepalive);
     }
@@ -907,6 +1200,7 @@ mod tests {
     #[test]
     fn parse_proxy_extracts_auth_and_host() {
         let proxy = parse_proxy_value("http://user:pass@example.com:8080").expect("proxy parsed");
+        assert_eq!(proxy.kind, ProxyKind::HttpConnect);
         assert_eq!(proxy.host, "example.com");
         assert_eq!(proxy.port, 8080);
         assert_eq!(
@@ -916,8 +1210,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_proxy_accepts_socks5_scheme() {
+        let proxy = parse_proxy_value("socks5://proxy.example.com:1080").expect("proxy parsed");
+        assert_eq!(proxy.kind, ProxyKind::Socks5);
+        assert_eq!(proxy.host, "proxy.example.com");
+        assert_eq!(proxy.port, 1080);
+        assert!(proxy.auth.is_none());
+    }
+
+    #[test]
+    fn parse_proxy_accepts_https_scheme() {
+        let proxy = parse_proxy_value("https://proxy.example.com:8443").expect("proxy parsed");
+        assert_eq!(proxy.kind, ProxyKind::HttpConnectTls);
+        assert_eq!(proxy.host, "proxy.example.com");
+        assert_eq!(proxy.port, 8443);
+    }
+
+    #[test]
     fn connect_request_includes_basic_auth_when_present() {
         let proxy = Proxy {
+            kind: ProxyKind::HttpConnect,
             host: "example.com".into(),
             port: 8080,
             auth: Some(("user".into(), "pass".into())),
@@ -926,6 +1238,7 @@ mod tests {
         assert!(req.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
 
         let proxy_no_auth = Proxy {
+            kind: ProxyKind::HttpConnect,
             host: "example.com".into(),
             port: 8080,
             auth: None,
@@ -934,22 +1247,199 @@ mod tests {
         assert!(!req.contains("Proxy-Authorization"));
     }
 
+    #[test]
+    fn apply_tcp_socket_options_enables_keepalive_when_configured() {
+        use socket2::{Domain, Protocol, Socket, Type};
+
+        // Binding/listening is prohibited in some sandbox environments. Keep this test local
+        // to socket options and avoid requiring a live TCP connection.
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).expect("socket");
+        apply_tcp_socket_options_sockref(
+            SockRef::from(&socket),
+            true,
+            Some(std::time::Duration::from_secs(123)),
+        );
+
+        let enabled = SockRef::from(&socket).keepalive().expect("read keepalive");
+        assert!(enabled, "SO_KEEPALIVE was not enabled");
+    }
+
     #[tokio::test(flavor = "current_thread")]
-    async fn apply_tcp_socket_options_enables_keepalive_when_configured() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        let accept_task = tokio::spawn(async move {
-            let _ = listener.accept().await;
+    async fn socks5_connect_no_auth_ipv4_target_roundtrips() {
+        use iroha_primitives::addr::socket_addr;
+
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let proxy = Proxy {
+            kind: ProxyKind::Socks5,
+            host: "proxy.example.com".into(),
+            port: 1080,
+            auth: None,
+        };
+        let target = socket_addr!(1.2.3.4:1234);
+
+        let client_fut = async { socks5_connect(&mut client, &proxy, &target).await };
+        let server_fut = async move {
+            // Greeting
+            let mut head = [0u8; 2];
+            server.read_exact(&mut head).await?;
+            assert_eq!(head[0], 0x05, "VER");
+            let n_methods = head[1] as usize;
+            let mut methods = vec![0u8; n_methods];
+            server.read_exact(&mut methods).await?;
+            assert!(
+                methods.contains(&0x00),
+                "client must advertise NO AUTH method"
+            );
+            // Choose no-auth
+            server.write_all(&[0x05, 0x00]).await?;
+
+            // CONNECT request
+            let mut req = [0u8; 4];
+            server.read_exact(&mut req).await?;
+            assert_eq!(req[0], 0x05, "VER");
+            assert_eq!(req[1], 0x01, "CMD=CONNECT");
+            assert_eq!(req[2], 0x00, "RSV");
+            assert_eq!(req[3], 0x01, "ATYP=IPv4");
+            let mut ip = [0u8; 4];
+            server.read_exact(&mut ip).await?;
+            let mut port = [0u8; 2];
+            server.read_exact(&mut port).await?;
+            assert_eq!(ip, [1, 2, 3, 4]);
+            assert_eq!(u16::from_be_bytes(port), 1234);
+
+            // Reply: success, bind 0.0.0.0:0
+            server
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .await?;
+
+            Ok::<_, io::Error>(())
+        };
+
+        let (client_res, server_res) = tokio::join!(client_fut, server_fut);
+        client_res.expect("client should succeed");
+        server_res.expect("server should complete");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn socks5_connect_username_password_auth_roundtrips() {
+        use iroha_primitives::addr::socket_addr;
+
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let proxy = Proxy {
+            kind: ProxyKind::Socks5,
+            host: "proxy.example.com".into(),
+            port: 1080,
+            auth: Some(("user".into(), "pass".into())),
+        };
+        let target = socket_addr!(5.6.7.8:4321);
+
+        let client_fut = async { socks5_connect(&mut client, &proxy, &target).await };
+        let server_fut = async move {
+            // Greeting
+            let mut head = [0u8; 2];
+            server.read_exact(&mut head).await?;
+            assert_eq!(head[0], 0x05);
+            let n_methods = head[1] as usize;
+            let mut methods = vec![0u8; n_methods];
+            server.read_exact(&mut methods).await?;
+            assert!(methods.contains(&0x00));
+            assert!(methods.contains(&0x02), "auth method must be advertised");
+            // Choose username/password
+            server.write_all(&[0x05, 0x02]).await?;
+
+            // RFC 1929 auth request
+            let mut ver = [0u8; 1];
+            server.read_exact(&mut ver).await?;
+            assert_eq!(ver[0], 0x01);
+            let mut ulen = [0u8; 1];
+            server.read_exact(&mut ulen).await?;
+            let mut user = vec![0u8; ulen[0] as usize];
+            server.read_exact(&mut user).await?;
+            let mut plen = [0u8; 1];
+            server.read_exact(&mut plen).await?;
+            let mut pass = vec![0u8; plen[0] as usize];
+            server.read_exact(&mut pass).await?;
+            assert_eq!(user, b"user");
+            assert_eq!(pass, b"pass");
+            // Auth success
+            server.write_all(&[0x01, 0x00]).await?;
+
+            // CONNECT request
+            let mut req = [0u8; 4];
+            server.read_exact(&mut req).await?;
+            assert_eq!(req[0], 0x05);
+            assert_eq!(req[1], 0x01);
+            assert_eq!(req[2], 0x00);
+            assert_eq!(req[3], 0x01);
+            let mut ip = [0u8; 4];
+            server.read_exact(&mut ip).await?;
+            let mut port = [0u8; 2];
+            server.read_exact(&mut port).await?;
+            assert_eq!(ip, [5, 6, 7, 8]);
+            assert_eq!(u16::from_be_bytes(port), 4321);
+
+            server
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .await?;
+
+            Ok::<_, io::Error>(())
+        };
+
+        let (client_res, server_res) = tokio::join!(client_fut, server_fut);
+        client_res.expect("client should succeed");
+        server_res.expect("server should complete");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn socks5_connect_uses_domain_type_for_hostname_targets() {
+        use iroha_primitives::addr::SocketAddrHost;
+
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let proxy = Proxy {
+            kind: ProxyKind::Socks5,
+            host: "proxy.example.com".into(),
+            port: 1080,
+            auth: None,
+        };
+        let target = SocketAddr::Host(SocketAddrHost {
+            host: "example.com".into(),
+            port: 9999,
         });
 
-        let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
-        apply_tcp_socket_options(&stream, true, Some(std::time::Duration::from_secs(123)));
+        let client_fut = async { socks5_connect(&mut client, &proxy, &target).await };
+        let server_fut = async move {
+            // Greeting, choose no-auth
+            let mut head = [0u8; 2];
+            server.read_exact(&mut head).await?;
+            let mut methods = vec![0u8; head[1] as usize];
+            server.read_exact(&mut methods).await?;
+            server.write_all(&[0x05, 0x00]).await?;
 
-        let enabled = SockRef::from(&stream).keepalive().expect("read keepalive");
-        assert!(enabled, "SO_KEEPALIVE was not enabled");
+            // CONNECT request: DOMAIN
+            let mut req = [0u8; 4];
+            server.read_exact(&mut req).await?;
+            assert_eq!(req[0], 0x05);
+            assert_eq!(req[1], 0x01);
+            assert_eq!(req[2], 0x00);
+            assert_eq!(req[3], 0x03, "ATYP=DOMAIN");
+            let mut len = [0u8; 1];
+            server.read_exact(&mut len).await?;
+            let mut name = vec![0u8; len[0] as usize];
+            server.read_exact(&mut name).await?;
+            let mut port = [0u8; 2];
+            server.read_exact(&mut port).await?;
+            assert_eq!(name, b"example.com");
+            assert_eq!(u16::from_be_bytes(port), 9999);
 
-        let _ = accept_task.await;
+            server
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .await?;
+
+            Ok::<_, io::Error>(())
+        };
+
+        let (client_res, server_res) = tokio::join!(client_fut, server_fut);
+        client_res.expect("client should succeed");
+        server_res.expect("server should complete");
     }
 }
