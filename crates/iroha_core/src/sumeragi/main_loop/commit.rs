@@ -2371,11 +2371,11 @@ impl Actor {
                 let view = self.state.view();
                 self.pending_fast_path_timeout(&view, consensus_mode)
             };
-            let mut validation_outcome = if fast_timeout <= std::time::Duration::from_secs(1) {
-                self.validate_pending_block_for_voting_inline(hash, &commit_topology)
-            } else {
-                self.validate_pending_block_for_voting(hash, &commit_topology)
-            };
+            // Prefer validating via background workers to keep the tick loop responsive under load.
+            // Inline validation can take hundreds of milliseconds and risks stalling vote/proposal
+            // handling, which in turn causes view changes and reschedules.
+            let mut validation_outcome =
+                self.validate_pending_block_for_voting(hash, &commit_topology);
             if matches!(validation_outcome, ValidationGateOutcome::Deferred) {
                 if let Some(pending) = self.pending.pending_blocks.get(&hash) {
                     let pending_age = pending.age();

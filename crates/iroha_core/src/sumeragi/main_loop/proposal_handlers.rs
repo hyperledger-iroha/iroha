@@ -109,7 +109,7 @@ impl Actor {
         let highest_qc = hint.highest_qc;
         let height = hint.height;
         let view = hint.view;
-        let state_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if stale_height(height, state_height) {
             debug!(
                 height,
@@ -454,7 +454,7 @@ impl Actor {
     ) -> Result<()> {
         let height = proposal.header.height;
         let view = proposal.header.view;
-        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if stale_height(height, committed_height) {
             debug!(
                 height,

@@ -7137,7 +7137,7 @@ impl Actor {
         let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(key.1);
         let mut roster = self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode);
         if roster.is_empty() {
-            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
             let committed_epoch = self.epoch_for_height(committed_height);
             let session_epoch = self.epoch_for_height(key.1);
             let payload_known = self.block_known_locally(key.0);

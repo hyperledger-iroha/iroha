@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/p2p.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8ef0e808ca752c9c53046663a589f7d199b0d050e6ca78fffbb87bd309fd7ba7
-source_last_modified: "2026-02-08T07:18:26.525951+00:00"
+source_hash: a5ffff105a8ad86f17fad59c106c1ed03e7c97cc7b0f6a98b4c90331aae8f158
+source_last_modified: "2026-02-08T08:24:04.538104+00:00"
 translation_last_reviewed: 2026-02-08
 ---
 
@@ -183,6 +183,7 @@ p2p_ws_outbound_total 0
 
 - Knobs (`[network]`):
   - `p2p_proxy` (string; optional): outbound proxy URL (e.g., `http://user:pass@proxy.example.com:8080` or `socks5://user:pass@proxy.example.com:1080`).
+  - `p2p_proxy_required` (bool; default `false`): when true, require `p2p_proxy` to be set and fail startup otherwise. Note: QUIC bypasses the proxy, so `quic_enabled=true` is rejected when `p2p_proxy_required=true`.
   - `p2p_no_proxy` (array of strings): host suffixes to bypass the proxy (e.g., `.example.com`, `localhost`).
   - `p2p_proxy_tls_verify` (bool; default `true`): verify an `https://` proxy hop (certificate pinning).
   - `p2p_proxy_tls_pinned_cert_der_base64` (string; optional): pinned end-entity proxy certificate (DER, base64). Required when `p2p_proxy_tls_verify=true`.
@@ -195,7 +196,7 @@ p2p_ws_outbound_total 0
   - Basic authentication is supported via `user:pass@...` in the proxy URL.
   - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`).
   - Disabling `p2p_proxy_tls_verify` may expose proxy credentials (and proxy traffic metadata) to MITM on the proxy hop.
-  - Proxies apply only to TCP-based dials (TCP/TLS/WS). QUIC (UDP) bypasses the proxy; set `quic_enabled=false` if you must force all outbound P2P traffic through a proxy.
+  - Proxies apply only to TCP-based dials (TCP/TLS/WS). QUIC (UDP) bypasses the proxy; set `quic_enabled=false` (or enable `p2p_proxy_required=true`) if you must force all outbound P2P traffic through a proxy.
   - If no proxy is configured, connections go direct.
 
 ### Relay Mode (Hub/Spoke/Assist)
@@ -404,7 +405,8 @@ Notes
 
 - Build-time: enable `iroha_p2p/p2p_tls` to include TLS support.
 - Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the signed handshake (address + optional `chain_id`).
-- Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
+- Runtime: `tls_fallback_to_plain` (bool; default `true`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=false` to enforce TLS-only outbound dials.
+- Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails and `tls_fallback_to_plain=true`, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
 - Inbound: optionally enable a TLS listener on a separate address/port via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address while still accepting plain TCP on `[network].address`. Certificates are self‑signed per process; authentication is enforced at the application handshake.
 
 ### Noise XX handshake (feature-gated)

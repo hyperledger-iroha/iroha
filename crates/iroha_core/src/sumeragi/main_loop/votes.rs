@@ -438,7 +438,7 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
-        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let stale_view = self.stale_view(vote.height, vote.view);
         if self.drop_vote_for_height_or_view(&vote, committed_height, stale_view)
             || self.drop_precommit_vote_for_lock(&vote)
@@ -594,7 +594,7 @@ impl Actor {
         vote: crate::sumeragi::consensus::Vote,
         context: VoteProcessingContext,
     ) {
-        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let topology_peers = context.topology.as_ref().to_vec();
         self.touch_pending_progress(vote.block_hash, vote.height, vote.view, Instant::now());
         if !matches!(vote.phase, Phase::NewView) {
