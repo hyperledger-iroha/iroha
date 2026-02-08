@@ -83,15 +83,15 @@ fn envelope_roles_permissions_triggers() {
                 ("name", json_value("issuer")),
                 (
                     "perms",
-                        json_array([
-                            json_value("register_domain"),
-                            json_object([
-                                ("type", json_value("read_assets")),
-                                ("target", json_value(&alice)),
-                            ]),
+                    json_array([
+                        json_value("register_domain"),
+                        json_object([
+                            ("type", json_value("read_assets")),
+                            ("target", json_value(&alice)),
                         ]),
-                    ),
-                ]),
+                    ]),
+                ),
+            ]),
         ),
     ]);
     run_env(&mut vm, create_role_env);
