@@ -640,7 +640,8 @@ fn sampling_manifest(stripes: u32) -> DaManifestV1 {
 }
 
 fn sample_request() -> DaIngestRequest {
-    let keypair = KeyPair::random();
+    // Golden fixture tests must not depend on OS randomness.
+    let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
     let payload = b"example".to_vec();
 
     DaIngestRequest {

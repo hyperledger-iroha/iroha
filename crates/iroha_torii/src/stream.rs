@@ -162,6 +162,7 @@ pub fn extract_ws_closed(error: axum::Error) -> Error {
 #[cfg(feature = "p2p_ws")]
 mod ws_io {
     use futures::stream::{SplitSink, SplitStream};
+    use futures::{Sink, Stream};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     use super::*;
@@ -169,29 +170,13 @@ mod ws_io {
     /// Read half adapter over a WebSocket stream that yields bytes from Binary frames.
     pub struct WsReadHalf {
         inner: SplitStream<WebSocket>,
-        buf: bytes::Bytes,
+        buf: axum::body::Bytes,
     }
 
     /// Write half adapter over a WebSocket sink that sends bytes as Binary frames on flush.
     pub struct WsWriteHalf {
         inner: SplitSink<WebSocket, Message>,
         buf: Vec<u8>,
-    }
-
-    impl From<WebSocket> for (WsReadHalf, WsWriteHalf) {
-        fn from(ws: WebSocket) -> Self {
-            let (sink, stream) = ws.split();
-            (
-                WsReadHalf {
-                    inner: stream,
-                    buf: bytes::Bytes::new(),
-                },
-                WsWriteHalf {
-                    inner: sink,
-                    buf: Vec::new(),
-                },
-            )
-        }
     }
 
     impl AsyncRead for WsReadHalf {
@@ -205,7 +190,8 @@ mod ws_io {
                 dst.put_slice(&self.buf.split_to(n));
                 return core::task::Poll::Ready(Ok(()));
             }
-            match futures::ready!(core::pin::Pin::new(&mut self.inner).poll_next(cx)) {
+            let next = futures::ready!(core::pin::Pin::new(&mut self.inner).poll_next(cx));
+            match next {
                 Some(Ok(Message::Binary(b))) => {
                     self.buf = b;
                     let n = core::cmp::min(self.buf.len(), dst.remaining());
@@ -241,53 +227,62 @@ mod ws_io {
             mut self: core::pin::Pin<&mut Self>,
             cx: &mut core::task::Context<'_>,
         ) -> core::task::Poll<std::io::Result<()>> {
-            if self.buf.is_empty() {
-                return core::task::Poll::Ready(Ok(()));
-            }
-            let data = core::mem::take(&mut self.buf);
-            let mut sink = core::pin::Pin::new(&mut self.inner);
-            match futures::ready!(
-                sink.as_mut()
-                    .start_send(Message::Binary(axum::body::Bytes::from(data)))
-                    .map_err(|e| {
+            if !self.buf.is_empty() {
+                {
+                    let mut sink = core::pin::Pin::new(&mut self.inner);
+                    futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
                         std::io::Error::new(
                             std::io::ErrorKind::Other,
-                            format!("ws send error: {e}"),
+                            format!("ws ready error: {e}"),
                         )
-                    })
-            ) {
-                () => {}
+                    }))?;
+                }
+                let data = core::mem::take(&mut self.buf);
+                {
+                    let mut sink = core::pin::Pin::new(&mut self.inner);
+                    sink.as_mut()
+                        .start_send(Message::Binary(axum::body::Bytes::from(data)))
+                        .map_err(|e| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("ws send error: {e}"),
+                            )
+                        })?;
+                }
             }
-            match futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
+            let mut sink = core::pin::Pin::new(&mut self.inner);
+            futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, format!("ws flush error: {e}"))
-            })) {
-                () => core::task::Poll::Ready(Ok(())),
-            }
+            }))?;
+            core::task::Poll::Ready(Ok(()))
         }
 
         fn poll_shutdown(
             mut self: core::pin::Pin<&mut Self>,
             cx: &mut core::task::Context<'_>,
         ) -> core::task::Poll<std::io::Result<()>> {
+            futures::ready!(self.as_mut().poll_flush(cx))?;
+
             let mut sink = core::pin::Pin::new(&mut self.inner);
-            match futures::ready!(sink.as_mut().start_send(Message::Close(None)).map_err(|e| {
+            futures::ready!(sink.as_mut().poll_close(cx).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
-            })) {
-                () => {}
-            }
-            match futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("ws close flush error: {e}"),
-                )
-            })) {
-                () => core::task::Poll::Ready(Ok(())),
-            }
+            }))?;
+            core::task::Poll::Ready(Ok(()))
         }
     }
 
     pub fn split(ws: WebSocket) -> (WsReadHalf, WsWriteHalf) {
-        ws.into()
+        let (sink, stream) = ws.split();
+        (
+            WsReadHalf {
+                inner: stream,
+                buf: axum::body::Bytes::new(),
+            },
+            WsWriteHalf {
+                inner: sink,
+                buf: Vec::new(),
+            },
+        )
     }
 }
 

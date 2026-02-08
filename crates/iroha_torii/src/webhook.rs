@@ -263,17 +263,32 @@ fn webhook_policy_state() -> &'static Mutex<WebhookPolicy> {
     STATE.get_or_init(|| Mutex::new(WebhookPolicy::default()))
 }
 
+#[cfg(test)]
+fn webhook_policy_writer_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn webhook_policy() -> WebhookPolicy {
     *webhook_policy_state().lock().expect("webhook policy lock")
 }
 
-pub fn set_webhook_policy(policy: WebhookPolicy) {
+fn apply_webhook_policy(policy: WebhookPolicy) {
     *webhook_policy_state().lock().expect("webhook policy lock") = policy;
     set_http_timeout_config(HttpTimeoutConfig {
         connect: policy.connect_timeout,
         write: policy.write_timeout,
         read: policy.read_timeout,
     });
+}
+
+pub fn set_webhook_policy(policy: WebhookPolicy) {
+    #[cfg(test)]
+    let _writer_guard = webhook_policy_writer_lock()
+        .lock()
+        .expect("webhook policy writer lock");
+
+    apply_webhook_policy(policy);
 }
 
 /// Webhook destination security policy (SSRF guard rails).
@@ -2277,7 +2292,7 @@ mod tests {
     use std::{
         convert::TryFrom,
         fs,
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, MutexGuard},
     };
 
     use http_body_util::BodyExt as _;
@@ -2311,19 +2326,28 @@ mod tests {
         }
     }
 
-    struct WebhookPolicyGuard(super::WebhookPolicy);
+    struct WebhookPolicyGuard {
+        previous: super::WebhookPolicy,
+        _writer_guard: MutexGuard<'static, ()>,
+    }
 
     impl WebhookPolicyGuard {
         fn new(policy: super::WebhookPolicy) -> Self {
+            let writer_guard = super::webhook_policy_writer_lock()
+                .lock()
+                .expect("webhook policy writer lock");
             let previous = super::webhook_policy();
-            super::set_webhook_policy(policy);
-            Self(previous)
+            super::apply_webhook_policy(policy);
+            Self {
+                previous,
+                _writer_guard: writer_guard,
+            }
         }
     }
 
     impl Drop for WebhookPolicyGuard {
         fn drop(&mut self) {
-            super::set_webhook_policy(self.0);
+            super::apply_webhook_policy(self.previous);
         }
     }
 

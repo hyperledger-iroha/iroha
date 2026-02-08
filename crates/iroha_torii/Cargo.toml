@@ -45,7 +45,7 @@ zk-verify-batch = ["dep:iroha_zkp_halo2", "app_api"]
 # Forward `transparent_api` to data model so Torii can gate fields like authority/timestamp
 transparent_api = ["iroha_data_model/transparent_api"]
 ## Expose a `/p2p` WebSocket endpoint for P2P fallback (server-side), feature-gated.
-p2p_ws = []
+p2p_ws = ["iroha_p2p/p2p_ws"]
 ## WalletConnect-style WS + minimal in-node relay. Non-consensus.
 connect = []
 ## Enable HTTPS webhook delivery using hyper + rustls (client-only).

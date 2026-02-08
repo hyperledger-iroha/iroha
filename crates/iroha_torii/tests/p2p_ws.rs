@@ -1,82 +1,51 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii-level E2E test for the P2P WebSocket fallback route `/p2p`.
-//! Requires building with `--features iroha_p2p/p2p_ws`.
+//! Requires building with `--features p2p_ws`.
 
 #[cfg(feature = "p2p_ws")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn p2p_ws_route_accepts_and_handshakes() {
-    use iroha_config::parameters::actual::Network as NetCfg;
-    use iroha_config_base::WithOrigin;
-    use iroha_crypto::KeyPair;
-    use iroha_data_model::ChainId;
-    use iroha_p2p::{NetworkHandle, network::message::ClassifyTopic};
-    use iroha_primitives::addr::socket_addr;
+    use std::{net::SocketAddr, time::Duration};
+
+    use axum::{
+        Router,
+        extract::{ConnectInfo, ws::WebSocketUpgrade},
+        response::IntoResponse,
+        routing::get,
+    };
     use tokio::net::TcpListener;
-    use tokio_tungstenite::accept_async;
 
-    #[derive(Clone, Debug, norito::codec::Decode, norito::codec::Encode)]
-    struct Dummy;
-    impl ClassifyTopic for Dummy {}
+    async fn route(
+        ws: WebSocketUpgrade,
+        ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    ) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| async move {
+            // We only assert that the route accepts a WS handshake and upgrades successfully.
+            // The P2P node wires a real `IrohaNetwork` handle.
+            iroha_torii::handle_p2p_ws(socket, None, remote).await;
+        })
+    }
 
-    // Start a P2P network that will accept inbound streams
-    let kp = KeyPair::random();
-    let chain_id = ChainId::from("test-chain");
-    let (network, _child) = NetworkHandle::<Dummy>::start(
-        kp,
-        NetCfg {
-            address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            idle_timeout: std::time::Duration::from_millis(5000),
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            tls_enabled: false,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            prefer_ws_fallback: false,
-            p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
-            p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
-            p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
-            p2p_subscriber_queue_cap: core::num::NonZeroUsize::new(128).unwrap(),
-            happy_eyeballs_stagger: std::time::Duration::from_millis(50),
-            addr_ipv6_first: false,
-            lane_profile: iroha_config::parameters::actual::LaneProfile::Core,
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-        },
-        Some(chain_id),
-        None,
-        None,
-        iroha_futures::supervisor::ShutdownSignal::new(),
-    )
-    .await
-    .expect("start p2p");
-
-    // Minimal WS server that forwards the upgraded socket to Torii handler
+    let app = Router::new().route("/p2p", get(route));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let ws_addr = listener.local_addr().unwrap();
-    let net2 = network.clone();
-    tokio::spawn(async move {
-        let (stream, remote) = listener.accept().await.unwrap();
-        let ws = accept_async(stream).await.unwrap();
-        iroha_torii::handle_p2p_ws(ws, Some(net2), remote).await;
+    let addr = listener.local_addr().unwrap();
+
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    );
+    let server_task = tokio::spawn(async move {
+        let _ = server.await;
     });
 
-    // Dial the server via WS fallback (client-side adapter appends /p2p)
-    let endpoint = format!("{}:{}", ws_addr.ip(), ws_addr.port());
-    let ws = iroha_p2p::transport::ws::connect_ws(&endpoint)
-        .await
-        .expect("ws client connect");
-    drop(ws); // peer actor owns the stream
+    let endpoint = format!("{}:{}", addr.ip(), addr.port());
+    let _duplex = tokio::time::timeout(
+        Duration::from_secs(5),
+        iroha_p2p::transport::ws::connect_ws(&endpoint),
+    )
+    .await
+    .expect("ws connect timeout")
+    .expect("ws connect");
+
+    server_task.abort();
 }

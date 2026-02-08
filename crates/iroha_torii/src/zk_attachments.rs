@@ -19,7 +19,7 @@ use std::{
     net::IpAddr,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{OnceLock, mpsc},
+    sync::{OnceLock, RwLock, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -895,9 +895,11 @@ fn run_sanitizer_subprocess(
 }
 
 fn sanitizer_executable() -> Result<PathBuf, SanitizeError> {
-    let override_path = ATTACH_CFG
-        .get()
-        .and_then(|cfg| cfg.sanitizer_exe_override.clone());
+    let override_path = attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .sanitizer_exe_override
+        .clone();
     sanitizer_executable_with_override(override_path)
 }
 
@@ -1468,8 +1470,37 @@ struct AttachConfig {
     telemetry: MaybeTelemetry,
 }
 
-static ATTACH_CFG: OnceLock<AttachConfig> = OnceLock::new();
+impl Default for AttachConfig {
+    fn default() -> Self {
+        Self {
+            ttl_secs: ATTACHMENT_TTL_SECS_FALLBACK,
+            max_bytes: MAX_ATTACHMENT_BYTES_FALLBACK as u64,
+            per_tenant_max_count: 0,
+            per_tenant_max_bytes: 0,
+            allowed_mime_types:
+                iroha_config::parameters::defaults::torii::attachments_allowed_mime_types()
+                    .into_iter()
+                    .filter_map(|entry| normalize_mime(&entry))
+                    .collect(),
+            max_expanded_bytes:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
+            max_archive_depth:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,
+            sanitizer_mode: AttachmentSanitizerMode::Subprocess,
+            sanitize_timeout_ms:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
+            sanitizer_exe_override: None,
+            telemetry: MaybeTelemetry::disabled(),
+        }
+    }
+}
+
+static ATTACH_CFG: OnceLock<RwLock<AttachConfig>> = OnceLock::new();
 static ATTACH_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn attach_cfg() -> &'static RwLock<AttachConfig> {
+    ATTACH_CFG.get_or_init(|| RwLock::new(AttachConfig::default()))
+}
 
 /// Configure attachments TTL, per-item size cap, and per-tenant quotas from Torii config.
 /// The sanitizer executable override is intended for tests and tooling.
@@ -1491,7 +1522,7 @@ pub fn configure(
         .into_iter()
         .filter_map(|entry| normalize_mime(&entry))
         .collect();
-    let _ = ATTACH_CFG.set(AttachConfig {
+    *attach_cfg().write().expect("attachment config lock") = AttachConfig {
         ttl_secs,
         max_bytes,
         per_tenant_max_count,
@@ -1503,73 +1534,71 @@ pub fn configure(
         sanitize_timeout_ms,
         sanitizer_exe_override,
         telemetry,
-    });
+    };
 }
 
 fn max_bytes_cfg() -> usize {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.max_bytes as usize)
-        .unwrap_or(MAX_ATTACHMENT_BYTES_FALLBACK)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .max_bytes as usize
 }
 
 fn ttl_secs_cfg() -> u64 {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.ttl_secs)
-        .unwrap_or(ATTACHMENT_TTL_SECS_FALLBACK)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .ttl_secs
 }
 
 fn per_tenant_max_count_cfg() -> u64 {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.per_tenant_max_count)
-        .unwrap_or(0)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .per_tenant_max_count
 }
 
 fn per_tenant_max_bytes_cfg() -> u64 {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.per_tenant_max_bytes)
-        .unwrap_or(0)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .per_tenant_max_bytes
 }
 
 fn allowed_mime_types_cfg() -> Vec<String> {
-    let raw = ATTACH_CFG
-        .get()
-        .map(|c| c.allowed_mime_types.clone())
-        .unwrap_or_else(iroha_config::parameters::defaults::torii::attachments_allowed_mime_types);
-    raw.into_iter()
-        .filter_map(|entry| normalize_mime(&entry))
-        .collect()
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .allowed_mime_types
+        .clone()
 }
 
 fn max_expanded_bytes_cfg() -> u64 {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.max_expanded_bytes)
-        .unwrap_or(iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .max_expanded_bytes
 }
 
 fn max_archive_depth_cfg() -> u32 {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.max_archive_depth)
-        .unwrap_or(iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .max_archive_depth
 }
 
 fn sanitizer_mode_cfg() -> AttachmentSanitizerMode {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.sanitizer_mode)
-        .unwrap_or(AttachmentSanitizerMode::Subprocess)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .sanitizer_mode
 }
 
 fn sanitize_timeout_cfg() -> Duration {
-    let ms = ATTACH_CFG
-        .get()
-        .map(|c| c.sanitize_timeout_ms)
-        .unwrap_or(iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS)
+    let ms = attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .sanitize_timeout_ms
         .max(1);
     Duration::from_millis(ms)
 }
@@ -1750,10 +1779,11 @@ fn read_stdin_limited(max_bytes: usize) -> Result<Vec<u8>, SanitizeError> {
 }
 
 fn telemetry_handle() -> MaybeTelemetry {
-    ATTACH_CFG
-        .get()
-        .map(|c| c.telemetry.clone())
-        .unwrap_or_else(MaybeTelemetry::disabled)
+    attach_cfg()
+        .read()
+        .expect("attachment config lock")
+        .telemetry
+        .clone()
 }
 
 fn quota_lock() -> &'static Mutex<()> {
