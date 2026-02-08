@@ -6858,6 +6858,7 @@ mod tests {
 
     #[test]
     fn vote_validation_drop_snapshot_tracks_entries() {
+        let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
         let peer = PeerId::new(KeyPair::random().public_key().clone());
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
@@ -6894,6 +6895,7 @@ mod tests {
 
     #[test]
     fn vote_validation_drop_snapshot_tracks_peer_entries() {
+        let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
         let peer = PeerId::new(KeyPair::random().public_key().clone());
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(

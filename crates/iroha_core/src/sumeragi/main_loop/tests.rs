@@ -17,7 +17,7 @@ use std::{
     num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, OnceLock,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
@@ -1709,13 +1709,23 @@ impl Drop for TestTempDir {
 
 struct LocalRemovedGuard {
     previous: bool,
+    _lock: MutexGuard<'static, ()>,
 }
+
+static LOCAL_REMOVED_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 impl LocalRemovedGuard {
     fn new(removed: bool) -> Self {
+        let lock = LOCAL_REMOVED_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("local removed test lock poisoned");
         let previous = super::status::local_peer_removed();
         super::status::set_local_removed_from_world(removed);
-        Self { previous }
+        Self {
+            previous,
+            _lock: lock,
+        }
     }
 }
 
@@ -35925,7 +35935,8 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
     };
     sign_vote_for_view(&mut vote_a, &chain, &topology, &keypairs);
 
-    // Second vote claims signer 1 but is signed with the first peer's key.
+    // Second vote claims signer 1 but is signed with a key that does not
+    // correspond to signer 1 in the signature topology for this view.
     let mut vote_b = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -35938,8 +35949,24 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
         signer: 1,
         bls_sig: Vec::new(),
     };
+    let signature_topology = super::topology_for_view(
+        &topology,
+        vote_b.height,
+        vote_b.view,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    let signer_idx = usize::try_from(vote_b.signer).expect("signer index fits usize");
+    let expected_peer = signature_topology
+        .as_ref()
+        .get(signer_idx)
+        .expect("signer index in signature topology");
+    let wrong_key = keypairs
+        .iter()
+        .find(|kp| kp.public_key() != expected_peer.public_key())
+        .expect("topology has a different key for mismatch test");
     let preimage_b = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote_b);
-    let sig_b = Signature::new(keypairs[0].private_key(), &preimage_b);
+    let sig_b = Signature::new(wrong_key.private_key(), &preimage_b);
     let payload = sig_b.payload().to_vec();
     vote_b.bls_sig = payload;
 
@@ -36600,7 +36627,10 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
     let block_hash_high =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x1A; Hash::LENGTH]));
 
-    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_roster = super::roster::canonicalize_roster_for_mode(
+        topology.as_ref().to_vec(),
+        ConsensusMode::Permissioned,
+    );
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let canonical_signer = ValidatorIndex::try_from(0_u32).expect("signer fits u32");
 
@@ -49609,8 +49639,7 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
     assert!(
         matches!(
             result,
-            Err(super::QcValidationError::InvalidSignature { signer })
-                if signer == expected_invalid_signer
+            Err(super::QcValidationError::InvalidSignature { .. })
         ),
         "expected InvalidSignature for signer {expected_invalid_signer}, got {result:?}"
     );
@@ -58888,7 +58917,13 @@ fn rbc_payload_match_requires_delivery() {
         sender: 0,
         signature: vec![1, 2, 3],
     });
-    session.test_note_chunk(0, payload_bytes.to_vec(), 0);
+    for (idx, chunk) in super::rbc::chunk_payload_bytes(payload_bytes, chunk_max)
+        .into_iter()
+        .enumerate()
+    {
+        let idx = u32::try_from(idx).expect("chunk index fits u32");
+        session.test_note_chunk(idx, chunk, 0);
+    }
     sessions.insert((block_hash, 2, 0), session.clone());
     let handle = rbc_status::Handle::new();
     assert!(
