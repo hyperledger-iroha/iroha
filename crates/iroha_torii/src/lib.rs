@@ -12383,10 +12383,7 @@ impl Torii {
                     "/v1/sumeragi/evidence/count",
                     get(handler_sumeragi_evidence_count),
                 )
-                .route(
-                    "/v1/sumeragi/evidence",
-                    get(handler_sumeragi_evidence).post(handler_sumeragi_evidence_submit),
-                );
+                .route("/v1/sumeragi/evidence", get(handler_sumeragi_evidence));
 
             #[cfg(feature = "telemetry")]
             let sumeragi = sumeragi
@@ -12443,13 +12440,19 @@ impl Torii {
                 .route(
                     "/v1/sumeragi/vrf/epoch/{epoch}",
                     get(handler_sumeragi_vrf_epoch),
+                );
+
+            let operator_sumeragi = Router::new()
+                .route(
+                    "/v1/sumeragi/evidence",
+                    post(handler_sumeragi_evidence_submit),
                 )
                 .route("/v1/sumeragi/vrf/commit", post(handler_sumeragi_vrf_commit))
                 .route("/v1/sumeragi/vrf/reveal", post(handler_sumeragi_vrf_reveal))
                 .route("/v1/sumeragi/rbc/sample", post(handler_rbc_sample))
                 .route_layer(operator_layer);
 
-            router.merge(sumeragi)
+            router.merge(sumeragi).merge(operator_sumeragi)
         });
     }
 
