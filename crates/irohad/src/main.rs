@@ -26,7 +26,7 @@ use std::{
     sync::{
         Arc,
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -666,6 +666,7 @@ struct NetworkRelay {
     kiso: KisoHandle,
     #[allow(dead_code)]
     suppress_pow_broadcast: Arc<AtomicBool>,
+    pow_update_version: Arc<AtomicU64>,
     consensus_ingress: ConsensusIngressLimiter,
     low_priority_ingress: LowPriorityIngressLimiter,
 }
@@ -678,6 +679,8 @@ struct NetworkRelayShared {
     network: IrohaNetwork,
     streaming: iroha_core::streaming::StreamingHandle,
     kiso: KisoHandle,
+    suppress_pow_broadcast: Arc<AtomicBool>,
+    pow_update_version: Arc<AtomicU64>,
     consensus_ingress: Mutex<ConsensusIngressLimiter>,
     low_priority_ingress: Mutex<LowPriorityIngressLimiter>,
 }
@@ -1327,6 +1330,8 @@ impl NetworkRelay {
             network: self.network,
             streaming: self.streaming,
             kiso: self.kiso,
+            suppress_pow_broadcast: self.suppress_pow_broadcast,
+            pow_update_version: self.pow_update_version,
             consensus_ingress: Mutex::new(self.consensus_ingress),
             low_priority_ingress: Mutex::new(self.low_priority_ingress),
         }
@@ -1980,15 +1985,11 @@ impl NetworkRelayShared {
             level: iroha_logger::Level::INFO,
             filter: None,
         };
+        let mut matches_current = false;
         match self.kiso.get_dto().await {
             Ok(dto) => {
-                if Self::pow_summary_matches_broadcast(&dto.network.soranet_handshake.pow, &update)
-                {
-                    iroha_logger::debug!(
-                        "PoW update matches current configuration; skipping rebroadcast"
-                    );
-                    return;
-                }
+                matches_current =
+                    Self::pow_summary_matches_broadcast(&dto.network.soranet_handshake.pow, &update);
                 logger = dto.logger;
             }
             Err(err) => {
@@ -1998,6 +1999,63 @@ impl NetworkRelayShared {
                 );
             }
         };
+
+        let observed_version = self.pow_update_version.load(Ordering::SeqCst);
+        if update.version < observed_version {
+            iroha_logger::debug!(
+                incoming_version = update.version,
+                local_version = observed_version,
+                "Ignoring stale PoW update version"
+            );
+            return;
+        }
+        if update.version == observed_version {
+            if !matches_current {
+                iroha_logger::warn!(
+                    incoming_version = update.version,
+                    local_version = observed_version,
+                    "Ignoring conflicting PoW update with equal version"
+                );
+            }
+            iroha_logger::debug!(
+                incoming_version = update.version,
+                local_version = observed_version,
+                "PoW update version already applied; skipping"
+            );
+            return;
+        }
+        if matches_current {
+            let _ = self.pow_update_version.compare_exchange(
+                observed_version,
+                update.version,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            iroha_logger::debug!(
+                incoming_version = update.version,
+                local_version = observed_version,
+                "PoW config already matches; advancing version only"
+            );
+            return;
+        }
+        if self
+            .pow_update_version
+            .compare_exchange(
+                observed_version,
+                update.version,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            iroha_logger::debug!(
+                incoming_version = update.version,
+                local_version = self.pow_update_version.load(Ordering::SeqCst),
+                "Skipping PoW update after local version changed concurrently"
+            );
+            return;
+        }
+
         let puzzle = match update.puzzle {
             Some(p) => Some(iroha_config::client_api::SoranetHandshakePuzzleUpdate {
                 enabled: Some(true),
@@ -2012,6 +2070,8 @@ impl NetworkRelayShared {
                 lanes: None,
             }),
         };
+        // Remote updates should not trigger another rebroadcast from this peer.
+        self.suppress_pow_broadcast.store(true, Ordering::SeqCst);
         if let Err(err) = self
             .kiso
             .update_with_dto(iroha_config::client_api::ConfigUpdateDTO {
@@ -2041,6 +2101,13 @@ impl NetworkRelayShared {
             })
             .await
         {
+            self.suppress_pow_broadcast.store(false, Ordering::SeqCst);
+            let _ = self.pow_update_version.compare_exchange(
+                update.version,
+                observed_version,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
             iroha_logger::warn!(?err, "Failed to apply remote PoW configuration update");
         }
     }
@@ -2200,6 +2267,7 @@ mod network_relay_tests {
             signed_ticket_public_key_hex: None,
         };
         let broadcast = SoranetPowConfigBroadcast {
+            version: 1,
             required: true,
             difficulty: 7,
             max_future_skew_secs: 900,
@@ -2233,6 +2301,7 @@ mod network_relay_tests {
             signed_ticket_public_key_hex: None,
         };
         let broadcast = SoranetPowConfigBroadcast {
+            version: 1,
             required: true,
             difficulty: 7,
             max_future_skew_secs: 900,
@@ -2249,7 +2318,7 @@ mod network_relay_tests {
     #[test]
     fn pow_update_payload_skips_when_pow_disabled() {
         let pow = SoranetPow::default();
-        assert!(pow_update_payload(&pow).is_none());
+        assert!(pow_update_payload(&pow, 1).is_none());
     }
 
     #[test]
@@ -2266,10 +2335,11 @@ mod network_relay_tests {
             nz_u32(2),
         ));
 
-        let payload = pow_update_payload(&pow).expect("payload");
+        let payload = pow_update_payload(&pow, 42).expect("payload");
         let decoded: SoranetPowConfigBroadcast =
             norito::json::from_slice(&payload).expect("decode payload");
 
+        assert_eq!(decoded.version, 42);
         assert!(decoded.required);
         assert_eq!(decoded.difficulty, 7);
         assert_eq!(decoded.max_future_skew_secs, 900);
@@ -4358,6 +4428,7 @@ impl Iroha {
         ));
 
         let suppress_pow_broadcast = Arc::new(AtomicBool::new(false));
+        let pow_update_version = Arc::new(AtomicU64::new(1));
         supervisor.monitor(task::spawn(
             NetworkRelay {
                 sumeragi,
@@ -4368,6 +4439,7 @@ impl Iroha {
                 streaming: streaming.clone(),
                 kiso: kiso.clone(),
                 suppress_pow_broadcast: Arc::clone(&suppress_pow_broadcast),
+                pow_update_version: Arc::clone(&pow_update_version),
                 consensus_ingress: ConsensusIngressLimiter::from_config(
                     &config.network,
                     &config.sumeragi,
@@ -4398,12 +4470,14 @@ impl Iroha {
 
         let net_for_relay = network.clone();
         let suppress_pow_broadcast_for_relay = suppress_pow_broadcast.clone();
+        let pow_update_version_for_relay = pow_update_version.clone();
         supervisor.monitor(tokio::task::spawn(async move {
             if let Err(err) = config_updates_relay(
                 kiso,
                 logger,
                 net_for_relay,
                 suppress_pow_broadcast_for_relay,
+                pow_update_version_for_relay,
             )
             .await
             {
@@ -4594,6 +4668,7 @@ async fn config_updates_relay(
     logger: LoggerHandle,
     network: iroha_core::IrohaNetwork,
     suppress_pow_broadcast: Arc<AtomicBool>,
+    pow_update_version: Arc<AtomicU64>,
 ) -> EyreResult<()> {
     let mut log_level_update = kiso.subscribe_on_logger_updates().await?;
     let mut acl_update = kiso.subscribe_on_network_acl_updates().await?;
@@ -4625,9 +4700,11 @@ async fn config_updates_relay(
     network.update_soranet_handshake(initial_handshake.clone());
     // Broadcast the baseline PoW/puzzle policy before any runtime updates so new peers inherit
     // the consensus-backed guard rails even if they join before the first config change.
-    let mut pow_payload = pow_update_payload(&initial_handshake.pow);
+    let initial_pow_version = pow_update_version.load(Ordering::SeqCst);
+    let mut pow_payload = pow_update_payload(&initial_handshake.pow, initial_pow_version);
+    let pow_broadcast_generation = Arc::new(AtomicU64::new(0));
     if let Some(payload) = pow_payload.clone() {
-        broadcast_pow_payload(payload, &network);
+        broadcast_pow_payload(payload, &network, &pow_broadcast_generation);
     }
 
     // See https://github.com/tokio-rs/tokio/issues/5616 and
@@ -4667,13 +4744,24 @@ async fn config_updates_relay(
                 if let Ok(()) = result {
                     let value = handshake_update.borrow_and_update().clone();
                     network.update_soranet_handshake(value.clone());
-                    pow_payload = pow_update_payload(&value.pow);
                     let was_suppressed =
                         suppress_pow_broadcast.swap(false, Ordering::SeqCst);
-                    if !was_suppressed {
-                        if let Some(payload) = pow_payload.clone() {
-                            broadcast_pow_payload(payload, &network);
-                        }
+                    let next_version = if was_suppressed {
+                        pow_update_version.load(Ordering::SeqCst)
+                    } else {
+                        pow_update_version
+                            .fetch_add(1, Ordering::SeqCst)
+                            .saturating_add(1)
+                    };
+                    pow_payload = pow_update_payload(&value.pow, next_version);
+                    if was_suppressed {
+                        // A fresh config landed from a remote peer; stop stale retry loops.
+                        bump_pow_broadcast_generation(&pow_broadcast_generation);
+                    } else if let Some(payload) = pow_payload.clone() {
+                        broadcast_pow_payload(payload, &network, &pow_broadcast_generation);
+                    } else {
+                        // PoW disabled: cancel any in-flight retries of older payloads.
+                        bump_pow_broadcast_generation(&pow_broadcast_generation);
                     }
                 } else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
@@ -4756,13 +4844,24 @@ async fn config_updates_relay(
                 if let Ok(()) = result {
                     let value = handshake_update.borrow_and_update().clone();
                     network.update_soranet_handshake(value.clone());
-                    pow_payload = pow_update_payload(&value.pow);
                     let was_suppressed =
                         suppress_pow_broadcast.swap(false, Ordering::SeqCst);
-                    if !was_suppressed {
-                        if let Some(payload) = pow_payload.clone() {
-                            broadcast_pow_payload(payload, &network);
-                        }
+                    let next_version = if was_suppressed {
+                        pow_update_version.load(Ordering::SeqCst)
+                    } else {
+                        pow_update_version
+                            .fetch_add(1, Ordering::SeqCst)
+                            .saturating_add(1)
+                    };
+                    pow_payload = pow_update_payload(&value.pow, next_version);
+                    if was_suppressed {
+                        // A fresh config landed from a remote peer; stop stale retry loops.
+                        bump_pow_broadcast_generation(&pow_broadcast_generation);
+                    } else if let Some(payload) = pow_payload.clone() {
+                        broadcast_pow_payload(payload, &network, &pow_broadcast_generation);
+                    } else {
+                        // PoW disabled: cancel any in-flight retries of older payloads.
+                        bump_pow_broadcast_generation(&pow_broadcast_generation);
                     }
                 } else {
                     iroha_logger::debug!("Exiting config updates relay (handshake channel closed)");
@@ -4802,19 +4901,15 @@ async fn config_updates_relay(
     Ok(())
 }
 
-const BROADCAST_RETRY_DELAYS_MS: &[u64] = &[
-    500, 1_500, 3_000, 6_000, 12_000, 24_000, 48_000, 64_000, 80_000,
-];
-const BROADCAST_PEER_POLL_MS: u64 = 500;
-const BROADCAST_PEER_POLL_ATTEMPTS: u64 = 180;
-
 fn pow_update_payload(
     pow: &iroha_config::parameters::actual::SoranetPow,
+    version: u64,
 ) -> Option<Vec<u8>> {
     if !pow.required {
         return None;
     }
     let broadcast = iroha_core::SoranetPowConfigBroadcast {
+        version,
         required: pow.required,
         difficulty: pow.difficulty,
         max_future_skew_secs: pow.max_future_skew.as_secs(),
@@ -4834,41 +4929,21 @@ fn pow_update_payload(
     Some(payload)
 }
 
-fn broadcast_pow_payload(payload: Vec<u8>, network: &iroha_core::IrohaNetwork) {
-    // Retry a handful of times to cover peers that connect slightly after the initial update.
-    // The PoW config is small and sent on the control channel, so a few retries are cheap
-    // and make propagation more robust in short-lived test networks.
-    // Keep a long-ish tail so tiny test networks that form slowly still receive the update.
-    // We also continue to rebroadcast periodically up to ~80 seconds to survive slow dial/accept cycles.
+fn bump_pow_broadcast_generation(generation: &AtomicU64) {
+    generation.fetch_add(1, Ordering::SeqCst);
+}
+
+fn broadcast_pow_payload(
+    payload: Vec<u8>,
+    network: &iroha_core::IrohaNetwork,
+    generation: &Arc<AtomicU64>,
+) {
+    // Bump generation so any in-flight payload attempt is considered stale.
+    generation.fetch_add(1, Ordering::SeqCst);
 
     network.broadcast(iroha_p2p::Broadcast {
-        data: iroha_core::NetworkMessage::SoranetPowConfig(payload.clone()),
+        data: iroha_core::NetworkMessage::SoranetPowConfig(payload),
         priority: iroha_p2p::Priority::High,
-    });
-    let network_clone = network.clone();
-    let payload_retries = payload.clone();
-    tokio::spawn(async move {
-        for delay in BROADCAST_RETRY_DELAYS_MS {
-            tokio::time::sleep(Duration::from_millis(*delay)).await;
-            network_clone.broadcast(iroha_p2p::Broadcast {
-                data: iroha_core::NetworkMessage::SoranetPowConfig(payload_retries.clone()),
-                priority: iroha_p2p::Priority::High,
-            });
-        }
-    });
-    let network_clone = network.clone();
-    let payload_clone = payload;
-    tokio::spawn(async move {
-        for _ in 0..BROADCAST_PEER_POLL_ATTEMPTS {
-            tokio::time::sleep(Duration::from_millis(BROADCAST_PEER_POLL_MS)).await;
-            let has_peer = network_clone.online_peers(|peers| !peers.is_empty());
-            if has_peer {
-                network_clone.broadcast(iroha_p2p::Broadcast {
-                    data: iroha_core::NetworkMessage::SoranetPowConfig(payload_clone.clone()),
-                    priority: iroha_p2p::Priority::High,
-                });
-            }
-        }
     });
 }
 

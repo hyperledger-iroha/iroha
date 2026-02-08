@@ -29,3 +29,23 @@ fn callmulti_with_nine_returns_fails() {
         "unexpected error message: {err}"
     );
 }
+
+#[test]
+fn compile_function_returning_eight_values_succeeds() {
+    use ivm::kotodama::compiler::Compiler;
+    let src = r#"
+        fn h(a:int,b:int,c:int,d:int,e:int,f:int,g:int,h:int)
+            -> (int,int,int,int,int,int,int,int) {
+            return (a,b,c,d,e,f,g,h);
+        }
+    "#;
+    Compiler::new()
+        .compile_source(src)
+        .expect("expected 8-value return to compile");
+}
+
+#[test]
+fn callmulti_with_eight_returns_succeeds() {
+    ivm::kotodama::compiler::test_helpers::try_emit_callmulti_guard_only(8)
+        .expect("expected 8-value CallMulti to pass guard");
+}
