@@ -4839,6 +4839,99 @@ mod state {
         }
     }
 
+    #[cfg(test)]
+    mod dial_policy_tests {
+        use std::{sync::Arc, time::Duration};
+
+        use super::*;
+
+        fn connecting_to(
+            peer_addr: std::net::SocketAddr,
+            tls_enabled: bool,
+            tls_fallback_to_plain: bool,
+        ) -> Connecting {
+            let our_public_address: std::net::SocketAddr = "127.0.0.1:0".parse().expect("addr");
+            Connecting {
+                peer_addr: peer_addr.into(),
+                our_public_address: our_public_address.into(),
+                key_pair: KeyPair::random(),
+                connection_id: 0,
+                chain_id: None,
+                consensus_caps: None,
+                confidential_caps: None,
+                crypto_caps: None,
+                soranet_handshake: Arc::new(SoranetHandshakeConfig::defaults()),
+                quic_enabled: false,
+                tls_enabled,
+                tls_fallback_to_plain,
+                prefer_ws_fallback: false,
+                trust_gossip: false,
+                relay_role: RelayRole::Disabled,
+                dial_timeout: Duration::from_millis(200),
+                happy_eyeballs_stagger: Duration::from_millis(10),
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+                proxy_tls_verify: true,
+                proxy_tls_pinned_cert_der: None,
+                proxy_policy: crate::transport::ProxyPolicy::disabled(),
+                quic_dialer: None,
+            }
+        }
+
+        #[cfg(not(feature = "p2p_tls"))]
+        #[tokio::test(flavor = "current_thread")]
+        async fn tls_only_dial_requires_p2p_tls_feature_when_no_fallback() {
+            let addr: std::net::SocketAddr = "127.0.0.1:1".parse().expect("addr");
+            let connecting =
+                connecting_to(addr, /*tls_enabled=*/ true, /*fallback=*/ false);
+            let res = Connecting::connect_to(connecting).await;
+            assert!(matches!(
+                res,
+                Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
+            ));
+        }
+
+        #[cfg(feature = "p2p_tls")]
+        #[tokio::test(flavor = "current_thread")]
+        async fn tls_dial_falls_back_to_plain_when_enabled() {
+            use tokio::net::TcpListener;
+
+            let listener = match TcpListener::bind("127.0.0.1:0").await {
+                Ok(listener) => listener,
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+                Err(e) => panic!("listener bind failed: {e:?}"),
+            };
+            let addr = listener.local_addr().expect("local addr");
+
+            let accept_task = tokio::spawn(async move {
+                loop {
+                    let (sock, _) = match listener.accept().await {
+                        Ok(ok) => ok,
+                        Err(_) => break,
+                    };
+                    tokio::spawn(async move {
+                        let _sock = sock;
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    });
+                }
+            });
+
+            let ok = Connecting::connect_to(connecting_to(
+                addr, /*tls_enabled=*/ true, /*fallback=*/ true,
+            ))
+            .await;
+            assert!(ok.is_ok(), "TLS failure should fall back to TCP");
+
+            let err = Connecting::connect_to(connecting_to(
+                addr, /*tls_enabled=*/ true, /*fallback=*/ false,
+            ))
+            .await;
+            assert!(err.is_err(), "TLS-only should not fall back to TCP");
+
+            accept_task.abort();
+        }
+    }
+
     /// Peer that is being connected to.
     pub(super) struct ConnectedTo {
         our_public_address: SocketAddr,

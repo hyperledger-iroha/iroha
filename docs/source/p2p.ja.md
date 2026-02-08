@@ -113,6 +113,7 @@ p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
 
 - 設定（`[network]`）:
   - `p2p_proxy`（文字列; 任意）: アウトバウンドプロキシ URL（例: `http://user:pass@proxy.example.com:8080`、`https://proxy.example.com:8443`、`socks5://user:pass@proxy.example.com:1080`）。
+  - `p2p_proxy_required`（bool; 既定 `false`）: true の場合、`p2p_proxy` の設定を必須にし、未設定なら起動に失敗します。注: QUIC はプロキシをバイパスするため、`p2p_proxy_required=true` のとき `quic_enabled=true` は拒否されます。
   - `p2p_no_proxy`（文字列配列）: プロキシをバイパスするホストサフィックス（例: `.example.com`, `localhost`）。
   - `p2p_proxy_tls_verify`（bool; 既定 `true`）: `https://` プロキシ hop を検証します（証明書ピンニング）。
   - `p2p_proxy_tls_pinned_cert_der_base64`（文字列; 任意）: `https://` プロキシのエンドエンティティ証明書（DER, base64）をピンします。`p2p_proxy_tls_verify=true` の場合は必須です。
@@ -125,7 +126,7 @@ p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
   - ベーシック認証はプロキシ URL の `user:pass@...` として指定できます。
   - 除外は単純なホストサフィックスで照合します。
   - `p2p_proxy_tls_verify` を無効にすると、プロキシ hop 上の MITM によりプロキシ認証情報が漏えいする可能性があります。
-  - プロキシは TCP ベースのダイヤル（TCP/TLS/WS）にのみ適用されます。QUIC（UDP）はプロキシをバイパスするため、必ずプロキシ経由にしたい場合は `quic_enabled=false` にしてください。
+  - プロキシは TCP ベースのダイヤル（TCP/TLS/WS）にのみ適用されます。QUIC（UDP）はプロキシをバイパスするため、必ずプロキシ経由にしたい場合は `quic_enabled=false`（または `p2p_proxy_required=true`）にしてください。
   - プロキシ未設定時は直接接続します。
 
 ### リレーモード（Hub/Spoke/Assist）

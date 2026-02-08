@@ -2855,6 +2855,56 @@ mod accept_stream_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_proxy_required_without_proxy() {
+        let key_pair = KeyPair::random();
+        let mut cfg = base_cfg();
+        cfg.p2p_proxy_required = true;
+        cfg.p2p_proxy = None;
+
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            Some(ChainId::from("test-chain".to_string())),
+            None,
+            None,
+            shutdown,
+        )
+        .await;
+
+        assert!(matches!(
+            started,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_proxy_required_with_quic_enabled() {
+        let key_pair = KeyPair::random();
+        let mut cfg = base_cfg();
+        cfg.p2p_proxy_required = true;
+        cfg.p2p_proxy = Some("http://proxy.invalid:8080".to_string());
+        cfg.quic_enabled = true;
+
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            Some(ChainId::from("test-chain".to_string())),
+            None,
+            None,
+            shutdown,
+        )
+        .await;
+
+        assert!(matches!(
+            started,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn accept_stream_allows_basic() {
         let key_pair = KeyPair::random();
         let mut cfg = base_cfg();
