@@ -2296,9 +2296,31 @@ fn validate_qc_against_votes(
             });
         };
         let key = (qc.phase, qc.height, qc.view, qc.epoch, view_signer);
-        let Some(vote) = vote_log.get(&key) else {
-            missing += 1;
-            continue;
+        let vote = if let Some(vote) = vote_log.get(&key) {
+            vote
+        } else {
+            let fallback_vote = vote_log.values().find(|candidate| {
+                if candidate.phase != qc.phase
+                    || candidate.height != qc.height
+                    || candidate.view != qc.view
+                    || candidate.epoch != qc.epoch
+                {
+                    return false;
+                }
+                let mut view_signers = BTreeSet::new();
+                view_signers.insert(candidate.signer);
+                let canonical = normalize_signer_indices_to_canonical(
+                    &view_signers,
+                    &signature_topology,
+                    &canonical_topology,
+                );
+                canonical.contains(signer)
+            });
+            let Some(vote) = fallback_vote else {
+                missing += 1;
+                continue;
+            };
+            vote
         };
         if vote.block_hash != qc.subject_block_hash {
             return Err(QcValidationError::SubjectMismatch { signer: *signer });
@@ -15021,6 +15043,7 @@ impl RbcSession {
     pub(crate) fn delivered_payload_matches(&self, payload_hash: &Hash) -> bool {
         self.delivered
             && !self.is_invalid()
+            && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
     }
 

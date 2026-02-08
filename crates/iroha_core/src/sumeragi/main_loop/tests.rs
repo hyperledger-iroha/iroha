@@ -42615,12 +42615,27 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
     });
     highest_qc.phase = Phase::Commit;
     let topology = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id().clone();
     let local_pos = topology
         .iter()
-        .position(|peer| peer == actor.common_config.peer.id())
+        .position(|peer| peer == &local_peer)
         .expect("local peer in topology");
-    let local_idx = ValidatorIndex::try_from(local_pos).expect("local idx fits");
-    let view = u64::from(local_idx);
+    let search_limit = u64::try_from(topology.len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(1);
+    let view = (0..search_limit)
+        .find(|candidate_view| {
+            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
+            actor
+                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
+                .ok()
+                .is_some_and(|leader| {
+                    candidate_topology
+                        .position(local_peer.public_key())
+                        .is_some_and(|idx| idx == leader)
+                })
+        })
+        .expect("find view where local peer is leader");
     let sender_a_pos = (local_pos + 1) % topology.len();
     let sender_b_pos = (local_pos + 2) % topology.len();
     let sender_a = topology.get(sender_a_pos).cloned().expect("sender peer");
@@ -43148,11 +43163,22 @@ async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
 
     let roster = actor.effective_commit_topology();
     let local = actor.common_config.peer.id().clone();
-    let local_pos = roster
-        .iter()
-        .position(|peer| peer == &local)
-        .expect("local peer in topology");
-    let view = u64::try_from(local_pos).unwrap_or_default();
+    let search_limit = u64::try_from(roster.len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(1);
+    let view = (0..search_limit)
+        .find(|candidate_view| {
+            let mut candidate_topology = super::network_topology::Topology::new(roster.clone());
+            actor
+                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
+                .ok()
+                .is_some_and(|leader| {
+                    candidate_topology
+                        .position(local.public_key())
+                        .is_some_and(|idx| idx == leader)
+                })
+        })
+        .expect("active roster should elect local leader within search window");
     let required = super::network_topology::Topology::new(roster.clone()).min_votes_for_commit();
 
     let mut recorded = 0usize;
@@ -49498,7 +49524,7 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         vote_a,
     );
 
-    // Second vote claims signer 1 but is signed with the first peer's key.
+    // Second vote claims canonical signer 1 but is signed with the wrong peer key.
     let mut vote_b = crate::sumeragi::consensus::Vote {
         phase: crate::sumeragi::consensus::Phase::Commit,
         block_hash,
@@ -49511,6 +49537,7 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         signer: 1,
         bls_sig: Vec::new(),
     };
+    sign_vote_for_canonical_signer(&mut vote_b, &chain, &topology, &peer_keys);
     let rotated = super::topology_for_view(
         &topology,
         qc.height,
@@ -49579,10 +49606,14 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         super::PERMISSIONED_TAG,
         prf_seed,
     );
-    assert!(matches!(
-        result,
-        Err(super::QcValidationError::InvalidSignature { signer }) if signer == expected_invalid_signer
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(super::QcValidationError::InvalidSignature { signer })
+                if signer == expected_invalid_signer
+        ),
+        "expected InvalidSignature for signer {expected_invalid_signer}, got {result:?}"
+    );
 }
 
 #[test]

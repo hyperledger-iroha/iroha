@@ -2363,6 +2363,10 @@ impl Actor {
                             super::pending_block::ValidationStatus::Invalid
                         )
                 });
+        let committed_height = {
+            let view = self.state.view();
+            u64::try_from(view.height()).unwrap_or(u64::MAX)
+        };
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
             || self.block_known_locally(*block_hash)
         {
@@ -2377,13 +2381,24 @@ impl Actor {
             return false;
         }
         if self.runtime_da_enabled()
+            && kind != "RbcInit"
+            && !self.rbc_session_roster(key).is_empty()
+        {
+            debug!(
+                height,
+                view,
+                local_view,
+                committed_height,
+                block = %block_hash,
+                kind,
+                "accepting RBC message for stale view with tracked session roster"
+            );
+            return false;
+        }
+        if self.runtime_da_enabled()
             && (pending_aborted_payload
                 || (has_active_pending && !self.block_payload_available_locally(*block_hash)))
         {
-            let committed_height = {
-                let view = self.state.view();
-                u64::try_from(view.height()).unwrap_or(u64::MAX)
-            };
             if height > committed_height {
                 let reason = if pending_aborted_payload {
                     "pending block aborted"

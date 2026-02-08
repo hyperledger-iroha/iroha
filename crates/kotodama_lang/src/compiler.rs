@@ -1752,6 +1752,11 @@ impl Compiler {
                     if instr_queues_isi(instr) {
                         uses_isi = true;
                     }
+                    if let ir::Instr::Binary { dest, .. } = instr {
+                        // Temps are mutable in loop lowerings (e.g., `i = i + 1`), so
+                        // stale const facts must be dropped before codegen-time folding.
+                        int_const_map.remove(&(func_idx, *dest));
+                    }
                     if let ir::Instr::Copy { dest, src } = instr {
                         if dest != src {
                             let dest_key = (func_idx, *dest);
@@ -3849,12 +3854,12 @@ impl Compiler {
                             args,
                             dests,
                         } => {
-                            if dests.len() > regalloc::ARG_REGS.len() {
+                            if dests.len() > regalloc::MAX_RETURN_VALUES {
                                 return Err(format!(
                                     "too many return values in call to {}: {} > {}",
                                     callee,
                                     dests.len(),
-                                    regalloc::ARG_REGS.len()
+                                    regalloc::MAX_RETURN_VALUES
                                 ));
                             }
                             // Move args into conventional registers
@@ -5723,11 +5728,11 @@ impl Compiler {
                         }
                     }
                     Terminator::ReturnN(vals) => {
-                        if vals.len() > regalloc::ARG_REGS.len() {
+                        if vals.len() > regalloc::MAX_RETURN_VALUES {
                             return Err(format!(
                                 "too many return values in function: {} > {}",
                                 vals.len(),
-                                regalloc::ARG_REGS.len()
+                                regalloc::MAX_RETURN_VALUES
                             ));
                         }
                         for (i, t) in vals.iter().enumerate() {
@@ -7367,13 +7372,13 @@ pub mod test_helpers {
         for bb in &func.blocks {
             for instr in &bb.instrs {
                 if let ir::Instr::CallMulti { callee, dests, .. } = instr
-                    && dests.len() > regalloc::ARG_REGS.len()
+                    && dests.len() > regalloc::MAX_RETURN_VALUES
                 {
                     return Err(format!(
                         "too many return values in call to {}: {} > {}",
                         callee,
                         dests.len(),
-                        regalloc::ARG_REGS.len()
+                        regalloc::MAX_RETURN_VALUES
                     ));
                 }
             }

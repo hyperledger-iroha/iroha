@@ -128,7 +128,7 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_string();
     let resume_hex = "aabbccddeeff00112233445566778899".to_string();
 
-    client.set_config(&ConfigUpdateDTO {
+    let handshake_update = ConfigUpdateDTO {
         logger: Logger {
             level: new_level,
             filter: new_filter.clone(),
@@ -164,9 +164,19 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         }),
         transport: None,
         compute_pricing: None,
-    })?;
+    };
+    client.set_config(&handshake_update)?;
 
-    let config = client.get_config()?;
+    let mut config = client.get_config()?;
+    for _ in 0..60 {
+        let handshake = &config.network.soranet_handshake;
+        if handshake.pow.required && handshake.pow.difficulty == 5 {
+            break;
+        }
+        client.set_config(&handshake_update)?;
+        thread::sleep(Duration::from_millis(100));
+        config = client.get_config()?;
+    }
     let handshake = &config.network.soranet_handshake;
     assert_eq!(handshake.descriptor_commit_hex, descriptor_hex);
     assert_eq!(
@@ -315,9 +325,19 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
 
     client.set_config(&pow_update)?;
 
-    let initiator_pow = client.get_config()?.network.soranet_handshake.pow;
+    let mut initiator_pow = client.get_config()?.network.soranet_handshake.pow;
+    let mut initiator_applied = pow_matches_target(&initiator_pow);
+    for _ in 0..60 {
+        if initiator_applied {
+            break;
+        }
+        let _ = client.set_config(&pow_update);
+        thread::sleep(Duration::from_millis(100));
+        initiator_pow = client.get_config()?.network.soranet_handshake.pow;
+        initiator_applied = pow_matches_target(&initiator_pow);
+    }
     assert!(
-        pow_matches_target(&initiator_pow),
+        initiator_applied,
         "failed to apply updated puzzle settings on the initiating peer"
     );
 

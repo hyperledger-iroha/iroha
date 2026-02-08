@@ -289,14 +289,26 @@ impl Actor {
         let canonical_topology = super::network_topology::Topology::new(canonical_roster);
         let mut topology_by_view: BTreeMap<u64, super::network_topology::Topology> =
             BTreeMap::new();
-        let mut highest_view_by_signer: BTreeMap<PeerId, u64> = BTreeMap::new();
+        let canonical_signer_for_view = |signer: ValidatorIndex,
+                                         view_topology: &super::network_topology::Topology|
+         -> Option<ValidatorIndex> {
+            let mut view_signers = BTreeSet::new();
+            view_signers.insert(signer);
+            let canonical = super::normalize_signer_indices_to_canonical(
+                &view_signers,
+                view_topology,
+                &canonical_topology,
+            );
+            if canonical.len() != 1 {
+                return None;
+            }
+            canonical.into_iter().next()
+        };
+        let mut highest_view_by_signer: BTreeMap<ValidatorIndex, u64> = BTreeMap::new();
         for stored in self.vote_log.values() {
             if stored.phase != phase || stored.height != height || stored.epoch != epoch {
                 continue;
             }
-            let Ok(idx) = usize::try_from(stored.signer) else {
-                continue;
-            };
             let key = (
                 stored.phase,
                 stored.height,
@@ -304,29 +316,28 @@ impl Actor {
                 stored.epoch,
                 stored.signer,
             );
-            if self
-                .vote_validation_cache
-                .get(&key)
-                .is_some_and(|entry| entry.membership_hash != membership_hash)
-            {
-                continue;
-            }
             let view_topology = topology_by_view.entry(stored.view).or_insert_with(|| {
                 topology_for_view(&canonical_topology, height, stored.view, mode_tag, prf_seed)
             });
             let expected_roster_hash = HashOf::new(&view_topology.as_ref().to_vec());
+            let expected_membership_hash =
+                HashOf::new(&super::roster::canonicalize_roster_for_mode(
+                    view_topology.as_ref().to_vec(),
+                    consensus_mode,
+                ));
             let cache_matches = self.vote_validation_cache.get(&key).is_some_and(|entry| {
-                entry.membership_hash == membership_hash
+                entry.membership_hash == expected_membership_hash
                     && entry.roster_hash == expected_roster_hash
             });
             if !cache_matches && !vote_signature_valid(stored, view_topology, chain_id, mode_tag) {
                 continue;
             }
-            let Some(peer) = view_topology.as_ref().get(idx) else {
+            let Some(canonical_signer) = canonical_signer_for_view(stored.signer, view_topology)
+            else {
                 continue;
             };
             let entry = highest_view_by_signer
-                .entry(peer.clone())
+                .entry(canonical_signer)
                 .or_insert(stored.view);
             if stored.view > *entry {
                 *entry = stored.view;
@@ -359,18 +370,19 @@ impl Actor {
                 stats.invalid_signature = stats.invalid_signature.saturating_add(1);
                 continue;
             }
-            if let Ok(idx) = usize::try_from(vote.signer) {
-                if let Some(peer) = signature_topology.as_ref().get(idx) {
-                    if highest_view_by_signer
-                        .get(peer)
-                        .copied()
-                        .unwrap_or(vote.view)
-                        != view
-                    {
-                        stats.higher_view_filtered = stats.higher_view_filtered.saturating_add(1);
-                        continue;
-                    }
-                }
+            let Some(canonical_signer) = canonical_signer_for_view(vote.signer, signature_topology)
+            else {
+                stats.invalid_signature = stats.invalid_signature.saturating_add(1);
+                continue;
+            };
+            if highest_view_by_signer
+                .get(&canonical_signer)
+                .copied()
+                .unwrap_or(vote.view)
+                != view
+            {
+                stats.higher_view_filtered = stats.higher_view_filtered.saturating_add(1);
+                continue;
             }
             signers.insert(vote.signer);
         }

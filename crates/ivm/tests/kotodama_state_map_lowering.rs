@@ -9,6 +9,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use norito::{decode_from_bytes, to_bytes};
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -33,7 +34,7 @@ fn kotodama_state_map_set_writes_corehost_state() {
         seiyaku C {
             state Map<int, int> M;
             fn main() {
-                M[1] = 7; // should lower to host::STATE_SET("M/1", norito_bytes("7")) plus ephemeral.
+                M[1] = 7; // should lower to host::STATE_SET("M/1", Norito(i64=7)) plus ephemeral.
                 let _x = M[1];
             }
         }
@@ -64,7 +65,8 @@ fn kotodama_state_map_set_writes_corehost_state() {
     let p_out = vm.register(10);
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(tlv.payload, b"7");
+    let stored: i64 = decode_from_bytes(tlv.payload).expect("decode stored int");
+    assert_eq!(stored, 7);
 }
 
 #[test]
@@ -152,10 +154,16 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
         .compile_source(src)
         .expect("compile durable loop");
     let mut wsv = MockWorldStateView::new();
-    wsv.sc_set(&encoded_state_path("M", 0), b"5".to_vec())
-        .expect("write state index 0");
-    wsv.sc_set(&encoded_state_path("M", 1), b"9".to_vec())
-        .expect("write state index 1");
+    wsv.sc_set(
+        &encoded_state_path("M", 0),
+        to_bytes(&5_i64).expect("encode state value 5"),
+    )
+    .expect("write state index 0");
+    wsv.sc_set(
+        &encoded_state_path("M", 1),
+        to_bytes(&9_i64).expect("encode state value 9"),
+    )
+    .expect("write state index 1");
     let alice: AccountId =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
             .parse()
@@ -175,8 +183,8 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
     get_prog_bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let get_prog = common::assemble(&get_prog_bytes);
     for (path, expected) in [
-        (encoded_state_path("Mirror", 0), b"5".to_vec()),
-        (encoded_state_path("Mirror", 1), b"9".to_vec()),
+        (encoded_state_path("Mirror", 0), 5_i64),
+        (encoded_state_path("Mirror", 1), 9_i64),
     ] {
         let path_tlv = make_tlv(PointerType::Name, path.as_bytes());
         let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -186,6 +194,7 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
         let out = vm.register(10);
         let tlv = vm.memory.validate_tlv(out).expect("validate out");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(tlv.payload, expected);
+        let stored: i64 = decode_from_bytes(tlv.payload).expect("decode mirrored int");
+        assert_eq!(stored, expected);
     }
 }
