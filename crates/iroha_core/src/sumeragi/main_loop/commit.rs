@@ -4847,7 +4847,7 @@ impl Actor {
         height: u64,
         phase: EpochRefreshPhase,
     ) {
-        let (cfg, epoch_params, seed_for_height, epoch_schedule) = {
+        let (cfg, epoch_params, seed_for_height, epoch_seed_param) = {
             let view = self.state.view();
             let cfg = if matches!(self.consensus_mode, ConsensusMode::Npos) {
                 Some(
@@ -4864,11 +4864,11 @@ impl Actor {
             };
             let epoch_params = super::load_npos_epoch_params(&view, &self.config);
             let seed_for_height = super::prf_seed_for_height(&view, height);
-            let epoch_schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-                view.world(),
-                epoch_params.epoch_length_blocks,
-            );
-            (cfg, epoch_params, seed_for_height, epoch_schedule)
+            let epoch_seed_param = view.world().sumeragi_npos_parameters().map(|params| {
+                let seed = params.epoch_seed();
+                <[u8; 32]>::from(seed)
+            });
+            (cfg, epoch_params, seed_for_height, epoch_seed_param)
         };
         let mut next_seed = seed;
         if let Some(manager) = self.epoch_manager.as_mut() {
@@ -4878,16 +4878,20 @@ impl Actor {
                 epoch_params.reveal_deadline_offset,
             );
             if matches!(phase, EpochRefreshPhase::PostCommit) {
-                let epoch_for_height = epoch_schedule.epoch_for_height(height);
-                let expected_epoch = if epoch_schedule.is_epoch_boundary(height) {
-                    epoch_for_height.saturating_add(1)
-                } else {
-                    epoch_for_height
-                };
+                let epoch_for_height = manager.epoch_for_height(height);
+                let expected_epoch =
+                    if height > 0 && height.is_multiple_of(manager.epoch_length_blocks()) {
+                        epoch_for_height.saturating_add(1)
+                    } else {
+                        epoch_for_height
+                    };
                 if manager.epoch() != expected_epoch {
-                    manager.reset_epoch_state(expected_epoch, seed_for_height);
+                    let reset_seed = epoch_seed_param
+                        .or_else(|| cfg.map(|cfg| cfg.seed))
+                        .unwrap_or(seed_for_height);
+                    manager.reset_epoch_state(expected_epoch, reset_seed);
                     self.subsystems.vrf.reset();
-                    next_seed = seed_for_height;
+                    next_seed = reset_seed;
                 }
             }
             super::status::set_epoch_parameters(

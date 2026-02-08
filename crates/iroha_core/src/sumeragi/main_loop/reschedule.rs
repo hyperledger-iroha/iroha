@@ -252,6 +252,34 @@ impl Actor {
                     );
                     continue;
                 }
+                let rbc_session_incomplete = da_enabled
+                    && self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&rbc_key)
+                        .is_some_and(|session| {
+                            if session.is_invalid() || session.delivered {
+                                return false;
+                            }
+                            let missing_chunks = session.total_chunks() != 0
+                                && session.received_chunks() < session.total_chunks();
+                            let ready_quorum = session.ready_signatures.len()
+                                >= self.rbc_deliver_quorum(&commit_topology);
+                            missing_chunks || !ready_quorum
+                        });
+                if rbc_session_incomplete && pending_age < availability_timeout {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        pending_age_ms = pending_age.as_millis(),
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                        "deferring quorum reschedule while RBC session is incomplete"
+                    );
+                    continue;
+                }
                 if self.rbc_availability_unresolved_for_reschedule(
                     rbc_key,
                     &commit_topology,

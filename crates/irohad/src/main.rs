@@ -482,6 +482,28 @@ fn read_genesis_manifest(path: &Path) -> ReportResult<RawGenesisTransaction, Sta
     })
 }
 
+/// Ensure operator signature policy includes the node identity when requested by config.
+fn ensure_operator_node_key_allowlisted(config: &mut Config) {
+    if !config.torii.operator_signatures.allow_node_key {
+        return;
+    }
+
+    let node_public_key = config.common.key_pair.public_key().clone();
+    if config
+        .torii
+        .operator_signatures
+        .allowed_public_keys
+        .iter()
+        .all(|key| key != &node_public_key)
+    {
+        config
+            .torii
+            .operator_signatures
+            .allowed_public_keys
+            .push(node_public_key);
+    }
+}
+
 #[cfg(feature = "beep")]
 fn startup_beep(enable_beep: bool) -> bool {
     if !enable_beep {
@@ -4288,6 +4310,7 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
+        ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
@@ -5336,6 +5359,65 @@ metadata = {}
         assert_eq!(
             resolve_build_line_from_env(Some("unknown".to_owned()), "irohad"),
             BuildLine::Iroha3
+        );
+    }
+
+    #[test]
+    fn operator_signatures_allowlist_adds_node_key_when_enabled() {
+        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
+            .expect("default config");
+        let node_public_key = config.common.key_pair.public_key().clone();
+        config.torii.operator_signatures.allow_node_key = true;
+        config.torii.operator_signatures.allowed_public_keys.clear();
+
+        ensure_operator_node_key_allowlisted(&mut config);
+
+        assert!(
+            config
+                .torii
+                .operator_signatures
+                .allowed_public_keys
+                .contains(&node_public_key),
+            "node public key should be allow-listed when allow_node_key is enabled"
+        );
+    }
+
+    #[test]
+    fn operator_signatures_allowlist_keeps_node_key_unique() {
+        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
+            .expect("default config");
+        let node_public_key = config.common.key_pair.public_key().clone();
+        config.torii.operator_signatures.allow_node_key = true;
+        config
+            .torii
+            .operator_signatures
+            .allowed_public_keys
+            .push(node_public_key.clone());
+
+        ensure_operator_node_key_allowlisted(&mut config);
+
+        let count = config
+            .torii
+            .operator_signatures
+            .allowed_public_keys
+            .iter()
+            .filter(|key| *key == &node_public_key)
+            .count();
+        assert_eq!(count, 1, "node public key should not be duplicated");
+    }
+
+    #[test]
+    fn operator_signatures_allowlist_respects_disabled_node_key_flag() {
+        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
+            .expect("default config");
+        config.torii.operator_signatures.allow_node_key = false;
+        config.torii.operator_signatures.allowed_public_keys.clear();
+
+        ensure_operator_node_key_allowlisted(&mut config);
+
+        assert!(
+            config.torii.operator_signatures.allowed_public_keys.is_empty(),
+            "allow-list should remain unchanged when allow_node_key is disabled"
         );
     }
 

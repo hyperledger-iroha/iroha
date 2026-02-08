@@ -1119,6 +1119,7 @@ mod tests {
             idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
             connect_startup_delay:
                 iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
@@ -1131,6 +1132,8 @@ mod tests {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
+            p2p_proxy: None,
+            p2p_no_proxy: Vec::new(),
             quic_enabled: false,
             tls_enabled: false,
             tls_listen_address: None,
