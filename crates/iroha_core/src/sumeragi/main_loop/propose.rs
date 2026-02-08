@@ -1811,6 +1811,7 @@ impl Actor {
             block_hash,
             target_height,
             target_view,
+            false,
         );
         if rebroadcasted == 0 {
             debug!(
@@ -2090,23 +2091,14 @@ impl Actor {
                 highest_qc: qc,
             })
         }) else {
-            if pending_queue_len > 0 {
-                iroha_logger::info!(
-                    queue_len = pending_queue_len,
-                    height = view_height,
-                    required,
-                    local_idx = ?local_idx,
-                    new_view_slots = ?new_view_summary,
-                    "deferring proposal: awaiting NEW_VIEW quorum"
-                );
-            } else {
-                debug!(
-                    required,
-                    local_idx = ?local_idx,
-                    new_view_slots = ?new_view_summary,
-                    "deferring proposal: awaiting NEW_VIEW quorum"
-                );
-            }
+            debug!(
+                queue_len = pending_queue_len,
+                height = view_height,
+                required,
+                local_idx = ?local_idx,
+                new_view_slots = ?new_view_summary,
+                "deferring proposal: awaiting NEW_VIEW quorum"
+            );
             self.maybe_rebroadcast_new_view_votes(tracked_height, now);
             return false;
         };
@@ -2138,7 +2130,7 @@ impl Actor {
             })
             .count();
         if precommit_votes_at_view > 0 {
-            iroha_logger::info!(
+            debug!(
                 height,
                 view = view_idx,
                 precommit_votes = precommit_votes_at_view,
@@ -2161,8 +2153,57 @@ impl Actor {
             // Rebroadcast cached proposals when the leader is still responsible for the slot so
             // peers that missed the initial messages can recover without forcing a view change.
             self.maybe_rebroadcast_cached_proposal(height, view_idx, pending_queue_len, now);
+            let quorum_timeout = self.quorum_timeout(da_enabled);
+            let cached_wait_age = self
+                .pending
+                .pending_blocks
+                .values()
+                .filter(|pending| {
+                    !pending.aborted && pending.height == height && pending.view == view_idx
+                })
+                .map(|pending| pending.progress_age(now))
+                .max();
+            if quorum_timeout != Duration::ZERO
+                && cached_wait_age.is_some_and(|age| age >= quorum_timeout)
+            {
+                let wait_age_ms = cached_wait_age.map(|age| age.as_millis()).unwrap_or(0);
+                let already_forced = self
+                    .subsystems
+                    .propose
+                    .forced_view_after_timeout
+                    .is_some_and(|(forced_height, forced_view)| {
+                        forced_height == height && forced_view > view_idx
+                    });
+                if already_forced {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        wait_age_ms,
+                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        forced = ?self.subsystems.propose.forced_view_after_timeout,
+                        "cached proposal slot stalled past quorum timeout; awaiting scheduled view change"
+                    );
+                } else {
+                    warn!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        wait_age_ms,
+                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        "cached proposal slot stalled past quorum timeout; forcing view change"
+                    );
+                    self.trigger_view_change_with_cause(
+                        height,
+                        view_idx,
+                        ViewChangeCause::QuorumTimeout,
+                    );
+                }
+                self.maybe_rebroadcast_new_view_votes(height, now);
+                return false;
+            }
             if pending_queue_len > 0 {
-                iroha_logger::info!(
+                debug!(
                     height,
                     view = view_idx,
                     queue_len = pending_queue_len,
@@ -2185,7 +2226,7 @@ impl Actor {
             .contains(&(height, view_idx))
         {
             if pending_queue_len > 0 {
-                iroha_logger::info!(
+                debug!(
                     height,
                     view = view_idx,
                     queue_len = pending_queue_len,
@@ -2213,7 +2254,7 @@ impl Actor {
         {
             let quorum_timeout = self.quorum_timeout(da_enabled);
             if quorum_timeout != Duration::ZERO && pending_age < quorum_timeout {
-                iroha_logger::info!(
+                debug!(
                     height,
                     pending_view,
                     target_view = view_idx,

@@ -438,11 +438,25 @@ fn requeue_block_transactions(
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let state_view = state.view();
         match queue.push(accepted, state_view) {
-            Ok(()) => requeued = requeued.saturating_add(1),
+            Ok(()) => {
+                requeued = requeued.saturating_add(1);
+                gossip_hashes.push(tx_hash);
+            }
             Err(push_err) => match push_err.err {
                 crate::queue::Error::IsInQueue => {
                     duplicate_failures = duplicate_failures.saturating_add(1);
-                    debug!("transaction already in queue during requeue; keeping pending block");
+                    trace!(
+                        tx = %tx_hash,
+                        "transaction already in queue during requeue; keeping pending block"
+                    );
+                    gossip_hashes.push(tx_hash);
+                }
+                crate::queue::Error::InBlockchain => {
+                    duplicate_failures = duplicate_failures.saturating_add(1);
+                    trace!(
+                        tx = %tx_hash,
+                        "transaction already committed during requeue; skipping"
+                    );
                 }
                 err => {
                     failures = failures.saturating_add(1);
@@ -450,10 +464,9 @@ fn requeue_block_transactions(
                 }
             },
         }
-        gossip_hashes.push(tx_hash);
     }
     if !gossip_hashes.is_empty() {
-        queue.requeue_gossip_hashes(gossip_hashes.clone());
+        queue.requeue_gossip_hashes(gossip_hashes.iter().copied());
     }
     (requeued, failures, duplicate_failures, gossip_hashes)
 }

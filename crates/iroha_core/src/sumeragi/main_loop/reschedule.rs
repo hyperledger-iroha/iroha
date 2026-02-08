@@ -4,6 +4,44 @@ use iroha_logger::prelude::*;
 
 use super::*;
 
+fn adaptive_quorum_reschedule_backoff(
+    base_backoff: Duration,
+    quorum_stall_age: Duration,
+    quorum_timeout: Duration,
+    vote_count: usize,
+    min_votes_for_commit: usize,
+) -> (Duration, bool) {
+    if base_backoff == Duration::ZERO {
+        return (Duration::ZERO, false);
+    }
+
+    let vote_deficit = min_votes_for_commit.saturating_sub(vote_count);
+    let mut multiplier = if vote_deficit >= min_votes_for_commit.saturating_sub(1) {
+        3
+    } else if vote_deficit > 0 {
+        2
+    } else {
+        1
+    };
+    let mut escalated = false;
+    if quorum_timeout != Duration::ZERO {
+        let severe_stall = super::saturating_mul_duration(quorum_timeout, 4);
+        let moderate_stall = super::saturating_mul_duration(quorum_timeout, 2);
+        if quorum_stall_age >= severe_stall {
+            multiplier = multiplier.max(5);
+            escalated = true;
+        } else if quorum_stall_age >= moderate_stall {
+            multiplier = multiplier.max(4);
+            escalated = true;
+        }
+    }
+
+    (
+        super::saturating_mul_duration(base_backoff, multiplier),
+        escalated,
+    )
+}
+
 impl Actor {
     pub(super) fn rbc_availability_unresolved_for_reschedule(
         &self,
@@ -94,6 +132,7 @@ impl Actor {
         let mut prevote_timeouts = Vec::new();
         let mut reschedule_backoff_skipped = 0usize;
         let mut missing_data_backoff_skipped = 0usize;
+        let mut quorum_stall_escalations = 0usize;
         let mut stale_removed = 0usize;
         let mut aborted_removed = 0usize;
         for (hash, pending) in &self.pending.pending_blocks {
@@ -238,7 +277,13 @@ impl Actor {
             } else {
                 quorum_timeout
             };
-            if missing_quorum_stale(pending_age, effective_quorum_timeout, quorum_reached) {
+            let quorum_stall_age =
+                if (has_votes || has_qc) && pending.last_quorum_reschedule.is_some() {
+                    pending.progress_age(now)
+                } else {
+                    pending_age
+                };
+            if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
                 let rbc_key = (*hash, pending.height, pending.view);
                 if queue_depths.vote_rx > 0 {
                     debug!(
@@ -304,16 +349,30 @@ impl Actor {
                     missing_data_backoff_skipped = missing_data_backoff_skipped.saturating_add(1);
                     continue;
                 }
-                if !pending.reschedule_due(now, quorum_reschedule_cooldown) {
+                let (effective_reschedule_backoff, stall_escalated) =
+                    adaptive_quorum_reschedule_backoff(
+                        quorum_reschedule_cooldown,
+                        quorum_stall_age,
+                        effective_quorum_timeout,
+                        vote_count,
+                        min_votes_for_commit,
+                    );
+                if stall_escalated {
+                    quorum_stall_escalations = quorum_stall_escalations.saturating_add(1);
+                    super::status::inc_quorum_stall_age_escalation();
+                }
+                if !pending.reschedule_due(now, effective_reschedule_backoff) {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
                 }
                 to_reschedule.push((
                     key,
                     pending_age,
+                    quorum_stall_age,
                     vote_count,
                     min_votes_for_commit,
                     stake_quorum_missing,
+                    effective_reschedule_backoff,
                 ));
             }
         }
@@ -371,7 +430,16 @@ impl Actor {
         }
 
         let mut progress = aborted_removed > 0;
-        for (key, age, vote_count, min_votes, stake_quorum_missing) in to_reschedule {
+        for (
+            key,
+            age,
+            quorum_stall_age,
+            vote_count,
+            min_votes,
+            stake_quorum_missing,
+            effective_reschedule_backoff,
+        ) in to_reschedule
+        {
             if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
                 budget_exhausted = true;
                 break;
@@ -380,10 +448,11 @@ impl Actor {
                 self.reschedule_pending_quorum_block(
                     pending,
                     age,
+                    quorum_stall_age,
                     min_votes,
                     vote_count,
                     quorum_timeout,
-                    quorum_reschedule_cooldown,
+                    effective_reschedule_backoff,
                     now,
                 );
                 self.trigger_view_change_with_cause(
@@ -522,6 +591,7 @@ impl Actor {
                 aborted_removed,
                 backoff_skipped = reschedule_backoff_skipped,
                 missing_data_skipped = missing_data_backoff_skipped,
+                stall_escalations = quorum_stall_escalations,
                 budget_exhausted,
                 scan_ms = scan_cost.as_millis(),
                 total_ms = total_cost.as_millis(),
@@ -537,6 +607,7 @@ impl Actor {
         &mut self,
         mut pending: PendingBlock,
         pending_age: Duration,
+        quorum_stall_age: Duration,
         min_votes_for_commit: usize,
         vote_count: usize,
         quorum_timeout: Duration,
@@ -592,10 +663,14 @@ impl Actor {
         let reschedule_vote_count = precommit_vote_count.max(commit_vote_count);
         let has_reschedule_votes = reschedule_vote_count > 0;
         let already_rescheduled = pending.last_quorum_reschedule.is_some();
+        let progress_age = pending.progress_age(now);
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
-        let drop_pending = already_rescheduled && reschedule_vote_count < min_votes_for_commit;
+        let no_commit_evidence = reschedule_vote_count == 0 && !keep_commit_qc;
+        let drop_pending = already_rescheduled
+            && no_commit_evidence
+            && (quorum_timeout == Duration::ZERO || progress_age >= quorum_timeout);
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
@@ -652,6 +727,8 @@ impl Actor {
             height,
             view,
             pending_age_ms = pending_age.as_millis(),
+            quorum_stall_age_ms = quorum_stall_age.as_millis(),
+            progress_age_ms = progress_age.as_millis(),
             quorum_timeout_ms = quorum_timeout.as_millis(),
             votes = vote_count,
             min_votes = min_votes_for_commit,
@@ -700,14 +777,21 @@ impl Actor {
                 block: false,
             };
         }
+        let retransmit_targets = self.quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            height,
+            view,
+            topology_peers,
+        );
         let votes = self.rebroadcast_block_votes(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
             height,
             view,
+            true,
         );
         let mut block_sync = false;
-        if !drop_pending && !topology_peers.is_empty() {
+        if !drop_pending && !retransmit_targets.is_empty() {
             let mut update = block_sync_update_with_roster(
                 &pending.block,
                 self.state.as_ref(),
@@ -734,7 +818,7 @@ impl Actor {
             if pending.should_broadcast_block_sync_update(view, commit_votes, has_commit_qc) {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
                 if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
-                    self.broadcast_block_sync_update(update, topology_peers);
+                    self.broadcast_block_sync_update(update, &retransmit_targets);
                     block_sync = true;
                 } else {
                     debug!(
@@ -759,6 +843,8 @@ impl Actor {
         // allowing a fresh proposal to be assembled from the requeued transactions.
         let block = if drop_pending {
             false
+        } else if retransmit_targets.is_empty() {
+            false
         } else {
             let cooldown = self.payload_rebroadcast_cooldown();
             if self
@@ -767,7 +853,7 @@ impl Actor {
             {
                 self.broadcast_block_created_for_block_sync(
                     super::message::BlockCreated::from(&pending.block),
-                    topology_peers,
+                    &retransmit_targets,
                 );
                 true
             } else {
@@ -785,6 +871,49 @@ impl Actor {
             votes,
             block_sync,
             block,
+        }
+    }
+
+    fn quorum_retransmit_targets_for_missing_votes(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        topology_peers: &[PeerId],
+    ) -> Vec<PeerId> {
+        if topology_peers.is_empty() {
+            return Vec::new();
+        }
+        let local_peer_id = self.common_config.peer.id();
+        let observed_signers: std::collections::BTreeSet<usize> = self
+            .vote_log
+            .values()
+            .filter(|vote| {
+                vote.phase == crate::sumeragi::consensus::Phase::Commit
+                    && vote.block_hash == block_hash
+                    && vote.height == height
+                    && vote.view == view
+            })
+            .filter_map(|vote| usize::try_from(vote.signer).ok())
+            .collect();
+
+        let mut missing_targets = Vec::new();
+        for (idx, peer) in topology_peers.iter().enumerate() {
+            if peer == local_peer_id {
+                continue;
+            }
+            if !observed_signers.contains(&idx) {
+                missing_targets.push(peer.clone());
+            }
+        }
+        if missing_targets.is_empty() {
+            topology_peers
+                .iter()
+                .filter(|peer| *peer != local_peer_id)
+                .cloned()
+                .collect()
+        } else {
+            missing_targets
         }
     }
 }
