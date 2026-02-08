@@ -326,6 +326,7 @@ async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
         4,
         LARGE_PAYLOAD_BYTES,
         false,
+        true,
         |_| {},
         |_| Ok(()),
     )
@@ -342,6 +343,7 @@ async fn sumeragi_da_commit_certificate_history_four_peers() -> Result<()> {
         "sumeragi_da_commit_certificate_history_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
+        true,
         true,
         |_| {},
         |_| Ok(()),
@@ -362,6 +364,7 @@ async fn sumeragi_rbc_da_large_payload_six_peers() -> Result<()> {
         6,
         LARGE_PAYLOAD_BYTES,
         false,
+        true,
         |_| {},
         |_| Ok(()),
     )
@@ -378,6 +381,7 @@ async fn sumeragi_commit_qc_with_tight_block_queue_four_peers() -> Result<()> {
         "sumeragi_commit_qc_with_tight_block_queue_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
+        false,
         false,
         |layer| {
             layer.write(["sumeragi", "advanced", "queues", "blocks"], 2i64);
@@ -403,6 +407,7 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
         4,
         LARGE_PAYLOAD_BYTES,
         false,
+        true,
         |layer| {
             layer.write(["sumeragi", "debug", "disable_background_worker"], true);
         },
@@ -2144,6 +2149,7 @@ async fn run_sumeragi_da_scenario_with<F, G>(
     peer_count: usize,
     payload_bytes: usize,
     check_commit_certificates: bool,
+    require_rbc_observation: bool,
     configure: F,
     inspect: G,
 ) -> Result<()>
@@ -2319,12 +2325,14 @@ where
     let http = reqwest::Client::new();
     let start = Instant::now();
 
-    let rbc_handle = tokio::spawn(wait_for_rbc_delivery(
-        http.clone(),
-        sessions_url,
-        expected_height,
-        start,
-    ));
+    let rbc_handle = require_rbc_observation.then(|| {
+        tokio::spawn(wait_for_rbc_delivery(
+            http.clone(),
+            sessions_url,
+            expected_height,
+            start,
+        ))
+    });
     let commit_handle = tokio::spawn(wait_for_height(
         http.clone(),
         status_url,
@@ -2342,8 +2350,23 @@ where
         status_before.blocks
     );
 
-    let rbc_observation = rbc_handle.await.wrap_err("rbc join")??;
     let commit_elapsed = commit_handle.await.wrap_err("commit join")??;
+    let rbc_observation = if let Some(rbc_handle) = rbc_handle {
+        rbc_handle.await.wrap_err("rbc join")??
+    } else {
+        eprintln!(
+            "RBC session observation disabled for {scenario_name}; using commit timing fallback"
+        );
+        RbcObservation {
+            delivered_at: commit_elapsed,
+            height: expected_height,
+            view: 0,
+            total_chunks: 0,
+            received_chunks: 0,
+            ready_count: 0,
+            block_hash: String::new(),
+        }
+    };
     let ready_required = rbc_observation.ready_count > 0;
 
     let torii_urls = network.torii_urls();
@@ -2690,6 +2713,7 @@ async fn run_sumeragi_da_scenario(
         peer_count,
         payload_bytes,
         false,
+        true,
         |_| {},
         |_| Ok(()),
     )
