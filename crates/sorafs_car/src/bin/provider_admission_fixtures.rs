@@ -736,19 +736,19 @@ mod tests {
 
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
-            "176019d0bea04483973d97b1fbcbd6e558a4be37a8ba8c918d132472e39d04eb"
+            "15c05770f19f5965c464f360752744acfae3d2a2d8d217099a9bc9bed979e314"
         );
         assert_eq!(
             hex_lower(summary.envelope_v1_digest),
-            "8e4f3177bb02d7d01ed269db15b45b9b8fbf470e55199c827048304966069535"
+            "3a80af6d5f9551586d9939c1046898abfc50b6518c301c772c0566c4067c57a9"
         );
         assert_eq!(
             hex_lower(summary.renewal_envelope_digest),
-            "9f74ed69844e78f356760e0e3cba59a0709244ea7a266760481d7f4ba79b95cf"
+            "c3688ca183e1c622fe7082fe035bcddc8f61538a39a4abee6c34e6dfaf84eefe"
         );
         assert_eq!(
             hex_lower(summary.revocation_digest),
-            "db9c362ff80388beba3fa1988fe703b7923e958fe6243bb33b487fe2a3d30b6e"
+            "9680cb59e237e2b9a4b9dc2490d173ee7d99b99ef43bfa8e37a9d6acdb44c82c"
         );
 
         let proposal_path = dir.path().join("proposal_v1.to");

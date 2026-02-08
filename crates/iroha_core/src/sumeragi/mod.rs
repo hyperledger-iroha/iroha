@@ -10274,6 +10274,35 @@ fn has_pending_queue_depths(queue_depths: status::WorkerQueueDepthSnapshot) -> b
         || queue_depths.background_rx > 0
 }
 
+fn tier_budget_exhausted(
+    mailbox: &mut WorkerMailbox<'_>,
+    budgets: &TierBudgets,
+    tier: PriorityTier,
+) -> bool {
+    if budgets.remaining(tier) > 0 {
+        return false;
+    }
+    if mailbox.has_pending(tier) {
+        return true;
+    }
+    mailbox.fill_slot(tier);
+    mailbox.has_pending(tier)
+}
+
+fn refresh_budget_exhaustion_flags(
+    mailbox: &mut WorkerMailbox<'_>,
+    budgets: &TierBudgets,
+    stats: &mut WorkerIterationStats,
+) {
+    stats.vote_rx_budget_exhausted |= tier_budget_exhausted(mailbox, budgets, PriorityTier::Votes);
+    stats.block_payload_rx_budget_exhausted |=
+        tier_budget_exhausted(mailbox, budgets, PriorityTier::BlockPayload);
+    stats.rbc_chunk_rx_budget_exhausted |=
+        tier_budget_exhausted(mailbox, budgets, PriorityTier::RbcChunks);
+    stats.block_rx_budget_exhausted |=
+        tier_budget_exhausted(mailbox, budgets, PriorityTier::Blocks);
+}
+
 fn should_warn_slow_iteration(stats: &WorkerIterationStats) -> bool {
     stats.progress
         || stats.budget_exceeded
@@ -10625,14 +10654,7 @@ fn run_worker_iteration<A: WorkerActor>(
     }
 
     let pre_tick_depths = status::worker_queue_depth_snapshot();
-    stats.vote_rx_budget_exhausted =
-        budgets.remaining(PriorityTier::Votes) == 0 && pre_tick_depths.vote_rx > 0;
-    stats.block_payload_rx_budget_exhausted =
-        budgets.remaining(PriorityTier::BlockPayload) == 0 && pre_tick_depths.block_payload_rx > 0;
-    stats.rbc_chunk_rx_budget_exhausted =
-        budgets.remaining(PriorityTier::RbcChunks) == 0 && pre_tick_depths.rbc_chunk_rx > 0;
-    stats.block_rx_budget_exhausted =
-        budgets.remaining(PriorityTier::Blocks) == 0 && pre_tick_depths.block_rx > 0;
+    refresh_budget_exhaustion_flags(&mut mailbox, &budgets, &mut stats);
 
     let tick_now = Instant::now();
     let tick_deadline = actor.next_tick_deadline(tick_now);
@@ -10675,14 +10697,7 @@ fn run_worker_iteration<A: WorkerActor>(
     }
 
     let post_tick_depths = status::worker_queue_depth_snapshot();
-    stats.vote_rx_budget_exhausted |=
-        budgets.remaining(PriorityTier::Votes) == 0 && post_tick_depths.vote_rx > 0;
-    stats.block_payload_rx_budget_exhausted |=
-        budgets.remaining(PriorityTier::BlockPayload) == 0 && post_tick_depths.block_payload_rx > 0;
-    stats.rbc_chunk_rx_budget_exhausted |=
-        budgets.remaining(PriorityTier::RbcChunks) == 0 && post_tick_depths.rbc_chunk_rx > 0;
-    stats.block_rx_budget_exhausted |=
-        budgets.remaining(PriorityTier::Blocks) == 0 && post_tick_depths.block_rx > 0;
+    refresh_budget_exhaustion_flags(&mut mailbox, &budgets, &mut stats);
 
     stats.queue_depths = post_tick_depths;
     if stats.votes_handled > 0 || stats.block_payloads_handled > 0 || stats.blocks_handled > 0 {
