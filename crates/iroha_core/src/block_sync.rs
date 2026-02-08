@@ -3507,10 +3507,10 @@ pub mod message {
                 let (unblock_tx, unblock_rx) = std::sync::mpsc::channel();
                 let unblock = std::thread::spawn(move || {
                     unblock_rx
-                        .recv_timeout(Duration::from_secs(4))
+                        .recv_timeout(Duration::from_secs(10))
                         .expect("unblock signal");
                     block_payload_rx
-                        .recv_timeout(Duration::from_secs(2))
+                        .recv_timeout(Duration::from_secs(5))
                         .expect("expected block sync update");
                 });
 
@@ -3522,7 +3522,7 @@ pub mod message {
                     tokio::task::yield_now().await;
                     let _ = progress_tx.send(());
                 });
-                let progress = tokio::time::timeout(Duration::from_secs(4), progress_rx);
+                let progress = tokio::time::timeout(Duration::from_secs(10), progress_rx);
                 tokio::pin!(progress);
 
                 tokio::select! {

@@ -9916,7 +9916,7 @@ pub mod isi {
         use std::{
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
-            sync::{Arc, Mutex, OnceLock},
+            sync::Arc,
         };
 
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
@@ -9961,8 +9961,6 @@ pub mod isi {
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
-
-        static PEER_KEY_POLICY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
         #[test]
         fn derive_ballot_nullifier_is_unambiguous_for_delimiters() {
@@ -11847,10 +11845,7 @@ pub mod isi {
 
         #[test]
         fn register_peer_rejects_identifier_collisions() {
-            let _guard = PEER_KEY_POLICY_TEST_LOCK
-                .get_or_init(|| Mutex::new(()))
-                .lock()
-                .expect("peer key policy test lock poisoned");
+            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
