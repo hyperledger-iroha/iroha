@@ -153,7 +153,7 @@ pub fn payload_for_type(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
         }
         PointerType::AssetId => encode_from_str::<AssetId>(payload, "AssetId"),
         PointerType::DomainId => encode_from_str::<DomainId>(payload, "DomainId"),
-        PointerType::Name => encode_from_str::<Name>(payload, "Name"),
+        PointerType::Name => encode_name_payload(payload),
         PointerType::NftId => encode_from_str::<NftId>(payload, "NftId"),
         PointerType::Json => encode_json_payload(payload),
         _ => payload.to_vec(),
@@ -231,4 +231,19 @@ fn encode_json_payload(payload: &[u8]) -> Vec<u8> {
     let raw = core::str::from_utf8(payload).expect("json payload must be utf-8");
     let json = Json::from_str_norito(raw).expect("parse json payload");
     norito::to_bytes(&json).expect("encode json payload")
+}
+
+fn encode_name_payload(payload: &[u8]) -> Vec<u8> {
+    // Some tests already provide Norito-encoded Name payload bytes.
+    if norito::decode_from_bytes::<Name>(payload).is_ok() {
+        return payload.to_vec();
+    }
+
+    let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
+    match raw.parse::<Name>() {
+        Ok(name) => norito::to_bytes(&name).expect("encode payload"),
+        // Permission token literals like `mint_asset:rose#wonder` are intentionally
+        // not `Name`; pass them through as raw bytes so host-side parsing decides.
+        Err(_) => payload.to_vec(),
+    }
 }

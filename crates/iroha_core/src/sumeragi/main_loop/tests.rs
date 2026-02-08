@@ -4477,6 +4477,7 @@ async fn current_height_and_roster_matches_effective_topology() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_skips_known_block_without_roster_counters() {
+    let _block_sync_guard = super::status::block_sync_test_guard();
     super::status::reset_block_sync_counters_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &harness.actor;
@@ -4507,6 +4508,7 @@ async fn block_sync_update_skips_known_block_without_roster_counters() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_drops_conflicting_committed_block_without_roster_counters() {
+    let _block_sync_guard = super::status::block_sync_test_guard();
     super::status::reset_block_sync_counters_for_tests();
     let mut harness = test_actor_harness(4).await;
 
@@ -45141,6 +45143,100 @@ async fn block_created_accepts_when_hint_highest_missing() {
         "locked QC should remain anchored to the known chain"
     );
 
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_accepts_when_locked_matches_incoming_with_stale_hint_highest() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+    super::status::reset_message_handling_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let (committed_height, parent_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash()
+                .expect("committed block hash should exist"),
+        )
+    };
+    let height = committed_height.saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    actor
+        .kura
+        .store_block(block.clone())
+        .expect("store locked block");
+
+    actor.locked_qc = Some(QcHeaderRef {
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: block_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_locked_qc(height, view, Some(block_hash));
+
+    let hint_highest = QcHeaderRef {
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        subject_block_hash: parent_hash,
+        phase: Phase::Commit,
+    };
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_hint(super::message::ProposalHint {
+            height,
+            view,
+            block_hash,
+            highest_qc: hint_highest,
+        });
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("handle BlockCreated");
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should be accepted when it matches the locally locked block"
+    );
+    let dropped_by_lock = super::status::snapshot()
+        .consensus_message_handling
+        .entries
+        .iter()
+        .any(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::BlockCreated
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::LockedQc
+                && entry.total > 0
+        });
+    assert!(
+        !dropped_by_lock,
+        "matching locked BlockCreated should not be dropped by lock gate"
+    );
+
+    super::status::reset_message_handling_for_tests();
     super::status::set_locked_qc(0, 0, None);
     super::status::set_highest_qc(0, 0);
     super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
