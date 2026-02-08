@@ -2211,11 +2211,25 @@ fn derive_struct_deserialize(
                     impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
                         #[inline]
                         fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+                            let __logical_len = bytes.len();
+                            let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                            if __min_size > 0 && __logical_len == 0 {
+                                return Err(norito::core::Error::LengthMismatch);
+                            }
+                            let __decode_bytes: ::std::borrow::Cow<'a, [u8]> =
+                                if __min_size > 0 && __logical_len < __min_size {
+                                    let mut __pad = ::std::vec::Vec::with_capacity(__min_size);
+                                    __pad.extend_from_slice(bytes);
+                                    __pad.resize(__min_size, 0);
+                                    ::std::borrow::Cow::Owned(__pad)
+                                } else {
+                                    ::std::borrow::Cow::Borrowed(bytes)
+                                };
+                            let __archived = norito::core::archived_from_slice::<Self>(__decode_bytes.as_ref())?;
                             let __archived_bytes = __archived.bytes();
-                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+                            let _pg = norito::core::PayloadCtxGuard::enter_with_len(__archived_bytes, __logical_len);
                             let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-                            Ok((value, __archived_bytes.len()))
+                            Ok((value, __logical_len))
                         }
                     }
                 }
@@ -2663,11 +2677,25 @@ fn derive_struct_deserialize(
                     impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
                         #[inline]
                         fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+                            let __logical_len = bytes.len();
+                            let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                            if __min_size > 0 && __logical_len == 0 {
+                                return Err(norito::core::Error::LengthMismatch);
+                            }
+                            let __decode_bytes: ::std::borrow::Cow<'a, [u8]> =
+                                if __min_size > 0 && __logical_len < __min_size {
+                                    let mut __pad = ::std::vec::Vec::with_capacity(__min_size);
+                                    __pad.extend_from_slice(bytes);
+                                    __pad.resize(__min_size, 0);
+                                    ::std::borrow::Cow::Owned(__pad)
+                                } else {
+                                    ::std::borrow::Cow::Borrowed(bytes)
+                                };
+                            let __archived = norito::core::archived_from_slice::<Self>(__decode_bytes.as_ref())?;
                             let __archived_bytes = __archived.bytes();
-                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+                            let _pg = norito::core::PayloadCtxGuard::enter_with_len(__archived_bytes, __logical_len);
                             let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-                            Ok((value, __archived_bytes.len()))
+                            Ok((value, __logical_len))
                         }
                     }
                 }
@@ -2828,11 +2856,25 @@ fn derive_struct_deserialize(
                     impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
                         #[inline]
                         fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+                            let __logical_len = bytes.len();
+                            let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                            if __min_size > 0 && __logical_len == 0 {
+                                return Err(norito::core::Error::LengthMismatch);
+                            }
+                            let __decode_bytes: ::std::borrow::Cow<'a, [u8]> =
+                                if __min_size > 0 && __logical_len < __min_size {
+                                    let mut __pad = ::std::vec::Vec::with_capacity(__min_size);
+                                    __pad.extend_from_slice(bytes);
+                                    __pad.resize(__min_size, 0);
+                                    ::std::borrow::Cow::Owned(__pad)
+                                } else {
+                                    ::std::borrow::Cow::Borrowed(bytes)
+                                };
+                            let __archived = norito::core::archived_from_slice::<Self>(__decode_bytes.as_ref())?;
                             let __archived_bytes = __archived.bytes();
-                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+                            let _pg = norito::core::PayloadCtxGuard::enter_with_len(__archived_bytes, __logical_len);
                             let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-                            Ok((value, __archived_bytes.len()))
+                            Ok((value, __logical_len))
                         }
                     }
                 }
@@ -3873,11 +3915,25 @@ fn derive_enum_deserialize(
             impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
                 #[inline]
                 fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                    let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+                    let __logical_len = bytes.len();
+                    let __min_size = ::core::mem::size_of::<norito::core::Archived<Self>>();
+                    if __min_size > 0 && __logical_len == 0 {
+                        return Err(norito::core::Error::LengthMismatch);
+                    }
+                    let __decode_bytes: ::std::borrow::Cow<'a, [u8]> =
+                        if __min_size > 0 && __logical_len < __min_size {
+                            let mut __pad = ::std::vec::Vec::with_capacity(__min_size);
+                            __pad.extend_from_slice(bytes);
+                            __pad.resize(__min_size, 0);
+                            ::std::borrow::Cow::Owned(__pad)
+                        } else {
+                            ::std::borrow::Cow::Borrowed(bytes)
+                        };
+                    let __archived = norito::core::archived_from_slice::<Self>(__decode_bytes.as_ref())?;
                     let __archived_bytes = __archived.bytes();
-                    let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+                    let _pg = norito::core::PayloadCtxGuard::enter_with_len(__archived_bytes, __logical_len);
                     let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-                    Ok((value, __archived_bytes.len()))
+                    Ok((value, __logical_len))
                 }
             }
         }

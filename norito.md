@@ -64,6 +64,9 @@ encoding:
   - If set: unsigned varint (7-bit continuation).
   - If not set: fixed 8-byte little-endian u64.
 - Sequence length headers are fixed 8-byte little-endian u64 in v1.
+- `Vec<u8>` is encoded as a fixed-size sequence: `[len_u64][raw-bytes]` (no per-element
+  length prefixes), regardless of `PACKED_SEQ`. Decoders must also accept the legacy
+  per-element length-prefixed representation for compatibility.
 - Packed-sequence offsets are always `(len + 1)` u64 offsets, monotonic with the
   first offset 0.
 

@@ -117,6 +117,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             prefer_ws_fallback: false,
             p2p_queue_cap_high: nonzero!(128usize),
             p2p_queue_cap_low: nonzero!(512usize),

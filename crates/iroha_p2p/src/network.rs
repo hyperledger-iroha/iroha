@@ -1774,6 +1774,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             low_priority_bytes_per_sec,
             low_priority_bytes_burst,
             tls_listen_address,
+            tls_inbound_only,
             allowlist_only,
             allow_keys,
             deny_keys,
@@ -1810,11 +1811,22 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
         let connect_startup_delay_until = tokio::time::Instant::now() + connect_startup_delay;
 
+        let proxy_is_https = p2p_proxy
+            .as_deref()
+            .is_some_and(|proxy| proxy.trim_start().starts_with("https://"));
+
         if p2p_proxy_required {
             if p2p_proxy.is_none() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "network.p2p_proxy_required=true but network.p2p_proxy is not set",
+                )
+                .into());
+            }
+            if !p2p_no_proxy.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "network.p2p_proxy_required=true is incompatible with network.p2p_no_proxy; remove no-proxy exemptions to enforce the proxy",
                 )
                 .into());
             }
@@ -1826,6 +1838,77 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 )
                 .into());
             }
+        }
+
+        if proxy_is_https {
+            if !cfg!(feature = "p2p_tls") {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "network.p2p_proxy uses https:// but this build was compiled without iroha_p2p/p2p_tls",
+                )
+                .into());
+            }
+            if p2p_proxy_tls_verify {
+                let pin_present = p2p_proxy_tls_pinned_cert_der_base64
+                    .as_deref()
+                    .is_some_and(|raw| !raw.trim().is_empty());
+                if !pin_present {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "network.p2p_proxy_tls_verify=true requires network.p2p_proxy_tls_pinned_cert_der_base64 to be set when using an https:// proxy",
+                    )
+                    .into());
+                }
+            }
+        }
+
+        if tls_inbound_only {
+            if !tls_enabled {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "network.tls_inbound_only=true requires network.tls_enabled=true",
+                )
+                .into());
+            }
+            if !cfg!(feature = "p2p_tls") {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "network.tls_inbound_only=true requires a build with iroha_p2p/p2p_tls",
+                )
+                .into());
+            }
+            // Ensure peers can still dial us by requiring the advertised port to match the TLS bind port.
+            let tls_port = tls_listen_address
+                .as_ref()
+                .map_or_else(|| listen_addr.value().port(), |addr| addr.value().port());
+            if tls_port != public_address.value().port() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "network.tls_inbound_only=true binds inbound TLS on port {tls_port}, but network.public_address advertises port {}; set public_address to the TLS port",
+                        public_address.value().port()
+                    ),
+                )
+                .into());
+            }
+        }
+
+        if tls_enabled && !cfg!(feature = "p2p_tls") {
+            if !tls_fallback_to_plain {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "network.tls_enabled=true with tls_fallback_to_plain=false requires a build with iroha_p2p/p2p_tls",
+                )
+                .into());
+            }
+            if tls_listen_address.is_some() {
+                iroha_logger::warn!(
+                    "network.tls_listen_address is set but this build lacks iroha_p2p/p2p_tls; inbound TLS listener will not start"
+                );
+            }
+            iroha_logger::warn!(
+                "network.tls_enabled=true but this build lacks iroha_p2p/p2p_tls; outbound dials will be plaintext because tls_fallback_to_plain=true"
+            );
         }
 
         let proxy_policy = crate::transport::ProxyPolicy::from_config(p2p_proxy, p2p_no_proxy)?;
@@ -1893,41 +1976,51 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         // Bind TCP listener with improved diagnostics that include the configured address.
         let listen_addr_repr = format!("{listen_addr:?}");
         let public_addr_repr = format!("{public_address:?}");
-        let addrs: Vec<std::net::SocketAddr> = match listen_addr.value().to_socket_addrs() {
-            Ok(iter) => iter.collect(),
-            Err(e) => {
-                let error = std::sync::Arc::new(e);
-                iroha_logger::error!(
-                    listen_addr = ?listen_addr,
-                    public_address = ?public_address,
-                    error = %error,
-                    "Failed to resolve TCP listener address"
-                );
-                return Err(Error::BindListener {
-                    listen_addr: listen_addr_repr.clone(),
-                    public_address: public_addr_repr.clone(),
-                    error,
-                });
-            }
+        let listener = if tls_inbound_only {
+            // Bind a dummy TCP listener so the network actor's select loop can keep the accept
+            // branch without exposing a plaintext listener on the configured P2P port.
+            let dummy: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid bind addr");
+            let listener = TcpListener::bind(dummy).await?;
+            iroha_logger::info!("Network started without plain TCP listener (tls_inbound_only=true)");
+            listener
+        } else {
+            let addrs: Vec<std::net::SocketAddr> = match listen_addr.value().to_socket_addrs() {
+                Ok(iter) => iter.collect(),
+                Err(e) => {
+                    let error = std::sync::Arc::new(e);
+                    iroha_logger::error!(
+                        listen_addr = ?listen_addr,
+                        public_address = ?public_address,
+                        error = %error,
+                        "Failed to resolve TCP listener address"
+                    );
+                    return Err(Error::BindListener {
+                        listen_addr: listen_addr_repr.clone(),
+                        public_address: public_addr_repr.clone(),
+                        error,
+                    });
+                }
+            };
+            let listener = match TcpListener::bind(addrs.as_slice()).await {
+                Ok(l) => l,
+                Err(e) => {
+                    let error = std::sync::Arc::new(e);
+                    iroha_logger::error!(
+                        listen_addr = ?listen_addr,
+                        public_address = ?public_address,
+                        error = %error,
+                        "Failed to bind TCP listener"
+                    );
+                    return Err(Error::BindListener {
+                        listen_addr: listen_addr_repr.clone(),
+                        public_address: public_addr_repr.clone(),
+                        error,
+                    });
+                }
+            };
+            iroha_logger::info!("Network bound to listener");
+            listener
         };
-        let listener = match TcpListener::bind(addrs.as_slice()).await {
-            Ok(l) => l,
-            Err(e) => {
-                let error = std::sync::Arc::new(e);
-                iroha_logger::error!(
-                    listen_addr = ?listen_addr,
-                    public_address = ?public_address,
-                    error = %error,
-                    "Failed to bind TCP listener"
-                );
-                return Err(Error::BindListener {
-                    listen_addr: listen_addr_repr.clone(),
-                    public_address: public_addr_repr.clone(),
-                    error,
-                });
-            }
-        };
-        iroha_logger::info!("Network bound to listener");
         let (online_peers_sender, online_peers_receiver) = watch::channel(HashSet::new());
         let (subscribe_to_peers_messages_sender, subscribe_to_peers_messages_receiver) =
             mpsc::unbounded_channel();
@@ -1985,7 +2078,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         }
         #[cfg(feature = "p2p_tls")]
         if tls_enabled {
-            if let Some(tls_addr) = tls_listen_address.as_ref().map(|x| x.value().clone()) {
+            let tls_bind_addr = if tls_inbound_only {
+                Some(
+                    tls_listen_address
+                        .as_ref()
+                        .map(|x| x.value().clone())
+                        .unwrap_or_else(|| listen_addr.value().clone()),
+                )
+            } else {
+                tls_listen_address.as_ref().map(|x| x.value().clone())
+            };
+            if let Some(tls_addr) = tls_bind_addr {
                 if let Err(e) = start_tls_listener::<WireMessage<T>, K, E>(
                     tls_addr.to_socket_addrs()?.as_slice()[0],
                     key_pair.clone(),
@@ -2008,7 +2111,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 )
                 .await
                 {
-                    iroha_logger::warn!(%e, addr=%tls_addr, "Failed to start TLS listener; continuing without inbound TLS");
+                    if tls_inbound_only {
+                        return Err(e);
+                    }
+                    iroha_logger::warn!(
+                        %e,
+                        addr=%tls_addr,
+                        "Failed to start TLS listener; continuing without inbound TLS"
+                    );
                 }
             }
         }
@@ -2730,6 +2840,7 @@ mod accept_stream_tests {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -2876,6 +2987,137 @@ mod accept_stream_tests {
             started,
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_proxy_required_with_no_proxy_exemptions() {
+        let key_pair = KeyPair::random();
+        let mut cfg = base_cfg();
+        cfg.p2p_proxy_required = true;
+        cfg.p2p_proxy = Some("http://proxy.invalid:8080".to_string());
+        cfg.p2p_no_proxy = vec!["localhost".to_string()];
+
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            Some(ChainId::from("test-chain".to_string())),
+            None,
+            None,
+            shutdown,
+        )
+        .await;
+
+        assert!(matches!(
+            started,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_https_proxy_without_pin_when_verify_enabled() {
+        let key_pair = KeyPair::random();
+        let mut cfg = base_cfg();
+        cfg.p2p_proxy = Some("https://proxy.invalid:443".to_string());
+        cfg.p2p_proxy_tls_verify = true;
+        cfg.p2p_proxy_tls_pinned_cert_der_base64 = None;
+
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            Some(ChainId::from("test-chain".to_string())),
+            None,
+            None,
+            shutdown,
+        )
+        .await;
+
+        assert!(matches!(
+            started,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    #[cfg(not(feature = "p2p_tls"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_tls_without_feature_when_tls_only_outbound() {
+        let key_pair = KeyPair::random();
+        let mut cfg = base_cfg();
+        cfg.tls_enabled = true;
+        cfg.tls_fallback_to_plain = false;
+
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            Some(ChainId::from("test-chain".to_string())),
+            None,
+            None,
+            shutdown,
+        )
+        .await;
+
+        assert!(matches!(
+            started,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    #[cfg(not(feature = "p2p_tls"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_tls_inbound_only_without_feature() {
+        let key_pair = KeyPair::random();
+        let mut cfg = base_cfg();
+        cfg.tls_enabled = true;
+        cfg.tls_inbound_only = true;
+
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            Some(ChainId::from("test-chain".to_string())),
+            None,
+            None,
+            shutdown,
+        )
+        .await;
+
+        assert!(matches!(
+            started,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    #[cfg(feature = "p2p_tls")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_accepts_tls_inbound_only_with_tls_feature() {
+        let key_pair = KeyPair::random();
+        let mut cfg = base_cfg();
+        cfg.tls_enabled = true;
+        cfg.tls_inbound_only = true;
+
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            Some(ChainId::from("test-chain".to_string())),
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await;
+
+        let (_handle, _child) = match started {
+            Ok(ok) => ok,
+            Err(Error::Io(_) | Error::BindListener { .. }) => {
+                // Likely running in a sandbox that forbids sockets; skip.
+                return;
+            }
+            Err(e) => panic!("network start: {e:?}"),
+        };
+
+        shutdown.send();
     }
 
     #[cfg(feature = "quic")]

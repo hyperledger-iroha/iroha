@@ -375,6 +375,7 @@ fn minimal_config_snapshot() {
                 tls_enabled: false,
                 tls_fallback_to_plain: true,
                 tls_listen_address: None,
+                tls_inbound_only: false,
                 prefer_ws_fallback: false,
                 p2p_queue_cap_high: 8192,
                 p2p_queue_cap_low: 32768,

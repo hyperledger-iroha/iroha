@@ -172,8 +172,8 @@ p2p_ws_outbound_total 0
 
 - Knobs (`[network]`):
   - `p2p_proxy` (string; optional): outbound proxy URL (e.g., `http://user:pass@proxy.example.com:8080` or `socks5://user:pass@proxy.example.com:1080`).
-  - `p2p_proxy_required` (bool; default `false`): when true, require `p2p_proxy` to be set and fail startup otherwise. Note: QUIC bypasses the proxy, so `quic_enabled=true` is rejected when `p2p_proxy_required=true`.
-  - `p2p_no_proxy` (array of strings): host suffixes to bypass the proxy (e.g., `.example.com`, `localhost`).
+  - `p2p_proxy_required` (bool; default `false`): when true, require `p2p_proxy` to be set, disallow `p2p_no_proxy` exemptions, and fail startup otherwise. Note: QUIC bypasses the proxy, so `quic_enabled=true` is rejected when `p2p_proxy_required=true`.
+  - `p2p_no_proxy` (array of strings): host suffixes to bypass the proxy (e.g., `.example.com`, `localhost`). Must be empty when `p2p_proxy_required=true`.
   - `p2p_proxy_tls_verify` (bool; default `true`): verify an `https://` proxy hop (certificate pinning).
   - `p2p_proxy_tls_pinned_cert_der_base64` (string; optional): pinned end-entity proxy certificate (DER, base64). Required when `p2p_proxy_tls_verify=true`.
 - When `p2p_proxy` is set and the target host is not exempted, the dialer tunnels via:
@@ -183,9 +183,9 @@ p2p_ws_outbound_total 0
   - SOCKS5 `CONNECT` for `socks5://...` / `socks5h://...`
 - Notes:
   - Basic authentication is supported via `user:pass@...` in the proxy URL.
-  - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`).
+  - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`) when `p2p_proxy_required=false`.
   - Disabling `p2p_proxy_tls_verify` may expose proxy credentials (and proxy traffic metadata) to MITM on the proxy hop.
-  - Proxies apply only to TCP-based dials (TCP/TLS/WS). QUIC (UDP) bypasses the proxy; set `quic_enabled=false` (or enable `p2p_proxy_required=true`) if you must force all outbound P2P traffic through a proxy.
+  - Proxies apply only to TCP-based dials (TCP/TLS/WS). QUIC (UDP) bypasses the proxy; set `quic_enabled=false` and `p2p_proxy_required=true` (with no `p2p_no_proxy` exemptions) if you must force all outbound P2P traffic through a proxy.
   - If no proxy is configured, connections go direct.
 
 ### Relay Mode (Hub/Spoke/Assist)
@@ -396,7 +396,9 @@ Notes
 - Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the signed handshake (address + optional `chain_id`).
 - Runtime: `tls_fallback_to_plain` (bool; default `true`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=false` to enforce TLS-only outbound dials.
 - Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails and `tls_fallback_to_plain=true`, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
-- Inbound: optionally enable a TLS listener on a separate address/port via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address while still accepting plain TCP on `[network].address`. Certificates are self‑signed per process; authentication is enforced at the application handshake.
+- Inbound: optionally enable a TLS listener via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address. Plain TCP on `[network].address` remains enabled unless `[network].tls_inbound_only=true`.
+  - `tls_inbound_only` (bool; default `false`): disable the plaintext listener and accept inbound P2P only via TLS-over-TCP. When enabled, TLS binds on `tls_listen_address` when set, otherwise on `[network].address`.
+  - Certificates are self‑signed per process; authentication is enforced at the application handshake.
 
 ### Noise XX handshake (feature-gated)
 

@@ -1897,6 +1897,22 @@ where
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, mut offset) = read_seq_len_slice(bytes)?;
+        // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency.
+        // For compatibility we still accept the legacy per-element length-prefixed
+        // representation (and the packed-seq offsets layout) when the raw form
+        // doesn't match the input.
+        if core::any::type_name::<T>() == "u8"
+            && let Some(end) = offset.checked_add(len)
+            && end == bytes.len()
+        {
+            // SAFETY: we verified `T == u8` via `type_name`.
+            let out = unsafe {
+                let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+                let vec = slice.to_vec();
+                std::mem::transmute::<Vec<u8>, Vec<T>>(vec)
+            };
+            return Ok((out, end));
+        }
         let remaining = bytes.len().saturating_sub(offset);
         if use_packed_seq() {
             let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
@@ -5156,6 +5172,15 @@ where
 
 impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+        if core::any::type_name::<T>() == "u8" {
+            let len_u64 = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
+            write_seq_len(&mut writer, len_u64)?;
+            // SAFETY: we verified `T == u8` via `type_name`.
+            let bytes =
+                unsafe { core::slice::from_raw_parts(self.as_ptr().cast::<u8>(), self.len()) };
+            writer.write_all(bytes)?;
+            return Ok(());
+        }
         encode_seq_payloads(
             &mut writer,
             self.len(),
@@ -5163,6 +5188,14 @@ impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
             |item, buf| item.serialize(buf),
             |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
         )
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        if core::any::type_name::<T>() == "u8" {
+            self.len().checked_add(8)
+        } else {
+            None
+        }
     }
 }
 
@@ -7958,6 +7991,54 @@ mod tests {
 
         let result = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&buf);
         assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn vec_u8_encodes_as_len_plus_raw_bytes() {
+        reset_decode_state();
+        let value: Vec<u8> = (0..32).collect();
+        let payload = encode_adaptive(&value);
+        assert_eq!(payload.len(), 8 + value.len());
+        let mut len_bytes = [0u8; 8];
+        len_bytes.copy_from_slice(&payload[..8]);
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        assert_eq!(len, value.len());
+        assert_eq!(&payload[8..], value.as_slice());
+        reset_decode_state();
+    }
+
+    #[test]
+    fn vec_u8_decode_accepts_legacy_len_prefixed_elements() {
+        reset_decode_state();
+        let value: Vec<u8> = vec![1, 2, 3, 4];
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        for byte in &value {
+            legacy.extend_from_slice(&1u64.to_le_bytes());
+            legacy.push(*byte);
+        }
+
+        let (decoded, used) =
+            <Vec<u8> as DecodeFromSlice>::decode_from_slice(&legacy).expect("decode legacy vec");
+        assert_eq!(used, legacy.len());
+        assert_eq!(decoded, value);
+        reset_decode_state();
+    }
+
+    #[test]
+    fn vec_u8_raw_decode_works_even_with_packed_seq_flag() {
+        reset_decode_state();
+        let value: Vec<u8> = vec![7, 8, 9];
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        raw.extend_from_slice(&value);
+
+        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+        let (decoded, used) =
+            <Vec<u8> as DecodeFromSlice>::decode_from_slice(&raw).expect("decode raw vec");
+        assert_eq!(used, raw.len());
+        assert_eq!(decoded, value);
+        reset_decode_state();
     }
 
     #[test]

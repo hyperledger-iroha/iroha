@@ -110,6 +110,7 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         prefer_ws_fallback: false,
         p2p_proxy: None,
         p2p_proxy_required: false,

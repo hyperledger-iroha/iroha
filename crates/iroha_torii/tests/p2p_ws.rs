@@ -32,6 +32,7 @@ async fn p2p_ws_route_accepts_and_handshakes() {
             quic_enabled: false,
             tls_enabled: false,
             tls_listen_address: None,
+            tls_inbound_only: false,
             prefer_ws_fallback: false,
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),

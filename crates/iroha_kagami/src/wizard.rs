@@ -170,8 +170,37 @@ impl<T: Write> RunArgs<T> for Args {
                 .wrap_err("failed to create sorafs admission directory")?;
         }
 
-        let config_payload = toml::to_string_pretty(&config)
+        let mut config_payload = toml::to_string_pretty(&config)
             .wrap_err("failed to serialise config after wizard updates")?;
+        // Surface optional networking knobs in the generated config without changing defaults.
+        config_payload.push_str(
+            r#"
+
+# ---
+# P2P advanced options (optional)
+#
+# [network]
+# # Outbound proxy (HTTP CONNECT / SOCKS5):
+# p2p_proxy = "http://user:pass@proxy.example.com:8080" # or socks5://...
+# p2p_proxy_required = false
+# p2p_no_proxy = ["localhost", ".example.com"]
+#
+# # If p2p_proxy starts with https://, the proxy hop uses TLS (requires iroha_p2p/p2p_tls):
+# p2p_proxy_tls_verify = true
+# p2p_proxy_tls_pinned_cert_der_base64 = "BASE64_DER"
+#
+# # TLS-over-TCP to peers (requires iroha_p2p/p2p_tls):
+# tls_enabled = false
+# tls_fallback_to_plain = true
+# tls_listen_address = "addr:0.0.0.0:1337"
+# tls_inbound_only = false
+#
+# Notes:
+# - When p2p_proxy_required=true, p2p_no_proxy must be empty.
+# - When p2p_proxy is https:// and p2p_proxy_tls_verify=true, a pinned cert is required.
+# - tls_inbound_only=true disables the plaintext P2P listener; inbound connections require TLS.
+"#,
+        );
         fs::write(&config_path, config_payload)
             .wrap_err_with(|| format!("failed to write config to {}", config_path.display()))?;
 
