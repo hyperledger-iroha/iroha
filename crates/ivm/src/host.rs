@@ -9,7 +9,6 @@
 use std::{
     any::Any,
     collections::{BTreeMap, HashSet},
-    io::Cursor,
     num::NonZeroU16,
 };
 
@@ -510,8 +509,8 @@ impl DefaultHost {
                 type_id: tlv.type_id as u16,
             });
         }
-        let mut cursor = Cursor::new(tlv.payload);
-        let numeric = Numeric::decode(&mut cursor).map_err(|_| VMError::DecodeError)?;
+        let numeric =
+            decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
         Self::ensure_unsigned_scale0(numeric)
     }
 
@@ -815,7 +814,8 @@ impl IVMHost for DefaultHost {
                 if val < 0 {
                     return Err(VMError::AssertionFailed);
                 }
-                let payload = Numeric::new(val, 0).encode();
+                let payload =
+                    norito::to_bytes(&Numeric::new(val, 0)).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -839,7 +839,7 @@ impl IVMHost for DefaultHost {
                 let lhs = Self::decode_numeric(vm, vm.register(10))?;
                 let rhs = Self::decode_numeric(vm, vm.register(11))?;
                 let out = lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -851,7 +851,7 @@ impl IVMHost for DefaultHost {
                 if out.mantissa().is_negative() {
                     return Err(VMError::AssertionFailed);
                 }
-                let payload = out.encode();
+                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -862,7 +862,7 @@ impl IVMHost for DefaultHost {
                 let out = lhs
                     .checked_mul(rhs, NumericSpec::unconstrained())
                     .ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -873,7 +873,7 @@ impl IVMHost for DefaultHost {
                 let out = lhs
                     .checked_div(rhs, NumericSpec::unconstrained())
                     .ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -884,7 +884,7 @@ impl IVMHost for DefaultHost {
                 let out = lhs
                     .checked_rem(rhs, NumericSpec::unconstrained())
                     .ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -894,7 +894,7 @@ impl IVMHost for DefaultHost {
                 if !val.is_zero() {
                     return Err(VMError::AssertionFailed);
                 }
-                let payload = val.encode();
+                let payload = norito::to_bytes(&val).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)

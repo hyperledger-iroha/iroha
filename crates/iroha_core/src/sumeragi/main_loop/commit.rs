@@ -470,26 +470,26 @@ impl Actor {
             epoch,
         );
         if update.commit_qc.is_none() {
-            if let Some(record) = crate::sumeragi::status::precommit_signers_for(block_hash) {
-                if record.height == height && record.view == view && record.epoch == epoch {
-                    if let Some(derived) = super::derive_block_sync_qc_from_signers(
-                        block_hash,
-                        height,
-                        view,
-                        record.epoch,
-                        record.parent_state_root,
-                        record.post_state_root,
-                        &record.validator_set,
-                        consensus_mode,
-                        record.stake_snapshot.as_ref(),
-                        &record.mode_tag,
-                        &record.signers,
-                        record.bls_aggregate_signature.clone(),
-                    ) {
-                        update.commit_qc = Some(derived);
-                        if update.stake_snapshot.is_none() {
-                            update.stake_snapshot.clone_from(&record.stake_snapshot);
-                        }
+            if let Some(record) = crate::sumeragi::status::precommit_signers_for_round(
+                block_hash, height, view, epoch,
+            ) {
+                if let Some(derived) = super::derive_block_sync_qc_from_signers(
+                    block_hash,
+                    height,
+                    view,
+                    record.epoch,
+                    record.parent_state_root,
+                    record.post_state_root,
+                    &record.validator_set,
+                    consensus_mode,
+                    record.stake_snapshot.as_ref(),
+                    &record.mode_tag,
+                    &record.signers,
+                    record.bls_aggregate_signature.clone(),
+                ) {
+                    update.commit_qc = Some(derived);
+                    if update.stake_snapshot.is_none() {
+                        update.stake_snapshot.clone_from(&record.stake_snapshot);
                     }
                 }
             }
@@ -4554,10 +4554,12 @@ impl Actor {
         if block.hash() != qc.subject_block_hash {
             return None;
         }
-        let record = crate::sumeragi::status::precommit_signers_for(block.hash())?;
-        if record.height != qc.height || record.view != qc.view || record.epoch != qc.epoch {
-            return None;
-        }
+        let record = crate::sumeragi::status::precommit_signers_for_round(
+            block.hash(),
+            qc.height,
+            qc.view,
+            qc.epoch,
+        )?;
         if record.bls_aggregate_signature.is_empty() {
             return None;
         }
@@ -6982,6 +6984,8 @@ mod tests {
 
     #[test]
     fn recover_qc_from_kura_block_falls_back_to_roster() {
+        let _guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_commit_certs_for_tests();
         let chain: ChainId = "recover-qc-from-kura".parse().expect("chain id parses");
         let kura = Kura::blank_kura_for_testing();
         let block = sample_block(1, 0);
@@ -7038,6 +7042,7 @@ mod tests {
         assert_eq!(recovered.view, qc_header.view);
         assert_eq!(recovered.subject_block_hash, qc_header.subject_block_hash);
         assert_eq!(recovered.aggregate.signers_bitmap, signers_bitmap);
+        crate::sumeragi::status::reset_commit_certs_for_tests();
     }
 
     #[test]

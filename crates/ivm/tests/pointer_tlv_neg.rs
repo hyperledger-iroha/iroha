@@ -3,6 +3,9 @@ use ivm::{IVM, PointerType, ProgramMetadata};
 
 mod common;
 
+const VALID_ACCOUNT_ID: &[u8] =
+    b"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+
 fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -26,7 +29,7 @@ fn tlv_wrong_hash_is_rejected() {
     let meta = ProgramMetadata::default().encode();
     vm.load_program(&meta).unwrap();
     // Build a valid payload and a TLV with a corrupted hash
-    let payload = common::payload_for_type(PointerType::AccountId, b"alice@wonderland");
+    let payload = common::payload_for_type(PointerType::AccountId, VALID_ACCOUNT_ID);
     let tlv = build_tlv(PointerType::AccountId as u16, 1, &payload, true);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;

@@ -2296,31 +2296,9 @@ fn validate_qc_against_votes(
             });
         };
         let key = (qc.phase, qc.height, qc.view, qc.epoch, view_signer);
-        let vote = if let Some(vote) = vote_log.get(&key) {
-            vote
-        } else {
-            let fallback_vote = vote_log.values().find(|candidate| {
-                if candidate.phase != qc.phase
-                    || candidate.height != qc.height
-                    || candidate.view != qc.view
-                    || candidate.epoch != qc.epoch
-                {
-                    return false;
-                }
-                let mut view_signers = BTreeSet::new();
-                view_signers.insert(candidate.signer);
-                let canonical = normalize_signer_indices_to_canonical(
-                    &view_signers,
-                    &signature_topology,
-                    &canonical_topology,
-                );
-                canonical.contains(signer)
-            });
-            let Some(vote) = fallback_vote else {
-                missing += 1;
-                continue;
-            };
-            vote
+        let Some(vote) = vote_log.get(&key) else {
+            missing += 1;
+            continue;
         };
         if vote.block_hash != qc.subject_block_hash {
             return Err(QcValidationError::SubjectMismatch { signer: *signer });
@@ -5761,16 +5739,15 @@ fn selection_from_roster_artifacts(
         .as_ref()
         .map(|(_, cert)| (cert.parent_state_root, cert.post_state_root))
         .or_else(|| {
-            super::status::precommit_signers_for(block_hash).and_then(|record| {
-                if record.height == block_height
-                    && record.epoch == epoch
-                    && block_view.is_none_or(|view| view == record.view)
-                {
-                    Some((record.parent_state_root, record.post_state_root))
-                } else {
-                    None
-                }
-            })
+            super::status::precommit_signer_history()
+                .into_iter()
+                .find(|record| {
+                    record.block_hash == block_hash
+                        && record.height == block_height
+                        && record.epoch == epoch
+                        && block_view.is_none_or(|view| view == record.view)
+                })
+                .map(|record| (record.parent_state_root, record.post_state_root))
         });
     let checkpoint_roots_ms =
         u64::try_from(checkpoint_roots_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -5951,29 +5928,34 @@ fn block_sync_history_roster_for_block(
         .max_by(|a, b| a.height.cmp(&b.height));
 
     if cert.is_none() {
-        if let Some(record) = super::status::precommit_signers_for(block_hash) {
-            let expected_epoch = roster_cache.expected_epoch(record.height, consensus_mode);
-            let view_matches = block_view.is_none_or(|view| view == record.view);
-            if record.height <= block_height
-                && view_matches
-                && record.epoch == expected_epoch
-                && record.mode_tag.as_str() == mode_tag
-            {
-                cert = derive_block_sync_qc_from_signers(
-                    block_hash,
-                    record.height,
-                    record.view,
-                    record.epoch,
-                    record.parent_state_root,
-                    record.post_state_root,
-                    &record.validator_set,
-                    consensus_mode,
-                    record.stake_snapshot.as_ref(),
-                    record.mode_tag.as_str(),
-                    &record.signers,
-                    record.bls_aggregate_signature.clone(),
-                );
-            }
+        let record = super::status::precommit_signer_history()
+            .into_iter()
+            .filter(|record| {
+                record.block_hash == block_hash
+                    && record.height <= block_height
+                    && block_view.is_none_or(|view| view == record.view)
+                    && record.mode_tag.as_str() == mode_tag
+            })
+            .filter(|record| {
+                let expected_epoch = roster_cache.expected_epoch(record.height, consensus_mode);
+                record.epoch == expected_epoch
+            })
+            .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)));
+        if let Some(record) = record {
+            cert = derive_block_sync_qc_from_signers(
+                block_hash,
+                record.height,
+                record.view,
+                record.epoch,
+                record.parent_state_root,
+                record.post_state_root,
+                &record.validator_set,
+                consensus_mode,
+                record.stake_snapshot.as_ref(),
+                record.mode_tag.as_str(),
+                &record.signers,
+                record.bls_aggregate_signature.clone(),
+            );
         }
     }
 
@@ -7019,10 +7001,8 @@ impl Actor {
                     && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
             })
             .or_else(|| {
-                let record = status::precommit_signers_for(block.hash())?;
-                if record.height != height || record.view != view || record.epoch != epoch {
-                    return None;
-                }
+                let record =
+                    status::precommit_signers_for_round(block.hash(), height, view, epoch)?;
                 if record.mode_tag != mode_tag {
                     return None;
                 }

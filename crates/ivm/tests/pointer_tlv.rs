@@ -3,6 +3,9 @@ use ivm::{Memory, PointerType};
 
 mod common;
 
+const VALID_ACCOUNT_ID: &[u8] =
+    b"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -17,11 +20,11 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
 #[test]
 fn validate_known_types_ok() {
     let cases: &[(PointerType, &[u8])] = &[
-        (PointerType::AccountId, b"alice@wonderland"),
+        (PointerType::AccountId, VALID_ACCOUNT_ID),
         (PointerType::AssetDefinitionId, b"rose#wonderland"),
         (PointerType::Name, b"cursor"),
         (PointerType::Json, br#"{"q":1}"#),
-        (PointerType::NftId, b"rose:uuid:0123"),
+        (PointerType::NftId, b"rose$wonderland"),
     ];
     for (pty, raw) in cases.iter().copied() {
         let payload = common::payload_for_type(pty, raw);
@@ -37,7 +40,7 @@ fn validate_known_types_ok() {
 
 #[test]
 fn reject_hash_mismatch() {
-    let payload = common::payload_for_type(PointerType::AccountId, b"alice@wonderland");
+    let payload = common::payload_for_type(PointerType::AccountId, VALID_ACCOUNT_ID);
     let mut tlv = make_tlv(PointerType::AccountId as u16, 1, &payload);
     // Flip one byte in the stored hash
     let off = 7 + payload.len();

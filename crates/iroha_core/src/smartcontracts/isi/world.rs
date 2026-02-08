@@ -11845,6 +11845,7 @@ pub mod isi {
 
         #[test]
         fn register_peer_rejects_identifier_collisions() {
+            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
