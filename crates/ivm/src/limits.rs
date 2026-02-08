@@ -20,8 +20,7 @@ pub fn gas_schedule_entries() -> Vec<GasScheduleEntry> {
         .iter()
         .map(|&opcode| GasScheduleEntry {
             opcode,
-            cost: gas::cost_of((opcode as u32) << 24)
-                .expect("scheduled opcode must have gas cost"),
+            cost: gas::cost_of((opcode as u32) << 24).expect("scheduled opcode must have gas cost"),
         })
         .collect()
 }

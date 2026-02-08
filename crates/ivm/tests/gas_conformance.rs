@@ -85,7 +85,8 @@ fn vector_op_gas_table_matches_under_various_setvl() {
             // Expected gas: SETVL (vector_len ignored for SETVL) + op (scaled by vm.vector_length()) + HALT
             let vl = vm.vector_length();
             let used = 100_000 - vm.remaining_gas();
-            let expected = cost_of_with_params(setvl, 1, 0).expect("valid opcode must have gas cost")
+            let expected = cost_of_with_params(setvl, 1, 0)
+                .expect("valid opcode must have gas cost")
                 + cost_of_with_params(word, vl, 0).expect("valid opcode must have gas cost")
                 + cost_of_with_params(encoding::wide::encode_halt(), 4, 0)
                     .expect("valid opcode must have gas cost");

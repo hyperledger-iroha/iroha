@@ -1149,17 +1149,14 @@ seiyaku Test {
     fn manifest_access_set_hints_include_transfer_domain_literal() {
         use iroha_data_model::{account::AccountId, domain::DomainId};
 
-        let from: AccountId =
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
-                .parse()
-                .unwrap();
-        let to: AccountId =
-            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-                .parse()
-                .unwrap();
+        let from_literal =
+            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland";
+        let to_literal =
+            "ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC@wonderland";
+        let to: AccountId = to_literal.parse().unwrap();
         let domain: DomainId = "wonderland".parse().unwrap();
         let src = format!(
-            "fn main() {{ transfer_domain(account_id(\"{from}\"), domain(\"{domain}\"), account_id(\"{to}\")); }}"
+            "fn main() {{ transfer_domain(account_id(\"{from_literal}\"), domain(\"{domain}\"), account_id(\"{to_literal}\")); }}"
         );
 
         let compiler = Compiler::new();
@@ -1489,35 +1486,45 @@ seiyaku Test {
 
     #[test]
     fn entry_spills_use_stack_frame() {
-        let mut src = String::from("seiyaku SpillTest {\n  kotoage fn main() -> int {\n");
-        let count = 32;
-        for i in 0..count {
-            let value = i + 1;
-            src.push_str(&format!("    let a{i} = {value};\n"));
-        }
-        src.push_str("    let sum = ");
-        for i in 0..count {
-            if i > 0 {
-                src.push_str(" + ");
-            }
-            src.push_str(&format!("a{i}"));
-        }
-        src.push_str(";\n    return sum;\n  }\n}\n");
+        // The compiler pipeline may use a few MiB of stack in debug builds; run this test on a
+        // larger stack so it doesn't depend on the test harness' thread stack size.
+        std::thread::Builder::new()
+            .name("kotodama_entry_spills_use_stack_frame".to_owned())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut src = String::from("seiyaku SpillTest {\n  kotoage fn main() -> int {\n");
+                let count = 32;
+                for i in 0..count {
+                    let value = i + 1;
+                    src.push_str(&format!("    let a{i} = {value};\n"));
+                }
+                src.push_str("    let sum = ");
+                for i in 0..count {
+                    if i > 0 {
+                        src.push_str(" + ");
+                    }
+                    src.push_str(&format!("a{i}"));
+                }
+                src.push_str(";\n    return sum;\n  }\n}\n");
 
-        let parsed = crate::parser::parse(&src).expect("parse spill test");
-        let typed = crate::semantic::analyze(&parsed).expect("type spill test");
-        let ir_prog = crate::ir::lower(&typed).expect("lower spill test");
-        let func = ir_prog
-            .functions
-            .iter()
-            .find(|func| func.name == "main")
-            .expect("main function");
-        let alloc = crate::regalloc::allocate(func);
-        assert!(
-            !alloc.stack.is_empty(),
-            "expected spills to allocate stack slots"
-        );
-        assert!(alloc.frame_size > 0, "expected non-zero frame size");
+                let parsed = crate::parser::parse(&src).expect("parse spill test");
+                let typed = crate::semantic::analyze(&parsed).expect("type spill test");
+                let ir_prog = crate::ir::lower(&typed).expect("lower spill test");
+                let func = ir_prog
+                    .functions
+                    .iter()
+                    .find(|func| func.name == "main")
+                    .expect("main function");
+                let alloc = crate::regalloc::allocate(func);
+                assert!(
+                    !alloc.stack.is_empty(),
+                    "expected spills to allocate stack slots"
+                );
+                assert!(alloc.frame_size > 0, "expected non-zero frame size");
+            })
+            .expect("spawn large-stack test thread")
+            .join()
+            .expect("test thread panicked");
     }
 }
 
@@ -1541,7 +1548,7 @@ pub fn encode_sub(rd: u8, rs1: u8, rs2: u8) -> u32 {
 /// -------
 ///
 /// ```
-/// # use ivm::kotodama::compiler::encode_addi;
+/// use kotodama_lang::compiler::encode_addi;
 /// let word = encode_addi(1, 1, 7).expect("addi"); // addi x1, x1, 7
 /// assert_eq!(word, 0x2001_0107);
 /// ```
@@ -6005,7 +6012,12 @@ impl Compiler {
                     )
                 }
                 DataKey(DataKind::Json, s) => {
-                    let json = Json::from_str_norito(s).map_err(|e| {
+                    // JSON literals must be valid JSON text. (Use `norito_bytes` for opaque bytes.)
+                    let value = norito::json::parse_value(s).map_err(|e| {
+                        let err = format!("invalid JSON literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    let json = Json::from_norito_value_ref(&value).map_err(|e| {
                         let err = format!("invalid JSON literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;

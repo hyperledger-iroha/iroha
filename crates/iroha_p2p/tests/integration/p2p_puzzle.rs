@@ -77,7 +77,7 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
         address: WithOrigin::inline(addr),
         public_address: WithOrigin::inline(public_addr),
         relay_mode: RelayMode::Disabled,
-        relay_hub_address: None,
+        relay_hub_addresses: Vec::new(),
         relay_ttl: RELAY_TTL,
         soranet_handshake: handshake,
         soranet_privacy: SoranetPrivacy::default(),
@@ -100,6 +100,13 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         quic_enabled: false,
+        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         prefer_ws_fallback: false,
@@ -176,6 +183,9 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn puzzle_mismatch_rejects_handshake() {
     let chain = ChainId::from("puzzle_mismatch");
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
     let baseline_failures = peer::handshake_failure_count();
 
     let kp1 = KeyPair::random();

@@ -1160,10 +1160,13 @@ pub struct Network {
     pub address: WithOrigin<SocketAddr>,
     /// Publicly advertised socket address.
     pub public_address: WithOrigin<SocketAddr>,
-    /// Relay role (disabled/hub/spoke) for constrained topologies.
+    /// Relay role (disabled/hub/spoke/assist) for constrained topologies.
     pub relay_mode: RelayMode,
-    /// Relay hub address to dial when in `spoke` mode.
-    pub relay_hub_address: Option<SocketAddr>,
+    /// Relay hub addresses to dial when in `spoke` or `assist` mode.
+    ///
+    /// When multiple hubs are supplied, the node may pick one that is reachable
+    /// and fall back to others if connectivity changes.
+    pub relay_hub_addresses: Vec<SocketAddr>,
     /// Hop limit for relayed frames.
     pub relay_ttl: u8,
     /// SoraNet handshake capabilities to advertise.
@@ -1202,12 +1205,25 @@ pub struct Network {
     pub dns_refresh_interval: Option<Duration>,
     /// Optional TTL-based refresh for hostname-based peers.
     pub dns_refresh_ttl: Option<Duration>,
-    /// Optional HTTP CONNECT proxy URL for outbound TCP dials (e.g., `http://user:pass@host:port`).
+    /// Optional outbound proxy URL for TCP-based dials (e.g., `http://user:pass@host:port`,
+    /// `https://host:port`, `socks5://user:pass@host:port`, or `socks5h://host:port`).
+    ///
+    /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
     pub p2p_proxy: Option<String>,
     /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
     pub p2p_no_proxy: Vec<String>,
     /// Enable QUIC transport (feature-gated).
     pub quic_enabled: bool,
+    /// Enable QUIC DATAGRAM support for best-effort topics (gossip/health).
+    ///
+    /// Datagrams are used only for best-effort topics; reliable topics keep using streams.
+    pub quic_datagrams_enabled: bool,
+    /// Upper bound (bytes) for QUIC datagram payloads.
+    pub quic_datagram_max_payload_bytes: usize,
+    /// Total receive buffer reserved for QUIC datagrams (bytes).
+    pub quic_datagram_receive_buffer_bytes: usize,
+    /// Total send buffer reserved for QUIC datagrams (bytes).
+    pub quic_datagram_send_buffer_bytes: usize,
     /// Enable TLS-over-TCP transport for outbound dials (feature-gated).
     /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer will
     /// attempt to establish a TLS 1.3 session to the peer's host:port and run the
@@ -1338,6 +1354,13 @@ pub enum RelayMode {
     Hub,
     /// Relay spoke; dial only the hub and rely on forwarding.
     Spoke,
+    /// Relay assist; connect directly when possible but keep a hub connection for relay fallback.
+    ///
+    /// This mode is intended for mixed deployments where some peers are behind
+    /// NAT/firewalls/censorship and run in `Spoke` mode. Nodes in `Assist` mode
+    /// can communicate with those spokes via the configured hub without forcing
+    /// every peer to use a relay.
+    Assist,
 }
 
 /// Hardware acceleration settings (actual layer).
@@ -7601,15 +7624,20 @@ mod tests {
         let base_timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(base_ms));
         let scaled_timeouts =
             SumeragiNposTimeouts::from_block_time(Duration::from_millis(scaled_ms));
-        assert_eq!(
-            scaled_timeouts.propose,
-            base_timeouts.propose.saturating_mul(2)
-        );
-        assert_eq!(
-            scaled_timeouts.commit,
-            base_timeouts.commit.saturating_mul(2)
-        );
-        assert_eq!(scaled_timeouts.da, base_timeouts.da.saturating_mul(2));
+        let assert_scales = |base: Duration, scaled: Duration| {
+            let base_ms = i128::try_from(base.as_millis()).expect("duration fits i128");
+            let scaled_ms = i128::try_from(scaled.as_millis()).expect("duration fits i128");
+            let expected_ms = base_ms.saturating_mul(2);
+            let diff = (scaled_ms - expected_ms).abs();
+            // Per-phase rounding is applied independently, so scaling isn't guaranteed to be exact.
+            assert!(
+                diff <= 1,
+                "expected {scaled_ms}ms to be ~2x of {base_ms}ms (diff {diff}ms)"
+            );
+        };
+        assert_scales(base_timeouts.propose, scaled_timeouts.propose);
+        assert_scales(base_timeouts.commit, scaled_timeouts.commit);
+        assert_scales(base_timeouts.da, scaled_timeouts.da);
     }
 
     #[test]
@@ -7618,12 +7646,11 @@ mod tests {
             propose: Some(Duration::from_millis(123)),
             ..SumeragiNposTimeoutOverrides::default()
         };
-        let resolved = overrides.resolve(Duration::from_millis(1_000));
+        let block_time = Duration::from_millis(1_000);
+        let base = SumeragiNposTimeouts::from_block_time(block_time);
+        let resolved = overrides.resolve(block_time);
         assert_eq!(resolved.propose, Duration::from_millis(123));
-        assert_eq!(
-            resolved.prevote,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS)
-        );
+        assert_eq!(resolved.prevote, base.prevote);
     }
 
     #[test]

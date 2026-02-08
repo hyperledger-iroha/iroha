@@ -47,7 +47,7 @@ snow = { version = "0.10", optional = true }
 rcgen = { version = "0.14.5", optional = true }
 rustls = { version = "0.23.35", default-features = false, optional = true }
 tokio-rustls = { version = "0.26.4", default-features = false, optional = true }
-tokio-tungstenite = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"], optional = true }
 
 [features]
 default = []

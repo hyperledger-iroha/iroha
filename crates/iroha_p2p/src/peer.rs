@@ -1382,6 +1382,8 @@ pub mod handles {
         tcp_keepalive: Option<Duration>,
         proxy_policy: crate::transport::ProxyPolicy,
         quic_dialer: Option<crate::transport::QuicDialer>,
+        quic_datagrams_enabled: bool,
+        quic_datagram_max_payload_bytes: usize,
     ) {
         #[cfg(test)]
         crate::peer::test_support::record(
@@ -1416,6 +1418,8 @@ pub mod handles {
             idle_timeout,
             post_capacity,
             max_frame_bytes,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
         };
         tokio::task::spawn(run::run::<T, K, E, _>(peer).in_current_span());
     }
@@ -1441,6 +1445,8 @@ pub mod handles {
         relay_role: RelayRole,
         trust_gossip: bool,
         max_frame_bytes: usize,
+        quic_datagrams_enabled: bool,
+        quic_datagram_max_payload_bytes: usize,
     ) {
         #[cfg(test)]
         crate::peer::test_support::record(
@@ -1465,6 +1471,8 @@ pub mod handles {
             idle_timeout,
             post_capacity,
             max_frame_bytes,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
         };
         tokio::task::spawn(run::run::<T, K, E, _>(peer).in_current_span());
     }
@@ -1613,6 +1621,8 @@ mod run {
 
     use std::task::Poll;
 
+    #[cfg(feature = "quic")]
+    use bytes::Bytes;
     use futures::future::poll_fn;
     use iroha_logger::prelude::*;
     use norito::codec::Decode;
@@ -1628,6 +1638,170 @@ mod run {
         state::{ConnectedFrom, Connecting, Ready},
         *,
     };
+
+    #[cfg(feature = "quic")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DatagramSend {
+        Sent { bytes: usize },
+        TooLarge,
+        Unsupported,
+        Disabled,
+    }
+
+    #[cfg(feature = "quic")]
+    struct QuicDatagramSender<E: Enc> {
+        connection: quinn::Connection,
+        cryptographer: Cryptographer<E>,
+        buffer: Vec<u8>,
+        encrypted: Vec<u8>,
+        max_frame_bytes: usize,
+        max_payload_bytes: usize,
+    }
+
+    #[cfg(feature = "quic")]
+    impl<E: Enc> QuicDatagramSender<E> {
+        fn new(
+            connection: quinn::Connection,
+            cryptographer: Cryptographer<E>,
+            max_frame_bytes: usize,
+            max_payload_bytes: usize,
+        ) -> Self {
+            Self {
+                connection,
+                cryptographer,
+                buffer: Vec::new(),
+                encrypted: Vec::new(),
+                max_frame_bytes,
+                max_payload_bytes,
+            }
+        }
+
+        fn try_send<T: Pload + ClassifyTopic>(&mut self, msg: &T) -> Result<DatagramSend, Error> {
+            // Encode a single Norito-framed payload and encrypt it with the negotiated session key.
+            ncore::to_bytes_in(msg, &mut self.buffer)?;
+            let max_plaintext = crate::frame_plaintext_cap(self.max_frame_bytes);
+            if self.buffer.len() > max_plaintext {
+                return Err(Error::FrameTooLarge);
+            }
+            let encrypted = self
+                .cryptographer
+                .encrypt_into(&self.buffer, &mut self.encrypted)?;
+
+            let Some(mut max_datagram) = self.connection.max_datagram_size() else {
+                return Ok(DatagramSend::Unsupported);
+            };
+            max_datagram = max_datagram.min(self.max_payload_bytes);
+            if max_datagram == 0 || self.max_payload_bytes == 0 {
+                return Ok(DatagramSend::Disabled);
+            }
+            if encrypted.len() > max_datagram {
+                return Ok(DatagramSend::TooLarge);
+            }
+
+            match self
+                .connection
+                .send_datagram(Bytes::copy_from_slice(encrypted))
+            {
+                Ok(()) => Ok(DatagramSend::Sent {
+                    bytes: encrypted.len(),
+                }),
+                Err(quinn::SendDatagramError::UnsupportedByPeer) => Ok(DatagramSend::Unsupported),
+                Err(quinn::SendDatagramError::Disabled) => Ok(DatagramSend::Disabled),
+                Err(quinn::SendDatagramError::TooLarge) => Ok(DatagramSend::TooLarge),
+                Err(quinn::SendDatagramError::ConnectionLost(e)) => {
+                    Err(std::io::Error::other(format!("quic datagram send failed: {e}")).into())
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "quic")]
+    struct QuicDatagramReceiver<E: Enc, T: Pload> {
+        connection: quinn::Connection,
+        cryptographer: Cryptographer<E>,
+        decrypted: Vec<u8>,
+        framed_schema: [u8; 16],
+        framed_padding: usize,
+        max_frame_bytes: usize,
+        _payload: std::marker::PhantomData<T>,
+    }
+
+    #[cfg(feature = "quic")]
+    impl<E: Enc, T: Pload> QuicDatagramReceiver<E, T> {
+        fn new(
+            connection: quinn::Connection,
+            cryptographer: Cryptographer<E>,
+            max_frame_bytes: usize,
+        ) -> Self {
+            let framed_schema = <T as ncore::NoritoSerialize>::schema_hash();
+            let align = core::mem::align_of::<ncore::Archived<T>>();
+            let framed_padding = if align <= 1 {
+                0
+            } else {
+                let rem = ncore::Header::SIZE % align;
+                if rem == 0 { 0 } else { align - rem }
+            };
+            Self {
+                connection,
+                cryptographer,
+                decrypted: Vec::new(),
+                framed_schema,
+                framed_padding,
+                max_frame_bytes,
+                _payload: std::marker::PhantomData,
+            }
+        }
+
+        async fn recv(&mut self) -> Result<(T, usize), Error> {
+            let datagram =
+                self.connection.read_datagram().await.map_err(|e| {
+                    std::io::Error::other(format!("quic datagram recv failed: {e}"))
+                })?;
+            if datagram.len() > self.max_frame_bytes {
+                return Err(Error::FrameTooLarge);
+            }
+            let plaintext = self
+                .cryptographer
+                .decrypt_into(datagram.as_ref(), &mut self.decrypted)?;
+            let frame_len =
+                framed_message_len::<T>(plaintext, self.framed_schema, self.framed_padding)?;
+            if frame_len != plaintext.len() {
+                return Err(Error::Format);
+            }
+            let decoded = ncore::decode_from_bytes::<T>(plaintext).map_err(|err| {
+                iroha_logger::warn!(error = ?err, "Failed to decode peer datagram payload");
+                Error::Format
+            })?;
+            Ok((decoded, frame_len))
+        }
+    }
+
+    #[cfg(feature = "quic")]
+    type DatagramSender<E> = QuicDatagramSender<E>;
+    #[cfg(not(feature = "quic"))]
+    type DatagramSender<E> = std::marker::PhantomData<E>;
+
+    #[cfg(feature = "quic")]
+    type DatagramReceiver<E, T> = QuicDatagramReceiver<E, T>;
+    #[cfg(not(feature = "quic"))]
+    type DatagramReceiver<E, T> = std::marker::PhantomData<(E, T)>;
+
+    #[cfg(feature = "quic")]
+    async fn recv_best_effort_datagram<E: Enc, T: Pload>(
+        receiver: &mut Option<DatagramReceiver<E, T>>,
+    ) -> Result<(T, usize), Error> {
+        let receiver = receiver.as_mut().expect("guarded by is_some");
+        receiver.recv().await
+    }
+
+    #[cfg(not(feature = "quic"))]
+    async fn recv_best_effort_datagram<E: Enc, T: Pload>(
+        _receiver: &mut Option<DatagramReceiver<E, T>>,
+    ) -> Result<(T, usize), Error> {
+        // No QUIC support in this build: the branch is always disabled by the guard in `select!`,
+        // so this future is never polled.
+        std::future::pending::<Result<(T, usize), Error>>().await
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum LowTopic {
@@ -1790,6 +1964,8 @@ mod run {
             idle_timeout,
             post_capacity,
             max_frame_bytes,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
         }: RunPeerArgs<T, P>,
     ) {
         let conn_id = peer.connection_id();
@@ -1837,6 +2013,7 @@ mod run {
                         write,
                         read_low,
                         write_low,
+                        quic,
                         id: connection_id,
                         ..
                     },
@@ -1910,7 +2087,40 @@ mod run {
             let mut recv_backpressure_sampler = LogSampler::new();
             let mut message_sender_hi = MessageSender::new(write, cryptographer.clone(), max_frame_bytes);
             let mut message_sender_low =
-                write_low.map(|write| MessageSender::new(write, cryptographer, max_frame_bytes));
+                write_low.map(|write| MessageSender::new(write, cryptographer.clone(), max_frame_bytes));
+
+            #[cfg(feature = "quic")]
+            let mut datagram_sender: Option<DatagramSender<E>> = None;
+            #[cfg(not(feature = "quic"))]
+            let datagram_sender: Option<DatagramSender<E>> = None;
+            let mut datagram_receiver: Option<DatagramReceiver<E, T>> = None;
+            #[cfg(feature = "quic")]
+            if quic_datagrams_enabled {
+                    if let Some(conn) = quic.clone() {
+                        // Receiver is always safe to enable when datagrams are configured locally.
+                        datagram_receiver = Some(QuicDatagramReceiver::<E, T>::new(
+                            conn.clone(),
+                            cryptographer.clone(),
+                            max_frame_bytes,
+                        ));
+                    // Sender requires that the peer negotiated datagram support.
+                    if conn.max_datagram_size().is_some() && quic_datagram_max_payload_bytes > 0 {
+                        datagram_sender = Some(QuicDatagramSender::new(
+                            conn,
+                            cryptographer.clone(),
+                            max_frame_bytes,
+                            quic_datagram_max_payload_bytes,
+                        ));
+                    }
+                }
+            }
+            #[cfg(not(feature = "quic"))]
+            let _ = (
+                &datagram_sender,
+                quic_datagrams_enabled,
+                quic_datagram_max_payload_bytes,
+                quic,
+            );
 
             let mut idle_interval = tokio::time::interval_at(Instant::now() + idle_timeout, idle_timeout);
             let mut ping_interval = tokio::time::interval_at(Instant::now() + idle_timeout / 2, idle_timeout / 2);
@@ -1932,14 +2142,45 @@ mod run {
                     &mut lo_other_rx,
                 ) {
                     iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                    let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                        sender.prepare_message(&Message::Data(msg), Priority::Low)
-                    } else {
-                        message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
+                    #[cfg(feature = "quic")]
+                    let sent_datagram = {
+                        let net_topic = msg.topic();
+                        if net_topic.is_best_effort() {
+                            if let Some(sender) = datagram_sender.as_mut() {
+                                match sender.try_send(&msg) {
+                                    Ok(DatagramSend::Sent { .. }) => true,
+                                    Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
+                                        datagram_sender = None;
+                                        false
+                                    }
+                                    Ok(DatagramSend::TooLarge) => false,
+                                    Err(error) => {
+                                        iroha_logger::error!(
+                                            %error,
+                                            "Failed to send peer datagram."
+                                        );
+                                        break;
+                                    }
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
                     };
-                    if let Err(error) = prepared {
-                        iroha_logger::error!(%error, "Failed to encrypt message.");
-                        break;
+                    #[cfg(not(feature = "quic"))]
+                    let sent_datagram = false;
+                    if !sent_datagram {
+                        let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                            sender.prepare_message(&Message::Data(msg), Priority::Low)
+                        } else {
+                            message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
+                        };
+                        if let Err(error) = prepared {
+                            iroha_logger::error!(%error, "Failed to encrypt message.");
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -2015,14 +2256,45 @@ mod run {
                         break;
                     };
                     iroha_logger::trace!("Post message ({}/drain)", low_topic_label(topic));
-                    let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                        sender.prepare_message(&Message::Data(m), Priority::Low)
-                    } else {
-                        message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                    #[cfg(feature = "quic")]
+                    let sent_datagram = {
+                        let net_topic = m.topic();
+                        if net_topic.is_best_effort() {
+                            if let Some(sender) = datagram_sender.as_mut() {
+                                match sender.try_send(&m) {
+                                    Ok(DatagramSend::Sent { .. }) => true,
+                                    Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
+                                        datagram_sender = None;
+                                        false
+                                    }
+                                    Ok(DatagramSend::TooLarge) => false,
+                                    Err(error) => {
+                                        iroha_logger::error!(
+                                            %error,
+                                            "Failed to send peer datagram."
+                                        );
+                                        break;
+                                    }
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
                     };
-                    if let Err(error) = prepared {
-                        iroha_logger::error!(%error, "Failed to encrypt message.");
-                        break;
+                    #[cfg(not(feature = "quic"))]
+                    let sent_datagram = false;
+                    if !sent_datagram {
+                        let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                            sender.prepare_message(&Message::Data(m), Priority::Low)
+                        } else {
+                            message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                        };
+                        if let Err(error) = prepared {
+                            iroha_logger::error!(%error, "Failed to encrypt message.");
+                            break;
+                        }
                     }
                     hi_budget = HI_BUDGET_RESET;
                     drained_lo = drained_lo.saturating_add(1);
@@ -2087,19 +2359,98 @@ mod run {
                         &mut lo_peer_gossip_rx,
                         &mut lo_health_rx,
                         &mut lo_other_rx,
-                    ) => {
-                        if let Some((topic, msg)) = low {
-                            iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                            let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                                sender.prepare_message(&Message::Data(msg), Priority::Low)
-                            } else {
-                                message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
-                            };
-                            if let Err(error) = prepared {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
+	                    ) => {
+	                        if let Some((topic, msg)) = low {
+	                            iroha_logger::trace!("Post message ({})", low_topic_label(topic));
+	                            #[cfg(feature = "quic")]
+	                            let sent_datagram = {
+	                                let net_topic = msg.topic();
+	                                if net_topic.is_best_effort() {
+	                                    if let Some(sender) = datagram_sender.as_mut() {
+	                                        match sender.try_send(&msg) {
+	                                            Ok(DatagramSend::Sent { .. }) => true,
+	                                            Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
+	                                                datagram_sender = None;
+	                                                false
+	                                            }
+	                                            Ok(DatagramSend::TooLarge) => false,
+	                                            Err(error) => {
+	                                                iroha_logger::error!(
+	                                                    %error,
+	                                                    "Failed to send peer datagram."
+	                                                );
+	                                                break;
+	                                            }
+	                                        }
+	                                    } else {
+	                                        false
+	                                    }
+	                                } else {
+	                                    false
+	                                }
+	                            };
+	                            #[cfg(not(feature = "quic"))]
+	                            let sent_datagram = false;
+	                            if !sent_datagram {
+	                                let prepared = if let Some(sender) = message_sender_low.as_mut() {
+	                                    sender.prepare_message(&Message::Data(msg), Priority::Low)
+	                                } else {
+                                    message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
+                                };
+                                if let Err(error) = prepared {
+                                    iroha_logger::error!(%error, "Failed to encrypt message.");
+                                    break;
+                                }
                             }
                             hi_budget = HI_BUDGET_RESET;
+                        }
+                    }
+                    datagram = recv_best_effort_datagram::<E, T>(&mut datagram_receiver), if datagram_receiver.is_some() => {
+                        match datagram {
+                            Ok((payload, encoded_len)) => {
+                                let topic = payload.topic();
+                                if !topic.is_best_effort() {
+                                    iroha_logger::debug!(
+                                        conn_id,
+                                        ?topic,
+                                        "Dropping non-best-effort payload received via QUIC datagram"
+                                    );
+                                    continue;
+                                }
+                                let peer_message = PeerMessage {
+                                    peer: peer_id.clone(),
+                                    payload,
+                                    payload_bytes: encoded_len,
+                                };
+                                match peer_message_senders.low.try_send(peer_message) {
+                                    Ok(()) => {}
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                        // Best-effort delivery: drop when the network can't keep up.
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                        iroha_logger::error!(
+                                            "Network dropped peer message channel (datagram)."
+                                        );
+                                        break;
+                                    }
+                                }
+                                idle_interval.reset();
+                                ping_interval.reset();
+                            }
+                            Err(Error::Io(_)) => {
+                                iroha_logger::debug!(
+                                    conn_id,
+                                    "QUIC datagram receive failed; disabling datagram receiver"
+                                );
+                                datagram_receiver = None;
+                            }
+                            Err(error) => {
+                                iroha_logger::debug!(
+                                    conn_id,
+                                    %error,
+                                    "Dropping malformed QUIC datagram payload"
+                                );
+                            }
                         }
                     }
                     msg = message_reader.read_message() => {
@@ -2277,14 +2628,45 @@ mod run {
                         &mut lo_health_rx,
                         &mut lo_other_rx,
                     ) {
-                        let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                            sender.prepare_message(&Message::Data(m), Priority::Low)
-                        } else {
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                        #[cfg(feature = "quic")]
+                        let sent_datagram = {
+                            let net_topic = m.topic();
+                            if net_topic.is_best_effort() {
+                                if let Some(sender) = datagram_sender.as_mut() {
+                                    match sender.try_send(&m) {
+                                        Ok(DatagramSend::Sent { .. }) => true,
+                                        Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
+                                            datagram_sender = None;
+                                            false
+                                        }
+                                        Ok(DatagramSend::TooLarge) => false,
+                                        Err(error) => {
+                                            iroha_logger::error!(
+                                                %error,
+                                                "Failed to send peer datagram."
+                                            );
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
                         };
-                        if let Err(error) = prepared {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
+                        #[cfg(not(feature = "quic"))]
+                        let sent_datagram = false;
+                        if !sent_datagram {
+                            let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                                sender.prepare_message(&Message::Data(m), Priority::Low)
+                            } else {
+                                message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                            };
+                            if let Err(error) = prepared {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
                         }
                         hi_budget = HI_BUDGET_RESET;
                         iroha_logger::trace!("Post message ({})", low_topic_label(topic));
@@ -2321,6 +2703,8 @@ mod run {
         pub post_capacity: usize,
         #[allow(dead_code)]
         pub max_frame_bytes: usize,
+        pub quic_datagrams_enabled: bool,
+        pub quic_datagram_max_payload_bytes: usize,
     }
 
     /// Trait for peer stages that might be used as starting point for peer's [`run`] function.
@@ -3958,7 +4342,9 @@ mod state {
             };
             #[cfg(feature = "p2p_ws")]
             async fn dial_ws(
+                peer_addr: &iroha_primitives::addr::SocketAddr,
                 endpoint: &str,
+                opts: &crate::transport::TcpConnectOptions,
                 connection_id: ConnectionId,
                 dial_timeout: Duration,
                 tls_enabled: bool,
@@ -3972,23 +4358,33 @@ mod state {
                     [false, true]
                 };
                 for use_wss in order {
-                    let res = if use_wss {
-                        tokio::time::timeout(
-                            dial_timeout,
-                            crate::transport::ws::connect_wss(endpoint),
-                        )
-                        .await
+                    let url = if use_wss {
+                        format!("wss://{endpoint}/p2p")
                     } else {
-                        tokio::time::timeout(
-                            dial_timeout,
-                            crate::transport::ws::connect_ws(endpoint),
-                        )
-                        .await
+                        format!("ws://{endpoint}/p2p")
                     };
-                    if let Ok(Ok(ws)) = res {
+                    let res = tokio::time::timeout(dial_timeout, async {
+                        let stream = crate::transport::connect(peer_addr, opts).await?;
+                        match stream {
+                            crate::transport::TcpConnectStream::Plain(tcp) => {
+                                let ws =
+                                    crate::transport::ws::connect_with_stream(url, tcp).await?;
+                                let (r, w) = tokio::io::split(ws);
+                                Ok::<_, std::io::Error>(Connection::from_split(connection_id, r, w))
+                            }
+                            #[cfg(feature = "p2p_tls")]
+                            crate::transport::TcpConnectStream::Tls(tls) => {
+                                let ws =
+                                    crate::transport::ws::connect_with_stream(url, tls).await?;
+                                let (r, w) = tokio::io::split(ws);
+                                Ok::<_, std::io::Error>(Connection::from_split(connection_id, r, w))
+                            }
+                        }
+                    })
+                    .await;
+                    if let Ok(Ok(conn)) = res {
                         crate::network::inc_ws_outbound();
-                        let (r, w) = tokio::io::split(ws);
-                        return Some(Connection::from_split(connection_id, r, w));
+                        return Some(conn);
                     }
                 }
                 None
@@ -3998,7 +4394,7 @@ mod state {
                 peer_addr: &iroha_primitives::addr::SocketAddr,
                 opts: &crate::transport::TcpConnectOptions,
                 dial_timeout: Duration,
-            ) -> Result<TcpStream, crate::Error> {
+            ) -> Result<crate::transport::TcpConnectStream, crate::Error> {
                 match tokio::time::timeout(dial_timeout, crate::transport::connect(peer_addr, opts))
                     .await
                 {
@@ -4027,20 +4423,33 @@ mod state {
                     };
 
                     let tls = tokio::time::timeout(dial_timeout, async {
-                        let tcp = crate::transport::connect(peer_addr, opts).await?;
-                        crate::transport::tls::connect_tls(sni_host, tcp).await
+                        let stream = crate::transport::connect(peer_addr, opts).await?;
+                        match stream {
+                            crate::transport::TcpConnectStream::Plain(tcp) => {
+                                let tls = crate::transport::tls::connect_tls(sni_host, tcp).await?;
+                                let (read_half, write_half) = tokio::io::split(tls);
+                                Ok::<_, std::io::Error>(Connection::from_split(
+                                    connection_id,
+                                    read_half,
+                                    write_half,
+                                ))
+                            }
+                            crate::transport::TcpConnectStream::Tls(proxy_tls) => {
+                                let tls =
+                                    crate::transport::tls::connect_tls(sni_host, proxy_tls).await?;
+                                let (read_half, write_half) = tokio::io::split(tls);
+                                Ok::<_, std::io::Error>(Connection::from_split(
+                                    connection_id,
+                                    read_half,
+                                    write_half,
+                                ))
+                            }
+                        }
                     })
                     .await;
 
                     match tls {
-                        Ok(Ok(tls)) => {
-                            let (read_half, write_half) = tokio::io::split(tls);
-                            return Ok(Connection::from_split(
-                                connection_id,
-                                read_half,
-                                write_half,
-                            ));
-                        }
+                        Ok(Ok(conn)) => return Ok(conn),
                         Ok(Err(e)) => {
                             iroha_logger::warn!(%e, addr=%peer_addr, "TLS dial failed; falling back to TCP");
                         }
@@ -4050,8 +4459,17 @@ mod state {
                     }
                 }
 
-                let tcp = dial_tcp_plain(peer_addr, opts, dial_timeout).await?;
-                Ok(Connection::new(connection_id, tcp))
+                let stream = dial_tcp_plain(peer_addr, opts, dial_timeout).await?;
+                match stream {
+                    crate::transport::TcpConnectStream::Plain(tcp) => {
+                        Ok(Connection::new(connection_id, tcp))
+                    }
+                    #[cfg(feature = "p2p_tls")]
+                    crate::transport::TcpConnectStream::Tls(tls) => {
+                        let (read_half, write_half) = tokio::io::split(tls);
+                        Ok(Connection::from_split(connection_id, read_half, write_half))
+                    }
+                }
             }
 
             #[cfg(feature = "quic")]
@@ -4105,6 +4523,7 @@ mod state {
 
                     let res = tokio::time::timeout(remaining, async {
                         let conn = dialer.connect(target, QUIC_SERVER_NAME).await?;
+                        let remote = conn.remote_address();
                         let (send_hi, recv_hi) = conn
                             .open_bi()
                             .await
@@ -4120,11 +4539,12 @@ mod state {
                         };
                         Ok::<_, std::io::Error>(Connection::from_quic(
                             connection_id,
+                            conn,
                             send_hi,
                             recv_hi,
                             send_low,
                             recv_low,
-                            Some(conn.remote_address()),
+                            Some(remote),
                         ))
                     })
                     .await;
@@ -4173,8 +4593,15 @@ mod state {
             if prefer_ws_fallback {
                 ws_tried = true;
                 let endpoint = ws_endpoint(&peer_addr);
-                if let Some(conn) =
-                    dial_ws(&endpoint, connection_id, dial_timeout, tls_enabled).await
+                if let Some(conn) = dial_ws(
+                    &peer_addr,
+                    &endpoint,
+                    &tcp_opts,
+                    connection_id,
+                    dial_timeout,
+                    tls_enabled,
+                )
+                .await
                 {
                     return Ok(ConnectedTo {
                         our_public_address,
@@ -4277,8 +4704,15 @@ mod state {
                             || matches!(peer_addr, iroha_primitives::addr::SocketAddr::Host(_));
                         if should_try_ws {
                             let endpoint = ws_endpoint(&peer_addr);
-                            if let Some(conn) =
-                                dial_ws(&endpoint, connection_id, dial_timeout, tls_enabled).await
+                            if let Some(conn) = dial_ws(
+                                &peer_addr,
+                                &endpoint,
+                                &tcp_opts,
+                                connection_id,
+                                dial_timeout,
+                                tls_enabled,
+                            )
+                            .await
                             {
                                 return Ok(ConnectedTo {
                                     our_public_address,
@@ -5595,6 +6029,8 @@ pub struct Connection {
     pub read_low: Option<Box<dyn AsyncRead + Send + Unpin>>,
     /// Optional low-priority writer half (e.g., second QUIC stream).
     pub write_low: Option<Box<dyn AsyncWrite + Send + Unpin>>,
+    /// QUIC connection handle (only set when the underlying transport is QUIC).
+    pub quic: Option<crate::transport::QuicConnection>,
     /// Remote addr, for logging purpose.
     pub remote_addr: Option<SocketAddr>,
 }
@@ -5610,6 +6046,7 @@ impl Connection {
             write: Box::new(write_half),
             read_low: None,
             write_low: None,
+            quic: None,
             remote_addr,
         }
     }
@@ -5626,6 +6063,7 @@ impl Connection {
             write: Box::new(write),
             read_low: None,
             write_low: None,
+            quic: None,
             remote_addr: None,
         }
     }
@@ -5634,6 +6072,7 @@ impl Connection {
     #[cfg(feature = "quic")]
     pub fn from_quic(
         id: ConnectionId,
+        quic: quinn::Connection,
         send_hi: quinn::SendStream,
         recv_hi: quinn::RecvStream,
         send_low: Option<quinn::SendStream>,
@@ -5652,6 +6091,7 @@ impl Connection {
                 let boxed: Box<dyn AsyncWrite + Send + Unpin> = Box::new(s);
                 boxed
             }),
+            quic: Some(quic),
             remote_addr,
         }
     }

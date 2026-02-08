@@ -78,8 +78,9 @@ impl ProgramMetadata {
         let version_minor = bytes[5];
         let mode = bytes[6];
         let vector_length = bytes[7];
-        let max_cycles_bytes: [u8; 8] =
-            bytes[8..16].try_into().map_err(|_| VMError::InvalidMetadata)?;
+        let max_cycles_bytes: [u8; 8] = bytes[8..16]
+            .try_into()
+            .map_err(|_| VMError::InvalidMetadata)?;
         let max_cycles = u64::from_le_bytes(max_cycles_bytes);
 
         // Validate header fields according to the current implementation policy.

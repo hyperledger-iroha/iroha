@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Cursor, str::FromStr};
+use std::{collections::HashMap, str::FromStr};
 
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
@@ -8,8 +8,6 @@ use ivm::{
     mock_wsv::{AccountId as HostAccountId, MockWorldStateView, WsvHost},
     validate_tlv_bytes,
 };
-use norito::codec::Decode as NoritoDecode;
-
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
     let expected_path = format!("{}/{}", base.as_ref(), key);
     if let Some(bytes) = host.wsv.sc_get(&expected_path) {
@@ -64,8 +62,8 @@ fn pointer_map_default_roundtrip() {
     let inner = validate_tlv_bytes(outer.payload).expect("inner TLV");
     assert_eq!(inner.type_id, PointerType::AccountId);
 
-    let mut cursor = Cursor::new(inner.payload);
-    let decoded_account: AccountId = AccountId::decode(&mut cursor).expect("decode account id");
+    let decoded_account: AccountId =
+        norito::decode_from_bytes(inner.payload).expect("decode account id");
     let expected: AccountId = ACCOUNT_A.parse().expect("expected account");
     assert_eq!(decoded_account, expected);
 

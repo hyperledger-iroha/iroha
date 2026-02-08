@@ -168,14 +168,68 @@ p2p_ws_outbound_total 0
 - Message payload types implement `iroha_p2p::network::message::ClassifyTopic` to supply their topic. `iroha_core::NetworkMessage` provides the mapping for core messages.
 - A small fairness budget guarantees Low topics make progress during sustained High traffic.
 
-### Proxy Support (HTTP CONNECT)
+### Proxy Support (HTTP CONNECT / SOCKS5)
 
-- The p2p dialer can use system proxy settings for outbound connections (HTTP CONNECT tunneling). No Iroha-specific environment toggles are required or recommended for operators.
-- When a proxy is configured at the system level and the target host is not exempted, the connector tunnels via HTTP `CONNECT host:port`.
+- Knobs (`[network]`):
+  - `p2p_proxy` (string; optional): outbound proxy URL (e.g., `http://user:pass@proxy.example.com:8080` or `socks5://user:pass@proxy.example.com:1080`).
+  - `p2p_no_proxy` (array of strings): host suffixes to bypass the proxy (e.g., `.example.com`, `localhost`).
+- When `p2p_proxy` is set and the target host is not exempted, the dialer tunnels via:
+  - HTTP `CONNECT host:port` for `http://...` / `https://...`
+    - `http://...` uses plaintext TCP to the proxy.
+    - `https://...` wraps the proxy connection in TLS before issuing `CONNECT` (requires a build with `iroha_p2p/p2p_tls` enabled).
+  - SOCKS5 `CONNECT` for `socks5://...` / `socks5h://...`
 - Notes:
-  - Basic authentication is not yet supported; prefer IP-allowlisted proxies.
+  - Basic authentication is supported via `user:pass@...` in the proxy URL.
   - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`).
-  - If no system proxy is configured, connections go direct.
+  - Proxies apply only to TCP-based dials (TCP/TLS/WS). QUIC (UDP) bypasses the proxy; set `quic_enabled=false` if you must force all outbound P2P traffic through a proxy.
+  - If no proxy is configured, connections go direct.
+
+### Relay Mode (Hub/Spoke/Assist)
+
+Iroha can optionally use a relay hub to improve reachability when some peers are behind NAT/firewalls or in censored networks. This is an application-level relay (forwarding encrypted frames), not a special Internet routing mechanism.
+
+- Knobs (`[network]`):
+  - `relay_mode` (string; `disabled` | `hub` | `spoke` | `assist`)
+    - `disabled`: default; direct peer-to-peer mesh.
+    - `hub`: accept inbound peers and forward traffic between them.
+    - `spoke`: dial only the hub and rely on forwarding (useful when inbound connectivity is not possible).
+    - `assist`: keep direct connections where possible but also keep a hub connection and route via the hub when the target peer is not directly connected.
+  - `relay_hub_addresses` (array of socket addr; required for `spoke` and `assist`)
+    - Addresses of the hub(s) to dial (peers that run with `relay_mode="hub"`). If multiple are supplied, entries are tried in order and the node may fall back to later hubs if the preferred one is unreachable.
+  - `relay_ttl` (u8; default 8)
+    - Hop limit for forwarded frames (prevents relay loops).
+
+Recommended deployment pattern:
+- Run at least one hub on a stable public address (e.g., a data center node).
+- Run constrained nodes as `spoke` so they only need outbound connectivity to the hub.
+- Run validators / well-connected peers as `assist` so they can reach spokes without requiring every peer to use a relay.
+
+Example `config.toml` snippets:
+
+```toml
+[network]
+relay_mode = "hub"
+```
+
+```toml
+[network]
+relay_mode = "spoke"
+relay_hub_addresses = ["hub.example.com:1337"]
+```
+
+```toml
+[network]
+relay_mode = "assist"
+relay_hub_addresses = ["hub.example.com:1337"]
+```
+
+Multi-hub example (censorship/failover):
+
+```toml
+[network]
+relay_mode = "assist"
+relay_hub_addresses = ["hub1.example.com:1337", "hub2.example.com:1337"]
+```
 
 ### Dialing Strategy (Happy Eyeballs)
 
@@ -328,6 +382,9 @@ Notes
 - Build-time: enable `iroha_p2p/quic` to include QUIC support.
 - Runtime: set `[network].quic_enabled = true` to turn on the QUIC listener and allow outbound try‑QUIC dials. When a QUIC attempt fails, the dialer falls back to TCP automatically.
 - Current status: inbound QUIC listener is implemented and spawns peers for accepted bidirectional streams. Outbound dialing can attempt QUIC to hostnames (with TCP fallback).
+- Best-effort datagrams: when `[network].quic_datagrams_enabled = true` (default), small best-effort topics (`TxGossip`, `PeerGossip`, `TrustGossip`, `Health`) may be sent over QUIC DATAGRAM instead of streams. This avoids retransmission/head-of-line blocking for "green" traffic and is safe to drop. Reliable topics remain stream-only.
+  - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
+  - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers (both must be non-zero to enable the extension).
 
 ### TLS-over-TCP (camouflage)
 
@@ -423,3 +480,4 @@ Recommended:
 
 - TLS: default restricts to TLS 1.3 only when `[network].tls_only_v1_3 = true`.
 - QUIC: configure idle timeout via `[network].quic_max_idle_timeout_ms`.
+- QUIC DATAGRAM (best-effort): tune via `[network].quic_datagrams_enabled`, `[network].quic_datagram_max_payload_bytes`, `[network].quic_datagram_receive_buffer_bytes`, and `[network].quic_datagram_send_buffer_bytes`.
