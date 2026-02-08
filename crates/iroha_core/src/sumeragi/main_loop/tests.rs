@@ -13543,7 +13543,7 @@ async fn pacemaker_base_interval_uses_npos_block_time_on_mode_reset() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_quorum_timeout_uses_npos_timeouts() {
+async fn commit_quorum_timeout_uses_npos_commit_floor() {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
 
     let mut consensus_cfg = test_sumeragi_config();
@@ -13567,7 +13567,11 @@ async fn commit_quorum_timeout_uses_npos_timeouts() {
 
     let view = actor.state.view();
     let block_time = crate::sumeragi::resolve_npos_block_time(&view);
-    let commit_time = crate::sumeragi::resolve_npos_timeouts(&view, &actor.config.npos).commit;
+    let commit_time = actor.commit_timeout_for_mode(&view, ConsensusMode::Npos);
+    let stage_commit = crate::sumeragi::resolve_npos_timeouts(&view, &actor.config.npos).commit;
+    let canonical_commit = view.world.parameters().sumeragi().effective_commit_time();
+    assert_eq!(commit_time, canonical_commit);
+    assert!(stage_commit < canonical_commit);
     let da_enabled = view.world.parameters().sumeragi().da_enabled();
     drop(view);
 
