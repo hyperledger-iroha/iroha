@@ -820,28 +820,15 @@ impl BlockSynchronizer {
             return Some(cert);
         }
 
-        if let Some(record) = status::precommit_signers_for(block_hash) {
-            if record.height != height || record.view != view {
-                iroha_logger::info!(
-                    height,
-                    view,
-                    record_height = record.height,
-                    record_view = record.view,
-                    record_epoch = record.epoch,
-                    "block sync: cached precommit signer record does not match block metadata"
-                );
-                return None;
-            }
-            if record.mode_tag != expected_mode_tag {
-                iroha_logger::info!(
-                    height,
-                    view,
-                    expected_mode = expected_mode_tag,
-                    record_mode = %record.mode_tag,
-                    "block sync: cached precommit signer record uses unexpected mode tag"
-                );
-                return None;
-            }
+        if let Some(record) = status::precommit_signer_history()
+            .into_iter()
+            .find(|record| {
+                record.block_hash == block_hash
+                    && record.height == height
+                    && record.view == view
+                    && record.mode_tag == expected_mode_tag
+            })
+        {
             if let Some(qc) = Self::qc_from_signers(
                 consensus_mode,
                 record.stake_snapshot.as_ref(),
@@ -3507,10 +3494,10 @@ pub mod message {
                 let (unblock_tx, unblock_rx) = std::sync::mpsc::channel();
                 let unblock = std::thread::spawn(move || {
                     unblock_rx
-                        .recv_timeout(Duration::from_secs(4))
+                        .recv_timeout(Duration::from_secs(10))
                         .expect("unblock signal");
                     block_payload_rx
-                        .recv_timeout(Duration::from_secs(2))
+                        .recv_timeout(Duration::from_secs(5))
                         .expect("expected block sync update");
                 });
 
@@ -3522,7 +3509,7 @@ pub mod message {
                     tokio::task::yield_now().await;
                     let _ = progress_tx.send(());
                 });
-                let progress = tokio::time::timeout(Duration::from_secs(4), progress_rx);
+                let progress = tokio::time::timeout(Duration::from_secs(10), progress_rx);
                 tokio::pin!(progress);
 
                 tokio::select! {

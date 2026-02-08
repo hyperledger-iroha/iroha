@@ -1070,13 +1070,13 @@ impl Actor {
         let mut roster_source = "commit topology";
         if roster.is_empty() {
             let expected_epoch = self.epoch_for_height(highest.height);
-            if let Some(record) = super::status::precommit_signers_for(highest.subject_block_hash) {
-                if record.height == highest.height
-                    && record.view == highest.view
-                    && record.epoch == expected_epoch
-                    && record.mode_tag.as_str() == mode_tag
-                    && !record.validator_set.is_empty()
-                {
+            if let Some(record) = super::status::precommit_signers_for_round(
+                highest.subject_block_hash,
+                highest.height,
+                highest.view,
+                expected_epoch,
+            ) {
+                if record.mode_tag.as_str() == mode_tag && !record.validator_set.is_empty() {
                     let candidate = super::roster::canonicalize_roster_for_mode(
                         record.validator_set.clone(),
                         consensus_mode,

@@ -514,6 +514,10 @@ static QC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 static VALIDATION_REJECT_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 
 static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
 static QC_LATENCY_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
@@ -739,11 +743,15 @@ static LOCAL_REMOVED_FROM_WORLD: AtomicBool = AtomicBool::new(false);
 
 /// Record whether the local peer is present in the world state.
 pub fn set_local_removed_from_world(removed: bool) {
+    #[cfg(test)]
+    let _guard = local_removed_test_guard();
     LOCAL_REMOVED_FROM_WORLD.store(removed, Ordering::Relaxed);
 }
 
 /// Check if the local peer has been removed from the world state.
 pub fn local_peer_removed() -> bool {
+    #[cfg(test)]
+    let _guard = local_removed_test_guard();
     LOCAL_REMOVED_FROM_WORLD.load(Ordering::Relaxed)
 }
 
@@ -1501,12 +1509,16 @@ pub fn set_leader_index(idx: u64) {
 
 /// Update the current `HighestQC` tuple (height, view). Best-effort, for observability only.
 pub fn set_highest_qc(height: u64, view: u64) {
+    #[cfg(test)]
+    let _guard = qc_status_test_guard();
     HIGHEST_QC_HEIGHT.store(height, Ordering::Relaxed);
     HIGHEST_QC_VIEW.store(view, Ordering::Relaxed);
 }
 
 /// Update the subject block hash for the current `HighestQC` (best-effort).
 pub fn set_highest_qc_hash(hash: HashOf<BlockHeader>) {
+    #[cfg(test)]
+    let _guard = qc_status_test_guard();
     let h = UntypedHash::from(hash);
     let slot = HIGHEST_QC_HASH.get_or_init(|| Mutex::new(None));
     *slot.lock().unwrap() = Some(h);
@@ -1999,6 +2011,8 @@ pub fn penalty_counters() -> (u64, u64, u64, u64) {
 
 /// Update the current `LockedQC` tuple (height, view). Best-effort, monotonic.
 pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>>) {
+    #[cfg(test)]
+    let _guard = qc_status_test_guard();
     if height == 0 && view == 0 {
         LOCKED_QC_HEIGHT.store(0, Ordering::Relaxed);
         LOCKED_QC_VIEW.store(0, Ordering::Relaxed);
@@ -3577,6 +3591,22 @@ pub fn precommit_signers_for(block_hash: HashOf<BlockHeader>) -> Option<Precommi
         .find(|entry| entry.block_hash == block_hash)
 }
 
+/// Fetch the latest precommit signer record for the given block hash and round, if any.
+#[must_use]
+pub fn precommit_signers_for_round(
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+) -> Option<PrecommitSignerRecord> {
+    precommit_signer_history().into_iter().find(|entry| {
+        entry.block_hash == block_hash
+            && entry.height == height
+            && entry.view == view
+            && entry.epoch == epoch
+    })
+}
+
 fn npos_election_history_slot() -> &'static Mutex<VecDeque<ValidatorElectionOutcome>> {
     NPOS_ELECTION_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
@@ -3814,6 +3844,8 @@ fn validation_reject_snapshot() -> ValidationRejectSnapshot {
 }
 
 fn peer_key_policy_snapshot() -> PeerKeyPolicySnapshot {
+    #[cfg(test)]
+    let _guard = peer_key_policy_test_guard();
     let last_reason = PEER_KEY_POLICY_REASON
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -4561,6 +4593,8 @@ pub fn rbc_abort_snapshot() -> RbcAbortSnapshot {
 
 /// Record a peer consensus-key policy reject reason with counters and timestamp.
 pub fn record_peer_key_policy_reject(reason: PeerKeyPolicyRejectReason) {
+    #[cfg(test)]
+    let _guard = peer_key_policy_test_guard();
     PEER_KEY_POLICY_REJECT_TOTAL.fetch_add(1, Ordering::Relaxed);
     match reason {
         PeerKeyPolicyRejectReason::MissingHsm => {
@@ -4900,6 +4934,7 @@ pub(crate) fn reset_validation_reject_counters_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn reset_peer_key_policy_counters_for_tests() {
+    let _guard = peer_key_policy_test_guard();
     PEER_KEY_POLICY_REJECT_TOTAL.store(0, Ordering::Relaxed);
     PEER_KEY_POLICY_MISSING_HSM_TOTAL.store(0, Ordering::Relaxed);
     PEER_KEY_POLICY_ALGO_TOTAL.store(0, Ordering::Relaxed);
@@ -6495,6 +6530,18 @@ pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
 }
 
 #[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&PEER_KEY_POLICY_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn local_removed_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&LOCAL_REMOVED_TEST_LOCK)
+}
+
+#[cfg(test)]
 pub(crate) fn reset_rbc_store_evictions_for_tests() {
     RBC_STORE_SESSIONS.store(0, Ordering::Relaxed);
     RBC_STORE_BYTES.store(0, Ordering::Relaxed);
@@ -6858,6 +6905,7 @@ mod tests {
 
     #[test]
     fn vote_validation_drop_snapshot_tracks_entries() {
+        let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
         let peer = PeerId::new(KeyPair::random().public_key().clone());
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
@@ -6894,6 +6942,7 @@ mod tests {
 
     #[test]
     fn vote_validation_drop_snapshot_tracks_peer_entries() {
+        let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
         let peer = PeerId::new(KeyPair::random().public_key().clone());
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
@@ -7607,6 +7656,7 @@ mod tests {
 
     #[test]
     fn peer_key_policy_snapshot_tracks_last_reject() {
+        let _guard = super::peer_key_policy_test_guard();
         super::reset_peer_key_policy_counters_for_tests();
         super::record_peer_key_policy_reject(super::PeerKeyPolicyRejectReason::MissingHsm);
         super::record_peer_key_policy_reject(super::PeerKeyPolicyRejectReason::LeadTimeViolation);

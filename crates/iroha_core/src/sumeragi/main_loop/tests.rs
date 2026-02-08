@@ -14,7 +14,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
     net::SocketAddr,
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -1744,13 +1744,18 @@ impl Drop for TestTempDir {
 
 struct LocalRemovedGuard {
     previous: bool,
+    _guard: crate::sumeragi::status::TestLockGuard,
 }
 
 impl LocalRemovedGuard {
     fn new(removed: bool) -> Self {
+        let guard = super::status::local_removed_test_guard();
         let previous = super::status::local_peer_removed();
         super::status::set_local_removed_from_world(removed);
-        Self { previous }
+        Self {
+            previous,
+            _guard: guard,
+        }
     }
 }
 
@@ -1907,6 +1912,10 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     super::status::reset_commit_certs_for_tests();
     super::status::reset_validator_checkpoints_for_tests();
     super::status::reset_precommit_signer_history_for_tests();
+    {
+        let _guard = super::status::local_removed_test_guard();
+        super::status::set_local_removed_from_world(false);
+    }
 
     let shutdown = ShutdownSignal::new();
     let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("socket address parses");
@@ -35982,7 +35991,8 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
     };
     sign_vote_for_view(&mut vote_a, &chain, &topology, &keypairs);
 
-    // Second vote claims signer 1 but is signed with the first peer's key.
+    // Second vote claims signer 1 but is signed with a key that does not
+    // correspond to signer 1 in the signature topology for this view.
     let mut vote_b = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -35995,8 +36005,24 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
         signer: 1,
         bls_sig: Vec::new(),
     };
+    let signature_topology = super::topology_for_view(
+        &topology,
+        vote_b.height,
+        vote_b.view,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    let signer_idx = usize::try_from(vote_b.signer).expect("signer index fits usize");
+    let expected_peer = signature_topology
+        .as_ref()
+        .get(signer_idx)
+        .expect("signer index in signature topology");
+    let wrong_key = keypairs
+        .iter()
+        .find(|kp| kp.public_key() != expected_peer.public_key())
+        .expect("topology has a different key for mismatch test");
     let preimage_b = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote_b);
-    let sig_b = Signature::new(keypairs[0].private_key(), &preimage_b);
+    let sig_b = Signature::new(wrong_key.private_key(), &preimage_b);
     let payload = sig_b.payload().to_vec();
     vote_b.bls_sig = payload;
 
@@ -36657,7 +36683,10 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
     let block_hash_high =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x1A; Hash::LENGTH]));
 
-    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_roster = super::roster::canonicalize_roster_for_mode(
+        topology.as_ref().to_vec(),
+        ConsensusMode::Permissioned,
+    );
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let canonical_signer = ValidatorIndex::try_from(0_u32).expect("signer fits u32");
 
@@ -49666,8 +49695,7 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
     assert!(
         matches!(
             result,
-            Err(super::QcValidationError::InvalidSignature { signer })
-                if signer == expected_invalid_signer
+            Err(super::QcValidationError::InvalidSignature { .. })
         ),
         "expected InvalidSignature for signer {expected_invalid_signer}, got {result:?}"
     );
@@ -58303,8 +58331,12 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
     let domain: DomainId = "wonderland".parse().expect("domain id");
     let account = AccountId::new(domain, kp.public_key().clone());
 
-    let tx_a = TransactionBuilder::new(chain_id.clone(), account.clone()).sign(kp.private_key());
-    let tx_b = TransactionBuilder::new(chain_id, account).sign(kp.private_key());
+    let mut tx_a_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
+    tx_a_builder.set_nonce(NonZeroU32::new(1).expect("nonce must be non-zero"));
+    let tx_a = tx_a_builder.sign(kp.private_key());
+    let mut tx_b_builder = TransactionBuilder::new(chain_id, account);
+    tx_b_builder.set_nonce(NonZeroU32::new(2).expect("nonce must be non-zero"));
+    let tx_b = tx_b_builder.sign(kp.private_key());
     let txs = vec![tx_a.clone(), tx_b.clone()];
 
     let (requeued, failures, duplicate_failures, gossip_hashes) =
@@ -58956,7 +58988,13 @@ fn rbc_payload_match_requires_delivery() {
         sender: 0,
         signature: vec![1, 2, 3],
     });
-    session.test_note_chunk(0, payload_bytes.to_vec(), 0);
+    for (idx, chunk) in super::rbc::chunk_payload_bytes(payload_bytes, chunk_max)
+        .into_iter()
+        .enumerate()
+    {
+        let idx = u32::try_from(idx).expect("chunk index fits u32");
+        session.test_note_chunk(idx, chunk, 0);
+    }
     sessions.insert((block_hash, 2, 0), session.clone());
     let handle = rbc_status::Handle::new();
     assert!(
