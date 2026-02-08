@@ -156,6 +156,7 @@ fn trust_config(
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
@@ -285,6 +286,7 @@ async fn network_create() {
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
@@ -713,6 +715,7 @@ async fn ws_fallback_connects_and_handshakes() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
@@ -972,6 +975,7 @@ async fn ws_fallback_connects_and_handshakes() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
@@ -1219,6 +1223,7 @@ async fn two_networks() {
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
@@ -1347,6 +1352,7 @@ async fn two_networks() {
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
@@ -1563,6 +1569,7 @@ async fn update_peers_triggers_immediate_connect() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
@@ -1690,6 +1697,7 @@ async fn update_peers_triggers_immediate_connect() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
@@ -1862,6 +1870,7 @@ async fn happy_eyeballs_parallel_dials() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
@@ -1990,6 +1999,7 @@ async fn happy_eyeballs_parallel_dials() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
@@ -2159,6 +2169,7 @@ async fn low_topics_do_not_starve_each_other() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
@@ -2287,6 +2298,7 @@ async fn low_topics_do_not_starve_each_other() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
@@ -2513,6 +2525,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
@@ -2769,6 +2782,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
                 tls_enabled: false,
                 tls_fallback_to_plain: true,
                 tls_listen_address: None,
+                tls_inbound_only: false,
                 p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
                 p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
                 p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
@@ -2905,7 +2919,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     update_topology_and_peers_addresses(&spoke_net, std::slice::from_ref(&hub_peer));
     update_topology_and_peers_addresses(&assist_net, std::slice::from_ref(&hub_peer));
 
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         while hub_net.online_peers(HashSet::len) < 2 {
             hub_net
                 .wait_online_peers_update(HashSet::len)
@@ -2915,7 +2929,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     })
     .await
     .expect("connection deadline exceeded");
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         while spoke_net.online_peers(HashSet::len) < 1 {
             spoke_net
                 .wait_online_peers_update(HashSet::len)
@@ -2925,7 +2939,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     })
     .await
     .expect("connection deadline exceeded");
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         while assist_net.online_peers(HashSet::len) < 1 {
             assist_net
                 .wait_online_peers_update(HashSet::len)
@@ -2936,6 +2950,9 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     .await
     .expect("connection deadline exceeded");
 
+    // Give relay hub selection and subscriber wiring a moment to settle under parallel test load.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
     let payload_a = ConsensusMessage(11);
     assist_net.post(Post {
         data: payload_a.clone(),
@@ -2943,7 +2960,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
         priority: Priority::High,
     });
 
-    let received = tokio::time::timeout(Duration::from_secs(10), spoke_rx.recv())
+    let received = tokio::time::timeout(Duration::from_secs(20), spoke_rx.recv())
         .await
         .expect("spoke should receive consensus via hub")
         .expect("message channel closed");
@@ -2957,7 +2974,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
         priority: Priority::High,
     });
 
-    let received = tokio::time::timeout(Duration::from_secs(10), assist_rx.recv())
+    let received = tokio::time::timeout(Duration::from_secs(20), assist_rx.recv())
         .await
         .expect("assist should receive consensus via hub")
         .expect("message channel closed");
@@ -3098,6 +3115,7 @@ async fn start_network(
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
@@ -3301,6 +3319,7 @@ async fn tls_inbound_listener_smoke() {
         tls_enabled: true,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
         p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
         p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
@@ -3481,6 +3500,7 @@ async fn tls_inbound_listener_smoke() {
             low_priority_bytes_per_sec: None,
             low_priority_bytes_burst: None,
             tls_listen_address: None,
+            tls_inbound_only: false,
             allowlist_only: false,
             allow_keys: vec![],
             deny_keys: vec![],

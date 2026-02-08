@@ -110,6 +110,7 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,
+        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(4096).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(4096).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(1024).expect("non-zero"),
@@ -200,22 +201,20 @@ fn connect_topology(
     peer_a: &Peer,
     peer_b: &Peer,
 ) {
-    // Only dial from A to B to avoid simultaneous connection churn; chain_id is None so B will
-    // still accept the inbound link.
+    // Only dial from A to B to avoid simultaneous connection churn.
+    //
+    // In permissioned mode peers refuse inbound observers not present in the topology, so B must
+    // include A even if it does not dial out to it.
     net_a.update_topology(UpdateTopology([peer_b.id().clone()].into_iter().collect()));
     net_a.update_peers_addresses(UpdatePeers(vec![(
         peer_b.id().clone(),
         peer_b.address().clone(),
     )]));
-    net_b.update_peers_addresses(UpdatePeers(vec![(
-        peer_a.id().clone(),
-        peer_a.address().clone(),
-    )]));
+    net_b.update_topology(UpdateTopology([peer_a.id().clone()].into_iter().collect()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-#[ignore = "flaky under permissioned gate; reconnect loops drop inbound observers until topology/trust is relaxed"]
 async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
     test_logger();
     let chain_id = None;
@@ -350,7 +349,6 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "flaky under permissioned gate; reconnect loops drop inbound observers until topology/trust is relaxed"]
 async fn trust_gossip_enabled_reaches_both_peers() {
     test_logger();
     let chain_id = None;

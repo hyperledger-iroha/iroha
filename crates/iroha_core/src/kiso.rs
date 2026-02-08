@@ -661,6 +661,7 @@ mod tests {
                 tls_enabled: false,
                 tls_fallback_to_plain: true,
                 tls_listen_address: None,
+                tls_inbound_only: false,
                 prefer_ws_fallback: false,
                 p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
                 p2p_queue_cap_low: NonZeroUsize::new(512).unwrap(),

@@ -1210,11 +1210,13 @@ pub struct Network {
     ///
     /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
     pub p2p_proxy: Option<String>,
-    /// Require that outbound TCP-based dials use `p2p_proxy` (except when a target matches `p2p_no_proxy`).
+    /// Require that outbound TCP-based dials use `p2p_proxy`.
     ///
     /// Note: QUIC bypasses the proxy; set `quic_enabled=false` when requiring a proxy.
     pub p2p_proxy_required: bool,
     /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
+    ///
+    /// Note: this list must be empty when `p2p_proxy_required=true`.
     pub p2p_no_proxy: Vec<String>,
     /// Whether to verify an `https://` proxy hop.
     ///
@@ -1250,8 +1252,15 @@ pub struct Network {
     pub tls_fallback_to_plain: bool,
     /// Optional TLS listener address for inbound TLS-over-TCP connections (feature-gated).
     /// If set (and `tls_enabled` is true), a TLS listener is started on this address.
-    /// Plain TCP listener remains active on `address`.
+    /// Plain TCP listener remains active on `address` unless `tls_inbound_only=true`.
     pub tls_listen_address: Option<WithOrigin<SocketAddr>>,
+    /// Disable the plain TCP listener and accept inbound P2P connections only via TLS-over-TCP.
+    ///
+    /// Requires `tls_enabled=true` and a build with the `iroha_p2p/p2p_tls` feature.
+    ///
+    /// When enabled, the node binds a TLS listener on `tls_listen_address` when set, otherwise on
+    /// `address`.
+    pub tls_inbound_only: bool,
     /// Prefer WebSocket fallback for outbound dials when available (feature `p2p_ws`).
     /// Useful for constrained environments and tests that need deterministic WS dialing.
     pub prefer_ws_fallback: bool,

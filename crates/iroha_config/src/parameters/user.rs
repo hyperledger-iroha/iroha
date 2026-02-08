@@ -7960,7 +7960,7 @@ pub struct Network {
     ///
     /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
     pub p2p_proxy: Option<String>,
-    /// Require that outbound TCP-based dials use `p2p_proxy` (except when a target matches `p2p_no_proxy`).
+    /// Require that outbound TCP-based dials use `p2p_proxy`.
     ///
     /// This is a safety knob for constrained/censored environments where direct peer dials should
     /// be avoided to reduce IP leakage.
@@ -7969,6 +7969,8 @@ pub struct Network {
     #[config(default)]
     pub p2p_proxy_required: bool,
     /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
+    ///
+    /// Note: this list must be empty when `p2p_proxy_required=true`.
     #[config(default)]
     pub p2p_no_proxy: Vec<String>,
     /// Verify an `https://` proxy hop (default: true).
@@ -7996,8 +7998,17 @@ pub struct Network {
     pub tls_fallback_to_plain: bool,
     /// Optional P2P TLS listener address (host:port). If set and TLS is enabled,
     /// node will accept inbound TLS connections on this address.
+    /// Plain TCP listener remains active on `address` unless `tls_inbound_only=true`.
     #[config(env = "P2P_TLS_LISTEN_ADDRESS")]
     pub tls_listen_address: Option<WithOrigin<SocketAddr>>,
+    /// Disable the plain TCP listener and accept inbound P2P connections only via TLS-over-TCP.
+    ///
+    /// Requires `tls_enabled=true` and a build with the `iroha_p2p/p2p_tls` feature.
+    ///
+    /// When enabled, the node binds a TLS listener on `tls_listen_address` when set, otherwise on
+    /// `address`.
+    #[config(default)]
+    pub tls_inbound_only: bool,
     /// Optional interval to refresh DNS hostnames (when `public_address` is a hostname).
     /// Disabled if not set. Useful to catch IP changes faster.
     pub dns_refresh_interval_ms: Option<DurationMs>,
@@ -8212,6 +8223,7 @@ impl Network {
             tls_enabled,
             tls_fallback_to_plain,
             tls_listen_address,
+            tls_inbound_only,
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
@@ -8421,6 +8433,7 @@ impl Network {
                 tls_enabled,
                 tls_fallback_to_plain,
                 tls_listen_address,
+                tls_inbound_only,
                 prefer_ws_fallback,
                 p2p_queue_cap_high,
                 p2p_queue_cap_low,

@@ -1145,6 +1145,7 @@ mod tests {
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
+            tls_inbound_only: false,
             prefer_ws_fallback: false,
             p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
