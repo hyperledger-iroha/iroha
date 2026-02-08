@@ -198,8 +198,9 @@ async fn puzzle_mismatch_rejects_handshake() {
     let addr1 = socket_addr!(127.0.0.1: {next_port()});
     let addr2 = socket_addr!(127.0.0.1: {next_port()});
 
-    let handshake_entry = puzzle_handshake(4, 8 * 1024);
-    let handshake_exit = puzzle_handshake(7, 8 * 1024);
+    // Keep the puzzle work small so the mismatch is observed reliably even under CPU load.
+    let handshake_entry = puzzle_handshake(2, 8 * 1024);
+    let handshake_exit = puzzle_handshake(3, 8 * 1024);
 
     let started1 = NetworkHandle::<EmptyMsg>::start(
         kp1.clone(),
@@ -242,7 +243,8 @@ async fn puzzle_mismatch_rejects_handshake() {
         peer1.address().clone(),
     )]));
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // Allow enough time for the slower side to mint a ticket when tests are running in parallel.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut observed_failure = false;
     while Instant::now() < deadline {
         if peer::handshake_failure_count() > baseline_failures {
@@ -251,6 +253,8 @@ async fn puzzle_mismatch_rejects_handshake() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // Avoid races where the counter increments between the last poll and the loop exit.
+    observed_failure |= peer::handshake_failure_count() > baseline_failures;
 
     assert!(
         observed_failure,

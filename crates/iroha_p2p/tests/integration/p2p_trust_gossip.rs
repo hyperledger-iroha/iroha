@@ -195,6 +195,49 @@ async fn wait_for_peer(net: &NetworkHandle<TrustTestMessage>) {
     .expect("peer should connect");
 }
 
+async fn observe_peer_and_trust(
+    rx: &mut mpsc::Receiver<PeerMessage<TrustTestMessage>>,
+    expected_peer: u32,
+    expected_trust: u32,
+) -> (bool, bool) {
+    let mut saw_peer = false;
+    let mut saw_trust = false;
+
+    let peer_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < peer_deadline && !saw_peer {
+        let remaining = peer_deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(PeerMessage { payload, .. })) => match payload {
+                TrustTestMessage::Peer(v) if v == expected_peer => saw_peer = true,
+                TrustTestMessage::Trust(v) if v == expected_trust => saw_trust = true,
+                _ => {}
+            },
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    // Give the network a brief window to deliver any (unexpected) trust-gossip frames after the
+    // peer-gossip message arrives.
+    let trust_deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    while tokio::time::Instant::now() < trust_deadline {
+        let remaining = trust_deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(PeerMessage { payload, .. })) => match payload {
+                TrustTestMessage::Trust(v) if v == expected_trust => {
+                    saw_trust = true;
+                }
+                TrustTestMessage::Peer(v) if v == expected_peer => saw_peer = true,
+                _ => {}
+            },
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    (saw_peer, saw_trust)
+}
+
 fn connect_topology(
     net_a: &NetworkHandle<TrustTestMessage>,
     net_b: &NetworkHandle<TrustTestMessage>,
@@ -296,23 +339,7 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
         priority: Priority::Low,
     });
 
-    let (b_saw_peer, b_saw_trust) = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut saw_peer = false;
-        let mut saw_trust = false;
-        while let Some(PeerMessage { payload, .. }) = rx_b.recv().await {
-            match payload {
-                TrustTestMessage::Peer(2) => saw_peer = true,
-                TrustTestMessage::Trust(1) => saw_trust = true,
-                _ => {}
-            }
-            if saw_peer && saw_trust {
-                break;
-            }
-        }
-        (saw_peer, saw_trust)
-    })
-    .await
-    .unwrap_or((false, false));
+    let (b_saw_peer, b_saw_trust) = observe_peer_and_trust(&mut rx_b, 2, 1).await;
 
     assert!(b_saw_peer, "peer gossip should still be delivered");
     assert!(
@@ -320,23 +347,7 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
         "trust gossip should be dropped when the capability is disabled"
     );
 
-    let (a_saw_peer, a_saw_trust) = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut saw_peer = false;
-        let mut saw_trust = false;
-        while let Some(PeerMessage { payload, .. }) = rx_a.recv().await {
-            match payload {
-                TrustTestMessage::Peer(4) => saw_peer = true,
-                TrustTestMessage::Trust(3) => saw_trust = true,
-                _ => {}
-            }
-            if saw_peer && saw_trust {
-                break;
-            }
-        }
-        (saw_peer, saw_trust)
-    })
-    .await
-    .unwrap_or((false, false));
+    let (a_saw_peer, a_saw_trust) = observe_peer_and_trust(&mut rx_a, 4, 3).await;
 
     assert!(
         a_saw_peer,
