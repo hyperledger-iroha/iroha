@@ -2034,8 +2034,8 @@ impl IVMHost for DefaultHost {
                 // r10 = &NoritoBytes(Vec<OpenVerifyEnvelope>)
                 // Returns r10 = &NoritoBytes(Vec<u8>) with per-envelope results:
                 //   1 = verified true; 0 = verified false.
-                // Overall errors use r11 codes similar to single-verify:
-                //   1=ERR_DISABLED, 2=ERR_BACKEND, 3=ERR_CURVE, 4=ERR_K, 5=ERR_DECODE, 7=ERR_BATCH
+                // Overall errors use r11 codes only when no per-item status vector is returned:
+                //   1=ERR_DISABLED, 2=ERR_BACKEND, 5=ERR_DECODE, 7=ERR_BATCH
                 const OK: u64 = 0;
 
                 let ptr = vm.register(10);
@@ -2071,28 +2071,21 @@ impl IVMHost for DefaultHost {
 
                 // Pre-screen curves and k per envelope; build per-item status, then run verifier
                 let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
-                let mut first_error: Option<u64> = None;
                 // Optionally: enforce budget (best-effort; skip actual timing in this build)
                 for env in &envs {
                     let mut status = 0u8;
-                    if let Err(code) = self.validate_transcript_label(number, &env.transcript_label)
+                    if self
+                        .validate_transcript_label(number, &env.transcript_label)
+                        .is_err()
                     {
-                        first_error.get_or_insert(code);
-                        statuses.push(status);
-                        continue;
-                    }
-                    if env.vk_commitment.is_none() || env.public_inputs_schema_hash.is_none() {
-                        first_error.get_or_insert(ERR_VK_MISSING);
                         statuses.push(status);
                         continue;
                     }
                     let Some(proof_len) = Self::proof_len_bytes(&env.proof) else {
-                        first_error.get_or_insert(ERR_DECODE);
                         statuses.push(status);
                         continue;
                     };
                     if proof_len > self.zk_cfg.max_proof_bytes {
-                        first_error.get_or_insert(ERR_PROOF_LEN);
                         statuses.push(status);
                         continue;
                     }
@@ -2121,7 +2114,6 @@ impl IVMHost for DefaultHost {
                         _ => false,
                     };
                     if !curve_ok {
-                        first_error.get_or_insert(ERR_CURVE);
                         statuses.push(status);
                         continue;
                     }
@@ -2133,7 +2125,6 @@ impl IVMHost for DefaultHost {
                         u32::MAX
                     };
                     if k == u32::MAX || k > self.zk_cfg.max_k {
-                        first_error.get_or_insert(ERR_K);
                         statuses.push(status);
                         continue;
                     }
@@ -2141,26 +2132,19 @@ impl IVMHost for DefaultHost {
                     let bytes = match norito::to_bytes(env) {
                         Ok(b) => b,
                         Err(_) => {
-                            first_error.get_or_insert(ERR_DECODE);
                             statuses.push(status);
                             continue;
                         }
                     };
                     if bytes.len() > self.zk_cfg.max_envelope_bytes {
-                        first_error.get_or_insert(ERR_ENVELOPE_SIZE);
                         statuses.push(status);
                         continue;
                     }
                     match crate::zk_verify::verify_open_envelope(&bytes) {
                         Ok(ok) => {
                             status = if ok { 1 } else { 0 };
-                            if !ok {
-                                first_error.get_or_insert(ERR_VERIFY);
-                            }
                         }
-                        Err(_) => {
-                            first_error.get_or_insert(ERR_DECODE);
-                        }
+                        Err(_) => {}
                     }
                     if status == 0 {
                         statuses.push(0);
@@ -2192,11 +2176,7 @@ impl IVMHost for DefaultHost {
                 } else {
                     vm.set_register(12, u64::MAX);
                 }
-                if let Some(code) = first_error {
-                    vm.set_register(11, code);
-                } else {
-                    vm.set_register(11, OK);
-                }
+                vm.set_register(11, OK);
                 Ok(0)
             }
             syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),

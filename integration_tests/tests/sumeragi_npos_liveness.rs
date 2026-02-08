@@ -21,6 +21,11 @@ use tokio::time::sleep;
 use toml::Table;
 
 const MAX_HEIGHT_SKEW: u64 = 2;
+const PACEMAKER_BACKOFF_MULTIPLIER: u64 = 3;
+const PACEMAKER_RTT_FLOOR_MULTIPLIER: u64 = 2;
+const PACEMAKER_MAX_BACKOFF_MS: u64 = 5_000;
+const PACEMAKER_JITTER_FRAC_PERMILLE: u64 = 25;
+const PACEMAKER_FALLBACK_JITTER_MS: u64 = 125;
 
 #[test]
 fn npos_network_produces_blocks() -> Result<()> {
@@ -280,19 +285,19 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    3_i64,
+                    PACEMAKER_BACKOFF_MULTIPLIER as i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    2_i64,
+                    PACEMAKER_RTT_FLOOR_MULTIPLIER as i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    5_000_i64,
+                    PACEMAKER_MAX_BACKOFF_MS as i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "jitter_frac_permille"],
-                    25_i64,
+                    PACEMAKER_JITTER_FRAC_PERMILLE as i64,
                 );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -431,22 +436,23 @@ async fn fetch_pacemaker_status(
         Ok(resp) => resp,
         Err(err) => {
             tracing::warn!(?err, "pacemaker status fetch failed; using config fallback");
-            return Ok(PacemakerStatus {
-                backoff_ms: 0,
-                rtt_floor_ms: 0,
-                backoff_multiplier: 3,
-                rtt_floor_multiplier: 2,
-                max_backoff_ms: 5_000,
-                jitter_ms: 125,
-                jitter_frac_permille: 25,
-            });
+            return Ok(configured_pacemaker_status_fallback());
         }
     };
-    ensure!(
-        response.status().is_success(),
-        "pacemaker status request failed with status {}",
-        response.status()
-    );
+    let status = response.status();
+    if !status.is_success() {
+        if should_use_pacemaker_config_fallback(status) {
+            tracing::warn!(%status, "pacemaker status request rejected; using config fallback");
+            return Ok(configured_pacemaker_status_fallback());
+        }
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|err| format!("<failed to read body: {err}>"));
+        return Err(eyre!(
+            "pacemaker status request failed with status {status}: {body}"
+        ));
+    }
     let body = response.text().await.wrap_err("pacemaker status body")?;
     let value: Value = json::from_str(&body).wrap_err("parse pacemaker status JSON")?;
     let object = value
@@ -463,6 +469,27 @@ async fn fetch_pacemaker_status(
     })
 }
 
+fn configured_pacemaker_status_fallback() -> PacemakerStatus {
+    PacemakerStatus {
+        backoff_ms: 0,
+        rtt_floor_ms: 0,
+        backoff_multiplier: PACEMAKER_BACKOFF_MULTIPLIER,
+        rtt_floor_multiplier: PACEMAKER_RTT_FLOOR_MULTIPLIER,
+        max_backoff_ms: PACEMAKER_MAX_BACKOFF_MS,
+        jitter_ms: PACEMAKER_FALLBACK_JITTER_MS,
+        jitter_frac_permille: PACEMAKER_JITTER_FRAC_PERMILLE,
+    }
+}
+
+fn should_use_pacemaker_config_fallback(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::UNAUTHORIZED
+            | reqwest::StatusCode::FORBIDDEN
+            | reqwest::StatusCode::TOO_MANY_REQUESTS
+    )
+}
+
 fn pacemaker_field_u64(object: &norito::json::Map, key: &str) -> Result<u64> {
     let value = object
         .get(key)
@@ -474,19 +501,19 @@ fn pacemaker_field_u64(object: &norito::json::Map, key: &str) -> Result<u64> {
 
 fn assert_pacemaker_matches_config(status: &PacemakerStatus, phase: &str) {
     assert_eq!(
-        status.max_backoff_ms, 5_000,
+        status.max_backoff_ms, PACEMAKER_MAX_BACKOFF_MS,
         "configured max backoff must surface {phase}"
     );
     assert_eq!(
-        status.backoff_multiplier, 3,
+        status.backoff_multiplier, PACEMAKER_BACKOFF_MULTIPLIER,
         "configured backoff multiplier must surface {phase}"
     );
     assert_eq!(
-        status.rtt_floor_multiplier, 2,
+        status.rtt_floor_multiplier, PACEMAKER_RTT_FLOOR_MULTIPLIER,
         "configured RTT floor multiplier must surface {phase}"
     );
     assert_eq!(
-        status.jitter_frac_permille, 25,
+        status.jitter_frac_permille, PACEMAKER_JITTER_FRAC_PERMILLE,
         "configured jitter permille must surface {phase}"
     );
     assert!(
@@ -501,4 +528,26 @@ fn assert_pacemaker_matches_config(status: &PacemakerStatus, phase: &str) {
         status.rtt_floor_ms,
         status.max_backoff_ms
     );
+}
+
+#[test]
+fn pacemaker_fallback_status_codes_cover_auth_and_rate_limit() {
+    assert!(should_use_pacemaker_config_fallback(
+        reqwest::StatusCode::UNAUTHORIZED
+    ));
+    assert!(should_use_pacemaker_config_fallback(
+        reqwest::StatusCode::FORBIDDEN
+    ));
+    assert!(should_use_pacemaker_config_fallback(
+        reqwest::StatusCode::TOO_MANY_REQUESTS
+    ));
+    assert!(!should_use_pacemaker_config_fallback(
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    ));
+}
+
+#[test]
+fn pacemaker_config_fallback_matches_test_configuration() {
+    let fallback = configured_pacemaker_status_fallback();
+    assert_pacemaker_matches_config(&fallback, "fallback");
 }
