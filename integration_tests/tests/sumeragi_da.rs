@@ -139,21 +139,16 @@ fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
 }
 
 fn http_client_with_client_auth(client: &Client) -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder();
-    let auth = client.headers.iter().find_map(|(name, value)| {
-        name.eq_ignore_ascii_case(reqwest::header::AUTHORIZATION.as_str())
-            .then_some(value)
-    });
-    if let Some(auth) = auth {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_str(auth)
-                .wrap_err("parse authorization header value")?,
-        );
-        builder = builder.default_headers(headers);
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in &client.headers {
+        let header_name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| eyre!("invalid header name `{name}`: {err}"))?;
+        let header_value = reqwest::header::HeaderValue::from_str(value)
+            .map_err(|err| eyre!("invalid header value for `{name}`: {err}"))?;
+        headers.insert(header_name, header_value);
     }
-    builder
+    reqwest::Client::builder()
+        .default_headers(headers)
         .build()
         .wrap_err("build reqwest client for authenticated Sumeragi endpoint calls")
 }
@@ -720,12 +715,12 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
-    let payload_bytes = LARGE_PAYLOAD_BYTES;
+    let payload_bytes = RBC_RECOVERY_PAYLOAD_BYTES;
     let tx_limit =
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
-    let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let rbc_chunk_max_bytes = RBC_RECOVERY_CHUNK_BYTES;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -777,6 +772,19 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     rbc_chunk_max_bytes,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"],
+                    1i64,
+                )
+                .write(
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "rbc",
+                        "rebroadcast_sessions_per_tick",
+                    ],
+                    1i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
@@ -835,9 +843,12 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         submit_handle.await.wrap_err("submit join")??;
 
         let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
-        let persisted =
-            wait_for_persisted_rbc_session(&restart_store_dir, expected_height, Instant::now())
-                .await?;
+        let persisted = wait_for_persisted_inflight_rbc_session(
+            &restart_store_dir,
+            expected_height,
+            Instant::now(),
+        )
+        .await?;
         let block_hash_hex = hex::encode(persisted.block_hash.as_ref());
 
         restart_peer.shutdown().await;
@@ -851,6 +862,15 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         {
             return Ok(());
         }
+        let restart_start = Instant::now();
+        wait_for_recovered_flag(
+            http.clone(),
+            restart_sessions_url,
+            expected_height,
+            &block_hash_hex,
+            restart_start,
+        )
+        .await?;
         timeout(
             da_commit_wait_timeout(),
             restart_peer.once_block(expected_height),
@@ -862,16 +882,6 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
                 da_commit_wait_timeout()
             )
         })?;
-
-        let restart_start = Instant::now();
-        wait_for_recovered_flag(
-            http.clone(),
-            restart_sessions_url,
-            expected_height,
-            &block_hash_hex,
-            restart_start,
-        )
-        .await?;
 
         if let Err(err) = wait_for_rbc_delivery(
             http.clone(),
@@ -3276,6 +3286,33 @@ async fn wait_for_persisted_rbc_session(
             summary.height == expected_height
                 && summary.total_chunks > 0
                 && summary.received_chunks > 0
+                && !summary.invalid
+        }) {
+            return Ok(summary);
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_persisted_inflight_rbc_session(
+    store_dir: &Path,
+    expected_height: u64,
+    start: Instant,
+) -> Result<rbc_status::Summary> {
+    let timeout = da_rbc_persist_timeout();
+    loop {
+        if start.elapsed() > timeout {
+            return Err(eyre!(
+                "timed out waiting for persisted in-flight RBC session at height {expected_height} in {}",
+                store_dir.display()
+            ));
+        }
+        let snapshot = rbc_status::read_persisted_snapshot(store_dir);
+        if let Some(summary) = snapshot.into_iter().find(|summary| {
+            summary.height == expected_height
+                && summary.total_chunks > 0
+                && summary.received_chunks > 0
+                && !summary.delivered
                 && !summary.invalid
         }) {
             return Ok(summary);

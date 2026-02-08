@@ -307,6 +307,10 @@ exclude = [
 incremental = true
 split-debuginfo = "packed"
 
+[profile.test]
+# Avoid long dsymutil phases on macOS test binaries.
+split-debuginfo = "unpacked"
+
 [profile.dev.package."*"]
 debug = 0
 

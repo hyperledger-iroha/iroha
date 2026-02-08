@@ -1182,7 +1182,9 @@ fn allow_reentrant_build(running_under_cargo: bool) -> bool {
     if !running_under_cargo {
         return true;
     }
-    bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(false)
+    // Reentrant builds use a namespaced target dir (`.../iroha-test-network`) so they don't
+    // contend with the outer Cargo invocation's build lock. Keep an opt-out for debugging.
+    bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
 }
 
 impl Program {
@@ -7884,11 +7886,11 @@ exit 0
     }
 
     #[test]
-    fn reentrant_builds_disabled_under_cargo_by_default() {
+    fn reentrant_builds_enabled_under_cargo_by_default() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
 
-        assert!(!allow_reentrant_build(true));
+        assert!(allow_reentrant_build(true));
     }
 
     #[test]
@@ -7907,6 +7909,15 @@ exit 0
         set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
 
         assert!(allow_reentrant_build(true));
+    }
+
+    #[test]
+    fn reentrant_builds_can_be_disabled_via_env() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
+        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "false");
+
+        assert!(!allow_reentrant_build(true));
     }
 
     #[test]

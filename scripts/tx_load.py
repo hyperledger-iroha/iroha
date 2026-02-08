@@ -306,6 +306,14 @@ def main() -> int:
     if (args.peer_urls or args.peer_count) and args.metrics_url == DEFAULT_METRICS_URL:
         args.metrics_url = urllib.parse.urljoin(peer_urls[0], "metrics")
 
+    # Keep a fallback list for status polling so one stalled Torii endpoint does not
+    # collapse queue-gating or throughput accounting for the whole run.
+    status_urls = [args.status_url]
+    for torii_url in peer_urls:
+        status_url = urllib.parse.urljoin(torii_url, "status")
+        if status_url not in status_urls:
+            status_urls.append(status_url)
+
     if args.per_peer:
         count_shards = [args.count for _ in peer_urls]
         parallel_shards = [args.parallel for _ in peer_urls]
@@ -345,15 +353,37 @@ def main() -> int:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return resp.read().decode("utf-8")
 
+    def fetch_status_with_fallback() -> tuple[dict, str]:
+        last_exc: Exception | None = None
+        last_url = status_urls[0]
+        for status_url in status_urls:
+            try:
+                return fetch_json(status_url), status_url
+            except Exception as exc:  # noqa: PERF203
+                last_exc = exc
+                last_url = status_url
+        raise RuntimeError(f"failed to fetch /status from all peers; last={last_url}: {last_exc}")
+
+    status_to_metrics_url: dict[str, str] = {}
+    for status_url in status_urls:
+        try:
+            status_to_metrics_url[status_url] = urllib.parse.urljoin(
+                torii_url_from_status(status_url),
+                "metrics",
+            )
+        except Exception:
+            status_to_metrics_url[status_url] = args.metrics_url
+
     snapshots = []
     lock = threading.Lock()
     stop_event = threading.Event()
 
     try:
-        baseline = fetch_json(args.status_url)
+        baseline, baseline_source = fetch_status_with_fallback()
         baseline_status = extract_status_snapshot(baseline)
     except Exception as exc:
         baseline_status = None
+        baseline_source = None
         if args.queue_soft_limit > 0 or args.queue_hard_limit > 0:
             print(
                 f"Warning: failed to read baseline status ({args.status_url}): {exc}; "
@@ -364,20 +394,25 @@ def main() -> int:
                 f"Warning: failed to read baseline status ({args.status_url}): {exc}; "
                 "status-based throughput estimates disabled."
             )
+    else:
+        if baseline_source is not None and baseline_source != args.status_url:
+            print(
+                f"Info: primary status endpoint unavailable, using fallback {baseline_source}"
+            )
 
     status_enabled = baseline_status is not None
 
     def poller() -> None:
         while not stop_event.is_set():
             try:
-                status_raw = fetch_json(args.status_url)
+                status_raw, status_source = fetch_status_with_fallback()
                 status = extract_status_snapshot(status_raw)
             except Exception:
                 time.sleep(args.poll_interval)
                 continue
             dag_vertices = None
             try:
-                metrics_raw = fetch_text(args.metrics_url)
+                metrics_raw = fetch_text(status_to_metrics_url.get(status_source, args.metrics_url))
                 dag_vertices = parse_metric_value(metrics_raw, "pipeline_dag_vertices")
             except Exception:
                 pass
@@ -387,6 +422,7 @@ def main() -> int:
                         "ts": time.monotonic(),
                         "status": status,
                         "dag_vertices": dag_vertices,
+                        "status_source": status_source,
                     }
                 )
             time.sleep(args.poll_interval)
@@ -447,14 +483,26 @@ def main() -> int:
                 status = extract_status_snapshot(status_raw)
                 delta = status["queue_size"] - shard.baseline_queue_size
             except Exception:
-                if deadline is not None and time.monotonic() >= deadline:
-                    print(
-                        f"Shard {shard.torii_url}: failed to fetch /status within "
-                        f"{args.queue_wait_timeout}s; aborting shard."
-                    )
-                    return False
-                time.sleep(args.poll_interval)
-                continue
+                fallback_delta = None
+                try:
+                    fallback_raw, _ = fetch_status_with_fallback()
+                    fallback_status = extract_status_snapshot(fallback_raw)
+                    fallback_delta = fallback_status["queue_size"] - baseline_status["queue_size"]
+                except Exception:
+                    fallback_delta = None
+
+                if fallback_delta is not None:
+                    delta = fallback_delta
+                else:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        print(
+                            f"Shard {shard.torii_url}: failed to fetch /status within "
+                            f"{args.queue_wait_timeout}s; continuing without queue gating."
+                        )
+                        return True
+                    time.sleep(args.poll_interval)
+                    continue
+
             if args.queue_hard_limit > 0 and delta > args.queue_hard_limit:
                 print(
                     f"Shard {shard.torii_url}: queue delta {delta} exceeds hard limit "
