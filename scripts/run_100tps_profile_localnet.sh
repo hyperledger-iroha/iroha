@@ -26,6 +26,10 @@ Options:
   --pprof-seconds <SEC>      CPU profile duration seconds (default: 30)
   --artifact-base <DIR>      artifact base directory (default: ./artifacts/localnet-100tps-profile)
   --out-base <DIR>           localnet base directory (default: /tmp/iroha-localnet-100tps)
+  --base-api-port-perm <N>   permissioned base API port (default: 29080)
+  --base-p2p-port-perm <N>   permissioned base P2P port (default: 33337)
+  --base-api-port-npos <N>   NPoS base API port (default: 39080)
+  --base-p2p-port-npos <N>   NPoS base P2P port (default: 34337)
   --release                  use release binaries (default)
   --debug                    use debug binaries
   -h, --help                 show this help
@@ -52,10 +56,10 @@ ARTIFACT_BASE=""
 OUT_BASE="/tmp/iroha-localnet-100tps"
 PROFILE="release"
 
-BASE_API_PORT_PERM=29080
-BASE_P2P_PORT_PERM=33337
-BASE_API_PORT_NPOS=39080
-BASE_P2P_PORT_NPOS=34337
+BASE_API_PORT_PERM="${BASE_API_PORT_PERM:-29080}"
+BASE_P2P_PORT_PERM="${BASE_P2P_PORT_PERM:-33337}"
+BASE_API_PORT_NPOS="${BASE_API_PORT_NPOS:-39080}"
+BASE_P2P_PORT_NPOS="${BASE_P2P_PORT_NPOS:-34337}"
 SEED_PERM="profile-100tps-permissioned"
 SEED_NPOS="profile-100tps-npos"
 
@@ -115,6 +119,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-base)
       OUT_BASE="$2"
+      shift 2
+      ;;
+    --base-api-port-perm)
+      BASE_API_PORT_PERM="$2"
+      shift 2
+      ;;
+    --base-p2p-port-perm)
+      BASE_P2P_PORT_PERM="$2"
+      shift 2
+      ;;
+    --base-api-port-npos)
+      BASE_API_PORT_NPOS="$2"
+      shift 2
+      ;;
+    --base-p2p-port-npos)
+      BASE_P2P_PORT_NPOS="$2"
       shift 2
       ;;
     --release)

@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{GossipBatchEntry, Queue, RoutingDecision},
-    state::State,
+    state::{State, StateReadOnlyWithTransactions},
     tx::AcceptedTransaction,
 };
 
@@ -1003,6 +1003,24 @@ impl TransactionGossiper {
         )
     }
 
+    fn is_transaction_known_locally(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
+        if self.queue.contains_transaction_hash(tx_hash) {
+            return true;
+        }
+        self.state.view().has_transaction(tx_hash)
+    }
+
+    fn is_transaction_known_locally_cached(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
+        if GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow().contains(tx_hash)) {
+            return true;
+        }
+        if self.is_transaction_known_locally(tx_hash) {
+            GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow_mut().remember(tx_hash));
+            return true;
+        }
+        false
+    }
+
     fn handle_transaction_gossip(&self, gossip: Arc<TransactionGossip>) {
         match Arc::try_unwrap(gossip) {
             Ok(owned) => self.handle_transaction_gossip_owned(owned),
@@ -1085,6 +1103,11 @@ impl TransactionGossiper {
                 );
                 continue;
             };
+            let tx_hash = tx.hash();
+            if self.is_transaction_known_locally_cached(tx_hash) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
             if let Err(reason) = validate_route(&lane_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
@@ -1194,7 +1217,6 @@ impl TransactionGossiper {
                     let state_view = self.state.view();
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
                     let local_route = self.queue.route_for_gossip(&tx, &state_view);
-                    let tx_hash = tx.as_ref().hash();
                     if local_route != advertised_route {
                         iroha_logger::warn!(
                             %tx_hash,
@@ -1330,6 +1352,11 @@ impl TransactionGossiper {
                 );
                 continue;
             };
+            let tx_hash = tx.hash();
+            if self.is_transaction_known_locally_cached(tx_hash) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
             if let Err(reason) = validate_route(&lane_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
@@ -1440,7 +1467,6 @@ impl TransactionGossiper {
                     let state_view = self.state.view();
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
                     let local_route = self.queue.route_for_gossip(&tx, &state_view);
-                    let tx_hash = tx.as_ref().hash();
                     if local_route != advertised_route {
                         iroha_logger::warn!(
                             %tx_hash,
@@ -1660,9 +1686,11 @@ impl NoritoSerialize for TransactionGossip {
 pub struct GossipTransaction {
     signed: Arc<SignedTransaction>,
     encoded: Option<Arc<Vec<u8>>>,
+    tx_hash: HashOf<SignedTransaction>,
 }
 
 const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
+const GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct GossipTxDecodeCacheKey {
@@ -1696,6 +1724,7 @@ impl GossipTxDecodeCacheKey {
 struct GossipTxDecodeCacheEntry {
     signed: Arc<SignedTransaction>,
     encoded: Arc<Vec<u8>>,
+    tx_hash: HashOf<SignedTransaction>,
     consumed: usize,
 }
 
@@ -1728,9 +1757,41 @@ thread_local! {
         RefCell::new(GossipTxDecodeCache::new());
 }
 
+#[derive(Default)]
+struct GossipKnownTxHashCache {
+    known: HashMap<HashOf<SignedTransaction>, ()>,
+}
+
+impl GossipKnownTxHashCache {
+    fn contains(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
+        self.known.contains_key(&tx_hash)
+    }
+
+    fn remember(&mut self, tx_hash: HashOf<SignedTransaction>) {
+        if self.known.len() >= GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT {
+            // Simple bounded cache: clear when full to keep overhead predictable.
+            self.known.clear();
+        }
+        self.known.insert(tx_hash, ());
+    }
+}
+
+thread_local! {
+    static GOSSIP_KNOWN_TX_HASH_CACHE: RefCell<GossipKnownTxHashCache> =
+        RefCell::new(GossipKnownTxHashCache::default());
+}
+
 fn decode_gossip_transaction_payload(
     bytes: &[u8],
-) -> Result<(Arc<SignedTransaction>, Arc<Vec<u8>>, usize), ncore::Error> {
+) -> Result<
+    (
+        Arc<SignedTransaction>,
+        Arc<Vec<u8>>,
+        HashOf<SignedTransaction>,
+        usize,
+    ),
+    ncore::Error,
+> {
     if let Some(hit) = GOSSIP_TX_DECODE_CACHE.with(|cache| {
         let cache = cache.borrow();
         let key = GossipTxDecodeCacheKey::from_bytes(bytes);
@@ -1742,6 +1803,7 @@ fn decode_gossip_transaction_payload(
                 Some((
                     Arc::clone(&entry.signed),
                     Arc::clone(&entry.encoded),
+                    entry.tx_hash.clone(),
                     entry.consumed,
                 ))
             } else {
@@ -1754,37 +1816,49 @@ fn decode_gossip_transaction_payload(
 
     let (signed, consumed) = ncore::decode_field_canonical_slice::<SignedTransaction>(bytes)?;
     let signed = Arc::new(signed);
+    let tx_hash = signed.hash();
     let encoded = Arc::new(bytes[..consumed].to_vec());
     let entry = GossipTxDecodeCacheEntry {
         signed: signed.clone(),
         encoded: encoded.clone(),
+        tx_hash,
         consumed,
     };
     let key = GossipTxDecodeCacheKey::from_bytes(bytes);
     GOSSIP_TX_DECODE_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
-    Ok((signed, encoded, consumed))
+    Ok((signed, encoded, tx_hash.clone(), consumed))
 }
 
 impl GossipTransaction {
     /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
     pub fn new(tx: AcceptedTransaction<'static>) -> Self {
+        let signed: SignedTransaction = tx.into();
+        let tx_hash = signed.hash();
         Self {
-            signed: Arc::new(tx.into()),
+            signed: Arc::new(signed),
             encoded: None,
+            tx_hash,
         }
     }
 
     /// Wrap an already-signed transaction with cached encoded bytes.
     pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
+        let tx_hash = signed.hash();
         Self {
             signed: Arc::new(signed),
             encoded: Some(encoded),
+            tx_hash,
         }
     }
 
     /// Borrow the signed transaction payload.
     pub fn as_signed(&self) -> &SignedTransaction {
         self.signed.as_ref()
+    }
+
+    /// Return the transaction hash without rehashing.
+    pub fn hash(&self) -> HashOf<SignedTransaction> {
+        self.tx_hash.clone()
     }
 
     /// Consume the wrapper and return the signed transaction.
@@ -1801,9 +1875,11 @@ impl GossipTransaction {
 
 impl From<SignedTransaction> for GossipTransaction {
     fn from(signed: SignedTransaction) -> Self {
+        let tx_hash = signed.hash();
         Self {
             signed: Arc::new(signed),
             encoded: None,
+            tx_hash,
         }
     }
 }
@@ -1840,21 +1916,23 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (signed, encoded, _) = decode_gossip_transaction_payload(bytes)?;
+        let (signed, encoded, tx_hash, _) = decode_gossip_transaction_payload(bytes)?;
         Ok(Self {
             signed,
             encoded: Some(encoded),
+            tx_hash,
         })
     }
 }
 
 impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (signed, encoded, consumed) = decode_gossip_transaction_payload(bytes)?;
+        let (signed, encoded, tx_hash, consumed) = decode_gossip_transaction_payload(bytes)?;
         Ok((
             Self {
                 signed,
                 encoded: Some(encoded),
+                tx_hash,
             },
             consumed,
         ))
@@ -3156,6 +3234,91 @@ mod tests {
         }));
 
         assert_eq!(queue.queued_len(), 1);
+        shutdown.send();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_skips_already_known_transaction_hashes() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let shutdown = ShutdownSignal::new();
+        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        let (network, _child) = IrohaNetwork::start(
+            KeyPair::random(),
+            network_cfg,
+            None,
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let (known_signed, _) = build_transaction("known");
+        queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(known_signed.clone())),
+                state.view(),
+            )
+            .expect("seed queue with known tx");
+        assert_eq!(queue.queued_len(), 1, "queue should contain the seeded tx");
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network,
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![known_signed.into()],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+            }],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "already-known gossip should be ignored without queue churn"
+        );
+
         shutdown.send();
     }
 

@@ -2777,6 +2777,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("kura_store", kura_store),
         json_entry("epoch", epoch),
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
+        json_entry(
+            "gossip_duplicate_known_skipped_total",
+            snap.gossip_duplicate_known_skipped_total,
+        ),
+        json_entry(
+            "quorum_stall_age_escalation_total",
+            snap.quorum_stall_age_escalation_total,
+        ),
         json_entry("dedup_evictions", dedup_evictions),
         json_entry("consensus_message_handling", consensus_message_handling),
         json_entry("vote_validation_drops", vote_validation_drops),

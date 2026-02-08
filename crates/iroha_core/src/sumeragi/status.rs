@@ -353,6 +353,8 @@ static LAST_COLLECT_AGG_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
+static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static QUORUM_STALL_AGE_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_VOTE_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_VOTE_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_BLOCK_CREATED_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3375,6 +3377,10 @@ pub struct StatusSnapshot {
     pub commit_inflight: CommitInflightSnapshot,
     /// Transaction gossip telemetry snapshot.
     pub tx_gossip: TxGossipSnapshot,
+    /// Total inbound gossip entries skipped because the transaction hash was already known.
+    pub gossip_duplicate_known_skipped_total: u64,
+    /// Total times quorum-stall adaptive backoff escalated due to prolonged stall age.
+    pub quorum_stall_age_escalation_total: u64,
     /// Total QC rebuild attempts triggered locally.
     pub qc_rebuild_attempts_total: u64,
     /// Total QC rebuild successes (QC cached after rebuild).
@@ -4187,6 +4193,10 @@ pub fn snapshot() -> StatusSnapshot {
         worker_loop,
         commit_inflight,
         tx_gossip: TxGossipSnapshot::default(),
+        gossip_duplicate_known_skipped_total: GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL
+            .load(Ordering::Relaxed),
+        quorum_stall_age_escalation_total: QUORUM_STALL_AGE_ESCALATION_TOTAL
+            .load(Ordering::Relaxed),
         qc_rebuild_attempts_total: QC_REBUILD_ATTEMPTS_TOTAL.load(Ordering::Relaxed),
         qc_rebuild_successes_total: QC_REBUILD_SUCCESSES_TOTAL.load(Ordering::Relaxed),
         qc_missing_votes_accepted_total: QC_MISSING_VOTES_ACCEPTED_TOTAL.load(Ordering::Relaxed),
@@ -4286,6 +4296,16 @@ pub fn set_phase_pipeline_total_ema_ms(ms: u64) {
 /// Increment gossip fallback counter (collectors exhausted).
 pub fn inc_gossip_fallback() {
     GOSSIP_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment skipped inbound gossip counter for already-known transaction hashes.
+pub fn inc_gossip_duplicate_known_skipped() {
+    GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment adaptive-backoff escalation counter for prolonged quorum stalls.
+pub fn inc_quorum_stall_age_escalation() {
+    QUORUM_STALL_AGE_ESCALATION_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Dedup cache kinds for eviction accounting.
@@ -6667,6 +6687,8 @@ pub(crate) fn rbc_store_pressure_log_state_for_tests() -> (u8, u64) {
 #[cfg(test)]
 pub(crate) fn reset_gossip_fallback_for_tests() {
     GOSSIP_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
+    GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL.store(0, Ordering::Relaxed);
+    QUORUM_STALL_AGE_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
     BG_POST_DROP_POST_TOTAL.store(0, Ordering::Relaxed);
     BG_POST_DROP_BROADCAST_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.store(0, Ordering::Relaxed);

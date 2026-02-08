@@ -1510,6 +1510,14 @@ impl Queue {
         self.router.read().route(tx, state_view)
     }
 
+    /// Returns whether the queue currently tracks the transaction hash.
+    ///
+    /// This is used by gossip fast paths to skip expensive re-validation for
+    /// entries that are already known locally.
+    pub(crate) fn contains_transaction_hash(&self, hash: SignedTxHash) -> bool {
+        self.txs.contains_key(&hash)
+    }
+
     /// Return transactions back to the gossip backlog by their hashes.
     pub fn requeue_gossip_hashes(&self, hashes: impl IntoIterator<Item = SignedTxHash>) {
         for hash in hashes {
