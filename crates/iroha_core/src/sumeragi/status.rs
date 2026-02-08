@@ -1957,6 +1957,11 @@ pub fn set_vrf_penalties(
     no_participation: u64,
     late_reveals: u64,
 ) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
+        return;
+    };
+
     VRF_PENALTY_EPOCH.store(epoch, Ordering::Relaxed);
     VRF_NON_REVEAL_TOTAL.store(committed_no_reveal, Ordering::Relaxed);
     VRF_NO_PARTICIPATION_TOTAL.store(no_participation, Ordering::Relaxed);
@@ -1965,6 +1970,11 @@ pub fn set_vrf_penalties(
 
 /// Update the late-reveal counter outside of epoch finalization (e.g., when a late reveal is accepted mid-epoch).
 pub fn set_vrf_late_reveals_total(late_reveals: u64) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
+        return;
+    };
+
     VRF_LATE_REVEALS_TOTAL.store(late_reveals, Ordering::Relaxed);
 }
 
@@ -5203,11 +5213,15 @@ pub fn rbc_backlog_snapshot() -> RbcBacklogSnapshot {
 
 /// Replace the pending-RBC snapshot used by `/v1/sumeragi/status`.
 pub fn set_pending_rbc_snapshot(snapshot: PendingRbcSnapshot) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     *pending_rbc_slot().lock().unwrap() = snapshot;
 }
 
 /// Snapshot pending-RBC aggregation for `/v1/sumeragi/status`.
 pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let mut snapshot = pending_rbc_slot().lock().unwrap().clone();
     snapshot.drops_total = PENDING_RBC_DROPS_TOTAL.load(Ordering::Relaxed);
     snapshot.drops_cap_total = PENDING_RBC_DROPS_CAP_TOTAL.load(Ordering::Relaxed);
@@ -5240,6 +5254,8 @@ pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
 
 /// Record pending-RBC stash counts by message kind and reason.
 pub fn inc_pending_rbc_stash(kind: PendingRbcStashKind, reason: Option<PendingRbcStashReason>) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     match kind {
         PendingRbcStashKind::Chunk => {
             PENDING_RBC_STASH_CHUNK_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -5294,6 +5310,8 @@ pub fn inc_pending_rbc_stash(kind: PendingRbcStashKind, reason: Option<PendingRb
 
 /// Record dropped pending RBC frames (cap or TTL enforcement).
 pub fn inc_rbc_pending_drop(reason: &str, frames: u64, bytes: u64) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     let frames = frames.max(1);
     match reason {
         "cap" | "session_cap" => {
@@ -5312,6 +5330,8 @@ pub fn inc_rbc_pending_drop(reason: &str, frames: u64, bytes: u64) {
 
 /// Record pending RBC session evictions (TTL expiry or stash-cap eviction).
 pub fn inc_pending_rbc_evicted(count: u64) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     PENDING_RBC_EVICTED_TOTAL.fetch_add(count, Ordering::Relaxed);
 }
 
@@ -6350,6 +6370,7 @@ pub(crate) fn reset_rbc_backlog_stats_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn reset_pending_rbc_for_tests() {
+    let _guard = rbc_status_test_guard();
     PENDING_RBC_DROPS_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_DROPS_CAP_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_DROPS_CAP_BYTES_TOTAL.store(0, Ordering::Relaxed);
@@ -8162,6 +8183,7 @@ mod tests {
 
     #[test]
     fn set_vrf_penalties_updates_snapshot() {
+        let _guard = super::qc_status_test_guard();
         super::set_vrf_penalties(5, 2, 3, 1);
         let snap = super::snapshot();
         assert_eq!(snap.vrf_penalty_epoch, 5);
@@ -8173,6 +8195,7 @@ mod tests {
 
     #[test]
     fn set_vrf_late_reveals_total_updates_snapshot() {
+        let _guard = super::qc_status_test_guard();
         super::set_vrf_late_reveals_total(4);
         assert_eq!(super::snapshot().vrf_late_reveals_total, 4);
         super::set_vrf_late_reveals_total(0);

@@ -14397,6 +14397,7 @@ async fn exec_witness_targets_collectors_even_when_redundant_r_below_quorum() {
 async fn rebroadcast_block_votes_targets_snapshot_roster() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
     let block = sample_block(1, 0, None);
     let block_hash = block.hash();
     let height = 1;
@@ -15774,6 +15775,7 @@ async fn handle_vote_defers_until_roster_available() {
 async fn deferred_votes_replay_after_commit_roster_history_arrives() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -18319,6 +18321,7 @@ async fn handle_rbc_ready_refreshes_roster_when_unverified() {
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_stash_roster_missing_updates_pending_counters() {
     let mut harness = test_actor_harness(4).await;
+    let _rbc_guard = super::status::rbc_status_test_guard();
     super::status::reset_pending_rbc_for_tests();
 
     let actor = &mut harness.actor;
@@ -20515,6 +20518,11 @@ async fn rebroadcast_stalled_rbc_payloads_respects_session_budget() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc.rebroadcast_sessions_per_tick = 1;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.actor.relay_backpressure.reset_to_current();
+    harness.actor.queue_drop_backpressure.reset_to_current();
+    harness.actor.queue_block_backpressure.reset_to_current();
     let local_peer_id = harness.actor.common_config.peer.id().clone();
     let mut roster = vec![local_peer_id.clone()];
     for peer in harness.actor.effective_commit_topology() {
@@ -20785,6 +20793,8 @@ async fn handle_rbc_deliver_uses_activation_height_mode_tag() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn recover_block_from_rbc_session_requests_missing_block_created() {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -20834,6 +20844,8 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn recover_block_from_rbc_session_requests_missing_block_without_payload() {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -20891,6 +20903,7 @@ async fn recover_block_from_rbc_session_requests_missing_block_without_payload()
 #[tokio::test(flavor = "current_thread")]
 async fn recover_block_from_rbc_session_defers_view_change_on_queue_backlog() {
     let mut harness = test_actor_harness(4).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
     let actor = &mut harness.actor;
     super::status::reset_worker_loop_snapshot_for_tests();
 
@@ -55956,7 +55969,12 @@ async fn reschedule_stale_pending_blocks_skips_when_commit_qc_cached() {
 #[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_defers_reschedule_until_availability_timeout() {
     let mut harness = test_actor_harness(4).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let actor = &mut harness.actor;
+    actor.relay_backpressure.reset_to_current();
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
     let parent = view.latest_block_hash();
