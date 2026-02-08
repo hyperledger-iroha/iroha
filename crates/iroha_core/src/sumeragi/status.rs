@@ -520,6 +520,8 @@ static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static WORKER_QUEUE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 
 static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
 static QC_LATENCY_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
@@ -6454,7 +6456,7 @@ impl Drop for TestLockGuard {
 #[cfg(test)]
 fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
     let owner = TestLockOwner::current();
-    let lock = lock.get_or_init(TestLock::default);
+    let lock = canonical_test_lock(lock);
     let mut state = lock
         .state
         .lock()
@@ -6484,7 +6486,7 @@ fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
 #[cfg(test)]
 fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLockGuard> {
     let owner = TestLockOwner::current();
-    let lock = lock.get_or_init(TestLock::default);
+    let lock = canonical_test_lock(lock);
     let mut state = lock
         .state
         .lock()
@@ -6506,7 +6508,7 @@ fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLoc
 #[cfg(test)]
 fn test_lock_depth(lock: &'static OnceLock<TestLock>) -> usize {
     let owner = TestLockOwner::current();
-    let lock = lock.get_or_init(TestLock::default);
+    let lock = canonical_test_lock(lock);
     let state = lock
         .state
         .lock()
@@ -6516,6 +6518,13 @@ fn test_lock_depth(lock: &'static OnceLock<TestLock>) -> usize {
     } else {
         0
     }
+}
+
+#[cfg(test)]
+fn canonical_test_lock(_lock: &'static OnceLock<TestLock>) -> &'static TestLock {
+    // All status test guards share one global re-entrant lock to prevent
+    // deadlocks from lock-order inversions across parallel tests.
+    STATUS_TEST_GLOBAL_LOCK.get_or_init(TestLock::default)
 }
 
 #[cfg(test)]
