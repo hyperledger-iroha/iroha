@@ -487,7 +487,7 @@ static VIEW_CHANGE_PROOF_REJECTED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_SUGGEST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_INSTALL_TOTAL: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static VIEW_CHANGE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static VIEW_CHANGE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static VIEW_CHANGE_CAUSE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
@@ -2039,31 +2039,55 @@ pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>
 
 /// Update the latest accepted view-change index.
 pub fn set_view_change_index(view: u64) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK) else {
+        return;
+    };
     VIEW_CHANGE_INDEX.store(view, Ordering::Relaxed);
 }
 
 /// Record that a view-change proof advanced the chain (accepted).
 pub fn inc_view_change_proof_accepted() {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK) else {
+        return;
+    };
     VIEW_CHANGE_PROOF_ACCEPTED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record that a view-change proof was structurally valid but stale.
 pub fn inc_view_change_proof_stale() {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK) else {
+        return;
+    };
     VIEW_CHANGE_PROOF_STALE_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record that a view-change proof was rejected (invalid payload/signature).
 pub fn inc_view_change_proof_rejected() {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK) else {
+        return;
+    };
     VIEW_CHANGE_PROOF_REJECTED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record that the local node suggested a view change.
 pub fn inc_view_change_suggest() {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK) else {
+        return;
+    };
     VIEW_CHANGE_SUGGEST_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record that a view change was installed (proof advanced).
 pub fn inc_view_change_install() {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK) else {
+        return;
+    };
     VIEW_CHANGE_INSTALL_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -6332,6 +6356,9 @@ pub(crate) fn reset_collectors_targeting_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn reset_view_change_proof_counters_for_tests() {
+    let Some(_guard) = try_reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK) else {
+        return;
+    };
     VIEW_CHANGE_PROOF_ACCEPTED_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_PROOF_STALE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_PROOF_REJECTED_TOTAL.store(0, Ordering::Relaxed);
@@ -6425,6 +6452,28 @@ fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
 }
 
 #[cfg(test)]
+fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLockGuard> {
+    let owner = TestLockOwner::current();
+    let lock = lock.get_or_init(TestLock::default);
+    let mut state = lock
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match state.owner {
+        None => {
+            state.owner = Some(owner);
+            state.depth = 1;
+            Some(TestLockGuard { lock, owner })
+        }
+        Some(current) if current == owner => {
+            state.depth = state.depth.saturating_add(1);
+            Some(TestLockGuard { lock, owner })
+        }
+        Some(_) => None,
+    }
+}
+
+#[cfg(test)]
 fn test_lock_depth(lock: &'static OnceLock<TestLock>) -> usize {
     let owner = TestLockOwner::current();
     let lock = lock.get_or_init(TestLock::default);
@@ -6440,11 +6489,9 @@ fn test_lock_depth(lock: &'static OnceLock<TestLock>) -> usize {
 }
 
 #[cfg(test)]
-pub(crate) fn view_change_proof_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    VIEW_CHANGE_TEST_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("view change test lock poisoned")
+#[allow(private_interfaces)]
+pub(crate) fn view_change_proof_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&VIEW_CHANGE_TEST_LOCK)
 }
 
 #[cfg(test)]
