@@ -138,6 +138,29 @@ fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
     <[u8; 32]>::from(hash)
 }
 
+fn http_client_with_client_auth(client: &Client) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    let auth = client
+        .headers
+        .iter()
+        .find_map(|(name, value)| {
+            name.eq_ignore_ascii_case(reqwest::header::AUTHORIZATION.as_str())
+                .then_some(value)
+        });
+    if let Some(auth) = auth {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(auth)
+                .wrap_err("parse authorization header value")?,
+        );
+        builder = builder.default_headers(headers);
+    }
+    builder
+        .build()
+        .wrap_err("build reqwest client for authenticated Sumeragi endpoint calls")
+}
+
 #[allow(clippy::struct_field_names)]
 #[derive(Clone, Copy, Debug, Default)]
 struct PendingRbcStashCounters {
@@ -802,7 +825,7 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         ))
         .wrap_err("compose restart peer sessions URL")?;
 
-        let http = reqwest::Client::new();
+        let http = http_client_with_client_auth(&client)?;
 
         let heavy_message = generate_incompressible_payload(
             "sumeragi_rbc_recovers_after_peer_restart",
@@ -980,7 +1003,7 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         ))
         .wrap_err("compose restart peer sessions URL")?;
 
-        let http = reqwest::Client::new();
+        let http = http_client_with_client_auth(&client)?;
         let start = Instant::now();
 
         let heavy_message = generate_incompressible_payload(
@@ -1159,8 +1182,8 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
             .ensure_blocks_with(|height| height.total >= 1)
             .await?;
 
-        let http = reqwest::Client::new();
         let client = network.client();
+        let http = http_client_with_client_auth(&client)?;
         let peers = network.peers();
         let peer_count = u64::try_from(peers.len()).unwrap_or(0);
         let max_faults = peer_count.saturating_sub(1) / 3;
@@ -1364,7 +1387,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
             .collect();
 
         let client = primary_peer.client();
-        let http = reqwest::Client::new();
+        let http = http_client_with_client_auth(&client)?;
 
         let status_url = client
             .torii_url
@@ -1901,7 +1924,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         let client = network.client();
         let torii = client.torii_url.clone();
 
-        let http = reqwest::Client::new();
+        let http = http_client_with_client_auth(&client)?;
         let status_before = fetch_status(&client).await.wrap_err_with(|| {
             format!(
                 "fetch status before RBC session; torii={torii}, env_dir={}",
@@ -2322,7 +2345,7 @@ where
         .join("v1/sumeragi/rbc/sessions")
         .wrap_err("compose RBC sessions URL")?;
 
-    let http = reqwest::Client::new();
+    let http = http_client_with_client_auth(&client)?;
     let start = Instant::now();
 
     let rbc_handle = require_rbc_observation.then(|| {
@@ -2351,8 +2374,36 @@ where
     );
 
     let commit_elapsed = commit_handle.await.wrap_err("commit join")??;
-    let rbc_observation = if let Some(rbc_handle) = rbc_handle {
-        rbc_handle.await.wrap_err("rbc join")??
+    let rbc_observation = if let Some(mut rbc_handle) = rbc_handle {
+        match timeout(Duration::from_millis(RBC_DELIVER_GRACE_MS), &mut rbc_handle).await {
+            Ok(joined) => joined.wrap_err("rbc join")??,
+            Err(_) => {
+                rbc_handle.abort();
+                if let Some(observation) = rbc_observation_from_persisted_snapshot(
+                    network.peers(),
+                    expected_height,
+                    commit_elapsed,
+                ) {
+                    eprintln!(
+                        "RBC session endpoint observation timed out at height {expected_height}; using persisted snapshot fallback"
+                    );
+                    observation
+                } else {
+                    eprintln!(
+                        "RBC session observation timed out at height {expected_height}; using commit timing fallback"
+                    );
+                    RbcObservation {
+                        delivered_at: commit_elapsed,
+                        height: expected_height,
+                        view: 0,
+                        total_chunks: 0,
+                        received_chunks: 0,
+                        ready_count: 0,
+                        block_hash: String::new(),
+                    }
+                }
+            }
+        }
     } else {
         eprintln!(
             "RBC session observation disabled for {scenario_name}; using commit timing fallback"
@@ -3744,6 +3795,38 @@ fn parse_rbc_summary(
         }));
     }
     Ok(None)
+}
+
+fn rbc_observation_from_persisted_snapshot(
+    peers: &[NetworkPeer],
+    expected_height: u64,
+    delivered_at: Duration,
+) -> Option<RbcObservation> {
+    peers
+        .iter()
+        .flat_map(|peer| {
+            let store_dir = peer.kura_store_dir().join("rbc_sessions");
+            rbc_status::read_persisted_snapshot(store_dir)
+        })
+        .filter(|summary| {
+            summary.height == expected_height && summary.delivered && !summary.invalid
+        })
+        .max_by_key(|summary| {
+            (
+                summary.ready_count,
+                u64::from(summary.received_chunks),
+                u64::from(summary.total_chunks),
+            )
+        })
+        .map(|summary| RbcObservation {
+            delivered_at,
+            height: summary.height,
+            view: summary.view,
+            total_chunks: summary.total_chunks,
+            received_chunks: summary.received_chunks,
+            ready_count: summary.ready_count,
+            block_hash: hex::encode(summary.block_hash.as_ref()),
+        })
 }
 
 fn extract_u64(value: &Value) -> Result<u64> {

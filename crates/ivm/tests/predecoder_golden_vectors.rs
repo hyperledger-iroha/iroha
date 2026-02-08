@@ -2,7 +2,7 @@
 //! ensure the cached decode stream preserves instruction words and lengths
 //! across metadata variations.
 
-use ivm::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache};
+use ivm::{ProgramMetadata, VMError, encoding, instruction, ivm_cache::IvmCache};
 
 fn push_word(buf: &mut Vec<u8>, word: u32) {
     buf.extend_from_slice(&word.to_le_bytes());
@@ -80,11 +80,6 @@ fn decode_artifact_invariant_across_metadata_fields() {
 
     let golden = decode(&base);
 
-    for vmin in [0u8, 1, 7, 42] {
-        let mut m = base.clone();
-        m.version_minor = vmin;
-        assert_eq!(&*golden, &*decode(&m), "minor {vmin}");
-    }
     for mode in 0u8..=0x07 {
         let mut m = base.clone();
         m.mode = mode;
@@ -106,4 +101,26 @@ fn decode_artifact_invariant_across_metadata_fields() {
     let mut m = base.clone();
     m.abi_version = 1;
     assert_eq!(&*golden, &*decode(&m), "abi 1");
+}
+
+#[test]
+fn decode_artifact_rejects_nonzero_minor_version() {
+    let code = build_wide_code();
+    let base = ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 0,
+        abi_version: 1,
+    };
+
+    for vmin in [1u8, 7, 42] {
+        let mut m = base.clone();
+        m.version_minor = vmin;
+        let mut artifact = m.encode();
+        artifact.extend_from_slice(&code);
+        let err = IvmCache::decode_artifact(&artifact).expect_err("non-zero minor should reject");
+        assert_eq!(err, VMError::InvalidMetadata, "minor {vmin}");
+    }
 }

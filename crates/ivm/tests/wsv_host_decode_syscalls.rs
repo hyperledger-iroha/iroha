@@ -58,7 +58,7 @@ fn wsv_host_name_decode_roundtrip() {
 }
 
 #[test]
-fn wsv_host_json_decode_rejects_blob() {
+fn wsv_host_json_decode_accepts_blob() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(wsv_host());
 
@@ -70,38 +70,47 @@ fn wsv_host_json_decode_rejects_blob() {
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_DECODE as u8]);
     vm.set_register(10, p_blob);
     vm.load_program(&prog).expect("load program");
-    let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    vm.run().expect("json decode");
+
+    let out_ptr = vm.register(10);
+    let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+    assert_eq!(tlv.type_id, PointerType::Json);
+    let parsed: Json = norito::decode_from_bytes(tlv.payload).expect("decode json");
+    assert_eq!(parsed.get(), r#"{"a":1,"b":[2,3]}"#);
 }
 
 #[test]
 fn wsv_host_schema_decode_roundtrip() {
-    #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-    struct Order {
-        qty: i64,
-        side: String,
-    }
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(wsv_host());
 
     let schema = b"Order";
-    let order = Order {
-        qty: 10,
-        side: "buy".to_string(),
-    };
-    let bytes = norito::to_bytes(&order).expect("encode order");
+    let json = br#"{"qty":10,"side":"buy"}"#;
 
     let p_schema = vm
         .alloc_input_tlv(&make_tlv(PointerType::Name, schema))
         .expect("alloc schema");
-    let p_bytes = vm
-        .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &bytes))
-        .expect("alloc order bytes");
+    let p_json = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Json, json))
+        .expect("alloc order json");
+
+    let enc_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_ENCODE as u8]);
+    vm.set_register(10, p_schema);
+    vm.set_register(11, p_json);
+    vm.load_program(&enc_prog).expect("load program");
+    vm.run().expect("schema encode");
+
+    let p_bytes = vm.register(10);
+    let encoded = vm.memory.validate_tlv(p_bytes).expect("encoded tlv");
+    assert_eq!(encoded.type_id, PointerType::NoritoBytes);
+
+    let p_bytes_in = vm
+        .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, encoded.payload))
+        .expect("alloc encoded order bytes");
 
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE as u8]);
     vm.set_register(10, p_schema);
-    vm.set_register(11, p_bytes);
+    vm.set_register(11, p_bytes_in);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("schema decode");
 

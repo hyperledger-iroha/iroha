@@ -87,7 +87,7 @@ fn envelope_roles_permissions_triggers() {
                         json_value("register_domain"),
                         json_object([
                             ("type", json_value("read_assets")),
-                            ("target", json_value(&alice.to_string())),
+                            ("target", json_value(&alice)),
                         ]),
                     ]),
                 ),
@@ -101,7 +101,7 @@ fn envelope_roles_permissions_triggers() {
         (
             "payload",
             json_object([
-                ("account_id", json_value(&alice.to_string())),
+                ("account_id", json_value(&alice)),
                 ("role", json_value("issuer")),
             ]),
         ),
@@ -126,7 +126,7 @@ fn envelope_roles_permissions_triggers() {
         (
             "payload",
             json_object([
-                ("account_id", json_value(&alice.to_string())),
+                ("account_id", json_value(&alice)),
                 ("permission", json_value("mint_asset:rose#domain")),
             ]),
         ),
@@ -144,7 +144,7 @@ fn envelope_roles_permissions_triggers() {
         (
             "payload",
             json_object([
-                ("account_id", json_value(&alice.to_string())),
+                ("account_id", json_value(&alice)),
                 (
                     "permission",
                     json_object([
@@ -204,7 +204,7 @@ fn envelope_roles_permissions_triggers() {
         (
             "payload",
             json_object([
-                ("account_id", json_value(&alice.to_string())),
+                ("account_id", json_value(&alice)),
                 ("role", json_value("issuer")),
             ]),
         ),
