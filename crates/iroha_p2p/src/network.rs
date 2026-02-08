@@ -1981,7 +1981,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             // branch without exposing a plaintext listener on the configured P2P port.
             let dummy: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid bind addr");
             let listener = TcpListener::bind(dummy).await?;
-            iroha_logger::info!("Network started without plain TCP listener (tls_inbound_only=true)");
+            iroha_logger::info!(
+                "Network started without plain TCP listener (tls_inbound_only=true)"
+            );
             listener
         } else {
             let addrs: Vec<std::net::SocketAddr> = match listen_addr.value().to_socket_addrs() {
