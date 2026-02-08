@@ -91,7 +91,10 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         trust_gossip,
         prefer_ws_fallback: false,
         p2p_proxy: None,
+        p2p_proxy_required: false,
         p2p_no_proxy: vec![],
+        p2p_proxy_tls_verify: true,
+        p2p_proxy_tls_pinned_cert_der_base64: None,
         happy_eyeballs_stagger: Duration::from_millis(50),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -105,6 +108,7 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         quic_datagram_send_buffer_bytes:
             iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
+        tls_fallback_to_plain: true,
         tls_listen_address: None,
         p2p_queue_cap_high: NonZeroUsize::new(4096).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(4096).expect("non-zero"),

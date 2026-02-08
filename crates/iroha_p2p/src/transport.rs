@@ -297,6 +297,93 @@ pub mod tls {
         let tls = connector.connect(server_name, tcp).await?;
         Ok(tls)
     }
+
+    #[derive(Clone, Debug)]
+    struct PinnedCertificateVerification {
+        expected_der: Arc<[u8]>,
+    }
+
+    impl ServerCertVerifier for PinnedCertificateVerification {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: UnixTime,
+        ) -> Result<ServerCertVerified, RustlsError> {
+            if end_entity.as_ref() == self.expected_der.as_ref() {
+                Ok(ServerCertVerified::assertion())
+            } else {
+                Err(RustlsError::General(
+                    "pinned proxy certificate mismatch".to_string(),
+                ))
+            }
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, RustlsError> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, RustlsError> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            vec![
+                SignatureScheme::ECDSA_NISTP256_SHA256,
+                SignatureScheme::ECDSA_NISTP384_SHA384,
+                SignatureScheme::ED25519,
+                SignatureScheme::RSA_PSS_SHA256,
+                SignatureScheme::RSA_PKCS1_SHA256,
+            ]
+        }
+    }
+
+    /// Upgrade an already-connected TCP stream to TLS with end-entity certificate pinning.
+    ///
+    /// This is intended for `https://` proxy connections where operator-supplied pins can prevent
+    /// MITM capture of proxy credentials.
+    pub async fn connect_tls_pinned<S>(
+        host: &str,
+        tcp: S,
+        expected_cert_der: Arc<[u8]>,
+    ) -> tokio::io::Result<TlsStream<S>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedCertificateVerification {
+            expected_der: expected_cert_der,
+        });
+        let config = ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+        let connector = TlsConnector::from(Arc::new(config));
+
+        let server_name = if let Ok(name) = ServerName::try_from(host) {
+            name.to_owned()
+        } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            ServerName::IpAddress(ip.into())
+        } else {
+            return Err(tokio::io::Error::new(
+                tokio::io::ErrorKind::InvalidInput,
+                "invalid SNI",
+            ));
+        };
+        let tls = connector.connect(server_name, tcp).await?;
+        Ok(tls)
+    }
 }
 
 #[cfg(feature = "p2p_ws")]
@@ -755,6 +842,14 @@ fn normalize_no_proxy(mut list: Vec<String>) -> Vec<String> {
 pub struct TcpConnectOptions {
     /// Proxy policy for this dial.
     pub proxy: ProxyPolicy,
+    /// Whether to verify TLS certificates when connecting to an `https://` proxy.
+    ///
+    /// This does not affect P2P TLS-over-TCP (peer identity is authenticated at the application layer).
+    pub proxy_tls_verify: bool,
+    /// Optional DER-encoded (base64 decoded) end-entity certificate to pin when connecting to an `https://` proxy.
+    ///
+    /// Used only when `proxy_tls_verify=true` and the proxy URL uses the `https://` scheme.
+    pub proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
     /// Whether to enable TCP_NODELAY for reduced latency.
     pub tcp_nodelay: bool,
     /// Optional keepalive idle time. When `None`, keepalive is disabled.
@@ -765,6 +860,8 @@ impl Default for TcpConnectOptions {
     fn default() -> Self {
         Self {
             proxy: ProxyPolicy::disabled(),
+            proxy_tls_verify: true,
+            proxy_tls_pinned_cert_der: None,
             tcp_nodelay: true,
             tcp_keepalive: None,
         }
@@ -1111,7 +1208,18 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
             ProxyKind::HttpConnectTls => {
                 #[cfg(feature = "p2p_tls")]
                 {
-                    let mut tls = crate::transport::tls::connect_tls(&proxy.host, stream).await?;
+                    let mut tls = if opts.proxy_tls_verify {
+                        let pinned = opts.proxy_tls_pinned_cert_der.clone().ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "https proxy verification enabled but no pin configured; set network.p2p_proxy_tls_pinned_cert_der_base64 or disable p2p_proxy_tls_verify",
+                            )
+                        })?;
+                        crate::transport::tls::connect_tls_pinned(&proxy.host, stream, pinned)
+                            .await?
+                    } else {
+                        crate::transport::tls::connect_tls(&proxy.host, stream).await?
+                    };
                     http_connect_tunnel(&mut tls, proxy, addr, &proxy_endpoint).await?;
                     return Ok(TcpConnectStream::Tls(tls));
                 }
@@ -1441,5 +1549,72 @@ mod tests {
         let (client_res, server_res) = tokio::join!(client_fut, server_fut);
         client_res.expect("client should succeed");
         server_res.expect("server should complete");
+    }
+
+    #[cfg(feature = "p2p_tls")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn https_proxy_tls_pinning_accepts_only_matching_cert() {
+        use std::sync::Arc;
+
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio_rustls::TlsAcceptor;
+
+        // A self-signed TLS server stands in for an `https://` proxy.
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(["proxy.local".to_owned()]).expect("generate cert");
+        let cert_der = cert.der().clone();
+        let cert_chain = vec![rustls::pki_types::CertificateDer::from(cert_der).into_owned()];
+        let priv_key = rustls::pki_types::PrivateKeyDer::from(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
+        )
+        .clone_key();
+        let server_cfg = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, priv_key)
+            .expect("server config");
+        let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("bind: {e:?}"),
+        };
+        let addr = listener.local_addr().expect("local addr");
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (tcp, _) = listener.accept().await.expect("accept");
+                let _ = acceptor.accept(tcp).await;
+            }
+        });
+
+        // Insecure P2P TLS accepts the self-signed certificate.
+        let tcp = TcpStream::connect(addr).await.expect("connect");
+        let insecure = crate::transport::tls::connect_tls("proxy.local", tcp).await;
+        assert!(
+            insecure.is_ok(),
+            "insecure TLS should accept self-signed cert"
+        );
+
+        // Pinning should accept the exact end-entity certificate.
+        let tcp = TcpStream::connect(addr).await.expect("connect");
+        let pinned = Arc::<[u8]>::from(cert.der().as_ref().to_vec());
+        let verified = crate::transport::tls::connect_tls_pinned("proxy.local", tcp, pinned).await;
+        assert!(
+            verified.is_ok(),
+            "pinned TLS should accept the pinned certificate"
+        );
+
+        // A mismatched pin should be rejected.
+        let tcp = TcpStream::connect(addr).await.expect("connect");
+        let mut wrong = cert.der().as_ref().to_vec();
+        wrong[0] = wrong[0].wrapping_add(1);
+        let wrong = Arc::<[u8]>::from(wrong);
+        let verified = crate::transport::tls::connect_tls_pinned("proxy.local", tcp, wrong).await;
+        assert!(
+            verified.is_err(),
+            "pinned TLS should reject mismatched certificates"
+        );
+
+        let _ = server.await;
     }
 }

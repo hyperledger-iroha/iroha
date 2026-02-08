@@ -1210,8 +1210,23 @@ pub struct Network {
     ///
     /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
     pub p2p_proxy: Option<String>,
+    /// Require that outbound TCP-based dials use `p2p_proxy` (except when a target matches `p2p_no_proxy`).
+    ///
+    /// Note: QUIC bypasses the proxy; set `quic_enabled=false` when requiring a proxy.
+    pub p2p_proxy_required: bool,
     /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
     pub p2p_no_proxy: Vec<String>,
+    /// Whether to verify an `https://` proxy hop.
+    ///
+    /// When enabled, the proxy connection uses certificate pinning via
+    /// `p2p_proxy_tls_pinned_cert_der_base64`. If no pin is configured, dialing an `https://`
+    /// proxy fails. When disabled, the proxy hop is encrypted but susceptible to MITM (which can
+    /// leak proxy credentials).
+    pub p2p_proxy_tls_verify: bool,
+    /// Optional pinned end-entity certificate for `https://` proxies (DER, base64).
+    ///
+    /// When `p2p_proxy_tls_verify` is enabled, the dialer pins the proxy certificate to this value.
+    pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
     /// Enable QUIC transport (feature-gated).
     pub quic_enabled: bool,
     /// Enable QUIC DATAGRAM support for best-effort topics (gossip/health).
@@ -1227,9 +1242,12 @@ pub struct Network {
     /// Enable TLS-over-TCP transport for outbound dials (feature-gated).
     /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer will
     /// attempt to establish a TLS 1.3 session to the peer's host:port and run the
-    /// existing signed application handshake over it. Falls back to plain TCP on
-    /// failure.
+    /// existing signed application handshake over it.
     pub tls_enabled: bool,
+    /// When `tls_enabled` is true, fall back to plain TCP if the TLS dial fails.
+    ///
+    /// Set to `false` to enforce TLS-only outbound dials.
+    pub tls_fallback_to_plain: bool,
     /// Optional TLS listener address for inbound TLS-over-TCP connections (feature-gated).
     /// If set (and `tls_enabled` is true), a TLS listener is started on this address.
     /// Plain TCP listener remains active on `address`.

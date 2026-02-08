@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/p2p.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bf059c9b6e20b8a8c5e7dd9623d766bbbc627dffb72d64c48f91bf25b172426d
-source_last_modified: "2026-02-08T06:20:45.330191+00:00"
+source_hash: 8ef0e808ca752c9c53046663a589f7d199b0d050e6ca78fffbb87bd309fd7ba7
+source_last_modified: "2026-02-08T07:18:26.525951+00:00"
 translation_last_reviewed: 2026-02-08
 ---
 
@@ -184,14 +184,17 @@ p2p_ws_outbound_total 0
 - Knobs (`[network]`):
   - `p2p_proxy` (string; optional): outbound proxy URL (e.g., `http://user:pass@proxy.example.com:8080` or `socks5://user:pass@proxy.example.com:1080`).
   - `p2p_no_proxy` (array of strings): host suffixes to bypass the proxy (e.g., `.example.com`, `localhost`).
+  - `p2p_proxy_tls_verify` (bool; default `true`): verify an `https://` proxy hop (certificate pinning).
+  - `p2p_proxy_tls_pinned_cert_der_base64` (string; optional): pinned end-entity proxy certificate (DER, base64). Required when `p2p_proxy_tls_verify=true`.
 - When `p2p_proxy` is set and the target host is not exempted, the dialer tunnels via:
   - HTTP `CONNECT host:port` for `http://...` / `https://...`
     - `http://...` uses plaintext TCP to the proxy.
-    - `https://...` wraps the proxy connection in TLS before issuing `CONNECT` (requires a build with `iroha_p2p/p2p_tls` enabled).
+    - `https://...` wraps the proxy connection in TLS before issuing `CONNECT` (requires a build with `iroha_p2p/p2p_tls` enabled). When `p2p_proxy_tls_verify=true`, the proxy hop requires a matching pinned certificate.
   - SOCKS5 `CONNECT` for `socks5://...` / `socks5h://...`
 - Notes:
   - Basic authentication is supported via `user:pass@...` in the proxy URL.
   - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`).
+  - Disabling `p2p_proxy_tls_verify` may expose proxy credentials (and proxy traffic metadata) to MITM on the proxy hop.
   - Proxies apply only to TCP-based dials (TCP/TLS/WS). QUIC (UDP) bypasses the proxy; set `quic_enabled=false` if you must force all outbound P2P traffic through a proxy.
   - If no proxy is configured, connections go direct.
 

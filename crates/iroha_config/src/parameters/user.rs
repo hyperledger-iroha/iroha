@@ -7960,15 +7960,40 @@ pub struct Network {
     ///
     /// Note: `https://` proxies require a build with `iroha_p2p/p2p_tls` to wrap the proxy hop in TLS.
     pub p2p_proxy: Option<String>,
+    /// Require that outbound TCP-based dials use `p2p_proxy` (except when a target matches `p2p_no_proxy`).
+    ///
+    /// This is a safety knob for constrained/censored environments where direct peer dials should
+    /// be avoided to reduce IP leakage.
+    ///
+    /// Note: QUIC bypasses the proxy; set `quic_enabled=false` when `p2p_proxy_required=true`.
+    #[config(default)]
+    pub p2p_proxy_required: bool,
     /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
     #[config(default)]
     pub p2p_no_proxy: Vec<String>,
+    /// Verify an `https://` proxy hop (default: true).
+    ///
+    /// When enabled, the proxy connection uses certificate pinning via
+    /// `p2p_proxy_tls_pinned_cert_der_base64`. If no pin is configured, dialing an `https://`
+    /// proxy fails. When disabled, the proxy hop is encrypted but susceptible to MITM (which can
+    /// leak proxy credentials).
+    #[config(default = "true")]
+    pub p2p_proxy_tls_verify: bool,
+    /// Optional pinned end-entity certificate for `https://` proxies (DER, base64).
+    ///
+    /// When `p2p_proxy_tls_verify` is enabled, the dialer pins the proxy certificate to this value.
+    pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
     /// Enable TLS-over-TCP transport (feature-gated).
     /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer
     /// wraps the TCP stream in TLS 1.3. Peer identity remains authenticated by
     /// the signed application handshake.
     #[config(env = "P2P_TLS", default)]
     pub tls_enabled: bool,
+    /// When TLS-over-TCP is enabled, fall back to plain TCP if the TLS dial fails.
+    ///
+    /// Set to `false` to enforce TLS-only outbound P2P dials when `tls_enabled=true`.
+    #[config(default = "true")]
+    pub tls_fallback_to_plain: bool,
     /// Optional P2P TLS listener address (host:port). If set and TLS is enabled,
     /// node will accept inbound TLS connections on this address.
     #[config(env = "P2P_TLS_LISTEN_ADDRESS")]
@@ -8180,8 +8205,12 @@ impl Network {
             quic_datagram_receive_buffer_bytes,
             quic_datagram_send_buffer_bytes,
             p2p_proxy,
+            p2p_proxy_required,
             p2p_no_proxy,
+            p2p_proxy_tls_verify,
+            p2p_proxy_tls_pinned_cert_der_base64,
             tls_enabled,
+            tls_fallback_to_plain,
             tls_listen_address,
             p2p_queue_cap_high,
             p2p_queue_cap_low,
@@ -8380,13 +8409,17 @@ impl Network {
                     .map(iroha_config_base::util::DurationMs::get),
                 dns_refresh_ttl: dns_refresh_ttl.map(iroha_config_base::util::DurationMs::get),
                 p2p_proxy,
+                p2p_proxy_required,
                 p2p_no_proxy,
+                p2p_proxy_tls_verify,
+                p2p_proxy_tls_pinned_cert_der_base64,
                 quic_enabled,
                 quic_datagrams_enabled,
                 quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes.get(),
                 quic_datagram_receive_buffer_bytes: quic_datagram_receive_buffer_bytes.get(),
                 quic_datagram_send_buffer_bytes: quic_datagram_send_buffer_bytes.get(),
                 tls_enabled,
+                tls_fallback_to_plain,
                 tls_listen_address,
                 prefer_ws_fallback,
                 p2p_queue_cap_high,

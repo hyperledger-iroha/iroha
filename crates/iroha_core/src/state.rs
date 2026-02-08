@@ -13828,6 +13828,33 @@ impl State {
         }
     }
 
+    /// Create a point-in-time view of just the world state.
+    ///
+    /// This avoids locking unrelated state components and is intended for hot
+    /// consensus paths that only need access to parameters/consensus keys.
+    #[track_caller]
+    pub fn world_view(&self) -> WorldView<'_> {
+        self.world.view()
+    }
+
+    /// Latest committed block height derived from the block hash journal.
+    ///
+    /// This is cheaper than acquiring a full [`StateView`] and avoids locking
+    /// world-state components.
+    #[track_caller]
+    pub fn committed_height(&self) -> usize {
+        self.block_hashes.view().len()
+    }
+
+    /// Latest committed block hash derived from the block hash journal.
+    ///
+    /// This is cheaper than acquiring a full [`StateView`] and avoids locking
+    /// world-state components.
+    #[track_caller]
+    pub fn latest_block_hash_fast(&self) -> Option<HashOf<BlockHeader>> {
+        self.block_hashes.view().last().copied()
+    }
+
     /// Create point in time view of [`State`]
     #[track_caller]
     pub fn view(&self) -> StateView<'_> {

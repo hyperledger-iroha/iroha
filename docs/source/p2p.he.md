@@ -114,14 +114,17 @@ p2p_subscriber_unrouted_by_topic_total{topic="Consensus"} 1
 - הגדרות (`[network]`):
   - `p2p_proxy` (מחרוזת; אופציונלי): כתובת URL לפרוקסי יציאה (למשל `http://user:pass@proxy.example.com:8080`, ‏`https://proxy.example.com:8443` או `socks5://user:pass@proxy.example.com:1080`).
   - `p2p_no_proxy` (מערך מחרוזות): סיומות מארח לעקיפת הפרוקסי (למשל `.example.com`, ‏`localhost`).
+  - `p2p_proxy_tls_verify` (bool; ברירת מחדל `true`): אימות hop אל פרוקסי `https://` (pinning).
+  - `p2p_proxy_tls_pinned_cert_der_base64` (מחרוזת; אופציונלי): תעודת קצה (DER, base64) לשם pinning של פרוקסי `https://`. נדרש כאשר `p2p_proxy_tls_verify=true`.
 - כאשר `p2p_proxy` מוגדר והיעד לא מוחרג, החייגן מבצע מנהור דרך:
   - HTTP `CONNECT host:port` עבור `http://...` / `https://...`
     - `http://...` משתמש ב־TCP לא מוצפן אל הפרוקסי.
-    - `https://...` עוטף את החיבור אל הפרוקסי ב־TLS לפני `CONNECT` (דורש בנייה עם `iroha_p2p/p2p_tls`).
+    - `https://...` עוטף את החיבור אל הפרוקסי ב־TLS לפני `CONNECT` (דורש בנייה עם `iroha_p2p/p2p_tls`). כאשר `p2p_proxy_tls_verify=true`, נדרש pin תואם לתעודת הפרוקסי.
   - SOCKS5 `CONNECT` עבור `socks5://...` / `socks5h://...`
 - שימו לב:
   - אימות בסיסי נתמך דרך `user:pass@...` בתוך כתובת ה־URL של הפרוקסי.
   - חריגים נבדקים לפי סיומת מארח.
+  - השבתת `p2p_proxy_tls_verify` עלולה לחשוף פרטי התחברות לפרוקסי (ומטא-דאטה של התעבורה) ל־MITM על ה־hop אל הפרוקסי.
   - הפרוקסי חל רק על חיבורים מבוססי TCP (TCP/TLS/WS). QUIC (UDP) עוקף את הפרוקסי; אם חייבים לעבוד תמיד דרך פרוקסי, הגדירו `quic_enabled=false`.
   - בהיעדר פרוקסי, החיבור ישיר.
 

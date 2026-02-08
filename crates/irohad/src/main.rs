@@ -3208,6 +3208,138 @@ mod network_relay_tests {
     }
 }
 
+fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
+    match error {
+        TryReadSnapshotError::NotFound => true,
+        TryReadSnapshotError::IO(_, _) => false,
+        TryReadSnapshotError::ChainIdMismatch { .. } => false,
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod snapshot_read_error_tests {
+    use super::*;
+    use std::num::NonZeroUsize;
+
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+
+    #[test]
+    fn snapshot_read_error_is_recoverable_classifies_errors() {
+        fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
+            let mut bytes = [0u8; Hash::LENGTH];
+            bytes[0] = byte;
+            HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
+        }
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::NotFound
+        ));
+
+        let io = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        assert!(!snapshot_read_error_is_recoverable(&TryReadSnapshotError::IO(
+            io,
+            std::path::PathBuf::from("snapshot.data")
+        )));
+
+        assert!(!snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::ChainIdMismatch {
+                expected: ChainId::from("expected-chain"),
+                actual: ChainId::from("actual-chain"),
+            }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::ChecksumMismatch {
+                expected: "deadbeef".into(),
+                actual: "beadfeed".into(),
+            }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::ChecksumMissing(std::path::PathBuf::from("snapshot.sha256"))
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::SignatureMissing(std::path::PathBuf::from("snapshot.sig"))
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::SignatureMalformed("bad sig".into())
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::SignatureInvalid("invalid sig".into())
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MerkleMissing(std::path::PathBuf::from("snapshot.merkle.json"))
+        ));
+
+        let json_err = norito::json::from_str::<norito::json::Value>("not json").unwrap_err();
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::Serialization(json_err)
+        ));
+
+        let json_err = norito::json::from_str::<norito::json::Value>("not json").unwrap_err();
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MerkleMetadata(json_err)
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MerkleMetadataMalformed("bad merkle".into())
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MerkleMismatch {
+                expected: "deadbeef".into(),
+                actual: "beadfeed".into(),
+            }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MerkleChunkSizeMismatch {
+                expected: NonZeroUsize::new(1).unwrap(),
+                actual: NonZeroUsize::new(2).unwrap(),
+            }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MerkleLengthMismatch {
+                expected: 10,
+                actual: 11,
+            }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MerkleProofInvalid {
+                chunk: 0,
+                reason: "bad proof".into(),
+            }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MismatchedHeight {
+                snapshot_height: 2,
+                kura_height: 1,
+            }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MissingBlock { height: 1 }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MismatchedHash {
+                height: 1,
+                snapshot_block_hash: dummy_block_hash(1),
+                kura_block_hash: dummy_block_hash(2),
+            }
+        ));
+    }
+}
+
 impl Iroha {
     /// Starts Iroha with all its subsystems.
     ///
@@ -3328,6 +3460,24 @@ impl Iroha {
             }
             Err(TryReadSnapshotError::NotFound) => {
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
+                let world = World::with(
+                    [genesis_domain(config.genesis.public_key.clone())],
+                    [genesis_account(config.genesis.public_key.clone())],
+                    [],
+                );
+                State::new(
+                    world,
+                    Arc::clone(&kura),
+                    live_query_store.clone(),
+                    #[cfg(feature = "telemetry")]
+                    state_telemetry,
+                )
+            }
+            Err(error) if snapshot_read_error_is_recoverable(&error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
+                );
                 let world = World::with(
                     [genesis_domain(config.genesis.public_key.clone())],
                     [genesis_account(config.genesis.public_key.clone())],
