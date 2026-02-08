@@ -4594,17 +4594,23 @@ pub mod message {
         }
 
         fn canonicalize_roster_and_signers(
-            topology: &Topology,
+            validator_set_topology: &Topology,
+            signer_topology: &Topology,
             signers: &BTreeSet<ValidatorIndex>,
         ) -> (Vec<PeerId>, BTreeSet<ValidatorIndex>) {
-            let original = topology.as_ref();
-            let mut roster: Vec<PeerId> = original.iter().cloned().collect();
-            roster.sort();
-            roster.dedup();
+            let validator_set = validator_set_topology.as_ref();
+            let signer_roster = signer_topology.as_ref();
+            let mut roster = Vec::with_capacity(validator_set.len());
+            for peer in validator_set {
+                if roster.iter().any(|candidate| candidate == peer) {
+                    continue;
+                }
+                roster.push(peer.clone());
+            }
             let mut mapped = BTreeSet::new();
             for signer in signers {
                 let idx = usize::try_from(*signer).expect("signer index fits usize");
-                let peer = original.get(idx).expect("signer in topology");
+                let peer = signer_roster.get(idx).expect("signer in topology");
                 let canonical_idx = roster
                     .iter()
                     .position(|candidate| candidate == peer)
@@ -4626,7 +4632,8 @@ pub mod message {
             view: u64,
             epoch: u64,
             signers: BTreeSet<ValidatorIndex>,
-            topology: &Topology,
+            signer_topology: &Topology,
+            validator_set_topology: &Topology,
             keypairs: &[KeyPair],
         ) -> Qc {
             let aggregate_signature = aggregate_signature_for_signers(
@@ -4638,12 +4645,12 @@ pub mod message {
                 view,
                 epoch,
                 &signers,
-                topology,
+                signer_topology,
                 keypairs,
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let (validator_set, canonical_signers) =
-                canonicalize_roster_and_signers(topology, &signers);
+                canonicalize_roster_and_signers(validator_set_topology, signer_topology, &signers);
             BlockSynchronizer::qc_from_signers(
                 ConsensusMode::Permissioned,
                 None,
@@ -4728,6 +4735,7 @@ pub mod message {
                 0,
                 signers.clone(),
                 &signature_topology,
+                &topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
             let context =
@@ -4780,6 +4788,7 @@ pub mod message {
                 0,
                 signers.clone(),
                 &signature_topology,
+                &topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
             let context =
@@ -4845,6 +4854,7 @@ pub mod message {
                 0,
                 signers,
                 &signature_topology,
+                &topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
             let context = super::BlockSyncValidationContext::new(
@@ -5426,7 +5436,7 @@ pub mod message {
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let (validator_set, canonical_signers) =
-                canonicalize_roster_and_signers(&signature_topology, &commit_signers);
+                canonicalize_roster_and_signers(&topology, &signature_topology, &commit_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash,
@@ -5508,7 +5518,7 @@ pub mod message {
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let (validator_set, canonical_signers) =
-                canonicalize_roster_and_signers(&signature_topology, &recorded_signers);
+                canonicalize_roster_and_signers(&topology, &signature_topology, &recorded_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
@@ -5609,7 +5619,7 @@ pub mod message {
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let (validator_set, canonical_signers) =
-                canonicalize_roster_and_signers(&signature_topology, &recorded_signers);
+                canonicalize_roster_and_signers(&topology, &signature_topology, &recorded_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
@@ -5650,6 +5660,7 @@ pub mod message {
                 0,
                 forged_signers,
                 &signature_topology,
+                &topology,
                 &[
                     kp_leader.clone(),
                     kp_validator.clone(),
@@ -5706,6 +5717,7 @@ pub mod message {
                 0,
                 signers,
                 &signature_topology,
+                &topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
 
@@ -5759,6 +5771,7 @@ pub mod message {
                 0,
                 signers,
                 &signature_topology,
+                &topology,
                 &[kp_leader.clone(), kp_validator.clone(), kp_proxy.clone()],
             );
 
@@ -5826,7 +5839,7 @@ pub mod message {
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let (validator_set, canonical_signers) =
-                canonicalize_roster_and_signers(&signature_topology, &recorded_signers);
+                canonicalize_roster_and_signers(&topology, &signature_topology, &recorded_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),

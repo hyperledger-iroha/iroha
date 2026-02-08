@@ -8,6 +8,7 @@ use ivm::{
     mock_wsv::{AccountId as HostAccountId, MockWorldStateView, WsvHost},
     validate_tlv_bytes,
 };
+
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
     let expected_path = format!("{}/{}", base.as_ref(), key);
     if let Some(bytes) = host.wsv.sc_get(&expected_path) {

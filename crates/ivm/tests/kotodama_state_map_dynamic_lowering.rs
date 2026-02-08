@@ -41,7 +41,7 @@ fn dynamic_map_set_uses_durable_state() {
     vm.load_program(&code).expect("load");
     vm.run().expect("run");
 
-    // Verify durable state via STATE_GET("M/2") == "5"
+    // Verify durable state via STATE_GET("M/2") == Norito(i64=5)
     let path = Name::from_str("M/2").expect("valid path");
     let path_tlv = make_tlv(PointerType::Name, path.as_ref().as_bytes());
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -61,5 +61,6 @@ fn dynamic_map_set_uses_durable_state() {
     let p_out = vm.register(10);
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(tlv.payload, b"5");
+    let stored: i64 = norito::decode_from_bytes(tlv.payload).expect("decode stored int");
+    assert_eq!(stored, 5);
 }

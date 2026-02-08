@@ -1,6 +1,7 @@
 //! Ensure scalar state loads from durable storage at function entry.
 
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use norito::to_bytes;
 
 #[test]
 fn kotodama_state_scalar_reads_durable() {
@@ -15,7 +16,7 @@ fn kotodama_state_scalar_reads_durable() {
         .expect("compile scalar state reader");
 
     let mut host = CoreHost::new();
-    host.insert_state_value("counter", b"42");
+    host.insert_state_value("counter", to_bytes(&42_i64).expect("encode counter"));
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

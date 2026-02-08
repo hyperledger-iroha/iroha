@@ -822,6 +822,7 @@ mod query_errors_handling {
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             account: account_id,
             headers: HashMap::new(),
+            operator_key_pair: None,
             add_transaction_nonce: false,
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,

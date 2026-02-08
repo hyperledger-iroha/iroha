@@ -1382,18 +1382,19 @@ mod tests {
 
             let mut payload_req = None;
             for _ in 0..100 {
-                payload_req = posted
-                    .lock()
-                    .expect("posted")
-                    .iter()
-                    .find_map(|post| match &post.data {
-                        NetworkMessage::GenesisRequest(req)
-                            if matches!(req.kind, GenesisRequestKind::Fetch) =>
-                        {
-                            Some(req.clone())
-                        }
-                        _ => None,
-                    });
+                payload_req =
+                    posted
+                        .lock()
+                        .expect("posted")
+                        .iter()
+                        .find_map(|post| match &post.data {
+                            NetworkMessage::GenesisRequest(req)
+                                if matches!(req.kind, GenesisRequestKind::Fetch) =>
+                            {
+                                Some(req.clone())
+                            }
+                            _ => None,
+                        });
                 if payload_req.is_some() {
                     break;
                 }

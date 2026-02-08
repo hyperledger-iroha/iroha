@@ -9,7 +9,7 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::Engine as _;
@@ -21,7 +21,7 @@ pub use iroha_config::client_api::{
     ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO, ConfigUpdateDTO, Logger as LoggerDTO,
 };
 use iroha_config::parameters::actual::SorafsRolloutPhase;
-use iroha_crypto::{Hash, SignatureOf};
+use iroha_crypto::{Hash, Signature, SignatureOf};
 use iroha_data_model::{
     DATA_MODEL_VERSION,
     block::consensus::{
@@ -46,6 +46,7 @@ use norito::{
     to_bytes,
 };
 use rand::Rng;
+use sha2::{Digest as _, Sha256};
 use sorafs_manifest::{
     alias_cache::{decode_alias_proof, unix_now_secs},
     pdp::PdpCommitmentV1,
@@ -102,6 +103,10 @@ const APPLICATION_JSON: &str = "application/json";
 const HEADER_API_VERSION: &str = iroha_torii_shared::HEADER_API_VERSION;
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
+const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
+const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
+const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
+const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
 // Integration scenarios involving DA/RBC can legitimately spend a few seconds
 // in the mempool before proposal assembly starts; keep the queue grace period
@@ -4869,6 +4874,8 @@ pub struct Client {
     pub account: AccountId,
     /// Http headers which will be appended to each request
     pub headers: HashMap<String, String>,
+    /// Optional key pair used to sign operator-only endpoint requests.
+    pub operator_key_pair: Option<KeyPair>,
     /// If `true` add nonce, which makes different hashes for
     /// transactions which occur repeatedly and/or simultaneously
     pub add_transaction_nonce: bool,
@@ -4896,6 +4903,13 @@ impl fmt::Debug for Client {
             .field("torii_request_timeout", &self.torii_request_timeout)
             .field("account", &self.account)
             .field("headers", &self.headers)
+            .field(
+                "operator_public_key",
+                &self
+                    .operator_key_pair
+                    .as_ref()
+                    .map(|key_pair| key_pair.public_key().to_string()),
+            )
             .field("add_transaction_nonce", &self.add_transaction_nonce)
             .field("alias_cache_policy", &self.alias_cache_policy)
             .field(
@@ -4963,12 +4977,18 @@ impl Client {
             torii_request_timeout,
             account,
             headers,
+            operator_key_pair: None,
             add_transaction_nonce: transaction_add_nonce,
             alias_cache_policy: sorafs_alias_cache,
             default_anonymity_policy: sorafs_anonymity_policy,
             rollout_phase: sorafs_rollout_phase,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
         }
+    }
+
+    /// Configure the key pair used to sign operator-only endpoint requests.
+    pub fn set_operator_key_pair(&mut self, key_pair: KeyPair) {
+        self.operator_key_pair = Some(key_pair);
     }
 
     pub(crate) fn default_request(&self, method: HttpMethod, url: Url) -> DefaultRequestBuilder {
@@ -4990,6 +5010,93 @@ impl Client {
         let response = request.send()?;
         self.enforce_alias_policy(&response)?;
         Ok(response)
+    }
+
+    fn canonical_query_string(raw: Option<&str>) -> String {
+        let Some(raw) = raw else {
+            return String::new();
+        };
+        if raw.is_empty() {
+            return String::new();
+        }
+        let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        for (key, value) in pairs {
+            serializer.append_pair(&key, &value);
+        }
+        serializer.finish()
+    }
+
+    fn canonical_request_message(method: &HttpMethod, url: &Url, body: &[u8]) -> Vec<u8> {
+        let query = Self::canonical_query_string(url.query());
+        let mut hasher = Sha256::new();
+        hasher.update(body);
+        let body_hash = hasher.finalize();
+        format!(
+            "{}\n{}\n{}\n{}",
+            method.as_str().to_ascii_uppercase(),
+            url.path(),
+            query,
+            hex::encode(body_hash)
+        )
+        .into_bytes()
+    }
+
+    fn operator_request_message(
+        method: &HttpMethod,
+        url: &Url,
+        body: &[u8],
+        timestamp_ms: u64,
+        nonce: &str,
+    ) -> Vec<u8> {
+        let mut message = Self::canonical_request_message(method, url, body);
+        message.extend_from_slice(b"\n");
+        message.extend_from_slice(timestamp_ms.to_string().as_bytes());
+        message.extend_from_slice(b"\n");
+        message.extend_from_slice(nonce.as_bytes());
+        message
+    }
+
+    fn operator_signed_request(
+        &self,
+        method: HttpMethod,
+        url: Url,
+        body: Vec<u8>,
+    ) -> Result<DefaultRequestBuilder> {
+        let mut builder = self.default_request(method.clone(), url.clone());
+
+        if let Some(operator_key_pair) = &self.operator_key_pair {
+            let timestamp_ms: u64 = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX);
+            let nonce_bytes: [u8; 12] = rand::rng().random();
+            let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+            let message =
+                Self::operator_request_message(&method, &url, &body, timestamp_ms, nonce.as_str());
+            let signature = Signature::new(operator_key_pair.private_key(), &message);
+            let public_key = operator_key_pair.public_key().to_string();
+            let timestamp = timestamp_ms.to_string();
+            let signature_b64 =
+                base64::engine::general_purpose::STANDARD.encode(signature.payload());
+
+            builder = builder
+                .header(HEADER_OPERATOR_PUBLIC_KEY, &public_key)
+                .header(HEADER_OPERATOR_TIMESTAMP_MS, &timestamp)
+                .header(HEADER_OPERATOR_NONCE, &nonce)
+                .header(HEADER_OPERATOR_SIGNATURE, &signature_b64);
+        }
+
+        if body.is_empty() {
+            Ok(builder)
+        } else {
+            Ok(builder.body(body))
+        }
     }
 
     fn build_sorafs_gateway_fetch_config(
@@ -5991,14 +6098,11 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
     pub fn get_config(&self) -> Result<ConfigGetDTO> {
-        let resp = self
-            .default_request(
-                HttpMethod::GET,
-                join_torii_url(&self.torii_url, torii_uri::CONFIGURATION),
-            )
-            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
-            .build()?
-            .send()?;
+        let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
+        )?;
 
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -6033,12 +6137,10 @@ impl Client {
             .map(std::string::String::into_bytes)
             .wrap_err(format!("Failed to serialize {dto:?}"))?;
         let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::POST, url, body)?
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
+        )?;
 
         if resp.status() != StatusCode::ACCEPTED {
             return Err(eyre!(
@@ -12691,6 +12793,143 @@ mod tests {
             .expect("Expected `Authorization` header");
         let expected_value = format!("Basic {ENCRYPTED_CREDENTIALS}");
         assert_eq!(value, &expected_value);
+    }
+
+    #[test]
+    fn canonical_query_string_sorts_and_encodes() {
+        let canonical = Client::canonical_query_string(Some("b=2&a=3&b=1&space=a+b"));
+        assert_eq!(canonical, "a=3&b=1&b=2&space=a+b");
+    }
+
+    #[test]
+    fn get_config_includes_operator_signature_headers_when_key_configured() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let mut client = client_with_base_url(base_url());
+        client.set_operator_key_pair(KeyPair::random());
+
+        with_mock_http(
+            respond_with(
+                &snapshots,
+                Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body(Vec::new())
+                    .expect("response build"),
+            ),
+            || {
+                let _err = client
+                    .get_config()
+                    .expect_err("mocked unauthorized response should fail");
+            },
+        );
+
+        let snapshot = snapshots
+            .lock()
+            .expect("lock snapshots")
+            .first()
+            .cloned()
+            .expect("request snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/configuration");
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
+            "missing operator public key header"
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
+            "missing operator timestamp header"
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
+            "missing operator nonce header"
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
+            "missing operator signature header"
+        );
+    }
+
+    #[test]
+    fn set_config_includes_operator_signature_headers_when_key_configured() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let mut client = client_with_base_url(base_url());
+        client.set_operator_key_pair(KeyPair::random());
+
+        let update = ConfigUpdateDTO {
+            logger: LoggerDTO {
+                level: iroha_data_model::Level::INFO,
+                filter: None,
+            },
+            network_acl: None,
+            network: None,
+            confidential_gas: None,
+            soranet_handshake: None,
+            transport: None,
+            compute_pricing: None,
+        };
+
+        with_mock_http(
+            respond_with(
+                &snapshots,
+                Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Vec::new())
+                    .expect("response build"),
+            ),
+            || {
+                let _err = client
+                    .set_config(&update)
+                    .expect_err("mocked bad request response should fail");
+            },
+        );
+
+        let snapshot = snapshots
+            .lock()
+            .expect("lock snapshots")
+            .first()
+            .cloned()
+            .expect("request snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/configuration");
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
+            "missing operator public key header"
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
+            "missing operator timestamp header"
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
+            "missing operator nonce header"
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
+            "missing operator signature header"
+        );
     }
 
     #[test]

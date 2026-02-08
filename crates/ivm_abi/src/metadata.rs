@@ -98,10 +98,6 @@ impl ProgramMetadata {
         if mode & !KNOWN_MODE_BITS != 0 {
             return Err(VMError::InvalidMetadata);
         }
-        // First release policy: only ABI v1 is accepted.
-        if abi_version != 1 {
-            return Err(VMError::InvalidMetadata);
-        }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
         // host/runtime may clamp or ignore it depending on policy.
         let mut code_offset = header_len;
