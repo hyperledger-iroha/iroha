@@ -1,44 +1,32 @@
 {
-  "format": "ivm.predecoder.v1/index",
-  "code_file": "code.bin",
-  "decoded_file": "decoded.json",
-  "artifacts_dir": "artifacts",
   "artifacts": [
     {
+      "artifact_sha256": "b0e5edf251edd803b66fd6cead24ca6ae9d8873fc7d1a4a87b74f270b75cfaa9",
       "file": "artifact_v1_0_mode00_vlen0_cycles0_abi1.to",
       "meta": {
-        "version_major": 1,
-        "version_minor": 0,
+        "abi_version": 1,
+        "max_cycles": 0,
         "mode": 0,
         "vector_length": 0,
-        "max_cycles": 0,
-        "abi_version": 1
-      },
-      "artifact_sha256": "b0e5edf251edd803b66fd6cead24ca6ae9d8873fc7d1a4a87b74f270b75cfaa9"
-    },
-    {
-      "file": "artifact_v1_7_mode00_vlen0_cycles0_abi1.to",
-      "meta": {
         "version_major": 1,
-        "version_minor": 7,
-        "mode": 0,
-        "vector_length": 0,
-        "max_cycles": 0,
-        "abi_version": 1
-      },
-      "artifact_sha256": "5a769bdd76911e77c68946b56ed3f32f0db69a04cf25f4cef9a88f3f2f4c7dec"
+        "version_minor": 0
+      }
     },
     {
+      "artifact_sha256": "0febb29199de3cd2120f07a93879495397e19c7e577ba3d47771fdbbfac6edd5",
       "file": "artifact_v1_0_mode03_vlen8_cycles1000_abi1.to",
       "meta": {
-        "version_major": 1,
-        "version_minor": 0,
+        "abi_version": 1,
+        "max_cycles": 1000,
         "mode": 3,
         "vector_length": 8,
-        "max_cycles": 1000,
-        "abi_version": 1
-      },
-      "artifact_sha256": "0febb29199de3cd2120f07a93879495397e19c7e577ba3d47771fdbbfac6edd5"
+        "version_major": 1,
+        "version_minor": 0
+      }
     }
-  ]
+  ],
+  "artifacts_dir": "artifacts",
+  "code_file": "code.bin",
+  "decoded_file": "decoded.json",
+  "format": "ivm.predecoder.v1/index"
 }

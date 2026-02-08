@@ -6760,6 +6760,9 @@ mod tests {
 
     #[test]
     fn cached_precommit_signers_attach_to_block_sync_update() {
+        let _history_guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+
         let chain: ChainId = "block-sync-precommit-signers"
             .parse()
             .expect("chain id parses");
@@ -6841,6 +6844,8 @@ mod tests {
         assert_eq!(qc.subject_block_hash, block_hash);
         assert_eq!(qc.aggregate.signers_bitmap, signers_bitmap);
         assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate_signature);
+
+        crate::sumeragi::status::reset_precommit_signer_history_for_tests();
     }
 
     #[test]

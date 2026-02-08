@@ -1386,6 +1386,25 @@ impl Actor {
                         );
                         hint_highest = lock;
                     }
+                } else if let Some(lock) = self.locked_qc.filter(|lock| {
+                    matches!(reason, LockedQcRejection::HeightRegressed { .. })
+                        && lock.height == height
+                        && lock.subject_block_hash == block_hash
+                }) {
+                    info!(
+                        ?reason,
+                        locked_qc_height = lock.height,
+                        locked_qc_view = lock.view,
+                        locked_qc_hash = %lock.subject_block_hash,
+                        hint_highest_qc_height = hint.highest_qc.height,
+                        hint_highest_qc_view = hint.highest_qc.view,
+                        hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
+                        height,
+                        view,
+                        block = %block_hash,
+                        "accepting BlockCreated for already-locked block despite stale hint highest QC"
+                    );
+                    hint_highest = lock;
                 } else {
                     super::status::inc_block_created_dropped_by_lock();
                     #[cfg(feature = "telemetry")]

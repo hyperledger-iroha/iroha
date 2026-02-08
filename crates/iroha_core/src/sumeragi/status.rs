@@ -518,6 +518,8 @@ static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static WORKER_QUEUE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 
 static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
 static QC_LATENCY_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
@@ -1510,7 +1512,9 @@ pub fn set_leader_index(idx: u64) {
 /// Update the current `HighestQC` tuple (height, view). Best-effort, for observability only.
 pub fn set_highest_qc(height: u64, view: u64) {
     #[cfg(test)]
-    let _guard = qc_status_test_guard();
+    let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
+        return;
+    };
     HIGHEST_QC_HEIGHT.store(height, Ordering::Relaxed);
     HIGHEST_QC_VIEW.store(view, Ordering::Relaxed);
 }
@@ -1518,7 +1522,9 @@ pub fn set_highest_qc(height: u64, view: u64) {
 /// Update the subject block hash for the current `HighestQC` (best-effort).
 pub fn set_highest_qc_hash(hash: HashOf<BlockHeader>) {
     #[cfg(test)]
-    let _guard = qc_status_test_guard();
+    let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
+        return;
+    };
     let h = UntypedHash::from(hash);
     let slot = HIGHEST_QC_HASH.get_or_init(|| Mutex::new(None));
     *slot.lock().unwrap() = Some(h);
@@ -2012,7 +2018,9 @@ pub fn penalty_counters() -> (u64, u64, u64, u64) {
 /// Update the current `LockedQC` tuple (height, view). Best-effort, monotonic.
 pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>>) {
     #[cfg(test)]
-    let _guard = qc_status_test_guard();
+    let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
+        return;
+    };
     if height == 0 && view == 0 {
         LOCKED_QC_HEIGHT.store(0, Ordering::Relaxed);
         LOCKED_QC_VIEW.store(0, Ordering::Relaxed);
@@ -6037,11 +6045,19 @@ fn worker_queue_totals_snapshot(
 
 /// Record an enqueue for the given worker-loop queue.
 pub fn record_worker_queue_enqueue(kind: WorkerQueueKind) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return;
+    };
     worker_queue_counter(kind).fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record a blocking enqueue duration for the given worker-loop queue.
 pub fn record_worker_queue_blocked(kind: WorkerQueueKind, blocked: Duration) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return;
+    };
     let blocked_ms = u64::try_from(blocked.as_millis()).unwrap_or(u64::MAX);
     if blocked_ms == 0 {
         return;
@@ -6056,11 +6072,19 @@ pub fn record_worker_queue_blocked(kind: WorkerQueueKind, blocked: Duration) {
 
 /// Record a dropped enqueue for the given worker-loop queue.
 pub fn record_worker_queue_drop(kind: WorkerQueueKind) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return;
+    };
     worker_queue_dropped_total_counter(kind).fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record a drain of one or more entries from the given worker-loop queue.
 pub fn record_worker_queue_drain(kind: WorkerQueueKind, drained: usize) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return;
+    };
     if drained == 0 {
         return;
     }
@@ -6087,6 +6111,11 @@ pub fn record_worker_iteration(iteration_ms: u64) {
 }
 
 pub(crate) fn worker_queue_depth_snapshot() -> WorkerQueueDepthSnapshot {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK) else {
+        return WorkerQueueDepthSnapshot::default();
+    };
+
     WorkerQueueDepthSnapshot {
         vote_rx: WORKER_QUEUE_VOTE_DEPTH.load(Ordering::Relaxed),
         block_payload_rx: WORKER_QUEUE_BLOCK_PAYLOAD_DEPTH.load(Ordering::Relaxed),
@@ -6223,6 +6252,7 @@ fn worker_loop_snapshot() -> WorkerLoopSnapshot {
 
 #[cfg(test)]
 pub(crate) fn reset_worker_loop_snapshot_for_tests() {
+    let _guard = reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK);
     WORKER_STAGE_ID.store(WorkerLoopStage::Idle.as_id(), Ordering::Relaxed);
     WORKER_STAGE_STARTED_MS.store(0, Ordering::Relaxed);
     WORKER_LAST_ITERATION_MS.store(0, Ordering::Relaxed);
@@ -6586,6 +6616,12 @@ pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {
 #[allow(private_interfaces)]
 pub(crate) fn local_removed_test_guard() -> TestLockGuard {
     reentrant_test_guard(&LOCAL_REMOVED_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn worker_queue_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK)
 }
 
 #[cfg(test)]
