@@ -17770,9 +17770,7 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
-    let _worker_guard = super::status::worker_queue_test_guard();
     let actor = &mut harness.actor;
-    super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let mut block_hash =
@@ -17813,7 +17811,8 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
         .checked_sub(window + Duration::from_millis(1))
         .unwrap_or_else(Instant::now);
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    actor.queue_block_backpressure.reset_to_current();
+    actor.queue_block_backpressure.last_blocked_at = Some(Instant::now());
     assert!(
         actor.defer_qc_if_block_missing(
             Phase::Commit,
@@ -17835,7 +17834,7 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
         "view change should be deferred while payload backlog is active"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
+    actor.queue_block_backpressure.reset_to_current();
     assert!(
         actor.defer_qc_if_block_missing(
             Phase::Commit,
@@ -17858,7 +17857,6 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
         "view change should arm once backlog clears and dwell exceeds window"
     );
 
-    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
