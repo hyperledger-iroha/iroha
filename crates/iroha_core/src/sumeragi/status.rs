@@ -1509,12 +1509,16 @@ pub fn set_leader_index(idx: u64) {
 
 /// Update the current `HighestQC` tuple (height, view). Best-effort, for observability only.
 pub fn set_highest_qc(height: u64, view: u64) {
+    #[cfg(test)]
+    let _guard = qc_status_test_guard();
     HIGHEST_QC_HEIGHT.store(height, Ordering::Relaxed);
     HIGHEST_QC_VIEW.store(view, Ordering::Relaxed);
 }
 
 /// Update the subject block hash for the current `HighestQC` (best-effort).
 pub fn set_highest_qc_hash(hash: HashOf<BlockHeader>) {
+    #[cfg(test)]
+    let _guard = qc_status_test_guard();
     let h = UntypedHash::from(hash);
     let slot = HIGHEST_QC_HASH.get_or_init(|| Mutex::new(None));
     *slot.lock().unwrap() = Some(h);
@@ -2007,6 +2011,8 @@ pub fn penalty_counters() -> (u64, u64, u64, u64) {
 
 /// Update the current `LockedQC` tuple (height, view). Best-effort, monotonic.
 pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>>) {
+    #[cfg(test)]
+    let _guard = qc_status_test_guard();
     if height == 0 && view == 0 {
         LOCKED_QC_HEIGHT.store(0, Ordering::Relaxed);
         LOCKED_QC_VIEW.store(0, Ordering::Relaxed);
@@ -3583,6 +3589,22 @@ pub fn precommit_signers_for(block_hash: HashOf<BlockHeader>) -> Option<Precommi
     precommit_signer_history()
         .into_iter()
         .find(|entry| entry.block_hash == block_hash)
+}
+
+/// Fetch the latest precommit signer record for the given block hash and round, if any.
+#[must_use]
+pub fn precommit_signers_for_round(
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+) -> Option<PrecommitSignerRecord> {
+    precommit_signer_history().into_iter().find(|entry| {
+        entry.block_hash == block_hash
+            && entry.height == height
+            && entry.view == view
+            && entry.epoch == epoch
+    })
 }
 
 fn npos_election_history_slot() -> &'static Mutex<VecDeque<ValidatorElectionOutcome>> {
