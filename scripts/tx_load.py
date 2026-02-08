@@ -353,12 +353,20 @@ def main() -> int:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return resp.read().decode("utf-8")
 
+    preferred_status_url = status_urls[0]
+
     def fetch_status_with_fallback() -> tuple[dict, str]:
+        nonlocal preferred_status_url
         last_exc: Exception | None = None
-        last_url = status_urls[0]
-        for status_url in status_urls:
+        last_url = preferred_status_url
+        ordered_status_urls = [preferred_status_url] + [
+            status_url for status_url in status_urls if status_url != preferred_status_url
+        ]
+        for status_url in ordered_status_urls:
             try:
-                return fetch_json(status_url), status_url
+                status = fetch_json(status_url)
+                preferred_status_url = status_url
+                return status, status_url
             except Exception as exc:  # noqa: PERF203
                 last_exc = exc
                 last_url = status_url
