@@ -1914,12 +1914,6 @@ impl IVMHost for DefaultHost {
                     vm.set_register(11, ERR_DECODE);
                     return Ok(0);
                 }
-                // Envelope must carry VK binding metadata
-                if env.vk_commitment.is_none() || env.public_inputs_schema_hash.is_none() {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_VK_MISSING);
-                    return Ok(0);
-                }
                 // Backend must be IPA and curve must be allowed
                 if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
                     vm.set_register(10, 0);

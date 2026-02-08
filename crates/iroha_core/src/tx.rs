@@ -7099,6 +7099,8 @@ pub mod tests {
     /// Pre-parsed asset definition identifier for the sandbox asset.
     pub static ASSET: LazyLock<AssetDefinitionId> =
         LazyLock::new(|| format!("{ASSET_STR}#{DOMAIN_STR}").parse().unwrap());
+    static FIFO_SCHEDULER_LOCK: LazyLock<std::sync::Mutex<()>> =
+        LazyLock::new(|| std::sync::Mutex::new(()));
     const SANDBOX_ACCOUNT_KEYS: [(&str, &str, &str); 5] = [
         (
             "alice",
@@ -7745,7 +7747,17 @@ pub mod tests {
         /// Returns the list of emitted events together with the committed
         /// block for further inspection in tests.
         pub fn apply(&mut self) -> (Vec<EventBox>, CommittedBlock) {
-            let prev_fifo = crate::pipeline::set_force_fifo_scheduler(true);
+            let _fifo_lock = FIFO_SCHEDULER_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            struct RestoreFifoScheduler(bool);
+            impl Drop for RestoreFifoScheduler {
+                fn drop(&mut self) {
+                    crate::pipeline::set_force_fifo_scheduler(self.0);
+                }
+            }
+            let _restore_fifo =
+                RestoreFifoScheduler(crate::pipeline::set_force_fifo_scheduler(true));
             let valid = ValidBlock::validate_unchecked(
                 core::mem::take(&mut self.block).unwrap(),
                 &mut self.state,
@@ -7757,7 +7769,6 @@ pub mod tests {
                 // topology in state is only used by sumeragi
                 vec![],
             );
-            crate::pipeline::set_force_fifo_scheduler(prev_fifo);
 
             (events, committed)
         }
