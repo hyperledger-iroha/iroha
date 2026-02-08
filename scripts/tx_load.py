@@ -469,8 +469,12 @@ def main() -> int:
             )
         )
 
+    queue_gating_disabled: set[str] = set()
+
     def wait_for_queue(shard: LoadShard) -> bool:
         if not status_enabled:
+            return True
+        if shard.torii_url in queue_gating_disabled:
             return True
         if args.queue_soft_limit <= 0 and args.queue_hard_limit <= 0:
             return True
@@ -497,8 +501,9 @@ def main() -> int:
                     if deadline is not None and time.monotonic() >= deadline:
                         print(
                             f"Shard {shard.torii_url}: failed to fetch /status within "
-                            f"{args.queue_wait_timeout}s; continuing without queue gating."
+                            f"{args.queue_wait_timeout}s; disabling queue gating for this shard."
                         )
+                        queue_gating_disabled.add(shard.torii_url)
                         return True
                     time.sleep(args.poll_interval)
                     continue
