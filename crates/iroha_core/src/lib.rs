@@ -352,6 +352,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     norito::derive::JsonDeserialize,
 )]
 pub struct SoranetPowConfigBroadcast {
+    /// Monotonic version for ordering PoW policy updates.
+    pub version: u64,
     /// Whether `PoW` is required for inbound circuits.
     pub required: bool,
     /// Leading zero bits required.
@@ -563,6 +565,7 @@ mod tests {
     #[test]
     fn soranet_pow_broadcast_roundtrip_and_topic() {
         let broadcast = SoranetPowConfigBroadcast {
+            version: 1,
             required: true,
             difficulty: 6,
             max_future_skew_secs: 900,
@@ -582,6 +585,7 @@ mod tests {
         let decoded: SoranetPowConfigBroadcast =
             json::from_slice(json.as_bytes()).expect("decode broadcast");
 
+        assert_eq!(decoded.version, broadcast.version);
         assert_eq!(decoded.required, broadcast.required);
         assert_eq!(decoded.difficulty, broadcast.difficulty);
         assert_eq!(decoded.ticket_ttl_secs, broadcast.ticket_ttl_secs);

@@ -2296,9 +2296,31 @@ fn validate_qc_against_votes(
             });
         };
         let key = (qc.phase, qc.height, qc.view, qc.epoch, view_signer);
-        let Some(vote) = vote_log.get(&key) else {
-            missing += 1;
-            continue;
+        let vote = if let Some(vote) = vote_log.get(&key) {
+            vote
+        } else {
+            let fallback_vote = vote_log.values().find(|candidate| {
+                if candidate.phase != qc.phase
+                    || candidate.height != qc.height
+                    || candidate.view != qc.view
+                    || candidate.epoch != qc.epoch
+                {
+                    return false;
+                }
+                let mut view_signers = BTreeSet::new();
+                view_signers.insert(candidate.signer);
+                let canonical = normalize_signer_indices_to_canonical(
+                    &view_signers,
+                    &signature_topology,
+                    &canonical_topology,
+                );
+                canonical.contains(signer)
+            });
+            let Some(vote) = fallback_vote else {
+                missing += 1;
+                continue;
+            };
+            vote
         };
         if vote.block_hash != qc.subject_block_hash {
             return Err(QcValidationError::SubjectMismatch { signer: *signer });
@@ -4934,7 +4956,7 @@ struct MergeLaneState {
 enum RbcRosterSource {
     /// Locally derived commit-topology snapshot (authoritative).
     Derived,
-    /// Unverified roster snapshot (e.g., from RBC INIT or persisted sessions).
+    /// Unverified roster snapshot (e.g., from RBC INIT).
     Init,
 }
 
@@ -7337,20 +7359,15 @@ impl Actor {
                     }
                     self.publish_rbc_backlog_snapshot();
                 } else if source.is_authoritative() && existing_source.is_authoritative() {
-                    let local_peer = self.common_config.peer.id();
-                    let local_missing = !existing_roster.iter().any(|peer| peer == local_peer);
-                    let local_present = roster.iter().any(|peer| peer == local_peer);
-                    let roster_superset = roster.len() > existing_roster.len()
-                        && existing_roster
-                            .iter()
-                            .all(|peer| roster.iter().any(|candidate| candidate == peer));
-                    if (local_missing && local_present) || roster_superset {
-                        info!(
+                    if matches!(
+                        (existing_source, source),
+                        (RbcRosterSource::Derived, RbcRosterSource::Derived)
+                    ) {
+                        debug!(
                             block = %key.0,
                             height = key.1,
                             view = key.2,
-                            local_peer = %local_peer,
-                            "refreshing authoritative RBC roster to include newly observed peers"
+                            "refreshing authoritative derived RBC roster snapshot"
                         );
                         entry.insert(roster);
                         self.subsystems
@@ -7395,12 +7412,72 @@ impl Actor {
                         }
                         self.publish_rbc_backlog_snapshot();
                     } else {
-                        warn!(
-                            block = %key.0,
-                            height = key.1,
-                            view = key.2,
-                            "conflicting authoritative RBC roster snapshot; keeping the first"
-                        );
+                        let local_peer = self.common_config.peer.id();
+                        let local_missing = !existing_roster.iter().any(|peer| peer == local_peer);
+                        let local_present = roster.iter().any(|peer| peer == local_peer);
+                        let roster_superset = roster.len() > existing_roster.len()
+                            && existing_roster
+                                .iter()
+                                .all(|peer| roster.iter().any(|candidate| candidate == peer));
+                        if (local_missing && local_present) || roster_superset {
+                            info!(
+                                block = %key.0,
+                                height = key.1,
+                                view = key.2,
+                                local_peer = %local_peer,
+                                "refreshing authoritative RBC roster to include newly observed peers"
+                            );
+                            entry.insert(roster);
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .session_roster_sources
+                                .insert(key, source);
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .persisted_full_sessions
+                                .remove(&key);
+                            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
+                            {
+                                session.ready_signatures.clear();
+                                session.sent_ready = false;
+                                session.delivered = false;
+                                session.deliver_sender = None;
+                                session.deliver_signature = None;
+                            }
+                            self.clear_pending_rbc(&key);
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .payload_rebroadcast_last_sent
+                                .remove(&key);
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .ready_rebroadcast_last_sent
+                                .remove(&key);
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .deliver_rebroadcast_last_sent
+                                .remove(&key);
+                            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                            if let Some(session) =
+                                self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
+                            {
+                                self.update_rbc_status_entry(key, &session, false);
+                                self.persist_rbc_session(key, &session);
+                            }
+                            self.publish_rbc_backlog_snapshot();
+                        } else {
+                            warn!(
+                                block = %key.0,
+                                height = key.1,
+                                view = key.2,
+                                "conflicting authoritative RBC roster snapshot; keeping the first"
+                            );
+                        }
                     }
                 } else if !source.is_authoritative() && !existing_source.is_authoritative() {
                     debug!(
@@ -8721,7 +8798,8 @@ impl Actor {
                                 rbc_sessions.insert(key, session);
                                 if !roster.is_empty() {
                                     rbc_session_rosters.insert(key, roster);
-                                    rbc_session_roster_sources.insert(key, RbcRosterSource::Init);
+                                    rbc_session_roster_sources
+                                        .insert(key, RbcRosterSource::Derived);
                                 }
                             }
                             Err(err) => {
@@ -14965,6 +15043,7 @@ impl RbcSession {
     pub(crate) fn delivered_payload_matches(&self, payload_hash: &Hash) -> bool {
         self.delivered
             && !self.is_invalid()
+            && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
     }
 
