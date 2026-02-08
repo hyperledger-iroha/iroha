@@ -45172,12 +45172,12 @@ async fn block_created_accepts_when_locked_matches_incoming_with_stale_hint_high
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
     let (committed_height, parent_hash) = {
         let view = actor.state.view();
         (
             u64::try_from(view.height()).unwrap_or(u64::MAX),
-            view.latest_block_hash()
-                .expect("committed block hash should exist"),
+            view.latest_block_hash().unwrap_or(parent_hash),
         )
     };
     let height = committed_height.saturating_add(1);

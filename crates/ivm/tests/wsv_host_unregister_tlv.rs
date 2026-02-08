@@ -31,11 +31,6 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn alloc_numeric(vm: &mut IVM, amount: u64) -> u64 {
-    let tlv = make_numeric_tlv(amount);
-    vm.alloc_input_tlv(&tlv).expect("alloc numeric tlv")
-}
-
 #[test]
 fn unregister_flow_with_dependencies() {
     let alice: AccountId =
@@ -98,10 +93,14 @@ fn unregister_flow_with_dependencies() {
     vm.memory
         .preload_input(tlv_bob.len() as u64 + 8, &tlv_rose)
         .expect("preload input");
+    let tlv_amount = make_numeric_tlv(7_u64);
+    let amount_offset = tlv_bob.len() as u64 + tlv_rose.len() as u64 + 16;
+    vm.memory
+        .preload_input(amount_offset, &tlv_amount)
+        .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    let mint_amount = alloc_numeric(&mut vm, 7);
-    vm.set_register(12, mint_amount);
+    vm.set_register(12, Memory::INPUT_START + amount_offset);
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint asset");
@@ -135,10 +134,14 @@ fn unregister_flow_with_dependencies() {
     vm.memory
         .preload_input(tlv_bob.len() as u64 + 8, &tlv_rose)
         .expect("preload input");
+    let tlv_amount = make_numeric_tlv(7_u64);
+    let amount_offset = tlv_bob.len() as u64 + tlv_rose.len() as u64 + 16;
+    vm.memory
+        .preload_input(amount_offset, &tlv_amount)
+        .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    let burn_amount = alloc_numeric(&mut vm, 7);
-    vm.set_register(12, burn_amount);
+    vm.set_register(12, Memory::INPUT_START + amount_offset);
     let prog_burn = assemble_syscalls(&[syscalls::SYSCALL_BURN_ASSET as u8]);
     vm.load_program(&prog_burn).unwrap();
     vm.run().expect("burn asset");
