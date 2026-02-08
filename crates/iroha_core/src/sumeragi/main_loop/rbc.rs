@@ -2351,6 +2351,7 @@ impl Actor {
             return false;
         };
         let key = Self::session_key(block_hash, height, view);
+        let has_active_pending = self.pending.pending_blocks.contains_key(block_hash);
         let pending_aborted_payload =
             self.pending
                 .pending_blocks
@@ -2376,7 +2377,8 @@ impl Actor {
             return false;
         }
         if self.runtime_da_enabled()
-            && (!self.block_payload_available_locally(*block_hash) || pending_aborted_payload)
+            && (pending_aborted_payload
+                || (has_active_pending && !self.block_payload_available_locally(*block_hash)))
         {
             let committed_height = {
                 let view = self.state.view();

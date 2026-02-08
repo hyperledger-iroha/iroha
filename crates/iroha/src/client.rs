@@ -12808,7 +12808,13 @@ mod tests {
         client.set_operator_key_pair(KeyPair::random());
 
         with_mock_http(
-            respond_with(&snapshots, empty_response(StatusCode::UNAUTHORIZED)),
+            respond_with(
+                &snapshots,
+                Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body(Vec::new())
+                    .expect("response build"),
+            ),
             || {
                 let _err = client
                     .get_config()
@@ -12874,7 +12880,13 @@ mod tests {
         };
 
         with_mock_http(
-            respond_with(&snapshots, empty_response(StatusCode::BAD_REQUEST)),
+            respond_with(
+                &snapshots,
+                Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Vec::new())
+                    .expect("response build"),
+            ),
             || {
                 let _err = client
                     .set_config(&update)

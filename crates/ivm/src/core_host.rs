@@ -2040,7 +2040,7 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_GET_AUTHORITY => {
                 // Produce a TLV with a fixed AccountId and return its INPUT pointer in x10
-                const ACCOUNT: &str = "alice@wonderland";
+                const ACCOUNT: &str = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
                 let account: AccountId = ACCOUNT.parse().map_err(|_| VMError::NoritoInvalid)?;
                 let payload = to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
