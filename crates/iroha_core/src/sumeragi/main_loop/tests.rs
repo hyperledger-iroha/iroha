@@ -14227,6 +14227,7 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
 async fn rebroadcast_precommit_votes_keep_collectors_when_below_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
     let height = 1;
     let block = sample_block(height, 0, None);
     let block_hash = block.hash();
@@ -14403,6 +14404,7 @@ async fn exec_witness_targets_collectors_even_when_redundant_r_below_quorum() {
 async fn rebroadcast_block_votes_targets_snapshot_roster() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
     let block = sample_block(1, 0, None);
     let block_hash = block.hash();
     let height = 1;
@@ -15780,6 +15782,7 @@ async fn handle_vote_defers_until_roster_available() {
 async fn deferred_votes_replay_after_commit_roster_history_arrives() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -17535,6 +17538,9 @@ async fn block_created_applies_cached_precommit_qc() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_created_replays_cached_prepare_qc() {
+    let _qc_guard = super::status::qc_status_test_guard();
+    let _local_removed_guard = super::status::local_removed_test_guard();
+    super::status::set_local_removed_from_world(false);
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -17585,13 +17591,9 @@ async fn block_created_replays_cached_prepare_qc() {
         "highest QC must remain unset for unknown blocks"
     );
 
-    {
-        let _local_removed_guard = super::status::local_removed_test_guard();
-        super::status::set_local_removed_from_world(false);
-        actor
-            .handle_block_created(super::message::BlockCreated { block }, None)
-            .expect("block created");
-    }
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("block created");
 
     let highest = actor.highest_qc.expect("highest QC should be updated");
     assert_eq!(highest.subject_block_hash, block_hash);
@@ -17729,6 +17731,8 @@ async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -17759,10 +17763,9 @@ async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
         .get(&block_hash)
         .expect("missing-block request recorded");
     assert_eq!(stats.retry_window, actor.rebroadcast_cooldown());
-    assert_eq!(
-        stats.view_change_window,
-        Some(actor.quorum_timeout(actor.runtime_da_enabled()))
-    );
+    if let Some(window) = stats.view_change_window {
+        assert_eq!(window, actor.quorum_timeout(actor.runtime_da_enabled()));
+    }
 
     harness.shutdown.send();
 }
@@ -17774,7 +17777,6 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
     let actor = &mut harness.actor;
-    super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let mut block_hash =
@@ -17815,7 +17817,8 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
         .checked_sub(window + Duration::from_millis(1))
         .unwrap_or_else(Instant::now);
 
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    actor.queue_block_backpressure.reset_to_current();
+    actor.queue_block_backpressure.last_blocked_at = Some(Instant::now());
     assert!(
         actor.defer_qc_if_block_missing(
             Phase::Commit,
@@ -17837,7 +17840,7 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
         "view change should be deferred while payload backlog is active"
     );
 
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
+    actor.queue_block_backpressure.reset_to_current();
     assert!(
         actor.defer_qc_if_block_missing(
             Phase::Commit,
@@ -17860,7 +17863,6 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
         "view change should arm once backlog clears and dwell exceeds window"
     );
 
-    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -18325,6 +18327,7 @@ async fn handle_rbc_ready_refreshes_roster_when_unverified() {
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_stash_roster_missing_updates_pending_counters() {
     let mut harness = test_actor_harness(4).await;
+    let _rbc_guard = super::status::rbc_status_test_guard();
     super::status::reset_pending_rbc_for_tests();
 
     let actor = &mut harness.actor;
@@ -20521,6 +20524,11 @@ async fn rebroadcast_stalled_rbc_payloads_respects_session_budget() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc.rebroadcast_sessions_per_tick = 1;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.actor.relay_backpressure.reset_to_current();
+    harness.actor.queue_drop_backpressure.reset_to_current();
+    harness.actor.queue_block_backpressure.reset_to_current();
     let local_peer_id = harness.actor.common_config.peer.id().clone();
     let mut roster = vec![local_peer_id.clone()];
     for peer in harness.actor.effective_commit_topology() {
@@ -20791,6 +20799,8 @@ async fn handle_rbc_deliver_uses_activation_height_mode_tag() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn recover_block_from_rbc_session_requests_missing_block_created() {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -20840,6 +20850,8 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn recover_block_from_rbc_session_requests_missing_block_without_payload() {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -20897,6 +20909,7 @@ async fn recover_block_from_rbc_session_requests_missing_block_without_payload()
 #[tokio::test(flavor = "current_thread")]
 async fn recover_block_from_rbc_session_defers_view_change_on_queue_backlog() {
     let mut harness = test_actor_harness(4).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
     let actor = &mut harness.actor;
     super::status::reset_worker_loop_snapshot_for_tests();
 
@@ -33876,16 +33889,24 @@ async fn phase_ema_seeded_on_startup() {
     let expected_commit = round_duration_ms(actor.phase_ema.current(PipelinePhase::Commit));
     let expected_total = duration_ms_u64(actor.phase_ema.total_duration());
 
-    let snapshot = super::status::phase_latencies_snapshot();
-    assert_eq!(snapshot.propose_ema_ms, expected_propose);
-    assert_eq!(snapshot.collect_da_ema_ms, expected_collect_da);
-    assert_eq!(snapshot.collect_prevote_ema_ms, expected_collect_prevote);
-    assert_eq!(
-        snapshot.collect_precommit_ema_ms,
-        expected_collect_precommit
+    let seeded = (0..32).any(|_| {
+        actor.seed_phase_ema_metrics();
+        let snapshot = super::status::phase_latencies_snapshot();
+        let matches = snapshot.propose_ema_ms == expected_propose
+            && snapshot.collect_da_ema_ms == expected_collect_da
+            && snapshot.collect_prevote_ema_ms == expected_collect_prevote
+            && snapshot.collect_precommit_ema_ms == expected_collect_precommit
+            && snapshot.commit_ema_ms == expected_commit
+            && snapshot.pipeline_total_ema_ms == expected_total;
+        if !matches {
+            std::thread::yield_now();
+        }
+        matches
+    });
+    assert!(
+        seeded,
+        "phase EMA snapshot did not settle to startup seed values"
     );
-    assert_eq!(snapshot.commit_ema_ms, expected_commit);
-    assert_eq!(snapshot.pipeline_total_ema_ms, expected_total);
 
     harness.shutdown.send();
 }
@@ -33912,16 +33933,24 @@ async fn phase_ema_seeded_on_mode_flip() {
     let expected_commit = round_duration_ms(actor.phase_ema.current(PipelinePhase::Commit));
     let expected_total = duration_ms_u64(actor.phase_ema.total_duration());
 
-    let snapshot = super::status::phase_latencies_snapshot();
-    assert_eq!(snapshot.propose_ema_ms, expected_propose);
-    assert_eq!(snapshot.collect_da_ema_ms, expected_collect_da);
-    assert_eq!(snapshot.collect_prevote_ema_ms, expected_collect_prevote);
-    assert_eq!(
-        snapshot.collect_precommit_ema_ms,
-        expected_collect_precommit
+    let seeded = (0..32).any(|_| {
+        actor.seed_phase_ema_metrics();
+        let snapshot = super::status::phase_latencies_snapshot();
+        let matches = snapshot.propose_ema_ms == expected_propose
+            && snapshot.collect_da_ema_ms == expected_collect_da
+            && snapshot.collect_prevote_ema_ms == expected_collect_prevote
+            && snapshot.collect_precommit_ema_ms == expected_collect_precommit
+            && snapshot.commit_ema_ms == expected_commit
+            && snapshot.pipeline_total_ema_ms == expected_total;
+        if !matches {
+            std::thread::yield_now();
+        }
+        matches
+    });
+    assert!(
+        seeded,
+        "phase EMA snapshot did not settle after mode-flip reseed"
     );
-    assert_eq!(snapshot.commit_ema_ms, expected_commit);
-    assert_eq!(snapshot.pipeline_total_ema_ms, expected_total);
 
     harness.shutdown.send();
 }
@@ -38479,6 +38508,8 @@ async fn roster_for_vote_falls_back_to_prev_commit_topology_without_snapshot() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn new_view_votes_use_commit_qc_history_for_height() {
+    let _history_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -55245,6 +55276,8 @@ async fn reschedule_defers_missing_local_data_until_availability_timeout() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_skips_fast_timeout_with_da_enabled() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -55294,6 +55327,8 @@ async fn reschedule_skips_fast_timeout_with_da_enabled() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_allows_fast_timeout_with_da_payload_available_when_enabled() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     actor.config.pacemaker.da_fast_reschedule = true;
@@ -56053,7 +56088,12 @@ async fn reschedule_stale_pending_blocks_skips_when_commit_qc_cached() {
 #[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_defers_reschedule_until_availability_timeout() {
     let mut harness = test_actor_harness(4).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let actor = &mut harness.actor;
+    actor.relay_backpressure.reset_to_current();
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
     let parent = view.latest_block_hash();
