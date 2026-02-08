@@ -15,6 +15,10 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
         .unwrap_or_else(|| payload.to_vec());
+    make_raw_tlv(type_id, &payload)
+}
+
+fn make_raw_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
@@ -37,6 +41,11 @@ fn grant_revoke_permission_with_tlv() {
             .parse()
             .unwrap();
     let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let alice_literal = norito::json::to_value(&alice)
+        .expect("serialize account id")
+        .as_str()
+        .expect("account id string")
+        .to_owned();
 
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
@@ -49,9 +58,9 @@ fn grant_revoke_permission_with_tlv() {
     // Step 1: grant ReadAccountAssets(alice) to bob via Name TLV
     let subj = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
     vm.memory.preload_input(0, &subj).expect("preload input");
-    let perm_name = make_tlv(
+    let perm_name = make_raw_tlv(
         PointerType::Name as u16,
-        format!("read_assets:{alice}").as_bytes(),
+        format!("read_assets:{alice_literal}").as_bytes(),
     );
     vm.memory
         .preload_input(subj.len() as u64 + 8, &perm_name)
@@ -89,7 +98,7 @@ fn grant_revoke_permission_with_tlv() {
     let subj = make_tlv(PointerType::AccountId as u16, bob.to_string().as_bytes());
     let perm_json = make_tlv(
         PointerType::Json as u16,
-        format!("{{\"type\":\"read_assets\",\"target\":\"{alice}\"}}").as_bytes(),
+        format!("{{\"type\":\"read_assets\",\"target\":\"{alice_literal}\"}}").as_bytes(),
     );
     vm.memory.preload_input(0, &subj).expect("preload input");
     vm.memory

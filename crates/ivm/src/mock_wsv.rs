@@ -4075,9 +4075,16 @@ impl IVMHost for WsvHost {
                             Ok((ty, payload))
                         }
 
-                        if let Ok(root) =
-                            norito::json::from_slice::<norito::json::Value>(tlv.payload)
-                        {
+                        let root = decode_from_bytes::<Json>(tlv.payload)
+                            .ok()
+                            .and_then(|json| {
+                                norito::json::from_str::<norito::json::Value>(json.get()).ok()
+                            })
+                            .or_else(|| {
+                                norito::json::from_slice::<norito::json::Value>(tlv.payload).ok()
+                            });
+
+                        if let Some(root) = root {
                             let (ty, payload) = parse_json_envelope(root)?;
                             let ty_ref = ty.as_str();
                             let alias_matches = |aliases: &[&str]| aliases.contains(&ty_ref);
@@ -4528,7 +4535,7 @@ impl IVMHost for WsvHost {
                                 }
                             }
                         } else {
-                            // Fallback: JSON decode via Norito wrapper
+                            // Fallback: non-envelope instruction JSON payload.
                             norito::json::from_slice::<DMInstructionBox>(tlv.payload)
                                 .map_err(|_| VMError::NoritoInvalid)?
                         }

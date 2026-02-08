@@ -2135,7 +2135,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         crate::telemetry::Telemetry::new(Arc::new(crate::telemetry::Metrics::default()), true);
 
     #[cfg(feature = "telemetry")]
-    let actor = Actor::new(
+    let mut actor = Actor::new(
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
@@ -2161,7 +2161,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     .expect("actor init");
 
     #[cfg(not(feature = "telemetry"))]
-    let actor = Actor::new(
+    let mut actor = Actor::new(
         consensus_cfg,
         common_config,
         network_cfg.max_frame_bytes_consensus,
@@ -2184,6 +2184,11 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         rbc_status_handle,
     )
     .expect("actor init");
+
+    // Keep unit tests deterministic by forcing QC aggregate checks inline.
+    actor.subsystems.qc_verify.work_txs.clear();
+    actor.subsystems.qc_verify.result_rx = None;
+    actor.subsystems.qc_verify.inflight.clear();
 
     TestActorHarness {
         actor,
@@ -4568,9 +4573,13 @@ async fn block_sync_update_rejects_conflicting_commit_qc_and_keeps_local_block()
     let mut update = super::message::BlockSyncUpdate::from(&conflicting);
     update.commit_qc = Some(qc);
 
-    actor
-        .handle_block_sync_update(update, None)
-        .expect("block sync update");
+    {
+        let _local_removed_guard = status::local_removed_test_guard();
+        status::set_local_removed_from_world(false);
+        actor
+            .handle_block_sync_update(update, None)
+            .expect("block sync update");
+    }
 
     let kura_block = actor
         .kura
@@ -4903,11 +4912,11 @@ async fn block_sync_update_ignored_when_local_removed_from_world() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let _guard = super::status::message_handling_test_guard();
+    let _local_removed_guard = super::status::local_removed_test_guard();
+    let _message_handling_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let _removed = LocalRemovedGuard::new(true);
 
     let _genesis_hash = seed_genesis_block_for_state(&actor.state);
     let (committed_height, committed_hash) = {
@@ -5000,9 +5009,12 @@ async fn block_sync_update_ignored_when_local_removed_from_world() {
         },
     );
 
-    actor
-        .handle_block_sync_update(update, None)
-        .expect("block sync update");
+    {
+        let _removed = LocalRemovedGuard::new(true);
+        actor
+            .handle_block_sync_update(update, None)
+            .expect("block sync update");
+    }
 
     assert!(
         !actor.vote_roster_cache.contains_key(&block.hash()),
@@ -7061,13 +7073,12 @@ async fn block_sync_update_drops_qc_epoch_mismatch() {
 async fn block_sync_update_records_commit_qc_from_cached_qc() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-    }
+    status::reset_commit_certs_for_tests();
+    status::reset_precommit_signer_history_for_tests();
 
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -7158,20 +7169,10 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
         &topology,
         &harness.key_pairs,
     );
-    status::record_precommit_signers(status::PrecommitSignerRecord {
-        block_hash: block.hash(),
-        height: block_height,
-        view,
-        epoch: 0,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        signers,
-        bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
-        roster_len: topology.as_ref().len(),
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        validator_set: topology.as_ref().to_vec(),
-        stake_snapshot: None,
-    });
+    actor.qc_cache.insert(
+        (Phase::Commit, block.hash(), block_height, view, 0),
+        qc.clone(),
+    );
     let now = Instant::now();
     let retry_window = Duration::from_secs(1);
     super::touch_missing_block_request(
@@ -7201,9 +7202,13 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
     update.stake_snapshot = None;
     update.commit_votes.clear();
 
-    actor
-        .handle_block_sync_update(update, None)
-        .expect("block sync update");
+    {
+        let _local_removed_guard = status::local_removed_test_guard();
+        status::set_local_removed_from_world(false);
+        actor
+            .handle_block_sync_update(update, None)
+            .expect("block sync update");
+    }
 
     let history = status::commit_qc_history();
     assert!(
@@ -8382,7 +8387,6 @@ async fn fetch_pending_block_attaches_cached_qc() {
     actor.kura.store_block(block.clone()).expect("store block");
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32].into_iter().collect();
     let signers_bitmap = vec![0b0000_0111];
     let aggregate_signature = aggregate_signature_for_bitmap(
         &actor.common_config.chain,
@@ -8397,22 +8401,33 @@ async fn fetch_pending_block_attaches_cached_qc() {
         &harness.key_pairs,
     );
     let validator_set = topology.as_ref().to_vec();
-
-    crate::sumeragi::status::record_precommit_signers(
-        crate::sumeragi::status::PrecommitSignerRecord {
-            block_hash,
-            height: block.header().height().get(),
-            view: block.header().view_change_index(),
-            epoch: 0,
-            parent_state_root: zero_state_root(),
-            post_state_root: zero_state_root(),
-            signers,
+    let cached_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: block.header().height().get(),
+        view: block.header().view_change_index(),
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: signers_bitmap.clone(),
             bls_aggregate_signature: aggregate_signature.clone(),
-            roster_len: topology.as_ref().len(),
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            validator_set,
-            stake_snapshot: None,
         },
+    };
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            block.header().height().get(),
+            block.header().view_change_index(),
+            0,
+        ),
+        cached_qc,
     );
 
     let request = super::message::FetchPendingBlock {
@@ -8833,7 +8848,6 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
     actor.kura.store_block(block.clone()).expect("store block");
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32].into_iter().collect();
     let signers_bitmap = vec![0b0000_0111];
     let aggregate_signature = aggregate_signature_for_bitmap(
         &actor.common_config.chain,
@@ -8848,22 +8862,33 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
         &harness.key_pairs,
     );
     let validator_set = topology.as_ref().to_vec();
-
-    crate::sumeragi::status::record_precommit_signers(
-        crate::sumeragi::status::PrecommitSignerRecord {
-            block_hash,
-            height: block.header().height().get(),
-            view: block.header().view_change_index(),
-            epoch: 0,
-            parent_state_root: zero_state_root(),
-            post_state_root: zero_state_root(),
-            signers,
+    let cached_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: block.header().height().get(),
+        view: block.header().view_change_index(),
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: signers_bitmap.clone(),
             bls_aggregate_signature: aggregate_signature,
-            roster_len: topology.as_ref().len(),
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            validator_set,
-            stake_snapshot: None,
         },
+    };
+    actor.qc_cache.insert(
+        (
+            Phase::Commit,
+            block_hash,
+            block.header().height().get(),
+            block.header().view_change_index(),
+            0,
+        ),
+        cached_qc,
     );
 
     let mut update = super::message::BlockSyncUpdate::from(&block);
@@ -15892,6 +15917,7 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
 async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -17475,9 +17501,13 @@ async fn block_created_applies_cached_precommit_qc() {
         "lock must remain unset for unknown blocks"
     );
 
-    actor
-        .handle_block_created(super::message::BlockCreated { block }, None)
-        .expect("block created");
+    {
+        let _local_removed_guard = super::status::local_removed_test_guard();
+        super::status::set_local_removed_from_world(false);
+        actor
+            .handle_block_created(super::message::BlockCreated { block }, None)
+            .expect("block created");
+    }
 
     let locked = actor.locked_qc.expect("locked QC should be updated");
     assert_eq!(locked.subject_block_hash, block_hash);
@@ -17543,9 +17573,13 @@ async fn block_created_replays_cached_prepare_qc() {
         "highest QC must remain unset for unknown blocks"
     );
 
-    actor
-        .handle_block_created(super::message::BlockCreated { block }, None)
-        .expect("block created");
+    {
+        let _local_removed_guard = super::status::local_removed_test_guard();
+        super::status::set_local_removed_from_world(false);
+        actor
+            .handle_block_created(super::message::BlockCreated { block }, None)
+            .expect("block created");
+    }
 
     let highest = actor.highest_qc.expect("highest QC should be updated");
     assert_eq!(highest.subject_block_hash, block_hash);
@@ -31588,6 +31622,7 @@ fn defer_qc_for_missing_block_records_metrics_with_empty_signers() {
 #[test]
 fn defer_qc_for_missing_block_prefers_signers_records_telemetry_and_preserves_qc_status() {
     let _guard = super::status::missing_block_fetch_test_guard();
+    let _qc_guard = super::status::qc_status_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
     let before = super::status::snapshot();
     let mut requests = BTreeMap::new();
@@ -33919,9 +33954,13 @@ async fn block_created_records_collect_da_phase() {
 
     actor.record_phase_sample(PipelinePhase::Propose, height, view);
     let block = sample_block(height, view, parent);
-    actor
-        .handle_block_created(super::message::BlockCreated { block }, None)
-        .expect("handle BlockCreated");
+    {
+        let _local_removed_guard = super::status::local_removed_test_guard();
+        super::status::set_local_removed_from_world(false);
+        actor
+            .handle_block_created(super::message::BlockCreated { block }, None)
+            .expect("handle BlockCreated");
+    }
 
     assert!(
         actor
@@ -44329,18 +44368,21 @@ async fn block_created_ignored_when_local_removed_from_world() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let _guard = super::status::message_handling_test_guard();
+    let _local_removed_guard = super::status::local_removed_test_guard();
+    let _message_handling_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
-    let _removed = LocalRemovedGuard::new(true);
 
     let height = 1_u64;
     let view = 0_u64;
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
 
-    actor
-        .handle_block_created(super::message::BlockCreated { block }, None)
-        .expect("handle BlockCreated");
+    {
+        let _removed = LocalRemovedGuard::new(true);
+        actor
+            .handle_block_created(super::message::BlockCreated { block }, None)
+            .expect("handle BlockCreated");
+    }
 
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
@@ -45556,9 +45598,13 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
         "test expects heartbeat BlockCreated to be non-empty"
     );
 
-    actor
-        .handle_block_created(super::message::BlockCreated { block }, None)
-        .expect("handle BlockCreated");
+    {
+        let _local_removed_guard = super::status::local_removed_test_guard();
+        super::status::set_local_removed_from_world(false);
+        actor
+            .handle_block_created(super::message::BlockCreated { block }, None)
+            .expect("handle BlockCreated");
+    }
 
     let key = (Phase::Commit, block_hash, height, view, epoch);
     let qc = actor
@@ -45566,12 +45612,12 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
         .get(&key)
         .cloned()
         .or_else(|| {
-            super::status::commit_qc_history().into_iter().find(|qc| {
-                qc.subject_block_hash == block_hash
-                    && qc.height == height
-                    && qc.view == view
-                    && qc.epoch == epoch
-            })
+            actor
+                .state
+                .commit_roster_journal
+                .read()
+                .get(height, block_hash)
+                .map(|snapshot| snapshot.commit_qc)
         })
         .unwrap_or_else(|| {
             let cached = actor.qc_cache.keys().collect::<Vec<_>>();
@@ -54923,6 +54969,8 @@ async fn stake_quorum_timeout_reschedules_and_records_view_change() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_defers_missing_local_data_until_availability_timeout() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -55170,6 +55218,8 @@ async fn reschedule_defers_fast_timeout_while_validation_inflight() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();

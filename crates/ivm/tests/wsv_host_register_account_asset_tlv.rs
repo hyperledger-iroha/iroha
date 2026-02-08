@@ -31,11 +31,6 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn alloc_numeric(vm: &mut IVM, amount: u64) -> u64 {
-    let tlv = make_numeric_tlv(amount);
-    vm.alloc_input_tlv(&tlv).expect("alloc numeric tlv")
-}
-
 #[test]
 fn register_account_and_asset_then_mint() {
     // Caller alice will register a new domain, an account in it, an asset def, and mint.
@@ -98,17 +93,21 @@ fn register_account_and_asset_then_mint() {
     vm.memory
         .preload_input(tlv_bob.len() as u64 + 8, &tlv_rose)
         .expect("preload input");
+    let tlv_amount = make_numeric_tlv(7_u64);
+    let amount_offset = tlv_bob.len() as u64 + tlv_rose.len() as u64 + 16;
+    vm.memory
+        .preload_input(amount_offset, &tlv_amount)
+        .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
-    let mint_amount = alloc_numeric(&mut vm, 7);
-    vm.set_register(12, mint_amount);
+    vm.set_register(12, Memory::INPUT_START + amount_offset);
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint asset");
 }
 
 #[test]
-fn register_asset_rejects_name_pointer() {
+fn register_asset_accepts_name_pointer_scoped_to_caller_domain() {
     let alice: AccountId =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
             .parse()
@@ -123,7 +122,17 @@ fn register_asset_rejects_name_pointer() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
-    // Caller registers domain first to keep permissions aligned.
+    // Register caller domain so Name-scoped asset registration can succeed.
+    let caller_dom = make_tlv(PointerType::DomainId as u16, b"domain");
+    vm.memory
+        .preload_input(0, &caller_dom)
+        .expect("preload input");
+    vm.set_register(10, Memory::INPUT_START);
+    let prog_caller_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    vm.load_program(&prog_caller_dom).unwrap();
+    vm.run().expect("register caller domain");
+
+    // Register an additional domain to mirror mixed-domain test setups.
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
@@ -131,7 +140,7 @@ fn register_asset_rejects_name_pointer() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    // Attempt to register an asset using a Name pointer (invalid path) should fail.
+    // Register an asset using a Name pointer; host scopes it to the caller domain.
     let invalid_name = make_tlv(PointerType::Name as u16, b"rose");
     vm.memory
         .preload_input(0, &invalid_name)
@@ -139,6 +148,5 @@ fn register_asset_rejects_name_pointer() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
-    let err = vm.run().expect_err("name pointer should be rejected");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    vm.run().expect("name pointer should be accepted");
 }
