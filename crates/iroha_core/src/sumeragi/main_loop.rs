@@ -14326,6 +14326,12 @@ impl RelayBackpressure {
         self.last_drop_count = Self::drop_count();
         self.last_drop_at = None;
     }
+
+    #[cfg(test)]
+    fn disable_for_tests(&mut self) {
+        self.last_drop_count = u64::MAX;
+        self.last_drop_at = None;
+    }
 }
 
 impl Default for RelayBackpressure {

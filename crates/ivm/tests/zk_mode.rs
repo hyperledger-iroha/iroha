@@ -11,18 +11,18 @@ fn test_zk_mode_padding_and_assert() {
     assert_prog.extend_from_slice(&assert_instr.to_le_bytes());
     assert_prog.extend_from_slice(&halt);
 
-    // Case 1: Normal mode (zk_mode = false) -> should error immediately and not pad cycles
+    // Case 1: Normal mode (zk_mode = false) -> ZK op is rejected immediately.
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(1, 1);
     let prog = assemble(&assert_prog);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(
-        matches!(res, Err(VMError::AssertionFailed)),
-        "Assert should fail in normal mode"
+        matches!(res, Err(VMError::ZkExtensionDisabled)),
+        "ZK ASSERT should be gated by header mode bit"
     );
-    // In normal mode, execution stops at the assertion (cycle count = 1)
-    assert_eq!(vm.get_cycle_count(), 1);
+    // Execution is rejected before the instruction is applied.
+    assert_eq!(vm.get_cycle_count(), 0);
 
     // Case 2: ZK mode (zk_mode = true) -> should pad to MAX_CYCLES and then error
     let mut vm2 = IVM::new(u64::MAX);
@@ -78,18 +78,18 @@ fn test_assert_continues_execution_in_zk_mode() {
     bytes.extend_from_slice(&addi_inst.to_le_bytes());
     bytes.extend_from_slice(&halt_inst.to_le_bytes());
 
-    // Normal mode: ADDI should not execute due to assertion failure
+    // Normal mode: ZK ASSERT is rejected, so ADDI does not execute.
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(1, 1);
     vm.set_register(2, 0);
     let prog = assemble(&bytes);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::AssertionFailed)));
+    assert!(matches!(res, Err(VMError::ZkExtensionDisabled)));
     assert_eq!(
         vm.register(2),
         0,
-        "addi executed unexpectedly in normal mode"
+        "addi executed unexpectedly when ZK mode bit is unset"
     );
 
     // ZK mode: execution continues so ADDI runs

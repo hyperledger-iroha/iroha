@@ -296,119 +296,130 @@ but they must not change the host ABI.
 <!-- BEGIN GENERATED SYSCALLS -->
 | Number | Name | Args | Return | Gas |
 |---|---|---|---|---|
-| 0x00 | DEBUG_PRINT | - | - | asset:gas/G_debug@ivm.core/v1 |
-| 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v1 |
-| 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v1 |
-| 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v1 |
-| 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v1 |
-| 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v1 |
-| 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId | u64=0 | asset:gas/G_xfer_domain@ivm.core/v1 |
-| 0x13 | REGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_reg_acct@ivm.core/v1 |
-| 0x14 | UNREGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_unreg_acct@ivm.core/v1 |
-| 0x15 | REGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_reg_peer@ivm.core/v1 |
-| 0x16 | UNREGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_unreg_peer@ivm.core/v1 |
-| 0x17 | ADD_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_add_sig@ivm.core/v1 |
-| 0x18 | REMOVE_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_rm_sig@ivm.core/v1 |
-| 0x19 | SET_ACCOUNT_QUORUM | r10=&AccountId, r11=quorum:u64 | u64=0 | asset:gas/G_set_quorum@ivm.core/v1 |
-| 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v1 + bytes(val) |
-| 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_reg_asset@ivm.core/v1 |
-| 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v1 |
-| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_mint@ivm.core/v1 |
-| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_burn@ivm.core/v1 |
-| 0x24 | TRANSFER_ASSET | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_transfer@ivm.core/v1 |
-| 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&AccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v1 |
-| 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v1 |
-| 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v1 |
-| 0x28 | NFT_BURN_ASSET | r10=&NftId | u64=0 | asset:gas/G_nft_burn_asset@ivm.core/v1 |
-| 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | - |
-| 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | - |
-| 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v1 per entry |
-| 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v1 |
-| 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v1 |
-| 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v1 |
-| 0x33 | REVOKE_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_role@ivm.core/v1 |
-| 0x34 | GRANT_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_perm@ivm.core/v1 |
-| 0x35 | REVOKE_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_perm@ivm.core/v1 |
-| 0x40 | CREATE_TRIGGER | r10=&Json(spec) | u64=0 | asset:gas/G_create_trig@ivm.core/v1 |
-| 0x41 | REMOVE_TRIGGER | r10=&Name | u64=0 | asset:gas/G_remove_trig@ivm.core/v1 |
-| 0x42 | SET_TRIGGER_ENABLED | r10=&Name, r11=enabled:u64 | u64=0 | asset:gas/G_set_trig@ivm.core/v1 |
-| 0x43 | DEACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(DeactivateContractInstance) | u64=0 | - |
-| 0x44 | REMOVE_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RemoveSmartContractBytes) | u64=0 | - |
-| 0x45 | REGISTER_SMART_CONTRACT_CODE | r10=&NoritoBytes(RegisterSmartContractCode) | u64=0 | - |
-| 0x46 | REGISTER_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RegisterSmartContractBytes) | u64=0 | - |
-| 0x47 | ACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(ActivateContractInstance) | u64=0 | - |
-| 0x50 | STATE_GET | r10=&Name | r10=ptr (&NoritoBytes) or 0 | - |
-| 0x51 | STATE_SET | r10=&Name, r11=&NoritoBytes | u64=0 | - |
-| 0x52 | STATE_DEL | r10=&Name | u64=0 | - |
-| 0x53 | DECODE_INT | r10=&NoritoBytes(Norito-framed i64) | r10=i64 | - |
-| 0x54 | BUILD_PATH_MAP_KEY | r10=&Name(base), r11=key:i64 | r10=ptr (&Name) | - |
-| 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Norito-framed i64)) | - |
-| 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | - |
-| 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes(Json)) | asset:gas/G_json_encode@ivm.core/v1 |
-| 0x58 | JSON_DECODE | r10=&NoritoBytes(Json) or &Blob(JSON text) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v1 |
-| 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes(Json)) | - |
-| 0x5A | SCHEMA_DECODE | r10=&Name(schema), r11=&NoritoBytes(Json) | ptr (&Json) | - |
-| 0x5B | SCHEMA_INFO | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
-| 0x5C | NAME_DECODE | r10=&NoritoBytes(Name) | ptr (&Name) | asset:gas/G_name_decode@ivm.core/v1 |
-| 0x5D | POINTER_TO_NORITO | r10=&PointerType<T> | ptr (&NoritoBytes(TLV envelope)) | - |
-| 0x5E | POINTER_FROM_NORITO | r10=&NoritoBytes(TLV envelope), r11=expected?:u16 | ptr (&PointerType<T>) | - |
-| 0x5F | TLV_EQ | r10=&Tlv, r11=&Tlv | r10=1/0 | - |
-| 0x60 | ZK_VERIFY_TRANSFER | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v1 |
-| 0x61 | ZK_VERIFY_UNSHIELD | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v1 |
-| 0x62 | ZK_VOTE_VERIFY_BALLOT | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v1 |
-| 0x63 | ZK_VOTE_VERIFY_TALLY | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v1 |
-| 0x64 | ZK_ROOTS_GET | r10=&NoritoBytes(RootsGetRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_roots_get@ivm.core/v1 |
-| 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v1 |
-| 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v1 |
-| 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v1 |
-| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | asset:gas/G_verify@ivm.core/v1 |
-| 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | - |
-| 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | - |
-| 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
-| 0x6C | NUMERIC_SUB | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
-| 0x6D | NUMERIC_MUL | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
-| 0x6E | NUMERIC_DIV | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
-| 0x6F | NUMERIC_REM | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
-| 0x70 | NUMERIC_NEG | r10=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
-| 0x71 | NUMERIC_EQ | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
-| 0x72 | NUMERIC_NE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
-| 0x73 | NUMERIC_LT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
-| 0x74 | NUMERIC_LE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
-| 0x75 | NUMERIC_GT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
-| 0x76 | NUMERIC_GE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
-| 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | - |
-| 0x91 | SM2_VERIFY | r10=&Blob(msg), r11=&Blob(sig), r12=&Blob(pubkey), r13=&Blob(distid)? | u64=0/1 | asset:gas/G_verify@ivm.core/v1 |
-| 0x92 | SM4_GCM_SEAL | r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext) | r10=ptr (&Blob(ciphertext || tag16)) | - |
-| 0x93 | SM4_GCM_OPEN | r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag16) | r10=ptr (&Blob(plaintext)) or 0 | - |
-| 0x94 | SM4_CCM_SEAL | r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(plaintext), r14=tag_len:u64 | r10=ptr (&Blob(ciphertext || tag)) | - |
-| 0x95 | SM4_CCM_OPEN | r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag), r14=tag_len:u64 | r10=ptr (&Blob(plaintext)) or 0 | - |
-| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox) | u64=0 | asset:gas/G_sci@ivm.core/v1 |
-| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v1 |
-| 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v1 |
-| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v1 |
-| 0xA4 | GET_AUTHORITY | - | ptr (AccountId in INPUT) | asset:gas/G_get_auth@ivm.core/v1 |
-| 0xA5 | SUBSCRIPTION_BILL | - | u64=0 | asset:gas/G_sub_bill@ivm.core/v1 |
-| 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v1 |
-| 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | - |
-| 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | - |
-| 0xB2 | AXT_COMMIT | - | u64=0 | - |
-| 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v1 |
-| 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | - |
-| 0xE0 | INPUT_PUBLISH_TLV | r10=&Blob(TLV) | ptr (r10) | asset:gas/G_input_publish@ivm.core/v1 |
-| 0xF0 | ALLOC | r10=bytes:u64 | ptr (r10) | asset:gas/G_alloc@ivm.core/v1 + bytes |
-| 0xF1 | GET_PUBLIC_INPUT | r10=&Name | ptr (&Tlv) | asset:gas/G_get_pub@ivm.core/v1 + bytes |
-| 0xF4 | PROVE_EXECUTION | - | r10=0/1 | asset:gas/G_prove@ivm.core/v1 |
-| 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v1 per page |
-| 0xF6 | VERIFY_PROOF | - | r10=0/1 | asset:gas/G_verify@ivm.core/v1 |
-| 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v1 + len |
-| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&NoritoBytes(Numeric)) | asset:gas/G_get_bal@ivm.core/v1 |
-| 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v1 + depth |
-| 0xFB | USE_NULLIFIER | r10=nullifier:u64 | u64=0 | asset:gas/G_use_null@ivm.core/v1 |
-| 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v1 |
-| 0xFD | GET_PRIVATE_INPUT | r10=index:u64 | r10=value | asset:gas/G_get_priv@ivm.core/v1 |
-| 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v1 |
-| 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v1 + depth |
+| 0x00 | DEBUG_PRINT | - | - | - |
+| 0x01 | EXIT | - | - | - |
+| 0x02 | ABORT | - | - | - |
+| 0x03 | DEBUG_LOG | - | - | - |
+| 0x10 | REGISTER_DOMAIN | - | - | - |
+| 0x11 | UNREGISTER_DOMAIN | - | - | - |
+| 0x12 | TRANSFER_DOMAIN | - | - | - |
+| 0x13 | REGISTER_ACCOUNT | - | - | - |
+| 0x14 | UNREGISTER_ACCOUNT | - | - | - |
+| 0x15 | REGISTER_PEER | - | - | - |
+| 0x16 | UNREGISTER_PEER | - | - | - |
+| 0x17 | ADD_SIGNATORY | - | - | - |
+| 0x18 | REMOVE_SIGNATORY | - | - | - |
+| 0x19 | SET_ACCOUNT_QUORUM | - | - | - |
+| 0x1A | SET_ACCOUNT_DETAIL | - | - | - |
+| 0x20 | REGISTER_ASSET | - | - | - |
+| 0x21 | UNREGISTER_ASSET | - | - | - |
+| 0x22 | MINT_ASSET | - | - | - |
+| 0x23 | BURN_ASSET | - | - | - |
+| 0x24 | TRANSFER_ASSET | - | - | - |
+| 0x25 | NFT_MINT_ASSET | - | - | - |
+| 0x26 | NFT_TRANSFER_ASSET | - | - | - |
+| 0x27 | NFT_SET_METADATA | - | - | - |
+| 0x28 | NFT_BURN_ASSET | - | - | - |
+| 0x29 | TRANSFER_V1_BATCH_BEGIN | - | - | - |
+| 0x2A | TRANSFER_V1_BATCH_END | - | - | - |
+| 0x2B | TRANSFER_V1_BATCH_APPLY | - | - | - |
+| 0x30 | CREATE_ROLE | - | - | - |
+| 0x31 | DELETE_ROLE | - | - | - |
+| 0x32 | GRANT_ROLE | - | - | - |
+| 0x33 | REVOKE_ROLE | - | - | - |
+| 0x34 | GRANT_PERMISSION | - | - | - |
+| 0x35 | REVOKE_PERMISSION | - | - | - |
+| 0x40 | CREATE_TRIGGER | - | - | - |
+| 0x41 | REMOVE_TRIGGER | - | - | - |
+| 0x42 | SET_TRIGGER_ENABLED | - | - | - |
+| 0x43 | DEACTIVATE_CONTRACT_INSTANCE | - | - | - |
+| 0x44 | REMOVE_SMART_CONTRACT_BYTES | - | - | - |
+| 0x45 | REGISTER_SMART_CONTRACT_CODE | - | - | - |
+| 0x46 | REGISTER_SMART_CONTRACT_BYTES | - | - | - |
+| 0x47 | ACTIVATE_CONTRACT_INSTANCE | - | - | - |
+| 0x50 | STATE_GET | - | - | - |
+| 0x51 | STATE_SET | - | - | - |
+| 0x52 | STATE_DEL | - | - | - |
+| 0x53 | DECODE_INT | - | - | - |
+| 0x54 | BUILD_PATH_MAP_KEY | - | - | - |
+| 0x55 | ENCODE_INT | - | - | - |
+| 0x56 | BUILD_PATH_KEY_NORITO | - | - | - |
+| 0x57 | JSON_ENCODE | - | - | - |
+| 0x58 | JSON_DECODE | - | - | - |
+| 0x59 | SCHEMA_ENCODE | - | - | - |
+| 0x5A | SCHEMA_DECODE | - | - | - |
+| 0x5B | SCHEMA_INFO | - | - | - |
+| 0x5C | NAME_DECODE | - | - | - |
+| 0x5D | POINTER_TO_NORITO | - | - | - |
+| 0x5E | POINTER_FROM_NORITO | - | - | - |
+| 0x5F | TLV_EQ | - | - | - |
+| 0x60 | ZK_VERIFY_TRANSFER | - | - | - |
+| 0x61 | ZK_VERIFY_UNSHIELD | - | - | - |
+| 0x62 | ZK_VOTE_VERIFY_BALLOT | - | - | - |
+| 0x63 | ZK_VOTE_VERIFY_TALLY | - | - | - |
+| 0x64 | ZK_ROOTS_GET | - | - | - |
+| 0x65 | ZK_VOTE_GET_TALLY | - | - | - |
+| 0x66 | VRF_VERIFY | - | - | - |
+| 0x67 | VRF_VERIFY_BATCH | - | - | - |
+| 0x68 | ZK_VERIFY_BATCH | - | - | - |
+| 0x69 | NUMERIC_FROM_INT | - | - | - |
+| 0x6A | NUMERIC_TO_INT | - | - | - |
+| 0x6B | NUMERIC_ADD | - | - | - |
+| 0x6C | NUMERIC_SUB | - | - | - |
+| 0x6D | NUMERIC_MUL | - | - | - |
+| 0x6E | NUMERIC_DIV | - | - | - |
+| 0x6F | NUMERIC_REM | - | - | - |
+| 0x70 | NUMERIC_NEG | - | - | - |
+| 0x71 | NUMERIC_EQ | - | - | - |
+| 0x72 | NUMERIC_NE | - | - | - |
+| 0x73 | NUMERIC_LT | - | - | - |
+| 0x74 | NUMERIC_LE | - | - | - |
+| 0x75 | NUMERIC_GT | - | - | - |
+| 0x76 | NUMERIC_GE | - | - | - |
+| 0x77 | TLV_LEN | - | - | - |
+| 0x78 | JSON_GET_I64 | - | - | - |
+| 0x79 | JSON_GET_JSON | - | - | - |
+| 0x7A | JSON_GET_NAME | - | - | - |
+| 0x7B | JSON_GET_ACCOUNT_ID | - | - | - |
+| 0x7C | JSON_GET_NFT_ID | - | - | - |
+| 0x7D | JSON_GET_BLOB_HEX | - | - | - |
+| 0x90 | SM3_HASH | - | - | - |
+| 0x91 | SM2_VERIFY | - | - | - |
+| 0x92 | SM4_GCM_SEAL | - | - | - |
+| 0x93 | SM4_GCM_OPEN | - | - | - |
+| 0x94 | SM4_CCM_SEAL | - | - | - |
+| 0x95 | SM4_CCM_OPEN | - | - | - |
+| 0x96 | SHA256_HASH | - | - | - |
+| 0x97 | SHA3_HASH | - | - | - |
+| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | - | - | - |
+| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | - | - | - |
+| 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | - | - |
+| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | - | - | - |
+| 0xA4 | GET_AUTHORITY | - | - | - |
+| 0xA5 | SUBSCRIPTION_BILL | - | - | - |
+| 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | - | - |
+| 0xB0 | AXT_BEGIN | - | - | - |
+| 0xB1 | AXT_TOUCH | - | - | - |
+| 0xB2 | AXT_COMMIT | - | - | - |
+| 0xB3 | VERIFY_DS_PROOF | - | - | - |
+| 0xB4 | USE_ASSET_HANDLE | - | - | - |
+| 0xE0 | INPUT_PUBLISH_TLV | - | - | - |
+| 0xF0 | ALLOC | - | - | - |
+| 0xF1 | GET_PUBLIC_INPUT | - | - | - |
+| 0xF4 | PROVE_EXECUTION | - | - | - |
+| 0xF5 | GROW_HEAP | - | - | - |
+| 0xF6 | VERIFY_PROOF | - | - | - |
+| 0xF7 | GET_MERKLE_PATH | - | - | - |
+| 0xF9 | GET_ACCOUNT_BALANCE | - | - | - |
+| 0xFA | GET_MERKLE_COMPACT | - | - | - |
+| 0xFB | USE_NULLIFIER | - | - | - |
+| 0xFC | VERIFY_SIGNATURE | - | - | - |
+| 0xFD | GET_PRIVATE_INPUT | - | - | - |
+| 0xFE | COMMIT_OUTPUT | - | - | - |
+| 0xFF | GET_REGISTER_MERKLE_COMPACT | - | - | - |
 <!-- END GENERATED SYSCALLS -->
+
+
 
 
 

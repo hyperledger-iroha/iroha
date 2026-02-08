@@ -4597,6 +4597,9 @@ impl IVM {
                     continue;
                 }
                 instruction::wide::zk::ASSERT => {
+                    if unlikely(!self.zk_mode) {
+                        return Err(VMError::ZkExtensionDisabled);
+                    }
                     let rs = instruction::wide::rs1(instr);
                     self.constraints.record(Constraint::Zero {
                         reg: rs,
@@ -4611,6 +4614,9 @@ impl IVM {
                     continue;
                 }
                 instruction::wide::zk::ASSERT_EQ => {
+                    if unlikely(!self.zk_mode) {
+                        return Err(VMError::ZkExtensionDisabled);
+                    }
                     let rs1 = instruction::wide::rs1(instr);
                     let rs2 = instruction::wide::rs2(instr);
                     self.constraints.record(Constraint::Eq {

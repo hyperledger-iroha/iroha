@@ -2066,7 +2066,6 @@ mod tests {
         },
     };
     use iroha_config_base::WithOrigin;
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, DataSpaceId, Level,
         isi::Log,
@@ -2264,7 +2263,6 @@ mod tests {
             &TimeSource::new_system(),
         ));
 
-        let shutdown = ShutdownSignal::new();
         let mut network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
         network_cfg.max_frame_bytes = 512;
         network_cfg.max_frame_bytes_tx_gossip = 1024;
@@ -2274,16 +2272,7 @@ mod tests {
         let expected =
             tx_gossip_frame_payload_cap(&network_cfg, &chain_id, &self_peer_id, &max_peer_id);
 
-        let (network, _child) = IrohaNetwork::start(
-            PEER_KEYPAIR.clone(),
-            network_cfg.clone(),
-            None,
-            None,
-            None,
-            shutdown.clone(),
-        )
-        .await
-        .expect("network starts");
+        let network = IrohaNetwork::closed_for_tests();
 
         let gossiper = TransactionGossiper::from_config(
             chain_id,
@@ -2302,7 +2291,6 @@ mod tests {
         );
 
         assert_eq!(gossiper.tx_frame_cap, expected);
-        shutdown.send();
     }
 
     #[test]
@@ -3104,19 +3092,6 @@ mod tests {
             &TimeSource::new_system(),
         ));
 
-        let shutdown = ShutdownSignal::new();
-        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
-        let (network, _child) = IrohaNetwork::start(
-            KeyPair::random(),
-            network_cfg,
-            None,
-            None,
-            None,
-            shutdown.clone(),
-        )
-        .await
-        .expect("network starts");
-
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
@@ -3130,7 +3105,7 @@ mod tests {
             ],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
-            network,
+            network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
             state,
             tx_frame_cap: 1024,
@@ -3156,7 +3131,6 @@ mod tests {
         }));
 
         assert_eq!(queue.queued_len(), 1);
-        shutdown.send();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3201,19 +3175,6 @@ mod tests {
             }),
         ));
 
-        let shutdown = ShutdownSignal::new();
-        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
-        let (network, _child) = IrohaNetwork::start(
-            KeyPair::random(),
-            network_cfg,
-            None,
-            None,
-            None,
-            shutdown.clone(),
-        )
-        .await
-        .expect("network starts");
-
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
@@ -3227,7 +3188,7 @@ mod tests {
             ],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
-            network,
+            network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
             state,
             tx_frame_cap: 1024,
@@ -3248,7 +3209,6 @@ mod tests {
         }));
 
         assert_eq!(queue.queued_len(), 0);
-        shutdown.send();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3333,19 +3293,6 @@ mod tests {
             }),
         ));
 
-        let shutdown = ShutdownSignal::new();
-        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
-        let (network, _child) = IrohaNetwork::start(
-            KeyPair::random(),
-            network_cfg,
-            None,
-            None,
-            None,
-            shutdown.clone(),
-        )
-        .await
-        .expect("network starts");
-
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
@@ -3359,7 +3306,7 @@ mod tests {
             ],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
-            network,
+            network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
             state,
             tx_frame_cap: 1024,
@@ -3380,6 +3327,5 @@ mod tests {
         }));
 
         assert_eq!(queue.queued_len(), 1);
-        shutdown.send();
     }
 }
