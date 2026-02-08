@@ -646,7 +646,10 @@ mod tests {
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
                 p2p_proxy: None,
+                p2p_proxy_required: false,
                 p2p_no_proxy: Vec::new(),
+                p2p_proxy_tls_verify: true,
+                p2p_proxy_tls_pinned_cert_der_base64: None,
                 quic_enabled: false,
                 quic_datagrams_enabled: defaults::network::QUIC_DATAGRAMS_ENABLED,
                 quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES
@@ -656,6 +659,7 @@ mod tests {
                 quic_datagram_send_buffer_bytes:
                     defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
                 tls_enabled: false,
+                tls_fallback_to_plain: true,
                 tls_listen_address: None,
                 prefer_ws_fallback: false,
                 p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),

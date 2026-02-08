@@ -317,12 +317,11 @@ fn roster_member_has_live_consensus_key(
     })
 }
 
-pub(super) fn filter_roster_with_live_consensus_keys_at_height(
-    view: &StateView<'_>,
+pub(super) fn filter_roster_with_live_consensus_keys_at_height_world(
+    world: &impl WorldReadOnly,
     roster: Vec<PeerId>,
     height: u64,
 ) -> Vec<PeerId> {
-    let world = view.world();
     if world.consensus_keys().is_empty() {
         return roster;
     }
@@ -342,6 +341,14 @@ pub(super) fn filter_roster_with_live_consensus_keys_at_height(
             )
         })
         .collect()
+}
+
+pub(super) fn filter_roster_with_live_consensus_keys_at_height(
+    view: &StateView<'_>,
+    roster: Vec<PeerId>,
+    height: u64,
+) -> Vec<PeerId> {
+    filter_roster_with_live_consensus_keys_at_height_world(view.world(), roster, height)
 }
 
 fn filter_roster_with_live_consensus_keys(

@@ -1373,6 +1373,7 @@ pub mod handles {
         post_capacity: usize,
         quic_enabled: bool,
         tls_enabled: bool,
+        tls_fallback_to_plain: bool,
         prefer_ws_fallback: bool,
         trust_gossip: bool,
         max_frame_bytes: usize,
@@ -1380,6 +1381,8 @@ pub mod handles {
         happy_eyeballs_stagger: Duration,
         tcp_nodelay: bool,
         tcp_keepalive: Option<Duration>,
+        proxy_tls_verify: bool,
+        proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
         proxy_policy: crate::transport::ProxyPolicy,
         quic_dialer: Option<crate::transport::QuicDialer>,
         quic_datagrams_enabled: bool,
@@ -1402,6 +1405,7 @@ pub mod handles {
             soranet_handshake,
             quic_enabled,
             tls_enabled,
+            tls_fallback_to_plain,
             prefer_ws_fallback,
             trust_gossip,
             relay_role,
@@ -1409,6 +1413,8 @@ pub mod handles {
             happy_eyeballs_stagger,
             tcp_nodelay,
             tcp_keepalive,
+            proxy_tls_verify,
+            proxy_tls_pinned_cert_der,
             proxy_policy,
             quic_dialer,
         };
@@ -2754,6 +2760,7 @@ mod run {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
         decrypted: Vec<u8>,
+        decode_scratch: Vec<u8>,
         cryptographer: Cryptographer<E>,
         pending: VecDeque<(M, usize)>,
         framed_schema: [u8; 16],
@@ -2784,11 +2791,41 @@ mod run {
                 cryptographer,
                 buffer: BytesMut::with_capacity(capacity),
                 decrypted: Vec::with_capacity(decrypt_capacity),
+                decode_scratch: Vec::new(),
                 pending: VecDeque::new(),
                 framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
                 framed_padding,
                 max_frame_bytes,
             }
+        }
+
+        fn copy_to_aligned_scratch<'a>(
+            scratch: &'a mut Vec<u8>,
+            src: &[u8],
+            align: usize,
+        ) -> &'a [u8] {
+            debug_assert!(align.is_power_of_two());
+            let len = src.len();
+            if len == 0 || align <= 1 {
+                scratch.clear();
+                scratch.extend_from_slice(src);
+                return scratch.as_slice();
+            }
+            let extra = align.saturating_sub(1);
+            let needed = len.saturating_add(extra);
+            if scratch.len() < needed {
+                scratch.resize(needed, 0);
+            }
+            let base = scratch.as_ptr() as usize;
+            let misalignment = base % align;
+            let offset = if misalignment == 0 {
+                0
+            } else {
+                align - misalignment
+            };
+            let end = offset.saturating_add(len);
+            scratch[offset..end].copy_from_slice(src);
+            &scratch[offset..end]
         }
 
         fn reserve_for_frame(&mut self) -> Result<(), Error> {
@@ -2856,32 +2893,48 @@ mod run {
             }
 
             let data = &buf[..size];
-            let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
-            let decrypted_len = decrypted.len();
-            if decrypted_len == 0 {
-                return Err(Error::Format);
-            }
+            {
+                let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
+                let decrypted_len = decrypted.len();
+                if decrypted_len == 0 {
+                    return Err(Error::Format);
+                }
 
-            // Decrypted payload may contain multiple Norito-framed messages.
-            let mut offset = 0usize;
-            while offset < decrypted_len {
-                let remaining = decrypted.get(offset..).ok_or(Error::Format)?;
-                let frame_len =
-                    framed_message_len::<M>(remaining, self.framed_schema, self.framed_padding)?;
-                let frame = remaining.get(..frame_len).ok_or(Error::Format)?;
-                let decoded = match ncore::decode_from_bytes::<M>(frame) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        iroha_logger::warn!(error = ?err, "Failed to decode peer message");
-                        return Err(Error::Format);
-                    }
-                };
-                self.pending.push_back((decoded, frame_len));
-                offset = offset.saturating_add(frame_len);
-            }
-            if offset != decrypted_len {
-                return Err(Error::Format);
-            }
+                // Decrypted payload may contain multiple Norito-framed messages.
+                let align = core::mem::align_of::<ncore::Archived<M>>();
+                let mut offset = 0usize;
+                while offset < decrypted_len {
+                    let remaining = decrypted.get(offset..).ok_or(Error::Format)?;
+                    let frame_len = framed_message_len::<M>(
+                        remaining,
+                        self.framed_schema,
+                        self.framed_padding,
+                    )?;
+                    let frame = remaining.get(..frame_len).ok_or(Error::Format)?;
+                    let misaligned = align > 1
+                        && !frame.is_empty()
+                        && !((frame.as_ptr() as usize).is_multiple_of(align));
+                    let decoded = if misaligned {
+                        let aligned =
+                            Self::copy_to_aligned_scratch(&mut self.decode_scratch, frame, align);
+                        ncore::decode_from_bytes::<M>(aligned)
+                    } else {
+                        ncore::decode_from_bytes::<M>(frame)
+                    };
+                    let decoded = match decoded {
+                        Ok(value) => value,
+                        Err(err) => {
+                            iroha_logger::warn!(error = ?err, "Failed to decode peer message");
+                            return Err(Error::Format);
+                        }
+                    };
+                    self.pending.push_back((decoded, frame_len));
+                    offset = offset.saturating_add(frame_len);
+                }
+                if offset != decrypted_len {
+                    return Err(Error::Format);
+                }
+            };
 
             self.buffer.advance(size + Self::U32_SIZE);
 
@@ -4298,6 +4351,7 @@ mod state {
         pub soranet_handshake: Arc<SoranetHandshakeConfig>,
         pub quic_enabled: bool,
         pub tls_enabled: bool,
+        pub tls_fallback_to_plain: bool,
         pub prefer_ws_fallback: bool,
         pub trust_gossip: bool,
         pub relay_role: RelayRole,
@@ -4305,6 +4359,8 @@ mod state {
         pub happy_eyeballs_stagger: Duration,
         pub tcp_nodelay: bool,
         pub tcp_keepalive: Option<Duration>,
+        pub proxy_tls_verify: bool,
+        pub proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
         pub proxy_policy: crate::transport::ProxyPolicy,
         pub quic_dialer: Option<crate::transport::QuicDialer>,
     }
@@ -4324,6 +4380,7 @@ mod state {
                 soranet_handshake,
                 quic_enabled,
                 tls_enabled,
+                tls_fallback_to_plain,
                 prefer_ws_fallback,
                 trust_gossip,
                 relay_role,
@@ -4331,12 +4388,16 @@ mod state {
                 happy_eyeballs_stagger,
                 tcp_nodelay,
                 tcp_keepalive,
+                proxy_tls_verify,
+                proxy_tls_pinned_cert_der,
                 proxy_policy,
                 quic_dialer,
             }: Self,
         ) -> Result<ConnectedTo, crate::Error> {
             let tcp_opts = crate::transport::TcpConnectOptions {
                 proxy: proxy_policy,
+                proxy_tls_verify,
+                proxy_tls_pinned_cert_der,
                 tcp_nodelay,
                 tcp_keepalive,
             };
@@ -4414,7 +4475,15 @@ mod state {
                 dial_timeout: Duration,
                 connection_id: ConnectionId,
                 tls_enabled: bool,
+                tls_fallback_to_plain: bool,
             ) -> Result<Connection, crate::Error> {
+                if tls_enabled && !cfg!(feature = "p2p_tls") && !tls_fallback_to_plain {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "TLS-only dialing requested but this build does not include iroha_p2p/p2p_tls",
+                    )
+                    .into());
+                }
                 #[cfg(feature = "p2p_tls")]
                 if tls_enabled {
                     let sni_host = match peer_addr {
@@ -4451,10 +4520,30 @@ mod state {
                     match tls {
                         Ok(Ok(conn)) => return Ok(conn),
                         Ok(Err(e)) => {
-                            iroha_logger::warn!(%e, addr=%peer_addr, "TLS dial failed; falling back to TCP");
+                            if tls_fallback_to_plain {
+                                iroha_logger::warn!(
+                                    %e,
+                                    addr=%peer_addr,
+                                    "TLS dial failed; falling back to TCP"
+                                );
+                            } else {
+                                return Err(e.into());
+                            }
                         }
                         Err(_) => {
-                            iroha_logger::warn!(addr=%peer_addr, timeout=?dial_timeout, "TLS dial timed out; falling back to TCP");
+                            let err = std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "tls dial timeout",
+                            );
+                            if tls_fallback_to_plain {
+                                iroha_logger::warn!(
+                                    addr=%peer_addr,
+                                    timeout=?dial_timeout,
+                                    "TLS dial timed out; falling back to TCP"
+                                );
+                            } else {
+                                return Err(err.into());
+                            }
                         }
                     }
                 }
@@ -4624,6 +4713,7 @@ mod state {
                 dial_timeout,
                 connection_id,
                 tls_enabled,
+                tls_fallback_to_plain,
             );
             tokio::pin!(tcp_fut);
 

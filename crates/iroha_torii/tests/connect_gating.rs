@@ -104,7 +104,10 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
+            p2p_proxy_required: false,
             p2p_no_proxy: Vec::new(),
+            p2p_proxy_tls_verify: true,
+            p2p_proxy_tls_pinned_cert_der_base64: None,
             quic_enabled: false,
             quic_datagrams_enabled:
                 iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
@@ -112,6 +115,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
+            tls_fallback_to_plain: true,
             tls_listen_address: None,
             prefer_ws_fallback: false,
             p2p_queue_cap_high: nonzero!(128usize),

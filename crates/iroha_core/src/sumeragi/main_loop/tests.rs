@@ -108,6 +108,41 @@ fn wire(msg: BlockMessage) -> BlockMessageWire {
     BlockMessageWire::new(msg)
 }
 
+#[test]
+fn tick_heartbeat_log_due_respects_interval() {
+    let start = Instant::now();
+    let interval = Duration::from_millis(500);
+
+    assert!(!Actor::tick_heartbeat_log_due(start, start, interval));
+    assert!(!Actor::tick_heartbeat_log_due(
+        start + interval - Duration::from_millis(1),
+        start,
+        interval
+    ));
+    assert!(Actor::tick_heartbeat_log_due(
+        start + interval,
+        start,
+        interval
+    ));
+}
+
+#[test]
+fn tick_heartbeat_log_due_handles_future_last_log() {
+    let start = Instant::now();
+    let interval = Duration::from_millis(500);
+    let last_log = start + Duration::from_secs(1);
+
+    assert!(!Actor::tick_heartbeat_log_due(start, last_log, interval));
+}
+
+#[test]
+fn tick_heartbeat_log_due_handles_zero_interval() {
+    let start = Instant::now();
+    let interval = Duration::ZERO;
+
+    assert!(Actor::tick_heartbeat_log_due(start, start, interval));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn select_block_sync_roster(
     block: &SignedBlock,
@@ -1929,7 +1964,10 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
+        p2p_proxy_required: false,
         p2p_no_proxy: Vec::new(),
+        p2p_proxy_tls_verify: true,
+        p2p_proxy_tls_pinned_cert_der_base64: None,
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
         quic_datagram_max_payload_bytes:
@@ -1939,6 +1977,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         quic_datagram_send_buffer_bytes:
             iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
+        tls_fallback_to_plain: true,
         tls_listen_address: None,
         prefer_ws_fallback: false,
         p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
@@ -25771,7 +25810,10 @@ async fn stale_pending_block_requeues_transactions() {
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
+        p2p_proxy_required: false,
         p2p_no_proxy: Vec::new(),
+        p2p_proxy_tls_verify: true,
+        p2p_proxy_tls_pinned_cert_der_base64: None,
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
         quic_datagram_max_payload_bytes:
@@ -25781,6 +25823,7 @@ async fn stale_pending_block_requeues_transactions() {
         quic_datagram_send_buffer_bytes:
             iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
+        tls_fallback_to_plain: true,
         tls_listen_address: None,
         prefer_ws_fallback: false,
         p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
@@ -53655,7 +53698,10 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
+        p2p_proxy_required: false,
         p2p_no_proxy: Vec::new(),
+        p2p_proxy_tls_verify: true,
+        p2p_proxy_tls_pinned_cert_der_base64: None,
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
         quic_datagram_max_payload_bytes:
@@ -53665,6 +53711,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         quic_datagram_send_buffer_bytes:
             iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
+        tls_fallback_to_plain: true,
         tls_listen_address: None,
         prefer_ws_fallback: false,
         p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,

@@ -56,10 +56,17 @@ handshake_chain_id = []
 # If enabled, use bounded queues for peer post channel to reduce unbounded growth.
 p2p_bounded_queues = []
 # Optional future transport/handshake features (scaffolding)
-quic = ["dep:quinn", "dep:rcgen", "dep:rustls"]
+quic = ["dep:quinn", "dep:rcgen", "dep:rustls", "rustls/ring", "rustls/std"]
 noise_handshake = ["dep:snow"]
 ## Scaffold for TLS-over-TCP transport (camouflage); currently a placeholder.
-p2p_tls = ["dep:tokio-rustls", "dep:rustls", "dep:rcgen"]
+p2p_tls = [
+    "dep:tokio-rustls",
+    "tokio-rustls/ring",
+    "dep:rustls",
+    "rustls/ring",
+    "rustls/std",
+    "dep:rcgen",
+]
 ## WebSocket fallback over Torii (/p2p) using WSS
 p2p_ws = ["dep:tokio-tungstenite"]
 ## Optional TURN relay scaffold (no external deps; env-based stub)

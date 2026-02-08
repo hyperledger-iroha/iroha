@@ -18,6 +18,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
 };
@@ -1743,6 +1744,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             quic_datagram_receive_buffer_bytes,
             quic_datagram_send_buffer_bytes,
             tls_enabled,
+            tls_fallback_to_plain,
             prefer_ws_fallback,
             p2p_queue_cap_high,
             p2p_queue_cap_low,
@@ -1751,7 +1753,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             dns_refresh_interval,
             dns_refresh_ttl,
             p2p_proxy,
+            p2p_proxy_required,
             p2p_no_proxy,
+            p2p_proxy_tls_verify,
+            p2p_proxy_tls_pinned_cert_der_base64,
             happy_eyeballs_stagger: config_happy_eyeballs_stagger,
             addr_ipv6_first,
             max_incoming,
@@ -1805,7 +1810,42 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
         let connect_startup_delay_until = tokio::time::Instant::now() + connect_startup_delay;
 
+        if p2p_proxy_required {
+            if p2p_proxy.is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "network.p2p_proxy_required=true but network.p2p_proxy is not set",
+                )
+                .into());
+            }
+            // QUIC uses UDP and bypasses the TCP proxy dialer entirely.
+            if cfg!(feature = "quic") && quic_enabled {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "network.p2p_proxy_required=true is incompatible with network.quic_enabled=true (QUIC bypasses the proxy); set network.quic_enabled=false",
+                )
+                .into());
+            }
+        }
+
         let proxy_policy = crate::transport::ProxyPolicy::from_config(p2p_proxy, p2p_no_proxy)?;
+        let proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>> =
+            if let Some(raw) = p2p_proxy_tls_pinned_cert_der_base64.as_deref() {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    None
+                } else {
+                    let bytes = BASE64_STANDARD.decode(raw.as_bytes()).map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("network.p2p_proxy_tls_pinned_cert_der_base64: {e}"),
+                        )
+                    })?;
+                    Some(std::sync::Arc::<[u8]>::from(bytes))
+                }
+            } else {
+                None
+            };
 
         let quic_dialer: Option<crate::transport::QuicDialer> = {
             #[cfg(feature = "quic")]
@@ -2054,8 +2094,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
             tls_enabled,
+            tls_fallback_to_plain,
             prefer_ws_fallback,
             proxy_policy,
+            proxy_tls_verify: p2p_proxy_tls_verify,
+            proxy_tls_pinned_cert_der,
             quic_dialer,
             allowlist_only,
             allow_keys: allow_keys.into_iter().collect(),
@@ -2685,10 +2728,14 @@ mod accept_stream_tests {
             quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             tls_enabled: false,
+            tls_fallback_to_plain: true,
             tls_listen_address: None,
             prefer_ws_fallback: false,
             p2p_proxy: None,
+            p2p_proxy_required: false,
             p2p_no_proxy: vec![],
+            p2p_proxy_tls_verify: true,
+            p2p_proxy_tls_pinned_cert_der_base64: None,
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
@@ -3189,8 +3236,11 @@ mod accept_stream_tests {
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
+            tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
             proxy_policy: crate::transport::ProxyPolicy::disabled(),
+            proxy_tls_verify: true,
+            proxy_tls_pinned_cert_der: None,
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),
@@ -3522,8 +3572,11 @@ mod accept_stream_tests {
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
+            tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
             proxy_policy: crate::transport::ProxyPolicy::disabled(),
+            proxy_tls_verify: true,
+            proxy_tls_pinned_cert_der: None,
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),
@@ -3714,8 +3767,11 @@ mod accept_stream_tests {
                 quic_datagram_max_payload_bytes: 0,
                 quic_dialer: None,
                 tls_enabled: false,
+                tls_fallback_to_plain: true,
                 prefer_ws_fallback: false,
                 proxy_policy: crate::transport::ProxyPolicy::disabled(),
+                proxy_tls_verify: true,
+                proxy_tls_pinned_cert_der: None,
                 allowlist_only: false,
                 allow_keys: HashSet::new(),
                 deny_keys: HashSet::new(),
@@ -3921,8 +3977,11 @@ mod accept_stream_tests {
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
+            tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
             proxy_policy: crate::transport::ProxyPolicy::disabled(),
+            proxy_tls_verify: true,
+            proxy_tls_pinned_cert_der: None,
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),
@@ -4672,11 +4731,17 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Enable TLS-over-TCP transport based on config at runtime (feature-gated).
     #[allow(dead_code)]
     tls_enabled: bool,
+    /// When TLS-over-TCP is enabled, fall back to plain TCP if the TLS dial fails.
+    tls_fallback_to_plain: bool,
     /// Prefer WS fallback for outbound (feature-gated via caller).
     #[allow(dead_code)]
     prefer_ws_fallback: bool,
     /// Proxy policy applied to outbound TCP dials.
     proxy_policy: crate::transport::ProxyPolicy,
+    /// Whether to verify TLS certificates when dialing an `https://` proxy.
+    proxy_tls_verify: bool,
+    /// Optional pinned end-entity certificate for `https://` proxies (DER).
+    proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
     /// ACL: Allowlist-only switch and lists of keys and networks
     allowlist_only: bool,
     allow_keys: std::collections::HashSet<iroha_crypto::PublicKey>,
@@ -5719,6 +5784,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.post_queue_cap,
             self.quic_enabled,
             self.tls_enabled,
+            self.tls_fallback_to_plain,
             self.prefer_ws_fallback,
             self.trust_gossip,
             self.max_frame_bytes,
@@ -5726,6 +5792,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.happy_eyeballs_stagger,
             self.tcp_nodelay,
             self.tcp_keepalive,
+            self.proxy_tls_verify,
+            self.proxy_tls_pinned_cert_der.clone(),
             self.proxy_policy.clone(),
             self.quic_dialer.clone(),
             self.quic_datagrams_enabled,
@@ -6884,8 +6952,11 @@ mod tests {
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
             tls_enabled: false,
+            tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
             proxy_policy: crate::transport::ProxyPolicy::disabled(),
+            proxy_tls_verify: true,
+            proxy_tls_pinned_cert_der: None,
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),

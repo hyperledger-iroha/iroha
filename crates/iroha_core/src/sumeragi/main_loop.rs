@@ -4436,6 +4436,7 @@ pub(super) struct Actor {
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     locked_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     tick_counter: u64,
+    last_tick_heartbeat_log: Instant,
     tick_timing: TickTimingMonitor,
     tick_timing_thresholds: TickTimingThresholds,
     last_qc_rebuild: Instant,
@@ -9058,6 +9059,7 @@ impl Actor {
             highest_qc: None,
             locked_qc: None,
             tick_counter: 0,
+            last_tick_heartbeat_log: now,
             tick_timing: TickTimingMonitor::new(now),
             tick_timing_thresholds: TickTimingThresholds::default(),
             last_qc_rebuild: initial_qc_rebuild,
@@ -9985,11 +9987,22 @@ impl Actor {
         matches!(tick_deadline, Some(deadline) if now >= deadline)
     }
 
+    const TICK_HEARTBEAT_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+    fn tick_heartbeat_log_due(now: Instant, last_log: Instant, interval: Duration) -> bool {
+        now.saturating_duration_since(last_log) >= interval
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
-        if self.tick_counter.is_multiple_of(50) {
+        if Self::tick_heartbeat_log_due(
+            tick_start,
+            self.last_tick_heartbeat_log,
+            Self::TICK_HEARTBEAT_LOG_INTERVAL,
+        ) {
+            self.last_tick_heartbeat_log = tick_start;
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.heartbeat");
             let view = self.state.view();
             let backpressure = self.queue_backpressure_state();

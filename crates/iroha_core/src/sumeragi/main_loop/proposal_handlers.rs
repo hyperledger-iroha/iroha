@@ -876,13 +876,8 @@ impl Actor {
         let header = block.header();
         let height = header.height().get();
         let view = header.view_change_index();
-        let (committed_height, committed_hash) = {
-            let state_view = self.state.view();
-            (
-                u64::try_from(state_view.height()).unwrap_or(u64::MAX),
-                state_view.latest_block_hash(),
-            )
-        };
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let committed_hash = self.state.latest_block_hash_fast();
         let missing_request = self
             .pending
             .missing_block_requests
