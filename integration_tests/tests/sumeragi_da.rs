@@ -140,13 +140,10 @@ fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
 
 fn http_client_with_client_auth(client: &Client) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
-    let auth = client
-        .headers
-        .iter()
-        .find_map(|(name, value)| {
-            name.eq_ignore_ascii_case(reqwest::header::AUTHORIZATION.as_str())
-                .then_some(value)
-        });
+    let auth = client.headers.iter().find_map(|(name, value)| {
+        name.eq_ignore_ascii_case(reqwest::header::AUTHORIZATION.as_str())
+            .then_some(value)
+    });
     if let Some(auth) = auth {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(

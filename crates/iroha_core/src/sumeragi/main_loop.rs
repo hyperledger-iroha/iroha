@@ -11443,7 +11443,14 @@ impl Actor {
             ConsensusMode::Permissioned => {
                 view.world.parameters().sumeragi().effective_commit_time()
             }
-            ConsensusMode::Npos => super::resolve_npos_timeouts(view, &self.config.npos).commit,
+            ConsensusMode::Npos => {
+                let stage_commit = super::resolve_npos_timeouts(view, &self.config.npos).commit;
+                // NPoS phase timeouts can be intentionally shorter than block time for the
+                // internal stage budget; quorum/view-change timing must remain anchored to the
+                // canonical Sumeragi commit timeout to avoid pathological churn.
+                let quorum_floor = view.world.parameters().sumeragi().effective_commit_time();
+                stage_commit.max(quorum_floor)
+            }
         }
     }
 

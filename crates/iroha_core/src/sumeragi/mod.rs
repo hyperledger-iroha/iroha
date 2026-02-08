@@ -300,6 +300,7 @@ impl EpochScheduleSnapshot {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_epoch_boundary(&self, height: u64) -> bool {
         if height == 0 {
             return false;
@@ -11346,7 +11347,9 @@ impl SumeragiWorker {
                 ConsensusMode::Permissioned => resolve_sumeragi_timeouts(params, &fallback_params),
                 ConsensusMode::Npos => {
                     let block_time = resolve_npos_block_time(&view);
-                    let commit_time = resolve_npos_timeouts(&view, &config.npos).commit;
+                    let stage_commit = resolve_npos_timeouts(&view, &config.npos).commit;
+                    // Keep worker/quorum budgets aligned with canonical Sumeragi commit timing.
+                    let commit_time = stage_commit.max(params.effective_commit_time());
                     (block_time, commit_time)
                 }
             };
