@@ -2149,29 +2149,37 @@ impl Actor {
             known_hash_for_height(candidate.height)
                 .is_none_or(|known_hash| known_hash == candidate.subject_block_hash)
         };
-        let cert = target_parent_hash
-            .and_then(|target_hash| {
-                super::status::commit_qc_history()
-                    .into_iter()
-                    .filter(|candidate| {
-                        candidate.height == target_parent
-                            && candidate.subject_block_hash == target_hash
-                            && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-                    })
-                    .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))
-            })
-            .or_else(|| {
-                super::status::commit_qc_history()
-                    .into_iter()
-                    .filter(|candidate| {
-                        candidate.height <= target_parent
-                            && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-                            && candidate_matches_known_chain(candidate)
-                    })
-                    .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))
-            })?;
-        if cert.validator_set.is_empty() {
-            return None;
+        let mut exact_candidates = Vec::new();
+        let mut fallback_candidates = Vec::new();
+        let strict_parent_qc = target_parent_hash.is_some() && target_parent > committed_height;
+        for candidate in super::status::commit_qc_history() {
+            if !matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit) {
+                continue;
+            }
+            if let Some(target_hash) = target_parent_hash {
+                if candidate.height == target_parent && candidate.subject_block_hash == target_hash
+                {
+                    exact_candidates.push(candidate);
+                    continue;
+                }
+                if strict_parent_qc {
+                    continue;
+                }
+            }
+            if candidate.height <= target_parent && candidate_matches_known_chain(&candidate) {
+                fallback_candidates.push(candidate);
+            }
+        }
+        exact_candidates.sort_by(|a, b| b.height.cmp(&a.height).then_with(|| b.view.cmp(&a.view)));
+        fallback_candidates
+            .sort_by(|a, b| b.height.cmp(&a.height).then_with(|| b.view.cmp(&a.view)));
+        let mut candidates = exact_candidates;
+        if !strict_parent_qc {
+            candidates.extend(fallback_candidates.into_iter().filter(|candidate| {
+                target_parent_hash.is_none_or(|target_hash| {
+                    candidate.height != target_parent || candidate.subject_block_hash != target_hash
+                })
+            }));
         }
         let hash_for_height = |h: u64| {
             if h == 0 {
@@ -2190,27 +2198,34 @@ impl Actor {
             }
             None
         };
-
-        let mut roster = cert.validator_set.clone();
-        let mut current_height = cert.height;
-        let mut current_hash = cert.subject_block_hash;
-        while current_height < height {
-            let mut topology = super::network_topology::Topology::new(roster.clone());
-            topology.block_committed(roster.clone(), current_hash);
-            roster = topology.as_ref().to_vec();
-            current_height = current_height.saturating_add(1);
-            if current_height == height {
-                let world = self.state.world_view();
-                roster = super::roster::filter_roster_with_live_consensus_keys_at_height_world(
-                    &world, roster, height,
-                );
-                if roster.is_empty() {
-                    return None;
-                }
-                roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
-                return Some(roster);
+        'candidates: for cert in candidates {
+            if cert.validator_set.is_empty() {
+                continue;
             }
-            current_hash = hash_for_height(current_height)?;
+            let mut roster = cert.validator_set.clone();
+            let mut current_height = cert.height;
+            let mut current_hash = cert.subject_block_hash;
+            while current_height < height {
+                let mut topology = super::network_topology::Topology::new(roster.clone());
+                topology.block_committed(roster.clone(), current_hash);
+                roster = topology.as_ref().to_vec();
+                current_height = current_height.saturating_add(1);
+                if current_height == height {
+                    let world = self.state.world_view();
+                    roster = super::roster::filter_roster_with_live_consensus_keys_at_height_world(
+                        &world, roster, height,
+                    );
+                    if roster.is_empty() {
+                        continue 'candidates;
+                    }
+                    roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+                    return Some(roster);
+                }
+                let Some(next_hash) = hash_for_height(current_height) else {
+                    continue 'candidates;
+                };
+                current_hash = next_hash;
+            }
         }
         None
     }

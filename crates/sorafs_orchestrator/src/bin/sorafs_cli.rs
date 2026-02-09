@@ -3858,7 +3858,6 @@ fn format_decimal(value: Decimal, places: u32) -> String {
 mod manifest_tests {
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
-    use iroha_data_model::domain::DomainId;
     use norito::json::{Map, Value};
     use sorafs_orchestrator::proxy::LocalQuicProxyConfig;
     use tempfile::TempDir;
@@ -3866,13 +3865,12 @@ mod manifest_tests {
     use super::*;
 
     fn account_string(label: u8) -> String {
-        let domain: DomainId = "panel".parse().expect("domain id");
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);
         let pk_bytes = signer.verifying_key().to_bytes();
         let pk =
             PublicKey::from_bytes(Algorithm::Ed25519, pk_bytes.as_slice()).expect("public key");
-        AccountId::new(domain, pk).to_string()
+        format!("{pk}@panel")
     }
 
     #[test]
