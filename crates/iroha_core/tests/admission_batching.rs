@@ -43,6 +43,12 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     (state, account_id, ChainId::from("chain"), kp)
 }
 
+fn set_default_da_policy_hash(header: &mut BlockHeader) {
+    let lane_cfg = iroha_config::parameters::actual::LaneConfig::default();
+    let hash = iroha_core::da::proof_policy_bundle_hash(&lane_cfg);
+    header.set_da_proof_policies_hash(Some(hash));
+}
+
 fn build_block_with_txs(
     good_kp: &KeyPair,
     bad_kp: &KeyPair,
@@ -68,7 +74,8 @@ fn build_block_with_txs(
         .map(|tx| tx.creation_time().as_millis() as u64)
         .max()
         .unwrap_or(0);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, ct_ms + 1, 0);
+    let mut header = BlockHeader::new(nonzero!(1_u64), None, None, None, ct_ms + 1, 0);
+    set_default_da_policy_hash(&mut header);
     let leader_sk = leader_kp.private_key();
     let sig = BlockSignature::new(0, SignatureOf::from_hash(leader_sk, header.hash()));
     SignedBlock::presigned(sig, header, txs)
@@ -116,6 +123,7 @@ fn presigned_block_with_creation_after_txs(
     };
     let mut header = BlockHeader::new(nonzero!(1_u64), None, None, None, block_ct, 0);
     header.merkle_root = merkle_root;
+    set_default_da_policy_hash(&mut header);
     let sig = BlockSignature::new(
         0,
         SignatureOf::from_hash(leader.private_key(), header.hash()),
@@ -209,7 +217,8 @@ fn bls_same_message_group_duplicate_rejected() {
         tx1.creation_time().as_millis() as u64,
         tx2.creation_time().as_millis() as u64,
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, ct_ms + 1, 0);
+    let mut header = BlockHeader::new(nonzero!(1_u64), None, None, None, ct_ms + 1, 0);
+    set_default_da_policy_hash(&mut header);
     let sig = BlockSignature::new(
         0,
         SignatureOf::from_hash(leader.private_key(), header.hash()),

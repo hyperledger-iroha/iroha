@@ -16,11 +16,11 @@ pub const SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX: u64 = 1_770_854_400;
 
 /// Aggregated BLAKE3 digest (hex) covering the canonical fixture bundle.
 pub const SORAFS_GATEWAY_FIXTURE_DIGEST_HEX: &str =
-    "83427e9d34ecdf4e2df6df159a0e2cb0a1fa6611b8898ef53e319ab535ba9588";
+    "fa5bcbc0776fcc762c6df13b0dfa8ad15673fd65509f505ea3ea0f0ffab32cdf";
 
 /// Canonical manifest payload digest (hex).
 pub const SORAFS_GATEWAY_MANIFEST_DIGEST_HEX: &str =
-    "9bd42b2e745e8f808dd9c5b641297fd3b637b09283023aaaecdc2d013648645a";
+    "ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e";
 
 /// Canonical deterministic payload digest (hex).
 pub const SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX: &str =
