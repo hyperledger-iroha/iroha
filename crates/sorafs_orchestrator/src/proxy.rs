@@ -24,6 +24,7 @@ use norito::{
 };
 use quinn::{
     ConnectionError, Endpoint, ServerConfig, VarInt,
+    crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
     rustls::pki_types::{CertificateDer, PrivateKeyDer},
 };
 use rand::{rand_core::TryRngCore, rngs::OsRng};
@@ -1019,8 +1020,7 @@ struct CacheTagContext {
 }
 
 impl CacheTagContext {
-    fn from_manifest(manifest: &BrowserExtensionManifest) -> Option<Self> {
-        let tagging = manifest.cache_tagging.as_ref()?;
+    fn from_cache_tagging(tagging: &ProxyCacheTagging) -> Option<Self> {
         let salt_hex = tagging.salt_hex.as_deref()?;
         let salt = match hex::decode(salt_hex) {
             Ok(bytes) => bytes,
@@ -1043,6 +1043,11 @@ impl CacheTagContext {
             attach_on,
             salt,
         })
+    }
+
+    fn from_manifest(manifest: &BrowserExtensionManifest) -> Option<Self> {
+        let tagging = manifest.cache_tagging.as_ref()?;
+        Self::from_cache_tagging(tagging)
     }
 
     fn supports(&self, service: &str) -> bool {
@@ -1196,8 +1201,17 @@ pub fn spawn_local_quic_proxy(
     let private_key = PrivateKeyDer::try_from(signing_key.serialize_der())
         .map_err(|err| ProxyError::PrivateKey(err.to_string()))?;
 
-    let mut server_config = ServerConfig::with_single_cert(vec![cert_der.clone()], private_key)
+    let mut tls_config = quinn::rustls::ServerConfig::builder_with_protocol_versions(&[
+        &quinn::rustls::version::TLS13,
+    ])
+    .with_no_client_auth()
+    .with_single_cert(vec![cert_der.clone()], private_key)
+    .map_err(|err| ProxyError::QuinnConfig(err.to_string()))?;
+    tls_config.max_early_data_size = u32::MAX;
+    tls_config.alpn_protocols = vec![PROXY_ALPN_LABEL.as_bytes().to_vec()];
+    let crypto = QuinnRustlsServerConfig::try_from(Arc::new(tls_config))
         .map_err(|err| ProxyError::QuinnConfig(err.to_string()))?;
+    let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
     server_config.transport = Arc::new(quinn::TransportConfig::default());
 
     let endpoint = Endpoint::server(server_config, bind_addr)
@@ -1347,6 +1361,8 @@ async fn handle_connection(
         let _ = send_stream.finish();
         let _ = recv_stream.stop(VarInt::from_u32(0));
         record_transport_event(telemetry_label, "handshake_reject", "unsupported_version");
+        // Keep the connection alive until the peer receives the rejection ack and closes.
+        let _ = connection.closed().await;
         return Ok(());
     }
 
@@ -1354,12 +1370,22 @@ async fn handle_connection(
     let manifest = manifest_template
         .as_ref()
         .map(BrowserManifestTemplate::instantiate);
+    let mut session_id = manifest.as_ref().and_then(|item| item.session_id.clone());
+    let mut cache_tags = manifest.as_ref().and_then(CacheTagContext::from_manifest);
+    if cache_tags.is_none() && guard_cache_key.is_some() {
+        if session_id.is_none() {
+            session_id = Some(generate_session_id());
+        }
+        let mut fallback_tagging = ProxyCacheTagging::default();
+        fallback_tagging.salt_hex = Some(generate_cache_salt());
+        cache_tags = CacheTagContext::from_cache_tagging(&fallback_tagging);
+    }
     let session = Arc::new(ProxySession {
         telemetry_label: telemetry_label.to_string(),
         mode: mode.clone(),
         guard_cache_key,
-        session_id: manifest.as_ref().and_then(|m| m.session_id.clone()),
-        cache_tags: manifest.as_ref().and_then(CacheTagContext::from_manifest),
+        session_id,
+        cache_tags,
         bridge: bridge_config,
     });
     let ack = ProxyHandshakeAckV1 {
@@ -2148,7 +2174,7 @@ struct ProxyHandshakeV1 {
 }
 
 /// Acknowledgement returned to clients after the handshake completes.
-#[derive(Debug, NoritoSerialize)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ProxyHandshakeAckV1 {
     version: u8,
     accepted: bool,
@@ -2177,7 +2203,7 @@ struct ProxyStreamOpenV1 {
 }
 
 /// Stream acknowledgement returned once the proxy routes a request.
-#[derive(Debug, NoritoSerialize)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ProxyStreamAckV1 {
     version: u8,
     code: u8,
@@ -2237,6 +2263,7 @@ mod tests {
     use quinn::{
         ClientConfig, Endpoint, ServerConfig, VarInt,
         crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
+        crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
     };
     use rustls::{
         DigitallySignedStruct, Error as RustlsError, SignatureScheme,
@@ -2278,8 +2305,16 @@ mod tests {
         let cert_der: CertificateDer<'static> = cert.der().clone();
         let private_key =
             PrivateKeyDer::try_from(signing_key.serialize_der()).expect("private key");
-        let mut server_config =
-            ServerConfig::with_single_cert(vec![cert_der], private_key).expect("server config");
+        let mut tls_config =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], private_key)
+                .expect("server tls config");
+        tls_config.max_early_data_size = u32::MAX;
+        tls_config.alpn_protocols = vec![PROXY_ALPN_LABEL.as_bytes().to_vec()];
+        let crypto =
+            QuinnRustlsServerConfig::try_from(Arc::new(tls_config)).expect("server crypto");
+        let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
         server_config.transport = Arc::new(quinn::TransportConfig::default());
 
         let endpoint = match Endpoint::server(server_config, "127.0.0.1:0".parse().expect("addr")) {
@@ -2612,7 +2647,7 @@ mod tests {
         let ack_bytes = read_frame(&mut handshake_recv)
             .await
             .expect("read handshake ack");
-        let ack: TestHandshakeAck = decode_from_bytes(&ack_bytes).expect("decode handshake ack");
+        let ack: ProxyHandshakeAckV1 = decode_from_bytes(&ack_bytes).expect("decode handshake ack");
         assert_eq!(ack.version, PROXY_HANDSHAKE_VERSION);
         assert!(!ack.accepted);
         assert_eq!(ack.message.as_deref(), Some("unsupported version"));
@@ -2898,7 +2933,7 @@ mod tests {
         (endpoint, connection)
     }
 
-    async fn perform_proxy_handshake(connection: &quinn::Connection) -> TestHandshakeAck {
+    async fn perform_proxy_handshake(connection: &quinn::Connection) -> ProxyHandshakeAckV1 {
         let (mut handshake_send, mut handshake_recv) =
             connection.open_bi().await.expect("open handshake stream");
         let handshake = ProxyHandshakeV1 {
@@ -2913,7 +2948,7 @@ mod tests {
         let ack_bytes = read_frame(&mut handshake_recv)
             .await
             .expect("read handshake ack");
-        let ack: TestHandshakeAck = decode_from_bytes(&ack_bytes).expect("decode handshake ack");
+        let ack: ProxyHandshakeAckV1 = decode_from_bytes(&ack_bytes).expect("decode handshake ack");
         assert_eq!(ack.version, PROXY_HANDSHAKE_VERSION);
         let _ = ack.message.as_ref();
         ack
@@ -2922,38 +2957,17 @@ mod tests {
     async fn open_proxy_stream(
         connection: &quinn::Connection,
         open_frame: &ProxyStreamOpenV1,
-    ) -> (quinn::SendStream, quinn::RecvStream, TestStreamAck) {
+    ) -> (quinn::SendStream, quinn::RecvStream, ProxyStreamAckV1) {
         let (mut stream_send, mut stream_recv) =
             connection.open_bi().await.expect("open application stream");
         write_frame(&mut stream_send, open_frame)
             .await
             .expect("write stream open");
         let ack_bytes = read_frame(&mut stream_recv).await.expect("read stream ack");
-        let ack: TestStreamAck = decode_from_bytes(&ack_bytes).expect("decode stream ack");
+        let ack: ProxyStreamAckV1 = decode_from_bytes(&ack_bytes).expect("decode stream ack");
         assert_eq!(ack.version, PROXY_STREAM_VERSION);
         let _ = ack.message.as_ref();
         (stream_send, stream_recv, ack)
-    }
-
-    #[derive(Debug, NoritoDeserialize)]
-    struct TestHandshakeAck {
-        version: u8,
-        accepted: bool,
-        #[norito(default)]
-        message: Option<String>,
-        #[norito(default)]
-        manifest: Option<BrowserExtensionManifest>,
-    }
-
-    #[derive(Debug, NoritoDeserialize)]
-    struct TestStreamAck {
-        version: u8,
-        code: u8,
-        accepted: bool,
-        #[norito(default)]
-        message: Option<String>,
-        #[norito(default)]
-        cache_tag_hex: Option<String>,
     }
 
     #[derive(Debug)]

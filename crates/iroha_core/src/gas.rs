@@ -23,6 +23,8 @@ use iroha_data_model::{
     zk::OpenVerifyEnvelope,
 };
 use norito::decode_from_bytes;
+#[cfg(test)]
+use parking_lot::ReentrantMutex;
 
 /// Per-instruction family base costs.
 /// Chosen to be small compared to the default per-block gas limit.
@@ -74,6 +76,8 @@ static ZK_GAS_PER_PUBLIC_INPUT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PU
 static ZK_GAS_PER_PROOF_BYTE: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PROOF_BYTE);
 static ZK_GAS_PER_NULLIFIER: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_NULLIFIER);
 static ZK_GAS_PER_COMMITMENT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_COMMITMENT);
+#[cfg(test)]
+static CONFIDENTIAL_GAS_TEST_LOCK: ReentrantMutex<()> = ReentrantMutex::new(());
 
 /// Tunable gas schedule for confidential verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,11 +120,18 @@ impl From<ActualConfidentialGas> for ConfidentialGasSchedule {
 
 /// Update the global confidential verification gas schedule.
 pub fn configure_confidential_gas(schedule: ConfidentialGasSchedule) {
+    #[cfg(test)]
+    let _test_guard = CONFIDENTIAL_GAS_TEST_LOCK.lock();
     ZK_GAS_BASE_VERIFY.store(schedule.base_verify, Ordering::Relaxed);
     ZK_GAS_PER_PUBLIC_INPUT.store(schedule.per_public_input, Ordering::Relaxed);
     ZK_GAS_PER_PROOF_BYTE.store(schedule.per_proof_byte, Ordering::Relaxed);
     ZK_GAS_PER_NULLIFIER.store(schedule.per_nullifier, Ordering::Relaxed);
     ZK_GAS_PER_COMMITMENT.store(schedule.per_commitment, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn lock_confidential_gas_for_tests() -> impl Drop {
+    CONFIDENTIAL_GAS_TEST_LOCK.lock()
 }
 
 fn zk_gas_base_verify() -> u64 {
@@ -551,6 +562,7 @@ mod tests {
 
     #[test]
     fn shield_gas_charges_commitment() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{
             confidential::ConfidentialEncryptedPayload, isi::zk::Shield, prelude::AssetDefinitionId,
         };
@@ -575,6 +587,7 @@ mod tests {
 
     #[test]
     fn verify_proof_gas_matches_schedule() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{isi::zk::VerifyProof, proof::VerifyingKeyId};
 
         let schedule = super::ConfidentialGasSchedule::default();
@@ -600,6 +613,7 @@ mod tests {
 
     #[test]
     fn zk_transfer_gas_accounts_for_nullifiers_and_commitments() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{
             isi::zk::ZkTransfer, prelude::AssetDefinitionId, proof::VerifyingKeyId,
         };
@@ -636,6 +650,7 @@ mod tests {
 
     #[test]
     fn state_configured_gas_schedule_updates_metering() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{
             isi::zk::{VerifyProof, ZkTransfer},
             proof::VerifyingKeyId,
