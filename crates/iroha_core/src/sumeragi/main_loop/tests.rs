@@ -17771,7 +17771,6 @@ async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
     let actor = &mut harness.actor;
-    super::status::reset_view_change_cause_counters_for_tests();
 
     let mut block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x95; Hash::LENGTH]));

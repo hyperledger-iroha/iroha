@@ -29,8 +29,8 @@ metadata, and operator expectations for those fixtures.
 | Profile | `sf1` |
 | Released | 2026-02-12 00:00:00Z (`1770854400` Unix seconds) |
 | Digests |
-| | `fixtures_digest_blake3_hex = 83427e9d34ecdf4e2df6df159a0e2cb0a1fa6611b8898ef53e319ab535ba9588` |
-| | `manifest_blake3_hex = 9bd42b2e745e8f808dd9c5b641297fd3b637b09283023aaaecdc2d013648645a` |
+| | `fixtures_digest_blake3_hex = fa5bcbc0776fcc762c6df13b0dfa8ad15673fd65509f505ea3ea0f0ffab32cdf` |
+| | `manifest_blake3_hex = ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e` |
 | | `payload_blake3_hex = 91275991d58858bdc7ce3eb4472b61c5289dec3ecc6cf43c6411db772c1888a8` |
 | | `car_blake3_hex = ce50a9aadf84e57559208d39201621262fd1b1887ae490ca54470e2a00153f27` |
 

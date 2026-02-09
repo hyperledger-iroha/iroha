@@ -32,7 +32,7 @@ fn trustless_verifier_reports_gateway_fixture_digests() {
 
     assert_eq!(
         outcome.manifest_digest_hex(),
-        "9bd42b2e745e8f808dd9c5b641297fd3b637b09283023aaaecdc2d013648645a",
+        "ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e",
         "manifest digest should match published fixture metadata"
     );
     assert_eq!(

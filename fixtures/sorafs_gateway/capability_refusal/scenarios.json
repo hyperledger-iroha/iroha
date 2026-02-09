@@ -32,7 +32,7 @@
     "error": "admission_mismatch",
     "reason": "manifest digest is not covered by the admission envelope",
     "details": {
-      "manifest_digest": "9bd42b2e745e8f808dd9c5b641297fd3b637b09283023aaaecdc2d013648645a"
+      "manifest_digest": "ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e"
     },
     "request_fixture": "C3/request.json",
     "response_fixture": "C3/response.json",
