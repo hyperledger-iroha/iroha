@@ -4,6 +4,9 @@ use iroha_logger::prelude::*;
 
 use super::*;
 
+const RETRANSMIT_RBC_BYTES_SOFT: u64 = 128 * 1024 * 1024;
+const RETRANSMIT_RBC_BYTES_HARD: u64 = 512 * 1024 * 1024;
+
 fn adaptive_quorum_reschedule_backoff(
     base_backoff: Duration,
     quorum_stall_age: Duration,
@@ -40,6 +43,68 @@ fn adaptive_quorum_reschedule_backoff(
         super::saturating_mul_duration(base_backoff, multiplier),
         escalated,
     )
+}
+
+fn retransmit_pressure_score(
+    tx_depth: u64,
+    tx_capacity: u64,
+    tx_saturated: bool,
+    rbc_bytes: u64,
+    rbc_pressure_level: u8,
+) -> u8 {
+    let tx_utilization_pct = if tx_capacity == 0 {
+        0
+    } else {
+        tx_depth.saturating_mul(100).saturating_div(tx_capacity)
+    };
+    let mut score = 0u8;
+    if tx_saturated || tx_utilization_pct >= 95 {
+        score = score.saturating_add(3);
+    } else if tx_utilization_pct >= 80 {
+        score = score.saturating_add(2);
+    } else if tx_utilization_pct >= 60 {
+        score = score.saturating_add(1);
+    }
+
+    if rbc_pressure_level >= 2 {
+        score = score.saturating_add(3);
+    } else if rbc_pressure_level == 1 {
+        score = score.saturating_add(2);
+    }
+    if rbc_bytes >= RETRANSMIT_RBC_BYTES_HARD {
+        score = score.saturating_add(2);
+    } else if rbc_bytes >= RETRANSMIT_RBC_BYTES_SOFT {
+        score = score.saturating_add(1);
+    }
+    score
+}
+
+fn retransmit_target_limit(target_count: usize, pressure_score: u8) -> usize {
+    if target_count == 0 {
+        return 0;
+    }
+    if pressure_score >= 6 {
+        return 0;
+    }
+    if pressure_score >= 4 {
+        return target_count.div_ceil(4).max(1);
+    }
+    if pressure_score >= 2 {
+        return target_count.div_ceil(2).max(1);
+    }
+    target_count
+}
+
+fn retransmit_cooldown_multiplier(pressure_score: u8) -> u32 {
+    if pressure_score >= 6 {
+        4
+    } else if pressure_score >= 4 {
+        3
+    } else if pressure_score >= 2 {
+        2
+    } else {
+        1
+    }
 }
 
 impl Actor {
@@ -753,6 +818,50 @@ impl Actor {
         );
     }
 
+    fn paced_retransmit_targets(
+        &self,
+        mut targets: Vec<PeerId>,
+        height: u64,
+        view: u64,
+        limit: usize,
+    ) -> Vec<PeerId> {
+        if limit == 0 || targets.is_empty() {
+            return Vec::new();
+        }
+        if targets.len() <= limit {
+            return targets;
+        }
+        targets.sort();
+        targets.dedup();
+        if targets.len() <= limit {
+            return targets;
+        }
+        let len_u64 = u64::try_from(targets.len()).expect("target list length fits in u64");
+        let offset_seed = height.rotate_left(17) ^ view.rotate_left(5);
+        let offset = usize::try_from(offset_seed % len_u64).expect("target offset fits in usize");
+        targets.rotate_left(offset);
+        targets.truncate(limit);
+        targets
+    }
+
+    fn retransmit_backlog_pacing(&self, target_count: usize) -> (usize, Duration, u8) {
+        let (tx_depth, tx_capacity, tx_saturated) = super::status::tx_queue_backpressure();
+        let (_, rbc_store_bytes, rbc_pressure_level) = super::status::rbc_store_pressure();
+        let pressure_score = retransmit_pressure_score(
+            tx_depth,
+            tx_capacity,
+            tx_saturated,
+            rbc_store_bytes,
+            rbc_pressure_level,
+        );
+        let limit = retransmit_target_limit(target_count, pressure_score);
+        let cooldown = super::saturating_mul_duration(
+            self.rebroadcast_cooldown(),
+            retransmit_cooldown_multiplier(pressure_score),
+        );
+        (limit, cooldown, pressure_score)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn rebroadcast_pending_block_updates(
         &mut self,
@@ -765,6 +874,7 @@ impl Actor {
         now: Instant,
     ) -> RescheduleRebroadcast {
         if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
+            super::status::inc_retransmit_skip_relay_backpressure();
             debug!(
                 height,
                 view,
@@ -783,6 +893,68 @@ impl Actor {
             view,
             topology_peers,
         );
+        if retransmit_targets.is_empty() {
+            super::status::inc_retransmit_skip_no_targets();
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "skipping reschedule rebroadcast because no peers are missing votes"
+            );
+            return RescheduleRebroadcast {
+                votes: 0,
+                block_sync: false,
+                block: false,
+            };
+        }
+
+        let (target_limit, adaptive_cooldown, pressure_score) =
+            self.retransmit_backlog_pacing(retransmit_targets.len());
+        if !pending.precommit_rebroadcast_due(now, adaptive_cooldown) {
+            super::status::inc_retransmit_skip_cooldown();
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                pressure_score,
+                cooldown_ms = adaptive_cooldown.as_millis(),
+                "skipping reschedule rebroadcast due to adaptive cooldown"
+            );
+            return RescheduleRebroadcast {
+                votes: 0,
+                block_sync: false,
+                block: false,
+            };
+        }
+
+        if target_limit == 0 {
+            super::status::inc_retransmit_skip_backlog_pacing();
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                pressure_score,
+                "skipping reschedule rebroadcast due to backlog pacing"
+            );
+            return RescheduleRebroadcast {
+                votes: 0,
+                block_sync: false,
+                block: false,
+            };
+        }
+
+        let retransmit_targets =
+            self.paced_retransmit_targets(retransmit_targets, height, view, target_limit);
+        if retransmit_targets.is_empty() {
+            super::status::inc_retransmit_skip_backlog_pacing();
+            return RescheduleRebroadcast {
+                votes: 0,
+                block_sync: false,
+                block: false,
+            };
+        }
+        super::status::record_retransmit_target_set_size(retransmit_targets.len());
+
         let votes = self.rebroadcast_block_votes(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
@@ -857,6 +1029,7 @@ impl Actor {
                 );
                 true
             } else {
+                super::status::inc_retransmit_skip_cooldown();
                 debug!(
                     height,
                     view,
@@ -867,6 +1040,9 @@ impl Actor {
                 false
             }
         };
+        if votes > 0 || block_sync || block {
+            pending.mark_precommit_rebroadcast(now);
+        }
         RescheduleRebroadcast {
             votes,
             block_sync,
@@ -906,15 +1082,7 @@ impl Actor {
                 missing_targets.push(peer.clone());
             }
         }
-        if missing_targets.is_empty() {
-            topology_peers
-                .iter()
-                .filter(|peer| *peer != local_peer_id)
-                .cloned()
-                .collect()
-        } else {
-            missing_targets
-        }
+        missing_targets
     }
 }
 
@@ -923,4 +1091,36 @@ struct RescheduleRebroadcast {
     votes: usize,
     block_sync: bool,
     block: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RETRANSMIT_RBC_BYTES_HARD, RETRANSMIT_RBC_BYTES_SOFT, retransmit_cooldown_multiplier,
+        retransmit_pressure_score, retransmit_target_limit,
+    };
+
+    #[test]
+    fn retransmit_pressure_score_grows_with_queue_and_rbc_backlog() {
+        let baseline = retransmit_pressure_score(4, 100, false, 0, 0);
+        let moderate = retransmit_pressure_score(70, 100, false, RETRANSMIT_RBC_BYTES_SOFT, 1);
+        let severe = retransmit_pressure_score(100, 100, true, RETRANSMIT_RBC_BYTES_HARD, 2);
+
+        assert!(baseline < moderate);
+        assert!(moderate < severe);
+    }
+
+    #[test]
+    fn retransmit_target_limit_and_cooldown_scale_with_pressure() {
+        let target_count = 12usize;
+        assert_eq!(retransmit_target_limit(target_count, 0), target_count);
+        assert_eq!(retransmit_target_limit(target_count, 2), 6);
+        assert_eq!(retransmit_target_limit(target_count, 4), 3);
+        assert_eq!(retransmit_target_limit(target_count, 6), 0);
+
+        assert_eq!(retransmit_cooldown_multiplier(0), 1);
+        assert_eq!(retransmit_cooldown_multiplier(2), 2);
+        assert_eq!(retransmit_cooldown_multiplier(4), 3);
+        assert_eq!(retransmit_cooldown_multiplier(6), 4);
+    }
 }

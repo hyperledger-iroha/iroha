@@ -355,6 +355,13 @@ static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QUORUM_STALL_AGE_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static RETRANSMIT_TARGET_SET_LAST: AtomicU64 = AtomicU64::new(0);
+static RETRANSMIT_TARGET_SET_TOTAL: AtomicU64 = AtomicU64::new(0);
+static RETRANSMIT_TARGET_SET_SAMPLES: AtomicU64 = AtomicU64::new(0);
+static RETRANSMIT_SKIP_RELAY_BACKPRESSURE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static RETRANSMIT_SKIP_BACKLOG_PACING_TOTAL: AtomicU64 = AtomicU64::new(0);
+static RETRANSMIT_SKIP_NO_TARGETS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static RETRANSMIT_SKIP_COOLDOWN_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_VOTE_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_VOTE_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_BLOCK_CREATED_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3391,6 +3398,20 @@ pub struct StatusSnapshot {
     pub gossip_duplicate_known_skipped_total: u64,
     /// Total times quorum-stall adaptive backoff escalated due to prolonged stall age.
     pub quorum_stall_age_escalation_total: u64,
+    /// Last retransmit target-set size selected during quorum reschedule.
+    pub retransmit_target_set_last: u64,
+    /// Cumulative retransmit target-set sizes selected during quorum reschedule.
+    pub retransmit_target_set_total: u64,
+    /// Number of retransmit target-set samples recorded during quorum reschedule.
+    pub retransmit_target_set_samples: u64,
+    /// Total reschedule retransmits skipped due to relay backpressure.
+    pub retransmit_skip_relay_backpressure_total: u64,
+    /// Total reschedule retransmits skipped by backlog-aware pacing.
+    pub retransmit_skip_backlog_pacing_total: u64,
+    /// Total reschedule retransmits skipped because no missing targets remained.
+    pub retransmit_skip_no_targets_total: u64,
+    /// Total reschedule retransmits skipped due to adaptive cooldown.
+    pub retransmit_skip_cooldown_total: u64,
     /// Total QC rebuild attempts triggered locally.
     pub qc_rebuild_attempts_total: u64,
     /// Total QC rebuild successes (QC cached after rebuild).
@@ -4207,6 +4228,15 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         quorum_stall_age_escalation_total: QUORUM_STALL_AGE_ESCALATION_TOTAL
             .load(Ordering::Relaxed),
+        retransmit_target_set_last: RETRANSMIT_TARGET_SET_LAST.load(Ordering::Relaxed),
+        retransmit_target_set_total: RETRANSMIT_TARGET_SET_TOTAL.load(Ordering::Relaxed),
+        retransmit_target_set_samples: RETRANSMIT_TARGET_SET_SAMPLES.load(Ordering::Relaxed),
+        retransmit_skip_relay_backpressure_total: RETRANSMIT_SKIP_RELAY_BACKPRESSURE_TOTAL
+            .load(Ordering::Relaxed),
+        retransmit_skip_backlog_pacing_total: RETRANSMIT_SKIP_BACKLOG_PACING_TOTAL
+            .load(Ordering::Relaxed),
+        retransmit_skip_no_targets_total: RETRANSMIT_SKIP_NO_TARGETS_TOTAL.load(Ordering::Relaxed),
+        retransmit_skip_cooldown_total: RETRANSMIT_SKIP_COOLDOWN_TOTAL.load(Ordering::Relaxed),
         qc_rebuild_attempts_total: QC_REBUILD_ATTEMPTS_TOTAL.load(Ordering::Relaxed),
         qc_rebuild_successes_total: QC_REBUILD_SUCCESSES_TOTAL.load(Ordering::Relaxed),
         qc_missing_votes_accepted_total: QC_MISSING_VOTES_ACCEPTED_TOTAL.load(Ordering::Relaxed),
@@ -4316,6 +4346,34 @@ pub fn inc_gossip_duplicate_known_skipped() {
 /// Increment adaptive-backoff escalation counter for prolonged quorum stalls.
 pub fn inc_quorum_stall_age_escalation() {
     QUORUM_STALL_AGE_ESCALATION_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record the size of the retransmit target set used during quorum reschedule.
+pub fn record_retransmit_target_set_size(size: usize) {
+    let size = u64::try_from(size).unwrap_or(u64::MAX);
+    RETRANSMIT_TARGET_SET_LAST.store(size, Ordering::Relaxed);
+    RETRANSMIT_TARGET_SET_TOTAL.fetch_add(size, Ordering::Relaxed);
+    RETRANSMIT_TARGET_SET_SAMPLES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment retransmit skip counters for relay-backpressure suppression.
+pub fn inc_retransmit_skip_relay_backpressure() {
+    RETRANSMIT_SKIP_RELAY_BACKPRESSURE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment retransmit skip counters for backlog-aware pacing suppression.
+pub fn inc_retransmit_skip_backlog_pacing() {
+    RETRANSMIT_SKIP_BACKLOG_PACING_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment retransmit skip counters when no target peers remain.
+pub fn inc_retransmit_skip_no_targets() {
+    RETRANSMIT_SKIP_NO_TARGETS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment retransmit skip counters for adaptive cooldown suppression.
+pub fn inc_retransmit_skip_cooldown() {
+    RETRANSMIT_SKIP_COOLDOWN_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Dedup cache kinds for eviction accounting.
@@ -5745,6 +5803,15 @@ pub fn set_rbc_store_pressure(sessions: u64, bytes: u64, level: u8) {
     maybe_log_rbc_store_pressure(sessions, bytes, level);
 }
 
+/// Snapshot the latest persisted RBC store pressure tuple: `(sessions, bytes, level)`.
+pub fn rbc_store_pressure() -> (u64, u64, u8) {
+    (
+        RBC_STORE_SESSIONS.load(Ordering::Relaxed),
+        RBC_STORE_BYTES.load(Ordering::Relaxed),
+        RBC_STORE_PRESSURE_LEVEL.load(Ordering::Relaxed),
+    )
+}
+
 /// Record detailed information about RBC sessions evicted due to TTL or capacity enforcement.
 pub fn record_rbc_store_evictions(keys: &[super::rbc_store::SessionKey]) {
     if keys.is_empty() {
@@ -6710,6 +6777,13 @@ pub(crate) fn reset_gossip_fallback_for_tests() {
     GOSSIP_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
     GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL.store(0, Ordering::Relaxed);
     QUORUM_STALL_AGE_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
+    RETRANSMIT_TARGET_SET_LAST.store(0, Ordering::Relaxed);
+    RETRANSMIT_TARGET_SET_TOTAL.store(0, Ordering::Relaxed);
+    RETRANSMIT_TARGET_SET_SAMPLES.store(0, Ordering::Relaxed);
+    RETRANSMIT_SKIP_RELAY_BACKPRESSURE_TOTAL.store(0, Ordering::Relaxed);
+    RETRANSMIT_SKIP_BACKLOG_PACING_TOTAL.store(0, Ordering::Relaxed);
+    RETRANSMIT_SKIP_NO_TARGETS_TOTAL.store(0, Ordering::Relaxed);
+    RETRANSMIT_SKIP_COOLDOWN_TOTAL.store(0, Ordering::Relaxed);
     BG_POST_DROP_POST_TOTAL.store(0, Ordering::Relaxed);
     BG_POST_DROP_BROADCAST_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.store(0, Ordering::Relaxed);
@@ -8068,6 +8142,26 @@ mod tests {
         let snapshot = super::snapshot();
         assert_eq!(snapshot.bg_post_drop_post_total, 2);
         assert_eq!(snapshot.bg_post_drop_broadcast_total, 1);
+    }
+
+    #[test]
+    fn snapshot_tracks_retransmit_target_and_skip_counters() {
+        super::reset_gossip_fallback_for_tests();
+        super::record_retransmit_target_set_size(3);
+        super::record_retransmit_target_set_size(1);
+        super::inc_retransmit_skip_relay_backpressure();
+        super::inc_retransmit_skip_backlog_pacing();
+        super::inc_retransmit_skip_no_targets();
+        super::inc_retransmit_skip_cooldown();
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.retransmit_target_set_last, 1);
+        assert_eq!(snapshot.retransmit_target_set_total, 4);
+        assert_eq!(snapshot.retransmit_target_set_samples, 2);
+        assert_eq!(snapshot.retransmit_skip_relay_backpressure_total, 1);
+        assert_eq!(snapshot.retransmit_skip_backlog_pacing_total, 1);
+        assert_eq!(snapshot.retransmit_skip_no_targets_total, 1);
+        assert_eq!(snapshot.retransmit_skip_cooldown_total, 1);
     }
 
     #[test]
