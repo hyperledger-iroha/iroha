@@ -13383,6 +13383,7 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_highest_pending_block_picks_latest() {
     let mut harness = test_actor_harness(4).await;
+    harness.actor.relay_backpressure.disable_for_tests();
     let payload_hash = Hash::new(b"payload");
     let parent = sample_block(1, 0, None);
     let low = sample_block(2, 0, Some(parent.hash()));
@@ -13423,6 +13424,7 @@ async fn rebroadcast_highest_pending_block_picks_latest() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_highest_pending_block_skips_aborted() {
     let mut harness = test_actor_harness(4).await;
+    harness.actor.relay_backpressure.disable_for_tests();
     let payload_hash = Hash::new(b"payload");
     let parent = sample_block(1, 0, None);
     let low = sample_block(2, 0, Some(parent.hash()));
@@ -43406,10 +43408,6 @@ async fn npos_commit_qc_roster_roll_forward_canonicalizes_order() {
 #[tokio::test(flavor = "current_thread")]
 async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
     use std::borrow::Cow;
-
-    use crate::sumeragi::status;
-
-    status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -43495,11 +43493,9 @@ async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
         &signers,
         vec![0b1],
     );
-    status::record_commit_qc(qc);
-
-    let qc_roster = actor
-        .roster_from_commit_qc_history_roll_forward(tracked_height, Some(genesis_hash))
-        .expect("commit QC roster");
+    let mut qc_topology = super::network_topology::Topology::new(qc.validator_set.clone());
+    qc_topology.block_committed(qc.validator_set.clone(), qc.subject_block_hash);
+    let qc_roster = qc_topology.as_ref().to_vec();
     assert!(
         !qc_roster.contains(&local),
         "commit QC roster should exclude local peer for this test"
@@ -43520,7 +43516,6 @@ async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
         "proposal should be assembled using the active roster"
     );
 
-    status::reset_commit_certs_for_tests();
     harness.shutdown.send();
 }
 
