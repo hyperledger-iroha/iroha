@@ -25,7 +25,9 @@ Options:
   --cli-timeout <SEC>        tx_load CLI timeout seconds (default: 15)
   --pprof-seconds <SEC>      CPU profile duration seconds (default: 30)
   --load-drain-timeout <SEC> tx_load drain timeout seconds (default: 180)
-  --rust-log <SPEC>          RUST_LOG override used when launching peers (default: warn)
+  --logger-level <LEVEL>     Override logger.level for generated peers (default: warn)
+  --logger-filter <SPEC>     Override logger.filter for generated peers
+  --rust-log <LEVEL>         Back-compat alias for --logger-level
   --artifact-base <DIR>      artifact base directory (default: ./artifacts/localnet-100tps-profile)
   --out-base <DIR>           localnet base directory (default: /tmp/iroha-localnet-100tps)
   --base-api-port-perm <N>   permissioned base API port (default: 29080)
@@ -55,7 +57,8 @@ LOCALNET_TIMEOUT=180
 CLI_TIMEOUT=15
 PPROF_SECONDS=30
 LOAD_DRAIN_TIMEOUT=180
-RUST_LOG_SPEC="${RUST_LOG_SPEC:-warn}"
+LOGGER_LEVEL="${LOGGER_LEVEL:-warn}"
+LOGGER_FILTER="${LOGGER_FILTER:-}"
 ARTIFACT_BASE=""
 OUT_BASE="/tmp/iroha-localnet-100tps"
 PROFILE="release"
@@ -121,8 +124,16 @@ while [[ $# -gt 0 ]]; do
       LOAD_DRAIN_TIMEOUT="$2"
       shift 2
       ;;
+    --logger-level)
+      LOGGER_LEVEL="$2"
+      shift 2
+      ;;
+    --logger-filter)
+      LOGGER_FILTER="$2"
+      shift 2
+      ;;
     --rust-log)
-      RUST_LOG_SPEC="$2"
+      LOGGER_LEVEL="$2"
       shift 2
       ;;
     --artifact-base)
@@ -262,8 +273,11 @@ run_mode() {
 
   echo ""
   echo "=== ${label} localnet (${PEERS} peers, ~${TPS} TPS, ${DURATION}s) ==="
+  local logger_args=(--logger-level "$LOGGER_LEVEL")
+  if [[ -n "$LOGGER_FILTER" ]]; then
+    logger_args+=(--logger-filter "$LOGGER_FILTER")
+  fi
   IROHAD_BIN="$PPROF_IROHAD_BIN" \
-    RUST_LOG="$RUST_LOG_SPEC" \
     "${SCRIPT_DIR}/deploy_localnet.sh" \
       --iroha-dir "$IROHA_DIR" \
       --out-dir "$out_dir" \
@@ -278,6 +292,7 @@ run_mode() {
       --base-api-port "$base_api_port" \
       --base-p2p-port "$base_p2p_port" \
       --timeout "$LOCALNET_TIMEOUT" \
+      "${logger_args[@]}" \
       --force \
       --skip-asset-register \
       "${PROFILE_ARGS[@]}"
@@ -299,7 +314,10 @@ run_mode() {
   echo "Artifacts: ${artifact_dir}"
   echo "Torii: ${torii_url}"
   echo "Load: count=${count} batch=${batch_size}/s parallel=${PARALLEL}"
-  echo "RUST_LOG: ${RUST_LOG_SPEC}"
+  echo "Logger level: ${LOGGER_LEVEL}"
+  if [[ -n "$LOGGER_FILTER" ]]; then
+    echo "Logger filter: ${LOGGER_FILTER}"
+  fi
   echo ""
 
   # Drive load in the background so we can capture a steady-state pprof profile.

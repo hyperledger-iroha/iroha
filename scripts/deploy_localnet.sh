@@ -31,6 +31,8 @@ Options:
   --queue-capacity <N>       Override transaction queue capacity in peer configs
   --queue-capacity-per-user <N> Override per-user transaction queue capacity (defaults to --queue-capacity when set)
   --queue-ttl-ms <MS>        Override queue transaction_time_to_live_ms (ms)
+  --logger-level <LEVEL>     Override logger.level in peer configs (e.g., warn)
+  --logger-filter <SPEC>     Override logger.filter in peer configs
   --base-api-port <PORT>     Base Torii API port (default: 29080)
   --base-p2p-port <PORT>     Base P2P port (default: 33337)
   --bind-host <HOST>         Bind host (default: 127.0.0.1)
@@ -71,6 +73,8 @@ PERF_PROFILE=""
 QUEUE_CAPACITY=""
 QUEUE_CAPACITY_PER_USER=""
 QUEUE_TTL_MS=""
+LOGGER_LEVEL=""
+LOGGER_FILTER=""
 CURL_TIMEOUT_SECS=2
 PORT_SCAN_MAX_TRIES=200
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -123,6 +127,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --queue-ttl-ms)
       QUEUE_TTL_MS="$2"
+      shift 2
+      ;;
+    --logger-level)
+      LOGGER_LEVEL="$2"
+      shift 2
+      ;;
+    --logger-filter)
+      LOGGER_FILTER="$2"
       shift 2
       ;;
     --base-api-port)
@@ -460,6 +472,57 @@ if [[ -n "$QUEUE_CAPACITY" || -n "$QUEUE_CAPACITY_PER_USER" || -n "$QUEUE_TTL_MS
       END {
         flush_queue()
         flush_torii()
+      }
+    ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+  done
+fi
+
+if [[ -n "$LOGGER_LEVEL" || -n "$LOGGER_FILTER" ]]; then
+  echo "Applying logger overrides in peer configs..."
+  for cfg in "$OUT_DIR"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    awk -v level="$LOGGER_LEVEL" -v filter="$LOGGER_FILTER" '
+      function flush_logger() {
+        if (!in_logger) return
+        if (level != "" && !seen_level) print "level = \"" level "\""
+        if (filter != "" && !seen_filter) print "filter = \"" filter "\""
+      }
+      BEGIN {
+        in_logger = 0
+        seen_level = 0
+        seen_filter = 0
+      }
+      /^[[:space:]]*\[logger\][[:space:]]*$/ {
+        flush_logger()
+        in_logger = 1
+        seen_level = 0
+        seen_filter = 0
+        print
+        next
+      }
+      /^[[:space:]]*\[/ {
+        flush_logger()
+        in_logger = 0
+        print
+        next
+      }
+      {
+        if (in_logger) {
+          if (level != "" && $1 == "level") {
+            print "level = \"" level "\""
+            seen_level = 1
+            next
+          }
+          if (filter != "" && $1 == "filter") {
+            print "filter = \"" filter "\""
+            seen_filter = 1
+            next
+          }
+        }
+        print
+      }
+      END {
+        flush_logger()
       }
     ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
   done
