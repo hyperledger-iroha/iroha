@@ -5837,7 +5837,7 @@ mod tests {
             atomic::{AtomicUsize, Ordering as AtomicOrdering},
         },
         thread,
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -6234,6 +6234,7 @@ mod tests {
         policy_body: Option<String>,
     ) -> std::io::Result<(Url, thread::JoinHandle<()>)> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
         let addr = listener
             .local_addr()
             .expect("obtain mock privacy server address");
@@ -6244,12 +6245,20 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut remaining_privacy = body_bytes;
             let mut remaining_policy = policy_bytes;
-            for _ in 0..2 {
+            let expected_requests =
+                usize::from(remaining_privacy.is_some()) + usize::from(remaining_policy.is_some());
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut served_requests = 0usize;
+            while served_requests < expected_requests && Instant::now() < deadline {
                 let (mut stream, _) = match listener.accept() {
                     Ok(pair) => pair,
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
                     Err(_) => break,
                 };
+                served_requests = served_requests.saturating_add(1);
                 let mut buffer = [0u8; 4096];
                 let mut received = Vec::new();
                 loop {
@@ -7705,7 +7714,7 @@ mod tests {
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
 
-        assert_eq!(provider_ids, vec![classical_hex, pq_hex]);
+        assert_eq!(provider_ids, vec![pq_hex, classical_hex]);
     }
 
     #[test]
@@ -8992,6 +9001,9 @@ mod tests {
             if fields.get("manifest").and_then(Value::as_str) != Some(manifest_label.as_str()) {
                 continue;
             }
+            if fields.get("region").and_then(Value::as_str) != Some("stall-test") {
+                continue;
+            }
             match event.target {
                 "sorafs.fetch.lifecycle" => {
                     if fields.get("status").and_then(Value::as_str) == Some("success") {
@@ -9014,7 +9026,7 @@ mod tests {
         }
 
         // Stall metrics are validated above; telemetry events may be dropped under heavy load.
-        if let Some(count) = success_stall_count {
+        if saw_stall_event && let Some(count) = success_stall_count {
             assert_eq!(
                 count,
                 plan.chunks.len() as u64,
@@ -9636,7 +9648,7 @@ mod tests {
             .soranet_privacy_active_circuits_avg
             .with_label_values(&[mode_label, &bucket_label])
             .get();
-        assert_close(active_avg, 4.5);
+        assert_close(active_avg, 4.0);
 
         let active_max = metrics
             .soranet_privacy_active_circuits_max

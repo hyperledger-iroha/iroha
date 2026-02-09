@@ -732,10 +732,10 @@ impl Actor {
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
-        let no_commit_evidence = reschedule_vote_count == 0 && !keep_commit_qc;
+        let no_commit_evidence = reschedule_vote_count == 0;
         let drop_pending = already_rescheduled
             && no_commit_evidence
-            && (quorum_timeout == Duration::ZERO || progress_age >= quorum_timeout);
+            && (quorum_timeout == Duration::ZERO || quorum_stall_age >= quorum_timeout);
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
