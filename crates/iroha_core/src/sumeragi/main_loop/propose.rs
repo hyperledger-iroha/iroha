@@ -57,6 +57,39 @@ fn precommit_qc_for_view_change(
     }
 }
 
+fn next_cached_slot_timeout_streak(
+    previous: Option<CachedSlotTimeoutTrigger>,
+    height: u64,
+    view: u64,
+) -> u8 {
+    previous
+        .filter(|last| last.height == height && view > last.view)
+        .map_or(0, |last| last.streak.saturating_add(1))
+}
+
+fn cached_slot_timeout_hysteresis_remaining(
+    mode: ConsensusMode,
+    quorum_timeout: Duration,
+    previous: Option<CachedSlotTimeoutTrigger>,
+    height: u64,
+    view: u64,
+    now: Instant,
+) -> Option<Duration> {
+    if !matches!(mode, ConsensusMode::Npos) || quorum_timeout == Duration::ZERO {
+        return None;
+    }
+    let last = previous?;
+    if last.height != height || view <= last.view {
+        return None;
+    }
+    let streak = next_cached_slot_timeout_streak(previous, height, view)
+        .max(1)
+        .min(3);
+    let hysteresis = super::saturating_mul_duration(quorum_timeout, u32::from(streak) + 1);
+    let elapsed = now.saturating_duration_since(last.at);
+    (elapsed < hysteresis).then(|| hysteresis.saturating_sub(elapsed))
+}
+
 fn trim_batch_for_size_cap<T, U>(
     tx_batch: &mut Vec<T>,
     routing_batch: &mut Vec<U>,
@@ -1811,6 +1844,7 @@ impl Actor {
             block_hash,
             target_height,
             target_view,
+            false,
         );
         if rebroadcasted == 0 {
             debug!(
@@ -2090,23 +2124,14 @@ impl Actor {
                 highest_qc: qc,
             })
         }) else {
-            if pending_queue_len > 0 {
-                iroha_logger::info!(
-                    queue_len = pending_queue_len,
-                    height = view_height,
-                    required,
-                    local_idx = ?local_idx,
-                    new_view_slots = ?new_view_summary,
-                    "deferring proposal: awaiting NEW_VIEW quorum"
-                );
-            } else {
-                debug!(
-                    required,
-                    local_idx = ?local_idx,
-                    new_view_slots = ?new_view_summary,
-                    "deferring proposal: awaiting NEW_VIEW quorum"
-                );
-            }
+            debug!(
+                queue_len = pending_queue_len,
+                height = view_height,
+                required,
+                local_idx = ?local_idx,
+                new_view_slots = ?new_view_summary,
+                "deferring proposal: awaiting NEW_VIEW quorum"
+            );
             self.maybe_rebroadcast_new_view_votes(tracked_height, now);
             return false;
         };
@@ -2138,7 +2163,7 @@ impl Actor {
             })
             .count();
         if precommit_votes_at_view > 0 {
-            iroha_logger::info!(
+            debug!(
                 height,
                 view = view_idx,
                 precommit_votes = precommit_votes_at_view,
@@ -2161,8 +2186,94 @@ impl Actor {
             // Rebroadcast cached proposals when the leader is still responsible for the slot so
             // peers that missed the initial messages can recover without forcing a view change.
             self.maybe_rebroadcast_cached_proposal(height, view_idx, pending_queue_len, now);
+            let quorum_timeout = self.quorum_timeout(da_enabled);
+            let cached_wait_age = self
+                .pending
+                .pending_blocks
+                .values()
+                .filter(|pending| {
+                    !pending.aborted && pending.height == height && pending.view == view_idx
+                })
+                .map(|pending| pending.progress_age(now))
+                .max();
+            if quorum_timeout != Duration::ZERO
+                && cached_wait_age.is_some_and(|age| age >= quorum_timeout)
+            {
+                let wait_age_ms = cached_wait_age.map(|age| age.as_millis()).unwrap_or(0);
+                let already_forced = self
+                    .subsystems
+                    .propose
+                    .forced_view_after_timeout
+                    .is_some_and(|(forced_height, forced_view)| {
+                        forced_height == height && forced_view > view_idx
+                    });
+                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                if already_forced {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        wait_age_ms,
+                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        forced = ?self.subsystems.propose.forced_view_after_timeout,
+                        "cached proposal slot stalled past quorum timeout; awaiting scheduled view change"
+                    );
+                } else if let Some(wait_remaining) = cached_slot_timeout_hysteresis_remaining(
+                    consensus_mode,
+                    quorum_timeout,
+                    self.subsystems.propose.last_cached_slot_timeout_trigger,
+                    height,
+                    view_idx,
+                    now,
+                ) {
+                    let next_streak = next_cached_slot_timeout_streak(
+                        self.subsystems.propose.last_cached_slot_timeout_trigger,
+                        height,
+                        view_idx,
+                    );
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        wait_age_ms,
+                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        hysteresis_wait_ms = wait_remaining.as_millis(),
+                        timeout_streak = next_streak,
+                        "cached proposal slot stalled past quorum timeout; waiting for NPoS timeout hysteresis"
+                    );
+                } else {
+                    let timeout_streak = next_cached_slot_timeout_streak(
+                        self.subsystems.propose.last_cached_slot_timeout_trigger,
+                        height,
+                        view_idx,
+                    );
+                    warn!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        wait_age_ms,
+                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        timeout_streak,
+                        "cached proposal slot stalled past quorum timeout; forcing view change"
+                    );
+                    self.trigger_view_change_with_cause(
+                        height,
+                        view_idx,
+                        ViewChangeCause::QuorumTimeout,
+                    );
+                    self.subsystems.propose.last_cached_slot_timeout_trigger =
+                        Some(CachedSlotTimeoutTrigger {
+                            height,
+                            view: view_idx,
+                            at: now,
+                            streak: timeout_streak,
+                        });
+                }
+                self.maybe_rebroadcast_new_view_votes(height, now);
+                return false;
+            }
             if pending_queue_len > 0 {
-                iroha_logger::info!(
+                debug!(
                     height,
                     view = view_idx,
                     queue_len = pending_queue_len,
@@ -2185,7 +2296,7 @@ impl Actor {
             .contains(&(height, view_idx))
         {
             if pending_queue_len > 0 {
-                iroha_logger::info!(
+                debug!(
                     height,
                     view = view_idx,
                     queue_len = pending_queue_len,
@@ -2213,7 +2324,7 @@ impl Actor {
         {
             let quorum_timeout = self.quorum_timeout(da_enabled);
             if quorum_timeout != Duration::ZERO && pending_age < quorum_timeout {
-                iroha_logger::info!(
+                debug!(
                     height,
                     pending_view,
                     target_view = view_idx,
@@ -2594,6 +2705,7 @@ impl Actor {
             .propose
             .new_view_tracker
             .remove(height, view_idx);
+        self.subsystems.propose.last_cached_slot_timeout_trigger = None;
         self.subsystems.propose.last_successful_proposal = Some(now);
         true
     }
@@ -2602,12 +2714,14 @@ impl Actor {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProposalBackpressure, consensus_queue_backpressure, da_payload_budget,
+        ProposalBackpressure, cached_slot_timeout_hysteresis_remaining,
+        consensus_queue_backpressure, da_payload_budget, next_cached_slot_timeout_streak,
         trim_batch_for_size_cap,
     };
     use crate::queue::BackpressureState;
     use crate::sumeragi::status;
     use std::num::NonZeroUsize;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn da_payload_budget_caps_to_rbc_budget() {
@@ -2714,5 +2828,63 @@ mod tests {
         };
         assert!(backpressure.should_defer());
         assert!(!backpressure.only_queue_saturation());
+    }
+
+    #[test]
+    fn timeout_streak_advances_for_repeated_height_views() {
+        let now = Instant::now();
+        let trigger = super::CachedSlotTimeoutTrigger {
+            height: 10,
+            view: 2,
+            at: now,
+            streak: 1,
+        };
+
+        assert_eq!(
+            next_cached_slot_timeout_streak(Some(trigger), 10, 3),
+            2,
+            "next view at same height should increase streak"
+        );
+        assert_eq!(
+            next_cached_slot_timeout_streak(Some(trigger), 11, 0),
+            0,
+            "new height should reset streak"
+        );
+    }
+
+    #[test]
+    fn npos_timeout_hysteresis_applies_after_previous_trigger() {
+        let now = Instant::now();
+        let previous = super::CachedSlotTimeoutTrigger {
+            height: 42,
+            view: 1,
+            at: now,
+            streak: 1,
+        };
+        let quorum_timeout = Duration::from_secs(2);
+        let remaining = cached_slot_timeout_hysteresis_remaining(
+            super::ConsensusMode::Npos,
+            quorum_timeout,
+            Some(previous),
+            42,
+            2,
+            now + Duration::from_secs(1),
+        );
+        assert!(
+            remaining.is_some(),
+            "NPoS repeated timeout should be delayed by hysteresis window"
+        );
+        let no_hysteresis = cached_slot_timeout_hysteresis_remaining(
+            super::ConsensusMode::Permissioned,
+            quorum_timeout,
+            Some(previous),
+            42,
+            2,
+            now + Duration::from_secs(1),
+        );
+        assert!(
+            no_hysteresis.is_none(),
+            "permissioned mode should not apply NPoS hysteresis"
+        );
     }
 }

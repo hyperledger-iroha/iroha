@@ -10104,6 +10104,7 @@ async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
     harness.actor.reschedule_pending_quorum_block(
         pending,
         Duration::from_secs(5),
+        Duration::from_secs(5),
         /*min_votes_for_commit*/ 3,
         /*vote_count*/ 0,
         /*quorum_timeout*/ Duration::from_secs(1),
@@ -10213,6 +10214,7 @@ async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
     actor.reschedule_pending_quorum_block(
         pending,
         Duration::from_secs(5),
+        Duration::from_secs(5),
         /*min_votes_for_commit*/ 3,
         /*vote_count*/ 3,
         /*quorum_timeout*/ Duration::from_secs(1),
@@ -10263,6 +10265,7 @@ async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
         .expect("pending block retained");
     actor.reschedule_pending_quorum_block(
         pending,
+        Duration::from_secs(5),
         Duration::from_secs(5),
         /*min_votes_for_commit*/ 3,
         /*vote_count*/ 3,
@@ -10346,6 +10349,7 @@ async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
     actor.reschedule_pending_quorum_block(
         pending,
         Duration::from_secs(5),
+        Duration::from_secs(5),
         /*min_votes_for_commit*/ 3,
         /*vote_count*/ 0,
         /*quorum_timeout*/ Duration::from_secs(1),
@@ -10399,6 +10403,7 @@ async fn quorum_reschedule_skips_requeue_when_commit_votes_present() {
 
     actor.reschedule_pending_quorum_block(
         pending,
+        Duration::from_secs(5),
         Duration::from_secs(5),
         /*min_votes_for_commit*/ 3,
         /*vote_count*/ vote_count,
@@ -10531,6 +10536,7 @@ async fn quorum_reschedule_keeps_cached_commit_qc_on_drop() {
 
     actor.reschedule_pending_quorum_block(
         pending,
+        Duration::from_secs(5),
         Duration::from_secs(5),
         topology.min_votes_for_commit(),
         /*vote_count*/ 0,
@@ -14283,7 +14289,7 @@ async fn rebroadcast_precommit_votes_keep_collectors_when_below_quorum() {
         .collectors_contacted
         .extend(planned_collectors.iter().cloned());
 
-    let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, 1, 0);
+    let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, 1, 0, false);
 
     let mut expected_targets = planned_collectors;
     let parallel = actor.config.collectors.parallel_topology_fanout;
@@ -14497,7 +14503,7 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
     );
 
     let _ = harness.background_rx.try_iter().count();
-    let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, height, view);
+    let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, height, view, false);
 
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
@@ -42985,6 +42991,97 @@ async fn pacemaker_rebroadcasts_cached_proposal_when_leader() {
     assert!(
         block_posts > 0,
         "cached block payload should be rebroadcast"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_forces_view_change_when_cached_slot_stalls() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+
+    let roster = actor.effective_commit_topology();
+    let local_pos = roster
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).unwrap_or_default();
+
+    let parent_hash = actor.state.view().latest_block_hash();
+    let parent_hash_for_qc = parent_hash.unwrap_or_else(|| {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
+    });
+    let block = sample_block(height, view, parent_hash);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+
+    let now = Instant::now();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let stale_at = now
+        .checked_sub(quorum_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    pending.touch_progress(stale_at);
+    actor.pending.pending_blocks.insert(block.hash(), pending);
+
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: parent_hash_for_qc,
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+    let proposer = u32::try_from(local_pos).expect("local index fits u32");
+    let epoch = actor.epoch_for_height(height);
+    let proposal =
+        Actor::build_consensus_proposal(&block, payload_hash, highest_qc, proposer, view, epoch);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(proposal);
+
+    let sender_a_pos = (local_pos + 1) % roster.len();
+    let sender_b_pos = (local_pos + 2) % roster.len();
+    let sender_a = roster.get(sender_a_pos).cloned().expect("sender peer");
+    let sender_b = roster.get(sender_b_pos).cloned().expect("sender peer");
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(height, view, sender_a, highest_qc);
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(height, view, sender_b, highest_qc);
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.on_view_change(height, view, start);
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "pacemaker should not assemble a new proposal when cached"
+    );
+    let forced = actor
+        .subsystems
+        .propose
+        .forced_view_after_timeout
+        .expect("stalled cached slot should force view change");
+    assert_eq!(
+        forced.0, height,
+        "forced view should target the same height"
+    );
+    assert!(
+        forced.1 > view,
+        "forced view should advance beyond the stalled cached slot"
     );
 
     harness.shutdown.send();

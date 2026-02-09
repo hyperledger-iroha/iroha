@@ -2777,6 +2777,36 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("kura_store", kura_store),
         json_entry("epoch", epoch),
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
+        json_entry(
+            "gossip_duplicate_known_skipped_total",
+            snap.gossip_duplicate_known_skipped_total,
+        ),
+        json_entry(
+            "quorum_stall_age_escalation_total",
+            snap.quorum_stall_age_escalation_total,
+        ),
+        json_entry("retransmit_target_set_last", snap.retransmit_target_set_last),
+        json_entry("retransmit_target_set_total", snap.retransmit_target_set_total),
+        json_entry(
+            "retransmit_target_set_samples",
+            snap.retransmit_target_set_samples,
+        ),
+        json_entry(
+            "retransmit_skip_relay_backpressure_total",
+            snap.retransmit_skip_relay_backpressure_total,
+        ),
+        json_entry(
+            "retransmit_skip_backlog_pacing_total",
+            snap.retransmit_skip_backlog_pacing_total,
+        ),
+        json_entry(
+            "retransmit_skip_no_targets_total",
+            snap.retransmit_skip_no_targets_total,
+        ),
+        json_entry(
+            "retransmit_skip_cooldown_total",
+            snap.retransmit_skip_cooldown_total,
+        ),
         json_entry("dedup_evictions", dedup_evictions),
         json_entry("consensus_message_handling", consensus_message_handling),
         json_entry("vote_validation_drops", vote_validation_drops),
