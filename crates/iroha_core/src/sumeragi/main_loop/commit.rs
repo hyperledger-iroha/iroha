@@ -832,7 +832,14 @@ impl Actor {
         let mut block_hash_to_clean = None;
         let mut exec_witness_to_emit: Option<ExecWitness> = None;
         let mut parent_to_cleanup: Option<HashOf<BlockHeader>> = None;
-        let mut reschedule_quorum: Option<(PendingBlock, Duration, usize, usize, Duration)> = None;
+        let mut reschedule_quorum: Option<(
+            PendingBlock,
+            Duration,
+            Duration,
+            usize,
+            usize,
+            Duration,
+        )> = None;
         let mut committed = false;
 
         let topology = super::network_topology::Topology::new(signature_topology);
@@ -1439,6 +1446,7 @@ impl Actor {
                             reschedule_quorum = Some((
                                 pending,
                                 pending_age,
+                                pending_age,
                                 min_votes_for_commit,
                                 vote_count,
                                 quorum_timeout,
@@ -1611,10 +1619,13 @@ impl Actor {
         if let Some(hash) = block_hash_to_clean {
             self.clean_rbc_sessions_for_block(hash, pending_height);
         }
-        if let Some((pending, age, min_votes, vote_count, quorum_timeout)) = reschedule_quorum {
+        if let Some((pending, age, quorum_stall_age, min_votes, vote_count, quorum_timeout)) =
+            reschedule_quorum
+        {
             self.reschedule_pending_quorum_block(
                 pending,
                 age,
+                quorum_stall_age,
                 min_votes,
                 vote_count,
                 quorum_timeout,
@@ -2619,10 +2630,11 @@ impl Actor {
                         hash,
                         pending_height,
                         pending_view,
+                        false,
                     );
                     if rebroadcasted > 0 {
                         pending.mark_precommit_rebroadcast(now);
-                        iroha_logger::info!(
+                        debug!(
                             height = pending_height,
                             view = pending_view,
                             block = %hash,
@@ -3628,6 +3640,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
+        target_missing_only: bool,
     ) -> usize {
         if self.relay_backpressure_active(Instant::now(), self.rebroadcast_cooldown()) {
             debug!(
@@ -3705,34 +3718,46 @@ impl Actor {
                 }
             }
         }
-        if fallback_to_topology {
-            iroha_logger::info!(
-                height,
-                view,
-                block = ?block_hash,
-                phase = ?phase,
-                targets = collector_targets.len(),
-                "rebroadcasting votes to commit topology (collector plan empty or local-only)"
-            );
-        } else if parallel_added > 0 {
-            iroha_logger::info!(
-                height,
-                view,
-                block = ?block_hash,
-                phase = ?phase,
-                targets = collector_targets.len(),
-                "rebroadcasting votes to collectors with parallel topology fanout"
-            );
-        } else {
-            iroha_logger::info!(
-                height,
-                view,
-                block = ?block_hash,
-                phase = ?phase,
-                targets = collector_targets.len(),
-                "rebroadcasting votes to collectors"
-            );
+
+        let mut missing_targets = 0usize;
+        let mut targeted_to_missing = false;
+        if target_missing_only {
+            let signer_peers: BTreeSet<PeerId> = votes
+                .iter()
+                .filter_map(|vote| usize::try_from(vote.signer).ok())
+                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                .collect();
+            let missing_target_set: BTreeSet<PeerId> = signature_topology
+                .as_ref()
+                .iter()
+                .filter(|peer| *peer != &local_peer_id && !signer_peers.contains(*peer))
+                .cloned()
+                .collect();
+            if missing_target_set.is_empty() {
+                return 0;
+            }
+            missing_targets = missing_target_set.len();
+            collector_targets.retain(|peer| missing_target_set.contains(peer));
+            if collector_targets.is_empty() {
+                fallback_to_topology = true;
+                collector_targets = missing_target_set.into_iter().collect();
+            }
+            targeted_to_missing = true;
         }
+
+        debug!(
+            height,
+            view,
+            block = ?block_hash,
+            phase = ?phase,
+            targets = collector_targets.len(),
+            fallback_to_topology,
+            parallel_added,
+            target_missing_only,
+            targeted_to_missing,
+            missing_targets,
+            "rebroadcasting votes"
+        );
 
         let mut rebroadcasted = 0usize;
         for vote in votes {
