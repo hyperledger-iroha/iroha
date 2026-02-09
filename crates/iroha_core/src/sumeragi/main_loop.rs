@@ -5258,10 +5258,19 @@ impl VoteVerifyState {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CachedSlotTimeoutTrigger {
+    height: u64,
+    view: u64,
+    at: Instant,
+    streak: u8,
+}
+
 struct ProposeState {
     backpressure_gate: BackpressureGate,
     pacemaker: Pacemaker,
     forced_view_after_timeout: Option<(u64, u64)>,
+    last_cached_slot_timeout_trigger: Option<CachedSlotTimeoutTrigger>,
     proposal_cache: ProposalCache,
     collector_plan: Option<CollectorPlan>,
     collector_plan_subject: Option<(u64, u64)>,
@@ -8932,6 +8941,7 @@ impl Actor {
             backpressure_gate,
             pacemaker: Pacemaker::new(pacemaker_base_interval, now),
             forced_view_after_timeout: None,
+            last_cached_slot_timeout_trigger: None,
             proposal_cache: ProposalCache::new(PROPOSAL_CACHE_LIMIT),
             collector_plan: None,
             collector_plan_subject: None,

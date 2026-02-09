@@ -2,7 +2,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::Write,
     num::{NonZeroU32, NonZeroUsize},
     str::FromStr,
@@ -66,10 +66,19 @@ enum RestrictedTargetPlan {
 const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
 const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
 const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
+const DROP_REASON_PEER_RECENT_SUPPRESSION: &str = "peer_recent_suppression";
 const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
 const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
+const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
+
+#[derive(Debug, Clone)]
+struct PeerRecentSuppressionEntry {
+    peer_id: PeerId,
+    tx_hash: HashOf<SignedTransaction>,
+    expires_tick: u64,
+}
 
 fn tx_gossip_frame_payload_cap(
     network_cfg: &NetworkConfig,
@@ -245,6 +254,10 @@ pub struct TransactionGossiper {
     gossip_tick: u64,
     /// Deferred gossip hashes bucketed by resend tick.
     gossip_deferred: Vec<Vec<HashOf<SignedTransaction>>>,
+    /// Recently-sent transaction hashes tracked per peer to suppress duplicate fanout.
+    peer_recently_sent: BTreeMap<PeerId, HashMap<HashOf<SignedTransaction>, u64>>,
+    /// Expiry ring for per-peer suppression entries (tick-based TTL).
+    peer_recent_ring: Vec<Vec<PeerRecentSuppressionEntry>>,
     /// Subscriber-queue drop counter at the last backpressure observation.
     last_drop_count: u64,
     /// Timestamp of the last observed subscriber-queue drop.
@@ -302,6 +315,7 @@ impl TransactionGossiper {
         let tx_frame_cap =
             tx_gossip_frame_payload_cap(network_cfg, &chain_id, &self_peer_id, &max_peer_id);
         let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
+        let peer_recent_ring = vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS];
         Self {
             chain_id,
             gossip_period,
@@ -309,6 +323,8 @@ impl TransactionGossiper {
             gossip_resend_ticks,
             gossip_tick: 0,
             gossip_deferred,
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring,
             last_drop_count: 0,
             last_drop_at: None,
             network,
@@ -395,6 +411,109 @@ impl TransactionGossiper {
         self.gossip_tick = self.gossip_tick.wrapping_add(1);
     }
 
+    fn peer_recent_slot_for_tick(&self, tick: u64) -> usize {
+        let slots = self.peer_recent_ring.len();
+        if slots == 0 {
+            return 0;
+        }
+        let slots_u64 = u64::try_from(slots).expect("peer_recent_ring length fits u64");
+        usize::try_from(tick % slots_u64).expect("slot index fits usize")
+    }
+
+    fn expire_peer_recent_suppression(&mut self) {
+        if self.peer_recent_ring.is_empty() {
+            return;
+        }
+        let slot_idx = self.peer_recent_slot_for_tick(self.gossip_tick);
+        let expiring = std::mem::take(&mut self.peer_recent_ring[slot_idx]);
+        if expiring.is_empty() {
+            return;
+        }
+        let mut empty_peers = BTreeSet::new();
+        let mut deferred = Vec::new();
+        for entry in expiring {
+            let peer_id = entry.peer_id.clone();
+            if let Some(peer_map) = self.peer_recently_sent.get_mut(&peer_id) {
+                let should_remove = peer_map.get(&entry.tx_hash).copied().is_some_and(|expiry| {
+                    expiry == entry.expires_tick && expiry <= self.gossip_tick
+                });
+                if should_remove {
+                    peer_map.remove(&entry.tx_hash);
+                } else {
+                    deferred.push(entry);
+                }
+                if peer_map.is_empty() {
+                    empty_peers.insert(peer_id);
+                }
+            } else {
+                deferred.push(entry);
+            }
+        }
+        for peer in empty_peers {
+            self.peer_recently_sent.remove(&peer);
+        }
+        for entry in deferred {
+            let deferred_slot = self.peer_recent_slot_for_tick(entry.expires_tick);
+            self.peer_recent_ring[deferred_slot].push(entry);
+        }
+    }
+
+    fn peer_recently_seen_all_hashes(
+        &self,
+        peer_id: &PeerId,
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) -> bool {
+        self.peer_recently_sent
+            .get(peer_id)
+            .is_some_and(|seen| tx_hashes.iter().all(|hash| seen.contains_key(hash)))
+    }
+
+    fn filter_targets_by_peer_recent_suppression(
+        &self,
+        targets: Vec<PeerId>,
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) -> (Vec<PeerId>, usize) {
+        if tx_hashes.is_empty() || targets.is_empty() {
+            return (targets, 0);
+        }
+        let mut filtered = Vec::with_capacity(targets.len());
+        let mut suppressed = 0usize;
+        for peer in targets {
+            if self.peer_recently_seen_all_hashes(&peer, tx_hashes) {
+                suppressed = suppressed.saturating_add(1);
+            } else {
+                filtered.push(peer);
+            }
+        }
+        (filtered, suppressed)
+    }
+
+    fn remember_peer_recent_sends(
+        &mut self,
+        targets: &[PeerId],
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) {
+        if targets.is_empty() || tx_hashes.is_empty() || self.peer_recent_ring.is_empty() {
+            return;
+        }
+        let ttl_ticks =
+            u64::try_from(self.peer_recent_ring.len()).expect("peer_recent_ring length fits u64");
+        let expires_tick = self.gossip_tick.saturating_add(ttl_ticks);
+        let slot_idx = self.peer_recent_slot_for_tick(expires_tick);
+        let slot = &mut self.peer_recent_ring[slot_idx];
+        for peer_id in targets {
+            let peer_map = self.peer_recently_sent.entry(peer_id.clone()).or_default();
+            for tx_hash in tx_hashes {
+                peer_map.insert(tx_hash.clone(), expires_tick);
+                slot.push(PeerRecentSuppressionEntry {
+                    peer_id: peer_id.clone(),
+                    tx_hash: tx_hash.clone(),
+                    expires_tick,
+                });
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn gossip_transactions(&mut self) {
         let now = Instant::now();
@@ -406,6 +525,7 @@ impl TransactionGossiper {
             );
             return;
         }
+        self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
         let (entries, lane_config, lane_catalog, commit_topology) = {
             let state_view = self.state.view();
@@ -573,19 +693,22 @@ impl TransactionGossiper {
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_PUBLIC_DOMAIN);
         let (targets, total_online) =
             Self::select_targets_with_seed(targets, self.dataspace_cfg.public_target_cap, seed);
+        let (targets, suppressed_targets) =
+            self.filter_targets_by_peer_recent_suppression(targets, &sent_hashes);
 
         if targets.is_empty() {
-            iroha_logger::warn!(
-                tx_count = message.txs.len(),
+            iroha_logger::debug!(
+                tx_count = batch_txs,
                 dataspace = %dataspace_id,
-                "no online peers available for public gossip"
+                suppressed_targets,
+                "skipping public gossip batch after per-peer suppression"
             );
             self.defer_gossip_hashes(sent_hashes);
             self.record_drop_metric(
                 GossipPlane::Public,
                 dataspace_id,
                 lane_ids,
-                "no_public_targets",
+                DROP_REASON_PEER_RECENT_SUPPRESSION,
                 false,
                 None,
                 &[],
@@ -596,16 +719,18 @@ impl TransactionGossiper {
             return;
         }
 
+        let message = Arc::new(message);
         if self.dataspace_cfg.public_target_cap.is_some() {
             iroha_logger::debug!(
-                tx_count = message.txs.len(),
+                tx_count = batch_txs,
                 size_bytes = encoded_len,
                 targets = targets.len(),
+                suppressed_targets,
                 online_peers = total_online,
                 dataspace = %dataspace_id,
                 "gossiping public transaction batch to capped target set"
             );
-            let payload = NetworkMessage::TransactionGossiper(Arc::new(message));
+            let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
             for peer_id in &targets {
                 self.network.post(Post {
                     data: payload.clone(),
@@ -625,27 +750,42 @@ impl TransactionGossiper {
                 None,
                 None,
             );
+            self.remember_peer_recent_sends(&targets, &sent_hashes);
             // Re-enqueue sent hashes when we gossip to a capped target set so the batch can
             // continue spreading to other peers in subsequent rounds.
             self.defer_gossip_hashes(sent_hashes);
         } else {
-            iroha_logger::debug!(
-                tx_count = message.txs.len(),
-                size_bytes = encoded_len,
-                online_peers = total_online,
-                dataspace = %dataspace_id,
-                "broadcasting transaction gossip batch"
-            );
-            iroha_logger::trace!(
-                tx_count = message.txs.len(),
-                size_bytes = encoded_len,
-                dataspace = %dataspace_id,
-                "Gossiping transactions"
-            );
-            self.network.broadcast(Broadcast {
-                data: NetworkMessage::TransactionGossiper(Arc::new(message)),
-                priority: Priority::Low,
-            });
+            if suppressed_targets == 0 {
+                iroha_logger::debug!(
+                    tx_count = batch_txs,
+                    size_bytes = encoded_len,
+                    online_peers = total_online,
+                    dataspace = %dataspace_id,
+                    "broadcasting transaction gossip batch"
+                );
+                self.network.broadcast(Broadcast {
+                    data: NetworkMessage::TransactionGossiper(Arc::clone(&message)),
+                    priority: Priority::Low,
+                });
+            } else {
+                iroha_logger::debug!(
+                    tx_count = batch_txs,
+                    size_bytes = encoded_len,
+                    targets = targets.len(),
+                    suppressed_targets,
+                    online_peers = total_online,
+                    dataspace = %dataspace_id,
+                    "gossiping public transaction batch to unsuppressed peer subset"
+                );
+                let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
+                for peer_id in &targets {
+                    self.network.post(Post {
+                        data: payload.clone(),
+                        peer_id: peer_id.clone(),
+                        priority: Priority::Low,
+                    });
+                }
+            }
             self.record_sent_metric(
                 GossipPlane::Public,
                 dataspace_id,
@@ -658,6 +798,7 @@ impl TransactionGossiper {
                 None,
                 None,
             );
+            self.remember_peer_recent_sends(&targets, &sent_hashes);
         }
     }
 
@@ -748,6 +889,24 @@ impl TransactionGossiper {
                 return;
             }
         };
+        let (targets, suppressed_targets) =
+            self.filter_targets_by_peer_recent_suppression(targets, &sent_hashes);
+        if targets.is_empty() {
+            self.defer_gossip_hashes(sent_hashes);
+            self.record_drop_metric(
+                GossipPlane::Restricted,
+                dataspace_id,
+                lane_ids,
+                DROP_REASON_PEER_RECENT_SUPPRESSION,
+                fallback_used,
+                fallback_surface,
+                &[],
+                self.target_cap_for_plane(GossipPlane::Restricted),
+                batch_txs,
+                encoded_len,
+            );
+            return;
+        }
 
         let message = Arc::new(message);
         let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
@@ -763,6 +922,7 @@ impl TransactionGossiper {
             tx_count = message.txs.len(),
             size_bytes = encoded_len,
             targets = targets.len(),
+            suppressed_targets,
             %dataspace_id,
             "gossiping restricted transactions to online commit topology"
         );
@@ -778,6 +938,7 @@ impl TransactionGossiper {
             fallback_surface,
             reason,
         );
+        self.remember_peer_recent_sends(&targets, &sent_hashes);
         self.defer_gossip_hashes(sent_hashes);
     }
 
@@ -1085,6 +1246,7 @@ impl TransactionGossiper {
         let lane_catalog = state_view.nexus.lane_catalog.clone();
         let lane_config = state_view.nexus.lane_config.clone();
         drop(state_view);
+        let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
 
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1104,6 +1266,10 @@ impl TransactionGossiper {
                 continue;
             };
             let tx_hash = tx.hash();
+            if !batch_seen_hashes.insert(tx_hash.clone()) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
             if self.is_transaction_known_locally_cached(tx_hash) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
@@ -1334,6 +1500,7 @@ impl TransactionGossiper {
         let lane_catalog = state_view.nexus.lane_catalog.clone();
         let lane_config = state_view.nexus.lane_config.clone();
         drop(state_view);
+        let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
 
         for (idx, tx) in txs.iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1353,6 +1520,10 @@ impl TransactionGossiper {
                 continue;
             };
             let tx_hash = tx.hash();
+            if !batch_seen_hashes.insert(tx_hash.clone()) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
             if self.is_transaction_known_locally_cached(tx_hash) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
@@ -2318,6 +2489,49 @@ mod tests {
         }
     }
 
+    fn closed_test_gossiper(resend_ticks: NonZeroU32) -> TransactionGossiper {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+        let now = Instant::now();
+        TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue,
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn gossiper_tx_frame_cap_respects_encrypted_frame_limit() {
         let temp_dir = tempdir().expect("temp dir");
@@ -2411,6 +2625,8 @@ mod tests {
             gossip_resend_ticks: resend_ticks,
             gossip_tick: 0,
             gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
@@ -2468,6 +2684,8 @@ mod tests {
             gossip_resend_ticks: resend_ticks,
             gossip_tick: 0,
             gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
             last_drop_count: u64::MAX,
             last_drop_at: Some(now),
             network: IrohaNetwork::closed_for_tests(),
@@ -2487,6 +2705,62 @@ mod tests {
             .unwrap_or(now);
         gossiper.last_drop_at = Some(past);
         assert!(!gossiper.gossip_backpressure_active(now));
+    }
+
+    #[test]
+    fn peer_recent_suppression_expires_after_ttl_ticks() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-expiry");
+        let tx_hash = signed.hash();
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
+            vec![peer.clone()],
+            std::slice::from_ref(&tx_hash),
+        );
+        assert!(targets.is_empty());
+        assert_eq!(suppressed, 1);
+
+        for _ in 0..GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS {
+            gossiper.expire_peer_recent_suppression();
+            gossiper.advance_gossip_tick();
+        }
+        gossiper.expire_peer_recent_suppression();
+
+        let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
+            vec![peer.clone()],
+            std::slice::from_ref(&tx_hash),
+        );
+        assert_eq!(targets, vec![peer]);
+        assert_eq!(suppressed, 0);
+    }
+
+    #[test]
+    fn peer_recent_suppression_keeps_peers_missing_any_hash() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
+        let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let (signed_a, _) = build_transaction("peer-a");
+        let (signed_b, _) = build_transaction("peer-b");
+        let tx_hash_a = signed_a.hash();
+        let tx_hash_b = signed_b.hash();
+        let all_hashes = vec![tx_hash_a.clone(), tx_hash_b.clone()];
+
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_a), &[tx_hash_a]);
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_b), &all_hashes);
+
+        let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
+            vec![peer_a.clone(), peer_b.clone()],
+            &all_hashes,
+        );
+        assert_eq!(targets, vec![peer_a]);
+        assert_eq!(suppressed, 1);
     }
 
     #[test]
@@ -3181,6 +3455,8 @@ mod tests {
                 Vec::new();
                 defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
             ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
@@ -3267,6 +3543,8 @@ mod tests {
                 Vec::new();
                 defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
             ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             network,
@@ -3349,6 +3627,8 @@ mod tests {
                 Vec::new();
                 defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
             ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
@@ -3467,6 +3747,8 @@ mod tests {
                 Vec::new();
                 defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
             ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),

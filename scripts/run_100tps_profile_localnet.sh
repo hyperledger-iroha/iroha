@@ -24,6 +24,8 @@ Options:
   --localnet-timeout <SEC>   seconds to wait for localnet readiness (default: 180)
   --cli-timeout <SEC>        tx_load CLI timeout seconds (default: 15)
   --pprof-seconds <SEC>      CPU profile duration seconds (default: 30)
+  --load-drain-timeout <SEC> tx_load drain timeout seconds (default: 180)
+  --rust-log <SPEC>          RUST_LOG override used when launching peers (default: warn)
   --artifact-base <DIR>      artifact base directory (default: ./artifacts/localnet-100tps-profile)
   --out-base <DIR>           localnet base directory (default: /tmp/iroha-localnet-100tps)
   --base-api-port-perm <N>   permissioned base API port (default: 29080)
@@ -52,6 +54,8 @@ QUEUE_HARD_LIMIT=15000
 LOCALNET_TIMEOUT=180
 CLI_TIMEOUT=15
 PPROF_SECONDS=30
+LOAD_DRAIN_TIMEOUT=180
+RUST_LOG_SPEC="${RUST_LOG_SPEC:-warn}"
 ARTIFACT_BASE=""
 OUT_BASE="/tmp/iroha-localnet-100tps"
 PROFILE="release"
@@ -113,6 +117,14 @@ while [[ $# -gt 0 ]]; do
       PPROF_SECONDS="$2"
       shift 2
       ;;
+    --load-drain-timeout)
+      LOAD_DRAIN_TIMEOUT="$2"
+      shift 2
+      ;;
+    --rust-log)
+      RUST_LOG_SPEC="$2"
+      shift 2
+      ;;
     --artifact-base)
       ARTIFACT_BASE="$2"
       shift 2
@@ -166,6 +178,11 @@ case "$MODE" in
     ;;
 esac
 
+if (( LOAD_DRAIN_TIMEOUT < 0 )); then
+  echo "--load-drain-timeout must be >= 0" >&2
+  exit 2
+fi
+
 if [[ -z "$ARTIFACT_BASE" ]]; then
   ARTIFACT_BASE="$(pwd)/artifacts/localnet-100tps-profile"
 fi
@@ -203,6 +220,30 @@ else
   (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" cargo build -p irohad --features profiling-endpoint)
 fi
 
+wait_for_pid_with_timeout() {
+  local pid="$1"
+  local timeout="$2"
+  local label="$3"
+  local started_at now
+  started_at="$(date +%s)"
+  while kill -0 "$pid" 2>/dev/null; do
+    now="$(date +%s)"
+    if (( now - started_at >= timeout )); then
+      echo "Warning: ${label} exceeded ${timeout}s; terminating pid ${pid}" >&2
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 5
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+      wait "$pid" || true
+      return 124
+    fi
+    sleep 1
+  done
+  wait "$pid" || true
+  return 0
+}
+
 run_mode() {
   local label="$1"
   local consensus_mode="$2"
@@ -222,6 +263,7 @@ run_mode() {
   echo ""
   echo "=== ${label} localnet (${PEERS} peers, ~${TPS} TPS, ${DURATION}s) ==="
   IROHAD_BIN="$PPROF_IROHAD_BIN" \
+    RUST_LOG="$RUST_LOG_SPEC" \
     "${SCRIPT_DIR}/deploy_localnet.sh" \
       --iroha-dir "$IROHA_DIR" \
       --out-dir "$out_dir" \
@@ -252,15 +294,17 @@ run_mode() {
 
   local count=$((TPS * DURATION))
   local batch_size=$TPS
+  local load_timeout=$((DURATION + LOAD_DRAIN_TIMEOUT + 120))
 
   echo "Artifacts: ${artifact_dir}"
   echo "Torii: ${torii_url}"
   echo "Load: count=${count} batch=${batch_size}/s parallel=${PARALLEL}"
+  echo "RUST_LOG: ${RUST_LOG_SPEC}"
   echo ""
 
   # Drive load in the background so we can capture a steady-state pprof profile.
   local tx_log="${artifact_dir}/tx_load.log"
-  "$PYTHON_BIN" "${SCRIPT_DIR}/tx_load.py" \
+  PYTHONUNBUFFERED=1 "$PYTHON_BIN" "${SCRIPT_DIR}/tx_load.py" \
     --client-config "${out_dir}/client.toml" \
     --peer-count "$PEERS" \
     --base-api-port "$(printf '%s' "$torii_url" | sed -E 's#.*:([0-9]+)/?$#\1#')" \
@@ -268,7 +312,7 @@ run_mode() {
     --parallel "$PARALLEL" \
     --batch-size "$batch_size" \
     --batch-interval 1 \
-    --drain-timeout 180 \
+    --drain-timeout "$LOAD_DRAIN_TIMEOUT" \
     --cli-timeout "$CLI_TIMEOUT" \
     --queue-soft-limit "$QUEUE_SOFT_LIMIT" \
     --queue-hard-limit "$QUEUE_HARD_LIMIT" \
@@ -290,7 +334,9 @@ run_mode() {
     rm -f "$pprof_out"
   fi
 
-  wait "$load_pid" || true
+  if ! wait_for_pid_with_timeout "$load_pid" "$load_timeout" "tx_load (${label})"; then
+    echo "Warning: tx_load did not finish cleanly for ${label}; see ${tx_log}" >&2
+  fi
 
   # Copy the first peer log for quick inspection (others can be huge).
   if [[ -f "${out_dir}/peer0.log" ]]; then
