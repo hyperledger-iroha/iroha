@@ -177,7 +177,9 @@ pub mod transaction {
 
     /// Maximum instructions allowed in a transaction payload.
     pub const fn max_instructions() -> NonZeroU64 {
-        nonzero!(20_000_u64)
+        // `v1/contracts/call` wrapper transactions for dpn_sora_nexus can exceed 20k
+        // decoded IVM instructions; keep a conservative margin above current payloads.
+        nonzero!(50_000_u64)
     }
 
     /// Maximum Kotodama bytecode length (bytes) allowed during admission.
