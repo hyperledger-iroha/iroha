@@ -20421,7 +20421,7 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_for_recent_commit
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_payload_after_delivery() {
+async fn rebroadcast_stalled_rbc_payloads_skips_payload_after_delivery() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -20499,7 +20499,17 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_payload_after_delivery() 
         .rebroadcast_stalled_rbc_payloads(Instant::now());
     assert!(
         progress,
-        "expected payload rebroadcast progress for delivered session"
+        "expected deliver rebroadcast progress for delivered session"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&key),
+        "delivered sessions with complete chunks must not rebroadcast payload"
     );
     assert!(
         harness
@@ -20507,9 +20517,9 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_payload_after_delivery() 
             .subsystems
             .da_rbc
             .rbc
-            .payload_rebroadcast_last_sent
+            .deliver_rebroadcast_last_sent
             .contains_key(&key),
-        "expected payload rebroadcast timestamp"
+        "expected deliver rebroadcast timestamp"
     );
 
     harness.shutdown.send();
@@ -55474,7 +55484,7 @@ async fn reschedule_allows_fast_timeout_with_da_payload_available_when_enabled()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_defers_fast_timeout_while_validation_inflight() {
+async fn reschedule_defers_quorum_timeout_while_validation_inflight() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -55493,9 +55503,14 @@ async fn reschedule_defers_fast_timeout_while_validation_inflight() {
         actor.pending_fast_path_timeout(&view, consensus_mode)
     };
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let availability_timeout = actor.availability_timeout(quorum_timeout, true);
     assert!(
         fast_timeout < quorum_timeout,
         "test requires fast timeout to be shorter than quorum timeout"
+    );
+    assert!(
+        quorum_timeout < availability_timeout,
+        "test requires availability timeout to exceed quorum timeout"
     );
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
@@ -55528,8 +55543,31 @@ async fn reschedule_defers_fast_timeout_while_validation_inflight() {
     }
 
     assert!(
+        !actor.reschedule_stale_pending_blocks(None),
+        "quorum timeout should still defer while validation is inflight"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should remain unrescheduled at quorum timeout while validation is inflight"
+    );
+
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending block");
+        pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
+    }
+
+    assert!(
         actor.reschedule_stale_pending_blocks(None),
-        "pending should reschedule once quorum timeout elapses even with validation inflight"
+        "pending should reschedule after availability timeout with validation inflight"
     );
     let pending_after = actor
         .pending
@@ -55538,7 +55576,7 @@ async fn reschedule_defers_fast_timeout_while_validation_inflight() {
         .expect("pending retained");
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
-        "pending should be quorum-rescheduled after quorum timeout"
+        "pending should be quorum-rescheduled after availability timeout"
     );
 
     harness.shutdown.send();
@@ -59654,6 +59692,39 @@ async fn rbc_backlog_counts_session_with_header_at_tip_height() {
     assert!(
         actor.has_unresolved_rbc_backlog(),
         "RBC sessions at the committed tip should gate view changes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn delivered_rbc_session_at_tip_height_ignores_non_tip_hash() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let tip_block = sample_block(2, 0, Some(genesis_hash));
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(tip_block.hash());
+
+    let stale_block = sample_block(2, 1, Some(genesis_hash));
+    let key = Actor::session_key(&stale_block.hash(), 2, 1);
+    let mut session = RbcSession::test_new(
+        1,
+        Some(Hash::prehashed([0x41; 32])),
+        Some(Hash::prehashed([0x42; 32])),
+        0,
+    );
+    session.test_set_block_header_and_signature(&stale_block);
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    assert!(
+        !actor.rbc_rebroadcast_active(key),
+        "delivered RBC sessions at tip height should only stay active for the tip hash"
     );
 
     harness.shutdown.send();

@@ -9,10 +9,14 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{
+    Registrable,
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
+    permission::Permission,
+    prelude::{Account, Domain, Grant},
 };
+use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
 
@@ -28,19 +32,40 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     // Minimal state
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let alice_account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [alice_account, bob_account], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0;
+    gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
 
     // Build a signed block header at H=1
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
+    let ballot_perm: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "any".to_string(),
+    }
+    .into();
+    Grant::account_permission(ballot_perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant ballot permission");
+    let rid = "rid-revote".to_string();
+    stx.world.governance_referenda_mut().insert(
+        rid.clone(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: 10_000,
+            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+        },
+    );
 
     // First vote by ALICE
-    let rid = "rid-revote".to_string();
     let first = CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
