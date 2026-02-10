@@ -28,10 +28,11 @@ fn referendum_open_and_close_by_height() {
     use core::num::NonZeroU64;
 
     use iroha_data_model::{
+        Registrable,
         events::data::governance::GovernanceEvent,
         isi::governance::{CastPlainBallot, ProposeDeployContract, VotingMode},
         permission::Permission,
-        prelude::Grant,
+        prelude::{Account, Domain, Grant},
     };
     use iroha_executor_data_model::permission::governance::{
         CanProposeContractDeployment, CanSubmitGovernanceBallot,
@@ -40,15 +41,20 @@ fn referendum_open_and_close_by_height() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
+    let domain: Domain = Domain::new(iroha_test_samples::ALICE_ID.domain.clone())
+        .build(&iroha_test_samples::ALICE_ID);
+    let account: Account =
+        Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
+    let world = World::with([domain], [account], []);
     #[cfg(feature = "telemetry")]
     let mut state = State::new(
-        World::default(),
+        world,
         kura,
         query_handle,
         iroha_core::telemetry::StateTelemetry::default(),
     );
     #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::default(), kura, query_handle);
+    let mut state = State::new(world, kura, query_handle);
 
     // Configure short schedule: start at +1, span 2 ⇒ end = start + 1
     let mut cfg = state.gov.clone();

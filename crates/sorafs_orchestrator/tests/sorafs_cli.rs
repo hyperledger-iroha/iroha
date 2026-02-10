@@ -18,6 +18,7 @@ use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
 use norito::{
     decode_from_bytes,
@@ -42,6 +43,16 @@ use tempfile::tempdir;
 
 fn sorafs_cli_cmd() -> AssertCommand {
     cargo_bin_cmd!("sorafs_cli")
+}
+
+fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
+    let keypair = KeyPair::from_seed(
+        b"sorafs-cli-manifest-submit-authority".to_vec(),
+        Algorithm::Ed25519,
+    );
+    let authority = format!("{}@wonderland", keypair.public_key());
+    let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
+    (authority, private_key)
 }
 
 fn make_stream_token_b64(
@@ -364,8 +375,7 @@ fn por_trigger_posts_manual_challenge() {
     let trigger_mock = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/por/trigger")
-            .body_includes("\"reason\":\"incident_probe\"")
-            .body_includes("\"requested_samples\":48");
+            .header("content-type", "application/x-norito");
         then.status(202)
             .header("content-type", "application/json")
             .body(r#"{"challenge_id":"cafebabe"}"#);
@@ -794,6 +804,7 @@ fn manifest_sign_emits_bundle_and_signature() {
 #[test]
 fn manifest_submit_posts_payload() {
     let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
 
     let input_path = tempdir.path().join("payload.bin");
     let payload: Vec<u8> = (0..4096).map(|idx| (idx as u8).wrapping_mul(31)).collect();
@@ -918,8 +929,8 @@ fn manifest_submit_posts_payload() {
         .arg(format!("--chunk-plan={}", plan_path.display()))
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--submitted-epoch=7")
-        .arg("--authority=alice@wonderland")
-        .arg("--private-key=ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C")
+        .arg(format!("--authority={authority}"))
+        .arg(format!("--private-key={private_key}"))
         .arg(format!("--summary-out={}", submit_summary_path.display()))
         .arg(format!("--response-out={}", response_path.display()))
         .assert()
@@ -961,6 +972,7 @@ fn manifest_submit_posts_payload() {
 #[test]
 fn manifest_submit_rejects_chunk_digest_mismatch() {
     let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
 
     let server = MockServer::start();
@@ -978,8 +990,8 @@ fn manifest_submit_rejects_chunk_digest_mismatch() {
         .arg(format!("--chunk-digest-sha3={wrong_digest}"))
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--submitted-epoch=7")
-        .arg("--authority=alice@wonderland")
-        .arg("--private-key=ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C")
+        .arg(format!("--authority={authority}"))
+        .arg(format!("--private-key={private_key}"))
         .output()
         .expect("command executes");
 

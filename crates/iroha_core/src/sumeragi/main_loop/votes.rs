@@ -2151,7 +2151,12 @@ impl Actor {
         };
         let mut exact_candidates = Vec::new();
         let mut fallback_candidates = Vec::new();
-        let strict_parent_qc = target_parent_hash.is_some() && target_parent > committed_height;
+        // Require an exact parent-height QC only when the parent chain cannot be
+        // reconstructed from pending blocks. When the chain is available, older
+        // commit QCs can be safely rolled forward through known parent hashes.
+        let strict_parent_qc = target_parent_hash.is_some()
+            && target_parent > committed_height
+            && pending_hashes.is_none();
         for candidate in super::status::commit_qc_history() {
             if !matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit) {
                 continue;

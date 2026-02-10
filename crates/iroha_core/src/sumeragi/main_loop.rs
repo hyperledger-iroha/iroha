@@ -14275,6 +14275,7 @@ mod queue_drop_backpressure_tests {
 
     #[test]
     fn queue_drop_backpressure_tracks_recent_drops() {
+        let _worker_guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
         let mut backpressure = QueueDropBackpressure::new();
         let now = Instant::now();
@@ -14299,6 +14300,7 @@ mod queue_block_backpressure_tests {
 
     #[test]
     fn queue_block_backpressure_tracks_recent_blocks() {
+        let _worker_guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
         let mut backpressure = QueueBlockBackpressure::new();
         let now = Instant::now();

@@ -116,6 +116,7 @@ Note: First release policy
 - If you need clarification on any requirement, stop and draft a ChatGPT prompt with your question, then share it with the user before continuing.
 - Keep changes minimal and scoped; avoid unrelated edits in the same patch.
 - Prefer internal modules over adding new dependencies; do not edit `Cargo.lock`.
+- Never kill `cargo` or `rustc` processes unless the user explicitly requests it. If there is build-lock contention, wait or ask first.
 - Use feature flags to guard hardware-accelerated paths (e.g., `simd`, `cuda`) and always provide a deterministic fallback path.
 - Ensure outputs remain identical across hardware; avoid relying on non-deterministic parallel reductions.
 - Update documentation and examples when public APIs or behavior change.

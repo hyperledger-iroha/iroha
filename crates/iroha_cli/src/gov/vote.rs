@@ -100,12 +100,17 @@ fn ensure_public_input_owner_canonical(map: &json::Map) -> Result<()> {
     let owner = value
         .as_str()
         .ok_or_else(|| eyre!("owner must be a canonical account id"))?;
-    let canonical = AccountId::canonicalize(owner)
-        .map_err(|_| eyre!("owner must be a canonical account id"))?;
-    if canonical != owner {
-        return Err(eyre!("owner must use canonical account id form"));
+    let owner = owner.trim();
+    if owner.is_empty() {
+        return Err(eyre!("owner must be a canonical account id"));
     }
-    Ok(())
+
+    match AccountId::parse(owner) {
+        Ok(parsed) if parsed.canonical() == owner => Ok(()),
+        Ok(_) => Err(eyre!("owner must use canonical account id form")),
+        Err(err) if err.reason() == "ERR_DOMAIN_SELECTOR_UNRESOLVED" => Ok(()),
+        Err(_) => Err(eyre!("owner must be a canonical account id")),
+    }
 }
 
 fn normalize_public_inputs(map: &mut json::Map) -> Result<()> {
@@ -654,6 +659,24 @@ mod tests {
         );
         let err = ensure_public_input_owner_canonical(&map).expect_err("noncanonical owner");
         assert!(err.to_string().contains("canonical account id form"));
+    }
+
+    #[test]
+    fn public_inputs_allow_implicit_owner_without_selector_resolver() {
+        use std::str::FromStr;
+
+        use iroha::data_model::domain::DomainId;
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let domain = DomainId::from_str("unresolved-owner-domain").expect("domain id");
+        let key_pair = KeyPair::from_seed(vec![0x55; 32], Algorithm::Ed25519);
+        let owner = AccountId::new(domain, key_pair.public_key().clone()).to_string();
+        let mut map = json::Map::new();
+        map.insert("owner".to_string(), json::Value::String(owner));
+        assert!(
+            ensure_public_input_owner_canonical(&map).is_ok(),
+            "implicit owner should be accepted when selector resolution is unavailable"
+        );
     }
 }
 

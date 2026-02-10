@@ -528,6 +528,10 @@ static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
+static MODE_TAGS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static GOSSIP_FALLBACK_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
 static WORKER_QUEUE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
@@ -1888,6 +1892,11 @@ pub fn set_effective_timing(
     redundant_send_r: u64,
     npos_timeouts: Option<NposTimeoutsSnapshot>,
 ) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&QC_STATUS_TEST_LOCK) else {
+        return;
+    };
+
     EFFECTIVE_MIN_FINALITY_MS.store(min_finality_ms, Ordering::Relaxed);
     EFFECTIVE_BLOCK_TIME_MS.store(block_time_ms, Ordering::Relaxed);
     EFFECTIVE_COMMIT_TIME_MS.store(commit_time_ms, Ordering::Relaxed);
@@ -6737,6 +6746,18 @@ pub(crate) fn local_removed_test_guard() -> TestLockGuard {
 
 #[cfg(test)]
 #[allow(private_interfaces)]
+pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&MODE_TAGS_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn gossip_fallback_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&GOSSIP_FALLBACK_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
 pub(crate) fn worker_queue_test_guard() -> TestLockGuard {
     reentrant_test_guard(&WORKER_QUEUE_TEST_LOCK)
 }
@@ -6976,6 +6997,8 @@ mod tests {
 
     #[test]
     fn effective_timing_snapshot_tracks_values() {
+        let _guard = super::qc_status_test_guard();
+
         super::set_effective_timing(
             150,
             1_000,
@@ -7446,6 +7469,7 @@ mod tests {
 
     #[test]
     fn phase_snapshot_exposes_phase_ema() {
+        let _guard = super::gossip_fallback_test_guard();
         super::reset_gossip_fallback_for_tests();
         super::set_phase_propose_ms(5);
         super::set_phase_collect_da_ms(6);
@@ -7529,6 +7553,7 @@ mod tests {
 
     #[test]
     fn pending_rbc_drop_counters_track_reasons() {
+        let _guard = super::rbc_status_test_guard();
         super::reset_pending_rbc_for_tests();
         super::inc_rbc_pending_drop("cap", 2, 10);
         super::inc_rbc_pending_drop("session_cap", 1, 4);
@@ -7549,6 +7574,7 @@ mod tests {
 
     #[test]
     fn pending_rbc_stash_counters_track_reasons() {
+        let _guard = super::rbc_status_test_guard();
         super::reset_pending_rbc_for_tests();
         super::inc_pending_rbc_stash(super::PendingRbcStashKind::Chunk, None);
         super::inc_pending_rbc_stash(
@@ -8135,6 +8161,7 @@ mod tests {
 
     #[test]
     fn snapshot_tracks_background_drops() {
+        let _guard = super::gossip_fallback_test_guard();
         super::reset_gossip_fallback_for_tests();
         super::record_bg_post_drop("Post");
         super::record_bg_post_drop("Broadcast");
@@ -8146,6 +8173,7 @@ mod tests {
 
     #[test]
     fn snapshot_tracks_retransmit_target_and_skip_counters() {
+        let _guard = super::gossip_fallback_test_guard();
         super::reset_gossip_fallback_for_tests();
         super::record_retransmit_target_set_size(3);
         super::record_retransmit_target_set_size(1);
@@ -8209,6 +8237,7 @@ mod tests {
 
     #[test]
     fn worker_loop_snapshot_tracks_stage_and_queue_depths() {
+        let _guard = super::worker_queue_test_guard();
         super::reset_worker_loop_snapshot_for_tests();
         super::record_worker_queue_enqueue(WorkerQueueKind::Votes);
         super::record_worker_queue_enqueue(WorkerQueueKind::Background);
@@ -8587,20 +8616,27 @@ mod tests {
 
     #[test]
     fn mode_tags_snapshot_updates() {
+        let _guard = super::mode_tags_test_guard();
+        super::set_mode_activation_lag(None);
         super::set_mode_tags("Permissioned", Some("Npos"), Some(10));
         let (mode, staged, activation, lag) = super::mode_tags();
         assert_eq!(mode, "Permissioned");
         assert_eq!(staged, Some("Npos".to_string()));
         assert_eq!(activation, Some(10));
         assert!(lag.is_none());
+        super::set_mode_tags("", None, None);
+        super::set_mode_activation_lag(None);
     }
 
     #[test]
     fn mode_activation_lag_snapshot_reflects_setter() {
+        let _guard = super::mode_tags_test_guard();
+        super::set_mode_activation_lag(None);
         super::set_mode_tags("Permissioned", Some("Npos"), Some(5));
         super::set_mode_activation_lag(Some(3));
         let snap = super::snapshot();
         assert_eq!(snap.mode_activation_lag_blocks, Some(3));
+        super::set_mode_tags("", None, None);
         super::set_mode_activation_lag(None);
     }
 

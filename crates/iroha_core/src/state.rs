@@ -5916,6 +5916,20 @@ mod stake_snapshot_tests {
     }
 
     #[test]
+    fn world_register_validator_pop_for_testing_seeds_consensus_lookup() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("pop for test key");
+        let mut world = World::default();
+
+        world.register_validator_pop_for_testing(keypair.public_key().clone(), pop.clone());
+
+        let view = world.view();
+        let resolved = consensus_key_pop_for_public_key(&view, keypair.public_key());
+        assert_eq!(resolved.as_deref(), Some(pop.as_slice()));
+    }
+
+    #[test]
     fn council_members_map_to_peer_ids_in_epoch_roster() {
         // Build a minimal state with blank Kura/query
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -8491,6 +8505,36 @@ impl World {
     /// Creates an empty `World`.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    /// Register an active validator consensus key with a PoP for deterministic tests.
+    pub fn register_validator_pop_for_testing(&mut self, public_key: PublicKey, pop: Vec<u8>) {
+        let id = derive_validator_key_id(&public_key);
+        let record = ConsensusKeyRecord {
+            id: id.clone(),
+            public_key: public_key.clone(),
+            pop: Some(pop),
+            activation_height: 0,
+            expiry_height: None,
+            hsm: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Active,
+        };
+
+        let mut block = self.block();
+        block.consensus_keys.insert(id.clone(), record);
+        let pk = public_key.to_string();
+        let mut by_pk = block
+            .consensus_keys_by_pk
+            .get(&pk)
+            .cloned()
+            .unwrap_or_default();
+        if !by_pk.contains(&id) {
+            by_pk.push(id);
+            block.consensus_keys_by_pk.insert(pk, by_pk);
+        }
+        block.commit();
     }
 
     /// Provides mutable access to UAID dataspace bindings for tests and API scaffolding.

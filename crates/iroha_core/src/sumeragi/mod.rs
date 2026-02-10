@@ -7305,6 +7305,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn worker_queue_depths_track_enqueues_and_drains() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);

@@ -13,11 +13,12 @@ use iroha_core::{
     },
 };
 use iroha_data_model::{
+    Registrable,
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
     permission::Permission,
-    prelude::Grant,
+    prelude::{Account, Domain, Grant},
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
@@ -26,7 +27,10 @@ use iroha_test_samples::ALICE_ID;
 fn plain_ballot_emits_open_event_with_window() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [account], []);
+    let mut state = State::new_for_testing(world, kura, query);
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
     cfg.min_bond_amount = 0;

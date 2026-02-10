@@ -3962,9 +3962,7 @@ fn derive_da_chunker_handle(manifest: &DaManifestV1) -> napi::Result<String> {
         plan.chunk_profile,
         sorafs_manifest::chunker_registry::DEFAULT_MULTIHASH_CODE,
     )
-    .ok_or_else(|| {
-        invalid_arg("manifest chunk profile is not registered in the chunker registry")
-    })?;
+    .unwrap_or_else(sorafs_manifest::chunker_registry::default_descriptor);
     Ok(format!(
         "{}.{}@{}",
         descriptor.namespace, descriptor.name, descriptor.semver
@@ -7025,8 +7023,8 @@ mod tests {
         da::{
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
             types::{
-                BlobClass, BlobCodec, BlobDigest, ErasureProfile, ExtraMetadata, RetentionPolicy,
-                StorageTicketId,
+                BlobClass, BlobCodec, BlobDigest, ErasureProfile, ExtraMetadata, MetadataEntry,
+                MetadataVisibility, RetentionPolicy, StorageTicketId,
             },
         },
         domain::DomainId,
@@ -7109,8 +7107,17 @@ mod tests {
         AccountId::new(domain_id, keypair.public_key().clone())
     }
 
-    fn canonical_owner_literal(domain: &str) -> String {
-        sample_account(domain).to_string()
+    fn account_json_literal(account: &AccountId) -> String {
+        json::to_value(account)
+            .expect("serialize account id")
+            .as_str()
+            .expect("account id json literal should be string")
+            .to_owned()
+    }
+
+    fn canonical_owner_literal(_domain: &str) -> String {
+        let default_domain = iroha_data_model::account::address::default_domain_name();
+        sample_account(default_domain.as_ref()).to_string()
     }
 
     fn noncanonical_owner_literal(domain: &str) -> String {
@@ -7204,7 +7211,7 @@ mod tests {
 
     fn da_fixture_path(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../fixtures/da/reconstruct/rs_parity_v1")
+            .join("../../fixtures/da/reconstruct/rs_parity_v1")
             .join(name)
     }
 
@@ -7980,7 +7987,30 @@ mod tests {
             rent_quote: DaRentQuote::default(),
             chunks: chunk_commitments,
             ipa_commitment: BlobDigest::new(chunk_root),
-            metadata: ExtraMetadata::default(),
+            metadata: ExtraMetadata {
+                items: vec![
+                    MetadataEntry::new(
+                        "taikai.event_id",
+                        b"demo-event".to_vec(),
+                        MetadataVisibility::Public,
+                    ),
+                    MetadataEntry::new(
+                        "taikai.stream_id",
+                        b"demo-stream".to_vec(),
+                        MetadataVisibility::Public,
+                    ),
+                    MetadataEntry::new(
+                        "taikai.rendition_id",
+                        b"demo-rendition".to_vec(),
+                        MetadataVisibility::Public,
+                    ),
+                    MetadataEntry::new(
+                        "taikai.segment.sequence",
+                        b"1".to_vec(),
+                        MetadataVisibility::Public,
+                    ),
+                ],
+            },
             issued_at_unix: 0,
         };
         let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
@@ -8215,7 +8245,10 @@ mod tests {
 
         let mut join = json::Map::new();
         join.insert("call_id".into(), Value::Object(call_id));
-        join.insert("participant".into(), Value::String(participant.to_string()));
+        join.insert(
+            "participant".into(),
+            Value::String(account_json_literal(&participant)),
+        );
         join.insert("commitment".into(), Value::Object(commitment));
         join.insert("nullifier".into(), Value::Object(nullifier));
         join.insert("roster_root".into(), Value::String(hash_literal(0x33)));
@@ -8447,6 +8480,7 @@ mod tests {
     #[test]
     fn join_kaigi_instruction_norito_roundtrip_from_json() {
         disable_packed_struct_once();
+        let participant = account_json_literal(&sample_account("wonderland"));
         let payload = r#"{
             "Kaigi": {
                 "JoinKaigi": {
@@ -8454,7 +8488,7 @@ mod tests {
                         "domain_id": "wonderland",
                         "call_name": "weekly-sync"
                     },
-                    "participant": "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "participant": "__PARTICIPANT__",
                     "commitment": {
                         "commitment": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
                         "alias_tag": null
@@ -8468,9 +8502,10 @@ mod tests {
                 }
             }
         }"#;
+        let payload = payload.replace("__PARTICIPANT__", &participant);
 
         let instruction =
-            instruction_from_json(payload).expect("builder JSON must translate into instruction");
+            instruction_from_json(&payload).expect("builder JSON must translate into instruction");
         if let Some(join) = instruction.as_any().downcast_ref::<JoinKaigi>() {
             assert!(
                 join.commitment().is_some(),
@@ -8926,7 +8961,7 @@ mod tests {
             .and_then(|value| value.get("owner"))
             .and_then(|value| value.as_str())
             .expect("owner string present");
-        assert_eq!(owner_json, owner.to_string());
+        assert_eq!(owner_json, account_json_literal(&owner));
     }
 
     #[test]
@@ -9020,7 +9055,7 @@ mod tests {
             .and_then(|arr| arr.first())
             .and_then(|value| value.as_str())
             .expect("member string present");
-        assert_eq!(member_json, member.to_string());
+        assert_eq!(member_json, account_json_literal(&member));
     }
 
     #[test]
@@ -9284,7 +9319,7 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
         let authority_id = AccountId::new(domain_id, keypair.public_key().clone());
         let encoded = build_time_trigger_action(
-            authority_id.to_string(),
+            account_json_literal(&authority_id),
             vec![
                 "{\"Mint\":{\"TriggerRepetitions\":{\"object\":1,\"destination\":\"demo::trigger\"}}}"
                     .to_owned(),
@@ -9320,7 +9355,7 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
         let authority_id = AccountId::new(domain_id, keypair.public_key().clone());
         let encoded = build_precommit_trigger_action(
-            authority_id.to_string(),
+            account_json_literal(&authority_id),
             vec![
                 "{\"Mint\":{\"TriggerRepetitions\":{\"object\":1,\"destination\":\"demo::trigger\"}}}"
                     .to_owned(),

@@ -2548,6 +2548,7 @@ pub mod trigger {
     mod tests {
         use core::str::FromStr as _;
 
+        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_executor_data_model::permission::{
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
             nexus::CanUseFeeSponsor,
@@ -2568,6 +2569,11 @@ pub mod trigger {
             asset::{AssetDefinitionId, AssetId},
             domain::DomainId,
         };
+
+        fn sample_account_id(seed: u8, domain_id: &DomainId) -> AccountId {
+            let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+            AccountId::new(domain_id.clone(), keypair.public_key().clone())
+        }
 
         fn sora_permissions() -> Vec<AnyPermission> {
             vec![
@@ -2592,9 +2598,10 @@ pub mod trigger {
         fn asset_metadata_permissions_not_trigger_associated() {
             let trigger_id =
                 TriggerId::from_str("metadata_cleanup").expect("trigger id must be valid");
+            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
             let asset_definition_id = AssetDefinitionId::from_str("token#test")
                 .expect("asset definition id must be valid");
-            let account_id = AccountId::from_str("alice@test").expect("account id must be valid");
+            let account_id = sample_account_id(0x11, &domain_id);
             let asset_id = AssetId::new(asset_definition_id.clone(), account_id);
 
             let permission = Permission::from(AnyPermission::CanModifyAssetMetadataWithDefinition(
@@ -2633,7 +2640,7 @@ pub mod trigger {
         #[test]
         fn sora_permissions_not_domain_account_or_definition_associated() {
             let domain_id = DomainId::from_str("test").expect("domain id must be valid");
-            let account_id = AccountId::from_str("alice@test").expect("account id must be valid");
+            let account_id = sample_account_id(0x12, &domain_id);
             let asset_definition_id = AssetDefinitionId::from_str("token#test")
                 .expect("asset definition id must be valid");
 
@@ -2659,10 +2666,9 @@ pub mod trigger {
 
         #[test]
         fn fee_sponsor_permission_associations() {
-            let sponsor = AccountId::from_str("sponsor@test").expect("account id must be valid");
-            let other_account =
-                AccountId::from_str("other@test").expect("account id must be valid");
             let domain_id = DomainId::from_str("test").expect("domain id must be valid");
+            let sponsor = sample_account_id(0x21, &domain_id);
+            let other_account = sample_account_id(0x22, &domain_id);
             let other_domain = DomainId::from_str("other").expect("domain id must be valid");
             let asset_definition_id = AssetDefinitionId::from_str("token#test")
                 .expect("asset definition id must be valid");

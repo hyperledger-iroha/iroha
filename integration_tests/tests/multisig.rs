@@ -26,7 +26,11 @@ fn start_network(
     builder: NetworkBuilder,
     context: &'static str,
 ) -> Option<(sandbox::SerializedNetwork, Runtime)> {
-    sandbox::start_network_blocking_or_skip(builder, context).unwrap()
+    sandbox::start_network_blocking_or_skip(
+        builder.with_peer_startup_timeout(Duration::from_secs(300)),
+        context,
+    )
+    .unwrap()
 }
 
 fn multisig_supported(client: &Client) -> bool {

@@ -158,6 +158,17 @@ pub(super) fn p2p_topology_with_trusted(
     topology
 }
 
+fn peer_ids_outside_topology(
+    expected_topology: &BTreeSet<PeerId>,
+    online_peer_ids: &[PeerId],
+) -> Vec<PeerId> {
+    online_peer_ids
+        .iter()
+        .filter(|peer_id| !expected_topology.contains(*peer_id))
+        .cloned()
+        .collect()
+}
+
 pub(super) fn spawn_commit_worker(
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -5526,6 +5537,8 @@ impl Actor {
             let view = self.state.view();
             view.world.peers().iter().cloned().collect::<BTreeSet<_>>()
         };
+        let trusted_peers = self.common_config.trusted_peers.value();
+        let expected_topology = p2p_topology_with_trusted(&current, trusted_peers);
 
         let local_peer = self.common_config.peer.id();
         let local_in_world = current.contains(local_peer);
@@ -5551,13 +5564,10 @@ impl Actor {
             return;
         }
 
-        let stray_online: Vec<_> = self.network.online_peers(|online| {
-            online
-                .iter()
-                .filter(|peer| !current.contains(peer.id()))
-                .map(|peer| peer.id().clone())
-                .collect()
-        });
+        let online_peer_ids: Vec<_> = self
+            .network
+            .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
+        let stray_online = peer_ids_outside_topology(&expected_topology, &online_peer_ids);
 
         let (decision, advertise) = super::topology_advertisement_for_refresh(
             &current,
@@ -5590,8 +5600,7 @@ impl Actor {
 
         let advertise = advertise.expect("advertise topology required for decision");
         self.last_advertised_topology.clone_from(&advertise);
-        let network_topology =
-            p2p_topology_with_trusted(&advertise, self.common_config.trusted_peers.value());
+        let network_topology = p2p_topology_with_trusted(&advertise, trusted_peers);
         self.network
             .update_topology(UpdateTopology(network_topology.into_iter().collect()));
         self.peers_gossiper
@@ -5724,6 +5733,44 @@ mod tests {
             pops,
         };
         (trusted, peer_id)
+    }
+
+    #[test]
+    fn peer_ids_outside_topology_skips_trusted_observer() {
+        let (mut trusted, local_peer) = trusted_self();
+        let validator = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let observer = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let stranger = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let observer_peer = Peer::new(
+            "127.0.0.1:7017"
+                .parse::<SocketAddr>()
+                .expect("socket address parses")
+                .into(),
+            observer.clone(),
+        );
+        let _ = trusted.others.push(observer_peer);
+
+        let world_peers: BTreeSet<_> = [local_peer.clone(), validator.clone()]
+            .into_iter()
+            .collect();
+        let expected_topology = p2p_topology_with_trusted(&world_peers, &trusted);
+        let online = vec![local_peer, validator, observer, stranger.clone()];
+
+        let stray_online = peer_ids_outside_topology(&expected_topology, &online);
+
+        assert_eq!(stray_online, vec![stranger]);
     }
 
     #[test]

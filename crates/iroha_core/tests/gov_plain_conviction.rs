@@ -9,10 +9,14 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{
+    Registrable,
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
+    permission::Permission,
+    prelude::{Account, Domain, Grant},
 };
+use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
@@ -25,7 +29,10 @@ fn plain_ballot_conviction_applies() {
     // Build minimal state/transaction
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [account], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0;
@@ -42,6 +49,13 @@ fn plain_ballot_conviction_applies() {
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
+    let perm: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "ref-conviction".to_string(),
+    }
+    .into();
+    Grant::account_permission(perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant ballot permission");
 
     // Defaults from config: conviction_step_blocks=100, max_conviction=6
     let amount: u128 = 10000; // sqrt=100
@@ -58,14 +72,17 @@ fn plain_ballot_conviction_applies() {
         .execute(&ALICE_ID, &mut stx)
         .expect("plain ballot ok");
     let events = stx.world.take_external_events();
-    // Expect BallotAccepted with weight = 100 * 3 = 300
+    let step = stx.gov.conviction_step_blocks.max(1);
+    let factor = (1u64 + (duration_blocks / step)).min(stx.gov.max_conviction);
+    let expected_weight = 100u128.saturating_mul(u128::from(factor));
+    // Expect BallotAccepted with conviction-adjusted weight.
     let mut saw_ok = false;
     for event in events {
         if let Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(ev))) =
             event.as_data_event()
         {
             assert_eq!(ev.referendum_id, "ref-conviction");
-            assert_eq!(ev.weight, Some(300));
+            assert_eq!(ev.weight, Some(expected_weight));
             saw_ok = true;
             break;
         }

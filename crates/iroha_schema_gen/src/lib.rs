@@ -203,67 +203,9 @@ mod tests {
 
         map_all_schema_types!(insert_into_test_map);
 
-        insert_into_test_map!(Compact<u128>);
-        insert_into_test_map!(Compact<u64>);
-        insert_into_test_map!(Compact<u32>);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::peer::CanManagePeers);
-        insert_into_test_map!(iroha_executor_data_model::permission::domain::CanRegisterDomain);
-        insert_into_test_map!(iroha_executor_data_model::permission::domain::CanUnregisterDomain);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::domain::CanModifyDomainMetadata
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::account::CanRegisterAccount);
-        insert_into_test_map!(iroha_executor_data_model::permission::account::CanUnregisterAccount);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::account::CanModifyAccountMetadata
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset_definition::CanRegisterAssetDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanMintAsset);
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanBurnAsset);
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanTransferAsset);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanRegisterNft);
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanUnregisterNft);
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanTransferNft);
-        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanModifyNftMetadata);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::parameter::CanSetParameters);
-        insert_into_test_map!(iroha_executor_data_model::permission::role::CanManageRoles);
-
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanRegisterTrigger);
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanExecuteTrigger);
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanUnregisterTrigger);
-        insert_into_test_map!(iroha_executor_data_model::permission::trigger::CanModifyTrigger);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata
-        );
-        insert_into_test_map!(iroha_executor_data_model::permission::executor::CanUpgradeExecutor);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
-        );
-
-        insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigInstructionBox);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigRegister);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigPropose);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigApprove);
-        insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigSpec);
-        insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigProposalValue);
 
         map
     }
@@ -308,9 +250,9 @@ mod tests {
         let map_types = generate_test_map();
 
         let mut missing_types = HashSet::new();
-        for (type_id, schema) in &schemas_types {
-            if !map_types.contains_key(type_id) && !exceptions.contains(type_id) {
-                missing_types.insert(schema);
+        for (type_id, type_name) in &map_types {
+            if !schemas_types.contains_key(type_id) && !exceptions.contains(type_id) {
+                missing_types.insert(type_name);
             }
         }
         assert!(

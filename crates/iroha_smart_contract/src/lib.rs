@@ -304,8 +304,8 @@ mod tests {
         len: usize,
     ) -> *const u8 {
         let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        let query_request: QueryRequest =
-            norito::codec::Decode::decode(&mut &*bytes).expect("decode query request");
+        let query_request =
+            norito::decode_from_bytes::<QueryRequest>(bytes).expect("decode query request");
 
         let response: Result<QueryResponse, ValidationFail> = Ok(match query_request {
             QueryRequest::Singular(_) => {
@@ -321,20 +321,7 @@ mod tests {
                 ))
             }
         });
-        // Encode response using Norito core with explicit flags to match
-        // the adaptive bare decode expectations (packed-struct + compact-len
-        // with field bitset and fixed-width offsets).
-        let mut body = Vec::new();
-        {
-            use norito::core::{DecodeFlagsGuard, NoritoSerialize as _, header_flags};
-            let mut flags: u8 = 0;
-            // Prefer hybrid packed-struct layout with compact lengths.
-            flags |= header_flags::PACKED_STRUCT;
-            flags |= header_flags::COMPACT_LEN;
-            flags |= header_flags::FIELD_BITSET;
-            let _guard = DecodeFlagsGuard::enter(flags);
-            response.serialize(&mut body).expect("encode resp");
-        }
+        let body = norito::to_bytes(&response).expect("encode resp");
         let len_size = core::mem::size_of::<usize>();
         let mut out = Vec::with_capacity(len_size + body.len());
         out.extend_from_slice(&(len_size + body.len()).to_le_bytes());

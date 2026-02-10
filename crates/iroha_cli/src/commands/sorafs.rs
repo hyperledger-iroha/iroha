@@ -12897,7 +12897,7 @@ mod tests {
             issued_at: Some("2026-01-01T00:00:00Z".to_string()),
             expires_at: None,
             ttl_secs: Some(900),
-            flags: Some(5),
+            flags: Some(0),
             output: None,
             token_encoding: TokenOutputFormat::Base64,
         };
@@ -12929,7 +12929,7 @@ mod tests {
             .expect("emit output");
         let output = ctx.outputs().last().expect("json output present");
         let json: Value = norito::json::from_str(output).expect("valid json");
-        assert_eq!(json["flags"], Value::from(5u64));
+        assert_eq!(json["flags"], Value::from(0u64));
         assert_eq!(
             json["token_id_hex"],
             Value::from(hex::encode(artifacts.token.token_id()))
