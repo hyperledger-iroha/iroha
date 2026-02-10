@@ -4046,7 +4046,7 @@ impl Actor {
         if extends_tip || matches_tip {
             return true;
         }
-        if session.delivered && block_height <= tip_height_u64 {
+        if session.delivered && block_height < tip_height_u64 {
             let behind = tip_height_u64.saturating_sub(block_height);
             return behind <= RBC_REBROADCAST_COMMITTED_DEPTH;
         }
@@ -12850,10 +12850,10 @@ impl Actor {
             } else {
                 false
             };
-            if !delivered && ready_quorum && !missing_chunks && !ready_rebroadcast_after_quorum {
+            if ready_quorum && !missing_chunks && !ready_rebroadcast_after_quorum {
                 continue;
             }
-            let should_rebroadcast_payload = missing_chunks || !ready_quorum || delivered;
+            let should_rebroadcast_payload = missing_chunks || !ready_quorum;
             let payload_bundle = if should_rebroadcast_payload
                 && !payload_backpressure
                 && self.should_rebroadcast_rbc_payload(&roster, key)
