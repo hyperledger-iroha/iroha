@@ -1110,6 +1110,7 @@ async fn actor_new_aligns_epoch_to_current_height_without_vrf_record() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn update_effective_timing_status_populates_snapshot() {
+    let _guard = super::status::qc_status_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.da.enabled = true;
@@ -2471,6 +2472,7 @@ async fn actor_next_tick_deadline_tracks_commit_pipeline_wakeup() {
 async fn actor_tick_clears_commit_pipeline_wakeup() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    actor.config.worker.tick_work_budget_cap = Duration::ZERO;
 
     actor.request_commit_pipeline();
     assert!(
@@ -2946,8 +2948,19 @@ async fn observer_skips_rbc_rebroadcasts() {
 }
 
 fn seed_genesis_block_for_state(state: &State) -> HashOf<BlockHeader> {
-    if let Some(hash) = state.view().latest_block_hash() {
-        return hash;
+    let (latest_hash, committed_height) = {
+        let view = state.view();
+        (
+            view.latest_block_hash(),
+            u64::try_from(view.height()).unwrap_or(0),
+        )
+    };
+    if let Some(hash) = latest_hash {
+        // Some harnesses may expose a placeholder latest hash before height advances.
+        // Only treat it as seeded genesis once height reflects a committed block.
+        if committed_height >= 1 {
+            return hash;
+        }
     }
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let leader = deterministic_keypair(b"genesis-block", Algorithm::BlsNormal);
@@ -11420,6 +11433,7 @@ async fn commit_pipeline_uses_epoch_for_height_when_emitting_votes() {
 async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -13840,8 +13854,10 @@ async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
     let mut harness = test_actor_harness(4).await;
 
     let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
-    let parent = sample_block(1, 0, None);
-    let block = sample_block(2, 0, Some(parent.hash()));
+    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"precommit_vote_broadcasts_payload_when_pending_tracked",
+    ));
+    let block = sample_block(2, 0, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     insert_validated_pending(&mut harness.actor, block.clone());
@@ -13850,11 +13866,12 @@ async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
 
     let topology =
         super::network_topology::Topology::new(harness.actor.effective_commit_topology());
+    let vote_epoch = harness.actor.epoch_for_height(2);
     let emitted = harness.actor.emit_precommit_vote(
         block_hash,
         2,
         0,
-        0,
+        vote_epoch,
         ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
@@ -13863,7 +13880,7 @@ async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
     assert!(emitted, "expected local precommit vote to be emitted");
     let vote = harness
         .actor
-        .local_precommit_vote_for(2, 0, 0, &topology)
+        .local_precommit_vote_for(2, 0, vote_epoch, &topology)
         .expect("local precommit vote recorded");
     let mut pending = PendingBlock::new(block, payload_hash, 2, 0);
     let _ = harness.background_rx.try_iter().count();
@@ -13904,8 +13921,10 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_tracked() {
     let mut harness = test_actor_harness(4).await;
 
     let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
-    let parent = sample_block(1, 0, None);
-    let block = sample_block(2, 0, Some(parent.hash()));
+    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"precommit_vote_payload_broadcast_skips_aborted_pending_tracked",
+    ));
+    let block = sample_block(2, 0, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
@@ -13916,11 +13935,12 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_tracked() {
 
     let topology =
         super::network_topology::Topology::new(harness.actor.effective_commit_topology());
+    let vote_epoch = harness.actor.epoch_for_height(2);
     let emitted = harness.actor.emit_precommit_vote(
         block_hash,
         2,
         0,
-        0,
+        vote_epoch,
         ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
@@ -13932,7 +13952,7 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_tracked() {
 
     let vote = harness
         .actor
-        .local_precommit_vote_for(2, 0, 0, &topology)
+        .local_precommit_vote_for(2, 0, vote_epoch, &topology)
         .expect("local precommit vote recorded");
     harness
         .actor
@@ -13966,8 +13986,10 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
     let actor = &mut harness.actor;
 
     let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
-    let parent = sample_block(1, 0, None);
-    let block = sample_block(2, 0, Some(parent.hash()));
+    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"precommit_vote_block_sync_update_targets_snapshot_roster",
+    ));
+    let block = sample_block(2, 0, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
@@ -14030,7 +14052,7 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
         block_hash,
         2,
         view_idx,
-        0,
+        actor.epoch_for_height(2),
         ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
@@ -14038,8 +14060,9 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
     );
     assert!(emitted, "expected local precommit vote to be emitted");
 
+    let vote_epoch = actor.epoch_for_height(2);
     let vote = actor
-        .local_precommit_vote_for(2, view_idx, 0, &topology)
+        .local_precommit_vote_for(2, view_idx, vote_epoch, &topology)
         .expect("local precommit vote recorded");
 
     let _ = harness.background_rx.try_iter().count();
@@ -14728,15 +14751,26 @@ async fn materialize_qc_for_header_recovers_with_empty_roster() {
 #[tokio::test(flavor = "current_thread")]
 async fn materialize_qc_for_header_aggregates_votes() {
     let mut harness = test_actor_harness(4).await;
-    let block = sample_block(1, 0, None);
+    let actor = &mut harness.actor;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let parent = {
+        let view = actor.state.view();
+        if committed_height == 0 {
+            None
+        } else {
+            view.latest_block_hash()
+        }
+    };
+    let block = sample_block(height, 0, parent);
     let block_hash = block.hash();
-    let topology_peers = harness.actor.effective_commit_topology();
+    let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers.clone());
     let required = topology.min_votes_for_commit();
-    let chain = harness.actor.common_config.chain.clone();
-    let height = 1;
+    let chain = actor.common_config.chain.clone();
     let view = 0;
-    let epoch = 0;
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
 
     for signer_idx in 0..required {
         let mut vote = crate::sumeragi::consensus::Vote {
@@ -14751,9 +14785,38 @@ async fn materialize_qc_for_header_aggregates_votes() {
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
-        harness.actor.handle_vote(vote);
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
+        actor.handle_vote(vote);
     }
+    while actor.poll_vote_verify_results() {}
+    assert!(
+        actor.subsystems.vote_verify.inflight.is_empty()
+            && actor.subsystems.vote_verify.pending.is_empty()
+            && actor.subsystems.vote_verify.pending_validation.is_empty(),
+        "vote verification should fully drain before QC materialization"
+    );
+    let recorded_votes = actor
+        .vote_log
+        .values()
+        .filter(|vote| {
+            vote.phase == Phase::Commit
+                && vote.block_hash == block_hash
+                && vote.height == height
+                && vote.view == view
+                && vote.epoch == epoch
+        })
+        .count();
+    assert_eq!(
+        recorded_votes, required,
+        "expected all quorum votes to be cached before QC materialization"
+    );
 
     let qc_header = crate::sumeragi::consensus::QcHeaderRef {
         phase: Phase::Commit,
@@ -14762,8 +14825,7 @@ async fn materialize_qc_for_header_aggregates_votes() {
         view,
         epoch,
     };
-    let qc = harness
-        .actor
+    let qc = actor
         .materialize_qc_for_header(qc_header, &topology_peers)
         .expect("qc should materialize from votes");
 
@@ -17483,6 +17545,9 @@ async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_created_applies_cached_precommit_qc() {
+    let _commit_history_guard = super::status::commit_history_test_guard();
+    let _local_removed_guard = LocalRemovedGuard::new(false);
+
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -17533,13 +17598,9 @@ async fn block_created_applies_cached_precommit_qc() {
         "lock must remain unset for unknown blocks"
     );
 
-    {
-        let _local_removed_guard = super::status::local_removed_test_guard();
-        super::status::set_local_removed_from_world(false);
-        actor
-            .handle_block_created(super::message::BlockCreated { block }, None)
-            .expect("block created");
-    }
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("block created");
 
     let locked = actor.locked_qc.expect("locked QC should be updated");
     assert_eq!(locked.subject_block_hash, block_hash);
@@ -19296,6 +19357,7 @@ async fn handle_rbc_deliver_refreshes_roster_when_unverified() {
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_deliver_stash_roster_missing_requests_missing_block() {
     let mut harness = test_actor_harness(4).await;
+    let _rbc_guard = super::status::rbc_status_test_guard();
     super::status::reset_pending_rbc_for_tests();
 
     let actor = &mut harness.actor;
@@ -20360,6 +20422,8 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_for_recent_commit
 
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_payload_after_delivery() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let background_log = attach_background_log(&mut harness.actor);
     let key = insert_active_pending_block(&mut harness.actor, 0);
@@ -20425,6 +20489,10 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_payload_after_delivery() 
         .expect("store committed block");
     state.push_block_hash_for_testing(next_next_block.hash());
 
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.actor.relay_backpressure.disable_for_tests();
+    harness.actor.queue_drop_backpressure.reset_to_current();
+    harness.actor.queue_block_backpressure.reset_to_current();
     let _ = take_background_log(&background_log);
     let progress = harness
         .actor
@@ -30585,9 +30653,14 @@ fn missing_block_view_change_single_shot_within_view_on_height_update() {
 #[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
     let mut harness = test_actor_harness(4).await;
-    let _guard = super::status::view_change_proof_test_guard();
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _proof_guard = super::status::view_change_proof_test_guard();
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
     let actor = &mut harness.actor;
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
     let height = actor.state.view().height() as u64 + 1;
     let view = 0;
     let now = Instant::now();
@@ -31088,6 +31161,8 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_blocks_seen(
 
 #[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_empty() {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let committed_height = actor.state.view().height() as u64;
@@ -31139,6 +31214,7 @@ async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_em
         .expect("request entry retained");
     assert!(stats.attempts > 0, "retry should record an attempt");
 
+    super::status::reset_commit_certs_for_tests();
     harness.shutdown.send();
 }
 
@@ -38143,6 +38219,7 @@ async fn roster_for_vote_prefers_snapshot_for_committed_height() {
 async fn roster_for_vote_uses_commit_qc_history_for_next_height() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -38242,6 +38319,7 @@ async fn roster_for_vote_uses_commit_qc_history_for_next_height() {
 async fn roster_for_vote_uses_commit_qc_history_when_lagging() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -38331,6 +38409,7 @@ async fn roster_for_vote_uses_commit_qc_history_when_lagging() {
 async fn roster_for_vote_rolls_forward_with_pending_parent_chain() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -38443,6 +38522,7 @@ async fn roster_for_vote_rolls_forward_with_pending_parent_chain() {
 async fn roster_for_vote_returns_empty_for_gap_without_history() {
     use crate::sumeragi::status;
 
+    let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -43557,7 +43637,6 @@ async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
     use crate::sumeragi::status;
     use iroha_data_model::consensus::ConsensusKeyStatus;
 
-    status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -43601,45 +43680,49 @@ async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
         &topology,
         &harness.key_pairs,
     );
-    status::record_commit_qc(Qc {
-        phase: Phase::Commit,
-        subject_block_hash: parent_hash,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        height: 2,
-        view: 0,
-        epoch: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: validator_set.clone(),
-        aggregate: QcAggregate {
-            signers_bitmap,
-            bls_aggregate_signature,
-        },
-    });
+    let roll_forward = {
+        let _history_guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::record_commit_qc(Qc {
+            phase: Phase::Commit,
+            subject_block_hash: parent_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap,
+                bls_aggregate_signature,
+            },
+        });
 
-    {
-        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-        state.push_block_hash_for_testing(block1.hash());
-        state.push_block_hash_for_testing(block2.hash());
-        let mut block = state.world.block();
-        if let Some(index) = block.peers.iter().position(|id| id == &removed) {
-            block.peers.remove(index);
+        {
+            let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+            state.push_block_hash_for_testing(block1.hash());
+            state.push_block_hash_for_testing(block2.hash());
+            let mut block = state.world.block();
+            if let Some(index) = block.peers.iter().position(|id| id == &removed) {
+                block.peers.remove(index);
+            }
+            let key_id = crate::state::derive_validator_key_id(removed.public_key());
+            if let Some(mut record) = block.consensus_keys.get(&key_id).cloned() {
+                record.status = ConsensusKeyStatus::Disabled;
+                record.expiry_height = Some(2);
+                block.consensus_keys.insert(key_id, record);
+            }
+            block.commit();
         }
-        let key_id = crate::state::derive_validator_key_id(removed.public_key());
-        if let Some(mut record) = block.consensus_keys.get(&key_id).cloned() {
-            record.status = ConsensusKeyStatus::Disabled;
-            record.expiry_height = Some(2);
-            block.consensus_keys.insert(key_id, record);
-        }
-        block.commit();
-    }
 
-    let roll_forward = actor
-        .roster_from_commit_qc_history_roll_forward(3, Some(parent_hash))
-        .expect("roll-forward roster");
+        actor
+            .roster_from_commit_qc_history_roll_forward(3, Some(parent_hash))
+            .expect("roll-forward roster")
+    };
     assert!(
         !roll_forward.contains(&removed),
         "roll-forward roster should drop disabled peer"
@@ -43650,7 +43733,10 @@ async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
         "roll-forward roster should remain canonical"
     );
 
-    status::reset_commit_certs_for_tests();
+    {
+        let _history_guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+    }
     harness.shutdown.send();
 }
 
@@ -46322,6 +46408,7 @@ async fn proposal_hint_missing_highest_qc_triggers_missing_block_fetch() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn proposal_updates_leader_index_status() {
+    let _guard = super::status::qc_status_test_guard();
     let prior_leader_index = super::status::snapshot().leader_index;
     super::status::set_leader_index(u64::MAX);
 
@@ -55525,6 +55612,7 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
+    let _worker_guard = super::status::worker_queue_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -55623,6 +55711,7 @@ async fn reschedule_stale_pending_blocks_skips_empty_roster() {
 async fn reschedule_stale_pending_blocks_respects_tick_budget() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
     let parent = view.latest_block_hash();
@@ -55874,10 +55963,11 @@ async fn reschedule_stale_pending_blocks_retains_aborted_above_committed_height(
         .max(super::QUORUM_RESCHEDULE_COOLDOWN)
         .saturating_mul(retention_factor);
     let within_retention = retention.saturating_sub(Duration::from_millis(1));
-    pending.inserted_at = Instant::now() - within_retention;
+    let now = Instant::now();
+    pending.inserted_at = now - within_retention;
     actor.pending.pending_blocks.insert(block_hash, pending);
 
-    actor.reschedule_stale_pending_blocks(None);
+    actor.reschedule_stale_pending_blocks_with_now(now, None);
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
         "aborted payloads above committed height should be retained within the window"
@@ -55921,10 +56011,11 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_above_committed_height_a
     let retention = quorum_timeout
         .max(super::QUORUM_RESCHEDULE_COOLDOWN)
         .saturating_mul(retention_factor);
-    pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
+    let now = Instant::now();
+    pending.inserted_at = now - retention - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
-    actor.reschedule_stale_pending_blocks(None);
+    actor.reschedule_stale_pending_blocks_with_now(now, None);
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
         "aborted payloads above committed height should be evicted after retention"
@@ -55935,6 +56026,13 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_above_committed_height_a
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::set_tx_queue_backpressure(crate::queue::BackpressureState::Healthy {
+        queued: 0,
+        capacity: NonZeroUsize::new(1).expect("non-zero tx queue capacity"),
+    });
+    super::status::set_rbc_store_pressure(0, 0, 0);
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -61885,6 +61983,7 @@ fn pending_rbc_chunk_eviction_records_drop_counts() {
 
 #[test]
 fn pending_rbc_snapshot_includes_entry_drop_counts() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
     super::status::reset_pending_rbc_for_tests();
     let now = Instant::now();
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32]));

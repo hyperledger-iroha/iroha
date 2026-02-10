@@ -140,6 +140,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<kaigi::RecordKaigiUsage>,
     InstructionRegistry::register::<kaigi::SetKaigiRelayManifest>,
     InstructionRegistry::register::<kaigi::RegisterKaigiRelay>,
+    InstructionRegistry::register::<kaigi::ReportKaigiRelayHealth>,
     InstructionRegistry::register::<zk::RegisterZkAsset>,
     InstructionRegistry::register::<zk::ScheduleConfidentialPolicyTransition>,
     InstructionRegistry::register::<zk::CancelConfidentialPolicyTransition>,
@@ -264,6 +265,14 @@ mod tests {
         let registry = default();
         assert!(registry.contains(std::any::type_name::<
             crate::isi::staking::RegisterPublicLaneValidator,
+        >()));
+    }
+
+    #[test]
+    fn default_registry_registers_kaigi_relay_health_report() {
+        let registry = default();
+        assert!(registry.contains(std::any::type_name::<
+            crate::isi::kaigi::ReportKaigiRelayHealth,
         >()));
     }
 }

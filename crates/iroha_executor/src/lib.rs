@@ -333,19 +333,187 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         slice,
-        sync::Mutex,
     };
 
+    #[cfg(feature = "fast_dsl")]
+    use data_model::query::QueryItemKind;
     use data_model::{
         permission::Permission,
         prelude::Json,
-        query::{QueryOutput, QueryOutputBatchBoxTuple, QueryResponse},
+        query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
+            QueryResponse, SingularQueryOutputBox,
+        },
     };
 
     use super::*;
 
     static CALLED: AtomicBool = AtomicBool::new(false);
-    static QUERY_PERMISSIONS: Mutex<Vec<Permission>> = Mutex::new(Vec::new());
+
+    fn empty_iterable_batch(
+        query: &data_model::query::QueryWithParams,
+    ) -> QueryOutputBatchBoxTuple {
+        #[cfg(not(feature = "fast_dsl"))]
+        {
+            let query_box = query
+                .query_box()
+                .expect("non-fast_dsl query must provide query box");
+            let batch =
+                if data_model::query::iter_query_inner::<data_model::domain::Domain>(query_box)
+                    .is_some()
+                {
+                    QueryOutputBatchBox::Domain(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::account::Account>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::Account(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::asset::value::Asset>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::Asset(Vec::new())
+                } else if data_model::query::iter_query_inner::<
+                    data_model::asset::definition::AssetDefinition,
+                >(query_box)
+                .is_some()
+                {
+                    QueryOutputBatchBox::AssetDefinition(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::repo::RepoAgreement>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::RepoAgreement(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::nft::Nft>(query_box)
+                    .is_some()
+                {
+                    QueryOutputBatchBox::Nft(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::role::Role>(query_box)
+                    .is_some()
+                {
+                    QueryOutputBatchBox::Role(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::role::RoleId>(query_box)
+                    .is_some()
+                {
+                    QueryOutputBatchBox::RoleId(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::peer::PeerId>(query_box)
+                    .is_some()
+                {
+                    QueryOutputBatchBox::Peer(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::trigger::TriggerId>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::TriggerId(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::trigger::Trigger>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::Trigger(Vec::new())
+                } else if data_model::query::iter_query_inner::<
+                    data_model::query::CommittedTransaction,
+                >(query_box)
+                .is_some()
+                {
+                    QueryOutputBatchBox::CommittedTransaction(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::block::SignedBlock>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::Block(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::block::BlockHeader>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::BlockHeader(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::proof::ProofRecord>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::ProofRecord(Vec::new())
+                } else if data_model::query::iter_query_inner::<data_model::permission::Permission>(
+                    query_box,
+                )
+                .is_some()
+                {
+                    QueryOutputBatchBox::Permission(Vec::new())
+                } else if data_model::query::iter_query_inner::<
+                    data_model::offline::OfflineAllowanceRecord,
+                >(query_box)
+                .is_some()
+                {
+                    QueryOutputBatchBox::OfflineAllowanceRecord(Vec::new())
+                } else if data_model::query::iter_query_inner::<
+                    data_model::offline::OfflineTransferRecord,
+                >(query_box)
+                .is_some()
+                {
+                    QueryOutputBatchBox::OfflineToOnlineTransfer(Vec::new())
+                } else if data_model::query::iter_query_inner::<
+                    data_model::offline::OfflineCounterSummary,
+                >(query_box)
+                .is_some()
+                {
+                    QueryOutputBatchBox::OfflineCounterSummary(Vec::new())
+                } else if data_model::query::iter_query_inner::<
+                    data_model::offline::OfflineVerdictRevocation,
+                >(query_box)
+                .is_some()
+                {
+                    QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())
+                } else {
+                    QueryOutputBatchBox::Permission(Vec::new())
+                };
+
+            return QueryOutputBatchBoxTuple::new(vec![batch]);
+        }
+
+        #[cfg(feature = "fast_dsl")]
+        {
+            let batch = match query.item {
+                QueryItemKind::Domain => QueryOutputBatchBox::Domain(Vec::new()),
+                QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
+                QueryItemKind::Asset => QueryOutputBatchBox::Asset(Vec::new()),
+                QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
+                QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),
+                QueryItemKind::Nft => QueryOutputBatchBox::Nft(Vec::new()),
+                QueryItemKind::Role => QueryOutputBatchBox::Role(Vec::new()),
+                QueryItemKind::RoleId => QueryOutputBatchBox::RoleId(Vec::new()),
+                QueryItemKind::PeerId => QueryOutputBatchBox::Peer(Vec::new()),
+                QueryItemKind::TriggerId => QueryOutputBatchBox::TriggerId(Vec::new()),
+                QueryItemKind::Trigger => QueryOutputBatchBox::Trigger(Vec::new()),
+                QueryItemKind::CommittedTransaction => {
+                    QueryOutputBatchBox::CommittedTransaction(Vec::new())
+                }
+                QueryItemKind::SignedBlock => QueryOutputBatchBox::Block(Vec::new()),
+                QueryItemKind::BlockHeader => QueryOutputBatchBox::BlockHeader(Vec::new()),
+                QueryItemKind::ProofRecord => QueryOutputBatchBox::ProofRecord(Vec::new()),
+                QueryItemKind::Permission => QueryOutputBatchBox::Permission(Vec::new()),
+                QueryItemKind::OfflineAllowanceRecord => {
+                    QueryOutputBatchBox::OfflineAllowanceRecord(Vec::new())
+                }
+                QueryItemKind::OfflineToOnlineTransfer => {
+                    QueryOutputBatchBox::OfflineToOnlineTransfer(Vec::new())
+                }
+                QueryItemKind::OfflineCounterSummary => {
+                    QueryOutputBatchBox::OfflineCounterSummary(Vec::new())
+                }
+                QueryItemKind::OfflineVerdictRevocation => {
+                    QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())
+                }
+            };
+
+            QueryOutputBatchBoxTuple::new(vec![batch])
+        }
+    }
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn execute_instruction(ptr: *const u8, len: usize) -> *const u8 {
@@ -357,10 +525,22 @@ mod tests {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn execute_query(ptr: *const u8, len: usize) -> *const u8 {
-        let _ = unsafe { slice::from_raw_parts(ptr, len) };
-        let response: Result<QueryResponse, ValidationFail> = Ok(QueryResponse::Iterable(
-            QueryOutput::new(QueryOutputBatchBoxTuple::new(Vec::new()), 0, None),
-        ));
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        let query_request = norito::decode_from_bytes::<QueryRequest>(bytes).ok();
+
+        let response: Result<QueryResponse, ValidationFail> = Ok(match query_request {
+            Some(QueryRequest::Singular(_)) => QueryResponse::Singular(
+                SingularQueryOutputBox::Parameters(data_model::parameter::Parameters::default()),
+            ),
+            Some(QueryRequest::Start(query)) => {
+                QueryResponse::Iterable(QueryOutput::new(empty_iterable_batch(&query), 0, None))
+            }
+            Some(QueryRequest::Continue(_)) | None => QueryResponse::Iterable(QueryOutput::new(
+                QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Permission(Vec::new())]),
+                0,
+                None,
+            )),
+        });
         let body = norito::to_bytes(&response).expect("encode query ok");
         unsafe { encode_with_len_prefix(&body) }
     }
@@ -375,34 +555,24 @@ mod tests {
 
     #[cfg(test)]
     pub fn with_mock_permissions<R>(permissions: Vec<Permission>, f: impl FnOnce() -> R) -> R {
-        let mut guard = QUERY_PERMISSIONS
-            .lock()
-            .expect("query permissions mutex poisoned");
-        let prev = guard.clone();
-        *guard = permissions;
-        #[cfg(test)]
-        {
-            let mut override_guard = crate::permission::test_override::PERMISSIONS
-                .lock()
-                .expect("permission override mutex poisoned");
-            *override_guard = guard.clone();
+        struct RestoreGuard {
+            previous: Option<Vec<Permission>>,
         }
-        drop(guard);
 
-        let result = f();
-
-        let mut guard = QUERY_PERMISSIONS
-            .lock()
-            .expect("query permissions mutex poisoned");
-        *guard = prev;
-        #[cfg(test)]
-        {
-            let mut override_guard = crate::permission::test_override::PERMISSIONS
-                .lock()
-                .expect("permission override mutex poisoned");
-            *override_guard = guard.clone();
+        impl Drop for RestoreGuard {
+            fn drop(&mut self) {
+                if let Some(previous) = self.previous.take() {
+                    let _ = crate::permission::test_override::replace_permissions(previous);
+                }
+            }
         }
-        result
+
+        let previous = crate::permission::test_override::replace_permissions(permissions);
+        let _restore = RestoreGuard {
+            previous: Some(previous),
+        };
+
+        f()
     }
 
     unsafe extern "C" fn dummy(_: *const u8, _: usize) {

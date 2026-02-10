@@ -149,16 +149,13 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
+    // This scenario performs two roster reconfigurations and can exceed the generic sync budget on
+    // loaded CI hosts.
+    let sync_timeout = network.sync_timeout().saturating_mul(2);
     let expected_connected = expected_connected_peers(n_peers);
 
     if sandbox::handle_result(
-        assert_peers_status(
-            network.peers().iter(),
-            1,
-            expected_connected,
-            network.sync_timeout(),
-        )
-        .await,
+        assert_peers_status(network.peers().iter(), 1, expected_connected, sync_timeout).await,
         context,
     )?
     .is_none()
@@ -177,17 +174,9 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let client = leader_peer(randomized_peers.iter().copied()).client();
     let unregister_peer = Unregister::peer(removed_peer.id());
     submit_instruction_or_warn(client.clone(), unregister_peer, context).await?;
-    timeout(
-        network.sync_timeout(),
-        randomized_peers
-            .iter()
-            .map(|peer| peer.once_block(2))
-            .collect::<FuturesUnordered<_>>()
-            .collect::<Vec<_>>(),
-    )
-    .await?;
+    wait_for_block_height(randomized_peers.iter().copied(), 2, sync_timeout).await?;
     if sandbox::handle_result(
-        wait_for_peer_roster(&roster_client, n_peers - 1, network.sync_timeout()).await,
+        wait_for_peer_roster(&roster_client, n_peers - 1, sync_timeout).await,
         context,
     )?
     .is_none()
@@ -200,7 +189,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
             randomized_peers.iter().copied(),
             2,
             expected_connected,
-            network.sync_timeout(),
+            sync_timeout,
         )
         .await,
         context,
@@ -212,9 +201,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
 
     // Removed peers remain connected to continue block sync; ensure they still observe block 2.
     if sandbox::handle_result(
-        timeout(network.sync_timeout(), removed_peer.once_block(2))
-            .await
-            .map_err(eyre::Report::new),
+        wait_for_block_height(std::iter::once(removed_peer), 2, sync_timeout).await,
         context,
     )?
     .is_none()
@@ -236,17 +223,9 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     );
     let client = leader_peer(randomized_peers.iter().copied()).client();
     submit_instruction_or_warn(client.clone(), register_peer, context).await?;
-    timeout(
-        network.sync_timeout(),
-        randomized_peers
-            .iter()
-            .map(|peer| peer.once_block(3))
-            .collect::<FuturesUnordered<_>>()
-            .collect::<Vec<_>>(),
-    )
-    .await?;
+    wait_for_block_height(randomized_peers.iter().copied(), 3, sync_timeout).await?;
     if sandbox::handle_result(
-        wait_for_peer_roster(&roster_client, n_peers, network.sync_timeout()).await,
+        wait_for_peer_roster(&roster_client, n_peers, sync_timeout).await,
         context,
     )?
     .is_none()
@@ -261,7 +240,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
             randomized_peers.iter().copied(),
             3,
             expected_connected,
-            network.sync_timeout(),
+            sync_timeout,
         )
         .await,
         context,
@@ -370,6 +349,94 @@ async fn assert_peers_status(
             return Err(eyre!(
                 "deadline has elapsed waiting for peer status: {:?}",
                 mismatches
+            ));
+        }
+
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_block_height(
+    peers: impl IntoIterator<Item = &'_ NetworkPeer>,
+    expected_blocks: u64,
+    timeout: Duration,
+) -> Result<()> {
+    let peers: Vec<_> = peers.into_iter().collect();
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let lagging = peers
+            .iter()
+            .map(|peer| async {
+                match peer.status().await {
+                    Err(err) if !peer.is_running() => Some(format!(
+                        "{}: peer not running; status error: {err}; stdout={:?} stderr={:?}",
+                        peer.id(),
+                        peer.latest_stdout_log_path(),
+                        peer.latest_stderr_log_path(),
+                    )),
+                    Ok(status) => {
+                        let fallback_height = peer.best_effort_block_height();
+                        let blocks_ok = status.blocks >= expected_blocks
+                            || fallback_height
+                                .is_some_and(|height| height.total >= expected_blocks);
+                        if blocks_ok {
+                            return None;
+                        }
+
+                        let mut message = format!(
+                            "{}: blocks={}, blocks_non_empty={}",
+                            peer.id(),
+                            status.blocks,
+                            status.blocks_non_empty
+                        );
+                        if let Some(height) = fallback_height {
+                            let _ = write!(
+                                message,
+                                "; fallback_blocks_total={} non_empty={}",
+                                height.total, height.non_empty
+                            );
+                        }
+                        Some(message)
+                    }
+                    Err(err) => {
+                        let fallback_height = peer.best_effort_block_height();
+                        if fallback_height.is_some_and(|height| height.total >= expected_blocks) {
+                            return None;
+                        }
+
+                        let mut message = format!(
+                            "{}: status error: {err}; stdout={:?} stderr={:?}",
+                            peer.id(),
+                            peer.latest_stdout_log_path(),
+                            peer.latest_stderr_log_path()
+                        );
+                        if let Some(height) = fallback_height {
+                            let _ = write!(
+                                message,
+                                "; fallback_blocks_total={} non_empty={}",
+                                height.total, height.non_empty
+                            );
+                        }
+                        Some(message)
+                    }
+                }
+            })
+            .collect::<FuturesUnordered<_>>()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        if lagging.is_empty() {
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "deadline has elapsed waiting for block height {expected_blocks}: {:?}",
+                lagging
             ));
         }
 

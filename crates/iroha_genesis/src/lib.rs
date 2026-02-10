@@ -69,6 +69,17 @@ use norito::{
 /// Domain of the genesis account, technically required for the pre-genesis state
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> = LazyLock::new(|| "genesis".parse().unwrap());
 
+#[cfg(test)]
+static DOMAIN_SELECTOR_RESOLVER_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
+
+#[cfg(test)]
+fn lock_domain_selector_resolver_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    DOMAIN_SELECTOR_RESOLVER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Construct an [`InstructionRegistry`] with all built-in Iroha instructions and
 /// set it as the global registry.
 ///
@@ -1369,27 +1380,35 @@ pub mod genesis_instructions_json {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
             let raw = std::fs::read_to_string(&path).expect("read defaults/genesis.json");
             let value: Value = norito::json::from_str(&raw).expect("parse defaults genesis JSON");
-            let transactions = value
-                .as_object()
-                .and_then(|obj| obj.get("transactions"))
-                .and_then(Value::as_array)
-                .expect("transactions array");
-            for (index, tx) in transactions.iter().enumerate() {
-                norito::json::value::from_value::<RawGenesisTx>(tx.clone())
-                    .unwrap_or_else(|err| panic!("decode transaction {index}: {err}"));
-                if let Some(parameters_value) = tx.as_object().and_then(|obj| obj.get("parameters"))
-                {
-                    norito::json::value::from_value::<Parameters>(parameters_value.clone())
-                        .expect("decode structured parameters");
-                }
-                if let Some(instructions) = tx
+            {
+                let _resolver_guard = super::super::lock_domain_selector_resolver_for_tests();
+                super::super::RawGenesisTransaction::install_domain_selector_resolver_from_genesis(
+                    &value,
+                )
+                .expect("install domain-selector resolver");
+                let transactions = value
                     .as_object()
-                    .and_then(|obj| obj.get("instructions"))
+                    .and_then(|obj| obj.get("transactions"))
                     .and_then(Value::as_array)
-                {
-                    for instruction in instructions {
-                        super::value_to_instruction(instruction.clone())
-                            .expect("decode structured instruction");
+                    .expect("transactions array");
+                for (index, tx) in transactions.iter().enumerate() {
+                    norito::json::value::from_value::<RawGenesisTx>(tx.clone())
+                        .unwrap_or_else(|err| panic!("decode transaction {index}: {err}"));
+                    if let Some(parameters_value) =
+                        tx.as_object().and_then(|obj| obj.get("parameters"))
+                    {
+                        norito::json::value::from_value::<Parameters>(parameters_value.clone())
+                            .expect("decode structured parameters");
+                    }
+                    if let Some(instructions) = tx
+                        .as_object()
+                        .and_then(|obj| obj.get("instructions"))
+                        .and_then(Value::as_array)
+                    {
+                        for instruction in instructions {
+                            super::value_to_instruction(instruction.clone())
+                                .expect("decode structured instruction");
+                        }
                     }
                 }
             }
@@ -1403,6 +1422,10 @@ pub mod genesis_instructions_json {
             manifest_fields.insert("chain".to_string(), Value::String("test-chain".to_string()));
             manifest_fields.insert("executor".to_string(), Value::Null);
             manifest_fields.insert("ivm_dir".to_string(), Value::String(".".to_string()));
+            manifest_fields.insert(
+                "consensus_mode".to_string(),
+                Value::String("Permissioned".to_string()),
+            );
             manifest_fields.insert(
                 "transactions".to_string(),
                 Value::Array(vec![Value::Object(norito::json::Map::new())]),
@@ -3531,6 +3554,8 @@ impl RawGenesisTransaction {
     pub fn from_path(json_path: impl AsRef<Path>) -> Result<Self> {
         use std::io::Read as _;
         init_instruction_registry();
+        #[cfg(test)]
+        let _resolver_guard = lock_domain_selector_resolver_for_tests();
         let here = json_path
             .as_ref()
             .parent()
@@ -4538,9 +4563,6 @@ mod tests {
 
     #[test]
     fn parse_genesis_installs_domain_selector_resolver() -> Result<()> {
-        static DOMAIN_SELECTOR_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = DOMAIN_SELECTOR_GUARD.lock().expect("domain resolver guard");
-        iroha_data_model::account::clear_account_domain_selector_resolver();
         init_instruction_registry();
 
         let (tmp_dir, builder) = test_builder();
@@ -4563,7 +4585,6 @@ mod tests {
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, json)?;
         RawGenesisTransaction::from_path(&genesis_path)?;
-        iroha_data_model::account::clear_account_domain_selector_resolver();
         Ok(())
     }
 
@@ -5051,7 +5072,7 @@ mod tests {
 
     #[test]
     fn default_genesis_block_roundtrips() -> Result<()> {
-        use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiParameter};
+        use iroha_data_model::parameter::system::SumeragiNposParameters;
 
         init_instruction_registry();
         if norito::debug_trace_enabled() {
@@ -5065,7 +5086,7 @@ mod tests {
         let kp = KeyPair::random();
         let block = genesis.build_and_sign(&kp)?;
 
-        let mut saw_next_mode = false;
+        let mut saw_handshake_mode = false;
         let mut saw_npos_custom = false;
         for tx in block.0.external_transactions() {
             if let iroha_data_model::transaction::Executable::Instructions(instrs) =
@@ -5080,13 +5101,22 @@ mod tests {
                             Parameter::Executor(_) => {
                                 panic!("unexpected executor parameter instruction generated")
                             }
-                            Parameter::Sumeragi(SumeragiParameter::NextMode(mode)) => {
+                            Parameter::Custom(custom)
+                                if custom.id() == &consensus_metadata::handshake_meta_id() =>
+                            {
+                                let payload: norito::json::Value = custom
+                                    .payload()
+                                    .try_into_any_norito()
+                                    .expect("decode handshake metadata payload");
+                                let mode = payload
+                                    .get("mode")
+                                    .and_then(norito::json::Value::as_str)
+                                    .expect("handshake metadata must carry mode");
                                 assert_eq!(
-                                    *mode,
-                                    SumeragiConsensusMode::Permissioned,
-                                    "Default genesis should declare permissioned consensus mode"
+                                    mode, "Npos",
+                                    "Default genesis should advertise NPoS consensus mode"
                                 );
-                                saw_next_mode = true;
+                                saw_handshake_mode = true;
                             }
                             Parameter::Custom(custom)
                                 if *custom.id() == SumeragiNposParameters::parameter_id() =>
@@ -5100,8 +5130,8 @@ mod tests {
             }
         }
         assert!(
-            saw_next_mode,
-            "Default genesis must emit SetParameter for Sumeragi::NextMode"
+            saw_handshake_mode,
+            "Default genesis must emit SetParameter for consensus handshake metadata"
         );
         assert!(
             saw_npos_custom,
@@ -5125,9 +5155,11 @@ mod tests {
         let registry = default_instruction_registry();
         let name = core::any::type_name::<Register<Domain>>();
         let instruction = Register::domain(Domain::new("test".parse().unwrap()));
-        let bytes = instruction.encode();
+        let bytes = norito::to_bytes(&instruction).expect("encode register-domain instruction");
         let decoded = registry.decode(name, &bytes).expect("entry");
-        assert!(decoded.is_ok());
+        if let Err(err) = decoded {
+            panic!("failed to decode register-domain instruction: {err}");
+        }
     }
 
     #[test]

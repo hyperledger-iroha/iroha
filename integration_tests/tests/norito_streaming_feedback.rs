@@ -273,6 +273,9 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                 .await
                 .map_err(|err| eyre!(err))?;
 
+            // Let the publisher consume the control frames and terminate first. Closing
+            // immediately can race with stream delivery and surface a spurious "closed by peer".
+            let _ = client.connection().quic_connection().closed().await;
             client.close().await;
             Ok::<(), eyre::Report>(())
         }

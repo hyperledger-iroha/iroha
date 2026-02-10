@@ -52,7 +52,7 @@ RBC status and sessions (throughput and active sessions):
 
 ```bash
 iroha --output-format text ops sumeragi rbc status
-# Example: active=2 pruned=10 ready=8 deliver=7 bytes=1234567
+# Example: active=2 pruned=10 ready=8 deliver=7 bytes=1234567 skip_payload=1 skip_ready=2
 
 iroha --output-format text ops sumeragi rbc sessions
 # Example: active=1 first=[h:1234 v:7 chunks=12/12 delivered=true] items=1

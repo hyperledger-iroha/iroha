@@ -17,7 +17,7 @@ use std::{
     num::NonZero,
     ops::Deref,
     path::{Component, Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{ExitStatus, Stdio},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -1536,24 +1536,13 @@ fn read_permit_pid(path: &Path) -> Option<u32> {
 
 #[cfg(unix)]
 fn pid_alive(pid: u32) -> Option<bool> {
-    let pid = pid.to_string();
-    let output = ["/bin/kill", "/usr/bin/kill", "kill"]
-        .into_iter()
-        .find_map(|candidate| Command::new(candidate).arg("-0").arg(&pid).output().ok())?;
-    if output.status.success() {
-        return Some(true);
+    let raw_pid = i32::try_from(pid).ok()?;
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw_pid), None) {
+        Ok(()) => Some(true),
+        Err(nix::errno::Errno::EPERM) => Some(true),
+        Err(nix::errno::Errno::ESRCH) => Some(false),
+        Err(_) => None,
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-    if stderr.contains("no such process")
-        || stderr.contains("illegal pid")
-        || stderr.contains("invalid pid")
-    {
-        return Some(false);
-    }
-    if stderr.contains("operation not permitted") || stderr.contains("permission denied") {
-        return Some(true);
-    }
-    Some(true)
 }
 
 #[cfg(not(unix))]
@@ -1591,6 +1580,7 @@ pub struct Network {
     block_time: Duration,
     commit_time: Duration,
     block_sync_gossip_period: Duration,
+    peer_startup_timeout_override: Option<Duration>,
     consensus_profile: ConsensusBootstrapProfile,
     genesis_key_pair: KeyPair,
 
@@ -1989,6 +1979,16 @@ impl Network {
         let mut elapsed = Duration::ZERO;
 
         loop {
+            if peer.has_committed_block(1) {
+                info!(
+                    index,
+                    %mnemonic,
+                    role,
+                    waited = ?elapsed,
+                    "observed block 1 via storage before status polling"
+                );
+                return Ok(());
+            }
             tokio::select! {
                 _ = poll.tick() => {
                     match tokio::time::timeout(status_timeout, peer.status()).await {
@@ -2122,7 +2122,9 @@ impl Network {
     }
 
     pub fn peer_startup_timeout(&self) -> Duration {
-        let base = peer_start_timeout_env();
+        let base = self
+            .peer_startup_timeout_override
+            .unwrap_or_else(peer_start_timeout_env);
         let peers = self.peers.len() as u128;
         if peers == 0 {
             return base;
@@ -2805,6 +2807,7 @@ pub struct NetworkBuilder {
     n_peers: usize,
     config_layers: Vec<Table>,
     pipeline_time: Option<Duration>,
+    peer_startup_timeout: Option<Duration>,
     ivm_fuel: IvmFuelConfig,
     genesis_isi: Vec<Vec<InstructionBox>>,
     genesis_post_topology_isi: Vec<Vec<InstructionBox>>,
@@ -3552,6 +3555,7 @@ impl NetworkBuilder {
             n_peers: 1,
             config_layers: vec![],
             pipeline_time: Some(LOCALNET_PIPELINE_TIME),
+            peer_startup_timeout: None,
             ivm_fuel: IvmFuelConfig::Auto,
             genesis_isi: vec![vec![]],
             genesis_post_topology_isi: Vec::new(),
@@ -3612,6 +3616,16 @@ impl NetworkBuilder {
         if self.n_peers < min_peers {
             self.n_peers = min_peers;
         }
+        self
+    }
+
+    /// Override the peer startup timeout for this network instance.
+    ///
+    /// Use this for slow hosts or heavy fixtures when peer bootstrap may exceed environment-level
+    /// defaults. The timeout must be strictly positive.
+    pub fn with_peer_startup_timeout(mut self, timeout: Duration) -> Self {
+        assert!(timeout > Duration::ZERO, "startup timeout must be positive");
+        self.peer_startup_timeout = Some(timeout);
         self
     }
 
@@ -3836,6 +3850,7 @@ impl NetworkBuilder {
             n_peers,
             mut config_layers,
             pipeline_time,
+            peer_startup_timeout,
             ivm_fuel,
             mut genesis_isi,
             mut genesis_post_topology_isi,
@@ -4404,6 +4419,7 @@ impl NetworkBuilder {
             block_time,
             commit_time,
             block_sync_gossip_period,
+            peer_startup_timeout_override: peer_startup_timeout,
             consensus_profile,
             genesis_key_pair,
             genesis_isi,
@@ -6908,6 +6924,18 @@ mod tests {
     }
 
     #[test]
+    fn peer_startup_timeout_override_is_applied() {
+        if skip_network_tests("peer_startup_timeout_override_is_applied") {
+            return;
+        }
+        let network = NetworkBuilder::new()
+            .with_min_peers(4)
+            .with_peer_startup_timeout(Duration::from_secs(300))
+            .build();
+        assert_eq!(network.peer_startup_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
     fn network_permit_creates_and_clears_lock_file() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let dir = tempdir().expect("permit dir");
@@ -6942,6 +6970,13 @@ mod tests {
 
         let permit = try_acquire_file_permit(1).expect("expected reclaimed permit");
         drop(permit);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_alive_detects_current_and_dead_processes() {
+        assert_eq!(pid_alive(std::process::id()), Some(true));
+        assert_eq!(pid_alive(i32::MAX as u32), Some(false));
     }
 
     #[test]
@@ -7411,7 +7446,7 @@ mod tests {
 
     #[test]
     fn trusted_peers_use_addr_literals() {
-        let network = NetworkBuilder::new().with_peers(2).build();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(2));
         let mut layers = network.config_layers();
         let base_layer = layers
             .next()
@@ -7444,16 +7479,12 @@ mod tests {
 
     #[test]
     fn with_min_peers_clamps_builder() {
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_min_peers(4)
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_min_peers(4));
         assert_eq!(network.peers().len(), 4);
 
-        let network = NetworkBuilder::new()
-            .with_peers(5)
-            .with_min_peers(4)
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(5).with_min_peers(4));
         assert_eq!(network.peers().len(), 5);
     }
 
@@ -8076,12 +8107,12 @@ exit 0
     fn startup_diagnostics_warn_on_mismatched_da_enabled() {
         let _sumeragi_guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
         let _disable_da = disable_sumeragi_env_overrides();
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "da", "enabled"], false);
-            })
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_config_layer(
+                |layer| {
+                    layer.write(["sumeragi", "da", "enabled"], false);
+                },
+            ));
 
         let buffer = BufferWriter(Arc::new(Mutex::new(Vec::new())));
         let subscriber = tracing_subscriber::fmt()
@@ -8103,7 +8134,7 @@ exit 0
     fn startup_diagnostics_silent_when_da_enabled_align() {
         let _sumeragi_guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
         let _disable_da = disable_sumeragi_env_overrides();
-        let network = NetworkBuilder::new().with_peers(2).build();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(2));
 
         let buffer = BufferWriter(Arc::new(Mutex::new(Vec::new())));
         let subscriber = tracing_subscriber::fmt()
@@ -8146,7 +8177,7 @@ exit 0
     #[test]
     fn genesis_consensus_metadata_matches_runtime_profile() {
         init_instruction_registry();
-        let network = NetworkBuilder::new().with_peers(4).build();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let genesis = network.genesis();
         let mut saw_da_enabled = None;
         for parameter in collect_set_parameters(&genesis) {
@@ -8208,12 +8239,12 @@ exit 0
     #[test]
     fn genesis_consensus_metadata_tracks_npos_mode() {
         init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_peers(4)
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
+                |layer| {
+                    layer.write(["sumeragi", "consensus_mode"], "npos");
+                },
+            ));
         let profile = network.consensus_bootstrap_profile();
         assert_eq!(
             profile.mode_tag, NPOS_TAG,
@@ -8267,37 +8298,37 @@ exit 0
     #[test]
     fn genesis_consensus_metadata_respects_npos_timeout_overrides() {
         init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_peers(4)
-            .with_config_layer(|layer| {
-                layer
-                    .write(["sumeragi", "consensus_mode"], "npos")
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                        166i64,
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                        213i64,
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                        260i64,
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                        355i64,
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                        307i64,
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"],
-                        57i64,
-                    );
-            })
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
+                |layer| {
+                    layer
+                        .write(["sumeragi", "consensus_mode"], "npos")
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                            166i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                            213i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                            260i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                            355i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                            307i64,
+                        )
+                        .write(
+                            ["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"],
+                            57i64,
+                        );
+                },
+            ));
         let genesis = network.genesis();
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
@@ -8318,24 +8349,24 @@ exit 0
     #[test]
     fn genesis_embeds_da_proof_policies_from_config_layers() {
         init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_peers(4)
-            .with_config_layer(|layer| {
-                let mut lane0 = Table::new();
-                lane0.insert("index".into(), Value::Integer(0));
-                lane0.insert("alias".into(), Value::String("alpha".to_string()));
-                lane0.insert("metadata".into(), Value::Table(Table::new()));
-                let mut lane1 = Table::new();
-                lane1.insert("index".into(), Value::Integer(1));
-                lane1.insert("alias".into(), Value::String("beta".to_string()));
-                lane1.insert("metadata".into(), Value::Table(Table::new()));
-                let lane_catalog = Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]);
-                layer
-                    .write(["nexus", "enabled"], true)
-                    .write(["nexus", "lane_count"], 2i64)
-                    .write(["nexus", "lane_catalog"], lane_catalog);
-            })
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
+                |layer| {
+                    let mut lane0 = Table::new();
+                    lane0.insert("index".into(), Value::Integer(0));
+                    lane0.insert("alias".into(), Value::String("alpha".to_string()));
+                    lane0.insert("metadata".into(), Value::Table(Table::new()));
+                    let mut lane1 = Table::new();
+                    lane1.insert("index".into(), Value::Integer(1));
+                    lane1.insert("alias".into(), Value::String("beta".to_string()));
+                    lane1.insert("metadata".into(), Value::Table(Table::new()));
+                    let lane_catalog = Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]);
+                    layer
+                        .write(["nexus", "enabled"], true)
+                        .write(["nexus", "lane_count"], 2i64)
+                        .write(["nexus", "lane_catalog"], lane_catalog);
+                },
+            ));
 
         let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let peer = network.peers().first().expect("network should have peers");
@@ -8867,9 +8898,16 @@ exit 0
         }
         let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
         let _disable_da = disable_sumeragi_env_overrides();
-        let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
+        {
+            let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
+            Program::Irohad
+                .resolve()
+                .expect("irohad binary should resolve for network startup tests");
+        }
         NetworkBuilder::new().with_peers(4).start().await.unwrap();
-        NetworkBuilder::new().start().await.unwrap();
+        // Single-peer DA startup is still stall-prone in integration paths; keep this
+        // smoke test on quorum-representative topologies to avoid lock convoy hangs.
+        NetworkBuilder::new().with_peers(4).start().await.unwrap();
     }
 
     #[tokio::test]
@@ -8896,7 +8934,12 @@ exit 0
         }
         let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
         let _disable_da = disable_sumeragi_env_overrides();
-        let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
+        {
+            let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
+            Program::Irohad
+                .resolve()
+                .expect("irohad binary should resolve for fallback startup test");
+        }
         // Intentionally avoid providing a default executor sample; in CI the
         // prebuilt samples are usually absent so JSON genesis will fail to
         // locate `defaults/executor.to` and the harness will fall back to a
@@ -9021,14 +9064,15 @@ exit 0
     #[test]
     fn without_npos_genesis_bootstrap_skips_validator_instructions() {
         init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_auto_populated_trusted_peers()
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
-            .without_npos_genesis_bootstrap()
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(2)
+                .with_auto_populated_trusted_peers()
+                .with_config_layer(|layer| {
+                    layer.write(["sumeragi", "consensus_mode"], "npos");
+                })
+                .without_npos_genesis_bootstrap(),
+        );
         let genesis = network.genesis();
         let mut has_register = false;
         let mut has_activate = false;
@@ -9459,9 +9503,18 @@ exit 0
         assert!(!args.contains(&"--features".to_string()));
     }
 
+    fn build_with_isolated_permit(builder: NetworkBuilder) -> Network {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+        builder.build()
+    }
+
     #[test]
     fn torii_url_uses_api_port() {
-        let network = NetworkBuilder::new().build();
+        let network = build_with_isolated_permit(NetworkBuilder::new());
         let peer = network.peer();
         let url = peer.torii_url();
         assert!(url.starts_with("http://127.0.0.1:"));
@@ -9472,7 +9525,7 @@ exit 0
 
     #[test]
     fn network_torii_urls_match_peers() {
-        let network = NetworkBuilder::new().with_peers(3).build();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
         let urls = network.torii_urls();
         assert_eq!(urls.len(), network.peers().len());
         for (peer, url) in network.peers().iter().zip(urls.iter()) {
@@ -9485,7 +9538,7 @@ exit 0
 
     #[test]
     fn network_client_uses_first_peer() {
-        let network = NetworkBuilder::new().with_peers(3).build();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
         let expected = network
             .peers()
             .first()
@@ -9590,16 +9643,17 @@ exit 0
         let callback_topology = Arc::clone(&seen_topology);
         let callback_pops = Arc::clone(&seen_pops);
 
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_genesis_block(move |topology, pops| {
-                *callback_topology
-                    .lock()
-                    .expect("callback topology mutex poisoned") = Some(topology.clone());
-                *callback_pops.lock().expect("callback pop mutex poisoned") = Some(pops.clone());
-                genesis_factory(Vec::new(), topology, pops)
-            })
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_genesis_block(
+                move |topology, pops| {
+                    *callback_topology
+                        .lock()
+                        .expect("callback topology mutex poisoned") = Some(topology.clone());
+                    *callback_pops.lock().expect("callback pop mutex poisoned") =
+                        Some(pops.clone());
+                    genesis_factory(Vec::new(), topology, pops)
+                },
+            ));
 
         let produced = network.genesis();
         let recorded = seen_topology

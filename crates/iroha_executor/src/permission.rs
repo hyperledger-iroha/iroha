@@ -15,10 +15,26 @@ use crate::{
 
 #[cfg(test)]
 pub(crate) mod test_override {
-    use std::sync::Mutex;
+    use std::cell::RefCell;
 
-    pub static PERMISSIONS: Mutex<Vec<crate::data_model::permission::Permission>> =
-        Mutex::new(Vec::new());
+    thread_local! {
+        static PERMISSIONS: RefCell<Vec<crate::data_model::permission::Permission>> = const {
+            RefCell::new(Vec::new())
+        };
+    }
+
+    pub fn permissions() -> Vec<crate::data_model::permission::Permission> {
+        PERMISSIONS.with(|permissions| permissions.borrow().clone())
+    }
+
+    pub fn replace_permissions(
+        permissions: Vec<crate::data_model::permission::Permission>,
+    ) -> Vec<crate::data_model::permission::Permission> {
+        PERMISSIONS.with(|current| {
+            let mut current = current.borrow_mut();
+            core::mem::replace(&mut *current, permissions)
+        })
+    }
 }
 
 /// Declare permission types of current module. Use it with a full path to the permission.
@@ -171,8 +187,9 @@ pub trait ExecutorPermission: Permission + PartialEq {
     {
         #[cfg(test)]
         {
-            if let Ok(override_permissions) = test_override::PERMISSIONS.lock() {
-                return !override_permissions.is_empty();
+            let override_permissions = test_override::permissions();
+            if !override_permissions.is_empty() {
+                return has_permission_in_account(&override_permissions, self);
             }
         }
 

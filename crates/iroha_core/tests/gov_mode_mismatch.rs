@@ -9,6 +9,10 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
+use iroha_data_model::{
+    Registrable,
+    prelude::{Account, Domain},
+};
 use mv::storage::StorageReadOnly;
 
 fn canonical_abi_hex() -> String {
@@ -36,10 +40,14 @@ fn plain_ballot_rejected_on_zk_referendum() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [account], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
     cfg.min_bond_amount = 0;
+    cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
 
     // H=1: propose a Zk referendum
@@ -56,6 +64,7 @@ fn plain_ballot_rejected_on_zk_referendum() {
     cfg.window_span = 10;
     cfg.plain_voting_enabled = true;
     cfg.min_bond_amount = 0;
+    cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -85,15 +94,13 @@ fn plain_ballot_rejected_on_zk_referendum() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("propose");
-    stx.apply();
-    let rid = state
-        .view()
-        .world()
+    let rid = stx
+        .world
         .governance_referenda()
         .iter()
         .next()
-        .map_or_else(|| "rid-mode".to_string(), |(k, _)| k.clone());
-    let mut stx = sblock.transaction();
+        .map(|(k, _)| k.clone())
+        .expect("referendum created");
     let instr = CastPlainBallot {
         referendum_id: rid,
         owner: ALICE_ID.clone(),

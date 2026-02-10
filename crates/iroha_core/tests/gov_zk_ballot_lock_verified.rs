@@ -23,11 +23,12 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         state::{State, WorldReadOnly},
     };
     use iroha_data_model::{
+        Registrable,
         block::BlockHeader,
         events::data::{DataEvent, governance::GovernanceEvent},
         isi::{governance::CastZkBallot, verifying_keys, zk::CreateElection},
         permission::Permission,
-        prelude::{Grant, InstructionBox},
+        prelude::{Account, Domain, Grant, InstructionBox},
     };
     use iroha_executor_data_model::permission::governance::{
         CanManageParliament, CanSubmitGovernanceBallot,
@@ -38,7 +39,10 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     // Build State (dev toggle OFF)
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(iroha_core::state::World::default(), kura, query);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = iroha_core::state::World::with([domain], [account], []);
+    let mut state = State::new_for_testing(world, kura, query);
     let bundle1 = zk_testkit::add2inst_public_bundle(5, 8);
     let bundle2 = zk_testkit::add2inst_public_bundle(6, 8);
     let bundle3 = zk_testkit::add2inst_public_bundle(7, 8);

@@ -9043,7 +9043,7 @@ where
     F: FnMut() -> Result<Option<TxConfirmationStatus>>,
 {
     // Keep track of the block height in which the transaction was approved
-    // so we can later detect the corresponding block apply event.
+    // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
     // Track when the transaction first entered the queue.
     let mut queued_at: Option<Instant> = None;
@@ -9153,16 +9153,28 @@ where
                             }
                         }
                         PipelineEventBox::Block(block_event) => {
-                            if Some(block_event.header().height()) == block_height
-                                && matches!(block_event.status(), BlockStatus::Applied)
-                            {
-                                debug!(
-                                    %hash,
-                                    height = block_event.header().height().get(),
-                                    status = ?block_event.status(),
-                                    "transaction applied observed in block event"
-                                );
-                                return Some(Ok(hash));
+                            if Some(block_event.header().height()) == block_height {
+                                match block_event.status() {
+                                    BlockStatus::Applied => {
+                                        debug!(
+                                            %hash,
+                                            height = block_event.header().height().get(),
+                                            status = ?block_event.status(),
+                                            "transaction applied observed in block event"
+                                        );
+                                        return Some(Ok(hash));
+                                    }
+                                    BlockStatus::Committed if !poll_enabled => {
+                                        debug!(
+                                            %hash,
+                                            height = block_event.header().height().get(),
+                                            status = ?block_event.status(),
+                                            "transaction committed observed in block event"
+                                        );
+                                        return Some(Ok(hash));
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         PipelineEventBox::Warning(_w) => {
@@ -10181,6 +10193,52 @@ mod tx_confirmation_stream_tests {
             .expect("join handle")
             .expect("confirmation ok");
         assert_eq!(result, hash);
+    }
+
+    #[tokio::test]
+    async fn committed_block_event_confirms_without_polling() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([15_u8; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(16).expect("nonzero height");
+        let events = vec![
+            Ok::<_, eyre::Report>(EventBox::Pipeline(PipelineEventBox::Transaction(
+                TransactionEvent {
+                    hash,
+                    block_height: None,
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::GLOBAL,
+                    status: TransactionStatus::Queued,
+                },
+            ))),
+            Ok(EventBox::Pipeline(PipelineEventBox::Transaction(
+                TransactionEvent {
+                    hash,
+                    block_height: Some(height),
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::GLOBAL,
+                    status: TransactionStatus::Approved,
+                },
+            ))),
+            Ok(EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+                header: BlockHeader {
+                    height,
+                    prev_block_hash: None,
+                    merkle_root: None,
+                    result_merkle_root: None,
+                    da_proof_policies_hash: None,
+                    da_commitments_hash: None,
+                    da_pin_intents_hash: None,
+                    creation_time_ms: 0,
+                    view_change_index: 0,
+                    confidential_features: None,
+                },
+                status: BlockStatus::Committed,
+            }))),
+        ];
+        let mut stream = stream::iter(events);
+        let result =
+            listen_for_tx_confirmation_stream(&mut stream, hash, Duration::from_secs(1)).await;
+        assert_eq!(result.unwrap(), hash);
     }
 
     #[tokio::test]
@@ -12678,7 +12736,7 @@ mod tests {
         );
         let snapshot = store_guard
             .iter()
-            .find(|snapshot| snapshot.url.path() == "/v1/transaction")
+            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
             .cloned()
             .expect("transaction snapshot captured");
         let content_type_headers: Vec<_> = snapshot

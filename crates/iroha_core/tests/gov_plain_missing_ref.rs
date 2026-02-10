@@ -7,7 +7,14 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_data_model::{block::BlockHeader, isi::governance::CastPlainBallot};
+use iroha_data_model::{
+    Registrable,
+    block::BlockHeader,
+    isi::governance::CastPlainBallot,
+    permission::Permission,
+    prelude::{Account, Domain, Grant},
+};
+use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
@@ -22,14 +29,25 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [account], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0;
+    gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
+    let ballot_perm: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "any".to_string(),
+    }
+    .into();
+    Grant::account_permission(ballot_perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant ballot permission");
 
     // No referendum exists
     let ballot = CastPlainBallot {
@@ -53,7 +71,7 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
         "closed".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 0,
-            h_end: 0,
+            h_end: 100,
             status: iroha_core::state::GovernanceReferendumStatus::Closed,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },

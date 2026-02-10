@@ -108,6 +108,13 @@ fn retransmit_cooldown_multiplier(pressure_score: u8) -> u32 {
 }
 
 impl Actor {
+    pub(super) fn reschedule_stale_pending_blocks(
+        &mut self,
+        tick_deadline: Option<Instant>,
+    ) -> bool {
+        self.reschedule_stale_pending_blocks_with_now(Instant::now(), tick_deadline)
+    }
+
     pub(super) fn rbc_availability_unresolved_for_reschedule(
         &self,
         key: super::rbc_store::SessionKey,
@@ -145,8 +152,9 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn reschedule_stale_pending_blocks(
+    pub(super) fn reschedule_stale_pending_blocks_with_now(
         &mut self,
+        now: Instant,
         tick_deadline: Option<Instant>,
     ) -> bool {
         if self.pending.pending_blocks.is_empty() {
@@ -179,7 +187,6 @@ impl Actor {
             .max(4);
         let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
         let queue_depths = super::status::worker_queue_depth_snapshot();
-        let now = Instant::now();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let (tip_height, tip_hash, fast_timeout_permissioned, fast_timeout_npos) = {
             let view = self.state.view();
@@ -229,7 +236,8 @@ impl Actor {
                 if has_votes || missing_request || commit_qc_cached {
                     continue;
                 }
-                if pending.age() >= aborted_retention {
+                let pending_age = now.saturating_duration_since(pending.inserted_at);
+                if pending_age >= aborted_retention {
                     aborted_expired.push((*hash, pending.height, pending.view));
                 }
                 continue;

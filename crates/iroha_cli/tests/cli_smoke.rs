@@ -4310,7 +4310,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
 
     assert_summary(
         &["ops", "sumeragi", "status"],
-        "leader=2 hqc=12/4 subj=abcdef12 lqc=10/3 subj=deadbeef gossip=1 drop=2 hint=3 proposal=4 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=3600 epoch_commit=120 epoch_reveal=160 vrf_epoch=7 vrf_late=8 vrf_non_reveal=5 vrf_no_part=6 membership=0/0/0 hash=- rbc_sessions=9 rbc_bytes=1000 rbc_evictions=10 rbc_pressure=11 rbc_last=01234567@13/5 sealed=0 aliases=[-] dvp=none pvp=none",
+        "leader=2 hqc=12/4 subj=abcdef12 lqc=10/3 subj=deadbeef gossip=1 drop=2 hint=3 proposal=4 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=3600 epoch_commit=120 epoch_reveal=160 vrf_epoch=7 vrf_late=8 vrf_non_reveal=5 vrf_no_part=6 membership=0/0/0 hash=- rbc_sessions=9 rbc_bytes=1000 rbc_evictions=10 rbc_persist_drops=2 rbc_pressure=11 rbc_last=01234567@13/5 sealed=0 aliases=[-] dvp=none pvp=none",
     );
     assert_summary(
         &["ops", "sumeragi", "leader"],
@@ -4322,7 +4322,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
     );
     assert_summary(
         &["ops", "sumeragi", "rbc", "status"],
-        "active=3 pruned=2 ready=5 deliver=7 bytes=99",
+        "active=3 pruned=2 ready=5 deliver=7 bytes=99 skip_payload=0 skip_ready=0",
     );
     assert_summary(
         &["ops", "sumeragi", "rbc", "sessions"],

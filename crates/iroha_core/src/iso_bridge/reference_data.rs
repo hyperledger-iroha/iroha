@@ -1139,13 +1139,24 @@ fn compute_sha256_hex(path: &Path) -> eyre::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Write as _};
+    use std::{
+        fs,
+        io::Write as _,
+        sync::{Mutex, OnceLock},
+    };
 
     use iroha_config::parameters::actual::IsoReferenceData;
     use iroha_telemetry::metrics;
     use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
+
+    fn iso_reference_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("iso reference test lock poisoned")
+    }
 
     fn write_snapshot(contents: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
@@ -1155,6 +1166,7 @@ mod tests {
 
     #[test]
     fn missing_snapshots_default_to_missing_state() {
+        let _guard = iso_reference_test_guard();
         let config = IsoReferenceData::default();
         let snapshots = ReferenceDataSnapshots::from_config(&config);
         assert_eq!(snapshots.isin_cusip().state(), SnapshotState::Missing);
@@ -1164,6 +1176,7 @@ mod tests {
 
     #[test]
     fn loads_isin_crosswalk_snapshot() {
+        let _guard = iso_reference_test_guard();
         let metrics_handle = metrics::global_or_default();
 
         let contents = r#"{
@@ -1219,6 +1232,7 @@ mod tests {
 
     #[test]
     fn validate_bic_enforces_registered_entries() {
+        let _guard = iso_reference_test_guard();
         let bic_snapshot = r#"{
             "version":"2024-05-01",
             "source":"GLEIF sample",
@@ -1243,6 +1257,7 @@ mod tests {
 
     #[test]
     fn validate_bic_skips_when_dataset_missing() {
+        let _guard = iso_reference_test_guard();
         let config = IsoReferenceData::default();
         let snapshots = ReferenceDataSnapshots::from_config(&config);
         assert_eq!(
@@ -1253,6 +1268,7 @@ mod tests {
 
     #[test]
     fn persists_loaded_snapshots_to_cache() {
+        let _guard = iso_reference_test_guard();
         let contents = r#"{
             "version":"2024-05-01",
             "source":"ANNA test",
@@ -1310,6 +1326,7 @@ mod tests {
 
     #[test]
     fn validate_mic_flags_inactive_entries() {
+        let _guard = iso_reference_test_guard();
         let mic_snapshot = r#"{
             "version":"2024-05-01",
             "source":"MIC sample",

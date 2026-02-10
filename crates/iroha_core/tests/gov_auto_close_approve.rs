@@ -9,6 +9,10 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
+use iroha_data_model::{
+    Registrable,
+    prelude::{Account, Domain},
+};
 use mv::storage::StorageReadOnly;
 
 fn canonical_abi_hex() -> String {
@@ -37,7 +41,11 @@ fn auto_close_emits_approved() {
     // Minimal state
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let alice_account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [alice_account, bob_account], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
 
     // Use default thresholds (1/2) and min_turnout=0
     let mut cfg = state.gov.clone();
@@ -46,6 +54,8 @@ fn auto_close_emits_approved() {
     cfg.approval_threshold_q_num = 1;
     cfg.approval_threshold_q_den = 2;
     cfg.min_turnout = 0;
+    cfg.min_enactment_delay = 1;
+    cfg.window_span = 2;
     state.set_gov(cfg);
 
     // H=1: propose a Plain referendum
@@ -90,6 +100,7 @@ fn auto_close_emits_approved() {
         .execute(&ALICE_ID, &mut stx1)
         .expect("propose");
         stx1.apply();
+        let _ = sblock1.commit();
     }
 
     // H=2: open + seed weights (approve sqrt(9)=3, reject sqrt(1)=1)
@@ -139,7 +150,7 @@ fn auto_close_emits_approved() {
         .expect("bob");
         // Extend ALICE lock via instruction to produce a LockExtended event
         let instr = iroha_data_model::isi::governance::CastPlainBallot {
-            referendum_id: "rid-auto-approve".to_string(),
+            referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
             amount: 9,
             duration_blocks: 200,
@@ -162,7 +173,7 @@ fn auto_close_emits_approved() {
                 )
         )));
     }
-    sblock2.world.take_external_events(); // drain opened/lock events
+    let _ = sblock2.commit();
 
     // H=3: auto close + ProposalApproved
     let block3 = iroha_data_model::block::BlockHeader::new(

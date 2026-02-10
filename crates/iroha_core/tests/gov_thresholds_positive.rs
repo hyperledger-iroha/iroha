@@ -9,6 +9,10 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
+use iroha_data_model::{
+    Registrable,
+    prelude::{Account, Domain},
+};
 use mv::storage::StorageReadOnly;
 
 fn canonical_abi_hex() -> String {
@@ -36,7 +40,11 @@ fn approves_when_ratio_and_turnout_met() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let alice_account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [alice_account, bob_account], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
 
     // Set threshold num/den = 1/2, min_turnout=0 (defaults); ensure ratio 3/(3+1) >= 1/2
     let mut cfg = state.gov.clone();

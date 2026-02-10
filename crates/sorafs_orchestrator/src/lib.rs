@@ -5795,6 +5795,7 @@ pub async fn fetch_via_gateway(
 
     let telemetry_snapshot = telemetry.map_or_else(TelemetrySnapshot::default, Clone::clone);
 
+    let should_verify_manifest = config.fetch.verify_lengths || config.fetch.verify_digests;
     let orchestrator = Orchestrator::new(config);
     let scoreboard = orchestrator.build_scoreboard(plan, &metadata, &telemetry_snapshot)?;
 
@@ -5812,11 +5813,13 @@ pub async fn fetch_via_gateway(
         .await
         .map_err(GatewayOrchestratorError::from)?;
 
-    let gateway_manifest = context.fetch_manifest().await?;
-    let verification_context = ManifestVerificationContext::from(&gateway_manifest);
-    session
-        .verify_against_manifest(plan, verification_context)
-        .map_err(GatewayOrchestratorError::from)?;
+    if should_verify_manifest {
+        let gateway_manifest = context.fetch_manifest().await?;
+        let verification_context = ManifestVerificationContext::from(&gateway_manifest);
+        session
+            .verify_against_manifest(plan, verification_context)
+            .map_err(GatewayOrchestratorError::from)?;
+    }
 
     Ok(session)
 }

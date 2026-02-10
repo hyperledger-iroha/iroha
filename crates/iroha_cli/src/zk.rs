@@ -29,7 +29,7 @@ use iroha::data_model::prelude::{Executable, InstructionBox};
 use iroha_crypto::Hash as CryptoHash;
 use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
 
-use crate::{Run, RunContext, json_utils};
+use crate::{CliOutputFormat, Run, RunContext, json_utils};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -663,7 +663,10 @@ impl Run for ProverReportsCountArgs {
             messages_only: None,
         };
         let count = client.get_zk_prover_reports_count(&filter)?;
-        context.println(count.to_string())?;
+        match context.output_format() {
+            CliOutputFormat::Json => context.print_data(&count)?,
+            CliOutputFormat::Text => context.println(count.to_string())?,
+        }
         Ok(())
     }
 }

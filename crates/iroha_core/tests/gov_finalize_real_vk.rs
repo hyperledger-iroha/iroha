@@ -20,6 +20,7 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
         zk::test_utils::halo2_fixture_envelope,
     };
     use iroha_data_model::{
+        Registrable,
         block::BlockHeader,
         confidential::ConfidentialStatus,
         isi::{
@@ -27,7 +28,7 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
             zk::{CreateElection, FinalizeElection},
         },
         permission::Permission,
-        prelude::Grant,
+        prelude::{Account, Domain, Grant},
         proof::{ProofAttachment, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
@@ -38,7 +39,10 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(iroha_core::state::World::default(), kura, query);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = iroha_core::state::World::with([domain], [account], []);
+    let state = State::new_for_testing(world, kura, query);
 
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);

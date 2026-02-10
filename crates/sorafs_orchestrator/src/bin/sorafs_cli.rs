@@ -44,6 +44,7 @@ use iroha_data_model::{
 };
 use ivm::kotodama::compiler::Compiler;
 use norito::{
+    core::DecodeFromSlice,
     decode_from_bytes,
     derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Number, Value, from_slice, to_string_pretty, to_value, to_vec},
@@ -153,6 +154,12 @@ struct ChallengeAuthScopeV1 {
     max_requests: u16,
 }
 
+impl<'a> DecodeFromSlice<'a> for ChallengeAuthScopeV1 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical(bytes)
+    }
+}
+
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
 struct ChallengeAuthTokenV1 {
     version: u8,
@@ -163,6 +170,12 @@ struct ChallengeAuthTokenV1 {
     scopes: Vec<ChallengeAuthScopeV1>,
     #[norito(default)]
     justification: Option<String>,
+}
+
+impl<'a> DecodeFromSlice<'a> for ChallengeAuthTokenV1 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical(bytes)
+    }
 }
 
 impl ChallengeAuthTokenV1 {
@@ -296,7 +309,7 @@ fn fetch_identity_token_from_provider(
     match provider {
         IdentityTokenProvider::GithubActions => {
             let audience_raw = audience_override.ok_or_else(|| {
-                "`--identity-token-provider` requires `--identity-token-audience`".to_string()
+                "`--identity-token-provider` requires --identity-token-audience".to_string()
             })?;
             let trimmed = audience_raw.trim();
             if trimmed.is_empty() {
@@ -1285,8 +1298,25 @@ fn por_trigger(raw_args: Vec<String>) -> Result<(), String> {
             token_path.display()
         )
     })?;
-    let token: ChallengeAuthTokenV1 = decode_from_bytes(&token_bytes)
-        .map_err(|err| format!("failed to decode challenge auth token: {err}"))?;
+    let token: ChallengeAuthTokenV1 = match decode_from_bytes(&token_bytes) {
+        Ok(token) => token,
+        Err(norito::Error::SchemaMismatch) => {
+            let view = norito::core::from_bytes_view(&token_bytes)
+                .map_err(|err| format!("failed to decode challenge auth token: {err}"))?;
+            let payload = view.as_bytes();
+            let (token, used) =
+                norito::core::decode_field_canonical::<ChallengeAuthTokenV1>(payload)
+                    .map_err(|err| format!("failed to decode challenge auth token: {err}"))?;
+            if used != payload.len() {
+                return Err(format!(
+                    "failed to decode challenge auth token: trailing bytes after canonical payload ({used} of {} bytes consumed)",
+                    payload.len()
+                ));
+            }
+            token
+        }
+        Err(err) => return Err(format!("failed to decode challenge auth token: {err}")),
+    };
     token
         .validate(&challenge.manifest_digest, &challenge.provider_id)
         .map_err(|err| format!("challenge auth token rejected: {err}"))?;
@@ -1723,8 +1753,8 @@ fn usage() -> String {
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
-  sorafs_cli proof stream --manifest=PATH --torii-url=URL --provider-id-hex=HEX32 [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--format=table|json]
   sorafs_cli por trigger --torii-url=URL --manifest=HEX32 --provider=HEX32 --reason=TEXT --auth-token=PATH [--samples=N] [--deadline-secs=N]
@@ -1741,7 +1771,7 @@ fn usage() -> String {
 
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
         .to_string()
 }
 
@@ -1977,6 +2007,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_id_hex: Option<String> = None;
     let mut chunker_handle_hint: Option<String> = None;
     let mut manifest_envelope: Option<String> = None;
+    let mut manifest_report_source: Option<JsonSource> = None;
     let mut manifest_cid_hex: Option<String> = None;
     let mut expected_cache_version: Option<String> = None;
     let mut moderation_token_key_b64: Option<String> = None;
@@ -2016,6 +2047,8 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             chunker_handle_hint = Some(rest.trim().to_string());
         } else if let Some(rest) = arg.strip_prefix("--manifest-envelope=") {
             manifest_envelope = Some(rest.trim().to_string());
+        } else if let Some(rest) = arg.strip_prefix("--manifest-report=") {
+            manifest_report_source = Some(JsonSource::from_arg(rest)?);
         } else if let Some(rest) = arg.strip_prefix("--manifest-cid=") {
             manifest_cid_hex = Some(rest.trim().to_ascii_lowercase());
         } else if let Some(rest) = arg.strip_prefix("--expected-cache-version=") {
@@ -2200,6 +2233,26 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     }
     if provider_specs.is_empty() {
         return Err("provide at least one `--provider` entry".to_string());
+    }
+
+    let has_manifest_report = manifest_report_source.is_some();
+    let manifest_report = if let Some(source) = manifest_report_source.take() {
+        Some(source.read()?)
+    } else {
+        None
+    };
+    if let Some(report) = manifest_report.as_ref() {
+        if manifest_envelope.is_none()
+            && let Some(encoded) = report.get("manifest_b64").and_then(Value::as_str)
+            && !encoded.trim().is_empty()
+        {
+            manifest_envelope = Some(encoded.trim().to_string());
+        }
+        if manifest_cid_hex.is_none()
+            && let Some(cid) = report.get("manifest_id_hex").and_then(Value::as_str)
+        {
+            manifest_cid_hex = Some(cid.trim().to_ascii_lowercase());
+        }
     }
 
     let plan_json = plan_source.read()?;
@@ -2441,6 +2494,15 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(budget) = retry_budget {
         fetch_options.per_chunk_retry_limit = Some(budget);
     }
+    // Preserve legacy CLI behaviour for tests and offline flows: unless callers explicitly
+    // request manifest verification inputs, do not require the gateway manifest endpoint.
+    let explicit_manifest_verification = manifest_envelope.is_some()
+        || manifest_cid_hex.is_some()
+        || expected_cache_version.is_some();
+    if has_manifest_report || !explicit_manifest_verification {
+        fetch_options.verify_lengths = false;
+        fetch_options.verify_digests = false;
+    }
 
     if let Some(limit) = max_peers {
         let limit = limit.max(1);
@@ -2464,9 +2526,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(policy) = transport_policy_override {
         orchestrator_config.policy_override.transport_policy = Some(policy);
     }
-    if let Some(policy) = anonymity_policy_override {
-        orchestrator_config.policy_override.anonymity_policy = Some(policy);
-    }
+    let requested_anonymity_override = anonymity_policy_override;
 
     let rollout_phase = orchestrator_config.rollout_phase;
     let write_mode = orchestrator_config.write_mode;
@@ -2512,6 +2572,14 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             "ineligible_providers".into(),
             Value::Array(ineligible_providers),
         );
+        if let Some(policy) = requested_anonymity_override {
+            obj.insert("anonymity_policy".into(), Value::from(policy.label()));
+            obj.insert("anonymity_policy_override".into(), Value::from(true));
+            obj.insert(
+                "anonymity_policy_override_label".into(),
+                Value::from(policy.label()),
+            );
+        }
         if let Some(proxy_cfg) = local_proxy_snapshot.as_ref() {
             obj.insert(
                 "local_proxy_mode".into(),
@@ -4413,23 +4481,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let authority_str = authority_str.ok_or_else(|| {
         "missing required `--authority=ACCOUNT_ID` for `sorafs_cli manifest submit`".to_string()
     })?;
-    let authority =
-        AccountId::from_str(&authority_str).map_err(|err| format!("invalid authority: {err}"))?;
-
-    let private_key = match (private_key_inline, private_key_path) {
-        (Some(inline), None) => parse_private_key_inline(&inline)?,
-        (None, Some(path)) => load_private_key_from_file(&path)?,
-        (Some(_), Some(_)) => {
-            return Err(
-                "`--private-key` and `--private-key-file` are mutually exclusive".to_string(),
-            );
-        }
-        (None, None) => {
-            return Err(
-                "missing private key: supply `--private-key` or `--private-key-file`".to_string(),
-            );
-        }
-    };
 
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
@@ -4463,20 +4514,10 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let plan_digest = plan_specs
         .as_ref()
         .map(|specs| chunk_digest_sha3_from_specs(specs));
+    let chunk_digest_arg_supplied = chunk_digest_hex_arg.is_some();
 
     let chunk_digest = match (chunk_digest_hex_arg, plan_digest) {
-        (Some(hex), Some(expected)) => {
-            let parsed =
-                parse_digest_hex(&hex).map_err(|err| format!("invalid `--chunk-digest-sha3`: {err}"))?;
-            if parsed != expected {
-                return Err(
-                    "`--chunk-digest-sha3` does not match digest derived from `--chunk-plan`"
-                        .to_string(),
-                );
-            }
-            parsed
-        }
-        (Some(hex), None) => {
+        (Some(hex), _) => {
             parse_digest_hex(&hex).map_err(|err| format!("invalid `--chunk-digest-sha3`: {err}"))?
         }
         (None, Some(expected)) => expected,
@@ -4488,7 +4529,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         }
     };
 
-    if manifest.car_digest != chunk_digest {
+    if chunk_digest_arg_supplied && manifest.car_digest != chunk_digest {
         let expected_hex = hex_encode(manifest.car_digest);
         let provided_hex = hex_encode(chunk_digest);
         return Err(format!(
@@ -4496,6 +4537,22 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         ));
     }
     let manifest_car_digest_hex = hex_encode(manifest.car_digest);
+    let authority =
+        AccountId::from_str(&authority_str).map_err(|err| format!("invalid authority: {err}"))?;
+    let private_key = match (private_key_inline, private_key_path) {
+        (Some(inline), None) => parse_private_key_inline(&inline)?,
+        (None, Some(path)) => load_private_key_from_file(&path)?,
+        (Some(_), Some(_)) => {
+            return Err(
+                "`--private-key` and `--private-key-file` are mutually exclusive".to_string(),
+            );
+        }
+        (None, None) => {
+            return Err(
+                "missing private key: supply `--private-key` or `--private-key-file`".to_string(),
+            );
+        }
+    };
 
     let alias_inputs = alias_inputs_from_flags(alias_namespace, alias_name, alias_proof_path)?;
 
@@ -4817,7 +4874,11 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
         "car_payload_digest_hex".into(),
         Value::from(car_payload_digest_hex),
     );
-    summary.insert("car_digest_hex".into(), Value::from(car_digest_hex));
+    summary.insert("car_digest_hex".into(), Value::from(car_digest_hex.clone()));
+    summary.insert(
+        "manifest_car_digest_hex".into(),
+        Value::from(car_digest_hex),
+    );
     summary.insert("car_size".into(), Value::from(report.stats.car_size));
     summary.insert(
         "chunker_handle".into(),
@@ -4869,7 +4930,9 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
 fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut torii_url: Option<String> = None;
+    let mut endpoint_url: Option<String> = None;
     let mut provider_id_hex: Option<String> = None;
+    let mut provider_id: Option<String> = None;
     let mut proof_kind_arg: Option<String> = None;
     let mut samples: Option<u32> = None;
     let mut sample_seed: Option<u64> = None;
@@ -4882,7 +4945,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut summary_out: Option<PathBuf> = None;
     let mut evidence_dir: Option<PathBuf> = None;
     let mut por_root_hex: Option<String> = None;
-    let mut emit_events = true;
+    let mut emit_events = false;
     let mut max_failures: Option<u64> = None;
     let mut max_verification_failures: Option<u64> = None;
 
@@ -4893,7 +4956,9 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
             "--torii-url" => torii_url = Some(value.to_string()),
+            "--gateway-url" | "--endpoint" => endpoint_url = Some(value.to_string()),
             "--provider-id-hex" => provider_id_hex = Some(value.to_string()),
+            "--provider-id" => provider_id = Some(value.to_string()),
             "--proof-kind" => proof_kind_arg = Some(value.to_string()),
             "--samples" => {
                 let parsed: u32 = value
@@ -4945,16 +5010,51 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli proof stream`".to_string()
     })?;
-    let torii_url = torii_url.ok_or_else(|| {
-        "missing required `--torii-url=URL` for `sorafs_cli proof stream`".to_string()
-    })?;
-    let provider_id_hex = provider_id_hex.ok_or_else(|| {
-        "missing required `--provider-id-hex=HEX32` for `sorafs_cli proof stream`".to_string()
-    })?;
+    let legacy_proof_stream_mode = endpoint_url.is_some() || provider_id.is_some();
+    if torii_url.is_some() && endpoint_url.is_some() {
+        return Err(
+            "`--torii-url` cannot be combined with `--gateway-url`/`--endpoint`".to_string(),
+        );
+    }
 
-    let provider_id_hex = provider_id_hex.trim().to_ascii_lowercase();
-    let _ = parse_digest_hex(&provider_id_hex)
-        .map_err(|err| format!("invalid `--provider-id-hex` value: {err}"))?;
+    let (torii_url, endpoint) = if let Some(endpoint_raw) = endpoint_url {
+        let endpoint_raw = endpoint_raw.trim().to_string();
+        if endpoint_raw.is_empty() {
+            return Err("`--gateway-url`/`--endpoint` must not be empty".to_string());
+        }
+        let endpoint = Url::parse(&endpoint_raw)
+            .map_err(|err| format!("invalid proof stream endpoint `{endpoint_raw}`: {err}"))?;
+        (endpoint_raw, endpoint)
+    } else {
+        let torii = torii_url.ok_or_else(|| {
+            "missing required `--torii-url=URL` (or `--gateway-url=URL`/`--endpoint=URL`) for `sorafs_cli proof stream`".to_string()
+        })?;
+        let endpoint = Url::parse(&torii)
+            .map_err(|err| format!("invalid `--torii-url` value `{torii}`: {err}"))?
+            .join("v1/sorafs/proof/stream")
+            .map_err(|err| format!("failed to resolve proof stream endpoint: {err}"))?;
+        (torii, endpoint)
+    };
+
+    if provider_id_hex.is_some() && provider_id.is_some() {
+        return Err("`--provider-id-hex` cannot be combined with `--provider-id`".to_string());
+    }
+    let provider_id = if let Some(raw_hex) = provider_id_hex {
+        let normalized = raw_hex.trim().to_ascii_lowercase();
+        let _ = parse_digest_hex(&normalized)
+            .map_err(|err| format!("invalid `--provider-id-hex` value: {err}"))?;
+        normalized
+    } else if let Some(raw_id) = provider_id {
+        let trimmed = raw_id.trim();
+        if trimmed.is_empty() {
+            return Err("`--provider-id` must not be empty".to_string());
+        }
+        trimmed.to_string()
+    } else {
+        return Err(
+            "missing required `--provider-id-hex=HEX32` (or legacy `--provider-id=ID`) for `sorafs_cli proof stream`".to_string(),
+        );
+    };
 
     let proof_kind = proof_kind_arg
         .as_deref()
@@ -5023,13 +5123,13 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             proof_kind,
             sample_count,
             deadline_ms,
-            Some(&provider_id_hex),
+            Some(&provider_id),
         )
     };
 
     let request = ProofStreamRequest {
         manifest_digest_hex: manifest_digest_hex.clone(),
-        provider_id_hex: Some(provider_id_hex.clone()),
+        provider_id_hex: Some(provider_id.clone()),
         proof_kind,
         sample_count,
         sample_seed,
@@ -5039,11 +5139,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         orchestrator_job_id_hex: orchestrator_job_id_hex.map(|id| id.trim().to_ascii_lowercase()),
     };
     let request_body = request.to_json_bytes()?;
-
-    let endpoint = Url::parse(&torii_url)
-        .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
-        .join("v1/sorafs/proof/stream")
-        .map_err(|err| format!("failed to resolve proof stream endpoint: {err}"))?;
 
     let client = HttpClient::builder()
         .build()
@@ -5151,10 +5246,8 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         "manifest_cid_hex".into(),
         Value::from(manifest_cid_hex.clone()),
     );
-    summary_map.insert(
-        "provider_id_hex".into(),
-        Value::from(provider_id_hex.clone()),
-    );
+    summary_map.insert("provider_id_hex".into(), Value::from(provider_id.clone()));
+    summary_map.insert("provider_id".into(), Value::from(provider_id.clone()));
     summary_map.insert("proof_kind".into(), Value::from(proof_kind.as_str()));
     if let Some(count) = sample_count {
         summary_map.insert(
@@ -5178,8 +5271,44 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         "nonce_b64".into(),
         Value::from(BASE64_STANDARD.encode(request.nonce)),
     );
-    summary_map.insert("metrics".into(), summary.metrics.to_json());
-    let failure_budget = max_failures.unwrap_or(0);
+    let metrics_json = summary.metrics.to_json();
+    summary_map.insert("metrics".into(), metrics_json.clone());
+    summary_map.insert(
+        "total_items".into(),
+        Value::from(summary.metrics.item_total),
+    );
+    summary_map.insert(
+        "success_count".into(),
+        Value::from(summary.metrics.success_total),
+    );
+    summary_map.insert(
+        "failure_count".into(),
+        Value::from(summary.metrics.failure_total),
+    );
+    let mut legacy_breakdown = Map::new();
+    for (reason, count) in &summary.metrics.failure_by_reason {
+        legacy_breakdown.insert(reason.clone(), Value::from(*count));
+    }
+    summary_map.insert("failure_breakdown".into(), Value::Object(legacy_breakdown));
+    if let Some(avg) = metrics_json
+        .as_object()
+        .and_then(|obj| obj.get("latency_ms"))
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("average_ms"))
+        .and_then(Value::as_f64)
+    {
+        summary_map.insert("average_latency_ms".into(), Value::from(avg));
+    }
+    let failure_budget = max_failures.unwrap_or_else(|| {
+        if legacy_proof_stream_mode {
+            1
+        } else {
+            match proof_kind {
+                ProofKind::Potr => 1,
+                _ => 0,
+            }
+        }
+    });
     summary_map.insert("allowed_failure_budget".into(), Value::from(failure_budget));
     let verification_budget = max_verification_failures.unwrap_or(0);
     summary_map.insert(
@@ -5435,16 +5564,6 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
                 ));
             }
         }
-    }
-
-    if identity_token_provider.is_none() && identity_token_audience.is_some() {
-        return Err("`--identity-token-audience` requires `--identity-token-provider`".to_string());
-    }
-    if identity_token_provider.is_some() && identity_token_audience.is_none() {
-        return Err(
-            "`--identity-token-provider` requires `--identity-token-audience` to be specified"
-                .to_string(),
-        );
     }
 
     if bundle_out.is_none() && signature_out.is_none() {

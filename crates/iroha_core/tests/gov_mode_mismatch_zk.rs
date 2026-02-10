@@ -17,6 +17,10 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, StateReadOnly, World, WorldReadOnly},
 };
+use iroha_data_model::{
+    Registrable,
+    prelude::{Account, Domain},
+};
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 
@@ -45,7 +49,10 @@ fn zk_ballot_rejected_on_plain_referendum() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [account], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let bundle = zk_testkit::tiny_add_bundle();
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;

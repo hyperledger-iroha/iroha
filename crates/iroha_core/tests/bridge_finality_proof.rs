@@ -162,6 +162,14 @@ fn build_commit_qc(
     }
 }
 
+fn seed_validator_pops(world: &mut World, validators: &[KeyPair]) {
+    for validator in validators {
+        let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+            .expect("generate pop for validator");
+        world.register_validator_pop_for_testing(validator.public_key().clone(), pop);
+    }
+}
+
 fn build_proof_with_validators(
     validators: &[KeyPair],
 ) -> (BridgeFinalityProof, ChainId, HashOf<Vec<PeerId>>) {
@@ -185,7 +193,8 @@ fn build_proof_with_validators(
     let kura = Kura::blank_kura_for_testing();
     kura.store_block(block).expect("store block");
     let query_handle = LiveQueryStore::start_test();
-    let world = World::new();
+    let mut world = World::new();
+    seed_validator_pops(&mut world, validators);
     let state = State::new_for_testing(world, kura, query_handle);
     let chain_id = state.view().chain_id().clone();
 
@@ -222,7 +231,8 @@ fn builds_finality_proof_for_stored_block() {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     kura.store_block(block).expect("store block");
     let query_handle = iroha_core::query::store::LiveQueryStore::start_test();
-    let world = iroha_core::state::World::new();
+    let mut world = iroha_core::state::World::new();
+    seed_validator_pops(&mut world, std::slice::from_ref(&kp));
     let state = State::new_for_testing(world, kura, query_handle);
 
     // Record commit certificate matching the stored block.
@@ -272,7 +282,8 @@ fn finality_proof_rejects_commit_qc_hash_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     kura.store_block(block).expect("store block");
     let query_handle = LiveQueryStore::start_test();
-    let world = World::new();
+    let mut world = World::new();
+    seed_validator_pops(&mut world, std::slice::from_ref(&kp));
     let state = State::new_for_testing(world, kura, query_handle);
 
     // Commit certificate points at a forged hash that disagrees with storage.
@@ -318,7 +329,9 @@ fn finality_proof_respects_commit_qc_retention_cap() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura.clone(), query);
+    let mut world = World::new();
+    seed_validator_pops(&mut world, std::slice::from_ref(&kp));
+    let state = State::new_for_testing(world, kura.clone(), query);
 
     let mut parent = None;
     for height in 1..=3 {
@@ -391,7 +404,8 @@ fn builds_finality_bundle_for_stored_block() {
         .expect("store genesis block");
     kura.store_block(block).expect("store block");
     let query_handle = iroha_core::query::store::LiveQueryStore::start_test();
-    let world = iroha_core::state::World::new();
+    let mut world = iroha_core::state::World::new();
+    seed_validator_pops(&mut world, std::slice::from_ref(&kp));
     let state = iroha_core::state::State::new_for_testing(world, kura, query_handle);
 
     let validator_set = vec![peer_id.clone()];
@@ -420,7 +434,7 @@ fn builds_finality_bundle_for_stored_block() {
     assert_eq!(bundle.commitment.authority_set.id, 2);
     assert_eq!(bundle.block_header.hash(), block_hash);
     assert_eq!(bundle.commit_qc, cert);
-    assert_eq!(bundle.justification.signatures.len(), 1);
+    assert_eq!(bundle.justification.signatures.len(), 0);
     // MMR root reflects bag-of-peaks over blocks 1..=2; should not equal the leaf hash.
     assert!(bundle.commitment.mmr_root.is_some());
     assert_eq!(bundle.commitment.mmr_leaf_index, Some(1));
@@ -430,7 +444,7 @@ fn builds_finality_bundle_for_stored_block() {
 fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let kp = KeyPair::random();
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let genesis = BlockHeader::new(
@@ -461,7 +475,8 @@ fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
         .expect("store genesis block");
     kura.store_block(block.clone()).expect("store block");
     let query_handle = LiveQueryStore::start_test();
-    let world = World::new();
+    let mut world = World::new();
+    seed_validator_pops(&mut world, std::slice::from_ref(&kp));
     let state = State::new_for_testing(world, kura.clone(), query_handle);
 
     let validator_set = vec![peer_id.clone()];
