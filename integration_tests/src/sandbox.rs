@@ -553,6 +553,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use tempfile::TempDir;
     use toml::Value as TomlValue;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -615,8 +616,20 @@ mod tests {
             })
     }
 
-    fn allow_reentrant_build_guard() -> EnvRestore {
-        EnvRestore::set("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1")
+    struct BuildEnvRestore {
+        _reentrant_build: EnvRestore,
+        _permit_dir: EnvRestore,
+        _permit_dir_owner: TempDir,
+    }
+
+    fn allow_reentrant_build_guard() -> BuildEnvRestore {
+        let permit_dir_owner = tempfile::tempdir().expect("sandbox permit dir");
+        let permit_dir = permit_dir_owner.path().to_string_lossy().into_owned();
+        BuildEnvRestore {
+            _reentrant_build: EnvRestore::set("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1"),
+            _permit_dir: EnvRestore::set("IROHA_TEST_NETWORK_PERMIT_DIR", &permit_dir),
+            _permit_dir_owner: permit_dir_owner,
+        }
     }
 
     fn network_permit_snapshot() -> (usize, usize) {

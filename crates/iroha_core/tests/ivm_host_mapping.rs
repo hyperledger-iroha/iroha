@@ -167,17 +167,19 @@ fn host_bridges_nft_mint_and_transfer() {
     }
 
     // Now transfer NFT to recipient via SCALL NFT_TRANSFER_ASSET
+    let from_blob = tlv_blob(&owner, PointerType::AccountId as u16);
     let nft_blob2 = tlv_blob(&nft_id, PointerType::NftId as u16);
     let to_blob = tlv_blob(&recipient, PointerType::AccountId as u16);
     let mut vm2 = IVM::new(50_000);
     vm2.set_host(CoreHost::new(owner.clone()));
     let mut cursor2 = 0;
+    let ptr_from = load_input_blob(&mut vm2, &mut cursor2, &from_blob);
     let ptr_nft2 = load_input_blob(&mut vm2, &mut cursor2, &nft_blob2);
     let ptr_to = load_input_blob(&mut vm2, &mut cursor2, &to_blob);
     run_syscall(
         &mut vm2,
         ivm_sys::SYSCALL_NFT_TRANSFER_ASSET,
-        &[(10, 0), (11, ptr_nft2), (12, ptr_to)],
+        &[(10, ptr_from), (11, ptr_nft2), (12, ptr_to)],
     );
 
     // Apply queued NFT_TRANSFER_ASSET in a new block scope
