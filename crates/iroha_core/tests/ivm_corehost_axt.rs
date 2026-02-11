@@ -151,6 +151,43 @@ fn host_with_policy(
     CoreHost::new(authority).with_axt_policy_snapshot(&snapshot)
 }
 
+fn nexus_with_lane_catalog(
+    lane_catalog: iroha_data_model::nexus::LaneCatalog,
+) -> iroha_config::parameters::actual::Nexus {
+    use std::collections::BTreeSet;
+
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata};
+
+    let mut dataspace_ids: BTreeSet<DataSpaceId> = lane_catalog
+        .lanes()
+        .iter()
+        .map(|lane| lane.dataspace_id)
+        .collect();
+    dataspace_ids.insert(DataSpaceId::GLOBAL);
+    let dataspace_catalog = DataSpaceCatalog::new(
+        dataspace_ids
+            .into_iter()
+            .map(|id| DataSpaceMetadata {
+                id,
+                alias: if id == DataSpaceId::GLOBAL {
+                    "universal".to_owned()
+                } else {
+                    format!("dataspace_{}", id.as_u64())
+                },
+                description: None,
+                fault_tolerance: 1,
+            })
+            .collect(),
+    )
+    .expect("dataspace catalog derived from lane catalog");
+
+    iroha_config::parameters::actual::Nexus {
+        lane_catalog,
+        dataspace_catalog,
+        ..iroha_config::parameters::actual::Nexus::default()
+    }
+}
+
 #[test]
 fn axt_policy_snapshot_refreshes_current_slot() {
     use iroha_core::{
@@ -641,10 +678,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         metadata: BTreeMap::new(),
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = nexus_with_lane_catalog(lane_catalog);
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -1471,10 +1505,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         metadata: BTreeMap::new(),
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = nexus_with_lane_catalog(lane_catalog);
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -1671,10 +1702,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         metadata: BTreeMap::new(),
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = nexus_with_lane_catalog(lane_catalog);
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -1907,15 +1935,12 @@ fn axt_replay_entries_expire_after_retention_window() {
         metadata: BTreeMap::new(),
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        axt: iroha_config::parameters::actual::NexusAxt {
-            slot_length_ms: nonzero!(1_u64),
-            max_clock_skew_ms: 0,
-            proof_cache_ttl_slots: nonzero!(1_u64),
-            replay_retention_slots: nonzero!(2_u64),
-        },
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
+    let mut nexus = nexus_with_lane_catalog(lane_catalog);
+    nexus.axt = iroha_config::parameters::actual::NexusAxt {
+        slot_length_ms: nonzero!(1_u64),
+        max_clock_skew_ms: 0,
+        proof_cache_ttl_slots: nonzero!(1_u64),
+        replay_retention_slots: nonzero!(2_u64),
     };
     let retention_slots = nexus.axt.replay_retention_slots.get();
 
@@ -2899,10 +2924,7 @@ fn core_host_from_state_enforces_space_directory_policy() {
         metadata: BTreeMap::new(),
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = nexus_with_lane_catalog(lane_catalog);
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -3016,10 +3038,7 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     };
     let lane_catalog =
         LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("lane catalog populated");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = nexus_with_lane_catalog(lane_catalog);
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -3610,10 +3629,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         metadata: BTreeMap::new(),
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = nexus_with_lane_catalog(lane_catalog);
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
