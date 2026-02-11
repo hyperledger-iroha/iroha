@@ -2055,7 +2055,7 @@ impl Actor {
         }
 
         if pending_queue_len > 0 {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 queue_len = pending_queue_len,
                 topology_len = topology.as_ref().len(),
                 required,
@@ -2616,7 +2616,7 @@ impl Actor {
         if local_pos != leader_index {
             let leader_peer = topology.iter().next().cloned();
             if pending_queue_len > 0 {
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     height,
                     view = view_idx,
                     local_idx = local_pos,

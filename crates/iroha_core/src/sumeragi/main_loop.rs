@@ -185,14 +185,14 @@ const RBC_MAX_TOTAL_CHUNKS: u32 = 1024;
 /// Reserve room for headers/signatures when RBC is disabled so `BlockCreated` frames
 /// stay under the consensus topic cap.
 const NON_RBC_FRAME_HEADROOM_BYTES: usize = 8 * 1024;
-/// Minimum backoff for consensus rebroadcasts to avoid tight loops on tiny block times.
-const REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(200);
-/// Base multiplier for consensus rebroadcasts (votes/block sync/READY).
-const REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
-/// Multiplier for consensus rebroadcasts when block times are sub-second.
-const REBROADCAST_COOLDOWN_MULTIPLIER_FAST: u32 = 1;
-/// Block-time threshold (ms) for tightening rebroadcast cadence.
-const REBROADCAST_COOLDOWN_FAST_THRESHOLD_MS: u64 = 1_000;
+/// Minimum backoff for control-plane rebroadcasts (votes/block sync/READY/DELIVER).
+///
+/// These messages are small and latency-sensitive, so keep the floor low.
+const REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(25);
+/// Upper bound for control-plane rebroadcast cooldown to avoid multi-hundred-ms stalls.
+const REBROADCAST_COOLDOWN_CEILING: Duration = Duration::from_millis(200);
+/// Derive control-plane cooldown as `block_time / divisor` and clamp to floor/ceiling.
+const REBROADCAST_COOLDOWN_DIVISOR: u32 = 8;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
 /// Keep RBC rebroadcasts alive for a small window of recently committed blocks.
@@ -219,6 +219,8 @@ const TICK_LAG_STALL_WINDOW: Duration = Duration::from_secs(10);
 const TICK_LAG_WARN_STALL_STREAK: u32 = 2;
 /// Cooldown between consecutive proposal-attempt logs when queued transactions exist.
 const PROPOSE_ATTEMPT_LOG_COOLDOWN: Duration = Duration::from_secs(2);
+/// Minimum interval for nudging the pacemaker when queued transactions persist.
+const PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL: Duration = Duration::from_millis(100);
 /// Minimum backoff between consecutive quorum reschedules for the same pending block.
 const QUORUM_RESCHEDULE_COOLDOWN: Duration = Duration::from_millis(800);
 /// Prevent repeated block-sync warning spam for the same hash/reason across short intervals.
@@ -231,26 +233,28 @@ const BLOCK_SYNC_WARN_BURST_CAP: u32 = 3;
 const BLOCK_SYNC_WARN_BURST_WINDOW: Duration = Duration::from_secs(10);
 /// Periodic interval for emitting aggregated hotspot summary logs.
 const HOTSPOT_LOG_SUMMARY_INTERVAL: Duration = Duration::from_secs(30);
-/// Align rebroadcast cadence with the block time while enforcing a safe floor.
-fn rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duration {
+/// Align control-plane rebroadcast cadence with block time while enforcing a safe floor.
+///
+/// Control-plane messages (votes / missing-block pulls / RBC READY/DELIVER coordination) are
+/// small and latency-sensitive, so 1s block times should stay on the fast multiplier.
+fn control_plane_rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duration {
     let base = if block_time == Duration::ZERO {
         REBROADCAST_COOLDOWN_FLOOR
     } else {
-        block_time.max(REBROADCAST_COOLDOWN_FLOOR)
+        block_time / REBROADCAST_COOLDOWN_DIVISOR
     };
-    let fast_threshold = Duration::from_millis(REBROADCAST_COOLDOWN_FAST_THRESHOLD_MS);
-    let multiplier = if block_time != Duration::ZERO && block_time < fast_threshold {
-        REBROADCAST_COOLDOWN_MULTIPLIER_FAST
-    } else {
-        REBROADCAST_COOLDOWN_MULTIPLIER
-    };
-    saturating_mul_duration(base, multiplier)
+    base.clamp(REBROADCAST_COOLDOWN_FLOOR, REBROADCAST_COOLDOWN_CEILING)
+}
+
+/// Backwards-compatible alias used by existing call sites.
+fn rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duration {
+    control_plane_rebroadcast_cooldown_from_block_time(block_time)
 }
 
 /// Align payload rebroadcast cadence to the block time while keeping a larger buffer.
 fn payload_rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duration {
     saturating_mul_duration(
-        rebroadcast_cooldown_from_block_time(block_time),
+        control_plane_rebroadcast_cooldown_from_block_time(block_time),
         PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER,
     )
 }
@@ -3982,6 +3986,10 @@ impl Actor {
 
     fn request_commit_pipeline(&mut self) {
         self.pending.commit_pipeline_wakeup = true;
+    }
+
+    pub(in crate::sumeragi) fn commit_pipeline_wakeup_pending(&self) -> bool {
+        self.pending.commit_pipeline_wakeup
     }
 
     fn rbc_rebroadcast_active_with_tip_and_session(
@@ -10048,6 +10056,19 @@ impl Actor {
         }
     }
 
+    fn pacemaker_queue_nudge_due(&self, now: Instant) -> bool {
+        let attempt_interval = self
+            .subsystems
+            .propose
+            .pacemaker
+            .propose_interval
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
+        self.subsystems
+            .propose
+            .last_pacemaker_attempt
+            .is_none_or(|last| now.saturating_duration_since(last) >= attempt_interval)
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
         let tick_start = Instant::now();
@@ -10191,7 +10212,7 @@ impl Actor {
             );
         }
         let queue_ready = queue_len > 0 && !proposal_backpressure.active_pending;
-        if queue_ready {
+        if queue_ready && self.pacemaker_queue_nudge_due(now) {
             self.subsystems.propose.pacemaker.next_deadline = now;
         }
         if queue_ready
@@ -13571,6 +13592,13 @@ impl Actor {
         let block_time = self.block_time_for_mode(&view, self.consensus_mode);
         drop(view);
         rebroadcast_cooldown_from_block_time(block_time)
+    }
+
+    fn control_plane_rebroadcast_cooldown(&self) -> Duration {
+        let view = self.state.view();
+        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
+        drop(view);
+        control_plane_rebroadcast_cooldown_from_block_time(block_time)
     }
 
     fn payload_rebroadcast_cooldown(&self) -> Duration {

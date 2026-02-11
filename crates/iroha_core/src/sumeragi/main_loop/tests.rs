@@ -14562,6 +14562,19 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
                 }
             }
         }
+        let remote_floor = usize::from(actor.subsystems.propose.collector_redundant_limit.max(1))
+            .min(signature_topology.as_ref().len().saturating_sub(1));
+        if expected_targets.len() < remote_floor {
+            for peer in signature_topology.as_ref() {
+                if peer == &local_peer || expected_targets.contains(peer) {
+                    continue;
+                }
+                expected_targets.push(peer.clone());
+                if expected_targets.len() >= remote_floor {
+                    break;
+                }
+            }
+        }
     }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
@@ -54975,21 +54988,22 @@ fn commit_quorum_timeout_tracks_block_time() {
 fn rebroadcast_cooldown_tracks_block_time() {
     assert_eq!(
         super::rebroadcast_cooldown_from_block_time(Duration::from_secs(1)),
-        Duration::from_secs(2)
+        Duration::from_millis(125),
+        "control-plane rebroadcasts should scale down for 1s blocks"
+    );
+    assert_eq!(
+        super::rebroadcast_cooldown_from_block_time(Duration::from_millis(1_001)),
+        Duration::from_micros(125_125),
+        "rebroadcast cooldown should derive from block_time/8 when above the floor"
     );
     assert_eq!(
         super::rebroadcast_cooldown_from_block_time(Duration::from_millis(150)),
-        super::saturating_mul_duration(
-            super::REBROADCAST_COOLDOWN_FLOOR,
-            super::REBROADCAST_COOLDOWN_MULTIPLIER_FAST
-        )
+        super::REBROADCAST_COOLDOWN_FLOOR,
+        "small block times should clamp to the floor"
     );
     assert_eq!(
         super::rebroadcast_cooldown_from_block_time(Duration::ZERO),
-        super::saturating_mul_duration(
-            super::REBROADCAST_COOLDOWN_FLOOR,
-            super::REBROADCAST_COOLDOWN_MULTIPLIER
-        )
+        super::REBROADCAST_COOLDOWN_FLOOR
     );
 }
 
@@ -54997,27 +55011,15 @@ fn rebroadcast_cooldown_tracks_block_time() {
 fn payload_rebroadcast_cooldown_tracks_block_time() {
     assert_eq!(
         super::payload_rebroadcast_cooldown_from_block_time(Duration::from_secs(1)),
-        Duration::from_secs(4)
+        Duration::from_millis(250)
     );
     assert_eq!(
         super::payload_rebroadcast_cooldown_from_block_time(Duration::from_millis(150)),
-        super::saturating_mul_duration(
-            super::saturating_mul_duration(
-                super::REBROADCAST_COOLDOWN_FLOOR,
-                super::REBROADCAST_COOLDOWN_MULTIPLIER_FAST
-            ),
-            super::PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER
-        )
+        Duration::from_millis(50)
     );
     assert_eq!(
         super::payload_rebroadcast_cooldown_from_block_time(Duration::ZERO),
-        super::saturating_mul_duration(
-            super::saturating_mul_duration(
-                super::REBROADCAST_COOLDOWN_FLOOR,
-                super::REBROADCAST_COOLDOWN_MULTIPLIER
-            ),
-            super::PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER
-        )
+        Duration::from_millis(50)
     );
 }
 
