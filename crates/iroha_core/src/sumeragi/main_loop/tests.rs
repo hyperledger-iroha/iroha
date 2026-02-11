@@ -55571,7 +55571,13 @@ async fn reschedule_defers_quorum_timeout_while_validation_inflight() {
     pending.validation_status = ValidationStatus::Pending;
     pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
-    actor.subsystems.validation.inflight.insert(block_hash, 1);
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 1,
+            started_at: Instant::now(),
+        },
+    );
 
     assert!(
         !actor.reschedule_stale_pending_blocks(None),
@@ -56582,6 +56588,81 @@ async fn commit_pipeline_defers_reschedule_while_vote_queue_backlogged() {
     assert!(
         pending_after.last_quorum_reschedule.is_none(),
         "commit pipeline should defer reschedule while vote queue is backlogged"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_inlines_validation_when_inflight_is_stalled() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let stall_timeout = fast_timeout.checked_mul(2).unwrap_or(fast_timeout);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 7,
+            started_at: Instant::now() - stall_timeout - Duration::from_millis(1),
+        },
+    );
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(
+        pending_after.validation_status,
+        ValidationStatus::Valid,
+        "stalled inflight validation should be bypassed with inline validation"
+    );
+    assert!(
+        pending_after.parent_state_root.is_some(),
+        "inline fallback should capture parent state root"
+    );
+    assert!(
+        pending_after.post_state_root.is_some(),
+        "inline fallback should capture post state root"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "stalled inflight entry should be cleared"
     );
 
     harness.shutdown.send();
