@@ -776,8 +776,7 @@ impl ProxyPolicy {
     /// Returns an error if `proxy_url` is present but cannot be parsed.
     pub fn from_config(proxy_url: Option<String>, no_proxy: Vec<String>) -> io::Result<Self> {
         let proxy = proxy_url
-            .as_deref()
-            .map(parse_proxy_value)
+            .map(|raw| parse_proxy_value(&raw))
             .transpose()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
@@ -850,7 +849,7 @@ pub struct TcpConnectOptions {
     ///
     /// Used only when `proxy_tls_verify=true` and the proxy URL uses the `https://` scheme.
     pub proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
-    /// Whether to enable TCP_NODELAY for reduced latency.
+    /// Whether to enable `TCP_NODELAY` for reduced latency.
     pub tcp_nodelay: bool,
     /// Optional keepalive idle time. When `None`, keepalive is disabled.
     pub tcp_keepalive: Option<std::time::Duration>,
@@ -971,25 +970,19 @@ fn build_connect_request(target: &str, proxy: &Proxy) -> String {
     headers
 }
 
-async fn socks5_connect<S>(stream: &mut S, proxy: &Proxy, target: &SocketAddr) -> Result<()>
+async fn socks5_negotiate_method<S>(stream: &mut S, proxy: &Proxy) -> Result<u8>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    // RFC 1928: SOCKS5 version/method negotiation
-    // Advertise "no auth" always, and "username/password" if configured.
     let mut methods: Vec<u8> = vec![0x00];
     if proxy.auth.is_some() {
         methods.push(0x02);
     }
-    if methods.len() > u8::MAX as usize {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "SOCKS5 method list too long",
-        ));
-    }
+    let methods_len = u8::try_from(methods.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "SOCKS5 method list too long"))?;
     let mut greeting = Vec::with_capacity(2 + methods.len());
     greeting.push(0x05);
-    greeting.push(u8::try_from(methods.len()).unwrap_or(u8::MAX));
+    greeting.push(methods_len);
     greeting.extend_from_slice(&methods);
     stream.write_all(&greeting).await?;
     stream.flush().await?;
@@ -1003,53 +996,47 @@ where
         ));
     }
     match choice[1] {
-        0x00 => {}
-        0x02 => {
-            let (user, pass) = proxy.auth.as_ref().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "SOCKS5 proxy requires username/password",
-                )
-            })?;
-            if user.len() > u8::MAX as usize || pass.len() > u8::MAX as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "SOCKS5 credentials too long",
-                ));
-            }
-            // RFC 1929: username/password authentication
-            let mut auth_req = Vec::with_capacity(3 + user.len() + pass.len());
-            auth_req.push(0x01);
-            auth_req.push(user.len() as u8);
-            auth_req.extend_from_slice(user.as_bytes());
-            auth_req.push(pass.len() as u8);
-            auth_req.extend_from_slice(pass.as_bytes());
-            stream.write_all(&auth_req).await?;
-            stream.flush().await?;
-            let mut auth_resp = [0u8; 2];
-            stream.read_exact(&mut auth_resp).await?;
-            if auth_resp[0] != 0x01 || auth_resp[1] != 0x00 {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "SOCKS5 authentication failed",
-                ));
-            }
-        }
-        0xFF => {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "SOCKS5 no acceptable auth methods",
-            ));
-        }
-        m => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("SOCKS5 unsupported auth method {m}"),
-            ));
-        }
+        0x00 | 0x02 => Ok(choice[1]),
+        0xFF => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "SOCKS5 no acceptable auth methods",
+        )),
+        m => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("SOCKS5 unsupported auth method {m}"),
+        )),
     }
+}
 
-    // RFC 1928: CONNECT request
+async fn socks5_auth_user_pass<S>(stream: &mut S, user: &str, pass: &str) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // RFC 1929: username/password authentication.
+    let user_len = u8::try_from(user.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "SOCKS5 username too long"))?;
+    let pass_len = u8::try_from(pass.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "SOCKS5 password too long"))?;
+    let mut auth_req = Vec::with_capacity(3 + user.len() + pass.len());
+    auth_req.push(0x01);
+    auth_req.push(user_len);
+    auth_req.extend_from_slice(user.as_bytes());
+    auth_req.push(pass_len);
+    auth_req.extend_from_slice(pass.as_bytes());
+    stream.write_all(&auth_req).await?;
+    stream.flush().await?;
+    let mut auth_resp = [0u8; 2];
+    stream.read_exact(&mut auth_resp).await?;
+    if auth_resp[0] != 0x01 || auth_resp[1] != 0x00 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "SOCKS5 authentication failed",
+        ));
+    }
+    Ok(())
+}
+
+fn socks5_build_connect_request(target: &SocketAddr) -> Result<Vec<u8>> {
     let mut req = Vec::with_capacity(32);
     req.push(0x05); // version
     req.push(0x01); // CMD=CONNECT
@@ -1069,22 +1056,26 @@ where
         }
         SocketAddr::Host(host) => {
             let name = host.host.as_ref();
-            if name.len() > u8::MAX as usize {
-                return Err(io::Error::new(
+            let name_len = u8::try_from(name.len()).map_err(|_| {
+                io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "SOCKS5 target hostname too long",
-                ));
-            }
+                )
+            })?;
             req.push(0x03); // ATYP=DOMAIN
-            req.push(name.len() as u8);
+            req.push(name_len);
             req.extend_from_slice(name.as_bytes());
             req.extend_from_slice(&host.port.to_be_bytes());
         }
     }
-    stream.write_all(&req).await?;
-    stream.flush().await?;
+    Ok(req)
+}
 
-    // Reply: VER, REP, RSV, ATYP, BND.ADDR, BND.PORT
+async fn socks5_read_connect_reply<S>(stream: &mut S) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // Reply: VER, REP, RSV, ATYP, BND.ADDR, BND.PORT.
     let mut head = [0u8; 4];
     stream.read_exact(&mut head).await?;
     if head[0] != 0x05 {
@@ -1094,11 +1085,10 @@ where
         ));
     }
     if head[1] != 0x00 {
-        // Keep it short; include the code for debugging.
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("SOCKS5 connect failed (rep={})", head[1]),
-        ));
+        return Err(io::Error::other(format!(
+            "SOCKS5 connect failed (rep={})",
+            head[1]
+        )));
     }
     match head[3] {
         0x01 => {
@@ -1124,8 +1114,29 @@ where
     }
     let mut port = [0u8; 2];
     stream.read_exact(&mut port).await?;
-
     Ok(())
+}
+
+async fn socks5_connect<S>(stream: &mut S, proxy: &Proxy, target: &SocketAddr) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // RFC 1928: SOCKS5 version/method negotiation.
+    let method = socks5_negotiate_method(stream, proxy).await?;
+    if method == 0x02 {
+        let (user, pass) = proxy.auth.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "SOCKS5 proxy requires username/password",
+            )
+        })?;
+        socks5_auth_user_pass(stream, user, pass).await?;
+    }
+
+    let req = socks5_build_connect_request(target)?;
+    stream.write_all(&req).await?;
+    stream.flush().await?;
+    socks5_read_connect_reply(stream).await
 }
 
 async fn http_connect_tunnel<S>(
@@ -1262,11 +1273,12 @@ pub(crate) fn apply_tcp_socket_options(
     tcp_nodelay: bool,
     tcp_keepalive: Option<std::time::Duration>,
 ) {
-    apply_tcp_socket_options_sockref(SockRef::from(stream), tcp_nodelay, tcp_keepalive);
+    let sock_ref = SockRef::from(stream);
+    apply_tcp_socket_options_sockref(&sock_ref, tcp_nodelay, tcp_keepalive);
 }
 
 fn apply_tcp_socket_options_sockref(
-    sock_ref: SockRef<'_>,
+    sock_ref: &SockRef<'_>,
     tcp_nodelay: bool,
     tcp_keepalive: Option<std::time::Duration>,
 ) {
@@ -1362,8 +1374,9 @@ mod tests {
         // Binding/listening is prohibited in some sandbox environments. Keep this test local
         // to socket options and avoid requiring a live TCP connection.
         let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).expect("socket");
+        let sock_ref = SockRef::from(&socket);
         apply_tcp_socket_options_sockref(
-            SockRef::from(&socket),
+            &sock_ref,
             true,
             Some(std::time::Duration::from_secs(123)),
         );

@@ -1787,6 +1787,12 @@ mod norito_rpc_fixture_tests {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::explicit_iter_loop,
+        clippy::collapsible_if,
+        clippy::collapsible_match
+    )]
     #[test]
     fn norito_rpc_fixture_manifest_roundtrips() {
         let path = manifest_path();

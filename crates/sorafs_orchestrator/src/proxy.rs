@@ -1376,8 +1376,10 @@ async fn handle_connection(
         if session_id.is_none() {
             session_id = Some(generate_session_id());
         }
-        let mut fallback_tagging = ProxyCacheTagging::default();
-        fallback_tagging.salt_hex = Some(generate_cache_salt());
+        let fallback_tagging = ProxyCacheTagging {
+            salt_hex: Some(generate_cache_salt()),
+            ..ProxyCacheTagging::default()
+        };
         cache_tags = CacheTagContext::from_cache_tagging(&fallback_tagging);
     }
     let session = Arc::new(ProxySession {

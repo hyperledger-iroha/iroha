@@ -107,6 +107,8 @@ struct ChallengeSpec {
     amount: String,
     issued_at_ms: Option<u64>,
     nonce_hex: String,
+    #[norito(default)]
+    sender_certificate_id_hex: Option<String>,
 }
 
 #[derive(Debug, JsonSerialize)]
@@ -287,6 +289,18 @@ fn load_challenge(spec: &ProofSpec, base_dir: &Path) -> Result<OfflineReceiptCha
         .wrap_err_with(|| format!("invalid amount in proof `{}`", spec.label))?;
     let nonce = parse_hash_hex("nonce_hex", &source.nonce_hex)
         .wrap_err_with(|| format!("invalid nonce in proof `{}`", spec.label))?;
+    let sender_certificate_id = source
+        .sender_certificate_id_hex
+        .as_deref()
+        .map(|value| parse_hash_hex("sender_certificate_id_hex", value))
+        .transpose()
+        .wrap_err_with(|| {
+            format!(
+                "invalid sender_certificate_id_hex in proof `{}`",
+                spec.label
+            )
+        })?
+        .unwrap_or(nonce);
     let issued_at_ms = source.issued_at_ms.unwrap_or(spec.manifest_issued_at_ms);
 
     Ok(OfflineReceiptChallengePreimage {
@@ -295,6 +309,7 @@ fn load_challenge(spec: &ProofSpec, base_dir: &Path) -> Result<OfflineReceiptCha
         asset,
         amount,
         issued_at_ms,
+        sender_certificate_id,
         nonce,
     })
 }
@@ -327,6 +342,7 @@ mod tests {
             amount: "25.00".to_string(),
             issued_at_ms,
             nonce_hex: NONCE_HEX.to_string(),
+            sender_certificate_id_hex: None,
         }
     }
 

@@ -74,7 +74,7 @@ fn handle_bundle(spec: &BundleSpec, base_dir: &Path, output_root: &Path) -> Resu
     write_norito_bytes(&dir.join("bundle.norito"), &transfer)?;
 
     let receipts_root = compute_receipts_root(&transfer)?;
-    let record = build_record(spec, transfer)?;
+    let record = build_record(spec, transfer, base_dir)?;
     let sum_request = record.to_proof_request_sum().map_err(|err| eyre!(err))?;
     let counter_checkpoint = match spec.counter_checkpoint {
         Some(value) => value,
@@ -194,7 +194,7 @@ fn build_receipts(specs: &[ReceiptSpec], base_dir: &Path) -> Result<Vec<OfflineS
             invoice_id: spec.invoice_id.clone(),
             platform_proof,
             platform_snapshot,
-            sender_certificate: certificate,
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature,
         });
     }
@@ -204,6 +204,7 @@ fn build_receipts(specs: &[ReceiptSpec], base_dir: &Path) -> Result<Vec<OfflineS
 fn build_record(
     spec: &BundleSpec,
     transfer: OfflineToOnlineTransfer,
+    base_dir: &Path,
 ) -> Result<OfflineTransferRecord> {
     let controller = if let Some(id) = &spec.controller {
         parse_account_id(id)?
@@ -221,8 +222,17 @@ fn build_record(
     } else {
         OfflineTransferStatus::Settled
     };
+    let primary_certificate = spec
+        .receipts
+        .first()
+        .ok_or_else(|| eyre!("bundle `{}` must contain at least one receipt", spec.label))?
+        .sender_certificate
+        .load(base_dir)?;
     let pos_verdict_snapshots =
-        iroha_data_model::offline::OfflineTransferRecord::collect_pos_verdict_snapshots(&transfer);
+        iroha_data_model::offline::OfflineTransferRecord::collect_pos_verdict_snapshots(
+            &transfer,
+            &primary_certificate,
+        );
     Ok(OfflineTransferRecord {
         transfer,
         controller,

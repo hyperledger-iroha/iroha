@@ -705,6 +705,16 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
     }
 
     fn deserialize(archived: &'a norito::core::Archived<InstructionBox>) -> Self {
+        const MAX_MESSAGE_LEN: usize = 256;
+
+        let truncate_message = |mut message: String| {
+            // Keep the placeholder bounded; it may end up in logs/errors.
+            if message.len() > MAX_MESSAGE_LEN {
+                message.truncate(MAX_MESSAGE_LEN);
+            }
+            message
+        };
+
         let pair: Result<(String, Vec<u8>), norito::core::Error> =
             norito::core::NoritoDeserialize::try_deserialize(archived.cast());
         match pair {
@@ -714,23 +724,14 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
                     // Avoid panics on malformed instruction payloads (DoS vector).
                     // Represent the decode error as a sentinel instruction that the executor rejects.
                     let hash: [u8; 32] = iroha_crypto::Hash::new(&bytes).into();
-                    let mut message = err.to_string();
-                    // Keep the placeholder bounded; it may end up in logs/errors.
-                    const MAX_MESSAGE_LEN: usize = 256;
-                    if message.len() > MAX_MESSAGE_LEN {
-                        message.truncate(MAX_MESSAGE_LEN);
-                    }
+                    let message = truncate_message(err.to_string());
                     InstructionBox::from(crate::isi::transparent::InvalidInstruction::new(
                         name, hash, message,
                     ))
                 }
             },
             Err(err) => {
-                let mut message = err.to_string();
-                const MAX_MESSAGE_LEN: usize = 256;
-                if message.len() > MAX_MESSAGE_LEN {
-                    message.truncate(MAX_MESSAGE_LEN);
-                }
+                let message = truncate_message(err.to_string());
                 InstructionBox::from(crate::isi::transparent::InvalidInstruction::new(
                     "<norito>", [0u8; 32], message,
                 ))
@@ -743,7 +744,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
     ) -> Result<Self, norito::core::Error> {
         let (name, bytes): (String, Vec<u8>) =
             norito::core::NoritoDeserialize::try_deserialize(archived.cast())?;
-        decode_instruction_from_pair(&name, &bytes).map_err(norito::core::Error::from)
+        decode_instruction_from_pair(&name, &bytes)
     }
 }
 
@@ -804,6 +805,10 @@ impl iroha_schema::TypeId for InstructionBox {
 /// The `name` must be either the canonical Rust `type_name` or a wire-id
 /// registered in the instruction registry. The `payload` must be framed with
 /// the Norito header as produced by [`frame_instruction_payload`].
+///
+/// # Errors
+/// Returns `norito::Error` if the instruction name is not registered or payload
+/// decoding fails.
 pub fn decode_instruction_from_pair(
     name: &str,
     payload: &[u8],
@@ -1106,7 +1111,9 @@ pub fn set_instruction_registry(registry: InstructionRegistry) {
     }
     #[cfg(not(test))]
     if let Some(lock) = INSTRUCTION_REGISTRY.get() {
-        let mut guard = lock.write().unwrap_or_else(|err| err.into_inner());
+        let mut guard = lock
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = registry;
     } else {
         let _ = INSTRUCTION_REGISTRY.set(RwLock::new(registry));
@@ -1142,7 +1149,7 @@ fn instruction_registry() -> InstructionRegistryReadGuard {
     let registry = INSTRUCTION_REGISTRY
         .get_or_init(|| RwLock::new(Arc::new(crate::instruction_registry::default())))
         .read()
-        .unwrap_or_else(|err| err.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     InstructionRegistryReadGuard::Global(Arc::clone(&registry))
 }
 

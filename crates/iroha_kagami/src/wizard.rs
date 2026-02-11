@@ -565,7 +565,7 @@ fn load_config_template(
     Ok((config, defaults.genesis_template.to_string()))
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 fn apply_overrides(
     config: &mut TomlValue,
     answers: &Answers,

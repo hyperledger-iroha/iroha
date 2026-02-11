@@ -284,7 +284,7 @@ mod tests {
         offline::{
             AndroidIntegrityPolicy, AppleAppAttestProof, OfflineAllowanceCommitment,
             OfflineBalanceProof, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
-            OfflineSpendReceipt, OfflineWalletPolicy,
+            OfflineSpendReceipt, OfflineWalletCertificate, OfflineWalletPolicy,
         },
     };
 

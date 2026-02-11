@@ -3444,6 +3444,8 @@ mod tests {
             attachments: None,
             platform_snapshot: None,
         };
+        let pos_verdict_snapshots =
+            OfflineTransferRecord::collect_pos_verdict_snapshots(&transfer, &snapshot_certificate);
         OfflineTransferRecord {
             transfer,
             controller: sample_account(0xA1, "sbp"),
@@ -3452,10 +3454,7 @@ mod tests {
             recorded_at_height: 1,
             archived_at_height: None,
             history: Vec::new(),
-            pos_verdict_snapshots: OfflineTransferRecord::collect_pos_verdict_snapshots(
-                &transfer,
-                &snapshot_certificate,
-            ),
+            pos_verdict_snapshots,
             verdict_snapshot: Some(OfflineVerdictSnapshot::from_certificate(
                 &snapshot_certificate,
             )),

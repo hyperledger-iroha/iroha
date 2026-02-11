@@ -71,6 +71,7 @@ fn puzzle_handshake(difficulty: u8, memory_kib: u32) -> ActualSoranetHandshake {
     handshake
 }
 
+#[allow(clippy::too_many_lines)]
 fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHandshake) -> Config {
     let public_addr = addr.clone();
     Config {

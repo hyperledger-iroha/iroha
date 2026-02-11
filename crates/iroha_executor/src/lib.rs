@@ -350,169 +350,100 @@ mod tests {
 
     static CALLED: AtomicBool = AtomicBool::new(false);
 
+    #[cfg(not(feature = "fast_dsl"))]
+    macro_rules! iter_query_empty_batch {
+        ($query_box:expr; $($ty:ty => $variant:ident),+ $(,)?) => {{
+            'found: {
+                $(
+                    if data_model::query::iter_query_inner::<$ty>($query_box).is_some() {
+                        break 'found QueryOutputBatchBox::$variant(Vec::new());
+                    }
+                )+
+                QueryOutputBatchBox::Permission(Vec::new())
+            }
+        }};
+    }
+
+    #[cfg(not(feature = "fast_dsl"))]
+    fn empty_iterable_batch_non_fast(
+        query: &data_model::query::QueryWithParams,
+    ) -> QueryOutputBatchBox {
+        let query_box = query
+            .query_box()
+            .expect("non-fast_dsl query must provide query box");
+        iter_query_empty_batch!(
+            query_box;
+            data_model::domain::Domain => Domain,
+            data_model::account::Account => Account,
+            data_model::asset::value::Asset => Asset,
+            data_model::asset::definition::AssetDefinition => AssetDefinition,
+            data_model::repo::RepoAgreement => RepoAgreement,
+            data_model::nft::Nft => Nft,
+            data_model::role::Role => Role,
+            data_model::role::RoleId => RoleId,
+            data_model::peer::PeerId => Peer,
+            data_model::trigger::TriggerId => TriggerId,
+            data_model::trigger::Trigger => Trigger,
+            data_model::query::CommittedTransaction => CommittedTransaction,
+            data_model::block::SignedBlock => Block,
+            data_model::block::BlockHeader => BlockHeader,
+            data_model::proof::ProofRecord => ProofRecord,
+            data_model::permission::Permission => Permission,
+            data_model::offline::OfflineAllowanceRecord => OfflineAllowanceRecord,
+            data_model::offline::OfflineTransferRecord => OfflineToOnlineTransfer,
+            data_model::offline::OfflineCounterSummary => OfflineCounterSummary,
+            data_model::offline::OfflineVerdictRevocation => OfflineVerdictRevocation,
+        )
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    fn empty_iterable_batch_fast(
+        query: &data_model::query::QueryWithParams,
+    ) -> QueryOutputBatchBox {
+        match query.item {
+            QueryItemKind::Domain => QueryOutputBatchBox::Domain(Vec::new()),
+            QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
+            QueryItemKind::Asset => QueryOutputBatchBox::Asset(Vec::new()),
+            QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
+            QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),
+            QueryItemKind::Nft => QueryOutputBatchBox::Nft(Vec::new()),
+            QueryItemKind::Role => QueryOutputBatchBox::Role(Vec::new()),
+            QueryItemKind::RoleId => QueryOutputBatchBox::RoleId(Vec::new()),
+            QueryItemKind::PeerId => QueryOutputBatchBox::Peer(Vec::new()),
+            QueryItemKind::TriggerId => QueryOutputBatchBox::TriggerId(Vec::new()),
+            QueryItemKind::Trigger => QueryOutputBatchBox::Trigger(Vec::new()),
+            QueryItemKind::CommittedTransaction => {
+                QueryOutputBatchBox::CommittedTransaction(Vec::new())
+            }
+            QueryItemKind::SignedBlock => QueryOutputBatchBox::Block(Vec::new()),
+            QueryItemKind::BlockHeader => QueryOutputBatchBox::BlockHeader(Vec::new()),
+            QueryItemKind::ProofRecord => QueryOutputBatchBox::ProofRecord(Vec::new()),
+            QueryItemKind::Permission => QueryOutputBatchBox::Permission(Vec::new()),
+            QueryItemKind::OfflineAllowanceRecord => {
+                QueryOutputBatchBox::OfflineAllowanceRecord(Vec::new())
+            }
+            QueryItemKind::OfflineToOnlineTransfer => {
+                QueryOutputBatchBox::OfflineToOnlineTransfer(Vec::new())
+            }
+            QueryItemKind::OfflineCounterSummary => {
+                QueryOutputBatchBox::OfflineCounterSummary(Vec::new())
+            }
+            QueryItemKind::OfflineVerdictRevocation => {
+                QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())
+            }
+        }
+    }
+
     fn empty_iterable_batch(
         query: &data_model::query::QueryWithParams,
     ) -> QueryOutputBatchBoxTuple {
         #[cfg(not(feature = "fast_dsl"))]
-        {
-            let query_box = query
-                .query_box()
-                .expect("non-fast_dsl query must provide query box");
-            let batch =
-                if data_model::query::iter_query_inner::<data_model::domain::Domain>(query_box)
-                    .is_some()
-                {
-                    QueryOutputBatchBox::Domain(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::account::Account>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::Account(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::asset::value::Asset>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::Asset(Vec::new())
-                } else if data_model::query::iter_query_inner::<
-                    data_model::asset::definition::AssetDefinition,
-                >(query_box)
-                .is_some()
-                {
-                    QueryOutputBatchBox::AssetDefinition(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::repo::RepoAgreement>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::RepoAgreement(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::nft::Nft>(query_box)
-                    .is_some()
-                {
-                    QueryOutputBatchBox::Nft(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::role::Role>(query_box)
-                    .is_some()
-                {
-                    QueryOutputBatchBox::Role(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::role::RoleId>(query_box)
-                    .is_some()
-                {
-                    QueryOutputBatchBox::RoleId(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::peer::PeerId>(query_box)
-                    .is_some()
-                {
-                    QueryOutputBatchBox::Peer(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::trigger::TriggerId>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::TriggerId(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::trigger::Trigger>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::Trigger(Vec::new())
-                } else if data_model::query::iter_query_inner::<
-                    data_model::query::CommittedTransaction,
-                >(query_box)
-                .is_some()
-                {
-                    QueryOutputBatchBox::CommittedTransaction(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::block::SignedBlock>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::Block(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::block::BlockHeader>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::BlockHeader(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::proof::ProofRecord>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::ProofRecord(Vec::new())
-                } else if data_model::query::iter_query_inner::<data_model::permission::Permission>(
-                    query_box,
-                )
-                .is_some()
-                {
-                    QueryOutputBatchBox::Permission(Vec::new())
-                } else if data_model::query::iter_query_inner::<
-                    data_model::offline::OfflineAllowanceRecord,
-                >(query_box)
-                .is_some()
-                {
-                    QueryOutputBatchBox::OfflineAllowanceRecord(Vec::new())
-                } else if data_model::query::iter_query_inner::<
-                    data_model::offline::OfflineTransferRecord,
-                >(query_box)
-                .is_some()
-                {
-                    QueryOutputBatchBox::OfflineToOnlineTransfer(Vec::new())
-                } else if data_model::query::iter_query_inner::<
-                    data_model::offline::OfflineCounterSummary,
-                >(query_box)
-                .is_some()
-                {
-                    QueryOutputBatchBox::OfflineCounterSummary(Vec::new())
-                } else if data_model::query::iter_query_inner::<
-                    data_model::offline::OfflineVerdictRevocation,
-                >(query_box)
-                .is_some()
-                {
-                    QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())
-                } else {
-                    QueryOutputBatchBox::Permission(Vec::new())
-                };
-
-            return QueryOutputBatchBoxTuple::new(vec![batch]);
-        }
+        let batch = empty_iterable_batch_non_fast(query);
 
         #[cfg(feature = "fast_dsl")]
-        {
-            let batch = match query.item {
-                QueryItemKind::Domain => QueryOutputBatchBox::Domain(Vec::new()),
-                QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
-                QueryItemKind::Asset => QueryOutputBatchBox::Asset(Vec::new()),
-                QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
-                QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),
-                QueryItemKind::Nft => QueryOutputBatchBox::Nft(Vec::new()),
-                QueryItemKind::Role => QueryOutputBatchBox::Role(Vec::new()),
-                QueryItemKind::RoleId => QueryOutputBatchBox::RoleId(Vec::new()),
-                QueryItemKind::PeerId => QueryOutputBatchBox::Peer(Vec::new()),
-                QueryItemKind::TriggerId => QueryOutputBatchBox::TriggerId(Vec::new()),
-                QueryItemKind::Trigger => QueryOutputBatchBox::Trigger(Vec::new()),
-                QueryItemKind::CommittedTransaction => {
-                    QueryOutputBatchBox::CommittedTransaction(Vec::new())
-                }
-                QueryItemKind::SignedBlock => QueryOutputBatchBox::Block(Vec::new()),
-                QueryItemKind::BlockHeader => QueryOutputBatchBox::BlockHeader(Vec::new()),
-                QueryItemKind::ProofRecord => QueryOutputBatchBox::ProofRecord(Vec::new()),
-                QueryItemKind::Permission => QueryOutputBatchBox::Permission(Vec::new()),
-                QueryItemKind::OfflineAllowanceRecord => {
-                    QueryOutputBatchBox::OfflineAllowanceRecord(Vec::new())
-                }
-                QueryItemKind::OfflineToOnlineTransfer => {
-                    QueryOutputBatchBox::OfflineToOnlineTransfer(Vec::new())
-                }
-                QueryItemKind::OfflineCounterSummary => {
-                    QueryOutputBatchBox::OfflineCounterSummary(Vec::new())
-                }
-                QueryItemKind::OfflineVerdictRevocation => {
-                    QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())
-                }
-            };
+        let batch = empty_iterable_batch_fast(query);
 
-            QueryOutputBatchBoxTuple::new(vec![batch])
-        }
+        QueryOutputBatchBoxTuple::new(vec![batch])
     }
 
     #[unsafe(no_mangle)]

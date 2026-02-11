@@ -1834,6 +1834,8 @@ mod run {
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
     const OUTBOUND_DRAIN_LO_MAX: usize = 32;
     const INBOUND_SEND_WARN_MS: u64 = 250;
+    const FORMAT_ERROR_BACKOFF_BASE_MS: u64 = 10;
+    const FORMAT_ERROR_BACKOFF_MAX_MS: u64 = 200;
 
     fn low_topic_label(topic: LowTopic) -> &'static str {
         match topic {
@@ -2147,8 +2149,6 @@ mod run {
             let mut hi_budget: u8 = HI_BUDGET_RESET;
             let mut low_rr: u8 = 0;
             let mut format_error_streak: u32 = 0;
-            const FORMAT_ERROR_BACKOFF_BASE_MS: u64 = 10;
-            const FORMAT_ERROR_BACKOFF_MAX_MS: u64 = 200;
 
             loop {
                 if let Some((topic, msg)) = maybe_take_low_after_hi(
@@ -2210,9 +2210,7 @@ mod run {
                 // I/O driver churn under load.
                 let mut drained_hi = 0usize;
                 while drained_hi < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
-                    let mut progressed = false;
-
-                    if let Some(m) = hi_consensus_rx.try_recv_now() {
+                    let mut progressed = if let Some(m) = hi_consensus_rx.try_recv_now() {
                         iroha_logger::trace!("Post message (hi:consensus/drain)");
                         if let Err(error) =
                             message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
@@ -2222,8 +2220,10 @@ mod run {
                         }
                         hi_budget = hi_budget.saturating_sub(1);
                         drained_hi = drained_hi.saturating_add(1);
-                        progressed = true;
-                    }
+                        true
+                    } else {
+                        false
+                    };
                     if hi_budget == 0 {
                         break;
                     }
@@ -2442,8 +2442,7 @@ mod run {
                                     payload_bytes: encoded_len,
                                 };
                                 match peer_message_senders.low.try_send(peer_message) {
-                                    Ok(()) => {}
-                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                                         // Best-effort delivery: drop when the network can't keep up.
                                     }
                                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
@@ -2672,7 +2671,7 @@ mod run {
                     result = async {
                         let sender = message_sender_low.as_mut().expect("ready implies sender present");
                         sender.send().await
-                    }, if message_sender_low.as_ref().is_some_and(|s| s.ready()) => {
+                    }, if message_sender_low.as_ref().is_some_and(MessageSender::ready) => {
                         if let Err(error) = result {
                             iroha_logger::warn!(%error, "Failed to send message to peer (low stream); falling back to hi stream");
                             message_sender_low = None;
@@ -4461,13 +4460,6 @@ mod state {
                 quic_dialer,
             }: Self,
         ) -> Result<ConnectedTo, crate::Error> {
-            let tcp_opts = crate::transport::TcpConnectOptions {
-                proxy: proxy_policy,
-                proxy_tls_verify,
-                proxy_tls_pinned_cert_der,
-                tcp_nodelay,
-                tcp_keepalive,
-            };
             #[cfg(feature = "p2p_ws")]
             async fn dial_ws(
                 peer_addr: &iroha_primitives::addr::SocketAddr,
@@ -4725,11 +4717,6 @@ mod state {
             }
 
             #[cfg(feature = "p2p_ws")]
-            let mut ws_tried = false;
-            #[cfg(not(feature = "p2p_ws"))]
-            let ws_tried = true;
-
-            #[cfg(feature = "p2p_ws")]
             fn ws_endpoint(peer_addr: &iroha_primitives::addr::SocketAddr) -> String {
                 match peer_addr {
                     iroha_primitives::addr::SocketAddr::Ipv4(addr) => {
@@ -4744,6 +4731,19 @@ mod state {
                     }
                 }
             }
+
+            let tcp_opts = crate::transport::TcpConnectOptions {
+                proxy: proxy_policy,
+                proxy_tls_verify,
+                proxy_tls_pinned_cert_der,
+                tcp_nodelay,
+                tcp_keepalive,
+            };
+
+            #[cfg(feature = "p2p_ws")]
+            let mut ws_tried = false;
+            #[cfg(not(feature = "p2p_ws"))]
+            let ws_tried = true;
 
             #[cfg(feature = "p2p_ws")]
             if prefer_ws_fallback {
@@ -4836,7 +4836,7 @@ mod state {
                                         tcp_fut.await
                                     }
                                 },
-                                _ = &mut stagger => {
+                                () = &mut stagger => {
                                     let mut quic_err: Option<crate::Error> = None;
                                     let mut tcp_err: Option<crate::Error> = None;
                                     loop {
