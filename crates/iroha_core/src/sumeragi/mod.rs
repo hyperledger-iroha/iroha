@@ -5843,7 +5843,9 @@ mod tests {
     fn run_worker_iteration_ticks_when_backlogged_before_max_gap() {
         status::reset_worker_loop_snapshot_for_tests();
 
-        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_total = VOTE_BURST_CAP_WITH_BLOCKS.saturating_add(2);
+        let vote_cap = vote_total.saturating_add(1);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(vote_cap);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -5852,7 +5854,7 @@ mod tests {
         let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
-        for _ in 0..2 {
+        for _ in 0..vote_total {
             let vote = Vote {
                 phase: Phase::Prepare,
                 block_hash,

@@ -36,7 +36,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
             .parse()
             .unwrap();
-    let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
+    let asset_def: AssetDefinitionId = "coin#wonderland".parse().unwrap();
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
@@ -112,8 +112,8 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
 
-    // Setup: register domain 'wonder', register accounts, asset definition, and mint 1_000 to 'from'
-    let domain_id: DomainId = "wonder".parse().unwrap();
+    // Setup: register domain 'wonderland', register accounts, asset definition, and mint 1_000 to 'from'
+    let domain_id: DomainId = "wonderland".parse().unwrap();
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));

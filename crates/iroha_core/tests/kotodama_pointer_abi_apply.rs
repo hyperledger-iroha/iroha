@@ -60,9 +60,12 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    // Setup: register `wonder` domain, accounts and asset def
-    let domain_id: DomainId = "wonder".parse().unwrap();
-    let reg_domain = RegisterBox::from(Register::domain(Domain::new(domain_id.clone())));
+    // Setup: register domains required by account ids and asset definition.
+    let account_domain_id: DomainId = "wonderland".parse().unwrap();
+    let reg_account_domain =
+        RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
+    let asset_domain_id: DomainId = "wonder".parse().unwrap();
+    let reg_asset_domain = RegisterBox::from(Register::domain(Domain::new(asset_domain_id)));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
     let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
     let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
@@ -71,7 +74,8 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     )));
     let executor = tx.world.executor().clone();
     for instr in [
-        InstructionBox::from(reg_domain),
+        InstructionBox::from(reg_account_domain),
+        InstructionBox::from(reg_asset_domain),
         InstructionBox::from(reg_from),
         InstructionBox::from(reg_to),
         InstructionBox::from(reg_asset_def),
