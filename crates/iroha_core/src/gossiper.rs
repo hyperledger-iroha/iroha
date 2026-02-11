@@ -2416,6 +2416,7 @@ mod tests {
             p2p_no_proxy: Vec::new(),
             p2p_proxy_tls_verify: true,
             p2p_proxy_tls_pinned_cert_der_base64: None,
+            scion: iroha_config::parameters::actual::ScionConfig::default(),
             quic_enabled: false,
             quic_datagrams_enabled: defaults::network::QUIC_DATAGRAMS_ENABLED,
             quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),

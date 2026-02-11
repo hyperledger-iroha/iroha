@@ -4862,6 +4862,18 @@ pub struct Halo2 {
         default = "defaults::zk::halo2::VERIFIER_MAX_BATCH"
     )]
     pub verifier_max_batch: u32,
+    /// Number of worker threads serving ZK lane verification (0 = auto).
+    #[config(
+        env = "ZK_HALO2_VERIFIER_WORKER_THREADS",
+        default = "defaults::zk::halo2::VERIFIER_WORKER_THREADS"
+    )]
+    pub verifier_worker_threads: usize,
+    /// Capacity of the ZK lane verifier queue (0 = auto-derived).
+    #[config(
+        env = "ZK_HALO2_VERIFIER_QUEUE_CAP",
+        default = "defaults::zk::halo2::VERIFIER_QUEUE_CAP"
+    )]
+    pub verifier_queue_cap: usize,
     /// Maximum accepted Norito envelope payload length (bytes).
     #[config(
         env = "ZK_HALO2_MAX_ENVELOPE_BYTES",
@@ -4897,6 +4909,8 @@ impl Halo2 {
             max_k: self.max_k,
             verifier_budget_ms: self.verifier_budget_ms,
             verifier_max_batch: self.verifier_max_batch,
+            verifier_worker_threads: self.verifier_worker_threads,
+            verifier_queue_cap: self.verifier_queue_cap,
             max_envelope_bytes: self.max_envelope_bytes,
             max_proof_bytes: self.max_proof_bytes,
             max_transcript_label_len: self.max_transcript_label_len,
@@ -7955,6 +7969,17 @@ pub struct Network {
     /// Total send buffer reserved for QUIC datagrams (bytes).
     #[config(default = "defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES")]
     pub quic_datagram_send_buffer_bytes: NonZeroUsize,
+    /// Enable SCION-guided outbound dialing when peer routes are configured.
+    #[config(default = "defaults::network::SCION_ENABLED")]
+    pub scion_enabled: bool,
+    /// Allow fallback to legacy dialing when SCION route dialing is unavailable or fails.
+    #[config(default = "defaults::network::SCION_FALLBACK_TO_LEGACY")]
+    pub scion_fallback_to_legacy: bool,
+    /// Optional SCION listener endpoint hint (reserved for future inbound support).
+    pub scion_listen_endpoint: Option<String>,
+    /// Optional per-peer SCION route map (`peer_id/public_key` -> `host:port`).
+    #[config(default)]
+    pub scion_routes: BTreeMap<String, String>,
     /// Optional outbound proxy URL for TCP-based dials (e.g., `http://user:pass@host:port`,
     /// `https://host:port`, `socks5://user:pass@host:port`, or `socks5h://host:port`).
     ///
@@ -8165,6 +8190,27 @@ pub struct Network {
 }
 
 impl Network {
+    fn parse_scion_routes(routes: BTreeMap<String, String>) -> BTreeMap<PeerId, SocketAddr> {
+        routes
+            .into_iter()
+            .map(|(raw_peer_id, raw_route)| {
+                let peer_label = raw_peer_id.trim();
+                let route_label = raw_route.trim();
+                let peer_id = peer_label.parse::<PeerId>().unwrap_or_else(|err| {
+                    panic!(
+                        "network.scion_routes key `{peer_label}` must be a peer public key: {err}"
+                    )
+                });
+                let route = route_label.parse::<SocketAddr>().unwrap_or_else(|err| {
+                    panic!(
+                        "network.scion_routes[{peer_label}] value `{route_label}` must be a socket address: {err}"
+                    )
+                });
+                (peer_id, route)
+            })
+            .collect()
+    }
+
     #[allow(clippy::too_many_lines)]
     fn parse(
         self,
@@ -8215,6 +8261,10 @@ impl Network {
             quic_datagram_max_payload_bytes,
             quic_datagram_receive_buffer_bytes,
             quic_datagram_send_buffer_bytes,
+            scion_enabled,
+            scion_fallback_to_legacy,
+            scion_listen_endpoint,
+            scion_routes,
             p2p_proxy,
             p2p_proxy_required,
             p2p_no_proxy,
@@ -8335,6 +8385,15 @@ impl Network {
         let soranet_handshake = soranet_handshake.parse();
         let soranet_privacy = user_soranet_privacy.parse();
         let soranet_vpn = soranet_vpn.parse();
+        let scion_listen_endpoint = scion_listen_endpoint.and_then(|endpoint| {
+            let trimmed = endpoint.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        });
+        let scion_routes = Self::parse_scion_routes(scion_routes);
         let lane_profile = actual::LaneProfile::from_label(&lane_profile);
         let limits = lane_profile.derived_limits();
         let max_incoming = max_incoming.or(limits.max_incoming);
@@ -8430,6 +8489,12 @@ impl Network {
                 quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes.get(),
                 quic_datagram_receive_buffer_bytes: quic_datagram_receive_buffer_bytes.get(),
                 quic_datagram_send_buffer_bytes: quic_datagram_send_buffer_bytes.get(),
+                scion: actual::ScionConfig {
+                    enabled: scion_enabled,
+                    fallback_to_legacy: scion_fallback_to_legacy,
+                    listen_endpoint: scion_listen_endpoint,
+                    routes: scion_routes,
+                },
                 tls_enabled,
                 tls_fallback_to_plain,
                 tls_listen_address,
@@ -8514,6 +8579,43 @@ impl Network {
                 },
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod network_scion_route_tests {
+    use super::*;
+
+    #[test]
+    fn parse_scion_routes_accepts_peer_key_map() {
+        let peer_key = KeyPair::random().public_key().to_string();
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            peer_key.clone(),
+            "scion-gateway.example.com:30257".to_owned(),
+        );
+
+        let parsed = Network::parse_scion_routes(routes);
+        let peer_id = peer_key.parse::<PeerId>().expect("peer id should parse");
+        let route = parsed.get(&peer_id).expect("route should exist");
+        assert_eq!("scion-gateway.example.com:30257", route.to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "network.scion_routes key")]
+    fn parse_scion_routes_rejects_invalid_peer_key() {
+        let mut routes = BTreeMap::new();
+        routes.insert("not-a-peer-key".to_owned(), "127.0.0.1:30257".to_owned());
+        let _ = Network::parse_scion_routes(routes);
+    }
+
+    #[test]
+    #[should_panic(expected = "network.scion_routes[")]
+    fn parse_scion_routes_rejects_invalid_route() {
+        let peer_key = KeyPair::random().public_key().to_string();
+        let mut routes = BTreeMap::new();
+        routes.insert(peer_key, "not-a-socket-address".to_owned());
+        let _ = Network::parse_scion_routes(routes);
     }
 }
 

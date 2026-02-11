@@ -14,7 +14,10 @@
 
 use std::{
     num::NonZeroU64,
+    sync::mpsc as std_mpsc,
     sync::{Arc, OnceLock},
+    thread,
+    time::Duration,
 };
 
 #[cfg(test)]
@@ -127,93 +130,198 @@ impl ZkLaneHandle {
 static GLOBAL_SENDER: OnceLock<ZkLaneHandle> = OnceLock::new();
 static EVENTS: OnceLock<crate::EventsSender> = OnceLock::new();
 
-fn process_batch(batch: &mut Vec<ZkTask>) {
-    for job in batch.drain(..) {
-        let dig = job.digest();
-        let outcome =
-            ivm::zk::verify_trace(&job.trace, &job.constraints, &job.mem_log, &job.reg_log)
-                .map(|()| ZkOutcome::Verified)
-                .unwrap_or(ZkOutcome::Rejected);
-        #[cfg(feature = "zk-preverify")]
-        if matches!(outcome, ZkOutcome::Verified) {
-            if let Some(header) = &job.header {
-                let artifact =
-                    crate::zk::make_trace_digest_artifact(job.code_hash, job.tx_hash.as_ref(), dig);
-                crate::zk::queue_trace_proof(header.height().get(), artifact);
-                crate::zk::queue_trace_for_proving(
-                    header.height().get(),
-                    crate::zk::TraceForProving::from_task(&job, dig),
-                );
+struct WorkerPool {
+    work_txs: Vec<std_mpsc::SyncSender<ZkTask>>,
+    join_handles: Vec<thread::JoinHandle<()>>,
+    next_worker: usize,
+}
+
+impl WorkerPool {
+    fn spawn(worker_threads: usize, work_queue_cap: usize) -> Self {
+        let mut work_txs = Vec::with_capacity(worker_threads);
+        let mut join_handles = Vec::with_capacity(worker_threads);
+        for idx in 0..worker_threads {
+            let (work_tx, work_rx) = std_mpsc::sync_channel::<ZkTask>(work_queue_cap);
+            work_txs.push(work_tx);
+            let name = format!("zk-lane-verify-{idx}");
+            let join_handle = thread::Builder::new()
+                .name(name)
+                .spawn(move || {
+                    while let Ok(job) = work_rx.recv() {
+                        process_job(job);
+                    }
+                })
+                .expect("failed to spawn zk lane verifier thread");
+            join_handles.push(join_handle);
+        }
+        Self {
+            work_txs,
+            join_handles,
+            next_worker: 0,
+        }
+    }
+
+    fn dispatch(&mut self, mut job: ZkTask) -> Result<(), ZkTask> {
+        if self.work_txs.is_empty() {
+            return Err(job);
+        }
+        let total = self.work_txs.len();
+        let mut disconnected = Vec::new();
+        for _ in 0..total {
+            let idx = self.next_worker % total;
+            self.next_worker = self.next_worker.saturating_add(1);
+            let work_tx = &self.work_txs[idx];
+            match work_tx.try_send(job) {
+                Ok(()) => {
+                    if !disconnected.is_empty() {
+                        self.prune_disconnected(disconnected);
+                    }
+                    return Ok(());
+                }
+                Err(std_mpsc::TrySendError::Full(returned)) => {
+                    job = returned;
+                }
+                Err(std_mpsc::TrySendError::Disconnected(returned)) => {
+                    job = returned;
+                    disconnected.push(idx);
+                }
             }
         }
-        let transport_desc = job.transport_capabilities.as_ref().map(|caps| {
-            format!(
-                "suite={}, datagram={}, max_dgram={}, feedback_ms={}, privacy={:?}",
-                caps.hpke_suite.suite_id(),
-                caps.use_datagram,
-                caps.max_segment_datagram_size,
-                caps.fec_feedback_interval_ms,
-                caps.privacy_bucket_granularity
+        if !disconnected.is_empty() {
+            self.prune_disconnected(disconnected);
+        }
+        Err(job)
+    }
+
+    fn prune_disconnected(&mut self, mut disconnected: Vec<usize>) {
+        disconnected.sort_unstable();
+        disconnected.dedup();
+        for idx in disconnected.into_iter().rev() {
+            if idx < self.work_txs.len() {
+                self.work_txs.swap_remove(idx);
+            }
+        }
+        if self.next_worker >= self.work_txs.len() {
+            self.next_worker = 0;
+        }
+    }
+}
+
+fn resolve_worker_threads(configured: usize) -> usize {
+    if configured == 0 {
+        std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+            .max(1)
+    } else {
+        configured.max(1)
+    }
+}
+
+fn resolve_queue_cap(configured: usize, workers: usize) -> usize {
+    if configured == 0 {
+        workers.saturating_mul(4).max(128)
+    } else {
+        configured.max(1)
+    }
+}
+
+fn process_job(job: ZkTask) {
+    let dig = job.digest();
+    let outcome = ivm::zk::verify_trace(&job.trace, &job.constraints, &job.mem_log, &job.reg_log)
+        .map(|()| ZkOutcome::Verified)
+        .unwrap_or(ZkOutcome::Rejected);
+    emit_outcome(job, dig, outcome);
+}
+
+fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: ZkOutcome) {
+    #[cfg(feature = "zk-preverify")]
+    if matches!(outcome, ZkOutcome::Verified) {
+        if let Some(header) = &job.header {
+            let artifact =
+                crate::zk::make_trace_digest_artifact(job.code_hash, job.tx_hash.as_ref(), dig);
+            crate::zk::queue_trace_proof(header.height().get(), artifact);
+            crate::zk::queue_trace_for_proving(
+                header.height().get(),
+                crate::zk::TraceForProving::from_task(&job, dig),
+            );
+        }
+    }
+    let transport_desc = job.transport_capabilities.as_ref().map(|caps| {
+        format!(
+            "suite={}, datagram={}, max_dgram={}, feedback_ms={}, privacy={:?}",
+            caps.hpke_suite.suite_id(),
+            caps.use_datagram,
+            caps.max_segment_datagram_size,
+            caps.fec_feedback_interval_ms,
+            caps.privacy_bucket_granularity
+        )
+    });
+    let negotiated_desc = job
+        .negotiated_capabilities
+        .map(|flags| format!("0x{:x}", flags.bits()));
+    iroha_logger::info!(
+        code_hash = %hex::encode(job.code_hash),
+        tx_hash = job.tx_hash.as_ref().map(|hash| hex::encode(hash.as_ref())),
+        transport = transport_desc.as_deref(),
+        negotiated_capabilities = negotiated_desc.as_deref(),
+        digest = %hex::encode(dig),
+        outcome = ?outcome,
+        cycles = job.trace.len(),
+        constraints = job.constraints.len(),
+        mem_events = job.mem_log.len(),
+        reg_events = job.reg_log.len(),
+        "zk_lane: verified formal trace"
+    );
+    if let Some(es) = EVENTS.get() {
+        let header = job.header.unwrap_or_else(|| {
+            iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero constant"),
+                None,
+                None,
+                None,
+                0,
+                0,
             )
         });
-        let negotiated_desc = job
-            .negotiated_capabilities
-            .map(|flags| format!("0x{:x}", flags.bits()));
-        iroha_logger::info!(
-            code_hash = %hex::encode(job.code_hash),
-            tx_hash = job.tx_hash.as_ref().map(|hash| hex::encode(hash.as_ref())),
-            transport = transport_desc.as_deref(),
-            negotiated_capabilities = negotiated_desc.as_deref(),
-            digest = %hex::encode(dig),
-            outcome = ?outcome,
-            cycles = job.trace.len(),
-            constraints = job.constraints.len(),
-            mem_events = job.mem_log.len(),
-            reg_events = job.reg_log.len(),
-            "zk_lane: verified formal trace"
-        );
-        if let Some(es) = EVENTS.get() {
-            let header = job.header.unwrap_or_else(|| {
-                iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).expect("non-zero constant"),
-                    None,
-                    None,
-                    None,
-                    0,
-                    0,
-                )
-            });
-            let (kind, details) = match outcome {
-                ZkOutcome::Verified => (
-                    "zk_trace_verified",
-                    format!(
-                        "trace verified: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
-                        hex::encode(job.code_hash),
-                        hex::encode(dig),
-                        transport_desc,
-                        negotiated_desc
-                    ),
+        let (kind, details) = match outcome {
+            ZkOutcome::Verified => (
+                "zk_trace_verified",
+                format!(
+                    "trace verified: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
+                    hex::encode(job.code_hash),
+                    hex::encode(dig),
+                    transport_desc,
+                    negotiated_desc
                 ),
-                ZkOutcome::Rejected => (
-                    "zk_trace_rejected",
-                    format!(
-                        "trace rejected: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
-                        hex::encode(job.code_hash),
-                        hex::encode(dig),
-                        transport_desc,
-                        negotiated_desc
-                    ),
+            ),
+            ZkOutcome::Rejected => (
+                "zk_trace_rejected",
+                format!(
+                    "trace rejected: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
+                    hex::encode(job.code_hash),
+                    hex::encode(dig),
+                    transport_desc,
+                    negotiated_desc
                 ),
-            };
-            let warn = iroha_data_model::events::pipeline::PipelineWarning {
-                header,
-                kind: kind.to_string(),
-                details,
-            };
-            let _ = es.send(iroha_data_model::events::EventBox::from(
-                iroha_data_model::events::pipeline::PipelineEventBox::Warning(warn),
-            ));
-        }
+            ),
+        };
+        let warn = iroha_data_model::events::pipeline::PipelineWarning {
+            header,
+            kind: kind.to_string(),
+            details,
+        };
+        let _ = es.send(iroha_data_model::events::EventBox::from(
+            iroha_data_model::events::pipeline::PipelineEventBox::Warning(warn),
+        ));
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn process_batch(batch: &mut Vec<ZkTask>) {
+    for job in batch.drain(..) {
+        process_job(job);
     }
 }
 
@@ -245,33 +353,77 @@ pub fn start(
         // Already started in this process.
         return Some((existing.clone(), tokio::spawn(async {})));
     }
-    // Use a small bounded channel; config integration can be added if needed.
-    let (tx, mut rx) = mpsc::channel::<ZkTask>(128);
+    let workers = resolve_worker_threads(cfg.verifier_worker_threads);
+    let queue_cap = resolve_queue_cap(cfg.verifier_queue_cap, workers);
+    let worker_queue_cap = queue_cap.saturating_div(workers).max(1);
+    let (tx, mut rx) = mpsc::channel::<ZkTask>(queue_cap);
     let handle = ZkLaneHandle(tx.clone());
     let _ = GLOBAL_SENDER.set(handle.clone());
 
     let max_batch = cfg.verifier_max_batch.max(1) as usize;
     let task = tokio::spawn(async move {
+        let mut worker_pool = WorkerPool::spawn(workers, worker_queue_cap);
         let mut pending: Vec<ZkTask> = Vec::with_capacity(max_batch);
+        let dispatch_pending = |pool: &mut WorkerPool, pending: &mut Vec<ZkTask>| {
+            if pending.is_empty() {
+                return;
+            }
+            let mut retained = Vec::new();
+            for job in pending.drain(..) {
+                if let Err(job) = pool.dispatch(job) {
+                    retained.push(job);
+                }
+            }
+            *pending = retained;
+        };
         loop {
             tokio::select! {
                 biased;
                 maybe = rx.recv() => {
                     if let Some(job) = maybe {
-                        pending.push(job);
-                        if pending.len() >= max_batch { process_batch(&mut pending); }
+                        if pending.len() < queue_cap {
+                            pending.push(job);
+                        } else {
+                            iroha_logger::warn!(
+                                queue_cap,
+                                workers,
+                                "zk_lane: dropping trace verification task due to saturated dispatch backlog"
+                            );
+                        }
+                        if pending.len() >= max_batch {
+                            dispatch_pending(&mut worker_pool, &mut pending);
+                        }
                     } else {
-                        // Channel closed; drain and exit
-                        if !pending.is_empty() { process_batch(&mut pending); }
+                        dispatch_pending(&mut worker_pool, &mut pending);
                         break;
                     }
                 }
                 // Periodically drain small batches to avoid unbounded latency
-                () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
-                    if !pending.is_empty() { process_batch(&mut pending); }
+                () = tokio::time::sleep(Duration::from_millis(5)) => {
+                    dispatch_pending(&mut worker_pool, &mut pending);
                 }
             }
         }
+        if !pending.is_empty() {
+            iroha_logger::warn!(
+                dropped = pending.len(),
+                "zk_lane: dropping pending verification tasks during shutdown"
+            );
+        }
+        let WorkerPool {
+            work_txs,
+            join_handles: joins,
+            ..
+        } = worker_pool;
+        drop(work_txs);
+        let _ = tokio::task::spawn_blocking(move || {
+            for join in joins {
+                if let Err(err) = join.join() {
+                    iroha_logger::warn!(?err, "zk lane verifier thread exited with panic");
+                }
+            }
+        })
+        .await;
     });
     Some((handle, task))
 }
@@ -319,6 +471,14 @@ mod tests {
         let a = mk(3).digest();
         let b = mk(4).digest();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn queue_cap_defaults_scale_with_workers() {
+        assert_eq!(resolve_queue_cap(0, 1), 128);
+        assert_eq!(resolve_queue_cap(0, 32), 128);
+        assert_eq!(resolve_queue_cap(0, 64), 256);
+        assert_eq!(resolve_queue_cap(17, 4), 17);
     }
 
     #[cfg(feature = "zk-preverify")]
