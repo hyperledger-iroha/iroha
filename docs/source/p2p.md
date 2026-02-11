@@ -72,6 +72,8 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 - `p2p_total_cap_reject_total`: number of connections rejected due to `max_total_connections`.
 - `p2p_ws_inbound_total`: accepted inbound WebSocket P2P connections.
 - `p2p_ws_outbound_total`: successful outbound WebSocket P2P connections.
+- `p2p_scion_inbound_total`: accepted inbound SCION P2P connections (reserved for future inbound listener support).
+- `p2p_scion_outbound_total`: successful outbound SCION-guided P2P connections.
 
 These metrics help identify saturation scenarios and networking issues. Drop counters remain at zero as long as queues keep up with traffic.
 
@@ -158,6 +160,10 @@ p2p_ws_inbound_total 0
 # HELP p2p_ws_outbound_total Successful outbound WebSocket P2P connections
 # TYPE p2p_ws_outbound_total gauge
 p2p_ws_outbound_total 0
+
+# HELP p2p_scion_outbound_total Successful outbound SCION P2P connections
+# TYPE p2p_scion_outbound_total gauge
+p2p_scion_outbound_total 0
 ```
 
 ### Per-Topic Scheduling
@@ -241,6 +247,22 @@ relay_hub_addresses = ["hub1.example.com:1337", "hub2.example.com:1337"]
 - Address preference (default): hostname first, then IPv6, then IPv4.
 - Stagger interval: configurable via `[network]` as `happy_eyeballs_stagger_ms` (default 100ms). Increase if you have very large peer lists and want to further reduce burst dials; decrease for faster failover on slow networks.
 - Per-address backoff: failed attempts back off independently per address with exponential jitter (up to 5s), avoiding stampedes.
+
+### SCION Capability Dialing
+
+SCION preference is automatic and capability-driven.
+
+Behavior:
+- Each peer advertises `scion_supported` in handshake metadata.
+- Peers gossip observed transport capabilities (`scion_supported`) alongside peer-address gossip.
+- Outbound dialing prefers SCION only when both peers advertise SCION support.
+- If SCION preference fails for a peer, dialing falls back to legacy transport strategy automatically.
+- Peers without SCION capability continue to use existing QUIC/TLS/TCP/WS behavior.
+- Successful SCION-preferred outbound connections increment `p2p_scion_outbound_total`.
+
+Notes:
+- Existing `network.scion_*` config fields are ignored at runtime and retained only for backward-compatible config parsing.
+- `scion_listen_endpoint` remains reserved for future inbound listener support.
 
 ### Example: `[network]` TOML and Feature Flags
 

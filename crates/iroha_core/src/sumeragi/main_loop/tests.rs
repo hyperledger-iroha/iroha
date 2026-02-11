@@ -1978,6 +1978,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         p2p_no_proxy: Vec::new(),
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
+        scion: iroha_config::parameters::actual::ScionConfig::default(),
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
         quic_datagram_max_payload_bytes:
@@ -25977,6 +25978,7 @@ async fn stale_pending_block_requeues_transactions() {
         p2p_no_proxy: Vec::new(),
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
+        scion: iroha_config::parameters::actual::ScionConfig::default(),
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
         quic_datagram_max_payload_bytes:
@@ -54112,6 +54114,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         p2p_no_proxy: Vec::new(),
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
+        scion: iroha_config::parameters::actual::ScionConfig::default(),
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
         quic_datagram_max_payload_bytes:

@@ -58,6 +58,8 @@ mod goldilocks {
             max_k: 18,
             verifier_budget_ms: 200,
             verifier_max_batch: 8,
+            verifier_worker_threads: defaults::zk::halo2::VERIFIER_WORKER_THREADS,
+            verifier_queue_cap: defaults::zk::halo2::VERIFIER_QUEUE_CAP,
             max_envelope_bytes: defaults::zk::halo2::MAX_ENVELOPE_BYTES,
             max_proof_bytes: defaults::zk::halo2::MAX_PROOF_BYTES,
             max_transcript_label_len: defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,

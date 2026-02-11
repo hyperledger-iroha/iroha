@@ -391,6 +391,10 @@ static BACKOFF_SCHEDULED: AtomicU64 = AtomicU64::new(0);
 static WS_INBOUND_ACCEPTED: AtomicU64 = AtomicU64::new(0);
 /// Count of outbound WS connections successfully established.
 static WS_OUTBOUND_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+/// Count of inbound SCION connections accepted.
+static SCION_INBOUND_ACCEPTED: AtomicU64 = AtomicU64::new(0);
+/// Count of outbound SCION connections successfully established.
+static SCION_OUTBOUND_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 /// Count of accepted connections dropped due to per-IP accept throttle.
 static ACCEPT_THROTTLED: AtomicU64 = AtomicU64::new(0);
 /// Count of accept throttle bucket evictions (idle or capacity).
@@ -859,6 +863,26 @@ pub fn ws_inbound_total() -> u64 {
 /// Total successful outbound WS connections.
 pub fn ws_outbound_total() -> u64 {
     WS_OUTBOUND_SUCCESSES.load(Ordering::Relaxed)
+}
+
+/// Increment SCION inbound accepted counter.
+pub fn inc_scion_inbound() {
+    SCION_INBOUND_ACCEPTED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment SCION outbound success counter.
+pub fn inc_scion_outbound() {
+    SCION_OUTBOUND_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Total accepted inbound SCION connections.
+pub fn scion_inbound_total() -> u64 {
+    SCION_INBOUND_ACCEPTED.load(Ordering::Relaxed)
+}
+
+/// Total successful outbound SCION connections.
+pub fn scion_outbound_total() -> u64 {
+    SCION_OUTBOUND_SUCCESSES.load(Ordering::Relaxed)
 }
 
 /// Returns the number of connections rejected by the per‑IP accept throttle.
@@ -1586,10 +1610,14 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     subscribe_to_peers_messages_sender: mpsc::UnboundedSender<Subscriber<T>>,
     /// Receiver of `OnlinePeer` message
     online_peers_receiver: watch::Receiver<OnlinePeers>,
+    /// Receiver of online peer transport capabilities.
+    online_peer_capabilities_receiver: watch::Receiver<message::OnlinePeerCapabilities>,
     /// [`UpdateTopology`] message sender
     update_topology_sender: mpsc::UnboundedSender<UpdateTopology>,
     /// [`UpdatePeers`] message sender
     update_peers_sender: mpsc::UnboundedSender<UpdatePeers>,
+    /// [`UpdatePeerCapabilities`] message sender
+    update_peer_capabilities_sender: mpsc::UnboundedSender<message::UpdatePeerCapabilities>,
     /// Trusted peers update sender
     update_trusted_peers_sender: mpsc::UnboundedSender<UpdateTrustedPeers>,
     /// [`UpdateAcl`] message sender
@@ -1617,8 +1645,10 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
         Self {
             subscribe_to_peers_messages_sender: self.subscribe_to_peers_messages_sender.clone(),
             online_peers_receiver: self.online_peers_receiver.clone(),
+            online_peer_capabilities_receiver: self.online_peer_capabilities_receiver.clone(),
             update_topology_sender: self.update_topology_sender.clone(),
             update_peers_sender: self.update_peers_sender.clone(),
+            update_peer_capabilities_sender: self.update_peer_capabilities_sender.clone(),
             update_trusted_peers_sender: self.update_trusted_peers_sender.clone(),
             update_acl_sender: self.update_acl_sender.clone(),
             update_handshake_sender: self.update_handshake_sender.clone(),
@@ -1668,6 +1698,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let (update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
+            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
         let (update_trusted_tx, update_trusted_rx) =
             mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
         let (update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
@@ -1682,9 +1714,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let (network_message_low_sender, _network_message_low_rx) =
             net_channel::channel_with_capacity(1);
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
+        let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
+            watch::channel(HashMap::new());
 
         drop(update_topology_rx);
         drop(update_peers_rx);
+        drop(update_peer_capabilities_rx);
         drop(update_trusted_rx);
         drop(update_acl_rx);
         drop(update_handshake_rx);
@@ -1693,8 +1728,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         Self {
             subscribe_to_peers_messages_sender: subscribe_tx,
             online_peers_receiver,
+            online_peer_capabilities_receiver,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
+            update_peer_capabilities_sender: update_peer_capabilities_tx,
             update_trusted_peers_sender: update_trusted_tx,
             update_acl_sender: update_acl_tx,
             update_handshake_sender: update_handshake_tx,
@@ -1743,6 +1780,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             quic_datagram_max_payload_bytes,
             quic_datagram_receive_buffer_bytes,
             quic_datagram_send_buffer_bytes,
+            scion,
             tls_enabled,
             tls_fallback_to_plain,
             prefer_ws_fallback,
@@ -1911,6 +1949,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             );
         }
 
+        if scion.enabled || scion.listen_endpoint.is_some() || !scion.routes.is_empty() {
+            iroha_logger::warn!(
+                "network.scion_* settings are ignored; SCION selection is automatic via peer capabilities"
+            );
+        }
+        let local_scion_supported = quic_enabled && cfg!(feature = "quic");
+
         let proxy_policy = crate::transport::ProxyPolicy::from_config(p2p_proxy, p2p_no_proxy)?;
         let proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>> =
             if let Some(raw) = p2p_proxy_tls_pinned_cert_der_base64.as_deref() {
@@ -2024,10 +2069,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             listener
         };
         let (online_peers_sender, online_peers_receiver) = watch::channel(HashSet::new());
+        let (online_peer_capabilities_sender, online_peer_capabilities_receiver) =
+            watch::channel(HashMap::new());
         let (subscribe_to_peers_messages_sender, subscribe_to_peers_messages_receiver) =
             mpsc::unbounded_channel();
         let (update_topology_sender, update_topology_receiver) = mpsc::unbounded_channel();
         let (update_peers_sender, update_peers_receiver) = mpsc::unbounded_channel();
+        let (update_peer_capabilities_sender, update_peer_capabilities_receiver) =
+            mpsc::unbounded_channel();
         let (update_trusted_peers_sender, update_trusted_peers_receiver) =
             mpsc::unbounded_channel();
         let (update_acl_sender, update_acl_receiver) = mpsc::unbounded_channel();
@@ -2071,6 +2120,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 trust_gossip,
                 max_frame_bytes,
                 soranet_runtime.clone(),
+                local_scion_supported,
                 relay_role,
             )
             .await
@@ -2107,6 +2157,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     quic_datagrams_enabled,
                     quic_datagram_max_payload_bytes,
                     soranet_runtime.clone(),
+                    local_scion_supported,
                     relay_role,
                     tcp_nodelay,
                     tcp_keepalive,
@@ -2164,8 +2215,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             subscribers_to_peers_messages: Vec::new(),
             subscribe_to_peers_messages_receiver,
             online_peers_sender,
+            online_peer_capabilities_sender,
             update_topology_receiver,
             update_peers_receiver,
+            update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver,
             update_handshake_receiver,
@@ -2188,6 +2241,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             consensus_caps,
             confidential_caps,
             crypto_caps,
+            peer_capabilities: HashMap::new(),
             post_queue_cap: p2p_post_queue_cap.get(),
             max_frame_bytes,
             cap_consensus: max_frame_bytes_consensus,
@@ -2205,6 +2259,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             quic_enabled,
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
+            local_scion_supported,
             tls_enabled,
             tls_fallback_to_plain,
             prefer_ws_fallback,
@@ -2260,8 +2315,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             Self {
                 subscribe_to_peers_messages_sender,
                 online_peers_receiver,
+                online_peer_capabilities_receiver,
                 update_topology_sender,
                 update_peers_sender,
+                update_peer_capabilities_sender,
                 update_trusted_peers_sender,
                 update_acl_sender,
                 update_handshake_sender,
@@ -2459,6 +2516,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         }
     }
 
+    /// Send [`UpdatePeerCapabilities`] message on network actor.
+    pub fn update_peer_capabilities(&self, capabilities: message::UpdatePeerCapabilities) {
+        if self
+            .update_peer_capabilities_sender
+            .send(capabilities)
+            .is_err()
+        {
+            iroha_logger::debug!("Network actor is closed, dropping peer capability update");
+        }
+    }
+
     /// Update trusted peer list for reputation tracking.
     pub fn update_trusted_peers(&self, trusted: UpdateTrustedPeers) {
         if self.update_trusted_peers_sender.send(trusted).is_err() {
@@ -2505,6 +2573,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     /// Receive latest update of [`OnlinePeers`]
     pub fn online_peers<P>(&self, f: impl FnOnce(&OnlinePeers) -> P) -> P {
         f(&self.online_peers_receiver.borrow())
+    }
+
+    /// Receive latest update of online peer transport capabilities.
+    pub fn online_peer_capabilities<P>(
+        &self,
+        f: impl FnOnce(&message::OnlinePeerCapabilities) -> P,
+    ) -> P {
+        f(&self.online_peer_capabilities_receiver.borrow())
     }
 
     /// Get a receiver of [`OnlinePeers`]
@@ -2556,6 +2632,8 @@ mod handle_update_tests {
         let (update_topology_tx, update_topology_rx) =
             mpsc::unbounded_channel::<message::UpdateTopology>();
         let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
+            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
         let (update_trusted_tx, update_trusted_rx) =
             mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
         let (update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
@@ -2570,9 +2648,12 @@ mod handle_update_tests {
         let (network_message_low_sender, _network_message_low_rx) =
             net_channel::channel_with_capacity(1);
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
+        let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
+            watch::channel(HashMap::new());
 
         drop(update_topology_rx);
         drop(update_peers_rx);
+        drop(update_peer_capabilities_rx);
         drop(update_trusted_rx);
         drop(update_acl_rx);
         drop(update_handshake_rx);
@@ -2581,8 +2662,10 @@ mod handle_update_tests {
         NetworkBaseHandle {
             subscribe_to_peers_messages_sender: subscribe_tx,
             online_peers_receiver,
+            online_peer_capabilities_receiver,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
+            update_peer_capabilities_sender: update_peer_capabilities_tx,
             update_trusted_peers_sender: update_trusted_tx,
             update_acl_sender: update_acl_tx,
             update_handshake_sender: update_handshake_tx,
@@ -2839,6 +2922,7 @@ mod accept_stream_tests {
             quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
             quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+            scion: iroha_config::parameters::actual::ScionConfig::default(),
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
@@ -3474,6 +3558,10 @@ mod accept_stream_tests {
         let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
         let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
         let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
+        let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
+            watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
+        let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -3499,8 +3587,10 @@ mod accept_stream_tests {
             subscribers_to_peers_messages: Vec::new(),
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
+            online_peer_capabilities_sender: online_peer_capabilities_tx,
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
@@ -3520,6 +3610,7 @@ mod accept_stream_tests {
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
+            peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
@@ -3529,6 +3620,7 @@ mod accept_stream_tests {
             quic_datagrams_enabled: false,
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
+            local_scion_supported: false,
             tls_enabled: false,
             tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
@@ -3805,6 +3897,10 @@ mod accept_stream_tests {
         let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
         let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
         let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
+        let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
+            watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
+        let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -3830,8 +3926,10 @@ mod accept_stream_tests {
             subscribers_to_peers_messages: Vec::new(),
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
+            online_peer_capabilities_sender: online_peer_capabilities_tx,
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
@@ -3856,6 +3954,7 @@ mod accept_stream_tests {
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
+            peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
@@ -3865,6 +3964,7 @@ mod accept_stream_tests {
             quic_datagrams_enabled: false,
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
+            local_scion_supported: false,
             tls_enabled: false,
             tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
@@ -3999,6 +4099,10 @@ mod accept_stream_tests {
         let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
         let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
         let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
+        let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
+            watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
+        let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4025,8 +4129,10 @@ mod accept_stream_tests {
                 subscribers_to_peers_messages: Vec::new(),
                 subscribe_to_peers_messages_receiver: subscribe_rx,
                 online_peers_sender: online_peers_tx,
+                online_peer_capabilities_sender: online_peer_capabilities_tx,
                 update_topology_receiver: update_topology_rx,
                 update_peers_receiver: update_peers_rx,
+                update_peer_capabilities_receiver,
                 update_trusted_peers_receiver,
                 update_acl_receiver: update_acl_rx,
                 network_message_high_receiver: network_message_high_rx,
@@ -4051,6 +4157,7 @@ mod accept_stream_tests {
                 consensus_caps: None,
                 confidential_caps: None,
                 crypto_caps: None,
+                peer_capabilities: HashMap::new(),
                 post_queue_cap: 4,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
@@ -4060,6 +4167,7 @@ mod accept_stream_tests {
                 quic_datagrams_enabled: false,
                 quic_datagram_max_payload_bytes: 0,
                 quic_dialer: None,
+                local_scion_supported: false,
                 tls_enabled: false,
                 tls_fallback_to_plain: true,
                 prefer_ws_fallback: false,
@@ -4210,6 +4318,10 @@ mod accept_stream_tests {
         let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
         let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
         let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
+        let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
+            watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
+        let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
+            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4235,8 +4347,10 @@ mod accept_stream_tests {
             subscribers_to_peers_messages: Vec::new(),
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
+            online_peer_capabilities_sender: online_peer_capabilities_tx,
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
@@ -4261,6 +4375,7 @@ mod accept_stream_tests {
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
+            peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
@@ -4270,6 +4385,7 @@ mod accept_stream_tests {
             quic_datagrams_enabled: false,
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
+            local_scion_supported: false,
             tls_enabled: false,
             tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
@@ -4544,6 +4660,7 @@ async fn start_quic_listener<T, K, E>(
     trust_gossip: bool,
     max_frame_bytes: usize,
     soranet_handshake: Arc<SoranetHandshakeConfig>,
+    local_scion_supported: bool,
     relay_role: RelayRole,
 ) -> Result<(), Error>
 where
@@ -4689,6 +4806,7 @@ where
                             confidential_caps.clone(),
                             crypto_caps.clone(),
                             soranet_handshake.clone(),
+                            local_scion_supported,
                             post_capacity,
                             relay_role,
                             trust_gossip,
@@ -4755,6 +4873,7 @@ mod quic_tests {
             true,
             1_048_576,
             soranet,
+            true,
             RelayRole::Disabled,
         )
         .await
@@ -4789,6 +4908,7 @@ async fn start_tls_listener<T, K, E>(
     quic_datagrams_enabled: bool,
     quic_datagram_max_payload_bytes: usize,
     soranet_handshake: Arc<SoranetHandshakeConfig>,
+    local_scion_supported: bool,
     relay_role: RelayRole,
     tcp_nodelay: bool,
     tcp_keepalive: Option<std::time::Duration>,
@@ -4885,6 +5005,7 @@ where
                             confidential_caps.clone(),
                             crypto_caps.clone(),
                             soranet_handshake.clone(),
+                            local_scion_supported,
                             post_capacity,
                             relay_role,
                             trust_gossip,
@@ -4954,10 +5075,14 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     subscribe_to_peers_messages_receiver: mpsc::UnboundedReceiver<Subscriber<T>>,
     /// Sender of `OnlinePeer` message
     online_peers_sender: watch::Sender<OnlinePeers>,
+    /// Sender of online peer transport capabilities.
+    online_peer_capabilities_sender: watch::Sender<message::OnlinePeerCapabilities>,
     /// [`UpdateTopology`] message receiver
     update_topology_receiver: mpsc::UnboundedReceiver<UpdateTopology>,
     /// [`UpdatePeers`] message receiver
     update_peers_receiver: mpsc::UnboundedReceiver<UpdatePeers>,
+    /// [`UpdatePeerCapabilities`] message receiver
+    update_peer_capabilities_receiver: mpsc::UnboundedReceiver<message::UpdatePeerCapabilities>,
     /// Trusted peers update receiver.
     update_trusted_peers_receiver: mpsc::UnboundedReceiver<UpdateTrustedPeers>,
     /// Receiver of high priority [`NetworkMessage`]
@@ -5002,6 +5127,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     /// Optional crypto handshake capabilities for gating connections.
     crypto_caps: Option<crate::CryptoHandshakeCaps>,
+    /// Known peer transport capabilities keyed by peer id.
+    peer_capabilities: HashMap<PeerId, message::PeerTransportCapabilities>,
     /// Per-peer post channel capacity (bounded mode).
     post_queue_cap: usize,
     /// Optional interval to refresh hostname-based peers.
@@ -5022,6 +5149,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Shared outbound QUIC dialer endpoint (feature-gated).
     #[allow(dead_code)]
     quic_dialer: Option<crate::transport::QuicDialer>,
+    /// Whether this node can advertise/use SCION-preferred transport.
+    local_scion_supported: bool,
     /// Enable TLS-over-TCP transport based on config at runtime (feature-gated).
     #[allow(dead_code)]
     tls_enabled: bool,
@@ -5191,6 +5320,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 Some(update_peers) = self.update_peers_receiver.recv() => {
                     self.set_current_peers_addresses(update_peers);
                 }
+                Some(update_capabilities) = self.update_peer_capabilities_receiver.recv() => {
+                    self.set_peer_capabilities(update_capabilities);
+                }
                 // Apply ACL updates (hot reload)
                 Some(acl) = self.update_acl_receiver.recv() => {
                     self.allowlist_only = acl.allowlist_only;
@@ -5304,6 +5436,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                                 self.confidential_caps.clone(),
                                 self.crypto_caps.clone(),
                                 self.soranet_handshake.clone(),
+                                self.local_scion_supported,
                                 self.post_queue_cap,
                                 self.relay_role,
                                 self.trust_gossip,
@@ -5477,6 +5610,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.confidential_caps.clone(),
             self.crypto_caps.clone(),
             self.soranet_handshake.clone(),
+            self.local_scion_supported,
             self.post_queue_cap,
             self.relay_role,
             self.trust_gossip,
@@ -5533,6 +5667,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
         self.current_topology = topology;
         self.apply_trusted_observers();
+        self.peer_capabilities
+            .retain(|peer_id, _| self.current_topology.contains(peer_id));
         self.update_topology()
     }
 
@@ -5600,6 +5736,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.address_book.insert(pid.clone(), addr.clone());
         }
         self.current_peers_addresses = peers;
+        self.peer_capabilities
+            .retain(|peer_id, _| self.current_topology.contains(peer_id));
         if let Some((hub_id, hub_addr)) = preserved_hub {
             self.address_book
                 .entry(hub_id.clone())
@@ -5625,6 +5763,21 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         // speed up recovery after gossip/DNS refresh. This keeps connection
         // attempts responsive instead of waiting for the periodic tick.
         self.update_topology();
+    }
+
+    fn set_peer_capabilities(
+        &mut self,
+        message::UpdatePeerCapabilities(capabilities): message::UpdatePeerCapabilities,
+    ) {
+        for (peer_id, caps) in capabilities {
+            if peer_id.public_key() == self.key_pair.public_key() {
+                continue;
+            }
+            if !self.current_topology.contains(&peer_id) {
+                continue;
+            }
+            self.peer_capabilities.insert(peer_id, caps);
+        }
     }
 
     fn update_topology(&mut self) {
@@ -5917,7 +6070,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         };
         if outcome.is_some() {
             self.peers.remove(peer_id);
-            Self::remove_online_peer(&self.online_peers_sender, peer_id);
+            Self::remove_online_peer(
+                &self.online_peers_sender,
+                &self.online_peer_capabilities_sender,
+                peer_id,
+            );
             self.incoming_active.remove(&conn_id);
             self.last_active.remove(peer_id);
             self.clear_low_buckets(peer_id);
@@ -6059,11 +6216,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         );
 
         let conn_id = self.get_conn_id();
+        let prefer_scion = self.local_scion_supported
+            && self
+                .peer_capabilities
+                .get(peer.id())
+                .is_some_and(|caps| caps.scion_supported);
         self.connecting_peers.insert(conn_id, peer.clone());
         let service_message_sender = self.service_message_sender.clone();
         connecting::<WireMessage<T>, K, E>(
             // NOTE: we intentionally use peer's address and our public key, it's used during handshake
             peer.address().clone(),
+            peer.id().clone(),
             self.public_address.clone(),
             self.key_pair.clone(),
             conn_id,
@@ -6079,6 +6242,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.quic_enabled,
             self.tls_enabled,
             self.tls_fallback_to_plain,
+            prefer_scion,
+            self.local_scion_supported,
             self.prefer_ws_fallback,
             self.trust_gossip,
             self.max_frame_bytes,
@@ -6104,7 +6269,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
         self.incoming_active.remove(&peer.conn_id);
         self.last_active.remove(peer_id);
-        Self::remove_online_peer(&self.online_peers_sender, peer_id);
+        Self::remove_online_peer(
+            &self.online_peers_sender,
+            &self.online_peer_capabilities_sender,
+            peer_id,
+        );
         self.clear_low_buckets(peer_id);
     }
 
@@ -6118,6 +6287,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             peer_message_sender,
             disambiguator,
             relay_role,
+            scion_supported,
             trust_gossip,
         }: Connected<WireMessage<T>>,
     ) {
@@ -6258,6 +6428,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         self.address_book
             .insert(peer.id().clone(), peer.address().clone());
 
+        let transport_capabilities = message::PeerTransportCapabilities { scion_supported };
+        self.peer_capabilities
+            .insert(peer.id().clone(), transport_capabilities);
+
         let ref_peer = RefPeer {
             handle: ready_peer_handle,
             conn_id: connection_id,
@@ -6278,7 +6452,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.dns_last_refresh
                 .insert(peer.id().clone(), tokio::time::Instant::now());
         }
-        Self::add_online_peer(&self.online_peers_sender, peer);
+        Self::add_online_peer(
+            &self.online_peers_sender,
+            &self.online_peer_capabilities_sender,
+            peer,
+            transport_capabilities,
+        );
     }
 
     fn peer_terminated(&mut self, Terminated { peer, conn_id }: Terminated) {
@@ -6291,7 +6470,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     self.peer_reputations.record_disconnected(peer.id());
                     self.peers.remove(peer.id());
                     self.last_active.remove(peer.id());
-                    Self::remove_online_peer(&self.online_peers_sender, peer.id());
+                    Self::remove_online_peer(
+                        &self.online_peers_sender,
+                        &self.online_peer_capabilities_sender,
+                        peer.id(),
+                    );
                 }
             }
             // Schedule backoff for this peer address.
@@ -6461,7 +6644,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             if let Some(ref_peer) = self.peers.remove(&peer_id) {
                 self.peer_reputations.record_disconnected(&peer_id);
                 self.schedule_backoff_addr(&peer_id, &ref_peer.p2p_addr);
-                Self::remove_online_peer(&self.online_peers_sender, &peer_id);
+                Self::remove_online_peer(
+                    &self.online_peers_sender,
+                    &self.online_peer_capabilities_sender,
+                    &peer_id,
+                );
                 self.incoming_active.remove(&ref_peer.conn_id);
                 self.last_active.remove(&peer_id);
                 self.clear_low_buckets(&peer_id);
@@ -6732,7 +6919,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let _ = self.send_frame_to_peer(target, frame, topic);
     }
 
-    fn add_online_peer(online_peers_sender: &watch::Sender<OnlinePeers>, peer: Peer) {
+    fn add_online_peer(
+        online_peers_sender: &watch::Sender<OnlinePeers>,
+        online_peer_capabilities_sender: &watch::Sender<message::OnlinePeerCapabilities>,
+        peer: Peer,
+        capabilities: message::PeerTransportCapabilities,
+    ) {
         online_peers_sender.send_if_modified(|online_peers| {
             let inserted = online_peers.insert(peer.clone());
             if inserted {
@@ -6744,10 +6936,20 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             }
             inserted
         });
+        let peer_id = peer.id().clone();
+        online_peer_capabilities_sender.send_if_modified(|online_caps| {
+            online_caps.insert(peer_id.clone(), capabilities) != Some(capabilities)
+        });
     }
 
-    fn remove_online_peer(online_peers_sender: &watch::Sender<OnlinePeers>, peer_id: &PeerId) {
+    fn remove_online_peer(
+        online_peers_sender: &watch::Sender<OnlinePeers>,
+        online_peer_capabilities_sender: &watch::Sender<message::OnlinePeerCapabilities>,
+        peer_id: &PeerId,
+    ) {
         online_peers_sender.send_if_modified(|online_peers| online_peers.remove(peer_id));
+        online_peer_capabilities_sender
+            .send_if_modified(|online_caps| online_caps.remove(peer_id).is_some());
     }
 
     fn get_conn_id(&mut self) -> ConnectionId {
@@ -7183,6 +7385,10 @@ mod tests {
         let (_network_hi_tx, network_message_high_rx) = net_channel::channel_with_capacity(1);
         let (_network_lo_tx, network_message_low_rx) = net_channel::channel_with_capacity(1);
         let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
+        let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
+            watch::channel(HashMap::new());
+        let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
+            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -7208,8 +7414,10 @@ mod tests {
             subscribers_to_peers_messages: Vec::new(),
             subscribe_to_peers_messages_receiver: subscribe_rx,
             online_peers_sender: online_peers_tx,
+            online_peer_capabilities_sender: online_peer_capabilities_tx,
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
             update_handshake_receiver: update_handshake_rx,
@@ -7229,6 +7437,7 @@ mod tests {
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
+            peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
@@ -7245,6 +7454,7 @@ mod tests {
             quic_datagrams_enabled: false,
             quic_datagram_max_payload_bytes: 0,
             quic_dialer: None,
+            local_scion_supported: false,
             tls_enabled: false,
             tls_fallback_to_plain: true,
             prefer_ws_fallback: false,
@@ -8099,6 +8309,16 @@ pub mod message {
     /// Current online network peers
     pub type OnlinePeers = HashSet<Peer>;
 
+    /// Transport capabilities observed/advertised for a peer.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
+    pub struct PeerTransportCapabilities {
+        /// Whether the peer advertises SCION-preferred transport support.
+        pub scion_supported: bool,
+    }
+
+    /// Current transport capabilities for online peers keyed by peer id.
+    pub type OnlinePeerCapabilities = HashMap<PeerId, PeerTransportCapabilities>;
+
     /// The message that is sent to `NetworkBase` to update p2p topology of the network.
     #[derive(Clone, Debug)]
     pub struct UpdateTopology(pub HashSet<PeerId>);
@@ -8106,6 +8326,10 @@ pub mod message {
     /// The message that is sent to `NetworkBase` to update peers addresses of the network.
     #[derive(Clone, Debug)]
     pub struct UpdatePeers(pub Vec<(PeerId, SocketAddr)>);
+
+    /// The message that updates transport capabilities for peers.
+    #[derive(Clone, Debug)]
+    pub struct UpdatePeerCapabilities(pub Vec<(PeerId, PeerTransportCapabilities)>);
 
     /// Update ACL configuration at runtime (hot reload).
     #[derive(Clone, Debug, Default)]

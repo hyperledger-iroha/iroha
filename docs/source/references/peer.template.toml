@@ -61,6 +61,15 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # trust_min_score = -20              # drop trust gossip at or below this score
 # trust_gossip = true                # Advertise/accept trust gossip; set false to opt out in permissioned overlays
 #
+# # SCION capability gossip and dialing:
+# # SCION preference is automatic when both peers advertise support.
+# # Legacy/non-SCION peers keep using normal transport fallback automatically.
+# # The following legacy keys are ignored at runtime and kept only for compatibility:
+# # scion_enabled = false
+# # scion_fallback_to_legacy = true
+# # scion_listen_endpoint = "scion://0.0.0.0:30257" # reserved for future inbound support
+# # scion_routes = { "ed0120...peerkey..." = "scion-gateway.example.com:30257" }
+#
 # # Bounded queue capacities:
 # p2p_queue_cap_high = 8192     # consensus/control
 # p2p_queue_cap_low  = 32768    # gossip/sync

@@ -771,6 +771,14 @@ pub mod network {
     /// Total send buffer reserved for QUIC datagrams (bytes).
     pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
 
+    /// Enable SCION-guided outbound peer dialing.
+    ///
+    /// When enabled and a route exists for a peer, the dialer attempts the SCION
+    /// route first before legacy address dialing.
+    pub const SCION_ENABLED: bool = false;
+    /// Allow fallback to legacy dialing when a SCION route is missing or fails.
+    pub const SCION_FALLBACK_TO_LEGACY: bool = true;
+
     // P2P bounded queue capacities (always enforced)
     // Defaults tuned for ~20,000 TPS environments: prioritize headroom for gossip/low-priority
     // traffic while keeping consensus/control queues responsive.
@@ -2300,6 +2308,10 @@ pub mod zk {
         pub const VERIFIER_BUDGET_MS: u64 = 20; // soft budget
         /// Maximum batch size processed in a single verification call.
         pub const VERIFIER_MAX_BATCH: u32 = 16;
+        /// Number of ZK lane verifier worker threads (0 = auto by available parallelism).
+        pub const VERIFIER_WORKER_THREADS: usize = 0;
+        /// Capacity of the ZK lane verifier ingress queue (0 = auto-derived).
+        pub const VERIFIER_QUEUE_CAP: usize = 0;
         /// Maximum accepted Norito envelope payload length in bytes.
         pub const MAX_ENVELOPE_BYTES: usize = super::preverify::MAX_BYTES;
         /// Maximum accepted proof length in bytes after Norito encoding.
