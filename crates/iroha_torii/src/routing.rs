@@ -35921,8 +35921,7 @@ pub async fn handle_v1_offline_receipts(
                             return None;
                         }
                     }
-                    let certificate_id_hex =
-                        hex::encode(receipt.sender_certificate.certificate_id().as_ref());
+                    let certificate_id_hex = hex::encode(receipt.sender_certificate_id.as_ref());
                     if let Some(ref cert) = certificate_filter {
                         if certificate_id_hex != *cert {
                             return None;
@@ -36073,9 +36072,7 @@ pub async fn handle_v1_offline_receipts_query(
                     let item = OfflineReceiptListItem {
                         bundle_id_hex: bundle_id_hex.clone(),
                         tx_id_hex: hex::encode(receipt.tx_id.as_ref()),
-                        certificate_id_hex: hex::encode(
-                            receipt.sender_certificate.certificate_id().as_ref(),
-                        ),
+                        certificate_id_hex: hex::encode(receipt.sender_certificate_id.as_ref()),
                         controller_id: receipt.from.to_string(),
                         controller_display: address_format.display_literal(&receipt.from),
                         receiver_id: receipt.to.to_string(),
@@ -36608,11 +36605,15 @@ pub async fn handle_post_v1_offline_settlements_submit(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_spend_receipts(
-    _state: Arc<CoreState>,
+    state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<OfflineSpendReceiptsSubmitRequest>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId,
+    };
 
     if req.receipts.is_empty() {
         return Err(conversion_error(format!(
@@ -36620,6 +36621,7 @@ pub async fn handle_post_v1_offline_spend_receipts(
         )));
     }
 
+    let state_view = state.view();
     let mut asset_id = None;
     let mut total_amount = Numeric::zero();
     for receipt in &req.receipts {
@@ -36643,9 +36645,25 @@ pub async fn handle_post_v1_offline_spend_receipts(
                 "{OFFLINE_REJECTION_REASON_PREFIX}receipt_signature_invalid:failed to serialize receipt payload: {err}"
             ))
         })?;
+        let mut allowance_records = ValidQuery::execute(
+            FindOfflineAllowanceByCertificateId::new(receipt.sender_certificate_id),
+            CompoundPredicate::PASS,
+            &state_view,
+        )
+        .map_err(|err| {
+            conversion_error(format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_lookup_failed:failed to lookup certificate: {err}"
+            ))
+        })?
+        .collect::<Vec<_>>();
+        let allowance_record = allowance_records.pop().ok_or_else(|| {
+            conversion_error(format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_registered:offline allowance certificate not registered"
+            ))
+        })?;
         receipt
             .sender_signature
-            .verify(&receipt.sender_certificate.spend_public_key, &payload)
+            .verify(&allowance_record.certificate.spend_public_key, &payload)
             .map_err(|err| {
                 conversion_error(format!(
                     "{OFFLINE_REJECTION_REASON_PREFIX}receipt_signature_invalid:receipt signature invalid: {err}"
@@ -39917,71 +39935,16 @@ mod adapter_filter_tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn offline_transfer_item_json_surfaces_platform_policy_without_snapshot() {
-        use iroha_data_model::name::Name;
-        use iroha_primitives::json::Json;
-
+    fn offline_transfer_item_json_omits_platform_policy_without_snapshot() {
         let mut record = sample_transfer_record();
         record.platform_snapshot = None;
         record.transfer.platform_snapshot = None;
-        let certificate = record
-            .transfer
-            .receipts
-            .get_mut(0)
-            .map(|receipt| &mut receipt.sender_certificate)
-            .expect("sample receipt");
-        let mut metadata = Metadata::default();
-        let mut insert = |key: &str, value: Json| {
-            let name = Name::from_str(key).expect("metadata key");
-            metadata.insert(name, value);
-        };
-        insert(
-            AndroidIntegrityPolicy::METADATA_KEY,
-            Json::new(AndroidIntegrityPolicy::PlayIntegrity.as_str()),
-        );
-        insert(
-            "android.play_integrity.cloud_project_number",
-            Json::new(1234_u64),
-        );
-        insert(
-            "android.play_integrity.environment",
-            Json::new("production"),
-        );
-        insert(
-            "android.play_integrity.package_names",
-            Json::new(vec!["tech.app".to_string()]),
-        );
-        insert(
-            "android.play_integrity.signing_digests_sha256",
-            Json::new(vec![String::from(
-                "778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566",
-            )]),
-        );
-        insert(
-            "android.play_integrity.allowed_app_verdicts",
-            Json::new(vec!["play_recognized".to_string()]),
-        );
-        insert(
-            "android.play_integrity.allowed_device_verdicts",
-            Json::new(vec!["device".to_string()]),
-        );
-        insert(
-            "android.play_integrity.max_token_age_ms",
-            Json::new(5_000_u64),
-        );
-        certificate.metadata = metadata;
 
         let item = OfflineTransferSummary::from(record);
         let value =
             offline_transfer_item_to_json(&item, AddressFormatPreference::Ih58).expect("json");
         let object = value.as_object().expect("json object");
-        assert_eq!(
-            object
-                .get("platform_policy")
-                .and_then(Value::as_str)
-                .expect("platform policy"),
-            AndroidIntegrityPolicy::PlayIntegrity.as_str()
-        );
+        assert!(object.get("platform_policy").is_none());
         assert!(object.get("platform_token_snapshot").is_none());
     }
 
@@ -40332,7 +40295,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             challenge_hash: Hash::new(b"challenge"),
         }),
         platform_snapshot: None,
-        sender_certificate: certificate,
+        sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::from_bytes(&[1; 64]),
     };
 

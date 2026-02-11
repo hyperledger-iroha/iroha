@@ -186,10 +186,7 @@ enum OfflineNorito {
     static func encodeBytesVec(_ bytes: Data) -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeLength(UInt64(bytes.count))
-        for byte in bytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeBytes(bytes)
         return writer.data
     }
 

@@ -62,7 +62,7 @@ use iroha_data_model::{
         OfflineFastpqSumProof, OfflinePlatformProof, OfflineProofBlindingSeed,
         OfflineProofRequestCounter, OfflineProofRequestReplay, OfflineProofRequestSum,
         OfflineReceiptChallengePreimage, OfflineSpendReceipt, OfflineSpendReceiptPayload,
-        OfflineWalletCertificate, PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
+        PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     smart_contract::manifest::ContractManifest,
@@ -920,6 +920,7 @@ fn compute_offline_receipt_challenge(
     asset_raw: String,
     amount_raw: String,
     issued_at_ms: u64,
+    sender_certificate_id_raw: String,
     nonce_raw: String,
 ) -> BridgeResult<(Vec<u8>, [u8; Hash::LENGTH], [u8; 32])> {
     if chain_id_raw.trim().is_empty() {
@@ -929,6 +930,8 @@ fn compute_offline_receipt_challenge(
     let receiver = AccountId::from_str(&receiver_raw).map_err(|_| BridgeError::OfflineReceiver)?;
     let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
+    let sender_certificate_id =
+        Hash::from_str(&sender_certificate_id_raw).map_err(|_| BridgeError::OfflineNonce)?;
     let nonce = Hash::from_str(&nonce_raw).map_err(|_| BridgeError::OfflineNonce)?;
     let preimage = OfflineReceiptChallengePreimage {
         invoice_id,
@@ -936,6 +939,7 @@ fn compute_offline_receipt_challenge(
         asset,
         amount,
         issued_at_ms,
+        sender_certificate_id,
         nonce,
     };
     let bytes = to_bytes(&preimage).map_err(|_| BridgeError::OfflineSerialize)?;
@@ -956,7 +960,7 @@ fn encode_offline_spend_receipt_payload(
     issued_at_ms: u64,
     invoice_id: String,
     platform_proof_json: String,
-    certificate_json: String,
+    sender_certificate_id_hex: String,
 ) -> BridgeResult<Vec<u8>> {
     let tx_id = Hash::from_str(&tx_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
     let from = AccountId::from_str(&from_raw).map_err(|_| BridgeError::Authority)?;
@@ -965,8 +969,8 @@ fn encode_offline_spend_receipt_payload(
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
     let platform_proof: OfflinePlatformProof =
         norito::json::from_str(&platform_proof_json).map_err(|_| BridgeError::OfflineSerialize)?;
-    let certificate: OfflineWalletCertificate =
-        norito::json::from_str(&certificate_json).map_err(|_| BridgeError::OfflineSerialize)?;
+    let sender_certificate_id =
+        Hash::from_str(&sender_certificate_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
 
     let payload = OfflineSpendReceiptPayload {
         tx_id,
@@ -977,7 +981,7 @@ fn encode_offline_spend_receipt_payload(
         issued_at_ms,
         invoice_id,
         platform_proof,
-        sender_certificate: certificate,
+        sender_certificate_id,
     };
 
     to_bytes(&payload).map_err(|_| BridgeError::OfflineSerialize)
@@ -1623,6 +1627,8 @@ pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
     amount_ptr: *const c_char,
     amount_len: c_ulong,
     issued_at_ms: c_ulonglong,
+    sender_certificate_id_ptr: *const c_char,
+    sender_certificate_id_len: c_ulong,
     nonce_ptr: *const c_char,
     nonce_len: c_ulong,
     out_preimage_ptr: *mut *mut c_uchar,
@@ -1646,6 +1652,8 @@ pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
         let receiver = unsafe { read_string_bridge(receiver_ptr, receiver_len)? };
         let asset = unsafe { read_string_bridge(asset_ptr, asset_len)? };
         let amount = unsafe { read_string_bridge(amount_ptr, amount_len)? };
+        let sender_certificate_id =
+            unsafe { read_string_bridge(sender_certificate_id_ptr, sender_certificate_id_len)? };
         let nonce = unsafe { read_string_bridge(nonce_ptr, nonce_len)? };
 
         let (preimage, iroha_hash, client_hash) = compute_offline_receipt_challenge(
@@ -1655,6 +1663,7 @@ pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
             asset,
             amount,
             issued_at_ms,
+            sender_certificate_id,
             nonce,
         )?;
 
@@ -8190,6 +8199,9 @@ mod offline_challenge_tests {
         let asset_cstr = CString::new(asset_literal(&asset_id)).expect("asset identifier string");
         let amount = CString::new("500").expect("amount");
         let issued_at_ms: u64 = 1_700_000_000_000;
+        let sender_certificate_id = Hash::new(b"sender-certificate");
+        let sender_certificate_id_cstr =
+            CString::new(format!("{}", sender_certificate_id)).expect("sender certificate id");
         let nonce_hash = Hash::new(b"ffi-nonce");
         let nonce_cstr = CString::new(format!("{}", nonce_hash)).expect("nonce identifier");
 
@@ -8210,6 +8222,8 @@ mod offline_challenge_tests {
                 amount.as_ptr(),
                 amount.as_bytes().len() as c_ulong,
                 issued_at_ms as c_ulonglong,
+                sender_certificate_id_cstr.as_ptr(),
+                sender_certificate_id_cstr.as_bytes().len() as c_ulong,
                 nonce_cstr.as_ptr(),
                 nonce_cstr.as_bytes().len() as c_ulong,
                 &mut out_ptr,
@@ -8237,6 +8251,7 @@ mod offline_challenge_tests {
         assert_eq!(decoded.asset, asset_id);
         assert_eq!(decoded.amount, Numeric::from_str("500").unwrap());
         assert_eq!(decoded.issued_at_ms, issued_at_ms);
+        assert_eq!(decoded.sender_certificate_id, sender_certificate_id);
 
         let chain_id_value = ChainId::from("test-chain");
         let expected_hash = chain_bound_receipt_hash(&chain_id_value, &preimage);
@@ -9406,6 +9421,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
     asset: jni::objects::JString<'_>,
     amount: jni::objects::JString<'_>,
     issued_at_ms: jni::sys::jlong,
+    sender_certificate_id_hex: jni::objects::JString<'_>,
     nonce: jni::objects::JString<'_>,
     iroha_hash_out: jni::objects::JByteArray<'_>,
     client_hash_out: jni::objects::JByteArray<'_>,
@@ -9416,6 +9432,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
         let receiver_str = jstring_to_string(&mut env, receiver)?;
         let asset_str = jstring_to_string(&mut env, asset)?;
         let amount_str = jstring_to_string(&mut env, amount)?;
+        let sender_certificate_id_str = jstring_to_string(&mut env, sender_certificate_id_hex)?;
         let nonce_str = jstring_to_string(&mut env, nonce)?;
 
         if env
@@ -9443,6 +9460,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
             asset_str,
             amount_str,
             issued_at_ms as u64,
+            sender_certificate_id_str,
             nonce_str,
         )
         .map_err(|err| format!("offline challenge error {}", err.code()))?;
@@ -9487,7 +9505,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
     issued_at_ms: jni::sys::jlong,
     invoice_id: jni::objects::JString<'_>,
     platform_proof_json: jni::objects::JString<'_>,
-    certificate_json: jni::objects::JString<'_>,
+    sender_certificate_id_hex: jni::objects::JString<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let tx_id_str = jstring_to_string(&mut env, tx_id_hex)?;
@@ -9497,7 +9515,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
         let amount_str = jstring_to_string(&mut env, amount)?;
         let invoice_str = jstring_to_string(&mut env, invoice_id)?;
         let proof_json = jstring_to_string(&mut env, platform_proof_json)?;
-        let cert_json = jstring_to_string(&mut env, certificate_json)?;
+        let certificate_id_hex = jstring_to_string(&mut env, sender_certificate_id_hex)?;
 
         let bytes = encode_offline_spend_receipt_payload(
             tx_id_str,
@@ -9508,7 +9526,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
             issued_at_ms as u64,
             invoice_str,
             proof_json,
-            cert_json,
+            certificate_id_hex,
         )
         .map_err(|e| format!("encode error: {}", e.code()))?;
 
@@ -9892,6 +9910,7 @@ mod offline_receipt_challenge_tests {
         let _guard = super::test_support::chain_discriminant_guard();
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
+        let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "".to_string(),
@@ -9900,6 +9919,7 @@ mod offline_receipt_challenge_tests {
             asset_literal(&asset),
             "1".to_string(),
             0,
+            sender_certificate_id,
             nonce,
         );
         assert!(matches!(result, Err(BridgeError::ChainId)));
@@ -9910,6 +9930,7 @@ mod offline_receipt_challenge_tests {
         let _guard = super::test_support::chain_discriminant_guard();
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
+        let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "test-chain".to_string(),
@@ -9918,6 +9939,7 @@ mod offline_receipt_challenge_tests {
             asset_literal(&asset),
             "1.5".to_string(),
             0,
+            sender_certificate_id,
             nonce,
         );
         assert!(result.is_ok(), "expected ok, got {result:?}");
@@ -12208,7 +12230,7 @@ mod sorafs_tests {
             invoice_id: "INV-42".into(),
             platform_proof: platform_proof.clone(),
             platform_snapshot: None,
-            sender_certificate: certificate.clone(),
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[0xCD; 64]),
         };
 
@@ -12216,7 +12238,7 @@ mod sorafs_tests {
 
         let platform_proof_json =
             norito::json::to_json(&platform_proof).expect("platform proof json");
-        let certificate_json = norito::json::to_json(&certificate).expect("certificate json");
+        let certificate_id_hex = hex::encode(certificate.certificate_id().as_ref());
 
         let jni_bytes = encode_offline_spend_receipt_payload(
             hex::encode(tx_id.as_ref()),
@@ -12227,7 +12249,7 @@ mod sorafs_tests {
             1_700_000_500_000,
             "INV-42".to_string(),
             platform_proof_json,
-            certificate_json,
+            certificate_id_hex,
         )
         .expect("JNI encoding");
 

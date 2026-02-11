@@ -89,6 +89,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
 
         let certificateRaw = OfflineWalletCertificate(
             controller: rawAccountId,
+            operatorId: rawAccountId,
             allowance: allowanceRaw,
             spendPublicKey: spendPublicKey,
             attestationReport: Data([0x01, 0x02]),
@@ -99,6 +100,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
         )
         let certificateCanonical = OfflineWalletCertificate(
             controller: canonicalAccountId,
+            operatorId: canonicalAccountId,
             allowance: allowanceCanonical,
             spendPublicKey: spendPublicKey,
             attestationReport: Data([0x01, 0x02]),

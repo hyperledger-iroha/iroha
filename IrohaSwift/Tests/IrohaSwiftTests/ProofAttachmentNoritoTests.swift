@@ -150,10 +150,7 @@ final class ProofAttachmentNoritoTests: XCTestCase {
     private func encodeBytesVec(_ bytes: Data) -> Data {
         var out = Data()
         out.append(u64le(UInt64(bytes.count)))
-        for byte in bytes {
-            out.append(u64le(1))
-            out.append(byte)
-        }
+        out.append(bytes)
         return out
     }
 

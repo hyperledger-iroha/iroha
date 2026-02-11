@@ -1321,7 +1321,7 @@ pub mod isi {
                     challenge_hash: Hash::new(b"challenge"),
                 }),
                 platform_snapshot: None,
-                sender_certificate: certificate.clone(),
+                sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
             };
             let snapshot = OfflinePlatformTokenSnapshot {
@@ -1390,7 +1390,7 @@ pub mod isi {
                     challenge_hash: Hash::new(b"challenge"),
                 }),
                 platform_snapshot: None,
-                sender_certificate: certificate.clone(),
+                sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
             };
             let transfer = OfflineToOnlineTransfer {
@@ -1442,7 +1442,7 @@ pub mod isi {
                     challenge_hash: Hash::new(b"challenge"),
                 }),
                 platform_snapshot: None,
-                sender_certificate: certificate.clone(),
+                sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
             };
             let transfer = OfflineToOnlineTransfer {
@@ -1499,7 +1499,7 @@ pub mod isi {
                     challenge_hash: Hash::new(b"challenge"),
                 }),
                 platform_snapshot: None,
-                sender_certificate: certificate.clone(),
+                sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
             };
 
@@ -2024,13 +2024,12 @@ pub mod isi {
             .receipts
             .first()
             .expect("non-empty receipts")
-            .sender_certificate
-            .certificate_id();
+            .sender_certificate_id;
 
         if transfer
             .receipts
             .iter()
-            .any(|receipt| receipt.sender_certificate.certificate_id() != certificate_id)
+            .any(|receipt| receipt.sender_certificate_id != certificate_id)
         {
             return Err(rejection_error(
                 OfflineTransferRejectionReason::MixedCertificates,
@@ -2091,7 +2090,7 @@ pub mod isi {
 
         let submitted_snapshot_ref = submitted_platform_snapshot.as_ref();
         for receipt in &transfer.receipts {
-            verify_receipt_signature(receipt)?;
+            verify_receipt_signature(receipt, &record.certificate)?;
             let receipt_snapshot = validate_platform_snapshot(
                 receipt.platform_snapshot.as_ref(),
                 integrity_metadata.as_ref(),
@@ -2147,6 +2146,7 @@ pub mod isi {
         let pos_verdict_snapshots =
             iroha_data_model::offline::OfflineTransferRecord::collect_pos_verdict_snapshots(
                 &transfer,
+                &record.certificate,
             );
         let mut audit_record = OfflineTransferRecord {
             transfer: transfer.clone(),
@@ -3019,13 +3019,16 @@ pub mod isi {
         }
     }
 
-    fn verify_receipt_signature(receipt: &OfflineSpendReceipt) -> Result<(), Error> {
+    fn verify_receipt_signature(
+        receipt: &OfflineSpendReceipt,
+        certificate: &OfflineWalletCertificate,
+    ) -> Result<(), Error> {
         let payload = receipt.signing_bytes().map_err(|err| {
             InstructionExecutionError::InvariantViolation(
                 format!("failed to encode receipt payload: {err}").into(),
             )
         })?;
-        let spend_key = receipt.sender_certificate.spend_public_key.clone();
+        let spend_key = certificate.spend_public_key.clone();
         receipt
             .sender_signature
             .verify(&spend_key, &payload)
@@ -6166,7 +6169,7 @@ mod attestation {
                 let meta = AndroidFixtureMetadata::default();
                 let base = AndroidFixture::new();
                 let mut certificate = base.certificate;
-                let mut receipt = base.receipt;
+                let receipt = base.receipt;
                 let nonce_bytes = [0x11; 32];
                 certificate.attestation_nonce = Some(Hash::prehashed(nonce_bytes));
                 certificate.refresh_at_ms = Some(certificate.issued_at_ms + 30_000);
@@ -6174,7 +6177,6 @@ mod attestation {
                 let payload =
                     build_play_payload(&meta, &nonce_bytes, certificate.issued_at_ms + 10_000);
                 certificate.attestation_report = SIGNER.build_token(&payload).into_bytes();
-                receipt.sender_certificate = certificate.clone();
                 Self {
                     certificate,
                     receipt,
@@ -6195,7 +6197,7 @@ mod attestation {
                 let meta = AndroidFixtureMetadata::default();
                 let base = AndroidFixture::new();
                 let mut certificate = base.certificate;
-                let mut receipt = base.receipt;
+                let receipt = base.receipt;
                 let mut nonce_bytes = [0x22; 32];
                 nonce_bytes[Hash::LENGTH - 1] |= 1;
                 certificate.attestation_nonce = Some(Hash::prehashed(nonce_bytes));
@@ -6204,7 +6206,6 @@ mod attestation {
                 let payload =
                     build_hms_payload(&meta, &nonce_bytes, certificate.issued_at_ms + 5_000);
                 certificate.attestation_report = SIGNER.build_token(&payload).into_bytes();
-                receipt.sender_certificate = certificate.clone();
                 Self {
                     certificate,
                     receipt,
@@ -6259,7 +6260,6 @@ mod attestation {
                 proof.inspector_signature = Signature::new(inspector.private_key(), &payload);
 
                 receipt.platform_proof = OfflinePlatformProof::Provisioned(proof);
-                receipt.sender_certificate = certificate.clone();
                 Self {
                     certificate,
                     receipt,
@@ -6483,7 +6483,7 @@ mod attestation {
                 let signing_key =
                     SigningKey::from_pkcs8_der(&signing_key_der).expect("decode leaf key");
                 let mut certificate = CHAIN.build_certificate(&spend_pair, &operator_pair);
-                let mut receipt = CHAIN.build_receipt(&certificate, &spend_pair, &signing_key, 7);
+                let receipt = CHAIN.build_receipt(&certificate, &spend_pair, &signing_key, 7);
                 let chain_id = sample_chain_id();
                 let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
                 certificate.attestation_report = build_attestation_report(
@@ -6495,7 +6495,6 @@ mod attestation {
                     &CHAIN.rp_id_hash,
                     &challenge.client_data_hash,
                 );
-                receipt.sender_certificate = certificate.clone();
                 Self {
                     certificate,
                     receipt,
@@ -6645,7 +6644,7 @@ mod attestation {
                         challenge_hash: Hash::new([]),
                     }),
                     platform_snapshot: None,
-                    sender_certificate: certificate.clone(),
+                    sender_certificate_id: certificate.certificate_id(),
                     sender_signature: Signature::from_bytes(&[0; 64]),
                 };
                 let chain_id = sample_chain_id();
@@ -6978,7 +6977,7 @@ mod attestation {
                     attestation: Vec::new(),
                 }),
                 platform_snapshot: None,
-                sender_certificate: certificate.clone(),
+                sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
             };
             let payload = receipt.signing_bytes().expect("receipt payload");
@@ -7289,7 +7288,7 @@ mod attestation {
                     challenge_hash: Hash::new(b"counter-challenge"),
                 }),
                 platform_snapshot: None,
-                sender_certificate: certificate,
+                sender_certificate_id: certificate.certificate_id(),
                 sender_signature: Signature::from_bytes(&[0; 64]),
             }
         }
@@ -7597,7 +7596,7 @@ mod aggregate_proof_tests {
                 challenge_hash: Hash::new(b"challenge-a"),
             }),
             platform_snapshot: None,
-            sender_certificate: certificate.clone(),
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[1; 64]),
         };
         let receipt_b = OfflineSpendReceipt {
@@ -7615,7 +7614,7 @@ mod aggregate_proof_tests {
                 challenge_hash: Hash::new(b"challenge-b"),
             }),
             platform_snapshot: None,
-            sender_certificate: certificate.clone(),
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[1; 64]),
         };
 

@@ -214,7 +214,7 @@ extension OfflineSpendReceipt {
             "invoice_id": .string(invoiceId),
             "platform_proof": try platformProof.toriiJSON(),
             "platform_snapshot": platformSnapshot.map { $0.toriiJSON() } ?? .null,
-            "sender_certificate": try senderCertificate.toriiJSON(),
+            "sender_certificate_id": try OfflineToriiEncoding.hashLiteralValue(senderCertificateId),
             "sender_signature": .string(senderSignature.hexUppercased()),
         ])
     }

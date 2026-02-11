@@ -1578,11 +1578,15 @@ impl StateBlock<'_> {
             let ns = ns_key
                 .ok()
                 .and_then(|k| md.get(&k))
-                .map(|j| j.get().clone());
+                .and_then(|j| j.try_into_any_norito::<String>().ok())
+                .map(|raw| raw.trim().to_owned())
+                .filter(|raw| !raw.is_empty());
             let cid = cid_key
                 .ok()
                 .and_then(|k| md.get(&k))
-                .map(|j| j.get().clone());
+                .and_then(|j| j.try_into_any_norito::<String>().ok())
+                .map(|raw| raw.trim().to_owned())
+                .filter(|raw| !raw.is_empty());
             (ns, cid)
         };
 

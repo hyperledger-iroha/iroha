@@ -56,13 +56,10 @@ final class OfflineToriiEncodingTests: XCTestCase {
         XCTAssertEqual(snapshotObject["policy"]?.normalizedString, snapshot.policy)
         XCTAssertEqual(snapshotObject["attestation_jws_b64"]?.normalizedString, snapshot.attestationJwsB64)
 
-        guard case let .object(certObject) = object["sender_certificate"] else {
-            return XCTFail("expected sender_certificate object")
-        }
-        guard let reportBytes = bytes(from: certObject["attestation_report"]) else {
-            return XCTFail("expected attestation_report byte array")
-        }
-        XCTAssertEqual(reportBytes, [UInt8](certificate.attestationReport))
+        XCTAssertEqual(
+            object["sender_certificate_id"]?.normalizedString,
+            hashLiteral(try certificate.certificateId())
+        )
     }
 
     func testTransferToriiJSONEncoding() throws {

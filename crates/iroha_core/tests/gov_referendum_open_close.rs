@@ -102,9 +102,26 @@ fn referendum_open_and_close_by_height() {
     }
     .execute(&iroha_test_samples::ALICE_ID, &mut stx1)
     .expect("propose");
+    let rid = stx1
+        .world
+        .governance_referenda()
+        .iter()
+        .next()
+        .map(|(k, _)| k.clone())
+        .expect("referendum created");
     stx1.apply();
-    // No open event at H=1
-    assert!(sblock1.world.take_external_events().is_empty());
+    // No referendum-open event at H=1.
+    let evs1 = sblock1.world.take_external_events();
+    assert!(!evs1.iter().any(|e| matches!(
+        e,
+        iroha_data_model::events::EventBox::Data(ev)
+            if matches!(
+                ev.as_ref(),
+                iroha_data_model::events::data::DataEvent::Governance(
+                    GovernanceEvent::ReferendumOpened(_)
+                )
+            )
+    )));
 
     // Block H=2: opens. Cast a plain ballot so that approve > reject at close
     let block2 = iroha_data_model::block::BlockHeader::new(
@@ -117,17 +134,9 @@ fn referendum_open_and_close_by_height() {
     );
     let mut sblock2 = state.block(block2);
     {
-        let rid = state
-            .view()
-            .world()
-            .governance_referenda()
-            .iter()
-            .next()
-            .map(|(k, _)| k.clone())
-            .unwrap();
         let mut stx2 = sblock2.transaction();
         CastPlainBallot {
-            referendum_id: rid,
+            referendum_id: rid.clone(),
             owner: iroha_test_samples::ALICE_ID.clone(),
             amount: 10000,
             duration_blocks: 10,

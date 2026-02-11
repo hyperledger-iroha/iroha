@@ -190,6 +190,15 @@ fn require_u64(value: &Value, key: &str) -> Result<u64> {
         .ok_or_else(|| eyre!("expected u64 field `{key}` in response"))
 }
 
+fn manifest_envelope_header(manifest_id_hex: &str) -> Result<String> {
+    let envelope = norito::json!({
+        "manifest_digest_hex": manifest_id_hex,
+        "source": "integration-test",
+    });
+    let bytes = json::to_vec(&envelope)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 async fn fetch_payload(
     http: &HttpClient,
     torii_url: &Url,
@@ -197,6 +206,7 @@ async fn fetch_payload(
     length: u64,
 ) -> Result<Vec<u8>> {
     let fetch_url = torii_url.join("/v1/sorafs/storage/fetch")?;
+    let manifest_envelope = manifest_envelope_header(manifest_id_hex)?;
     let request = norito::json!({
         "manifest_id_hex": manifest_id_hex,
         "offset": 0u64,
@@ -206,6 +216,7 @@ async fn fetch_payload(
     let response = http
         .post(fetch_url)
         .header("Content-Type", "application/json")
+        .header("X-SoraFS-Manifest-Envelope", manifest_envelope)
         .body(request_body)
         .send()
         .await?;

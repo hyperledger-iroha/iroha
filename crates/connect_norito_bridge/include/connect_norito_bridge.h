@@ -69,6 +69,8 @@ int32_t connect_norito_offline_receipt_challenge(
     const char* amount,
     unsigned long amount_len,
     uint64_t issued_at_ms,
+    const char* sender_certificate_id_hex,
+    unsigned long sender_certificate_id_len,
     const char* nonce_hex,
     unsigned long nonce_len,
     uint8_t** out_preimage_ptr,

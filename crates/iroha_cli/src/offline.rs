@@ -726,8 +726,9 @@ fn transfer_verdict_id(record: &OfflineTransferRecord) -> Option<&Hash> {
         .and_then(|snapshot| snapshot.verdict_id.as_ref())
         .or_else(|| {
             record
-                .primary_certificate()
-                .and_then(|cert| cert.verdict_id.as_ref())
+                .pos_verdict_snapshots
+                .first()
+                .and_then(|snapshot| snapshot.verdict_id.as_ref())
         })
 }
 
@@ -738,8 +739,9 @@ fn transfer_attestation_nonce(record: &OfflineTransferRecord) -> Option<&Hash> {
         .and_then(|snapshot| snapshot.attestation_nonce.as_ref())
         .or_else(|| {
             record
-                .primary_certificate()
-                .and_then(|cert| cert.attestation_nonce.as_ref())
+                .pos_verdict_snapshots
+                .first()
+                .and_then(|snapshot| snapshot.attestation_nonce.as_ref())
         })
 }
 
@@ -750,8 +752,9 @@ fn transfer_refresh_at(record: &OfflineTransferRecord) -> Option<u64> {
         .and_then(|snapshot| snapshot.refresh_at_ms)
         .or_else(|| {
             record
-                .primary_certificate()
-                .and_then(|cert| cert.refresh_at_ms)
+                .pos_verdict_snapshots
+                .first()
+                .and_then(|snapshot| snapshot.refresh_at_ms)
         })
 }
 
@@ -760,7 +763,12 @@ fn transfer_certificate_expires(record: &OfflineTransferRecord) -> Option<u64> {
         .verdict_snapshot
         .as_ref()
         .map(|snapshot| snapshot.certificate_expires_at_ms)
-        .or_else(|| record.primary_certificate().map(|cert| cert.expires_at_ms))
+        .or_else(|| {
+            record
+                .pos_verdict_snapshots
+                .first()
+                .map(|snapshot| snapshot.certificate_expires_at_ms)
+        })
 }
 
 fn transfer_policy_expires(record: &OfflineTransferRecord) -> Option<u64> {
@@ -770,8 +778,9 @@ fn transfer_policy_expires(record: &OfflineTransferRecord) -> Option<u64> {
         .map(|snapshot| snapshot.policy_expires_at_ms)
         .or_else(|| {
             record
-                .primary_certificate()
-                .map(|cert| cert.policy.expires_at_ms)
+                .pos_verdict_snapshots
+                .first()
+                .map(|snapshot| snapshot.policy_expires_at_ms)
         })
 }
 
@@ -1532,7 +1541,7 @@ mod bundle_inspect_tests {
             invoice_id: "inv-1".into(),
             platform_proof,
             platform_snapshot: None,
-            sender_certificate: certificate.clone(),
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::new(spend_keys.private_key(), b"receipt payload"),
         };
 
@@ -1900,7 +1909,7 @@ mod tests {
                 challenge_hash: Hash::new(b"challenge"),
             }),
             platform_snapshot: None,
-            sender_certificate: certificate.clone(),
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[0; 64]),
         };
         let transfer = OfflineToOnlineTransfer {

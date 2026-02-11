@@ -12,6 +12,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     func testEncodeRejectsEmptyChainId() {
         let nonce = sampleNonceHex()
+        let senderCertificateIdHex = sampleSenderCertificateIdHex()
         XCTAssertThrowsError(
             try OfflineReceiptChallenge.encode(
                 chainId: " ",
@@ -20,6 +21,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 assetId: Self.fixtureAssetId,
                 amount: "1",
                 issuedAtMs: 1_700_000_000_000,
+                senderCertificateIdHex: senderCertificateIdHex,
                 nonceHex: nonce
             )
         ) { error in
@@ -32,6 +34,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     func testEncodeAcceptsScaledAmount() {
         let nonce = sampleNonceHex()
+        let senderCertificateIdHex = sampleSenderCertificateIdHex()
         XCTAssertNoThrow(
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
@@ -40,6 +43,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 assetId: Self.fixtureAssetId,
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
+                senderCertificateIdHex: senderCertificateIdHex,
                 nonceHex: nonce
             )
         )
@@ -47,6 +51,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     func testEncodeRejectsScaleMismatchWhenExpectedScaleProvided() {
         let nonce = sampleNonceHex()
+        let senderCertificateIdHex = sampleSenderCertificateIdHex()
         XCTAssertThrowsError(
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
@@ -55,6 +60,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 assetId: Self.fixtureAssetId,
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
+                senderCertificateIdHex: senderCertificateIdHex,
                 nonceHex: nonce,
                 expectedScale: 0
             )
@@ -69,6 +75,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
     func testEncodeProducesDeterministicHashes() throws {
         #if canImport(Darwin)
         let nonce = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
+        let senderCertificateIdHex = sampleSenderCertificateIdHex()
         let result = try OfflineReceiptChallenge.encode(
             chainId: "testnet",
             invoiceId: "inv-swift-tests",
@@ -76,6 +83,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
             assetId: "xor#sora#34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1",
             amount: "250",
             issuedAtMs: 1_700_000_000_000,
+            senderCertificateIdHex: senderCertificateIdHex,
             nonceHex: nonce
         )
 
@@ -102,6 +110,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         let rawAssetId = "xor#\(domain)#\(rawAccountId)"
         let canonicalAssetId = "xor#\(domain)#\(canonicalAccountId)"
         let nonceHex = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
+        let nonce = try XCTUnwrap(Data(hexString: nonceHex))
+        let senderCertificateId = IrohaHash.hash(Data("sender-certificate".utf8))
 
         let rawPreimage = OfflineReceiptChallengePreimage(
             invoiceId: "inv-raw",
@@ -109,7 +119,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
             assetId: rawAssetId,
             amount: "10",
             issuedAtMs: 1_700_000_000_000,
-            nonceHex: nonceHex
+            senderCertificateId: senderCertificateId,
+            nonce: nonce
         )
         let canonicalPreimage = OfflineReceiptChallengePreimage(
             invoiceId: "inv-raw",
@@ -117,7 +128,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
             assetId: canonicalAssetId,
             amount: "10",
             issuedAtMs: 1_700_000_000_000,
-            nonceHex: nonceHex
+            senderCertificateId: senderCertificateId,
+            nonce: nonce
         )
 
         XCTAssertEqual(try rawPreimage.noritoPayload(), try canonicalPreimage.noritoPayload())
@@ -125,5 +137,9 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     private func sampleNonceHex() -> String {
         IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
+    }
+
+    private func sampleSenderCertificateIdHex() -> String {
+        IrohaHash.hash(Data("sender-certificate".utf8)).hexUppercased()
     }
 }

@@ -199,6 +199,7 @@ struct OfflineReceiptChallengePreimage {
     asset: AssetId,
     amount: Numeric,
     issued_at_ms: u64,
+    sender_certificate_id: Hash,
     nonce: Hash,    // derived from the receipt's tx_id
 }
 ```
@@ -260,7 +261,7 @@ canonical Norito encoding described above.
 ## 4. Receipts, Balance Proofs, and Bundles
 
 - `OfflineSpendReceipt` includes the sender/receiver accounts, asset/amount, invoice identifier,
-  issuance timestamp (`issued_at_ms`), platform proof, sender certificate, the sender’s
+  issuance timestamp (`issued_at_ms`), platform proof, sender certificate id, the sender’s
   spend-key signature, and
   optional receipt-scoped `platform_snapshot` metadata when wallets attach a Play
   Integrity or HMS Safety Detect token for that specific spend.
@@ -506,7 +507,7 @@ resource envelopes defined in OA14.1; SDKs call the host through the FFI/bridge 
 
 Ledger invariants enforced during `SubmitOfflineToOnlineTransfer`:
 
-1. All receipts share the same sender certificate, asset definition, receiver, and controller.
+1. All receipts share the same sender certificate id, asset definition, receiver, and controller.
 2. Receipts share a single counter scope (canonical App Attest key id, marker series, or provisioned scope).
 3. Receipts are ordered by `(counter, tx_id)` to keep counter proofs and aggregates deterministic.
 4. Every receipt amount is positive, uses the allowance scale, and stays within

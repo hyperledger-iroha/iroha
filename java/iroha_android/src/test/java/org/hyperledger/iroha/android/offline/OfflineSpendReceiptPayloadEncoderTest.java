@@ -48,20 +48,9 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
             + "\"assertion\":[202,254],"
             + "\"challenge_hash\":\"hash:510C7466F2A90281DF576A765517ADFC6A4C8F89FEE3E14B8EAE3A574F442C37#7C0B\"}}";
 
-    // Certificate JSON from Rust test
-    final String certificateJson =
-        "{\"controller\":\"" + sender + "@default\","
-            + "\"allowance\":{\"asset\":\"" + asset + "@default\",\"amount\":\"500\","
-            + "\"commitment\":[66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,"
-            + "66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66]},"
-            + "\"spend_public_key\":\"ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4\","
-            + "\"attestation_report\":[1,2,3],"
-            + "\"issued_at_ms\":1700000000000,"
-            + "\"expires_at_ms\":1800000000000,"
-            + "\"policy\":{\"max_balance\":\"1000\",\"max_tx_value\":\"200\",\"expires_at_ms\":1800000000000},"
-            + "\"operator_signature\":\"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
-            + "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB\","
-            + "\"metadata\":{},\"verdict_id\":null,\"attestation_nonce\":null,\"refresh_at_ms\":null}";
+    // Deterministic 32-byte certificate id hex.
+    final String senderCertificateIdHex =
+        "8f4c5cc60e2f8cb2cbec6db861f2f923fbe46362b55ef8f40bbd8fa54f6b6f31";
 
     final byte[] encoded =
         OfflineSpendReceiptPayloadEncoder.encode(
@@ -73,7 +62,7 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
             issuedAtMs,
             invoiceId,
             platformProofJson,
-            certificateJson);
+            senderCertificateIdHex);
 
     if (encoded == null || encoded.length == 0) {
       throw new AssertionError("encode() returned empty bytes");

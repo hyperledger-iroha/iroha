@@ -190,9 +190,9 @@ fn certificate_id_for_receipts(receipts: &[OfflineSpendReceipt]) -> Result<Hash,
     let Some(first) = receipts.first() else {
         return Err("receipt list is empty".into());
     };
-    let certificate_id = first.sender_certificate.certificate_id();
+    let certificate_id = first.sender_certificate_id;
     for receipt in receipts.iter().skip(1) {
-        if receipt.sender_certificate.certificate_id() != certificate_id {
+        if receipt.sender_certificate_id != certificate_id {
             return Err("receipts reference multiple certificates".into());
         }
     }

@@ -444,6 +444,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
     public let invoiceId: String
     public let platformProof: OfflinePlatformProof
     public let platformSnapshot: OfflinePlatformTokenSnapshot?
+    public let senderCertificateId: Data
     public let senderCertificate: OfflineWalletCertificate
     public let senderSignature: Data
 
@@ -458,6 +459,9 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
                 platformSnapshot: OfflinePlatformTokenSnapshot?,
                 senderCertificate: OfflineWalletCertificate,
                 senderSignature: Data) {
+        guard let certificateId = try? senderCertificate.certificateId() else {
+            preconditionFailure("sender certificate must produce a deterministic certificate id")
+        }
         self.txId = txId
         self.from = from
         self.to = to
@@ -467,6 +471,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
         self.invoiceId = invoiceId
         self.platformProof = platformProof
         self.platformSnapshot = platformSnapshot
+        self.senderCertificateId = certificateId
         self.senderCertificate = senderCertificate
         self.senderSignature = senderSignature
     }
@@ -484,7 +489,8 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
             assetId: assetId,
             amount: amount,
             issuedAtMs: issuedAtMs,
-            nonceHex: txId.hexUppercased()
+            senderCertificateId: senderCertificateId,
+            nonce: txId
         )
         return OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,
                                   payload: try preimage.noritoPayload())
@@ -511,7 +517,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
         writer.writeField(OfflineNorito.encodeString(invoiceId))
         writer.writeField(try platformProof.noritoPayload())
         writer.writeField(try OfflineNorito.encodeOption(platformSnapshot, encode: { try $0.noritoPayload() }))
-        writer.writeField(try senderCertificate.noritoPayload())
+        writer.writeField(try OfflineNorito.encodeHash(senderCertificateId))
         writer.writeField(OfflineNorito.encodeBytesVec(senderSignature))
         return writer.data
     }
@@ -763,7 +769,7 @@ struct OfflineSpendReceiptPayload {
     let issuedAtMs: UInt64
     let invoiceId: String
     let platformProof: OfflinePlatformProof
-    let senderCertificate: OfflineWalletCertificate
+    let senderCertificateId: Data
 
     init(receipt: OfflineSpendReceipt) {
         txId = receipt.txId
@@ -774,7 +780,7 @@ struct OfflineSpendReceiptPayload {
         issuedAtMs = receipt.issuedAtMs
         invoiceId = receipt.invoiceId
         platformProof = receipt.platformProof
-        senderCertificate = receipt.senderCertificate
+        senderCertificateId = receipt.senderCertificateId
     }
 
     func noritoPayload() throws -> Data {
@@ -787,7 +793,7 @@ struct OfflineSpendReceiptPayload {
         writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
         writer.writeField(OfflineNorito.encodeString(invoiceId))
         writer.writeField(try platformProof.noritoPayload())
-        writer.writeField(try senderCertificate.noritoPayload())
+        writer.writeField(try OfflineNorito.encodeHash(senderCertificateId))
         return writer.data
     }
 
@@ -800,7 +806,8 @@ struct OfflineReceiptChallengePreimage {
     let assetId: String
     let amount: String
     let issuedAtMs: UInt64
-    let nonceHex: String
+    let senderCertificateId: Data
+    let nonce: Data
 
     func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
@@ -809,9 +816,7 @@ struct OfflineReceiptChallengePreimage {
         writer.writeField(try OfflineNorito.encodeAssetId(assetId))
         writer.writeField(try OfflineNorito.encodeNumeric(amount))
         writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
-        guard let nonce = Data(hexString: nonceHex) else {
-            throw OfflineNoritoError.invalidHex("nonce_hex")
-        }
+        writer.writeField(try OfflineNorito.encodeHash(senderCertificateId))
         writer.writeField(try OfflineNorito.encodeHash(nonce))
         return writer.data
     }
