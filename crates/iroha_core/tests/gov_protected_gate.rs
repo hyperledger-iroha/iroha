@@ -132,11 +132,11 @@ fn protected_namespace_requires_enacted_proposal() {
     let mut md = iroha_data_model::metadata::Metadata::default();
     md.insert(
         "gov_namespace".parse().unwrap(),
-        iroha_primitives::json::Json::from("apps"),
+        iroha_primitives::json::Json::new("apps"),
     );
     md.insert(
         "gov_contract_id".parse().unwrap(),
-        iroha_primitives::json::Json::from("calc.v1"),
+        iroha_primitives::json::Json::new("calc.v1"),
     );
     insert_gas_limit(&mut md);
     let chain: ChainId = "chain".parse().unwrap();
@@ -152,6 +152,7 @@ fn protected_namespace_requires_enacted_proposal() {
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_h, res) = block2.validate_transaction(accepted, &mut ivm_cache);
     assert!(res.is_err(), "should reject without enacted proposal");
+    drop(block2);
 
     // Enact a matching proposal via public instructions
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
@@ -206,6 +207,11 @@ fn protected_namespace_requires_enacted_proposal() {
     .expect("propose");
     // Recompute the proposal id like in core and enact it
     let pid = compute_proposal_id("apps", "calc.v1", &want_code_hex, &want_abi_hex);
+    stx3.world
+        .governance_proposals_mut()
+        .get_mut(&pid)
+        .expect("proposal exists")
+        .status = iroha_core::state::GovernanceProposalStatus::Approved;
     EnactReferendum {
         referendum_id: pid,
         preimage_hash: [0u8; 32],
@@ -225,11 +231,11 @@ fn protected_namespace_requires_enacted_proposal() {
             let mut md = iroha_data_model::metadata::Metadata::default();
             md.insert(
                 "gov_namespace".parse().unwrap(),
-                iroha_primitives::json::Json::from("apps"),
+                iroha_primitives::json::Json::new("apps"),
             );
             md.insert(
                 "gov_contract_id".parse().unwrap(),
-                iroha_primitives::json::Json::from("calc.v1"),
+                iroha_primitives::json::Json::new("calc.v1"),
             );
             insert_gas_limit(&mut md);
             md

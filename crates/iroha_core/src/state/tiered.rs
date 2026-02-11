@@ -3643,7 +3643,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.invoice_id.measured_bytes_extra());
             total = total.saturating_add(self.platform_proof.measured_bytes_extra());
             total = total.saturating_add(self.platform_snapshot.measured_bytes_extra());
-            total = total.saturating_add(self.sender_certificate.measured_bytes_extra());
+            total = total.saturating_add(self.sender_certificate_id.measured_bytes_extra());
             total = total.saturating_add(self.sender_signature.measured_bytes_extra());
             total
         }

@@ -28,7 +28,8 @@ final class OfflineWalletReceiptTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: amount,
                                   issuedAtMs: issuedAtMs,
-                                  invoiceId: invoiceId)
+                                  invoiceId: invoiceId,
+                                  senderCertificateId: try certificate.certificateId())
 
         let receipt = try wallet.buildSignedReceipt(
             txId: txId,
@@ -85,6 +86,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
                                   amount: amount,
                                   issuedAtMs: issuedAtMs,
                                   invoiceId: invoiceId,
+                                  senderCertificateId: try certificate.certificateId(),
                                   counter: 3)
         XCTAssertThrowsError(
             try wallet.buildSignedReceipt(
@@ -113,6 +115,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
                            amount: String,
                            issuedAtMs: UInt64,
                            invoiceId: String,
+                           senderCertificateId: Data,
                            counter: UInt64 = 1) throws -> OfflinePlatformProof {
         let challenge = try challengeHash(txId: txId,
                                           chainId: chainId,
@@ -120,7 +123,8 @@ final class OfflineWalletReceiptTests: XCTestCase {
                                           assetId: assetId,
                                           amount: amount,
                                           issuedAtMs: issuedAtMs,
-                                          invoiceId: invoiceId)
+                                          invoiceId: invoiceId,
+                                          senderCertificateId: senderCertificateId)
         let proof = AppleAppAttestProof(keyId: appAttestKeyId,
                                         counter: counter,
                                         assertion: Data([0xAA]),
@@ -134,14 +138,16 @@ final class OfflineWalletReceiptTests: XCTestCase {
                                assetId: String,
                                amount: String,
                                issuedAtMs: UInt64,
-                               invoiceId: String) throws -> Data {
+                               invoiceId: String,
+                               senderCertificateId: Data) throws -> Data {
         let preimage = OfflineReceiptChallengePreimage(
             invoiceId: invoiceId,
             receiverAccountId: receiver,
             assetId: assetId,
             amount: amount,
             issuedAtMs: issuedAtMs,
-            nonceHex: txId.hexUppercased()
+            senderCertificateId: senderCertificateId,
+            nonce: txId
         )
         let payload = try preimage.noritoPayload()
         let bytes = OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,

@@ -10,9 +10,8 @@ use norito::codec::{Decode, Encode};
 use crate::{
     account::AccountId,
     offline::{
-        AndroidIntegrityMetadata, OfflinePlatformTokenSnapshot, OfflineToOnlineTransfer,
-        OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferStatus,
-        OfflineVerdictSnapshot, OfflineWalletCertificate,
+        OfflinePlatformTokenSnapshot, OfflineToOnlineTransfer, OfflineTransferLifecycleEntry,
+        OfflineTransferRecord, OfflineTransferStatus, OfflineVerdictSnapshot,
     },
 };
 
@@ -154,7 +153,6 @@ impl OfflineTransferSummary {
         resolve_platform_policy_label(
             self.platform_snapshot.as_ref(),
             self.transfer.platform_snapshot.as_ref(),
-            self.transfer.primary_certificate(),
         )
     }
 }
@@ -179,8 +177,8 @@ fn sum_receipt_amounts(record: &OfflineTransferRecord) -> Numeric {
         })
 }
 
-fn primary_certificate(record: &OfflineTransferRecord) -> Option<&OfflineWalletCertificate> {
-    record.primary_certificate()
+fn primary_pos_snapshot(record: &OfflineTransferRecord) -> Option<&OfflineVerdictSnapshot> {
+    record.pos_verdict_snapshots.first()
 }
 
 /// Canonical bundle identifier associated with an offline transfer.
@@ -200,11 +198,9 @@ pub fn transfer_verdict_hex(record: &OfflineTransferRecord) -> Option<String> {
         .and_then(|snapshot| snapshot.verdict_id)
         .map(|hash| encode_hex(hash.as_ref()))
         .or_else(|| {
-            primary_certificate(record).and_then(|cert| {
-                cert.verdict_id
-                    .as_ref()
-                    .map(|hash| encode_hex(hash.as_ref()))
-            })
+            primary_pos_snapshot(record)
+                .and_then(|snapshot| snapshot.verdict_id)
+                .map(|hash| encode_hex(hash.as_ref()))
         })
 }
 
@@ -217,11 +213,9 @@ pub fn transfer_attestation_nonce_hex(record: &OfflineTransferRecord) -> Option<
         .and_then(|snapshot| snapshot.attestation_nonce)
         .map(|hash| encode_hex(hash.as_ref()))
         .or_else(|| {
-            primary_certificate(record).and_then(|cert| {
-                cert.attestation_nonce
-                    .as_ref()
-                    .map(|hash| encode_hex(hash.as_ref()))
-            })
+            primary_pos_snapshot(record)
+                .and_then(|snapshot| snapshot.attestation_nonce)
+                .map(|hash| encode_hex(hash.as_ref()))
         })
 }
 
@@ -232,7 +226,7 @@ pub fn transfer_refresh_at_ms(record: &OfflineTransferRecord) -> Option<u64> {
         .verdict_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.refresh_at_ms)
-        .or_else(|| primary_certificate(record).and_then(|cert| cert.refresh_at_ms))
+        .or_else(|| primary_pos_snapshot(record).and_then(|snapshot| snapshot.refresh_at_ms))
 }
 
 /// Timestamp when the originating certificate expires.
@@ -242,7 +236,7 @@ pub fn transfer_certificate_expires_at_ms(record: &OfflineTransferRecord) -> Opt
         .verdict_snapshot
         .as_ref()
         .map(|snapshot| snapshot.certificate_expires_at_ms)
-        .or_else(|| primary_certificate(record).map(|cert| cert.expires_at_ms))
+        .or_else(|| primary_pos_snapshot(record).map(|snapshot| snapshot.certificate_expires_at_ms))
 }
 
 /// Timestamp when the wallet policy expires.
@@ -252,7 +246,7 @@ pub fn transfer_policy_expires_at_ms(record: &OfflineTransferRecord) -> Option<u
         .verdict_snapshot
         .as_ref()
         .map(|snapshot| snapshot.policy_expires_at_ms)
-        .or_else(|| primary_certificate(record).map(|cert| cert.policy.expires_at_ms))
+        .or_else(|| primary_pos_snapshot(record).map(|snapshot| snapshot.policy_expires_at_ms))
 }
 
 /// Policy slug recorded in the platform snapshot.
@@ -261,28 +255,16 @@ pub fn transfer_platform_policy_label(record: &OfflineTransferRecord) -> Option<
     resolve_platform_policy_label(
         record.platform_snapshot.as_ref(),
         record.transfer.platform_snapshot.as_ref(),
-        primary_certificate(record),
     )
-}
-
-fn certificate_platform_policy_label(certificate: &OfflineWalletCertificate) -> Option<String> {
-    AndroidIntegrityMetadata::from_metadata(&certificate.metadata)
-        .ok()
-        .and_then(|metadata| metadata.map(|parsed| parsed.policy_slug().to_string()))
 }
 
 fn resolve_platform_policy_label(
     record_snapshot: Option<&OfflinePlatformTokenSnapshot>,
     transfer_snapshot: Option<&OfflinePlatformTokenSnapshot>,
-    certificate: Option<&OfflineWalletCertificate>,
 ) -> Option<String> {
     record_snapshot
         .map(|snapshot| snapshot.policy_label().to_string())
-        .or_else(|| {
-            transfer_snapshot
-                .map(|snapshot| snapshot.policy_label().to_string())
-                .or_else(|| certificate.and_then(certificate_platform_policy_label))
-        })
+        .or_else(|| transfer_snapshot.map(|snapshot| snapshot.policy_label().to_string()))
 }
 
 #[cfg(test)]
@@ -291,7 +273,7 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::numeric::Numeric;
     use norito::json::{self, Value};
 
     use super::*;
@@ -299,7 +281,6 @@ mod tests {
         asset::AssetDefinitionId,
         domain::DomainId,
         metadata::Metadata,
-        name::Name,
         offline::{
             AndroidIntegrityPolicy, AppleAppAttestProof, OfflineAllowanceCommitment,
             OfflineBalanceProof, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
@@ -341,49 +322,6 @@ mod tests {
         }
     }
 
-    fn play_integrity_metadata() -> Metadata {
-        let mut metadata = Metadata::default();
-        let mut insert = |key: &str, value: Json| {
-            let name = Name::from_str(key).expect("metadata key");
-            metadata.insert(name, value);
-        };
-        insert(
-            AndroidIntegrityPolicy::METADATA_KEY,
-            Json::new(AndroidIntegrityPolicy::PlayIntegrity.as_str()),
-        );
-        insert(
-            "android.play_integrity.cloud_project_number",
-            Json::new(1234_u64),
-        );
-        insert(
-            "android.play_integrity.environment",
-            Json::new("production"),
-        );
-        insert(
-            "android.play_integrity.package_names",
-            Json::new(vec!["tech.app".to_string()]),
-        );
-        insert(
-            "android.play_integrity.signing_digests_sha256",
-            Json::new(vec![String::from(
-                "778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566",
-            )]),
-        );
-        insert(
-            "android.play_integrity.allowed_app_verdicts",
-            Json::new(vec!["play_recognized".to_string()]),
-        );
-        insert(
-            "android.play_integrity.allowed_device_verdicts",
-            Json::new(vec!["device".to_string()]),
-        );
-        insert(
-            "android.play_integrity.max_token_age_ms",
-            Json::new(5_000_u64),
-        );
-        metadata
-    }
-
     fn sample_certificate() -> OfflineWalletCertificate {
         let controller = sample_account(0xA1, "sbp");
         let policy = OfflineWalletPolicy {
@@ -409,6 +347,7 @@ mod tests {
     }
 
     fn sample_transfer_record() -> OfflineTransferRecord {
+        let certificate = sample_certificate();
         let receipt = OfflineSpendReceipt {
             tx_id: Hash::new(b"offline-tx"),
             from: sample_account(0xA1, "sbp"),
@@ -424,11 +363,12 @@ mod tests {
                 challenge_hash: Hash::new(b"challenge"),
             }),
             platform_snapshot: None,
-            sender_certificate: sample_certificate(),
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: sample_signature(0x55),
         };
         let claimed_delta = receipt.amount.clone();
-        let pos_snapshot = OfflineVerdictSnapshot::from_certificate(&receipt.sender_certificate);
+        let mut pos_snapshot = OfflineVerdictSnapshot::from_certificate(&certificate);
+        pos_snapshot.certificate_id = receipt.sender_certificate_id;
         let balance_proof = OfflineBalanceProof {
             initial_commitment: sample_commitment(0x22),
             resulting_commitment: vec![0xCC; 32],
@@ -539,66 +479,10 @@ mod tests {
     }
 
     #[test]
-    fn platform_policy_falls_back_to_certificate_metadata() {
+    fn platform_policy_absent_without_snapshots() {
         let mut record = sample_transfer_record();
         record.platform_snapshot = None;
         record.transfer.platform_snapshot = None;
-        let certificate = record
-            .transfer
-            .receipts
-            .get_mut(0)
-            .map(|receipt| &mut receipt.sender_certificate)
-            .expect("sample receipt");
-        certificate.metadata = play_integrity_metadata();
-
-        assert_eq!(
-            transfer_platform_policy_label(&record).as_deref(),
-            Some(AndroidIntegrityPolicy::PlayIntegrity.as_str())
-        );
-
-        let summary = OfflineTransferSummary::from(record);
-        assert_eq!(
-            summary.platform_policy_label().as_deref(),
-            Some(AndroidIntegrityPolicy::PlayIntegrity.as_str())
-        );
-    }
-
-    #[test]
-    fn platform_policy_prefers_snapshot_over_metadata() {
-        let mut record = sample_transfer_record();
-        record.transfer.platform_snapshot = None;
-        let certificate = record
-            .transfer
-            .receipts
-            .get_mut(0)
-            .map(|receipt| &mut receipt.sender_certificate)
-            .expect("sample receipt");
-        certificate.metadata = play_integrity_metadata();
-        record.platform_snapshot = Some(OfflinePlatformTokenSnapshot {
-            policy: AndroidIntegrityPolicy::HmsSafetyDetect.to_string(),
-            attestation_jws_b64: "token".into(),
-        });
-
-        assert_eq!(
-            transfer_platform_policy_label(&record).as_deref(),
-            Some(AndroidIntegrityPolicy::HmsSafetyDetect.as_str())
-        );
-
-        let summary = OfflineTransferSummary::from(record);
-        assert_eq!(
-            summary.platform_policy_label().as_deref(),
-            Some(AndroidIntegrityPolicy::HmsSafetyDetect.as_str())
-        );
-    }
-
-    #[test]
-    fn platform_policy_absent_without_snapshots_or_metadata() {
-        let mut record = sample_transfer_record();
-        record.platform_snapshot = None;
-        record.transfer.platform_snapshot = None;
-        for receipt in &mut record.transfer.receipts {
-            receipt.sender_certificate.metadata = Metadata::default();
-        }
 
         assert_eq!(transfer_platform_policy_label(&record), None);
 

@@ -601,7 +601,6 @@ fn replace_account_id_in_offline_spend_receipt(
     replace_account_id(&mut receipt.from, old, new);
     replace_account_id(&mut receipt.to, old, new);
     receipt.asset = replace_account_id_in_asset_id(&receipt.asset, old, new);
-    replace_account_id_in_offline_wallet_certificate(&mut receipt.sender_certificate, old, new);
 }
 
 fn replace_account_id_in_offline_transfer(

@@ -220,7 +220,7 @@ fn build_fixtures() -> Fixtures {
             challenge_hash: Hash::new(b"challenge"),
         }),
         platform_snapshot: None,
-        sender_certificate: certificate.clone(),
+        sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::from_bytes(&[0; 64]),
     };
     receipt.sender_signature = Signature::new(

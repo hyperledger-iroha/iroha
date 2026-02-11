@@ -308,8 +308,8 @@ pub struct OfflineSpendReceiptPayload {
     pub invoice_id: String,
     /// Platform-specific counter proof.
     pub platform_proof: OfflinePlatformProof,
-    /// Sender's certificate proving allowance + policy.
-    pub sender_certificate: OfflineWalletCertificate,
+    /// Identifier of the sender's registered certificate.
+    pub sender_certificate_id: Hash,
 }
 
 impl From<&OfflineSpendReceipt> for OfflineSpendReceiptPayload {
@@ -323,7 +323,7 @@ impl From<&OfflineSpendReceipt> for OfflineSpendReceiptPayload {
             issued_at_ms: receipt.issued_at_ms,
             invoice_id: receipt.invoice_id.clone(),
             platform_proof: receipt.platform_proof.clone(),
-            sender_certificate: receipt.sender_certificate.clone(),
+            sender_certificate_id: receipt.sender_certificate_id,
         }
     }
 }
@@ -341,6 +341,8 @@ pub struct OfflineReceiptChallengePreimage {
     pub amount: Numeric,
     /// Unix timestamp (ms) when the receipt was issued.
     pub issued_at_ms: u64,
+    /// Identifier of the sender's registered certificate.
+    pub sender_certificate_id: Hash,
     /// Nonce supplied by the sender (currently the receipt transaction id).
     pub nonce: Hash,
 }
@@ -355,6 +357,7 @@ impl OfflineReceiptChallengePreimage {
             asset: receipt.asset.clone(),
             amount: receipt.amount.clone(),
             issued_at_ms: receipt.issued_at_ms,
+            sender_certificate_id: receipt.sender_certificate_id,
             nonce: receipt.tx_id,
         }
     }
@@ -512,15 +515,12 @@ impl OfflineToOnlineTransfer {
         self.aggregate_proof.as_ref()
     }
 
-    /// Borrow the primary sender certificate used by this bundle, if any.
-    ///
-    /// Valid bundles contain receipts derived from the same certificate, so the first entry
-    /// suffices for callers that need attestation metadata.
+    /// Borrow the primary sender certificate identifier used by this bundle, if any.
     #[must_use]
-    pub fn primary_certificate(&self) -> Option<&OfflineWalletCertificate> {
+    pub fn primary_certificate_id(&self) -> Option<Hash> {
         self.receipts
             .first()
-            .map(|receipt| &receipt.sender_certificate)
+            .map(|receipt| receipt.sender_certificate_id)
     }
 }
 
@@ -1666,8 +1666,8 @@ mod model {
         /// are supplied.
         #[norito(default)]
         pub platform_snapshot: Option<OfflinePlatformTokenSnapshot>,
-        /// Sender's certificate proving allowance + policy.
-        pub sender_certificate: OfflineWalletCertificate,
+        /// Identifier of the sender's registered certificate.
+        pub sender_certificate_id: Hash,
         /// Signature produced by the sender's spend key over the offline transaction payload.
         pub sender_signature: Signature,
     }
@@ -1686,7 +1686,7 @@ mod model {
             invoice_id: String,
             platform_proof: OfflinePlatformProof,
             platform_snapshot: Option<OfflinePlatformTokenSnapshot>,
-            sender_certificate: OfflineWalletCertificate,
+            sender_certificate_id: Hash,
             sender_signature: Signature,
         ) -> Self {
             Self {
@@ -1699,7 +1699,7 @@ mod model {
                 invoice_id,
                 platform_proof,
                 platform_snapshot,
-                sender_certificate,
+                sender_certificate_id,
                 sender_signature,
             }
         }
@@ -2364,8 +2364,7 @@ mod model {
             ensure_single_counter_scope(&self.receipts)?;
             let receipts_root = compute_receipts_root(&self.receipts)?;
             let certificate_id = self
-                .primary_certificate()
-                .map(OfflineWalletCertificate::certificate_id)
+                .primary_certificate_id()
                 .ok_or(OfflineProofRequestError::MissingCertificate)?;
             Ok(OfflineProofRequestHeader {
                 version: OFFLINE_PROOF_REQUEST_VERSION_V1,
@@ -2469,35 +2468,37 @@ mod model {
             &self.controller
         }
 
-        /// Borrow the sender certificate backing this transfer, if receipts are available.
+        /// Borrow the sender certificate identifier backing this transfer, if receipts are available.
         #[must_use]
-        pub fn primary_certificate(&self) -> Option<&OfflineWalletCertificate> {
-            self.transfer.primary_certificate()
+        pub fn primary_certificate_id(&self) -> Option<Hash> {
+            self.transfer.primary_certificate_id()
         }
 
         /// Convenience accessor returning the sender certificate identifier when available.
         #[must_use]
         pub fn certificate_id(&self) -> Option<Hash> {
-            self.primary_certificate()
-                .map(OfflineWalletCertificate::certificate_id)
+            self.primary_certificate_id()
         }
 
         /// Collect verdict snapshots for every receipt certificate in the bundle.
         #[must_use]
         pub fn pos_verdict_snapshots(&self) -> Vec<OfflineVerdictSnapshot> {
-            Self::collect_pos_verdict_snapshots(&self.transfer)
+            self.pos_verdict_snapshots.clone()
         }
 
         /// Collect verdict snapshots for every receipt certificate in a transfer.
         #[must_use]
         pub fn collect_pos_verdict_snapshots(
             transfer: &OfflineToOnlineTransfer,
+            certificate: &OfflineWalletCertificate,
         ) -> Vec<OfflineVerdictSnapshot> {
             transfer
                 .receipts
                 .iter()
                 .map(|receipt| {
-                    OfflineVerdictSnapshot::from_certificate(&receipt.sender_certificate)
+                    let mut snapshot = OfflineVerdictSnapshot::from_certificate(certificate);
+                    snapshot.certificate_id = receipt.sender_certificate_id;
+                    snapshot
                 })
                 .collect()
         }
@@ -2596,7 +2597,7 @@ mod model {
         #[error("offline transfer missing receipts")]
         MissingReceipts,
         /// Receipts failed to reference a shared certificate.
-        #[error("offline transfer missing sender certificate")]
+        #[error("offline transfer missing sender certificate id")]
         MissingCertificate,
         /// The first receipt counter cannot produce a checkpoint.
         #[error("first receipt counter is zero; provide an explicit checkpoint")]
@@ -3352,6 +3353,25 @@ mod tests {
     fn sample_receipt() -> OfflineSpendReceipt {
         let sender_key = sample_public_key(0xA1);
         let receiver_key = sample_public_key(0xB2);
+        let certificate = OfflineWalletCertificate {
+            controller: account_from_key(&sender_key, "sbp"),
+            operator: account_from_key(&sender_key, "sbp"),
+            allowance: sample_commitment(0x11),
+            spend_public_key: sender_key.clone(),
+            attestation_report: vec![0x01, 0x02],
+            issued_at_ms: 1_700_000_000,
+            expires_at_ms: 1_800_000_000,
+            policy: OfflineWalletPolicy {
+                max_balance: Numeric::new(5_000, 0),
+                max_tx_value: Numeric::new(1_000, 0),
+                expires_at_ms: 1_800_000_000,
+            },
+            operator_signature: sample_signature(0xA0),
+            metadata: Metadata::default(),
+            verdict_id: None,
+            attestation_nonce: None,
+            refresh_at_ms: None,
+        };
         OfflineSpendReceipt {
             tx_id: Hash::new(b"offline-tx"),
             from: account_from_key(&sender_key, "sbp"),
@@ -3367,25 +3387,7 @@ mod tests {
                 challenge_hash: Hash::new(b"challenge"),
             }),
             platform_snapshot: None,
-            sender_certificate: OfflineWalletCertificate {
-                controller: account_from_key(&sender_key, "sbp"),
-                operator: account_from_key(&sender_key, "sbp"),
-                allowance: sample_commitment(0x11),
-                spend_public_key: sender_key.clone(),
-                attestation_report: vec![0x01, 0x02],
-                issued_at_ms: 1_700_000_000,
-                expires_at_ms: 1_800_000_000,
-                policy: OfflineWalletPolicy {
-                    max_balance: Numeric::new(5_000, 0),
-                    max_tx_value: Numeric::new(1_000, 0),
-                    expires_at_ms: 1_800_000_000,
-                },
-                operator_signature: sample_signature(0xA0),
-                metadata: Metadata::default(),
-                verdict_id: None,
-                attestation_nonce: None,
-                refresh_at_ms: None,
-            },
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: sample_signature(0x55),
         }
     }
@@ -3406,7 +3408,25 @@ mod tests {
 
     fn sample_transfer_record(counter: u64) -> OfflineTransferRecord {
         let receipt = sample_receipt_with_counter(counter);
-        let snapshot_certificate = receipt.sender_certificate.clone();
+        let snapshot_certificate = OfflineWalletCertificate {
+            controller: receipt.from.clone(),
+            operator: receipt.from.clone(),
+            allowance: sample_commitment(0x11),
+            spend_public_key: sample_public_key(0xA1),
+            attestation_report: vec![0x01, 0x02],
+            issued_at_ms: 1_700_000_000,
+            expires_at_ms: 1_800_000_000,
+            policy: OfflineWalletPolicy {
+                max_balance: Numeric::new(5_000, 0),
+                max_tx_value: Numeric::new(1_000, 0),
+                expires_at_ms: 1_800_000_000,
+            },
+            operator_signature: sample_signature(0xA0),
+            metadata: Metadata::default(),
+            verdict_id: None,
+            attestation_nonce: None,
+            refresh_at_ms: None,
+        };
         let bundle_id = Hash::new(b"bundle");
         let balance_proof = OfflineBalanceProof {
             initial_commitment: sample_commitment(0x22),
@@ -3432,9 +3452,10 @@ mod tests {
             recorded_at_height: 1,
             archived_at_height: None,
             history: Vec::new(),
-            pos_verdict_snapshots: vec![OfflineVerdictSnapshot::from_certificate(
+            pos_verdict_snapshots: OfflineTransferRecord::collect_pos_verdict_snapshots(
+                &transfer,
                 &snapshot_certificate,
-            )],
+            ),
             verdict_snapshot: Some(OfflineVerdictSnapshot::from_certificate(
                 &snapshot_certificate,
             )),
@@ -3628,9 +3649,28 @@ mod tests {
         android.insert("pixel-8".into(), 9);
 
         let receipt = sample_receipt();
+        let certificate = OfflineWalletCertificate {
+            controller: receipt.from.clone(),
+            operator: receipt.from.clone(),
+            allowance: sample_commitment(0x11),
+            spend_public_key: sample_public_key(0xA1),
+            attestation_report: vec![0x01, 0x02],
+            issued_at_ms: 1_700_000_000,
+            expires_at_ms: 1_800_000_000,
+            policy: OfflineWalletPolicy {
+                max_balance: Numeric::new(5_000, 0),
+                max_tx_value: Numeric::new(1_000, 0),
+                expires_at_ms: 1_800_000_000,
+            },
+            operator_signature: sample_signature(0xA0),
+            metadata: Metadata::default(),
+            verdict_id: None,
+            attestation_nonce: None,
+            refresh_at_ms: None,
+        };
         let record = OfflineAllowanceRecord {
-            certificate: receipt.sender_certificate.clone(),
-            current_commitment: receipt.sender_certificate.allowance.commitment.clone(),
+            certificate: certificate.clone(),
+            current_commitment: certificate.allowance.commitment.clone(),
             registered_at_ms: 1_700_000_123,
             remaining_amount: Numeric::new(750, 0),
             counter_state: OfflineCounterState {
@@ -3677,24 +3717,23 @@ mod tests {
         let snapshot = record.verdict_snapshot.as_ref().expect("snapshot");
         assert_eq!(
             snapshot.certificate_id,
-            record
-                .transfer
-                .primary_certificate()
-                .unwrap()
-                .certificate_id()
+            record.transfer.primary_certificate_id().unwrap()
         );
         assert_eq!(
             snapshot.certificate_expires_at_ms,
-            record.transfer.primary_certificate().unwrap().expires_at_ms
+            record
+                .verdict_snapshot
+                .as_ref()
+                .unwrap()
+                .certificate_expires_at_ms
         );
         assert_eq!(
             snapshot.policy_expires_at_ms,
             record
-                .transfer
-                .primary_certificate()
+                .verdict_snapshot
+                .as_ref()
                 .unwrap()
-                .policy
-                .expires_at_ms
+                .policy_expires_at_ms
         );
         assert_eq!(snapshot.verdict_id, None);
     }
@@ -3843,6 +3882,7 @@ mod receipt_challenge_tests {
         let sender = sample_account();
         let receiver = sample_receiver();
         let asset = sample_asset(&sender);
+        let certificate = sample_certificate(&sender, &asset);
         OfflineSpendReceipt {
             tx_id: Hash::new(vec![0x22; 32]),
             from: sender.clone(),
@@ -3853,7 +3893,7 @@ mod receipt_challenge_tests {
             invoice_id: "INV-42".into(),
             platform_proof: sample_platform_proof(Hash::new(vec![0x33; 32])),
             platform_snapshot: None,
-            sender_certificate: sample_certificate(&sender, &asset),
+            sender_certificate_id: certificate.certificate_id(),
             sender_signature: Signature::from_bytes(&[0xCD; 64]),
         }
     }
@@ -3866,6 +3906,7 @@ mod receipt_challenge_tests {
             asset: sample_asset(&sample_account()),
             amount: Numeric::from(123_u32),
             issued_at_ms: 1_700_000_400_000,
+            sender_certificate_id: Hash::new(vec![0x44; 32]),
             nonce: Hash::new(vec![0x10; 32]),
         };
         let raw = preimage.to_bytes().expect("serialize preimage");

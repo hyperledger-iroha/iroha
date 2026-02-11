@@ -9,6 +9,11 @@ public final class OfflineReceiptChallengeTest {
 
   private OfflineReceiptChallengeTest() {}
 
+  private static final String SAMPLE_CERTIFICATE_ID_HEX =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  private static final String SAMPLE_NONCE_HEX =
+      "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
   public static void main(final String[] args) throws Exception {
     computeAcceptsScaledAmount();
     computeProducesClientHash();
@@ -28,7 +33,8 @@ public final class OfflineReceiptChallengeTest {
         "usd#wonderland#treasury@wonderland",
         "12.5",
         1_700_000_000_000L,
-        "ABCDEF1234",
+        SAMPLE_CERTIFICATE_ID_HEX,
+        SAMPLE_NONCE_HEX,
         1);
   }
 
@@ -47,7 +53,8 @@ public final class OfflineReceiptChallengeTest {
             "usd#wonderland#treasury@wonderland",
             "100",
             1_700_000_000_000L,
-            "ABCDEF1234");
+            SAMPLE_CERTIFICATE_ID_HEX,
+            SAMPLE_NONCE_HEX);
 
     expectByteEquals('N', challenge.getPreimage()[0], "preimage[0]");
     expectByteEquals('R', challenge.getPreimage()[1], "preimage[1]");

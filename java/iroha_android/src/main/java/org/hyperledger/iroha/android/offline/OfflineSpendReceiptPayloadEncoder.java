@@ -3,8 +3,8 @@ package org.hyperledger.iroha.android.offline;
 /**
  * Encodes OfflineSpendReceiptPayload to Norito bytes for signing.
  *
- * <p>This encoder serializes the complete receipt payload structure using the Norito
- * codec, producing bytes that can be signed by the sender's spend key.
+ * <p>This encoder serializes the receipt payload structure using the Norito codec, producing
+ * bytes that can be signed by the sender's spend key.
  */
 public final class OfflineSpendReceiptPayloadEncoder {
   private static final boolean NATIVE_AVAILABLE;
@@ -37,7 +37,7 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * @param issuedAtMs timestamp in milliseconds
    * @param invoiceId invoice identifier
    * @param platformProofJson JSON-serialized OfflinePlatformProof
-   * @param certificateJson JSON-serialized OfflineWalletCertificate
+   * @param senderCertificateIdHex 32-byte certificate identifier as hex (64 chars)
    * @return Norito-encoded bytes
    * @throws IllegalStateException if native library is not available
    * @throws IllegalArgumentException if any parameter is invalid
@@ -51,7 +51,7 @@ public final class OfflineSpendReceiptPayloadEncoder {
       final long issuedAtMs,
       final String invoiceId,
       final String platformProofJson,
-      final String certificateJson) {
+      final String senderCertificateIdHex) {
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
     }
@@ -76,8 +76,8 @@ public final class OfflineSpendReceiptPayloadEncoder {
     if (platformProofJson == null || platformProofJson.isEmpty()) {
       throw new IllegalArgumentException("platformProofJson must not be empty");
     }
-    if (certificateJson == null || certificateJson.isEmpty()) {
-      throw new IllegalArgumentException("certificateJson must not be empty");
+    if (senderCertificateIdHex == null || senderCertificateIdHex.length() != 64) {
+      throw new IllegalArgumentException("senderCertificateIdHex must be 64 hex characters");
     }
     final byte[] result =
         nativeEncode(
@@ -89,7 +89,7 @@ public final class OfflineSpendReceiptPayloadEncoder {
             issuedAtMs,
             invoiceId,
             platformProofJson,
-            certificateJson);
+            senderCertificateIdHex);
     if (result == null) {
       throw new IllegalStateException("nativeEncode returned null");
     }
@@ -105,5 +105,5 @@ public final class OfflineSpendReceiptPayloadEncoder {
       long issuedAtMs,
       String invoiceId,
       String platformProofJson,
-      String certificateJson);
+      String senderCertificateIdHex);
 }

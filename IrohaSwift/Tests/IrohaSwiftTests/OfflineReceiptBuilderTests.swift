@@ -19,7 +19,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: amount,
                                   invoiceId: invoiceId,
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
 
         let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
             txId: txId,
@@ -50,7 +51,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: "1.0",
                                   invoiceId: "inv-frac",
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
         let receipt = OfflineSpendReceipt(
             txId: txId,
             from: certificate.controller,
@@ -175,7 +177,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: amount,
                                   invoiceId: invoiceId,
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
 
         let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
             txIdSeed: seed,
@@ -206,7 +209,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: amount,
                                   invoiceId: invoiceId,
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
@@ -236,7 +240,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: "9.00",
                                   invoiceId: "inv-invalid",
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
@@ -266,7 +271,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: "9.00",
                                   invoiceId: "inv-reserved",
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
@@ -296,7 +302,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: "4.00",
                                   invoiceId: "inv-whitespace",
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
@@ -368,7 +375,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: "8.00",
                                   invoiceId: "inv-snapshot",
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
         let snapshot = OfflinePlatformTokenSnapshot(
             policy: "play_integrity",
             attestationJwsB64: Data([0x01, 0x02]).base64EncodedString()
@@ -858,7 +866,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   assetId: certificate.allowance.assetId,
                                   amount: amount,
                                   invoiceId: invoiceId,
-                                  issuedAtMs: issuedAtMs)
+                                  issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId())
 
         let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
             txId: txId,
@@ -920,6 +929,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   amount: amount,
                                   invoiceId: invoiceId,
                                   issuedAtMs: issuedAtMs,
+                                  senderCertificateId: try certificate.certificateId(),
                                   counter: counter)
         return try OfflineReceiptBuilder.buildSignedReceipt(
             txId: txId,
@@ -947,6 +957,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                            amount: String,
                            invoiceId: String,
                            issuedAtMs: UInt64 = 1_700_000_000_000,
+                           senderCertificateId: Data,
                            counter: UInt64 = 1) throws -> OfflinePlatformProof {
         let challenge = try challengeHash(txId: txId,
                                           chainId: chainId,
@@ -954,7 +965,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                           assetId: assetId,
                                           amount: amount,
                                           issuedAtMs: issuedAtMs,
-                                          invoiceId: invoiceId)
+                                          invoiceId: invoiceId,
+                                          senderCertificateId: senderCertificateId)
         let keyId = Data("swift-tests".utf8).base64EncodedString()
         let proof = AppleAppAttestProof(keyId: keyId,
                                         counter: counter,
@@ -969,14 +981,16 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                assetId: String,
                                amount: String,
                                issuedAtMs: UInt64,
-                               invoiceId: String) throws -> Data {
+                               invoiceId: String,
+                               senderCertificateId: Data) throws -> Data {
         let preimage = OfflineReceiptChallengePreimage(
             invoiceId: invoiceId,
             receiverAccountId: receiver,
             assetId: assetId,
             amount: amount,
             issuedAtMs: issuedAtMs,
-            nonceHex: txId.hexUppercased()
+            senderCertificateId: senderCertificateId,
+            nonce: txId
         )
         let payload = try preimage.noritoPayload()
         let bytes = OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,

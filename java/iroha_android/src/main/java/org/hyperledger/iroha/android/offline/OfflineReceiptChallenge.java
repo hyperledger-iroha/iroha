@@ -38,10 +38,12 @@ public final class OfflineReceiptChallenge {
       final String assetId,
       final String amount,
       final long issuedAtMs,
+      final String senderCertificateIdHex,
       final String nonceHex) {
     if (chainId == null || chainId.trim().isEmpty()) {
       throw new IllegalArgumentException("chainId must not be empty");
     }
+    requireCertificateIdHex(senderCertificateIdHex);
     requireNumericAmount(amount);
     return computeInternal(
         chainId,
@@ -50,6 +52,7 @@ public final class OfflineReceiptChallenge {
         assetId,
         amount,
         issuedAtMs,
+        senderCertificateIdHex,
         nonceHex);
   }
 
@@ -60,6 +63,7 @@ public final class OfflineReceiptChallenge {
       final String assetId,
       final String amount,
       final long issuedAtMs,
+      final String senderCertificateIdHex,
       final String nonceHex,
       final int expectedScale) {
     if (chainId == null || chainId.trim().isEmpty()) {
@@ -68,6 +72,7 @@ public final class OfflineReceiptChallenge {
     if (expectedScale < 0) {
       throw new IllegalArgumentException("expectedScale must be non-negative");
     }
+    requireCertificateIdHex(senderCertificateIdHex);
     final int scale = requireNumericAmount(amount);
     if (scale != expectedScale) {
       throw new IllegalArgumentException(
@@ -80,6 +85,7 @@ public final class OfflineReceiptChallenge {
         assetId,
         amount,
         issuedAtMs,
+        senderCertificateIdHex,
         nonceHex);
   }
 
@@ -90,6 +96,7 @@ public final class OfflineReceiptChallenge {
       final String assetId,
       final String amount,
       final long issuedAtMs,
+      final String senderCertificateIdHex,
       final String nonceHex) {
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
@@ -104,6 +111,7 @@ public final class OfflineReceiptChallenge {
             assetId,
             amount,
             issuedAtMs,
+            senderCertificateIdHex,
             nonceHex,
             irohaHash,
             clientHash);
@@ -132,9 +140,16 @@ public final class OfflineReceiptChallenge {
       String assetId,
       String amount,
       long issuedAtMs,
+      String senderCertificateIdHex,
       String nonceHex,
       byte[] irohaHashOut,
       byte[] clientHashOut);
+
+  private static void requireCertificateIdHex(final String senderCertificateIdHex) {
+    if (senderCertificateIdHex == null || senderCertificateIdHex.length() != 64) {
+      throw new IllegalArgumentException("senderCertificateIdHex must be 64 hex characters");
+    }
+  }
 
   private static int requireNumericAmount(final String amount) {
     if (amount == null) {

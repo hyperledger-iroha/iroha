@@ -432,7 +432,7 @@ fn build_receipt(
             inspector_signature: Signature::from_bytes(&[0; 64]),
         }),
         platform_snapshot: None,
-        sender_certificate: certificate.clone(),
+        sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::from_bytes(&[0; 64]),
     };
     let challenge_hash = receipt

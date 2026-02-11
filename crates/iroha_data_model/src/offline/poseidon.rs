@@ -596,6 +596,7 @@ mod tests {
         let account = sample_account();
         let asset = sample_asset(&account);
         let cert = sample_certificate(&account, &asset);
+        let certificate_id = cert.certificate_id();
         let key_pair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
         OfflineSpendReceipt {
             tx_id: Hash::new(format!("tx-{seed}").as_bytes()),
@@ -612,7 +613,7 @@ mod tests {
                 challenge_hash: Hash::new(b"challenge"),
             }),
             platform_snapshot: None,
-            sender_certificate: cert,
+            sender_certificate_id: certificate_id,
             sender_signature: Signature::new(key_pair.private_key(), b"receipt"),
         }
     }
@@ -671,6 +672,7 @@ mod tests {
         entry: &Value,
         certificate: &OfflineWalletCertificate,
     ) -> OfflineSpendReceipt {
+        let certificate_id = certificate.certificate_id();
         let obj = entry.as_object().expect("receipt object");
         let from = obj
             .get("from")
@@ -756,7 +758,7 @@ mod tests {
             invoice_id,
             platform_proof,
             platform_snapshot: None,
-            sender_certificate: certificate.clone(),
+            sender_certificate_id: certificate_id,
             sender_signature: Signature::from_bytes(&[0; 64]),
         }
     }

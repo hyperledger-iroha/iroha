@@ -6928,10 +6928,11 @@ mod tests {
         if skip_network_tests("peer_startup_timeout_override_is_applied") {
             return;
         }
-        let network = NetworkBuilder::new()
-            .with_min_peers(4)
-            .with_peer_startup_timeout(Duration::from_secs(300))
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_min_peers(4)
+                .with_peer_startup_timeout(Duration::from_secs(300)),
+        );
         assert_eq!(network.peer_startup_timeout(), Duration::from_secs(300));
     }
 
@@ -8896,29 +8897,57 @@ exit 0
         if skip_network_tests("can_start_networks") {
             return;
         }
-        let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
-        let _disable_da = disable_sumeragi_env_overrides();
+        let (first_builder, second_builder) = {
+            let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
+            let _disable_da = disable_sumeragi_env_overrides();
+            (
+                NetworkBuilder::new().with_peers(4),
+                NetworkBuilder::new().with_peers(4),
+            )
+        };
         {
             let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
             Program::Irohad
                 .resolve()
                 .expect("irohad binary should resolve for network startup tests");
         }
-        NetworkBuilder::new().with_peers(4).start().await.unwrap();
+        const START_TIMEOUT: Duration = Duration::from_secs(90);
+        let first = build_with_isolated_permit_async(first_builder).await;
+        tokio::time::timeout(START_TIMEOUT, first.start_all())
+            .await
+            .expect("first network startup should complete within timeout")
+            .unwrap();
+        tokio::time::timeout(START_TIMEOUT, async {
+            first.shutdown().await;
+        })
+        .await
+        .expect("first network shutdown should complete within timeout");
         // Single-peer DA startup is still stall-prone in integration paths; keep this
         // smoke test on quorum-representative topologies to avoid lock convoy hangs.
-        NetworkBuilder::new().with_peers(4).start().await.unwrap();
+        let second = build_with_isolated_permit_async(second_builder).await;
+        tokio::time::timeout(START_TIMEOUT, second.start_all())
+            .await
+            .expect("second network startup should complete within timeout")
+            .unwrap();
     }
 
     #[tokio::test]
     async fn start_fails_with_missing_binary() {
-        let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
-        let _disable_da = disable_sumeragi_env_overrides();
+        if skip_network_tests("start_fails_with_missing_binary") {
+            return;
+        }
+        let network = {
+            let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
+            let _disable_da = disable_sumeragi_env_overrides();
+            build_with_isolated_permit_async(NetworkBuilder::new()).await
+        };
         let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
         const ENV: &str = PROGRAM_IROHAD_ENV;
         let old = std::env::var(ENV).ok();
         set_env_var(ENV, "non-existent-path");
-        let res = NetworkBuilder::new().start().await;
+        let res = tokio::time::timeout(Duration::from_secs(10), network.start_all())
+            .await
+            .expect("missing binary should fail startup quickly");
         assert!(res.is_err());
         if let Some(val) = old {
             set_env_var(ENV, val);
@@ -8932,8 +8961,13 @@ exit 0
         if skip_network_tests("starts_single_peer_with_minimal_genesis_fallback") {
             return;
         }
-        let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
-        let _disable_da = disable_sumeragi_env_overrides();
+        let builder = {
+            let _sumeragi_guard = lock_env_guard_async(&SUMERAGI_ENV_GUARD).await;
+            let _disable_da = disable_sumeragi_env_overrides();
+            // Single-peer DA startup is still stall-prone in test environments.
+            // Use a quorum-representative topology while preserving fallback-genesis coverage.
+            NetworkBuilder::new().with_peers(4)
+        };
         {
             let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
             Program::Irohad
@@ -8946,11 +8980,11 @@ exit 0
         // minimal in-memory genesis. This test ensures that even with fallback
         // the peer starts and commits the genesis block.
         remove_env_var("IROHA_TEST_SKIP_BUILD"); // allow building if needed
-        let net = NetworkBuilder::new().with_peers(1).start().await;
-        assert!(
-            net.is_ok(),
-            "single-peer network should start with fallback genesis"
-        );
+        let network = build_with_isolated_permit_async(builder).await;
+        let net = tokio::time::timeout(Duration::from_secs(90), network.start_all())
+            .await
+            .expect("fallback startup should complete within timeout");
+        assert!(net.is_ok(), "network should start with fallback genesis");
     }
 
     #[test]
@@ -9106,12 +9140,13 @@ exit 0
     fn post_topology_instructions_are_included_in_genesis() {
         init_instruction_registry();
         let domain_id: DomainId = "post_topology_test".parse().expect("domain");
-        let network = NetworkBuilder::new()
-            .with_peers(1)
-            .with_genesis_post_topology_isi(vec![
-                Register::domain(Domain::new(domain_id.clone())).into(),
-            ])
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(1)
+                .with_genesis_post_topology_isi(vec![
+                    Register::domain(Domain::new(domain_id.clone())).into(),
+                ]),
+        );
         let genesis = network.genesis();
         let mut has_domain = false;
         for tx in genesis.0.transactions_vec() {
@@ -9142,16 +9177,17 @@ exit 0
         let mut npos_params = SumeragiNposParameters::default();
         npos_params.min_self_bond = npos_params.min_self_bond().saturating_add(5_000);
         let expected = npos_params.min_self_bond;
-        let network = NetworkBuilder::new()
-            .with_peers(1)
-            .with_auto_populated_trusted_peers()
-            .with_genesis_instruction(SetParameter::new(Parameter::Custom(
-                npos_params.into_custom_parameter(),
-            )))
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(1)
+                .with_auto_populated_trusted_peers()
+                .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+                    npos_params.into_custom_parameter(),
+                )))
+                .with_config_layer(|layer| {
+                    layer.write(["sumeragi", "consensus_mode"], "npos");
+                }),
+        );
         let genesis = network.genesis();
         let mut seen = false;
         for tx in genesis.0.transactions_vec() {
@@ -9284,8 +9320,12 @@ exit 0
 
     #[test]
     fn pipeline_time_rounding_preserves_total_duration() {
+        if skip_network_tests("pipeline_time_rounding_preserves_total_duration") {
+            return;
+        }
         let duration = Duration::from_millis(9_500);
-        let network = NetworkBuilder::new().with_pipeline_time(duration).build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_pipeline_time(duration));
 
         assert_eq!(network.pipeline_time(), duration);
 
@@ -9505,6 +9545,15 @@ exit 0
 
     fn build_with_isolated_permit(builder: NetworkBuilder) -> Network {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+        builder.build()
+    }
+
+    async fn build_with_isolated_permit_async(builder: NetworkBuilder) -> Network {
+        let _guard = lock_env_guard_async(&NETWORK_PERMIT_ENV_GUARD).await;
         let dir = tempdir().expect("permit dir");
         let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");

@@ -63,9 +63,7 @@ following structure:
           "...": "variant-specific fields"
         }
       },
-      "sender_certificate": {
-        "certificate_path": "../../fixtures/offline_allowance/ios-demo/certificate.json"
-      },
+      "sender_certificate_id_hex": "2A86...7C61",
       "sender_signature_hex": "ed25519 signature hex"
     }
   ],
@@ -86,7 +84,7 @@ following structure:
 }
 ```
 
-All receipts in a bundle must reference the same certificate. The example spec
+All receipts in a bundle must reference the same certificate id. The example spec
 (in this directory) demonstrates how to point the generator at the allowance
 fixtures emitted by `scripts/offline_topup`. The metadata block inside
 `aggregate_proof` is optional; when present it is copied verbatim into the

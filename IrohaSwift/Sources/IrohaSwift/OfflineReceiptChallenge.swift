@@ -21,6 +21,7 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         assetId: String,
         amount: String,
         issuedAtMs: UInt64,
+        senderCertificateIdHex: String,
         nonceHex: String,
         expectedScale: Int? = nil
     ) throws -> Result {
@@ -28,6 +29,8 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
             throw Error.invalidInput("chainId must not be empty")
         }
         try validateAmount(amount, expectedScale: expectedScale)
+        _ = try parseHashHex(senderCertificateIdHex, field: "senderCertificateIdHex")
+        _ = try parseHashHex(nonceHex, field: "nonceHex")
         do {
             guard let native = try NoritoNativeBridge.shared.offlineReceiptChallenge(
                 chainId: chainId,
@@ -36,6 +39,7 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
                 assetId: assetId,
                 amount: amount,
                 issuedAtMs: issuedAtMs,
+                senderCertificateIdHex: senderCertificateIdHex,
                 nonceHex: nonceHex
             ) else {
                 throw Error.bridgeUnavailable
@@ -54,6 +58,7 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
                                             assetId: assetId,
                                             amount: amount,
                                             issuedAtMs: issuedAtMs,
+                                            senderCertificateIdHex: senderCertificateIdHex,
                                             nonceHex: nonceHex,
                                             status: code)
             }
@@ -64,6 +69,7 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
                                         assetId: assetId,
                                         amount: amount,
                                         issuedAtMs: issuedAtMs,
+                                        senderCertificateIdHex: senderCertificateIdHex,
                                         nonceHex: nonceHex,
                                         status: nil)
         } catch {
@@ -78,18 +84,22 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         assetId: String,
         amount: String,
         issuedAtMs: UInt64,
+        senderCertificateIdHex: String,
         nonceHex: String,
         status: Int32?
     ) throws -> Result {
-        let preimage = OfflineReceiptChallengePreimage(
-            invoiceId: invoiceId,
-            receiverAccountId: receiverAccountId,
-            assetId: assetId,
-            amount: amount,
-            issuedAtMs: issuedAtMs,
-            nonceHex: nonceHex
-        )
         do {
+            let senderCertificateId = try parseHashHex(senderCertificateIdHex, field: "senderCertificateIdHex")
+            let nonce = try parseHashHex(nonceHex, field: "nonceHex")
+            let preimage = OfflineReceiptChallengePreimage(
+                invoiceId: invoiceId,
+                receiverAccountId: receiverAccountId,
+                assetId: assetId,
+                amount: amount,
+                issuedAtMs: issuedAtMs,
+                senderCertificateId: senderCertificateId,
+                nonce: nonce
+            )
             let payload = try preimage.noritoPayload()
             let bytes = OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,
                                            payload: payload)
@@ -105,6 +115,14 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
             let message = status.map { "\(error.localizedDescription) (bridge code \($0))" } ?? error.localizedDescription
             throw Error.invalidInput(message)
         }
+    }
+
+    private static func parseHashHex(_ value: String, field: String) throws -> Data {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let bytes = Data(hexString: trimmed), bytes.count == 32 else {
+            throw Error.invalidInput("\(field) must be 64 hex characters")
+        }
+        return bytes
     }
 
     private static func validateAmount(_ value: String, expectedScale: Int?) throws {

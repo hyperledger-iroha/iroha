@@ -1089,6 +1089,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt64,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UInt8>?, UInt
@@ -2808,6 +2809,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         assetId: String,
         amount: String,
         issuedAtMs: UInt64,
+        senderCertificateIdHex: String,
         nonceHex: String
     ) throws -> NativeOfflineReceiptChallengeResult? {
         #if canImport(Darwin)
@@ -2828,28 +2830,32 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                         return receiverId.withCString { receiverPtr in
                             return assetId.withCString { assetPtr in
                                 return amount.withCString { amountPtr in
-                                    return nonceHex.withCString { noncePtr in
-                                        offlineReceiptChallengeFn(
-                                            chainPtr,
-                                            UInt(chainId.utf8.count),
-                                            invoicePtr,
-                                            UInt(invoiceId.utf8.count),
-                                            receiverPtr,
-                                            UInt(receiverId.utf8.count),
-                                            assetPtr,
-                                            UInt(assetId.utf8.count),
-                                            amountPtr,
-                                            UInt(amount.utf8.count),
-                                            issuedAtMs,
-                                            noncePtr,
-                                            UInt(nonceHex.utf8.count),
-                                            &preimagePtr,
-                                            &preimageLen,
-                                            hashPtr,
-                                            irohaHashCount,
-                                            clientPtr,
-                                            clientHashCount
-                                        )
+                                    return senderCertificateIdHex.withCString { senderCertificateIdPtr in
+                                        return nonceHex.withCString { noncePtr in
+                                            offlineReceiptChallengeFn(
+                                                chainPtr,
+                                                UInt(chainId.utf8.count),
+                                                invoicePtr,
+                                                UInt(invoiceId.utf8.count),
+                                                receiverPtr,
+                                                UInt(receiverId.utf8.count),
+                                                assetPtr,
+                                                UInt(assetId.utf8.count),
+                                                amountPtr,
+                                                UInt(amount.utf8.count),
+                                                issuedAtMs,
+                                                senderCertificateIdPtr,
+                                                UInt(senderCertificateIdHex.utf8.count),
+                                                noncePtr,
+                                                UInt(nonceHex.utf8.count),
+                                                &preimagePtr,
+                                                &preimageLen,
+                                                hashPtr,
+                                                irohaHashCount,
+                                                clientPtr,
+                                                clientHashCount
+                                            )
+                                        }
                                     }
                                 }
                             }
