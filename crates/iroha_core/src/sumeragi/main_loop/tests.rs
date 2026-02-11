@@ -56669,6 +56669,77 @@ async fn commit_pipeline_inlines_validation_when_inflight_is_stalled() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_keeps_deferred_validation_when_inflight_is_fresh() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+
+    // Keep a non-empty worker set so the deferred path checks the inflight marker.
+    let (work_tx, _work_rx) = std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = None;
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 9,
+            started_at: Instant::now(),
+        },
+    );
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(
+        pending_after.validation_status,
+        ValidationStatus::Pending,
+        "fresh inflight validation should remain deferred despite pending age"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "fresh inflight entry should not be superseded"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_runs_event_when_queue_backlogged() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

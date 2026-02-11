@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use iroha_logger::prelude::*;
 
@@ -1603,21 +1604,35 @@ impl Actor {
             local_height,
         ) {
             super::status::inc_block_sync_drop_invalid_signatures();
-            warn!(
-                hash = ?block_hash,
-                height = block_height,
-                view = block_view,
-                block_signers = block_signer_count,
-                signatures = block.signatures().count(),
-                commit_quorum,
-                candidate_qc_present,
-                candidate_qc_signers,
-                qc_evidence_present,
-                incoming_qc_validated,
-                missing_request = requested_missing_block,
-                local_height,
-                "dropping block sync update missing commit-role quorum"
-            );
+            let warn_cooldown = self
+                .rebroadcast_cooldown()
+                .max(super::BLOCK_SYNC_WARN_COOLDOWN_FLOOR);
+            if let Some(suppressed_since_last) = self.block_sync_warning_log.allow(
+                super::BlockSyncWarningKind::MissingCommitRoleQuorum,
+                block_hash,
+                block_height,
+                block_view,
+                Instant::now(),
+                warn_cooldown,
+            ) {
+                warn!(
+                    hash = ?block_hash,
+                    height = block_height,
+                    view = block_view,
+                    block_signers = block_signer_count,
+                    signatures = block.signatures().count(),
+                    commit_quorum,
+                    candidate_qc_present,
+                    candidate_qc_signers,
+                    qc_evidence_present,
+                    incoming_qc_validated,
+                    missing_request = requested_missing_block,
+                    local_height,
+                    suppressed_since_last,
+                    warn_cooldown_ms = warn_cooldown.as_millis(),
+                    "dropping block sync update missing commit-role quorum"
+                );
+            }
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::BlockSyncUpdate,
                 super::status::ConsensusMessageOutcome::Dropped,

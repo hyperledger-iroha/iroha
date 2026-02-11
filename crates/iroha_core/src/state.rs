@@ -4565,6 +4565,54 @@ impl Drop for TieredSnapshotWorker {
     }
 }
 
+const STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Default)]
+struct ViewLockContentionLog {
+    last_warn_at: Option<Instant>,
+    suppressed: u64,
+}
+
+impl ViewLockContentionLog {
+    fn should_emit(&mut self, now: Instant, cooldown: Duration) -> Option<u64> {
+        if let Some(last_warn_at) = self.last_warn_at {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(last_warn_at) < cooldown {
+                self.suppressed = self.suppressed.saturating_add(1);
+                return None;
+            }
+        }
+        self.last_warn_at = Some(now);
+        Some(std::mem::take(&mut self.suppressed))
+    }
+}
+
+#[cfg(test)]
+mod view_lock_contention_log_tests {
+    use super::ViewLockContentionLog;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn contention_log_suppresses_within_cooldown_and_reports_aggregate() {
+        let mut log = ViewLockContentionLog::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+
+        assert_eq!(log.should_emit(now, cooldown), Some(0));
+        assert_eq!(
+            log.should_emit(now + Duration::from_millis(10), cooldown),
+            None
+        );
+        assert_eq!(
+            log.should_emit(now + Duration::from_millis(20), cooldown),
+            None
+        );
+        assert_eq!(
+            log.should_emit(now + Duration::from_millis(80), cooldown),
+            Some(2)
+        );
+    }
+}
+
 /// Current state of the blockchain.
 ///
 /// Merge-ledger finality plumbing is specified in `docs/source/merge_ledger.md`.
@@ -4664,6 +4712,8 @@ pub struct State {
     pub telemetry: StateTelemetry,
     /// Lock to prevent getting inconsistent view of the state
     view_lock: parking_lot::RwLock<()>,
+    /// Aggregates repeated view-lock contention warnings to avoid log spam under write pressure.
+    view_lock_contention_log: parking_lot::Mutex<ViewLockContentionLog>,
 }
 
 /// Struct for block's aggregated changes
@@ -13161,6 +13211,7 @@ impl State {
             telemetry,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             view_lock: parking_lot::RwLock::new(()),
+            view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         };
         #[cfg(feature = "telemetry")]
         {
@@ -13899,6 +13950,22 @@ impl State {
         self.block_hashes.view().last().copied()
     }
 
+    #[inline]
+    fn note_view_lock_contention(&self) {
+        let now = Instant::now();
+        let suppressed = self
+            .view_lock_contention_log
+            .lock()
+            .should_emit(now, STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN);
+        if let Some(suppressed_since_last) = suppressed {
+            warn!(
+                suppressed_since_last,
+                cooldown_ms = STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN.as_millis(),
+                "state view lock contended; returning unlocked view"
+            );
+        }
+    }
+
     /// Create point in time view of [`State`]
     #[track_caller]
     pub fn view(&self) -> StateView<'_> {
@@ -13927,7 +13994,7 @@ impl State {
         let nexus_wait = nexus_start.elapsed();
         let _view_lock = self.view_lock.try_read().map_or_else(
             || {
-                warn!("state view lock contended; returning unlocked view");
+                self.note_view_lock_contention();
                 None
             },
             Some,
@@ -21943,6 +22010,7 @@ pub(crate) mod deserialize {
             #[cfg(feature = "telemetry")]
             telemetry,
             view_lock: parking_lot::RwLock::new(()),
+            view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         };
         #[cfg(feature = "sm")]
         Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())

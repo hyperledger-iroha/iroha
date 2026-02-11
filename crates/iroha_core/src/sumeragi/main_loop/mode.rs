@@ -171,6 +171,7 @@ impl Actor {
         self.subsystems.propose.collector_role_index = None;
         self.pending.pending_blocks.clear();
         self.subsystems.validation.inflight.clear();
+        self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
@@ -209,6 +210,9 @@ impl Actor {
         self.payload_rebroadcast_log.clear();
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
+        self.block_sync_warning_log.clear();
+        self.tick_lag_warn_streak = 0;
+        self.tick_lag_last_warn = None;
         let base_pacemaker_interval = pacemaker_base_interval_with_propose_timeout(
             pacemaker_block_time,
             pacemaker_timeouts.propose,

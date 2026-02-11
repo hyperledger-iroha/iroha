@@ -211,10 +211,16 @@ const COMMIT_PIPELINE_BLOCK_LOG_THRESHOLD: Duration = Duration::from_millis(500)
 const RESCHEDULE_TIMING_LOG_THRESHOLD: Duration = Duration::from_millis(500);
 /// Cooldown between consecutive tick timing logs to avoid log spam.
 const TICK_TIMING_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+/// Cooldown between warning-level tick-lag logs. Non-actionable lag reports use debug level.
+const TICK_LAG_WARN_COOLDOWN: Duration = Duration::from_secs(5);
+/// Number of consecutive lag reports required before warning when the loop appears idle.
+const TICK_LAG_WARN_IDLE_STREAK: u32 = 3;
 /// Cooldown between consecutive proposal-attempt logs when queued transactions exist.
 const PROPOSE_ATTEMPT_LOG_COOLDOWN: Duration = Duration::from_secs(2);
 /// Minimum backoff between consecutive quorum reschedules for the same pending block.
 const QUORUM_RESCHEDULE_COOLDOWN: Duration = Duration::from_millis(800);
+/// Prevent repeated block-sync warning spam for the same hash/reason across short intervals.
+const BLOCK_SYNC_WARN_COOLDOWN_FLOOR: Duration = Duration::from_secs(3);
 /// Align rebroadcast cadence with the block time while enforcing a safe floor.
 fn rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duration {
     let base = if block_time == Duration::ZERO {
@@ -4430,6 +4436,8 @@ pub(super) struct Actor {
     last_tick_heartbeat_log: Instant,
     tick_timing: TickTimingMonitor,
     tick_timing_thresholds: TickTimingThresholds,
+    tick_lag_warn_streak: u32,
+    tick_lag_last_warn: Option<Instant>,
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
     queue_drop_backpressure: QueueDropBackpressure,
@@ -4439,6 +4447,7 @@ pub(super) struct Actor {
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
+    block_sync_warning_log: BlockSyncWarningThrottle,
     roster_validation_cache: RosterValidationCache,
     #[cfg(test)]
     background_request_log: Option<Arc<Mutex<Vec<BackgroundRequestLogEntry>>>>,
@@ -5140,6 +5149,7 @@ struct ValidationState {
     work_txs: Vec<mpsc::SyncSender<validation::ValidationWork>>,
     result_rx: Option<mpsc::Receiver<validation::ValidationResult>>,
     inflight: BTreeMap<HashOf<BlockHeader>, ValidationInFlight>,
+    superseded_results: BTreeMap<HashOf<BlockHeader>, u64>,
     next_id: u64,
     next_worker: usize,
 }
@@ -5156,6 +5166,7 @@ impl ValidationState {
             work_txs: Vec::new(),
             result_rx: None,
             inflight: BTreeMap::new(),
+            superseded_results: BTreeMap::new(),
             next_id: 0,
             next_worker: 0,
         }
@@ -9071,6 +9082,8 @@ impl Actor {
             last_tick_heartbeat_log: now,
             tick_timing: TickTimingMonitor::new(now),
             tick_timing_thresholds: TickTimingThresholds::default(),
+            tick_lag_warn_streak: 0,
+            tick_lag_last_warn: None,
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
             queue_drop_backpressure: QueueDropBackpressure::default(),
@@ -9080,6 +9093,7 @@ impl Actor {
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
+            block_sync_warning_log: BlockSyncWarningThrottle::default(),
             roster_validation_cache,
             #[cfg(test)]
             background_request_log: None,
@@ -9997,6 +10011,7 @@ impl Actor {
     }
 
     const TICK_HEARTBEAT_LOG_INTERVAL: Duration = Duration::from_secs(10);
+    const TICK_EXPIRED_CULL_STRIDE: u64 = 4;
 
     fn tick_heartbeat_log_due(now: Instant, last_log: Instant, interval: Duration) -> bool {
         now.saturating_duration_since(last_log) >= interval
@@ -10025,9 +10040,11 @@ impl Actor {
             );
         }
         let mut progress = self.tick_mode_management();
-        let expired_culled = {
+        let expired_culled = if self.tick_counter % Self::TICK_EXPIRED_CULL_STRIDE == 0 {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.cull_expired");
             self.queue.cull_expired_entries_if_due()
+        } else {
+            0
         };
         if expired_culled > 0 {
             progress = true;
@@ -10199,6 +10216,11 @@ impl Actor {
             thresholds.lag,
             thresholds.cost,
         );
+        let lag_breached =
+            timing.since_last_tick >= thresholds.lag || timing.tick_cost >= thresholds.cost;
+        if !lag_breached {
+            self.tick_lag_warn_streak = 0;
+        }
         if timing.log_gap || timing.log_cost {
             let pacemaker_remaining = self
                 .subsystems
@@ -10217,48 +10239,111 @@ impl Actor {
                 .propose
                 .last_successful_proposal
                 .map(|last| tick_start.saturating_duration_since(last));
-            iroha_logger::warn!(
-                since_last_ms = timing.since_last_tick.as_millis(),
-                tick_cost_ms = timing.tick_cost.as_millis(),
-                pacemaker_remaining_ms = pacemaker_remaining.as_millis(),
-                last_pacemaker_attempt_ms = since_last_attempt.map(|d| d.as_millis()),
-                last_proposal_ms = since_last_success.map(|d| d.as_millis()),
-                refresh_ms = refresh_cost.as_millis(),
-                committed_poll_ms = committed_poll_cost.as_millis(),
-                missing_block_ms = missing_block_cost.as_millis(),
-                reschedule_ms = reschedule_cost.as_millis(),
-                idle_view_ms = idle_view_cost.as_millis(),
-                commit_pipeline_ms = commit_pipeline_cost.as_millis(),
-                commit_pipeline_ran = commit_pipeline_timings.ran,
-                commit_pipeline_blocks_considered = commit_pipeline_timings.blocks_considered,
-                commit_pipeline_blocks_processed = commit_pipeline_timings.blocks_processed,
-                commit_pipeline_drain_ms = commit_pipeline_timings.drain_results.as_millis(),
-                commit_pipeline_drain_results = commit_pipeline_timings.drain_result_count,
-                commit_pipeline_drain_qc_verify_ms = commit_pipeline_timings.drain_qc_verify_ms,
-                commit_pipeline_drain_persist_ms = commit_pipeline_timings.drain_persist_ms,
-                commit_pipeline_drain_kura_store_ms = commit_pipeline_timings.drain_kura_store_ms,
-                commit_pipeline_drain_state_apply_ms = commit_pipeline_timings.drain_state_apply_ms,
-                commit_pipeline_drain_state_commit_ms =
-                    commit_pipeline_timings.drain_state_commit_ms,
-                commit_pipeline_abort_ms = commit_pipeline_timings.abort_inflight.as_millis(),
-                commit_pipeline_event_reschedule_ms =
-                    commit_pipeline_timings.event_reschedule.as_millis(),
-                commit_pipeline_qc_rebuild_ms = commit_pipeline_timings.qc_rebuild.as_millis(),
-                commit_pipeline_validation_ms = commit_pipeline_timings.validation.as_millis(),
-                commit_pipeline_gate_ms = commit_pipeline_timings.gate.as_millis(),
-                commit_pipeline_finalize_ms = commit_pipeline_timings.finalize.as_millis(),
-                pacemaker_eval_ms = pacemaker_eval_cost.as_millis(),
-                propose_ms = propose_cost.as_millis(),
-                progress,
-                queue_ready,
-                backpressure_saturated = state.is_saturated(),
-                queue_len,
-                pending_blocks = self.pending.pending_blocks.len(),
-                tick = self.tick_counter,
-                "sumeragi tick loop lagging; pacemaker may be stalling"
-            );
+            let pending_blocks = self.pending.pending_blocks.len();
+            let has_pending_work = queue_ready
+                || queue_len > 0
+                || pending_blocks > 0
+                || self.subsystems.commit.inflight.is_some()
+                || commit_pipeline_timings.ran;
+            let should_warn =
+                self.should_emit_tick_lag_warn(tick_start, has_pending_work, lag_breached);
+            macro_rules! emit_tick_lag_log {
+                ($level:ident, $message:literal) => {
+                    iroha_logger::$level!(
+                        since_last_ms = timing.since_last_tick.as_millis(),
+                        tick_cost_ms = timing.tick_cost.as_millis(),
+                        pacemaker_remaining_ms = pacemaker_remaining.as_millis(),
+                        last_pacemaker_attempt_ms = since_last_attempt.map(|d| d.as_millis()),
+                        last_proposal_ms = since_last_success.map(|d| d.as_millis()),
+                        refresh_ms = refresh_cost.as_millis(),
+                        committed_poll_ms = committed_poll_cost.as_millis(),
+                        missing_block_ms = missing_block_cost.as_millis(),
+                        reschedule_ms = reschedule_cost.as_millis(),
+                        idle_view_ms = idle_view_cost.as_millis(),
+                        commit_pipeline_ms = commit_pipeline_cost.as_millis(),
+                        commit_pipeline_ran = commit_pipeline_timings.ran,
+                        commit_pipeline_blocks_considered =
+                            commit_pipeline_timings.blocks_considered,
+                        commit_pipeline_blocks_processed = commit_pipeline_timings.blocks_processed,
+                        commit_pipeline_drain_ms =
+                            commit_pipeline_timings.drain_results.as_millis(),
+                        commit_pipeline_drain_results = commit_pipeline_timings.drain_result_count,
+                        commit_pipeline_drain_qc_verify_ms =
+                            commit_pipeline_timings.drain_qc_verify_ms,
+                        commit_pipeline_drain_persist_ms = commit_pipeline_timings.drain_persist_ms,
+                        commit_pipeline_drain_kura_store_ms =
+                            commit_pipeline_timings.drain_kura_store_ms,
+                        commit_pipeline_drain_state_apply_ms =
+                            commit_pipeline_timings.drain_state_apply_ms,
+                        commit_pipeline_drain_state_commit_ms =
+                            commit_pipeline_timings.drain_state_commit_ms,
+                        commit_pipeline_abort_ms =
+                            commit_pipeline_timings.abort_inflight.as_millis(),
+                        commit_pipeline_event_reschedule_ms =
+                            commit_pipeline_timings.event_reschedule.as_millis(),
+                        commit_pipeline_qc_rebuild_ms =
+                            commit_pipeline_timings.qc_rebuild.as_millis(),
+                        commit_pipeline_validation_ms =
+                            commit_pipeline_timings.validation.as_millis(),
+                        commit_pipeline_gate_ms = commit_pipeline_timings.gate.as_millis(),
+                        commit_pipeline_finalize_ms = commit_pipeline_timings.finalize.as_millis(),
+                        pacemaker_eval_ms = pacemaker_eval_cost.as_millis(),
+                        propose_ms = propose_cost.as_millis(),
+                        progress,
+                        queue_ready,
+                        backpressure_saturated = state.is_saturated(),
+                        queue_len,
+                        pending_blocks,
+                        tick = self.tick_counter,
+                        has_pending_work,
+                        lag_streak = self.tick_lag_warn_streak,
+                        $message
+                    );
+                };
+            }
+            if should_warn {
+                emit_tick_lag_log!(
+                    warn,
+                    "sumeragi tick loop lagging; pacemaker may be stalling"
+                );
+            } else {
+                emit_tick_lag_log!(
+                    debug,
+                    "sumeragi tick loop lagging while idle or below warn threshold"
+                );
+            }
         }
         progress
+    }
+
+    fn should_emit_tick_lag_warn(
+        &mut self,
+        now: Instant,
+        has_pending_work: bool,
+        lag_breached: bool,
+    ) -> bool {
+        if !lag_breached {
+            self.tick_lag_warn_streak = 0;
+            return false;
+        }
+
+        self.tick_lag_warn_streak = self.tick_lag_warn_streak.saturating_add(1);
+        let streak_ready =
+            has_pending_work || self.tick_lag_warn_streak >= TICK_LAG_WARN_IDLE_STREAK;
+        if !streak_ready {
+            return false;
+        }
+
+        if self
+            .tick_lag_last_warn
+            .is_some_and(|last| now.saturating_duration_since(last) < TICK_LAG_WARN_COOLDOWN)
+        {
+            return false;
+        }
+
+        self.tick_lag_last_warn = Some(now);
+        self.tick_lag_warn_streak = 0;
+        true
     }
 
     fn validate_block_against_hint(
@@ -13658,6 +13743,7 @@ impl Actor {
         for hash in stale_pending {
             if let Some(mut pending) = self.pending.pending_blocks.remove(&hash) {
                 self.subsystems.validation.inflight.remove(&hash);
+                self.subsystems.validation.superseded_results.remove(&hash);
                 let committed = self.kura.get_block_height_by_hash(hash).is_some();
                 let invalid = matches!(pending.validation_status, ValidationStatus::Invalid);
                 if da_enabled && !committed && !invalid {
@@ -14463,6 +14549,109 @@ impl QueueBlockBackpressure {
 impl Default for QueueBlockBackpressure {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum BlockSyncWarningKind {
+    MissingCommitRoleQuorum,
+}
+
+#[derive(Debug, Default)]
+struct BlockSyncWarningThrottle {
+    entries: BTreeMap<(BlockSyncWarningKind, HashOf<BlockHeader>, u64, u64), (Instant, u64)>,
+}
+
+impl BlockSyncWarningThrottle {
+    fn allow(
+        &mut self,
+        kind: BlockSyncWarningKind,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+        cooldown: Duration,
+    ) -> Option<u64> {
+        let key = (kind, block_hash, height, view);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.entries.insert(key, (now, 0));
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+#[cfg(test)]
+mod block_sync_warning_throttle_tests {
+    use super::{BlockSyncWarningKind, BlockSyncWarningThrottle};
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn block_sync_warning_throttle_aggregates_suppressed_events() {
+        let mut throttle = BlockSyncWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+        let hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                hash,
+                42,
+                0,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                hash,
+                42,
+                0,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                hash,
+                42,
+                0,
+                now + Duration::from_millis(70),
+                cooldown,
+            ),
+            Some(1)
+        );
     }
 }
 

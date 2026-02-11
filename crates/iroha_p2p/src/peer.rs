@@ -2146,6 +2146,9 @@ mod run {
             // low topics during sustained consensus traffic.
             let mut hi_budget: u8 = HI_BUDGET_RESET;
             let mut low_rr: u8 = 0;
+            let mut format_error_streak: u32 = 0;
+            const FORMAT_ERROR_BACKOFF_BASE_MS: u64 = 10;
+            const FORMAT_ERROR_BACKOFF_MAX_MS: u64 = 200;
 
             loop {
                 if let Some((topic, msg)) = maybe_take_low_after_hi(
@@ -2471,14 +2474,36 @@ mod run {
                     }
                     msg = message_reader.read_message() => {
                         let (message, encoded_len): (Message<T>, usize) = match msg {
-                            Ok(Some((msg, encoded_len))) => (msg, encoded_len),
+                            Ok(Some((msg, encoded_len))) => {
+                                format_error_streak = 0;
+                                (msg, encoded_len)
+                            }
                             Ok(None) => {
                                 iroha_logger::debug!("Peer send whole message and close connection");
                                 break;
                             }
                             Err(error) => {
+                                let is_format_error = matches!(error, Error::Format);
+                                if is_format_error {
+                                    format_error_streak = format_error_streak.saturating_add(1);
+                                } else {
+                                    format_error_streak = 0;
+                                }
+                                let backoff_ms = (u64::from(format_error_streak)
+                                    .saturating_mul(FORMAT_ERROR_BACKOFF_BASE_MS))
+                                .min(FORMAT_ERROR_BACKOFF_MAX_MS);
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
-                                    iroha_logger::error!(?error, suppressed=supp, "Error while reading message from peer.");
+                                    iroha_logger::error!(
+                                        ?error,
+                                        suppressed=supp,
+                                        format_error = is_format_error,
+                                        format_error_streak,
+                                        backoff_ms,
+                                        "Error while reading message from peer."
+                                    );
+                                }
+                                if is_format_error && backoff_ms > 0 {
+                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                                 }
                                 break;
                             }
@@ -2544,15 +2569,37 @@ mod run {
                         reader.read_message().await
                     }, if message_reader_low.is_some() => {
                         let (message, encoded_len): (Message<T>, usize) = match msg {
-                            Ok(Some((msg, encoded_len))) => (msg, encoded_len),
+                            Ok(Some((msg, encoded_len))) => {
+                                format_error_streak = 0;
+                                (msg, encoded_len)
+                            }
                             Ok(None) => {
                                 iroha_logger::debug!("Peer closed low-priority stream");
                                 message_reader_low = None;
                                 continue;
                             }
                             Err(error) => {
+                                let is_format_error = matches!(error, Error::Format);
+                                if is_format_error {
+                                    format_error_streak = format_error_streak.saturating_add(1);
+                                } else {
+                                    format_error_streak = 0;
+                                }
+                                let backoff_ms = (u64::from(format_error_streak)
+                                    .saturating_mul(FORMAT_ERROR_BACKOFF_BASE_MS))
+                                .min(FORMAT_ERROR_BACKOFF_MAX_MS);
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
-                                    iroha_logger::debug!(?error, suppressed=supp, "Error while reading message from peer (low stream).");
+                                    iroha_logger::debug!(
+                                        ?error,
+                                        suppressed=supp,
+                                        format_error = is_format_error,
+                                        format_error_streak,
+                                        backoff_ms,
+                                        "Error while reading message from peer (low stream)."
+                                    );
+                                }
+                                if is_format_error && backoff_ms > 0 {
+                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                                 }
                                 message_reader_low = None;
                                 continue;
