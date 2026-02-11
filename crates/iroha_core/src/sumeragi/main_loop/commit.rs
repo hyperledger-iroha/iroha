@@ -2338,7 +2338,7 @@ impl Actor {
         // keep NEW_VIEW liveness (precommit QCs) and backfill telemetry.
         let enable_qc_pipeline = true;
         let da_enabled = self.runtime_da_enabled();
-        let rebroadcast_cooldown = self.rebroadcast_cooldown();
+        let rebroadcast_cooldown = self.control_plane_rebroadcast_cooldown();
         let local_peer_id = self.common_config.peer.id().clone();
 
         if self.active_pending_blocks_len() == 0 {
@@ -3096,6 +3096,29 @@ impl Actor {
         Some(vote)
     }
 
+    fn top_up_remote_targets_to_floor(
+        signature_topology: &super::network_topology::Topology,
+        local_peer_id: &PeerId,
+        targets: &mut Vec<PeerId>,
+        remote_floor: usize,
+    ) -> usize {
+        if remote_floor == 0 || targets.len() >= remote_floor {
+            return 0;
+        }
+        let mut added = 0usize;
+        for peer in signature_topology.as_ref() {
+            if peer == local_peer_id || targets.iter().any(|existing| existing == peer) {
+                continue;
+            }
+            targets.push(peer.clone());
+            added = added.saturating_add(1);
+            if targets.len() >= remote_floor {
+                break;
+            }
+        }
+        added
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
@@ -3290,6 +3313,8 @@ impl Actor {
             collector_targets = signature_topology.as_ref().to_vec();
             collector_targets.retain(|peer| peer != &local_peer_id);
         }
+        let remote_floor = usize::from(self.subsystems.propose.collector_redundant_limit.max(1))
+            .min(signature_topology.as_ref().len().saturating_sub(1));
         let mut parallel_added = 0usize;
         if !fallback_to_topology {
             let parallel = self.config.collectors.parallel_topology_fanout;
@@ -3307,6 +3332,12 @@ impl Actor {
                     }
                 }
             }
+            let _ = Self::top_up_remote_targets_to_floor(
+                &signature_topology,
+                &local_peer_id,
+                &mut collector_targets,
+                remote_floor,
+            );
         }
         if fallback_to_topology {
             iroha_logger::info!(
@@ -3702,7 +3733,8 @@ impl Actor {
         view: u64,
         target_missing_only: bool,
     ) -> usize {
-        if self.relay_backpressure_active(Instant::now(), self.rebroadcast_cooldown()) {
+        if self.relay_backpressure_active(Instant::now(), self.control_plane_rebroadcast_cooldown())
+        {
             debug!(
                 height,
                 view,
@@ -3760,6 +3792,8 @@ impl Actor {
             collector_targets = signature_topology.as_ref().to_vec();
             collector_targets.retain(|peer| peer != &local_peer_id);
         }
+        let remote_floor = usize::from(self.subsystems.propose.collector_redundant_limit.max(1))
+            .min(signature_topology.as_ref().len().saturating_sub(1));
         let mut parallel_added = 0usize;
         if !fallback_to_topology {
             let parallel = self.config.collectors.parallel_topology_fanout;
@@ -3777,6 +3811,12 @@ impl Actor {
                     }
                 }
             }
+            let _ = Self::top_up_remote_targets_to_floor(
+                &signature_topology,
+                &local_peer_id,
+                &mut collector_targets,
+                remote_floor,
+            );
         }
 
         let mut missing_targets = 0usize;
