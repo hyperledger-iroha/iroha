@@ -897,6 +897,7 @@ impl Actor {
                 super::status::ConsensusMessageReason::StaleHeight,
             );
             self.pending.pending_blocks.remove(&block_hash);
+            self.subsystems.validation.inflight.remove(&block_hash);
             self.pending.pending_fetch_requests.remove(&block_hash);
             self.subsystems
                 .propose
@@ -1008,6 +1009,7 @@ impl Actor {
                     super::status::ConsensusMessageReason::InvalidPayload,
                 );
                 self.pending.pending_blocks.remove(&block_hash);
+                self.subsystems.validation.inflight.remove(&block_hash);
                 self.pending.pending_fetch_requests.remove(&block_hash);
                 let proposal = self
                     .subsystems
@@ -2047,6 +2049,7 @@ impl Actor {
         view: u64,
     ) {
         self.pending.pending_blocks.remove(&block_hash);
+        self.subsystems.validation.inflight.remove(&block_hash);
         self.pending.pending_fetch_requests.remove(&block_hash);
         self.purge_rbc_state(session_key, block_hash, height, view);
     }

@@ -495,6 +495,7 @@ impl Actor {
             });
             self.block_signer_cache.remove_block(&hash);
             self.pending.pending_blocks.remove(&hash);
+            self.subsystems.validation.inflight.remove(&hash);
             aborted_removed = aborted_removed.saturating_add(1);
         }
 
@@ -504,6 +505,7 @@ impl Actor {
                 break;
             }
             self.pending.pending_blocks.remove(&hash);
+            self.subsystems.validation.inflight.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
             self.qc_cache
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
@@ -529,6 +531,7 @@ impl Actor {
                 break;
             }
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
+                self.subsystems.validation.inflight.remove(&key.0);
                 self.reschedule_pending_quorum_block(
                     pending,
                     age,
@@ -554,6 +557,7 @@ impl Actor {
                 break;
             }
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
+                self.subsystems.validation.inflight.remove(&key.0);
                 let roster_len = commit_roster.len();
                 let vote_count = qc
                     .as_ref()

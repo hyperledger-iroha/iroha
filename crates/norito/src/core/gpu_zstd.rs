@@ -208,8 +208,8 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
     if rc == RC_GPU_UNAVAILABLE {
         // Helper is loaded but GPU kernels are currently unavailable.
         // Accept this mode if GPU-side decode still roundtrips CPU zstd frames.
-        let cpu_encoded =
-            zstd::encode_all(std::io::Cursor::new(SAMPLE), 1).map_err(SelfTestFailure::CpuEncode)?;
+        let cpu_encoded = zstd::encode_all(std::io::Cursor::new(SAMPLE), 1)
+            .map_err(SelfTestFailure::CpuEncode)?;
         let mut gpu_decoded = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
         let mut gpu_decoded_len = gpu_decoded.len();
         let rc = unsafe {

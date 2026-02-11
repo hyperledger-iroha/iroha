@@ -5139,9 +5139,15 @@ impl CommitState {
 struct ValidationState {
     work_txs: Vec<mpsc::SyncSender<validation::ValidationWork>>,
     result_rx: Option<mpsc::Receiver<validation::ValidationResult>>,
-    inflight: BTreeMap<HashOf<BlockHeader>, u64>,
+    inflight: BTreeMap<HashOf<BlockHeader>, ValidationInFlight>,
     next_id: u64,
     next_worker: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ValidationInFlight {
+    id: u64,
+    started_at: Instant,
 }
 
 impl ValidationState {
@@ -13651,6 +13657,7 @@ impl Actor {
         let mut pending_retained = 0usize;
         for hash in stale_pending {
             if let Some(mut pending) = self.pending.pending_blocks.remove(&hash) {
+                self.subsystems.validation.inflight.remove(&hash);
                 let committed = self.kura.get_block_height_by_hash(hash).is_some();
                 let invalid = matches!(pending.validation_status, ValidationStatus::Invalid);
                 if da_enabled && !committed && !invalid {

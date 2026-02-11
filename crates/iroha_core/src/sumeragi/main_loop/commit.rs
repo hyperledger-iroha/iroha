@@ -1739,6 +1739,7 @@ impl Actor {
                 .collect();
             for (stale_hash, stale_height) in stale {
                 self.pending.pending_blocks.remove(&stale_hash);
+                self.subsystems.validation.inflight.remove(&stale_hash);
                 self.clean_rbc_sessions_for_block(stale_hash, stale_height);
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
@@ -2233,6 +2234,7 @@ impl Actor {
         reason_label: &'static str,
     ) {
         if let Some(pending) = self.pending.pending_blocks.remove(&invalid_hash) {
+            self.subsystems.validation.inflight.remove(&invalid_hash);
             self.clean_rbc_sessions_for_block(invalid_hash, pending.height);
         }
         if let Some(ev) = evidence {
@@ -2277,6 +2279,13 @@ impl Actor {
         tick_deadline: Option<Instant>,
     ) -> CommitPipelineTimings {
         let pipeline_start = Instant::now();
+        let stale_validation = self.prune_validation_inflight_without_pending();
+        if stale_validation > 0 {
+            debug!(
+                stale_validation,
+                "pruned validation inflight entries without matching pending blocks"
+            );
+        }
         let mut timings = CommitPipelineTimings {
             ran: true,
             ..CommitPipelineTimings::default()
@@ -2401,6 +2410,22 @@ impl Actor {
             if matches!(validation_outcome, ValidationGateOutcome::Deferred) {
                 if let Some(pending) = self.pending.pending_blocks.get(&hash) {
                     let pending_age = pending.age();
+                    if pending_age >= fast_timeout {
+                        if self.subsystems.validation.inflight.contains_key(&hash) {
+                            let inflight_elapsed_ms = self
+                                .validation_inflight_elapsed(hash)
+                                .map(|elapsed| elapsed.as_millis());
+                            self.subsystems.validation.inflight.remove(&hash);
+                            warn!(
+                                height = pending.height,
+                                view = pending.view,
+                                block = %hash,
+                                inflight_elapsed_ms = inflight_elapsed_ms,
+                                fast_timeout_ms = fast_timeout.as_millis(),
+                                "validation inflight exceeded fast timeout; forcing inline pre-vote validation"
+                            );
+                        }
+                    }
                     if pending_age >= fast_timeout
                         && !self.subsystems.validation.inflight.contains_key(&hash)
                     {
@@ -2520,6 +2545,7 @@ impl Actor {
                 )
             {
                 if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
+                    self.subsystems.validation.inflight.remove(&hash);
                     self.clean_rbc_sessions_for_block(hash, pending.height);
                 }
                 continue;
@@ -3632,6 +3658,7 @@ impl Actor {
         let Some(pending) = self.pending.pending_blocks.remove(&block_hash) else {
             return;
         };
+        self.subsystems.validation.inflight.remove(&block_hash);
         let mut pending = pending;
         pending.commit_qc_seen = true;
         pending.commit_qc_epoch = Some(cert.epoch);
@@ -5478,6 +5505,7 @@ impl Actor {
         preserve_proposals_seen: bool,
     ) {
         self.pending.pending_blocks.clear();
+        self.subsystems.validation.inflight.clear();
         self.pending.pending_fetch_requests.clear();
         self.pending.missing_block_requests.clear();
         self.pending.pending_processing.set(None);

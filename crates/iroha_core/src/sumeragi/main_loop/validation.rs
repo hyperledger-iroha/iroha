@@ -1,6 +1,9 @@
 //! Pending-block validation gates used by the commit pipeline.
 
-use std::sync::{Arc, mpsc};
+use std::{
+    sync::{Arc, mpsc},
+    time::Instant,
+};
 
 use iroha_logger::prelude::*;
 
@@ -130,6 +133,26 @@ pub(super) fn spawn_validation_workers(
 }
 
 impl Actor {
+    pub(super) fn prune_validation_inflight_without_pending(&mut self) -> usize {
+        let before = self.subsystems.validation.inflight.len();
+        self.subsystems
+            .validation
+            .inflight
+            .retain(|hash, _| self.pending.pending_blocks.contains_key(hash));
+        before.saturating_sub(self.subsystems.validation.inflight.len())
+    }
+
+    pub(super) fn validation_inflight_elapsed(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> Option<std::time::Duration> {
+        self.subsystems
+            .validation
+            .inflight
+            .get(&hash)
+            .map(|inflight| Instant::now().saturating_duration_since(inflight.started_at))
+    }
+
     /// Validate a pending block (stateless + stateful) before sending any votes.
     pub(super) fn validate_pending_block_for_voting(
         &mut self,
@@ -162,6 +185,11 @@ impl Actor {
         commit_topology: &[PeerId],
         dispatch: ValidationDispatch,
     ) -> ValidationGateOutcome {
+        if matches!(dispatch, ValidationDispatch::Inline) {
+            // Inline validation supersedes any stale worker intent for this block.
+            self.subsystems.validation.inflight.remove(&hash);
+        }
+
         let pending = match self.pending.pending_blocks.remove(&hash) {
             Some(pending) => pending,
             None => return ValidationGateOutcome::Deferred,
@@ -280,7 +308,13 @@ impl Actor {
             }
 
             if dispatched {
-                self.subsystems.validation.inflight.insert(hash, id);
+                self.subsystems.validation.inflight.insert(
+                    hash,
+                    super::ValidationInFlight {
+                        id,
+                        started_at: Instant::now(),
+                    },
+                );
                 pending.validation_status = ValidationStatus::Pending;
                 self.pending.pending_blocks.insert(hash, pending);
                 return ValidationGateOutcome::Deferred;
@@ -307,6 +341,11 @@ impl Actor {
                 return ValidationGateOutcome::Deferred;
             }
         }
+
+        // This block is now taking the inline path (either explicitly requested
+        // or because workers were unavailable/full), so any prior async marker
+        // is stale and must not keep the block deferred.
+        self.subsystems.validation.inflight.remove(&hash);
 
         let mut voting_block = self.voting_block.take();
         let result = validate_block_for_voting(
@@ -378,10 +417,10 @@ impl Actor {
                             continue;
                         }
                     };
-                    if inflight != id {
+                    if inflight.id != id {
                         warn!(
                             block = %hash,
-                            inflight_id = inflight,
+                            inflight_id = inflight.id,
                             result_id = id,
                             "validation result id mismatch; ignoring"
                         );
