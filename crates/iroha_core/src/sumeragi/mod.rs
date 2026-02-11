@@ -9825,6 +9825,9 @@ trait WorkerActor {
     fn poll_rbc_persist_results(&mut self) -> bool {
         false
     }
+    fn should_bypass_tick_gap(&self) -> bool {
+        false
+    }
     fn should_tick(&self) -> bool {
         true
     }
@@ -9869,6 +9872,10 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn poll_rbc_persist_results(&mut self) -> bool {
         crate::sumeragi::main_loop::Actor::poll_rbc_persist_results_inner(self)
+    }
+
+    fn should_bypass_tick_gap(&self) -> bool {
+        crate::sumeragi::main_loop::Actor::commit_pipeline_wakeup_pending(self)
     }
 
     fn refresh_worker_loop_config(&mut self, cfg: &mut WorkerLoopConfig) {
@@ -10672,7 +10679,8 @@ fn run_worker_iteration<A: WorkerActor>(
     } else {
         cfg.tick_min_gap
     };
-    if tick_due && should_run_tick(tick_now, *last_tick, tick_gap) {
+    let bypass_tick_gap = actor.should_bypass_tick_gap();
+    if tick_due && (bypass_tick_gap || should_run_tick(tick_now, *last_tick, tick_gap)) {
         status::set_worker_stage(status::WorkerLoopStage::Tick);
         let tick_start = Instant::now();
         stats.progress |= actor.tick();
@@ -10886,12 +10894,16 @@ fn run_worker_loop<A: WorkerActor>(
             status::set_worker_stage(status::WorkerLoopStage::Idle);
             let now = Instant::now();
             let tick_deadline = actor.next_tick_deadline(now);
+            let bypass_tick_gap = actor.should_bypass_tick_gap();
             let wait = match tick_deadline {
                 None => Some(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS)),
                 Some(deadline) => {
                     let due_wait = deadline.saturating_duration_since(now);
-                    let min_gap_wait =
-                        idle_wait_duration(now, loop_state.last_tick, cfg.tick_min_gap);
+                    let min_gap_wait = if bypass_tick_gap && deadline <= now {
+                        None
+                    } else {
+                        idle_wait_duration(now, loop_state.last_tick, cfg.tick_min_gap)
+                    };
                     let mut wait = min_gap_wait.map_or(due_wait, |min_gap| min_gap.max(due_wait));
                     if wait.is_zero() {
                         None
@@ -11030,7 +11042,7 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                 }
                 let iter_start = Instant::now();
                 active.fetch_add(1, Ordering::Relaxed);
-                let (next_deadline, tick_min_gap) = {
+                let (next_deadline, tick_min_gap, bypass_tick_gap) = {
                     let mut guard = gate.enter();
                     status::set_worker_stage(status::WorkerLoopStage::Tick);
                     guard.actor_mut().refresh_worker_loop_config(&mut cfg);
@@ -11038,7 +11050,8 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                     poll_worker_results(guard.actor_mut());
                     let next_deadline = guard.actor_mut().next_tick_deadline(now);
                     if next_deadline.is_some_and(|deadline| deadline <= now)
-                        && should_run_tick(now, last_tick, cfg.tick_min_gap)
+                        && (guard.actor_mut().should_bypass_tick_gap()
+                            || should_run_tick(now, last_tick, cfg.tick_min_gap))
                     {
                         if guard.actor_mut().tick() {
                             last_tick = now;
@@ -11047,7 +11060,7 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                     status::record_worker_iteration(
                         u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
                     );
-                    (next_deadline, cfg.tick_min_gap)
+                    (next_deadline, cfg.tick_min_gap, guard.actor_mut().should_bypass_tick_gap())
                 };
                 if active.fetch_sub(1, Ordering::Relaxed) == 1 {
                     status::set_worker_stage(status::WorkerLoopStage::Idle);
@@ -11062,7 +11075,11 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                     None => Some(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS)),
                     Some(deadline) => {
                         let due_wait = deadline.saturating_duration_since(now);
-                        let min_gap_wait = idle_wait_duration(now, last_tick, tick_min_gap);
+                        let min_gap_wait = if bypass_tick_gap && deadline <= now {
+                            None
+                        } else {
+                            idle_wait_duration(now, last_tick, tick_min_gap)
+                        };
                         let mut wait =
                             min_gap_wait.map_or(due_wait, |min_gap| min_gap.max(due_wait));
                         if wait.is_zero() {

@@ -31,8 +31,9 @@ pub(super) fn canonicalize_roster_for_mode(
     consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
     match consensus_mode {
-        // Permissioned commit-QC roll-forward preserves active-membership ordering.
-        ConsensusMode::Permissioned => dedup_preserving_order(roster),
+        // Permissioned also needs deterministic ordering across peers; preserving local
+        // trusted/commit order can diverge (e.g. self-first trusted peer lists).
+        ConsensusMode::Permissioned => canonicalize_roster(roster),
         // NPoS roster hashes remain canonicalized for deterministic stake-quorum validation.
         ConsensusMode::Npos => canonicalize_roster(roster),
     }
@@ -251,12 +252,8 @@ pub(super) fn derive_active_topology_from_views(
         }
     };
 
-    roster = if use_commit {
-        // Commit topology is already canonicalized; PRF-based ordering happens at selection time.
-        dedup_preserving_order(roster)
-    } else {
-        canonicalize_roster(roster)
-    };
+    // Keep ordering deterministic for both commit-derived and world/trusted-derived rosters.
+    roster = canonicalize_roster(roster);
     if !roster.is_empty() {
         return roster;
     }
@@ -572,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_roster_for_permissioned_preserves_order() {
+    fn canonicalize_roster_for_permissioned_sorts_for_determinism() {
         let first = PeerId::new(
             KeyPair::from_seed(b"roster-a".to_vec(), Algorithm::BlsNormal)
                 .public_key()
@@ -587,7 +584,8 @@ mod tests {
         let roster = vec![second.clone(), first.clone()];
         let canonical = canonicalize_roster_for_mode(roster, ConsensusMode::Permissioned);
 
-        let expected = vec![second, first];
+        let mut expected = vec![second, first];
+        expected.sort();
         assert_eq!(canonical, expected);
     }
 

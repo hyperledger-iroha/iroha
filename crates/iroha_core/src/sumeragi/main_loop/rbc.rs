@@ -2080,7 +2080,7 @@ impl Actor {
             );
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
-        let retry_window = self.rebroadcast_cooldown();
+        let retry_window = self.control_plane_rebroadcast_cooldown();
         let defer_view_change = self.should_defer_missing_block_view_change(&key.0, key.1, key.2);
         let view_change_window = if defer_view_change {
             None
@@ -2227,7 +2227,7 @@ impl Actor {
             }
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
-        let retry_window = self.rebroadcast_cooldown();
+        let retry_window = self.control_plane_rebroadcast_cooldown();
         let defer_view_change = self.should_defer_missing_block_view_change(&key.0, key.1, key.2);
         let view_change_window = if defer_view_change {
             None
@@ -4825,7 +4825,11 @@ impl Actor {
                     defer_kind,
                 );
             }
-            if self.rbc_deliver_rebroadcast_due(&key, now, self.rebroadcast_cooldown()) {
+            if self.rbc_deliver_rebroadcast_due(
+                &key,
+                now,
+                self.control_plane_rebroadcast_cooldown(),
+            ) {
                 let msg = Arc::new(BlockMessage::RbcDeliver(deliver.clone()));
                 let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                 self.schedule_background(BackgroundRequest::Broadcast {
