@@ -101,6 +101,7 @@ const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const STORAGE_LISTING_LIMIT: usize = 8;
 const SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS: usize = 512;
+const PEER_STARTUP_TIMEOUT_PER_PEER_SECS: u64 = 60;
 
 const NON_OPTIMIZED_IVM_FUEL: NonZero<u64> = nonzero!(1_000_000_000u64);
 /// Minimum consensus pipeline time accepted by `with_pipeline_time` (milliseconds).
@@ -2130,9 +2131,11 @@ impl Network {
             return base;
         }
 
-        // Allow at least 30 seconds per peer by default to accommodate slower start-ups
-        // (e.g., when multiple genesis submitters serialise their submissions).
-        let dynamic_secs = 30u128.saturating_mul(peers).min(u128::from(u64::MAX));
+        // Allow at least 60 seconds per peer by default to accommodate slower DA/RBC startup
+        // under host contention (e.g., multiple full peers bootstrapping simultaneously).
+        let dynamic_secs = u128::from(PEER_STARTUP_TIMEOUT_PER_PEER_SECS)
+            .saturating_mul(peers)
+            .min(u128::from(u64::MAX));
         let dynamic = Duration::from_secs(dynamic_secs as u64);
 
         base.max(dynamic)
@@ -4799,9 +4802,29 @@ impl NetworkPeer {
                             let warn_gate = warn_gate.clone();
                             let http_seen = Arc::clone(&http_seen);
                             async move {
-                                let status = spawn_blocking(move || client.get_status())
-                                    .await
-                                    .expect("should not panic");
+                                let status = match spawn_blocking(move || client.get_status()).await
+                                {
+                                    Ok(status) => status,
+                                    Err(join_error) => {
+                                        let err = Report::new(join_error)
+                                            .wrap_err("get status join failed");
+                                        NetworkPeer::record_probe_error(&startup_probe, &err);
+                                        log_status_warning(
+                                            &warn_gate,
+                                            || warn!(
+                                                error = %err,
+                                                debug = ?err,
+                                                "get status failed"
+                                            ),
+                                            || debug!(
+                                                error = %err,
+                                                debug = ?err,
+                                                "get status failed"
+                                            ),
+                                        );
+                                        return Err(err);
+                                    }
+                                };
                                 match status {
                                     Ok(status) => {
                                         let _ =
@@ -4809,6 +4832,7 @@ impl NetworkPeer {
                                         Ok((status, StatusSource::Http))
                                     }
                                     Err(err) => {
+                                        NetworkPeer::record_probe_error(&startup_probe, &err);
                                         if status_error_is_connection_refused(&err)
                                             && !http_seen.load(Ordering::Relaxed)
                                         {
@@ -6937,6 +6961,19 @@ mod tests {
     }
 
     #[test]
+    fn peer_startup_timeout_applies_per_peer_floor() {
+        if skip_network_tests("peer_startup_timeout_applies_per_peer_floor") {
+            return;
+        }
+        let _timeout_guard = EnvVarRestore::set("IROHA_TEST_PEER_START_TIMEOUT_SECS", "10");
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_min_peers(4));
+        let expected = Duration::from_secs(
+            PEER_STARTUP_TIMEOUT_PER_PEER_SECS.saturating_mul(network.peers().len() as u64),
+        );
+        assert_eq!(network.peer_startup_timeout(), expected);
+    }
+
+    #[test]
     fn network_permit_creates_and_clears_lock_file() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let dir = tempdir().expect("permit dir");
@@ -8911,24 +8948,35 @@ exit 0
                 .resolve()
                 .expect("irohad binary should resolve for network startup tests");
         }
-        const START_TIMEOUT: Duration = Duration::from_secs(90);
         let first = build_with_isolated_permit_async(first_builder).await;
-        tokio::time::timeout(START_TIMEOUT, first.start_all())
+        let first_timeout = first
+            .peer_startup_timeout()
+            .saturating_add(Duration::from_secs(30));
+        tokio::time::timeout(first_timeout, first.start_all())
             .await
             .expect("first network startup should complete within timeout")
             .unwrap();
-        tokio::time::timeout(START_TIMEOUT, async {
+        tokio::time::timeout(first_timeout, async {
             first.shutdown().await;
         })
         .await
         .expect("first network shutdown should complete within timeout");
+        drop(first);
         // Single-peer DA startup is still stall-prone in integration paths; keep this
         // smoke test on quorum-representative topologies to avoid lock convoy hangs.
         let second = build_with_isolated_permit_async(second_builder).await;
-        tokio::time::timeout(START_TIMEOUT, second.start_all())
+        let second_timeout = second
+            .peer_startup_timeout()
+            .saturating_add(Duration::from_secs(30));
+        tokio::time::timeout(second_timeout, second.start_all())
             .await
             .expect("second network startup should complete within timeout")
             .unwrap();
+        tokio::time::timeout(second_timeout, async {
+            second.shutdown().await;
+        })
+        .await
+        .expect("second network shutdown should complete within timeout");
     }
 
     #[tokio::test]

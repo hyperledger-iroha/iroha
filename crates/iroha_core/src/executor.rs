@@ -415,6 +415,10 @@ fn parse_fee_sponsor(
     }
 }
 
+fn parse_account_id_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
+    crate::block::parse_account_literal_with_world(world, literal).or_else(|| literal.parse().ok())
+}
+
 /// Parse optional `gas_limit` from transaction metadata.
 pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
     let Some(raw) = metadata.get("gas_limit") else {
@@ -1045,17 +1049,16 @@ impl Executor {
 
                     if used > 0 && units_per_gas > 0 {
                         // Parse tech account id
-                        let tech_account: AccountId = state_transaction
-                            .pipeline
-                            .gas
-                            .tech_account_id
-                            .parse()
-                            .map_err(|_| {
-                                ValidationFail::InternalError(
-                                    "invalid pipeline.gas.tech_account_id; expected account identifier"
-                                        .to_owned(),
-                                )
-                            })?;
+                        let tech_account: AccountId = parse_account_id_literal(
+                            &state_transaction.world,
+                            &state_transaction.pipeline.gas.tech_account_id,
+                        )
+                        .ok_or_else(|| {
+                            ValidationFail::InternalError(
+                                "invalid pipeline.gas.tech_account_id; expected account identifier"
+                                    .to_owned(),
+                            )
+                        })?;
 
                         // Parse gas asset definition id
                         let asset_def: AssetDefinitionId =
@@ -1251,17 +1254,16 @@ impl Executor {
                         GasLiquidity::Tier3 => LiquidityProfile::Tier3,
                     };
                     // Parse tech account id
-                    let tech_account: AccountId = state_transaction
-                        .pipeline
-                        .gas
-                        .tech_account_id
-                        .parse()
-                        .map_err(|_| {
-                            ValidationFail::InternalError(
-                                "invalid pipeline.gas.tech_account_id; expected account identifier"
-                                    .to_owned(),
-                            )
-                        })?;
+                    let tech_account: AccountId = parse_account_id_literal(
+                        &state_transaction.world,
+                        &state_transaction.pipeline.gas.tech_account_id,
+                    )
+                    .ok_or_else(|| {
+                        ValidationFail::InternalError(
+                            "invalid pipeline.gas.tech_account_id; expected account identifier"
+                                .to_owned(),
+                        )
+                    })?;
                     // Parse gas asset definition id
                     let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
                         ValidationFail::NotPermitted(

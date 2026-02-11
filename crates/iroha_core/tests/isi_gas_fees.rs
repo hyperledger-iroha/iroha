@@ -15,7 +15,6 @@ use iroha_core::{
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;
-use iroha_data_model::query::parameters::ForwardCursor;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
@@ -220,7 +219,7 @@ fn ivm_syscall_charges_fees() {
 
     let scall = encoding::wide::encode_sys(
         instruction::wide::system::SCALL,
-        u8::try_from(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL).expect("syscall id fits in u8"),
+        u8::try_from(ivm_sys::SYSCALL_DEBUG_PRINT).expect("syscall id fits in u8"),
     );
     let mut program = ProgramMetadata {
         max_cycles: 1_000,
@@ -254,17 +253,8 @@ fn ivm_syscall_charges_fees() {
         .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
         .expect("execution");
 
-    let fc = ForwardCursor {
-        query: "sc_dummy".to_string(),
-        cursor: nonzero!(1_u64),
-        gas_budget: None,
-    };
-    let isi = SetKeyValue::account(alice_id.clone(), "cursor".parse().unwrap(), Json::new(fc));
-    let expected_extra =
-        isi_gas::meter_instruction(&InstructionBox::from(SetKeyValueBox::from(isi)));
     let scall_cost = ivm::gas::cost_of(scall).expect("SCALL must have gas cost");
-    let expected_used = scall_cost.saturating_add(expected_extra);
-    assert_eq!(state_tx.last_tx_gas_used, expected_used);
+    assert_eq!(state_tx.last_tx_gas_used, scall_cost);
 
     let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
     let payer_balance_after = state_tx
