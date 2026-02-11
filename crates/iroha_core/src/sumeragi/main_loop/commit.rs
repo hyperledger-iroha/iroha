@@ -524,8 +524,8 @@ impl Actor {
                     .as_ref()
                     .is_some_and(|snapshot| snapshot.matches_roster(roster));
                 if !matches {
-                    update.stake_snapshot =
-                        CommitStakeSnapshot::from_roster(state.view().world(), roster);
+                    let world = state.world_view();
+                    update.stake_snapshot = CommitStakeSnapshot::from_roster(&world, roster);
                 }
             }
         }
@@ -992,10 +992,10 @@ impl Actor {
                         };
                         let stake_snapshot = match consensus_mode {
                             ConsensusMode::Permissioned => None,
-                            ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
-                                self.state.view().world(),
-                                &commit_topology,
-                            ),
+                            ConsensusMode::Npos => {
+                                let world = self.state.world_view();
+                                CommitStakeSnapshot::from_roster(&world, &commit_topology)
+                            }
                         };
                         if let Some((parent_state_root, post_state_root)) =
                             pending.parent_state_root.zip(pending.post_state_root)
@@ -1099,10 +1099,10 @@ impl Actor {
                         if let Some((parent_state_root, post_state_root)) = roots {
                             let stake_snapshot = match consensus_mode {
                                 ConsensusMode::Permissioned => None,
-                                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
-                                    self.state.view().world(),
-                                    &commit_topology,
-                                ),
+                                ConsensusMode::Npos => {
+                                    let world = self.state.world_view();
+                                    CommitStakeSnapshot::from_roster(&world, &commit_topology)
+                                }
                             };
                             crate::sumeragi::status::record_precommit_signers(
                                 crate::sumeragi::status::PrecommitSignerRecord {
@@ -1132,10 +1132,10 @@ impl Actor {
                 } else if let Some(qc) = cached_qc.as_ref() {
                     let stake_snapshot = match consensus_mode {
                         ConsensusMode::Permissioned => None,
-                        ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
-                            self.state.view().world(),
-                            &commit_topology,
-                        ),
+                        ConsensusMode::Npos => {
+                            let world = self.state.world_view();
+                            CommitStakeSnapshot::from_roster(&world, &commit_topology)
+                        }
                     };
                     if let Some(record) = Self::precommit_signer_record_from_cached_qc(
                         qc,
@@ -2047,10 +2047,10 @@ impl Actor {
                 };
                 let stake_snapshot = match consensus_mode {
                     ConsensusMode::Permissioned => None,
-                    ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
-                        self.state.view().world(),
-                        &commit_topology,
-                    ),
+                    ConsensusMode::Npos => {
+                        let world = self.state.world_view();
+                        CommitStakeSnapshot::from_roster(&world, &commit_topology)
+                    }
                 };
                 if let Some((parent_state_root, post_state_root)) =
                     pending.parent_state_root.zip(pending.post_state_root)
@@ -5575,8 +5575,15 @@ impl Actor {
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
         self.block_sync_warning_log.clear();
+        self.qc_insufficient_warning_log.clear();
+        let now = Instant::now();
+        self.tick_lag_last_progress_at = now;
+        self.tick_lag_last_progress_height = self.state.committed_height();
+        self.tick_lag_last_progress_queue_len = self.queue.active_len();
+        self.tick_lag_last_progress_pending_blocks = self.pending.pending_blocks.len();
         self.tick_lag_warn_streak = 0;
         self.tick_lag_last_warn = None;
+        self.hotspot_log_summary.reset(now);
     }
 
     #[cfg(test)]

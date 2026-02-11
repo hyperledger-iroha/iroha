@@ -497,7 +497,7 @@ impl Actor {
                         continue;
                     }
                     let committed_height =
-                        u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+                        u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                     let stale_view = self.stale_view(inflight.vote.height, inflight.vote.view);
                     if self.drop_vote_for_height_or_view(
                         &inflight.vote,

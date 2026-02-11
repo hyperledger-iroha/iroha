@@ -1159,7 +1159,7 @@ impl Actor {
         let block_signers = match block_signers_result {
             Ok(signers) => signers,
             Err(err) => {
-                let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+                let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                 let parent_missing = block
                     .header()
                     .prev_block_hash()
@@ -1356,7 +1356,7 @@ impl Actor {
                 }
             }
         };
-        let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let mut cached_qc_tally: Option<QcSignerTally> = None;
         let cached_qc_match = candidate_qc.as_ref().and_then(|qc| {
             cached_qc_for(
@@ -1607,14 +1607,22 @@ impl Actor {
             let warn_cooldown = self
                 .rebroadcast_cooldown()
                 .max(super::BLOCK_SYNC_WARN_COOLDOWN_FLOOR);
+            let warn_now = Instant::now();
             if let Some(suppressed_since_last) = self.block_sync_warning_log.allow(
                 super::BlockSyncWarningKind::MissingCommitRoleQuorum,
                 block_hash,
                 block_height,
                 block_view,
-                Instant::now(),
+                warn_now,
                 warn_cooldown,
+                super::BLOCK_SYNC_WARN_BURST_WINDOW,
+                super::BLOCK_SYNC_WARN_BURST_CAP,
             ) {
+                self.hotspot_log_summary.record_block_sync_warn();
+                if suppressed_since_last > 0 {
+                    self.hotspot_log_summary
+                        .record_block_sync_suppressed(suppressed_since_last);
+                }
                 warn!(
                     hash = ?block_hash,
                     height = block_height,
@@ -1632,7 +1640,10 @@ impl Actor {
                     warn_cooldown_ms = warn_cooldown.as_millis(),
                     "dropping block sync update missing commit-role quorum"
                 );
+            } else {
+                self.hotspot_log_summary.record_block_sync_suppressed(1);
             }
+            self.hotspot_log_summary.emit_if_due(warn_now);
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::BlockSyncUpdate,
                 super::status::ConsensusMessageOutcome::Dropped,

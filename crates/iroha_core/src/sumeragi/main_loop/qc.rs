@@ -1265,30 +1265,56 @@ impl Actor {
         }
 
         if !quorum_met {
-            match consensus_mode {
-                ConsensusMode::Permissioned => {
-                    iroha_logger::info!(
-                        height,
-                        view,
-                        phase = ?phase,
-                        block = ?block_hash,
-                        voting_signers = snapshot.voting_signers,
-                        total_signers = snapshot.total_signers,
-                        required,
-                        "not enough votes collected for QC"
-                    );
+            let now = Instant::now();
+            let insufficient_kind = match consensus_mode {
+                ConsensusMode::Permissioned => QcInsufficientKind::PermissionedVotes,
+                ConsensusMode::Npos => QcInsufficientKind::NposStake,
+            };
+            let suppressed_since_last = self.qc_insufficient_warning_log.allow(
+                insufficient_kind,
+                phase,
+                block_hash,
+                height,
+                view,
+                now,
+                QC_INSUFFICIENT_WARN_COOLDOWN,
+            );
+            if let Some(suppressed_since_last) = suppressed_since_last {
+                self.hotspot_log_summary.record_qc_insufficient_warn();
+                if suppressed_since_last > 0 {
+                    self.hotspot_log_summary
+                        .record_qc_insufficient_suppressed(suppressed_since_last);
                 }
-                ConsensusMode::Npos => {
-                    iroha_logger::info!(
-                        height,
-                        view,
-                        phase = ?phase,
-                        block = ?block_hash,
-                        voting_signers = snapshot.voting_signers,
-                        total_signers = snapshot.total_signers,
-                        "not enough stake collected for QC"
-                    );
+                match consensus_mode {
+                    ConsensusMode::Permissioned => {
+                        iroha_logger::info!(
+                            height,
+                            view,
+                            phase = ?phase,
+                            block = ?block_hash,
+                            voting_signers = snapshot.voting_signers,
+                            total_signers = snapshot.total_signers,
+                            required,
+                            suppressed_since_last,
+                            "not enough votes collected for QC"
+                        );
+                    }
+                    ConsensusMode::Npos => {
+                        iroha_logger::info!(
+                            height,
+                            view,
+                            phase = ?phase,
+                            block = ?block_hash,
+                            voting_signers = snapshot.voting_signers,
+                            total_signers = snapshot.total_signers,
+                            suppressed_since_last,
+                            "not enough stake collected for QC"
+                        );
+                    }
                 }
+            } else {
+                self.hotspot_log_summary
+                    .record_qc_insufficient_suppressed(1);
             }
             return;
         }
@@ -2740,7 +2766,7 @@ impl Actor {
                 }
             }
         }
-        let committed_height = self.state.view().height();
+        let committed_height = self.state.committed_height();
         let committed_height_u64 = u64::try_from(committed_height).unwrap_or(u64::MAX);
         self.drop_missing_lock_if_unknown(&qc);
         match self.qc_for_committed_height(

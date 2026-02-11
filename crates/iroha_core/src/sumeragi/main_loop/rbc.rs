@@ -2859,7 +2859,7 @@ impl Actor {
         }
 
         let (roster, roster_source) = if derived_roster_missing {
-            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
             let committed_epoch = self.epoch_for_height(committed_height);
             let (consensus_mode, _, _) = self.consensus_context_for_height(init.height);
             let fallback_roster = {
@@ -3643,7 +3643,7 @@ impl Actor {
             Ok(())
         }
         if topology_peers.is_empty() {
-            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
             let committed_epoch = self.epoch_for_height(committed_height);
             let session_epoch = self.epoch_for_height(key.1);
             let payload_known = self.block_known_locally(key.0);
@@ -4468,7 +4468,7 @@ impl Actor {
             Ok(())
         }
         if topology_peers.is_empty() {
-            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
             let committed_epoch = self.epoch_for_height(committed_height);
             let session_epoch = self.epoch_for_height(key.1);
             let payload_known = self.block_known_locally(key.0);

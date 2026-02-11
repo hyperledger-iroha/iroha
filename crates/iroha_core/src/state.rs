@@ -13951,7 +13951,7 @@ impl State {
     }
 
     #[inline]
-    fn note_view_lock_contention(&self) {
+    fn note_view_lock_contention(&self, caller: &'static core::panic::Location<'static>) {
         let now = Instant::now();
         let suppressed = self
             .view_lock_contention_log
@@ -13959,6 +13959,7 @@ impl State {
             .should_emit(now, STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN);
         if let Some(suppressed_since_last) = suppressed {
             warn!(
+                caller = %caller,
                 suppressed_since_last,
                 cooldown_ms = STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN.as_millis(),
                 "state view lock contended; returning unlocked view"
@@ -13970,6 +13971,7 @@ impl State {
     #[track_caller]
     pub fn view(&self) -> StateView<'_> {
         const STATE_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
+        let caller = core::panic::Location::caller();
         let total_start = Instant::now();
         let block_hashes_start = Instant::now();
         // Acquire inner views before taking the coarse view lock so we don't deadlock
@@ -13994,7 +13996,7 @@ impl State {
         let nexus_wait = nexus_start.elapsed();
         let _view_lock = self.view_lock.try_read().map_or_else(
             || {
-                self.note_view_lock_contention();
+                self.note_view_lock_contention(caller);
                 None
             },
             Some,
@@ -14023,7 +14025,7 @@ impl State {
         }
         if max_wait >= STATE_VIEW_LOG_THRESHOLD {
             debug!(
-                caller = %core::panic::Location::caller(),
+                caller = %caller,
                 max_component,
                 max_wait_us = max_wait.as_micros(),
                 total_wait_us = total_wait.as_micros(),

@@ -213,14 +213,24 @@ const RESCHEDULE_TIMING_LOG_THRESHOLD: Duration = Duration::from_millis(500);
 const TICK_TIMING_LOG_COOLDOWN: Duration = Duration::from_secs(5);
 /// Cooldown between warning-level tick-lag logs. Non-actionable lag reports use debug level.
 const TICK_LAG_WARN_COOLDOWN: Duration = Duration::from_secs(5);
-/// Number of consecutive lag reports required before warning when the loop appears idle.
-const TICK_LAG_WARN_IDLE_STREAK: u32 = 3;
+/// Warn about tick lag only if no meaningful progress was observed in this window.
+const TICK_LAG_STALL_WINDOW: Duration = Duration::from_secs(10);
+/// Number of consecutive lag samples required before promoting to warning.
+const TICK_LAG_WARN_STALL_STREAK: u32 = 2;
 /// Cooldown between consecutive proposal-attempt logs when queued transactions exist.
 const PROPOSE_ATTEMPT_LOG_COOLDOWN: Duration = Duration::from_secs(2);
 /// Minimum backoff between consecutive quorum reschedules for the same pending block.
 const QUORUM_RESCHEDULE_COOLDOWN: Duration = Duration::from_millis(800);
 /// Prevent repeated block-sync warning spam for the same hash/reason across short intervals.
 const BLOCK_SYNC_WARN_COOLDOWN_FLOOR: Duration = Duration::from_secs(3);
+/// Prevent repeated insufficient-QC warnings for the same block/phase tuple across short intervals.
+const QC_INSUFFICIENT_WARN_COOLDOWN: Duration = Duration::from_secs(3);
+/// Cap the number of block-sync quorum-miss warnings emitted per burst window.
+const BLOCK_SYNC_WARN_BURST_CAP: u32 = 3;
+/// Window used by block-sync warning burst suppression.
+const BLOCK_SYNC_WARN_BURST_WINDOW: Duration = Duration::from_secs(10);
+/// Periodic interval for emitting aggregated hotspot summary logs.
+const HOTSPOT_LOG_SUMMARY_INTERVAL: Duration = Duration::from_secs(30);
 /// Align rebroadcast cadence with the block time while enforcing a safe floor.
 fn rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duration {
     let base = if block_time == Duration::ZERO {
@@ -3166,7 +3176,7 @@ impl Actor {
         if self.block_payload_available_locally(parent_hash) {
             return;
         }
-        let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if block_height <= local_height.saturating_add(1) {
             return;
         }
@@ -3336,7 +3346,7 @@ impl Actor {
         roster_hint: Option<&[PeerId]>,
         trigger: &'static str,
     ) {
-        let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let mut parents = Vec::new();
         let mut seen = BTreeSet::new();
         for pending in self.pending.pending_blocks.values() {
@@ -4436,8 +4446,13 @@ pub(super) struct Actor {
     last_tick_heartbeat_log: Instant,
     tick_timing: TickTimingMonitor,
     tick_timing_thresholds: TickTimingThresholds,
+    tick_lag_last_progress_at: Instant,
+    tick_lag_last_progress_height: usize,
+    tick_lag_last_progress_queue_len: usize,
+    tick_lag_last_progress_pending_blocks: usize,
     tick_lag_warn_streak: u32,
     tick_lag_last_warn: Option<Instant>,
+    hotspot_log_summary: HotspotLogSummary,
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
     queue_drop_backpressure: QueueDropBackpressure,
@@ -4448,6 +4463,7 @@ pub(super) struct Actor {
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
     block_sync_warning_log: BlockSyncWarningThrottle,
+    qc_insufficient_warning_log: QcInsufficientWarningThrottle,
     roster_validation_cache: RosterValidationCache,
     #[cfg(test)]
     background_request_log: Option<Arc<Mutex<Vec<BackgroundRequestLogEntry>>>>,
@@ -7077,10 +7093,10 @@ impl Actor {
         }
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => Some(CommitStakeSnapshot::from_roster(
-                state.view().world(),
-                roster,
-            )?),
+            ConsensusMode::Npos => {
+                let world = state.world_view();
+                Some(CommitStakeSnapshot::from_roster(&world, roster)?)
+            }
         };
         Some((cert, stake_snapshot))
     }
@@ -7986,7 +8002,8 @@ impl Actor {
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
             ConsensusMode::Npos => {
-                CommitStakeSnapshot::from_roster(self.state.view().world(), &roster)
+                let world = self.state.world_view();
+                CommitStakeSnapshot::from_roster(&world, &roster)
             }
         };
         self.state
@@ -8321,13 +8338,11 @@ impl Actor {
     }
 
     fn evidence_horizon_context(&self) -> Option<(u64, u64)> {
-        let view = self.state.view();
-        let current_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-        let from_wsv = view
-            .world()
+        let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let world = self.state.world_view();
+        let from_wsv = world
             .sumeragi_npos_parameters()
             .map(|params| params.evidence_horizon_blocks());
-        drop(view);
         let configured_horizon = matches!(self.consensus_mode, ConsensusMode::Npos)
             .then_some(self.config.npos.reconfig.evidence_horizon_blocks);
         from_wsv
@@ -8364,7 +8379,7 @@ impl Actor {
             return Ok(false);
         }
         let (subject_height, _) = super::evidence::evidence_subject_height_view(evidence);
-        let fallback_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let fallback_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let evidence_height = subject_height.unwrap_or(fallback_height);
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(evidence_height);
@@ -8442,7 +8457,7 @@ impl Actor {
         {
             let committed_qc = self.latest_committed_qc();
             let committed_height = committed_qc.as_ref().map_or_else(
-                || u64::try_from(self.state.view().height()).unwrap_or(0),
+                || u64::try_from(self.state.committed_height()).unwrap_or(0),
                 |qc| qc.height,
             );
             let active_height =
@@ -9011,6 +9026,8 @@ impl Actor {
             let view = state.view();
             view.world.peers().contains(local_peer_id)
         };
+        let initial_committed_height = state.committed_height();
+        let initial_queue_len = queue.active_len();
 
         let mut actor = Self {
             config,
@@ -9082,8 +9099,13 @@ impl Actor {
             last_tick_heartbeat_log: now,
             tick_timing: TickTimingMonitor::new(now),
             tick_timing_thresholds: TickTimingThresholds::default(),
+            tick_lag_last_progress_at: now,
+            tick_lag_last_progress_height: initial_committed_height,
+            tick_lag_last_progress_queue_len: initial_queue_len,
+            tick_lag_last_progress_pending_blocks: 0,
             tick_lag_warn_streak: 0,
             tick_lag_last_warn: None,
+            hotspot_log_summary: HotspotLogSummary::new(now),
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
             queue_drop_backpressure: QueueDropBackpressure::default(),
@@ -9094,6 +9116,7 @@ impl Actor {
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
             block_sync_warning_log: BlockSyncWarningThrottle::default(),
+            qc_insufficient_warning_log: QcInsufficientWarningThrottle::default(),
             roster_validation_cache,
             #[cfg(test)]
             background_request_log: None,
@@ -9143,18 +9166,17 @@ impl Actor {
         super::status::set_tx_queue_backpressure(
             actor.subsystems.propose.backpressure_gate.state(),
         );
+        let view = actor.state.view();
         super::status::set_leader_index(
             actor
-                .local_validator_index(&actor.state.view())
+                .local_validator_index(&view)
                 .map(u64::from)
                 .unwrap_or_default(),
         );
-        {
-            let view = actor.state.view();
-            actor.update_effective_timing_status(&view, actor.consensus_mode);
-        }
+        actor.update_effective_timing_status(&view, actor.consensus_mode);
+        drop(view);
         iroha_logger::info!(
-            height = actor.state.view().height(),
+            height = actor.state.committed_height(),
             queue_len = actor.queue.active_len(),
             "sumeragi actor initialized"
         );
@@ -10021,6 +10043,7 @@ impl Actor {
     pub(super) fn tick(&mut self) -> bool {
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
+        self.hotspot_log_summary.emit_if_due(tick_start);
         if Self::tick_heartbeat_log_due(
             tick_start,
             self.last_tick_heartbeat_log,
@@ -10218,9 +10241,19 @@ impl Actor {
         );
         let lag_breached =
             timing.since_last_tick >= thresholds.lag || timing.tick_cost >= thresholds.cost;
-        if !lag_breached {
-            self.tick_lag_warn_streak = 0;
-        }
+        let queue_len_now = self.queue.active_len();
+        let pending_blocks = self.pending.pending_blocks.len();
+        let committed_height = self.state.committed_height();
+        let commit_pipeline_processed = commit_pipeline_timings.blocks_processed > 0;
+        let meaningful_progress = self.note_tick_progress(
+            tick_start,
+            committed_height,
+            queue_len_now,
+            pending_blocks,
+            commit_pipeline_processed,
+            committed_progress,
+        );
+        let stalled_for = tick_start.saturating_duration_since(self.tick_lag_last_progress_at);
         if timing.log_gap || timing.log_cost {
             let pacemaker_remaining = self
                 .subsystems
@@ -10239,9 +10272,8 @@ impl Actor {
                 .propose
                 .last_successful_proposal
                 .map(|last| tick_start.saturating_duration_since(last));
-            let pending_blocks = self.pending.pending_blocks.len();
             let has_pending_work = queue_ready
-                || queue_len > 0
+                || queue_len_now > 0
                 || pending_blocks > 0
                 || self.subsystems.commit.inflight.is_some()
                 || commit_pipeline_timings.ran;
@@ -10292,26 +10324,58 @@ impl Actor {
                         progress,
                         queue_ready,
                         backpressure_saturated = state.is_saturated(),
-                        queue_len,
+                        queue_len = queue_len_now,
                         pending_blocks,
+                        committed_height,
                         tick = self.tick_counter,
                         has_pending_work,
+                        meaningful_progress,
+                        stalled_for_ms = stalled_for.as_millis(),
                         lag_streak = self.tick_lag_warn_streak,
                         $message
                     );
                 };
             }
             if should_warn {
+                self.hotspot_log_summary.record_tick_lag_warn();
                 emit_tick_lag_log!(
                     warn,
                     "sumeragi tick loop lagging; pacemaker may be stalling"
                 );
             } else {
+                self.hotspot_log_summary.record_tick_lag_debug();
                 emit_tick_lag_log!(
                     debug,
-                    "sumeragi tick loop lagging while idle or below warn threshold"
+                    "sumeragi tick loop lagging but no stall evidence; warning suppressed"
                 );
             }
+        }
+        progress
+    }
+
+    fn note_tick_progress(
+        &mut self,
+        now: Instant,
+        committed_height: usize,
+        queue_len: usize,
+        pending_blocks: usize,
+        commit_pipeline_processed: bool,
+        committed_progress: bool,
+    ) -> bool {
+        let progress = committed_height > self.tick_lag_last_progress_height
+            || queue_len.saturating_add(1) < self.tick_lag_last_progress_queue_len
+            || pending_blocks.saturating_add(1) < self.tick_lag_last_progress_pending_blocks
+            || commit_pipeline_processed
+            || committed_progress;
+        if progress {
+            self.tick_lag_last_progress_at = now;
+            self.tick_lag_last_progress_height = committed_height;
+            self.tick_lag_last_progress_queue_len = queue_len;
+            self.tick_lag_last_progress_pending_blocks = pending_blocks;
+            self.tick_lag_warn_streak = 0;
+        } else {
+            self.tick_lag_last_progress_queue_len = queue_len;
+            self.tick_lag_last_progress_pending_blocks = pending_blocks;
         }
         progress
     }
@@ -10327,10 +10391,18 @@ impl Actor {
             return false;
         }
 
+        if !has_pending_work {
+            self.tick_lag_warn_streak = 0;
+            return false;
+        }
+
+        if now.saturating_duration_since(self.tick_lag_last_progress_at) < TICK_LAG_STALL_WINDOW {
+            self.tick_lag_warn_streak = 0;
+            return false;
+        }
+
         self.tick_lag_warn_streak = self.tick_lag_warn_streak.saturating_add(1);
-        let streak_ready =
-            has_pending_work || self.tick_lag_warn_streak >= TICK_LAG_WARN_IDLE_STREAK;
-        if !streak_ready {
+        if self.tick_lag_warn_streak < TICK_LAG_WARN_STALL_STREAK {
             return false;
         }
 
@@ -14552,14 +14624,116 @@ impl Default for QueueBlockBackpressure {
     }
 }
 
+#[derive(Debug)]
+struct HotspotLogSummary {
+    last_emit: Instant,
+    tick_lag_warn: u64,
+    tick_lag_debug: u64,
+    block_sync_warn: u64,
+    block_sync_suppressed: u64,
+    qc_insufficient_warn: u64,
+    qc_insufficient_suppressed: u64,
+}
+
+impl HotspotLogSummary {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_emit: now,
+            tick_lag_warn: 0,
+            tick_lag_debug: 0,
+            block_sync_warn: 0,
+            block_sync_suppressed: 0,
+            qc_insufficient_warn: 0,
+            qc_insufficient_suppressed: 0,
+        }
+    }
+
+    fn record_tick_lag_warn(&mut self) {
+        self.tick_lag_warn = self.tick_lag_warn.saturating_add(1);
+    }
+
+    fn record_tick_lag_debug(&mut self) {
+        self.tick_lag_debug = self.tick_lag_debug.saturating_add(1);
+    }
+
+    fn record_block_sync_warn(&mut self) {
+        self.block_sync_warn = self.block_sync_warn.saturating_add(1);
+    }
+
+    fn record_block_sync_suppressed(&mut self, count: u64) {
+        self.block_sync_suppressed = self.block_sync_suppressed.saturating_add(count);
+    }
+
+    fn record_qc_insufficient_warn(&mut self) {
+        self.qc_insufficient_warn = self.qc_insufficient_warn.saturating_add(1);
+    }
+
+    fn record_qc_insufficient_suppressed(&mut self, count: u64) {
+        self.qc_insufficient_suppressed = self.qc_insufficient_suppressed.saturating_add(count);
+    }
+
+    fn emit_if_due(&mut self, now: Instant) {
+        if now.saturating_duration_since(self.last_emit) < HOTSPOT_LOG_SUMMARY_INTERVAL {
+            return;
+        }
+        if self.tick_lag_warn > 0
+            || self.tick_lag_debug > 0
+            || self.block_sync_warn > 0
+            || self.block_sync_suppressed > 0
+            || self.qc_insufficient_warn > 0
+            || self.qc_insufficient_suppressed > 0
+        {
+            info!(
+                tick_lag_warn = self.tick_lag_warn,
+                tick_lag_debug = self.tick_lag_debug,
+                block_sync_warn = self.block_sync_warn,
+                block_sync_suppressed = self.block_sync_suppressed,
+                qc_insufficient_warn = self.qc_insufficient_warn,
+                qc_insufficient_suppressed = self.qc_insufficient_suppressed,
+                window_secs = HOTSPOT_LOG_SUMMARY_INTERVAL.as_secs(),
+                "consensus hotspot summary"
+            );
+        }
+        self.tick_lag_warn = 0;
+        self.tick_lag_debug = 0;
+        self.block_sync_warn = 0;
+        self.block_sync_suppressed = 0;
+        self.qc_insufficient_warn = 0;
+        self.qc_insufficient_suppressed = 0;
+        self.last_emit = now;
+    }
+
+    fn reset(&mut self, now: Instant) {
+        self.tick_lag_warn = 0;
+        self.tick_lag_debug = 0;
+        self.block_sync_warn = 0;
+        self.block_sync_suppressed = 0;
+        self.qc_insufficient_warn = 0;
+        self.qc_insufficient_suppressed = 0;
+        self.last_emit = now;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum BlockSyncWarningKind {
     MissingCommitRoleQuorum,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct BlockSyncWarningThrottle {
     entries: BTreeMap<(BlockSyncWarningKind, HashOf<BlockHeader>, u64, u64), (Instant, u64)>,
+    burst_window_start: Option<Instant>,
+    burst_emitted: u32,
+}
+
+impl Default for BlockSyncWarningThrottle {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            burst_window_start: None,
+            burst_emitted: 0,
+        }
+    }
 }
 
 impl BlockSyncWarningThrottle {
@@ -14571,8 +14745,99 @@ impl BlockSyncWarningThrottle {
         view: u64,
         now: Instant,
         cooldown: Duration,
+        burst_window: Duration,
+        burst_cap: u32,
     ) -> Option<u64> {
         let key = (kind, block_hash, height, view);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.refresh_burst_window(now, burst_window);
+            if burst_cap > 0 && self.burst_emitted >= burst_cap {
+                return None;
+            }
+            if burst_cap > 0 {
+                self.burst_emitted = self.burst_emitted.saturating_add(1);
+            }
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.refresh_burst_window(now, burst_window);
+        if burst_cap > 0 && self.burst_emitted >= burst_cap {
+            return None;
+        }
+        self.entries.insert(key, (now, 0));
+        if burst_cap > 0 {
+            self.burst_emitted = self.burst_emitted.saturating_add(1);
+        }
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn refresh_burst_window(&mut self, now: Instant, burst_window: Duration) {
+        match self.burst_window_start {
+            Some(start) if now.saturating_duration_since(start) < burst_window => {}
+            _ => {
+                self.burst_window_start = Some(now);
+                self.burst_emitted = 0;
+            }
+        }
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.burst_window_start = None;
+        self.burst_emitted = 0;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum QcInsufficientKind {
+    PermissionedVotes,
+    NposStake,
+}
+
+#[derive(Debug, Default)]
+struct QcInsufficientWarningThrottle {
+    entries: BTreeMap<
+        (
+            QcInsufficientKind,
+            crate::sumeragi::consensus::Phase,
+            HashOf<BlockHeader>,
+            u64,
+            u64,
+        ),
+        (Instant, u64),
+    >,
+}
+
+impl QcInsufficientWarningThrottle {
+    fn allow(
+        &mut self,
+        kind: QcInsufficientKind,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+        cooldown: Duration,
+    ) -> Option<u64> {
+        let key = (kind, phase, block_hash, height, view);
         if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
             if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
                 *suppressed = suppressed.saturating_add(1);
@@ -14627,6 +14892,8 @@ mod block_sync_warning_throttle_tests {
                 0,
                 now,
                 cooldown,
+                Duration::from_secs(1),
+                16,
             ),
             Some(0)
         );
@@ -14638,6 +14905,8 @@ mod block_sync_warning_throttle_tests {
                 0,
                 now + Duration::from_millis(10),
                 cooldown,
+                Duration::from_secs(1),
+                16,
             ),
             None
         );
@@ -14649,8 +14918,165 @@ mod block_sync_warning_throttle_tests {
                 0,
                 now + Duration::from_millis(70),
                 cooldown,
+                Duration::from_secs(1),
+                16,
             ),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn block_sync_warning_throttle_limits_burst_across_hashes() {
+        let mut throttle = BlockSyncWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(10);
+        let burst_window = Duration::from_secs(1);
+        let burst_cap = 2;
+        let hash_a =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([8; Hash::LENGTH]));
+        let hash_b =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9; Hash::LENGTH]));
+        let hash_c =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([10; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                hash_a,
+                1,
+                0,
+                now,
+                cooldown,
+                burst_window,
+                burst_cap,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                hash_b,
+                2,
+                0,
+                now + Duration::from_millis(20),
+                cooldown,
+                burst_window,
+                burst_cap,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                hash_c,
+                3,
+                0,
+                now + Duration::from_millis(40),
+                cooldown,
+                burst_window,
+                burst_cap,
+            ),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod qc_insufficient_warning_throttle_tests {
+    use super::{QcInsufficientKind, QcInsufficientWarningThrottle};
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn qc_insufficient_warning_throttle_aggregates_suppressed_events() {
+        let mut throttle = QcInsufficientWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+        let hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([21; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                QcInsufficientKind::PermissionedVotes,
+                crate::sumeragi::consensus::Phase::Commit,
+                hash,
+                42,
+                0,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                QcInsufficientKind::PermissionedVotes,
+                crate::sumeragi::consensus::Phase::Commit,
+                hash,
+                42,
+                0,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                QcInsufficientKind::PermissionedVotes,
+                crate::sumeragi::consensus::Phase::Commit,
+                hash,
+                42,
+                0,
+                now + Duration::from_millis(70),
+                cooldown,
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn qc_insufficient_warning_throttle_distinguishes_phase_and_mode() {
+        let mut throttle = QcInsufficientWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_secs(1);
+        let hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([22; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                QcInsufficientKind::PermissionedVotes,
+                crate::sumeragi::consensus::Phase::Commit,
+                hash,
+                7,
+                0,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                QcInsufficientKind::NposStake,
+                crate::sumeragi::consensus::Phase::Commit,
+                hash,
+                7,
+                0,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                QcInsufficientKind::PermissionedVotes,
+                crate::sumeragi::consensus::Phase::Prepare,
+                hash,
+                7,
+                0,
+                now + Duration::from_millis(20),
+                cooldown,
+            ),
+            Some(0)
         );
     }
 }

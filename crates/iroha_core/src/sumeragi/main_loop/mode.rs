@@ -211,8 +211,14 @@ impl Actor {
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
         self.block_sync_warning_log.clear();
+        self.qc_insufficient_warning_log.clear();
+        self.tick_lag_last_progress_at = now;
+        self.tick_lag_last_progress_height = self.state.committed_height();
+        self.tick_lag_last_progress_queue_len = self.queue.active_len();
+        self.tick_lag_last_progress_pending_blocks = self.pending.pending_blocks.len();
         self.tick_lag_warn_streak = 0;
         self.tick_lag_last_warn = None;
+        self.hotspot_log_summary.reset(now);
         let base_pacemaker_interval = pacemaker_base_interval_with_propose_timeout(
             pacemaker_block_time,
             pacemaker_timeouts.propose,

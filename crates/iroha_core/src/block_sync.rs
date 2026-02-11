@@ -2626,13 +2626,13 @@ pub mod message {
                     context.block_height,
                     context.block_view,
                 ) {
-                    warn!(
+                    debug!(
                         height = context.block_height,
                         view = context.block_view,
                         hash = %context.block_hash,
                         suppressed_since_last,
                         warn_cooldown_ms = BLOCK_SYNC_QC_WARNING_COOLDOWN.as_millis(),
-                        "replacing block sync QC that does not match cached aggregate"
+                        "replacing block sync QC that does not match cached aggregate (non-fatal)"
                     );
                 }
                 (Some(derived), true)
@@ -2646,7 +2646,7 @@ pub mod message {
                     context.block_height,
                     context.block_view,
                 ) {
-                    warn!(
+                    debug!(
                         height = context.block_height,
                         view = context.block_view,
                         hash = %context.block_hash,
@@ -2655,7 +2655,7 @@ pub mod message {
                         incoming_qc_signers,
                         suppressed_since_last,
                         warn_cooldown_ms = BLOCK_SYNC_QC_WARNING_COOLDOWN.as_millis(),
-                        "keeping incoming block sync QC; no cached precommit signer record"
+                        "keeping incoming block sync QC; no cached precommit signer record (non-fatal)"
                     );
                 }
                 (Some(incoming), false)
