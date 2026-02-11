@@ -2312,6 +2312,14 @@ pub mod zk {
         pub const VERIFIER_WORKER_THREADS: usize = 0;
         /// Capacity of the ZK lane verifier ingress queue (0 = auto-derived).
         pub const VERIFIER_QUEUE_CAP: usize = 0;
+        /// Maximum time spent waiting for ZK lane enqueue under saturation (ms).
+        pub const VERIFIER_ENQUEUE_WAIT_MS: u64 = 25;
+        /// Capacity of the important-task retry ring used by the ZK lane.
+        pub const VERIFIER_RETRY_RING_CAP: usize = 2048;
+        /// Maximum retry rounds for an item in the ZK lane retry ring.
+        pub const VERIFIER_RETRY_MAX_ATTEMPTS: u32 = 3;
+        /// Retry scheduler tick interval for the ZK lane (ms).
+        pub const VERIFIER_RETRY_TICK_MS: u64 = 5;
         /// Maximum accepted Norito envelope payload length in bytes.
         pub const MAX_ENVELOPE_BYTES: usize = super::preverify::MAX_BYTES;
         /// Maximum accepted proof length in bytes after Norito encoding.

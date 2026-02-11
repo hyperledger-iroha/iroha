@@ -299,6 +299,18 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # capacity_per_user = 65536
 # transaction_time_to_live_ms = 86_400_000 # 1 day
 
+[zk.halo2]
+# enabled = false
+# max_k = 16
+# verifier_budget_ms = 20
+# verifier_max_batch = 16
+# verifier_worker_threads = 0        # 0 = auto by available parallelism
+# verifier_queue_cap = 0             # 0 = auto-derived from worker count
+# verifier_enqueue_wait_ms = 25      # bounded enqueue wait before timeout under saturation
+# verifier_retry_ring_cap = 2048     # in-memory retry ring capacity for important tasks
+# verifier_retry_max_attempts = 3    # retry rounds before final drop
+# verifier_retry_tick_ms = 5         # retry scheduler tick interval
+
 [governance]
 # Allowed JDG attestation signature schemes.
 # jdg_signature_schemes = ["simple_threshold"] # or "bls_normal_aggregate"

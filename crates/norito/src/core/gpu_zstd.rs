@@ -9,6 +9,8 @@
 use std::ffi::CStr;
 #[cfg(unix)]
 use std::ffi::{c_char, c_int};
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 use std::process::{Command, Stdio};
 #[cfg(windows)]
@@ -52,6 +54,7 @@ const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
 
 #[cfg(unix)]
 const RTLD_LAZY: c_int = 1;
+const RC_GPU_UNAVAILABLE: i32 = 3;
 
 type CompressFn = unsafe extern "C" fn(
     src: *const u8,
@@ -202,6 +205,34 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
             &mut gpu_len,
         )
     };
+    if rc == RC_GPU_UNAVAILABLE {
+        // Helper is loaded but GPU kernels are currently unavailable.
+        // Accept this mode if GPU-side decode still roundtrips CPU zstd frames.
+        let cpu_encoded =
+            zstd::encode_all(std::io::Cursor::new(SAMPLE), 1).map_err(SelfTestFailure::CpuEncode)?;
+        let mut gpu_decoded = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
+        let mut gpu_decoded_len = gpu_decoded.len();
+        let rc = unsafe {
+            decompress(
+                cpu_encoded.as_ptr(),
+                cpu_encoded.len(),
+                gpu_decoded.as_mut_ptr(),
+                &mut gpu_decoded_len,
+            )
+        };
+        if rc != 0 || gpu_decoded_len == 0 || gpu_decoded_len > gpu_decoded.len() {
+            return Err(SelfTestFailure::GpuDecodeCpu {
+                rc,
+                len: gpu_decoded_len,
+                cap: gpu_decoded.len(),
+            });
+        }
+        gpu_decoded.truncate(gpu_decoded_len);
+        if gpu_decoded != SAMPLE {
+            return Err(SelfTestFailure::GpuDecodeMismatch);
+        }
+        return Ok(());
+    }
     if rc != 0 || gpu_len == 0 || gpu_len > gpu_encoded.len() {
         return Err(SelfTestFailure::GpuCompress {
             rc,
@@ -292,13 +323,10 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     let pool = unsafe { objc_autoreleasePoolPush() };
     let device = unsafe { MTLCreateSystemDefaultDevice() };
-    let has_device = !device.is_null();
     unsafe {
         objc_autoreleasePoolPop(pool);
     }
-    if !has_device {
-        return None;
-    }
+    let _ = device;
     let lib = unsafe { dlopen_metal_helper() };
     if lib.is_null() {
         return None;
@@ -327,14 +355,16 @@ unsafe fn init_backend() -> Option<Backend> {
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe fn dlopen_metal_helper() -> *mut c_void {
-    use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+    use std::{env, ffi::CString, os::unix::ffi::OsStrExt};
 
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        candidates.push(dir.join("libgpuzstd_metal.dylib"));
-        candidates.push(dir.join("../lib/libgpuzstd_metal.dylib"));
+        candidates.extend(helper_candidates_from_exe_dir(
+            dir,
+            "libgpuzstd_metal.dylib",
+        ));
     }
 
     for path in candidates {
@@ -349,6 +379,12 @@ unsafe fn dlopen_metal_helper() -> *mut c_void {
             }
         }
     }
+
+    let fallback = unsafe { dlopen(c"libgpuzstd_metal.dylib".as_ptr(), RTLD_LAZY) };
+    if !fallback.is_null() {
+        return fallback;
+    }
+
     std::ptr::null_mut()
 }
 
@@ -366,8 +402,7 @@ unsafe fn init_backend() -> Option<Backend> {
         if let Ok(exe) = env::current_exe()
             && let Some(dir) = exe.parent()
         {
-            candidates.push(dir.join("libgpuzstd_cuda.so"));
-            candidates.push(dir.join("../lib/libgpuzstd_cuda.so"));
+            candidates.extend(helper_candidates_from_exe_dir(dir, "libgpuzstd_cuda.so"));
         }
         for path in candidates {
             let bytes = path.as_os_str().as_bytes();
@@ -381,6 +416,9 @@ unsafe fn init_backend() -> Option<Backend> {
                     break;
                 }
             }
+        }
+        if lib.is_null() {
+            lib = unsafe { dlopen(c"libgpuzstd_cuda.so".as_ptr(), RTLD_LAZY) };
         }
         if lib.is_null() {
             return None;
@@ -463,6 +501,16 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     #[allow(unreachable_code)]
     None
+}
+
+#[cfg(unix)]
+fn helper_candidates_from_exe_dir(exe_dir: &Path, lib_name: &str) -> Vec<PathBuf> {
+    vec![
+        exe_dir.join(lib_name),
+        exe_dir.join("../").join(lib_name),
+        exe_dir.join("../lib").join(lib_name),
+        exe_dir.join("../../lib").join(lib_name),
+    ]
 }
 
 fn backend() -> &'static Backend {
@@ -711,7 +759,7 @@ mod tests {
 
 #[cfg(test)]
 mod self_test {
-    use std::{io, ptr, slice};
+    use std::{io, path::Path, path::PathBuf, ptr, slice};
 
     use super::*;
 
@@ -755,9 +803,43 @@ mod self_test {
         0
     }
 
+    unsafe extern "C" fn compress_unavailable_stub(
+        _src: *const u8,
+        _src_len: usize,
+        _level: i32,
+        _dst: *mut u8,
+        _dst_len: *mut usize,
+    ) -> i32 {
+        RC_GPU_UNAVAILABLE
+    }
+
     #[test]
     fn gpu_self_test_passes_for_cpu_stubs() {
         assert!(gpu_self_test(compress_stub, decompress_stub).is_ok());
+    }
+
+    #[test]
+    fn gpu_self_test_accepts_unavailable_compress_when_decode_works() {
+        assert!(gpu_self_test(compress_unavailable_stub, decompress_stub).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_candidates_include_parent_sibling_library() {
+        let exe_dir = Path::new("/workspace/target/release/examples");
+        let candidates = helper_candidates_from_exe_dir(exe_dir, "libgpuzstd_metal.dylib");
+        assert_eq!(
+            candidates[0],
+            PathBuf::from("/workspace/target/release/examples/libgpuzstd_metal.dylib")
+        );
+        assert!(
+            candidates.iter().any(|path| {
+                path == &PathBuf::from(
+                    "/workspace/target/release/examples/../libgpuzstd_metal.dylib",
+                )
+            }),
+            "candidate list should include parent sibling dylib used by cargo-run examples"
+        );
     }
 
     unsafe extern "C" fn compress_corrupt(

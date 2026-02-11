@@ -4874,6 +4874,30 @@ pub struct Halo2 {
         default = "defaults::zk::halo2::VERIFIER_QUEUE_CAP"
     )]
     pub verifier_queue_cap: usize,
+    /// Maximum enqueue wait for ZK lane admission under saturation (ms).
+    #[config(
+        env = "ZK_HALO2_VERIFIER_ENQUEUE_WAIT_MS",
+        default = "defaults::zk::halo2::VERIFIER_ENQUEUE_WAIT_MS"
+    )]
+    pub verifier_enqueue_wait_ms: u64,
+    /// Capacity of the in-memory retry ring used for important ZK lane tasks.
+    #[config(
+        env = "ZK_HALO2_VERIFIER_RETRY_RING_CAP",
+        default = "defaults::zk::halo2::VERIFIER_RETRY_RING_CAP"
+    )]
+    pub verifier_retry_ring_cap: usize,
+    /// Maximum retry rounds for an item in the ZK lane retry ring.
+    #[config(
+        env = "ZK_HALO2_VERIFIER_RETRY_MAX_ATTEMPTS",
+        default = "defaults::zk::halo2::VERIFIER_RETRY_MAX_ATTEMPTS"
+    )]
+    pub verifier_retry_max_attempts: u32,
+    /// Retry scheduler tick interval for the ZK lane (ms).
+    #[config(
+        env = "ZK_HALO2_VERIFIER_RETRY_TICK_MS",
+        default = "defaults::zk::halo2::VERIFIER_RETRY_TICK_MS"
+    )]
+    pub verifier_retry_tick_ms: u64,
     /// Maximum accepted Norito envelope payload length (bytes).
     #[config(
         env = "ZK_HALO2_MAX_ENVELOPE_BYTES",
@@ -4911,6 +4935,10 @@ impl Halo2 {
             verifier_max_batch: self.verifier_max_batch,
             verifier_worker_threads: self.verifier_worker_threads,
             verifier_queue_cap: self.verifier_queue_cap,
+            verifier_enqueue_wait_ms: self.verifier_enqueue_wait_ms,
+            verifier_retry_ring_cap: self.verifier_retry_ring_cap,
+            verifier_retry_max_attempts: self.verifier_retry_max_attempts,
+            verifier_retry_tick_ms: self.verifier_retry_tick_ms,
             max_envelope_bytes: self.max_envelope_bytes,
             max_proof_bytes: self.max_proof_bytes,
             max_transcript_label_len: self.max_transcript_label_len,

@@ -6587,6 +6587,14 @@ pub struct Halo2 {
     pub verifier_worker_threads: usize,
     /// Capacity of the ZK lane verification queue (0 = auto).
     pub verifier_queue_cap: usize,
+    /// Maximum enqueue wait for ZK lane admission under saturation (ms).
+    pub verifier_enqueue_wait_ms: u64,
+    /// Capacity of the in-memory retry ring used for important ZK lane tasks.
+    pub verifier_retry_ring_cap: usize,
+    /// Maximum retry rounds for a queued task in the ZK lane retry ring.
+    pub verifier_retry_max_attempts: u32,
+    /// Retry scheduler tick interval for the ZK lane (ms).
+    pub verifier_retry_tick_ms: u64,
     /// Maximum accepted Norito envelope payload length (bytes).
     pub max_envelope_bytes: usize,
     /// Maximum accepted proof payload length (bytes).
@@ -6609,6 +6617,13 @@ impl Default for Halo2 {
             verifier_worker_threads:
                 crate::parameters::defaults::zk::halo2::VERIFIER_WORKER_THREADS,
             verifier_queue_cap: crate::parameters::defaults::zk::halo2::VERIFIER_QUEUE_CAP,
+            verifier_enqueue_wait_ms:
+                crate::parameters::defaults::zk::halo2::VERIFIER_ENQUEUE_WAIT_MS,
+            verifier_retry_ring_cap:
+                crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_RING_CAP,
+            verifier_retry_max_attempts:
+                crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_MAX_ATTEMPTS,
+            verifier_retry_tick_ms: crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_TICK_MS,
             max_envelope_bytes: crate::parameters::defaults::zk::halo2::MAX_ENVELOPE_BYTES,
             max_proof_bytes: crate::parameters::defaults::zk::halo2::MAX_PROOF_BYTES,
             max_transcript_label_len:

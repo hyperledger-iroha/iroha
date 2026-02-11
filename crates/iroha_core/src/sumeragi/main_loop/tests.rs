@@ -47244,6 +47244,62 @@ async fn validation_defers_on_empty_commit_topology() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn validation_defers_when_newer_pending_view_exists() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let older_block = sample_block(height, 0, parent);
+    let older_hash = older_block.hash();
+    let older_payload = Hash::new(super::proposals::block_payload_bytes(&older_block));
+    let older_view = older_block.header().view_change_index();
+
+    let newer_block = sample_block(height, 1, parent);
+    let newer_hash = newer_block.hash();
+    let newer_payload = Hash::new(super::proposals::block_payload_bytes(&newer_block));
+    let newer_view = newer_block.header().view_change_index();
+
+    actor.pending.pending_blocks.insert(
+        older_hash,
+        PendingBlock::new(older_block, older_payload, height, older_view),
+    );
+    actor.pending.pending_blocks.insert(
+        newer_hash,
+        PendingBlock::new(newer_block, newer_payload, height, newer_view),
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    assert!(
+        !commit_topology.is_empty(),
+        "test requires non-empty commit topology"
+    );
+
+    let outcome = actor.validate_pending_block_for_voting(older_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Deferred),
+        "older pending views should defer while a newer view exists"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&older_hash),
+        "older pending block should remain queued"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&older_hash),
+        "older pending view should not be dispatched to validation workers"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn validation_records_state_roots_for_valid_block() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -55506,14 +55562,9 @@ async fn reschedule_defers_quorum_timeout_while_validation_inflight() {
         actor.pending_fast_path_timeout(&view, consensus_mode)
     };
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
-    let availability_timeout = actor.availability_timeout(quorum_timeout, true);
     assert!(
         fast_timeout < quorum_timeout,
         "test requires fast timeout to be shorter than quorum timeout"
-    );
-    assert!(
-        quorum_timeout < availability_timeout,
-        "test requires availability timeout to exceed quorum timeout"
     );
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
@@ -55565,12 +55616,28 @@ async fn reschedule_defers_quorum_timeout_while_validation_inflight() {
             .pending_blocks
             .get_mut(&block_hash)
             .expect("pending block");
-        pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
+        pending.inserted_at =
+            Instant::now() - quorum_timeout.saturating_mul(2) - Duration::from_millis(1);
     }
 
     assert!(
+        !actor.reschedule_stale_pending_blocks(None),
+        "pending should continue to defer while validation remains inflight"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should stay unrescheduled while validation is inflight"
+    );
+
+    actor.subsystems.validation.inflight.remove(&block_hash);
+    assert!(
         actor.reschedule_stale_pending_blocks(None),
-        "pending should reschedule after availability timeout with validation inflight"
+        "pending should reschedule once validation inflight clears"
     );
     let pending_after = actor
         .pending
@@ -55579,7 +55646,7 @@ async fn reschedule_defers_quorum_timeout_while_validation_inflight() {
         .expect("pending retained");
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
-        "pending should be quorum-rescheduled after availability timeout"
+        "pending should be quorum-rescheduled once validation inflight clears"
     );
 
     harness.shutdown.send();

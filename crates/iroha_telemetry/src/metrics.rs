@@ -6068,6 +6068,26 @@ pub struct Metrics {
     pub zk_halo2_verifier_budget_ms: GenericGauge<AtomicU64>,
     /// Maximum proofs allowed in a Halo2 batch verification.
     pub zk_halo2_verifier_max_batch: GenericGauge<AtomicU64>,
+    /// Number of worker threads serving ZK lane verification.
+    pub zk_halo2_verifier_worker_threads: GenericGauge<AtomicU64>,
+    /// Effective ZK lane queue capacity.
+    pub zk_halo2_verifier_queue_cap: GenericGauge<AtomicU64>,
+    /// Count of ZK lane admissions that required a bounded wait.
+    pub zk_lane_enqueue_wait_total: IntCounter,
+    /// Count of ZK lane admissions that timed out under saturation.
+    pub zk_lane_enqueue_timeout_total: IntCounter,
+    /// ZK lane dropped-task counter labeled by terminal reason.
+    pub zk_lane_drop_total: IntCounterVec,
+    /// Count of important tasks enqueued into the ZK lane retry ring.
+    pub zk_lane_retry_enqueued_total: IntCounter,
+    /// Count of tasks replayed from the ZK lane retry ring.
+    pub zk_lane_retry_replayed_total: IntCounter,
+    /// Count of tasks dropped after exhausting ZK lane retry attempts.
+    pub zk_lane_retry_exhausted_total: IntCounter,
+    /// Current number of tasks buffered in ZK lane dispatch backlog.
+    pub zk_lane_pending_depth: GenericGauge<AtomicU64>,
+    /// Current number of tasks buffered in the ZK lane retry ring.
+    pub zk_lane_retry_ring_depth: GenericGauge<AtomicU64>,
     /// Events emitted when verifier cache hits/misses occur (labels: cache,event).
     pub zk_verifier_cache_events_total: IntCounterVec,
     /// Base gas charged when verifying a confidential proof.
@@ -7654,6 +7674,59 @@ impl Default for Metrics {
         let zk_halo2_verifier_max_batch = GenericGauge::new(
             "iroha_zk_halo2_verifier_max_batch",
             "Maximum proofs allowed in a Halo2 batch verification.",
+        )
+        .expect("Infallible");
+        let zk_halo2_verifier_worker_threads = GenericGauge::new(
+            "iroha_zk_halo2_verifier_worker_threads",
+            "Number of worker threads serving ZK lane verification.",
+        )
+        .expect("Infallible");
+        let zk_halo2_verifier_queue_cap = GenericGauge::new(
+            "iroha_zk_halo2_verifier_queue_cap",
+            "Effective ZK lane queue capacity.",
+        )
+        .expect("Infallible");
+        let zk_lane_enqueue_wait_total = IntCounter::new(
+            "iroha_zk_lane_enqueue_wait_total",
+            "Count of ZK lane admissions that required a bounded wait.",
+        )
+        .expect("Infallible");
+        let zk_lane_enqueue_timeout_total = IntCounter::new(
+            "iroha_zk_lane_enqueue_timeout_total",
+            "Count of ZK lane admissions that timed out under saturation.",
+        )
+        .expect("Infallible");
+        let zk_lane_drop_total = IntCounterVec::new(
+            Opts::new(
+                "iroha_zk_lane_drop_total",
+                "Terminal ZK lane drops grouped by reason.",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        let zk_lane_retry_enqueued_total = IntCounter::new(
+            "iroha_zk_lane_retry_enqueued_total",
+            "Count of important tasks enqueued into the ZK lane retry ring.",
+        )
+        .expect("Infallible");
+        let zk_lane_retry_replayed_total = IntCounter::new(
+            "iroha_zk_lane_retry_replayed_total",
+            "Count of tasks replayed from the ZK lane retry ring.",
+        )
+        .expect("Infallible");
+        let zk_lane_retry_exhausted_total = IntCounter::new(
+            "iroha_zk_lane_retry_exhausted_total",
+            "Count of tasks dropped after exhausting ZK lane retry attempts.",
+        )
+        .expect("Infallible");
+        let zk_lane_pending_depth = GenericGauge::new(
+            "iroha_zk_lane_pending_depth",
+            "Current number of tasks buffered in ZK lane dispatch backlog.",
+        )
+        .expect("Infallible");
+        let zk_lane_retry_ring_depth = GenericGauge::new(
+            "iroha_zk_lane_retry_ring_depth",
+            "Current number of tasks buffered in the ZK lane retry ring.",
         )
         .expect("Infallible");
         let zk_verifier_cache_events_total = IntCounterVec::new(
@@ -13120,6 +13193,16 @@ impl Default for Metrics {
             zk_halo2_max_k,
             zk_halo2_verifier_budget_ms,
             zk_halo2_verifier_max_batch,
+            zk_halo2_verifier_worker_threads,
+            zk_halo2_verifier_queue_cap,
+            zk_lane_enqueue_wait_total,
+            zk_lane_enqueue_timeout_total,
+            zk_lane_drop_total,
+            zk_lane_retry_enqueued_total,
+            zk_lane_retry_replayed_total,
+            zk_lane_retry_exhausted_total,
+            zk_lane_pending_depth,
+            zk_lane_retry_ring_depth,
             zk_verifier_cache_events_total,
             axt_proof_cache_events_total,
             axt_proof_cache_state,
@@ -13619,6 +13702,16 @@ impl Default for Metrics {
             zk_halo2_max_k,
             zk_halo2_verifier_budget_ms,
             zk_halo2_verifier_max_batch,
+            zk_halo2_verifier_worker_threads,
+            zk_halo2_verifier_queue_cap,
+            zk_lane_enqueue_wait_total,
+            zk_lane_enqueue_timeout_total,
+            zk_lane_drop_total,
+            zk_lane_retry_enqueued_total,
+            zk_lane_retry_replayed_total,
+            zk_lane_retry_exhausted_total,
+            zk_lane_pending_depth,
+            zk_lane_retry_ring_depth,
             zk_verifier_cache_events_total,
             confidential_gas_base_verify,
             confidential_gas_per_public_input,

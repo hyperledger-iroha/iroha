@@ -198,6 +198,24 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
+        let superseded_by_newer_view = self.pending.pending_blocks.values().any(|other| {
+            other.height == pending.height
+                && other.view > pending.view
+                && !other.aborted
+                && !matches!(other.validation_status, ValidationStatus::Invalid)
+        });
+        if superseded_by_newer_view && !pending.commit_qc_seen {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                "deferring validation before voting: newer pending view already exists"
+            );
+            pending.validation_status = ValidationStatus::Pending;
+            self.pending.pending_blocks.insert(hash, pending);
+            return ValidationGateOutcome::Deferred;
+        }
+
         if matches!(dispatch, ValidationDispatch::TryWorker)
             && !self.subsystems.validation.work_txs.is_empty()
         {

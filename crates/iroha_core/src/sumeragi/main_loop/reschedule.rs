@@ -350,13 +350,12 @@ impl Actor {
             } else {
                 quorum_timeout
             };
-            if validation_inflight && !has_votes && !has_qc && pending_age < availability_timeout {
+            if validation_inflight && !has_votes && !has_qc {
                 debug!(
                     height = pending.height,
                     view = pending.view,
                     block = %hash,
                     pending_age_ms = pending_age.as_millis(),
-                    availability_timeout_ms = availability_timeout.as_millis(),
                     quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                     "deferring quorum reschedule while pre-vote validation is inflight"
                 );

@@ -13,11 +13,12 @@
 #![deny(missing_docs)]
 
 use std::{
+    collections::VecDeque,
     num::NonZeroU64,
     sync::mpsc as std_mpsc,
     sync::{Arc, OnceLock},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(test)]
@@ -118,17 +119,229 @@ pub enum ZkOutcome {
 
 /// Handle for submitting ZK tasks to the background worker.
 #[derive(Clone)]
-pub struct ZkLaneHandle(mpsc::Sender<ZkTask>);
+pub struct ZkLaneHandle {
+    tx: mpsc::Sender<ZkTask>,
+    enqueue_wait: Duration,
+    enqueue_poll: Duration,
+    retry_ring: Arc<RetryRing>,
+}
 
 impl ZkLaneHandle {
-    /// Submit a task; returns false if the lane is not running or channel is full.
+    /// Submit a task; returns false only if admission fails after bounded wait/retry handling.
     pub fn submit(&self, task: ZkTask) -> bool {
-        self.0.try_send(task).is_ok()
+        let mut task = task;
+        let started = Instant::now();
+        loop {
+            match self.tx.try_send(task) {
+                Ok(()) => {
+                    if started.elapsed() > Duration::ZERO {
+                        record_enqueue_wait();
+                    }
+                    return true;
+                }
+                Err(mpsc::error::TrySendError::Full(returned)) => {
+                    task = returned;
+                    if started.elapsed() >= self.enqueue_wait {
+                        record_enqueue_timeout();
+                        if task.tx_hash.is_some() {
+                            return enqueue_retry_task(
+                                &self.retry_ring,
+                                task,
+                                "ingress_retry_ring_full",
+                            );
+                        }
+                        record_lane_drop("ingress_enqueue_timeout");
+                        return false;
+                    }
+                    if self.enqueue_poll > Duration::ZERO {
+                        thread::sleep(self.enqueue_poll);
+                    }
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    record_lane_drop("ingress_channel_closed");
+                    return false;
+                }
+            }
+        }
     }
 }
 
 static GLOBAL_SENDER: OnceLock<ZkLaneHandle> = OnceLock::new();
 static EVENTS: OnceLock<crate::EventsSender> = OnceLock::new();
+
+struct RetryTask {
+    task: ZkTask,
+    attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RetryDrainStats {
+    replayed: u64,
+    exhausted: u64,
+    depth: usize,
+}
+
+struct RetryRing {
+    cap: usize,
+    max_attempts: u32,
+    inner: std::sync::Mutex<VecDeque<RetryTask>>,
+}
+
+impl RetryRing {
+    fn new(cap: usize, max_attempts: u32) -> Self {
+        Self {
+            cap: cap.max(1),
+            max_attempts: max_attempts.max(1),
+            inner: std::sync::Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn enqueue(&self, task: ZkTask) -> Result<usize, ZkTask> {
+        match self.inner.lock() {
+            Ok(mut queue) => {
+                if queue.len() >= self.cap {
+                    return Err(task);
+                }
+                queue.push_back(RetryTask { task, attempts: 0 });
+                Ok(queue.len())
+            }
+            Err(err) => {
+                iroha_logger::warn!(?err, "zk_lane: retry ring lock poisoned during enqueue");
+                Err(task)
+            }
+        }
+    }
+
+    fn drain_into_pending(&self, pending: &mut Vec<ZkTask>, pending_cap: usize) -> RetryDrainStats {
+        let mut stats = RetryDrainStats::default();
+        let mut queue = match self.inner.lock() {
+            Ok(queue) => queue,
+            Err(err) => {
+                iroha_logger::warn!(?err, "zk_lane: retry ring lock poisoned during drain");
+                return stats;
+            }
+        };
+
+        if pending.len() >= pending_cap {
+            for entry in queue.iter_mut() {
+                entry.attempts = entry.attempts.saturating_add(1);
+            }
+            let before = queue.len();
+            queue.retain(|entry| entry.attempts < self.max_attempts);
+            stats.exhausted = (before.saturating_sub(queue.len())) as u64;
+            stats.depth = queue.len();
+            return stats;
+        }
+
+        while pending.len() < pending_cap {
+            let Some(entry) = queue.pop_front() else {
+                break;
+            };
+            pending.push(entry.task);
+            stats.replayed = stats.replayed.saturating_add(1);
+        }
+        stats.depth = queue.len();
+        stats
+    }
+
+    fn clear(&self) -> usize {
+        match self.inner.lock() {
+            Ok(mut queue) => {
+                let dropped = queue.len();
+                queue.clear();
+                dropped
+            }
+            Err(err) => {
+                iroha_logger::warn!(?err, "zk_lane: retry ring lock poisoned during clear");
+                0
+            }
+        }
+    }
+
+    fn depth(&self) -> usize {
+        match self.inner.lock() {
+            Ok(queue) => queue.len(),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    "zk_lane: retry ring lock poisoned while reading depth"
+                );
+                0
+            }
+        }
+    }
+}
+
+fn with_metrics(mut apply: impl FnMut(&iroha_telemetry::metrics::Metrics)) {
+    if let Some(metrics) = iroha_telemetry::metrics::global() {
+        apply(metrics.as_ref());
+    }
+}
+
+fn record_lane_drop(reason: &str) {
+    with_metrics(|metrics| {
+        metrics
+            .zk_lane_drop_total
+            .with_label_values(&[reason])
+            .inc();
+    });
+}
+
+fn record_lane_drop_by(reason: &str, count: u64) {
+    if count == 0 {
+        return;
+    }
+    with_metrics(|metrics| {
+        metrics
+            .zk_lane_drop_total
+            .with_label_values(&[reason])
+            .inc_by(count);
+    });
+}
+
+fn record_enqueue_wait() {
+    with_metrics(|metrics| {
+        metrics.zk_lane_enqueue_wait_total.inc();
+    });
+}
+
+fn record_enqueue_timeout() {
+    with_metrics(|metrics| {
+        metrics.zk_lane_enqueue_timeout_total.inc();
+    });
+}
+
+fn set_pending_depth(depth: usize) {
+    with_metrics(|metrics| {
+        metrics
+            .zk_lane_pending_depth
+            .set(u64::try_from(depth).unwrap_or(u64::MAX));
+    });
+}
+
+fn set_retry_ring_depth(depth: usize) {
+    with_metrics(|metrics| {
+        metrics
+            .zk_lane_retry_ring_depth
+            .set(u64::try_from(depth).unwrap_or(u64::MAX));
+    });
+}
+
+fn enqueue_retry_task(retry_ring: &RetryRing, task: ZkTask, full_reason: &str) -> bool {
+    match retry_ring.enqueue(task) {
+        Ok(depth) => {
+            with_metrics(|metrics| {
+                metrics.zk_lane_retry_enqueued_total.inc();
+            });
+            set_retry_ring_depth(depth);
+            true
+        }
+        Err(_) => {
+            record_lane_drop(full_reason);
+            false
+        }
+    }
+}
 
 struct WorkerPool {
     work_txs: Vec<std_mpsc::SyncSender<ZkTask>>,
@@ -224,6 +437,37 @@ fn resolve_queue_cap(configured: usize, workers: usize) -> usize {
     } else {
         configured.max(1)
     }
+}
+
+fn resolve_enqueue_wait_ms(configured: u64) -> Duration {
+    Duration::from_millis(configured)
+}
+
+fn resolve_retry_tick_ms(configured: u64) -> Duration {
+    Duration::from_millis(configured.max(1))
+}
+
+fn resolve_enqueue_poll(wait: Duration) -> Duration {
+    if wait > Duration::ZERO {
+        Duration::from_millis(1)
+    } else {
+        Duration::ZERO
+    }
+}
+
+fn dispatch_pending(pool: &mut WorkerPool, pending: &mut Vec<ZkTask>) {
+    if pending.is_empty() {
+        set_pending_depth(0);
+        return;
+    }
+    let mut retained = Vec::new();
+    for job in pending.drain(..) {
+        if let Err(job) = pool.dispatch(job) {
+            retained.push(job);
+        }
+    }
+    *pending = retained;
+    set_pending_depth(pending.len());
 }
 
 fn process_job(job: ZkTask) {
@@ -355,40 +599,87 @@ pub fn start(
     }
     let workers = resolve_worker_threads(cfg.verifier_worker_threads);
     let queue_cap = resolve_queue_cap(cfg.verifier_queue_cap, workers);
+    let enqueue_wait = resolve_enqueue_wait_ms(cfg.verifier_enqueue_wait_ms);
+    let enqueue_poll = resolve_enqueue_poll(enqueue_wait);
+    let retry_tick = resolve_retry_tick_ms(cfg.verifier_retry_tick_ms);
+    let retry_ring = Arc::new(RetryRing::new(
+        cfg.verifier_retry_ring_cap,
+        cfg.verifier_retry_max_attempts,
+    ));
     let worker_queue_cap = queue_cap.saturating_div(workers).max(1);
     let (tx, mut rx) = mpsc::channel::<ZkTask>(queue_cap);
-    let handle = ZkLaneHandle(tx.clone());
+    let handle = ZkLaneHandle {
+        tx: tx.clone(),
+        enqueue_wait,
+        enqueue_poll,
+        retry_ring: Arc::clone(&retry_ring),
+    };
     let _ = GLOBAL_SENDER.set(handle.clone());
+    with_metrics(|metrics| {
+        metrics
+            .zk_halo2_verifier_worker_threads
+            .set(u64::try_from(workers).unwrap_or(u64::MAX));
+        metrics
+            .zk_halo2_verifier_queue_cap
+            .set(u64::try_from(queue_cap).unwrap_or(u64::MAX));
+    });
+    set_pending_depth(0);
+    set_retry_ring_depth(0);
 
     let max_batch = cfg.verifier_max_batch.max(1) as usize;
     let task = tokio::spawn(async move {
         let mut worker_pool = WorkerPool::spawn(workers, worker_queue_cap);
         let mut pending: Vec<ZkTask> = Vec::with_capacity(max_batch);
-        let dispatch_pending = |pool: &mut WorkerPool, pending: &mut Vec<ZkTask>| {
-            if pending.is_empty() {
-                return;
-            }
-            let mut retained = Vec::new();
-            for job in pending.drain(..) {
-                if let Err(job) = pool.dispatch(job) {
-                    retained.push(job);
-                }
-            }
-            *pending = retained;
-        };
         loop {
             tokio::select! {
                 biased;
                 maybe = rx.recv() => {
                     if let Some(job) = maybe {
-                        if pending.len() < queue_cap {
-                            pending.push(job);
-                        } else {
-                            iroha_logger::warn!(
-                                queue_cap,
-                                workers,
-                                "zk_lane: dropping trace verification task due to saturated dispatch backlog"
-                            );
+                        let job = job;
+                        let started = Instant::now();
+                        loop {
+                            if pending.len() < queue_cap {
+                                pending.push(job);
+                                set_pending_depth(pending.len());
+                                if started.elapsed() > Duration::ZERO {
+                                    record_enqueue_wait();
+                                }
+                                break;
+                            }
+                            dispatch_pending(&mut worker_pool, &mut pending);
+                            if started.elapsed() >= enqueue_wait {
+                                record_enqueue_timeout();
+                                if job.tx_hash.is_some() {
+                                    let accepted = enqueue_retry_task(
+                                        retry_ring.as_ref(),
+                                        job,
+                                        "dispatch_retry_ring_full",
+                                    );
+                                    if !accepted {
+                                        iroha_logger::warn!(
+                                            queue_cap,
+                                            pending = pending.len(),
+                                            retry_depth = retry_ring.depth(),
+                                            workers,
+                                            "zk_lane: dropped important task after dispatch saturation"
+                                        );
+                                    }
+                                } else {
+                                    record_lane_drop("dispatch_enqueue_timeout");
+                                    iroha_logger::warn!(
+                                        queue_cap,
+                                        pending = pending.len(),
+                                        workers,
+                                        "zk_lane: dropping trace verification task due to saturated dispatch backlog"
+                                    );
+                                }
+                                break;
+                            }
+                            if enqueue_poll > Duration::ZERO {
+                                tokio::time::sleep(enqueue_poll).await;
+                            } else {
+                                tokio::task::yield_now().await;
+                            }
                         }
                         if pending.len() >= max_batch {
                             dispatch_pending(&mut worker_pool, &mut pending);
@@ -399,16 +690,52 @@ pub fn start(
                     }
                 }
                 // Periodically drain small batches to avoid unbounded latency
-                () = tokio::time::sleep(Duration::from_millis(5)) => {
+                () = tokio::time::sleep(retry_tick) => {
                     dispatch_pending(&mut worker_pool, &mut pending);
                 }
             }
+
+            let retry_stats = retry_ring.drain_into_pending(&mut pending, queue_cap);
+            if retry_stats.replayed > 0 {
+                with_metrics(|metrics| {
+                    metrics
+                        .zk_lane_retry_replayed_total
+                        .inc_by(retry_stats.replayed);
+                });
+                set_pending_depth(pending.len());
+            }
+            if retry_stats.exhausted > 0 {
+                with_metrics(|metrics| {
+                    metrics
+                        .zk_lane_retry_exhausted_total
+                        .inc_by(retry_stats.exhausted);
+                });
+                record_lane_drop_by("retry_exhausted", retry_stats.exhausted);
+                iroha_logger::warn!(
+                    exhausted = retry_stats.exhausted,
+                    "zk_lane: dropping retry-ring tasks after exhausting retry rounds"
+                );
+            }
+            set_retry_ring_depth(retry_stats.depth);
+            if pending.len() >= max_batch {
+                dispatch_pending(&mut worker_pool, &mut pending);
+            }
         }
         if !pending.is_empty() {
+            record_lane_drop_by("shutdown_flush_drop", pending.len() as u64);
             iroha_logger::warn!(
                 dropped = pending.len(),
                 "zk_lane: dropping pending verification tasks during shutdown"
             );
+        }
+        let retry_dropped = retry_ring.clear();
+        if retry_dropped > 0 {
+            record_lane_drop_by("shutdown_flush_drop", retry_dropped as u64);
+            iroha_logger::warn!(
+                dropped = retry_dropped,
+                "zk_lane: dropping retry-ring tasks during shutdown"
+            );
+            set_retry_ring_depth(0);
         }
         let WorkerPool {
             work_txs,
@@ -479,6 +806,74 @@ mod tests {
         assert_eq!(resolve_queue_cap(0, 32), 128);
         assert_eq!(resolve_queue_cap(0, 64), 256);
         assert_eq!(resolve_queue_cap(17, 4), 17);
+    }
+
+    #[test]
+    fn retry_ring_replays_when_pending_has_capacity() {
+        let ring = RetryRing::new(8, 3);
+        let task = ZkTask {
+            tx_hash: Some(Hash::prehashed([0x11; 32])),
+            code_hash: [0x22; 32],
+            program: Arc::new(vec![0x01, 0x02]),
+            header: None,
+            trace: Vec::new(),
+            constraints: Vec::new(),
+            mem_log: Vec::new(),
+            reg_log: Vec::new(),
+            step_log: Vec::new(),
+            transport_capabilities: None,
+            negotiated_capabilities: None,
+        };
+        assert!(ring.enqueue(task).is_ok(), "ring accepts first task");
+
+        let mut pending = Vec::new();
+        let stats = ring.drain_into_pending(&mut pending, 1);
+        assert_eq!(stats.replayed, 1);
+        assert_eq!(stats.exhausted, 0);
+        assert_eq!(stats.depth, 0);
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn retry_ring_exhausts_when_pending_stays_full() {
+        let ring = RetryRing::new(4, 2);
+        for idx in 0..2 {
+            let task = ZkTask {
+                tx_hash: Some(Hash::prehashed([idx as u8; 32])),
+                code_hash: [0xAA; 32],
+                program: Arc::new(vec![idx as u8]),
+                header: None,
+                trace: Vec::new(),
+                constraints: Vec::new(),
+                mem_log: Vec::new(),
+                reg_log: Vec::new(),
+                step_log: Vec::new(),
+                transport_capabilities: None,
+                negotiated_capabilities: None,
+            };
+            assert!(ring.enqueue(task).is_ok(), "ring enqueue should succeed");
+        }
+
+        let mut pending = vec![ZkTask {
+            tx_hash: None,
+            code_hash: [0xFF; 32],
+            program: Arc::new(vec![0xFF]),
+            header: None,
+            trace: Vec::new(),
+            constraints: Vec::new(),
+            mem_log: Vec::new(),
+            reg_log: Vec::new(),
+            step_log: Vec::new(),
+            transport_capabilities: None,
+            negotiated_capabilities: None,
+        }];
+        let first = ring.drain_into_pending(&mut pending, 1);
+        assert_eq!(first.exhausted, 0);
+        assert_eq!(first.depth, 2);
+
+        let second = ring.drain_into_pending(&mut pending, 1);
+        assert_eq!(second.exhausted, 2);
+        assert_eq!(second.depth, 0);
     }
 
     #[cfg(feature = "zk-preverify")]
