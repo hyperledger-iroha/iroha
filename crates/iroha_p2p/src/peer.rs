@@ -1359,6 +1359,7 @@ pub mod handles {
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, K: Kex, E: Enc>(
         peer_addr: SocketAddr,
+        peer_id: iroha_data_model::prelude::PeerId,
         our_public_address: SocketAddr,
         key_pair: KeyPair,
         connection_id: ConnectionId,
@@ -1374,6 +1375,8 @@ pub mod handles {
         quic_enabled: bool,
         tls_enabled: bool,
         tls_fallback_to_plain: bool,
+        prefer_scion: bool,
+        local_scion_supported: bool,
         prefer_ws_fallback: bool,
         trust_gossip: bool,
         max_frame_bytes: usize,
@@ -1395,6 +1398,7 @@ pub mod handles {
         );
         let peer = state::Connecting {
             peer_addr,
+            peer_id,
             our_public_address,
             key_pair,
             connection_id,
@@ -1406,6 +1410,8 @@ pub mod handles {
             quic_enabled,
             tls_enabled,
             tls_fallback_to_plain,
+            prefer_scion,
+            local_scion_supported,
             prefer_ws_fallback,
             trust_gossip,
             relay_role,
@@ -1447,6 +1453,7 @@ pub mod handles {
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
         soranet_handshake: Arc<SoranetHandshakeConfig>,
+        local_scion_supported: bool,
         post_capacity: usize,
         relay_role: RelayRole,
         trust_gossip: bool,
@@ -1468,6 +1475,7 @@ pub mod handles {
             confidential_caps,
             crypto_caps,
             soranet_handshake,
+            local_scion_supported,
             trust_gossip,
             relay_role,
         };
@@ -2025,6 +2033,7 @@ mod run {
                     },
                 cryptographer,
                 relay_role,
+                scion_supported,
                 trust_gossip,
             } = ready_peer;
             let peer_id = peer_id.insert(new_peer_id);
@@ -2065,6 +2074,7 @@ mod run {
                     peer_message_sender,
                     disambiguator,
                     relay_role,
+                    scion_supported,
                     trust_gossip,
                 }))
                 .await
@@ -3996,13 +4006,17 @@ mod state {
         pub(super) sm_openssl_preview: Option<bool>,
     }
 
-    fn build_trust_meta(trust_gossip: bool) -> HandshakeTrustMeta {
-        HandshakeTrustMeta { trust_gossip }
+    fn build_trust_meta(trust_gossip: bool, scion_supported: bool) -> HandshakeTrustMeta {
+        HandshakeTrustMeta {
+            trust_gossip,
+            scion_supported,
+        }
     }
 
     #[derive(Clone, Debug, Encode, Decode)]
     pub(super) struct HandshakeTrustMeta {
         pub(super) trust_gossip: bool,
+        pub(super) scion_supported: bool,
     }
 
     #[derive(Clone, Debug, Encode, Decode)]
@@ -4341,6 +4355,7 @@ mod state {
     #[allow(clippy::struct_excessive_bools)]
     pub(super) struct Connecting {
         pub peer_addr: SocketAddr,
+        pub peer_id: iroha_data_model::prelude::PeerId,
         pub our_public_address: SocketAddr,
         pub key_pair: KeyPair,
         pub connection_id: ConnectionId,
@@ -4352,6 +4367,8 @@ mod state {
         pub quic_enabled: bool,
         pub tls_enabled: bool,
         pub tls_fallback_to_plain: bool,
+        pub prefer_scion: bool,
+        pub local_scion_supported: bool,
         pub prefer_ws_fallback: bool,
         pub trust_gossip: bool,
         pub relay_role: RelayRole,
@@ -4370,6 +4387,7 @@ mod state {
         pub(super) async fn connect_to(
             Self {
                 peer_addr,
+                peer_id,
                 our_public_address,
                 key_pair,
                 connection_id,
@@ -4381,6 +4399,8 @@ mod state {
                 quic_enabled,
                 tls_enabled,
                 tls_fallback_to_plain,
+                prefer_scion,
+                local_scion_supported,
                 prefer_ws_fallback,
                 trust_gossip,
                 relay_role,
@@ -4701,9 +4721,41 @@ mod state {
                         confidential_caps,
                         crypto_caps,
                         soranet_handshake,
+                        local_scion_supported,
                         trust_gossip,
                         relay_role,
                     });
+                }
+            }
+
+            if prefer_scion {
+                #[cfg(feature = "quic")]
+                if let Some(dialer) = &quic_dialer {
+                    match dial_quic_like(&peer_addr, dialer, dial_timeout, connection_id).await {
+                        Ok(connection) => {
+                            crate::network::inc_scion_outbound();
+                            return Ok(ConnectedTo {
+                                our_public_address,
+                                key_pair,
+                                connection,
+                                chain_id,
+                                consensus_caps,
+                                confidential_caps,
+                                crypto_caps,
+                                soranet_handshake,
+                                local_scion_supported,
+                                trust_gossip,
+                                relay_role,
+                            });
+                        }
+                        Err(err) => {
+                            iroha_logger::warn!(
+                                %err,
+                                peer=%peer_addr,
+                                "SCION-preferred dial failed; falling back to legacy dial strategy"
+                            );
+                        }
+                    }
                 }
             }
 
@@ -4813,6 +4865,7 @@ mod state {
                                     confidential_caps,
                                     crypto_caps,
                                     soranet_handshake,
+                                    local_scion_supported,
                                     trust_gossip,
                                     relay_role,
                                 });
@@ -4833,6 +4886,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 soranet_handshake,
+                local_scion_supported,
                 trust_gossip,
                 relay_role,
             })
@@ -4853,6 +4907,9 @@ mod state {
             let our_public_address: std::net::SocketAddr = "127.0.0.1:0".parse().expect("addr");
             Connecting {
                 peer_addr: peer_addr.into(),
+                peer_id: iroha_data_model::prelude::PeerId::from(
+                    KeyPair::random().public_key().clone(),
+                ),
                 our_public_address: our_public_address.into(),
                 key_pair: KeyPair::random(),
                 connection_id: 0,
@@ -4864,6 +4921,8 @@ mod state {
                 quic_enabled: false,
                 tls_enabled,
                 tls_fallback_to_plain,
+                prefer_scion: false,
+                local_scion_supported: true,
                 prefer_ws_fallback: false,
                 trust_gossip: false,
                 relay_role: RelayRole::Disabled,
@@ -4876,6 +4935,22 @@ mod state {
                 proxy_policy: crate::transport::ProxyPolicy::disabled(),
                 quic_dialer: None,
             }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn scion_preference_falls_back_to_legacy_when_unavailable() {
+            let addr: std::net::SocketAddr = "127.0.0.1:1".parse().expect("addr");
+            let mut connecting =
+                connecting_to(addr, /*tls_enabled=*/ false, /*fallback=*/ true);
+            connecting.prefer_scion = true;
+
+            let res = Connecting::connect_to(connecting).await;
+            assert!(matches!(
+                res,
+                Err(crate::Error::Io(e))
+                    if e.kind() != std::io::ErrorKind::InvalidInput
+                        && e.kind() != std::io::ErrorKind::NotFound
+            ));
         }
 
         #[cfg(not(feature = "p2p_tls"))]
@@ -4942,6 +5017,7 @@ mod state {
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
         soranet_handshake: Arc<SoranetHandshakeConfig>,
+        local_scion_supported: bool,
         trust_gossip: bool,
         relay_role: RelayRole,
     }
@@ -4958,6 +5034,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 soranet_handshake,
+                local_scion_supported,
                 trust_gossip,
                 relay_role,
             }: Self,
@@ -5076,6 +5153,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 relay_role,
+                local_scion_supported,
                 trust_gossip,
             })
         }
@@ -5091,6 +5169,7 @@ mod state {
         pub confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub crypto_caps: Option<crate::CryptoHandshakeCaps>,
         pub soranet_handshake: Arc<SoranetHandshakeConfig>,
+        pub local_scion_supported: bool,
         pub trust_gossip: bool,
         pub relay_role: RelayRole,
     }
@@ -5107,6 +5186,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 soranet_handshake,
+                local_scion_supported,
                 trust_gossip,
                 relay_role,
             }: Self,
@@ -5221,6 +5301,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 relay_role,
+                local_scion_supported,
                 trust_gossip,
             })
         }
@@ -5239,6 +5320,7 @@ mod state {
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub(super) crypto_caps: Option<crate::CryptoHandshakeCaps>,
         pub(super) relay_role: RelayRole,
+        pub(super) local_scion_supported: bool,
         pub(super) trust_gossip: bool,
     }
 
@@ -5255,6 +5337,7 @@ mod state {
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub(super) crypto_caps: Option<crate::CryptoHandshakeCaps>,
         pub(super) relay_role: RelayRole,
+        pub(super) local_scion_supported: bool,
         pub(super) trust_gossip: bool,
     }
 
@@ -5273,6 +5356,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 relay_role,
+                local_scion_supported,
                 trust_gossip,
             } = init;
             Self {
@@ -5287,6 +5371,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 relay_role,
+                local_scion_supported,
                 trust_gossip,
             }
         }
@@ -5304,6 +5389,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 relay_role,
+                local_scion_supported,
                 trust_gossip,
             }: Self,
         ) -> Result<GetKey<K, E>, crate::Error> {
@@ -5328,7 +5414,7 @@ mod state {
                 consensus: build_consensus_meta(consensus_caps.as_ref()),
                 confidential: build_confidential_meta(confidential_caps.as_ref()),
                 crypto: build_crypto_meta(crypto_caps.as_ref()),
-                trust: build_trust_meta(trust_gossip),
+                trust: build_trust_meta(trust_gossip, local_scion_supported),
             };
             let encrypted = encode_handshake_message(&cryptographer, &hello)?;
 
@@ -5355,6 +5441,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 relay_role,
+                local_scion_supported,
                 trust_gossip,
             })
         }
@@ -5371,6 +5458,7 @@ mod state {
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub(super) crypto_caps: Option<crate::CryptoHandshakeCaps>,
         pub(super) relay_role: RelayRole,
+        pub(super) local_scion_supported: bool,
         pub(super) trust_gossip: bool,
     }
 
@@ -5387,6 +5475,7 @@ mod state {
                 confidential_caps,
                 crypto_caps,
                 relay_role: _relay_role,
+                local_scion_supported: _local_scion_supported,
                 trust_gossip,
             }: Self,
         ) -> Result<Ready<E>, crate::Error> {
@@ -5408,6 +5497,7 @@ mod state {
                 confidential,
                 crypto,
                 trust_gossip_remote,
+                scion_supported_remote,
             ) = match hello {
                 HandshakeHello::V1(HandshakeHelloV1 {
                     algorithm,
@@ -5429,6 +5519,7 @@ mod state {
                     confidential,
                     crypto,
                     trust.trust_gossip,
+                    trust.scion_supported,
                 ),
             };
             let remote_pub_key = match PublicKey::from_bytes(algorithm, &public_key) {
@@ -5456,12 +5547,14 @@ mod state {
 
             let peer = Peer::new(remote_public_address, remote_pub_key);
             let trust_gossip = trust_gossip && trust_gossip_remote;
+            let scion_supported = scion_supported_remote;
 
             Ok(Ready {
                 peer,
                 connection,
                 cryptographer,
                 relay_role: relay,
+                scion_supported,
                 trust_gossip,
             })
         }
@@ -5474,6 +5567,7 @@ mod state {
         pub connection: Connection,
         pub cryptographer: Cryptographer<E>,
         pub relay_role: RelayRole,
+        pub scion_supported: bool,
         pub trust_gossip: bool,
     }
 
@@ -5541,6 +5635,7 @@ mod state {
                 confidential_caps: None,
                 crypto_caps: None,
                 soranet_handshake: soranet.clone(),
+                local_scion_supported: true,
                 trust_gossip: true,
                 relay_role: RelayRole::Disabled,
             };
@@ -5553,6 +5648,7 @@ mod state {
                 confidential_caps: None,
                 crypto_caps: None,
                 soranet_handshake: soranet.clone(),
+                local_scion_supported: true,
                 trust_gossip: true,
                 relay_role: RelayRole::Disabled,
             };
@@ -5727,7 +5823,10 @@ mod tests {
                 sm_enabled: None,
                 sm_openssl_preview: None,
             },
-            trust: HandshakeTrustMeta { trust_gossip: true },
+            trust: HandshakeTrustMeta {
+                trust_gossip: true,
+                scion_supported: false,
+            },
         };
 
         let raw = hello.encode();
@@ -5768,7 +5867,10 @@ mod tests {
                 sm_enabled: Some(false),
                 sm_openssl_preview: Some(false),
             },
-            trust: HandshakeTrustMeta { trust_gossip: true },
+            trust: HandshakeTrustMeta {
+                trust_gossip: true,
+                scion_supported: true,
+            },
         };
 
         let encrypted =
@@ -5811,6 +5913,7 @@ mod tests {
             confidential_caps: Some(caps),
             crypto_caps: None,
             relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
             trust_gossip: true,
         });
         let err = match SendKey::<KexAlgo, ChaCha20Poly1305>::send_our_public_key(send_key).await {
@@ -5849,6 +5952,7 @@ mod tests {
             confidential_caps: None,
             crypto_caps: None,
             relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
             trust_gossip: true,
         });
 
@@ -5862,6 +5966,7 @@ mod tests {
             confidential_caps: None,
             crypto_caps: None,
             relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
             trust_gossip: true,
         };
 
@@ -5879,6 +5984,10 @@ mod tests {
             .expect("sending handshake should succeed");
 
         assert!(ready.trust_gossip, "handshake should enable trust gossip");
+        assert!(
+            ready.scion_supported,
+            "handshake should propagate SCION support flag"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -5906,6 +6015,7 @@ mod tests {
             confidential_caps: None,
             crypto_caps: None,
             soranet_handshake: soranet,
+            local_scion_supported: true,
             trust_gossip: true,
             relay_role: RelayRole::Disabled,
         };
@@ -6040,6 +6150,8 @@ pub mod message {
         pub disambiguator: u64,
         /// Relay role advertised during handshake.
         pub relay_role: RelayRole,
+        /// Whether the remote supports SCION transport preference.
+        pub scion_supported: bool,
         /// Whether the remote supports trust gossip.
         pub trust_gossip: bool,
     }

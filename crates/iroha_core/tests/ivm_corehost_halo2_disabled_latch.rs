@@ -99,6 +99,8 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
         max_k: 18,
         verifier_budget_ms: 50,
         verifier_max_batch: 4,
+        verifier_worker_threads: defaults::zk::halo2::VERIFIER_WORKER_THREADS,
+        verifier_queue_cap: defaults::zk::halo2::VERIFIER_QUEUE_CAP,
         max_envelope_bytes: defaults::zk::halo2::MAX_ENVELOPE_BYTES,
         max_proof_bytes: defaults::zk::halo2::MAX_PROOF_BYTES,
         max_transcript_label_len: defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,

@@ -6861,6 +6861,10 @@ pub struct Metrics {
     pub p2p_ws_inbound_total: GenericGauge<AtomicU64>,
     /// Successful outbound WebSocket P2P connections
     pub p2p_ws_outbound_total: GenericGauge<AtomicU64>,
+    /// Accepted inbound SCION P2P connections
+    pub p2p_scion_inbound_total: GenericGauge<AtomicU64>,
+    /// Successful outbound SCION P2P connections
+    pub p2p_scion_outbound_total: GenericGauge<AtomicU64>,
     /// Network message queue depth by priority (High/Low).
     pub p2p_queue_depth: GenericGaugeVec<AtomicU64>,
     /// Bounded network message queue drops split by priority and kind
@@ -9428,6 +9432,16 @@ impl Default for Metrics {
         let p2p_ws_outbound_total = GenericGauge::new(
             "p2p_ws_outbound_total",
             "Successful outbound WebSocket P2P connections",
+        )
+        .expect("Infallible");
+        let p2p_scion_inbound_total = GenericGauge::new(
+            "p2p_scion_inbound_total",
+            "Accepted inbound SCION P2P connections",
+        )
+        .expect("Infallible");
+        let p2p_scion_outbound_total = GenericGauge::new(
+            "p2p_scion_outbound_total",
+            "Successful outbound SCION P2P connections",
         )
         .expect("Infallible");
         let tx_gossip_sent_total = IntCounterVec::new(
@@ -13247,6 +13261,8 @@ impl Default for Metrics {
             tx_gossip_restricted_public_policy,
             p2p_ws_inbound_total,
             p2p_ws_outbound_total,
+            p2p_scion_inbound_total,
+            p2p_scion_outbound_total,
             p2p_queue_depth,
             p2p_queue_dropped_total,
             p2p_handshake_ms_bucket,
@@ -13826,6 +13842,8 @@ impl Default for Metrics {
             tx_gossip_caps,
             p2p_ws_inbound_total,
             p2p_ws_outbound_total,
+            p2p_scion_inbound_total,
+            p2p_scion_outbound_total,
             p2p_queue_depth,
             p2p_queue_dropped_total,
             p2p_handshake_ms_bucket,
