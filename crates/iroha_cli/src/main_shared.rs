@@ -1720,7 +1720,7 @@ mod account {
         /// Retrieve details of a specific account
         Get(Id),
         /// Register an account
-        Register(Id),
+        Register(RegisterId),
         /// Unregister an account
         Unregister(Id),
         /// Read and write metadata
@@ -1750,8 +1750,7 @@ mod account {
                     context.print_data(&entry)
                 }
                 Register(args) => {
-                    let account_id = resolve_account_id(context, &args.id)
-                        .wrap_err("failed to resolve --id account")?;
+                    let account_id = parse_register_account_id(&args.id)?;
                     let instruction =
                         iroha::data_model::isi::Register::account(Account::new(account_id));
                     context
@@ -1886,6 +1885,13 @@ mod account {
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        #[arg(short, long)]
+        id: String,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct RegisterId {
+        /// Account identifier for registration (`<public_key>@domain`)
         #[arg(short, long)]
         id: String,
     }
@@ -6605,6 +6611,32 @@ pub(crate) fn resolve_account_id<C: RunContext>(context: &C, literal: &str) -> R
     resolve_account_id_with(&client, literal, Client::post_account_resolve)
 }
 
+fn parse_register_account_id(literal: &str) -> Result<AccountId> {
+    let trimmed = literal.trim();
+    if trimmed.is_empty() {
+        eyre::bail!("`ledger account register --id` must be `<public_key>@<domain>`");
+    }
+
+    let Some((identifier, domain_literal)) = trimmed.rsplit_once('@') else {
+        eyre::bail!("`ledger account register --id` must be `<public_key>@<domain>`");
+    };
+    if identifier.is_empty() || domain_literal.is_empty() {
+        eyre::bail!("`ledger account register --id` must be `<public_key>@<domain>`");
+    }
+    if iroha::account_address::AccountAddress::parse_any(identifier, None).is_ok() {
+        eyre::bail!(
+            "`ledger account register --id` must be `<public_key>@<domain>`; encoded addresses and aliases are not accepted"
+        );
+    }
+    let public_key = identifier
+        .parse::<iroha_crypto::PublicKey>()
+        .map_err(|_| eyre!("`ledger account register --id` must be `<public_key>@<domain>`"))?;
+    let domain: DomainId = domain_literal
+        .parse()
+        .wrap_err("failed to parse account domain")?;
+    Ok(AccountId::new(domain, public_key))
+}
+
 fn string_from_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
@@ -6851,6 +6883,41 @@ mod tests {
         .expect("local resolve should succeed");
 
         assert_eq!(resolved, AccountId::new(domain, key_pair.public_key().clone()));
+    }
+
+    #[test]
+    fn parse_register_account_id_accepts_public_key_domain() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
+        let literal = format!("{}@{}", key_pair.public_key(), domain);
+        let resolved = parse_register_account_id(&literal).expect("register account id");
+        assert_eq!(resolved, AccountId::new(domain, key_pair.public_key().clone()));
+    }
+
+    #[test]
+    fn parse_register_account_id_rejects_alias_like_literal() {
+        let err = parse_register_account_id("inori@wonderland").expect_err("alias should fail");
+        assert!(
+            err.to_string().contains("must be `<public_key>@<domain>`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_register_account_id_rejects_encoded_address_suffix() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![13_u8; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let literal = format!(
+            "{}@{}",
+            account.canonical_ih58().expect("ih58"),
+            domain
+        );
+        let err = parse_register_account_id(&literal).expect_err("encoded address should fail");
+        assert!(
+            err.to_string().contains("encoded addresses and aliases are not accepted"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
