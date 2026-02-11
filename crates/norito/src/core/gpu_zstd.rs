@@ -7,7 +7,7 @@
 
 #[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
 use std::ffi::CStr;
-#[cfg(unix)]
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
 use std::ffi::{c_char, c_int};
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
@@ -19,7 +19,6 @@ use std::{
     ffi::c_void,
     fmt,
     io::{self, Read},
-    mem,
     sync::OnceLock,
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -29,7 +28,7 @@ unsafe extern "C" {
     fn objc_autoreleasePoolPop(pool: *mut c_void);
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
@@ -52,7 +51,7 @@ const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
 #[cfg(windows)]
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
 const RTLD_LAZY: c_int = 1;
 const RC_GPU_UNAVAILABLE: i32 = 3;
 
@@ -326,21 +325,10 @@ unsafe fn init_backend() -> Option<Backend> {
     unsafe {
         objc_autoreleasePoolPop(pool);
     }
-    let _ = device;
-    let lib = unsafe { dlopen_metal_helper() };
-    if lib.is_null() {
-        return None;
-    }
-    let compress = unsafe { dlsym(lib, c"gpu_zstd_compress".as_ptr()) };
-    let decompress = unsafe { dlsym(lib, c"gpu_zstd_decompress".as_ptr()) };
-    if compress.is_null() || decompress.is_null() {
-        let _ = unsafe { dlclose(lib) };
-        return None;
-    }
-    let compress_fn: CompressFn = unsafe { mem::transmute(compress) };
-    let decompress_fn: DecompressFn = unsafe { mem::transmute(decompress) };
+    let _has_device = !device.is_null();
+    let compress_fn: CompressFn = gpuzstd_metal::gpu_zstd_compress;
+    let decompress_fn: DecompressFn = gpuzstd_metal::gpu_zstd_decompress;
     if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
-        let _ = unsafe { dlclose(lib) };
         eprintln!(
             "[norito::gpu_zstd] Metal backend failed self-test ({}); falling back to CPU implementation",
             err
@@ -351,41 +339,6 @@ unsafe fn init_backend() -> Option<Backend> {
         compress: compress_fn,
         decompress: decompress_fn,
     })
-}
-
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-unsafe fn dlopen_metal_helper() -> *mut c_void {
-    use std::{env, ffi::CString, os::unix::ffi::OsStrExt};
-
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        candidates.extend(helper_candidates_from_exe_dir(
-            dir,
-            "libgpuzstd_metal.dylib",
-        ));
-    }
-
-    for path in candidates {
-        let bytes = path.as_os_str().as_bytes();
-        if bytes.contains(&0) {
-            continue;
-        }
-        if let Ok(cpath) = CString::new(bytes) {
-            let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
-            if !handle.is_null() {
-                return handle;
-            }
-        }
-    }
-
-    let fallback = unsafe { dlopen(c"libgpuzstd_metal.dylib".as_ptr(), RTLD_LAZY) };
-    if !fallback.is_null() {
-        return fallback;
-    }
-
-    std::ptr::null_mut()
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
@@ -443,8 +396,8 @@ unsafe fn init_backend() -> Option<Backend> {
             let _ = unsafe { dlclose(lib) };
             return None;
         }
-        let compress_fn: CompressFn = unsafe { mem::transmute(compress) };
-        let decompress_fn: DecompressFn = unsafe { mem::transmute(decompress) };
+        let compress_fn: CompressFn = unsafe { std::mem::transmute(compress) };
+        let decompress_fn: DecompressFn = unsafe { std::mem::transmute(decompress) };
         if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = unsafe { dlclose(lib) };
             eprintln!(
@@ -487,8 +440,8 @@ unsafe fn init_backend() -> Option<Backend> {
             ));
             return None;
         }
-        let compress_fn: CompressFn = mem::transmute(compress);
-        let decompress_fn: DecompressFn = mem::transmute(decompress);
+        let compress_fn: CompressFn = std::mem::transmute(compress);
+        let decompress_fn: DecompressFn = std::mem::transmute(decompress);
         if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = FreeLibrary(lib);
             report_gpu_load_failure(format!("CUDA backend failed self-test ({})", err));
@@ -504,6 +457,7 @@ unsafe fn init_backend() -> Option<Backend> {
 }
 
 #[cfg(unix)]
+#[cfg_attr(all(target_os = "macos", target_arch = "aarch64"), allow(dead_code))]
 fn helper_candidates_from_exe_dir(exe_dir: &Path, lib_name: &str) -> Vec<PathBuf> {
     vec![
         exe_dir.join(lib_name),

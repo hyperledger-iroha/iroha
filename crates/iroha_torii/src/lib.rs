@@ -6589,6 +6589,37 @@ async fn handler_explorer_instructions_stream(
 }
 
 #[cfg(feature = "app_api")]
+fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
+    let msg = error.to_string().to_ascii_lowercase();
+    msg.contains("connection is closed")
+        || msg.contains("broken pipe")
+        || msg.contains("connection reset")
+        || msg.contains("already closed")
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod ws_disconnect_classification_tests {
+    use super::is_expected_ws_disconnect;
+
+    #[test]
+    fn detects_expected_disconnect_errors() {
+        assert!(is_expected_ws_disconnect(&eyre::eyre!(
+            "WebSocket error: IO error: Broken pipe (os error 32)"
+        )));
+        assert!(is_expected_ws_disconnect(&eyre::eyre!(
+            "Event consumption resulted in an error: Connection is closed"
+        )));
+    }
+
+    #[test]
+    fn keeps_unexpected_errors_as_failures() {
+        assert!(!is_expected_ws_disconnect(&eyre::eyre!(
+            "event stream lagged; skipping buffered events"
+        )));
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_subscription_ws(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -6605,7 +6636,11 @@ async fn handler_subscription_ws(
             )
             .await
             {
-                iroha_logger::error!(%error, "Failure during event streaming");
+                if is_expected_ws_disconnect(&error) {
+                    iroha_logger::debug!(%error, "Event streaming closed by client");
+                } else {
+                    iroha_logger::error!(%error, "Failure during event streaming");
+                }
             }
         }))
         .await);
@@ -6647,7 +6682,11 @@ async fn handler_subscription_ws(
         )
         .await
         {
-            iroha_logger::error!(%error, "Failure during event streaming");
+            if is_expected_ws_disconnect(&error) {
+                iroha_logger::debug!(%error, "Event streaming closed by client");
+            } else {
+                iroha_logger::error!(%error, "Failure during event streaming");
+            }
         }
     }))
     .await)

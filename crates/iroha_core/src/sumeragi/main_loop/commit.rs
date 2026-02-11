@@ -1740,6 +1740,10 @@ impl Actor {
             for (stale_hash, stale_height) in stale {
                 self.pending.pending_blocks.remove(&stale_hash);
                 self.subsystems.validation.inflight.remove(&stale_hash);
+                self.subsystems
+                    .validation
+                    .superseded_results
+                    .remove(&stale_hash);
                 self.clean_rbc_sessions_for_block(stale_hash, stale_height);
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
@@ -2235,6 +2239,10 @@ impl Actor {
     ) {
         if let Some(pending) = self.pending.pending_blocks.remove(&invalid_hash) {
             self.subsystems.validation.inflight.remove(&invalid_hash);
+            self.subsystems
+                .validation
+                .superseded_results
+                .remove(&invalid_hash);
             self.clean_rbc_sessions_for_block(invalid_hash, pending.height);
         }
         if let Some(ev) = evidence {
@@ -2408,25 +2416,34 @@ impl Actor {
             let mut validation_outcome =
                 self.validate_pending_block_for_voting(hash, &commit_topology);
             if matches!(validation_outcome, ValidationGateOutcome::Deferred) {
-                if let Some(pending) = self.pending.pending_blocks.get(&hash) {
-                    let pending_age = pending.age();
-                    if pending_age >= fast_timeout {
-                        if self.subsystems.validation.inflight.contains_key(&hash) {
-                            let inflight_elapsed_ms = self
-                                .validation_inflight_elapsed(hash)
-                                .map(|elapsed| elapsed.as_millis());
-                            self.subsystems.validation.inflight.remove(&hash);
-                            warn!(
-                                height = pending.height,
-                                view = pending.view,
-                                block = %hash,
-                                inflight_elapsed_ms = inflight_elapsed_ms,
-                                fast_timeout_ms = fast_timeout.as_millis(),
-                                "validation inflight exceeded fast timeout; forcing inline pre-vote validation"
-                            );
+                if let Some((pending_height_snapshot, pending_view_snapshot, pending_age)) = self
+                    .pending
+                    .pending_blocks
+                    .get(&hash)
+                    .map(|pending| (pending.height, pending.view, pending.age()))
+                {
+                    let mut should_inline_validation = false;
+                    if let Some(inflight_elapsed) = self.validation_inflight_elapsed(hash) {
+                        if inflight_elapsed >= fast_timeout {
+                            if self.supersede_validation_inflight(hash).is_some() {
+                                warn!(
+                                    height = pending_height_snapshot,
+                                    view = pending_view_snapshot,
+                                    block = %hash,
+                                    inflight_elapsed_ms = inflight_elapsed.as_millis(),
+                                    fast_timeout_ms = fast_timeout.as_millis(),
+                                    "validation inflight exceeded fast timeout; forcing inline pre-vote validation"
+                                );
+                            }
+                            should_inline_validation = true;
                         }
+                    } else if pending_age >= fast_timeout {
+                        // No worker accepted the validation task (typically queue-full); avoid
+                        // indefinite deferral by validating inline after fast-timeout.
+                        should_inline_validation = true;
                     }
-                    if pending_age >= fast_timeout
+
+                    if should_inline_validation
                         && !self.subsystems.validation.inflight.contains_key(&hash)
                     {
                         validation_outcome =
@@ -2546,6 +2563,7 @@ impl Actor {
             {
                 if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
                     self.subsystems.validation.inflight.remove(&hash);
+                    self.subsystems.validation.superseded_results.remove(&hash);
                     self.clean_rbc_sessions_for_block(hash, pending.height);
                 }
                 continue;
@@ -3659,6 +3677,10 @@ impl Actor {
             return;
         };
         self.subsystems.validation.inflight.remove(&block_hash);
+        self.subsystems
+            .validation
+            .superseded_results
+            .remove(&block_hash);
         let mut pending = pending;
         pending.commit_qc_seen = true;
         pending.commit_qc_epoch = Some(cert.epoch);
@@ -5506,6 +5528,7 @@ impl Actor {
     ) {
         self.pending.pending_blocks.clear();
         self.subsystems.validation.inflight.clear();
+        self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
         self.pending.missing_block_requests.clear();
         self.pending.pending_processing.set(None);
@@ -5551,6 +5574,9 @@ impl Actor {
         self.payload_rebroadcast_log.clear();
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
+        self.block_sync_warning_log.clear();
+        self.tick_lag_warn_streak = 0;
+        self.tick_lag_last_warn = None;
     }
 
     #[cfg(test)]

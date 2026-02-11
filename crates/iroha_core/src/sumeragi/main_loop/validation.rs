@@ -52,12 +52,16 @@ pub(super) fn spawn_validation_workers(
     work_queue_cap: usize,
     result_queue_cap: usize,
 ) -> ValidationWorkerHandle {
+    const AUTO_WORKER_MIN: usize = 2;
+    const AUTO_WORKER_MAX: usize = 8;
+
     let threads = if worker_threads == 0 {
-        std::thread::available_parallelism()
+        let detected = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1)
+            .unwrap_or(1);
+        detected.clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX)
     } else {
-        worker_threads
+        worker_threads.max(1)
     };
     let work_queue_cap = if work_queue_cap == 0 {
         threads.saturating_mul(4).max(4)
@@ -133,11 +137,50 @@ pub(super) fn spawn_validation_workers(
 }
 
 impl Actor {
+    const SUPERSEDED_VALIDATION_RESULT_CAP: usize = 4_096;
+
+    fn remember_superseded_validation_result(&mut self, hash: HashOf<BlockHeader>, id: u64) {
+        if self.subsystems.validation.superseded_results.len()
+            >= Self::SUPERSEDED_VALIDATION_RESULT_CAP
+        {
+            if let Some(oldest_hash) = self
+                .subsystems
+                .validation
+                .superseded_results
+                .keys()
+                .next()
+                .copied()
+            {
+                self.subsystems
+                    .validation
+                    .superseded_results
+                    .remove(&oldest_hash);
+            }
+        }
+        self.subsystems
+            .validation
+            .superseded_results
+            .insert(hash, id);
+    }
+
+    pub(super) fn supersede_validation_inflight(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+    ) -> Option<super::ValidationInFlight> {
+        let inflight = self.subsystems.validation.inflight.remove(&hash)?;
+        self.remember_superseded_validation_result(hash, inflight.id);
+        Some(inflight)
+    }
+
     pub(super) fn prune_validation_inflight_without_pending(&mut self) -> usize {
         let before = self.subsystems.validation.inflight.len();
         self.subsystems
             .validation
             .inflight
+            .retain(|hash, _| self.pending.pending_blocks.contains_key(hash));
+        self.subsystems
+            .validation
+            .superseded_results
             .retain(|hash, _| self.pending.pending_blocks.contains_key(hash));
         before.saturating_sub(self.subsystems.validation.inflight.len())
     }
@@ -187,7 +230,7 @@ impl Actor {
     ) -> ValidationGateOutcome {
         if matches!(dispatch, ValidationDispatch::Inline) {
             // Inline validation supersedes any stale worker intent for this block.
-            self.subsystems.validation.inflight.remove(&hash);
+            let _ = self.supersede_validation_inflight(hash);
         }
 
         let pending = match self.pending.pending_blocks.remove(&hash) {
@@ -308,6 +351,7 @@ impl Actor {
             }
 
             if dispatched {
+                self.subsystems.validation.superseded_results.remove(&hash);
                 self.subsystems.validation.inflight.insert(
                     hash,
                     super::ValidationInFlight {
@@ -329,6 +373,7 @@ impl Actor {
                 );
                 self.subsystems.validation.result_rx = None;
                 self.subsystems.validation.inflight.clear();
+                self.subsystems.validation.superseded_results.clear();
             } else {
                 warn!(
                     height = pending.height,
@@ -345,7 +390,7 @@ impl Actor {
         // This block is now taking the inline path (either explicitly requested
         // or because workers were unavailable/full), so any prior async marker
         // is stale and must not keep the block deferred.
-        self.subsystems.validation.inflight.remove(&hash);
+        let _ = self.supersede_validation_inflight(hash);
 
         let mut voting_block = self.voting_block.take();
         let result = validate_block_for_voting(
@@ -413,14 +458,45 @@ impl Actor {
                     let inflight = match self.subsystems.validation.inflight.remove(&hash) {
                         Some(inflight) => inflight,
                         None => {
-                            warn!(block = %hash, "validation result received without inflight");
+                            if let Some(superseded_id) =
+                                self.subsystems.validation.superseded_results.remove(&hash)
+                            {
+                                if superseded_id == id {
+                                    debug!(
+                                        block = %hash,
+                                        result_id = id,
+                                        "validation result superseded by inline fallback; dropping stale worker result"
+                                    );
+                                } else {
+                                    warn!(
+                                        block = %hash,
+                                        result_id = id,
+                                        superseded_id,
+                                        "validation result id mismatch for superseded inflight; dropping stale worker result"
+                                    );
+                                }
+                            } else if self.pending.pending_blocks.contains_key(&hash) {
+                                warn!(
+                                    block = %hash,
+                                    result_id = id,
+                                    "validation result received without inflight"
+                                );
+                            } else {
+                                debug!(
+                                    block = %hash,
+                                    result_id = id,
+                                    "dropping validation result for unknown block"
+                                );
+                            }
                             continue;
                         }
                     };
                     if inflight.id != id {
+                        let inflight_id = inflight.id;
+                        self.subsystems.validation.inflight.insert(hash, inflight);
                         warn!(
                             block = %hash,
-                            inflight_id = inflight.id,
+                            inflight_id,
                             result_id = id,
                             "validation result id mismatch; ignoring"
                         );
@@ -491,6 +567,7 @@ impl Actor {
                     warn!("validation worker result channel closed; falling back to inline");
                     self.subsystems.validation.work_txs.clear();
                     self.subsystems.validation.inflight.clear();
+                    self.subsystems.validation.superseded_results.clear();
                     keep_rx = false;
                     break;
                 }

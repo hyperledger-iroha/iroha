@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     num::{NonZeroU32, NonZeroU64},
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
@@ -41,6 +41,126 @@ const BLOCK_SYNC_QUEUE_CAP_MULTIPLIER: usize = 4;
 const BLOCK_SYNC_QUEUE_CAP_FLOOR: usize = 4;
 const BLOCK_SYNC_REQUEST_MAX_PENDING: u8 = 8;
 const BLOCK_SYNC_REQUEST_TTL_FLOOR_MS: u64 = 1_000;
+const BLOCK_SYNC_QC_WARNING_COOLDOWN: Duration = Duration::from_secs(3);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum BlockSyncQcWarningKind {
+    QcMismatchReplaced,
+    MissingCachedPrecommitSigners,
+}
+
+#[derive(Debug, Default)]
+struct BlockSyncQcWarningThrottle {
+    entries: BTreeMap<(BlockSyncQcWarningKind, HashOf<BlockHeader>, u64, u64), (Instant, u64)>,
+}
+
+impl BlockSyncQcWarningThrottle {
+    fn allow(
+        &mut self,
+        kind: BlockSyncQcWarningKind,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+        cooldown: Duration,
+    ) -> Option<u64> {
+        let key = (kind, block_hash, height, view);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.entries.insert(key, (now, 0));
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+}
+
+static BLOCK_SYNC_QC_WARNING_THROTTLE: LazyLock<parking_lot::Mutex<BlockSyncQcWarningThrottle>> =
+    LazyLock::new(|| parking_lot::Mutex::new(BlockSyncQcWarningThrottle::default()));
+
+fn allow_block_sync_qc_warning(
+    kind: BlockSyncQcWarningKind,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) -> Option<u64> {
+    BLOCK_SYNC_QC_WARNING_THROTTLE.lock().allow(
+        kind,
+        block_hash,
+        height,
+        view,
+        Instant::now(),
+        BLOCK_SYNC_QC_WARNING_COOLDOWN,
+    )
+}
+
+#[cfg(test)]
+mod block_sync_qc_warning_throttle_tests {
+    use super::{BlockSyncQcWarningKind, BlockSyncQcWarningThrottle};
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn qc_warning_throttle_coalesces_duplicates() {
+        let mut throttle = BlockSyncQcWarningThrottle::default();
+        let cooldown = Duration::from_millis(50);
+        let now = Instant::now();
+        let hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([11; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                BlockSyncQcWarningKind::QcMismatchReplaced,
+                hash,
+                7,
+                1,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                BlockSyncQcWarningKind::QcMismatchReplaced,
+                hash,
+                7,
+                1,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                BlockSyncQcWarningKind::QcMismatchReplaced,
+                hash,
+                7,
+                1,
+                now + Duration::from_millis(80),
+                cooldown,
+            ),
+            Some(1)
+        );
+    }
+}
 
 fn block_sync_channel_cap(gossip_size: NonZeroU32) -> usize {
     let base = usize::try_from(gossip_size.get()).unwrap_or(1);
@@ -2500,26 +2620,44 @@ pub mod message {
             (Some(incoming), Some(derived)) if incoming == derived => (Some(incoming), true),
             (Some(_incoming), Some(derived)) => {
                 status::inc_block_sync_qc_replaced();
-                warn!(
-                    height = context.block_height,
-                    view = context.block_view,
-                    hash = %context.block_hash,
-                    "replacing block sync QC that does not match cached aggregate"
-                );
+                if let Some(suppressed_since_last) = allow_block_sync_qc_warning(
+                    BlockSyncQcWarningKind::QcMismatchReplaced,
+                    context.block_hash,
+                    context.block_height,
+                    context.block_view,
+                ) {
+                    warn!(
+                        height = context.block_height,
+                        view = context.block_view,
+                        hash = %context.block_hash,
+                        suppressed_since_last,
+                        warn_cooldown_ms = BLOCK_SYNC_QC_WARNING_COOLDOWN.as_millis(),
+                        "replacing block sync QC that does not match cached aggregate"
+                    );
+                }
                 (Some(derived), true)
             }
             (Some(incoming), None) => {
                 status::inc_block_sync_qc_derive_failed();
                 let incoming_qc_signers = qc_signer_count(&incoming);
-                warn!(
-                    height = context.block_height,
-                    view = context.block_view,
-                    hash = %context.block_hash,
-                    block_signers = context.commit_signer_count,
-                    commit_quorum = context.commit_quorum,
-                    incoming_qc_signers,
-                    "keeping incoming block sync QC; no cached precommit signer record"
-                );
+                if let Some(suppressed_since_last) = allow_block_sync_qc_warning(
+                    BlockSyncQcWarningKind::MissingCachedPrecommitSigners,
+                    context.block_hash,
+                    context.block_height,
+                    context.block_view,
+                ) {
+                    warn!(
+                        height = context.block_height,
+                        view = context.block_view,
+                        hash = %context.block_hash,
+                        block_signers = context.commit_signer_count,
+                        commit_quorum = context.commit_quorum,
+                        incoming_qc_signers,
+                        suppressed_since_last,
+                        warn_cooldown_ms = BLOCK_SYNC_QC_WARNING_COOLDOWN.as_millis(),
+                        "keeping incoming block sync QC; no cached precommit signer record"
+                    );
+                }
                 (Some(incoming), false)
             }
             (None, derived) => {

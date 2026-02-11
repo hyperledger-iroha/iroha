@@ -25,6 +25,9 @@ blake3 = "1.8.2"
 iroha_audio = { path = "../iroha_audio" }
 rkyv = { version = "0.8.12", default-features = false, features = ["alloc", "std", "pointer_width_64"] }
 
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+gpuzstd_metal = { path = "../gpuzstd_metal" }
+
 [dev-dependencies]
 proptest = "1.9.0"
 criterion = { workspace = true }
