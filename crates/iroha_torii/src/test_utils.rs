@@ -373,6 +373,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES
                 .get(),
+            scion: A::ScionConfig::default(),
             tls_enabled: false,
             tls_fallback_to_plain: true,
             tls_listen_address: None,
