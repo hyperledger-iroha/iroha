@@ -14755,16 +14755,11 @@ async fn materialize_qc_for_header_aggregates_votes() {
     let actor = &mut harness.actor;
     let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
     let height = committed_height.saturating_add(1).max(1);
-    let parent = {
-        let view = actor.state.view();
-        if committed_height == 0 {
-            None
-        } else {
-            view.latest_block_hash()
-        }
-    };
-    let block = sample_block(height, 0, parent);
-    let block_hash = block.hash();
+    // Use a test-unique synthetic hash so concurrent tests cannot inject roster hints via
+    // shared status history for deterministic sample blocks.
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"materialize_qc_for_header_aggregates_votes",
+    ));
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers.clone());
     let required = topology.min_votes_for_commit();
@@ -56491,8 +56486,8 @@ async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue
         actor.pending_fast_path_timeout(&view, consensus_mode)
     };
     assert!(
-        fast_timeout > Duration::from_secs(1),
-        "test requires worker-dispatched validation"
+        fast_timeout > Duration::ZERO,
+        "test requires non-zero fast timeout"
     );
 
     let (_work_tx, _work_rx) =

@@ -5481,11 +5481,25 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 self.durable_state_overlay.insert(path, None);
                 Ok(0)
             }
-            // Norito serialization helpers delegate to the ivm core host shim.
+            // Norito serialization and numeric helpers delegate to the ivm core host shim.
             ivm::syscalls::SYSCALL_BUILD_PATH_MAP_KEY
             | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | ivm::syscalls::SYSCALL_ENCODE_INT
             | ivm::syscalls::SYSCALL_DECODE_INT
+            | ivm::syscalls::SYSCALL_NUMERIC_FROM_INT
+            | ivm::syscalls::SYSCALL_NUMERIC_TO_INT
+            | ivm::syscalls::SYSCALL_NUMERIC_ADD
+            | ivm::syscalls::SYSCALL_NUMERIC_SUB
+            | ivm::syscalls::SYSCALL_NUMERIC_MUL
+            | ivm::syscalls::SYSCALL_NUMERIC_DIV
+            | ivm::syscalls::SYSCALL_NUMERIC_REM
+            | ivm::syscalls::SYSCALL_NUMERIC_NEG
+            | ivm::syscalls::SYSCALL_NUMERIC_EQ
+            | ivm::syscalls::SYSCALL_NUMERIC_NE
+            | ivm::syscalls::SYSCALL_NUMERIC_LT
+            | ivm::syscalls::SYSCALL_NUMERIC_LE
+            | ivm::syscalls::SYSCALL_NUMERIC_GT
+            | ivm::syscalls::SYSCALL_NUMERIC_GE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
             | ivm::syscalls::SYSCALL_TLV_LEN
@@ -9378,6 +9392,32 @@ mod tests {
 
         vm.set_register(10, ptr);
         assert_eq!(host.syscall(ivm_sys::SYSCALL_DECODE_INT, &mut vm), Ok(0));
+        assert_eq!(vm.register(10), 42);
+    }
+
+    #[test]
+    fn numeric_helper_syscalls_roundtrip_through_codec_host() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+        let mut vm = IVM::new(10_000);
+
+        vm.set_register(10, 42);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_NUMERIC_FROM_INT, &mut vm),
+            Ok(0)
+        );
+        let ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(ptr).expect("numeric tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let encoded: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode numeric");
+        assert_eq!(encoded, Numeric::from(42_u32));
+
+        vm.set_register(10, ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_NUMERIC_TO_INT, &mut vm),
+            Ok(0)
+        );
         assert_eq!(vm.register(10), 42);
     }
 
