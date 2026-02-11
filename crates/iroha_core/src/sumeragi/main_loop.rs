@@ -3796,15 +3796,11 @@ impl RbcBacklogSummary {
     clippy::assigning_clones
 )]
 impl Actor {
-    fn pending_fast_path_timeout(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
-        let block_time = self.block_time_for_mode(view, mode);
-        let commit_time = self.commit_timeout_for_mode(view, mode);
-        let base = if commit_time == Duration::ZERO {
-            block_time
-        } else {
-            block_time.min(commit_time)
-        };
-        base.max(Duration::from_millis(1))
+    fn pending_fast_path_timeout(&self, _view: &StateView<'_>, _mode: ConsensusMode) -> Duration {
+        const FAST_TIMEOUT_FLOOR: Duration = Duration::from_millis(750);
+        const FAST_TIMEOUT_CAP: Duration = Duration::from_millis(1_000);
+        let quorum_half = self.commit_quorum_timeout() / 2;
+        quorum_half.min(FAST_TIMEOUT_CAP).max(FAST_TIMEOUT_FLOOR)
     }
 
     fn pending_block_has_votes(
@@ -4464,6 +4460,8 @@ pub(super) struct Actor {
     block_sync_fetch_log: PayloadRebroadcastThrottle,
     block_sync_warning_log: BlockSyncWarningThrottle,
     qc_insufficient_warning_log: QcInsufficientWarningThrottle,
+    proposal_defer_warning_log: ProposalDeferWarningThrottle,
+    missing_qc_warning_log: MissingQcWarningThrottle,
     roster_validation_cache: RosterValidationCache,
     #[cfg(test)]
     background_request_log: Option<Arc<Mutex<Vec<BackgroundRequestLogEntry>>>>,
@@ -9117,6 +9115,8 @@ impl Actor {
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
             block_sync_warning_log: BlockSyncWarningThrottle::default(),
             qc_insufficient_warning_log: QcInsufficientWarningThrottle::default(),
+            proposal_defer_warning_log: ProposalDeferWarningThrottle::default(),
+            missing_qc_warning_log: MissingQcWarningThrottle::default(),
             roster_validation_cache,
             #[cfg(test)]
             background_request_log: None,
@@ -10032,11 +10032,20 @@ impl Actor {
         matches!(tick_deadline, Some(deadline) if now >= deadline)
     }
 
-    const TICK_HEARTBEAT_LOG_INTERVAL: Duration = Duration::from_secs(10);
+    const TICK_HEARTBEAT_LOG_INTERVAL_ACTIVE: Duration = Duration::from_secs(10);
+    const TICK_HEARTBEAT_LOG_INTERVAL_IDLE: Duration = Duration::from_secs(30);
     const TICK_EXPIRED_CULL_STRIDE: u64 = 4;
 
     fn tick_heartbeat_log_due(now: Instant, last_log: Instant, interval: Duration) -> bool {
         now.saturating_duration_since(last_log) >= interval
+    }
+
+    fn tick_heartbeat_log_interval(queue_len: usize, queue_saturated: bool) -> Duration {
+        if queue_saturated || queue_len > 0 {
+            Self::TICK_HEARTBEAT_LOG_INTERVAL_ACTIVE
+        } else {
+            Self::TICK_HEARTBEAT_LOG_INTERVAL_IDLE
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -10044,20 +10053,26 @@ impl Actor {
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
         self.hotspot_log_summary.emit_if_due(tick_start);
+        let heartbeat_backpressure = self.queue_backpressure_state();
+        let heartbeat_queue_len = self.queue.active_len();
+        let heartbeat_interval = Self::tick_heartbeat_log_interval(
+            heartbeat_queue_len,
+            heartbeat_backpressure.is_saturated(),
+        );
         if Self::tick_heartbeat_log_due(
             tick_start,
             self.last_tick_heartbeat_log,
-            Self::TICK_HEARTBEAT_LOG_INTERVAL,
+            heartbeat_interval,
         ) {
             self.last_tick_heartbeat_log = tick_start;
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.heartbeat");
             let view = self.state.view();
-            let backpressure = self.queue_backpressure_state();
             iroha_logger::info!(
                 height = view.height(),
-                queue_len = self.queue.active_len(),
-                queue_cap = backpressure.capacity().get(),
-                queue_saturated = backpressure.is_saturated(),
+                queue_len = heartbeat_queue_len,
+                queue_cap = heartbeat_backpressure.capacity().get(),
+                queue_saturated = heartbeat_backpressure.is_saturated(),
+                interval_ms = heartbeat_interval.as_millis(),
                 tick = self.tick_counter,
                 "sumeragi tick heartbeat"
             );
@@ -13776,23 +13791,29 @@ impl Actor {
                 telemetry.inc_proposal_gap();
             }
         }
-        warn!(
-            height,
-            view = current_view,
-            next_view,
-            age_ms = age.as_millis(),
-            timeout_ms = timeout.as_millis(),
-            proposal_seen,
-            rbc_backlog,
-            relay_backpressure,
-            consensus_queue_backpressure,
-            consensus_queue_backlog,
-            vote_rx_depth = queue_depths.vote_rx,
-            block_payload_rx_depth = queue_depths.block_payload_rx,
-            rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-            block_rx_depth = queue_depths.block_rx,
-            "no proposal observed before cutoff; rotating leader via view change"
-        );
+        if let Some(suppressed_since_last) =
+            self.missing_qc_warning_log
+                .allow(height, current_view, now, Duration::from_secs(5))
+        {
+            warn!(
+                height,
+                view = current_view,
+                next_view,
+                age_ms = age.as_millis(),
+                timeout_ms = timeout.as_millis(),
+                suppressed_since_last,
+                proposal_seen,
+                rbc_backlog,
+                relay_backpressure,
+                consensus_queue_backpressure,
+                consensus_queue_backlog,
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "no proposal observed before cutoff; rotating leader via view change"
+            );
+        }
         self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);
         true
     }
@@ -14869,6 +14890,90 @@ impl QcInsufficientWarningThrottle {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum ProposalDeferWarningKind {
+    HighestQcMissing,
+    ParentMissing,
+}
+
+#[derive(Debug, Default)]
+struct ProposalDeferWarningThrottle {
+    entries: BTreeMap<(ProposalDeferWarningKind, u64, u64, HashOf<BlockHeader>), (Instant, u64)>,
+}
+
+impl ProposalDeferWarningThrottle {
+    fn allow(
+        &mut self,
+        kind: ProposalDeferWarningKind,
+        height: u64,
+        view: u64,
+        highest_hash: HashOf<BlockHeader>,
+        now: Instant,
+        cooldown: Duration,
+    ) -> Option<u64> {
+        let key = (kind, height, view, highest_hash);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.entries.insert(key, (now, 0));
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+}
+
+#[derive(Debug, Default)]
+struct MissingQcWarningThrottle {
+    entries: BTreeMap<(u64, u64), (Instant, u64)>,
+}
+
+impl MissingQcWarningThrottle {
+    fn allow(&mut self, height: u64, view: u64, now: Instant, cooldown: Duration) -> Option<u64> {
+        let key = (height, view);
+        if let Some((last_emit, suppressed)) = self.entries.get_mut(&key) {
+            if cooldown > Duration::ZERO && now.saturating_duration_since(*last_emit) < cooldown {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let suppressed_since_last = *suppressed;
+            *last_emit = now;
+            *suppressed = 0;
+            self.gc(now, cooldown);
+            return Some(suppressed_since_last);
+        }
+        self.entries.insert(key, (now, 0));
+        self.gc(now, cooldown);
+        Some(0)
+    }
+
+    fn gc(&mut self, now: Instant, cooldown: Duration) {
+        let expiry_window = if cooldown > Duration::ZERO {
+            cooldown.saturating_mul(8)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.entries
+            .retain(|_, (recorded, _)| now.saturating_duration_since(*recorded) <= expiry_window);
+    }
+}
+
 #[cfg(test)]
 mod block_sync_warning_throttle_tests {
     use super::{BlockSyncWarningKind, BlockSyncWarningThrottle};
@@ -15077,6 +15182,106 @@ mod qc_insufficient_warning_throttle_tests {
                 cooldown,
             ),
             Some(0)
+        );
+    }
+}
+
+#[cfg(test)]
+mod proposal_defer_warning_throttle_tests {
+    use super::{ProposalDeferWarningKind, ProposalDeferWarningThrottle};
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn proposal_defer_warning_throttle_aggregates_suppressed_events() {
+        let mut throttle = ProposalDeferWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(40);
+        let hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([31; Hash::LENGTH]));
+
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now + Duration::from_millis(70),
+                cooldown,
+            ),
+            Some(1)
+        );
+    }
+}
+
+#[cfg(test)]
+mod missing_qc_warning_throttle_tests {
+    use super::MissingQcWarningThrottle;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn missing_qc_warning_throttle_aggregates_suppressed_events() {
+        let mut throttle = MissingQcWarningThrottle::default();
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+
+        assert_eq!(throttle.allow(10, 0, now, cooldown), Some(0));
+        assert_eq!(
+            throttle.allow(10, 0, now + Duration::from_millis(10), cooldown),
+            None
+        );
+        assert_eq!(
+            throttle.allow(10, 0, now + Duration::from_millis(70), cooldown),
+            Some(1)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tick_heartbeat_interval_tests {
+    use super::Actor;
+    use std::time::Duration;
+
+    #[test]
+    fn tick_heartbeat_interval_defaults_to_idle_when_queue_is_empty() {
+        assert_eq!(
+            Actor::tick_heartbeat_log_interval(0, false),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn tick_heartbeat_interval_stays_fast_when_busy_or_saturated() {
+        assert_eq!(
+            Actor::tick_heartbeat_log_interval(1, false),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            Actor::tick_heartbeat_log_interval(0, true),
+            Duration::from_secs(10)
         );
     }
 }

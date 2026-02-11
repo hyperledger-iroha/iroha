@@ -13,7 +13,7 @@
 #![deny(missing_docs)]
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
     sync::mpsc as std_mpsc,
     sync::{Arc, OnceLock},
@@ -129,6 +129,14 @@ pub struct ZkLaneHandle {
 impl ZkLaneHandle {
     /// Submit a task; returns false only if admission fails after bounded wait/retry handling.
     pub fn submit(&self, task: ZkTask) -> bool {
+        let digest = task.digest();
+        if let Some(cache) = RESULT_CACHE.get() {
+            match cache.admit(digest, Instant::now()) {
+                CacheAdmission::Cached => return true,
+                CacheAdmission::Inflight => return true,
+                CacheAdmission::Accepted => {}
+            }
+        }
         let mut task = task;
         let started = Instant::now();
         loop {
@@ -144,13 +152,18 @@ impl ZkLaneHandle {
                     if started.elapsed() >= self.enqueue_wait {
                         record_enqueue_timeout();
                         if task.tx_hash.is_some() {
-                            return enqueue_retry_task(
+                            let accepted = enqueue_retry_task(
                                 &self.retry_ring,
                                 task,
                                 "ingress_retry_ring_full",
                             );
+                            if !accepted {
+                                clear_inflight_digest(digest);
+                            }
+                            return accepted;
                         }
                         record_lane_drop("ingress_enqueue_timeout");
+                        clear_inflight_digest(digest);
                         return false;
                     }
                     if self.enqueue_poll > Duration::ZERO {
@@ -159,6 +172,7 @@ impl ZkLaneHandle {
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     record_lane_drop("ingress_channel_closed");
+                    clear_inflight_digest(digest);
                     return false;
                 }
             }
@@ -168,6 +182,143 @@ impl ZkLaneHandle {
 
 static GLOBAL_SENDER: OnceLock<ZkLaneHandle> = OnceLock::new();
 static EVENTS: OnceLock<crate::EventsSender> = OnceLock::new();
+static RESULT_CACHE: OnceLock<Arc<ZkResultCache>> = OnceLock::new();
+
+const ZK_RESULT_CACHE_CAP: usize = 8_192;
+const ZK_RESULT_CACHE_TTL_MS: u64 = 300_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheAdmission {
+    Accepted,
+    Inflight,
+    Cached,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ZkResultEntry {
+    recorded_at: Instant,
+}
+
+#[derive(Debug)]
+struct ZkResultCache {
+    cap: usize,
+    ttl: Duration,
+    inner: std::sync::Mutex<ZkResultCacheInner>,
+}
+
+#[derive(Debug, Default)]
+struct ZkResultCacheInner {
+    entries: BTreeMap<[u8; 32], ZkResultEntry>,
+    order: VecDeque<[u8; 32]>,
+    inflight: BTreeSet<[u8; 32]>,
+}
+
+impl ZkResultCache {
+    fn new(cap: usize, ttl: Duration) -> Self {
+        Self {
+            cap,
+            ttl,
+            inner: std::sync::Mutex::new(ZkResultCacheInner::default()),
+        }
+    }
+
+    fn admit(&self, key: [u8; 32], now: Instant) -> CacheAdmission {
+        let mut inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                iroha_logger::warn!(?err, "zk_lane: result cache lock poisoned during admit");
+                return CacheAdmission::Accepted;
+            }
+        };
+        inner.gc(now, self.ttl);
+        if let Some(entry) = inner.entries.get(&key) {
+            if self.ttl == Duration::ZERO
+                || now.saturating_duration_since(entry.recorded_at) <= self.ttl
+            {
+                inner.touch(key);
+                return CacheAdmission::Cached;
+            }
+            inner.remove_entry(&key);
+        }
+        if inner.inflight.contains(&key) {
+            return CacheAdmission::Inflight;
+        }
+        inner.inflight.insert(key);
+        CacheAdmission::Accepted
+    }
+
+    fn record(&self, key: [u8; 32], now: Instant) {
+        let mut inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                iroha_logger::warn!(?err, "zk_lane: result cache lock poisoned during record");
+                return;
+            }
+        };
+        inner.inflight.remove(&key);
+        if self.cap == 0 {
+            return;
+        }
+        inner
+            .entries
+            .insert(key, ZkResultEntry { recorded_at: now });
+        inner.touch(key);
+        inner.gc(now, self.ttl);
+        while inner.entries.len() > self.cap {
+            let Some(oldest) = inner.order.pop_front() else {
+                break;
+            };
+            inner.entries.remove(&oldest);
+        }
+    }
+
+    fn clear_inflight(&self, key: [u8; 32]) {
+        match self.inner.lock() {
+            Ok(mut guard) => {
+                guard.inflight.remove(&key);
+            }
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    "zk_lane: result cache lock poisoned while clearing inflight"
+                );
+            }
+        }
+    }
+}
+
+impl ZkResultCacheInner {
+    fn touch(&mut self, key: [u8; 32]) {
+        self.order.retain(|entry| entry != &key);
+        self.order.push_back(key);
+    }
+
+    fn remove_entry(&mut self, key: &[u8; 32]) {
+        self.entries.remove(key);
+        self.order.retain(|entry| entry != key);
+    }
+
+    fn gc(&mut self, now: Instant, ttl: Duration) {
+        if ttl == Duration::ZERO {
+            return;
+        }
+        let mut stale = Vec::new();
+        for (key, entry) in &self.entries {
+            if now.saturating_duration_since(entry.recorded_at) > ttl {
+                stale.push(*key);
+            }
+        }
+        for key in stale {
+            self.remove_entry(&key);
+        }
+    }
+}
+
+fn clear_inflight_digest(digest: [u8; 32]) {
+    if let Some(cache) = RESULT_CACHE.get() {
+        cache.clear_inflight(digest);
+    }
+}
 
 struct RetryTask {
     task: ZkTask,
@@ -227,7 +378,13 @@ impl RetryRing {
                 entry.attempts = entry.attempts.saturating_add(1);
             }
             let before = queue.len();
-            queue.retain(|entry| entry.attempts < self.max_attempts);
+            queue.retain(|entry| {
+                let keep = entry.attempts < self.max_attempts;
+                if !keep {
+                    clear_inflight_digest(entry.task.digest());
+                }
+                keep
+            });
             stats.exhausted = (before.saturating_sub(queue.len())) as u64;
             stats.depth = queue.len();
             return stats;
@@ -248,6 +405,9 @@ impl RetryRing {
         match self.inner.lock() {
             Ok(mut queue) => {
                 let dropped = queue.len();
+                for entry in queue.iter() {
+                    clear_inflight_digest(entry.task.digest());
+                }
                 queue.clear();
                 dropped
             }
@@ -475,6 +635,9 @@ fn process_job(job: ZkTask) {
     let outcome = ivm::zk::verify_trace(&job.trace, &job.constraints, &job.mem_log, &job.reg_log)
         .map(|()| ZkOutcome::Verified)
         .unwrap_or(ZkOutcome::Rejected);
+    if let Some(cache) = RESULT_CACHE.get() {
+        cache.record(dig, Instant::now());
+    }
     emit_outcome(job, dig, outcome);
 }
 
@@ -597,6 +760,10 @@ pub fn start(
         // Already started in this process.
         return Some((existing.clone(), tokio::spawn(async {})));
     }
+    let _ = RESULT_CACHE.set(Arc::new(ZkResultCache::new(
+        ZK_RESULT_CACHE_CAP,
+        Duration::from_millis(ZK_RESULT_CACHE_TTL_MS),
+    )));
     let workers = resolve_worker_threads(cfg.verifier_worker_threads);
     let queue_cap = resolve_queue_cap(cfg.verifier_queue_cap, workers);
     let enqueue_wait = resolve_enqueue_wait_ms(cfg.verifier_enqueue_wait_ms);
@@ -722,6 +889,9 @@ pub fn start(
             }
         }
         if !pending.is_empty() {
+            for task in &pending {
+                clear_inflight_digest(task.digest());
+            }
             record_lane_drop_by("shutdown_flush_drop", pending.len() as u64);
             iroha_logger::warn!(
                 dropped = pending.len(),
@@ -874,6 +1044,55 @@ mod tests {
         let second = ring.drain_into_pending(&mut pending, 1);
         assert_eq!(second.exhausted, 2);
         assert_eq!(second.depth, 0);
+    }
+
+    #[test]
+    fn result_cache_dedupes_inflight_and_reuses_recent_result() {
+        let cache = ZkResultCache::new(8, Duration::from_millis(100));
+        let now = Instant::now();
+        let key = [0x5A; 32];
+
+        assert_eq!(cache.admit(key, now), CacheAdmission::Accepted);
+        assert_eq!(
+            cache.admit(key, now + Duration::from_millis(10)),
+            CacheAdmission::Inflight
+        );
+
+        cache.record(key, now + Duration::from_millis(15));
+        assert_eq!(
+            cache.admit(key, now + Duration::from_millis(20)),
+            CacheAdmission::Cached
+        );
+
+        assert_eq!(
+            cache.admit(key, now + Duration::from_millis(130)),
+            CacheAdmission::Accepted
+        );
+    }
+
+    #[test]
+    fn result_cache_evicts_oldest_entries_when_capacity_reached() {
+        let cache = ZkResultCache::new(2, Duration::from_secs(1));
+        let now = Instant::now();
+        let a = [0x01; 32];
+        let b = [0x02; 32];
+        let c = [0x03; 32];
+
+        assert_eq!(cache.admit(a, now), CacheAdmission::Accepted);
+        cache.record(a, now);
+        assert_eq!(cache.admit(b, now), CacheAdmission::Accepted);
+        cache.record(b, now + Duration::from_millis(1));
+        assert_eq!(cache.admit(c, now), CacheAdmission::Accepted);
+        cache.record(c, now + Duration::from_millis(2));
+
+        assert_eq!(
+            cache.admit(a, now + Duration::from_millis(3)),
+            CacheAdmission::Accepted
+        );
+        assert_eq!(
+            cache.admit(c, now + Duration::from_millis(3)),
+            CacheAdmission::Cached
+        );
     }
 
     #[cfg(feature = "zk-preverify")]
