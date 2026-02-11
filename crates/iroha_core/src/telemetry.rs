@@ -8558,6 +8558,12 @@ impl Actor {
         self.metrics
             .p2p_ws_outbound_total
             .set(iroha_p2p::network::ws_outbound_total());
+        self.metrics
+            .p2p_scion_inbound_total
+            .set(iroha_p2p::network::scion_inbound_total());
+        self.metrics
+            .p2p_scion_outbound_total
+            .set(iroha_p2p::network::scion_outbound_total());
         // High/Low bounded-queue depth (network actor queues)
         let queue_depth = &self.metrics.p2p_queue_depth;
         queue_depth

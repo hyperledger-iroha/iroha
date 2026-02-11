@@ -16,7 +16,10 @@ use iroha_config::parameters::actual::TrustedPeers;
 use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::peer::{Peer, PeerId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_p2p::{Broadcast, UpdatePeers, UpdateTopology, UpdateTrustedPeers};
+use iroha_p2p::{
+    Broadcast, PeerTransportCapabilities, UpdatePeerCapabilities, UpdatePeers, UpdateTopology,
+    UpdateTrustedPeers,
+};
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode, core as ncore};
 use tokio::sync::mpsc;
@@ -301,6 +304,8 @@ pub struct PeersGossiper {
     /// First-level key corresponds to `SocketAddr`
     /// Second-level key - peer from which such `SocketAddr` was received
     gossip_peers: BTreeMap<PeerId, BTreeMap<PeerId, SocketAddr>>,
+    /// Transport capabilities known for peers in topology.
+    peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
     current_topology: BTreeSet<PeerId>,
     key_pair: KeyPair,
     gossip_period: Duration,
@@ -428,6 +433,7 @@ impl PeersGossiper {
             static_trusted_peers,
             trust_candidates,
             gossip_peers: BTreeMap::new(),
+            peer_capabilities: BTreeMap::new(),
             current_topology: initial_topology.clone(),
             key_pair,
             gossip_period,
@@ -458,7 +464,9 @@ impl PeersGossiper {
         gossiper
             .trust
             .seed(gossiper.trusted_peers.clone(), std::time::Instant::now());
+        let _ = gossiper.refresh_online_peer_capabilities();
         gossiper.network_update_peers_addresses();
+        gossiper.network_update_peer_capabilities();
         gossiper.update_trusted_peers_on_network();
 
         let (message_sender, message_receiver) = mpsc::channel(1);
@@ -586,26 +594,41 @@ impl PeersGossiper {
         }
 
         self.current_topology.clone_from(&new_topology);
+        let mut capabilities_changed = false;
+        self.peer_capabilities.retain(|peer_id, _| {
+            let keep = *peer_id != self.peer_id && self.current_topology.contains(peer_id);
+            if !keep {
+                capabilities_changed = true;
+            }
+            keep
+        });
         // Keep the network dial set in sync with the current topology so removed peers
         // are disconnected promptly and new peers are contacted.
         self.network
             .update_topology(UpdateTopology(new_topology.iter().cloned().collect()));
         self.network_update_peers_addresses();
+        if capabilities_changed {
+            self.network_update_peer_capabilities();
+        }
         if unchanged {
             iroha_logger::debug!(
                 topology_len = self.current_topology.len(),
                 "received unchanged topology; re-advertising to enforce dial set"
             );
         }
-        !unchanged
+        !unchanged || capabilities_changed
     }
 
     fn gossip_peers(&mut self) {
         let online_peers = self.network.online_peers(Clone::clone);
+        if self.refresh_online_peer_capabilities() {
+            self.network_update_peer_capabilities();
+        }
         let online_peers = UniqueVec::from_iter(online_peers);
         let now = std::time::Instant::now();
         let peers_msg = NetworkMessage::PeersGossiper(Box::new(PeersGossip {
             peers: online_peers,
+            peer_capabilities: self.peer_capabilities.clone(),
         }));
         self.network.broadcast(Broadcast {
             data: peers_msg,
@@ -679,7 +702,10 @@ impl PeersGossiper {
 
     fn handle_peers_gossip(
         &mut self,
-        PeersGossip { peers }: PeersGossip,
+        PeersGossip {
+            peers,
+            peer_capabilities,
+        }: PeersGossip,
         from_peer: &Peer,
     ) -> bool {
         let is_trusted = self.trusted_peers.contains(from_peer.id());
@@ -695,7 +721,8 @@ impl PeersGossiper {
             return false;
         }
         self.restore_if_recovered(from_peer.id(), now);
-        let mut changed = false;
+        let mut addresses_changed = false;
+        let mut capabilities_changed = false;
         for peer in peers {
             let peer_allowed = self.current_topology.contains(peer.id())
                 || allow_public
@@ -708,13 +735,27 @@ impl PeersGossiper {
             let address = peer.address().clone();
             let previous = map.insert(from_peer.id().clone(), address.clone());
             if previous.as_ref() != Some(&address) {
-                changed = true;
+                addresses_changed = true;
             }
         }
-        if changed {
+        for (peer_id, capabilities) in peer_capabilities {
+            let peer_allowed = self.current_topology.contains(&peer_id)
+                || allow_public
+                || self.trusted_peers.contains(&peer_id);
+            if !peer_allowed || peer_id == self.peer_id {
+                continue;
+            }
+            if self.peer_capabilities.insert(peer_id, capabilities) != Some(capabilities) {
+                capabilities_changed = true;
+            }
+        }
+        if addresses_changed {
             self.network_update_peers_addresses();
         }
-        changed
+        if capabilities_changed {
+            self.network_update_peer_capabilities();
+        }
+        addresses_changed || capabilities_changed
     }
 
     fn handle_trust_gossip(
@@ -780,6 +821,33 @@ impl PeersGossiper {
                 .collect(),
         );
         self.network.update_peers_addresses(update);
+    }
+
+    fn refresh_online_peer_capabilities(&mut self) -> bool {
+        let observed = self.network.online_peer_capabilities(Clone::clone);
+        let mut changed = false;
+        for (peer_id, capabilities) in observed {
+            if peer_id == self.peer_id || !self.current_topology.contains(&peer_id) {
+                continue;
+            }
+            if self.peer_capabilities.insert(peer_id, capabilities) != Some(capabilities) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn network_update_peer_capabilities(&self) {
+        let update = UpdatePeerCapabilities(
+            self.peer_capabilities
+                .iter()
+                .filter(|(peer_id, _)| {
+                    *peer_id != &self.peer_id && self.current_topology.contains(*peer_id)
+                })
+                .map(|(peer_id, capabilities)| (peer_id.clone(), *capabilities))
+                .collect(),
+        );
+        self.network.update_peer_capabilities(update);
     }
 
     fn update_trusted_peers_on_network(&self) {
@@ -875,6 +943,15 @@ fn choose_address_majority_rule(addresses: &BTreeMap<PeerId, SocketAddr>) -> Soc
 pub struct PeersGossip {
     /// Peers known to the sender, deduplicated but encoded in insertion order.
     pub peers: UniqueVec<Peer>,
+    /// Transport capabilities known to the sender keyed by peer id.
+    pub peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
+}
+
+/// Wire representation for peers gossip.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct PeersGossipWire {
+    peers: Vec<Peer>,
+    peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
 }
 
 /// Signed trust gossip payload.
@@ -907,8 +984,11 @@ pub struct SignedPeerTrust {
 impl NoritoSerialize for PeersGossip {
     fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
         // Serialize peers as Vec to preserve insertion order.
-        let vec: Vec<Peer> = self.peers.iter().map(Clone::clone).collect();
-        vec.serialize(writer)
+        let wire = PeersGossipWire {
+            peers: self.peers.iter().map(Clone::clone).collect(),
+            peer_capabilities: self.peer_capabilities.clone(),
+        };
+        wire.serialize(writer)
     }
 }
 
@@ -920,22 +1000,41 @@ impl<'a> NoritoDeserialize<'a> for PeersGossip {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        if let Ok((wire, consumed)) = ncore::decode_field_canonical::<PeersGossipWire>(bytes) {
+            if consumed == bytes.len() {
+                return Ok(Self {
+                    peers: UniqueVec::from_iter(wire.peers),
+                    peer_capabilities: wire.peer_capabilities,
+                });
+            }
+        }
         let (peers, consumed) = ncore::decode_field_canonical::<Vec<Peer>>(bytes)?;
         if consumed != bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
         Ok(Self {
             peers: UniqueVec::from_iter(peers),
+            peer_capabilities: BTreeMap::new(),
         })
     }
 }
 
 impl<'a> ncore::DecodeFromSlice<'a> for PeersGossip {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        if let Ok((wire, used)) = ncore::decode_field_canonical::<PeersGossipWire>(bytes) {
+            return Ok((
+                Self {
+                    peers: UniqueVec::from_iter(wire.peers),
+                    peer_capabilities: wire.peer_capabilities,
+                },
+                used,
+            ));
+        }
         let (peers, used) = <Vec<Peer> as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok((
             Self {
                 peers: UniqueVec::from_iter(peers),
+                peer_capabilities: BTreeMap::new(),
             },
             used,
         ))
@@ -978,12 +1077,24 @@ mod tests {
 
         let gossip = PeersGossip {
             peers: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone()]),
+            peer_capabilities: BTreeMap::from([(
+                peer1.id().clone(),
+                PeerTransportCapabilities {
+                    scion_supported: true,
+                },
+            )]),
         };
         let bytes = ncore::to_bytes(&gossip).expect("serialize gossip");
         let decoded: PeersGossip = norito::decode_from_bytes(&bytes).expect("decode gossip");
 
         let decoded_peers: Vec<_> = decoded.peers.into_iter().collect();
         assert_eq!(decoded_peers, vec![peer1.clone(), peer2.clone()]);
+        assert_eq!(
+            decoded.peer_capabilities.get(peer1.id()),
+            Some(&PeerTransportCapabilities {
+                scion_supported: true
+            })
+        );
     }
 
     #[test]
@@ -1087,6 +1198,7 @@ mod tests {
         handle.gossip(
             PeersGossip {
                 peers: UniqueVec::from_iter(vec![peer.clone()]),
+                peer_capabilities: BTreeMap::new(),
             },
             peer.clone(),
         );
@@ -1137,6 +1249,7 @@ mod tests {
             p2p_no_proxy: Vec::new(),
             p2p_proxy_tls_verify: true,
             p2p_proxy_tls_pinned_cert_der_base64: None,
+            scion: iroha_config::parameters::actual::ScionConfig::default(),
             quic_enabled: false,
             quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
             quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
@@ -1264,6 +1377,7 @@ mod tests {
             static_trusted_peers: trusted_set.clone(),
             trust_candidates,
             gossip_peers: BTreeMap::new(),
+            peer_capabilities: BTreeMap::new(),
             current_topology,
             key_pair: key_pair.clone(),
             gossip_period: network_cfg.peer_gossip_period,
@@ -1355,6 +1469,7 @@ mod tests {
             static_trusted_peers: trusted_set,
             trust_candidates,
             gossip_peers: BTreeMap::new(),
+            peer_capabilities: BTreeMap::new(),
             current_topology,
             key_pair,
             gossip_period: std::time::Duration::from_secs(1),

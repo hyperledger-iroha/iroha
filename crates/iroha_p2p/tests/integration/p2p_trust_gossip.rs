@@ -107,6 +107,7 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
             iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
         quic_datagram_send_buffer_bytes:
             iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+        scion: iroha_config::parameters::actual::ScionConfig::default(),
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,

@@ -1152,6 +1152,30 @@ pub struct LaneProfileLimits {
     pub low_priority_rate_per_sec: Option<NonZeroU32>,
 }
 
+/// SCION routing configuration for P2P outbound dials.
+#[derive(Debug, Clone)]
+pub struct ScionConfig {
+    /// Enable SCION-guided outbound peer dialing.
+    pub enabled: bool,
+    /// Fallback to legacy transports when SCION route dialing fails or is unavailable.
+    pub fallback_to_legacy: bool,
+    /// Optional SCION listener endpoint hint (reserved for future inbound support).
+    pub listen_endpoint: Option<String>,
+    /// Per-peer SCION routes keyed by peer id.
+    pub routes: BTreeMap<PeerId, SocketAddr>,
+}
+
+impl Default for ScionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::network::SCION_ENABLED,
+            fallback_to_legacy: defaults::network::SCION_FALLBACK_TO_LEGACY,
+            listen_endpoint: None,
+            routes: BTreeMap::new(),
+        }
+    }
+}
+
 /// Network options.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
@@ -1241,6 +1265,8 @@ pub struct Network {
     pub quic_datagram_receive_buffer_bytes: usize,
     /// Total send buffer reserved for QUIC datagrams (bytes).
     pub quic_datagram_send_buffer_bytes: usize,
+    /// SCION guided dialing options for outbound peer connections.
+    pub scion: ScionConfig,
     /// Enable TLS-over-TCP transport for outbound dials (feature-gated).
     /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer will
     /// attempt to establish a TLS 1.3 session to the peer's host:port and run the
@@ -6557,6 +6583,10 @@ pub struct Halo2 {
     pub verifier_budget_ms: u64,
     /// Maximum number of proofs allowed in a batch verification.
     pub verifier_max_batch: u32,
+    /// Number of worker threads serving ZK lane verification (0 = auto).
+    pub verifier_worker_threads: usize,
+    /// Capacity of the ZK lane verification queue (0 = auto).
+    pub verifier_queue_cap: usize,
     /// Maximum accepted Norito envelope payload length (bytes).
     pub max_envelope_bytes: usize,
     /// Maximum accepted proof payload length (bytes).
@@ -6576,6 +6606,9 @@ impl Default for Halo2 {
             max_k: crate::parameters::defaults::zk::halo2::MAX_K,
             verifier_budget_ms: crate::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
             verifier_max_batch: crate::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
+            verifier_worker_threads:
+                crate::parameters::defaults::zk::halo2::VERIFIER_WORKER_THREADS,
+            verifier_queue_cap: crate::parameters::defaults::zk::halo2::VERIFIER_QUEUE_CAP,
             max_envelope_bytes: crate::parameters::defaults::zk::halo2::MAX_ENVELOPE_BYTES,
             max_proof_bytes: crate::parameters::defaults::zk::halo2::MAX_PROOF_BYTES,
             max_transcript_label_len:
