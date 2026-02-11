@@ -207,7 +207,7 @@ struct GpuSequences {
 pub unsafe extern "C" fn gpu_zstd_compress(
     src: *const u8,
     src_len: usize,
-    _level: i32,
+    level: i32,
     dst: *mut u8,
     dst_len: *mut usize,
 ) -> i32 {
@@ -219,21 +219,26 @@ pub unsafe extern "C" fn gpu_zstd_compress(
     if capacity == 0 {
         return RC_NO_SPACE;
     }
-    let sequences = match gpu_sequences(src_slice) {
-        Ok(seqs) => seqs,
+    let encoded = match gpu_sequences(src_slice) {
+        Ok(sequences) => match zstd_frame::encode_frame(
+            src_slice,
+            CHUNK_SIZE as usize,
+            &sequences.counts,
+            &sequences.offsets,
+            &sequences.seqs,
+            false,
+        ) {
+            Ok(bytes) => bytes,
+            Err(ZstdEncodeError::Capacity) => return RC_NO_SPACE,
+            Err(_) => return RC_ZSTD,
+        },
+        // Keep the ABI stable: when Metal pipelines cannot initialize at runtime,
+        // return a valid zstd frame instead of surfacing GPU unavailability.
+        Err(RC_GPU_UNAVAILABLE) => match zstd::encode_all(Cursor::new(src_slice), level) {
+            Ok(bytes) => bytes,
+            Err(_) => return RC_ZSTD,
+        },
         Err(rc) => return rc,
-    };
-    let encoded = match zstd_frame::encode_frame(
-        src_slice,
-        CHUNK_SIZE as usize,
-        &sequences.counts,
-        &sequences.offsets,
-        &sequences.seqs,
-        false,
-    ) {
-        Ok(bytes) => bytes,
-        Err(ZstdEncodeError::Capacity) => return RC_NO_SPACE,
-        Err(_) => return RC_ZSTD,
     };
     if encoded.len() > capacity {
         return RC_NO_SPACE;
@@ -512,6 +517,27 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_ZSTD);
+    }
+
+    #[test]
+    fn gpu_compress_does_not_surface_unavailable_rc() {
+        let payload = b"gpuzstd availability fallback";
+        let mut out = vec![0u8; payload.len().saturating_mul(4).saturating_add(512)];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpu_zstd_compress(
+                payload.as_ptr(),
+                payload.len(),
+                1,
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_ne!(
+            rc, RC_GPU_UNAVAILABLE,
+            "compress should fall back to CPU when Metal is temporarily unavailable"
+        );
+        assert_eq!(rc, RC_OK);
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

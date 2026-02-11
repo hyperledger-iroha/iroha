@@ -3905,57 +3905,75 @@ impl Iroha {
                     .change_context(StartError::InitKura));
             }
 
-            // Ensure genesis instructions execute successfully before starting consensus.
-            // Use the configured trusted peers as the initial commit topology when the
-            // state hasn't recorded one yet (fresh storage). This ensures the genesis
-            // application seeds the validator roster with the full cluster rather than
-            // a single local peer, which would otherwise isolate the node and stall
-            // consensus.
-            let commit_topology: Vec<_> = {
-                let view = state.view();
-                let peers = view.commit_topology();
-                if peers.is_empty() {
-                    let mut validator_roster =
-                        filter_validators_from_trusted(config.common.trusted_peers.value());
-                    if validator_roster.is_empty() {
-                        validator_roster = config
-                            .common
-                            .trusted_peers
-                            .value()
-                            .clone()
-                            .into_non_empty_vec()
-                            .into_iter()
-                            .collect();
-                    }
-                    let me = config.common.peer.id();
-                    if !validator_roster.iter().any(|p| p == me) {
-                        validator_roster.push(me.clone());
-                    }
-                    if validator_roster.is_empty() {
-                        validator_roster.push(me.clone());
-                    }
-                    validator_roster
-                } else {
-                    peers.to_vec()
+            // On non-empty storage, avoid re-executing genesis against a replayed state
+            // (which would fail static height checks). Instead, verify that the provided
+            // genesis matches the block already persisted at height 1.
+            if block_count.0 > 0 {
+                let Some(stored_genesis) =
+                    kura.get_block(std::num::NonZeroUsize::new(1).expect("nonzero"))
+                else {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "non-empty block store is missing genesis block at height 1",
+                    ));
+                };
+                let stored_hash = stored_genesis.hash();
+                let provided_hash = genesis_block.0.hash();
+                if stored_hash != provided_hash {
+                    return Err(Report::new(StartError::InitKura).attach(format!(
+                        "provided genesis does not match stored genesis (stored={stored_hash}, provided={provided_hash})",
+                    )));
                 }
-            };
-            let topology = Topology::new(commit_topology.clone());
-            let time_source = TimeSource::new_system();
-            let mut voting_block: Option<VotingBlock> = None;
-            let validation = ValidBlock::validate_keep_voting_block(
-                genesis_block.0.clone(),
-                &topology,
-                &config.common.chain,
-                &genesis_account,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
-            match validation {
-                Ok((valid_block, mut state_block)) => {
-                    if block_count.0 == 0 {
+            } else {
+                // Ensure genesis instructions execute successfully before starting consensus.
+                // Use the configured trusted peers as the initial commit topology when the
+                // state hasn't recorded one yet (fresh storage). This ensures the genesis
+                // application seeds the validator roster with the full cluster rather than
+                // a single local peer, which would otherwise isolate the node and stall
+                // consensus.
+                let commit_topology: Vec<_> = {
+                    let view = state.view();
+                    let peers = view.commit_topology();
+                    if peers.is_empty() {
+                        let mut validator_roster =
+                            filter_validators_from_trusted(config.common.trusted_peers.value());
+                        if validator_roster.is_empty() {
+                            validator_roster = config
+                                .common
+                                .trusted_peers
+                                .value()
+                                .clone()
+                                .into_non_empty_vec()
+                                .into_iter()
+                                .collect();
+                        }
+                        let me = config.common.peer.id();
+                        if !validator_roster.iter().any(|p| p == me) {
+                            validator_roster.push(me.clone());
+                        }
+                        if validator_roster.is_empty() {
+                            validator_roster.push(me.clone());
+                        }
+                        validator_roster
+                    } else {
+                        peers.to_vec()
+                    }
+                };
+                let topology = Topology::new(commit_topology.clone());
+                let time_source = TimeSource::new_system();
+                let mut voting_block: Option<VotingBlock> = None;
+                let validation = ValidBlock::validate_keep_voting_block(
+                    genesis_block.0.clone(),
+                    &topology,
+                    &config.common.chain,
+                    &genesis_account,
+                    &time_source,
+                    &state,
+                    &mut voting_block,
+                    false,
+                )
+                .unpack(|_| {});
+                match validation {
+                    Ok((valid_block, mut state_block)) => {
                         let committed_block = valid_block.commit_unchecked().unpack(|_| {});
                         let events = state_block
                             .apply_without_execution(&committed_block, commit_topology.clone());
@@ -4025,21 +4043,19 @@ impl Iroha {
                             height = genesis_height,
                             "Applied genesis block to local storage"
                         );
-                    } else {
-                        drop(state_block);
                     }
-                }
-                Err((_failed_block, err)) => {
-                    let err_display = err.to_string();
-                    iroha_logger::error!(
-                        error = %err,
-                        "Genesis block execution failed during validation"
-                    );
-                    return Err(Report::new(err)
-                        .attach(format!(
-                            "Genesis block execution failed during validation: {err_display}"
-                        ))
-                        .change_context(StartError::InitKura));
+                    Err((_failed_block, err)) => {
+                        let err_display = err.to_string();
+                        iroha_logger::error!(
+                            error = %err,
+                            "Genesis block execution failed during validation"
+                        );
+                        return Err(Report::new(err)
+                            .attach(format!(
+                                "Genesis block execution failed during validation: {err_display}"
+                            ))
+                            .change_context(StartError::InitKura));
+                    }
                 }
             }
         } else if block_count.0 == 0 {
