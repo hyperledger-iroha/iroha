@@ -507,7 +507,7 @@ impl Actor {
         leader_index: usize,
         local_validator_index: u32,
         view_snapshot: Option<StateView<'_>>,
-        _now: Instant,
+        now: Instant,
     ) -> Result<bool> {
         if self.is_observer() {
             return Ok(false);
@@ -533,13 +533,23 @@ impl Actor {
         self.init_collector_plan(topology, proposal_height, view);
         if proposal_height > 1 && !self.block_known_locally(highest_qc.subject_block_hash) {
             self.observe_new_view_highest_qc(highest_qc);
-            warn!(
-                height = proposal_height,
+            if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                proposal_height,
                 view,
-                highest_height = highest_qc.height,
-                highest_hash = %highest_qc.subject_block_hash,
-                "deferring proposal assembly: highest QC block not available locally"
-            );
+                highest_qc.subject_block_hash,
+                now,
+                Duration::from_secs(5),
+            ) {
+                warn!(
+                    height = proposal_height,
+                    view,
+                    highest_height = highest_qc.height,
+                    highest_hash = %highest_qc.subject_block_hash,
+                    suppressed_since_last,
+                    "deferring proposal assembly: highest QC block not available locally"
+                );
+            }
             return Ok(false);
         }
         let prev_block = resolve_prev_block_for_proposal(
@@ -552,14 +562,24 @@ impl Actor {
             if !self.block_known_locally(highest_qc.subject_block_hash) {
                 self.observe_new_view_highest_qc(highest_qc);
             }
-            warn!(
-                height = proposal_height,
+            if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                ProposalDeferWarningKind::ParentMissing,
+                proposal_height,
                 view,
-                parent_height = proposal_height.saturating_sub(1),
-                highest_height = highest_qc.height,
-                highest_hash = %highest_qc.subject_block_hash,
-                "deferring proposal assembly: parent block not available locally"
-            );
+                highest_qc.subject_block_hash,
+                now,
+                Duration::from_secs(5),
+            ) {
+                warn!(
+                    height = proposal_height,
+                    view,
+                    parent_height = proposal_height.saturating_sub(1),
+                    highest_height = highest_qc.height,
+                    highest_hash = %highest_qc.subject_block_hash,
+                    suppressed_since_last,
+                    "deferring proposal assembly: parent block not available locally"
+                );
+            }
             return Ok(false);
         }
 
