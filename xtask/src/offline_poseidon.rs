@@ -220,7 +220,7 @@ fn sample_receipt(counter: u64, seed: &str) -> OfflineSpendReceipt {
             challenge_hash: Hash::new(b"challenge"),
         }),
         platform_snapshot: None,
-        sender_certificate: certificate,
+        sender_certificate_id: certificate.certificate_id(),
         sender_signature: Signature::new(key_pair.private_key(), b"receipt"),
     }
 }

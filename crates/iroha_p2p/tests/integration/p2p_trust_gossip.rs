@@ -213,8 +213,7 @@ async fn observe_peer_and_trust(
                 TrustTestMessage::Trust(v) if v == expected_trust => saw_trust = true,
                 _ => {}
             },
-            Ok(None) => break,
-            Err(_) => break,
+            Ok(None) | Err(_) => break,
         }
     }
 
@@ -231,8 +230,7 @@ async fn observe_peer_and_trust(
                 TrustTestMessage::Peer(v) if v == expected_peer => saw_peer = true,
                 _ => {}
             },
-            Ok(None) => break,
-            Err(_) => break,
+            Ok(None) | Err(_) => break,
         }
     }
 

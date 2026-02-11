@@ -261,7 +261,7 @@ mod tests {
                 Hash::new(b"challenge"),
             )),
             None,
-            sample_certificate(receiver),
+            sample_certificate(receiver).certificate_id(),
             Signature::from_bytes(&[0xCC]),
         )
     }

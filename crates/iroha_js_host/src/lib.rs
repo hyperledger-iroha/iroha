@@ -7918,6 +7918,7 @@ mod tests {
         leaf_count: usize,
     }
 
+    #[allow(clippy::too_many_lines)]
     fn build_da_manifest_fixture() -> DaManifestFixture {
         let payload: Vec<u8> = (0..16 * 1024)
             .map(|idx| u8::try_from(idx % 197).expect("payload byte fits in u8"))

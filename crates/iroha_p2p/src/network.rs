@@ -252,10 +252,10 @@ fn runtime_from_handshake(
 
 fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> RelayRole {
     match mode {
-        iroha_config::parameters::actual::RelayMode::Disabled => RelayRole::Disabled,
         iroha_config::parameters::actual::RelayMode::Hub => RelayRole::Hub,
         iroha_config::parameters::actual::RelayMode::Spoke => RelayRole::Spoke,
-        iroha_config::parameters::actual::RelayMode::Assist => RelayRole::Disabled,
+        iroha_config::parameters::actual::RelayMode::Disabled
+        | iroha_config::parameters::actual::RelayMode::Assist => RelayRole::Disabled,
     }
 }
 
@@ -3781,6 +3781,7 @@ mod accept_stream_tests {
             true,
             max_frame_bytes,
             soranet.clone(),
+            false,
             RelayRole::Disabled,
         )
         .await
@@ -5177,7 +5178,7 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     idle_timeout: Duration,
     /// Timeout applied to an individual outbound dial attempt.
     dial_timeout: Duration,
-    /// Whether to enable TCP_NODELAY on TCP connections (best-effort).
+    /// Whether to enable `TCP_NODELAY` on TCP connections (best-effort).
     tcp_nodelay: bool,
     /// Optional TCP keepalive idle timeout (best-effort, platform-specific).
     tcp_keepalive: Option<Duration>,

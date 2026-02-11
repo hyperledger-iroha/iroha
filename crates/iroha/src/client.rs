@@ -5065,10 +5065,8 @@ impl Client {
         method: HttpMethod,
         url: Url,
         body: Vec<u8>,
-    ) -> Result<DefaultRequestBuilder> {
-        let mut builder = self.default_request(method.clone(), url.clone());
-
-        if let Some(operator_key_pair) = &self.operator_key_pair {
+    ) -> DefaultRequestBuilder {
+        let operator_headers = self.operator_key_pair.as_ref().map(|operator_key_pair| {
             let timestamp_ms: u64 = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -5085,6 +5083,11 @@ impl Client {
             let signature_b64 =
                 base64::engine::general_purpose::STANDARD.encode(signature.payload());
 
+            (public_key, timestamp, nonce, signature_b64)
+        });
+        let mut builder = self.default_request(method, url);
+
+        if let Some((public_key, timestamp, nonce, signature_b64)) = operator_headers {
             builder = builder
                 .header(HEADER_OPERATOR_PUBLIC_KEY, &public_key)
                 .header(HEADER_OPERATOR_TIMESTAMP_MS, &timestamp)
@@ -5093,9 +5096,9 @@ impl Client {
         }
 
         if body.is_empty() {
-            Ok(builder)
+            builder
         } else {
-            Ok(builder.body(body))
+            builder.body(body)
         }
     }
 
@@ -6100,7 +6103,7 @@ impl Client {
     pub fn get_config(&self) -> Result<ConfigGetDTO> {
         let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
         let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
                 .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
         )?;
 
@@ -6138,7 +6141,7 @@ impl Client {
             .wrap_err(format!("Failed to serialize {dto:?}"))?;
         let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
         let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::POST, url, body)?
+            self.operator_signed_request(HttpMethod::POST, url, body)
                 .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
         )?;
 

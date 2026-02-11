@@ -913,6 +913,7 @@ fn update_offline_commitment(
     Ok(bytes)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_offline_receipt_challenge(
     chain_id_raw: String,
     invoice_id: String,

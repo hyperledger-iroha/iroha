@@ -5299,7 +5299,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     {
         summary_map.insert("average_latency_ms".into(), Value::from(avg));
     }
-    let failure_budget = max_failures.unwrap_or_else(|| {
+    let failure_budget = max_failures.unwrap_or({
         if legacy_proof_stream_mode {
             1
         } else {

@@ -64,6 +64,7 @@ fn default_soranet_handshake() -> ActualSoranetHandshake {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn make_config(
     addr: &SocketAddr,
     public: &SocketAddr,

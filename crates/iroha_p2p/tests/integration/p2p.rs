@@ -106,6 +106,7 @@ fn default_soranet_handshake() -> ActualSoranetHandshake {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn trust_config(
     addr: iroha_primitives::addr::SocketAddr,
     trust_gossip: bool,

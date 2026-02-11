@@ -2134,11 +2134,8 @@ impl IVMHost for DefaultHost {
                         statuses.push(status);
                         continue;
                     }
-                    match crate::zk_verify::verify_open_envelope(&bytes) {
-                        Ok(ok) => {
-                            status = if ok { 1 } else { 0 };
-                        }
-                        Err(_) => {}
+                    if let Ok(ok) = crate::zk_verify::verify_open_envelope(&bytes) {
+                        status = if ok { 1 } else { 0 };
                     }
                     if status == 0 {
                         statuses.push(0);

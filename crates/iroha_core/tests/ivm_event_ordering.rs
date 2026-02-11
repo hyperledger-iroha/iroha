@@ -10,7 +10,7 @@ use iroha_core::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{block::BlockHeader, prelude::*};
-use ivm::{IVM, Memory, PointerType, encoding, syscalls};
+use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, syscalls};
 use nonzero_ext::nonzero;
 
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -39,20 +39,29 @@ fn store_tlv(vm: &mut IVM, cursor: &mut u64, type_id: PointerType, payload: &[u8
 
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let scall = ivm::instruction::wide::system::SCALL;
+    let syscall = u8::try_from(num).expect("syscall number must fit in wide encoding");
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_sys(scall, num as u8).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_sys(scall, syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    let mut prog = Vec::new();
-    prog.extend_from_slice(b"IVM\0");
-    prog.push(2);
-    prog.push(0);
-    prog.push(0);
-    prog.push(0);
-    prog.extend_from_slice(&0u64.to_le_bytes());
-    prog.push(1);
+    let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     prog
+}
+
+#[test]
+fn encode_prog_syscall_uses_valid_metadata_header() {
+    let program = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
+    let parsed = ProgramMetadata::parse(&program).expect("metadata should parse");
+
+    assert_eq!(parsed.metadata.version_major, 1);
+    assert_eq!(parsed.metadata.version_minor, 0);
+    assert_eq!(parsed.metadata.abi_version, 1);
+    assert_eq!(parsed.code_offset, parsed.header_len);
+    assert!(
+        parsed.code_offset < program.len(),
+        "program should contain code"
+    );
 }
 
 #[test]
