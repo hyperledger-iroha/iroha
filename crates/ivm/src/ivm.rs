@@ -2635,7 +2635,11 @@ impl IVM {
 
     #[inline]
     fn flush_cycle_logs(&mut self, last_logged_cycle: &mut u64) {
-        if self.max_cycles == 0 {
+        // Cycle-by-cycle trace logging is only required for ZK execution.
+        // Leaving it enabled for non-ZK programs (when `max_cycles` is set)
+        // makes validation orders of magnitude slower due to per-cycle
+        // snapshotting and Merkle proof bookkeeping.
+        if !self.zk_mode || self.max_cycles == 0 {
             return;
         }
         while *last_logged_cycle < self.cycles {
@@ -2681,7 +2685,7 @@ impl IVM {
         self.cycles = 0;
         let _pointer_policy_guard =
             PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
-        let _reg_logger_guard = if self.max_cycles != 0 {
+        let _reg_logger_guard = if self.zk_mode {
             Some(zk::RegLoggerGuard::install(&mut self.reg_log))
         } else {
             None
@@ -2691,7 +2695,7 @@ impl IVM {
         // using the parallel scheduler. Complex instructions are still executed
         // sequentially.
         let mut ilp_block: Vec<SimpleInstruction> = Vec::new();
-        if self.max_cycles != 0 {
+        if self.zk_mode {
             self.trace_log = DeltaTraceLog::default();
             self.step_log = zk::StepLog::default();
         }
@@ -4066,7 +4070,7 @@ impl IVM {
                     let addr = self.registers.get(ptr_reg);
                     let mut block = [0u8; 64];
                     self.memory.load_bytes(addr, &mut block)?;
-                    if self.max_cycles != 0 {
+                    if self.zk_mode {
                         for (i, b) in block.iter().enumerate() {
                             let (root, path) = self.memory.merkle_root_and_path(addr + i as u64);
                             self.mem_log.record(MemEvent::Load {
@@ -4264,7 +4268,7 @@ impl IVM {
                     let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
                     let a = self.memory.load_u64(addr)?;
                     let b = self.memory.load_u64(addr + 8)?;
-                    if self.max_cycles != 0 {
+                    if self.zk_mode {
                         let (root, path_a) = self.memory.merkle_root_and_path(addr);
                         let (_root2, path_b) = self.memory.merkle_root_and_path(addr + 8);
                         self.mem_log.record(MemEvent::Load {
@@ -4308,7 +4312,7 @@ impl IVM {
                     for (i, slot) in vals.iter_mut().enumerate() {
                         let off = i * 8;
                         let word = u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap());
-                        if self.max_cycles != 0 {
+                        if self.zk_mode {
                             let (root, path) = self.memory.merkle_root_and_path(addr + off as u64);
                             self.mem_log.record(MemEvent::Load {
                                 addr: addr + off as u64,

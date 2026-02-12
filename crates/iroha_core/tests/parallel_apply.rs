@@ -88,6 +88,10 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     #[cfg(not(feature = "telemetry"))]
     let mut state_seq = iroha_core::state::State::new(world_seq, kura.clone(), query.clone());
     let cfg_seq = iroha_config::parameters::actual::Pipeline {
+        ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
+            enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
+            allowed_circuits: Vec::new(),
+        },
         dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
         access_set_cache_enabled:
             iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -169,6 +173,10 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     #[cfg(not(feature = "telemetry"))]
     let mut state_par = iroha_core::state::State::new(world_par, kura, query);
     let cfg_par = iroha_config::parameters::actual::Pipeline {
+        ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
+            enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
+            allowed_circuits: Vec::new(),
+        },
         dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
         access_set_cache_enabled:
             iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,

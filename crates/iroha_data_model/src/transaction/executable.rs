@@ -30,6 +30,15 @@ mod model {
         Instructions(ConstVec<InstructionBox>),
         /// IVM smart contract bytecode (.to)
         Ivm(IvmBytecode),
+        /// IVM smart contract bytecode accompanied by a precomputed instruction overlay.
+        ///
+        /// This executable is intended for proof-carrying flows where the transaction
+        /// supplies a deterministic overlay (ISIs) together with a ZK proof (via
+        /// [`SignedTransaction`](crate::transaction::SignedTransaction) attachments) that
+        /// binds the overlay to the executed bytecode.
+        ///
+        /// Nodes may verify the proof and apply the overlay directly, skipping VM execution.
+        IvmProved(IvmProved),
     }
 
     /// Wrapper for IVM bytecode used by [`Executable::Ivm`].
@@ -47,6 +56,18 @@ mod model {
         /// Raw Kotodama bytecode blob.
         pub(super) Vec<u8>,
     );
+
+    /// Wrapper for proved IVM executions.
+    #[derive(
+        derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct IvmProved {
+        /// Raw Kotodama bytecode blob.
+        pub bytecode: IvmBytecode,
+        /// Precomputed ordered instruction overlay to apply when the proof verifies.
+        pub overlay: ConstVec<InstructionBox>,
+    }
 }
 
 // Collect any iterator of instructions into an executable, avoiding
@@ -123,6 +144,7 @@ impl Executable {
         match self {
             Executable::Instructions(instructions) => instructions.len() as u64,
             Executable::Ivm(_) => 0,
+            Executable::IvmProved(proved) => proved.overlay.len() as u64,
         }
     }
 
@@ -131,6 +153,7 @@ impl Executable {
         match self {
             Executable::Ivm(b) => b.size_bytes(),
             Executable::Instructions(_) => 0,
+            Executable::IvmProved(proved) => proved.bytecode.size_bytes(),
         }
     }
 }
@@ -153,6 +176,45 @@ impl norito::json::JsonDeserialize for Executable {
                 Executable::Instructions(instrs)
             }
             "Ivm" => Executable::Ivm(IvmBytecode::json_deserialize(parser)?),
+            "IvmProved" => {
+                parser.skip_ws();
+                parser.consume_char(b'{')?;
+                let mut bytecode: Option<IvmBytecode> = None;
+                let mut overlay: Option<iroha_primitives::const_vec::ConstVec<InstructionBox>> =
+                    None;
+                loop {
+                    parser.skip_ws();
+                    if parser.try_consume_char(b'}')? {
+                        break;
+                    }
+                    let field = parser.parse_key()?;
+                    match field.as_str() {
+                        "bytecode" => {
+                            bytecode = Some(IvmBytecode::json_deserialize(parser)?);
+                        }
+                        "overlay" => {
+                            overlay = Some(
+                                iroha_primitives::const_vec::ConstVec::<InstructionBox>::json_deserialize(parser)?,
+                            );
+                        }
+                        other => {
+                            return Err(norito::json::Error::unknown_field(other.to_owned()));
+                        }
+                    }
+                    if !parser.consume_comma_if_present()? {
+                        parser.skip_ws();
+                        parser.consume_char(b'}')?;
+                        break;
+                    }
+                }
+                let bytecode = bytecode.ok_or_else(|| {
+                    norito::json::Error::Message("missing field `bytecode`".to_owned())
+                })?;
+                let overlay = overlay.ok_or_else(|| {
+                    norito::json::Error::Message("missing field `overlay`".to_owned())
+                })?;
+                Executable::IvmProved(IvmProved { bytecode, overlay })
+            }
             other => return Err(norito::json::Error::unknown_field(other.to_owned())),
         };
         parser.skip_ws();
@@ -175,6 +237,19 @@ impl norito::json::FastJsonWrite for Executable {
                 norito::json::write_json_string("Ivm", out);
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(bytecode, out);
+            }
+            Executable::IvmProved(proved) => {
+                norito::json::write_json_string("IvmProved", out);
+                out.push(':');
+                out.push('{');
+                norito::json::write_json_string("bytecode", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(&proved.bytecode, out);
+                out.push(',');
+                norito::json::write_json_string("overlay", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(&proved.overlay, out);
+                out.push('}');
             }
         }
         out.push('}');

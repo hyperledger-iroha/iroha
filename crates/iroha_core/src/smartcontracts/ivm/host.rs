@@ -66,6 +66,7 @@ use norito::{
     decode_from_bytes, json,
     streaming::CapabilityFlags,
 };
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "telemetry")]
@@ -647,6 +648,7 @@ where
     }
 }
 
+#[cfg(test)]
 struct DomainHashInputs<'a> {
     backend: &'a str,
     curve: &'a str,
@@ -1821,6 +1823,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         .to_string()
     }
 
+    #[cfg(test)]
     fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(backend.as_bytes());
@@ -1828,6 +1831,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         h.finalize().into()
     }
 
+    #[cfg(test)]
     fn compute_domain_hash(&self, inputs: &DomainHashInputs<'_>) -> [u8; 32] {
         use iroha_crypto::Hash;
         let mut buf = Vec::new();
@@ -1845,25 +1849,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn validate_envelope_header(
         &self,
-        env: &iroha_zkp_halo2::OpenVerifyEnvelope,
+        env: &iroha_data_model::zk::OpenVerifyEnvelope,
         payload_len: usize,
-        expected_label: &str,
     ) -> Result<(), u64> {
         if payload_len > self.halo2_config.max_envelope_bytes {
             return Err(ivm::host::ERR_ENVELOPE_SIZE);
-        }
-        if env.transcript_label != expected_label {
-            return Err(ivm::host::ERR_TRANSCRIPT_LABEL);
-        }
-        if env.transcript_label.is_empty()
-            || env.transcript_label.len() > self.halo2_config.max_transcript_label_len
-            || (self.halo2_config.enforce_transcript_label_ascii
-                && !env
-                    .transcript_label
-                    .bytes()
-                    .all(|b| matches!(b, 0x21..=0x7e)))
-        {
-            return Err(ivm::host::ERR_TRANSCRIPT_LABEL);
         }
         if !self.halo2_config.enabled {
             return Err(ivm::host::ERR_DISABLED);
@@ -1871,49 +1861,52 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if self.halo2_config.backend != ivm::host::ZkHalo2Backend::Ipa {
             return Err(ivm::host::ERR_BACKEND);
         }
-        let curve_ok = match (self.halo2_config.curve, env.params.curve_id) {
-            (ivm::host::ZkCurve::Pallas, cid)
-                if cid == iroha_zkp_halo2::ZkCurveId::Pallas.as_u16() =>
-            {
-                true
-            }
-            (ivm::host::ZkCurve::Pasta, cid)
-                if cid == iroha_zkp_halo2::ZkCurveId::Pasta.as_u16() =>
-            {
-                true
-            }
-            (ivm::host::ZkCurve::Goldilocks, cid)
-                if cid == iroha_zkp_halo2::ZkCurveId::Goldilocks.as_u16() =>
-            {
-                true
-            }
-            (ivm::host::ZkCurve::Bn254, cid)
-                if cid == iroha_zkp_halo2::ZkCurveId::Bn254.as_u16() =>
-            {
-                true
-            }
-            _ => false,
-        };
-        if !curve_ok {
-            return Err(ivm::host::ERR_CURVE);
-        }
-        let n = env.params.n as usize;
-        let k = if n.is_power_of_two() {
-            n.trailing_zeros()
-        } else {
-            u32::MAX
-        };
-        if k == u32::MAX || k > self.halo2_config.max_k {
-            return Err(ivm::host::ERR_K);
+        if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+            return Err(ivm::host::ERR_BACKEND);
         }
         Ok(())
     }
 
+    fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa-v1/") {
+            return (!rest.is_empty()).then(|| trimmed.to_string());
+        }
+        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        if let Some(rest) = trimmed.strip_prefix("halo2/ipa::") {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        if let Some(rest) = trimmed.strip_prefix("halo2/ipa:") {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        if let Some(rest) = trimmed.strip_prefix("halo2/ipa/") {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
+    }
+
+    fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
+        if backend == "halo2/ipa" {
+            match (
+                Self::normalize_halo2_circuit_id(record_id),
+                Self::normalize_halo2_circuit_id(env_id),
+            ) {
+                (Some(rec), Some(env)) => rec == env,
+                _ => record_id == env_id,
+            }
+        } else {
+            record_id == env_id
+        }
+    }
+
     fn load_vk_record_any_namespace(
         &self,
-        env: &iroha_zkp_halo2::OpenVerifyEnvelope,
         vk_commitment: [u8; 32],
-        schema_hash: [u8; 32],
     ) -> Result<(VerifyingKeyRecord, String), u64> {
         let vk_rec = self
             .verifying_keys
@@ -1921,41 +1914,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .find(|r| r.commitment == vk_commitment)
             .cloned()
             .ok_or(ivm::host::ERR_VK_MISSING)?;
-        let curve_label = match iroha_zkp_halo2::ZkCurveId::from_u16(env.params.curve_id) {
-            iroha_zkp_halo2::ZkCurveId::Pallas => "pallas",
-            iroha_zkp_halo2::ZkCurveId::Pasta => "pasta",
-            iroha_zkp_halo2::ZkCurveId::Goldilocks => "goldilocks",
-            iroha_zkp_halo2::ZkCurveId::Bn254 => "bn254",
-            _ => return Err(ivm::host::ERR_CURVE),
-        };
-        if !vk_rec.curve.eq_ignore_ascii_case(curve_label) {
-            return Err(ivm::host::ERR_CURVE);
-        }
         if vk_rec.backend != BackendTag::Halo2IpaPasta {
             return Err(ivm::host::ERR_BACKEND);
         }
         if !vk_rec.is_active() {
             return Err(ivm::host::ERR_VK_INACTIVE);
         }
-        if vk_rec.public_inputs_schema_hash != schema_hash || vk_rec.commitment != vk_commitment {
-            return Err(ivm::host::ERR_VK_MISMATCH);
-        }
         let backend_label = Self::backend_label_for_record(&vk_rec);
-        Ok((vk_rec, backend_label))
-    }
-
-    fn load_vk_record(
-        &self,
-        env: &iroha_zkp_halo2::OpenVerifyEnvelope,
-        vk_commitment: [u8; 32],
-        schema_hash: [u8; 32],
-        namespace: &str,
-    ) -> Result<(VerifyingKeyRecord, String), u64> {
-        let (vk_rec, backend_label) =
-            self.load_vk_record_any_namespace(env, vk_commitment, schema_hash)?;
-        if vk_rec.namespace != namespace {
-            return Err(ivm::host::ERR_NAMESPACE);
-        }
         Ok((vk_rec, backend_label))
     }
 
@@ -1974,23 +1939,69 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    fn enforce_zk_envelope(
+    fn parse_zk1_ipa_k(vk_bytes: &[u8]) -> Option<u32> {
+        const MAGIC: &[u8; 4] = b"ZK1\0";
+        if vk_bytes.len() < 4 || &vk_bytes[..4] != MAGIC {
+            return None;
+        }
+        let mut cursor = 4usize;
+        while cursor.checked_add(8)? <= vk_bytes.len() {
+            let tag = &vk_bytes[cursor..cursor + 4];
+            cursor += 4;
+            let len = u32::from_le_bytes(vk_bytes[cursor..cursor + 4].try_into().ok()?) as usize;
+            cursor += 4;
+            let end = cursor.checked_add(len)?;
+            if end > vk_bytes.len() {
+                return None;
+            }
+            if tag == b"IPAK" && len == 4 {
+                return Some(u32::from_le_bytes(vk_bytes[cursor..end].try_into().ok()?));
+            }
+            cursor = end;
+        }
+        None
+    }
+
+    fn curve_is_allowed(&self, curve_label: &str) -> bool {
+        match self.halo2_config.curve {
+            ivm::host::ZkCurve::Pallas | ivm::host::ZkCurve::Pasta => {
+                curve_label.eq_ignore_ascii_case("pallas")
+                    || curve_label.eq_ignore_ascii_case("pasta")
+            }
+            ivm::host::ZkCurve::Goldilocks => curve_label.eq_ignore_ascii_case("goldilocks"),
+            ivm::host::ZkCurve::Bn254 => curve_label.eq_ignore_ascii_case("bn254"),
+        }
+    }
+
+    fn enforce_zk_envelope_impl(
         &mut self,
         payload: &[u8],
-        expected_label: &str,
-        namespace: &str,
-    ) -> Result<(), u64> {
-        let env: iroha_zkp_halo2::OpenVerifyEnvelope =
+        namespace: Option<&str>,
+    ) -> Result<
+        (
+            iroha_data_model::zk::OpenVerifyEnvelope,
+            VerifyingKeyBox,
+            String,
+        ),
+        u64,
+    > {
+        let env: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(payload).map_err(|_| ivm::host::ERR_DECODE)?;
-        self.validate_envelope_header(&env, payload.len(), expected_label)?;
-        let vk_commitment = env.vk_commitment.ok_or(ivm::host::ERR_VK_MISSING)?;
-        let schema_hash = env
-            .public_inputs_schema_hash
-            .ok_or(ivm::host::ERR_VK_MISSING)?;
-        let (vk_rec, backend_label) =
-            self.load_vk_record(&env, vk_commitment, schema_hash, namespace)?;
-        let vk_box = vk_rec.key.as_ref().ok_or(ivm::host::ERR_VK_MISSING)?;
-        let inline_commit = Self::hash_vk_bytes(&backend_label, &vk_box.bytes);
+        self.validate_envelope_header(&env, payload.len())?;
+        if env.vk_hash == [0u8; 32] {
+            return Err(ivm::host::ERR_VK_MISSING);
+        }
+        let (vk_rec, backend_label) = self.load_vk_record_any_namespace(env.vk_hash)?;
+        if let Some(expected_namespace) = namespace
+            && vk_rec.namespace != expected_namespace
+        {
+            return Err(ivm::host::ERR_NAMESPACE);
+        }
+        if !Self::circuit_id_matches(&backend_label, &vk_rec.circuit_id, &env.circuit_id) {
+            return Err(ivm::host::ERR_VK_MISMATCH);
+        }
+        let vk_box = vk_rec.key.clone().ok_or(ivm::host::ERR_VK_MISSING)?;
+        let inline_commit = crate::zk::hash_vk(&vk_box);
         if inline_commit != vk_rec.commitment {
             return Err(ivm::host::ERR_VK_MISMATCH);
         }
@@ -1998,29 +2009,57 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if vk_rec.owner_manifest_id.as_deref().unwrap_or("core") != current_manifest {
             return Err(ivm::host::ERR_NAMESPACE);
         }
-        if vk_rec.namespace != namespace {
-            return Err(ivm::host::ERR_NAMESPACE);
+        if !self.curve_is_allowed(&vk_rec.curve) {
+            return Err(ivm::host::ERR_CURVE);
         }
-        let proof_len_bytes: usize = norito::to_bytes(&env.proof)
-            .map_err(|_| ivm::host::ERR_DECODE)?
-            .len();
-        self.validate_proof_len(&vk_rec, proof_len_bytes)?;
-        let domain_inputs = DomainHashInputs {
-            backend: &backend_label,
-            curve: &vk_rec.curve,
-            vk_commitment,
-            schema_hash,
-            syscall_label: expected_label,
-            manifest: current_manifest,
-            namespace,
+        let Some(k) = Self::parse_zk1_ipa_k(&vk_box.bytes) else {
+            return Err(ivm::host::ERR_DECODE);
         };
-        let domain = self.compute_domain_hash(&domain_inputs);
-        if env.domain_tag != Some(domain) {
-            return Err(ivm::host::ERR_DOMAIN_TAG);
+        if k > self.halo2_config.max_k {
+            return Err(ivm::host::ERR_K);
         }
-        self.default
-            .set_external_vk_bytes(vk_box.backend.clone(), vk_box.bytes.clone());
-        Ok(())
+        let schema_hash: [u8; 32] = Hash::new(&env.public_inputs).into();
+        if schema_hash != vk_rec.public_inputs_schema_hash {
+            return Err(ivm::host::ERR_VK_MISMATCH);
+        }
+        let proof_len_bytes = env.proof_bytes.len();
+        self.validate_proof_len(&vk_rec, proof_len_bytes)?;
+        Ok((env, vk_box, backend_label))
+    }
+
+    fn enforce_zk_envelope(
+        &mut self,
+        payload: &[u8],
+        namespace: &str,
+    ) -> Result<
+        (
+            iroha_data_model::zk::OpenVerifyEnvelope,
+            VerifyingKeyBox,
+            String,
+        ),
+        u64,
+    > {
+        self.enforce_zk_envelope_impl(payload, Some(namespace))
+    }
+
+    fn enforce_zk_envelope_any_namespace(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<
+        (
+            iroha_data_model::zk::OpenVerifyEnvelope,
+            VerifyingKeyBox,
+            String,
+        ),
+        u64,
+    > {
+        self.enforce_zk_envelope_impl(payload, None)
+    }
+
+    fn verify_bound_envelope(&mut self, payload: &[u8], namespace: &str) -> Result<bool, u64> {
+        let (_env, vk_box, backend_label) = self.enforce_zk_envelope(payload, namespace)?;
+        let proof = ProofBox::new(backend_label.clone().into(), payload.to_vec());
+        Ok(crate::zk::verify_backend_with_timing(&backend_label, &proof, Some(&vk_box)).ok)
     }
 
     /// Install a read-only snapshot of elections (finalized flag and tally) for state-read syscalls.
@@ -2884,10 +2923,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     #[inline]
     #[cfg_attr(not(feature = "zk-halo2-ipa"), allow(clippy::unnecessary_wraps))]
+    #[cfg(test)]
     fn compute_envelope_hash(payload: &[u8]) -> Result<[u8; 32], ivm::VMError> {
         #[cfg(feature = "zk-halo2-ipa")]
         {
-            if norito::decode_from_bytes::<iroha_zkp_halo2::OpenVerifyEnvelope>(payload).is_err() {
+            if norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(payload)
+                .is_err()
+            {
                 return Err(ivm::VMError::NoritoInvalid);
             }
         }
@@ -5095,27 +5137,28 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, ptr);
                 Ok(record.gas_cost())
             }
-            // Helper syscalls forwarded to the default host implementation.
-            // Intercept ZK_VERIFY syscalls to record success and gate ZK ISIs.
+            // ZK verify syscalls are handled here so CoreHost can enforce VK binding
+            // and run full backend verification before arming ISI latches.
             ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
-                // Capture TLV payload hash (envelope hash) before delegating to default host
-                // and enforce VK/label/domain binding.
+                // Capture TLV payload hash (envelope hash) and verify the bound proof.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
                 let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                let env_hash = Self::compute_envelope_hash(tlv.payload)?;
-                if let Err(code) =
-                    self.enforce_zk_envelope(tlv.payload, "zk_verify_transfer/v1", "transfer")
-                {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, code);
-                    return Ok(gas);
-                }
-                let _ = self.default.syscall(number, vm)?;
-                if vm.register(10) != 0 {
+                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                let ok = match self.verify_bound_envelope(tlv.payload, "transfer") {
+                    Ok(ok) => ok,
+                    Err(code) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, code);
+                        return Ok(gas);
+                    }
+                };
+                vm.set_register(10, u64::from(ok));
+                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                if ok {
                     self.zk_verified_transfer.push_back(env_hash);
                     self.zk_last_env_hash_transfer.push_back(env_hash);
                 }
@@ -5128,16 +5171,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
                 let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                let env_hash = Self::compute_envelope_hash(tlv.payload)?;
-                if let Err(code) =
-                    self.enforce_zk_envelope(tlv.payload, "zk_verify_unshield/v1", "unshield")
-                {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, code);
-                    return Ok(gas);
-                }
-                let _ = self.default.syscall(number, vm)?;
-                if vm.register(10) != 0 {
+                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                let ok = match self.verify_bound_envelope(tlv.payload, "unshield") {
+                    Ok(ok) => ok,
+                    Err(code) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, code);
+                        return Ok(gas);
+                    }
+                };
+                vm.set_register(10, u64::from(ok));
+                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                if ok {
                     self.zk_verified_unshield.push_back(env_hash);
                     self.zk_last_env_hash_unshield.push_back(env_hash);
                 }
@@ -5150,16 +5195,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
                 let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                let env_hash = Self::compute_envelope_hash(tlv.payload)?;
-                if let Err(code) =
-                    self.enforce_zk_envelope(tlv.payload, "zk_verify_ballot/v1", "ballot")
-                {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, code);
-                    return Ok(gas);
-                }
-                let _ = self.default.syscall(number, vm)?;
-                if vm.register(10) != 0 {
+                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                let ok = match self.verify_bound_envelope(tlv.payload, "ballot") {
+                    Ok(ok) => ok,
+                    Err(code) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, code);
+                        return Ok(gas);
+                    }
+                };
+                vm.set_register(10, u64::from(ok));
+                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                if ok {
                     self.zk_verified_ballot.push_back(env_hash);
                     self.zk_last_env_hash_ballot.push_back(env_hash);
                 }
@@ -5172,16 +5219,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
                 let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                let env_hash = Self::compute_envelope_hash(tlv.payload)?;
-                if let Err(code) =
-                    self.enforce_zk_envelope(tlv.payload, "zk_verify_tally/v1", "tally")
-                {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, code);
-                    return Ok(gas);
-                }
-                let _ = self.default.syscall(number, vm)?;
-                if vm.register(10) != 0 {
+                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                let ok = match self.verify_bound_envelope(tlv.payload, "tally") {
+                    Ok(ok) => ok,
+                    Err(code) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, code);
+                        return Ok(gas);
+                    }
+                };
+                vm.set_register(10, u64::from(ok));
+                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                if ok {
                     self.zk_verified_tally.push_back(env_hash);
                     self.zk_last_env_hash_tally.push_back(env_hash);
                 }
@@ -5194,7 +5243,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
                 let gas = Self::gas_for_zk_verify_payload(tlv.payload);
-                let envs: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+                let envs: Vec<iroha_data_model::zk::OpenVerifyEnvelope> =
                     if let Ok(v) = norito::decode_from_bytes(tlv.payload) {
                         v
                     } else {
@@ -5231,25 +5280,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         statuses.push(status);
                         continue;
                     };
-                    if let Err(code) =
-                        self.validate_envelope_header(env, payload.len(), ivm::host::LABEL_BATCH)
-                    {
-                        first_error.get_or_insert(code);
-                        statuses.push(status);
-                        continue;
-                    }
-                    let Some(vk_commitment) = env.vk_commitment else {
-                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
-                        statuses.push(status);
-                        continue;
-                    };
-                    let Some(schema_hash) = env.public_inputs_schema_hash else {
-                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
-                        statuses.push(status);
-                        continue;
-                    };
-                    let (vk_rec, backend_label) =
-                        match self.load_vk_record_any_namespace(env, vk_commitment, schema_hash) {
+                    let (_env, vk_box, backend_label) =
+                        match self.enforce_zk_envelope_any_namespace(&payload) {
                             Ok(v) => v,
                             Err(code) => {
                                 first_error.get_or_insert(code);
@@ -5257,62 +5289,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                                 continue;
                             }
                         };
-                    let Some(vk_box) = vk_rec.key.as_ref() else {
-                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
-                        statuses.push(status);
-                        continue;
-                    };
-                    let inline_commit = Self::hash_vk_bytes(&backend_label, &vk_box.bytes);
-                    if inline_commit != vk_rec.commitment {
-                        first_error.get_or_insert(ivm::host::ERR_VK_MISMATCH);
-                        statuses.push(status);
-                        continue;
-                    }
-                    let current_manifest = self.current_manifest_id.as_deref().unwrap_or("core");
-                    if vk_rec.owner_manifest_id.as_deref().unwrap_or("core") != current_manifest {
-                        first_error.get_or_insert(ivm::host::ERR_NAMESPACE);
-                        statuses.push(status);
-                        continue;
-                    }
-                    let proof_len = if let Ok(bytes) = norito::to_bytes(&env.proof) {
-                        bytes.len()
-                    } else {
-                        first_error.get_or_insert(ivm::host::ERR_DECODE);
-                        statuses.push(status);
-                        continue;
-                    };
-                    if let Err(code) = self.validate_proof_len(&vk_rec, proof_len) {
-                        first_error.get_or_insert(code);
-                        statuses.push(status);
-                        continue;
-                    }
-                    let domain_inputs = DomainHashInputs {
-                        backend: &backend_label,
-                        curve: &vk_rec.curve,
-                        vk_commitment,
-                        schema_hash,
-                        syscall_label: ivm::host::LABEL_BATCH,
-                        manifest: current_manifest,
-                        namespace: &vk_rec.namespace,
-                    };
-                    let domain = self.compute_domain_hash(&domain_inputs);
-                    if env.domain_tag != Some(domain) {
-                        first_error.get_or_insert(ivm::host::ERR_DOMAIN_TAG);
-                        statuses.push(status);
-                        continue;
-                    }
-                    self.default
-                        .set_external_vk_bytes(vk_box.backend.clone(), vk_box.bytes.clone());
-                    match ivm::zk_verify::verify_open_envelope(&payload) {
-                        Ok(ok) => {
-                            status = u8::from(ok);
-                            if !ok {
-                                first_error.get_or_insert(ivm::host::ERR_VERIFY);
-                            }
-                        }
-                        Err(_) => {
-                            first_error.get_or_insert(ivm::host::ERR_DECODE);
-                        }
+                    let proof = ProofBox::new(backend_label.clone().into(), payload);
+                    let report = crate::zk::verify_backend_with_timing(
+                        &backend_label,
+                        &proof,
+                        Some(&vk_box),
+                    );
+                    status = u8::from(report.ok);
+                    if !report.ok {
+                        first_error.get_or_insert(ivm::host::ERR_VERIFY);
                     }
                     statuses.push(status);
                 }
@@ -8081,35 +8066,16 @@ mod tests {
     };
 
     #[cfg(feature = "zk-halo2-ipa")]
-    fn sample_open_verify_envelope() -> iroha_zkp_halo2::OpenVerifyEnvelope {
-        iroha_zkp_halo2::OpenVerifyEnvelope {
-            params: iroha_zkp_halo2::IpaParams {
-                version: 1,
-                curve_id: 1,
-                n: 1,
-                g: vec![[0u8; 32]],
-                h: vec![[0u8; 32]],
-                u: [0u8; 32],
-            },
-            public: iroha_zkp_halo2::PolyOpenPublic {
-                version: 1,
-                curve_id: 1,
-                n: 1,
-                z: [0u8; 32],
-                t: [0u8; 32],
-                p_g: [0u8; 32],
-            },
-            proof: iroha_zkp_halo2::IpaProofData {
-                version: 1,
-                l: vec![[0u8; 32]],
-                r: vec![[0u8; 32]],
-                a_final: [0u8; 32],
-                b_final: [0u8; 32],
-            },
-            transcript_label: "test".to_string(),
-            vk_commitment: None,
-            public_inputs_schema_hash: None,
-            domain_tag: None,
+    fn sample_open_verify_envelope() -> iroha_data_model::zk::OpenVerifyEnvelope {
+        let fixture =
+            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+        iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/ipa:tiny-add-v1".to_string(),
+            vk_hash: [1u8; 32],
+            public_inputs: fixture.public_inputs,
+            proof_bytes: fixture.proof_bytes,
+            aux: Vec::new(),
         }
     }
 

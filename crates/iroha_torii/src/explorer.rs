@@ -978,6 +978,7 @@ fn executable_label(executable: &Executable) -> &'static str {
     match executable {
         Executable::Instructions(_) => "Instructions",
         Executable::Ivm(_) => "Wasm",
+        Executable::IvmProved(_) => "WasmProved",
     }
 }
 

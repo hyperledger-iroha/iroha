@@ -743,6 +743,202 @@ impl Executor {
                 .collect();
         }
     }
+
+    #[allow(clippy::too_many_lines)]
+    fn execute_metered_instructions(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instructions: Vec<InstructionBox>,
+        tx_bytes_len: usize,
+        settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
+        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
+        gas_limit_md: Option<u64>,
+        require_gas_limit: bool,
+        gas_asset_opt: Option<String>,
+        fee_sponsor: Option<AccountId>,
+    ) -> Result<(), ValidationFail> {
+        if require_gas_limit && gas_limit_md.is_none() {
+            return Err(ValidationFail::NotPermitted(
+                "missing gas_limit in transaction metadata".to_owned(),
+            ));
+        }
+
+        // 1) Deterministically meter the instruction batch.
+        let used = isi_gas::meter_instructions(&instructions);
+
+        // 2) Enforce optional payer-provided gas limit (caps fee exposure).
+        if let Some(limit) = gas_limit_md
+            && used > limit
+        {
+            return Err(ValidationFail::NotPermitted(format!(
+                "out of gas: used {used} > limit {limit}"
+            )));
+        }
+
+        let instruction_count = instructions.len();
+        let confidential_delta = instructions
+            .iter()
+            .map(crate::gas::confidential_gas_cost)
+            .sum::<u64>();
+
+        // 3) Execute ISIs in order.
+        for isi in instructions {
+            self.execute_instruction(state_transaction, authority, isi)?;
+        }
+
+        // Track confidential gas after successful execution.
+        if confidential_delta > 0 {
+            state_transaction.record_confidential_gas_delta(confidential_delta);
+        }
+
+        // 4) Record gas used for block-level budget enforcement.
+        state_transaction.last_tx_gas_used = used;
+
+        // 5) Charge gas fees when configured and the transaction specified a gas asset.
+        if let Some(gas_asset_id_str) = gas_asset_opt {
+            // Determine rate; require explicit mapping for determinism
+            let gas_rate = state_transaction
+                .pipeline
+                .gas
+                .units_per_gas
+                .iter()
+                .find(|r| r.asset == gas_asset_id_str)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "missing units_per_gas mapping for `{gas_asset_id_str}`"
+                    ))
+                })?;
+
+            let units_per_gas = gas_rate.units_per_gas;
+            let twap_local_per_xor = gas_rate.twap_local_per_xor;
+            let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
+            let liquidity_profile = match gas_rate.liquidity {
+                GasLiquidity::Tier1 => LiquidityProfile::Tier1,
+                GasLiquidity::Tier2 => LiquidityProfile::Tier2,
+                GasLiquidity::Tier3 => LiquidityProfile::Tier3,
+            };
+
+            if used > 0 && units_per_gas > 0 {
+                // Parse tech account id
+                let tech_account: AccountId = parse_account_id_literal(
+                    &state_transaction.world,
+                    &state_transaction.pipeline.gas.tech_account_id,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::InternalError(
+                        "invalid pipeline.gas.tech_account_id; expected account identifier"
+                            .to_owned(),
+                    )
+                })?;
+
+                // Parse gas asset definition id
+                let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
+                    ValidationFail::NotPermitted(
+                        "invalid gas_asset_id; expected `name#domain`".to_owned(),
+                    )
+                })?;
+
+                // Compute fee amount deterministically and guard Numeric bounds
+                let fee_u128 = u128::from(used).saturating_mul(u128::from(units_per_gas));
+                if fee_u128 > 0 {
+                    // Build payer asset id and transfer instruction
+                    let payer_asset = AssetId::new(asset_def.clone(), authority.clone());
+                    let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+                        ValidationFail::NotPermitted(
+                            "fee amount exceeds supported numeric bounds".to_owned(),
+                        )
+                    })?;
+                    let transfer =
+                        iroha_data_model::isi::Transfer::<
+                            Asset,
+                            Numeric,
+                            iroha_data_model::account::Account,
+                        >::asset_numeric(payer_asset, qty, tech_account);
+                    let instr: DMInstructionBox = transfer.into();
+                    instr.execute(authority, state_transaction).map_err(|err| {
+                        iroha_logger::debug!(
+                            ?err,
+                            authority = %authority,
+                            "gas fee transfer failed to apply"
+                        );
+                        ValidationFail::from(err)
+                    })?;
+                    #[cfg(feature = "telemetry")]
+                    {
+                        let delta =
+                            u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
+                        state_transaction.stage_block_fee_units(delta);
+                    }
+
+                    // Capture deterministic settlement receipt once the transfer succeeds.
+                    let source_id = settlement_source_id;
+                    let block_timestamp_ms_u128 =
+                        state_transaction._curr_block.creation_time().as_millis();
+                    let block_timestamp_ms =
+                        u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
+                    let quote = state_transaction
+                        .settlement_engine()
+                        .quote(
+                            source_id,
+                            fee_u128,
+                            twap_local_per_xor,
+                            liquidity_profile,
+                            volatility_bucket,
+                            block_timestamp_ms,
+                        )
+                        .map_err(|err| match err {
+                            QuoteError::LocalAmountOverflow(amount) => {
+                                ValidationFail::NotPermitted(format!(
+                                    "local gas amount {amount} exceeds Decimal range"
+                                ))
+                            }
+                            QuoteError::ZeroTwap => {
+                                ValidationFail::NotPermitted("gas TWAP must be non-zero".to_owned())
+                            }
+                        })?;
+                    let config_snapshot = state_transaction.settlement_engine().config();
+                    let twap_window_seconds = config_snapshot.twap_window.whole_seconds().max(0);
+                    let twap_window_seconds =
+                        u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
+                    let xor_due_micro =
+                        Self::decimal_to_micro_u128(*quote.receipt.xor_due, "xor_due amount")?;
+                    let xor_after_haircut_micro = Self::decimal_to_micro_u128(
+                        *quote.receipt.xor_with_haircut,
+                        "xor_after_haircut amount",
+                    )?;
+                    let xor_variance_micro = xor_due_micro.saturating_sub(xor_after_haircut_micro);
+                    let pending = PendingSettlement {
+                        source_id,
+                        asset_definition_id: asset_def,
+                        local_amount_micro: quote.receipt.local_amount_micro,
+                        xor_due_micro,
+                        xor_after_haircut_micro,
+                        xor_variance_micro,
+                        timestamp_ms: block_timestamp_ms,
+                        liquidity_profile,
+                        volatility_bucket,
+                        twap_local_per_xor,
+                        epsilon_bps: quote.effective_epsilon_bps,
+                        twap_window_seconds,
+                        oracle_timestamp_ms: block_timestamp_ms,
+                    };
+                    state_transaction.record_settlement_receipt(tx_hash, pending);
+                }
+            }
+        }
+
+        Self::charge_nexus_fees(
+            state_transaction,
+            authority,
+            fee_sponsor,
+            tx_bytes_len,
+            instruction_count,
+            used,
+        )?;
+
+        Ok(())
+    }
     /// Execute [`SignedTransaction`].
     ///
     /// # Errors
@@ -766,10 +962,6 @@ impl Executor {
                     "failed to encode transaction for fee metering: {err}"
                 ))
             })?;
-        let instruction_count = match transaction.instructions() {
-            Executable::Instructions(steps) => steps.len(),
-            _ => 0,
-        };
         let fee_sponsor = parse_fee_sponsor(&state_transaction.world, transaction.metadata())?;
         // Bind the transaction call_hash for ISI event emitters to use in audit fields
         let call_hash = transaction.hash_as_entrypoint();
@@ -988,190 +1180,110 @@ impl Executor {
             }
         }
 
+        // Full verification for proof-carrying IVM executables must run before we move the
+        // transaction payload out of `SignedTransaction`.
+        if let Executable::IvmProved(proved) = transaction.instructions() {
+            if gas_limit_md.is_none() {
+                return Err(ValidationFail::NotPermitted(
+                    "missing gas_limit in transaction metadata".to_owned(),
+                ));
+            }
+
+            let map_overlay_error =
+                |err: crate::pipeline::overlay::OverlayBuildError| -> ValidationFail {
+                    match err {
+                        crate::pipeline::overlay::OverlayBuildError::HeaderPolicy(e) => {
+                            ValidationFail::IvmAdmission(e)
+                        }
+                        crate::pipeline::overlay::OverlayBuildError::AxtReject(ctx) => {
+                            ValidationFail::AxtReject(ctx)
+                        }
+                        other => ValidationFail::NotPermitted(other.to_string()),
+                    }
+                };
+
+            let summary = ivm_cache
+                .summarize_program(proved.bytecode.as_ref())
+                .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+            let meta = summary.metadata.clone();
+            crate::pipeline::overlay::validate_header_policy(&meta)
+                .map_err(ValidationFail::IvmAdmission)?;
+
+            let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
+            if wants_zk && !state_transaction.zk.halo2.enabled {
+                return Err(ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
+                        ivm::ivm_mode::ZK,
+                    ),
+                ));
+            }
+
+            crate::pipeline::overlay::enforce_pre_execution_policy(
+                state_transaction.pipeline.ivm_max_cycles_upper_bound,
+                &meta,
+                summary.code_offset,
+                proved.bytecode.as_ref(),
+            )
+            .map_err(map_overlay_error)?;
+
+            crate::pipeline::overlay::validate_contract_binding(
+                state_transaction,
+                &transaction,
+                &summary,
+            )
+            .map_err(map_overlay_error)?;
+
+            crate::pipeline::overlay::enforce_manifest_is_pre_registered(
+                state_transaction,
+                &transaction,
+                summary.code_hash,
+            )
+            .map_err(map_overlay_error)?;
+
+            crate::pipeline::overlay::verify_ivm_proved_execution(
+                state_transaction,
+                &transaction,
+                proved,
+                &summary,
+            )
+            .map_err(map_overlay_error)?;
+        }
+
         let (tx_authority, executable) = transaction.into();
         debug_assert_eq!(&tx_authority, authority, "authority mismatch");
 
         match (self, executable) {
-            (Self::Initial | Self::UserProvided(_), Executable::Instructions(instructions)) => {
-                // 1) Deterministically meter the instruction batch.
-                let used = isi_gas::meter_instructions(instructions.as_ref());
-
-                // 2) Enforce optional payer-provided gas limit (caps fee exposure).
-                if let Some(limit) = gas_limit_md
-                    && used > limit
-                {
-                    return Err(ValidationFail::NotPermitted(format!(
-                        "out of gas: used {used} > limit {limit}"
-                    )));
-                }
-
-                let confidential_delta = instructions
-                    .iter()
-                    .map(crate::gas::confidential_gas_cost)
-                    .sum::<u64>();
-
-                // 3) Execute ISIs in order.
-                for isi in instructions {
-                    self.execute_instruction(state_transaction, authority, isi)?;
-                }
-
-                // Track confidential gas after successful execution.
-                if confidential_delta > 0 {
-                    state_transaction.record_confidential_gas_delta(confidential_delta);
-                }
-
-                // 4) Record gas used for block-level budget enforcement.
-                state_transaction.last_tx_gas_used = used;
-
-                // 5) Charge gas fees when configured and the transaction specified a gas asset.
-                if let Some(gas_asset_id_str) = gas_asset_opt {
-                    // Determine rate; require explicit mapping for determinism
-                    let gas_rate = state_transaction
-                        .pipeline
-                        .gas
-                        .units_per_gas
-                        .iter()
-                        .find(|r| r.asset == gas_asset_id_str)
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "missing units_per_gas mapping for `{gas_asset_id_str}`"
-                            ))
-                        })?;
-
-                    let units_per_gas = gas_rate.units_per_gas;
-                    let twap_local_per_xor = gas_rate.twap_local_per_xor;
-                    let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
-                    let liquidity_profile = match gas_rate.liquidity {
-                        GasLiquidity::Tier1 => LiquidityProfile::Tier1,
-                        GasLiquidity::Tier2 => LiquidityProfile::Tier2,
-                        GasLiquidity::Tier3 => LiquidityProfile::Tier3,
-                    };
-
-                    if used > 0 && units_per_gas > 0 {
-                        // Parse tech account id
-                        let tech_account: AccountId = parse_account_id_literal(
-                            &state_transaction.world,
-                            &state_transaction.pipeline.gas.tech_account_id,
-                        )
-                        .ok_or_else(|| {
-                            ValidationFail::InternalError(
-                                "invalid pipeline.gas.tech_account_id; expected account identifier"
-                                    .to_owned(),
-                            )
-                        })?;
-
-                        // Parse gas asset definition id
-                        let asset_def: AssetDefinitionId =
-                            gas_asset_id_str.parse().map_err(|_| {
-                                ValidationFail::NotPermitted(
-                                    "invalid gas_asset_id; expected `name#domain`".to_owned(),
-                                )
-                            })?;
-
-                        // Compute fee amount deterministically and guard Numeric bounds
-                        let fee_u128 = u128::from(used).saturating_mul(u128::from(units_per_gas));
-                        if fee_u128 > 0 {
-                            // Build payer asset id and transfer instruction
-                            let payer_asset = AssetId::new(asset_def.clone(), authority.clone());
-                            let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                                ValidationFail::NotPermitted(
-                                    "fee amount exceeds supported numeric bounds".to_owned(),
-                                )
-                            })?;
-                            let transfer = iroha_data_model::isi::Transfer::<
-                                Asset,
-                                Numeric,
-                                iroha_data_model::account::Account,
-                            >::asset_numeric(
-                                payer_asset, qty, tech_account
-                            );
-                            let instr: DMInstructionBox = transfer.into();
-                            instr.execute(authority, state_transaction).map_err(|err| {
-                                iroha_logger::debug!(
-                                    ?err,
-                                    authority = %authority,
-                                    "gas fee transfer failed to apply"
-                                );
-                                ValidationFail::from(err)
-                            })?;
-                            #[cfg(feature = "telemetry")]
-                            {
-                                let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
-                                    .unwrap_or(u64::MAX);
-                                state_transaction.stage_block_fee_units(delta);
-                            }
-
-                            // Capture deterministic settlement receipt once the transfer succeeds.
-                            let source_id = settlement_source_id;
-                            let block_timestamp_ms_u128 =
-                                state_transaction._curr_block.creation_time().as_millis();
-                            let block_timestamp_ms =
-                                u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
-                            let quote = state_transaction
-                                .settlement_engine()
-                                .quote(
-                                    source_id,
-                                    fee_u128,
-                                    twap_local_per_xor,
-                                    liquidity_profile,
-                                    volatility_bucket,
-                                    block_timestamp_ms,
-                                )
-                                .map_err(|err| match err {
-                                    QuoteError::LocalAmountOverflow(amount) => {
-                                        ValidationFail::NotPermitted(format!(
-                                            "local gas amount {amount} exceeds Decimal range"
-                                        ))
-                                    }
-                                    QuoteError::ZeroTwap => ValidationFail::NotPermitted(
-                                        "gas TWAP must be non-zero".to_owned(),
-                                    ),
-                                })?;
-                            let config_snapshot = state_transaction.settlement_engine().config();
-                            let twap_window_seconds =
-                                config_snapshot.twap_window.whole_seconds().max(0);
-                            let twap_window_seconds =
-                                u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
-                            let xor_due_micro = Self::decimal_to_micro_u128(
-                                *quote.receipt.xor_due,
-                                "xor_due amount",
-                            )?;
-                            let xor_after_haircut_micro = Self::decimal_to_micro_u128(
-                                *quote.receipt.xor_with_haircut,
-                                "xor_after_haircut amount",
-                            )?;
-                            let xor_variance_micro =
-                                xor_due_micro.saturating_sub(xor_after_haircut_micro);
-                            let pending = PendingSettlement {
-                                source_id,
-                                asset_definition_id: asset_def,
-                                local_amount_micro: quote.receipt.local_amount_micro,
-                                xor_due_micro,
-                                xor_after_haircut_micro,
-                                xor_variance_micro,
-                                timestamp_ms: block_timestamp_ms,
-                                liquidity_profile,
-                                volatility_bucket,
-                                twap_local_per_xor,
-                                epsilon_bps: quote.effective_epsilon_bps,
-                                twap_window_seconds,
-                                oracle_timestamp_ms: block_timestamp_ms,
-                            };
-                            state_transaction.record_settlement_receipt(tx_hash, pending);
-                        }
-                    }
-                }
-
-                Self::charge_nexus_fees(
+            (Self::Initial | Self::UserProvided(_), Executable::Instructions(instructions)) => self
+                .execute_metered_instructions(
                     state_transaction,
                     authority,
-                    fee_sponsor.clone(),
+                    instructions.into_vec(),
                     tx_bytes_len,
-                    instruction_count,
-                    used,
-                )?;
-
-                Ok(())
+                    settlement_source_id,
+                    tx_hash,
+                    gas_limit_md,
+                    false,
+                    gas_asset_opt,
+                    fee_sponsor,
+                ),
+            (Self::Initial | Self::UserProvided(_), Executable::IvmProved(proved)) => {
+                let mut instructions = proved.overlay.into_vec();
+                crate::pipeline::overlay::prune_redundant_contract_ops(
+                    state_transaction,
+                    &mut instructions,
+                );
+                self.execute_metered_instructions(
+                    state_transaction,
+                    authority,
+                    instructions,
+                    tx_bytes_len,
+                    settlement_source_id,
+                    tx_hash,
+                    gas_limit_md,
+                    true,
+                    gas_asset_opt,
+                    fee_sponsor,
+                )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
                 // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
@@ -1368,7 +1480,7 @@ impl Executor {
                     authority,
                     fee_sponsor,
                     tx_bytes_len,
-                    instruction_count,
+                    0,
                     gas_used,
                 )?;
                 ivm_cache.put_cached_runtime(&runtime);

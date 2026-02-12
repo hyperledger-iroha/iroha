@@ -13,7 +13,6 @@ use iroha_core::{
     state::State,
     zk::test_utils::halo2_fixture_envelope,
 };
-use iroha_crypto::Hash;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     isi::verifying_keys,
@@ -76,58 +75,6 @@ fn derive_ballot_nullifier(
     out
 }
 
-#[allow(clippy::too_many_arguments)]
-fn compute_domain_tag(
-    chain_id_bytes: &[u8],
-    backend_label: &str,
-    curve_label: &str,
-    vk_commitment: [u8; 32],
-    schema_hash: [u8; 32],
-    manifest: &str,
-    namespace: &str,
-    syscall_label: &str,
-) -> [u8; 32] {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"iroha.zk.domain/v1");
-    buf.extend_from_slice(chain_id_bytes);
-    buf.extend_from_slice(backend_label.as_bytes());
-    buf.extend_from_slice(curve_label.as_bytes());
-    buf.extend_from_slice(&vk_commitment);
-    buf.extend_from_slice(&schema_hash);
-    buf.extend_from_slice(syscall_label.as_bytes());
-    buf.extend_from_slice(manifest.as_bytes());
-    buf.extend_from_slice(namespace.as_bytes());
-    *Hash::new(&buf).as_ref()
-}
-
-fn build_open_verify_envelope_bytes(
-    k: u32,
-    vk_commitment: [u8; 32],
-    schema_hash: [u8; 32],
-    domain_tag: [u8; 32],
-) -> Vec<u8> {
-    use h2::norito_helpers as nh;
-    use iroha_zkp_halo2::{self as h2, backend::pallas::PallasBackend};
-    let params = h2::Params::new(k.try_into().unwrap()).expect("params");
-    // Build a trivial polynomial and opening proof; the coefficient vector must match params.n().
-    let coeffs: Vec<h2::PrimeField64> = vec![0u64.into(); params.n()];
-    let poly = h2::Polynomial::from_coeffs(coeffs);
-    let mut tr = h2::Transcript::new(ivm::host::LABEL_VOTE_BALLOT);
-    let p_g = poly.commit(&params).expect("commit");
-    let z = h2::PrimeField64::from(1u64);
-    let (proof, t) = poly.open(&params, &mut tr, z, p_g).expect("open");
-    let env = h2::OpenVerifyEnvelope {
-        params: nh::params_to_wire(&params),
-        public: nh::poly_open_public::<PallasBackend>(params.n(), z, t, p_g),
-        proof: nh::proof_to_wire(&proof),
-        transcript_label: ivm::host::LABEL_VOTE_BALLOT.to_string(),
-        vk_commitment: Some(vk_commitment),
-        public_inputs_schema_hash: Some(schema_hash),
-        domain_tag: Some(domain_tag),
-    };
-    norito::to_bytes(&env).expect("encode env")
-}
-
 #[test]
 fn verify_then_vendor_submit_ballot_applies() {
     // Minimal node state
@@ -160,23 +107,14 @@ fn verify_then_vendor_submit_ballot_applies() {
     host.set_chain_id_bytes(chain_id_bytes.clone());
     let backend_label = "halo2/ipa";
     let circuit_id = "halo2/ipa:tiny-add2inst-public-v1";
-    let fixture = halo2_fixture_envelope(circuit_id, [0u8; 32]);
-    let vk_bytes = fixture.vk_bytes.clone().expect("fixture vk bytes");
+    let fixture_seed = halo2_fixture_envelope(circuit_id, [0u8; 32]);
+    let vk_bytes = fixture_seed.vk_bytes.clone().expect("fixture vk bytes");
     let mut hasher = Sha256::new();
     hasher.update(backend_label.as_bytes());
     hasher.update(&vk_bytes);
     let vk_commitment: [u8; 32] = hasher.finalize().into();
+    let fixture = halo2_fixture_envelope(circuit_id, vk_commitment);
     let schema_hash = fixture.schema_hash;
-    let domain_tag = compute_domain_tag(
-        &chain_id_bytes,
-        backend_label,
-        "pallas",
-        vk_commitment,
-        schema_hash,
-        "core",
-        "ballot",
-        "zk_verify_ballot/v1",
-    );
     let mut vk_record = VerifyingKeyRecord::new_with_owner(
         1,
         circuit_id,
@@ -242,7 +180,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     .expect("register ballot vk");
 
     // 1) Verify ballot: prepare envelope TLV in INPUT and run SCALL
-    let env_bytes = build_open_verify_envelope_bytes(8, vk_commitment, schema_hash, domain_tag);
+    let env_bytes = fixture.proof_bytes.clone();
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);

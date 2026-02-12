@@ -3887,7 +3887,11 @@ impl IVMHost for WsvHost {
             | syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                // Expect NoritoBytes TLV in r10 for Halo2OpenVerify envelope
+                // Expect NoritoBytes TLV in r10 for a `iroha_data_model::zk::OpenVerifyEnvelope`.
+                //
+                // Note: `WsvHost` is a development/mock host. It does not perform full
+                // cryptographic proof verification. The production node host (CoreHost)
+                // verifies the proof end-to-end.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
@@ -3898,17 +3902,6 @@ impl IVMHost for WsvHost {
                     vm.set_register(11, crate::host::ERR_ENVELOPE_SIZE);
                     return Ok(0);
                 }
-                // Enforce backend/curve/max_k policy from host config
-                // Decode only the params header to check k and curve id
-                let env: iroha_zkp_halo2::OpenVerifyEnvelope =
-                    match norito::decode_from_bytes(tlv.payload) {
-                        Ok(env) => env,
-                        Err(_) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, crate::host::ERR_DECODE);
-                            return Ok(0);
-                        }
-                    };
                 let env_hash: [u8; 32] = CryptoHash::new(tlv.payload).into();
                 if !self.zk_cfg.enabled {
                     vm.set_register(10, 0);
@@ -3920,95 +3913,39 @@ impl IVMHost for WsvHost {
                     vm.set_register(11, crate::host::ERR_BACKEND);
                     return Ok(0);
                 }
-                if env.transcript_label.len() > self.zk_cfg.max_transcript_label_len
-                    || (self.zk_cfg.enforce_transcript_label_ascii
-                        && !env.transcript_label.is_ascii())
-                {
+                let env: iroha_data_model::zk::OpenVerifyEnvelope =
+                    match norito::decode_from_bytes(tlv.payload) {
+                        Ok(env) => env,
+                        Err(_) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, crate::host::ERR_DECODE);
+                            return Ok(0);
+                        }
+                    };
+                if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
                     vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_TRANSCRIPT_LABEL);
+                    vm.set_register(11, crate::host::ERR_BACKEND);
                     return Ok(0);
                 }
-                let expected_label = match number {
-                    syscalls::SYSCALL_ZK_VERIFY_TRANSFER => crate::host::LABEL_TRANSFER,
-                    syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => crate::host::LABEL_UNSHIELD,
-                    syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => crate::host::LABEL_VOTE_BALLOT,
-                    syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => crate::host::LABEL_VOTE_TALLY,
-                    _ => crate::host::LABEL_TRANSFER,
-                };
-                if env.transcript_label != expected_label {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_TRANSCRIPT_LABEL);
-                    return Ok(0);
-                }
-                let proof_len = norito::to_bytes(&env.proof)
-                    .ok()
-                    .map(|b| b.len())
-                    .unwrap_or(usize::MAX);
-                if proof_len > self.zk_cfg.max_proof_bytes {
+                if env.proof_bytes.len() > self.zk_cfg.max_proof_bytes {
                     vm.set_register(10, 0);
                     vm.set_register(11, crate::host::ERR_PROOF_LEN);
                     return Ok(0);
                 }
-                let curve_ok = match (self.zk_cfg.curve, env.params.curve_id) {
-                    (crate::host::ZkCurve::Pallas, cid)
-                        if cid == iroha_zkp_halo2::ZkCurveId::Pallas.as_u16() =>
-                    {
-                        true
+
+                // Mock host treats the envelope as verified if it passes basic gating.
+                vm.set_register(10, 1);
+                vm.set_register(11, 0);
+                match number {
+                    syscalls::SYSCALL_ZK_VERIFY_TRANSFER => self.zk_verified_transfer = true,
+                    syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => self.zk_verified_unshield = true,
+                    syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
+                        self.zk_verified_ballot.push_back(env_hash);
                     }
-                    (crate::host::ZkCurve::Pasta, cid)
-                        if cid == iroha_zkp_halo2::ZkCurveId::Pasta.as_u16() =>
-                    {
-                        true
+                    syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
+                        self.zk_verified_tally = Some(env_hash);
                     }
-                    (crate::host::ZkCurve::Goldilocks, cid)
-                        if cid == iroha_zkp_halo2::ZkCurveId::Goldilocks.as_u16() =>
-                    {
-                        true
-                    }
-                    (crate::host::ZkCurve::Bn254, cid)
-                        if cid == iroha_zkp_halo2::ZkCurveId::Bn254.as_u16() =>
-                    {
-                        true
-                    }
-                    _ => false,
-                };
-                if !curve_ok {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_CURVE);
-                    return Ok(0);
-                }
-                let n = env.params.n as usize;
-                let k = if n.is_power_of_two() {
-                    n.trailing_zeros()
-                } else {
-                    u32::MAX
-                };
-                if k == u32::MAX || k > self.zk_cfg.max_k {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_K);
-                    return Ok(0);
-                }
-                let env_bytes = norito::to_bytes(&env).map_err(|_| VMError::NoritoInvalid)?;
-                if env_bytes.len() > self.zk_cfg.max_envelope_bytes {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_ENVELOPE_SIZE);
-                    return Ok(0);
-                }
-                let ok = crate::zk_verify::verify_open_envelope(&env_bytes).unwrap_or(false);
-                vm.set_register(10, if ok { 1 } else { 0 });
-                vm.set_register(11, if ok { 0 } else { crate::host::ERR_VERIFY });
-                if ok {
-                    match number {
-                        syscalls::SYSCALL_ZK_VERIFY_TRANSFER => self.zk_verified_transfer = true,
-                        syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => self.zk_verified_unshield = true,
-                        syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
-                            self.zk_verified_ballot.push_back(env_hash);
-                        }
-                        syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                            self.zk_verified_tally = Some(env_hash);
-                        }
-                        _ => {}
-                    }
+                    _ => {}
                 }
                 Ok(0)
             }

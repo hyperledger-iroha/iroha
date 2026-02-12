@@ -2600,6 +2600,21 @@ impl Nts {
     }
 }
 
+/// User-level configuration for admitting `Executable::IvmProved` (proof-carrying IVM overlays).
+#[derive(Debug, ReadConfig, Clone)]
+pub struct IvmProvedExecution {
+    /// Whether `Executable::IvmProved` is accepted by the execution pipeline.
+    ///
+    /// Default is `false` until a full end-to-end IVM execution proof system is shipped.
+    #[config(default = "defaults::pipeline::ivm_proved::ENABLED")]
+    pub enabled: bool,
+    /// Allowlist of circuit IDs accepted for `Executable::IvmProved`.
+    ///
+    /// An empty allowlist rejects all proved executions, even when `enabled = true`.
+    #[config(default = "Vec::new()")]
+    pub allowed_circuits: Vec<String>,
+}
+
 /// User-level configuration container for `Pipeline`.
 #[derive(Debug, ReadConfig)]
 #[allow(clippy::struct_excessive_bools)]
@@ -2734,6 +2749,9 @@ pub struct Pipeline {
         default = "defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS"
     )]
     pub overlay_chunk_instructions: usize,
+    /// `Executable::IvmProved` admission/verification settings.
+    #[config(nested)]
+    pub ivm_proved: IvmProvedExecution,
     /// Gas-fee configuration (accepted assets, conversion, and tech account).
     #[config(nested)]
     pub gas: Gas,
@@ -3503,9 +3521,19 @@ impl Oracle {
     }
 }
 
+impl IvmProvedExecution {
+    fn parse(self) -> actual::IvmProvedExecution {
+        actual::IvmProvedExecution {
+            enabled: self.enabled,
+            allowed_circuits: self.allowed_circuits,
+        }
+    }
+}
+
 impl Pipeline {
     fn parse(self) -> actual::Pipeline {
         actual::Pipeline {
+            ivm_proved: self.ivm_proved.parse(),
             dynamic_prepass: self.dynamic_prepass,
             access_set_cache_enabled: self.access_set_cache_enabled,
             parallel_overlay: self.parallel_overlay,
@@ -3614,6 +3642,10 @@ mod pipeline_tests {
             overlay_max_instructions: defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
             overlay_max_bytes: defaults::pipeline::OVERLAY_MAX_BYTES,
             overlay_chunk_instructions: defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
+            ivm_proved: IvmProvedExecution {
+                enabled: defaults::pipeline::ivm_proved::ENABLED,
+                allowed_circuits: Vec::new(),
+            },
             gas: Gas {
                 tech_account_id: defaults::pipeline::GAS_TECH_ACCOUNT_ID.to_string(),
                 accepted_assets: Vec::new(),

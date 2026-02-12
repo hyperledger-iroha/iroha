@@ -287,6 +287,137 @@ pub mod test_utils {
         }
     }
 
+    /// Deterministic Halo2 IPA fixture for the `ivm-overlay-bind-v1` circuit.
+    ///
+    /// The circuit exposes 8 instance columns (1 row each) and constrains witness
+    /// values to equal those instances. This is used by `Executable::IvmProved`
+    /// to bind proofs to `(code_hash, overlay_hash)` public inputs.
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[must_use]
+    pub fn halo2_ivm_overlay_bind_envelope(
+        code_hash: CryptoHash,
+        overlay_hash: CryptoHash,
+    ) -> FixtureEnvelope {
+        use ff::PrimeField as _;
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{ProvingKey, create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+
+        const CIRCUIT_ID: &str = "halo2/ipa:ivm-overlay-bind-v1";
+
+        #[derive(Clone)]
+        struct KeyMaterial {
+            k: u32,
+            pk: ProvingKey<Curve>,
+            vk_bytes: Vec<u8>,
+        }
+
+        fn keys() -> &'static KeyMaterial {
+            static CACHE: OnceLock<KeyMaterial> = OnceLock::new();
+            CACHE.get_or_init(|| {
+                let k = 6u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::IvmOverlayBind::default();
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+
+                KeyMaterial { k, pk, vk_bytes }
+            })
+        }
+
+        fn limbs(hash: &CryptoHash) -> [u64; 4] {
+            let bytes: &[u8; 32] = hash.as_ref();
+            let mut out = [0u64; 4];
+            for (i, limb) in out.iter_mut().enumerate() {
+                let start = i * 8;
+                let end = start + 8;
+                *limb = u64::from_le_bytes(bytes[start..end].try_into().expect("8 bytes"));
+            }
+            out
+        }
+
+        let code_limbs = limbs(&code_hash);
+        let overlay_limbs = limbs(&overlay_hash);
+        let values: [Scalar; 8] = [
+            Scalar::from(code_limbs[0]),
+            Scalar::from(code_limbs[1]),
+            Scalar::from(code_limbs[2]),
+            Scalar::from(code_limbs[3]),
+            Scalar::from(overlay_limbs[0]),
+            Scalar::from(overlay_limbs[1]),
+            Scalar::from(overlay_limbs[2]),
+            Scalar::from(overlay_limbs[3]),
+        ];
+
+        let inst_cols_owned: Vec<Vec<Scalar>> = values.iter().map(|v| vec![*v]).collect();
+        let inst_cols: Vec<&[Scalar]> = inst_cols_owned.iter().map(Vec::as_slice).collect();
+        let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+
+        let circuit = super::pasta_tiny::IvmOverlayBind { values };
+
+        let material = keys();
+        let params = pasta_params_new(material.k);
+
+        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+        let mut rng = fixture_rng(0x5EED_F1C7_1234_5690);
+        create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
+            &params,
+            &material.pk,
+            &[circuit],
+            &inst_refs,
+            &mut rng,
+            &mut transcript,
+        )
+        .expect("create proof");
+        let proof_raw = transcript.finalize();
+
+        let mut proof_bytes = super::zk1::wrap_start();
+        super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+        super::zk1::wrap_append_instances_pasta_fp_cols(inst_cols.as_slice(), &mut proof_bytes);
+
+        let mut public_inputs = Vec::with_capacity(values.len() * 32);
+        for value in values {
+            public_inputs.extend_from_slice(value.to_repr().as_ref());
+        }
+        let schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+
+        let vk_hash = {
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), material.vk_bytes.clone());
+            super::hash_vk(&vk_box)
+        };
+
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: CIRCUIT_ID.to_owned(),
+            vk_hash,
+            public_inputs: public_inputs.clone(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        let proof_bytes =
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        FixtureEnvelope {
+            proof_bytes,
+            public_inputs,
+            schema_hash,
+            vk_bytes: Some(material.vk_bytes.clone()),
+        }
+    }
+
     type FixtureBundle = fn() -> (Vec<u8>, Vec<u8>, Vec<u8>);
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -4726,6 +4857,81 @@ mod pasta_tiny {
         }
     }
 
+    /// Circuit binding eight single-row instance columns to witness values.
+    ///
+    /// This is used by `Executable::IvmProved` as a minimal binding gadget: it proves
+    /// that the supplied proof is tied to the public inputs carried in the proof
+    /// envelope (for Iroha, `(code_hash, overlay_hash)` split into `u64` limbs).
+    ///
+    /// Note: This circuit does **not** prove correct IVM execution by itself.
+    #[derive(Clone)]
+    pub struct IvmOverlayBind {
+        /// Witness values constrained to equal the corresponding public instances.
+        pub values: [Scalar; 8],
+    }
+
+    impl Default for IvmOverlayBind {
+        fn default() -> Self {
+            Self {
+                values: [Scalar::from(0); 8],
+            }
+        }
+    }
+
+    impl Circuit<Scalar> for IvmOverlayBind {
+        type Config = (
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 8],
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            meta.set_minimum_degree(3);
+            let adv = std::array::from_fn(|_| meta.advice_column());
+            let inst = std::array::from_fn(|_| meta.instance_column());
+            let s = meta.selector();
+            meta.create_gate("ivm_overlay_bind", |meta| {
+                let s = meta.query_selector(s);
+                let mut cons = Vec::with_capacity(8);
+                for i in 0..8 {
+                    let a = meta.query_advice(adv[i], Rotation::cur());
+                    let p = meta.query_instance(inst[i], Rotation::cur());
+                    cons.push(s.clone() * (a - p));
+                }
+                cons
+            });
+            (adv, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (adv, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let values = self.values;
+            layouter.assign_region(
+                || "ivm_overlay_bind",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    for (i, column) in adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("a{i}"),
+                            *column,
+                            0,
+                            || Value::known(values[i]),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
     #[derive(Clone, Default)]
     pub struct AnonTransfer2x2;
     impl Circuit<Scalar> for AnonTransfer2x2 {
@@ -7753,6 +7959,29 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() < 2 {
                 return false;
             }
+            let mut transcript =
+                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+            let strategy = SingleVerifier::new(&params);
+            let proofs_instances = [&col_refs[..]];
+            verify_proof(
+                &params,
+                vk_h2.as_ref(),
+                strategy,
+                &proofs_instances,
+                &mut transcript,
+            )
+            .is_ok()
+        }
+        "halo2/pasta/ivm-overlay-bind-v1" => {
+            // Instances: 8 columns (code_hash limbs + overlay_hash limbs), 1 row each.
+            if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
+                return false;
+            }
+            let circuit = pasta_tiny::IvmOverlayBind::default();
+            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
             let mut transcript =
                 Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
             let strategy = SingleVerifier::new(&params);

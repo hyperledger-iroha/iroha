@@ -9,6 +9,7 @@ use std::sync::Arc;
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
+    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_data_model::{
     isi::InstructionBox,
@@ -18,7 +19,7 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
-use norito::{decode_from_bytes, to_bytes};
+use norito::to_bytes;
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -33,41 +34,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 
 fn store_tlv(vm: &mut IVM, tlv: &[u8]) -> u64 {
     vm.alloc_input_tlv(tlv).expect("write TLV into INPUT")
-}
-
-fn mock_env(curve_id: u16, k: u32) -> Vec<u8> {
-    let n = 1u32 << k;
-    let zero_point = [0u8; 32];
-    let env = iroha_zkp_halo2::OpenVerifyEnvelope {
-        params: iroha_zkp_halo2::IpaParams {
-            version: 1,
-            curve_id,
-            n,
-            g: vec![zero_point; n as usize],
-            h: vec![zero_point; n as usize],
-            u: zero_point,
-        },
-        public: iroha_zkp_halo2::PolyOpenPublic {
-            version: 1,
-            curve_id,
-            n,
-            z: zero_point,
-            t: zero_point,
-            p_g: zero_point,
-        },
-        proof: iroha_zkp_halo2::IpaProofData {
-            version: 1,
-            l: Vec::new(),
-            r: Vec::new(),
-            a_final: zero_point,
-            b_final: zero_point,
-        },
-        transcript_label: ivm::host::LABEL_TRANSFER.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
-    norito::to_bytes(&env).expect("encode env")
 }
 
 #[test]
@@ -118,8 +84,7 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
     vm.load_program(&meta.encode()).expect("load metadata");
 
     // Prepare a ZK_VERIFY_TRANSFER envelope TLV with a compact mock payload.
-    let env = mock_env(iroha_zkp_halo2::ZkCurveId::Pallas.as_u16(), 2);
-    decode_from_bytes::<iroha_zkp_halo2::OpenVerifyEnvelope>(&env).expect("env decodes");
+    let env = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]).proof_bytes;
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env);
     let ptr_verify = store_tlv(&mut vm, &tlv);
     vm.memory

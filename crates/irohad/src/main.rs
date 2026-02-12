@@ -7140,6 +7140,11 @@ fn verify_genesis_metadata(
                     "genesis transaction payload contains raw IVM bytecode; expected instruction batches",
                 ));
             }
+            Executable::IvmProved(_) => {
+                return Err(Report::new(MainError::Config).attach(
+                    "genesis transaction payload contains proved IVM bytecode; expected instruction batches",
+                ));
+            }
         }
     }
 

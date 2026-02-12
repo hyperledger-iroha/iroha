@@ -471,7 +471,7 @@ impl SignedTransaction {
                 modified.extend(additions);
                 *instructions = modified.into();
             }
-            Executable::Ivm(_) => {
+            Executable::Ivm(_) | Executable::IvmProved(_) => {
                 Self::apply_fault_injection_overlay(&mut self.payload.metadata, additions);
             }
         }
