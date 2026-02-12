@@ -12070,6 +12070,29 @@ impl Actor {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
+        if session.total_chunks() != 0 && session.received_chunks() < session.total_chunks() {
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            let hydrated = self.maybe_hydrate_rbc_session_from_pending_block(key, None)?;
+            let Some(reloaded_session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
+                return Ok(());
+            };
+            session = reloaded_session;
+            if session.is_invalid() {
+                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                return Ok(());
+            }
+            if hydrated {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    received = session.received_chunks(),
+                    total = session.total_chunks(),
+                    "hydrated RBC session from pending block before READY emission"
+                );
+            }
+        }
 
         let now = Instant::now();
         let mut invalidated = false;
@@ -13300,6 +13323,30 @@ impl Actor {
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
+        }
+        if session.total_chunks() != 0 && session.received_chunks() < session.total_chunks() {
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            let hydrated = self.maybe_hydrate_rbc_session_from_pending_block(key, None)?;
+            let Some(reloaded_session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
+                return Ok(());
+            };
+            session = reloaded_session;
+            if session.delivered || session.is_invalid() {
+                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                return Ok(());
+            }
+            if hydrated {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    received = session.received_chunks(),
+                    total = session.total_chunks(),
+                    "hydrated RBC session from pending block before DELIVER emission"
+                );
+            }
         }
 
         let ready_count = session.ready_signatures.len();
@@ -14934,6 +14981,7 @@ enum ProposalDeferWarningKind {
     HighestQcMissing,
     ParentMissing,
     InsufficientOnlinePeers,
+    ProceedingBelowQuorumAfterGrace,
 }
 
 #[derive(Debug, Default)]

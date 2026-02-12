@@ -798,7 +798,8 @@ mod tests {
             ConsensusMode::Permissioned,
         );
 
-        let expected = peers[..2].to_vec();
+        let mut expected = peers[..2].to_vec();
+        expected.sort();
         assert_eq!(roster, expected);
     }
 
