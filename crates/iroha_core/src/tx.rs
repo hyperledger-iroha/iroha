@@ -1757,6 +1757,9 @@ impl StateBlock<'_> {
         })?;
         let meta = summary.metadata.clone();
         let offset = summary.code_offset;
+        // Compute code_hash over the program body (bytes after header) and ABI hash for the policy.
+        let code_hash = summary.code_hash;
+        let abi_hash = summary.abi_hash;
 
         // Version gate: accept known major versions only (1.x for now).
         if meta.version_major != 1 {
@@ -1793,6 +1796,47 @@ impl StateBlock<'_> {
                     ),
                 ),
             ));
+        }
+
+        // Runtime upgrade admission: if there is an activated runtime upgrade record for this ABI
+        // version, require that the computed ABI hash matches the active manifest.
+        //
+        // This is redundant under the v1-only policy (all valid manifests must match ABI v1),
+        // but guards against tampered WSV and keeps admission deterministic across nodes.
+        {
+            let current_height = state_transaction._curr_block.height().get();
+            let version = u16::from(meta.abi_version);
+            let mut active: Option<(u64, Hash)> = None;
+            for (_id, rec) in state_transaction.world.runtime_upgrades.iter() {
+                let at = match rec.status {
+                    iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(at) => at,
+                    _ => continue,
+                };
+                if at > current_height {
+                    continue;
+                }
+                if rec.manifest.abi_version != version {
+                    continue;
+                }
+                let expected = Hash::prehashed(rec.manifest.abi_hash);
+                if active.map_or(true, |(best_at, _)| at > best_at) {
+                    active = Some((at, expected));
+                }
+            }
+            if let Some((_at, expected)) = active {
+                if expected != abi_hash {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::IvmAdmission(
+                            iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
+                                iroha_data_model::executor::ManifestAbiHashMismatchInfo {
+                                    expected,
+                                    actual: abi_hash,
+                                },
+                            ),
+                        ),
+                    ));
+                }
+            }
         }
 
         // Vector length: 0 means "auto"; otherwise require a sane bound.
@@ -1935,9 +1979,6 @@ impl StateBlock<'_> {
         }
 
         // Optional manifest validation (lookup by code_hash).
-        // Compute code_hash over the program body (bytes after header) and ABI hash for the policy.
-        let code_hash = summary.code_hash;
-        let abi_hash = summary.abi_hash;
         let validate_manifest =
             |manifest: &ContractManifest| -> Result<(), TransactionRejectionReason> {
                 if let Some(mh) = manifest.code_hash

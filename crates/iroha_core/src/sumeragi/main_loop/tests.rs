@@ -18639,6 +18639,10 @@ async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
 async fn request_missing_block_after_rbc_drop_uses_fallback_roster_when_session_roster_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
 
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(2);
@@ -18680,6 +18684,10 @@ async fn request_missing_block_after_rbc_drop_uses_fallback_roster_when_session_
 async fn handle_rbc_ready_accepts_init_roster_when_derived_missing_permissioned() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
 
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(2);
@@ -18762,6 +18770,10 @@ async fn handle_rbc_ready_accepts_init_roster_when_derived_missing_permissioned(
 async fn maybe_emit_rbc_ready_allows_init_roster_when_derived_missing_permissioned() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
     let background_log = attach_background_log(actor);
 
     let committed_height = actor.state.view().height() as u64;
@@ -18818,6 +18830,10 @@ async fn maybe_emit_rbc_ready_allows_init_roster_when_derived_missing_permission
 async fn maybe_emit_rbc_deliver_allows_init_roster_when_derived_missing_permissioned() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
     let background_log = attach_background_log(actor);
 
     let committed_height = actor.state.view().height() as u64;
@@ -39736,9 +39752,10 @@ async fn new_view_tracker_corrects_highest_view_after_parent_arrives() {
 async fn new_view_roster_rolls_forward_from_commit_qc_history() {
     use crate::sumeragi::status;
 
-    status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _commit_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
 
     let hash_height1 =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
@@ -39817,9 +39834,10 @@ async fn new_view_roster_rolls_forward_from_commit_qc_history() {
 async fn new_view_roster_ignores_commit_qc_hash_mismatch() {
     use crate::sumeragi::status;
 
-    status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _commit_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
 
     let hash_height1 =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; Hash::LENGTH]));
@@ -39931,9 +39949,10 @@ async fn new_view_roster_ignores_commit_qc_hash_mismatch() {
 async fn new_view_roster_prefers_active_topology_at_next_height() {
     use crate::sumeragi::status;
 
-    status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _commit_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
 
     let hash_height1 =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH]));
@@ -40023,9 +40042,10 @@ async fn new_view_roster_prefers_active_topology_at_next_height() {
 async fn new_view_roster_empty_for_gap_without_history() {
     use crate::sumeragi::status;
 
-    status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _commit_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
 
     let hash_height1 =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH]));
@@ -53356,7 +53376,10 @@ async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
     let session = RbcSession::test_new(0, Some(Hash::new(b"payload")), None, 0);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
-    actor.maybe_emit_rbc_deliver(key).expect("first deferral");
+    let now = Instant::now();
+    actor
+        .maybe_emit_rbc_deliver_at(key, now)
+        .expect("first deferral");
     let first = actor
         .subsystems
         .da_rbc
@@ -53365,7 +53388,9 @@ async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
         .get(&key)
         .copied()
         .expect("deferral tracked");
-    actor.maybe_emit_rbc_deliver(key).expect("second deferral");
+    actor
+        .maybe_emit_rbc_deliver_at(key, now)
+        .expect("second deferral");
     let second = actor
         .subsystems
         .da_rbc

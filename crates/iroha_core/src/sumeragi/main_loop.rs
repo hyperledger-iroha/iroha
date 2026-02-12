@@ -13315,6 +13315,15 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     fn maybe_emit_rbc_deliver(&mut self, key: super::rbc_store::SessionKey) -> Result<()> {
+        self.maybe_emit_rbc_deliver_at(key, Instant::now())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn maybe_emit_rbc_deliver_at(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        now: Instant,
+    ) -> Result<()> {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
@@ -13356,7 +13365,7 @@ impl Actor {
         if commit_topology.is_empty() {
             if self.should_emit_rbc_deliver_deferral(
                 key,
-                Instant::now(),
+                now,
                 ready_count,
                 received_chunks,
                 total_chunks,
@@ -13384,7 +13393,7 @@ impl Actor {
         if !roster_source.is_authoritative() && !allow_unverified {
             if self.should_emit_rbc_deliver_deferral(
                 key,
-                Instant::now(),
+                now,
                 ready_count,
                 received_chunks,
                 total_chunks,
@@ -13419,7 +13428,7 @@ impl Actor {
             };
             if !self.should_emit_rbc_deliver_deferral(
                 key,
-                Instant::now(),
+                now,
                 ready_count,
                 received_chunks,
                 total_chunks,
@@ -13510,7 +13519,7 @@ impl Actor {
         if missing_chunks && !allow_missing_chunks {
             if !self.should_emit_rbc_deliver_deferral(
                 key,
-                Instant::now(),
+                now,
                 ready_count,
                 received_chunks,
                 total_chunks,
