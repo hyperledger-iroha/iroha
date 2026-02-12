@@ -5259,6 +5259,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_limits_vote_burst_when_blocks_pending() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let vote_total = VOTE_BURST_CAP_WITH_BLOCKS + 1;
@@ -11060,7 +11061,11 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                     status::record_worker_iteration(
                         u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
                     );
-                    (next_deadline, cfg.tick_min_gap, guard.actor_mut().should_bypass_tick_gap())
+                    (
+                        next_deadline,
+                        cfg.tick_min_gap,
+                        guard.actor_mut().should_bypass_tick_gap(),
+                    )
                 };
                 if active.fetch_sub(1, Ordering::Relaxed) == 1 {
                     status::set_worker_stage(status::WorkerLoopStage::Idle);
