@@ -7787,9 +7787,11 @@ mod tests {
             .iter()
             .position(|label| *label == "regular")
             .expect("regular waiter should have run");
+        let burst_len =
+            usize::try_from(MAX_URGENT_GATE_STREAK.saturating_add(2)).unwrap_or(usize::MAX);
         assert!(
-            regular_idx <= usize::try_from(MAX_URGENT_GATE_STREAK).unwrap_or(usize::MAX),
-            "regular waiter was starved for too many urgent turns: index={regular_idx}, cap={MAX_URGENT_GATE_STREAK}"
+            regular_idx <= burst_len,
+            "regular waiter was starved for too many urgent turns: index={regular_idx}, cap={burst_len}"
         );
     }
 

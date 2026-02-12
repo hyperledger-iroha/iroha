@@ -937,6 +937,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let result = build_network_blocking_or_skip(
             NetworkBuilder::new(),
             "build_network_blocking_or_skip_returns_network",
