@@ -539,6 +539,7 @@ impl Queue {
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
         match tx.as_ref().instructions() {
             Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+            Executable::IvmProved(proved) => gas::meter_instructions(proved.overlay.as_ref()),
             Executable::Ivm(_) => match crate::executor::parse_gas_limit(tx.as_ref().metadata()) {
                 Ok(Some(limit)) => limit,
                 Ok(None) => {
@@ -2648,6 +2649,7 @@ impl Queue {
                 let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
                 gas::meter_instructions(&instructions)
             }
+            Executable::IvmProved(proved) => gas::meter_instructions(proved.overlay.as_ref()),
             Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
         }
     }
@@ -4249,6 +4251,9 @@ pub mod tests {
                 crate::gas::meter_instructions(batch.as_ref())
             }
             iroha_data_model::transaction::Executable::Ivm(_) => {
+                panic!("expected ISI transaction for gas test")
+            }
+            iroha_data_model::transaction::Executable::IvmProved(_) => {
                 panic!("expected ISI transaction for gas test")
             }
         };

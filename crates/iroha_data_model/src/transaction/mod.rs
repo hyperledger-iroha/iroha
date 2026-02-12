@@ -9,7 +9,7 @@ pub mod receipt;
 /// Signed transaction forms and helpers.
 pub mod signed;
 
-pub use executable::{Executable, IvmBytecode};
+pub use executable::{Executable, IvmBytecode, IvmProved};
 pub use receipt::{
     TX_SUBMISSION_RECEIPT_DOMAIN, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
 };
@@ -23,7 +23,7 @@ pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntryp
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
-        DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep, IvmBytecode,
+        DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep, IvmBytecode, IvmProved,
         SignedTransaction, TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint, TransactionBuilder,
         TransactionEntrypoint, TransactionResult, TransactionResultInner, TransactionSignature,
         TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,

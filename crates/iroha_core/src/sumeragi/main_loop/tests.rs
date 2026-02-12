@@ -41599,6 +41599,7 @@ async fn proposal_gas_budget_limits_fetch() {
     let instructions = match tx.instructions() {
         Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
         Executable::Ivm(_) => panic!("sample transaction should be ISI-based"),
+        Executable::IvmProved(_) => panic!("sample transaction should be ISI-based"),
     };
     let gas_cost = crate::gas::meter_instructions(&instructions);
     assert!(gas_cost > 0, "expected non-zero ISI gas cost");
@@ -54178,6 +54179,7 @@ fn proposal_gas_cost_matches_isi_metering() {
     let instructions = match tx.instructions() {
         Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
         Executable::Ivm(_) => panic!("sample transaction should be ISI-based"),
+        Executable::IvmProved(_) => panic!("sample transaction should be ISI-based"),
     };
     let expected = crate::gas::meter_instructions(&instructions);
     assert!(expected > 0, "expected non-zero ISI gas cost");

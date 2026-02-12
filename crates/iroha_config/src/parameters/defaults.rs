@@ -2188,6 +2188,14 @@ pub mod pipeline {
     pub const AMX_PER_MEMORY_ACCESS_NS: u64 = 80;
     /// Estimated nanoseconds per syscall used for AMX budgeting.
     pub const AMX_PER_SYSCALL_NS: u64 = 120;
+
+    /// Settings for admitting `Executable::IvmProved` (proof-carrying IVM overlays).
+    pub mod ivm_proved {
+        /// Whether `Executable::IvmProved` is accepted by the execution pipeline.
+        ///
+        /// Default is `false` until a full end-to-end IVM execution proof system is shipped.
+        pub const ENABLED: bool = false;
+    }
 }
 
 /// Tiered state backend defaults.

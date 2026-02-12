@@ -751,6 +751,46 @@ seiyaku NegTest {
     }
 
     #[test]
+    fn require_compiles_without_zk_mode_and_uses_abort_syscall() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn main() {
+    require(1 == 1);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler.compile_source(src).expect("compile require");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        assert_eq!(
+            parsed.metadata.mode & crate::metadata::mode::ZK,
+            0,
+            "require should not enable ZK mode"
+        );
+
+        let mut found_abort = false;
+        let mut found_zk_assert = false;
+        for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
+            let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+            let op = instruction::wide::opcode(word);
+            if op == instruction::wide::system::SCALL {
+                let (_op, imm8) = encoding::wide::decode_sys(word);
+                if imm8 == crate::syscalls::SYSCALL_ABORT as u8 {
+                    found_abort = true;
+                }
+            }
+            if op == instruction::wide::zk::ASSERT || op == instruction::wide::zk::ASSERT_EQ {
+                found_zk_assert = true;
+            }
+        }
+        assert!(found_abort, "expected ABORT syscall in compiled require");
+        assert!(
+            !found_zk_assert,
+            "require should not emit ZK ASSERT/ASSERT_EQ opcodes"
+        );
+    }
+
+    #[test]
     fn validate_feature_requests_reports_unused_requested_features() {
         let mut meta = ContractMeta::default();
         meta.features.push(ContractFeature::Vector);
@@ -4247,6 +4287,19 @@ impl Compiler {
                             let word =
                                 encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, rs, 0);
                             push_word(&mut code, word);
+                        }
+                        Instr::AbortIf { cond } => {
+                            let rs = src_reg(cond, scratch1, &mut code)?;
+                            // Skip ABORT if the condition is false (i.e., == 0).
+                            // Branch offsets are relative to the branch PC, so 8 bytes skips
+                            // over the following single instruction.
+                            let skip_word = encode_branch_rv(0x0, rs, 0, 8)?;
+                            push_word(&mut code, skip_word);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ABORT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::Info { msg } => {
                             let r_msg = src_reg(msg, scratch1, &mut code)?;

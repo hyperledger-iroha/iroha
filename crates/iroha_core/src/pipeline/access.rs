@@ -243,6 +243,10 @@ where
             derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
             None,
         ),
+        Executable::IvmProved(proved) => (
+            derive_from_isi_batch_with_state(proved.overlay.as_ref(), state_ro),
+            None,
+        ),
         Executable::Ivm(bytecode) => {
             let bytecode_ref = bytecode.as_ref();
             if let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode_ref) {
