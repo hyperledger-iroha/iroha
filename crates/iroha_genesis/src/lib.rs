@@ -2023,53 +2023,22 @@ impl RawGenesisTransaction {
     #[must_use]
     pub fn with_consensus_meta(mut self) -> Self {
         use iroha_data_model::parameter::system::{
-            BlockParameter, BlockParameters, SumeragiConsensusMode, SumeragiParameters,
+            BlockParameters, SumeragiConsensusMode, SumeragiParameters,
         };
         let params = self.effective_parameters();
         let sumeragi: SumeragiParameters = params.sumeragi().clone();
         let block: BlockParameters = params.block();
         let custom = params.custom();
-        let mut block_time_ms = sumeragi.block_time_ms();
-        let mut commit_time_ms = sumeragi.commit_time_ms();
-        let mut min_finality_ms = sumeragi.min_finality_ms();
-        let mut da_enabled = sumeragi.da_enabled();
-        let mut collectors_k = sumeragi.collectors_k();
-        let mut collectors_redundant_send_r = sumeragi.collectors_redundant_send_r();
-        let mut block_max_transactions = block.max_transactions().get();
+        let block_time_ms = sumeragi.block_time_ms();
+        let commit_time_ms = sumeragi.commit_time_ms();
+        let min_finality_ms = sumeragi.min_finality_ms();
+        let da_enabled = sumeragi.da_enabled();
+        let collectors_k = sumeragi.collectors_k();
+        let collectors_redundant_send_r = sumeragi.collectors_redundant_send_r();
+        let block_max_transactions = block.max_transactions().get();
 
-        // Allow explicit SetParameter instructions to override consensus timing fields when
-        // computing the fingerprint. This keeps the advertised fingerprint in sync with
-        // genesis parameters even when pipeline timings are injected via instructions.
-        for tx in &self.transactions {
-            for instruction in &tx.instructions {
-                if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
-                    match set_param.inner() {
-                        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(ms)) => {
-                            block_time_ms = *ms;
-                        }
-                        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(ms)) => {
-                            commit_time_ms = *ms;
-                        }
-                        Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(ms)) => {
-                            min_finality_ms = *ms;
-                        }
-                        Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) => {
-                            da_enabled = *value;
-                        }
-                        Parameter::Sumeragi(SumeragiParameter::CollectorsK(k)) => {
-                            collectors_k = *k;
-                        }
-                        Parameter::Sumeragi(SumeragiParameter::RedundantSendR(r)) => {
-                            collectors_redundant_send_r = *r;
-                        }
-                        Parameter::Block(BlockParameter::MaxTransactions(max_txs)) => {
-                            block_max_transactions = max_txs.get();
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        // `effective_parameters()` already applies both structured parameter sections and
+        // explicit SetParameter instructions in manifest transaction order.
 
         let npos_param_id = SumeragiNposParameters::parameter_id();
         let npos_payload = custom
@@ -2127,26 +2096,11 @@ impl RawGenesisTransaction {
             epoch_length_blocks,
             bls_domain: bls_domain.clone(),
             npos: resolved_npos.map(|npos| {
-                let mut npos_timeouts =
+                let block_time_for_timeouts_ms = block_time_ms.max(min_finality_ms.max(1));
+                let npos_timeouts =
                     iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
-                        Duration::from_millis(block_time_ms.max(1)),
+                        Duration::from_millis(block_time_for_timeouts_ms),
                     );
-                let min_finality = Duration::from_millis(min_finality_ms.max(1));
-                let clamp = |value: Duration| {
-                    if value < min_finality {
-                        min_finality
-                    } else {
-                        value
-                    }
-                };
-                npos_timeouts.propose = clamp(npos_timeouts.propose);
-                npos_timeouts.prevote = clamp(npos_timeouts.prevote);
-                npos_timeouts.precommit = clamp(npos_timeouts.precommit);
-                npos_timeouts.commit = clamp(npos_timeouts.commit);
-                npos_timeouts.da = clamp(npos_timeouts.da);
-                npos_timeouts.aggregator = clamp(npos_timeouts.aggregator);
-                npos_timeouts.exec = clamp(npos_timeouts.exec);
-                npos_timeouts.witness = clamp(npos_timeouts.witness);
                 let duration_ms = |value: Duration| -> u64 {
                     let ms = value.as_millis();
                     u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
@@ -3172,26 +3126,13 @@ mod tests2 {
                 epoch_length_blocks,
                 bls_domain,
                 npos: resolved_npos.map(|npos| {
-                    let mut npos_timeouts =
+                    let block_time_for_timeouts_ms = sumeragi
+                        .block_time_ms()
+                        .max(sumeragi.min_finality_ms().max(1));
+                    let npos_timeouts =
                         iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
-                            Duration::from_millis(sumeragi.block_time_ms().max(1)),
+                            Duration::from_millis(block_time_for_timeouts_ms),
                         );
-                    let min_finality = Duration::from_millis(sumeragi.min_finality_ms().max(1));
-                    let clamp = |value: Duration| {
-                        if value < min_finality {
-                            min_finality
-                        } else {
-                            value
-                        }
-                    };
-                    npos_timeouts.propose = clamp(npos_timeouts.propose);
-                    npos_timeouts.prevote = clamp(npos_timeouts.prevote);
-                    npos_timeouts.precommit = clamp(npos_timeouts.precommit);
-                    npos_timeouts.commit = clamp(npos_timeouts.commit);
-                    npos_timeouts.da = clamp(npos_timeouts.da);
-                    npos_timeouts.aggregator = clamp(npos_timeouts.aggregator);
-                    npos_timeouts.exec = clamp(npos_timeouts.exec);
-                    npos_timeouts.witness = clamp(npos_timeouts.witness);
                     let duration_ms = |value: Duration| -> u64 {
                         let ms = value.as_millis();
                         u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")

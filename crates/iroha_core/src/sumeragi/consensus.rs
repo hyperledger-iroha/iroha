@@ -161,6 +161,15 @@ pub fn compute_consensus_fingerprint_from_params(
     out
 }
 
+fn npos_timeout_base_for_handshake_fingerprint_ms(
+    sumeragi: &iroha_data_model::parameter::system::SumeragiParameters,
+) -> u64 {
+    // Handshake fingerprinting must remain stable across restarts and must not depend on
+    // adaptive runtime pacing, which can legitimately drift during congestion recovery.
+    let min_finality_ms = sumeragi.min_finality_ms().max(1);
+    sumeragi.block_time_ms().max(1).max(min_finality_ms)
+}
+
 /// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current state view and configuration.
 #[allow(clippy::too_many_lines)]
 pub fn compute_consensus_handshake_caps_from_view(
@@ -185,7 +194,11 @@ pub fn compute_consensus_handshake_caps_from_view(
         ),
     };
     let (npos_params, epoch_length_blocks) = if matches!(effective_mode, ConsensusMode::Npos) {
-        let npos_timeouts = super::resolve_npos_timeouts(view, &sumeragi_config.npos);
+        let timeout_base_ms = npos_timeout_base_for_handshake_fingerprint_ms(sumeragi);
+        let npos_timeouts = sumeragi_config
+            .npos
+            .timeouts_overrides
+            .resolve(Duration::from_millis(timeout_base_ms));
         let duration_ms = |d: Duration| -> u64 {
             let ms = d.as_millis();
             u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")

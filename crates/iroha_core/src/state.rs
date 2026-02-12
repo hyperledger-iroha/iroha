@@ -14823,8 +14823,9 @@ impl State {
         let policy = sumeragi.into();
         let mut params_block = self.world.parameters.block();
         let mut sys = params_block.sumeragi.clone();
-        sys.collectors_k = u16::try_from(policy.collectors_k).unwrap_or(u16::MAX);
-        sys.collectors_redundant_send_r = policy.collectors_redundant_send_r;
+        // Keep collector topology (`collectors_k`, `collectors_redundant_send_r`) anchored to
+        // on-chain values. Overwriting these from local config causes handshake fingerprint drift
+        // after restart because genesis metadata is derived from chain parameters.
         sys.da_enabled = policy.policy_flags.da_enabled();
         sys.key_activation_lead_blocks = policy.key_activation_lead_blocks;
         sys.key_overlap_grace_blocks = policy.key_overlap_grace_blocks;

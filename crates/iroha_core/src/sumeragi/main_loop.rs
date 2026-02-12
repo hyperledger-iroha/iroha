@@ -223,6 +223,10 @@ const PROPOSE_ATTEMPT_LOG_COOLDOWN: Duration = Duration::from_secs(2);
 const PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL: Duration = Duration::from_millis(100);
 /// Minimum backoff between consecutive quorum reschedules for the same pending block.
 const QUORUM_RESCHEDULE_COOLDOWN: Duration = Duration::from_millis(800);
+/// Floor for adaptive quorum reschedule backoff on fast pipelines.
+const QUORUM_RESCHEDULE_BACKOFF_FLOOR: Duration = Duration::from_millis(100);
+/// Derive quorum-reschedule retries from quorum timeout by a fixed divisor.
+const QUORUM_RESCHEDULE_BACKOFF_DIVISOR: u32 = 4;
 /// Prevent repeated block-sync warning spam for the same hash/reason across short intervals.
 const BLOCK_SYNC_WARN_COOLDOWN_FLOOR: Duration = Duration::from_secs(3);
 /// Prevent repeated insufficient-QC warnings for the same block/phase tuple across short intervals.
@@ -257,6 +261,19 @@ fn payload_rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duratio
         control_plane_rebroadcast_cooldown_from_block_time(block_time),
         PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER,
     )
+}
+
+/// Derive post-timeout quorum reschedule retry cadence from the observed quorum timeout.
+///
+/// Keep retries faster than the timeout itself for responsiveness on fast localnets while still
+/// enforcing conservative bounds for slower pipelines.
+pub(super) fn quorum_reschedule_backoff_from_timeout(quorum_timeout: Duration) -> Duration {
+    let base = if quorum_timeout == Duration::ZERO {
+        QUORUM_RESCHEDULE_BACKOFF_FLOOR
+    } else {
+        quorum_timeout / QUORUM_RESCHEDULE_BACKOFF_DIVISOR
+    };
+    base.clamp(QUORUM_RESCHEDULE_BACKOFF_FLOOR, QUORUM_RESCHEDULE_COOLDOWN)
 }
 
 fn bump_view_after_quorum_timeout(
@@ -9682,14 +9699,15 @@ impl Actor {
 
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
-        let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+        let quorum_reschedule_retention = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+        let quorum_reschedule_backoff = quorum_reschedule_backoff_from_timeout(quorum_timeout);
         let retention_factor = self
             .config
             .recovery
             .missing_block_signer_fallback_attempts
             .saturating_add(2)
             .max(4);
-        let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
+        let aborted_retention = quorum_reschedule_retention.saturating_mul(retention_factor);
         let rebroadcast_cooldown = self.rebroadcast_cooldown();
         let (tip_height, tip_hash) = {
             let view = self.state.view();
@@ -9763,7 +9781,7 @@ impl Actor {
                 } else {
                     pending
                         .last_quorum_reschedule
-                        .and_then(|last| last.checked_add(quorum_reschedule_cooldown))
+                        .and_then(|last| last.checked_add(quorum_reschedule_backoff))
                         .unwrap_or(now)
                 };
                 let deadline = deadline.max(now);
@@ -9920,43 +9938,36 @@ impl Actor {
             self.da_quorum_timeout_multiplier(),
             self.config.worker.iteration_budget_cap,
         );
+        // Keep queue drain windows aligned to the same responsiveness budget.
+        // Large per-queue windows (e.g. block_time/2) can accumulate into >1s pre-tick
+        // drain time under bursty ingress, which delays vote/QC replay despite low RTT.
         let vote_rx_drain_budget = super::vote_rx_drain_budget(
             block_time,
             commit_time,
             da_enabled,
             self.da_quorum_timeout_multiplier(),
-            Duration::from_secs(8),
+            time_budget,
             self.config.worker.iteration_budget_cap,
         )
         .max(time_budget);
         let non_vote_drain_budget = super::cap_drain_budget(
-            block_time / 2,
+            time_budget,
             time_budget,
             self.config.worker.iteration_budget_cap,
         );
         let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(
-            block_time / 2,
+            time_budget,
             time_budget,
             self.config.worker.iteration_budget_cap,
         );
         let block_rx_drain_budget = super::cap_drain_budget(
-            block_time / 4,
+            time_budget / 2,
             time_budget,
             self.config.worker.iteration_budget_cap,
         );
         let starve_max = block_time.max(commit_time).max(time_budget);
-        let tick_min_gap = super::idle_tick_gap(
-            block_time,
-            commit_time,
-            time_budget,
-            self.config.worker.tick_work_budget_cap,
-        );
-        let tick_busy_gap = super::busy_tick_gap(
-            block_time,
-            commit_time,
-            tick_min_gap,
-            self.config.worker.tick_work_budget_cap,
-        );
+        let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
+        let tick_busy_gap = super::busy_tick_gap(block_time, commit_time, tick_min_gap);
         let mut tick_max_gap = if block_time.is_zero() {
             time_budget
         } else {
@@ -12059,6 +12070,29 @@ impl Actor {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
+        if session.total_chunks() != 0 && session.received_chunks() < session.total_chunks() {
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            let hydrated = self.maybe_hydrate_rbc_session_from_pending_block(key, None)?;
+            let Some(reloaded_session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
+                return Ok(());
+            };
+            session = reloaded_session;
+            if session.is_invalid() {
+                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                return Ok(());
+            }
+            if hydrated {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    received = session.received_chunks(),
+                    total = session.total_chunks(),
+                    "hydrated RBC session from pending block before READY emission"
+                );
+            }
+        }
 
         let now = Instant::now();
         let mut invalidated = false;
@@ -12334,7 +12368,7 @@ impl Actor {
             return Ok(());
         }
         if let Some(ready) = ready_to_send {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
@@ -13289,6 +13323,30 @@ impl Actor {
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
+        }
+        if session.total_chunks() != 0 && session.received_chunks() < session.total_chunks() {
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            let hydrated = self.maybe_hydrate_rbc_session_from_pending_block(key, None)?;
+            let Some(reloaded_session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
+                return Ok(());
+            };
+            session = reloaded_session;
+            if session.delivered || session.is_invalid() {
+                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                return Ok(());
+            }
+            if hydrated {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    received = session.received_chunks(),
+                    total = session.total_chunks(),
+                    "hydrated RBC session from pending block before DELIVER emission"
+                );
+            }
         }
 
         let ready_count = session.ready_signatures.len();
@@ -14922,6 +14980,8 @@ impl QcInsufficientWarningThrottle {
 enum ProposalDeferWarningKind {
     HighestQcMissing,
     ParentMissing,
+    InsufficientOnlinePeers,
+    ProceedingBelowQuorumAfterGrace,
 }
 
 #[derive(Debug, Default)]

@@ -1317,6 +1317,16 @@ impl Actor {
                 });
             }
 
+            if let Some(plan) = rbc_plan.take() {
+                // Start RBC payload dissemination immediately after Proposal/BlockCreated posts.
+                // Running local BlockCreated handling first adds avoidable delay before peers can
+                // receive chunks and emit READY, which inflates localnet quorum latencies.
+                self.broadcast_rbc_session_plan(plan.primary)?;
+                if let Some(dup) = plan.duplicate {
+                    self.broadcast_rbc_session_plan(dup)?;
+                }
+            }
+
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
                 self.handle_block_created(block_msg, None)?;
             }
@@ -1330,13 +1340,6 @@ impl Actor {
                 .propose
                 .proposal_cache
                 .insert_proposal(proposal);
-
-            if let Some(plan) = rbc_plan.take() {
-                self.broadcast_rbc_session_plan(plan.primary)?;
-                if let Some(dup) = plan.duplicate {
-                    self.broadcast_rbc_session_plan(dup)?;
-                }
-            }
 
             let relay_envelopes = crate::sumeragi::status::lane_relay_envelopes_snapshot();
             if !relay_envelopes.is_empty() {
@@ -1997,15 +2000,31 @@ impl Actor {
         );
         if should_defer_online {
             if pending_queue_len > 0 {
-                iroha_logger::info!(
-                    queue_len = pending_queue_len,
-                    height = tracked_height,
-                    required,
-                    online_peers,
-                    online_total,
-                    grace_ms = offline_grace.as_millis(),
-                    "deferring proposal: insufficient online peers for commit quorum (within grace)"
-                );
+                let throttle_hash = tip_hash.unwrap_or_else(|| {
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                        [0; Hash::LENGTH],
+                    ))
+                });
+                if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                    ProposalDeferWarningKind::InsufficientOnlinePeers,
+                    tracked_height,
+                    current_view.unwrap_or_default(),
+                    throttle_hash,
+                    now,
+                    Duration::from_secs(5),
+                ) {
+                    iroha_logger::info!(
+                        queue_len = pending_queue_len,
+                        height = tracked_height,
+                        view = current_view,
+                        required,
+                        online_peers,
+                        online_total,
+                        grace_ms = offline_grace.as_millis(),
+                        suppressed_since_last,
+                        "deferring proposal: insufficient online peers for commit quorum (within grace)"
+                    );
+                }
             } else {
                 trace!(
                     height = tracked_height,
@@ -2018,15 +2037,30 @@ impl Actor {
             }
             return false;
         } else if online_total < required {
-            warn!(
-                height = tracked_height,
-                required,
-                online_peers,
-                online_total,
-                grace_ms = offline_grace.as_millis(),
-                age_ms = view_age.map(|age| age.as_millis()),
-                "proceeding with proposal despite online peer count below quorum after grace"
-            );
+            let throttle_hash = tip_hash.unwrap_or_else(|| {
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
+            });
+            if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                ProposalDeferWarningKind::ProceedingBelowQuorumAfterGrace,
+                tracked_height,
+                current_view.unwrap_or_default(),
+                throttle_hash,
+                now,
+                Duration::from_secs(5),
+            ) {
+                warn!(
+                    queue_len = pending_queue_len,
+                    height = tracked_height,
+                    view = current_view,
+                    required,
+                    online_peers,
+                    online_total,
+                    grace_ms = offline_grace.as_millis(),
+                    age_ms = view_age.map(|age| age.as_millis()),
+                    suppressed_since_last,
+                    "proceeding with proposal despite online peer count below quorum after grace"
+                );
+            }
         }
 
         if required == 1 && topology.as_ref().len() == 1 {

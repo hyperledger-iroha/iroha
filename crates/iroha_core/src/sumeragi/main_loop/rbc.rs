@@ -1715,6 +1715,7 @@ impl Actor {
         if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
             let payload_bytes = block_payload_bytes(&block);
             let payload_len = payload_bytes.len();
+            let payload_bytes_for_hydrate = payload_bytes.clone();
             let work = RbcSeedWork {
                 key,
                 payload_hash,
@@ -1745,6 +1746,22 @@ impl Actor {
                         );
                         self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
                         return Ok(false);
+                    }
+                    let hydrate_result = self.hydrate_rbc_session_from_block(
+                        key,
+                        &payload_bytes_for_hydrate,
+                        payload_hash,
+                        None,
+                    );
+                    // Pending block already includes full payload; keep READY/DELIVER on the
+                    // synchronous path and ignore delayed background seed completion.
+                    self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
+                    hydrate_result?;
+                    if rebroadcast_missing_init
+                        && let Some(session) =
+                            self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
+                    {
+                        self.rebroadcast_rbc_payload_for_missing_init(key, &session);
                     }
                     return Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key));
                 }
@@ -2096,7 +2113,7 @@ impl Actor {
             key.1,
             key.2,
             crate::sumeragi::consensus::Phase::Commit,
-            super::MissingBlockPriority::Background,
+            super::MissingBlockPriority::Consensus,
             &signers,
             &topology,
             now,
@@ -2131,7 +2148,7 @@ impl Actor {
                     key.0,
                     key.1,
                     key.2,
-                    super::MissingBlockPriority::Background,
+                    super::MissingBlockPriority::Consensus,
                     &targets,
                 );
                 info!(
@@ -2278,7 +2295,7 @@ impl Actor {
                     key.0,
                     key.1,
                     key.2,
-                    super::MissingBlockPriority::Background,
+                    super::MissingBlockPriority::Consensus,
                     &targets,
                 );
                 match reason {
@@ -4917,7 +4934,7 @@ impl Actor {
                                 }
                             },
                         );
-                    iroha_logger::info!(
+                    iroha_logger::debug!(
                         height = key.1,
                         view = key.2,
                         block = %key.0,
