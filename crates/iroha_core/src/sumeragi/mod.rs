@@ -862,24 +862,15 @@ mod tests {
     }
 
     #[test]
-    fn busy_tick_gap_clamps_to_idle_and_budget() {
+    fn busy_tick_gap_clamps_to_idle() {
         let idle_gap = Duration::from_millis(80);
         let busy_gap = busy_tick_gap(
             Duration::from_millis(1_000),
             Duration::from_millis(1_000),
             idle_gap,
-            Duration::ZERO,
         );
         assert!(busy_gap <= idle_gap);
         assert!(busy_gap >= Duration::from_millis(BUSY_TICK_GAP_FLOOR_MS));
-
-        let budgeted = busy_tick_gap(
-            Duration::from_millis(1_000),
-            Duration::from_millis(1_000),
-            idle_gap,
-            Duration::from_millis(200),
-        );
-        assert!(budgeted >= Duration::from_millis(200));
     }
 
     #[test]
@@ -1488,7 +1479,6 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             Duration::from_secs(2),
-            Duration::ZERO,
         );
         assert_eq!(gap, Duration::from_millis(250));
 
@@ -1496,7 +1486,6 @@ mod tests {
             Duration::from_secs(10),
             Duration::from_secs(10),
             Duration::from_secs(2),
-            Duration::ZERO,
         );
         assert_eq!(clamped, Duration::from_secs(2));
 
@@ -1504,20 +1493,18 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_millis(10),
             Duration::from_millis(200),
-            Duration::ZERO,
         );
         assert_eq!(floored, Duration::from_millis(IDLE_TICK_GAP_FLOOR_MS));
     }
 
     #[test]
-    fn idle_tick_gap_honors_tick_work_budget_cap() {
+    fn idle_tick_gap_ignores_tick_work_budget_cap() {
         let gap = idle_tick_gap(
             Duration::from_millis(400),
             Duration::from_millis(400),
             Duration::from_millis(400),
-            Duration::from_millis(500),
         );
-        assert_eq!(gap, Duration::from_millis(500));
+        assert_eq!(gap, Duration::from_millis(100));
     }
 
     #[test]
@@ -9686,12 +9673,7 @@ const DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 const VOTE_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 const RBC_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 
-fn idle_tick_gap(
-    block_time: Duration,
-    commit_time: Duration,
-    max_tick_gap: Duration,
-    tick_work_budget_cap: Duration,
-) -> Duration {
+fn idle_tick_gap(block_time: Duration, commit_time: Duration, max_tick_gap: Duration) -> Duration {
     let base = block_time.min(commit_time);
     let raw = if base == Duration::ZERO {
         max_tick_gap
@@ -9701,34 +9683,18 @@ fn idle_tick_gap(
     let gap = raw
         .max(Duration::from_millis(IDLE_TICK_GAP_FLOOR_MS))
         .min(max_tick_gap);
-    if tick_work_budget_cap.is_zero() {
-        gap
-    } else {
-        gap.max(tick_work_budget_cap)
-    }
+    gap
 }
 
-fn busy_tick_gap(
-    block_time: Duration,
-    commit_time: Duration,
-    idle_tick_gap: Duration,
-    tick_work_budget_cap: Duration,
-) -> Duration {
+fn busy_tick_gap(block_time: Duration, commit_time: Duration, idle_tick_gap: Duration) -> Duration {
     let base = block_time.min(commit_time);
     let raw = if base == Duration::ZERO {
         idle_tick_gap
     } else {
         base / BUSY_TICK_GAP_DIVISOR
     };
-    let mut gap = raw
-        .max(Duration::from_millis(BUSY_TICK_GAP_FLOOR_MS))
-        .min(idle_tick_gap);
-    if tick_work_budget_cap.is_zero() {
-        gap
-    } else {
-        gap = gap.max(tick_work_budget_cap);
-        gap
-    }
+    raw.max(Duration::from_millis(BUSY_TICK_GAP_FLOOR_MS))
+        .min(idle_tick_gap)
 }
 
 fn cap_drain_budget(raw: Duration, floor: Duration, budget_cap: Duration) -> Duration {
@@ -11042,16 +11008,22 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                 }
                 let iter_start = Instant::now();
                 active.fetch_add(1, Ordering::Relaxed);
-                let (next_deadline, tick_min_gap, bypass_tick_gap) = {
+                let (next_deadline, tick_gap, bypass_tick_gap) = {
                     let mut guard = gate.enter();
                     status::set_worker_stage(status::WorkerLoopStage::Tick);
                     guard.actor_mut().refresh_worker_loop_config(&mut cfg);
                     let now = Instant::now();
                     poll_worker_results(guard.actor_mut());
+                    let queue_depths = status::worker_queue_depth_snapshot();
+                    let tick_gap = if has_pending_queue_depths(queue_depths) {
+                        cfg.tick_busy_gap
+                    } else {
+                        cfg.tick_min_gap
+                    };
                     let next_deadline = guard.actor_mut().next_tick_deadline(now);
                     if next_deadline.is_some_and(|deadline| deadline <= now)
                         && (guard.actor_mut().should_bypass_tick_gap()
-                            || should_run_tick(now, last_tick, cfg.tick_min_gap))
+                            || should_run_tick(now, last_tick, tick_gap))
                     {
                         if guard.actor_mut().tick() {
                             last_tick = now;
@@ -11060,7 +11032,11 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                     status::record_worker_iteration(
                         u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
                     );
-                    (next_deadline, cfg.tick_min_gap, guard.actor_mut().should_bypass_tick_gap())
+                    (
+                        next_deadline,
+                        tick_gap,
+                        guard.actor_mut().should_bypass_tick_gap(),
+                    )
                 };
                 if active.fetch_sub(1, Ordering::Relaxed) == 1 {
                     status::set_worker_stage(status::WorkerLoopStage::Idle);
@@ -11078,7 +11054,7 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                         let min_gap_wait = if bypass_tick_gap && deadline <= now {
                             None
                         } else {
-                            idle_wait_duration(now, last_tick, tick_min_gap)
+                            idle_wait_duration(now, last_tick, tick_gap)
                         };
                         let mut wait =
                             min_gap_wait.map_or(due_wait, |min_gap| min_gap.max(due_wait));
@@ -11373,7 +11349,6 @@ impl SumeragiWorker {
         let control_msg_channel_cap = config.queues.control;
         let worker_iteration_budget_cap = config.worker.iteration_budget_cap;
         let worker_iteration_drain_budget_cap = config.worker.iteration_drain_budget_cap;
-        let tick_work_budget_cap = config.worker.tick_work_budget_cap;
         let (block_time, commit_time, da_enabled) = {
             let view = state.view();
             let params = view.world.parameters().sumeragi();
@@ -11454,10 +11429,8 @@ impl SumeragiWorker {
         let block_rx_drain_budget =
             cap_drain_budget(block_time / 4, time_budget, worker_iteration_budget_cap);
         let starve_max = block_time.max(commit_time).max(time_budget);
-        let tick_min_gap =
-            idle_tick_gap(block_time, commit_time, time_budget, tick_work_budget_cap);
-        let tick_busy_gap =
-            busy_tick_gap(block_time, commit_time, tick_min_gap, tick_work_budget_cap);
+        let tick_min_gap = idle_tick_gap(block_time, commit_time, time_budget);
+        let tick_busy_gap = busy_tick_gap(block_time, commit_time, tick_min_gap);
         let mut tick_max_gap = if block_time.is_zero() {
             time_budget
         } else {

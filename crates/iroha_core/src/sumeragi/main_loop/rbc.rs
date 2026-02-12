@@ -2096,7 +2096,7 @@ impl Actor {
             key.1,
             key.2,
             crate::sumeragi::consensus::Phase::Commit,
-            super::MissingBlockPriority::Background,
+            super::MissingBlockPriority::Consensus,
             &signers,
             &topology,
             now,
@@ -2131,7 +2131,7 @@ impl Actor {
                     key.0,
                     key.1,
                     key.2,
-                    super::MissingBlockPriority::Background,
+                    super::MissingBlockPriority::Consensus,
                     &targets,
                 );
                 info!(
@@ -2278,7 +2278,7 @@ impl Actor {
                     key.0,
                     key.1,
                     key.2,
-                    super::MissingBlockPriority::Background,
+                    super::MissingBlockPriority::Consensus,
                     &targets,
                 );
                 match reason {
@@ -4917,7 +4917,7 @@ impl Actor {
                                 }
                             },
                         );
-                    iroha_logger::info!(
+                    iroha_logger::debug!(
                         height = key.1,
                         view = key.2,
                         block = %key.0,

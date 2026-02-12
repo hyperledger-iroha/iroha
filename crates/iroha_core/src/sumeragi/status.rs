@@ -4593,7 +4593,7 @@ pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
     entry.last_epoch = record.epoch;
     entry.last_timestamp_ms = now_ms;
     if should_log_vote_drop_count(entry.total) || should_log_vote_drop_count(*reason_total) {
-        iroha_logger::info!(
+        iroha_logger::debug!(
             peer = ?peer_id,
             roster_hash = ?roster_hash,
             roster_len = entry.roster_len,
