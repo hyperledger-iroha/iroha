@@ -287,14 +287,10 @@ pub mod test_utils {
         }
     }
 
-    /// Deterministic Halo2 IPA fixture for the `ivm-overlay-bind-v1` circuit.
-    ///
-    /// The circuit exposes 8 instance columns (1 row each) and constrains witness
-    /// values to equal those instances. This is used by `Executable::IvmProved`
-    /// to bind proofs to `(code_hash, overlay_hash)` public inputs.
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[must_use]
-    pub fn halo2_ivm_overlay_bind_envelope(
+    fn halo2_ivm_binding_envelope(
+        circuit_id: &str,
         code_hash: CryptoHash,
         overlay_hash: CryptoHash,
     ) -> FixtureEnvelope {
@@ -305,8 +301,6 @@ pub mod test_utils {
             poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
             transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
         };
-
-        const CIRCUIT_ID: &str = "halo2/ipa:ivm-overlay-bind-v1";
 
         #[derive(Clone)]
         struct KeyMaterial {
@@ -402,7 +396,7 @@ pub mod test_utils {
 
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: CIRCUIT_ID.to_owned(),
+            circuit_id: circuit_id.to_owned(),
             vk_hash,
             public_inputs: public_inputs.clone(),
             proof_bytes,
@@ -416,6 +410,35 @@ pub mod test_utils {
             schema_hash,
             vk_bytes: Some(material.vk_bytes.clone()),
         }
+    }
+
+    /// Deterministic Halo2 IPA fixture for the legacy `ivm-overlay-bind-v1` circuit.
+    ///
+    /// The circuit exposes 8 instance columns (1 row each) and constrains witness
+    /// values to equal those instances. This fixture is retained for regression/
+    /// negative tests; `Executable::IvmProved` admission no longer accepts this
+    /// binding-only stand-in circuit.
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[must_use]
+    pub fn halo2_ivm_overlay_bind_envelope(
+        code_hash: CryptoHash,
+        overlay_hash: CryptoHash,
+    ) -> FixtureEnvelope {
+        halo2_ivm_binding_envelope("halo2/ipa:ivm-overlay-bind-v1", code_hash, overlay_hash)
+    }
+
+    /// Deterministic Halo2 IPA fixture for `ivm-execution-v1` proof attachments.
+    ///
+    /// This fixture currently uses the same 8-column `(code_hash, overlay_hash)`
+    /// instance layout as the legacy binding gadget so end-to-end admission paths
+    /// can exercise real Halo2 verification and replay checks.
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[must_use]
+    pub fn halo2_ivm_execution_envelope(
+        code_hash: CryptoHash,
+        overlay_hash: CryptoHash,
+    ) -> FixtureEnvelope {
+        halo2_ivm_binding_envelope("halo2/ipa:ivm-execution-v1", code_hash, overlay_hash)
     }
 
     type FixtureBundle = fn() -> (Vec<u8>, Vec<u8>, Vec<u8>);
@@ -4859,8 +4882,8 @@ mod pasta_tiny {
 
     /// Circuit binding eight single-row instance columns to witness values.
     ///
-    /// This is used by `Executable::IvmProved` as a minimal binding gadget: it proves
-    /// that the supplied proof is tied to the public inputs carried in the proof
+    /// Legacy binding gadget retained for tests and fixture generation. It proves
+    /// only that the supplied proof is tied to public inputs carried in the proof
     /// envelope (for Iroha, `(code_hash, overlay_hash)` split into `u64` limbs).
     ///
     /// Note: This circuit does **not** prove correct IVM execution by itself.
@@ -7972,7 +7995,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/ivm-overlay-bind-v1" => {
+        "halo2/pasta/ivm-overlay-bind-v1" | "halo2/pasta/ivm-execution-v1" => {
             // Instances: 8 columns (code_hash limbs + overlay_hash limbs), 1 row each.
             if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;
