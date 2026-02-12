@@ -520,6 +520,9 @@ mod tests {
                 Executable::Ivm(IvmBytecode { .. }) => {
                     eyre::bail!("unexpected IVM bytecode submission in test context")
                 }
+                Executable::IvmProved(_) => {
+                    eyre::bail!("unexpected proved IVM submission in test context")
+                }
             }
         }
     }

@@ -14061,5 +14061,6 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
                 IVM_TEU_FALLBACK
             }
         },
+        Executable::IvmProved(proved) => crate::gas::meter_instructions(proved.overlay.as_ref()),
     }
 }

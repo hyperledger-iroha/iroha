@@ -299,6 +299,12 @@ pub enum Instr {
     Assert {
         cond: Temp,
     },
+    /// Abort execution and revert state changes if `cond` is non-zero.
+    ///
+    /// This is a non-ZK assertion primitive intended for fast on-chain checks.
+    AbortIf {
+        cond: Temp,
+    },
     /// Log an info message (development only).
     Info {
         msg: Temp,
@@ -2093,6 +2099,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         operand: cond,
                     });
                     ctx.current_instr(Instr::Assert { cond: t });
+                    let u = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: u, value: 0 });
+                    u
+                }
+                "require" => {
+                    let cond = lower_expr(ctx, &args[0], vars);
+                    if args.len() > 1 {
+                        let _ = lower_expr(ctx, &args[1], vars);
+                    }
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Unary {
+                        dest: t,
+                        op: UnaryOp::Not,
+                        operand: cond,
+                    });
+                    ctx.current_instr(Instr::AbortIf { cond: t });
                     let u = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: u, value: 0 });
                     u

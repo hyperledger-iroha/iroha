@@ -1395,6 +1395,7 @@ mod tests {
                     }
                 }
                 Executable::Ivm(_) => {}
+                Executable::IvmProved(_) => {}
             }
         }
         assert_eq!(

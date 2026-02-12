@@ -195,6 +195,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Executable::Ivm(bytecode) => {
                         println!("  ivm bytecode: {bytecode:?}");
                     }
+                    Executable::IvmProved(proved) => {
+                        println!(
+                            "  ivm proved: bytecode {} bytes overlay {} instructions",
+                            proved.bytecode.size_bytes(),
+                            proved.overlay.len()
+                        );
+                    }
                 }
                 if let Some(err) = block.error(idx) {
                     println!("  tx[{idx}] execution error: {err:?}");

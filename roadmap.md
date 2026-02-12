@@ -63,6 +63,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 - [ ] Re-run `cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_peer_restart -- --nocapture` in a clean workspace (no competing Cargo jobs, fresh matching `iroha3d`) to capture a definitive post-fix pass.
+- [ ] IVM ZK execution proofs: replace the current `Executable::IvmProved` `halo2/ipa:ivm-overlay-bind-v1` binding gadget with a real IVM execution circuit (prove the overlay is the result of executing the submitted bytecode under IVM semantics), and ship a production prover path (Torii/CLI/external) that emits the corresponding `halo2/ipa` `OpenVerifyEnvelope`.
 - Norito streaming math upgrades: motion-compensated prediction, rANS rate-model RDO, adaptive quantization + deterministic deblock, deterministic audio LPC/MDCT path, and SIMD/GPU acceleration for fixed-point DCT.
 - GPU zstd (Metal): full GPU entropy coding + decode (bit-for-bit parity with CPU zstd).
  - [x] Architecture: document the full GPU zstd pipeline (frame/block layout, buffer lifetimes, deterministic bitstream packing, and kernel responsibilities) with explicit parity constraints.

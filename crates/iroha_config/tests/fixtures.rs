@@ -1434,6 +1434,10 @@ fn minimal_config_snapshot() {
                 panic_on_duplicate_metrics: false,
             },
             pipeline: Pipeline {
+                ivm_proved: IvmProvedExecution {
+                    enabled: false,
+                    allowed_circuits: [],
+                },
                 dynamic_prepass: true,
                 access_set_cache_enabled: true,
                 parallel_overlay: true,

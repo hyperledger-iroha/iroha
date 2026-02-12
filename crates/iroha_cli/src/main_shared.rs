@@ -231,6 +231,14 @@ trait RunContext {
                 }
                 Executable::Ivm(bytecode)
             }
+            Executable::IvmProved(proved) => {
+                if self.input_instructions() || self.output_instructions() {
+                    eyre::bail!(
+                        "Incompatible `--input` `--output` flags with `iroha transaction ivm`"
+                    )
+                }
+                Executable::IvmProved(proved)
+            }
             Executable::Instructions(instructions) => {
                 let mut out = instructions.into_vec();
                 if self.input_instructions() {
@@ -4974,6 +4982,15 @@ mod trigger {
                 outer.insert("Ivm".into(), Value::Object(inner));
                 Value::Object(outer)
             }
+            Executable::IvmProved(proved) => {
+                let mut inner = BTreeMap::<String, Value>::new();
+                inner.insert("hash".into(), to_value(&HashOf::new(&proved.bytecode))?);
+                inner.insert("size_bytes".into(), to_value(&proved.bytecode.size_bytes())?);
+                inner.insert("overlay_len".into(), to_value(&proved.overlay.len())?);
+                let mut outer = BTreeMap::<String, Value>::new();
+                outer.insert("IvmProved".into(), Value::Object(inner));
+                Value::Object(outer)
+            }
         };
         map.insert("executable".into(), executable_value);
 
@@ -7239,6 +7256,7 @@ mod tests {
         let instructions = match exec {
             Executable::Instructions(instructions) => instructions.into_vec(),
             Executable::Ivm(_) => panic!("expected instructions"),
+            Executable::IvmProved(_) => panic!("expected instructions"),
         };
         assert_eq!(instructions.len(), 1);
         let log = instructions[0]

@@ -507,6 +507,11 @@ impl TransactionPreview {
         let authority = account_literal(signed.authority());
         let instructions = match signed.instructions() {
             Executable::Instructions(list) => list.iter().map(|instr| format!("{instr}")).collect(),
+            Executable::IvmProved(proved) => proved
+                .overlay
+                .iter()
+                .map(|instr| format!("{instr}"))
+                .collect(),
             Executable::Ivm(_) => vec!["IVM bytecode executable".to_owned()],
         };
         Self {

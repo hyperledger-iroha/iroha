@@ -105,6 +105,14 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
 ) {
     match transaction.instructions() {
         Executable::Ivm(bytecode) => executor.visit_ivm(bytecode),
+        Executable::IvmProved(proved) => {
+            executor.visit_ivm(&proved.bytecode);
+            for isi in &proved.overlay {
+                if executor.verdict().is_ok() {
+                    executor.visit_instruction(isi);
+                }
+            }
+        }
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 if executor.verdict().is_ok() {

@@ -456,6 +456,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*right);
         }
         Assert { cond } => f(*cond),
+        AbortIf { cond } => f(*cond),
         Info { msg } => f(*msg),
         PointerFromString { src, .. } => f(*src),
         MapGet { map, key, .. } => {
@@ -852,6 +853,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::SubscriptionRecordUsage
         | Instr::AssertEq { .. }
         | Instr::Assert { .. }
+        | Instr::AbortIf { .. }
         | Instr::Info { .. }
         | Instr::MapSet { .. }
         | Instr::SetNftData { .. }
