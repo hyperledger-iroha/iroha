@@ -648,17 +648,6 @@ where
     }
 }
 
-#[cfg(test)]
-struct DomainHashInputs<'a> {
-    backend: &'a str,
-    curve: &'a str,
-    vk_commitment: [u8; 32],
-    schema_hash: [u8; 32],
-    syscall_label: &'a str,
-    manifest: &'a str,
-    namespace: &'a str,
-}
-
 /// Snapshot of subscription-related data resolved from the current state.
 pub struct SubscriptionContext {
     executable: Executable,
@@ -1829,22 +1818,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         h.update(backend.as_bytes());
         h.update(bytes);
         h.finalize().into()
-    }
-
-    #[cfg(test)]
-    fn compute_domain_hash(&self, inputs: &DomainHashInputs<'_>) -> [u8; 32] {
-        use iroha_crypto::Hash;
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"iroha.zk.domain/v1");
-        buf.extend_from_slice(&self.chain_id_bytes);
-        buf.extend_from_slice(inputs.backend.as_bytes());
-        buf.extend_from_slice(inputs.curve.as_bytes());
-        buf.extend_from_slice(&inputs.vk_commitment);
-        buf.extend_from_slice(&inputs.schema_hash);
-        buf.extend_from_slice(inputs.syscall_label.as_bytes());
-        buf.extend_from_slice(inputs.manifest.as_bytes());
-        buf.extend_from_slice(inputs.namespace.as_bytes());
-        *Hash::new(&buf).as_ref()
     }
 
     fn validate_envelope_header(
@@ -9453,11 +9426,18 @@ mod tests {
         world.elections.insert("election-1".to_string(), election);
 
         let backend = "halo2/ipa";
-        let vk_bytes = vec![9, 9, 9];
+        let circuit_id = "halo2/ipa:vote-tally-v1";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let schema_hash = [5u8; 32];
-        let mut rec = active_vk_record(commitment, schema_hash, backend);
-        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes,
+        );
         let vk_id = VerifyingKeyId::new(backend, "vk");
         world.verifying_keys.insert(vk_id.clone(), rec);
 
@@ -9509,11 +9489,18 @@ mod tests {
         world.elections.insert("election-1".to_string(), election);
 
         let backend = "halo2/ipa";
-        let vk_bytes = vec![9, 9, 9];
+        let circuit_id = "halo2/ipa:state-hydrate-v1";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let schema_hash = [7u8; 32];
-        let mut rec = active_vk_record(commitment, schema_hash, backend);
-        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes,
+        );
         let vk_id = VerifyingKeyId::new(backend, "vk");
         world.verifying_keys.insert(vk_id.clone(), rec);
 
@@ -9588,59 +9575,48 @@ mod tests {
     }
 
     fn dummy_env(
-        label: &str,
-        vk_commitment: [u8; 32],
-        schema_hash: [u8; 32],
-        domain: [u8; 32],
+        circuit_id: &str,
+        vk_hash: [u8; 32],
+        public_inputs: Vec<u8>,
+        proof_bytes: Vec<u8>,
     ) -> Vec<u8> {
-        use iroha_zkp_halo2::{
-            IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, ZkCurveId,
-        };
-        let params = IpaParams {
-            version: 1,
-            curve_id: ZkCurveId::Pallas.as_u16(),
-            n: 4,
-            g: Vec::new(),
-            h: Vec::new(),
-            u: [0u8; 32],
-        };
-        let public = PolyOpenPublic {
-            version: 1,
-            curve_id: ZkCurveId::Pallas.as_u16(),
-            n: 4,
-            z: [0u8; 32],
-            t: [0u8; 32],
-            p_g: [0u8; 32],
-        };
-        let proof = IpaProofData {
-            version: 1,
-            l: Vec::new(),
-            r: Vec::new(),
-            a_final: [0u8; 32],
-            b_final: [0u8; 32],
-        };
-        let env = OpenVerifyEnvelope {
-            params,
-            public,
-            proof,
-            transcript_label: label.to_string(),
-            vk_commitment: Some(vk_commitment),
-            public_inputs_schema_hash: Some(schema_hash),
-            domain_tag: Some(domain),
+        let env = iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: circuit_id.to_string(),
+            vk_hash,
+            public_inputs,
+            proof_bytes,
+            aux: Vec::new(),
         };
         norito::to_bytes(&env).expect("serialize envelope")
+    }
+
+    fn minimal_zk1_vk_bytes(k: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"ZK1\0");
+        bytes.extend_from_slice(b"IPAK");
+        bytes.extend_from_slice(&(4u32).to_le_bytes());
+        bytes.extend_from_slice(&k.to_le_bytes());
+        bytes
+    }
+
+    fn schema_hash(public_inputs: &[u8]) -> [u8; 32] {
+        Hash::new(public_inputs).into()
     }
 
     fn active_vk_record(
         commitment: [u8; 32],
         schema_hash: [u8; 32],
         backend: &str,
+        circuit_id: &str,
+        namespace: &str,
+        vk_bytes: Vec<u8>,
     ) -> VerifyingKeyRecord {
         let mut rec = VerifyingKeyRecord::new_with_owner(
             1,
-            format!("{backend}:circuit"),
+            circuit_id.to_string(),
             None,
-            "transfer",
+            namespace,
             BackendTag::Halo2IpaPasta,
             "pallas",
             schema_hash,
@@ -9648,7 +9624,7 @@ mod tests {
         );
         rec.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         rec.max_proof_bytes = 1024;
-        rec.key = Some(VerifyingKeyBox::new(backend.into(), vec![9, 9, 9]));
+        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
         rec
     }
 
@@ -9660,35 +9636,40 @@ mod tests {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let vk_bytes = vec![9, 9, 9];
+        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let schema_hash = [3u8; 32];
-        let mut rec = active_vk_record(commitment, schema_hash, backend);
-        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes.clone()));
+        let public_inputs = vec![1u8, 2, 3, 4];
+        let schema_hash = schema_hash(&public_inputs);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes.clone(),
+        );
         let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec.clone());
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         host.set_verifying_keys(map).expect("set registry");
 
-        let domain_inputs = DomainHashInputs {
-            backend,
-            curve: "pallas",
-            vk_commitment: commitment,
-            schema_hash,
-            syscall_label: "zk_verify_transfer/v1",
-            manifest: "core",
-            namespace: "transfer",
-        };
-        let domain = host.compute_domain_hash(&domain_inputs);
-        let ok_env = dummy_env("zk_verify_transfer/v1", commitment, schema_hash, domain);
-        assert_eq!(
-            host.enforce_zk_envelope(&ok_env, "zk_verify_transfer/v1", "transfer"),
-            Ok(())
+        let ok_env = dummy_env(
+            circuit_id,
+            commitment,
+            public_inputs.clone(),
+            vec![0xAA; 16],
         );
+        assert!(host.enforce_zk_envelope(&ok_env, "transfer").is_ok());
 
-        let bad_label_env = dummy_env("wrong_label", commitment, schema_hash, domain);
+        let bad_circuit_env = dummy_env(
+            "halo2/ipa:wrong-circuit-v1",
+            commitment,
+            public_inputs,
+            vec![0xAA; 16],
+        );
         assert_eq!(
-            host.enforce_zk_envelope(&bad_label_env, "zk_verify_transfer/v1", "transfer"),
-            Err(ivm::host::ERR_TRANSCRIPT_LABEL)
+            host.enforce_zk_envelope(&bad_circuit_env, "transfer"),
+            Err(ivm::host::ERR_VK_MISMATCH)
         );
     }
 
@@ -9700,103 +9681,100 @@ mod tests {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let vk_bytes = vec![9, 9, 9];
+        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let schema_hash = [7u8; 32];
-        let mut rec = active_vk_record(commitment, schema_hash, backend);
-        rec.namespace = "ballot".to_string();
+        let public_inputs = vec![9u8, 8, 7, 6];
+        let schema_hash = schema_hash(&public_inputs);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "ballot",
+            vk_bytes.clone(),
+        );
         let mut map = BTreeMap::new();
         map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         host.set_verifying_keys(map).expect("set registry");
 
-        let domain_inputs = DomainHashInputs {
-            backend,
-            curve: "pallas",
-            vk_commitment: commitment,
-            schema_hash,
-            syscall_label: "zk_verify_transfer/v1",
-            manifest: "core",
-            namespace: "transfer",
-        };
-        let domain = host.compute_domain_hash(&domain_inputs);
-        let env = dummy_env("zk_verify_transfer/v1", commitment, schema_hash, domain);
+        let env = dummy_env(
+            circuit_id,
+            commitment,
+            public_inputs.clone(),
+            vec![0xAA; 16],
+        );
         assert_eq!(
-            host.enforce_zk_envelope(&env, "zk_verify_transfer/v1", "transfer"),
+            host.enforce_zk_envelope(&env, "transfer"),
             Err(ivm::host::ERR_NAMESPACE)
         );
 
-        // Switching the caller manifest also trips the namespace binding.
+        // Switching the caller manifest also trips the manifest binding.
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes,
+        );
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        host.set_verifying_keys(map).expect("set registry");
         host.set_current_manifest_id(Some("other".to_string()));
         assert_eq!(
-            host.enforce_zk_envelope(&env, "zk_verify_transfer/v1", "transfer"),
+            host.enforce_zk_envelope(&env, "transfer"),
             Err(ivm::host::ERR_NAMESPACE)
         );
     }
 
     #[test]
-    fn enforce_zk_envelope_rejects_vk_metadata_and_domain_mismatch() {
+    fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
         crate::test_alias::ensure();
         let mut host = CoreHost::new("alice@wonderland".parse().unwrap());
         host.set_chain_id_bytes(b"chain".to_vec());
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let vk_bytes = vec![7, 7, 7];
+        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let schema_hash = [3u8; 32];
-        let mut rec = active_vk_record(commitment, schema_hash, backend);
-        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes.clone()));
+        let public_inputs = vec![1u8, 2, 3, 4];
+        let schema_hash = schema_hash(&public_inputs);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes.clone(),
+        );
         let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec.clone());
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         host.set_verifying_keys(map).expect("set registry");
 
-        // Schema hash mismatch is rejected before domain-tag evaluation.
-        let wrong_schema = [5u8; 32];
-        let domain_inputs = DomainHashInputs {
-            backend,
-            curve: "pallas",
-            vk_commitment: commitment,
-            schema_hash: wrong_schema,
-            syscall_label: "zk_verify_transfer/v1",
-            manifest: "core",
-            namespace: "transfer",
-        };
-        let domain = host.compute_domain_hash(&domain_inputs);
-        let env = dummy_env("zk_verify_transfer/v1", commitment, wrong_schema, domain);
+        // Schema hash mismatch is rejected.
+        let env = dummy_env(circuit_id, commitment, vec![5u8, 6, 7, 8], vec![0xAA; 16]);
         assert_eq!(
-            host.enforce_zk_envelope(&env, "zk_verify_transfer/v1", "transfer"),
+            host.enforce_zk_envelope(&env, "transfer"),
             Err(ivm::host::ERR_VK_MISMATCH)
         );
 
-        // Matching metadata but a tampered domain tag is rejected explicitly.
-        let correct_domain_inputs = DomainHashInputs {
-            backend,
-            curve: "pallas",
-            vk_commitment: commitment,
-            schema_hash,
-            syscall_label: "zk_verify_transfer/v1",
-            manifest: "core",
-            namespace: "transfer",
-        };
-        let correct_domain = host.compute_domain_hash(&correct_domain_inputs);
-        let env_bad_domain =
-            dummy_env("zk_verify_transfer/v1", commitment, schema_hash, [0xAA; 32]);
+        // Unknown vk hash is rejected explicitly.
+        let env_bad_vk = dummy_env(
+            circuit_id,
+            [0xAA; 32],
+            public_inputs.clone(),
+            vec![0xAA; 16],
+        );
         assert_eq!(
-            host.enforce_zk_envelope(&env_bad_domain, "zk_verify_transfer/v1", "transfer"),
-            Err(ivm::host::ERR_DOMAIN_TAG)
+            host.enforce_zk_envelope(&env_bad_vk, "transfer"),
+            Err(ivm::host::ERR_VK_MISSING)
         );
 
-        // Happy-path with untampered domain tag still succeeds.
-        let env_ok = dummy_env(
-            "zk_verify_transfer/v1",
-            commitment,
-            schema_hash,
-            correct_domain,
-        );
-        assert_eq!(
-            host.enforce_zk_envelope(&env_ok, "zk_verify_transfer/v1", "transfer"),
-            Ok(())
-        );
+        // Happy-path still succeeds.
+        let env_ok = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
+        assert!(host.enforce_zk_envelope(&env_ok, "transfer").is_ok());
     }
 
     #[test]
@@ -9807,27 +9785,25 @@ mod tests {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let vk_bytes = vec![9, 9, 9];
+        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let schema_hash = [4u8; 32];
-        let mut rec = active_vk_record(commitment, schema_hash, backend);
-        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes.clone()));
+        let public_inputs = vec![3u8, 1, 4, 1, 5, 9];
+        let schema_hash = schema_hash(&public_inputs);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes.clone(),
+        );
         let mut map = BTreeMap::new();
         map.insert(VerifyingKeyId::new(backend, "vk"), rec);
         host.set_verifying_keys(map).expect("set registry");
 
-        let domain_inputs = DomainHashInputs {
-            backend,
-            curve: "pallas",
-            vk_commitment: commitment,
-            schema_hash,
-            syscall_label: ivm::host::LABEL_BATCH,
-            manifest: "core",
-            namespace: "transfer",
-        };
-        let domain = host.compute_domain_hash(&domain_inputs);
-        let env_bytes = dummy_env(ivm::host::LABEL_BATCH, commitment, schema_hash, domain);
-        let env: iroha_zkp_halo2::OpenVerifyEnvelope =
+        let env_bytes = dummy_env(circuit_id, commitment, public_inputs, vec![0xAA; 16]);
+        let env: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(&env_bytes).expect("decode envelope");
         let payload = norito::to_bytes(&vec![env]).expect("encode batch");
 
@@ -9842,7 +9818,7 @@ mod tests {
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
         let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
         assert_eq!(statuses, vec![0]);
-        assert_eq!(vm.register(11), ivm::host::ERR_DECODE);
+        assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
         assert_eq!(vm.register(12), 0);
     }
 

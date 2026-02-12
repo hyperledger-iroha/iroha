@@ -3,8 +3,8 @@
 
 use std::time::{Duration, Instant};
 
-use iroha_core::kura::BlockStore;
 use iroha_config::kura::FsyncMode;
+use iroha_core::kura::BlockStore;
 use tempfile::tempdir;
 
 #[test]
