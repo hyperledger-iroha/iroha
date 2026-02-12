@@ -271,7 +271,7 @@ impl Actor {
         }
     }
 
-    fn build_fetch_pending_block_payload(&self, block: &SignedBlock) -> BlockMessage {
+    pub(super) fn build_fetch_pending_block_payload(&self, block: &SignedBlock) -> BlockMessage {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
