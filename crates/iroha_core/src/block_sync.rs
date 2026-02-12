@@ -4740,6 +4740,8 @@ pub mod message {
                 }
                 roster.push(peer.clone());
             }
+            // Permissioned QC validation canonicalizes roster ordering.
+            roster.sort();
             let mut mapped = BTreeSet::new();
             for signer in signers {
                 let idx = usize::try_from(*signer).expect("signer index fits usize");

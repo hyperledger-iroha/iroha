@@ -5287,6 +5287,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_limits_vote_burst_when_blocks_pending() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let vote_total = VOTE_BURST_CAP_WITH_BLOCKS + 1;

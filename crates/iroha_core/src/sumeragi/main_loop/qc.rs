@@ -34,6 +34,10 @@ enum CommittedQcDecision {
     Drop,
 }
 
+/// For small committees, worker handoff can dominate the aggregate verification cost.
+/// Keep verification inline to avoid unnecessary queueing latency on the hot path.
+const QC_VERIFY_INLINE_ROSTER_MAX: usize = 8;
+
 pub(super) fn select_commit_root_signers(
     vote_log: &BTreeMap<
         (
@@ -2505,6 +2509,7 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
+        let topology_len = topology.as_ref().len();
         if aggregate_ok.is_none()
             && self
                 .subsystems
@@ -2514,7 +2519,10 @@ impl Actor {
         {
             aggregate_ok = Some(true);
         }
-        if aggregate_ok.is_none() && !self.subsystems.qc_verify.work_txs.is_empty() {
+        if aggregate_ok.is_none()
+            && topology_len > QC_VERIFY_INLINE_ROSTER_MAX
+            && !self.subsystems.qc_verify.work_txs.is_empty()
+        {
             if let Some(inputs) = super::qc_aggregate_inputs(
                 &qc,
                 &topology,
@@ -2615,6 +2623,15 @@ impl Actor {
                     );
                 }
             }
+        } else if aggregate_ok.is_none() && topology_len <= QC_VERIFY_INLINE_ROSTER_MAX {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                roster_len = topology_len,
+                "verifying QC aggregate inline for small commit roster"
+            );
         }
         let (stake_snapshot, validation, evidence) = {
             let state_view = self.state.view();
