@@ -5239,11 +5239,7 @@ impl Client {
         metadata: Metadata,
     ) -> SignedTransaction {
         let tx_builder = TransactionBuilder::new(self.chain.clone(), self.account.clone());
-
-        let mut tx_builder = match instructions.into() {
-            Executable::Instructions(instructions) => tx_builder.with_instructions(instructions),
-            Executable::Ivm(bytecode) => tx_builder.with_bytecode(bytecode),
-        };
+        let mut tx_builder = tx_builder.with_executable(instructions.into());
 
         if let Some(transaction_ttl) = self.transaction_ttl {
             tx_builder.set_ttl(transaction_ttl);

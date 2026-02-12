@@ -22,7 +22,7 @@ use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec},
 };
-use norito::{NoritoSerialize, decode_from_bytes};
+use norito::decode_from_bytes;
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3_hash::{Digest as Sha3Digest, Sha3_256};
 
@@ -32,7 +32,7 @@ use crate::{
     ivm::IVM,
     parallel::{StateAccessSet, StateKey, StateUpdate},
     pointer_abi::{self, PointerType},
-    syscalls, zk,
+    syscalls,
 };
 
 /// Runtime record of logical state touches performed by a host during a transaction.
@@ -296,37 +296,6 @@ impl DefaultHost {
     pub fn with_chain_id(mut self, chain_id: Vec<u8>) -> Self {
         self.chain_id = Some(chain_id);
         self
-    }
-
-    fn expected_transcript_label(number: u32) -> &'static str {
-        match number {
-            syscalls::SYSCALL_ZK_VERIFY_TRANSFER => LABEL_TRANSFER,
-            syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => LABEL_UNSHIELD,
-            syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => LABEL_VOTE_BALLOT,
-            syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => LABEL_VOTE_TALLY,
-            syscalls::SYSCALL_ZK_VERIFY_BATCH => LABEL_BATCH,
-            _ => LABEL_TRANSFER,
-        }
-    }
-
-    fn validate_transcript_label(&self, number: u32, label: &str) -> Result<(), u64> {
-        if label.len() > self.zk_cfg.max_transcript_label_len {
-            return Err(ERR_TRANSCRIPT_LABEL);
-        }
-        if self.zk_cfg.enforce_transcript_label_ascii && !label.is_ascii() {
-            return Err(ERR_TRANSCRIPT_LABEL);
-        }
-        let expected = Self::expected_transcript_label(number);
-        if label != expected {
-            return Err(ERR_TRANSCRIPT_LABEL);
-        }
-        Ok(())
-    }
-
-    fn proof_len_bytes(proof: &iroha_zkp_halo2::IpaProofData) -> Option<usize> {
-        proof
-            .encoded_len_exact()
-            .or_else(|| norito::to_bytes(proof).ok().map(|b| b.len()))
     }
 
     /// Set maximum supported k (where n = 2^k) for Halo2 IPA verifier.
@@ -1366,26 +1335,14 @@ impl IVMHost for DefaultHost {
                 }
             }
             crate::syscalls::SYSCALL_PROVE_EXECUTION => {
-                let trace = vm.register_trace();
-                match zk::verify_trace(&trace, vm.constraints(), vm.memory_log(), vm.register_log())
-                {
-                    Ok(_) => {
-                        vm.set_register(10, 1);
-                        Ok(0)
-                    }
-                    Err(e) => Err(e),
-                }
+                // This syscall is reserved for future integration with a real proving system.
+                // The standalone IVM host does not produce execution proofs.
+                Err(VMError::NotImplemented { syscall: number })
             }
             crate::syscalls::SYSCALL_VERIFY_PROOF => {
-                let trace = vm.register_trace();
-                match zk::verify_trace(&trace, vm.constraints(), vm.memory_log(), vm.register_log())
-                {
-                    Ok(_) => {
-                        vm.set_register(10, 1);
-                        Ok(0)
-                    }
-                    Err(_) => Err(VMError::AssertionFailed),
-                }
+                // Execution proof verification is implemented at the node layer (CoreHost),
+                // not inside the standalone IVM host.
+                Err(VMError::NotImplemented { syscall: number })
             }
             crate::syscalls::SYSCALL_VERIFY_SIGNATURE => {
                 // r10 = &Blob message TLV, r11 = &Blob signature TLV, r12 = &Blob public key TLV, r13 = scheme code
@@ -1871,8 +1828,8 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                // Expect a NoritoBytes TLV pointer in r10 containing a bare Norito payload
-                // for `Halo2OpenVerify`. Decode and verify via `iroha_zkp_halo2`.
+                // ZK proof verification is implemented by the node host (CoreHost). The
+                // standalone IVM host only reports the syscall as disabled.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
@@ -1883,94 +1840,9 @@ impl IVMHost for DefaultHost {
                     vm.set_register(11, ERR_ENVELOPE_SIZE);
                     return Ok(0);
                 }
-                // Decode the envelope first to apply config gating
-                let decoded_env: Result<iroha_zkp_halo2::OpenVerifyEnvelope, _> =
-                    norito::decode_from_bytes(tlv.payload);
-                if decoded_env.is_err() {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_DECODE);
-                    return Ok(0);
-                }
-                let env = decoded_env.unwrap();
-                // Enforce config gates
-                if !self.zk_cfg.enabled {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_DISABLED);
-                    return Ok(0);
-                }
-                if let Err(code) = self.validate_transcript_label(number, &env.transcript_label) {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, code);
-                    return Ok(0);
-                }
-                if let Some(proof_len) = Self::proof_len_bytes(&env.proof) {
-                    if proof_len > self.zk_cfg.max_proof_bytes {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_PROOF_LEN);
-                        return Ok(0);
-                    }
-                } else {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_DECODE);
-                    return Ok(0);
-                }
-                // Backend must be IPA and curve must be allowed
-                if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_BACKEND);
-                    return Ok(0);
-                }
-                let curve_ok = match (self.zk_cfg.curve, env.params.curve_id) {
-                    (ZkCurve::Pallas, cid)
-                        if cid == iroha_zkp_halo2::ZkCurveId::Pallas.as_u16() =>
-                    {
-                        true
-                    }
-                    (ZkCurve::Pasta, cid) if cid == iroha_zkp_halo2::ZkCurveId::Pasta.as_u16() => {
-                        true
-                    }
-                    (ZkCurve::Goldilocks, cid)
-                        if cid == iroha_zkp_halo2::ZkCurveId::Goldilocks.as_u16() =>
-                    {
-                        true
-                    }
-                    (ZkCurve::Bn254, cid) if cid == iroha_zkp_halo2::ZkCurveId::Bn254.as_u16() => {
-                        true
-                    }
-                    _ => false,
-                };
-                if !curve_ok {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_CURVE);
-                    return Ok(0);
-                }
-                // Enforce max_k based on params.n = 2^k
-                let n = env.params.n as usize;
-                let k = if n.is_power_of_two() {
-                    n.trailing_zeros()
-                } else {
-                    u32::MAX
-                };
-                if k == u32::MAX || k > self.zk_cfg.max_k {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_K);
-                    return Ok(0);
-                }
-                // Re-encode the envelope to Norito bytes and run verifier on the same bytes
-                let env_bytes = norito::to_bytes(&env).map_err(|_| VMError::NoritoInvalid)?;
-                match crate::zk_verify::verify_open_envelope(&env_bytes) {
-                    Ok(ok) => {
-                        vm.set_register(10, if ok { 1 } else { 0 });
-                        vm.set_register(11, if ok { 0 } else { ERR_VERIFY });
-                        Ok(0)
-                    }
-                    Err(_e) => {
-                        // Non-VerificationFailed errors are treated as invalid payloads
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_DECODE);
-                        Ok(0)
-                    }
-                }
+                vm.set_register(10, 0);
+                vm.set_register(11, ERR_DISABLED);
+                Ok(0)
             }
             crate::syscalls::SYSCALL_ZK_ROOTS_GET | crate::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
                 // Expect a NoritoBytes TLV pointer in r10 (request). Stub returns no data and
@@ -2025,149 +1897,15 @@ impl IVMHost for DefaultHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                // r10 = &NoritoBytes(Vec<OpenVerifyEnvelope>)
-                // Returns r10 = &NoritoBytes(Vec<u8>) with per-envelope results:
-                //   1 = verified true; 0 = verified false.
-                // Overall errors use r11 codes only when no per-item status vector is returned:
-                //   1=ERR_DISABLED, 2=ERR_BACKEND, 5=ERR_DECODE, 7=ERR_BATCH
-                const OK: u64 = 0;
-
+                // Batch verification is implemented by the node host (CoreHost). The standalone
+                // IVM host reports the syscall as disabled.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                // Decode batch
-                let envs: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-                    match norito::decode_from_bytes(tlv.payload) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, ERR_DECODE);
-                            return Ok(0);
-                        }
-                    };
-                if envs.len() as u32 > self.zk_cfg.verifier_max_batch {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_BATCH);
-                    return Ok(0);
-                }
-                if !self.zk_cfg.enabled {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_DISABLED);
-                    return Ok(0);
-                }
-                if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_BACKEND);
-                    return Ok(0);
-                }
-
-                // Pre-screen curves and k per envelope; build per-item status, then run verifier
-                let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
-                // Optionally: enforce budget (best-effort; skip actual timing in this build)
-                for env in &envs {
-                    let mut status = 0u8;
-                    if self
-                        .validate_transcript_label(number, &env.transcript_label)
-                        .is_err()
-                    {
-                        statuses.push(status);
-                        continue;
-                    }
-                    let Some(proof_len) = Self::proof_len_bytes(&env.proof) else {
-                        statuses.push(status);
-                        continue;
-                    };
-                    if proof_len > self.zk_cfg.max_proof_bytes {
-                        statuses.push(status);
-                        continue;
-                    }
-                    // Curve gating
-                    let curve_ok = match (self.zk_cfg.curve, env.params.curve_id) {
-                        (ZkCurve::Pallas, cid)
-                            if cid == iroha_zkp_halo2::ZkCurveId::Pallas.as_u16() =>
-                        {
-                            true
-                        }
-                        (ZkCurve::Pasta, cid)
-                            if cid == iroha_zkp_halo2::ZkCurveId::Pasta.as_u16() =>
-                        {
-                            true
-                        }
-                        (ZkCurve::Goldilocks, cid)
-                            if cid == iroha_zkp_halo2::ZkCurveId::Goldilocks.as_u16() =>
-                        {
-                            true
-                        }
-                        (ZkCurve::Bn254, cid)
-                            if cid == iroha_zkp_halo2::ZkCurveId::Bn254.as_u16() =>
-                        {
-                            true
-                        }
-                        _ => false,
-                    };
-                    if !curve_ok {
-                        statuses.push(status);
-                        continue;
-                    }
-                    // k gating
-                    let n = env.params.n as usize;
-                    let k = if n.is_power_of_two() {
-                        n.trailing_zeros()
-                    } else {
-                        u32::MAX
-                    };
-                    if k == u32::MAX || k > self.zk_cfg.max_k {
-                        statuses.push(status);
-                        continue;
-                    }
-                    // Verify this envelope
-                    let bytes = match norito::to_bytes(env) {
-                        Ok(b) => b,
-                        Err(_) => {
-                            statuses.push(status);
-                            continue;
-                        }
-                    };
-                    if bytes.len() > self.zk_cfg.max_envelope_bytes {
-                        statuses.push(status);
-                        continue;
-                    }
-                    if let Ok(ok) = crate::zk_verify::verify_open_envelope(&bytes) {
-                        status = if ok { 1 } else { 0 };
-                    }
-                    if status == 0 {
-                        statuses.push(0);
-                    } else {
-                        statuses.push(status);
-                    }
-                }
-
-                if statuses.is_empty() {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_DECODE);
-                    return Ok(0);
-                }
-
-                // Encode statuses as NoritoBytes and return pointer. Also set r12 to the
-                // index of the first failing item (status=0) if any; otherwise set to u64::MAX.
-                let body = norito::to_bytes(&statuses).map_err(|_| VMError::NoritoInvalid)?;
-                let mut out = Vec::with_capacity(7 + body.len() + 32);
-                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                out.extend_from_slice(&body);
-                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
-                vm.set_register(10, p);
-                if let Some((idx, _)) = statuses.iter().enumerate().find(|(_, s)| **s == 0) {
-                    vm.set_register(12, idx as u64);
-                } else {
-                    vm.set_register(12, u64::MAX);
-                }
-                vm.set_register(11, OK);
+                vm.set_register(10, 0);
+                vm.set_register(11, ERR_DISABLED);
                 Ok(0)
             }
             syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),

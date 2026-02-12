@@ -64,6 +64,12 @@ fn inspect_transactions(block: &SignedBlock) {
                     "tx#{tx_idx}: executable carries IVM bytecode (skipping instruction probe)"
                 );
             }
+            Executable::IvmProved(proved) => {
+                println!(
+                    "tx#{tx_idx}: executable carries proved IVM bytecode (overlay_len={}, skipping instruction probe)",
+                    proved.overlay.len()
+                );
+            }
         }
     }
 }

@@ -8431,6 +8431,7 @@ exit 0
                     })
                     .collect::<Vec<_>>(),
                 Executable::Ivm(_) => Vec::new(),
+                Executable::IvmProved(_) => Vec::new(),
             })
             .collect()
     }

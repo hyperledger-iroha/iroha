@@ -191,6 +191,15 @@ fn dump_block(path: &Path, block: &SignedBlock, ctx: &mut DumpContext) {
                     println!("    ivm bytecode: {} bytes", bytecode.size_bytes());
                 }
             }
+            Executable::IvmProved(proved) => {
+                if ctx.verbose {
+                    println!(
+                        "    ivm proved: bytecode {} bytes overlay {} instructions",
+                        proved.bytecode.size_bytes(),
+                        proved.overlay.len()
+                    );
+                }
+            }
         }
     }
 }

@@ -12846,6 +12846,10 @@ impl State {
                 }
             };
         let pipeline = iroha_config::parameters::actual::Pipeline {
+            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
+                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
+                allowed_circuits: Vec::new(),
+            },
             dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -21008,6 +21012,10 @@ impl StateTransaction<'_, '_> {
                     .expect("failed to load IVM program");
                 vm.run().expect("failed to execute IVM program");
             }
+            Executable::IvmProved(proved) => {
+                self.execute_instructions(proved.overlay.clone(), authority)
+                    .expect("should be no errors");
+            }
         }
     }
 
@@ -22031,6 +22039,10 @@ pub(crate) mod deserialize {
 
     fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
         iroha_config::parameters::actual::Pipeline {
+            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
+                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
+                allowed_circuits: Vec::new(),
+            },
             dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,

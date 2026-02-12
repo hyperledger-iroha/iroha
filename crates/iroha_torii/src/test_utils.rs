@@ -841,6 +841,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             panic_on_duplicate_metrics: defaults::telemetry::PANIC_ON_DUPLICATE_METRICS,
         },
         pipeline: A::Pipeline {
+            ivm_proved: A::IvmProvedExecution {
+                enabled: defaults::pipeline::ivm_proved::ENABLED,
+                allowed_circuits: Vec::new(),
+            },
             dynamic_prepass: false,
             access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
             parallel_overlay: false,

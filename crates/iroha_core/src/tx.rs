@@ -455,6 +455,7 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::Instructions(instructions) => {
             instructions.iter().any(is_time_sensitive_instruction)
         }
+        Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
 }
@@ -968,6 +969,102 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
             }
+            Executable::IvmProved(proved) => {
+                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
+                    .expect("static gas_limit key");
+                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "missing gas_limit in transaction metadata".into(),
+                        },
+                    ));
+                };
+                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("invalid gas_limit metadata: {err}"),
+                    })
+                })?;
+                if gas_limit == 0 {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "gas_limit must be positive".into(),
+                        },
+                    ));
+                }
+
+                let instruction_limit = limits.max_instructions().get();
+                let instruction_count = u64::try_from(proved.overlay.len()).unwrap_or(u64::MAX);
+                if instruction_count > instruction_limit {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: format!(
+                                "Too many instructions in proved overlay, max number is {}, but got {}",
+                                limits.max_instructions(),
+                                proved.overlay.len()
+                            ),
+                        },
+                    ));
+                }
+
+                let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
+                let bytecode_size = u64::try_from(proved.bytecode.size_bytes()).unwrap_or(u64::MAX);
+                if bytecode_size > ivm_bytecode_size_limit {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: format!(
+                                "IVM bytecode size is too large: max {}, got {} \
+                                (configured by \"Parameter::SmartContractLimits\")",
+                                limits.ivm_bytecode_size(),
+                                proved.bytecode.size_bytes()
+                            ),
+                        },
+                    ));
+                }
+
+                // Decode the program header to obtain the code section and enforce the global
+                // instruction count limit published via `TransactionParameters`.
+                let parsed =
+                    ivm::ProgramMetadata::parse(proved.bytecode.as_ref()).map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: format!("Failed to parse IVM metadata: {err}"),
+                        })
+                    })?;
+                let code = &proved.bytecode.as_ref()[parsed.code_offset..];
+                let decoded = ivm::ivm_cache::IvmCache::decode_stream(code).map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("Failed to decode IVM instructions: {err}"),
+                    })
+                })?;
+
+                let decoded_bytes = decoded
+                    .iter()
+                    .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
+                    .unwrap_or(u64::MAX);
+                if decoded_bytes > ivm_bytecode_size_limit {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: format!(
+                                "Decoded IVM instruction stream exceeds byte limit {} with {} bytes",
+                                limits.ivm_bytecode_size(),
+                                decoded_bytes
+                            ),
+                        },
+                    ));
+                }
+
+                let decoded_len = u64::try_from(decoded.len()).unwrap_or(u64::MAX);
+                if decoded_len > instruction_limit {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: format!(
+                                "Too many IVM instructions in payload, max number is {}, but decoded {}",
+                                limits.max_instructions(),
+                                decoded.len()
+                            ),
+                        },
+                    ));
+                }
+            }
             Executable::Ivm(smart_contract) => {
                 let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
                     .expect("static gas_limit key");
@@ -1243,6 +1340,13 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
+            }
+            Executable::IvmProved(_) => {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "Heartbeat transaction must not include IVM bytecode".into(),
+                    },
+                ));
             }
             Executable::Ivm(_) => {
                 return Err(AcceptTransactionFail::TransactionLimit(

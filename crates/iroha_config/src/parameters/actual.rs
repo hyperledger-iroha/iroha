@@ -2962,6 +2962,8 @@ impl DaRotation {
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Pipeline {
+    /// Settings for admitting `Executable::IvmProved` (proof-carrying IVM overlays).
+    pub ivm_proved: IvmProvedExecution,
     /// Enable dynamic prepass for IVM access-set derivation.
     pub dynamic_prepass: bool,
     /// Cache derived access sets for IVM manifests (advisory only).
@@ -3038,6 +3040,15 @@ pub struct Pipeline {
     pub amx_per_memory_access_ns: u64,
     /// Estimated nanoseconds per syscall used for AMX budgeting.
     pub amx_per_syscall_ns: u64,
+}
+
+/// Pipeline settings controlling admission and verification of `Executable::IvmProved`.
+#[derive(Debug, Clone)]
+pub struct IvmProvedExecution {
+    /// Master toggle for accepting `Executable::IvmProved`.
+    pub enabled: bool,
+    /// Allowlist of circuit IDs accepted for `Executable::IvmProved`.
+    pub allowed_circuits: Vec<String>,
 }
 
 /// Tiered state backend settings controlling hot/cold storage behaviour.
