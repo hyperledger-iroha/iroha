@@ -3659,8 +3659,19 @@ impl Iroha {
         );
 
         if let Some(genesis_block) = genesis.as_ref() {
+            let metadata_genesis_from_store = if block_count.0 > 0 {
+                let Some(stored_genesis) = kura.get_block(std::num::NonZeroUsize::new(1).expect("nonzero"))
+                else {
+                    return Err(Report::new(StartError::InitKura)
+                        .attach("non-empty block store is missing genesis block at height 1"));
+                };
+                Some(GenesisBlock((*stored_genesis).clone()))
+            } else {
+                None
+            };
+            let metadata_genesis = metadata_genesis_from_store.as_ref().unwrap_or(genesis_block);
             verify_genesis_metadata(
-                genesis_block,
+                metadata_genesis,
                 &config,
                 &consensus_caps,
                 &computed_mode_tag,
@@ -3884,30 +3895,9 @@ impl Iroha {
         }
 
         if let Some(genesis_block) = genesis.as_ref() {
-            let genesis_account = AccountId::new(
-                iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                config.genesis.public_key.clone(),
-            );
-            if let Err(err) = iroha_core::validate_genesis_block(
-                &genesis_block.0,
-                &genesis_account,
-                &config.common.chain,
-            ) {
-                let err_display = err.to_string();
-                iroha_logger::error!(
-                    error = %err,
-                    "Invalid genesis block rejected during validation"
-                );
-                return Err(Report::new(err)
-                    .attach(format!(
-                        "Invalid genesis block rejected during validation: {err_display}"
-                    ))
-                    .change_context(StartError::InitKura));
-            }
-
-            // On non-empty storage, avoid re-executing genesis against a replayed state
-            // (which would fail static height checks). Instead, verify that the provided
-            // genesis matches the block already persisted at height 1.
+            // On non-empty storage, avoid re-validating the provided genesis signature.
+            // Instead, ensure the optional provided payload matches the genesis already
+            // persisted at height 1 and continue replay from stored data.
             if block_count.0 > 0 {
                 let Some(stored_genesis) =
                     kura.get_block(std::num::NonZeroUsize::new(1).expect("nonzero"))
@@ -3923,7 +3913,32 @@ impl Iroha {
                         "provided genesis does not match stored genesis (stored={stored_hash}, provided={provided_hash})",
                     )));
                 }
+                iroha_logger::info!(
+                    hash = %stored_hash,
+                    "non-empty block store detected; using stored genesis for restart",
+                );
             } else {
+                let genesis_account = AccountId::new(
+                    iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+                    config.genesis.public_key.clone(),
+                );
+                if let Err(err) = iroha_core::validate_genesis_block(
+                    &genesis_block.0,
+                    &genesis_account,
+                    &config.common.chain,
+                ) {
+                    let err_display = err.to_string();
+                    iroha_logger::error!(
+                        error = %err,
+                        "Invalid genesis block rejected during validation"
+                    );
+                    return Err(Report::new(err)
+                        .attach(format!(
+                            "Invalid genesis block rejected during validation: {err_display}"
+                        ))
+                        .change_context(StartError::InitKura));
+                }
+
                 // Ensure genesis instructions execute successfully before starting consensus.
                 // Use the configured trusted peers as the initial commit topology when the
                 // state hasn't recorded one yet (fresh storage). This ensures the genesis
