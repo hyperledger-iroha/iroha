@@ -1093,6 +1093,7 @@ impl Actor {
                     if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
                         let payload_bytes = super::proposals::block_payload_bytes(&block);
                         let payload_len = payload_bytes.len();
+                        let payload_bytes_for_hydrate = payload_bytes.clone();
                         let work = super::rbc::RbcSeedWork {
                             key: session_key,
                             payload_hash,
@@ -1117,6 +1118,34 @@ impl Actor {
                                     Ok(_) => {
                                         queued_seed = true;
                                         seed_inflight = true;
+                                        let hydrate_result = self.hydrate_rbc_session_from_block(
+                                            session_key,
+                                            &payload_bytes_for_hydrate,
+                                            payload_hash,
+                                            sender.as_ref(),
+                                        );
+                                        // BlockCreated already carries the payload; avoid waiting
+                                        // on async seed completion before READY/DELIVER can proceed.
+                                        self.subsystems
+                                            .da_rbc
+                                            .rbc
+                                            .seed_inflight
+                                            .remove(&session_key);
+                                        hydrate_result?;
+                                        if rebroadcast_missing_init
+                                            && let Some(session) = self
+                                                .subsystems
+                                                .da_rbc
+                                                .rbc
+                                                .sessions
+                                                .get(&session_key)
+                                                .cloned()
+                                        {
+                                            self.rebroadcast_rbc_payload_for_missing_init(
+                                                session_key,
+                                                &session,
+                                            );
+                                        }
                                     }
                                     Err(err) => {
                                         warn!(
@@ -1204,14 +1233,31 @@ impl Actor {
                             }
                         }
                     }
-                    if !queued_seed {
-                        let payload_bytes = super::proposals::block_payload_bytes(&block);
-                        self.hydrate_rbc_session_from_block(
-                            session_key,
-                            &payload_bytes,
-                            payload_hash,
-                            sender.as_ref(),
-                        )?;
+                    let payload_bytes = super::proposals::block_payload_bytes(&block);
+                    let hydrate_result = self.hydrate_rbc_session_from_block(
+                        session_key,
+                        &payload_bytes,
+                        payload_hash,
+                        sender.as_ref(),
+                    );
+                    if queued_seed {
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .seed_inflight
+                            .remove(&session_key);
+                    }
+                    hydrate_result?;
+                    if rebroadcast_missing_init
+                        && let Some(session) = self
+                            .subsystems
+                            .da_rbc
+                            .rbc
+                            .sessions
+                            .get(&session_key)
+                            .cloned()
+                    {
+                        self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
                     }
                 }
             }
@@ -1627,6 +1673,7 @@ impl Actor {
                     let mut queued_seed = false;
                     if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
                         let payload_len = payload_bytes.len();
+                        let payload_bytes_for_hydrate = payload_bytes.clone();
                         let work = super::rbc::RbcSeedWork {
                             key: session_key,
                             payload_hash,
@@ -1650,6 +1697,38 @@ impl Actor {
                                 ) {
                                     Ok(_) => {
                                         queued_seed = true;
+                                        let hydrate_start = Instant::now();
+                                        let hydrate_result = self.hydrate_rbc_session_from_block(
+                                            session_key,
+                                            &payload_bytes_for_hydrate,
+                                            payload_hash,
+                                            sender.as_ref(),
+                                        );
+                                        // BlockCreated already carries full payload bytes.
+                                        // Do not defer READY/DELIVER on background seed completion.
+                                        self.subsystems
+                                            .da_rbc
+                                            .rbc
+                                            .seed_inflight
+                                            .remove(&session_key);
+                                        hydrate_result?;
+                                        hydrate_ms =
+                                            u64::try_from(hydrate_start.elapsed().as_millis())
+                                                .unwrap_or(u64::MAX);
+                                        if rebroadcast_missing_init
+                                            && let Some(session) = self
+                                                .subsystems
+                                                .da_rbc
+                                                .rbc
+                                                .sessions
+                                                .get(&session_key)
+                                                .cloned()
+                                        {
+                                            self.rebroadcast_rbc_payload_for_missing_init(
+                                                session_key,
+                                                &session,
+                                            );
+                                        }
                                     }
                                     Err(err) => {
                                         warn!(
@@ -1736,16 +1815,33 @@ impl Actor {
                         }
                     }
                     seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    if !queued_seed {
-                        let hydrate_start = Instant::now();
-                        self.hydrate_rbc_session_from_block(
-                            session_key,
-                            &payload_bytes,
-                            payload_hash,
-                            sender.as_ref(),
-                        )?;
-                        hydrate_ms =
-                            u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    let hydrate_start = Instant::now();
+                    let hydrate_result = self.hydrate_rbc_session_from_block(
+                        session_key,
+                        &payload_bytes,
+                        payload_hash,
+                        sender.as_ref(),
+                    );
+                    if queued_seed {
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .seed_inflight
+                            .remove(&session_key);
+                    }
+                    hydrate_result?;
+                    hydrate_ms =
+                        u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    if rebroadcast_missing_init
+                        && let Some(session) = self
+                            .subsystems
+                            .da_rbc
+                            .rbc
+                            .sessions
+                            .get(&session_key)
+                            .cloned()
+                    {
+                        self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
                     }
                 }
             }

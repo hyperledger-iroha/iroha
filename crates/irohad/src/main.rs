@@ -6951,22 +6951,12 @@ fn consensus_caps_from_genesis(
         if block_time_ms < min_finality_ms {
             block_time_ms = min_finality_ms;
         }
-        let mut timeouts =
+        Some(
             sumeragi
                 .npos
                 .timeouts_overrides
-                .resolve(Duration::from_millis(block_time_ms));
-        let min_finality = Duration::from_millis(min_finality_ms);
-        let clamp = |value: Duration| if value < min_finality { min_finality } else { value };
-        timeouts.propose = clamp(timeouts.propose);
-        timeouts.prevote = clamp(timeouts.prevote);
-        timeouts.precommit = clamp(timeouts.precommit);
-        timeouts.commit = clamp(timeouts.commit);
-        timeouts.da = clamp(timeouts.da);
-        timeouts.aggregator = clamp(timeouts.aggregator);
-        timeouts.exec = clamp(timeouts.exec);
-        timeouts.witness = clamp(timeouts.witness);
-        Some(timeouts)
+                .resolve(Duration::from_millis(block_time_ms)),
+        )
     } else {
         None
     };
@@ -7259,21 +7249,11 @@ fn verify_genesis_metadata(
         if block_time_ms < min_finality_ms {
             block_time_ms = min_finality_ms;
         }
-        let mut timeouts = config
+        let timeouts = config
             .sumeragi
             .npos
             .timeouts_overrides
             .resolve(Duration::from_millis(block_time_ms));
-        let min_finality = Duration::from_millis(min_finality_ms);
-        let clamp = |value: Duration| if value < min_finality { min_finality } else { value };
-        timeouts.propose = clamp(timeouts.propose);
-        timeouts.prevote = clamp(timeouts.prevote);
-        timeouts.precommit = clamp(timeouts.precommit);
-        timeouts.commit = clamp(timeouts.commit);
-        timeouts.da = clamp(timeouts.da);
-        timeouts.aggregator = clamp(timeouts.aggregator);
-        timeouts.exec = clamp(timeouts.exec);
-        timeouts.witness = clamp(timeouts.witness);
         let duration_ms = |value: Duration| -> u64 {
             let ms = value.as_millis();
             u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
