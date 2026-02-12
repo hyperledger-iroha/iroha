@@ -2000,15 +2000,31 @@ impl Actor {
         );
         if should_defer_online {
             if pending_queue_len > 0 {
-                iroha_logger::info!(
-                    queue_len = pending_queue_len,
-                    height = tracked_height,
-                    required,
-                    online_peers,
-                    online_total,
-                    grace_ms = offline_grace.as_millis(),
-                    "deferring proposal: insufficient online peers for commit quorum (within grace)"
-                );
+                let throttle_hash = tip_hash.unwrap_or_else(|| {
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                        [0; Hash::LENGTH],
+                    ))
+                });
+                if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                    ProposalDeferWarningKind::InsufficientOnlinePeers,
+                    tracked_height,
+                    current_view.unwrap_or_default(),
+                    throttle_hash,
+                    now,
+                    Duration::from_secs(5),
+                ) {
+                    iroha_logger::info!(
+                        queue_len = pending_queue_len,
+                        height = tracked_height,
+                        view = current_view,
+                        required,
+                        online_peers,
+                        online_total,
+                        grace_ms = offline_grace.as_millis(),
+                        suppressed_since_last,
+                        "deferring proposal: insufficient online peers for commit quorum (within grace)"
+                    );
+                }
             } else {
                 trace!(
                     height = tracked_height,

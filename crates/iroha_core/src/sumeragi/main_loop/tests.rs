@@ -1464,6 +1464,9 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1600)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1600)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::PacingFactorBps(
+            25_000,
+        )));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(400)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(3)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(2)));
@@ -1509,7 +1512,12 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
         let ms = value.as_millis();
         u64::try_from(ms).expect("timeout exceeds millisecond range")
     };
-    let resolved_timeouts = crate::sumeragi::resolve_npos_timeouts(&view, &consensus_cfg.npos);
+    // Handshake fingerprints must use canonical genesis timing and must not drift with adaptive
+    // pacing-factor changes that occur at runtime.
+    let resolved_timeouts = consensus_cfg
+        .npos
+        .timeouts_overrides
+        .resolve(Duration::from_millis(1600));
     let expected = crate::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         &common_config.chain,
         &ConsensusGenesisParams {
@@ -1649,7 +1657,10 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
         let ms = value.as_millis();
         u64::try_from(ms).expect("timeout exceeds millisecond range")
     };
-    let resolved_timeouts = crate::sumeragi::resolve_npos_timeouts(&view, &consensus_cfg.npos);
+    let resolved_timeouts = consensus_cfg
+        .npos
+        .timeouts_overrides
+        .resolve(Duration::from_millis(1600));
     let expected = crate::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         &common_config.chain,
         &ConsensusGenesisParams {

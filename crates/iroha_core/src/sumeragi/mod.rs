@@ -384,30 +384,10 @@ pub(crate) fn resolve_npos_timeouts(
     fallback: &SumeragiNpos,
 ) -> SumeragiNposTimeouts {
     let block_time = resolve_npos_block_time(view);
-    let min_finality_ms = {
-        let params = view.world.parameters().sumeragi();
-        if params.min_finality_ms() == 0 {
-            iroha_data_model::parameter::system::SumeragiParameters::default().min_finality_ms()
-        } else {
-            params.min_finality_ms()
-        }
-    };
-    let min_finality = Duration::from_millis(min_finality_ms.max(1));
-    let clamp = |value: Duration| {
-        if value < min_finality {
-            min_finality
-        } else {
-            value
-        }
-    };
-    let mut out = fallback.timeouts_overrides.resolve(block_time);
-    out.propose = clamp(out.propose);
-    out.prevote = clamp(out.prevote);
-    out.precommit = clamp(out.precommit);
-    out.commit = clamp(out.commit);
-    out.da = clamp(out.da);
-    out.aggregator = clamp(out.aggregator);
-    out
+    // NPoS phase timeouts are derived from block time and can legitimately be below
+    // `min_finality_ms` for fast pipelines; clamping each phase to min_finality
+    // artificially inflates end-to-end latency and vote fanout cadence.
+    fallback.timeouts_overrides.resolve(block_time)
 }
 
 /// Resolve `NPoS` election parameters from on-chain values, falling back to config defaults.
@@ -560,7 +540,7 @@ mod tests {
         collections::{BTreeMap, BTreeSet},
         num::NonZeroU64,
         sync::{
-            Arc, Mutex,
+            Arc, Barrier, Mutex,
             atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
         },
@@ -1426,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_time_budget_clamps_to_floor_for_small_quorum_timeout() {
+    fn worker_time_budget_clamps_to_floor_for_small_block_window() {
         let budget = worker_time_budget(
             Duration::from_millis(10),
             Duration::from_millis(10),
@@ -1438,10 +1418,10 @@ mod tests {
     }
 
     #[test]
-    fn worker_time_budget_clamps_to_cap_for_large_quorum_timeout() {
+    fn worker_time_budget_clamps_to_cap_for_large_block_window() {
         let budget = worker_time_budget(
-            Duration::from_secs(1),
-            Duration::from_secs(2),
+            Duration::from_secs(20),
+            Duration::from_secs(30),
             true,
             1,
             Duration::from_millis(TIME_BUDGET_CAP_MS),
@@ -1450,15 +1430,34 @@ mod tests {
     }
 
     #[test]
-    fn worker_time_budget_uses_quorum_timeout_for_non_da() {
+    fn worker_time_budget_uses_block_commit_window() {
         let budget = worker_time_budget(
-            Duration::from_millis(100),
-            Duration::from_millis(200),
-            false,
+            Duration::from_secs(2),
+            Duration::from_secs(3),
+            true,
             1,
             Duration::from_millis(TIME_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn worker_time_budget_ignores_da_quorum_multiplier() {
+        let baseline = worker_time_budget(
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            true,
+            1,
+            Duration::from_millis(TIME_BUDGET_CAP_MS),
+        );
+        let with_large_multiplier = worker_time_budget(
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            true,
+            10,
+            Duration::from_millis(TIME_BUDGET_CAP_MS),
+        );
+        assert_eq!(baseline, with_large_multiplier);
     }
 
     #[test]
@@ -1809,6 +1808,45 @@ mod tests {
         assert_eq!(resolved.aggregator, Duration::from_millis(200));
         assert_eq!(resolved.exec, derived.exec);
         assert_eq!(resolved.witness, derived.witness);
+    }
+
+    #[test]
+    fn resolve_npos_timeouts_scale_with_fast_block_time_without_min_finality_clamp() {
+        let fallback = SumeragiNpos::default();
+        let state = state_with_sumeragi_block_time(333);
+        let view = state.view();
+        let resolved = resolve_npos_timeouts(&view, &fallback);
+        let expected = SumeragiNposTimeouts::from_block_time(Duration::from_millis(333));
+        assert_eq!(resolved.propose, expected.propose);
+        assert_eq!(resolved.prevote, expected.prevote);
+        assert_eq!(resolved.precommit, expected.precommit);
+        assert_eq!(resolved.commit, expected.commit);
+        assert_eq!(resolved.da, expected.da);
+        assert_eq!(resolved.aggregator, expected.aggregator);
+        assert_eq!(resolved.exec, expected.exec);
+        assert_eq!(resolved.witness, expected.witness);
+        assert!(resolved.aggregator < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn resolve_npos_timeouts_preserve_small_overrides() {
+        let mut fallback = SumeragiNpos::default();
+        fallback.timeouts_overrides.propose = Some(Duration::from_millis(30));
+        fallback.timeouts_overrides.prevote = Some(Duration::from_millis(40));
+        fallback.timeouts_overrides.precommit = Some(Duration::from_millis(50));
+        fallback.timeouts_overrides.commit = Some(Duration::from_millis(60));
+        fallback.timeouts_overrides.da = Some(Duration::from_millis(70));
+        fallback.timeouts_overrides.aggregator = Some(Duration::from_millis(5));
+
+        let state = state_with_sumeragi_block_time(333);
+        let view = state.view();
+        let resolved = resolve_npos_timeouts(&view, &fallback);
+        assert_eq!(resolved.propose, Duration::from_millis(30));
+        assert_eq!(resolved.prevote, Duration::from_millis(40));
+        assert_eq!(resolved.precommit, Duration::from_millis(50));
+        assert_eq!(resolved.commit, Duration::from_millis(60));
+        assert_eq!(resolved.da, Duration::from_millis(70));
+        assert_eq!(resolved.aggregator, Duration::from_millis(5));
     }
 
     #[test]
@@ -3505,8 +3543,8 @@ mod tests {
     fn incoming_block_message_drops_duplicate_rbc_init() {
         const CAP: usize = 4;
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
-        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
@@ -3565,7 +3603,7 @@ mod tests {
         assert!(handle.try_incoming_block_message(init.clone()));
         assert!(!handle.try_incoming_block_message(init));
 
-        let received = block_rx.try_recv().expect("RbcInit should be enqueued");
+        let received = rbc_chunk_rx.try_recv().expect("RbcInit should be enqueued");
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -3574,7 +3612,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            block_rx.try_recv(),
+            rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
     }
@@ -3678,11 +3716,11 @@ mod tests {
     }
 
     #[test]
-    fn try_incoming_block_message_waits_when_block_queue_full_for_rbc_init() {
+    fn try_incoming_block_message_waits_when_rbc_chunk_queue_full_for_rbc_init() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(CAP);
-        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
@@ -3695,7 +3733,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let block_tx_fill = block_tx.clone();
+        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -3708,18 +3746,17 @@ mod tests {
             block_payload_dedup,
         );
 
-        let requester = PeerId::new(KeyPair::random().public_key().clone());
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
-        let request = message::FetchPendingBlock {
-            requester,
-            block_hash,
-            height: 0,
+        let chunk_fill = BlockMessage::RbcChunk(crate::sumeragi::consensus::RbcChunk {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32])),
+            height: 1,
             view: 0,
-            priority: None,
-        };
-        block_tx_fill
-            .send(inbound(BlockMessage::FetchPendingBlock(request)))
-            .expect("fill block channel");
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0x42],
+        });
+        rbc_chunk_tx_fill
+            .send(inbound(chunk_fill))
+            .expect("fill RBC chunk channel");
 
         let height = 2;
         let view = 0;
@@ -3761,11 +3798,11 @@ mod tests {
 
         assert!(
             done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "RbcInit should wait for block queue capacity"
+            "RbcInit should wait for RBC chunk queue capacity"
         );
-        let _ = block_rx
+        let _ = rbc_chunk_rx
             .recv()
-            .expect("drain block queue to unblock sender");
+            .expect("drain RBC chunk queue to unblock sender");
         let accepted = done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("RbcInit should be enqueued after space is available");
@@ -3775,7 +3812,7 @@ mod tests {
         );
         join.join().expect("join RbcInit sender");
 
-        let received = block_rx
+        let received = rbc_chunk_rx
             .try_recv()
             .expect("RbcInit should be enqueued after space is freed");
         assert!(matches!(
@@ -3784,6 +3821,10 @@ mod tests {
                 message: BlockMessage::RbcInit(_),
                 ..
             }
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
             block_rx.try_recv(),
@@ -4284,7 +4325,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_rbc_init_via_block_queue() {
+    fn incoming_block_message_routes_rbc_init_via_rbc_chunk_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -4345,9 +4386,9 @@ mod tests {
 
         handle.incoming_block_message(msg);
 
-        let received = block_rx
+        let received = rbc_chunk_rx
             .try_recv()
-            .expect("RbcInit should be enqueued to block channel");
+            .expect("RbcInit should be enqueued to RBC chunk channel");
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -4356,7 +4397,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            rbc_chunk_rx.try_recv(),
+            block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
@@ -7635,7 +7676,7 @@ mod tests {
             let violation = Arc::clone(&violation);
             joins.push(std::thread::spawn(move || {
                 for _ in 0..4 {
-                    let mut guard = gate.enter();
+                    let mut guard = gate.enter(GatePriority::Regular);
                     let in_flight = active.fetch_add(1, Ordering::SeqCst) + 1;
                     if in_flight > 1 {
                         violation.store(true, Ordering::SeqCst);
@@ -7649,9 +7690,106 @@ mod tests {
         for join in joins {
             join.join().expect("actor gate thread");
         }
-        let mut guard = gate.enter();
+        let mut guard = gate.enter(GatePriority::Regular);
         assert_eq!(guard.actor_mut().len(), 16);
         assert!(!violation.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn actor_gate_prioritizes_urgent_waiters() {
+        let gate = Arc::new(ActorGate::new(Vec::<&'static str>::new()));
+        let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let start = Arc::new(Barrier::new(3));
+
+        let initial = gate.enter(GatePriority::Regular);
+
+        let regular_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                let mut guard = gate.enter(GatePriority::Regular);
+                order.lock().expect("order lock poisoned").push("regular");
+                guard.actor_mut().push("regular");
+            })
+        };
+
+        let urgent_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                let mut guard = gate.enter(GatePriority::Urgent);
+                order.lock().expect("order lock poisoned").push("urgent");
+                guard.actor_mut().push("urgent");
+            })
+        };
+
+        start.wait();
+        std::thread::sleep(Duration::from_millis(5));
+        drop(initial);
+
+        regular_join.join().expect("regular waiter thread");
+        urgent_join.join().expect("urgent waiter thread");
+
+        let order = order.lock().expect("order lock poisoned");
+        assert_eq!(order.len(), 2);
+        assert_eq!(order[0], "urgent");
+        assert_eq!(order[1], "regular");
+    }
+
+    #[test]
+    fn actor_gate_regular_waiter_not_starved_by_urgent_burst() {
+        let gate = Arc::new(ActorGate::new(Vec::<&'static str>::new()));
+        let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let start = Arc::new(Barrier::new(3));
+
+        let initial = gate.enter(GatePriority::Regular);
+
+        let regular_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                let mut guard = gate.enter(GatePriority::Regular);
+                order.lock().expect("order lock poisoned").push("regular");
+                guard.actor_mut().push("regular");
+            })
+        };
+
+        let urgent_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                for _ in 0..(MAX_URGENT_GATE_STREAK + 2) {
+                    let mut guard = gate.enter(GatePriority::Urgent);
+                    order.lock().expect("order lock poisoned").push("urgent");
+                    guard.actor_mut().push("urgent");
+                }
+            })
+        };
+
+        start.wait();
+        std::thread::sleep(Duration::from_millis(5));
+        drop(initial);
+
+        regular_join.join().expect("regular waiter thread");
+        urgent_join.join().expect("urgent burst thread");
+
+        let order = order.lock().expect("order lock poisoned");
+        let regular_idx = order
+            .iter()
+            .position(|label| *label == "regular")
+            .expect("regular waiter should have run");
+        assert!(
+            regular_idx <= usize::try_from(MAX_URGENT_GATE_STREAK).unwrap_or(usize::MAX),
+            "regular waiter was starved for too many urgent turns: index={regular_idx}, cap={MAX_URGENT_GATE_STREAK}"
+        );
     }
 
     #[test]
@@ -8867,8 +9005,10 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
+                // Keep INIT on the same high-priority ingress lane as chunks to minimize
+                // chunk-before-init reordering under block queue pressure.
                 let accepted = enqueue_with_mode(
-                    &self.block,
+                    &self.rbc_chunks,
                     {
                         iroha_logger::debug!(
                             height = init.height,
@@ -8876,13 +9016,13 @@ impl SumeragiHandle {
                             block = %init.block_hash,
                             total_chunks = init.total_chunks,
                             mode = ?mode,
-                            queue = ?status::WorkerQueueKind::Blocks,
+                            queue = ?status::WorkerQueueKind::RbcChunks,
                             "enqueueing RBC INIT"
                         );
                         InboundBlockMessage::new(BlockMessage::RbcInit(init), sender)
                     },
                     "RbcInit",
-                    status::WorkerQueueKind::Blocks,
+                    status::WorkerQueueKind::RbcChunks,
                     mode,
                 );
                 if !accepted {
@@ -9621,19 +9761,20 @@ fn resolve_sumeragi_timeouts(
 fn worker_time_budget(
     block_time: Duration,
     commit_time: Duration,
-    da_enabled: bool,
-    da_quorum_timeout_multiplier: u32,
+    _da_enabled: bool,
+    _da_quorum_timeout_multiplier: u32,
     budget_cap: Duration,
 ) -> Duration {
-    let quorum_timeout = crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
-        block_time,
-        commit_time,
-        da_enabled,
-        da_quorum_timeout_multiplier,
-    );
-    let scaled = quorum_timeout
-        .checked_div(4)
-        .unwrap_or_else(|| Duration::from_millis(1));
+    // Keep loop responsiveness anchored to proposal/commit cadence.
+    // DA-extended quorum windows can be seconds long and should not be used as a
+    // per-iteration drain budget because that delays QC replay/commit under load.
+    let window = match (block_time.is_zero(), commit_time.is_zero()) {
+        (true, true) => Duration::from_millis(1),
+        (false, true) => block_time,
+        (true, false) => commit_time,
+        (false, false) => block_time.min(commit_time),
+    };
+    let scaled = window.checked_div(4).unwrap_or(Duration::from_millis(1));
     let cap = Duration::from_millis(TIME_BUDGET_CAP_MS).min(budget_cap);
     let mut budget = scaled.min(cap);
     let floor = Duration::from_millis(TIME_BUDGET_FLOOR_MS);
@@ -9866,15 +10007,25 @@ struct ActorGate<A> {
     cvar: Condvar,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GatePriority {
+    Urgent,
+    Regular,
+}
+
+const MAX_URGENT_GATE_STREAK: u32 = 32;
+
 struct ActorGateState<A> {
     actor: A,
-    serving: u64,
-    next_ticket: u64,
+    in_flight: bool,
+    waiting_urgent: u32,
+    waiting_regular: u32,
+    urgent_streak: u32,
 }
 
 struct ActorGuard<'a, A> {
     gate: &'a ActorGate<A>,
-    ticket: u64,
+    priority: GatePriority,
     guard: Option<std::sync::MutexGuard<'a, ActorGateState<A>>>,
 }
 
@@ -9883,23 +10034,56 @@ impl<A> ActorGate<A> {
         Self {
             state: Mutex::new(ActorGateState {
                 actor,
-                serving: 0,
-                next_ticket: 0,
+                in_flight: false,
+                waiting_urgent: 0,
+                waiting_regular: 0,
+                urgent_streak: 0,
             }),
             cvar: Condvar::new(),
         }
     }
 
-    fn enter(&self) -> ActorGuard<'_, A> {
+    fn can_enter(priority: GatePriority, state: &ActorGateState<A>) -> bool {
+        if state.in_flight {
+            return false;
+        }
+        match priority {
+            GatePriority::Urgent => {
+                !(state.waiting_regular > 0 && state.urgent_streak >= MAX_URGENT_GATE_STREAK)
+            }
+            GatePriority::Regular => {
+                state.waiting_urgent == 0 || state.urgent_streak >= MAX_URGENT_GATE_STREAK
+            }
+        }
+    }
+
+    fn enter(&self, priority: GatePriority) -> ActorGuard<'_, A> {
         let mut guard = self.state.lock().expect("sumeragi actor gate poisoned");
-        let ticket = guard.next_ticket;
-        guard.next_ticket = guard.next_ticket.wrapping_add(1);
-        while guard.serving != ticket {
+        match priority {
+            GatePriority::Urgent => {
+                guard.waiting_urgent = guard.waiting_urgent.saturating_add(1);
+            }
+            GatePriority::Regular => {
+                guard.waiting_regular = guard.waiting_regular.saturating_add(1);
+            }
+        }
+        while !Self::can_enter(priority, &guard) {
             guard = self.cvar.wait(guard).expect("sumeragi actor gate poisoned");
+        }
+        guard.in_flight = true;
+        match priority {
+            GatePriority::Urgent => {
+                guard.waiting_urgent = guard.waiting_urgent.saturating_sub(1);
+                guard.urgent_streak = guard.urgent_streak.saturating_add(1);
+            }
+            GatePriority::Regular => {
+                guard.waiting_regular = guard.waiting_regular.saturating_sub(1);
+                guard.urgent_streak = 0;
+            }
         }
         ActorGuard {
             gate: self,
-            ticket,
+            priority,
             guard: Some(guard),
         }
     }
@@ -9920,8 +10104,11 @@ impl<A> Drop for ActorGuard<'_, A> {
         let Some(mut guard) = self.guard.take() else {
             return;
         };
-        if guard.serving == self.ticket {
-            guard.serving = guard.serving.wrapping_add(1);
+        if guard.in_flight {
+            guard.in_flight = false;
+            if matches!(self.priority, GatePriority::Regular) {
+                guard.urgent_streak = 0;
+            }
         }
         self.gate.cvar.notify_all();
     }
@@ -10939,6 +11126,7 @@ fn spawn_queue_worker<A, T, F>(
     name: &'static str,
     rx: mpsc::Receiver<T>,
     gate: Arc<ActorGate<A>>,
+    gate_priority: GatePriority,
     active: Arc<AtomicUsize>,
     shutdown_signal: ShutdownSignal,
     stage: status::WorkerLoopStage,
@@ -10962,7 +11150,7 @@ where
                     Ok(msg) => {
                         let iter_start = Instant::now();
                         active.fetch_add(1, Ordering::Relaxed);
-                        let mut guard = gate.enter();
+                        let mut guard = gate.enter(gate_priority);
                         status::set_worker_stage(stage);
                         if let Err(err) = handler(guard.actor_mut(), msg) {
                             iroha_logger::error!(
@@ -11009,7 +11197,7 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                 let iter_start = Instant::now();
                 active.fetch_add(1, Ordering::Relaxed);
                 let (next_deadline, tick_gap, bypass_tick_gap) = {
-                    let mut guard = gate.enter();
+                    let mut guard = gate.enter(GatePriority::Urgent);
                     status::set_worker_stage(status::WorkerLoopStage::Tick);
                     guard.actor_mut().refresh_worker_loop_config(&mut cfg);
                     let now = Instant::now();
@@ -11103,6 +11291,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-votes",
         vote_rx,
         Arc::clone(&gate),
+        GatePriority::Urgent,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::Votes.stage(),
@@ -11127,6 +11316,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-rbc",
         rbc_chunk_rx,
         Arc::clone(&gate),
+        GatePriority::Regular,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::RbcChunks.stage(),
@@ -11138,6 +11328,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-blocks",
         block_rx,
         Arc::clone(&gate),
+        GatePriority::Urgent,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::Blocks.stage(),
@@ -11149,6 +11340,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-payloads",
         block_payload_rx,
         Arc::clone(&gate),
+        GatePriority::Regular,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::BlockPayload.stage(),
@@ -11160,6 +11352,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-consensus",
         consensus_rx,
         Arc::clone(&gate),
+        GatePriority::Urgent,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::Consensus.stage(),
@@ -11171,6 +11364,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-lane-relay",
         lane_relay_rx,
         Arc::clone(&gate),
+        GatePriority::Urgent,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::LaneRelay.stage(),
@@ -11182,6 +11376,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-background",
         background_rx,
         Arc::clone(&gate),
+        GatePriority::Regular,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::Background.stage(),

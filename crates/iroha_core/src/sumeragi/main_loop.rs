@@ -9938,27 +9938,30 @@ impl Actor {
             self.da_quorum_timeout_multiplier(),
             self.config.worker.iteration_budget_cap,
         );
+        // Keep queue drain windows aligned to the same responsiveness budget.
+        // Large per-queue windows (e.g. block_time/2) can accumulate into >1s pre-tick
+        // drain time under bursty ingress, which delays vote/QC replay despite low RTT.
         let vote_rx_drain_budget = super::vote_rx_drain_budget(
             block_time,
             commit_time,
             da_enabled,
             self.da_quorum_timeout_multiplier(),
-            Duration::from_secs(8),
+            time_budget,
             self.config.worker.iteration_budget_cap,
         )
         .max(time_budget);
         let non_vote_drain_budget = super::cap_drain_budget(
-            block_time / 2,
+            time_budget,
             time_budget,
             self.config.worker.iteration_budget_cap,
         );
         let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(
-            block_time / 2,
+            time_budget,
             time_budget,
             self.config.worker.iteration_budget_cap,
         );
         let block_rx_drain_budget = super::cap_drain_budget(
-            block_time / 4,
+            time_budget / 2,
             time_budget,
             self.config.worker.iteration_budget_cap,
         );
@@ -14930,6 +14933,7 @@ impl QcInsufficientWarningThrottle {
 enum ProposalDeferWarningKind {
     HighestQcMissing,
     ParentMissing,
+    InsufficientOnlinePeers,
 }
 
 #[derive(Debug, Default)]
