@@ -194,9 +194,9 @@ new helpers are available:
 
 | Hex | Constant | Description |
 |----:|----------|-------------|
-| 0xF4 | `SYSCALL_PROVE_EXECUTION` | Generate a zero-knowledge proof of the trace |
+| 0xF4 | `SYSCALL_PROVE_EXECUTION` | Reserved (execution proving integration; currently not implemented by default hosts) |
 | 0xF5 | `SYSCALL_GROW_HEAP` | Increase heap size by `x10` bytes |
-| 0xF6 | `SYSCALL_VERIFY_PROOF` | Verify the execution proof collected so far |
+| 0xF6 | `SYSCALL_VERIFY_PROOF` | Reserved (execution-proof verification integration; currently not implemented by default hosts) |
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |
 
 ### NFT syscall naming alignment

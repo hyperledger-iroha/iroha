@@ -293,23 +293,14 @@ fn removed_hw_probe_syscalls_reject() {
 
 #[test]
 fn test_verify_proof_syscall() {
-    use common::assemble_zk;
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(
-        &encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0).to_le_bytes(),
-    );
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_VERIFY_PROOF as u8,
-    );
-    bytes.extend_from_slice(&syscall.to_le_bytes());
-    bytes.extend_from_slice(&HALT);
-    let prog = assemble_zk(&bytes, 8);
     let mut vm = IVM::new(u64::MAX);
-    vm.set_register(1, 0);
+    let prog = assemble_syscall(syscalls::SYSCALL_VERIFY_PROOF as u8);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("verify proof syscall failed");
-    assert_eq!(vm.register(10), 1);
+    let err = vm.run().expect_err("VERIFY_PROOF should be unimplemented");
+    assert!(matches!(
+        err,
+        VMError::NotImplemented { syscall } if syscall == syscalls::SYSCALL_VERIFY_PROOF
+    ));
 }
 
 #[test]
@@ -317,7 +308,13 @@ fn test_prove_execution_syscall() {
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscall(syscalls::SYSCALL_PROVE_EXECUTION as u8);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("prove execution syscall failed");
+    let err = vm
+        .run()
+        .expect_err("PROVE_EXECUTION should be unimplemented");
+    assert!(matches!(
+        err,
+        VMError::NotImplemented { syscall } if syscall == syscalls::SYSCALL_PROVE_EXECUTION
+    ));
 }
 
 #[test]

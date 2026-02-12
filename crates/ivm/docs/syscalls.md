@@ -150,23 +150,23 @@ NFTs
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
 
 Zero‑knowledge (verification/state‑read)
-- 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
-- 0x61 ZK_VERIFY_UNSHIELD — Args: `r10=&NoritoBytes(OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
-- 0x62 ZK_VOTE_VERIFY_BALLOT — Args: `r10=&NoritoBytes(OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
-- 0x63 ZK_VOTE_VERIFY_TALLY — Args: `r10=&NoritoBytes(OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
+- 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
+- 0x61 ZK_VERIFY_UNSHIELD — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
+- 0x62 ZK_VOTE_VERIFY_BALLOT — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
+- 0x63 ZK_VOTE_VERIFY_TALLY — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof
 - 0x64 ZK_ROOTS_GET — Args: `r10=&NoritoBytes(RootsGetRequest)` → `ptr (NoritoBytes(RootsGetResponse))` — Gas: G_roots_get
 - 0x65 ZK_VOTE_GET_TALLY — Args: `r10=&NoritoBytes(VoteGetTallyRequest)` → `ptr (NoritoBytes(VoteGetTallyResponse))` — Gas: G_vote_get
 
 ZK gating & determinism
-- Hosts enforce deterministic gating before verification. A call returns `0` (failure) if any gate fails:
-  - `zk.enabled=false`, unsupported backend (must be IPA), or disallowed curve (host-configured set; e.g., Pallas/Pasta/Bn254).
-  - `max_k` exceeded for the envelope’s params (where `n = 2^k`).
-  - Envelope must include `vk_commitment` and `public_inputs_schema_hash` that resolve to an active registry entry; rejects use `r11=11` (missing), `r11=12` (mismatch), or `r11=13` (inactive).
-  - Namespace/manifest/domain binding: VK namespace and manifest must match the caller and the domain tag must match the recomputed hash; `r11=14` or `r11=15` on mismatch.
-  - Envelope too large (`r11=8`), proof payload too large (`r11=10`), or transcript label rejected (`r11=9`, non-ASCII/too long/wrong label for the syscall).
-- On success, the host returns `1`. Verification itself is deterministic; accelerators, when enabled, must match scalar results.
-- Payloads use the pointer‑ABI `NoritoBytes` type; the TLV must be mirrored into INPUT and pass hash validation.
-  - Required transcript labels: `zk_verify_transfer/v1`, `zk_verify_unshield/v1`, `zk_verify_ballot/v1`, `zk_verify_tally/v1`, and `zk_verify_batch/v1` (batch). Labels must be ASCII and ≤64 bytes (configurable).
+- `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
+- Verification is bound to the VK registry before cryptographic checks:
+  - envelope/backend must be supported (`backend = halo2-ipa-pasta`), `vk_hash` must be present, and payload/proof sizes must respect config caps.
+  - the referenced verifying key must be active and match circuit id, schema hash (`hash(public_inputs)`), namespace, and owner manifest.
+  - configured curve/max_k policy is enforced from VK metadata / VK envelope parameters.
+- Return conventions:
+  - `r10=1`, `r11=0` on success.
+  - `r10=0`, `r11=<ERR_*>` on precheck/binding failure (`ERR_DISABLED`, `ERR_BACKEND`, `ERR_CURVE`, `ERR_K`, `ERR_DECODE`, `ERR_VERIFY`, `ERR_ENVELOPE_SIZE`, `ERR_PROOF_LEN`, `ERR_VK_MISSING`, `ERR_VK_MISMATCH`, `ERR_VK_INACTIVE`, `ERR_NAMESPACE`).
+- `DefaultHost` does not implement end-to-end ZK verification for these syscalls and reports disabled (`r10=0`, `r11=ERR_DISABLED`).
 
 Roles / Permissions
 - 0x30 CREATE_ROLE — Args: `r10=&Name, r11=&Json` (perm set) → 0 — Gas: G_create_role
@@ -245,9 +245,9 @@ ZK Helpers
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig
 
 Hardware / Proofs
-- 0xF4 PROVE_EXECUTION — Args: none → `r10=0/1` *(1 when the captured trace verifies)* — Gas: G_prove
+- 0xF4 PROVE_EXECUTION — Args: none → `NotImplemented` (reserved for future end-to-end proving integration) — Gas: -
 - 0xF5 GROW_HEAP — Args: `r10=bytes:u64` → `u64=new_limit` — Gas: G_grow_heap per page
-- 0xF6 VERIFY_PROOF — Args: none → `r10=0/1` *(1 when verification passes)* — Gas: G_verify
+- 0xF6 VERIFY_PROOF — Args: none → `NotImplemented` (reserved for future end-to-end execution-proof verification) — Gas: -
 - 0xF7 GET_MERKLE_PATH — Args: `r10=addr:u64, r11=out_ptr:u64, r12=root_out:u64?` → `u64=len` — Gas: G_mpath + path_len
   - Writes the authentication path (leaf→root) to `out_ptr`. If `r12 != 0`, also writes the 32‑byte Merkle root to `root_out`.
 - 0xFA GET_MERKLE_COMPACT — Args: `r10=addr:u64, r11=out_ptr:u64, r12=depth_cap:u64?, r13=root_out:u64?` → `u64=depth` — Gas: G_mpath + depth
@@ -456,8 +456,7 @@ Codec helpers
 - Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
-- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64` — Gas: G_verify
-  - Verifies a batch of Halo2 OpenVerify envelopes (transparent IPA). Per‑item statuses are `1 = verified true`, `0 = verified false` (including verification failure or precheck gating).
-  - Host gating: disabled/backend/curve/max_k checks apply uniformly to each item. Overall request failures (e.g., disabled host or batch size exceeds `verifier_max_batch`) are signaled via `r11` with no output pointer:
-    - `1 = ERR_DISABLED`, `2 = ERR_BACKEND`, `3 = ERR_CURVE`, `4 = ERR_K`, `5 = ERR_DECODE`, `7 = ERR_BATCH`.
-  - Types: `OpenVerifyEnvelope` is the Norito-serializable container defined in `iroha_zkp_halo2` with fields `{ params: IpaParams, public: PolyOpenPublic, proof: IpaProofData, transcript_label: String }`.
+- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: G_verify
+  - Per-item statuses are `1 = verified`, `0 = not verified`. Each item runs the same binding + full backend verification path as single-item ZK verify syscalls.
+  - Top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).
+  - On vector return, `r11` carries the first observed precheck/verify error code (or `0` when all succeed).
