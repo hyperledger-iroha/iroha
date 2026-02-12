@@ -1317,6 +1317,16 @@ impl Actor {
                 });
             }
 
+            if let Some(plan) = rbc_plan.take() {
+                // Start RBC payload dissemination immediately after Proposal/BlockCreated posts.
+                // Running local BlockCreated handling first adds avoidable delay before peers can
+                // receive chunks and emit READY, which inflates localnet quorum latencies.
+                self.broadcast_rbc_session_plan(plan.primary)?;
+                if let Some(dup) = plan.duplicate {
+                    self.broadcast_rbc_session_plan(dup)?;
+                }
+            }
+
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
                 self.handle_block_created(block_msg, None)?;
             }
@@ -1330,13 +1340,6 @@ impl Actor {
                 .propose
                 .proposal_cache
                 .insert_proposal(proposal);
-
-            if let Some(plan) = rbc_plan.take() {
-                self.broadcast_rbc_session_plan(plan.primary)?;
-                if let Some(dup) = plan.duplicate {
-                    self.broadcast_rbc_session_plan(dup)?;
-                }
-            }
 
             let relay_envelopes = crate::sumeragi::status::lane_relay_envelopes_snapshot();
             if !relay_envelopes.is_empty() {
