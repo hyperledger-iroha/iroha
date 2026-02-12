@@ -1411,7 +1411,8 @@ impl Actor {
                     && !has_quorum_signers
                     && missing_quorum_stale(pending_age, effective_quorum_timeout, quorum_reached)
                 {
-                    let reschedule_backoff = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+                    let reschedule_backoff =
+                        super::quorum_reschedule_backoff_from_timeout(quorum_timeout);
                     if missing_local_data && pending_age < availability_timeout {
                         debug!(
                             height = pending_height,
@@ -1640,7 +1641,7 @@ impl Actor {
                 min_votes,
                 vote_count,
                 quorum_timeout,
-                quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN),
+                super::quorum_reschedule_backoff_from_timeout(quorum_timeout),
                 Instant::now(),
             );
             self.trigger_view_change_with_cause(

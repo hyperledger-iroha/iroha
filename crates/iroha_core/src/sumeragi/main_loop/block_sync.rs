@@ -99,7 +99,10 @@ impl Actor {
         (allow_highest_qc_bypass && self.fetch_response_targets_highest_qc(msg))
             || matches!(
                 msg,
-                BlockMessage::RbcInit(_)
+                // Missing-block recovery must deliver the block payload eagerly; otherwise
+                // peers can receive RBC chunks first and stall waiting for BlockCreated.
+                BlockMessage::BlockCreated(_)
+                    | BlockMessage::RbcInit(_)
                     | BlockMessage::RbcChunk(_)
                     | BlockMessage::RbcChunkCompact(_)
                     | BlockMessage::RbcReady(_)

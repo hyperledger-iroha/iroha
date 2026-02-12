@@ -176,7 +176,9 @@ impl Actor {
         let local_peer_id = self.common_config.peer.id().clone();
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
-        let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+        let quorum_reschedule_cooldown =
+            super::quorum_reschedule_backoff_from_timeout(quorum_timeout);
+        let quorum_reschedule_retention = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
         let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
         // Keep aborted payloads long enough for missing-block fetches after reschedule drops.
         let retention_factor = self
@@ -185,7 +187,7 @@ impl Actor {
             .missing_block_signer_fallback_attempts
             .saturating_add(2)
             .max(4);
-        let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
+        let aborted_retention = quorum_reschedule_retention.saturating_mul(retention_factor);
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let (tip_height, tip_hash, fast_timeout_permissioned, fast_timeout_npos) = {
