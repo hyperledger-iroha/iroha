@@ -1,16 +1,22 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests that a restarted peer restores its state.
-use std::time::{Duration, Instant};
+use std::{
+    borrow::Cow,
+    time::{Duration, Instant},
+};
 
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
+use iroha::crypto::KeyPair;
 use iroha::data_model::prelude::*;
+use iroha_config_base::toml::WriteExt as _;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
+use toml::Table;
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -204,5 +210,66 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     };
     assert_eq!(quantity, restored_value);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn restarted_peer_with_mismatched_genesis_pubkey_uses_stored_genesis() -> Result<()> {
+    let test_name = stringify!(restarted_peer_with_mismatched_genesis_pubkey_uses_stored_genesis);
+    let Some(network) =
+        sandbox::start_network_async_or_skip(NetworkBuilder::new().with_peers(4), test_name)
+            .await?
+    else {
+        return Ok(());
+    };
+    let peer = &network.peers()[0];
+
+    if sandbox::handle_result(network.ensure_blocks(1).await, test_name)?.is_none() {
+        return Ok(());
+    }
+
+    let config_layers: Vec<_> = network.config_layers().collect();
+    let wrong_genesis_pubkey = KeyPair::random().public_key().to_string();
+    let override_layer = Table::new().write(["genesis", "public_key"], wrong_genesis_pubkey);
+    let genesis = network.genesis();
+
+    network.shutdown().await;
+
+    let start_result = timeout(network.peer_startup_timeout(), async {
+        peer.start_checked(
+            config_layers
+                .iter()
+                .cloned()
+                .chain(std::iter::once(Cow::Owned(override_layer))),
+            Some(&genesis),
+        )
+        .await?;
+        peer.once_block(1).await;
+        Ok::<(), eyre::Report>(())
+    })
+    .await;
+
+    match start_result {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            if let Some(reason) = sandbox::sandbox_reason(&err) {
+                return Err(err.wrap_err(format!(
+                    "sandboxed network restriction detected while restarting peer with mismatched genesis pubkey: {reason}"
+                )));
+            }
+            return Err(err);
+        }
+        Err(err) => {
+            let err = eyre::Report::new(err);
+            if let Some(reason) = sandbox::sandbox_reason(&err) {
+                return Err(err.wrap_err(format!(
+                    "sandboxed network restriction detected while restarting peer with mismatched genesis pubkey: {reason}"
+                )));
+            }
+            return Err(err);
+        }
+    }
+
+    network.shutdown().await;
     Ok(())
 }

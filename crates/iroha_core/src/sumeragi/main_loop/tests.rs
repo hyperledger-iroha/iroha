@@ -58725,6 +58725,10 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         .expect("session");
     let _guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
+    assert!(
+        !actor.should_drop_stale_rbc_message(height, stale_view, &block_hash, "RbcDeliver"),
+        "stale-view DELIVER should not be dropped as stale for known sessions"
+    );
     let deliver = actor.build_rbc_deliver(key, &session).expect("deliver");
     actor.handle_rbc_deliver(deliver).expect("rbc deliver");
     let stored = actor
@@ -58738,19 +58742,17 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         !stored.delivered,
         "stale-view DELIVER without quorum should remain deferred"
     );
-    let deliver_was_queued = actor.subsystems.da_rbc.rbc.pending.contains_key(&key);
-    if !deliver_was_queued {
-        let entries = super::status::snapshot().consensus_message_handling.entries;
-        assert!(
-            entries.iter().any(|entry| {
-                entry.kind == super::status::ConsensusMessageKind::RbcDeliver
-                    && entry.reason != super::status::ConsensusMessageReason::StaleView
-            }),
-            "stale-view DELIVER should not be dropped as stale"
-        );
-    }
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    assert!(
+        !entries.iter().any(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::RbcDeliver
+                && entry.reason == super::status::ConsensusMessageReason::StaleView
+        }),
+        "stale-view DELIVER should not be dropped as stale"
+    );
 
     super::status::reset_message_handling_for_tests();
+
     harness.shutdown.send();
 }
 
