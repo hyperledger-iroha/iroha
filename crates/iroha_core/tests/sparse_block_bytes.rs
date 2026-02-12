@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use iroha_core::kura::BlockStore;
+use iroha_config::kura::FsyncMode;
 use tempfile::tempdir;
 
 #[test]
@@ -14,7 +15,9 @@ use tempfile::tempdir;
 fn block_bytes_sparse_file_reads_requested_slice() {
     const FILE_LEN: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
     let temp_dir = tempdir().expect("create temp dir");
-    let mut store = BlockStore::new(temp_dir.path());
+    // Use fsync off so init does not prune entries based on a stale commit marker,
+    // which is irrelevant for this sparse-read regression test.
+    let mut store = BlockStore::with_fsync(temp_dir.path(), FsyncMode::Off, Duration::ZERO);
     store
         .create_files_if_they_do_not_exist()
         .expect("initialize block store");
@@ -25,6 +28,9 @@ fn block_bytes_sparse_file_reads_requested_slice() {
     store
         .write_block_data(offset, payload)
         .expect("write sparse payload");
+    store
+        .write_block_index(0, offset, payload.len() as u64)
+        .expect("write sparse index");
 
     let start = Instant::now();
     let slice = store
@@ -41,7 +47,7 @@ fn block_bytes_sparse_file_reads_requested_slice() {
     let _ = slice;
     drop(store);
 
-    let mut reopened = BlockStore::new(temp_dir.path());
+    let mut reopened = BlockStore::with_fsync(temp_dir.path(), FsyncMode::Off, Duration::ZERO);
     reopened
         .create_files_if_they_do_not_exist()
         .expect("reopen block store");
