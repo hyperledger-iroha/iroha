@@ -585,6 +585,59 @@ fn lock_path(cache_dir: &Path, pkg: &str, profile: &str) -> PathBuf {
     cache_dir.join(format!("{pkg}-{profile}.lock"))
 }
 
+fn global_build_lock_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("cargo-build.lock")
+}
+
+fn is_rustc_metadata_mismatch(output: &str) -> bool {
+    // Re-entrant builds occasionally trip over stale/corrupted `target` artifacts (e.g. after
+    // toolchain upgrades or interrupted builds). Cleaning the target dir and retrying once is a
+    // pragmatic recovery strategy.
+    //
+    // E0460: compiled by a different rustc / incompatible metadata.
+    // E0463: dependencies are "missing" (often because their artifacts vanished or are corrupted).
+    output.contains("E0460")
+        || output.contains("rustc --explain E0460")
+        || output.contains("E0463")
+        || output.contains("rustc --explain E0463")
+        || output.contains("can't find crate for `")
+}
+
+fn clean_target_dir_preserving_build_cache(target_dir: &Path) -> color_eyre::Result<()> {
+    if !target_dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(target_dir).wrap_err_with(|| {
+        eyre!(
+            "Failed to list target dir for cleanup: {}",
+            target_dir.display()
+        )
+    })? {
+        let entry = entry?;
+        if entry.file_name().as_os_str() == std::ffi::OsStr::new(BUILD_CACHE_DIR) {
+            continue;
+        }
+        let path = entry.path();
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            fs::remove_dir_all(&path).wrap_err_with(|| {
+                eyre!(
+                    "Failed to remove target dir entry during cleanup: {}",
+                    path.display()
+                )
+            })?;
+        } else {
+            fs::remove_file(&path).wrap_err_with(|| {
+                eyre!(
+                    "Failed to remove target file entry during cleanup: {}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default)]
 struct IgnoreList {
     dirs: HashSet<PathBuf>,
@@ -1127,42 +1180,74 @@ fn ensure_binary_fresh(
 
     if needs_build {
         tracing::info!(%name, %pkg, %profile, "building `{name}` for tests");
+        let build_lock_path = global_build_lock_path(&cache_dir);
+        let mut build_lock = LockFile::open(&build_lock_path)
+            .wrap_err_with(|| eyre!("Failed to open build lock at {build_lock_path:?}"))?;
+        build_lock
+            .lock()
+            .wrap_err_with(|| eyre!("Failed to acquire global build lock for {pkg}"))?;
         let cargo_program =
             std::env::var("TEST_NETWORK_CARGO").unwrap_or_else(|_| "cargo".to_owned());
-        let mut command = std::process::Command::new(&cargo_program);
-        command.arg("build").arg("-p").arg(pkg);
-        match profile {
-            "debug" => {}
-            "release" => {
-                command.arg("--release");
+        let mut attempt = 0_u8;
+        loop {
+            attempt = attempt.saturating_add(1);
+
+            let mut command = std::process::Command::new(&cargo_program);
+            command.arg("build").arg("-p").arg(pkg);
+            match profile {
+                "debug" => {}
+                "release" => {
+                    command.arg("--release");
+                }
+                other => {
+                    command.arg("--profile").arg(other);
+                }
             }
-            other => {
-                command.arg("--profile").arg(other);
+            for arg in build_args {
+                command.arg(arg);
             }
-        }
-        for arg in build_args {
-            command.arg(arg);
-        }
-        command.env("CARGO_TARGET_DIR", target_dir);
-        for (key, value) in build_env_overrides() {
-            command.env(key, value);
-        }
-        let output = command
-            .current_dir(repo)
-            .output()
-            .wrap_err("failed to invoke cargo to build binary")?;
-        if !output.status.success() {
+            command.env("CARGO_TARGET_DIR", target_dir);
+            for (key, value) in build_env_overrides() {
+                command.env(key, value);
+            }
+            let output = command
+                .current_dir(repo)
+                .output()
+                .wrap_err("failed to invoke cargo to build binary")?;
+            if output.status.success() {
+                break;
+            }
+
             let code = output.status.code();
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{stdout}\n{stderr}");
+            if attempt == 1 && is_rustc_metadata_mismatch(&combined) {
+                warn!(
+                    %name,
+                    %pkg,
+                    %profile,
+                    target_dir = %target_dir.display(),
+                    "detected stale/corrupted build artifacts; cleaning target dir and retrying build"
+                );
+                clean_target_dir_preserving_build_cache(target_dir)?;
+                continue;
+            }
+
             tracing::warn!(?code, build_stdout = %stdout, build_stderr = %stderr, "`cargo build` returned non-zero status");
-            return Err(eyre!(
+            let err = eyre!(
                 "failed to build `{name}` (pkg `{pkg}`), cargo status: {code:?}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
-            ));
+            );
+            let _ = build_lock.unlock();
+            return Err(err);
         }
         // Refresh fingerprint after the successful build to capture generated files.
         fingerprint = workspace_fingerprint(repo)?;
         fingerprint = fingerprint_with_build_args(fingerprint, build_args);
+
+        build_lock
+            .unlock()
+            .wrap_err_with(|| eyre!("Failed to release global build lock for {pkg}"))?;
     }
 
     if binary_path.exists() {
@@ -7916,6 +8001,224 @@ exit 0
             first_log.lines().count(),
             second_log.lines().count(),
             "second resolve should not trigger an extra cargo invocation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_binary_fresh_retries_after_e0460_by_cleaning_target_dir() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n",
+        )
+        .expect("write manifest");
+        fs::create_dir_all(root.join("member/src")).expect("create member src directory");
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
+            .expect("write source file");
+
+        let target_dir = root.join("target");
+        let binary_path = target_dir.join("debug/dummy");
+
+        let stale_path = target_dir.join("debug/deps/stale");
+        fs::create_dir_all(stale_path.parent().expect("stale deps dir"))
+            .expect("create stale deps directory");
+        fs::write(&stale_path, b"stale").expect("write stale artifact");
+
+        let script = root.join("fake-cargo-e0460.sh");
+        let script_contents = r#"#!/bin/sh
+set -eu
+count_file="${TEST_NETWORK_CARGO_COUNT_FILE:?}"
+bin_path="${TEST_NETWORK_DUMMY_BIN:?}"
+
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count+1))
+echo "$count" > "$count_file"
+
+if [ "$count" -eq 1 ]; then
+  echo "error[E0460]: found possibly newer version of crate \`norito\`" 1>&2
+  echo "For more information about this error, try rustc --explain E0460." 1>&2
+  exit 101
+fi
+
+mkdir -p "$(dirname "$bin_path")"
+printf '%s\n' "binary" > "$bin_path"
+exit 0
+"#;
+        fs::write(&script, script_contents).expect("write fake cargo script");
+        fs::set_permissions(&script, PermissionsExt::from_mode(0o755))
+            .expect("make script executable");
+
+        let count_path = root.join("build-count.txt");
+
+        struct EnvRestore {
+            key: &'static str,
+            previous: Option<String>,
+        }
+        impl EnvRestore {
+            fn set(key: &'static str, value: &str) -> Self {
+                let previous = env::var(key).ok();
+                unsafe { std::env::set_var(key, value) };
+                Self { key, previous }
+            }
+        }
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                if let Some(ref value) = self.previous {
+                    unsafe { std::env::set_var(self.key, value) };
+                } else {
+                    unsafe { std::env::remove_var(self.key) };
+                }
+            }
+        }
+
+        let script_env = script.to_string_lossy().into_owned();
+        let count_env = count_path.to_string_lossy().into_owned();
+        let bin_env = binary_path.to_string_lossy().into_owned();
+        let _cargo_guard = EnvRestore::set("TEST_NETWORK_CARGO", &script_env);
+        let _count_guard = EnvRestore::set("TEST_NETWORK_CARGO_COUNT_FILE", &count_env);
+        let _bin_guard = EnvRestore::set("TEST_NETWORK_DUMMY_BIN", &bin_env);
+
+        ensure_binary_fresh(
+            root,
+            "dummy_pkg",
+            "dummy",
+            &target_dir,
+            "debug",
+            &binary_path,
+            true,
+            &[],
+        )
+        .expect("retry build after E0460 should succeed");
+
+        assert!(binary_path.exists(), "dummy binary should be created");
+        assert!(
+            !stale_path.exists(),
+            "cleanup should remove stale build artifacts"
+        );
+
+        let count: u32 = fs::read_to_string(&count_path)
+            .expect("read build count")
+            .trim()
+            .parse()
+            .expect("parse build count");
+        assert_eq!(
+            count, 2,
+            "fake cargo should be invoked twice (fail then retry)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_binary_fresh_retries_after_e0463_by_cleaning_target_dir() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n",
+        )
+        .expect("write manifest");
+        fs::create_dir_all(root.join("member/src")).expect("create member src directory");
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
+            .expect("write source file");
+
+        let target_dir = root.join("target");
+        let binary_path = target_dir.join("debug/dummy");
+
+        let stale_path = target_dir.join("release/deps/stale");
+        fs::create_dir_all(stale_path.parent().expect("stale deps dir"))
+            .expect("create stale deps directory");
+        fs::write(&stale_path, b"stale").expect("write stale artifact");
+
+        let script = root.join("fake-cargo-e0463.sh");
+        let script_contents = r#"#!/bin/sh
+set -eu
+count_file="${TEST_NETWORK_CARGO_COUNT_FILE:?}"
+bin_path="${TEST_NETWORK_DUMMY_BIN:?}"
+
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count+1))
+echo "$count" > "$count_file"
+
+if [ "$count" -eq 1 ]; then
+  echo "error[E0463]: can't find crate for \`norito\`" 1>&2
+  echo "For more information about this error, try \`rustc --explain E0463\`." 1>&2
+  exit 101
+fi
+
+mkdir -p "$(dirname "$bin_path")"
+printf '%s\n' "binary" > "$bin_path"
+exit 0
+"#;
+        fs::write(&script, script_contents).expect("write fake cargo script");
+        fs::set_permissions(&script, PermissionsExt::from_mode(0o755))
+            .expect("make script executable");
+
+        let count_path = root.join("build-count.txt");
+
+        struct EnvRestore {
+            key: &'static str,
+            previous: Option<String>,
+        }
+        impl EnvRestore {
+            fn set(key: &'static str, value: &str) -> Self {
+                let previous = env::var(key).ok();
+                unsafe { std::env::set_var(key, value) };
+                Self { key, previous }
+            }
+        }
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                if let Some(ref value) = self.previous {
+                    unsafe { std::env::set_var(self.key, value) };
+                } else {
+                    unsafe { std::env::remove_var(self.key) };
+                }
+            }
+        }
+
+        let script_env = script.to_string_lossy().into_owned();
+        let count_env = count_path.to_string_lossy().into_owned();
+        let bin_env = binary_path.to_string_lossy().into_owned();
+        let _cargo_guard = EnvRestore::set("TEST_NETWORK_CARGO", &script_env);
+        let _count_guard = EnvRestore::set("TEST_NETWORK_CARGO_COUNT_FILE", &count_env);
+        let _bin_guard = EnvRestore::set("TEST_NETWORK_DUMMY_BIN", &bin_env);
+
+        ensure_binary_fresh(
+            root,
+            "dummy_pkg",
+            "dummy",
+            &target_dir,
+            "debug",
+            &binary_path,
+            true,
+            &[],
+        )
+        .expect("retry build after E0463 should succeed");
+
+        assert!(binary_path.exists(), "dummy binary should be created");
+        assert!(
+            !stale_path.exists(),
+            "cleanup should remove stale build artifacts"
+        );
+
+        let count: u32 = fs::read_to_string(&count_path)
+            .expect("read build count")
+            .trim()
+            .parse()
+            .expect("parse build count");
+        assert_eq!(
+            count, 2,
+            "fake cargo should be invoked twice (fail then retry)"
         );
     }
 

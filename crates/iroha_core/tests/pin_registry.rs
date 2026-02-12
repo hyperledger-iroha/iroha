@@ -16,7 +16,7 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
         sorafs::{
             ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-            RegisterPinManifest, RetirePinManifest,
+            RegisterPinManifest, RegisterProviderOwner, RetirePinManifest,
         },
     },
     prelude::*,
@@ -28,6 +28,11 @@ use iroha_data_model::{
             ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
     },
+};
+use iroha_executor_data_model::permission::sorafs::{
+    CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
+    CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
+    CanRetireSorafsPin,
 };
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, json::Value, to_bytes};
@@ -44,6 +49,7 @@ fn pin_registry_snapshot_matches_fixture() {
     let state = make_state();
     let mut block = state.block(default_block_header());
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
@@ -212,6 +218,7 @@ fn duplicate_alias_binding_is_rejected() {
     {
         let mut block = state.block(block_header(1));
         let mut tx = block.transaction();
+        bootstrap_sorafs(&mut tx);
         let digest = default_digest();
         let chunk_digest = default_chunk_digest();
 
@@ -236,6 +243,7 @@ fn duplicate_alias_binding_is_rejected() {
 
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     register_and_approve(&mut tx, digest_b, chunk_digest_b, &council_keys);
     let alias_binding = alias_binding_for(digest_b, "sora", "docs", 16, 36, &council_keys);
@@ -271,6 +279,7 @@ fn replication_order_with_mismatched_profile_is_rejected() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
 
@@ -313,6 +322,7 @@ fn alias_binding_with_expiry_before_bound_is_rejected() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
 
@@ -348,6 +358,7 @@ fn alias_binding_exceeding_retention_is_rejected() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
 
@@ -385,6 +396,7 @@ fn replication_order_below_min_replicas_is_rejected() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
 
@@ -424,6 +436,7 @@ fn register_manifest_rejects_unknown_chunker_profile() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     let mut chunker = default_chunker();
     chunker.namespace = "unknown".into();
@@ -457,6 +470,7 @@ fn register_manifest_rejects_unknown_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     let digest = ManifestDigest::new([0xE1; 32]);
     let unknown_parent = ManifestDigest::new([0xF1; 32]);
@@ -489,6 +503,7 @@ fn register_manifest_rejects_self_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     let digest = ManifestDigest::new([0xE2; 32]);
 
@@ -520,6 +535,7 @@ fn register_manifest_rejects_unapproved_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     let parent = ManifestDigest::new([0xE3; 32]);
     RegisterPinManifest {
@@ -538,6 +554,7 @@ fn register_manifest_rejects_unapproved_successor() {
 
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
     let err = RegisterPinManifest {
         digest: ManifestDigest::new([0xE4; 32]),
         chunker: default_chunker(),
@@ -569,12 +586,14 @@ fn register_manifest_rejects_retired_successor() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, default_chunk_digest(), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
 
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
     RetirePinManifest {
         digest: parent,
         retired_epoch: 20,
@@ -587,6 +606,7 @@ fn register_manifest_rejects_retired_successor() {
 
     let mut block = state.block(block_header(3));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
     let err = RegisterPinManifest {
         digest: ManifestDigest::new([0xE6; 32]),
         chunker: default_chunker(),
@@ -618,12 +638,14 @@ fn register_manifest_with_successor_persists_pointer() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, default_chunk_digest(), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
 
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     let child = ManifestDigest::new([0xE8; 32]);
     RegisterPinManifest {
@@ -656,6 +678,7 @@ fn bind_alias_rejects_expiry_before_bound_epoch() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
 
@@ -689,6 +712,7 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
 
@@ -722,6 +746,7 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
+    bootstrap_sorafs(&mut tx);
 
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
 
@@ -792,6 +817,43 @@ fn default_policy() -> PinPolicy {
         min_replicas: 3,
         storage_class: StorageClass::Hot,
         retention_epoch: 42,
+    }
+}
+
+fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
+    let alice = alice();
+    {
+        let world = tx.world_mut_for_testing();
+        for perm in [
+            Permission::from(CanRegisterSorafsPin),
+            Permission::from(CanApproveSorafsPin),
+            Permission::from(CanRetireSorafsPin),
+            Permission::from(CanBindSorafsAlias),
+            Permission::from(CanIssueSorafsReplicationOrder),
+            Permission::from(CanCompleteSorafsReplicationOrder),
+            Permission::from(CanRegisterSorafsProviderOwner),
+        ] {
+            world.add_account_permission(&alice, perm);
+        }
+    }
+
+    for provider_id in [
+        ProviderId::new([0x51; 32]),
+        ProviderId::new([0x52; 32]),
+        ProviderId::new([0x53; 32]),
+        ProviderId::new([0x61; 32]),
+        ProviderId::new([0x62; 32]),
+        ProviderId::new([0x63; 32]),
+        ProviderId::new([0x71; 32]),
+        ProviderId::new([0x72; 32]),
+        ProviderId::new([0x73; 32]),
+    ] {
+        RegisterProviderOwner {
+            provider_id,
+            owner: alice.clone(),
+        }
+        .execute(&alice, tx)
+        .expect("register provider owner");
     }
 }
 
@@ -964,8 +1026,10 @@ fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
 }
 
 fn alice() -> AccountId {
-    AccountId::from_str("ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C")
-        .expect("valid account id")
+    AccountId::from_str(
+        "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+    )
+    .expect("valid account id")
 }
 
 fn snapshot_json(

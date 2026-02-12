@@ -8,6 +8,7 @@ use std::{borrow::Cow, str::FromStr};
 
 use iroha_core::{block::BlockBuilder, smartcontracts::Execute, state::StateReadOnly};
 use iroha_data_model::prelude::*;
+use norito::codec::Encode as NoritoEncode;
 
 fn build_min_world() -> (
     iroha_core::state::State,
@@ -95,20 +96,31 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
 fn overlay_bytes_cap_rejects_and_rest_apply() {
     let (mut state, chain_id, authority_id, kp) = build_min_world();
 
-    // Set strict byte cap: at most 100 bytes per overlay (approximate Norito TLV length)
+    // Choose a strict byte cap so that the small overlay passes but the big one is rejected.
+    let small_instr: InstructionBox = Log::new(Level::INFO, "ok".to_string()).into();
+    let small_bytes = NoritoEncode::encode(&small_instr).len() as u64;
+    let big_instr: InstructionBox = Log::new(
+        Level::INFO,
+        "x".repeat(256 /* exceeds small by a wide margin */),
+    )
+    .into();
+    let big_bytes = NoritoEncode::encode(&big_instr).len() as u64;
+    assert!(
+        big_bytes > small_bytes,
+        "expected big instruction to exceed small: {big_bytes} > {small_bytes}"
+    );
+
     let mut cfg = state.view().pipeline().clone();
     cfg.overlay_max_instructions = 0; // unlimited instruction count
-    cfg.overlay_max_bytes = 1_000;
+    cfg.overlay_max_bytes = small_bytes;
     state.set_pipeline(cfg);
 
-    // tx_big: one large Log message to exceed ~100 bytes when encoded
-    let big_msg = "x".repeat(256);
     let tx_big = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([Log::new(Level::INFO, big_msg)])
+        .with_instructions([big_instr])
         .sign(kp.private_key());
     // tx_small: a small Log within byte cap
     let tx_small = TransactionBuilder::new(chain_id, authority_id.clone())
-        .with_instructions([Log::new(Level::INFO, "ok".to_string())])
+        .with_instructions([small_instr])
         .sign(kp.private_key());
 
     let big = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_big));

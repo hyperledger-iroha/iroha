@@ -34,8 +34,8 @@ fn block_time_source() -> TimeSource {
 fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Build a small world: one domain, two accounts, one numeric asset def, zeroed assets
     let chain_id = ChainId::from("chain");
-    let (alice_id, alice_kp) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, bob_kp) = iroha_test_samples::gen_account_in("wonderland");
+    let alice_id = (*iroha_test_samples::ALICE_ID).clone();
+    let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let build_world = || {
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
         let ad: AssetDefinition =
@@ -60,10 +60,10 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
             10_u32,
             AssetId::of("coin#wonderland".parse().unwrap(), alice_id.clone()),
         )])
-        .sign(alice_kp.private_key());
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx2 = tx_builder(&chain_id, &bob_id)
         .with_instructions([Log::new(Level::INFO, "t2".to_string())])
-        .sign(bob_kp.private_key());
+        .sign(iroha_test_samples::BOB_KEYPAIR.private_key());
 
     // Build a NewBlock with both transactions
     let tx1 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
@@ -73,7 +73,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         block_time_source(),
     )
     .chain(0, None)
-    .sign(alice_kp.private_key())
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
     .unpack(|_| {});
 
     // Run sequential apply
@@ -275,34 +275,41 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 fn run_block_and_events(
     parallel_apply: bool,
     txs: Vec<SignedTransaction>,
+    bootstrap_accounts: Vec<AccountId>,
 ) -> (
     Vec<iroha_data_model::events::prelude::EventBox>,
     iroha_core::state::State,
 ) {
-    // Build a fresh world aligned with authority accounts present in `txs`.
-    let mut authorities: BTreeSet<AccountId> = BTreeSet::new();
+    // Build a fresh world aligned with authority accounts present in `txs`,
+    // plus any additional bootstrap accounts referenced by the test.
+    //
+    // This keeps the initial world stable across apply modes and avoids relying
+    // on implicit admission side effects (which can be sensitive to scheduling).
+    let mut accounts: BTreeSet<AccountId> = bootstrap_accounts.into_iter().collect();
     for tx in &txs {
-        authorities.insert(tx.authority().clone());
+        accounts.insert(tx.authority().clone());
     }
-    let first_auth = authorities
+    let first_auth = accounts
         .iter()
         .next()
         .cloned()
-        .expect("at least one authority present");
+        .expect("non-empty account set");
     let domain_id = first_auth.domain().clone();
     let domain: Domain = Domain::new(domain_id.clone()).build(&first_auth);
     let ad_id: AssetDefinitionId = format!("rose#{domain_id}").parse().unwrap();
     let ad: AssetDefinition =
         AssetDefinition::new(ad_id.clone(), NumericSpec::default()).build(&first_auth);
-    let mut accounts: Vec<Account> = Vec::new();
+    let mut world_accounts: Vec<Account> = Vec::new();
     let mut assets: Vec<Asset> = Vec::new();
-    for (idx, auth) in authorities.iter().enumerate() {
-        accounts.push(Account::new(auth.clone()).build(&first_auth));
-        let asset_id = AssetId::new(ad.id().clone(), auth.clone());
-        let balance = if idx == 0 { 60 } else { 10 };
+    for acc_id in &accounts {
+        world_accounts.push(Account::new(acc_id.clone()).build(&first_auth));
+        let asset_id = AssetId::new(ad.id().clone(), acc_id.clone());
+        // Ensure the first bootstrap account has a larger balance so that
+        // ordering differences in the scheduler don't affect validity.
+        let balance = if acc_id == &first_auth { 60 } else { 10 };
         assets.push(Asset::new(asset_id, Numeric::new(balance, 0)));
     }
-    let world = iroha_core::state::World::with_assets([domain], accounts, [ad], assets, []);
+    let world = iroha_core::state::World::with_assets([domain], world_accounts, [ad], assets, []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
@@ -344,8 +351,8 @@ fn run_block_and_events(
 #[test]
 fn events_snapshot_mint_burn_transfer_match_between_modes() {
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let alice_id = (*iroha_test_samples::ALICE_ID).clone();
+    let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let rose: AssetDefinitionId = "rose#wonderland".parse().unwrap();
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
@@ -369,9 +376,14 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     let (events_seq, state_seq) = run_block_and_events(
         false,
         vec![tx_mint.clone(), tx_burn.clone(), tx_xfer.clone()],
+        vec![alice_id.clone(), bob_id.clone()],
     );
     // Parallel-detached
-    let (events_par, state_par) = run_block_and_events(true, vec![tx_mint, tx_burn, tx_xfer]);
+    let (events_par, state_par) = run_block_and_events(
+        true,
+        vec![tx_mint, tx_burn, tx_xfer],
+        vec![alice_id.clone(), bob_id.clone()],
+    );
 
     // Fixture-backed parity snapshots
     assert_events("mint_burn_transfer", &events_seq);
@@ -394,8 +406,8 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
 fn events_snapshot_kv_and_nft_match_between_modes() {
     use iroha_data_model::prelude::*;
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let alice_id = (*iroha_test_samples::ALICE_ID).clone();
+    let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
 
@@ -463,9 +475,11 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
     ];
 
     // Sequential
-    let (events_seq, _state_seq) = run_block_and_events(false, txs.clone());
+    let (events_seq, _state_seq) =
+        run_block_and_events(false, txs.clone(), vec![alice_id.clone(), bob_id.clone()]);
     // Parallel-detached
-    let (events_par, _state_par) = run_block_and_events(true, txs);
+    let (events_par, _state_par) =
+        run_block_and_events(true, txs, vec![alice_id.clone(), bob_id.clone()]);
 
     assert_events("kv_and_nft_lifecycle", &events_seq);
     assert_events("kv_and_nft_lifecycle", &events_par);
@@ -474,7 +488,7 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
 #[test]
 fn events_snapshot_asset_definition_kv_match_between_modes() {
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let ad: AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
     let tx_set = tx_builder(&chain_id, &alice_id)
@@ -491,8 +505,12 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
 
-    let (events_seq, _) = run_block_and_events(false, vec![tx_set.clone(), tx_rm.clone()]);
-    let (events_par, _) = run_block_and_events(true, vec![tx_set, tx_rm]);
+    let (events_seq, _) = run_block_and_events(
+        false,
+        vec![tx_set.clone(), tx_rm.clone()],
+        vec![alice_id.clone()],
+    );
+    let (events_par, _) = run_block_and_events(true, vec![tx_set, tx_rm], vec![alice_id.clone()]);
     assert_events("asset_definition_kv", &events_seq);
     assert_events("asset_definition_kv", &events_par);
 }
@@ -500,8 +518,8 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
 #[test]
 fn owner_transfer_domain_and_asset_def_parity() {
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let alice_id = (*iroha_test_samples::ALICE_ID).clone();
+    let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let ad: AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
@@ -521,10 +539,17 @@ fn owner_transfer_domain_and_asset_def_parity() {
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
 
     // Sequential
-    let (events_seq, state_seq) =
-        run_block_and_events(false, vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()]);
+    let (events_seq, state_seq) = run_block_and_events(
+        false,
+        vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()],
+        vec![alice_id.clone(), bob_id.clone()],
+    );
     // Parallel-detached
-    let (events_par, state_par) = run_block_and_events(true, vec![tx_dom_xfer, tx_ad_xfer]);
+    let (events_par, state_par) = run_block_and_events(
+        true,
+        vec![tx_dom_xfer, tx_ad_xfer],
+        vec![alice_id.clone(), bob_id.clone()],
+    );
 
     // Events parity via fixture snapshots
     assert_events("owner_transfer_domain_asset_def", &events_seq);
