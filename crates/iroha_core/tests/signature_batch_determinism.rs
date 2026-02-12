@@ -83,6 +83,7 @@ fn mk_block_with_permuted_txs(
     height: std::num::NonZeroU64,
     prev_block_hash: Option<HashOf<BlockHeader>>,
     leader: &KeyPair,
+    proof_policy_bundle: &iroha_data_model::da::commitment::DaProofPolicyBundle,
 ) -> SignedBlock {
     // Build header with creation time just after max tx creation_time
     let ct_ms = txs
@@ -92,6 +93,7 @@ fn mk_block_with_permuted_txs(
         .unwrap_or(0);
     let header = BlockHeader::new(height, prev_block_hash, None, None, ct_ms + 1, 0);
     let mut builder = BlockBuilder::new(header);
+    builder.set_da_proof_policies(Some(proof_policy_bundle.clone()));
     for tx in txs {
         builder.push_transaction(tx);
     }
@@ -150,6 +152,8 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
     let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
+    let proof_policy_bundle =
+        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, mismatched_sig: bool| {
@@ -174,7 +178,13 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
     let mut rng = Lcg::new(0xED_25_51_9D);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(perm, height, Some(genesis_hash), &leader);
+        let block = mk_block_with_permuted_txs(
+            perm,
+            height,
+            Some(genesis_hash),
+            &leader,
+            &proof_policy_bundle,
+        );
         let err = run_validate(&mut state, block, &chain, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
 
@@ -198,6 +208,8 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
+    let proof_policy_bundle =
+        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
@@ -220,7 +232,13 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let mut rng = Lcg::new(0x53_45_43_50);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(perm, height, Some(genesis_hash), &leader);
+        let block = mk_block_with_permuted_txs(
+            perm,
+            height,
+            Some(genesis_hash),
+            &leader,
+            &proof_policy_bundle,
+        );
         let err = run_validate(&mut state, block, &chain, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
         use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
@@ -244,6 +262,8 @@ fn bls_multimessage_batch_passes() {
     let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
+    let proof_policy_bundle =
+        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     let mk = |msg: &str| {
         TransactionBuilder::new(chain.clone(), authority.clone())
@@ -252,7 +272,13 @@ fn bls_multimessage_batch_passes() {
     };
     let txs = vec![mk("m1"), mk("m2"), mk("m3"), mk("m4"), mk("m5")];
 
-    let block = mk_block_with_permuted_txs(txs, height, Some(genesis_hash), &leader);
+    let block = mk_block_with_permuted_txs(
+        txs,
+        height,
+        Some(genesis_hash),
+        &leader,
+        &proof_policy_bundle,
+    );
     run_validate(&mut state, block, &chain, &authority, &leader)
         .expect("valid BLS multi-message batch must pass");
 }
@@ -266,6 +292,8 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
     let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
+    let proof_policy_bundle =
+        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
@@ -288,7 +316,13 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
     let mut rng = Lcg::new(0xB150_0BAD);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(perm, height, Some(genesis_hash), &leader);
+        let block = mk_block_with_permuted_txs(
+            perm,
+            height,
+            Some(genesis_hash),
+            &leader,
+            &proof_policy_bundle,
+        );
         let err = run_validate(&mut state, block, &chain, &authority, &leader)
             .expect_err("block must be rejected due to bad BLS signature");
 
@@ -313,6 +347,8 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
+    let proof_policy_bundle =
+        iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     // Use distinct messages to exercise multi-message aggregation path
     let mk = |msg: &str, mismatched_sig: bool| {
@@ -336,7 +372,13 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     let mut rng = Lcg::new(0xB1_5B_4D);
     for _ in 0..16 {
         let perm = shuffle(&mut rng, &baseline);
-        let block = mk_block_with_permuted_txs(perm, height, Some(genesis_hash), &leader);
+        let block = mk_block_with_permuted_txs(
+            perm,
+            height,
+            Some(genesis_hash),
+            &leader,
+            &proof_policy_bundle,
+        );
         let err = run_validate(&mut state, block, &chain, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
         use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
