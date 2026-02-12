@@ -491,7 +491,8 @@ pub struct Environment {
 
 // tests module lives at the end of file
 
-/// Programs to work with
+/// Programs to work with.
+#[derive(Copy, Clone, Debug)]
 pub enum Program {
     /// Iroha Daemon CLI
     Irohad,
@@ -1453,6 +1454,17 @@ impl Program {
         self.resolve_internal(None)
     }
 
+    /// Async variant of [`Self::resolve`].
+    ///
+    /// Spawns a blocking task so that re-entrant builds and filesystem probing never block
+    /// a Tokio runtime thread (which can otherwise starve timers and hang async tests).
+    pub async fn resolve_async(&self) -> color_eyre::Result<PathBuf> {
+        let program = *self;
+        tokio::task::spawn_blocking(move || program.resolve_internal(None))
+            .await
+            .wrap_err("failed to join blocking task while resolving program")?
+    }
+
     pub fn resolve_force_build(&self) -> color_eyre::Result<PathBuf> {
         self.resolve_internal(Some(false))
     }
@@ -1889,7 +1901,8 @@ impl Network {
         }
 
         // Ensure we resolve `irohad` once before spawning peers; caches for subsequent calls.
-        let _ = Program::Irohad.resolve()?;
+        // This may trigger a re-entrant build, so keep it off the async runtime threads.
+        let _ = Program::Irohad.resolve_async().await?;
 
         let mut submitters: Vec<usize> = genesis_submitters.into_iter().collect();
         submitters.sort_unstable();
@@ -4730,7 +4743,8 @@ impl NetworkPeer {
             .await?;
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
-        let mut cmd = tokio::process::Command::new(Program::Irohad.resolve()?);
+        let irohad = Program::Irohad.resolve_async().await?;
+        let mut cmd = tokio::process::Command::new(irohad);
         strip_config_env_overrides(&mut cmd);
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -8447,6 +8461,9 @@ exit 0
 
     #[test]
     fn startup_diagnostics_warn_on_mismatched_da_enabled() {
+        if skip_network_tests("startup_diagnostics_warn_on_mismatched_da_enabled") {
+            return;
+        }
         let _sumeragi_guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
         let _disable_da = disable_sumeragi_env_overrides();
         let network =
@@ -8474,6 +8491,9 @@ exit 0
 
     #[test]
     fn startup_diagnostics_silent_when_da_enabled_align() {
+        if skip_network_tests("startup_diagnostics_silent_when_da_enabled_align") {
+            return;
+        }
         let _sumeragi_guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
         let _disable_da = disable_sumeragi_env_overrides();
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(2));
@@ -9248,9 +9268,13 @@ exit 0
         };
         {
             let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
-            Program::Irohad
-                .resolve()
-                .expect("irohad binary should resolve for network startup tests");
+            tokio::time::timeout(
+                Duration::from_secs(20 * 60),
+                Program::Irohad.resolve_async(),
+            )
+            .await
+            .expect("irohad binary resolution should not hang")
+            .expect("irohad binary should resolve for network startup tests");
         }
         let first = build_with_isolated_permit_async(first_builder).await;
         let first_timeout = first
@@ -9322,9 +9346,13 @@ exit 0
         };
         {
             let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
-            Program::Irohad
-                .resolve()
-                .expect("irohad binary should resolve for fallback startup test");
+            tokio::time::timeout(
+                Duration::from_secs(20 * 60),
+                Program::Irohad.resolve_async(),
+            )
+            .await
+            .expect("irohad binary resolution should not hang")
+            .expect("irohad binary should resolve for fallback startup test");
         }
         // Intentionally avoid providing a default executor sample; in CI the
         // prebuilt samples are usually absent so JSON genesis will fail to
@@ -9856,6 +9884,7 @@ exit 0
 
     #[test]
     fn program_resolve_uses_env_override_without_build() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         // Point TEST_NETWORK_BIN_IROHA to a dummy file under repo root
         let repo = repo_root();
         let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy");
@@ -9880,6 +9909,31 @@ exit 0
         }
         // Do not remove the dummy file to avoid races if other tests concurrently resolve;
         // it's under target/ and harmless.
+    }
+
+    #[tokio::test]
+    async fn program_resolve_async_honors_env_override() {
+        let _guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
+        let repo = repo_root();
+        let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy-async");
+        let abs = repo.join(&rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, b"dummy").unwrap();
+
+        let old_env = env::var(super::PROGRAM_IROHA_ENV).ok();
+        set_env_var(super::PROGRAM_IROHA_ENV, rel.display().to_string());
+
+        let resolved = Program::Iroha
+            .resolve_async()
+            .await
+            .expect("resolve via env");
+        assert_eq!(resolved, abs.canonicalize().unwrap());
+
+        if let Some(v) = old_env {
+            set_env_var(super::PROGRAM_IROHA_ENV, v);
+        } else {
+            remove_env_var(super::PROGRAM_IROHA_ENV);
+        }
     }
 
     #[test]
