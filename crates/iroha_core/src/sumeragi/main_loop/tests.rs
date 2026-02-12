@@ -37420,7 +37420,6 @@ fn validate_qc_with_evidence_emits_invalid_qc_evidence() {
         Some([0; 32]),
         None,
     );
-    eprintln!("validate_qc_with_evidence result: {result:?}");
     assert!(matches!(
         result,
         Err(super::QcValidationError::SignerOutOfBounds { .. })
