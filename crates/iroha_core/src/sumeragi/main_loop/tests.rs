@@ -29914,6 +29914,10 @@ fn selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint() {
 
 #[test]
 fn synthesize_commit_qc_accepts_valid_roster() {
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_precommit_signer_history_for_tests();
+
     let (peer, _pop, kp) = bls_peer("127.0.0.1:7090");
     let roster = vec![peer.id().clone()];
     let block: SignedBlock = ValidBlock::new_dummy_and_modify_header(kp.private_key(), |header| {
@@ -29953,10 +29957,17 @@ fn synthesize_commit_qc_accepts_valid_roster() {
 
     assert_eq!(cert.validator_set, roster);
     assert_eq!(cert.subject_block_hash, block.hash());
+
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_commit_certs_for_tests();
 }
 
 #[test]
 fn synthesize_commit_qc_uses_precommit_signers_when_history_missing() {
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_precommit_signer_history_for_tests();
+
     let (peer, _pop, kp) = bls_peer("127.0.0.1:7091");
     let roster = vec![peer.id().clone()];
     let block: SignedBlock = ValidBlock::new_dummy_and_modify_header(kp.private_key(), |header| {
@@ -29995,6 +30006,9 @@ fn synthesize_commit_qc_uses_precommit_signers_when_history_missing() {
 
     assert_eq!(cert.validator_set, roster);
     assert_eq!(cert.subject_block_hash, block.hash());
+
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_commit_certs_for_tests();
 }
 
 #[test]
