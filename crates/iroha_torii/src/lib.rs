@@ -6207,20 +6207,22 @@ async fn handler_zk_ivm_derive(
         )));
     }
 
-    let view = app.state.view();
-    let vk_record = view
-        .world()
-        .verifying_keys()
-        .get(&req.vk_ref)
-        .cloned()
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key not found: {}::{}",
-                    req.vk_ref.backend, req.vk_ref.name
-                )),
-            ))
-        })?;
+    let vk_record = {
+        // Ensure the view guard does not live across `.await` points below.
+        let view = app.state.view();
+        view.world()
+            .verifying_keys()
+            .get(&req.vk_ref)
+            .cloned()
+            .ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                        "verifying key not found: {}::{}",
+                        req.vk_ref.backend, req.vk_ref.name
+                    )),
+                ))
+            })?
+    };
 
     if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
