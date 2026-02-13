@@ -8892,7 +8892,7 @@ mod tests {
     fn read_genesis_handles_decode_failure() {
         // Create a bogus genesis file and ensure we return an error instead of panicking.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.genesis.scale");
+        let path = dir.path().join("bad.genesis.signed.nrt");
         std::fs::write(&path, [0u8, 1u8, 2u8, 3u8]).unwrap();
 
         let res = read_genesis(&path);
@@ -8907,7 +8907,7 @@ mod tests {
         set_instruction_registry(InstructionRegistry::new());
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.genesis.scale");
+        let path = dir.path().join("bad.genesis.signed.nrt");
         std::fs::write(&path, [0u8, 1u8, 2u8, 3u8]).unwrap();
 
         // `read_genesis` should initialize the registry internally and simply

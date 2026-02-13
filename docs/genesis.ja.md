@@ -136,7 +136,7 @@ cargo run -p iroha_cli --features sm -- \
 
    `irohad` を `--genesis-manifest-json` のみで起動した場合（署名済みジェネシスブロックが無いケース）、実行時の暗号設定はマニフェストの `crypto` セクションから自動的に適用されます。署名付きジェネシスブロックを併用する場合は、マニフェストと設定値が完全に一致している必要があります。
 
-`kagami genesis sign` は JSON の整合性を検査し、`genesis.file` 経由でそのまま利用可能な Norito エンコード済みブロックを生成します。生成される `genesis.signed.nrt` は、バージョンバイトと Norito ヘッダ（ペイロードレイアウトを記述）を含むカノニカルなワイヤ形式であり、配布時は常にこちらを共有してください。互換性のために `.scale` という古い拡張子を使うこともあります。ジェネシスで Executor をアップグレードしない場合は `executor` フィールド自体を省略し、`.to` ファイルを渡さなくても構いません。
+`kagami genesis sign` は JSON の整合性を検査し、`genesis.file` 経由でそのまま利用可能な Norito エンコード済みブロックを生成します。生成される `genesis.signed.nrt` は、バージョンバイトと Norito ヘッダ（ペイロードレイアウトを記述）を含むカノニカルなワイヤ形式です。配布時は常にこの `.nrt` を共有してください。ジェネシスで Executor をアップグレードしない場合は `executor` フィールド自体を省略し、`.to` ファイルを渡さなくても構いません。
 
 NPoS マニフェスト（`--consensus-mode npos` または Iroha2 の段階的な切り替え）を署名する場合、`kagami genesis sign` は `sumeragi_npos_parameters` を要求します。`kagami genesis generate --consensus-mode npos` で生成するか、パラメータを手動で追加してください。
 既定では `kagami genesis sign` はマニフェストの `consensus_mode` を使用します。`--consensus-mode` で上書きできます。

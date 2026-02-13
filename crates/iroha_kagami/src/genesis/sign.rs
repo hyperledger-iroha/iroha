@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use clap::Parser;
@@ -189,6 +189,9 @@ impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
+        if let Some(path) = self.out_file.as_deref() {
+            reject_legacy_scale_out_file(path)?;
+        }
         let build_line = build_line_from_env();
         match (self.next_consensus_mode, self.mode_activation_height) {
             (Some(_), None) => {
@@ -330,6 +333,20 @@ impl<T: Write> RunArgs<T> for Args {
 
         Ok(())
     }
+}
+
+fn reject_legacy_scale_out_file(path: &Path) -> Result<(), color_eyre::eyre::Error> {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return Ok(());
+    };
+    if !ext.eq_ignore_ascii_case("scale") {
+        return Ok(());
+    }
+
+    Err(eyre!(
+        "refusing to write `{}`: `.scale` is a legacy extension; kagami writes Norito wire format, use `.nrt` (e.g. genesis.signed.nrt)",
+        path.display()
+    ))
 }
 
 fn load_genesis_key(
@@ -532,6 +549,33 @@ mod tests {
         assert_eq!(
             entries[1].peer, peer_b,
             "entries should respect topology order"
+        );
+    }
+
+    #[test]
+    fn out_file_scale_extension_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("genesis.scale");
+        let args = Args {
+            genesis_file: npos_genesis_file(),
+            out_file: Some(path),
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut sink = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut sink)
+            .expect_err("writing a .scale out_file should be rejected");
+        assert!(
+            err.to_string().contains("legacy extension"),
+            "unexpected error: {err}"
         );
     }
 
