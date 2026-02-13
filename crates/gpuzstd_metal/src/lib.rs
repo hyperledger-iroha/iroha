@@ -272,13 +272,10 @@ pub unsafe extern "C" fn gpu_zstd_decompress(
     }
     let decoded = match zstd_frame::decode_frame(src_slice) {
         Ok(bytes) => bytes,
-        Err(zstd_frame::ZstdDecodeError::Unsupported) => {
-            match zstd::decode_all(Cursor::new(src_slice)) {
-                Ok(bytes) => bytes,
-                Err(_) => return RC_ZSTD,
-            }
-        }
-        Err(_) => return RC_ZSTD,
+        Err(_) => match zstd::decode_all(Cursor::new(src_slice)) {
+            Ok(bytes) => bytes,
+            Err(_) => return RC_ZSTD,
+        },
     };
     if decoded.len() > capacity {
         return RC_NO_SPACE;

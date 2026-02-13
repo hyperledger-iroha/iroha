@@ -5,9 +5,7 @@
 //! present. They are structured so that true GPU offloading can be added later
 //! without changing the public API.
 
-#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
-use std::ffi::CStr;
-#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
+#[cfg(unix)]
 use std::ffi::{c_char, c_int};
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
@@ -28,7 +26,7 @@ unsafe extern "C" {
     fn objc_autoreleasePoolPop(pool: *mut c_void);
 }
 
-#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
+#[cfg(unix)]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
@@ -45,13 +43,12 @@ extern "system" {
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
     fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
 }
-
 #[cfg(windows)]
 const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
 #[cfg(windows)]
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
 
-#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
+#[cfg(unix)]
 const RTLD_LAZY: c_int = 1;
 const RC_GPU_UNAVAILABLE: i32 = 3;
 
@@ -326,9 +323,12 @@ unsafe fn init_backend() -> Option<Backend> {
         objc_autoreleasePoolPop(pool);
     }
     let _has_device = !device.is_null();
-    let compress_fn: CompressFn = gpuzstd_metal::gpu_zstd_compress;
-    let decompress_fn: DecompressFn = gpuzstd_metal::gpu_zstd_decompress;
+    let (lib, compress_fn, decompress_fn) = match load_gpu_symbols("libgpuzstd_metal.dylib") {
+        Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
+        None => return None,
+    };
     if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
+        let _ = unsafe { dlclose(lib) };
         eprintln!(
             "[norito::gpu_zstd] Metal backend failed self-test ({}); falling back to CPU implementation",
             err
@@ -348,56 +348,10 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     #[cfg(unix)]
     {
-        use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
-        let mut lib = std::ptr::null_mut();
-        let mut candidates: Vec<PathBuf> = Vec::new();
-        if let Ok(exe) = env::current_exe()
-            && let Some(dir) = exe.parent()
-        {
-            candidates.extend(helper_candidates_from_exe_dir(dir, "libgpuzstd_cuda.so"));
-        }
-        for path in candidates {
-            let bytes = path.as_os_str().as_bytes();
-            if bytes.contains(&0) {
-                continue;
-            }
-            if let Ok(cpath) = CString::new(bytes) {
-                let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
-                if !handle.is_null() {
-                    lib = handle;
-                    break;
-                }
-            }
-        }
-        if lib.is_null() {
-            lib = unsafe { dlopen(c"libgpuzstd_cuda.so".as_ptr(), RTLD_LAZY) };
-        }
-        if lib.is_null() {
-            return None;
-        }
-        let compress = unsafe {
-            dlsym(
-                lib,
-                CStr::from_bytes_with_nul(b"gpu_zstd_compress\0")
-                    .unwrap()
-                    .as_ptr(),
-            )
+        let (lib, compress_fn, decompress_fn) = match load_gpu_symbols("libgpuzstd_cuda.so") {
+            Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
+            None => return None,
         };
-        let decompress = unsafe {
-            dlsym(
-                lib,
-                CStr::from_bytes_with_nul(b"gpu_zstd_decompress\0")
-                    .unwrap()
-                    .as_ptr(),
-            )
-        };
-        if compress.is_null() || decompress.is_null() {
-            let _ = unsafe { dlclose(lib) };
-            return None;
-        }
-        let compress_fn: CompressFn = unsafe { std::mem::transmute(compress) };
-        let decompress_fn: DecompressFn = unsafe { std::mem::transmute(decompress) };
         if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = unsafe { dlclose(lib) };
             eprintln!(
@@ -454,6 +408,66 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     #[allow(unreachable_code)]
     None
+}
+
+#[cfg(unix)]
+unsafe fn load_gpu_symbols(
+    lib_name: &str,
+) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
+    use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+
+    let mut library = std::ptr::null_mut();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.extend(helper_candidates_from_exe_dir(dir, lib_name));
+    }
+
+    for path in candidates {
+        let bytes = path.as_os_str().as_bytes();
+        if bytes.contains(&0) {
+            continue;
+        }
+        if let Ok(path) = CString::new(bytes) {
+            let handle = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
+            if !handle.is_null() {
+                library = handle;
+                break;
+            }
+        }
+    }
+
+    if library.is_null() {
+        if let Ok(path) = CString::new(lib_name) {
+            library = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
+        }
+    }
+
+    if library.is_null() {
+        return None;
+    }
+
+    let compress = unsafe {
+        dlsym(
+            library,
+            b"gpu_zstd_compress\0".as_ptr() as *const c_char,
+        )
+    };
+    let decompress = unsafe {
+        dlsym(
+            library,
+            b"gpu_zstd_decompress\0".as_ptr() as *const c_char,
+        )
+    };
+    if compress.is_null() || decompress.is_null() {
+        let _ = unsafe { dlclose(library) };
+        return None;
+    }
+
+    let compress_fn: CompressFn = unsafe { std::mem::transmute(compress) };
+    let decompress_fn: DecompressFn = unsafe { std::mem::transmute(decompress) };
+    Some((library, compress_fn, decompress_fn))
 }
 
 #[cfg(unix)]
