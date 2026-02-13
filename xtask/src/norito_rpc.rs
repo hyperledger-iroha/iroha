@@ -3,26 +3,39 @@ use std::{
     fs,
     fs::File,
     io::Read,
+    num::NonZeroU32,
     path::{Path, PathBuf},
-    process::Command,
+    str::FromStr,
+    time::Duration,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake2::{Blake2bVar, digest::VariableOutput};
 use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
+    ChainId,
+    account::{AccountId, address},
+    domain::DomainId,
+    isi::{Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload},
+    metadata::Metadata,
+    name::Name,
     sns::{
         FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
         NameStatus, PaymentProofV1, RegisterNameRequestV1, RegisterNameResponseV1,
         RenewNameRequestV1, ReservedAssignmentRequestV1, SuffixPolicyV1, TransferNameRequestV1,
         UpdateControllersRequestV1,
     },
-    transaction::{SignedTransaction, signed::TransactionPayload},
+    transaction::{
+        Executable, IvmBytecode, SignedTransaction, TransactionBuilder, signed::TransactionPayload,
+    },
 };
+use iroha_primitives::json::Json;
 use norito::{
     NoritoSerialize,
-    json::{self, JsonDeserialize, JsonSerialize},
+    codec::{Decode, Encode},
+    json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
 use sha2::{Digest as ShaDigest, Sha256};
 use tempfile::tempdir;
@@ -87,6 +100,11 @@ pub struct FixtureOptions {
 impl FixtureOptions {
     fn resolve_paths(&self) -> Result<ResolvedFixtureOptions> {
         let root = workspace_root();
+        if self.exporter_manifest.is_some() {
+            eprintln!(
+                "[norito-rpc] warning: --exporter is deprecated and ignored; fixture exporter is built into xtask"
+            );
+        }
         let fixtures = self.fixtures_json.clone().unwrap_or_else(|| {
             root.join("java/iroha_android/src/test/resources/transaction_payloads.json")
         });
@@ -94,16 +112,6 @@ impl FixtureOptions {
             return Err(eyre!(
                 "fixtures JSON missing: {} (override with --fixtures)",
                 fixtures.display()
-            ));
-        }
-        let exporter = self
-            .exporter_manifest
-            .clone()
-            .unwrap_or_else(|| root.join("scripts/export_norito_fixtures/Cargo.toml"));
-        if !exporter.is_file() {
-            return Err(eyre!(
-                "exporter manifest missing: {} (override with --exporter)",
-                exporter.display()
             ));
         }
         let output = self
@@ -116,7 +124,6 @@ impl FixtureOptions {
             .unwrap_or_else(|| output.join(MANIFEST_BASENAME));
         Ok(ResolvedFixtureOptions {
             fixtures_json: fixtures,
-            exporter_manifest: exporter,
             output_dir: output,
             manifest_path: selection,
         })
@@ -125,7 +132,6 @@ impl FixtureOptions {
 
 struct ResolvedFixtureOptions {
     fixtures_json: PathBuf,
-    exporter_manifest: PathBuf,
     output_dir: PathBuf,
     manifest_path: PathBuf,
 }
@@ -375,7 +381,7 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     fs::create_dir_all(&resolved.output_dir)
         .with_context(|| format!("failed to create {}", resolved.output_dir.display()))?;
     let temp_dir = tempdir().context("failed to create temporary directory")?;
-    run_fixture_exporter(&resolved, temp_dir.path(), options.check_encoded)?;
+    generate_fixture_artifacts(&resolved, temp_dir.path(), options.check_encoded)?;
     let generated_manifest_path = temp_dir.path().join(MANIFEST_BASENAME);
     let generated = Manifest::load(&generated_manifest_path).with_context(|| {
         format!(
@@ -425,41 +431,666 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     Ok(())
 }
 
-fn run_fixture_exporter(
+fn generate_fixture_artifacts(
     resolved: &ResolvedFixtureOptions,
     out_dir: &Path,
     check_encoded: bool,
 ) -> Result<()> {
-    let root = workspace_root();
-    let mut command = Command::new("cargo");
-    command
-        .arg("run")
-        .arg("--locked")
-        .arg("--manifest-path")
-        .arg(&resolved.exporter_manifest)
-        .arg("--release")
-        .arg("--")
-        .arg("--fixtures")
-        .arg(&resolved.fixtures_json)
-        .arg("--write-fixtures")
-        .arg("--out-dir")
-        .arg(out_dir)
-        .arg("--manifest")
-        .arg(MANIFEST_BASENAME);
-    if !check_encoded {
-        command.arg("--check-encoded").arg("false");
+    let fixtures_text = fs::read_to_string(&resolved.fixtures_json)
+        .with_context(|| format!("failed to read {}", resolved.fixtures_json.display()))?;
+    let fixtures_value: Value =
+        json::from_str(&fixtures_text).context("invalid transaction_payloads fixtures JSON")?;
+    let raw_fixtures = parse_payload_fixtures(&fixtures_value)?;
+    let keypair = signing_keypair()?;
+
+    let mut fixtures = Vec::with_capacity(raw_fixtures.len());
+    for raw in &raw_fixtures {
+        fixtures.push(raw.generate_fixture(&keypair, check_encoded)?);
     }
-    let status = command
-        .current_dir(&root)
-        .status()
-        .with_context(|| format!("failed to run {}", resolved.exporter_manifest.display()))?;
-    if !status.success() {
-        return Err(eyre!(
-            "fixture exporter exited with status {}",
-            status.code().unwrap_or(-1)
-        ));
+
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("failed to create {}", out_dir.display()))?;
+    for fixture in &fixtures {
+        let norito_path = out_dir.join(format!("{}.norito", fixture.name));
+        fs::write(&norito_path, &fixture.payload_bytes)
+            .with_context(|| format!("failed to write {}", norito_path.display()))?;
+    }
+
+    let manifest = Manifest {
+        fixtures: fixtures.iter().map(Fixture::to_entry).collect(),
+    };
+    let manifest_json = json::to_json_pretty(&manifest)?;
+    fs::write(
+        out_dir.join(MANIFEST_BASENAME),
+        format!("{manifest_json}\n"),
+    )
+    .context("failed to write generated fixture manifest")?;
+
+    // Keep the Android/Swift/Python `transaction_payloads.json` source hints in sync.
+    let updated_payloads = build_payload_fixtures_json(&raw_fixtures, &fixtures)?;
+    let payloads_json = json::to_json_pretty(&updated_payloads)?;
+    fs::write(&resolved.fixtures_json, format!("{payloads_json}\n"))
+        .with_context(|| format!("failed to write {}", resolved.fixtures_json.display()))?;
+
+    Ok(())
+}
+
+const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
+
+fn signing_keypair() -> Result<KeyPair> {
+    let seed = hex::decode(SIGNING_SEED_HEX).context("invalid signing seed hex")?;
+    Ok(KeyPair::from_seed(seed, Algorithm::Ed25519))
+}
+
+#[derive(Clone)]
+struct RawPayloadFixture {
+    name: String,
+    payload: RawPayload,
+    payload_json: Value,
+    encoded_hint: Option<String>,
+    chain_hint: Option<String>,
+    authority_hint: Option<String>,
+    creation_time_ms_hint: Option<u64>,
+    ttl_ms_hint: Option<u64>,
+    nonce_hint: Option<u32>,
+}
+
+#[derive(Clone)]
+struct RawPayload {
+    chain: String,
+    authority: String,
+    creation_time_ms: u64,
+    executable: RawExecutable,
+    ttl_ms: Option<u64>,
+    nonce: Option<u32>,
+    metadata: Vec<(Name, Json)>,
+}
+
+#[derive(Clone)]
+enum RawExecutable {
+    Ivm(Vec<u8>),
+    Instructions(Vec<RawInstruction>),
+}
+
+#[derive(Clone)]
+struct RawInstruction {
+    wire_name: String,
+    payload_base64: String,
+}
+
+struct Fixture {
+    name: String,
+    payload_bytes: Vec<u8>,
+    signed_bytes: Vec<u8>,
+    summary: PayloadSummary,
+}
+
+struct PayloadSummary {
+    chain: String,
+    authority: String,
+    creation_time_ms: u64,
+    ttl_ms: Option<u64>,
+    nonce: Option<u32>,
+    payload_base64: String,
+    signed_base64: String,
+    payload_hash_hex: String,
+    signed_hash_hex: String,
+}
+
+struct WireInstructionPayload {
+    wire_name: String,
+    payload_base64: String,
+}
+
+impl RawPayloadFixture {
+    fn generate_fixture(&self, keypair: &KeyPair, check_encoded: bool) -> Result<Fixture> {
+        if let Some(chain_hint) = &self.chain_hint {
+            if chain_hint != &self.payload.chain {
+                bail!(
+                    "fixture '{}' chain mismatch: expected {}, got {}",
+                    self.name,
+                    chain_hint,
+                    self.payload.chain
+                );
+            }
+        }
+        if let Some(authority_hint) = &self.authority_hint {
+            let expected = normalize_authority_hint(authority_hint);
+            let actual = normalize_authority_hint(&self.payload.authority);
+            if expected != actual {
+                bail!(
+                    "fixture '{}' authority mismatch: expected {}, got {}",
+                    self.name,
+                    authority_hint,
+                    self.payload.authority
+                );
+            }
+        }
+        if let Some(creation_hint) = self.creation_time_ms_hint {
+            if creation_hint != self.payload.creation_time_ms {
+                bail!(
+                    "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
+                    self.name,
+                    creation_hint,
+                    self.payload.creation_time_ms
+                );
+            }
+        }
+        if let Some(ttl_hint) = self.ttl_ms_hint {
+            if Some(ttl_hint) != self.payload.ttl_ms {
+                bail!(
+                    "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
+                    self.name,
+                    ttl_hint,
+                    self.payload.ttl_ms
+                );
+            }
+        }
+        if let Some(nonce_hint) = self.nonce_hint {
+            if Some(nonce_hint) != self.payload.nonce {
+                bail!(
+                    "fixture '{}' nonce mismatch: expected {}, got {:?}",
+                    self.name,
+                    nonce_hint,
+                    self.payload.nonce
+                );
+            }
+        }
+
+        let builder = self.payload.to_builder()?;
+        let signed = builder.sign(keypair.private_key());
+        let payload_value = signed.payload().clone();
+        let payload_bytes = payload_value.encode();
+        let payload_base64 = BASE64.encode(&payload_bytes);
+        if check_encoded {
+            if let Some(expected) = &self.encoded_hint {
+                if expected != &payload_base64 {
+                    bail!(
+                        "encoded payload mismatch for '{}': expected {}, got {}",
+                        self.name,
+                        expected,
+                        payload_base64
+                    );
+                }
+            }
+        }
+
+        let signed_bytes = signed.encode();
+        let signed_base64 = BASE64.encode(&signed_bytes);
+        let payload_hash_hex = blake2b256_hex(&payload_bytes);
+        let signed_hash_hex = blake2b256_hex(&signed_bytes);
+
+        Ok(Fixture {
+            name: self.name.clone(),
+            payload_bytes,
+            signed_bytes,
+            summary: PayloadSummary {
+                chain: self.payload.chain.clone(),
+                authority: self.payload.authority.clone(),
+                creation_time_ms: self.payload.creation_time_ms,
+                ttl_ms: self.payload.ttl_ms,
+                nonce: self.payload.nonce,
+                payload_base64,
+                signed_base64,
+                payload_hash_hex,
+                signed_hash_hex,
+            },
+        })
+    }
+}
+
+impl RawPayload {
+    fn to_builder(&self) -> Result<TransactionBuilder> {
+        let chain_id = ChainId::from_str(&self.chain).expect("ChainId parsing must be infallible");
+        let authority = parse_account_id(&self.authority)
+            .with_context(|| format!("invalid authority id '{}'", self.authority))?;
+
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
+        if let Some(ttl) = self.ttl_ms {
+            builder.set_ttl(Duration::from_millis(ttl));
+        }
+        if let Some(nonce) = self.nonce {
+            let nz = NonZeroU32::new(nonce).ok_or_else(|| eyre!("nonce must be > 0"))?;
+            builder.set_nonce(nz);
+        }
+
+        let mut metadata = Metadata::default();
+        for (key, value) in &self.metadata {
+            metadata.insert(key.clone(), value.clone());
+        }
+        builder = builder.with_metadata(metadata);
+
+        builder = match &self.executable {
+            RawExecutable::Ivm(bytes) => {
+                builder.with_executable(Executable::Ivm(IvmBytecode::from_compiled(bytes.clone())))
+            }
+            RawExecutable::Instructions(raws) => {
+                let instructions = raws
+                    .iter()
+                    .map(build_instruction)
+                    .collect::<Result<Vec<_>>>()?;
+                builder.with_instructions(instructions)
+            }
+        };
+
+        Ok(builder)
+    }
+}
+
+impl Fixture {
+    fn to_entry(&self) -> FixtureEntry {
+        FixtureEntry {
+            name: self.name.clone(),
+            authority: self.summary.authority.clone(),
+            chain: self.summary.chain.clone(),
+            creation_time_ms: self.summary.creation_time_ms,
+            encoded_file: format!("{}.norito", self.name),
+            encoded_len: self.payload_bytes.len() as u64,
+            signed_len: self.signed_bytes.len() as u64,
+            payload_base64: self.summary.payload_base64.clone(),
+            payload_hash: self.summary.payload_hash_hex.clone(),
+            signed_base64: self.summary.signed_base64.clone(),
+            signed_hash: self.summary.signed_hash_hex.clone(),
+            nonce: self.summary.nonce,
+            time_to_live_ms: self.summary.ttl_ms,
+        }
+    }
+}
+
+fn parse_payload_fixtures(value: &Value) -> Result<Vec<RawPayloadFixture>> {
+    let arr = value
+        .as_array()
+        .ok_or_else(|| eyre!("fixture root must be an array"))?;
+    arr.iter().map(parse_payload_fixture).collect()
+}
+
+fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("fixture entries must be objects"))?;
+    let name = expect_string(obj, "name")?.to_owned();
+    let payload_value = obj
+        .get("payload")
+        .ok_or_else(|| eyre!("fixture '{name}' missing payload"))?;
+    let payload_json = payload_value.clone();
+    let payload = parse_payload(payload_value)
+        .with_context(|| format!("invalid payload for fixture '{name}'"))?;
+
+    let encoded_hint = obj
+        .get("payload_base64")
+        .or_else(|| obj.get("encoded"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let chain_hint = obj.get("chain").and_then(Value::as_str).map(str::to_owned);
+    let authority_hint = obj
+        .get("authority")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let creation_time_ms_hint = obj.get("creation_time_ms").and_then(Value::as_u64);
+    let ttl_ms_hint = obj.get("time_to_live_ms").and_then(Value::as_u64);
+    let nonce_hint = obj.get("nonce").and_then(Value::as_u64).map(|n| n as u32);
+
+    Ok(RawPayloadFixture {
+        name,
+        payload,
+        payload_json,
+        encoded_hint,
+        chain_hint,
+        authority_hint,
+        creation_time_ms_hint,
+        ttl_ms_hint,
+        nonce_hint,
+    })
+}
+
+fn parse_payload(value: &Value) -> Result<RawPayload> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("payload entries must be objects"))?;
+    let chain = expect_string(obj, "chain")?.to_owned();
+    let authority = expect_string(obj, "authority")?.to_owned();
+    let creation_time_ms = expect_u64(obj, "creation_time_ms")?;
+    let executable_value = obj
+        .get("executable")
+        .ok_or_else(|| eyre!("missing executable"))?;
+    let executable = parse_executable(executable_value)?;
+    let ttl_ms = parse_optional_u64(obj, "time_to_live_ms")?;
+    let nonce = parse_optional_u32(obj, "nonce")?;
+    let metadata = match obj.get("metadata") {
+        Some(value) => parse_metadata_object(value)?,
+        None => Vec::new(),
+    };
+
+    Ok(RawPayload {
+        chain,
+        authority,
+        creation_time_ms,
+        executable,
+        ttl_ms,
+        nonce,
+        metadata,
+    })
+}
+
+fn parse_executable(value: &Value) -> Result<RawExecutable> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("executable must be an object"))?;
+    if let Some(ivm) = obj.get("Ivm") {
+        let bytes = ivm
+            .as_str()
+            .ok_or_else(|| eyre!("Ivm value must be base64 string"))?;
+        let decoded = BASE64
+            .decode(bytes)
+            .with_context(|| format!("failed to decode Ivm base64 for payload {bytes:?}"))?;
+        return Ok(RawExecutable::Ivm(decoded));
+    }
+    if let Some(instr) = obj.get("Instructions") {
+        let arr = instr
+            .as_array()
+            .ok_or_else(|| eyre!("Instructions must be an array"))?;
+        let mut entries = Vec::with_capacity(arr.len());
+        for entry in arr {
+            entries.push(parse_instruction(entry)?);
+        }
+        return Ok(RawExecutable::Instructions(entries));
+    }
+    bail!("unknown executable variant")
+}
+
+fn parse_instruction(value: &Value) -> Result<RawInstruction> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("instruction entries must be objects"))?;
+    let wire_name = obj
+        .get("wire_name")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| eyre!("instruction wire payload requires wire_name"))?;
+    let payload_base64 = obj
+        .get("payload_base64")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| eyre!("instruction wire payload requires payload_base64"))?;
+    if obj.contains_key("kind") || obj.contains_key("arguments") {
+        bail!("legacy instruction fields are not supported; use wire_name/payload_base64");
+    }
+    Ok(RawInstruction {
+        wire_name,
+        payload_base64,
+    })
+}
+
+fn parse_metadata_object(value: &Value) -> Result<Vec<(Name, Json)>> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("metadata must be an object"))?;
+    let mut entries = Vec::with_capacity(obj.len());
+    for (key, value) in obj {
+        let name: Name = key.parse().context("invalid metadata key")?;
+        let json_value = Json::from_norito_value_ref(value)
+            .map_err(|err| eyre!("invalid metadata json value for '{key}': {err}"))?;
+        entries.push((name, json_value));
+    }
+    Ok(entries)
+}
+
+fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
+    let payload_bytes = BASE64
+        .decode(raw.payload_base64.as_bytes())
+        .with_context(|| format!("invalid instruction payload_base64 for {}", raw.wire_name))?;
+    if payload_bytes.is_empty() {
+        bail!("instruction payload_base64 must not decode to empty bytes");
+    }
+    decode_instruction_from_pair(&raw.wire_name, &payload_bytes)
+        .map_err(|err| eyre!(err.to_string()))
+        .with_context(|| format!("failed to decode wire instruction '{}'", raw.wire_name))
+}
+
+fn normalize_authority_hint(authority: &str) -> String {
+    let trimmed = authority.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(canonical) = AccountId::canonicalize(trimmed) {
+        return canonical;
+    }
+    if let Some((address_part, _)) = trimmed.rsplit_once('@') {
+        if let Ok(canonical) = AccountId::canonicalize(address_part) {
+            return canonical;
+        }
+        return address_part.to_string();
+    }
+    trimmed.to_string()
+}
+
+fn parse_account_id(value: &str) -> Result<AccountId> {
+    let (signatory_hint, domain_part) = value
+        .split_once('@')
+        .ok_or_else(|| eyre!("account id '{value}' must contain '@'"))?;
+    let domain: DomainId = domain_part
+        .parse()
+        .with_context(|| format!("invalid domain id '{domain_part}'"))?;
+
+    if let Ok((address_payload, _)) = address::AccountAddress::parse_any(signatory_hint, None) {
+        return address_payload
+            .to_account_id(&domain)
+            .map_err(|err| eyre!(err.code_str()));
+    }
+
+    if let Ok(signatory) = signatory_hint.parse::<PublicKey>() {
+        return Ok(AccountId::of(domain, signatory));
+    }
+
+    let seed = derive_seed(signatory_hint, domain_part);
+    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    Ok(AccountId::of(domain, keypair.public_key().clone()))
+}
+
+fn derive_seed(left: &str, right: &str) -> Vec<u8> {
+    let mut seed = [0u8; 32];
+    for (index, byte) in left
+        .as_bytes()
+        .iter()
+        .chain(right.as_bytes().iter())
+        .enumerate()
+    {
+        seed[index % seed.len()] ^= *byte;
+    }
+    seed.to_vec()
+}
+
+fn optional_u64_value(value: Option<u64>) -> Value {
+    match value {
+        Some(v) => Value::Number(Number::U64(v)),
+        None => Value::Null,
+    }
+}
+
+fn optional_u32_value(value: Option<u32>) -> Value {
+    match value {
+        Some(v) => Value::Number(Number::U64(v as u64)),
+        None => Value::Null,
+    }
+}
+
+fn build_payload_fixtures_json(
+    raw_fixtures: &[RawPayloadFixture],
+    fixtures: &[Fixture],
+) -> Result<Value> {
+    let fixtures_by_name: BTreeMap<&str, &Fixture> = fixtures
+        .iter()
+        .map(|fixture| (fixture.name.as_str(), fixture))
+        .collect();
+
+    let mut out = Vec::with_capacity(raw_fixtures.len());
+    for raw in raw_fixtures {
+        let fixture = fixtures_by_name
+            .get(raw.name.as_str())
+            .copied()
+            .ok_or_else(|| eyre!("fixture '{}' missing generated payload", raw.name))?;
+
+        let mut entry = Map::new();
+        entry.insert("name".to_owned(), Value::String(fixture.name.clone()));
+        entry.insert(
+            "chain".to_owned(),
+            Value::String(fixture.summary.chain.clone()),
+        );
+        entry.insert(
+            "authority".to_owned(),
+            Value::String(fixture.summary.authority.clone()),
+        );
+        entry.insert(
+            "creation_time_ms".to_owned(),
+            Value::Number(Number::U64(fixture.summary.creation_time_ms)),
+        );
+        entry.insert(
+            "time_to_live_ms".to_owned(),
+            optional_u64_value(fixture.summary.ttl_ms),
+        );
+        entry.insert(
+            "nonce".to_owned(),
+            optional_u32_value(fixture.summary.nonce),
+        );
+        entry.insert(
+            "payload_base64".to_owned(),
+            Value::String(fixture.summary.payload_base64.clone()),
+        );
+        entry.insert(
+            "signed_base64".to_owned(),
+            Value::String(fixture.summary.signed_base64.clone()),
+        );
+        entry.insert(
+            "payload_hash".to_owned(),
+            Value::String(fixture.summary.payload_hash_hex.clone()),
+        );
+        entry.insert(
+            "signed_hash".to_owned(),
+            Value::String(fixture.summary.signed_hash_hex.clone()),
+        );
+        entry.insert(
+            "encoded".to_owned(),
+            Value::String(fixture.summary.payload_base64.clone()),
+        );
+
+        let mut payload = raw.payload_json.clone();
+        let wire_payloads = wire_payloads_from_encoded(&fixture.payload_bytes)?;
+        if !wire_payloads.is_empty() {
+            apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
+        }
+        entry.insert("payload".to_owned(), payload);
+
+        out.push(Value::Object(entry));
+    }
+
+    Ok(Value::Array(out))
+}
+
+fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPayload>> {
+    let mut cursor = encoded;
+    let payload = TransactionPayload::decode(&mut cursor).context("decode TransactionPayload")?;
+    if !cursor.is_empty() {
+        bail!("payload contains trailing bytes");
+    }
+    let Executable::Instructions(instructions) = &payload.instructions else {
+        return Ok(Vec::new());
+    };
+
+    let registry = iroha_data_model::instruction_registry::default();
+    let mut out = Vec::with_capacity(instructions.len());
+    for instruction in instructions.iter() {
+        let type_name = Instruction::id(&**instruction);
+        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
+        let payload = Instruction::dyn_encode(&**instruction);
+        let framed =
+            frame_instruction_payload(type_name, &payload).map_err(|err| eyre!(err.to_string()))?;
+        out.push(WireInstructionPayload {
+            wire_name: wire_name.to_owned(),
+            payload_base64: BASE64.encode(framed),
+        });
+    }
+    Ok(out)
+}
+
+fn apply_wire_payloads_to_payload_json(
+    payload: &mut Value,
+    wire_payloads: &[WireInstructionPayload],
+) -> Result<()> {
+    let payload_obj = payload
+        .as_object_mut()
+        .ok_or_else(|| eyre!("payload must be an object"))?;
+    let executable_value = payload_obj
+        .get_mut("executable")
+        .ok_or_else(|| eyre!("payload missing executable"))?;
+    let executable_obj = executable_value
+        .as_object_mut()
+        .ok_or_else(|| eyre!("payload executable must be an object"))?;
+    let instructions_value = executable_obj
+        .get_mut("Instructions")
+        .ok_or_else(|| eyre!("payload executable missing Instructions"))?;
+    let instructions = instructions_value
+        .as_array_mut()
+        .ok_or_else(|| eyre!("payload Instructions must be an array"))?;
+    if instructions.len() != wire_payloads.len() {
+        bail!(
+            "payload instructions length mismatch: expected {}, got {}",
+            wire_payloads.len(),
+            instructions.len()
+        );
+    }
+    for (entry, wire) in instructions.iter_mut().zip(wire_payloads) {
+        let obj = entry
+            .as_object_mut()
+            .ok_or_else(|| eyre!("instruction entries must be objects"))?;
+        if obj.contains_key("kind") || obj.contains_key("arguments") {
+            bail!("instruction entries must not include legacy kind/arguments fields");
+        }
+        obj.insert("wire_name".into(), Value::String(wire.wire_name.clone()));
+        obj.insert(
+            "payload_base64".into(),
+            Value::String(wire.payload_base64.clone()),
+        );
     }
     Ok(())
+}
+
+fn expect_string<'a>(obj: &'a Map, key: &str) -> Result<&'a str> {
+    obj.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("missing '{key}' string"))
+}
+
+fn expect_u64(obj: &Map, key: &str) -> Result<u64> {
+    obj.get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| eyre!("missing '{key}' integer"))
+}
+
+fn parse_optional_u64(obj: &Map, key: &str) -> Result<Option<u64>> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| eyre!("'{key}' must be an integer or null"))
+            .map(Some),
+        Some(other) => bail!("'{key}' must be an integer or null, got {other:?}"),
+    }
+}
+
+fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => {
+            let value = number
+                .as_u64()
+                .ok_or_else(|| eyre!("'{key}' must be an integer or null"))?;
+            let value_u32 = u32::try_from(value)
+                .with_context(|| format!("'{key}' must fit in u32 (got {value})"))?;
+            Ok(Some(value_u32))
+        }
+        Some(other) => bail!("'{key}' must be an integer or null, got {other:?}"),
+    }
 }
 
 fn filter_fixtures(

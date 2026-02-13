@@ -1,6 +1,12 @@
 //! Asset identifiers.
 
-use std::{fmt, format, str::FromStr, string::String};
+use std::{
+    cmp::Ordering,
+    fmt, format,
+    hash::{Hash, Hasher},
+    str::FromStr,
+    string::String,
+};
 
 use derive_more::Constructor;
 use getset::Getters;
@@ -17,7 +23,11 @@ use crate::{
 mod model {
     use super::*;
 
-    /// Identification of an Asset Definition. Consists of Asset name and Domais name.
+    /// Identification of an Asset Definition. Consists of asset name and domain name.
+    ///
+    /// Asset names are compared case-insensitively (ASCII) for equality, ordering and hashing.
+    /// This ensures asset definition IDs are unique per domain regardless of name casing (e.g.
+    /// `pkr#sbp` and `PKR#sbp` refer to the same asset definition).
     ///
     /// # Examples
     ///
@@ -30,11 +40,6 @@ mod model {
         derive_more::Debug,
         Clone,
         derive_more::Display,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
         Constructor,
         Getters,
         Decode,
@@ -65,6 +70,56 @@ mod model {
 }
 
 string_id!(AssetDefinitionId);
+
+fn cmp_ignore_ascii_case(a: &str, b: &str) -> Ordering {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    let shared = core::cmp::min(a_bytes.len(), b_bytes.len());
+    for i in 0..shared {
+        let a_fold = a_bytes[i].to_ascii_lowercase();
+        let b_fold = b_bytes[i].to_ascii_lowercase();
+        match a_fold.cmp(&b_fold) {
+            Ordering::Equal => {}
+            non_eq => return non_eq,
+        }
+    }
+    a_bytes.len().cmp(&b_bytes.len())
+}
+
+impl PartialEq for AssetDefinitionId {
+    fn eq(&self, other: &Self) -> bool {
+        self.domain == other.domain && self.name.as_ref().eq_ignore_ascii_case(other.name.as_ref())
+    }
+}
+
+impl Eq for AssetDefinitionId {}
+
+impl PartialOrd for AssetDefinitionId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AssetDefinitionId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.domain.cmp(&other.domain) {
+            Ordering::Equal => cmp_ignore_ascii_case(self.name.as_ref(), other.name.as_ref()),
+            non_eq => non_eq,
+        }
+    }
+}
+
+impl Hash for AssetDefinitionId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.domain.hash(state);
+        let name = self.name.as_ref();
+        // Preserve structural hashing (like `str`) without allocating a lowercase String.
+        name.len().hash(state);
+        for byte in name.as_bytes() {
+            state.write_u8(byte.to_ascii_lowercase());
+        }
+    }
+}
 
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetId {
@@ -186,6 +241,12 @@ impl FromStr for AssetId {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        cmp::Ordering,
+        collections::BTreeSet,
+        hash::{Hash as _, Hasher as _},
+    };
+
     use iroha_crypto::KeyPair;
 
     use super::*;
@@ -202,5 +263,24 @@ mod tests {
         // Should contain the account and asset parts and not crash
         assert!(s.contains("xor"));
         assert!(s.contains('#'));
+    }
+
+    #[test]
+    fn asset_definition_id_name_is_case_insensitive() {
+        let lower: AssetDefinitionId = "pkr#sbp".parse().unwrap();
+        let upper: AssetDefinitionId = "PKR#sbp".parse().unwrap();
+        assert_eq!(lower, upper);
+        assert_eq!(lower.cmp(&upper), Ordering::Equal);
+
+        let mut hasher_lower = std::collections::hash_map::DefaultHasher::new();
+        lower.hash(&mut hasher_lower);
+        let mut hasher_upper = std::collections::hash_map::DefaultHasher::new();
+        upper.hash(&mut hasher_upper);
+        assert_eq!(hasher_lower.finish(), hasher_upper.finish());
+
+        let mut set = BTreeSet::new();
+        set.insert(lower);
+        set.insert(upper);
+        assert_eq!(set.len(), 1);
     }
 }
