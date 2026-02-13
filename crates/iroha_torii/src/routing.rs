@@ -6220,6 +6220,7 @@ pub async fn handle_post_contract_call(
         entrypoint,
         payload,
         gas_asset_id,
+        fee_sponsor,
         gas_limit,
     } = req;
 
@@ -6260,6 +6261,10 @@ pub async fn handle_post_contract_call(
         let gas_asset_key =
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
         metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
+    }
+    if let Some(sponsor) = fee_sponsor {
+        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
+        metadata.insert(sponsor_key, IrohaJson::new(sponsor.to_string()));
     }
     let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
     metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
@@ -7490,6 +7495,9 @@ pub struct ContractCallDto {
     /// Optional gas asset id forwarded to transaction metadata.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account that will be charged for gas/fees when enabled and authorized.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
     /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
     pub gas_limit: u64,
 }

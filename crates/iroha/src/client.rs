@@ -3495,6 +3495,114 @@ mod evidence_http_tests {
         assert!(has_content_type, "Content-Type header missing");
     }
 
+    #[test]
+    fn post_zk_ivm_prove_json_builds_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
+        let req = norito::json!({
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
+            "proved": { "placeholder": true },
+        });
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .post_zk_ivm_prove_json(&req)
+                .expect("post zk ivm prove json");
+            assert_eq!(resp["job_id"].as_str(), Some("abc"));
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/prove");
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(body, req);
+        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
+        });
+        assert!(has_content_type, "Content-Type header missing");
+    }
+
+    #[test]
+    fn post_zk_ivm_derive_json_builds_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"proved\": {\"placeholder\": true}}");
+        let req = norito::json!({
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_main" },
+            "authority": { "placeholder": true },
+            "metadata": { "gas_limit": 123 },
+            "bytecode": { "placeholder": true },
+        });
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .post_zk_ivm_derive_json(&req)
+                .expect("post zk ivm derive json");
+            assert!(resp.get("proved").is_some());
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/derive");
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(body, req);
+        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
+        });
+        assert!(has_content_type, "Content-Type header missing");
+    }
+
+    #[test]
+    fn get_zk_ivm_prove_job_json_builds_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\",\"status\":\"done\"}");
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .get_zk_ivm_prove_job_json("abc")
+                .expect("get zk ivm prove job json");
+            assert_eq!(resp["status"].as_str(), Some("done"));
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/zk/ivm/prove/abc"
+        );
+    }
+
+    #[test]
+    fn delete_zk_ivm_prove_job_json_builds_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .delete_zk_ivm_prove_job_json("abc")
+                .expect("delete zk ivm prove job json");
+            assert_eq!(resp["job_id"].as_str(), Some("abc"));
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::DELETE);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/zk/ivm/prove/abc"
+        );
+    }
+
     type SorafsFetchHook = Arc<
         dyn Fn(
                 &CarBuildPlan,
@@ -7536,6 +7644,98 @@ impl Client {
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to verify-batch (json) with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// Convenience: POST `/v1/zk/ivm/derive` with a JSON DTO body.
+    ///
+    /// The request body is expected to match the Torii app API DTO:
+    /// `{ vk_ref: { backend, name }, authority, metadata, bytecode }`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
+    pub fn post_zk_ivm_derive_json(
+        &self,
+        value: &norito::json::Value,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/zk/ivm/derive");
+        let body = norito::json::to_vec(value)?;
+        let resp = self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to derive ivm proved payload (json) with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// Convenience: POST a ZK IVM prove job to `/v1/zk/ivm/prove` with a JSON DTO body.
+    ///
+    /// The request body is expected to match the Torii app API DTO:
+    /// `{ vk_ref: { backend, name }, proved: IvmProved }`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
+    pub fn post_zk_ivm_prove_json(
+        &self,
+        value: &norito::json::Value,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/zk/ivm/prove");
+        let body = norito::json::to_vec(value)?;
+        let resp = self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to submit ivm prove job (json) with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// Convenience: GET a ZK IVM prove job status from `/v1/zk/ivm/prove/{job_id}` (JSON).
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
+    pub fn get_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
+        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get ivm prove job (json) with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// Convenience: DELETE a ZK IVM prove job from `/v1/zk/ivm/prove/{job_id}` (JSON).
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
+    pub fn delete_zk_ivm_prove_job_json(&self, job_id: &str) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, &format!("v1/zk/ivm/prove/{job_id}"));
+        let resp = self.send_builder(self.default_request(HttpMethod::DELETE, url))?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to delete ivm prove job (json) with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));

@@ -153,6 +153,32 @@ where
     }
 }
 
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn read_proving_key<C, R>(
+    reader: &mut R,
+) -> io::Result<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
+where
+    R: io::Read,
+    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
+    C::Params: Default,
+{
+    #[cfg(feature = "circuit-params")]
+    {
+        halo2_proofs::plonk::ProvingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
+            reader,
+            SerdeFormat::Processed,
+            C::Params::default(),
+        )
+    }
+    #[cfg(not(feature = "circuit-params"))]
+    {
+        halo2_proofs::plonk::ProvingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
+            reader,
+            SerdeFormat::Processed,
+        )
+    }
+}
+
 /// Hard caps for TLV sections to preserve bounded parsing and determinism.
 /// These are generous relative to current tests and examples.
 const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
@@ -201,6 +227,187 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
     h.update(backend.as_bytes());
     h.update(bytes);
     h.finalize().into()
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
+    let mut limbs = [0u64; 4];
+    let bytes: &[u8; 32] = hash.as_ref();
+    for (idx, limb) in limbs.iter_mut().enumerate() {
+        let start = idx * 8;
+        let end = start + 8;
+        *limb = u64::from_le_bytes(bytes[start..end].try_into().expect("8-byte limb"));
+    }
+    limbs
+}
+
+/// Build a real Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
+///
+/// The produced proof binds these public commitments:
+/// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)`.
+///
+/// If `proving_key_bytes` is provided, it is used as the proving key after strict
+/// compatibility checks against `vk_box`. If omitted, the proving key is derived
+/// from `vk_box` and the canonical `IvmExecutionBindV1` circuit.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_halo2_ipa_ivm_execution_envelope(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    code_hash: iroha_crypto::Hash,
+    overlay_hash: iroha_crypto::Hash,
+    events_commitment: iroha_crypto::Hash,
+    gas_policy_commitment: iroha_crypto::Hash,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<ProofBox, String> {
+    use std::io::Cursor;
+
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{ProvingKey, VerifyingKey, create_proof, keygen_pk},
+        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+    };
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    use rand_core_06::OsRng;
+
+    if vk_box.backend.as_str() != "halo2/ipa" {
+        return Err("ivm execution proving requires halo2/ipa verifying key backend".to_owned());
+    }
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> =
+        zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
+            .ok_or_else(|| {
+                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
+            })?;
+
+    let code_limbs = hash_to_u64_limbs_le(&code_hash);
+    let overlay_limbs = hash_to_u64_limbs_le(&overlay_hash);
+    let events_limbs = hash_to_u64_limbs_le(&events_commitment);
+    let gas_limbs = hash_to_u64_limbs_le(&gas_policy_commitment);
+
+    let values: [Scalar; 16] = [
+        Scalar::from(code_limbs[0]),
+        Scalar::from(code_limbs[1]),
+        Scalar::from(code_limbs[2]),
+        Scalar::from(code_limbs[3]),
+        Scalar::from(overlay_limbs[0]),
+        Scalar::from(overlay_limbs[1]),
+        Scalar::from(overlay_limbs[2]),
+        Scalar::from(overlay_limbs[3]),
+        Scalar::from(events_limbs[0]),
+        Scalar::from(events_limbs[1]),
+        Scalar::from(events_limbs[2]),
+        Scalar::from(events_limbs[3]),
+        Scalar::from(gas_limbs[0]),
+        Scalar::from(gas_limbs[1]),
+        Scalar::from(gas_limbs[2]),
+        Scalar::from(gas_limbs[3]),
+    ];
+
+    let instance_columns_owned: Vec<Vec<Scalar>> =
+        values.iter().map(|value| vec![*value]).collect();
+    let instance_columns: Vec<&[Scalar]> =
+        instance_columns_owned.iter().map(Vec::as_slice).collect();
+    let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
+
+    let proving_key: ProvingKey<Curve> = if let Some(bytes) = proving_key_bytes {
+        let mut cursor = Cursor::new(bytes);
+        let pk = read_proving_key::<pasta_tiny::IvmExecutionBindV1, _>(&mut cursor)
+            .map_err(|err| format!("failed to decode proving key: {err}"))?;
+        let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+        if consumed != bytes.len() {
+            return Err("failed to decode proving key: trailing bytes".to_owned());
+        }
+        if pk.get_vk().get_domain().k() != params.k() {
+            return Err("proving key domain does not match IPAK parameters".to_owned());
+        }
+        if pk.get_vk().to_bytes(SerdeFormat::Processed)
+            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err("proving key verifying key does not match vk_ref bytes".to_owned());
+        }
+        pk
+    } else {
+        keygen_pk(
+            &params,
+            parsed_vk.clone(),
+            &pasta_tiny::IvmExecutionBindV1::default(),
+        )
+        .map_err(|err| format!("failed to derive proving key: {err}"))?
+    };
+
+    let circuit = pasta_tiny::IvmExecutionBindV1 { values };
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        &params,
+        &proving_key,
+        &[circuit],
+        &instance_refs,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| format!("failed to create ivm-execution-v1 proof: {err}"))?;
+    let proof_raw = transcript.finalize();
+
+    let mut proof_payload = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
+    zk1::wrap_append_instances_pasta_fp_cols(instance_columns.as_slice(), &mut proof_payload);
+
+    let public_inputs = ivm_execution_public_inputs_schema_descriptor().to_vec();
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Halo2IpaPasta,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash: hash_vk(vk_box),
+        public_inputs,
+        proof_bytes: proof_payload,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new("halo2/ipa".to_owned(), encoded))
+}
+
+/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution-v1` circuit.
+///
+/// The returned bytes are the Halo2 `ProvingKey` serialization using `SerdeFormat::Processed`,
+/// suitable for persistence in the Torii prover key store (`<backend>__<name>.pk`).
+///
+/// Note: this operation is expensive (key generation) and should be performed offline.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::EqAffine as Curve,
+        plonk::{VerifyingKey, keygen_pk},
+    };
+
+    if vk_box.backend.as_str() != "halo2/ipa" {
+        return Err(
+            "ivm execution proving key derivation requires halo2/ipa verifying key backend"
+                .to_owned(),
+        );
+    }
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> =
+        zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
+            .ok_or_else(|| {
+                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
+            })?;
+
+    let pk = keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::IvmExecutionBindV1::default(),
+    )
+    .map_err(|err| format!("failed to derive proving key: {err}"))?;
+    Ok(pk.to_bytes(SerdeFormat::Processed))
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]

@@ -826,6 +826,13 @@ mod tests {
                     iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
                 zk_prover_allowed_circuits:
                     iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits(),
+                zk_ivm_prove_max_inflight:
+                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT,
+                zk_ivm_prove_max_queue: iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_QUEUE,
+                zk_ivm_prove_job_ttl_secs:
+                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS,
+                zk_ivm_prove_job_max_entries:
+                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
                 rbc_sampling: RbcSampling::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
                 connect: Connect {

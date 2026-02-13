@@ -38,7 +38,9 @@ mod model {
         /// [`SignedTransaction`](crate::transaction::SignedTransaction) attachments) that
         /// binds the overlay to the executed bytecode.
         ///
-        /// Nodes may verify the proof and apply the overlay directly, skipping VM execution.
+        /// Nodes verify the proof and (currently) deterministically replay the IVM execution to
+        /// recompute the overlay and commitments, rejecting mismatches. Future execution-proof
+        /// circuits may allow safely skipping VM replay once full semantics are proven.
         IvmProved(IvmProved),
     }
 

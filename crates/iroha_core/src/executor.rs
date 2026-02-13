@@ -843,7 +843,24 @@ impl Executor {
                 let fee_u128 = u128::from(used).saturating_mul(u128::from(units_per_gas));
                 if fee_u128 > 0 {
                     // Build payer asset id and transfer instruction
-                    let payer_asset = AssetId::new(asset_def.clone(), authority.clone());
+                    let payer = if let Some(sponsor) =
+                        fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
+                    {
+                        if !state_transaction.nexus.fees.sponsorship_enabled {
+                            return Err(ValidationFail::NotPermitted(
+                                "fee sponsorship is disabled".to_owned(),
+                            ));
+                        }
+                        if !state_transaction.can_use_fee_sponsor(authority, sponsor) {
+                            return Err(ValidationFail::NotPermitted(
+                                "fee sponsor is not authorized".to_owned(),
+                            ));
+                        }
+                        sponsor.clone()
+                    } else {
+                        authority.clone()
+                    };
+                    let payer_asset = AssetId::new(asset_def.clone(), payer.clone());
                     let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
                         ValidationFail::NotPermitted(
                             "fee amount exceeds supported numeric bounds".to_owned(),

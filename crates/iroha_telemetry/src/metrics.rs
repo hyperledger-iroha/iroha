@@ -7086,6 +7086,10 @@ pub struct Metrics {
     pub torii_zk_prover_inflight: GenericGauge<AtomicU64>,
     /// Torii: background prover pending attachment gauge
     pub torii_zk_prover_pending: GenericGauge<AtomicU64>,
+    /// Torii: IVM prove helper in-flight job gauge
+    pub torii_zk_ivm_prove_inflight: GenericGauge<AtomicU64>,
+    /// Torii: IVM prove helper queued job gauge
+    pub torii_zk_ivm_prove_queued: GenericGauge<AtomicU64>,
     /// Torii: background prover last-scan processed bytes gauge
     pub torii_zk_prover_last_scan_bytes: GenericGauge<AtomicU64>,
     /// Torii: background prover last-scan wall-clock duration gauge
@@ -11306,6 +11310,16 @@ impl Default for Metrics {
             "Background prover attachments pending processing",
         )
         .expect("Infallible");
+        let torii_zk_ivm_prove_inflight = GenericGauge::new(
+            "torii_zk_ivm_prove_inflight",
+            "Torii IVM prove helper jobs currently proving",
+        )
+        .expect("Infallible");
+        let torii_zk_ivm_prove_queued = GenericGauge::new(
+            "torii_zk_ivm_prove_queued",
+            "Torii IVM prove helper jobs queued (waiting for inflight slot)",
+        )
+        .expect("Infallible");
         let torii_zk_prover_last_scan_bytes = GenericGauge::new(
             "torii_zk_prover_last_scan_bytes",
             "Background prover bytes processed during the most recent scan",
@@ -13646,6 +13660,8 @@ impl Default for Metrics {
             torii_zk_prover_gc_total,
             torii_zk_prover_inflight,
             torii_zk_prover_pending,
+            torii_zk_ivm_prove_inflight,
+            torii_zk_ivm_prove_queued,
             torii_zk_prover_last_scan_bytes,
             torii_zk_prover_last_scan_ms,
             torii_zk_prover_budget_exhausted_total
@@ -14213,6 +14229,8 @@ impl Default for Metrics {
             torii_zk_prover_gc_total,
             torii_zk_prover_inflight,
             torii_zk_prover_pending,
+            torii_zk_ivm_prove_inflight,
+            torii_zk_ivm_prove_queued,
             torii_zk_prover_last_scan_bytes,
             torii_zk_prover_last_scan_ms,
             torii_zk_prover_budget_exhausted_total,

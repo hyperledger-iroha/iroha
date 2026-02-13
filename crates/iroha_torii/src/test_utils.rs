@@ -573,6 +573,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_prover_keys_dir: defaults::torii::zk_prover_keys_dir(),
             zk_prover_allowed_backends: defaults::torii::zk_prover_allowed_backends(),
             zk_prover_allowed_circuits: defaults::torii::zk_prover_allowed_circuits(),
+            zk_ivm_prove_max_inflight: defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT,
+            zk_ivm_prove_max_queue: defaults::torii::ZK_IVM_PROVE_MAX_QUEUE,
+            zk_ivm_prove_job_ttl_secs: defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS,
+            zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             rbc_sampling: Default::default(),
             da_ingest: A::DaIngest::default(),
             connect: A::Connect {
