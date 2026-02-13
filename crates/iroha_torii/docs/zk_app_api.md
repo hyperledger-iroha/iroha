@@ -115,6 +115,7 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Proving keys: the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
   The `.pk` file must match the resolved verifying key and uses Halo2 `SerdeFormat::Processed` serialization.
 - Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
+- Execution semantics: the current `halo2/ipa:ivm-execution-v1` circuit used by `/v1/zk/ivm/prove` is a commitment-binding circuit and does not prove full IVM execution semantics by itself. Nodes still deterministically replay the bytecode during admission to recompute the overlay and commitments and reject mismatches.
 - Metrics: `torii_zk_ivm_prove_inflight` (jobs currently proving) and `torii_zk_ivm_prove_queued` (jobs queued waiting for an inflight slot) expose IVM prove helper queue pressure.
 
 ## Examples

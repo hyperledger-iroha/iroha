@@ -411,9 +411,7 @@ unsafe fn init_backend() -> Option<Backend> {
 }
 
 #[cfg(unix)]
-unsafe fn load_gpu_symbols(
-    lib_name: &str,
-) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
+unsafe fn load_gpu_symbols(lib_name: &str) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
     use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
 
     let mut library = std::ptr::null_mut();
@@ -448,18 +446,8 @@ unsafe fn load_gpu_symbols(
         return None;
     }
 
-    let compress = unsafe {
-        dlsym(
-            library,
-            b"gpu_zstd_compress\0".as_ptr() as *const c_char,
-        )
-    };
-    let decompress = unsafe {
-        dlsym(
-            library,
-            b"gpu_zstd_decompress\0".as_ptr() as *const c_char,
-        )
-    };
+    let compress = unsafe { dlsym(library, b"gpu_zstd_compress\0".as_ptr() as *const c_char) };
+    let decompress = unsafe { dlsym(library, b"gpu_zstd_decompress\0".as_ptr() as *const c_char) };
     if compress.is_null() || decompress.is_null() {
         let _ = unsafe { dlclose(library) };
         return None;

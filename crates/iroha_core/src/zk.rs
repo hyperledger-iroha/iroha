@@ -241,10 +241,14 @@ fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     limbs
 }
 
-/// Build a real Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
+/// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
 ///
 /// The produced proof binds these public commitments:
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)`.
+///
+/// Note: the current `ivm-execution-v1` circuit is a **binding** circuit. It does **not**
+/// prove correct IVM execution semantics by itself, so admission still performs deterministic
+/// VM replay to recompute the overlay/commitments and reject mismatches.
 ///
 /// If `proving_key_bytes` is provided, it is used as the proving key after strict
 /// compatibility checks against `vk_box`. If omitted, the proving key is derived

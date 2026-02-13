@@ -3953,7 +3953,7 @@ where
         || is_legacy_ivm_overlay_bind_circuit(attachment.backend.as_str(), &env.circuit_id)
     {
         return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind-v1`: the binding-only stand-in circuit is no longer accepted; full execution proofs are required"
+            "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind-v1`: the binding-only stand-in circuit is no longer accepted; `ivm-execution-v1` proof attachments are required (nodes still replay IVM execution to validate semantics)"
                 .to_owned(),
         ));
     }
