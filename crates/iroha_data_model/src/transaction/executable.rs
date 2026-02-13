@@ -14,6 +14,7 @@ use crate::isi::InstructionBox;
 
 #[model]
 mod model {
+    use iroha_crypto::Hash;
     use iroha_primitives::const_vec::ConstVec;
 
     use super::*;
@@ -67,6 +68,10 @@ mod model {
         pub bytecode: IvmBytecode,
         /// Precomputed ordered instruction overlay to apply when the proof verifies.
         pub overlay: ConstVec<InstructionBox>,
+        /// Commitment to deterministic execution-side events materialized for this proved run.
+        pub events_commitment: Hash,
+        /// Commitment to gas policy compliance (without revealing exact gas usage).
+        pub gas_policy_commitment: Hash,
     }
 }
 
@@ -138,6 +143,90 @@ impl norito::json::JsonDeserialize for IvmBytecode {
     }
 }
 
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for IvmProved {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        norito::json::write_json_string("bytecode", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.bytecode, out);
+        out.push(',');
+        norito::json::write_json_string("overlay", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.overlay, out);
+        out.push(',');
+        norito::json::write_json_string("events_commitment", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.events_commitment, out);
+        out.push(',');
+        norito::json::write_json_string("gas_policy_commitment", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.gas_policy_commitment, out);
+        out.push('}');
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for IvmProved {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        parser.skip_ws();
+        parser.consume_char(b'{')?;
+        let mut bytecode: Option<IvmBytecode> = None;
+        let mut overlay: Option<iroha_primitives::const_vec::ConstVec<InstructionBox>> = None;
+        let mut events_commitment: Option<iroha_crypto::Hash> = None;
+        let mut gas_policy_commitment: Option<iroha_crypto::Hash> = None;
+        loop {
+            parser.skip_ws();
+            if parser.try_consume_char(b'}')? {
+                break;
+            }
+            let field = parser.parse_key()?;
+            match field.as_str() {
+                "bytecode" => {
+                    bytecode = Some(IvmBytecode::json_deserialize(parser)?);
+                }
+                "overlay" => {
+                    overlay = Some(
+                        iroha_primitives::const_vec::ConstVec::<InstructionBox>::json_deserialize(
+                            parser,
+                        )?,
+                    );
+                }
+                "events_commitment" => {
+                    events_commitment = Some(iroha_crypto::Hash::json_deserialize(parser)?);
+                }
+                "gas_policy_commitment" => {
+                    gas_policy_commitment = Some(iroha_crypto::Hash::json_deserialize(parser)?);
+                }
+                other => return Err(norito::json::Error::unknown_field(other.to_owned())),
+            }
+            if !parser.consume_comma_if_present()? {
+                parser.skip_ws();
+                parser.consume_char(b'}')?;
+                break;
+            }
+        }
+        let bytecode = bytecode
+            .ok_or_else(|| norito::json::Error::Message("missing field `bytecode`".to_owned()))?;
+        let overlay = overlay
+            .ok_or_else(|| norito::json::Error::Message("missing field `overlay`".to_owned()))?;
+        let events_commitment = events_commitment.ok_or_else(|| {
+            norito::json::Error::Message("missing field `events_commitment`".to_owned())
+        })?;
+        let gas_policy_commitment = gas_policy_commitment.ok_or_else(|| {
+            norito::json::Error::Message("missing field `gas_policy_commitment`".to_owned())
+        })?;
+        Ok(Self {
+            bytecode,
+            overlay,
+            events_commitment,
+            gas_policy_commitment,
+        })
+    }
+}
+
 impl Executable {
     /// Number of instructions if this executable is an ISI batch; `0` for IVM bytecode.
     pub fn instruction_count(&self) -> u64 {
@@ -182,6 +271,8 @@ impl norito::json::JsonDeserialize for Executable {
                 let mut bytecode: Option<IvmBytecode> = None;
                 let mut overlay: Option<iroha_primitives::const_vec::ConstVec<InstructionBox>> =
                     None;
+                let mut events_commitment: Option<iroha_crypto::Hash> = None;
+                let mut gas_policy_commitment: Option<iroha_crypto::Hash> = None;
                 loop {
                     parser.skip_ws();
                     if parser.try_consume_char(b'}')? {
@@ -196,6 +287,13 @@ impl norito::json::JsonDeserialize for Executable {
                             overlay = Some(
                                 iroha_primitives::const_vec::ConstVec::<InstructionBox>::json_deserialize(parser)?,
                             );
+                        }
+                        "events_commitment" => {
+                            events_commitment = Some(iroha_crypto::Hash::json_deserialize(parser)?);
+                        }
+                        "gas_policy_commitment" => {
+                            gas_policy_commitment =
+                                Some(iroha_crypto::Hash::json_deserialize(parser)?);
                         }
                         other => {
                             return Err(norito::json::Error::unknown_field(other.to_owned()));
@@ -213,7 +311,18 @@ impl norito::json::JsonDeserialize for Executable {
                 let overlay = overlay.ok_or_else(|| {
                     norito::json::Error::Message("missing field `overlay`".to_owned())
                 })?;
-                Executable::IvmProved(IvmProved { bytecode, overlay })
+                let events_commitment = events_commitment.ok_or_else(|| {
+                    norito::json::Error::Message("missing field `events_commitment`".to_owned())
+                })?;
+                let gas_policy_commitment = gas_policy_commitment.ok_or_else(|| {
+                    norito::json::Error::Message("missing field `gas_policy_commitment`".to_owned())
+                })?;
+                Executable::IvmProved(IvmProved {
+                    bytecode,
+                    overlay,
+                    events_commitment,
+                    gas_policy_commitment,
+                })
             }
             other => return Err(norito::json::Error::unknown_field(other.to_owned())),
         };
@@ -249,6 +358,14 @@ impl norito::json::FastJsonWrite for Executable {
                 norito::json::write_json_string("overlay", out);
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(&proved.overlay, out);
+                out.push(',');
+                norito::json::write_json_string("events_commitment", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(&proved.events_commitment, out);
+                out.push(',');
+                norito::json::write_json_string("gas_policy_commitment", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(&proved.gas_policy_commitment, out);
                 out.push('}');
             }
         }
@@ -341,5 +458,15 @@ mod tests {
         let json = norito::json::to_json(&ivm_executable).expect("serialize ivm");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize ivm");
         assert_eq!(ivm_executable, deserialized);
+
+        let proved_executable = Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![7, 7, 7]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: iroha_crypto::Hash::new(b"events"),
+            gas_policy_commitment: iroha_crypto::Hash::new(b"gas-policy"),
+        });
+        let json = norito::json::to_json(&proved_executable).expect("serialize proved");
+        let deserialized: Executable = norito::json::from_str(&json).expect("deserialize proved");
+        assert_eq!(proved_executable, deserialized);
     }
 }

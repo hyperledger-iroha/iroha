@@ -163,6 +163,25 @@ const MAX_INST_COLS: usize = 16;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 const MAX_INST_ROWS: usize = 8192;
 
+/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
+///
+/// The execution proof instances still carry concrete values in the proof payload;
+/// this descriptor is only used for stable registry binding via
+/// `VerifyingKeyRecord.public_inputs_schema_hash`.
+pub const IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"ivm_execution_v1","public_inputs":["code_hash_limb0","code_hash_limb1","code_hash_limb2","code_hash_limb3","overlay_hash_limb0","overlay_hash_limb1","overlay_hash_limb2","overlay_hash_limb3","events_commitment_limb0","events_commitment_limb1","events_commitment_limb2","events_commitment_limb3","gas_policy_commitment_limb0","gas_policy_commitment_limb1","gas_policy_commitment_limb2","gas_policy_commitment_limb3"]}"#;
+
+/// Returns the canonical schema descriptor bytes for `ivm-execution-v1`.
+#[must_use]
+pub fn ivm_execution_public_inputs_schema_descriptor() -> &'static [u8] {
+    IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1
+}
+
+/// Returns the canonical schema hash for `ivm-execution-v1`.
+#[must_use]
+pub fn ivm_execution_public_inputs_schema_hash() -> [u8; 32] {
+    iroha_crypto::Hash::new(ivm_execution_public_inputs_schema_descriptor()).into()
+}
+
 /// Compute a stable 32-byte hash of the proof payload along with backend ID.
 pub fn hash_proof(proof: &ProofBox) -> [u8; 32] {
     let mut h = Sha256::new();
@@ -412,6 +431,139 @@ pub mod test_utils {
         }
     }
 
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[must_use]
+    fn halo2_ivm_execution_bind_v1_envelope(
+        circuit_id: &str,
+        code_hash: CryptoHash,
+        overlay_hash: CryptoHash,
+        events_commitment: CryptoHash,
+        gas_policy_commitment: CryptoHash,
+    ) -> FixtureEnvelope {
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{ProvingKey, create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+
+        #[derive(Clone)]
+        struct KeyMaterial {
+            k: u32,
+            pk: ProvingKey<Curve>,
+            vk_bytes: Vec<u8>,
+        }
+
+        fn keys() -> &'static KeyMaterial {
+            static CACHE: OnceLock<KeyMaterial> = OnceLock::new();
+            CACHE.get_or_init(|| {
+                let k = 7u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::IvmExecutionBindV1::default();
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+
+                KeyMaterial { k, pk, vk_bytes }
+            })
+        }
+
+        fn limbs(hash: &CryptoHash) -> [u64; 4] {
+            let bytes: &[u8; 32] = hash.as_ref();
+            let mut out = [0u64; 4];
+            for (i, limb) in out.iter_mut().enumerate() {
+                let start = i * 8;
+                let end = start + 8;
+                *limb = u64::from_le_bytes(bytes[start..end].try_into().expect("8 bytes"));
+            }
+            out
+        }
+
+        let code_limbs = limbs(&code_hash);
+        let overlay_limbs = limbs(&overlay_hash);
+        let events_limbs = limbs(&events_commitment);
+        let gas_limbs = limbs(&gas_policy_commitment);
+        let values: [Scalar; 16] = [
+            Scalar::from(code_limbs[0]),
+            Scalar::from(code_limbs[1]),
+            Scalar::from(code_limbs[2]),
+            Scalar::from(code_limbs[3]),
+            Scalar::from(overlay_limbs[0]),
+            Scalar::from(overlay_limbs[1]),
+            Scalar::from(overlay_limbs[2]),
+            Scalar::from(overlay_limbs[3]),
+            Scalar::from(events_limbs[0]),
+            Scalar::from(events_limbs[1]),
+            Scalar::from(events_limbs[2]),
+            Scalar::from(events_limbs[3]),
+            Scalar::from(gas_limbs[0]),
+            Scalar::from(gas_limbs[1]),
+            Scalar::from(gas_limbs[2]),
+            Scalar::from(gas_limbs[3]),
+        ];
+
+        let inst_cols_owned: Vec<Vec<Scalar>> = values.iter().map(|v| vec![*v]).collect();
+        let inst_cols: Vec<&[Scalar]> = inst_cols_owned.iter().map(Vec::as_slice).collect();
+        let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+
+        let circuit = super::pasta_tiny::IvmExecutionBindV1 { values };
+
+        let material = keys();
+        let params = pasta_params_new(material.k);
+
+        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+        let mut rng = fixture_rng(0x5EED_F1C7_1234_5691);
+        create_proof::<
+            IPACommitmentScheme<Curve>,
+            ProverIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+            _,
+        >(
+            &params,
+            &material.pk,
+            &[circuit],
+            &inst_refs,
+            &mut rng,
+            &mut transcript,
+        )
+        .expect("create proof");
+        let proof_raw = transcript.finalize();
+
+        let mut proof_bytes = super::zk1::wrap_start();
+        super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+        super::zk1::wrap_append_instances_pasta_fp_cols(inst_cols.as_slice(), &mut proof_bytes);
+
+        let public_inputs = super::ivm_execution_public_inputs_schema_descriptor().to_vec();
+        let schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+
+        let vk_hash = {
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), material.vk_bytes.clone());
+            super::hash_vk(&vk_box)
+        };
+
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: circuit_id.to_owned(),
+            vk_hash,
+            public_inputs: public_inputs.clone(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        let proof_bytes =
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        FixtureEnvelope {
+            proof_bytes,
+            public_inputs,
+            schema_hash,
+            vk_bytes: Some(material.vk_bytes.clone()),
+        }
+    }
+
     /// Deterministic Halo2 IPA fixture for the legacy `ivm-overlay-bind-v1` circuit.
     ///
     /// The circuit exposes 8 instance columns (1 row each) and constrains witness
@@ -429,16 +581,26 @@ pub mod test_utils {
 
     /// Deterministic Halo2 IPA fixture for `ivm-execution-v1` proof attachments.
     ///
-    /// This fixture currently uses the same 8-column `(code_hash, overlay_hash)`
-    /// instance layout as the legacy binding gadget so end-to-end admission paths
-    /// can exercise real Halo2 verification and replay checks.
+    /// The circuit exposes 16 instance columns (1 row each) corresponding to:
+    /// - `code_hash` (4 `u64` limbs, little-endian)
+    /// - `overlay_hash` (4 `u64` limbs, little-endian)
+    /// - `events_commitment` (4 `u64` limbs, little-endian)
+    /// - `gas_policy_commitment` (4 `u64` limbs, little-endian)
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[must_use]
     pub fn halo2_ivm_execution_envelope(
         code_hash: CryptoHash,
         overlay_hash: CryptoHash,
+        events_commitment: CryptoHash,
+        gas_policy_commitment: CryptoHash,
     ) -> FixtureEnvelope {
-        halo2_ivm_binding_envelope("halo2/ipa:ivm-execution-v1", code_hash, overlay_hash)
+        halo2_ivm_execution_bind_v1_envelope(
+            "halo2/ipa:ivm-execution-v1",
+            code_hash,
+            overlay_hash,
+            events_commitment,
+            gas_policy_commitment,
+        )
     }
 
     type FixtureBundle = fn() -> (Vec<u8>, Vec<u8>, Vec<u8>);
@@ -4955,6 +5117,80 @@ mod pasta_tiny {
         }
     }
 
+    /// Circuit binding sixteen single-row instance columns to witness values.
+    ///
+    /// This is used by `ivm-execution-v1` fixtures to ensure the proof is bound to
+    /// all public commitments required by `Executable::IvmProved` admission.
+    ///
+    /// Note: This circuit does **not** prove correct IVM execution by itself.
+    #[derive(Clone)]
+    pub struct IvmExecutionBindV1 {
+        /// Witness values constrained to equal the corresponding public instances.
+        pub values: [Scalar; 16],
+    }
+
+    impl Default for IvmExecutionBindV1 {
+        fn default() -> Self {
+            Self {
+                values: [Scalar::from(0); 16],
+            }
+        }
+    }
+
+    impl Circuit<Scalar> for IvmExecutionBindV1 {
+        type Config = (
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 16],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 16],
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            meta.set_minimum_degree(3);
+            let adv = std::array::from_fn(|_| meta.advice_column());
+            let inst = std::array::from_fn(|_| meta.instance_column());
+            let s = meta.selector();
+            meta.create_gate("ivm_execution_bind_v1", |meta| {
+                let s = meta.query_selector(s);
+                let mut cons = Vec::with_capacity(16);
+                for i in 0..16 {
+                    let a = meta.query_advice(adv[i], Rotation::cur());
+                    let p = meta.query_instance(inst[i], Rotation::cur());
+                    cons.push(s.clone() * (a - p));
+                }
+                cons
+            });
+            (adv, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (adv, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let values = self.values;
+            layouter.assign_region(
+                || "ivm_execution_bind_v1",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    for (i, column) in adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("a{i}"),
+                            *column,
+                            0,
+                            || Value::known(values[i]),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
     #[derive(Clone, Default)]
     pub struct AnonTransfer2x2;
     impl Circuit<Scalar> for AnonTransfer2x2 {
@@ -7995,12 +8231,35 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/ivm-overlay-bind-v1" | "halo2/pasta/ivm-execution-v1" => {
+        "halo2/pasta/ivm-overlay-bind-v1" => {
             // Instances: 8 columns (code_hash limbs + overlay_hash limbs), 1 row each.
             if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;
             }
             let circuit = pasta_tiny::IvmOverlayBind::default();
+            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            let mut transcript =
+                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+            let strategy = SingleVerifier::new(&params);
+            let proofs_instances = [&col_refs[..]];
+            verify_proof(
+                &params,
+                vk_h2.as_ref(),
+                strategy,
+                &proofs_instances,
+                &mut transcript,
+            )
+            .is_ok()
+        }
+        "halo2/pasta/ivm-execution-v1" => {
+            // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
+            if col_refs.len() != 16 || col_refs.iter().any(|col| col.len() != 1) {
+                return false;
+            }
+            let circuit = pasta_tiny::IvmExecutionBindV1::default();
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
                 Err(_) => return false,

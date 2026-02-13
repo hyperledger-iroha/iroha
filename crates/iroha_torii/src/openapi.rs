@@ -2869,6 +2869,50 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/zk/ivm/prove".to_owned(),
+        Value::Object(json_post_operation(
+            "ZK",
+            "Prove IVM execution (job).",
+            "Submit an IVM proved payload and return a job identifier for proof generation.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/zk/ivm/prove/{job_id}".to_owned(),
+        Value::Object({
+            let get_op = json_get_operation(
+                "ZK",
+                "Fetch an IVM prove job.",
+                "Fetch the status of an IVM proof generation job.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param(
+                    "job_id",
+                    "Proof generation job identifier.",
+                )],
+            );
+            let delete_op = json_delete_operation(
+                "ZK",
+                "Delete an IVM prove job.",
+                "Delete an IVM proof generation job entry.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param(
+                    "job_id",
+                    "Proof generation job identifier.",
+                )],
+            );
+            let mut methods = Map::new();
+            if let Some(get_value) = get_op.get("get") {
+                methods.insert("get".to_owned(), get_value.clone());
+            }
+            if let Some(delete_value) = delete_op.get("delete") {
+                methods.insert("delete".to_owned(), delete_value.clone());
+            }
+            methods
+        }),
+    );
+    paths.insert(
         "/v1/zk/attachments".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
