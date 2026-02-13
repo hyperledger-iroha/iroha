@@ -2608,6 +2608,9 @@ pub struct IvmProvedExecution {
     /// Default is `false` until a full end-to-end IVM execution proof system is shipped.
     #[config(default = "defaults::pipeline::ivm_proved::ENABLED")]
     pub enabled: bool,
+    /// Skip deterministic IVM replay for circuits that are known to prove full IVM execution semantics.
+    #[config(default = "defaults::pipeline::ivm_proved::SKIP_REPLAY")]
+    pub skip_replay: bool,
     /// Allowlist of circuit IDs accepted for `Executable::IvmProved`.
     ///
     /// An empty allowlist rejects all proved executions, even when `enabled = true`.
@@ -3525,6 +3528,7 @@ impl IvmProvedExecution {
     fn parse(self) -> actual::IvmProvedExecution {
         actual::IvmProvedExecution {
             enabled: self.enabled,
+            skip_replay: self.skip_replay,
             allowed_circuits: self.allowed_circuits,
         }
     }
@@ -3644,6 +3648,7 @@ mod pipeline_tests {
             overlay_chunk_instructions: defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
             ivm_proved: IvmProvedExecution {
                 enabled: defaults::pipeline::ivm_proved::ENABLED,
+                skip_replay: defaults::pipeline::ivm_proved::SKIP_REPLAY,
                 allowed_circuits: Vec::new(),
             },
             gas: Gas {

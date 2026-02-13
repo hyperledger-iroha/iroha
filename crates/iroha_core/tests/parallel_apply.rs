@@ -90,6 +90,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     let cfg_seq = iroha_config::parameters::actual::Pipeline {
         ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
             enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
+            skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
             allowed_circuits: Vec::new(),
         },
         dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
@@ -175,6 +176,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     let cfg_par = iroha_config::parameters::actual::Pipeline {
         ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
             enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
+            skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
             allowed_circuits: Vec::new(),
         },
         dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,

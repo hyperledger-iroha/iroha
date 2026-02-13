@@ -322,7 +322,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [ ] Implement a Halo2 circuit that proves IVM step semantics (start with a restricted opcode/syscall subset) and add the required deterministic 64-bit arithmetic gadgets.
 - [ ] Extend Torii proving to execute bytecode and build the circuit witness (either via a new endpoint or by versioning `/v1/zk/ivm/prove`), preserving privacy guarantees (no plaintext `gas_used`).
 - [ ] Update `Executable::IvmProved` admission to optionally skip deterministic VM replay only when the proof circuit guarantees full semantics; keep replay as the fallback and add regression tests for both modes.
-- [ ] Update docs/config templates, and flip `pipeline.ivm_proved.enabled` default once the full execution-proof circuit is shipped.
+- [x] Add `pipeline.ivm_proved.skip_replay` and wire admission skipping for full-semantics circuits with regression coverage.
 
 11. **SUMERAGI-ACTOR-REFACTOR — Replace ad-hoc worker loop with a deterministic actor model** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
  - [x] Document the current worker loop/queue topology, ordering rules, backpressure behavior, and determinism constraints; capture known failure modes and desired invariants.

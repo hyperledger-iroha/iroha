@@ -88,7 +88,11 @@ Privacy:
 - `/v1/zk/ivm/derive` and `/v1/zk/ivm/prove` require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
 
 Execution semantics:
-- The current `halo2/ipa:ivm-execution-v1` circuit used by `/v1/zk/ivm/prove` is a commitment-binding circuit and does not prove full IVM execution semantics by itself. Nodes still deterministically replay the bytecode during admission to recompute the overlay and commitments and reject mismatches.
+- `/v1/zk/ivm/prove` currently uses `halo2/ipa:ivm-execution-v1`, which binds
+  commitments for code/overlay/events/gas-policy. By default, nodes still deterministically
+  replay the bytecode during admission to recompute the overlay and commitments and reject mismatches.
+  For environments that operate with a full-semantic execution proof circuit, replay can be disabled
+  via `pipeline.ivm_proved.skip_replay = true`.
 
 Metrics:
 - `torii_zk_ivm_prove_inflight` (gauge) — jobs currently proving.

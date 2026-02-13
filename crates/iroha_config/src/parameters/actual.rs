@@ -3047,6 +3047,8 @@ pub struct Pipeline {
 pub struct IvmProvedExecution {
     /// Master toggle for accepting `Executable::IvmProved`.
     pub enabled: bool,
+    /// Skip deterministic replay for circuits that are known to prove full IVM execution semantics.
+    pub skip_replay: bool,
     /// Allowlist of circuit IDs accepted for `Executable::IvmProved`.
     pub allowed_circuits: Vec<String>,
 }
