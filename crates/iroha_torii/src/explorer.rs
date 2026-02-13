@@ -977,8 +977,8 @@ fn encode_scale_hex<T: Encode>(value: &T) -> String {
 fn executable_label(executable: &Executable) -> &'static str {
     match executable {
         Executable::Instructions(_) => "Instructions",
-        Executable::Ivm(_) => "Wasm",
-        Executable::IvmProved(_) => "WasmProved",
+        Executable::Ivm(_) => "Ivm",
+        Executable::IvmProved(_) => "IvmProved",
     }
 }
 
