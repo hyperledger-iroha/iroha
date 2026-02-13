@@ -85,7 +85,10 @@ Resource controls:
 
 Privacy:
 - This API does not expose plaintext gas usage (`gas_used`). The proof binds commitments only.
- - `/v1/zk/ivm/derive` and `/v1/zk/ivm/prove` require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
+- `/v1/zk/ivm/derive` and `/v1/zk/ivm/prove` require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
+
+Execution semantics:
+- The current `halo2/ipa:ivm-execution-v1` circuit used by `/v1/zk/ivm/prove` is a commitment-binding circuit and does not prove full IVM execution semantics by itself. Nodes still deterministically replay the bytecode during admission to recompute the overlay and commitments and reject mismatches.
 
 Metrics:
 - `torii_zk_ivm_prove_inflight` (gauge) — jobs currently proving.
