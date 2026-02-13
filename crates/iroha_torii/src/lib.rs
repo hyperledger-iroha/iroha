@@ -769,6 +769,14 @@ struct AppState {
     telemetry: routing::MaybeTelemetry,
     telemetry_profile: TelemetryProfile,
     api_versions: api_version::ApiVersionPolicy,
+    zk_prover_keys_dir: PathBuf,
+    zk_ivm_prove_jobs: Arc<DashMap<String, ZkIvmProveJobState>>,
+    zk_ivm_prove_inflight: Arc<tokio::sync::Semaphore>,
+    zk_ivm_prove_slots: Arc<tokio::sync::Semaphore>,
+    zk_ivm_prove_slots_total: usize,
+    zk_ivm_prove_inflight_total: usize,
+    zk_ivm_prove_job_ttl_ms: u64,
+    zk_ivm_prove_job_max_entries: usize,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_telemetry: Arc<telemetry::peers::PeerTelemetryService>,
     rbc_sampling_enabled: bool,
@@ -5887,6 +5895,47 @@ async fn handler_zk_submit_proof(
     PartialEq,
     Eq,
 )]
+/// Request body for `POST /v1/zk/ivm/derive`.
+pub struct ZkIvmDeriveRequestDto {
+    /// Verifying key reference used to select circuit parameters (gas schedule id, version).
+    pub vk_ref: iroha_data_model::proof::VerifyingKeyId,
+    /// Transaction authority used for admission-style binding and host context.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Transaction metadata (must include `gas_limit`).
+    #[norito(default)]
+    pub metadata: iroha_data_model::metadata::Metadata,
+    /// IVM bytecode to execute.
+    pub bytecode: iroha_data_model::transaction::IvmBytecode,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    PartialEq,
+    Eq,
+)]
+/// Response body returned by `POST /v1/zk/ivm/derive`.
+///
+/// Note: this API does not expose plaintext gas usage; it returns commitments only.
+pub struct ZkIvmDeriveResponseDto {
+    /// Proved executable payload derived from local IVM execution.
+    pub proved: iroha_data_model::transaction::IvmProved,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    PartialEq,
+    Eq,
+)]
 /// Request body for `POST /v1/zk/ivm/prove`.
 pub struct ZkIvmProveRequestDto {
     /// Verifying key reference to use when producing the proof attachment.
@@ -5927,7 +5976,7 @@ pub struct ZkIvmProveJobCreatedDto {
 pub struct ZkIvmProveJobDto {
     /// Stable job identifier.
     pub job_id: String,
-    /// Job status label (`pending`, `done`, `error`).
+    /// Job status label (`pending`, `running`, `done`, `error`).
     pub status: String,
     /// Optional error message when status is `error`.
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -5943,6 +5992,7 @@ pub struct ZkIvmProveJobDto {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ZkIvmProveJobStatus {
     Pending,
+    Running,
     Done,
     Error,
 }
@@ -5955,17 +6005,8 @@ struct ZkIvmProveJobState {
     vk_ref: iroha_data_model::proof::VerifyingKeyId,
     attachment: Option<iroha_data_model::proof::ProofAttachment>,
     error: Option<String>,
+    cancel: tokio::sync::watch::Sender<bool>,
 }
-
-static ZK_IVM_PROVE_JOBS: std::sync::OnceLock<DashMap<String, ZkIvmProveJobState>> =
-    std::sync::OnceLock::new();
-
-fn zk_ivm_prove_jobs() -> &'static DashMap<String, ZkIvmProveJobState> {
-    ZK_IVM_PROVE_JOBS.get_or_init(DashMap::new)
-}
-
-const ZK_IVM_PROVE_JOB_TTL_MS: u64 = 30 * 60 * 1_000;
-const ZK_IVM_PROVE_JOB_MAX_ENTRIES: usize = 1_024;
 
 fn zk_ivm_prove_now_ms() -> u64 {
     SystemTime::now()
@@ -5974,38 +6015,81 @@ fn zk_ivm_prove_now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn zk_ivm_prove_gc_jobs_at(now_ms: u64) {
-    let jobs = zk_ivm_prove_jobs();
-    let expire_before = now_ms.saturating_sub(ZK_IVM_PROVE_JOB_TTL_MS);
-
-    let expired = jobs
-        .iter()
-        .filter_map(|entry| (entry.value().created_ms < expire_before).then(|| entry.key().clone()))
-        .collect::<Vec<_>>();
-    for key in expired {
-        jobs.remove(&key);
+fn zk_ivm_prove_gc_jobs_at(
+    jobs: &DashMap<String, ZkIvmProveJobState>,
+    now_ms: u64,
+    ttl_ms: u64,
+    max_entries: usize,
+) {
+    if ttl_ms > 0 {
+        let expire_before = now_ms.saturating_sub(ttl_ms);
+        let expired = jobs
+            .iter()
+            .filter_map(|entry| {
+                let state = entry.value();
+                (state.created_ms < expire_before).then(|| entry.key().clone())
+            })
+            .collect::<Vec<_>>();
+        for key in expired {
+            if let Some((_key, state)) = jobs.remove(&key) {
+                // Best-effort cancellation. Proving (spawn_blocking) is not preemptible, but
+                // cancellation frees capacity permits once the async wrapper exits.
+                let _ = state.cancel.send(true);
+            }
+        }
     }
 
-    let len = jobs.len();
-    if len > ZK_IVM_PROVE_JOB_MAX_ENTRIES {
-        let mut by_age = jobs
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().created_ms))
-            .collect::<Vec<_>>();
-        by_age.sort_by_key(|(_, created_ms)| *created_ms);
-        for (key, _) in by_age.into_iter().take(len - ZK_IVM_PROVE_JOB_MAX_ENTRIES) {
-            jobs.remove(&key);
+    if max_entries > 0 {
+        let len = jobs.len();
+        if len > max_entries {
+            let mut by_age = jobs
+                .iter()
+                .filter_map(|entry| {
+                    let state = entry.value();
+                    matches!(
+                        state.status,
+                        ZkIvmProveJobStatus::Done | ZkIvmProveJobStatus::Error
+                    )
+                    .then(|| (entry.key().clone(), state.created_ms))
+                })
+                .collect::<Vec<_>>();
+            by_age.sort_by_key(|(_, created_ms)| *created_ms);
+            for (key, _) in by_age.into_iter().take(len.saturating_sub(max_entries)) {
+                jobs.remove(&key);
+            }
         }
     }
 }
 
-fn zk_ivm_prove_gc_jobs() {
-    zk_ivm_prove_gc_jobs_at(zk_ivm_prove_now_ms());
+fn zk_ivm_prove_gc_jobs(app: &AppState) {
+    zk_ivm_prove_gc_jobs_at(
+        app.zk_ivm_prove_jobs.as_ref(),
+        zk_ivm_prove_now_ms(),
+        app.zk_ivm_prove_job_ttl_ms,
+        app.zk_ivm_prove_job_max_entries,
+    );
+}
+
+fn zk_ivm_prove_observe_queue_metrics(
+    telemetry: &crate::routing::MaybeTelemetry,
+    slots: &tokio::sync::Semaphore,
+    slots_total: usize,
+    inflight: &tokio::sync::Semaphore,
+    inflight_total: usize,
+) {
+    let used_slots = slots_total.saturating_sub(slots.available_permits());
+    let used_inflight = inflight_total.saturating_sub(inflight.available_permits());
+    let queued = used_slots.saturating_sub(used_inflight);
+    telemetry.with_metrics(|tel| {
+        tel.set_torii_zk_ivm_prove_inflight(used_inflight as u64);
+        tel.set_torii_zk_ivm_prove_queued(queued as u64);
+    });
 }
 
 fn zk_ivm_prove_status_label(status: ZkIvmProveJobStatus) -> &'static str {
     match status {
         ZkIvmProveJobStatus::Pending => "pending",
+        ZkIvmProveJobStatus::Running => "running",
         ZkIvmProveJobStatus::Done => "done",
         ZkIvmProveJobStatus::Error => "error",
     }
@@ -6044,13 +6128,184 @@ fn halo2_ipa_circuit_id_matches(record_id: &str, env_id: &str) -> bool {
     }
 }
 
+fn sanitize_zk_key_component(component: &str) -> String {
+    let mut out = String::with_capacity(component.len());
+    for ch in component.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() { "_".to_string() } else { out }
+}
+
+fn zk_vk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
+    let backend = sanitize_zk_key_component(id.backend.as_ref());
+    let name = sanitize_zk_key_component(&id.name);
+    keys_dir.join(format!("{backend}__{name}.vk"))
+}
+
+fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
+    let backend = sanitize_zk_key_component(id.backend.as_ref());
+    let name = sanitize_zk_key_component(&id.name);
+    keys_dir.join(format!("{backend}__{name}.pk"))
+}
+
+async fn handler_zk_ivm_derive(
+    State(app): State<SharedAppState>,
+    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, Error> {
+    let cost = (body.len() as u64)
+        .saturating_div(4 * 1024)
+        .saturating_add(1);
+    ensure_proof_api_version(&app, negotiated, "v1/zk/ivm/derive")?;
+    enforce_proof_body_limit(&app, body.len(), "v1/zk/ivm/derive")?;
+    check_proof_access(
+        &app,
+        negotiated,
+        &headers,
+        None,
+        "v1/zk/ivm/derive",
+        cost,
+        true,
+    )
+    .await?;
+
+    let req: ZkIvmDeriveRequestDto = norito::decode_from_bytes(body.as_ref()).or_else(|_| {
+        norito::json::from_slice(body.as_ref()).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "invalid derive request body: {err}"
+                )),
+            ))
+        })
+    })?;
+
+    if req.vk_ref.backend.as_str() != "halo2/ipa" {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "ivm derive requires vk_ref.backend == `halo2/ipa`".to_owned(),
+            ),
+        )));
+    }
+
+    let parsed = ivm::ProgramMetadata::parse(req.bytecode.as_ref()).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "invalid IVM header".to_owned(),
+            ),
+        ))
+    })?;
+    if parsed.metadata.mode & ivm::ivm_mode::ZK == 0 {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "ivm derive requires bytecode ZK mode bit (mode & ZK != 0)".to_owned(),
+            ),
+        )));
+    }
+
+    let view = app.state.view();
+    let vk_record = view
+        .world()
+        .verifying_keys()
+        .get(&req.vk_ref)
+        .cloned()
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "verifying key not found: {}::{}",
+                    req.vk_ref.backend, req.vk_ref.name
+                )),
+            ))
+        })?;
+
+    if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "verifying key is not Active".to_owned(),
+            ),
+        )));
+    }
+    if !halo2_ipa_circuit_id_matches(&vk_record.circuit_id, "halo2/ipa:ivm-execution-v1") {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "verifying key circuit_id is not compatible with `halo2/ipa:ivm-execution-v1` (got `{}`)",
+                vk_record.circuit_id
+            )),
+        )));
+    }
+    let expected_schema_hash = iroha_core::zk::ivm_execution_public_inputs_schema_hash();
+    if vk_record.public_inputs_schema_hash != expected_schema_hash {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "verifying key schema hash is not compatible with `halo2/ipa:ivm-execution-v1`"
+                    .to_owned(),
+            ),
+        )));
+    }
+    if vk_record.gas_schedule_id.as_deref().is_none() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "verifying key missing gas_schedule_id".to_owned(),
+            ),
+        )));
+    }
+
+    let chain_id = app.chain_id.as_ref().clone();
+    let state = Arc::clone(&app.state);
+    let authority = req.authority;
+    let metadata = req.metadata;
+    let bytecode = req.bytecode;
+    let proved = tokio::task::spawn_blocking(
+        move || -> Result<iroha_data_model::transaction::IvmProved, String> {
+            let kp = iroha_crypto::KeyPair::random();
+            let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+                chain_id,
+                authority.clone(),
+            )
+            .with_metadata(metadata)
+            .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode))
+            .sign(kp.private_key())
+            // Proof derivation needs a stable authority, but signature validity is not required here.
+            .with_authority(authority);
+
+            let view = state.view();
+            iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
+                &view, &tx, &vk_record,
+            )
+            .map_err(|err| err.to_string())
+        },
+    )
+    .await
+    .map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "derive task panicked: {err}"
+            )),
+        ))
+    })?
+    .map_err(|msg| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
+        ))
+    })?;
+
+    Ok(crate::utils::respond_with_format(
+        ZkIvmDeriveResponseDto { proved },
+        crate::utils::ResponseFormat::Json,
+    ))
+}
+
 async fn handler_zk_ivm_prove(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    zk_ivm_prove_gc_jobs();
+    zk_ivm_prove_gc_jobs(&app);
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
@@ -6107,6 +6362,7 @@ async fn handler_zk_ivm_prove(
             ),
         )));
     }
+    let keys_dir = app.zk_prover_keys_dir.clone();
     if !halo2_ipa_circuit_id_matches(&vk_record.circuit_id, "halo2/ipa:ivm-execution-v1") {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -6124,13 +6380,54 @@ async fn handler_zk_ivm_prove(
             ),
         )));
     }
-    if vk_record.key.is_none() {
+    let vk_box = if let Some(vk_box) = vk_record.key.as_ref() {
+        if vk_box.backend.as_str() != req.vk_ref.backend.as_str() {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "verifying key backend does not match vk_ref backend".to_owned(),
+                ),
+            )));
+        }
+        vk_box.clone()
+    } else {
+        let path = zk_vk_store_path(&keys_dir, &req.vk_ref);
+        let bytes = std::fs::read(&path).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "failed to read verifying key bytes at {}: {err}",
+                    path.display()
+                )),
+            ))
+        })?;
+        iroha_data_model::proof::VerifyingKeyBox::new(req.vk_ref.backend.as_str().to_owned(), bytes)
+    };
+    if vk_record.vk_len > 0 && vk_box.bytes.len() != vk_record.vk_len as usize {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "verifying key length {} does not match registry vk_len {}",
+                vk_box.bytes.len(),
+                vk_record.vk_len
+            )),
+        )));
+    }
+    let computed_commitment = iroha_core::zk::hash_vk(&vk_box);
+    if computed_commitment != vk_record.commitment {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "verifying key bytes missing in WSV".to_owned(),
+                "verifying key commitment mismatch".to_owned(),
             ),
         )));
     }
+
+    let retry_after_secs = app.proof_limits.retry_after.as_secs().max(1);
+    let slot_permit = app
+        .zk_ivm_prove_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| Error::ProofRateLimited {
+            endpoint: "v1/zk/ivm/prove",
+            retry_after_secs,
+        })?;
 
     let job_id_bytes: [u8; 16] = rand::random();
     let job_id = hex::encode(job_id_bytes);
@@ -6138,7 +6435,8 @@ async fn handler_zk_ivm_prove(
 
     let proved = req.proved.clone();
     let vk_ref = req.vk_ref.clone();
-    zk_ivm_prove_jobs().insert(
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    app.zk_ivm_prove_jobs.insert(
         job_id.clone(),
         ZkIvmProveJobState {
             created_ms,
@@ -6147,47 +6445,139 @@ async fn handler_zk_ivm_prove(
             vk_ref,
             attachment: None,
             error: None,
+            cancel: cancel_tx,
         },
     );
+    zk_ivm_prove_observe_queue_metrics(
+        &app.telemetry,
+        app.zk_ivm_prove_slots.as_ref(),
+        app.zk_ivm_prove_slots_total,
+        app.zk_ivm_prove_inflight.as_ref(),
+        app.zk_ivm_prove_inflight_total,
+    );
 
-    let vk_commitment = vk_record.commitment;
+    let circuit_id = vk_record.circuit_id.clone();
+    let max_proof_bytes = vk_record.max_proof_bytes;
     let proved = req.proved;
     let vk_ref = req.vk_ref;
     let job_id_for_task = job_id.clone();
-    tokio::task::spawn_blocking(move || {
-        let outcome = (|| -> Result<iroha_data_model::proof::ProofAttachment, String> {
-            let parsed = ivm::ProgramMetadata::parse(proved.bytecode.as_ref())
-                .map_err(|_| "invalid IVM header".to_owned())?;
-            let body = proved
-                .bytecode
-                .as_ref()
-                .get(parsed.header_len..)
-                .ok_or_else(|| "invalid IVM header (missing code body)".to_owned())?;
-            let code_hash = iroha_crypto::Hash::new(body);
-            let overlay_bytes = norito::to_bytes(&proved.overlay)
-                .map_err(|_| "failed to encode proved overlay".to_owned())?;
-            let overlay_hash = iroha_crypto::Hash::new(&overlay_bytes);
-
-            let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
-                code_hash,
-                overlay_hash,
-                proved.events_commitment,
-                proved.gas_policy_commitment,
+    let telemetry = app.telemetry.clone();
+    let slots = app.zk_ivm_prove_slots.clone();
+    let slots_total = app.zk_ivm_prove_slots_total;
+    let inflight = app.zk_ivm_prove_inflight.clone();
+    let inflight_total = app.zk_ivm_prove_inflight_total;
+    let jobs = app.zk_ivm_prove_jobs.clone();
+    tokio::spawn(async move {
+        let mut cancel_rx = cancel_rx;
+        let slot_permit = slot_permit;
+        if *cancel_rx.borrow() {
+            drop(slot_permit);
+            zk_ivm_prove_observe_queue_metrics(
+                &telemetry,
+                slots.as_ref(),
+                slots_total,
+                inflight.as_ref(),
+                inflight_total,
             );
-            let fixture_vk_hash = fixture
-                .vk_hash("halo2/ipa")
-                .ok_or_else(|| "fixture is missing verifying key bytes".to_owned())?;
-            if fixture_vk_hash != vk_commitment {
-                return Err("verifying key commitment mismatch".to_owned());
-            }
-            Ok(iroha_data_model::proof::ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                fixture.proof_box("halo2/ipa"),
-                vk_ref,
-            ))
-        })();
+            return;
+        }
 
-        if let Some(mut entry) = zk_ivm_prove_jobs().get_mut(&job_id_for_task) {
+        let Some(inflight_permit) = (tokio::select! {
+            permit = inflight.clone().acquire_owned() => match permit {
+                Ok(permit) => Some(permit),
+                Err(_) => None,
+            },
+            _ = cancel_rx.changed() => None,
+        }) else {
+            drop(slot_permit);
+            zk_ivm_prove_observe_queue_metrics(
+                &telemetry,
+                slots.as_ref(),
+                slots_total,
+                inflight.as_ref(),
+                inflight_total,
+            );
+            return;
+        };
+
+        if let Some(mut entry) = jobs.get_mut(&job_id_for_task) {
+            entry.status = ZkIvmProveJobStatus::Running;
+        }
+        zk_ivm_prove_observe_queue_metrics(
+            &telemetry,
+            slots.as_ref(),
+            slots_total,
+            inflight.as_ref(),
+            inflight_total,
+        );
+
+        let prove_job = tokio::task::spawn_blocking(move || {
+            (|| -> Result<iroha_data_model::proof::ProofAttachment, String> {
+                let parsed = ivm::ProgramMetadata::parse(proved.bytecode.as_ref())
+                    .map_err(|_| "invalid IVM header".to_owned())?;
+                if parsed.metadata.mode & ivm::ivm_mode::ZK == 0 {
+                    return Err(
+                        "ivm prove requires bytecode ZK mode bit (mode & ZK != 0)".to_owned()
+                    );
+                }
+                let body = proved
+                    .bytecode
+                    .as_ref()
+                    .get(parsed.header_len..)
+                    .ok_or_else(|| "invalid IVM header (missing code body)".to_owned())?;
+                let code_hash = iroha_crypto::Hash::new(body);
+                let overlay_bytes = norito::to_bytes(&proved.overlay)
+                    .map_err(|_| "failed to encode proved overlay".to_owned())?;
+                let overlay_hash = iroha_crypto::Hash::new(&overlay_bytes);
+
+                let pk_path = zk_pk_store_path(&keys_dir, &vk_ref);
+                let pk_bytes = std::fs::read(&pk_path).map_err(|err| {
+                    format!(
+                        "failed to read proving key bytes at {}: {err}",
+                        pk_path.display()
+                    )
+                })?;
+
+                let proof_box = iroha_core::zk::prove_halo2_ipa_ivm_execution_envelope(
+                    circuit_id.as_str(),
+                    &vk_box,
+                    code_hash,
+                    overlay_hash,
+                    proved.events_commitment,
+                    proved.gas_policy_commitment,
+                    Some(pk_bytes.as_slice()),
+                )?;
+                if max_proof_bytes > 0 && proof_box.bytes.len() > max_proof_bytes as usize {
+                    return Err("generated proof exceeds verifying key max_proof_bytes".to_owned());
+                }
+                Ok(iroha_data_model::proof::ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    proof_box,
+                    vk_ref,
+                ))
+            })()
+        });
+
+        let outcome = tokio::select! {
+            res = prove_job => match res {
+                Ok(outcome) => outcome,
+                Err(err) => Err(format!("prove job panicked: {err}")),
+            },
+            _ = cancel_rx.changed() => {
+                drop(inflight_permit);
+                drop(slot_permit);
+                zk_ivm_prove_observe_queue_metrics(
+                    &telemetry,
+                    slots.as_ref(),
+                    slots_total,
+                    inflight.as_ref(),
+                    inflight_total,
+                );
+                return;
+            }
+        };
+
+        if let Some(mut entry) = jobs.get_mut(&job_id_for_task) {
             match outcome {
                 Ok(attachment) => {
                     entry.status = ZkIvmProveJobStatus::Done;
@@ -6201,6 +6591,16 @@ async fn handler_zk_ivm_prove(
                 }
             }
         }
+
+        drop(inflight_permit);
+        drop(slot_permit);
+        zk_ivm_prove_observe_queue_metrics(
+            &telemetry,
+            slots.as_ref(),
+            slots_total,
+            inflight.as_ref(),
+            inflight_total,
+        );
     });
 
     Ok(crate::utils::respond_with_format(
@@ -6215,7 +6615,7 @@ async fn handler_zk_ivm_prove_get(
     headers: axum::http::HeaderMap,
     job_id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
-    zk_ivm_prove_gc_jobs();
+    zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
         negotiated,
@@ -6228,7 +6628,7 @@ async fn handler_zk_ivm_prove_get(
     .await?;
 
     let job_id = job_id.0;
-    let Some(entry) = zk_ivm_prove_jobs().get(&job_id) else {
+    let Some(entry) = app.zk_ivm_prove_jobs.get(&job_id) else {
         return Ok((
             StatusCode::NOT_FOUND,
             "prove job not found; submit a new job via POST /v1/zk/ivm/prove",
@@ -6259,7 +6659,7 @@ async fn handler_zk_ivm_prove_delete(
     headers: axum::http::HeaderMap,
     job_id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
-    zk_ivm_prove_gc_jobs();
+    zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
         negotiated,
@@ -6272,7 +6672,9 @@ async fn handler_zk_ivm_prove_delete(
     .await?;
 
     let job_id = job_id.0;
-    zk_ivm_prove_jobs().remove(&job_id);
+    if let Some((_key, state)) = app.zk_ivm_prove_jobs.remove(&job_id) {
+        let _ = state.cancel.send(true);
+    }
     Ok(crate::utils::respond_with_format(
         ZkIvmProveJobCreatedDto { job_id },
         crate::utils::ResponseFormat::Json,
@@ -12543,6 +12945,11 @@ pub struct Torii {
     content_request_limiter: limits::RateLimiter,
     content_egress_limiter: limits::RateLimiter,
     proof_limits: routing::ProofApiLimits,
+    zk_prover_keys_dir: PathBuf,
+    zk_ivm_prove_max_inflight: usize,
+    zk_ivm_prove_max_queue: usize,
+    zk_ivm_prove_job_ttl_ms: u64,
+    zk_ivm_prove_job_max_entries: usize,
     content_config: iroha_config::parameters::actual::Content,
     preauth_gate: Arc<limits::PreAuthGate>,
     fee_policy: FeePolicy,
@@ -13875,6 +14282,7 @@ impl Torii {
                 .route("/v1/zk/roots", post(handler_zk_roots))
                 .route("/v1/zk/verify", post(handler_zk_verify))
                 .route("/v1/zk/submit-proof", post(handler_zk_submit_proof))
+                .route("/v1/zk/ivm/derive", post(handler_zk_ivm_derive))
                 .route("/v1/zk/ivm/prove", post(handler_zk_ivm_prove))
                 .route(
                     "/v1/zk/ivm/prove/{job_id}",
@@ -14496,6 +14904,11 @@ impl Torii {
             content_request_limiter,
             content_egress_limiter,
             proof_limits,
+            zk_prover_keys_dir: config.zk_prover_keys_dir.clone(),
+            zk_ivm_prove_max_inflight: config.zk_ivm_prove_max_inflight,
+            zk_ivm_prove_max_queue: config.zk_ivm_prove_max_queue,
+            zk_ivm_prove_job_ttl_ms: config.zk_ivm_prove_job_ttl_secs.saturating_mul(1_000),
+            zk_ivm_prove_job_max_entries: config.zk_ivm_prove_job_max_entries,
             preauth_gate,
             fee_policy,
             norito_rpc: config.transport.norito_rpc.clone(),
@@ -14693,6 +15106,15 @@ impl Torii {
             self.peer_geo.clone(),
         );
 
+        let zk_ivm_prove_jobs = Arc::new(DashMap::new());
+        let zk_ivm_prove_max_inflight = self.zk_ivm_prove_max_inflight.max(1);
+        let zk_ivm_prove_slots_total =
+            zk_ivm_prove_max_inflight.saturating_add(self.zk_ivm_prove_max_queue);
+        let zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_slots_total));
+        let zk_ivm_prove_inflight =
+            Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_max_inflight));
+        let zk_ivm_prove_inflight_total = zk_ivm_prove_max_inflight;
+
         let app_state: SharedAppState = Arc::new(AppState {
             events: self.events.clone(),
             kura: self.kura.clone(),
@@ -14733,6 +15155,14 @@ impl Torii {
             telemetry: self.telemetry.clone(),
             telemetry_profile: self.telemetry_profile,
             api_versions: self.api_versions.clone(),
+            zk_prover_keys_dir: self.zk_prover_keys_dir.clone(),
+            zk_ivm_prove_jobs,
+            zk_ivm_prove_inflight,
+            zk_ivm_prove_slots,
+            zk_ivm_prove_slots_total,
+            zk_ivm_prove_inflight_total,
+            zk_ivm_prove_job_ttl_ms: self.zk_ivm_prove_job_ttl_ms,
+            zk_ivm_prove_job_max_entries: self.zk_ivm_prove_job_max_entries,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry,
             rbc_sampling_enabled: sampling_enabled,
@@ -16603,6 +17033,15 @@ pub(crate) mod tests_runtime_handlers {
             telemetry.clone(),
         ));
 
+        let zk_ivm_prove_jobs = Arc::new(DashMap::new());
+        let zk_ivm_prove_max_inflight = defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT.max(1);
+        let zk_ivm_prove_slots_total =
+            zk_ivm_prove_max_inflight.saturating_add(defaults::torii::ZK_IVM_PROVE_MAX_QUEUE);
+        let zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_slots_total));
+        let zk_ivm_prove_inflight =
+            Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_max_inflight));
+        let zk_ivm_prove_inflight_total = zk_ivm_prove_max_inflight;
+
         Arc::new(AppState {
             events,
             kura,
@@ -16643,6 +17082,14 @@ pub(crate) mod tests_runtime_handlers {
             telemetry,
             telemetry_profile,
             api_versions: api_version::ApiVersionPolicy::default(),
+            zk_prover_keys_dir: defaults::torii::zk_prover_keys_dir(),
+            zk_ivm_prove_jobs,
+            zk_ivm_prove_inflight,
+            zk_ivm_prove_slots,
+            zk_ivm_prove_slots_total,
+            zk_ivm_prove_inflight_total,
+            zk_ivm_prove_job_ttl_ms: defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS * 1_000,
+            zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry,
             da_replay_cache,
@@ -20461,8 +20908,12 @@ mod tests {
 
     #[tokio::test]
     async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
-        zk_ivm_prove_jobs().clear();
-        let app = mk_app_state_for_tests();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app");
+            state.zk_prover_keys_dir = temp.path().to_path_buf();
+        }
 
         let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-fixture");
         let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
@@ -20490,6 +20941,13 @@ mod tests {
         vk_record.key = Some(vk_box);
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
 
+        let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(
+            vk_record.key.as_ref().expect("vk_box"),
+        )
+        .expect("derive proving key bytes");
+        let pk_path = zk_pk_store_path(temp.path(), &vk_id);
+        std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
+
         {
             let height = next_block_height(&app);
             let header = BlockHeader::new(
@@ -20513,8 +20971,12 @@ mod tests {
             block.commit().expect("commit should persist vk record");
         }
 
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&[0, 0, 0, 0]);
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let proved = IvmProved {
             bytecode: IvmBytecode::from_compiled(program),
             overlay: iroha_primitives::const_vec::ConstVec::new_empty(),
@@ -20567,7 +21029,7 @@ mod tests {
             );
             let dto: ZkIvmProveJobDto = norito::json::from_slice(&body).expect("decode job dto");
             match dto.status.as_str() {
-                "pending" => tokio::time::sleep(Duration::from_millis(25)).await,
+                "pending" | "running" => tokio::time::sleep(Duration::from_millis(25)).await,
                 "done" => {
                     final_dto = Some(dto);
                     break;
@@ -20592,16 +21054,259 @@ mod tests {
         .expect("prove delete ok")
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
-        zk_ivm_prove_jobs().clear();
+    }
+
+    #[tokio::test]
+    async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app");
+            state.zk_prover_keys_dir = temp.path().to_path_buf();
+        }
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-disk-vk");
+        let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+            Hash::new(b"code"),
+            Hash::new(b"overlay"),
+            Hash::new(b"events"),
+            Hash::new(b"gas"),
+        );
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture should include verifying key bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture should include verifying key commitment");
+
+        let vk_path = zk_vk_store_path(temp.path(), &vk_id);
+        std::fs::write(&vk_path, &vk_box.bytes).expect("write verifying key bytes");
+
+        let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box)
+            .expect("derive proving key bytes");
+        let pk_path = zk_pk_store_path(temp.path(), &vk_id);
+        std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
+
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.vk_len = vk_box.bytes.len() as u32;
+        vk_record.max_proof_bytes = 8 * 1024 * 1024;
+        vk_record.key = None;
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+
+        {
+            let height = next_block_height(&app);
+            let header = BlockHeader::new(
+                NonZeroU64::new(height).expect("height>0"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            let mut stx = block.transaction();
+            stx.world
+                .verifying_keys_mut_for_testing()
+                .insert(vk_id.clone(), vk_record);
+            stx.apply();
+            block.transactions.insert_block(
+                HashSet::new(),
+                NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+            );
+            block.commit().expect("commit should persist vk record");
+        }
+
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let proved = IvmProved {
+            bytecode: IvmBytecode::from_compiled(program),
+            overlay: iroha_primitives::const_vec::ConstVec::new_empty(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas_policy"),
+        };
+        let req = ZkIvmProveRequestDto {
+            vk_ref: vk_id,
+            proved,
+        };
+        let body = norito::json::to_vec(&req).expect("json encode request");
+        let response = handler_zk_ivm_prove(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("prove submit ok")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let created: ZkIvmProveJobCreatedDto =
+            norito::json::from_slice(&body).expect("json decode created dto");
+
+        let job_id = created.job_id;
+        let mut final_dto: Option<ZkIvmProveJobDto> = None;
+        for _ in 0..200 {
+            let response = handler_zk_ivm_prove_get(
+                State(app.clone()),
+                negotiated(&app),
+                HeaderMap::new(),
+                axum::extract::Path(job_id.clone()),
+            )
+            .await
+            .expect("prove get ok")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            let rendered = std::str::from_utf8(&body).expect("utf8 body");
+            assert!(
+                !rendered.contains("gas_used"),
+                "prove job response must not expose gas_used"
+            );
+            let dto: ZkIvmProveJobDto = norito::json::from_slice(&body).expect("decode job dto");
+            match dto.status.as_str() {
+                "pending" | "running" => tokio::time::sleep(Duration::from_millis(25)).await,
+                "done" => {
+                    final_dto = Some(dto);
+                    break;
+                }
+                "error" => panic!("prove job failed: {:?}", dto.error),
+                other => panic!("unexpected prove job status: {other}"),
+            }
+        }
+        let dto = final_dto.expect("prove job should complete");
+        assert!(
+            dto.attachment.is_some(),
+            "expected proof attachment in done response"
+        );
+    }
+
+    #[tokio::test]
+    async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
+        let kp = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            kp.public_key().clone(),
+        );
+        let domain = Domain::new("wonderland".parse().expect("domain")).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with_assets([domain], [account], [], [], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app");
+            let core = Arc::get_mut(&mut state.state).expect("unique core state");
+            core.zk.halo2.enabled = true;
+        }
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-derive");
+        let schema_hash = iroha_core::zk::ivm_execution_public_inputs_schema_hash();
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            schema_hash,
+            [0u8; 32],
+        );
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+
+        {
+            let height = next_block_height(&app);
+            let header = BlockHeader::new(
+                NonZeroU64::new(height).expect("height>0"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            let mut stx = block.transaction();
+            stx.world
+                .verifying_keys_mut_for_testing()
+                .insert(vk_id.clone(), vk_record);
+            stx.apply();
+            block.transactions.insert_block(
+                HashSet::new(),
+                NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+            );
+            block.commit().expect("commit should persist vk record");
+        }
+
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 1,
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("gas_limit").expect("static gas_limit key"),
+            iroha_primitives::json::Json::new(50_000_000_u64),
+        );
+
+        let req = ZkIvmDeriveRequestDto {
+            vk_ref: vk_id,
+            authority: authority.clone(),
+            metadata,
+            bytecode: bytecode.clone(),
+        };
+        let body = norito::json::to_vec(&req).expect("json encode request");
+        let response = handler_zk_ivm_derive(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("derive ok")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let rendered = std::str::from_utf8(&body).expect("utf8 body");
+        assert!(
+            !rendered.contains("gas_used"),
+            "derive response must not expose gas_used"
+        );
+        let dto: ZkIvmDeriveResponseDto = norito::json::from_slice(&body).expect("decode dto");
+        assert_eq!(dto.proved.bytecode, bytecode);
     }
 
     #[test]
     fn zk_ivm_prove_gc_evicts_expired_jobs() {
-        zk_ivm_prove_jobs().clear();
+        let jobs = DashMap::new();
 
         let vk_ref = VerifyingKeyId::new("halo2/ipa", "gc-fixture");
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&[0, 0, 0, 0]);
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let proved = IvmProved {
             bytecode: IvmBytecode::from_compiled(program),
             overlay: iroha_primitives::const_vec::ConstVec::new_empty(),
@@ -20609,7 +21314,7 @@ mod tests {
             gas_policy_commitment: Hash::new(b"gas"),
         };
 
-        zk_ivm_prove_jobs().insert(
+        jobs.insert(
             "old".to_owned(),
             ZkIvmProveJobState {
                 created_ms: 10,
@@ -20618,36 +21323,30 @@ mod tests {
                 vk_ref: vk_ref.clone(),
                 attachment: None,
                 error: None,
+                cancel: tokio::sync::watch::channel(false).0,
             },
         );
-        zk_ivm_prove_jobs().insert(
+        let ttl_ms = 1_000;
+        jobs.insert(
             "fresh".to_owned(),
             ZkIvmProveJobState {
-                created_ms: ZK_IVM_PROVE_JOB_TTL_MS + 10,
+                created_ms: ttl_ms + 10,
                 status: ZkIvmProveJobStatus::Done,
                 proved,
                 vk_ref,
                 attachment: None,
                 error: None,
+                cancel: tokio::sync::watch::channel(false).0,
             },
         );
 
-        zk_ivm_prove_gc_jobs_at(ZK_IVM_PROVE_JOB_TTL_MS + 20);
-        assert!(
-            zk_ivm_prove_jobs().get("old").is_none(),
-            "expired jobs should be removed"
-        );
-        assert!(
-            zk_ivm_prove_jobs().get("fresh").is_some(),
-            "fresh jobs should be retained"
-        );
-
-        zk_ivm_prove_jobs().clear();
+        zk_ivm_prove_gc_jobs_at(&jobs, ttl_ms + 20, ttl_ms, 1_024);
+        assert!(jobs.get("old").is_none(), "expired jobs should be removed");
+        assert!(jobs.get("fresh").is_some(), "fresh jobs should be retained");
     }
 
     #[tokio::test]
     async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
-        zk_ivm_prove_jobs().clear();
         let app = mk_app_state_for_tests();
 
         let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-schema-mismatch");
@@ -20699,8 +21398,12 @@ mod tests {
             block.commit().expect("commit should persist vk record");
         }
 
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&[0, 0, 0, 0]);
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let req = ZkIvmProveRequestDto {
             vk_ref: vk_id,
             proved: IvmProved {
@@ -20732,8 +21435,243 @@ mod tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
 
-        zk_ivm_prove_jobs().clear();
+    #[tokio::test]
+    async fn zk_ivm_prove_rejects_when_queue_full() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app");
+            state.zk_prover_keys_dir = temp.path().to_path_buf();
+            state.zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(1));
+            state.zk_ivm_prove_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+            state.zk_ivm_prove_slots_total = 1;
+            state.zk_ivm_prove_inflight_total = 1;
+        }
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-queue-full");
+        let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+            Hash::new(b"code"),
+            Hash::new(b"overlay"),
+            Hash::new(b"events"),
+            Hash::new(b"gas"),
+        );
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture should include verifying key bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture should include verifying key commitment");
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.vk_len = vk_box.bytes.len() as u32;
+        vk_record.max_proof_bytes = 8 * 1024 * 1024;
+        vk_record.key = Some(vk_box);
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+
+        {
+            let height = next_block_height(&app);
+            let header = BlockHeader::new(
+                NonZeroU64::new(height).expect("height>0"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            let mut stx = block.transaction();
+            stx.world
+                .verifying_keys_mut_for_testing()
+                .insert(vk_id.clone(), vk_record);
+            stx.apply();
+            block.transactions.insert_block(
+                HashSet::new(),
+                NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+            );
+            block.commit().expect("commit should persist vk record");
+        }
+
+        let _saturated = app
+            .zk_ivm_prove_slots
+            .clone()
+            .try_acquire_owned()
+            .expect("acquire slot");
+
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let req = ZkIvmProveRequestDto {
+            vk_ref: vk_id,
+            proved: IvmProved {
+                bytecode: IvmBytecode::from_compiled(program),
+                overlay: iroha_primitives::const_vec::ConstVec::new_empty(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas_policy"),
+            },
+        };
+        let body = norito::json::to_vec(&req).expect("json encode request");
+        let err = match handler_zk_ivm_prove(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        {
+            Ok(_) => panic!("queue full should be rejected"),
+            Err(err) => err,
+        };
+
+        match err {
+            Error::ProofRateLimited { endpoint, .. } => assert_eq!(endpoint, "v1/zk/ivm/prove"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            app.zk_ivm_prove_jobs.is_empty(),
+            "rejected request must not create a job entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app");
+            state.zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(1));
+            // Force the job to remain queued so cancellation is deterministic.
+            state.zk_ivm_prove_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            state.zk_ivm_prove_slots_total = 1;
+            state.zk_ivm_prove_inflight_total = 0;
+        }
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-cancel");
+        let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+            Hash::new(b"code"),
+            Hash::new(b"overlay"),
+            Hash::new(b"events"),
+            Hash::new(b"gas"),
+        );
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture should include verifying key bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture should include verifying key commitment");
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.vk_len = vk_box.bytes.len() as u32;
+        vk_record.max_proof_bytes = 8 * 1024 * 1024;
+        vk_record.key = Some(vk_box);
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+
+        {
+            let height = next_block_height(&app);
+            let header = BlockHeader::new(
+                NonZeroU64::new(height).expect("height>0"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            let mut stx = block.transaction();
+            stx.world
+                .verifying_keys_mut_for_testing()
+                .insert(vk_id.clone(), vk_record);
+            stx.apply();
+            block.transactions.insert_block(
+                HashSet::new(),
+                NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+            );
+            block.commit().expect("commit should persist vk record");
+        }
+
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let req = ZkIvmProveRequestDto {
+            vk_ref: vk_id,
+            proved: IvmProved {
+                bytecode: IvmBytecode::from_compiled(program),
+                overlay: iroha_primitives::const_vec::ConstVec::new_empty(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas_policy"),
+            },
+        };
+        let req_body = norito::json::to_vec(&req).expect("json encode request");
+
+        let response = handler_zk_ivm_prove(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            axum::body::Bytes::from(req_body.clone()),
+        )
+        .await
+        .expect("first submission ok")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let resp_body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let created: ZkIvmProveJobCreatedDto =
+            norito::json::from_slice(&resp_body).expect("json decode created dto");
+        let job_id = created.job_id;
+
+        let err = match handler_zk_ivm_prove(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            axum::body::Bytes::from(req_body.clone()),
+        )
+        .await
+        {
+            Ok(_) => panic!("second submission should be rate limited due to capacity slot"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, Error::ProofRateLimited { endpoint, .. } if endpoint == "v1/zk/ivm/prove")
+        );
+
+        let response = handler_zk_ivm_prove_delete(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            axum::extract::Path(job_id),
+        )
+        .await
+        .expect("prove delete ok")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Allow the cancellation signal to reach the queued task so it can drop the slot permit.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            app.zk_ivm_prove_slots.available_permits(),
+            1,
+            "capacity slot should be released after delete cancels a queued job"
+        );
     }
 
     #[tokio::test]

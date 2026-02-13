@@ -46,6 +46,7 @@ use iroha_data_model::{
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     executor::{
@@ -723,6 +724,11 @@ where
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
 
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
+            if !wants_zk {
+                return Err(OverlayBuildError::ZkProof(
+                    "Executable::IvmProved requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
+                ));
+            }
             if wants_zk && !state_ro.zk().halo2.enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
@@ -1286,7 +1292,7 @@ mod tests {
             zk::BackendTag,
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
 
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -1392,7 +1398,7 @@ mod tests {
             zk::BackendTag,
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
 
@@ -1491,6 +1497,7 @@ mod tests {
                 .expect("gas schedule id must be set"),
             TEST_GAS_LIMIT,
             replay.gas_used,
+            replay.trace_hash,
         );
         let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
             code_hash,
@@ -1535,7 +1542,7 @@ mod tests {
             zk::BackendTag,
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
 
@@ -1634,6 +1641,7 @@ mod tests {
                 .expect("gas schedule id must be set"),
             TEST_GAS_LIMIT,
             replay.gas_used,
+            replay.trace_hash,
         );
 
         let build_tx =
@@ -1693,7 +1701,7 @@ mod tests {
             transaction::{Executable, IvmProved},
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
 
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> =
@@ -1752,7 +1760,7 @@ mod tests {
             transaction::{Executable, IvmProved},
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
 
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> =
@@ -1816,7 +1824,7 @@ mod tests {
             zk::BackendTag,
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
 
         let overlay_ok: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -1934,7 +1942,7 @@ mod tests {
             zk::BackendTag,
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
 
@@ -2041,7 +2049,7 @@ mod tests {
             zk::BackendTag,
         };
 
-        let (program, _header_len, _meta) = sample_program();
+        let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
 
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> =
@@ -2146,6 +2154,7 @@ mod tests {
                 .expect("gas schedule id must be set"),
             TEST_GAS_LIMIT,
             replay.gas_used,
+            replay.trace_hash,
         );
 
         let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
@@ -2177,9 +2186,127 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn derive_ivm_proved_payload_matches_replay_commitments() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            account::Account,
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            proof::VerifyingKeyRecord,
+            transaction::{Executable, IvmProved},
+            zk::BackendTag,
+        };
+
+        let (program, _header_len, _meta) = sample_program_zk_mode();
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let kp = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            kp.public_key().clone(),
+        );
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = crate::state::World::with([domain], [account], []);
+
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.halo2.enabled = true;
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_metadata(metadata.clone())
+            .with_executable(Executable::Ivm(bytecode.clone()))
+            .sign(kp.private_key());
+
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            [0u8; 32],
+        );
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+
+        let proved = derive_ivm_proved_payload_from_ivm_execution(&state.view(), &tx, &vk_record)
+            .expect("derive proved payload");
+
+        let tx_proved = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: proved.bytecode.clone(),
+                overlay: proved.overlay.clone(),
+                events_commitment: proved.events_commitment,
+                gas_policy_commitment: proved.gas_policy_commitment,
+            }))
+            .sign(kp.private_key());
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let summary = ivm_cache
+            .summarize_program(proved.bytecode.as_ref())
+            .expect("summarize IVM program");
+
+        let overlay_hash = {
+            let bytes = norito::to_bytes(&proved.overlay).expect("encode overlay");
+            Hash::new(&bytes)
+        };
+
+        let replay = replay_ivm_proved_overlay(
+            &state.view(),
+            &tx_proved,
+            &proved,
+            TEST_GAS_LIMIT,
+            summary.code_hash,
+            overlay_hash,
+        )
+        .expect("replay proved overlay");
+
+        assert_eq!(
+            proved.events_commitment, replay.events_commitment,
+            "events commitment should match deterministic replay"
+        );
+
+        let expected_gas_policy_commitment = expected_ivm_gas_policy_commitment(
+            summary.code_hash,
+            overlay_hash,
+            &vk_record.circuit_id,
+            vk_record.version,
+            vk_record
+                .gas_schedule_id
+                .as_deref()
+                .expect("gas schedule id"),
+            TEST_GAS_LIMIT,
+            replay.gas_used,
+            replay.trace_hash,
+        );
+        assert_eq!(
+            proved.gas_policy_commitment, expected_gas_policy_commitment,
+            "gas policy commitment should match deterministic replay"
+        );
+    }
+
     fn sample_program() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
+            ..ivm::ProgramMetadata::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
+        (program, parsed.header_len, parsed.metadata)
+    }
+
+    fn sample_program_zk_mode() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 1,
+            mode: ivm::ivm_mode::ZK,
             ..ivm::ProgramMetadata::default()
         };
         let mut program = meta.encode();
@@ -3292,8 +3419,15 @@ fn expected_ivm_exec_public_inputs(
         .collect()
 }
 
-const IVM_EVENTS_COMMITMENT_DOMAIN: &[u8] = b"iroha.ivm_proved.events_commitment.v1";
-const IVM_GAS_POLICY_COMMITMENT_DOMAIN: &[u8] = b"iroha.ivm_proved.gas_policy_commitment.v1";
+const IVM_EVENTS_COMMITMENT_DOMAIN: &[u8] = b"iroha.ivm_proved.events_commitment.v3";
+const IVM_GAS_POLICY_COMMITMENT_DOMAIN: &[u8] = b"iroha.ivm_proved.gas_policy_commitment.v3";
+
+fn sha256_to_hash(bytes: &[u8]) -> Hash {
+    let digest = Sha256::digest(bytes);
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&digest);
+    Hash::prehashed(arr)
+}
 
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -3506,21 +3640,23 @@ fn append_len_prefixed_str(out: &mut Vec<u8>, value: &str) {
     out.extend_from_slice(value.as_bytes());
 }
 
-fn expected_ivm_events_commitment(
-    code_hash: Hash,
-    overlay_hash: Hash,
-    trace_bundle: &IvmTraceBundleV1,
-) -> Result<Hash, OverlayBuildError> {
+fn expected_ivm_trace_hash(trace_bundle: &IvmTraceBundleV1) -> Result<Hash, OverlayBuildError> {
     let trace_bytes = norito::to_bytes(trace_bundle)
         .map_err(|_| OverlayBuildError::ZkProof("failed to encode IVM trace bundle".to_owned()))?;
+    Ok(sha256_to_hash(&trace_bytes))
+}
+
+fn expected_ivm_events_commitment(code_hash: Hash, overlay_hash: Hash, trace_hash: Hash) -> Hash {
     let mut preimage = Vec::with_capacity(
-        IVM_EVENTS_COMMITMENT_DOMAIN.len() + code_hash.as_ref().len() * 2 + trace_bytes.len(),
+        IVM_EVENTS_COMMITMENT_DOMAIN.len()
+            + code_hash.as_ref().len() * 2
+            + trace_hash.as_ref().len(),
     );
     preimage.extend_from_slice(IVM_EVENTS_COMMITMENT_DOMAIN);
     preimage.extend_from_slice(code_hash.as_ref());
     preimage.extend_from_slice(overlay_hash.as_ref());
-    preimage.extend_from_slice(&trace_bytes);
-    Ok(Hash::new(&preimage))
+    preimage.extend_from_slice(trace_hash.as_ref());
+    sha256_to_hash(&preimage)
 }
 
 fn expected_ivm_gas_policy_commitment(
@@ -3531,6 +3667,7 @@ fn expected_ivm_gas_policy_commitment(
     gas_schedule_id: &str,
     tx_gas_limit: u64,
     gas_used: u64,
+    trace_hash: Hash,
 ) -> Hash {
     let mut preimage = Vec::new();
     preimage.extend_from_slice(IVM_GAS_POLICY_COMMITMENT_DOMAIN);
@@ -3540,9 +3677,12 @@ fn expected_ivm_gas_policy_commitment(
     preimage.extend_from_slice(&circuit_version.to_le_bytes());
     preimage.extend_from_slice(&tx_gas_limit.to_le_bytes());
     preimage.extend_from_slice(&gas_used.to_le_bytes());
+    // Include a commitment to the execution trace hash so that `gas_used` cannot be
+    // brute-forced from the commitment without reproducing the VM trace.
+    preimage.extend_from_slice(trace_hash.as_ref());
     append_len_prefixed_str(&mut preimage, circuit_id);
     append_len_prefixed_str(&mut preimage, gas_schedule_id);
-    Hash::new(&preimage)
+    sha256_to_hash(&preimage)
 }
 
 fn extract_expected_single_row_columns(columns: Vec<Vec<[u8; 32]>>) -> Option<Vec<[u8; 32]>> {
@@ -3622,13 +3762,15 @@ where
     run_vm_with_host(&mut vm, &mut host)?;
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
     let trace_bundle = build_ivm_trace_bundle(&vm);
-    let events_commitment = expected_ivm_events_commitment(code_hash, overlay_hash, &trace_bundle)?;
+    let trace_hash = expected_ivm_trace_hash(&trace_bundle)?;
+    let events_commitment = expected_ivm_events_commitment(code_hash, overlay_hash, trace_hash);
     let mut queued = host.drain_instructions();
     prune_redundant_contract_ops(state_ro, &mut queued);
     Ok(IvmProvedReplay {
         overlay: queued,
         events_commitment,
         gas_used,
+        trace_hash,
     })
 }
 
@@ -3636,6 +3778,7 @@ struct IvmProvedReplay {
     overlay: Vec<InstructionBox>,
     events_commitment: Hash,
     gas_used: u64,
+    trace_hash: Hash,
 }
 
 pub(crate) fn verify_ivm_proved_execution<R>(
@@ -3647,6 +3790,11 @@ pub(crate) fn verify_ivm_proved_execution<R>(
 where
     R: StateReadOnly + QueryStateSource,
 {
+    if summary.metadata.mode & ivm::ivm_mode::ZK == 0 {
+        return Err(OverlayBuildError::ZkProof(
+            "Executable::IvmProved requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
+        ));
+    }
     let pipeline_cfg = state_ro.pipeline();
     if !pipeline_cfg.ivm_proved.enabled {
         return Err(OverlayBuildError::ZkProof(
@@ -3885,6 +4033,7 @@ where
         gas_schedule_id,
         tx_gas_limit,
         replay.gas_used,
+        replay.trace_hash,
     );
     if proved.gas_policy_commitment != expected_gas_policy_commitment {
         return Err(OverlayBuildError::ZkProof(
@@ -3902,4 +4051,143 @@ where
     }
 
     Ok(())
+}
+
+/// Execute an `Executable::Ivm` transaction in the local state view and derive the corresponding
+/// [`iroha_data_model::transaction::IvmProved`] payload.
+///
+/// This helper is intended for Torii/operator tooling to construct the proved payload in a way
+/// that matches node-side admission replay verification (`verify_ivm_proved_execution`).
+///
+/// Note: callers should treat `gas_used` as private; this function returns commitments only.
+pub fn derive_ivm_proved_payload_from_ivm_execution<R>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    vk_record: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    let bytecode = match tx.instructions() {
+        Executable::Ivm(bytecode) => bytecode.clone(),
+        other => {
+            return Err(OverlayBuildError::ZkProof(format!(
+                "expected Executable::Ivm for proved derivation, got {other:?}"
+            )));
+        }
+    };
+
+    let gas_limit = require_tx_gas_limit(tx)?;
+
+    let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+    let summary = ivm_cache
+        .summarize_program(bytecode.as_ref())
+        .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+    let meta = summary.metadata.clone();
+    validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+
+    let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
+    if !wants_zk {
+        return Err(OverlayBuildError::ZkProof(
+            "ivm proved derivation requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
+        ));
+    }
+    if wants_zk && !state_ro.zk().halo2.enabled {
+        return Err(OverlayBuildError::HeaderPolicy(
+            IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
+        ));
+    }
+
+    enforce_pre_execution_policy(
+        state_ro.pipeline().ivm_max_cycles_upper_bound,
+        &meta,
+        summary.code_offset,
+        bytecode.as_ref(),
+    )?;
+    validate_contract_binding(state_ro, tx, &summary)?;
+    // Proved executions do not support implicit manifest registration append.
+    enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
+
+    let gas_schedule_id = vk_record.gas_schedule_id.as_deref().ok_or_else(|| {
+        OverlayBuildError::ZkProof("verifying key missing gas_schedule_id".to_owned())
+    })?;
+
+    let mut vm = ivm_cache
+        .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
+        .map_err(OverlayBuildError::IvmLoad)?;
+
+    let accounts = Arc::new(
+        state_ro
+            .world()
+            .accounts_iter()
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>(),
+    );
+    let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
+    let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+        tx.authority().clone(),
+        Arc::clone(&accounts),
+    );
+    let amx_analysis =
+        ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
+            ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
+            ProgramAnalysisError::Decode(decode_err) => OverlayBuildError::IvmLoad(decode_err),
+        })?;
+    host.set_amx_analysis(amx_analysis);
+    let amx_limits =
+        crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
+    host.set_amx_limits(amx_limits);
+    host.set_axt_timing(state_ro.nexus().axt);
+    host.hydrate_axt_replay_ledger(state_ro);
+    host.set_durable_state_snapshot_from_world(state_ro.world());
+    host.set_public_inputs_from_parameters(state_ro.world().parameters());
+    host.set_query_state(state_ro);
+    let snapshot = state_ro.axt_policy_snapshot();
+    host = host.with_axt_policy_snapshot(&snapshot);
+    apply_streaming_metadata(&mut host, streaming_meta);
+    #[cfg(feature = "telemetry")]
+    host.set_telemetry(state_ro.metrics().clone());
+    host.set_crypto_config(state_ro.crypto());
+    host.set_halo2_config(&state_ro.zk().halo2);
+    host.set_chain_id(state_ro.chain_id());
+    host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
+        .map_err(OverlayBuildError::IvmRun)?;
+
+    vm.set_gas_limit(gas_limit);
+    run_vm_with_host(&mut vm, &mut host)?;
+
+    let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+    let trace_bundle = build_ivm_trace_bundle(&vm);
+    let trace_hash = expected_ivm_trace_hash(&trace_bundle)?;
+
+    let mut queued = host.drain_instructions();
+    prune_redundant_contract_ops(state_ro, &mut queued);
+    let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = queued.into();
+
+    let overlay_hash = {
+        let bytes = norito::to_bytes(&overlay).map_err(|_| {
+            OverlayBuildError::ZkProof("failed to encode proved overlay".to_owned())
+        })?;
+        Hash::new(&bytes)
+    };
+
+    let events_commitment =
+        expected_ivm_events_commitment(summary.code_hash, overlay_hash, trace_hash);
+    let gas_policy_commitment = expected_ivm_gas_policy_commitment(
+        summary.code_hash,
+        overlay_hash,
+        &vk_record.circuit_id,
+        vk_record.version,
+        gas_schedule_id,
+        gas_limit,
+        gas_used,
+        trace_hash,
+    );
+
+    Ok(iroha_data_model::transaction::IvmProved {
+        bytecode,
+        overlay,
+        events_commitment,
+        gas_policy_commitment,
+    })
 }

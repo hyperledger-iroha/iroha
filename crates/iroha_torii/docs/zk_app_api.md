@@ -21,6 +21,12 @@ Background prover reports (non‑consensus verification):
 - `GET    /v1/zk/prover/reports/{id}` — fetch one report (JSON)
 - `DELETE /v1/zk/prover/reports/{id}` — delete a report
 
+IVM prove helper (non-consensus proof generation):
+- `POST   /v1/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only)
+- `POST   /v1/zk/ivm/prove` — submit a prove job for an `IvmProved` payload (returns `{ job_id }`)
+- `GET    /v1/zk/ivm/prove/{job_id}` — poll job status (`pending|running|done|error`)
+- `DELETE /v1/zk/ivm/prove/{job_id}` — delete/cancel a job from the in-memory cache
+
 Notes
 - Attachment id is a deterministic Blake2b‑32 (hex, lowercase) of the sanitized body bytes.
 - Content type is normalized from magic‑byte sniffing; the declared header is recorded in `provenance`.
@@ -29,6 +35,7 @@ Notes
   - `./storage/torii/zk_attachments/{id}.json` (metadata)
 - Prover reports persist under `./storage/torii/zk_prover/reports/{id}.json`.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
+- IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
 
 ## Configuration
 
@@ -75,6 +82,12 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Directory holding verifying key bytes for registry entries without inline keys.
 - `torii.zk_prover_allowed_backends` / `torii.zk_prover_allowed_circuits` (string list)
   - Allowlists for prover scope (prefix match, empty = allow all).
+- `torii.zk_ivm_prove_max_inflight` / `torii.zk_ivm_prove_max_queue`
+  - Concurrency controls for the IVM prove helper endpoint (`POST /v1/zk/ivm/prove`).
+  - When saturated, Torii rejects new jobs with `429` and a `Retry-After` hint.
+- `torii.zk_ivm_prove_job_ttl_secs` / `torii.zk_ivm_prove_job_max_entries`
+  - Retention controls for the in-memory prove job cache used by `/v1/zk/ivm/prove/{job_id}`.
+  - Jobs older than `zk_ivm_prove_job_ttl_secs` are evicted (pending/running jobs are cancelled best-effort to free capacity).
 - `torii.max_content_len` (bytes)
   - Global HTTP request body limit; applies to attachments uploads as an upper bound.
 
@@ -99,6 +112,10 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Storage hygiene: deleting an attachment removes both `.bin` and `.json`; deleting a report removes the corresponding `.json` under `zk_prover/reports`.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads.
 - Key bytes: when a registry entry omits inline VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
+- Proving keys: the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
+  The `.pk` file must match the resolved verifying key and uses Halo2 `SerdeFormat::Processed` serialization.
+- Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
+- Metrics: `torii_zk_ivm_prove_inflight` (jobs currently proving) and `torii_zk_ivm_prove_queued` (jobs queued waiting for an inflight slot) expose IVM prove helper queue pressure.
 
 ## Examples
 
@@ -135,17 +152,23 @@ CLI shortcuts (`iroha_cli`):
 
 ```bash
 # Upload attachment
-iroha zk attachments upload --file ./proof.json --content-type application/json
+iroha app zk attachments upload --file ./proof.json --content-type application/json
 
 # List/get/delete
-iroha zk attachments list
-iroha zk attachments get --id <id> --out ./downloaded.bin
-iroha zk attachments delete --id <id>
+iroha app zk attachments list
+iroha app zk attachments get --id <id> --out ./downloaded.bin
+iroha app zk attachments delete --id <id>
 
 # Prover reports (list/get/delete)
-iroha zk prover reports list
-iroha zk prover reports get --id <id>
-iroha zk prover reports delete --id <id>
+iroha app zk prover reports list
+iroha app zk prover reports get --id <id>
+iroha app zk prover reports delete --id <id>
+
+# IVM prove helper (submit/poll) and proving-key derivation
+iroha app zk ivm prove --json ./ivm_prove_request.json --wait
+iroha app zk ivm get --job-id <job_id>
+iroha app zk ivm delete --job-id <job_id>
+iroha app zk ivm derive-pk --vk ./halo2_ipa__ivm-exec-v1.vk --out ./halo2_ipa__ivm-exec-v1.pk
 ```
 
-See also: the ZK vote tally convenience endpoint (`POST /v1/zk/vote/tally`) and CLI helper `iroha zk vote tally` for inspecting election tallies.
+See also: the ZK vote tally convenience endpoint (`POST /v1/zk/vote/tally`) and CLI helper `iroha app zk vote tally` for inspecting election tallies.

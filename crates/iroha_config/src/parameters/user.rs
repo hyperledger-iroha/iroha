@@ -12886,6 +12886,36 @@ pub struct Torii {
     /// Allowlisted circuit identifiers for the background prover (empty = allow all).
     #[config(default = "defaults::torii::zk_prover_allowed_circuits()")]
     pub zk_prover_allowed_circuits: Vec<String>,
+    /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
+    ///
+    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_MAX_INFLIGHT",
+        default = "defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT"
+    )]
+    pub zk_ivm_prove_max_inflight: usize,
+    /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
+    ///
+    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_MAX_QUEUE",
+        default = "defaults::torii::ZK_IVM_PROVE_MAX_QUEUE"
+    )]
+    pub zk_ivm_prove_max_queue: usize,
+    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_JOB_TTL_SECS",
+        default = "defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS"
+    )]
+    pub zk_ivm_prove_job_ttl_secs: u64,
+    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
+    ///
+    /// Set to 0 to disable the cap (not recommended).
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_JOB_MAX_ENTRIES",
+        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES"
+    )]
+    pub zk_ivm_prove_job_max_entries: usize,
     /// Push notification configuration (feature-gated in runtime).
     #[config(nested)]
     pub push: ToriiPush,
@@ -13340,6 +13370,10 @@ impl Torii {
             zk_prover_keys_dir: self.zk_prover_keys_dir,
             zk_prover_allowed_backends: self.zk_prover_allowed_backends,
             zk_prover_allowed_circuits: self.zk_prover_allowed_circuits,
+            zk_ivm_prove_max_inflight: self.zk_ivm_prove_max_inflight,
+            zk_ivm_prove_max_queue: self.zk_ivm_prove_max_queue,
+            zk_ivm_prove_job_ttl_secs: self.zk_ivm_prove_job_ttl_secs,
+            zk_ivm_prove_job_max_entries: self.zk_ivm_prove_job_max_entries,
             connect: self.connect.parse(),
             iso_bridge: self.iso_bridge.parse(),
             rbc_sampling,

@@ -61,6 +61,9 @@ pub enum Command {
     /// Inspect background prover reports (list/get/delete)
     #[command(subcommand)]
     Prover(ProverCommand),
+    /// IVM prove helpers (non-consensus, app API)
+    #[command(subcommand)]
+    Ivm(IvmCommand),
     /// ZK Vote helpers (tally)
     #[command(subcommand)]
     Vote(VoteCommand),
@@ -93,6 +96,7 @@ impl Run for Command {
             Command::Vk(args) => args.run(context),
             Command::Proofs(args) => args.run(context),
             Command::Prover(args) => args.run(context),
+            Command::Ivm(args) => args.run(context),
             Command::Vote(args) => args.run(context),
             Command::Envelope(args) => args.run(context),
         }
@@ -909,6 +913,168 @@ impl Run for ProverReportsDeleteArgs {
         let client: Client = context.client_from_config();
         client.delete_zk_prover_report(&self.id)?;
         context.println("Deleted")?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum IvmCommand {
+    /// Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
+    Derive(IvmDeriveArgs),
+    /// Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
+    Prove(IvmProveArgs),
+    /// Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
+    Get(IvmProveGetArgs),
+    /// Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
+    Delete(IvmProveDeleteArgs),
+    /// Derive a proving key (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
+    DerivePk(IvmDerivePkArgs),
+}
+
+impl Run for IvmCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            IvmCommand::Derive(args) => args.run(context),
+            IvmCommand::Prove(args) => args.run(context),
+            IvmCommand::Get(args) => args.run(context),
+            IvmCommand::Delete(args) => args.run(context),
+            IvmCommand::DerivePk(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IvmDeriveArgs {
+    /// Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode }`
+    #[arg(long, value_name = "PATH")]
+    json: std::path::PathBuf,
+}
+
+impl Run for IvmDeriveArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client: Client = context.client_from_config();
+        let s = std::fs::read_to_string(&self.json)?;
+        let req: norito::json::Value = norito::json::from_str(&s)?;
+        let value = client.post_zk_ivm_derive_json(&req)?;
+        context.print_data(&value)?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IvmProveArgs {
+    /// Path to a JSON request DTO `{ vk_ref: { backend, name }, proved: IvmProved }`
+    #[arg(long, value_name = "PATH")]
+    json: std::path::PathBuf,
+    /// Poll the job until it reaches `done` or `error`
+    #[arg(long)]
+    wait: bool,
+    /// Poll interval (milliseconds) when using --wait
+    #[arg(long, default_value_t = 250)]
+    poll_interval_ms: u64,
+    /// Optional timeout (seconds) when using --wait (0 = no timeout)
+    #[arg(long, default_value_t = 0)]
+    timeout_secs: u64,
+}
+
+impl Run for IvmProveArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client: Client = context.client_from_config();
+        let s = std::fs::read_to_string(&self.json)?;
+        let req: norito::json::Value = norito::json::from_str(&s)?;
+        let created = client.post_zk_ivm_prove_json(&req)?;
+        if !self.wait {
+            context.print_data(&created)?;
+            return Ok(());
+        }
+        let job_id = created
+            .get("job_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("response missing job_id"))?
+            .to_string();
+
+        let started = std::time::Instant::now();
+        let poll = std::time::Duration::from_millis(self.poll_interval_ms.max(10));
+        let timeout = (self.timeout_secs > 0).then(|| std::time::Duration::from_secs(self.timeout_secs));
+
+        loop {
+            if let Some(timeout) = timeout
+                && started.elapsed() >= timeout
+            {
+                eyre::bail!("timed out waiting for ivm prove job {job_id}");
+            }
+            let status = client.get_zk_ivm_prove_job_json(&job_id)?;
+            let label = status
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            match label {
+                "pending" | "running" => std::thread::sleep(poll),
+                "done" | "error" => {
+                    context.print_data(&status)?;
+                    return Ok(());
+                }
+                other => eyre::bail!("unexpected job status `{other}` for job {job_id}"),
+            }
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IvmProveGetArgs {
+    /// Prove job id returned by `iroha zk ivm prove`
+    #[arg(long, value_name = "JOB_ID")]
+    job_id: String,
+}
+
+impl Run for IvmProveGetArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client: Client = context.client_from_config();
+        let value = client.get_zk_ivm_prove_job_json(&self.job_id)?;
+        context.print_data(&value)?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IvmProveDeleteArgs {
+    /// Prove job id returned by `iroha zk ivm prove`
+    #[arg(long, value_name = "JOB_ID")]
+    job_id: String,
+}
+
+impl Run for IvmProveDeleteArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client: Client = context.client_from_config();
+        let value = client.delete_zk_ivm_prove_job_json(&self.job_id)?;
+        context.print_data(&value)?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct IvmDerivePkArgs {
+    /// Backend label for the verifying key bytes (must match Torii `vk_ref.backend`), e.g. `halo2/ipa`
+    #[arg(long, default_value = "halo2/ipa", value_name = "BACKEND")]
+    backend: String,
+    /// Path to verifying key bytes (`.vk`) in Halo2 "processed" format
+    #[arg(long, value_name = "PATH")]
+    vk: std::path::PathBuf,
+    /// Output path for proving key bytes (`.pk`)
+    #[arg(long, value_name = "PATH")]
+    out: std::path::PathBuf,
+}
+
+impl Run for IvmDerivePkArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let vk_bytes = std::fs::read(&self.vk)?;
+        let vk_box = iroha::data_model::proof::VerifyingKeyBox::new(self.backend, vk_bytes);
+        let pk = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box)
+            .map_err(|err| {
+                eyre::eyre!("failed to derive proving key bytes from verifying key bytes: {err}")
+            })?;
+        std::fs::write(&self.out, &pk)?;
+        context.println(format!("Wrote {} bytes to {}", pk.len(), self.out.display()))?;
         Ok(())
     }
 }

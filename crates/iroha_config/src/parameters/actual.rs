@@ -4617,6 +4617,20 @@ pub struct Torii {
     pub zk_prover_allowed_backends: Vec<String>,
     /// Allowlisted circuit identifiers for the background prover (empty = allow all).
     pub zk_prover_allowed_circuits: Vec<String>,
+    /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
+    ///
+    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    pub zk_ivm_prove_max_inflight: usize,
+    /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
+    ///
+    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    pub zk_ivm_prove_max_queue: usize,
+    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
+    pub zk_ivm_prove_job_ttl_secs: u64,
+    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
+    ///
+    /// Set to 0 to disable the cap (not recommended).
+    pub zk_ivm_prove_job_max_entries: usize,
     /// Iroha Connect configuration.
     pub connect: Connect,
     /// ISO 20022 bridge configuration.

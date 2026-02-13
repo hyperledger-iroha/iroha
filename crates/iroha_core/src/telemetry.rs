@@ -7317,6 +7317,20 @@ impl Telemetry {
         }
     }
 
+    /// Set the number of IVM prove helper jobs currently proving.
+    pub fn set_torii_zk_ivm_prove_inflight(&self, inflight: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.torii_zk_ivm_prove_inflight.set(inflight);
+        }
+    }
+
+    /// Set the number of IVM prove helper jobs queued (waiting for an inflight slot).
+    pub fn set_torii_zk_ivm_prove_queued(&self, queued: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.torii_zk_ivm_prove_queued.set(queued);
+        }
+    }
+
     /// Record bytes processed and duration for the last background prover scan.
     pub fn record_torii_zk_prover_scan(&self, bytes: u64, millis: u64) {
         if self.enabled.load(Ordering::Relaxed) {

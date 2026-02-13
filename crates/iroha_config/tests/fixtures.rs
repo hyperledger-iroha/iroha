@@ -609,6 +609,10 @@ fn minimal_config_snapshot() {
                     "halo2/",
                 ],
                 zk_prover_allowed_circuits: [],
+                zk_ivm_prove_max_inflight: 1,
+                zk_ivm_prove_max_queue: 16,
+                zk_ivm_prove_job_ttl_secs: 1800,
+                zk_ivm_prove_job_max_entries: 1024,
                 connect: Connect {
                     enabled: true,
                     ws_max_sessions: 10000,

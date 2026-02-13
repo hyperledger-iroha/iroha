@@ -44,6 +44,53 @@ Details:
   - Data: `storage/torii/zk_attachments/<id>.bin`
   - Metadata: `storage/torii/zk_attachments/<id>.json`
 
+## IVM Prove (Non-Consensus Helper)
+
+Torii also exposes an app-facing helper endpoint to *generate* a proof attachment for an
+`IvmProved` payload. This endpoint is non-consensus: it does not affect block production
+or validation, and it can be disabled/unused without changing ledger results.
+
+Endpoints:
+- `POST /v1/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only).
+- `POST /v1/zk/ivm/prove` — submit a prove job (returns `{ job_id }`).
+- `GET  /v1/zk/ivm/prove/{job_id}` — poll job status; returns `{ status, proved?, attachment?, error? }`.
+- `DELETE /v1/zk/ivm/prove/{job_id}` — remove a job from the in-memory job cache.
+
+Job status values:
+- `pending` — queued (may still be waiting for an inflight slot).
+- `running` — actively proving.
+- `done` — proof attachment is available.
+- `error` — proving failed (see `error`).
+
+Cancellation:
+- `DELETE` is best-effort cancellation. It cancels queued jobs immediately and frees capacity.
+- In-flight proof generation may continue to consume CPU (Halo2 proving is not preemptible), but the
+  result will be discarded once the job is deleted.
+
+Key resolution:
+- `vk_ref` is resolved via the WSV verifying-key registry and must be `Active`.
+- If the registry entry omits inline VK bytes, Torii loads them from `torii.zk_prover_keys_dir`
+  using `<backend>__<name>.vk` naming (sanitized components).
+- The proving key is loaded from the same directory using `<backend>__<name>.pk` naming.
+  For `halo2/ipa:ivm-execution-v1`, the `.pk` file must contain the Halo2 `ProvingKey`
+  serialization in `SerdeFormat::Processed`, and it must match the resolved verifying key.
+
+Resource controls:
+- Job processing is bounded by `torii.zk_ivm_prove_max_inflight` (concurrent jobs) and
+  `torii.zk_ivm_prove_max_queue` (queued jobs). When saturated, `POST /v1/zk/ivm/prove` returns
+  `429` with `Retry-After` based on Torii’s proof retry hint.
+- Job cache retention is controlled by `torii.zk_ivm_prove_job_ttl_secs` (TTL) and
+  `torii.zk_ivm_prove_job_max_entries` (cap).
+  - TTL eviction cancels pending/running jobs best-effort to free capacity.
+
+Privacy:
+- This API does not expose plaintext gas usage (`gas_used`). The proof binds commitments only.
+ - `/v1/zk/ivm/derive` and `/v1/zk/ivm/prove` require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
+
+Metrics:
+- `torii_zk_ivm_prove_inflight` (gauge) — jobs currently proving.
+- `torii_zk_ivm_prove_queued` (gauge) — jobs queued waiting for an inflight slot.
+
 ## Background Prover Reports
 
 The background prover worker (disabled by default) scans attachments and produces a JSON report per attachment. It verifies `ProofAttachment` payloads (single or list) using the core ZK backend verifiers:
@@ -134,6 +181,12 @@ zk_prover_keys_dir = "./storage/torii/zk_prover/keys"
 zk_prover_allowed_backends = ["halo2/"] # prefix match (empty = allow all)
 zk_prover_allowed_circuits = []       # prefix match (empty = allow all)
 
+# IVM prove jobs (non-consensus)
+zk_ivm_prove_max_inflight = 1         # concurrent jobs
+zk_ivm_prove_max_queue = 16           # queued jobs
+zk_ivm_prove_job_ttl_secs = 1800      # 30 minutes
+zk_ivm_prove_job_max_entries = 1024   # cap in-memory job entries (0 disables the cap)
+
 # (optional) app API tokens and rate limits
 require_api_token = false
 api_tokens = ["example-token-value"]
@@ -186,6 +239,11 @@ Use the CLI to interact with the app API (requires Torii URL and any API token i
 - Verification stubs:
   - `iroha app zk verify --json <PATH>` or `--norito <PATH>`
   - `iroha app zk submit-proof --json <PATH>` or `--norito <PATH>`
+- IVM prove:
+  - `iroha app zk ivm prove --json <PATH> [--wait]`
+  - `iroha app zk ivm get --job-id <JOB_ID>`
+  - `iroha app zk ivm delete --job-id <JOB_ID>`
+  - `iroha app zk ivm derive-pk --vk <VK_PATH> --out <PK_PATH>`
 
 ## Verifying Key Registry (App API)
 
