@@ -847,6 +847,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         pipeline: A::Pipeline {
             ivm_proved: A::IvmProvedExecution {
                 enabled: defaults::pipeline::ivm_proved::ENABLED,
+                skip_replay: defaults::pipeline::ivm_proved::SKIP_REPLAY,
                 allowed_circuits: Vec::new(),
             },
             dynamic_prepass: false,

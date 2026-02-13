@@ -1440,6 +1440,7 @@ fn minimal_config_snapshot() {
             pipeline: Pipeline {
                 ivm_proved: IvmProvedExecution {
                     enabled: false,
+                    skip_replay: false,
                     allowed_circuits: [],
                 },
                 dynamic_prepass: true,

@@ -2207,6 +2207,8 @@ pub mod pipeline {
         ///
         /// Default is `false` until a full end-to-end IVM execution proof system is shipped.
         pub const ENABLED: bool = false;
+        /// Skip deterministic replay for circuits that are known to prove full IVM execution semantics.
+        pub const SKIP_REPLAY: bool = false;
     }
 }
 

@@ -116,6 +116,7 @@ fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
     actual::Pipeline {
         ivm_proved: actual::IvmProvedExecution {
             enabled: defaults::pipeline::ivm_proved::ENABLED,
+            skip_replay: defaults::pipeline::ivm_proved::SKIP_REPLAY,
             allowed_circuits: Vec::new(),
         },
         dynamic_prepass: defaults::pipeline::DYNAMIC_PREPASS,
@@ -1721,7 +1722,8 @@ mod tests {
         let world = crate::state::World::with([domain], [account], []);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.halo2.enabled = true;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         insert_gas_limit(&mut metadata);
@@ -1783,6 +1785,7 @@ mod tests {
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits.clear();
+        state.zk.halo2.enabled = true;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         insert_gas_limit(&mut metadata);
@@ -2184,6 +2187,10 @@ mod tests {
             err,
             OverlayBuildError::ZkProof(msg) if msg.contains("deterministic IVM replay")
         ));
+
+        state.pipeline.ivm_proved.skip_replay = true;
+        build_overlay_for_transaction(&tx, &state.view())
+            .expect("overlay replay mismatch should be accepted when skip_replay is enabled for full execution proof circuits");
     }
 
     #[test]
@@ -3705,6 +3712,15 @@ fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
             .is_some_and(|normalized| normalized == IVM_OVERLAY_BIND_CIRCUIT_CANONICAL)
 }
 
+const IVM_EXECUTION_V1_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa-v1/ivm-execution-v1";
+
+fn is_full_semantics_ivm_execution_circuit(backend: &str, circuit_id: &str) -> bool {
+    backend == "halo2/ipa"
+        && normalize_halo2_ipa_circuit_id(circuit_id)
+            .as_deref()
+            .is_some_and(|normalized| normalized == IVM_EXECUTION_V1_CIRCUIT_CANONICAL)
+}
+
 fn replay_ivm_proved_overlay<R>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -3953,7 +3969,7 @@ where
         || is_legacy_ivm_overlay_bind_circuit(attachment.backend.as_str(), &env.circuit_id)
     {
         return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind-v1`: the binding-only stand-in circuit is no longer accepted; `ivm-execution-v1` proof attachments are required (nodes still replay IVM execution to validate semantics)"
+            "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind-v1`: the binding-only stand-in circuit is no longer accepted; `ivm-execution-v1` proof attachments are required"
                 .to_owned(),
         ));
     }
@@ -4010,6 +4026,13 @@ where
     }
     if !report.ok {
         return Err(OverlayBuildError::ZkProof("proof rejected".to_owned()));
+    }
+    if pipeline_cfg
+        .ivm_proved
+        .skip_replay
+        && is_full_semantics_ivm_execution_circuit(attachment.backend.as_str(), &vk_record.circuit_id)
+    {
+        return Ok(());
     }
 
     let replay = replay_ivm_proved_overlay(
