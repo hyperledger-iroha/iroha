@@ -41,7 +41,9 @@ use iroha_data_model::{
     proof::VerifyingKeyId,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{Executable, SignedTransaction},
-    zk::{BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope},
+    zk::{
+        BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1,
+    },
 };
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
@@ -601,7 +603,7 @@ where
 
             let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
-            if wants_zk && !state_ro.zk().halo2.enabled {
+            if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
@@ -730,7 +732,7 @@ where
                     "Executable::IvmProved requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
                 ));
             }
-            if wants_zk && !state_ro.zk().halo2.enabled {
+            if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
@@ -908,7 +910,7 @@ where
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
             let mut queued = host.drain_instructions();
-            if zk_enabled && vm.zk_mode_enabled() {
+            if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
                 if !trace.is_empty() {
                     let constraints = vm.constraints().to_vec();
@@ -1353,6 +1355,9 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
+        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
+        // time-based rejection so slow debug builds don't flap.
+        state.zk.verify_timeout = std::time::Duration::ZERO;
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
@@ -1459,6 +1464,9 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
+        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
+        // time-based rejection so slow debug builds don't flap.
+        state.zk.verify_timeout = std::time::Duration::ZERO;
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
@@ -1603,6 +1611,9 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
+        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
+        // time-based rejection so slow debug builds don't flap.
+        state.zk.verify_timeout = std::time::Duration::ZERO;
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
@@ -1674,18 +1685,24 @@ mod tests {
         let bad_events_tx = build_tx(Hash::new(b"bad-events"), expected_gas_policy_commitment);
         let err = build_overlay_for_transaction(&bad_events_tx, &state.view())
             .expect_err("events commitment mismatch must be rejected");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg) if msg.contains("events commitment mismatch")
-        ));
+        assert!(
+            matches!(
+                &err,
+                OverlayBuildError::ZkProof(msg) if msg.contains("events commitment mismatch")
+            ),
+            "unexpected error: {err:?}"
+        );
 
         let bad_gas_policy_tx = build_tx(expected_events_commitment, Hash::new(b"bad-gas-policy"));
         let err = build_overlay_for_transaction(&bad_gas_policy_tx, &state.view())
             .expect_err("gas policy commitment mismatch must be rejected");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg) if msg.contains("gas policy commitment mismatch")
-        ));
+        assert!(
+            matches!(
+                &err,
+                OverlayBuildError::ZkProof(msg) if msg.contains("gas policy commitment mismatch")
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -1900,6 +1917,9 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
+        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
+        // time-based rejection so slow debug builds don't flap.
+        state.zk.verify_timeout = std::time::Duration::ZERO;
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
@@ -2009,6 +2029,7 @@ mod tests {
         state.zk.halo2.enabled = true;
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
+        state.zk.verify_timeout = std::time::Duration::ZERO;
 
         let attachment =
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
@@ -2183,10 +2204,13 @@ mod tests {
 
         let err = build_overlay_for_transaction(&tx, &state.view())
             .expect_err("overlay replay mismatch must be rejected");
-        assert!(matches!(
-            err,
-            OverlayBuildError::ZkProof(msg) if msg.contains("deterministic IVM replay")
-        ));
+        assert!(
+            matches!(
+                &err,
+                OverlayBuildError::ZkProof(msg) if msg.contains("deterministic IVM replay")
+            ),
+            "unexpected error: {err:?}"
+        );
 
         state.pipeline.ivm_proved.skip_replay = true;
         build_overlay_for_transaction(&tx, &state.view())
@@ -3376,11 +3400,35 @@ fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
     Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
 }
 
+fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == backend {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix(backend) {
+        if let Some(rest) = rest.strip_prefix(':') {
+            return (!rest.is_empty()).then(|| trimmed.to_string());
+        }
+        if let Some(rest) = rest.strip_prefix('/') {
+            return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
+        }
+    }
+    Some(format!("{backend}:{trimmed}"))
+}
+
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
     if backend == "halo2/ipa" {
         match (
             normalize_halo2_ipa_circuit_id(record_id),
             normalize_halo2_ipa_circuit_id(env_id),
+        ) {
+            (Some(rec), Some(env)) => rec == env,
+            _ => record_id == env_id,
+        }
+    } else if backend.starts_with("stark/fri-v1/") {
+        match (
+            normalize_stark_fri_circuit_id(backend, record_id),
+            normalize_stark_fri_circuit_id(backend, env_id),
         ) {
             (Some(rec), Some(env)) => rec == env,
             _ => record_id == env_id,
@@ -3830,11 +3878,6 @@ where
     }
 
     let zk_cfg = state_ro.zk();
-    if !zk_cfg.halo2.enabled {
-        return Err(OverlayBuildError::ZkProof(
-            "halo2 verification is disabled in node configuration".to_owned(),
-        ));
-    }
 
     let attachments = tx
         .attachments()
@@ -3851,17 +3894,48 @@ where
             "proof attachment backend mismatch".to_owned(),
         ));
     }
-    if attachment.backend.as_str() != "halo2/ipa" {
-        return Err(OverlayBuildError::ZkProof(
-            "unsupported backend for Executable::IvmProved (expected halo2/ipa)".to_owned(),
-        ));
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum IvmProvedBackendKind {
+        Halo2Ipa,
+        StarkFriV1,
     }
+    let backend_kind = if attachment.backend.as_str() == "halo2/ipa" {
+        IvmProvedBackendKind::Halo2Ipa
+    } else if attachment.backend.as_str().starts_with("stark/fri-v1/") {
+        IvmProvedBackendKind::StarkFriV1
+    } else {
+        return Err(OverlayBuildError::ZkProof(
+            "unsupported backend for Executable::IvmProved (expected halo2/ipa or stark/fri-v1/*)"
+                .to_owned(),
+        ));
+    };
 
     let proof_len = attachment.proof.bytes.len();
-    if proof_len > zk_cfg.halo2.max_proof_bytes {
-        return Err(OverlayBuildError::ZkProof(
-            "proof exceeds node-configured halo2.max_proof_bytes".to_owned(),
-        ));
+    match backend_kind {
+        IvmProvedBackendKind::Halo2Ipa => {
+            if !zk_cfg.halo2.enabled {
+                return Err(OverlayBuildError::ZkProof(
+                    "halo2 verification is disabled in node configuration".to_owned(),
+                ));
+            }
+            if proof_len > zk_cfg.halo2.max_proof_bytes {
+                return Err(OverlayBuildError::ZkProof(
+                    "proof exceeds node-configured halo2.max_proof_bytes".to_owned(),
+                ));
+            }
+        }
+        IvmProvedBackendKind::StarkFriV1 => {
+            if !zk_cfg.stark.enabled {
+                return Err(OverlayBuildError::ZkProof(
+                    "stark verification is disabled in node configuration".to_owned(),
+                ));
+            }
+            if proof_len > zk_cfg.stark.max_proof_bytes {
+                return Err(OverlayBuildError::ZkProof(
+                    "proof exceeds node-configured stark.max_proof_bytes".to_owned(),
+                ));
+            }
+        }
     }
 
     // Require VK references for governance-controlled circuit selection.
@@ -3951,10 +4025,21 @@ where
     // Decode and sanity-check the OpenVerifyEnvelope carried in the proof box.
     let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
         .map_err(|_| OverlayBuildError::ZkProof("malformed OpenVerifyEnvelope".to_owned()))?;
-    if env.backend != ZkBackendTag::Halo2IpaPasta {
-        return Err(OverlayBuildError::ZkProof(
-            "unsupported OpenVerifyEnvelope backend tag for IvmProved".to_owned(),
-        ));
+    match backend_kind {
+        IvmProvedBackendKind::Halo2Ipa => {
+            if env.backend != ZkBackendTag::Halo2IpaPasta {
+                return Err(OverlayBuildError::ZkProof(
+                    "unsupported OpenVerifyEnvelope backend tag for IvmProved".to_owned(),
+                ));
+            }
+        }
+        IvmProvedBackendKind::StarkFriV1 => {
+            if env.backend != ZkBackendTag::Stark {
+                return Err(OverlayBuildError::ZkProof(
+                    "unsupported OpenVerifyEnvelope backend tag for IvmProved".to_owned(),
+                ));
+            }
+        }
     }
     if !circuit_id_matches(
         attachment.backend.as_str(),
@@ -3976,7 +4061,7 @@ where
     let expected_schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
     if vk_record.public_inputs_schema_hash != expected_schema_hash {
         return Err(OverlayBuildError::ZkProof(
-            "verifying key schema hash mismatch for `halo2/ipa:ivm-execution-v1`".to_owned(),
+            "verifying key schema hash mismatch for ivm-execution-v1".to_owned(),
         ));
     }
     let observed_schema_hash: [u8; 32] = *Hash::new(&env.public_inputs).as_ref();
@@ -4002,11 +4087,33 @@ where
         proved.events_commitment,
         proved.gas_policy_commitment,
     );
-    let instance_cols = crate::zk::extract_pasta_instance_columns_bytes(&env.proof_bytes)
-        .ok_or_else(|| OverlayBuildError::ZkProof("missing proof instances".to_owned()))?;
-    let observed = extract_expected_single_row_columns(instance_cols).ok_or_else(|| {
-        OverlayBuildError::ZkProof("expected instance columns layout: 1 row per column".to_owned())
-    })?;
+    let observed = match backend_kind {
+        IvmProvedBackendKind::Halo2Ipa => {
+            let instance_cols = crate::zk::extract_pasta_instance_columns_bytes(&env.proof_bytes)
+                .ok_or_else(|| {
+                OverlayBuildError::ZkProof("missing proof instances".to_owned())
+            })?;
+            extract_expected_single_row_columns(instance_cols).ok_or_else(|| {
+                OverlayBuildError::ZkProof(
+                    "expected instance columns layout: 1 row per column".to_owned(),
+                )
+            })?
+        }
+        IvmProvedBackendKind::StarkFriV1 => {
+            let open: StarkFriOpenProofV1 = norito::decode_from_bytes(&env.proof_bytes)
+                .map_err(|_| OverlayBuildError::ZkProof("malformed STARK open proof".to_owned()))?;
+            if open.version != 1 {
+                return Err(OverlayBuildError::ZkProof(
+                    "unsupported STARK open proof version".to_owned(),
+                ));
+            }
+            extract_expected_single_row_columns(open.public_inputs).ok_or_else(|| {
+                OverlayBuildError::ZkProof(
+                    "expected instance columns layout: 1 row per column".to_owned(),
+                )
+            })?
+        }
+    };
     if observed != expected {
         return Err(OverlayBuildError::ZkProof(
             "proof public inputs do not match (code_hash, overlay_hash, events_commitment, gas_policy_commitment)"
@@ -4027,10 +4134,11 @@ where
     if !report.ok {
         return Err(OverlayBuildError::ZkProof("proof rejected".to_owned()));
     }
-    if pipeline_cfg
-        .ivm_proved
-        .skip_replay
-        && is_full_semantics_ivm_execution_circuit(attachment.backend.as_str(), &vk_record.circuit_id)
+    if pipeline_cfg.ivm_proved.skip_replay
+        && is_full_semantics_ivm_execution_circuit(
+            attachment.backend.as_str(),
+            &vk_record.circuit_id,
+        )
     {
         return Ok(());
     }
@@ -4115,7 +4223,7 @@ where
             "ivm proved derivation requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
         ));
     }
-    if wants_zk && !state_ro.zk().halo2.enabled {
+    if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
         return Err(OverlayBuildError::HeaderPolicy(
             IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
         ));

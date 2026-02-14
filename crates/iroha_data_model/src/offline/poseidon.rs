@@ -765,13 +765,26 @@ mod tests {
 
     #[test]
     fn merkle_root_deterministic() {
+        let receipt_a = sample_receipt(5, "a");
+        let receipt_b = sample_receipt(6, "b");
+        let leaf_a = OfflineReceiptLeaf::from_receipt(&receipt_a).expect("leaf a");
+        let leaf_b = OfflineReceiptLeaf::from_receipt(&receipt_b).expect("leaf b");
+
+        assert_eq!(
+            hex::encode_upper(leaf_a.platform_proof_hash.as_ref()),
+            "A8AE2E5B21547ADA98E767615901C1B40B28EF7E4A1E26E53A978C45103F810F"
+        );
+        assert_eq!(
+            hex::encode_upper(leaf_b.platform_proof_hash.as_ref()),
+            "6509B6E9E782793D4A84C76C011BCAF76E8AC967EAE60C780112F41A081D64D3"
+        );
         let mut builder = OfflineReceiptMerkleBuilder::new();
-        builder.push_receipt(&sample_receipt(5, "a")).expect("leaf");
-        builder.push_receipt(&sample_receipt(6, "b")).expect("leaf");
+        builder.push_receipt(&receipt_a).expect("leaf");
+        builder.push_receipt(&receipt_b).expect("leaf");
         let root = builder.finalize();
         assert_eq!(
             root.to_hex_upper(),
-            "000000000000000000000000000000000000000000000000092966700D9AD6BB"
+            "000000000000000000000000000000000000000000000000CE303ECAFE17326C"
         );
     }
 

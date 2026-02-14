@@ -67,6 +67,7 @@ fn zk_roots_get_respects_cap_and_max() {
             metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
             metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
         },
+        stark: cfg::Stark::default(),
         root_history_cap: 4,
         ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
         empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

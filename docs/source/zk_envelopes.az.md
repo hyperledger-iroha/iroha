@@ -224,13 +224,14 @@ Verifier behavior (native STARK)
 
 Example (Rust)
 ```rust
-use iroha_core::zk_stark::*;
-let n_log2 = 3u8; // domain size 8
-// Build layers 0..L (y0/y1 folds) and Merkle roots/paths externally
-let env = StarkVerifyEnvelopeV1 { /* fill params, proof, transcript */ };
-let bytes = norito::to_bytes(&env).unwrap();
-// Verify via backend tag `stark/fri-v1/sha256-goldilocks-v1`
-```
+	use iroha_core::zk_stark::*;
+	let n_log2 = 3u8; // domain size 8
+	// Build layers 0..L (y0/y1 folds) and Merkle roots/paths externally
+	let env = StarkVerifyEnvelopeV1 { /* fill params, proof, transcript */ };
+	let bytes = norito::to_bytes(&env).unwrap();
+	// Verify the raw envelope bytes with `verify_stark_fri_envelope(&bytes)`.
+	// Note: `verify_backend(\"stark/fri-v1/*\", ...)` expects a Norito `OpenVerifyEnvelope` wrapper.
+	```
 
 Example (JSON-like, annotated)
 ```jsonc

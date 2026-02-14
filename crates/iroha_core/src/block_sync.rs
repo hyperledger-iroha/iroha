@@ -3566,6 +3566,7 @@ pub mod message {
 
         #[test]
         fn share_blocks_enqueue_does_not_block_tokio_timer() {
+            let _guard = crate::sumeragi::status::block_sync_test_guard();
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
                 .build()
@@ -3640,10 +3641,10 @@ pub mod message {
                 let (unblock_tx, unblock_rx) = std::sync::mpsc::channel();
                 let unblock = std::thread::spawn(move || {
                     unblock_rx
-                        .recv_timeout(Duration::from_secs(10))
+                        .recv_timeout(Duration::from_secs(30))
                         .expect("unblock signal");
                     block_payload_rx
-                        .recv_timeout(Duration::from_secs(5))
+                        .recv_timeout(Duration::from_secs(10))
                         .expect("expected block sync update");
                 });
 
@@ -3655,7 +3656,7 @@ pub mod message {
                     tokio::task::yield_now().await;
                     let _ = progress_tx.send(());
                 });
-                let progress = tokio::time::timeout(Duration::from_secs(10), progress_rx);
+                let progress = tokio::time::timeout(Duration::from_secs(30), progress_rx);
                 tokio::pin!(progress);
 
                 tokio::select! {

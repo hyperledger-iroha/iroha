@@ -7702,7 +7702,12 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
         let start = Arc::new(Barrier::new(3));
 
-        let initial = gate.enter(GatePriority::Regular);
+        {
+            // Ensure waiters queue through the gate's condition variable instead of racing on the
+            // mutex lock used by `ActorGuard`.
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
 
         let regular_join = {
             let gate = Arc::clone(&gate);
@@ -7729,8 +7734,31 @@ mod tests {
         };
 
         start.wait();
-        std::thread::sleep(Duration::from_millis(5));
-        drop(initial);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < deadline {
+            let (waiting_urgent, waiting_regular) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_urgent, guard.waiting_regular)
+            };
+            if waiting_urgent > 0 && waiting_regular > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_urgent > 0 && guard.waiting_regular > 0,
+                "waiters should queue while gate is held"
+            );
+        }
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
 
         regular_join.join().expect("regular waiter thread");
         urgent_join.join().expect("urgent waiter thread");
@@ -7747,7 +7775,10 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
         let start = Arc::new(Barrier::new(3));
 
-        let initial = gate.enter(GatePriority::Regular);
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
 
         let regular_join = {
             let gate = Arc::clone(&gate);
@@ -7776,8 +7807,31 @@ mod tests {
         };
 
         start.wait();
-        std::thread::sleep(Duration::from_millis(5));
-        drop(initial);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < deadline {
+            let (waiting_urgent, waiting_regular) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_urgent, guard.waiting_regular)
+            };
+            if waiting_urgent > 0 && waiting_regular > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_urgent > 0 && guard.waiting_regular > 0,
+                "waiters should queue while gate is held"
+            );
+        }
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
 
         regular_join.join().expect("regular waiter thread");
         urgent_join.join().expect("urgent burst thread");

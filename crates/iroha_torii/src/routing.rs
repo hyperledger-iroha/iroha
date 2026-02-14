@@ -40287,6 +40287,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
         attestation_nonce: Some(Hash::new(b"nonce-transfer")),
         refresh_at_ms: Some(1_860_000_000_000),
     };
+    let pos_snapshot = OfflineVerdictSnapshot::from_certificate(&certificate);
 
     let receipt = OfflineSpendReceipt {
         tx_id: Hash::new(b"receipt"),
@@ -40348,7 +40349,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
         recorded_at_height: 123,
         archived_at_height: Some(150),
         history: Vec::new(),
-        pos_verdict_snapshots: Vec::new(),
+        pos_verdict_snapshots: vec![pos_snapshot],
         verdict_snapshot: None,
         platform_snapshot: Some(OfflinePlatformTokenSnapshot {
             policy: AndroidIntegrityPolicy::PlayIntegrity.to_string(),

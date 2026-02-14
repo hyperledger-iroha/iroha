@@ -1048,6 +1048,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 metal_debug_enum: fastpq::METAL_DEBUG_ENUM,
                 metal_debug_fused: fastpq::METAL_DEBUG_FUSED,
             },
+            stark: A::Stark::default(),
             root_history_cap: defaults::zk::ledger::ROOT_HISTORY_CAP,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

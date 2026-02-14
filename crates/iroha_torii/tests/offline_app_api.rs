@@ -253,6 +253,7 @@ fn build_fixtures() -> Fixtures {
 #[tokio::test]
 async fn offline_spend_receipts_submit_returns_poseidon_root() {
     let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
     let mut map = json::Map::new();
     map.insert(
         "receipts".into(),

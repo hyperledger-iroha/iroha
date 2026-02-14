@@ -27,6 +27,7 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 #[tokio::test]
 async fn app_api_router_smoke() {
     // Start Kiso and minimal components for Torii
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();

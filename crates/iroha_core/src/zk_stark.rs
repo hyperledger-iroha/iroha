@@ -1,24 +1,19 @@
-//! Minimal STARK-style (binary FRI) verifier for tests.
+//! Native STARK/FRI (binary folding) verifier used by the `stark/fri-v1/*` backends.
 //!
-//! This module provides a deterministic, no-deps verifier over the Goldilocks
-//! field using SHA-256 for transcripts and Merkle commitments. It implements a
-//! multi-round binary FRI consistency check suitable for end-to-end testing and
-//! examples. Envelope metadata (fold arity, blowup, domain tag, hash selector,
-//! and query count) is validated with size bounds to guard against oversized or
-//! malformed payloads. It is intentionally test-only; production builds must not
-//! enable the `zk-stark` feature.
+//! This module provides a deterministic, dependency-light verifier over the Goldilocks
+//! prime field using SHA-256 for transcripts and Merkle commitments. It implements a
+//! multi-round binary FRI consistency check.
 //!
-//! Wire format is defined with Norito. The proof envelope carries params,
-//! commitments, and query decommitments. The verifier replays transcript and
-//! checks Merkle openings and the fold relation z = y0 + r*y1 for each query.
+//! The wire format is defined with Norito. The proof envelope carries params, Merkle
+//! roots, and query decommitments. Verification replays the transcript and checks:
+//! - Merkle openings for each queried value
+//! - The fold relation `z = y0 + r*y1` for each round and query
+//! - Optional composition leaf constraints when `comp_root` is present
+//!
+//! Size and structural limits are enforced to reject oversized or malformed payloads
+//! deterministically (see [`StarkVerifierLimits`]).
 
 #![allow(clippy::needless_pass_by_value)]
-
-// The toy verifier is for tests only; guard against production enables.
-#[cfg(all(feature = "zk-stark", not(any(test, feature = "zk-tests"))))]
-compile_error!(
-    "The `zk-stark` feature is for tests only and must not be enabled in production builds."
-);
 
 use sha2::{Digest, Sha256};
 
@@ -101,10 +96,12 @@ impl Fq {
         if v >= MOD_P_U64 { None } else { Some(Self(v)) }
     }
 
+    #[cfg(test)]
     fn zero() -> Self {
         Self(0)
     }
 
+    #[cfg(test)]
     fn one() -> Self {
         Self(1)
     }
@@ -117,6 +114,7 @@ impl Fq {
         Self(x as u64)
     }
 
+    #[cfg(test)]
     fn sub(self, rhs: Self) -> Self {
         let a = self.0 as u128;
         let b = rhs.0 as u128;
@@ -129,6 +127,7 @@ impl Fq {
         Self::reduce(x)
     }
 
+    #[cfg(test)]
     fn pow(self, mut e: u128) -> Self {
         let mut base = self;
         let mut acc = Self::one();
@@ -142,6 +141,7 @@ impl Fq {
         acc
     }
 
+    #[cfg(test)]
     fn inv(self) -> Option<Self> {
         if self.0 == 0 {
             return None;
@@ -208,6 +208,26 @@ fn merkle_verify(root: &[u8; 32], leaf: Fq, path: &MerklePath) -> bool {
         };
     }
     &acc == root
+}
+
+fn merkle_path_index(path: &MerklePath) -> Option<usize> {
+    let depth = path.siblings.len();
+    if depth == 0 {
+        return Some(0);
+    }
+    if depth > usize::BITS as usize {
+        return None;
+    }
+    let mut index = 0usize;
+    for i in 0..depth {
+        let byte = i / 8;
+        if byte >= path.dirs.len() {
+            return None;
+        }
+        let dir_bit = (path.dirs[byte] >> (i % 8)) & 1;
+        index |= (dir_bit as usize) << i;
+    }
+    Some(index)
 }
 
 fn merkle_path_depth_ok(
@@ -283,10 +303,9 @@ fn validate_params(
     if params.blowup_log2 == 0 || params.blowup_log2 > limits.max_blowup_log2 {
         return None;
     }
-    if params.fold_arity < 2
-        || params.fold_arity > limits.max_fold_arity
-        || !params.fold_arity.is_power_of_two()
-    {
+    // The current wire format (`FoldDecommitV1`) carries a binary fold (y0,y1),
+    // so only `fold_arity = 2` is supported by the native verifier.
+    if params.fold_arity != 2 || params.fold_arity > limits.max_fold_arity {
         return None;
     }
     if params.merkle_arity != 2 || params.hash_fn != STARK_HASH_SHA256_V1 {
@@ -581,6 +600,32 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
                 || !merkle_path_depth_ok(&decommit.path_y1, depth_current, limits)
                 || !merkle_path_depth_ok(&decommit.path_z, depth_next, limits)
             {
+                return false;
+            }
+            // Bind Merkle openings to the expected indices for this fold. Without this, a prover
+            // can mix-and-match openings from arbitrary positions while still satisfying the
+            // fold relation and Merkle roots, which breaks soundness.
+            let idx_y0 = match merkle_path_index(&decommit.path_y0) {
+                Some(v) => v,
+                None => return false,
+            };
+            let idx_y1 = match merkle_path_index(&decommit.path_y1) {
+                Some(v) => v,
+                None => return false,
+            };
+            let idx_z = match merkle_path_index(&decommit.path_z) {
+                Some(v) => v,
+                None => return false,
+            };
+            let expected_y0 = match expected_j.checked_mul(fold_arity) {
+                Some(v) => v,
+                None => return false,
+            };
+            let expected_y1 = match expected_y0.checked_add(1) {
+                Some(v) => v,
+                None => return false,
+            };
+            if idx_y0 != expected_y0 || idx_y1 != expected_y1 || idx_z != expected_j {
                 return false;
             }
 

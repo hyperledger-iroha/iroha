@@ -41,6 +41,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             max_proof_bytes: defaults::zk::halo2::MAX_PROOF_BYTES,
             max_transcript_label_len: defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,
             enforce_transcript_label_ascii: defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
+            ..cfg::Halo2::default()
         },
         fastpq: cfg::Fastpq {
             execution_mode: cfg::FastpqExecutionMode::Auto,
@@ -56,6 +57,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
             metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
         },
+        stark: cfg::Stark::default(),
         root_history_cap: 3,
         ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
         empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

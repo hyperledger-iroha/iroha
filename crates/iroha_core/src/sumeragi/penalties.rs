@@ -1176,6 +1176,7 @@ mod tests {
 
     #[test]
     fn consensus_penalties_mark_records_when_due() -> Result<()> {
+        let _commit_history_guard = crate::sumeragi::status::commit_history_test_guard();
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
@@ -1388,6 +1389,7 @@ mod tests {
 
     #[test]
     fn consensus_penalties_skip_unmapped_offender() -> Result<()> {
+        let _commit_history_guard = crate::sumeragi::status::commit_history_test_guard();
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
@@ -1459,6 +1461,7 @@ mod tests {
 
     #[test]
     fn consensus_penalties_pending_without_roster() -> Result<()> {
+        let _commit_history_guard = crate::sumeragi::status::commit_history_test_guard();
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
@@ -1528,6 +1531,7 @@ mod tests {
 
     #[test]
     fn consensus_penalties_pending_without_prf_seed() -> Result<()> {
+        let _commit_history_guard = crate::sumeragi::status::commit_history_test_guard();
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
@@ -1826,6 +1830,7 @@ mod tests {
 
     #[test]
     fn roster_for_evidence_uses_commit_history_candidates() {
+        let _commit_history_guard = crate::sumeragi::status::commit_history_test_guard();
         let state = fresh_state();
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();

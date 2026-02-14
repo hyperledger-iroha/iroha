@@ -82,7 +82,7 @@ pub mod isi {
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
-        zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope},
+        zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     use iroha_primitives::{
         numeric::{Numeric, NumericSpec},
@@ -393,7 +393,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !backend.starts_with("halo2/") {
+        if !(backend.starts_with("halo2/") || backend.starts_with("stark/fri-v1/")) {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -436,9 +436,33 @@ pub mod isi {
                 (Some(rec), Some(env)) => rec == env,
                 _ => record_id == env_id,
             }
+        } else if backend.starts_with("stark/fri-v1/") {
+            match (
+                normalize_stark_fri_circuit_id(backend, record_id),
+                normalize_stark_fri_circuit_id(backend, env_id),
+            ) {
+                (Some(rec), Some(env)) => rec == env,
+                _ => record_id == env_id,
+            }
         } else {
             record_id == env_id
         }
+    }
+
+    fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed == backend {
+            return None;
+        }
+        if let Some(rest) = trimmed.strip_prefix(backend) {
+            if let Some(rest) = rest.strip_prefix(':') {
+                return (!rest.is_empty()).then(|| trimmed.to_string());
+            }
+            if let Some(rest) = rest.strip_prefix('/') {
+                return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
+            }
+        }
+        Some(format!("{backend}:{trimmed}"))
     }
 
     fn validate_vote_envelope_metadata(
@@ -503,6 +527,44 @@ pub mod isi {
                         "failed to extract vote public inputs".into(),
                     )
                 })?;
+            if !env.public_inputs.is_empty() {
+                let flattened = flatten_instance_columns(&columns);
+                if env.public_inputs != flattened {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "public inputs do not match proof".into(),
+                    ));
+                }
+            }
+            return Ok(VotePublicInputs {
+                columns,
+                envelope: Some(env),
+            });
+        }
+
+        if backend.starts_with("stark/fri-v1/") {
+            let env: ZkOpenVerifyEnvelope =
+                norito::decode_from_bytes(proof_bytes).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "invalid OpenVerifyEnvelope payload".into(),
+                    )
+                })?;
+            if env.backend != BackendTag::Stark {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "unexpected OpenVerifyEnvelope backend tag".into(),
+                ));
+            }
+            let open: StarkFriOpenProofV1 =
+                norito::decode_from_bytes(&env.proof_bytes).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "invalid STARK open proof payload".into(),
+                    )
+                })?;
+            if open.version != 1 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "unsupported STARK open proof version".into(),
+                ));
+            }
+            let columns = open.public_inputs;
             if !env.public_inputs.is_empty() {
                 let flattened = flatten_instance_columns(&columns);
                 if env.public_inputs != flattened {
@@ -2068,6 +2130,19 @@ pub mod isi {
                 ));
                 return Err(InstructionExecutionError::InvariantViolation(
                     "verifying key backend mismatch".into(),
+                ));
+            }
+            if backend.starts_with("stark/fri-v1/") && !state_transaction.zk.stark.enabled {
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: self.election_id.clone(),
+                            reason: "stark verification is disabled in node configuration".into(),
+                        },
+                    ),
+                ));
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "stark verification is disabled in node configuration".into(),
                 ));
             }
             if let Err(err) = enforce_vk_max_proof_bytes("ballot", &vk_rec, proof_bytes.len()) {
@@ -5222,7 +5297,7 @@ pub mod isi {
         if expects_envelope && envelope_meta.is_none() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "halo2 proofs must use OpenVerifyEnvelope payload".into(),
+                    "proofs for this backend must use OpenVerifyEnvelope payload".into(),
                 ),
             ));
         }
@@ -5426,7 +5501,8 @@ pub mod isi {
             let proof = attachment.proof.clone();
             let envelope_meta = decode_open_verify_envelope(&proof);
             let backend_label = attachment.backend.as_str();
-            let expects_envelope = backend_label.starts_with("halo2/");
+            let expects_envelope =
+                backend_label.starts_with("halo2/") || backend_label.starts_with("stark/fri-v1/");
 
             let envelope_ref = validate_proof_attachment(
                 &attachment,
@@ -5801,6 +5877,13 @@ pub mod isi {
         let timeout_budget = state_transaction.zk.verify_timeout;
         if let Some(preverified) = state_transaction.lookup_preverified_proof(proof) {
             return Ok((preverified, Duration::ZERO));
+        }
+        if attachment.backend.as_str().starts_with("stark/fri-v1/")
+            && !state_transaction.zk.stark.enabled
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stark verification is disabled in node configuration".into(),
+            ));
         }
 
         let vk_box = match (&attachment.vk_inline, &attachment.vk_ref) {
@@ -7106,6 +7189,13 @@ pub mod isi {
             if let Some(binding) = st.vk_transfer.as_ref() {
                 enforce_vk_binding(binding, attachment)?;
             }
+            if attachment.backend.as_str().starts_with("stark/fri-v1/")
+                && !state_transaction.zk.stark.enabled
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "stark verification is disabled in node configuration".into(),
+                ));
+            }
             let policy_mode = apply_policy_if_due(state_transaction, &asset_def_id)?.mode();
             if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -7130,6 +7220,48 @@ pub mod isi {
             }
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_transfer.as_ref(), attachment)?;
+            if attachment.backend.as_str().starts_with("stark/fri-v1/") {
+                // For `stark/fri-v1/*` we require the canonical OpenVerifyEnvelope wrapper so the
+                // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
+                // can validate metadata against the configured verifying key.
+                let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
+                    .map_err(|_| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "invalid OpenVerifyEnvelope payload".into(),
+                            ),
+                        )
+                    })?;
+                if env.backend != BackendTag::Stark {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "unexpected OpenVerifyEnvelope backend tag".into(),
+                    ));
+                }
+                if let Some(record) = vk_record.as_ref() {
+                    if !circuit_id_matches(
+                        attachment.backend.as_str(),
+                        &record.circuit_id,
+                        &env.circuit_id,
+                    ) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "transfer verifying key circuit mismatch".into(),
+                        ));
+                    }
+                    if record.public_inputs_schema_hash != [0u8; 32] {
+                        let observed_hash: [u8; 32] = CryptoHash::new(&env.public_inputs).into();
+                        if record.public_inputs_schema_hash != observed_hash {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "public inputs schema hash mismatch".into(),
+                            ));
+                        }
+                    }
+                    if env.vk_hash != [0u8; 32] && env.vk_hash != record.commitment {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "verifying key commitment mismatch".into(),
+                        ));
+                    }
+                }
+            }
             let proof_len = attachment.proof.bytes.len();
             if let Some(record) = vk_record.as_ref() {
                 enforce_vk_max_proof_bytes("transfer", record, proof_len)?;
@@ -7341,6 +7473,13 @@ pub mod isi {
             if let Some(binding) = st.vk_unshield.as_ref() {
                 enforce_vk_binding(binding, attachment)?;
             }
+            if attachment.backend.as_str().starts_with("stark/fri-v1/")
+                && !state_transaction.zk.stark.enabled
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "stark verification is disabled in node configuration".into(),
+                ));
+            }
             // If a root_hint is provided, enforce it is within the bounded recent root window.
             if let Some(root_hint) = self.root_hint() {
                 if !st.root_history.iter().any(|r| r == root_hint) {
@@ -7351,6 +7490,48 @@ pub mod isi {
             }
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
+            if attachment.backend.as_str().starts_with("stark/fri-v1/") {
+                // For `stark/fri-v1/*` we require the canonical OpenVerifyEnvelope wrapper so the
+                // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
+                // can validate metadata against the configured verifying key.
+                let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
+                    .map_err(|_| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "invalid OpenVerifyEnvelope payload".into(),
+                            ),
+                        )
+                    })?;
+                if env.backend != BackendTag::Stark {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "unexpected OpenVerifyEnvelope backend tag".into(),
+                    ));
+                }
+                if let Some(record) = vk_record.as_ref() {
+                    if !circuit_id_matches(
+                        attachment.backend.as_str(),
+                        &record.circuit_id,
+                        &env.circuit_id,
+                    ) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "unshield verifying key circuit mismatch".into(),
+                        ));
+                    }
+                    if record.public_inputs_schema_hash != [0u8; 32] {
+                        let observed_hash: [u8; 32] = CryptoHash::new(&env.public_inputs).into();
+                        if record.public_inputs_schema_hash != observed_hash {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "public inputs schema hash mismatch".into(),
+                            ));
+                        }
+                    }
+                    if env.vk_hash != [0u8; 32] && env.vk_hash != record.commitment {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "verifying key commitment mismatch".into(),
+                        ));
+                    }
+                }
+            }
             let proof_len = attachment.proof.bytes.len();
             if let Some(record) = vk_record.as_ref() {
                 enforce_vk_max_proof_bytes("unshield", record, proof_len)?;
@@ -7860,6 +8041,11 @@ pub mod isi {
             let (vk_id, vk_box, vk_rec) =
                 resolve_ballot_vk(&st, &self.ballot_proof, state_transaction)?;
             let backend = vk_id.backend.as_str();
+            if backend.starts_with("stark/fri-v1/") && !state_transaction.zk.stark.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "stark verification is disabled in node configuration".into(),
+                ));
+            }
 
             let proof_len = self.ballot_proof.proof.bytes.len();
             enforce_vk_max_proof_bytes("ballot", &vk_rec, proof_len)?;
@@ -7985,6 +8171,11 @@ pub mod isi {
             }
             let (vk_id, vk_box, vk_rec) = resolve_tally_vk(&st, att, state_transaction)?;
             let backend = vk_id.backend.as_str();
+            if backend.starts_with("stark/fri-v1/") && !state_transaction.zk.stark.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "stark verification is disabled in node configuration".into(),
+                ));
+            }
             let proof_len = att.proof.bytes.len();
             enforce_vk_max_proof_bytes("tally", &vk_rec, proof_len)?;
             state_transaction.register_confidential_proof(proof_len)?;
@@ -10203,6 +10394,67 @@ pub mod isi {
             );
             let bad_payload = norito::to_bytes(&bad_envelope).expect("encode envelope");
             assert!(extract_vote_public_inputs("halo2/ipa", &bad_payload).is_err());
+        }
+
+        #[test]
+        fn extract_vote_public_inputs_handles_stark_envelope() {
+            use iroha_data_model::zk::StarkFriOpenProofV1;
+
+            let columns: Vec<Vec<[u8; 32]>> = vec![vec![[1u8; 32]], vec![[2u8; 32]]];
+            let public_inputs = flatten_instance_columns(&columns);
+            let open = StarkFriOpenProofV1 {
+                version: 1,
+                public_inputs: columns.clone(),
+                envelope_bytes: vec![0xAA, 0xBB],
+            };
+            let proof_bytes = norito::to_bytes(&open).expect("encode stark open proof");
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Stark,
+                "vote-circuit",
+                [0u8; 32],
+                public_inputs.clone(),
+                proof_bytes,
+            );
+            let payload = norito::to_bytes(&envelope).expect("encode envelope");
+
+            let parsed = extract_vote_public_inputs("stark/fri-v1/sha256-goldilocks-v1", &payload)
+                .expect("extract inputs");
+            assert_eq!(parsed.columns, columns);
+            assert!(parsed.envelope.is_some());
+
+            let mut bad_inputs = public_inputs;
+            bad_inputs[0] ^= 0x01;
+            let bad_envelope = OpenVerifyEnvelope::new(
+                BackendTag::Stark,
+                "vote-circuit",
+                [0u8; 32],
+                bad_inputs,
+                envelope.proof_bytes.clone(),
+            );
+            let bad_payload = norito::to_bytes(&bad_envelope).expect("encode envelope");
+            assert!(
+                extract_vote_public_inputs("stark/fri-v1/sha256-goldilocks-v1", &bad_payload)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn decode_open_verify_envelope_accepts_stark_backend() {
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Stark,
+                "stark/fri-v1/sha256-goldilocks-v1:dummy-circuit",
+                [0u8; 32],
+                vec![1, 2, 3],
+                vec![4, 5, 6],
+            );
+            let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
+            let proof_box =
+                ProofBox::new("stark/fri-v1/sha256-goldilocks-v1".into(), bytes.clone());
+            let decoded = decode_open_verify_envelope(&proof_box).expect("decode");
+            assert_eq!(decoded.backend, BackendTag::Stark);
+            assert_eq!(decoded.circuit_id, envelope.circuit_id);
+            assert_eq!(decoded.public_inputs, envelope.public_inputs);
+            assert_eq!(decoded.proof_bytes, envelope.proof_bytes);
         }
 
         #[test]
