@@ -6,7 +6,6 @@
 //! snapshots used by the TUI.
 
 use std::{
-    collections::HashMap,
     io::Read,
     time::{Duration, Instant},
 };
@@ -43,10 +42,77 @@ pub struct StatusPayload {
     pub crypto: Option<CryptoStatusPayload>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+impl StatusPayload {
+    pub fn from_i23_status(v: &json::Value) -> Self {
+        // i23: peers.total
+        let peers = v
+            .get("peers")
+            .and_then(|p| p.get("total"))
+            .and_then(|v| v.as_u64());
+
+        // i23: blocks.height
+        let blocks = v
+            .get("blocks")
+            .and_then(|b| b.get("height"))
+            .and_then(|v| v.as_u64());
+
+        // i23: blocks.non_empty
+        let blocks_non_empty = v
+            .get("blocks")
+            .and_then(|b| b.get("non_empty"))
+            .and_then(|v| v.as_u64());
+
+        // i23: queue.size
+        let queue_size = v
+            .get("queue")
+            .and_then(|q| q.get("size"))
+            .and_then(|v| v.as_u64());
+
+        // i23: uptime (単位はそのまま扱う)
+        let uptime = v.get("uptime").and_then(|v| v.as_u64());
+
+        // i23: txs.approved / rejected
+        let txs_approved = v
+            .get("txs")
+            .and_then(|t| t.get("approved"))
+            .and_then(|v| v.as_u64());
+
+        let txs_rejected = v
+            .get("txs")
+            .and_then(|t| t.get("rejected"))
+            .and_then(|v| v.as_u64());
+
+        // i23: commit.time_ms
+        let commit_time_ms = v
+            .get("commit")
+            .and_then(|c| c.get("time_ms"))
+            .and_then(|v| v.as_u64());
+
+        StatusPayload {
+            alias: None,
+            peers,
+            blocks,
+            blocks_non_empty,
+            commit_time_ms,
+            txs_approved,
+            txs_rejected,
+            queue_size,
+            uptime,
+            view_changes: None,
+            governance: v.get("governance").cloned(),
+            crypto: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct MetricsSnapshot {
+    pub block_height: Option<u64>,
+    pub block_height_non_empty: Option<u64>,
+    pub tx_accepted: Option<u64>,
+    pub tx_rejected: Option<u64>,
+    pub tx_queue_depth: Option<u64>,
     pub gas_used: Option<u64>,
-    pub fee_units: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +199,7 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
     let status_url = format!("{trimmed}/status");
     let metrics_url = format!("{trimmed}/metrics");
 
+    // ---- status ----
     let status_result = fetch_status(&status_url);
     let latency = status_result.as_ref().ok().and_then(|info| info.latency);
 
@@ -140,22 +207,18 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
         warnings.push(format!("status: {err}"));
     }
 
-    let status = status_result.ok().and_then(|info| info.payload);
+    let mut status = status_result.ok().and_then(|info| info.payload);
+
     if let Some(crypto) = status.as_ref().and_then(|payload| payload.crypto.as_ref()) {
-        if crypto
-            .sm_helpers_available
-            .is_some_and(|available| available)
-        {
+        if crypto.sm_helpers_available.is_some_and(|v| v) {
             warnings.push("info: peer advertises SM helpers".to_owned());
         }
-        if crypto
-            .sm_openssl_preview_enabled
-            .is_some_and(|enabled| enabled)
-        {
+        if crypto.sm_openssl_preview_enabled.is_some_and(|v| v) {
             warnings.push("info: peer enables SM OpenSSL preview".to_owned());
         }
     }
 
+    // ---- metrics ----
     let metrics = match fetch_metrics(&metrics_url) {
         Ok(metrics) => metrics,
         Err(err) => {
@@ -163,6 +226,36 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
             MetricsSnapshot::default()
         }
     };
+
+    // ---- status ← metrics synthesis (i23) ----
+    match status {
+        Some(ref mut payload) => {
+            payload.blocks =
+                payload.blocks.or(metrics.block_height);
+    
+            payload.blocks_non_empty =
+                payload.blocks_non_empty.or(metrics.block_height_non_empty);
+    
+            // tx accepted → txs_approved
+            payload.txs_approved =
+                payload.txs_approved.or(metrics.tx_accepted);
+    
+            // queue
+            payload.queue_size =
+                payload.queue_size.or(metrics.tx_queue_depth);
+    
+            // gas は commit_time_ms とは別なので無視（monitor仕様）
+        }
+        None => {
+            status = Some(StatusPayload {
+                blocks: metrics.block_height,
+                blocks_non_empty: metrics.block_height_non_empty,
+                txs_approved: metrics.tx_accepted,
+                queue_size: metrics.tx_queue_depth,
+                ..Default::default()
+            });
+        }
+    }
 
     PeerUpdate {
         index,
@@ -208,7 +301,10 @@ fn fetch_status(url: &str) -> Result<StatusFetch> {
             latency,
         });
     }
-    let payload: StatusPayload = json::from_slice(&body)?;
+    let raw: json::Value = json::from_slice(&body)
+        .map_err(|e| eyre!("invalid JSON from {url}: {e}"))?;
+
+    let payload = StatusPayload::from_i23_status(&raw);
     Ok(StatusFetch {
         payload: Some(payload),
         latency,
@@ -250,22 +346,37 @@ fn read_body_with_limit<R: Read>(mut reader: R, limit: usize) -> Result<(Vec<u8>
 }
 
 fn parse_prometheus_metrics(text: &str) -> MetricsSnapshot {
-    let mut values: HashMap<&str, u64> = HashMap::new();
+    let mut snap = MetricsSnapshot::default();
+
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some((key, value)) = line.split_once(' ')
-            && let Ok(parsed) = value.parse::<u64>()
-        {
-            values.insert(key, parsed);
+
+        // ラベル付き txs
+        if let Some(v) = line.strip_prefix("txs{type=\"accepted\"} ") {
+            snap.tx_accepted = v.parse().ok();
+            continue;
+        }
+        if let Some(v) = line.strip_prefix("txs{type=\"rejected\"} ") {
+            snap.tx_rejected = v.parse().ok();
+            continue;
+        }
+
+        let Some((key, value)) = line.split_once(' ') else { continue };
+        let Ok(v) = value.parse::<u64>() else { continue };
+
+        match key {
+            "block_height" => snap.block_height = Some(v),
+            "block_height_non_empty" => snap.block_height_non_empty = Some(v),
+            "block_gas_used" => snap.gas_used = Some(v),
+            "sumeragi_tx_queue_depth" => snap.tx_queue_depth = Some(v),
+            _ => {}
         }
     }
-    MetricsSnapshot {
-        gas_used: values.get("block_gas_used").copied(),
-        fee_units: values.get("block_fee_total_units").copied(),
-    }
+
+    snap
 }
 
 pub struct StubCluster {
@@ -330,10 +441,12 @@ fn stub_status_payload(peer_index: usize, total_peers: usize) -> StatusPayload {
     }
 }
 
-fn stub_metrics_snapshot(peer_index: usize) -> MetricsSnapshot {
+fn stub_metrics_snapshot(_peer_index: usize) -> MetricsSnapshot {
     MetricsSnapshot {
-        gas_used: Some(100 + peer_index as u64 * 17),
-        fee_units: Some(50 + peer_index as u64 * 7),
+        block_height: Some(1),
+        tx_accepted: Some(10),
+        tx_rejected: Some(0),
+        ..Default::default()
     }
 }
 

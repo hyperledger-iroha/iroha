@@ -782,16 +782,16 @@ fn format_summary_text(app: &AppState) -> String {
             online += 1;
             if let Some(status) = &snapshot.status {
                 if let Some(b) = status.blocks {
-                    blocks += b;
+                    blocks = blocks.max(b);
                 }
                 if let Some(b) = status.blocks_non_empty {
-                    non_empty += b;
+                    non_empty = non_empty.max(b);
                 }
                 if let Some(ok) = status.txs_approved {
-                    approved += ok;
+                    approved = approved.max(ok);
                 }
                 if let Some(rej) = status.txs_rejected {
-                    rejected += rej;
+                    rejected = rejected.max(rej);
                 }
                 if let Some(p) = status.peers {
                     reported = reported.max(p);
@@ -1032,6 +1032,7 @@ mod tests {
                 metrics: MetricsSnapshot {
                     gas_used: Some(i as u64),
                     fee_units: None,
+                    ..Default::default()
                 },
                 latency: None,
                 warnings: Vec::new(),
@@ -1077,6 +1078,7 @@ mod tests {
             metrics: MetricsSnapshot {
                 gas_used: Some(50),
                 fee_units: None,
+                ..Default::default()
             },
             latency: Some(Duration::from_millis(30)),
             warnings: Vec::new(),
