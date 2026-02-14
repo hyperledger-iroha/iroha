@@ -6128,6 +6128,38 @@ fn halo2_ipa_circuit_id_matches(record_id: &str, env_id: &str) -> bool {
     }
 }
 
+fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == backend {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix(backend) {
+        if let Some(rest) = rest.strip_prefix(':') {
+            return (!rest.is_empty()).then(|| trimmed.to_string());
+        }
+        if let Some(rest) = rest.strip_prefix('/') {
+            return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
+        }
+    }
+    Some(format!("{backend}:{trimmed}"))
+}
+
+fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
+    if backend == "halo2/ipa" {
+        halo2_ipa_circuit_id_matches(record_id, env_id)
+    } else if backend.starts_with("stark/fri-v1/") {
+        match (
+            normalize_stark_fri_circuit_id(backend, record_id),
+            normalize_stark_fri_circuit_id(backend, env_id),
+        ) {
+            (Some(rec), Some(env)) => rec == env,
+            _ => record_id == env_id,
+        }
+    } else {
+        record_id == env_id
+    }
+}
+
 fn sanitize_zk_key_component(component: &str) -> String {
     let mut out = String::with_capacity(component.len());
     for ch in component.chars() {
@@ -6184,10 +6216,11 @@ async fn handler_zk_ivm_derive(
         })
     })?;
 
-    if req.vk_ref.backend.as_str() != "halo2/ipa" {
+    let backend = req.vk_ref.backend.as_str();
+    if backend != "halo2/ipa" && !backend.starts_with("stark/fri-v1/") {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "ivm derive requires vk_ref.backend == `halo2/ipa`".to_owned(),
+                "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri-v1/*`".to_owned(),
             ),
         )));
     }
@@ -6231,11 +6264,11 @@ async fn handler_zk_ivm_derive(
             ),
         )));
     }
-    if !halo2_ipa_circuit_id_matches(&vk_record.circuit_id, "halo2/ipa:ivm-execution-v1") {
+    if !circuit_id_matches(backend, &vk_record.circuit_id, "ivm-execution-v1") {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "verifying key circuit_id is not compatible with `halo2/ipa:ivm-execution-v1` (got `{}`)",
-                vk_record.circuit_id
+                "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{backend}` (got `{}`)",
+                vk_record.circuit_id,
             )),
         )));
     }

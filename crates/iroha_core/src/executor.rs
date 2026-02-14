@@ -1227,7 +1227,9 @@ impl Executor {
                 .map_err(ValidationFail::IvmAdmission)?;
 
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
-            if wants_zk && !state_transaction.zk.halo2.enabled {
+            if wants_zk
+                && !(state_transaction.zk.halo2.enabled || state_transaction.zk.stark.enabled)
+            {
                 return Err(ValidationFail::IvmAdmission(
                     iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
                         ivm::ivm_mode::ZK,
@@ -1404,7 +1406,24 @@ impl Executor {
                         let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(rate));
                         // Build payer asset id and transfer instruction, guarding Numeric bounds
                         if fee_u128 > 0 {
-                            let payer_asset = AssetId::new(asset_def.clone(), authority.clone());
+                            let payer = if let Some(sponsor) =
+                                fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
+                            {
+                                if !state_transaction.nexus.fees.sponsorship_enabled {
+                                    return Err(ValidationFail::NotPermitted(
+                                        "fee sponsorship is disabled".to_owned(),
+                                    ));
+                                }
+                                if !state_transaction.can_use_fee_sponsor(authority, sponsor) {
+                                    return Err(ValidationFail::NotPermitted(
+                                        "fee sponsor is not authorized".to_owned(),
+                                    ));
+                                }
+                                sponsor.clone()
+                            } else {
+                                authority.clone()
+                            };
+                            let payer_asset = AssetId::new(asset_def.clone(), payer);
                             let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
                                 ValidationFail::NotPermitted(
                                     "fee amount exceeds supported numeric bounds".to_owned(),

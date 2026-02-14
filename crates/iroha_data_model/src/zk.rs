@@ -12,7 +12,7 @@ pub enum BackendTag {
     Halo2Bn254,
     /// Groth16 (stub)
     Groth16,
-    /// STARK (stub)
+    /// STARK/FRI (transparent, no trusted setup)
     Stark,
     /// Unknown/unsupported backend
     Unsupported,
@@ -95,3 +95,28 @@ impl OpenVerifyEnvelope {
 }
 
 // Note: Norito serialization is derived via `Encode`/`Decode` (packed structs compatible)
+
+/// STARK/FRI proof payload embedded inside [`OpenVerifyEnvelope::proof_bytes`] when
+/// [`OpenVerifyEnvelope::backend`] is [`BackendTag::Stark`].
+///
+/// This wrapper carries:
+/// - `public_inputs`: public inputs expressed as 32-byte words, column-major (matching
+///   the instance-column layout used by Halo2 envelopes), and
+/// - `envelope_bytes`: backend-native proof bytes (typically a Norito-encoded STARK/FRI
+///   envelope such as `StarkVerifyEnvelopeV1`).
+///
+/// Higher-level flows (governance voting, `Executable::IvmProved`, etc.) interpret the public
+/// inputs according to the circuit/policy definitions and must validate their semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct StarkFriOpenProofV1 {
+    /// Version tag for format evolution.
+    pub version: u16,
+    /// Public inputs encoded as 32-byte words, column-major.
+    pub public_inputs: Vec<Vec<[u8; 32]>>,
+    /// Backend-native proof envelope bytes.
+    pub envelope_bytes: Vec<u8>,
+}

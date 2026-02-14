@@ -10135,6 +10135,26 @@ impl<'world> WorldBlock<'world> {
         &mut self.commit_qcs
     }
 
+    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    /// Mutable verifying-key registry accessor used exclusively by tests and API scaffolding.
+    pub fn verifying_keys_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<
+        'world,
+        iroha_data_model::proof::VerifyingKeyId,
+        iroha_data_model::proof::VerifyingKeyRecord,
+    > {
+        &mut self.verifying_keys
+    }
+
+    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    /// Mutable verifying-key circuit index accessor used exclusively by tests and API scaffolding.
+    pub fn verifying_keys_by_circuit_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, (String, u32), iroha_data_model::proof::VerifyingKeyId> {
+        &mut self.verifying_keys_by_circuit
+    }
+
     /// Create struct to apply transaction's changes
     pub fn trasaction(
         &mut self,
@@ -12995,6 +13015,7 @@ impl State {
                     metal_debug_fused:
                         iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
                 },
+                stark: iroha_config::parameters::actual::Stark::default(),
                 root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
                 ballot_history_cap:
                     iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
@@ -22138,6 +22159,7 @@ pub(crate) mod deserialize {
                 metal_debug_fused:
                     iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
+            stark: iroha_config::parameters::actual::Stark::default(),
             root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
             ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty:

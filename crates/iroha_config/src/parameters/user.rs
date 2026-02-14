@@ -3695,6 +3695,9 @@ pub struct Zk {
     #[config(nested)]
     /// FASTPQ prover configuration.
     pub fastpq: Fastpq,
+    #[config(nested)]
+    /// Native STARK/FRI verification configuration.
+    pub stark: Stark,
     /// Maximum number of recent shielded Merkle roots kept per asset.
     #[config(
         env = "ZK_ROOT_HISTORY_CAP",
@@ -3786,6 +3789,7 @@ impl Zk {
         actual::Zk {
             halo2: self.halo2.parse(),
             fastpq: self.fastpq.parse(),
+            stark: self.stark.parse(),
             root_history_cap: self.root_history_cap,
             ballot_history_cap: self.ballot_history_cap,
             empty_root_on_empty: self.empty_root_on_empty,
@@ -4980,6 +4984,30 @@ impl Halo2 {
             max_proof_bytes: self.max_proof_bytes,
             max_transcript_label_len: self.max_transcript_label_len,
             enforce_transcript_label_ascii: self.enforce_transcript_label_ascii,
+        }
+    }
+}
+
+/// Native STARK/FRI verification configuration (user view).
+/// User-level configuration container for `Stark`.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct Stark {
+    /// Enable native STARK/FRI verification in hosts.
+    #[config(env = "ZK_STARK_ENABLED", default = "defaults::zk::stark::ENABLED")]
+    pub enabled: bool,
+    /// Maximum accepted proof payload length (bytes).
+    #[config(
+        env = "ZK_STARK_MAX_PROOF_BYTES",
+        default = "defaults::zk::stark::MAX_PROOF_BYTES"
+    )]
+    pub max_proof_bytes: usize,
+}
+
+impl Stark {
+    fn parse(self) -> actual::Stark {
+        actual::Stark {
+            enabled: self.enabled,
+            max_proof_bytes: self.max_proof_bytes,
         }
     }
 }

@@ -8499,6 +8499,7 @@ async fn fetch_pending_block_attaches_cached_qc() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
+    let _guard = super::status::commit_history_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -12130,6 +12131,9 @@ async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pendin
     cfg.persistence.commit_inflight_timeout = Duration::from_millis(10);
     let mut harness = test_actor_harness_with_config(1, cfg, None).await;
 
+    // This test asserts on global view-change cause counters. Hold the test guard for the full
+    // duration so other concurrently running unit tests do not record into the same counters.
+    let _view_change_guard = super::status::view_change_cause_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let height = 1;
@@ -12638,6 +12642,7 @@ async fn rbc_outbound_chunk_budget_limits_per_tick() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn flush_rbc_outbound_chunks_skips_when_queue_backpressured() {
+    let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     harness.actor.queue_block_backpressure.reset_to_current();
@@ -12784,6 +12789,7 @@ async fn rbc_payload_rebroadcast_allows_derived_roster() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_rbc_payload_skips_when_queue_backpressured() {
+    let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     harness.actor.queue_block_backpressure.reset_to_current();
@@ -14727,6 +14733,7 @@ async fn qc_broadcast_targets_snapshot_roster() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn materialize_qc_for_header_recovers_with_empty_roster() {
+    let _history_guard = status::commit_history_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let block = sample_block(1, 0, None);
@@ -20665,6 +20672,7 @@ async fn rebroadcast_stalled_rbc_payloads_skips_payload_after_delivery() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_skips_when_queue_backpressured() {
+    let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     harness.actor.queue_block_backpressure.reset_to_current();
@@ -21283,8 +21291,11 @@ async fn seed_rbc_session_from_block_records_roster_snapshot() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn seed_rbc_session_from_block_rebroadcasts_init_when_requested() {
+    let _worker_queue_guard = super::status::worker_queue_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
 
     let height = actor.state.view().height() as u64 + 1;
     let view = 0u64;
@@ -24162,6 +24173,9 @@ async fn seed_rbc_session_flushes_pending_ready() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn seed_rbc_session_uses_epoch_for_height() {
+    // This test observes behaviour that depends on status-backed roster histories.
+    // Guard against parallel tests resetting those global histories mid-test.
+    let _guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 2;
@@ -31255,6 +31269,7 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_drops_seen()
 
 #[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_defers_view_change_when_queue_blocks_seen() {
+    let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();

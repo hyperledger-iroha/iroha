@@ -24,6 +24,7 @@ mod fixtures;
 #[tokio::test]
 async fn webhooks_endpoints_exposed() {
     // Minimal Torii setup
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();

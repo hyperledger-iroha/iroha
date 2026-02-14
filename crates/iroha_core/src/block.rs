@@ -6188,7 +6188,8 @@ pub(crate) mod valid {
                                     tx,
                                     accounts_snapshot.as_ref(),
                                     state_block,
-                                    state_block.zk().halo2.enabled,
+                                    state_block.zk().halo2.enabled
+                                        || state_block.zk().stark.enabled,
                                     &block.header(),
                                     metadata,
                                 )
@@ -6208,7 +6209,7 @@ pub(crate) mod valid {
                                 tx,
                                 accounts_snapshot.as_ref(),
                                 state_block,
-                                state_block.zk().halo2.enabled,
+                                state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
                                 &block.header(),
                                 metadata,
                             )
@@ -6227,7 +6228,7 @@ pub(crate) mod valid {
                             tx,
                             accounts_snapshot.as_ref(),
                             state_block,
-                            state_block.zk().halo2.enabled,
+                            state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
                             &block.header(),
                             metadata,
                         )

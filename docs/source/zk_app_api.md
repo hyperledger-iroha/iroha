@@ -56,6 +56,10 @@ Endpoints:
 - `GET  /v1/zk/ivm/prove/{job_id}` — poll job status; returns `{ status, proved?, attachment?, error? }`.
 - `DELETE /v1/zk/ivm/prove/{job_id}` — remove a job from the in-memory job cache.
 
+Backend support:
+- `/v1/zk/ivm/derive` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1/*` (both require an `ivm-execution-v1` circuit/schema).
+- `/v1/zk/ivm/prove` currently supports `halo2/ipa` only.
+
 Job status values:
 - `pending` — queued (may still be waiting for an inflight slot).
 - `running` — actively proving.
@@ -110,7 +114,7 @@ Verification rules:
 - `vk_ref` is resolved via the WSV verifying‑key registry. When a registry entry omits inline key bytes, Torii loads the key bytes from `torii.zk_prover_keys_dir` (see storage layout below).
 - `vk_commitment` is validated against the computed VK hash when present.
 - Backends and circuits are allowlisted via `torii.zk_prover_allowed_backends` and `torii.zk_prover_allowed_circuits` (prefix match).
-- Supported backends currently include `halo2/ipa` and other `halo2/…` variants built into the node. `groth16/…` and `stark/…` remain unsupported in production builds.
+- Supported backends currently include `halo2/ipa` and other `halo2/…` variants built into the node. `stark/fri-v1/*` is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`). `groth16/…` remains unsupported.
 
 Endpoints:
 - `GET /v1/zk/prover/reports` — list reports as a JSON array.

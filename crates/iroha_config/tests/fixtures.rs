@@ -1750,6 +1750,10 @@ fn minimal_config_snapshot() {
                     metal_debug_enum: false,
                     metal_debug_fused: false,
                 },
+                stark: Stark {
+                    enabled: false,
+                    max_proof_bytes: 1048576,
+                },
                 root_history_cap: 2048,
                 ballot_history_cap: 1024,
                 empty_root_on_empty: false,

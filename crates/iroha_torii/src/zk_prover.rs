@@ -17,7 +17,7 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -145,7 +145,7 @@ struct ProverCfg {
     telemetry: MaybeTelemetry,
 }
 
-static PROVER_CFG: OnceLock<ProverCfg> = OnceLock::new();
+static PROVER_CFG: OnceLock<RwLock<ProverCfg>> = OnceLock::new();
 
 #[cfg(test)]
 static TEST_PROCESSING_DELAY_MS: AtomicU64 = AtomicU64::new(0);
@@ -167,7 +167,7 @@ pub fn configure(
     state: Option<Arc<CoreState>>,
     telemetry: MaybeTelemetry,
 ) {
-    let _ = PROVER_CFG.set(ProverCfg {
+    let cfg = ProverCfg {
         enabled,
         scan_period_secs,
         reports_ttl_secs,
@@ -179,76 +179,76 @@ pub fn configure(
         allowed_circuits,
         state,
         telemetry,
-    });
+    };
+    if let Some(lock) = PROVER_CFG.get() {
+        let mut guard = lock.write().expect("prover cfg lock poisoned");
+        *guard = cfg;
+        return;
+    }
+    if PROVER_CFG.set(RwLock::new(cfg.clone())).is_err() {
+        if let Some(lock) = PROVER_CFG.get() {
+            let mut guard = lock.write().expect("prover cfg lock poisoned");
+            *guard = cfg;
+        }
+    }
+}
+
+fn with_cfg<R>(f: impl FnOnce(&ProverCfg) -> R) -> Option<R> {
+    PROVER_CFG.get().map(|lock| {
+        let guard = lock.read().expect("prover cfg lock poisoned");
+        f(&*guard)
+    })
 }
 
 fn cfg_enabled() -> bool {
-    PROVER_CFG.get().map(|c| c.enabled).unwrap_or(false)
+    with_cfg(|c| c.enabled).unwrap_or(false)
 }
 
 fn cfg_scan_period() -> Duration {
-    Duration::from_secs(PROVER_CFG.get().map(|c| c.scan_period_secs).unwrap_or(30))
+    Duration::from_secs(with_cfg(|c| c.scan_period_secs).unwrap_or(30))
 }
 
 fn cfg_reports_ttl_secs() -> u64 {
-    PROVER_CFG
-        .get()
-        .map(|c| c.reports_ttl_secs)
-        .unwrap_or(7 * 24 * 60 * 60)
+    with_cfg(|c| c.reports_ttl_secs).unwrap_or(7 * 24 * 60 * 60)
 }
 
 fn cfg_max_inflight() -> usize {
-    PROVER_CFG
-        .get()
-        .map(|c| c.max_inflight)
+    with_cfg(|c| c.max_inflight)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_INFLIGHT)
         .max(1)
 }
 
 fn cfg_max_scan_bytes() -> u64 {
-    PROVER_CFG
-        .get()
-        .map(|c| c.max_scan_bytes)
+    with_cfg(|c| c.max_scan_bytes)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_BYTES)
 }
 
 fn cfg_max_scan_millis() -> u64 {
-    PROVER_CFG
-        .get()
-        .map(|c| c.max_scan_millis)
+    with_cfg(|c| c.max_scan_millis)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS)
 }
 
 fn cfg_keys_dir() -> PathBuf {
-    PROVER_CFG
-        .get()
-        .map(|c| c.keys_dir.clone())
+    with_cfg(|c| c.keys_dir.clone())
         .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_keys_dir)
 }
 
 fn cfg_allowed_backends() -> Vec<String> {
-    PROVER_CFG
-        .get()
-        .map(|c| c.allowed_backends.clone())
+    with_cfg(|c| c.allowed_backends.clone())
         .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_allowed_backends)
 }
 
 fn cfg_allowed_circuits() -> Vec<String> {
-    PROVER_CFG
-        .get()
-        .map(|c| c.allowed_circuits.clone())
+    with_cfg(|c| c.allowed_circuits.clone())
         .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits)
 }
 
 fn cfg_state() -> Option<Arc<CoreState>> {
-    PROVER_CFG.get().and_then(|c| c.state.clone())
+    with_cfg(|c| c.state.clone()).flatten()
 }
 
 fn telemetry_handle() -> MaybeTelemetry {
-    PROVER_CFG
-        .get()
-        .map(|c| c.telemetry.clone())
-        .unwrap_or_else(MaybeTelemetry::disabled)
+    with_cfg(|c| c.telemetry.clone()).unwrap_or_else(MaybeTelemetry::disabled)
 }
 
 fn prover_dir() -> PathBuf {
@@ -658,6 +658,13 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     }
     if !backend_allowed(backend_str, &ctx.allowed_backends) {
         errors.push(format!("backend `{backend_str}` not allowed"));
+    }
+    if backend_str.starts_with("stark/fri-v1/") {
+        if let Some(state) = ctx.state.as_ref() {
+            if !state.view().zk.stark.enabled {
+                errors.push("stark verification is disabled in node configuration".into());
+            }
+        }
     }
 
     let mut vk_box: Option<VerifyingKeyBox> = None;

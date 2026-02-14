@@ -4279,6 +4279,90 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
     verify_halo2_ipa(&backend, &proof_box, Some(vk_box))
 }
 
+#[cfg(feature = "zk-stark")]
+fn verify_stark_fri_open_verify_envelope(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+) -> bool {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+
+    let reject = |reason: &'static str| {
+        iroha_logger::debug!(
+            backend,
+            reason,
+            "stark/fri-v1 proof rejected (metadata/integrity check failed)"
+        );
+        false
+    };
+
+    let env: OpenVerifyEnvelope = match norito::decode_from_bytes(&proof.bytes) {
+        Ok(env) => env,
+        Err(_) => return reject("invalid OpenVerifyEnvelope payload"),
+    };
+    if env.backend != BackendTag::Stark {
+        return reject("unexpected OpenVerifyEnvelope backend tag");
+    }
+
+    let Some(vk_box) = vk else {
+        return reject("missing verifying key");
+    };
+    let expected_vk_hash = hash_vk(vk_box);
+    // STARK verification does not consult VK bytes directly, so bind to the VK hash eagerly.
+    if env.vk_hash == [0u8; 32] || env.vk_hash != expected_vk_hash {
+        return reject("verifying key commitment mismatch");
+    }
+
+    // Decode the STARK wrapper payload.
+    let open: StarkFriOpenProofV1 = match norito::decode_from_bytes(&env.proof_bytes) {
+        Ok(open) => open,
+        Err(_) => return reject("invalid STARK wrapper payload"),
+    };
+    if open.version != 1 {
+        return reject("unsupported STARK wrapper version");
+    }
+
+    // Bind the inner STARK envelope to the outer OpenVerifyEnvelope metadata and public inputs by
+    // requiring `params.domain_tag` to equal the SHA-256 digest (hex, 64 chars) of:
+    // `backend || circuit_id || vk_hash || schema/aux public_inputs || wrapper public inputs`.
+    //
+    // This prevents re-wrapping a valid STARK envelope under a different circuit/vk/public-inputs
+    // header without detection.
+    let expected_domain_tag = {
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(b"iroha:zk:stark-fri-open-proof:v1");
+        preimage.extend_from_slice(&(backend.len() as u64).to_le_bytes());
+        preimage.extend_from_slice(backend.as_bytes());
+        preimage.extend_from_slice(&(env.circuit_id.len() as u64).to_le_bytes());
+        preimage.extend_from_slice(env.circuit_id.as_bytes());
+        preimage.extend_from_slice(&env.vk_hash);
+        preimage.extend_from_slice(&(env.public_inputs.len() as u64).to_le_bytes());
+        preimage.extend_from_slice(&env.public_inputs);
+        preimage.extend_from_slice(&(open.public_inputs.len() as u64).to_le_bytes());
+        for column in &open.public_inputs {
+            preimage.extend_from_slice(&(column.len() as u64).to_le_bytes());
+            for value in column {
+                preimage.extend_from_slice(value);
+            }
+        }
+        let digest = Sha256::digest(&preimage);
+        hex::encode(digest)
+    };
+    let inner: crate::zk_stark::StarkVerifyEnvelopeV1 =
+        match norito::decode_from_bytes(&open.envelope_bytes) {
+            Ok(inner) => inner,
+            Err(_) => return reject("invalid inner STARK envelope payload"),
+        };
+    if inner.params.domain_tag != expected_domain_tag {
+        return reject("domain tag integrity mismatch");
+    }
+
+    if !crate::zk_stark::verify_stark_fri_envelope(&open.envelope_bytes) {
+        return reject("native STARK verifier rejected proof");
+    }
+    true
+}
+
 /// Verify a zero-knowledge proof using the requested backend, returning `true` when supported.
 pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
     // Explicit debug backends for deterministic test results.
@@ -4336,10 +4420,16 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     if backend.starts_with("stark/fri-v1/") {
         #[cfg(feature = "zk-stark")]
         {
-            return crate::zk_stark::verify_stark_fri_envelope(&proof.bytes);
+            // STARK proofs must use `OpenVerifyEnvelope` so the verifier can bind the
+            // backend/circuit metadata and verifying-key hash into the inner STARK envelope.
+            return verify_stark_fri_open_verify_envelope(backend, proof, vk);
         }
         #[cfg(not(feature = "zk-stark"))]
         {
+            iroha_logger::debug!(
+                backend,
+                "stark/fri-v1 backend requested but binary was built without `zk-stark`"
+            );
             return false;
         }
     }

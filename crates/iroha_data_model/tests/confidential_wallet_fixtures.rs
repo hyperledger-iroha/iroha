@@ -65,6 +65,36 @@ fn confidential_wallet_fixtures_are_stable() {
     }
 }
 
+#[test]
+#[ignore = "utility for regenerating wallet fixture expected hashes"]
+fn print_confidential_wallet_fixture_hashes() {
+    set_instruction_registry(instruction_registry::default());
+
+    let raw = fs::read_to_string(fixture_path()).expect("wallet fixture must load");
+    let root: Value = json::from_str(&raw).expect("wallet fixture JSON must parse");
+    let cases = root
+        .get("cases")
+        .and_then(Value::as_array)
+        .expect("cases array missing");
+
+    for case in cases {
+        let case_id = case
+            .get("case_id")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let signed_hex = case
+            .get("signed_transaction_hex")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{case_id}: signed_transaction_hex missing"));
+        let signed_bytes = hex::decode(signed_hex)
+            .unwrap_or_else(|err| panic!("{case_id}: failed to decode hex: {err}"));
+        let tx = decode_signed_transaction(case_id, &signed_bytes)
+            .unwrap_or_else(|err| panic!("{case_id}: failed to decode signed tx: {err}"));
+        let actual_hash = hex::encode(tx.hash().as_ref());
+        eprintln!("{case_id}: {actual_hash}");
+    }
+}
+
 fn decode_signed_transaction(case_id: &str, bytes: &[u8]) -> Result<SignedTransaction, String> {
     // Primary path: framed decode with strict deserialization.
     let strict = std::panic::catch_unwind(|| {

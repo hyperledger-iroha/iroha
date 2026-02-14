@@ -36,6 +36,10 @@ Notes
 - Prover reports persist under `./storage/torii/zk_prover/reports/{id}.json`.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
+- `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri-v1/*` (must be compatible with `ivm-execution-v1`).
+- `/v1/zk/ivm/prove` currently supports `halo2/ipa` only (Halo2 proving keys).
+- STARK verification (`stark/fri-v1/*`) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
+- For `halo2/*` and `stark/fri-v1/*` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
 
 ## Configuration
 
@@ -115,7 +119,7 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Proving keys: the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
   The `.pk` file must match the resolved verifying key and uses Halo2 `SerdeFormat::Processed` serialization.
 - Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
-- Execution semantics: the current `halo2/ipa:ivm-execution-v1` circuit used by `/v1/zk/ivm/prove` is a commitment-binding circuit and does not prove full IVM execution semantics by itself. Nodes still deterministically replay the bytecode during admission to recompute the overlay and commitments and reject mismatches.
+- Execution semantics: `/v1/zk/ivm/prove` currently uses the commitment-binding `halo2/ipa:ivm-execution-v1` circuit. Nodes still deterministically replay the bytecode during admission to recompute the overlay and commitments and reject mismatches. For environments that operate with full-semantic proof circuits, set `pipeline.ivm_proved.skip_replay = true` to skip replay.
 - Metrics: `torii_zk_ivm_prove_inflight` (jobs currently proving) and `torii_zk_ivm_prove_queued` (jobs queued waiting for an inflight slot) expose IVM prove helper queue pressure.
 
 ## Examples

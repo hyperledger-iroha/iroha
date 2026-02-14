@@ -6152,6 +6152,8 @@ pub struct Zk {
     pub halo2: Halo2,
     /// FASTPQ prover settings.
     pub fastpq: Fastpq,
+    /// Native STARK/FRI verification settings.
+    pub stark: Stark,
     /// Cap on the number of recent shielded Merkle roots kept per asset.
     pub root_history_cap: usize,
     /// Cap on the number of recent ballot ciphertexts kept per election.
@@ -6657,6 +6659,24 @@ impl Default for Halo2 {
                 crate::parameters::defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,
             enforce_transcript_label_ascii:
                 crate::parameters::defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
+        }
+    }
+}
+
+/// Native STARK/FRI verification settings.
+#[derive(Debug, Clone, Copy)]
+pub struct Stark {
+    /// Enable native STARK verification.
+    pub enabled: bool,
+    /// Maximum accepted proof payload length (bytes).
+    pub max_proof_bytes: usize,
+}
+
+impl Default for Stark {
+    fn default() -> Self {
+        Self {
+            enabled: crate::parameters::defaults::zk::stark::ENABLED,
+            max_proof_bytes: crate::parameters::defaults::zk::stark::MAX_PROOF_BYTES,
         }
     }
 }

@@ -2351,6 +2351,16 @@ pub mod zk {
         /// Whether transcript labels must be ASCII.
         pub const ENFORCE_TRANSCRIPT_LABEL_ASCII: bool = true;
     }
+    /// Native STARK/FRI verifier configuration defaults.
+    pub mod stark {
+        /// Feature toggle for STARK verification in hosts.
+        pub const ENABLED: bool = false;
+        /// Maximum accepted proof payload length (bytes).
+        ///
+        /// The native `stark/fri-v1/*` verifier enforces additional structural caps
+        /// during decoding; this limit is an early, coarse safeguard.
+        pub const MAX_PROOF_BYTES: usize = 1024 * 1024; // 1 MiB
+    }
     /// Stateless pre-verification defaults.
     pub mod preverify {
         /// Maximum accepted proof size (bytes) for pre-verification.
