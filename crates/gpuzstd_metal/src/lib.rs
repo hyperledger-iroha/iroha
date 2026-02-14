@@ -229,16 +229,17 @@ pub unsafe extern "C" fn gpu_zstd_compress(
             false,
         ) {
             Ok(bytes) => bytes,
-            Err(ZstdEncodeError::Capacity) => return RC_NO_SPACE,
-            Err(_) => return RC_ZSTD,
+            Err(_) => match zstd::encode_all(Cursor::new(src_slice), level) {
+                Ok(bytes) => bytes,
+                Err(_) => return RC_ZSTD,
+            },
         },
-        // Keep the ABI stable: when Metal pipelines cannot initialize at runtime,
-        // return a valid zstd frame instead of surfacing GPU unavailability.
-        Err(RC_GPU_UNAVAILABLE) => match zstd::encode_all(Cursor::new(src_slice), level) {
+        // Keep the ABI stable: CPU fallback guarantees valid standard zstd frames
+        // when GPU preprocessing does not produce usable sequences.
+        Err(_) => match zstd::encode_all(Cursor::new(src_slice), level) {
             Ok(bytes) => bytes,
             Err(_) => return RC_ZSTD,
         },
-        Err(rc) => return rc,
     };
     if encoded.len() > capacity {
         return RC_NO_SPACE;

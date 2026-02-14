@@ -24,10 +24,14 @@ use iroha_data_model::{
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
     domain::DomainId,
-    isi::{Grant, InstructionBox, Mint, register::RegisterPeerWithPop},
+    isi::{Grant, InstructionBox, Mint, SetParameter, register::RegisterPeerWithPop},
     metadata::Metadata,
     name::Name,
-    parameter::{Parameter, custom::CustomParameter, system::confidential_metadata},
+    parameter::{
+        Parameter,
+        custom::CustomParameter,
+        system::{consensus_metadata, confidential_metadata},
+    },
     peer::PeerId,
     prelude::{HashOf, Transfer},
     transaction::signed::TransactionResultInner,
@@ -179,6 +183,7 @@ pub fn genesis_with_keypair_and_post_topology(
         genesis_key_pair,
         None,
         None,
+        None,
     )
 }
 
@@ -189,7 +194,8 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     da_proof_policies: Option<DaProofPolicyBundle>,
-    nexus_config: Option<ActualNexus>,
+    _nexus_config: Option<ActualNexus>,
+    consensus_handshake_meta: Option<Parameter>,
 ) -> GenesisBlock {
     init_instruction_registry();
     build_minimal_genesis_with_post_topology(
@@ -199,8 +205,26 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         topology_entries,
         genesis_key_pair,
         da_proof_policies,
-        nexus_config,
+        _nexus_config,
+        consensus_handshake_meta,
     )
+}
+
+fn strip_handshake_metadata_transactions(transactions: &mut [Vec<InstructionBox>]) {
+    for instruction_batch in transactions {
+        instruction_batch.retain(|instruction| {
+            !instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set_param| {
+                    matches!(
+                        set_param.inner(),
+                        Parameter::Custom(custom)
+                            if custom.id() == &consensus_metadata::handshake_meta_id()
+                    )
+                })
+        });
+    }
 }
 
 fn build_minimal_genesis(
@@ -217,6 +241,7 @@ fn build_minimal_genesis(
         genesis_key_pair,
         None,
         None,
+        None,
     )
 }
 
@@ -228,7 +253,14 @@ fn build_minimal_genesis_with_post_topology(
     genesis_key_pair: KeyPair,
     da_proof_policies: Option<DaProofPolicyBundle>,
     nexus_config: Option<ActualNexus>,
+    consensus_handshake_meta: Option<Parameter>,
 ) -> GenesisBlock {
+    let mut extra_transactions = extra_transactions;
+    let mut post_topology_transactions = post_topology_transactions;
+
+    strip_handshake_metadata_transactions(&mut extra_transactions);
+    strip_handshake_metadata_transactions(&mut post_topology_transactions);
+
     let (mut block, genesis_account, topology_vec, genesis_key_pair) =
         build_minimal_genesis_unexecuted_with_post_topology(
             extra_transactions,
@@ -237,6 +269,8 @@ fn build_minimal_genesis_with_post_topology(
             topology_entries,
             genesis_key_pair,
             da_proof_policies,
+            nexus_config.clone(),
+            consensus_handshake_meta,
         );
     ensure_genesis_results(
         &mut block,
@@ -258,11 +292,13 @@ fn build_minimal_genesis_unexecuted(
     build_minimal_genesis_unexecuted_with_post_topology(
         extra_transactions,
         Vec::new(),
-        topology,
-        topology_entries,
-        genesis_key_pair,
-        None,
-    )
+            topology,
+            topology_entries,
+            genesis_key_pair,
+            None,
+            None,
+            None,
+        )
 }
 
 fn build_minimal_genesis_unexecuted_with_post_topology(
@@ -272,6 +308,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     da_proof_policies: Option<DaProofPolicyBundle>,
+    _nexus_config: Option<ActualNexus>,
+    consensus_handshake_meta: Option<Parameter>,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
     fn try_default_executor_path() -> Option<PathBuf> {
         if std::env::var("IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR")
@@ -531,6 +569,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         Json::new(norito::json!({ "vk_set_hash": null })),
     ));
     builder = builder.append_parameter(conf_param);
+    if let Some(handshake_meta) = consensus_handshake_meta {
+        builder = builder.append_instruction(InstructionBox::from(SetParameter::new(handshake_meta)));
+    }
 
     let block = builder
         .build_and_sign(&genesis_key_pair)
@@ -1250,6 +1291,8 @@ mod tests {
                 vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 Some(policies),
+                None,
+                None,
             );
         let executed = super::populate_genesis_results(
             &block,
