@@ -635,21 +635,30 @@ mod detection_tests {
 #[cfg(test)]
 mod observer_tests {
     use std::sync::mpsc;
+    use std::time::Duration;
 
     use super::*;
 
     #[test]
     fn execution_mode_observer_receives_resolution() {
         clear_execution_mode_observer();
+        struct ExecutionModeObserverGuard;
+        impl Drop for ExecutionModeObserverGuard {
+            fn drop(&mut self) {
+                clear_execution_mode_observer();
+            }
+        }
+        let _observer_guard = ExecutionModeObserverGuard;
         let (tx, rx) = mpsc::channel();
         set_execution_mode_observer(move |requested, resolved, backend| {
-            tx.send((requested, resolved, backend))
-                .expect("send observer payload");
+            let _ = tx.send((requested, resolved, backend));
         });
 
         let resolved = ExecutionMode::Auto.resolve();
 
-        let (requested, resolved_event, backend) = rx.recv().expect("observer payload");
+        let (requested, resolved_event, backend) = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("observer payload");
         assert_eq!(requested, ExecutionMode::Auto);
         assert_eq!(resolved_event, resolved);
         match resolved {
