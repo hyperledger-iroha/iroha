@@ -17,10 +17,12 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
+mod test_world;
+
 #[test]
 fn vk_register_update_emit_events() {
     // Minimal node state and block context
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
@@ -40,6 +42,9 @@ fn vk_register_update_emit_events() {
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant vk manage");
+    // The permission grant emits an account-level event; clear it so we only
+    // assert on verifying-key lifecycle events below.
+    stx.world.take_external_events();
 
     // Prepare a VK record and Register
     let id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_test");

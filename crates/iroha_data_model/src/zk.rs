@@ -63,10 +63,14 @@ pub struct OpenVerifyEnvelope {
     pub backend: BackendTag,
     /// Circuit identifier string (backend-specific; opaque to host).
     pub circuit_id: String,
-    /// Verifying-key hash (Blake2b-32) if known; all zeros if inline.
+    /// Verifying-key hash (`sha256(backend || vk_bytes)`) if known; all zeros if inline.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub vk_hash: [u8; 32],
-    /// Public inputs (opaque bytes; backend-specific canonical encoding).
+    /// Public-input metadata bytes (opaque; backend-specific canonical encoding).
+    ///
+    /// For backends that separate schema from values (e.g., `stark/fri-v1` wrappers),
+    /// this field carries the stable schema descriptor while concrete values are
+    /// stored inside backend-specific payloads.
     pub public_inputs: Vec<u8>,
     /// Proof bytes (opaque, backend-specific canonical encoding).
     pub proof_bytes: Vec<u8>,

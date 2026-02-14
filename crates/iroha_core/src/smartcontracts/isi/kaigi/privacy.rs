@@ -284,8 +284,12 @@ fn verify_with_config(
     let backend_ident = Ident::from_str(backend_tag.as_str())
         .map_err(|_| privacy_error("invalid verifier backend identifier"))?;
     let proof_box = ProofBox::new(backend_ident, proof_bytes.to_vec());
-    let report =
-        zk::verify_backend_with_timing(backend_tag.as_str(), &proof_box, record_key.as_ref());
+    let report = zk::verify_backend_with_timing_checked(
+        backend_tag.as_str(),
+        &proof_box,
+        record_key.as_ref(),
+        &state_transaction.zk,
+    );
 
     #[cfg(feature = "telemetry")]
     {

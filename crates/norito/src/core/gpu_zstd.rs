@@ -323,10 +323,11 @@ unsafe fn init_backend() -> Option<Backend> {
         objc_autoreleasePoolPop(pool);
     }
     let _has_device = !device.is_null();
-    let (lib, compress_fn, decompress_fn) = match load_gpu_symbols("libgpuzstd_metal.dylib") {
-        Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
-        None => return None,
-    };
+    let (lib, compress_fn, decompress_fn) =
+        match unsafe { load_gpu_symbols("libgpuzstd_metal.dylib") } {
+            Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
+            None => return None,
+        };
     if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
         let _ = unsafe { dlclose(lib) };
         eprintln!(
@@ -348,10 +349,11 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     #[cfg(unix)]
     {
-        let (lib, compress_fn, decompress_fn) = match load_gpu_symbols("libgpuzstd_cuda.so") {
-            Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
-            None => return None,
-        };
+        let (lib, compress_fn, decompress_fn) =
+            match unsafe { load_gpu_symbols("libgpuzstd_cuda.so") } {
+                Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
+                None => return None,
+            };
         if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = unsafe { dlclose(lib) };
             eprintln!(

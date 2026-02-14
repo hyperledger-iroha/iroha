@@ -9742,6 +9742,7 @@ async fn block_sync_caches_qc_before_block_known() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_cache_rejects_qc_epoch_mismatch() {
+    let _history_guard = crate::sumeragi::status::commit_history_test_guard();
     crate::sumeragi::status::reset_precommit_signer_history_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -9763,7 +9764,11 @@ async fn block_sync_cache_rejects_qc_epoch_mismatch() {
         .expect("signer keypair exists in harness");
     let header = BlockHeader {
         height: NonZeroU64::new(height).expect("block height must be non-zero"),
-        prev_block_hash: None,
+        // Use a per-harness parent hash so this test does not collide with other
+        // tests that may record signer history under deterministic sample hashes.
+        prev_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+            signer_peer.public_key().to_string().as_bytes(),
+        ))),
         merkle_root: None,
         result_merkle_root: None,
         da_proof_policies_hash: None,

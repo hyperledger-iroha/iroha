@@ -6966,6 +6966,7 @@ mod tests {
 
     #[test]
     fn access_set_source_and_conflict_rate_snapshot_updates() {
+        let _guard = super::qc_status_test_guard();
         super::reset_rbc_backlog_stats_for_tests();
         let summary = AccessSetSourceSummary {
             manifest_hints: 2,

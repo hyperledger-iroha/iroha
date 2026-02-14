@@ -2032,7 +2032,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn verify_bound_envelope(&mut self, payload: &[u8], namespace: &str) -> Result<bool, u64> {
         let (_env, vk_box, backend_label) = self.enforce_zk_envelope(payload, namespace)?;
         let proof = ProofBox::new(backend_label.clone().into(), payload.to_vec());
-        Ok(crate::zk::verify_backend_with_timing(&backend_label, &proof, Some(&vk_box)).ok)
+        let guardrails = crate::zk::ZkVerifyGuardrails {
+            halo2_enabled: self.halo2_config.enabled,
+            halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
+            halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
+            stark_enabled: false,
+            stark_max_proof_bytes: 0,
+        };
+        Ok(crate::zk::verify_backend_with_timing_guardrails(
+            &backend_label,
+            &proof,
+            Some(&vk_box),
+            guardrails,
+        )
+        .ok)
     }
 
     /// Install a read-only snapshot of elections (finalized flag and tally) for state-read syscalls.
@@ -5242,6 +5255,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Ok(gas);
                 }
 
+                let guardrails = crate::zk::ZkVerifyGuardrails {
+                    halo2_enabled: self.halo2_config.enabled,
+                    halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
+                    halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
+                    stark_enabled: false,
+                    stark_max_proof_bytes: 0,
+                };
+
                 let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
                 let mut first_error: Option<u64> = None;
                 for env in &envs {
@@ -5263,10 +5284,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             }
                         };
                     let proof = ProofBox::new(backend_label.clone().into(), payload);
-                    let report = crate::zk::verify_backend_with_timing(
+                    let report = crate::zk::verify_backend_with_timing_guardrails(
                         &backend_label,
                         &proof,
                         Some(&vk_box),
+                        guardrails,
                     );
                     status = u8::from(report.ok);
                     if !report.ok {

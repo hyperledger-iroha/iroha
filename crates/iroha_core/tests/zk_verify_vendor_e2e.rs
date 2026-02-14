@@ -1,6 +1,7 @@
 #![doc = "End-to-end vendor bridge gating path for ZK verification"]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
+#![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 //! End-to-end gating path: ZK verify (mocked) -> vendor bridge -> `CoreHost` gating.
 //!
 //! This test avoids IPA math by forcing the verification flag on `CoreHost`
@@ -16,8 +17,11 @@ use iroha_core::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    account::Account,
+    asset::AssetDefinition,
     confidential::ConfidentialStatus,
-    isi::{BuiltInInstruction, verifying_keys, zk::CreateElection},
+    domain::Domain,
+    isi::{verifying_keys, zk::CreateElection},
     permission::Permission,
     prelude::*,
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -28,7 +32,7 @@ use iroha_executor_data_model::permission::governance::{
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -81,25 +85,20 @@ fn derive_ballot_nullifier(
 #[allow(clippy::too_many_lines)]
 fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     // Minimal state
-    let world = iroha_core::state::World::new();
+    let authority: AccountId = ALICE_ID.clone();
+    let domain = Domain::new(authority.domain.clone()).build(&authority);
+    let account = Account::new(authority.clone()).build(&authority);
+    let world = iroha_core::state::World::with([domain], [account], Vec::<AssetDefinition>::new());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(world, kura, query);
+    let mut state = State::new_for_testing(world, kura, query);
+    state.zk.halo2.enabled = true;
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
     // Authority and host
-    let authority: AccountId = ALICE_ID.clone();
-    let mut vm = IVM::new(0);
+    let mut vm = IVM::new(10_000_000);
     let host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     vm.set_host(host);
 
@@ -179,7 +178,8 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
         ),
         nullifier,
     };
-    let sb_bytes = sb.encode_as_instruction_box();
+    let sb_bytes = norito::to_bytes(&InstructionBox::from(sb))
+        .expect("encode SubmitBallot instruction box to Norito");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &sb_bytes);
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);
@@ -192,13 +192,11 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     code.extend_from_slice(&encoding::wide::encode_sys(scall, sys).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    // Program header: magic + header + code (simple)
-    let mut prog = Vec::new();
-    prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[1, 0, 0, 4]); // version 1.0, mode=0, vector_length=4
-    prog.extend_from_slice(&0u64.to_le_bytes()); // gas
-    prog.push(1); // abi_version=1
-    prog.push(0); // vector len
+    let meta = ProgramMetadata {
+        abi_version: 1,
+        ..ProgramMetadata::default()
+    };
+    let mut prog = meta.encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).unwrap();
 

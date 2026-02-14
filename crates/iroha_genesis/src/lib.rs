@@ -1895,10 +1895,7 @@ fn parse_consensus_handshake_metadata(
 ) -> Option<ConsensusHandshakeMetadata> {
     for tx in transactions {
         for instruction in &tx.instructions {
-            let Some(set_param) = instruction
-                .as_any()
-                .downcast_ref::<SetParameter>()
-            else {
+            let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
                 continue;
             };
             let Parameter::Custom(custom) = set_param.inner() else {
@@ -1914,7 +1911,9 @@ fn parse_consensus_handshake_metadata(
                 Ok(payload) => payload,
                 Err(_) => continue,
             };
-            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(manifest, payload) {
+            if let Some(metadata) =
+                parse_consensus_handshake_metadata_from_payload(manifest, payload)
+            {
                 return Some(metadata);
             }
         }
@@ -1934,7 +1933,9 @@ fn parse_consensus_handshake_metadata(
                 Ok(payload) => payload,
                 Err(_) => continue,
             };
-            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(manifest, payload) {
+            if let Some(metadata) =
+                parse_consensus_handshake_metadata_from_payload(manifest, payload)
+            {
                 return Some(metadata);
             }
         }
@@ -4903,29 +4904,33 @@ mod tests {
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw()
             .with_consensus_meta();
-            manifest
-                .transactions
-                .first_mut()
-                .expect("missing manifest transaction")
-                .instructions
-                .push(InstructionBox::from(SetParameter::new(stale_param)));
+        manifest
+            .transactions
+            .first_mut()
+            .expect("missing manifest transaction")
+            .instructions
+            .push(InstructionBox::from(SetParameter::new(stale_param)));
 
         let mut found = Vec::new();
         for instr in manifest.parse()?.into_iter().flatten() {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
                 && let Parameter::Custom(custom) = set_param.inner()
                 && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+                && let Ok(payload) = custom
+                    .payload()
+                    .try_into_any_norito::<norito::json::Value>()
             {
-                if let Some(fingerprint) = payload.get("consensus_fingerprint").and_then(
-                    |value: &norito::json::Value| {
-                    if let Some(fp) = value.as_str() {
-                        Some(fp.to_string())
-                    } else {
-                        None
-                    }
-                },
-                ) {
+                if let Some(fingerprint) =
+                    payload
+                        .get("consensus_fingerprint")
+                        .and_then(|value: &norito::json::Value| {
+                            if let Some(fp) = value.as_str() {
+                                Some(fp.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                {
                     found.push(fingerprint);
                 }
             }
@@ -4985,17 +4990,21 @@ mod tests {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
                 && let Parameter::Custom(custom) = set_param.inner()
                 && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+                && let Ok(payload) = custom
+                    .payload()
+                    .try_into_any_norito::<norito::json::Value>()
             {
-                if let Some(fingerprint) = payload.get("consensus_fingerprint").and_then(
-                    |value: &norito::json::Value| {
-                        if let Some(fp) = value.as_str() {
-                            Some(fp.to_string())
-                        } else {
-                            None
-                        }
-                    },
-                ) {
+                if let Some(fingerprint) =
+                    payload
+                        .get("consensus_fingerprint")
+                        .and_then(|value: &norito::json::Value| {
+                            if let Some(fp) = value.as_str() {
+                                Some(fp.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                {
                     found.push(fingerprint);
                 }
             }
@@ -5056,7 +5065,9 @@ mod tests {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
                 && let Parameter::Custom(custom) = set_param.inner()
                 && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+                && let Ok(payload) = custom
+                    .payload()
+                    .try_into_any_norito::<norito::json::Value>()
             {
                 found.push(payload);
             }
@@ -5064,9 +5075,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         let payload = found.remove(0);
         assert_eq!(
-            payload
-                .get("mode")
-                .and_then(norito::json::Value::as_str),
+            payload.get("mode").and_then(norito::json::Value::as_str),
             Some("Permissioned")
         );
         assert_eq!(
@@ -5143,7 +5152,9 @@ mod tests {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
                 && let Parameter::Custom(custom) = set_param.inner()
                 && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+                && let Ok(payload) = custom
+                    .payload()
+                    .try_into_any_norito::<norito::json::Value>()
             {
                 found.push(payload);
             }
@@ -5151,9 +5162,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         let payload = found.remove(0);
         assert_eq!(
-            payload
-                .get("mode")
-                .and_then(norito::json::Value::as_str),
+            payload.get("mode").and_then(norito::json::Value::as_str),
             Some("Permissioned")
         );
         assert_eq!(

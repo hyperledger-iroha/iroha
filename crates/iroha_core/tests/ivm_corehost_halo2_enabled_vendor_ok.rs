@@ -3,7 +3,7 @@
 #![cfg(feature = "zk-ipa-native")]
 #![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use iroha_config::parameters::defaults;
 use iroha_core::{
@@ -93,6 +93,11 @@ fn verify_then_vendor_submit_ballot_applies() {
     );
     #[cfg(not(feature = "telemetry"))]
     let mut state = State::new(world, kura, query);
+    // Governance and ISI verification consult the node `Zk` config guardrails, so ensure
+    // halo2 verification is enabled here (in addition to the host-local halo2 config used by
+    // the syscall verifier).
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = Duration::ZERO;
     let mut gov_cfg = state.gov.clone();
     gov_cfg.citizenship_bond_amount = 0;
     state.set_gov(gov_cfg);

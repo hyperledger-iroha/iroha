@@ -44,14 +44,19 @@ fn prepare_state() -> (
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
-    let state = State::new(
+    let mut state = State::new(
         iroha_core::state::World::new(),
         kura,
         query,
         iroha_core::telemetry::StateTelemetry::default(),
     );
     #[cfg(not(feature = "telemetry"))]
-    let state = State::new(iroha_core::state::World::new(), kura, query);
+    let mut state = State::new(iroha_core::state::World::new(), kura, query);
+
+    // These tests verify real Halo2 proofs via `verify_backend_with_timing_checked`, so enable the
+    // halo2 verifier in the node config snapshot.
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = std::time::Duration::ZERO;
 
     let (vk_transfer_id, vk_unshield_id, vk_other_id, asset_def_id, owner) = {
         let domain_id: DomainId = "zkd".parse().unwrap();

@@ -158,9 +158,9 @@ fn notify_execution_mode_observer(
         .ok()
         .and_then(|guard| guard.clone());
     if let Some(callback) = observer {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || callback(requested, resolved, backend),
-        ));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            callback(requested, resolved, backend)
+        }));
         if result.is_err() {
             tracing::warn!(
                 target: "fastpq::planner",

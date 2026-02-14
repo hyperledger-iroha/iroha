@@ -6,13 +6,14 @@
 #![cfg(feature = "zk-stark")]
 
 use expect_test::expect;
+use fastpq_prover::{hash_field_elements, pack_bytes};
 use iroha_core::{
     zk::verify_backend,
     zk_stark::{
-        FoldDecommitV1, MerklePath, STARK_HASH_SHA256_V1, StarkCommitmentsV1,
-        StarkCompositionTermV1, StarkCompositionValueV1, StarkFriParamsV1, StarkProofV1,
-        StarkVerifierLimits, StarkVerifyEnvelopeV1, verify_stark_fri_envelope,
-        verify_stark_fri_envelope_with_limits,
+        FoldDecommitV1, MerklePath, STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1,
+        StarkCommitmentsV1, StarkCompositionTermV1, StarkCompositionValueV1, StarkFriParamsV1,
+        StarkFriVerifyingKeyV1, StarkProofV1, StarkVerifierLimits, StarkVerifyEnvelopeV1,
+        verify_stark_fri_envelope, verify_stark_fri_envelope_with_limits,
     },
 };
 use sha2::{Digest, Sha256};
@@ -43,6 +44,40 @@ fn node_hash(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
     h.finalize().into()
 }
 
+fn u64_to_digest_le(val: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&val.to_le_bytes());
+    out
+}
+
+fn digest_le_to_u64(bytes: &[u8; 32]) -> u64 {
+    assert!(
+        bytes[8..].iter().all(|b| *b == 0),
+        "non-canonical poseidon digest encoding"
+    );
+    u64::from_le_bytes(bytes[..8].try_into().expect("slice len = 8"))
+}
+
+fn poseidon_domain_hash_u64(domain: &[u8], values: &[u64]) -> u64 {
+    let packed = pack_bytes(domain);
+    let len_field = u64::try_from(packed.length).unwrap_or(u64::MAX);
+    let mut limbs = Vec::with_capacity(1 + packed.limbs.len() + values.len());
+    limbs.push(len_field);
+    limbs.extend_from_slice(&packed.limbs);
+    limbs.extend_from_slice(values);
+    hash_field_elements(&limbs)
+}
+
+fn leaf_hash_poseidon_u64(v: u64) -> [u8; 32] {
+    u64_to_digest_le(poseidon_domain_hash_u64(b"iroha:zk:stark:leaf:v1", &[v]))
+}
+
+fn node_hash_poseidon(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
+    let l = digest_le_to_u64(l);
+    let r = digest_le_to_u64(r);
+    u64_to_digest_le(poseidon_domain_hash_u64(b"iroha:zk:stark:node:v1", &[l, r]))
+}
+
 fn merkle_root_from_leaves(mut leaves: Vec<[u8; 32]>) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
     // Build full binary tree and return root and per-level nodes
     let mut levels = Vec::new();
@@ -51,6 +86,20 @@ fn merkle_root_from_leaves(mut leaves: Vec<[u8; 32]>) -> ([u8; 32], Vec<Vec<[u8;
         let mut next = Vec::with_capacity(leaves.len() / 2);
         for i in (0..leaves.len()).step_by(2) {
             next.push(node_hash(&leaves[i], &leaves[i + 1]));
+        }
+        levels.push(next.clone());
+        leaves = next;
+    }
+    (leaves[0], levels)
+}
+
+fn merkle_root_from_leaves_poseidon(mut leaves: Vec<[u8; 32]>) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
+    let mut levels = Vec::new();
+    levels.push(leaves.clone());
+    while leaves.len() > 1 {
+        let mut next = Vec::with_capacity(leaves.len() / 2);
+        for i in (0..leaves.len()).step_by(2) {
+            next.push(node_hash_poseidon(&leaves[i], &leaves[i + 1]));
         }
         levels.push(next.clone());
         leaves = next;
@@ -108,6 +157,44 @@ fn derive_query_index_for_test(
     (u64::from_le_bytes(w) % (domain as u64)) as usize
 }
 
+fn poseidon_hash_bytes(preimage: &[u8]) -> u64 {
+    let packed = pack_bytes(preimage);
+    let len_field = u64::try_from(packed.length).unwrap_or(u64::MAX);
+    let mut limbs = Vec::with_capacity(packed.limbs.len() + 1);
+    limbs.push(len_field);
+    limbs.extend_from_slice(&packed.limbs);
+    hash_field_elements(&limbs)
+}
+
+fn derive_query_index_for_test_poseidon(
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_idx: usize,
+) -> usize {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"STARK:query-index");
+    preimage.extend_from_slice(label.as_bytes());
+    preimage.extend_from_slice(&params.version.to_le_bytes());
+    preimage.extend_from_slice(&[
+        params.n_log2,
+        params.blowup_log2,
+        params.fold_arity,
+        params.merkle_arity,
+        params.hash_fn,
+    ]);
+    preimage.extend_from_slice(&params.queries.to_le_bytes());
+    preimage.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
+    preimage.extend_from_slice(params.domain_tag.as_bytes());
+    preimage.extend_from_slice(&(query_idx as u64).to_le_bytes());
+    for root in roots {
+        preimage.extend_from_slice(root);
+    }
+    let digest = poseidon_hash_bytes(&preimage);
+    let domain = 1usize << params.n_log2;
+    (digest % (domain as u64)) as usize
+}
+
 fn challenge_u64(label: &str, bytes: &[u8]) -> u64 {
     let mut h = Sha256::new();
     h.update(label.as_bytes());
@@ -118,6 +205,14 @@ fn challenge_u64(label: &str, bytes: &[u8]) -> u64 {
     w.copy_from_slice(&out[..8]);
     let v = u64::from_le_bytes(w);
     (v as u128 % MOD_P) as u64
+}
+
+fn challenge_poseidon_u64(label: &str, bytes: &[u8]) -> u64 {
+    let mut preimage = Vec::with_capacity(label.len() + 1 + bytes.len());
+    preimage.extend_from_slice(label.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(bytes);
+    poseidon_hash_bytes(&preimage)
 }
 
 fn stark_open_verify_domain_tag_v1(
@@ -307,8 +402,246 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
     }
 }
 
+#[allow(clippy::too_many_lines)]
+fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkVerifyEnvelopeV1 {
+    let n_log2 = 3u8;
+    let n = 1usize << n_log2;
+    let evals: Vec<u64> = (0..n)
+        .map(|x| field_add(field_mul(3, x as u64), 5))
+        .collect();
+    let leaves0: Vec<[u8; 32]> = evals.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
+    let (root0, levels0) = merkle_root_from_leaves_poseidon(leaves0.clone());
+
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2,
+        blowup_log2: 3,
+        fold_arity: 2,
+        queries: 1,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_POSEIDON2_V1,
+        domain_tag,
+    };
+
+    let build_transcript = |root: &[u8; 32]| {
+        let mut tb = Vec::new();
+        tb.extend_from_slice(b"TEST-STARK");
+        tb.extend_from_slice(&params.version.to_le_bytes());
+        tb.extend_from_slice(&[
+            params.n_log2,
+            params.blowup_log2,
+            params.fold_arity,
+            params.merkle_arity,
+            params.hash_fn,
+        ]);
+        tb.extend_from_slice(&params.queries.to_le_bytes());
+        tb.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
+        tb.extend_from_slice(params.domain_tag.as_bytes());
+        tb.extend_from_slice(root);
+        tb
+    };
+
+    let r0 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root0));
+
+    let layer1: Vec<u64> = (0..n / 2)
+        .map(|j| field_add(evals[2 * j], field_mul(r0, evals[2 * j + 1])))
+        .collect();
+    let leaves1: Vec<[u8; 32]> = layer1.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
+    let (root1, levels1) = merkle_root_from_leaves_poseidon(leaves1.clone());
+
+    let r1 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root1));
+
+    let layer2: Vec<u64> = (0..n / 4)
+        .map(|j| field_add(layer1[2 * j], field_mul(r1, layer1[2 * j + 1])))
+        .collect();
+    let leaves2: Vec<[u8; 32]> = layer2.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
+    let (root2, levels2) = merkle_root_from_leaves_poseidon(leaves2.clone());
+
+    let r2 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root2));
+
+    let layer3: Vec<u64> = (0..n / 8)
+        .map(|j| field_add(layer2[2 * j], field_mul(r2, layer2[2 * j + 1])))
+        .collect();
+    let leaves3: Vec<[u8; 32]> = layer3.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
+    let (root3, levels3) = merkle_root_from_leaves_poseidon(leaves3.clone());
+
+    let commitments_roots = vec![root0, root1, root2, root3];
+    let base_index =
+        derive_query_index_for_test_poseidon("TEST-STARK", &params, &commitments_roots, 0);
+    let mut idx_layer = base_index;
+    let mut chain = Vec::new();
+    let layer_values: [&[u64]; 4] = [&evals, &layer1, &layer2, &layer3];
+    let level_refs: [&[Vec<[u8; 32]>]; 4] = [&levels0, &levels1, &levels2, &levels3];
+    let mut domain = n;
+    let fold = params.fold_arity as usize;
+    for k in 0..commitments_roots.len() - 1 {
+        assert!(domain >= fold, "domain must have pairs at layer {k}");
+        let j = idx_layer / fold;
+        let y0 = layer_values[k][2 * j];
+        let y1 = layer_values[k][2 * j + 1];
+        let z = layer_values[k + 1][j];
+        let path_y0 = path_for(2 * j, level_refs[k]);
+        let path_y1 = path_for(2 * j + 1, level_refs[k]);
+        let path_z = path_for(j, level_refs[k + 1]);
+        chain.push(FoldDecommitV1 {
+            j: j as u32,
+            y0,
+            y1,
+            path_y0,
+            path_y1,
+            z,
+            path_z,
+        });
+        idx_layer = j;
+        domain /= fold;
+    }
+    let queries: Vec<Vec<FoldDecommitV1>> = vec![chain];
+
+    let comp_constant = 7u64;
+    let comp_z_coeff = 2u64;
+    let aux_wire0 = layer2[0];
+    let aux_wire1 = layer2[1];
+    let comp_aux_terms = vec![
+        StarkCompositionTermV1 {
+            wire_index: 0,
+            value: aux_wire0,
+            coeff: 3,
+        },
+        StarkCompositionTermV1 {
+            wire_index: 1,
+            value: aux_wire1,
+            coeff: 5,
+        },
+    ];
+    let comp_leaf = field_add(
+        field_add(
+            field_add(comp_constant, field_mul(comp_z_coeff, layer3[0])),
+            field_mul(3, aux_wire0),
+        ),
+        field_mul(5, aux_wire1),
+    );
+    let expected_comp = field_add(
+        field_add(
+            field_add(comp_constant, field_mul(comp_z_coeff, layer3[0])),
+            field_mul(comp_aux_terms[0].coeff, comp_aux_terms[0].value),
+        ),
+        field_mul(comp_aux_terms[1].coeff, comp_aux_terms[1].value),
+    );
+    assert_eq!(comp_leaf, expected_comp, "composition leaf mismatch");
+    let comp_leaves = vec![leaf_hash_poseidon_u64(comp_leaf)];
+    let (comp_root, comp_levels) = merkle_root_from_leaves_poseidon(comp_leaves);
+    let comp_values = Some(vec![StarkCompositionValueV1 {
+        leaf: comp_leaf,
+        constant: comp_constant,
+        z_coeff: comp_z_coeff,
+        aux_terms: comp_aux_terms,
+        path: path_for(0, &comp_levels),
+    }]);
+
+    StarkVerifyEnvelopeV1 {
+        params,
+        proof: StarkProofV1 {
+            version: 1,
+            commits: StarkCommitmentsV1 {
+                version: 1,
+                roots: commitments_roots,
+                comp_root: Some(comp_root),
+            },
+            queries,
+            comp_values,
+        },
+        transcript_label: "TEST-STARK".to_string(),
+    }
+}
+
 fn build_sample_envelope() -> StarkVerifyEnvelopeV1 {
     build_sample_envelope_with_domain_tag("fastpq:v1:fri".to_string())
+}
+
+fn build_sample_envelope_poseidon2() -> StarkVerifyEnvelopeV1 {
+    build_sample_envelope_poseidon2_with_domain_tag("fastpq:v1:fri".to_string())
+}
+
+fn build_stark_open_verify_envelope_bytes_for_columns(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    schema_descriptor: &[u8],
+    public_inputs: Vec<Vec<[u8; 32]>>,
+) -> Vec<u8> {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+
+    let domain_tag = stark_open_verify_domain_tag_v1(
+        backend,
+        circuit_id,
+        vk_hash,
+        schema_descriptor,
+        &public_inputs,
+    );
+    let inner = build_sample_envelope_with_domain_tag(domain_tag);
+    let envelope_bytes = norito::to_bytes(&inner).expect("encode STARK inner envelope");
+    let open = StarkFriOpenProofV1 {
+        version: 1,
+        public_inputs,
+        envelope_bytes,
+    };
+    let proof_bytes = norito::to_bytes(&open).expect("encode STARK open proof");
+    let env = OpenVerifyEnvelope {
+        backend: BackendTag::Stark,
+        circuit_id: circuit_id.to_string(),
+        vk_hash,
+        public_inputs: schema_descriptor.to_vec(),
+        proof_bytes,
+        aux: Vec::new(),
+    };
+    norito::to_bytes(&env).expect("encode OpenVerifyEnvelope")
+}
+
+fn derive_ballot_nullifier_for_test(
+    domain_tag: &str,
+    chain_id: &iroha_data_model::ChainId,
+    election_id: &str,
+    commit: &[u8; 32],
+) -> [u8; 32] {
+    use blake2::{Blake2b512, Digest as _};
+
+    let mut input = Vec::with_capacity(
+        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+    );
+    let push_len = |buf: &mut Vec<u8>, len: usize| {
+        let len_u64 = len as u64;
+        buf.extend_from_slice(&len_u64.to_le_bytes());
+    };
+    push_len(&mut input, domain_tag.len());
+    input.extend_from_slice(domain_tag.as_bytes());
+    push_len(&mut input, chain_id.as_str().len());
+    input.extend_from_slice(chain_id.as_str().as_bytes());
+    push_len(&mut input, election_id.len());
+    input.extend_from_slice(election_id.as_bytes());
+    input.extend_from_slice(commit);
+    let digest = Blake2b512::digest(&input);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest[..32]);
+    out
+}
+
+fn sample_stark_vk_box(
+    backend: &str,
+    circuit_id: &str,
+    hash_fn: u8,
+) -> iroha_data_model::proof::VerifyingKeyBox {
+    let payload = StarkFriVerifyingKeyV1 {
+        version: 1,
+        circuit_id: circuit_id.to_string(),
+        n_log2: 3,
+        blowup_log2: 3,
+        fold_arity: 2,
+        queries: 1,
+        merkle_arity: 2,
+        hash_fn,
+    };
+    let bytes = norito::to_bytes(&payload).expect("encode STARK verifying key payload");
+    iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), bytes)
 }
 
 #[test]
@@ -396,11 +729,21 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
 
     // Unsupported hash selector should be rejected
     let mut env_bad_hash = env.clone();
-    env_bad_hash.params.hash_fn = iroha_core::zk_stark::STARK_HASH_POSEIDON2_V1;
+    env_bad_hash.params.hash_fn = 3;
     let bytes_bad_hash = norito::to_bytes(&env_bad_hash).expect("encode");
     assert!(
         !verify_stark_fri_envelope(&bytes_bad_hash),
         "unsupported hash selector must fail"
+    );
+}
+
+#[test]
+fn stark_poseidon2_roundtrip_ok() {
+    let env = build_sample_envelope_poseidon2();
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        verify_stark_fri_envelope(&bytes),
+        "native STARK verifier rejected poseidon2 envelope"
     );
 }
 
@@ -485,14 +828,14 @@ fn stark_rejects_mismatched_merkle_indices() {
 #[test]
 fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
     use iroha_data_model::{
-        proof::{ProofBox, VerifyingKeyBox},
+        proof::ProofBox,
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
 
     let backend = "stark/fri-v1/sha256-goldilocks-v1";
     let circuit_id = "ivm-execution-v1";
 
-    let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5, 6]);
+    let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
 
     // Two columns, one row each (matches the instance-column shape used by other backends).
@@ -547,6 +890,56 @@ fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
     );
 }
 
+#[test]
+fn stark_open_verify_envelope_poseidon2_variant_verifies() {
+    use iroha_data_model::{
+        proof::ProofBox,
+        zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
+    };
+
+    let backend = "stark/fri-v1/poseidon2-goldilocks-v1";
+    let circuit_id = "ivm-execution-v1";
+
+    let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_POSEIDON2_V1);
+    let vk_hash = iroha_core::zk::hash_vk(&vk_box);
+
+    let public_inputs = vec![vec![[0x11; 32]], vec![[0x22; 32]]];
+    let env_public_inputs = b"schema:test".to_vec();
+    let domain_tag = stark_open_verify_domain_tag_v1(
+        backend,
+        circuit_id,
+        vk_hash,
+        &env_public_inputs,
+        &public_inputs,
+    );
+    let inner = build_sample_envelope_poseidon2_with_domain_tag(domain_tag);
+    let envelope_bytes = norito::to_bytes(&inner).expect("encode stark envelope");
+
+    let open = StarkFriOpenProofV1 {
+        version: 1,
+        public_inputs: public_inputs.clone(),
+        envelope_bytes,
+    };
+    let proof_bytes = norito::to_bytes(&open).expect("encode open proof");
+
+    let env = OpenVerifyEnvelope {
+        backend: BackendTag::Stark,
+        circuit_id: circuit_id.to_string(),
+        vk_hash,
+        public_inputs: env_public_inputs,
+        proof_bytes,
+        aux: Vec::new(),
+    };
+    let proof = ProofBox::new(
+        backend.into(),
+        norito::to_bytes(&env).expect("encode OpenVerifyEnvelope"),
+    );
+    assert!(
+        verify_backend(backend, &proof, Some(&vk_box)),
+        "wrapped STARK OpenVerifyEnvelope should verify (poseidon2 variant)"
+    );
+}
+
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     let bytes: &[u8; 32] = hash.as_ref();
     let mut limbs = [0u64; 4];
@@ -598,8 +991,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
         name::Name,
         prelude::{AccountId, IvmBytecode, TransactionBuilder},
         proof::{
-            ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
-            VerifyingKeyRecord,
+            ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId, VerifyingKeyRecord,
         },
         transaction::{Executable, IvmProved},
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
@@ -630,7 +1022,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     let world = iroha_core::state::World::with([domain], [account], []);
 
     let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
-    let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5, 6]);
+    let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
 
     let mut vk_record = VerifyingKeyRecord::new(
@@ -751,6 +1143,206 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
             .expect("proved execution overlay must be accepted");
     let built: Vec<_> = overlay_built.instructions().cloned().collect();
     assert_eq!(built.as_slice(), proved.overlay.as_ref());
+}
+
+#[test]
+fn stark_governance_submit_and_finalize_accept_valid_proofs() {
+    use core::num::NonZeroU64;
+
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::Execute,
+        state::{State, World, WorldReadOnly},
+    };
+    use iroha_data_model::{
+        Registrable,
+        account::Account,
+        block::BlockHeader,
+        confidential::ConfidentialStatus,
+        domain::Domain,
+        isi::{
+            Grant, verifying_keys,
+            zk::{CreateElection, FinalizeElection, SubmitBallot},
+        },
+        permission::Permission,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
+        zk::BackendTag,
+    };
+    use iroha_executor_data_model::permission::governance::{
+        CanEnactGovernance, CanManageParliament, CanSubmitGovernanceBallot,
+    };
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::ALICE_ID;
+    use mv::storage::StorageReadOnly;
+
+    let backend = "stark/fri-v1/sha256-goldilocks-v1";
+    let ballot_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1";
+    let tally_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1";
+    let election_id = "stark-vote-e2e".to_string();
+    let nullifier_domain = "gov:ballot:v1";
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = World::with([domain], [account], Vec::new());
+    let mut state = State::new_for_testing(world, kura, query);
+    state.zk.stark.enabled = true;
+    state.zk.halo2.enabled = false;
+    state.zk.verify_timeout = std::time::Duration::ZERO;
+    state.gov.citizenship_bond_amount = 0;
+    state.gov.min_bond_amount = 0;
+
+    let header = BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    Grant::account_permission(perm_vk, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanManageVerifyingKeys");
+    let perm_parliament: Permission = CanManageParliament.into();
+    Grant::account_permission(perm_parliament, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanManageParliament");
+    let perm_ballot: Permission = CanSubmitGovernanceBallot {
+        referendum_id: election_id.clone(),
+    }
+    .into();
+    Grant::account_permission(perm_ballot, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanSubmitGovernanceBallot");
+    let perm_enact: Permission = CanEnactGovernance.into();
+    Grant::account_permission(perm_enact, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanEnactGovernance");
+
+    let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
+    let ballot_vk_box = sample_stark_vk_box(backend, ballot_circuit_id, STARK_HASH_SHA256_V1);
+    let ballot_vk_hash = iroha_core::zk::hash_vk(&ballot_vk_box);
+    let ballot_schema = b"gov:vote:ballot:schema:v1".to_vec();
+    let ballot_schema_hash: [u8; 32] = iroha_crypto::Hash::new(&ballot_schema).into();
+    let mut ballot_vk_record = VerifyingKeyRecord::new(
+        1,
+        ballot_circuit_id,
+        BackendTag::Stark,
+        "goldilocks",
+        ballot_schema_hash,
+        ballot_vk_hash,
+    );
+    ballot_vk_record.status = ConfidentialStatus::Active;
+    ballot_vk_record.gas_schedule_id = Some("sched_ballot".to_string());
+    ballot_vk_record.key = Some(ballot_vk_box.clone());
+    verifying_keys::RegisterVerifyingKey {
+        id: ballot_vk_id.clone(),
+        record: ballot_vk_record,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register ballot vk");
+
+    let tally_vk_id = VerifyingKeyId::new(backend, "vote_tally");
+    let tally_vk_box = sample_stark_vk_box(backend, tally_circuit_id, STARK_HASH_SHA256_V1);
+    let tally_vk_hash = iroha_core::zk::hash_vk(&tally_vk_box);
+    let tally_schema = b"gov:vote:tally:schema:v1".to_vec();
+    let tally_schema_hash: [u8; 32] = iroha_crypto::Hash::new(&tally_schema).into();
+    let mut tally_vk_record = VerifyingKeyRecord::new(
+        1,
+        tally_circuit_id,
+        BackendTag::Stark,
+        "goldilocks",
+        tally_schema_hash,
+        tally_vk_hash,
+    );
+    tally_vk_record.status = ConfidentialStatus::Active;
+    tally_vk_record.gas_schedule_id = Some("sched_tally".to_string());
+    tally_vk_record.key = Some(tally_vk_box.clone());
+    verifying_keys::RegisterVerifyingKey {
+        id: tally_vk_id.clone(),
+        record: tally_vk_record,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register tally vk");
+
+    let eligible_root = [0x22; 32];
+    CreateElection {
+        election_id: election_id.clone(),
+        options: 2,
+        eligible_root,
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: ballot_vk_id.clone(),
+        vk_tally: tally_vk_id.clone(),
+        domain_tag: nullifier_domain.to_string(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("create election");
+
+    let commit = [0x11; 32];
+    let ballot_columns = vec![vec![commit], vec![eligible_root]];
+    let ballot_proof_bytes = build_stark_open_verify_envelope_bytes_for_columns(
+        backend,
+        ballot_circuit_id,
+        ballot_vk_hash,
+        &ballot_schema,
+        ballot_columns,
+    );
+    let ballot_attachment = ProofAttachment::new_ref(
+        backend.to_string(),
+        ProofBox::new(backend.to_string(), ballot_proof_bytes),
+        ballot_vk_id,
+    );
+    let nullifier =
+        derive_ballot_nullifier_for_test(nullifier_domain, &state.chain_id, &election_id, &commit);
+    SubmitBallot {
+        election_id: election_id.clone(),
+        ciphertext: commit.to_vec(),
+        ballot_proof: ballot_attachment,
+        nullifier,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("submit ballot");
+
+    let tally = vec![7_u64, 2_u64];
+    let tally_columns = tally
+        .iter()
+        .map(|&value| vec![limb_as_instance_bytes(value)])
+        .collect::<Vec<_>>();
+    let tally_proof_bytes = build_stark_open_verify_envelope_bytes_for_columns(
+        backend,
+        tally_circuit_id,
+        tally_vk_hash,
+        &tally_schema,
+        tally_columns,
+    );
+    let tally_attachment = ProofAttachment::new_ref(
+        backend.to_string(),
+        ProofBox::new(backend.to_string(), tally_proof_bytes),
+        tally_vk_id,
+    );
+    FinalizeElection {
+        election_id: election_id.clone(),
+        tally: tally.clone(),
+        tally_proof: tally_attachment,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("finalize election");
+
+    let election = stx
+        .world
+        .elections()
+        .get(&election_id)
+        .cloned()
+        .expect("election exists");
+    assert!(election.finalized, "election must be finalized");
+    assert_eq!(election.tally, tally);
 }
 
 #[test]

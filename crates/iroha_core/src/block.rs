@@ -486,7 +486,7 @@ use iroha_data_model::Encode as _;
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
     da::proof_policy_bundle_hash,
-    executor::configure_executor_fuel_budget,
+    executor::{charge_fees_for_applied_overlay, configure_executor_fuel_budget},
     kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
     pipeline::{
         gpu::{self, AccessTriplet},
@@ -7338,8 +7338,32 @@ pub(crate) mod valid {
                                     .map(|rm| rm.object.clone())
                             })
                     };
+                    let requires_fee_postprocessing =
+                        |tx: &iroha_data_model::transaction::SignedTransaction| {
+                            if !state_block.pipeline.gas.accepted_assets.is_empty() {
+                                return true;
+                            }
+                            if tx.metadata().get("gas_asset_id").is_some() {
+                                return true;
+                            }
+                            if state_block.nexus.enabled {
+                                let fees = &state_block.nexus.fees;
+                                if fees.base_fee > 0
+                                    || fees.per_byte_fee > 0
+                                    || fees.per_instruction_fee > 0
+                                    || fees.per_gas_unit_fee > 0
+                                {
+                                    return true;
+                                }
+                            }
+                            false
+                        };
                     let eval_detached = |p: &PreparedEntry| {
                         if let Some(Ok(ovl)) = overlays.get(p.idx) {
+                            let tx = txs[p.idx];
+                            if requires_fee_postprocessing(tx) {
+                                return (p.idx, None);
+                            }
                             let mut delta = DetachedStateTransactionDelta::default();
                             let mut unsupported = false;
                             let mut reject: Option<TransactionRejectionReason> = None;
@@ -7558,13 +7582,24 @@ pub(crate) mod valid {
                                 chunk_size,
                             ) {
                                 Err(e) => Err(TransactionRejectionReason::Validation(e)),
-                                Ok(()) => match state_tx.execute_data_triggers_dfs(&authority) {
-                                    Err(err) => Err(err),
-                                    Ok(trigger_sequence) => {
-                                        state_tx.apply();
-                                        Ok(trigger_sequence)
+                                Ok(()) => {
+                                    if let Err(err) = charge_fees_for_applied_overlay(
+                                        &mut state_tx,
+                                        &authority,
+                                        tx,
+                                        overlay.as_ref(),
+                                    ) {
+                                        Err(TransactionRejectionReason::Validation(err))
+                                    } else {
+                                        match state_tx.execute_data_triggers_dfs(&authority) {
+                                            Err(err) => Err(err),
+                                            Ok(trigger_sequence) => {
+                                                state_tx.apply();
+                                                Ok(trigger_sequence)
+                                            }
+                                        }
                                     }
-                                },
+                                }
                             };
                             if let Err(reason) = &result {
                                 iroha_logger::debug!(
@@ -7823,15 +7858,29 @@ pub(crate) mod valid {
                                                 e,
                                             ),
                                         ),
-                                        Ok(()) => match state_tx
-                                            .execute_data_triggers_dfs(&authority)
-                                        {
-                                            Err(err) => Err(err),
-                                            Ok(trigger_sequence) => {
-                                                state_tx.apply();
-                                                Ok(trigger_sequence)
+                                        Ok(()) => {
+                                            if let Err(err) = charge_fees_for_applied_overlay(
+                                                &mut state_tx,
+                                                &authority,
+                                                tx,
+                                                overlay.as_ref(),
+                                            ) {
+                                                Err(
+                                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                        err,
+                                                    ),
+                                                )
+                                            } else {
+                                                match state_tx.execute_data_triggers_dfs(&authority)
+                                                {
+                                                    Err(err) => Err(err),
+                                                    Ok(trigger_sequence) => {
+                                                        state_tx.apply();
+                                                        Ok(trigger_sequence)
+                                                    }
+                                                }
                                             }
-                                        },
+                                        }
                                     }
                                 }
                             }
@@ -7951,11 +8000,24 @@ pub(crate) mod valid {
                                         ),
                                     ),
                                     Ok(()) => {
-                                        match state_tx.execute_data_triggers_dfs(&authority) {
-                                            Err(err) => Err(err),
-                                            Ok(trigger_sequence) => {
-                                                state_tx.apply();
-                                                Ok(trigger_sequence)
+                                        if let Err(err) = charge_fees_for_applied_overlay(
+                                            &mut state_tx,
+                                            &authority,
+                                            tx,
+                                            overlay.as_ref(),
+                                        ) {
+                                            Err(
+                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                    err,
+                                                ),
+                                            )
+                                        } else {
+                                            match state_tx.execute_data_triggers_dfs(&authority) {
+                                                Err(err) => Err(err),
+                                                Ok(trigger_sequence) => {
+                                                    state_tx.apply();
+                                                    Ok(trigger_sequence)
+                                                }
                                             }
                                         }
                                     }

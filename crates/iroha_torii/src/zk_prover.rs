@@ -27,7 +27,7 @@ use std::{
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
     state::{State as CoreState, WorldReadOnly},
-    zk::{hash_proof, hash_vk, verify_backend},
+    zk::{hash_proof, hash_vk, verify_backend, verify_backend_with_timing_checked},
 };
 use iroha_data_model::proof::{
     ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
@@ -659,7 +659,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     if !backend_allowed(backend_str, &ctx.allowed_backends) {
         errors.push(format!("backend `{backend_str}` not allowed"));
     }
-    if backend_str.starts_with("stark/fri-v1/") {
+    if backend_str == "stark/fri-v1" || backend_str.starts_with("stark/fri-v1/") {
         if let Some(state) = ctx.state.as_ref() {
             if !state.view().zk.stark.enabled {
                 errors.push("stark verification is disabled in node configuration".into());
@@ -811,7 +811,19 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     if errors.is_empty() {
         match vk_box.as_ref() {
             Some(vk_box) => {
-                if !verify_backend(backend_str, &attachment.proof, Some(vk_box)) {
+                let verified = if let Some(state) = ctx.state.as_ref() {
+                    let view = state.view();
+                    verify_backend_with_timing_checked(
+                        backend_str,
+                        &attachment.proof,
+                        Some(vk_box),
+                        &view.zk,
+                    )
+                    .ok
+                } else {
+                    verify_backend(backend_str, &attachment.proof, Some(vk_box))
+                };
+                if !verified {
                     errors.push("verification failed".into());
                 }
             }

@@ -105,7 +105,7 @@ fn zk_task_digest_reflects_transport_metadata() {
         gpr: [0u64; 256],
         tags: [false; 256],
     }];
-    let mut base = zk_lane::ZkTask {
+    let base = zk_lane::ZkTask {
         tx_hash: None,
         code_hash: [0xAB; 32],
         program: Arc::new(vec![0x01, 0x00, 0x00, 0x00]),

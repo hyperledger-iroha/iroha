@@ -22,6 +22,8 @@ use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+mod test_world;
+
 const TINY_ADD_CIRCUIT_ID: &str = "halo2/ipa:tiny-add-v1";
 
 fn build_vk_record(
@@ -50,7 +52,7 @@ fn build_vk_record(
 #[test]
 fn duplicate_proof_in_same_block_is_rejected() {
     // Minimal node state and block context
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -109,7 +111,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
 
 #[test]
 fn verifyproof_isi_records_proof() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -154,7 +156,7 @@ fn verifyproof_isi_records_proof() {
 
 #[test]
 fn verifyproof_rejects_when_exceeding_size_cap() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(world, kura, query_handle);
@@ -199,7 +201,7 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
 
 #[test]
 fn verifyproof_rejects_when_block_cap_hit() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(world, kura, query_handle);
@@ -258,7 +260,7 @@ fn verifyproof_rejects_when_block_cap_hit() {
 
 #[test]
 fn preverify_rejects_missing_vk_reference() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -297,7 +299,7 @@ fn preverify_rejects_missing_vk_reference() {
 
 #[test]
 fn preverify_rejects_when_no_verifying_key_present() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -345,7 +347,7 @@ fn preverify_rejects_when_no_verifying_key_present() {
 
 #[test]
 fn verifyproof_requires_verifying_key() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -379,7 +381,7 @@ fn verifyproof_requires_verifying_key() {
 
 #[test]
 fn preverify_rejects_empty_proof_as_malformed() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -417,7 +419,7 @@ fn preverify_rejects_empty_proof_as_malformed() {
 
 #[test]
 fn preverify_rejects_proof_too_big() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -457,7 +459,7 @@ fn preverify_rejects_proof_too_big() {
 
 #[test]
 fn verifyproof_rejects_via_debug_backend() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
