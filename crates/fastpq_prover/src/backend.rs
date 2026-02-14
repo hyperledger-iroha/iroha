@@ -158,7 +158,17 @@ fn notify_execution_mode_observer(
         .ok()
         .and_then(|guard| guard.clone());
     if let Some(callback) = observer {
-        callback(requested, resolved, backend);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || callback(requested, resolved, backend),
+        ));
+        if result.is_err() {
+            tracing::warn!(
+                target: "fastpq::planner",
+                requested = requested.as_str(),
+                resolved = resolved.as_str(),
+                "execution mode observer callback panicked"
+            );
+        }
     }
 }
 
