@@ -300,7 +300,8 @@ members = [
     "tools/telemetry-schema-diff"
 ]
 exclude = [
-    "mochi/fixtures"
+    "mochi/fixtures",
+    "crates/gpuzstd_metal.ignore"
 ]
 
 [profile.dev]

@@ -1827,6 +1827,134 @@ fn collect_manual_set_parameters(transactions: &[RawGenesisTx]) -> Vec<Parameter
     manual
 }
 
+#[derive(Debug, Clone)]
+struct ConsensusHandshakeMetadata {
+    mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
+    bls_domain: String,
+    wire_proto_versions: Vec<u32>,
+    consensus_fingerprint: String,
+}
+
+fn parse_consensus_handshake_metadata_from_payload(
+    manifest: &RawGenesisTransaction,
+    payload: norito::json::Value,
+) -> Option<ConsensusHandshakeMetadata> {
+    let mode = payload
+        .get("mode")
+        .and_then(norito::json::Value::as_str)
+        .and_then(|mode| match mode {
+            "Permissioned" => {
+                Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned)
+            }
+            "Npos" => Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos),
+            _ => None,
+        })?;
+    let bls_domain = payload
+        .get("bls_domain")
+        .and_then(norito::json::Value::as_str)?
+        .to_string();
+    let wire_proto_versions = payload
+        .get("wire_proto_versions")
+        .and_then(norito::json::Value::as_array)
+        .and_then(|versions| {
+            versions
+                .iter()
+                .map(|version| version.as_u64().and_then(|value| u32::try_from(value).ok()))
+                .collect::<Option<Vec<_>>>()
+        })?;
+    let consensus_fingerprint = payload
+        .get("consensus_fingerprint")
+        .and_then(norito::json::Value::as_str)?
+        .to_string();
+
+    if wire_proto_versions.is_empty() {
+        return None;
+    }
+
+    let mut probe = manifest.clone();
+    probe.consensus_mode = Some(mode);
+    probe.bls_domain = Some(bls_domain.clone());
+    probe.wire_proto_versions = wire_proto_versions.clone();
+    probe.consensus_fingerprint = None;
+    let probe = probe.with_consensus_meta();
+    if probe.consensus_fingerprint.as_deref()? != consensus_fingerprint.as_str() {
+        return None;
+    }
+
+    Some(ConsensusHandshakeMetadata {
+        mode,
+        bls_domain,
+        wire_proto_versions,
+        consensus_fingerprint,
+    })
+}
+
+fn parse_consensus_handshake_metadata(
+    manifest: &RawGenesisTransaction,
+    transactions: &[RawGenesisTx],
+) -> Option<ConsensusHandshakeMetadata> {
+    for tx in transactions {
+        for instruction in &tx.instructions {
+            let Some(set_param) = instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+            else {
+                continue;
+            };
+            let Parameter::Custom(custom) = set_param.inner() else {
+                continue;
+            };
+            if custom.id() != &consensus_metadata::handshake_meta_id() {
+                continue;
+            }
+            let payload = match custom
+                .payload()
+                .try_into_any_norito::<norito::json::Value>()
+            {
+                Ok(payload) => payload,
+                Err(_) => continue,
+            };
+            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(manifest, payload) {
+                return Some(metadata);
+            }
+        }
+
+        if let Some(parameters) = &tx.parameters {
+            let Some(custom) = parameters
+                .custom()
+                .get(&consensus_metadata::handshake_meta_id())
+            else {
+                continue;
+            };
+
+            let payload: norito::json::Value = match custom
+                .payload()
+                .try_into_any_norito::<norito::json::Value>()
+            {
+                Ok(payload) => payload,
+                Err(_) => continue,
+            };
+            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(manifest, payload) {
+                return Some(metadata);
+            }
+        }
+    }
+
+    None
+}
+
+fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> bool {
+    instruction
+        .as_any()
+        .downcast_ref::<SetParameter>()
+        .is_some_and(|set_param| {
+            matches!(
+                set_param.inner(),
+                Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id()
+            )
+        })
+}
+
 fn extract_sumeragi_staging(
     transactions: &[RawGenesisTx],
 ) -> (
@@ -3659,9 +3787,19 @@ impl RawGenesisTransaction {
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
     fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
-        // Always refresh consensus metadata so fingerprints stay aligned with
-        // effective parameters after manifest edits.
-        let manifest = self.with_consensus_meta();
+        let explicit_handshake_meta = parse_consensus_handshake_metadata(&self, &self.transactions);
+        let mut manifest = self.with_consensus_meta();
+        if let Some(handshake_meta) = explicit_handshake_meta {
+            manifest.consensus_mode = Some(handshake_meta.mode);
+            manifest.bls_domain = Some(handshake_meta.bls_domain);
+            manifest.wire_proto_versions = handshake_meta.wire_proto_versions;
+            manifest.consensus_fingerprint = Some(handshake_meta.consensus_fingerprint);
+        }
+
+        // Recompute generated fields only when no valid injected handshake metadata
+        // is present.
+        // (Injected values are intentionally preserved so test-network overrides are
+        // not accidentally discarded.)
 
         manifest
             .crypto
@@ -3672,13 +3810,31 @@ impl RawGenesisTransaction {
             chain: _,
             executor,
             ivm_dir: _,
-            transactions,
+            mut transactions,
             consensus_mode,
             bls_domain,
             wire_proto_versions,
             consensus_fingerprint,
             crypto: _,
         } = manifest;
+
+        for tx in &mut transactions {
+            tx.instructions
+                .retain(|instruction| !is_consensus_handshake_metadata_instruction(instruction));
+            if let Some(parameters) = &mut tx.parameters {
+                let filtered_parameters = parameters
+                    .parameters()
+                    .filter(|parameter| {
+                        !matches!(
+                            parameter,
+                            Parameter::Custom(custom)
+                                if custom.id() == &consensus_metadata::handshake_meta_id()
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                *parameters = Parameters::from_iter(filtered_parameters);
+            }
+        }
 
         let manual_parameters = collect_manual_set_parameters(&transactions);
         let (staged_next_mode, staged_activation_height) = extract_sumeragi_staging(&transactions);
@@ -4707,6 +4863,318 @@ mod tests {
             }
         }
         assert!(found, "consensus handshake metadata parameter not found");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_replaces_stale_consensus_handshake_metadata() -> Result<()> {
+        init_instruction_registry();
+        let chain = ChainId::from("test-consensus-meta-replace");
+        let expected_fingerprint = GenesisBuilder::new_without_executor(chain.clone(), ".")
+            .build_raw()
+            .with_consensus_meta()
+            .consensus_fingerprint
+            .expect("consensus fingerprint expected");
+
+        let stale_param = Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::from_norito_value_ref(&norito::json::Value::Object({
+                let mut payload = norito::json::Map::new();
+                payload.insert(
+                    "mode".to_string(),
+                    norito::json::Value::String("Permissioned".to_string()),
+                );
+                payload.insert(
+                    "bls_domain".to_string(),
+                    norito::json::Value::String("bls:stale-domain".to_string()),
+                );
+                payload.insert(
+                    "wire_proto_versions".to_string(),
+                    norito::json::to_value(&vec![1u32]).expect("serialize proto versions"),
+                );
+                payload.insert(
+                    "consensus_fingerprint".to_string(),
+                    norito::json::Value::String("0x0000bad".to_string()),
+                );
+                payload
+            }))
+            .expect("construct stale handshake payload"),
+        ));
+        let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
+            .build_raw()
+            .with_consensus_meta();
+            manifest
+                .transactions
+                .first_mut()
+                .expect("missing manifest transaction")
+                .instructions
+                .push(InstructionBox::from(SetParameter::new(stale_param)));
+
+        let mut found = Vec::new();
+        for instr in manifest.parse()?.into_iter().flatten() {
+            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Custom(custom) = set_param.inner()
+                && custom.id() == &consensus_metadata::handshake_meta_id()
+                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+            {
+                if let Some(fingerprint) = payload.get("consensus_fingerprint").and_then(
+                    |value: &norito::json::Value| {
+                    if let Some(fp) = value.as_str() {
+                        Some(fp.to_string())
+                    } else {
+                        None
+                    }
+                },
+                ) {
+                    found.push(fingerprint);
+                }
+            }
+        }
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], expected_fingerprint);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_replaces_stale_consensus_handshake_metadata_in_parameters() -> Result<()> {
+        init_instruction_registry();
+        let chain = ChainId::from("test-consensus-meta-replace-params");
+        let expected_fingerprint = GenesisBuilder::new_without_executor(chain.clone(), ".")
+            .build_raw()
+            .with_consensus_meta()
+            .consensus_fingerprint
+            .expect("consensus fingerprint expected");
+
+        let stale_param = Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::from_norito_value_ref(&norito::json::Value::Object({
+                let mut payload = norito::json::Map::new();
+                payload.insert(
+                    "mode".to_string(),
+                    norito::json::Value::String("Permissioned".to_string()),
+                );
+                payload.insert(
+                    "bls_domain".to_string(),
+                    norito::json::Value::String("bls:stale-domain".to_string()),
+                );
+                payload.insert(
+                    "wire_proto_versions".to_string(),
+                    norito::json::to_value(&vec![1u32]).expect("serialize proto versions"),
+                );
+                payload.insert(
+                    "consensus_fingerprint".to_string(),
+                    norito::json::Value::String("0x0000bad".to_string()),
+                );
+                payload
+            }))
+            .expect("construct stale handshake payload"),
+        ));
+        let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
+            .build_raw()
+            .with_consensus_meta();
+        let mut parameters = Parameters::default();
+        parameters.set_parameter(stale_param);
+        manifest
+            .transactions
+            .first_mut()
+            .expect("missing manifest transaction")
+            .parameters = Some(parameters);
+
+        let mut found = Vec::new();
+        for instr in manifest.parse()?.into_iter().flatten() {
+            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Custom(custom) = set_param.inner()
+                && custom.id() == &consensus_metadata::handshake_meta_id()
+                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+            {
+                if let Some(fingerprint) = payload.get("consensus_fingerprint").and_then(
+                    |value: &norito::json::Value| {
+                        if let Some(fp) = value.as_str() {
+                            Some(fp.to_string())
+                        } else {
+                            None
+                        }
+                    },
+                ) {
+                    found.push(fingerprint);
+                }
+            }
+        }
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], expected_fingerprint);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_preserves_valid_consensus_handshake_metadata() -> Result<()> {
+        init_instruction_registry();
+        let chain = ChainId::from("test-consensus-meta-preserve-valid");
+        let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
+            .build_raw()
+            .with_consensus_meta();
+        manifest.consensus_mode = Some(SumeragiConsensusMode::Permissioned);
+        manifest.bls_domain = Some("bls:override:mode".to_string());
+        manifest.wire_proto_versions = vec![7];
+        let expected_fingerprint = manifest
+            .clone()
+            .with_consensus_meta()
+            .consensus_fingerprint
+            .expect("consensus fingerprint expected");
+        let explicit_param = Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::from_norito_value_ref(&norito::json::Value::Object({
+                let mut payload = norito::json::Map::new();
+                payload.insert(
+                    "mode".to_string(),
+                    norito::json::Value::String("Permissioned".to_string()),
+                );
+                payload.insert(
+                    "bls_domain".to_string(),
+                    norito::json::Value::String("bls:override:mode".to_string()),
+                );
+                payload.insert(
+                    "wire_proto_versions".to_string(),
+                    norito::json::to_value(&vec![7u32]).expect("serialize proto versions"),
+                );
+                payload.insert(
+                    "consensus_fingerprint".to_string(),
+                    norito::json::Value::String(expected_fingerprint.clone()),
+                );
+                payload
+            }))
+            .expect("construct handshake payload"),
+        ));
+        manifest
+            .transactions
+            .first_mut()
+            .expect("missing manifest transaction")
+            .instructions
+            .push(InstructionBox::from(SetParameter::new(explicit_param)));
+
+        let mut found = Vec::new();
+        for instr in manifest.parse()?.into_iter().flatten() {
+            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Custom(custom) = set_param.inner()
+                && custom.id() == &consensus_metadata::handshake_meta_id()
+                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+            {
+                found.push(payload);
+            }
+        }
+        assert_eq!(found.len(), 1);
+        let payload = found.remove(0);
+        assert_eq!(
+            payload
+                .get("mode")
+                .and_then(norito::json::Value::as_str),
+            Some("Permissioned")
+        );
+        assert_eq!(
+            payload
+                .get("bls_domain")
+                .and_then(norito::json::Value::as_str),
+            Some("bls:override:mode")
+        );
+        assert_eq!(
+            payload
+                .get("wire_proto_versions")
+                .and_then(norito::json::Value::as_array)
+                .expect("wire_proto_versions should be encoded"),
+            &vec![norito::json::Value::Number(7u64.into())]
+        );
+        assert_eq!(
+            payload
+                .get("consensus_fingerprint")
+                .and_then(norito::json::Value::as_str),
+            Some(expected_fingerprint.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_preserves_valid_consensus_handshake_metadata_in_parameters() -> Result<()> {
+        init_instruction_registry();
+        let chain = ChainId::from("test-consensus-meta-preserve-valid-params");
+        let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
+            .build_raw()
+            .with_consensus_meta();
+        manifest.consensus_mode = Some(SumeragiConsensusMode::Permissioned);
+        manifest.bls_domain = Some("bls:override:mode".to_string());
+        manifest.wire_proto_versions = vec![7];
+        let expected_fingerprint = manifest
+            .clone()
+            .with_consensus_meta()
+            .consensus_fingerprint
+            .expect("consensus fingerprint expected");
+        let explicit_param = Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::from_norito_value_ref(&norito::json::Value::Object({
+                let mut payload = norito::json::Map::new();
+                payload.insert(
+                    "mode".to_string(),
+                    norito::json::Value::String("Permissioned".to_string()),
+                );
+                payload.insert(
+                    "bls_domain".to_string(),
+                    norito::json::Value::String("bls:override:mode".to_string()),
+                );
+                payload.insert(
+                    "wire_proto_versions".to_string(),
+                    norito::json::to_value(&vec![7u32]).expect("serialize proto versions"),
+                );
+                payload.insert(
+                    "consensus_fingerprint".to_string(),
+                    norito::json::Value::String(expected_fingerprint.clone()),
+                );
+                payload
+            }))
+            .expect("construct handshake payload"),
+        ));
+        let mut parameters = Parameters::default();
+        parameters.set_parameter(explicit_param);
+        manifest
+            .transactions
+            .first_mut()
+            .expect("missing manifest transaction")
+            .parameters = Some(parameters);
+
+        let mut found = Vec::new();
+        for instr in manifest.parse()?.into_iter().flatten() {
+            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Custom(custom) = set_param.inner()
+                && custom.id() == &consensus_metadata::handshake_meta_id()
+                && let Ok(payload) = custom.payload().try_into_any_norito::<norito::json::Value>()
+            {
+                found.push(payload);
+            }
+        }
+        assert_eq!(found.len(), 1);
+        let payload = found.remove(0);
+        assert_eq!(
+            payload
+                .get("mode")
+                .and_then(norito::json::Value::as_str),
+            Some("Permissioned")
+        );
+        assert_eq!(
+            payload
+                .get("bls_domain")
+                .and_then(norito::json::Value::as_str),
+            Some("bls:override:mode")
+        );
+        assert_eq!(
+            payload
+                .get("wire_proto_versions")
+                .and_then(norito::json::Value::as_array)
+                .expect("wire_proto_versions should be encoded"),
+            &vec![norito::json::Value::Number(7u64.into())]
+        );
+        assert_eq!(
+            payload
+                .get("consensus_fingerprint")
+                .and_then(norito::json::Value::as_str),
+            Some(expected_fingerprint.as_str())
+        );
         Ok(())
     }
 

@@ -3393,6 +3393,14 @@ impl Iroha {
         });
 
         let (kura, mut block_count) = Kura::new(&config.kura, &config.nexus.lane_config)
+            .map_err(|err| {
+                let resolved = config.kura.store_dir.resolve_relative_path();
+                Report::new(err).attach(format!(
+                    "failed to initialize Kura for store_dir {} (raw {})",
+                    resolved.display(),
+                    config.kura.store_dir.value().display(),
+                ))
+            })
             .change_context(StartError::InitKura)?;
         let child = Kura::start(kura.clone(), supervisor.shutdown_signal());
         supervisor.monitor(child);
@@ -3680,7 +3688,7 @@ impl Iroha {
             )
             .map_err(|err| {
                 iroha_logger::error!(?err, "genesis consensus metadata validation failed");
-                StartError::InitKura
+                Report::new(StartError::InitKura).attach(err)
             })?;
         }
 
@@ -6937,12 +6945,54 @@ fn consensus_caps_from_genesis(
 
     let entry = handshake_entries
         .iter()
-        .find(|meta| {
-            meta.wire_proto_versions
+        .filter(|entry| {
+            entry
+                .wire_proto_versions
                 .contains(&iroha_core::sumeragi::consensus::PROTO_VERSION)
+        })
+        .find_map(|entry| {
+            let advertised = parse_consensus_handshake_fingerprint(&entry.consensus_fingerprint)?;
+            let (_, _, fingerprint) =
+                consensus_entry_caps(chain_id, entry, &params, sumeragi);
+            (advertised == fingerprint).then_some(entry)
+        })
+        .or_else(|| {
+            handshake_entries.iter().find(|entry| {
+                entry
+                    .wire_proto_versions
+                    .contains(&iroha_core::sumeragi::consensus::PROTO_VERSION)
+            })
         })
         .or_else(|| handshake_entries.first())?;
 
+    let (mode_tag, consensus_params, computed_fingerprint) =
+        consensus_entry_caps(chain_id, entry, &params, sumeragi);
+
+    Some((
+        mode_tag.clone(),
+        entry.bls_domain.clone(),
+        iroha_p2p::ConsensusHandshakeCaps {
+            mode_tag,
+            proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
+            consensus_fingerprint: computed_fingerprint,
+            config: *config_caps,
+        },
+    ))
+}
+
+fn parse_consensus_handshake_fingerprint(raw: &str) -> Option<[u8; 32]> {
+    let mut bytes = [0_u8; 32];
+    let fingerprint = raw.trim_start_matches("0x");
+    hex::decode_to_slice(fingerprint, &mut bytes).ok()?;
+    Some(bytes)
+}
+
+fn consensus_entry_caps(
+    chain_id: &ChainId,
+    entry: &ConsensusHandshakeMeta,
+    params: &iroha_data_model::parameter::Parameters,
+    sumeragi: &iroha_config::parameters::actual::Sumeragi,
+) -> (String, iroha_data_model::block::consensus::ConsensusGenesisParams, [u8; 32]) {
     let mode_tag = match entry.mode.as_str() {
         "Npos" => iroha_core::sumeragi::consensus::NPOS_TAG,
         _ => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
@@ -6999,8 +7049,8 @@ fn consensus_caps_from_genesis(
                 min_self_bond: npos.min_self_bond(),
                 min_nomination_bond: npos.min_nomination_bond(),
                 max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                seat_band_pct: npos.seat_band_pct(),
-                max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                seat_band_pct: npos.seat_band_pct,
+                max_entity_correlation_pct: npos.max_entity_correlation_pct,
                 finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),
@@ -7060,19 +7110,10 @@ fn consensus_caps_from_genesis(
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         chain_id,
         &consensus_params,
-        mode_tag,
+        &mode_tag,
     );
 
-    Some((
-        mode_tag.to_string(),
-        entry.bls_domain.clone(),
-        iroha_p2p::ConsensusHandshakeCaps {
-            mode_tag: mode_tag.to_string(),
-            proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
-            consensus_fingerprint: fingerprint,
-            config: *config_caps,
-        },
-    ))
+    (mode_tag.to_string(), consensus_params, fingerprint)
 }
 
 fn compute_consensus_handshake_caps(
