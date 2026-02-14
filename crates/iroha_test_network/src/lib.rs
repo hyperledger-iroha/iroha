@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     ffi::OsString,
     fs,
-    hash::{Hash, Hasher},
+    hash::{Hash as StdHash, Hasher},
     io::{ErrorKind, Read, Seek, SeekFrom, Write},
     iter,
     net::TcpListener,
@@ -35,6 +35,7 @@ use iroha_config::{
     base::{
         env::MockEnv,
         read::ConfigReader,
+        ParameterOrigin,
         toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
     },
     parameters::actual::{ConsensusMode, SumeragiNposTimeoutOverrides},
@@ -43,7 +44,7 @@ use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{Algorithm, Hash as CryptoHash, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
 #[cfg(test)]
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
@@ -2349,28 +2350,35 @@ impl Network {
     /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`],
     /// post-topology bootstrap instructions, and the network peer topology.
     pub fn genesis(&self) -> GenesisBlock {
-        self.cached_genesis
-            .get_or_init(|| {
-                let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
-                let actual_config = self
-                    .peers
-                    .first()
-                    .and_then(|peer| resolve_actual_config(peer, &config_layers));
-                let da_proof_policies = actual_config
-                    .as_ref()
-                    .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
-                let nexus_config = actual_config.map(|config| config.nexus);
-                config::genesis_with_keypair_and_post_topology_with_policies(
-                    self.genesis_isi.clone(),
-                    self.genesis_post_topology_isi.clone(),
-                    self.peers.iter().map(NetworkPeer::id).collect(),
-                    self.topology_entries.clone(),
-                    self.genesis_key_pair.clone(),
-                    da_proof_policies,
-                    nexus_config,
-                )
-            })
-            .clone()
+        let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
+        let actual_config = self
+            .peers
+            .first()
+            .and_then(|peer| resolve_actual_config(peer, &config_layers));
+        let da_proof_policies = actual_config
+            .as_ref()
+            .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+        let nexus_config = actual_config.map(|config| config.nexus);
+        let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
+
+        if let Some(cached_genesis) = self.cached_genesis.get() {
+            if genesis_has_consensus_handshake(cached_genesis, &consensus_handshake_meta) {
+                return cached_genesis.clone();
+            }
+        }
+
+        let genesis = config::genesis_with_keypair_and_post_topology_with_policies(
+            self.genesis_isi.clone(),
+            self.genesis_post_topology_isi.clone(),
+            self.peers.iter().map(NetworkPeer::id).collect(),
+            self.topology_entries.clone(),
+            self.genesis_key_pair.clone(),
+            da_proof_policies,
+            nexus_config,
+            Some(consensus_handshake_meta),
+        );
+        let _ = self.cached_genesis.set(genesis.clone());
+        genesis
     }
 
     /// Genesis block instructions grouped by transaction
@@ -3261,6 +3269,30 @@ fn resolve_actual_config(
     parse_actual_config_for_genesis(merged, config_layers)
 }
 
+fn resolve_kura_store_dir(
+    peer: &NetworkPeer,
+    config_layers: &[Table],
+) -> (PathBuf, String, String) {
+    const DEFAULT_KURA_STORE_DIR_KEY: &str = "kura.store_dir (unresolved)";
+    resolve_actual_config(peer, config_layers).map_or_else(
+        || (
+            peer.dir.join("storage"),
+            DEFAULT_KURA_STORE_DIR_KEY.to_string(),
+            "./storage".to_string(),
+        ),
+        |config| {
+            let (store_dir, origin) = config.kura.store_dir.into_tuple();
+            let value = store_dir.to_string_lossy().to_string();
+            let resolved = if store_dir.is_absolute() {
+                store_dir
+            } else {
+                peer.dir.join(store_dir)
+            };
+            (resolved, parameter_origin_to_string(&origin), value)
+        },
+    )
+}
+
 fn parse_actual_config_for_genesis(
     merged: Table,
     config_layers: &[Table],
@@ -3571,16 +3603,108 @@ fn npos_timeout_overrides_from_table(table: &Table) -> Option<SumeragiNposTimeou
     }
 }
 
-fn genesis_contains_parameter(genesis_isi: &[Vec<InstructionBox>], parameter: &Parameter) -> bool {
-    genesis_isi
-        .iter()
-        .flat_map(|tx| tx.iter())
-        .any(|instruction| {
-            instruction
+fn replace_consensus_handshake_meta(genesis_isi: &mut Vec<Vec<InstructionBox>>) -> bool {
+    let mut was_replaced = false;
+    genesis_isi.iter_mut().for_each(|instructions| {
+        let original_len = instructions.len();
+        instructions.retain(|instruction| {
+            let is_handshake_meta = instruction
                 .as_any()
                 .downcast_ref::<SetParameter>()
-                .is_some_and(|set_param| set_param.inner() == parameter)
-        })
+                .is_some_and(|set_param| {
+                    matches!(
+                        set_param.inner(),
+                        Parameter::Custom(custom)
+                            if custom.id() == &consensus_metadata::handshake_meta_id()
+                    )
+                });
+            if is_handshake_meta {
+                was_replaced = true;
+            }
+            !is_handshake_meta
+        });
+        if instructions.is_empty() && original_len > 0 {
+            instructions.shrink_to_fit();
+        }
+    });
+    was_replaced
+}
+
+fn genesis_instructions_contain_consensus_handshake_meta(
+    genesis_isi: &[Vec<InstructionBox>],
+    consensus_handshake_meta: &Parameter,
+) -> bool {
+    let expected_meta = match consensus_handshake_meta {
+        Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id() => {
+            custom
+        }
+        _ => return false,
+    };
+
+    genesis_isi.iter().flat_map(|tx| tx.iter()).any(|instruction| {
+        instruction
+            .as_any()
+            .downcast_ref::<SetParameter>()
+            .is_some_and(|set_param| match set_param.inner() {
+                Parameter::Custom(custom) => custom == expected_meta,
+                _ => false,
+            })
+    })
+}
+
+fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
+    let expected_meta = match expected {
+        Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id() => {
+            custom
+        }
+        _ => return false,
+    };
+
+    block.0.transactions_vec().iter().any(|tx| {
+        match tx.instructions() {
+            Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .is_some_and(|set_param| match set_param.inner() {
+                        Parameter::Custom(custom) => custom == expected_meta,
+                        _ => false,
+                    })
+            }),
+            _ => false,
+        }
+    })
+}
+
+fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
+    let mode = match consensus_profile.mode_tag {
+        NPOS_TAG => "Npos",
+        _ => "Permissioned",
+    };
+    let mut handshake_fields = json::Map::new();
+    handshake_fields.insert(
+        "mode".to_string(),
+        JsonValue::String(mode.to_string()),
+    );
+    handshake_fields.insert(
+        "bls_domain".to_string(),
+        JsonValue::String(consensus_profile.bls_domain.to_string()),
+    );
+    handshake_fields.insert(
+        "wire_proto_versions".to_string(),
+        json::to_value(&consensus_profile.wire_proto_versions)
+            .expect("serialize handshake proto versions"),
+    );
+    handshake_fields.insert(
+        "consensus_fingerprint".to_string(),
+        JsonValue::String(format!("0x{}", hex_lower(&consensus_profile.fingerprint()))),
+    );
+    let handshake_payload = Json::from_norito_value_ref(&JsonValue::Object(handshake_fields))
+        .expect("handshake metadata JSON must serialize");
+    Parameter::Custom(CustomParameter::new(
+        consensus_metadata::handshake_meta_id(),
+        handshake_payload,
+    ))
 }
 
 fn genesis_contains_npos_parameters(genesis_isi: &[Vec<InstructionBox>]) -> bool {
@@ -4114,6 +4238,56 @@ impl NetworkBuilder {
             (block_time_ms, commit_time_ms)
         });
 
+        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
+        config_layers_for_parse.push(
+            Table::new()
+                .write("chain", config::chain_id().to_string())
+                .write(
+                    ["genesis", "public_key"],
+                    genesis_key_pair.public_key().to_string(),
+                ),
+        );
+        config_layers_for_parse.push(trusted_peers_layer_for_parse(
+            &peers,
+            auto_populate_trusted_peer_pops,
+        ));
+        config_layers_for_parse.extend(config_layers.iter().cloned());
+
+        let resolved_npos_config = peers
+            .first()
+            .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse));
+        let consensus_chain_id = resolved_npos_config
+            .as_ref()
+            .map(|config| config.common.chain.clone())
+            .unwrap_or_else(chain_id);
+
+        let npos_params_from_config = |config: &iroha_config::parameters::actual::Root| {
+            let npos = &config.sumeragi.npos;
+            let collectors = &config.sumeragi.collectors;
+            let chain_hash =
+                CryptoHash::new(config.common.chain.clone().into_inner().as_bytes());
+            let epoch_seed: [u8; 32] = chain_hash.into();
+            let mut fallback = SumeragiNposParameters::default();
+            fallback.epoch_length_blocks = npos.epoch_length_blocks.max(1);
+            fallback.k_aggregators = u16::try_from(collectors.k)
+                .expect("sumeragi.collectors.k exceeds u16 for NPoS fallback");
+            fallback.redundant_send_r = collectors.redundant_send_r;
+            fallback.epoch_seed = epoch_seed;
+            fallback.vrf_commit_window_blocks = npos.vrf.commit_window_blocks;
+            fallback.vrf_reveal_window_blocks = npos.vrf.reveal_window_blocks;
+            fallback.max_validators = npos.election.max_validators;
+            fallback.min_self_bond = npos.election.min_self_bond;
+            fallback.min_nomination_bond = npos.election.min_nomination_bond;
+            fallback.max_nominator_concentration_pct = npos.election.max_nominator_concentration_pct;
+            fallback.seat_band_pct = npos.election.seat_band_pct;
+            fallback.max_entity_correlation_pct = npos.election.max_entity_correlation_pct;
+            fallback.finality_margin_blocks = npos.election.finality_margin_blocks;
+            fallback.evidence_horizon_blocks = npos.reconfig.evidence_horizon_blocks;
+            fallback.activation_lag_blocks = npos.reconfig.activation_lag_blocks;
+            fallback.slashing_delay_blocks = npos.reconfig.slashing_delay_blocks;
+            fallback
+        };
+
         let mut parameter_prefix: Vec<InstructionBox> = Vec::new();
         if let Some(fuel) = set_ivm_fuel {
             parameter_prefix.push(fuel);
@@ -4138,7 +4312,10 @@ impl NetworkBuilder {
         if matches!(consensus_mode, ConsensusMode::Npos)
             && !genesis_contains_npos_parameters(&genesis_isi)
         {
-            let mut npos = SumeragiNposParameters::default();
+            let mut npos = resolved_npos_config
+                .as_ref()
+                .map(npos_params_from_config)
+                .unwrap_or_else(SumeragiNposParameters::default);
             npos.redundant_send_r = effective_redundant_send_r;
             parameter_prefix.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
                 npos.into_custom_parameter(),
@@ -4246,52 +4423,24 @@ impl NetworkBuilder {
                 }
             }
         }
-        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
-        config_layers_for_parse.push(
-            Table::new()
-                .write("chain", config::chain_id().to_string())
-                .write(
-                    ["genesis", "public_key"],
-                    genesis_key_pair.public_key().to_string(),
-                ),
-        );
-        config_layers_for_parse.push(trusted_peers_layer_for_parse(
-            &peers,
-            auto_populate_trusted_peer_pops,
-        ));
-        config_layers_for_parse.extend(config_layers.iter().cloned());
-
-        let npos_timeout_overrides = peers
-            .first()
-            .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse))
+        let npos_timeout_overrides = resolved_npos_config
+            .as_ref()
             .map(|config| config.sumeragi.npos.timeouts_overrides)
             .or_else(|| npos_timeout_overrides_from_table(&merged_sumeragi));
-        let min_finality =
-            Duration::from_millis(parameter_state.sumeragi().min_finality_ms().max(1));
+        let default_timeout_base_ms = parameter_state
+            .sumeragi()
+            .block_time_ms()
+            .max(parameter_state.sumeragi().min_finality_ms());
         let derive_npos_timeouts = |block_time_ms: u64| {
-            let block_time = Duration::from_millis(block_time_ms.max(1));
-            let mut timeouts = npos_timeout_overrides
+            let block_time_ms = block_time_ms.max(default_timeout_base_ms).max(1);
+            let block_time = Duration::from_millis(block_time_ms);
+            let timeouts = npos_timeout_overrides
                 .map(|overrides| overrides.resolve(block_time))
                 .unwrap_or_else(|| {
                     iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
                         block_time,
                     )
                 });
-            let clamp = |value: Duration| {
-                if value < min_finality {
-                    min_finality
-                } else {
-                    value
-                }
-            };
-            timeouts.propose = clamp(timeouts.propose);
-            timeouts.prevote = clamp(timeouts.prevote);
-            timeouts.precommit = clamp(timeouts.precommit);
-            timeouts.commit = clamp(timeouts.commit);
-            timeouts.da = clamp(timeouts.da);
-            timeouts.aggregator = clamp(timeouts.aggregator);
-            timeouts.exec = clamp(timeouts.exec);
-            timeouts.witness = clamp(timeouts.witness);
             timeouts
         };
 
@@ -4335,14 +4484,17 @@ impl NetworkBuilder {
                 )
             }
             None if matches!(consensus_mode, ConsensusMode::Npos) => {
-                let npos = SumeragiNposParameters::default();
+                let npos = resolved_npos_config
+                    .as_ref()
+                    .expect("NPoS consensus requires resolved runtime config");
+                let npos = npos_params_from_config(npos);
                 let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
                 let duration_ms = |value: Duration| -> u64 {
                     let ms = value.as_millis();
                     u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
                 };
                 (
-                    npos.epoch_length_blocks(),
+                    npos.epoch_length_blocks,
                     Some(NposGenesisParams {
                         block_time_ms: parameter_state.sumeragi().block_time_ms(),
                         timeout_propose_ms: duration_ms(timeouts.propose),
@@ -4401,7 +4553,7 @@ impl NetworkBuilder {
             params: consensus_params,
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
-            chain_id: chain_id(),
+            chain_id: consensus_chain_id.clone(),
             wire_proto_versions: vec![PROTO_VERSION],
         };
 
@@ -4414,41 +4566,33 @@ impl NetworkBuilder {
             "resolved consensus profile for genesis"
         );
 
-        let handshake_fingerprint = format!("0x{}", hex_lower(&consensus_profile.fingerprint()));
-        let handshake_mode = match consensus_mode {
-            ConsensusMode::Permissioned => "Permissioned",
-            ConsensusMode::Npos => "Npos",
-        };
-        let mut handshake_fields = json::Map::new();
-        handshake_fields.insert(
-            "mode".to_string(),
-            JsonValue::String(handshake_mode.to_string()),
-        );
-        handshake_fields.insert(
-            "bls_domain".to_string(),
-            JsonValue::String(consensus_profile.bls_domain.to_string()),
-        );
-        handshake_fields.insert(
-            "wire_proto_versions".to_string(),
-            json::to_value(&consensus_profile.wire_proto_versions)
-                .expect("serialize handshake proto versions"),
-        );
-        handshake_fields.insert(
-            "consensus_fingerprint".to_string(),
-            JsonValue::String(handshake_fingerprint),
-        );
-        let handshake_payload = Json::from_norito_value_ref(&JsonValue::Object(handshake_fields))
-            .expect("handshake metadata JSON must serialize");
-        let handshake_param = Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            handshake_payload,
-        ));
-        if !genesis_contains_parameter(&genesis_isi, &handshake_param)
-            && !genesis_contains_parameter(&genesis_post_topology_isi, &handshake_param)
-        {
-            genesis_post_topology_isi.push(vec![InstructionBox::from(SetParameter::new(
-                handshake_param,
-            ))]);
+        let replaced_in_genesis = replace_consensus_handshake_meta(&mut genesis_isi);
+        let replaced_in_post_topology =
+            replace_consensus_handshake_meta(&mut genesis_post_topology_isi);
+        let consensus_handshake_meta = consensus_handshake_parameter(&consensus_profile);
+        if replaced_in_genesis || replaced_in_post_topology {
+            debug!(
+                replaced = replaced_in_genesis || replaced_in_post_topology,
+                "replaced existing consensus_handshake_meta in genesis with computed profile"
+            );
+        }
+        if !(genesis_instructions_contain_consensus_handshake_meta(
+            &genesis_isi,
+            &consensus_handshake_meta,
+        ) || genesis_instructions_contain_consensus_handshake_meta(
+            &genesis_post_topology_isi,
+            &consensus_handshake_meta,
+        )) {
+            let instruction = InstructionBox::from(SetParameter::new(consensus_handshake_meta.clone()));
+            if genesis_isi.is_empty() {
+                genesis_isi.push(vec![instruction]);
+            } else {
+                genesis_isi[0].push(instruction);
+            }
+            debug!(
+                inserted = true,
+                "inserted computed consensus_handshake_meta into genesis instructions"
+            );
         }
 
         let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
@@ -4618,6 +4762,45 @@ pub enum PeerLifecycleEvent {
     BlockApplied { height: u64 },
 }
 
+#[derive(Debug, Clone)]
+struct PeerStartContext {
+    run_num: usize,
+    config_path: PathBuf,
+    genesis_path: Option<PathBuf>,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    kura_store_dir_key: String,
+    kura_store_dir: PathBuf,
+    kura_store_dir_value: String,
+}
+
+fn parameter_origin_to_string(origin: &ParameterOrigin) -> String {
+    match origin {
+        ParameterOrigin::File { id, path } => format!("{id} from file `{}`", path.display()),
+        ParameterOrigin::Env { id, var } => format!("{id} from env `{var}`"),
+        ParameterOrigin::Default { id } => format!("{id} (default)"),
+        ParameterOrigin::Custom { message } => format!("custom: {message}"),
+    }
+}
+
+impl PeerStartContext {
+    fn summary(&self) -> String {
+        format!(
+            "run={}; config_path={}; genesis_path={}; stdout_path={}; stderr_path={}; kura_store_dir_key={}; kura_store_dir_value={}; kura_store_dir={}",
+            self.run_num,
+            self.config_path.display(),
+            self.genesis_path
+                .as_ref()
+                .map_or_else(|| "<none>".to_string(), |path| path.display().to_string()),
+            self.stdout_path.display(),
+            self.stderr_path.display(),
+            self.kura_store_dir_key,
+            self.kura_store_dir_value,
+            self.kura_store_dir.display(),
+        )
+    }
+}
+
 async fn wait_for_start_event(
     mut rx: broadcast::Receiver<PeerLifecycleEvent>,
 ) -> Option<PeerLifecycleEvent> {
@@ -4657,6 +4840,7 @@ pub struct NetworkPeer {
     block_height: watch::Sender<Option<BlockHeight>>,
     stderr_live: Arc<StdMutex<LiveStderrState>>,
     startup_probe: Arc<StdMutex<PeerStartupProbe>>,
+    start_context: Arc<StdMutex<Option<PeerStartContext>>>,
     // dropping these the last
     port_p2p: Arc<AllocatedPort>,
     port_api: Arc<AllocatedPort>,
@@ -4686,6 +4870,12 @@ impl NetworkPeer {
             .lock()
             .ok()
             .and_then(|probe| probe.last_status.as_ref().map(|snapshot| snapshot.peers))
+    }
+    fn startup_context_summary(&self) -> Option<String> {
+        self.start_context
+            .lock()
+            .ok()
+            .and_then(|context| context.as_ref().map(PeerStartContext::summary))
     }
     pub fn builder() -> NetworkPeerBuilder {
         NetworkPeerBuilder::new()
@@ -4720,7 +4910,11 @@ impl NetworkPeer {
         let has_genesis = genesis.is_some();
         span.in_scope(|| info!(has_genesis, "Starting"));
 
-        let storage_dir = self.dir.join("storage");
+        let storage_layers: Vec<Table> = config_layers.map(|layer| layer.as_ref().clone()).collect();
+        let (storage_dir, storage_dir_key, storage_dir_value) =
+            resolve_kura_store_dir(self, &storage_layers);
+
+        self.prepare_kura_storage_dir(&storage_dir, has_genesis)?;
 
         {
             let mut live = self
@@ -4734,13 +4928,32 @@ impl NetworkPeer {
                 .startup_probe
                 .lock()
                 .expect("startup probe should not be poisoned");
-            *probe = PeerStartupProbe::default();
-        }
+        *probe = PeerStartupProbe::default();
+    }
 
-        let config_layers: Vec<Table> = config_layers.map(|layer| layer.as_ref().clone()).collect();
+        let config_layers: Vec<Table> = storage_layers;
         let config_path = self
             .write_run_config(config_layers.iter().map(Cow::Borrowed), genesis, run_num)
             .await?;
+        let genesis_path = has_genesis.then(|| self.dir.join(format!("run-{run_num}-genesis.nrt")));
+        let stdout_path = self.dir.join(format!("run-{run_num}-stdout.log"));
+        let stderr_path = self.dir.join(format!("run-{run_num}-stderr.log"));
+        {
+            let mut startup_context = self
+                .start_context
+                .lock()
+                .expect("startup context lock should not be poisoned");
+            *startup_context = Some(PeerStartContext {
+                run_num,
+                config_path: config_path.clone(),
+                genesis_path: genesis_path.clone(),
+                stdout_path: stdout_path.clone(),
+                stderr_path: stderr_path.clone(),
+                kura_store_dir_key: storage_dir_key,
+                kura_store_dir: storage_dir.clone(),
+                kura_store_dir_value: storage_dir_value,
+            });
+        }
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
         let irohad = Program::Irohad.resolve_async().await?;
@@ -4752,6 +4965,7 @@ impl NetworkPeer {
             .arg("--config")
             .arg(config_path)
             .arg("--terminal-colors=true");
+        cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
         if use_sora_profile {
             cmd.arg("--sora");
         }
@@ -4776,8 +4990,7 @@ impl NetworkPeer {
                 .stdout
                 .take()
                 .ok_or_else(|| eyre!("failed to capture child stdout"))?;
-            let path = self.dir.join(format!("run-{run_num}-stdout.log"));
-            let file = File::create(path)
+            let file = File::create(&stdout_path)
                 .await
                 .wrap_err("failed to create stdout log file")?;
             tasks.spawn(async move {
@@ -4794,16 +5007,15 @@ impl NetworkPeer {
                 .stderr
                 .take()
                 .ok_or_else(|| eyre!("failed to capture child stderr"))?;
-            let path = self.dir.join(format!("run-{run_num}-stderr.log"));
-            let log_path = path.clone();
+            let log_path = stderr_path.clone();
             let stderr_log_ready = Arc::clone(&stderr_log_ready);
             let stderr_live = Arc::clone(&self.stderr_live);
             tasks.spawn(async move {
-                let buffer = PeerStderrBuffer::new(span, log_path, stderr_live);
-                let file = match File::create(&path).await {
+                let buffer = PeerStderrBuffer::new(span, log_path.clone(), stderr_live);
+                let file = match File::create(&log_path).await {
                     Ok(file) => file,
                     Err(err) => {
-                        error!(?err, ?path, "failed to create stderr log file");
+                        error!(?err, ?log_path, "failed to create stderr log file");
                         stderr_log_ready.notify_waiters();
                         return;
                     }
@@ -5327,21 +5539,24 @@ impl NetworkPeer {
     ) -> Result<()> {
         let events = self.events();
         self.start(config_layers, genesis).await?;
+        let context = self
+            .startup_context_summary()
+            .unwrap_or_else(|| "<startup context not initialized>".to_string());
         match wait_for_start_event(events).await {
             Some(PeerLifecycleEvent::ServerStarted) => Ok(()),
             Some(PeerLifecycleEvent::Terminated { status }) => {
                 let err = if let Some(preview) = self.stderr_preview() {
-                    eyre!("Peer exited unexpectedly ({status:?}); stderr preview:\n{preview}")
+                    eyre!("Peer exited unexpectedly ({status:?}); {context}; stderr preview:\n{preview}")
                 } else {
-                    eyre!("Peer exited unexpectedly ({status:?})")
+                    eyre!("Peer exited unexpectedly ({status:?}); {context}")
                 };
                 Err(err)
             }
             Some(PeerLifecycleEvent::Killed) => {
                 let err = if let Some(preview) = self.stderr_preview() {
-                    eyre!("Peer was killed before startup; stderr preview:\n{preview}")
+                    eyre!("Peer was killed before startup; {context}; stderr preview:\n{preview}")
                 } else {
-                    eyre!("Peer was killed before startup")
+                    eyre!("Peer was killed before startup; {context}")
                 };
                 Err(err)
             }
@@ -5585,7 +5800,80 @@ impl NetworkPeer {
     /// By default tests configure Kura with `store_dir = "./storage"` relative to the peer run dir.
     /// This helper returns `<peer_dir>/storage` matching that configuration.
     pub fn kura_store_dir(&self) -> PathBuf {
+        if let Ok(context) = self.start_context.lock() {
+            if let Some(context) = context.as_ref() {
+                return context.kura_store_dir.clone();
+            }
+        }
         self.dir.join("storage")
+    }
+
+    fn prepare_kura_storage_dir(&self, storage_dir: &Path, reset_for_bootstrap: bool) -> Result<()> {
+        if reset_for_bootstrap {
+            match fs::symlink_metadata(storage_dir) {
+                Ok(meta) => {
+                    if meta.is_dir() && !meta.file_type().is_symlink() {
+                        fs::remove_dir_all(storage_dir).wrap_err_with(|| {
+                            format!(
+                                "failed to clear storage directory {} before bootstrap",
+                                storage_dir.display()
+                            )
+                        })?;
+                    } else {
+                        fs::remove_file(storage_dir).or_else(|err| {
+                            if err.kind() == ErrorKind::NotFound {
+                                Ok(())
+                            } else {
+                                Err(err)
+                            }
+                        })?;
+                    }
+                }
+                Err(err) if err.kind() != ErrorKind::NotFound => {
+                    return Err(err).wrap_err_with(|| {
+                        format!(
+                            "failed to inspect storage path {} before bootstrap",
+                            storage_dir.display()
+                        )
+                    });
+                }
+                Err(_) => {}
+            }
+        }
+
+        match fs::symlink_metadata(storage_dir) {
+            Ok(meta) => {
+                if !meta.is_dir() {
+                    fs::remove_file(storage_dir)
+                        .or_else(|err| {
+                            if err.kind() == ErrorKind::IsADirectory {
+                                fs::remove_dir_all(storage_dir)
+                            } else {
+                                Err(err)
+                            }
+                        })
+                        .wrap_err_with(|| {
+                            format!(
+                                "failed to remove non-directory path at {} before Kura startup",
+                                storage_dir.display()
+                            )
+                        })?;
+                }
+            }
+            Err(err) if err.kind() != ErrorKind::NotFound => {
+                return Err(err).wrap_err_with(|| {
+                    format!("failed to inspect storage path {}", storage_dir.display())
+                })
+            }
+            Err(_) => {}
+        }
+
+        fs::create_dir_all(storage_dir).wrap_err_with(|| {
+            format!(
+                "failed to prepare Kura storage directory at {}",
+                storage_dir.display()
+            )
+        })
     }
 
     fn storage_snapshot(&self) -> PeerStorageSnapshot {
@@ -6029,6 +6317,7 @@ impl NetworkPeerBuilder {
             block_height,
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
+            start_context: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(port_p2p),
             port_api: Arc::new(port_api),
         };
@@ -7196,6 +7485,7 @@ mod tests {
             block_height,
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
+            start_context: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
@@ -7234,6 +7524,7 @@ mod tests {
             block_height,
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
             startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
+            start_context: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
@@ -8561,6 +8852,11 @@ exit 0
             "genesis should encode DA enablement"
         );
         let reconstructed = reconstructed_consensus_params(&genesis);
+        eprintln!(
+            "profile params = {:?}\nreconstructed params = {:?}",
+            profile.params,
+            reconstructed
+        );
         assert_eq!(
             reconstructed.block_time_ms, profile.params.block_time_ms,
             "genesis parameters should preserve block timing"
@@ -8591,6 +8887,20 @@ exit 0
             profile.mode_tag,
         );
         let expected = format!("0x{}", hex_lower(&expected_bytes));
+        let mut metadatas = Vec::<JsonValue>::new();
+        for parameter in collect_set_parameters(&genesis) {
+            if let Parameter::Custom(custom) = parameter
+                && custom.id() == &consensus_metadata::handshake_meta_id()
+                && let Ok(payload) = custom.payload().try_into_any()
+            {
+                metadatas.push(payload);
+            }
+        }
+        eprintln!("consensus profile fingerprint = {expected}");
+        eprintln!(
+            "genesis consensus handshakes = {metadatas:#?} (count={})",
+            metadatas.len()
+        );
         assert_eq!(
             actual.to_ascii_lowercase(),
             expected,
