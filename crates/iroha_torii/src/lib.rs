@@ -6144,10 +6144,14 @@ fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
     Some(format!("{backend}:{trimmed}"))
 }
 
+fn is_stark_fri_v1_backend(backend: &str) -> bool {
+    backend == "stark/fri-v1" || backend.starts_with("stark/fri-v1/")
+}
+
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
     if backend == "halo2/ipa" {
         halo2_ipa_circuit_id_matches(record_id, env_id)
-    } else if backend.starts_with("stark/fri-v1/") {
+    } else if is_stark_fri_v1_backend(backend) {
         match (
             normalize_stark_fri_circuit_id(backend, record_id),
             normalize_stark_fri_circuit_id(backend, env_id),
@@ -6217,10 +6221,10 @@ async fn handler_zk_ivm_derive(
     })?;
 
     let backend = req.vk_ref.backend.as_str();
-    if backend != "halo2/ipa" && !backend.starts_with("stark/fri-v1/") {
+    if backend != "halo2/ipa" && !is_stark_fri_v1_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri-v1/*`".to_owned(),
+                "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri-v1`".to_owned(),
             ),
         )));
     }
@@ -13060,16 +13064,30 @@ impl Torii {
             );
             let operator_router = Router::new()
                 // Telemetry-gated Sumeragi endpoints (runtime gate inside handlers)
-                .route("/v1/sumeragi/rbc", get(handler_rbc_status))
+                .route(
+                    "/v1/sumeragi/rbc",
+                    get(handler_rbc_status).layer(operator_layer.clone()),
+                )
                 .route(
                     "/v1/sumeragi/rbc/delivered/{height}/{view}",
-                    get(handler_rbc_delivered_height_view),
+                    get(handler_rbc_delivered_height_view).layer(operator_layer.clone()),
                 )
-                .route("/v1/sumeragi/pacemaker", get(handler_pacemaker_status))
-                .route("/v1/sumeragi/phases", get(handler_sumeragi_phases))
-                .route("/v1/debug/axt/cache", get(handler_debug_axt_cache))
-                .route("/v1/debug/witness", get(handler_debug_witness))
-                .route_layer(operator_layer);
+                .route(
+                    "/v1/sumeragi/pacemaker",
+                    get(handler_pacemaker_status).layer(operator_layer.clone()),
+                )
+                .route(
+                    "/v1/sumeragi/phases",
+                    get(handler_sumeragi_phases).layer(operator_layer.clone()),
+                )
+                .route(
+                    "/v1/debug/axt/cache",
+                    get(handler_debug_axt_cache).layer(operator_layer.clone()),
+                )
+                .route(
+                    "/v1/debug/witness",
+                    get(handler_debug_witness).layer(operator_layer.clone()),
+                );
 
             let public_router = Router::new()
                 .route(
@@ -13328,12 +13346,20 @@ impl Torii {
             let operator_sumeragi = Router::new()
                 .route(
                     "/v1/sumeragi/evidence",
-                    post(handler_sumeragi_evidence_submit),
+                    post(handler_sumeragi_evidence_submit).layer(operator_layer.clone()),
                 )
-                .route("/v1/sumeragi/vrf/commit", post(handler_sumeragi_vrf_commit))
-                .route("/v1/sumeragi/vrf/reveal", post(handler_sumeragi_vrf_reveal))
-                .route("/v1/sumeragi/rbc/sample", post(handler_rbc_sample))
-                .route_layer(operator_layer);
+                .route(
+                    "/v1/sumeragi/vrf/commit",
+                    post(handler_sumeragi_vrf_commit).layer(operator_layer.clone()),
+                )
+                .route(
+                    "/v1/sumeragi/vrf/reveal",
+                    post(handler_sumeragi_vrf_reveal).layer(operator_layer.clone()),
+                )
+                .route(
+                    "/v1/sumeragi/rbc/sample",
+                    post(handler_rbc_sample).layer(operator_layer.clone()),
+                );
 
             router.merge(sumeragi).merge(operator_sumeragi)
         });
@@ -13349,13 +13375,14 @@ impl Torii {
             let operator_router = Router::new()
                 .route(
                     uri::CONFIGURATION,
-                    get(handler_get_configuration).post(handler_post_configuration),
+                    get(handler_get_configuration)
+                        .post(handler_post_configuration)
+                        .layer(operator_layer.clone()),
                 )
                 .route(
                     iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE,
-                    post(handler_post_nexus_lane_lifecycle),
-                )
-                .route_layer(operator_layer);
+                    post(handler_post_nexus_lane_lifecycle).layer(operator_layer.clone()),
+                );
             let public_router = Router::new()
                 .route(uri::API_VERSION, get(handler_version))
                 .route(uri::API_VERSIONS, get(handler_api_versions))

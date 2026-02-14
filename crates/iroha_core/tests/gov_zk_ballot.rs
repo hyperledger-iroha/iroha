@@ -7,6 +7,7 @@
 mod zk_testkit;
 
 use core::num::NonZeroU64;
+use std::time::Duration;
 
 use base64::Engine as _;
 use iroha_core::{
@@ -74,7 +75,10 @@ fn new_state() -> State {
     let alice = Account::new(alice_id.clone()).build(&alice_id);
     let bob = Account::new(bob_id.clone()).build(&bob_id);
     let world = World::with([domain], [alice, bob], Vec::<AssetDefinition>::new());
-    State::new_for_testing(world, kura, query_handle)
+    let mut state = State::new_for_testing(world, kura, query_handle);
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = Duration::ZERO;
+    state
 }
 
 fn assert_instruction_error_contains(err: &InstructionExecutionError, expected: &str) {
@@ -593,8 +597,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     }
     .execute(&ALICE_ID, &mut stx)
     .unwrap_err();
-    let s = format!("{err}");
-    assert!(s.contains("owner must equal authority"));
+    assert_instruction_error_contains(&err, "owner must equal authority");
 
     let st_after = stx
         .world

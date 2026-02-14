@@ -1,8 +1,11 @@
 //! Native STARK/FRI (binary folding) verifier used by the `stark/fri-v1/*` backends.
 //!
-//! This module provides a deterministic, dependency-light verifier over the Goldilocks
-//! prime field using SHA-256 for transcripts and Merkle commitments. It implements a
-//! multi-round binary FRI consistency check.
+//! This module provides a deterministic verifier over the Goldilocks prime field.
+//! It supports:
+//! - SHA-256 transcripts + SHA-256 Merkle commitments (`stark/fri-v1/sha256-goldilocks-v1`), and
+//! - Poseidon2 transcripts + Poseidon2 Merkle commitments (`stark/fri-v1/poseidon2-goldilocks-v1`).
+//!
+//! The verifier implements a multi-round binary FRI consistency check.
 //!
 //! The wire format is defined with Norito. The proof envelope carries params, Merkle
 //! roots, and query decommitments. Verification replays the transcript and checks:
@@ -15,6 +18,7 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
+use fastpq_prover::{hash_field_elements, pack_bytes};
 use sha2::{Digest, Sha256};
 
 /// Goldilocks prime modulus p = 2^64 - 2^32 + 1
@@ -23,7 +27,7 @@ const MOD_P_U64: u64 = MOD_P as u64;
 
 /// Supported hash selector for the STARK envelope.
 pub const STARK_HASH_SHA256_V1: u8 = 1;
-/// Reserved selector for a Poseidon2 transcript; not yet supported by the native verifier.
+/// Selector for a Poseidon2 transcript and Merkle commitments.
 pub const STARK_HASH_POSEIDON2_V1: u8 = 2;
 
 const MAX_DOMAIN_LOG2: u8 = 24;
@@ -159,21 +163,51 @@ impl Fq {
     }
 }
 
-/// Transcript helper: derive a 64-bit field element challenge from label+bytes.
-fn challenge(params: &StarkFriParamsV1, label: &str, bytes: &[u8]) -> Option<Fq> {
-    if params.hash_fn != STARK_HASH_SHA256_V1 {
+fn u64_to_digest_le(val: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&val.to_le_bytes());
+    out
+}
+
+fn digest_le_to_u64(bytes: &[u8; 32]) -> Option<u64> {
+    if bytes[8..].iter().any(|b| *b != 0) {
         return None;
     }
-    let mut h = Sha256::new();
-    h.update(label.as_bytes());
-    h.update(&[0u8]);
-    h.update(bytes);
-    let out = h.finalize();
-    // Map to field by taking LE u64 and reducing
-    let mut w = [0u8; 8];
-    w.copy_from_slice(&out[..8]);
-    let v = u64::from_le_bytes(w);
-    Some(Fq::new((v as u128 % MOD_P) as u64))
+    Some(u64::from_le_bytes(
+        bytes[..8].try_into().expect("slice length"),
+    ))
+}
+
+/// Transcript helper: derive a 64-bit field element challenge from label+bytes.
+fn challenge(params: &StarkFriParamsV1, label: &str, bytes: &[u8]) -> Option<Fq> {
+    match params.hash_fn {
+        STARK_HASH_SHA256_V1 => {
+            let mut h = Sha256::new();
+            h.update(label.as_bytes());
+            h.update(&[0u8]);
+            h.update(bytes);
+            let out = h.finalize();
+            // Map to field by taking LE u64 and reducing
+            let mut w = [0u8; 8];
+            w.copy_from_slice(&out[..8]);
+            let v = u64::from_le_bytes(w);
+            Some(Fq::new((v as u128 % MOD_P) as u64))
+        }
+        STARK_HASH_POSEIDON2_V1 => {
+            let mut preimage = Vec::with_capacity(label.len() + 1 + bytes.len());
+            preimage.extend_from_slice(label.as_bytes());
+            preimage.push(0);
+            preimage.extend_from_slice(bytes);
+            let packed = pack_bytes(&preimage);
+            let len_field = u64::try_from(packed.length).ok()?;
+            let mut limbs = Vec::with_capacity(packed.limbs.len() + 1);
+            limbs.push(len_field);
+            limbs.extend_from_slice(&packed.limbs);
+            let v = hash_field_elements(&limbs);
+            Fq::from_canonical_u64(v)
+        }
+        _ => None,
+    }
 }
 
 /// Compute SHA-256 hash of a leaf value with domain separation.
@@ -192,19 +226,66 @@ fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     h.finalize().into()
 }
 
+fn poseidon_domain_hash_u64(domain: &[u8], values: &[u64]) -> u64 {
+    let packed = pack_bytes(domain);
+    let len_field = u64::try_from(packed.length).unwrap_or(u64::MAX);
+    let mut limbs = Vec::with_capacity(1 + packed.limbs.len() + values.len());
+    limbs.push(len_field);
+    limbs.extend_from_slice(&packed.limbs);
+    limbs.extend_from_slice(values);
+    hash_field_elements(&limbs)
+}
+
+fn poseidon_leaf_hash(val: Fq) -> [u8; 32] {
+    // Domain-separated leaf hashing to avoid collisions with internal nodes.
+    u64_to_digest_le(poseidon_domain_hash_u64(
+        b"iroha:zk:stark:leaf:v1",
+        &[val.0],
+    ))
+}
+
+fn poseidon_node_hash(left: &[u8; 32], right: &[u8; 32]) -> Option<[u8; 32]> {
+    let l = digest_le_to_u64(left)?;
+    let r = digest_le_to_u64(right)?;
+    Some(u64_to_digest_le(poseidon_domain_hash_u64(
+        b"iroha:zk:stark:node:v1",
+        &[l, r],
+    )))
+}
+
 /// Verify a Merkle inclusion proof for a leaf value to `root`.
-fn merkle_verify(root: &[u8; 32], leaf: Fq, path: &MerklePath) -> bool {
-    let mut acc = leaf_hash(leaf);
+fn merkle_verify(params: &StarkFriParamsV1, root: &[u8; 32], leaf: Fq, path: &MerklePath) -> bool {
+    let mut acc = match params.hash_fn {
+        STARK_HASH_SHA256_V1 => leaf_hash(leaf),
+        STARK_HASH_POSEIDON2_V1 => poseidon_leaf_hash(leaf),
+        _ => return false,
+    };
     for (i, sib) in path.siblings.iter().enumerate() {
         let byte = i / 8;
         if byte >= path.dirs.len() {
             return false;
         }
         let dir_bit = (path.dirs[byte] >> (i % 8)) & 1; // 0: leaf on left, 1: leaf on right
-        acc = if dir_bit == 0 {
-            node_hash(&acc, sib)
-        } else {
-            node_hash(sib, &acc)
+        acc = match params.hash_fn {
+            STARK_HASH_SHA256_V1 => {
+                if dir_bit == 0 {
+                    node_hash(&acc, sib)
+                } else {
+                    node_hash(sib, &acc)
+                }
+            }
+            STARK_HASH_POSEIDON2_V1 => {
+                let next = if dir_bit == 0 {
+                    poseidon_node_hash(&acc, sib)
+                } else {
+                    poseidon_node_hash(sib, &acc)
+                };
+                match next {
+                    Some(v) => v,
+                    None => return false,
+                }
+            }
+            _ => return false,
         };
     }
     &acc == root
@@ -308,7 +389,10 @@ fn validate_params(
     if params.fold_arity != 2 || params.fold_arity > limits.max_fold_arity {
         return None;
     }
-    if params.merkle_arity != 2 || params.hash_fn != STARK_HASH_SHA256_V1 {
+    if params.merkle_arity != 2 {
+        return None;
+    }
+    if params.hash_fn != STARK_HASH_SHA256_V1 && params.hash_fn != STARK_HASH_POSEIDON2_V1 {
         return None;
     }
     if params.domain_tag.is_empty() || params.domain_tag.len() > limits.max_domain_tag_len {
@@ -385,36 +469,67 @@ fn derive_query_index(
     roots: &[[u8; 32]],
     query_idx: usize,
 ) -> Option<usize> {
-    if params.hash_fn != STARK_HASH_SHA256_V1 || params.n_log2 as u32 >= usize::BITS {
+    if params.n_log2 as u32 >= usize::BITS {
         return None;
     }
     let domain = 1usize << params.n_log2;
     if domain == 0 {
         return None;
     }
-    let mut h = Sha256::new();
-    h.update(b"STARK:query-index");
-    h.update(label.as_bytes());
-    h.update(&params.version.to_le_bytes());
-    h.update(&[
-        params.n_log2,
-        params.blowup_log2,
-        params.fold_arity,
-        params.merkle_arity,
-        params.hash_fn,
-    ]);
-    h.update(&params.queries.to_le_bytes());
-    h.update(&(params.domain_tag.len() as u32).to_le_bytes());
-    h.update(params.domain_tag.as_bytes());
-    h.update(&(query_idx as u64).to_le_bytes());
-    for root in roots {
-        h.update(root);
+    match params.hash_fn {
+        STARK_HASH_SHA256_V1 => {
+            let mut h = Sha256::new();
+            h.update(b"STARK:query-index");
+            h.update(label.as_bytes());
+            h.update(&params.version.to_le_bytes());
+            h.update(&[
+                params.n_log2,
+                params.blowup_log2,
+                params.fold_arity,
+                params.merkle_arity,
+                params.hash_fn,
+            ]);
+            h.update(&params.queries.to_le_bytes());
+            h.update(&(params.domain_tag.len() as u32).to_le_bytes());
+            h.update(params.domain_tag.as_bytes());
+            h.update(&(query_idx as u64).to_le_bytes());
+            for root in roots {
+                h.update(root);
+            }
+            let digest = h.finalize();
+            let mut w = [0u8; 8];
+            w.copy_from_slice(&digest[..8]);
+            Some((u64::from_le_bytes(w) % (domain as u64)) as usize)
+        }
+        STARK_HASH_POSEIDON2_V1 => {
+            let mut preimage = Vec::new();
+            preimage.extend_from_slice(b"STARK:query-index");
+            preimage.extend_from_slice(label.as_bytes());
+            preimage.extend_from_slice(&params.version.to_le_bytes());
+            preimage.extend_from_slice(&[
+                params.n_log2,
+                params.blowup_log2,
+                params.fold_arity,
+                params.merkle_arity,
+                params.hash_fn,
+            ]);
+            preimage.extend_from_slice(&params.queries.to_le_bytes());
+            preimage.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
+            preimage.extend_from_slice(params.domain_tag.as_bytes());
+            preimage.extend_from_slice(&(query_idx as u64).to_le_bytes());
+            for root in roots {
+                preimage.extend_from_slice(root);
+            }
+            let packed = pack_bytes(&preimage);
+            let len_field = u64::try_from(packed.length).ok()?;
+            let mut limbs = Vec::with_capacity(packed.limbs.len() + 1);
+            limbs.push(len_field);
+            limbs.extend_from_slice(&packed.limbs);
+            let v = hash_field_elements(&limbs);
+            Some((v % (domain as u64)) as usize)
+        }
+        _ => None,
     }
-    let digest = h.finalize();
-    let mut w = [0u8; 8];
-    w.copy_from_slice(&digest[..8]);
-    let idx = (u64::from_le_bytes(w) % (domain as u64)) as usize;
-    Some(idx)
 }
 
 /// Norito-serializable Merkle path (dirs as bitset, siblings as hashes).
@@ -441,10 +556,37 @@ pub struct StarkFriParamsV1 {
     pub queries: u16,
     /// Merkle branching factor (current backend supports binary trees only)
     pub merkle_arity: u8,
-    /// Hash function selector (`1 = SHA-256`, `2 = Poseidon2` reserved)
+    /// Hash function selector (`1 = SHA-256`, `2 = Poseidon2`)
     pub hash_fn: u8,
     /// Domain tag mixed into transcripts and query sampling
     pub domain_tag: String,
+}
+
+/// Minimal verifying-key payload for the `stark/fri-v1/*` backends.
+///
+/// This is stored inside [`iroha_data_model::proof::VerifyingKeyBox::bytes`] and
+/// pins the verifier parameters (hash function, domain size, query count, etc.).
+///
+/// Note: `domain_tag` is **not** part of the verifying key because it is instance-specific
+/// and is derived from the outer [`iroha_data_model::zk::OpenVerifyEnvelope`] metadata.
+#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+pub struct StarkFriVerifyingKeyV1 {
+    /// Version tag for format evolution.
+    pub version: u16,
+    /// Canonical circuit identifier string.
+    pub circuit_id: String,
+    /// Log2 of evaluation domain size.
+    pub n_log2: u8,
+    /// Log2 of the blowup factor applied before FRI folding.
+    pub blowup_log2: u8,
+    /// Arity of each FRI fold (current wire format supports 2).
+    pub fold_arity: u8,
+    /// Number of queries sampled by the verifier.
+    pub queries: u16,
+    /// Merkle branching factor (current backend supports binary trees only).
+    pub merkle_arity: u8,
+    /// Hash function selector (`1 = SHA-256`, `2 = Poseidon2`).
+    pub hash_fn: u8,
 }
 
 /// Commitments for multiple layers and optional composition root.
@@ -561,7 +703,7 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
         }
     }
     let total_domain = 1usize << env.params.n_log2;
-    if total_domain == 0 || env.params.hash_fn != STARK_HASH_SHA256_V1 {
+    if total_domain == 0 {
         return false;
     }
     let fold_arity = env.params.fold_arity as usize;
@@ -656,10 +798,10 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
                 Some(v) => v,
                 None => return false,
             };
-            if !merkle_verify(&roots[k], y0, &decommit.path_y0) {
+            if !merkle_verify(&env.params, &roots[k], y0, &decommit.path_y0) {
                 return false;
             }
-            if !merkle_verify(&roots[k], y1, &decommit.path_y1) {
+            if !merkle_verify(&env.params, &roots[k], y1, &decommit.path_y1) {
                 return false;
             }
             let z = match Fq::from_canonical_u64(decommit.z) {
@@ -670,7 +812,7 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
             if zr != z {
                 return false;
             }
-            if !merkle_verify(&roots[k + 1], z, &decommit.path_z) {
+            if !merkle_verify(&env.params, &roots[k + 1], z, &decommit.path_z) {
                 return false;
             }
             last_z = Some(z);
@@ -699,7 +841,7 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
                 Some(v) => v,
                 None => return false,
             };
-            if !merkle_verify(&comp_root, cv_f, &comp_entry.path) {
+            if !merkle_verify(&env.params, &comp_root, cv_f, &comp_entry.path) {
                 return false;
             }
             let constant = match Fq::from_canonical_u64(comp_entry.constant) {

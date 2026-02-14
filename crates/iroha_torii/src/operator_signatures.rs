@@ -184,11 +184,11 @@ impl ReplayCache {
             let (key, expiry) = order
                 .pop_front()
                 .expect("front is Some so pop_front must succeed");
-            if let Some(existing) = self.entries.get(&key) {
-                if *existing == expiry {
-                    self.entries.remove(&key);
-                }
-            }
+            // Avoid `DashMap` shard deadlocks: don't hold a read guard (`get`) while attempting
+            // a write lock (`remove`) on the same shard.
+            let _ = self
+                .entries
+                .remove_if(&key, |_k, existing| *existing == expiry);
         }
     }
 }

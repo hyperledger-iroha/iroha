@@ -30,7 +30,7 @@ use iroha_data_model::{
     parameter::{
         Parameter,
         custom::CustomParameter,
-        system::{consensus_metadata, confidential_metadata},
+        system::{confidential_metadata, consensus_metadata},
     },
     peer::PeerId,
     prelude::{HashOf, Transfer},
@@ -292,13 +292,13 @@ fn build_minimal_genesis_unexecuted(
     build_minimal_genesis_unexecuted_with_post_topology(
         extra_transactions,
         Vec::new(),
-            topology,
-            topology_entries,
-            genesis_key_pair,
-            None,
-            None,
-            None,
-        )
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        None,
+        None,
+        None,
+    )
 }
 
 fn build_minimal_genesis_unexecuted_with_post_topology(
@@ -570,7 +570,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     ));
     builder = builder.append_parameter(conf_param);
     if let Some(handshake_meta) = consensus_handshake_meta {
-        builder = builder.append_instruction(InstructionBox::from(SetParameter::new(handshake_meta)));
+        builder =
+            builder.append_instruction(InstructionBox::from(SetParameter::new(handshake_meta)));
     }
 
     let block = builder

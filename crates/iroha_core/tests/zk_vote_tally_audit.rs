@@ -25,8 +25,11 @@ mod tests {
         zk::{self as zk_backend, hash_proof},
     };
     use iroha_data_model::{
-        ValidationFail,
+        Registrable, ValidationFail,
+        account::Account,
+        asset::AssetDefinition,
         block::BlockHeader,
+        domain::Domain,
         isi::{Grant, verifying_keys, zk as zk_isi},
         permission::Permission,
         prelude::InstructionBox,
@@ -179,8 +182,31 @@ mod tests {
         assert_schema_hash_violation(err);
     }
 
-    /// Flip the lowest byte of the requested I10P column (0 = commit, 1 = root).
-    fn tamper_instance_column(mut envelope: Vec<u8>, column_index: usize) -> Vec<u8> {
+    /// Flip the lowest byte of the requested public input column (0 = commit, 1 = root).
+    ///
+    /// For `halo2/ipa` proofs this tampers both the outer `OpenVerifyEnvelope.public_inputs`
+    /// bytes and the inner ZK1 instance column.
+    fn tamper_instance_column(envelope: Vec<u8>, column_index: usize) -> Vec<u8> {
+        if let Ok(mut env) =
+            norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&envelope)
+        {
+            let offset = column_index
+                .checked_mul(32)
+                .expect("public input offset must not overflow");
+            let target = env
+                .public_inputs
+                .get_mut(offset)
+                .expect("public input column within envelope bounds");
+            *target ^= 0x01;
+            env.proof_bytes = tamper_zk1_instance_column(env.proof_bytes, column_index);
+            return norito::to_bytes(&env)
+                .expect("tampered OpenVerifyEnvelope must serialize with Norito");
+        }
+
+        tamper_zk1_instance_column(envelope, column_index)
+    }
+
+    fn tamper_zk1_instance_column(mut envelope: Vec<u8>, column_index: usize) -> Vec<u8> {
         const TAG: &[u8; 4] = b"I10P";
         let tag_pos = envelope
             .windows(TAG.len())
@@ -243,10 +269,16 @@ mod tests {
     }
 
     fn new_state() -> State {
-        let world = World::new();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        State::new_for_testing(world, kura, query_handle)
+        let alice_id = (*ALICE_ID).clone();
+        let domain = Domain::new(alice_id.domain.clone()).build(&alice_id);
+        let alice = Account::new(alice_id.clone()).build(&alice_id);
+        let world = World::with([domain], [alice], Vec::<AssetDefinition>::new());
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        state.zk.halo2.enabled = true;
+        state.zk.verify_timeout = std::time::Duration::ZERO;
+        state
     }
 
     #[allow(clippy::disallowed_types)]

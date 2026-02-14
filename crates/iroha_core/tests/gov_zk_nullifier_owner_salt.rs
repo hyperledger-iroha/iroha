@@ -26,7 +26,7 @@ fn canonical_abi_hex() -> String {
 
 #[test]
 fn zk_ballot_nullifier_commit_duplicate_rejected() {
-    use core::num::NonZeroU64;
+    use core::{num::NonZeroU64, time::Duration};
 
     use iroha_data_model::{
         events::data::governance::GovernanceEvent,
@@ -70,6 +70,8 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         [],
     );
     let mut state = State::new_for_testing(world, kura, query_handle);
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = Duration::ZERO;
     // Install Halo2 verifying key defaults for governance
     let bundle = zk_testkit::add2inst_public_bundle(5, 8);
     let bundle_alt = zk_testkit::add2inst_public_bundle(6, 8);

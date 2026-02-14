@@ -393,7 +393,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !(backend.starts_with("halo2/") || backend.starts_with("stark/fri-v1/")) {
+        if !(backend.starts_with("halo2/") || crate::zk::is_stark_fri_v1_backend(backend)) {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -436,7 +436,7 @@ pub mod isi {
                 (Some(rec), Some(env)) => rec == env,
                 _ => record_id == env_id,
             }
-        } else if backend.starts_with("stark/fri-v1/") {
+        } else if crate::zk::is_stark_fri_v1_backend(backend) {
             match (
                 normalize_stark_fri_circuit_id(backend, record_id),
                 normalize_stark_fri_circuit_id(backend, env_id),
@@ -476,6 +476,14 @@ pub mod isi {
                 format!("{label} verifying key circuit mismatch").into(),
             ));
         }
+        if vk_record.public_inputs_schema_hash != [0u8; 32] {
+            let observed_hash: [u8; 32] = CryptoHash::new(&envelope.public_inputs).into();
+            if observed_hash != vk_record.public_inputs_schema_hash {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("{label} public inputs schema hash mismatch").into(),
+                ));
+            }
+        }
         if envelope.vk_hash != [0u8; 32] && envelope.vk_hash != vk_record.commitment {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key commitment mismatch").into(),
@@ -500,16 +508,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn flatten_instance_columns(columns: &[Vec<[u8; 32]>]) -> Vec<u8> {
-        let mut out = Vec::new();
-        for column in columns {
-            for value in column {
-                out.extend_from_slice(value);
-            }
-        }
-        out
-    }
-
     fn extract_vote_public_inputs(
         backend: &str,
         proof_bytes: &[u8],
@@ -521,27 +519,24 @@ pub mod isi {
                         "invalid OpenVerifyEnvelope payload".into(),
                     )
                 })?;
+            if env.backend != BackendTag::Halo2IpaPasta {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "unexpected OpenVerifyEnvelope backend tag".into(),
+                ));
+            }
             let columns = crate::zk::extract_pasta_instance_columns_bytes(&env.proof_bytes)
                 .ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
                         "failed to extract vote public inputs".into(),
                     )
                 })?;
-            if !env.public_inputs.is_empty() {
-                let flattened = flatten_instance_columns(&columns);
-                if env.public_inputs != flattened {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs do not match proof".into(),
-                    ));
-                }
-            }
             return Ok(VotePublicInputs {
                 columns,
                 envelope: Some(env),
             });
         }
 
-        if backend.starts_with("stark/fri-v1/") {
+        if crate::zk::is_stark_fri_v1_backend(backend) {
             let env: ZkOpenVerifyEnvelope =
                 norito::decode_from_bytes(proof_bytes).map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
@@ -565,14 +560,6 @@ pub mod isi {
                 ));
             }
             let columns = open.public_inputs;
-            if !env.public_inputs.is_empty() {
-                let flattened = flatten_instance_columns(&columns);
-                if env.public_inputs != flattened {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "public inputs do not match proof".into(),
-                    ));
-                }
-            }
             return Ok(VotePublicInputs {
                 columns,
                 envelope: Some(env),
@@ -1177,27 +1164,47 @@ pub mod isi {
                     ),
                 ));
             }
-            if record.backend != BackendTag::Halo2IpaPasta {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verifying key backend must be Halo2IpaPasta".into(),
-                    ),
-                ));
-            }
-            if !record.curve.eq_ignore_ascii_case("pallas") {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verifying key curve must be \"pallas\"".into(),
-                    ),
-                ));
-            }
             let id_backend = id.backend.as_str();
-            if !id_backend.starts_with("halo2/") || id_backend.contains("bn254") {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verifying key id backend must target halo2 IPA (no bn254)".into(),
-                    ),
-                ));
+            match record.backend {
+                BackendTag::Halo2IpaPasta => {
+                    if !record.curve.eq_ignore_ascii_case("pallas") {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verifying key curve must be \"pallas\"".into(),
+                            ),
+                        ));
+                    }
+                    if !id_backend.starts_with("halo2/") || id_backend.contains("bn254") {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verifying key id backend must target halo2 IPA (no bn254)".into(),
+                            ),
+                        ));
+                    }
+                }
+                BackendTag::Stark => {
+                    if !record.curve.eq_ignore_ascii_case("goldilocks") {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verifying key curve must be \"goldilocks\"".into(),
+                            ),
+                        ));
+                    }
+                    if !crate::zk::is_stark_fri_v1_backend(id_backend) {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verifying key id backend must target stark/fri-v1".into(),
+                            ),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verifying key backend must be Halo2IpaPasta or Stark".into(),
+                        ),
+                    ));
+                }
             }
             // Commitment sanity if inline key present
             if let Some(vk) = &record.key {
@@ -1211,6 +1218,101 @@ pub mod isi {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "vk backend does not match id backend".into(),
                     ));
+                }
+                if record.backend == BackendTag::Stark {
+                    #[cfg(not(feature = "zk-stark"))]
+                    {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verifying key backend Stark is not enabled".into(),
+                            ),
+                        ));
+                    }
+
+                    #[cfg(feature = "zk-stark")]
+                    {
+                        use crate::zk_stark::{
+                            STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
+                        };
+                        let expected_hash_fn = if id_backend == "stark/fri-v1" {
+                            None
+                        } else if id_backend.contains("/sha256-") {
+                            Some(STARK_HASH_SHA256_V1)
+                        } else if id_backend.contains("/poseidon2-") {
+                            Some(STARK_HASH_POSEIDON2_V1)
+                        } else {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "unsupported stark/fri-v1 backend variant".into(),
+                                ),
+                            ));
+                        };
+                        let payload: StarkFriVerifyingKeyV1 = norito::decode_from_bytes(&vk.bytes)
+                            .map_err(|_| {
+                                InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "invalid STARK verifying key payload".into(),
+                                    ),
+                                )
+                            })?;
+                        if payload.version != 1 {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "unsupported STARK verifying key payload version".into(),
+                                ),
+                            ));
+                        }
+                        if payload.hash_fn != STARK_HASH_SHA256_V1
+                            && payload.hash_fn != STARK_HASH_POSEIDON2_V1
+                        {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "unsupported STARK verifying key hash_fn".into(),
+                                ),
+                            ));
+                        }
+                        if let Some(expected_hash_fn) = expected_hash_fn {
+                            if payload.hash_fn != expected_hash_fn {
+                                return Err(InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "STARK verifying key hash_fn mismatch".into(),
+                                    ),
+                                ));
+                            }
+                        }
+                        if payload.circuit_id.trim().is_empty() {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "STARK verifying key circuit_id must not be empty".into(),
+                                ),
+                            ));
+                        }
+                        let payload_circuit_id =
+                            normalize_stark_fri_circuit_id(id_backend, &payload.circuit_id)
+                                .ok_or_else(|| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(
+                                            "invalid STARK verifying key circuit_id".into(),
+                                        ),
+                                    )
+                                })?;
+                        let record_circuit_id =
+                            normalize_stark_fri_circuit_id(id_backend, &record.circuit_id)
+                                .ok_or_else(|| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(
+                                            "invalid verifying key record circuit_id".into(),
+                                        ),
+                                    )
+                                })?;
+                        if payload_circuit_id != record_circuit_id {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "STARK verifying key circuit_id does not match record".into(),
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
             // Ensure entry not present
@@ -1805,7 +1907,7 @@ pub mod isi {
             if let Some(val) = public_inputs.as_ref() {
                 if let Some(owner_val) = val.get("owner") {
                     if !matches!(owner_val, norito::json::Value::Null) {
-                        let owner_str = owner_val.as_str().ok_or_else(|| {
+                        let owner_str_raw = owner_val.as_str().ok_or_else(|| {
                             state_transaction.world.emit_events(Some(
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -1818,37 +1920,87 @@ pub mod isi {
                             "owner must be a canonical account id".into(),
                         )
                     })?;
-                        let owner_parsed: iroha_data_model::account::AccountId = if let Ok(id) =
-                            owner_str.parse()
-                        {
-                            id
-                        } else {
+                        let owner_str = owner_str_raw.trim();
+                        if owner_str != owner_str_raw || owner_str.is_empty() {
                             state_transaction.world.emit_events(Some(
-                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                    referendum_id: self.election_id.clone(),
-                                    reason: "owner must be a canonical account id".into(),
-                                },
-                            ),
-                        ));
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must be a canonical account id".into(),
+                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                        referendum_id: self.election_id.clone(),
+                                        reason: "owner must use canonical account id form".into(),
+                                    },
+                                ),
                             ));
-                        };
-                        let owner_canonical = owner_parsed.to_string();
-                        if owner_canonical != owner_str {
-                            state_transaction.world.emit_events(Some(
-                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                    referendum_id: self.election_id.clone(),
-                                    reason: "owner must use canonical account id form".into(),
-                                },
-                            ),
-                        ));
                             return Err(InstructionExecutionError::InvariantViolation(
                                 "owner must use canonical account id form".into(),
                             ));
                         }
+
+                        let owner_parsed: iroha_data_model::account::AccountId = if owner_str
+                            .contains('@')
+                        {
+                            let owner_parsed: iroha_data_model::account::AccountId =
+                                    owner_str.parse().map_err(|_| {
+                                        state_transaction.world.emit_events(Some(
+                                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                                    referendum_id: self.election_id.clone(),
+                                                    reason: "owner must be a canonical account id".into(),
+                                                },
+                                            ),
+                                        ));
+                                        InstructionExecutionError::InvariantViolation(
+                                            "owner must be a canonical account id".into(),
+                                        )
+                                    })?;
+                            let canonical_full =
+                                format!("{}@{}", owner_parsed, owner_parsed.domain());
+                            if canonical_full != owner_str {
+                                state_transaction.world.emit_events(Some(
+                                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                                referendum_id: self.election_id.clone(),
+                                                reason: "owner must use canonical account id form".into(),
+                                            },
+                                        ),
+                                    ));
+                                return Err(InstructionExecutionError::InvariantViolation(
+                                    "owner must use canonical account id form".into(),
+                                ));
+                            }
+                            owner_parsed
+                        } else {
+                            // The hint format supports omitting `@domain`; interpret the
+                            // identifier as belonging to the authority's domain.
+                            let owner_with_domain = format!("{owner_str}@{}", authority.domain());
+                            let owner_parsed: iroha_data_model::account::AccountId =
+                                    owner_with_domain.parse().map_err(|_| {
+                                        state_transaction.world.emit_events(Some(
+                                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                                    referendum_id: self.election_id.clone(),
+                                                    reason: "owner must be a canonical account id".into(),
+                                                },
+                                            ),
+                                        ));
+                                        InstructionExecutionError::InvariantViolation(
+                                            "owner must be a canonical account id".into(),
+                                        )
+                                    })?;
+                            if owner_parsed.to_string() != owner_str {
+                                state_transaction.world.emit_events(Some(
+                                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                                referendum_id: self.election_id.clone(),
+                                                reason: "owner must use canonical account id form".into(),
+                                            },
+                                        ),
+                                    ));
+                                return Err(InstructionExecutionError::InvariantViolation(
+                                    "owner must use canonical account id form".into(),
+                                ));
+                            }
+                            owner_parsed
+                        };
                         if lock_owner.is_none() {
                             lock_owner = Some(owner_parsed);
                         }
@@ -2132,7 +2284,7 @@ pub mod isi {
                     "verifying key backend mismatch".into(),
                 ));
             }
-            if backend.starts_with("stark/fri-v1/") && !state_transaction.zk.stark.enabled {
+            if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                         iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -2158,8 +2310,12 @@ pub mod isi {
             }
             let proof_box =
                 iroha_data_model::proof::ProofBox::new(vk_id.backend.clone(), proof_bytes.clone());
-            let verify_report =
-                crate::zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_box));
+            let verify_report = crate::zk::verify_backend_with_timing_checked(
+                backend,
+                &proof_box,
+                Some(&vk_box),
+                &state_transaction.zk,
+            );
             let timeout_budget = state_transaction.zk.verify_timeout;
             if timeout_budget > Duration::ZERO && verify_report.elapsed > timeout_budget {
                 state_transaction.world.emit_events(Some(
@@ -4505,27 +4661,52 @@ pub mod isi {
                 "verifying key version must increase".into(),
             ));
         }
-        if new.backend != BackendTag::Halo2IpaPasta {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "verifying key backend must be Halo2IpaPasta".into(),
-                ),
-            ));
-        }
-        if !new.curve.eq_ignore_ascii_case("pallas") {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "verifying key curve must be \"pallas\"".into(),
-                ),
+        if new.backend != old.backend {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verifying key backend cannot change".into(),
             ));
         }
         let id_backend = id.backend.as_str();
-        if !id_backend.starts_with("halo2/") || id_backend.contains("bn254") {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "verifying key id backend must target halo2 IPA (no bn254)".into(),
-                ),
-            ));
+        match new.backend {
+            BackendTag::Halo2IpaPasta => {
+                if !new.curve.eq_ignore_ascii_case("pallas") {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verifying key curve must be \"pallas\"".into(),
+                        ),
+                    ));
+                }
+                if !id_backend.starts_with("halo2/") || id_backend.contains("bn254") {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verifying key id backend must target halo2 IPA (no bn254)".into(),
+                        ),
+                    ));
+                }
+            }
+            BackendTag::Stark => {
+                if !new.curve.eq_ignore_ascii_case("goldilocks") {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verifying key curve must be \"goldilocks\"".into(),
+                        ),
+                    ));
+                }
+                if !crate::zk::is_stark_fri_v1_backend(id_backend) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verifying key id backend must target stark/fri-v1".into(),
+                        ),
+                    ));
+                }
+            }
+            _ => {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verifying key backend must be Halo2IpaPasta or Stark".into(),
+                    ),
+                ));
+            }
         }
         if let Some(vk) = &new.key {
             if new.commitment != hash_vk(vk) {
@@ -4537,6 +4718,95 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "vk backend does not match id backend".into(),
                 ));
+            }
+            if new.backend == BackendTag::Stark {
+                #[cfg(not(feature = "zk-stark"))]
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verifying key backend Stark is not enabled".into(),
+                        ),
+                    ));
+                }
+
+                #[cfg(feature = "zk-stark")]
+                {
+                    use crate::zk_stark::{
+                        STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
+                    };
+                    let expected_hash_fn = if id_backend == "stark/fri-v1" {
+                        None
+                    } else if id_backend.contains("/sha256-") {
+                        Some(STARK_HASH_SHA256_V1)
+                    } else if id_backend.contains("/poseidon2-") {
+                        Some(STARK_HASH_POSEIDON2_V1)
+                    } else {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "unsupported stark/fri-v1 backend variant".into(),
+                            ),
+                        ));
+                    };
+                    let payload: StarkFriVerifyingKeyV1 = norito::decode_from_bytes(&vk.bytes)
+                        .map_err(|_| {
+                            InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "invalid STARK verifying key payload".into(),
+                                ),
+                            )
+                        })?;
+                    if payload.version != 1 {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "unsupported STARK verifying key payload version".into(),
+                            ),
+                        ));
+                    }
+                    if payload.hash_fn != STARK_HASH_SHA256_V1
+                        && payload.hash_fn != STARK_HASH_POSEIDON2_V1
+                    {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "unsupported STARK verifying key hash_fn".into(),
+                            ),
+                        ));
+                    }
+                    if let Some(expected_hash_fn) = expected_hash_fn {
+                        if payload.hash_fn != expected_hash_fn {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "STARK verifying key hash_fn mismatch".into(),
+                                ),
+                            ));
+                        }
+                    }
+                    let payload_circuit_id =
+                        normalize_stark_fri_circuit_id(id_backend, &payload.circuit_id)
+                            .ok_or_else(|| {
+                                InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "invalid STARK verifying key circuit_id".into(),
+                                    ),
+                                )
+                            })?;
+                    let record_circuit_id =
+                        normalize_stark_fri_circuit_id(id_backend, &new.circuit_id).ok_or_else(
+                            || {
+                                InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "invalid verifying key record circuit_id".into(),
+                                    ),
+                                )
+                            },
+                        )?;
+                    if payload_circuit_id != record_circuit_id {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "STARK verifying key circuit_id does not match record".into(),
+                            ),
+                        ));
+                    }
+                }
             }
         }
         let new_key = (new.circuit_id.clone(), new.version);
@@ -5501,8 +5771,8 @@ pub mod isi {
             let proof = attachment.proof.clone();
             let envelope_meta = decode_open_verify_envelope(&proof);
             let backend_label = attachment.backend.as_str();
-            let expects_envelope =
-                backend_label.starts_with("halo2/") || backend_label.starts_with("stark/fri-v1/");
+            let expects_envelope = backend_label.starts_with("halo2/")
+                || crate::zk::is_stark_fri_v1_backend(backend_label);
 
             let envelope_ref = validate_proof_attachment(
                 &attachment,
@@ -5878,7 +6148,7 @@ pub mod isi {
         if let Some(preverified) = state_transaction.lookup_preverified_proof(proof) {
             return Ok((preverified, Duration::ZERO));
         }
-        if attachment.backend.as_str().starts_with("stark/fri-v1/")
+        if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str())
             && !state_transaction.zk.stark.enabled
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -5920,10 +6190,11 @@ pub mod isi {
             _ => None,
         };
 
-        let report = crate::zk::verify_backend_with_timing(
+        let report = crate::zk::verify_backend_with_timing_checked(
             attachment.backend.as_str(),
             proof,
             vk_box.as_ref(),
+            &state_transaction.zk,
         );
         if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -7189,7 +7460,7 @@ pub mod isi {
             if let Some(binding) = st.vk_transfer.as_ref() {
                 enforce_vk_binding(binding, attachment)?;
             }
-            if attachment.backend.as_str().starts_with("stark/fri-v1/")
+            if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str())
                 && !state_transaction.zk.stark.enabled
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -7220,8 +7491,8 @@ pub mod isi {
             }
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_transfer.as_ref(), attachment)?;
-            if attachment.backend.as_str().starts_with("stark/fri-v1/") {
-                // For `stark/fri-v1/*` we require the canonical OpenVerifyEnvelope wrapper so the
+            if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
+                // For `stark/fri-v1` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
                 let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
@@ -7267,10 +7538,11 @@ pub mod isi {
                 enforce_vk_max_proof_bytes("transfer", record, proof_len)?;
             }
             state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing(
+            let report = crate::zk::verify_backend_with_timing_checked(
                 attachment.backend.as_str(),
                 &attachment.proof,
                 Some(&vk_box),
+                &state_transaction.zk,
             );
             let timeout_budget = state_transaction.zk.verify_timeout;
             if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
@@ -7473,7 +7745,7 @@ pub mod isi {
             if let Some(binding) = st.vk_unshield.as_ref() {
                 enforce_vk_binding(binding, attachment)?;
             }
-            if attachment.backend.as_str().starts_with("stark/fri-v1/")
+            if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str())
                 && !state_transaction.zk.stark.enabled
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -7490,8 +7762,8 @@ pub mod isi {
             }
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
-            if attachment.backend.as_str().starts_with("stark/fri-v1/") {
-                // For `stark/fri-v1/*` we require the canonical OpenVerifyEnvelope wrapper so the
+            if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
+                // For `stark/fri-v1` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
                 let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
@@ -7537,10 +7809,11 @@ pub mod isi {
                 enforce_vk_max_proof_bytes("unshield", record, proof_len)?;
             }
             state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing(
+            let report = crate::zk::verify_backend_with_timing_checked(
                 attachment.backend.as_str(),
                 &attachment.proof,
                 Some(&vk_box),
+                &state_transaction.zk,
             );
             let timeout_budget = state_transaction.zk.verify_timeout;
             if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
@@ -8041,7 +8314,7 @@ pub mod isi {
             let (vk_id, vk_box, vk_rec) =
                 resolve_ballot_vk(&st, &self.ballot_proof, state_transaction)?;
             let backend = vk_id.backend.as_str();
-            if backend.starts_with("stark/fri-v1/") && !state_transaction.zk.stark.enabled {
+            if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "stark verification is disabled in node configuration".into(),
                 ));
@@ -8050,10 +8323,11 @@ pub mod isi {
             let proof_len = self.ballot_proof.proof.bytes.len();
             enforce_vk_max_proof_bytes("ballot", &vk_rec, proof_len)?;
             state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing(
+            let report = crate::zk::verify_backend_with_timing_checked(
                 backend,
                 &self.ballot_proof.proof,
                 Some(&vk_box),
+                &state_transaction.zk,
             );
             let timeout_budget = state_transaction.zk.verify_timeout;
             if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
@@ -8171,7 +8445,7 @@ pub mod isi {
             }
             let (vk_id, vk_box, vk_rec) = resolve_tally_vk(&st, att, state_transaction)?;
             let backend = vk_id.backend.as_str();
-            if backend.starts_with("stark/fri-v1/") && !state_transaction.zk.stark.enabled {
+            if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "stark verification is disabled in node configuration".into(),
                 ));
@@ -8179,7 +8453,12 @@ pub mod isi {
             let proof_len = att.proof.bytes.len();
             enforce_vk_max_proof_bytes("tally", &vk_rec, proof_len)?;
             state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing(backend, &att.proof, Some(&vk_box));
+            let report = crate::zk::verify_backend_with_timing_checked(
+                backend,
+                &att.proof,
+                Some(&vk_box),
+                &state_transaction.zk,
+            );
             let timeout_budget = state_transaction.zk.verify_timeout;
             if timeout_budget > Duration::ZERO && report.elapsed > timeout_budget {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -10342,6 +10621,43 @@ pub mod isi {
         }
 
         #[test]
+        fn validate_vote_envelope_metadata_checks_schema_hash() {
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 8, 7, 6]);
+            let commitment = hash_vk(&vk_box);
+            let schema = b"schema:voting:v1".to_vec();
+            let schema_hash: [u8; 32] = iroha_crypto::Hash::new(&schema).into();
+            let mut vk_rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "halo2/pasta/ipa-v1/test-circuit",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                schema_hash,
+                commitment,
+            );
+            vk_rec.status = ConfidentialStatus::Active;
+
+            let ok = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:test-circuit",
+                commitment,
+                schema.clone(),
+                Vec::new(),
+            );
+            assert!(validate_vote_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok());
+
+            let bad = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:test-circuit",
+                commitment,
+                b"schema:voting:v2".to_vec(),
+                Vec::new(),
+            );
+            assert!(validate_vote_envelope_metadata("ballot", "halo2/ipa", &bad, &vk_rec).is_err());
+        }
+
+        #[test]
         fn enforce_vk_max_proof_bytes_rejects_too_large() {
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
@@ -10369,31 +10685,18 @@ pub mod isi {
                 .expect("halo2 envelope");
             let proof_bytes = halo_env.to_bytes();
             let columns: Vec<Vec<[u8; 32]>> = inputs.iter().copied().map(|v| vec![v]).collect();
-            let public_inputs = flatten_instance_columns(&columns);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:vote-circuit",
                 [0u8; 32],
-                public_inputs.clone(),
-                proof_bytes.clone(),
+                b"schema:voting:halo2:v1".to_vec(),
+                proof_bytes,
             );
             let payload = norito::to_bytes(&envelope).expect("encode envelope");
 
             let parsed = extract_vote_public_inputs("halo2/ipa", &payload).expect("extract inputs");
             assert_eq!(parsed.columns, columns);
             assert!(parsed.envelope.is_some());
-
-            let mut bad_inputs = public_inputs;
-            bad_inputs[0] ^= 0x01;
-            let bad_envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                "halo2/ipa:vote-circuit",
-                [0u8; 32],
-                bad_inputs,
-                proof_bytes,
-            );
-            let bad_payload = norito::to_bytes(&bad_envelope).expect("encode envelope");
-            assert!(extract_vote_public_inputs("halo2/ipa", &bad_payload).is_err());
         }
 
         #[test]
@@ -10401,7 +10704,6 @@ pub mod isi {
             use iroha_data_model::zk::StarkFriOpenProofV1;
 
             let columns: Vec<Vec<[u8; 32]>> = vec![vec![[1u8; 32]], vec![[2u8; 32]]];
-            let public_inputs = flatten_instance_columns(&columns);
             let open = StarkFriOpenProofV1 {
                 version: 1,
                 public_inputs: columns.clone(),
@@ -10412,7 +10714,7 @@ pub mod isi {
                 BackendTag::Stark,
                 "vote-circuit",
                 [0u8; 32],
-                public_inputs.clone(),
+                b"schema:voting:stark:v1".to_vec(),
                 proof_bytes,
             );
             let payload = norito::to_bytes(&envelope).expect("encode envelope");
@@ -10421,21 +10723,6 @@ pub mod isi {
                 .expect("extract inputs");
             assert_eq!(parsed.columns, columns);
             assert!(parsed.envelope.is_some());
-
-            let mut bad_inputs = public_inputs;
-            bad_inputs[0] ^= 0x01;
-            let bad_envelope = OpenVerifyEnvelope::new(
-                BackendTag::Stark,
-                "vote-circuit",
-                [0u8; 32],
-                bad_inputs,
-                envelope.proof_bytes.clone(),
-            );
-            let bad_payload = norito::to_bytes(&bad_envelope).expect("encode envelope");
-            assert!(
-                extract_vote_public_inputs("stark/fri-v1/sha256-goldilocks-v1", &bad_payload)
-                    .is_err()
-            );
         }
 
         #[test]
@@ -10581,6 +10868,59 @@ pub mod isi {
             assert_eq!(ballot_rec.commitment, commitment);
 
             let tally_att = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id.clone());
+            let (tally_id, tally_vk, tally_rec) =
+                resolve_tally_vk(&st, &tally_att, &stx).expect("resolve tally vk");
+            assert_eq!(tally_id, vk_id);
+            assert_eq!(tally_vk, ballot_vk);
+            assert_eq!(tally_rec.commitment, commitment);
+        }
+
+        #[test]
+        fn resolve_ballot_and_tally_vk_accept_valid_stark_attachments() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let backend = "stark/fri-v1/sha256-goldilocks-v1";
+            let vk_id = VerifyingKeyId::new(backend, "vk_stark_ok");
+            let vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
+            let commitment = hash_vk(&vk_box);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1",
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0u8; 32],
+                commitment,
+            );
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box.clone());
+            rec.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
+            stx.world.verifying_keys.insert(vk_id.clone(), rec);
+
+            let st = crate::state::ElectionState {
+                vk_ballot: Some(vk_id.clone()),
+                vk_tally: Some(vk_id.clone()),
+                ..Default::default()
+            };
+
+            let proof = ProofBox::new(backend.into(), vec![0xbb]);
+            let ballot_att =
+                ProofAttachment::new_inline(backend.into(), proof.clone(), vk_box.clone());
+            let (ballot_id, ballot_vk, ballot_rec) =
+                resolve_ballot_vk(&st, &ballot_att, &stx).expect("resolve ballot vk");
+            assert_eq!(ballot_id, vk_id);
+            assert_eq!(ballot_vk, vk_box);
+            assert_eq!(ballot_rec.commitment, commitment);
+
+            let tally_att = ProofAttachment::new_ref(backend.into(), proof, vk_id.clone());
             let (tally_id, tally_vk, tally_rec) =
                 resolve_tally_vk(&st, &tally_att, &stx).expect("resolve tally vk");
             assert_eq!(tally_id, vk_id);
@@ -11400,6 +11740,7 @@ pub mod isi {
                 InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(msg),
                 ) => msg,
+                InstructionExecutionError::InvariantViolation(msg) => msg.to_string(),
                 other => panic!("unexpected error: {other:?}"),
             }
         }
@@ -13622,7 +13963,7 @@ pub mod isi {
                 .expect_err("update with non-IPA backend must fail");
             let msg = smart_contract_error_message(err);
             assert!(
-                msg.contains("backend must be Halo2IpaPasta"),
+                msg.contains("backend cannot change"),
                 "unexpected msg: {msg}"
             );
         }

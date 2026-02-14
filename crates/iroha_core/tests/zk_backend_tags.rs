@@ -1,6 +1,7 @@
 #![doc = "Backend tag acceptance tests for ZK attachments (pre-verify path)."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
+#![cfg(feature = "zk-preverify")]
 //! Backend tag acceptance tests for ZK attachments (pre-verify path).
 //! - Unknown families (e.g., `groth16/*`) are rejected as unsupported.
 //! - Halo2 curve mismatch is rejected as "curve not allowed".
@@ -13,8 +14,10 @@ use iroha_data_model::{ValidationFail, prelude::*, transaction::signed::Transact
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
+mod test_world;
+
 fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);

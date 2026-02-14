@@ -14,9 +14,11 @@ use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+mod test_world;
+
 #[test]
 fn proof_records_pruned_to_cap_per_backend() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
@@ -61,7 +63,7 @@ fn proof_records_pruned_to_cap_per_backend() {
 
 #[test]
 fn manual_prune_instruction_applies_new_cap() {
-    let world = iroha_core::state::World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);

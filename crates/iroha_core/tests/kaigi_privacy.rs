@@ -7,7 +7,7 @@
 ))]
 
 use core::num::NonZeroU64;
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use halo2_proofs::{
     SerdeFormat,
@@ -30,7 +30,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{State, WorldReadOnly},
     zk::hash_vk,
 };
 use iroha_crypto::Hash;
@@ -59,6 +59,8 @@ use kaigi_zk::{
 };
 use rand_core_06::OsRng;
 
+mod test_world;
+
 const ROSTER_VK_NAME: &str = "kaigi_roster_v1";
 const USAGE_VK_NAME: &str = "kaigi_usage_v1";
 const ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_v1","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
@@ -84,7 +86,6 @@ struct UsageArtifacts {
     vk_ref: VerifyingKeyRef,
     duration_ms: u64,
     billed_gas: u64,
-    segment_index: u64,
     usage_commitment: Hash,
     proof: Vec<u8>,
 }
@@ -96,7 +97,7 @@ fn build_roster_artifacts() -> RosterArtifacts {
     let mut vk_env = zk1_envelope_start();
     zk1_append_ipa_k(&mut vk_env, KAIGI_ROSTER_CIRCUIT_K);
     zk1_append_vk_pasta(&mut vk_env, &vk_base);
-    let vk_box = VerifyingKeyBox::new(KAIGI_ROSTER_BACKEND.into(), vk_env.clone());
+    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vk_env.clone());
     let vk_commitment = hash_vk(&vk_box);
     let schema_hash: [u8; 32] = Hash::new(ROSTER_PUBLIC_INPUTS_DESC).into();
 
@@ -113,9 +114,9 @@ fn build_roster_artifacts() -> RosterArtifacts {
     vk_record.gas_schedule_id = Some(ROSTER_VK_NAME.to_string());
     vk_record.key = Some(vk_box);
 
-    let vk_id = VerifyingKeyId::new(KAIGI_ROSTER_BACKEND, ROSTER_VK_NAME);
+    let vk_id = VerifyingKeyId::new("halo2/ipa", ROSTER_VK_NAME);
     let vk_ref = VerifyingKeyRef {
-        backend: KAIGI_ROSTER_BACKEND.to_string(),
+        backend: "halo2/ipa".to_string(),
         name: ROSTER_VK_NAME.to_string(),
     };
 
@@ -192,7 +193,7 @@ fn build_usage_artifacts() -> UsageArtifacts {
     let mut vk_env = zk1_envelope_start();
     zk1_append_ipa_k(&mut vk_env, KAIGI_USAGE_CIRCUIT_K);
     zk1_append_vk_pasta(&mut vk_env, &vk_base);
-    let vk_box = VerifyingKeyBox::new(KAIGI_USAGE_BACKEND.into(), vk_env.clone());
+    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vk_env.clone());
     let vk_commitment = hash_vk(&vk_box);
     let schema_hash: [u8; 32] = Hash::new(USAGE_PUBLIC_INPUTS_DESC).into();
 
@@ -209,9 +210,9 @@ fn build_usage_artifacts() -> UsageArtifacts {
     vk_record.gas_schedule_id = Some(USAGE_VK_NAME.to_string());
     vk_record.key = Some(vk_box);
 
-    let vk_id = VerifyingKeyId::new(KAIGI_USAGE_BACKEND, USAGE_VK_NAME);
+    let vk_id = VerifyingKeyId::new("halo2/ipa", USAGE_VK_NAME);
     let vk_ref = VerifyingKeyRef {
-        backend: KAIGI_USAGE_BACKEND.to_string(),
+        backend: "halo2/ipa".to_string(),
         name: USAGE_VK_NAME.to_string(),
     };
 
@@ -243,7 +244,6 @@ fn build_usage_artifacts() -> UsageArtifacts {
         vk_ref,
         duration_ms,
         billed_gas,
-        segment_index,
         usage_commitment: commitment_hash,
         proof: proof_bytes,
     }
@@ -404,12 +404,14 @@ fn kaigi_privacy_join_and_leave_flow_updates_record() {
     #[cfg(feature = "telemetry")]
     let telemetry = StateTelemetry::default();
     let mut state = State::new(
-        World::default(),
+        test_world::world_with_test_accounts(),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         telemetry,
     );
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = Duration::ZERO;
     state.zk.kaigi_roster_join_vk = Some(roster.vk_ref.clone());
     state.zk.kaigi_roster_leave_vk = Some(roster.vk_ref.clone());
 
@@ -554,12 +556,14 @@ fn usage_summary_emitted_on_record_usage() {
     #[cfg(feature = "telemetry")]
     let telemetry = StateTelemetry::default();
     let mut state = State::new(
-        World::default(),
+        test_world::world_with_test_accounts(),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         telemetry,
     );
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = Duration::ZERO;
     state.zk.kaigi_roster_join_vk = Some(roster.vk_ref.clone());
     state.zk.kaigi_roster_leave_vk = Some(roster.vk_ref.clone());
     state.zk.kaigi_usage_vk = Some(usage.vk_ref.clone());

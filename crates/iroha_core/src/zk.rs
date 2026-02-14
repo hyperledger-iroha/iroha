@@ -229,6 +229,15 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// Returns `true` when `backend` denotes the native STARK/FRI verifier family.
+///
+/// The canonical family identifier is `stark/fri-v1`. Implementations may use
+/// additional suffixes under this prefix (e.g., `stark/fri-v1/sha256-goldilocks-v1`).
+#[inline]
+pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
+    backend == "stark/fri-v1" || backend.starts_with("stark/fri-v1/")
+}
+
 #[cfg(feature = "zk-halo2-ipa")]
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     let mut limbs = [0u64; 4];
@@ -4285,6 +4294,7 @@ fn verify_stark_fri_open_verify_envelope(
     proof: &ProofBox,
     vk: Option<&VerifyingKeyBox>,
 ) -> bool {
+    use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     let reject = |reason: &'static str| {
@@ -4308,9 +4318,62 @@ fn verify_stark_fri_open_verify_envelope(
         return reject("missing verifying key");
     };
     let expected_vk_hash = hash_vk(vk_box);
-    // STARK verification does not consult VK bytes directly, so bind to the VK hash eagerly.
     if env.vk_hash == [0u8; 32] || env.vk_hash != expected_vk_hash {
         return reject("verifying key commitment mismatch");
+    }
+
+    let expected_hash_fn = if backend == "stark/fri-v1" {
+        None
+    } else if backend.contains("/sha256-") {
+        Some(STARK_HASH_SHA256_V1)
+    } else if backend.contains("/poseidon2-") {
+        Some(STARK_HASH_POSEIDON2_V1)
+    } else {
+        return reject("unsupported stark/fri-v1 backend variant");
+    };
+
+    // Decode and validate the STARK verifying key payload. This pins the verifier
+    // parameters so a prover cannot select weaker hash/query settings at runtime.
+    let vk_payload: StarkFriVerifyingKeyV1 = match norito::decode_from_bytes(&vk_box.bytes) {
+        Ok(vk) => vk,
+        Err(_) => return reject("invalid STARK verifying key payload"),
+    };
+    if vk_payload.version != 1 {
+        return reject("unsupported STARK verifying key payload version");
+    }
+    if vk_payload.hash_fn != STARK_HASH_SHA256_V1 && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
+        return reject("unsupported STARK verifying key hash_fn");
+    }
+    if let Some(expected_hash_fn) = expected_hash_fn {
+        if vk_payload.hash_fn != expected_hash_fn {
+            return reject("STARK verifying key hash_fn mismatch");
+        }
+    }
+    let canonical_circuit_id = |raw: &str| -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed == backend {
+            return None;
+        }
+        if let Some(rest) = trimmed.strip_prefix(backend) {
+            if let Some(rest) = rest.strip_prefix(':') {
+                return (!rest.is_empty()).then(|| trimmed.to_string());
+            }
+            if let Some(rest) = rest.strip_prefix('/') {
+                return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
+            }
+        }
+        Some(format!("{backend}:{trimmed}"))
+    };
+    let env_circuit_id = match canonical_circuit_id(&env.circuit_id) {
+        Some(id) => id,
+        None => return reject("invalid STARK envelope circuit_id"),
+    };
+    let vk_circuit_id = match canonical_circuit_id(&vk_payload.circuit_id) {
+        Some(id) => id,
+        None => return reject("invalid STARK verifying key circuit_id"),
+    };
+    if env_circuit_id != vk_circuit_id {
+        return reject("STARK verifying key circuit_id mismatch");
     }
 
     // Decode the STARK wrapper payload.
@@ -4353,6 +4416,21 @@ fn verify_stark_fri_open_verify_envelope(
             Ok(inner) => inner,
             Err(_) => return reject("invalid inner STARK envelope payload"),
         };
+    // Verify that the prover is using the parameters pinned by the verifying key.
+    if inner.params.hash_fn != vk_payload.hash_fn
+        || inner.params.n_log2 != vk_payload.n_log2
+        || inner.params.blowup_log2 != vk_payload.blowup_log2
+        || inner.params.fold_arity != vk_payload.fold_arity
+        || inner.params.queries != vk_payload.queries
+        || inner.params.merkle_arity != vk_payload.merkle_arity
+    {
+        return reject("STARK proof parameters do not match verifying key");
+    }
+    if let Some(expected_hash_fn) = expected_hash_fn {
+        if inner.params.hash_fn != expected_hash_fn {
+            return reject("STARK proof hash_fn does not match backend");
+        }
+    }
     if inner.params.domain_tag != expected_domain_tag {
         return reject("domain tag integrity mismatch");
     }
@@ -4417,7 +4495,7 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     }
 
     // STARK/FRI family: native multi-fold verifier
-    if backend.starts_with("stark/fri-v1/") {
+    if is_stark_fri_v1_backend(backend) {
         #[cfg(feature = "zk-stark")]
         {
             // STARK proofs must use `OpenVerifyEnvelope` so the verifier can bind the
@@ -4456,6 +4534,22 @@ mod debug_backend_tests {
     }
 }
 
+#[cfg(test)]
+mod stark_backend_tag_tests {
+    use super::is_stark_fri_v1_backend;
+
+    #[test]
+    fn detects_base_and_variant_backends() {
+        assert!(is_stark_fri_v1_backend("stark/fri-v1"));
+        assert!(is_stark_fri_v1_backend("stark/fri-v1/sha256-goldilocks-v1"));
+        assert!(is_stark_fri_v1_backend(
+            "stark/fri-v1/poseidon2-goldilocks-v1"
+        ));
+        assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
+        assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
+    }
+}
+
 /// Result produced by [`verify_backend_with_timing`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifyReport {
@@ -4463,6 +4557,37 @@ pub struct VerifyReport {
     pub ok: bool,
     /// Time spent verifying.
     pub elapsed: Duration,
+}
+
+/// Configuration guardrails for proof verification (enabled flags + payload size caps).
+///
+/// This struct is intentionally scalar-only so it can be sourced both from node configuration
+/// (`iroha_config::parameters::actual::Zk`) and from host-local verification caps (e.g. IVM host).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZkVerifyGuardrails {
+    /// Whether halo2 verification is enabled.
+    pub halo2_enabled: bool,
+    /// Maximum accepted halo2 envelope payload size (bytes).
+    pub halo2_max_envelope_bytes: usize,
+    /// Maximum accepted halo2 proof payload size (bytes).
+    pub halo2_max_proof_bytes: usize,
+    /// Whether STARK verification is enabled.
+    pub stark_enabled: bool,
+    /// Maximum accepted STARK proof payload size (bytes).
+    pub stark_max_proof_bytes: usize,
+}
+
+impl ZkVerifyGuardrails {
+    /// Build guardrails from node configuration.
+    pub fn from_cfg(cfg: &iroha_config::parameters::actual::Zk) -> Self {
+        Self {
+            halo2_enabled: cfg.halo2.enabled,
+            halo2_max_envelope_bytes: cfg.halo2.max_envelope_bytes,
+            halo2_max_proof_bytes: cfg.halo2.max_proof_bytes,
+            stark_enabled: cfg.stark.enabled,
+            stark_max_proof_bytes: cfg.stark.max_proof_bytes,
+        }
+    }
 }
 
 /// Verify a backend and report the elapsed time.
@@ -4476,6 +4601,186 @@ pub fn verify_backend_with_timing(
     VerifyReport {
         ok,
         elapsed: started.elapsed(),
+    }
+}
+
+/// Verify a backend under explicit configuration guardrails (enabled flags + payload size caps).
+///
+/// This helper exists to prevent accidentally accepting proofs for a backend that is
+/// compiled in but disabled at runtime.
+pub fn verify_backend_with_timing_guardrails(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    guardrails: ZkVerifyGuardrails,
+) -> VerifyReport {
+    if backend == "halo2/ipa" || backend.starts_with("halo2/") {
+        if !guardrails.halo2_enabled {
+            iroha_logger::debug!(
+                backend,
+                "halo2 verification is disabled in node configuration"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+        if proof.bytes.len() > guardrails.halo2_max_envelope_bytes {
+            iroha_logger::debug!(
+                backend,
+                "halo2 payload exceeds node-configured max_envelope_bytes"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+
+        // Best-effort: when the payload is a Norito `OpenVerifyEnvelope`, enforce the inner
+        // proof-bytes cap. (Some halo2 backends may accept raw proof bytes, so decode failure
+        // is not treated as a hard reject here.)
+        if let Ok(env) =
+            norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&proof.bytes)
+            && env.proof_bytes.len() > guardrails.halo2_max_proof_bytes
+        {
+            iroha_logger::debug!(
+                backend,
+                "halo2 envelope proof_bytes exceeds node-configured max_proof_bytes"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+    }
+
+    if is_stark_fri_v1_backend(backend) {
+        if !guardrails.stark_enabled {
+            iroha_logger::debug!(
+                backend,
+                "stark verification is disabled in node configuration"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+        if proof.bytes.len() > guardrails.stark_max_proof_bytes {
+            iroha_logger::debug!(
+                backend,
+                "stark proof exceeds node-configured max_proof_bytes"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+    }
+
+    verify_backend_with_timing(backend, proof, vk)
+}
+
+/// Verify a backend under node configuration guardrails (enabled flags + payload size caps).
+///
+/// This helper exists to prevent accidentally accepting proofs for a backend that is
+/// compiled in but disabled at runtime.
+pub fn verify_backend_with_timing_checked(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    cfg: &iroha_config::parameters::actual::Zk,
+) -> VerifyReport {
+    verify_backend_with_timing_guardrails(backend, proof, vk, ZkVerifyGuardrails::from_cfg(cfg))
+}
+
+#[cfg(test)]
+mod guardrails_tests {
+    use super::*;
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+
+    #[test]
+    fn guardrails_disable_halo2_returns_zero_duration() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![0xAA; 8]);
+        let report = verify_backend_with_timing_guardrails(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: false,
+                halo2_max_envelope_bytes: 1024,
+                halo2_max_proof_bytes: 1024,
+                stark_enabled: true,
+                stark_max_proof_bytes: 1024,
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_enforce_halo2_max_envelope_bytes() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![0xAA; 9]);
+        let report = verify_backend_with_timing_guardrails(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: 8,
+                halo2_max_proof_bytes: 1024,
+                stark_enabled: true,
+                stark_max_proof_bytes: 1024,
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_enforce_halo2_max_proof_bytes_for_open_verify_envelopes() {
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/ipa:dummy".to_owned(),
+            vk_hash: [0u8; 32],
+            public_inputs: Vec::new(),
+            proof_bytes: vec![0xBB; 10],
+            aux: Vec::new(),
+        };
+        let bytes = norito::to_bytes(&env).expect("encode envelope");
+        let proof = ProofBox::new("halo2/ipa".into(), bytes);
+        let report = verify_backend_with_timing_guardrails(
+            "halo2/ipa",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: 1024,
+                halo2_max_proof_bytes: 5,
+                stark_enabled: true,
+                stark_max_proof_bytes: 1024,
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_disable_stark_returns_zero_duration() {
+        let proof = ProofBox::new("stark/fri-v1".into(), vec![0xAA; 8]);
+        let report = verify_backend_with_timing_guardrails(
+            "stark/fri-v1",
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: 1024,
+                halo2_max_proof_bytes: 1024,
+                stark_enabled: false,
+                stark_max_proof_bytes: 1024,
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.elapsed, Duration::ZERO);
     }
 }
 
@@ -8231,7 +8536,18 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                         Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
                     let strategy = SingleVerifier::new(&params);
                     let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            iroha_logger::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 kaigi roster proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
                 }
             )
         }
@@ -8249,7 +8565,18 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                         Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
                     let strategy = SingleVerifier::new(&params);
                     let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            iroha_logger::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 kaigi usage proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
                 }
             )
         }
@@ -8292,16 +8619,29 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
     };
     use iroha_zkp_halo2::Halo2ProofEnvelope;
 
-    let Some(vk_box) = vk else { return false };
-    if vk_box.backend != proof.backend || proof.bytes.is_empty() || vk_box.bytes.is_empty() {
-        return false;
+    let reject = |reason: &'static str| {
+        iroha_logger::debug!(backend, reason, "halo2 ipa proof rejected");
+        false
+    };
+
+    let Some(vk_box) = vk else {
+        return reject("missing verifying key");
+    };
+    if vk_box.backend != proof.backend {
+        return reject("verifying key backend mismatch");
+    }
+    if proof.bytes.is_empty() {
+        return reject("empty proof bytes");
+    }
+    if vk_box.bytes.is_empty() {
+        return reject("empty verifying key bytes");
     }
 
     ensure_halo2_max_degree(64);
 
     let params: PastaParams = match zkparse::params_any(vk_box.bytes.as_slice()) {
         Some(p) => p,
-        None => return false,
+        None => return reject("missing/invalid IPAK parameters in verifying key envelope"),
     };
 
     // Parse proof payload + instances via shared helper
@@ -8324,7 +8664,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         } else {
             let (payload, cols) = match zkparse::proof_and_instances(proof.bytes.as_slice()) {
                 Some(x) => x,
-                None => return false,
+                None => return reject("invalid ZK1 proof envelope payload"),
             };
             (payload, cols, None)
         };
@@ -8333,7 +8673,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
     if let Some(header) = envelope_header
         && params.k() != u32::from(header.k)
     {
-        return false;
+        return reject("proof header k does not match verifying key IPAK");
     }
     // For IPA, we normalize backend tag to reuse circuit mapping
     let normalized = backend.replace("/ipa-v1/", "/");
@@ -8939,6 +9279,64 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 .is_ok()
             }
         }
+        KAIGI_ROSTER_BACKEND => {
+            if col_refs.len() < 2 {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                &vk_box.backend,
+                vk_box,
+                KaigiRosterJoinCircuit::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            iroha_logger::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 kaigi roster proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
+                }
+            )
+        }
+        KAIGI_USAGE_BACKEND => {
+            if col_refs.is_empty() {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                &vk_box.backend,
+                vk_box,
+                KaigiUsageCommitmentCircuit::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            iroha_logger::debug!(
+                                backend,
+                                normalized = normalized.as_str(),
+                                error = ?err,
+                                "halo2 kaigi usage proof rejected (verify_proof failed)"
+                            );
+                            false
+                        }
+                    }
+                }
+            )
+        }
         _ => false,
     }
 }
@@ -9242,7 +9640,14 @@ mod tests {
 
         if let Some(cache) = super::BUILTIN_VK_CACHE.get() {
             let guard = cache.lock().expect("cache poisoned");
-            assert_eq!(guard.len(), 1);
+            let key = super::BuiltinVkCacheKey {
+                backend: backend.to_owned(),
+                params_fingerprint: super::params_fingerprint(&params),
+            };
+            let Some(cached) = guard.get(&key) else {
+                panic!("expected builtin verifying key cache entry for {backend}");
+            };
+            assert!(Arc::ptr_eq(&first, cached));
         } else {
             panic!("cache not initialized");
         }

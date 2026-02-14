@@ -452,6 +452,7 @@ pub(crate) fn prune_redundant_contract_ops<R: StateReadOnly>(
 #[derive(Debug, Clone, Default)]
 pub struct TxOverlay {
     instructions: Vec<InstructionBox>,
+    ivm_gas_used: Option<u64>,
 }
 
 impl TxOverlay {
@@ -459,6 +460,15 @@ impl TxOverlay {
     pub fn from_instructions(instrs: Vec<InstructionBox>) -> Self {
         Self {
             instructions: instrs,
+            ivm_gas_used: None,
+        }
+    }
+
+    /// Create an overlay from IVM-produced instructions and observed IVM gas usage.
+    pub fn from_ivm_instructions(instrs: Vec<InstructionBox>, ivm_gas_used: u64) -> Self {
+        Self {
+            instructions: instrs,
+            ivm_gas_used: Some(ivm_gas_used),
         }
     }
 
@@ -475,6 +485,16 @@ impl TxOverlay {
     /// Iterate over instructions in this overlay.
     pub fn instructions(&self) -> impl ExactSizeIterator<Item = &InstructionBox> {
         self.instructions.iter()
+    }
+
+    /// Borrow the overlay instructions as a slice.
+    pub fn instruction_slice(&self) -> &[InstructionBox] {
+        &self.instructions
+    }
+
+    /// Return IVM gas used during overlay prepass, when the source executable was `Executable::Ivm`.
+    pub fn ivm_gas_used(&self) -> Option<u64> {
+        self.ivm_gas_used
     }
 
     /// Approximate byte size of this overlay when serialized via Norito TLV.
@@ -664,6 +684,7 @@ where
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             run_vm_with_host(&mut vm, &mut host)?;
+            let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
             let mut queued = host.drain_instructions();
@@ -715,7 +736,7 @@ where
                     queued.push(InstructionBox::from(isi));
                 }
             }
-            Ok(TxOverlay::from_instructions(queued))
+            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
         }
         Executable::IvmProved(proved) => {
             // Validate header against node policy (same checks as `Executable::Ivm`).
@@ -806,6 +827,7 @@ pub fn build_overlay_for_transaction_with_accounts(
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
             run_vm(&mut vm)?;
+            let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let mut queued = if let Some(h) = vm.host_mut_any()
                 && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
             {
@@ -821,7 +843,7 @@ pub fn build_overlay_for_transaction_with_accounts(
             {
                 queued.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
             }
-            Ok(TxOverlay::from_instructions(queued))
+            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
         }
         Executable::IvmProved(_) => Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved requires a full state view for proof verification".to_owned(),
@@ -907,6 +929,7 @@ where
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
             run_vm_with_host(&mut vm, &mut host)?;
+            let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
             let mut queued = host.drain_instructions();
@@ -945,7 +968,7 @@ where
                 let _ = code_hash;
             }
             prune_redundant_contract_ops(state_ro, &mut queued);
-            Ok(TxOverlay::from_instructions(queued))
+            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
         }
         Executable::IvmProved(proved) => {
             let parsed = ivm::ProgramMetadata::parse(proved.bytecode.as_ref())
@@ -1077,6 +1100,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 }
             }
             res?;
+            let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let queued = if let Some(h) = vm.host_mut_any()
                 && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
             {
@@ -1084,7 +1108,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             } else {
                 Vec::new()
             };
-            Ok(TxOverlay::from_instructions(queued))
+            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
         }
         Executable::IvmProved(_) => Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved is not supported in quarantine overlay building".to_owned(),
@@ -2027,9 +2051,11 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
+        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
+        // time-based rejection so slow debug builds don't flap.
+        state.zk.verify_timeout = std::time::Duration::ZERO;
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
-        state.zk.verify_timeout = std::time::Duration::ZERO;
 
         let attachment =
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
@@ -2139,6 +2165,9 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
+        // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
+        // time-based rejection so slow debug builds don't flap.
+        state.zk.verify_timeout = std::time::Duration::ZERO;
         state.pipeline.ivm_proved.enabled = true;
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
@@ -3425,7 +3454,7 @@ fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
             (Some(rec), Some(env)) => rec == env,
             _ => record_id == env_id,
         }
-    } else if backend.starts_with("stark/fri-v1/") {
+    } else if crate::zk::is_stark_fri_v1_backend(backend) {
         match (
             normalize_stark_fri_circuit_id(backend, record_id),
             normalize_stark_fri_circuit_id(backend, env_id),
@@ -3901,11 +3930,11 @@ where
     }
     let backend_kind = if attachment.backend.as_str() == "halo2/ipa" {
         IvmProvedBackendKind::Halo2Ipa
-    } else if attachment.backend.as_str().starts_with("stark/fri-v1/") {
+    } else if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
         IvmProvedBackendKind::StarkFriV1
     } else {
         return Err(OverlayBuildError::ZkProof(
-            "unsupported backend for Executable::IvmProved (expected halo2/ipa or stark/fri-v1/*)"
+            "unsupported backend for Executable::IvmProved (expected halo2/ipa or stark/fri-v1)"
                 .to_owned(),
         ));
     };
@@ -4121,10 +4150,11 @@ where
         ));
     }
     let tx_gas_limit = require_tx_gas_limit(tx)?;
-    let report = crate::zk::verify_backend_with_timing(
+    let report = crate::zk::verify_backend_with_timing_checked(
         attachment.backend.as_str(),
         &attachment.proof,
         Some(vk_box),
+        zk_cfg,
     );
     if zk_cfg.verify_timeout > std::time::Duration::ZERO && report.elapsed > zk_cfg.verify_timeout {
         return Err(OverlayBuildError::ZkProof(

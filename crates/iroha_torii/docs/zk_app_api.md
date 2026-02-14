@@ -36,10 +36,11 @@ Notes
 - Prover reports persist under `./storage/torii/zk_prover/reports/{id}.json`.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
-- `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri-v1/*` (must be compatible with `ivm-execution-v1`).
+- `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri-v1` (including `stark/fri-v1/...` variants) (must be compatible with `ivm-execution-v1`).
 - `/v1/zk/ivm/prove` currently supports `halo2/ipa` only (Halo2 proving keys).
-- STARK verification (`stark/fri-v1/*`) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
-- For `halo2/*` and `stark/fri-v1/*` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
+- STARK verification (`stark/fri-v1` family) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
+- For `halo2/*` and `stark/fri-v1` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
+- For STARK wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes; concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
 
 ## Configuration
 

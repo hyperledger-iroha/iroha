@@ -211,20 +211,36 @@ Verifier behavior (native STARK)
   unsupported hash selectors, and mismatched query-count headers. Depth/size caps guard
   against oversized envelopes.
 
-Example (Rust)
-```rust
-	use iroha_core::zk_stark::*;
-	let n_log2 = 3u8; // domain size 8
-	// Build layers 0..L (y0/y1 folds) and Merkle roots/paths externally
-	let env = StarkVerifyEnvelopeV1 { /* fill params, proof, transcript */ };
-	let bytes = norito::to_bytes(&env).unwrap();
-	// Verify the raw envelope bytes with `verify_stark_fri_envelope(&bytes)`.
-	// Note: `verify_backend(\"stark/fri-v1/*\", ...)` expects a Norito `OpenVerifyEnvelope` wrapper.
-	```
+	Example (Rust)
+	```rust
+		use iroha_core::zk_stark::*;
+		let n_log2 = 3u8; // domain size 8
+		// Build layers 0..L (y0/y1 folds) and Merkle roots/paths externally
+		let env = StarkVerifyEnvelopeV1 { /* fill params, proof, transcript */ };
+		let bytes = norito::to_bytes(&env).unwrap();
+		// Verify the raw envelope bytes with `verify_stark_fri_envelope(&bytes)`.
+		// Note: `verify_backend(\"stark/fri-v1/*\", ...)` expects a Norito `OpenVerifyEnvelope` wrapper.
+		```
 
-Example (JSON-like, annotated)
-```jsonc
-{
+	STARK via `OpenVerifyEnvelope` (consensus / `verify_backend`)
+	- `ProofBox.bytes` (outer payload): Norito `OpenVerifyEnvelope` with:
+	  - `backend = BackendTag::Stark`
+	  - `circuit_id = "stark/fri-v1/<profile>:<circuit>"` (application-level identifier)
+	  - `vk_hash = sha256(backend || vk_bytes)`
+	  - `public_inputs = schema descriptor bytes` (stable policy-defined layout commitment)
+	  - `proof_bytes = norito(StarkFriOpenProofV1 { version, public_inputs, envelope_bytes })`
+	- `StarkFriOpenProofV1.public_inputs` carries the concrete public input values
+	  (column-major 32-byte words) used for circuit/policy checks.
+	- `StarkFriOpenProofV1.envelope_bytes` (inner payload): Norito `StarkVerifyEnvelopeV1`
+	- `VerifyingKeyBox.bytes` (for `stark/fri-v1/*`): Norito `StarkFriVerifyingKeyV1`
+	  containing the expected `circuit_id` and the FRI parameter set (`n_log2`, `blowup_log2`,
+	  `fold_arity`, `queries`, `merkle_arity`, `hash_fn`).
+	- The verifier enforces that the outer wrapper metadata is bound into the inner STARK
+	  envelope (via `domain_tag`) and that the inner envelope parameters match the VK payload.
+
+	Example (JSON-like, annotated)
+	```jsonc
+	{
   // StarkVerifyEnvelopeV1
   "params": {
     "version": 1,

@@ -10,7 +10,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{State, WorldReadOnly},
     zk::{hash_proof, hash_vk},
 };
 use iroha_crypto::Hash as CryptoHash;
@@ -31,6 +31,8 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+
+mod test_world;
 
 #[allow(clippy::disallowed_types)]
 type PreverifiedMap = std::collections::BTreeMap<[u8; 32], bool>;
@@ -81,7 +83,7 @@ fn base_record(circuit: &str, version: u32) -> VerifyingKeyRecord {
 
 #[test]
 fn duplicate_circuit_version_registration_rejected() {
-    let world = World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
@@ -117,7 +119,7 @@ fn duplicate_circuit_version_registration_rejected() {
 
 #[test]
 fn update_rotates_circuit_version_index() {
-    let world = World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
@@ -197,7 +199,7 @@ fn execute_verify_proof(
 
 #[test]
 fn verify_proof_rejects_circuit_mismatch() {
-    let world = World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
@@ -243,7 +245,7 @@ fn verify_proof_rejects_circuit_mismatch() {
 
 #[test]
 fn verify_proof_rejects_schema_hash_mismatch() {
-    let world = World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
@@ -288,7 +290,7 @@ fn verify_proof_rejects_schema_hash_mismatch() {
 
 #[test]
 fn verify_proof_accepts_matching_metadata() {
-    let world = World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
@@ -330,7 +332,7 @@ fn verify_proof_accepts_matching_metadata() {
 
 #[test]
 fn register_requires_circuit_and_schema_hash() {
-    let world = World::new();
+    let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);

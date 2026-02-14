@@ -576,6 +576,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
     );
 }
 
+#[test]
 fn transfer_rejects_when_nullifiers_exceed_cap() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();

@@ -1,5 +1,6 @@
 #![doc = "Helpers for generating minimal Halo2 proofs for governance tests."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(dead_code, unused_imports)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -28,7 +29,7 @@ mod halo2_bundle {
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-        zk::BackendTag,
+        zk::{BackendTag, OpenVerifyEnvelope},
     };
     use rand_core_06::OsRng;
 
@@ -360,7 +361,7 @@ mod halo2_bundle {
 
     /// Deterministic Halo2/IPA vote tally circuit (depth 8) exercising the production backend.
     pub struct VoteTallyProofBundle {
-        /// Backend tag for the tally circuit.
+        /// Backend identifier for the proof attachment (`halo2/ipa`).
         pub backend: &'static str,
         /// Circuit identifier recorded alongside the verifying key.
         pub circuit_id: &'static str,
@@ -368,7 +369,7 @@ mod halo2_bundle {
         pub vk_id: VerifyingKeyId,
         /// Registry-style verifying key record (inline bytes populated).
         pub vk_record: VerifyingKeyRecord,
-        /// ZK1 envelope bytes carrying the proof and public instances.
+        /// Norito-encoded `OpenVerifyEnvelope` bytes carrying the proof payload.
         pub proof_bytes: Vec<u8>,
         /// Canonical public-input encoding (commit || root).
         pub public_inputs: Vec<u8>,
@@ -414,7 +415,8 @@ mod halo2_bundle {
             transcript::{Blake2bWrite, Challenge255},
         };
 
-        let backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1";
+        let backend = "halo2/ipa";
+        let envelope_circuit_id = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1";
         let circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1";
         let name = "tally_v1";
         let k: u32 = 6;
@@ -547,11 +549,11 @@ mod halo2_bundle {
 
         let commit_col = [commit];
         let root_col = [root];
-        let mut proof_bytes = zk1::wrap_start();
-        zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+        let mut proof_payload = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
         zk1::wrap_append_instances_pasta_fp_cols(
             &[&commit_col[..], &root_col[..]],
-            &mut proof_bytes,
+            &mut proof_payload,
         );
 
         let mut vk_bytes = zk1::wrap_start();
@@ -574,10 +576,23 @@ mod halo2_bundle {
             commitment,
         );
         vk_record.vk_len = vk_bytes.len() as u32;
-        vk_record.max_proof_bytes = proof_bytes.len() as u32;
+        // `max_proof_bytes` is enforced against the submitted proof payload length, which for
+        // `halo2/ipa` is the full OpenVerifyEnvelope bytes.
         vk_record.gas_schedule_id = Some("halo2_default".into());
         vk_record.key = Some(vk_box);
         vk_record.status = ConfidentialStatus::Active;
+
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: envelope_circuit_id.to_string(),
+            vk_hash: commitment,
+            public_inputs: public_inputs.clone(),
+            proof_bytes: proof_payload,
+            aux: Vec::new(),
+        };
+        let proof_bytes =
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
+        vk_record.max_proof_bytes = proof_bytes.len() as u32;
 
         let proof_box = ProofBox::new(backend.into(), proof_bytes.clone());
         let vk_inline = vk_record.key.as_ref().expect("inline vk populated").clone();

@@ -70,7 +70,7 @@ All commands emit Norito JSON responses. Filters match the HTTP query parameters
 
 - Controlled via `torii.zk_prover_enabled`, `torii.zk_prover_scan_period_secs`, `torii.zk_prover_reports_ttl_secs`, `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, `torii.zk_prover_max_scan_millis`, `torii.zk_prover_keys_dir`, `torii.zk_prover_allowed_backends`, and `torii.zk_prover_allowed_circuits` in `iroha_config`.
 - Attachments must decode as `ProofAttachment`/`ProofAttachmentList` (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads.
-- Backends are allowlisted by prefix; default `["halo2/"]`. `stark/fri-v1/*` is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`). `groth16/…` remains unsupported.
+- Backends are allowlisted by prefix; default `["halo2/"]`. The `stark/fri-v1` family is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`). `groth16/…` remains unsupported.
 - Each report now records `latency_ms = processed_ms - created_ms` so operators can track queue delays.
 - The prover emits telemetry:
   - `torii_zk_prover_attachment_bytes` (histogram, labelled by `content_type`)

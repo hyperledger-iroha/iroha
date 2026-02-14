@@ -37,14 +37,19 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
-    let state = State::new(
+    let mut state = State::new(
         World::new(),
         kura,
         query,
         iroha_core::telemetry::StateTelemetry::default(),
     );
     #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let mut state = State::new(World::new(), kura, query);
+
+    // ZkTransfer/Unshield execute real proof verification under `verify_backend_with_timing_checked`,
+    // so these tests must opt into the halo2 verifier explicitly.
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = std::time::Duration::ZERO;
 
     let domain_id = account_id.domain.clone();
     let asset_def_id: AssetDefinitionId = format!("zcoin#{domain_id}").parse().unwrap();

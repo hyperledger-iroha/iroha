@@ -75,6 +75,7 @@ zk-halo2-ipa = ["iroha_core/zk-halo2-ipa"]
 ipa-commitment = ["dep:iroha_zkp_halo2"]
 circuit-params = ["iroha_core/circuit-params", "halo2_proofs/circuit-params"]
 zk-tests = ["iroha_core/zk-tests"]
+halo2-dev-tests = ["iroha_core/halo2-dev-tests"]
 [dependencies]
 norito = { workspace = true }
 iroha_core = { workspace = true, features = ["app_api", "iroha-core-tests", "zk-tests", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }

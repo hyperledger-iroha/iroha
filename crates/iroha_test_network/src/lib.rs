@@ -33,9 +33,9 @@ use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_config::{
     base::{
+        ParameterOrigin,
         env::MockEnv,
         read::ConfigReader,
-        ParameterOrigin,
         toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
     },
     parameters::actual::{ConsensusMode, SumeragiNposTimeoutOverrides},
@@ -44,7 +44,9 @@ use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
-use iroha_crypto::{Algorithm, Hash as CryptoHash, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{
+    Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey,
+};
 #[cfg(test)]
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
@@ -3275,11 +3277,13 @@ fn resolve_kura_store_dir(
 ) -> (PathBuf, String, String) {
     const DEFAULT_KURA_STORE_DIR_KEY: &str = "kura.store_dir (unresolved)";
     resolve_actual_config(peer, config_layers).map_or_else(
-        || (
-            peer.dir.join("storage"),
-            DEFAULT_KURA_STORE_DIR_KEY.to_string(),
-            "./storage".to_string(),
-        ),
+        || {
+            (
+                peer.dir.join("storage"),
+                DEFAULT_KURA_STORE_DIR_KEY.to_string(),
+                "./storage".to_string(),
+            )
+        },
         |config| {
             let (store_dir, origin) = config.kura.store_dir.into_tuple();
             let value = store_dir.to_string_lossy().to_string();
@@ -3641,15 +3645,18 @@ fn genesis_instructions_contain_consensus_handshake_meta(
         _ => return false,
     };
 
-    genesis_isi.iter().flat_map(|tx| tx.iter()).any(|instruction| {
-        instruction
-            .as_any()
-            .downcast_ref::<SetParameter>()
-            .is_some_and(|set_param| match set_param.inner() {
-                Parameter::Custom(custom) => custom == expected_meta,
-                _ => false,
-            })
-    })
+    genesis_isi
+        .iter()
+        .flat_map(|tx| tx.iter())
+        .any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set_param| match set_param.inner() {
+                    Parameter::Custom(custom) => custom == expected_meta,
+                    _ => false,
+                })
+        })
 }
 
 fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
@@ -3660,8 +3667,11 @@ fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -
         _ => return false,
     };
 
-    block.0.transactions_vec().iter().any(|tx| {
-        match tx.instructions() {
+    block
+        .0
+        .transactions_vec()
+        .iter()
+        .any(|tx| match tx.instructions() {
             Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
                 instruction
                     .as_any()
@@ -3672,8 +3682,7 @@ fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -
                     })
             }),
             _ => false,
-        }
-    })
+        })
 }
 
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
@@ -3682,10 +3691,7 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         _ => "Permissioned",
     };
     let mut handshake_fields = json::Map::new();
-    handshake_fields.insert(
-        "mode".to_string(),
-        JsonValue::String(mode.to_string()),
-    );
+    handshake_fields.insert("mode".to_string(), JsonValue::String(mode.to_string()));
     handshake_fields.insert(
         "bls_domain".to_string(),
         JsonValue::String(consensus_profile.bls_domain.to_string()),
@@ -4264,8 +4270,7 @@ impl NetworkBuilder {
         let npos_params_from_config = |config: &iroha_config::parameters::actual::Root| {
             let npos = &config.sumeragi.npos;
             let collectors = &config.sumeragi.collectors;
-            let chain_hash =
-                CryptoHash::new(config.common.chain.clone().into_inner().as_bytes());
+            let chain_hash = CryptoHash::new(config.common.chain.clone().into_inner().as_bytes());
             let epoch_seed: [u8; 32] = chain_hash.into();
             let mut fallback = SumeragiNposParameters::default();
             fallback.epoch_length_blocks = npos.epoch_length_blocks.max(1);
@@ -4278,7 +4283,8 @@ impl NetworkBuilder {
             fallback.max_validators = npos.election.max_validators;
             fallback.min_self_bond = npos.election.min_self_bond;
             fallback.min_nomination_bond = npos.election.min_nomination_bond;
-            fallback.max_nominator_concentration_pct = npos.election.max_nominator_concentration_pct;
+            fallback.max_nominator_concentration_pct =
+                npos.election.max_nominator_concentration_pct;
             fallback.seat_band_pct = npos.election.seat_band_pct;
             fallback.max_entity_correlation_pct = npos.election.max_entity_correlation_pct;
             fallback.finality_margin_blocks = npos.election.finality_margin_blocks;
@@ -4583,7 +4589,8 @@ impl NetworkBuilder {
             &genesis_post_topology_isi,
             &consensus_handshake_meta,
         )) {
-            let instruction = InstructionBox::from(SetParameter::new(consensus_handshake_meta.clone()));
+            let instruction =
+                InstructionBox::from(SetParameter::new(consensus_handshake_meta.clone()));
             if genesis_isi.is_empty() {
                 genesis_isi.push(vec![instruction]);
             } else {
@@ -4910,7 +4917,8 @@ impl NetworkPeer {
         let has_genesis = genesis.is_some();
         span.in_scope(|| info!(has_genesis, "Starting"));
 
-        let storage_layers: Vec<Table> = config_layers.map(|layer| layer.as_ref().clone()).collect();
+        let storage_layers: Vec<Table> =
+            config_layers.map(|layer| layer.as_ref().clone()).collect();
         let (storage_dir, storage_dir_key, storage_dir_value) =
             resolve_kura_store_dir(self, &storage_layers);
 
@@ -4928,8 +4936,8 @@ impl NetworkPeer {
                 .startup_probe
                 .lock()
                 .expect("startup probe should not be poisoned");
-        *probe = PeerStartupProbe::default();
-    }
+            *probe = PeerStartupProbe::default();
+        }
 
         let config_layers: Vec<Table> = storage_layers;
         let config_path = self
@@ -5546,7 +5554,9 @@ impl NetworkPeer {
             Some(PeerLifecycleEvent::ServerStarted) => Ok(()),
             Some(PeerLifecycleEvent::Terminated { status }) => {
                 let err = if let Some(preview) = self.stderr_preview() {
-                    eyre!("Peer exited unexpectedly ({status:?}); {context}; stderr preview:\n{preview}")
+                    eyre!(
+                        "Peer exited unexpectedly ({status:?}); {context}; stderr preview:\n{preview}"
+                    )
                 } else {
                     eyre!("Peer exited unexpectedly ({status:?}); {context}")
                 };
@@ -5808,7 +5818,11 @@ impl NetworkPeer {
         self.dir.join("storage")
     }
 
-    fn prepare_kura_storage_dir(&self, storage_dir: &Path, reset_for_bootstrap: bool) -> Result<()> {
+    fn prepare_kura_storage_dir(
+        &self,
+        storage_dir: &Path,
+        reset_for_bootstrap: bool,
+    ) -> Result<()> {
         if reset_for_bootstrap {
             match fs::symlink_metadata(storage_dir) {
                 Ok(meta) => {
@@ -5863,7 +5877,7 @@ impl NetworkPeer {
             Err(err) if err.kind() != ErrorKind::NotFound => {
                 return Err(err).wrap_err_with(|| {
                     format!("failed to inspect storage path {}", storage_dir.display())
-                })
+                });
             }
             Err(_) => {}
         }
@@ -8854,8 +8868,7 @@ exit 0
         let reconstructed = reconstructed_consensus_params(&genesis);
         eprintln!(
             "profile params = {:?}\nreconstructed params = {:?}",
-            profile.params,
-            reconstructed
+            profile.params, reconstructed
         );
         assert_eq!(
             reconstructed.block_time_ms, profile.params.block_time_ms,
