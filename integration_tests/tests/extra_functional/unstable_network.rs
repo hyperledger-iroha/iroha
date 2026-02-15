@@ -508,18 +508,36 @@ async fn start_network_under_relay(
         pops_by_peer_id.insert(peer.id(), pop.to_vec());
     }
 
+    let designated_genesis_index = match genesis_peer {
+        GenesisPeer::Whichever => 0,
+        GenesisPeer::Nth(n) => n,
+    };
+    if designated_genesis_index >= network.peers().len() {
+        return Err(eyre!(
+            "designated genesis peer index {designated_genesis_index} out of range for {} peers",
+            network.peers().len()
+        ));
+    }
+    // Start the designated genesis peer first, then the remaining peers. A small stagger reduces
+    // thundering-herd effects and makes genesis submission ordering more deterministic.
+    let mut start_order: Vec<usize> = (0..network.peers().len()).collect();
+    start_order.retain(|&idx| idx != designated_genesis_index);
+    start_order.insert(0, designated_genesis_index);
+    let start_stage_by_index: HashMap<usize, usize> = start_order
+        .into_iter()
+        .enumerate()
+        .map(|(stage, idx)| (idx, stage))
+        .collect();
+
     let startup_timeout = scaled_timeout(network.peer_startup_timeout(), network.peers().len());
-    let results = timeout(
+    let start_results = match timeout(
         startup_timeout,
         network
             .peers()
             .iter()
             .enumerate()
             .map(|(i, peer)| {
-                let _designated_genesis_peer = match genesis_peer {
-                    GenesisPeer::Whichever => i == 0,
-                    GenesisPeer::Nth(n) => i == n,
-                };
+                let start_stage = start_stage_by_index.get(&i).copied().unwrap_or(i);
                 let trusted_peers = relay.trusted_peers_for(&peer.id());
                 let trusted_peers_list = trusted_peers
                     .iter()
@@ -565,14 +583,38 @@ async fn start_network_under_relay(
 
                 let genesis = Some(genesis_block.clone());
 
-                async move { peer.start_checked(config, genesis.as_ref()).await }
+                async move {
+                    if start_stage > 0 {
+                        let delay = Duration::from_millis(200)
+                            .checked_mul(start_stage as u32)
+                            .unwrap_or(Duration::from_secs(u64::MAX));
+                        if delay > Duration::ZERO {
+                            tokio::time::sleep(delay).await;
+                        }
+                    }
+                    peer.start_checked(config, genesis.as_ref()).await
+                }
             })
             .collect::<FuturesUnordered<_>>()
             .collect::<Vec<_>>(),
     )
-    .await?;
+    .await
+    {
+        Ok(results) => results,
+        Err(_) => {
+            let snapshot = network.startup_snapshot();
+            return Err(eyre!(
+                "expected peers to start within timeout ({startup_timeout:?}); startup snapshot: [{}]",
+                snapshot
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    };
 
-    for result in results {
+    for result in start_results {
         result?;
     }
 
