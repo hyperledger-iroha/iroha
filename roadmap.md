@@ -325,9 +325,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Resolve merge-conflict markers in `crates/iroha_core/src/zk.rs` that currently break builds/tests.
  - [x] Update ZK docs/configs to reflect the expanded fixture set and supported test circuits.
 
-10.1. **IVM-ZK-EXECUTION-PROOF — Real IVM execution semantics proof (no replay)** (ZK/IVM/Core/Torii, Line: Shared, Owner: ZK WG, Priority: High, Status: 🈺 In Progress, target TBD)
+10.1. **IVM-ZK-EXECUTION-PROOF — Real IVM execution semantics proof (no replay)** (ZK/IVM/Core/Torii, Line: Shared, Owner: ZK WG, Priority: High, Status: 🈴 Completed, target TBD)
 - [x] Define the end-to-end statement and public inputs for a real IVM execution proof (bind at least `code_hash`, `overlay_hash`, `events_commitment`, `gas_policy_commitment`) and the witness requirements (execution trace + host I/O).
-- [ ] Implement a Halo2 circuit that proves IVM step semantics (start with a restricted opcode/syscall subset) and add the required deterministic 64-bit arithmetic gadgets.
+- [x] Implement a Halo2 circuit that proves IVM step semantics (start with a restricted opcode/syscall subset) and add the required deterministic 64-bit arithmetic gadgets.
 - [x] Extend Torii proving to execute bytecode and build the circuit witness (either via a new endpoint or by versioning `/v1/zk/ivm/prove`), preserving privacy guarantees (no plaintext `gas_used`).
 - [x] Update `Executable::IvmProved` admission to optionally skip deterministic VM replay only when the proof circuit guarantees full semantics; keep replay as the fallback and add regression tests for both modes.
 - [x] Add `pipeline.ivm_proved.skip_replay` and wire admission skipping for full-semantics circuits with regression coverage.

@@ -841,15 +841,20 @@ const SORA_TILE_LIGHT_FG: [f64; 3] = [0.10, 0.04, 0.14];
 const SORA_TILE_DARK_BG: [f64; 3] = [0.07, 0.03, 0.10];
 const SORA_TILE_DARK_FG: [f64; 3] = [0.97, 0.91, 0.98];
 const SORA_LOGO_TINT: [f64; 3] = [0.98, 0.91, 0.97];
-const SORA_RING_RADII: [f64; 3] = [0.34, 0.40, 0.46];
-const SORA_RING_DOTS: [f64; 3] = [62.0, 78.0, 94.0];
-const SORA_RING_SPEED: [f64; 3] = [0.72, 0.97, 1.21];
-const SORA_RING_BAND: f64 = 0.0055;
+const SORA_RING_RADII: [f64; 4] = [0.35, 0.42, 0.49, 0.56];
+const SORA_RING_DOTS: [f64; 4] = [68.0, 84.0, 102.0, 122.0];
+const SORA_RING_SPEED: [f64; 4] = [0.64, 0.89, 1.08, 1.30];
+const SORA_RING_BAND: f64 = 0.0058;
 const SORA_SCANLINE_ALPHA: f64 = 0.02;
 const SORA_VIGNETTE: f64 = 0.26;
-const SORA_TILE_MARGIN_OUTER: f64 = 0.10;
-const SORA_TILE_MARGIN_LOGO: f64 = 0.03;
-const SORA_TILE_GLYPH_ALPHA: f64 = 0.18;
+const SORA_TILE_MARGIN_OUTER: f64 = 0.03;
+const SORA_TILE_MARGIN_LOGO: f64 = 0.007;
+const SORA_TILE_GLYPH_ALPHA: f64 = 0.28;
+const SORA_KATAKANA_UNCERTAIN_BAND: u8 = 28;
+const SORA_KATAKANA_CONFIDENCE_MIN: f64 = 0.08;
+const SORA_KATAKANA_CONFIDENCE_STRONG: f64 = 0.16;
+const SORA_KATAKANA_OVERRIDE_PUSH: u8 = 68;
+const SORA_KATAKANA_MIN_ASSIST_SAMPLES: usize = 24;
 const SORA_KATAKANA_BITMAPS: [[u8; 8]; 16] = [
     [0x3C, 0x08, 0x1C, 0x08, 0x08, 0x08, 0x00, 0x00],
     [0x10, 0x10, 0x20, 0x20, 0x40, 0x40, 0x00, 0x00],
@@ -910,11 +915,11 @@ fn render_sora_temple_frame(
                 ^ stream_signature
                 ^ (u64::from(frame_index) << 11)
                 ^ (u64::from(bit as u8) << 3);
-            let kana_index = (sample_u32(&mut seed) as usize) % IROHA_KATAKANA.len();
+            let kana_index = select_kana_index_for_bit(bit, &mut seed);
             cell_params.push(TempleCellParam {
                 bit,
                 logo,
-                kana_index,
+                kana_pattern: katakana_pattern_id(kana_index),
             });
             cell_roles.push(role);
         }
@@ -941,6 +946,14 @@ fn render_sora_temple_frame(
                 lerp(style_cfg.bg_start[1], style_cfg.bg_end[1], ny),
                 lerp(style_cfg.bg_start[2], style_cfg.bg_end[2], 1.0 - radial.min(1.0)),
             ];
+            let core = (1.0 - radial / style_cfg.logo_core_radius).clamp(0.0, 1.0);
+            if core > 0.0 {
+                blend_rgb(
+                    &mut rgb,
+                    style_cfg.logo_core_bg,
+                    core.powi(2) * style_cfg.logo_core_alpha,
+                );
+            }
             let scanline = (ny * 210.0 + phase * std::f64::consts::TAU).sin() * 0.5 + 0.5;
             blend_rgb(
                 &mut rgb,
@@ -1017,7 +1030,7 @@ fn render_sora_temple_frame(
 struct TempleCellParam {
     bit: bool,
     logo: bool,
-    kana_index: usize,
+    kana_pattern: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -1042,8 +1055,15 @@ struct TempleStyleConfig {
     tile_alpha_regular: f64,
     tile_alpha_logo: f64,
     logo_tint_alpha: f64,
+    logo_light_bg: [f64; 3],
+    logo_dark_bg: [f64; 3],
+    logo_tile_mix: f64,
     border_dark_mix: f64,
     border_light_mix: f64,
+    logo_core_bg: [f64; 3],
+    logo_core_alpha: f64,
+    logo_core_radius: f64,
+    logo_glyph_boost: f64,
 }
 
 fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
@@ -1066,11 +1086,18 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             tile_margin_outer: SORA_TILE_MARGIN_OUTER,
             tile_margin_logo: SORA_TILE_MARGIN_LOGO,
             tile_glyph_alpha: SORA_TILE_GLYPH_ALPHA,
-            tile_alpha_regular: 0.96,
-            tile_alpha_logo: 0.995,
-            logo_tint_alpha: 0.04,
+            tile_alpha_regular: 0.976,
+            tile_alpha_logo: 0.998,
+            logo_tint_alpha: 0.24,
+            logo_light_bg: [0.96, 0.87, 0.90],
+            logo_dark_bg: [0.19, 0.03, 0.06],
+            logo_tile_mix: 0.68,
             border_dark_mix: 0.18,
             border_light_mix: 0.12,
+            logo_core_bg: [0.78, 0.11, 0.20],
+            logo_core_alpha: 0.54,
+            logo_core_radius: 0.45,
+            logo_glyph_boost: 0.22,
         },
         PetalRenderStyle::SoraTempleBold => TempleStyleConfig {
             bg_start: [0.015, 0.006, 0.045],
@@ -1087,14 +1114,21 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             ring_band: 0.0072,
             ring_on_alpha: 0.82,
             ring_off_alpha: 0.42,
-            tile_margin_outer: 0.09,
-            tile_margin_logo: 0.025,
-            tile_glyph_alpha: 0.16,
-            tile_alpha_regular: 0.975,
+            tile_margin_outer: 0.028,
+            tile_margin_logo: 0.006,
+            tile_glyph_alpha: 0.32,
+            tile_alpha_regular: 0.985,
             tile_alpha_logo: 0.998,
-            logo_tint_alpha: 0.10,
+            logo_tint_alpha: 0.28,
+            logo_light_bg: [0.97, 0.86, 0.90],
+            logo_dark_bg: [0.22, 0.03, 0.07],
+            logo_tile_mix: 0.74,
             border_dark_mix: 0.23,
             border_light_mix: 0.16,
+            logo_core_bg: [0.85, 0.10, 0.21],
+            logo_core_alpha: 0.66,
+            logo_core_radius: 0.46,
+            logo_glyph_boost: 0.26,
         },
         PetalRenderStyle::SoraTempleMinimal => TempleStyleConfig {
             bg_start: [0.03, 0.02, 0.06],
@@ -1111,14 +1145,21 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             ring_band: 0.0042,
             ring_on_alpha: 0.30,
             ring_off_alpha: 0.12,
-            tile_margin_outer: 0.08,
-            tile_margin_logo: 0.02,
-            tile_glyph_alpha: 0.08,
-            tile_alpha_regular: 0.935,
-            tile_alpha_logo: 0.985,
-            logo_tint_alpha: 0.02,
+            tile_margin_outer: 0.036,
+            tile_margin_logo: 0.009,
+            tile_glyph_alpha: 0.24,
+            tile_alpha_regular: 0.955,
+            tile_alpha_logo: 0.992,
+            logo_tint_alpha: 0.18,
+            logo_light_bg: [0.95, 0.88, 0.91],
+            logo_dark_bg: [0.17, 0.04, 0.07],
+            logo_tile_mix: 0.58,
             border_dark_mix: 0.10,
             border_light_mix: 0.06,
+            logo_core_bg: [0.70, 0.12, 0.20],
+            logo_core_alpha: 0.42,
+            logo_core_radius: 0.44,
+            logo_glyph_boost: 0.20,
         },
         PetalRenderStyle::SoraTempleRadiant => TempleStyleConfig {
             bg_start: [0.03, 0.01, 0.07],
@@ -1135,14 +1176,21 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             ring_band: 0.0065,
             ring_on_alpha: 0.74,
             ring_off_alpha: 0.34,
-            tile_margin_outer: 0.10,
-            tile_margin_logo: 0.03,
-            tile_glyph_alpha: 0.20,
-            tile_alpha_regular: 0.965,
+            tile_margin_outer: 0.03,
+            tile_margin_logo: 0.007,
+            tile_glyph_alpha: 0.34,
+            tile_alpha_regular: 0.978,
             tile_alpha_logo: 0.997,
-            logo_tint_alpha: 0.06,
+            logo_tint_alpha: 0.26,
+            logo_light_bg: [0.97, 0.86, 0.91],
+            logo_dark_bg: [0.20, 0.03, 0.08],
+            logo_tile_mix: 0.72,
             border_dark_mix: 0.19,
             border_light_mix: 0.13,
+            logo_core_bg: [0.82, 0.10, 0.22],
+            logo_core_alpha: 0.62,
+            logo_core_radius: 0.47,
+            logo_glyph_boost: 0.26,
         },
         PetalRenderStyle::SakuraWind => TempleStyleConfig {
             bg_start: SORA_BG_START,
@@ -1162,11 +1210,18 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             tile_margin_outer: SORA_TILE_MARGIN_OUTER,
             tile_margin_logo: SORA_TILE_MARGIN_LOGO,
             tile_glyph_alpha: SORA_TILE_GLYPH_ALPHA,
-            tile_alpha_regular: 0.96,
-            tile_alpha_logo: 0.995,
-            logo_tint_alpha: 0.04,
+            tile_alpha_regular: 0.976,
+            tile_alpha_logo: 0.998,
+            logo_tint_alpha: 0.24,
+            logo_light_bg: [0.96, 0.87, 0.90],
+            logo_dark_bg: [0.19, 0.03, 0.06],
+            logo_tile_mix: 0.68,
             border_dark_mix: 0.18,
             border_light_mix: 0.12,
+            logo_core_bg: [0.78, 0.11, 0.20],
+            logo_core_alpha: 0.54,
+            logo_core_radius: 0.45,
+            logo_glyph_boost: 0.22,
         },
     }
 }
@@ -1213,16 +1268,21 @@ fn blend_sora_data_tile(
     };
     blend_rgb(rgb, tile_bg, tile_alpha);
     if param.logo {
+        let logo_bg = if param.bit {
+            style_cfg.logo_dark_bg
+        } else {
+            style_cfg.logo_light_bg
+        };
+        blend_rgb(rgb, logo_bg, style_cfg.logo_tile_mix);
         blend_rgb(rgb, style_cfg.logo_tint, style_cfg.logo_tint_alpha);
     }
 
     let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
-    let char_index = param.kana_index;
-    let bitmap = katakana_bitmap(char_index, gx, gy);
+    let bitmap = katakana_bitmap(param.kana_pattern, gx, gy);
     if katakana_bitmap_hit(bitmap, inner_u, inner_v) {
         let glyph_alpha = if param.logo {
-            style_cfg.tile_glyph_alpha + 0.04
+            style_cfg.tile_glyph_alpha + style_cfg.logo_glyph_boost
         } else {
             style_cfg.tile_glyph_alpha
         };
@@ -1230,10 +1290,30 @@ fn blend_sora_data_tile(
     }
 }
 
-fn katakana_bitmap(index: usize, x: usize, y: usize) -> [u8; 8] {
-    let char_seed = IROHA_KATAKANA[index % IROHA_KATAKANA.len()] as usize;
-    let pattern = SORA_KATAKANA_BITMAPS[char_seed % SORA_KATAKANA_BITMAPS.len()];
-    let rotate = (x + y + index) % 3;
+fn katakana_pattern_id(kana_index: usize) -> usize {
+    let char_seed = IROHA_KATAKANA[kana_index % IROHA_KATAKANA.len()] as usize;
+    char_seed % SORA_KATAKANA_BITMAPS.len()
+}
+
+fn select_kana_index_for_bit(bit: bool, seed: &mut u64) -> usize {
+    let desired_parity = usize::from(bit);
+    let mut candidates = [0usize; IROHA_KATAKANA.len()];
+    let mut count = 0usize;
+    for index in 0..IROHA_KATAKANA.len() {
+        if katakana_pattern_id(index) % 2 == desired_parity {
+            candidates[count] = index;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return (sample_u32(seed) as usize) % IROHA_KATAKANA.len();
+    }
+    candidates[(sample_u32(seed) as usize) % count]
+}
+
+fn katakana_bitmap(pattern_id: usize, x: usize, y: usize) -> [u8; 8] {
+    let pattern = SORA_KATAKANA_BITMAPS[pattern_id % SORA_KATAKANA_BITMAPS.len()];
+    let rotate = (x.wrapping_mul(3) + y.wrapping_mul(5)) % 3;
     if rotate == 0 {
         return pattern;
     }
@@ -1280,9 +1360,10 @@ fn blend_sora_rings(
         let dots = SORA_RING_DOTS[ring_index];
         let spin = (angle_u + phase * SORA_RING_SPEED[ring_index]).rem_euclid(1.0);
         let slot = spin * dots;
-        let slot_index = slot.floor() as usize;
-        let dot_t = slot.fract();
-        let dot_profile = (1.0 - (dot_t - 0.5).abs() * 2.0).max(0.0);
+        let slot_center = slot.round();
+        let slot_index = slot_center as usize % dots as usize;
+        let angular_dist = (slot - slot_center).abs().min(0.5);
+        let dot_profile = (1.0 - angular_dist * 2.0).max(0.0).powf(2.2);
         let bit_index = (ring_offset + slot_index + (stream_signature as usize % 23))
             % stream_bits.len();
         let bit = stream_bits[bit_index];
@@ -1311,14 +1392,14 @@ fn blend_rgb(rgb: &mut [f64; 3], target: [f64; 3], alpha: f64) {
 }
 
 fn sora_ten_logo_mask(nx: f64, ny: f64) -> bool {
-    let x = nx * 2.0 - 1.0;
-    let y = ny * 2.0 - 1.0;
-    let top_bar = y >= -0.67 && y <= -0.52 && x.abs() <= 0.70;
-    let mid_bar = y >= -0.33 && y <= -0.19 && x.abs() <= 0.52;
-    let stem = y >= -0.19 && y <= -0.03 && x.abs() <= 0.11;
-    let left_leg = y >= -0.03 && y <= 0.86 && (x + 0.60 * (y + 0.01)).abs() <= 0.10;
-    let right_leg = y >= -0.03 && y <= 0.86 && (x - 0.60 * (y + 0.01)).abs() <= 0.10;
-    let foot = y >= 0.74 && y <= 0.88 && x.abs() <= 0.50;
+    let x = (nx * 2.0 - 1.0) / 0.93;
+    let y = (ny * 2.0 - 1.0) / 0.93;
+    let top_bar = y >= -0.72 && y <= -0.50 && x.abs() <= 0.82;
+    let mid_bar = y >= -0.37 && y <= -0.18 && x.abs() <= 0.58;
+    let stem = y >= -0.20 && y <= 0.00 && x.abs() <= 0.15;
+    let left_leg = y >= -0.02 && y <= 0.92 && (x + 0.64 * y).abs() <= 0.13;
+    let right_leg = y >= -0.02 && y <= 0.92 && (x - 0.64 * y).abs() <= 0.13;
+    let foot = y >= 0.75 && y <= 0.93 && x.abs() <= 0.58;
     top_bar || mid_bar || stem || left_leg || right_leg || foot
 }
 
@@ -1354,6 +1435,7 @@ fn sample_u32(seed: &mut u64) -> u32 {
 fn sample_grid_from_rgba(
     image: &image::RgbaImage,
     grid_size: u16,
+    options: PetalStreamOptions,
 ) -> Result<PetalStreamSampleGrid> {
     let width = image.width();
     let height = image.height();
@@ -1388,7 +1470,187 @@ fn sample_grid_from_rgba(
             samples.push(avg);
         }
     }
+    apply_katakana_assist_to_samples(
+        image,
+        grid_size,
+        options,
+        cell_size,
+        offset_x,
+        offset_y,
+        &mut samples,
+    );
     PetalStreamSampleGrid::new(grid_size, samples).map_err(|err| eyre!("{err}"))
+}
+
+fn derive_anchor_threshold(samples: &[u8], grid_size: u16, options: PetalStreamOptions) -> Option<u8> {
+    let mut dark_sum = 0u64;
+    let mut dark_count = 0u64;
+    let mut light_sum = 0u64;
+    let mut light_count = 0u64;
+    for y in 0..grid_size {
+        for x in 0..grid_size {
+            let idx = y as usize * grid_size as usize + x as usize;
+            match render_cell_role(x, y, grid_size, options) {
+                RenderCellRole::AnchorDark => {
+                    dark_sum += u64::from(samples[idx]);
+                    dark_count += 1;
+                }
+                RenderCellRole::AnchorLight => {
+                    light_sum += u64::from(samples[idx]);
+                    light_count += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    if dark_count == 0 || light_count == 0 {
+        return None;
+    }
+    let dark_avg = dark_sum / dark_count;
+    let light_avg = light_sum / light_count;
+    if dark_avg + 1 >= light_avg {
+        return None;
+    }
+    u8::try_from((dark_avg + light_avg) / 2).ok()
+}
+
+fn apply_katakana_assist_to_samples(
+    image: &image::RgbaImage,
+    grid_size: u16,
+    options: PetalStreamOptions,
+    cell_size: u32,
+    offset_x: u32,
+    offset_y: u32,
+    samples: &mut [u8],
+) {
+    if cell_size < 6 {
+        return;
+    }
+    let Some(threshold) = derive_anchor_threshold(samples, grid_size, options) else {
+        return;
+    };
+
+    let mut overrides = Vec::new();
+    for y in 0..grid_size {
+        for x in 0..grid_size {
+            if render_cell_role(x, y, grid_size, options) != RenderCellRole::Data {
+                continue;
+            }
+            let idx = y as usize * grid_size as usize + x as usize;
+            let sample = samples[idx];
+            if sample.abs_diff(threshold) > SORA_KATAKANA_UNCERTAIN_BAND {
+                continue;
+            }
+            let Some((bit, confidence)) = infer_katakana_cell_bit(
+                image, x, y, cell_size, offset_x, offset_y,
+            ) else {
+                continue;
+            };
+            if confidence < SORA_KATAKANA_CONFIDENCE_MIN {
+                continue;
+            }
+            overrides.push((idx, bit, confidence));
+        }
+    }
+    if overrides.len() < SORA_KATAKANA_MIN_ASSIST_SAMPLES {
+        return;
+    }
+
+    for (idx, bit, confidence) in overrides {
+        let sample = samples[idx];
+        if confidence < SORA_KATAKANA_CONFIDENCE_STRONG
+            && sample.abs_diff(threshold) > SORA_KATAKANA_UNCERTAIN_BAND
+        {
+            continue;
+        }
+        samples[idx] = if bit {
+            threshold.saturating_sub(SORA_KATAKANA_OVERRIDE_PUSH)
+        } else {
+            threshold.saturating_add(SORA_KATAKANA_OVERRIDE_PUSH)
+        };
+    }
+}
+
+fn infer_katakana_cell_bit(
+    image: &image::RgbaImage,
+    cell_x: u16,
+    cell_y: u16,
+    cell_size: u32,
+    offset_x: u32,
+    offset_y: u32,
+) -> Option<(bool, f64)> {
+    if cell_size == 0 {
+        return None;
+    }
+    let width = image.width();
+    let height = image.height();
+    let margin = if cell_size <= 6 { 0.05 } else { 0.035 };
+    let span = 1.0 - margin * 2.0;
+    if span <= 0.0 {
+        return None;
+    }
+
+    let mut luma = [0u16; 64];
+    for sy in 0..8usize {
+        for sx in 0..8usize {
+            let u = (sx as f64 + 0.5) / 8.0;
+            let v = (sy as f64 + 0.5) / 8.0;
+            let fx = cell_x as f64 + margin + span * u;
+            let fy = cell_y as f64 + margin + span * v;
+            let px = (offset_x as f64 + fx * cell_size as f64).floor() as u32;
+            let py = (offset_y as f64 + fy * cell_size as f64).floor() as u32;
+            let px = px.min(width.saturating_sub(1));
+            let py = py.min(height.saturating_sub(1));
+            let pixel = image.get_pixel(px, py).0;
+            let value = (77u32 * pixel[0] as u32 + 150u32 * pixel[1] as u32 + 29u32 * pixel[2] as u32) >> 8;
+            luma[sy * 8 + sx] = value as u16;
+        }
+    }
+
+    let mut best_true = f64::NEG_INFINITY;
+    let mut best_false = f64::NEG_INFINITY;
+    for pattern_id in 0..SORA_KATAKANA_BITMAPS.len() {
+        let bitmap = katakana_bitmap(pattern_id, cell_x as usize, cell_y as usize);
+        let mut on_sum = 0u32;
+        let mut on_count = 0u32;
+        let mut off_sum = 0u32;
+        let mut off_count = 0u32;
+        for sy in 0..8usize {
+            let row = bitmap[sy];
+            for sx in 0..8usize {
+                let sample = u32::from(luma[sy * 8 + sx]);
+                if row & (1u8 << (7 - sx)) != 0 {
+                    on_sum += sample;
+                    on_count += 1;
+                } else {
+                    off_sum += sample;
+                    off_count += 1;
+                }
+            }
+        }
+        if on_count == 0 || off_count == 0 {
+            continue;
+        }
+        let contrast = on_sum as f64 / on_count as f64 - off_sum as f64 / off_count as f64;
+        if pattern_id % 2 == 1 {
+            best_true = best_true.max(contrast);
+        } else {
+            best_false = best_false.max(-contrast);
+        }
+    }
+    if !best_true.is_finite() || !best_false.is_finite() {
+        return None;
+    }
+    let (bit, best, other) = if best_true >= best_false {
+        (true, best_true, best_false)
+    } else {
+        (false, best_false, best_true)
+    };
+    if best < 3.0 {
+        return None;
+    }
+    let confidence = ((best - other) / 255.0).clamp(0.0, 1.0);
+    Some((bit, confidence))
 }
 
 fn load_png(path: impl AsRef<Path>) -> Result<image::RgbaImage> {
@@ -1410,7 +1672,7 @@ fn decode_frame_with_grid(
     if grid_size == 0 {
         return Err(eyre!("grid size must be > 0"));
     }
-    let samples = sample_grid_from_rgba(image, grid_size)?;
+    let samples = sample_grid_from_rgba(image, grid_size, options)?;
     PetalStreamDecoder::decode_samples(&samples, options).map_err(|err| eyre!("{err}"))
 }
 
@@ -1422,7 +1684,7 @@ fn decode_frame_auto(
         if candidate == 0 {
             continue;
         }
-        if let Ok(samples) = sample_grid_from_rgba(image, candidate) {
+        if let Ok(samples) = sample_grid_from_rgba(image, candidate, options) {
             if let Ok(bytes) = PetalStreamDecoder::decode_samples(&samples, options) {
                 return Ok((candidate, bytes));
             }
@@ -2194,6 +2456,51 @@ mod tests {
     }
 
     #[test]
+    fn katakana_channel_bit_inference_tracks_data_bits() {
+        let payload = b"petal-cli-katakana-channel";
+        let options = PetalStreamOptions::default();
+        let grid = PetalStreamEncoder::encode_grid(payload, options).expect("encode");
+        let image = render_petal_frame(
+            &grid,
+            320,
+            2,
+            12,
+            PetalRenderStyle::SoraTemple,
+            options,
+        );
+        let grid_size = grid.grid_size;
+        let cell_size = (image.width() / u32::from(grid_size)).max(1);
+        let grid_pixels = u32::from(grid_size) * cell_size;
+        let offset_x = (image.width().saturating_sub(grid_pixels)) / 2;
+        let offset_y = (image.height().saturating_sub(grid_pixels)) / 2;
+
+        let mut compared = 0usize;
+        let mut matched = 0usize;
+        for y in 0..grid_size {
+            for x in 0..grid_size {
+                if render_cell_role(x, y, grid_size, options) != RenderCellRole::Data {
+                    continue;
+                }
+                let idx = y as usize * grid_size as usize + x as usize;
+                if let Some((bit, confidence)) =
+                    infer_katakana_cell_bit(&image, x, y, cell_size, offset_x, offset_y)
+                {
+                    if confidence < SORA_KATAKANA_CONFIDENCE_MIN {
+                        continue;
+                    }
+                    compared += 1;
+                    if bit == grid.cells[idx] {
+                        matched += 1;
+                    }
+                }
+            }
+        }
+        assert!(compared > 128, "insufficient katakana samples: {compared}");
+        let accuracy = matched as f64 / compared as f64;
+        assert!(accuracy > 0.72, "katakana bit accuracy too low: {accuracy:.3}");
+    }
+
+    #[test]
     fn write_png_rgba_emits_rgba() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("frame.png");
@@ -2249,7 +2556,9 @@ mod tests {
             PetalRenderStyle::SakuraWind,
             PetalStreamOptions::default(),
         );
-        let samples = sample_grid_from_rgba(&image, grid.grid_size).expect("samples");
+        let samples =
+            sample_grid_from_rgba(&image, grid.grid_size, PetalStreamOptions::default())
+                .expect("samples");
         let decoded = PetalStreamDecoder::decode_samples(&samples, PetalStreamOptions::default())
             .expect("decode");
         assert_eq!(decoded, payload);
