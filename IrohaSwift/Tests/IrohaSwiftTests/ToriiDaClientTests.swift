@@ -154,7 +154,8 @@ final class ToriiDaClientTests: XCTestCase {
         ToriiDaStubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/da/commitments")
             XCTAssertEqual(request.httpMethod, "POST")
-            let payload = try XCTUnwrap(request.httpBody)
+            let payload = requestBodyData(from: request)
+            XCTAssertFalse(payload.isEmpty)
             let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
             XCTAssertEqual(json?["manifest_hash"] as? String, String(repeating: "1", count: 64))
             XCTAssertEqual(json?["lane_id"] as? Int, 7)
@@ -199,7 +200,8 @@ final class ToriiDaClientTests: XCTestCase {
         ToriiDaStubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/da/commitments/verify")
             XCTAssertEqual(request.httpMethod, "POST")
-            let payload = try XCTUnwrap(request.httpBody)
+            let payload = requestBodyData(from: request)
+            XCTAssertFalse(payload.isEmpty)
             let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
             XCTAssertEqual(json?["bundle_len"] as? Int, 1)
             let body = Data(#"{"valid":true}"#.utf8)
@@ -258,6 +260,27 @@ final class ToriiDaClientTests: XCTestCase {
             streamTokenB64: Data([0x01, 0x02]).base64EncodedString()
         )
     }
+}
+
+private func requestBodyData(from request: URLRequest) -> Data {
+    if let body = request.httpBody {
+        return body
+    }
+    guard let stream = request.httpBodyStream else {
+        return Data()
+    }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: buffer.count)
+        if read <= 0 {
+            break
+        }
+        data.append(buffer, count: read)
+    }
+    return data
 }
 
 private final class ToriiDaStubURLProtocol: URLProtocol {
