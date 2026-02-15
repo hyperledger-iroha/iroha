@@ -39,10 +39,13 @@ fn proof_event_timeout(network: &Network) -> Duration {
 
 fn proof_network_builder() -> NetworkBuilder {
     NetworkBuilder::new().with_config_layer(|layer| {
-        layer.write(
-            ["confidential", "verify_timeout_ms"],
-            PROOF_VERIFY_TIMEOUT_MS,
-        );
+        // Enable Halo2 verification explicitly; default configs keep it off so operators must opt in.
+        layer
+            .write(["zk", "halo2", "enabled"], true)
+            .write(
+                ["confidential", "verify_timeout_ms"],
+                PROOF_VERIFY_TIMEOUT_MS,
+            );
     })
 }
 

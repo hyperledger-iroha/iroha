@@ -354,6 +354,7 @@ pub fn start_network_blocking_or_skip(
 ) -> Result<Option<(SerializedNetwork, Runtime)>> {
     let guard = serial_guard();
     let builder = builder
+        .with_base_seed_if_unset(context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
@@ -396,6 +397,7 @@ pub fn build_network_blocking_or_skip(
 ) -> Option<(SerializedNetwork, Runtime)> {
     let guard = serial_guard();
     let builder = builder
+        .with_base_seed_if_unset(context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
@@ -432,6 +434,7 @@ pub async fn start_network_async_or_skip(
 ) -> Result<Option<SerializedNetwork>> {
     let guard = serial_guard_async().await;
     let builder = builder
+        .with_base_seed_if_unset(context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
@@ -471,6 +474,7 @@ pub async fn start_network_async_or_skip(
 pub fn build_network_or_skip(builder: NetworkBuilder, context: &str) -> Option<SerializedNetwork> {
     let guard = serial_guard();
     let builder = builder
+        .with_base_seed_if_unset(context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {

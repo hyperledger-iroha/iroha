@@ -1978,23 +1978,6 @@ impl Network {
                         total_submitters = genesis_order.len(),
                         "preparing genesis submitter",
                     );
-                    if stage_idx > 0 {
-                        let delay = Duration::from_millis(200)
-                            .checked_mul(stage_idx as u32)
-                            .unwrap_or(Duration::from_secs(u64::MAX));
-                        info!(
-                            index,
-                            %mnemonic,
-                            role,
-                            stage_idx,
-                            total_submitters = genesis_order.len(),
-                            ?delay,
-                            "staggering genesis submission",
-                        );
-                        if delay > Duration::ZERO {
-                            tokio::time::sleep(delay).await;
-                        }
-                    }
                 } else {
                     info!(
                         index,
@@ -2002,6 +1985,27 @@ impl Network {
                         role,
                         "providing replica with local genesis copy for bootstrap"
                     );
+                }
+
+                // Start genesis submitters first, then replicas. This reduces startup contention
+                // and makes the genesis submission ordering more deterministic across hosts.
+                let start_stage = stage.unwrap_or_else(|| genesis_order.len());
+                if start_stage > 0 {
+                    let delay = Duration::from_millis(200)
+                        .checked_mul(start_stage as u32)
+                        .unwrap_or(Duration::from_secs(u64::MAX));
+                    info!(
+                        index,
+                        %mnemonic,
+                        role,
+                        start_stage,
+                        total_submitters = genesis_order.len(),
+                        ?delay,
+                        "staggering peer startup",
+                    );
+                    if delay > Duration::ZERO {
+                        tokio::time::sleep(delay).await;
+                    }
                 }
 
                 peer.start_checked(self.config_layers(), Some(genesis_block.as_ref()))
@@ -2024,18 +2028,29 @@ impl Network {
         )
         .await
         {
-            Ok(result) => {
-                result?;
-                self.verify_post_genesis_liveness().await?;
-                info!(
-                    elapsed = ?start_instant.elapsed(),
-                    "all peers started and passed liveness guard"
-                );
-                Ok(self)
-            }
+            Ok(result) => match result {
+                Ok(_) => {
+                    self.verify_post_genesis_liveness().await?;
+                    info!(
+                        elapsed = ?start_instant.elapsed(),
+                        "all peers started and passed liveness guard"
+                    );
+                    Ok(self)
+                }
+                Err(err) => {
+                    let snapshot = self.startup_snapshot();
+                    warn!(?snapshot, error = %err, "peer startup failed");
+                    self.shutdown().await;
+                    let formatted = Self::format_startup_snapshot(&snapshot);
+                    Err(err).wrap_err_with(|| {
+                        format!("peer startup failed; startup snapshot: [{formatted}]")
+                    })
+                }
+            },
             Err(_) => {
                 let snapshot = self.startup_snapshot();
                 warn!(?snapshot, "peer startup timed out");
+                self.shutdown().await;
                 Err(eyre!(
                     "expected peers to start within timeout ({startup_timeout:?}); startup snapshot: [{}]",
                     Self::format_startup_snapshot(&snapshot),
@@ -4120,6 +4135,17 @@ impl NetworkBuilder {
 
     pub fn with_base_seed(mut self, seed: impl ToString) -> Self {
         self.seed = Some(seed.to_string());
+        self
+    }
+
+    /// Set the base seed only when the builder does not already have one.
+    ///
+    /// This is useful for harness helpers that want deterministic peer identities by default,
+    /// while still allowing callers to override the seed explicitly.
+    pub fn with_base_seed_if_unset(mut self, seed: impl ToString) -> Self {
+        if self.seed.is_none() {
+            self.seed = Some(seed.to_string());
+        }
         self
     }
 
@@ -7435,6 +7461,17 @@ mod tests {
                 .with_peer_startup_timeout(Duration::from_secs(300)),
         );
         assert_eq!(network.peer_startup_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn with_base_seed_if_unset_sets_only_when_missing() {
+        let builder = NetworkBuilder::new().with_base_seed_if_unset("seed-a");
+        assert_eq!(builder.seed.as_deref(), Some("seed-a"));
+
+        let builder = NetworkBuilder::new()
+            .with_base_seed("seed-b")
+            .with_base_seed_if_unset("seed-c");
+        assert_eq!(builder.seed.as_deref(), Some("seed-b"));
     }
 
     #[test]
