@@ -30,7 +30,7 @@ use iroha_data_model::{
     parameter::{
         Parameter,
         custom::CustomParameter,
-        system::{consensus_metadata, confidential_metadata},
+        system::{confidential_metadata, consensus_metadata},
     },
     peer::PeerId,
     prelude::{HashOf, Transfer},
@@ -181,6 +181,7 @@ pub fn genesis_with_keypair_and_post_topology(
         topology,
         topology_entries,
         genesis_key_pair,
+        chain_id(),
         None,
         None,
         None,
@@ -193,6 +194,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
+    chain_id: ChainId,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -204,6 +206,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         topology,
         topology_entries,
         genesis_key_pair,
+        chain_id,
         da_proof_policies,
         _nexus_config,
         consensus_handshake_meta,
@@ -239,6 +242,7 @@ fn build_minimal_genesis(
         topology,
         topology_entries,
         genesis_key_pair,
+        chain_id(),
         None,
         None,
         None,
@@ -251,6 +255,7 @@ fn build_minimal_genesis_with_post_topology(
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
+    chain_id: ChainId,
     da_proof_policies: Option<DaProofPolicyBundle>,
     nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -268,6 +273,7 @@ fn build_minimal_genesis_with_post_topology(
             topology,
             topology_entries,
             genesis_key_pair,
+            chain_id,
             da_proof_policies,
             nexus_config.clone(),
             consensus_handshake_meta,
@@ -292,13 +298,14 @@ fn build_minimal_genesis_unexecuted(
     build_minimal_genesis_unexecuted_with_post_topology(
         extra_transactions,
         Vec::new(),
-            topology,
-            topology_entries,
-            genesis_key_pair,
-            None,
-            None,
-            None,
-        )
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        chain_id(),
+        None,
+        None,
+        None,
+    )
 }
 
 fn build_minimal_genesis_unexecuted_with_post_topology(
@@ -307,6 +314,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
+    chain_id: ChainId,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -332,8 +340,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
     }
-
-    let chain = chain_id();
+    let chain = chain_id.clone();
     let genesis_account = AccountId::new(
         iroha_genesis::GENESIS_DOMAIN_ID.clone(),
         genesis_key_pair.public_key().clone(),
@@ -570,7 +577,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     ));
     builder = builder.append_parameter(conf_param);
     if let Some(handshake_meta) = consensus_handshake_meta {
-        builder = builder.append_instruction(InstructionBox::from(SetParameter::new(handshake_meta)));
+        builder =
+            builder.append_instruction(InstructionBox::from(SetParameter::new(handshake_meta)));
     }
 
     let block = builder
@@ -1290,6 +1298,7 @@ mod tests {
                 topology,
                 vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+                super::chain_id(),
                 Some(policies),
                 None,
                 None,
