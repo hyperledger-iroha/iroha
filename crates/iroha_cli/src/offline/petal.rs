@@ -547,6 +547,9 @@ pub enum PetalRenderStyle {
     SoraTempleBold,
     SoraTempleMinimal,
     SoraTempleRadiant,
+    SoraTempleCommand,
+    SoraTempleAegis,
+    SoraTempleGhost,
 }
 
 impl PetalRenderStyle {
@@ -557,6 +560,9 @@ impl PetalRenderStyle {
             Self::SoraTempleBold => "sora-temple-bold",
             Self::SoraTempleMinimal => "sora-temple-minimal",
             Self::SoraTempleRadiant => "sora-temple-radiant",
+            Self::SoraTempleCommand => "sora-temple-command",
+            Self::SoraTempleAegis => "sora-temple-aegis",
+            Self::SoraTempleGhost => "sora-temple-ghost",
         }
     }
 }
@@ -668,6 +674,9 @@ fn render_petal_frame(
             | PetalRenderStyle::SoraTempleBold
             | PetalRenderStyle::SoraTempleMinimal
             | PetalRenderStyle::SoraTempleRadiant
+            | PetalRenderStyle::SoraTempleCommand
+            | PetalRenderStyle::SoraTempleAegis
+            | PetalRenderStyle::SoraTempleGhost
     ) {
         return render_sora_temple_frame(grid, dimension, frame_index, frame_count, style, options);
     }
@@ -856,6 +865,8 @@ const SORA_KATAKANA_CONFIDENCE_MIN: f64 = 0.08;
 const SORA_KATAKANA_CONFIDENCE_STRONG: f64 = 0.16;
 const SORA_KATAKANA_OVERRIDE_PUSH: u8 = 68;
 const SORA_KATAKANA_MIN_ASSIST_SAMPLES: usize = 24;
+const SORA_KATAKANA_SHIFT_X: i32 = 0;
+const SORA_KATAKANA_SHIFT_Y: i32 = 1;
 const SORA_KATAKANA_BITMAPS: [[u8; 8]; 16] = [
     [0x3C, 0x08, 0x1C, 0x08, 0x08, 0x08, 0x00, 0x00],
     [0x10, 0x10, 0x20, 0x20, 0x40, 0x40, 0x00, 0x00],
@@ -1191,6 +1202,99 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             logo_core_radius: 0.47,
             logo_glyph_boost: 0.26,
         },
+        PetalRenderStyle::SoraTempleCommand => TempleStyleConfig {
+            bg_start: [0.016, 0.007, 0.040],
+            bg_end: [0.070, 0.020, 0.108],
+            ring_bright: [0.99, 0.80, 0.92],
+            ring_dim: [0.30, 0.15, 0.29],
+            tile_light_bg: [0.97, 0.94, 0.98],
+            tile_light_fg: [0.08, 0.03, 0.12],
+            tile_dark_bg: [0.06, 0.02, 0.09],
+            tile_dark_fg: [0.99, 0.93, 0.99],
+            logo_tint: [1.0, 0.92, 0.98],
+            scanline_alpha: 0.030,
+            vignette: 0.30,
+            ring_band: 0.0060,
+            ring_on_alpha: 0.78,
+            ring_off_alpha: 0.26,
+            tile_margin_outer: 0.022,
+            tile_margin_logo: 0.004,
+            tile_glyph_alpha: 0.34,
+            tile_alpha_regular: 0.985,
+            tile_alpha_logo: 0.998,
+            logo_tint_alpha: 0.30,
+            logo_light_bg: [0.97, 0.86, 0.90],
+            logo_dark_bg: [0.21, 0.03, 0.08],
+            logo_tile_mix: 0.76,
+            border_dark_mix: 0.22,
+            border_light_mix: 0.15,
+            logo_core_bg: [0.86, 0.11, 0.23],
+            logo_core_alpha: 0.68,
+            logo_core_radius: 0.47,
+            logo_glyph_boost: 0.28,
+        },
+        PetalRenderStyle::SoraTempleAegis => TempleStyleConfig {
+            bg_start: [0.017, 0.009, 0.045],
+            bg_end: [0.062, 0.023, 0.095],
+            ring_bright: [0.95, 0.76, 0.89],
+            ring_dim: [0.24, 0.12, 0.25],
+            tile_light_bg: [0.96, 0.93, 0.97],
+            tile_light_fg: [0.09, 0.04, 0.12],
+            tile_dark_bg: [0.05, 0.02, 0.08],
+            tile_dark_fg: [0.97, 0.91, 0.98],
+            logo_tint: [0.98, 0.91, 0.97],
+            scanline_alpha: 0.018,
+            vignette: 0.34,
+            ring_band: 0.0067,
+            ring_on_alpha: 0.70,
+            ring_off_alpha: 0.30,
+            tile_margin_outer: 0.024,
+            tile_margin_logo: 0.005,
+            tile_glyph_alpha: 0.30,
+            tile_alpha_regular: 0.982,
+            tile_alpha_logo: 0.998,
+            logo_tint_alpha: 0.26,
+            logo_light_bg: [0.96, 0.87, 0.90],
+            logo_dark_bg: [0.18, 0.03, 0.07],
+            logo_tile_mix: 0.72,
+            border_dark_mix: 0.24,
+            border_light_mix: 0.18,
+            logo_core_bg: [0.80, 0.11, 0.22],
+            logo_core_alpha: 0.60,
+            logo_core_radius: 0.46,
+            logo_glyph_boost: 0.24,
+        },
+        PetalRenderStyle::SoraTempleGhost => TempleStyleConfig {
+            bg_start: [0.022, 0.012, 0.050],
+            bg_end: [0.074, 0.024, 0.106],
+            ring_bright: [0.90, 0.73, 0.86],
+            ring_dim: [0.20, 0.10, 0.22],
+            tile_light_bg: [0.95, 0.92, 0.96],
+            tile_light_fg: [0.10, 0.04, 0.13],
+            tile_dark_bg: [0.07, 0.03, 0.10],
+            tile_dark_fg: [0.95, 0.89, 0.96],
+            logo_tint: [0.96, 0.90, 0.95],
+            scanline_alpha: 0.012,
+            vignette: 0.22,
+            ring_band: 0.0052,
+            ring_on_alpha: 0.58,
+            ring_off_alpha: 0.20,
+            tile_margin_outer: 0.026,
+            tile_margin_logo: 0.006,
+            tile_glyph_alpha: 0.26,
+            tile_alpha_regular: 0.972,
+            tile_alpha_logo: 0.996,
+            logo_tint_alpha: 0.18,
+            logo_light_bg: [0.95, 0.88, 0.92],
+            logo_dark_bg: [0.17, 0.04, 0.07],
+            logo_tile_mix: 0.66,
+            border_dark_mix: 0.16,
+            border_light_mix: 0.10,
+            logo_core_bg: [0.74, 0.11, 0.20],
+            logo_core_alpha: 0.44,
+            logo_core_radius: 0.45,
+            logo_glyph_boost: 0.20,
+        },
         PetalRenderStyle::SakuraWind => TempleStyleConfig {
             bg_start: SORA_BG_START,
             bg_end: SORA_BG_END,
@@ -1306,10 +1410,6 @@ fn blend_sora_data_tile(
         if corner_bracket {
             blend_rgb(rgb, frame_color, if param.logo { 0.20 } else { 0.14 });
         }
-        let bus_y = if (gx + gy) % 2 == 0 { 0.34 } else { 0.66 };
-        if (inner_v - bus_y).abs() < 0.018 && inner_u > 0.18 && inner_u < 0.82 {
-            blend_rgb(rgb, frame_color, if param.logo { 0.10 } else { 0.07 });
-        }
     }
 
     let bitmap = katakana_bitmap(param.kana_pattern, gx, gy);
@@ -1348,12 +1448,34 @@ fn katakana_bitmap(pattern_id: usize, x: usize, y: usize) -> [u8; 8] {
     let pattern = SORA_KATAKANA_BITMAPS[pattern_id % SORA_KATAKANA_BITMAPS.len()];
     let rotate = (x.wrapping_mul(3) + y.wrapping_mul(5)) % 3;
     if rotate == 0 {
-        return pattern;
+        return shift_katakana_bitmap(pattern, SORA_KATAKANA_SHIFT_X, SORA_KATAKANA_SHIFT_Y);
     }
     let mut out = [0u8; 8];
     for row in 0..8 {
         let src = pattern[(row + rotate) % 8];
         out[row] = src.rotate_left(rotate as u32);
+    }
+    shift_katakana_bitmap(out, SORA_KATAKANA_SHIFT_X, SORA_KATAKANA_SHIFT_Y)
+}
+
+fn shift_katakana_bitmap(bitmap: [u8; 8], shift_x: i32, shift_y: i32) -> [u8; 8] {
+    if shift_x == 0 && shift_y == 0 {
+        return bitmap;
+    }
+    let mut out = [0u8; 8];
+    for y in 0..8i32 {
+        let row = bitmap[y as usize];
+        for x in 0..8i32 {
+            if row & (1u8 << (7 - x)) == 0 {
+                continue;
+            }
+            let nx = x + shift_x;
+            let ny = y + shift_y;
+            if !(0..8).contains(&nx) || !(0..8).contains(&ny) {
+                continue;
+            }
+            out[ny as usize] |= 1u8 << (7 - nx);
+        }
     }
     out
 }
@@ -1647,31 +1769,41 @@ fn infer_katakana_cell_bit(
     let mut best_false = f64::NEG_INFINITY;
     for pattern_id in 0..SORA_KATAKANA_BITMAPS.len() {
         let bitmap = katakana_bitmap(pattern_id, cell_x as usize, cell_y as usize);
-        let mut on_sum = 0u32;
-        let mut on_count = 0u32;
-        let mut off_sum = 0u32;
-        let mut off_count = 0u32;
-        for sy in 0..8usize {
-            let row = bitmap[sy];
-            for sx in 0..8usize {
-                let sample = u32::from(luma[sy * 8 + sx]);
-                if row & (1u8 << (7 - sx)) != 0 {
-                    on_sum += sample;
-                    on_count += 1;
+        for dy in -1i32..=1 {
+            for dx in -1i32..=1 {
+                let mut on_sum = 0u32;
+                let mut on_count = 0u32;
+                let mut off_sum = 0u32;
+                let mut off_count = 0u32;
+                for sy in 0..8i32 {
+                    for sx in 0..8i32 {
+                        let sample = u32::from(luma[sy as usize * 8 + sx as usize]);
+                        let bx = sx - dx;
+                        let by = sy - dy;
+                        let hit = if (0..8).contains(&bx) && (0..8).contains(&by) {
+                            bitmap[by as usize] & (1u8 << (7 - bx as u32)) != 0
+                        } else {
+                            false
+                        };
+                        if hit {
+                            on_sum += sample;
+                            on_count += 1;
+                        } else {
+                            off_sum += sample;
+                            off_count += 1;
+                        }
+                    }
+                }
+                if on_count == 0 || off_count == 0 {
+                    continue;
+                }
+                let contrast = on_sum as f64 / on_count as f64 - off_sum as f64 / off_count as f64;
+                if pattern_id % 2 == 1 {
+                    best_true = best_true.max(contrast);
                 } else {
-                    off_sum += sample;
-                    off_count += 1;
+                    best_false = best_false.max(-contrast);
                 }
             }
-        }
-        if on_count == 0 || off_count == 0 {
-            continue;
-        }
-        let contrast = on_sum as f64 / on_count as f64 - off_sum as f64 / off_count as f64;
-        if pattern_id % 2 == 1 {
-            best_true = best_true.max(contrast);
-        } else {
-            best_false = best_false.max(-contrast);
         }
     }
     if !best_true.is_finite() || !best_false.is_finite() {
