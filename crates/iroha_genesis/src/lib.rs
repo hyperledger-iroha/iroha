@@ -1837,7 +1837,7 @@ struct ConsensusHandshakeMetadata {
 
 fn parse_consensus_handshake_metadata_from_payload(
     manifest: &RawGenesisTransaction,
-    payload: norito::json::Value,
+    payload: &norito::json::Value,
 ) -> Option<ConsensusHandshakeMetadata> {
     let mode = payload
         .get("mode")
@@ -1874,7 +1874,7 @@ fn parse_consensus_handshake_metadata_from_payload(
     let mut probe = manifest.clone();
     probe.consensus_mode = Some(mode);
     probe.bls_domain = Some(bls_domain.clone());
-    probe.wire_proto_versions = wire_proto_versions.clone();
+    probe.wire_proto_versions.clone_from(&wire_proto_versions);
     probe.consensus_fingerprint = None;
     let probe = probe.with_consensus_meta();
     if probe.consensus_fingerprint.as_deref()? != consensus_fingerprint.as_str() {
@@ -1912,7 +1912,7 @@ fn parse_consensus_handshake_metadata(
                 Err(_) => continue,
             };
             if let Some(metadata) =
-                parse_consensus_handshake_metadata_from_payload(manifest, payload)
+                parse_consensus_handshake_metadata_from_payload(manifest, &payload)
             {
                 return Some(metadata);
             }
@@ -1934,7 +1934,7 @@ fn parse_consensus_handshake_metadata(
                 Err(_) => continue,
             };
             if let Some(metadata) =
-                parse_consensus_handshake_metadata_from_payload(manifest, payload)
+                parse_consensus_handshake_metadata_from_payload(manifest, &payload)
             {
                 return Some(metadata);
             }
@@ -4988,11 +4988,7 @@ mod tests {
                     payload
                         .get("consensus_fingerprint")
                         .and_then(|value: &norito::json::Value| {
-                            if let Some(fp) = value.as_str() {
-                                Some(fp.to_string())
-                            } else {
-                                None
-                            }
+                            value.as_str().map(std::string::ToString::to_string)
                         })
                 {
                     found.push(fingerprint);
@@ -5062,11 +5058,7 @@ mod tests {
                     payload
                         .get("consensus_fingerprint")
                         .and_then(|value: &norito::json::Value| {
-                            if let Some(fp) = value.as_str() {
-                                Some(fp.to_string())
-                            } else {
-                                None
-                            }
+                            value.as_str().map(std::string::ToString::to_string)
                         })
                 {
                     found.push(fingerprint);

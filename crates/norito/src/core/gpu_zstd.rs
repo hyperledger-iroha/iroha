@@ -438,18 +438,18 @@ unsafe fn load_gpu_symbols(lib_name: &str) -> Option<(*mut c_void, CompressFn, D
         }
     }
 
-    if library.is_null() {
-        if let Ok(path) = CString::new(lib_name) {
-            library = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
-        }
+    if library.is_null()
+        && let Ok(path) = CString::new(lib_name)
+    {
+        library = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
     }
 
     if library.is_null() {
         return None;
     }
 
-    let compress = unsafe { dlsym(library, b"gpu_zstd_compress\0".as_ptr() as *const c_char) };
-    let decompress = unsafe { dlsym(library, b"gpu_zstd_decompress\0".as_ptr() as *const c_char) };
+    let compress = unsafe { dlsym(library, c"gpu_zstd_compress".as_ptr()) };
+    let decompress = unsafe { dlsym(library, c"gpu_zstd_decompress".as_ptr()) };
     if compress.is_null() || decompress.is_null() {
         let _ = unsafe { dlclose(library) };
         return None;
