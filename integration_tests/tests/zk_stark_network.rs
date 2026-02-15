@@ -1,5 +1,5 @@
-#![cfg(feature = "zk-stark")]
 //! Multi-peer STARK integration coverage for governance voting and shielded IVM admission.
+#![cfg(feature = "zk-stark")]
 
 use std::{str::FromStr as _, time::Duration};
 

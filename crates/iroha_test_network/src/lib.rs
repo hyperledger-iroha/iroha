@@ -5884,11 +5884,48 @@ impl NetworkPeer {
         self.dir.join("storage")
     }
 
+    fn kura_store_has_blocks(storage_dir: &Path) -> bool {
+        // Non-zero length implies at least one block has been persisted.
+        const KURA_LEDGER_FILES: [&str; 3] = ["blocks.index", "blocks.data", "blocks.hashes"];
+        let dir_has_blocks = |dir: &Path| {
+            KURA_LEDGER_FILES.into_iter().any(|name| {
+                let path = dir.join(name);
+                fs::metadata(path).is_ok_and(|meta| meta.len() > 0)
+            })
+        };
+
+        // Legacy / single-lane layout: files under `kura.store_dir`.
+        if dir_has_blocks(storage_dir) {
+            return true;
+        }
+
+        // Current multi-lane layout: `<kura.store_dir>/blocks/<segment>/blocks.{index,data,hashes}`.
+        let blocks_root = storage_dir.join("blocks");
+        let Ok(entries) = fs::read_dir(&blocks_root) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if dir_has_blocks(&path) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn prepare_kura_storage_dir(
         &self,
         storage_dir: &Path,
         reset_for_bootstrap: bool,
     ) -> Result<()> {
+        // Providing a genesis file does not necessarily mean we want to wipe existing state:
+        // `irohad` itself will ignore genesis on non-empty storage and use the stored block 1.
+        // Clearing here would turn a restart into a bootstrap and can break tests that validate
+        // restart behaviour under config drift (e.g., mismatched `genesis.public_key`).
+        let reset_for_bootstrap = reset_for_bootstrap && !Self::kura_store_has_blocks(storage_dir);
         if reset_for_bootstrap {
             match fs::symlink_metadata(storage_dir) {
                 Ok(meta) => {
@@ -10597,5 +10634,57 @@ exit 0
             expected.0.encode_versioned(),
             "custom genesis builder should dictate the resulting block"
         );
+    }
+
+    #[test]
+    fn kura_storage_dir_is_not_cleared_on_restart_when_genesis_is_provided() -> Result<()> {
+        let root = tempdir()?;
+        let env = Environment {
+            dir: root.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&env);
+        let storage_dir = peer.dir.join("storage");
+        fs::create_dir_all(&storage_dir)?;
+        let segment_dir = storage_dir.join("blocks").join("core");
+        fs::create_dir_all(&segment_dir)?;
+        fs::write(segment_dir.join("blocks.index"), [0_u8; 16])?;
+        fs::write(segment_dir.join("blocks.data"), [0_u8; 1])?;
+        fs::write(segment_dir.join("blocks.hashes"), [0_u8; 32])?;
+        fs::write(storage_dir.join("keep.marker"), b"keep")?;
+
+        peer.prepare_kura_storage_dir(&storage_dir, true)?;
+
+        assert!(
+            storage_dir.join("keep.marker").exists(),
+            "existing storage must not be cleared when blocks are present"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn kura_storage_dir_is_cleared_for_bootstrap_when_no_blocks_exist() -> Result<()> {
+        let root = tempdir()?;
+        let env = Environment {
+            dir: root.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&env);
+        let storage_dir = peer.dir.join("storage");
+        fs::create_dir_all(&storage_dir)?;
+        let segment_dir = storage_dir.join("blocks").join("core");
+        fs::create_dir_all(&segment_dir)?;
+        fs::write(segment_dir.join("blocks.index"), [])?;
+        fs::write(storage_dir.join("keep.marker"), b"remove")?;
+
+        peer.prepare_kura_storage_dir(&storage_dir, true)?;
+
+        assert!(
+            !storage_dir.join("keep.marker").exists(),
+            "bootstrap reset must clear stale files when no blocks are present"
+        );
+        assert!(
+            storage_dir.exists(),
+            "storage directory must exist after preparation"
+        );
+        Ok(())
     }
 }

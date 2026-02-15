@@ -3468,9 +3468,37 @@ impl Iroha {
             }
             Err(TryReadSnapshotError::NotFound) => {
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
+                let genesis_public_key = if block_count.0 > 0 {
+                    let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
+                    let stored = kura.get_block(nz).ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
+                            "non-empty block store is missing genesis block at height 1",
+                        )
+                    })?;
+                    let first = stored.external_transactions().next().ok_or_else(|| {
+                        Report::new(StartError::InitKura)
+                            .attach("stored genesis block contains no transactions")
+                    })?;
+                    let authority = first.authority();
+                    if authority.domain() != &*iroha_genesis::GENESIS_DOMAIN_ID {
+                        return Err(Report::new(StartError::InitKura).attach(format!(
+                            "stored genesis transaction authority is not in genesis domain (authority={authority})",
+                        )));
+                    }
+                    authority
+                        .try_signatory()
+                        .cloned()
+                        .ok_or_else(|| {
+                            Report::new(StartError::InitKura).attach(
+                                "stored genesis transaction authority is not a single-key account",
+                            )
+                        })?
+                } else {
+                    config.genesis.public_key.clone()
+                };
                 let world = World::with(
-                    [genesis_domain(config.genesis.public_key.clone())],
-                    [genesis_account(config.genesis.public_key.clone())],
+                    [genesis_domain(genesis_public_key.clone())],
+                    [genesis_account(genesis_public_key)],
                     [],
                 );
                 State::new(
@@ -3486,9 +3514,37 @@ impl Iroha {
                     ?error,
                     "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
                 );
+                let genesis_public_key = if block_count.0 > 0 {
+                    let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
+                    let stored = kura.get_block(nz).ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
+                            "non-empty block store is missing genesis block at height 1",
+                        )
+                    })?;
+                    let first = stored.external_transactions().next().ok_or_else(|| {
+                        Report::new(StartError::InitKura)
+                            .attach("stored genesis block contains no transactions")
+                    })?;
+                    let authority = first.authority();
+                    if authority.domain() != &*iroha_genesis::GENESIS_DOMAIN_ID {
+                        return Err(Report::new(StartError::InitKura).attach(format!(
+                            "stored genesis transaction authority is not in genesis domain (authority={authority})",
+                        )));
+                    }
+                    authority
+                        .try_signatory()
+                        .cloned()
+                        .ok_or_else(|| {
+                            Report::new(StartError::InitKura).attach(
+                                "stored genesis transaction authority is not a single-key account",
+                            )
+                        })?
+                } else {
+                    config.genesis.public_key.clone()
+                };
                 let world = World::with(
-                    [genesis_domain(config.genesis.public_key.clone())],
-                    [genesis_account(config.genesis.public_key.clone())],
+                    [genesis_domain(genesis_public_key.clone())],
+                    [genesis_account(genesis_public_key)],
                     [],
                 );
                 State::new(
