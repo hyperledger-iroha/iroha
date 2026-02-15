@@ -2129,11 +2129,21 @@ impl RawGenesisTransaction {
 
     /// Compute the effective parameter set after applying all structured sections and explicit `SetParameter` instructions.
     pub fn effective_parameters(&self) -> Parameters {
+        // Mirror `parse()` parameter injection rules: structured `parameters` sections are first
+        // turned into `SetParameter` instructions with `collect_parameter_instructions`, which
+        // suppresses slots already set manually (any explicit `SetParameter` anywhere in the
+        // manifest). This keeps the derived consensus fingerprint consistent with the final
+        // parsed instruction batches.
+        let manual_parameters = collect_manual_set_parameters(&self.transactions);
         let mut aggregated = Parameters::default();
         for tx in &self.transactions {
             if let Some(params) = &tx.parameters {
-                for parameter in parameters_with_staging(params) {
-                    aggregated.set_parameter(parameter);
+                for instruction in
+                    collect_parameter_instructions(params, &tx.instructions, &manual_parameters)
+                {
+                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
+                        aggregated.set_parameter(set_param.inner().clone());
+                    }
                 }
             }
             for instruction in &tx.instructions {
@@ -2874,6 +2884,60 @@ mod tests2 {
 
         let effective = manifest.effective_parameters();
         assert_eq!(effective.sumeragi().block_time_ms(), 1_500);
+    }
+
+    #[test]
+    fn effective_parameters_respects_manual_overrides_across_transactions() {
+        init_instruction_registry();
+        use iroha_data_model::{
+            isi::InstructionBox,
+            parameter::{
+                Parameters,
+                custom::CustomParameter,
+                system::{SumeragiParameter, confidential_metadata},
+            },
+        };
+
+        let chain = ChainId::from("iroha:test:paramagg-manual");
+        let tx_manual = RawGenesisTx {
+            instructions: vec![
+                InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::BlockTimeMs(333),
+                ))),
+                InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::CommitTimeMs(667),
+                ))),
+            ],
+            ..RawGenesisTx::default()
+        };
+
+        // Parameters created from a single custom entry still include system defaults.
+        // `effective_parameters()` must follow the same suppression rules as `parse()` so
+        // that later structured sections don't overwrite globally-manual overrides.
+        let conf_param = Parameter::Custom(CustomParameter::new(
+            confidential_metadata::registry_root_id(),
+            Json::new(norito::json!({ "vk_set_hash": null })),
+        ));
+        let tx_defaults = RawGenesisTx {
+            parameters: Some(Parameters::from_iter([conf_param])),
+            ..RawGenesisTx::default()
+        };
+
+        let manifest = RawGenesisTransaction {
+            chain,
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![tx_manual, tx_defaults],
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: vec![],
+            consensus_fingerprint: None,
+            crypto: ManifestCrypto::default(),
+        };
+
+        let effective = manifest.effective_parameters();
+        assert_eq!(effective.sumeragi().block_time_ms(), 333);
+        assert_eq!(effective.sumeragi().commit_time_ms(), 667);
     }
 
     #[test]

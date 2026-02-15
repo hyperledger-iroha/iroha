@@ -531,6 +531,9 @@ pub enum PetalOutputFormat {
 pub enum PetalRenderStyle {
     SakuraWind,
     SoraTemple,
+    SoraTempleBold,
+    SoraTempleMinimal,
+    SoraTempleRadiant,
 }
 
 impl PetalRenderStyle {
@@ -538,6 +541,9 @@ impl PetalRenderStyle {
         match self {
             Self::SakuraWind => "sakura-wind",
             Self::SoraTemple => "sora-temple",
+            Self::SoraTempleBold => "sora-temple-bold",
+            Self::SoraTempleMinimal => "sora-temple-minimal",
+            Self::SoraTempleRadiant => "sora-temple-radiant",
         }
     }
 }
@@ -641,12 +647,19 @@ fn render_petal_frame(
     style: PetalRenderStyle,
     options: PetalStreamOptions,
 ) -> image::RgbaImage {
-    if style == PetalRenderStyle::SoraTemple {
+    if matches!(
+        style,
+        PetalRenderStyle::SoraTemple
+            | PetalRenderStyle::SoraTempleBold
+            | PetalRenderStyle::SoraTempleMinimal
+            | PetalRenderStyle::SoraTempleRadiant
+    ) {
         return render_sora_temple_frame(
             grid,
             dimension,
             frame_index,
             frame_count,
+            style,
             options,
         );
     }
@@ -868,8 +881,10 @@ fn render_sora_temple_frame(
     dimension: u32,
     frame_index: u32,
     frame_count: u32,
+    style: PetalRenderStyle,
     options: PetalStreamOptions,
 ) -> image::RgbaImage {
+    let style_cfg = temple_style_config(style);
     let grid_size = grid.grid_size as u32;
     let cell_size = (dimension / grid_size).max(1);
     let width = grid_size * cell_size;
@@ -922,20 +937,20 @@ fn render_sora_temple_frame(
             let cy = ny - 0.5;
             let radial = (cx * cx + cy * cy).sqrt();
             let mut rgb = [
-                lerp(SORA_BG_START[0], SORA_BG_END[0], nx),
-                lerp(SORA_BG_START[1], SORA_BG_END[1], ny),
-                lerp(SORA_BG_START[2], SORA_BG_END[2], 1.0 - radial.min(1.0)),
+                lerp(style_cfg.bg_start[0], style_cfg.bg_end[0], nx),
+                lerp(style_cfg.bg_start[1], style_cfg.bg_end[1], ny),
+                lerp(style_cfg.bg_start[2], style_cfg.bg_end[2], 1.0 - radial.min(1.0)),
             ];
             let scanline = (ny * 210.0 + phase * std::f64::consts::TAU).sin() * 0.5 + 0.5;
             blend_rgb(
                 &mut rgb,
-                SORA_RING_DIM,
-                scanline * SORA_SCANLINE_ALPHA,
+                style_cfg.ring_dim,
+                scanline * style_cfg.scanline_alpha,
             );
-            let vignette = (radial / 0.74).clamp(0.0, 1.0).powi(2) * SORA_VIGNETTE;
-            rgb[0] = lerp(rgb[0], SORA_BG_START[0], vignette);
-            rgb[1] = lerp(rgb[1], SORA_BG_START[1], vignette);
-            rgb[2] = lerp(rgb[2], SORA_BG_START[2], vignette);
+            let vignette = (radial / 0.74).clamp(0.0, 1.0).powi(2) * style_cfg.vignette;
+            rgb[0] = lerp(rgb[0], style_cfg.bg_start[0], vignette);
+            rgb[1] = lerp(rgb[1], style_cfg.bg_start[1], vignette);
+            rgb[2] = lerp(rgb[2], style_cfg.bg_start[2], vignette);
 
             blend_sora_rings(
                 &mut rgb,
@@ -944,6 +959,7 @@ fn render_sora_temple_frame(
                 phase,
                 &stream_bits,
                 stream_signature,
+                style_cfg,
             );
 
             if px >= offset_x && py >= offset_y && px < offset_x + width && py < offset_y + height {
@@ -960,8 +976,12 @@ fn render_sora_temple_frame(
                     }
                     RenderCellRole::Border => {
                         let bit = grid.cells[idx];
-                        let border_mix = if bit { 0.18 } else { 0.12 };
-                        blend_rgb(&mut rgb, SORA_RING_DIM, border_mix);
+                        let border_mix = if bit {
+                            style_cfg.border_dark_mix
+                        } else {
+                            style_cfg.border_light_mix
+                        };
+                        blend_rgb(&mut rgb, style_cfg.ring_dim, border_mix);
                     }
                     RenderCellRole::Data => {
                         let local_x = (px - offset_x) as f64 / cell_size as f64 - gx as f64;
@@ -975,6 +995,7 @@ fn render_sora_temple_frame(
                             gy as usize,
                             cell_size,
                             param,
+                            style_cfg,
                         );
                     }
                 }
