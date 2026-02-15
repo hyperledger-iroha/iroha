@@ -1020,6 +1020,157 @@ struct TempleCellParam {
     kana_index: usize,
 }
 
+#[derive(Clone, Copy)]
+struct TempleStyleConfig {
+    bg_start: [f64; 3],
+    bg_end: [f64; 3],
+    ring_bright: [f64; 3],
+    ring_dim: [f64; 3],
+    tile_light_bg: [f64; 3],
+    tile_light_fg: [f64; 3],
+    tile_dark_bg: [f64; 3],
+    tile_dark_fg: [f64; 3],
+    logo_tint: [f64; 3],
+    scanline_alpha: f64,
+    vignette: f64,
+    ring_band: f64,
+    ring_on_alpha: f64,
+    ring_off_alpha: f64,
+    tile_margin_outer: f64,
+    tile_margin_logo: f64,
+    tile_glyph_alpha: f64,
+    tile_alpha_regular: f64,
+    tile_alpha_logo: f64,
+    logo_tint_alpha: f64,
+    border_dark_mix: f64,
+    border_light_mix: f64,
+}
+
+fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
+    match style {
+        PetalRenderStyle::SoraTemple => TempleStyleConfig {
+            bg_start: SORA_BG_START,
+            bg_end: SORA_BG_END,
+            ring_bright: SORA_RING_BRIGHT,
+            ring_dim: SORA_RING_DIM,
+            tile_light_bg: SORA_TILE_LIGHT_BG,
+            tile_light_fg: SORA_TILE_LIGHT_FG,
+            tile_dark_bg: SORA_TILE_DARK_BG,
+            tile_dark_fg: SORA_TILE_DARK_FG,
+            logo_tint: SORA_LOGO_TINT,
+            scanline_alpha: SORA_SCANLINE_ALPHA,
+            vignette: SORA_VIGNETTE,
+            ring_band: SORA_RING_BAND,
+            ring_on_alpha: 0.65,
+            ring_off_alpha: 0.28,
+            tile_margin_outer: SORA_TILE_MARGIN_OUTER,
+            tile_margin_logo: SORA_TILE_MARGIN_LOGO,
+            tile_glyph_alpha: SORA_TILE_GLYPH_ALPHA,
+            tile_alpha_regular: 0.96,
+            tile_alpha_logo: 0.995,
+            logo_tint_alpha: 0.04,
+            border_dark_mix: 0.18,
+            border_light_mix: 0.12,
+        },
+        PetalRenderStyle::SoraTempleBold => TempleStyleConfig {
+            bg_start: [0.015, 0.006, 0.045],
+            bg_end: [0.06, 0.02, 0.10],
+            ring_bright: [0.99, 0.84, 0.93],
+            ring_dim: [0.38, 0.22, 0.36],
+            tile_light_bg: [0.97, 0.94, 0.98],
+            tile_light_fg: [0.08, 0.03, 0.12],
+            tile_dark_bg: [0.055, 0.025, 0.08],
+            tile_dark_fg: [0.99, 0.93, 0.99],
+            logo_tint: [1.0, 0.95, 0.99],
+            scanline_alpha: 0.026,
+            vignette: 0.30,
+            ring_band: 0.0072,
+            ring_on_alpha: 0.82,
+            ring_off_alpha: 0.42,
+            tile_margin_outer: 0.09,
+            tile_margin_logo: 0.025,
+            tile_glyph_alpha: 0.16,
+            tile_alpha_regular: 0.975,
+            tile_alpha_logo: 0.998,
+            logo_tint_alpha: 0.10,
+            border_dark_mix: 0.23,
+            border_light_mix: 0.16,
+        },
+        PetalRenderStyle::SoraTempleMinimal => TempleStyleConfig {
+            bg_start: [0.03, 0.02, 0.06],
+            bg_end: [0.055, 0.025, 0.075],
+            ring_bright: [0.88, 0.73, 0.86],
+            ring_dim: [0.22, 0.13, 0.24],
+            tile_light_bg: [0.955, 0.93, 0.965],
+            tile_light_fg: [0.09, 0.04, 0.13],
+            tile_dark_bg: [0.075, 0.035, 0.11],
+            tile_dark_fg: [0.96, 0.90, 0.97],
+            logo_tint: [0.96, 0.90, 0.95],
+            scanline_alpha: 0.008,
+            vignette: 0.16,
+            ring_band: 0.0042,
+            ring_on_alpha: 0.30,
+            ring_off_alpha: 0.12,
+            tile_margin_outer: 0.08,
+            tile_margin_logo: 0.02,
+            tile_glyph_alpha: 0.08,
+            tile_alpha_regular: 0.935,
+            tile_alpha_logo: 0.985,
+            logo_tint_alpha: 0.02,
+            border_dark_mix: 0.10,
+            border_light_mix: 0.06,
+        },
+        PetalRenderStyle::SoraTempleRadiant => TempleStyleConfig {
+            bg_start: [0.03, 0.01, 0.07],
+            bg_end: [0.10, 0.03, 0.14],
+            ring_bright: [1.0, 0.86, 0.94],
+            ring_dim: [0.44, 0.25, 0.40],
+            tile_light_bg: [0.965, 0.94, 0.975],
+            tile_light_fg: [0.11, 0.04, 0.14],
+            tile_dark_bg: [0.08, 0.03, 0.12],
+            tile_dark_fg: [0.98, 0.91, 0.98],
+            logo_tint: [1.0, 0.93, 0.98],
+            scanline_alpha: 0.024,
+            vignette: 0.24,
+            ring_band: 0.0065,
+            ring_on_alpha: 0.74,
+            ring_off_alpha: 0.34,
+            tile_margin_outer: 0.10,
+            tile_margin_logo: 0.03,
+            tile_glyph_alpha: 0.20,
+            tile_alpha_regular: 0.965,
+            tile_alpha_logo: 0.997,
+            logo_tint_alpha: 0.06,
+            border_dark_mix: 0.19,
+            border_light_mix: 0.13,
+        },
+        PetalRenderStyle::SakuraWind => TempleStyleConfig {
+            bg_start: SORA_BG_START,
+            bg_end: SORA_BG_END,
+            ring_bright: SORA_RING_BRIGHT,
+            ring_dim: SORA_RING_DIM,
+            tile_light_bg: SORA_TILE_LIGHT_BG,
+            tile_light_fg: SORA_TILE_LIGHT_FG,
+            tile_dark_bg: SORA_TILE_DARK_BG,
+            tile_dark_fg: SORA_TILE_DARK_FG,
+            logo_tint: SORA_LOGO_TINT,
+            scanline_alpha: SORA_SCANLINE_ALPHA,
+            vignette: SORA_VIGNETTE,
+            ring_band: SORA_RING_BAND,
+            ring_on_alpha: 0.65,
+            ring_off_alpha: 0.28,
+            tile_margin_outer: SORA_TILE_MARGIN_OUTER,
+            tile_margin_logo: SORA_TILE_MARGIN_LOGO,
+            tile_glyph_alpha: SORA_TILE_GLYPH_ALPHA,
+            tile_alpha_regular: 0.96,
+            tile_alpha_logo: 0.995,
+            logo_tint_alpha: 0.04,
+            border_dark_mix: 0.18,
+            border_light_mix: 0.12,
+        },
+    }
+}
+
 fn blend_sora_data_tile(
     rgb: &mut [f64; 3],
     local_x: f64,
@@ -1028,11 +1179,12 @@ fn blend_sora_data_tile(
     gy: usize,
     cell_size: u32,
     param: TempleCellParam,
+    style_cfg: TempleStyleConfig,
 ) {
     let style_margin = if param.logo {
-        SORA_TILE_MARGIN_LOGO
+        style_cfg.tile_margin_logo
     } else {
-        SORA_TILE_MARGIN_OUTER
+        style_cfg.tile_margin_outer
     };
     let margin = if cell_size <= 4 {
         0.0
@@ -1049,15 +1201,19 @@ fn blend_sora_data_tile(
         return;
     }
 
-    let tile_alpha = if param.logo { 0.995 } else { 0.96 };
-    let (tile_bg, glyph_fg) = if param.bit {
-        (SORA_TILE_DARK_BG, SORA_TILE_DARK_FG)
+    let tile_alpha = if param.logo {
+        style_cfg.tile_alpha_logo
     } else {
-        (SORA_TILE_LIGHT_BG, SORA_TILE_LIGHT_FG)
+        style_cfg.tile_alpha_regular
+    };
+    let (tile_bg, glyph_fg) = if param.bit {
+        (style_cfg.tile_dark_bg, style_cfg.tile_dark_fg)
+    } else {
+        (style_cfg.tile_light_bg, style_cfg.tile_light_fg)
     };
     blend_rgb(rgb, tile_bg, tile_alpha);
     if param.logo {
-        blend_rgb(rgb, SORA_LOGO_TINT, 0.04);
+        blend_rgb(rgb, style_cfg.logo_tint, style_cfg.logo_tint_alpha);
     }
 
     let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
@@ -1066,9 +1222,9 @@ fn blend_sora_data_tile(
     let bitmap = katakana_bitmap(char_index, gx, gy);
     if katakana_bitmap_hit(bitmap, inner_u, inner_v) {
         let glyph_alpha = if param.logo {
-            SORA_TILE_GLYPH_ALPHA + 0.04
+            style_cfg.tile_glyph_alpha + 0.04
         } else {
-            SORA_TILE_GLYPH_ALPHA
+            style_cfg.tile_glyph_alpha
         };
         blend_rgb(rgb, glyph_fg, glyph_alpha);
     }
@@ -1105,6 +1261,7 @@ fn blend_sora_rings(
     phase: f64,
     stream_bits: &[bool],
     stream_signature: u64,
+    style_cfg: TempleStyleConfig,
 ) {
     if stream_bits.is_empty() {
         return;
@@ -1116,7 +1273,7 @@ fn blend_sora_rings(
     for ring_index in 0..SORA_RING_RADII.len() {
         let ring_radius = SORA_RING_RADII[ring_index];
         let dist = (radius - ring_radius).abs();
-        if dist > SORA_RING_BAND * 2.2 {
+        if dist > style_cfg.ring_band * 2.2 {
             ring_offset += SORA_RING_DOTS[ring_index] as usize;
             continue;
         }
@@ -1130,13 +1287,17 @@ fn blend_sora_rings(
             % stream_bits.len();
         let bit = stream_bits[bit_index];
         let ring_color = if bit {
-            SORA_RING_BRIGHT
+            style_cfg.ring_bright
         } else {
-            SORA_RING_DIM
+            style_cfg.ring_dim
         };
         let alpha = dot_profile.powi(2)
-            * (1.0 - dist / (SORA_RING_BAND * 2.2))
-            * if bit { 0.65 } else { 0.28 };
+            * (1.0 - dist / (style_cfg.ring_band * 2.2))
+            * if bit {
+                style_cfg.ring_on_alpha
+            } else {
+                style_cfg.ring_off_alpha
+            };
         blend_rgb(rgb, ring_color, alpha);
         ring_offset += dots as usize;
     }

@@ -523,6 +523,12 @@ pub fn derive_public_key(secret: Scalar) -> ECPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        encoding::wide as wide_enc,
+        instruction::wide,
+        metadata::ProgramMetadata,
+        zk::{Constraint, RegisterState},
+    };
 
     #[test]
     fn super_hash_aligns_with_poseidon_permutation() {
@@ -546,6 +552,185 @@ mod tests {
                 "super_hash must align with canonical Halo2 Poseidon gadget for ({a:#x}, {b:#x})"
             );
         }
+    }
+
+    fn build_program(words: &[u32]) -> Vec<u8> {
+        let mut bytes = ProgramMetadata::default_for(1, 0, 1).encode();
+        for word in words {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn base_state(pc: u64) -> RegisterState {
+        RegisterState {
+            pc,
+            gpr: [0u64; 256],
+            tags: [false; 256],
+        }
+    }
+
+    #[test]
+    fn vm_execution_circuit_accepts_wrapping_addi_and_sub_semantics() {
+        let program = build_program(&[
+            wide_enc::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
+            wide_enc::encode_ri(wide::arithmetic::ADDI, 4, 3, -1),
+            wide_enc::encode_rr(wide::arithmetic::SUB, 5, 4, 1),
+            wide_enc::encode_halt(),
+        ]);
+
+        let mut s0 = base_state(0);
+        s0.gpr[1] = u64::MAX;
+        s0.gpr[2] = 2;
+
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        s1.gpr[3] = s0.gpr[1].wrapping_add(s0.gpr[2]);
+
+        let mut s2 = s1.clone();
+        s2.pc = 8;
+        s2.gpr[4] = s1.gpr[3].wrapping_add((-1_i8) as i64 as u64);
+
+        let mut s3 = s2.clone();
+        s3.pc = 12;
+        s3.gpr[5] = s2.gpr[4].wrapping_sub(s2.gpr[1]);
+
+        let mut s4 = s3.clone();
+        s4.pc = 16;
+
+        let trace = vec![s0, s1, s2, s3, s4];
+        let constraints = vec![
+            Constraint::Eq {
+                reg1: 4,
+                reg2: 0,
+                cycle: 2,
+            },
+            Constraint::Range {
+                reg: 5,
+                bits: 1,
+                cycle: 3,
+            },
+        ];
+
+        let circuit = VMExecutionCircuit::new(&program, &trace, &constraints);
+        assert!(circuit.verify().is_ok());
+    }
+
+    #[test]
+    fn vm_execution_circuit_accepts_taken_beq_trace() {
+        let program = build_program(&[
+            wide_enc::encode_branch(wide::control::BEQ, 1, 2, 2),
+            wide_enc::encode_ri(wide::arithmetic::ADDI, 3, 0, 7),
+            wide_enc::encode_halt(),
+        ]);
+
+        let mut s0 = base_state(0);
+        s0.gpr[1] = 9;
+        s0.gpr[2] = 9;
+
+        let mut s1 = s0.clone();
+        s1.pc = 8;
+
+        let mut s2 = s1.clone();
+        s2.pc = 12;
+
+        let trace = vec![s0, s1, s2];
+        let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
+        assert!(circuit.verify().is_ok());
+    }
+
+    #[test]
+    fn vm_execution_circuit_accepts_not_taken_bne_trace() {
+        let program = build_program(&[
+            wide_enc::encode_branch(wide::control::BNE, 1, 2, 2),
+            wide_enc::encode_ri(wide::arithmetic::ADDI, 3, 0, 7),
+            wide_enc::encode_halt(),
+        ]);
+
+        let mut s0 = base_state(0);
+        s0.gpr[1] = 9;
+        s0.gpr[2] = 9;
+
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+
+        let mut s2 = s1.clone();
+        s2.pc = 8;
+        s2.gpr[3] = 7;
+
+        let mut s3 = s2.clone();
+        s3.pc = 12;
+
+        let trace = vec![s0, s1, s2, s3];
+        let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
+        assert!(circuit.verify().is_ok());
+    }
+
+    #[test]
+    fn vm_execution_circuit_rejects_unsupported_opcode() {
+        let program = build_program(&[
+            wide_enc::encode_rr(wide::arithmetic::AND, 3, 1, 2),
+            wide_enc::encode_halt(),
+        ]);
+
+        let mut s0 = base_state(0);
+        s0.gpr[1] = 0xF0;
+        s0.gpr[2] = 0xAA;
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        s1.gpr[3] = s0.gpr[1] & s0.gpr[2];
+
+        let trace = vec![s0, s1];
+        let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
+        assert_eq!(circuit.verify(), Err("unsupported opcode"));
+    }
+
+    #[test]
+    fn vm_execution_circuit_rejects_unexpected_register_drift() {
+        let program = build_program(&[
+            wide_enc::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
+            wide_enc::encode_halt(),
+        ]);
+
+        let mut s0 = base_state(0);
+        s0.gpr[1] = 5;
+        s0.gpr[2] = 7;
+
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        s1.gpr[3] = 12;
+        s1.gpr[8] = 99;
+
+        let mut s2 = s1.clone();
+        s2.pc = 8;
+
+        let trace = vec![s0, s1, s2];
+        let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
+        assert_eq!(circuit.verify(), Err("halo2 constraint failure"));
+    }
+
+    #[test]
+    fn vm_execution_circuit_rejects_constraint_mismatch() {
+        let program = build_program(&[
+            wide_enc::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
+            wide_enc::encode_halt(),
+        ]);
+
+        let mut s0 = base_state(0);
+        s0.gpr[1] = 5;
+        s0.gpr[2] = 7;
+
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        s1.gpr[3] = 12;
+
+        let mut s2 = s1.clone();
+        s2.pc = 8;
+
+        let trace = vec![s0, s1, s2];
+        let constraints = vec![Constraint::Zero { reg: 3, cycle: 1 }];
+        let circuit = VMExecutionCircuit::new(&program, &trace, &constraints);
+        assert_eq!(circuit.verify(), Err("constraint failure"));
     }
 }
 
