@@ -2,12 +2,12 @@ use super::*;
 
 use iroha_data_model::{
     petal_stream::{
-        PetalStreamDecoder, PetalStreamEncoder, PetalStreamGrid, PetalStreamOptions,
-        PetalStreamSampleGrid, PETAL_STREAM_GRID_SIZES,
+        PETAL_STREAM_GRID_SIZES, PetalStreamDecoder, PetalStreamEncoder, PetalStreamGrid,
+        PetalStreamOptions, PetalStreamSampleGrid,
     },
     qr_stream::{
-        QrStreamAssembler, QrStreamDecodeResult, QrStreamEncoder, QrStreamEnvelope,
-        QrStreamFrame, QrStreamFrameKind, QrStreamOptions,
+        QrStreamAssembler, QrStreamDecodeResult, QrStreamEncoder, QrStreamEnvelope, QrStreamFrame,
+        QrStreamFrameKind, QrStreamOptions,
     },
 };
 use norito::json::{Map, Value};
@@ -51,7 +51,7 @@ pub struct PetalEncodeArgs {
     #[arg(long, value_enum, default_value = "unspecified")]
     pub payload_kind: QrPayloadKindArg,
     /// Chunk size in bytes.
-    #[arg(long, default_value_t = 360)]
+    #[arg(long, default_value_t = 140)]
     pub chunk_size: u16,
     /// Parity group size (0 disables parity frames).
     #[arg(long, default_value_t = 0)]
@@ -110,20 +110,27 @@ impl PetalEncodeArgs {
         };
 
         let output_dir = &self.output;
-        fs::create_dir_all(output_dir)
-            .map_err(|err| eyre!("failed to create output dir {}: {err}", output_dir.display()))?;
+        fs::create_dir_all(output_dir).map_err(|err| {
+            eyre!(
+                "failed to create output dir {}: {err}",
+                output_dir.display()
+            )
+        })?;
         let frames_dir = output_dir.join("frames");
-        fs::create_dir_all(&frames_dir)
-            .map_err(|err| eyre!("failed to create frames dir {}: {err}", frames_dir.display()))?;
+        fs::create_dir_all(&frames_dir).map_err(|err| {
+            eyre!(
+                "failed to create frames dir {}: {err}",
+                frames_dir.display()
+            )
+        })?;
 
         let mut manifest_frames: Vec<Value> = Vec::new();
         let mut rendered = Vec::new();
         for (idx, (frame, bytes)) in frames.iter().zip(encoded_frames.iter()).enumerate() {
             let file_name = format!("frame_{idx:04}.bin");
             let path = frames_dir.join(&file_name);
-            fs::write(&path, bytes).map_err(|err| {
-                eyre!("failed to write frame {}: {err}", path.display())
-            })?;
+            fs::write(&path, bytes)
+                .map_err(|err| eyre!("failed to write frame {}: {err}", path.display()))?;
             let mut frame_map = Map::new();
             frame_map.insert("index".to_string(), Value::from(idx as u64));
             frame_map.insert(
@@ -134,10 +141,7 @@ impl PetalEncodeArgs {
                 "file".to_string(),
                 Value::from(format!("frames/{file_name}")),
             );
-            frame_map.insert(
-                "bytes_hex".to_string(),
-                Value::from(hex::encode(bytes)),
-            );
+            frame_map.insert("bytes_hex".to_string(), Value::from(hex::encode(bytes)));
             manifest_frames.push(Value::Object(frame_map));
             if self.format != PetalOutputFormat::Frames {
                 let grid = PetalStreamEncoder::encode_grid(bytes, petal_options)?;
@@ -215,21 +219,27 @@ impl PetalEncodeArgs {
             "payload_kind".to_string(),
             Value::from(self.payload_kind.label()),
         );
-        manifest_map.insert("chunk_size".to_string(), Value::from(self.chunk_size as u64));
+        manifest_map.insert(
+            "chunk_size".to_string(),
+            Value::from(self.chunk_size as u64),
+        );
         manifest_map.insert(
             "parity_group".to_string(),
             Value::from(self.parity_group as u64),
         );
-        manifest_map.insert("grid_size".to_string(), Value::from(resolved_grid_size as u64));
-        manifest_map.insert("border".to_string(), Value::from(petal_options.border as u64));
+        manifest_map.insert(
+            "grid_size".to_string(),
+            Value::from(resolved_grid_size as u64),
+        );
+        manifest_map.insert(
+            "border".to_string(),
+            Value::from(petal_options.border as u64),
+        );
         manifest_map.insert(
             "anchor_size".to_string(),
             Value::from(petal_options.anchor_size as u64),
         );
-        manifest_map.insert(
-            "render_style".to_string(),
-            Value::from(self.style.label()),
-        );
+        manifest_map.insert("render_style".to_string(), Value::from(self.style.label()));
         manifest_map.insert(
             "estimated_payload_bytes_per_second".to_string(),
             Value::from(estimated_payload_bps),
@@ -253,7 +263,10 @@ impl PetalEncodeArgs {
         let manifest_json =
             norito::json::to_string_pretty(&manifest).map_err(|err| eyre!("{err}"))?;
         fs::write(&manifest_path, format!("{manifest_json}\n")).map_err(|err| {
-            eyre!("failed to write manifest {}: {err}", manifest_path.display())
+            eyre!(
+                "failed to write manifest {}: {err}",
+                manifest_path.display()
+            )
         })?;
 
         Ok(())
@@ -301,7 +314,11 @@ impl PetalDecodeArgs {
 
         let mut resolved_grid_size = self.grid_size;
         let petal_options = PetalStreamOptions {
-            grid_size: if self.grid_size == 0 { 0 } else { self.grid_size },
+            grid_size: if self.grid_size == 0 {
+                0
+            } else {
+                self.grid_size
+            },
             border: self.border,
             anchor_size: self.anchor_size,
         };
@@ -335,9 +352,8 @@ impl PetalDecodeArgs {
             ));
         }
         let payload = result.payload.ok_or_else(|| eyre!("payload missing"))?;
-        fs::write(&self.output, payload.as_slice()).map_err(|err| {
-            eyre!("failed to write {}: {err}", self.output.display())
-        })?;
+        fs::write(&self.output, payload.as_slice())
+            .map_err(|err| eyre!("failed to write {}: {err}", self.output.display()))?;
 
         if let Some(path) = self.output_manifest {
             let mut manifest_map = Map::new();
@@ -370,9 +386,8 @@ impl PetalDecodeArgs {
             );
             let manifest = Value::Object(manifest_map);
             let rendered = norito::json::to_string_pretty(&manifest)?;
-            fs::write(&path, format!("{rendered}\n")).map_err(|err| {
-                eyre!("failed to write manifest {}: {err}", path.display())
-            })?;
+            fs::write(&path, format!("{rendered}\n"))
+                .map_err(|err| eyre!("failed to write manifest {}: {err}", path.display()))?;
         }
 
         Ok(())
@@ -413,9 +428,7 @@ pub struct PetalEvalCaptureArgs {
 impl PetalEvalCaptureArgs {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
         if !(0.0..=1.0).contains(&self.min_success_ratio) {
-            return Err(eyre!(
-                "min-success-ratio must be between 0.0 and 1.0"
-            ));
+            return Err(eyre!("min-success-ratio must be between 0.0 and 1.0"));
         }
         let mut entries = fs::read_dir(&self.input_dir)
             .map_err(|err| eyre!("failed to read {}: {err}", self.input_dir.display()))?
@@ -432,17 +445,18 @@ impl PetalEvalCaptureArgs {
             .collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.file_name());
         if entries.is_empty() {
-            return Err(eyre!(
-                "no png frames found in {}",
-                self.input_dir.display()
-            ));
+            return Err(eyre!("no png frames found in {}", self.input_dir.display()));
         }
 
         let mut resolved_grid_size = self.grid_size;
         let mut images = Vec::with_capacity(entries.len());
         let mut expected_bytes = Vec::with_capacity(entries.len());
         let base_options = PetalStreamOptions {
-            grid_size: if self.grid_size == 0 { 0 } else { self.grid_size },
+            grid_size: if self.grid_size == 0 {
+                0
+            } else {
+                self.grid_size
+            },
             border: self.border,
             anchor_size: self.anchor_size,
         };
@@ -495,9 +509,8 @@ impl PetalEvalCaptureArgs {
         );
         if let Some(path) = self.output_report {
             let rendered = norito::json::to_string_pretty(&report)?;
-            fs::write(&path, format!("{rendered}\n")).map_err(|err| {
-                eyre!("failed to write report {}: {err}", path.display())
-            })?;
+            fs::write(&path, format!("{rendered}\n"))
+                .map_err(|err| eyre!("failed to write report {}: {err}", path.display()))?;
         }
 
         if metrics.success_ratio() + f64::EPSILON < self.min_success_ratio {
@@ -586,7 +599,9 @@ enum RenderCellRole {
 fn render_cell_role(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> RenderCellRole {
     let border = options.border as u16;
     let anchor = options.anchor_size as u16;
-    if x < border || y < border || x >= grid_size.saturating_sub(border)
+    if x < border
+        || y < border
+        || x >= grid_size.saturating_sub(border)
         || y >= grid_size.saturating_sub(border)
     {
         return RenderCellRole::Border;
@@ -654,14 +669,7 @@ fn render_petal_frame(
             | PetalRenderStyle::SoraTempleMinimal
             | PetalRenderStyle::SoraTempleRadiant
     ) {
-        return render_sora_temple_frame(
-            grid,
-            dimension,
-            frame_index,
-            frame_count,
-            style,
-            options,
-        );
+        return render_sora_temple_frame(grid, dimension, frame_index, frame_count, style, options);
     }
     let grid_size = grid.grid_size as u32;
     let cell_size = (dimension / grid_size).max(1);
@@ -683,7 +691,8 @@ fn render_petal_frame(
             let mut seed = cell_seed(x, y);
             let jitter_x = (sample_unit(&mut seed) - 0.5) * DATA_PETAL_JITTER;
             let jitter_y = (sample_unit(&mut seed) - 0.5) * DATA_PETAL_JITTER;
-            let angle = (sample_unit(&mut seed) - 0.5) * std::f64::consts::TAU * DATA_PETAL_ROTATION;
+            let angle =
+                (sample_unit(&mut seed) - 0.5) * std::f64::consts::TAU * DATA_PETAL_ROTATION;
             let sway = (sample_unit(&mut seed) - 0.5) * 2.0;
             cell_params.push(CellParam {
                 bit,
@@ -722,10 +731,9 @@ fn render_petal_frame(
             let mut g = lerp(SAKURA_BG_START[1], SAKURA_BG_END[1], t);
             let mut b = lerp(SAKURA_BG_START[2], SAKURA_BG_END[2], t);
 
-            let streak = (nx * SAKURA_WIND_STREAK_FREQ_X
-                + ny * SAKURA_WIND_STREAK_FREQ_Y
-                + wind_angle)
-                .sin();
+            let streak =
+                (nx * SAKURA_WIND_STREAK_FREQ_X + ny * SAKURA_WIND_STREAK_FREQ_Y + wind_angle)
+                    .sin();
             let streak = (streak * 0.5 + 0.5) * SAKURA_WIND_STREAK_ALPHA;
             r = (r + streak).min(1.0);
             g = (g + streak).min(1.0);
@@ -742,7 +750,8 @@ fn render_petal_frame(
 
             let petal_phase = phase * std::f64::consts::TAU;
             for petal_index in 0..SAKURA_BG_PETAL_COUNT {
-                let petal_angle = petal_phase + (petal_index as f64 / SAKURA_BG_PETAL_COUNT as f64) * std::f64::consts::TAU;
+                let petal_angle = petal_phase
+                    + (petal_index as f64 / SAKURA_BG_PETAL_COUNT as f64) * std::f64::consts::TAU;
                 let drift = petal_phase.sin() * 0.05;
                 let petal_cx = 0.5 + petal_angle.cos() * SAKURA_BG_PETAL_ORBIT + wind_dir.0 * drift;
                 let petal_cy = 0.5
@@ -780,9 +789,8 @@ fn render_petal_frame(
                     let ny = ry / DATA_PETAL_MINOR;
                     let dist = nx * nx + ny * ny;
                     if dist <= glow_radius_sq {
-                        let glow = (1.0 - dist / glow_radius_sq)
-                            .clamp(0.0, 1.0)
-                            * DATA_PETAL_GLOW_ALPHA;
+                        let glow =
+                            (1.0 - dist / glow_radius_sq).clamp(0.0, 1.0) * DATA_PETAL_GLOW_ALPHA;
                         r = lerp(r, SAKURA_PETAL[0], glow);
                         g = lerp(g, SAKURA_PETAL[1], glow);
                         b = lerp(b, SAKURA_PETAL[2], glow);
@@ -791,9 +799,7 @@ fn render_petal_frame(
                         r = SAKURA_INK[0];
                         g = SAKURA_INK[1];
                         b = SAKURA_INK[2];
-                        let highlight = (1.0 - dist)
-                            .clamp(0.0, 1.0)
-                            * DATA_PETAL_HIGHLIGHT_ALPHA;
+                        let highlight = (1.0 - dist).clamp(0.0, 1.0) * DATA_PETAL_HIGHLIGHT_ALPHA;
                         r = lerp(r, SAKURA_PETAL[0], highlight);
                         g = lerp(g, SAKURA_PETAL[1], highlight);
                         b = lerp(b, SAKURA_PETAL[2], highlight);
@@ -820,12 +826,7 @@ fn render_petal_frame(
                 }
             }
 
-            rgba.extend_from_slice(&[
-                to_u8(r),
-                to_u8(g),
-                to_u8(b),
-                0xFF,
-            ]);
+            rgba.extend_from_slice(&[to_u8(r), to_u8(g), to_u8(b), 0xFF]);
         }
     }
 
@@ -847,8 +848,8 @@ const SORA_RING_SPEED: [f64; 4] = [0.64, 0.89, 1.08, 1.30];
 const SORA_RING_BAND: f64 = 0.0058;
 const SORA_SCANLINE_ALPHA: f64 = 0.02;
 const SORA_VIGNETTE: f64 = 0.26;
-const SORA_TILE_MARGIN_OUTER: f64 = 0.03;
-const SORA_TILE_MARGIN_LOGO: f64 = 0.007;
+const SORA_TILE_MARGIN_OUTER: f64 = 0.024;
+const SORA_TILE_MARGIN_LOGO: f64 = 0.005;
 const SORA_TILE_GLYPH_ALPHA: f64 = 0.28;
 const SORA_KATAKANA_UNCERTAIN_BAND: u8 = 28;
 const SORA_KATAKANA_CONFIDENCE_MIN: f64 = 0.08;
@@ -875,10 +876,9 @@ const SORA_KATAKANA_BITMAPS: [[u8; 8]; 16] = [
 ];
 
 const IROHA_KATAKANA: [char; 47] = [
-    'イ', 'ロ', 'ハ', 'ニ', 'ホ', 'ヘ', 'ト', 'チ', 'リ', 'ヌ', 'ル', 'ヲ', 'ワ', 'カ', 'ヨ',
-    'タ', 'レ', 'ソ', 'ツ', 'ネ', 'ナ', 'ラ', 'ム', 'ウ', 'ヰ', 'ノ', 'オ', 'ク', 'ヤ', 'マ',
-    'ケ', 'フ', 'コ', 'エ', 'テ', 'ア', 'サ', 'キ', 'ユ', 'メ', 'ミ', 'シ', 'ヱ', 'ヒ', 'モ',
-    'セ', 'ス',
+    'イ', 'ロ', 'ハ', 'ニ', 'ホ', 'ヘ', 'ト', 'チ', 'リ', 'ヌ', 'ル', 'ヲ', 'ワ', 'カ', 'ヨ', 'タ',
+    'レ', 'ソ', 'ツ', 'ネ', 'ナ', 'ラ', 'ム', 'ウ', 'ヰ', 'ノ', 'オ', 'ク', 'ヤ', 'マ', 'ケ', 'フ',
+    'コ', 'エ', 'テ', 'ア', 'サ', 'キ', 'ユ', 'メ', 'ミ', 'シ', 'ヱ', 'ヒ', 'モ', 'セ', 'ス',
 ];
 
 fn render_sora_temple_frame(
@@ -944,7 +944,11 @@ fn render_sora_temple_frame(
             let mut rgb = [
                 lerp(style_cfg.bg_start[0], style_cfg.bg_end[0], nx),
                 lerp(style_cfg.bg_start[1], style_cfg.bg_end[1], ny),
-                lerp(style_cfg.bg_start[2], style_cfg.bg_end[2], 1.0 - radial.min(1.0)),
+                lerp(
+                    style_cfg.bg_start[2],
+                    style_cfg.bg_end[2],
+                    1.0 - radial.min(1.0),
+                ),
             ];
             let core = (1.0 - radial / style_cfg.logo_core_radius).clamp(0.0, 1.0);
             if core > 0.0 {
@@ -1014,12 +1018,7 @@ fn render_sora_temple_frame(
                 }
             }
 
-            rgba.extend_from_slice(&[
-                to_u8(rgb[0]),
-                to_u8(rgb[1]),
-                to_u8(rgb[2]),
-                0xFF,
-            ]);
+            rgba.extend_from_slice(&[to_u8(rgb[0]), to_u8(rgb[1]), to_u8(rgb[2]), 0xFF]);
         }
     }
 
@@ -1114,8 +1113,8 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             ring_band: 0.0072,
             ring_on_alpha: 0.82,
             ring_off_alpha: 0.42,
-            tile_margin_outer: 0.028,
-            tile_margin_logo: 0.006,
+            tile_margin_outer: 0.022,
+            tile_margin_logo: 0.004,
             tile_glyph_alpha: 0.32,
             tile_alpha_regular: 0.985,
             tile_alpha_logo: 0.998,
@@ -1145,8 +1144,8 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             ring_band: 0.0042,
             ring_on_alpha: 0.30,
             ring_off_alpha: 0.12,
-            tile_margin_outer: 0.036,
-            tile_margin_logo: 0.009,
+            tile_margin_outer: 0.028,
+            tile_margin_logo: 0.006,
             tile_glyph_alpha: 0.24,
             tile_alpha_regular: 0.955,
             tile_alpha_logo: 0.992,
@@ -1176,8 +1175,8 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             ring_band: 0.0065,
             ring_on_alpha: 0.74,
             ring_off_alpha: 0.34,
-            tile_margin_outer: 0.03,
-            tile_margin_logo: 0.007,
+            tile_margin_outer: 0.024,
+            tile_margin_logo: 0.005,
             tile_glyph_alpha: 0.34,
             tile_alpha_regular: 0.978,
             tile_alpha_logo: 0.997,
@@ -1241,18 +1240,21 @@ fn blend_sora_data_tile(
     } else {
         style_cfg.tile_margin_outer
     };
-    let margin = if cell_size <= 4 {
+    let mut margin = if cell_size <= 4 {
         0.0
     } else if cell_size <= 6 {
         style_margin.min(0.04)
     } else {
         style_margin
     };
-    if local_x < margin
-        || local_x > 1.0 - margin
-        || local_y < margin
-        || local_y > 1.0 - margin
-    {
+    if cell_size >= 8 {
+        // At larger render sizes, open up each tile so boxes read bolder on screen.
+        margin = (margin * 0.72).max(0.010);
+    }
+    if cell_size >= 10 {
+        margin = (margin * 0.90).max(0.009);
+    }
+    if local_x < margin || local_x > 1.0 - margin || local_y < margin || local_y > 1.0 - margin {
         return;
     }
 
@@ -1267,6 +1269,13 @@ fn blend_sora_data_tile(
         (style_cfg.tile_light_bg, style_cfg.tile_light_fg)
     };
     blend_rgb(rgb, tile_bg, tile_alpha);
+
+    // Add angular UI framing so each tile reads like a sci-fi interface cell.
+    let frame_color = if param.bit {
+        style_cfg.tile_dark_fg
+    } else {
+        style_cfg.tile_light_fg
+    };
     if param.logo {
         let logo_bg = if param.bit {
             style_cfg.logo_dark_bg
@@ -1279,6 +1288,30 @@ fn blend_sora_data_tile(
 
     let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
+    if cell_size >= 8 {
+        let frame_dist = inner_u.min(1.0 - inner_u).min(inner_v.min(1.0 - inner_v));
+        if frame_dist < 0.030 {
+            blend_rgb(rgb, frame_color, if param.logo { 0.12 } else { 0.09 });
+        }
+        let bracket_len = if param.logo { 0.32 } else { 0.26 };
+        let bracket_w = if param.logo { 0.060 } else { 0.052 };
+        let corner_bracket = (inner_u < bracket_len && inner_v < bracket_w)
+            || (inner_u < bracket_w && inner_v < bracket_len)
+            || (inner_u > 1.0 - bracket_len && inner_v < bracket_w)
+            || (inner_u > 1.0 - bracket_w && inner_v < bracket_len)
+            || (inner_u < bracket_len && inner_v > 1.0 - bracket_w)
+            || (inner_u < bracket_w && inner_v > 1.0 - bracket_len)
+            || (inner_u > 1.0 - bracket_len && inner_v > 1.0 - bracket_w)
+            || (inner_u > 1.0 - bracket_w && inner_v > 1.0 - bracket_len);
+        if corner_bracket {
+            blend_rgb(rgb, frame_color, if param.logo { 0.20 } else { 0.14 });
+        }
+        let bus_y = if (gx + gy) % 2 == 0 { 0.34 } else { 0.66 };
+        if (inner_v - bus_y).abs() < 0.018 && inner_u > 0.18 && inner_u < 0.82 {
+            blend_rgb(rgb, frame_color, if param.logo { 0.10 } else { 0.07 });
+        }
+    }
+
     let bitmap = katakana_bitmap(param.kana_pattern, gx, gy);
     if katakana_bitmap_hit(bitmap, inner_u, inner_v) {
         let glyph_alpha = if param.logo {
@@ -1364,8 +1397,8 @@ fn blend_sora_rings(
         let slot_index = slot_center as usize % dots as usize;
         let angular_dist = (slot - slot_center).abs().min(0.5);
         let dot_profile = (1.0 - angular_dist * 2.0).max(0.0).powf(2.2);
-        let bit_index = (ring_offset + slot_index + (stream_signature as usize % 23))
-            % stream_bits.len();
+        let bit_index =
+            (ring_offset + slot_index + (stream_signature as usize % 23)) % stream_bits.len();
         let bit = stream_bits[bit_index];
         let ring_color = if bit {
             style_cfg.ring_bright
@@ -1451,10 +1484,8 @@ fn sample_grid_from_rgba(
             let mut count = 0u64;
             for oy in [0.25, 0.5, 0.75] {
                 for ox in [0.25, 0.5, 0.75] {
-                    let px = offset_x
-                        + ((x as f64 + ox) * cell_size as f64).floor() as u32;
-                    let py = offset_y
-                        + ((y as f64 + oy) * cell_size as f64).floor() as u32;
+                    let px = offset_x + ((x as f64 + ox) * cell_size as f64).floor() as u32;
+                    let py = offset_y + ((y as f64 + oy) * cell_size as f64).floor() as u32;
                     let px = px.min(width - 1);
                     let py = py.min(height - 1);
                     let pixel = image.get_pixel(px, py).0;
@@ -1482,7 +1513,11 @@ fn sample_grid_from_rgba(
     PetalStreamSampleGrid::new(grid_size, samples).map_err(|err| eyre!("{err}"))
 }
 
-fn derive_anchor_threshold(samples: &[u8], grid_size: u16, options: PetalStreamOptions) -> Option<u8> {
+fn derive_anchor_threshold(
+    samples: &[u8],
+    grid_size: u16,
+    options: PetalStreamOptions,
+) -> Option<u8> {
     let mut dark_sum = 0u64;
     let mut dark_count = 0u64;
     let mut light_sum = 0u64;
@@ -1541,9 +1576,9 @@ fn apply_katakana_assist_to_samples(
             if sample.abs_diff(threshold) > SORA_KATAKANA_UNCERTAIN_BAND {
                 continue;
             }
-            let Some((bit, confidence)) = infer_katakana_cell_bit(
-                image, x, y, cell_size, offset_x, offset_y,
-            ) else {
+            let Some((bit, confidence)) =
+                infer_katakana_cell_bit(image, x, y, cell_size, offset_x, offset_y)
+            else {
                 continue;
             };
             if confidence < SORA_KATAKANA_CONFIDENCE_MIN {
@@ -1602,7 +1637,8 @@ fn infer_katakana_cell_bit(
             let px = px.min(width.saturating_sub(1));
             let py = py.min(height.saturating_sub(1));
             let pixel = image.get_pixel(px, py).0;
-            let value = (77u32 * pixel[0] as u32 + 150u32 * pixel[1] as u32 + 29u32 * pixel[2] as u32) >> 8;
+            let value =
+                (77u32 * pixel[0] as u32 + 150u32 * pixel[1] as u32 + 29u32 * pixel[2] as u32) >> 8;
             luma[sy * 8 + sx] = value as u16;
         }
     }
@@ -1769,7 +1805,10 @@ impl CaptureEvalMetrics {
             "min_success_ratio".to_string(),
             Value::from(min_success_ratio),
         );
-        map.insert("frame_count".to_string(), Value::from(self.frame_count as u64));
+        map.insert(
+            "frame_count".to_string(),
+            Value::from(self.frame_count as u64),
+        );
         map.insert(
             "frame_successes".to_string(),
             Value::from(self.frame_successes as u64),
@@ -1993,24 +2032,14 @@ fn evaluate_capture_robustness(
     for (frame_index, (image, expected)) in images.iter().zip(expected_bytes.iter()).enumerate() {
         let mut frame_ok = false;
         for trial in 0..trials_per_frame {
-            let scenario_idx =
-                (frame_index + usize::from(trial)) % scenarios.len();
+            let scenario_idx = (frame_index + usize::from(trial)) % scenarios.len();
             let scenario = scenarios[scenario_idx];
             scenario_metrics[scenario_idx].attempts += 1;
             attempts += 1;
-            let simulated = simulate_capture_frame(
-                image,
-                scenario,
-                frame_index,
-                usize::from(trial),
-                seed,
-            );
-            let decoded = decode_frame_with_alignment_search(
-                &simulated,
-                grid_size,
-                options,
-                search_radius,
-            );
+            let simulated =
+                simulate_capture_frame(image, scenario, frame_index, usize::from(trial), seed);
+            let decoded =
+                decode_frame_with_alignment_search(&simulated, grid_size, options, search_radius);
             let ok = decoded.map(|bytes| bytes == *expected).unwrap_or(false);
             if ok {
                 successes += 1;
@@ -2073,9 +2102,7 @@ fn decode_frame_with_alignment_search(
     Err(eyre!("decode failed after alignment search"))
 }
 
-fn reconstruct_stream_completion(
-    recovered: &[Option<Vec<u8>>],
-) -> Result<(bool, usize, usize)> {
+fn reconstruct_stream_completion(recovered: &[Option<Vec<u8>>]) -> Result<(bool, usize, usize)> {
     let mut assembler = QrStreamAssembler::default();
     let mut final_result: Option<QrStreamDecodeResult> = None;
     for bytes in recovered.iter().flatten() {
@@ -2083,7 +2110,11 @@ fn reconstruct_stream_completion(
         final_result = Some(assembler.ingest_frame(frame)?);
     }
     if let Some(result) = final_result {
-        Ok((result.is_complete(), result.received_chunks, result.total_chunks))
+        Ok((
+            result.is_complete(),
+            result.received_chunks,
+            result.total_chunks,
+        ))
     } else {
         Ok((false, 0, 0))
     }
@@ -2118,17 +2149,18 @@ fn simulate_capture_frame(
         image::imageops::FilterType::CatmullRom,
     );
 
-    let blur_sigma =
-        sample_range(&mut local_seed, scenario.min_blur_sigma as f64, scenario.max_blur_sigma as f64)
-            as f32;
+    let blur_sigma = sample_range(
+        &mut local_seed,
+        scenario.min_blur_sigma as f64,
+        scenario.max_blur_sigma as f64,
+    ) as f32;
     if blur_sigma > 0.01 {
         image = image::imageops::blur(&image, blur_sigma);
     }
 
     if scenario.max_motion_pixels > 0 {
         let motion_span =
-            sample_range(&mut local_seed, 0.0, f64::from(scenario.max_motion_pixels)).round()
-                as u8;
+            sample_range(&mut local_seed, 0.0, f64::from(scenario.max_motion_pixels)).round() as u8;
         if motion_span > 0 {
             image = apply_motion_blur(&image, motion_span, &mut local_seed);
         }
@@ -2153,10 +2185,21 @@ fn simulate_capture_frame(
         scenario.min_brightness_shift,
         scenario.max_brightness_shift,
     );
-    let contrast = sample_range(&mut local_seed, scenario.min_contrast, scenario.max_contrast);
+    let contrast = sample_range(
+        &mut local_seed,
+        scenario.min_contrast,
+        scenario.max_contrast,
+    );
     let gamma = sample_range(&mut local_seed, scenario.min_gamma, scenario.max_gamma);
     let noise = sample_range(&mut local_seed, 0.0, scenario.max_noise);
-    apply_capture_tone(&mut image, brightness, contrast, gamma, noise, &mut local_seed);
+    apply_capture_tone(
+        &mut image,
+        brightness,
+        contrast,
+        gamma,
+        noise,
+        &mut local_seed,
+    );
     image
 }
 
@@ -2411,14 +2454,7 @@ mod tests {
         let payload = b"petal-cli-sora-temple";
         let options = PetalStreamOptions::default();
         let grid = PetalStreamEncoder::encode_grid(payload, options).expect("encode");
-        let image = render_petal_frame(
-            &grid,
-            128,
-            3,
-            12,
-            PetalRenderStyle::SoraTemple,
-            options,
-        );
+        let image = render_petal_frame(&grid, 128, 3, 12, PetalRenderStyle::SoraTemple, options);
         let decoded = decode_frame_with_grid(
             &image,
             grid.grid_size,
@@ -2436,22 +2472,8 @@ mod tests {
         let payload = b"petal-cli-sora-deterministic";
         let options = PetalStreamOptions::default();
         let grid = PetalStreamEncoder::encode_grid(payload, options).expect("encode");
-        let image_a = render_petal_frame(
-            &grid,
-            160,
-            5,
-            24,
-            PetalRenderStyle::SoraTemple,
-            options,
-        );
-        let image_b = render_petal_frame(
-            &grid,
-            160,
-            5,
-            24,
-            PetalRenderStyle::SoraTemple,
-            options,
-        );
+        let image_a = render_petal_frame(&grid, 160, 5, 24, PetalRenderStyle::SoraTemple, options);
+        let image_b = render_petal_frame(&grid, 160, 5, 24, PetalRenderStyle::SoraTemple, options);
         assert_eq!(image_a.as_raw(), image_b.as_raw());
     }
 
@@ -2460,14 +2482,7 @@ mod tests {
         let payload = b"petal-cli-katakana-channel";
         let options = PetalStreamOptions::default();
         let grid = PetalStreamEncoder::encode_grid(payload, options).expect("encode");
-        let image = render_petal_frame(
-            &grid,
-            320,
-            2,
-            12,
-            PetalRenderStyle::SoraTemple,
-            options,
-        );
+        let image = render_petal_frame(&grid, 320, 2, 12, PetalRenderStyle::SoraTemple, options);
         let grid_size = grid.grid_size;
         let cell_size = (image.width() / u32::from(grid_size)).max(1);
         let grid_pixels = u32::from(grid_size) * cell_size;
@@ -2497,7 +2512,10 @@ mod tests {
         }
         assert!(compared > 128, "insufficient katakana samples: {compared}");
         let accuracy = matched as f64 / compared as f64;
-        assert!(accuracy > 0.72, "katakana bit accuracy too low: {accuracy:.3}");
+        assert!(
+            accuracy > 0.72,
+            "katakana bit accuracy too low: {accuracy:.3}"
+        );
     }
 
     #[test]
@@ -2556,9 +2574,8 @@ mod tests {
             PetalRenderStyle::SakuraWind,
             PetalStreamOptions::default(),
         );
-        let samples =
-            sample_grid_from_rgba(&image, grid.grid_size, PetalStreamOptions::default())
-                .expect("samples");
+        let samples = sample_grid_from_rgba(&image, grid.grid_size, PetalStreamOptions::default())
+            .expect("samples");
         let decoded = PetalStreamDecoder::decode_samples(&samples, PetalStreamOptions::default())
             .expect("decode");
         assert_eq!(decoded, payload);
@@ -2617,12 +2634,10 @@ mod tests {
             .map(QrStreamFrame::encode)
             .collect::<Vec<_>>();
         let max_len = frame_bytes.iter().map(Vec::len).max().unwrap_or_default();
-        let resolved_grid_size = PetalStreamEncoder::encode_grid(
-            &vec![0u8; max_len],
-            PetalStreamOptions::default(),
-        )
-        .expect("grid resolve")
-        .grid_size;
+        let resolved_grid_size =
+            PetalStreamEncoder::encode_grid(&vec![0u8; max_len], PetalStreamOptions::default())
+                .expect("grid resolve")
+                .grid_size;
         let petal_options = PetalStreamOptions {
             grid_size: resolved_grid_size,
             ..PetalStreamOptions::default()
@@ -2669,7 +2684,8 @@ mod tests {
             parity_group: 0,
             ..QrStreamOptions::default()
         };
-        let (_envelope, frames) = QrStreamEncoder::encode_frames(&payload, options).expect("encode");
+        let (_envelope, frames) =
+            QrStreamEncoder::encode_frames(&payload, options).expect("encode");
         let bps = estimate_payload_bytes_per_second(payload.len(), frames.len(), 24);
         assert!(bps >= 3_000, "estimated throughput too low: {bps} B/s");
     }

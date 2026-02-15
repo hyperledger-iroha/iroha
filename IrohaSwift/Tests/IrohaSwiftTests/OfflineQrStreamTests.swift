@@ -72,6 +72,54 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertEqual(decoded, payload)
     }
 
+    func testSakuraStormPlaybackSkinMatchesPreset() {
+        XCTAssertEqual(OfflineQrStreamPlaybackSkin.sakuraStorm.name, "sakura-storm")
+        XCTAssertEqual(OfflineQrStreamPlaybackSkin.sakuraStorm.frameRate, 12)
+        XCTAssertEqual(OfflineQrStreamPlaybackSkin.sakuraStorm.petalDriftSpeed, 0.6)
+        XCTAssertEqual(OfflineQrStreamPlaybackSkin.sakuraStorm.progressOverlayAlpha, 0.34)
+        XCTAssertEqual(OfflineQrStreamPlaybackSkin.sakuraStorm.theme.backgroundStart.red, 0.05)
+        XCTAssertEqual(OfflineQrStreamPlaybackSkin.sakuraStorm.theme.backgroundEnd.blue, 0.04)
+    }
+
+    func testSakuraStormScanSessionPresetRecoversDroppedFrame() throws {
+        let payload = makePayload(length: 6 * 1024)
+        let frames = try OfflineQrStreamEncoder.encodeFrames(
+            payload: payload,
+            payloadKind: .offlineSpendReceipt,
+            options: OfflineQrStreamOptions(chunkSize: 336, parityGroup: 4)
+        )
+        let header = try XCTUnwrap(frames.first(where: { $0.kind == .header }))
+        let dataFrames = frames.filter { $0.kind == .data }
+        let parityFrames = frames.filter { $0.kind == .parity }
+        XCTAssertFalse(dataFrames.isEmpty)
+        XCTAssertFalse(parityFrames.isEmpty)
+
+        let dropped = try XCTUnwrap(dataFrames.first(where: { $0.index == 1 }))
+        let session = OfflineQrStreamScanSession()
+        _ = try session.ingest(
+            frameString: OfflineQrStreamTextCodec.encode(header.encode(), encoding: .base64),
+            encoding: .base64
+        )
+
+        var result: OfflineQrStreamDecodeResult?
+        for frame in dataFrames where frame.index != dropped.index {
+            result = try session.ingest(
+                frameString: OfflineQrStreamTextCodec.encode(frame.encode(), encoding: .base64),
+                encoding: .base64
+            )
+        }
+        for frame in parityFrames {
+            result = try session.ingest(
+                frameString: OfflineQrStreamTextCodec.encode(frame.encode(), encoding: .base64),
+                encoding: .base64
+            )
+        }
+        let final = try XCTUnwrap(result)
+        XCTAssertTrue(final.isComplete)
+        XCTAssertEqual(final.payload, payload)
+        XCTAssertEqual(final.recoveredChunks, 1)
+    }
+
     private func makePayload(length: Int) -> Data {
         var bytes = [UInt8](repeating: 0, count: length)
         for index in bytes.indices {

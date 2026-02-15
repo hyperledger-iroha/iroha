@@ -11,6 +11,8 @@ import {
   encodeQrFrameText,
   decodeQrFrameText,
   scanQrStreamFrames,
+  sakuraStormQrStreamTheme,
+  sakuraStormQrStreamSkin,
 } from "../src/offlineQrStream.js";
 
 function buildPayload(size = 1200) {
@@ -124,4 +126,54 @@ test("offline qr stream fixtures round-trip", () => {
   assert.ok(result);
   assert.equal(result.isComplete, true);
   assert.deepEqual(result.payload, payload);
+});
+
+test("offline qr stream sakura-storm skin matches preset", () => {
+  assert.equal(sakuraStormQrStreamTheme.name, "sakura-storm");
+  assert.deepEqual(sakuraStormQrStreamTheme.backgroundStart, {
+    red: 0.05,
+    green: 0.02,
+    blue: 0.08,
+  });
+  assert.equal(sakuraStormQrStreamSkin.name, "sakura-storm");
+  assert.equal(sakuraStormQrStreamSkin.frameRate, 12);
+  assert.equal(sakuraStormQrStreamSkin.petalDriftSpeed, 0.6);
+  assert.equal(sakuraStormQrStreamSkin.progressOverlayAlpha, 0.34);
+});
+
+test("offline qr stream sakura-storm preset recovers dropped frame in scan loop", () => {
+  const payload = buildPayload(6 * 1024);
+  const frames = OfflineQrStreamEncoder.encodeFrames(payload, {
+    chunkSize: 336,
+    parityGroup: 4,
+  });
+  const header = frames.find((frame) => frame.kind === OfflineQrStreamFrameKind.header);
+  const dataFrames = frames.filter((frame) => frame.kind === OfflineQrStreamFrameKind.data);
+  const parityFrames = frames.filter((frame) => frame.kind === OfflineQrStreamFrameKind.parity);
+  assert.ok(header);
+  assert.equal(dataFrames.length > 0, true);
+  assert.equal(parityFrames.length > 0, true);
+
+  const session = new OfflineQrStreamScanSession({
+    frameEncoding: OfflineQrStreamFrameEncoding.base64,
+  });
+  session.ingest(encodeQrFrameText(header.encode(), OfflineQrStreamFrameEncoding.base64));
+  let result = null;
+  for (const frame of dataFrames) {
+    if (frame.index === 1) {
+      continue;
+    }
+    result = session.ingest(
+      encodeQrFrameText(frame.encode(), OfflineQrStreamFrameEncoding.base64),
+    );
+  }
+  for (const frame of parityFrames) {
+    result = session.ingest(
+      encodeQrFrameText(frame.encode(), OfflineQrStreamFrameEncoding.base64),
+    );
+  }
+  assert.ok(result);
+  assert.equal(result.isComplete, true);
+  assert.deepEqual(result.payload, payload);
+  assert.equal(result.recoveredChunks, 1);
 });

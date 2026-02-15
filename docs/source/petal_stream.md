@@ -86,3 +86,6 @@ iroha offline petal eval-capture --input-dir ./petal_out/png --profile default -
 `eval-capture` applies deterministic perturbations (distance downscale, blur, motion blur,
 jitter, exposure/noise shifts), decodes each perturbed frame, and fails if the success ratio
 drops below the configured threshold.
+
+For operator-facing QR transport presets (`ecc`/dimension/fps) in noisy camera conditions, see
+`docs/source/offline_qr_operator_runbook.md`.
