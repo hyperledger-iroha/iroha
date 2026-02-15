@@ -412,6 +412,52 @@ public enum AccountId {
         let ih58 = try address.toIH58(networkPrefix: networkPrefix)
         return ih58
     }
+
+    /// Normalizes account id literals for equality checks across systems that sometimes append `@domain` to IH58
+    /// addresses.
+    ///
+    /// Semantics:
+    /// - If the literal is an `AccountAddress` (IH58/compressed/canonical hex), returns the canonical IH58 rendering
+    ///   of the address and ignores any `@domain` suffix.
+    /// - Otherwise, trims outer whitespace and (when possible) canonicalizes the domain label casing in `addr@domain`
+    ///   forms.
+    public static func normalizeForComparison(
+        _ literal: String,
+        expectedPrefix: UInt16 = defaultNetworkPrefix
+    ) -> String {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let addressCandidate: String
+        if let at = trimmed.firstIndex(of: "@") {
+            addressCandidate = String(trimmed[..<at])
+        } else {
+            addressCandidate = trimmed
+        }
+        if let (address, _) = try? AccountAddress.parseAny(addressCandidate, expectedPrefix: expectedPrefix),
+           let ih58 = try? address.toIH58(networkPrefix: expectedPrefix) {
+            return ih58
+        }
+
+        if let at = trimmed.firstIndex(of: "@") {
+            let addressPart = String(trimmed[..<at])
+            let domainPart = String(trimmed[trimmed.index(after: at)...])
+            if !addressPart.isEmpty, !domainPart.isEmpty,
+               let canonicalDomain = try? AccountAddress.canonicalizeDomainLabel(domainPart) {
+                return "\(addressPart)@\(canonicalDomain)"
+            }
+        }
+        return trimmed
+    }
+
+    /// Returns true when both account id literals refer to the same address under `normalizeForComparison`.
+    public static func matchesForComparison(
+        _ lhs: String,
+        _ rhs: String,
+        expectedPrefix: UInt16 = defaultNetworkPrefix
+    ) -> Bool {
+        normalizeForComparison(lhs, expectedPrefix: expectedPrefix) == normalizeForComparison(rhs, expectedPrefix: expectedPrefix)
+    }
 }
 
 public enum Secp256k1Error: Error, LocalizedError, Sendable {
