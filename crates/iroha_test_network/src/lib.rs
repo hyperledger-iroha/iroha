@@ -33,9 +33,9 @@ use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_config::{
     base::{
+        ParameterOrigin,
         env::MockEnv,
         read::ConfigReader,
-        ParameterOrigin,
         toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
     },
     parameters::actual::{ConsensusMode, SumeragiNposTimeoutOverrides},
@@ -44,7 +44,9 @@ use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
-use iroha_crypto::{Algorithm, Hash as CryptoHash, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{
+    Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey,
+};
 #[cfg(test)]
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
@@ -2267,7 +2269,7 @@ impl Network {
 
     /// Chain ID of the network
     pub fn chain_id(&self) -> ChainId {
-        config::chain_id()
+        self.consensus_profile.chain_id.clone()
     }
 
     /// Torii URLs for all peers in the network.
@@ -2373,6 +2375,7 @@ impl Network {
             self.peers.iter().map(NetworkPeer::id).collect(),
             self.topology_entries.clone(),
             self.genesis_key_pair.clone(),
+            self.chain_id(),
             da_proof_policies,
             nexus_config,
             Some(consensus_handshake_meta),
@@ -3275,11 +3278,13 @@ fn resolve_kura_store_dir(
 ) -> (PathBuf, String, String) {
     const DEFAULT_KURA_STORE_DIR_KEY: &str = "kura.store_dir (unresolved)";
     resolve_actual_config(peer, config_layers).map_or_else(
-        || (
-            peer.dir.join("storage"),
-            DEFAULT_KURA_STORE_DIR_KEY.to_string(),
-            "./storage".to_string(),
-        ),
+        || {
+            (
+                peer.dir.join("storage"),
+                DEFAULT_KURA_STORE_DIR_KEY.to_string(),
+                "./storage".to_string(),
+            )
+        },
         |config| {
             let (store_dir, origin) = config.kura.store_dir.into_tuple();
             let value = store_dir.to_string_lossy().to_string();
@@ -3630,6 +3635,53 @@ fn replace_consensus_handshake_meta(genesis_isi: &mut Vec<Vec<InstructionBox>>) 
     was_replaced
 }
 
+fn consensus_parameters_from_genesis(
+    genesis: &GenesisBlock,
+) -> iroha_data_model::parameter::Parameters {
+    let mut parameter_state = iroha_data_model::parameter::Parameters::default();
+    for tx in genesis.0.external_transactions() {
+        if let Executable::Instructions(instructions) = tx.instructions() {
+            for instruction in instructions {
+                if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
+                    parameter_state.set_parameter(set_param.inner().clone());
+                }
+            }
+        }
+    }
+    parameter_state
+}
+
+fn replace_da_enabled_parameter(genesis_isi: &mut Vec<Vec<InstructionBox>>, da_enabled: bool) {
+    let is_da_enabled_parameter = |instruction: &InstructionBox| {
+        instruction
+            .as_any()
+            .downcast_ref::<SetParameter>()
+            .is_some_and(|set_param| {
+                matches!(
+                    set_param.inner(),
+                    Parameter::Sumeragi(SumeragiParameter::DaEnabled(_))
+                )
+            })
+    };
+
+    for instructions in genesis_isi.iter_mut() {
+        instructions.retain(|instruction| !is_da_enabled_parameter(instruction));
+    }
+
+    let da_parameter = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+        SumeragiParameter::DaEnabled(da_enabled),
+    )));
+
+    if genesis_isi.is_empty() {
+        genesis_isi.push(vec![da_parameter]);
+    } else {
+        genesis_isi
+            .first_mut()
+            .expect("at least one genesis transaction")
+            .insert(0, da_parameter);
+    }
+}
+
 fn genesis_instructions_contain_consensus_handshake_meta(
     genesis_isi: &[Vec<InstructionBox>],
     consensus_handshake_meta: &Parameter,
@@ -3641,15 +3693,18 @@ fn genesis_instructions_contain_consensus_handshake_meta(
         _ => return false,
     };
 
-    genesis_isi.iter().flat_map(|tx| tx.iter()).any(|instruction| {
-        instruction
-            .as_any()
-            .downcast_ref::<SetParameter>()
-            .is_some_and(|set_param| match set_param.inner() {
-                Parameter::Custom(custom) => custom == expected_meta,
-                _ => false,
-            })
-    })
+    genesis_isi
+        .iter()
+        .flat_map(|tx| tx.iter())
+        .any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set_param| match set_param.inner() {
+                    Parameter::Custom(custom) => custom == expected_meta,
+                    _ => false,
+                })
+        })
 }
 
 fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
@@ -3660,8 +3715,11 @@ fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -
         _ => return false,
     };
 
-    block.0.transactions_vec().iter().any(|tx| {
-        match tx.instructions() {
+    block
+        .0
+        .transactions_vec()
+        .iter()
+        .any(|tx| match tx.instructions() {
             Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
                 instruction
                     .as_any()
@@ -3672,8 +3730,7 @@ fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -
                     })
             }),
             _ => false,
-        }
-    })
+        })
 }
 
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
@@ -3682,10 +3739,7 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         _ => "Permissioned",
     };
     let mut handshake_fields = json::Map::new();
-    handshake_fields.insert(
-        "mode".to_string(),
-        JsonValue::String(mode.to_string()),
-    );
+    handshake_fields.insert("mode".to_string(), JsonValue::String(mode.to_string()));
     handshake_fields.insert(
         "bls_domain".to_string(),
         JsonValue::String(consensus_profile.bls_domain.to_string()),
@@ -4264,8 +4318,7 @@ impl NetworkBuilder {
         let npos_params_from_config = |config: &iroha_config::parameters::actual::Root| {
             let npos = &config.sumeragi.npos;
             let collectors = &config.sumeragi.collectors;
-            let chain_hash =
-                CryptoHash::new(config.common.chain.clone().into_inner().as_bytes());
+            let chain_hash = CryptoHash::new(config.common.chain.clone().into_inner().as_bytes());
             let epoch_seed: [u8; 32] = chain_hash.into();
             let mut fallback = SumeragiNposParameters::default();
             fallback.epoch_length_blocks = npos.epoch_length_blocks.max(1);
@@ -4278,7 +4331,8 @@ impl NetworkBuilder {
             fallback.max_validators = npos.election.max_validators;
             fallback.min_self_bond = npos.election.min_self_bond;
             fallback.min_nomination_bond = npos.election.min_nomination_bond;
-            fallback.max_nominator_concentration_pct = npos.election.max_nominator_concentration_pct;
+            fallback.max_nominator_concentration_pct =
+                npos.election.max_nominator_concentration_pct;
             fallback.seat_band_pct = npos.election.seat_band_pct;
             fallback.max_entity_correlation_pct = npos.election.max_entity_correlation_pct;
             fallback.finality_margin_blocks = npos.election.finality_margin_blocks;
@@ -4406,23 +4460,29 @@ impl NetworkBuilder {
             genesis_post_topology_isi.push(validator_tx);
         }
 
-        // Build a preview genesis so we can derive the consensus fingerprint from the
-        // actual on-chain parameters (including the built-in genesis scaffolding).
-        let preview_genesis = genesis_factory(
+        replace_da_enabled_parameter(&mut genesis_isi, da_enabled);
+        replace_da_enabled_parameter(&mut genesis_post_topology_isi, da_enabled);
+
+        // Build consensus parameters from the effective genesis instructions (base + post-topology),
+        // so consensus metadata is consistent with the final submitted genesis layout.
+        let da_proof_policies = resolved_npos_config
+            .as_ref()
+            .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+        let nexus_config = resolved_npos_config
+            .as_ref()
+            .map(|config| config.nexus.clone());
+        let preview_genesis = config::genesis_with_keypair_and_post_topology_with_policies(
             genesis_isi.clone(),
+            genesis_post_topology_isi.clone(),
             peer_ids.clone(),
             topology_entries.clone(),
+            genesis_key_pair.clone(),
+            consensus_chain_id.clone(),
+            da_proof_policies,
+            nexus_config,
+            None,
         );
-        let mut parameter_state = iroha_data_model::parameter::Parameters::default();
-        for tx in preview_genesis.0.external_transactions() {
-            if let Executable::Instructions(batch) = tx.instructions() {
-                for instruction in batch {
-                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
-                        parameter_state.set_parameter(set_param.inner().clone());
-                    }
-                }
-            }
-        }
+        let parameter_state = consensus_parameters_from_genesis(&preview_genesis);
         let npos_timeout_overrides = resolved_npos_config
             .as_ref()
             .map(|config| config.sumeragi.npos.timeouts_overrides)
@@ -4583,7 +4643,8 @@ impl NetworkBuilder {
             &genesis_post_topology_isi,
             &consensus_handshake_meta,
         )) {
-            let instruction = InstructionBox::from(SetParameter::new(consensus_handshake_meta.clone()));
+            let instruction =
+                InstructionBox::from(SetParameter::new(consensus_handshake_meta.clone()));
             if genesis_isi.is_empty() {
                 genesis_isi.push(vec![instruction]);
             } else {
@@ -4598,7 +4659,8 @@ impl NetworkBuilder {
         let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
             .expect("block gossip period fits in i64 milliseconds");
 
-        let mut base_layer = config::base_iroha_config();
+        let mut base_layer =
+            config::base_iroha_config().write("chain", consensus_chain_id.to_string());
         base_layer = base_layer
             .write(["network", "block_gossip_period_ms"], gossip_ms)
             // Fan-out gossip to all peers so block sync converges quickly in multi-peer
@@ -4910,7 +4972,8 @@ impl NetworkPeer {
         let has_genesis = genesis.is_some();
         span.in_scope(|| info!(has_genesis, "Starting"));
 
-        let storage_layers: Vec<Table> = config_layers.map(|layer| layer.as_ref().clone()).collect();
+        let storage_layers: Vec<Table> =
+            config_layers.map(|layer| layer.as_ref().clone()).collect();
         let (storage_dir, storage_dir_key, storage_dir_value) =
             resolve_kura_store_dir(self, &storage_layers);
 
@@ -4928,8 +4991,8 @@ impl NetworkPeer {
                 .startup_probe
                 .lock()
                 .expect("startup probe should not be poisoned");
-        *probe = PeerStartupProbe::default();
-    }
+            *probe = PeerStartupProbe::default();
+        }
 
         let config_layers: Vec<Table> = storage_layers;
         let config_path = self
@@ -5546,7 +5609,9 @@ impl NetworkPeer {
             Some(PeerLifecycleEvent::ServerStarted) => Ok(()),
             Some(PeerLifecycleEvent::Terminated { status }) => {
                 let err = if let Some(preview) = self.stderr_preview() {
-                    eyre!("Peer exited unexpectedly ({status:?}); {context}; stderr preview:\n{preview}")
+                    eyre!(
+                        "Peer exited unexpectedly ({status:?}); {context}; stderr preview:\n{preview}"
+                    )
                 } else {
                     eyre!("Peer exited unexpectedly ({status:?}); {context}")
                 };
@@ -5808,7 +5873,11 @@ impl NetworkPeer {
         self.dir.join("storage")
     }
 
-    fn prepare_kura_storage_dir(&self, storage_dir: &Path, reset_for_bootstrap: bool) -> Result<()> {
+    fn prepare_kura_storage_dir(
+        &self,
+        storage_dir: &Path,
+        reset_for_bootstrap: bool,
+    ) -> Result<()> {
         if reset_for_bootstrap {
             match fs::symlink_metadata(storage_dir) {
                 Ok(meta) => {
@@ -5863,7 +5932,7 @@ impl NetworkPeer {
             Err(err) if err.kind() != ErrorKind::NotFound => {
                 return Err(err).wrap_err_with(|| {
                     format!("failed to inspect storage path {}", storage_dir.display())
-                })
+                });
             }
             Err(_) => {}
         }
@@ -8852,11 +8921,6 @@ exit 0
             "genesis should encode DA enablement"
         );
         let reconstructed = reconstructed_consensus_params(&genesis);
-        eprintln!(
-            "profile params = {:?}\nreconstructed params = {:?}",
-            profile.params,
-            reconstructed
-        );
         assert_eq!(
             reconstructed.block_time_ms, profile.params.block_time_ms,
             "genesis parameters should preserve block timing"
@@ -8887,20 +8951,6 @@ exit 0
             profile.mode_tag,
         );
         let expected = format!("0x{}", hex_lower(&expected_bytes));
-        let mut metadatas = Vec::<JsonValue>::new();
-        for parameter in collect_set_parameters(&genesis) {
-            if let Parameter::Custom(custom) = parameter
-                && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom.payload().try_into_any()
-            {
-                metadatas.push(payload);
-            }
-        }
-        eprintln!("consensus profile fingerprint = {expected}");
-        eprintln!(
-            "genesis consensus handshakes = {metadatas:#?} (count={})",
-            metadatas.len()
-        );
         assert_eq!(
             actual.to_ascii_lowercase(),
             expected,
@@ -9015,6 +9065,39 @@ exit 0
         assert_eq!(
             actual, expected,
             "consensus fingerprint must respect NPoS timeout overrides"
+        );
+    }
+
+    #[test]
+    fn genesis_consensus_metadata_includes_post_topology_parameters() {
+        init_instruction_registry();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_genesis_post_topology_isi(vec![
+                InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::CommitTimeMs(7_500),
+                ))),
+            ]));
+
+        let genesis = network.genesis();
+        let actual = consensus_fingerprint_from_block(&genesis)
+            .expect("genesis should contain consensus fingerprint")
+            .to_ascii_lowercase();
+        let profile = network.consensus_bootstrap_profile();
+        let expected_bytes = compute_consensus_fingerprint_from_params(
+            &network.chain_id(),
+            &profile.params,
+            profile.mode_tag,
+        );
+        let expected = format!("0x{}", hex_lower(&expected_bytes));
+        let reconstructed = reconstructed_consensus_params(&genesis);
+
+        assert_eq!(
+            actual, expected,
+            "post-topology consensus params should affect fingerprint"
+        );
+        assert_eq!(
+            reconstructed.commit_time_ms, 7_500,
+            "post-topology commit time should be visible in final genesis consensus params"
         );
     }
 
@@ -9688,20 +9771,65 @@ exit 0
         let _disable_da = disable_sumeragi_env_overrides();
         let network = NetworkBuilder::new().build();
         let isi = network.genesis_isi();
-        let has_da_enabled_set_parameter = isi.iter().flatten().any(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<SetParameter>()
-                .is_some_and(|set_param| {
-                    matches!(
-                        set_param.inner(),
-                        Parameter::Sumeragi(SumeragiParameter::DaEnabled(true))
-                    )
-                })
-        });
-        assert!(
-            has_da_enabled_set_parameter,
-            "default builder must inject DA enablement parameter"
+        let da_enabled_values = isi
+            .iter()
+            .flatten()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .and_then(|set_param| {
+                        if let Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) =
+                            set_param.inner()
+                        {
+                            Some(*value)
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            da_enabled_values,
+            vec![true],
+            "default builder must inject a canonical DA enablement parameter"
+        );
+    }
+
+    #[test]
+    fn builder_replaces_conflicting_da_enabled_parameter_with_resolved_value() {
+        let _guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
+        let _disable_da = disable_sumeragi_env_overrides();
+        let conflict = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )));
+        let network = NetworkBuilder::new()
+            .with_genesis_instruction(conflict)
+            .with_data_availability_enabled(false)
+            .build();
+        let isi = network.genesis_isi();
+        let da_enabled_values = isi
+            .iter()
+            .flatten()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .and_then(|set_param| {
+                        if let Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) =
+                            set_param.inner()
+                        {
+                            Some(*value)
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            da_enabled_values,
+            vec![true],
+            "conflicting DA parameters must be canonicalized to resolved value"
         );
     }
 
