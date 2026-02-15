@@ -47,6 +47,18 @@ The JSON DTOs mirror the `iroha_data_model::proof` payloads. Inline VK bytes rem
   - Optional `vk_ref` and `vk_commitment`
 - ZK1/TLV envelopes are inspected at verification time. Recognised 4-byte tags are recorded lazily to power tag-based queries.
 
+### IVM execution prove statement (`ivm-execution-v1`)
+
+- `POST /v1/zk/ivm/derive` and `POST /v1/zk/ivm/prove` execute the supplied IVM bytecode on-node using request context (`authority`, `metadata`, `bytecode`; metadata must include `gas_limit`).
+- The proof statement for `ivm-execution-v1` binds four commitments as public inputs:
+  - `code_hash`
+  - `overlay_hash`
+  - `events_commitment`
+  - `gas_policy_commitment`
+- Torii derives the authoritative `IvmProved` payload from deterministic execution before proving. If clients supply an optional `proved` object, Torii treats it as a strict consistency check and rejects mismatches.
+- Witness inputs are node-local execution artefacts (program body, tx context, deterministic execution trace/host effects needed to derive the commitments). Plaintext `gas_used` is not exposed by the app API.
+- Admission verifies proof bindings and backend proof validity, then deterministically replays execution by default. Replay skipping is controlled by `pipeline.ivm_proved.skip_replay` and is intended only for full-semantics execution circuits.
+
 ### Query surface
 
 `/v1/zk/proofs` and `/v1/zk/proofs/count` expose the ledger-facing records:

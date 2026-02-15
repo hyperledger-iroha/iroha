@@ -148,6 +148,13 @@ Recommended defaults:
 - ECC: `M` (balanced) or `Q` for noisy environments
 - FPS: 10–12 for standard devices, 6–8 for reduced-motion/low-power modes
 
+Reliable ~3 KB/s profile (with parity enabled):
+
+- `chunk_size=336`
+- `parity_group=4`
+- `fps=12`
+- Effective payload rate: around `3` KB/s on medium/large payloads (recorded in CLI manifests as `estimated_payload_bytes_per_second`, computed from payload bytes and rendered frame count)
+
 ## 8. Assembler limits
 
 The default assembler limits enforced by `iroha_data_model::qr_stream`:
@@ -179,7 +186,7 @@ Use `--check` to verify fixtures are up to date.
 Encode payloads into frames + images:
 
 ```
-iroha offline qr encode --input payload.bin --output ./qr_out --format gif --ecc m --fps 12 --style sakura-wind
+iroha offline qr encode --input payload.bin --output ./qr_out --format gif --ecc q --fps 12 --chunk-size 336 --parity-group 4 --style sakura-storm
 ```
 
 Decode raw frame bytes:

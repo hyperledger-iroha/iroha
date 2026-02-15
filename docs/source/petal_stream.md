@@ -6,7 +6,7 @@ title: Petal Stream Transport
 
 Petal Stream is an optional, custom optical transport for offline payloads. It reuses the
 `QrStreamFrame` bytes produced by the existing QR stream encoder but renders them as a
-sakura-inspired particle field instead of a rigid QR grid. Petal Stream **requires a custom
+stylized optical frame instead of a rigid QR grid. Petal Stream **requires a custom
 scanner** on each platform; standard QR scanners will not decode it.
 
 ## 2. Frame header (PS1)
@@ -58,15 +58,31 @@ accept the first size that yields a valid header + CRC.
 
 ## 5. Animation guidance
 
-For a smooth 24 fps loop, keep the **data layer** stable and overlay a low-contrast
-petal field that drifts with a sinusoidal wind phase. Use luminance contrast for data
-petals; avoid relying solely on color because display filters and camera pipelines
-can shift hues.
+The `sora-temple` renderer keeps all payload bits in Petal grid cells, and adds
+data-derived ornamentation:
+
+- Data cells are rendered as katakana tiles (iroha ordering, including archaic forms).
+- The central SORA logo silhouette (`天`) is composed from high-density data tiles.
+- Three concentric ring bands are dotted with redundant, data-driven symbols.
+- Anchor cells remain high-contrast for threshold calibration.
+
+Use luminance contrast (not hue alone) for the decode-critical layers so camera color
+pipelines do not collapse bit separation.
 
 ## 6. CLI preview
 
-```
-iroha offline petal encode --input payload.bin --output ./petal_out --format gif --fps 24
+`encode` example:
+
+```bash
+iroha offline petal encode --input payload.bin --output ./petal_out --format gif --fps 24 --style sora-temple
 ```
 
-This command renders a sakura wind preview of Petal Stream frames.
+`eval-capture` example (distance/motion robustness gate):
+
+```bash
+iroha offline petal eval-capture --input-dir ./petal_out/png --profile default --min-success-ratio 0.95 --output-report ./petal_out/capture_eval.json
+```
+
+`eval-capture` applies deterministic perturbations (distance downscale, blur, motion blur,
+jitter, exposure/noise shifts), decodes each perturbed frame, and fails if the success ratio
+drops below the configured threshold.

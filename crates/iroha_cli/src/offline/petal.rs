@@ -25,6 +25,8 @@ pub enum PetalCommand {
     Encode(PetalEncodeArgs),
     /// Decode petal stream frames into the original payload.
     Decode(PetalDecodeArgs),
+    /// Evaluate decode robustness under simulated distant/moving capture.
+    EvalCapture(PetalEvalCaptureArgs),
 }
 
 impl Run for PetalCommand {
@@ -32,6 +34,7 @@ impl Run for PetalCommand {
         match self {
             PetalCommand::Encode(args) => args.run(context),
             PetalCommand::Decode(args) => args.run(context),
+            PetalCommand::EvalCapture(args) => args.run(context),
         }
     }
 }
@@ -72,7 +75,7 @@ pub struct PetalEncodeArgs {
     #[arg(long, default_value_t = 24)]
     pub fps: u16,
     /// Render style for preview images (ignored for --format frames).
-    #[arg(long, value_enum, default_value = "sakura-wind")]
+    #[arg(long, value_enum, default_value = "sora-temple")]
     pub style: PetalRenderStyle,
 }
 
@@ -205,6 +208,8 @@ impl PetalEncodeArgs {
         }
 
         let mut manifest_map = Map::new();
+        let estimated_payload_bps =
+            estimate_payload_bytes_per_second(payload.len(), frames.len(), self.fps);
         manifest_map.insert("version".to_string(), Value::from(1u64));
         manifest_map.insert(
             "payload_kind".to_string(),
@@ -220,6 +225,14 @@ impl PetalEncodeArgs {
         manifest_map.insert(
             "anchor_size".to_string(),
             Value::from(petal_options.anchor_size as u64),
+        );
+        manifest_map.insert(
+            "render_style".to_string(),
+            Value::from(self.style.label()),
+        );
+        manifest_map.insert(
+            "estimated_payload_bytes_per_second".to_string(),
+            Value::from(estimated_payload_bps),
         );
         manifest_map.insert("frame_count".to_string(), Value::from(frames.len() as u64));
         manifest_map.insert(
@@ -366,6 +379,146 @@ impl PetalDecodeArgs {
     }
 }
 
+#[derive(clap::Args, Debug)]
+pub struct PetalEvalCaptureArgs {
+    /// Directory containing rendered PNG frames.
+    #[arg(long, value_name = "DIR")]
+    pub input_dir: PathBuf,
+    /// Grid size in cells (0 to auto-detect from pristine frames).
+    #[arg(long, default_value_t = 0)]
+    pub grid_size: u16,
+    /// Border thickness in cells.
+    #[arg(long, default_value_t = 1)]
+    pub border: u8,
+    /// Anchor size in cells.
+    #[arg(long, default_value_t = 3)]
+    pub anchor_size: u8,
+    /// Capture perturbation profile.
+    #[arg(long, value_enum, default_value = "default")]
+    pub profile: PetalCaptureProfile,
+    /// Deterministic seed for perturbation sampling.
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+    /// Number of perturbation trials per frame (0 uses profile default).
+    #[arg(long, default_value_t = 0)]
+    pub trials_per_frame: u16,
+    /// Minimum successful decode ratio required to pass.
+    #[arg(long, default_value_t = 0.95)]
+    pub min_success_ratio: f64,
+    /// Optional JSON report output path.
+    #[arg(long, value_name = "FILE")]
+    pub output_report: Option<PathBuf>,
+}
+
+impl PetalEvalCaptureArgs {
+    fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
+        if !(0.0..=1.0).contains(&self.min_success_ratio) {
+            return Err(eyre!(
+                "min-success-ratio must be between 0.0 and 1.0"
+            ));
+        }
+        let mut entries = fs::read_dir(&self.input_dir)
+            .map_err(|err| eyre!("failed to read {}: {err}", self.input_dir.display()))?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("png"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        if entries.is_empty() {
+            return Err(eyre!(
+                "no png frames found in {}",
+                self.input_dir.display()
+            ));
+        }
+
+        let mut resolved_grid_size = self.grid_size;
+        let mut images = Vec::with_capacity(entries.len());
+        let mut expected_bytes = Vec::with_capacity(entries.len());
+        let base_options = PetalStreamOptions {
+            grid_size: if self.grid_size == 0 { 0 } else { self.grid_size },
+            border: self.border,
+            anchor_size: self.anchor_size,
+        };
+        for entry in &entries {
+            let image = load_png(entry.path())?;
+            let bytes = if resolved_grid_size == 0 {
+                let (grid_size, bytes) = decode_frame_auto(&image, base_options)?;
+                resolved_grid_size = grid_size;
+                bytes
+            } else {
+                decode_frame_with_grid(&image, resolved_grid_size, base_options)?
+            };
+            images.push(image);
+            expected_bytes.push(bytes);
+        }
+        if resolved_grid_size == 0 {
+            return Err(eyre!("failed to resolve grid size from pristine frames"));
+        }
+
+        let trials_per_frame = if self.trials_per_frame == 0 {
+            self.profile.default_trials()
+        } else {
+            self.trials_per_frame
+        };
+        if trials_per_frame == 0 {
+            return Err(eyre!("trials-per-frame must be > 0"));
+        }
+
+        let options = PetalStreamOptions {
+            grid_size: resolved_grid_size,
+            border: self.border,
+            anchor_size: self.anchor_size,
+        };
+        let metrics = evaluate_capture_robustness(
+            &images,
+            &expected_bytes,
+            resolved_grid_size,
+            options,
+            self.profile,
+            self.seed,
+            trials_per_frame,
+        )?;
+
+        let report = metrics.to_json(
+            self.profile,
+            resolved_grid_size,
+            trials_per_frame,
+            self.min_success_ratio,
+            self.seed,
+        );
+        if let Some(path) = self.output_report {
+            let rendered = norito::json::to_string_pretty(&report)?;
+            fs::write(&path, format!("{rendered}\n")).map_err(|err| {
+                eyre!("failed to write report {}: {err}", path.display())
+            })?;
+        }
+
+        if metrics.success_ratio() + f64::EPSILON < self.min_success_ratio {
+            return Err(eyre!(
+                "capture decode success ratio {:.3} below required {:.3}",
+                metrics.success_ratio(),
+                self.min_success_ratio
+            ));
+        }
+        if !metrics.stream_complete {
+            return Err(eyre!(
+                "capture evaluation could not reconstruct complete stream ({} / {} chunks)",
+                metrics.stream_received_chunks,
+                metrics.stream_total_chunks
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetalOutputFormat {
     Frames,
@@ -377,6 +530,38 @@ pub enum PetalOutputFormat {
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetalRenderStyle {
     SakuraWind,
+    SoraTemple,
+}
+
+impl PetalRenderStyle {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SakuraWind => "sakura-wind",
+            Self::SoraTemple => "sora-temple",
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetalCaptureProfile {
+    Default,
+    Aggressive,
+}
+
+impl PetalCaptureProfile {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Aggressive => "aggressive",
+        }
+    }
+
+    fn default_trials(self) -> u16 {
+        match self {
+            Self::Default => 5,
+            Self::Aggressive => 8,
+        }
+    }
 }
 
 struct RenderedFrame {
@@ -453,9 +638,18 @@ fn render_petal_frame(
     dimension: u32,
     frame_index: u32,
     frame_count: u32,
-    _style: PetalRenderStyle,
+    style: PetalRenderStyle,
     options: PetalStreamOptions,
 ) -> image::RgbaImage {
+    if style == PetalRenderStyle::SoraTemple {
+        return render_sora_temple_frame(
+            grid,
+            dimension,
+            frame_index,
+            frame_count,
+            options,
+        );
+    }
     let grid_size = grid.grid_size as u32;
     let cell_size = (dimension / grid_size).max(1);
     let width = grid_size * cell_size;
@@ -625,6 +819,356 @@ fn render_petal_frame(
     image::RgbaImage::from_raw(dimension, dimension, rgba).expect("rgba buffer size")
 }
 
+const SORA_BG_START: [f64; 3] = [0.02, 0.01, 0.05];
+const SORA_BG_END: [f64; 3] = [0.05, 0.02, 0.08];
+const SORA_RING_BRIGHT: [f64; 3] = [0.95, 0.76, 0.89];
+const SORA_RING_DIM: [f64; 3] = [0.32, 0.18, 0.31];
+const SORA_TILE_LIGHT_BG: [f64; 3] = [0.95, 0.92, 0.97];
+const SORA_TILE_LIGHT_FG: [f64; 3] = [0.10, 0.04, 0.14];
+const SORA_TILE_DARK_BG: [f64; 3] = [0.07, 0.03, 0.10];
+const SORA_TILE_DARK_FG: [f64; 3] = [0.97, 0.91, 0.98];
+const SORA_LOGO_TINT: [f64; 3] = [0.98, 0.91, 0.97];
+const SORA_RING_RADII: [f64; 3] = [0.34, 0.40, 0.46];
+const SORA_RING_DOTS: [f64; 3] = [62.0, 78.0, 94.0];
+const SORA_RING_SPEED: [f64; 3] = [0.72, 0.97, 1.21];
+const SORA_RING_BAND: f64 = 0.0055;
+const SORA_SCANLINE_ALPHA: f64 = 0.02;
+const SORA_VIGNETTE: f64 = 0.26;
+const SORA_TILE_MARGIN_OUTER: f64 = 0.10;
+const SORA_TILE_MARGIN_LOGO: f64 = 0.03;
+const SORA_TILE_GLYPH_ALPHA: f64 = 0.18;
+const SORA_KATAKANA_BITMAPS: [[u8; 8]; 16] = [
+    [0x3C, 0x08, 0x1C, 0x08, 0x08, 0x08, 0x00, 0x00],
+    [0x10, 0x10, 0x20, 0x20, 0x40, 0x40, 0x00, 0x00],
+    [0x3C, 0x04, 0x1C, 0x04, 0x04, 0x3C, 0x00, 0x00],
+    [0x3C, 0x10, 0x1C, 0x10, 0x10, 0x3C, 0x00, 0x00],
+    [0x10, 0x3C, 0x10, 0x1C, 0x12, 0x3C, 0x00, 0x00],
+    [0x20, 0x3C, 0x24, 0x24, 0x24, 0x06, 0x00, 0x00],
+    [0x3C, 0x10, 0x3C, 0x10, 0x0C, 0x30, 0x00, 0x00],
+    [0x3C, 0x04, 0x08, 0x10, 0x20, 0x3C, 0x00, 0x00],
+    [0x24, 0x24, 0x3C, 0x24, 0x24, 0x06, 0x00, 0x00],
+    [0x3C, 0x04, 0x04, 0x04, 0x04, 0x3C, 0x00, 0x00],
+    [0x24, 0x24, 0x3C, 0x10, 0x10, 0x0C, 0x00, 0x00],
+    [0x04, 0x04, 0x0C, 0x14, 0x24, 0x20, 0x00, 0x00],
+    [0x3C, 0x04, 0x1C, 0x20, 0x20, 0x3C, 0x00, 0x00],
+    [0x3C, 0x10, 0x3C, 0x10, 0x10, 0x0C, 0x00, 0x00],
+    [0x04, 0x08, 0x10, 0x24, 0x24, 0x18, 0x00, 0x00],
+    [0x3C, 0x04, 0x3C, 0x24, 0x24, 0x06, 0x00, 0x00],
+];
+
+const IROHA_KATAKANA: [char; 47] = [
+    'イ', 'ロ', 'ハ', 'ニ', 'ホ', 'ヘ', 'ト', 'チ', 'リ', 'ヌ', 'ル', 'ヲ', 'ワ', 'カ', 'ヨ',
+    'タ', 'レ', 'ソ', 'ツ', 'ネ', 'ナ', 'ラ', 'ム', 'ウ', 'ヰ', 'ノ', 'オ', 'ク', 'ヤ', 'マ',
+    'ケ', 'フ', 'コ', 'エ', 'テ', 'ア', 'サ', 'キ', 'ユ', 'メ', 'ミ', 'シ', 'ヱ', 'ヒ', 'モ',
+    'セ', 'ス',
+];
+
+fn render_sora_temple_frame(
+    grid: &PetalStreamGrid,
+    dimension: u32,
+    frame_index: u32,
+    frame_count: u32,
+    options: PetalStreamOptions,
+) -> image::RgbaImage {
+    let grid_size = grid.grid_size as u32;
+    let cell_size = (dimension / grid_size).max(1);
+    let width = grid_size * cell_size;
+    let height = width;
+    let offset_x = (dimension.saturating_sub(width)) / 2;
+    let offset_y = (dimension.saturating_sub(height)) / 2;
+    let frame_count = frame_count.max(1);
+    let phase = (frame_index % frame_count) as f64 / frame_count as f64;
+
+    let stream_bits = collect_stream_data_bits(grid, options);
+    let stream_signature = stream_bit_signature(&stream_bits);
+    let mut cell_params = Vec::with_capacity((grid_size * grid_size) as usize);
+    let mut cell_roles = Vec::with_capacity((grid_size * grid_size) as usize);
+    for y in 0..grid_size {
+        for x in 0..grid_size {
+            let idx = y as usize * grid_size as usize + x as usize;
+            let role = render_cell_role(x as u16, y as u16, grid.grid_size, options);
+            let bit = grid.cells[idx];
+            let nx = (x as f64 + 0.5) / grid_size as f64;
+            let ny = (y as f64 + 0.5) / grid_size as f64;
+            let logo = role == RenderCellRole::Data && sora_ten_logo_mask(nx, ny);
+            let mut seed = cell_seed(x, y)
+                ^ stream_signature
+                ^ (u64::from(frame_index) << 11)
+                ^ (u64::from(bit as u8) << 3);
+            let kana_index = (sample_u32(&mut seed) as usize) % IROHA_KATAKANA.len();
+            cell_params.push(TempleCellParam {
+                bit,
+                logo,
+                kana_index,
+            });
+            cell_roles.push(role);
+        }
+    }
+
+    let mut rgba = Vec::with_capacity((dimension * dimension * 4) as usize);
+    for py in 0..dimension {
+        let ny = if dimension <= 1 {
+            0.5
+        } else {
+            py as f64 / (dimension - 1) as f64
+        };
+        for px in 0..dimension {
+            let nx = if dimension <= 1 {
+                0.5
+            } else {
+                px as f64 / (dimension - 1) as f64
+            };
+            let cx = nx - 0.5;
+            let cy = ny - 0.5;
+            let radial = (cx * cx + cy * cy).sqrt();
+            let mut rgb = [
+                lerp(SORA_BG_START[0], SORA_BG_END[0], nx),
+                lerp(SORA_BG_START[1], SORA_BG_END[1], ny),
+                lerp(SORA_BG_START[2], SORA_BG_END[2], 1.0 - radial.min(1.0)),
+            ];
+            let scanline = (ny * 210.0 + phase * std::f64::consts::TAU).sin() * 0.5 + 0.5;
+            blend_rgb(
+                &mut rgb,
+                SORA_RING_DIM,
+                scanline * SORA_SCANLINE_ALPHA,
+            );
+            let vignette = (radial / 0.74).clamp(0.0, 1.0).powi(2) * SORA_VIGNETTE;
+            rgb[0] = lerp(rgb[0], SORA_BG_START[0], vignette);
+            rgb[1] = lerp(rgb[1], SORA_BG_START[1], vignette);
+            rgb[2] = lerp(rgb[2], SORA_BG_START[2], vignette);
+
+            blend_sora_rings(
+                &mut rgb,
+                cx,
+                cy,
+                phase,
+                &stream_bits,
+                stream_signature,
+            );
+
+            if px >= offset_x && py >= offset_y && px < offset_x + width && py < offset_y + height {
+                let gx = (px - offset_x) / cell_size;
+                let gy = (py - offset_y) / cell_size;
+                let idx = gy as usize * grid_size as usize + gx as usize;
+                let role = cell_roles[idx];
+                match role {
+                    RenderCellRole::AnchorDark => {
+                        rgb = [0.04, 0.02, 0.06];
+                    }
+                    RenderCellRole::AnchorLight => {
+                        rgb = [0.96, 0.93, 0.97];
+                    }
+                    RenderCellRole::Border => {
+                        let bit = grid.cells[idx];
+                        let border_mix = if bit { 0.18 } else { 0.12 };
+                        blend_rgb(&mut rgb, SORA_RING_DIM, border_mix);
+                    }
+                    RenderCellRole::Data => {
+                        let local_x = (px - offset_x) as f64 / cell_size as f64 - gx as f64;
+                        let local_y = (py - offset_y) as f64 / cell_size as f64 - gy as f64;
+                        let param = cell_params[idx];
+                        blend_sora_data_tile(
+                            &mut rgb,
+                            local_x,
+                            local_y,
+                            gx as usize,
+                            gy as usize,
+                            cell_size,
+                            param,
+                        );
+                    }
+                }
+            }
+
+            rgba.extend_from_slice(&[
+                to_u8(rgb[0]),
+                to_u8(rgb[1]),
+                to_u8(rgb[2]),
+                0xFF,
+            ]);
+        }
+    }
+
+    image::RgbaImage::from_raw(dimension, dimension, rgba).expect("rgba buffer size")
+}
+
+#[derive(Clone, Copy)]
+struct TempleCellParam {
+    bit: bool,
+    logo: bool,
+    kana_index: usize,
+}
+
+fn blend_sora_data_tile(
+    rgb: &mut [f64; 3],
+    local_x: f64,
+    local_y: f64,
+    gx: usize,
+    gy: usize,
+    cell_size: u32,
+    param: TempleCellParam,
+) {
+    let style_margin = if param.logo {
+        SORA_TILE_MARGIN_LOGO
+    } else {
+        SORA_TILE_MARGIN_OUTER
+    };
+    let margin = if cell_size <= 4 {
+        0.0
+    } else if cell_size <= 6 {
+        style_margin.min(0.04)
+    } else {
+        style_margin
+    };
+    if local_x < margin
+        || local_x > 1.0 - margin
+        || local_y < margin
+        || local_y > 1.0 - margin
+    {
+        return;
+    }
+
+    let tile_alpha = if param.logo { 0.995 } else { 0.96 };
+    let (tile_bg, glyph_fg) = if param.bit {
+        (SORA_TILE_DARK_BG, SORA_TILE_DARK_FG)
+    } else {
+        (SORA_TILE_LIGHT_BG, SORA_TILE_LIGHT_FG)
+    };
+    blend_rgb(rgb, tile_bg, tile_alpha);
+    if param.logo {
+        blend_rgb(rgb, SORA_LOGO_TINT, 0.04);
+    }
+
+    let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
+    let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
+    let char_index = param.kana_index;
+    let bitmap = katakana_bitmap(char_index, gx, gy);
+    if katakana_bitmap_hit(bitmap, inner_u, inner_v) {
+        let glyph_alpha = if param.logo {
+            SORA_TILE_GLYPH_ALPHA + 0.04
+        } else {
+            SORA_TILE_GLYPH_ALPHA
+        };
+        blend_rgb(rgb, glyph_fg, glyph_alpha);
+    }
+}
+
+fn katakana_bitmap(index: usize, x: usize, y: usize) -> [u8; 8] {
+    let char_seed = IROHA_KATAKANA[index % IROHA_KATAKANA.len()] as usize;
+    let pattern = SORA_KATAKANA_BITMAPS[char_seed % SORA_KATAKANA_BITMAPS.len()];
+    let rotate = (x + y + index) % 3;
+    if rotate == 0 {
+        return pattern;
+    }
+    let mut out = [0u8; 8];
+    for row in 0..8 {
+        let src = pattern[(row + rotate) % 8];
+        out[row] = src.rotate_left(rotate as u32);
+    }
+    out
+}
+
+fn katakana_bitmap_hit(bitmap: [u8; 8], u: f64, v: f64) -> bool {
+    let gx = (u * 8.0).floor() as usize;
+    let gy = (v * 8.0).floor() as usize;
+    let gx = gx.min(7);
+    let gy = gy.min(7);
+    let row = bitmap[gy];
+    row & (1u8 << (7 - gx)) != 0
+}
+
+fn blend_sora_rings(
+    rgb: &mut [f64; 3],
+    cx: f64,
+    cy: f64,
+    phase: f64,
+    stream_bits: &[bool],
+    stream_signature: u64,
+) {
+    if stream_bits.is_empty() {
+        return;
+    }
+    let radius = (cx * cx + cy * cy).sqrt();
+    let angle = cy.atan2(cx);
+    let angle_u = (angle / std::f64::consts::TAU).rem_euclid(1.0);
+    let mut ring_offset = 0usize;
+    for ring_index in 0..SORA_RING_RADII.len() {
+        let ring_radius = SORA_RING_RADII[ring_index];
+        let dist = (radius - ring_radius).abs();
+        if dist > SORA_RING_BAND * 2.2 {
+            ring_offset += SORA_RING_DOTS[ring_index] as usize;
+            continue;
+        }
+        let dots = SORA_RING_DOTS[ring_index];
+        let spin = (angle_u + phase * SORA_RING_SPEED[ring_index]).rem_euclid(1.0);
+        let slot = spin * dots;
+        let slot_index = slot.floor() as usize;
+        let dot_t = slot.fract();
+        let dot_profile = (1.0 - (dot_t - 0.5).abs() * 2.0).max(0.0);
+        let bit_index = (ring_offset + slot_index + (stream_signature as usize % 23))
+            % stream_bits.len();
+        let bit = stream_bits[bit_index];
+        let ring_color = if bit {
+            SORA_RING_BRIGHT
+        } else {
+            SORA_RING_DIM
+        };
+        let alpha = dot_profile.powi(2)
+            * (1.0 - dist / (SORA_RING_BAND * 2.2))
+            * if bit { 0.65 } else { 0.28 };
+        blend_rgb(rgb, ring_color, alpha);
+        ring_offset += dots as usize;
+    }
+}
+
+fn blend_rgb(rgb: &mut [f64; 3], target: [f64; 3], alpha: f64) {
+    let alpha = alpha.clamp(0.0, 1.0);
+    rgb[0] = lerp(rgb[0], target[0], alpha);
+    rgb[1] = lerp(rgb[1], target[1], alpha);
+    rgb[2] = lerp(rgb[2], target[2], alpha);
+}
+
+fn sora_ten_logo_mask(nx: f64, ny: f64) -> bool {
+    let x = nx * 2.0 - 1.0;
+    let y = ny * 2.0 - 1.0;
+    let top_bar = y >= -0.67 && y <= -0.52 && x.abs() <= 0.70;
+    let mid_bar = y >= -0.33 && y <= -0.19 && x.abs() <= 0.52;
+    let stem = y >= -0.19 && y <= -0.03 && x.abs() <= 0.11;
+    let left_leg = y >= -0.03 && y <= 0.86 && (x + 0.60 * (y + 0.01)).abs() <= 0.10;
+    let right_leg = y >= -0.03 && y <= 0.86 && (x - 0.60 * (y + 0.01)).abs() <= 0.10;
+    let foot = y >= 0.74 && y <= 0.88 && x.abs() <= 0.50;
+    top_bar || mid_bar || stem || left_leg || right_leg || foot
+}
+
+fn collect_stream_data_bits(grid: &PetalStreamGrid, options: PetalStreamOptions) -> Vec<bool> {
+    let mut bits = Vec::new();
+    for y in 0..grid.grid_size {
+        for x in 0..grid.grid_size {
+            if render_cell_role(x, y, grid.grid_size, options) == RenderCellRole::Data {
+                let idx = y as usize * grid.grid_size as usize + x as usize;
+                bits.push(grid.cells[idx]);
+            }
+        }
+    }
+    bits
+}
+
+fn stream_bit_signature(bits: &[bool]) -> u64 {
+    let mut sig = 0x6D_61_74_73_75u64;
+    for (idx, bit) in bits.iter().enumerate().take(128) {
+        if *bit {
+            sig ^= 1u64 << (idx % 63);
+        }
+        sig = splitmix64(sig ^ idx as u64);
+    }
+    sig
+}
+
+fn sample_u32(seed: &mut u64) -> u32 {
+    *seed = splitmix64(*seed);
+    (*seed >> 32) as u32
+}
+
 fn sample_grid_from_rgba(
     image: &image::RgbaImage,
     grid_size: u16,
@@ -707,6 +1251,590 @@ fn decode_frame_auto(
     ))
 }
 
+#[derive(Clone, Copy)]
+struct CaptureScenario {
+    name: &'static str,
+    min_scale: f64,
+    max_scale: f64,
+    min_blur_sigma: f32,
+    max_blur_sigma: f32,
+    max_motion_pixels: u8,
+    max_jitter_pixels: i32,
+    min_brightness_shift: f64,
+    max_brightness_shift: f64,
+    min_contrast: f64,
+    max_contrast: f64,
+    min_gamma: f64,
+    max_gamma: f64,
+    max_noise: f64,
+}
+
+#[derive(Clone, Debug)]
+struct CaptureScenarioMetrics {
+    name: &'static str,
+    attempts: u64,
+    successes: u64,
+}
+
+#[derive(Debug)]
+struct CaptureEvalMetrics {
+    frame_count: usize,
+    frame_successes: usize,
+    attempts: u64,
+    successes: u64,
+    recovered_frames: usize,
+    stream_complete: bool,
+    stream_received_chunks: usize,
+    stream_total_chunks: usize,
+    scenario: Vec<CaptureScenarioMetrics>,
+}
+
+impl CaptureEvalMetrics {
+    fn success_ratio(&self) -> f64 {
+        if self.attempts == 0 {
+            return 0.0;
+        }
+        self.successes as f64 / self.attempts as f64
+    }
+
+    fn frame_success_ratio(&self) -> f64 {
+        if self.frame_count == 0 {
+            return 0.0;
+        }
+        self.frame_successes as f64 / self.frame_count as f64
+    }
+
+    fn to_json(
+        &self,
+        profile: PetalCaptureProfile,
+        grid_size: u16,
+        trials_per_frame: u16,
+        min_success_ratio: f64,
+        seed: u64,
+    ) -> Value {
+        let mut map = Map::new();
+        map.insert("version".to_string(), Value::from(1u64));
+        map.insert("profile".to_string(), Value::from(profile.label()));
+        map.insert("seed".to_string(), Value::from(seed));
+        map.insert("grid_size".to_string(), Value::from(grid_size as u64));
+        map.insert(
+            "trials_per_frame".to_string(),
+            Value::from(trials_per_frame as u64),
+        );
+        map.insert(
+            "min_success_ratio".to_string(),
+            Value::from(min_success_ratio),
+        );
+        map.insert("frame_count".to_string(), Value::from(self.frame_count as u64));
+        map.insert(
+            "frame_successes".to_string(),
+            Value::from(self.frame_successes as u64),
+        );
+        map.insert(
+            "frame_success_ratio".to_string(),
+            Value::from(self.frame_success_ratio()),
+        );
+        map.insert("attempts".to_string(), Value::from(self.attempts));
+        map.insert("successes".to_string(), Value::from(self.successes));
+        map.insert(
+            "success_ratio".to_string(),
+            Value::from(self.success_ratio()),
+        );
+        map.insert(
+            "recovered_frames".to_string(),
+            Value::from(self.recovered_frames as u64),
+        );
+        map.insert(
+            "stream_complete".to_string(),
+            Value::from(self.stream_complete),
+        );
+        map.insert(
+            "stream_received_chunks".to_string(),
+            Value::from(self.stream_received_chunks as u64),
+        );
+        map.insert(
+            "stream_total_chunks".to_string(),
+            Value::from(self.stream_total_chunks as u64),
+        );
+        let mut scenario_rows = Vec::with_capacity(self.scenario.len());
+        for scenario in &self.scenario {
+            let mut scenario_map = Map::new();
+            scenario_map.insert("name".to_string(), Value::from(scenario.name));
+            scenario_map.insert("attempts".to_string(), Value::from(scenario.attempts));
+            scenario_map.insert("successes".to_string(), Value::from(scenario.successes));
+            let ratio = if scenario.attempts == 0 {
+                0.0
+            } else {
+                scenario.successes as f64 / scenario.attempts as f64
+            };
+            scenario_map.insert("success_ratio".to_string(), Value::from(ratio));
+            scenario_rows.push(Value::Object(scenario_map));
+        }
+        map.insert("scenarios".to_string(), Value::Array(scenario_rows));
+        Value::Object(map)
+    }
+}
+
+const DEFAULT_CAPTURE_SCENARIOS: [CaptureScenario; 4] = [
+    CaptureScenario {
+        name: "distance_soft",
+        min_scale: 0.72,
+        max_scale: 0.90,
+        min_blur_sigma: 0.10,
+        max_blur_sigma: 0.75,
+        max_motion_pixels: 1,
+        max_jitter_pixels: 2,
+        min_brightness_shift: -0.05,
+        max_brightness_shift: 0.04,
+        min_contrast: 0.92,
+        max_contrast: 1.08,
+        min_gamma: 0.92,
+        max_gamma: 1.08,
+        max_noise: 0.012,
+    },
+    CaptureScenario {
+        name: "pan_lateral",
+        min_scale: 0.70,
+        max_scale: 0.88,
+        min_blur_sigma: 0.15,
+        max_blur_sigma: 0.95,
+        max_motion_pixels: 2,
+        max_jitter_pixels: 4,
+        min_brightness_shift: -0.08,
+        max_brightness_shift: 0.03,
+        min_contrast: 0.90,
+        max_contrast: 1.06,
+        min_gamma: 0.94,
+        max_gamma: 1.12,
+        max_noise: 0.016,
+    },
+    CaptureScenario {
+        name: "shake_noise",
+        min_scale: 0.74,
+        max_scale: 0.91,
+        min_blur_sigma: 0.20,
+        max_blur_sigma: 1.10,
+        max_motion_pixels: 2,
+        max_jitter_pixels: 5,
+        min_brightness_shift: -0.10,
+        max_brightness_shift: 0.02,
+        min_contrast: 0.88,
+        max_contrast: 1.02,
+        min_gamma: 0.95,
+        max_gamma: 1.15,
+        max_noise: 0.020,
+    },
+    CaptureScenario {
+        name: "lowlight_scan",
+        min_scale: 0.76,
+        max_scale: 0.93,
+        min_blur_sigma: 0.00,
+        max_blur_sigma: 0.65,
+        max_motion_pixels: 1,
+        max_jitter_pixels: 3,
+        min_brightness_shift: -0.14,
+        max_brightness_shift: -0.02,
+        min_contrast: 0.90,
+        max_contrast: 1.04,
+        min_gamma: 1.00,
+        max_gamma: 1.20,
+        max_noise: 0.018,
+    },
+];
+
+const AGGRESSIVE_CAPTURE_SCENARIOS: [CaptureScenario; 4] = [
+    CaptureScenario {
+        name: "distance_hard",
+        min_scale: 0.56,
+        max_scale: 0.82,
+        min_blur_sigma: 0.35,
+        max_blur_sigma: 1.55,
+        max_motion_pixels: 3,
+        max_jitter_pixels: 7,
+        min_brightness_shift: -0.16,
+        max_brightness_shift: 0.04,
+        min_contrast: 0.82,
+        max_contrast: 1.06,
+        min_gamma: 0.95,
+        max_gamma: 1.20,
+        max_noise: 0.025,
+    },
+    CaptureScenario {
+        name: "moving_camera",
+        min_scale: 0.58,
+        max_scale: 0.84,
+        min_blur_sigma: 0.15,
+        max_blur_sigma: 1.20,
+        max_motion_pixels: 4,
+        max_jitter_pixels: 9,
+        min_brightness_shift: -0.12,
+        max_brightness_shift: 0.03,
+        min_contrast: 0.84,
+        max_contrast: 1.10,
+        min_gamma: 0.90,
+        max_gamma: 1.18,
+        max_noise: 0.030,
+    },
+    CaptureScenario {
+        name: "tilt_glare",
+        min_scale: 0.62,
+        max_scale: 0.86,
+        min_blur_sigma: 0.30,
+        max_blur_sigma: 1.45,
+        max_motion_pixels: 3,
+        max_jitter_pixels: 6,
+        min_brightness_shift: -0.04,
+        max_brightness_shift: 0.12,
+        min_contrast: 0.80,
+        max_contrast: 1.14,
+        min_gamma: 0.85,
+        max_gamma: 1.08,
+        max_noise: 0.028,
+    },
+    CaptureScenario {
+        name: "noisy_lowlight",
+        min_scale: 0.60,
+        max_scale: 0.84,
+        min_blur_sigma: 0.20,
+        max_blur_sigma: 1.10,
+        max_motion_pixels: 2,
+        max_jitter_pixels: 8,
+        min_brightness_shift: -0.20,
+        max_brightness_shift: -0.02,
+        min_contrast: 0.80,
+        max_contrast: 1.02,
+        min_gamma: 1.02,
+        max_gamma: 1.26,
+        max_noise: 0.035,
+    },
+];
+
+fn capture_scenarios(profile: PetalCaptureProfile) -> &'static [CaptureScenario] {
+    match profile {
+        PetalCaptureProfile::Default => &DEFAULT_CAPTURE_SCENARIOS,
+        PetalCaptureProfile::Aggressive => &AGGRESSIVE_CAPTURE_SCENARIOS,
+    }
+}
+
+fn evaluate_capture_robustness(
+    images: &[image::RgbaImage],
+    expected_bytes: &[Vec<u8>],
+    grid_size: u16,
+    options: PetalStreamOptions,
+    profile: PetalCaptureProfile,
+    seed: u64,
+    trials_per_frame: u16,
+) -> Result<CaptureEvalMetrics> {
+    if images.len() != expected_bytes.len() {
+        return Err(eyre!("frame/image length mismatch"));
+    }
+    let scenarios = capture_scenarios(profile);
+    if scenarios.is_empty() {
+        return Err(eyre!("capture profile has no scenarios"));
+    }
+    let mut scenario_metrics = scenarios
+        .iter()
+        .map(|scenario| CaptureScenarioMetrics {
+            name: scenario.name,
+            attempts: 0,
+            successes: 0,
+        })
+        .collect::<Vec<_>>();
+
+    let mut attempts = 0u64;
+    let mut successes = 0u64;
+    let mut frame_successes = 0usize;
+    let mut recovered = vec![None; images.len()];
+    let search_radius = capture_alignment_search_radius(profile);
+    for (frame_index, (image, expected)) in images.iter().zip(expected_bytes.iter()).enumerate() {
+        let mut frame_ok = false;
+        for trial in 0..trials_per_frame {
+            let scenario_idx =
+                (frame_index + usize::from(trial)) % scenarios.len();
+            let scenario = scenarios[scenario_idx];
+            scenario_metrics[scenario_idx].attempts += 1;
+            attempts += 1;
+            let simulated = simulate_capture_frame(
+                image,
+                scenario,
+                frame_index,
+                usize::from(trial),
+                seed,
+            );
+            let decoded = decode_frame_with_alignment_search(
+                &simulated,
+                grid_size,
+                options,
+                search_radius,
+            );
+            let ok = decoded.map(|bytes| bytes == *expected).unwrap_or(false);
+            if ok {
+                successes += 1;
+                frame_ok = true;
+                scenario_metrics[scenario_idx].successes += 1;
+                recovered[frame_index] = Some(expected.clone());
+            }
+        }
+        if frame_ok {
+            frame_successes += 1;
+        }
+    }
+
+    let recovered_frames = recovered.iter().filter(|entry| entry.is_some()).count();
+    let (stream_complete, stream_received_chunks, stream_total_chunks) =
+        reconstruct_stream_completion(&recovered)?;
+
+    Ok(CaptureEvalMetrics {
+        frame_count: images.len(),
+        frame_successes,
+        attempts,
+        successes,
+        recovered_frames,
+        stream_complete,
+        stream_received_chunks,
+        stream_total_chunks,
+        scenario: scenario_metrics,
+    })
+}
+
+fn capture_alignment_search_radius(profile: PetalCaptureProfile) -> i32 {
+    match profile {
+        PetalCaptureProfile::Default => 4,
+        PetalCaptureProfile::Aggressive => 7,
+    }
+}
+
+fn decode_frame_with_alignment_search(
+    image: &image::RgbaImage,
+    grid_size: u16,
+    options: PetalStreamOptions,
+    search_radius: i32,
+) -> Result<Vec<u8>> {
+    if let Ok(bytes) = decode_frame_with_grid(image, grid_size, options) {
+        return Ok(bytes);
+    }
+    for radius in 1..=search_radius.max(0) {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx.abs() != radius && dy.abs() != radius {
+                    continue;
+                }
+                let shifted = translate_image(image, dx, dy, image::Rgba([4, 1, 8, 0xFF]));
+                if let Ok(bytes) = decode_frame_with_grid(&shifted, grid_size, options) {
+                    return Ok(bytes);
+                }
+            }
+        }
+    }
+    Err(eyre!("decode failed after alignment search"))
+}
+
+fn reconstruct_stream_completion(
+    recovered: &[Option<Vec<u8>>],
+) -> Result<(bool, usize, usize)> {
+    let mut assembler = QrStreamAssembler::default();
+    let mut final_result: Option<QrStreamDecodeResult> = None;
+    for bytes in recovered.iter().flatten() {
+        let frame = QrStreamFrame::decode(bytes)?;
+        final_result = Some(assembler.ingest_frame(frame)?);
+    }
+    if let Some(result) = final_result {
+        Ok((result.is_complete(), result.received_chunks, result.total_chunks))
+    } else {
+        Ok((false, 0, 0))
+    }
+}
+
+fn simulate_capture_frame(
+    source: &image::RgbaImage,
+    scenario: CaptureScenario,
+    frame_index: usize,
+    trial_index: usize,
+    seed: u64,
+) -> image::RgbaImage {
+    let mut local_seed = seed
+        ^ (frame_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (trial_index as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    let width = source.width();
+    let height = source.height();
+
+    let scale = sample_range(&mut local_seed, scenario.min_scale, scenario.max_scale);
+    let resized_w = ((width as f64 * scale).round() as u32).clamp(24, width.max(24));
+    let resized_h = ((height as f64 * scale).round() as u32).clamp(24, height.max(24));
+    let mut image = image::imageops::resize(
+        source,
+        resized_w,
+        resized_h,
+        image::imageops::FilterType::Triangle,
+    );
+    image = image::imageops::resize(
+        &image,
+        width,
+        height,
+        image::imageops::FilterType::CatmullRom,
+    );
+
+    let blur_sigma =
+        sample_range(&mut local_seed, scenario.min_blur_sigma as f64, scenario.max_blur_sigma as f64)
+            as f32;
+    if blur_sigma > 0.01 {
+        image = image::imageops::blur(&image, blur_sigma);
+    }
+
+    if scenario.max_motion_pixels > 0 {
+        let motion_span =
+            sample_range(&mut local_seed, 0.0, f64::from(scenario.max_motion_pixels)).round()
+                as u8;
+        if motion_span > 0 {
+            image = apply_motion_blur(&image, motion_span, &mut local_seed);
+        }
+    }
+
+    if scenario.max_jitter_pixels > 0 {
+        let dx = sample_i32_range(
+            &mut local_seed,
+            -scenario.max_jitter_pixels,
+            scenario.max_jitter_pixels,
+        );
+        let dy = sample_i32_range(
+            &mut local_seed,
+            -scenario.max_jitter_pixels,
+            scenario.max_jitter_pixels,
+        );
+        image = translate_image(&image, dx, dy, image::Rgba([4, 1, 8, 0xFF]));
+    }
+
+    let brightness = sample_range(
+        &mut local_seed,
+        scenario.min_brightness_shift,
+        scenario.max_brightness_shift,
+    );
+    let contrast = sample_range(&mut local_seed, scenario.min_contrast, scenario.max_contrast);
+    let gamma = sample_range(&mut local_seed, scenario.min_gamma, scenario.max_gamma);
+    let noise = sample_range(&mut local_seed, 0.0, scenario.max_noise);
+    apply_capture_tone(&mut image, brightness, contrast, gamma, noise, &mut local_seed);
+    image
+}
+
+fn apply_capture_tone(
+    image: &mut image::RgbaImage,
+    brightness: f64,
+    contrast: f64,
+    gamma: f64,
+    noise: f64,
+    seed: &mut u64,
+) {
+    let width = image.width().max(1);
+    let height = image.height().max(1);
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = image.get_pixel_mut(x, y);
+            let nx = x as f64 / (width - 1).max(1) as f64 - 0.5;
+            let ny = y as f64 / (height - 1).max(1) as f64 - 0.5;
+            let vignette = ((nx * nx + ny * ny) * 1.8).clamp(0.0, 1.0) * 0.18;
+            for channel in 0..3 {
+                let mut value = f64::from(pixel[channel]) / 255.0;
+                value = value.powf(gamma);
+                value = (value - 0.5) * contrast + 0.5 + brightness - vignette;
+                if noise > 0.0 {
+                    value += (sample_unit(seed) - 0.5) * 2.0 * noise;
+                }
+                pixel[channel] = to_u8(value);
+            }
+            pixel[3] = 0xFF;
+        }
+    }
+}
+
+fn apply_motion_blur(
+    image: &image::RgbaImage,
+    motion_span: u8,
+    seed: &mut u64,
+) -> image::RgbaImage {
+    let directions = [
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (-1, 1),
+        (-1, 0),
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+    ];
+    let dir = directions[(sample_u32(seed) as usize) % directions.len()];
+    let radius = i32::from(motion_span);
+    let width = image.width();
+    let height = image.height();
+    let mut out = image::RgbaImage::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            let mut acc = [0u32; 4];
+            let mut count = 0u32;
+            for offset in -radius..=radius {
+                let sx = clamp_i32(x as i32 + dir.0 * offset, 0, width as i32 - 1) as u32;
+                let sy = clamp_i32(y as i32 + dir.1 * offset, 0, height as i32 - 1) as u32;
+                let p = image.get_pixel(sx, sy).0;
+                for channel in 0..4 {
+                    acc[channel] += u32::from(p[channel]);
+                }
+                count += 1;
+            }
+            let mut pixel = [0u8; 4];
+            for channel in 0..4 {
+                pixel[channel] = (acc[channel] / count.max(1)) as u8;
+            }
+            out.put_pixel(x, y, image::Rgba(pixel));
+        }
+    }
+    out
+}
+
+fn translate_image(
+    image: &image::RgbaImage,
+    dx: i32,
+    dy: i32,
+    fill: image::Rgba<u8>,
+) -> image::RgbaImage {
+    let width = image.width();
+    let height = image.height();
+    let mut out = image::RgbaImage::from_pixel(width, height, fill);
+    for y in 0..height {
+        let src_y = y as i32 - dy;
+        if src_y < 0 || src_y >= height as i32 {
+            continue;
+        }
+        for x in 0..width {
+            let src_x = x as i32 - dx;
+            if src_x < 0 || src_x >= width as i32 {
+                continue;
+            }
+            let pixel = image.get_pixel(src_x as u32, src_y as u32);
+            out.put_pixel(x, y, *pixel);
+        }
+    }
+    out
+}
+
+fn sample_range(seed: &mut u64, min: f64, max: f64) -> f64 {
+    if (max - min).abs() <= f64::EPSILON {
+        return min;
+    }
+    let t = sample_unit(seed);
+    min + (max - min) * t
+}
+
+fn sample_i32_range(seed: &mut u64, min: i32, max: i32) -> i32 {
+    if min >= max {
+        return min;
+    }
+    let span = (max - min + 1) as f64;
+    min + (sample_unit(seed) * span).floor() as i32
+}
+
+fn clamp_i32(value: i32, min: i32, max: i32) -> i32 {
+    value.clamp(min, max)
+}
+
 fn write_png_rgba(path: &Path, image: &image::RgbaImage) -> Result<()> {
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
@@ -758,6 +1886,14 @@ fn write_gif_rgba(path: &Path, frames: &[image::RgbaImage], fps: u16) -> Result<
 fn frame_delay_ms(fps: u16) -> u16 {
     let fps = fps.max(1) as u32;
     ((1000 + fps / 2) / fps).min(u16::MAX as u32) as u16
+}
+
+fn estimate_payload_bytes_per_second(payload_bytes: usize, frame_count: usize, fps: u16) -> u64 {
+    if payload_bytes == 0 || frame_count == 0 {
+        return 0;
+    }
+    let fps = fps.max(1) as f64;
+    ((payload_bytes as f64 * fps) / frame_count as f64).round() as u64
 }
 
 fn cell_seed(x: u32, y: u32) -> u64 {
@@ -824,6 +1960,55 @@ mod tests {
         assert_eq!(image.width(), 64);
         assert_eq!(image.height(), 64);
         assert_eq!(image.as_raw().len(), 64 * 64 * 4);
+    }
+
+    #[test]
+    fn render_sora_temple_roundtrip_decodes_payload() {
+        let payload = b"petal-cli-sora-temple";
+        let options = PetalStreamOptions::default();
+        let grid = PetalStreamEncoder::encode_grid(payload, options).expect("encode");
+        let image = render_petal_frame(
+            &grid,
+            128,
+            3,
+            12,
+            PetalRenderStyle::SoraTemple,
+            options,
+        );
+        let decoded = decode_frame_with_grid(
+            &image,
+            grid.grid_size,
+            PetalStreamOptions {
+                grid_size: grid.grid_size,
+                ..options
+            },
+        )
+        .expect("decode");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn sora_temple_render_is_deterministic_per_frame() {
+        let payload = b"petal-cli-sora-deterministic";
+        let options = PetalStreamOptions::default();
+        let grid = PetalStreamEncoder::encode_grid(payload, options).expect("encode");
+        let image_a = render_petal_frame(
+            &grid,
+            160,
+            5,
+            24,
+            PetalRenderStyle::SoraTemple,
+            options,
+        );
+        let image_b = render_petal_frame(
+            &grid,
+            160,
+            5,
+            24,
+            PetalRenderStyle::SoraTemple,
+            options,
+        );
+        assert_eq!(image_a.as_raw(), image_b.as_raw());
     }
 
     #[test]
@@ -923,5 +2108,78 @@ mod tests {
             decode_frame_auto(&image, PetalStreamOptions::default()).expect("auto");
         assert_eq!(grid_size, grid.grid_size);
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn capture_eval_reports_metrics_for_small_stream() {
+        let payload = vec![0xA5; 220];
+        let stream_options = QrStreamOptions {
+            chunk_size: 72,
+            parity_group: 0,
+            ..QrStreamOptions::default()
+        };
+        let (_envelope, frames) =
+            QrStreamEncoder::encode_frames(&payload, stream_options).expect("encode stream");
+        let frame_bytes = frames
+            .iter()
+            .take(4)
+            .map(QrStreamFrame::encode)
+            .collect::<Vec<_>>();
+        let max_len = frame_bytes.iter().map(Vec::len).max().unwrap_or_default();
+        let resolved_grid_size = PetalStreamEncoder::encode_grid(
+            &vec![0u8; max_len],
+            PetalStreamOptions::default(),
+        )
+        .expect("grid resolve")
+        .grid_size;
+        let petal_options = PetalStreamOptions {
+            grid_size: resolved_grid_size,
+            ..PetalStreamOptions::default()
+        };
+
+        let mut images = Vec::new();
+        for (index, bytes) in frame_bytes.iter().enumerate() {
+            let grid = PetalStreamEncoder::encode_grid(bytes, petal_options).expect("grid");
+            images.push(render_petal_frame(
+                &grid,
+                192,
+                index as u32,
+                frame_bytes.len() as u32,
+                PetalRenderStyle::SoraTemple,
+                petal_options,
+            ));
+        }
+
+        let metrics = evaluate_capture_robustness(
+            &images,
+            &frame_bytes,
+            resolved_grid_size,
+            petal_options,
+            PetalCaptureProfile::Default,
+            1337,
+            2,
+        )
+        .expect("evaluate");
+        assert_eq!(metrics.frame_count, frame_bytes.len());
+        assert!(metrics.attempts > 0);
+        assert!(metrics.successes > 0);
+        assert!(
+            metrics.success_ratio() > 0.55,
+            "success_ratio={:.3}",
+            metrics.success_ratio()
+        );
+    }
+
+    #[test]
+    fn estimated_payload_rate_meets_three_kb_target() {
+        let payload = vec![0x5A; 12_000];
+        let options = QrStreamOptions {
+            chunk_size: 360,
+            parity_group: 0,
+            ..QrStreamOptions::default()
+        };
+        let (_envelope, frames) = QrStreamEncoder::encode_frames(&payload, options).expect("encode");
+        let bps = estimate_payload_bytes_per_second(payload.len(), frames.len(), 24);
+        assert!(bps >= 3_000, "estimated throughput too low: {bps} B/s");
     }
 }

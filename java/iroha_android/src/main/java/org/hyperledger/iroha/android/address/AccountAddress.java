@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -92,6 +93,45 @@ public final class AccountAddress {
 
   public byte[] canonicalBytes() {
     return Arrays.copyOf(canonicalBytes, canonicalBytes.length);
+  }
+
+  /**
+   * Re-encodes this address with a domain selector derived from the provided domain label when this address currently
+   * uses the {@code default} domain selector (tag {@code 0x00}).
+   *
+   * <p>Some Core API deployments return account IDs encoded with the default-domain selector, while Torii/explorer
+   * interactions require the FI-local (Local12) selector (tag {@code 0x01}) derived from the FI's domain label.
+   *
+   * <p>This helper is intentionally conservative:
+   * <ul>
+   *   <li>If this address already uses {@code local12} or {@code global} selectors, it returns {@code this}.</li>
+   *   <li>If {@code domainLabel} canonicalizes to {@code default}, it returns {@code this}.</li>
+   * </ul>
+   */
+  public AccountAddress rebasedFromDefaultDomain(final String domainLabel) throws AccountAddressException {
+    Objects.requireNonNull(domainLabel, "domainLabel must not be null");
+    parseCanonical(canonicalBytes);
+    if (canonicalBytes.length < 2) {
+      return this;
+    }
+
+    final int tag = canonicalBytes[1] & 0xFF;
+    if (tag != 0x00) {
+      return this;
+    }
+
+    final String canonicalLabel = domainLabel.trim().toLowerCase(Locale.ROOT);
+    if (canonicalLabel.isBlank() || canonicalLabel.equalsIgnoreCase(DEFAULT_DOMAIN_NAME)) {
+      return this;
+    }
+
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(canonicalBytes[0]); // header
+    out.write(0x01); // local12 domain selector
+    final byte[] digest = computeLocalDigest(canonicalLabel);
+    out.write(digest, 0, digest.length);
+    out.write(canonicalBytes, 2, canonicalBytes.length - 2); // skip old default selector tag
+    return fromCanonicalBytes(out.toByteArray());
   }
 
   public String canonicalHex() {

@@ -23,7 +23,7 @@ Background prover reports (non‑consensus verification):
 
 IVM prove helper (non-consensus proof generation):
 - `POST   /v1/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only)
-- `POST   /v1/zk/ivm/prove` — submit a prove job for an `IvmProved` payload (returns `{ job_id }`)
+- `POST   /v1/zk/ivm/prove` — submit a prove job for execution-derived `IvmProved` payload (returns `{ job_id }`)
 - `GET    /v1/zk/ivm/prove/{job_id}` — poll job status (`pending|running|done|error`)
 - `DELETE /v1/zk/ivm/prove/{job_id}` — delete/cancel a job from the in-memory cache
 
@@ -37,7 +37,7 @@ Notes
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
 - `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri-v1` (including `stark/fri-v1/...` variants) (must be compatible with `ivm-execution-v1`).
-- `/v1/zk/ivm/prove` currently supports `halo2/ipa` only (Halo2 proving keys).
+- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
 - STARK verification (`stark/fri-v1` family) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
 - For `halo2/*` and `stark/fri-v1` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
 - For STARK wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes; concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
@@ -117,10 +117,13 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Storage hygiene: deleting an attachment removes both `.bin` and `.json`; deleting a report removes the corresponding `.json` under `zk_prover/reports`.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads.
 - Key bytes: when a registry entry omits inline VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
-- Proving keys: the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
+- Proving keys: for `halo2/ipa`, the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
   The `.pk` file must match the resolved verifying key and uses Halo2 `SerdeFormat::Processed` serialization.
+  The STARK path (`stark/fri-v1`) does not require a separate `.pk` artifact.
 - Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
-- Execution semantics: `/v1/zk/ivm/prove` currently uses the commitment-binding `halo2/ipa:ivm-execution-v1` circuit. Nodes still deterministically replay the bytecode during admission to recompute the overlay and commitments and reject mismatches. For environments that operate with full-semantic proof circuits, set `pipeline.ivm_proved.skip_replay = true` to skip replay.
+- Execution semantics: `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and derives the authoritative `IvmProved` payload on-node before generating `ivm-execution-v1` proof attachments (`halo2/ipa` or `stark/fri-v1`).
+- Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }` where optional `proved` is treated as a strict consistency check against node-derived execution output.
+- Nodes can still deterministically replay bytecode during admission as an additional safety check. `pipeline.ivm_proved.skip_replay` controls whether that extra replay check is skipped for full-semantics execution circuits.
 - Metrics: `torii_zk_ivm_prove_inflight` (jobs currently proving) and `torii_zk_ivm_prove_queued` (jobs queued waiting for an inflight slot) expose IVM prove helper queue pressure.
 
 ## Examples

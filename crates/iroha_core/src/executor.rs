@@ -473,6 +473,11 @@ pub(crate) fn charge_fees_for_applied_overlay(
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
 ) -> Result<(), ValidationFail> {
+    // Genesis transactions are bootstrap operations and must remain fee-free.
+    if state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty() {
+        return Ok(());
+    }
+
     let tx_bytes_len = to_bytes(transaction)
         .map(|bytes| bytes.len())
         .map_err(|err| {

@@ -332,6 +332,7 @@ const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
 
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
+const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
 
 /// Utility to get the root of the repository
@@ -518,10 +519,20 @@ impl Program {
                 name: "iroha3d",
                 env: PROGRAM_IROHAD_ENV,
                 pkg: "irohad",
-                build_args: ["--bin", "iroha3d"]
-                    .into_iter()
-                    .map(OsString::from)
-                    .collect(),
+                build_args: {
+                    let mut args: Vec<OsString> = ["--bin", "iroha3d"]
+                        .into_iter()
+                        .map(OsString::from)
+                        .collect();
+                    if let Ok(features) = std::env::var(PROGRAM_IROHAD_FEATURES_ENV) {
+                        let trimmed = features.trim();
+                        if !trimmed.is_empty() {
+                            args.push(OsString::from("--features"));
+                            args.push(OsString::from(trimmed));
+                        }
+                    }
+                    args
+                },
             },
             Self::Iroha => ProgramSpec {
                 name: "iroha",
@@ -10270,6 +10281,26 @@ exit 0
         assert!(args.contains(&"--bin".to_string()));
         assert!(args.contains(&"iroha3d".to_string()));
         assert!(!args.contains(&"--features".to_string()));
+    }
+
+    #[test]
+    fn program_spec_irohad_includes_features_from_env() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let old_env = env::var(super::PROGRAM_IROHAD_FEATURES_ENV).ok();
+        set_env_var(super::PROGRAM_IROHAD_FEATURES_ENV, "zk-stark");
+        let spec = Program::Irohad.spec();
+        let args: Vec<String> = spec
+            .build_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"--features".to_string()));
+        assert!(args.contains(&"zk-stark".to_string()));
+        if let Some(v) = old_env {
+            set_env_var(super::PROGRAM_IROHAD_FEATURES_ENV, v);
+        } else {
+            remove_env_var(super::PROGRAM_IROHAD_FEATURES_ENV);
+        }
     }
 
     fn build_with_isolated_permit(builder: NetworkBuilder) -> Network {

@@ -72,6 +72,7 @@ goldilocks_backend = [
 ]
 zk-halo2 = ["iroha_core/zk-halo2"]
 zk-halo2-ipa = ["iroha_core/zk-halo2-ipa"]
+zk-stark = ["iroha_core/zk-stark"]
 ipa-commitment = ["dep:iroha_zkp_halo2"]
 circuit-params = ["iroha_core/circuit-params", "halo2_proofs/circuit-params"]
 zk-tests = ["iroha_core/zk-tests"]

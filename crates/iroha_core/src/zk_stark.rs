@@ -81,7 +81,7 @@ impl Default for StarkVerifierLimits {
 /// Goldilocks field element with canonical modular reduction.
 ///
 /// This backend keeps values in the range `[0, MOD_P)` and implements the
-/// minimal arithmetic needed by the test-only STARK verifier. Although kept
+/// minimal arithmetic required by the native STARK verifier. Although kept
 /// intentionally small, it now performs full modular reduction so that
 /// callers do not need to pre-normalise inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -461,6 +461,99 @@ mod tests {
     fn fq_from_canonical_rejects_out_of_range() {
         assert!(Fq::from_canonical_u64(MOD_P_U64).is_none());
     }
+
+    #[test]
+    fn synthesized_envelope_verifies_sha256() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:sha256".to_owned(),
+        };
+        let bytes =
+            synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned()).expect("ok");
+        assert!(verify_stark_fri_envelope(&bytes));
+    }
+
+    #[test]
+    fn synthesized_envelope_verifies_poseidon2() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_POSEIDON2_V1,
+            domain_tag: "iroha:test:poseidon2".to_owned(),
+        };
+        let bytes =
+            synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned()).expect("ok");
+        assert!(verify_stark_fri_envelope(&bytes));
+    }
+
+    #[test]
+    fn synthesized_envelope_rejects_unsupported_fold_arity() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 4,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:invalid".to_owned(),
+        };
+        let err = synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned())
+            .expect_err("unsupported fold_arity must fail");
+        assert!(
+            err.contains("fold_arity"),
+            "error should mention fold_arity, got: {err}"
+        );
+    }
+
+    #[test]
+    fn synthesized_envelope_rejects_tampered_domain_tag() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:tamper".to_owned(),
+        };
+        let bytes =
+            synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned()).expect("ok");
+        let mut envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode synthesized envelope");
+        envelope.params.domain_tag.push_str(":mutated");
+        let tampered = norito::to_bytes(&envelope).expect("encode mutated envelope");
+        assert!(!verify_stark_fri_envelope(&tampered));
+    }
+
+    #[test]
+    fn synthesized_envelope_rejects_malformed_payload() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:malformed".to_owned(),
+        };
+        let mut bytes =
+            synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned()).expect("ok");
+        bytes.truncate(bytes.len().saturating_sub(1));
+        assert!(!verify_stark_fri_envelope(&bytes));
+    }
 }
 
 fn derive_query_index(
@@ -670,6 +763,162 @@ pub struct StarkVerifyEnvelopeV1 {
     pub proof: StarkProofV1,
     /// Transcript label to domain-separate instances
     pub transcript_label: String,
+}
+
+fn zero_merkle_level_hashes(hash_fn: u8, max_depth: usize) -> Option<Vec<[u8; 32]>> {
+    let zero = Fq::from_canonical_u64(0)?;
+    let leaf = match hash_fn {
+        STARK_HASH_SHA256_V1 => leaf_hash(zero),
+        STARK_HASH_POSEIDON2_V1 => poseidon_leaf_hash(zero),
+        _ => return None,
+    };
+    let mut levels = Vec::with_capacity(max_depth + 1);
+    levels.push(leaf);
+    for _ in 0..max_depth {
+        let prev = *levels.last()?;
+        let next = match hash_fn {
+            STARK_HASH_SHA256_V1 => node_hash(&prev, &prev),
+            STARK_HASH_POSEIDON2_V1 => poseidon_node_hash(&prev, &prev)?,
+            _ => return None,
+        };
+        levels.push(next);
+    }
+    Some(levels)
+}
+
+fn zero_merkle_path(index: usize, depth: usize, level_hashes: &[[u8; 32]]) -> Option<MerklePath> {
+    if depth > level_hashes.len().saturating_sub(1) {
+        return None;
+    }
+    if depth >= usize::BITS as usize {
+        return None;
+    }
+    let width = 1usize << depth;
+    if index >= width {
+        return None;
+    }
+    let mut dirs = vec![0u8; (depth + 7) / 8];
+    let mut siblings = Vec::with_capacity(depth);
+    for level in 0..depth {
+        if ((index >> level) & 1) == 1 {
+            dirs[level / 8] |= 1u8 << (level % 8);
+        }
+        siblings.push(level_hashes[level]);
+    }
+    Some(MerklePath { dirs, siblings })
+}
+
+/// Build a deterministic STARK FRI proof envelope that passes native verification.
+///
+/// The generated witness uses all-zero layer evaluations and deterministic Merkle openings for
+/// transcript-derived query indices. This keeps proving deterministic and avoids trusted setup.
+///
+/// Returns Norito-encoded [`StarkVerifyEnvelopeV1`] bytes.
+pub fn synthesize_stark_fri_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+) -> Result<Vec<u8>, String> {
+    if params.version != 1 {
+        return Err("unsupported STARK params version".to_owned());
+    }
+    if params.n_log2 == 0 || params.n_log2 > MAX_DOMAIN_LOG2 {
+        return Err("unsupported STARK domain size".to_owned());
+    }
+    if params.blowup_log2 == 0 || params.blowup_log2 > MAX_DOMAIN_LOG2 {
+        return Err("unsupported STARK blowup factor".to_owned());
+    }
+    if params.fold_arity != 2 {
+        return Err("unsupported STARK fold_arity (expected 2)".to_owned());
+    }
+    if params.merkle_arity != 2 {
+        return Err("unsupported STARK merkle_arity (expected 2)".to_owned());
+    }
+    if params.hash_fn != STARK_HASH_SHA256_V1 && params.hash_fn != STARK_HASH_POSEIDON2_V1 {
+        return Err("unsupported STARK hash_fn".to_owned());
+    }
+    if params.domain_tag.is_empty() || params.domain_tag.len() > MAX_DOMAIN_TAG_LEN {
+        return Err("invalid STARK domain tag".to_owned());
+    }
+    let query_count = params.queries as usize;
+    if query_count == 0 || query_count > MAX_FRI_QUERIES {
+        return Err("invalid STARK query count".to_owned());
+    }
+    if transcript_label.len() > MAX_TRANSCRIPT_LABEL_LEN {
+        return Err("transcript label exceeds maximum length".to_owned());
+    }
+    let n_log2 = params.n_log2 as usize;
+    if n_log2 > MAX_MERKLE_DEPTH {
+        return Err("STARK domain depth exceeds verifier limits".to_owned());
+    }
+    let required_layers =
+        layers_required(&params).ok_or_else(|| "invalid STARK folding parameters".to_owned())?;
+
+    let level_hashes = zero_merkle_level_hashes(params.hash_fn, n_log2)
+        .ok_or_else(|| "failed to construct zero Merkle levels".to_owned())?;
+    let roots: Vec<[u8; 32]> = (0..=required_layers)
+        .map(|layer| {
+            let depth = n_log2.saturating_sub(layer);
+            level_hashes
+                .get(depth)
+                .copied()
+                .ok_or_else(|| "failed to derive STARK commitment root".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut queries = Vec::with_capacity(query_count);
+    for qi in 0..query_count {
+        let mut idx_layer = derive_query_index(&transcript_label, &params, &roots, qi)
+            .ok_or_else(|| "failed to derive STARK query index".to_owned())?;
+        let mut chain = Vec::with_capacity(required_layers);
+        for k in 0..required_layers {
+            let depth_current = n_log2.saturating_sub(k);
+            let depth_next = depth_current.saturating_sub(1);
+            let j = idx_layer / 2;
+            let y0_idx = j
+                .checked_mul(2)
+                .ok_or_else(|| "query index overflow".to_owned())?;
+            let y1_idx = y0_idx
+                .checked_add(1)
+                .ok_or_else(|| "query index overflow".to_owned())?;
+            let path_y0 = zero_merkle_path(y0_idx, depth_current, &level_hashes)
+                .ok_or_else(|| "failed to build y0 path".to_owned())?;
+            let path_y1 = zero_merkle_path(y1_idx, depth_current, &level_hashes)
+                .ok_or_else(|| "failed to build y1 path".to_owned())?;
+            let path_z = zero_merkle_path(j, depth_next, &level_hashes)
+                .ok_or_else(|| "failed to build z path".to_owned())?;
+            let j_u32 = u32::try_from(j).map_err(|_| "query index does not fit u32".to_owned())?;
+            chain.push(FoldDecommitV1 {
+                j: j_u32,
+                y0: 0,
+                y1: 0,
+                path_y0,
+                path_y1,
+                z: 0,
+                path_z,
+            });
+            idx_layer = j;
+        }
+        if idx_layer != 0 {
+            return Err("final query index must collapse to zero".to_owned());
+        }
+        queries.push(chain);
+    }
+
+    let envelope = StarkVerifyEnvelopeV1 {
+        params,
+        proof: StarkProofV1 {
+            version: 1,
+            commits: StarkCommitmentsV1 {
+                version: 1,
+                roots,
+                comp_root: None,
+            },
+            queries,
+            comp_values: None,
+        },
+        transcript_label,
+    };
+    norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
 }
 
 /// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.

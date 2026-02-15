@@ -14,18 +14,24 @@ use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use blake3::hash as blake3_hash;
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
-use iroha::da::{self, DaIngestParams, DaRentLedgerPlan};
+use iroha::da::{
+    self, DaCommitmentProofRequest, DaIngestParams, DaPinIntentQueryRequest, DaRentLedgerPlan,
+};
 use iroha::data_model::{
     asset::AssetDefinitionId,
     da::{
+        commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::DaIngestReceipt,
         manifest::DaManifestV1,
+        pin_intent::DaPinIntentWithLocation,
         types::{
             BlobCodec, BlobDigest, DaRentLedgerProjection, DaRentPolicyV1, DaRentQuote,
-            ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy,
+            ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
     nexus::LaneId,
+    query::parameters::Pagination,
+    sorafs::pin_registry::ManifestDigest,
 };
 use iroha_crypto::Hash;
 use iroha_torii_shared::da::sampling::build_sampling_plan;
@@ -43,6 +49,7 @@ use std::{
     convert::{TryFrom, TryInto},
     fmt::Write as _,
     fs,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
@@ -61,6 +68,22 @@ pub enum Command {
     Prove(ProveArgs),
     /// Download + verify availability for a storage ticket using a Torii manifest.
     ProveAvailability(ProveAvailabilityArgs),
+    /// Fetch the current DA proof-policy bundle from Torii.
+    ProofPolicies(ProofPoliciesArgs),
+    /// Fetch the DA proof-policy snapshot from Torii.
+    ProofPolicySnapshot(ProofPolicySnapshotArgs),
+    /// List DA commitments with optional filters.
+    CommitmentsList(CommitmentQueryArgs),
+    /// Build a DA commitment proof with optional filters.
+    CommitmentsProve(CommitmentQueryArgs),
+    /// Verify a DA commitment proof from a JSON file.
+    CommitmentsVerify(CommitmentVerifyArgs),
+    /// List DA pin intents with optional filters.
+    PinIntentsList(PinIntentQueryArgs),
+    /// Build a DA pin intent proof with optional filters.
+    PinIntentsProve(PinIntentQueryArgs),
+    /// Verify a DA pin intent proof from a JSON file.
+    PinIntentsVerify(PinIntentVerifyArgs),
     /// Quote rent/incentive breakdown for a blob size/retention combo.
     RentQuote(RentQuoteArgs),
     /// Convert a rent quote into deterministic ledger transfer instructions.
@@ -75,6 +98,14 @@ impl Run for Command {
             Command::GetBlob(args) => args.run(context),
             Command::Prove(args) => args.run(context),
             Command::ProveAvailability(args) => args.run(context),
+            Command::ProofPolicies(args) => args.run(context),
+            Command::ProofPolicySnapshot(args) => args.run(context),
+            Command::CommitmentsList(args) => args.run_list(context),
+            Command::CommitmentsProve(args) => args.run_prove(context),
+            Command::CommitmentsVerify(args) => args.run(context),
+            Command::PinIntentsList(args) => args.run_list(context),
+            Command::PinIntentsProve(args) => args.run_prove(context),
+            Command::PinIntentsVerify(args) => args.run(context),
             Command::RentQuote(args) => args.run(context),
             Command::RentLedger(args) => args.run(context),
         }
@@ -209,6 +240,205 @@ impl GetBlobArgs {
         let output = build_manifest_fetch_value(&bundle, &persisted);
         let text = render_manifest_fetch_text(&bundle, &persisted);
         print_with_optional_text(context, Some(text), &output)
+    }
+}
+
+#[derive(Args, Debug, Default)]
+pub struct ProofPoliciesArgs {}
+
+impl ProofPoliciesArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let bundle = context.client_from_config().get_da_proof_policies()?;
+        let text = render_da_proof_policies_text("DA proof policies", &bundle);
+        print_with_optional_text(context, Some(text), &bundle)
+    }
+}
+
+#[derive(Args, Debug, Default)]
+pub struct ProofPolicySnapshotArgs {}
+
+impl ProofPolicySnapshotArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let bundle = context.client_from_config().get_da_proof_policy_snapshot()?;
+        let text = render_da_proof_policies_text("DA proof policy snapshot", &bundle);
+        print_with_optional_text(context, Some(text), &bundle)
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct CommitmentQueryArgs {
+    /// Optional manifest hash filter (32-byte hex).
+    #[arg(long = "manifest-hash", value_name = "HEX")]
+    pub manifest_hash: Option<String>,
+    /// Optional lane id filter (requires epoch + sequence for direct lookup).
+    #[arg(long = "lane-id", value_name = "U32")]
+    pub lane_id: Option<u32>,
+    /// Optional epoch filter (requires lane-id + sequence for direct lookup).
+    #[arg(long = "epoch", value_name = "U64")]
+    pub epoch: Option<u64>,
+    /// Optional sequence filter (requires lane-id + epoch for direct lookup).
+    #[arg(long = "sequence", value_name = "U64")]
+    pub sequence: Option<u64>,
+    /// Optional list limit (`>0`).
+    #[arg(long = "limit", value_name = "U64")]
+    pub limit: Option<u64>,
+    /// Optional list offset.
+    #[arg(long = "offset", value_name = "U64", default_value_t = 0)]
+    pub offset: u64,
+}
+
+impl CommitmentQueryArgs {
+    fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request = self.to_request()?;
+        let response = context.client_from_config().list_da_commitments(&request)?;
+        let text = render_da_commitments_list_text(&response);
+        print_with_optional_text(context, Some(text), &response)
+    }
+
+    fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request = self.to_request()?;
+        let response = context.client_from_config().prove_da_commitment(&request)?;
+        let text = render_da_commitment_prove_text(&response);
+        print_with_optional_text(context, Some(text), &response)
+    }
+
+    fn to_request(&self) -> Result<DaCommitmentProofRequest> {
+        let manifest_hash = self
+            .manifest_hash
+            .as_deref()
+            .map(|hash| parse_fixed_hex(hash, "manifest-hash").map(ManifestDigest::new))
+            .transpose()?;
+        let limit = self
+            .limit
+            .map(|value| {
+                NonZeroU64::new(value).ok_or_else(|| eyre!("--limit must be greater than zero"))
+            })
+            .transpose()?;
+        let pagination = if limit.is_some() || self.offset > 0 {
+            Some(Pagination::new(limit, self.offset))
+        } else {
+            None
+        };
+        Ok(DaCommitmentProofRequest {
+            manifest_hash,
+            lane_id: self.lane_id,
+            epoch: self.epoch,
+            sequence: self.sequence,
+            pagination,
+        })
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct CommitmentVerifyArgs {
+    /// Path to a JSON-encoded `DaCommitmentProof`.
+    #[arg(long = "proof-json", value_name = "PATH")]
+    pub proof_json: PathBuf,
+}
+
+impl CommitmentVerifyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let proof = load_json_payload::<DaCommitmentProof>(&self.proof_json, "DA commitment proof")?;
+        let response = context.client_from_config().verify_da_commitment(&proof)?;
+        let text = render_da_verify_text(
+            "DA commitment verification",
+            response.valid,
+            response.error.as_deref(),
+        );
+        print_with_optional_text(context, Some(text), &response)
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct PinIntentQueryArgs {
+    /// Optional manifest hash filter (32-byte hex).
+    #[arg(long = "manifest-hash", value_name = "HEX")]
+    pub manifest_hash: Option<String>,
+    /// Optional storage ticket filter (32-byte hex).
+    #[arg(long = "storage-ticket", value_name = "HEX")]
+    pub storage_ticket: Option<String>,
+    /// Optional alias filter.
+    #[arg(long = "alias", value_name = "TEXT")]
+    pub alias: Option<String>,
+    /// Optional lane id filter (requires epoch + sequence for direct lookup).
+    #[arg(long = "lane-id", value_name = "U32")]
+    pub lane_id: Option<u32>,
+    /// Optional epoch filter (requires lane-id + sequence for direct lookup).
+    #[arg(long = "epoch", value_name = "U64")]
+    pub epoch: Option<u64>,
+    /// Optional sequence filter (requires lane-id + epoch for direct lookup).
+    #[arg(long = "sequence", value_name = "U64")]
+    pub sequence: Option<u64>,
+    /// Optional list limit (`>0`).
+    #[arg(long = "limit", value_name = "U64")]
+    pub limit: Option<u64>,
+    /// Optional list offset.
+    #[arg(long = "offset", value_name = "U64", default_value_t = 0)]
+    pub offset: u64,
+}
+
+impl PinIntentQueryArgs {
+    fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request = self.to_request()?;
+        let response = context.client_from_config().list_da_pin_intents(&request)?;
+        let text = render_da_pin_intents_list_text(&response);
+        print_with_optional_text(context, Some(text), &response)
+    }
+
+    fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let request = self.to_request()?;
+        let response = context.client_from_config().prove_da_pin_intent(&request)?;
+        let text = render_da_pin_intent_prove_text(&response);
+        print_with_optional_text(context, Some(text), &response)
+    }
+
+    fn to_request(&self) -> Result<DaPinIntentQueryRequest> {
+        let manifest_hash = self
+            .manifest_hash
+            .as_deref()
+            .map(|hash| parse_fixed_hex(hash, "manifest-hash").map(ManifestDigest::new))
+            .transpose()?;
+        let storage_ticket = self
+            .storage_ticket
+            .as_deref()
+            .map(|ticket| parse_fixed_hex(ticket, "storage-ticket").map(StorageTicketId::new))
+            .transpose()?;
+        let limit = self
+            .limit
+            .map(|value| {
+                NonZeroU64::new(value).ok_or_else(|| eyre!("--limit must be greater than zero"))
+            })
+            .transpose()?;
+        let pagination = if limit.is_some() || self.offset > 0 {
+            Some(Pagination::new(limit, self.offset))
+        } else {
+            None
+        };
+        Ok(DaPinIntentQueryRequest {
+            manifest_hash,
+            storage_ticket,
+            alias: self.alias.clone(),
+            lane_id: self.lane_id,
+            epoch: self.epoch,
+            sequence: self.sequence,
+            pagination,
+        })
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct PinIntentVerifyArgs {
+    /// Path to a JSON-encoded `DaPinIntentWithLocation`.
+    #[arg(long = "proof-json", value_name = "PATH")]
+    pub proof_json: PathBuf,
+}
+
+impl PinIntentVerifyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let proof = load_json_payload::<DaPinIntentWithLocation>(&self.proof_json, "DA pin intent proof")?;
+        let response = context.client_from_config().verify_da_pin_intent(&proof)?;
+        let text = render_da_verify_text("DA pin intent verification", response.valid, None);
+        print_with_optional_text(context, Some(text), &response)
     }
 }
 
@@ -1057,6 +1287,87 @@ fn render_submit_text(output: &SubmitOutput) -> String {
     out
 }
 
+fn render_da_proof_policies_text(title: &str, bundle: &DaProofPolicyBundle) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{title}");
+    let _ = writeln!(out, "version: {}", bundle.version);
+    let _ = writeln!(out, "policy_hash: {}", hex::encode(bundle.policy_hash.as_ref()));
+    let _ = writeln!(out, "policy_count: {}", bundle.policies.len());
+    out
+}
+
+fn render_da_commitments_list_text(
+    response: &iroha::da::DaCommitmentListResponse,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "DA commitments");
+    let _ = writeln!(out, "version: {}", response.policies.version);
+    let _ = writeln!(
+        out,
+        "policy_hash: {}",
+        hex::encode(response.policies.policy_hash.as_ref())
+    );
+    let _ = writeln!(out, "policy_count: {}", response.policies.policies.len());
+    let _ = writeln!(out, "commitment_count: {}", response.commitments.len());
+    out
+}
+
+fn render_da_commitment_prove_text(
+    response: &Option<iroha::da::DaCommitmentProofResponse>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "DA commitment proof");
+    match response {
+        Some(payload) => {
+            let _ = writeln!(out, "found: true");
+            let _ = writeln!(out, "proof_scheme: {}", payload.proof.commitment.proof_scheme);
+            let _ = writeln!(out, "bundle_len: {}", payload.proof.bundle_len);
+        }
+        None => {
+            let _ = writeln!(out, "found: false");
+        }
+    }
+    out
+}
+
+fn render_da_pin_intents_list_text(response: &[DaPinIntentWithLocation]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "DA pin intents");
+    let _ = writeln!(out, "pin_intent_count: {}", response.len());
+    out
+}
+
+fn render_da_pin_intent_prove_text(response: &Option<DaPinIntentWithLocation>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "DA pin intent proof");
+    match response {
+        Some(record) => {
+            let _ = writeln!(out, "found: true");
+            let _ = writeln!(
+                out,
+                "storage_ticket: {}",
+                hex::encode(record.intent.storage_ticket.as_ref())
+            );
+        }
+        None => {
+            let _ = writeln!(out, "found: false");
+        }
+    }
+    out
+}
+
+fn render_da_verify_text(title: &str, valid: bool, error: Option<&str>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{title}");
+    let _ = writeln!(out, "valid: {valid}");
+    if let Some(error) = error
+        && !error.trim().is_empty()
+    {
+        let _ = writeln!(out, "error: {error}");
+    }
+    out
+}
+
 fn persist_receipt_headers(root: &Path, header_value: &str) -> Result<()> {
     let mut headers = Map::new();
     headers.insert(
@@ -1135,6 +1446,20 @@ fn parse_fixed_hex(label: &str, field: &str) -> Result<[u8; 32]> {
         .try_into()
         .map_err(|_| eyre!("`{field}` must decode to 32 bytes, got {byte_len}"))?;
     Ok(array)
+}
+
+fn load_json_payload<T>(path: &Path, label: &str) -> Result<T>
+where
+    T: norito::json::JsonDeserialize,
+{
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read {label} JSON `{}`", path.display()))?;
+    norito::json::from_slice(&bytes).wrap_err_with(|| {
+        format!(
+            "failed to decode {label} JSON payload from `{}`",
+            path.display()
+        )
+    })
 }
 
 fn load_manifest(path: &Path) -> Result<DaManifestV1> {
@@ -1616,7 +1941,9 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash};
     use iroha_data_model::da::{
+        commitment::DaProofPolicyBundle,
         manifest::{ChunkCommitment, ChunkRole},
+        pin_intent::DaPinIntent,
         types::{
             BlobClass, BlobDigest, DaRentQuote, ErasureProfile, ExtraMetadata, FecScheme,
             GovernanceTag, MetadataEntry, MetadataVisibility, RetentionPolicy, StorageTicketId,
@@ -2097,6 +2424,124 @@ mod tests {
         assert!(text.contains("client_blob_id: abcd"));
         assert!(text.contains("request: /tmp/request.norito"));
         assert!(text.contains("request_json: /tmp/request.json"));
+    }
+
+    #[test]
+    fn commitment_query_args_build_request() {
+        let args = CommitmentQueryArgs {
+            manifest_hash: Some("11".repeat(32)),
+            lane_id: Some(7),
+            epoch: Some(9),
+            sequence: Some(11),
+            limit: Some(3),
+            offset: 1,
+        };
+        let request = args.to_request().expect("request");
+        assert_eq!(request.manifest_hash, Some(ManifestDigest::new([0x11; 32])));
+        assert_eq!(request.lane_id, Some(7));
+        assert_eq!(request.epoch, Some(9));
+        assert_eq!(request.sequence, Some(11));
+        assert_eq!(
+            request
+                .pagination
+                .as_ref()
+                .and_then(|pagination| pagination.limit.map(NonZeroU64::get)),
+            Some(3)
+        );
+        assert_eq!(
+            request.pagination.as_ref().map(|pagination| pagination.offset),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn commitment_query_args_reject_zero_limit() {
+        let args = CommitmentQueryArgs {
+            manifest_hash: None,
+            lane_id: None,
+            epoch: None,
+            sequence: None,
+            limit: Some(0),
+            offset: 0,
+        };
+        let err = args.to_request().expect_err("expected failure");
+        assert!(err.to_string().contains("--limit"));
+    }
+
+    #[test]
+    fn pin_intent_query_args_build_request() {
+        let args = PinIntentQueryArgs {
+            manifest_hash: Some("22".repeat(32)),
+            storage_ticket: Some("33".repeat(32)),
+            alias: Some("demo/alias".to_string()),
+            lane_id: Some(4),
+            epoch: Some(8),
+            sequence: Some(12),
+            limit: Some(5),
+            offset: 2,
+        };
+        let request = args.to_request().expect("request");
+        assert_eq!(request.manifest_hash, Some(ManifestDigest::new([0x22; 32])));
+        assert_eq!(request.storage_ticket, Some(StorageTicketId::new([0x33; 32])));
+        assert_eq!(request.alias.as_deref(), Some("demo/alias"));
+        assert_eq!(request.lane_id, Some(4));
+        assert_eq!(request.epoch, Some(8));
+        assert_eq!(request.sequence, Some(12));
+        assert_eq!(
+            request
+                .pagination
+                .as_ref()
+                .and_then(|pagination| pagination.limit.map(NonZeroU64::get)),
+            Some(5)
+        );
+        assert_eq!(
+            request.pagination.as_ref().map(|pagination| pagination.offset),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn render_da_proof_policies_text_includes_hash_and_count() {
+        let bundle = DaProofPolicyBundle::new(Vec::new());
+        let text = render_da_proof_policies_text("DA proof policies", &bundle);
+        assert!(text.contains("DA proof policies"));
+        assert!(text.contains("policy_hash:"));
+        assert!(text.contains("policy_count: 0"));
+    }
+
+    #[test]
+    fn render_da_verify_text_includes_optional_error() {
+        let text = render_da_verify_text("DA verification", false, Some("invalid bundle hash"));
+        assert!(text.contains("DA verification"));
+        assert!(text.contains("valid: false"));
+        assert!(text.contains("error: invalid bundle hash"));
+    }
+
+    #[test]
+    fn load_json_payload_decodes_pin_intent_proof() {
+        let intent = DaPinIntent::new(
+            LaneId::new(1),
+            2,
+            3,
+            StorageTicketId::new([0x44; 32]),
+            ManifestDigest::new([0x55; 32]),
+        );
+        let proof = DaPinIntentWithLocation {
+            intent,
+            location: iroha::data_model::da::commitment::DaCommitmentLocation {
+                block_height: 4,
+                index_in_bundle: 1,
+            },
+        };
+        let tmp = NamedTempFile::new().expect("temp file");
+        fs::write(
+            tmp.path(),
+            norito::json::to_vec(&proof).expect("encode pin intent proof"),
+        )
+        .expect("write json payload");
+        let decoded: DaPinIntentWithLocation =
+            load_json_payload(tmp.path(), "DA pin intent proof").expect("decode payload");
+        assert_eq!(decoded, proof);
     }
 
     #[test]

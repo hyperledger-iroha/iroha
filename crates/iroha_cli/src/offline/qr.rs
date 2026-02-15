@@ -139,9 +139,17 @@ impl QrEncodeArgs {
                 let total_frames = rendered.len() as u32;
                 for frame in &rendered {
                     let path = png_dir.join(format!("frame_{:04}.png", frame.index));
-                    if self.style == QrRenderStyle::SakuraWind {
-                        let image =
-                            render_sakura_wind_rgba(&frame.code, self.dimension, frame.index, total_frames);
+                    if matches!(
+                        self.style,
+                        QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm
+                    ) {
+                        let image = render_stylized_rgba(
+                            &frame.code,
+                            self.dimension,
+                            frame.index,
+                            total_frames,
+                            self.style,
+                        );
                         write_png_rgba(&path, &image)?;
                     } else {
                         let image = render_image(&frame.code, self.dimension)?;
@@ -151,8 +159,11 @@ impl QrEncodeArgs {
             }
             QrOutputFormat::Gif => {
                 let path = output_dir.join("stream.gif");
-                if self.style == QrRenderStyle::SakuraWind {
-                    let frames = render_sakura_wind_animation(&rendered, self.dimension);
+                if matches!(
+                    self.style,
+                    QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm
+                ) {
+                    let frames = render_stylized_animation(&rendered, self.dimension, self.style);
                     write_gif_rgba(&path, &frames, self.fps)?;
                 } else {
                     let frames = render_animation(&rendered, self.dimension)?;
@@ -161,8 +172,11 @@ impl QrEncodeArgs {
             }
             QrOutputFormat::Apng => {
                 let path = output_dir.join("stream.png");
-                if self.style == QrRenderStyle::SakuraWind {
-                    let frames = render_sakura_wind_animation(&rendered, self.dimension);
+                if matches!(
+                    self.style,
+                    QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm
+                ) {
+                    let frames = render_stylized_animation(&rendered, self.dimension, self.style);
                     write_apng_rgba(&path, &frames, self.fps)?;
                 } else {
                     let frames = render_animation(&rendered, self.dimension)?;
@@ -172,6 +186,8 @@ impl QrEncodeArgs {
         }
 
         let mut manifest_map = Map::new();
+        let estimated_payload_bps =
+            estimate_payload_bytes_per_second(payload.len(), frames.len(), self.fps);
         manifest_map.insert("version".to_string(), Value::from(1u64));
         manifest_map.insert(
             "payload_kind".to_string(),
@@ -185,6 +201,10 @@ impl QrEncodeArgs {
         manifest_map.insert(
             "frame_encoding".to_string(),
             Value::from(self.frame_encoding.label()),
+        );
+        manifest_map.insert(
+            "estimated_payload_bytes_per_second".to_string(),
+            Value::from(estimated_payload_bps),
         );
         manifest_map.insert("frame_count".to_string(), Value::from(frames.len() as u64));
         manifest_map.insert(
@@ -321,6 +341,7 @@ pub enum QrRenderStyle {
     Mono,
     Sakura,
     SakuraWind,
+    SakuraStorm,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
@@ -423,12 +444,58 @@ const SAKURA_WIND_PETAL_SECONDARY_MAJOR: f64 = 0.34;
 const SAKURA_WIND_PETAL_SECONDARY_MINOR: f64 = 0.18;
 const SAKURA_WIND_CORE_RADIUS: f64 = 0.18;
 const SAKURA_WIND_MODULE_DRIFT: f64 = 0.12;
+const SAKURA_STORM_SVG_ON: &str = "#F6EAF6";
+const SAKURA_STORM_SVG_OFF: &str = "#07040D";
+const SAKURA_STORM_BG_START: [f64; 3] = [0.05, 0.02, 0.08];
+const SAKURA_STORM_BG_END: [f64; 3] = [0.02, 0.01, 0.04];
+const SAKURA_STORM_LIGHT_MODULE: [f64; 3] = [0.09, 0.05, 0.12];
+const SAKURA_STORM_DARK_MODULE: [f64; 3] = [0.26, 0.16, 0.30];
+const SAKURA_STORM_DARK_CORE: [f64; 3] = [0.07, 0.03, 0.10];
+const SAKURA_STORM_FUNCTIONAL_CORE: [f64; 3] = [0.96, 0.89, 0.96];
+const SAKURA_STORM_GLYPH: [f64; 3] = [0.98, 0.92, 0.97];
+const SAKURA_STORM_RING_BRIGHT: [f64; 3] = [0.95, 0.71, 0.87];
+const SAKURA_STORM_RING_DIM: [f64; 3] = [0.42, 0.24, 0.37];
+const SAKURA_STORM_QR_SCALE: f64 = 0.63;
+const SAKURA_STORM_RING_RADII: [f64; 3] = [0.315, 0.372, 0.429];
+const SAKURA_STORM_RING_BAND: f64 = 0.0048;
+const SAKURA_STORM_RING_DOTS: [f64; 3] = [64.0, 76.0, 90.0];
+const SAKURA_STORM_RING_SPEED: [f64; 3] = [1.0, 1.2, 1.45];
+const SAKURA_STORM_RING_THRESHOLD: f64 = 0.24;
+const SAKURA_STORM_LIGHT_VIGNETTE: f64 = 0.28;
+const SAKURA_STORM_SCANLINE: f64 = 0.018;
+const SAKURA_STORM_GLYPH_PADDING_RATIO: f64 = 0.17;
+const SAKURA_STORM_CORE_RADIUS: f64 = 0.17;
+const SAKURA_STORM_GLYPHS: [[u8; 8]; 16] = [
+    [0x3C, 0x08, 0x1C, 0x08, 0x08, 0x08, 0x00, 0x00],
+    [0x10, 0x10, 0x20, 0x20, 0x40, 0x40, 0x00, 0x00],
+    [0x3C, 0x04, 0x1C, 0x04, 0x04, 0x3C, 0x00, 0x00],
+    [0x3C, 0x10, 0x1C, 0x10, 0x10, 0x3C, 0x00, 0x00],
+    [0x10, 0x3C, 0x10, 0x1C, 0x12, 0x3C, 0x00, 0x00],
+    [0x20, 0x3C, 0x24, 0x24, 0x24, 0x06, 0x00, 0x00],
+    [0x3C, 0x10, 0x3C, 0x10, 0x0C, 0x30, 0x00, 0x00],
+    [0x3C, 0x04, 0x08, 0x10, 0x20, 0x3C, 0x00, 0x00],
+    [0x24, 0x24, 0x3C, 0x24, 0x24, 0x06, 0x00, 0x00],
+    [0x3C, 0x04, 0x04, 0x04, 0x04, 0x3C, 0x00, 0x00],
+    [0x24, 0x24, 0x3C, 0x10, 0x10, 0x0C, 0x00, 0x00],
+    [0x04, 0x04, 0x0C, 0x14, 0x24, 0x20, 0x00, 0x00],
+    [0x3C, 0x04, 0x1C, 0x20, 0x20, 0x3C, 0x00, 0x00],
+    [0x3C, 0x10, 0x3C, 0x10, 0x10, 0x0C, 0x00, 0x00],
+    [0x04, 0x08, 0x10, 0x24, 0x24, 0x18, 0x00, 0x00],
+    [0x3C, 0x04, 0x3C, 0x24, 0x24, 0x06, 0x00, 0x00],
+];
 
 fn render_svg(code: &QrCode, dimension: u32, style: QrRenderStyle) -> Result<String> {
     let mut renderer = code.render::<svg::Color>();
-    if matches!(style, QrRenderStyle::Sakura | QrRenderStyle::SakuraWind) {
-        renderer.dark_color(svg::Color(SAKURA_SVG_INK));
-        renderer.light_color(svg::Color(SAKURA_SVG_BG));
+    match style {
+        QrRenderStyle::Sakura | QrRenderStyle::SakuraWind => {
+            renderer.dark_color(svg::Color(SAKURA_SVG_INK));
+            renderer.light_color(svg::Color(SAKURA_SVG_BG));
+        }
+        QrRenderStyle::SakuraStorm => {
+            renderer.dark_color(svg::Color(SAKURA_STORM_SVG_ON));
+            renderer.light_color(svg::Color(SAKURA_STORM_SVG_OFF));
+        }
+        QrRenderStyle::Mono => {}
     }
     let svg = renderer
         .min_dimensions(dimension, dimension)
@@ -686,18 +753,243 @@ fn render_sakura_wind_rgba(
     image::RgbaImage::from_raw(width, height, rgba).expect("rgba buffer size")
 }
 
-fn render_sakura_wind_animation(
+fn sakura_storm_logo_hole(mx: u32, my: u32, modules: u32) -> bool {
+    if modules == 0 {
+        return false;
+    }
+    let nx = ((mx as f64 + 0.5) / modules as f64) * 2.0 - 1.0;
+    let ny = ((my as f64 + 0.5) / modules as f64) * 2.0 - 1.0;
+    let x = nx * 1.05;
+    let y = ny * 1.05;
+    let outer = x * x + y * y <= 0.86 * 0.86;
+    if !outer {
+        return false;
+    }
+    let top_lobe = (x + 0.06).powi(2) + (y + 0.34).powi(2) <= 0.48 * 0.48;
+    let bottom_lobe = (x - 0.06).powi(2) + (y - 0.34).powi(2) <= 0.48 * 0.48;
+    let bridge = x.abs() <= 0.20 && y.abs() <= 0.14;
+    let body = top_lobe || bottom_lobe || bridge;
+    let carve_top = (x - 0.24).powi(2) + (y + 0.34).powi(2) <= 0.27 * 0.27;
+    let carve_bottom = (x + 0.24).powi(2) + (y - 0.34).powi(2) <= 0.27 * 0.27;
+    body && !(carve_top || carve_bottom)
+}
+
+fn sakura_storm_glyph_index(mx: u32, my: u32, frame_index: u32, frame_count: u32) -> usize {
+    let phase = frame_index.wrapping_mul(17) ^ frame_count.wrapping_mul(31);
+    let mut v = mx.wrapping_mul(0x9E37_79B1)
+        ^ my.wrapping_mul(0x85EB_CA77)
+        ^ phase.wrapping_mul(0xC2B2_AE3D);
+    v ^= v >> 16;
+    v = v.wrapping_mul(0x7FEB_352D);
+    v ^= v >> 15;
+    (v as usize) % SAKURA_STORM_GLYPHS.len()
+}
+
+fn sakura_storm_glyph_hit(glyph_index: usize, local_x: u32, local_y: u32, module_size: u32) -> bool {
+    if module_size < 6 {
+        return false;
+    }
+    let max_pad = (module_size / 3).max(1);
+    let mut padding = (module_size as f64 * SAKURA_STORM_GLYPH_PADDING_RATIO).round() as u32;
+    padding = padding.clamp(1, max_pad);
+    let inner = module_size.saturating_sub(padding * 2);
+    if inner < 3 || local_x < padding || local_y < padding {
+        return false;
+    }
+    if local_x >= module_size - padding || local_y >= module_size - padding {
+        return false;
+    }
+    let gx = (((local_x - padding) * 8) / inner).min(7) as usize;
+    let gy = (((local_y - padding) * 8) / inner).min(7) as usize;
+    ((SAKURA_STORM_GLYPHS[glyph_index][gy] >> (7 - gx)) & 1) == 1
+}
+
+fn render_sakura_storm_rgba(
+    code: &QrCode,
+    dimension: u32,
+    frame_index: u32,
+    frame_count: u32,
+) -> image::RgbaImage {
+    let modules = code.width() as u32;
+    let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+    let total_modules = modules + quiet_zone * 2;
+    let target_qr = ((dimension as f64) * SAKURA_STORM_QR_SCALE).round() as u32;
+    let module_size = (target_qr / total_modules).max(1);
+    let qr_size = total_modules * module_size;
+    let side = dimension.max(qr_size);
+    let qr_offset = (side - qr_size) / 2;
+    let module_size_f = module_size as f64;
+    let frame_count = frame_count.max(1);
+    let phase = (frame_index % frame_count) as f64 / frame_count as f64;
+    let tau = std::f64::consts::TAU;
+    let core_radius_sq = SAKURA_STORM_CORE_RADIUS * SAKURA_STORM_CORE_RADIUS;
+    let colors = code.to_colors();
+    let mut module_dark = vec![false; (modules * modules) as usize];
+    let mut module_functional = vec![false; (modules * modules) as usize];
+    for y in 0..modules {
+        for x in 0..modules {
+            let idx = (y * modules + x) as usize;
+            module_dark[idx] = colors[idx] != qrcode::types::Color::Light;
+            module_functional[idx] = code.is_functional(x as usize, y as usize);
+        }
+    }
+
+    let norm = |idx: u32, max: u32| -> f64 {
+        if max <= 1 {
+            0.5
+        } else {
+            idx as f64 / (max - 1) as f64
+        }
+    };
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let to_u8 = |value: f64| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+
+    let pixel_count = side as usize * side as usize;
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    for y in 0..side {
+        let ny = norm(y, side);
+        let cy = ny - 0.5;
+        for x in 0..side {
+            let nx = norm(x, side);
+            let cx = nx - 0.5;
+            let radial = (cx * cx + cy * cy).sqrt();
+            let depth = (0.67 * ny + 0.33 * nx).clamp(0.0, 1.0);
+            let v = (radial / 0.72).clamp(0.0, 1.0);
+            let t = (depth * (1.0 - v * 0.35)).clamp(0.0, 1.0);
+            let mut r = lerp(SAKURA_STORM_BG_START[0], SAKURA_STORM_BG_END[0], t);
+            let mut g = lerp(SAKURA_STORM_BG_START[1], SAKURA_STORM_BG_END[1], t);
+            let mut b = lerp(SAKURA_STORM_BG_START[2], SAKURA_STORM_BG_END[2], t);
+            let scan = ((y as f64 * 0.11 + phase * tau).sin() * 0.5 + 0.5)
+                * SAKURA_STORM_SCANLINE
+                * (1.0 - v * 0.8);
+            r = (r + scan).clamp(0.0, 1.0);
+            g = (g + scan).clamp(0.0, 1.0);
+            b = (b + scan).clamp(0.0, 1.0);
+
+            let angle = cy.atan2(cx);
+            for ring_idx in 0..SAKURA_STORM_RING_RADII.len() {
+                let dr = ((radial - SAKURA_STORM_RING_RADII[ring_idx]).abs())
+                    / SAKURA_STORM_RING_BAND;
+                if dr > 1.6 {
+                    continue;
+                }
+                let dot_wave = (angle * SAKURA_STORM_RING_DOTS[ring_idx]
+                    + phase * tau * SAKURA_STORM_RING_SPEED[ring_idx]
+                    + ring_idx as f64 * 0.73)
+                    .sin();
+                if dot_wave <= SAKURA_STORM_RING_THRESHOLD {
+                    continue;
+                }
+                let alpha = ((1.0 - dr / 1.6).clamp(0.0, 1.0))
+                    * (0.45 + 0.55 * dot_wave.clamp(0.0, 1.0));
+                let cardinal = ((angle * 2.0).cos().abs()).powf(18.0);
+                let ring_color = if cardinal > 0.66 {
+                    SAKURA_STORM_RING_BRIGHT
+                } else {
+                    SAKURA_STORM_RING_DIM
+                };
+                r = lerp(r, ring_color[0], alpha);
+                g = lerp(g, ring_color[1], alpha);
+                b = lerp(b, ring_color[2], alpha);
+            }
+
+            if x >= qr_offset && x < qr_offset + qr_size && y >= qr_offset && y < qr_offset + qr_size {
+                let rel_x = x - qr_offset;
+                let rel_y = y - qr_offset;
+                let module_x = rel_x / module_size;
+                let module_y = rel_y / module_size;
+                if module_x >= quiet_zone
+                    && module_x < quiet_zone + modules
+                    && module_y >= quiet_zone
+                    && module_y < quiet_zone + modules
+                {
+                    let mx = module_x - quiet_zone;
+                    let my = module_y - quiet_zone;
+                    let idx = (my * modules + mx) as usize;
+                    if module_dark[idx] {
+                        let local_x = rel_x % module_size;
+                        let local_y = rel_y % module_size;
+                        if !module_functional[idx] && sakura_storm_logo_hole(mx, my, modules) {
+                            // Keep the logo region as negative space for the storm silhouette.
+                        } else if module_functional[idx] {
+                            r = SAKURA_STORM_FUNCTIONAL_CORE[0];
+                            g = SAKURA_STORM_FUNCTIONAL_CORE[1];
+                            b = SAKURA_STORM_FUNCTIONAL_CORE[2];
+                            let lx = local_x as f64 / module_size_f;
+                            let ly = local_y as f64 / module_size_f;
+                            let edge = lx.min(1.0 - lx).min(ly).min(1.0 - ly);
+                            if edge < 0.18 {
+                                r = lerp(r, SAKURA_STORM_DARK_MODULE[0], 0.74);
+                                g = lerp(g, SAKURA_STORM_DARK_MODULE[1], 0.74);
+                                b = lerp(b, SAKURA_STORM_DARK_MODULE[2], 0.74);
+                            }
+                        } else {
+                            r = SAKURA_STORM_DARK_MODULE[0];
+                            g = SAKURA_STORM_DARK_MODULE[1];
+                            b = SAKURA_STORM_DARK_MODULE[2];
+                            let glyph_idx = sakura_storm_glyph_index(mx, my, frame_index, frame_count);
+                            if sakura_storm_glyph_hit(glyph_idx, local_x, local_y, module_size) {
+                                r = SAKURA_STORM_GLYPH[0];
+                                g = SAKURA_STORM_GLYPH[1];
+                                b = SAKURA_STORM_GLYPH[2];
+                            }
+                            let lx = local_x as f64 / module_size_f - 0.5;
+                            let ly = local_y as f64 / module_size_f - 0.5;
+                            if lx * lx + ly * ly <= core_radius_sq {
+                                r = SAKURA_STORM_DARK_CORE[0];
+                                g = SAKURA_STORM_DARK_CORE[1];
+                                b = SAKURA_STORM_DARK_CORE[2];
+                            }
+                        }
+                    } else {
+                        r = lerp(r, SAKURA_STORM_LIGHT_MODULE[0], SAKURA_STORM_LIGHT_VIGNETTE);
+                        g = lerp(g, SAKURA_STORM_LIGHT_MODULE[1], SAKURA_STORM_LIGHT_VIGNETTE);
+                        b = lerp(b, SAKURA_STORM_LIGHT_MODULE[2], SAKURA_STORM_LIGHT_VIGNETTE);
+                    }
+                }
+            }
+
+            rgba.extend_from_slice(&[to_u8(r), to_u8(g), to_u8(b), 0xFF]);
+        }
+    }
+
+    image::RgbaImage::from_raw(side, side, rgba).expect("rgba buffer size")
+}
+
+fn render_stylized_rgba(
+    code: &QrCode,
+    dimension: u32,
+    frame_index: u32,
+    frame_count: u32,
+    style: QrRenderStyle,
+) -> image::RgbaImage {
+    match style {
+        QrRenderStyle::SakuraWind => {
+            render_sakura_wind_rgba(code, dimension, frame_index, frame_count)
+        }
+        QrRenderStyle::SakuraStorm => {
+            render_sakura_storm_rgba(code, dimension, frame_index, frame_count)
+        }
+        QrRenderStyle::Mono | QrRenderStyle::Sakura => {
+            unreachable!("RGBA-only render helper only supports stylized themes")
+        }
+    }
+}
+
+fn render_stylized_animation(
     frames: &[RenderedFrame],
     dimension: u32,
+    style: QrRenderStyle,
 ) -> Vec<image::RgbaImage> {
     let frame_count = frames.len().max(1) as u32;
     let mut out = Vec::with_capacity(frames.len());
     for frame in frames {
-        out.push(render_sakura_wind_rgba(
+        out.push(render_stylized_rgba(
             &frame.code,
             dimension,
             frame.index,
             frame_count,
+            style,
         ));
     }
     out
@@ -718,8 +1010,10 @@ fn write_png(
     frame_index: u32,
     frame_count: u32,
 ) -> Result<()> {
-    if style == QrRenderStyle::SakuraWind {
-        return Err(eyre!("sakura-wind render requires the RGBA pipeline"));
+    if matches!(style, QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm) {
+        return Err(eyre!(
+            "sakura-wind/sakura-storm render requires the RGBA pipeline"
+        ));
     }
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
@@ -738,7 +1032,9 @@ fn write_png(
             let rgba = render_sakura_rgba(image, frame_index, frame_count);
             writer.write_image_data(rgba.as_raw())?;
         }
-        QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+        QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm => {
+            unreachable!("RGBA-only guard should have returned")
+        }
     }
     Ok(())
 }
@@ -752,8 +1048,10 @@ fn write_apng(
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
-    if style == QrRenderStyle::SakuraWind {
-        return Err(eyre!("sakura-wind render requires the RGBA pipeline"));
+    if matches!(style, QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm) {
+        return Err(eyre!(
+            "sakura-wind/sakura-storm render requires the RGBA pipeline"
+        ));
     }
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
@@ -761,7 +1059,9 @@ fn write_apng(
     match style {
         QrRenderStyle::Mono => encoder.set_color(png::ColorType::Grayscale),
         QrRenderStyle::Sakura => encoder.set_color(png::ColorType::Rgba),
-        QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+        QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm => {
+            unreachable!("RGBA-only guard should have returned")
+        }
     }
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_animated(frames.len() as u32, 0)?;
@@ -777,7 +1077,9 @@ fn write_apng(
                 let rgba = render_sakura_rgba(frame, idx as u32, frames.len() as u32);
                 writer.write_image_data(rgba.as_raw())?;
             }
-            QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+            QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm => {
+                unreachable!("RGBA-only guard should have returned")
+            }
         }
     }
     Ok(())
@@ -792,8 +1094,10 @@ fn write_gif(
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
-    if style == QrRenderStyle::SakuraWind {
-        return Err(eyre!("sakura-wind render requires the RGBA pipeline"));
+    if matches!(style, QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm) {
+        return Err(eyre!(
+            "sakura-wind/sakura-storm render requires the RGBA pipeline"
+        ));
     }
     let file = fs::File::create(path)?;
     let mut encoder = image::codecs::gif::GifEncoder::new(file);
@@ -805,7 +1109,9 @@ fn write_gif(
         let rgba = match style {
             QrRenderStyle::Mono => grayscale_to_rgba(frame),
             QrRenderStyle::Sakura => render_sakura_rgba(frame, idx as u32, frame_count),
-            QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+            QrRenderStyle::SakuraWind | QrRenderStyle::SakuraStorm => {
+                unreachable!("RGBA-only guard should have returned")
+            }
         };
         gif_frames.push(image::Frame::from_parts(rgba, 0, 0, delay));
     }
@@ -873,6 +1179,14 @@ fn grayscale_to_rgba(frame: &GrayImage) -> image::RgbaImage {
 fn frame_delay_ms(fps: u16) -> u16 {
     let fps = fps.max(1) as u32;
     ((1000 + fps / 2) / fps).min(u16::MAX as u32) as u16
+}
+
+fn estimate_payload_bytes_per_second(payload_bytes: usize, frame_count: usize, fps: u16) -> u64 {
+    if frame_count == 0 {
+        return 0;
+    }
+    let fps = fps.max(1) as f64;
+    ((payload_bytes as f64 * fps) / frame_count as f64).round() as u64
 }
 
 const QR_TEXT_PREFIX: &str = "iroha:qr1:";
@@ -1015,6 +1329,14 @@ mod tests {
     }
 
     #[test]
+    fn qr_svg_sakura_storm_applies_palette() {
+        let code = QrCode::new(b"sakura-storm").expect("qr code");
+        let svg = render_svg(&code, 32, QrRenderStyle::SakuraStorm).expect("svg");
+        assert!(svg.contains("fill=\"#07040D\""));
+        assert!(svg.contains("fill=\"#F6EAF6\""));
+    }
+
+    #[test]
     fn sakura_wind_finder_modules_render_as_ink() {
         let code = QrCode::new(b"sakura-wind").expect("qr code");
         let dimension = 128;
@@ -1115,5 +1437,67 @@ mod tests {
         write_gif_rgba(&path, &[image], 12).expect("write");
         let bytes = fs::read(&path).expect("read");
         assert!(bytes.starts_with(b"GIF"));
+    }
+
+    #[test]
+    fn sakura_storm_finder_modules_render_with_bright_core() {
+        let code = QrCode::new(b"sakura-storm").expect("qr code");
+        let dimension = 256;
+        let image = render_sakura_storm_rgba(&code, dimension, 0, 1);
+        let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+        let modules = code.width() as u32;
+        let total_modules = modules + quiet_zone * 2;
+        let target_qr = ((dimension as f64) * SAKURA_STORM_QR_SCALE).round() as u32;
+        let module_size = (target_qr / total_modules).max(1);
+        let qr_size = total_modules * module_size;
+        let side = dimension.max(qr_size);
+        let qr_offset = (side - qr_size) / 2;
+        let module_x = quiet_zone + 3;
+        let module_y = quiet_zone + 3;
+        let x = qr_offset + module_x * module_size + module_size / 2;
+        let y = qr_offset + module_y * module_size + module_size / 2;
+        let pixel = image.get_pixel(x, y).0;
+        let to_u8 = |value: f64| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+        let expected = [
+            to_u8(SAKURA_STORM_FUNCTIONAL_CORE[0]),
+            to_u8(SAKURA_STORM_FUNCTIONAL_CORE[1]),
+            to_u8(SAKURA_STORM_FUNCTIONAL_CORE[2]),
+            0xFF,
+        ];
+        assert_eq!(pixel, expected);
+    }
+
+    #[test]
+    fn write_png_sakura_storm_emits_rgba() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("frame.png");
+        let code = QrCode::new(b"sakura-storm").expect("qr code");
+        let image = render_sakura_storm_rgba(&code, 64, 0, 1);
+        write_png_rgba(&path, &image).expect("write");
+        let file = fs::File::open(&path).expect("open");
+        let decoder = png::Decoder::new(std::io::BufReader::new(file));
+        let reader = decoder.read_info().expect("read info");
+        assert_eq!(reader.info().color_type, png::ColorType::Rgba);
+    }
+
+    #[test]
+    fn throughput_profile_for_three_kib_per_second() {
+        let payload = vec![0_u8; 12 * 1024];
+        let (_envelope, frames) = QrStreamEncoder::encode_frames(
+            &payload,
+            QrStreamOptions {
+                chunk_size: 336,
+                parity_group: 4,
+                payload_kind: QrPayloadKind::Unspecified,
+                ..QrStreamOptions::default()
+            },
+        )
+        .expect("encode");
+        let bytes_per_second =
+            estimate_payload_bytes_per_second(payload.len(), frames.len(), 12);
+        assert!(
+            bytes_per_second >= 3_000,
+            "expected at least 3000 B/s, got {bytes_per_second}"
+        );
     }
 }

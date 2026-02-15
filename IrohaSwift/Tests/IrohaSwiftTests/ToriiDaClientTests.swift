@@ -3,6 +3,11 @@ import XCTest
 @testable import IrohaSwift
 
 final class ToriiDaClientTests: XCTestCase {
+    override func tearDown() {
+        ToriiDaStubURLProtocol.handler = nil
+        super.tearDown()
+    }
+
     func testFetchDaPayloadInjectsChunkerHandle() async throws {
         let bundle = try decodeManifestBundle()
         let provider = try sampleProvider()
@@ -124,7 +129,98 @@ final class ToriiDaClientTests: XCTestCase {
         XCTAssertEqual(scoreboardJSON?.first?["alias"] as? String, "alpha")
     }
 
+    func testGetDaProofPoliciesUsesEndpoint() async throws {
+        ToriiDaStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/da/proof_policies")
+            XCTAssertEqual(request.httpMethod, "GET")
+            let body = try JSONSerialization.data(withJSONObject: [
+                "version": 1,
+                "policy_hash": String(repeating: "a", count: 64),
+                "policies": []
+            ], options: [.sortedKeys])
+            return (200, ["Content-Type": "application/json"], body)
+        }
+
+        let client = makeHTTPClient()
+        let value = try await client.getDaProofPolicies()
+        guard case .object(let object) = value else {
+            XCTFail("expected object response")
+            return
+        }
+        XCTAssertEqual(object["version"]?.normalizedUInt64, 1)
+    }
+
+    func testListDaCommitmentsPostsNormalizedRequest() async throws {
+        ToriiDaStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/da/commitments")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = try XCTUnwrap(request.httpBody)
+            let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            XCTAssertEqual(json?["manifest_hash"] as? String, String(repeating: "1", count: 64))
+            XCTAssertEqual(json?["lane_id"] as? Int, 7)
+            let response = try JSONSerialization.data(withJSONObject: [
+                "policies": [
+                    "version": 1,
+                    "policy_hash": String(repeating: "a", count: 64),
+                    "policies": []
+                ],
+                "commitments": []
+            ], options: [.sortedKeys])
+            return (200, ["Content-Type": "application/json"], response)
+        }
+
+        let client = makeHTTPClient()
+        let request = ToriiDaCommitmentProofRequest(
+            manifestHash: "0x" + String(repeating: "1", count: 64),
+            laneId: 7,
+            epoch: 9,
+            sequence: 11,
+            pagination: ToriiQueryPagination(limit: 3, offset: 1)
+        )
+        let response = try await client.listDaCommitments(request)
+        XCTAssertEqual(response.commitments.count, 0)
+    }
+
+    func testProveDaPinIntentHandlesNullResponse() async throws {
+        ToriiDaStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/da/pin_intents/prove")
+            XCTAssertEqual(request.httpMethod, "POST")
+            return (200, ["Content-Type": "application/json"], Data("null".utf8))
+        }
+
+        let client = makeHTTPClient()
+        let response = try await client.proveDaPinIntent(
+            ToriiDaPinIntentQueryRequest(storageTicket: String(repeating: "2", count: 64))
+        )
+        XCTAssertNil(response)
+    }
+
+    func testVerifyDaCommitmentPostsProofBody() async throws {
+        ToriiDaStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/da/commitments/verify")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = try XCTUnwrap(request.httpBody)
+            let json = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            XCTAssertEqual(json?["bundle_len"] as? Int, 1)
+            let body = Data(#"{"valid":true}"#.utf8)
+            return (200, ["Content-Type": "application/json"], body)
+        }
+
+        let client = makeHTTPClient()
+        let proof = ToriiJSONValue.object(["bundle_len": .number(1)])
+        let response = try await client.verifyDaCommitment(proof: proof)
+        XCTAssertTrue(response.valid)
+        XCTAssertNil(response.error)
+    }
+
     // MARK: - Helpers
+
+    private func makeHTTPClient() -> ToriiClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ToriiDaStubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        return ToriiClient(baseURL: URL(string: "https://example.com")!, session: session)
+    }
 
     private func decodeManifestBundle() throws -> ToriiDaManifestBundle {
         let manifestNorito = Data([0xAA, 0xBB]).base64EncodedString()
@@ -162,6 +258,38 @@ final class ToriiDaClientTests: XCTestCase {
             streamTokenB64: Data([0x01, 0x02]).base64EncodedString()
         )
     }
+}
+
+private final class ToriiDaStubURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (Int, [String: String], Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (status, headers, body) = try handler(request)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url ?? URL(string: "https://example.com")!,
+                    statusCode: status,
+                    httpVersion: nil,
+                    headerFields: headers
+                )
+            )
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
 
 private final class MockGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {

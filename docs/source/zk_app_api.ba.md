@@ -194,7 +194,7 @@ Use the CLI to interact with the app API (requires Torii URL and any API token i
   - `iroha app zk attachments list`
   - `iroha app zk attachments get --id <ID> --out <PATH>`
   - `iroha app zk attachments delete --id <ID>`
-- Verification stubs:
+- Verification support:
   - `iroha app zk verify --json <PATH>` or `--norito <PATH>`
   - `iroha app zk submit-proof --json <PATH>` or `--norito <PATH>`
 

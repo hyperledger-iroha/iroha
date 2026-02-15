@@ -189,6 +189,13 @@ const MAX_INST_COLS: usize = 16;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 const MAX_INST_ROWS: usize = 8192;
 
+/// Canonical backend identifier for Halo2 IPA verification.
+pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
+/// Canonical backend family identifier for native STARK/FRI verification.
+pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri-v1";
+/// Canonical circuit identifier suffix for proved IVM execution commitments.
+pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
+
 /// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
 ///
 /// The execution proof instances still carry concrete values in the proof payload;
@@ -235,10 +242,17 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 /// additional suffixes under this prefix (e.g., `stark/fri-v1/sha256-goldilocks-v1`).
 #[inline]
 pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    backend == "stark/fri-v1" || backend.starts_with("stark/fri-v1/")
+    backend == ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri-v1/")
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
+/// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
+#[inline]
+#[must_use]
+pub fn is_ivm_execution_backend(backend: &str) -> bool {
+    backend == ZK_BACKEND_HALO2_IPA || is_stark_fri_v1_backend(backend)
+}
+
+#[cfg(any(feature = "zk-halo2-ipa", feature = "zk-stark"))]
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     let mut limbs = [0u64; 4];
     let bytes: &[u8; 32] = hash.as_ref();
@@ -248,6 +262,34 @@ fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
         *limb = u64::from_le_bytes(bytes[start..end].try_into().expect("8-byte limb"));
     }
     limbs
+}
+
+#[cfg(feature = "zk-stark")]
+fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&limb.to_le_bytes());
+    out
+}
+
+#[cfg(feature = "zk-stark")]
+fn ivm_execution_public_inputs_columns(
+    code_hash: iroha_crypto::Hash,
+    overlay_hash: iroha_crypto::Hash,
+    events_commitment: iroha_crypto::Hash,
+    gas_policy_commitment: iroha_crypto::Hash,
+) -> Vec<Vec<[u8; 32]>> {
+    let code_limbs = hash_to_u64_limbs_le(&code_hash);
+    let overlay_limbs = hash_to_u64_limbs_le(&overlay_hash);
+    let events_limbs = hash_to_u64_limbs_le(&events_commitment);
+    let gas_limbs = hash_to_u64_limbs_le(&gas_policy_commitment);
+    code_limbs
+        .into_iter()
+        .chain(overlay_limbs)
+        .chain(events_limbs)
+        .chain(gas_limbs)
+        .map(limb_as_instance_bytes)
+        .map(|value| vec![value])
+        .collect()
 }
 
 /// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
@@ -284,7 +326,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
     use rand_core_06::OsRng;
 
-    if vk_box.backend.as_str() != "halo2/ipa" {
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err("ivm execution proving requires halo2/ipa verifying key backend".to_owned());
     }
 
@@ -380,7 +422,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     };
     let encoded = norito::to_bytes(&envelope)
         .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
-    Ok(ProofBox::new("halo2/ipa".to_owned(), encoded))
+    Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
 }
 
 /// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution-v1` circuit.
@@ -399,7 +441,7 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
         plonk::{VerifyingKey, keygen_pk},
     };
 
-    if vk_box.backend.as_str() != "halo2/ipa" {
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err(
             "ivm execution proving key derivation requires halo2/ipa verifying key backend"
                 .to_owned(),
@@ -421,6 +463,179 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     )
     .map_err(|err| format!("failed to derive proving key: {err}"))?;
     Ok(pk.to_bytes(SerdeFormat::Processed))
+}
+
+#[cfg(feature = "zk-stark")]
+fn normalize_stark_fri_circuit_id_for_backend(backend: &str, raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == backend {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix(backend) {
+        if let Some(rest) = rest.strip_prefix(':') {
+            return (!rest.is_empty()).then(|| trimmed.to_string());
+        }
+        if let Some(rest) = rest.strip_prefix('/') {
+            return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
+        }
+    }
+    Some(format!("{backend}:{trimmed}"))
+}
+
+#[cfg(feature = "zk-stark")]
+fn stark_open_verify_domain_tag_v1(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> String {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"iroha:zk:stark-fri-open-proof:v1");
+    preimage.extend_from_slice(&(backend.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(backend.as_bytes());
+    preimage.extend_from_slice(&(circuit_id.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(circuit_id.as_bytes());
+    preimage.extend_from_slice(&vk_hash);
+    preimage.extend_from_slice(&(env_public_inputs.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(env_public_inputs);
+    preimage.extend_from_slice(&(public_inputs.len() as u64).to_le_bytes());
+    for column in public_inputs {
+        preimage.extend_from_slice(&(column.len() as u64).to_le_bytes());
+        for value in column {
+            preimage.extend_from_slice(value);
+        }
+    }
+    let digest = Sha256::digest(&preimage);
+    hex::encode(digest)
+}
+
+/// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
+///
+/// The produced envelope is accepted by the native `stark/fri-v1` verifier and binds:
+/// - backend family/variant tag
+/// - circuit identifier
+/// - verifying-key commitment
+/// - schema descriptor bytes
+/// - backend-native public inputs (`StarkFriOpenProofV1.public_inputs`)
+///
+/// Note: this helper synthesizes the STARK layer witness deterministically from verifier
+/// parameters. Execution semantics remain enforced by deterministic replay in admission paths.
+#[cfg(feature = "zk-stark")]
+pub fn prove_stark_fri_open_verify_envelope(
+    backend: &str,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    schema_descriptor: &[u8],
+    public_inputs: Vec<Vec<[u8; 32]>>,
+) -> Result<ProofBox, String> {
+    use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriParamsV1};
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+
+    if !is_stark_fri_v1_backend(backend) {
+        return Err("STARK proving requires stark/fri-v1 backend".to_owned());
+    }
+    if vk_box.backend.as_str() != backend {
+        return Err("STARK proving requires vk backend to match requested backend".to_owned());
+    }
+    let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+        norito::decode_from_bytes(&vk_box.bytes)
+            .map_err(|_| "invalid STARK verifying key payload".to_owned())?;
+    if vk_payload.version != 1 {
+        return Err("unsupported STARK verifying key payload version".to_owned());
+    }
+    if vk_payload.hash_fn != STARK_HASH_SHA256_V1 && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
+        return Err("unsupported STARK verifying key hash_fn".to_owned());
+    }
+    if backend.contains("/sha256-") && vk_payload.hash_fn != STARK_HASH_SHA256_V1 {
+        return Err("STARK verifying key hash_fn does not match backend variant".to_owned());
+    }
+    if backend.contains("/poseidon2-") && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
+        return Err("STARK verifying key hash_fn does not match backend variant".to_owned());
+    }
+    if backend != ZK_BACKEND_STARK_FRI_V1
+        && !backend.contains("/sha256-")
+        && !backend.contains("/poseidon2-")
+    {
+        return Err("unsupported stark/fri-v1 backend variant".to_owned());
+    }
+
+    let req_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
+        .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
+    let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
+        .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
+    if req_circuit_id != vk_circuit_id {
+        return Err("STARK verifying key circuit_id mismatch".to_owned());
+    }
+
+    let vk_hash = hash_vk(vk_box);
+    let domain_tag = stark_open_verify_domain_tag_v1(
+        backend,
+        circuit_id,
+        vk_hash,
+        schema_descriptor,
+        &public_inputs,
+    );
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: vk_payload.n_log2,
+        blowup_log2: vk_payload.blowup_log2,
+        fold_arity: vk_payload.fold_arity,
+        queries: vk_payload.queries,
+        merkle_arity: vk_payload.merkle_arity,
+        hash_fn: vk_payload.hash_fn,
+        domain_tag,
+    };
+    let inner =
+        crate::zk_stark::synthesize_stark_fri_envelope_bytes(params, "IROHA-STARK-IVM".to_owned())?;
+    let open = StarkFriOpenProofV1 {
+        version: 1,
+        public_inputs,
+        envelope_bytes: inner,
+    };
+    let proof_bytes = norito::to_bytes(&open)
+        .map_err(|err| format!("failed to encode STARK open proof: {err}"))?;
+    let env = OpenVerifyEnvelope {
+        backend: BackendTag::Stark,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash,
+        public_inputs: schema_descriptor.to_vec(),
+        proof_bytes,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&env)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new(backend.to_owned(), encoded))
+}
+
+/// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
+///
+/// This is the STARK analogue to [`prove_halo2_ipa_ivm_execution_envelope`]. It binds
+/// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)` as backend-native
+/// public inputs in a `StarkFriOpenProofV1` wrapper.
+#[cfg(feature = "zk-stark")]
+pub fn prove_stark_fri_ivm_execution_envelope(
+    backend: &str,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    code_hash: iroha_crypto::Hash,
+    overlay_hash: iroha_crypto::Hash,
+    events_commitment: iroha_crypto::Hash,
+    gas_policy_commitment: iroha_crypto::Hash,
+) -> Result<ProofBox, String> {
+    let public_inputs = ivm_execution_public_inputs_columns(
+        code_hash,
+        overlay_hash,
+        events_commitment,
+        gas_policy_commitment,
+    );
+    prove_stark_fri_open_verify_envelope(
+        backend,
+        circuit_id,
+        vk_box,
+        ivm_execution_public_inputs_schema_descriptor(),
+        public_inputs,
+    )
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -4254,14 +4469,16 @@ fn halo2_ipa_backend_from_circuit_id(circuit_id: &str) -> Option<String> {
     if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
         return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
     }
-    if let Some(rest) = trimmed.strip_prefix("halo2/ipa::") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/ipa:") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/ipa/") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+    if let Some(rest) = trimmed.strip_prefix(ZK_BACKEND_HALO2_IPA) {
+        if let Some(rest) = rest.strip_prefix("::") {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        if let Some(rest) = rest.strip_prefix(':') {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        if let Some(rest) = rest.strip_prefix('/') {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
     }
     Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
 }
@@ -4322,7 +4539,7 @@ fn verify_stark_fri_open_verify_envelope(
         return reject("verifying key commitment mismatch");
     }
 
-    let expected_hash_fn = if backend == "stark/fri-v1" {
+    let expected_hash_fn = if backend == ZK_BACKEND_STARK_FRI_V1 {
         None
     } else if backend.contains("/sha256-") {
         Some(STARK_HASH_SHA256_V1)
@@ -4349,29 +4566,16 @@ fn verify_stark_fri_open_verify_envelope(
             return reject("STARK verifying key hash_fn mismatch");
         }
     }
-    let canonical_circuit_id = |raw: &str| -> Option<String> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() || trimmed == backend {
-            return None;
-        }
-        if let Some(rest) = trimmed.strip_prefix(backend) {
-            if let Some(rest) = rest.strip_prefix(':') {
-                return (!rest.is_empty()).then(|| trimmed.to_string());
-            }
-            if let Some(rest) = rest.strip_prefix('/') {
-                return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
-            }
-        }
-        Some(format!("{backend}:{trimmed}"))
-    };
-    let env_circuit_id = match canonical_circuit_id(&env.circuit_id) {
+    let env_circuit_id = match normalize_stark_fri_circuit_id_for_backend(backend, &env.circuit_id)
+    {
         Some(id) => id,
         None => return reject("invalid STARK envelope circuit_id"),
     };
-    let vk_circuit_id = match canonical_circuit_id(&vk_payload.circuit_id) {
-        Some(id) => id,
-        None => return reject("invalid STARK verifying key circuit_id"),
-    };
+    let vk_circuit_id =
+        match normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id) {
+            Some(id) => id,
+            None => return reject("invalid STARK verifying key circuit_id"),
+        };
     if env_circuit_id != vk_circuit_id {
         return reject("STARK verifying key circuit_id mismatch");
     }
@@ -4391,26 +4595,13 @@ fn verify_stark_fri_open_verify_envelope(
     //
     // This prevents re-wrapping a valid STARK envelope under a different circuit/vk/public-inputs
     // header without detection.
-    let expected_domain_tag = {
-        let mut preimage = Vec::new();
-        preimage.extend_from_slice(b"iroha:zk:stark-fri-open-proof:v1");
-        preimage.extend_from_slice(&(backend.len() as u64).to_le_bytes());
-        preimage.extend_from_slice(backend.as_bytes());
-        preimage.extend_from_slice(&(env.circuit_id.len() as u64).to_le_bytes());
-        preimage.extend_from_slice(env.circuit_id.as_bytes());
-        preimage.extend_from_slice(&env.vk_hash);
-        preimage.extend_from_slice(&(env.public_inputs.len() as u64).to_le_bytes());
-        preimage.extend_from_slice(&env.public_inputs);
-        preimage.extend_from_slice(&(open.public_inputs.len() as u64).to_le_bytes());
-        for column in &open.public_inputs {
-            preimage.extend_from_slice(&(column.len() as u64).to_le_bytes());
-            for value in column {
-                preimage.extend_from_slice(value);
-            }
-        }
-        let digest = Sha256::digest(&preimage);
-        hex::encode(digest)
-    };
+    let expected_domain_tag = stark_open_verify_domain_tag_v1(
+        backend,
+        &env.circuit_id,
+        env.vk_hash,
+        &env.public_inputs,
+        &open.public_inputs,
+    );
     let inner: crate::zk_stark::StarkVerifyEnvelopeV1 =
         match norito::decode_from_bytes(&open.envelope_bytes) {
             Ok(inner) => inner,
@@ -4465,7 +4656,7 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
         return ok;
     }
 
-    if backend == "halo2/ipa" {
+    if backend == ZK_BACKEND_HALO2_IPA {
         #[cfg(feature = "zk-halo2-ipa")]
         {
             return verify_halo2_ipa_envelope(proof, vk);
@@ -4536,7 +4727,7 @@ mod debug_backend_tests {
 
 #[cfg(test)]
 mod stark_backend_tag_tests {
-    use super::is_stark_fri_v1_backend;
+    use super::{is_ivm_execution_backend, is_stark_fri_v1_backend};
 
     #[test]
     fn detects_base_and_variant_backends() {
@@ -4547,6 +4738,207 @@ mod stark_backend_tag_tests {
         ));
         assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
+    }
+
+    #[test]
+    fn ivm_execution_backend_allowlist_is_explicit() {
+        assert!(is_ivm_execution_backend("halo2/ipa"));
+        assert!(is_ivm_execution_backend("stark/fri-v1"));
+        assert!(is_ivm_execution_backend(
+            "stark/fri-v1/sha256-goldilocks-v1"
+        ));
+        assert!(!is_ivm_execution_backend("groth16/bn254"));
+        assert!(!is_ivm_execution_backend("halo2/kzg"));
+    }
+}
+
+#[cfg(all(test, feature = "zk-stark"))]
+mod stark_prover_tests {
+    use super::{
+        prove_stark_fri_ivm_execution_envelope, prove_stark_fri_open_verify_envelope,
+        verify_backend, verify_backend_with_timing,
+    };
+    use crate::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
+    use iroha_crypto::Hash;
+    use iroha_data_model::{
+        proof::{ProofBox, VerifyingKeyBox},
+        zk::OpenVerifyEnvelope,
+    };
+
+    #[test]
+    fn prove_stark_open_verify_envelope_roundtrip() {
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let circuit_id = format!("{backend}:tiny-open-v1");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let public_inputs = vec![vec![[0x11; 32]], vec![[0x22; 32]]];
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"tiny:schema:v1",
+            public_inputs,
+        )
+        .expect("build stark open proof");
+        assert!(verify_backend(backend, &proof, Some(&vk_box)));
+    }
+
+    #[test]
+    fn prove_stark_ivm_execution_envelope_roundtrip() {
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let circuit_id = format!("{backend}:ivm-execution-v1");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let proof = prove_stark_fri_ivm_execution_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            Hash::new(b"code"),
+            Hash::new(b"overlay"),
+            Hash::new(b"events"),
+            Hash::new(b"gas"),
+        )
+        .expect("build stark ivm proof");
+        assert!(verify_backend(backend, &proof, Some(&vk_box)));
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_circuit_id_mismatch() {
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let circuit_id = format!("{backend}:tiny-open-v1");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"tiny:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("build stark open proof");
+
+        let mut envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope");
+        envelope.circuit_id = format!("{backend}:wrong-circuit");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&envelope).expect("encode tampered OpenVerifyEnvelope"),
+        );
+        assert!(!verify_backend(backend, &tampered, Some(&vk_box)));
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_malformed_payload_without_panic() {
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: format!("{backend}:tiny-open-v1"),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let malformed = ProofBox::new(backend.to_owned(), vec![0xAA, 0xBB, 0xCC]);
+        let report = verify_backend_with_timing(backend, &malformed, Some(&vk_box));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_backend_variant_mismatch() {
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let wrong_backend = "stark/fri-v1/poseidon2-goldilocks-v1";
+        let circuit_id = format!("{backend}:tiny-open-v1");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"tiny:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("build stark open proof");
+        assert!(
+            !verify_backend(wrong_backend, &proof, Some(&vk_box)),
+            "proof must be rejected when declared backend variant mismatches the proof hash family"
+        );
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_vk_backend_mismatch() {
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let mismatched_vk_backend = "stark/fri-v1/poseidon2-goldilocks-v1";
+        let circuit_id = format!("{backend}:tiny-open-v1");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes.clone());
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"tiny:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("build stark open proof");
+
+        let wrong_vk = VerifyingKeyBox::new(mismatched_vk_backend.to_owned(), vk_bytes);
+        assert!(
+            !verify_backend(backend, &proof, Some(&wrong_vk)),
+            "proof must be rejected when verifying key backend differs from proof backend"
+        );
     }
 }
 
@@ -4614,7 +5006,7 @@ pub fn verify_backend_with_timing_guardrails(
     vk: Option<&VerifyingKeyBox>,
     guardrails: ZkVerifyGuardrails,
 ) -> VerifyReport {
-    if backend == "halo2/ipa" || backend.starts_with("halo2/") {
+    if backend == ZK_BACKEND_HALO2_IPA || backend.starts_with("halo2/") {
         if !guardrails.halo2_enabled {
             iroha_logger::debug!(
                 backend,
@@ -4766,9 +5158,9 @@ mod guardrails_tests {
 
     #[test]
     fn guardrails_disable_stark_returns_zero_duration() {
-        let proof = ProofBox::new("stark/fri-v1".into(), vec![0xAA; 8]);
+        let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 8]);
         let report = verify_backend_with_timing_guardrails(
-            "stark/fri-v1",
+            ZK_BACKEND_STARK_FRI_V1,
             &proof,
             None,
             ZkVerifyGuardrails {
@@ -4777,6 +5169,25 @@ mod guardrails_tests {
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: false,
                 stark_max_proof_bytes: 1024,
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_enforce_stark_max_proof_bytes() {
+        let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 9]);
+        let report = verify_backend_with_timing_guardrails(
+            ZK_BACKEND_STARK_FRI_V1,
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: 1024,
+                halo2_max_proof_bytes: 1024,
+                stark_enabled: true,
+                stark_max_proof_bytes: 8,
             },
         );
         assert!(!report.ok);

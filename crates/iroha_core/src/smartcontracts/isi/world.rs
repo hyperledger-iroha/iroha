@@ -415,20 +415,22 @@ pub mod isi {
         if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
             return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
         }
-        if let Some(rest) = trimmed.strip_prefix("halo2/ipa::") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-        }
-        if let Some(rest) = trimmed.strip_prefix("halo2/ipa:") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-        }
-        if let Some(rest) = trimmed.strip_prefix("halo2/ipa/") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        if let Some(rest) = trimmed.strip_prefix(crate::zk::ZK_BACKEND_HALO2_IPA) {
+            if let Some(rest) = rest.strip_prefix("::") {
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            }
+            if let Some(rest) = rest.strip_prefix(':') {
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            }
+            if let Some(rest) = rest.strip_prefix('/') {
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            }
         }
         Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-        if backend == "halo2/ipa" {
+        if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
             match (
                 normalize_halo2_circuit_id(record_id),
                 normalize_halo2_circuit_id(env_id),
@@ -447,6 +449,33 @@ pub mod isi {
         } else {
             record_id == env_id
         }
+    }
+
+    const VOTING_BALLOT_CIRCUIT_ID: &str = "vote-ballot-v1";
+    const VOTING_TALLY_CIRCUIT_ID: &str = "vote-tally-v1";
+
+    fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
+        if crate::zk::is_stark_fri_v1_backend(backend) {
+            // Enforce canonical STARK vote circuit roles to avoid swapping ballot/tally VKs.
+            circuit_id_matches(backend, record_circuit_id, expected_id)
+        } else {
+            // Preserve existing Halo2 and legacy backend behavior for backwards compatibility.
+            true
+        }
+    }
+
+    fn ensure_voting_circuit_role(
+        label: &str,
+        backend: &str,
+        record_circuit_id: &str,
+        expected_id: &str,
+    ) -> Result<(), Error> {
+        if !voting_circuit_matches(backend, record_circuit_id, expected_id) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} verifying key circuit mismatch").into(),
+            ));
+        }
+        Ok(())
     }
 
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
@@ -512,7 +541,7 @@ pub mod isi {
         backend: &str,
         proof_bytes: &[u8],
     ) -> Result<VotePublicInputs, Error> {
-        if backend == "halo2/ipa" {
+        if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
             let env: ZkOpenVerifyEnvelope =
                 norito::decode_from_bytes(proof_bytes).map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
@@ -1234,7 +1263,7 @@ pub mod isi {
                         use crate::zk_stark::{
                             STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
                         };
-                        let expected_hash_fn = if id_backend == "stark/fri-v1" {
+                        let expected_hash_fn = if id_backend == crate::zk::ZK_BACKEND_STARK_FRI_V1 {
                             None
                         } else if id_backend.contains("/sha256-") {
                             Some(STARK_HASH_SHA256_V1)
@@ -4734,7 +4763,7 @@ pub mod isi {
                     use crate::zk_stark::{
                         STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
                     };
-                    let expected_hash_fn = if id_backend == "stark/fri-v1" {
+                    let expected_hash_fn = if id_backend == crate::zk::ZK_BACKEND_STARK_FRI_V1 {
                         None
                     } else if id_backend.contains("/sha256-") {
                         Some(STARK_HASH_SHA256_V1)
@@ -8059,6 +8088,12 @@ pub mod isi {
                 "ballot verifying key backend mismatch".into(),
             ));
         }
+        ensure_voting_circuit_role(
+            "ballot",
+            backend,
+            &record.circuit_id,
+            VOTING_BALLOT_CIRCUIT_ID,
+        )?;
         Ok((vk_id, vk_box, record))
     }
 
@@ -8167,6 +8202,12 @@ pub mod isi {
                 "tally vk backend mismatch".into(),
             ));
         }
+        ensure_voting_circuit_role(
+            "tally",
+            backend,
+            &record.circuit_id,
+            VOTING_TALLY_CIRCUIT_ID,
+        )?;
         Ok((vk_id, vk_box, record))
     }
 
@@ -8226,6 +8267,22 @@ pub mod isi {
             }
             // Require ballot/tally verifying keys to be attested and active.
             let ballot_vk_id = self.vk_ballot().clone();
+            let ballot_rec = state_transaction
+                .world
+                .verifying_keys
+                .get(&ballot_vk_id)
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ballot verifying key not found".into(),
+                    )
+                })?;
+            ensure_voting_circuit_role(
+                "ballot",
+                ballot_vk_id.backend.as_str(),
+                &ballot_rec.circuit_id,
+                VOTING_BALLOT_CIRCUIT_ID,
+            )?;
             let ballot_commitment =
                 election_vk_commitment(&ballot_vk_id, "ballot", state_transaction)?;
 
@@ -8245,6 +8302,12 @@ pub mod isi {
                     "tally verifying key is not Active".into(),
                 ));
             }
+            ensure_voting_circuit_role(
+                "tally",
+                tally_vk_id.backend.as_str(),
+                &tally_rec.circuit_id,
+                VOTING_TALLY_CIRCUIT_ID,
+            )?;
             let tally_commitment =
                 election_vk_commitment(&tally_vk_id, "tally", state_transaction)?;
             let st = crate::state::ElectionState {
@@ -10566,6 +10629,21 @@ pub mod isi {
             ));
             assert!(circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
+            assert!(voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa-v1/any-circuit",
+                "vote-ballot-v1"
+            ));
+            assert!(voting_circuit_matches(
+                "stark/fri-v1/sha256-goldilocks-v1",
+                "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1",
+                "vote-ballot-v1"
+            ));
+            assert!(!voting_circuit_matches(
+                "stark/fri-v1/sha256-goldilocks-v1",
+                "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1",
+                "vote-ballot-v1"
+            ));
         }
 
         #[test]
@@ -10886,10 +10964,10 @@ pub mod isi {
             let mut stx = state_block.transaction();
 
             let backend = "stark/fri-v1/sha256-goldilocks-v1";
-            let vk_id = VerifyingKeyId::new(backend, "vk_stark_ok");
-            let vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
-            let commitment = hash_vk(&vk_box);
-            let mut rec = VerifyingKeyRecord::new_with_owner(
+            let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_ok");
+            let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
+            let ballot_commitment = hash_vk(&ballot_vk_box);
+            let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1",
                 None,
@@ -10897,35 +10975,122 @@ pub mod isi {
                 BackendTag::Stark,
                 "goldilocks",
                 [0u8; 32],
-                commitment,
+                ballot_commitment,
             );
-            rec.status = ConfidentialStatus::Active;
-            rec.key = Some(vk_box.clone());
-            rec.vk_len =
-                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
-            stx.world.verifying_keys.insert(vk_id.clone(), rec);
+            ballot_rec.status = ConfidentialStatus::Active;
+            ballot_rec.key = Some(ballot_vk_box.clone());
+            ballot_rec.vk_len = u32::try_from(ballot_vk_box.bytes.len())
+                .expect("verifying key length fits into u32");
+            stx.world
+                .verifying_keys
+                .insert(ballot_vk_id.clone(), ballot_rec);
+
+            let tally_vk_id = VerifyingKeyId::new(backend, "vk_stark_tally_ok");
+            let tally_vk_box = VerifyingKeyBox::new(backend.into(), vec![5, 6, 7, 8, 9]);
+            let tally_commitment = hash_vk(&tally_vk_box);
+            let mut tally_rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1",
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0u8; 32],
+                tally_commitment,
+            );
+            tally_rec.status = ConfidentialStatus::Active;
+            tally_rec.key = Some(tally_vk_box.clone());
+            tally_rec.vk_len = u32::try_from(tally_vk_box.bytes.len())
+                .expect("verifying key length fits into u32");
+            stx.world
+                .verifying_keys
+                .insert(tally_vk_id.clone(), tally_rec);
 
             let st = crate::state::ElectionState {
-                vk_ballot: Some(vk_id.clone()),
-                vk_tally: Some(vk_id.clone()),
+                vk_ballot: Some(ballot_vk_id.clone()),
+                vk_tally: Some(tally_vk_id.clone()),
                 ..Default::default()
             };
 
             let proof = ProofBox::new(backend.into(), vec![0xbb]);
             let ballot_att =
-                ProofAttachment::new_inline(backend.into(), proof.clone(), vk_box.clone());
+                ProofAttachment::new_inline(backend.into(), proof.clone(), ballot_vk_box.clone());
             let (ballot_id, ballot_vk, ballot_rec) =
                 resolve_ballot_vk(&st, &ballot_att, &stx).expect("resolve ballot vk");
-            assert_eq!(ballot_id, vk_id);
-            assert_eq!(ballot_vk, vk_box);
-            assert_eq!(ballot_rec.commitment, commitment);
+            assert_eq!(ballot_id, ballot_vk_id);
+            assert_eq!(ballot_vk, ballot_vk_box);
+            assert_eq!(ballot_rec.commitment, ballot_commitment);
 
-            let tally_att = ProofAttachment::new_ref(backend.into(), proof, vk_id.clone());
+            let tally_att = ProofAttachment::new_ref(backend.into(), proof, tally_vk_id.clone());
             let (tally_id, tally_vk, tally_rec) =
                 resolve_tally_vk(&st, &tally_att, &stx).expect("resolve tally vk");
-            assert_eq!(tally_id, vk_id);
-            assert_eq!(tally_vk, ballot_vk);
-            assert_eq!(tally_rec.commitment, commitment);
+            assert_eq!(tally_id, tally_vk_id);
+            assert_eq!(tally_vk, tally_vk_box);
+            assert_eq!(tally_rec.commitment, tally_commitment);
+        }
+
+        #[test]
+        fn resolve_ballot_and_tally_vk_reject_stark_role_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let backend = "stark/fri-v1/sha256-goldilocks-v1";
+            let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_bad");
+            let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
+            let ballot_commitment = hash_vk(&ballot_vk_box);
+            let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "stark/fri-v1/sha256-goldilocks-v1:not-a-ballot-circuit",
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0u8; 32],
+                ballot_commitment,
+            );
+            ballot_rec.status = ConfidentialStatus::Active;
+            ballot_rec.key = Some(ballot_vk_box);
+            stx.world
+                .verifying_keys
+                .insert(ballot_vk_id.clone(), ballot_rec);
+
+            let tally_vk_id = VerifyingKeyId::new(backend, "vk_stark_tally_bad");
+            let tally_vk_box = VerifyingKeyBox::new(backend.into(), vec![5, 4, 3, 2, 1]);
+            let tally_commitment = hash_vk(&tally_vk_box);
+            let mut tally_rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "stark/fri-v1/sha256-goldilocks-v1:not-a-tally-circuit",
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0u8; 32],
+                tally_commitment,
+            );
+            tally_rec.status = ConfidentialStatus::Active;
+            tally_rec.key = Some(tally_vk_box);
+            stx.world
+                .verifying_keys
+                .insert(tally_vk_id.clone(), tally_rec);
+
+            let st = crate::state::ElectionState {
+                vk_ballot: Some(ballot_vk_id.clone()),
+                vk_tally: Some(tally_vk_id.clone()),
+                ..Default::default()
+            };
+
+            let ballot_proof = ProofBox::new(backend.into(), vec![0x11]);
+            let ballot_att = ProofAttachment::new_ref(backend.into(), ballot_proof, ballot_vk_id);
+            assert!(resolve_ballot_vk(&st, &ballot_att, &stx).is_err());
+
+            let tally_proof = ProofBox::new(backend.into(), vec![0x22]);
+            let tally_att = ProofAttachment::new_ref(backend.into(), tally_proof, tally_vk_id);
+            assert!(resolve_tally_vk(&st, &tally_att, &stx).is_err());
         }
 
         fn bootstrap_alice_account(stx: &mut StateTransaction<'_, '_>) {

@@ -243,6 +243,20 @@ public struct AccountAddress {
         }
     }
 
+    /// Re-encodes this address with a domain selector derived from the provided domain label when this address currently
+    /// uses the `default` domain selector.
+    ///
+    /// Why this exists:
+    /// - Some Core API deployments return account IDs encoded with the default-domain selector (tag `0x00`), while Torii
+    ///   / explorer interactions require the local-domain selector (tag `0x01`) for a specific FI domain label.
+    /// - For first-release client standardization, wallets should converge on local-domain IH58 encodings for QR codes,
+    ///   transfers, and any chain-facing workflows.
+    public func rebasedFromDefaultDomain(to domainLabel: String) throws -> AccountAddress {
+        guard case .default = domain else { return self }
+        let selector = try DomainSelector.from(domain: domainLabel)
+        return AccountAddress(header: header, domain: selector, controller: controller)
+    }
+
     private static func containsCompressedAlphabetBeyondIh58(_ literal: String) -> Bool {
         for character in literal {
             let symbol = String(character)
