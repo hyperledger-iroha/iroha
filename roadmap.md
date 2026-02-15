@@ -145,7 +145,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Re-run `cargo test -p integration_tests --test mod` after the payload-hash stabilization fix (strip results/extra signatures from DA/RBC payload bytes) and the block-sync seen-block filtering; attempt 2025-12-31 timed out after 5m with pipeline event failures, peers waiting for block 1, and status endpoint connection refused—confirm the gating condition is resolved (2026-02-01 run above passed).
 - [x] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover + replay PRF rotation) to confirm event/connected-peers suites no longer hang (2026-02-01 run above passed).
 - [x] Re-run `cargo test -p integration_tests --test mod` after preserving `proposals_seen` across membership changes (prevents re-proposing the same view during roster updates) to confirm peer membership tests no longer stall consensus (2026-02-01 run above passed).
-- [ ] Re-run `cargo test --workspace` after the Sumeragi gap fixes; latest attempt (`cargo test -p iroha_core --lib sumeragi::main_loop::tests`) timed out after 600s; active-topology world-peer ordering and locked-QC status flake were fixed afterward.
+- [ ] Run the Sumeragi targeted matrix (no full-workspace run): `cargo test -p iroha_core --lib sumeragi::main_loop::tests -- --nocapture`, `cargo test -p integration_tests --test sumeragi_da -- --nocapture`, and `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --ignored --nocapture`; update `status.md` with command results and artifact/log paths.
 - [x] Fix block-sync seen-block tracking to avoid marking uncommitted payloads (prevents catch-up stalls), add unit coverage, and re-run `extra_functional::connected_peers::register_new_peer` (pass; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_y8a4wO`).
 
 4. **ADAPTIVE-PACING-FLOOR — Genesis minimum finality + adaptive timing governor** (Consensus, Line: Shared, Owner: Core WG, Priority: High, Status: 🈴 Completed, target TBD)
@@ -233,7 +233,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Add a `torii_da_chunking_seconds` histogram around erasure coding/segment assembly, wire it into telemetry exports, and document it in telemetry docs with unit coverage for metric registration.
  - [x] Finish module boundary cleanup (visibility tweaks, test relocation, and lint fixes).
  - [x] Verify Torii DA unit tests pass.
- - [ ] Run `cargo test --workspace` and update `status.md` with the results (attempted; sandbox timed out).
+ - [ ] Run the DA/Torii targeted matrix (no full-workspace run): `cargo test -p iroha_torii -- --nocapture`, `cargo test -p iroha_core --lib overlay_ -- --nocapture`, and `cargo test -p integration_tests --test mod -- --nocapture` (or narrowed DA/Torii subsets if runtime limits hit); update `status.md` with command results and artifact/log paths.
 
 5. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
  - [x] Add an ignored localnet soak integration test that drives thousands of blocks/transactions and document how to run it.
@@ -355,7 +355,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 15. **IZANAMI-SUMERAGI-FRAME-CAP — Validate consensus frame cap + RBC chunk clamp** (Consensus/QA, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
 - [x] Re-run Izanami 4-peer DA runs to confirm no `FrameTooLarge` disconnects and consensus reaches target blocks (2026-01-23 run: `RUST_LOG=izanami::summary=info,izanami::workload=warn IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 20 --progress-interval 10s --progress-timeout 180s --tps 5 --max-inflight 8 --workload-profile stable` completed with 112 successes/0 failures; no `FrameTooLarge` observed; duplicate metric registration warnings persisted).
- - [ ] Re-run `cargo test --workspace` (latest attempt timed out after 600s during compilation; see `status.md`).
+ - [ ] Run the frame-cap targeted matrix (no full-workspace run): `cargo test -p iroha_core --lib sumeragi::main_loop::tests -- --nocapture`, `cargo test -p integration_tests --test sumeragi_da -- --nocapture`, and `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --ignored --nocapture`; update `status.md` with command results and artifact/log paths.
  - [x] Size consensus frames using NetworkMessage wire lengths, trim BlockSyncUpdate payloads to fit caps, and guard background consensus sends against oversize frames.
  - [x] Trim proposal tx batches in bulk when BlockCreated frames exceed consensus caps to avoid O(n^2) assembly stalls; add unit coverage.
  - [x] Harden Norito length decoding to reject u64->usize overflows across core and AoS columnar views; add regression coverage.

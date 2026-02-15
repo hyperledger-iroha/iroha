@@ -584,6 +584,16 @@ public struct OfflineQrStreamTheme: Sendable, Equatable {
         pulsePeriod: 48
     )
 
+    public static let sakuraStorm = OfflineQrStreamTheme(
+        name: "sakura-storm",
+        backgroundStart: OfflineQrStreamColor(red: 0.05, green: 0.02, blue: 0.08),
+        backgroundEnd: OfflineQrStreamColor(red: 0.02, green: 0.01, blue: 0.04),
+        accent: OfflineQrStreamColor(red: 0.95, green: 0.71, blue: 0.87),
+        petal: OfflineQrStreamColor(red: 0.98, green: 0.92, blue: 0.97),
+        petalCount: 8,
+        pulsePeriod: 36
+    )
+
     public func frameStyle(frameIndex: Int, totalFrames: Int) -> OfflineQrStreamFrameStyle {
         let safeTotal = max(totalFrames, 1)
         let phase = Double(frameIndex % safeTotal) / Double(safeTotal)
@@ -638,6 +648,16 @@ public struct OfflineQrStreamPlaybackSkin: Sendable, Equatable {
         progressOverlayAlpha: 0.3,
         reducedMotion: false,
         lowPower: true
+    )
+
+    public static let sakuraStorm = OfflineQrStreamPlaybackSkin(
+        name: "sakura-storm",
+        theme: .sakuraStorm,
+        frameRate: 12,
+        petalDriftSpeed: 0.6,
+        progressOverlayAlpha: 0.34,
+        reducedMotion: false,
+        lowPower: false
     )
 
     public func frameStyle(frameIndex: Int, totalFrames: Int, progress: Double) -> OfflineQrStreamPlaybackStyle {

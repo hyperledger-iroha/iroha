@@ -197,6 +197,7 @@ For device-to-device transfers, use the QR stream helpers from `offlineQrStream.
 - **Text fallback:** wrap frame bytes as `iroha:qr1:<base64(frame_bytes)>` using
   `encodeQrFrameText`, and decode with `decodeQrFrameText`.
 - **Playback skins:** use `sakuraQrStreamSkin` for default animation,
+  `sakuraStormQrStreamSkin` to mirror CLI `--style sakura-storm` previews,
   `sakuraQrStreamReducedMotionSkin` for accessibility, and `sakuraQrStreamLowPowerSkin` for
   battery-friendly playback.
 

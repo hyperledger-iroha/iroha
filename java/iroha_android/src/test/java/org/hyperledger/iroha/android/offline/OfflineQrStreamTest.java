@@ -11,6 +11,8 @@ public final class OfflineQrStreamTest {
     recoversMissingChunk();
     rejectsBadChecksum();
     textCodecRoundTrip();
+    sakuraStormPlaybackSkinMatchesPreset();
+    sakuraStormScanSessionPresetRecoversDroppedFrame();
     System.out.println("[IrohaAndroid] OfflineQrStreamTest passed.");
   }
 
@@ -87,6 +89,53 @@ public final class OfflineQrStreamTest {
     final byte[] decoded =
         OfflineQrStream.TextCodec.decode(encoded, OfflineQrStream.FrameEncoding.BASE64);
     assertArrayEquals(payload, decoded, "text codec payload mismatch");
+  }
+
+  private static void sakuraStormPlaybackSkinMatchesPreset() {
+    final OfflineQrStream.PlaybackSkin skin = OfflineQrStream.SAKURA_STORM_SKIN;
+    assertTrue("sakura-storm".equals(skin.name), "storm skin name mismatch");
+    assertTrue(skin.frameRate == 12.0, "storm frameRate mismatch");
+    assertTrue(skin.petalDriftSpeed == 0.6, "storm drift mismatch");
+    assertTrue(skin.progressOverlayAlpha == 0.34, "storm overlay mismatch");
+    assertTrue(skin.theme.backgroundStart.red == 0.05, "storm backgroundStart mismatch");
+    assertTrue(skin.theme.backgroundEnd.blue == 0.04, "storm backgroundEnd mismatch");
+  }
+
+  private static void sakuraStormScanSessionPresetRecoversDroppedFrame() {
+    final byte[] payload = makePayload(6 * 1024);
+    final List<OfflineQrStream.Frame> frames =
+        OfflineQrStream.Encoder.encodeFrames(
+            payload,
+            OfflineQrStream.PayloadKind.OFFLINE_SPEND_RECEIPT,
+            new OfflineQrStream.Options(336, 4));
+
+    OfflineQrStream.Frame header = null;
+    for (OfflineQrStream.Frame frame : frames) {
+      if (frame.kind() == OfflineQrStream.FrameKind.HEADER) {
+        header = frame;
+        break;
+      }
+    }
+    assertNotNull(header, "header");
+
+    final OfflineQrStream.ScanSession session = new OfflineQrStream.ScanSession();
+    session.ingest(header.encode());
+
+    OfflineQrStream.DecodeResult result = null;
+    for (OfflineQrStream.Frame frame : frames) {
+      if (frame.kind() == OfflineQrStream.FrameKind.DATA && frame.index() == 1) {
+        continue;
+      }
+      if (frame.kind() == OfflineQrStream.FrameKind.HEADER) {
+        continue;
+      }
+      result = session.ingest(frame.encode());
+    }
+
+    assertNotNull(result, "storm decode result");
+    assertTrue(result.isComplete(), "storm scan session incomplete");
+    assertArrayEquals(payload, result.payload(), "storm scan payload mismatch");
+    assertTrue(result.recoveredChunks() == 1, "storm recovered chunk mismatch");
   }
 
   private static byte[] makePayload(final int length) {

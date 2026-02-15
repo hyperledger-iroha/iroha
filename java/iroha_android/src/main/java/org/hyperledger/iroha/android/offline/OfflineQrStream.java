@@ -721,6 +721,16 @@ public final class OfflineQrStream {
           6,
           48);
 
+  public static final Theme SAKURA_STORM_THEME =
+      new Theme(
+          "sakura-storm",
+          new Color(0.05, 0.02, 0.08),
+          new Color(0.02, 0.01, 0.04),
+          new Color(0.95, 0.71, 0.87),
+          new Color(0.98, 0.92, 0.97),
+          8,
+          36);
+
   public static final PlaybackSkin SAKURA_SKIN =
       new PlaybackSkin("sakura", SAKURA_THEME, 12.0, 1.0, 0.4, false, false);
 
@@ -743,6 +753,9 @@ public final class OfflineQrStream {
           0.3,
           false,
           true);
+
+  public static final PlaybackSkin SAKURA_STORM_SKIN =
+      new PlaybackSkin("sakura-storm", SAKURA_STORM_THEME, 12.0, 0.6, 0.34, false, false);
 
   private static byte[] xorParity(
       final byte[] payload,

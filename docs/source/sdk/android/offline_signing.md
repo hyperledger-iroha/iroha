@@ -454,8 +454,9 @@ Use the QR stream helpers when passing offline receipts or bundles between devic
 - **Text fallback:** if QR decoders return text, decode
   `iroha:qr1:<base64(frame_bytes)>` via `OfflineQrStream.TextCodec`.
 - **Playback skins:** use `OfflineQrStream.SAKURA_SKIN` for default playback,
-  `SAKURA_REDUCED_MOTION_SKIN` for accessibility, and `SAKURA_LOW_POWER_SKIN` for battery-friendly
-  animations.
+  `SAKURA_STORM_SKIN` to mirror CLI `--style sakura-storm` previews,
+  `SAKURA_REDUCED_MOTION_SKIN` for accessibility, and `SAKURA_LOW_POWER_SKIN` for
+  battery-friendly animations.
 
 ## Petal stream handoff (custom scanner)
 
