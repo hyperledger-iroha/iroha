@@ -3448,6 +3448,34 @@ impl Iroha {
             |key| iroha_crypto::KeyPair::from(key.0.clone()),
         );
 
+        let stored_genesis_block = read_stored_genesis_block(kura.as_ref(), block_count)?;
+        let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
+
+        let effective_genesis_public_key = if let Some(stored_genesis) = stored_genesis_block.as_ref() {
+            let stored_key = genesis_public_key_from_genesis_block(stored_genesis)?;
+            if stored_key != config.genesis.public_key {
+                iroha_logger::warn!(
+                    configured = %config.genesis.public_key,
+                    stored = %stored_key,
+                    "genesis.public_key does not match stored genesis; using stored key for restart"
+                );
+            }
+            if let (Some(config_hash), Some(stored_hash)) =
+                (config.genesis.expected_hash.as_ref(), stored_genesis_hash.as_ref())
+            {
+                if config_hash != stored_hash {
+                    iroha_logger::warn!(
+                        configured = ?config_hash,
+                        stored = ?stored_hash,
+                        "genesis.expected_hash does not match stored genesis; ignoring for restart"
+                    );
+                }
+            }
+            stored_key
+        } else {
+            config.genesis.public_key.clone()
+        };
+
         let mut state = match try_read_snapshot(
             config.snapshot.store_dir.resolve_relative_path(),
             &kura,
@@ -3468,34 +3496,7 @@ impl Iroha {
             }
             Err(TryReadSnapshotError::NotFound) => {
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
-                let genesis_public_key = if block_count.0 > 0 {
-                    let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
-                    let stored = kura.get_block(nz).ok_or_else(|| {
-                        Report::new(StartError::InitKura).attach(
-                            "non-empty block store is missing genesis block at height 1",
-                        )
-                    })?;
-                    let first = stored.external_transactions().next().ok_or_else(|| {
-                        Report::new(StartError::InitKura)
-                            .attach("stored genesis block contains no transactions")
-                    })?;
-                    let authority = first.authority();
-                    if authority.domain() != &*iroha_genesis::GENESIS_DOMAIN_ID {
-                        return Err(Report::new(StartError::InitKura).attach(format!(
-                            "stored genesis transaction authority is not in genesis domain (authority={authority})",
-                        )));
-                    }
-                    authority
-                        .try_signatory()
-                        .cloned()
-                        .ok_or_else(|| {
-                            Report::new(StartError::InitKura).attach(
-                                "stored genesis transaction authority is not a single-key account",
-                            )
-                        })?
-                } else {
-                    config.genesis.public_key.clone()
-                };
+                let genesis_public_key = effective_genesis_public_key.clone();
                 let world = World::with(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
@@ -3514,34 +3515,7 @@ impl Iroha {
                     ?error,
                     "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
                 );
-                let genesis_public_key = if block_count.0 > 0 {
-                    let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
-                    let stored = kura.get_block(nz).ok_or_else(|| {
-                        Report::new(StartError::InitKura).attach(
-                            "non-empty block store is missing genesis block at height 1",
-                        )
-                    })?;
-                    let first = stored.external_transactions().next().ok_or_else(|| {
-                        Report::new(StartError::InitKura)
-                            .attach("stored genesis block contains no transactions")
-                    })?;
-                    let authority = first.authority();
-                    if authority.domain() != &*iroha_genesis::GENESIS_DOMAIN_ID {
-                        return Err(Report::new(StartError::InitKura).attach(format!(
-                            "stored genesis transaction authority is not in genesis domain (authority={authority})",
-                        )));
-                    }
-                    authority
-                        .try_signatory()
-                        .cloned()
-                        .ok_or_else(|| {
-                            Report::new(StartError::InitKura).attach(
-                                "stored genesis transaction authority is not a single-key account",
-                            )
-                        })?
-                } else {
-                    config.genesis.public_key.clone()
-                };
+                let genesis_public_key = effective_genesis_public_key.clone();
                 let world = World::with(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
@@ -3723,17 +3697,7 @@ impl Iroha {
         );
 
         if let Some(genesis_block) = genesis.as_ref() {
-            let metadata_genesis_from_store = if block_count.0 > 0 {
-                let Some(stored_genesis) = kura.get_block(std::num::NonZeroUsize::new(1).expect("nonzero"))
-                else {
-                    return Err(Report::new(StartError::InitKura)
-                        .attach("non-empty block store is missing genesis block at height 1"));
-                };
-                Some(GenesisBlock((*stored_genesis).clone()))
-            } else {
-                None
-            };
-            let metadata_genesis = metadata_genesis_from_store.as_ref().unwrap_or(genesis_block);
+            let metadata_genesis = stored_genesis_block.as_ref().unwrap_or(genesis_block);
             verify_genesis_metadata(
                 metadata_genesis,
                 &config,
@@ -3850,8 +3814,16 @@ impl Iroha {
         supervisor.monitor(child);
 
         // Bootstrapper orchestrates request/response handling for genesis.
+        let bootstrap_genesis_config = if let Some(stored_hash) = stored_genesis_hash.clone() {
+            let mut cfg = config.genesis.clone();
+            cfg.public_key = effective_genesis_public_key.clone();
+            cfg.expected_hash = Some(stored_hash);
+            cfg
+        } else {
+            config.genesis.clone()
+        };
         let bootstrapper = GenesisBootstrapper::new(
-            &config.genesis,
+            &bootstrap_genesis_config,
             network.clone(),
             config.common.chain.clone(),
         );
@@ -3864,22 +3836,18 @@ impl Iroha {
         bootstrapper.spawn_listener().await;
 
         // Allow peers to fetch genesis if we already have it locally (storage or file).
-        if let Some(genesis_block) = genesis.as_ref() {
+        if let Some(stored_genesis) = stored_genesis_block.as_ref() {
+            if let Err(err) = bootstrapper.set_payload(stored_genesis).await {
+                iroha_logger::warn!(
+                    ?err,
+                    "failed to register stored genesis payload for bootstrap"
+                );
+            }
+        } else if let Some(genesis_block) = genesis.as_ref() {
             if let Err(err) = bootstrapper.set_payload(genesis_block).await {
                 iroha_logger::warn!(
                     ?err,
                     "failed to register local genesis payload for bootstrap"
-                );
-            }
-        } else if block_count.0 > 0
-            && let Some(stored_genesis) =
-                kura.get_block(std::num::NonZeroUsize::new(1).expect("nonzero"))
-        {
-            let block = GenesisBlock((*stored_genesis).clone());
-            if let Err(err) = bootstrapper.set_payload(&block).await {
-                iroha_logger::warn!(
-                    ?err,
-                    "failed to register stored genesis payload for bootstrap"
                 );
             }
         }
@@ -3901,7 +3869,7 @@ impl Iroha {
                     let expected_hash = config.genesis.expected_hash;
                     let genesis_account = AccountId::new(
                         iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                        config.genesis.public_key.clone(),
+                        effective_genesis_public_key.clone(),
                     );
                     match bootstrapper
                         .fetch_genesis(&candidates, &genesis_account, expected_hash)
@@ -3962,15 +3930,8 @@ impl Iroha {
             // On non-empty storage, avoid re-validating the provided genesis signature.
             // Instead, ensure the optional provided payload matches the genesis already
             // persisted at height 1 and continue replay from stored data.
-            if block_count.0 > 0 {
-                let Some(stored_genesis) =
-                    kura.get_block(std::num::NonZeroUsize::new(1).expect("nonzero"))
-                else {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "non-empty block store is missing genesis block at height 1",
-                    ));
-                };
-                let stored_hash = stored_genesis.hash();
+            if let Some(stored_genesis) = stored_genesis_block.as_ref() {
+                let stored_hash = stored_genesis.0.hash();
                 let provided_hash = genesis_block.0.hash();
                 if stored_hash != provided_hash {
                     return Err(Report::new(StartError::InitKura).attach(format!(
@@ -3984,7 +3945,7 @@ impl Iroha {
             } else {
                 let genesis_account = AccountId::new(
                     iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                    config.genesis.public_key.clone(),
+                    effective_genesis_public_key.clone(),
                 );
                 if let Err(err) = iroha_core::validate_genesis_block(
                     &genesis_block.0,
@@ -4515,6 +4476,11 @@ impl Iroha {
             .resolve_relative_path()
             .join("rbc_sessions");
 
+        let genesis_for_consensus = if stored_genesis_block.is_some() {
+            None
+        } else {
+            genesis
+        };
         let sumeragi_cfg = config.sumeragi.clone();
         let (sumeragi, child) = SumeragiStartArgs {
             config: sumeragi_cfg.clone(),
@@ -4528,8 +4494,8 @@ impl Iroha {
             network: network.clone(),
             peers_gossiper: peers_gossiper.clone(),
             genesis_network: GenesisWithPubKey {
-                genesis,
-                public_key: config.genesis.public_key.clone(),
+                genesis: genesis_for_consensus,
+                public_key: effective_genesis_public_key.clone(),
             },
             block_count,
             block_sync_gossip_limit: usize::try_from(config.block_sync.gossip_size.get())
@@ -5192,6 +5158,40 @@ fn broadcast_pow_payload(
     });
 }
 
+fn read_stored_genesis_block(
+    kura: &Kura,
+    block_count: iroha_core::kura::BlockCount,
+) -> ReportResult<Option<GenesisBlock>, StartError> {
+    if block_count.0 == 0 {
+        return Ok(None);
+    }
+
+    let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
+    let stored = kura.get_block(nz).ok_or_else(|| {
+        Report::new(StartError::InitKura)
+            .attach("non-empty block store is missing genesis block at height 1")
+    })?;
+    Ok(Some(GenesisBlock((*stored).clone())))
+}
+
+fn genesis_public_key_from_genesis_block(
+    block: &GenesisBlock,
+) -> ReportResult<PublicKey, StartError> {
+    let first = block.0.external_transactions().next().ok_or_else(|| {
+        Report::new(StartError::InitKura).attach("stored genesis block contains no transactions")
+    })?;
+    let authority = first.authority();
+    if authority.domain() != &*iroha_genesis::GENESIS_DOMAIN_ID {
+        return Err(Report::new(StartError::InitKura).attach(format!(
+            "stored genesis transaction authority is not in genesis domain (authority={authority})",
+        )));
+    }
+    authority.try_signatory().cloned().ok_or_else(|| {
+        Report::new(StartError::InitKura)
+            .attach("stored genesis transaction authority is not a single-key account")
+    })
+}
+
 fn genesis_account(public_key: PublicKey) -> Account {
     let genesis_account_id = AccountId::new(iroha_genesis::GENESIS_DOMAIN_ID.clone(), public_key);
     Account::new(genesis_account_id.clone()).build(&genesis_account_id)
@@ -5200,6 +5200,27 @@ fn genesis_account(public_key: PublicKey) -> Account {
 fn genesis_domain(public_key: PublicKey) -> Domain {
     let genesis_account = genesis_account(public_key);
     Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id)
+}
+
+#[cfg(test)]
+mod genesis_key_tests {
+    use super::*;
+    use iroha_genesis::GenesisBuilder;
+    use std::path::PathBuf;
+
+    #[test]
+    fn derives_genesis_pubkey_from_block_authority() {
+        let chain = ChainId::from("derive-genesis-pubkey-test");
+        let manifest =
+            GenesisBuilder::new_without_executor(chain, PathBuf::from(".")).build_raw();
+        let keypair = iroha_crypto::KeyPair::random();
+        let genesis_block = manifest
+            .build_and_sign(&keypair)
+            .expect("build genesis block");
+        let derived =
+            genesis_public_key_from_genesis_block(&genesis_block).expect("derive genesis pubkey");
+        assert_eq!(&derived, keypair.public_key());
+    }
 }
 
 /// Errors raised while reading configuration and genesis data.
@@ -7021,7 +7042,7 @@ fn consensus_caps_from_genesis(
         })
         .or_else(|| handshake_entries.first())?;
 
-    let (mode_tag, consensus_params, computed_fingerprint) =
+    let (mode_tag, _consensus_params, computed_fingerprint) =
         consensus_entry_caps(chain_id, entry, &params, sumeragi);
 
     Some((
