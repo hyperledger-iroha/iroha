@@ -3446,6 +3446,89 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
 
 }
 
+public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
+    public let manifestHash: String?
+    public let laneId: UInt32?
+    public let epoch: UInt64?
+    public let sequence: UInt64?
+    public let pagination: ToriiQueryPagination?
+
+    public init(manifestHash: String? = nil,
+                laneId: UInt32? = nil,
+                epoch: UInt64? = nil,
+                sequence: UInt64? = nil,
+                pagination: ToriiQueryPagination? = nil) {
+        self.manifestHash = manifestHash
+        self.laneId = laneId
+        self.epoch = epoch
+        self.sequence = sequence
+        self.pagination = pagination
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case manifestHash = "manifest_hash"
+        case laneId = "lane_id"
+        case epoch
+        case sequence
+        case pagination
+    }
+}
+
+public struct ToriiDaCommitmentListResponse: Decodable, Sendable, Equatable {
+    public let policies: ToriiJSONValue
+    public let commitments: [ToriiJSONValue]
+}
+
+public struct ToriiDaCommitmentProofResponse: Decodable, Sendable, Equatable {
+    public let policies: ToriiJSONValue
+    public let proof: ToriiJSONValue
+}
+
+public struct ToriiDaCommitmentVerifyResponse: Decodable, Sendable, Equatable {
+    public let valid: Bool
+    public let error: String?
+}
+
+public struct ToriiDaPinIntentQueryRequest: Codable, Sendable, Equatable {
+    public let manifestHash: String?
+    public let storageTicket: String?
+    public let alias: String?
+    public let laneId: UInt32?
+    public let epoch: UInt64?
+    public let sequence: UInt64?
+    public let pagination: ToriiQueryPagination?
+
+    public init(manifestHash: String? = nil,
+                storageTicket: String? = nil,
+                alias: String? = nil,
+                laneId: UInt32? = nil,
+                epoch: UInt64? = nil,
+                sequence: UInt64? = nil,
+                pagination: ToriiQueryPagination? = nil) {
+        self.manifestHash = manifestHash
+        self.storageTicket = storageTicket
+        self.alias = alias
+        self.laneId = laneId
+        self.epoch = epoch
+        self.sequence = sequence
+        self.pagination = pagination
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case manifestHash = "manifest_hash"
+        case storageTicket = "storage_ticket"
+        case alias
+        case laneId = "lane_id"
+        case epoch
+        case sequence
+        case pagination
+    }
+}
+
+public struct ToriiDaPinIntentVerifyResponse: Decodable, Sendable, Equatable {
+    public let valid: Bool
+}
+
 public struct ToriiDaIngestPersistedPaths: Sendable, Equatable {
     public let requestJsonURL: URL
     public let receiptJsonURL: URL?
@@ -8370,6 +8453,52 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func getDaProofPolicies(completion: @escaping (Result<ToriiJSONValue, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getDaProofPolicies() }
+    }
+
+    @discardableResult
+    public func getDaProofPolicySnapshot(completion: @escaping (Result<ToriiJSONValue, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getDaProofPolicySnapshot() }
+    }
+
+    @discardableResult
+    public func listDaCommitments(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest(),
+                                  completion: @escaping (Result<ToriiDaCommitmentListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listDaCommitments(requestBody) }
+    }
+
+    @discardableResult
+    public func proveDaCommitment(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest(),
+                                  completion: @escaping (Result<ToriiDaCommitmentProofResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.proveDaCommitment(requestBody) }
+    }
+
+    @discardableResult
+    public func verifyDaCommitment(proof: ToriiJSONValue,
+                                   completion: @escaping (Result<ToriiDaCommitmentVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.verifyDaCommitment(proof: proof) }
+    }
+
+    @discardableResult
+    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest(),
+                                 completion: @escaping (Result<[ToriiJSONValue], Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listDaPinIntents(requestBody) }
+    }
+
+    @discardableResult
+    public func proveDaPinIntent(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest(),
+                                 completion: @escaping (Result<ToriiJSONValue?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.proveDaPinIntent(requestBody) }
+    }
+
+    @discardableResult
+    public func verifyDaPinIntent(proof: ToriiJSONValue,
+                                  completion: @escaping (Result<ToriiDaPinIntentVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.verifyDaPinIntent(proof: proof) }
+    }
+
+    @discardableResult
     public func fetchDaPayloadViaGateway(storageTicketHex: String? = nil,
                                          manifestBundle: ToriiDaManifestBundle? = nil,
                                          chunkerHandle: String? = nil,
@@ -9564,6 +9693,104 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                             label: label ?? bundle.storageTicketHex,
                                                             fileManager: fileManager)
         return (bundle, paths)
+    }
+
+    public func getDaProofPolicies() async throws -> ToriiJSONValue {
+        let request = try makeRequest(path: "/v1/da/proof_policies",
+                                      headers: ["Accept": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiJSONValue.self, from: data)
+    }
+
+    public func getDaProofPolicySnapshot() async throws -> ToriiJSONValue {
+        let request = try makeRequest(path: "/v1/da/proof_policy_snapshot",
+                                      headers: ["Accept": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiJSONValue.self, from: data)
+    }
+
+    public func listDaCommitments(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest()) async throws -> ToriiDaCommitmentListResponse {
+        let normalized = try normalizeDaCommitmentProofRequest(requestBody)
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(normalized)
+        let request = try makeRequest(path: "/v1/da/commitments",
+                                      method: .post,
+                                      body: body,
+                                      headers: [
+                                        "Content-Type": "application/json",
+                                        "Accept": "application/json"
+                                      ])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiDaCommitmentListResponse.self, from: data)
+    }
+
+    public func proveDaCommitment(_ requestBody: ToriiDaCommitmentProofRequest = ToriiDaCommitmentProofRequest()) async throws -> ToriiDaCommitmentProofResponse? {
+        let normalized = try normalizeDaCommitmentProofRequest(requestBody)
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(normalized)
+        let request = try makeRequest(path: "/v1/da/commitments/prove",
+                                      method: .post,
+                                      body: body,
+                                      headers: [
+                                        "Content-Type": "application/json",
+                                        "Accept": "application/json"
+                                      ])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiDaCommitmentProofResponse?.self, from: data)
+    }
+
+    public func verifyDaCommitment(proof: ToriiJSONValue) async throws -> ToriiDaCommitmentVerifyResponse {
+        let request = try makeRequest(path: "/v1/da/commitments/verify",
+                                      method: .post,
+                                      body: try proof.encodedData(),
+                                      headers: [
+                                        "Content-Type": "application/json",
+                                        "Accept": "application/json"
+                                      ])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiDaCommitmentVerifyResponse.self, from: data)
+    }
+
+    public func listDaPinIntents(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest()) async throws -> [ToriiJSONValue] {
+        let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(normalized)
+        let request = try makeRequest(path: "/v1/da/pin_intents",
+                                      method: .post,
+                                      body: body,
+                                      headers: [
+                                        "Content-Type": "application/json",
+                                        "Accept": "application/json"
+                                      ])
+        let data = try await data(for: request)
+        return try decodeJSON([ToriiJSONValue].self, from: data)
+    }
+
+    public func proveDaPinIntent(_ requestBody: ToriiDaPinIntentQueryRequest = ToriiDaPinIntentQueryRequest()) async throws -> ToriiJSONValue? {
+        let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(normalized)
+        let request = try makeRequest(path: "/v1/da/pin_intents/prove",
+                                      method: .post,
+                                      body: body,
+                                      headers: [
+                                        "Content-Type": "application/json",
+                                        "Accept": "application/json"
+                                      ])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiJSONValue?.self, from: data)
+    }
+
+    public func verifyDaPinIntent(proof: ToriiJSONValue) async throws -> ToriiDaPinIntentVerifyResponse {
+        let request = try makeRequest(path: "/v1/da/pin_intents/verify",
+                                      method: .post,
+                                      body: try proof.encodedData(),
+                                      headers: [
+                                        "Content-Type": "application/json",
+                                        "Accept": "application/json"
+                                      ])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiDaPinIntentVerifyResponse.self, from: data)
     }
 
     public func fetchDaPayloadViaGateway(
@@ -10961,6 +11188,38 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             return inferred
         }
         throw ToriiClientError.invalidPayload("chunkerHandle is required when the manifest omits chunking metadata")
+    }
+
+    private func normalizeDaCommitmentProofRequest(_ request: ToriiDaCommitmentProofRequest) throws -> ToriiDaCommitmentProofRequest {
+        let normalizedManifest = try request.manifestHash.map {
+            try ToriiClient.normalizeHex32($0, field: "manifest_hash")
+        }
+        return ToriiDaCommitmentProofRequest(
+            manifestHash: normalizedManifest,
+            laneId: request.laneId,
+            epoch: request.epoch,
+            sequence: request.sequence,
+            pagination: request.pagination
+        )
+    }
+
+    private func normalizeDaPinIntentQueryRequest(_ request: ToriiDaPinIntentQueryRequest) throws -> ToriiDaPinIntentQueryRequest {
+        let normalizedManifest = try request.manifestHash.map {
+            try ToriiClient.normalizeHex32($0, field: "manifest_hash")
+        }
+        let normalizedTicket = try request.storageTicket.map {
+            try ToriiClient.normalizeHex32($0, field: "storage_ticket")
+        }
+        let normalizedAlias = request.alias?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ToriiDaPinIntentQueryRequest(
+            manifestHash: normalizedManifest,
+            storageTicket: normalizedTicket,
+            alias: normalizedAlias?.isEmpty == true ? nil : normalizedAlias,
+            laneId: request.laneId,
+            epoch: request.epoch,
+            sequence: request.sequence,
+            pagination: request.pagination
+        )
     }
 
     private static func normalizeStorageTicketHex(_ ticket: String) throws -> String {

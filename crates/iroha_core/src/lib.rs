@@ -143,9 +143,9 @@ pub mod time;
 /// Shared Torii helpers (query surfaces, filters).
 pub mod torii;
 pub mod tx;
-/// Zero-knowledge verification helpers (scaffolding)
+/// Zero-knowledge verification helpers (backend dispatch + envelope validation).
 pub mod zk;
-/// Minimal STARK (FRI, Goldilocks, SHA-256) verifier under `zk-stark`.
+/// Native STARK/FRI verifier under `zk-stark` (`stark/fri-v1/*`).
 #[cfg(feature = "zk-stark")]
 pub mod zk_stark;
 

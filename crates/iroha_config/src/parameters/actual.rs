@@ -6666,7 +6666,7 @@ impl Default for Halo2 {
 /// Native STARK/FRI verification settings.
 #[derive(Debug, Clone, Copy)]
 pub struct Stark {
-    /// Enable native STARK verification.
+    /// Enable native STARK verification (requires `zk-stark` build feature).
     pub enabled: bool,
     /// Maximum accepted proof payload length (bytes).
     pub max_proof_bytes: usize,

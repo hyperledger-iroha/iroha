@@ -2353,7 +2353,10 @@ pub mod zk {
     }
     /// Native STARK/FRI verifier configuration defaults.
     pub mod stark {
-        /// Feature toggle for STARK verification in hosts.
+        /// Runtime toggle for STARK verification in hosts.
+        ///
+        /// Acceptance still requires binaries built with `zk-stark`; this default
+        /// remains `false` so operators must explicitly opt in at runtime.
         pub const ENABLED: bool = false;
         /// Maximum accepted proof payload length (bytes).
         ///

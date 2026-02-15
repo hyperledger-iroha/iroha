@@ -4993,6 +4993,8 @@ impl Halo2 {
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Stark {
     /// Enable native STARK/FRI verification in hosts.
+    ///
+    /// Note: runtime enablement requires binaries built with `zk-stark`.
     #[config(env = "ZK_STARK_ENABLED", default = "defaults::zk::stark::ENABLED")]
     pub enabled: bool,
     /// Maximum accepted proof payload length (bytes).

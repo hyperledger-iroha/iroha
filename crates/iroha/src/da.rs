@@ -14,20 +14,22 @@ use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
+        commitment::{DaCommitmentProof, DaCommitmentWithLocation, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
         manifest::{ChunkRole, DaManifestV1},
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, DaRentLedgerProjection, ErasureProfile,
-            ExtraMetadata, GovernanceTag, RetentionPolicy,
+            ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
     nexus::LaneId,
-    sorafs::pin_registry::StorageClass,
+    query::parameters::Pagination,
+    sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
 use iroha_primitives::numeric::Numeric;
 use norito::{
     decode_from_bytes,
-    derive::JsonSerialize,
+    derive::{JsonDeserialize, JsonSerialize},
     json::{self, Map, Value},
 };
 #[cfg(test)]
@@ -143,6 +145,74 @@ pub struct DaManifestPersistedPaths {
     pub manifest_json: PathBuf,
     /// Path to the pretty-rendered chunk plan JSON payload.
     pub chunk_plan: PathBuf,
+}
+
+/// Request payload for `/v1/da/commitments` and `/v1/da/commitments/prove`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaCommitmentProofRequest {
+    /// Optional manifest digest used as the primary lookup key.
+    pub manifest_hash: Option<ManifestDigest>,
+    /// Optional lane id used with `epoch` and `sequence` fallback lookup.
+    pub lane_id: Option<u32>,
+    /// Optional epoch used with `lane_id` and `sequence` fallback lookup.
+    pub epoch: Option<u64>,
+    /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
+    pub sequence: Option<u64>,
+    /// Optional pagination metadata for list responses.
+    pub pagination: Option<Pagination>,
+}
+
+/// Response payload for `/v1/da/commitments`.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaCommitmentListResponse {
+    /// Active proof-policy bundle for DA commitments.
+    pub policies: DaProofPolicyBundle,
+    /// Matching commitment records with on-chain location metadata.
+    pub commitments: Vec<DaCommitmentWithLocation>,
+}
+
+/// Response payload for `/v1/da/commitments/prove`.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaCommitmentProofResponse {
+    /// Active proof-policy bundle for DA commitments.
+    pub policies: DaProofPolicyBundle,
+    /// Commitment proof bound to the requested record.
+    pub proof: DaCommitmentProof,
+}
+
+/// Response payload for `/v1/da/commitments/verify`.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaCommitmentVerifyResponse {
+    /// Indicates whether the supplied proof verified against the current store.
+    pub valid: bool,
+    /// Optional verification failure detail when `valid` is false.
+    pub error: Option<String>,
+}
+
+/// Request payload for `/v1/da/pin_intents` and `/v1/da/pin_intents/prove`.
+#[derive(Debug, Default, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaPinIntentQueryRequest {
+    /// Optional manifest digest used as a lookup key.
+    pub manifest_hash: Option<ManifestDigest>,
+    /// Optional storage ticket used as a lookup key.
+    pub storage_ticket: Option<StorageTicketId>,
+    /// Optional human-readable alias used as a lookup key.
+    pub alias: Option<String>,
+    /// Optional lane id used with `epoch` and `sequence` fallback lookup.
+    pub lane_id: Option<u32>,
+    /// Optional epoch used with `lane_id` and `sequence` fallback lookup.
+    pub epoch: Option<u64>,
+    /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
+    pub sequence: Option<u64>,
+    /// Optional pagination metadata for list responses.
+    pub pagination: Option<Pagination>,
+}
+
+/// Response payload for `/v1/da/pin_intents/verify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaPinIntentVerifyResponse {
+    /// Indicates whether the supplied pin intent verified against the current store.
+    pub valid: bool,
 }
 
 impl DaManifestBundle {
@@ -1288,6 +1358,78 @@ mod tests {
         assert!(
             err.to_string().contains("invalid"),
             "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn da_commitment_proof_request_roundtrips_json() {
+        let request = DaCommitmentProofRequest {
+            manifest_hash: Some(ManifestDigest::new([0x11; 32])),
+            lane_id: Some(7),
+            epoch: Some(9),
+            sequence: Some(12),
+            pagination: Some(Pagination::new(std::num::NonZeroU64::new(2), 1)),
+        };
+
+        let bytes = norito::json::to_vec(&request).expect("encode request");
+        let decoded: DaCommitmentProofRequest =
+            norito::json::from_slice(&bytes).expect("decode request");
+
+        assert_eq!(decoded.manifest_hash, request.manifest_hash);
+        assert_eq!(decoded.lane_id, request.lane_id);
+        assert_eq!(decoded.epoch, request.epoch);
+        assert_eq!(decoded.sequence, request.sequence);
+        assert_eq!(
+            decoded
+                .pagination
+                .as_ref()
+                .and_then(|pagination| pagination.limit.map(std::num::NonZeroU64::get)),
+            Some(2)
+        );
+        assert_eq!(
+            decoded
+                .pagination
+                .as_ref()
+                .map(|pagination| pagination.offset),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn da_pin_intent_query_request_roundtrips_json() {
+        let request = DaPinIntentQueryRequest {
+            manifest_hash: Some(ManifestDigest::new([0x22; 32])),
+            storage_ticket: Some(StorageTicketId::new([0x33; 32])),
+            alias: Some("news/latest".to_string()),
+            lane_id: Some(4),
+            epoch: Some(8),
+            sequence: Some(16),
+            pagination: Some(Pagination::new(std::num::NonZeroU64::new(5), 3)),
+        };
+
+        let bytes = norito::json::to_vec(&request).expect("encode request");
+        let decoded: DaPinIntentQueryRequest =
+            norito::json::from_slice(&bytes).expect("decode request");
+
+        assert_eq!(decoded.manifest_hash, request.manifest_hash);
+        assert_eq!(decoded.storage_ticket, request.storage_ticket);
+        assert_eq!(decoded.alias, request.alias);
+        assert_eq!(decoded.lane_id, request.lane_id);
+        assert_eq!(decoded.epoch, request.epoch);
+        assert_eq!(decoded.sequence, request.sequence);
+        assert_eq!(
+            decoded
+                .pagination
+                .as_ref()
+                .and_then(|pagination| pagination.limit.map(std::num::NonZeroU64::get)),
+            Some(5)
+        );
+        assert_eq!(
+            decoded
+                .pagination
+                .as_ref()
+                .map(|pagination| pagination.offset),
+            Some(3)
         );
     }
 

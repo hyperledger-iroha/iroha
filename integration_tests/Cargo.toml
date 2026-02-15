@@ -16,6 +16,7 @@ fault_injection = []
 telemetry = ["iroha_core/telemetry"]
 norito_streaming_fec = ["reed-solomon-erasure"]
 js_host_parity = []
+zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
 
 [dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }

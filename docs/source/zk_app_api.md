@@ -58,7 +58,7 @@ Endpoints:
 
 Backend support:
 - `/v1/zk/ivm/derive` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) (both require an `ivm-execution-v1` circuit/schema).
-- `/v1/zk/ivm/prove` currently supports `halo2/ipa` only.
+- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
 - For verification flows that use `stark/fri-v1` wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes, while concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
 
 Job status values:
@@ -76,9 +76,10 @@ Key resolution:
 - `vk_ref` is resolved via the WSV verifying-key registry and must be `Active`.
 - If the registry entry omits inline VK bytes, Torii loads them from `torii.zk_prover_keys_dir`
   using `<backend>__<name>.vk` naming (sanitized components).
-- The proving key is loaded from the same directory using `<backend>__<name>.pk` naming.
-  For `halo2/ipa:ivm-execution-v1`, the `.pk` file must contain the Halo2 `ProvingKey`
-  serialization in `SerdeFormat::Processed`, and it must match the resolved verifying key.
+- For `halo2/ipa`, the proving key is loaded from the same directory using `<backend>__<name>.pk`
+  naming. The `.pk` file must contain the Halo2 `ProvingKey` serialization in
+  `SerdeFormat::Processed`, and it must match the resolved verifying key.
+- The STARK path (`stark/fri-v1`) does not require a separate `.pk` artifact.
 
 Resource controls:
 - Job processing is bounded by `torii.zk_ivm_prove_max_inflight` (concurrent jobs) and
@@ -93,11 +94,13 @@ Privacy:
 - `/v1/zk/ivm/derive` and `/v1/zk/ivm/prove` require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
 
 Execution semantics:
-- `/v1/zk/ivm/prove` currently uses `halo2/ipa:ivm-execution-v1`, which binds
-  commitments for code/overlay/events/gas-policy. By default, nodes still deterministically
-  replay the bytecode during admission to recompute the overlay and commitments and reject mismatches.
-  For environments that operate with a full-semantic execution proof circuit, replay can be disabled
-  via `pipeline.ivm_proved.skip_replay = true`.
+- `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and
+  derives the authoritative `IvmProved` payload before generating `ivm-execution-v1` proofs for the
+  selected backend (`halo2/ipa` or `stark/fri-v1`).
+- Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }`.
+  The optional `proved` field is validated against the node-derived execution payload and rejected on mismatch.
+- Nodes may still deterministically replay bytecode during admission as an extra safety check.
+  Replay behavior is controlled by `pipeline.ivm_proved.skip_replay`.
 
 Metrics:
 - `torii_zk_ivm_prove_inflight` (gauge) — jobs currently proving.
@@ -248,7 +251,7 @@ Use the CLI to interact with the app API (requires Torii URL and any API token i
   - `iroha app zk attachments list`
   - `iroha app zk attachments get --id <ID> --out <PATH>`
   - `iroha app zk attachments delete --id <ID>`
-- Verification stubs:
+- Verification helpers:
   - `iroha app zk verify --json <PATH>` or `--norito <PATH>`
   - `iroha app zk submit-proof --json <PATH>` or `--norito <PATH>`
 - IVM prove:

@@ -1561,6 +1561,334 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zk-stark")]
+    fn overlay_accepts_ivm_proved_with_stark_execution_circuit() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            account::Account,
+            confidential::ConfidentialStatus,
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            proof::{
+                ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
+                VerifyingKeyRecord,
+            },
+            transaction::{Executable, IvmProved},
+            zk::BackendTag,
+        };
+
+        let (program, _header_len, _meta) = sample_program_zk_mode();
+        let bytecode = IvmBytecode::from_compiled(program);
+        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let summary = ivm_cache
+            .summarize_program(bytecode.as_ref())
+            .expect("summarize IVM program");
+        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
+        let overlay_hash = {
+            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
+            Hash::new(&bytes)
+        };
+
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let circuit_id = "stark/fri-v1/sha256-goldilocks-v1:ivm-execution-v1";
+        let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
+        let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.to_owned(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        };
+        let vk_box = VerifyingKeyBox::new(
+            backend.into(),
+            norito::to_bytes(&vk_payload).expect("encode STARK VK payload"),
+        );
+        let vk_commitment = crate::zk::hash_vk(&vk_box);
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            circuit_id,
+            BackendTag::Stark,
+            "goldilocks",
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            vk_commitment,
+        );
+        vk_record.status = ConfidentialStatus::Active;
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+        vk_record.key = Some(vk_box.clone());
+
+        let kp = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            kp.public_key().clone(),
+        );
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = crate::state::World::with([domain], [account], []);
+        world
+            .verifying_keys
+            .insert(vk_id.clone(), vk_record.clone());
+        world.verifying_keys_by_circuit.insert(
+            (vk_record.circuit_id.clone(), vk_record.version),
+            vk_id.clone(),
+        );
+
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.stark.enabled = true;
+        state.zk.halo2.enabled = false;
+        state.zk.verify_timeout = std::time::Duration::ZERO;
+        state.pipeline.ivm_proved.enabled = true;
+        state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+        let replay_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_metadata(metadata.clone())
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: bytecode.clone(),
+                overlay: overlay.clone(),
+                events_commitment: Hash::new(b"replay-events"),
+                gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+            }))
+            .sign(kp.private_key());
+        let replay_proved = match replay_tx.instructions() {
+            Executable::IvmProved(p) => p,
+            _ => unreachable!("tx must carry IvmProved executable"),
+        };
+        let replay = replay_ivm_proved_overlay(
+            &state.view(),
+            &replay_tx,
+            replay_proved,
+            TEST_GAS_LIMIT,
+            summary.code_hash,
+            overlay_hash,
+        )
+        .expect("ivm proved replay");
+        let events_commitment = replay.events_commitment;
+        let gas_policy_commitment = expected_ivm_gas_policy_commitment(
+            summary.code_hash,
+            overlay_hash,
+            &vk_record.circuit_id,
+            vk_record.version,
+            vk_record
+                .gas_schedule_id
+                .as_deref()
+                .expect("gas schedule id must be set"),
+            TEST_GAS_LIMIT,
+            replay.gas_used,
+            replay.trace_hash,
+        );
+
+        let proof_box = crate::zk::prove_stark_fri_ivm_execution_envelope(
+            backend,
+            circuit_id,
+            &vk_box,
+            code_hash,
+            overlay_hash,
+            events_commitment,
+            gas_policy_commitment,
+        )
+        .expect("build STARK ivm-execution proof");
+
+        let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
+        let attachments = ProofAttachmentList(vec![attachment]);
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode,
+                overlay: overlay.clone(),
+                events_commitment,
+                gas_policy_commitment,
+            }))
+            .with_attachments(attachments)
+            .sign(kp.private_key());
+
+        let overlay_built =
+            build_overlay_for_transaction(&tx, &state.view()).expect("proved execution overlay");
+        let built: Vec<InstructionBox> = overlay_built.instructions().cloned().collect();
+        assert_eq!(built.as_slice(), overlay.as_ref());
+    }
+
+    #[test]
+    #[cfg(feature = "zk-stark")]
+    fn overlay_rejects_stark_ivm_proved_when_circuit_id_mismatch() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            account::Account,
+            confidential::ConfidentialStatus,
+            domain::Domain,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            proof::{
+                ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
+                VerifyingKeyRecord,
+            },
+            transaction::{Executable, IvmProved},
+            zk::{BackendTag, OpenVerifyEnvelope},
+        };
+
+        let (program, _header_len, _meta) = sample_program_zk_mode();
+        let bytecode = IvmBytecode::from_compiled(program);
+        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let summary = ivm_cache
+            .summarize_program(bytecode.as_ref())
+            .expect("summarize IVM program");
+        let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
+        let overlay_hash = {
+            let bytes = norito::to_bytes(&overlay).expect("encode overlay");
+            Hash::new(&bytes)
+        };
+
+        let backend = "stark/fri-v1/sha256-goldilocks-v1";
+        let circuit_id = "stark/fri-v1/sha256-goldilocks-v1:ivm-execution-v1";
+        let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
+        let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.to_owned(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        };
+        let vk_box = VerifyingKeyBox::new(
+            backend.into(),
+            norito::to_bytes(&vk_payload).expect("encode STARK VK payload"),
+        );
+        let vk_commitment = crate::zk::hash_vk(&vk_box);
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            circuit_id,
+            BackendTag::Stark,
+            "goldilocks",
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            vk_commitment,
+        );
+        vk_record.status = ConfidentialStatus::Active;
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+        vk_record.key = Some(vk_box.clone());
+
+        let kp = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            kp.public_key().clone(),
+        );
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = crate::state::World::with([domain], [account], []);
+        world
+            .verifying_keys
+            .insert(vk_id.clone(), vk_record.clone());
+        world.verifying_keys_by_circuit.insert(
+            (vk_record.circuit_id.clone(), vk_record.version),
+            vk_id.clone(),
+        );
+
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.stark.enabled = true;
+        state.zk.halo2.enabled = false;
+        state.zk.verify_timeout = std::time::Duration::ZERO;
+        state.pipeline.ivm_proved.enabled = true;
+        state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+        let replay_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_metadata(metadata.clone())
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: bytecode.clone(),
+                overlay: overlay.clone(),
+                events_commitment: Hash::new(b"replay-events"),
+                gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+            }))
+            .sign(kp.private_key());
+        let replay_proved = match replay_tx.instructions() {
+            Executable::IvmProved(p) => p,
+            _ => unreachable!("tx must carry IvmProved executable"),
+        };
+        let replay = replay_ivm_proved_overlay(
+            &state.view(),
+            &replay_tx,
+            replay_proved,
+            TEST_GAS_LIMIT,
+            summary.code_hash,
+            overlay_hash,
+        )
+        .expect("ivm proved replay");
+        let events_commitment = replay.events_commitment;
+        let gas_policy_commitment = expected_ivm_gas_policy_commitment(
+            summary.code_hash,
+            overlay_hash,
+            &vk_record.circuit_id,
+            vk_record.version,
+            vk_record
+                .gas_schedule_id
+                .as_deref()
+                .expect("gas schedule id must be set"),
+            TEST_GAS_LIMIT,
+            replay.gas_used,
+            replay.trace_hash,
+        );
+
+        let proof_box = crate::zk::prove_stark_fri_ivm_execution_envelope(
+            backend,
+            circuit_id,
+            &vk_box,
+            code_hash,
+            overlay_hash,
+            events_commitment,
+            gas_policy_commitment,
+        )
+        .expect("build STARK ivm-execution proof");
+        let mut envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
+        envelope.circuit_id = format!("{backend}:wrong-circuit");
+        let tampered = iroha_data_model::proof::ProofBox::new(
+            backend.into(),
+            norito::to_bytes(&envelope).expect("encode tampered OpenVerifyEnvelope"),
+        );
+
+        let attachment = ProofAttachment::new_ref(backend.into(), tampered, vk_id);
+        let attachments = ProofAttachmentList(vec![attachment]);
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode,
+                overlay,
+                events_commitment,
+                gas_policy_commitment,
+            }))
+            .with_attachments(attachments)
+            .sign(kp.private_key());
+
+        let err = build_overlay_for_transaction(&tx, &state.view())
+            .expect_err("circuit mismatch must be rejected");
+        assert!(
+            matches!(
+                &err,
+                OverlayBuildError::ZkProof(msg) if msg.contains("verifying key circuit mismatch")
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
     fn overlay_rejects_ivm_proved_when_commitments_mismatch() {
         use std::sync::Arc;
 
@@ -3417,14 +3745,16 @@ fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
     if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
         return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
     }
-    if let Some(rest) = trimmed.strip_prefix("halo2/ipa::") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/ipa:") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/ipa/") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+    if let Some(rest) = trimmed.strip_prefix(crate::zk::ZK_BACKEND_HALO2_IPA) {
+        if let Some(rest) = rest.strip_prefix("::") {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        if let Some(rest) = rest.strip_prefix(':') {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
+        if let Some(rest) = rest.strip_prefix('/') {
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        }
     }
     Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
 }
@@ -3446,7 +3776,7 @@ fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
 }
 
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-    if backend == "halo2/ipa" {
+    if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
         match (
             normalize_halo2_ipa_circuit_id(record_id),
             normalize_halo2_ipa_circuit_id(env_id),
@@ -3783,7 +4113,7 @@ fn extract_expected_single_row_columns(columns: Vec<Vec<[u8; 32]>>) -> Option<Ve
 const IVM_OVERLAY_BIND_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa-v1/ivm-overlay-bind-v1";
 
 fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
-    backend == "halo2/ipa"
+    backend == crate::zk::ZK_BACKEND_HALO2_IPA
         && normalize_halo2_ipa_circuit_id(circuit_id)
             .as_deref()
             .is_some_and(|normalized| normalized == IVM_OVERLAY_BIND_CIRCUIT_CANONICAL)
@@ -3792,10 +4122,14 @@ fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
 const IVM_EXECUTION_V1_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa-v1/ivm-execution-v1";
 
 fn is_full_semantics_ivm_execution_circuit(backend: &str, circuit_id: &str) -> bool {
-    backend == "halo2/ipa"
-        && normalize_halo2_ipa_circuit_id(circuit_id)
+    if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
+        return normalize_halo2_ipa_circuit_id(circuit_id)
             .as_deref()
-            .is_some_and(|normalized| normalized == IVM_EXECUTION_V1_CIRCUIT_CANONICAL)
+            .is_some_and(|normalized| normalized == IVM_EXECUTION_V1_CIRCUIT_CANONICAL);
+    }
+
+    crate::zk::is_stark_fri_v1_backend(backend)
+        && circuit_id_matches(backend, circuit_id, crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID)
 }
 
 fn replay_ivm_proved_overlay<R>(
@@ -3928,7 +4262,7 @@ where
         Halo2Ipa,
         StarkFriV1,
     }
-    let backend_kind = if attachment.backend.as_str() == "halo2/ipa" {
+    let backend_kind = if attachment.backend.as_str() == crate::zk::ZK_BACKEND_HALO2_IPA {
         IvmProvedBackendKind::Halo2Ipa
     } else if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
         IvmProvedBackendKind::StarkFriV1

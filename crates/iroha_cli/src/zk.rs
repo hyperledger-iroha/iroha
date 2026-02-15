@@ -963,7 +963,7 @@ impl Run for IvmDeriveArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct IvmProveArgs {
-    /// Path to a JSON request DTO `{ vk_ref: { backend, name }, proved: IvmProved }`
+    /// Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode, proved? }`
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
     /// Poll the job until it reaches `done` or `error`
