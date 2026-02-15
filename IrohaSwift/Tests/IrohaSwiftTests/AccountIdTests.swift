@@ -92,4 +92,25 @@ final class AccountIdTests: XCTestCase {
         // IH58 format
         XCTAssertFalse(ih58AccountId.hasPrefix("ed0120"))
     }
+
+    func testNormalizeForComparisonStripsDomainSuffixForIh58() throws {
+        let publicKey = Data(repeating: 0x11, count: 32)
+        let ih58 = try AccountId.makeIH58(publicKey: publicKey, domain: "default")
+
+        XCTAssertEqual(AccountId.normalizeForComparison(ih58), ih58)
+        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@default"), ih58)
+        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@WONDERLAND"), ih58)
+
+        XCTAssertTrue(AccountId.matchesForComparison(ih58, "\(ih58)@default"))
+        XCTAssertTrue(AccountId.matchesForComparison("\(ih58)@default", "\(ih58)@wonderland"))
+    }
+
+    func testNormalizeForComparisonCanonicalizesDomainForNonIh58Literals() {
+        let publicKey = Data(repeating: 0xAB, count: 32)
+        let rawUpper = AccountId.make(publicKey: publicKey, domain: "WONDERLAND")
+        let rawLower = AccountId.make(publicKey: publicKey, domain: "wonderland")
+
+        XCTAssertEqual(AccountId.normalizeForComparison(rawUpper), rawLower)
+        XCTAssertFalse(AccountId.matchesForComparison(rawUpper, AccountId.make(publicKey: publicKey, domain: "otherland")))
+    }
 }
