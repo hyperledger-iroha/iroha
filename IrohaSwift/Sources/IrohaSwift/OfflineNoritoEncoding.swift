@@ -183,10 +183,26 @@ enum OfflineNorito {
         return writer.data
     }
 
+    /// Encode `Vec<u8>` fields (flat blob): `[u64 count][raw bytes]`.
+    /// Rust `Vec<u8>` has a special-case in NoritoSerialize that writes bytes flat.
+    /// Used for: `attestation_report`, `allowance.commitment`, `assertion`, etc.
     static func encodeBytesVec(_ bytes: Data) -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeLength(UInt64(bytes.count))
         writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    /// Encode `ConstVec<u8>` fields (per-element): `[u64 count]{[u64 len=1][u8]}*`.
+    /// Rust `ConstVec<u8>` unpacked layout encodes each u8 with its own u64 length prefix.
+    /// Used for: `operator_signature` (Signature wraps ConstVec<u8>).
+    static func encodeConstVec(_ bytes: Data) -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeLength(UInt64(bytes.count))
+        for byte in bytes {
+            writer.writeLength(1)
+            writer.writeUInt8(byte)
+        }
         return writer.data
     }
 

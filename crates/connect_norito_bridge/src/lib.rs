@@ -1824,6 +1824,59 @@ pub unsafe extern "C" fn connect_norito_offline_commitment_update(
     bridge_result_to_code(result)
 }
 
+/// Derive the resulting blinding scalar for an offline spend commitment.
+///
+/// Given the current (`initial`) blinding and the receipt's certificate ID + counter,
+/// computes: `resulting_blinding = initial_blinding + blinding_scalar_from_seed(seed)`
+/// where `seed = OfflineProofBlindingSeed::derive(certificate_id, counter)`.
+///
+/// This ensures the commitment update uses a deterministic blinding delta that
+/// matches what `generate_offline_fastpq_sum_proof` will later verify.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_blinding_from_seed(
+    initial_blinding_ptr: *const c_uchar,
+    initial_blinding_len: c_ulong,
+    certificate_id_ptr: *const c_uchar,
+    certificate_id_len: c_ulong,
+    counter: u64,
+    out_blinding_ptr: *mut *mut c_uchar,
+    out_blinding_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if initial_blinding_ptr.is_null()
+            || certificate_id_ptr.is_null()
+            || out_blinding_ptr.is_null()
+            || out_blinding_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let initial_blinding =
+            unsafe { slice::from_raw_parts(initial_blinding_ptr, initial_blinding_len as usize) };
+        let cert_id_bytes =
+            unsafe { slice::from_raw_parts(certificate_id_ptr, certificate_id_len as usize) };
+
+        let init_scalar = decode_scalar_bytes(initial_blinding)?;
+
+        // Reconstruct the certificate Hash from the pre-computed 32-byte digest.
+        let cert_array: [u8; Hash::LENGTH] = cert_id_bytes
+            .try_into()
+            .map_err(|_| BridgeError::OfflineBlinding)?;
+        let cert_hash = Hash::prehashed(cert_array);
+
+        let seed = OfflineProofBlindingSeed::derive(cert_hash, counter);
+        let seed_scalar = blinding_scalar_from_seed(&seed);
+
+        let mut resulting = init_scalar + seed_scalar;
+        let bytes = resulting.to_bytes();
+        resulting.zeroize();
+
+        unsafe { write_bytes_bridge(out_blinding_ptr, out_blinding_len, &bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_blinding_from_seed(
     initial_blinding_ptr: *const c_uchar,
@@ -10178,6 +10231,72 @@ mod offline_balance_proof_tests {
         assert_eq!(&updated[..], c_res_expected.compress().as_bytes());
     }
 
+    /// Simulates iOS offline payment flow:
+    /// 1. topUp creates C(initial_amount, blind) via updateCommitment(zeros, amount, zeros, blind)
+    /// 2. Spend delta: updateCommitment(c_init, delta, blind_init, blind_res)
+    /// 3. generateProof must accept resultingValue = initial_amount + delta
+    #[test]
+    fn topup_then_spend_roundtrip() {
+        let chain_id = ChainId::from("sora");
+        let topup_amount = Numeric::new(4500, 2); // "45.00"
+        let spend_delta = Numeric::new(500, 2);   // "5.00"
+
+        // Step 1: topUp — compute initial commitment C(45.00, blind_topup)
+        let zero_commitment = [0u8; 32];
+        let zero_blinding = [0u8; 32];
+        let blind_topup = Scalar::from(42u64);
+        let blind_topup_bytes = scalar_bytes(blind_topup).to_vec();
+
+        let c_init_bytes = update_offline_commitment(
+            &zero_commitment,
+            &topup_amount,
+            &zero_blinding,
+            &blind_topup_bytes,
+        )
+        .expect("initial commitment");
+
+        // Verify: c_init should be C(45.00, blind_topup)
+        let c_init_expected = pedersen_commit(&topup_amount, blind_topup);
+        assert_eq!(
+            &c_init_bytes[..],
+            c_init_expected.compress().as_bytes(),
+            "initial commitment must equal C(topup_amount, blind_topup)"
+        );
+
+        // Step 2: spend 5.00 — resultingValue = topup_amount + spend_delta
+        let resulting_amount = topup_amount
+            .clone()
+            .checked_add(spend_delta.clone())
+            .expect("sum");
+        let blind_spend = Scalar::from(99u64);
+        let blind_spend_bytes = scalar_bytes(blind_spend).to_vec();
+
+        let proof = generate_offline_balance_proof(
+            chain_id.clone(),
+            &spend_delta,
+            &resulting_amount,
+            &c_init_bytes,
+            &update_offline_commitment(
+                &c_init_bytes,
+                &spend_delta,
+                &blind_topup_bytes,
+                &blind_spend_bytes,
+            )
+            .expect("updated commitment"),
+            &blind_topup_bytes,
+            &blind_spend_bytes,
+        )
+        .expect("balance proof for spend");
+
+        // Verify proof
+        let c_init = decode_commitment_point(&c_init_bytes).unwrap();
+        let c_res = pedersen_commit(&resulting_amount, blind_spend);
+        assert!(
+            verify_proof(&chain_id, &spend_delta, &c_init, &c_res, &proof),
+            "spend proof must verify"
+        );
+    }
+
     #[test]
     fn proof_rejects_scale_mismatch() {
         let chain_id = ChainId::from("iroha-sdk-tests");
@@ -12330,4 +12449,5 @@ mod sorafs_tests {
             "JNI encoding must match native signing_bytes"
         );
     }
+
 }

@@ -6555,6 +6555,8 @@ pub struct Offline {
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
     /// Optional DER-encoded trust anchors appended to the built-in Android root set.
     pub android_trust_anchors: Vec<Vec<u8>>,
+    /// Skip platform attestation verification (for local testing only).
+    pub skip_platform_attestation: bool,
 }
 
 impl Default for Offline {
@@ -6571,6 +6573,7 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             android_trust_anchors: Vec::new(),
+            skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
         }
     }
 }

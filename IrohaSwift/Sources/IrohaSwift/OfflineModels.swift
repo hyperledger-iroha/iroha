@@ -290,7 +290,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
         writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
         writer.writeField(OfflineNorito.encodeUInt64(expiresAtMs))
         writer.writeField(try policy.noritoPayload())
-        writer.writeField(OfflineNorito.encodeBytesVec(operatorSignature))
+        writer.writeField(OfflineNorito.encodeConstVec(operatorSignature))
         writer.writeField(try OfflineNorito.encodeMetadata(metadata))
         writer.writeField(try OfflineNorito.encodeOption(verdictId, encode: OfflineNorito.encodeHash))
         writer.writeField(try OfflineNorito.encodeOption(attestationNonce, encode: OfflineNorito.encodeHash))
@@ -518,7 +518,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
         writer.writeField(try platformProof.noritoPayload())
         writer.writeField(try OfflineNorito.encodeOption(platformSnapshot, encode: { try $0.noritoPayload() }))
         writer.writeField(try OfflineNorito.encodeHash(senderCertificateId))
-        writer.writeField(OfflineNorito.encodeBytesVec(senderSignature))
+        writer.writeField(OfflineNorito.encodeConstVec(senderSignature))
         return writer.data
     }
 

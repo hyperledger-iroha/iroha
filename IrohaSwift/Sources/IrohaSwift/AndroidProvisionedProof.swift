@@ -244,7 +244,7 @@ extension AndroidProvisionedProof {
         guard let signature = inspectorSignatureData else {
             throw OfflineNoritoError.invalidHex("inspector_signature")
         }
-        writer.writeField(OfflineNorito.encodeBytesVec(signature))
+        writer.writeField(OfflineNorito.encodeConstVec(signature))
         return writer.data
     }
 

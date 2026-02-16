@@ -63,10 +63,20 @@ pub fn get_status_with_retry_or_storage(
     client: &Client,
     context: &str,
 ) -> Result<Status> {
-    match get_status_with_retry(client) {
+    let fallback = best_effort_status_from_network(network);
+    apply_storage_fallback(get_status_with_retry(client), fallback, client, context)
+}
+
+fn apply_storage_fallback(
+    status_result: Result<Status>,
+    fallback: Option<Status>,
+    client: &Client,
+    context: &str,
+) -> Result<Status> {
+    match status_result {
         Ok(status) => Ok(status),
         Err(err) => {
-            if let Some(status) = best_effort_status_from_network(network) {
+            if let Some(status) = fallback {
                 eprintln!("warning: {context} status poll failed; using storage snapshot: {err}");
                 Ok(status)
             } else {
@@ -128,19 +138,12 @@ pub fn sync_after_submission(
 }
 
 fn best_effort_status_from_network(network: &Network) -> Option<Status> {
-    let height = best_effort_block_height(network)?;
     let peers = network
         .peers()
         .iter()
         .find_map(iroha_test_network::NetworkPeer::last_known_peers)
         .unwrap_or_else(|| network.peers().len().saturating_sub(1) as u64);
-    let status = Status {
-        blocks: height.total,
-        blocks_non_empty: height.non_empty,
-        peers,
-        ..Status::default()
-    };
-    Some(status)
+    status_from_storage_snapshot(best_effort_block_height(network), peers)
 }
 
 fn best_effort_block_height(network: &Network) -> Option<BlockHeight> {
@@ -154,6 +157,16 @@ fn best_effort_block_height(network: &Network) -> Option<BlockHeight> {
         }
     }
     best
+}
+
+fn status_from_storage_snapshot(height: Option<BlockHeight>, peers: u64) -> Option<Status> {
+    let height = height?;
+    Some(Status {
+        blocks: height.total,
+        blocks_non_empty: height.non_empty,
+        peers,
+        ..Status::default()
+    })
 }
 
 fn status_retry_budget_env() -> Duration {
@@ -189,7 +202,6 @@ mod tests {
         default_torii_api_version,
     };
     use iroha::data_model::ChainId;
-    use iroha_test_network::{NetworkBuilder, init_instruction_registry};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
 
@@ -305,11 +317,7 @@ mod tests {
 
     #[test]
     fn best_effort_status_is_none_without_storage_heights() {
-        init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_auto_populated_trusted_peers()
-            .build();
-        assert!(best_effort_status_from_network(&network).is_none());
+        assert!(status_from_storage_snapshot(None, 0).is_none());
     }
 
     #[test]
@@ -318,13 +326,14 @@ mod tests {
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "5ms");
 
-        init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_auto_populated_trusted_peers()
-            .build();
         let client = dummy_client();
-        let err = get_status_with_retry_or_storage(&network, &client, "status test")
-            .expect_err("should fail without storage snapshot");
+        let err = apply_storage_fallback(
+            Err(eyre::eyre!("status retry budget exhausted")),
+            None,
+            &client,
+            "status test",
+        )
+        .expect_err("should fail without storage snapshot");
         let msg = err.to_string();
         assert!(
             msg.contains("status retry failed"),

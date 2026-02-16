@@ -95,6 +95,202 @@ final class OfflineBalanceProofBuilderTests: XCTestCase {
         #endif
     }
 
+    // MARK: - deriveResultingBlinding → advanceCommitment round-trip
+
+    /// Verifies that deriveResultingBlinding produces a valid blinding
+    /// that advanceCommitment accepts and generates a correct proof.
+    /// This is the exact flow used in offline spend on iOS.
+    func testDeriveResultingBlindingRoundTrip() throws {
+        #if canImport(Darwin)
+        let zeroHex = String(repeating: "0", count: 64)
+        let initialBlinding = try randomHex32()
+        let certificateId = try randomHex32()
+        let counter: UInt64 = 1
+
+        // Step 1: build initial commitment (topUp equivalent: delta=50, result=50)
+        let initial: OfflineBalanceProofBuilder.Artifacts
+        do {
+            initial = try OfflineBalanceProofBuilder.advanceCommitment(
+                chainId: "sora",
+                claimedDelta: "50",
+                resultingValue: "50",
+                initialCommitmentHex: zeroHex,
+                initialBlindingHex: zeroHex,
+                resultingBlindingHex: initialBlinding
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        }
+        XCTAssertEqual(initial.resultingCommitment.count, 32)
+        XCTAssertEqual(initial.proof.count, OfflineBalanceProofBuilder.proofLength)
+
+        // Step 2: derive resulting blinding deterministically (the key operation under test)
+        let derivedBlinding: String
+        do {
+            derivedBlinding = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+                initialBlindingHex: initialBlinding,
+                certificateIdHex: certificateId,
+                counter: counter
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("offlineBlindingFromSeed bridge unavailable on this platform")
+        }
+
+        // Verify derived blinding is valid hex of correct length
+        XCTAssertEqual(derivedBlinding.count, 64, "Derived blinding must be 32 bytes (64 hex chars)")
+        XCTAssertNotNil(Data(hexString: derivedBlinding), "Derived blinding must be valid hex")
+        XCTAssertNotEqual(derivedBlinding, initialBlinding, "Derived blinding must differ from initial")
+
+        // Step 3: use derived blinding in advanceCommitment (offline spend: delta=4, result=54)
+        let spend = try OfflineBalanceProofBuilder.advanceCommitment(
+            chainId: "sora",
+            claimedDelta: "4",
+            resultingValue: "54",
+            initialCommitmentHex: initial.resultingCommitmentHex,
+            initialBlindingHex: initialBlinding,
+            resultingBlindingHex: derivedBlinding
+        )
+        XCTAssertEqual(spend.resultingCommitment.count, 32)
+        XCTAssertEqual(spend.proof.count, OfflineBalanceProofBuilder.proofLength)
+        XCTAssertNotEqual(spend.resultingCommitmentHex, initial.resultingCommitmentHex)
+        #else
+        throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        #endif
+    }
+
+    /// Two sequential offline spends using deriveResultingBlinding with incrementing counter.
+    /// Mirrors the real flow: topUp → spend#1(counter=1) → spend#2(counter=2).
+    func testTwoSequentialSpendsWithDerivedBlinding() throws {
+        #if canImport(Darwin)
+        let zeroHex = String(repeating: "0", count: 64)
+        let initialBlinding = try randomHex32()
+        let certificateId = try randomHex32()
+
+        // topUp: delta=100, result=100
+        let topUp: OfflineBalanceProofBuilder.Artifacts
+        do {
+            topUp = try OfflineBalanceProofBuilder.advanceCommitment(
+                chainId: "sora",
+                claimedDelta: "100",
+                resultingValue: "100",
+                initialCommitmentHex: zeroHex,
+                initialBlindingHex: zeroHex,
+                resultingBlindingHex: initialBlinding
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        }
+
+        // Spend #1: delta=10, cumulative spent=10, resultingValue = limit + spent = 100+10 = 110
+        let blinding1 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+            initialBlindingHex: initialBlinding,
+            certificateIdHex: certificateId,
+            counter: 1
+        )
+        let spend1 = try OfflineBalanceProofBuilder.advanceCommitment(
+            chainId: "sora",
+            claimedDelta: "10",
+            resultingValue: "110",
+            initialCommitmentHex: topUp.resultingCommitmentHex,
+            initialBlindingHex: initialBlinding,
+            resultingBlindingHex: blinding1
+        )
+        XCTAssertEqual(spend1.proof.count, OfflineBalanceProofBuilder.proofLength)
+
+        // Spend #2: delta=5, cumulative spent=15, resultingValue = 100+15 = 115
+        // NOTE: initialBlinding for spend#2 is blinding1 (result of spend#1)
+        let blinding2 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+            initialBlindingHex: blinding1,
+            certificateIdHex: certificateId,
+            counter: 2
+        )
+        let spend2 = try OfflineBalanceProofBuilder.advanceCommitment(
+            chainId: "sora",
+            claimedDelta: "5",
+            resultingValue: "115",
+            initialCommitmentHex: spend1.resultingCommitmentHex,
+            initialBlindingHex: blinding1,
+            resultingBlindingHex: blinding2
+        )
+        XCTAssertEqual(spend2.proof.count, OfflineBalanceProofBuilder.proofLength)
+        XCTAssertNotEqual(spend2.resultingCommitmentHex, spend1.resultingCommitmentHex)
+
+        // Verify all blindings are distinct
+        XCTAssertNotEqual(initialBlinding, blinding1)
+        XCTAssertNotEqual(blinding1, blinding2)
+        XCTAssertNotEqual(initialBlinding, blinding2)
+        #else
+        throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        #endif
+    }
+
+    /// deriveResultingBlinding must be deterministic: same inputs → same output.
+    func testDeriveResultingBlindingIsDeterministic() throws {
+        #if canImport(Darwin)
+        let initialBlinding = try randomHex32()
+        let certificateId = try randomHex32()
+        let counter: UInt64 = 42
+
+        let result1: String
+        do {
+            result1 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+                initialBlindingHex: initialBlinding,
+                certificateIdHex: certificateId,
+                counter: counter
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("offlineBlindingFromSeed bridge unavailable on this platform")
+        }
+
+        let result2 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+            initialBlindingHex: initialBlinding,
+            certificateIdHex: certificateId,
+            counter: counter
+        )
+
+        XCTAssertEqual(result1, result2, "deriveResultingBlinding must be deterministic")
+        #else
+        throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        #endif
+    }
+
+    /// Different counters must produce different blindings.
+    func testDeriveResultingBlindingDifferentCounters() throws {
+        #if canImport(Darwin)
+        let initialBlinding = try randomHex32()
+        let certificateId = try randomHex32()
+
+        let b1: String
+        do {
+            b1 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+                initialBlindingHex: initialBlinding,
+                certificateIdHex: certificateId,
+                counter: 1
+            )
+        } catch OfflineBalanceProofError.bridgeUnavailable {
+            throw XCTSkip("offlineBlindingFromSeed bridge unavailable on this platform")
+        }
+
+        let b2 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+            initialBlindingHex: initialBlinding,
+            certificateIdHex: certificateId,
+            counter: 2
+        )
+
+        let b3 = try OfflineBalanceProofBuilder.deriveResultingBlinding(
+            initialBlindingHex: initialBlinding,
+            certificateIdHex: certificateId,
+            counter: 3
+        )
+
+        XCTAssertNotEqual(b1, b2, "Different counters must produce different blindings")
+        XCTAssertNotEqual(b2, b3, "Different counters must produce different blindings")
+        XCTAssertNotEqual(b1, b3, "Different counters must produce different blindings")
+        #else
+        throw XCTSkip("Offline balance proof bridge unavailable on this platform")
+        #endif
+    }
+
     // MARK: - Helpers
 
     private func randomHex32() throws -> String {
