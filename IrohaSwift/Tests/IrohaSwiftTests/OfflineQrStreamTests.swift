@@ -121,7 +121,6 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertEqual(final.payload, payload)
         XCTAssertEqual(final.recoveredChunks, 1)
     }
-
     /// Full chain: encode → TextCodec → CIFilter QR → Vision detect → TextCodec decode → ingest
     func testQrStreamFullChainViaQRImage() throws {
         #if canImport(CoreImage) && canImport(Vision)

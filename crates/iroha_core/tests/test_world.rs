@@ -1,6 +1,7 @@
 //! Test helpers shared by ZK-focused integration tests.
 
 use iroha_core::state::World;
+use iroha_data_model::Registrable;
 use iroha_data_model::prelude::{Account, Domain};
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 

@@ -117,6 +117,58 @@ fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito:
     }
 }
 
+fn parse_manifest_crypto_str(raw: &str) -> Result<ManifestCrypto, norito::Error> {
+    if let Ok(meta) = norito::json::from_str(raw) {
+        Ok(meta)
+    } else {
+        let value = norito::json::parse_value(raw).map_err(norito::Error::from)?;
+        norito::json::from_value(value).map_err(norito::Error::from)
+    }
+}
+
+fn decode_crypto_manifest_meta(payload: &Json) -> Result<ManifestCrypto, norito::Error> {
+    if let Ok(meta) = parse_manifest_crypto_str(payload.get()) {
+        return Ok(meta);
+    }
+
+    if let Ok(value) = norito::json::parse_value(payload.get()) {
+        if let Ok(meta) = norito::json::from_value(value.clone()) {
+            return Ok(meta);
+        }
+        if let Some(inner) = value.as_str()
+            && let Ok(meta) = parse_manifest_crypto_str(inner)
+        {
+            return Ok(meta);
+        }
+    }
+
+    if let Ok(inner) = norito::json::from_str::<String>(payload.get())
+        && let Ok(meta) = parse_manifest_crypto_str(&inner)
+    {
+        return Ok(meta);
+    }
+
+    // Legacy malformed payloads sometimes wrapped the JSON object in raw quotes
+    // without escaping interior quotes. Peel one wrapping layer and retry.
+    let raw = payload.get().trim();
+    if raw.len() >= 2
+        && ((raw.starts_with('"') && raw.ends_with('"'))
+            || (raw.starts_with('\'') && raw.ends_with('\'')))
+    {
+        let mut inner = raw[1..raw.len() - 1].to_owned();
+        if inner.contains("\\\"") {
+            inner = inner.replace("\\\"", "\"");
+        }
+        if let Ok(meta) = parse_manifest_crypto_str(inner.trim()) {
+            return Ok(meta);
+        }
+    }
+
+    Err(norito::Error::Message(
+        "failed to decode crypto_manifest_meta payload".to_string(),
+    ))
+}
+
 fn decode_consensus_handshake_meta(
     payload: &Json,
 ) -> Result<ConsensusHandshakeMeta, norito::Error> {
@@ -228,7 +280,7 @@ fn decode_consensus_handshake_heuristics(
 #[cfg(test)]
 mod handshake_payload_tests {
     use super::*;
-    use iroha_genesis::GenesisBuilder;
+    use iroha_genesis::{GenesisBuilder, ManifestCrypto};
     use std::path::PathBuf;
 
     fn handshake_payload_from_genesis() -> Json {
@@ -326,6 +378,38 @@ mod handshake_payload_tests {
             meta.wire_proto_versions,
             vec![iroha_core::sumeragi::consensus::PROTO_VERSION]
         );
+    }
+
+    #[test]
+    fn decode_crypto_manifest_meta_handles_normal_and_nested_json() {
+        let manifest = ManifestCrypto::default();
+        let payload = Json::new(manifest.clone());
+        let decoded = decode_crypto_manifest_meta(&payload).expect("decode normal payload");
+        assert_eq!(decoded, manifest);
+
+        let stringified =
+            Json::new(norito::json::to_json(&payload).expect("stringify manifest payload"));
+        let decoded_nested =
+            decode_crypto_manifest_meta(&stringified).expect("decode nested payload");
+        assert_eq!(decoded_nested, manifest);
+    }
+
+    #[test]
+    fn decode_crypto_manifest_meta_handles_raw_quoted_legacy_payload() {
+        let raw = r#""{"allowed_curve_ids":[1,3,4],"allowed_signing":["ed25519","secp256k1","bls_normal"],"default_hash":"blake2b-256","sm2_distid_default":"1234567812345678","sm_openssl_preview":false}""#;
+        let payload = Json::from_string_unchecked(raw.to_owned());
+        let decoded =
+            decode_crypto_manifest_meta(&payload).expect("decode raw-quoted legacy payload");
+        assert_eq!(
+            decoded.allowed_signing,
+            vec![
+                Algorithm::Ed25519,
+                Algorithm::Secp256k1,
+                Algorithm::BlsNormal
+            ]
+        );
+        assert_eq!(decoded.default_hash, "blake2b-256");
+        assert_eq!(decoded.allowed_curve_ids, vec![1, 3, 4]);
     }
 }
 
@@ -7361,7 +7445,7 @@ fn verify_genesis_metadata(
             )
         })?;
     let manifest_crypto: ManifestCrypto =
-        crypto_manifest_payload.try_into_any().map_err(|err| {
+        decode_crypto_manifest_meta(crypto_manifest_payload).map_err(|err| {
             Report::new(MainError::Config).attach(format!(
                 "failed to decode crypto_manifest_meta payload: {err}"
             ))
