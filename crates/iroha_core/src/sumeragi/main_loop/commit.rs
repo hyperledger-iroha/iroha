@@ -3482,19 +3482,17 @@ impl Actor {
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
         let local_peer_id = self.common_config.peer.id().clone();
         let leader = signature_topology.leader().clone();
-        let (collectors_k, _) = self.collector_plan_params_for_mode(consensus_mode);
-        let mut targets = if collectors_k == 0 {
-            Vec::new()
-        } else {
-            super::collectors::deterministic_collectors(
-                &signature_topology,
-                consensus_mode,
-                collectors_k,
-                prf_seed,
-                height,
-                view,
-            )
-        };
+        self.ensure_collector_plan(&signature_topology, height, view);
+        while let Some(peer) = self.next_redundant_collector() {
+            self.note_collector_contact(peer.clone(), true);
+        }
+        let mut targets: Vec<_> = self
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect();
         let mut fallback_to_topology = false;
         if targets.is_empty() {
             fallback_to_topology = true;
@@ -3505,6 +3503,32 @@ impl Actor {
             fallback_to_topology = true;
             targets = signature_topology.as_ref().to_vec();
             targets.retain(|peer| peer != &local_peer_id);
+        }
+        let remote_floor = usize::from(self.subsystems.propose.collector_redundant_limit.max(1))
+            .min(signature_topology.as_ref().len().saturating_sub(1));
+        let mut parallel_added = 0usize;
+        if !fallback_to_topology {
+            let parallel = self.config.collectors.parallel_topology_fanout;
+            if parallel > 0 {
+                let mut parallel_targets: Vec<_> = signature_topology
+                    .topology_fanout_from_tail(parallel)
+                    .into_iter()
+                    .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                    .collect();
+                parallel_targets.retain(|peer| peer != &local_peer_id);
+                for peer in parallel_targets {
+                    if !targets.contains(&peer) {
+                        targets.push(peer);
+                        parallel_added = parallel_added.saturating_add(1);
+                    }
+                }
+            }
+            let _ = Self::top_up_remote_targets_to_floor(
+                &signature_topology,
+                &local_peer_id,
+                &mut targets,
+                remote_floor,
+            );
         }
         if leader != local_peer_id && !targets.contains(&leader) {
             targets.push(leader.clone());
@@ -3520,6 +3544,15 @@ impl Actor {
                 leader = %leader,
                 targets = targets.len(),
                 "sending NEW_VIEW vote to commit topology (collector plan empty or local-only)"
+            );
+        } else if parallel_added > 0 {
+            info!(
+                height,
+                view,
+                signer = local_idx,
+                leader = %leader,
+                targets = targets.len(),
+                "sending NEW_VIEW vote to collectors with parallel topology fanout"
             );
         } else {
             info!(

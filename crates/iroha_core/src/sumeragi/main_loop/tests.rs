@@ -42275,7 +42275,7 @@ async fn new_view_votes_target_collectors_even_when_below_quorum() {
 
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster);
-    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let local_peer = actor.common_config.peer.id().clone();
 
@@ -42299,28 +42299,55 @@ async fn new_view_votes_target_collectors_even_when_below_quorum() {
         })
         .collect();
 
-    let (collectors_k, _) = actor.collector_plan_params_for_mode(consensus_mode);
-    let mut expected = if collectors_k == 0 {
-        Vec::new()
-    } else {
-        super::collectors::deterministic_collectors(
-            &signature_topology,
-            consensus_mode,
-            collectors_k,
-            prf_seed,
-            height,
-            view,
-        )
-    };
-    if expected.is_empty() {
-        expected = signature_topology.as_ref().to_vec();
-    }
+    let leader = signature_topology.leader().clone();
+    let mut expected: Vec<_> = actor
+        .subsystems
+        .propose
+        .collectors_contacted
+        .iter()
+        .cloned()
+        .collect();
+    let mut fallback_to_topology = false;
     expected.retain(|peer| peer != &local_peer);
     if expected.is_empty() {
+        fallback_to_topology = true;
         expected = signature_topology.as_ref().to_vec();
         expected.retain(|peer| peer != &local_peer);
     }
-    let leader = signature_topology.leader().clone();
+    if expected.is_empty() {
+        fallback_to_topology = true;
+        expected = signature_topology.as_ref().to_vec();
+        expected.retain(|peer| peer != &local_peer);
+    }
+    if !fallback_to_topology {
+        let parallel = actor.config.collectors.parallel_topology_fanout;
+        if parallel > 0 {
+            let mut parallel_targets: Vec<_> = signature_topology
+                .topology_fanout_from_tail(parallel)
+                .into_iter()
+                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                .collect();
+            parallel_targets.retain(|peer| peer != &local_peer);
+            for peer in parallel_targets {
+                if !expected.contains(&peer) {
+                    expected.push(peer);
+                }
+            }
+        }
+        let remote_floor = usize::from(actor.subsystems.propose.collector_redundant_limit.max(1))
+            .min(signature_topology.as_ref().len().saturating_sub(1));
+        if expected.len() < remote_floor {
+            for peer in signature_topology.as_ref() {
+                if peer == &local_peer || expected.contains(peer) {
+                    continue;
+                }
+                expected.push(peer.clone());
+                if expected.len() >= remote_floor {
+                    break;
+                }
+            }
+        }
+    }
     if leader != local_peer && !expected.contains(&leader) {
         expected.push(leader);
     }
@@ -42385,15 +42412,58 @@ async fn new_view_votes_target_collectors_when_local_leads_in_npos() {
         })
         .collect();
 
-    let mut expected = super::collectors::deterministic_collectors(
-        &signature_topology,
-        consensus_mode,
-        actor.config.collectors.k,
-        prf_seed,
-        height,
-        view,
-    );
+    let leader = signature_topology.leader().clone();
+    let mut expected: Vec<_> = actor
+        .subsystems
+        .propose
+        .collectors_contacted
+        .iter()
+        .cloned()
+        .collect();
+    let mut fallback_to_topology = false;
     expected.retain(|peer| peer != &local_peer);
+    if expected.is_empty() {
+        fallback_to_topology = true;
+        expected = signature_topology.as_ref().to_vec();
+        expected.retain(|peer| peer != &local_peer);
+    }
+    if expected.is_empty() {
+        fallback_to_topology = true;
+        expected = signature_topology.as_ref().to_vec();
+        expected.retain(|peer| peer != &local_peer);
+    }
+    if !fallback_to_topology {
+        let parallel = actor.config.collectors.parallel_topology_fanout;
+        if parallel > 0 {
+            let mut parallel_targets: Vec<_> = signature_topology
+                .topology_fanout_from_tail(parallel)
+                .into_iter()
+                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                .collect();
+            parallel_targets.retain(|peer| peer != &local_peer);
+            for peer in parallel_targets {
+                if !expected.contains(&peer) {
+                    expected.push(peer);
+                }
+            }
+        }
+        let remote_floor = usize::from(actor.subsystems.propose.collector_redundant_limit.max(1))
+            .min(signature_topology.as_ref().len().saturating_sub(1));
+        if expected.len() < remote_floor {
+            for peer in signature_topology.as_ref() {
+                if peer == &local_peer || expected.contains(peer) {
+                    continue;
+                }
+                expected.push(peer.clone());
+                if expected.len() >= remote_floor {
+                    break;
+                }
+            }
+        }
+    }
+    if leader != local_peer && !expected.contains(&leader) {
+        expected.push(leader);
+    }
     assert_eq!(targets, expected);
 
     harness.shutdown.send();

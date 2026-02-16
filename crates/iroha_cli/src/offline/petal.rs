@@ -1284,14 +1284,14 @@ fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
             tile_glyph_alpha: 0.26,
             tile_alpha_regular: 0.972,
             tile_alpha_logo: 0.996,
-            logo_tint_alpha: 0.18,
+            logo_tint_alpha: 0.23,
             logo_light_bg: [0.95, 0.88, 0.92],
             logo_dark_bg: [0.17, 0.04, 0.07],
-            logo_tile_mix: 0.66,
+            logo_tile_mix: 0.70,
             border_dark_mix: 0.16,
             border_light_mix: 0.10,
             logo_core_bg: [0.74, 0.11, 0.20],
-            logo_core_alpha: 0.44,
+            logo_core_alpha: 0.50,
             logo_core_radius: 0.45,
             logo_glyph_boost: 0.20,
         },
@@ -1353,10 +1353,10 @@ fn blend_sora_data_tile(
     };
     if cell_size >= 8 {
         // At larger render sizes, open up each tile so boxes read bolder on screen.
-        margin = (margin * 0.72).max(0.010);
+        margin = (margin * 0.58).max(0.006);
     }
     if cell_size >= 10 {
-        margin = (margin * 0.90).max(0.009);
+        margin = (margin * 0.82).max(0.005);
     }
     if local_x < margin || local_x > 1.0 - margin || local_y < margin || local_y > 1.0 - margin {
         return;
@@ -1394,11 +1394,11 @@ fn blend_sora_data_tile(
     let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     if cell_size >= 8 {
         let frame_dist = inner_u.min(1.0 - inner_u).min(inner_v.min(1.0 - inner_v));
-        if frame_dist < 0.030 {
-            blend_rgb(rgb, frame_color, if param.logo { 0.12 } else { 0.09 });
+        if frame_dist < if param.logo { 0.024 } else { 0.030 } {
+            blend_rgb(rgb, frame_color, if param.logo { 0.08 } else { 0.09 });
         }
-        let bracket_len = if param.logo { 0.32 } else { 0.26 };
-        let bracket_w = if param.logo { 0.060 } else { 0.052 };
+        let bracket_len = if param.logo { 0.24 } else { 0.26 };
+        let bracket_w = if param.logo { 0.046 } else { 0.052 };
         let corner_bracket = (inner_u < bracket_len && inner_v < bracket_w)
             || (inner_u < bracket_w && inner_v < bracket_len)
             || (inner_u > 1.0 - bracket_len && inner_v < bracket_w)
@@ -1408,7 +1408,7 @@ fn blend_sora_data_tile(
             || (inner_u > 1.0 - bracket_len && inner_v > 1.0 - bracket_w)
             || (inner_u > 1.0 - bracket_w && inner_v > 1.0 - bracket_len);
         if corner_bracket {
-            blend_rgb(rgb, frame_color, if param.logo { 0.20 } else { 0.14 });
+            blend_rgb(rgb, frame_color, if param.logo { 0.12 } else { 0.14 });
         }
     }
 
