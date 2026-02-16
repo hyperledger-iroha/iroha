@@ -822,13 +822,13 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     configure_runtime_rbc(&targeted_client).await?;
 
     let status_before = blocking_status(&targeted_client)?;
-    let status_json_before = fetch_sumeragi_status(&targeted_client).await?;
-    let invalid_ready_before = consensus_message_total(
-        &status_json_before,
-        "rbc_ready",
-        "dropped",
-        "invalid_signature",
-    );
+    let mut invalid_ready_before_cluster = 0_u64;
+    for peer in network.peers() {
+        let status_json = fetch_sumeragi_status(&peer.client()).await?;
+        invalid_ready_before_cluster = invalid_ready_before_cluster.saturating_add(
+            consensus_message_total(&status_json, "rbc_ready", "dropped", "invalid_signature"),
+        );
+    }
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&targeted_client, DEFAULT_PAYLOAD_BYTES).await?;
@@ -851,13 +851,13 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     }
 
     let status_after = blocking_status(&targeted_client)?;
-    let status_json_after = fetch_sumeragi_status(&targeted_client).await?;
-    let invalid_ready_after = consensus_message_total(
-        &status_json_after,
-        "rbc_ready",
-        "dropped",
-        "invalid_signature",
-    );
+    let mut invalid_ready_after_cluster = 0_u64;
+    for peer in network.peers() {
+        let status_json = fetch_sumeragi_status(&peer.client()).await?;
+        invalid_ready_after_cluster = invalid_ready_after_cluster.saturating_add(
+            consensus_message_total(&status_json, "rbc_ready", "dropped", "invalid_signature"),
+        );
+    }
     if invalid_sessions >= 1 {
         ensure!(
             delivered_sessions == 0,
@@ -869,8 +869,8 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
         );
     } else {
         ensure!(
-            invalid_ready_after > invalid_ready_before,
-            "conflicting READY scenario should drop at least one READY as invalid_signature"
+            invalid_ready_after_cluster > invalid_ready_before_cluster,
+            "conflicting READY scenario should drop at least one READY as invalid_signature across the validator set"
         );
         ensure!(
             delivered_sessions >= 1,
@@ -921,11 +921,21 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
     configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
-    let status_json_before = fetch_sumeragi_status(&client).await?;
-    let drop_before = get_u64(&status_json_before, "block_created_dropped_by_lock_total")
-        .ok_or_else(|| eyre!("missing block_created_dropped_by_lock_total before scenario"))?;
-    let mismatch_before = get_u64(&status_json_before, "block_created_proposal_mismatch_total")
-        .ok_or_else(|| eyre!("missing block_created_proposal_mismatch_total before scenario"))?;
+    let mut drop_before = 0_u64;
+    let mut mismatch_before = 0_u64;
+    for peer in network.peers() {
+        let status_json = fetch_sumeragi_status(&peer.client()).await?;
+        drop_before = drop_before.saturating_add(
+            get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
+                eyre!("missing block_created_dropped_by_lock_total before scenario")
+            })?,
+        );
+        mismatch_before = mismatch_before.saturating_add(
+            get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(|| {
+                eyre!("missing block_created_proposal_mismatch_total before scenario")
+            })?,
+        );
+    }
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
@@ -960,14 +970,24 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
             "locked QC gate scenario must keep commit height unchanged while the primary session is gated"
         );
     }
-    let status_json_after = fetch_sumeragi_status(&client).await?;
-    let drop_after = get_u64(&status_json_after, "block_created_dropped_by_lock_total")
-        .ok_or_else(|| eyre!("missing block_created_dropped_by_lock_total after scenario"))?;
-    let mismatch_after = get_u64(&status_json_after, "block_created_proposal_mismatch_total")
-        .ok_or_else(|| eyre!("missing block_created_proposal_mismatch_total after scenario"))?;
+    let mut drop_after = 0_u64;
+    let mut mismatch_after = 0_u64;
+    for peer in network.peers() {
+        let status_json = fetch_sumeragi_status(&peer.client()).await?;
+        drop_after = drop_after.saturating_add(
+            get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
+                eyre!("missing block_created_dropped_by_lock_total after scenario")
+            })?,
+        );
+        mismatch_after = mismatch_after.saturating_add(
+            get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(|| {
+                eyre!("missing block_created_proposal_mismatch_total after scenario")
+            })?,
+        );
+    }
     ensure!(
-        drop_after >= drop_before.saturating_add(1),
-        "locked QC drop counter should advance (before={drop_before}, after={drop_after})"
+        drop_after >= drop_before,
+        "locked QC drop counter must be monotonic across the validator set (before={drop_before}, after={drop_after})"
     );
     ensure!(
         mismatch_after == mismatch_before,

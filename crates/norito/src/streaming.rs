@@ -3601,8 +3601,7 @@ pub mod codec {
                 while lookahead < chars.len() && chars[lookahead].is_whitespace() {
                     lookahead += 1;
                 }
-                if lookahead < chars.len() && (chars[lookahead] == '}' || chars[lookahead] == ']')
-                {
+                if lookahead < chars.len() && (chars[lookahead] == '}' || chars[lookahead] == ']') {
                     i += 1;
                     continue;
                 }
@@ -3698,7 +3697,9 @@ pub mod codec {
         Ok(SignedRansTablesV1 { payload, signature })
     }
 
-    fn parse_rans_tables_payload(value: &NoritoJsonValue) -> Result<RansTablesV1, BundleTableError> {
+    fn parse_rans_tables_payload(
+        value: &NoritoJsonValue,
+    ) -> Result<RansTablesV1, BundleTableError> {
         if let Some(raw) = value.as_str() {
             let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
             expand_jsonish_strings(&mut parsed);
@@ -3706,11 +3707,9 @@ pub mod codec {
             return parse_rans_tables_payload(&parsed);
         }
 
-        let payload = value
-            .as_object()
-            .ok_or(BundleTableError::InvalidStructure(
-                "SignedRansTablesV1 payload must be an object",
-            ))?;
+        let payload = value.as_object().ok_or(BundleTableError::InvalidStructure(
+            "SignedRansTablesV1 payload must be an object",
+        ))?;
 
         let body_value = payload
             .get("body")
@@ -3744,7 +3743,9 @@ pub mod codec {
         })
     }
 
-    fn parse_rans_tables_body(value: &NoritoJsonValue) -> Result<RansTablesBodyV1, BundleTableError> {
+    fn parse_rans_tables_body(
+        value: &NoritoJsonValue,
+    ) -> Result<RansTablesBodyV1, BundleTableError> {
         if let Some(raw) = value.as_str() {
             let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
             expand_jsonish_strings(&mut parsed);
@@ -3752,11 +3753,9 @@ pub mod codec {
             return parse_rans_tables_body(&parsed);
         }
 
-        let body = value
-            .as_object()
-            .ok_or(BundleTableError::InvalidStructure(
-                "SignedRansTablesV1 payload body must be an object",
-            ))?;
+        let body = value.as_object().ok_or(BundleTableError::InvalidStructure(
+            "SignedRansTablesV1 payload body must be an object",
+        ))?;
 
         let groups_value = body
             .get("groups")
@@ -3796,11 +3795,9 @@ pub mod codec {
             return parse_rans_group(&parsed);
         }
 
-        let group = value
-            .as_object()
-            .ok_or(BundleTableError::InvalidStructure(
-                "SignedRansTablesV1 payload group must be an object",
-            ))?;
+        let group = value.as_object().ok_or(BundleTableError::InvalidStructure(
+            "SignedRansTablesV1 payload group must be an object",
+        ))?;
 
         let frequencies = parse_u16_array_field(
             group,
@@ -3851,11 +3848,9 @@ pub mod codec {
             return parse_rans_tables_signature(&parsed);
         }
 
-        let signature = value
-            .as_object()
-            .ok_or(BundleTableError::InvalidStructure(
-                "SignedRansTablesV1 signature must be an object",
-            ))?;
+        let signature = value.as_object().ok_or(BundleTableError::InvalidStructure(
+            "SignedRansTablesV1 signature must be an object",
+        ))?;
         let algorithm = parse_string_field(
             signature,
             "algorithm",
@@ -3866,7 +3861,7 @@ pub mod codec {
             _ => {
                 return Err(BundleTableError::InvalidStructure(
                     "SignedRansTablesV1 signature algorithm must be `ed25519`",
-                ))
+                ));
             }
         };
 
@@ -3934,7 +3929,10 @@ pub mod codec {
         u8::try_from(parsed).map_err(|_| BundleTableError::InvalidStructure(err))
     }
 
-    fn parse_u64_value(value: &NoritoJsonValue, err: &'static str) -> Result<u64, BundleTableError> {
+    fn parse_u64_value(
+        value: &NoritoJsonValue,
+        err: &'static str,
+    ) -> Result<u64, BundleTableError> {
         if let Some(parsed) = value.as_u64() {
             return Ok(parsed);
         }
@@ -3983,9 +3981,10 @@ pub mod codec {
             .ok_or(BundleTableError::InvalidStructure(err))?;
         let mut out = Vec::with_capacity(array.len());
         for entry in array {
-            out.push(u32::try_from(parse_u64_value(entry, err)?).map_err(|_| {
-                BundleTableError::InvalidStructure(err)
-            })?);
+            out.push(
+                u32::try_from(parse_u64_value(entry, err)?)
+                    .map_err(|_| BundleTableError::InvalidStructure(err))?,
+            );
         }
         Ok(out)
     }
@@ -3998,7 +3997,9 @@ pub mod codec {
         let value = map
             .get(key)
             .ok_or(BundleTableError::InvalidStructure(err))?;
-        let raw = value.as_str().ok_or(BundleTableError::InvalidStructure(err))?;
+        let raw = value
+            .as_str()
+            .ok_or(BundleTableError::InvalidStructure(err))?;
         parse_hex_array::<N>(raw, err)
     }
 

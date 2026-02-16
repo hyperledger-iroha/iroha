@@ -239,13 +239,13 @@ impl PeerConfigDto {
             public_key: cfg.public_key.as_ref().map(ToString::to_string),
             queue_capacity: cfg.queue_capacity,
             network_block_gossip_size: cfg.network_block_gossip_size,
-            network_block_gossip_period: cfg.network_block_gossip_period_ms.map(|ms| ExplorerDurationDto {
-                ms: ms.into(),
-            }),
+            network_block_gossip_period: cfg
+                .network_block_gossip_period_ms
+                .map(|ms| ExplorerDurationDto { ms: ms.into() }),
             network_tx_gossip_size: cfg.network_tx_gossip_size,
-            network_tx_gossip_period: cfg.network_tx_gossip_period_ms.map(|ms| ExplorerDurationDto {
-                ms: ms.into(),
-            }),
+            network_tx_gossip_period: cfg
+                .network_tx_gossip_period_ms
+                .map(|ms| ExplorerDurationDto { ms: ms.into() }),
         }
     }
 }
