@@ -12972,6 +12972,9 @@ pub struct Torii {
     /// Transport-specific configuration (Norito-RPC rollout, streaming knobs).
     #[config(nested)]
     pub transport: ToriiTransport,
+    /// Native MCP endpoint configuration.
+    #[config(nested)]
+    pub mcp: ToriiMcp,
     /// Webhook delivery/backpressure configuration.
     #[config(nested)]
     pub webhook: Webhook,
@@ -13422,6 +13425,7 @@ impl Torii {
             sorafs_gateway,
             sorafs_por,
             transport: self.transport.into(),
+            mcp: self.mcp.into(),
             webhook,
             webhook_security,
             push,
@@ -13733,6 +13737,40 @@ impl Default for ToriiNoritoRpcTransport {
             require_mtls: defaults::torii::transport::norito_rpc::REQUIRE_MTLS,
             allowed_clients: defaults::torii::transport::norito_rpc::allowed_clients(),
             stage: defaults::torii::transport::norito_rpc::STAGE.to_string(),
+        }
+    }
+}
+
+/// Native MCP endpoint configuration parameters.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct ToriiMcp {
+    /// Master enable switch for native `/v1/mcp`.
+    #[config(default = "defaults::torii::mcp::ENABLED")]
+    pub enabled: bool,
+    /// Maximum accepted request payload size in bytes.
+    #[config(default = "defaults::torii::mcp::MAX_REQUEST_BYTES")]
+    pub max_request_bytes: usize,
+    /// Maximum number of tools emitted in one `tools/list` response page.
+    #[config(default = "defaults::torii::mcp::MAX_TOOLS_PER_LIST")]
+    pub max_tools_per_list: usize,
+    /// Expose operator-only routes in MCP tool discovery.
+    #[config(default = "defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES")]
+    pub expose_operator_routes: bool,
+    /// Optional steady-state MCP request budget (requests/minute).
+    pub rate_per_minute: Option<u32>,
+    /// Optional MCP burst budget.
+    pub burst: Option<u32>,
+}
+
+impl Default for ToriiMcp {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::mcp::ENABLED,
+            max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
+            max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,
+            rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE,
+            burst: defaults::torii::mcp::BURST,
         }
     }
 }

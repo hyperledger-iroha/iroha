@@ -243,6 +243,13 @@ fn tags_section() -> Value {
         Value::String("Iroha Connect session and relay endpoints.".to_owned()),
     );
 
+    let mut mcp = Map::new();
+    mcp.insert("name".into(), Value::String("MCP".to_owned()));
+    mcp.insert(
+        "description".into(),
+        Value::String("Model Context Protocol endpoint for agent tool orchestration.".to_owned()),
+    );
+
     let mut push = Map::new();
     push.insert("name".into(), Value::String("Push".to_owned()));
     push.insert(
@@ -335,6 +342,7 @@ fn tags_section() -> Value {
         Value::Object(parameters),
         Value::Object(explorer),
         Value::Object(connect),
+        Value::Object(mcp),
         Value::Object(push),
         Value::Object(webhooks),
         Value::Object(sorafs),
@@ -2669,6 +2677,65 @@ fn connect_paths() -> Map {
             Vec::new(),
         )),
     );
+    paths
+}
+
+fn mcp_paths() -> Map {
+    let mut get_operation = Map::new();
+    get_operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("MCP".to_owned())]),
+    );
+    get_operation.insert(
+        "summary".into(),
+        Value::String("Fetch MCP capabilities.".to_owned()),
+    );
+    get_operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns server capabilities and tool count for the native MCP bridge.".to_owned(),
+        ),
+    );
+    get_operation.insert(
+        "operationId".into(),
+        Value::String("mcpCapabilities".to_owned()),
+    );
+    get_operation.insert(
+        "responses".into(),
+        Value::Object(single_json_response("#/components/schemas/JsonValue")),
+    );
+
+    let mut post_operation = Map::new();
+    post_operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("MCP".to_owned())]),
+    );
+    post_operation.insert(
+        "summary".into(),
+        Value::String("Execute MCP JSON-RPC request.".to_owned()),
+    );
+    post_operation.insert(
+        "description".into(),
+        Value::String(
+            "Accepts JSON-RPC payloads for MCP tool discovery and invocation.".to_owned(),
+        ),
+    );
+    post_operation.insert("operationId".into(), Value::String("mcpJsonRpc".to_owned()));
+    post_operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body("#/components/schemas/JsonValue")),
+    );
+    post_operation.insert(
+        "responses".into(),
+        Value::Object(single_json_response("#/components/schemas/JsonValue")),
+    );
+
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(get_operation));
+    methods.insert("post".to_owned(), Value::Object(post_operation));
+
+    let mut paths = Map::new();
+    paths.insert("/v1/mcp".to_owned(), Value::Object(methods));
     paths
 }
 
@@ -6313,6 +6380,7 @@ fn paths_section() -> Map {
     paths.extend(query_paths());
     paths.extend(stream_paths());
     paths.extend(connect_paths());
+    paths.extend(mcp_paths());
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
     paths.extend(zk_paths());
@@ -10014,6 +10082,7 @@ mod tests {
         assert!(paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));
         assert!(paths.contains_key("/v1/connect/session"));
+        assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
@@ -10480,6 +10549,11 @@ mod tests {
                 label: "connect",
                 builder: connect_paths,
                 expected: "/v1/connect/session",
+            },
+            PathCase {
+                label: "mcp",
+                builder: mcp_paths,
+                expected: "/v1/mcp",
             },
             PathCase {
                 label: "proofs",
