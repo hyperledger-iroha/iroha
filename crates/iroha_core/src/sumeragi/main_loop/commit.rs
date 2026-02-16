@@ -1383,11 +1383,7 @@ impl Actor {
                 let missing_local_data =
                     matches!(pending.last_gate, Some(GateReason::MissingLocalData));
                 let quorum_reached = has_quorum_signers || vote_count >= min_votes_for_commit;
-                let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
-                let fast_timeout = {
-                    let view = self.state.view();
-                    self.pending_fast_path_timeout(&view, consensus_mode)
-                };
+                let fast_timeout = self.pending_fast_path_timeout_current();
                 let has_votes = pending.precommit_vote_sent
                     || vote_count > 0
                     || self.pending_block_has_votes(block_hash, pending_height, pending_view);
@@ -2407,10 +2403,7 @@ impl Actor {
                 );
                 continue;
             }
-            let fast_timeout = {
-                let view = self.state.view();
-                self.pending_fast_path_timeout(&view, consensus_mode)
-            };
+            let fast_timeout = self.pending_fast_path_timeout_current();
             // Prefer validating via background workers to keep the tick loop responsive under load.
             // Inline validation can take hundreds of milliseconds and risks stalling vote/proposal
             // handling, which in turn causes view changes and reschedules.

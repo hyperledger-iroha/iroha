@@ -769,9 +769,6 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::SetAssetInstanceKeyValue,
     RecipeKind::RemoveAssetInstanceKeyValue,
     RecipeKind::RegisterRole,
-    RecipeKind::RegisterTimeTrigger,
-    RecipeKind::MintTriggerRepetitions,
-    RecipeKind::BurnTriggerRepetitions,
     RecipeKind::DeployIvmContract,
     RecipeKind::DeployKotodamaContract,
 ];

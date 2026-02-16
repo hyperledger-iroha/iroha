@@ -3817,11 +3817,22 @@ impl RbcBacklogSummary {
     clippy::assigning_clones
 )]
 impl Actor {
-    fn pending_fast_path_timeout(&self, _view: &StateView<'_>, _mode: ConsensusMode) -> Duration {
+    fn pending_fast_path_timeout_current(&self) -> Duration {
         const FAST_TIMEOUT_FLOOR: Duration = Duration::from_millis(750);
-        const FAST_TIMEOUT_CAP: Duration = Duration::from_millis(1_000);
-        let quorum_half = self.commit_quorum_timeout() / 2;
-        quorum_half.min(FAST_TIMEOUT_CAP).max(FAST_TIMEOUT_FLOOR)
+        const FAST_TIMEOUT_MARGIN: Duration = Duration::from_millis(250);
+
+        let quorum_timeout = self.commit_quorum_timeout();
+        let fast_timeout = quorum_timeout.saturating_sub(FAST_TIMEOUT_MARGIN);
+        if fast_timeout < FAST_TIMEOUT_FLOOR {
+            // Keep a usable timeout on very small quorum windows while preserving
+            // the fast-path fallback behavior.
+            return (quorum_timeout / 2).max(Duration::from_millis(1));
+        }
+        fast_timeout
+    }
+
+    fn pending_fast_path_timeout(&self, _view: &StateView<'_>, _mode: ConsensusMode) -> Duration {
+        self.pending_fast_path_timeout_current()
     }
 
     fn pending_block_has_votes(
@@ -3930,9 +3941,7 @@ impl Actor {
         let view = self.state.view();
         let tip_height = view.height();
         let tip_hash = view.latest_block_hash();
-        let pending_height = u64::try_from(tip_height.saturating_add(1)).unwrap_or(u64::MAX);
-        let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
-        let fast_timeout = self.pending_fast_path_timeout(&view, consensus_mode);
+        let fast_timeout = self.pending_fast_path_timeout_current();
         self.pending
             .pending_blocks
             .values()
@@ -11662,29 +11671,42 @@ impl Actor {
         }
     }
 
-    fn block_time_for_mode(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
+    fn block_time_for_mode_from_world(
+        &self,
+        world: &impl WorldReadOnly,
+        mode: ConsensusMode,
+    ) -> Duration {
         match mode {
-            ConsensusMode::Permissioned => {
-                view.world.parameters().sumeragi().effective_block_time()
+            ConsensusMode::Permissioned => world.parameters().sumeragi().effective_block_time(),
+            ConsensusMode::Npos => super::resolve_npos_block_time_from_world(world),
+        }
+    }
+
+    fn block_time_for_mode(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
+        self.block_time_for_mode_from_world(view.world(), mode)
+    }
+
+    fn commit_timeout_for_mode_from_world(
+        &self,
+        world: &impl WorldReadOnly,
+        mode: ConsensusMode,
+    ) -> Duration {
+        match mode {
+            ConsensusMode::Permissioned => world.parameters().sumeragi().effective_commit_time(),
+            ConsensusMode::Npos => {
+                let stage_commit =
+                    super::resolve_npos_timeouts_from_world(world, &self.config.npos).commit;
+                // NPoS phase timeouts can be intentionally shorter than block time for the
+                // internal stage budget; quorum/view-change timing must remain anchored to the
+                // canonical Sumeragi commit timeout to avoid pathological churn.
+                let quorum_floor = world.parameters().sumeragi().effective_commit_time();
+                stage_commit.max(quorum_floor)
             }
-            ConsensusMode::Npos => super::resolve_npos_block_time(view),
         }
     }
 
     fn commit_timeout_for_mode(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
-        match mode {
-            ConsensusMode::Permissioned => {
-                view.world.parameters().sumeragi().effective_commit_time()
-            }
-            ConsensusMode::Npos => {
-                let stage_commit = super::resolve_npos_timeouts(view, &self.config.npos).commit;
-                // NPoS phase timeouts can be intentionally shorter than block time for the
-                // internal stage budget; quorum/view-change timing must remain anchored to the
-                // canonical Sumeragi commit timeout to avoid pathological churn.
-                let quorum_floor = view.world.parameters().sumeragi().effective_commit_time();
-                stage_commit.max(quorum_floor)
-            }
-        }
+        self.commit_timeout_for_mode_from_world(view.world(), mode)
     }
 
     fn is_observer(&self) -> bool {
@@ -13639,12 +13661,11 @@ impl Actor {
     }
 
     fn commit_quorum_timeout(&self) -> Duration {
-        let view = self.state.view();
-        let params = view.world.parameters().sumeragi();
-        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
-        let commit_time = self.commit_timeout_for_mode(&view, self.consensus_mode);
+        let world = self.state.world_view();
+        let params = world.parameters().sumeragi();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
+        let commit_time = self.commit_timeout_for_mode_from_world(&world, self.consensus_mode);
         let da_enabled = params.da_enabled();
-        drop(view);
 
         commit_quorum_timeout_from_durations(
             block_time,
@@ -13655,23 +13676,20 @@ impl Actor {
     }
 
     fn rebroadcast_cooldown(&self) -> Duration {
-        let view = self.state.view();
-        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
-        drop(view);
+        let world = self.state.world_view();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         rebroadcast_cooldown_from_block_time(block_time)
     }
 
     fn control_plane_rebroadcast_cooldown(&self) -> Duration {
-        let view = self.state.view();
-        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
-        drop(view);
+        let world = self.state.world_view();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         control_plane_rebroadcast_cooldown_from_block_time(block_time)
     }
 
     fn payload_rebroadcast_cooldown(&self) -> Duration {
-        let view = self.state.view();
-        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
-        drop(view);
+        let world = self.state.world_view();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         payload_rebroadcast_cooldown_from_block_time(block_time)
     }
 
@@ -13688,10 +13706,9 @@ impl Actor {
     }
 
     fn quorum_timeout(&self, da_enabled: bool) -> Duration {
-        let view = self.state.view();
-        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
-        let commit_time = self.commit_timeout_for_mode(&view, self.consensus_mode);
-        drop(view);
+        let world = self.state.world_view();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
+        let commit_time = self.commit_timeout_for_mode_from_world(&world, self.consensus_mode);
 
         commit_quorum_timeout_from_durations(
             block_time,
