@@ -3286,13 +3286,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             start_ms: subscription_state.next_charge_ms,
             period_ms: None,
         };
+        let mut next_trigger_metadata = context.trigger_metadata.clone();
+        for key in ["__registered_block_height", "__registered_at_ms"] {
+            let key = key
+                .parse::<Name>()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            next_trigger_metadata.remove(&key);
+        }
         let action = iroha_data_model::trigger::action::Action::new(
             context.executable.clone(),
             Repeats::Exactly(1),
             context.authority.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
         )
-        .with_metadata(context.trigger_metadata.clone());
+        .with_metadata(next_trigger_metadata);
         let trigger = Trigger::new(trigger_id.clone(), action);
         let unregister =
             InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
@@ -8509,6 +8516,16 @@ mod tests {
                 subscription_nft_id: nft_id.clone(),
             }),
         );
+        // Runtime registration metadata is present on real triggers and must be stripped
+        // before re-registering, otherwise registration rejects reserved keys.
+        trigger_metadata.insert(
+            "__registered_block_height".parse().unwrap(),
+            Json::from(42_u64),
+        );
+        trigger_metadata.insert(
+            "__registered_at_ms".parse().unwrap(),
+            Json::from(12_345_u64),
+        );
         let schedule = Schedule {
             start_ms: scheduled_at_ms,
             period_ms: None,
@@ -8591,7 +8608,14 @@ mod tests {
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
         )
-        .with_metadata(trigger_metadata);
+        .with_metadata({
+            let mut metadata = trigger_metadata;
+            let registered_height_key: Name = "__registered_block_height".parse().unwrap();
+            metadata.remove(&registered_height_key);
+            let registered_time_key: Name = "__registered_at_ms".parse().unwrap();
+            metadata.remove(&registered_time_key);
+            metadata
+        });
         let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
         let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
 
