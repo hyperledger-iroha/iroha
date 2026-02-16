@@ -2974,7 +2974,8 @@ pub mod codec {
         AudioFrame, AudioLayout, AudioTrackSummary, BundleAcceleration, Bytes, CapabilityFlags,
         ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme, FeedbackHint, Hash, ManifestV1,
         Multiaddr, NeuralBundle, NoritoJsonValue, PrivacyRoute, ProfileId, RansGroupTableV1,
-        RdoMode, SegmentAudio, SegmentHeader, Signature, SignedRansTablesV1, StorageClass,
+        RansTablesBodyV1, RansTablesSignatureV1, RansTablesV1, RdoMode, SegmentAudio,
+        SegmentHeader, Signature, SignatureAlgorithm, SignedRansTablesV1, StorageClass,
         StreamMetadata, Timestamp,
         chunk::{
             AudioFrameCadenceMismatchInfo, AudioFrameCadenceOverflowInfo,
@@ -3405,9 +3406,628 @@ pub mod codec {
         let contents = fs::read_to_string(path)?;
         let toml_value: TomlValue = toml::from_str(&contents)?;
         let json_value = toml_to_norito_value(&toml_value)?;
-        let signed: SignedRansTablesV1 = json::from_value(json_value)?;
+        let signed: SignedRansTablesV1 = match json::from_value(json_value.clone()) {
+            Ok(signed) => signed,
+            Err(err) => decode_signed_rans_tables_compat(&json_value)
+                .map_err(|_| BundleTableError::Json(err))?,
+        };
         let tables = BundleAnsTables::from_signed(&signed)?;
         Ok(Arc::new(tables))
+    }
+
+    fn decode_signed_rans_tables_compat(
+        raw_value: &NoritoJsonValue,
+    ) -> Result<SignedRansTablesV1, BundleTableError> {
+        let mut normalized = raw_value.clone();
+        expand_jsonish_strings(&mut normalized);
+        coerce_jsonish_scalar_strings(&mut normalized);
+        if let Ok(signed) = json::from_value(normalized.clone()) {
+            return Ok(signed);
+        }
+        decode_signed_rans_tables_manual(&normalized)
+    }
+
+    fn parse_jsonish_norito_value(raw: &str) -> Result<NoritoJsonValue, json::Error> {
+        let trimmed = raw.trim();
+        if let Ok(value) = json::parse_value(trimmed) {
+            return Ok(value);
+        }
+
+        if let Ok(inner) = json::from_str::<String>(trimmed) {
+            let inner_trimmed = inner.trim();
+            if let Ok(value) = json::parse_value(inner_trimmed) {
+                return Ok(value);
+            }
+            let normalized_inner = normalize_jsonish_payload(inner_trimmed);
+            if let Ok(value) = json::parse_value(&normalized_inner) {
+                return Ok(value);
+            }
+        }
+
+        let normalized = normalize_jsonish_payload(trimmed);
+        json::parse_value(&normalized)
+    }
+
+    fn normalize_jsonish_payload(raw: &str) -> String {
+        let mut out = raw.trim().trim_matches(&['"', '\''][..]).to_owned();
+        if out.contains("\\\"") {
+            out = out.replace("\\\"", "\"");
+        }
+        if out.contains("\\{") || out.contains("\\}") || out.contains("\\[") || out.contains("\\]")
+        {
+            out = out
+                .replace("\\{", "{")
+                .replace("\\}", "}")
+                .replace("\\[", "[")
+                .replace("\\]", "]");
+        }
+
+        out = replace_equals_and_missing_colons(&out);
+        strip_trailing_commas(&out)
+    }
+
+    fn replace_equals_and_missing_colons(input: &str) -> String {
+        let chars: Vec<char> = input.chars().collect();
+        let mut out = String::with_capacity(input.len() + 16);
+        let mut i = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut string_is_key = false;
+        let mut after_object_key = false;
+        let mut context_stack: Vec<char> = Vec::new();
+        let mut object_expect_key = false;
+
+        while i < chars.len() {
+            let ch = chars[i];
+
+            if !in_string && after_object_key && !ch.is_whitespace() {
+                if ch == ':' || ch == '=' {
+                    out.push(':');
+                    after_object_key = false;
+                    object_expect_key = false;
+                    i += 1;
+                    continue;
+                }
+                out.push(':');
+                after_object_key = false;
+                object_expect_key = false;
+                continue;
+            }
+
+            if in_string {
+                out.push(ch);
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                    if string_is_key {
+                        after_object_key = true;
+                    }
+                }
+                i += 1;
+                continue;
+            }
+
+            match ch {
+                '"' => {
+                    let in_object = context_stack.last() == Some(&'{');
+                    string_is_key = in_object && object_expect_key;
+                    in_string = true;
+                    escaped = false;
+                    out.push(ch);
+                }
+                '{' => {
+                    context_stack.push('{');
+                    object_expect_key = true;
+                    after_object_key = false;
+                    out.push(ch);
+                }
+                '[' => {
+                    context_stack.push('[');
+                    object_expect_key = false;
+                    after_object_key = false;
+                    out.push(ch);
+                }
+                '}' => {
+                    if context_stack.pop() == Some('{') {
+                        object_expect_key = false;
+                    }
+                    after_object_key = false;
+                    out.push(ch);
+                }
+                ']' => {
+                    context_stack.pop();
+                    after_object_key = false;
+                    out.push(ch);
+                }
+                ',' => {
+                    out.push(ch);
+                    after_object_key = false;
+                    object_expect_key = context_stack.last() == Some(&'{');
+                }
+                ':' => {
+                    out.push(ch);
+                    after_object_key = false;
+                    object_expect_key = false;
+                }
+                '=' => {
+                    out.push(':');
+                    after_object_key = false;
+                    object_expect_key = false;
+                }
+                _ => out.push(ch),
+            }
+
+            i += 1;
+        }
+
+        out
+    }
+
+    fn strip_trailing_commas(input: &str) -> String {
+        let chars: Vec<char> = input.chars().collect();
+        let mut out = String::with_capacity(input.len());
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut i = 0usize;
+
+        while i < chars.len() {
+            let ch = chars[i];
+            if in_string {
+                out.push(ch);
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if ch == '"' {
+                in_string = true;
+                escaped = false;
+                out.push(ch);
+                i += 1;
+                continue;
+            }
+
+            if ch == ',' {
+                let mut lookahead = i + 1;
+                while lookahead < chars.len() && chars[lookahead].is_whitespace() {
+                    lookahead += 1;
+                }
+                if lookahead < chars.len() && (chars[lookahead] == '}' || chars[lookahead] == ']')
+                {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            out.push(ch);
+            i += 1;
+        }
+
+        out
+    }
+
+    fn expand_jsonish_strings(value: &mut NoritoJsonValue) {
+        match value {
+            NoritoJsonValue::String(raw) => {
+                if let Ok(mut parsed) = parse_jsonish_norito_value(raw) {
+                    expand_jsonish_strings(&mut parsed);
+                    *value = parsed;
+                }
+            }
+            NoritoJsonValue::Array(items) => {
+                for item in items {
+                    expand_jsonish_strings(item);
+                }
+            }
+            NoritoJsonValue::Object(map) => {
+                for nested in map.values_mut() {
+                    expand_jsonish_strings(nested);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn coerce_jsonish_scalar_strings(value: &mut NoritoJsonValue) {
+        match value {
+            NoritoJsonValue::String(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.eq_ignore_ascii_case("true") {
+                    *value = NoritoJsonValue::Bool(true);
+                } else if trimmed.eq_ignore_ascii_case("false") {
+                    *value = NoritoJsonValue::Bool(false);
+                } else if trimmed.eq_ignore_ascii_case("null") {
+                    *value = NoritoJsonValue::Null;
+                } else if let Ok(parsed) = trimmed.parse::<u64>() {
+                    *value = NoritoJsonValue::Number(json::native::Number::U64(parsed));
+                } else if let Ok(parsed) = trimmed.parse::<i64>() {
+                    *value = NoritoJsonValue::Number(json::native::Number::I64(parsed));
+                }
+            }
+            NoritoJsonValue::Array(items) => {
+                for item in items {
+                    coerce_jsonish_scalar_strings(item);
+                }
+            }
+            NoritoJsonValue::Object(map) => {
+                for nested in map.values_mut() {
+                    coerce_jsonish_scalar_strings(nested);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn decode_signed_rans_tables_manual(
+        raw_value: &NoritoJsonValue,
+    ) -> Result<SignedRansTablesV1, BundleTableError> {
+        if let Some(raw) = raw_value.as_str() {
+            let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
+            expand_jsonish_strings(&mut parsed);
+            coerce_jsonish_scalar_strings(&mut parsed);
+            return decode_signed_rans_tables_manual(&parsed);
+        }
+
+        let root = raw_value
+            .as_object()
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 root must be an object",
+            ))?;
+
+        let (payload_value, signature_value) = if let Some(payload) = root.get("payload") {
+            (payload, root.get("signature"))
+        } else {
+            // Compatibility: some legacy payloads persisted only the payload body.
+            (raw_value, None)
+        };
+
+        let payload = parse_rans_tables_payload(payload_value)?;
+        let signature = match signature_value {
+            Some(value) => parse_rans_tables_signature(value)?,
+            None => None,
+        };
+        Ok(SignedRansTablesV1 { payload, signature })
+    }
+
+    fn parse_rans_tables_payload(value: &NoritoJsonValue) -> Result<RansTablesV1, BundleTableError> {
+        if let Some(raw) = value.as_str() {
+            let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
+            expand_jsonish_strings(&mut parsed);
+            coerce_jsonish_scalar_strings(&mut parsed);
+            return parse_rans_tables_payload(&parsed);
+        }
+
+        let payload = value
+            .as_object()
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 payload must be an object",
+            ))?;
+
+        let body_value = payload
+            .get("body")
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 payload missing body",
+            ))?;
+        let body = parse_rans_tables_body(body_value)?;
+
+        Ok(RansTablesV1 {
+            version: parse_u16_field(
+                payload,
+                "version",
+                "SignedRansTablesV1 payload version must be an integer",
+            )?,
+            generated_at: parse_u64_field(
+                payload,
+                "generated_at",
+                "SignedRansTablesV1 payload generated_at must be an integer",
+            )?,
+            generator_commit: parse_string_field(
+                payload,
+                "generator_commit",
+                "SignedRansTablesV1 payload generator_commit must be a string",
+            )?,
+            checksum_sha256: parse_hex_field::<32>(
+                payload,
+                "checksum_sha256",
+                "SignedRansTablesV1 payload checksum_sha256 must be a 64-character hex string",
+            )?,
+            body,
+        })
+    }
+
+    fn parse_rans_tables_body(value: &NoritoJsonValue) -> Result<RansTablesBodyV1, BundleTableError> {
+        if let Some(raw) = value.as_str() {
+            let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
+            expand_jsonish_strings(&mut parsed);
+            coerce_jsonish_scalar_strings(&mut parsed);
+            return parse_rans_tables_body(&parsed);
+        }
+
+        let body = value
+            .as_object()
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 payload body must be an object",
+            ))?;
+
+        let groups_value = body
+            .get("groups")
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 payload body missing groups",
+            ))?;
+        let groups_array = groups_value
+            .as_array()
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 payload body groups must be an array",
+            ))?;
+        let mut groups = Vec::with_capacity(groups_array.len());
+        for group in groups_array {
+            groups.push(parse_rans_group(group)?);
+        }
+
+        Ok(RansTablesBodyV1 {
+            seed: parse_u64_field(
+                body,
+                "seed",
+                "SignedRansTablesV1 payload body seed must be an integer",
+            )?,
+            bundle_width: parse_u8_field(
+                body,
+                "bundle_width",
+                "SignedRansTablesV1 payload body bundle_width must be an integer",
+            )?,
+            groups,
+        })
+    }
+
+    fn parse_rans_group(value: &NoritoJsonValue) -> Result<RansGroupTableV1, BundleTableError> {
+        if let Some(raw) = value.as_str() {
+            let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
+            expand_jsonish_strings(&mut parsed);
+            coerce_jsonish_scalar_strings(&mut parsed);
+            return parse_rans_group(&parsed);
+        }
+
+        let group = value
+            .as_object()
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 payload group must be an object",
+            ))?;
+
+        let frequencies = parse_u16_array_field(
+            group,
+            "frequencies",
+            "SignedRansTablesV1 payload group frequencies must be an integer array",
+        )?;
+        let cumulative = parse_u32_array_field(
+            group,
+            "cumulative",
+            "SignedRansTablesV1 payload group cumulative must be an integer array",
+        )?;
+
+        Ok(RansGroupTableV1 {
+            width_bits: parse_u8_field(
+                group,
+                "width_bits",
+                "SignedRansTablesV1 payload group width_bits must be an integer",
+            )?,
+            group_size: parse_u16_field(
+                group,
+                "group_size",
+                "SignedRansTablesV1 payload group group_size must be an integer",
+            )?,
+            precision_bits: parse_u8_field(
+                group,
+                "precision_bits",
+                "SignedRansTablesV1 payload group precision_bits must be an integer",
+            )?,
+            frequencies,
+            cumulative,
+        })
+    }
+
+    fn parse_rans_tables_signature(
+        value: &NoritoJsonValue,
+    ) -> Result<Option<RansTablesSignatureV1>, BundleTableError> {
+        if matches!(value, NoritoJsonValue::Null) {
+            return Ok(None);
+        }
+        if let Some(raw) = value.as_str() {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("null") {
+                return Ok(None);
+            }
+            let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
+            expand_jsonish_strings(&mut parsed);
+            coerce_jsonish_scalar_strings(&mut parsed);
+            return parse_rans_tables_signature(&parsed);
+        }
+
+        let signature = value
+            .as_object()
+            .ok_or(BundleTableError::InvalidStructure(
+                "SignedRansTablesV1 signature must be an object",
+            ))?;
+        let algorithm = parse_string_field(
+            signature,
+            "algorithm",
+            "SignedRansTablesV1 signature algorithm must be a string",
+        )?;
+        let algorithm = match algorithm.trim().to_ascii_lowercase().as_str() {
+            "ed25519" => SignatureAlgorithm::Ed25519,
+            _ => {
+                return Err(BundleTableError::InvalidStructure(
+                    "SignedRansTablesV1 signature algorithm must be `ed25519`",
+                ))
+            }
+        };
+
+        Ok(Some(RansTablesSignatureV1 {
+            algorithm,
+            public_key: parse_hex_field::<32>(
+                signature,
+                "public_key",
+                "SignedRansTablesV1 signature public_key must be a 64-character hex string",
+            )?,
+            signature: parse_hex_field::<64>(
+                signature,
+                "signature",
+                "SignedRansTablesV1 signature signature must be a 128-character hex string",
+            )?,
+        }))
+    }
+
+    fn parse_string_field(
+        map: &BTreeMap<String, NoritoJsonValue>,
+        key: &'static str,
+        err: &'static str,
+    ) -> Result<String, BundleTableError> {
+        let value = map
+            .get(key)
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or(BundleTableError::InvalidStructure(err))
+    }
+
+    fn parse_u64_field(
+        map: &BTreeMap<String, NoritoJsonValue>,
+        key: &'static str,
+        err: &'static str,
+    ) -> Result<u64, BundleTableError> {
+        let value = map
+            .get(key)
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        parse_u64_value(value, err)
+    }
+
+    fn parse_u16_field(
+        map: &BTreeMap<String, NoritoJsonValue>,
+        key: &'static str,
+        err: &'static str,
+    ) -> Result<u16, BundleTableError> {
+        let value = map
+            .get(key)
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        let parsed = parse_u64_value(value, err)?;
+        u16::try_from(parsed).map_err(|_| BundleTableError::InvalidStructure(err))
+    }
+
+    fn parse_u8_field(
+        map: &BTreeMap<String, NoritoJsonValue>,
+        key: &'static str,
+        err: &'static str,
+    ) -> Result<u8, BundleTableError> {
+        let value = map
+            .get(key)
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        let parsed = parse_u64_value(value, err)?;
+        u8::try_from(parsed).map_err(|_| BundleTableError::InvalidStructure(err))
+    }
+
+    fn parse_u64_value(value: &NoritoJsonValue, err: &'static str) -> Result<u64, BundleTableError> {
+        if let Some(parsed) = value.as_u64() {
+            return Ok(parsed);
+        }
+        if let Some(parsed) = value.as_i64()
+            && parsed >= 0
+        {
+            return Ok(parsed as u64);
+        }
+        if let Some(raw) = value.as_str()
+            && let Ok(parsed) = raw.trim().parse::<u64>()
+        {
+            return Ok(parsed);
+        }
+        Err(BundleTableError::InvalidStructure(err))
+    }
+
+    fn parse_u16_array_field(
+        map: &BTreeMap<String, NoritoJsonValue>,
+        key: &'static str,
+        err: &'static str,
+    ) -> Result<Vec<u16>, BundleTableError> {
+        let value = map
+            .get(key)
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        let array = value
+            .as_array()
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        let mut out = Vec::with_capacity(array.len());
+        for entry in array {
+            let parsed = parse_u64_value(entry, err)?;
+            out.push(u16::try_from(parsed).map_err(|_| BundleTableError::InvalidStructure(err))?);
+        }
+        Ok(out)
+    }
+
+    fn parse_u32_array_field(
+        map: &BTreeMap<String, NoritoJsonValue>,
+        key: &'static str,
+        err: &'static str,
+    ) -> Result<Vec<u32>, BundleTableError> {
+        let value = map
+            .get(key)
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        let array = value
+            .as_array()
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        let mut out = Vec::with_capacity(array.len());
+        for entry in array {
+            out.push(u32::try_from(parse_u64_value(entry, err)?).map_err(|_| {
+                BundleTableError::InvalidStructure(err)
+            })?);
+        }
+        Ok(out)
+    }
+
+    fn parse_hex_field<const N: usize>(
+        map: &BTreeMap<String, NoritoJsonValue>,
+        key: &'static str,
+        err: &'static str,
+    ) -> Result<[u8; N], BundleTableError> {
+        let value = map
+            .get(key)
+            .ok_or(BundleTableError::InvalidStructure(err))?;
+        let raw = value.as_str().ok_or(BundleTableError::InvalidStructure(err))?;
+        parse_hex_array::<N>(raw, err)
+    }
+
+    fn parse_hex_array<const N: usize>(
+        raw: &str,
+        err: &'static str,
+    ) -> Result<[u8; N], BundleTableError> {
+        let trimmed = raw.trim();
+        if trimmed.len() != N * 2 {
+            return Err(BundleTableError::InvalidStructure(err));
+        }
+        let bytes = trimmed.as_bytes();
+        let mut out = [0u8; N];
+        for idx in 0..N {
+            let hi = hex_nibble(bytes[idx * 2]).ok_or(BundleTableError::InvalidStructure(err))?;
+            let lo =
+                hex_nibble(bytes[idx * 2 + 1]).ok_or(BundleTableError::InvalidStructure(err))?;
+            out[idx] = (hi << 4) | lo;
+        }
+        Ok(out)
+    }
+
+    fn hex_nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
     }
 
     /// Lazily construct the shared default bundle tables (uniform distribution).
@@ -9764,6 +10384,53 @@ mod tests {
         assert!(
             tables.freq_len_for_bits_for_tests(4).is_none(),
             "should reject widths above bundle limit"
+        );
+    }
+
+    fn write_temp_tables_toml(contents: &str) -> std::path::PathBuf {
+        use std::{
+            fs,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "norito-bundle-tables-{pid}-{suffix}.toml",
+            pid = std::process::id()
+        ));
+        fs::write(&path, contents).expect("write temp tables toml");
+        path
+    }
+
+    #[test]
+    fn load_bundle_tables_accepts_mangled_payload_string() {
+        let payload = r#"{"version""1","generated_at""1765012527","generator_commit""7fa1c4c20a921ae51e6a5fd575cfe8ee06d14877","checksum_sha256""430943A6D4E8BB34DE9A39879C39FAA5814B5D1FE3D13FE43DEFBA1F2C1741F2","body":{"bundle_width""3","seed""0","groups":[{"width_bits""2","group_size""4","precision_bits""12","frequencies":["542","1113","1011","1430"],"cumulative":["0","542","1655","2666","4096"]},{"width_bits""3","group_size""8","precision_bits""12","frequencies":["280","262","672","441","818","193","692","738"],"cumulative":["0","280","542","1214","1655","2473","2666","3358","4096"]}]}}"#;
+        let toml = format!("payload = '''{payload}'''\nsignature = ''\n");
+        let path = write_temp_tables_toml(&toml);
+
+        let tables = load_bundle_tables_from_toml(&path).expect("decode mangled payload string");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(tables.max_width(), 3);
+        assert_eq!(
+            tables.freq_len_for_bits_for_tests(3),
+            Some(8),
+            "expected 3-bit group frequencies from payload"
+        );
+    }
+
+    #[test]
+    fn load_bundle_tables_accepts_repo_fixture() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../codec/rans/tables/rans_seed0.toml");
+        let tables = load_bundle_tables_from_toml(&path)
+            .unwrap_or_else(|err| panic!("failed to load {}: {err}", path.display()));
+        assert!(
+            tables.max_width() >= 2,
+            "expected deterministic tables fixture to expose bundled widths"
         );
     }
 }

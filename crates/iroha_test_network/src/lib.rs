@@ -1565,9 +1565,30 @@ fn test_concurrency_threads() -> usize {
 }
 
 fn permit_dir() -> PathBuf {
-    std::env::var(NETWORK_PERMIT_DIR_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir().join("iroha_test_network_permits"))
+    if let Ok(path) = std::env::var(NETWORK_PERMIT_DIR_ENV) {
+        return PathBuf::from(path);
+    }
+
+    default_permit_dir()
+}
+
+fn default_permit_dir() -> PathBuf {
+    let mut dir = std::env::temp_dir().join("iroha_test_network_permits");
+    if let Some(namespace) = default_permit_namespace() {
+        dir.push(namespace);
+    }
+    dir
+}
+
+#[cfg(unix)]
+fn default_permit_namespace() -> Option<String> {
+    let parent = nix::unistd::getppid().as_raw();
+    (parent > 0).then(|| format!("ppid-{parent}"))
+}
+
+#[cfg(not(unix))]
+fn default_permit_namespace() -> Option<String> {
+    None
 }
 
 fn network_permit_wait_timeout() -> Option<Duration> {
@@ -7612,6 +7633,36 @@ mod tests {
 
         let _timeout_guard = EnvVarRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "0");
         assert_eq!(network_permit_wait_timeout(), None);
+    }
+
+    #[test]
+    fn permit_dir_env_override_wins() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+
+        assert_eq!(permit_dir(), dir.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_permit_dir_is_namespaced_by_parent_pid() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        remove_env_var(NETWORK_PERMIT_DIR_ENV);
+
+        let dir = permit_dir();
+        let expected_prefix = std::env::temp_dir().join("iroha_test_network_permits");
+        assert!(
+            dir.starts_with(&expected_prefix),
+            "default permit dir should use temp root {expected_prefix:?}, got {dir:?}"
+        );
+
+        let expected_namespace = format!("ppid-{}", nix::unistd::getppid().as_raw());
+        assert_eq!(
+            dir.file_name().and_then(OsStr::to_str),
+            Some(expected_namespace.as_str()),
+            "default permit dir should be namespaced by parent pid"
+        );
     }
 
     #[test]
