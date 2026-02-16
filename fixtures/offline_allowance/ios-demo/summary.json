@@ -1,6 +1,6 @@
 {
   "label": "ios-demo",
-  "certificate_id_hex": "A668C17B50628AB53DC369ED8EB9CD71D1A26A55953EB307668238FDAC0ECCD5",
+  "certificate_id_hex": "499AB823A6DEEAF3223F2E9DD3DBB067F968BEE569AD891E8837A15EE42B9785",
   "controller": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
   "allowance_asset": "xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
   "allowance_amount": "250.00",

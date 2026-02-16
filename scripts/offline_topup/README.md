@@ -31,8 +31,8 @@ $ scripts/offline_topup/run.sh \
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
       "policy": {
-        "max_balance": "500",
-        "max_tx_value": "125",
+        "max_balance": "500.00",
+        "max_tx_value": "125.00",
         "expires_at_ms": 1745900000000
       },
       "spend_public_key": "ed0120...",       // multihash or `algo:hex`

@@ -12,8 +12,8 @@
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
       "policy": {
-        "max_balance": "500",
-        "max_tx_value": "125",
+        "max_balance": "500.00",
+        "max_tx_value": "125.00",
         "expires_at_ms": 1745900000000
       },
       "spend_public_key": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -33,8 +33,8 @@
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
       "policy": {
-        "max_balance": "300",
-        "max_tx_value": "75",
+        "max_balance": "300.00",
+        "max_tx_value": "75.00",
         "expires_at_ms": 1745900000000
       },
       "spend_public_key": "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D",
@@ -93,8 +93,8 @@
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
       "policy": {
-        "max_balance": "350",
-        "max_tx_value": "90",
+        "max_balance": "350.00",
+        "max_tx_value": "90.00",
         "expires_at_ms": 1745900000000
       },
       "spend_public_key": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016",
@@ -129,8 +129,8 @@
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
       "policy": {
-        "max_balance": "400",
-        "max_tx_value": "110",
+        "max_balance": "400.00",
+        "max_tx_value": "110.00",
         "expires_at_ms": 1745900000000
       },
       "spend_public_key": "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99",
