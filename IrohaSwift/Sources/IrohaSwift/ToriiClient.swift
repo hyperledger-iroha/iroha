@@ -9484,14 +9484,21 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> ToriiJSONValue {
+        let data = try await requestOfflineTransferProofData(requestBody)
+        return try decodeJSON(ToriiJSONValue.self, from: data)
+    }
+
+    /// Returns the raw JSON bytes from the Torii proof endpoint, preserving
+    /// the original Iroha JSON format (important for ``norito::json`` parsing
+    /// in the native bridge).
+    public func requestOfflineTransferProofData(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> Data {
         let encoder = JSONEncoder()
         let body = try encoder.encode(requestBody)
         let request = try makeRequest(path: "/v1/offline/transfers/proof",
                                       method: .post,
                                       body: body,
                                       headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiJSONValue.self, from: data)
+        return try await data(for: request)
     }
 
     public func getConnectStatus() async throws -> ToriiConnectStatusSnapshot? {

@@ -8856,6 +8856,9 @@ pub struct Offline {
     /// Optional list of DER-encoded Android trust anchor files used to supplement the built-in roots.
     #[config(default)]
     pub android_trust_anchor_files: Vec<PathBuf>,
+    /// Skip platform attestation verification (for local testing only).
+    #[config(default = "defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION")]
+    pub skip_platform_attestation: bool,
 }
 
 impl Default for Offline {
@@ -8872,6 +8875,7 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             android_trust_anchor_files: Vec::new(),
+            skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
         }
     }
 }
@@ -9100,6 +9104,7 @@ impl Offline {
             escrow_required,
             escrow_accounts,
             android_trust_anchor_files,
+            skip_platform_attestation,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -9179,6 +9184,7 @@ impl Offline {
             escrow_required,
             escrow_accounts: escrow_bindings,
             android_trust_anchors: anchors,
+            skip_platform_attestation,
         }
     }
 }

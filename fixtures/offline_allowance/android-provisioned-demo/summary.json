@@ -1,6 +1,6 @@
 {
   "label": "android-provisioned-demo",
-  "certificate_id_hex": "D5FDC91DBA22540DEF5C5F04B1CEE107E1D9E767D9845CBDED23531616986F3D",
+  "certificate_id_hex": "B8349D4BC905F0F551C645BE075A361DB8E3342A16BA90E705B86037D3975EBF",
   "controller": "34mSYnDgbaJM58rbLoif4Tkp7G8SqQ5XH3c7btPpdLLiXrvtptbDi71W6jGmCDP5NxTDbMbwx",
   "allowance_asset": "xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8SqQ5XH3c7btPpdLLiXrvtptbDi71W6jGmCDP5NxTDbMbwx",
   "allowance_amount": "200.00",

@@ -147,6 +147,8 @@ final class ProofAttachmentNoritoTests: XCTestCase {
         return out
     }
 
+    /// Encode Vec<u8> as flat blob: [u64 count][raw bytes].
+    /// Rust Vec<u8> NoritoSerialize has a special case that writes bytes flat.
     private func encodeBytesVec(_ bytes: Data) -> Data {
         var out = Data()
         out.append(u64le(UInt64(bytes.count)))
