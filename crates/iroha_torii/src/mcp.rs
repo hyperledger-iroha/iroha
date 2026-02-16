@@ -1,0 +1,1177 @@
+//! Native MCP endpoint support for Torii.
+//!
+//! This module exposes a lightweight JSON-RPC bridge that maps MCP tool calls to
+//! existing Torii HTTP routes. Tool definitions are derived from Torii's OpenAPI
+//! document so the MCP surface tracks the documented API.
+
+use std::fmt::Write as _;
+
+use axum::{
+    body::Body,
+    http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode, header},
+    response::Response,
+};
+use base64::Engine as _;
+use http_body_util::BodyExt as _;
+use norito::json::{self, Map, Value};
+use tower::ServiceExt as _;
+
+use crate::{SharedAppState, limits, openapi};
+
+const JSONRPC_VERSION: &str = "2.0";
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+
+const JSONRPC_PARSE_ERROR: i64 = -32700;
+const JSONRPC_INVALID_REQUEST: i64 = -32600;
+const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+const JSONRPC_INVALID_PARAMS: i64 = -32602;
+const JSONRPC_INTERNAL_ERROR: i64 = -32603;
+const MCP_TOOL_EXECUTION_ERROR: i64 = -32001;
+const MCP_RATE_LIMITED: i64 = -32029;
+
+const HEADER_X_API_TOKEN: &str = "x-api-token";
+const HEADER_X_IROHA_ACCOUNT: &str = "x-iroha-account";
+const HEADER_X_IROHA_SIGNATURE: &str = "x-iroha-signature";
+const HEADER_X_IROHA_API_VERSION: &str = "x-iroha-api-version";
+const HEADER_X_FORWARDED_PROTO: &str = "x-forwarded-proto";
+
+/// OpenAPI-derived tool metadata used for MCP dispatch.
+#[derive(Debug, Clone)]
+pub(crate) struct ToolSpec {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) method: Method,
+    pub(crate) path_template: String,
+    pub(crate) input_schema: Value,
+}
+
+impl ToolSpec {
+    pub(crate) fn descriptor(&self) -> Value {
+        let mut obj = Map::new();
+        obj.insert("name".into(), Value::String(self.name.clone()));
+        obj.insert(
+            "description".into(),
+            Value::String(self.description.clone()),
+        );
+        obj.insert("inputSchema".into(), self.input_schema.clone());
+        Value::Object(obj)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParameterInfo {
+    name: String,
+    location: String,
+    required: bool,
+}
+
+/// Build the MCP tool registry from OpenAPI operations.
+pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp) -> Vec<ToolSpec> {
+    let mut tools = Vec::new();
+    let spec = openapi::generate_spec();
+    let Some(paths) = spec.get("paths").and_then(Value::as_object) else {
+        return tools;
+    };
+
+    for (path, path_item) in paths {
+        let Some(path_map) = path_item.as_object() else {
+            continue;
+        };
+
+        let path_parameters = parse_parameters(path_map.get("parameters"));
+
+        for method_key in ["get", "post", "put", "patch", "delete", "head", "options"] {
+            let Some(operation) = path_map.get(method_key).and_then(Value::as_object) else {
+                continue;
+            };
+            let Some(method) = method_from_key(method_key) else {
+                continue;
+            };
+            if should_skip_operation(path, operation, cfg.expose_operator_routes) {
+                continue;
+            }
+
+            let operation_id = operation
+                .get("operationId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| fallback_operation_id(method_key, path));
+            let description = operation
+                .get("summary")
+                .and_then(Value::as_str)
+                .or_else(|| operation.get("description").and_then(Value::as_str))
+                .unwrap_or("Torii API operation")
+                .to_owned();
+
+            let mut parameters = path_parameters.clone();
+            parameters.extend(parse_parameters(operation.get("parameters")));
+            let input_schema =
+                build_input_schema(path, &parameters, operation.get("requestBody").is_some());
+
+            tools.push(ToolSpec {
+                name: format!("torii.{operation_id}"),
+                description,
+                method,
+                path_template: path.clone(),
+                input_schema,
+            });
+        }
+    }
+
+    tools.push(connect_ws_ticket_tool());
+    tools.push(connect_session_create_tool());
+    tools.push(connect_session_delete_tool());
+    tools.push(connect_status_tool());
+
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    tools
+}
+
+pub(crate) fn capabilities_payload(tool_count: usize) -> Value {
+    let mut server_info = Map::new();
+    server_info.insert("name".into(), Value::String("iroha-torii-mcp".to_owned()));
+    server_info.insert("version".into(), Value::String("0.0.0-dev".to_owned()));
+
+    let mut tools = Map::new();
+    tools.insert("listChanged".into(), Value::Bool(false));
+    tools.insert("count".into(), Value::from(tool_count as u64));
+
+    let mut capabilities = Map::new();
+    capabilities.insert("tools".into(), Value::Object(tools));
+
+    let mut out = Map::new();
+    out.insert(
+        "protocolVersion".into(),
+        Value::String(MCP_PROTOCOL_VERSION.to_owned()),
+    );
+    out.insert("serverInfo".into(), Value::Object(server_info));
+    out.insert("capabilities".into(), Value::Object(capabilities));
+    Value::Object(out)
+}
+
+pub(crate) fn jsonrpc_invalid_request(message: &str) -> Value {
+    jsonrpc_error_response(None, JSONRPC_INVALID_REQUEST, message, None)
+}
+
+pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
+    jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, message, None)
+}
+
+pub(crate) fn jsonrpc_rate_limited() -> Value {
+    jsonrpc_error_response(
+        None,
+        MCP_RATE_LIMITED,
+        "mcp request rate limited",
+        Some(norito::json!({
+            "error": "rate_limited"
+        })),
+    )
+}
+
+/// Execute one MCP JSON-RPC request value.
+pub(crate) async fn handle_jsonrpc_request(
+    app: SharedAppState,
+    inbound_headers: &HeaderMap,
+    request: Value,
+) -> Value {
+    let Some(req_obj) = request.as_object() else {
+        return jsonrpc_invalid_request("request must be an object");
+    };
+    if req_obj
+        .get("jsonrpc")
+        .and_then(Value::as_str)
+        .is_some_and(|v| v != JSONRPC_VERSION)
+    {
+        return jsonrpc_error_response(
+            req_obj.get("id").cloned(),
+            JSONRPC_INVALID_REQUEST,
+            "jsonrpc must be \"2.0\"",
+            None,
+        );
+    }
+
+    let id = req_obj.get("id").cloned();
+    let Some(method) = req_obj.get("method").and_then(Value::as_str) else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_REQUEST,
+            "method must be a string",
+            None,
+        );
+    };
+    let params = req_obj
+        .get("params")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    match method {
+        "initialize" => jsonrpc_result_response(id, capabilities_payload(app.mcp_tools.len())),
+        "tools/list" => handle_tools_list(id, &app, &params),
+        "tools/call" => handle_tools_call(id, app, inbound_headers, &params).await,
+        _ => jsonrpc_error_response(
+            id,
+            JSONRPC_METHOD_NOT_FOUND,
+            "method not found",
+            Some(norito::json!({ "method": method })),
+        ),
+    }
+}
+
+fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
+    let start = params
+        .get("cursor")
+        .and_then(Value::as_str)
+        .and_then(|cursor| cursor.parse::<usize>().ok())
+        .unwrap_or(0);
+    let page_size = app.mcp.max_tools_per_list.max(1);
+    let end = start.saturating_add(page_size).min(app.mcp_tools.len());
+
+    let tools = app.mcp_tools[start..end]
+        .iter()
+        .map(ToolSpec::descriptor)
+        .collect::<Vec<_>>();
+    let next_cursor = if end < app.mcp_tools.len() {
+        Value::String(end.to_string())
+    } else {
+        Value::Null
+    };
+
+    jsonrpc_result_response(
+        id,
+        norito::json!({
+            "tools": tools,
+            "nextCursor": next_cursor
+        }),
+    )
+}
+
+async fn handle_tools_call(
+    id: Option<Value>,
+    app: SharedAppState,
+    inbound_headers: &HeaderMap,
+    params: &Map,
+) -> Value {
+    let Some(name) = params.get("name").and_then(Value::as_str) else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tools/call params.name must be a string",
+            None,
+        );
+    };
+    let arguments = params
+        .get("arguments")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let tool_result = match name {
+        "connect.ws.ticket" => build_connect_ws_ticket(&arguments, inbound_headers)
+            .map(mcp_tool_success)
+            .unwrap_or_else(mcp_tool_error),
+        "connect.session.create" => {
+            match dispatch_connect_session_create(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "connect.session.delete" => {
+            match dispatch_connect_session_delete(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "connect.status" => {
+            match dispatch_connect_status(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        _ => match app.mcp_tools.iter().find(|tool| tool.name == name) {
+            Some(tool) => {
+                match dispatch_openapi_tool(&app, inbound_headers, tool, &arguments).await {
+                    Ok(result) => mcp_tool_success(result),
+                    Err(err) => mcp_tool_error(err),
+                }
+            }
+            None => {
+                return jsonrpc_error_response(
+                    id,
+                    JSONRPC_INVALID_PARAMS,
+                    "tool not found",
+                    Some(norito::json!({ "name": name })),
+                );
+            }
+        },
+    };
+
+    jsonrpc_result_response(id, tool_result)
+}
+
+fn mcp_tool_success(structured: Value) -> Value {
+    norito::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": "ok"
+            }
+        ],
+        "isError": false,
+        "structuredContent": structured
+    })
+}
+
+fn mcp_tool_error(message: String) -> Value {
+    norito::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": message
+            }
+        ],
+        "isError": true
+    })
+}
+
+fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value {
+    let mut obj = Map::new();
+    obj.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
+    obj.insert("id".into(), id.unwrap_or(Value::Null));
+    obj.insert("result".into(), result);
+    Value::Object(obj)
+}
+
+fn jsonrpc_error_response(
+    id: Option<Value>,
+    code: i64,
+    message: &str,
+    data: Option<Value>,
+) -> Value {
+    let mut err = Map::new();
+    err.insert("code".into(), Value::from(code));
+    err.insert("message".into(), Value::String(message.to_owned()));
+    if let Some(data) = data {
+        err.insert("data".into(), data);
+    }
+    let mut obj = Map::new();
+    obj.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
+    obj.insert("id".into(), id.unwrap_or(Value::Null));
+    obj.insert("error".into(), Value::Object(err));
+    Value::Object(obj)
+}
+
+fn parse_parameters(value: Option<&Value>) -> Vec<ParameterInfo> {
+    let Some(array) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    array
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|param| {
+            let name = param.get("name").and_then(Value::as_str)?;
+            let location = param.get("in").and_then(Value::as_str)?;
+            let required = param
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Some(ParameterInfo {
+                name: name.to_owned(),
+                location: location.to_owned(),
+                required,
+            })
+        })
+        .collect()
+}
+
+fn build_input_schema(path: &str, parameters: &[ParameterInfo], has_request_body: bool) -> Value {
+    let mut path_props = Map::new();
+    let mut path_required = Vec::new();
+    let mut query_props = Map::new();
+    let mut header_props = Map::new();
+
+    for param in parameters {
+        match param.location.as_str() {
+            "path" => {
+                path_props.insert(param.name.clone(), string_schema());
+                if param.required || path.contains(&format!("{{{}}}", param.name)) {
+                    path_required.push(Value::String(param.name.clone()));
+                }
+            }
+            "query" => {
+                query_props.insert(param.name.clone(), string_schema());
+            }
+            "header" => {
+                header_props.insert(param.name.clone(), string_schema());
+            }
+            _ => {}
+        }
+    }
+
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+
+    if !path_props.is_empty() {
+        let mut path_schema = Map::new();
+        path_schema.insert("type".into(), Value::String("object".to_owned()));
+        path_schema.insert("properties".into(), Value::Object(path_props));
+        path_schema.insert("additionalProperties".into(), Value::Bool(false));
+        if !path_required.is_empty() {
+            path_schema.insert("required".into(), Value::Array(path_required));
+        }
+        properties.insert("path".into(), Value::Object(path_schema));
+        required.push(Value::String("path".to_owned()));
+    }
+
+    if !query_props.is_empty() {
+        let mut query_schema = Map::new();
+        query_schema.insert("type".into(), Value::String("object".to_owned()));
+        query_schema.insert("properties".into(), Value::Object(query_props));
+        query_schema.insert("additionalProperties".into(), Value::Bool(false));
+        properties.insert("query".into(), Value::Object(query_schema));
+    }
+
+    if !header_props.is_empty() {
+        let mut headers_schema = Map::new();
+        headers_schema.insert("type".into(), Value::String("object".to_owned()));
+        headers_schema.insert("properties".into(), Value::Object(header_props));
+        headers_schema.insert("additionalProperties".into(), Value::Bool(true));
+        properties.insert("headers".into(), Value::Object(headers_schema));
+    } else {
+        properties.insert(
+            "headers".into(),
+            norito::json!({
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+            }),
+        );
+    }
+
+    if has_request_body {
+        properties.insert(
+            "body".into(),
+            norito::json!({
+                "description": "Request body payload. JSON values are encoded as application/json unless `content_type` overrides it."
+            }),
+        );
+        properties.insert(
+            "body_base64".into(),
+            norito::json!({
+                "type": "string",
+                "description": "Base64-encoded request body payload for binary formats."
+            }),
+        );
+    }
+
+    properties.insert("content_type".into(), string_schema());
+    properties.insert("accept".into(), string_schema());
+
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("object".to_owned()));
+    schema.insert("properties".into(), Value::Object(properties));
+    schema.insert("additionalProperties".into(), Value::Bool(false));
+    if !required.is_empty() {
+        schema.insert("required".into(), Value::Array(required));
+    }
+    Value::Object(schema)
+}
+
+fn string_schema() -> Value {
+    norito::json!({ "type": "string" })
+}
+
+fn method_from_key(key: &str) -> Option<Method> {
+    match key {
+        "get" => Some(Method::GET),
+        "post" => Some(Method::POST),
+        "put" => Some(Method::PUT),
+        "patch" => Some(Method::PATCH),
+        "delete" => Some(Method::DELETE),
+        "head" => Some(Method::HEAD),
+        "options" => Some(Method::OPTIONS),
+        _ => None,
+    }
+}
+
+fn should_skip_operation(path: &str, operation: &Map, expose_operator_routes: bool) -> bool {
+    if matches!(
+        path,
+        "/events" | "/block/stream" | "/p2p" | "/v1/connect/ws" | "/v1/mcp"
+    ) {
+        return true;
+    }
+    if path.ends_with("/sse") {
+        return true;
+    }
+    if path.starts_with("/openapi") {
+        return true;
+    }
+    if !expose_operator_routes {
+        let has_operator_tag =
+            operation
+                .get("tags")
+                .and_then(Value::as_array)
+                .is_some_and(|tags| {
+                    tags.iter()
+                        .filter_map(Value::as_str)
+                        .any(|tag| tag == "OperatorAuth")
+                });
+        if has_operator_tag || path.starts_with("/v1/operator/") {
+            return true;
+        }
+    }
+    false
+}
+
+fn fallback_operation_id(method: &str, path: &str) -> String {
+    let mut out = String::new();
+    out.push_str(method);
+    out.push('_');
+    for c in path.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_owned()
+}
+
+async fn dispatch_openapi_tool(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    tool: &ToolSpec,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let route = fill_path_template(&tool.path_template, arguments.get("path"))?;
+    let route = append_query(route, arguments.get("query"))?;
+    let (body, content_type) = build_request_body(arguments)?;
+    let accept = arguments
+        .get("accept")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    dispatch_route(
+        app,
+        inbound_headers,
+        tool.method.clone(),
+        route.as_str(),
+        arguments.get("headers"),
+        body,
+        content_type,
+        accept,
+    )
+    .await
+}
+
+async fn dispatch_connect_session_create(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = arguments
+        .get("body")
+        .cloned()
+        .unwrap_or_else(|| norito::json!({}));
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/connect/session",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_connect_session_delete(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let sid = arguments
+        .get("sid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`sid` is required".to_owned())?;
+    let mut path = String::from("/v1/connect/session/");
+    path.push_str(&urlencoding::encode(sid));
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::DELETE,
+        path.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_connect_status(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/connect/status",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_route(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    method: Method,
+    path_and_query: &str,
+    extra_headers: Option<&Value>,
+    body: Vec<u8>,
+    content_type: Option<String>,
+    accept: Option<String>,
+) -> Result<Value, String> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path_and_query)
+        .body(Body::from(body))
+        .map_err(|err| format!("build request: {err}"))?;
+
+    {
+        let headers = request.headers_mut();
+        forward_auth_headers(headers, inbound_headers);
+        apply_extra_headers(headers, extra_headers)?;
+        if let Some(accept_value) = accept {
+            let value = HeaderValue::from_str(&accept_value)
+                .map_err(|err| format!("invalid accept header: {err}"))?;
+            headers.insert(header::ACCEPT, value);
+        }
+        if let Some(content_type_value) = content_type {
+            let value = HeaderValue::from_str(&content_type_value)
+                .map_err(|err| format!("invalid content_type header: {err}"))?;
+            headers.insert(header::CONTENT_TYPE, value);
+        }
+        headers.insert(
+            HeaderName::from_static(limits::REMOTE_ADDR_HEADER),
+            HeaderValue::from_static("127.0.0.1"),
+        );
+    }
+
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+
+    let router = {
+        let guard = app
+            .mcp_dispatch_router
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard
+            .clone()
+            .ok_or_else(|| "mcp router unavailable".to_owned())?
+    };
+
+    let response = router
+        .with_state(app.clone())
+        .oneshot(request)
+        .await
+        .map_err(|err| format!("dispatch failed: {err}"))?;
+    response_to_value(response).await
+}
+
+fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
+    if let Some(encoded) = arguments.get("body_base64").and_then(Value::as_str) {
+        let bytes = decode_base64_any(encoded)
+            .ok_or_else(|| "body_base64 must be valid base64/base64url".to_owned())?;
+        let content_type = arguments
+            .get("content_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| Some(crate::utils::NORITO_MIME_TYPE.to_owned()));
+        return Ok((bytes, content_type));
+    }
+
+    if let Some(body_value) = arguments.get("body") {
+        let bytes = json::to_vec(body_value).map_err(|err| format!("encode body: {err}"))?;
+        let content_type = arguments
+            .get("content_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| Some("application/json".to_owned()));
+        return Ok((bytes, content_type));
+    }
+
+    Ok((Vec::new(), None))
+}
+
+fn decode_base64_any(input: &str) -> Option<Vec<u8>> {
+    base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .ok()
+        .or_else(|| base64::engine::general_purpose::URL_SAFE.decode(input).ok())
+        .or_else(|| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(input)
+                .ok()
+        })
+}
+
+fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<String, String> {
+    let args = path_args
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = String::with_capacity(path_template.len() + 16);
+    let mut chars = path_template.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '{' {
+            out.push(ch);
+            continue;
+        }
+        let mut key = String::new();
+        while let Some(next) = chars.next() {
+            if next == '}' {
+                break;
+            }
+            key.push(next);
+        }
+        if key.is_empty() {
+            return Err("invalid path template placeholder".to_owned());
+        }
+        let value = args
+            .get(&key)
+            .and_then(value_to_string)
+            .ok_or_else(|| format!("missing required path argument `{key}`"))?;
+        out.push_str(&urlencoding::encode(&value));
+    }
+
+    Ok(out)
+}
+
+fn append_query(path: String, query: Option<&Value>) -> Result<String, String> {
+    let Some(map) = query.and_then(Value::as_object) else {
+        return Ok(path);
+    };
+    if map.is_empty() {
+        return Ok(path);
+    }
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (key, value) in map {
+        if value.is_null() {
+            continue;
+        }
+        let value =
+            value_to_string(value).ok_or_else(|| format!("invalid query value for `{key}`"))?;
+        serializer.append_pair(key, &value);
+    }
+    let encoded = serializer.finish();
+    if encoded.is_empty() {
+        return Ok(path);
+    }
+    Ok(format!("{path}?{encoded}"))
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    if let Some(s) = value.as_str() {
+        return Some(s.to_owned());
+    }
+    if let Some(i) = value.as_i64() {
+        return Some(i.to_string());
+    }
+    if let Some(u) = value.as_u64() {
+        return Some(u.to_string());
+    }
+    if let Some(f) = value.as_f64() {
+        return Some(f.to_string());
+    }
+    if let Some(b) = value.as_bool() {
+        return Some(b.to_string());
+    }
+    json::to_string(value).ok()
+}
+
+fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
+    for header_name in [
+        header::AUTHORIZATION,
+        HeaderName::from_static(HEADER_X_API_TOKEN),
+        HeaderName::from_static(HEADER_X_IROHA_ACCOUNT),
+        HeaderName::from_static(HEADER_X_IROHA_SIGNATURE),
+        HeaderName::from_static(HEADER_X_IROHA_API_VERSION),
+    ] {
+        if let Some(value) = inbound.get(&header_name) {
+            out.insert(header_name, value.clone());
+        }
+    }
+}
+
+fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(), String> {
+    let Some(headers_obj) = value.and_then(Value::as_object) else {
+        return Ok(());
+    };
+
+    for (raw_name, raw_value) in headers_obj {
+        let lowered = raw_name.to_ascii_lowercase();
+        if lowered == "content-length" || lowered == "host" || lowered == "connection" {
+            continue;
+        }
+        let header_name: HeaderName = raw_name
+            .parse()
+            .map_err(|err| format!("invalid header name `{raw_name}`: {err}"))?;
+        let header_value = value_to_string(raw_value)
+            .ok_or_else(|| format!("invalid header value for `{raw_name}`"))?;
+        let header_value = HeaderValue::from_str(&header_value)
+            .map_err(|err| format!("invalid header value for `{raw_name}`: {err}"))?;
+        out.insert(header_name, header_value);
+    }
+    Ok(())
+}
+
+async fn response_to_value(response: Response) -> Result<Value, String> {
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body_bytes = response
+        .into_body()
+        .collect()
+        .await
+        .map_err(|err| format!("read response body: {err}"))?
+        .to_bytes();
+
+    let headers_value = headers_to_value(&headers);
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let body_value = decode_response_body(&body_bytes, content_type.as_deref());
+
+    let mut structured = Map::new();
+    structured.insert("status".into(), Value::from(u64::from(status.as_u16())));
+    structured.insert("headers".into(), headers_value);
+    structured.insert(
+        "content_type".into(),
+        content_type.map(Value::String).unwrap_or(Value::Null),
+    );
+    structured.insert("body".into(), body_value);
+
+    Ok(Value::Object(structured))
+}
+
+fn headers_to_value(headers: &HeaderMap) -> Value {
+    let mut out = Map::new();
+    for (name, value) in headers {
+        if let Ok(as_str) = value.to_str() {
+            out.insert(name.as_str().to_owned(), Value::String(as_str.to_owned()));
+        }
+    }
+    Value::Object(out)
+}
+
+fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> Value {
+    if bytes.is_empty() {
+        return Value::Null;
+    }
+    if content_type.is_some_and(|ct| ct.to_ascii_lowercase().contains("json"))
+        && let Ok(value) = json::from_slice::<Value>(bytes)
+    {
+        return value;
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Value::String(text.to_owned());
+    }
+    Value::String(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Result<Value, String> {
+    let sid = arguments
+        .get("sid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`sid` is required".to_owned())?;
+    let role = arguments
+        .get("role")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`role` is required".to_owned())?;
+    if role != "app" && role != "wallet" {
+        return Err("`role` must be `app` or `wallet`".to_owned());
+    }
+    let token = arguments
+        .get("token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`token` is required".to_owned())?;
+    let node = arguments
+        .get("node_url")
+        .or_else(|| arguments.get("node"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| infer_node_url(inbound_headers));
+
+    let mut url = parse_node_url(&node)?;
+    url.set_path("/v1/connect/ws");
+    {
+        let mut query = url.query_pairs_mut();
+        query.clear();
+        query.append_pair("sid", sid);
+        query.append_pair("role", role);
+    }
+
+    let protocol_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token.as_bytes());
+
+    Ok(norito::json!({
+        "ws_url": (url.to_string()),
+        "authorization_header": (format!("Bearer {token}")),
+        "sec_websocket_protocol": (format!("iroha-connect.token.v1.{protocol_token}"))
+    }))
+}
+
+fn infer_node_url(inbound_headers: &HeaderMap) -> String {
+    let host = inbound_headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("127.0.0.1:8080");
+    let proto = inbound_headers
+        .get(HEADER_X_FORWARDED_PROTO)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("http");
+    format!("{proto}://{host}")
+}
+
+fn parse_node_url(raw: &str) -> Result<url::Url, String> {
+    let parsed = if raw.contains("://") {
+        url::Url::parse(raw)
+    } else {
+        let mut with_scheme = String::from("http://");
+        with_scheme.push_str(raw);
+        url::Url::parse(&with_scheme)
+    }
+    .map_err(|err| format!("invalid node url `{raw}`: {err}"))?;
+
+    let mut url = parsed;
+    match url.scheme() {
+        "http" => {
+            url.set_scheme("ws")
+                .map_err(|_| "failed to convert http->ws".to_owned())?;
+        }
+        "https" => {
+            url.set_scheme("wss")
+                .map_err(|_| "failed to convert https->wss".to_owned())?;
+        }
+        "ws" | "wss" => {}
+        other => {
+            return Err(format!(
+                "unsupported node URL scheme `{other}`; expected http/https/ws/wss"
+            ));
+        }
+    }
+    Ok(url)
+}
+
+fn connect_ws_ticket_tool() -> ToolSpec {
+    ToolSpec {
+        name: "connect.ws.ticket".to_owned(),
+        description: "Build Connect WebSocket join metadata (URL + auth headers/protocol token)."
+            .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/connect/ws".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sid", "role", "token"],
+            "properties": {
+                "sid": { "type": "string" },
+                "role": { "type": "string", "enum": ["app", "wallet"] },
+                "token": { "type": "string" },
+                "node_url": { "type": "string", "description": "Optional node URL; defaults to Host/X-Forwarded-Proto from the MCP request." }
+            }
+        }),
+    }
+}
+
+fn connect_session_create_tool() -> ToolSpec {
+    ToolSpec {
+        name: "connect.session.create".to_owned(),
+        description: "Create an Iroha Connect session and return app/wallet tokens.".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/connect/session".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Connect session request body (requires `sid` in current Torii builds)."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn connect_session_delete_tool() -> ToolSpec {
+    ToolSpec {
+        name: "connect.session.delete".to_owned(),
+        description: "Delete/purge an Iroha Connect session by SID.".to_owned(),
+        method: Method::DELETE,
+        path_template: "/v1/connect/session/{sid}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sid"],
+            "properties": {
+                "sid": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn connect_status_tool() -> ToolSpec {
+    ToolSpec {
+        name: "connect.status".to_owned(),
+        description: "Get Iroha Connect relay/session status.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/connect/status".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+/// Build the HTTP status + JSON-RPC error payload for oversized requests.
+pub(crate) fn oversized_payload_response(max_request_bytes: usize) -> (StatusCode, Value) {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        jsonrpc_error_response(
+            None,
+            JSONRPC_INVALID_REQUEST,
+            "mcp request body exceeds configured size limit",
+            Some(norito::json!({
+                "max_request_bytes": max_request_bytes
+            })),
+        ),
+    )
+}
+
+/// Build the JSON-RPC payload for internal dispatch failures.
+pub(crate) fn internal_error_payload(message: &str) -> Value {
+    jsonrpc_error_response(
+        None,
+        MCP_TOOL_EXECUTION_ERROR,
+        message,
+        Some(norito::json!({
+            "kind": "dispatch_error"
+        })),
+    )
+}
+
+pub(crate) fn method_not_allowed_payload() -> Value {
+    jsonrpc_error_response(
+        None,
+        JSONRPC_METHOD_NOT_FOUND,
+        "only JSON-RPC over POST is supported",
+        None,
+    )
+}
+
+pub(crate) fn invalid_json_payload(err: &json::Error) -> Value {
+    let mut msg = String::from("invalid json payload: ");
+    let _ = write!(msg, "{err}");
+    jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, &msg, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_registry_skips_ws_and_sse_routes() {
+        let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        let tools = build_tool_specs(&cfg);
+        assert!(!tools.is_empty(), "tool registry must not be empty");
+        assert!(
+            tools.iter().all(
+                |tool| tool.path_template != "/events" && !tool.path_template.ends_with("/sse")
+            )
+        );
+        assert!(tools.iter().any(|tool| tool.name == "connect.ws.ticket"));
+    }
+
+    #[test]
+    fn fill_path_template_substitutes_required_values() {
+        let args = norito::json!({
+            "sid": "abc",
+            "role": "wallet"
+        });
+        let path =
+            fill_path_template("/v1/connect/session/{sid}/{role}", Some(&args)).expect("filled");
+        assert_eq!(path, "/v1/connect/session/abc/wallet");
+    }
+
+    #[test]
+    fn ws_ticket_uses_ws_url_and_protocol_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("node.example"));
+        let args = norito::json!({
+            "sid": "Z2Fr",
+            "role": "app",
+            "token": "my-token"
+        });
+        let ticket =
+            build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
+        let ws_url = ticket
+            .get("ws_url")
+            .and_then(Value::as_str)
+            .expect("ws url");
+        assert!(ws_url.starts_with("ws://node.example/v1/connect/ws?"));
+        assert_eq!(
+            ticket
+                .get("sec_websocket_protocol")
+                .and_then(Value::as_str)
+                .expect("protocol"),
+            "iroha-connect.token.v1.bXktdG9rZW4"
+        );
+    }
+}

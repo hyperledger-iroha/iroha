@@ -1725,6 +1725,22 @@ pub mod torii {
             }
         }
     }
+
+    /// MCP endpoint defaults surfaced via `torii.mcp`.
+    pub mod mcp {
+        /// Enable native Torii MCP server.
+        pub const ENABLED: bool = false;
+        /// Maximum accepted MCP request payload size (bytes).
+        pub const MAX_REQUEST_BYTES: usize = 1_048_576; // 1 MiB
+        /// Maximum number of tools returned per `tools/list` response page.
+        pub const MAX_TOOLS_PER_LIST: usize = 500;
+        /// Expose operator-only routes in the MCP registry.
+        pub const EXPOSE_OPERATOR_ROUTES: bool = false;
+        /// Optional steady-state MCP request budget (requests/minute). None disables.
+        pub const RATE_PER_MINUTE: Option<u32> = Some(240);
+        /// Optional MCP request burst budget.
+        pub const BURST: Option<u32> = Some(120);
+    }
     /// Default poll interval (seconds) for Taikai anchor uploads.
     pub const DA_TAIKAI_ANCHOR_POLL_INTERVAL_SECS: u64 = 30;
     /// ISO 20022 bridge disabled by default.

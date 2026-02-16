@@ -4659,6 +4659,8 @@ pub struct Torii {
     pub sorafs_por: SorafsPor,
     /// Transport-specific configuration (Norito-RPC rollout, streaming knobs).
     pub transport: ToriiTransport,
+    /// Native MCP endpoint configuration.
+    pub mcp: ToriiMcp,
     /// Proof endpoint DoS/backpressure policy.
     pub proof_api: ProofApi,
     /// Optional UAID onboarding authority configuration.
@@ -4957,6 +4959,23 @@ pub struct ToriiTransport {
     pub norito_rpc: NoritoRpcTransport,
 }
 
+/// Native MCP configuration exposed by Torii.
+#[derive(Debug, Clone, Copy)]
+pub struct ToriiMcp {
+    /// Master enable switch for `/v1/mcp`.
+    pub enabled: bool,
+    /// Maximum accepted request payload size in bytes.
+    pub max_request_bytes: usize,
+    /// Maximum number of tools emitted in one `tools/list` response page.
+    pub max_tools_per_list: usize,
+    /// Expose operator-only routes in the MCP tool registry.
+    pub expose_operator_routes: bool,
+    /// Optional steady-state MCP request budget (requests per minute).
+    pub rate_per_minute: Option<NonZeroU32>,
+    /// Optional MCP burst budget.
+    pub burst: Option<NonZeroU32>,
+}
+
 /// Norito-RPC transport configuration (stage, allowlist, toggles).
 #[derive(Debug, Clone)]
 pub struct NoritoRpcTransport {
@@ -5020,6 +5039,38 @@ impl From<user::ToriiTransport> for ToriiTransport {
     fn from(value: user::ToriiTransport) -> Self {
         Self {
             norito_rpc: value.norito_rpc.into(),
+        }
+    }
+}
+
+impl Default for ToriiMcp {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::mcp::ENABLED,
+            max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
+            max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,
+            rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE.and_then(NonZeroU32::new),
+            burst: defaults::torii::mcp::BURST.and_then(NonZeroU32::new),
+        }
+    }
+}
+
+impl From<user::ToriiMcp> for ToriiMcp {
+    fn from(value: user::ToriiMcp) -> Self {
+        Self {
+            enabled: value.enabled,
+            max_request_bytes: value.max_request_bytes.max(1),
+            max_tools_per_list: value.max_tools_per_list.max(1),
+            expose_operator_routes: value.expose_operator_routes,
+            rate_per_minute: value
+                .rate_per_minute
+                .or(defaults::torii::mcp::RATE_PER_MINUTE)
+                .and_then(NonZeroU32::new),
+            burst: value
+                .burst
+                .or(defaults::torii::mcp::BURST)
+                .and_then(NonZeroU32::new),
         }
     }
 }

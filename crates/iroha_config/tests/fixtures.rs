@@ -926,6 +926,18 @@ fn minimal_config_snapshot() {
                         stage: Disabled,
                     },
                 },
+                mcp: ToriiMcp {
+                    enabled: false,
+                    max_request_bytes: 1048576,
+                    max_tools_per_list: 500,
+                    expose_operator_routes: false,
+                    rate_per_minute: Some(
+                        240,
+                    ),
+                    burst: Some(
+                        120,
+                    ),
+                },
                 proof_api: ProofApi {
                     rate_per_minute: Some(
                         120,

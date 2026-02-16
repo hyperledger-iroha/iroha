@@ -309,6 +309,7 @@ pub mod filter;
 mod gov;
 mod iso20022_bridge;
 mod limits;
+mod mcp;
 #[cfg(feature = "tx_predicates")]
 mod predicates;
 mod router;
@@ -761,6 +762,10 @@ struct AppState {
     high_load_tx_threshold: usize,
     high_load_stream_tx_threshold: usize,
     high_load_subscription_tx_threshold: usize,
+    mcp: iroha_config::parameters::actual::ToriiMcp,
+    mcp_rate_limiter: limits::RateLimiter,
+    mcp_tools: Arc<Vec<mcp::ToolSpec>>,
+    mcp_dispatch_router: std::sync::RwLock<Option<axum::Router<std::sync::Arc<AppState>>>>,
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     online_peers: OnlinePeersProvider,
@@ -13066,6 +13071,8 @@ pub struct Torii {
     preauth_gate: Arc<limits::PreAuthGate>,
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
+    mcp: iroha_config::parameters::actual::ToriiMcp,
+    mcp_rate_limiter: limits::RateLimiter,
     require_api_token: bool,
     api_tokens_set: std::sync::Arc<std::collections::HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
@@ -13856,6 +13863,21 @@ impl Torii {
                     iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
                     get(handler_proof_retention_status),
                 )
+        });
+    }
+
+    /// Native MCP capability and JSON-RPC bridge routes.
+    fn add_mcp_routes(&self, builder: &mut RouterBuilder) {
+        builder.apply(|router| {
+            if !self.mcp.enabled {
+                return router;
+            }
+
+            let mcp_router = Router::new().route(
+                "/v1/mcp",
+                get(handler_mcp_capabilities).post(handler_mcp_jsonrpc),
+            );
+            router.merge(mcp_router)
         });
     }
 
@@ -14759,6 +14781,13 @@ impl Torii {
                 .deploy_burst_per_origin
                 .map(std::num::NonZeroU32::get),
         );
+        let mcp_rate_per_sec = config.mcp.rate_per_minute.map(|rate| {
+            let per_minute = rate.get();
+            let per_sec = per_minute.div_ceil(60);
+            per_sec.max(1)
+        });
+        let mcp_burst = config.mcp.burst.map(std::num::NonZeroU32::get);
+        let mcp_rate_limiter = limits::RateLimiter::new(mcp_rate_per_sec, mcp_burst);
         let proof_rate_per_sec = config.proof_api.rate_per_minute.map(|rate| {
             let per_minute = rate.get();
             let per_sec = per_minute.div_ceil(60);
@@ -15047,6 +15076,8 @@ impl Torii {
             preauth_gate,
             fee_policy,
             norito_rpc: config.transport.norito_rpc.clone(),
+            mcp: config.mcp,
+            mcp_rate_limiter,
             require_api_token: config.require_api_token,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,
@@ -15249,6 +15280,11 @@ impl Torii {
         let zk_ivm_prove_inflight =
             Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_max_inflight));
         let zk_ivm_prove_inflight_total = zk_ivm_prove_max_inflight;
+        let mcp_tools = Arc::new(if self.mcp.enabled {
+            mcp::build_tool_specs(&self.mcp)
+        } else {
+            Vec::new()
+        });
 
         let app_state: SharedAppState = Arc::new(AppState {
             events: self.events.clone(),
@@ -15279,6 +15315,10 @@ impl Torii {
             preauth_gate: self.preauth_gate.clone(),
             queue: self.queue.clone(),
             pipeline_status_cache: self.pipeline_status_cache.clone(),
+            mcp: self.mcp,
+            mcp_rate_limiter: self.mcp_rate_limiter.clone(),
+            mcp_tools: mcp_tools.clone(),
+            mcp_dispatch_router: std::sync::RwLock::new(None),
             fee_policy: self.fee_policy.clone(),
             norito_rpc: self.norito_rpc.clone(),
             high_load_tx_threshold: self.high_load_tx_threshold,
@@ -15387,6 +15427,12 @@ impl Torii {
         let _ = (&app_state.kiso, &app_state.online_peers);
         #[cfg(any(feature = "p2p_ws", feature = "connect"))]
         let _ = &app_state.p2p;
+        let _ = (
+            &app_state.mcp,
+            &app_state.mcp_rate_limiter,
+            &app_state.mcp_tools,
+            &app_state.mcp_dispatch_router,
+        );
         #[cfg(feature = "app_api")]
         let _ = (
             &app_state.sorafs_node,
@@ -15455,6 +15501,7 @@ impl Torii {
         // Signed Norito query and proof endpoints
         self.add_query_routes(&mut builder);
         self.add_proof_routes(&mut builder);
+        self.add_mcp_routes(&mut builder);
         // Streams and P2P websocket fallback
         self.add_network_stream_routes(&mut builder);
         // Policy and pipeline helpers
@@ -15499,6 +15546,14 @@ impl Torii {
                 app_state.clone(),
                 record_http_metrics,
             ));
+
+        {
+            let mut guard = app_state
+                .mcp_dispatch_router
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = Some(router.clone());
+        }
 
         router.with_state(app_state)
     }
@@ -15721,6 +15776,68 @@ async fn handler_openapi(
     }
 
     Ok(routing::handler_openapi_spec(axum::extract::State(app)).await)
+}
+
+/// GET /v1/mcp — expose MCP capabilities and tool-count metadata.
+async fn handler_mcp_capabilities(
+    State(app): State<SharedAppState>,
+) -> (StatusCode, JsonBody<norito::json::Value>) {
+    (
+        StatusCode::OK,
+        JsonBody(mcp::capabilities_payload(app.mcp_tools.len())),
+    )
+}
+
+/// POST /v1/mcp — execute native MCP JSON-RPC requests.
+async fn handler_mcp_jsonrpc(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: axum::http::Request<Body>,
+) -> (StatusCode, JsonBody<norito::json::Value>) {
+    let rate_key = limits::key_from_headers(&headers, None, Some("mcp"), app.require_api_token);
+    if !app.mcp_rate_limiter.allow(&rate_key).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            JsonBody(mcp::jsonrpc_rate_limited()),
+        );
+    }
+
+    let request_bytes =
+        match axum::body::to_bytes(request.into_body(), app.mcp.max_request_bytes).await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let (status, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
+                return (status, JsonBody(payload));
+            }
+        };
+
+    let payload = match norito::json::from_slice::<norito::json::Value>(&request_bytes) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                JsonBody(mcp::invalid_json_payload(&err)),
+            );
+        }
+    };
+
+    let response_payload = if let Some(batch) = payload.as_array() {
+        if batch.is_empty() {
+            mcp::jsonrpc_invalid_request("batch request must not be empty")
+        } else {
+            let mut responses = Vec::with_capacity(batch.len());
+            for request_value in batch {
+                let response =
+                    mcp::handle_jsonrpc_request(app.clone(), &headers, request_value.clone()).await;
+                responses.push(response);
+            }
+            norito::json::Value::Array(responses)
+        }
+    } else {
+        mcp::handle_jsonrpc_request(app, &headers, payload).await
+    };
+
+    (StatusCode::OK, JsonBody(response_payload))
 }
 
 #[cfg(feature = "app_api")]
@@ -17176,6 +17293,19 @@ pub(crate) mod tests_runtime_handlers {
         let zk_ivm_prove_inflight =
             Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_max_inflight));
         let zk_ivm_prove_inflight_total = zk_ivm_prove_max_inflight;
+        let mcp = iroha_config::parameters::actual::ToriiMcp::default();
+        let mcp_rate_per_sec = mcp.rate_per_minute.map(|rate| {
+            let per_minute = rate.get();
+            let per_sec = per_minute.div_ceil(60);
+            per_sec.max(1)
+        });
+        let mcp_burst = mcp.burst.map(std::num::NonZeroU32::get);
+        let mcp_rate_limiter = limits::RateLimiter::new(mcp_rate_per_sec, mcp_burst);
+        let mcp_tools = Arc::new(if mcp.enabled {
+            mcp::build_tool_specs(&mcp)
+        } else {
+            Vec::new()
+        });
 
         Arc::new(AppState {
             events,
@@ -17206,6 +17336,10 @@ pub(crate) mod tests_runtime_handlers {
             preauth_gate: Arc::new(limits::PreAuthGate::disabled()),
             queue,
             pipeline_status_cache,
+            mcp,
+            mcp_rate_limiter,
+            mcp_tools,
+            mcp_dispatch_router: std::sync::RwLock::new(None),
             fee_policy: FeePolicy::Disabled,
             norito_rpc: norito_rpc_cfg,
             high_load_tx_threshold: usize::MAX,

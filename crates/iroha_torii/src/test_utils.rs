@@ -462,6 +462,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             data_dir: defaults::torii::data_dir(),
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
+            mcp: A::ToriiMcp::default(),
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             query_rate_per_authority_per_sec: None,
