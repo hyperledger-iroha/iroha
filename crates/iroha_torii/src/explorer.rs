@@ -1420,6 +1420,36 @@ mod tests {
     }
 
     #[test]
+    fn network_metrics_json_serializes_valid_timestamp_once() {
+        let timestamp = "2026-02-16T17:14:37.843Z";
+        let dto = ExplorerNetworkMetricsDto {
+            peers: 4,
+            domains: 8,
+            accounts: 258,
+            assets: 17,
+            transactions_accepted: 405,
+            transactions_rejected: 61,
+            block: 422,
+            block_created_at: Some(timestamp.to_string()),
+            finalized_block: 422,
+            avg_commit_time: Some(ExplorerDurationDto { ms: 302 }),
+            avg_block_time: Some(ExplorerDurationDto { ms: 877_364 }),
+        };
+
+        let bytes = norito::json::to_vec(&dto).expect("metrics dto should serialize");
+        let encoded = String::from_utf8(bytes).expect("metrics payload should be utf-8");
+        assert!(
+            norito::json::from_str::<Value>(&encoded).is_ok(),
+            "serialized metrics json must be parseable"
+        );
+        assert_eq!(
+            encoded.matches(timestamp).count(),
+            1,
+            "timestamp should appear exactly once in serialized payload"
+        );
+    }
+
+    #[test]
     fn transaction_summary_reflects_status() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
         let tx = TransactionBuilder::new(chain, ALICE_ID.clone())

@@ -23,7 +23,7 @@ use tokio::{
 use tracing::{Instrument, info_span};
 use url::Url;
 
-use super::{GeoLocation, GeoLookupConfig, ToriiUrl};
+use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
 
 const DEFAULT_GEO_ENDPOINT: &str = "http://ip-api.com/json";
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
@@ -52,7 +52,7 @@ pub struct Metrics {
 
 #[derive(Clone, Debug)]
 pub enum Update {
-    Connected(Box<ConfigGetDTO>),
+    Connected(Box<PeerConfigSnapshot>),
     Disconnected,
     TelemetryUnsupported,
     Metrics(Metrics),
@@ -388,15 +388,83 @@ fn construct_geo_query(
     Ok(url)
 }
 
-async fn get_config_with_retry(torii_url: &ToriiUrl) -> ConfigGetDTO {
+fn is_missing_public_key_error(err: &norito::json::Error) -> bool {
+    let message = err.to_string();
+    message.contains("missing public_key") || message.contains("missing field `public_key`")
+}
+
+fn value_to_u32(value: &Value) -> Option<u32> {
+    value.as_u64().and_then(|raw| u32::try_from(raw).ok())
+}
+
+fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
+    let value: Value = json::from_slice(bytes)?;
+    let payload = value
+        .as_object()
+        .ok_or_else(|| eyre!("expected object payload"))?;
+
+    let queue = payload
+        .get("queue")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("missing queue object"))?;
+    let network = payload
+        .get("network")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("missing network object"))?;
+
+    let public_key = payload
+        .get("public_key")
+        .and_then(Value::as_str)
+        .and_then(|raw| PublicKey::from_str(raw).ok());
+
+    let queue_capacity = queue.get("capacity").and_then(value_to_u32);
+    let network_block_gossip_size = network.get("block_gossip_size").and_then(value_to_u32);
+    let network_block_gossip_period_ms = network
+        .get("block_gossip_period_ms")
+        .and_then(Value::as_u64);
+    let network_tx_gossip_size = network
+        .get("transaction_gossip_size")
+        .and_then(value_to_u32);
+    let network_tx_gossip_period_ms = network
+        .get("transaction_gossip_period_ms")
+        .and_then(Value::as_u64);
+
+    Ok(PeerConfigSnapshot {
+        public_key,
+        queue_capacity,
+        network_block_gossip_size,
+        network_block_gossip_period_ms,
+        network_tx_gossip_size,
+        network_tx_gossip_period_ms,
+    })
+}
+
+fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
+    match json::from_slice::<ConfigGetDTO>(bytes) {
+        Ok(config) => Ok(PeerConfigSnapshot::from(&config)),
+        Err(err) if is_missing_public_key_error(&err) => {
+            let legacy = decode_legacy_peer_config_payload(bytes).map_err(|fallback_err| {
+                eyre!(
+                    "failed to decode /configuration payload: {err}; legacy fallback failed: {fallback_err}"
+                )
+            })?;
+            iroha_logger::debug!(
+                "decoded /configuration payload without public_key using legacy fallback"
+            );
+            Ok(legacy)
+        }
+        Err(err) => Err(eyre!("failed to decode /configuration payload: {err}")),
+    }
+}
+
+async fn get_config_with_retry(torii_url: &ToriiUrl) -> PeerConfigSnapshot {
     let client = Client::new();
     let url = torii_url.0.join("/configuration").expect("valid url");
 
     let do_request = || async {
         let response = client.get(url.clone()).send().await?;
         let bytes = response.bytes().await?;
-        let config = json::from_slice(&bytes)
-            .map_err(|err| eyre!("failed to decode /configuration payload: {err}"))?;
+        let config = decode_peer_config_payload(&bytes)?;
         Ok::<_, Report>(config)
     };
 
@@ -771,5 +839,37 @@ mod tests {
 
         metrics_task.abort();
         server.abort();
+    }
+
+    #[test]
+    fn decode_peer_config_payload_accepts_legacy_without_public_key() {
+        let payload = br#"{
+            "queue": { "capacity": 512 },
+            "network": {
+                "block_gossip_size": 64,
+                "block_gossip_period_ms": 1500,
+                "transaction_gossip_size": 32,
+                "transaction_gossip_period_ms": 2500
+            }
+        }"#;
+
+        let decoded = decode_peer_config_payload(payload).expect("legacy payload should decode");
+        assert!(decoded.public_key.is_none());
+        assert_eq!(decoded.queue_capacity, Some(512));
+        assert_eq!(decoded.network_block_gossip_size, Some(64));
+        assert_eq!(decoded.network_block_gossip_period_ms, Some(1500));
+        assert_eq!(decoded.network_tx_gossip_size, Some(32));
+        assert_eq!(decoded.network_tx_gossip_period_ms, Some(2500));
+    }
+
+    #[test]
+    fn decode_peer_config_payload_rejects_invalid_legacy_shape() {
+        let payload = br#"{ "error": "unauthorized" }"#;
+        let err = decode_peer_config_payload(payload).expect_err("invalid shape should fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("missing queue object"),
+            "unexpected error: {message}"
+        );
     }
 }
