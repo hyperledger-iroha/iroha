@@ -7631,7 +7631,7 @@ mod aggregate_proof_tests {
         let delta_scalar = numeric_to_scalar(&claimed_delta);
         let expected_delta =
             RISTRETTO_BASEPOINT_POINT * delta_scalar + *pedersen_generator_h() * blind_sum;
-        let c_res = c_init - expected_delta;
+        let c_res = c_init + expected_delta;
         let resulting_commitment = c_res.compress().to_bytes().to_vec();
 
         let balance_proof = OfflineBalanceProof {
