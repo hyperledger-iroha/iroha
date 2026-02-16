@@ -121,7 +121,17 @@ const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64",
 
 #[cfg(feature = "telemetry")]
 fn json_value<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> norito::json::Value {
-    norito::json::to_value(value).expect("serialize json value")
+    match norito::json::to_value(value) {
+        Ok(value) => value,
+        Err(err) => {
+            // Telemetry must never crash node startup on malformed persisted payloads.
+            iroha_logger::warn!(
+                ?err,
+                "failed to serialize telemetry json value; emitting null"
+            );
+            norito::json::Value::Null
+        }
+    }
 }
 
 #[cfg(feature = "telemetry")]

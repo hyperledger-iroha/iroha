@@ -22,7 +22,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
-use norito::json::{self, JsonDeserialize, JsonSerialize, JsonSerialize as JsonSerializeTrait};
+use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "telemetry")]
@@ -148,7 +148,7 @@ enum SnapshotMerkleError {
     },
 }
 
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 struct SnapshotMerkleMetadata {
     /// Chunk size in bytes used to compute leaf digests.
     chunk_size_bytes: u64,
@@ -161,6 +161,89 @@ struct SnapshotMerkleMetadata {
 }
 
 impl SnapshotMerkleMetadata {
+    fn parse_error(message: impl Into<String>) -> SnapshotMerkleError {
+        SnapshotMerkleError::Parse(norito::json::Error::Message(message.into()))
+    }
+
+    fn expect_field<'a>(
+        map: &'a norito::json::Map,
+        field: &'static str,
+    ) -> Result<&'a norito::json::Value, SnapshotMerkleError> {
+        map.get(field)
+            .ok_or_else(|| SnapshotMerkleError::Parse(norito::json::Error::missing_field(field)))
+    }
+
+    fn parse_u64_field(
+        map: &norito::json::Map,
+        field: &'static str,
+    ) -> Result<u64, SnapshotMerkleError> {
+        let value = Self::expect_field(map, field)?;
+        if let Some(number) = value.as_u64() {
+            return Ok(number);
+        }
+        if let Some(raw) = value.as_str() {
+            return raw.parse::<u64>().map_err(|err| {
+                Self::parse_error(format!(
+                    "`{field}` must be a u64 (number or numeric string): {err}"
+                ))
+            });
+        }
+        Err(Self::parse_error(format!(
+            "`{field}` must be a u64 (number or numeric string)"
+        )))
+    }
+
+    fn parse_string_field(
+        map: &norito::json::Map,
+        field: &'static str,
+    ) -> Result<String, SnapshotMerkleError> {
+        let value = Self::expect_field(map, field)?;
+        value
+            .as_str()
+            .map(|raw| raw.to_owned())
+            .ok_or_else(|| Self::parse_error(format!("`{field}` must be a string")))
+    }
+
+    fn parse_string_vec_field(
+        map: &norito::json::Map,
+        field: &'static str,
+    ) -> Result<Vec<String>, SnapshotMerkleError> {
+        let value = Self::expect_field(map, field)?;
+        if let Some(array) = value.as_array() {
+            return array
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    item.as_str().map(|raw| raw.to_owned()).ok_or_else(|| {
+                        Self::parse_error(format!(
+                            "`{field}[{index}]` must be a string (hex digest)"
+                        ))
+                    })
+                })
+                .collect();
+        }
+        if let Some(single) = value.as_str() {
+            // Compatibility path for snapshots written as a single string digest.
+            return Ok(vec![single.to_owned()]);
+        }
+        Err(Self::parse_error(format!(
+            "`{field}` must be an array of hex strings"
+        )))
+    }
+
+    fn from_json_value(value: norito::json::Value) -> Result<Self, SnapshotMerkleError> {
+        let map = value
+            .as_object()
+            .ok_or_else(|| Self::parse_error("snapshot Merkle metadata must be a JSON object"))?;
+
+        Ok(Self {
+            chunk_size_bytes: Self::parse_u64_field(map, "chunk_size_bytes")?,
+            total_len_bytes: Self::parse_u64_field(map, "total_len_bytes")?,
+            root_hex: Self::parse_string_field(map, "root_hex")?,
+            leaf_hashes_hex: Self::parse_string_vec_field(map, "leaf_hashes_hex")?,
+        })
+    }
+
     fn from_bytes(bytes: &[u8], chunk_size: NonZeroUsize) -> Self {
         let leaf_hashes = chunk_hashes(bytes, chunk_size);
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaf_hashes.clone());
@@ -329,7 +412,9 @@ impl SnapshotMerkleMetadata {
             }
             Err(err) => return Err(SnapshotMerkleError::Io(err)),
         };
-        json::from_slice(&bytes).map_err(SnapshotMerkleError::Parse)
+        let value =
+            json::from_slice::<norito::json::Value>(&bytes).map_err(SnapshotMerkleError::Parse)?;
+        Self::from_json_value(value)
     }
 }
 
@@ -689,6 +774,21 @@ fn snapshot_domain_selector_map(
     Some(selectors)
 }
 
+fn snapshot_payload_preview(bytes: &[u8]) -> String {
+    let mut preview = String::new();
+    let limit = bytes.len().min(96);
+    for &byte in &bytes[..limit] {
+        match byte {
+            b'\n' => preview.push_str("\\n"),
+            b'\r' => preview.push_str("\\r"),
+            b'\t' => preview.push_str("\\t"),
+            0x20..=0x7E => preview.push(char::from(byte)),
+            _ => preview.push('.'),
+        }
+    }
+    preview
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle(
@@ -708,6 +808,8 @@ fn try_read_snapshot_bundle(
     let digest_bytes = Sha256::digest(bytes);
     let digest_vec = digest_bytes.to_vec();
     let actual_digest = hex::encode(&digest_vec);
+    let bytes_len = bytes.len();
+    let payload_preview = snapshot_payload_preview(bytes);
     let digest_used_tmp =
         select_digest_with_fallback(&digest_path, &digest_tmp_path, &actual_digest)?;
 
@@ -721,22 +823,17 @@ fn try_read_snapshot_bundle(
     let merkle_used_tmp =
         verify_merkle_with_fallback(&merkle_path, &merkle_tmp_path, bytes, merkle_chunk_size)?;
 
-    #[cfg(test)]
-    {
-        eprintln!(
-            "SNAPSHOT READ DEBUG: first bytes {:?}",
-            std::str::from_utf8(bytes).unwrap_or("<non-utf8>")
-        );
-    }
     let value: json::Value = match json::from_slice(bytes) {
-        Ok(value) => {
-            #[cfg(test)]
-            eprintln!("SNAPSHOT PARSE OK");
-            value
-        }
+        Ok(value) => value,
         Err(err) => {
-            #[cfg(test)]
-            eprintln!("SNAPSHOT PARSE ERR: {err:?}");
+            iroha_logger::warn!(
+                ?err,
+                data_used_tmp,
+                bytes_len,
+                digest = %actual_digest,
+                preview = %payload_preview,
+                "snapshot JSON parse failed"
+            );
             return Err(TryReadError::Serialization(err));
         }
     };
@@ -748,7 +845,14 @@ fn try_read_snapshot_bundle(
         telemetry,
     };
     let state = seed.into_state_from_json(value).map_err(|err| {
-        iroha_logger::warn!(?err, "snapshot state deserialization failed");
+        iroha_logger::warn!(
+            ?err,
+            data_used_tmp,
+            bytes_len,
+            digest = %actual_digest,
+            preview = %payload_preview,
+            "snapshot state deserialization failed"
+        );
         TryReadError::Serialization(err)
     })?;
     if &state.chain_id != expected_chain_id {
@@ -869,6 +973,8 @@ pub fn try_read_snapshot(
                 if let Some(tmp_bytes) = tmp_bytes.as_deref() {
                     iroha_logger::warn!(
                         ?main_err,
+                        main_bytes_len = bytes.len(),
+                        tmp_bytes_len = tmp_bytes.len(),
                         "snapshot primary bundle failed; trying temp bundle"
                     );
                     match attempt_tmp(tmp_bytes) {
@@ -876,6 +982,8 @@ pub fn try_read_snapshot(
                         Err(tmp_err) => {
                             iroha_logger::warn!(
                                 ?tmp_err,
+                                main_bytes_len = bytes.len(),
+                                tmp_bytes_len = tmp_bytes.len(),
                                 "snapshot temp bundle also failed; falling back to primary error"
                             );
                             return Err(main_err);
@@ -984,16 +1092,6 @@ fn try_write_snapshot(
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
     file.sync_data()
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
-    #[cfg(test)]
-    {
-        use std::io::Read as _;
-        let mut debug_reader = std::fs::File::open(&path_to_tmp_file).expect("debug open");
-        let mut debug_buf = String::new();
-        debug_reader
-            .read_to_string(&mut debug_buf)
-            .expect("debug read");
-        eprintln!("SNAPSHOT DEBUG: {debug_buf}");
-    }
     let snapshot_bytes = std::fs::read(&path_to_tmp_file)
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_file.clone()))?;
     let digest_bytes = Sha256::digest(&snapshot_bytes);
@@ -1915,6 +2013,46 @@ mod tests {
             error,
             TryReadError::MerkleChunkSizeMismatch { .. }
         ));
+    }
+
+    #[test]
+    async fn merkle_metadata_accepts_numeric_string_fields() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let merkle_path = store_dir.join(SNAPSHOT_MERKLE_FILE_NAME);
+        let mut value: norito::json::Value =
+            json::from_slice(&std::fs::read(&merkle_path).expect("read merkle"))
+                .expect("parse merkle json");
+        let map = value.as_object_mut().expect("metadata object");
+        map.insert(
+            "chunk_size_bytes".to_owned(),
+            norito::json::Value::String(TEST_CHUNK_SIZE.get().to_string()),
+        );
+        let snapshot_len = std::fs::metadata(store_dir.join(SNAPSHOT_FILE_NAME))
+            .expect("snapshot metadata")
+            .len();
+        map.insert(
+            "total_len_bytes".to_owned(),
+            norito::json::Value::String(snapshot_len.to_string()),
+        );
+        let mut merkle_file = File::create(&merkle_path).expect("create merkle file");
+        json::to_writer(&mut merkle_file, &value).expect("write merkle json");
+
+        let parsed = SnapshotMerkleMetadata::from_path(&merkle_path).expect("parse metadata");
+        assert_eq!(
+            parsed.chunk_size_bytes,
+            u64::try_from(TEST_CHUNK_SIZE.get()).expect("fits in u64")
+        );
+        assert_eq!(parsed.total_len_bytes, snapshot_len);
+        let snapshot_bytes = std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot");
+        parsed
+            .verify_against_bytes(&snapshot_bytes, TEST_CHUNK_SIZE)
+            .expect("metadata verification");
     }
 
     #[test]

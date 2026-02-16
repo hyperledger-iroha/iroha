@@ -121,6 +121,8 @@ const DA_ENABLED_ENV: &str = "SUMERAGI_DA_ENABLED";
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_DIR_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_DIR";
+const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
+const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
 const NETWORK_PERMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
@@ -1568,6 +1570,14 @@ fn permit_dir() -> PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("iroha_test_network_permits"))
 }
 
+fn network_permit_wait_timeout() -> Option<Duration> {
+    let timeout = read_env_duration(
+        NETWORK_PERMIT_WAIT_TIMEOUT_ENV,
+        NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT,
+    );
+    (!timeout.is_zero()).then_some(timeout)
+}
+
 fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
     if limit == 0 {
         return None;
@@ -1646,6 +1656,51 @@ fn read_permit_pid(path: &Path) -> Option<u32> {
     None
 }
 
+fn read_permit_started(path: &Path) -> Option<u64> {
+    let contents = fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("started=")
+            && let Ok(started) = value.trim().parse::<u64>()
+            && started > 0
+        {
+            return Some(started);
+        }
+    }
+    None
+}
+
+fn describe_permit_holders(limit: usize) -> String {
+    let dir = permit_dir();
+    let mut holders = Vec::new();
+    for slot in 0..limit.max(1) {
+        let path = dir.join(format!("permit-{slot}.lock"));
+        if !path.exists() {
+            continue;
+        }
+
+        let pid = read_permit_pid(&path)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_owned());
+        let alive = read_permit_pid(&path)
+            .and_then(pid_alive)
+            .map_or("unknown", |is_alive| if is_alive { "yes" } else { "no" });
+        let started = read_permit_started(&path)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_owned());
+        holders.push(format!(
+            "slot={slot},pid={pid},alive={alive},started={started},file={}",
+            path.display()
+        ));
+    }
+
+    if holders.is_empty() {
+        "none".to_owned()
+    } else {
+        holders.join("; ")
+    }
+}
+
 #[cfg(unix)]
 fn pid_alive(pid: u32) -> Option<bool> {
     let raw_pid = i32::try_from(pid).ok()?;
@@ -1665,6 +1720,7 @@ fn pid_alive(_pid: u32) -> Option<bool> {
 fn acquire_network_permit() -> NetworkPermit {
     let mut waited = Duration::ZERO;
     let mut next_log = NETWORK_PERMIT_LOG_INTERVAL;
+    let wait_timeout = network_permit_wait_timeout();
     loop {
         let limit = network_parallelism_limit();
         if let Some(file_permit) = try_acquire_file_permit(limit) {
@@ -1673,11 +1729,29 @@ fn acquire_network_permit() -> NetworkPermit {
             };
         }
         if waited >= next_log {
+            let dir = permit_dir();
+            let holders = describe_permit_holders(limit);
+            eprintln!(
+                "waiting for test network permit: waited={waited:?} limit={limit} dir={} holders={holders}",
+                dir.display()
+            );
             info!(
                 waited_ms = waited.as_millis(),
                 limit, "waiting for test network permit"
             );
             next_log = next_log.saturating_add(NETWORK_PERMIT_LOG_INTERVAL);
+        }
+        if let Some(timeout) = wait_timeout
+            && waited >= timeout
+        {
+            let dir = permit_dir();
+            let holders = describe_permit_holders(limit);
+            panic!(
+                "timed out after {timeout:?} waiting for test network permit (limit={limit}, dir={}). holders={holders}. \
+set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolated \
+{NETWORK_PERMIT_DIR_ENV} when running unrelated network suites concurrently",
+                dir.display()
+            );
         }
         std::thread::sleep(NETWORK_PERMIT_POLL_INTERVAL);
         waited = waited.saturating_add(NETWORK_PERMIT_POLL_INTERVAL);
@@ -2460,9 +2534,14 @@ impl Network {
     }
 
     pub async fn ensure_blocks_with<F: Fn(BlockHeight) -> bool>(&self, f: F) -> Result<&Self> {
+        let running_peers: Vec<_> = self.peers.iter().filter(|peer| peer.is_running()).collect();
+        if running_peers.is_empty() {
+            return Ok(self);
+        }
+
         // Fast path: if storage already shows the required height for all running peers,
         // skip the async watchers to avoid long waits when status polling lags behind.
-        let storage_satisfied = self.peers.iter().filter(|p| p.is_running()).all(|peer| {
+        let storage_satisfied = running_peers.iter().all(|peer| {
             detect_block_height_from_storage(&peer.kura_store_dir(), 0)
                 .map(&f)
                 .unwrap_or(false)
@@ -2471,10 +2550,33 @@ impl Network {
             return Ok(self);
         }
 
+        // Storage markers may lag behind or be absent (e.g., layout migration in progress).
+        // Probe `/status` once before wiring block watchers to avoid waiting for fresh block events
+        // when peers already satisfy the predicate.
+        let mut status_results = Vec::with_capacity(running_peers.len());
+        for peer in &running_peers {
+            match peer.status().await {
+                Ok(status) => {
+                    status_results.push(Ok(BlockHeight::from(status)));
+                }
+                Err(err) => {
+                    debug!(
+                        ?err,
+                        mnemonic = peer.mnemonic(),
+                        "status fast path unavailable while ensuring blocks"
+                    );
+                    status_results.push(Err(()));
+                }
+            }
+        }
+        if Self::status_results_satisfy_predicate(status_results.into_iter(), &f) {
+            return Ok(self);
+        }
+
         let snapshot_on_failure = || self.startup_snapshot();
         timeout(
             self.sync_timeout(),
-            once_blocks_sync(self.peers.iter().filter(|x| x.is_running()), &f),
+            once_blocks_sync(running_peers.into_iter(), &f),
         )
         .await
         .map_err(|_| {
@@ -2492,6 +2594,16 @@ impl Network {
         })?;
 
         Ok(self)
+    }
+
+    fn status_results_satisfy_predicate<F, I, E>(results: I, predicate: &F) -> bool
+    where
+        F: Fn(BlockHeight) -> bool,
+        I: IntoIterator<Item = std::result::Result<BlockHeight, E>>,
+    {
+        results
+            .into_iter()
+            .all(|result| result.is_ok_and(predicate))
     }
 
     async fn wait_for_blocks_via_status(&self, height: u64) -> Result<()> {
@@ -7448,6 +7560,119 @@ mod tests {
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "4");
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "1");
         assert_eq!(network_parallelism_limit(), 1);
+    }
+
+    #[test]
+    fn status_results_satisfy_predicate_requires_all_successes() {
+        let predicate = BlockHeight::predicate_total(2);
+
+        assert!(Network::status_results_satisfy_predicate(
+            vec![
+                Ok::<BlockHeight, ()>(BlockHeight {
+                    total: 2,
+                    non_empty: 1
+                }),
+                Ok::<BlockHeight, ()>(BlockHeight {
+                    total: 3,
+                    non_empty: 2
+                }),
+            ],
+            &predicate
+        ));
+        assert!(!Network::status_results_satisfy_predicate(
+            vec![Ok::<BlockHeight, ()>(BlockHeight {
+                total: 1,
+                non_empty: 1
+            })],
+            &predicate
+        ));
+        assert!(!Network::status_results_satisfy_predicate(
+            vec![Err::<BlockHeight, ()>(())],
+            &predicate
+        ));
+    }
+
+    #[test]
+    fn network_permit_wait_timeout_env_override_applies() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+
+        remove_env_var(NETWORK_PERMIT_WAIT_TIMEOUT_ENV);
+        assert_eq!(
+            network_permit_wait_timeout(),
+            Some(NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT)
+        );
+
+        let _timeout_guard = EnvVarRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "250ms");
+        assert_eq!(
+            network_permit_wait_timeout(),
+            Some(Duration::from_millis(250))
+        );
+
+        drop(_timeout_guard);
+
+        let _timeout_guard = EnvVarRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "0");
+        assert_eq!(network_permit_wait_timeout(), None);
+    }
+
+    #[test]
+    fn describe_permit_holders_reports_lock_owner() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+
+        let path = dir.path().join("permit-0.lock");
+        let mut file = fs::File::create(&path).expect("create permit lock");
+        writeln!(file, "pid={}", std::process::id()).expect("write pid");
+        writeln!(file, "started=1").expect("write started");
+
+        let holders = describe_permit_holders(1);
+        assert!(
+            holders.contains("slot=0"),
+            "expected slot details in holder summary: {holders}"
+        );
+        assert!(
+            holders.contains(&format!("pid={}", std::process::id())),
+            "expected pid details in holder summary: {holders}"
+        );
+        #[cfg(unix)]
+        assert!(
+            holders.contains("alive=yes"),
+            "expected liveness details in holder summary: {holders}"
+        );
+    }
+
+    #[test]
+    fn acquire_network_permit_panics_after_wait_timeout() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+        let _timeout_guard = EnvVarRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
+
+        let path = dir.path().join("permit-0.lock");
+        let mut file = fs::File::create(&path).expect("create permit lock");
+        writeln!(file, "pid={}", std::process::id()).expect("write pid");
+        writeln!(file, "started=1").expect("write started");
+
+        let started = std::time::Instant::now();
+        let panic = match std::panic::catch_unwind(acquire_network_permit) {
+            Ok(_) => panic!("acquire_network_permit should panic when wait timeout elapses"),
+            Err(panic) => panic,
+        };
+        let panic_message = panic
+            .downcast_ref::<&str>()
+            .map(std::string::ToString::to_string)
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<missing panic message>".to_owned());
+        assert!(
+            panic_message.contains("timed out"),
+            "panic should explain permit wait timeout, got: {panic_message}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(20),
+            "permit wait should not panic before timeout elapsed"
+        );
     }
 
     #[test]

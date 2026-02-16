@@ -77,10 +77,6 @@ public final class OfflineQrStreamCameraXScanner implements ImageAnalysis.Analyz
     try {
       final Result result = reader.decodeWithState(bitmap);
       reader.reset();
-      final byte[] raw = result.getRawBytes();
-      if (raw != null && raw.length > 0) {
-        return raw;
-      }
       final String text = result.getText();
       if (text == null || text.isBlank()) {
         return null;
