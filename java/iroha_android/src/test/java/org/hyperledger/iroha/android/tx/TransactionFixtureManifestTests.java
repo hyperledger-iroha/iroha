@@ -63,6 +63,8 @@ public final class TransactionFixtureManifestTests {
   private static final TypeAdapter<Optional<Long>> NONCE_ADAPTER =
       NoritoAdapters.option(NoritoAdapters.uint(32));
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
+  private static final TypeAdapter<byte[]> RAW_BYTE_VECTOR_ADAPTER =
+      NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<List<InstructionEnvelope>> INSTRUCTION_LIST_ADAPTER =
       NoritoAdapters.sequence(new InstructionEnvelopeAdapter());
   private static final TypeAdapter<List<MetadataEntry>> METADATA_ENTRY_LIST_ADAPTER =
@@ -517,7 +519,7 @@ public final class TransactionFixtureManifestTests {
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(name + ": executable ivm has trailing bytes");
     }
-    return decodeFieldPayload(inner, BYTE_VECTOR_ADAPTER, name + ".payload.executable.ivm.bytes");
+    return decodeFieldPayload(inner, RAW_BYTE_VECTOR_ADAPTER, name + ".payload.executable.ivm.bytes");
   }
 
   private static RawPayload decodePayloadRaw(final String name, final byte[] payloadBytes) {
@@ -961,14 +963,14 @@ public final class TransactionFixtureManifestTests {
     @Override
     public void encode(final NoritoEncoder encoder, final InstructionEnvelope value) {
       encodeSizedField(encoder, STRING_ADAPTER, value.wireName());
-      encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value.payload());
+      encodeSizedField(encoder, RAW_BYTE_VECTOR_ADAPTER, value.payload());
     }
 
     @Override
     public InstructionEnvelope decode(final NoritoDecoder decoder) {
       final String name = decodeSizedField(decoder, STRING_ADAPTER, "instruction.name");
       final byte[] payload =
-          decodeSizedField(decoder, BYTE_VECTOR_ADAPTER, "instruction.payload");
+          decodeSizedField(decoder, RAW_BYTE_VECTOR_ADAPTER, "instruction.payload");
       if (decoder.remaining() != 0) {
         throw new IllegalArgumentException("Instruction envelope has trailing bytes");
       }

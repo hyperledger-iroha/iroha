@@ -29,6 +29,7 @@ public final class NoritoTests {
     testSequenceAdapterEncoding();
     testByteVecAdapterRoundtrip();
     testByteVecAdapterPackedEncoding();
+    testRawByteVecAdapterRoundtrip();
     testSequenceAcceptsEmptyPackedTail();
     testSequenceAcceptsEmptyPackedTailWithFollowingData();
     testOption();
@@ -264,6 +265,22 @@ public final class NoritoTests {
     byte[] decoded = adapter.decode(decoder);
     assert Arrays.equals(decoded, value) : "packed byte vec roundtrip mismatch";
     assert decoder.remaining() == 0 : "decoder should consume packed payload";
+  }
+
+  private static void testRawByteVecAdapterRoundtrip() {
+    TypeAdapter<byte[]> adapter = NoritoAdapters.rawByteVecAdapter();
+    byte[] value = new byte[] {0x05, (byte) 0xFF};
+    NoritoCodec.AdaptiveEncoding encoding = NoritoCodec.encodeAdaptive(value, adapter);
+    byte[] encoded = encoding.payload();
+    byte[] expected = new byte[] {
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x05, (byte) 0xFF
+    };
+    assert Arrays.equals(encoded, expected) : "raw byte vec encoding mismatch";
+    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags(), NoritoHeader.MINOR_VERSION);
+    byte[] decoded = adapter.decode(decoder);
+    assert Arrays.equals(decoded, value) : "raw byte vec roundtrip mismatch";
+    assert decoder.remaining() == 0 : "decoder should consume raw payload";
   }
 
   private static void testSequenceAcceptsEmptyPackedTail() {

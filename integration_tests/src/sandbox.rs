@@ -52,6 +52,34 @@ impl SerializedNetwork {
         }
     }
 
+    /// Asynchronously shut down running peers and release the optional serial guard.
+    pub async fn shutdown_and_release(mut self) {
+        self.shutdown_done = true;
+        let Some(network) = self.network.take() else {
+            return;
+        };
+        let Some(guard) = self.guard.take() else {
+            return;
+        };
+
+        let shutdown_completed = if network.peers().iter().any(NetworkPeer::is_running) {
+            tokio::time::timeout(SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT, network.shutdown())
+                .await
+                .is_ok()
+        } else {
+            true
+        };
+
+        if !shutdown_completed {
+            eprintln!(
+                "warning: graceful test network shutdown did not complete within {:?}; falling back to drop cleanup",
+                SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT
+            );
+        }
+        drop(network);
+        drop(guard);
+    }
+
     /// Shut down running peers before releasing the optional serial guard.
     pub fn shutdown_blocking(mut self) {
         self.shutdown_done = true;
@@ -78,30 +106,31 @@ impl SerializedNetwork {
         let runtime_flavor = handle.as_ref().map(Handle::runtime_flavor);
         let inside_runtime = Handle::try_current().is_ok();
         let shutdown = move || {
-            if let Some(handle) = handle {
+            let shutdown_completed = if let Some(handle) = handle.as_ref() {
                 if matches!(handle.runtime_flavor(), RuntimeFlavor::CurrentThread) {
                     // Current-thread runtimes cannot be driven from another thread.
-                    match Runtime::new() {
-                        Ok(rt) => {
-                            let _ = rt.block_on(network.shutdown());
-                        }
-                        Err(err) => {
-                            eprintln!("warning: failed to create runtime for shutdown: {err}");
-                        }
-                    }
+                    shutdown_network_with_fresh_runtime(&network)
                 } else {
-                    let _ = handle.block_on(network.shutdown());
+                    handle.block_on(async {
+                        tokio::time::timeout(
+                            SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT,
+                            network.shutdown(),
+                        )
+                        .await
+                        .is_ok()
+                    })
                 }
             } else {
-                match Runtime::new() {
-                    Ok(rt) => {
-                        let _ = rt.block_on(network.shutdown());
-                    }
-                    Err(err) => {
-                        eprintln!("warning: failed to create runtime for shutdown: {err}");
-                    }
-                }
+                shutdown_network_with_fresh_runtime(&network)
+            };
+
+            if !shutdown_completed {
+                eprintln!(
+                    "warning: graceful test network shutdown did not complete within {:?}; falling back to drop cleanup",
+                    SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT
+                );
             }
+            drop(network);
             drop(guard);
         };
 
@@ -125,6 +154,20 @@ where
         return;
     }
     shutdown();
+}
+
+fn shutdown_network_with_fresh_runtime(network: &Network) -> bool {
+    match Runtime::new() {
+        Ok(rt) => rt.block_on(async {
+            tokio::time::timeout(SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT, network.shutdown())
+                .await
+                .is_ok()
+        }),
+        Err(err) => {
+            eprintln!("warning: failed to create runtime for shutdown: {err}");
+            false
+        }
+    }
 }
 
 impl Deref for SerializedNetwork {
@@ -190,6 +233,7 @@ impl Drop for NetworkPermit {
 
 const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64; // Match iroha_test_network default.
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
@@ -796,6 +840,29 @@ mod tests {
         assert_eq!(in_use, 0);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serialized_network_shutdown_async_releases_guard() {
+        if skip_if_sandboxed("serialized_network_shutdown_async_releases_guard") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let _override_guard = override_network_parallelism(Some(true), None);
+        let guard = serial_guard();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
+        let serialized = SerializedNetwork::new(network, guard);
+
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
+
+        serialized.shutdown_and_release().await;
+        let (_, in_use) = network_permit_snapshot();
+        assert_eq!(in_use, 0);
+    }
+
     #[test]
     fn serialized_network_new_with_handle_stores_handle() {
         if skip_if_sandboxed("serialized_network_new_with_handle_stores_handle") {
@@ -1011,20 +1078,22 @@ mod tests {
         let Some(network) = result else {
             return Ok(());
         };
-        let mut layers = network.config_layers();
-        let trusted = layers
-            .next()
-            .expect("trusted peers layer must be present")
-            .into_owned();
-        assert!(trusted.contains_key("trusted_peers"));
-        let pops = trusted
-            .get("trusted_peers_pop")
-            .and_then(TomlValue::as_array)
-            .expect("trusted_peers_pop array must be present");
-        assert!(
-            !pops.is_empty(),
-            "trusted_peers_pop should include at least one entry"
-        );
+        {
+            let mut layers = network.config_layers();
+            let trusted = layers
+                .next()
+                .expect("trusted peers layer must be present")
+                .into_owned();
+            assert!(trusted.contains_key("trusted_peers"));
+            let pops = trusted
+                .get("trusted_peers_pop")
+                .and_then(TomlValue::as_array)
+                .expect("trusted_peers_pop array must be present");
+            assert!(
+                !pops.is_empty(),
+                "trusted_peers_pop should include at least one entry"
+            );
+        }
         network.shutdown().await;
         Ok(())
     }

@@ -7056,6 +7056,142 @@ mod custom_parameter_tests {
 
         assert!(sumeragi_npos_parameters_from_parameters(&params).is_none());
     }
+
+    #[test]
+    fn npos_parameters_legacy_string_wrapped_payload_is_decoded() {
+        let mut params = Parameters::default();
+        let expected = SumeragiNposParameters::default();
+        let legacy_json =
+            norito::json::to_json(&expected).expect("serialize npos parameters to json");
+        // Legacy format: JSON object persisted as a JSON string payload.
+        let legacy_payload = Json::new(legacy_json);
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            SumeragiNposParameters::parameter_id(),
+            legacy_payload,
+        );
+        params.set_parameter(Parameter::Custom(custom));
+
+        let decoded = sumeragi_npos_parameters_from_parameters(&params)
+            .expect("decode npos parameters from legacy payload");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn npos_parameters_legacy_numeric_strings_are_decoded() {
+        let mut params = Parameters::default();
+        let expected = SumeragiNposParameters::default();
+        let mut legacy_value =
+            norito::json::to_value(&expected).expect("serialize npos parameters to json value");
+        let map = legacy_value
+            .as_object_mut()
+            .expect("npos parameters should serialize as object");
+
+        for key in npos_numeric_string_compat_fields() {
+            let value = map
+                .get_mut(*key)
+                .unwrap_or_else(|| panic!("missing `{key}` in serialized npos payload"));
+            let number = value
+                .as_u64()
+                .unwrap_or_else(|| panic!("`{key}` should serialize as number"));
+            *value = norito::json::Value::String(number.to_string());
+        }
+
+        let legacy_payload =
+            Json::from_norito_value_ref(&legacy_value).expect("serialize compatibility payload");
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            SumeragiNposParameters::parameter_id(),
+            legacy_payload,
+        );
+        params.set_parameter(Parameter::Custom(custom));
+
+        let decoded = sumeragi_npos_parameters_from_parameters(&params)
+            .expect("decode npos parameters from numeric-string payload");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn npos_parameters_legacy_epoch_seed_hex_string_is_decoded() {
+        let mut params = Parameters::default();
+        let expected = SumeragiNposParameters::default();
+        let mut legacy_value =
+            norito::json::to_value(&expected).expect("serialize npos parameters to json value");
+        let map = legacy_value
+            .as_object_mut()
+            .expect("npos parameters should serialize as object");
+        map.insert(
+            "epoch_seed".to_owned(),
+            norito::json::Value::String(
+                expected
+                    .epoch_seed()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            ),
+        );
+
+        let legacy_payload =
+            Json::from_norito_value_ref(&legacy_value).expect("serialize compatibility payload");
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            SumeragiNposParameters::parameter_id(),
+            legacy_payload,
+        );
+        params.set_parameter(Parameter::Custom(custom));
+
+        let decoded = sumeragi_npos_parameters_from_parameters(&params)
+            .expect("decode npos parameters from hex epoch seed payload");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn npos_parameters_legacy_epoch_seed_nested_quotes_are_decoded() {
+        let mut params = Parameters::default();
+        let expected = SumeragiNposParameters::default();
+        let mut legacy_value =
+            norito::json::to_value(&expected).expect("serialize npos parameters to json value");
+        let map = legacy_value
+            .as_object_mut()
+            .expect("npos parameters should serialize as object");
+        map.insert(
+            "epoch_seed".to_owned(),
+            norito::json::Value::String(format!(
+                "\"{}\"",
+                expected
+                    .epoch_seed()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            )),
+        );
+
+        let legacy_payload =
+            Json::from_norito_value_ref(&legacy_value).expect("serialize compatibility payload");
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            SumeragiNposParameters::parameter_id(),
+            legacy_payload,
+        );
+        params.set_parameter(Parameter::Custom(custom));
+
+        let decoded = sumeragi_npos_parameters_from_parameters(&params)
+            .expect("decode npos parameters from nested-quoted epoch seed payload");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn npos_parameters_real_chain_payload_is_decoded() {
+        let mut params = Parameters::default();
+        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            SumeragiNposParameters::parameter_id(),
+            payload
+                .parse::<Json>()
+                .expect("fixture payload should be valid json"),
+        );
+        params.set_parameter(Parameter::Custom(custom));
+        assert!(
+            sumeragi_npos_parameters_from_parameters(&params).is_some(),
+            "real chain payload should decode"
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -15606,20 +15742,143 @@ static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_data_model::ChainId> = LazyLock::ne
 fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<SumeragiNposParameters> {
     let id = SumeragiNposParameters::parameter_id();
     let custom = params.custom().get(&id)?;
+    if let Some(parsed) = SumeragiNposParameters::from_custom_parameter(custom) {
+        return Some(parsed);
+    }
+    let payload = custom.payload();
+    let payload_preview: String = payload.get().chars().take(256).collect();
 
-    match custom
-        .payload()
-        .try_into_any_norito::<SumeragiNposParameters>()
-    {
+    match payload.try_into_any_norito::<SumeragiNposParameters>() {
         Ok(parsed) => Some(parsed),
-        Err(error) => {
+        Err(primary_error) => {
+            // Backward-compatibility: some legacy payloads persisted the NPoS JSON
+            // object as a JSON string. Attempt that decode path before giving up.
+            if let Ok(inner_json) = payload.try_into_any_norito::<String>() {
+                match norito::json::from_str::<SumeragiNposParameters>(&inner_json) {
+                    Ok(parsed) => {
+                        warn!(
+                            "Decoded `sumeragi_npos_parameters` from legacy string-wrapped payload"
+                        );
+                        return Some(parsed);
+                    }
+                    Err(fallback_error) => {
+                        warn!(
+                            ?primary_error,
+                            ?fallback_error,
+                            "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
+                        );
+                        return None;
+                    }
+                }
+            }
+
+            // Backward-compatibility: some historical payloads encoded numeric fields
+            // as JSON strings inside the object. Coerce those fields and retry.
+            if let Ok(value) = payload.try_into_any_norito::<norito::json::Value>() {
+                match decode_npos_parameters_with_numeric_string_compat(value) {
+                    Ok(parsed) => {
+                        warn!(
+                            "Decoded `sumeragi_npos_parameters` from numeric-string compatibility payload"
+                        );
+                        return Some(parsed);
+                    }
+                    Err(compat_error) => {
+                        warn!(
+                            ?primary_error,
+                            ?compat_error,
+                            "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
+                        );
+                        return None;
+                    }
+                }
+            }
+
             warn!(
-                ?error,
-                "Failed to decode `sumeragi_npos_parameters` custom parameter payload"
+                ?primary_error,
+                "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
             );
             None
         }
     }
+}
+
+fn npos_numeric_string_compat_fields() -> &'static [&'static str] {
+    &[
+        "k_aggregators",
+        "redundant_send_r",
+        "vrf_commit_window_blocks",
+        "vrf_reveal_window_blocks",
+        "max_validators",
+        "min_self_bond",
+        "min_nomination_bond",
+        "max_nominator_concentration_pct",
+        "seat_band_pct",
+        "max_entity_correlation_pct",
+        "finality_margin_blocks",
+        "evidence_horizon_blocks",
+        "activation_lag_blocks",
+        "slashing_delay_blocks",
+        "epoch_length_blocks",
+    ]
+}
+
+fn decode_npos_parameters_with_numeric_string_compat(
+    mut value: norito::json::Value,
+) -> Result<SumeragiNposParameters, norito::json::Error> {
+    if let Some(map) = value.as_object_mut() {
+        for field in npos_numeric_string_compat_fields() {
+            let Some(raw_value) = map.get_mut(*field) else {
+                continue;
+            };
+            let Some(raw_string) = raw_value.as_str() else {
+                continue;
+            };
+            if let Ok(parsed) = raw_string.parse::<u64>() {
+                *raw_value = norito::json::Value::from(parsed);
+            }
+        }
+    }
+
+    if let Ok(parsed) = norito::json::value::from_value(value.clone()) {
+        return Ok(parsed);
+    }
+
+    if let Some(map) = value.as_object_mut()
+        && let Some(epoch_seed_value) = map.get_mut("epoch_seed")
+        && let Some(raw_seed) = epoch_seed_value.as_str()
+        && let Some(seed_bytes) = decode_epoch_seed_hex_string(raw_seed)
+    {
+        let mut normalized = String::with_capacity(64);
+        for byte in seed_bytes {
+            normalized.push_str(&format!("{byte:02X}"));
+        }
+        *epoch_seed_value = norito::json::Value::String(normalized);
+    }
+
+    norito::json::value::from_value(value)
+}
+
+fn decode_epoch_seed_hex_string(raw: &str) -> Option<[u8; 32]> {
+    let raw = raw.trim();
+    let raw = raw
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(raw);
+    let hex = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .unwrap_or(raw);
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let mut out = [0_u8; 32];
+    for idx in 0..32 {
+        let start = idx * 2;
+        let end = start + 2;
+        out[idx] = u8::from_str_radix(&hex[start..end], 16).ok()?;
+    }
+    Some(out)
 }
 
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
@@ -21655,15 +21914,76 @@ pub(crate) mod deserialize {
         let value = map
             .remove(key)
             .ok_or_else(|| json::Error::missing_field(key))?;
-        json::value::from_value(value)
+        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
+            field: key.to_owned(),
+            message: err.to_string(),
+        })
     }
 
     fn take_optional_default<T>(map: &mut json::native::Map, key: &str) -> Result<T, json::Error>
     where
         T: JsonDeserialize + Default,
     {
-        map.remove(key)
-            .map_or_else(|| Ok(T::default()), json::value::from_value)
+        map.remove(key).map_or_else(
+            || Ok(T::default()),
+            |value| {
+                json::value::from_value(value).map_err(|err| json::Error::InvalidField {
+                    field: key.to_owned(),
+                    message: err.to_string(),
+                })
+            },
+        )
+    }
+
+    fn parse_legacy_parameters_cell(value: json::Value) -> Result<Cell<Parameters>, json::Error> {
+        let json::Value::Object(mut envelope) = value else {
+            return Err(json::Error::InvalidField {
+                field: "parameters".into(),
+                message: "expected object".into(),
+            });
+        };
+
+        let Some(blocks) = envelope.remove("blocks") else {
+            return Err(json::Error::missing_field("blocks"));
+        };
+
+        if let Some(revert) = envelope.remove("revert")
+            && !matches!(revert, json::Value::Null)
+        {
+            trace!(
+                target: "state::deserialize",
+                value = ?revert,
+                "ignoring legacy non-null parameters.revert payload"
+            );
+        }
+
+        drain_unknown(&envelope, "parameters");
+        let parsed: Parameters = json::value::from_value(blocks)?;
+        Ok(Cell::new(parsed))
+    }
+
+    fn take_parameters_cell(
+        map: &mut json::native::Map,
+        key: &str,
+    ) -> Result<Cell<Parameters>, json::Error> {
+        let value = map
+            .remove(key)
+            .ok_or_else(|| json::Error::missing_field(key))?;
+
+        match json::value::from_value::<Cell<Parameters>>(value.clone()) {
+            Ok(parameters) => Ok(parameters),
+            Err(primary_error) => match parse_legacy_parameters_cell(value) {
+                Ok(parameters) => {
+                    trace!(
+                        target: "state::deserialize",
+                        field = key,
+                        "decoded legacy parameters envelope"
+                    );
+                    Ok(parameters)
+                }
+                Err(_) => Err(primary_error),
+            },
+        }
     }
 
     fn take_topology_cell(
@@ -21694,7 +22014,7 @@ pub(crate) mod deserialize {
             });
         };
 
-        let parameters: Cell<Parameters> = take_required(&mut map, "parameters")?;
+        let parameters = take_parameters_cell(&mut map, "parameters")?;
         let peers: Cell<Peers> = take_required(&mut map, "peers")?;
         if let Some(domains_value) = map.get("domains") {
             // Install a resolver so domainless IH58 accounts parse during snapshot load.
@@ -22347,6 +22667,28 @@ pub(crate) mod deserialize {
         }
         for key in map.keys() {
             trace!(target: "state::deserialize", context = context, field = %key, "ignoring unknown field");
+        }
+    }
+
+    #[cfg(test)]
+    mod compatibility_tests {
+        use super::*;
+
+        #[test]
+        fn take_parameters_cell_accepts_legacy_blocks_envelope() {
+            let expected = Parameters::default();
+            let blocks = norito::json::to_value(&expected).expect("serialize parameters");
+            let mut legacy_map = json::native::Map::new();
+            legacy_map.insert("revert".to_owned(), json::Value::Null);
+            legacy_map.insert("blocks".to_owned(), blocks);
+            let legacy = json::Value::Object(legacy_map);
+
+            let mut map = json::native::Map::new();
+            map.insert("parameters".to_owned(), legacy);
+
+            let parsed = take_parameters_cell(&mut map, "parameters")
+                .expect("decode legacy parameters envelope");
+            assert_eq!(*parsed.view().get(), expected);
         }
     }
 }

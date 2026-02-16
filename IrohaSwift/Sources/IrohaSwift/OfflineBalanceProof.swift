@@ -38,6 +38,8 @@ public enum OfflineBalanceProofBuilder {
         initialBlindingHex: String,
         resultingBlindingHex: String
     ) throws -> Artifacts {
+        NSLog("[OfflineBalanceProof] advanceCommitment input: chainId=%@, delta=%@, value=%@, commitment=%@, blinding=%@, resBlinding=%@",
+              chainId, claimedDelta, resultingValue, initialCommitmentHex, initialBlindingHex, resultingBlindingHex)
         let initialCommitment = try data(fromHex: initialCommitmentHex, field: "initialCommitmentHex")
         let initialBlinding = try data(fromHex: initialBlindingHex, field: "initialBlindingHex")
         let resultingBlinding = try data(fromHex: resultingBlindingHex, field: "resultingBlindingHex")
@@ -47,6 +49,7 @@ public enum OfflineBalanceProofBuilder {
             initialBlinding: initialBlinding,
             resultingBlinding: resultingBlinding
         )
+        NSLog("[OfflineBalanceProof] updateCommitment OK, resultingCommitment=%@", resultingCommitment.map { String(format: "%02x", $0) }.joined())
         let proof = try generateProof(
             chainId: chainId,
             claimedDelta: claimedDelta,
@@ -125,6 +128,38 @@ public enum OfflineBalanceProofBuilder {
             switch bridgeError {
             case .callFailed(let status):
                 NSLog("[OfflineBalanceProof] offlineBalanceProof callFailed status=%d, chainId=%@, delta=%@, value=%@", status, chainId, claimedDelta, resultingValue)
+                throw OfflineBalanceProofError.bridgeUnavailable
+            }
+        }
+    }
+
+    /// Derive the deterministic resulting blinding for an offline spend.
+    ///
+    /// Returns `hex(initial_blinding + HKDF_scalar(certificate_id, counter))`.
+    /// Use the returned hex as `resultingBlindingHex` in `advanceCommitment`.
+    public static func deriveResultingBlinding(
+        initialBlindingHex: String,
+        certificateIdHex: String,
+        counter: UInt64
+    ) throws -> String {
+        let initialBlinding = try data(fromHex: initialBlindingHex, field: "initialBlindingHex")
+        let certificateId = try data(fromHex: certificateIdHex, field: "certificateIdHex")
+        guard initialBlinding.count == commitmentLength else {
+            throw OfflineBalanceProofError.invalidBlindingLength
+        }
+        do {
+            guard let result = try NoritoNativeBridge.shared.offlineBlindingFromSeed(
+                initialBlinding: initialBlinding,
+                certificateId: certificateId,
+                counter: counter
+            ) else {
+                throw OfflineBalanceProofError.bridgeUnavailable
+            }
+            return hex(from: result)
+        } catch let bridgeError as NoritoNativeBridge.OfflineBlindingFromSeedBridgeError {
+            switch bridgeError {
+            case .callFailed(let status):
+                NSLog("[OfflineBalanceProof] offlineBlindingFromSeed callFailed status=%d, certIdLen=%d, counter=%llu", status, certificateId.count, counter)
                 throw OfflineBalanceProofError.bridgeUnavailable
             }
         }
