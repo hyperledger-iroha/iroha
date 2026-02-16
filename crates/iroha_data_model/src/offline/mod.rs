@@ -3984,5 +3984,4 @@ mod receipt_challenge_tests {
         assert_eq!(proof.version, AGGREGATE_PROOF_VERSION_V1);
         assert_eq!(proof.receipts_root, aggregate.receipts_root);
     }
-
 }
