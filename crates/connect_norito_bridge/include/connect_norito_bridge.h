@@ -98,6 +98,15 @@ int32_t connect_norito_offline_commitment_update(
     uint8_t** out_commitment_ptr,
     unsigned long* out_commitment_len);
 
+int32_t connect_norito_offline_blinding_from_seed(
+    const uint8_t* initial_blinding_ptr,
+    unsigned long initial_blinding_len,
+    const uint8_t* certificate_id_ptr,
+    unsigned long certificate_id_len,
+    uint64_t counter,
+    uint8_t** out_blinding_ptr,
+    unsigned long* out_blinding_len);
+
 int32_t connect_norito_offline_balance_proof(
     const char* chain_id,
     unsigned long chain_id_len,

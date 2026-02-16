@@ -32,6 +32,7 @@ import org.junit.Test;
 public final class NoritoCodecAdapterTests {
 
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
+  private static final TypeAdapter<byte[]> RAW_BYTE_VECTOR_ADAPTER = NoritoAdapters.rawByteVecAdapter();
 
   @Test
   public void runCodecScenarios() throws NoritoException {
@@ -396,7 +397,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] ivmPayload =
         Arrays.copyOfRange(ivmField, 8, Math.toIntExact(8 + ivmInnerLen));
     final byte[] decodedIvm =
-        decodeFieldPayload(ivmPayload, NoritoAdapters.byteVecAdapter(), "payload.executable.ivm.bytes");
+        decodeFieldPayload(ivmPayload, RAW_BYTE_VECTOR_ADAPTER, "payload.executable.ivm.bytes");
     assert Arrays.equals(ivmBytes, decodedIvm) : "IVM bytecode bytes should match";
   }
 
@@ -451,7 +452,7 @@ public final class NoritoCodecAdapterTests {
     final String decodedName =
         decodeFieldPayload(nameField, NoritoAdapters.stringAdapter(), "instruction.name");
     final byte[] decodedPayload =
-        decodeFieldPayload(payloadField, NoritoAdapters.byteVecAdapter(), "instruction.payload");
+        decodeFieldPayload(payloadField, RAW_BYTE_VECTOR_ADAPTER, "instruction.payload");
     assert "iroha.custom.layout".equals(decodedName) : "Instruction name must match wire payload";
     assert Arrays.equals(wirePayload, decodedPayload) : "Instruction payload must match wire bytes";
   }

@@ -35,7 +35,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<Long> UINT32_AS_LONG_ADAPTER = NoritoAdapters.uint(32);
   private static final TypeAdapter<Long> UINT16_ADAPTER = NoritoAdapters.uint(16);
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
-  private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
+  private static final TypeAdapter<byte[]> RAW_BYTE_VEC_ADAPTER = NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<byte[]> IVM_BYTECODE_ADAPTER = new IvmBytecodeAdapter();
   private static final TypeAdapter<List<InstructionBox>> INSTRUCTION_LIST_ADAPTER =
       NoritoAdapters.sequence(new InstructionAdapter());
@@ -113,7 +113,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           throw new IllegalArgumentException("Wire payload must include a valid Norito header");
         }
         encodeSizedField(encoder, STRING_ADAPTER, wire.wireName());
-        encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, wire.payloadBytes());
+        encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, wire.payloadBytes());
         return;
       }
       throw new IllegalArgumentException("Instruction payload must be wire-framed");
@@ -521,7 +521,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     try {
       final NoritoDecoder wireDecoder = new NoritoDecoder(payload, flags, flagsHint);
       final String wireName = decodeSizedField(wireDecoder, STRING_ADAPTER);
-      final byte[] wirePayload = decodeSizedField(wireDecoder, BYTE_VECTOR_ADAPTER);
+      final byte[] wirePayload = decodeSizedField(wireDecoder, RAW_BYTE_VEC_ADAPTER);
       if (wireDecoder.remaining() != 0) {
         return null;
       }
@@ -579,7 +579,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class IvmBytecodeAdapter implements TypeAdapter<byte[]> {
     @Override
     public void encode(final NoritoEncoder encoder, final byte[] value) {
-      encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value);
+      encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, value);
     }
 
     @Override
@@ -591,7 +591,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static byte[] decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
       final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
-      final byte[] value = decodeSizedField(sized, BYTE_VECTOR_ADAPTER);
+      final byte[] value = decodeSizedField(sized, RAW_BYTE_VEC_ADAPTER);
       if (sized.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after IVM payload");
       }

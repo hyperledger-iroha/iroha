@@ -240,7 +240,7 @@ pub(super) fn verify_fastpq_sum_proof(
     let delta_le = numeric_to_le_bytes(&total)?;
     let expected_delta =
         RISTRETTO_BASEPOINT_POINT * delta_scalar + *pedersen_generator_h() * blind_sum;
-    if c_init - c_res != expected_delta {
+    if c_res - c_init != expected_delta {
         return Err("sum proof commitment delta mismatch".into());
     }
     let nonce = sum_proof_nonce(

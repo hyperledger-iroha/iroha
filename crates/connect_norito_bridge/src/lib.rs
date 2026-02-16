@@ -913,6 +913,21 @@ fn update_offline_commitment(
     Ok(bytes)
 }
 
+fn derive_offline_blinding_from_seed(
+    initial_blinding: &[u8],
+    certificate_id: Hash,
+    counter: u64,
+) -> BridgeResult<[u8; 32]> {
+    let mut initial = decode_scalar_bytes(initial_blinding)?;
+    let seed = OfflineProofBlindingSeed::derive(certificate_id, counter);
+    let mut delta = blinding_scalar_from_seed(&seed);
+    let resulting = initial + delta;
+    let bytes = resulting.to_bytes();
+    initial.zeroize();
+    delta.zeroize();
+    Ok(bytes)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compute_offline_receipt_challenge(
     chain_id_raw: String,
@@ -1147,7 +1162,7 @@ fn generate_offline_fastpq_sum_proof(
         .fold(Scalar::ZERO, |acc, scalar| acc + scalar);
     let expected_delta =
         RISTRETTO_BASEPOINT_POINT * delta_scalar + pedersen_generator_h() * blind_sum;
-    let commitment_delta = c_init - c_res;
+    let commitment_delta = c_res - c_init;
     if commitment_delta != expected_delta {
         blind_sum.zeroize();
         return Err(BridgeError::OfflineCommitment);
@@ -1803,6 +1818,47 @@ pub unsafe extern "C" fn connect_norito_offline_commitment_update(
             resulting_blinding,
         )?;
         unsafe { write_bytes_bridge(out_commitment_ptr, out_commitment_len, &updated) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_blinding_from_seed(
+    initial_blinding_ptr: *const c_uchar,
+    initial_blinding_len: c_ulong,
+    certificate_id_ptr: *const c_uchar,
+    certificate_id_len: c_ulong,
+    counter: u64,
+    out_blinding_ptr: *mut *mut c_uchar,
+    out_blinding_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if initial_blinding_ptr.is_null()
+            || certificate_id_ptr.is_null()
+            || out_blinding_ptr.is_null()
+            || out_blinding_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let initial_blinding =
+            unsafe { slice::from_raw_parts(initial_blinding_ptr, initial_blinding_len as usize) };
+        let certificate_id_bytes =
+            unsafe { slice::from_raw_parts(certificate_id_ptr, certificate_id_len as usize) };
+        if certificate_id_bytes.len() != Hash::LENGTH {
+            return Err(BridgeError::OfflineNonce);
+        }
+        let mut certificate_id_array = [0u8; Hash::LENGTH];
+        certificate_id_array.copy_from_slice(certificate_id_bytes);
+        if certificate_id_array[Hash::LENGTH - 1] & 1 == 0 {
+            return Err(BridgeError::OfflineNonce);
+        }
+        let certificate_id = Hash::prehashed(certificate_id_array);
+        let resulting =
+            derive_offline_blinding_from_seed(initial_blinding, certificate_id, counter)?;
+        unsafe { write_bytes_bridge(out_blinding_ptr, out_blinding_len, &resulting) }?;
         Ok(())
     })();
 
@@ -8343,10 +8399,10 @@ mod offline_fastpq_proof_tests {
             .map(blinding_scalar_from_seed)
             .fold(Scalar::ZERO, |acc, scalar| acc + scalar);
         let delta_scalar = numeric_to_scalar(&claimed_delta).expect("delta scalar");
-        let c_res = RistrettoPoint::identity();
+        let c_init = RistrettoPoint::identity();
         let expected_delta =
             RISTRETTO_BASEPOINT_POINT * delta_scalar + pedersen_generator_h() * blind_sum;
-        let c_init = c_res + expected_delta;
+        let c_res = c_init + expected_delta;
         let initial_commitment = OfflineAllowanceCommitment::new(
             asset_id,
             Numeric::new(100, 0),
@@ -10148,6 +10204,21 @@ mod offline_balance_proof_tests {
             &blind_res_bytes,
         );
         assert!(matches!(proof, Err(BridgeError::Quantity)));
+    }
+
+    #[test]
+    fn derive_offline_blinding_from_seed_matches_expected_sum() {
+        let initial = Scalar::from(19u64);
+        let certificate_id = Hash::new(b"offline-certificate");
+        let counter = 11u64;
+        let seed = OfflineProofBlindingSeed::derive(certificate_id, counter);
+        let expected = (initial + blinding_scalar_from_seed(&seed)).to_bytes();
+
+        let derived =
+            derive_offline_blinding_from_seed(&initial.to_bytes(), certificate_id, counter)
+                .expect("derive resulting blinding");
+
+        assert_eq!(derived, expected);
     }
 }
 

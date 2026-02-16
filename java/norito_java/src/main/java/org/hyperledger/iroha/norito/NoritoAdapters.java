@@ -87,6 +87,10 @@ public final class NoritoAdapters {
     return ByteVecAdapter.INSTANCE;
   }
 
+  public static TypeAdapter<byte[]> rawByteVecAdapter() {
+    return RawByteVecAdapter.INSTANCE;
+  }
+
   public static TypeAdapter<byte[]> fixedBytes(int length) {
     return new FixedBytesAdapter(length);
   }
@@ -336,6 +340,39 @@ public final class NoritoAdapters {
         out[i] = (byte) value;
       }
       return out;
+    }
+  }
+
+  /**
+   * Adapter that encodes {@code byte[]} as {@code length(u64) + raw bytes}, matching the Rust
+   * {@code Vec<u8>} fast-path serialization in Norito.
+   *
+   * <p>Use this for opaque byte payloads (wire instruction payloads, IVM bytecode) where
+   * per-element framing is not expected by the server.
+   *
+   * @see #byteVecAdapter() for the sequence-of-elements encoding used for signatures
+   */
+  private static final class RawByteVecAdapter implements TypeAdapter<byte[]> {
+    private static final RawByteVecAdapter INSTANCE = new RawByteVecAdapter();
+
+    @Override
+    public void encode(NoritoEncoder encoder, byte[] value) {
+      encoder.writeLength(value.length, false);
+      encoder.writeBytes(value);
+    }
+
+    @Override
+    public byte[] decode(NoritoDecoder decoder) {
+      long length = decoder.readLength(false);
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Raw byte vector too large");
+      }
+      return decoder.readBytes((int) length);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
     }
   }
 

@@ -1,7 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Time-based trigger execution paths using bounded async waits.
 
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
@@ -18,6 +21,8 @@ use tokio::{
 };
 
 use crate::triggers::get_asset_value;
+
+static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 fn curr_time() -> Duration {
     use std::time::SystemTime;
@@ -68,6 +73,7 @@ async fn submit_all_with_context(
 }
 
 async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
+    let peer_count = network.peers().len();
     let status = spawn_blocking({
         let client = probe.clone();
         move || client.get_status()
@@ -79,11 +85,29 @@ async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &
         .as_ref()
         .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
         .and_then(|idx| usize::try_from(idx).ok())
-        .filter(|&idx| idx < network.peers().len())
-        .unwrap_or(0);
+        .filter(|&idx| idx < peer_count);
+    let leader_is_connected = status
+        .as_ref()
+        .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
+    let fallback_totals = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
+    let fallback_index = pick_fallback_submit_peer_index(&fallback_totals, fallback_seed);
+    let selected_index = if leader_is_connected {
+        leader_index.unwrap_or(fallback_index)
+    } else {
+        fallback_index
+    };
     network
         .peers()
-        .get(leader_index)
+        .get(selected_index)
         .unwrap_or_else(|| {
             network
                 .peers()
@@ -95,6 +119,30 @@ async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &
 
 fn effective_status_timeout(current: Duration, sync_timeout: Duration) -> Duration {
     current.max(sync_timeout)
+}
+
+fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
+    match peer_count {
+        0..=2 => 0,
+        _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
+    }
+}
+
+fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
+    if block_totals.is_empty() {
+        return 0;
+    }
+    let best_total = block_totals.iter().copied().max().unwrap_or(0);
+    let best_indices = block_totals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, total)| (*total == best_total).then_some(idx))
+        .collect::<Vec<_>>();
+    if best_indices.is_empty() {
+        return 0;
+    }
+    let offset = seed % best_indices.len();
+    best_indices[offset]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -547,7 +595,9 @@ async fn submit_sample_isi_on_every_block_commit(
 
 #[cfg(test)]
 mod timeout_tests {
-    use super::effective_status_timeout;
+    use super::{
+        effective_status_timeout, min_connected_peers_for_submit, pick_fallback_submit_peer_index,
+    };
     use std::time::Duration;
 
     #[test]
@@ -556,5 +606,27 @@ mod timeout_tests {
         let long = Duration::from_secs(120);
         assert_eq!(effective_status_timeout(short, long), long);
         assert_eq!(effective_status_timeout(long, short), long);
+    }
+
+    #[test]
+    fn submit_connection_threshold_scales_with_peer_count() {
+        assert_eq!(min_connected_peers_for_submit(0), 0);
+        assert_eq!(min_connected_peers_for_submit(1), 0);
+        assert_eq!(min_connected_peers_for_submit(2), 0);
+        assert_eq!(min_connected_peers_for_submit(3), 1);
+        assert_eq!(min_connected_peers_for_submit(4), 2);
+    }
+
+    #[test]
+    fn fallback_submit_peer_index_rotates_across_best_peers() {
+        let totals = [7, 9, 9, 5];
+        assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
+        assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
+        assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
+    }
+
+    #[test]
+    fn fallback_submit_peer_index_defaults_to_zero_when_empty() {
+        assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
     }
 }

@@ -416,6 +416,10 @@ public final class OfflineQrStreamDecoder {
             guard streamId == frame.streamId else {
                 throw OfflineQrStreamError.invalidStreamId
             }
+            // Skip reset if we already have this stream's envelope (repeated header in looping animation)
+            if let existing = self.envelope, existing.streamId == streamId {
+                return
+            }
             self.envelope = envelope
             dataChunks = Array(repeating: nil, count: Int(envelope.dataChunks))
             parityChunks = Array(repeating: nil, count: Int(envelope.parityChunks))
