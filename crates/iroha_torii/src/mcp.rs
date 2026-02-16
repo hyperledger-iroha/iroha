@@ -122,6 +122,15 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(connect_session_create_tool());
     tools.push(connect_session_delete_tool());
     tools.push(connect_status_tool());
+    tools.push(iroha_connect_ws_ticket_tool());
+    tools.push(iroha_connect_session_create_tool());
+    tools.push(iroha_connect_session_delete_tool());
+    tools.push(iroha_connect_status_tool());
+    tools.push(iroha_accounts_list_tool());
+    tools.push(iroha_accounts_resolve_tool());
+    tools.push(iroha_account_transactions_tool());
+    tools.push(iroha_transactions_submit_tool());
+    tools.push(iroha_transactions_status_tool());
 
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     tools
@@ -267,23 +276,55 @@ async fn handle_tools_call(
         .unwrap_or_default();
 
     let tool_result = match name {
-        "connect.ws.ticket" => build_connect_ws_ticket(&arguments, inbound_headers)
-            .map(mcp_tool_success)
-            .unwrap_or_else(mcp_tool_error),
-        "connect.session.create" => {
+        "connect.ws.ticket" | "iroha.connect.ws.ticket" => {
+            build_connect_ws_ticket(&arguments, inbound_headers)
+                .map(mcp_tool_success)
+                .unwrap_or_else(mcp_tool_error)
+        }
+        "connect.session.create" | "iroha.connect.session.create" => {
             match dispatch_connect_session_create(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "connect.session.delete" => {
+        "connect.session.delete" | "iroha.connect.session.delete" => {
             match dispatch_connect_session_delete(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "connect.status" => {
+        "connect.status" | "iroha.connect.status" => {
             match dispatch_connect_status(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.list" => {
+            match dispatch_iroha_accounts_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.resolve" => {
+            match dispatch_iroha_accounts_resolve(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.transactions" => {
+            match dispatch_iroha_account_transactions(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.transactions.submit" => {
+            match dispatch_iroha_transactions_submit(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.transactions.status" => {
+            match dispatch_iroha_transactions_status(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -310,14 +351,21 @@ async fn handle_tools_call(
 }
 
 fn mcp_tool_success(structured: Value) -> Value {
+    let status = structured.get("status").and_then(Value::as_u64);
+    let is_http_error = status.is_some_and(|code| code >= 400);
+    let text = match status {
+        Some(code) if is_http_error => format!("http error {code}"),
+        Some(code) => format!("http {code}"),
+        None => "ok".to_owned(),
+    };
     norito::json!({
         "content": [
             {
                 "type": "text",
-                "text": "ok"
+                "text": text
             }
         ],
-        "isError": false,
+        "isError": is_http_error,
         "structuredContent": structured
     })
 }
@@ -573,10 +621,20 @@ async fn dispatch_connect_session_create(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = arguments
-        .get("body")
-        .cloned()
-        .unwrap_or_else(|| norito::json!({}));
+    let body = arguments.get("body").cloned().unwrap_or_else(|| {
+        let mut payload = Map::new();
+        if let Some(sid) = arguments.get("sid").and_then(Value::as_str) {
+            payload.insert("sid".into(), Value::String(sid.to_owned()));
+        }
+        let node = arguments
+            .get("node")
+            .or_else(|| arguments.get("node_url"))
+            .and_then(Value::as_str);
+        if let Some(node) = node {
+            payload.insert("node".into(), Value::String(node.to_owned()));
+        }
+        Value::Object(payload)
+    });
     let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
     dispatch_route(
         app,
@@ -640,6 +698,239 @@ async fn dispatch_connect_status(
             .map(str::to_owned),
     )
     .await
+}
+
+async fn dispatch_iroha_accounts_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/accounts".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_accounts_resolve(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = if let Some(body) = arguments.get("body") {
+        body.clone()
+    } else {
+        let literal = arguments
+            .get("literal")
+            .or_else(|| arguments.get("account_literal"))
+            .or_else(|| arguments.get("account_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                "`literal` is required (or provide `body.literal`) for iroha.accounts.resolve"
+                    .to_owned()
+            })?;
+        norito::json!({ "literal": literal })
+    };
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/resolve",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_account_transactions(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let account_id = extract_account_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("account_id".into(), Value::String(account_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/accounts/{account_id}/transactions", Some(&path_value))?;
+    let query = collect_query_arguments(
+        arguments,
+        &["path", "account_id", "query", "headers", "accept"],
+    )?;
+    let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_transactions_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let mut adapted = arguments.clone();
+    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
+        if let Some(encoded) = arguments
+            .get("signed_tx_base64")
+            .or_else(|| arguments.get("tx_base64"))
+            .and_then(Value::as_str)
+        {
+            adapted.insert("body_base64".into(), Value::String(encoded.to_owned()));
+        } else if let Some(encoded_hex) = arguments
+            .get("body_hex")
+            .or_else(|| arguments.get("signed_tx_hex"))
+            .or_else(|| arguments.get("tx_hex"))
+            .and_then(Value::as_str)
+        {
+            let bytes = hex::decode(encoded_hex)
+                .map_err(|err| format!("transaction hex payload must be valid hex: {err}"))?;
+            adapted.insert(
+                "body_base64".into(),
+                Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            );
+        }
+    }
+
+    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
+        return Err("one of `body_base64`, `signed_tx_base64`, `tx_base64`, `body_hex`, `signed_tx_hex`, `tx_hex`, or `body` is required".to_owned());
+    }
+
+    let (body, content_type) = build_request_body(&adapted)?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/transaction",
+        adapted.get("headers"),
+        body,
+        content_type,
+        adapted
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_transactions_status(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let mut query = collect_query_map(arguments, &["query", "headers", "accept", "hash"])?;
+    if !query
+        .get("hash")
+        .and_then(Value::as_str)
+        .is_some_and(|hash| !hash.is_empty())
+    {
+        if let Some(hash) = arguments.get("hash").and_then(Value::as_str) {
+            query.insert("hash".into(), Value::String(hash.to_owned()));
+        }
+    }
+    if !query
+        .get("hash")
+        .and_then(Value::as_str)
+        .is_some_and(|hash| !hash.is_empty())
+    {
+        return Err("`hash` is required (provide `hash` or `query.hash`)".to_owned());
+    }
+
+    let query_value = Value::Object(query);
+    let route = append_query(
+        "/v1/pipeline/transactions/status".to_owned(),
+        Some(&query_value),
+    )?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(account_id) = path.get("account_id").and_then(Value::as_str) {
+            return Ok(account_id.to_owned());
+        }
+    }
+    arguments
+        .get("account_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            "`account_id` is required (provide `account_id` or `path.account_id`)".to_owned()
+        })
+}
+
+fn collect_query_arguments(
+    arguments: &Map,
+    ignored_keys: &[&str],
+) -> Result<Option<Value>, String> {
+    let query = collect_query_map(arguments, ignored_keys)?;
+    if query.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Value::Object(query)))
+}
+
+fn collect_query_map(arguments: &Map, ignored_keys: &[&str]) -> Result<Map, String> {
+    if let Some(query) = arguments.get("query") {
+        return query
+            .as_object()
+            .cloned()
+            .ok_or_else(|| "`query` must be an object".to_owned());
+    }
+
+    let mut query = Map::new();
+    for (key, value) in arguments {
+        if ignored_keys.iter().any(|ignored| key == ignored) {
+            continue;
+        }
+        if value.is_null() {
+            continue;
+        }
+        query.insert(key.clone(), value.clone());
+    }
+    Ok(query)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -924,7 +1215,14 @@ fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Resu
     let token = arguments
         .get("token")
         .and_then(Value::as_str)
-        .ok_or_else(|| "`token` is required".to_owned())?;
+        .or_else(|| match role {
+            "app" => arguments.get("token_app").and_then(Value::as_str),
+            "wallet" => arguments.get("token_wallet").and_then(Value::as_str),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            "`token` is required (or provide `token_app`/`token_wallet` matching `role`)".to_owned()
+        })?;
     let node = arguments
         .get("node_url")
         .or_else(|| arguments.get("node"))
@@ -1002,11 +1300,22 @@ fn connect_ws_ticket_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["sid", "role", "token"],
+            "required": ["sid", "role"],
             "properties": {
                 "sid": { "type": "string" },
                 "role": { "type": "string", "enum": ["app", "wallet"] },
-                "token": { "type": "string" },
+                "token": {
+                    "type": "string",
+                    "description": "Explicit token for the selected role."
+                },
+                "token_app": {
+                    "type": "string",
+                    "description": "Token alias used when `role=app` and `token` is omitted."
+                },
+                "token_wallet": {
+                    "type": "string",
+                    "description": "Token alias used when `role=wallet` and `token` is omitted."
+                },
                 "node_url": { "type": "string", "description": "Optional node URL; defaults to Host/X-Forwarded-Proto from the MCP request." }
             }
         }),
@@ -1023,10 +1332,22 @@ fn connect_session_create_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "sid": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.sid` (base64url session id)."
+                },
+                "node": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.node`."
+                },
+                "node_url": {
+                    "type": "string",
+                    "description": "Alias for `node` convenience shortcut."
+                },
                 "body": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Connect session request body (requires `sid` in current Torii builds)."
+                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` shortcuts."
                 },
                 "headers": {
                     "type": "object",
@@ -1070,6 +1391,225 @@ fn connect_status_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_connect_ws_ticket_tool() -> ToolSpec {
+    let mut tool = connect_ws_ticket_tool();
+    tool.name = "iroha.connect.ws.ticket".to_owned();
+    tool.description = "Alias for connect.ws.ticket.".to_owned();
+    tool
+}
+
+fn iroha_connect_session_create_tool() -> ToolSpec {
+    let mut tool = connect_session_create_tool();
+    tool.name = "iroha.connect.session.create".to_owned();
+    tool.description = "Alias for connect.session.create.".to_owned();
+    tool
+}
+
+fn iroha_connect_session_delete_tool() -> ToolSpec {
+    let mut tool = connect_session_delete_tool();
+    tool.name = "iroha.connect.session.delete".to_owned();
+    tool.description = "Alias for connect.session.delete.".to_owned();
+    tool
+}
+
+fn iroha_connect_status_tool() -> ToolSpec {
+    let mut tool = connect_status_tool();
+    tool.name = "iroha.connect.status".to_owned();
+    tool.description = "Alias for connect.status.".to_owned();
+    tool
+}
+
+fn iroha_accounts_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.list".to_owned(),
+        description:
+            "List accounts with optional query filters/pagination (supports flat top-level query args)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/accounts".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "asset_id": { "type": "string" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_accounts_resolve_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.resolve".to_owned(),
+        description:
+            "Resolve account literals into canonical IH58 account identifiers (`literal` shortcut supported)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/resolve".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "literal": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.literal`."
+                },
+                "account_literal": {
+                    "type": "string",
+                    "description": "Alias for `literal`."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Alias for `literal` when the input is already an account identifier."
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_account_transactions_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.transactions".to_owned(),
+        description:
+            "List transactions authored by a specific account (`account_id` shortcut supported)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/accounts/{account_id}/transactions".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.account_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["account_id"],
+                    "properties": {
+                        "account_id": { "type": "string" }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_transactions_submit_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.transactions.submit".to_owned(),
+        description: "Submit a signed transaction encoded as Norito bytes (`signed_tx_base64`/`tx_base64`/hex shortcuts supported).".to_owned(),
+        method: Method::POST,
+        path_template: "/transaction".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body_base64": {
+                    "type": "string",
+                    "description": "Base64/base64url encoded SignedTransaction bytes."
+                },
+                "signed_tx_base64": {
+                    "type": "string",
+                    "description": "Alias for `body_base64`."
+                },
+                "tx_base64": {
+                    "type": "string",
+                    "description": "Alias for `body_base64`."
+                },
+                "body_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded SignedTransaction bytes."
+                },
+                "signed_tx_hex": {
+                    "type": "string",
+                    "description": "Alias for `body_hex`."
+                },
+                "tx_hex": {
+                    "type": "string",
+                    "description": "Alias for `body_hex`."
+                },
+                "body": {
+                    "description": "Optional JSON request body; use only when submitting JSON transaction envelopes."
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "Optional content type override (defaults to application/x-norito)."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_transactions_status_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.transactions.status".to_owned(),
+        description:
+            "Get latest pipeline status for a submitted transaction hash (`hash` shortcut supported)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/pipeline/transactions/status".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "hash": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `query.hash`."
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["hash"],
+                    "properties": {
+                        "hash": { "type": "string" }
+                    }
+                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -1137,6 +1677,17 @@ mod tests {
             )
         );
         assert!(tools.iter().any(|tool| tool.name == "connect.ws.ticket"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.connect.session.create")
+        );
+        assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.list"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.transactions.submit")
+        );
     }
 
     #[test]
@@ -1173,5 +1724,64 @@ mod tests {
                 .expect("protocol"),
             "iroha-connect.token.v1.bXktdG9rZW4"
         );
+    }
+
+    #[test]
+    fn ws_ticket_accepts_role_specific_token_aliases() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("node.example"));
+        let args = norito::json!({
+            "sid": "YWJj",
+            "role": "wallet",
+            "token_wallet": "wallet-token"
+        });
+        let ticket =
+            build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
+        assert_eq!(
+            ticket
+                .get("authorization_header")
+                .and_then(Value::as_str)
+                .expect("authorization"),
+            "Bearer wallet-token"
+        );
+    }
+
+    #[test]
+    fn collect_query_map_accepts_flat_query_fields_when_query_absent() {
+        let args = norito::json!({
+            "account_id": "alice@wonderland",
+            "limit": 20,
+            "offset": 0,
+            "headers": {"x": "1"}
+        });
+        let map = collect_query_map(
+            args.as_object().expect("object"),
+            &["account_id", "headers", "accept", "query"],
+        )
+        .expect("query map");
+        assert_eq!(map.get("limit").and_then(Value::as_u64), Some(20));
+        assert_eq!(map.get("offset").and_then(Value::as_u64), Some(0));
+        assert!(!map.contains_key("account_id"));
+        assert!(!map.contains_key("headers"));
+    }
+
+    #[test]
+    fn collect_query_map_rejects_non_object_query() {
+        let args = norito::json!({
+            "query": "not-an-object"
+        });
+        let err =
+            collect_query_map(args.as_object().expect("object"), &["query"]).expect_err("error");
+        assert!(err.contains("`query` must be an object"));
+    }
+
+    #[test]
+    fn extract_account_id_argument_accepts_top_level_shortcut() {
+        let args = norito::json!({
+            "account_id": "alice@wonderland"
+        });
+        let account_id =
+            extract_account_id_argument(args.as_object().expect("object")).expect("account id");
+        assert_eq!(account_id, "alice@wonderland");
     }
 }

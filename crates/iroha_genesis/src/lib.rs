@@ -1836,7 +1836,6 @@ struct ConsensusHandshakeMetadata {
 }
 
 fn parse_consensus_handshake_metadata_from_payload(
-    manifest: &RawGenesisTransaction,
     payload: &norito::json::Value,
 ) -> Option<ConsensusHandshakeMetadata> {
     let mode = payload
@@ -1871,13 +1870,9 @@ fn parse_consensus_handshake_metadata_from_payload(
         return None;
     }
 
-    let mut probe = manifest.clone();
-    probe.consensus_mode = Some(mode);
-    probe.bls_domain = Some(bls_domain.clone());
-    probe.wire_proto_versions.clone_from(&wire_proto_versions);
-    probe.consensus_fingerprint = None;
-    let probe = probe.with_consensus_meta();
-    if probe.consensus_fingerprint.as_deref()? != consensus_fingerprint.as_str() {
+    let fp_hex = consensus_fingerprint.trim_start_matches("0x");
+    let mut fp = [0u8; 32];
+    if hex::decode_to_slice(fp_hex, &mut fp).is_err() {
         return None;
     }
 
@@ -1890,7 +1885,6 @@ fn parse_consensus_handshake_metadata_from_payload(
 }
 
 fn parse_consensus_handshake_metadata(
-    manifest: &RawGenesisTransaction,
     transactions: &[RawGenesisTx],
 ) -> Option<ConsensusHandshakeMetadata> {
     for tx in transactions {
@@ -1911,9 +1905,7 @@ fn parse_consensus_handshake_metadata(
                 Ok(payload) => payload,
                 Err(_) => continue,
             };
-            if let Some(metadata) =
-                parse_consensus_handshake_metadata_from_payload(manifest, &payload)
-            {
+            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(&payload) {
                 return Some(metadata);
             }
         }
@@ -1933,9 +1925,7 @@ fn parse_consensus_handshake_metadata(
                 Ok(payload) => payload,
                 Err(_) => continue,
             };
-            if let Some(metadata) =
-                parse_consensus_handshake_metadata_from_payload(manifest, &payload)
-            {
+            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(&payload) {
                 return Some(metadata);
             }
         }
@@ -3852,7 +3842,7 @@ impl RawGenesisTransaction {
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
     fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
-        let explicit_handshake_meta = parse_consensus_handshake_metadata(&self, &self.transactions);
+        let explicit_handshake_meta = parse_consensus_handshake_metadata(&self.transactions);
         let mut manifest = self.with_consensus_meta();
         if let Some(handshake_meta) = explicit_handshake_meta {
             manifest.consensus_mode = Some(handshake_meta.mode);
@@ -5152,6 +5142,70 @@ mod tests {
                 .get("consensus_fingerprint")
                 .and_then(norito::json::Value::as_str),
             Some(expected_fingerprint.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_preserves_explicit_consensus_handshake_metadata_with_external_fingerprint()
+    -> Result<()> {
+        init_instruction_registry();
+        let chain = ChainId::from("test-consensus-meta-preserve-external-fingerprint");
+        let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
+            .build_raw()
+            .with_consensus_meta();
+        let external_fingerprint =
+            "0x1111111111111111111111111111111111111111111111111111111111111111";
+        let explicit_param = Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::from_norito_value_ref(&norito::json::Value::Object({
+                let mut payload = norito::json::Map::new();
+                payload.insert(
+                    "mode".to_string(),
+                    norito::json::Value::String("Npos".to_string()),
+                );
+                payload.insert(
+                    "bls_domain".to_string(),
+                    norito::json::Value::String("bls-iroha2:npos-sumeragi:v1".to_string()),
+                );
+                payload.insert(
+                    "wire_proto_versions".to_string(),
+                    norito::json::to_value(&vec![1u32]).expect("serialize proto versions"),
+                );
+                payload.insert(
+                    "consensus_fingerprint".to_string(),
+                    norito::json::Value::String(external_fingerprint.to_string()),
+                );
+                payload
+            }))
+            .expect("construct handshake payload"),
+        ));
+        manifest
+            .transactions
+            .first_mut()
+            .expect("missing manifest transaction")
+            .instructions
+            .push(InstructionBox::from(SetParameter::new(explicit_param)));
+
+        let mut found = Vec::new();
+        for instr in manifest.parse()?.into_iter().flatten() {
+            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Custom(custom) = set_param.inner()
+                && custom.id() == &consensus_metadata::handshake_meta_id()
+                && let Ok(payload) = custom
+                    .payload()
+                    .try_into_any_norito::<norito::json::Value>()
+            {
+                found.push(payload);
+            }
+        }
+        assert_eq!(found.len(), 1);
+        let payload = found.remove(0);
+        assert_eq!(
+            payload
+                .get("consensus_fingerprint")
+                .and_then(norito::json::Value::as_str),
+            Some(external_fingerprint)
         );
         Ok(())
     }

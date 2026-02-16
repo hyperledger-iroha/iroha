@@ -14094,6 +14094,14 @@ impl State {
         self.world.view()
     }
 
+    /// Snapshot of the current commit topology.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only validator ordering is needed.
+    #[track_caller]
+    pub fn commit_topology_snapshot(&self) -> Vec<PeerId> {
+        self.commit_topology.view().iter().cloned().collect()
+    }
+
     /// Latest committed block height derived from the block hash journal.
     ///
     /// This is cheaper than acquiring a full [`StateView`] and avoids locking

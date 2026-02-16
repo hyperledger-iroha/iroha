@@ -356,7 +356,12 @@ pub(crate) fn load_npos_epoch_params(
 
 /// Resolve the pacemaker block time from on-chain Sumeragi parameters.
 pub(crate) fn resolve_npos_block_time(view: &StateView<'_>) -> Duration {
-    let params = view.world.parameters().sumeragi();
+    resolve_npos_block_time_from_world(view.world())
+}
+
+/// Resolve the pacemaker block time from on-chain Sumeragi parameters using a world snapshot.
+pub(crate) fn resolve_npos_block_time_from_world(world: &impl WorldReadOnly) -> Duration {
+    let params = world.parameters().sumeragi();
     let min_finality_ms = if params.min_finality_ms() == 0 {
         iroha_data_model::parameter::system::SumeragiParameters::default().min_finality_ms()
     } else {
@@ -383,7 +388,15 @@ pub(crate) fn resolve_npos_timeouts(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
 ) -> SumeragiNposTimeouts {
-    let block_time = resolve_npos_block_time(view);
+    resolve_npos_timeouts_from_world(view.world(), fallback)
+}
+
+/// Resolve `NPoS` pacemaker timeouts from on-chain parameters using a world snapshot.
+pub(crate) fn resolve_npos_timeouts_from_world(
+    world: &impl WorldReadOnly,
+    fallback: &SumeragiNpos,
+) -> SumeragiNposTimeouts {
+    let block_time = resolve_npos_block_time_from_world(world);
     // NPoS phase timeouts are derived from block time and can legitimately be below
     // `min_finality_ms` for fast pipelines; clamping each phase to min_finality
     // artificially inflates end-to-end latency and vote fanout cadence.

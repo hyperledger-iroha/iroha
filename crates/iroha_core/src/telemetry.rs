@@ -8341,12 +8341,8 @@ impl Actor {
             return;
         }
         let local_removed = {
-            let view = self.state.view();
-            !view
-                .world()
-                .peers()
-                .iter()
-                .any(|peer| peer == &self.local_peer_id)
+            let world = self.state.world_view();
+            !world.peers().iter().any(|peer| peer == &self.local_peer_id)
         };
         if crate::sumeragi::status::local_peer_removed() != local_removed {
             crate::sumeragi::status::set_local_removed_from_world(local_removed);

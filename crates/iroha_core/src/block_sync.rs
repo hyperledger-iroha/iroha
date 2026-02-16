@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use crate::{
     IrohaNetwork, NetworkMessage,
     kura::Kura,
-    state::{State, StateReadOnly, StateView, WorldReadOnly},
+    state::{State, StateReadOnly, StateReadOnlyWithTransactions, StateView, WorldReadOnly},
     sumeragi::{
         SumeragiHandle,
         consensus::{
@@ -651,7 +651,7 @@ impl BlockSynchronizer {
     /// Sends requests for the latest blocks to a subset of online peers
     async fn request_block(&mut self) {
         let now = std::time::Instant::now();
-        let now_height = u64::try_from(self.state.view().height()).unwrap_or_else(|_| {
+        let now_height = u64::try_from(self.state.committed_height()).unwrap_or_else(|_| {
             warn!("block sync: state height exceeds u64::MAX; saturating");
             u64::MAX
         });
@@ -702,7 +702,7 @@ impl BlockSynchronizer {
 
         let (targets, stray_targets, gossip_size, world_known) = {
             let world_peers: BTreeSet<_> =
-                self.state.view().world.peers().iter().cloned().collect();
+                self.state.world_view().peers().iter().cloned().collect();
             let mut rng = rand::rng();
             let gossip_size = usize::try_from(self.gossip_size.get()).unwrap_or(usize::MAX);
             let (targets, stray_targets) =
@@ -994,10 +994,9 @@ impl BlockSynchronizer {
     pub(crate) fn block_signatures_valid(
         block: &SignedBlock,
         topology: &Topology,
-        state: &State,
+        state: &impl StateReadOnlyWithTransactions,
     ) -> Result<(), crate::block::SignatureVerificationError> {
-        let state_view = state.view();
-        crate::block::ValidBlock::validate_signatures_subset(block, topology, &state_view)
+        crate::block::ValidBlock::validate_signatures_subset(block, topology, state)
     }
 }
 
@@ -2354,16 +2353,16 @@ pub mod message {
         block_hash: HashOf<BlockHeader>,
         fallback_consensus_mode: ConsensusMode,
     ) -> Option<RosterMetadata> {
-        let consensus_mode = {
-            let view = state.view();
-            consensus_mode_for_block_sync(&view, block_height, fallback_consensus_mode)
-        };
+        let world = state.world_view();
+        let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+            &world,
+            block_height,
+            fallback_consensus_mode,
+        );
         let fill_snapshot = |mut metadata: RosterMetadata| {
             if matches!(consensus_mode, ConsensusMode::Npos) && metadata.stake_snapshot.is_none() {
-                let roster = metadata.validator_set().map(<[_]>::to_vec);
-                if let Some(roster) = roster.as_ref() {
-                    metadata.stake_snapshot =
-                        CommitStakeSnapshot::from_roster(state.view().world(), roster);
+                if let Some(roster) = metadata.validator_set() {
+                    metadata.stake_snapshot = CommitStakeSnapshot::from_roster(&world, roster);
                 }
             }
             metadata
@@ -2851,11 +2850,9 @@ pub mod message {
         ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
             let mut dropped = 0usize;
             let fallback_topology = fallback_topology.cloned();
-            let (mut expected_height, mut expected_hash) = {
-                let view = state.view();
-                let tip_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-                (tip_height.saturating_add(1), view.latest_block_hash())
-            };
+            let tip_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+            let mut expected_height = tip_height.saturating_add(1);
+            let mut expected_hash = state.latest_block_hash_fast();
             let mut filtered = Vec::new();
             for (block, qc) in entries {
                 let block_hash = block.hash();
@@ -2880,28 +2877,24 @@ pub mod message {
                 let stake_snapshot = rosters
                     .get(&block_hash)
                     .and_then(|meta| meta.stake_snapshot.as_ref());
-                let context = {
+                let (context, signature_check, sanitized_qc) = {
                     // Keep the state view short-lived to reduce lock contention under load.
                     let state_view = state.view();
                     let mode_tag =
                         mode_tag_for_block_sync(&state_view, block_height, fallback_consensus_mode);
-                    BlockSyncValidationContext::new(&block, &topology, &state_view, mode_tag)
-                };
-                let signature_check = BlockSynchronizer::block_signatures_valid(
-                    &block,
-                    &context.signature_topology,
-                    state,
-                );
-                let allow_without_quorum =
-                    extends_tip && block_height == expected_height && signature_check.is_ok();
-                let block_signers = if signature_check.is_ok() {
-                    Self::commit_role_signers_all(&block, &context.signature_topology)
-                } else {
-                    BTreeSet::new()
-                };
-                let sanitized_qc = {
-                    let state_view = state.view();
-                    sanitize_block_sync_qc(
+                    let context =
+                        BlockSyncValidationContext::new(&block, &topology, &state_view, mode_tag);
+                    let signature_check = BlockSynchronizer::block_signatures_valid(
+                        &block,
+                        &context.signature_topology,
+                        &state_view,
+                    );
+                    let block_signers = if signature_check.is_ok() {
+                        Self::commit_role_signers_all(&block, &context.signature_topology)
+                    } else {
+                        BTreeSet::new()
+                    };
+                    let sanitized_qc = sanitize_block_sync_qc(
                         &state_view,
                         fallback_consensus_mode,
                         &block,
@@ -2910,8 +2903,11 @@ pub mod message {
                         &topology,
                         &block_signers,
                         stake_snapshot,
-                    )
+                    );
+                    (context, signature_check, sanitized_qc)
                 };
+                let allow_without_quorum =
+                    extends_tip && block_height == expected_height && signature_check.is_ok();
                 if should_drop_block_sync_entry(
                     &block,
                     &context,
@@ -3051,8 +3047,8 @@ pub mod message {
                     seen_blocks,
                 }) => {
                     let is_registered = {
-                        let view = block_sync.state.view();
-                        view.world.peers().iter().any(|peer| peer == peer_id)
+                        let world = block_sync.state.world_view();
+                        world.peers().iter().any(|peer| peer == peer_id)
                     };
                     if !is_registered && !block_sync.trusted_peers.contains(peer_id) {
                         debug!(
@@ -3071,7 +3067,7 @@ pub mod message {
                         return;
                     }
 
-                    let local_latest_block_hash = block_sync.state.view().latest_block_hash();
+                    let local_latest_block_hash = block_sync.state.latest_block_hash_fast();
 
                     if *latest_hash == local_latest_block_hash
                         || *prev_hash == local_latest_block_hash
@@ -3087,8 +3083,8 @@ pub mod message {
                                 .checked_add(1)
                                 .expect("INTERNAL BUG: Blockchain height overflow")
                         } else {
-                            let now_height =
-                                u64::try_from(block_sync.state.view().height()).unwrap_or(u64::MAX);
+                            let now_height = u64::try_from(block_sync.state.committed_height())
+                                .unwrap_or(u64::MAX);
                             share_unknown_prev = should_share_unknown_prev_hash(
                                 &mut block_sync.unknown_prev_hashes,
                                 peer_id,
@@ -3256,9 +3252,7 @@ pub mod message {
                     }
                     let paired: Vec<_> = blocks.iter().cloned().zip(qcs.iter().cloned()).collect();
                     let fallback_topology = {
-                        let state_view = block_sync.state.view();
-                        let commit_topology: Vec<_> =
-                            state_view.commit_topology().iter().cloned().collect();
+                        let commit_topology = block_sync.state.commit_topology_snapshot();
                         (!commit_topology.is_empty()).then(|| Topology::new(commit_topology))
                     };
                     let (filtered_blocks, dropped) = Self::filter_blocks_with_valid_signatures(
@@ -3333,9 +3327,9 @@ pub mod message {
                             block_sync.fallback_consensus_mode,
                         );
                         let consensus_mode = {
-                            let view = block_sync.state.view();
-                            consensus_mode_for_block_sync(
-                                &view,
+                            let world = block_sync.state.world_view();
+                            crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                                &world,
                                 block_height,
                                 block_sync.fallback_consensus_mode,
                             )
@@ -5002,7 +4996,7 @@ pub mod message {
             let signature_check = BlockSynchronizer::block_signatures_valid(
                 &invalid_block,
                 &context.signature_topology,
-                &state,
+                &state_view,
             );
 
             assert!(
