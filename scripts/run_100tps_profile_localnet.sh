@@ -277,25 +277,46 @@ run_mode() {
   if [[ -n "$LOGGER_FILTER" ]]; then
     logger_args+=(--logger-filter "$LOGGER_FILTER")
   fi
-  IROHAD_BIN="$PPROF_IROHAD_BIN" \
-    "${SCRIPT_DIR}/deploy_localnet.sh" \
-      --iroha-dir "$IROHA_DIR" \
-      --out-dir "$out_dir" \
-      --peers "$PEERS" \
-      --seed "$seed" \
-      --build-line iroha3 \
-      --consensus-mode "$consensus_mode" \
-      --block-time-ms 1000 \
-      --commit-time-ms 1000 \
-      --queue-capacity "$QUEUE_CAPACITY" \
-      --queue-ttl-ms "$QUEUE_TTL_MS" \
-      --base-api-port "$base_api_port" \
-      --base-p2p-port "$base_p2p_port" \
-      --timeout "$LOCALNET_TIMEOUT" \
-      "${logger_args[@]}" \
-      --force \
-      --skip-asset-register \
-      "${PROFILE_ARGS[@]}"
+  if ((${#PROFILE_ARGS[@]} > 0)); then
+    IROHAD_BIN="$PPROF_IROHAD_BIN" \
+      "${SCRIPT_DIR}/deploy_localnet.sh" \
+        --iroha-dir "$IROHA_DIR" \
+        --out-dir "$out_dir" \
+        --peers "$PEERS" \
+        --seed "$seed" \
+        --build-line iroha3 \
+        --consensus-mode "$consensus_mode" \
+        --block-time-ms 1000 \
+        --commit-time-ms 1000 \
+        --queue-capacity "$QUEUE_CAPACITY" \
+        --queue-ttl-ms "$QUEUE_TTL_MS" \
+        --base-api-port "$base_api_port" \
+        --base-p2p-port "$base_p2p_port" \
+        --timeout "$LOCALNET_TIMEOUT" \
+        "${logger_args[@]}" \
+        --force \
+        --skip-asset-register \
+        "${PROFILE_ARGS[@]}"
+  else
+    IROHAD_BIN="$PPROF_IROHAD_BIN" \
+      "${SCRIPT_DIR}/deploy_localnet.sh" \
+        --iroha-dir "$IROHA_DIR" \
+        --out-dir "$out_dir" \
+        --peers "$PEERS" \
+        --seed "$seed" \
+        --build-line iroha3 \
+        --consensus-mode "$consensus_mode" \
+        --block-time-ms 1000 \
+        --commit-time-ms 1000 \
+        --queue-capacity "$QUEUE_CAPACITY" \
+        --queue-ttl-ms "$QUEUE_TTL_MS" \
+        --base-api-port "$base_api_port" \
+        --base-p2p-port "$base_p2p_port" \
+        --timeout "$LOCALNET_TIMEOUT" \
+        "${logger_args[@]}" \
+        --force \
+        --skip-asset-register
+  fi
 
   started=1
 
