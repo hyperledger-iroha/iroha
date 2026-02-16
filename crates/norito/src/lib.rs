@@ -2712,6 +2712,7 @@ pub mod json {
             unsafe {
                 write_neon(s, out);
             }
+            return;
         }
         // x86_64 AVX2 fast path using vector compares + movemask
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -2770,6 +2771,7 @@ pub mod json {
             unsafe {
                 write_avx2(s, out);
             }
+            return;
         }
         // x86_64 AVX2 runtime path when binary is not compiled with avx2 by default
         #[cfg(all(
@@ -2836,6 +2838,7 @@ pub mod json {
                 unsafe {
                     write_avx2_rt(s, out);
                 }
+                return;
             }
         }
         #[cfg(not(any(

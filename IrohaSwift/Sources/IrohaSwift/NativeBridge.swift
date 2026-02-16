@@ -67,7 +67,8 @@ enum NoritoBridgeLoader {
         }
 
         if let defaultHandle = dlopen(nil, RTLD_NOW),
-           dlsym(defaultHandle, "connect_norito_free") != nil {
+           dlsym(defaultHandle, "connect_norito_free") != nil,
+           dlsym(defaultHandle, "connect_norito_offline_commitment_update") != nil {
             NSLog("[NoritoBridgeLoader] found via dlopen(nil)")
             return (defaultHandle, .valid(path: "embedded", identifier: currentIdentifier()))
         }
@@ -459,8 +460,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     enum OfflineBalanceProofBridgeError: Error {
         case callFailed(Int32)
     }
-    enum OfflineFastpqProofBridgeError: Error {
+    enum OfflineFastpqProofBridgeError: Error, LocalizedError {
         case callFailed(Int32)
+
+        var errorDescription: String? {
+            switch self {
+            case .callFailed(let code):
+                return "FASTPQ bridge call failed with status \(code)"
+            }
+        }
     }
 
     private func throwOnStatus(_ status: Int32) throws {
@@ -2443,6 +2451,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 setAccelerationConfigFn(UnsafeRawPointer(ptr))
             }
         }
+        NSLog("[NoritoNativeBridge] init done — status=%@, handle=%@, free=%@, commitUpdate=%@, balanceProof=%@, blindingSeed=%@",
+              "\(self.bridgeStatus)",
+              self.bridgeHandle == nil ? "nil" : "ok",
+              self.freeFn == nil ? "nil" : "ok",
+              self.offlineCommitmentUpdateFn == nil ? "nil" : "ok",
+              self.offlineBalanceProofFn == nil ? "nil" : "ok",
+              self.offlineBlindingFromSeedFn == nil ? "nil" : "ok")
         #else
         self.bridgeStatus = .missing(path: "unsupported platform")
         #endif
@@ -2454,6 +2469,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return encodeTransferFn != nil && freeFn != nil
         #else
         return false
+        #endif
+    }
+
+    public var hasOfflineCommitmentUpdate: Bool {
+        #if canImport(Darwin)
+        return offlineCommitmentUpdateFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var bridgeStatusDescription: String {
+        #if canImport(Darwin)
+        return "\(bridgeStatus)"
+        #else
+        return "non-Darwin"
         #endif
     }
 
@@ -6702,7 +6733,13 @@ extension NoritoNativeBridge {
     ) throws -> Data? {
         #if canImport(Darwin)
         guard let offlineCommitmentUpdateFn = offlineCommitmentUpdateFn,
-              let freeFn = freeFn else { return nil }
+              let freeFn = freeFn else {
+            NSLog("[NoritoNativeBridge] offlineCommitmentUpdate: fn=%@, free=%@, bridgeHandle=%@",
+                  self.offlineCommitmentUpdateFn == nil ? "nil" : "ok",
+                  self.freeFn == nil ? "nil" : "ok",
+                  self.bridgeHandle == nil ? "nil" : "ok")
+            return nil
+        }
         guard !initialCommitment.isEmpty,
               !initialBlinding.isEmpty,
               !resultingBlinding.isEmpty else {

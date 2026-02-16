@@ -23,6 +23,7 @@ use std::{
     fs,
     future::Future,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         Arc,
         Mutex,
@@ -126,6 +127,160 @@ fn parse_manifest_crypto_str(raw: &str) -> Result<ManifestCrypto, norito::Error>
     }
 }
 
+fn parse_confidential_registry_meta_str(raw: &str) -> Result<ConfidentialRegistryMeta, norito::Error> {
+    if let Ok(meta) = norito::json::from_str(raw) {
+        Ok(meta)
+    } else {
+        let value = norito::json::parse_value(raw).map_err(norito::Error::from)?;
+        norito::json::from_value(value).map_err(norito::Error::from)
+    }
+}
+
+fn extract_after_key<'a>(raw: &'a str, key: &str) -> Option<&'a str> {
+    let lower = raw.to_ascii_lowercase();
+    let idx = lower.find(key)?;
+    Some(&raw[idx + key.len()..])
+}
+
+fn extract_jsonish_array(raw: &str, key: &str) -> Option<String> {
+    let tail = extract_after_key(raw, key)?;
+    let start = tail.find('[')?;
+    let inner = &tail[start + 1..];
+    let end = inner.find(']')?;
+    Some(inner[..end].to_owned())
+}
+
+fn extract_jsonish_scalar(raw: &str, key: &str) -> Option<String> {
+    let tail = extract_after_key(raw, key)?;
+    let trimmed = tail.trim_start_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, ':' | '=' | '>' | '-' | '\\' | '"' | '\'' | ',')
+    });
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let token = trimmed
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | '}' | ']' | '"' | '\''))
+        .next()
+        .unwrap_or_default()
+        .trim_matches(&['"', '\'', '\\'][..]);
+
+    (!token.is_empty()).then(|| token.to_owned())
+}
+
+fn extract_jsonish_bool(raw: &str, key: &str) -> Option<bool> {
+    match extract_jsonish_scalar(raw, key)?.to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_curve_ids(raw: &str) -> Vec<u8> {
+    let mut values = Vec::new();
+    for token in raw.split(|ch: char| !ch.is_ascii_digit()) {
+        if token.is_empty() {
+            continue;
+        }
+        if let Ok(value) = token.parse::<u8>()
+            && !values.contains(&value)
+        {
+            values.push(value);
+        }
+    }
+    values
+}
+
+fn parse_allowed_signing(raw: &str) -> Vec<Algorithm> {
+    let mut values = Vec::new();
+    for token in raw.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')) {
+        if token.is_empty() {
+            continue;
+        }
+        let normalized = token.to_ascii_lowercase();
+        if let Ok(algorithm) = Algorithm::from_str(&normalized)
+            && !values.contains(&algorithm)
+        {
+            values.push(algorithm);
+        }
+    }
+    values
+}
+
+fn decode_crypto_manifest_heuristics(raw: &str) -> Result<ManifestCrypto, norito::Error> {
+    // Legacy payloads may be JSON-ish text with escaped quotes or malformed key/value separators.
+    let trimmed = raw.trim().trim_matches(&['"', '\''][..]);
+    let unescaped = trimmed
+        .replace("\\\"", "\"")
+        .replace("\\{", "{")
+        .replace("\\}", "}")
+        .replace("\\[", "[")
+        .replace("\\]", "]");
+
+    let candidates = [trimmed, unescaped.as_str()];
+    let mut manifest = ManifestCrypto::default();
+    let mut parsed_any = false;
+
+    for candidate in candidates {
+        if let Some(curves_raw) = extract_jsonish_array(candidate, "allowed_curve_ids") {
+            let curves = parse_curve_ids(&curves_raw);
+            if !curves.is_empty() {
+                manifest.allowed_curve_ids = curves;
+                parsed_any = true;
+            }
+        }
+
+        if let Some(signing_raw) = extract_jsonish_array(candidate, "allowed_signing") {
+            let signing = parse_allowed_signing(&signing_raw);
+            if !signing.is_empty() {
+                manifest.allowed_signing = signing;
+                parsed_any = true;
+            }
+        } else if let Some(signing_scalar) = extract_jsonish_scalar(candidate, "allowed_signing") {
+            let signing = parse_allowed_signing(&signing_scalar);
+            if !signing.is_empty() {
+                manifest.allowed_signing = signing;
+                parsed_any = true;
+            }
+        }
+
+        if let Some(hash) = extract_jsonish_scalar(candidate, "default_hash")
+            && !hash.trim().is_empty()
+        {
+            manifest.default_hash = hash;
+            parsed_any = true;
+        }
+
+        if let Some(distid) = extract_jsonish_scalar(candidate, "sm2_distid_default")
+            && !distid.trim().is_empty()
+        {
+            manifest.sm2_distid_default = distid;
+            parsed_any = true;
+        }
+
+        if let Some(sm_intrinsics) = extract_jsonish_scalar(candidate, "sm_intrinsics")
+            && !sm_intrinsics.trim().is_empty()
+        {
+            manifest.sm_intrinsics = sm_intrinsics;
+            parsed_any = true;
+        }
+
+        if let Some(sm_preview) = extract_jsonish_bool(candidate, "sm_openssl_preview") {
+            manifest.sm_openssl_preview = sm_preview;
+            parsed_any = true;
+        }
+    }
+
+    if parsed_any {
+        Ok(manifest)
+    } else {
+        Err(norito::Error::Message(
+            "failed to decode crypto_manifest_meta payload".to_string(),
+        ))
+    }
+}
+
 fn decode_crypto_manifest_meta(payload: &Json) -> Result<ManifestCrypto, norito::Error> {
     if let Ok(meta) = parse_manifest_crypto_str(payload.get()) {
         return Ok(meta);
@@ -164,8 +319,64 @@ fn decode_crypto_manifest_meta(payload: &Json) -> Result<ManifestCrypto, norito:
         }
     }
 
+    if let Ok(meta) = decode_crypto_manifest_heuristics(payload.get()) {
+        return Ok(meta);
+    }
+
+    let preview: String = payload.get().chars().take(256).collect();
+    tracing::warn!(preview = %preview, "failed to decode crypto_manifest_meta payload");
+    Err(norito::Error::Message("failed to decode crypto_manifest_meta payload".to_string()))
+}
+
+fn decode_confidential_registry_meta(
+    payload: &Json,
+) -> Result<ConfidentialRegistryMeta, norito::Error> {
+    if let Ok(meta) = parse_confidential_registry_meta_str(payload.get()) {
+        return Ok(meta);
+    }
+
+    if let Ok(value) = norito::json::parse_value(payload.get()) {
+        if let Ok(meta) = norito::json::from_value(value.clone()) {
+            return Ok(meta);
+        }
+        if let Some(inner) = value.as_str()
+            && let Ok(meta) = parse_confidential_registry_meta_str(inner)
+        {
+            return Ok(meta);
+        }
+    }
+
+    if let Ok(inner) = norito::json::from_str::<String>(payload.get())
+        && let Ok(meta) = parse_confidential_registry_meta_str(&inner)
+    {
+        return Ok(meta);
+    }
+
+    // Legacy malformed payloads sometimes wrapped the JSON object in raw quotes
+    // without escaping interior quotes. Peel one wrapping layer and retry.
+    let raw = payload.get().trim();
+    if raw.len() >= 2
+        && ((raw.starts_with('"') && raw.ends_with('"'))
+            || (raw.starts_with('\'') && raw.ends_with('\'')))
+    {
+        let mut inner = raw[1..raw.len() - 1].to_owned();
+        if inner.contains("\\\"") {
+            inner = inner.replace("\\\"", "\"");
+        }
+        if let Ok(meta) = parse_confidential_registry_meta_str(inner.trim()) {
+            return Ok(meta);
+        }
+    }
+
+    // Last-resort parse for mangled key/value separators.
+    if let Some(hash) = extract_jsonish_scalar(payload.get(), "vk_set_hash") {
+        return Ok(ConfidentialRegistryMeta {
+            vk_set_hash: Some(hash),
+        });
+    }
+
     Err(norito::Error::Message(
-        "failed to decode crypto_manifest_meta payload".to_string(),
+        "failed to decode confidential_registry_root payload".to_string(),
     ))
 }
 
@@ -410,6 +621,71 @@ mod handshake_payload_tests {
         );
         assert_eq!(decoded.default_hash, "blake2b-256");
         assert_eq!(decoded.allowed_curve_ids, vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn decode_crypto_manifest_meta_handles_backslash_escaped_object_payload() {
+        let raw = r#"{\"allowed_curve_ids\":[1,3,4],\"allowed_signing\":[\"ed25519\",\"secp256k1\",\"bls_normal\"],\"default_hash\":\"blake2b-256\",\"sm2_distid_default\":\"1234567812345678\",\"sm_openssl_preview\":false}"#;
+        let payload = Json::from_string_unchecked(raw.to_owned());
+        let decoded =
+            decode_crypto_manifest_meta(&payload).expect("decode backslash-escaped payload");
+        assert_eq!(
+            decoded.allowed_signing,
+            vec![
+                Algorithm::Ed25519,
+                Algorithm::Secp256k1,
+                Algorithm::BlsNormal
+            ]
+        );
+        assert_eq!(decoded.default_hash, "blake2b-256");
+        assert_eq!(decoded.allowed_curve_ids, vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn decode_crypto_manifest_meta_handles_mangled_key_value_separators() {
+        let raw = r#"{"allowed_curve_ids""[1,3,4],"allowed_signing""["ed25519","secp256k1","bls_normal"],"default_hash""blake2b-256","sm2_distid_default""1234567812345678","sm_openssl_preview"false}"#;
+        let payload = Json::from_string_unchecked(raw.to_owned());
+        let decoded =
+            decode_crypto_manifest_meta(&payload).expect("decode mangled key-value payload");
+        assert_eq!(
+            decoded.allowed_signing,
+            vec![
+                Algorithm::Ed25519,
+                Algorithm::Secp256k1,
+                Algorithm::BlsNormal
+            ]
+        );
+        assert_eq!(decoded.default_hash, "blake2b-256");
+        assert_eq!(decoded.allowed_curve_ids, vec![1, 3, 4]);
+        assert!(!decoded.sm_openssl_preview);
+    }
+
+    #[test]
+    fn decode_confidential_registry_meta_handles_normal_json() {
+        let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let payload =
+            Json::from_string_unchecked(format!("{{\"vk_set_hash\":\"{hash}\"}}"));
+        let decoded =
+            decode_confidential_registry_meta(&payload).expect("decode confidential payload");
+        assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
+    }
+
+    #[test]
+    fn decode_confidential_registry_meta_handles_mangled_key_value_separators() {
+        let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let payload =
+            Json::from_string_unchecked(format!("{{\"vk_set_hash\"\"{hash}\"}}"));
+        let decoded =
+            decode_confidential_registry_meta(&payload).expect("decode mangled confidential payload");
+        assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
+    }
+
+    #[test]
+    fn parse_confidential_registry_hash_treats_null_as_absent() {
+        let payload = Json::from_string_unchecked("{\"vk_set_hash\"null}".to_string());
+        let decoded = parse_confidential_registry_hash(&payload)
+            .expect("decode null confidential payload");
+        assert_eq!(decoded, None);
     }
 }
 
@@ -6997,13 +7273,16 @@ fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResul
 }
 
 fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 32]>, MainError> {
-    let meta: ConfidentialRegistryMeta = payload.try_into_any().map_err(|err| {
+    let meta = decode_confidential_registry_meta(payload).map_err(|err| {
         Report::new(MainError::Config).attach(format!(
             "failed to decode confidential_registry_root payload: {err}"
         ))
     })?;
     if let Some(hash_str) = meta.vk_set_hash {
         let trimmed = hash_str.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("null") {
+            return Ok(None);
+        }
         let body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
         if body.len() != 64 || !body.as_bytes().iter().all(u8::is_ascii_hexdigit) {
             return Err(Report::new(MainError::Config).attach(format!(

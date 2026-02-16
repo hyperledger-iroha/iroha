@@ -3393,6 +3393,9 @@ mod attestation {
         settlement_cfg: &iroha_config::parameters::actual::Offline,
         submitted_snapshot: Option<&OfflinePlatformTokenSnapshot>,
     ) -> Result<(), InstructionExecutionError> {
+        if settlement_cfg.skip_platform_attestation {
+            return Ok(());
+        }
         match &receipt.platform_proof {
             OfflinePlatformProof::AppleAppAttest(proof) => {
                 verify_apple_attestation(receipt, certificate, chain_id, proof, block_timestamp_ms)

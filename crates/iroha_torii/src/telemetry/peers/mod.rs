@@ -30,7 +30,8 @@ pub struct GeoLocation {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct PeerConfigDto {
-    pub public_key: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub queue_capacity: Option<u32>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -41,6 +42,16 @@ pub struct PeerConfigDto {
     pub network_tx_gossip_size: Option<u32>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub network_tx_gossip_period: Option<ExplorerDurationDto>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct PeerConfigSnapshot {
+    pub public_key: Option<PublicKey>,
+    pub queue_capacity: Option<u32>,
+    pub network_block_gossip_size: Option<u32>,
+    pub network_block_gossip_period_ms: Option<u64>,
+    pub network_tx_gossip_size: Option<u32>,
+    pub network_tx_gossip_period_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -193,7 +204,7 @@ struct PeerState {
     url: ToriiUrl,
     connected: bool,
     telemetry_unsupported: bool,
-    config: Option<ConfigGetDTO>,
+    config: Option<PeerConfigSnapshot>,
     geo: Option<GeoLocation>,
     connected_peers: Option<Vec<String>>,
 }
@@ -223,18 +234,31 @@ impl PeerState {
 }
 
 impl PeerConfigDto {
-    fn from_config(cfg: &ConfigGetDTO) -> Self {
+    fn from_config(cfg: &PeerConfigSnapshot) -> Self {
         Self {
-            public_key: cfg.public_key.to_string(),
+            public_key: cfg.public_key.as_ref().map(ToString::to_string),
+            queue_capacity: cfg.queue_capacity,
+            network_block_gossip_size: cfg.network_block_gossip_size,
+            network_block_gossip_period: cfg
+                .network_block_gossip_period_ms
+                .map(|ms| ExplorerDurationDto { ms: ms.into() }),
+            network_tx_gossip_size: cfg.network_tx_gossip_size,
+            network_tx_gossip_period: cfg
+                .network_tx_gossip_period_ms
+                .map(|ms| ExplorerDurationDto { ms: ms.into() }),
+        }
+    }
+}
+
+impl From<&ConfigGetDTO> for PeerConfigSnapshot {
+    fn from(cfg: &ConfigGetDTO) -> Self {
+        Self {
+            public_key: Some(cfg.public_key.clone()),
             queue_capacity: cfg.queue.capacity.get().try_into().ok(),
             network_block_gossip_size: Some(cfg.network.block_gossip_size.get()),
-            network_block_gossip_period: Some(ExplorerDurationDto {
-                ms: cfg.network.block_gossip_period_ms.into(),
-            }),
+            network_block_gossip_period_ms: Some(cfg.network.block_gossip_period_ms.into()),
             network_tx_gossip_size: Some(cfg.network.transaction_gossip_size.get()),
-            network_tx_gossip_period: Some(ExplorerDurationDto {
-                ms: cfg.network.transaction_gossip_period_ms.into(),
-            }),
+            network_tx_gossip_period_ms: Some(cfg.network.transaction_gossip_period_ms.into()),
         }
     }
 }
