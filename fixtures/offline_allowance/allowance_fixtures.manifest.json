@@ -2,7 +2,7 @@
   "allowances": [
     {
       "label": "ios-demo",
-      "certificate_id_hex": "D07D3FD2FEB66ECEA4B382927C16CBEE946216B270CB88E313A63AB49ECEA00B",
+      "certificate_id_hex": "A668C17B50628AB53DC369ED8EB9CD71D1A26A55953EB307668238FDAC0ECCD5",
       "controller": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
       "allowance_asset": "xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
       "allowance_amount": "250.00",
@@ -25,7 +25,7 @@
     },
     {
       "label": "android-demo",
-      "certificate_id_hex": "09F4AD5E6358B1E3E8F18ECF6D62E25F6553F2550AE55126645CE74D379DC18F",
+      "certificate_id_hex": "E8A46C8168CBC764A80AC9BD6E6FCC505011107A1C3690A846BF65A1011AE2A7",
       "controller": "34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ",
       "allowance_asset": "usd#sora#34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ",
       "allowance_amount": "150.00",
@@ -50,7 +50,7 @@
     },
     {
       "label": "android-hms-demo",
-      "certificate_id_hex": "32D1259E698BAD11FC0C59670963233F8C289BAC0C85B813462ECED3567450BB",
+      "certificate_id_hex": "AE3CEE7A42A0091D218A7FF6CC96D29BD6FCBCD070B21F617125074069D3318F",
       "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
       "allowance_asset": "jpy#sora#34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
       "allowance_amount": "90",
@@ -76,7 +76,7 @@
     },
     {
       "label": "android-play-demo",
-      "certificate_id_hex": "F8E308AB54C3664FAD1E7091012BCF6CB7EE2CB64008EFBBAB93046B75029039",
+      "certificate_id_hex": "88336D7FA66750FED0F29B088273914E3F41502B60C27BC20B8A0DD31C575D3D",
       "controller": "34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
       "allowance_asset": "xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G3Gd9suBTsJvKNFkYKvje2hpP717N9P7Tm8Lwr5p618i8sN9",
       "allowance_amount": "175.00",
@@ -104,7 +104,7 @@
     },
     {
       "label": "android-provisioned-demo",
-      "certificate_id_hex": "D5FDC91DBA22540DEF5C5F04B1CEE107E1D9E767D9845CBDED23531616986F3D",
+      "certificate_id_hex": "B8349D4BC905F0F551C645BE075A361DB8E3342A16BA90E705B86037D3975EBF",
       "controller": "34mSYnDgbaJM58rbLoif4Tkp7G8SqQ5XH3c7btPpdLLiXrvtptbDi71W6jGmCDP5NxTDbMbwx",
       "allowance_asset": "xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8SqQ5XH3c7btPpdLLiXrvtptbDi71W6jGmCDP5NxTDbMbwx",
       "allowance_amount": "200.00",

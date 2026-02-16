@@ -3170,6 +3170,8 @@ pub mod settlement {
         pub const PROOF_MODE: &str = "optional";
         /// Default maximum age for offline receipts (ms). Zero disables age checks.
         pub const MAX_RECEIPT_AGE_MS: u64 = 86_400_000;
+        /// Whether to skip platform attestation verification (for local testing only).
+        pub const SKIP_PLATFORM_ATTESTATION: bool = false;
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

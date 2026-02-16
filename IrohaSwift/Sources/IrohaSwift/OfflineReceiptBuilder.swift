@@ -370,6 +370,28 @@ public enum OfflineReceiptBuilder {
         return (sum: sum, counter: counter, replay: replay)
     }
 
+    /// Generates aggregate proofs from **raw** Torii JSON bytes, bypassing
+    /// the ``ToriiJSONValue`` round-trip that corrupts Iroha-native JSON format.
+    public static func generateAggregateProofsFromRawData(
+        sumRequestData: Data? = nil,
+        counterRequestData: Data? = nil,
+        replayRequestData: Data? = nil
+    ) throws -> (sum: Data?, counter: Data?, replay: Data?) {
+        let sum = try generateAggregateProofFromRawData(
+            requestData: sumRequestData,
+            bridgeCall: { try NoritoNativeBridge.shared.offlineFastpqProofSum(requestJson: $0) }
+        )
+        let counter = try generateAggregateProofFromRawData(
+            requestData: counterRequestData,
+            bridgeCall: { try NoritoNativeBridge.shared.offlineFastpqProofCounter(requestJson: $0) }
+        )
+        let replay = try generateAggregateProofFromRawData(
+            requestData: replayRequestData,
+            bridgeCall: { try NoritoNativeBridge.shared.offlineFastpqProofReplay(requestJson: $0) }
+        )
+        return (sum: sum, counter: counter, replay: replay)
+    }
+
     private static func generateAggregateProof(
         request: ToriiJSONValue?,
         bridgeCall: (Data) throws -> Data?
@@ -385,6 +407,26 @@ public enum OfflineReceiptBuilder {
         }
         do {
             if let proof = try bridgeCall(json) {
+                return proof
+            }
+        } catch {
+            throw OfflineReceiptBuilderError.aggregateProofGenerationFailed(error.localizedDescription)
+        }
+        let message = NoritoNativeBridge.bridgeUnavailableMessage(
+            "FASTPQ proof generation requires the native bridge."
+        )
+        throw OfflineReceiptBuilderError.aggregateProofGenerationUnavailable(message)
+    }
+
+    private static func generateAggregateProofFromRawData(
+        requestData: Data?,
+        bridgeCall: (Data) throws -> Data?
+    ) throws -> Data? {
+        guard let requestData else {
+            return nil
+        }
+        do {
+            if let proof = try bridgeCall(requestData) {
                 return proof
             }
         } catch {
