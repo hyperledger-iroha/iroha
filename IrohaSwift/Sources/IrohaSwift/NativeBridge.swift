@@ -68,7 +68,30 @@ enum NoritoBridgeLoader {
 
         if let defaultHandle = dlopen(nil, RTLD_NOW),
            dlsym(defaultHandle, "connect_norito_free") != nil {
+            NSLog("[NoritoBridgeLoader] found via dlopen(nil)")
             return (defaultHandle, .valid(path: "embedded", identifier: currentIdentifier()))
+        }
+
+        // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
+        // dlopen(nil) returns a handle to the 57 KB stub, so symbols from the debug dylib are invisible.
+        // Try loading the debug dylib explicitly.
+        if let execURL = Bundle.main.executableURL {
+            let debugDylibURL = execURL.deletingLastPathComponent()
+                .appendingPathComponent(execURL.lastPathComponent + ".debug.dylib")
+            let exists = FileManager.default.fileExists(atPath: debugDylibURL.path)
+            NSLog("[NoritoBridgeLoader] debug dylib path=%@ exists=%d", debugDylibURL.path, exists ? 1 : 0)
+            if exists {
+                let debugHandle = debugDylibURL.path.withCString { ptr in
+                    dlopen(ptr, RTLD_NOW | RTLD_GLOBAL)
+                }
+                let hasSym = debugHandle.flatMap { dlsym($0, "connect_norito_free") } != nil
+                NSLog("[NoritoBridgeLoader] debug dylib handle=%@, hasSym=%d", debugHandle == nil ? "nil" : "ok", hasSym ? 1 : 0)
+                if let debugHandle, hasSym {
+                    return (debugHandle, .valid(path: "debug.dylib", identifier: currentIdentifier()))
+                }
+            }
+        } else {
+            NSLog("[NoritoBridgeLoader] Bundle.main.executableURL is nil")
         }
 
         var lastFailure: ValidationStatus = .missing(path: defaultBridgeBinaryPath())
@@ -428,6 +451,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         case callFailed(Int32)
     }
     enum OfflineCommitmentBridgeError: Error {
+        case callFailed(Int32)
+    }
+    enum OfflineBlindingFromSeedBridgeError: Error {
         case callFailed(Int32)
     }
     enum OfflineBalanceProofBridgeError: Error {
@@ -1434,6 +1460,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
+    private typealias OfflineBlindingFromSeedFn = @convention(c) (
+        UnsafePointer<UInt8>?, UInt,   // initial_blinding
+        UnsafePointer<UInt8>?, UInt,   // certificate_id
+        UInt64,                        // counter
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?
+    ) -> Int32
     private typealias OfflineBalanceProofFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -1527,6 +1560,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var offlineProofCounterFn: OfflineFastpqProofFn? = nil
     private var offlineProofReplayFn: OfflineFastpqProofFn? = nil
     private var offlineCommitmentUpdateFn: OfflineCommitmentUpdateFn? = nil
+    private var offlineBlindingFromSeedFn: OfflineBlindingFromSeedFn? = nil
     private var offlineBalanceProofFn: OfflineBalanceProofFn? = nil
     private var publicKeyFromPrivateFn: PublicKeyFromPrivateFn? = nil
     private var keypairFromSeedFn: KeypairFromSeedFn? = nil
@@ -1634,6 +1668,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let offlineProofCounterFn: Any? = nil
     private let offlineProofReplayFn: Any? = nil
     private let offlineCommitmentUpdateFn: Any? = nil
+    private let offlineBlindingFromSeedFn: Any? = nil
     private let offlineBalanceProofFn: Any? = nil
     private let publicKeyFromPrivateFn: Any? = nil
     private let keypairFromSeedFn: Any? = nil
@@ -2036,6 +2071,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.offlineCommitmentUpdateFn = nil
             }
+            if let offlineBlindingSeedSymbol = dlsym(handle, "connect_norito_offline_blinding_from_seed") {
+                self.offlineBlindingFromSeedFn = unsafeBitCast(offlineBlindingSeedSymbol, to: OfflineBlindingFromSeedFn.self)
+            } else {
+                self.offlineBlindingFromSeedFn = nil
+            }
             if let offlineProofSymbol = dlsym(handle, "connect_norito_offline_balance_proof") {
                 self.offlineBalanceProofFn = unsafeBitCast(offlineProofSymbol, to: OfflineBalanceProofFn.self)
             } else {
@@ -2333,6 +2373,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.offlineProofCounterFn = nil
             self.offlineProofReplayFn = nil
             self.offlineCommitmentUpdateFn = nil
+            self.offlineBlindingFromSeedFn = nil
             self.offlineBalanceProofFn = nil
             self.sm2DefaultDistidFn = nil
             self.sm2KeypairFromSeedFn = nil
@@ -6703,6 +6744,58 @@ extension NoritoNativeBridge {
                 freeFn(pointer)
             }
             throw OfflineCommitmentBridgeError.callFailed(status)
+        }
+        guard let pointer = outputPtr else {
+            return Data()
+        }
+        let data = Data(bytes: pointer, count: Int(outputLen))
+        freeFn(pointer)
+        return data
+        #else
+        return nil
+        #endif
+    }
+
+    /// Derive the resulting blinding for an offline spend commitment.
+    ///
+    /// Computes `resulting_blinding = initial_blinding + HKDF_scalar(certificate_id, counter)`.
+    /// The returned 32-byte scalar must be used as `resultingBlindingHex` in `advanceCommitment`
+    /// so that the sum proof later passes the commitment check.
+    func offlineBlindingFromSeed(
+        initialBlinding: Data,
+        certificateId: Data,
+        counter: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let offlineBlindingFromSeedFn = offlineBlindingFromSeedFn,
+              let freeFn = freeFn else { return nil }
+        guard !initialBlinding.isEmpty, !certificateId.isEmpty else { return nil }
+        var outputPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outputLen: UInt = 0
+        let status = initialBlinding.withUnsafeBytes { initBlindBuffer -> Int32 in
+            guard let initBlindPtr = initBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                return -1
+            }
+            return certificateId.withUnsafeBytes { certBuffer -> Int32 in
+                guard let certPtr = certBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                    return -1
+                }
+                return offlineBlindingFromSeedFn(
+                    initBlindPtr,
+                    UInt(initialBlinding.count),
+                    certPtr,
+                    UInt(certificateId.count),
+                    counter,
+                    &outputPtr,
+                    &outputLen
+                )
+            }
+        }
+        guard status == 0 else {
+            if let pointer = outputPtr {
+                freeFn(pointer)
+            }
+            throw OfflineBlindingFromSeedBridgeError.callFailed(status)
         }
         guard let pointer = outputPtr else {
             return Data()

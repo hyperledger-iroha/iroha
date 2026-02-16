@@ -1,4 +1,6 @@
+import CoreImage
 import Foundation
+import Vision
 import XCTest
 @testable import IrohaSwift
 
@@ -118,6 +120,96 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertTrue(final.isComplete)
         XCTAssertEqual(final.payload, payload)
         XCTAssertEqual(final.recoveredChunks, 1)
+    }
+
+    /// Full chain: encode → TextCodec → CIFilter QR → Vision detect → TextCodec decode → ingest
+    func testQrStreamFullChainViaQRImage() throws {
+        #if canImport(CoreImage) && canImport(Vision)
+        let payload = makePayload(length: 256)
+        let options = OfflineQrStreamOptions(chunkSize: 100, parityGroup: 0)
+        let frameBytesList = try OfflineQrStreamEncoder.encodeFrameBytes(
+            payload: payload,
+            payloadKind: .offlineSpendReceipt,
+            options: options
+        )
+        XCTAssertFalse(frameBytesList.isEmpty, "Should produce at least 1 frame")
+
+        // Convert each frame to text QR string (matching sender)
+        let textFrames = frameBytesList.map {
+            OfflineQrStreamTextCodec.encode($0, encoding: .base64)
+        }
+        print("[Test] Produced \(textFrames.count) text frames")
+        print("[Test] Frame[0] prefix: \(String(textFrames[0].prefix(50)))")
+
+        let decoder = OfflineQrStreamDecoder()
+        var lastResult: OfflineQrStreamDecodeResult?
+
+        for (index, textFrame) in textFrames.enumerated() {
+            // Step 1: Generate QR image with CIFilter (same as sender)
+            guard let textData = textFrame.data(using: .utf8) else {
+                XCTFail("Frame \(index): cannot encode to UTF-8")
+                continue
+            }
+            guard let filter = CIFilter(name: "CIQRCodeGenerator") else {
+                XCTFail("CIQRCodeGenerator unavailable")
+                return
+            }
+            filter.setValue(textData, forKey: "inputMessage")
+            filter.setValue("M", forKey: "inputCorrectionLevel")
+            guard let ciImage = filter.outputImage else {
+                XCTFail("Frame \(index): CIFilter produced no output")
+                continue
+            }
+
+            // Scale QR to reasonable pixel size for Vision
+            let scale = CGAffineTransform(scaleX: 10, y: 10)
+            let scaledImage = ciImage.transformed(by: scale)
+            let context = CIContext()
+            guard let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) else {
+                XCTFail("Frame \(index): cannot create CGImage")
+                continue
+            }
+
+            // Step 2: Detect with Vision
+            let request = VNDetectBarcodesRequest()
+            request.symbologies = [.qr]
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try handler.perform([request])
+            guard let results = request.results, !results.isEmpty else {
+                XCTFail("Frame \(index): Vision detected 0 barcodes")
+                continue
+            }
+
+            // Step 3: Read payloadStringValue
+            guard let detected = results.first?.payloadStringValue else {
+                XCTFail("Frame \(index): no payloadStringValue")
+                continue
+            }
+            print("[Test] Frame[\(index)] detected string prefix: \(String(detected.prefix(50)))")
+
+            // Verify roundtrip fidelity
+            XCTAssertEqual(detected, textFrame, "Frame \(index): Vision string != original text")
+
+            // Step 4: Decode through TextCodec
+            let frameBytes = try OfflineQrStreamTextCodec.decode(detected, encoding: .base64)
+
+            // Verify binary matches encoder output
+            XCTAssertEqual(frameBytes, frameBytesList[index], "Frame \(index): decoded bytes != original frame bytes")
+
+            // Step 5: Ingest into decoder
+            lastResult = try decoder.ingest(frameBytes: frameBytes)
+            print("[Test] Frame[\(index)] progress: \(lastResult!.receivedChunks)/\(lastResult!.totalChunks)")
+        }
+
+        guard let finalResult = lastResult else {
+            return XCTFail("No frames ingested")
+        }
+        XCTAssertTrue(finalResult.isComplete, "Stream should be complete")
+        XCTAssertEqual(finalResult.payload, payload, "Decoded payload should match original")
+        print("[Test] SUCCESS: decoded \(finalResult.payload?.count ?? 0) bytes")
+        #else
+        throw XCTSkip("Requires CoreImage and Vision frameworks")
+        #endif
     }
 
     private func makePayload(length: Int) -> Data {

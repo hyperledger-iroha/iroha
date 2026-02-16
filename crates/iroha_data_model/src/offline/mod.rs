@@ -1714,7 +1714,7 @@ mod model {
     pub struct OfflineBalanceProof {
         /// Issued allowance commitment.
         pub initial_commitment: OfflineAllowanceCommitment,
-        /// Commitment after subtracting all offline spends included in the bundle.
+        /// Commitment after applying all offline spends included in the bundle.
         pub resulting_commitment: Vec<u8>,
         /// Claimed delta \(\Delta\) that is being deposited online.
         pub claimed_delta: Numeric,
@@ -1845,7 +1845,7 @@ mod model {
         pub header: OfflineProofRequestHeader,
         /// Issued allowance commitment.
         pub initial_commitment: OfflineAllowanceCommitment,
-        /// Commitment after subtracting the receipts reported in the bundle.
+        /// Commitment after applying the receipts reported in the bundle.
         pub resulting_commitment: Vec<u8>,
         /// Claimed delta deposited on-ledger.
         pub claimed_delta: Numeric,
