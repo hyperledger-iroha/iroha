@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{GossipBatchEntry, Queue, RoutingDecision},
-    state::{State, StateReadOnlyWithTransactions},
+    state::State,
     tx::AcceptedTransaction,
 };
 
@@ -1168,7 +1168,7 @@ impl TransactionGossiper {
         if self.queue.contains_transaction_hash(tx_hash) {
             return true;
         }
-        self.state.view().has_transaction(tx_hash)
+        self.state.has_committed_transaction(tx_hash)
     }
 
     fn is_transaction_known_locally_cached(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
@@ -1242,10 +1242,15 @@ impl TransactionGossiper {
             return;
         }
 
-        let state_view = self.state.view();
-        let lane_catalog = state_view.nexus.lane_catalog.clone();
-        let lane_config = state_view.nexus.lane_config.clone();
-        drop(state_view);
+        let nexus = self.state.nexus_snapshot();
+        let lane_catalog = nexus.lane_catalog.clone();
+        let lane_config = nexus.lane_config.clone();
+        let (max_clock_drift, tx_limits) = {
+            let world_view = self.state.world_view();
+            let params = &world_view.parameters;
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
 
         for (idx, tx) in txs.into_iter().enumerate() {
@@ -1364,14 +1369,7 @@ impl TransactionGossiper {
                 continue;
             }
 
-            let (max_clock_drift, tx_limits) = {
-                let state_view = self.state.world.view();
-                let params = &state_view.parameters;
-                (params.sumeragi().max_clock_drift(), params.transaction())
-            };
-
             let (signed, payload) = tx.into_signed_with_payload();
-            let crypto_cfg = self.state.crypto();
             match AcceptedTransaction::accept(
                 signed,
                 &self.chain_id,
@@ -1496,10 +1494,15 @@ impl TransactionGossiper {
             return;
         }
 
-        let state_view = self.state.view();
-        let lane_catalog = state_view.nexus.lane_catalog.clone();
-        let lane_config = state_view.nexus.lane_config.clone();
-        drop(state_view);
+        let nexus = self.state.nexus_snapshot();
+        let lane_catalog = nexus.lane_catalog.clone();
+        let lane_config = nexus.lane_config.clone();
+        let (max_clock_drift, tx_limits) = {
+            let world_view = self.state.world_view();
+            let params = &world_view.parameters;
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
 
         for (idx, tx) in txs.iter().enumerate() {
@@ -1618,15 +1621,8 @@ impl TransactionGossiper {
                 continue;
             }
 
-            let (max_clock_drift, tx_limits) = {
-                let state_view = self.state.world.view();
-                let params = &state_view.parameters;
-                (params.sumeragi().max_clock_drift(), params.transaction())
-            };
-
             let signed = (*tx.signed).clone();
             let payload = tx.encoded.as_ref().map(Arc::clone);
-            let crypto_cfg = self.state.crypto();
             match AcceptedTransaction::accept(
                 signed,
                 &self.chain_id,

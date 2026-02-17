@@ -103,7 +103,7 @@ use crate::{
     kura::Kura,
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::{Queue, QueueLimits},
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, WorldReadOnly},
     sumeragi::{
         da::{GateReason, GateSatisfaction},
         message::BlockMessage,
@@ -8686,7 +8686,7 @@ impl Actor {
             value
         };
 
-        let state_view = self.state.view();
+        let world_view = self.state.world_view();
 
         let start_index = self.last_sync_block;
         {
@@ -8768,27 +8768,33 @@ impl Actor {
         }
 
         #[allow(clippy::cast_possible_truncation)]
-        if let Some(timestamp) = state_view.genesis_timestamp() {
-            let curr_time = self.time_source.get_unix_time();
+        if self.state.committed_height() > 0 {
+            let genesis_timestamp = NonZeroUsize::new(1)
+                .and_then(|index| self.kura.get_block(index))
+                .map(|genesis_block| genesis_block.header().creation_time());
 
-            // this will overflow in 584,942,417 years
-            let uptime = curr_time.checked_sub(timestamp).unwrap_or(Duration::ZERO);
-            self.metrics.uptime_since_genesis_ms.set(
-                uptime
-                    .as_millis()
-                    .try_into()
-                    .expect("Timestamp should fit into u64"),
-            )
+            if let Some(timestamp) = genesis_timestamp {
+                let curr_time = self.time_source.get_unix_time();
+
+                // this will overflow in 584,942,417 years
+                let uptime = curr_time.checked_sub(timestamp).unwrap_or(Duration::ZERO);
+                self.metrics.uptime_since_genesis_ms.set(
+                    uptime
+                        .as_millis()
+                        .try_into()
+                        .expect("Timestamp should fit into u64"),
+                );
+            } else {
+                iroha_logger::error!("Failed to get genesis block from Kura.");
+            }
         }
 
         // Below metrics could be out of sync with the "latest block" metric,
-        // since state_view might be potentially ahead of the last reported block.
+        // since the world snapshot might be potentially ahead of the last reported block.
         // This is fine because this time window _should_ be very narrow.
 
-        self.metrics
-            .domains
-            .set(state_view.world().domains().len() as u64);
-        for domain in state_view.world().domains_iter() {
+        self.metrics.domains.set(world_view.domains().len() as u64);
+        for domain in world_view.domains_iter() {
             match self
                 .metrics
                 .accounts
@@ -8801,18 +8807,13 @@ impl Actor {
                     iroha_logger::error!(?err, "Failed to compose domains")
                 }
                 Ok(metrics) => {
-                    metrics.set(
-                        state_view
-                            .world()
-                            .accounts_in_domain_iter(domain.id())
-                            .count() as u64,
-                    );
+                    metrics.set(world_view.accounts_in_domain_iter(domain.id()).count() as u64);
                 }
             }
         }
 
         // Runtime: update active ABI versions count from current state view
-        let active_abi_versions_count = state_view.world().active_abi_versions().len() as u64;
+        let active_abi_versions_count = world_view.active_abi_versions().len() as u64;
         self.metrics
             .runtime_active_abi_versions_count
             .set(active_abi_versions_count);

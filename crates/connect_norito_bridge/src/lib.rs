@@ -10239,7 +10239,7 @@ mod offline_balance_proof_tests {
     fn topup_then_spend_roundtrip() {
         let chain_id = ChainId::from("sora");
         let topup_amount = Numeric::new(4500, 2); // "45.00"
-        let spend_delta = Numeric::new(500, 2);   // "5.00"
+        let spend_delta = Numeric::new(500, 2); // "5.00"
 
         // Step 1: topUp — compute initial commitment C(45.00, blind_topup)
         let zero_commitment = [0u8; 32];
@@ -12449,5 +12449,4 @@ mod sorafs_tests {
             "JNI encoding must match native signing_bytes"
         );
     }
-
 }

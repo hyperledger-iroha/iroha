@@ -586,10 +586,7 @@ impl Actor {
                 super::status::ConsensusMessageReason::FutureWindow,
             );
             if let Some(parent_hash) = parent_hash {
-                let local_height = {
-                    let view = self.state.view();
-                    u64::try_from(view.height()).unwrap_or(u64::MAX)
-                };
+                let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                 let expected_height = local_height.saturating_add(1);
                 let commit_topology = self.effective_commit_topology();
                 let expected_usize = usize::try_from(expected_height).ok();
@@ -644,9 +641,9 @@ impl Actor {
             );
         }
         let (consensus_mode, mode_tag, prf_seed, local_height) = {
-            let view = self.state.view();
-            let consensus_mode = super::effective_consensus_mode_for_height(
-                &view,
+            let world_view = self.state.world_view();
+            let consensus_mode = super::effective_consensus_mode_for_height_from_world(
+                &world_view,
                 block_height,
                 self.config.consensus_mode,
             );
@@ -654,8 +651,12 @@ impl Actor {
                 ConsensusMode::Permissioned => PERMISSIONED_TAG,
                 ConsensusMode::Npos => NPOS_TAG,
             };
-            let prf_seed = Some(super::prf_seed_for_height(&view, block_height));
-            let local_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+            let prf_seed = Some(super::prf_seed_for_height_from_world(
+                &world_view,
+                &self.common_config.chain,
+                block_height,
+            ));
+            let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
             (consensus_mode, mode_tag, prf_seed, local_height)
         };
         let expected_epoch = self.epoch_for_height(block_height);
@@ -1252,12 +1253,12 @@ impl Actor {
         let qc_candidate_start = Instant::now();
         let commit_quorum = topology.min_votes_for_commit().max(1);
         let mut candidate_qc = {
-            let state_view = self.state.view();
+            let world_view = self.state.world_view();
             incoming_qc
                 .or_else(|| selection.commit_qc.clone())
                 .or_else(|| {
-                    crate::block_sync::BlockSynchronizer::block_sync_qc_for(
-                        &state_view,
+                    crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
+                        &world_view,
                         self.config.consensus_mode,
                         &block,
                     )
@@ -1387,12 +1388,11 @@ impl Actor {
             }
         });
         let validated_qc = candidate_qc.as_ref().and_then(|qc| {
-            let state_view = self.state.view();
-            let world = state_view.world();
+            let world_view = self.state.world_view();
             match validate_block_sync_qc(
                 qc,
                 &topology,
-                world,
+                &world_view,
                 &block_signers,
                 block_view,
                 &self.roster_validation_cache.pops,
@@ -1441,12 +1441,11 @@ impl Actor {
                 expected_epoch,
             )
             .and_then(|qc| {
-                let state_view = self.state.view();
-                let world = state_view.world();
+                let world_view = self.state.world_view();
                 validate_block_sync_qc(
                     &qc,
                     &topology,
-                    world,
+                    &world_view,
                     &block_signers,
                     block_view,
                     &self.roster_validation_cache.pops,
@@ -1885,12 +1884,11 @@ impl Actor {
                 {
                     Ok(tally)
                 } else {
-                    let state_view = self.state.view();
-                    let world = state_view.world();
+                    let world_view = self.state.world_view();
                     tally_qc_against_block_signers(
                         &qc,
                         &topology,
-                        world,
+                        &world_view,
                         &block_signers,
                         block_view,
                         &self.roster_validation_cache.pops,
@@ -2179,12 +2177,11 @@ impl Actor {
         }
         let qc_signers = qc_signer_count(&qc);
         let tally_result = {
-            let state_view = self.state.view();
-            let world = state_view.world();
+            let world_view = self.state.world_view();
             tally_qc_against_block_signers(
                 &qc,
                 topology,
-                world,
+                &world_view,
                 block_signers,
                 block_view,
                 &self.roster_validation_cache.pops,
@@ -2779,12 +2776,11 @@ impl Actor {
                     }
                 }
             };
-            let state_view = self.state.view();
-            let world = state_view.world();
+            let world_view = self.state.world_view();
             tally_qc_against_block_signers(
                 &qc,
                 &topology,
-                world,
+                &world_view,
                 &block_signers,
                 block_view,
                 &self.roster_validation_cache.pops,
