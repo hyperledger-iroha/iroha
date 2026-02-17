@@ -248,6 +248,11 @@ private enum SorafsBridgeBootstrap {
             }
         }
 
+        // Prefer the prebuilt bridge when it is available; only fall back to cargo builds when needed.
+        if hasPrebuilt {
+            return urls
+        }
+
         let repoRoot = SorafsFixturePaths.repoRoot
         let built = builtCandidates(in: repoRoot)
         var hasBuilt = appendExisting(built, fileManager: fileManager, into: &urls)
@@ -275,9 +280,12 @@ private enum SorafsBridgeBootstrap {
     }
 
     private static func builtCandidates(in repoRoot: URL) -> [URL] {
-        [
+        let swiftBridgeTargetDir = repoRoot.appendingPathComponent("target/swift-sorafs-bridge", isDirectory: true)
+        return [
+            swiftBridgeTargetDir.appendingPathComponent("release/libconnect_norito_bridge.dylib"),
+            swiftBridgeTargetDir.appendingPathComponent("debug/libconnect_norito_bridge.dylib"),
             repoRoot.appendingPathComponent("target/release/libconnect_norito_bridge.dylib"),
-            repoRoot.appendingPathComponent("target/debug/libconnect_norito_bridge.dylib")
+            repoRoot.appendingPathComponent("target/debug/libconnect_norito_bridge.dylib"),
         ]
     }
 
@@ -313,7 +321,8 @@ private enum SorafsBridgeBootstrap {
     }
 
     private static func buildBridgeWithCargo(at repoRoot: URL) throws -> URL? {
-        let releasePath = repoRoot.appendingPathComponent("target/release/libconnect_norito_bridge.dylib")
+        let bridgeTargetDir = repoRoot.appendingPathComponent("target/swift-sorafs-bridge", isDirectory: true)
+        let releasePath = bridgeTargetDir.appendingPathComponent("release/libconnect_norito_bridge.dylib")
         if FileManager.default.fileExists(atPath: releasePath.path) {
             return releasePath
         }
@@ -322,6 +331,10 @@ private enum SorafsBridgeBootstrap {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["cargo", "build", "-p", "connect_norito_bridge", "--release"]
         process.currentDirectoryURL = repoRoot
+        var env = ProcessInfo.processInfo.environment
+        // Avoid build-dir lock contention with other concurrent cargo tasks (common in CI and local dev).
+        env["CARGO_TARGET_DIR"] = bridgeTargetDir.path
+        process.environment = env
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = outputPipe

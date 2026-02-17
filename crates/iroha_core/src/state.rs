@@ -14129,6 +14129,14 @@ impl State {
         self.transactions.view().get(&hash).is_some()
     }
 
+    /// Borrow the configured chain identifier.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only the chain id is needed.
+    #[must_use]
+    pub fn chain_id_ref(&self) -> &iroha_data_model::ChainId {
+        &self.chain_id
+    }
+
     #[inline]
     fn note_view_lock_contention(&self, caller: &'static core::panic::Location<'static>) {
         let now = Instant::now();
