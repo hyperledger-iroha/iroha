@@ -1155,8 +1155,8 @@ impl Actor {
         let had_incoming_qc = incoming_qc.is_some();
         let signature_start = Instant::now();
         let block_signers_result = {
-            let state_view = self.state.view();
-            validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed)
+            let world_view = self.state.world_view();
+            validated_block_signers_from_world(&block, &topology, &world_view, mode_tag, prf_seed)
         };
         let signature_verify_ms =
             u64::try_from(signature_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -2754,8 +2754,14 @@ impl Actor {
                 signers
             } else {
                 let block_signers = {
-                    let state_view = self.state.view();
-                    validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed)
+                    let world_view = self.state.world_view();
+                    validated_block_signers_from_world(
+                        &block,
+                        &topology,
+                        &world_view,
+                        mode_tag,
+                        prf_seed,
+                    )
                 };
                 match block_signers {
                     Ok(signers) => {

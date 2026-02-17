@@ -2,7 +2,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
-    num::{NonZeroU32, NonZeroU64},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use crate::{
     IrohaNetwork, NetworkMessage,
     kura::Kura,
-    state::{State, StateReadOnly, StateReadOnlyWithTransactions, StateView, WorldReadOnly},
+    state::{State, StateReadOnly, StateView, WorldReadOnly},
     sumeragi::{
         SumeragiHandle,
         consensus::{
@@ -744,10 +744,8 @@ impl BlockSynchronizer {
 
     /// Sends request for latest blocks to a chosen peer
     async fn request_latest_blocks_from_peer(&mut self, peer_id: PeerId) {
-        let (prev_hash, latest_hash) = {
-            let state_view = self.state.view();
-            (state_view.prev_block_hash(), state_view.latest_block_hash())
-        };
+        let prev_hash = self.state.prev_block_hash_fast();
+        let latest_hash = self.state.latest_block_hash_fast();
         self.request_tracker
             .record_request(peer_id.clone(), Instant::now());
         message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
@@ -904,6 +902,8 @@ impl BlockSynchronizer {
         })
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[allow(dead_code)]
     pub(crate) fn block_sync_qc_for(
         state_view: &StateView<'_>,
         fallback_consensus_mode: ConsensusMode,
@@ -999,12 +999,23 @@ impl BlockSynchronizer {
     }
 
     /// Validate block signatures against the provided topology.
+    pub(crate) fn block_signatures_valid_world(
+        block: &SignedBlock,
+        topology: &Topology,
+        world: &impl WorldReadOnly,
+    ) -> Result<(), crate::block::SignatureVerificationError> {
+        crate::block::ValidBlock::validate_signatures_subset_world(block, topology, world)
+    }
+
+    /// Validate block signatures against the provided topology.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[allow(dead_code)]
     pub(crate) fn block_signatures_valid(
         block: &SignedBlock,
         topology: &Topology,
-        state: &impl StateReadOnlyWithTransactions,
+        state: &impl StateReadOnly,
     ) -> Result<(), crate::block::SignatureVerificationError> {
-        crate::block::ValidBlock::validate_signatures_subset(block, topology, state)
+        Self::block_signatures_valid_world(block, topology, state.world())
     }
 }
 
@@ -2532,50 +2543,114 @@ pub mod message {
         topology_len: usize,
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[allow(dead_code)]
     fn prf_seed_for_block_sync(
         mode_tag: &str,
         state_view: &StateView<'_>,
         block_height: u64,
     ) -> Option<[u8; 32]> {
-        (mode_tag == NPOS_TAG || mode_tag == PERMISSIONED_TAG)
-            .then(|| crate::sumeragi::prf_seed_for_height(state_view, block_height))
+        prf_seed_for_block_sync_from_world(
+            mode_tag,
+            state_view.world(),
+            state_view.chain_id(),
+            block_height,
+        )
     }
 
+    fn prf_seed_for_block_sync_from_world(
+        mode_tag: &str,
+        world: &impl WorldReadOnly,
+        chain_id: &ChainId,
+        block_height: u64,
+    ) -> Option<[u8; 32]> {
+        (mode_tag == NPOS_TAG || mode_tag == PERMISSIONED_TAG)
+            .then(|| crate::sumeragi::prf_seed_for_height_from_world(world, chain_id, block_height))
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[allow(dead_code)]
     fn consensus_mode_for_block_sync(
         state_view: &StateView<'_>,
         block_height: u64,
         fallback_consensus_mode: ConsensusMode,
     ) -> ConsensusMode {
-        crate::sumeragi::effective_consensus_mode_for_height(
-            state_view,
+        consensus_mode_for_block_sync_from_world(
+            state_view.world(),
             block_height,
             fallback_consensus_mode,
         )
     }
 
+    fn consensus_mode_for_block_sync_from_world(
+        world: &impl WorldReadOnly,
+        block_height: u64,
+        fallback_consensus_mode: ConsensusMode,
+    ) -> ConsensusMode {
+        crate::sumeragi::effective_consensus_mode_for_height_from_world(
+            world,
+            block_height,
+            fallback_consensus_mode,
+        )
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[allow(dead_code)]
     fn mode_tag_for_block_sync(
         state_view: &StateView<'_>,
         block_height: u64,
         fallback_consensus_mode: ConsensusMode,
     ) -> &'static str {
-        match consensus_mode_for_block_sync(state_view, block_height, fallback_consensus_mode) {
+        mode_tag_for_block_sync_from_world(
+            state_view.world(),
+            block_height,
+            fallback_consensus_mode,
+        )
+    }
+
+    fn mode_tag_for_block_sync_from_world(
+        world: &impl WorldReadOnly,
+        block_height: u64,
+        fallback_consensus_mode: ConsensusMode,
+    ) -> &'static str {
+        match consensus_mode_for_block_sync_from_world(world, block_height, fallback_consensus_mode)
+        {
             ConsensusMode::Permissioned => PERMISSIONED_TAG,
             ConsensusMode::Npos => NPOS_TAG,
         }
     }
 
     impl BlockSyncValidationContext {
+        #[cfg(any(test, feature = "iroha-core-tests"))]
+        #[allow(dead_code)]
         fn new(
             block: &SignedBlock,
             topology: &Topology,
             state_view: &StateView<'_>,
             mode_tag: &str,
         ) -> Self {
+            Self::new_from_world(
+                block,
+                topology,
+                state_view.world(),
+                state_view.chain_id(),
+                mode_tag,
+            )
+        }
+
+        fn new_from_world(
+            block: &SignedBlock,
+            topology: &Topology,
+            world: &impl WorldReadOnly,
+            chain_id: &ChainId,
+            mode_tag: &str,
+        ) -> Self {
             let block_hash = block.hash();
             let block_height = block.header().height().get();
             let block_view_idx = block.header().view_change_index();
             let block_view = block_view_idx;
-            let prf_seed = prf_seed_for_block_sync(mode_tag, state_view, block_height);
+            let prf_seed =
+                prf_seed_for_block_sync_from_world(mode_tag, world, chain_id, block_height);
             let signature_topology =
                 align_topology_for_block_signatures(mode_tag, topology, block, prf_seed);
             let commit_quorum = topology.min_votes_for_commit().max(1);
@@ -2604,6 +2679,8 @@ pub mod message {
     }
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[allow(dead_code)]
     fn sanitize_block_sync_qc(
         state_view: &StateView<'_>,
         fallback_consensus_mode: ConsensusMode,
@@ -2614,22 +2691,49 @@ pub mod message {
         block_signers: &BTreeSet<ValidatorIndex>,
         stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> Option<Qc> {
-        let consensus_mode = consensus_mode_for_block_sync(
-            state_view,
+        sanitize_block_sync_qc_from_world(
+            state_view.world(),
+            state_view.chain_id(),
+            fallback_consensus_mode,
+            block,
+            incoming,
+            context,
+            topology,
+            block_signers,
+            stake_snapshot,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn sanitize_block_sync_qc_from_world(
+        world: &impl WorldReadOnly,
+        chain_id: &ChainId,
+        fallback_consensus_mode: ConsensusMode,
+        block: &SignedBlock,
+        incoming: Option<Qc>,
+        context: &BlockSyncValidationContext,
+        topology: &Topology,
+        block_signers: &BTreeSet<ValidatorIndex>,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> Option<Qc> {
+        let consensus_mode = consensus_mode_for_block_sync_from_world(
+            world,
             context.block_height,
             fallback_consensus_mode,
         );
-        let mode_tag =
-            mode_tag_for_block_sync(state_view, context.block_height, fallback_consensus_mode);
+        let mode_tag = mode_tag_for_block_sync_from_world(
+            world,
+            context.block_height,
+            fallback_consensus_mode,
+        );
         let expected_epoch = match consensus_mode {
             ConsensusMode::Permissioned => 0,
-            ConsensusMode::Npos => crate::sumeragi::epoch_for_height_from_world(
-                &state_view.world,
-                context.block_height,
-            ),
+            ConsensusMode::Npos => {
+                crate::sumeragi::epoch_for_height_from_world(world, context.block_height)
+            }
         };
         let derived_qc =
-            BlockSynchronizer::block_sync_qc_for(state_view, fallback_consensus_mode, block);
+            BlockSynchronizer::block_sync_qc_for_world(world, fallback_consensus_mode, block);
         let (candidate, qc_from_cache) = match (incoming, derived_qc) {
             (Some(incoming), Some(derived)) if incoming == derived => (Some(incoming), true),
             (Some(_incoming), Some(derived)) => {
@@ -2728,13 +2832,13 @@ pub mod message {
             );
             return None;
         }
-        let prf_seed = prf_seed_for_block_sync(mode_tag, state_view, context.block_height);
+        let prf_seed =
+            prf_seed_for_block_sync_from_world(mode_tag, world, chain_id, context.block_height);
         let mut pops = BTreeMap::<iroha_crypto::PublicKey, Vec<u8>>::new();
         for peer in topology.as_ref() {
-            if let Some(pop) = crate::state::consensus_key_pop_for_public_key(
-                state_view.world(),
-                peer.public_key(),
-            ) {
+            if let Some(pop) =
+                crate::state::consensus_key_pop_for_public_key(world, peer.public_key())
+            {
                 pops.insert(peer.public_key().clone(), pop);
             }
         }
@@ -2748,11 +2852,11 @@ pub mod message {
         if let Err(err) = crate::sumeragi::main_loop::validate_block_sync_qc(
             &qc,
             topology,
-            state_view.world(),
+            world,
             qc_block_signers,
             context.block_view,
             &pops,
-            state_view.chain_id(),
+            chain_id,
             consensus_mode,
             stake_snapshot,
             mode_tag,
@@ -2893,24 +2997,32 @@ pub mod message {
                     .get(&block_hash)
                     .and_then(|meta| meta.stake_snapshot.as_ref());
                 let (context, signature_check, sanitized_qc) = {
-                    // Keep the state view short-lived to reduce lock contention under load.
-                    let state_view = state.view();
-                    let mode_tag =
-                        mode_tag_for_block_sync(&state_view, block_height, fallback_consensus_mode);
-                    let context =
-                        BlockSyncValidationContext::new(&block, &topology, &state_view, mode_tag);
-                    let signature_check = BlockSynchronizer::block_signatures_valid(
+                    let world_view = state.world_view();
+                    let mode_tag = mode_tag_for_block_sync_from_world(
+                        &world_view,
+                        block_height,
+                        fallback_consensus_mode,
+                    );
+                    let context = BlockSyncValidationContext::new_from_world(
+                        &block,
+                        &topology,
+                        &world_view,
+                        state.chain_id_ref(),
+                        mode_tag,
+                    );
+                    let signature_check = BlockSynchronizer::block_signatures_valid_world(
                         &block,
                         &context.signature_topology,
-                        &state_view,
+                        &world_view,
                     );
                     let block_signers = if signature_check.is_ok() {
                         Self::commit_role_signers_all(&block, &context.signature_topology)
                     } else {
                         BTreeSet::new()
                     };
-                    let sanitized_qc = sanitize_block_sync_qc(
-                        &state_view,
+                    let sanitized_qc = sanitize_block_sync_qc_from_world(
+                        &world_view,
+                        state.chain_id_ref(),
                         fallback_consensus_mode,
                         &block,
                         qc,
@@ -3145,9 +3257,20 @@ pub mod message {
                     }
 
                     let blocks = {
-                        let state_view = block_sync.state.view();
-                        let blocks_iter = state_view
-                            .all_blocks(start_height)
+                        let tip_height = block_sync.state.committed_height();
+                        let blocks_iter = (start_height.get()..=tip_height)
+                            .filter_map(|height| {
+                                let Some(height_nz) = NonZeroUsize::new(height) else {
+                                    return None;
+                                };
+                                block_sync.kura.get_block(height_nz).or_else(|| {
+                                    warn!(
+                                        height,
+                                        "missing block in Kura while preparing block-sync share"
+                                    );
+                                    None
+                                })
+                            })
                             .skip_while(|block| Some(block.hash()) == *latest_hash);
                         Self::select_blocks_for_share(
                             blocks_iter,
@@ -3160,12 +3283,12 @@ pub mod message {
                         trace!(hash=?prev_hash, "Sharing blocks after hash");
 
                         let qcs: Vec<Option<Qc>> = {
-                            let state_view = block_sync.state.view();
+                            let world = block_sync.state.world_view();
                             blocks
                                 .iter()
                                 .map(|block| {
-                                    BlockSynchronizer::block_sync_qc_for(
-                                        &state_view,
+                                    BlockSynchronizer::block_sync_qc_for_world(
+                                        &world,
                                         block_sync.fallback_consensus_mode,
                                         block,
                                     )
@@ -3341,13 +3464,24 @@ pub mod message {
                             block_hash,
                             block_sync.fallback_consensus_mode,
                         );
-                        let consensus_mode = {
+                        let (consensus_mode, derived_qc) = {
                             let world = block_sync.state.world_view();
-                            crate::sumeragi::effective_consensus_mode_for_height_from_world(
-                                &world,
-                                block_height,
-                                block_sync.fallback_consensus_mode,
-                            )
+                            let consensus_mode =
+                                crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                                    &world,
+                                    block_height,
+                                    block_sync.fallback_consensus_mode,
+                                );
+                            let derived_qc = if msg.commit_qc.is_none() && incoming_qc.is_none() {
+                                BlockSynchronizer::block_sync_qc_for_world(
+                                    &world,
+                                    block_sync.fallback_consensus_mode,
+                                    &block,
+                                )
+                            } else {
+                                None
+                            };
+                            (consensus_mode, derived_qc)
                         };
                         if let Some(metadata) = effective_roster_metadata(
                             incoming_roster,
@@ -3361,16 +3495,6 @@ pub mod message {
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
-                        let derived_qc = if msg.commit_qc.is_none() && incoming_qc.is_none() {
-                            let view = block_sync.state.view();
-                            BlockSynchronizer::block_sync_qc_for(
-                                &view,
-                                block_sync.fallback_consensus_mode,
-                                &block,
-                            )
-                        } else {
-                            None
-                        };
                         if msg.commit_qc.is_none() {
                             if let Some(qc) = incoming_qc.or(derived_qc) {
                                 let attach_qc = match consensus_mode {

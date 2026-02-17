@@ -12691,7 +12691,18 @@ impl State {
     /// otherwise projecting from the Space Directory + lane catalog.
     #[must_use]
     pub fn axt_policy_snapshot(&self) -> iroha_data_model::nexus::AxtPolicySnapshot {
-        self.view().axt_policy_snapshot()
+        let world = self.world_view();
+        let mut entries: Vec<iroha_data_model::nexus::AxtPolicyBinding> = world
+            .axt_policies()
+            .iter()
+            .map(|(dsid, policy)| iroha_data_model::nexus::AxtPolicyBinding {
+                dsid: *dsid,
+                policy: *policy,
+            })
+            .collect();
+        entries.sort_by_key(|binding| binding.dsid);
+        let version = iroha_data_model::nexus::AxtPolicySnapshot::compute_version(&entries);
+        iroha_data_model::nexus::AxtPolicySnapshot { version, entries }
     }
 
     /// Install or update a dataspace AXT policy entry.
@@ -14102,6 +14113,15 @@ impl State {
         self.commit_topology.view().iter().cloned().collect()
     }
 
+    /// Snapshot of the previous commit topology.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only the prior validator ordering is
+    /// required.
+    #[track_caller]
+    pub fn prev_commit_topology_snapshot(&self) -> Vec<PeerId> {
+        self.prev_commit_topology.view().iter().cloned().collect()
+    }
+
     /// Latest committed block height derived from the block hash journal.
     ///
     /// This is cheaper than acquiring a full [`StateView`] and avoids locking
@@ -14109,6 +14129,14 @@ impl State {
     #[track_caller]
     pub fn committed_height(&self) -> usize {
         self.block_hashes.view().len()
+    }
+
+    /// Load a committed block by height from Kura.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only block retrieval is needed.
+    #[track_caller]
+    pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        self.kura.get_block(height)
     }
 
     /// Latest committed block hash derived from the block hash journal.
@@ -14120,6 +14148,15 @@ impl State {
         self.block_hashes.view().last().copied()
     }
 
+    /// Previous committed block hash (if any) derived from the block hash journal.
+    ///
+    /// This is cheaper than acquiring a full [`StateView`] and avoids locking
+    /// world-state components.
+    #[track_caller]
+    pub fn prev_block_hash_fast(&self) -> Option<HashOf<BlockHeader>> {
+        self.block_hashes.view().iter().nth_back(1).copied()
+    }
+
     /// Whether a transaction hash is already committed.
     ///
     /// This avoids acquiring a full [`StateView`] when only committed-transaction
@@ -14127,6 +14164,18 @@ impl State {
     #[track_caller]
     pub fn has_committed_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
         self.transactions.view().get(&hash).is_some()
+    }
+
+    /// Committed block height for a transaction hash, if present in the index.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only the transaction index
+    /// lookup is required.
+    #[track_caller]
+    pub fn committed_transaction_height(
+        &self,
+        hash: &HashOf<SignedTransaction>,
+    ) -> Option<NonZeroUsize> {
+        self.transactions.view().get(hash)
     }
 
     /// Borrow the configured chain identifier.
@@ -22961,6 +23010,104 @@ mod tests {
         let unknown =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([7; Hash::LENGTH]));
         assert!(!state.has_committed_transaction(unknown));
+    }
+
+    #[test]
+    fn committed_transaction_height_reads_transactions_index() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let tx = dummy_accepted_transaction();
+        let tx_hash = tx.hash();
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(tx_hash, nonzero!(3_usize));
+            transactions
+                .commit()
+                .expect("transactions block should commit");
+        }
+
+        assert_eq!(
+            state.committed_transaction_height(&tx_hash),
+            Some(nonzero!(3_usize))
+        );
+
+        let unknown =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([9; Hash::LENGTH]));
+        assert_eq!(state.committed_transaction_height(&unknown), None);
+    }
+
+    #[test]
+    fn prev_block_hash_fast_reads_block_hash_journal() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let first =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+        let second =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+        let third =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(first);
+            block_hashes.push_for_tests(second);
+            block_hashes.push_for_tests(third);
+            block_hashes.commit_for_tests();
+        }
+
+        assert_eq!(state.latest_block_hash_fast(), Some(third));
+        assert_eq!(state.prev_block_hash_fast(), Some(second));
+    }
+
+    #[test]
+    fn prev_commit_topology_snapshot_reads_previous_topology_journal() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let first = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let second = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        {
+            let mut prev_topology = state.prev_commit_topology.block();
+            prev_topology.clear();
+            prev_topology.push(first.clone());
+            prev_topology.push(second.clone());
+            prev_topology.commit();
+        }
+
+        assert_eq!(state.prev_commit_topology_snapshot(), vec![first, second]);
+    }
+
+    #[test]
+    fn block_by_height_reads_kura_without_state_view() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let keypair = KeyPair::random();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, keypair.private_key());
+        let block_hash = block.hash();
+        kura.store_block(Arc::new(block))
+            .expect("store block in kura");
+
+        let loaded = state
+            .block_by_height(nonzero!(1_usize))
+            .expect("block should be available");
+        assert_eq!(loaded.hash(), block_hash);
+        assert!(state.block_by_height(nonzero!(2_usize)).is_none());
     }
 
     #[test]

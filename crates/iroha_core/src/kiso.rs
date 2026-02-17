@@ -870,6 +870,7 @@ mod tests {
                 sorafs_gateway: iroha_config::parameters::actual::SorafsGateway::default(),
                 sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
+                mcp: iroha_config::parameters::actual::ToriiMcp::default(),
                 onboarding: None,
                 offline_issuer: None,
                 proof_api: iroha_config::parameters::actual::ProofApi {

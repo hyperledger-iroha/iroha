@@ -470,11 +470,11 @@ fn requeue_block_transactions(
     let mut failures = 0usize;
     let mut duplicate_failures = 0usize;
     let mut gossip_hashes: Vec<_> = Vec::new();
+    let state_view = state.view();
     for tx in txs {
         let tx_hash = tx.hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let state_view = state.view();
-        match queue.push(accepted, state_view) {
+        match queue.push_in_view(accepted, &state_view) {
             Ok(()) => {
                 requeued = requeued.saturating_add(1);
                 gossip_hashes.push(tx_hash);
@@ -1532,6 +1532,8 @@ pub(super) fn topology_for_view(
     rotated
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[allow(dead_code)]
 pub(crate) fn validated_block_signers(
     block: &SignedBlock,
     topology: &super::network_topology::Topology,
@@ -1542,8 +1544,21 @@ pub(crate) fn validated_block_signers(
     BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     crate::block::SignatureVerificationError,
 > {
+    validated_block_signers_from_world(block, topology, state_view.world(), mode_tag, prf_seed)
+}
+
+pub(crate) fn validated_block_signers_from_world(
+    block: &SignedBlock,
+    topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+) -> Result<
+    BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    crate::block::SignatureVerificationError,
+> {
     let signature_topology = topology_for_block_signatures(block, topology, mode_tag, prf_seed);
-    crate::block::ValidBlock::validate_signatures_subset(block, &signature_topology, state_view)?;
+    crate::block::ValidBlock::validate_signatures_subset_world(block, &signature_topology, world)?;
 
     let mut signers = BTreeSet::new();
     for signature in signature_topology.filter_signatures_by_roles(
@@ -3231,14 +3246,14 @@ impl Actor {
         } else if !commit_topology.is_empty() {
             (commit_topology.to_vec(), "commit_topology")
         } else {
-            let view = self.state.view();
-            let roster = derive_active_topology_for_mode(
-                &view,
+            let world = self.state.world_view();
+            let commit_topology_snapshot = self.state.commit_topology_snapshot();
+            let roster = derive_active_topology_from_views(
+                &world,
+                commit_topology_snapshot.as_slice(),
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
-                consensus_mode,
             );
-            drop(view);
             (roster, "trusted_peers")
         };
         if roster.is_empty() {
@@ -3896,8 +3911,9 @@ impl Actor {
     }
 
     fn active_pending_blocks_len(&self) -> usize {
-        let view = self.state.view();
-        self.active_pending_blocks_len_for_tip(view.height(), view.latest_block_hash())
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        self.active_pending_blocks_len_for_tip(tip_height, tip_hash)
     }
 
     fn active_pending_blocks_len_for_tip(
@@ -3922,9 +3938,8 @@ impl Actor {
     }
 
     fn has_active_pending_blocks(&self) -> bool {
-        let view = self.state.view();
-        let tip_height = view.height();
-        let tip_hash = view.latest_block_hash();
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
         self.pending.pending_blocks.values().any(|pending| {
             !pending.aborted
                 && pending_extends_tip(
@@ -3938,9 +3953,8 @@ impl Actor {
 
     fn blocking_pending_blocks_len(&self) -> usize {
         let now = Instant::now();
-        let view = self.state.view();
-        let tip_height = view.height();
-        let tip_hash = view.latest_block_hash();
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
         let fast_timeout = self.pending_fast_path_timeout_current();
         self.pending
             .pending_blocks
@@ -3971,9 +3985,8 @@ impl Actor {
             .pacemaker
             .pending_stall_grace
             .min(quorum_timeout);
-        let view = self.state.view();
-        let tip_height = view.height();
-        let tip_hash = view.latest_block_hash();
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
         self.pending
             .pending_blocks
             .values()
@@ -4109,10 +4122,8 @@ impl Actor {
     }
 
     fn rbc_rebroadcast_active(&self, key: super::rbc_store::SessionKey) -> bool {
-        let view = self.state.view();
-        let tip_height = view.height();
-        let tip_hash = view.latest_block_hash();
-        drop(view);
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
         self.rbc_rebroadcast_active_with_tip(key, tip_height, tip_hash)
     }
 
@@ -4143,11 +4154,9 @@ impl Actor {
         if !self.runtime_da_enabled() {
             return RbcBacklogSummary::default();
         }
-        let view = self.state.view();
-        let tip_height = view.height();
+        let tip_height = self.state.committed_height();
         let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
-        let tip_hash = view.latest_block_hash();
-        drop(view);
+        let tip_hash = self.state.latest_block_hash_fast();
         let mut summary = RbcBacklogSummary::default();
         for (key, session) in &self.subsystems.da_rbc.rbc.sessions {
             if !self.rbc_rebroadcast_active_with_tip_and_session(
@@ -5423,11 +5432,8 @@ impl Actor {
 }
 
 fn sumeragi_da_enabled(state: &State) -> bool {
-    let view = state.view();
-    let da_enabled = view.world.parameters().sumeragi().da_enabled();
-    drop(view);
-
-    da_enabled
+    let world = state.world_view();
+    world.parameters().sumeragi().da_enabled()
 }
 
 #[allow(clippy::too_many_arguments)] // Helper resets multiple subsystems; keep signature explicit.
@@ -6904,9 +6910,11 @@ fn select_block_sync_roster(
     }
 
     if allow_uncertified {
-        let view = state.view();
-        let roster = derive_active_topology_for_mode(&view, trusted, me, consensus_mode);
-        let source = if view.commit_topology().is_empty() {
+        let world = state.world_view();
+        let commit_topology = state.commit_topology_snapshot();
+        let roster =
+            derive_active_topology_from_views(&world, commit_topology.as_slice(), trusted, me);
+        let source = if commit_topology.is_empty() {
             BlockSyncRosterSource::TrustedPeersFallback
         } else {
             BlockSyncRosterSource::CommitTopologySnapshot
@@ -6915,7 +6923,6 @@ fn select_block_sync_roster(
             ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
             ConsensusMode::Permissioned => None,
         };
-        drop(view);
 
         if !roster.is_empty() {
             return Some(BlockSyncRosterSelection {
@@ -7161,16 +7168,18 @@ impl Actor {
         }
     }
 
-    fn active_topology_with_genesis_fallback(
+    fn active_topology_with_genesis_fallback_from_world(
         &self,
-        view: &StateView<'_>,
+        world: &impl WorldReadOnly,
+        commit_topology: &[PeerId],
+        height: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
-        let roster = derive_active_topology_for_mode(
-            view,
+        let roster = derive_active_topology_from_views(
+            world,
+            commit_topology,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
-            consensus_mode,
         );
         if !roster.is_empty() {
             return roster;
@@ -7184,11 +7193,25 @@ impl Actor {
             return roster;
         }
         info!(
-            height = view.height(),
+            height,
             roster_len = genesis_roster.len(),
             "using genesis roster fallback for empty commit topology"
         );
         genesis_roster
+    }
+
+    fn active_topology_with_genesis_fallback(
+        &self,
+        view: &StateView<'_>,
+        consensus_mode: ConsensusMode,
+    ) -> Vec<PeerId> {
+        let height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+        self.active_topology_with_genesis_fallback_from_world(
+            view.world(),
+            view.commit_topology(),
+            height,
+            consensus_mode,
+        )
     }
 
     fn effective_commit_topology_from_view(&self, view: &StateView<'_>) -> Vec<PeerId> {
@@ -7196,8 +7219,15 @@ impl Actor {
     }
 
     fn effective_commit_topology(&self) -> Vec<PeerId> {
-        let view = self.state.view();
-        self.effective_commit_topology_from_view(&view)
+        let world = self.state.world_view();
+        let commit_topology = self.state.commit_topology_snapshot();
+        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        self.active_topology_with_genesis_fallback_from_world(
+            &world,
+            commit_topology.as_slice(),
+            height,
+            self.consensus_mode,
+        )
     }
 
     fn rbc_roster_for_session(&self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
@@ -7211,14 +7241,14 @@ impl Actor {
             let allow_fallback = key.1 <= committed_height.saturating_add(1)
                 || (payload_known && session_epoch == committed_epoch);
             if allow_fallback {
-                let view = self.state.view();
-                let fallback = derive_active_topology_for_mode(
-                    &view,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
+                let world = self.state.world_view();
+                let commit_topology = self.state.commit_topology_snapshot();
+                let fallback = self.active_topology_with_genesis_fallback_from_world(
+                    &world,
+                    commit_topology.as_slice(),
+                    committed_height,
                     consensus_mode,
                 );
-                drop(view);
                 if !fallback.is_empty() {
                     if payload_known && key.1 > committed_height.saturating_add(1) {
                         debug!(
@@ -7691,19 +7721,18 @@ impl Actor {
 
         let pops = &self.roster_validation_cache.pops;
         let (result, evidence, fallback_tally, sync_err) = {
-            let state_view = self.state.view();
-            let world = state_view.world();
+            let world = self.state.world_view();
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(world, topology.as_ref()),
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(&world, topology.as_ref()),
             };
             let (result, evidence) = validate_qc_with_evidence(
                 &self.vote_log,
                 qc,
                 topology,
-                world,
+                &world,
                 pops,
-                &self.common_config.chain,
+                self.state.chain_id_ref(),
                 consensus_mode,
                 stake_snapshot.as_ref(),
                 mode_tag,
@@ -7716,11 +7745,11 @@ impl Actor {
                 match tally_qc_against_block_signers(
                     qc,
                     topology,
-                    world,
+                    &world,
                     block_signers,
                     block_view,
                     pops,
-                    &self.common_config.chain,
+                    self.state.chain_id_ref(),
                     consensus_mode,
                     stake_snapshot.as_ref(),
                     mode_tag,
@@ -7733,9 +7762,9 @@ impl Actor {
                         fallback_tally = fallback_qc_tally_from_bitmap(
                             qc,
                             topology,
-                            world,
+                            &world,
                             pops,
-                            &self.common_config.chain,
+                            self.state.chain_id_ref(),
                             mode_tag,
                             prf_seed,
                         );
@@ -7777,10 +7806,8 @@ impl Actor {
     }
 
     fn current_height_and_roster(&self) -> (u64, usize, Vec<u32>) {
-        let view = self.state.view();
-        let height = view.height() as u64;
-        let topology = self.effective_commit_topology_from_view(&view);
-        drop(view);
+        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let topology = self.effective_commit_topology();
         let indices =
             compute_roster_indices_from_topology(&topology, self.epoch_roster_provider.as_ref());
         (height, topology.len(), indices)
@@ -7820,20 +7847,27 @@ impl Actor {
             .map_or(0, super::epoch::EpochManager::epoch)
     }
 
-    fn epoch_for_height_from_view(&self, view: &StateView<'_>, height: u64) -> u64 {
-        let consensus_mode =
-            super::effective_consensus_mode_for_height(view, height, self.config.consensus_mode);
+    fn epoch_for_height_from_world(
+        &self,
+        world: &impl WorldReadOnly,
+        current_height: u64,
+        height: u64,
+    ) -> u64 {
+        let consensus_mode = super::effective_consensus_mode_for_height_from_world(
+            world,
+            height,
+            self.config.consensus_mode,
+        );
         if matches!(consensus_mode, ConsensusMode::Permissioned) {
             return 0;
         }
         let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-            view.world(),
+            world,
             self.config.npos.epoch_length_blocks,
         );
         let schedule_epoch = schedule.epoch_for_height(height);
-        let current_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-        let current_mode = super::effective_consensus_mode_for_height(
-            view,
+        let current_mode = super::effective_consensus_mode_for_height_from_world(
+            world,
             current_height,
             self.config.consensus_mode,
         );
@@ -7850,9 +7884,15 @@ impl Actor {
             .map_or(schedule_epoch, |manager| manager.epoch_for_height(height))
     }
 
+    fn epoch_for_height_from_view(&self, view: &StateView<'_>, height: u64) -> u64 {
+        let current_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+        self.epoch_for_height_from_world(view.world(), current_height, height)
+    }
+
     fn epoch_for_height(&self, height: u64) -> u64 {
-        let view = self.state.view();
-        self.epoch_for_height_from_view(&view, height)
+        let world = self.state.world_view();
+        let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        self.epoch_for_height_from_world(&world, current_height, height)
     }
 
     fn genesis_block_hash(&self) -> Option<HashOf<BlockHeader>> {
@@ -7981,11 +8021,13 @@ impl Actor {
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(GENESIS_HEIGHT);
         let mut roster = self.genesis_roster_from_genesis_block();
         if roster.is_empty() {
-            let view = self.state.view();
-            roster = derive_active_topology_for_mode(
-                &view,
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
+            let world = self.state.world_view();
+            let commit_topology = self.state.commit_topology_snapshot();
+            let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            roster = self.active_topology_with_genesis_fallback_from_world(
+                &world,
+                commit_topology.as_slice(),
+                height,
                 consensus_mode,
             );
         }
@@ -8049,11 +8091,12 @@ impl Actor {
     }
 
     fn latest_committed_qc(&self) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
-        let view = self.state.view();
-        let block = view.latest_block()?;
+        let height_usize = self.state.committed_height();
+        let block_height = NonZeroUsize::new(height_usize)?;
+        let block = self.kura.get_block(block_height)?;
         let header = block.header();
         let height = header.height().get();
-        let epoch = self.epoch_for_height_from_view(&view, height);
+        let epoch = self.epoch_for_height(height);
         Some(crate::sumeragi::consensus::QcHeaderRef {
             height,
             view: header.view_change_index(),
@@ -8926,13 +8969,8 @@ impl Actor {
         );
         let collector_redundant_limit = match consensus_mode {
             ConsensusMode::Permissioned => {
-                let view = state.view();
-                let redundant = view
-                    .world
-                    .parameters()
-                    .sumeragi()
-                    .collectors_redundant_send_r;
-                drop(view);
+                let world = state.world_view();
+                let redundant = world.parameters().sumeragi().collectors_redundant_send_r;
                 redundant.max(1)
             }
             ConsensusMode::Npos => {
@@ -8940,10 +8978,9 @@ impl Actor {
                     .as_ref()
                     .map(|cfg| cfg.redundant_send_r)
                     .or_else(|| {
-                        let view = state.view();
-                        let cfg = super::load_npos_collector_config(&view);
-                        drop(view);
-                        cfg.map(|cfg| cfg.redundant_send_r)
+                        let world = state.world_view();
+                        super::load_npos_collector_config_from_world(&world, state.chain_id_ref())
+                            .map(|cfg| cfg.redundant_send_r)
                     })
                     .unwrap_or(config.collectors.redundant_send_r);
                 redundant.max(1)
@@ -9055,8 +9092,8 @@ impl Actor {
         };
         let invalid_sig_penalty = InvalidSigPenalty::new(&config);
         let local_peer_seen_in_world = {
-            let view = state.view();
-            view.world.peers().contains(local_peer_id)
+            let world = state.world_view();
+            world.peers().contains(local_peer_id)
         };
         let initial_committed_height = state.committed_height();
         let initial_queue_len = queue.active_len();
@@ -9270,23 +9307,23 @@ impl Actor {
     fn collector_plan_params_for_mode(&self, consensus_mode: ConsensusMode) -> (usize, u8) {
         match consensus_mode {
             ConsensusMode::Permissioned => {
-                let view = self.state.view();
-                let params = view.world.parameters().sumeragi();
+                let world = self.state.world_view();
+                let params = world.parameters().sumeragi();
                 let k = usize::from(params.collectors_k);
                 let redundant = params.collectors_redundant_send_r;
-                drop(view);
                 (k, redundant)
             }
             ConsensusMode::Npos => self.npos_collectors.map_or_else(
                 || {
-                    let view = self.state.view();
-                    super::load_npos_collector_config(&view).map_or(
-                        (
-                            self.config.collectors.k,
-                            self.config.collectors.redundant_send_r,
-                        ),
-                        |cfg| (cfg.k, cfg.redundant_send_r),
-                    )
+                    let world = self.state.world_view();
+                    super::load_npos_collector_config_from_world(&world, self.state.chain_id_ref())
+                        .map_or(
+                            (
+                                self.config.collectors.k,
+                                self.config.collectors.redundant_send_r,
+                            ),
+                            |cfg| (cfg.k, cfg.redundant_send_r),
+                        )
                 },
                 |cfg| (cfg.k, cfg.redundant_send_r),
             ),
@@ -9343,10 +9380,8 @@ impl Actor {
             .clone_from(&targets);
         self.subsystems.propose.collector_plan = Some(CollectorPlan::new(targets));
         self.subsystems.propose.collector_role_index = {
-            let view_snapshot = self.state.view();
-            let idx = self.local_validator_index(&view_snapshot);
-            drop(view_snapshot);
-            idx
+            let topology = super::network_topology::Topology::new(self.effective_commit_topology());
+            self.local_validator_index_for_topology(&topology)
         };
 
         if let Some(plan) = self.subsystems.propose.collector_plan.as_mut() {
@@ -9468,11 +9503,15 @@ impl Actor {
         config_caps
     }
 
-    fn update_effective_timing_status(&self, view: &StateView<'_>, consensus_mode: ConsensusMode) {
-        let params = view.world.parameters().sumeragi();
+    fn update_effective_timing_status_from_world(
+        &self,
+        world: &impl WorldReadOnly,
+        consensus_mode: ConsensusMode,
+    ) {
+        let params = world.parameters().sumeragi();
         let min_finality_ms = params.effective_min_finality_ms();
-        let block_time = self.block_time_for_mode(view, consensus_mode);
-        let commit_time = self.commit_timeout_for_mode(view, consensus_mode);
+        let block_time = self.block_time_for_mode_from_world(world, consensus_mode);
+        let commit_time = self.commit_timeout_for_mode_from_world(world, consensus_mode);
         let pacing_factor_bps = u64::from(params.effective_pacing_factor_bps());
         let da_enabled = params.da_enabled();
         let commit_quorum_timeout = commit_quorum_timeout_from_durations(
@@ -9491,7 +9530,7 @@ impl Actor {
         let (collectors_k, _) = self.collector_plan_params_for_mode(consensus_mode);
         let redundant_send_r = self.subsystems.propose.collector_redundant_limit.max(1);
         let npos_timeouts = if matches!(consensus_mode, ConsensusMode::Npos) {
-            let timeouts = super::resolve_npos_timeouts(view, &self.config.npos);
+            let timeouts = super::resolve_npos_timeouts_from_world(world, &self.config.npos);
             Some(super::status::NposTimeoutsSnapshot {
                 propose_ms: duration_ms_u64(timeouts.propose),
                 prevote_ms: duration_ms_u64(timeouts.prevote),
@@ -9520,6 +9559,10 @@ impl Actor {
         );
     }
 
+    fn update_effective_timing_status(&self, view: &StateView<'_>, consensus_mode: ConsensusMode) {
+        self.update_effective_timing_status_from_world(view.world(), consensus_mode);
+    }
+
     fn apply_adaptive_observability(&mut self, now: Instant) -> bool {
         let metrics = AdaptiveObservabilityMetrics::gather();
         match self.subsystems.propose.adaptive_state.evaluate(
@@ -9542,8 +9585,8 @@ impl Actor {
                         .as_millis(),
                     "adaptive observability widened collector fan-out/pacemaker interval"
                 );
-                let view = self.state.view();
-                self.update_effective_timing_status(&view, self.consensus_mode);
+                let world = self.state.world_view();
+                self.update_effective_timing_status_from_world(&world, self.consensus_mode);
                 true
             }
             AdaptiveAction::Reset => {
@@ -9557,8 +9600,8 @@ impl Actor {
                         .as_millis(),
                     "adaptive observability reset to baseline thresholds"
                 );
-                let view = self.state.view();
-                self.update_effective_timing_status(&view, self.consensus_mode);
+                let world = self.state.world_view();
+                self.update_effective_timing_status_from_world(&world, self.consensus_mode);
                 true
             }
             AdaptiveAction::None => false,
@@ -9567,14 +9610,19 @@ impl Actor {
 
     fn tick_mode_management(&mut self) -> bool {
         let (effective_mode, staged_mode_tag, staged_mode_activation_height, current_height) = {
-            let view = self.state.view();
-            let params = view.world.parameters().sumeragi();
+            let world = self.state.world_view();
+            let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let params = world.parameters().sumeragi();
             let (staged_tag, staged_height) = staged_mode_info(params);
             (
-                super::effective_consensus_mode(&view, self.config.consensus_mode),
+                super::effective_consensus_mode_for_height_from_world(
+                    &world,
+                    current_height,
+                    self.config.consensus_mode,
+                ),
                 staged_tag,
                 staged_height,
-                view.height() as u64,
+                current_height,
             )
         };
         let mode_activation_lag_blocks = mode_activation_lag(
@@ -9718,10 +9766,8 @@ impl Actor {
             .max(4);
         let aborted_retention = quorum_reschedule_retention.saturating_mul(retention_factor);
         let rebroadcast_cooldown = self.rebroadcast_cooldown();
-        let (tip_height, tip_hash) = {
-            let view = self.state.view();
-            (view.height(), view.latest_block_hash())
-        };
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
 
         let mut next_due: Option<Instant> = None;
         for (hash, pending) in &self.pending.pending_blocks {
@@ -9808,10 +9854,7 @@ impl Actor {
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
-            || {
-                let view_snapshot = self.state.view();
-                view_snapshot.height() as u64
-            },
+            || u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
             |qc| qc.height,
         );
         let height = active_round_height(self.highest_qc, committed_qc, committed_height);
@@ -9932,13 +9975,18 @@ impl Actor {
     }
 
     pub(super) fn refresh_worker_loop_config(&mut self, cfg: &mut super::WorkerLoopConfig) {
-        let view = self.state.view();
-        let mode = super::effective_consensus_mode(&view, self.consensus_mode);
-        let params = view.world.parameters().sumeragi();
-        let block_time = self.block_time_for_mode(&view, mode);
-        let commit_time = self.commit_timeout_for_mode(&view, mode);
+        let world = self.state.world_view();
+        let current_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let mode = super::effective_consensus_mode_for_height_from_world(
+            &world,
+            current_height,
+            self.consensus_mode,
+        );
+        let params = world.parameters().sumeragi();
+        let block_time = self.block_time_for_mode_from_world(&world, mode);
+        let commit_time = self.commit_timeout_for_mode_from_world(&world, mode);
         let da_enabled = params.da_enabled();
-        drop(view);
+        drop(world);
 
         let time_budget = super::worker_time_budget(
             block_time,
@@ -10107,9 +10155,8 @@ impl Actor {
         ) {
             self.last_tick_heartbeat_log = tick_start;
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.heartbeat");
-            let view = self.state.view();
             iroha_logger::info!(
-                height = view.height(),
+                height = self.state.committed_height(),
                 queue_len = heartbeat_queue_len,
                 queue_cap = heartbeat_backpressure.capacity().get(),
                 queue_saturated = heartbeat_backpressure.is_saturated(),
@@ -10733,10 +10780,8 @@ impl Actor {
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
                         if let Some(parent_hash) = header.prev_block_hash() {
-                            let local_height = {
-                                let view = self.state.view();
-                                u64::try_from(view.height()).unwrap_or(u64::MAX)
-                            };
+                            let local_height =
+                                u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                             let expected_height = local_height.saturating_add(1);
                             let active_commit_topology = self.effective_commit_topology();
                             let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -11940,10 +11985,7 @@ impl Actor {
         block_hash: &HashOf<BlockHeader>,
         height: crate::sumeragi::consensus::Height,
     ) -> bool {
-        let committed_height = {
-            let view = self.state.view();
-            view.height() as u64
-        };
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if height <= committed_height {
             let committed_hash = usize::try_from(height)
                 .ok()
@@ -12949,10 +12991,8 @@ impl Actor {
             );
         }
         let ready_cooldown = self.rebroadcast_cooldown();
-        let view = self.state.view();
-        let tip_height = view.height();
-        let tip_hash = view.latest_block_hash();
-        drop(view);
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
         // Rotate through sessions with a per-tick budget so large backlogs do not trigger storms.
         let total_sessions = self.subsystems.da_rbc.rbc.sessions.len();
         let session_budget = self.config.rbc.rebroadcast_sessions_per_tick.max(1);
@@ -13737,10 +13777,7 @@ impl Actor {
         }
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
-            || {
-                let view_snapshot = self.state.view();
-                view_snapshot.height() as u64
-            },
+            || u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
             |qc| qc.height,
         );
         let height = active_round_height(self.highest_qc, committed_qc, committed_height);
@@ -13794,10 +13831,7 @@ impl Actor {
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
-            || {
-                let view_snapshot = self.state.view();
-                view_snapshot.height() as u64
-            },
+            || u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
             |qc| qc.height,
         );
         let height = active_round_height(self.highest_qc, committed_qc, committed_height);

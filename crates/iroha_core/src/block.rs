@@ -3528,6 +3528,8 @@ pub(crate) mod valid {
             Self::enforce_consensus_key_lifecycle_world(block, topology, world)
         }
 
+        #[cfg(any(test, feature = "iroha-core-tests"))]
+        #[allow(dead_code)]
         pub(crate) fn validate_signatures_subset(
             block: &SignedBlock,
             topology: &Topology,

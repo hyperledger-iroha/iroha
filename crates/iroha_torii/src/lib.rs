@@ -493,26 +493,26 @@ fn install_account_resolvers(state: &Arc<CoreState>) {
     set_account_alias_resolver(Arc::new(move |label, domain| {
         let name = Name::from_str(label).ok()?;
         let key = AccountLabel::new(domain.clone(), name);
-        let view = alias_state.view();
-        view.world().account_aliases().get(&key).cloned()
+        let world = alias_state.world_view();
+        world.account_aliases().get(&key).cloned()
     }));
 
     let selector_state = Arc::clone(state);
     set_account_domain_selector_resolver(Arc::new(move |selector| {
-        let view = selector_state.view();
-        view.world().domain_selectors().get(selector).cloned()
+        let world = selector_state.world_view();
+        world.domain_selectors().get(selector).cloned()
     }));
 
     let uaid_state = Arc::clone(state);
     set_account_uaid_resolver(Arc::new(move |uaid| {
-        let view = uaid_state.view();
-        view.world().uaid_accounts().get(uaid).cloned()
+        let world = uaid_state.world_view();
+        world.uaid_accounts().get(uaid).cloned()
     }));
 
     let opaque_state = Arc::clone(state);
     set_account_opaque_resolver(Arc::new(move |opaque| {
-        let view = opaque_state.view();
-        view.world().opaque_uaids().get(opaque).copied()
+        let world = opaque_state.world_view();
+        world.opaque_uaids().get(opaque).copied()
     }));
 }
 
@@ -6265,8 +6265,8 @@ async fn handler_zk_ivm_derive(
 
     let vk_record = {
         // Ensure the view guard does not live across `.await` points below.
-        let view = app.state.view();
-        view.world()
+        let world = app.state.world_view();
+        world
             .verifying_keys()
             .get(&req.vk_ref)
             .cloned()
@@ -6402,9 +6402,8 @@ async fn handler_zk_ivm_prove(
         )));
     }
 
-    let view = app.state.view();
-    let vk_record = view
-        .world()
+    let world = app.state.world_view();
+    let vk_record = world
         .verifying_keys()
         .get(&req.vk_ref)
         .cloned()
@@ -8155,7 +8154,7 @@ async fn handler_debug_axt_cache(
             Ok(norito::json::Value::Object(map))
         })
         .collect::<Result<_, Error>>()?;
-    let policy_snapshot = app.state.view().axt_policy_snapshot();
+    let policy_snapshot = app.state.axt_policy_snapshot();
     let snapshot_version =
         iroha_data_model::nexus::AxtPolicySnapshot::compute_version(&policy_snapshot.entries);
     let reject_hints = app
@@ -10345,9 +10344,8 @@ fn enforce_sorafs_repair_worker_auth(
     let permission = Permission::from(CanOperateSorafsRepair {
         provider_id: ProviderId::new(record.provider_id),
     });
-    let view = app.state.view();
-    let permitted = view
-        .world()
+    let world = app.state.world_view();
+    let permitted = world
         .account_permissions()
         .get(&account_id)
         .is_some_and(|perms| perms.contains(&permission));
@@ -10980,7 +10978,7 @@ async fn handler_iso_status(
         // before a dedicated watcher threads `mark_settled` from the pipeline.
         if let Some(hash_str) = status.transaction_hash() {
             if let Ok(hash) = hash_str.parse::<HashOf<SignedTransaction>>() {
-                if app.state.view().has_transaction(hash) {
+                if app.state.has_committed_transaction(hash) {
                     runtime.mark_settled(&msg_id, SystemTime::now());
                     if let Some(updated) = runtime.message_status(&msg_id) {
                         status = updated;
@@ -11253,7 +11251,7 @@ async fn handler_post_transaction(
         iroha_torii_shared::uri::TRANSACTION,
     )
     .await?;
-    let submitted_at_height = u64::try_from(app.state.view().height()).unwrap_or(0);
+    let submitted_at_height = u64::try_from(app.state.committed_height()).unwrap_or(0);
     let submitted_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
@@ -11499,7 +11497,7 @@ fn pipeline_status_from_state(
     app: &AppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Option<PipelineStatusEntry> {
-    let height = app.state.view().transactions().get(hash)?;
+    let height = app.state.committed_transaction_height(hash)?;
     let height_u64 = u64::try_from(height.get()).ok()?;
     let height_nz = NonZeroU64::new(height_u64)?;
     let block = app.kura.get_block(height)?;
@@ -11548,13 +11546,7 @@ async fn handler_pipeline_transaction_status(
         ));
     }
 
-    // Drop the view before the follow-up state lookup to avoid writer-preferring lock deadlocks.
-    let queued = {
-        let view = app.state.view();
-        app.queue
-            .all_transactions(&view)
-            .any(|tx| tx.as_ref().hash() == hash)
-    };
+    let queued = app.queue.contains_pending_hash(hash.clone(), &app.state);
     if queued {
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache.record_entry(hash, entry.clone());
@@ -12567,8 +12559,7 @@ async fn handler_ledger_headers(
         Err(resp) => return Ok(resp),
     };
 
-    let view = app.state.view();
-    let current_height: u64 = view.height() as u64;
+    let current_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let start_height = match window.from {
         Some(0) => return Err(conversion_error("from must be at least 1".to_owned())),
         Some(from) => {
@@ -12598,7 +12589,7 @@ async fn handler_ledger_headers(
         let Some(nz_height) = NonZeroUsize::new(height as usize) else {
             break;
         };
-        if let Some(block) = view.kura().get_block(nz_height) {
+        if let Some(block) = app.state.block_by_height(nz_height) {
             headers.push(block.header());
         } else {
             break;
@@ -13267,9 +13258,8 @@ impl Torii {
         state: &Arc<CoreState>,
         telemetry: &routing::MaybeTelemetry,
     ) -> Result<(), crate::sorafs::registry::PinRegistryError> {
-        let view = state.view();
-        let world = view.world();
-        let snapshot = crate::sorafs::registry::collect_pin_registry(world)?;
+        let world = state.world_view();
+        let snapshot = crate::sorafs::registry::collect_pin_registry(&world)?;
         crate::sorafs::registry::record_pin_registry_metrics(telemetry, &snapshot);
         Ok(())
     }
