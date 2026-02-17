@@ -76,6 +76,7 @@ testcfg
 tmp_referendum.rs
 python/iroha_python/.venv*
 python/iroha_python/iroha_python_rs/python-runtime-path
+python/norito_py/src/norito/__pycache__/
 java/iroha_android/build/*
 java/iroha_android/android/build/*
 java/iroha_android/core/build/*

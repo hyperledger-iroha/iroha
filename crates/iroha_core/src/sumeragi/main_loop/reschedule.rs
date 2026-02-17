@@ -190,15 +190,10 @@ impl Actor {
         let aborted_retention = quorum_reschedule_retention.saturating_mul(retention_factor);
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
-        let (tip_height, tip_hash, fast_timeout_permissioned, fast_timeout_npos) = {
-            let view = self.state.view();
-            (
-                view.height(),
-                view.latest_block_hash(),
-                self.pending_fast_path_timeout(&view, ConsensusMode::Permissioned),
-                self.pending_fast_path_timeout(&view, ConsensusMode::Npos),
-            )
-        };
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let fast_timeout_permissioned = self.pending_fast_path_timeout_current();
+        let fast_timeout_npos = self.pending_fast_path_timeout_current();
 
         let mut stale_pending = Vec::new();
         let mut aborted_expired = Vec::new();
@@ -723,10 +718,8 @@ impl Actor {
         )
         .is_some();
         let _queue_depth = self.queue.queued_len();
-        let (state_height, tip_hash) = {
-            let state_view = self.state.view();
-            (state_view.height(), state_view.latest_block_hash())
-        };
+        let state_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
         let pending_parent = pending.block.header().prev_block_hash();
         if !pending_extends_tip(height, pending_parent, state_height, tip_hash) {
             debug!(
