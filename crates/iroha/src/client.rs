@@ -5104,9 +5104,13 @@ impl Client {
     }
 
     pub(crate) fn default_request(&self, method: HttpMethod, url: Url) -> DefaultRequestBuilder {
-        let mut builder = DefaultRequestBuilder::new(method, url)
-            .headers(&self.headers)
-            .header(http::header::ACCEPT, APPLICATION_JSON);
+        // Do not set a default `Accept` header here.
+        //
+        // Many endpoints negotiate JSON vs Norito based on `Accept`. A default `Accept:
+        // application/json` would be appended alongside a later `Accept: application/x-norito`,
+        // and some servers/frameworks only observe the first header value. Callers set `Accept`
+        // explicitly when needed; otherwise Torii defaults to JSON.
+        let mut builder = DefaultRequestBuilder::new(method, url).headers(&self.headers);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }

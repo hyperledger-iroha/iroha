@@ -468,10 +468,12 @@ impl Actor {
         state: &State,
         fallback_consensus_mode: ConsensusMode,
     ) {
-        let consensus_mode = {
-            let view = state.view();
-            super::effective_consensus_mode_for_height(&view, height, fallback_consensus_mode)
-        };
+        let world = state.world_view();
+        let consensus_mode = super::effective_consensus_mode_for_height_from_world(
+            &world,
+            height,
+            fallback_consensus_mode,
+        );
         update.commit_qc = cached_qc_for(
             qc_cache,
             crate::sumeragi::consensus::Phase::Commit,
@@ -1151,19 +1153,46 @@ impl Actor {
                     // Seed the genesis roster after the block is durably persisted.
                     self.ensure_genesis_commit_roster();
                 }
-                let tally = qc_signers.as_ref().map_or_else(
-                    || {
-                        crate::block::valid::commit_signature_tally(
-                            committed_block.as_ref(),
-                            &topology,
-                        )
-                    },
-                    |signers| crate::block::valid::SignatureTally {
+                let set_b_signers = |signers: &BTreeSet<ValidatorIndex>| -> usize {
+                    let proxy_tail_idx = topology.proxy_tail_index();
+                    signers
+                        .iter()
+                        .filter(|signer| {
+                            super::view_index_for_canonical_signer(
+                                **signer,
+                                &topology,
+                                &canonical_topology,
+                            )
+                            .and_then(|idx| usize::try_from(idx).ok())
+                            .is_some_and(|idx| idx > proxy_tail_idx)
+                        })
+                        .count()
+                };
+
+                // Commit certificates are carried as QCs and are not always replicated into the
+                // block signature list. Prefer the QC signer bitmap when available.
+                let tally = if let Some(signers) = qc_signers.as_ref() {
+                    crate::block::valid::SignatureTally {
                         present: signers.len(),
                         counted: signers.len(),
-                        set_b_signatures: 0,
-                    },
-                );
+                        set_b_signatures: set_b_signers(signers),
+                    }
+                } else if let Some(qc) = cached_qc.as_ref() {
+                    let roster_len = commit_topology.len();
+                    match super::qc_signer_indices(qc, roster_len, roster_len) {
+                        Ok(parsed) => crate::block::valid::SignatureTally {
+                            present: parsed.present.len(),
+                            counted: parsed.voting.len(),
+                            set_b_signatures: set_b_signers(&parsed.voting),
+                        },
+                        Err(_) => crate::block::valid::commit_signature_tally(
+                            committed_block.as_ref(),
+                            &topology,
+                        ),
+                    }
+                } else {
+                    crate::block::valid::commit_signature_tally(committed_block.as_ref(), &topology)
+                };
                 crate::sumeragi::status::record_commit_quorum_snapshot(
                     pending_height,
                     pending_view,
@@ -1221,10 +1250,8 @@ impl Actor {
                     self.state.as_ref(),
                     self.config.consensus_mode,
                 );
-                let world_peers = {
-                    let view = self.state.view();
-                    view.world.peers().iter().cloned().collect::<Vec<_>>()
-                };
+                let world = self.state.world_view();
+                let world_peers = world.peers().iter().cloned().collect::<Vec<_>>();
                 let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
                 if self.prepare_block_sync_update_for_broadcast(&mut sync_update, consensus_mode) {
                     self.broadcast_block_sync_update(sync_update, &world_peers);
@@ -1835,10 +1862,8 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        let (state_height, state_tip_hash) = {
-            let view = self.state.view();
-            (view.height(), view.latest_block_hash())
-        };
+        let state_height = self.state.committed_height();
+        let state_tip_hash = self.state.latest_block_hash_fast();
         if pending.aborted {
             let pending_parent = pending.block.header().prev_block_hash();
             if pending.commit_qc_seen
@@ -2359,10 +2384,8 @@ impl Actor {
             return timings.finish(pipeline_start);
         }
 
-        let block_time = {
-            let view = self.state.view();
-            self.block_time_for_mode(&view, self.consensus_mode)
-        };
+        let world = self.state.world_view();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         let qc_rebuild_cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
         self.pending.last_commit_pipeline_run = self.pending.last_commit_pipeline_run.max(now);
         let should_rebuild_qcs =
@@ -2534,10 +2557,8 @@ impl Actor {
                 None => continue,
             };
             let kura_has_block = self.kura.get_block_height_by_hash(hash).is_some();
-            let (state_height, state_tip_hash) = {
-                let view = self.state.view();
-                (view.height(), view.latest_block_hash())
-            };
+            let state_height = self.state.committed_height();
+            let state_tip_hash = self.state.latest_block_hash_fast();
             let state_aligned = state_tip_hash.is_some_and(|tip| tip == hash)
                 && usize::try_from(pending_height)
                     .is_ok_and(|pending_height| state_height >= pending_height);
@@ -2956,10 +2977,8 @@ impl Actor {
             );
             return;
         }
-        let block_time = {
-            let view = self.state.view();
-            self.block_time_for_mode(&view, self.consensus_mode)
-        };
+        let world = self.state.world_view();
+        let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         let cooldown = block_time.max(std::time::Duration::from_millis(200));
         let now = std::time::Instant::now();
         if self
@@ -4200,10 +4219,8 @@ impl Actor {
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
-        let registered_peers = {
-            let view = self.state.view();
-            view.world().peers().iter().cloned().collect::<Vec<_>>()
-        };
+        let world = self.state.world_view();
+        let registered_peers = world.peers().iter().cloned().collect::<Vec<_>>();
         let trusted = self.common_config.trusted_peers.value();
         let trusted_peers: Vec<PeerId> = std::iter::once(trusted.myself.id().clone())
             .chain(trusted.others.iter().map(|peer| peer.id().clone()))
@@ -4246,10 +4263,8 @@ impl Actor {
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
-        let registered_peers = {
-            let view = self.state.view();
-            view.world().peers().iter().cloned().collect::<Vec<_>>()
-        };
+        let world = self.state.world_view();
+        let registered_peers = world.peers().iter().cloned().collect::<Vec<_>>();
         let trusted = self.common_config.trusted_peers.value();
         let trusted_peers: Vec<PeerId> = std::iter::once(trusted.myself.id().clone())
             .chain(trusted.others.iter().map(|peer| peer.id().clone()))
@@ -4468,10 +4483,8 @@ impl Actor {
         if topology_peers.is_empty() {
             return;
         }
-        let timeouts = {
-            let view = self.state.view();
-            super::resolve_npos_timeouts(&view, &self.config.npos)
-        };
+        let world = self.state.world_view();
+        let timeouts = super::resolve_npos_timeouts_from_world(&world, &self.config.npos);
         let cooldown = timeouts.propose.max(Duration::from_millis(50));
         let now = Instant::now();
         if !self
@@ -5081,10 +5094,7 @@ impl Actor {
     }
 
     fn try_poll_committed_blocks(&mut self) -> Result<bool> {
-        let committed_height = {
-            let view = self.state.view();
-            view.height() as u64
-        };
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let mut progress = false;
         let mut next_height = self.last_committed_height.saturating_add(1);
         while next_height <= committed_height {
@@ -5661,10 +5671,8 @@ impl Actor {
     }
 
     pub(super) fn refresh_p2p_topology(&mut self) {
-        let current: BTreeSet<_> = {
-            let view = self.state.view();
-            view.world.peers().iter().cloned().collect::<BTreeSet<_>>()
-        };
+        let world = self.state.world_view();
+        let current: BTreeSet<_> = world.peers().iter().cloned().collect::<BTreeSet<_>>();
         let trusted_peers = self.common_config.trusted_peers.value();
         let expected_topology = p2p_topology_with_trusted(&current, trusted_peers);
 

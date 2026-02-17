@@ -27,7 +27,11 @@ fn permissioned_primary_stable_without_seed() {
         plan_h2, plan_h3,
         "permissioned fallback should be stable without a PRF seed"
     );
-    assert_eq!(plan_h2, vec![peers[2].clone(), peers[3].clone()]);
+    // The fallback is quorum-sized and wraps around (skipping the leader).
+    assert_eq!(
+        plan_h2,
+        vec![peers[2].clone(), peers[3].clone(), peers[1].clone()]
+    );
 }
 
 #[test]
