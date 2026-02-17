@@ -6137,9 +6137,10 @@ impl NetworkPeer {
 
     /// Create a client to interact with this peer
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
-        println!(
-            "TEST_NETWORK client for {} using port {}",
-            self.mnemonic, self.port_api
+        tracing::debug!(
+            mnemonic = %self.mnemonic,
+            port = %self.port_api,
+            "TEST_NETWORK client"
         );
         let status_timeout = client_status_timeout_env();
         let request_timeout = client_request_timeout_env();

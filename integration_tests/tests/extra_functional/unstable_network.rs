@@ -1139,6 +1139,11 @@ impl UnstableNetwork {
         let target_height = ctx.init_blocks + (round_index as u64) + 1;
         let chain_id = network.chain_id();
         let peer_ids: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
+        let peers_by_id: HashMap<PeerId, NetworkPeer> = peers
+            .iter()
+            .cloned()
+            .map(|peer| (peer.id(), peer))
+            .collect();
         let rotated_topology =
             topology_for_permissioned_round(&peer_ids, &chain_id, target_height, 0);
         let leader_id = rotated_topology
@@ -1199,6 +1204,14 @@ impl UnstableNetwork {
             let primary = candidates.remove(pos);
             candidates.insert(0, primary);
         }
+        // After recovery the round may experience view changes. If the transaction only exists on
+        // one peer, a later-view leader might never observe it. Submitting to all peers (best
+        // effort) makes the scenario resilient to delayed tx gossip and leadership rotation.
+        let recovered_candidates: Vec<_> = rotated_topology
+            .iter()
+            .filter_map(|peer_id| peers_by_id.get(peer_id))
+            .cloned()
+            .collect();
         let mut builder_client = primary_peer.client();
         if let Some(ttl) = builder_client.transaction_ttl {
             if ttl < min_ttl {
@@ -1248,55 +1261,60 @@ impl UnstableNetwork {
                 iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
             }
         }
-        let submit_tx = |phase: &'static str, timeout_window: Duration| {
-            let candidates = candidates.clone();
-            let tx = Arc::clone(&tx);
-            async move {
-                let deadline = Instant::now() + timeout_window;
-                let mut attempts = 0usize;
-                loop {
-                    attempts = attempts.saturating_add(1);
-                    let mut attempt_err: Option<eyre::Report> = None;
-                    for peer in &candidates {
-                        let client = peer.client();
-                        iroha_logger::info!(
-                            phase,
-                            via_peer = peer.mnemonic(),
-                            "Submit transaction"
-                        );
-                        let tx = Arc::clone(&tx);
-                        let res = spawn_blocking(move || client.submit_transaction(&tx)).await;
-                        match res {
-                            Ok(Ok(_hash)) => return Ok(()),
-                            Ok(Err(err)) => {
-                                if is_already_accepted(&err) {
-                                    return Ok(());
+        let submit_tx =
+            |phase: &'static str, timeout_window: Duration, submit_peers: Vec<NetworkPeer>| {
+                let tx = Arc::clone(&tx);
+                async move {
+                    let deadline = Instant::now() + timeout_window;
+                    let mut attempts = 0usize;
+                    loop {
+                        attempts = attempts.saturating_add(1);
+                        let mut accepted = false;
+                        let mut attempt_err: Option<eyre::Report> = None;
+                        for peer in &submit_peers {
+                            let client = peer.client();
+                            iroha_logger::info!(
+                                phase,
+                                via_peer = peer.mnemonic(),
+                                "Submit transaction"
+                            );
+                            let tx = Arc::clone(&tx);
+                            let res = spawn_blocking(move || client.submit_transaction(&tx)).await;
+                            match res {
+                                Ok(Ok(_hash)) => accepted = true,
+                                Ok(Err(err)) => {
+                                    if is_already_accepted(&err) {
+                                        accepted = true;
+                                        continue;
+                                    }
+                                    attempt_err = Some(err);
                                 }
-                                attempt_err = Some(err);
-                            }
-                            Err(err) => {
-                                attempt_err = Some(eyre::Report::new(err));
+                                Err(err) => {
+                                    attempt_err = Some(eyre::Report::new(err));
+                                }
                             }
                         }
+                        if accepted {
+                            return Ok(());
+                        }
+                        if Instant::now() >= deadline {
+                            return Err(attempt_err.unwrap_or_else(|| {
+                                eyre!("transaction submission failed on all peers during {phase}")
+                            }));
+                        }
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            return Err(attempt_err.unwrap_or_else(|| {
+                                eyre!("transaction submission failed on all peers during {phase}")
+                            }));
+                        }
+                        sleep(submit_retry_backoff(attempts).min(remaining)).await;
                     }
-                    if Instant::now() >= deadline {
-                        return Err(attempt_err.unwrap_or_else(|| {
-                            eyre!("transaction submission failed on all non-faulty peers")
-                        }));
-                    }
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        return Err(attempt_err.unwrap_or_else(|| {
-                            eyre!("transaction submission failed on all non-faulty peers")
-                        }));
-                    }
-                    sleep(submit_retry_backoff(attempts).min(remaining)).await;
                 }
-            }
-        };
+            };
         let mut submitted_during_partition = false;
         if submit_while_partitioned {
-            match submit_tx("partitioned", partition_submit_window).await {
+            match submit_tx("partitioned", partition_submit_window, candidates.clone()).await {
                 Ok(()) => submitted_during_partition = true,
                 Err(err) => {
                     iroha_logger::warn!(
@@ -1353,7 +1371,7 @@ impl UnstableNetwork {
         };
         sleep(recovery_delay).await;
         if !submitted_during_partition {
-            submit_tx("recovered", sync_timeout).await?;
+            submit_tx("recovered", sync_timeout, recovered_candidates.clone()).await?;
         }
         let expected_supply = Numeric::new((round_index + 1) as u128, 0);
         let supply_start = Instant::now();
@@ -1416,7 +1434,9 @@ impl UnstableNetwork {
             if should_resubmit_tx(allow_resubmit, resubmitted, now, resubmit_at) {
                 let remaining = supply_deadline.saturating_duration_since(now);
                 if !remaining.is_zero() {
-                    if let Err(err) = submit_tx("recovered_retry", remaining).await {
+                    if let Err(err) =
+                        submit_tx("recovered_retry", remaining, recovered_candidates.clone()).await
+                    {
                         iroha_logger::warn!(
                             ?err,
                             "recovered submit retry failed while waiting for supply"

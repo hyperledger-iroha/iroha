@@ -3502,22 +3502,21 @@ pub(crate) mod valid {
         /// Unlike [`Self::is_commit`], this accepts partial signature sets and only enforces that
         /// each present signature is unique, maps to a known validator role, and uses a live
         /// consensus key.
-        pub(crate) fn validate_signatures_subset(
+        pub(crate) fn validate_signatures_subset_world(
             block: &SignedBlock,
             topology: &Topology,
-            state: &impl StateReadOnlyWithTransactions,
+            world: &impl WorldReadOnly,
         ) -> Result<(), SignatureVerificationError> {
             if block.header().is_genesis() {
                 return Ok(());
             }
             Self::verify_unique_signers(block)?;
-            let world = state.world();
             let params = world.parameters();
             let sumeragi = params.sumeragi();
             let height = block.header().height().get();
             if world.consensus_keys().is_empty() {
                 Self::verify_signatures_against_topology(block, topology)?;
-                return Self::enforce_consensus_key_lifecycle(block, topology, state);
+                return Self::enforce_consensus_key_lifecycle_world(block, topology, world);
             }
             let pops = Self::collect_validator_pops(
                 world,
@@ -3526,7 +3525,15 @@ pub(crate) mod valid {
                 sumeragi.key_expiry_grace_blocks,
             )?;
             Self::verify_signatures_against_topology_with_pops(block, topology, &pops)?;
-            Self::enforce_consensus_key_lifecycle(block, topology, state)
+            Self::enforce_consensus_key_lifecycle_world(block, topology, world)
+        }
+
+        pub(crate) fn validate_signatures_subset(
+            block: &SignedBlock,
+            topology: &Topology,
+            state: &impl StateReadOnly,
+        ) -> Result<(), SignatureVerificationError> {
+            Self::validate_signatures_subset_world(block, topology, state.world())
         }
 
         fn collect_validator_pops(
@@ -3562,15 +3569,14 @@ pub(crate) mod valid {
             Ok(pops)
         }
 
-        pub(crate) fn enforce_consensus_key_lifecycle(
+        pub(crate) fn enforce_consensus_key_lifecycle_world(
             block: &SignedBlock,
             topology: &Topology,
-            state: &impl StateReadOnlyWithTransactions,
+            world: &impl WorldReadOnly,
         ) -> Result<(), SignatureVerificationError> {
             if block.header().is_genesis() {
                 return Ok(());
             }
-            let world = state.world();
             // Skip enforcement until consensus keys are explicitly registered. Once any
             // registry entries exist, validators must present a live key for signing.
             if world.consensus_keys().is_empty() {
@@ -3624,6 +3630,14 @@ pub(crate) mod valid {
                 }
             }
             Ok(())
+        }
+
+        pub(crate) fn enforce_consensus_key_lifecycle(
+            block: &SignedBlock,
+            topology: &Topology,
+            state: &impl StateReadOnly,
+        ) -> Result<(), SignatureVerificationError> {
+            Self::enforce_consensus_key_lifecycle_world(block, topology, state.world())
         }
 
         fn ensure_genesis_transactions_clean(

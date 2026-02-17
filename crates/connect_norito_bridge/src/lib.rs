@@ -1850,51 +1850,6 @@ pub unsafe extern "C" fn connect_norito_offline_blinding_from_seed(
         {
             return Err(BridgeError::NullPtr);
         }
-        let initial_blinding =
-            unsafe { slice::from_raw_parts(initial_blinding_ptr, initial_blinding_len as usize) };
-        let cert_id_bytes =
-            unsafe { slice::from_raw_parts(certificate_id_ptr, certificate_id_len as usize) };
-
-        let init_scalar = decode_scalar_bytes(initial_blinding)?;
-
-        // Reconstruct the certificate Hash from the pre-computed 32-byte digest.
-        let cert_array: [u8; Hash::LENGTH] = cert_id_bytes
-            .try_into()
-            .map_err(|_| BridgeError::OfflineBlinding)?;
-        let cert_hash = Hash::prehashed(cert_array);
-
-        let seed = OfflineProofBlindingSeed::derive(cert_hash, counter);
-        let seed_scalar = blinding_scalar_from_seed(&seed);
-
-        let mut resulting = init_scalar + seed_scalar;
-        let bytes = resulting.to_bytes();
-        resulting.zeroize();
-
-        unsafe { write_bytes_bridge(out_blinding_ptr, out_blinding_len, &bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_blinding_from_seed(
-    initial_blinding_ptr: *const c_uchar,
-    initial_blinding_len: c_ulong,
-    certificate_id_ptr: *const c_uchar,
-    certificate_id_len: c_ulong,
-    counter: u64,
-    out_blinding_ptr: *mut *mut c_uchar,
-    out_blinding_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        if initial_blinding_ptr.is_null()
-            || certificate_id_ptr.is_null()
-            || out_blinding_ptr.is_null()
-            || out_blinding_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
 
         let initial_blinding =
             unsafe { slice::from_raw_parts(initial_blinding_ptr, initial_blinding_len as usize) };
@@ -1905,10 +1860,13 @@ pub unsafe extern "C" fn connect_norito_offline_blinding_from_seed(
         }
         let mut certificate_id_array = [0u8; Hash::LENGTH];
         certificate_id_array.copy_from_slice(certificate_id_bytes);
+        // `Hash` has an invariant: the least significant bit must be 1. Reject raw Blake2b-32
+        // digests here to avoid silently mutating caller-provided values.
         if certificate_id_array[Hash::LENGTH - 1] & 1 == 0 {
             return Err(BridgeError::OfflineNonce);
         }
         let certificate_id = Hash::prehashed(certificate_id_array);
+
         let resulting =
             derive_offline_blinding_from_seed(initial_blinding, certificate_id, counter)?;
         unsafe { write_bytes_bridge(out_blinding_ptr, out_blinding_len, &resulting) }?;
@@ -8393,6 +8351,62 @@ mod offline_challenge_tests {
         assert_eq!(code, 0, "expected receipts root success");
         let expected = compute_receipts_root(&receipts).expect("root");
         assert_eq!(out_root.as_slice(), expected.as_bytes());
+    }
+
+    #[test]
+    fn offline_blinding_from_seed_ffi_matches_derive() {
+        let initial = Scalar::from(19u64);
+        let initial_bytes = initial.to_bytes();
+        let certificate_id = Hash::new(b"offline-certificate");
+        let counter = 11u64;
+        let seed = OfflineProofBlindingSeed::derive(certificate_id, counter);
+        let expected = (initial + blinding_scalar_from_seed(&seed)).to_bytes();
+
+        let mut out_ptr: *mut u8 = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let code = unsafe {
+            connect_norito_offline_blinding_from_seed(
+                initial_bytes.as_ptr(),
+                initial_bytes.len() as c_ulong,
+                certificate_id.as_ref().as_ptr(),
+                Hash::LENGTH as c_ulong,
+                counter,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(code, 0, "expected success");
+        assert!(!out_ptr.is_null());
+        assert_eq!(out_len as usize, expected.len());
+        let derived = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
+        connect_norito_free(out_ptr);
+        assert_eq!(derived, expected);
+    }
+
+    #[test]
+    fn offline_blinding_from_seed_rejects_non_hash_certificate_id_bytes() {
+        let initial = Scalar::from(19u64);
+        let initial_bytes = initial.to_bytes();
+        let certificate_id = Hash::new(b"offline-certificate");
+        let mut bad_certificate_bytes = *certificate_id.as_ref();
+        bad_certificate_bytes[Hash::LENGTH - 1] &= !1;
+
+        let mut out_ptr: *mut u8 = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let code = unsafe {
+            connect_norito_offline_blinding_from_seed(
+                initial_bytes.as_ptr(),
+                initial_bytes.len() as c_ulong,
+                bad_certificate_bytes.as_ptr(),
+                bad_certificate_bytes.len() as c_ulong,
+                1,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(code, ERR_OFFLINE_NONCE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 }
 
