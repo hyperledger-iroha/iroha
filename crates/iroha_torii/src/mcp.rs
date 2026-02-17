@@ -127,8 +127,13 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_connect_session_delete_tool());
     tools.push(iroha_connect_status_tool());
     tools.push(iroha_accounts_list_tool());
+    tools.push(iroha_accounts_query_tool());
     tools.push(iroha_accounts_resolve_tool());
     tools.push(iroha_account_transactions_tool());
+    tools.push(iroha_account_transactions_query_tool());
+    tools.push(iroha_account_assets_tool());
+    tools.push(iroha_account_assets_query_tool());
+    tools.push(iroha_account_permissions_tool());
     tools.push(iroha_transactions_submit_tool());
     tools.push(iroha_transactions_status_tool());
 
@@ -305,6 +310,12 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        "iroha.accounts.query" => {
+            match dispatch_iroha_accounts_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
         "iroha.accounts.resolve" => {
             match dispatch_iroha_accounts_resolve(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -313,6 +324,31 @@ async fn handle_tools_call(
         }
         "iroha.accounts.transactions" => {
             match dispatch_iroha_account_transactions(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.transactions.query" => {
+            match dispatch_iroha_account_transactions_query(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.assets" => {
+            match dispatch_iroha_account_assets(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.assets.query" => {
+            match dispatch_iroha_account_assets_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.permissions" => {
+            match dispatch_iroha_account_permissions(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -723,6 +759,29 @@ async fn dispatch_iroha_accounts_list(
     .await
 }
 
+async fn dispatch_iroha_accounts_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_accounts_resolve(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -774,6 +833,122 @@ async fn dispatch_iroha_account_transactions(
         &["path", "account_id", "query", "headers", "accept"],
     )?;
     let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_account_transactions_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let account_id = extract_account_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("account_id".into(), Value::String(account_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        "/v1/accounts/{account_id}/transactions/query",
+        Some(&path_value),
+    )?;
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_account_assets(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let account_id = extract_account_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("account_id".into(), Value::String(account_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/accounts/{account_id}/assets", Some(&path_value))?;
+    let query = collect_query_arguments(
+        arguments,
+        &["path", "account_id", "query", "headers", "accept"],
+    )?;
+    let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_account_assets_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let account_id = extract_account_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("account_id".into(), Value::String(account_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/accounts/{account_id}/assets/query", Some(&path_value))?;
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_account_permissions(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let account_id = extract_account_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("account_id".into(), Value::String(account_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/accounts/{account_id}/permissions", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -899,6 +1074,52 @@ fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
         .ok_or_else(|| {
             "`account_id` is required (provide `account_id` or `path.account_id`)".to_owned()
         })
+}
+
+fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
+    if let Some(body) = arguments.get("body") {
+        return body
+            .as_object()
+            .map(|_| body.clone())
+            .ok_or_else(|| "`body` must be an object".to_owned());
+    }
+
+    let mut env = Map::new();
+    for key in [
+        "query",
+        "filter",
+        "select",
+        "sort",
+        "fetch_size",
+        "address_format",
+    ] {
+        if let Some(value) = arguments.get(key) {
+            env.insert(key.to_owned(), value.clone());
+        }
+    }
+
+    if let Some(pagination) = arguments.get("pagination") {
+        let pagination_obj = pagination
+            .as_object()
+            .ok_or_else(|| "`pagination` must be an object".to_owned())?;
+        env.insert(
+            "pagination".to_owned(),
+            Value::Object(pagination_obj.clone()),
+        );
+    } else {
+        let mut pagination = Map::new();
+        if let Some(limit) = arguments.get("limit") {
+            pagination.insert("limit".to_owned(), limit.clone());
+        }
+        if let Some(offset) = arguments.get("offset") {
+            pagination.insert("offset".to_owned(), offset.clone());
+        }
+        if !pagination.is_empty() {
+            env.insert("pagination".to_owned(), Value::Object(pagination));
+        }
+    }
+
+    Ok(Value::Object(env))
 }
 
 fn collect_query_arguments(
@@ -1459,6 +1680,42 @@ fn iroha_accounts_list_tool() -> ToolSpec {
     }
 }
 
+fn iroha_accounts_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.query".to_owned(),
+        description:
+            "Query accounts with filter/select/sort/pagination envelope (flat shortcuts supported)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_accounts_resolve_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.resolve".to_owned(),
@@ -1524,6 +1781,173 @@ fn iroha_account_transactions_tool() -> ToolSpec {
                 "query": {
                     "type": "object",
                     "additionalProperties": true
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_account_transactions_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.transactions.query".to_owned(),
+        description: "Query transactions authored by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/{account_id}/transactions/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.account_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["account_id"],
+                    "properties": {
+                        "account_id": { "type": "string" }
+                    }
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_account_assets_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.assets".to_owned(),
+        description: "List assets held by a specific account (`account_id` shortcut supported)."
+            .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/accounts/{account_id}/assets".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.account_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["account_id"],
+                    "properties": {
+                        "account_id": { "type": "string" }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "asset_id": { "type": "string" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_account_assets_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.assets.query".to_owned(),
+        description: "Query assets held by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/{account_id}/assets/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.account_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["account_id"],
+                    "properties": {
+                        "account_id": { "type": "string" }
+                    }
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_account_permissions_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.permissions".to_owned(),
+        description:
+            "List permissions granted to a specific account (`account_id` shortcut supported)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/accounts/{account_id}/permissions".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.account_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["account_id"],
+                    "properties": {
+                        "account_id": { "type": "string" }
+                    }
                 },
                 "headers": {
                     "type": "object",
@@ -1683,10 +2107,31 @@ mod tests {
                 .any(|tool| tool.name == "iroha.connect.session.create")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.list"));
+        assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.query"));
         assert!(
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.transactions.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.accounts.assets")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.accounts.permissions")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.accounts.transactions.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.accounts.assets.query")
         );
     }
 
@@ -1783,5 +2228,34 @@ mod tests {
         let account_id =
             extract_account_id_argument(args.as_object().expect("object")).expect("account id");
         assert_eq!(account_id, "alice@wonderland");
+    }
+
+    #[test]
+    fn build_query_envelope_body_collects_shortcut_fields() {
+        let args = norito::json!({
+            "filter": { "op": "eq", "args": ["authority", "alice@wonderland"] },
+            "limit": 25,
+            "offset": 5,
+            "fetch_size": 10
+        });
+        let body = build_query_envelope_body(args.as_object().expect("object")).expect("body");
+        let body = body.as_object().expect("body object");
+        assert!(body.contains_key("filter"));
+        let pagination = body
+            .get("pagination")
+            .and_then(Value::as_object)
+            .expect("pagination");
+        assert_eq!(pagination.get("limit").and_then(Value::as_u64), Some(25));
+        assert_eq!(pagination.get("offset").and_then(Value::as_u64), Some(5));
+        assert_eq!(body.get("fetch_size").and_then(Value::as_u64), Some(10));
+    }
+
+    #[test]
+    fn build_query_envelope_body_rejects_non_object_body() {
+        let args = norito::json!({
+            "body": "invalid"
+        });
+        let err = build_query_envelope_body(args.as_object().expect("object")).expect_err("error");
+        assert!(err.contains("`body` must be an object"));
     }
 }

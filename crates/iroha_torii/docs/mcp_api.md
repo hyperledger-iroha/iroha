@@ -34,13 +34,19 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.connect.session.delete`
   - `iroha.connect.status`
   - `iroha.accounts.list`
+  - `iroha.accounts.query`
   - `iroha.accounts.resolve`
   - `iroha.accounts.transactions`
+  - `iroha.accounts.transactions.query`
+  - `iroha.accounts.assets`
+  - `iroha.accounts.assets.query`
+  - `iroha.accounts.permissions`
   - `iroha.transactions.submit`
   - `iroha.transactions.status`
 - `iroha.*` aliases accept flat convenience fields in addition to nested
   `path`/`query`/`body` payloads (for example `account_id`, `hash`, `literal`,
-  `signed_tx_base64`, `signed_tx_hex`).
+  `signed_tx_base64`, `signed_tx_hex`, and query-envelope shortcuts like
+  `filter`, `sort`, `limit`, `offset`).
 
 ## Account Tool Example
 
@@ -92,6 +98,91 @@ Equivalent flat-argument call via the alias tool:
       "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
       "limit": 20,
       "offset": 0
+    }
+  }
+}
+```
+
+Account assets alias (flat `account_id` + query keys):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "acct-assets-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.accounts.assets",
+    "arguments": {
+      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "limit": 20,
+      "offset": 0
+    }
+  }
+}
+```
+
+Account permissions alias (flat `account_id`):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "acct-perm-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.accounts.permissions",
+    "arguments": {
+      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+    }
+  }
+}
+```
+
+Accounts query alias (flat query-envelope shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "acct-query-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.accounts.query",
+    "arguments": {
+      "limit": 20,
+      "offset": 0
+    }
+  }
+}
+```
+
+Account transactions query alias (flat `account_id` + query-envelope shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "acct-tx-query-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.accounts.transactions.query",
+    "arguments": {
+      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "limit": 20
+    }
+  }
+}
+```
+
+Account assets query alias (flat `account_id` + query-envelope shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "acct-assets-query-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.accounts.assets.query",
+    "arguments": {
+      "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+      "limit": 20
     }
   }
 }

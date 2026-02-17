@@ -14120,6 +14120,15 @@ impl State {
         self.block_hashes.view().last().copied()
     }
 
+    /// Whether a transaction hash is already committed.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only committed-transaction
+    /// membership is required.
+    #[track_caller]
+    pub fn has_committed_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
+        self.transactions.view().get(&hash).is_some()
+    }
+
     #[inline]
     fn note_view_lock_contention(&self, caller: &'static core::panic::Location<'static>) {
         let now = Instant::now();
@@ -22921,6 +22930,29 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    #[test]
+    fn has_committed_transaction_reads_transactions_index() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let tx = dummy_accepted_transaction();
+        let tx_hash = tx.hash();
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(tx_hash, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("transactions block should commit");
+        }
+
+        assert!(state.has_committed_transaction(tx_hash));
+
+        let unknown =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([7; Hash::LENGTH]));
+        assert!(!state.has_committed_transaction(unknown));
     }
 
     #[test]

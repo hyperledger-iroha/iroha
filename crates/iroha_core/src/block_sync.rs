@@ -909,12 +909,20 @@ impl BlockSynchronizer {
         fallback_consensus_mode: ConsensusMode,
         block: &SignedBlock,
     ) -> Option<Qc> {
+        Self::block_sync_qc_for_world(state_view.world(), fallback_consensus_mode, block)
+    }
+
+    pub(crate) fn block_sync_qc_for_world(
+        world: &impl WorldReadOnly,
+        fallback_consensus_mode: ConsensusMode,
+        block: &SignedBlock,
+    ) -> Option<Qc> {
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = block.header().view_change_index();
         let (consensus_mode, expected_mode_tag) = {
-            let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height(
-                state_view,
+            let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                world,
                 height,
                 fallback_consensus_mode,
             );
@@ -1992,8 +2000,15 @@ mod qc_build_tests {
         let qc =
             BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
                 .expect("cached QC should be built");
+        let qc_from_world = BlockSynchronizer::block_sync_qc_for_world(
+            state_view.world(),
+            ConsensusMode::Permissioned,
+            &block,
+        )
+        .expect("world snapshot path should build cached QC");
         assert_eq!(qc.subject_block_hash, block_hash);
         assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
+        assert_eq!(qc_from_world, qc);
     }
 
     #[test]

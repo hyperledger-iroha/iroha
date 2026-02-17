@@ -755,10 +755,36 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly account listing MCP tool"
     );
     assert!(
+        names.iter().any(|name| name == "iroha.accounts.query"),
+        "expected agent-friendly account query MCP tool"
+    );
+    assert!(
         names
             .iter()
             .any(|name| name == "iroha.accounts.transactions"),
         "expected agent-friendly account transactions MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.accounts.transactions.query"),
+        "expected agent-friendly account transactions query MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.accounts.assets"),
+        "expected agent-friendly account assets MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.accounts.assets.query"),
+        "expected agent-friendly account assets query MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.accounts.permissions"),
+        "expected agent-friendly account permissions MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.transactions.submit"),
@@ -977,6 +1003,176 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_accepts_flat_ar
             .is_some_and(|status| status >= 400),
         "expected invalid flat limit to be rejected"
     );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope_fields() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10620,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.query",
+                "arguments": {
+                    "limit": 2,
+                    "offset": 0
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "accounts query alias with flat envelope fields should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_query_accepts_flat_arguments() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10623,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.transactions.query",
+                "arguments": {
+                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "limit": 2
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "transactions query alias with flat arguments should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_accepts_flat_arguments() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10621,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.assets",
+                "arguments": {
+                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "limit": 0
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid flat asset query should be marked as MCP tool error"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid flat asset limit to be rejected"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_query_accepts_flat_arguments() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10624,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.assets.query",
+                "arguments": {
+                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+                    "limit": 2
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "assets query alias with flat arguments should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_account_permissions_accepts_flat_account_id() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10622,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.accounts.permissions",
+                "arguments": {
+                    "account_id": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "permissions alias with flat account id should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 
 #[tokio::test]
