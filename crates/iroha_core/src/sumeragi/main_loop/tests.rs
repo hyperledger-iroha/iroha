@@ -34081,6 +34081,16 @@ async fn trigger_view_change_skips_new_view_vote_without_roster() {
 
     actor.trigger_view_change_with_cause(trigger_height, 0, super::ViewChangeCause::QuorumTimeout);
 
+    #[cfg(feature = "telemetry")]
+    {
+        let metrics = actor.telemetry.metrics().await;
+        assert_eq!(
+            metrics.view_changes.get(),
+            super::status::snapshot().view_change_index,
+            "telemetry view_changes gauge should track the latest view-change index"
+        );
+    }
+
     assert!(
         !actor
             .vote_log
@@ -34129,6 +34139,15 @@ async fn record_phase_sample_updates_view_change_index_and_install() {
     let snapshot = super::status::snapshot();
     assert_eq!(snapshot.view_change_index, view);
     assert_eq!(snapshot.view_change_install_total, 1);
+    #[cfg(feature = "telemetry")]
+    {
+        let metrics = actor.telemetry.metrics().await;
+        assert_eq!(
+            metrics.view_changes.get(),
+            view,
+            "telemetry view_changes gauge should track the latest view-change index"
+        );
+    }
 
     actor.record_phase_sample(PipelinePhase::CollectCommit, height, view);
     let snapshot = super::status::snapshot();
@@ -34238,6 +34257,15 @@ async fn note_view_change_from_block_updates_view_change_install() {
     let snapshot = super::status::snapshot();
     assert_eq!(snapshot.view_change_index, view);
     assert_eq!(snapshot.view_change_install_total, 1);
+    #[cfg(feature = "telemetry")]
+    {
+        let metrics = actor.telemetry.metrics().await;
+        assert_eq!(
+            metrics.view_changes.get(),
+            view,
+            "telemetry view_changes gauge should track the latest view-change index"
+        );
+    }
 
     actor.note_view_change_from_block(height, view);
     let snapshot = super::status::snapshot();

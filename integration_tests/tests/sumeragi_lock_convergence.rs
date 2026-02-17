@@ -288,14 +288,27 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         "lock convergence restart tick".to_string(),
     ))?;
     let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
-    let mut final_locked = Vec::new();
-    for peer in &running {
-        final_locked.push(fetch_qc_snapshot(&peer.client()).await?.locked);
+    let final_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut final_locked = Vec::new();
+        for peer in &running {
+            final_locked.push(fetch_qc_snapshot(&peer.client()).await?.locked);
+        }
+        if assert_qc_entries_match(
+            &final_locked,
+            "locked QC divergence after post-restart progress",
+        )
+        .is_ok()
+        {
+            break;
+        }
+        if Instant::now() >= final_deadline {
+            return Err(eyre!(
+                "timed out waiting for locked QC convergence after post-restart progress; locked={final_locked:?}"
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
     }
-    assert_qc_entries_match(
-        &final_locked,
-        "locked QC divergence after post-restart progress",
-    )?;
 
     network.shutdown().await;
     Ok(())
