@@ -10577,6 +10577,9 @@ impl Actor {
         }
 
         super::status::set_view_change_index(view);
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.set_view_changes(view);
+        }
         let advanced = match prev_height {
             Some(prev_height) if prev_height == height => view > prev_view,
             _ => view > 0,
@@ -10609,6 +10612,9 @@ impl Actor {
                 .on_view_change(height, view, Instant::now());
         }
         super::status::set_view_change_index(view);
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.set_view_changes(view);
+        }
         if advanced {
             super::status::inc_view_change_install();
             if let Some(telemetry) = self.telemetry_handle() {
@@ -14229,6 +14235,9 @@ impl Actor {
             now,
         );
         super::status::set_view_change_index(next_view);
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.set_view_changes(next_view);
+        }
         super::status::inc_view_change_suggest();
         if let Some(telemetry) = self.telemetry_handle() {
             telemetry.inc_view_change_suggest();
