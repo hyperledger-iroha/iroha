@@ -319,8 +319,16 @@ impl EpochScheduleSnapshot {
 
 /// Attempt to load `NPoS` collector configuration (PRF seed + tunables) from the given state view.
 pub fn load_npos_collector_config(view: &StateView<'_>) -> Option<NposCollectorConfig> {
-    let params = view.world.sumeragi_npos_parameters()?;
-    let seed = latest_epoch_seed(view);
+    load_npos_collector_config_from_world(view.world(), view.chain_id())
+}
+
+/// Attempt to load `NPoS` collector configuration (PRF seed + tunables) from the given world view.
+pub fn load_npos_collector_config_from_world(
+    world: &impl WorldReadOnly,
+    chain_id: &ChainId,
+) -> Option<NposCollectorConfig> {
+    let params = world.sumeragi_npos_parameters()?;
+    let seed = latest_epoch_seed_from_world(world, chain_id);
     let k = usize::from(params.k_aggregators());
     let redundant_send_r = params.redundant_send_r();
     Some(NposCollectorConfig {
@@ -1772,6 +1780,29 @@ mod tests {
         let view = state.view();
         let config = load_npos_collector_config(&view).expect("npos config present");
         assert_eq!(config.seed, [0xCD; 32]);
+    }
+
+    #[test]
+    fn load_npos_collector_config_from_world_matches_view_loader() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters::default().with_epoch_seed([0xEF; 32]);
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.commit();
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let from_view = load_npos_collector_config(&view).expect("view loader should resolve");
+        let world_view = state.world_view();
+        let from_world = load_npos_collector_config_from_world(&world_view, state.chain_id_ref())
+            .expect("world loader should resolve");
+        assert_eq!(from_world, from_view);
     }
 
     #[test]

@@ -494,10 +494,14 @@ impl Actor {
                 let epoch_matches = matches!(consensus_mode, ConsensusMode::Permissioned)
                     || vote.epoch == committed_epoch;
                 if epoch_matches {
-                    let view = self.state.view();
-                    let fallback =
-                        self.active_topology_with_genesis_fallback(&view, consensus_mode);
-                    drop(view);
+                    let world = self.state.world_view();
+                    let commit_topology = self.state.commit_topology_snapshot();
+                    let fallback = self.active_topology_with_genesis_fallback_from_world(
+                        &world,
+                        commit_topology.as_slice(),
+                        committed_height,
+                        consensus_mode,
+                    );
                     if !fallback.is_empty() {
                         topology_peers =
                             super::roster::canonicalize_roster_for_mode(fallback, consensus_mode);
@@ -634,10 +638,9 @@ impl Actor {
                         Some(pending) => pending.block.clone(),
                         None => return,
                     };
-                    let block_time = {
-                        let current_view = self.state.view();
-                        self.block_time_for_mode(&current_view, context.consensus_mode)
-                    };
+                    let world = self.state.world_view();
+                    let block_time =
+                        self.block_time_for_mode_from_world(&world, context.consensus_mode);
                     let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
                     if self.block_sync_rebroadcast_log.allow(
                         vote.block_hash,
@@ -1140,9 +1143,7 @@ impl Actor {
             }
         }
         if roster.is_empty() {
-            let view = self.state.view();
-            let commit_topology = view.commit_topology().to_vec();
-            drop(view);
+            let commit_topology = self.state.commit_topology_snapshot();
             if !commit_topology.is_empty() {
                 roster =
                     super::roster::canonicalize_roster_for_mode(commit_topology, consensus_mode);
@@ -2245,8 +2246,14 @@ impl Actor {
         if height > committed_height.saturating_add(1) {
             return Vec::new();
         }
-        let view = self.state.view();
-        self.active_topology_with_genesis_fallback(&view, consensus_mode)
+        let world = self.state.world_view();
+        let commit_topology = self.state.commit_topology_snapshot();
+        self.active_topology_with_genesis_fallback_from_world(
+            &world,
+            commit_topology.as_slice(),
+            committed_height,
+            consensus_mode,
+        )
     }
 
     // Prefer the cached roster once votes are validated to keep signatures stable across roster changes.
@@ -2307,14 +2314,20 @@ impl Actor {
         }
         let mut active = Vec::new();
         if height <= committed_height.saturating_add(1) {
-            let view = self.state.view();
             if height == committed_height {
-                let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+                let prev = self.state.prev_commit_topology_snapshot();
                 if !prev.is_empty() {
                     return canonicalize(prev);
                 }
             }
-            active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
+            let world = self.state.world_view();
+            let commit_topology = self.state.commit_topology_snapshot();
+            active = self.active_topology_with_genesis_fallback_from_world(
+                &world,
+                commit_topology.as_slice(),
+                committed_height,
+                consensus_mode,
+            );
             if !active.is_empty() {
                 if let Some(selection) = roster_selection() {
                     if !selection.roster.is_empty() {
@@ -2366,8 +2379,14 @@ impl Actor {
         }
         let mut active = Vec::new();
         if height == committed_height.saturating_add(1) {
-            let state_view = self.state.view();
-            active = self.active_topology_with_genesis_fallback(&state_view, consensus_mode);
+            let world = self.state.world_view();
+            let commit_topology = self.state.commit_topology_snapshot();
+            active = self.active_topology_with_genesis_fallback_from_world(
+                &world,
+                commit_topology.as_slice(),
+                committed_height,
+                consensus_mode,
+            );
             if !active.is_empty() {
                 return canonicalize(active);
             }

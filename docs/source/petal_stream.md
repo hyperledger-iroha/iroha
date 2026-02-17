@@ -87,5 +87,15 @@ iroha offline petal eval-capture --input-dir ./petal_out/png --profile default -
 jitter, exposure/noise shifts), decodes each perturbed frame, and fails if the success ratio
 drops below the configured threshold.
 
+`score-styles` example (repeatable style ranking report):
+
+```bash
+iroha offline petal score-styles --input payload.bin --output-report ./petal_out/style_score.json --profile default --fps 24 --target-effective-bps 3000
+```
+
+`score-styles` renders each candidate style, runs deterministic capture evaluation, and emits a
+ranked JSON report with `aesthetic_score`, `decode_completion_score`,
+`effective_payload_bytes_per_second`, and `overall_score` plus a `recommended_style`.
+
 For operator-facing QR transport presets (`ecc`/dimension/fps) in noisy camera conditions, see
 `docs/source/offline_qr_operator_runbook.md`.

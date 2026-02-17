@@ -1420,6 +1420,15 @@ impl Queue {
         !self.is_expired(tx.as_accepted()) && !tx.is_in_blockchain(state_view)
     }
 
+    fn is_pending_with_state(
+        &self,
+        hash: SignedTxHash,
+        tx: &CheckedTransaction<'static>,
+        state: &State,
+    ) -> bool {
+        !self.is_expired(tx.as_accepted()) && !state.has_committed_transaction(hash)
+    }
+
     /// Checks if the transaction is waiting longer than its TTL or than the TTL from [`Config`].
     pub fn is_expired(&self, tx: &AcceptedTransaction<'static>) -> bool {
         self.is_expired_at(tx, self.time_source.get_unix_time())
@@ -1456,6 +1465,20 @@ impl Queue {
 
     /// Returns `n` transactions in a batch for gossiping
     pub fn gossip_batch(&self, n: u32, state_view: &StateView) -> Vec<GossipBatchEntry> {
+        self.gossip_batch_inner(n, |_, tx_ref| self.is_pending(tx_ref, state_view))
+    }
+
+    /// Returns `n` transactions in a batch for gossiping using narrow state accessors.
+    pub fn gossip_batch_with_state(&self, n: u32, state: &State) -> Vec<GossipBatchEntry> {
+        self.gossip_batch_inner(n, |hash, tx_ref| {
+            self.is_pending_with_state(hash, tx_ref, state)
+        })
+    }
+
+    fn gossip_batch_inner<F>(&self, n: u32, mut is_pending: F) -> Vec<GossipBatchEntry>
+    where
+        F: FnMut(SignedTxHash, &CheckedTransaction<'static>) -> bool,
+    {
         let mut batch = Vec::with_capacity(n as usize);
         while let Some(hash) = self.tx_gossip.pop() {
             let Some(tx) = self.txs.get(&hash) else {
@@ -1463,7 +1486,7 @@ impl Queue {
                 continue;
             };
             let tx_ref = tx.value().as_ref();
-            if self.is_pending(tx_ref, state_view) {
+            if is_pending(hash, tx_ref) {
                 let routing = if let Some(decision) = self.routing_decisions.get(&hash) {
                     *decision.value()
                 } else {
@@ -1519,6 +1542,16 @@ impl Queue {
         self.txs.contains_key(&hash)
     }
 
+    /// Returns whether the queue still tracks `hash` as pending (not expired/committed).
+    #[must_use]
+    pub fn contains_pending_hash(&self, hash: SignedTxHash, state: &State) -> bool {
+        let Some(entry) = self.txs.get(&hash) else {
+            return false;
+        };
+        let tx = entry.value().as_ref();
+        !self.is_expired(tx.as_accepted()) && !state.has_committed_transaction(hash)
+    }
+
     /// Return transactions back to the gossip backlog by their hashes.
     pub fn requeue_gossip_hashes(&self, hashes: impl IntoIterator<Item = SignedTxHash>) {
         for hash in hashes {
@@ -1557,10 +1590,10 @@ impl Queue {
     fn push_with_lane_internal(
         &self,
         tx: AcceptedTransaction<'static>,
-        state_view: StateView,
+        state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        let routing_decision = self.router.read().route(&tx, &state_view);
+        let routing_decision = self.router.read().route(&tx, state_view);
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -1570,7 +1603,7 @@ impl Queue {
             tx = %tx.as_ref().hash(),
             "Pushing to the queue"
         );
-        let checked = match tx.into_checked(&state_view) {
+        let checked = match tx.into_checked(state_view) {
             Ok(checked) => checked,
             Err((original, _)) => {
                 return Err(Failure {
@@ -1665,12 +1698,9 @@ impl Queue {
                         err,
                     });
                 }
-                if let Err(err) = Self::enforce_manifest_protected_namespaces(
-                    &alias,
-                    rules,
-                    &checked,
-                    &state_view,
-                ) {
+                if let Err(err) =
+                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, state_view)
+                {
                     #[cfg(feature = "telemetry")]
                     if !rules.protected_namespaces.is_empty() {
                         telemetry_handle.record_protected_namespace_enforcement("rejected");
@@ -1771,7 +1801,7 @@ impl Queue {
         };
 
         let lane_identity = Self::extract_lane_identity_metadata(
-            &state_view,
+            state_view,
             checked.as_ref().authority(),
             dataspace_id,
             &lane_alias,
@@ -1833,7 +1863,6 @@ impl Queue {
             .map(|payload| payload.len())
             .unwrap_or_else(|| Self::compute_tx_encoded_len(checked.as_accepted()));
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
-        drop(state_view);
         let hash = checked.as_ref().hash();
         let _guard = self.push_remove_lock.lock();
         let txs_len = self.txs.len();
@@ -1956,14 +1985,28 @@ impl Queue {
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
     /// or violates lane limits).
+    pub fn push_with_gossip_payload_in_view(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state_view: &StateView<'_>,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<(), Failure> {
+        self.push_with_lane_internal(tx, state_view, gossip_payload)
+            .map(|_| ())
+    }
+
+    /// Pushes an accepted transaction into the queue using a cached gossip payload.
+    ///
+    /// # Errors
+    /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
+    /// or violates lane limits).
     pub fn push_with_gossip_payload(
         &self,
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<(), Failure> {
-        self.push_with_lane_internal(tx, state_view, gossip_payload)
-            .map(|_| ())
+        self.push_with_gossip_payload_in_view(tx, &state_view, gossip_payload)
     }
 
     /// Push transaction into queue.
@@ -1974,6 +2017,18 @@ impl Queue {
         &self,
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_in_view(tx, &state_view)
+    }
+
+    /// Push transaction into queue with a shared [`StateView`] snapshot.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    pub fn push_with_lane_in_view(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, Failure> {
         self.push_with_lane_internal(tx, state_view, None)
     }
@@ -1989,7 +2044,20 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
     ) -> Result<(), Failure> {
-        self.push_with_lane(tx, state_view).map(|_| ())
+        self.push_in_view(tx, &state_view)
+    }
+
+    /// Pushes an accepted transaction into the queue with a shared [`StateView`] snapshot.
+    ///
+    /// # Errors
+    /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
+    /// or violates lane limits).
+    pub fn push_in_view(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state_view: &StateView<'_>,
+    ) -> Result<(), Failure> {
+        self.push_with_lane_in_view(tx, state_view).map(|_| ())
     }
 
     /// Drop all queued transactions and gossip buffers.
@@ -4339,6 +4407,96 @@ pub mod tests {
         let batch = queue.gossip_batch(1, &state.view());
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].payload.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn queue_accepts_gossip_payload_cache_in_shared_view() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let payload = Arc::new(tx.as_ref().encode());
+        let state_view = state.view();
+
+        queue
+            .push_with_gossip_payload_in_view(tx, &state_view, Some(Arc::clone(&payload)))
+            .expect("push tx with payload through shared view");
+
+        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
+        assert_eq!(stored_payload.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn push_in_view_accepts_multiple_transactions_with_shared_snapshot() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let state_view = state.view();
+        queue
+            .push_in_view(accepted_tx_by_someone(&time_source), &state_view)
+            .expect("first push");
+        queue
+            .push_in_view(accepted_tx_by_someone(&time_source), &state_view)
+            .expect("second push");
+
+        assert_eq!(queue.queued_len(), 2);
+    }
+
+    #[test]
+    fn contains_pending_hash_ignores_committed_entries() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        assert!(queue.contains_pending_hash(hash, &state));
+
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("transactions block should commit");
+        }
+
+        assert!(!queue.contains_pending_hash(hash, &state));
+    }
+
+    #[test]
+    fn gossip_batch_with_state_skips_committed_entries() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("transactions block should commit");
+        }
+
+        let batch = queue.gossip_batch_with_state(1, &state);
+        assert!(
+            batch.is_empty(),
+            "committed transaction must not be selected for gossip"
+        );
     }
 
     #[tokio::test]

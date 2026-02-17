@@ -27,6 +27,8 @@ pub enum PetalCommand {
     Decode(PetalDecodeArgs),
     /// Evaluate decode robustness under simulated distant/moving capture.
     EvalCapture(PetalEvalCaptureArgs),
+    /// Score render styles with deterministic capture simulation and throughput metrics.
+    ScoreStyles(PetalScoreStylesArgs),
 }
 
 impl Run for PetalCommand {
@@ -35,6 +37,7 @@ impl Run for PetalCommand {
             PetalCommand::Encode(args) => args.run(context),
             PetalCommand::Decode(args) => args.run(context),
             PetalCommand::EvalCapture(args) => args.run(context),
+            PetalCommand::ScoreStyles(args) => args.run(context),
         }
     }
 }
@@ -532,6 +535,212 @@ impl PetalEvalCaptureArgs {
     }
 }
 
+#[derive(clap::Args, Debug)]
+pub struct PetalScoreStylesArgs {
+    /// Path to payload bytes used for style scoring.
+    #[arg(long, value_name = "FILE")]
+    pub input: PathBuf,
+    /// JSON report path for scored styles.
+    #[arg(long, value_name = "FILE")]
+    pub output_report: PathBuf,
+    /// Styles to evaluate (repeat flag). Empty means the default temple style set.
+    #[arg(long, value_enum)]
+    pub style: Vec<PetalRenderStyle>,
+    /// Payload kind tag embedded in the envelope.
+    #[arg(long, value_enum, default_value = "unspecified")]
+    pub payload_kind: QrPayloadKindArg,
+    /// Chunk size in bytes.
+    #[arg(long, default_value_t = 140)]
+    pub chunk_size: u16,
+    /// Parity group size (0 disables parity frames).
+    #[arg(long, default_value_t = 0)]
+    pub parity_group: u8,
+    /// Grid size in cells (0 selects automatic sizing).
+    #[arg(long, default_value_t = 0)]
+    pub grid_size: u16,
+    /// Border thickness in cells.
+    #[arg(long, default_value_t = 1)]
+    pub border: u8,
+    /// Anchor size in cells.
+    #[arg(long, default_value_t = 3)]
+    pub anchor_size: u8,
+    /// Rendered frame size in pixels.
+    #[arg(long, default_value_t = 512)]
+    pub dimension: u32,
+    /// Frames per second used for effective throughput scoring.
+    #[arg(long, default_value_t = 24)]
+    pub fps: u16,
+    /// Capture perturbation profile.
+    #[arg(long, value_enum, default_value = "default")]
+    pub profile: PetalCaptureProfile,
+    /// Deterministic seed for perturbation sampling.
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+    /// Number of perturbation trials per frame (0 uses profile default).
+    #[arg(long, default_value_t = 0)]
+    pub trials_per_frame: u16,
+    /// Minimum capture success ratio used for the pass gate in the report.
+    #[arg(long, default_value_t = 0.95)]
+    pub min_success_ratio: f64,
+    /// Target effective throughput used to normalize throughput scoring.
+    #[arg(long, default_value_t = 3_000)]
+    pub target_effective_bps: u64,
+}
+
+impl PetalScoreStylesArgs {
+    fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
+        if !(0.0..=1.0).contains(&self.min_success_ratio) {
+            return Err(eyre!("min-success-ratio must be between 0.0 and 1.0"));
+        }
+        if self.target_effective_bps == 0 {
+            return Err(eyre!("target-effective-bps must be > 0"));
+        }
+
+        let payload = fs::read(&self.input)
+            .map_err(|err| eyre!("failed to read payload {}: {err}", self.input.display()))?;
+        let stream_options = QrStreamOptions {
+            chunk_size: self.chunk_size,
+            parity_group: self.parity_group,
+            payload_kind: self.payload_kind.into(),
+            ..QrStreamOptions::default()
+        };
+        let (_envelope, frames) = QrStreamEncoder::encode_frames(&payload, stream_options)?;
+        let encoded_frames: Vec<Vec<u8>> = frames.iter().map(QrStreamFrame::encode).collect();
+        if encoded_frames.is_empty() {
+            return Err(eyre!("no frames generated for scoring"));
+        }
+
+        let base_petal_options = PetalStreamOptions {
+            grid_size: 0,
+            border: self.border,
+            anchor_size: self.anchor_size,
+        };
+        let resolved_grid_size = if self.grid_size == 0 {
+            let max_len = encoded_frames.iter().map(Vec::len).max().unwrap_or(0);
+            let dummy = vec![0u8; max_len];
+            let grid = PetalStreamEncoder::encode_grid(&dummy, base_petal_options)?;
+            grid.grid_size
+        } else {
+            self.grid_size
+        };
+        let petal_options = PetalStreamOptions {
+            grid_size: resolved_grid_size,
+            ..base_petal_options
+        };
+
+        let trials_per_frame = if self.trials_per_frame == 0 {
+            self.profile.default_trials()
+        } else {
+            self.trials_per_frame
+        };
+        if trials_per_frame == 0 {
+            return Err(eyre!("trials-per-frame must be > 0"));
+        }
+
+        let styles = resolve_score_styles(&self.style);
+        let estimated_payload_bps =
+            estimate_payload_bytes_per_second(payload.len(), encoded_frames.len(), self.fps);
+        let frame_count = encoded_frames.len().max(1) as u32;
+        let mut rows = Vec::with_capacity(styles.len());
+        for style in styles {
+            let mut images = Vec::with_capacity(encoded_frames.len());
+            for (index, frame_bytes) in encoded_frames.iter().enumerate() {
+                let grid = PetalStreamEncoder::encode_grid(frame_bytes, petal_options)?;
+                images.push(render_petal_frame(
+                    &grid,
+                    self.dimension,
+                    index as u32,
+                    frame_count,
+                    style,
+                    petal_options,
+                ));
+            }
+            let metrics = evaluate_capture_robustness(
+                &images,
+                &encoded_frames,
+                resolved_grid_size,
+                petal_options,
+                self.profile,
+                self.seed,
+                trials_per_frame,
+            )?;
+            let aesthetic_score = images
+                .first()
+                .map(|image| estimate_style_aesthetic_score(image, style))
+                .unwrap_or(0.0);
+            let decode_completion_score = if metrics.frame_count == 0 {
+                0.0
+            } else if metrics.stream_complete {
+                1.0
+            } else {
+                metrics.recovered_frames as f64 / metrics.frame_count as f64
+            };
+            let effective_payload_bps = estimated_payload_bps as f64 * metrics.success_ratio();
+            let effective_bps_score =
+                (effective_payload_bps / self.target_effective_bps as f64).clamp(0.0, 1.0);
+            let overall_score = style_overall_score(
+                aesthetic_score,
+                decode_completion_score,
+                effective_bps_score,
+            );
+            let passes_gate = metrics.stream_complete
+                && metrics.success_ratio() + f64::EPSILON >= self.min_success_ratio;
+            rows.push(PetalStyleScoreRow {
+                style,
+                aesthetic_score,
+                decode_completion_score,
+                capture_success_ratio: metrics.success_ratio(),
+                frame_success_ratio: metrics.frame_success_ratio(),
+                effective_payload_bps,
+                effective_bps_score,
+                overall_score,
+                passes_gate,
+                metrics,
+            });
+        }
+
+        rows.sort_by(style_score_row_ordering);
+        let recommended_style = rows
+            .iter()
+            .find(|row| row.passes_gate)
+            .or_else(|| rows.first())
+            .map(|row| row.style)
+            .ok_or_else(|| eyre!("style score report is empty"))?;
+
+        let report = build_style_score_report(
+            &rows,
+            PetalStyleScoreReportContext {
+                payload_kind: self.payload_kind.label(),
+                payload_length: payload.len(),
+                frame_count: encoded_frames.len(),
+                chunk_size: self.chunk_size,
+                parity_group: self.parity_group,
+                grid_size: resolved_grid_size,
+                border: self.border,
+                anchor_size: self.anchor_size,
+                dimension: self.dimension,
+                fps: self.fps,
+                profile: self.profile,
+                seed: self.seed,
+                trials_per_frame,
+                min_success_ratio: self.min_success_ratio,
+                estimated_payload_bps,
+                target_effective_bps: self.target_effective_bps,
+                recommended_style,
+            },
+        );
+        let rendered = norito::json::to_string_pretty(&report)?;
+        fs::write(&self.output_report, format!("{rendered}\n")).map_err(|err| {
+            eyre!(
+                "failed to write style score report {}: {err}",
+                self.output_report.display()
+            )
+        })?;
+
+        Ok(())
+    }
+}
+
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetalOutputFormat {
     Frames,
@@ -565,6 +774,31 @@ impl PetalRenderStyle {
             Self::SoraTempleGhost => "sora-temple-ghost",
         }
     }
+}
+
+const DEFAULT_STYLE_SCORE_STYLES: [PetalRenderStyle; 7] = [
+    PetalRenderStyle::SoraTemple,
+    PetalRenderStyle::SoraTempleGhost,
+    PetalRenderStyle::SoraTempleAegis,
+    PetalRenderStyle::SoraTempleRadiant,
+    PetalRenderStyle::SoraTempleBold,
+    PetalRenderStyle::SoraTempleCommand,
+    PetalRenderStyle::SoraTempleMinimal,
+];
+
+fn resolve_score_styles(requested: &[PetalRenderStyle]) -> Vec<PetalRenderStyle> {
+    let source: &[PetalRenderStyle] = if requested.is_empty() {
+        &DEFAULT_STYLE_SCORE_STYLES
+    } else {
+        requested
+    };
+    let mut styles = Vec::with_capacity(source.len());
+    for &style in source {
+        if !styles.contains(&style) {
+            styles.push(style);
+        }
+    }
+    styles
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -1353,10 +1587,10 @@ fn blend_sora_data_tile(
     };
     if cell_size >= 8 {
         // At larger render sizes, open up each tile so boxes read bolder on screen.
-        margin = (margin * 0.58).max(0.006);
+        margin = 0.0;
     }
     if cell_size >= 10 {
-        margin = (margin * 0.82).max(0.005);
+        margin = 0.0;
     }
     if local_x < margin || local_x > 1.0 - margin || local_y < margin || local_y > 1.0 - margin {
         return;
@@ -1394,11 +1628,11 @@ fn blend_sora_data_tile(
     let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     if cell_size >= 8 {
         let frame_dist = inner_u.min(1.0 - inner_u).min(inner_v.min(1.0 - inner_v));
-        if frame_dist < if param.logo { 0.024 } else { 0.030 } {
-            blend_rgb(rgb, frame_color, if param.logo { 0.08 } else { 0.09 });
+        if frame_dist < if param.logo { 0.046 } else { 0.058 } {
+            blend_rgb(rgb, frame_color, if param.logo { 0.14 } else { 0.15 });
         }
-        let bracket_len = if param.logo { 0.24 } else { 0.26 };
-        let bracket_w = if param.logo { 0.046 } else { 0.052 };
+        let bracket_len = if param.logo { 0.42 } else { 0.46 };
+        let bracket_w = if param.logo { 0.088 } else { 0.105 };
         let corner_bracket = (inner_u < bracket_len && inner_v < bracket_w)
             || (inner_u < bracket_w && inner_v < bracket_len)
             || (inner_u > 1.0 - bracket_len && inner_v < bracket_w)
@@ -1408,7 +1642,7 @@ fn blend_sora_data_tile(
             || (inner_u > 1.0 - bracket_len && inner_v > 1.0 - bracket_w)
             || (inner_u > 1.0 - bracket_w && inner_v > 1.0 - bracket_len);
         if corner_bracket {
-            blend_rgb(rgb, frame_color, if param.logo { 0.12 } else { 0.14 });
+            blend_rgb(rgb, frame_color, if param.logo { 0.21 } else { 0.24 });
         }
     }
 
@@ -1556,6 +1790,78 @@ fn sora_ten_logo_mask(nx: f64, ny: f64) -> bool {
     let right_leg = y >= -0.02 && y <= 0.92 && (x - 0.64 * y).abs() <= 0.13;
     let foot = y >= 0.75 && y <= 0.93 && x.abs() <= 0.58;
     top_bar || mid_bar || stem || left_leg || right_leg || foot
+}
+
+fn estimate_style_aesthetic_score(image: &image::RgbaImage, style: PetalRenderStyle) -> f64 {
+    if image.width() == 0 || image.height() == 0 {
+        return 0.0;
+    }
+    let style_cfg = temple_style_config(style);
+    let ring_band = (style_cfg.ring_band * 2.4).max(0.004);
+    let mut logo_sum = 0.0;
+    let mut logo_sq_sum = 0.0;
+    let mut logo_count = 0u64;
+    let mut bg_sum = 0.0;
+    let mut bg_count = 0u64;
+    let mut ring_sum = 0.0;
+    let mut ring_count = 0u64;
+    let width = image.width();
+    let height = image.height();
+    for py in 0..height {
+        let ny = if height <= 1 {
+            0.5
+        } else {
+            py as f64 / (height - 1) as f64
+        };
+        for px in 0..width {
+            let nx = if width <= 1 {
+                0.5
+            } else {
+                px as f64 / (width - 1) as f64
+            };
+            let pixel = image.get_pixel(px, py).0;
+            let luma = pixel_luma_norm(pixel);
+            if sora_ten_logo_mask(nx, ny) {
+                logo_sum += luma;
+                logo_sq_sum += luma * luma;
+                logo_count += 1;
+            } else {
+                bg_sum += luma;
+                bg_count += 1;
+            }
+            let cx = nx - 0.5;
+            let cy = ny - 0.5;
+            let radius = (cx * cx + cy * cy).sqrt();
+            if SORA_RING_RADII
+                .iter()
+                .any(|ring_radius| (radius - ring_radius).abs() <= ring_band)
+            {
+                ring_sum += luma;
+                ring_count += 1;
+            }
+        }
+    }
+    if logo_count == 0 || bg_count == 0 {
+        return 0.0;
+    }
+    let logo_mean = logo_sum / logo_count as f64;
+    let bg_mean = bg_sum / bg_count as f64;
+    let ring_mean = if ring_count == 0 {
+        bg_mean
+    } else {
+        ring_sum / ring_count as f64
+    };
+    let logo_var = (logo_sq_sum / logo_count as f64) - logo_mean * logo_mean;
+    let logo_std = logo_var.max(0.0).sqrt();
+    let logo_contrast = (logo_mean - bg_mean).abs();
+    let ring_contrast = (ring_mean - bg_mean).abs();
+    let texture = (logo_std / 0.22).clamp(0.0, 1.0);
+    (logo_contrast * 0.58 + ring_contrast * 0.22 + texture * 0.20).clamp(0.0, 1.0)
+}
+
+fn pixel_luma_norm(pixel: [u8; 4]) -> f64 {
+    let luma = (77u32 * pixel[0] as u32 + 150u32 * pixel[1] as u32 + 29u32 * pixel[2] as u32) >> 8;
+    luma as f64 / 255.0
 }
 
 fn collect_stream_data_bits(grid: &PetalStreamGrid, options: PetalStreamOptions) -> Vec<bool> {
@@ -1888,7 +2194,7 @@ struct CaptureScenarioMetrics {
     successes: u64,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct CaptureEvalMetrics {
     frame_count: usize,
     frame_successes: usize,
@@ -1988,6 +2294,206 @@ impl CaptureEvalMetrics {
         map.insert("scenarios".to_string(), Value::Array(scenario_rows));
         Value::Object(map)
     }
+}
+
+#[derive(Clone, Debug)]
+struct PetalStyleScoreRow {
+    style: PetalRenderStyle,
+    aesthetic_score: f64,
+    decode_completion_score: f64,
+    capture_success_ratio: f64,
+    frame_success_ratio: f64,
+    effective_payload_bps: f64,
+    effective_bps_score: f64,
+    overall_score: f64,
+    passes_gate: bool,
+    metrics: CaptureEvalMetrics,
+}
+
+#[derive(Clone, Copy)]
+struct PetalStyleScoreReportContext {
+    payload_kind: &'static str,
+    payload_length: usize,
+    frame_count: usize,
+    chunk_size: u16,
+    parity_group: u8,
+    grid_size: u16,
+    border: u8,
+    anchor_size: u8,
+    dimension: u32,
+    fps: u16,
+    profile: PetalCaptureProfile,
+    seed: u64,
+    trials_per_frame: u16,
+    min_success_ratio: f64,
+    estimated_payload_bps: u64,
+    target_effective_bps: u64,
+    recommended_style: PetalRenderStyle,
+}
+
+fn style_score_row_ordering(a: &PetalStyleScoreRow, b: &PetalStyleScoreRow) -> std::cmp::Ordering {
+    b.overall_score
+        .total_cmp(&a.overall_score)
+        .then_with(|| {
+            b.decode_completion_score
+                .total_cmp(&a.decode_completion_score)
+        })
+        .then_with(|| b.capture_success_ratio.total_cmp(&a.capture_success_ratio))
+        .then_with(|| b.effective_payload_bps.total_cmp(&a.effective_payload_bps))
+        .then_with(|| a.style.label().cmp(b.style.label()))
+}
+
+fn style_overall_score(
+    aesthetic_score: f64,
+    decode_completion_score: f64,
+    effective_bps_score: f64,
+) -> f64 {
+    (aesthetic_score.clamp(0.0, 1.0) * 0.25
+        + decode_completion_score.clamp(0.0, 1.0) * 0.45
+        + effective_bps_score.clamp(0.0, 1.0) * 0.30)
+        .clamp(0.0, 1.0)
+}
+
+fn build_style_score_report(
+    rows: &[PetalStyleScoreRow],
+    context: PetalStyleScoreReportContext,
+) -> Value {
+    let mut map = Map::new();
+    map.insert("version".to_string(), Value::from(1u64));
+    map.insert(
+        "payload_kind".to_string(),
+        Value::from(context.payload_kind),
+    );
+    map.insert(
+        "payload_length".to_string(),
+        Value::from(context.payload_length as u64),
+    );
+    map.insert(
+        "frame_count".to_string(),
+        Value::from(context.frame_count as u64),
+    );
+    map.insert(
+        "chunk_size".to_string(),
+        Value::from(context.chunk_size as u64),
+    );
+    map.insert(
+        "parity_group".to_string(),
+        Value::from(context.parity_group as u64),
+    );
+    map.insert(
+        "grid_size".to_string(),
+        Value::from(context.grid_size as u64),
+    );
+    map.insert("border".to_string(), Value::from(context.border as u64));
+    map.insert(
+        "anchor_size".to_string(),
+        Value::from(context.anchor_size as u64),
+    );
+    map.insert(
+        "dimension".to_string(),
+        Value::from(context.dimension as u64),
+    );
+    map.insert("fps".to_string(), Value::from(context.fps as u64));
+    map.insert("profile".to_string(), Value::from(context.profile.label()));
+    map.insert("seed".to_string(), Value::from(context.seed));
+    map.insert(
+        "trials_per_frame".to_string(),
+        Value::from(context.trials_per_frame as u64),
+    );
+    map.insert(
+        "min_success_ratio".to_string(),
+        Value::from(context.min_success_ratio),
+    );
+    map.insert(
+        "estimated_payload_bytes_per_second".to_string(),
+        Value::from(context.estimated_payload_bps),
+    );
+    map.insert(
+        "target_effective_bps".to_string(),
+        Value::from(context.target_effective_bps),
+    );
+    map.insert(
+        "recommended_style".to_string(),
+        Value::from(context.recommended_style.label()),
+    );
+    map.insert(
+        "styles_evaluated".to_string(),
+        Value::Array(
+            rows.iter()
+                .map(|row| Value::from(row.style.label()))
+                .collect::<Vec<_>>(),
+        ),
+    );
+    map.insert(
+        "rows".to_string(),
+        Value::Array(rows.iter().map(style_score_row_to_json).collect()),
+    );
+    Value::Object(map)
+}
+
+fn style_score_row_to_json(row: &PetalStyleScoreRow) -> Value {
+    let mut map = Map::new();
+    map.insert("style".to_string(), Value::from(row.style.label()));
+    map.insert(
+        "aesthetic_score".to_string(),
+        Value::from(row.aesthetic_score),
+    );
+    map.insert(
+        "decode_completion_score".to_string(),
+        Value::from(row.decode_completion_score),
+    );
+    map.insert(
+        "capture_success_ratio".to_string(),
+        Value::from(row.capture_success_ratio),
+    );
+    map.insert(
+        "frame_success_ratio".to_string(),
+        Value::from(row.frame_success_ratio),
+    );
+    map.insert(
+        "effective_payload_bytes_per_second".to_string(),
+        Value::from(row.effective_payload_bps),
+    );
+    map.insert(
+        "effective_bps_score".to_string(),
+        Value::from(row.effective_bps_score),
+    );
+    map.insert("overall_score".to_string(), Value::from(row.overall_score));
+    map.insert("passes_gate".to_string(), Value::from(row.passes_gate));
+    map.insert(
+        "stream_complete".to_string(),
+        Value::from(row.metrics.stream_complete),
+    );
+    map.insert(
+        "recovered_frames".to_string(),
+        Value::from(row.metrics.recovered_frames as u64),
+    );
+    map.insert(
+        "stream_received_chunks".to_string(),
+        Value::from(row.metrics.stream_received_chunks as u64),
+    );
+    map.insert(
+        "stream_total_chunks".to_string(),
+        Value::from(row.metrics.stream_total_chunks as u64),
+    );
+    map.insert("attempts".to_string(), Value::from(row.metrics.attempts));
+    map.insert("successes".to_string(), Value::from(row.metrics.successes));
+    let mut scenario_rows = Vec::with_capacity(row.metrics.scenario.len());
+    for scenario in &row.metrics.scenario {
+        let mut scenario_map = Map::new();
+        scenario_map.insert("name".to_string(), Value::from(scenario.name));
+        scenario_map.insert("attempts".to_string(), Value::from(scenario.attempts));
+        scenario_map.insert("successes".to_string(), Value::from(scenario.successes));
+        let ratio = if scenario.attempts == 0 {
+            0.0
+        } else {
+            scenario.successes as f64 / scenario.attempts as f64
+        };
+        scenario_map.insert("success_ratio".to_string(), Value::from(ratio));
+        scenario_rows.push(Value::Object(scenario_map));
+    }
+    map.insert("scenarios".to_string(), Value::Array(scenario_rows));
+    Value::Object(map)
 }
 
 const DEFAULT_CAPTURE_SCENARIOS: [CaptureScenario; 4] = [
@@ -2563,6 +3069,29 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    fn sample_style_metrics(
+        frame_count: usize,
+        successes: u64,
+        attempts: u64,
+        stream_complete: bool,
+    ) -> CaptureEvalMetrics {
+        CaptureEvalMetrics {
+            frame_count,
+            frame_successes: frame_count,
+            attempts,
+            successes,
+            recovered_frames: frame_count,
+            stream_complete,
+            stream_received_chunks: frame_count,
+            stream_total_chunks: frame_count,
+            scenario: vec![CaptureScenarioMetrics {
+                name: "sample",
+                attempts,
+                successes,
+            }],
+        }
+    }
+
     #[test]
     fn render_petal_frame_outputs_rgba() {
         let payload = b"petal-cli";
@@ -2820,5 +3349,95 @@ mod tests {
             QrStreamEncoder::encode_frames(&payload, options).expect("encode");
         let bps = estimate_payload_bytes_per_second(payload.len(), frames.len(), 24);
         assert!(bps >= 3_000, "estimated throughput too low: {bps} B/s");
+    }
+
+    #[test]
+    fn resolve_score_styles_uses_defaults_and_deduplicates() {
+        let defaults = resolve_score_styles(&[]);
+        assert_eq!(
+            defaults.first().copied(),
+            Some(PetalRenderStyle::SoraTemple)
+        );
+        assert!(defaults.contains(&PetalRenderStyle::SoraTempleGhost));
+        let deduped = resolve_score_styles(&[
+            PetalRenderStyle::SoraTemple,
+            PetalRenderStyle::SoraTemple,
+            PetalRenderStyle::SoraTempleGhost,
+        ]);
+        assert_eq!(
+            deduped,
+            vec![
+                PetalRenderStyle::SoraTemple,
+                PetalRenderStyle::SoraTempleGhost
+            ]
+        );
+    }
+
+    #[test]
+    fn aesthetic_score_is_normalized() {
+        let payload = b"petal-style-aesthetic";
+        let options = PetalStreamOptions::default();
+        let grid = PetalStreamEncoder::encode_grid(payload, options).expect("encode");
+        let image = render_petal_frame(&grid, 192, 0, 6, PetalRenderStyle::SoraTemple, options);
+        let score = estimate_style_aesthetic_score(&image, PetalRenderStyle::SoraTemple);
+        assert!((0.0..=1.0).contains(&score));
+        assert!(score > 0.08, "unexpectedly low aesthetic score: {score:.3}");
+    }
+
+    #[test]
+    fn style_score_rows_sort_by_overall_then_decode() {
+        let mut rows = vec![
+            PetalStyleScoreRow {
+                style: PetalRenderStyle::SoraTempleCommand,
+                aesthetic_score: 0.72,
+                decode_completion_score: 0.90,
+                capture_success_ratio: 0.88,
+                frame_success_ratio: 0.90,
+                effective_payload_bps: 2_640.0,
+                effective_bps_score: 0.88,
+                overall_score: 0.84,
+                passes_gate: false,
+                metrics: sample_style_metrics(8, 88, 100, false),
+            },
+            PetalStyleScoreRow {
+                style: PetalRenderStyle::SoraTemple,
+                aesthetic_score: 0.70,
+                decode_completion_score: 1.0,
+                capture_success_ratio: 0.94,
+                frame_success_ratio: 1.0,
+                effective_payload_bps: 2_820.0,
+                effective_bps_score: 0.94,
+                overall_score: 0.91,
+                passes_gate: true,
+                metrics: sample_style_metrics(8, 94, 100, true),
+            },
+        ];
+        rows.sort_by(style_score_row_ordering);
+        assert_eq!(rows[0].style, PetalRenderStyle::SoraTemple);
+        let report = build_style_score_report(
+            &rows,
+            PetalStyleScoreReportContext {
+                payload_kind: "unspecified",
+                payload_length: 1024,
+                frame_count: 8,
+                chunk_size: 140,
+                parity_group: 0,
+                grid_size: 41,
+                border: 1,
+                anchor_size: 3,
+                dimension: 512,
+                fps: 24,
+                profile: PetalCaptureProfile::Default,
+                seed: 7,
+                trials_per_frame: 5,
+                min_success_ratio: 0.95,
+                estimated_payload_bps: 3_220,
+                target_effective_bps: 3_000,
+                recommended_style: rows[0].style,
+            },
+        );
+        let json = norito::json::to_string(&report).expect("json");
+        assert!(json.contains("\"recommended_style\":\"sora-temple\""));
+        assert!(json.contains("\"styles_evaluated\":[\"sora-temple\",\"sora-temple-command\"]"));
     }
 }

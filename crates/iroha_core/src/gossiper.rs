@@ -528,13 +528,13 @@ impl TransactionGossiper {
         self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
         let (entries, lane_config, lane_catalog, commit_topology) = {
-            let state_view = self.state.view();
-            let lane_config = state_view.nexus.lane_config.clone();
-            let lane_catalog = state_view.nexus.lane_catalog.clone();
-            let entries = self.queue.gossip_batch(self.gossip_size.get(), &state_view);
-            let commit_topology_src = state_view.commit_topology();
-            let mut commit_topology = Vec::with_capacity(commit_topology_src.len());
-            commit_topology.extend(commit_topology_src.iter().cloned());
+            let nexus = self.state.nexus_snapshot();
+            let lane_config = nexus.lane_config.clone();
+            let lane_catalog = nexus.lane_catalog.clone();
+            let entries = self
+                .queue
+                .gossip_batch_with_state(self.gossip_size.get(), &self.state);
+            let commit_topology = self.state.commit_topology_snapshot();
             (entries, lane_config, lane_catalog, commit_topology)
         };
 
@@ -1252,6 +1252,8 @@ impl TransactionGossiper {
         };
         let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
+        let state = Arc::clone(&self.state);
+        let state_view = state.view();
 
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1378,7 +1380,6 @@ impl TransactionGossiper {
                 crypto_cfg.as_ref(),
             ) {
                 Ok(tx) => {
-                    let state_view = self.state.view();
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
                     let local_route = self.queue.route_for_gossip(&tx, &state_view);
                     if local_route != advertised_route {
@@ -1404,7 +1405,10 @@ impl TransactionGossiper {
                         );
                         continue;
                     }
-                    match self.queue.push_with_gossip_payload(tx, state_view, payload) {
+                    match self
+                        .queue
+                        .push_with_gossip_payload_in_view(tx, &state_view, payload)
+                    {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }
@@ -1504,6 +1508,8 @@ impl TransactionGossiper {
         };
         let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
+        let state = Arc::clone(&self.state);
+        let state_view = state.view();
 
         for (idx, tx) in txs.iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1631,7 +1637,6 @@ impl TransactionGossiper {
                 crypto_cfg.as_ref(),
             ) {
                 Ok(tx) => {
-                    let state_view = self.state.view();
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
                     let local_route = self.queue.route_for_gossip(&tx, &state_view);
                     if local_route != advertised_route {
@@ -1657,7 +1662,10 @@ impl TransactionGossiper {
                         );
                         continue;
                     }
-                    match self.queue.push_with_gossip_payload(tx, state_view, payload) {
+                    match self
+                        .queue
+                        .push_with_gossip_payload_in_view(tx, &state_view, payload)
+                    {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }

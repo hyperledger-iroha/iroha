@@ -5,7 +5,7 @@ use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
 use crate::state::StateReadOnlyWithTransactions;
-use core::num::NonZeroU64;
+use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
 pub(super) fn resolve_prev_block_for_proposal(
@@ -224,9 +224,8 @@ impl Actor {
                 PROPOSAL_TIME_PADDING,
             ),
         );
-        let view = self.state.view();
-        let since = view
-            .latest_block()
+        let since = NonZeroUsize::new(self.state.committed_height())
+            .and_then(|height| self.state.block_by_height(height))
             .map_or(creation_time, |block| block.header().creation_time());
         let (since, length) = creation_time
             .checked_sub(since)
@@ -239,7 +238,8 @@ impl Actor {
         let key_height = "__registered_block_height"
             .parse::<iroha_data_model::name::Name>()
             .ok();
-        view.world()
+        let world = self.state.world_view();
+        world
             .triggers()
             .time_triggers()
             .iter()
@@ -712,9 +712,15 @@ impl Actor {
             }
         }
 
-        for tx in deferred_transactions {
-            if let Err(err) = self.queue.push(tx, self.state.view()) {
-                warn!(?err.err, "failed to requeue transaction deferred by lane TEU limits");
+        {
+            let requeue_view = self.state.view();
+            for tx in deferred_transactions {
+                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
+                    warn!(
+                        ?err.err,
+                        "failed to requeue transaction deferred by lane TEU limits"
+                    );
+                }
             }
         }
 
@@ -815,9 +821,12 @@ impl Actor {
 
         if tx_batch.is_empty() {
             tx_guards.clear();
-            for tx in std::mem::take(&mut overflow_transactions) {
-                if let Err(err) = self.queue.push(tx, self.state.view()) {
-                    warn!(?err.err, "failed to requeue oversized transaction");
+            {
+                let requeue_view = self.state.view();
+                for tx in std::mem::take(&mut overflow_transactions) {
+                    if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
+                        warn!(?err.err, "failed to requeue oversized transaction");
+                    }
                 }
             }
             let has_internal_work = internal_work
@@ -1059,8 +1068,7 @@ impl Actor {
                 };
 
                 if let Some(bundle) = pin_bundle_opt {
-                    let view = self.state.view();
-                    let world = view.world();
+                    let world = self.state.world_view();
                     let account_exists = |account: &iroha_data_model::account::AccountId| -> bool {
                         world.accounts().get(account).is_some()
                     };
@@ -1069,7 +1077,6 @@ impl Actor {
                         &lane_config,
                         account_exists,
                     );
-                    drop(view);
                     if !rejected.is_empty() {
                         for reason in rejected {
                             #[cfg(feature = "telemetry")]
@@ -1364,11 +1371,12 @@ impl Actor {
 
         if let Err(err) = assembly_result {
             tx_guards.clear();
+            let requeue_view = self.state.view();
             for tx in original_for_requeue {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(push_err) = self.queue.push(tx, self.state.view()) {
+                if let Err(push_err) = self.queue.push_in_view(tx, &requeue_view) {
                     warn!(?push_err.err, "failed to requeue transaction after assembly failure");
                 }
             }
@@ -1376,7 +1384,7 @@ impl Actor {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(err) = self.queue.push(tx, self.state.view()) {
+                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
                     warn!(?err.err, "failed to requeue transaction overflowed by RBC budget");
                 }
             }
@@ -1384,7 +1392,7 @@ impl Actor {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(err) = self.queue.push(tx, self.state.view()) {
+                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
                     warn!(?err.err, "failed to requeue transaction trimmed by RBC chunk cap");
                 }
             }
@@ -1392,7 +1400,7 @@ impl Actor {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(err) = self.queue.push(tx, self.state.view()) {
+                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
                     warn!(
                         ?err.err,
                         "failed to requeue transaction trimmed by consensus frame cap"
@@ -1403,11 +1411,12 @@ impl Actor {
         }
 
         tx_guards.clear();
+        let requeue_view = self.state.view();
         for tx in std::mem::take(&mut overflow_transactions) {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
-            if let Err(err) = self.queue.push(tx, self.state.view()) {
+            if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
                 warn!(?err.err, "failed to requeue transaction overflowed by RBC budget");
             }
         }
@@ -1415,7 +1424,7 @@ impl Actor {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
-            if let Err(err) = self.queue.push(tx, self.state.view()) {
+            if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
                 warn!(?err.err, "failed to requeue transaction trimmed by RBC chunk cap");
             }
         }
@@ -1423,7 +1432,7 @@ impl Actor {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
-            if let Err(err) = self.queue.push(tx, self.state.view()) {
+            if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
                 warn!(
                     ?err.err,
                     "failed to requeue transaction trimmed by consensus frame cap"
@@ -1545,10 +1554,8 @@ impl Actor {
         self.subsystems.propose.backpressure_gate.refresh();
         let queue_state = self.subsystems.propose.backpressure_gate.state();
         let blocking_pending = self.blocking_pending_blocks_len_with_progress(now);
-        let (tip_height, tip_hash) = {
-            let view = self.state.view();
-            (view.height(), view.latest_block_hash())
-        };
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
         let pending_votes_or_qc = self.pending.pending_blocks.values().any(|pending| {
             if pending.aborted
                 || !super::pending_extends_tip(
@@ -1883,13 +1890,9 @@ impl Actor {
     pub(super) fn on_pacemaker_propose_ready(&mut self, now: Instant) -> bool {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
-        let (tip_height, tip_hash, topology_peers) = {
-            let view_ref = self.state.view();
-            let tip_height = view_ref.height();
-            let tip_hash = view_ref.latest_block_hash();
-            let topology_peers = self.effective_commit_topology_from_view(&view_ref);
-            (tip_height, tip_hash, topology_peers)
-        };
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let topology_peers = self.effective_commit_topology();
         let active_topology_peers = topology_peers.clone();
         let pending_queue_len = self.queue.queued_len();
         let active_pending = self.active_pending_blocks_len_for_tip(tip_height, tip_hash);
