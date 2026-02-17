@@ -1151,19 +1151,46 @@ impl Actor {
                     // Seed the genesis roster after the block is durably persisted.
                     self.ensure_genesis_commit_roster();
                 }
-                let tally = qc_signers.as_ref().map_or_else(
-                    || {
-                        crate::block::valid::commit_signature_tally(
-                            committed_block.as_ref(),
-                            &topology,
-                        )
-                    },
-                    |signers| crate::block::valid::SignatureTally {
+                let set_b_signers = |signers: &BTreeSet<ValidatorIndex>| -> usize {
+                    let proxy_tail_idx = topology.proxy_tail_index();
+                    signers
+                        .iter()
+                        .filter(|signer| {
+                            super::view_index_for_canonical_signer(
+                                **signer,
+                                &topology,
+                                &canonical_topology,
+                            )
+                            .and_then(|idx| usize::try_from(idx).ok())
+                            .is_some_and(|idx| idx > proxy_tail_idx)
+                        })
+                        .count()
+                };
+
+                // Commit certificates are carried as QCs and are not always replicated into the
+                // block signature list. Prefer the QC signer bitmap when available.
+                let tally = if let Some(signers) = qc_signers.as_ref() {
+                    crate::block::valid::SignatureTally {
                         present: signers.len(),
                         counted: signers.len(),
-                        set_b_signatures: 0,
-                    },
-                );
+                        set_b_signatures: set_b_signers(signers),
+                    }
+                } else if let Some(qc) = cached_qc.as_ref() {
+                    let roster_len = commit_topology.len();
+                    match super::qc_signer_indices(qc, roster_len, roster_len) {
+                        Ok(parsed) => crate::block::valid::SignatureTally {
+                            present: parsed.present.len(),
+                            counted: parsed.voting.len(),
+                            set_b_signatures: set_b_signers(&parsed.voting),
+                        },
+                        Err(_) => crate::block::valid::commit_signature_tally(
+                            committed_block.as_ref(),
+                            &topology,
+                        ),
+                    }
+                } else {
+                    crate::block::valid::commit_signature_tally(committed_block.as_ref(), &topology)
+                };
                 crate::sumeragi::status::record_commit_quorum_snapshot(
                     pending_height,
                     pending_view,
