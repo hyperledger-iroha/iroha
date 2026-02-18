@@ -63,10 +63,10 @@ impl<'a> PenaltyApplier<'a> {
     }
 
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
-        let view = self.state.view();
+        let world = self.state.world_view();
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
 
-        for ((lane_id, validator_id), record) in view.world.public_lane_validators().iter() {
+        for ((lane_id, validator_id), record) in world.public_lane_validators().iter() {
             if let Some(pk) = record.validator.try_signatory() {
                 candidates_map
                     .entry(pk.clone())
@@ -95,8 +95,11 @@ impl<'a> PenaltyApplier<'a> {
     pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
         let mut outcome = PenaltyOutcome::default();
         let activation_lag = {
-            let view = self.state.view();
-            crate::sumeragi::resolve_npos_activation_lag_blocks(&view, &self.config.npos)
+            let world = self.state.world_view();
+            crate::sumeragi::resolve_npos_activation_lag_blocks_from_world(
+                &world,
+                &self.config.npos,
+            )
         };
         let view = self.state.world.vrf_epochs.view();
         let mut due_records: Vec<VrfEpochRecord> = Vec::new();
@@ -118,6 +121,7 @@ impl<'a> PenaltyApplier<'a> {
 
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
         let validator_map = self.build_validator_locator_map();
+        let commit_topology = self.state.commit_topology_snapshot();
 
         for record in due_records {
             let offenders: BTreeSet<u32> = record
@@ -131,7 +135,9 @@ impl<'a> PenaltyApplier<'a> {
             let mut unmapped_offenders = false;
             let mut locators = Vec::new();
             for signer in offenders {
-                if let Some(locator) = self.locate_validator_cached(signer, &validator_map) {
+                if let Some(locator) =
+                    Self::locate_validator_cached(signer, &commit_topology, &validator_map)
+                {
                     locators.push(locator);
                 } else {
                     unmapped_offenders = true;
@@ -175,8 +181,11 @@ impl<'a> PenaltyApplier<'a> {
     pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
         let mut outcome = PenaltyOutcome::default();
         let slashing_delay = {
-            let view = self.state.view();
-            crate::sumeragi::resolve_npos_slashing_delay_blocks(&view, &self.config.npos)
+            let world = self.state.world_view();
+            crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(
+                &world,
+                &self.config.npos,
+            )
         };
         let evidence_view = self.state.world.consensus_evidence.view();
         let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
@@ -205,20 +214,18 @@ impl<'a> PenaltyApplier<'a> {
             map
         };
         let epoch_schedule = {
-            let view = self.state.view();
-            let epoch_params = crate::sumeragi::load_npos_epoch_params(&view, self.config);
+            let world = self.state.world_view();
+            let epoch_params =
+                crate::sumeragi::load_npos_epoch_params_from_world(&world, &self.config.npos);
             EpochScheduleSnapshot::from_world_with_fallback(
-                view.world(),
+                &world,
                 epoch_params.epoch_length_blocks,
             )
         };
 
-        let staking_cfg = {
-            let view = self.state.view();
-            view.nexus.staking.clone()
-        };
-
-        let lane_config = self.state.nexus_snapshot().lane_config.clone();
+        let nexus = self.state.nexus_snapshot();
+        let staking_cfg = nexus.staking.clone();
+        let lane_config = nexus.lane_config.clone();
         let validator_map = self.build_validator_locator_map();
 
         let commit_certs = crate::sumeragi::status::commit_qc_history();
@@ -332,13 +339,12 @@ impl<'a> PenaltyApplier<'a> {
     }
 
     fn locate_validator_cached(
-        &self,
         signer: ValidatorIndex,
+        commit_topology: &[PeerId],
         map: &BTreeMap<PublicKey, ValidatorLocator>,
     ) -> Option<ValidatorLocator> {
         let signer_idx = usize::try_from(signer).ok()?;
-        let view = self.state.view();
-        let peer = view.commit_topology().get().get(signer_idx)?;
+        let peer = commit_topology.get(signer_idx)?;
         map.get(peer.public_key()).cloned()
     }
 
@@ -363,8 +369,7 @@ fn roster_for_evidence(
 ) -> Option<Vec<PeerId>> {
     let refs = super::evidence::evidence_block_refs(evidence);
     if refs.is_empty() {
-        let view = state.view();
-        let roster: Vec<_> = view.commit_topology().iter().cloned().collect();
+        let roster = state.commit_topology_snapshot();
         if !roster.is_empty() {
             return Some(roster);
         }
@@ -404,8 +409,8 @@ fn consensus_mode_for_evidence(
 ) -> ConsensusMode {
     let (subject_height, _) = super::evidence::evidence_subject_height_view(evidence);
     let height = subject_height.unwrap_or(recorded_at_height);
-    let view = state.view();
-    crate::sumeragi::effective_consensus_mode_for_height(&view, height, fallback)
+    let world = state.world_view();
+    crate::sumeragi::effective_consensus_mode_for_height_from_world(&world, height, fallback)
 }
 
 fn npos_leader_index(seed: [u8; 32], height: u64, view: u64, topology_len: usize) -> Option<usize> {

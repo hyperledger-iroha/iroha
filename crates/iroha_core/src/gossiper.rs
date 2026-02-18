@@ -1252,8 +1252,7 @@ impl TransactionGossiper {
         };
         let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
-        let state = Arc::clone(&self.state);
-        let state_view = state.view();
+        let state = self.state.as_ref();
 
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1381,12 +1380,12 @@ impl TransactionGossiper {
             ) {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
-                    let local_route = self.queue.route_for_gossip(&tx, &state_view);
+                    let local_route = self.queue.route_for_gossip_with_state(&tx, state);
                     if local_route != advertised_route {
                         iroha_logger::warn!(
-                            %tx_hash,
-                            advertised_lane_id = %route.lane_id,
-                            advertised_dataspace_id = %route.dataspace_id,
+                                %tx_hash,
+                                advertised_lane_id = %route.lane_id,
+                                advertised_dataspace_id = %route.dataspace_id,
                             expected_lane_id = %local_route.lane_id,
                             expected_dataspace_id = %local_route.dataspace_id,
                             "dropping transaction gossip entry due to routing mismatch"
@@ -1407,7 +1406,7 @@ impl TransactionGossiper {
                     }
                     match self
                         .queue
-                        .push_with_gossip_payload_in_view(tx, &state_view, payload)
+                        .push_with_gossip_payload_with_state(tx, state, payload)
                     {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
@@ -1508,8 +1507,7 @@ impl TransactionGossiper {
         };
         let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
-        let state = Arc::clone(&self.state);
-        let state_view = state.view();
+        let state = self.state.as_ref();
 
         for (idx, tx) in txs.iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1638,12 +1636,12 @@ impl TransactionGossiper {
             ) {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
-                    let local_route = self.queue.route_for_gossip(&tx, &state_view);
+                    let local_route = self.queue.route_for_gossip_with_state(&tx, state);
                     if local_route != advertised_route {
                         iroha_logger::warn!(
-                            %tx_hash,
-                            advertised_lane_id = %route.lane_id,
-                            advertised_dataspace_id = %route.dataspace_id,
+                                %tx_hash,
+                                advertised_lane_id = %route.lane_id,
+                                advertised_dataspace_id = %route.dataspace_id,
                             expected_lane_id = %local_route.lane_id,
                             expected_dataspace_id = %local_route.dataspace_id,
                             "dropping transaction gossip entry due to routing mismatch"
@@ -1664,7 +1662,7 @@ impl TransactionGossiper {
                     }
                     match self
                         .queue
-                        .push_with_gossip_payload_in_view(tx, &state_view, payload)
+                        .push_with_gossip_payload_with_state(tx, state, payload)
                     {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
@@ -3587,11 +3585,7 @@ mod tests {
         }
 
         impl LaneRouter for FixedRouter {
-            fn route(
-                &self,
-                _tx: &crate::tx::AcceptedTransaction<'_>,
-                _state_view: &crate::state::StateView<'_>,
-            ) -> RoutingDecision {
+            fn route(&self, _tx: &crate::tx::AcceptedTransaction<'_>) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
             }
         }
@@ -3668,11 +3662,7 @@ mod tests {
         }
 
         impl LaneRouter for FixedRouter {
-            fn route(
-                &self,
-                _tx: &crate::tx::AcceptedTransaction<'_>,
-                _state_view: &crate::state::StateView<'_>,
-            ) -> RoutingDecision {
+            fn route(&self, _tx: &crate::tx::AcceptedTransaction<'_>) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
             }
         }

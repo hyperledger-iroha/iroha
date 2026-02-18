@@ -6333,7 +6333,7 @@ async fn handler_zk_ivm_derive(
             // Proof derivation needs a stable authority, but signature validity is not required here.
             .with_authority(authority);
 
-            let view = state.view();
+            let view = state.query_view();
             iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
                 &view, &tx, &vk_record,
             )
@@ -6604,7 +6604,7 @@ async fn handler_zk_ivm_prove(
                 // Proof derivation needs stable authority; signature validity is not required.
                 .with_authority(authority.clone());
 
-                let view = state.view();
+                let view = state.query_view();
                 let derived_proved =
                     iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
                         &view, &tx, &vk_record,
@@ -12639,14 +12639,14 @@ async fn handler_ledger_state_root(
         return Err(conversion_error("height must be at least 1".to_owned()));
     };
 
-    let view = app.state.view();
-    let Some(block) = view.kura().get_block(height_usize) else {
+    let Some(block) = app.state.block_by_height(height_usize) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
     let block_hash = block.hash();
-    let commit_qc = view.world.commit_qcs().get(&block_hash).cloned();
+    let world = app.state.world_view();
+    let commit_qc = world.commit_qcs().get(&block_hash).cloned();
     let payload = if let Some(qc) = commit_qc {
         StateRootResponse {
             height,
@@ -12708,16 +12708,15 @@ async fn handler_ledger_state_proof(
         return Err(conversion_error("height must be at least 1".to_owned()));
     };
 
-    let view = app.state.view();
-    let Some(block) = view.kura().get_block(height_usize) else {
+    let Some(block) = app.state.block_by_height(height_usize) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
     let block_hash = block.hash();
     // Ledger state proof requires a persisted commit QC; avoid placeholder synthesis.
-    let commit_qc = view
-        .world
+    let world = app.state.world_view();
+    let commit_qc = world
         .commit_qcs()
         .get(&block_hash)
         .cloned()
@@ -12762,24 +12761,23 @@ async fn handler_block_proof(
         .parse()
         .map_err(|err| conversion_error(format!("invalid entry hash: {err}")))?;
 
-    let proofs = {
-        let view = app.state.view();
-        view.block_proofs_for_entry(block_height, entry_hash)
-            .map_err(|err| match err {
-                BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
-                    conversion_error(err.to_string())
-                }
-                BlockProofError::BlockNotFound(_)
-                | BlockProofError::MissingResults(_)
-                | BlockProofError::EntrypointNotFound { .. }
-                | BlockProofError::ExecutionResultMissing { .. }
-                | BlockProofError::MerkleProofUnavailable { .. } => {
-                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                    ))
-                }
-            })?
-    };
+    let proofs = app
+        .state
+        .block_proofs_for_entry(block_height, entry_hash)
+        .map_err(|err| match err {
+            BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
+                conversion_error(err.to_string())
+            }
+            BlockProofError::BlockNotFound(_)
+            | BlockProofError::MissingResults(_)
+            | BlockProofError::EntrypointNotFound { .. }
+            | BlockProofError::ExecutionResultMissing { .. }
+            | BlockProofError::MerkleProofUnavailable { .. } => {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                ))
+            }
+        })?;
     #[cfg(feature = "connect")]
     if app.connect_enabled {
         if let Err(err) = app
@@ -14802,7 +14800,7 @@ impl Torii {
             config.proof_api.retry_after,
             config.proof_api.max_body_bytes.get(),
         );
-        let content_snapshot = state.view().content.clone();
+        let content_snapshot = state.content_snapshot();
         let content_limits_snapshot = content_snapshot.limits;
         let content_request_limiter = limits::RateLimiter::new(
             Some(content_limits_snapshot.max_requests_per_second.get()),
@@ -17246,7 +17244,7 @@ pub(crate) mod tests_runtime_handlers {
             telemetry::peers::GeoLookupConfig::disabled(),
         );
 
-        let content_config_snapshot = state.view().content.clone();
+        let content_config_snapshot = state.content_snapshot();
         let soranet_privacy_ingest =
             iroha_config::parameters::actual::SoranetPrivacyIngest::default();
         let soranet_privacy_tokens: HashSet<String> =

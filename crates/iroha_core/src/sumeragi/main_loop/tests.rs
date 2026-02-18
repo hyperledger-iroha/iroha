@@ -1508,6 +1508,20 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
             &consensus_cfg,
             &config_caps,
         );
+    let (mode_tag_from_world, bls_domain_from_world, caps_from_world) = {
+        let world = state.world_view();
+        let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+        crate::sumeragi::consensus::compute_consensus_handshake_caps_from_world(
+            &world,
+            height,
+            &common_config,
+            &consensus_cfg,
+            &config_caps,
+        )
+    };
+    assert_eq!(mode_tag_from_world, mode_tag);
+    assert_eq!(bls_domain_from_world, bls_domain);
+    assert_eq!(caps_from_world, caps);
     assert_eq!(mode_tag, NPOS_TAG.to_string());
     assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v1");
 
@@ -41507,10 +41521,9 @@ async fn proposal_queue_scan_budget_limits_fetch() {
             .expect("push tx");
     }
 
-    let state_view = actor.state.view();
     let mut tx_guards = Vec::new();
     let deferred = actor.pull_transactions_for_proposal(
-        &state_view,
+        actor.state.as_ref(),
         nonzero!(5_usize),
         2,
         None,
@@ -41522,7 +41535,6 @@ async fn proposal_queue_scan_budget_limits_fetch() {
     assert!(deferred.is_empty(), "budgeted scan should not defer txs");
     assert_eq!(tx_guards.len(), 2, "scan budget should cap selection");
 
-    drop(state_view);
     drop(tx_guards);
 
     assert_eq!(actor.queue.queued_len(), 3, "remaining txs stay queued");
@@ -41555,10 +41567,9 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
 
     let height = 1u64;
     let view = 0u64;
-    let state_view = actor.state.view();
     let mut tx_guards = Vec::new();
     let _ = actor.pull_transactions_for_proposal(
-        &state_view,
+        actor.state.as_ref(),
         nonzero!(2_usize),
         2,
         None,
@@ -41566,7 +41577,6 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         height,
         view,
     );
-    drop(state_view);
 
     assert_eq!(tx_guards.len(), 2, "queue should return both transactions");
 
@@ -41595,10 +41605,9 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         tx_block.commit().expect("commit transactions block");
     }
 
-    let state_view = actor.state.view();
     let (filtered_guards, filtered_transactions, _filtered_routing, _filtered_sizes, dropped) =
         Actor::filter_committed_transactions_for_proposal(
-            &state_view,
+            actor.state.as_ref(),
             tx_guards,
             transactions,
             routing,
@@ -41606,7 +41615,6 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
             height,
             view,
         );
-    drop(state_view);
 
     assert_eq!(dropped, 1, "one committed transaction should be dropped");
     assert_eq!(
@@ -41660,10 +41668,9 @@ async fn proposal_gas_budget_limits_fetch() {
         )
         .expect("push tx");
 
-    let state_view = actor.state.view();
     let mut tx_guards = Vec::new();
     let deferred = actor.pull_transactions_for_proposal(
-        &state_view,
+        actor.state.as_ref(),
         nonzero!(5_usize),
         5,
         Some(gas_cap),
@@ -41675,13 +41682,12 @@ async fn proposal_gas_budget_limits_fetch() {
     assert_eq!(tx_guards.len(), 1, "gas cap should allow one tx");
     assert_eq!(deferred.len(), 1, "second tx should be deferred");
 
-    drop(state_view);
     drop(tx_guards);
 
-    for tx in deferred {
+    for (tx, routing) in deferred {
         actor
             .queue
-            .push(tx, actor.state.view())
+            .push_requeued_with_routing(tx, routing, actor.state.as_ref())
             .expect("requeue deferred tx");
     }
 

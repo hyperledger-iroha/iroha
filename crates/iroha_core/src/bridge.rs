@@ -3,13 +3,13 @@
 use std::{
     collections::BTreeSet,
     num::NonZeroUsize,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
-use iroha_crypto::HashOf;
+use iroha_crypto::{HashOf, PublicKey};
 use iroha_data_model::{
     ChainId,
-    block::BlockHeader,
+    block::{BlockHeader, SignedBlock},
     bridge::{
         BridgeAuthoritySet, BridgeCommitment, BridgeCommitmentJustification, BridgeFinalityBundle,
         BridgeFinalityProof,
@@ -21,9 +21,50 @@ use thiserror::Error;
 
 use crate::{
     mmr::BlockMmr,
-    state::{StateReadOnly, consensus_key_pop_for_public_key},
+    state::{State as CoreState, StateReadOnly, consensus_key_pop_for_public_key},
     sumeragi,
 };
+
+/// Narrow read-only surface used by bridge finality proof builders.
+///
+/// This keeps bridge-proof construction independent from full `StateView` snapshots.
+pub trait BridgeStateReadOnly {
+    /// Chain identifier bound to the state snapshot.
+    fn bridge_chain_id(&self) -> &ChainId;
+    /// Load a committed block at `height`.
+    fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>>;
+    /// Resolve a validator consensus-key proof-of-possession by public key.
+    fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>>;
+}
+
+impl<T: StateReadOnly> BridgeStateReadOnly for T {
+    fn bridge_chain_id(&self) -> &ChainId {
+        self.chain_id()
+    }
+
+    fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        self.kura().get_block(height)
+    }
+
+    fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
+        consensus_key_pop_for_public_key(self.world(), public_key)
+    }
+}
+
+impl BridgeStateReadOnly for CoreState {
+    fn bridge_chain_id(&self) -> &ChainId {
+        self.chain_id_ref()
+    }
+
+    fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        self.block_by_height(height)
+    }
+
+    fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
+        let world = self.world_view();
+        consensus_key_pop_for_public_key(&world, public_key)
+    }
+}
 
 struct MmrCache {
     mmr: BlockMmr,
@@ -68,7 +109,7 @@ pub enum BridgeFinalityError {
 }
 
 fn compute_block_mmr(
-    state: &impl StateReadOnly,
+    state: &impl BridgeStateReadOnly,
     height: u64,
 ) -> Result<BlockMmr, BridgeFinalityError> {
     static BLOCK_MMR_CACHE: OnceLock<Mutex<MmrCache>> = OnceLock::new();
@@ -87,7 +128,7 @@ fn compute_block_mmr(
     });
 
     let mut guard = cache.lock().expect("mmr cache mutex poisoned");
-    let chain_id = state.chain_id().clone();
+    let chain_id = state.bridge_chain_id().clone();
 
     let mut rebuild = height < guard.height || guard.chain_id.as_ref() != Some(&chain_id);
     if !rebuild && guard.height > 0 {
@@ -127,7 +168,7 @@ fn compute_block_mmr(
 }
 
 fn block_hash_at(
-    state: &impl StateReadOnly,
+    state: &impl BridgeStateReadOnly,
     height: u64,
 ) -> Result<iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>, BridgeFinalityError> {
     let h_usize: usize = height
@@ -135,8 +176,7 @@ fn block_hash_at(
         .map_err(|_| BridgeFinalityError::InvalidHeight(height))?;
     let nonzero = NonZeroUsize::new(h_usize).ok_or(BridgeFinalityError::InvalidHeight(height))?;
     let block = state
-        .kura()
-        .get_block(nonzero)
+        .bridge_block_by_height(nonzero)
         .ok_or(BridgeFinalityError::BlockNotFound(height))?;
     Ok(block.hash())
 }
@@ -153,7 +193,7 @@ fn block_hash_at(
 /// Returns [`BridgeFinalityError`] when the height is invalid, the block or commit
 /// certificate is missing, or their hashes do not match.
 pub fn build_finality_proof(
-    state: &impl StateReadOnly,
+    state: &impl BridgeStateReadOnly,
     height: u64,
 ) -> Result<BridgeFinalityProof, BridgeFinalityError> {
     let height_usize: usize = height
@@ -163,8 +203,7 @@ pub fn build_finality_proof(
         NonZeroUsize::new(height_usize).ok_or(BridgeFinalityError::InvalidHeight(height))?;
 
     let block = state
-        .kura()
-        .get_block(nonzero_height)
+        .bridge_block_by_height(nonzero_height)
         .ok_or(BridgeFinalityError::BlockNotFound(height))?;
     let block_header = block.header();
     let block_hash = block.hash();
@@ -188,10 +227,9 @@ pub fn build_finality_proof(
         return Err(BridgeFinalityError::QcNotFound(height));
     };
 
-    let world = state.world();
     let mut validator_set_pops = Vec::with_capacity(cert.validator_set.len());
     for (index, peer) in cert.validator_set.iter().enumerate() {
-        let Some(pop) = consensus_key_pop_for_public_key(world, peer.public_key()) else {
+        let Some(pop) = state.bridge_validator_pop(peer.public_key()) else {
             return Err(BridgeFinalityError::MissingValidatorPop { index });
         };
         validator_set_pops.push(pop);
@@ -199,7 +237,7 @@ pub fn build_finality_proof(
 
     Ok(BridgeFinalityProof {
         height,
-        chain_id: state.chain_id().clone(),
+        chain_id: state.bridge_chain_id().clone(),
         block_header,
         block_hash,
         commit_qc: cert,
@@ -217,7 +255,7 @@ pub fn build_finality_proof(
 /// Returns [`BridgeFinalityError`] when the underlying finality proof or block MMR
 /// cannot be built for the requested height.
 pub fn build_finality_bundle(
-    state: &impl StateReadOnly,
+    state: &impl BridgeStateReadOnly,
     height: u64,
 ) -> Result<BridgeFinalityBundle, BridgeFinalityError> {
     let proof = build_finality_proof(state, height)?;

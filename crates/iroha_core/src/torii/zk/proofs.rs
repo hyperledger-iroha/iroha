@@ -52,9 +52,8 @@ pub struct ProofListItem {
 
 /// List proof records using the supplied filters and pagination controls.
 pub fn list_proofs(state: &State, params: &ProofListParams<'_>) -> Vec<ProofListItem> {
-    let view = state.view();
-    let world = &view.world;
-    let mut entries = collect_filtered(world, &params.filters);
+    let world = state.world_view();
+    let mut entries = collect_filtered(&world, &params.filters);
     entries.sort_by(|a, b| {
         let ha = a.record.verified_at_height.unwrap_or(0);
         let hb = b.record.verified_at_height.unwrap_or(0);
@@ -78,9 +77,8 @@ pub fn list_proofs(state: &State, params: &ProofListParams<'_>) -> Vec<ProofList
 
 /// Count proof records matching the supplied filters (ignores pagination controls).
 pub fn count_proofs(state: &State, filters: &ProofFilters<'_>) -> u64 {
-    let view = state.view();
-    let world = &view.world;
-    collect_filtered(world, filters).len() as u64
+    let world = state.world_view();
+    collect_filtered(&world, filters).len() as u64
 }
 
 fn collect_filtered(world: &impl WorldReadOnly, filters: &ProofFilters<'_>) -> Vec<ProofListItem> {

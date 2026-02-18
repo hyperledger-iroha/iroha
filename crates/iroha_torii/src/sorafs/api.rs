@@ -1919,10 +1919,8 @@ pub(crate) async fn handle_get_sorafs_capacity_state(
         return feature_disabled("sorafs capacity registry API is not enabled on this node");
     }
 
-    let snapshot = {
-        let view = state.state.view();
-        collect_snapshot(view.world())
-    };
+    let world = state.state.world_view();
+    let snapshot = collect_snapshot(&world);
 
     let snapshot = match snapshot {
         Ok(snapshot) => snapshot,
@@ -6596,11 +6594,10 @@ fn capacity_telemetry_to_json(snapshot: &CapacityTelemetryV1) -> Result<Value, j
 fn pin_snapshot_with_attestation(
     state: &SharedAppState,
 ) -> ApiResult<(Value, PinRegistrySnapshot)> {
-    let view = state.state.view();
-    let world = view.world();
-    let block_hash = iroha_core::state::StateReadOnly::latest_block_hash(&view);
-    let height = view.height() as u64;
-    let chain_id = view.chain_id();
+    let world = state.state.world_view();
+    let block_hash = state.state.latest_block_hash_fast();
+    let height = u64::try_from(state.state.committed_height()).unwrap_or(u64::MAX);
+    let chain_id = state.state.chain_id_ref();
 
     let attestation = match build_attestation_value(height, block_hash.as_ref(), chain_id) {
         Ok(value) => value,
@@ -6614,7 +6611,7 @@ fn pin_snapshot_with_attestation(
         }
     };
 
-    match collect_pin_registry(world) {
+    match collect_pin_registry(&world) {
         Ok(snapshot) => {
             let telemetry = state.telemetry_handle();
             record_pin_registry_metrics(&telemetry, &snapshot);

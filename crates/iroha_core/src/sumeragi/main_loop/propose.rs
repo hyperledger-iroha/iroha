@@ -4,7 +4,6 @@ use super::proposals::block_payload_bytes;
 use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
-use crate::state::StateReadOnlyWithTransactions;
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
@@ -94,7 +93,7 @@ fn trim_batch_for_size_cap<T, U>(
     tx_batch: &mut Vec<T>,
     routing_batch: &mut Vec<U>,
     sizes: &mut Vec<usize>,
-    removed: &mut Vec<T>,
+    removed: &mut Vec<(T, U)>,
     mut excess_bytes: usize,
 ) -> usize {
     debug_assert_eq!(tx_batch.len(), routing_batch.len());
@@ -105,10 +104,13 @@ fn trim_batch_for_size_cap<T, U>(
             Some(tx) => tx,
             None => break,
         };
-        let _ = routing_batch.pop();
+        let routing = match routing_batch.pop() {
+            Some(routing) => routing,
+            None => break,
+        };
         let size = sizes.pop().unwrap_or(1).max(1);
         excess_bytes = excess_bytes.saturating_sub(size);
-        removed.push(tx);
+        removed.push((tx, routing));
         removed_count = removed_count.saturating_add(1);
     }
     removed_count
@@ -362,16 +364,17 @@ impl Actor {
 
     pub(super) fn pull_transactions_for_proposal(
         &self,
-        state_view: &StateView,
+        state: &State,
         max_in_block: NonZeroUsize,
         scan_budget: usize,
         gas_limit_per_block: Option<NonZeroU64>,
         tx_guards: &mut Vec<crate::queue::TransactionGuard>,
         height: u64,
         view: u64,
-    ) -> Vec<AcceptedTransaction<'static>> {
+    ) -> Vec<(AcceptedTransaction<'static>, RoutingDecision)> {
         let mut lane_consumption: BTreeMap<LaneId, u64> = BTreeMap::new();
-        let mut deferred_accumulator: Vec<AcceptedTransaction<'static>> = Vec::new();
+        let mut deferred_accumulator: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
+            Vec::new();
         let mut fetched_total = 0usize;
         let mut gas_used_in_block = 0u64;
         let gas_limit_per_block = gas_limit_per_block.map(NonZeroU64::get);
@@ -407,14 +410,17 @@ impl Actor {
                 .expect("non-zero by construction");
             let mut fetched = Vec::new();
             self.queue
-                .get_transactions_for_block(state_view, fetch_cap, &mut fetched);
+                .get_transactions_for_block_with_state(state, fetch_cap, &mut fetched);
             if fetched.is_empty() {
                 break;
             }
             fetched_total = fetched_total.saturating_add(fetched.len());
             let deferred = self
                 .queue
-                .enforce_lane_teu_limits_with_consumption(&mut fetched, &mut lane_consumption);
+                .enforce_lane_teu_limits_with_consumption_and_routing(
+                    &mut fetched,
+                    &mut lane_consumption,
+                );
             if !deferred.is_empty() {
                 deferred_accumulator.extend(deferred);
             }
@@ -433,7 +439,7 @@ impl Actor {
                         if let Some(used) = lane_consumption.get_mut(&lane_id) {
                             *used = used.saturating_sub(teu);
                         }
-                        deferred_accumulator.push(guard.clone_accepted());
+                        deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
                         continue;
                     }
 
@@ -462,6 +468,20 @@ impl Actor {
         }
 
         deferred_accumulator
+    }
+
+    fn requeue_accepted_transaction(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        routing_decision: crate::queue::RoutingDecision,
+        warn_context: &'static str,
+    ) {
+        if let Err(err) =
+            self.queue
+                .push_requeued_with_routing(tx, routing_decision, self.state.as_ref())
+        {
+            warn!(?err.err, "{warn_context}");
+        }
     }
 
     pub(super) fn drop_stale_pending_block(
@@ -585,7 +605,6 @@ impl Actor {
 
         let queue_len = self.queue.queued_len();
         let mut tx_guards = Vec::new();
-        let state_view = view_snapshot.unwrap_or_else(|| self.state.view());
         let (
             _block_digest,
             conf_features,
@@ -594,20 +613,63 @@ impl Actor {
             mut tx_sizes,
             deferred_transactions,
         ) = {
-            let block_max_param = state_view.world().parameters().block().max_transactions();
+            let (block_max_param, effective_commit_time_ms, base_gas_limit, digest) =
+                if let Some(state_view) = view_snapshot.as_ref() {
+                    let block_max_param =
+                        state_view.world().parameters().block().max_transactions();
+                    let effective_commit_time_ms = state_view
+                        .world()
+                        .parameters()
+                        .sumeragi()
+                        .effective_commit_time_ms();
+                    let base_gas_limit = NonZeroU64::new(crate::state::gas_limit_from_parameters(
+                        state_view.world().parameters(),
+                    ));
+                    let committed_height = u64::try_from(state_view.height())
+                        .expect("committed height exceeds u64::MAX");
+                    let next_height = committed_height
+                        .checked_add(1)
+                        .expect("block height exceeds u64::MAX");
+                    let digest = self.state.cached_confidential_feature_digest(
+                        state_view.world(),
+                        &state_view.zk,
+                        next_height,
+                    );
+                    (
+                        block_max_param,
+                        effective_commit_time_ms,
+                        base_gas_limit,
+                        digest,
+                    )
+                } else {
+                    let world = self.state.world_view();
+                    let block_max_param = world.parameters().block().max_transactions();
+                    let effective_commit_time_ms =
+                        world.parameters().sumeragi().effective_commit_time_ms();
+                    let base_gas_limit = NonZeroU64::new(crate::state::gas_limit_from_parameters(
+                        world.parameters(),
+                    ));
+                    let committed_height = u64::try_from(self.state.committed_height())
+                        .expect("committed height exceeds u64::MAX");
+                    let next_height = committed_height
+                        .checked_add(1)
+                        .expect("block height exceeds u64::MAX");
+                    let zk = self.state.zk_snapshot();
+                    let digest =
+                        self.state
+                            .cached_confidential_feature_digest(&world, &zk, next_height);
+                    (
+                        block_max_param,
+                        effective_commit_time_ms,
+                        base_gas_limit,
+                        digest,
+                    )
+                };
             let (max_tx_target, max_in_block) = Self::max_tx_budget(
                 queue_len,
                 block_max_param.get(),
                 self.config.block.max_transactions,
             );
-            let effective_commit_time_ms = state_view
-                .world()
-                .parameters()
-                .sumeragi()
-                .effective_commit_time_ms();
-            let base_gas_limit = NonZeroU64::new(crate::state::gas_limit_from_parameters(
-                state_view.world().parameters(),
-            ));
             let fast_gas_limit_per_block = self.config.block.fast_gas_limit_per_block;
             let proposal_gas_limit = Self::cap_gas_limit_for_fast_commit(
                 base_gas_limit,
@@ -634,23 +696,13 @@ impl Actor {
             );
             // Bound queue scanning to keep proposal assembly from stalling under sustained load.
             let deferred_accumulator = self.pull_transactions_for_proposal(
-                &state_view,
+                self.state.as_ref(),
                 max_in_block,
                 scan_budget,
                 proposal_gas_limit,
                 &mut tx_guards,
                 height,
                 view,
-            );
-            let committed_height =
-                u64::try_from(state_view.height()).expect("committed height exceeds u64::MAX");
-            let next_height = committed_height
-                .checked_add(1)
-                .expect("block height exceeds u64::MAX");
-            let digest = self.state.cached_confidential_feature_digest(
-                state_view.world(),
-                &state_view.zk,
-                next_height,
             );
             let transactions: Vec<AcceptedTransaction<'static>> = tx_guards
                 .iter()
@@ -681,7 +733,7 @@ impl Actor {
 
         let (filtered_guards, filtered_transactions, filtered_routing, filtered_sizes, _dropped) =
             Self::filter_committed_transactions_for_proposal(
-                &state_view,
+                self.state.as_ref(),
                 tx_guards,
                 transactions,
                 routing_decisions,
@@ -693,7 +745,6 @@ impl Actor {
         transactions = filtered_transactions;
         routing_decisions = filtered_routing;
         tx_sizes = filtered_sizes;
-        drop(state_view);
 
         if transactions.len() > 1 {
             let order = interleave_lane_indices(&routing_decisions);
@@ -712,16 +763,12 @@ impl Actor {
             }
         }
 
-        {
-            let requeue_view = self.state.view();
-            for tx in deferred_transactions {
-                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                    warn!(
-                        ?err.err,
-                        "failed to requeue transaction deferred by lane TEU limits"
-                    );
-                }
-            }
+        for (tx, routing) in deferred_transactions {
+            self.requeue_accepted_transaction(
+                tx,
+                routing,
+                "failed to requeue transaction deferred by lane TEU limits",
+            );
         }
 
         let queue_len_after_pop = self.queue.queued_len();
@@ -742,7 +789,8 @@ impl Actor {
         };
 
         let da_enabled = self.runtime_da_enabled();
-        let mut overflow_transactions = Vec::new();
+        let mut overflow_transactions: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
+            Vec::new();
         let mut oversized_frame_len: Option<usize> = None;
         let tx_sizes_in = tx_sizes;
         let mut tx_batch;
@@ -769,7 +817,7 @@ impl Actor {
                         Some(oversized_frame_len.map_or(encoded_len, |prev| prev.max(encoded_len)));
                 }
                 if encoded_len > remaining_budget {
-                    overflow_transactions.push(tx);
+                    overflow_transactions.push((tx, routing));
                     continue;
                 }
                 remaining_budget = remaining_budget.saturating_sub(encoded_len);
@@ -793,7 +841,7 @@ impl Actor {
             {
                 if let Some(budget) = payload_budget {
                     if encoded_len > budget {
-                        overflow_transactions.push(tx);
+                        overflow_transactions.push((tx, routing));
                         continue;
                     }
                     payload_budget = Some(budget.saturating_sub(encoded_len));
@@ -810,8 +858,7 @@ impl Actor {
                 let admin_tx = tx_batch.remove(admin_idx);
                 let admin_route = routing_batch.remove(admin_idx);
                 let admin_size = tx_sizes.remove(admin_idx);
-                overflow_transactions.append(&mut tx_batch);
-                routing_batch.clear();
+                overflow_transactions.extend(tx_batch.drain(..).zip(routing_batch.drain(..)));
                 tx_sizes.clear();
                 tx_batch.push(admin_tx);
                 routing_batch.push(admin_route);
@@ -821,13 +868,12 @@ impl Actor {
 
         if tx_batch.is_empty() {
             tx_guards.clear();
-            {
-                let requeue_view = self.state.view();
-                for tx in std::mem::take(&mut overflow_transactions) {
-                    if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                        warn!(?err.err, "failed to requeue oversized transaction");
-                    }
-                }
+            for (tx, routing) in std::mem::take(&mut overflow_transactions) {
+                self.requeue_accepted_transaction(
+                    tx,
+                    routing,
+                    "failed to requeue oversized transaction",
+                );
             }
             let has_internal_work = internal_work
                 .get_or_insert_with(|| {
@@ -855,9 +901,15 @@ impl Actor {
             );
         }
 
-        let original_for_requeue = tx_batch.clone();
-        let mut removed_for_chunk_cap: Vec<AcceptedTransaction<'static>> = Vec::new();
-        let mut removed_for_frame_cap: Vec<AcceptedTransaction<'static>> = Vec::new();
+        let original_for_requeue: Vec<(AcceptedTransaction<'static>, RoutingDecision)> = tx_batch
+            .iter()
+            .cloned()
+            .zip(routing_batch.iter().copied())
+            .collect();
+        let mut removed_for_chunk_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
+            Vec::new();
+        let mut removed_for_frame_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
+            Vec::new();
 
         let assembly_result: Result<()> = (|| {
             if tx_sizes.len() < tx_batch.len() {
@@ -1171,9 +1223,11 @@ impl Actor {
                             ));
                         }
                         if let Some(removed_tx) = tx_batch.pop() {
-                            let _ = routing_batch.pop();
+                            let removed_routing = routing_batch
+                                .pop()
+                                .expect("routing batch should align with tx batch");
                             let _ = tx_sizes.pop();
-                            removed_for_chunk_cap.push(removed_tx);
+                            removed_for_chunk_cap.push((removed_tx, removed_routing));
                             continue;
                         }
                     }
@@ -1208,9 +1262,11 @@ impl Actor {
                     );
                     if removed == 0 {
                         if let Some(removed_tx) = tx_batch.pop() {
-                            let _ = routing_batch.pop();
+                            let removed_routing = routing_batch
+                                .pop()
+                                .expect("routing batch should align with tx batch");
                             let _ = tx_sizes.pop();
-                            removed_for_frame_cap.push(removed_tx);
+                            removed_for_frame_cap.push((removed_tx, removed_routing));
                             continue;
                         }
                     }
@@ -1371,73 +1427,79 @@ impl Actor {
 
         if let Err(err) = assembly_result {
             tx_guards.clear();
-            let requeue_view = self.state.view();
-            for tx in original_for_requeue {
+            for (tx, routing) in original_for_requeue {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(push_err) = self.queue.push_in_view(tx, &requeue_view) {
-                    warn!(?push_err.err, "failed to requeue transaction after assembly failure");
-                }
+                self.requeue_accepted_transaction(
+                    tx,
+                    routing,
+                    "failed to requeue transaction after assembly failure",
+                );
             }
-            for tx in std::mem::take(&mut overflow_transactions) {
+            for (tx, routing) in std::mem::take(&mut overflow_transactions) {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                    warn!(?err.err, "failed to requeue transaction overflowed by RBC budget");
-                }
+                self.requeue_accepted_transaction(
+                    tx,
+                    routing,
+                    "failed to requeue transaction overflowed by RBC budget",
+                );
             }
-            for tx in removed_for_chunk_cap {
+            for (tx, routing) in removed_for_chunk_cap {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                    warn!(?err.err, "failed to requeue transaction trimmed by RBC chunk cap");
-                }
+                self.requeue_accepted_transaction(
+                    tx,
+                    routing,
+                    "failed to requeue transaction trimmed by RBC chunk cap",
+                );
             }
-            for tx in removed_for_frame_cap {
+            for (tx, routing) in removed_for_frame_cap {
                 if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                     continue;
                 }
-                if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                    warn!(
-                        ?err.err,
-                        "failed to requeue transaction trimmed by consensus frame cap"
-                    );
-                }
+                self.requeue_accepted_transaction(
+                    tx,
+                    routing,
+                    "failed to requeue transaction trimmed by consensus frame cap",
+                );
             }
             return Err(err);
         }
 
         tx_guards.clear();
-        let requeue_view = self.state.view();
-        for tx in std::mem::take(&mut overflow_transactions) {
+        for (tx, routing) in std::mem::take(&mut overflow_transactions) {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
-            if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                warn!(?err.err, "failed to requeue transaction overflowed by RBC budget");
-            }
+            self.requeue_accepted_transaction(
+                tx,
+                routing,
+                "failed to requeue transaction overflowed by RBC budget",
+            );
         }
-        for tx in removed_for_chunk_cap {
+        for (tx, routing) in removed_for_chunk_cap {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
-            if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                warn!(?err.err, "failed to requeue transaction trimmed by RBC chunk cap");
-            }
+            self.requeue_accepted_transaction(
+                tx,
+                routing,
+                "failed to requeue transaction trimmed by RBC chunk cap",
+            );
         }
-        for tx in removed_for_frame_cap {
+        for (tx, routing) in removed_for_frame_cap {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
                 continue;
             }
-            if let Err(err) = self.queue.push_in_view(tx, &requeue_view) {
-                warn!(
-                    ?err.err,
-                    "failed to requeue transaction trimmed by consensus frame cap"
-                );
-            }
+            self.requeue_accepted_transaction(
+                tx,
+                routing,
+                "failed to requeue transaction trimmed by consensus frame cap",
+            );
         }
 
         Ok(true)
@@ -1606,7 +1668,7 @@ impl Actor {
     }
 
     pub(super) fn filter_committed_transactions_for_proposal(
-        state_view: &StateView<'_>,
+        state: &State,
         tx_guards: Vec<crate::queue::TransactionGuard>,
         transactions: Vec<AcceptedTransaction<'static>>,
         routing_decisions: Vec<RoutingDecision>,
@@ -1632,7 +1694,7 @@ impl Actor {
             .zip(routing_decisions.into_iter())
             .zip(tx_sizes.into_iter())
         {
-            if state_view.has_transaction(tx.hash()) {
+            if state.has_committed_transaction(tx.hash()) {
                 dropped = dropped.saturating_add(1);
                 continue;
             }

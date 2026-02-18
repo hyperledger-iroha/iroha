@@ -5460,6 +5460,49 @@ pub struct StateView<'state> {
     created_at: Instant,
 }
 
+/// Lightweight state snapshot intended for query-heavy paths.
+///
+/// Compared with [`StateView`], this snapshot avoids taking transaction-index
+/// views and the coarse `view_lock`, while still providing the
+/// [`StateReadOnly`] surface required by IVM/query execution.
+pub struct StateQueryView<'state> {
+    /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
+    pub world: WorldView<'state>,
+    /// Blockchain.
+    pub block_hashes: BlockHashesView<'state>,
+    /// Topology used to commit latest block.
+    pub commit_topology: CellView<'state, Vec<PeerId>>,
+    /// Topology used to commit previous block.
+    pub prev_commit_topology: CellView<'state, Vec<PeerId>>,
+    /// Merge-ledger cache retaining recent entries for this snapshot.
+    pub merge_ledger: &'state MergeLedgerStore,
+    /// Runtime handle for the IVM to execute triggers.
+    pub ivm: &'state IVM,
+    /// Reference to Kura subsystem.
+    kura: &'state Kura,
+    /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
+    pub query_handle: &'state LiveQueryStoreHandle,
+    /// Cached snapshot of account identifiers for this view.
+    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
+    /// State telemetry.
+    #[cfg(feature = "telemetry")]
+    pub telemetry: &'state StateTelemetry,
+    /// Pipeline execution preferences snapshot for this view.
+    pub pipeline: iroha_config::parameters::actual::Pipeline,
+    /// Oracle configuration snapshot for this view.
+    pub oracle: iroha_config::parameters::actual::Oracle,
+    /// Cryptography configuration snapshot for this view.
+    pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
+    /// Nexus configuration snapshot for this state view.
+    pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Zero-knowledge verification configuration snapshot for this view.
+    pub zk: iroha_config::parameters::actual::Zk,
+    /// Content configuration snapshot for this view.
+    pub content: iroha_config::parameters::actual::Content,
+    /// Chain identifier for this view.
+    pub chain_id: iroha_data_model::ChainId,
+}
+
 impl<'state> StateView<'state> {
     /// Returns the world view for this read-only snapshot.
     #[inline]
@@ -5560,6 +5603,14 @@ impl<'state> StateView<'state> {
     #[inline]
     pub fn prev_block_hash(&self) -> Option<HashOf<BlockHeader>> {
         StateReadOnly::prev_block_hash(self)
+    }
+}
+
+impl<'state> StateQueryView<'state> {
+    /// Returns the world view for this read-only snapshot.
+    #[inline]
+    pub fn world(&self) -> &WorldView<'state> {
+        &self.world
     }
 }
 
@@ -5725,149 +5776,168 @@ pub trait StakeSnapshot {
     fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>>;
 }
 
-impl StakeSnapshot for StateView<'_> {
-    #[allow(clippy::too_many_lines)]
-    fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>> {
-        let present_peers: std::collections::BTreeSet<PeerId> =
-            self.world.peers().iter().cloned().collect();
-        let block_height = u64::try_from(self.block_hashes.len()).unwrap_or(u64::MAX);
-        let mut topology_peers: std::collections::BTreeSet<PeerId> =
-            self.commit_topology.iter().cloned().collect();
-        let enforce_topology_membership = !topology_peers.is_empty();
-        if enforce_topology_membership {
-            let mut active_candidates: std::collections::BTreeSet<PeerId> =
-                std::collections::BTreeSet::new();
-            for ((_lane_id, _validator_id), record) in self.world.public_lane_validators().iter() {
-                if !matches!(record.status, PublicLaneValidatorStatus::Active) {
-                    continue;
-                }
-                if !matches!(
-                    self.lane_validator_mode(record.lane_id),
-                    iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-                ) {
-                    continue;
-                }
-                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                    &record.self_stake,
-                    self.nexus.staking.min_validator_stake,
-                ) else {
-                    continue;
-                };
-                if !meets_min {
-                    continue;
-                }
-                let Some(pk) = record.validator.try_signatory() else {
-                    continue;
-                };
-                let pid = PeerId::from(pk.clone());
-                if !present_peers.contains(&pid) {
-                    continue;
-                }
-                if !peer_has_live_consensus_key(self.world(), &pid, block_height) {
-                    continue;
-                }
-                active_candidates.insert(pid);
+#[allow(clippy::too_many_lines)]
+fn epoch_validator_peer_ids_from_world<I>(
+    world: &impl WorldReadOnly,
+    commit_topology: I,
+    block_height: u64,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    epoch: u64,
+) -> Option<Vec<PeerId>>
+where
+    I: IntoIterator<Item = PeerId>,
+{
+    let present_peers: std::collections::BTreeSet<PeerId> = world.peers().iter().cloned().collect();
+    let mut topology_peers: std::collections::BTreeSet<PeerId> =
+        commit_topology.into_iter().collect();
+    let enforce_topology_membership = !topology_peers.is_empty();
+    if enforce_topology_membership {
+        let mut active_candidates: std::collections::BTreeSet<PeerId> =
+            std::collections::BTreeSet::new();
+        for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+            if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+                continue;
             }
-
-            if !active_candidates.is_empty() {
-                let missing: Vec<_> = active_candidates
-                    .iter()
-                    .filter(|pid| !topology_peers.contains(*pid))
-                    .cloned()
-                    .collect();
-                if !missing.is_empty() {
-                    warn!(
-                        commit_topology_len = topology_peers.len(),
-                        active_candidates_len = active_candidates.len(),
-                        missing_len = missing.len(),
-                        "commit topology missing active validators; widening epoch roster filter"
-                    );
-                    topology_peers.extend(missing);
-                }
+            if !matches!(
+                nexus
+                    .staking
+                    .validator_mode(record.lane_id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            ) {
+                continue;
             }
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                nexus.staking.min_validator_stake,
+            ) else {
+                continue;
+            };
+            if !meets_min {
+                continue;
+            }
+            let Some(pk) = record.validator.try_signatory() else {
+                continue;
+            };
+            let pid = PeerId::from(pk.clone());
+            if !present_peers.contains(&pid) {
+                continue;
+            }
+            if !peer_has_live_consensus_key(world, &pid, block_height) {
+                continue;
+            }
+            active_candidates.insert(pid);
         }
-        // Preferred path: council-derived roster for the epoch
-        if let Some(c) = self.world.council().get(&epoch).cloned() {
-            // Build PeerIds from council members' signatories
-            let mut ids: Vec<PeerId> = c
-                .members
-                .into_iter()
-                .map(|acct| PeerId::from(acct.signatory().clone()))
-                .collect();
-            // Filter to peers known in WSV and preserve order
-            ids.retain(|pid| present_peers.contains(pid));
-            if enforce_topology_membership {
-                ids.retain(|pid| topology_peers.contains(pid));
-            }
-            if !ids.is_empty() {
-                return Some(ids);
-            }
-        }
-        let mut candidates: Vec<(PeerId, Numeric, AccountId)> = self
-            .world
-            .public_lane_validators()
-            .iter()
-            .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
-            .filter(|(_, record)| {
-                matches!(
-                    self.lane_validator_mode(record.lane_id),
-                    iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-                )
-            })
-            .filter_map(|(_, record)| {
-                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                    &record.self_stake,
-                    self.nexus.staking.min_validator_stake,
-                ) else {
-                    return None;
-                };
-                if !meets_min {
-                    return None;
-                }
-                let pk = record.validator.try_signatory()?;
-                let pid = PeerId::from(pk.clone());
-                if !present_peers.contains(&pid) {
-                    return None;
-                }
-                if enforce_topology_membership && !topology_peers.contains(&pid) {
-                    return None;
-                }
-                Some((pid, record.total_stake.clone(), record.validator.clone()))
-            })
-            .collect();
 
-        candidates
-            .retain(|(pid, _, _)| peer_has_live_consensus_key(self.world(), pid, block_height));
-
-        if candidates.is_empty() {
-            let peers: Vec<PeerId> = self
-                .world()
-                .peers()
+        if !active_candidates.is_empty() {
+            let missing: Vec<_> = active_candidates
                 .iter()
-                .filter(|peer| peer_has_live_consensus_key(self.world(), peer, block_height))
-                .filter(|peer| !enforce_topology_membership || topology_peers.contains(peer))
+                .filter(|pid| !topology_peers.contains(*pid))
                 .cloned()
                 .collect();
-            return if peers.is_empty() { None } else { Some(peers) };
+            if !missing.is_empty() {
+                warn!(
+                    commit_topology_len = topology_peers.len(),
+                    active_candidates_len = active_candidates.len(),
+                    missing_len = missing.len(),
+                    "commit topology missing active validators; widening epoch roster filter"
+                );
+                topology_peers.extend(missing);
+            }
         }
-
-        candidates.sort_by(|lhs, rhs| {
-            rhs.1
-                .cmp(&lhs.1)
-                .then_with(|| lhs.2.cmp(&rhs.2))
-                .then_with(|| lhs.0.cmp(&rhs.0))
-        });
-        candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
-
-        let max = usize::try_from(self.nexus.staking.max_validators.get())
-            .unwrap_or(usize::MAX)
-            .min(candidates.len());
-        let peers: Vec<PeerId> = candidates
+    }
+    // Preferred path: council-derived roster for the epoch.
+    if let Some(c) = world.council().get(&epoch).cloned() {
+        // Build PeerIds from council members' signatories.
+        let mut ids: Vec<PeerId> = c
+            .members
             .into_iter()
-            .take(max)
-            .map(|(peer, _, _)| peer)
+            .map(|acct| PeerId::from(acct.signatory().clone()))
             .collect();
-        if peers.is_empty() { None } else { Some(peers) }
+        // Filter to peers known in WSV and preserve order.
+        ids.retain(|pid| present_peers.contains(pid));
+        if enforce_topology_membership {
+            ids.retain(|pid| topology_peers.contains(pid));
+        }
+        if !ids.is_empty() {
+            return Some(ids);
+        }
+    }
+    let mut candidates: Vec<(PeerId, Numeric, AccountId)> = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            matches!(
+                nexus
+                    .staking
+                    .validator_mode(record.lane_id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .filter_map(|(_, record)| {
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                nexus.staking.min_validator_stake,
+            ) else {
+                return None;
+            };
+            if !meets_min {
+                return None;
+            }
+            let pk = record.validator.try_signatory()?;
+            let pid = PeerId::from(pk.clone());
+            if !present_peers.contains(&pid) {
+                return None;
+            }
+            if enforce_topology_membership && !topology_peers.contains(&pid) {
+                return None;
+            }
+            Some((pid, record.total_stake.clone(), record.validator.clone()))
+        })
+        .collect();
+
+    candidates.retain(|(pid, _, _)| peer_has_live_consensus_key(world, pid, block_height));
+
+    if candidates.is_empty() {
+        let peers: Vec<PeerId> = world
+            .peers()
+            .iter()
+            .filter(|peer| peer_has_live_consensus_key(world, peer, block_height))
+            .filter(|peer| !enforce_topology_membership || topology_peers.contains(peer))
+            .cloned()
+            .collect();
+        return if peers.is_empty() { None } else { Some(peers) };
+    }
+
+    candidates.sort_by(|lhs, rhs| {
+        rhs.1
+            .cmp(&lhs.1)
+            .then_with(|| lhs.2.cmp(&rhs.2))
+            .then_with(|| lhs.0.cmp(&rhs.0))
+    });
+    candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
+
+    let max = usize::try_from(nexus.staking.max_validators.get())
+        .unwrap_or(usize::MAX)
+        .min(candidates.len());
+    let peers: Vec<PeerId> = candidates
+        .into_iter()
+        .take(max)
+        .map(|(peer, _, _)| peer)
+        .collect();
+    if peers.is_empty() { None } else { Some(peers) }
+}
+
+impl StakeSnapshot for StateView<'_> {
+    fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>> {
+        let block_height = u64::try_from(self.block_hashes.len()).unwrap_or(u64::MAX);
+        epoch_validator_peer_ids_from_world(
+            self.world(),
+            self.commit_topology.iter().cloned(),
+            block_height,
+            &self.nexus,
+            epoch,
+        )
     }
 }
 
@@ -6019,9 +6089,13 @@ mod stake_snapshot_tests {
         // Query the epoch roster via StakeSnapshot
         let sv = state.view();
         let out = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).unwrap();
+        let fast = state
+            .epoch_validator_peer_ids_fast(0)
+            .expect("fast epoch roster should exist");
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], PeerId::from(kp[1].public_key().clone()));
         assert_eq!(out[1], PeerId::from(kp[0].public_key().clone()));
+        assert_eq!(fast, out);
     }
 
     #[test]
@@ -14105,6 +14179,83 @@ impl State {
         self.world.view()
     }
 
+    /// Create a point-in-time snapshot tuned for query/IVM execution.
+    ///
+    /// This avoids taking the transactions index view and coarse `view_lock`
+    /// used by [`State::view`] while still exposing the full
+    /// [`StateReadOnly`] interface needed by query paths.
+    #[track_caller]
+    pub fn query_view(&self) -> StateQueryView<'_> {
+        const STATE_QUERY_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
+        let caller = core::panic::Location::caller();
+        let total_start = Instant::now();
+
+        let block_hashes_start = Instant::now();
+        let block_hashes = self.block_hashes.view();
+        let block_hashes_wait = block_hashes_start.elapsed();
+
+        let world_start = Instant::now();
+        let world = self.world.view();
+        let world_wait = world_start.elapsed();
+
+        let commit_topology_start = Instant::now();
+        let commit_topology = self.commit_topology.view();
+        let commit_topology_wait = commit_topology_start.elapsed();
+
+        let prev_commit_topology_start = Instant::now();
+        let prev_commit_topology = self.prev_commit_topology.view();
+        let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
+
+        let total_wait = total_start.elapsed();
+        let (mut max_component, mut max_wait) = ("block_hashes", block_hashes_wait);
+        if world_wait > max_wait {
+            max_component = "world";
+            max_wait = world_wait;
+        }
+        if commit_topology_wait > max_wait {
+            max_component = "commit_topology";
+            max_wait = commit_topology_wait;
+        }
+        if prev_commit_topology_wait > max_wait {
+            max_component = "prev_commit_topology";
+            max_wait = prev_commit_topology_wait;
+        }
+        if max_wait >= STATE_QUERY_VIEW_LOG_THRESHOLD {
+            debug!(
+                caller = %caller,
+                max_component,
+                max_wait_us = max_wait.as_micros(),
+                total_wait_us = total_wait.as_micros(),
+                block_hashes_wait_us = block_hashes_wait.as_micros(),
+                world_wait_us = world_wait.as_micros(),
+                commit_topology_wait_us = commit_topology_wait.as_micros(),
+                prev_commit_topology_wait_us = prev_commit_topology_wait.as_micros(),
+                "state query_view acquisition slow"
+            );
+        }
+
+        StateQueryView {
+            world,
+            block_hashes,
+            commit_topology,
+            prev_commit_topology,
+            merge_ledger: &self.merge_ledger,
+            ivm: &self.ivm,
+            kura: &self.kura,
+            query_handle: &self.query_handle,
+            accounts_snapshot_cache: SyncOnceCell::new(),
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
+            pipeline: self.pipeline.clone(),
+            oracle: self.oracle.clone(),
+            crypto: self.crypto(),
+            nexus: self.nexus_snapshot(),
+            zk: self.zk.clone(),
+            content: self.content.clone(),
+            chain_id: self.chain_id.clone(),
+        }
+    }
+
     /// Snapshot of the current commit topology.
     ///
     /// This avoids acquiring a full [`StateView`] when only validator ordering is needed.
@@ -14131,12 +14282,109 @@ impl State {
         self.block_hashes.view().len()
     }
 
+    /// Snapshot committed block hashes from the block-hash journal.
+    ///
+    /// This is cheaper than acquiring a full [`StateView`] when only the committed
+    /// hash sequence is required.
+    #[track_caller]
+    pub fn committed_block_hashes_snapshot(&self) -> Vec<HashOf<BlockHeader>> {
+        self.block_hashes.view().iter().copied().collect()
+    }
+
     /// Load a committed block by height from Kura.
     ///
     /// This avoids acquiring a full [`StateView`] when only block retrieval is needed.
     #[track_caller]
     pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
         self.kura.get_block(height)
+    }
+
+    /// Resolve a committed block height by block hash using Kura's index.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only hash lookup is needed.
+    #[track_caller]
+    pub fn block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
+        self.kura.get_block_height_by_hash(hash)
+    }
+
+    /// Load a committed block by hash from Kura.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only hash-based block retrieval is needed.
+    #[track_caller]
+    pub fn block_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<Arc<SignedBlock>> {
+        self.block_height_by_hash(hash)
+            .and_then(|height| self.block_by_height(height))
+    }
+
+    /// Latest committed block header loaded from Kura.
+    ///
+    /// This avoids acquiring a full [`StateView`] when callers only need the
+    /// latest committed header for contextual validation.
+    #[track_caller]
+    pub fn latest_block_header_fast(&self) -> Option<BlockHeader> {
+        NonZeroUsize::new(self.committed_height())
+            .and_then(|height| self.block_by_height(height))
+            .map(|block| block.header())
+    }
+
+    /// Produce Merkle proofs for an entrypoint hash at the given block height.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only Kura-backed block proof
+    /// construction is required.
+    #[track_caller]
+    pub fn block_proofs_for_entry(
+        &self,
+        block_height: NonZeroU64,
+        entry_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<BlockProofs, BlockProofError> {
+        block_proofs_for_entry_from_kura(&self.kura, block_height, entry_hash)
+    }
+
+    /// Check if any time triggers should fire for a block with the given header.
+    ///
+    /// This avoids acquiring a full [`StateView`] on consensus hot paths that only need
+    /// trigger readiness.
+    #[track_caller]
+    pub fn time_triggers_due_for_block_fast(&self, block_header: &BlockHeader) -> bool {
+        let to = block_header.creation_time();
+        let since = NonZeroUsize::new(self.committed_height())
+            .and_then(|height| self.block_by_height(height))
+            .map_or(to, |latest_block| latest_block.header().creation_time());
+        let (since, length) = to.checked_sub(since).map_or_else(
+            || {
+                warn!(
+                    prev_time_ms = since.as_millis(),
+                    block_time_ms = to.as_millis(),
+                    "Block creation time regressed; clamping time interval to zero."
+                );
+                (to, Duration::ZERO)
+            },
+            |length| (since, length),
+        );
+        let interval = TimeInterval::new(since, length);
+        let event = TimeEvent { interval };
+        let current_block_height = block_header.height().get();
+        let key_height = "__registered_block_height".parse::<Name>().ok();
+        let world = self.world_view();
+        world
+            .triggers()
+            .time_triggers()
+            .iter()
+            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
+            .any(|(_, action)| {
+                let mut count = action.filter.count_matches(&event);
+                if let Repeats::Exactly(repeats) = action.repeats {
+                    count = std::cmp::min(repeats, count);
+                }
+                if count == 0 {
+                    return false;
+                }
+                let registered_height = key_height
+                    .as_ref()
+                    .and_then(|key| action.metadata().get(key))
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                registered_height.is_some_and(|height| height != current_block_height)
+            })
     }
 
     /// Latest committed block hash derived from the block hash journal.
@@ -14178,12 +14426,48 @@ impl State {
         self.transactions.view().get(hash)
     }
 
+    /// Epoch roster lookup without constructing a full [`StateView`].
+    ///
+    /// This reads only the world/commit-topology journals and current Nexus parameters.
+    #[track_caller]
+    pub fn epoch_validator_peer_ids_fast(&self, epoch: u64) -> Option<Vec<PeerId>> {
+        let block_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
+        let world = self.world_view();
+        let commit_topology = self.commit_topology_snapshot();
+        let nexus = self.nexus_snapshot();
+        epoch_validator_peer_ids_from_world(&world, commit_topology, block_height, &nexus, epoch)
+    }
+
     /// Borrow the configured chain identifier.
     ///
     /// This avoids acquiring a full [`StateView`] when only the chain id is needed.
     #[must_use]
     pub fn chain_id_ref(&self) -> &iroha_data_model::ChainId {
         &self.chain_id
+    }
+
+    /// Snapshot the current ZK verification configuration.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only verifier settings are needed.
+    #[must_use]
+    pub fn zk_snapshot(&self) -> iroha_config::parameters::actual::Zk {
+        self.zk.clone()
+    }
+
+    /// Snapshot the current pipeline configuration.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only query/pipeline limits are needed.
+    #[must_use]
+    pub fn pipeline_snapshot(&self) -> iroha_config::parameters::actual::Pipeline {
+        self.pipeline.clone()
+    }
+
+    /// Snapshot the current content configuration.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only content limits/settings are needed.
+    #[must_use]
+    pub fn content_snapshot(&self) -> iroha_config::parameters::actual::Content {
+        self.content.clone()
     }
 
     #[inline]
@@ -15988,6 +16272,102 @@ pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
     }
 }
 
+fn block_proofs_for_entry_from_kura(
+    kura: &Kura,
+    block_height: NonZeroU64,
+    entry_hash: HashOf<TransactionEntrypoint>,
+) -> Result<BlockProofs, BlockProofError> {
+    let height_usize: usize = block_height
+        .get()
+        .try_into()
+        .map_err(|_| BlockProofError::HeightOutOfRange(block_height))?;
+    let height = NonZeroUsize::new(height_usize).ok_or(BlockProofError::ZeroHeight)?;
+    let block = kura
+        .get_block(height)
+        .ok_or(BlockProofError::BlockNotFound(block_height))?;
+
+    let header = block.header();
+    if !block.has_results() {
+        return Err(BlockProofError::MissingResults(block_height));
+    }
+    let entry_hashes: Vec<_> = block.entrypoint_hashes().collect();
+    let (entry_index, _) = entry_hashes
+        .iter()
+        .enumerate()
+        .find(|(_, hash)| **hash == entry_hash)
+        .ok_or(BlockProofError::EntrypointNotFound {
+            entry_hash,
+            block_height,
+        })?;
+
+    let external_count = block.external_transactions().len();
+    let entry_root = if entry_index < external_count {
+        header
+            .merkle_root()
+            .ok_or(BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            })?
+    } else {
+        block
+            .full_entry_merkle_root()
+            .ok_or(BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            })?
+    };
+    let entry_index_u32: u32 =
+        entry_index
+            .try_into()
+            .map_err(|_| BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            })?;
+
+    let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
+    let entry_receipt_proof =
+        entry_merkle
+            .get_proof(entry_index_u32)
+            .ok_or(BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            })?;
+
+    let entry_receipt = BlockReceiptProof::new(entry_hash, entry_receipt_proof);
+
+    let result_root = header.result_merkle_root();
+    let result_receipt = if result_root.is_some() {
+        let result_hashes: Vec<_> = block.result_hashes().collect();
+        let result_hash =
+            *result_hashes
+                .get(entry_index)
+                .ok_or(BlockProofError::ExecutionResultMissing {
+                    entry_hash,
+                    block_height,
+                })?;
+        let result_merkle: CanonMerkleTree<_> = result_hashes.iter().copied().collect();
+        let proof = result_merkle.get_proof(entry_index_u32).ok_or(
+            BlockProofError::ExecutionResultMissing {
+                entry_hash,
+                block_height,
+            },
+        )?;
+        Some(ExecutionReceiptProof::new(result_hash, proof))
+    } else {
+        None
+    };
+
+    Ok(BlockProofs {
+        block_height: header.height(),
+        entry_hash,
+        entry_root,
+        entry_proof: entry_receipt,
+        result_root,
+        result_proof: result_receipt,
+        fastpq_transcripts: block.fastpq_transcripts().clone(),
+    })
+}
+
 /// Canonical read-only snapshot interface for world-state consumers.
 ///
 /// Provides immutable access to world data and consensus topology metadata
@@ -16111,95 +16491,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
         block_height: NonZeroU64,
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<BlockProofs, BlockProofError> {
-        let height_usize: usize = block_height
-            .get()
-            .try_into()
-            .map_err(|_| BlockProofError::HeightOutOfRange(block_height))?;
-        let height = NonZeroUsize::new(height_usize).ok_or(BlockProofError::ZeroHeight)?;
-        let block = self
-            .kura()
-            .get_block(height)
-            .ok_or(BlockProofError::BlockNotFound(block_height))?;
-
-        let header = block.header();
-        if !block.has_results() {
-            return Err(BlockProofError::MissingResults(block_height));
-        }
-        let entry_hashes: Vec<_> = block.entrypoint_hashes().collect();
-        let (entry_index, _) = entry_hashes
-            .iter()
-            .enumerate()
-            .find(|(_, hash)| **hash == entry_hash)
-            .ok_or(BlockProofError::EntrypointNotFound {
-                entry_hash,
-                block_height,
-            })?;
-
-        let external_count = block.external_transactions().len();
-        let entry_root = if entry_index < external_count {
-            header
-                .merkle_root()
-                .ok_or(BlockProofError::MerkleProofUnavailable {
-                    entry_hash,
-                    block_height,
-                })?
-        } else {
-            block
-                .full_entry_merkle_root()
-                .ok_or(BlockProofError::MerkleProofUnavailable {
-                    entry_hash,
-                    block_height,
-                })?
-        };
-        let entry_index_u32: u32 =
-            entry_index
-                .try_into()
-                .map_err(|_| BlockProofError::MerkleProofUnavailable {
-                    entry_hash,
-                    block_height,
-                })?;
-
-        let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
-        let entry_receipt_proof = entry_merkle.get_proof(entry_index_u32).ok_or(
-            BlockProofError::MerkleProofUnavailable {
-                entry_hash,
-                block_height,
-            },
-        )?;
-
-        let entry_receipt = BlockReceiptProof::new(entry_hash, entry_receipt_proof);
-
-        let result_root = header.result_merkle_root();
-        let result_receipt = if result_root.is_some() {
-            let result_hashes: Vec<_> = block.result_hashes().collect();
-            let result_hash =
-                *result_hashes
-                    .get(entry_index)
-                    .ok_or(BlockProofError::ExecutionResultMissing {
-                        entry_hash,
-                        block_height,
-                    })?;
-            let result_merkle: CanonMerkleTree<_> = result_hashes.iter().copied().collect();
-            let proof = result_merkle.get_proof(entry_index_u32).ok_or(
-                BlockProofError::ExecutionResultMissing {
-                    entry_hash,
-                    block_height,
-                },
-            )?;
-            Some(ExecutionReceiptProof::new(result_hash, proof))
-        } else {
-            None
-        };
-
-        Ok(BlockProofs {
-            block_height: header.height(),
-            entry_hash,
-            entry_root,
-            entry_proof: entry_receipt,
-            result_root,
-            result_proof: result_receipt,
-            fastpq_transcripts: block.fastpq_transcripts().clone(),
-        })
+        block_proofs_for_entry_from_kura(self.kura(), block_height, entry_hash)
     }
 
     /// Returns [`Some`] milliseconds since the genesis block was
@@ -16647,7 +16939,7 @@ pub fn compute_confidential_feature_digest(
     )
 }
 
-impl_state_ro! { StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_> }
+impl_state_ro! { StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_>, StateQueryView<'_> }
 
 /// Separate trait for either [`State`] or [`StateBlock`].
 ///
@@ -18558,8 +18850,7 @@ mod block_proof_tests {
             hashes.commit();
         }
 
-        let view = state.view();
-        let proofs = view
+        let proofs = state
             .block_proofs_for_entry(block_arc.header().height(), entry_hash)
             .expect("proofs available");
 
@@ -23063,6 +23354,91 @@ mod tests {
     }
 
     #[test]
+    fn committed_block_hashes_snapshot_reads_block_hash_journal() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let first =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
+        let second =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(first);
+            block_hashes.push_for_tests(second);
+            block_hashes.commit_for_tests();
+        }
+
+        assert_eq!(state.committed_block_hashes_snapshot(), vec![first, second]);
+    }
+
+    #[test]
+    fn pipeline_snapshot_reflects_latest_pipeline_config() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut updated = state.pipeline_snapshot();
+        updated.query_default_cursor_mode =
+            iroha_config::parameters::actual::QueryCursorMode::Stored;
+        updated.query_stored_min_gas_units = updated.query_stored_min_gas_units.saturating_add(77);
+
+        state.set_pipeline(updated.clone());
+
+        let snapshot = state.pipeline_snapshot();
+        assert_eq!(
+            snapshot.query_default_cursor_mode,
+            iroha_config::parameters::actual::QueryCursorMode::Stored
+        );
+        assert_eq!(
+            snapshot.query_stored_min_gas_units,
+            updated.query_stored_min_gas_units
+        );
+    }
+
+    #[test]
+    fn content_snapshot_reflects_latest_content_config() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut updated = state.content_snapshot();
+        updated.max_files = updated.max_files.saturating_add(11);
+        updated.max_bundle_bytes = updated.max_bundle_bytes.saturating_add(1024);
+        state.content = updated.clone();
+
+        let snapshot = state.content_snapshot();
+        assert_eq!(snapshot.max_files, updated.max_files);
+        assert_eq!(snapshot.max_bundle_bytes, updated.max_bundle_bytes);
+    }
+
+    #[test]
+    fn query_view_matches_basic_read_only_snapshot_fields() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let keypair = KeyPair::random();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, keypair.private_key());
+        let block_hash = block.hash();
+        kura.store_block(Arc::new(block))
+            .expect("store block in kura");
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(block_hash);
+            block_hashes.commit_for_tests();
+        }
+
+        let view = state.query_view();
+        assert_eq!(view.height(), 1);
+        assert_eq!(view.latest_block_hash(), Some(block_hash));
+        assert_eq!(view.world().domains().iter().count(), 0);
+    }
+
+    #[test]
     fn prev_commit_topology_snapshot_reads_previous_topology_journal() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -23108,6 +23484,57 @@ mod tests {
             .expect("block should be available");
         assert_eq!(loaded.hash(), block_hash);
         assert!(state.block_by_height(nonzero!(2_usize)).is_none());
+    }
+
+    #[test]
+    fn block_by_hash_reads_kura_without_state_view() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let keypair = KeyPair::random();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, keypair.private_key());
+        let block_hash = block.hash();
+        kura.store_block(Arc::new(block))
+            .expect("store block in kura");
+
+        let loaded = state
+            .block_by_hash(block_hash)
+            .expect("block should be available");
+        assert_eq!(loaded.hash(), block_hash);
+
+        let missing = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new("missing-block"));
+        assert!(state.block_by_hash(missing).is_none());
+    }
+
+    #[test]
+    fn latest_block_header_fast_reads_latest_committed_header() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        assert!(state.latest_block_header_fast().is_none());
+
+        let keypair = KeyPair::random();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 42, 0);
+        let block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, keypair.private_key());
+        let block_hash = block.hash();
+        kura.store_block(Arc::new(block))
+            .expect("store block in kura");
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(block_hash);
+            block_hashes.commit_for_tests();
+        }
+
+        let latest = state
+            .latest_block_header_fast()
+            .expect("latest block header should exist");
+        assert_eq!(latest.height().get(), 1);
+        assert_eq!(latest.creation_time().as_millis(), 42);
     }
 
     #[test]
@@ -30843,6 +31270,15 @@ mod tests {
 
         let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let view = state.view();
+        assert_eq!(
+            state.time_triggers_due_for_block_fast(&header2),
+            view.time_triggers_due_for_block(&header2),
+            "fast helper should match StateView trigger checks"
+        );
+        assert!(
+            state.time_triggers_due_for_block_fast(&header2),
+            "precommit triggers should be due for the next block via fast helper"
+        );
         assert!(
             view.time_triggers_due_for_block(&header2),
             "precommit triggers should be due for the next block"

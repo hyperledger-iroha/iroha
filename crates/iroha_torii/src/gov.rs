@@ -825,12 +825,11 @@ pub async fn handle_gov_council_derive_vrf(
 ) -> Result<JsonBody<CouncilDeriveVrfResponse>, crate::Error> {
     const TERM_BLOCKS: u64 = 43_200; // ~12h @1s
     let gov_cfg = state.gov.clone();
-    let view = state.view();
-    let height = view.height() as u64;
+    let height = state.committed_height() as u64;
     let epoch = body.epoch.unwrap_or(height / TERM_BLOCKS);
-    let chain_id = view.chain_id();
-    let beacon_bytes: [u8; 32] = view
-        .latest_block_hash()
+    let chain_id = state.chain_id_ref();
+    let beacon_bytes: [u8; 32] = state
+        .latest_block_hash_fast()
         .map(|h| *h.as_ref())
         .unwrap_or([0u8; 32]);
     let committee_size = body
@@ -911,11 +910,11 @@ pub struct UnlockStatsResponse {
 pub async fn handle_gov_unlock_stats(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<UnlockStatsResponse>, crate::Error> {
-    let v = state.view();
-    let now_h = v.height() as u64;
+    let world = state.world_view();
+    let now_h = state.committed_height() as u64;
     let mut expired_locks_now: u64 = 0;
     let mut refs_with_expired: u64 = 0;
-    for (_rid, rec) in v.world().governance_locks().iter() {
+    for (_rid, rec) in world.governance_locks().iter() {
         let mut any = false;
         for (_owner, l) in rec.locks.iter() {
             if l.expiry_height <= now_h {
@@ -927,7 +926,7 @@ pub async fn handle_gov_unlock_stats(
             refs_with_expired += 1;
         }
     }
-    let last_sweep_height = *v.world().governance_last_unlock_sweep_height();
+    let last_sweep_height = *world.governance_last_unlock_sweep_height();
     Ok(JsonBody(UnlockStatsResponse {
         height_current: now_h,
         expired_locks_now,
@@ -1242,8 +1241,8 @@ pub async fn handle_gov_get_proposal(
     }
     let mut id_arr = [0u8; 32];
     id_arr.copy_from_slice(&bytes);
-    let v = state.view();
-    let found = v.world().governance_proposals().get(&id_arr).cloned();
+    let world = state.world_view();
+    let found = world.governance_proposals().get(&id_arr).cloned();
     Ok(JsonBody(ProposalGetResponse {
         found: found.is_some(),
         proposal: found,
@@ -1259,8 +1258,8 @@ pub async fn handle_gov_get_locks(
     rid: axum::extract::Path<String>,
 ) -> Result<JsonBody<LocksGetResponse>, crate::Error> {
     let ref_id = rid.0;
-    let v = state.view();
-    let found = v.world().governance_locks().get(&ref_id).cloned();
+    let world = state.world_view();
+    let found = world.governance_locks().get(&ref_id).cloned();
     Ok(JsonBody(LocksGetResponse {
         found: found.is_some(),
         referendum_id: ref_id,
@@ -1277,8 +1276,8 @@ pub async fn handle_gov_get_referendum(
     id: axum::extract::Path<String>,
 ) -> Result<JsonBody<ReferendumGetResponse>, crate::Error> {
     let rid = id.0;
-    let v = state.view();
-    let found = v.world().governance_referenda().get(&rid).copied();
+    let world = state.world_view();
+    let found = world.governance_referenda().get(&rid).copied();
     Ok(JsonBody(ReferendumGetResponse {
         found: found.is_some(),
         referendum: found,
@@ -1294,23 +1293,23 @@ pub async fn handle_gov_get_tally(
     id: axum::extract::Path<String>,
 ) -> Result<JsonBody<TallyGetResponse>, crate::Error> {
     let rid = id.0;
-    let v = state.view();
+    let world = state.world_view();
+    let gov_cfg = state.gov.clone();
     // Mirror FinalizeReferendum tally logic without mutating state.
-    let now_h = v.height() as u64;
+    let now_h = state.committed_height() as u64;
     let mut approve: u128 = 0;
     let mut reject: u128 = 0;
     let mut abstain: u128 = 0;
-    let mode = v
-        .world()
+    let mode = world
         .governance_referenda()
         .get(&rid)
         .map(|rec| rec.mode)
         .unwrap_or(iroha_core::state::GovernanceReferendumMode::Plain);
     match mode {
         iroha_core::state::GovernanceReferendumMode::Plain => {
-            if let Some(locks) = v.world().governance_locks().get(&rid) {
-                let step = v.gov.conviction_step_blocks.max(1);
-                let max_c = v.gov.max_conviction;
+            if let Some(locks) = world.governance_locks().get(&rid) {
+                let step = gov_cfg.conviction_step_blocks.max(1);
+                let max_c = gov_cfg.max_conviction;
                 for (_owner, rec) in locks.locks.iter() {
                     if rec.expiry_height < now_h {
                         continue;
@@ -1330,7 +1329,7 @@ pub async fn handle_gov_get_tally(
             }
         }
         iroha_core::state::GovernanceReferendumMode::Zk => {
-            if let Some(e) = v.world().elections().get(&rid) {
+            if let Some(e) = world.elections().get(&rid) {
                 if e.finalized && e.tally.len() >= 2 {
                     approve = e.tally[0] as u128;
                     reject = e.tally[1] as u128;
@@ -1607,7 +1606,7 @@ pub async fn handle_gov_protected_set(
     let isi = iroha_data_model::isi::SetParameter::new(Parameter::Custom(custom));
 
     // Create a minimal block header: height = current+1
-    let curr_h = state.view().height() as u64;
+    let curr_h = state.committed_height() as u64;
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(curr_h + 1).unwrap(),
         None,
@@ -1664,8 +1663,8 @@ pub async fn handle_gov_protected_get(
     use std::str::FromStr as _;
 
     use iroha_data_model::{name::Name, parameter::CustomParameterId};
-    let v = state.view();
-    let params = v.world().parameters();
+    let world = state.world_view();
+    let params = world.parameters();
     let mut namespaces: Vec<String> = Vec::new();
     let mut found = false;
     if let Ok(name) = Name::from_str("gov_protected_namespaces") {
@@ -1717,9 +1716,8 @@ pub async fn handle_gov_instances_by_ns(
     NoritoQuery(q): NoritoQuery<InstancesQuery>,
 ) -> Result<JsonBody<InstancesByNamespaceResponse>, crate::Error> {
     let namespace = ns.0;
-    let v = state.view();
-    let mut out: Vec<InstanceDto> = v
-        .world()
+    let world = state.world_view();
+    let mut out: Vec<InstanceDto> = world
         .contract_instances()
         .iter()
         .filter_map(|((ns_key, cid), h)| {
@@ -2150,14 +2148,14 @@ pub async fn handle_gov_council_current(
 ) -> Result<JsonBody<CouncilCurrentResponse>, crate::Error> {
     // Return the latest persisted council when available; otherwise fall back to a
     // deterministic derivation that mirrors the VRF spec using configured defaults.
-    let v = state.view();
+    let world = state.world_view();
     let gov_cfg = &state.gov;
     let mut last_epoch: Option<u64> = None;
-    for (ep, _) in v.world().council().iter() {
+    for (ep, _) in world.council().iter() {
         last_epoch = Some(last_epoch.map(|e| e.max(*ep)).unwrap_or(*ep));
     }
     if let Some(epoch) = last_epoch {
-        if let Some(cs) = v.world().council().get(&epoch) {
+        if let Some(cs) = world.council().get(&epoch) {
             return Ok(JsonBody(CouncilCurrentResponse {
                 epoch,
                 members: cs
@@ -2181,12 +2179,12 @@ pub async fn handle_gov_council_current(
         }
     }
     // Fallback derivation (deterministic hash scores using configured parameters)
-    let height = v.height() as u64;
+    let height = state.committed_height() as u64;
     let term_blocks = gov_cfg.parliament_term_blocks.max(1);
     let epoch = height / term_blocks;
-    let chain_id = v.chain_id().to_string();
-    let beacon_bytes: [u8; 32] = v
-        .latest_block_hash()
+    let chain_id = state.chain_id_ref().to_string();
+    let beacon_bytes: [u8; 32] = state
+        .latest_block_hash_fast()
         .map(|h| *h.as_ref())
         .unwrap_or([0u8; 32]);
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
@@ -2208,7 +2206,7 @@ pub async fn handle_gov_council_current(
     };
     use std::collections::HashSet;
     let mut elig: HashSet<iroha_data_model::account::AccountId> = HashSet::new();
-    for (asset_id, value) in v.world().assets().iter() {
+    for (asset_id, value) in world.assets().iter() {
         if asset_id.definition() == &stake_def {
             // Non-zero balance qualifies
             if **value >= min_stake_numeric {
@@ -2347,12 +2345,11 @@ pub async fn handle_gov_council_persist(
 ) -> Result<JsonBody<CouncilPersistResponse>, crate::Error> {
     const TERM_BLOCKS: u64 = 43_200; // ~12h @1s
     let gov_cfg = state.gov.clone();
-    let view = state.view();
-    let height = view.height() as u64;
+    let height = state.committed_height() as u64;
     let epoch = body.epoch.unwrap_or(height / TERM_BLOCKS);
-    let chain_id_ref = view.chain_id();
-    let beacon_bytes: [u8; 32] = view
-        .latest_block_hash()
+    let chain_id_ref = state.chain_id_ref();
+    let beacon_bytes: [u8; 32] = state
+        .latest_block_hash_fast()
         .map(|h| *h.as_ref())
         .unwrap_or([0u8; 32]);
     let committee_size = body
@@ -2496,29 +2493,19 @@ pub async fn handle_gov_council_replace(
     telemetry: crate::routing::MaybeTelemetry,
     NoritoJson(body): NoritoJson<CouncilReplaceRequest>,
 ) -> Result<JsonBody<CouncilReplaceResponse>, crate::Error> {
-    let v = state.view();
+    let world = state.world_view();
     let target_epoch = if let Some(epoch) = body.epoch {
         epoch
     } else {
-        v.world()
-            .council()
-            .iter()
-            .map(|(ep, _)| *ep)
-            .max()
-            .unwrap_or(0)
+        world.council().iter().map(|(ep, _)| *ep).max().unwrap_or(0)
     };
-    let mut term = v
-        .world()
-        .council()
-        .get(&target_epoch)
-        .cloned()
-        .ok_or_else(|| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "no persisted council for epoch".into(),
-                ),
-            ))
-        })?;
+    let mut term = world.council().get(&target_epoch).cloned().ok_or_else(|| {
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "no persisted council for epoch".into(),
+            ),
+        ))
+    })?;
 
     let missing: iroha_data_model::account::AccountId = body.missing.parse().map_err(|_| {
         crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -2581,7 +2568,7 @@ pub async fn handle_gov_council_replace(
         #[cfg(feature = "council_direct_wsv")]
         {
             let mut block = state.block_and_revert(iroha_core::block::BlockHeader::new(
-                nonzero_ext::nonzero!(v.height().max(1) as u64),
+                nonzero_ext::nonzero!(state.committed_height().max(1) as u64),
                 None,
                 None,
                 None,
@@ -2661,19 +2648,18 @@ pub async fn handle_gov_council_audit(
     NoritoQuery(q): NoritoQuery<CouncilAuditQuery>,
 ) -> Result<JsonBody<CouncilAuditResponse>, crate::Error> {
     const TERM_BLOCKS: u64 = 43_200; // ~12h @1s
-    let v = state.view();
-    let height = v.height() as u64;
+    let world = state.world_view();
+    let height = state.committed_height() as u64;
     let epoch = q.epoch.unwrap_or(height / TERM_BLOCKS);
-    let chain_id_ref = v.chain_id();
-    let beacon_bytes: [u8; 32] = v
-        .latest_block_hash()
+    let chain_id_ref = state.chain_id_ref();
+    let beacon_bytes: [u8; 32] = state
+        .latest_block_hash_fast()
         .map(|h| *h.as_ref())
         .unwrap_or([0u8; 32]);
     let seed = parliament::compute_seed(chain_id_ref, epoch, &beacon_bytes);
     let seed_hex = hex::encode(seed);
     let beacon_hex = hex::encode(beacon_bytes);
-    let (members_count, candidate_count, alternates_count, verified, derived_by) = v
-        .world()
+    let (members_count, candidate_count, alternates_count, verified, derived_by) = world
         .council()
         .get(&epoch)
         .map(|c| {

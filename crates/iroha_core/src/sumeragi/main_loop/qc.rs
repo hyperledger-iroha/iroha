@@ -125,10 +125,8 @@ impl Actor {
             Some(pending)
                 if !pending.aborted && pending.validation_status == ValidationStatus::Pending =>
             {
-                let (state_height, tip_hash) = {
-                    let view = self.state.view();
-                    (view.height(), view.latest_block_hash())
-                };
+                let state_height = self.state.committed_height();
+                let tip_hash = self.state.latest_block_hash_fast();
                 pending_extends_tip(
                     pending.height,
                     pending.block.header().prev_block_hash(),
@@ -676,9 +674,13 @@ impl Actor {
                     ConsensusMode::Npos => &mut active_roster_npos,
                 };
                 if cache.is_none() {
-                    let view = self.state.view();
-                    *cache = Some(super::roster::derive_active_topology_for_mode(
-                        &view,
+                    let world = self.state.world_view();
+                    let commit_topology = self.state.commit_topology_snapshot();
+                    let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+                    *cache = Some(super::roster::derive_active_topology_for_mode_from_world(
+                        &world,
+                        commit_topology.as_slice(),
+                        height,
                         self.common_config.trusted_peers.value(),
                         self.common_config.peer.id(),
                         consensus_mode,
@@ -1215,10 +1217,14 @@ impl Actor {
                             return;
                         }
                     };
-                let state_view = self.state.view();
+                let world = self.state.world_view();
+                let commit_topology = self.state.commit_topology_snapshot();
+                let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                 let stake_roster = {
-                    let active = super::roster::derive_active_topology_for_mode(
-                        &state_view,
+                    let active = super::roster::derive_active_topology_for_mode_from_world(
+                        &world,
+                        commit_topology.as_slice(),
+                        height,
                         self.common_config.trusted_peers.value(),
                         self.common_config.peer.id(),
                         consensus_mode,
@@ -1229,8 +1235,8 @@ impl Actor {
                         active
                     }
                 };
-                match super::stake_snapshot::stake_quorum_reached_for_peers(
-                    &state_view,
+                match super::stake_snapshot::stake_quorum_reached_for_world(
+                    &world,
                     &stake_roster,
                     &signer_peers,
                 ) {
@@ -1756,13 +1762,12 @@ impl Actor {
     }
 
     pub(super) fn block_is_empty(&self, hash: HashOf<BlockHeader>) -> Option<bool> {
-        let view = self.state.view();
         if let Some(height) = self.kura.get_block_height_by_hash(hash) {
             if let Some(block) = self.kura.get_block(height) {
                 if !block.is_empty() {
                     return Some(false);
                 }
-                if view.time_triggers_due_for_block(&block.header()) {
+                if self.state.time_triggers_due_for_block_fast(&block.header()) {
                     return Some(false);
                 }
                 return Some(true);
@@ -1772,7 +1777,10 @@ impl Actor {
             if !pending.block.is_empty() {
                 return false;
             }
-            if view.time_triggers_due_for_block(&pending.block.header()) {
+            if self
+                .state
+                .time_triggers_due_for_block_fast(&pending.block.header())
+            {
                 return false;
             }
             true
@@ -2634,17 +2642,16 @@ impl Actor {
             );
         }
         let (stake_snapshot, validation, evidence) = {
-            let state_view = self.state.view();
-            let world = state_view.world();
+            let world = self.state.world_view();
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(world, topology.as_ref()),
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(&world, topology.as_ref()),
             };
             let (validation, evidence) = validate_qc_with_evidence(
                 &self.vote_log,
                 &qc,
                 &topology,
-                world,
+                &world,
                 &self.roster_validation_cache.pops,
                 &self.common_config.chain,
                 consensus_mode,
@@ -3019,10 +3026,8 @@ impl Actor {
                     .pending_blocks
                     .get(&qc.subject_block_hash)
                     .and_then(|pending| {
-                        let (state_height, tip_hash) = {
-                            let view = self.state.view();
-                            (view.height(), view.latest_block_hash())
-                        };
+                        let state_height = self.state.committed_height();
+                        let tip_hash = self.state.latest_block_hash_fast();
                         let parent = pending.block.header().prev_block_hash();
                         super::pending_extends_tip(pending.height, parent, state_height, tip_hash)
                             .then_some(())

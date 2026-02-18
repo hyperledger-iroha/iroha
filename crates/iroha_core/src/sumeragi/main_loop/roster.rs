@@ -44,10 +44,8 @@ pub(super) fn compute_roster_indices_from_state(
     state: &State,
     provider: Option<&Arc<WsvEpochRosterAdapter>>,
 ) -> (u64, usize, Vec<u32>) {
-    let view = state.view();
-    let height = view.height() as u64;
-    let commit_topology: Vec<PeerId> = view.commit_topology.iter().cloned().collect();
-    drop(view);
+    let height = u64::try_from(state.committed_height()).unwrap_or(0);
+    let commit_topology = state.commit_topology_snapshot();
 
     let roster_len = commit_topology.len();
     let indices = compute_roster_indices_from_topology(&commit_topology, provider);
@@ -340,6 +338,7 @@ pub(super) fn filter_roster_with_live_consensus_keys_at_height_world(
         .collect()
 }
 
+#[cfg(test)]
 pub(super) fn filter_roster_with_live_consensus_keys_at_height(
     view: &StateView<'_>,
     roster: Vec<PeerId>,
@@ -348,6 +347,7 @@ pub(super) fn filter_roster_with_live_consensus_keys_at_height(
     filter_roster_with_live_consensus_keys_at_height_world(view.world(), roster, height)
 }
 
+#[cfg(test)]
 fn filter_roster_with_live_consensus_keys(
     view: &StateView<'_>,
     roster: Vec<PeerId>,
@@ -381,10 +381,30 @@ pub(super) fn derive_active_topology_for_mode(
     me: &PeerId,
     consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
-    let commit_topology = view.commit_topology();
+    let height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+    derive_active_topology_for_mode_from_world(
+        view.world(),
+        view.commit_topology().as_slice(),
+        height,
+        trusted,
+        me,
+        consensus_mode,
+    )
+}
+
+/// Mode-aware roster selection with `NPoS` staking bootstrap from world snapshots.
+pub(super) fn derive_active_topology_for_mode_from_world(
+    world: &impl WorldReadOnly,
+    commit_topology: &[PeerId],
+    height: u64,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+    consensus_mode: ConsensusMode,
+) -> Vec<PeerId> {
     let use_commit = !commit_topology.is_empty();
+    let next_height = height.saturating_add(1);
     if matches!(consensus_mode, ConsensusMode::Npos) {
-        let active_roster = active_validator_roster_from_world(view.world());
+        let active_roster = active_validator_roster_from_world(world);
         if !active_roster.is_empty() {
             if use_commit {
                 let commit_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
@@ -423,13 +443,16 @@ pub(super) fn derive_active_topology_for_mode(
             // NPoS needs a canonical roster order so signer indices stay consistent across peers.
             roster = canonicalize_roster(roster);
             if !roster.is_empty() {
-                return filter_roster_with_live_consensus_keys(view, roster);
+                return filter_roster_with_live_consensus_keys_at_height_world(
+                    world,
+                    roster,
+                    next_height,
+                );
             }
         }
     }
-    let roster =
-        derive_active_topology_from_views(view.world(), commit_topology.as_slice(), trusted, me);
-    filter_roster_with_live_consensus_keys(view, roster)
+    let roster = derive_active_topology_from_views(world, commit_topology, trusted, me);
+    filter_roster_with_live_consensus_keys_at_height_world(world, roster, next_height)
 }
 
 #[cfg(test)]
@@ -453,6 +476,29 @@ pub(super) fn derive_local_validator_index_for_mode(
     consensus_mode: ConsensusMode,
 ) -> Option<ValidatorIndex> {
     let roster = derive_active_topology_for_mode(view, trusted, me, consensus_mode);
+    roster.iter().position(|peer| peer == me).and_then(|idx| {
+        u32::try_from(idx)
+            .inspect_err(|err| warn!(?idx, ?err, "local validator index exceeds u32 range"))
+            .ok()
+    })
+}
+
+pub(super) fn derive_local_validator_index_for_mode_from_world(
+    world: &impl WorldReadOnly,
+    commit_topology: &[PeerId],
+    height: u64,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
+    consensus_mode: ConsensusMode,
+) -> Option<ValidatorIndex> {
+    let roster = derive_active_topology_for_mode_from_world(
+        world,
+        commit_topology,
+        height,
+        trusted,
+        me,
+        consensus_mode,
+    );
     roster.iter().position(|peer| peer == me).and_then(|idx| {
         u32::try_from(idx)
             .inspect_err(|err| warn!(?idx, ?err, "local validator index exceeds u32 range"))
@@ -804,6 +850,61 @@ mod tests {
     }
 
     #[test]
+    fn active_topology_for_mode_from_world_matches_view_path() {
+        let keypairs: Vec<KeyPair> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        state.commit_topology.mutate_vec(|vec| *vec = peers.clone());
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peers[0].clone()),
+            others: peers
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(idx, peer_id)| {
+                    let port = 10_001 + u16::try_from(idx).expect("peer index fits u16");
+                    make_peer(peer_id.clone(), port)
+                })
+                .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        };
+        let mode = ConsensusMode::Permissioned;
+        let expected = {
+            let view = state.view();
+            derive_active_topology_for_mode(&view, &trusted, &peers[0], mode)
+        };
+        let world = state.world_view();
+        let commit_topology = state.commit_topology_snapshot();
+        let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+        let actual = derive_active_topology_for_mode_from_world(
+            &world,
+            commit_topology.as_slice(),
+            height,
+            &trusted,
+            &peers[0],
+            mode,
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn active_topology_for_npos_prefers_active_validators() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -1119,6 +1220,65 @@ mod tests {
         );
 
         assert_eq!(idx, ValidatorIndex::try_from(0).ok());
+    }
+
+    #[test]
+    fn local_validator_index_for_mode_from_world_matches_view_path() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(domain, keypair_active.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(8, 0),
+                    self_stake: Numeric::new(8, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new(
+                "127.0.0.1:10000".parse().expect("addr"),
+                peer_active.clone(),
+            ),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let mode = ConsensusMode::Npos;
+        let idx_from_view = {
+            let view = state.view();
+            derive_local_validator_index_for_mode(&view, &trusted, &peer_active, mode)
+        };
+        let world_view = state.world_view();
+        let commit_topology = state.commit_topology_snapshot();
+        let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+        let idx_from_world = derive_local_validator_index_for_mode_from_world(
+            &world_view,
+            commit_topology.as_slice(),
+            height,
+            &trusted,
+            &peer_active,
+            mode,
+        );
+
+        assert_eq!(idx_from_world, idx_from_view);
     }
 
     #[test]
