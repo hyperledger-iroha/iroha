@@ -643,12 +643,7 @@ impl Actor {
             return Ok(());
         }
         let (height, roster_len, roster_indices) = self.current_height_and_roster();
-        let local_signer = {
-            let view = self.state.view();
-            let idx = self.local_validator_index(&view);
-            drop(view);
-            idx
-        };
+        let local_signer = self.local_validator_index_current();
         if let Some(manager) = self.epoch_manager.as_mut() {
             apply_roster_indices_to_manager(manager, roster_len, roster_indices);
         } else {
@@ -686,12 +681,7 @@ impl Actor {
             return Ok(());
         }
         let (height, roster_len, roster_indices) = self.current_height_and_roster();
-        let local_signer = {
-            let view = self.state.view();
-            let idx = self.local_validator_index(&view);
-            drop(view);
-            idx
-        };
+        let local_signer = self.local_validator_index_current();
         if let Some(manager) = self.epoch_manager.as_mut() {
             apply_roster_indices_to_manager(manager, roster_len, roster_indices);
         } else {

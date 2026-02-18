@@ -24,13 +24,22 @@ use crate::state::{WorldReadOnly, WorldStateSnapshot};
 
 /// Return the number of persisted evidence entries currently stored in WSV.
 pub fn evidence_count(state: &impl WorldStateSnapshot) -> usize {
-    state.world().consensus_evidence().iter().count()
+    evidence_count_from_world(state.world())
+}
+
+/// Return the number of persisted evidence entries currently stored in WSV.
+pub fn evidence_count_from_world(world: &impl WorldReadOnly) -> usize {
+    world.consensus_evidence().iter().count()
 }
 
 /// Snapshot persisted evidence records ordered latest-first.
 pub fn evidence_list_snapshot(state: &impl WorldStateSnapshot) -> Vec<EvidenceRecord> {
-    let mut records: Vec<_> = state
-        .world()
+    evidence_list_snapshot_from_world(state.world())
+}
+
+/// Snapshot persisted evidence records ordered latest-first.
+pub fn evidence_list_snapshot_from_world(world: &impl WorldReadOnly) -> Vec<EvidenceRecord> {
+    let mut records: Vec<_> = world
         .consensus_evidence()
         .iter()
         .map(|(_, record)| record.clone())
@@ -41,6 +50,33 @@ pub fn evidence_list_snapshot(state: &impl WorldStateSnapshot) -> Vec<EvidenceRe
             .reverse()
     });
     records
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+
+    #[test]
+    fn evidence_world_helpers_match_state_snapshot_helpers_on_empty_state() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let world = state.world_view();
+        let view = state.view();
+
+        assert_eq!(evidence_count_from_world(&world), evidence_count(&view));
+        assert_eq!(
+            evidence_list_snapshot_from_world(&world),
+            evidence_list_snapshot(&view),
+        );
+    }
 }
 
 fn next_test_block_height() -> NonZeroUsize {
@@ -56,7 +92,7 @@ fn next_height_for_state(state: &mut crate::state::State) -> (NonZeroUsize, NonZ
     let state_ptr: *mut crate::state::State = state;
     let key = state_ptr as usize;
     let mut guard = map.lock().expect("state height mutex");
-    let entry = guard.entry(key).or_insert_with(|| state.view().height());
+    let entry = guard.entry(key).or_insert_with(|| state.committed_height());
     *entry = entry.saturating_add(1);
     let next = *entry;
     let nz_usize = NonZeroUsize::new(next).expect("height non-zero");

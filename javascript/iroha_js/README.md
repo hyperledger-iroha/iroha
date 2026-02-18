@@ -2198,6 +2198,13 @@ console.log(
   `connect sessions=${connectStatus.sessionsActive}/${connectStatus.sessionsTotal}`,
 );
 console.log(`relay status: ${connectStatus.policy?.relayEnabled ? "on" : "off"}`);
+console.log(
+  `relay strategy configured=${connectStatus.policy?.relayStrategy} effective=${connectStatus.policy?.relayEffectiveStrategy}`,
+);
+console.log(`relay p2p attached=${connectStatus.policy?.relayP2pAttached}`);
+console.log(
+  `p2p rebroadcasts=${connectStatus.p2pRebroadcastsTotal} skipped=${connectStatus.p2pRebroadcastSkippedTotal}`,
+);
 
 const preview = createConnectSessionPreview({
   chainId: "test-chain",
@@ -2937,6 +2944,25 @@ helper performs the certificate issue + register steps, returning both payloads
 so you can persist the verdict metadata immediately.
 
 ```js
+const draft = {
+  controller: "ih58:...",
+  operator: "ih58:...", // account whose private key signs the certificate payload
+  allowance: {
+    asset: "usd#wonderland",
+    amount: "10",
+    commitment: [1, 2, 3],
+  },
+  spend_public_key: "ed0120...",
+  attestation_report: [4, 5, 6],
+  issued_at_ms: Date.now(),
+  expires_at_ms: Date.now() + 86_400_000,
+  policy: {
+    max_balance: "10",
+    max_tx_value: "5",
+    expires_at_ms: Date.now() + 86_400_000,
+  },
+};
+
 const topUp = await torii.topUpOfflineAllowance({
   authority: "ih58:...",
   privateKey: "ed25519:...",

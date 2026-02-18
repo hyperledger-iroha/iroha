@@ -2145,6 +2145,27 @@ impl Executor {
         authority: &AccountId,
         query: &QueryRequest,
     ) -> Result<(), ValidationFail> {
+        let latest_block = state_ro.latest_block().map(|block| block.header());
+        self.validate_query_with_world_parts(state_ro.world(), latest_block, authority, query)
+    }
+
+    /// Validate [`QueryRequest`] using world-state and latest committed block header.
+    ///
+    /// This variant avoids requiring a full [`StateReadOnly`] snapshot in callers that
+    /// already have a world view and can cheaply resolve the latest block header.
+    ///
+    /// # Errors
+    ///
+    /// - Failed to prepare the IVM runtime;
+    /// - Failed to execute the entrypoint of the IVM bytecode;
+    /// - Executor denied the operation.
+    pub fn validate_query_with_world_parts(
+        &self,
+        world_ro: &impl WorldReadOnly,
+        latest_block: Option<BlockHeader>,
+        authority: &AccountId,
+        query: &QueryRequest,
+    ) -> Result<(), ValidationFail> {
         trace!("Running query validation");
 
         let query_box = match query {
@@ -2159,9 +2180,9 @@ impl Executor {
         match self {
             Self::Initial => Ok(()),
             Self::UserProvided(loaded_executor) => {
-                let curr_block = state_ro.latest_block().map_or_else(
+                let curr_block = latest_block.map_or_else(
                     || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
-                    |b| b.header(),
+                    core::convert::identity,
                 );
 
                 let context = ExecutorContext {
@@ -2180,7 +2201,7 @@ impl Executor {
                     QueryRequest::Continue(_) => unreachable!("continue queries return early"),
                 };
 
-                let gas_limit = state_ro.world().parameters().executor().fuel.get();
+                let gas_limit = world_ro.parameters().executor().fuel.get();
                 let report =
                     run_executor_validation(loaded_executor, &payload, query_label, gas_limit)?;
                 match report.verdict {

@@ -76,7 +76,7 @@ use crate::{
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
     prelude::*,
-    state::{LaneLifecycleError, State},
+    state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly},
     sumeragi::status,
     telemetry::StateTelemetry,
     tx::CheckedTransaction,
@@ -562,12 +562,12 @@ impl Queue {
     }
 
     fn extract_lane_identity_metadata(
-        state_view: &StateView<'_>,
+        world: &impl WorldReadOnly,
         authority: &AccountId,
         dataspace_id: DataSpaceId,
         lane_alias: &str,
     ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
-        let account_entry = match state_view.world.account(authority) {
+        let account_entry = match world.account(authority) {
             Ok(entry) => entry,
             Err(_) => return Ok((None, Vec::new())),
         };
@@ -575,7 +575,7 @@ impl Queue {
             return Ok((None, Vec::new()));
         };
 
-        let bindings = state_view.world.uaid_dataspaces().get(&uaid).ok_or_else(|| {
+        let bindings = world.uaid_dataspaces().get(&uaid).ok_or_else(|| {
             Error::LaneComplianceDenied {
                 alias: lane_alias.to_string(),
                 reason: format!(
@@ -598,8 +598,7 @@ impl Queue {
             });
         }
 
-        let manifest_set = state_view
-            .world
+        let manifest_set = world
             .space_directory_manifests()
             .get(&uaid)
             .ok_or_else(|| Error::LaneComplianceDenied {
@@ -856,7 +855,7 @@ impl Queue {
         alias: &str,
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
-        state_view: &StateView<'_>,
+        world: &impl WorldReadOnly,
     ) -> Result<(), Error> {
         if rules.protected_namespaces.is_empty() {
             return Ok(());
@@ -1082,8 +1081,7 @@ impl Queue {
                 .clone()
                 .or_else(|| namespaces_from_instructions.iter().next().cloned())
         {
-            let cross_namespace = state_view
-                .world()
+            let cross_namespace = world
                 .contract_instances()
                 .iter()
                 .filter(|((_ns, cid), _)| cid == meta_cid)
@@ -1420,15 +1418,6 @@ impl Queue {
         !self.is_expired(tx.as_accepted()) && !tx.is_in_blockchain(state_view)
     }
 
-    fn is_pending_with_state(
-        &self,
-        hash: SignedTxHash,
-        tx: &CheckedTransaction<'static>,
-        state: &State,
-    ) -> bool {
-        !self.is_expired(tx.as_accepted()) && !state.has_committed_transaction(hash)
-    }
-
     /// Checks if the transaction is waiting longer than its TTL or than the TTL from [`Config`].
     pub fn is_expired(&self, tx: &AcceptedTransaction<'static>) -> bool {
         self.is_expired_at(tx, self.time_source.get_unix_time())
@@ -1470,8 +1459,9 @@ impl Queue {
 
     /// Returns `n` transactions in a batch for gossiping using narrow state accessors.
     pub fn gossip_batch_with_state(&self, n: u32, state: &State) -> Vec<GossipBatchEntry> {
+        let committed_transactions = state.transactions.view();
         self.gossip_batch_inner(n, |hash, tx_ref| {
-            self.is_pending_with_state(hash, tx_ref, state)
+            !self.is_expired(tx_ref.as_accepted()) && committed_transactions.get(&hash).is_none()
         })
     }
 
@@ -1525,13 +1515,24 @@ impl Queue {
         batch
     }
 
-    /// Resolve routing for an inbound gossip transaction using the active router.
-    pub(crate) fn route_for_gossip(
+    /// Resolve routing without a [`StateView`] when the active router supports it.
+    pub(crate) fn route_for_gossip_without_state(
         &self,
         tx: &AcceptedTransaction<'_>,
-        state_view: &StateView<'_>,
+    ) -> Option<RoutingDecision> {
+        self.router.read().route_without_state(tx)
+    }
+
+    /// Resolve routing for an inbound gossip transaction with the current state.
+    ///
+    /// This path prefers no-state routing and only falls back to a short-lived
+    /// snapshot when the active router requires dynamic world data.
+    pub(crate) fn route_for_gossip_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
     ) -> RoutingDecision {
-        self.router.read().route(tx, state_view)
+        self.router.read().route_with_state(tx, state)
     }
 
     /// Returns whether the queue currently tracks the transaction hash.
@@ -1568,12 +1569,8 @@ impl Queue {
         }
     }
 
-    fn check_tx(
-        &self,
-        tx: &CheckedTransaction<'static>,
-        state_view: &StateView,
-    ) -> Result<(), Error> {
-        if tx.is_in_blockchain(state_view) {
+    fn check_tx(&self, tx: &CheckedTransaction<'static>, in_blockchain: bool) -> Result<(), Error> {
+        if in_blockchain {
             Err(Error::InBlockchain)
         } else if self.is_expired(tx.as_accepted()) {
             Err(Error::Expired)
@@ -1593,7 +1590,7 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        let routing_decision = self.router.read().route(&tx, state_view);
+        let routing_decision = self.router.read().route_with_view(&tx, state_view);
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -1612,7 +1609,6 @@ impl Queue {
                 });
             }
         };
-        let authority = checked.as_ref().authority();
         if self.is_expired(checked.as_accepted()) {
             return Err(Failure {
                 tx: Box::new(checked.into_accepted()),
@@ -1621,6 +1617,92 @@ impl Queue {
         }
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state_view.telemetry;
+        self.push_checked_with_lane_context(
+            checked,
+            routing_decision,
+            state_view.world(),
+            gossip_payload,
+            #[cfg(feature = "telemetry")]
+            telemetry_handle,
+        )
+    }
+
+    /// Push transaction into queue using narrow state accessors where possible.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    #[allow(clippy::too_many_lines)]
+    fn push_with_lane_internal_with_state(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal_with_state_and_routing(tx, state, None, gossip_payload)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn push_with_lane_internal_with_state_and_routing(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_decision: Option<RoutingDecision>,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<RoutingDecision, Failure> {
+        let routing_decision =
+            routing_decision.unwrap_or_else(|| self.router.read().route_with_state(&tx, state));
+        let lane_id = routing_decision.lane_id;
+        let dataspace_id = routing_decision.dataspace_id;
+
+        trace!(
+            lane_id = %lane_id,
+            dataspace_id = %dataspace_id,
+            tx = %tx.as_ref().hash(),
+            "Pushing to the queue"
+        );
+
+        let tx_hash = tx.as_ref().hash();
+        if state.has_committed_transaction(tx_hash) {
+            return Err(Failure {
+                tx: tx.into(),
+                err: Error::InBlockchain,
+            });
+        }
+        let checked = CheckedTransaction::new_unchecked(tx);
+        if self.is_expired(checked.as_accepted()) {
+            return Err(Failure {
+                tx: Box::new(checked.into_accepted()),
+                err: Error::Expired,
+            });
+        }
+
+        let world = state.world_view();
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle = state.metrics();
+
+        self.push_checked_with_lane_context(
+            checked,
+            routing_decision,
+            &world,
+            gossip_payload,
+            #[cfg(feature = "telemetry")]
+            telemetry_handle,
+        )
+    }
+
+    /// Shared admission logic once routing + committed-hash checks have been performed.
+    #[allow(clippy::too_many_lines)]
+    fn push_checked_with_lane_context(
+        &self,
+        checked: CheckedTransaction<'static>,
+        routing_decision: RoutingDecision,
+        world: &impl WorldReadOnly,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+        #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
+    ) -> Result<RoutingDecision, Failure> {
+        let lane_id = routing_decision.lane_id;
+        let dataspace_id = routing_decision.dataspace_id;
+        let authority = checked.as_ref().authority();
 
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
@@ -1699,7 +1781,7 @@ impl Queue {
                     });
                 }
                 if let Err(err) =
-                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, state_view)
+                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world)
                 {
                     #[cfg(feature = "telemetry")]
                     if !rules.protected_namespaces.is_empty() {
@@ -1745,10 +1827,9 @@ impl Queue {
             }
         }
 
-        if let Ok(account_entry) = state_view.world.account(authority) {
+        if let Ok(account_entry) = world.account(authority) {
             if let Some(uaid) = account_entry.value().uaid().copied() {
-                let bound = state_view
-                    .world
+                let bound = world
                     .uaid_dataspaces()
                     .get(&uaid)
                     .is_some_and(|bindings| bindings.is_bound_to(dataspace_id, authority));
@@ -1801,7 +1882,7 @@ impl Queue {
         };
 
         let lane_identity = Self::extract_lane_identity_metadata(
-            state_view,
+            world,
             checked.as_ref().authority(),
             dataspace_id,
             &lane_alias,
@@ -2009,6 +2090,44 @@ impl Queue {
         self.push_with_gossip_payload_in_view(tx, &state_view, gossip_payload)
     }
 
+    /// Pushes an accepted transaction into the queue using narrow state accessors and a cached
+    /// gossip payload.
+    ///
+    /// # Errors
+    /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
+    /// full or violates lane limits).
+    pub fn push_with_gossip_payload_with_state(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<(), Failure> {
+        self.push_with_lane_internal_with_state(tx, state, gossip_payload)
+            .map(|_| ())
+    }
+
+    /// Pushes an accepted transaction into the queue using a precomputed routing decision and a
+    /// cached gossip payload.
+    ///
+    /// # Errors
+    /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
+    /// full or violates lane limits).
+    pub(crate) fn push_with_gossip_payload_with_state_and_routing(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_decision: RoutingDecision,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<(), Failure> {
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_decision),
+            gossip_payload,
+        )
+        .map(|_| ())
+    }
+
     /// Push transaction into queue.
     ///
     /// # Errors
@@ -2031,6 +2150,18 @@ impl Queue {
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, Failure> {
         self.push_with_lane_internal(tx, state_view, None)
+    }
+
+    /// Push transaction into queue using narrow state access when possible.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    pub fn push_with_lane_with_state(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal_with_state(tx, state, None)
     }
 
     /// Pushes an accepted transaction into the queue, routing it to the lane resolved from the
@@ -2058,6 +2189,161 @@ impl Queue {
         state_view: &StateView<'_>,
     ) -> Result<(), Failure> {
         self.push_with_lane_in_view(tx, state_view).map(|_| ())
+    }
+
+    /// Reinsert a previously admitted transaction with a precomputed routing decision.
+    ///
+    /// This fast-path is used by consensus requeue flows to avoid holding a full
+    /// [`StateView`] while rebuilding queue state after commit/reschedule failures.
+    ///
+    /// # Errors
+    /// Propagates [`Failure`] when queue limits reject the transaction.
+    pub(crate) fn push_requeued_with_routing(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        routing_decision: RoutingDecision,
+        state: &State,
+    ) -> Result<(), Failure> {
+        let hash = tx.as_ref().hash();
+        if state.has_committed_transaction(hash) {
+            return Err(Failure {
+                tx: Box::new(tx),
+                err: Error::InBlockchain,
+            });
+        }
+
+        let checked = CheckedTransaction::new_unchecked(tx);
+        if self.is_expired(checked.as_accepted()) {
+            return Err(Failure {
+                tx: Box::new(checked.into_accepted()),
+                err: Error::Expired,
+            });
+        }
+
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle = state.metrics();
+        #[cfg(feature = "telemetry")]
+        let pending_teu = Self::compute_teu_weight(checked.as_accepted());
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+
+        let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
+        let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
+        let lane_id = routing_decision.lane_id;
+        let dataspace_id = routing_decision.dataspace_id;
+        let _guard = self.push_remove_lock.lock();
+        let txs_len = self.txs.len();
+        let entry = match self.txs.entry(hash) {
+            Entry::Occupied(_) => {
+                return Err(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err: Error::IsInQueue,
+                });
+            }
+            Entry::Vacant(entry) => entry,
+        };
+
+        if txs_len >= self.capacity.get() {
+            warn!(
+                lane_id = %lane_id,
+                dataspace_id = %dataspace_id,
+                max = self.capacity,
+                "Achieved maximum amount of transactions"
+            );
+            self.publish_backpressure_state(txs_len, backpressure_telemetry);
+            return Err(Failure {
+                tx: checked.as_accepted().clone().into(),
+                err: Error::Full,
+            });
+        }
+
+        if let Err(err) = self.check_and_increase_per_user_tx_count(checked.as_ref().authority()) {
+            return Err(Failure {
+                tx: checked.as_accepted().clone().into(),
+                err,
+            });
+        }
+
+        // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
+        let tx_arc = Arc::new(checked);
+        entry.insert(Arc::clone(&tx_arc));
+        self.routing_decisions.insert(hash, routing_decision);
+        routing_ledger::record(hash, routing_decision);
+        // Drop the local holder before attempting to unwrap on push failure.
+        drop(tx_arc);
+        let mut pushed = self.tx_hashes.push(hash).is_ok();
+        if !pushed {
+            let compacted = self.compact_hash_queue_locked();
+            if compacted > 0 {
+                pushed = self.tx_hashes.push(hash).is_ok();
+            }
+        }
+        if !pushed {
+            warn!("Queue is full");
+            let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+            if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                routing_ledger::discard_if_matches(&hash, decision);
+            }
+            self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
+            self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
+            return Err(Failure {
+                tx: Box::new(
+                    Arc::try_unwrap(err_tx)
+                        .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
+                        .into_accepted(),
+                ),
+                err: Error::Full,
+            });
+        }
+        self.tx_encoded_len.insert(hash, encoded_len);
+        self.tx_gas_cost.insert(hash, proposal_gas_cost);
+        self.track_expiry_hash(hash);
+        #[cfg(feature = "telemetry")]
+        self.record_teu_enqueue(
+            hash,
+            TxTeuInfo {
+                lane_id,
+                dataspace_id,
+                teu: pending_teu,
+            },
+            telemetry_handle,
+        );
+        iroha_logger::debug!(
+            tx = %hash,
+            lane_id = %lane_id,
+            dataspace_id = %dataspace_id,
+            queued = self.tx_hashes.len(),
+            "transaction enqueued from consensus requeue"
+        );
+        self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+        if let Err(err_hash) = self.tx_gossip.push(hash) {
+            warn!(
+                lane_id = %lane_id,
+                dataspace_id = %dataspace_id,
+                tx = %err_hash,
+                "Gossiper is lagging behind, not able to queue tx for gossiping"
+            );
+        }
+        let _ = self.events_sender.send(
+            TransactionEvent {
+                hash,
+                block_height: None,
+                lane_id,
+                dataspace_id,
+                status: TransactionStatus::Queued,
+            }
+            .into(),
+        );
+        trace!(
+            lane_id = %lane_id,
+            dataspace_id = %dataspace_id,
+            len = self.tx_hashes.len(),
+            "Transaction queue length"
+        );
+        self.wake_sumeragi();
+        Ok(())
     }
 
     /// Drop all queued transactions and gossip buffers.
@@ -2127,7 +2413,10 @@ impl Queue {
                 continue;
             };
 
-            if let Err(e) = self.check_tx(tx_arc.as_ref(), state_view) {
+            if let Err(e) = self.check_tx(
+                tx_arc.as_ref(),
+                tx_arc.as_ref().is_in_blockchain(state_view),
+            ) {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -2193,21 +2482,124 @@ impl Queue {
         }
     }
 
+    /// Pop single transaction from the queue using narrow [`State`] accessors.
+    ///
+    /// Removes all transactions that are already committed or expired.
+    fn pop_from_queue_with_state(
+        self: &Arc<Self>,
+        state: &State,
+        expired_transactions: &mut Vec<AcceptedTransaction<'static>>,
+    ) -> Option<TransactionGuard> {
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle = state.metrics();
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+        let committed_transactions = state.transactions.view();
+        loop {
+            let hash = if let Some(hash) = self.tx_hashes.pop() {
+                hash
+            } else {
+                if self.resync_hash_queue_if_needed_with_telemetry(backpressure_telemetry) {
+                    continue;
+                }
+                return None;
+            };
+            if self.removed_hashes.remove(&hash).is_some() {
+                continue;
+            }
+
+            let tx_arc = if let Some(entry) = self.txs.get(&hash) {
+                Arc::clone(entry.value())
+            } else {
+                self.untrack_expiry_hash(&hash);
+                #[cfg(test)]
+                self.vacant_entry_warnings.fetch_add(1, Ordering::Relaxed);
+                warn!("Looks like we're experiencing a high load");
+                continue;
+            };
+
+            if let Err(e) =
+                self.check_tx(tx_arc.as_ref(), committed_transactions.get(&hash).is_some())
+            {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (check_tx)"
+                );
+                iroha_logger::trace!(?hash, ?e, "dropping transaction during queue pop");
+                // Drop the cloned arc before removing to keep expiration recovery effective.
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
+                    self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
+                    if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                    } else {
+                        // Ensure we do not leak entries when the queue-side cache missed the remove.
+                        let _ = routing_ledger::take(&hash);
+                    }
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, Some(telemetry_handle));
+                    if let Error::Expired = e
+                        && let Ok(tx) = Arc::try_unwrap(removed_tx)
+                    {
+                        expired_transactions.push(tx.into_accepted());
+                    }
+                }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                continue;
+            }
+
+            let routing = self
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value())
+                .unwrap_or_default();
+            let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
+            let encoded_len = self
+                .tx_encoded_len
+                .get(&hash)
+                .map(|entry| *entry.value())
+                .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_arc.as_accepted()));
+            let gas_cost = self
+                .tx_gas_cost
+                .get(&hash)
+                .map(|entry| *entry.value())
+                .unwrap_or_else(|| Self::compute_proposal_gas_cost(tx_arc.as_accepted()));
+            #[cfg(feature = "telemetry")]
+            let telemetry_clone = telemetry_handle.clone();
+            self.record_inflight_guard();
+            let guard = TransactionGuard {
+                tx: tx_arc,
+                queue: Arc::clone(self),
+                routing,
+                queue_position,
+                encoded_len,
+                gas_cost,
+                #[cfg(feature = "telemetry")]
+                telemetry: Some(telemetry_clone),
+            };
+            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+            return Some(guard);
+        }
+    }
+
     /// Rebuild the hash queue when it is empty but transactions remain in the map.
     /// Skip resync if there are in-flight guards to avoid re-enqueuing active selections.
-    fn resync_hash_queue_if_needed(&self, state_view: &StateView) -> bool {
+    fn resync_hash_queue_if_needed_with_telemetry(
+        &self,
+        backpressure_telemetry: Option<&StateTelemetry>,
+    ) -> bool {
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
             return false;
         }
         if self.inflight_guards.load(Ordering::Relaxed) > 0 {
             return false;
         }
-        #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
-        #[cfg(not(feature = "telemetry"))]
-        let backpressure_telemetry: Option<&StateTelemetry> = None;
-        #[cfg(not(feature = "telemetry"))]
-        let _ = state_view;
 
         let _guard = self.push_remove_lock.lock();
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
@@ -2244,6 +2636,18 @@ impl Queue {
         }
 
         false
+    }
+
+    /// Rebuild the hash queue when it is empty but transactions remain in the map.
+    /// Skip resync if there are in-flight guards to avoid re-enqueuing active selections.
+    fn resync_hash_queue_if_needed(&self, state_view: &StateView) -> bool {
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = state_view;
+        self.resync_hash_queue_if_needed_with_telemetry(backpressure_telemetry)
     }
 
     /// Return the number of transactions tracked by the queue (queued + in-flight).
@@ -2309,14 +2713,41 @@ impl Queue {
         max_txs_in_block: NonZeroUsize,
         transactions: &mut Vec<TransactionGuard>,
     ) {
+        self.get_transactions_for_block_internal(max_txs_in_block, transactions, |expired| {
+            self.pop_from_queue(state_view, expired)
+        });
+    }
+
+    /// Put transactions into provided vector until they fill the whole block or there are no
+    /// more transactions in the queue, using narrow [`State`] accessors.
+    ///
+    /// BEWARE: Shouldn't be called in parallel with itself.
+    pub fn get_transactions_for_block_with_state(
+        self: &Arc<Self>,
+        state: &State,
+        max_txs_in_block: NonZeroUsize,
+        transactions: &mut Vec<TransactionGuard>,
+    ) {
+        self.get_transactions_for_block_internal(max_txs_in_block, transactions, |expired| {
+            self.pop_from_queue_with_state(state, expired)
+        });
+    }
+
+    fn get_transactions_for_block_internal<F>(
+        self: &Arc<Self>,
+        max_txs_in_block: NonZeroUsize,
+        transactions: &mut Vec<TransactionGuard>,
+        mut pop_next: F,
+    ) where
+        F: FnMut(&mut Vec<AcceptedTransaction<'static>>) -> Option<TransactionGuard>,
+    {
         if transactions.len() >= max_txs_in_block.get() {
             return;
         }
 
         let mut expired_transactions = Vec::new();
 
-        let txs_from_queue =
-            core::iter::from_fn(|| self.pop_from_queue(state_view, &mut expired_transactions));
+        let txs_from_queue = core::iter::from_fn(|| pop_next(&mut expired_transactions));
 
         let transactions_hashes: IndexSet<SignedTxHash> =
             transactions.iter().map(|tx| tx.as_ref().hash()).collect();
@@ -2368,20 +2799,19 @@ impl Queue {
         self.enforce_lane_teu_limits_with_consumption(guards, &mut consumed_teu)
     }
 
-    /// Apply lane-level TEU limits to the provided transaction guards, taking into account any
-    /// previously consumed TEU recorded in `consumed_teu`. Returns transactions that must be
-    /// deferred because serving them would exceed the configured lane capacity.
-    pub fn enforce_lane_teu_limits_with_consumption(
+    /// Apply lane-level TEU limits and return deferred transactions together with routing
+    /// decisions so callers can requeue without recomputing routing.
+    pub fn enforce_lane_teu_limits_with_consumption_and_routing(
         &self,
         guards: &mut Vec<TransactionGuard>,
         consumed_teu: &mut BTreeMap<LaneId, u64>,
-    ) -> Vec<AcceptedTransaction<'static>> {
+    ) -> Vec<(AcceptedTransaction<'static>, RoutingDecision)> {
         if guards.is_empty() {
             return Vec::new();
         }
 
         let mut retained: Vec<TransactionGuard> = Vec::with_capacity(guards.len());
-        let mut deferred: Vec<AcceptedTransaction<'static>> = Vec::new();
+        let mut deferred: Vec<(AcceptedTransaction<'static>, RoutingDecision)> = Vec::new();
 
         let mut drained = std::mem::take(guards);
         drained.sort_by(|left, right| {
@@ -2418,7 +2848,7 @@ impl Queue {
             }
             if new_total > limits.teu_capacity {
                 guard.record_lane_teu_deferral(lane_id, "cap_exceeded", teu);
-                deferred.push(guard.clone_accepted());
+                deferred.push((guard.clone_accepted(), routing));
                 // guard drops here, removing the transaction from the queue.
                 continue;
             }
@@ -2428,6 +2858,20 @@ impl Queue {
 
         *guards = retained;
         deferred
+    }
+
+    /// Apply lane-level TEU limits to the provided transaction guards, taking into account any
+    /// previously consumed TEU recorded in `consumed_teu`. Returns transactions that must be
+    /// deferred because serving them would exceed the configured lane capacity.
+    pub fn enforce_lane_teu_limits_with_consumption(
+        &self,
+        guards: &mut Vec<TransactionGuard>,
+        consumed_teu: &mut BTreeMap<LaneId, u64>,
+    ) -> Vec<AcceptedTransaction<'static>> {
+        self.enforce_lane_teu_limits_with_consumption_and_routing(guards, consumed_teu)
+            .into_iter()
+            .map(|(tx, _routing)| tx)
+            .collect()
     }
 
     fn duration_to_millis(duration: Duration) -> u64 {
@@ -2895,7 +3339,7 @@ impl Queue {
                 }
                 continue;
             }
-            let routing = router.route(tx.as_accepted(), state_view);
+            let routing = router.route_with_view(tx.as_accepted(), state_view);
             self.routing_decisions.insert(*entry.key(), routing);
             #[cfg(feature = "telemetry")]
             {
@@ -2925,6 +3369,80 @@ impl Queue {
 
         #[cfg(feature = "telemetry")]
         self.publish_teu_backlog_metrics(Some(state_view.telemetry));
+    }
+
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn reroute_pending_transactions_with_state(
+        &self,
+        router: &Arc<dyn LaneRouter>,
+        state: &State,
+        lane_catalog: &LaneCatalog,
+        dataspace_catalog: &DataSpaceCatalog,
+    ) {
+        #[cfg(not(feature = "telemetry"))]
+        let _ = (lane_catalog, dataspace_catalog);
+        #[cfg(feature = "telemetry")]
+        {
+            self.tx_teu.clear();
+            self.lane_teu_pending.clear();
+            self.dataspace_teu_pending.clear();
+            for lane in lane_catalog.lanes() {
+                self.lane_teu_pending.insert(lane.id, PendingTeu::default());
+                for dataspace in dataspace_catalog.entries() {
+                    self.dataspace_teu_pending
+                        .insert((lane.id, dataspace.id), PendingTeu::default());
+                }
+            }
+        }
+
+        let committed_transactions = state.transactions.view();
+        let mut route_view: Option<StateView<'_>> = None;
+        for entry in &self.txs {
+            let tx = entry.value();
+            if self.is_expired(tx.as_accepted())
+                || committed_transactions.get(entry.key()).is_some()
+            {
+                #[cfg(feature = "telemetry")]
+                {
+                    self.tx_teu.remove(entry.key());
+                }
+                continue;
+            }
+            let routing = if let Some(routing) = router.route_without_state(tx.as_accepted()) {
+                routing
+            } else {
+                let state_view = route_view.get_or_insert_with(|| state.view());
+                router.route_with_view(tx.as_accepted(), state_view)
+            };
+            self.routing_decisions.insert(*entry.key(), routing);
+            #[cfg(feature = "telemetry")]
+            {
+                let teu = Self::compute_teu_weight(tx.as_accepted());
+                let info = TxTeuInfo {
+                    lane_id: routing.lane_id,
+                    dataspace_id: routing.dataspace_id,
+                    teu,
+                };
+                self.tx_teu.insert(*entry.key(), info);
+                self.lane_teu_pending
+                    .entry(routing.lane_id)
+                    .and_modify(|agg| {
+                        agg.teu = agg.teu.saturating_add(teu);
+                        agg.tx_count += 1;
+                    })
+                    .or_insert(PendingTeu { teu, tx_count: 1 });
+                self.dataspace_teu_pending
+                    .entry((routing.lane_id, routing.dataspace_id))
+                    .and_modify(|agg| {
+                        agg.teu = agg.teu.saturating_add(teu);
+                        agg.tx_count += 1;
+                    })
+                    .or_insert(PendingTeu { teu, tx_count: 1 });
+            }
+        }
+
+        #[cfg(feature = "telemetry")]
+        self.publish_teu_backlog_metrics(Some(state.metrics()));
     }
 
     /// Expose a handle for observing queue load.
@@ -2994,6 +3512,48 @@ impl Queue {
         self.reroute_pending_transactions(&router, state_view, &lane_catalog, &dataspace_catalog);
     }
 
+    /// Refresh routing, limits, manifests, and telemetry after a Nexus catalog update.
+    pub fn reconfigure_nexus_with_state(
+        &self,
+        nexus: &Nexus,
+        state: &State,
+        lane_compliance: Option<Arc<LaneComplianceEngine>>,
+    ) {
+        let lane_catalog = Arc::new(nexus.lane_catalog.clone());
+        let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
+        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+            nexus.routing_policy.clone(),
+            (*dataspace_catalog).clone(),
+            (*lane_catalog).clone(),
+        ));
+        *self.router.write() = Arc::clone(&router);
+        *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
+        *self.lane_catalog.write() = Arc::clone(&lane_catalog);
+        *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
+        *self.lane_compliance.write() = lane_compliance;
+
+        let registry = Arc::new(LaneManifestRegistry::from_config(
+            &lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        ));
+        self.install_lane_manifests(&registry);
+
+        #[cfg(feature = "telemetry")]
+        {
+            state
+                .metrics()
+                .set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
+        }
+
+        self.reroute_pending_transactions_with_state(
+            &router,
+            state,
+            &lane_catalog,
+            &dataspace_catalog,
+        );
+    }
+
     /// Apply a lane lifecycle plan to the WSV and refresh queue routing/limits.
     ///
     /// This helper keeps queue routing, manifests, and telemetry aligned with
@@ -3008,8 +3568,8 @@ impl Queue {
     ) -> Result<(), LaneLifecycleError> {
         let lane_compliance = self.lane_compliance.read().clone();
         state.apply_lane_lifecycle(plan)?;
-        let view = state.view();
-        self.reconfigure_nexus(&view.nexus, &view, lane_compliance);
+        let nexus = state.nexus_snapshot();
+        self.reconfigure_nexus_with_state(&nexus, state, lane_compliance);
         Ok(())
     }
 }
@@ -3282,11 +3842,7 @@ pub mod tests {
     }
 
     impl LaneRouter for StaticRouter {
-        fn route(
-            &self,
-            _tx: &AcceptedTransaction<'_>,
-            _state_view: &StateView<'_>,
-        ) -> RoutingDecision {
+        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
             RoutingDecision::new(self.lane, self.dataspace)
         }
     }
@@ -4431,6 +4987,26 @@ pub mod tests {
     }
 
     #[test]
+    fn queue_accepts_gossip_payload_cache_with_state() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let payload = Arc::new(tx.as_ref().encode());
+
+        queue
+            .push_with_gossip_payload_with_state(tx, &state, Some(Arc::clone(&payload)))
+            .expect("push tx with payload through state");
+
+        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
+        assert_eq!(stored_payload.as_slice(), payload.as_slice());
+    }
+
+    #[test]
     fn push_in_view_accepts_multiple_transactions_with_shared_snapshot() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -4447,6 +5023,49 @@ pub mod tests {
             .expect("second push");
 
         assert_eq!(queue.queued_len(), 2);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_multiple_transactions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        queue
+            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+            .expect("first push");
+        queue
+            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+            .expect("second push");
+
+        assert_eq!(queue.queued_len(), 2);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_committed_transaction() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let tx_hash = tx.as_ref().hash();
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(tx_hash, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("transactions block should commit");
+        }
+
+        let err = queue
+            .push_with_lane_with_state(tx, &state)
+            .expect_err("committed transaction must be rejected");
+        assert!(matches!(err.err, Error::InBlockchain));
+        assert_eq!(err.tx.as_ref().as_ref().hash(), tx_hash);
     }
 
     #[test]
@@ -4949,7 +5568,7 @@ pub mod tests {
     }
 
     #[test]
-    fn route_for_gossip_uses_router_decision() {
+    fn route_for_gossip_with_state_uses_router_decision() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
@@ -4967,11 +5586,207 @@ pub mod tests {
         );
 
         let tx = accepted_tx_by_someone(&time_source);
-        let state_view = state.view();
-        let routing = queue.route_for_gossip(&tx, &state_view);
+        let routing = queue.route_for_gossip_with_state(&tx, state.as_ref());
 
         assert_eq!(routing.lane_id, expected_lane);
         assert_eq!(routing.dataspace_id, expected_dataspace);
+    }
+
+    #[test]
+    fn route_for_gossip_with_state_prefers_no_state_router_path() {
+        struct PanicOnViewRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for PanicOnViewRouter {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+                panic!("route() should not be called when route_without_state is available");
+            }
+
+            fn route_without_state(
+                &self,
+                _tx: &AcceptedTransaction<'_>,
+            ) -> Option<RoutingDecision> {
+                Some(RoutingDecision::new(self.lane, self.dataspace))
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let expected_lane = LaneId::new(3);
+        let expected_dataspace = DataSpaceId::new(9);
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(PanicOnViewRouter {
+                lane: expected_lane,
+                dataspace: expected_dataspace,
+            }),
+        );
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let routing = queue.route_for_gossip_with_state(&tx, state.as_ref());
+
+        assert_eq!(routing.lane_id, expected_lane);
+        assert_eq!(routing.dataspace_id, expected_dataspace);
+    }
+
+    #[test]
+    fn route_for_gossip_with_state_falls_back_to_view_router_path() {
+        struct ViewOnlyRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for ViewOnlyRouter {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+                panic!("route() should not be used for view-only routers");
+            }
+
+            fn route_with_view(
+                &self,
+                _tx: &AcceptedTransaction<'_>,
+                _state_view: &StateView<'_>,
+            ) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+
+            fn route_without_state(
+                &self,
+                _tx: &AcceptedTransaction<'_>,
+            ) -> Option<RoutingDecision> {
+                None
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let expected_lane = LaneId::new(4);
+        let expected_dataspace = DataSpaceId::new(11);
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(ViewOnlyRouter {
+                lane: expected_lane,
+                dataspace: expected_dataspace,
+            }),
+        );
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let routing = queue.route_for_gossip_with_state(&tx, state.as_ref());
+
+        assert_eq!(routing.lane_id, expected_lane);
+        assert_eq!(routing.dataspace_id, expected_dataspace);
+    }
+
+    #[test]
+    fn reroute_pending_transactions_with_state_uses_view_router_fallback() {
+        struct ViewOnlyRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for ViewOnlyRouter {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+                panic!("route() should not be used for view-only routers");
+            }
+
+            fn route_with_view(
+                &self,
+                _tx: &AcceptedTransaction<'_>,
+                _state_view: &StateView<'_>,
+            ) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+
+            fn route_without_state(
+                &self,
+                _tx: &AcceptedTransaction<'_>,
+            ) -> Option<RoutingDecision> {
+                None
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push");
+
+        let expected_lane = LaneId::new(6);
+        let expected_dataspace = DataSpaceId::new(14);
+        let router: Arc<dyn LaneRouter> = Arc::new(ViewOnlyRouter {
+            lane: expected_lane,
+            dataspace: expected_dataspace,
+        });
+        let lane_catalog = queue.lane_catalog.read().clone();
+        let dataspace_catalog = queue.dataspace_catalog.read().clone();
+
+        queue.reroute_pending_transactions_with_state(
+            &router,
+            state.as_ref(),
+            &lane_catalog,
+            &dataspace_catalog,
+        );
+
+        let routing = queue
+            .routing_decisions
+            .get(&hash)
+            .expect("routing decision should exist");
+        assert_eq!(routing.lane_id, expected_lane);
+        assert_eq!(routing.dataspace_id, expected_dataspace);
+    }
+
+    #[test]
+    fn push_with_gossip_payload_with_state_and_routing_skips_router_lookup() {
+        struct PanicRouter;
+
+        impl LaneRouter for PanicRouter {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+                panic!("route() should not be called when routing is precomputed");
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test_with_router(config_factory(), &time_source, Arc::new(PanicRouter));
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let payload = Arc::new(vec![1_u8, 2, 3, 4]);
+        queue
+            .push_with_gossip_payload_with_state_and_routing(
+                tx,
+                state.as_ref(),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL),
+                Some(Arc::clone(&payload)),
+            )
+            .expect("push with precomputed routing should succeed");
+
+        let routing = queue
+            .routing_decisions
+            .get(&hash)
+            .expect("routing decision should exist");
+        assert_eq!(routing.lane_id, LaneId::SINGLE);
+        assert_eq!(routing.dataspace_id, DataSpaceId::GLOBAL);
+        let stored_payload = queue
+            .tx_gossip_payloads
+            .get(&hash)
+            .expect("cached gossip payload should exist");
+        assert_eq!(stored_payload.as_slice(), payload.as_slice());
     }
 
     fn config_factory() -> Config {
@@ -5114,17 +5929,81 @@ pub mod tests {
     }
 
     #[test]
+    fn enforce_lane_teu_limits_with_routing_returns_requeue_hint() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let first_tx = accepted_tx_by_someone(&time_source);
+        let lane_capacity = Queue::compute_teu_weight(&first_tx);
+        assert!(
+            lane_capacity > 0,
+            "expected positive TEU weight for sample transaction"
+        );
+
+        let test_lane = LaneId::new(9);
+        let test_dataspace = DataSpaceId::new(3);
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: test_lane,
+            dataspace: test_dataspace,
+        });
+        let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
+        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        *queue_inner.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
+        let queue = Arc::new(queue_inner);
+
+        let first_hash = first_tx.as_ref().hash();
+        queue
+            .push(first_tx, state.view())
+            .expect("first push should succeed");
+
+        let second_tx = accepted_tx_by_someone(&time_source);
+        let second_hash = second_tx.as_ref().hash();
+        queue
+            .push(second_tx, state.view())
+            .expect("second push should succeed");
+
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
+        assert_eq!(guards.len(), 2, "expected both transactions before gating");
+
+        let mut consumed = BTreeMap::new();
+        let deferred =
+            queue.enforce_lane_teu_limits_with_consumption_and_routing(&mut guards, &mut consumed);
+        assert_eq!(guards.len(), 1, "one transaction should remain");
+        assert_eq!(deferred.len(), 1, "one transaction should defer");
+        assert_eq!(
+            guards[0].as_ref().hash(),
+            first_hash,
+            "first transaction should remain executable"
+        );
+
+        let (deferred_tx, deferred_routing) = deferred.into_iter().next().expect("deferred tx");
+        assert_eq!(deferred_tx.as_ref().hash(), second_hash);
+        assert_eq!(deferred_routing.lane_id, test_lane);
+        assert_eq!(deferred_routing.dataspace_id, test_dataspace);
+
+        drop(guards);
+        queue
+            .push_requeued_with_routing(deferred_tx, deferred_routing, state.as_ref())
+            .expect("requeue with explicit routing should succeed");
+
+        let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
+        assert_eq!(next.len(), 1, "deferred transaction should be queued next");
+        assert_eq!(next[0].as_ref().hash(), second_hash);
+    }
+
+    #[test]
     fn overweight_lane_not_starved_when_not_first_in_batch() {
         struct SequenceRouter {
             decisions: parking_lot::Mutex<Vec<RoutingDecision>>,
         }
 
         impl LaneRouter for SequenceRouter {
-            fn route(
-                &self,
-                _tx: &AcceptedTransaction<'_>,
-                _state_view: &crate::state::StateView<'_>,
-            ) -> RoutingDecision {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
                 let mut decisions = self.decisions.lock();
                 decisions.remove(0)
             }
@@ -5529,11 +6408,7 @@ pub mod tests {
         }
 
         impl LaneRouter for StaticRouter {
-            fn route(
-                &self,
-                _tx: &AcceptedTransaction<'_>,
-                _state_view: &crate::state::StateView<'_>,
-            ) -> RoutingDecision {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
             }
         }
@@ -5627,11 +6502,7 @@ pub mod tests {
         }
 
         impl LaneRouter for TaggedRouter {
-            fn route(
-                &self,
-                _tx: &AcceptedTransaction<'_>,
-                _state_view: &crate::state::StateView<'_>,
-            ) -> RoutingDecision {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
             }
         }
@@ -5914,6 +6785,36 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn get_transactions_for_block_with_state_rebuilds_hash_queue_when_empty() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        for _ in 0..3 {
+            queue
+                .push(accepted_tx_by_someone(&time_source), state.view())
+                .expect("push succeeds");
+        }
+
+        while queue.tx_hashes.pop().is_some() {}
+        assert_eq!(queue.queued_len(), 0, "hash queue should be empty");
+        assert_eq!(queue.txs.len(), 3, "tx map retains queued entries");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block_with_state(state.as_ref(), nonzero!(2_usize), &mut guards);
+        assert_eq!(guards.len(), 2, "resync should repopulate hashes");
+        drop(guards);
+
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "remaining queue size should be tracked"
+        );
+    }
+
+    #[tokio::test]
     async fn resync_skips_when_guards_inflight() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -6030,6 +6931,76 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         assert!(matches!(
             queue.push(tx, state.view()),
+            Err(Failure {
+                err: Error::InBlockchain,
+                ..
+            })
+        ));
+        assert_eq!(queue.txs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn push_requeued_with_routing_accepts_pending_transaction() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+
+        queue
+            .push_requeued_with_routing(tx, routing, &state)
+            .expect("requeue push succeeds");
+
+        assert_eq!(queue.txs.len(), 1);
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(routing)
+        );
+
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("queued tx should be available");
+        assert!(expired.is_empty());
+        assert_eq!(guard.as_ref().hash(), hash);
+        assert_eq!(guard.routing(), routing);
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn push_requeued_with_routing_rejects_committed_transaction() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let tx = accepted_tx_by_someone(&time_source);
+        let (_, private_key) = KeyPair::random().into_parts();
+        let unverified_block: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(&private_key, |header| {
+                header.height = nonzero!(1_u64);
+            })
+            .into();
+        let mut state_block = state.block(unverified_block.header());
+        let block_height: NonZeroUsize = unverified_block
+            .header()
+            .height()
+            .try_into()
+            .expect("block height should fit into usize");
+        state_block
+            .transactions
+            .insert_block_with_single_tx(tx.as_ref().hash(), block_height);
+        state_block.commit().unwrap();
+        let queue = Queue::test(config_factory(), &time_source);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+
+        assert!(matches!(
+            queue.push_requeued_with_routing(tx, routing, &state),
             Err(Failure {
                 err: Error::InBlockchain,
                 ..

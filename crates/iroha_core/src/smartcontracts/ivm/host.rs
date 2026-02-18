@@ -77,7 +77,7 @@ use crate::{
         triggers::{TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly},
     },
     state::{
-        StateBlock, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
+        StateBlock, StateQueryView, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
         current_axt_slot_from_block,
     },
 };
@@ -371,6 +371,8 @@ impl<QRef> Default for QueryStateSlot<QRef> {
 pub enum QueryStateRef<'block, 'tx, 'state> {
     /// Query against a state view snapshot.
     View(&'block StateView<'state>),
+    /// Query against a lightweight state query snapshot.
+    QueryView(&'block StateQueryView<'state>),
     /// Query against a state block snapshot.
     Block(&'block StateBlock<'state>),
     /// Query against a state transaction snapshot.
@@ -395,6 +397,17 @@ impl<'state> QueryStateSource for StateView<'state> {
 
     fn as_query_state_ref(&self) -> Self::Ref<'_> {
         QueryStateRef::View(self)
+    }
+}
+
+impl<'state> QueryStateSource for StateQueryView<'state> {
+    type Ref<'a>
+        = QueryStateRef<'a, 'state, 'state>
+    where
+        Self: 'a;
+
+    fn as_query_state_ref(&self) -> Self::Ref<'_> {
+        QueryStateRef::QueryView(self)
     }
 }
 
@@ -638,6 +651,9 @@ where
             QueryStateRef::View(view) => {
                 execute_query_on_state_with_budget(view, authority, request, budget_items)
             }
+            QueryStateRef::QueryView(view) => {
+                execute_query_on_state_with_budget(view, authority, request, budget_items)
+            }
             QueryStateRef::Block(block) => {
                 execute_query_on_state_with_budget(block, authority, request, budget_items)
             }
@@ -699,6 +715,9 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             QueryStateRef::View(view) => {
                 CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(view, trigger_id)
             }
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(view, trigger_id)
+            }
             QueryStateRef::Block(block) => {
                 CoreHostImpl::<NoQueryState>::subscription_context_for_trigger(block, trigger_id)
             }
@@ -716,6 +735,9 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             QueryStateRef::View(view) => {
                 CoreHostImpl::<NoQueryState>::subscription_state_for_nft(view, nft_id)
             }
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_state_for_nft(view, nft_id)
+            }
             QueryStateRef::Block(block) => {
                 CoreHostImpl::<NoQueryState>::subscription_state_for_nft(block, nft_id)
             }
@@ -731,6 +753,9 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
     ) -> Result<SubscriptionPlan, ivm::VMError> {
         match *self {
             QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::subscription_plan(view, plan_id)
+            }
+            QueryStateRef::QueryView(view) => {
                 CoreHostImpl::<NoQueryState>::subscription_plan(view, plan_id)
             }
             QueryStateRef::Block(block) => {

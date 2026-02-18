@@ -92,6 +92,8 @@ struct BusShared {
     sequence_violation_closes_total: AtomicU64,
     role_direction_mismatch_total: AtomicU64,
     ping_miss_total: AtomicU64,
+    p2p_rebroadcasts_total: AtomicU64,
+    p2p_rebroadcast_skipped_total: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -697,6 +699,20 @@ impl Bus {
         if matches!(frame.kind, proto::FrameKind::Ciphertext(_)) {
             self.shared.ciphertext_total.fetch_add(1, Ordering::Relaxed);
         }
+        let key = SeenKey {
+            sid: frame.sid,
+            dir: frame.dir,
+            seq: frame.seq,
+        };
+        let mut seen = self.seen.lock().await;
+        if !seen.record_if_new(key) {
+            self.shared
+                .dedupe_drops_total
+                .fetch_add(1, Ordering::Relaxed);
+            return; // duplicate
+        }
+        drop(seen);
+
         if let proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce }) = &frame.kind {
             let target = match frame.dir {
                 proto::Dir::AppToWallet => proto::Role::Wallet,
@@ -765,19 +781,6 @@ impl Bus {
                 .await;
             return;
         }
-        let key = SeenKey {
-            sid: frame.sid,
-            dir: frame.dir,
-            seq: frame.seq,
-        };
-        let mut seen = self.seen.lock().await;
-        if !seen.record_if_new(key) {
-            self.shared
-                .dedupe_drops_total
-                .fetch_add(1, Ordering::Relaxed);
-            return; // duplicate
-        }
-        drop(seen);
         // If control frame, capture permissions for diagnostics
         if let proto::FrameKind::Control(ctrl) = &frame.kind {
             match ctrl {
@@ -859,10 +862,17 @@ impl Bus {
         // Re-broadcast to peers (best effort). Multi-hop flood with dedupe.
         if self.policy.relay_enabled && self.policy.relay_strategy == RelayStrategy::Broadcast {
             if let Some(net) = self.p2p.read().await.as_ref() {
+                self.shared
+                    .p2p_rebroadcasts_total
+                    .fetch_add(1, Ordering::Relaxed);
                 net.broadcast(iroha_p2p::Broadcast {
                     data: corelib::NetworkMessage::Connect(Box::new(frame)),
                     priority: iroha_p2p::Priority::Low,
                 });
+            } else {
+                self.shared
+                    .p2p_rebroadcast_skipped_total
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -1643,6 +1653,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_frame_does_not_close_session() {
+        let bus = Bus::new();
+        let sid = [0x6Au8; 32];
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        let f1 = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 11 }),
+        };
+        bus.relay(f1.clone()).await;
+        let got1 = wallet_inbox
+            .recv()
+            .await
+            .expect("wallet should receive first frame");
+        assert_eq!(got1.seq, 1);
+
+        // Duplicate seq=1 should be dropped by dedupe, not treated as sequence violation.
+        bus.relay(f1).await;
+        assert!(
+            timeout(Duration::from_millis(50), wallet_inbox.recv())
+                .await
+                .is_err(),
+            "duplicate frame should not be delivered"
+        );
+        assert!(
+            timeout(Duration::from_millis(50), app_inbox.recv())
+                .await
+                .is_err(),
+            "duplicate frame should not close the session"
+        );
+
+        let f2 = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 2,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 12 }),
+        };
+        bus.relay(f2).await;
+        let got2 = wallet_inbox
+            .recv()
+            .await
+            .expect("wallet should receive next contiguous frame");
+        assert_eq!(got2.seq, 2);
+
+        let st = bus.status().await;
+        assert!(st.dedupe_drops_total >= 1);
+        assert_eq!(st.sequence_violation_closes_total, 0);
+    }
+
+    #[tokio::test]
     async fn closes_session_on_role_direction_mismatch() {
         let bus = Bus::new();
         let sid = [0x9Au8; 32];
@@ -1708,12 +1771,297 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "centralized_gateway",
+            relay_strategy: "bogus_strategy",
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg);
         let status = bus.status().await;
         assert_eq!(status.policy.relay_strategy, "local_only");
+        assert_eq!(status.policy.relay_effective_strategy, "local_only");
+        assert!(!status.policy.relay_p2p_attached);
+    }
+
+    #[tokio::test]
+    async fn relay_strategy_aliases_normalize_to_local_only() {
+        for relay_strategy in ["local_only", "local-only", "local"] {
+            let cfg = iroha_config::parameters::actual::Connect {
+                enabled: true,
+                ws_max_sessions: 1000,
+                ws_per_ip_max_sessions: 10,
+                ws_rate_per_ip_per_min: 120,
+                session_ttl: Duration::from_mins(5),
+                frame_max_bytes: 64_000,
+                session_buffer_max_bytes: 262_144,
+                ping_interval: Duration::from_secs(30),
+                ping_miss_tolerance: 3,
+                ping_min_interval: Duration::from_secs(15),
+                dedupe_ttl: Duration::from_mins(2),
+                dedupe_cap: 8192,
+                relay_enabled: true,
+                relay_strategy,
+                p2p_ttl_hops: 0,
+            };
+            let bus = Bus::from_config(&cfg);
+            let status = bus.status().await;
+            assert_eq!(status.policy.relay_strategy, "local_only");
+            assert_eq!(status.policy.relay_effective_strategy, "local_only");
+            assert!(!status.policy.relay_p2p_attached);
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_strategy_parser_trims_and_lowercases() {
+        let broadcast_cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "  BROADCAST  ",
+            p2p_ttl_hops: 0,
+        };
+        let broadcast_bus = Bus::from_config(&broadcast_cfg);
+        let broadcast_status = broadcast_bus.status().await;
+        assert_eq!(broadcast_status.policy.relay_strategy, "broadcast");
+        assert_eq!(
+            broadcast_status.policy.relay_effective_strategy,
+            "local_only"
+        );
+        assert!(!broadcast_status.policy.relay_p2p_attached);
+
+        let local_cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "  LOCAL-ONLY  ",
+            p2p_ttl_hops: 0,
+        };
+        let local_bus = Bus::from_config(&local_cfg);
+        let local_status = local_bus.status().await;
+        assert_eq!(local_status.policy.relay_strategy, "local_only");
+        assert_eq!(local_status.policy.relay_effective_strategy, "local_only");
+        assert!(!local_status.policy.relay_p2p_attached);
+    }
+
+    #[tokio::test]
+    async fn broadcast_strategy_records_p2p_rebroadcast_when_network_attached() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        {
+            let mut p2p = bus.p2p.write().await;
+            *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
+        }
+        let sid = [0xB1u8; 32];
+        let _app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        let frame = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 42 }),
+        };
+        bus.relay(frame).await;
+        let got = wallet_inbox
+            .recv()
+            .await
+            .expect("wallet should receive frame");
+        assert_eq!(got.seq, 1);
+
+        let status = bus.status().await;
+        assert!(status.policy.relay_p2p_attached);
+        assert_eq!(status.policy.relay_effective_strategy, "broadcast");
+        assert_eq!(status.p2p_rebroadcasts_total, 1);
+        assert_eq!(status.p2p_rebroadcast_skipped_total, 0);
+    }
+
+    #[tokio::test]
+    async fn broadcast_strategy_without_network_does_not_increment_rebroadcast_counter() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        let sid = [0xB4u8; 32];
+        let _app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        let frame = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 45 }),
+        };
+        bus.relay(frame).await;
+        let got = wallet_inbox
+            .recv()
+            .await
+            .expect("wallet should receive frame");
+        assert_eq!(got.seq, 1);
+
+        let status = bus.status().await;
+        assert_eq!(
+            status.policy.relay_strategy, "broadcast",
+            "policy should still report broadcast"
+        );
+        assert!(!status.policy.relay_p2p_attached);
+        assert_eq!(
+            status.policy.relay_effective_strategy, "local_only",
+            "without a P2P network, broadcast falls back to local-only delivery"
+        );
+        assert_eq!(status.p2p_rebroadcasts_total, 0);
+        assert_eq!(
+            status.p2p_rebroadcast_skipped_total, 1,
+            "rebroadcast should be skipped when no P2P network is attached"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_only_strategy_skips_p2p_rebroadcast_when_network_attached() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "bogus_strategy",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        {
+            let mut p2p = bus.p2p.write().await;
+            *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
+        }
+        let sid = [0xB2u8; 32];
+        let _app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        let frame = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 43 }),
+        };
+        bus.relay(frame).await;
+        let got = wallet_inbox
+            .recv()
+            .await
+            .expect("wallet should receive frame");
+        assert_eq!(got.seq, 1);
+
+        let status = bus.status().await;
+        assert_eq!(
+            status.policy.relay_strategy, "local_only",
+            "unsupported relay strategy should be forced to local_only"
+        );
+        assert!(status.policy.relay_p2p_attached);
+        assert_eq!(status.policy.relay_effective_strategy, "local_only");
+        assert_eq!(status.p2p_rebroadcasts_total, 0);
+        assert_eq!(status.p2p_rebroadcast_skipped_total, 0);
+    }
+
+    #[tokio::test]
+    async fn relay_disabled_skips_p2p_rebroadcast_when_network_attached() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: false,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        {
+            let mut p2p = bus.p2p.write().await;
+            *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
+        }
+        let sid = [0xB3u8; 32];
+        let _app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        let frame = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 44 }),
+        };
+        bus.relay(frame).await;
+        let got = wallet_inbox
+            .recv()
+            .await
+            .expect("wallet should receive frame");
+        assert_eq!(got.seq, 1);
+
+        let status = bus.status().await;
+        assert!(!status.policy.relay_enabled);
+        assert!(status.policy.relay_p2p_attached);
+        assert_eq!(status.policy.relay_effective_strategy, "local_only");
+        assert_eq!(status.p2p_rebroadcasts_total, 0);
+        assert_eq!(status.p2p_rebroadcast_skipped_total, 0);
     }
 
     #[tokio::test]
@@ -2054,6 +2402,11 @@ impl Bus {
             let seen = self.seen.lock().await;
             seen.map.len()
         };
+        let relay_p2p_attached = self.p2p.read().await.is_some();
+        let relay_effective_strategy = self
+            .policy
+            .effective_relay_strategy(relay_p2p_attached)
+            .as_str();
         ConnectStatus {
             enabled: true,
             sessions_total: self.shared.sessions_total.load(Ordering::Relaxed),
@@ -2071,6 +2424,8 @@ impl Bus {
                 session_buffer_max_bytes: self.policy.session_buffer_max_bytes,
                 relay_enabled: self.policy.relay_enabled,
                 relay_strategy: self.policy.relay_strategy.as_str(),
+                relay_effective_strategy,
+                relay_p2p_attached,
                 heartbeat_interval_ms: self.policy.heartbeat_interval.as_millis() as u64,
                 heartbeat_miss_tolerance: self.policy.heartbeat_miss_tolerance,
                 heartbeat_min_interval_ms: self.policy.heartbeat_min_interval.as_millis() as u64,
@@ -2094,6 +2449,11 @@ impl Bus {
                 .role_direction_mismatch_total
                 .load(Ordering::Relaxed),
             ping_miss_total: self.shared.ping_miss_total.load(Ordering::Relaxed),
+            p2p_rebroadcasts_total: self.shared.p2p_rebroadcasts_total.load(Ordering::Relaxed),
+            p2p_rebroadcast_skipped_total: self
+                .shared
+                .p2p_rebroadcast_skipped_total
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -2197,6 +2557,8 @@ pub struct ConnectStatus {
     pub sequence_violation_closes_total: u64,
     pub role_direction_mismatch_total: u64,
     pub ping_miss_total: u64,
+    pub p2p_rebroadcasts_total: u64,
+    pub p2p_rebroadcast_skipped_total: u64,
 }
 
 #[derive(Clone, Copy, JsonSerialize)]
@@ -2209,6 +2571,8 @@ pub struct ConnectPolicyStatus {
     pub session_buffer_max_bytes: usize,
     pub relay_enabled: bool,
     pub relay_strategy: &'static str,
+    pub relay_effective_strategy: &'static str,
+    pub relay_p2p_attached: bool,
     pub heartbeat_interval_ms: u64,
     pub heartbeat_miss_tolerance: u32,
     pub heartbeat_min_interval_ms: u64,
@@ -2259,6 +2623,18 @@ impl Default for Policy {
             heartbeat_interval: Duration::from_secs(30),
             heartbeat_miss_tolerance: 3,
             heartbeat_min_interval: Duration::from_secs(15),
+        }
+    }
+}
+
+impl Policy {
+    fn effective_relay_strategy(self, relay_p2p_attached: bool) -> RelayStrategy {
+        if !self.relay_enabled {
+            return RelayStrategy::LocalOnly;
+        }
+        match self.relay_strategy {
+            RelayStrategy::Broadcast if relay_p2p_attached => RelayStrategy::Broadcast,
+            _ => RelayStrategy::LocalOnly,
         }
     }
 }

@@ -491,13 +491,8 @@ impl SnapshotMaker {
     /// Invoke snapshot creation task
     fn create_snapshot(&mut self) {
         let store_dir = self.store_dir.clone();
-        let latest_block_hash;
-        let at_height;
-        {
-            let state_view = self.state.view();
-            latest_block_hash = state_view.latest_block_hash();
-            at_height = state_view.height();
-        }
+        let latest_block_hash = self.state.latest_block_hash_fast();
+        let at_height = self.state.committed_height();
 
         if latest_block_hash != self.latest_block_hash {
             let state = self.state.clone();
@@ -525,7 +520,7 @@ impl SnapshotMaker {
     /// Might return [`None`] if the configuration is not suitable for _making_ snapshots.
     pub fn from_config(config: &Config, state: Arc<State>, signing_key: KeyPair) -> Option<Self> {
         if let Mode::ReadWrite = config.mode {
-            let latest_block_hash = state.view().latest_block_hash();
+            let latest_block_hash = state.latest_block_hash_fast();
             Some(Self {
                 state,
                 create_every: config.create_every_ms.get(),
@@ -861,11 +856,8 @@ fn try_read_snapshot_bundle(
             actual: state.chain_id.clone(),
         });
     }
-    let (snapshot_height, snapshot_hashes) = {
-        let state_view = state.view();
-        let hashes = state_view.block_hashes.iter().copied().collect::<Vec<_>>();
-        (state_view.height(), hashes)
-    };
+    let snapshot_hashes = state.committed_block_hashes_snapshot();
+    let snapshot_height = snapshot_hashes.len();
     if snapshot_height > block_count {
         return Err(TryReadError::MismatchedHeight {
             snapshot_height,

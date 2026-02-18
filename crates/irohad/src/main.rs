@@ -25,8 +25,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        Arc,
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -61,7 +60,7 @@ use iroha_core::{
     queue::{ConfigLaneRouter, LaneRouter, Queue, SingleLaneRouter},
     smartcontracts::isi::Registrable as _,
     snapshot::{SnapshotMaker, TryReadError as TryReadSnapshotError, try_read_snapshot},
-    state::{State, StateView, World, WorldReadOnly},
+    state::{State, World, WorldReadOnly},
     streaming::{FilesystemSoranetProvisioner, ManifestPublisher, run_ticket_event_listener},
     sumeragi::{
         GenesisWithPubKey, RbcStoreConfig, SumeragiHandle, SumeragiStartArgs, VotingBlock,
@@ -89,11 +88,11 @@ use iroha_primitives::addr::SocketAddr;
 use iroha_primitives::erasure::rs16;
 use iroha_primitives::json::Json;
 use iroha_primitives::time::TimeSource;
-use mv::storage::StorageReadOnly;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use iroha_version::BuildLine;
+use mv::storage::StorageReadOnly;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
 use tokio::{
@@ -127,7 +126,9 @@ fn parse_manifest_crypto_str(raw: &str) -> Result<ManifestCrypto, norito::Error>
     }
 }
 
-fn parse_confidential_registry_meta_str(raw: &str) -> Result<ConfidentialRegistryMeta, norito::Error> {
+fn parse_confidential_registry_meta_str(
+    raw: &str,
+) -> Result<ConfidentialRegistryMeta, norito::Error> {
     if let Ok(meta) = norito::json::from_str(raw) {
         Ok(meta)
     } else {
@@ -170,7 +171,10 @@ fn extract_jsonish_scalar(raw: &str, key: &str) -> Option<String> {
 }
 
 fn extract_jsonish_bool(raw: &str, key: &str) -> Option<bool> {
-    match extract_jsonish_scalar(raw, key)?.to_ascii_lowercase().as_str() {
+    match extract_jsonish_scalar(raw, key)?
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "true" => Some(true),
         "false" => Some(false),
         _ => None,
@@ -325,7 +329,9 @@ fn decode_crypto_manifest_meta(payload: &Json) -> Result<ManifestCrypto, norito:
 
     let preview: String = payload.get().chars().take(256).collect();
     tracing::warn!(preview = %preview, "failed to decode crypto_manifest_meta payload");
-    Err(norito::Error::Message("failed to decode crypto_manifest_meta payload".to_string()))
+    Err(norito::Error::Message(
+        "failed to decode crypto_manifest_meta payload".to_string(),
+    ))
 }
 
 fn decode_confidential_registry_meta(
@@ -663,8 +669,7 @@ mod handshake_payload_tests {
     #[test]
     fn decode_confidential_registry_meta_handles_normal_json() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let payload =
-            Json::from_string_unchecked(format!("{{\"vk_set_hash\":\"{hash}\"}}"));
+        let payload = Json::from_string_unchecked(format!("{{\"vk_set_hash\":\"{hash}\"}}"));
         let decoded =
             decode_confidential_registry_meta(&payload).expect("decode confidential payload");
         assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
@@ -673,18 +678,17 @@ mod handshake_payload_tests {
     #[test]
     fn decode_confidential_registry_meta_handles_mangled_key_value_separators() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let payload =
-            Json::from_string_unchecked(format!("{{\"vk_set_hash\"\"{hash}\"}}"));
-        let decoded =
-            decode_confidential_registry_meta(&payload).expect("decode mangled confidential payload");
+        let payload = Json::from_string_unchecked(format!("{{\"vk_set_hash\"\"{hash}\"}}"));
+        let decoded = decode_confidential_registry_meta(&payload)
+            .expect("decode mangled confidential payload");
         assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
     }
 
     #[test]
     fn parse_confidential_registry_hash_treats_null_as_absent() {
         let payload = Json::from_string_unchecked("{\"vk_set_hash\"null}".to_string());
-        let decoded = parse_confidential_registry_hash(&payload)
-            .expect("decode null confidential payload");
+        let decoded =
+            parse_confidential_registry_hash(&payload).expect("decode null confidential payload");
         assert_eq!(decoded, None);
     }
 }
@@ -1262,25 +1266,30 @@ impl ConsensusIngressLimiter {
         network: &iroha_config::parameters::actual::Network,
         sumeragi: &iroha_config::parameters::actual::Sumeragi,
     ) -> Self {
-        let msg_rate = network.consensus_ingress_rate_per_sec.map(|rate| BucketConfig {
-            rate_per_sec: rate,
-            burst: network.consensus_ingress_burst.unwrap_or(rate),
-        });
-        let bytes_rate = network.consensus_ingress_bytes_per_sec.map(|rate| BucketConfig {
-            rate_per_sec: rate,
-            burst: network.consensus_ingress_bytes_burst.unwrap_or(rate),
-        });
+        let msg_rate = network
+            .consensus_ingress_rate_per_sec
+            .map(|rate| BucketConfig {
+                rate_per_sec: rate,
+                burst: network.consensus_ingress_burst.unwrap_or(rate),
+            });
+        let bytes_rate = network
+            .consensus_ingress_bytes_per_sec
+            .map(|rate| BucketConfig {
+                rate_per_sec: rate,
+                burst: network.consensus_ingress_bytes_burst.unwrap_or(rate),
+            });
         let bulk_scale = Self::bulk_scale_factor(Duration::from_millis(
             iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
         ));
         let bulk_msg_rate = msg_rate.map(|cfg| cfg.scaled(bulk_scale));
         let bulk_bytes_rate = bytes_rate.map(|cfg| cfg.scaled(bulk_scale));
-        let critical_msg_rate = network
-            .consensus_ingress_critical_rate_per_sec
-            .map(|rate| BucketConfig {
-                rate_per_sec: rate,
-                burst: network.consensus_ingress_critical_burst.unwrap_or(rate),
-            });
+        let critical_msg_rate =
+            network
+                .consensus_ingress_critical_rate_per_sec
+                .map(|rate| BucketConfig {
+                    rate_per_sec: rate,
+                    burst: network.consensus_ingress_critical_burst.unwrap_or(rate),
+                });
         let critical_bytes_rate = network
             .consensus_ingress_critical_bytes_per_sec
             .map(|rate| BucketConfig {
@@ -1294,10 +1303,8 @@ impl ConsensusIngressLimiter {
             window: network.consensus_ingress_penalty_window,
             cooldown: network.consensus_ingress_penalty_cooldown,
         };
-        let rbc_session_limit = Self::resolve_rbc_session_limit(
-            network.consensus_ingress_rbc_session_limit,
-            sumeragi,
-        );
+        let rbc_session_limit =
+            Self::resolve_rbc_session_limit(network.consensus_ingress_rbc_session_limit, sumeragi);
         Self::new(
             msg_rate,
             bytes_rate,
@@ -1312,8 +1319,8 @@ impl ConsensusIngressLimiter {
     }
 
     fn bulk_scale_factor(block_time: Duration) -> u32 {
-        let base_ms = u128::from(iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS)
-            .max(1);
+        let base_ms =
+            u128::from(iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS).max(1);
         let block_ms = block_time.as_millis().max(1);
         let scale = base_ms.div_ceil(block_ms);
         u32::try_from(scale).unwrap_or(u32::MAX).max(1)
@@ -1332,11 +1339,7 @@ impl ConsensusIngressLimiter {
         Self::rbc_session_limit_from_ttl(configured, sumeragi.rbc.session_ttl, block_time)
     }
 
-    fn rbc_session_limit_from_ttl(
-        configured: usize,
-        ttl: Duration,
-        block_time: Duration,
-    ) -> usize {
+    fn rbc_session_limit_from_ttl(configured: usize, ttl: Duration, block_time: Duration) -> usize {
         // Scale the cap to cover fast pipelines without dropping in-flight RBC sessions.
         if configured == 0 || ttl.is_zero() {
             return configured;
@@ -1344,10 +1347,7 @@ impl ConsensusIngressLimiter {
         let block_ms = block_time.as_millis().max(1);
         let ttl_ms = ttl.as_millis().max(1);
         let expected = usize::try_from(ttl_ms / block_ms).unwrap_or(usize::MAX);
-        let padded = expected
-            .saturating_add(1)
-            .saturating_mul(2)
-            .max(1);
+        let padded = expected.saturating_add(1).saturating_mul(2).max(1);
         configured.max(padded)
     }
 
@@ -1389,21 +1389,18 @@ impl ConsensusIngressLimiter {
                 && self.critical_msg_rate.is_none()
                 && self.critical_bytes_rate.is_none());
         let now = Instant::now();
-        let entry = self
-            .peers
-            .entry(peer.id().clone())
-            .or_insert_with(|| {
-                PeerIngressState::new(
-                    now,
-                    self.msg_rate,
-                    self.bytes_rate,
-                    self.bulk_msg_rate,
-                    self.bulk_bytes_rate,
-                    self.critical_msg_rate,
-                    self.critical_bytes_rate,
-                    self.penalty,
-                )
-            });
+        let entry = self.peers.entry(peer.id().clone()).or_insert_with(|| {
+            PeerIngressState::new(
+                now,
+                self.msg_rate,
+                self.bytes_rate,
+                self.bulk_msg_rate,
+                self.bulk_bytes_rate,
+                self.critical_msg_rate,
+                self.critical_bytes_rate,
+                self.penalty,
+            )
+        });
         if apply_penalty && entry.penalty.is_suppressed(now) {
             return Some(ConsensusIngressDropReason::Penalty);
         }
@@ -1416,8 +1413,7 @@ impl ConsensusIngressLimiter {
                 }
                 return Some(ConsensusIngressDropReason::Rate);
             }
-            let size_bytes_f64 =
-                f64::from(u32::try_from(size_bytes).unwrap_or(u32::MAX));
+            let size_bytes_f64 = f64::from(u32::try_from(size_bytes).unwrap_or(u32::MAX));
             if let Some(bucket) = entry.bytes_bucket_for(rate_class)
                 && !bucket.allow(size_bytes_f64, now)
             {
@@ -1492,10 +1488,7 @@ impl PeerIngressState {
         }
     }
 
-    fn msg_bucket_for(
-        &mut self,
-        class: IngressRateClass,
-    ) -> Option<&mut TokenBucket> {
+    fn msg_bucket_for(&mut self, class: IngressRateClass) -> Option<&mut TokenBucket> {
         match class {
             IngressRateClass::Limited => self.msg_bucket.as_mut(),
             IngressRateClass::Bulk => self.bulk_msg_bucket.as_mut(),
@@ -1509,10 +1502,7 @@ impl PeerIngressState {
         }
     }
 
-    fn bytes_bucket_for(
-        &mut self,
-        class: IngressRateClass,
-    ) -> Option<&mut TokenBucket> {
+    fn bytes_bucket_for(&mut self, class: IngressRateClass) -> Option<&mut TokenBucket> {
         match class {
             IngressRateClass::Limited => self.bytes_bucket.as_mut(),
             IngressRateClass::Bulk => self.bulk_bytes_bucket.as_mut(),
@@ -1575,8 +1565,7 @@ impl LowPriorityIngressLimiter {
         {
             return Some(LowPriorityIngressDropReason::Rate);
         }
-        let size_bytes_f64 =
-            f64::from(u32::try_from(size_bytes).unwrap_or(u32::MAX));
+        let size_bytes_f64 = f64::from(u32::try_from(size_bytes).unwrap_or(u32::MAX));
         if let Some(bucket) = entry.bytes_bucket.as_mut()
             && !bucket.allow(size_bytes_f64, now)
         {
@@ -1587,11 +1576,7 @@ impl LowPriorityIngressLimiter {
 }
 
 impl LowPriorityPeerState {
-    fn new(
-        now: Instant,
-        msg_rate: Option<BucketConfig>,
-        bytes_rate: Option<BucketConfig>,
-    ) -> Self {
+    fn new(now: Instant, msg_rate: Option<BucketConfig>, bytes_rate: Option<BucketConfig>) -> Self {
         Self {
             msg_bucket: msg_rate.map(|cfg| TokenBucket::new(cfg, now)),
             bytes_bucket: bytes_rate.map(|cfg| TokenBucket::new(cfg, now)),
@@ -2010,15 +1995,13 @@ impl NetworkRelay {
 
 impl NetworkRelayShared {
     #[allow(clippy::too_many_lines)]
-    async fn handle_message(
-        &self,
-        peer: Peer,
-        msg: iroha_core::NetworkMessage,
-        size_bytes: usize,
-    ) {
+    async fn handle_message(&self, peer: Peer, msg: iroha_core::NetworkMessage, size_bytes: usize) {
         use iroha_core::NetworkMessage::*;
 
-        if matches!(&msg, SumeragiBlock(_) | SumeragiControlFlow(_) | BlockSync(_)) {
+        if matches!(
+            &msg,
+            SumeragiBlock(_) | SumeragiControlFlow(_) | BlockSync(_)
+        ) {
             let reason = {
                 let mut limiter = self
                     .consensus_ingress
@@ -2214,9 +2197,7 @@ impl NetworkRelayShared {
     }
 
     #[cfg(feature = "telemetry")]
-    fn consensus_ingress_topic_label(
-        msg: &iroha_core::NetworkMessage,
-    ) -> Option<&'static str> {
+    fn consensus_ingress_topic_label(msg: &iroha_core::NetworkMessage) -> Option<&'static str> {
         use iroha_p2p::network::message::Topic;
 
         match msg.topic() {
@@ -2365,8 +2346,10 @@ impl NetworkRelayShared {
         let mut matches_current = false;
         match self.kiso.get_dto().await {
             Ok(dto) => {
-                matches_current =
-                    Self::pow_summary_matches_broadcast(&dto.network.soranet_handshake.pow, &update);
+                matches_current = Self::pow_summary_matches_broadcast(
+                    &dto.network.soranet_handshake.pow,
+                    &update,
+                );
                 logger = dto.logger;
             }
             Err(err) => {
@@ -2525,6 +2508,7 @@ mod network_relay_tests {
         parameters::actual::{SoranetPow, SoranetPuzzle},
     };
     use iroha_core::{
+        SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         block::BlockBuilder,
         block_sync::message::{GetBlocksAfter, Message as BlockSyncMessage, ShareBlocks},
         sumeragi::{
@@ -2537,7 +2521,6 @@ mod network_relay_tests {
             },
         },
         tx::AcceptedTransaction,
-        SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
@@ -2549,9 +2532,10 @@ mod network_relay_tests {
     };
 
     use super::{
-        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, LowPriorityIngressDropReason,
-        LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        enqueue_sumeragi_block_message, pow_update_payload, sumeragi_block_message_requires_blocking,
+        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter,
+        LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
+        enqueue_sumeragi_block_message, pow_update_payload,
+        sumeragi_block_message_requires_blocking,
     };
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
@@ -2594,9 +2578,8 @@ mod network_relay_tests {
     #[test]
     fn sumeragi_block_message_requires_blocking_matches_expected_variants() {
         let signed = signed_block_for_test();
-        let created = BlockMessage::BlockCreated(
-            iroha_core::sumeragi::message::BlockCreated::from(&signed),
-        );
+        let created =
+            BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
         assert!(sumeragi_block_message_requires_blocking(&created));
 
         let init = BlockMessage::RbcInit(RbcInit {
@@ -2706,11 +2689,7 @@ mod network_relay_tests {
         pow.max_future_skew = Duration::from_secs(900);
         pow.min_ticket_ttl = Duration::from_secs(120);
         pow.ticket_ttl = Duration::from_secs(240);
-        pow.puzzle = Some(SoranetPuzzle::new(
-            nz_u32(131_072),
-            nz_u32(3),
-            nz_u32(2),
-        ));
+        pow.puzzle = Some(SoranetPuzzle::new(nz_u32(131_072), nz_u32(3), nz_u32(2)));
 
         let payload = pow_update_payload(&pow, 42).expect("payload");
         let decoded: SoranetPowConfigBroadcast =
@@ -2764,17 +2743,15 @@ mod network_relay_tests {
 
     fn block_created_msg() -> iroha_core::NetworkMessage {
         let signed = signed_block_for_test();
-        let created = BlockMessage::BlockCreated(
-            iroha_core::sumeragi::message::BlockCreated::from(&signed),
-        );
+        let created =
+            BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
         sumeragi_msg(created)
     }
 
     fn proposal_hint_msg() -> iroha_core::NetworkMessage {
         let parent_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x20; 32]));
-        let block_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; 32]));
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; 32]));
         let hint = iroha_core::sumeragi::message::ProposalHint {
             block_hash,
             height: 2,
@@ -2820,8 +2797,7 @@ mod network_relay_tests {
     }
 
     fn exec_witness_msg() -> iroha_core::NetworkMessage {
-        let block_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; 32]));
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; 32]));
         let msg = ExecWitnessMsg {
             block_hash,
             height: 2,
@@ -2934,8 +2910,10 @@ mod network_relay_tests {
         );
         let leader_key = KeyPair::random();
         let (_, leader_private) = leader_key.into_parts();
-        let leader_signature =
-            BlockSignature::new(0, SignatureOf::from_hash(&leader_private, block_header.hash()));
+        let leader_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(&leader_private, block_header.hash()),
+        );
         let init = iroha_core::sumeragi::consensus::RbcInit {
             block_hash,
             height,
@@ -3039,8 +3017,8 @@ mod network_relay_tests {
             BTreeSet::new(),
         ));
 
-        let sanitized = NetworkRelayShared::sanitize_block_sync_message(&peer, msg)
-            .expect("expected message");
+        let sanitized =
+            NetworkRelayShared::sanitize_block_sync_message(&peer, msg).expect("expected message");
         let BlockSyncMessage::GetBlocksAfter(get) = sanitized else {
             panic!("unexpected block sync variant");
         };
@@ -3615,10 +3593,9 @@ mod snapshot_read_error_tests {
         ));
 
         let io = std::io::Error::new(std::io::ErrorKind::Other, "boom");
-        assert!(!snapshot_read_error_is_recoverable(&TryReadSnapshotError::IO(
-            io,
-            std::path::PathBuf::from("snapshot.data")
-        )));
+        assert!(!snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::IO(io, std::path::PathBuf::from("snapshot.data"))
+        ));
 
         assert!(!snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::ChainIdMismatch {
@@ -3828,7 +3805,9 @@ impl Iroha {
         let stored_genesis_block = read_stored_genesis_block(kura.as_ref(), block_count)?;
         let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
 
-        let effective_genesis_public_key = if let Some(stored_genesis) = stored_genesis_block.as_ref() {
+        let effective_genesis_public_key = if let Some(stored_genesis) =
+            stored_genesis_block.as_ref()
+        {
             let stored_key = genesis_public_key_from_genesis_block(stored_genesis)?;
             if stored_key != config.genesis.public_key {
                 iroha_logger::warn!(
@@ -3837,9 +3816,10 @@ impl Iroha {
                     "genesis.public_key does not match stored genesis; using stored key for restart"
                 );
             }
-            if let (Some(config_hash), Some(stored_hash)) =
-                (config.genesis.expected_hash.as_ref(), stored_genesis_hash.as_ref())
-            {
+            if let (Some(config_hash), Some(stored_hash)) = (
+                config.genesis.expected_hash.as_ref(),
+                stored_genesis_hash.as_ref(),
+            ) {
                 if config_hash != stored_hash {
                     iroha_logger::warn!(
                         configured = ?config_hash,
@@ -3866,7 +3846,7 @@ impl Iroha {
         ) {
             Ok(state) => {
                 iroha_logger::info!(
-                    at_height = state.view().height(),
+                    at_height = state.committed_height(),
                     "Successfully loaded the state from a snapshot"
                 );
                 state
@@ -3925,7 +3905,7 @@ impl Iroha {
                 report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
             })?;
 
-        let state_height = state.view().height();
+        let state_height = state.committed_height();
         if block_count.0 > state_height {
             let start_height = state_height.saturating_add(1);
             iroha_logger::info!(
@@ -4017,8 +3997,12 @@ impl Iroha {
                 let telemetry_task = state.telemetry.clone();
                 let governance_task = Arc::clone(&governance_catalog);
                 let registry_cfg_task = registry_cfg.clone();
-                lane_manifest_task =
-                    Some((queue_task, telemetry_task, governance_task, registry_cfg_task));
+                lane_manifest_task = Some((
+                    queue_task,
+                    telemetry_task,
+                    governance_task,
+                    registry_cfg_task,
+                ));
             }
             #[cfg(not(feature = "telemetry"))]
             {
@@ -4054,12 +4038,14 @@ impl Iroha {
         // Compute consensus handshake caps for gating peers
         // Use WSV Sumeragi parameters (canonical JSON) so fingerprint is stable across peers
         let (computed_mode_tag, computed_bls_domain, consensus_caps, confidential_features) = {
-            let sv = state.view();
-            let height = u64::try_from(sv.height()).expect("height fits into u64");
+            let world = state.world_view();
+            let height = u64::try_from(state.committed_height()).expect("height fits into u64");
+            let zk = state.zk_snapshot();
             let confidential_features =
-                iroha_core::state::compute_confidential_feature_digest(sv.world(), &sv.zk, height);
+                iroha_core::state::compute_confidential_feature_digest(&world, &zk, height);
             let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
-                &sv,
+                &world,
+                height,
                 &config,
                 &config_caps,
                 consensus_caps_override.clone(),
@@ -4348,8 +4334,7 @@ impl Iroha {
                 // a single local peer, which would otherwise isolate the node and stall
                 // consensus.
                 let commit_topology: Vec<_> = {
-                    let view = state.view();
-                    let peers = view.commit_topology();
+                    let peers = state.commit_topology_snapshot();
                     if peers.is_empty() {
                         let mut validator_roster =
                             filter_validators_from_trusted(config.common.trusted_peers.value());
@@ -4372,7 +4357,7 @@ impl Iroha {
                         }
                         validator_roster
                     } else {
-                        peers.to_vec()
+                        peers
                     }
                 };
                 let topology = Topology::new(commit_topology.clone());
@@ -4399,8 +4384,8 @@ impl Iroha {
                                 .attach(format!("failed to commit injected genesis state: {err}"))
                         })?;
                         let params_snapshot = {
-                            let view = state.view();
-                            let params = view.world().parameters();
+                            let world = state.world_view();
+                            let params = world.parameters();
                             (
                                 params.block().max_transactions().get(),
                                 params.smart_contract().execution_depth(),
@@ -4419,9 +4404,9 @@ impl Iroha {
                             iroha_config::parameters::actual::ConsensusMode::Npos
                         ) {
                             let (active_bls, active_total, pending, total) = {
-                                let view = state.view();
+                                let world = state.world_view();
                                 npos_validator_status_counts(
-                                    view.world()
+                                    world
                                         .public_lane_validators()
                                         .iter()
                                         .map(|(_, record)| record),
@@ -4552,13 +4537,12 @@ impl Iroha {
         #[cfg(feature = "dag-recovery-verify")]
         {
             use iroha_core::pipeline::access::{IvmStrategy, derive_for_transaction};
-            use iroha_core::state::StateReadOnly as _;
             use nonzero_ext::nonzero;
             use sha2::{Digest, Sha256};
 
             // Choose strategy based on configured pipeline prepass
-            let view = state.view();
-            let dyn_pre = view.pipeline().dynamic_prepass;
+            let view = state.query_view();
+            let dyn_pre = state.pipeline_snapshot().dynamic_prepass;
             let strategy = if dyn_pre {
                 IvmStrategy::DynamicThenConservative
             } else {
@@ -4885,7 +4869,8 @@ impl Iroha {
             ) && sumeragi_cfg.npos.use_stake_snapshot_roster
             {
                 // Placeholder: map current WSV peers to contiguous indices.
-                let peers: Vec<PeerId> = state.view().world.peers().to_vec();
+                let world = state.world_view();
+                let peers: Vec<PeerId> = world.peers().to_vec();
                 Some(std::sync::Arc::new(
                     iroha_core::sumeragi::WsvEpochRosterAdapter::new(peers),
                 ))
@@ -4893,8 +4878,8 @@ impl Iroha {
                 None
             },
             rbc_store: Some({
-                let disk_max_bytes = usize::try_from(sumeragi_cfg.rbc.disk_store_max_bytes)
-                    .unwrap_or(usize::MAX);
+                let disk_max_bytes =
+                    usize::try_from(sumeragi_cfg.rbc.disk_store_max_bytes).unwrap_or(usize::MAX);
                 let max_bytes = sumeragi_cfg.rbc.store_max_bytes.min(disk_max_bytes);
                 RbcStoreConfig {
                     dir: rbc_store_dir.clone(),
@@ -4912,8 +4897,7 @@ impl Iroha {
         supervisor.monitor(child);
 
         let block_sync_frame_cap = {
-            let global_plaintext =
-                iroha_p2p::frame_plaintext_cap(config.network.max_frame_bytes);
+            let global_plaintext = iroha_p2p::frame_plaintext_cap(config.network.max_frame_bytes);
             config
                 .network
                 .max_frame_bytes_block_sync
@@ -4972,18 +4956,14 @@ impl Iroha {
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
-        let receipt_signer = config
-            .torii
-            .receipt_signer
-            .clone()
-            .unwrap_or_else(|| {
-                let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
-                iroha_logger::info!(
-                    algorithm = ?key.public_key().algorithm(),
-                    "torii receipt signer not configured; generated ephemeral key"
-                );
-                key
-            });
+        let receipt_signer = config.torii.receipt_signer.clone().unwrap_or_else(|| {
+            let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            iroha_logger::info!(
+                algorithm = ?key.public_key().algorithm(),
+                "torii receipt signer not configured; generated ephemeral key"
+            );
+            key
+        });
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             kiso.clone(),
@@ -5211,9 +5191,9 @@ async fn start_telemetry(
         .await
         .map_err(|err| {
             Report::new(StartError::StartTelemetry)
-                    .attach(MSG_START_TASK)
-                    .attach(err)
-            })?;
+                .attach(MSG_START_TASK)
+                .attach(err)
+        })?;
         supervisor.monitor(handle);
         #[cfg(feature = "telegram-alerts")]
         if telemetry_capabilities.developer_outputs_enabled()
@@ -5588,8 +5568,7 @@ mod genesis_key_tests {
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
         let chain = ChainId::from("derive-genesis-pubkey-test");
-        let manifest =
-            GenesisBuilder::new_without_executor(chain, PathBuf::from(".")).build_raw();
+        let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from(".")).build_raw();
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
             .build_and_sign(&keypair)
@@ -5943,7 +5922,7 @@ mod build_line_tests {
     use super::{resolve_build_line_from_env, *};
     use iroha_config_base::toml::TomlSource;
     use iroha_crypto::Hash;
-    use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneId, LaneConfig};
+    use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId};
     use std::{io::Write, num::NonZeroU32, path::Path};
     use tempfile::NamedTempFile;
     use toml::Table;
@@ -6134,7 +6113,11 @@ metadata = {}
         ensure_operator_node_key_allowlisted(&mut config);
 
         assert!(
-            config.torii.operator_signatures.allowed_public_keys.is_empty(),
+            config
+                .torii
+                .operator_signatures
+                .allowed_public_keys
+                .is_empty(),
             "allow-list should remain unchanged when allow_node_key is disabled"
         );
     }
@@ -6744,9 +6727,8 @@ fn apply_norito_config(cfg: &Config) {
 /// - Iroha 3 always requires DA with RBC.
 fn enforce_da_rbc_policy(build_line: BuildLine, config: &Config) -> ReportResult<(), MainError> {
     if build_line.is_iroha3() && !config.sumeragi.da.enabled {
-        return Err(Report::new(MainError::Config).attach(
-            "Iroha 3 requires DA/RBC; set sumeragi.da.enabled=true in the configuration",
-        ));
+        return Err(Report::new(MainError::Config)
+            .attach("Iroha 3 requires DA/RBC; set sumeragi.da.enabled=true in the configuration"));
     }
     Ok(())
 }
@@ -7238,7 +7220,8 @@ fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResul
 
     if build_line.is_iroha3() {
         if config.nexus.enabled
-            && config.sumeragi.consensus_mode != iroha_config::parameters::actual::ConsensusMode::Npos
+            && config.sumeragi.consensus_mode
+                != iroha_config::parameters::actual::ConsensusMode::Npos
         {
             return Err(Report::new(MainError::Config).attach(
                 "Nexus requires the global NPoS validator set; set sumeragi.consensus_mode = \"npos\" or disable nexus.enabled",
@@ -7326,28 +7309,24 @@ fn build_consensus_config_caps(
             .attach("sumeragi.collectors.k exceeds handshake limits (must fit into u16)")
     })?;
     let rbc_chunk_max_bytes = u64::try_from(sumeragi.rbc.chunk_max_bytes).map_err(|_| {
-        Report::new(StartError::StartP2p)
-            .attach(
-                "sumeragi.advanced.rbc.chunk_max_bytes exceeds handshake limits (must fit into u64)",
-            )
+        Report::new(StartError::StartP2p).attach(
+            "sumeragi.advanced.rbc.chunk_max_bytes exceeds handshake limits (must fit into u64)",
+        )
     })?;
     let rbc_store_max_bytes = u64::try_from(sumeragi.rbc.store_max_bytes).map_err(|_| {
-        Report::new(StartError::StartP2p)
-            .attach(
-                "sumeragi.advanced.rbc.store_max_bytes exceeds handshake limits (must fit into u64)",
-            )
+        Report::new(StartError::StartP2p).attach(
+            "sumeragi.advanced.rbc.store_max_bytes exceeds handshake limits (must fit into u64)",
+        )
     })?;
     let rbc_store_soft_bytes = u64::try_from(sumeragi.rbc.store_soft_bytes).map_err(|_| {
-        Report::new(StartError::StartP2p)
-            .attach(
-                "sumeragi.advanced.rbc.store_soft_bytes exceeds handshake limits (must fit into u64)",
-            )
+        Report::new(StartError::StartP2p).attach(
+            "sumeragi.advanced.rbc.store_soft_bytes exceeds handshake limits (must fit into u64)",
+        )
     })?;
     let rbc_store_max_sessions = u32::try_from(sumeragi.rbc.store_max_sessions).map_err(|_| {
-        Report::new(StartError::StartP2p)
-            .attach(
-                "sumeragi.advanced.rbc.store_max_sessions exceeds handshake limits (must fit into u32)",
-            )
+        Report::new(StartError::StartP2p).attach(
+            "sumeragi.advanced.rbc.store_max_sessions exceeds handshake limits (must fit into u32)",
+        )
     })?;
     let rbc_store_soft_sessions =
         u32::try_from(sumeragi.rbc.store_soft_sessions).map_err(|_| {
@@ -7409,8 +7388,7 @@ fn consensus_caps_from_genesis(
         })
         .find_map(|entry| {
             let advertised = parse_consensus_handshake_fingerprint(&entry.consensus_fingerprint)?;
-            let (_, _, fingerprint) =
-                consensus_entry_caps(chain_id, entry, &params, sumeragi);
+            let (_, _, fingerprint) = consensus_entry_caps(chain_id, entry, &params, sumeragi);
             (advertised == fingerprint).then_some(entry)
         })
         .or_else(|| {
@@ -7449,7 +7427,11 @@ fn consensus_entry_caps(
     entry: &ConsensusHandshakeMeta,
     params: &iroha_data_model::parameter::Parameters,
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
-) -> (String, iroha_data_model::block::consensus::ConsensusGenesisParams, [u8; 32]) {
+) -> (
+    String,
+    iroha_data_model::block::consensus::ConsensusGenesisParams,
+    [u8; 32],
+) {
     let mode_tag = match entry.mode.as_str() {
         "Npos" => iroha_core::sumeragi::consensus::NPOS_TAG,
         _ => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
@@ -7461,9 +7443,10 @@ fn consensus_entry_caps(
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter);
     let epoch_length_blocks = if use_npos {
-        npos_payload
-            .as_ref()
-            .map_or(sumeragi.npos.epoch_length_blocks, SumeragiNposParameters::epoch_length_blocks)
+        npos_payload.as_ref().map_or(
+            sumeragi.npos.epoch_length_blocks,
+            SumeragiNposParameters::epoch_length_blocks,
+        )
     } else {
         0
     };
@@ -7574,7 +7557,8 @@ fn consensus_entry_caps(
 }
 
 fn compute_consensus_handshake_caps(
-    view: &StateView<'_>,
+    world: &impl WorldReadOnly,
+    height: u64,
     config: &Config,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     override_caps: Option<(String, String, iroha_p2p::ConsensusHandshakeCaps)>,
@@ -7583,8 +7567,9 @@ fn compute_consensus_handshake_caps(
         return (mode_tag, bls_domain, caps);
     }
 
-    iroha_core::sumeragi::consensus::compute_consensus_handshake_caps_from_view(
-        view,
+    iroha_core::sumeragi::consensus::compute_consensus_handshake_caps_from_world(
+        world,
+        height,
         &config.common,
         &config.sumeragi,
         config_caps,
@@ -7740,8 +7725,8 @@ fn verify_genesis_metadata(
                 "genesis block missing crypto_manifest_meta parameter; regenerate genesis with crypto metadata populated",
             )
         })?;
-    let manifest_crypto: ManifestCrypto =
-        decode_crypto_manifest_meta(crypto_manifest_payload).map_err(|err| {
+    let manifest_crypto: ManifestCrypto = decode_crypto_manifest_meta(crypto_manifest_payload)
+        .map_err(|err| {
             Report::new(MainError::Config).attach(format!(
                 "failed to decode crypto_manifest_meta payload: {err}"
             ))
@@ -7755,9 +7740,10 @@ fn verify_genesis_metadata(
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter);
     let epoch_length_blocks = if use_npos {
-        npos_payload
-            .as_ref()
-            .map_or(config.sumeragi.npos.epoch_length_blocks, SumeragiNposParameters::epoch_length_blocks)
+        npos_payload.as_ref().map_or(
+            config.sumeragi.npos.epoch_length_blocks,
+            SumeragiNposParameters::epoch_length_blocks,
+        )
     } else {
         0
     };
@@ -8252,7 +8238,6 @@ mod tests {
             assert_eq!(scaled.rate_per_sec.get(), 4);
             assert_eq!(scaled.burst.get(), 6);
         }
-
     }
 
     mod npos_validator_counts {
@@ -8290,8 +8275,10 @@ mod tests {
 
         #[test]
         fn tracks_active_bls_validators() {
-            let active_bls = record_with_status(PublicLaneValidatorStatus::Active, Algorithm::BlsNormal);
-            let active_ed = record_with_status(PublicLaneValidatorStatus::Active, Algorithm::Ed25519);
+            let active_bls =
+                record_with_status(PublicLaneValidatorStatus::Active, Algorithm::BlsNormal);
+            let active_ed =
+                record_with_status(PublicLaneValidatorStatus::Active, Algorithm::Ed25519);
             let pending = record_with_status(
                 PublicLaneValidatorStatus::PendingActivation(0),
                 Algorithm::BlsNormal,
@@ -8595,17 +8582,13 @@ mod tests {
             use std::sync::Arc;
 
             use iroha_core::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore};
-            use iroha_data_model::{
-                account::curve::CurveId,
-                prelude::*,
-            };
+            use iroha_data_model::{account::curve::CurveId, prelude::*};
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-            let bls_keypair =
-                iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id =
                 AccountId::new(domain_id.clone(), bls_keypair.public_key().clone());
 
@@ -8623,8 +8606,12 @@ mod tests {
             );
 
             let world = World::with(
-                [genesis_domain(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone())],
-                [genesis_account(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone())],
+                [genesis_domain(
+                    SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+                )],
+                [genesis_account(
+                    SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+                )],
                 [],
             );
             let kura = Kura::blank_kura_for_testing();
@@ -8690,11 +8677,12 @@ mod tests {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            let view = state.view();
+            let world = state.world_view();
+            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let config_caps =
                 build_consensus_config_caps(&config.sumeragi).expect("config caps should build");
             let (mode_tag_perm, bls_perm, caps_perm) =
-                compute_consensus_handshake_caps(&view, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
             assert_eq!(
                 mode_tag_perm,
                 iroha_core::sumeragi::consensus::PERMISSIONED_TAG
@@ -8713,9 +8701,10 @@ mod tests {
                 block.commit();
             }
             let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
-            let view = state.view();
+            let world = state.world_view();
+            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let (mode_tag_npos, bls_npos, caps_npos) =
-                compute_consensus_handshake_caps(&view, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
             assert_eq!(mode_tag_npos, iroha_core::sumeragi::consensus::NPOS_TAG);
             assert_eq!(bls_npos, "bls-iroha2:npos-sumeragi:v1");
             assert_ne!(
@@ -8746,9 +8735,10 @@ mod tests {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);
-            let view = state.view();
+            let world = state.world_view();
+            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let (mode_tag, bls_domain, consensus_caps) =
-                compute_consensus_handshake_caps(&view, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
 
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err = verify_genesis_metadata(
@@ -8804,9 +8794,10 @@ mod tests {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);
-            let view = state.view();
+            let world = state.world_view();
+            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let (mode_tag, bls_domain, consensus_caps) =
-                compute_consensus_handshake_caps(&view, &config, &config_caps, None);
+                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
 
             // Diverge the runtime chain after computing consensus caps to force a
             // fingerprint mismatch without altering the embedded handshake metadata.
@@ -8937,10 +8928,7 @@ mod tests {
                 "public_key".to_string(),
                 toml::Value::String(pubkey.to_string()),
             );
-            pop_entry.insert(
-                "pop_hex".to_string(),
-                toml::Value::String(hex::encode(pop)),
-            );
+            pop_entry.insert("pop_hex".to_string(), toml::Value::String(hex::encode(pop)));
             table.insert(
                 "trusted_peers_pop".to_string(),
                 toml::Value::Array(vec![toml::Value::Table(pop_entry)]),
@@ -9160,22 +9148,22 @@ mod tests {
         #[test]
         fn validate_config_io_flags_lone_peer_and_address_conflict() -> eyre::Result<()> {
             let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
-                if let Some(genesis_table) = table
-                    .get_mut("genesis")
-                    .and_then(toml::Value::as_table_mut)
+                if let Some(genesis_table) =
+                    table.get_mut("genesis").and_then(toml::Value::as_table_mut)
                 {
                     genesis_table.remove("file");
                 }
-                iroha_config::base::toml::Writer::new(table)
-                    .write(
-                        ["torii", "address"],
-                        socket_addr!(127.0.0.1:1337).to_literal(),
-                    );
+                iroha_config::base::toml::Writer::new(table).write(
+                    ["torii", "address"],
+                    socket_addr!(127.0.0.1:1337).to_literal(),
+                );
             })?;
 
             let mut emitter = Emitter::new();
             validate_config_io(&mut emitter, &config);
-            let report = emitter.into_result().expect_err("expected validation errors");
+            let report = emitter
+                .into_result()
+                .expect_err("expected validation errors");
             let report_text = format!("{report:#}");
             assert_contains!(report_text, "The network consists from this one peer only");
             assert_contains!(
@@ -9190,10 +9178,7 @@ mod tests {
         fn stack_budget_mismatch_warns_but_allows_config() -> eyre::Result<()> {
             let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
                 let mut cpu_balanced = toml::Table::new();
-                cpu_balanced.insert(
-                    "max_cycles".to_owned(),
-                    toml::Value::Integer(10_000_000),
-                );
+                cpu_balanced.insert("max_cycles".to_owned(), toml::Value::Integer(10_000_000));
                 cpu_balanced.insert(
                     "max_memory_bytes".to_owned(),
                     toml::Value::Integer(256 * 1024 * 1024),
@@ -9214,10 +9199,7 @@ mod tests {
                 cpu_balanced.insert("allow_wasi".to_owned(), toml::Value::Boolean(true));
 
                 let mut profiles = toml::Table::new();
-                profiles.insert(
-                    "cpu-balanced".to_owned(),
-                    toml::Value::Table(cpu_balanced),
-                );
+                profiles.insert("cpu-balanced".to_owned(), toml::Value::Table(cpu_balanced));
 
                 iroha_config::base::toml::Writer::new(table)
                     .write(["compute", "enabled"], true)
@@ -9264,7 +9246,9 @@ mod tests {
 
             let mut emitter = Emitter::new();
             validate_config_runtime(&mut emitter, &config);
-            let report = emitter.into_result().expect_err("expected validation errors");
+            let report = emitter
+                .into_result()
+                .expect_err("expected validation errors");
             assert_contains!(
                 format!("{report:#}"),
                 "validator nodes must enable confidential verification"

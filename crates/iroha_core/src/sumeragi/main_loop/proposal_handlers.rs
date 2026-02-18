@@ -987,10 +987,7 @@ impl Actor {
         }
         if block.is_empty() {
             let queue_len = self.queue.queued_len();
-            let time_triggers_due = {
-                let state_view = self.state.view();
-                state_view.time_triggers_due_for_block(&block.header())
-            };
+            let time_triggers_due = self.state.time_triggers_due_for_block_fast(&block.header());
             if time_triggers_due {
                 iroha_logger::info!(
                     height,

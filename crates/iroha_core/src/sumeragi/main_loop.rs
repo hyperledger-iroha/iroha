@@ -98,7 +98,7 @@ use crate::{
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
     queue::{BackpressureState, Queue, RoutingDecision},
-    state::{CellVecExt, StakeSnapshot, State, StateView, WorldReadOnly},
+    state::{CellVecExt, State, StateView, WorldReadOnly},
     sumeragi::evidence::EvidenceStore,
     telemetry::{MissingBlockFetchOutcome, MissingBlockFetchTargetKind},
     tx::AcceptedTransaction,
@@ -150,9 +150,9 @@ use proposals::ProposalMismatch;
 use proposals::{ProposalCache, detect_proposal_mismatch, evidence_within_horizon};
 use roster::{
     apply_roster_indices_to_manager, canonicalize_roster, compute_membership_view_hash,
-    compute_roster_indices_from_topology, derive_active_topology_for_mode,
+    compute_roster_indices_from_topology, derive_active_topology_for_mode_from_world,
     derive_active_topology_from_views, derive_local_validator_index_for_mode,
-    roster_member_allowed_bls,
+    derive_local_validator_index_for_mode_from_world, roster_member_allowed_bls,
 };
 #[cfg(test)]
 use roster::{derive_active_topology, derive_local_validator_index};
@@ -470,11 +470,13 @@ fn requeue_block_transactions(
     let mut failures = 0usize;
     let mut duplicate_failures = 0usize;
     let mut gossip_hashes: Vec<_> = Vec::new();
-    let state_view = state.view();
     for tx in txs {
         let tx_hash = tx.hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        match queue.push_in_view(accepted, &state_view) {
+        let routing_decision = crate::queue::routing_ledger::get(&tx_hash)
+            .or_else(|| queue.route_for_gossip_without_state(&accepted))
+            .unwrap_or_else(|| queue.route_for_gossip_with_state(&accepted, state));
+        match queue.push_requeued_with_routing(accepted, routing_decision, state) {
             Ok(()) => {
                 requeued = requeued.saturating_add(1);
                 gossip_hashes.push(tx_hash);
@@ -4148,6 +4150,33 @@ impl Actor {
                 inflight.pending.touch_progress(now);
             }
         }
+    }
+
+    fn has_recent_pending_progress_for_rbc(&self, now: Instant, window: Duration) -> bool {
+        if window == Duration::ZERO {
+            return false;
+        }
+        let tip_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let lower = tip_height.saturating_sub(1);
+        let upper = tip_height.saturating_add(2);
+        if self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending.height >= lower
+                && pending.height <= upper
+                && pending.progress_age(now) <= window
+        }) {
+            return true;
+        }
+        self.subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                !inflight.pending.aborted
+                    && inflight.pending.height >= lower
+                    && inflight.pending.height <= upper
+                    && inflight.pending.progress_age(now) <= window
+            })
     }
 
     fn rbc_backlog_summary(&self) -> RbcBacklogSummary {
@@ -8148,13 +8177,11 @@ impl Actor {
     }
 
     fn determine_genesis_account(state: &State) -> Result<AccountId> {
-        let view = state.view();
-        let maybe_account = view
-            .world
+        let world = state.world_view();
+        let maybe_account = world
             .accounts_iter()
             .find(|entry| entry.id().domain() == &*GENESIS_DOMAIN_ID)
             .map(|entry| entry.id().clone());
-        drop(view);
         maybe_account.ok_or_else(|| eyre!("genesis account not found in world state"))
     }
 
@@ -8640,17 +8667,25 @@ impl Actor {
             pacemaker_timeouts,
             pacemaker_block_time,
         ) = {
-            let view = state.view();
-            let mode = super::effective_consensus_mode(&view, config.consensus_mode);
-            let commit_topology = derive_active_topology_for_mode(
-                &view,
+            let world = state.world_view();
+            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+            let mode = super::effective_consensus_mode_for_height_from_world(
+                &world,
+                height,
+                config.consensus_mode,
+            );
+            let commit_topology_snapshot = state.commit_topology_snapshot();
+            let commit_topology = derive_active_topology_for_mode_from_world(
+                &world,
+                commit_topology_snapshot.as_slice(),
+                height,
                 common_config.trusted_peers.value(),
                 common_config.peer.id(),
                 mode,
             );
-            let pacemaker_block_time = super::resolve_npos_block_time(&view);
+            let pacemaker_block_time = super::resolve_npos_block_time_from_world(&world);
             let pacemaker_timeouts = if matches!(mode, ConsensusMode::Npos) {
-                super::resolve_npos_timeouts(&view, &config.npos)
+                super::resolve_npos_timeouts_from_world(&world, &config.npos)
             } else {
                 SumeragiNposTimeouts::from_block_time(pacemaker_block_time)
             };
@@ -8665,7 +8700,7 @@ impl Actor {
                 {
                     ignored.push("sumeragi.collectors.redundant_send_r");
                 }
-                if view.world.sumeragi_npos_parameters().is_some() {
+                if world.sumeragi_npos_parameters().is_some() {
                     if config.npos.epoch_length_blocks
                         != iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS
                     {
@@ -8724,26 +8759,24 @@ impl Actor {
                 }
             }
             let mut collectors = if matches!(mode, ConsensusMode::Npos) {
-                super::load_npos_collector_config(&view)
+                super::load_npos_collector_config_from_world(&world, state.chain_id_ref())
             } else {
                 None
             };
-            let epoch_params = super::load_npos_epoch_params(&view, &config);
-            let height = view.height() as u64;
+            let epoch_params = super::load_npos_epoch_params_from_world(&world, &config.npos);
             let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-                view.world(),
+                &world,
                 epoch_params.epoch_length_blocks,
             );
             let target_epoch = schedule.epoch_for_height(height);
-            let epoch_seed_for_height = super::prf_seed_for_height(&view, height);
-            let record_for_target_epoch = view.world().vrf_epochs().get(&target_epoch).cloned();
-            let last_epoch_record = view
-                .world()
+            let epoch_seed_for_height =
+                super::prf_seed_for_height_from_world(&world, state.chain_id_ref(), height);
+            let record_for_target_epoch = world.vrf_epochs().get(&target_epoch).cloned();
+            let last_epoch_record = world
                 .vrf_epochs()
                 .iter()
                 .last()
                 .map(|(_, record)| record.clone());
-            drop(view);
             let roster_len = commit_topology.len();
             let initial_indices = compute_roster_indices_from_topology(
                 &commit_topology,
@@ -8823,8 +8856,8 @@ impl Actor {
             telemetry.set_prf_context(Some(cfg.seed), block_count.0 as u64, 0);
         }
         let (staged_mode_tag, staged_mode_activation_height) = {
-            let view = state.view();
-            let params = view.world.parameters().sumeragi();
+            let world = state.world_view();
+            let params = world.parameters().sumeragi();
             staged_mode_info(params)
         };
         let mode_tag = match consensus_mode {
@@ -9237,15 +9270,14 @@ impl Actor {
         super::status::set_tx_queue_backpressure(
             actor.subsystems.propose.backpressure_gate.state(),
         );
-        let view = actor.state.view();
         super::status::set_leader_index(
             actor
-                .local_validator_index(&view)
+                .local_validator_index_current()
                 .map(u64::from)
                 .unwrap_or_default(),
         );
-        actor.update_effective_timing_status(&view, actor.consensus_mode);
-        drop(view);
+        let world = actor.state.world_view();
+        actor.update_effective_timing_status_from_world(&world, actor.consensus_mode);
         iroha_logger::info!(
             height = actor.state.committed_height(),
             queue_len = actor.queue.active_len(),
@@ -11802,6 +11834,23 @@ impl Actor {
             .or_else(|| self.epoch_manager.as_ref().map(EpochManager::seed))
     }
 
+    fn local_validator_index_current(&self) -> Option<ValidatorIndex> {
+        if self.is_observer() {
+            return None;
+        }
+        let world = self.state.world_view();
+        let commit_topology = self.state.commit_topology_snapshot();
+        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        derive_local_validator_index_for_mode_from_world(
+            &world,
+            commit_topology.as_slice(),
+            height,
+            self.common_config.trusted_peers.value(),
+            self.common_config.peer.id(),
+            self.consensus_mode,
+        )
+    }
+
     fn local_validator_index(&self, view: &StateView<'_>) -> Option<ValidatorIndex> {
         if self.is_observer() {
             return None;
@@ -13857,6 +13906,9 @@ impl Actor {
         let rbc_backlog = self.has_unresolved_rbc_backlog();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let queue_depths = super::status::worker_queue_depth_snapshot();
+        let rbc_progress_window = self
+            .payload_rebroadcast_cooldown()
+            .max(Duration::from_millis(250));
         let block_payload_cap =
             u64::try_from(self.config.queues.block_payload.max(1)).unwrap_or(u64::MAX);
         let rbc_chunk_cap = u64::try_from(self.config.queues.rbc_chunks.max(1)).unwrap_or(u64::MAX);
@@ -13936,10 +13988,12 @@ impl Actor {
             now.saturating_duration_since(queue_since.unwrap_or(now))
         };
         let timed_out = idle_round_timed_out(true, age, timeout);
-        // Only defer idle view-change while RBC/relay backlog is within the timeout window.
-        // After the idle timeout elapses, allow view changes to break deadlocks.
-        let backlog_blocking = rbc_backlog || relay_backpressure;
-        if backlog_blocking && !timed_out {
+        let rbc_backlog_progressing = rbc_backlog
+            && (queue_depths.rbc_chunk_rx > 0
+                || queue_depths.block_payload_rx > 0
+                || self.has_recent_pending_progress_for_rbc(now, rbc_progress_window));
+        // Defer idle view-change while backlog is within the timeout window.
+        if (rbc_backlog || relay_backpressure) && !timed_out {
             if rbc_backlog {
                 trace!("skipping idle view-change due to unresolved RBC backlog");
             }
@@ -13947,6 +14001,22 @@ impl Actor {
                 trace!("skipping idle view-change due to relay backpressure");
             }
             return false;
+        }
+        if rbc_backlog && rbc_backlog_progressing {
+            let progress_grace_deadline = timeout.saturating_add(rbc_progress_window);
+            if age < progress_grace_deadline {
+                debug!(
+                    rbc_backlog,
+                    rbc_backlog_progressing,
+                    age_ms = age.as_millis(),
+                    timeout_ms = timeout.as_millis(),
+                    progress_grace_ms = progress_grace_deadline.as_millis(),
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    "deferring idle view-change while RBC backlog is converging"
+                );
+                return false;
+            }
         }
         if consensus_queue_backpressure && !timed_out {
             trace!("skipping idle view-change due to consensus queue backpressure");
@@ -13988,6 +14058,7 @@ impl Actor {
                 suppressed_since_last,
                 proposal_seen,
                 rbc_backlog,
+                rbc_backlog_progressing,
                 relay_backpressure,
                 consensus_queue_backpressure,
                 consensus_queue_backlog,
@@ -14925,6 +14996,7 @@ impl HotspotLogSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum BlockSyncWarningKind {
     MissingCommitRoleQuorum,
+    LockedQcConflict,
 }
 
 #[derive(Debug)]

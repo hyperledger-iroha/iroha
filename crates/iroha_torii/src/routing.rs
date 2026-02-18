@@ -1608,9 +1608,9 @@ impl KaigiRelayEventKind {
 
 #[cfg(feature = "app_api")]
 fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Error> {
-    let view = state.view();
+    let world = state.world_view();
     let mut out = Vec::new();
-    for domain in view.world().domains_iter() {
+    for domain in world.domains_iter() {
         let domain_id = domain.id().clone();
         for (key, value) in domain.metadata().iter() {
             let key_str = key.as_ref();
@@ -2009,10 +2009,9 @@ pub async fn handle_v1_confidential_asset_transitions(
         .parse()
         .map_err(|_| conversion_error("invalid asset definition id".to_owned()))?;
 
-    let view = state.view();
-    let block_height = view.height() as u64;
-    let definition = view
-        .world()
+    let world = state.world_view();
+    let block_height = state.committed_height() as u64;
+    let definition = world
         .asset_definition(&def_id)
         .map_err(|_| explorer_not_found())?;
     let dto = ConfidentialAssetPolicyDto::from_policy(
@@ -2049,13 +2048,13 @@ pub async fn handle_get_proof_tags(
         backend: backend.clone(),
         proof_hash: arr,
     };
-    let view = state.view();
+    let world = state.world_view();
     #[allow(unused_mut)]
     let mut tags: Vec<[u8; 4]> = Vec::new();
     #[cfg(feature = "zk-proof-tags")]
     {
         use mv::storage::StorageReadOnly as _;
-        if let Some(v) = view.world().proof_tags.get(&id) {
+        if let Some(v) = world.proof_tags().get(&id) {
             tags = v.clone();
         }
     }
@@ -2810,7 +2809,7 @@ pub async fn handle_list_vk(
     state: Arc<CoreState>,
     crate::NoritoQuery(q): crate::NoritoQuery<VkListQuery>,
 ) -> Result<impl IntoResponse> {
-    let view = state.view();
+    let world = state.world_view();
     use iroha_data_model::confidential::ConfidentialStatus;
     let offset = q.offset.map(u64::from).unwrap_or(0);
     let limit = q.limit.map(u64::from);
@@ -2853,8 +2852,7 @@ pub async fn handle_list_vk(
     }
 
     let (page_items, _total) = if order_desc {
-        let iter = view
-            .world()
+        let iter = world
             .verifying_keys()
             .iter()
             .filter(|(id, rec)| {
@@ -2874,8 +2872,7 @@ pub async fn handle_list_vk(
             });
         collect_page_streaming(iter, offset, limit, Some(1_000))
     } else {
-        let iter = view
-            .world()
+        let iter = world
             .verifying_keys()
             .iter()
             .filter(|(id, rec)| {
@@ -3228,8 +3225,8 @@ pub async fn handle_get_proof(
         backend: backend.clone(),
         proof_hash,
     };
-    let view = state.view();
-    let rec = view.world().proofs().get(&id).cloned().ok_or_else(|| {
+    let world = state.world_view();
+    let rec = world.proofs().get(&id).cloned().ok_or_else(|| {
         telemetry.with_metrics(|tel| {
             tel.observe_torii_proof_request("v1/zk/proof", "not_found", 0, start.elapsed())
         });
@@ -3552,10 +3549,8 @@ pub async fn handle_v1_sumeragi_consensus_keys(
     app: &SharedAppState,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let mut records: Vec<ConsensusKeyRecord> = app
-        .state
-        .view()
-        .world
+    let world = app.state.world_view();
+    let mut records: Vec<ConsensusKeyRecord> = world
         .consensus_keys()
         .iter()
         .map(|(_, rec)| rec.clone())
@@ -3626,9 +3621,8 @@ pub async fn handle_v1_bridge_finality(
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let proof =
-        iroha_core::bridge::build_finality_proof(&view, height).map_err(|err| match err {
+    let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height).map_err(
+        |err| match err {
             iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
             | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
             | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
@@ -3642,7 +3636,8 @@ pub async fn handle_v1_bridge_finality(
             iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
                 iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
             ),
-        })?;
+        },
+    )?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -3669,9 +3664,8 @@ pub async fn handle_v1_bridge_finality_bundle(
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let bundle =
-        iroha_core::bridge::build_finality_bundle(&view, height).map_err(|err| match err {
+    let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height).map_err(
+        |err| match err {
             iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
             | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
             | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
@@ -3685,7 +3679,8 @@ pub async fn handle_v1_bridge_finality_bundle(
             iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
                 iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
             ),
-        })?;
+        },
+    )?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -3849,9 +3844,8 @@ pub async fn handle_v1_sumeragi_bls_keys(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     // Debug/operator endpoint; non-consensus. Build mapping from world peers where identity key is BLS-normal.
-    let view = state.view();
-    let peers = view.world.peers().clone();
-    drop(view);
+    let world = state.world_view();
+    let peers = world.peers().clone();
     let mut obj: std::collections::BTreeMap<String, Option<String>> =
         std::collections::BTreeMap::new();
     for p in peers {
@@ -3900,22 +3894,23 @@ pub async fn handle_v1_sumeragi_collectors(
     State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
+    let world = state.world_view();
     let snap = sumeragi::status_snapshot();
-    let peers = view.commit_topology.clone();
+    let peers = state.commit_topology_snapshot();
     let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
     let n = peers.len();
     let min_votes = topology.min_votes_for_commit();
     let tail = topology.proxy_tail_index();
     let available = n.saturating_sub(tail);
-    let mode = match snap.mode_tag.as_str() {
-        iroha_core::sumeragi::consensus::NPOS_TAG => ConsensusMode::Npos,
-        iroha_core::sumeragi::consensus::PERMISSIONED_TAG => ConsensusMode::Permissioned,
-        _ => sumeragi::effective_consensus_mode(&view, ConsensusMode::Permissioned),
-    };
+    let current_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+    let mode = sumeragi::effective_consensus_mode_for_height_from_world(
+        &world,
+        current_height,
+        ConsensusMode::Permissioned,
+    );
     let (mut k_raw, redundant_send_r, seed_from_mode) = match mode {
         ConsensusMode::Permissioned => {
-            let params = view.world.parameters().sumeragi();
+            let params = world.parameters().sumeragi();
             (
                 params.collectors_k as usize,
                 params.collectors_redundant_send_r,
@@ -3923,10 +3918,12 @@ pub async fn handle_v1_sumeragi_collectors(
             )
         }
         ConsensusMode::Npos => {
-            if let Some(cfg) = sumeragi::load_npos_collector_config(&view) {
+            if let Some(cfg) =
+                sumeragi::load_npos_collector_config_from_world(&world, state.chain_id_ref())
+            {
                 (cfg.k, cfg.redundant_send_r, Some(cfg.seed))
             } else {
-                let params = view.world.parameters().sumeragi();
+                let params = world.parameters().sumeragi();
                 iroha_logger::warn!(
                     "Missing sumeragi_npos_parameters payload; falling back to permissioned collector settings"
                 );
@@ -3951,15 +3948,14 @@ pub async fn handle_v1_sumeragi_collectors(
     }
     let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
     if epoch_seed.is_none() {
-        epoch_seed = view
-            .world
+        epoch_seed = world
             .sumeragi_npos_parameters()
             .map(|params| params.epoch_seed());
     }
     let plan_height = if snap.prf_height > 0 {
         snap.prf_height
     } else {
-        view.height() as u64
+        current_height
     };
     let plan_view = snap.prf_view;
     let collectors = sumeragi::collectors::deterministic_collectors(
@@ -4006,7 +4002,6 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    drop(view);
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -4019,8 +4014,8 @@ pub async fn handle_v1_sumeragi_params(
     State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let sp = view.world.parameters().sumeragi();
+    let world = state.world_view();
+    let sp = world.parameters().sumeragi();
     let payload = SumeragiParamsResponse {
         block_time_ms: sp.block_time_ms,
         commit_time_ms: sp.commit_time_ms,
@@ -4035,9 +4030,8 @@ pub async fn handle_v1_sumeragi_params(
             iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => "Npos",
         }),
         mode_activation_height: sp.mode_activation_height,
-        chain_height: view.height() as u64,
+        chain_height: state.committed_height() as u64,
     };
-    drop(view);
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -4178,17 +4172,17 @@ pub async fn handle_v1_zk_roots(
             ));
         }
     };
-    let view = state.view();
+    let world = state.world_view();
+    let zk = state.zk_snapshot();
     // Bound the requested window by config cap (0 -> cap)
-    let cap = view.zk().root_history_cap;
+    let cap = zk.root_history_cap;
     let want = if req.max == 0 {
         cap
     } else {
         core::cmp::min(cap, req.max as usize)
     };
     // Fetch roots from WSV (if any); build response window
-    let roots_all = view
-        .world
+    let roots_all = world
         .zk_assets()
         .get(&ad)
         .map(|st| st.root_history.clone())
@@ -4223,8 +4217,8 @@ pub async fn handle_v1_zk_vote_tally(
     NoritoJson(req): NoritoJson<ZkVoteGetTallyRequestDto>,
 ) -> Result<Response> {
     // Read-only lookup from WSV elections
-    let view = state.view();
-    let (finalized, tally) = match view.world.elections().get(&req.election_id) {
+    let world = state.world_view();
+    let (finalized, tally) = match world.elections().get(&req.election_id) {
         Some(e) => (e.finalized, e.tally.clone()),
         None => (false, Vec::new()),
     };
@@ -4242,9 +4236,8 @@ pub async fn handle_v1_sumeragi_evidence_count(
     State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let n = iroha_core::query::evidence_count(&view) as u64;
-    drop(view);
+    let world = state.world_view();
+    let n = world.consensus_evidence().iter().count() as u64;
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -4275,8 +4268,17 @@ pub async fn handle_v1_sumeragi_evidence_list(
     crate::NoritoQuery(q): crate::NoritoQuery<EvidenceListQuery>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let mut records = iroha_core::query::evidence_list_snapshot(&view);
+    let world = state.world_view();
+    let mut records: Vec<_> = world
+        .consensus_evidence()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
+    records.sort_by(|a, b| {
+        (a.recorded_at_height, a.recorded_at_view, a.recorded_at_ms)
+            .cmp(&(b.recorded_at_height, b.recorded_at_view, b.recorded_at_ms))
+            .reverse()
+    });
     // Optional kind filter
     if let Some(kind_s) = q.kind.as_deref() {
         use iroha_core::sumeragi::consensus::EvidenceKind;
@@ -4515,12 +4517,11 @@ fn decode_and_validate_evidence(
     chain_id: &ChainId,
 ) -> Result<ConsensusEvidence, Error> {
     let evidence = decode_evidence_hex(value)?;
-    let view = state.view();
-    let topology_peers: Vec<_> = view.commit_topology().iter().cloned().collect();
+    let world = state.world_view();
+    let topology_peers = state.commit_topology_snapshot();
     let (subject_height, _) = iroha_core::sumeragi::evidence_subject_height_view(&evidence);
-    let current_height = u64::try_from(view.height()).unwrap_or(0);
+    let current_height = u64::try_from(state.committed_height()).unwrap_or(0);
     let height = subject_height.unwrap_or(current_height);
-    let prf_seed = Some(iroha_core::sumeragi::prf_seed_for_height(&view, height));
     let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
     let fallback_mode = match mode_tag.as_str() {
         iroha_core::sumeragi::consensus::PERMISSIONED_TAG => {
@@ -4540,8 +4541,9 @@ fn decode_and_validate_evidence(
     }
     let topology = iroha_core::sumeragi::network_topology::Topology::new(topology_peers);
     if let Some(fallback) = fallback_mode {
-        let consensus_mode =
-            iroha_core::sumeragi::effective_consensus_mode_for_height(&view, height, fallback);
+        let consensus_mode = iroha_core::sumeragi::effective_consensus_mode_for_height_from_world(
+            &world, height, fallback,
+        );
         let mode_tag = match consensus_mode {
             iroha_config::parameters::actual::ConsensusMode::Permissioned => {
                 iroha_core::sumeragi::consensus::PERMISSIONED_TAG
@@ -4550,7 +4552,17 @@ fn decode_and_validate_evidence(
                 iroha_core::sumeragi::consensus::NPOS_TAG
             }
         };
-        drop(view);
+        let prf_seed = matches!(
+            consensus_mode,
+            iroha_config::parameters::actual::ConsensusMode::Npos
+        )
+        .then(|| {
+            iroha_core::sumeragi::npos_seed_for_height_from_world(
+                &world,
+                state.chain_id_ref(),
+                height,
+            )
+        });
         let context = iroha_core::sumeragi::EvidenceValidationContext {
             topology: &topology,
             chain_id,
@@ -4567,7 +4579,9 @@ fn decode_and_validate_evidence(
         };
     }
 
-    drop(view);
+    let npos_seed = world.sumeragi_npos_parameters().is_some().then(|| {
+        iroha_core::sumeragi::npos_seed_for_height_from_world(&world, state.chain_id_ref(), height)
+    });
     let mut errors = Vec::new();
     for mode_tag in [
         iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
@@ -4577,7 +4591,11 @@ fn decode_and_validate_evidence(
             topology: &topology,
             chain_id,
             mode_tag,
-            prf_seed,
+            prf_seed: if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
+                npos_seed
+            } else {
+                None
+            },
         };
         match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
             Ok(()) => return Ok(evidence),
@@ -5147,7 +5165,7 @@ async fn handle_transaction_inner(
     );
 
     queue
-        .push_with_lane(accepted_tx, state.view())
+        .push_with_lane_with_state(accepted_tx, state.as_ref())
         .map_err(|queue::Failure { tx, err }| {
             iroha_logger::warn!(
                 tx_hash=%tx.as_ref().as_ref().hash(), ?err,
@@ -5302,10 +5320,10 @@ pub async fn handle_queries_with_opts(
     sig.verify(authority.signatory(), &query).map_err(|_| {
         ValidationFail::NotPermitted("query signature failed verification".to_string())
     })?;
+    let pipeline = state.pipeline_snapshot();
 
     // Map config cursor mode to lane cursor mode (with query override)
     let mode = {
-        let v = state.view();
         match opts.cursor_mode.as_deref() {
             Some("ephemeral") => LaneCursorMode::Ephemeral,
             Some("stored") => LaneCursorMode::Stored,
@@ -5314,7 +5332,7 @@ pub async fn handle_queries_with_opts(
                     other,
                     "unknown cursor_mode override; falling back to config"
                 );
-                match v.pipeline().query_default_cursor_mode {
+                match pipeline.query_default_cursor_mode {
                     iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
                         LaneCursorMode::Ephemeral
                     }
@@ -5323,7 +5341,7 @@ pub async fn handle_queries_with_opts(
                     }
                 }
             }
-            None => match v.pipeline().query_default_cursor_mode {
+            None => match pipeline.query_default_cursor_mode {
                 iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
                     LaneCursorMode::Ephemeral
                 }
@@ -5344,8 +5362,7 @@ pub async fn handle_queries_with_opts(
     // client-provided budget. For continuations, honor the cursor's gas budget.
     // This does not actually charge gas; it simply guards resource usage for server-side cursors.
     {
-        let v = state.view();
-        let min_gas = v.pipeline().query_stored_min_gas_units;
+        let min_gas = pipeline.query_stored_min_gas_units;
         if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
             let provided = match &request {
                 iroha_data_model::query::QueryRequest::Continue(cursor) => {
@@ -5702,18 +5719,13 @@ pub async fn handle_get_contract_code(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(e),
         ))
     })?;
-    let view = state.view();
-    let manifest = view
-        .world()
-        .contract_manifests()
-        .get(&h)
-        .cloned()
-        .ok_or_else(|| {
-            // Map absence to a query NotFound (HTTP 404)
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
+    let world = state.world_view();
+    let manifest = world.contract_manifests().get(&h).cloned().ok_or_else(|| {
+        // Map absence to a query NotFound (HTTP 404)
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })?;
     let code_hash_hex = manifest.code_hash.as_ref().map(|h| hex::encode(h.as_ref()));
     let abi_hash_hex = manifest.abi_hash.as_ref().map(|h| hex::encode(h.as_ref()));
     let mut manifest_obj = norito::json::Map::new();
@@ -5822,8 +5834,8 @@ pub async fn handle_get_contract_state(
     let default_limit = 1000u64;
     let max_limit = 10_000u64;
 
-    let view = state.view();
-    let storage = view.world().smart_contract_state();
+    let world = state.world_view();
+    let storage = world.smart_contract_state();
 
     let encode_entry = |path: &str, value: Option<&Vec<u8>>, found: bool| {
         if !include_value {
@@ -5998,17 +6010,12 @@ pub async fn handle_get_contract_code_bytes(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(e),
         ))
     })?;
-    let view = state.view();
-    let code = view
-        .world()
-        .contract_code()
-        .get(&h)
-        .cloned()
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
+    let world = state.world_view();
+    let code = world.contract_code().get(&h).cloned().ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })?;
     let mut obj = norito::json::Map::new();
     obj.insert(
         "code_b64".into(),
@@ -6307,8 +6314,8 @@ pub async fn handle_get_proof_record(
             )),
         ))
     })?;
-    let view = state.view();
-    let rec = view.world().proofs().get(&id).cloned().ok_or_else(|| {
+    let world = state.world_view();
+    let rec = world.proofs().get(&id).cloned().ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         ))
@@ -6361,12 +6368,8 @@ fn compute_prunable_proofs(
 pub fn handle_proof_retention_status(
     state: Arc<CoreState>,
 ) -> iroha_torii_shared::ProofRetentionStatus {
-    let view = state.view();
-    let height_hint = view
-        .latest_block()
-        .as_deref()
-        .map(|block| block.header().height().get())
-        .unwrap_or(0);
+    let world = state.world_view();
+    let height_hint = u64::try_from(state.committed_height()).unwrap_or(0);
     let cap = state.zk.proof_history_cap;
     let grace_blocks = state.zk.proof_retention_grace_blocks;
     let prune_batch = state.zk.proof_prune_batch;
@@ -6375,7 +6378,7 @@ pub fn handle_proof_retention_status(
         String,
         Vec<(iroha_data_model::proof::ProofId, u64)>,
     > = std::collections::BTreeMap::new();
-    for (id, record) in view.world().proofs().iter() {
+    for (id, record) in world.proofs().iter() {
         let height = record.verified_at_height.unwrap_or(0);
         per_backend
             .entry(id.backend.clone())
@@ -7072,17 +7075,12 @@ pub async fn handle_get_vk(
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::proof::VerifyingKeyId;
     let id = VerifyingKeyId::new(backend, name);
-    let view = state.view();
-    let rec = view
-        .world()
-        .verifying_keys()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
+    let world = state.world_view();
+    let rec = world.verifying_keys().get(&id).cloned().ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })?;
     let mut root = norito::json::Map::new();
     let mut id_map = norito::json::Map::new();
     id_map.insert(
@@ -7312,9 +7310,8 @@ fn prepare_contract_call(
     use iroha_data_model::query::error::QueryExecutionFail;
     use ivm::SyscallPolicy;
 
-    let view = state.view();
-    let binding = view
-        .world()
+    let world = state.world_view();
+    let binding = world
         .contract_instances()
         .get(&(namespace.to_owned(), contract_id.to_owned()))
         .copied()
@@ -7324,8 +7321,7 @@ fn prepare_contract_call(
             ))
         })?;
 
-    let code_bytes = view
-        .world()
+    let code_bytes = world
         .contract_code()
         .get(&binding)
         .cloned()
@@ -7361,21 +7357,21 @@ fn prepare_contract_call(
     let syscall_policy = SyscallPolicy::AbiV1;
     let abi_hash = iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(syscall_policy));
 
-    let mut manifest = view
-        .world()
-        .contract_manifests()
-        .get(&binding)
-        .cloned()
-        .unwrap_or(manifest::ContractManifest {
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        });
+    let mut manifest =
+        world
+            .contract_manifests()
+            .get(&binding)
+            .cloned()
+            .unwrap_or(manifest::ContractManifest {
+                code_hash: None,
+                abi_hash: None,
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                kotoba: None,
+                provenance: None,
+            });
 
     if let Some(existing) = manifest.code_hash {
         if existing != binding {
@@ -14522,6 +14518,67 @@ mod account_path_metric_tests {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn committed_transactions_snapshot(
+    state: &CoreState,
+) -> Vec<iroha_data_model::query::CommittedTransaction> {
+    let committed_height = state.committed_height();
+    if committed_height == 0 {
+        return Vec::new();
+    }
+
+    let mut transactions = Vec::new();
+    for height in (1..=committed_height).rev() {
+        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
+            continue;
+        };
+        let Some(block) = state.block_by_height(height_nz) else {
+            iroha_logger::warn!(
+                height,
+                "missing block in Kura while building committed transaction snapshot"
+            );
+            continue;
+        };
+        let block_hash = block.hash();
+
+        // Keep ordering aligned with `FindTransactions`: newest block first, newest tx first.
+        let entrypoint_hashes = block.entrypoint_hashes().rev();
+        let entrypoint_proofs = block.entrypoint_proofs().rev();
+        let entrypoints = block.entrypoints_cloned().rev();
+        let result_hashes = block.result_hashes().rev();
+        let result_proofs = block.result_proofs().rev();
+        let results = block.results().cloned().rev();
+
+        transactions.extend(
+            entrypoint_hashes
+                .zip(entrypoint_proofs)
+                .zip(entrypoints)
+                .zip(result_hashes)
+                .zip(result_proofs)
+                .zip(results)
+                .map(
+                    |(
+                        (
+                            (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
+                            result_proof,
+                        ),
+                        result,
+                    )| iroha_data_model::query::CommittedTransaction {
+                        block_hash,
+                        entrypoint_hash,
+                        entrypoint_proof,
+                        entrypoint,
+                        result_hash,
+                        result_proof,
+                        result,
+                    },
+                ),
+        );
+    }
+
+    transactions
+}
+
 /// POST /v1/accounts/{account_id}/transactions/query
 ///
 /// Body: JSON `QueryEnvelope` with optional `filter`, `select`, and `pagination`.
@@ -14566,11 +14623,7 @@ pub async fn handle_v1_account_transactions_with_policy(
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
 
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::{CommittedTxPredicate, CompoundPredicate},
-        transaction::prelude::FindTransactions,
-    };
+    use iroha_data_model::query::dsl::{CommittedTxPredicate, CompoundPredicate};
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     #[cfg(feature = "telemetry")]
@@ -14607,11 +14660,9 @@ pub async fn handle_v1_account_transactions_with_policy(
     );
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
+    let committed_txs = committed_transactions_snapshot(state.as_ref());
 
-    // Limit state borrows within this block so that the handler future remains Send across await points.
     let (items, total) = {
-        let state_view = state.view();
-
         // Validate JSON filter (structural + endpoint-specific) and execute typed predicate (PASS for now)
         let predicate = if let Some(ref expr_wrap) = envelope.filter {
             let expr = expr_wrap;
@@ -14639,8 +14690,6 @@ pub async fn handle_v1_account_transactions_with_policy(
             CompoundPredicate::PASS
         };
         let predicate = predicate.and(account_predicate);
-        let iter = ValidQuery::execute(FindTransactions, predicate.clone(), &state_view)
-            .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
 
         let pagination = enforce_app_pagination(
             envelope.pagination.limit,
@@ -14658,10 +14707,13 @@ pub async fn handle_v1_account_transactions_with_policy(
         if sort_spec.is_empty() {
             let filter_ref = filter_clone.as_ref();
             let select_ref = &select_clone;
-            let filtered_iter = iter.filter_map(|tx| {
-                let include = filter_ref.map(|expr| filter_tx(expr, &tx)).unwrap_or(true);
+            let filtered_iter = committed_txs.iter().filter_map(|tx| {
+                if !predicate.applies(tx) {
+                    return None;
+                }
+                let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
                 if include {
-                    Some(project_tx(&tx, select_ref))
+                    Some(project_tx(tx, select_ref))
                 } else {
                     None
                 }
@@ -14678,17 +14730,15 @@ pub async fn handle_v1_account_transactions_with_policy(
             // ordering discrepancies for complex multi-key sorts. Given the
             // expected result sizes on this endpoint and for deterministic
             // behavior in tests, we collect, sort, and then slice.
-            use iroha_core::smartcontracts::ValidQuery;
-            use iroha_data_model::query::transaction::prelude::FindTransactions;
-            let iter2 = ValidQuery::execute(FindTransactions, predicate, &state_view)
-                .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
-
             let filter_ref = filter_clone.as_ref();
             let select_ref = &select_clone;
             let mut projections: Vec<TxProjection> = Vec::new();
             let debug_filter = torii_debug_match_enabled();
-            for tx in iter2 {
-                let include = filter_ref.map(|expr| filter_tx(expr, &tx)).unwrap_or(true);
+            for tx in &committed_txs {
+                if !predicate.applies(tx) {
+                    continue;
+                }
+                let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
                 if debug_filter {
                     // Print candidate fields and per-clause results if filter provided
                     let result_ok = tx.result().as_ref().is_ok();
@@ -14734,7 +14784,7 @@ pub async fn handle_v1_account_transactions_with_policy(
                         match expr {
                             F::And(list) => {
                                 for (i, c) in list.iter().enumerate() {
-                                    let ok = filter_tx(c, &tx);
+                                    let ok = filter_tx(c, tx);
                                     eprintln!(
                                         "[torii-filter-debug]  clause[{i}] {} => {}",
                                         clause_str(c),
@@ -14743,7 +14793,7 @@ pub async fn handle_v1_account_transactions_with_policy(
                                 }
                             }
                             other => {
-                                let ok = filter_tx(other, &tx);
+                                let ok = filter_tx(other, tx);
                                 eprintln!(
                                     "[torii-filter-debug]  clause {} => {}",
                                     clause_str(other),
@@ -14755,7 +14805,7 @@ pub async fn handle_v1_account_transactions_with_policy(
                     }
                 }
                 if include {
-                    projections.push(project_tx(&tx, select_ref));
+                    projections.push(project_tx(tx, select_ref));
                 }
             }
 
@@ -14898,8 +14948,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
 
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{asset::AssetId, query::transaction::prelude::FindTransactions};
+    use iroha_data_model::asset::AssetId;
 
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
@@ -14918,16 +14967,9 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         .transpose()?;
     let cap = app_query_page_cap(&state);
     let limits = app_query_limits();
+    let committed_txs = committed_transactions_snapshot(state.as_ref());
 
-    // Limit state borrows within this block so that the handler future remains Send across await points.
     let (items, total) = {
-        let state_view = state.view();
-        let iter = ValidQuery::execute(
-            FindTransactions,
-            iroha_data_model::query::dsl::CompoundPredicate::PASS,
-            &state_view,
-        )
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
         let pagination = enforce_app_pagination(
             params.limit,
             params.offset,
@@ -14937,11 +14979,11 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         let fetch_cap = limits
             .clamp_fetch_size(None)?
             .map(|v| v.min(pagination.cap));
-        let filtered = iter.filter_map({
+        let filtered = committed_txs.iter().filter_map({
             let canonical = canonical_account.clone();
             let asset_filter = asset_filter.clone();
             move |tx| {
-                let include = match tx_field_value(&tx, "authority") {
+                let include = match tx_field_value(tx, "authority") {
                     Some(auth) => auth == canonical.as_ref(),
                     None => true,
                 };
@@ -14949,12 +14991,12 @@ pub async fn handle_v1_account_transactions_get_with_policy(
                     return None;
                 }
                 if let Some(expected) = asset_filter.as_ref() {
-                    let assets = tx_collect_asset_ids(&tx);
+                    let assets = tx_collect_asset_ids(tx);
                     if !assets.iter().any(|candidate| candidate == expected) {
                         return None;
                     }
                 }
-                Some(project_tx(&tx, &None))
+                Some(project_tx(tx, &None))
             }
         });
         collect_page_streaming(
@@ -15009,7 +15051,8 @@ pub async fn handle_v1_account_transactions_get_with_policy(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResponse> {
-    let params = state.world.view().parameters().clone();
+    let world = state.world_view();
+    let params = world.parameters().clone();
     Ok(JsonBody(params))
 }
 
@@ -19460,8 +19503,14 @@ mod app_api_integration_tests {
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), http::StatusCode::OK);
+        let status = resp.status();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            http::StatusCode::OK,
+            "unexpected response body: {}",
+            String::from_utf8_lossy(&bytes)
+        );
         let json: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
         assert_eq!(json["total"].as_u64(), Some(1));
         let items = json["items"].as_array().unwrap();
@@ -20399,7 +20448,7 @@ fn populate_explorer_queue(
                 block: Some(height),
                 asset_id: None,
             };
-            match collect_transaction_summaries(
+            match collect_transaction_summaries_from_kura(
                 kura,
                 height,
                 &filters,
@@ -20432,8 +20481,12 @@ fn populate_explorer_queue(
                 kind: None,
                 asset_id: None,
             };
-            match collect_instruction_history(kura, height, &filters, AddressFormatPreference::Ih58)
-            {
+            match collect_instruction_history_from_kura(
+                kura,
+                height,
+                &filters,
+                AddressFormatPreference::Ih58,
+            ) {
                 Ok(items) => {
                     for dto in items {
                         if let Ok(body) = norito::json::to_json(&dto) {
@@ -21372,14 +21425,13 @@ pub fn handle_v1_kaigi_relays_sse(
 pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<NoritoJsonBody, Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
-    let view = state.view();
-    let Some(latest_id) = *view.world().soradns_directory_latest() else {
+    let world = state.world_view();
+    let Some(latest_id) = *world.soradns_directory_latest() else {
         return Err(Error::Query(ValidationFail::QueryFailed(
             QueryExecutionFail::NotFound,
         )));
     };
-    let record = view
-        .world()
+    let record = world
         .soradns_directory_records()
         .get(&latest_id)
         .cloned()
@@ -25293,11 +25345,11 @@ pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl 
         .collect();
     let backlog = status::rbc_backlog_snapshot();
     let pending = status::pending_rbc_snapshot();
+    let world = state.world_view();
     let vrf_snapshot = {
-        let view = state.view();
         let mut active: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
         let mut latest_final: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
-        for (epoch, record) in view.world().vrf_epochs().iter() {
+        for (epoch, record) in world.vrf_epochs().iter() {
             if record.finalized {
                 latest_final = Some((*epoch, record.clone()));
             } else {
@@ -25431,14 +25483,12 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
     state: Arc<CoreState>,
     epoch: u64,
 ) -> Result<impl IntoResponse> {
-    let record_opt = {
-        let view = state.view();
-        view.world()
-            .vrf_epochs()
-            .iter()
-            .find(|entry| *entry.0 == epoch)
-            .map(|(_, rec)| rec.clone())
-    };
+    let world = state.world_view();
+    let record_opt = world
+        .vrf_epochs()
+        .iter()
+        .find(|entry| *entry.0 == epoch)
+        .map(|(_, rec)| rec.clone());
 
     let payload = if let Some(record) = record_opt {
         let participants: Vec<Value> = record
@@ -25820,8 +25870,8 @@ pub async fn handle_v1_sumeragi_commit_qc(
         )))
     })?;
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
-    let view = state.view();
-    let qc_opt = view.world.commit_qcs().get(&typed).cloned();
+    let world = state.world_view();
+    let qc_opt = world.commit_qcs().get(&typed).cloned();
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -28166,30 +28216,21 @@ pub async fn handle_v1_account_permissions_with_policy(
     crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate,
-        error::{FindError, QueryExecutionFail},
-        permission::prelude::FindPermissionsByAccountId,
-    };
+    use iroha_data_model::query::error::FindError;
 
     let (account, _) =
         parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
 
-    let state_view = state.view();
+    let world = state.world_view();
     let permissions_iter: Box<dyn Iterator<Item = iroha_data_model::permission::Permission>> =
-        match ValidQuery::execute(
-            FindPermissionsByAccountId::new(account),
-            CompoundPredicate::PASS,
-            &state_view,
-        ) {
-            Ok(iter) => Box::new(iter),
-            Err(QueryExecutionFail::Find(FindError::Account(_))) => Box::new(std::iter::empty()),
+        match world.account_permissions_iter(&account) {
+            Ok(iter) => Box::new(iter.cloned()),
+            Err(FindError::Account(_)) => Box::new(std::iter::empty()),
             Err(err) => {
                 return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    err,
+                    err.into(),
                 )));
             }
         };
@@ -28264,13 +28305,9 @@ pub async fn handle_v1_account_assets_with_policy(
     crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        asset::AssetId,
-        query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
-    };
+    use iroha_data_model::asset::AssetId;
 
-    let state_view = state.view();
+    let world = state.world_view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_ASSETS)?;
     let (acct, _) = parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_ASSETS)?;
@@ -28278,8 +28315,12 @@ pub async fn handle_v1_account_assets_with_policy(
         .asset_id
         .as_deref()
         .map(|raw| {
-            raw.parse::<AssetId>()
-                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
+            raw.parse::<AssetId>().map_err(|err| {
+                conversion_error(format!(
+                    "asset_id must be a valid asset id `{raw}`: {}",
+                    err.reason()
+                ))
+            })
         })
         .transpose()?;
     let limits = app_query_limits();
@@ -28288,14 +28329,8 @@ pub async fn handle_v1_account_assets_with_policy(
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
 
-    let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
-
     let (items, total) = collect_page_streaming(
-        iter.filter_map(|asset| {
-            if *asset.id().account() != acct {
-                return None;
-            }
+        world.assets_in_account_iter(&acct).filter_map(|asset| {
             if let Some(expected) = asset_filter.as_ref() {
                 if asset.id() != expected {
                     return None;
@@ -28305,7 +28340,7 @@ pub async fn handle_v1_account_assets_with_policy(
                 (),
                 AccountAssetListItem {
                     asset_id: asset.id().to_string(),
-                    quantity: asset.value().clone(),
+                    quantity: asset.value().clone().into_inner(),
                 },
             ))
         }),
@@ -28353,12 +28388,12 @@ pub async fn handle_v1_repo_agreements(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindRepoAgreements, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let agreements: Vec<_> = world
+        .repo_agreements()
+        .iter()
+        .map(|(_, agreement)| agreement.clone())
+        .collect();
 
     let mut filter_expr = p
         .filter
@@ -28379,7 +28414,7 @@ pub async fn handle_v1_repo_agreements(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_REPO_AGREEMENTS_LIST)?;
 
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = agreements.into_iter().filter_map({
         let selectors = selectors.clone();
         move |agreement| {
             let projection = RepoAgreementProjection::from_agreement(&agreement, address_format);
@@ -28420,12 +28455,12 @@ pub async fn handle_v1_repo_agreements_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindRepoAgreements, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let agreements: Vec<_> = world
+        .repo_agreements()
+        .iter()
+        .map(|(_, agreement)| agreement.clone())
+        .collect();
 
     if let Some(expr) = envelope.filter.as_mut() {
         crate::filter::validate_filter(expr)
@@ -28450,7 +28485,7 @@ pub async fn handle_v1_repo_agreements_query(
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = agreements.into_iter().filter_map({
         let selectors = selectors.clone();
         move |agreement| {
             let projection = RepoAgreementProjection::from_agreement(&agreement, address_format);
@@ -28822,12 +28857,8 @@ pub async fn handle_v1_domains(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{domain::prelude::FindDomains, dsl::CompoundPredicate};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindDomains, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let domains: Vec<_> = world.domains_iter().cloned().collect();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_DOMAINS_LIST)?;
 
@@ -28836,7 +28867,7 @@ pub async fn handle_v1_domains(
         id: String,
     }
     let (items, total) = collect_page_streaming(
-        iter.map(|dom| {
+        domains.into_iter().map(|dom| {
             (
                 dom.id().to_string(),
                 DomainProj {
@@ -28932,12 +28963,8 @@ pub async fn handle_v1_domains_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{domain::prelude::FindDomains, dsl::CompoundPredicate};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindDomains, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let domains: Vec<_> = world.domains_iter().cloned().collect();
 
     #[derive(Clone)]
     struct DomainProj {
@@ -28963,7 +28990,7 @@ pub async fn handle_v1_domains_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let selectors = compile_domain_sort_spec(&sort);
-    let mapped_iter = iter.map({
+    let mapped_iter = domains.into_iter().map({
         let selectors = selectors;
         move |dom| {
             let id = dom.id().to_string();
@@ -29790,6 +29817,20 @@ fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool 
 }
 
 #[cfg(feature = "app_api")]
+fn account_from_world_entry(
+    entry: iroha_data_model::account::AccountEntry<'_>,
+) -> iroha_data_model::account::Account {
+    let details = entry.value().clone().into_inner();
+    iroha_data_model::account::Account {
+        id: entry.id().clone(),
+        metadata: details.metadata,
+        label: details.label,
+        uaid: details.uaid,
+        opaque_ids: details.opaque_ids,
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn uaid_parse_error(reason: &'static str) -> Error {
     iroha_logger::warn!(
         target: "torii.uaid.parse",
@@ -30049,11 +30090,8 @@ pub async fn handle_v1_accounts_onboard(
         }
     }
 
-    {
-        let view = app.state.view();
-        if view.world().account(&account_id).is_ok() {
-            return Err(onboarding_invalid_request("account already exists"));
-        }
+    if app.state.world_view().account(&account_id).is_ok() {
+        return Err(onboarding_invalid_request("account already exists"));
     }
 
     let uaid = if let Some(literal) = uaid {
@@ -30063,13 +30101,11 @@ pub async fn handle_v1_accounts_onboard(
     };
     let dataspace = DataSpaceId::GLOBAL;
     let should_publish_manifest = {
-        let view = app.state.view();
-        let bound = view
-            .world()
+        let world = app.state.world_view();
+        !world
             .uaid_dataspaces()
             .get(&uaid)
-            .is_some_and(|bindings| bindings.is_bound_to(dataspace, &account_id));
-        !bound
+            .is_some_and(|bindings| bindings.is_bound_to(dataspace, &account_id))
     };
 
     let mut metadata = Metadata::default();
@@ -30092,7 +30128,7 @@ pub async fn handle_v1_accounts_onboard(
     let mut instructions = Vec::with_capacity(if should_publish_manifest { 2 } else { 1 });
     instructions.push(InstructionBox::from(register));
     if should_publish_manifest {
-        let activation_epoch = app.state.view().height().saturating_sub(1) as u64;
+        let activation_epoch = app.state.committed_height().saturating_sub(1) as u64;
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::V1,
             uaid,
@@ -30160,12 +30196,12 @@ pub async fn handle_v1_accounts(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{account::prelude::FindAccounts, dsl::CompoundPredicate};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindAccounts, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let accounts: Vec<_> = world
+        .accounts_iter()
+        .map(account_from_world_entry)
+        .collect();
+    drop(world);
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_account_sort_spec(&sort_spec);
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
@@ -30185,7 +30221,7 @@ pub async fn handle_v1_accounts(
     }
 
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = accounts.into_iter().filter_map({
         let selectors = selectors;
         let address_format = address_format;
         move |account| {
@@ -30242,10 +30278,6 @@ pub async fn handle_v1_accounts_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{account::prelude::FindAccounts, dsl::CompoundPredicate};
-
-    let state_view = state.view();
     if let Some(expr) = envelope.filter.as_mut() {
         fn depth(e: &crate::filter::FilterExpr) -> usize {
             use crate::filter::FilterExpr as F;
@@ -30279,12 +30311,16 @@ pub async fn handle_v1_accounts_query(
         ENDPOINT_ACCOUNTS_QUERY,
     )?;
     let fetch_size = envelope.fetch_size;
+    let world = state.world_view();
+    let accounts: Vec<_> = world
+        .accounts_iter()
+        .map(account_from_world_entry)
+        .collect();
+    drop(world);
 
     let (items, total) = if sort_spec.is_empty() {
-        let iter = ValidQuery::execute(FindAccounts, CompoundPredicate::PASS, &state_view)
-            .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
         let address_format = address_format;
-        let filtered_iter = iter.filter_map(move |account| {
+        let filtered_iter = accounts.into_iter().filter_map(move |account| {
             if let Some(expr) = filter_ref {
                 if !account_filter_object(expr, &account) {
                     return None;
@@ -30308,11 +30344,9 @@ pub async fn handle_v1_accounts_query(
             fetch_size,
         )
     } else {
-        let iter = ValidQuery::execute(FindAccounts, CompoundPredicate::PASS, &state_view)
-            .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
         let selectors = compile_account_sort_spec(&sort_spec);
         let address_format = address_format;
-        let mapped_iter = iter.filter_map(move |account| {
+        let mapped_iter = accounts.into_iter().filter_map(move |account| {
             if let Some(expr) = filter_ref {
                 if !account_filter_object(expr, &account) {
                     return None;
@@ -30368,7 +30402,10 @@ pub async fn handle_v1_accounts_portfolio(
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
-    let mut snapshot = portfolio::collect_portfolio(&state.view(), uaid);
+    let world = state.world_view();
+    let nexus = state.nexus_snapshot();
+    let mut snapshot = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
+    drop(world);
     if let Some(expected) = asset_id.as_ref() {
         filter_portfolio_by_asset_id(&mut snapshot, expected);
     }
@@ -30547,11 +30584,12 @@ pub async fn handle_v1_space_directory_bindings(
         ENDPOINT_SPACE_DIRECTORY_BINDINGS,
         address_format,
     );
-    let snapshot = state.view();
-    let alias_lookup = DataspaceAliasLookup::new(snapshot.nexus.dataspace_catalog.clone());
+    let world = state.world_view();
+    let nexus = state.nexus_snapshot();
+    let alias_lookup = DataspaceAliasLookup::new(nexus.dataspace_catalog.clone());
 
     let mut dataspaces = Vec::new();
-    if let Some(bindings) = snapshot.world.uaid_dataspaces().get(&uaid) {
+    if let Some(bindings) = world.uaid_dataspaces().get(&uaid) {
         for (dataspace_id, accounts) in bindings.iter() {
             let mut entry = Map::new();
             entry.insert("dataspace_id".into(), Value::from(dataspace_id.as_u64()));
@@ -30597,9 +30635,10 @@ pub async fn handle_v1_space_directory_manifests(
 ) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
     let filter = query.dataspace.map(DataSpaceId::new);
-    let snapshot = state.view();
-    let alias_lookup = DataspaceAliasLookup::new(snapshot.nexus.dataspace_catalog.clone());
-    let bindings = snapshot.world.uaid_dataspaces().get(&uaid);
+    let world = state.world_view();
+    let nexus = state.nexus_snapshot();
+    let alias_lookup = DataspaceAliasLookup::new(nexus.dataspace_catalog.clone());
+    let bindings = world.uaid_dataspaces().get(&uaid);
     let address_format = AddressFormatPreference::from_param(query.address_format.as_deref())?;
     record_address_format_selection(
         &telemetry,
@@ -30618,40 +30657,39 @@ pub async fn handle_v1_space_directory_manifests(
 
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.filter(|&lim| lim > 0);
-    let (projections, total) =
-        if let Some(set) = snapshot.world.space_directory_manifests().get(&uaid) {
-            let dataspace_filter = filter;
-            let total = set
-                .iter()
-                .filter(|&(dataspace_id, _)| match dataspace_filter {
-                    Some(target) => *dataspace_id == target,
-                    None => true,
-                })
-                .count();
-            let status_filter = status_filter;
-            let iter_filter = dataspace_filter;
-            let iter = set.iter().filter_map(move |(dataspace_id, record)| {
-                if let Some(target) = iter_filter {
-                    if *dataspace_id != target {
-                        return None;
-                    }
-                }
-                if !manifest_status_matches(record, status_filter) {
+    let (projections, total) = if let Some(set) = world.space_directory_manifests().get(&uaid) {
+        let dataspace_filter = filter;
+        let total = set
+            .iter()
+            .filter(|&(dataspace_id, _)| match dataspace_filter {
+                Some(target) => *dataspace_id == target,
+                None => true,
+            })
+            .count();
+        let status_filter = status_filter;
+        let iter_filter = dataspace_filter;
+        let iter = set.iter().filter_map(move |(dataspace_id, record)| {
+            if let Some(target) = iter_filter {
+                if *dataspace_id != target {
                     return None;
                 }
-                Some((
-                    dataspace_id.as_u64(),
-                    ManifestProjection {
-                        dataspace_id: *dataspace_id,
-                        record,
-                    },
-                ))
-            });
-            let (items, _) = collect_page_streaming(iter, offset, limit, None);
-            (items, total)
-        } else {
-            (Vec::new(), 0)
-        };
+            }
+            if !manifest_status_matches(record, status_filter) {
+                return None;
+            }
+            Some((
+                dataspace_id.as_u64(),
+                ManifestProjection {
+                    dataspace_id: *dataspace_id,
+                    record,
+                },
+            ))
+        });
+        let (items, _) = collect_page_streaming(iter, offset, limit, None);
+        (items, total)
+    } else {
+        (Vec::new(), 0)
+    };
 
     for projection in projections {
         let entry = manifest_entry_to_json(
@@ -30991,10 +31029,10 @@ pub async fn handle_v1_explorer_accounts(
     domain: Option<DomainId>,
     definition: Option<AssetDefinitionId>,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(view.world());
+    let world = state.world_view();
+    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
     let page = crate::explorer::accounts_page(
-        view.world().accounts_iter(),
+        world.accounts_iter(),
         &aggregates,
         domain.as_ref(),
         definition.as_ref(),
@@ -31010,10 +31048,10 @@ pub async fn handle_v1_explorer_domains(
     pagination: crate::explorer::ExplorerPaginationQuery,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(view.world());
+    let world = state.world_view();
+    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
     let page = crate::explorer::domains_page(
-        view.world().domains_iter(),
+        world.domains_iter(),
         &aggregates,
         owned_by.as_ref(),
         pagination.page,
@@ -31029,10 +31067,11 @@ pub async fn handle_v1_explorer_asset_definitions(
     domain: Option<DomainId>,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(view.world());
+    let world = state.world_view();
+    let governance = state.governance_snapshot();
+    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
     let mut page = crate::explorer::asset_definitions_page(
-        view.world().asset_definitions_iter(),
+        world.asset_definitions_iter(),
         &aggregates,
         domain.as_ref(),
         owned_by.as_ref(),
@@ -31042,22 +31081,21 @@ pub async fn handle_v1_explorer_asset_definitions(
 
     // Enrich the governance voting asset definition with locked/circulating supply figures.
     // (Other assets default to null for these fields.)
-    let voting_asset_id = view.gov.voting_asset_id.clone();
+    let voting_asset_id = governance.voting_asset_id.clone();
     let voting_asset_id_str = voting_asset_id.to_string();
     if page.items.iter().any(|item| item.id == voting_asset_id_str) {
         use iroha_primitives::numeric::Numeric;
 
         let escrow_asset_id = AssetId::new(
             voting_asset_id.clone(),
-            view.gov.bond_escrow_account.clone(),
+            governance.bond_escrow_account.clone(),
         );
-        let locked = match view.world().asset(&escrow_asset_id) {
+        let locked = match world.asset(&escrow_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => Numeric::zero(),
         };
 
-        let total = view
-            .world()
+        let total = world
             .asset_definition(&voting_asset_id)
             .map(|def| def.total_quantity().clone())
             .unwrap_or_else(|_| Numeric::zero());
@@ -31089,9 +31127,9 @@ pub async fn handle_v1_explorer_assets(
     definition: Option<AssetDefinitionId>,
     asset_id: Option<AssetId>,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
+    let world = state.world_view();
     let page = crate::explorer::assets_page(
-        view.world().assets_iter(),
+        world.assets_iter(),
         owned_by.as_ref(),
         definition.as_ref(),
         asset_id.as_ref(),
@@ -31108,9 +31146,9 @@ pub async fn handle_v1_explorer_nfts(
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
+    let world = state.world_view();
     let page = crate::explorer::nfts_page(
-        view.world().nfts_iter(),
+        world.nfts_iter(),
         owned_by.as_ref(),
         domain.as_ref(),
         pagination.page,
@@ -31124,8 +31162,7 @@ pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let total_items = view.height() as u64;
+    let total_items = state.committed_height() as u64;
     let page = pagination.page.max(1);
     let per_page = pagination.per_page.max(1);
     let total_pages = total_items.div_ceil(per_page);
@@ -31140,7 +31177,7 @@ pub async fn handle_v1_explorer_blocks(
                 .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
             let nonzero_height = NonZeroUsize::new(height_usize)
                 .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-            let block = view.kura().get_block(nonzero_height).ok_or_else(|| {
+            let block = state.block_by_height(nonzero_height).ok_or_else(|| {
                 Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::NotFound,
                 ))
@@ -31295,14 +31332,12 @@ async fn explorer_network_metrics_snapshot(
     telemetry: &MaybeTelemetry,
 ) -> Result<crate::explorer::ExplorerNetworkMetricsDto, Error> {
     let metrics = telemetry.metrics().await;
-    let view = state.view();
-    let peers = view.world().peers().len() as u64;
-    let domains = view.world().domains_iter().count() as u64;
-    let accounts = view.world().accounts_iter().count() as u64;
-    let assets =
-        view.world().assets_iter().count() as u64 + view.world().nfts().iter().count() as u64;
-    let finalized_block = view.height() as u64;
-    drop(view);
+    let world = state.world_view();
+    let peers = world.peers().len() as u64;
+    let domains = world.domains_iter().count() as u64;
+    let accounts = world.accounts_iter().count() as u64;
+    let assets = world.assets_iter().count() as u64 + world.nfts().iter().count() as u64;
+    let finalized_block = state.committed_height() as u64;
 
     let transactions_accepted = metrics.txs.with_label_values(&["accepted"]).get();
     let transactions_rejected = metrics.txs.with_label_values(&["rejected"]).get();
@@ -31391,8 +31426,7 @@ pub async fn handle_v1_explorer_transactions(
     status: Option<ExplorerTransactionStatusFilter>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let max_height = view.height() as u64;
+    let max_height = state.committed_height() as u64;
     let address_format = pagination.address_format_pref()?;
     record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS, address_format);
     if let Some(block_height) = block {
@@ -31416,7 +31450,7 @@ pub async fn handle_v1_explorer_transactions(
         asset_id,
     };
     let transactions =
-        collect_transaction_summaries(view.kura(), max_height, &filters, address_format)?;
+        collect_transaction_summaries(state.as_ref(), max_height, &filters, address_format)?;
     let (items, pagination_meta) =
         crate::explorer::paginate(transactions, pagination.page, pagination.per_page);
     let page = crate::explorer::ExplorerTransactionsPage {
@@ -31445,8 +31479,7 @@ pub async fn handle_v1_explorer_instructions(
     pagination: crate::explorer::ExplorerPaginationQuery,
     query: ExplorerInstructionQuery,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let max_height = view.height() as u64;
+    let max_height = state.committed_height() as u64;
     let address_format = pagination.address_format_pref()?;
     record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS, address_format);
     let ExplorerInstructionQuery {
@@ -31482,7 +31515,7 @@ pub async fn handle_v1_explorer_instructions(
         asset_id,
     };
     let instructions =
-        collect_instruction_history(view.kura(), max_height, &filters, address_format)?;
+        collect_instruction_history(state.as_ref(), max_height, &filters, address_format)?;
     let (items, pagination_meta) =
         crate::explorer::paginate(instructions, pagination.page, pagination.per_page);
     let page = ExplorerInstructionsPage {
@@ -31499,14 +31532,13 @@ pub async fn handle_v1_explorer_transaction_detail(
     identifier: String,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let max_height = view.height() as u64;
+    let max_height = state.committed_height() as u64;
     record_address_format_selection(
         &telemetry,
         ENDPOINT_EXPLORER_TRANSACTION_DETAIL,
         address_format,
     );
-    let dto = find_transaction_detail(view.kura(), max_height, identifier, address_format)?;
+    let dto = find_transaction_detail(state.as_ref(), max_height, identifier, address_format)?;
     Ok(JsonBody(dto).into_response())
 }
 
@@ -31518,19 +31550,18 @@ pub async fn handle_v1_explorer_instruction_detail(
     index: u64,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let max_height = view.height() as u64;
+    let max_height = state.committed_height() as u64;
     record_address_format_selection(
         &telemetry,
         ENDPOINT_EXPLORER_INSTRUCTION_DETAIL,
         address_format,
     );
-    let dto = find_instruction_detail(view.kura(), max_height, hash, index, address_format)?;
+    let dto = find_instruction_detail(state.as_ref(), max_height, hash, index, address_format)?;
     Ok(JsonBody(dto).into_response())
 }
 
 #[cfg(feature = "app_api")]
-fn collect_transaction_summaries(
+fn collect_transaction_summaries_from_kura(
     kura: &Kura,
     start_height: u64,
     filters: &ExplorerTransactionFilters,
@@ -31575,7 +31606,52 @@ fn collect_transaction_summaries(
 }
 
 #[cfg(feature = "app_api")]
-fn collect_instruction_history(
+fn collect_transaction_summaries(
+    state: &CoreState,
+    start_height: u64,
+    filters: &ExplorerTransactionFilters,
+    address_format: AddressFormatPreference,
+) -> Result<Vec<crate::explorer::ExplorerTransactionDto>, Error> {
+    let mut out = Vec::new();
+    if start_height == 0 {
+        return Ok(out);
+    }
+    let mut height = filters.block.unwrap_or(start_height);
+    let lower_bound = filters.block.unwrap_or(1);
+    while height >= lower_bound {
+        let height_usize: usize = height
+            .try_into()
+            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
+        let nonzero_height = NonZeroUsize::new(height_usize)
+            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+        let block = state
+            .block_by_height(nonzero_height)
+            .ok_or_else(explorer_not_found)?;
+        let block_ref = block.as_ref();
+        let external_total = block_ref.external_transactions().len();
+        for (tx, result) in block_ref
+            .external_transactions()
+            .zip(block_ref.results().take(external_total))
+        {
+            if filters.matches(tx, height, result) {
+                out.push(crate::explorer::transaction_summary_dto(
+                    tx,
+                    height,
+                    result,
+                    address_format,
+                ));
+            }
+        }
+        if height == lower_bound || height == 1 {
+            break;
+        }
+        height -= 1;
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_instruction_history_from_kura(
     kura: &Kura,
     start_height: u64,
     filters: &ExplorerInstructionFilters,
@@ -31644,8 +31720,77 @@ fn collect_instruction_history(
 }
 
 #[cfg(feature = "app_api")]
+fn collect_instruction_history(
+    state: &CoreState,
+    start_height: u64,
+    filters: &ExplorerInstructionFilters,
+    address_format: AddressFormatPreference,
+) -> Result<Vec<ExplorerInstructionDto>, Error> {
+    let mut out = Vec::new();
+    if start_height == 0 {
+        return Ok(out);
+    }
+    let mut height = filters.block.unwrap_or(start_height);
+    let lower_bound = filters.block.unwrap_or(1);
+    while height >= lower_bound {
+        let height_usize: usize = height
+            .try_into()
+            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
+        let nonzero_height = NonZeroUsize::new(height_usize)
+            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+        let block = state
+            .block_by_height(nonzero_height)
+            .ok_or_else(explorer_not_found)?;
+        let block_ref = block.as_ref();
+        let external_total = block_ref.external_transactions().len();
+        for (tx, result) in block_ref
+            .external_transactions()
+            .zip(block_ref.results().take(external_total))
+        {
+            if !filters.matches_transaction(tx, height, result) {
+                continue;
+            }
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for (idx, instruction) in instructions.iter().enumerate() {
+                let kind = crate::explorer::instruction_kind(instruction);
+                if !filters.matches_instruction(kind) {
+                    continue;
+                }
+                if let Some(expected) = filters.account.as_ref() {
+                    if !instruction_matches_account_id(instruction, expected) {
+                        continue;
+                    }
+                }
+                if let Some(expected) = filters.asset_id.as_ref() {
+                    if !instruction_matches_asset_id(instruction, expected) {
+                        continue;
+                    }
+                }
+                let index = u32::try_from(idx).unwrap_or(u32::MAX);
+                out.push(crate::explorer::instruction_dto_with_kind(
+                    tx,
+                    height,
+                    result,
+                    instruction,
+                    kind,
+                    index,
+                    address_format,
+                ));
+            }
+        }
+        if height == lower_bound || height == 1 {
+            break;
+        }
+        height -= 1;
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
 fn find_transaction_detail(
-    kura: &Kura,
+    state: &CoreState,
     start_height: u64,
     identifier: String,
     address_format: AddressFormatPreference,
@@ -31664,8 +31809,8 @@ fn find_transaction_detail(
             .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
         let nonzero_height = NonZeroUsize::new(height_usize)
             .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = kura
-            .get_block(nonzero_height)
+        let block = state
+            .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
         let external_total = block_ref.external_transactions().len();
@@ -31692,7 +31837,7 @@ fn find_transaction_detail(
 
 #[cfg(feature = "app_api")]
 fn find_instruction_detail(
-    kura: &Kura,
+    state: &CoreState,
     start_height: u64,
     identifier: String,
     index: u64,
@@ -31715,8 +31860,8 @@ fn find_instruction_detail(
             .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
         let nonzero_height = NonZeroUsize::new(height_usize)
             .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = kura
-            .get_block(nonzero_height)
+        let block = state
+            .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
         let external_total = block_ref.external_transactions().len();
@@ -31758,10 +31903,9 @@ pub async fn handle_v1_explorer_account_detail(
     state: Arc<CoreState>,
     account_id: AccountId,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(view.world());
-    let dto = view
-        .world()
+    let world = state.world_view();
+    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
+    let dto = world
         .account(&account_id)
         .map(|entry| {
             crate::explorer::ExplorerAccountDto::from_entry(
@@ -31780,8 +31924,8 @@ pub async fn handle_v1_explorer_account_qr(
     telemetry: MaybeTelemetry,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    view.world()
+    let world = state.world_view();
+    world
         .account(&account_id)
         .map_err(|_| explorer_not_found())?;
     record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_ACCOUNT_QR, address_format);
@@ -31795,10 +31939,9 @@ pub async fn handle_v1_explorer_domain_detail(
     state: Arc<CoreState>,
     domain_id: DomainId,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(view.world());
-    let dto = view
-        .world()
+    let world = state.world_view();
+    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
+    let dto = world
         .domain(&domain_id)
         .map(|domain| {
             crate::explorer::ExplorerDomainDto::from_domain(
@@ -31815,21 +31958,23 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let aggregates = crate::explorer::ExplorerAggregates::build(view.world());
-    let definition = view
-        .world()
+    let world = state.world_view();
+    let governance = state.governance_snapshot();
+    let aggregates = crate::explorer::ExplorerAggregates::build(&world);
+    let definition = world
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
     let mut dto =
         crate::explorer::ExplorerAssetDefinitionDto::from_definition(&definition, &aggregates);
 
-    if &definition_id == &view.gov.voting_asset_id {
+    if definition_id == governance.voting_asset_id {
         use iroha_primitives::numeric::Numeric;
 
-        let escrow_asset_id =
-            AssetId::new(definition_id.clone(), view.gov.bond_escrow_account.clone());
-        let locked = match view.world().asset(&escrow_asset_id) {
+        let escrow_asset_id = AssetId::new(
+            definition_id.clone(),
+            governance.bond_escrow_account.clone(),
+        );
+        let locked = match world.asset(&escrow_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => Numeric::zero(),
         };
@@ -33082,9 +33227,8 @@ pub async fn handle_v1_explorer_asset_detail(
     state: Arc<CoreState>,
     asset_id: AssetId,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let dto = view
-        .world()
+    let world = state.world_view();
+    let dto = world
         .asset(&asset_id)
         .map(crate::explorer::ExplorerAssetDto::from_entry)
         .map_err(|_| explorer_not_found())?;
@@ -33096,9 +33240,8 @@ pub async fn handle_v1_explorer_nft_detail(
     state: Arc<CoreState>,
     nft_id: NftId,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let dto = view
-        .world()
+    let world = state.world_view();
+    let dto = world
         .nft(&nft_id)
         .map(crate::explorer::ExplorerNftDto::from_entry)
         .map_err(|_| explorer_not_found())?;
@@ -33136,14 +33279,10 @@ pub async fn handle_v1_explorer_block_detail(
     state: Arc<CoreState>,
     identifier: String,
 ) -> Result<AxResponse, Error> {
-    let view = state.view();
-    let kura = view.kura();
     let lookup = parse_block_identifier(&identifier)?;
     let block = match lookup {
-        ExplorerBlockIdentifier::Height(height) => kura.get_block(height),
-        ExplorerBlockIdentifier::Hash(hash) => kura
-            .get_block_height_by_hash(hash)
-            .and_then(|height| kura.get_block(height)),
+        ExplorerBlockIdentifier::Height(height) => state.block_by_height(height),
+        ExplorerBlockIdentifier::Hash(hash) => state.block_by_hash(hash),
     }
     .ok_or_else(explorer_not_found)?;
     let dto = crate::explorer::ExplorerBlockDto::from_block(block.as_ref());
@@ -33439,16 +33578,9 @@ pub async fn handle_v1_assets_definitions(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{asset::prelude::FindAssetsDefinitions, dsl::CompoundPredicate};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindAssetsDefinitions::new(),
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let definitions: Vec<_> = world.asset_definitions_iter().cloned().collect();
+    drop(world);
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_asset_definition_sort_spec(&sort_spec);
@@ -33467,7 +33599,7 @@ pub async fn handle_v1_assets_definitions(
     }
 
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = definitions.into_iter().filter_map({
         let selectors = selectors;
         move |def| {
             if let Some(expr) = filter_ref {
@@ -33519,16 +33651,9 @@ pub async fn handle_v1_assets_definitions_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{asset::prelude::FindAssetsDefinitions, dsl::CompoundPredicate};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindAssetsDefinitions::new(),
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let definitions: Vec<_> = world.asset_definitions_iter().cloned().collect();
+    drop(world);
 
     let selectors = compile_asset_definition_sort_spec(&envelope.sort);
     let cap = app_query_page_cap(&state);
@@ -33561,7 +33686,7 @@ pub async fn handle_v1_assets_definitions_query(
     }
 
     let filter_ref = envelope.filter.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = definitions.into_iter().filter_map({
         let selectors = selectors;
         move |def| {
             if let Some(expr) = filter_ref {
@@ -35251,14 +35376,12 @@ pub async fn handle_v1_offline_allowances(
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineAllowanceListParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineAllowances,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindOfflineAllowances, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_allowances()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_offline_allowance_sort_spec(&sort_spec);
@@ -35293,7 +35416,7 @@ pub async fn handle_v1_offline_allowances(
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = records.into_iter().filter_map({
         let selectors = selectors;
         let extra_filters = extra_filters;
         move |record| {
@@ -35346,18 +35469,12 @@ pub async fn handle_v1_offline_revocations(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineVerdictRevocations,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineVerdictRevocations,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_verdict_revocations()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_offline_revocation_sort_spec(&sort_spec);
@@ -35389,7 +35506,7 @@ pub async fn handle_v1_offline_revocations(
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = records.into_iter().filter_map({
         let selectors = selectors;
         move |record| {
             if let Some(expr) = filter_ref {
@@ -35438,14 +35555,12 @@ pub async fn handle_v1_offline_allowances_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineAllowances,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindOfflineAllowances, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_allowances()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let selectors = compile_offline_allowance_sort_spec(&envelope.sort);
     let response_now_ms = current_unix_timestamp_ms();
@@ -35493,7 +35608,7 @@ pub async fn handle_v1_offline_allowances_query(
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = records.into_iter().filter_map({
         let selectors = selectors;
         move |record| {
             if let Some(expr) = filter_ref {
@@ -35550,9 +35665,9 @@ pub async fn handle_v1_nexus_public_lane_validators(
         address_format,
     );
 
-    let view = state.view();
+    let world = state.world_view();
     let mut entries = Vec::new();
-    for ((lane, _), record) in view.world.public_lane_validators().iter() {
+    for ((lane, _), record) in world.public_lane_validators().iter() {
         if *lane == lane_id {
             entries.push(validator_record_to_json(record, address_format));
         }
@@ -35602,9 +35717,9 @@ pub async fn handle_v1_nexus_public_lane_stake(
     let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_STAKE, address_format);
 
-    let view = state.view();
+    let world = state.world_view();
     let mut entries = Vec::new();
-    for ((lane, validator, _), share) in view.world.public_lane_stake_shares().iter() {
+    for ((lane, validator, _), share) in world.public_lane_stake_shares().iter() {
         if *lane != lane_id {
             continue;
         }
@@ -35673,14 +35788,14 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     );
     let upto_epoch = params.upto_epoch.unwrap_or(u64::MAX);
 
-    let view = state.view();
+    let world = state.world_view();
     let rewards = collect_pending_public_lane_rewards(
         lane_id,
         &account_id,
         upto_epoch,
         asset_filter.as_ref(),
-        view.world.public_lane_reward_claims().iter(),
-        view.world.public_lane_rewards().iter(),
+        world.public_lane_reward_claims().iter(),
+        world.public_lane_rewards().iter(),
     )?;
     let mut entries = rewards
         .into_iter()
@@ -36081,18 +36196,12 @@ pub async fn handle_v1_offline_revocations_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineVerdictRevocations,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineVerdictRevocations,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_verdict_revocations()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let selectors = compile_offline_revocation_sort_spec(&envelope.sort);
 
@@ -36139,7 +36248,7 @@ pub async fn handle_v1_offline_revocations_query(
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = records.into_iter().filter_map({
         let selectors = selectors;
         move |record| {
             if let Some(expr) = filter_ref {
@@ -36188,18 +36297,12 @@ pub async fn handle_v1_offline_summaries(
     AxQuery(p): AxQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineCounterSummaries,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineCounterSummaries,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let summaries: Vec<_> = world
+        .offline_allowances()
+        .iter()
+        .map(|(_, record)| OfflineCounterSummary::from(record))
+        .collect();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_offline_summary_sort_spec(&sort_spec);
@@ -36227,7 +36330,7 @@ pub async fn handle_v1_offline_summaries(
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = summaries.into_iter().filter_map({
         let selectors = selectors;
         move |summary| {
             let item = OfflineCounterSummaryListItem::from(summary);
@@ -36276,18 +36379,12 @@ pub async fn handle_v1_offline_summaries_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineCounterSummaries,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineCounterSummaries,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let summaries: Vec<_> = world
+        .offline_allowances()
+        .iter()
+        .map(|(_, record)| OfflineCounterSummary::from(record))
+        .collect();
 
     if let Some(expr) = envelope.filter.as_mut() {
         crate::filter::validate_filter(expr)
@@ -36317,7 +36414,7 @@ pub async fn handle_v1_offline_summaries_query(
     let selectors = compile_offline_summary_sort_spec(&envelope.sort);
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = summaries.into_iter().filter_map({
         let selectors = selectors;
         move |summary| {
             let item = OfflineCounterSummaryListItem::from(summary);
@@ -37440,18 +37537,12 @@ pub async fn handle_v1_offline_transfers(
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineTransferListParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineToOnlineTransfers,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_to_online_transfers()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_offline_transfer_sort_spec(&sort_spec);
@@ -37481,7 +37572,7 @@ pub async fn handle_v1_offline_transfers(
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = records.into_iter().filter_map({
         let selectors = selectors;
         let extra_filters = extra_filters.clone();
         move |record| {
@@ -37534,18 +37625,12 @@ pub async fn handle_v1_offline_transfers_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse, Error> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers,
-    };
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineToOnlineTransfers,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_to_online_transfers()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let selectors = compile_offline_transfer_sort_spec(&envelope.sort);
 
@@ -37588,7 +37673,7 @@ pub async fn handle_v1_offline_transfers_query(
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = records.into_iter().filter_map({
         let selectors = selectors;
         move |record| {
             if let Some(expr) = filter_ref {
@@ -37639,26 +37724,14 @@ pub async fn handle_v1_offline_transfer_get(
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineTransferGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        ValidationFail,
-        query::{
-            dsl::CompoundPredicate, error::QueryExecutionFail,
-            offline::prelude::FindOfflineToOnlineTransferById,
-        },
-    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let bundle_id = parse_hash_hex(&bundle_id_hex, "bundle_id_hex")?;
-    let state_view = state.view();
-    let mut results = ValidQuery::execute(
-        FindOfflineToOnlineTransferById::new(bundle_id),
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(ValidationFail::QueryFailed(e)))?
-    .collect::<Vec<_>>();
-    let record = results
-        .pop()
+    let world = state.world_view();
+    let record = world
+        .offline_to_online_transfers()
+        .get(&bundle_id)
+        .cloned()
         .ok_or_else(|| Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)))?;
 
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
@@ -37680,20 +37753,14 @@ pub async fn handle_v1_offline_receipts(
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineReceiptListParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        ValidationFail,
-        offline::OFFLINE_REJECTION_REASON_PREFIX,
-        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers},
-    };
+    use iroha_data_model::{ValidationFail, offline::OFFLINE_REJECTION_REASON_PREFIX};
 
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineToOnlineTransfers,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_to_online_transfers()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_offline_receipt_sort_spec(&sort_spec);
@@ -37740,7 +37807,7 @@ pub async fn handle_v1_offline_receipts(
     let asset_filter = p.asset_id.clone();
 
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = iter.flat_map({
+    let mapped_iter = records.into_iter().flat_map({
         let selectors = selectors;
         move |record| {
             let bundle_id_hex = hex::encode(record.transfer.bundle_id.as_ref());
@@ -37850,19 +37917,14 @@ pub async fn handle_v1_offline_receipts_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse, Error> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        ValidationFail,
-        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers},
-    };
+    use iroha_data_model::ValidationFail;
 
-    let state_view = state.view();
-    let iter = ValidQuery::execute(
-        FindOfflineToOnlineTransfers,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let records: Vec<_> = world
+        .offline_to_online_transfers()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect();
 
     let selectors = compile_offline_receipt_sort_spec(&envelope.sort);
 
@@ -37904,7 +37966,7 @@ pub async fn handle_v1_offline_receipts_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let filter_ref = envelope.filter.as_ref();
-    let mapped_iter = iter.flat_map({
+    let mapped_iter = records.into_iter().flat_map({
         let selectors = selectors;
         move |record| {
             let bundle_id_hex = hex::encode(record.transfer.bundle_id.as_ref());
@@ -37964,14 +38026,7 @@ pub async fn handle_v1_offline_bundle_proof_status(
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineBundleProofStatusParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        ValidationFail,
-        query::{
-            dsl::CompoundPredicate, error::QueryExecutionFail,
-            offline::prelude::FindOfflineToOnlineTransferById,
-        },
-    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let bundle_id = parse_hash_hex(&p.bundle_id_hex, "bundle_id_hex")?;
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
@@ -37981,19 +38036,12 @@ pub async fn handle_v1_offline_bundle_proof_status(
         address_format,
     );
 
-    let record = {
-        let state_view = state.view();
-        let mut results = ValidQuery::execute(
-            FindOfflineToOnlineTransferById::new(bundle_id),
-            CompoundPredicate::PASS,
-            &state_view,
-        )
-        .map_err(|e| Error::Query(ValidationFail::QueryFailed(e)))?
-        .collect::<Vec<_>>();
-        results.pop().ok_or_else(|| {
-            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
-        })?
-    };
+    let world = state.world_view();
+    let record = world
+        .offline_to_online_transfers()
+        .get(&bundle_id)
+        .cloned()
+        .ok_or_else(|| Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)))?;
 
     let receipts_root = compute_receipts_root(&record.transfer.receipts).map_err(|err| {
         Error::Query(ValidationFail::InternalError(format!(
@@ -38159,11 +38207,7 @@ pub async fn handle_post_v1_offline_certificates_renew_issue(
     NoritoJson(req): NoritoJson<OfflineCertificateIssueRequest>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        ValidationFail,
-        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId},
-    };
+    use iroha_data_model::ValidationFail;
 
     let issuer = app.offline_issuer.as_ref().ok_or_else(|| {
         Error::Query(ValidationFail::NotPermitted(
@@ -38172,21 +38216,16 @@ pub async fn handle_post_v1_offline_certificates_renew_issue(
     })?;
 
     let old_certificate_id = parse_hash_hex(&certificate_id_hex, "certificate_id_hex")?;
-    let record = {
-        let state_view = app.state.view();
-        let mut results = ValidQuery::execute(
-            FindOfflineAllowanceByCertificateId::new(old_certificate_id),
-            CompoundPredicate::PASS,
-            &state_view,
-        )
-        .map_err(|e| Error::Query(ValidationFail::QueryFailed(e)))?
-        .collect::<Vec<_>>();
-        results.pop().ok_or_else(|| {
+    let world = app.state.world_view();
+    let record = world
+        .offline_allowances()
+        .get(&old_certificate_id)
+        .cloned()
+        .ok_or_else(|| {
             conversion_error(format!(
                 "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
             ))
-        })?
-    };
+        })?;
 
     let controller = req.certificate.controller.clone();
     if record.certificate.controller != controller {
@@ -38246,28 +38285,60 @@ pub async fn handle_v1_offline_allowance_get(
     certificate_id_hex: String,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        ValidationFail,
-        query::{
-            dsl::CompoundPredicate, error::QueryExecutionFail,
-            offline::prelude::FindOfflineAllowanceByCertificateId,
-        },
-    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let certificate_id = parse_hash_hex(&certificate_id_hex, "certificate_id_hex")?;
-    let state_view = state.view();
-    let mut results = ValidQuery::execute(
-        FindOfflineAllowanceByCertificateId::new(certificate_id),
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-    .collect::<Vec<_>>();
-    let record = results
-        .pop()
+    let world = state.world_view();
+    let record = world
+        .offline_allowances()
+        .get(&certificate_id)
+        .cloned()
         .ok_or_else(|| Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)))?;
     json_response(&record)
+}
+
+#[cfg(feature = "app_api")]
+fn offline_allowance_controller_or_error(
+    state: &CoreState,
+    certificate_id: &iroha_crypto::Hash,
+) -> Result<iroha_data_model::account::AccountId> {
+    use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
+
+    let world = state.world_view();
+    let record = world
+        .offline_allowances()
+        .get(certificate_id)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
+            ))
+        })?;
+    Ok(record.certificate.controller.clone())
+}
+
+#[cfg(feature = "app_api")]
+fn offline_allowance_verdict_id_or_error(
+    state: &CoreState,
+    certificate_id: &iroha_crypto::Hash,
+) -> Result<(iroha_crypto::Hash, String)> {
+    use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
+
+    let world = state.world_view();
+    let record = world
+        .offline_allowances()
+        .get(certificate_id)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
+            ))
+        })?;
+    let verdict_id = record.verdict_id.ok_or_else(|| {
+        conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}verdict_id_missing:certificate does not include verdict metadata"
+        ))
+    })?;
+    let verdict_id_hex = hex::encode(verdict_id.as_ref());
+    Ok((verdict_id, verdict_id_hex))
 }
 
 /// POST /v1/offline/allowances/{certificate_id_hex}/renew — renew an offline allowance certificate.
@@ -38281,33 +38352,12 @@ pub async fn handle_post_v1_offline_allowances_renew(
     certificate_id_hex: String,
     NoritoJson(req): NoritoJson<OfflineCertificateRenewRequest>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::{
-        ValidationFail,
-        isi::offline,
-        offline::OFFLINE_REJECTION_REASON_PREFIX,
-        prelude as dm,
-        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId},
-    };
+    use iroha_data_model::{isi::offline, offline::OFFLINE_REJECTION_REASON_PREFIX, prelude as dm};
 
     let old_certificate_id = parse_hash_hex(&certificate_id_hex, "certificate_id_hex")?;
-    let record = {
-        let state_view = state.view();
-        let mut results = ValidQuery::execute(
-            FindOfflineAllowanceByCertificateId::new(old_certificate_id),
-            CompoundPredicate::PASS,
-            &state_view,
-        )
-        .map_err(|e| Error::Query(ValidationFail::QueryFailed(e)))?
-        .collect::<Vec<_>>();
-        results.pop().ok_or_else(|| {
-            conversion_error(format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
-            ))
-        })?
-    };
+    let controller = offline_allowance_controller_or_error(&state, &old_certificate_id)?;
 
-    if record.certificate.controller != req.authority {
+    if controller != req.authority {
         return Err(conversion_error(format!(
             "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:only the allowance controller may renew"
         )));
@@ -38351,38 +38401,15 @@ pub async fn handle_post_v1_offline_certificates_revoke(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<OfflineCertificateRevokeRequest>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
-        ValidationFail,
         isi::offline,
         offline::{OFFLINE_REJECTION_REASON_PREFIX, OfflineVerdictRevocation},
         prelude as dm,
-        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId},
     };
 
     let certificate_id = parse_hash_hex(&req.certificate_id_hex, "certificate_id_hex")?;
-    let (verdict_id, verdict_id_hex) = {
-        let state_view = state.view();
-        let mut results = ValidQuery::execute(
-            FindOfflineAllowanceByCertificateId::new(certificate_id),
-            CompoundPredicate::PASS,
-            &state_view,
-        )
-        .map_err(|e| Error::Query(ValidationFail::QueryFailed(e)))?
-        .collect::<Vec<_>>();
-        let record = results.pop().ok_or_else(|| {
-            conversion_error(format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_found:offline allowance not found"
-            ))
-        })?;
-        let verdict_id = record.verdict_id.ok_or_else(|| {
-            conversion_error(format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}verdict_id_missing:certificate does not include verdict metadata"
-            ))
-        })?;
-        let verdict_id_hex = hex::encode(verdict_id.as_ref());
-        (verdict_id, verdict_id_hex)
-    };
+    let (verdict_id, verdict_id_hex) =
+        offline_allowance_verdict_id_or_error(&state, &certificate_id)?;
 
     let reason = match req.reason.as_deref() {
         Some(raw) => OfflineVerdictRevocationReason::from_str(raw).map_err(|err| {
@@ -38459,11 +38486,7 @@ pub async fn handle_post_v1_offline_spend_receipts(
     NoritoJson(req): NoritoJson<OfflineSpendReceiptsSubmitRequest>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId,
-    };
 
     if req.receipts.is_empty() {
         return Err(conversion_error(format!(
@@ -38471,7 +38494,7 @@ pub async fn handle_post_v1_offline_spend_receipts(
         )));
     }
 
-    let state_view = state.view();
+    let world = state.world_view();
     let mut asset_id = None;
     let mut total_amount = Numeric::zero();
     for receipt in &req.receipts {
@@ -38495,18 +38518,10 @@ pub async fn handle_post_v1_offline_spend_receipts(
                 "{OFFLINE_REJECTION_REASON_PREFIX}receipt_signature_invalid:failed to serialize receipt payload: {err}"
             ))
         })?;
-        let mut allowance_records = ValidQuery::execute(
-            FindOfflineAllowanceByCertificateId::new(receipt.sender_certificate_id),
-            CompoundPredicate::PASS,
-            &state_view,
-        )
-        .map_err(|err| {
-            conversion_error(format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}allowance_lookup_failed:failed to lookup certificate: {err}"
-            ))
-        })?
-        .collect::<Vec<_>>();
-        let allowance_record = allowance_records.pop().ok_or_else(|| {
+        let allowance_record = world
+            .offline_allowances()
+            .get(&receipt.sender_certificate_id)
+            .ok_or_else(|| {
             conversion_error(format!(
                 "{OFFLINE_REJECTION_REASON_PREFIX}allowance_not_registered:offline allowance certificate not registered"
             ))
@@ -38549,41 +38564,27 @@ pub async fn handle_v1_offline_state(
     state: Arc<CoreState>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate,
-        offline::prelude::{
-            FindOfflineAllowances, FindOfflineCounterSummaries, FindOfflineToOnlineTransfers,
-            FindOfflineVerdictRevocations,
-        },
-    };
-
-    let state_view = state.view();
-    let allowances =
-        ValidQuery::execute(FindOfflineAllowances, CompoundPredicate::PASS, &state_view)
-            .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-            .collect::<Vec<_>>();
-    let transfers = ValidQuery::execute(
-        FindOfflineToOnlineTransfers,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-    .collect::<Vec<_>>();
-    let summaries = ValidQuery::execute(
-        FindOfflineCounterSummaries,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-    .collect::<Vec<_>>();
-    let revocations = ValidQuery::execute(
-        FindOfflineVerdictRevocations,
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-    .collect::<Vec<_>>();
+    let world = state.world_view();
+    let allowances = world
+        .offline_allowances()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect::<Vec<_>>();
+    let transfers = world
+        .offline_to_online_transfers()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect::<Vec<_>>();
+    let summaries = world
+        .offline_allowances()
+        .iter()
+        .map(|(_, record)| OfflineCounterSummary::from(record))
+        .collect::<Vec<_>>();
+    let revocations = world
+        .offline_verdict_revocations()
+        .iter()
+        .map(|(_, record)| record.clone())
+        .collect::<Vec<_>>();
 
     let payload = OfflineStateResponse {
         allowances,
@@ -38975,12 +38976,18 @@ pub async fn handle_v1_nfts(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{dsl::CompoundPredicate, nft::prelude::FindNfts};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindNfts::new(), CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let nfts: Vec<_> = world
+        .nfts_iter()
+        .map(|entry| {
+            let details = entry.value().clone().into_inner();
+            Nft {
+                id: entry.id().clone(),
+                content: details.content,
+                owned_by: details.owned_by,
+            }
+        })
+        .collect();
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_nft_sort_spec(&sort_spec);
@@ -38998,7 +39005,7 @@ pub async fn handle_v1_nfts(
     }
 
     let filter_ref = filter_expr.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = nfts.into_iter().filter_map({
         let selectors = selectors;
         move |nft| {
             if let Some(expr) = filter_ref {
@@ -39050,12 +39057,18 @@ pub async fn handle_v1_nfts_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{dsl::CompoundPredicate, nft::prelude::FindNfts};
-
-    let state_view = state.view();
-    let iter = ValidQuery::execute(FindNfts::new(), CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let nfts: Vec<_> = world
+        .nfts_iter()
+        .map(|entry| {
+            let details = entry.value().clone().into_inner();
+            Nft {
+                id: entry.id().clone(),
+                content: details.content,
+                owned_by: details.owned_by,
+            }
+        })
+        .collect();
 
     let selectors = compile_nft_sort_spec(&envelope.sort);
     let cap = app_query_page_cap(&state);
@@ -39088,7 +39101,7 @@ pub async fn handle_v1_nfts_query(
     }
 
     let filter_ref = envelope.filter.as_ref();
-    let mapped_iter = iter.filter_map({
+    let mapped_iter = nfts.into_iter().filter_map({
         let selectors = selectors;
         move |nft| {
             if let Some(expr) = filter_ref {
@@ -39486,7 +39499,7 @@ pub async fn handle_v1_subscription_plans(
         _ => None,
     };
 
-    let state_view = state.view();
+    let world = state.world_view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         params.limit,
@@ -39496,7 +39509,7 @@ pub async fn handle_v1_subscription_plans(
     )?;
 
     let mut items_with_keys = Vec::new();
-    for def in state_view.world().asset_definitions_iter() {
+    for def in world.asset_definitions_iter() {
         let Some(plan) = subscription_plan_from_metadata(def.metadata())? else {
             continue;
         };
@@ -39552,14 +39565,10 @@ pub async fn handle_post_v1_subscription_create(
     } = req;
 
     let (plan, charge_at_ms, period_start, period_end, billing_trigger_id, usage_trigger_id) = {
-        let view = state.view();
-        let plan_def = view
-            .world()
-            .asset_definitions()
-            .get(&plan_id)
-            .ok_or_else(|| {
-                conversion_error(format!("plan asset definition `{plan_id}` not found"))
-            })?;
+        let world = state.world_view();
+        let plan_def = world.asset_definitions().get(&plan_id).ok_or_else(|| {
+            conversion_error(format!("plan asset definition `{plan_id}` not found"))
+        })?;
         let plan = subscription_plan_from_metadata(plan_def.metadata())?
             .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
         let charge_at_ms = resolve_charge_ms(plan.billing, first_charge_ms)?;
@@ -39704,7 +39713,7 @@ pub async fn handle_v1_subscriptions(
         .map(|raw| parse_subscription_status_filter(raw))
         .transpose()?;
 
-    let state_view = state.view();
+    let world = state.world_view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         params.limit,
@@ -39716,7 +39725,7 @@ pub async fn handle_v1_subscriptions(
     let mut plan_cache: std::collections::BTreeMap<AssetDefinitionId, SubscriptionPlan> =
         std::collections::BTreeMap::new();
     let mut items_with_keys = Vec::new();
-    for nft in state_view.world().nfts_iter() {
+    for nft in world.nfts_iter() {
         let Some(subscription) = subscription_state_from_metadata(&nft.content)? else {
             continue;
         };
@@ -39739,11 +39748,7 @@ pub async fn handle_v1_subscriptions(
         let plan = if let Some(plan) = plan_cache.get(&subscription.plan_id) {
             Some(plan.clone())
         } else {
-            let plan = match state_view
-                .world()
-                .asset_definitions()
-                .get(&subscription.plan_id)
-            {
+            let plan = match world.asset_definitions().get(&subscription.plan_id) {
                 Some(def) => subscription_plan_from_metadata(def.metadata())?,
                 None => None,
             };
@@ -39784,16 +39789,15 @@ pub async fn handle_v1_subscription_get(
     state: Arc<CoreState>,
     subscription_id: NftId,
 ) -> Result<impl IntoResponse> {
-    let view = state.view();
-    let nft = view
-        .world()
+    let world = state.world_view();
+    let nft = world
         .nfts()
         .get(&subscription_id)
         .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
     let subscription = subscription_state_from_metadata(&nft.content)?
         .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
     let invoice = subscription_invoice_from_metadata(&nft.content)?;
-    let plan = match view.world().asset_definitions().get(&subscription.plan_id) {
+    let plan = match world.asset_definitions().get(&subscription.plan_id) {
         Some(def) => subscription_plan_from_metadata(def.metadata())?,
         None => None,
     };
@@ -39830,17 +39834,15 @@ pub async fn handle_post_v1_subscription_pause(
     } = req;
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
-        let view = state.view();
-        let nft = view
-            .world()
+        let world = state.world_view();
+        let nft = world
             .nfts()
             .get(&subscription_id)
             .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
         let subscription_state = subscription_state_from_metadata(&nft.content)?
             .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
         let owner = nft.owned_by.clone();
-        let billing_trigger_exists = view
-            .world()
+        let billing_trigger_exists = world
             .triggers()
             .time_triggers()
             .get(&subscription_state.billing_trigger_id)
@@ -39921,24 +39923,21 @@ pub async fn handle_post_v1_subscription_resume(
     } = req;
 
     let (mut subscription_state, owner, plan, billing_trigger_exists) = {
-        let view = state.view();
-        let nft = view
-            .world()
+        let world = state.world_view();
+        let nft = world
             .nfts()
             .get(&subscription_id)
             .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
         let subscription_state = subscription_state_from_metadata(&nft.content)?
             .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
         let owner = nft.owned_by.clone();
-        let plan_def = view
-            .world()
+        let plan_def = world
             .asset_definitions()
             .get(&subscription_state.plan_id)
             .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
         let plan = subscription_plan_from_metadata(plan_def.metadata())?
             .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
-        let billing_trigger_exists = view
-            .world()
+        let billing_trigger_exists = world
             .triggers()
             .time_triggers()
             .get(&subscription_state.billing_trigger_id)
@@ -40027,17 +40026,15 @@ pub async fn handle_post_v1_subscription_cancel(
     } = req;
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
-        let view = state.view();
-        let nft = view
-            .world()
+        let world = state.world_view();
+        let nft = world
             .nfts()
             .get(&subscription_id)
             .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
         let subscription_state = subscription_state_from_metadata(&nft.content)?
             .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
         let owner = nft.owned_by.clone();
-        let billing_trigger_exists = view
-            .world()
+        let billing_trigger_exists = world
             .triggers()
             .time_triggers()
             .get(&subscription_state.billing_trigger_id)
@@ -40131,9 +40128,8 @@ pub async fn handle_post_v1_subscription_keep(
     } = req;
 
     let (mut subscription_state, owner) = {
-        let view = state.view();
-        let nft = view
-            .world()
+        let world = state.world_view();
+        let nft = world
             .nfts()
             .get(&subscription_id)
             .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
@@ -40215,17 +40211,15 @@ pub async fn handle_post_v1_subscription_charge_now(
     } = req;
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
-        let view = state.view();
-        let nft = view
-            .world()
+        let world = state.world_view();
+        let nft = world
             .nfts()
             .get(&subscription_id)
             .ok_or_else(|| conversion_error("subscription nft not found".to_string()))?;
         let subscription_state = subscription_state_from_metadata(&nft.content)?
             .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
         let owner = nft.owned_by.clone();
-        let billing_trigger_exists = view
-            .world()
+        let billing_trigger_exists = world
             .triggers()
             .time_triggers()
             .get(&subscription_state.billing_trigger_id)
@@ -42227,15 +42221,17 @@ pub async fn handle_v1_account_assets_query_with_policy(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{asset::prelude::FindAssets, dsl::CompoundPredicate};
-
-    let state_view = state.view();
     let (acct, _) =
         parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_ASSETS_QUERY)?;
-
-    let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let world = state.world_view();
+    let projected_assets: Vec<_> = world
+        .assets_in_account_iter(&acct)
+        .map(|asset| AccountAssetListItem {
+            asset_id: asset.id().to_string(),
+            quantity: asset.value().clone().into_inner(),
+        })
+        .collect();
+    drop(world);
     let crate::filter::QueryEnvelope {
         filter,
         sort,
@@ -42279,22 +42275,14 @@ pub async fn handle_v1_account_assets_query_with_policy(
 
     let filter_ref = filter.as_ref();
     let selectors = compile_account_asset_sort_spec(&sort);
-    let mapped_iter = iter.filter_map({
-        let acct = acct.clone();
+    let mapped_iter = projected_assets.into_iter().filter_map({
         let filter_ref = filter_ref;
         let selectors = selectors;
-        move |asset| {
-            if *asset.id().account() != acct {
+        move |projected| {
+            if let Some(expr) = filter_ref
+                && !filter_account_asset_item(expr, &projected)
+            {
                 return None;
-            }
-            let projected = AccountAssetListItem {
-                asset_id: asset.id().to_string(),
-                quantity: asset.value().clone(),
-            };
-            if let Some(expr) = filter_ref {
-                if !filter_account_asset_item(expr, &projected) {
-                    return None;
-                }
             }
             let key = account_asset_sort_key(&projected, &selectors);
             Some((key, projected))
@@ -42539,45 +42527,42 @@ pub async fn handle_v1_asset_holders(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetId, id::AssetDefinitionId},
-        query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
     };
 
-    let state_view = state.view();
     let def_id: AssetDefinitionId = definition_id
         .parse()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
     let asset_filter = p
         .asset_id
         .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
         .map(|raw| {
             raw.parse::<AssetId>()
-                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
-        })
-        .transpose()?;
+                .map(|asset| asset.to_string())
+                .unwrap_or_else(|_| raw.to_owned())
+        });
 
-    let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
-
+    let world = state.world_view();
+    let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
+    drop(world);
     // Aggregate balances per account
     let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
-    for asset in iter {
-        if *asset.id().definition() == def_id {
-            if let Some(expected) = asset_filter.as_ref() {
-                if asset.id() != expected {
-                    continue;
-                }
-            }
-            let acct = asset.id().account().clone();
-            let entry = map
-                .entry(acct)
-                .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-            if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
-                *entry = sum;
-            }
+    for asset in assets {
+        if let Some(expected) = asset_filter.as_ref()
+            && asset.id().to_string() != *expected
+        {
+            continue;
+        }
+        let acct = asset.id().account().clone();
+        let entry = map
+            .entry(acct)
+            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
+        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
+            *entry = sum;
         }
     }
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
@@ -42647,31 +42632,26 @@ pub async fn handle_v1_asset_holders_query(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetId, id::AssetDefinitionId},
-        query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
     };
 
-    let state_view = state.view();
     let def_id: AssetDefinitionId = definition_id
         .parse()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
 
-    let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &state_view)
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
-
+    let world = state.world_view();
+    let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
+    drop(world);
     let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
-    for asset in iter {
-        if *asset.id().definition() == def_id {
-            let acct = asset.id().account().clone();
-            let entry = map
-                .entry(acct)
-                .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-            if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
-                *entry = sum;
-            }
+    for asset in assets {
+        let acct = asset.id().account().clone();
+        let entry = map
+            .entry(acct)
+            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
+        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
+            *entry = sum;
         }
     }
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
@@ -42792,9 +42772,8 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "asset_id" => v
-                .as_str()
-                .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                .map(|_| ())
+                .is_string()
+                .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "quantity" => v
                 .is_number()
@@ -42817,11 +42796,7 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "asset_id" => list
                 .iter()
-                .all(|v| {
-                    v.as_str()
-                        .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                        .is_some()
-                })
+                .all(norito::json::Value::is_string)
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "quantity" => list
@@ -42993,9 +42968,8 @@ pub async fn handle_post_nexus_lane_lifecycle(
         })?;
 
     let nexus = state.nexus_snapshot();
-    let view = state.view();
     let lane_compliance = queue.lane_compliance_engine();
-    queue.reconfigure_nexus(&nexus, &view, lane_compliance);
+    queue.reconfigure_nexus_with_state(&nexus, state.as_ref(), lane_compliance);
 
     let mut payload = norito::json::Map::new();
     payload.insert("ok".into(), norito::json::Value::from(true));
@@ -43183,8 +43157,9 @@ pub mod event {
 pub async fn handle_version(state: Arc<CoreState>) -> Response {
     use iroha_version::Version;
 
-    let state_view = state.view();
-    let mut resp = match state_view.latest_block() {
+    let latest_block = std::num::NonZeroUsize::new(state.committed_height())
+        .and_then(|height| state.block_by_height(height));
+    let mut resp = match latest_block {
         Some(block) => Response::new(Body::from(block.version().to_string())),
         None => {
             let mut resp = Response::new(Body::from("genesis not applied"));

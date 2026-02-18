@@ -871,12 +871,36 @@ impl ValidQueryRequest {
         state_ro: &impl StateReadOnly,
         limits: QueryLimits,
     ) -> Result<Self, ValidationFail> {
+        let latest_block = state_ro.latest_block().map(|block| block.header());
+        Self::validate_for_client_world_parts(
+            request,
+            authority,
+            state_ro.world(),
+            latest_block,
+            limits,
+        )
+    }
+
+    /// Validate a query for an API client using world-state and latest committed block header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query validation fails or request limits are exceeded.
+    pub fn validate_for_client_world_parts(
+        request: QueryRequest,
+        authority: &AccountId,
+        world_ro: &impl WorldReadOnly,
+        latest_block: Option<BlockHeader>,
+        limits: QueryLimits,
+    ) -> Result<Self, ValidationFail> {
         ensure_query_registry_initialized();
         validate_query_request_limits(&request, limits)?;
-        state_ro
-            .world()
-            .executor()
-            .validate_query(state_ro, authority, &request)?;
+        world_ro.executor().validate_query_with_world_parts(
+            world_ro,
+            latest_block,
+            authority,
+            &request,
+        )?;
         Ok(Self { request, limits })
     }
 
@@ -2884,7 +2908,7 @@ mod tests {
     use iroha_data_model::{
         AccountId, ChainId, DomainId, Level,
         isi::Log,
-        query::{dsl::CompoundPredicate, prelude::FindParameters},
+        query::{QueryRequest, SingularQueryBox, dsl::CompoundPredicate, prelude::FindParameters},
         transaction::TransactionBuilder,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
@@ -2915,6 +2939,35 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    #[tokio::test]
+    async fn validate_for_client_world_parts_matches_state_view_path() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let limits = QueryLimits::default();
+
+        ValidQueryRequest::validate_for_client_parts(
+            QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters)),
+            &ALICE_ID,
+            &state.view(),
+            limits,
+        )
+        .expect("state-view validation should pass");
+
+        let world = state.world_view();
+        let latest_block = state.latest_block_header_fast();
+        ValidQueryRequest::validate_for_client_world_parts(
+            QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters)),
+            &ALICE_ID,
+            &world,
+            latest_block,
+            limits,
+        )
+        .expect("world validation should pass");
     }
 
     #[tokio::test]

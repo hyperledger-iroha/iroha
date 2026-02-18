@@ -340,15 +340,24 @@ pub fn load_npos_collector_config_from_world(
 
 /// Resolve VRF epoch parameters from on-chain `SumeragiNposParameters` when available,
 /// falling back to the local configuration otherwise.
+#[cfg(test)]
 pub(crate) fn load_npos_epoch_params(
     view: &StateView<'_>,
     config: &SumeragiConfig,
 ) -> NposEpochParams {
-    view.world.sumeragi_npos_parameters().map_or(
+    load_npos_epoch_params_from_world(view.world(), &config.npos)
+}
+
+/// Resolve VRF epoch parameters from on-chain `SumeragiNposParameters` using a world snapshot.
+pub(crate) fn load_npos_epoch_params_from_world(
+    world: &impl WorldReadOnly,
+    fallback: &SumeragiNpos,
+) -> NposEpochParams {
+    world.sumeragi_npos_parameters().map_or(
         NposEpochParams {
-            epoch_length_blocks: config.npos.epoch_length_blocks,
-            commit_deadline_offset: config.npos.vrf.commit_deadline_offset_blocks,
-            reveal_deadline_offset: config.npos.vrf.reveal_deadline_offset_blocks,
+            epoch_length_blocks: fallback.epoch_length_blocks,
+            commit_deadline_offset: fallback.vrf.commit_deadline_offset_blocks,
+            reveal_deadline_offset: fallback.vrf.reveal_deadline_offset_blocks,
         },
         |params| {
             let commit_window = params.vrf_commit_window_blocks();
@@ -412,11 +421,20 @@ pub(crate) fn resolve_npos_timeouts_from_world(
 }
 
 /// Resolve `NPoS` election parameters from on-chain values, falling back to config defaults.
+#[cfg(test)]
 pub(crate) fn resolve_npos_election_params(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
 ) -> ValidatorElectionParameters {
-    view.world.sumeragi_npos_parameters().map_or(
+    resolve_npos_election_params_from_world(view.world(), fallback)
+}
+
+/// Resolve `NPoS` election parameters from on-chain values using a world snapshot.
+pub(crate) fn resolve_npos_election_params_from_world(
+    world: &impl WorldReadOnly,
+    fallback: &SumeragiNpos,
+) -> ValidatorElectionParameters {
+    world.sumeragi_npos_parameters().map_or(
         ValidatorElectionParameters {
             max_validators: fallback.election.max_validators,
             min_self_bond: fallback.election.min_self_bond,
@@ -439,11 +457,21 @@ pub(crate) fn resolve_npos_election_params(
 }
 
 /// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config.
+#[cfg(test)]
 pub(crate) fn resolve_npos_activation_lag_blocks(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
 ) -> u64 {
-    view.world
+    resolve_npos_activation_lag_blocks_from_world(view.world(), fallback)
+}
+
+/// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config
+/// using a world snapshot.
+pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
+    world: &impl WorldReadOnly,
+    fallback: &SumeragiNpos,
+) -> u64 {
+    world
         .sumeragi_npos_parameters()
         .map_or(fallback.reconfig.activation_lag_blocks, |params| {
             params.activation_lag_blocks()
@@ -451,19 +479,25 @@ pub(crate) fn resolve_npos_activation_lag_blocks(
 }
 
 /// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or config.
+#[cfg(test)]
 pub(crate) fn resolve_npos_slashing_delay_blocks(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
 ) -> u64 {
-    view.world
+    resolve_npos_slashing_delay_blocks_from_world(view.world(), fallback)
+}
+
+/// Resolve `NPoS` slashing delay (blocks) for evidence penalties from on-chain parameters or
+/// config using a world snapshot.
+pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
+    world: &impl WorldReadOnly,
+    fallback: &SumeragiNpos,
+) -> u64 {
+    world
         .sumeragi_npos_parameters()
         .map_or(fallback.reconfig.slashing_delay_blocks, |params| {
             params.slashing_delay_blocks()
         })
-}
-
-fn latest_epoch_seed(view: &StateView<'_>) -> [u8; 32] {
-    latest_epoch_seed_from_world(&view.world, view.chain_id())
 }
 
 fn chain_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
@@ -523,7 +557,7 @@ pub fn prf_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
 }
 
 /// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
-pub(crate) fn npos_seed_for_height_from_world(
+pub fn npos_seed_for_height_from_world(
     world: &impl WorldReadOnly,
     chain_id: &ChainId,
     height: u64,
@@ -1806,6 +1840,27 @@ mod tests {
     }
 
     #[test]
+    fn load_npos_epoch_params_from_world_matches_view_loader() {
+        let state = state_with_npos_params(SumeragiNposParameters {
+            epoch_length_blocks: 77,
+            vrf_commit_window_blocks: 5,
+            vrf_reveal_window_blocks: 7,
+            ..SumeragiNposParameters::default()
+        });
+        let fallback = SumeragiNpos::default();
+        let world_view = state.world_view();
+        let from_world = load_npos_epoch_params_from_world(&world_view, &fallback);
+        assert_eq!(
+            from_world,
+            NposEpochParams {
+                epoch_length_blocks: 77,
+                commit_deadline_offset: 5,
+                reveal_deadline_offset: 12,
+            }
+        );
+    }
+
+    #[test]
     fn resolve_npos_block_time_uses_on_chain_or_default() {
         let state = state_with_sumeragi_block_time(1_500);
         let view = state.view();
@@ -1926,6 +1981,26 @@ mod tests {
     }
 
     #[test]
+    fn resolve_npos_election_params_from_world_matches_view_loader() {
+        let state = state_with_npos_params(SumeragiNposParameters {
+            max_validators: 21,
+            min_self_bond: 22,
+            min_nomination_bond: 23,
+            max_nominator_concentration_pct: 24,
+            seat_band_pct: 25,
+            max_entity_correlation_pct: 26,
+            finality_margin_blocks: 27,
+            ..SumeragiNposParameters::default()
+        });
+        let fallback = SumeragiNpos::default();
+        let view = state.view();
+        let from_view = resolve_npos_election_params(&view, &fallback);
+        let world_view = state.world_view();
+        let from_world = resolve_npos_election_params_from_world(&world_view, &fallback);
+        assert_eq!(from_world, from_view);
+    }
+
+    #[test]
     fn resolve_npos_activation_lag_blocks_prefers_on_chain() {
         let mut fallback = SumeragiNpos::default();
         fallback.reconfig.activation_lag_blocks = 12;
@@ -1951,6 +2026,24 @@ mod tests {
     }
 
     #[test]
+    fn resolve_npos_activation_lag_blocks_from_world_matches_view_loader() {
+        let mut fallback = SumeragiNpos::default();
+        fallback.reconfig.activation_lag_blocks = 18;
+        let state = state_with_npos_params(SumeragiNposParameters {
+            activation_lag_blocks: 9,
+            ..SumeragiNposParameters::default()
+        });
+
+        let view = state.view();
+        let from_view = resolve_npos_activation_lag_blocks(&view, &fallback);
+        drop(view);
+
+        let world_view = state.world_view();
+        let from_world = resolve_npos_activation_lag_blocks_from_world(&world_view, &fallback);
+        assert_eq!(from_world, from_view);
+    }
+
+    #[test]
     fn resolve_npos_slashing_delay_blocks_prefers_on_chain() {
         let mut fallback = SumeragiNpos::default();
         fallback.reconfig.slashing_delay_blocks = 42;
@@ -1973,6 +2066,24 @@ mod tests {
             resolve_npos_slashing_delay_blocks(&view, &fallback),
             fallback.reconfig.slashing_delay_blocks
         );
+    }
+
+    #[test]
+    fn resolve_npos_slashing_delay_blocks_from_world_matches_view_loader() {
+        let mut fallback = SumeragiNpos::default();
+        fallback.reconfig.slashing_delay_blocks = 21;
+        let state = state_with_npos_params(SumeragiNposParameters {
+            slashing_delay_blocks: 11,
+            ..SumeragiNposParameters::default()
+        });
+
+        let view = state.view();
+        let from_view = resolve_npos_slashing_delay_blocks(&view, &fallback);
+        drop(view);
+
+        let world_view = state.world_view();
+        let from_world = resolve_npos_slashing_delay_blocks_from_world(&world_view, &fallback);
+        assert_eq!(from_world, from_view);
     }
 
     #[test]

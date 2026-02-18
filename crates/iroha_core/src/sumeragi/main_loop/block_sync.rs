@@ -8,6 +8,7 @@ use iroha_logger::prelude::*;
 
 use crate::sumeragi::message::BlockMessageWire;
 
+use super::locked_qc::qc_extends_locked_with_lookup;
 use super::message::FetchPendingBlockPriority;
 use super::*;
 
@@ -309,6 +310,63 @@ impl Actor {
         } else {
             BlockMessage::BlockSyncUpdate(update)
         }
+    }
+
+    fn block_sync_qc_extends_locked_chain(&self, qc: &crate::sumeragi::consensus::Qc) -> bool {
+        let Some(lock) = self.locked_qc else {
+            return true;
+        };
+        if !self.block_known_for_lock(lock.subject_block_hash) {
+            return true;
+        }
+        let candidate = Self::qc_to_header_ref(qc);
+        qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
+            self.parent_hash_for(hash, lookup_height)
+        })
+    }
+
+    fn log_block_sync_locked_qc_conflict(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        lock: crate::sumeragi::consensus::QcHeaderRef,
+        context: &'static str,
+    ) {
+        let warn_cooldown = self
+            .rebroadcast_cooldown()
+            .max(super::BLOCK_SYNC_WARN_COOLDOWN_FLOOR);
+        let warn_now = Instant::now();
+        if let Some(suppressed_since_last) = self.block_sync_warning_log.allow(
+            super::BlockSyncWarningKind::LockedQcConflict,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            warn_now,
+            warn_cooldown,
+            super::BLOCK_SYNC_WARN_BURST_WINDOW,
+            super::BLOCK_SYNC_WARN_BURST_CAP,
+        ) {
+            self.hotspot_log_summary.record_block_sync_warn();
+            if suppressed_since_last > 0 {
+                self.hotspot_log_summary
+                    .record_block_sync_suppressed(suppressed_since_last);
+            }
+            info!(
+                context,
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                incoming_hash = %qc.subject_block_hash,
+                locked_height = lock.height,
+                locked_view = lock.view,
+                locked_hash = %lock.subject_block_hash,
+                suppressed_since_last,
+                warn_cooldown_ms = warn_cooldown.as_millis(),
+                "dropping block sync QC that conflicts with locked chain"
+            );
+        } else {
+            self.hotspot_log_summary.record_block_sync_suppressed(1);
+        }
+        self.hotspot_log_summary.emit_if_due(warn_now);
     }
 
     fn take_pending_fetch_requesters(
@@ -1558,11 +1616,17 @@ impl Actor {
         };
         let qc_validate_ms =
             u64::try_from(qc_validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let conflicts_locked = incoming_qc.as_ref().is_some_and(|qc| {
-            self.locked_qc.as_ref().is_some_and(|lock| {
-                qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash
-            })
-        });
+        let conflicts_locked = incoming_qc
+            .as_ref()
+            .is_some_and(|qc| !self.block_sync_qc_extends_locked_chain(qc));
+        if conflicts_locked && let (Some(qc), Some(lock)) = (incoming_qc.as_ref(), self.locked_qc) {
+            self.log_block_sync_locked_qc_conflict(qc, lock, "block_sync_update.prefetch_cache");
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
+        }
         if incoming_qc_validated && !conflicts_locked {
             if let Some(qc) = incoming_qc.as_ref() {
                 self.qc_cache.insert(
@@ -1854,13 +1918,10 @@ impl Actor {
                 if let Some(lock) = self.locked_qc {
                     if qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash
                     {
-                        info!(
-                            height = qc.height,
-                            view = qc.view,
-                            locked_height = lock.height,
-                            locked_hash = %lock.subject_block_hash,
-                            incoming_hash = %qc.subject_block_hash,
-                            "dropping block sync QC that conflicts with locked chain"
+                        self.log_block_sync_locked_qc_conflict(
+                            &qc,
+                            lock,
+                            "block_sync_update.height_conflict",
                         );
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::Qc,
@@ -1870,14 +1931,30 @@ impl Actor {
                         return Ok(());
                     }
                 }
+                let extends_locked = self.block_sync_qc_extends_locked_chain(&qc);
+                if !extends_locked {
+                    if let Some(lock) = self.locked_qc {
+                        self.log_block_sync_locked_qc_conflict(
+                            &qc,
+                            lock,
+                            "block_sync_update.non_extending",
+                        );
+                    } else {
+                        info!(
+                            height = qc.height,
+                            view = qc.view,
+                            incoming_hash = %qc.subject_block_hash,
+                            "dropping block sync QC that does not extend locked chain"
+                        );
+                    }
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::LockedQc,
+                    );
+                    return Ok(());
+                }
                 let qc_signers = qc_signer_count(&qc);
-                let qc_ref = Self::qc_to_header_ref(&qc);
-                let extends_locked = qc_extends_locked_if_present(
-                    self.locked_qc,
-                    qc_ref,
-                    |hash, height| self.parent_hash_for(hash, height),
-                    |hash| self.block_known_for_lock(hash),
-                );
                 let tally_start = Instant::now();
                 let tally_result = if let Some(tally) =
                     self.qc_signer_tally.get(&Self::qc_tally_key(&qc)).cloned()
@@ -1935,12 +2012,13 @@ impl Actor {
                         qc_apply_process_ms =
                             u64::try_from(process_start.elapsed().as_millis()).unwrap_or(u64::MAX);
                         if !process_ok {
-                            info!(
-                                incoming_hash = %block_hash,
-                                height = block_height,
-                                view = block_view,
-                                "dropping block sync QC that conflicts with locked chain"
-                            );
+                            if let Some(lock) = self.locked_qc {
+                                self.log_block_sync_locked_qc_conflict(
+                                    &qc,
+                                    lock,
+                                    "block_sync_update.precommit_reject",
+                                );
+                            }
                             return Ok(());
                         }
                         super::status::record_commit_qc(qc.clone());
@@ -1968,34 +2046,24 @@ impl Actor {
                             qc_signers,
                             "applied block sync QC after validation"
                         );
-                        if extends_locked {
-                            if block_known_for_commit {
-                                let commit_start = Instant::now();
-                                self.apply_commit_qc(
-                                    &qc,
-                                    topology.as_ref(),
-                                    block_hash,
-                                    block_height,
-                                    block_view,
-                                );
-                                qc_apply_commit_ms =
-                                    u64::try_from(commit_start.elapsed().as_millis())
-                                        .unwrap_or(u64::MAX);
-                                self.request_commit_pipeline();
-                            } else {
-                                debug!(
-                                    incoming_hash = %block_hash,
-                                    height = block_height,
-                                    view = block_view,
-                                    "deferring commit apply for block sync QC until block is validated"
-                                );
-                            }
+                        if block_known_for_commit {
+                            let commit_start = Instant::now();
+                            self.apply_commit_qc(
+                                &qc,
+                                topology.as_ref(),
+                                block_hash,
+                                block_height,
+                                block_view,
+                            );
+                            qc_apply_commit_ms = u64::try_from(commit_start.elapsed().as_millis())
+                                .unwrap_or(u64::MAX);
+                            self.request_commit_pipeline();
                         } else {
                             debug!(
                                 incoming_hash = %block_hash,
                                 height = block_height,
                                 view = block_view,
-                                "skipping commit apply for non-extending block sync QC"
+                                "deferring commit apply for block sync QC until block is validated"
                             );
                         }
                     }
@@ -2159,13 +2227,10 @@ impl Actor {
         };
         if let Some(lock) = self.locked_qc {
             if qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash {
-                info!(
-                    incoming_hash = %block_hash,
-                    height = block_height,
-                    view = block_view,
-                    locked_height = lock.height,
-                    locked_hash = %lock.subject_block_hash,
-                    "dropping cached block sync QC that conflicts with locked chain"
+                self.log_block_sync_locked_qc_conflict(
+                    &qc,
+                    lock,
+                    "cached_block_sync_qc.height_conflict",
                 );
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::Qc,
@@ -2174,6 +2239,22 @@ impl Actor {
                 );
                 return;
             }
+        }
+        let extends_locked = self.block_sync_qc_extends_locked_chain(&qc);
+        if !extends_locked {
+            if let Some(lock) = self.locked_qc {
+                self.log_block_sync_locked_qc_conflict(
+                    &qc,
+                    lock,
+                    "cached_block_sync_qc.non_extending",
+                );
+            }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
+            return;
         }
         let qc_signers = qc_signer_count(&qc);
         let tally_result = {
@@ -2213,12 +2294,13 @@ impl Actor {
                 );
                 self.note_validated_qc_tally(&qc, tally.clone());
                 if !self.process_precommit_qc(&qc, false, allow_nonextending_qc) {
-                    info!(
-                        incoming_hash = %block_hash,
-                        height = block_height,
-                        view = block_view,
-                        "dropping cached block sync QC that conflicts with locked chain"
-                    );
+                    if let Some(lock) = self.locked_qc {
+                        self.log_block_sync_locked_qc_conflict(
+                            &qc,
+                            lock,
+                            "cached_block_sync_qc.precommit_reject",
+                        );
+                    }
                     return;
                 }
                 if allow_nonextending_qc {
@@ -2498,14 +2580,7 @@ impl Actor {
         }
         if let Some(lock) = self.locked_qc {
             if qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash {
-                info!(
-                    height = qc.height,
-                    view = qc.view,
-                    locked_height = lock.height,
-                    locked_hash = %lock.subject_block_hash,
-                    incoming_hash = %qc.subject_block_hash,
-                    "dropping block sync QC that conflicts with locked chain"
-                );
+                self.log_block_sync_locked_qc_conflict(&qc, lock, "known_block_qc.height_conflict");
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::Qc,
                     super::status::ConsensusMessageOutcome::Dropped,
@@ -2513,6 +2588,17 @@ impl Actor {
                 );
                 return None;
             }
+        }
+        if !self.block_sync_qc_extends_locked_chain(&qc) {
+            if let Some(lock) = self.locked_qc {
+                self.log_block_sync_locked_qc_conflict(&qc, lock, "known_block_qc.non_extending");
+            }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
+            return None;
         }
         Some(KnownBlockQcWork {
             qc,
@@ -2735,13 +2821,22 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let qc_signers = qc_signer_count(&qc);
-        let qc_ref = Self::qc_to_header_ref(&qc);
-        let extends_locked = qc_extends_locked_if_present(
-            self.locked_qc,
-            qc_ref,
-            |hash, height| self.parent_hash_for(hash, height),
-            |hash| self.block_known_for_lock(hash),
-        );
+        let extends_locked = self.block_sync_qc_extends_locked_chain(&qc);
+        if !extends_locked {
+            if let Some(lock) = self.locked_qc {
+                self.log_block_sync_locked_qc_conflict(
+                    &qc,
+                    lock,
+                    "known_block_qc.apply.non_extending",
+                );
+            }
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::LockedQc,
+            );
+            return true;
+        }
         let tally = if let Some(tally) = cached_tally {
             Ok(tally)
         } else {
@@ -2833,12 +2928,13 @@ impl Actor {
             || self.kura.get_block_height_by_hash(block_hash).is_some();
         let process_ok = self.process_precommit_qc(&qc, true, true);
         if !process_ok {
-            info!(
-                incoming_hash = %block_hash,
-                height = block_height,
-                view = block_view,
-                "dropping block sync QC that conflicts with locked chain"
-            );
+            if let Some(lock) = self.locked_qc {
+                self.log_block_sync_locked_qc_conflict(
+                    &qc,
+                    lock,
+                    "known_block_qc.apply.precommit_reject",
+                );
+            }
             return true;
         }
         let checkpoint = ValidatorSetCheckpoint::new(
@@ -2881,18 +2977,16 @@ impl Actor {
             qc_signers,
             "applied block sync QC for known block"
         );
-        if extends_locked {
-            if block_known_for_commit {
-                self.apply_commit_qc(&qc, topology.as_ref(), block_hash, block_height, block_view);
-                self.request_commit_pipeline();
-            } else {
-                debug!(
-                    incoming_hash = %block_hash,
-                    height = block_height,
-                    view = block_view,
-                    "deferring commit apply for block sync QC until block is validated"
-                );
-            }
+        if block_known_for_commit {
+            self.apply_commit_qc(&qc, topology.as_ref(), block_hash, block_height, block_view);
+            self.request_commit_pipeline();
+        } else {
+            debug!(
+                incoming_hash = %block_hash,
+                height = block_height,
+                view = block_view,
+                "deferring commit apply for block sync QC until block is validated"
+            );
         }
         true
     }

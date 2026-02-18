@@ -287,6 +287,35 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let expected_height = local_height.saturating_add(1);
+        if pending.height > expected_height {
+            if let Some(parent_hash) = pending.block.header().prev_block_hash() {
+                self.request_missing_parent(
+                    hash,
+                    pending.height,
+                    pending.view,
+                    parent_hash,
+                    commit_topology,
+                    None,
+                    usize::try_from(expected_height).ok(),
+                    usize::try_from(pending.height).ok(),
+                    "validation_precheck",
+                );
+            }
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                local_height,
+                expected_height,
+                "deferring validation before voting: block is ahead of local height"
+            );
+            pending.validation_status = ValidationStatus::Pending;
+            self.pending.pending_blocks.insert(hash, pending);
+            return ValidationGateOutcome::Deferred;
+        }
+
         if matches!(dispatch, ValidationDispatch::TryWorker)
             && !self.subsystems.validation.work_txs.is_empty()
         {
