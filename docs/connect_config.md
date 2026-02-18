@@ -19,7 +19,7 @@ Environment overrides (user config → actual config):
 - `CONNECT_PING_MIN_INTERVAL_MS` (duration; default: `15000`)
 - `CONNECT_DEDUPE_CAP` (usize; default: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; default: `true`)
-- `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`)
+- `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`; allowed: `"broadcast"`, `"local_only"`)
 - `CONNECT_P2P_TTL_HOPS` (u8; default: `0`)
 
 Notes:
@@ -28,6 +28,9 @@ Notes:
   map to actual `session_ttl` and `dedupe_ttl` fields.
 - `CONNECT_WS_PER_IP_MAX_SESSIONS=0` disables the per-IP session cap.
 - `CONNECT_WS_RATE_PER_IP_PER_MIN=0` disables the per-IP handshake rate limiter.
+- `CONNECT_RELAY_STRATEGY="broadcast"` relays Connect frames through the Iroha node-to-node P2P network;
+  `"local_only"` keeps relay traffic on the local node only. Unknown strategy values are forced to
+  `"local_only"` to avoid unintended relay behavior.
 - Heartbeat enforcement clamps the configured interval to the browser-friendly minimum (`ping_min_interval_ms`);
   the server tolerates `ping_miss_tolerance` consecutive missed pongs before closing the WebSocket and
   increments the `connect.ping_miss_total` metric.

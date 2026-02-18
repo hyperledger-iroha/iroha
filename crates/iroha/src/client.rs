@@ -23,8 +23,7 @@ pub use iroha_config::client_api::{
 use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Hash, Signature, SignatureOf};
 use iroha_data_model::{
-    DATA_MODEL_VERSION,
-    ValidationFail,
+    DATA_MODEL_VERSION, ValidationFail,
     block::consensus::{
         EvidenceRecord, SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiQcEntry,
         SumeragiQcSnapshot, SumeragiStatusWire,

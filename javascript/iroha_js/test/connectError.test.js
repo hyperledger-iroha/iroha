@@ -86,3 +86,27 @@ test("syntax errors surface codec category", () => {
   assert.equal(converted.category, ConnectErrorCategory.CODEC);
   assert.equal(converted.code, "codec.syntax_error");
 });
+
+test("http timeout status maps to timeout category", () => {
+  const httpErr = Object.assign(new Error("Request Timeout"), { status: 408 });
+  const converted = connectErrorFrom(httpErr);
+  assert.equal(converted.category, ConnectErrorCategory.TIMEOUT);
+  assert.equal(converted.code, "http.timeout");
+  assert.equal(converted.httpStatus, 408);
+});
+
+test("http rate limit status maps to retryable transport category", () => {
+  const httpErr = Object.assign(new Error("Too Many Requests"), { status: 429 });
+  const converted = connectErrorFrom(httpErr);
+  assert.equal(converted.category, ConnectErrorCategory.TRANSPORT);
+  assert.equal(converted.code, "http.rate_limited");
+  assert.equal(converted.httpStatus, 429);
+});
+
+test("http 4xx client errors no longer map to authorization by default", () => {
+  const httpErr = Object.assign(new Error("Not Found"), { status: 404 });
+  const converted = connectErrorFrom(httpErr);
+  assert.equal(converted.category, ConnectErrorCategory.TRANSPORT);
+  assert.equal(converted.code, "http.client_error");
+  assert.equal(converted.httpStatus, 404);
+});

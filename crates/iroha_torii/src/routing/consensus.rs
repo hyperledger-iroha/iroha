@@ -770,13 +770,18 @@ pub async fn handle_v1_sumeragi_collectors(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let view = state.view();
+    let snap = sumeragi::status_snapshot();
     let peers = view.commit_topology.clone();
     let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
     let n = peers.len();
     let min_votes = topology.min_votes_for_commit();
     let tail = topology.proxy_tail_index();
     let available = n.saturating_sub(tail);
-    let mode = sumeragi::effective_consensus_mode(&view, ConsensusMode::Permissioned);
+    let mode = match snap.mode_tag.as_str() {
+        iroha_core::sumeragi::consensus::NPOS_TAG => ConsensusMode::Npos,
+        iroha_core::sumeragi::consensus::PERMISSIONED_TAG => ConsensusMode::Permissioned,
+        _ => sumeragi::effective_consensus_mode(&view, ConsensusMode::Permissioned),
+    };
     let (mut k_raw, redundant_send_r, seed_from_mode) = match mode {
         ConsensusMode::Permissioned => {
             let params = view.world.parameters().sumeragi();
@@ -813,7 +818,6 @@ pub async fn handle_v1_sumeragi_collectors(
     if k == 0 && available > 0 {
         k = available;
     }
-    let snap = sumeragi::status_snapshot();
     let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
     if epoch_seed.is_none() {
         epoch_seed = view

@@ -26,10 +26,17 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura.clone(), query));
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        kura.clone(),
+        query,
+    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_sender));
+    let queue = Arc::new(iroha_core::queue::Queue::from_config(
+        queue_cfg,
+        events_sender,
+    ));
     let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
 
     let telemetry = MaybeTelemetry::for_tests().map_gate(profile);
