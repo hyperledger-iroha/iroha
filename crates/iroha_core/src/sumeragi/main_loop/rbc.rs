@@ -2380,10 +2380,7 @@ impl Actor {
                             super::pending_block::ValidationStatus::Invalid
                         )
                 });
-        let committed_height = {
-            let view = self.state.view();
-            u64::try_from(view.height()).unwrap_or(u64::MAX)
-        };
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
             || self.block_known_locally(*block_hash)
         {
@@ -2880,14 +2877,17 @@ impl Actor {
             let committed_epoch = self.epoch_for_height(committed_height);
             let (consensus_mode, _, _) = self.consensus_context_for_height(init.height);
             let fallback_roster = {
-                let view = self.state.view();
-                let roster = super::roster::derive_active_topology_for_mode(
-                    &view,
+                let world = self.state.world_view();
+                let commit_topology = self.state.commit_topology_snapshot();
+                let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+                let roster = super::roster::derive_active_topology_for_mode_from_world(
+                    &world,
+                    commit_topology.as_slice(),
+                    height,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
                     consensus_mode,
                 );
-                drop(view);
                 super::roster::canonicalize_roster_for_mode(roster, consensus_mode)
             };
             if !fallback_roster.is_empty() && fallback_roster == init.roster {

@@ -21658,9 +21658,25 @@ function normalizeConnectStatusSnapshot(payload, context) {
       record.monotonic_drops_total,
       `${context}.monotonic_drops_total`,
     ),
+    sequenceViolationClosesTotal: coerceStatusInt(
+      record.sequence_violation_closes_total,
+      `${context}.sequence_violation_closes_total`,
+    ),
+    roleDirectionMismatchTotal: coerceStatusInt(
+      record.role_direction_mismatch_total,
+      `${context}.role_direction_mismatch_total`,
+    ),
     pingMissTotal: coerceStatusInt(
       record.ping_miss_total,
       `${context}.ping_miss_total`,
+    ),
+    p2pRebroadcastsTotal: coerceStatusInt(
+      record.p2p_rebroadcasts_total,
+      `${context}.p2p_rebroadcasts_total`,
+    ),
+    p2pRebroadcastSkippedTotal: coerceStatusInt(
+      record.p2p_rebroadcast_skipped_total,
+      `${context}.p2p_rebroadcast_skipped_total`,
     ),
   };
 }
@@ -21715,6 +21731,18 @@ function normalizeConnectStatusPolicySnapshot(payload, context) {
     relayEnabled: requireBooleanLike(
       record.relay_enabled,
       `${context}.relay_enabled`,
+    ),
+    relayStrategy: requireNonEmptyString(
+      record.relay_strategy,
+      `${context}.relay_strategy`,
+    ),
+    relayEffectiveStrategy: requireNonEmptyString(
+      record.relay_effective_strategy,
+      `${context}.relay_effective_strategy`,
+    ),
+    relayP2pAttached: requireBooleanLike(
+      record.relay_p2p_attached,
+      `${context}.relay_p2p_attached`,
     ),
     heartbeatIntervalMs: ToriiClient._normalizeUnsignedInteger(
       record.heartbeat_interval_ms,

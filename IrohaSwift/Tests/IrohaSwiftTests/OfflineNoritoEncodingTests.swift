@@ -100,6 +100,23 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         XCTAssertEqual(resolved, expected)
     }
 
+    func testEncodeAccountIdRebasesDefaultDomainIh58WhenExplicitDomainProvided() throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 5, count: 32))
+        let defaultAddress = try AccountAddress.fromAccount(
+            domain: AccountAddress.defaultDomainName,
+            publicKey: keypair.publicKey
+        )
+        let defaultIh58 = try defaultAddress.toIH58(networkPrefix: 0x02F1)
+        let providedLiteral = "\(defaultIh58)@bank1"
+
+        let expectedAddress = try defaultAddress.rebasedFromDefaultDomain(to: "bank1")
+        let expectedIh58 = try expectedAddress.toIH58(networkPrefix: 0x02F1)
+        let expected = try OfflineNorito.encodeAccountId("\(expectedIh58)@bank1")
+
+        let encoded = try OfflineNorito.encodeAccountId(providedLiteral)
+        XCTAssertEqual(encoded, expected)
+    }
+
     private func assertInvalidAssetId(_ value: String) {
         XCTAssertThrowsError(try OfflineAssetIdParts.parse(value)) { error in
             guard case let OfflineNoritoError.invalidAssetId(raw) = error else {

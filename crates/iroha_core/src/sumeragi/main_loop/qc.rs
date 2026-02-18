@@ -101,6 +101,37 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
+    fn missing_block_retry_window_with_rbc_progress(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        base_retry_window: Duration,
+    ) -> Duration {
+        if !self.runtime_da_enabled() || base_retry_window == Duration::ZERO {
+            return base_retry_window;
+        }
+        let key = Self::session_key(&block_hash, height, view);
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+            return base_retry_window;
+        };
+        if session.is_invalid() || session.delivered {
+            return base_retry_window;
+        }
+        let chunks_progressed = session.total_chunks() > 0 && session.received_chunks() > 0;
+        let ready_progressed = !session.ready_signatures.is_empty();
+        let pending_payload = self.subsystems.da_rbc.rbc.pending.contains_key(&key);
+        if !chunks_progressed && !ready_progressed && !pending_payload {
+            return base_retry_window;
+        }
+        let availability_timeout = self.availability_timeout(
+            self.quorum_timeout(self.runtime_da_enabled()),
+            self.runtime_da_enabled(),
+        );
+        let widened = super::saturating_mul_duration(base_retry_window, 2);
+        widened.min(availability_timeout.max(base_retry_window))
+    }
+
     fn maybe_validate_pending_for_commit_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
@@ -125,10 +156,8 @@ impl Actor {
             Some(pending)
                 if !pending.aborted && pending.validation_status == ValidationStatus::Pending =>
             {
-                let (state_height, tip_hash) = {
-                    let view = self.state.view();
-                    (view.height(), view.latest_block_hash())
-                };
+                let state_height = self.state.committed_height();
+                let tip_hash = self.state.latest_block_hash_fast();
                 pending_extends_tip(
                     pending.height,
                     pending.block.header().prev_block_hash(),
@@ -403,7 +432,18 @@ impl Actor {
         topology: &super::network_topology::Topology,
     ) -> bool {
         let da_enabled = self.runtime_da_enabled();
-        let retry_window = self.rebroadcast_cooldown();
+        let base_retry_window = self.rebroadcast_cooldown();
+        let retry_window = self.missing_block_retry_window_with_rbc_progress(
+            block_hash,
+            height,
+            view,
+            base_retry_window,
+        );
+        if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
+            && retry_window > stats.retry_window
+        {
+            stats.retry_window = retry_window;
+        }
         let defer_view_change =
             self.should_defer_missing_block_view_change(&block_hash, height, view);
         // Retry missing payload fetches on the rebroadcast cadence while keeping
@@ -676,9 +716,13 @@ impl Actor {
                     ConsensusMode::Npos => &mut active_roster_npos,
                 };
                 if cache.is_none() {
-                    let view = self.state.view();
-                    *cache = Some(super::roster::derive_active_topology_for_mode(
-                        &view,
+                    let world = self.state.world_view();
+                    let commit_topology = self.state.commit_topology_snapshot();
+                    let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+                    *cache = Some(super::roster::derive_active_topology_for_mode_from_world(
+                        &world,
+                        commit_topology.as_slice(),
+                        height,
                         self.common_config.trusted_peers.value(),
                         self.common_config.peer.id(),
                         consensus_mode,
@@ -1215,10 +1259,14 @@ impl Actor {
                             return;
                         }
                     };
-                let state_view = self.state.view();
+                let world = self.state.world_view();
+                let commit_topology = self.state.commit_topology_snapshot();
+                let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                 let stake_roster = {
-                    let active = super::roster::derive_active_topology_for_mode(
-                        &state_view,
+                    let active = super::roster::derive_active_topology_for_mode_from_world(
+                        &world,
+                        commit_topology.as_slice(),
+                        height,
                         self.common_config.trusted_peers.value(),
                         self.common_config.peer.id(),
                         consensus_mode,
@@ -1229,8 +1277,8 @@ impl Actor {
                         active
                     }
                 };
-                match super::stake_snapshot::stake_quorum_reached_for_peers(
-                    &state_view,
+                match super::stake_snapshot::stake_quorum_reached_for_world(
+                    &world,
                     &stake_roster,
                     &signer_peers,
                 ) {
@@ -1756,13 +1804,12 @@ impl Actor {
     }
 
     pub(super) fn block_is_empty(&self, hash: HashOf<BlockHeader>) -> Option<bool> {
-        let view = self.state.view();
         if let Some(height) = self.kura.get_block_height_by_hash(hash) {
             if let Some(block) = self.kura.get_block(height) {
                 if !block.is_empty() {
                     return Some(false);
                 }
-                if view.time_triggers_due_for_block(&block.header()) {
+                if self.state.time_triggers_due_for_block_fast(&block.header()) {
                     return Some(false);
                 }
                 return Some(true);
@@ -1772,7 +1819,10 @@ impl Actor {
             if !pending.block.is_empty() {
                 return false;
             }
-            if view.time_triggers_due_for_block(&pending.block.header()) {
+            if self
+                .state
+                .time_triggers_due_for_block_fast(&pending.block.header())
+            {
                 return false;
             }
             true
@@ -2634,17 +2684,16 @@ impl Actor {
             );
         }
         let (stake_snapshot, validation, evidence) = {
-            let state_view = self.state.view();
-            let world = state_view.world();
+            let world = self.state.world_view();
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(world, topology.as_ref()),
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(&world, topology.as_ref()),
             };
             let (validation, evidence) = validate_qc_with_evidence(
                 &self.vote_log,
                 &qc,
                 &topology,
-                world,
+                &world,
                 &self.roster_validation_cache.pops,
                 &self.common_config.chain,
                 consensus_mode,
@@ -2876,8 +2925,22 @@ impl Actor {
                 "received QC for unknown block; caching without updating locks/highest"
             );
             let da_enabled = self.runtime_da_enabled();
-            let retry_window = self.quorum_timeout(da_enabled);
+            let base_retry_window = self.quorum_timeout(da_enabled);
+            let retry_window = self.missing_block_retry_window_with_rbc_progress(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                base_retry_window,
+            );
             let now = Instant::now();
+            if let Some(stats) = self
+                .pending
+                .missing_block_requests
+                .get_mut(&qc.subject_block_hash)
+                && retry_window > stats.retry_window
+            {
+                stats.retry_window = retry_window;
+            }
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             let decision = plan_missing_block_fetch(
                 &mut self.pending.missing_block_requests,
@@ -3019,10 +3082,8 @@ impl Actor {
                     .pending_blocks
                     .get(&qc.subject_block_hash)
                     .and_then(|pending| {
-                        let (state_height, tip_hash) = {
-                            let view = self.state.view();
-                            (view.height(), view.latest_block_hash())
-                        };
+                        let state_height = self.state.committed_height();
+                        let tip_hash = self.state.latest_block_hash_fast();
                         let parent = pending.block.header().prev_block_hash();
                         super::pending_extends_tip(pending.height, parent, state_height, tip_hash)
                             .then_some(())

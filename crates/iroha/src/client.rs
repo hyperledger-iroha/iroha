@@ -7,7 +7,7 @@ use std::{
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -39,11 +39,11 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
-use iroha_torii_shared::{ErrorEnvelope, uri as torii_uri};
+use iroha_torii_shared::{ErrorEnvelope, QueueErrorEnvelope, uri as torii_uri};
 use iroha_version::{DecodeAll, codec::EncodeVersioned};
 use norito::{
     decode_from_bytes,
-    derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
+    derive::{JsonDeserialize, JsonSerialize},
     json::{Map as JsonMap, Value as JsonValue},
     to_bytes,
 };
@@ -1458,6 +1458,36 @@ pub enum DataModelCompatibility {
     Incompatible(DataModelCompatibilityError),
 }
 
+type DataModelCompatibilityState = Arc<Mutex<DataModelCompatibility>>;
+
+fn data_model_compatibility_cache_key(
+    chain: &ChainId,
+    torii_url: &Url,
+    account: &AccountId,
+) -> String {
+    format!("{chain}|{}|{account}", torii_url.as_str())
+}
+
+fn shared_data_model_compatibility_state(
+    chain: &ChainId,
+    torii_url: &Url,
+    account: &AccountId,
+) -> DataModelCompatibilityState {
+    static CACHE: OnceLock<Mutex<HashMap<String, Weak<Mutex<DataModelCompatibility>>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = data_model_compatibility_cache_key(chain, torii_url, account);
+
+    let mut guard = cache.lock().expect("data model compatibility cache lock");
+    if let Some(existing) = guard.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+
+    let state = Arc::new(Mutex::new(DataModelCompatibility::Unchecked));
+    guard.insert(key, Arc::downgrade(&state));
+    state
+}
+
 /// Filters for `/v1/sumeragi/evidence` listing endpoint.
 #[derive(Debug, Default, Clone)]
 pub struct SumeragiEvidenceListFilter<'a> {
@@ -1490,23 +1520,6 @@ impl SumeragiEvidenceListFilter<'_> {
         }
         out
     }
-}
-
-#[derive(Debug, NoritoDeserialize, NoritoSerialize)]
-struct QueueErrorSnapshot {
-    state: String,
-    queued: u64,
-    capacity: u64,
-    saturated: bool,
-}
-
-#[derive(Debug, NoritoDeserialize, NoritoSerialize)]
-struct QueueErrorEnvelope {
-    code: String,
-    message: String,
-    queue: QueueErrorSnapshot,
-    #[norito(default)]
-    retry_after_seconds: Option<u64>,
 }
 
 /// Phantom struct that handles Transaction API HTTP response
@@ -5088,6 +5101,9 @@ impl Client {
             headers.insert(String::from("Authorization"), format!("Basic {encoded}"));
         }
 
+        let data_model_compatibility =
+            shared_data_model_compatibility_state(&chain, &torii_api_url, &account);
+
         Self {
             chain,
             torii_url: torii_api_url,
@@ -5102,7 +5118,7 @@ impl Client {
             alias_cache_policy: sorafs_alias_cache,
             default_anonymity_policy: sorafs_anonymity_policy,
             rollout_phase: sorafs_rollout_phase,
-            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+            data_model_compatibility,
         }
     }
 
@@ -5477,18 +5493,19 @@ impl Client {
     }
 
     fn ensure_data_model_compatibility(&self) -> Result<()> {
-        let cached = self
+        let mut cached = self
             .data_model_compatibility
             .lock()
-            .expect("data model compatibility lock")
-            .clone();
-        match cached {
+            .expect("data model compatibility lock");
+        match cached.clone() {
             DataModelCompatibility::Unchecked => {}
             DataModelCompatibility::Compatible => return Ok(()),
             DataModelCompatibility::Incompatible(err) => return Err(err.into()),
         }
 
-        let capabilities = self.get_node_capabilities_json()?;
+        let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
+            return Ok(());
+        };
         let outcome = match parse_optional_u64(
             capabilities.get("data_model_version"),
             "node capabilities data_model_version",
@@ -5534,10 +5551,7 @@ impl Client {
             }
         };
 
-        *self
-            .data_model_compatibility
-            .lock()
-            .expect("data model compatibility lock") = outcome.clone();
+        *cached = outcome.clone();
 
         match outcome {
             DataModelCompatibility::Compatible => Ok(()),
@@ -5552,8 +5566,9 @@ impl Client {
     /// Returns submitted transaction's hash or error string.
     ///
     /// # Errors
-    /// Fails if sending transaction to peer fails, if it response with error, or if the
-    /// node data model version is missing or incompatible.
+    /// Fails if sending transaction to peer fails, if it response with error, or if the node
+    /// data model version is missing or incompatible. If `/v1/node/capabilities` responds with
+    /// HTTP 429, the compatibility probe is treated as transient and deferred.
     pub fn submit_transaction(
         &self,
         transaction: &SignedTransaction,
@@ -8830,6 +8845,34 @@ impl Client {
             ));
         }
         Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// GET `/v1/node/capabilities`
+    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
+        let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
+        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("unknown");
+            warn!(
+                "node capabilities probe was rate-limited (retry-after: {retry_after}); deferring data model compatibility check"
+            );
+            return Ok(None);
+        }
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get node capabilities: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(Some(norito::json::from_slice(resp.body())?))
     }
 
     /// GET `/v1/node/capabilities`
@@ -13543,6 +13586,117 @@ mod tests {
     }
 
     #[test]
+    fn submit_transaction_tolerates_rate_limited_capabilities_probe() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("snapshot lock").push(snapshot);
+                let response = if path == "/v1/node/capabilities" {
+                    HttpResponse::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(b"rate limited".to_vec())
+                        .expect("response build")
+                } else {
+                    HttpResponse::builder()
+                        .status(StatusCode::OK)
+                        .body(Vec::new())
+                        .expect("response build")
+                };
+                Ok(response)
+            }
+        };
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            client.submit_transaction(&tx).expect(
+                "transaction submission should proceed despite transient capability throttling",
+            );
+            let cached = client
+                .data_model_compatibility
+                .lock()
+                .expect("data model compatibility lock")
+                .clone();
+            assert!(
+                matches!(cached, DataModelCompatibility::Unchecked),
+                "rate-limited probe must not mark compatibility state as checked"
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(
+            store_guard.len(),
+            2,
+            "expected node capabilities + transaction requests"
+        );
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
+    }
+
+    #[test]
+    fn submit_transaction_reuses_compatibility_cache_across_equivalent_clients() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let capabilities_body = format!(r#"{{"data_model_version":{DATA_MODEL_VERSION}}}"#);
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("snapshot lock").push(snapshot);
+                let response = if path == "/v1/node/capabilities" {
+                    json_response(StatusCode::OK, &capabilities_body)
+                } else {
+                    HttpResponse::builder()
+                        .status(StatusCode::OK)
+                        .body(Vec::new())
+                        .expect("response build")
+                };
+                Ok(response)
+            }
+        };
+
+        with_mock_http(responder, || {
+            let config = Config {
+                torii_api_url: base_url(),
+                ..config_factory()
+            };
+            let client_a = Client::new(config.clone());
+            let client_b = Client::new(config);
+
+            let tx_a =
+                client_a.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            client_a
+                .submit_transaction(&tx_a)
+                .expect("first transaction submission succeeds");
+
+            let tx_b =
+                client_b.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            client_b
+                .submit_transaction(&tx_b)
+                .expect("second transaction submission succeeds");
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        let capability_requests = store_guard
+            .iter()
+            .filter(|snapshot| snapshot.url.path() == "/v1/node/capabilities")
+            .count();
+        let tx_requests = store_guard
+            .iter()
+            .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .count();
+        assert_eq!(
+            capability_requests, 1,
+            "capabilities probe should be shared"
+        );
+        assert_eq!(
+            tx_requests, 2,
+            "both transaction submissions should be sent"
+        );
+    }
+
+    #[test]
     fn authorization_header() {
         let config = Config {
             basic_auth: Some(BasicAuth {
@@ -15662,5 +15816,35 @@ mod response_report {
         let text = report.0.to_string();
         assert!(text.contains("queue_error"));
         assert!(text.contains("transaction already committed"));
+    }
+
+    #[test]
+    fn with_msg_decodes_shared_queue_error_envelope() {
+        let envelope = QueueErrorEnvelope {
+            code: "queue_full".to_owned(),
+            message: "transaction queue is at capacity".to_owned(),
+            queue: iroha_torii_shared::QueueErrorSnapshot {
+                state: "saturated".to_owned(),
+                queued: 24,
+                capacity: 24,
+                saturated: true,
+            },
+            retry_after_seconds: Some(1),
+        };
+        let body = to_bytes(&envelope).expect("encode queue error envelope");
+        let response = Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header(http::header::CONTENT_TYPE, APPLICATION_NORITO)
+            .header("x-iroha-reject-code", "PRTRY:QUEUE_FULL")
+            .body(body)
+            .unwrap();
+        let report = match ResponseReport::with_msg("Unexpected transaction response", &response) {
+            Ok(report) => report,
+            Err(err) => panic!("expected queue envelope decode, got error: {}", err.0),
+        };
+        let text = report.0.to_string();
+        assert!(text.contains("PRTRY:QUEUE_FULL"));
+        assert!(text.contains("queue_full"));
+        assert!(text.contains("transaction queue is at capacity"));
     }
 }

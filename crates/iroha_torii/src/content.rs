@@ -12,7 +12,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use blake3::Hasher;
 use hex::ToHex;
-use iroha_core::state::{StateReadOnly, StateReadOnlyWithTransactions, WorldReadOnly};
+use iroha_core::state::WorldReadOnly;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -96,12 +96,11 @@ pub async fn handle_get_content(
         }
 
         let (bundle, entry, range_spec) = {
-            let state = app.state.view();
-            let current_height = state.height() as u64;
+            let world = app.state.world_view();
+            let current_height = app.state.committed_height() as u64;
 
             let Some(bundle) =
-                mv::storage::StorageReadOnly::get(state.world().content_bundles(), &bundle_id)
-                    .cloned()
+                mv::storage::StorageReadOnly::get(world.content_bundles(), &bundle_id).cloned()
             else {
                 outcome_hint = Some("not_found");
                 return Err(ContentError::NotFound);
@@ -158,8 +157,8 @@ pub async fn handle_get_content(
         let body = if range_spec.content_length == 0 {
             Vec::new()
         } else {
-            let state = app.state.view();
-            match assemble_file_range(&state, &bundle, &entry, &range_spec) {
+            let world = app.state.world_view();
+            match assemble_file_range(&world, &bundle, &entry, &range_spec) {
                 Ok(body) => body,
                 Err(err) => {
                     error!(
@@ -323,8 +322,8 @@ fn enforce_auth(
         ContentAuthMode::Public => Ok(()),
         ContentAuthMode::RoleGate(role) => {
             let account = signed_account(state, headers, method, uri)?;
-            let view = state.view();
-            let has_role = view.world().account_roles_iter(&account).any(|r| r == role);
+            let world = state.world_view();
+            let has_role = world.account_roles_iter(&account).any(|r| r == role);
             if has_role {
                 Ok(())
             } else {
@@ -333,9 +332,8 @@ fn enforce_auth(
         }
         ContentAuthMode::Sponsor(expected) => {
             let account = signed_account(state, headers, method, uri)?;
-            let view = state.view();
-            let account_entry = view
-                .world()
+            let world = state.world_view();
+            let account_entry = world
                 .account(&account)
                 .map_err(|_| ContentError::Forbidden("account not found".to_string()))?;
             let uaid = account_entry
@@ -386,7 +384,7 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
 }
 
 fn assemble_file_range(
-    state: &impl StateReadOnlyWithTransactions,
+    world: &impl WorldReadOnly,
     bundle: &ContentBundleRecord,
     entry: &iroha_data_model::content::ContentFileEntry,
     range: &RangeSpec,
@@ -404,7 +402,7 @@ fn assemble_file_range(
         .checked_add(1)
         .ok_or(AssembleError::Overflow)?;
     assemble_range_from_chunks(chunk_size, &bundle.chunk_hashes, start, end, |hash| {
-        mv::storage::StorageReadOnly::get(state.world().content_chunks(), hash)
+        mv::storage::StorageReadOnly::get(world.content_chunks(), hash)
             .map(|chunk| chunk.data.as_slice())
     })
 }

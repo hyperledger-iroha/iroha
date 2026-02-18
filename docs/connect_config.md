@@ -19,7 +19,7 @@ Environment overrides (user config → actual config):
 - `CONNECT_PING_MIN_INTERVAL_MS` (duration; default: `15000`)
 - `CONNECT_DEDUPE_CAP` (usize; default: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; default: `true`)
-- `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`; allowed: `"broadcast"`, `"local_only"`)
+- `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`; allowed: `"broadcast"`, `"local_only"`; compatibility aliases: `"local-only"`, `"local"`)
 - `CONNECT_P2P_TTL_HOPS` (u8; default: `0`)
 
 Notes:
@@ -29,8 +29,26 @@ Notes:
 - `CONNECT_WS_PER_IP_MAX_SESSIONS=0` disables the per-IP session cap.
 - `CONNECT_WS_RATE_PER_IP_PER_MIN=0` disables the per-IP handshake rate limiter.
 - `CONNECT_RELAY_STRATEGY="broadcast"` relays Connect frames through the Iroha node-to-node P2P network;
-  `"local_only"` keeps relay traffic on the local node only. Unknown strategy values are forced to
-  `"local_only"` to avoid unintended relay behavior.
+  `"local_only"` keeps relay traffic on the local node only. Compatibility aliases `"local-only"` and
+  `"local"` normalize to `"local_only"`. Unknown strategy values are forced to `"local_only"` to avoid
+  unintended relay behavior. Torii does not use centralized relay servers.
+- WebSocket ingress validates role→direction mapping (`app` must send `AppToWallet`, `wallet` must
+  send `WalletToApp`). Mismatches terminate the session with `connect_role_direction_mismatch` and
+  increment `connect.role_direction_mismatch_total`.
+- Frames are deduplicated by `(sid, dir, seq)` before sequence checks. Duplicates increment
+  `connect.dedupe_drops_total` and are dropped without advancing sequence state.
+- Per direction, sequence numbers are strict and contiguous starting at `1`; non-contiguous frames
+  terminate the session with `connect_sequence_violation` and increment
+  `connect.sequence_violation_closes_total`.
+- `/v1/connect/status` reports top-level fields `p2p_rebroadcasts_total` and
+  `p2p_rebroadcast_skipped_total` (mirrored by telemetry metrics
+  `connect.p2p_rebroadcasts_total` and `connect.p2p_rebroadcast_skipped_total`). The rebroadcast
+  counter increments when a frame is sent over Iroha P2P; the skipped counter increments when relay
+  is configured as `broadcast` but no P2P network handle is attached at runtime.
+- `/v1/connect/status.policy` includes both configured and effective relay mode:
+  `relay_strategy` (normalized config), `relay_effective_strategy` (runtime behavior), and
+  `relay_p2p_attached` (whether Torii currently has a P2P relay handle). This allows operators to
+  confirm that cross-node forwarding is happening over decentralized node-to-node transport.
 - Heartbeat enforcement clamps the configured interval to the browser-friendly minimum (`ping_min_interval_ms`);
   the server tolerates `ping_miss_tolerance` consecutive missed pongs before closing the WebSocket and
   increments the `connect.ping_miss_total` metric.

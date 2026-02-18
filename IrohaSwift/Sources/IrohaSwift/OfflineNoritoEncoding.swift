@@ -366,10 +366,19 @@ enum OfflineNorito {
             }
             if let (address, _) = try? AccountAddress.parseAny(addressPart,
                                                                expectedPrefix: defaultNetworkPrefix) {
-                guard address.matchesDomainLabel(canonicalDomain) else {
-                    throw OfflineNoritoError.invalidAccountId(trimmed)
+                if address.matchesDomainLabel(canonicalDomain) {
+                    return ResolvedAccountId(address: address, domainLabel: canonicalDomain)
                 }
-                return ResolvedAccountId(address: address, domainLabel: canonicalDomain)
+
+                // Some deployments provide a bare IH58 address encoded with the default-domain selector
+                // and pair it with an explicit FI domain (`IH58@bank1`). Rebase default-domain IH58
+                // addresses to the requested domain instead of rejecting them.
+                if let rebased = try? address.rebasedFromDefaultDomain(to: canonicalDomain),
+                   rebased.matchesDomainLabel(canonicalDomain) {
+                    return ResolvedAccountId(address: rebased, domainLabel: canonicalDomain)
+                }
+
+                throw OfflineNoritoError.invalidAccountId(trimmed)
             }
             guard let parsed = try parsePublicKeyMultihash(addressPart, raw: trimmed) else {
                 throw OfflineNoritoError.invalidAccountId(trimmed)

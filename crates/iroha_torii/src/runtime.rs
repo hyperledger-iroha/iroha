@@ -131,8 +131,8 @@ pub struct RuntimeUpgradesListResponse {
 pub async fn handle_runtime_abi_active(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiActiveResponse, crate::Error> {
-    let v = state.view();
-    let active = v.world().active_abi_versions();
+    let world = state.world_view();
+    let active = world.active_abi_versions();
     let mut list: Vec<u16> = active.into_iter().collect();
     list.sort_unstable();
     let default = *list.last().unwrap_or(&1);
@@ -146,11 +146,10 @@ pub async fn handle_runtime_abi_active(
 pub async fn handle_node_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<NodeCapabilitiesResponse, crate::Error> {
-    let v = state.view();
-    let mut list: Vec<u16> = v.world().active_abi_versions().into_iter().collect();
+    let world = state.world_view();
+    let mut list: Vec<u16> = world.active_abi_versions().into_iter().collect();
     list.sort_unstable();
     let default = *list.last().unwrap_or(&1);
-    drop(v);
     let crypto_cfg = state.crypto();
     let allowed_signing: Vec<String> = crypto_cfg
         .allowed_signing
@@ -270,12 +269,12 @@ mod bitmap_tests {
 pub async fn handle_runtime_metrics(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeMetricsResponse, crate::Error> {
-    let v = state.view();
-    let active_count = v.world().active_abi_versions().len() as u64;
+    let world = state.world_view();
+    let active_count = world.active_abi_versions().len() as u64;
     let mut proposed: u64 = 0;
     let mut activated: u64 = 0;
     let mut canceled: u64 = 0;
-    for (_id, rec) in v.world().runtime_upgrades().iter() {
+    for (_id, rec) in world.runtime_upgrades().iter() {
         proposed = proposed.saturating_add(1);
         match rec.status {
             iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_) => {
@@ -316,9 +315,9 @@ pub async fn handle_runtime_abi_hash(
 pub async fn handle_runtime_upgrades_list(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeUpgradesListResponse, crate::Error> {
-    let v = state.view();
+    let world = state.world_view();
     let mut items: Vec<RuntimeUpgradeListItem> = Vec::new();
-    for (id, rec) in v.world().runtime_upgrades().iter() {
+    for (id, rec) in world.runtime_upgrades().iter() {
         items.push(RuntimeUpgradeListItem {
             id_hex: hex::encode(id.0),
             record: rec.clone(),

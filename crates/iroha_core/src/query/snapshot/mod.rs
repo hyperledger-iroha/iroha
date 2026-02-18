@@ -39,8 +39,9 @@ pub enum CursorMode {
 /// Execute a query against a point-in-time snapshot of the state with the provided cursor mode
 /// and query limits.
 ///
-/// Captures a `StateView`, validates the query, and executes it. Stored cursor mode persists
-/// iterators inside the [`LiveQueryStore`] so subsequent `Continue` requests can resume.
+/// Captures a lightweight query snapshot, validates the query, and executes it.
+/// Stored cursor mode persists iterators inside the [`LiveQueryStore`] so
+/// subsequent `Continue` requests can resume.
 ///
 /// # Errors
 /// Returns a validation error if the request is rejected by the executor, or an execution
@@ -53,7 +54,7 @@ pub fn run_on_snapshot_with_mode(
     mode: CursorMode,
     limits: QueryLimits,
 ) -> Result<QueryResponse, SnapshotQueryError> {
-    let view = state.view();
+    let view = state.query_view();
 
     if matches!(mode, CursorMode::Ephemeral) && matches!(request, QueryRequest::Continue(_)) {
         return Err(SnapshotQueryError::Validation(

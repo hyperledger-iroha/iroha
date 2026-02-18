@@ -253,7 +253,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
-use iroha_torii_shared::{ErrorEnvelope, uri};
+use iroha_torii_shared::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot, uri};
 use ivm::iso20022::{MsgError, parse_message};
 use mv::storage::StorageReadOnly;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -6376,7 +6376,7 @@ async fn handler_zk_ivm_derive(
             // Proof derivation needs a stable authority, but signature validity is not required here.
             .with_authority(authority);
 
-            let view = state.view();
+            let view = state.query_view();
             iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
                 &view, &tx, &vk_record,
             )
@@ -6647,7 +6647,7 @@ async fn handler_zk_ivm_prove(
                 // Proof derivation needs stable authority; signature validity is not required.
                 .with_authority(authority.clone());
 
-                let view = state.view();
+                let view = state.query_view();
                 let derived_proved =
                     iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
                         &view, &tx, &vk_record,
@@ -12808,14 +12808,14 @@ async fn handler_ledger_state_root(
         return Err(conversion_error("height must be at least 1".to_owned()));
     };
 
-    let view = app.state.view();
-    let Some(block) = view.kura().get_block(height_usize) else {
+    let Some(block) = app.state.block_by_height(height_usize) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
     let block_hash = block.hash();
-    let commit_qc = view.world.commit_qcs().get(&block_hash).cloned();
+    let world = app.state.world_view();
+    let commit_qc = world.commit_qcs().get(&block_hash).cloned();
     let payload = if let Some(qc) = commit_qc {
         StateRootResponse {
             height,
@@ -12877,16 +12877,15 @@ async fn handler_ledger_state_proof(
         return Err(conversion_error("height must be at least 1".to_owned()));
     };
 
-    let view = app.state.view();
-    let Some(block) = view.kura().get_block(height_usize) else {
+    let Some(block) = app.state.block_by_height(height_usize) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
     let block_hash = block.hash();
     // Ledger state proof requires a persisted commit QC; avoid placeholder synthesis.
-    let commit_qc = view
-        .world
+    let world = app.state.world_view();
+    let commit_qc = world
         .commit_qcs()
         .get(&block_hash)
         .cloned()
@@ -12931,24 +12930,23 @@ async fn handler_block_proof(
         .parse()
         .map_err(|err| conversion_error(format!("invalid entry hash: {err}")))?;
 
-    let proofs = {
-        let view = app.state.view();
-        view.block_proofs_for_entry(block_height, entry_hash)
-            .map_err(|err| match err {
-                BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
-                    conversion_error(err.to_string())
-                }
-                BlockProofError::BlockNotFound(_)
-                | BlockProofError::MissingResults(_)
-                | BlockProofError::EntrypointNotFound { .. }
-                | BlockProofError::ExecutionResultMissing { .. }
-                | BlockProofError::MerkleProofUnavailable { .. } => {
-                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                    ))
-                }
-            })?
-    };
+    let proofs = app
+        .state
+        .block_proofs_for_entry(block_height, entry_hash)
+        .map_err(|err| match err {
+            BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
+                conversion_error(err.to_string())
+            }
+            BlockProofError::BlockNotFound(_)
+            | BlockProofError::MissingResults(_)
+            | BlockProofError::EntrypointNotFound { .. }
+            | BlockProofError::ExecutionResultMissing { .. }
+            | BlockProofError::MerkleProofUnavailable { .. } => {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                ))
+            }
+        })?;
     #[cfg(feature = "connect")]
     if app.connect_enabled {
         if let Err(err) = app
@@ -14986,7 +14984,7 @@ impl Torii {
             config.proof_api.retry_after,
             config.proof_api.max_body_bytes.get(),
         );
-        let content_snapshot = state.view().content.clone();
+        let content_snapshot = state.content_snapshot();
         let content_limits_snapshot = content_snapshot.limits;
         let content_request_limiter = limits::RateLimiter::new(
             Some(content_limits_snapshot.max_requests_per_second.get()),
@@ -17148,23 +17146,6 @@ impl IntoResponse for Error {
     }
 }
 
-#[derive(Debug, Clone, norito::derive::NoritoSerialize)]
-struct QueueErrorSnapshot {
-    state: &'static str,
-    queued: u64,
-    capacity: u64,
-    saturated: bool,
-}
-
-#[derive(Debug, Clone, norito::derive::NoritoSerialize)]
-struct QueueErrorEnvelope {
-    code: &'static str,
-    message: &'static str,
-    queue: QueueErrorSnapshot,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    retry_after_seconds: Option<u64>,
-}
-
 #[allow(dead_code)]
 fn _assert_torii_types_are_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
@@ -17430,7 +17411,7 @@ pub(crate) mod tests_runtime_handlers {
             telemetry::peers::GeoLookupConfig::disabled(),
         );
 
-        let content_config_snapshot = state.view().content.clone();
+        let content_config_snapshot = state.content_snapshot();
         let soranet_privacy_ingest =
             iroha_config::parameters::actual::SoranetPrivacyIngest::default();
         let soranet_privacy_tokens: HashSet<String> =
@@ -20380,10 +20361,14 @@ impl Error {
             _ => None,
         };
         QueueErrorEnvelope {
-            code,
-            message,
+            code: code.to_owned(),
+            message: message.to_owned(),
             queue: QueueErrorSnapshot {
-                state: if saturated { "saturated" } else { "healthy" },
+                state: if saturated {
+                    "saturated".to_owned()
+                } else {
+                    "healthy".to_owned()
+                },
                 queued: backpressure.queued() as u64,
                 capacity: backpressure.capacity().get() as u64,
                 saturated,

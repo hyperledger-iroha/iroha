@@ -559,8 +559,8 @@ fn find_vk_record_by_commitment(
     state: &CoreState,
     commitment: [u8; 32],
 ) -> Option<(VerifyingKeyId, VerifyingKeyRecord)> {
-    let view = state.view();
-    for (id, record) in view.world.verifying_keys().iter() {
+    let world = state.world_view();
+    for (id, record) in world.verifying_keys().iter() {
         if record.commitment == commitment {
             return Some((id.clone(), record.clone()));
         }
@@ -661,7 +661,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     }
     if backend_str == "stark/fri-v1" || backend_str.starts_with("stark/fri-v1/") {
         if let Some(state) = ctx.state.as_ref() {
-            if !state.view().zk.stark.enabled {
+            if !state.zk_snapshot().stark.enabled {
                 errors.push("stark verification is disabled in node configuration".into());
             }
         }
@@ -699,7 +699,8 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
                     };
                 }
             };
-            let record = match state.view().world.verifying_keys().get(vk_id) {
+            let world = state.world_view();
+            let record = match world.verifying_keys().get(vk_id) {
                 Some(record) => record.clone(),
                 None => {
                     errors.push("verifying key not found in registry".into());
@@ -812,12 +813,12 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
         match vk_box.as_ref() {
             Some(vk_box) => {
                 let verified = if let Some(state) = ctx.state.as_ref() {
-                    let view = state.view();
+                    let zk = state.zk_snapshot();
                     verify_backend_with_timing_checked(
                         backend_str,
                         &attachment.proof,
                         Some(vk_box),
-                        &view.zk,
+                        &zk,
                     )
                     .ok
                 } else {

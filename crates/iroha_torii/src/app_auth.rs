@@ -108,9 +108,17 @@ where
     let iter = QueryWithParams::new(&qbox, QueryParams::default());
     let request = QueryRequest::Start(iter);
     let limits = QueryLimits::new(crate::routing::app_query_limits().max_fetch_size);
-    ValidQueryRequest::validate_for_client_parts(request, authority, &state.view(), limits)
-        .map(|_| ())
-        .map_err(crate::Error::Query)
+    let world = state.world_view();
+    let latest_block = state.latest_block_header_fast();
+    ValidQueryRequest::validate_for_client_world_parts(
+        request,
+        authority,
+        &world,
+        latest_block,
+        limits,
+    )
+    .map(|_| ())
+    .map_err(crate::Error::Query)
 }
 
 /// Verify optional canonical request headers.
@@ -172,8 +180,8 @@ pub fn verify_canonical_request(
     let signature = Signature::from_bytes(&signature_bytes);
     let message = canonical_request_message(method, uri, body);
 
-    let view = state.view();
-    let account_entry = view.world().account(&account).map_err(|_| {
+    let world = state.world_view();
+    let account_entry = world.account(&account).map_err(|_| {
         crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Find(
             FindError::Account(account.clone()),
         )))

@@ -170,19 +170,24 @@ fn npos_timeout_base_for_handshake_fingerprint_ms(
     sumeragi.block_time_ms().max(1).max(min_finality_ms)
 }
 
-/// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current state view and configuration.
+/// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from a world
+/// snapshot, committed height, and local configuration.
 #[allow(clippy::too_many_lines)]
-pub fn compute_consensus_handshake_caps_from_view(
-    view: &StateView<'_>,
+pub fn compute_consensus_handshake_caps_from_world(
+    world: &impl WorldReadOnly,
+    height: u64,
     common_config: &CommonConfig,
     sumeragi_config: &SumeragiConfig,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
 ) -> (String, String, iroha_p2p::ConsensusHandshakeCaps) {
-    let s_params = view.world().parameters();
+    let s_params = world.parameters();
     let sumeragi = s_params.sumeragi();
     let block = s_params.block();
-    let effective_mode =
-        crate::sumeragi::effective_consensus_mode(view, sumeragi_config.consensus_mode);
+    let effective_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+        world,
+        height,
+        sumeragi_config.consensus_mode,
+    );
     let (mode_tag, bls_domain) = match effective_mode {
         ConsensusMode::Permissioned => (
             PERMISSIONED_TAG.to_string(),
@@ -203,7 +208,7 @@ pub fn compute_consensus_handshake_caps_from_view(
             let ms = d.as_millis();
             u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
         };
-        view.world().sumeragi_npos_parameters().map_or_else(
+        world.sumeragi_npos_parameters().map_or_else(
             || {
                 let npos_cfg = &sumeragi_config.npos;
                 let collectors_cfg = &sumeragi_config.collectors;
@@ -297,6 +302,24 @@ pub fn compute_consensus_handshake_caps_from_view(
             consensus_fingerprint: fingerprint,
             config: *config_caps,
         },
+    )
+}
+
+/// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current
+/// state view and configuration.
+pub fn compute_consensus_handshake_caps_from_view(
+    view: &StateView<'_>,
+    common_config: &CommonConfig,
+    sumeragi_config: &SumeragiConfig,
+    config_caps: &iroha_p2p::ConsensusConfigCaps,
+) -> (String, String, iroha_p2p::ConsensusHandshakeCaps) {
+    let height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+    compute_consensus_handshake_caps_from_world(
+        view.world(),
+        height,
+        common_config,
+        sumeragi_config,
+        config_caps,
     )
 }
 

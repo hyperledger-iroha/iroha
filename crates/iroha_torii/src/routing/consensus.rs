@@ -1,15 +1,14 @@
 //! Consensus-related Torii handlers split out from the main routing module.
 
 use super::*;
-use iroha_core::state::StateReadOnly;
 use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
-        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiNposTimeoutsStatus,
-        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
-        SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
-        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
+        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+        SumeragiConsensusMessageHandlingStatus, SumeragiDataspaceCommitment,
+        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
+        SumeragiMembershipStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
         SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcStatus,
         SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRuntimeUpgradeHook,
         SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
@@ -660,7 +659,10 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
         json_entry("signatures_present", snap.commit_quorum.signatures_present),
         json_entry("signatures_counted", snap.commit_quorum.signatures_counted),
         json_entry("signatures_set_b", snap.commit_quorum.signatures_set_b),
-        json_entry("signatures_required", snap.commit_quorum.signatures_required),
+        json_entry(
+            "signatures_required",
+            snap.commit_quorum.signatures_required,
+        ),
         json_entry("last_updated_ms", snap.commit_quorum.last_updated_ms),
     ]);
     let payload = json_object(vec![
@@ -718,9 +720,8 @@ pub async fn handle_v1_sumeragi_bls_keys(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     // Debug/operator endpoint; non-consensus. Build mapping from world peers where identity key is BLS-normal.
-    let view = state.view();
-    let peers = view.world.peers().clone();
-    drop(view);
+    let world = state.world_view();
+    let peers = world.peers().clone();
     let mut obj: std::collections::BTreeMap<String, Option<String>> =
         std::collections::BTreeMap::new();
     for p in peers {
@@ -769,22 +770,23 @@ pub async fn handle_v1_sumeragi_collectors(
     State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
+    let world = state.world_view();
     let snap = sumeragi::status_snapshot();
-    let peers = view.commit_topology.clone();
+    let peers = state.commit_topology_snapshot();
+    let chain_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
     let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
     let n = peers.len();
     let min_votes = topology.min_votes_for_commit();
     let tail = topology.proxy_tail_index();
     let available = n.saturating_sub(tail);
-    let mode = match snap.mode_tag.as_str() {
-        iroha_core::sumeragi::consensus::NPOS_TAG => ConsensusMode::Npos,
-        iroha_core::sumeragi::consensus::PERMISSIONED_TAG => ConsensusMode::Permissioned,
-        _ => sumeragi::effective_consensus_mode(&view, ConsensusMode::Permissioned),
-    };
+    let mode = sumeragi::effective_consensus_mode_for_height_from_world(
+        &world,
+        chain_height,
+        ConsensusMode::Permissioned,
+    );
     let (mut k_raw, redundant_send_r, seed_from_mode) = match mode {
         ConsensusMode::Permissioned => {
-            let params = view.world.parameters().sumeragi();
+            let params = world.parameters().sumeragi();
             (
                 params.collectors_k as usize,
                 params.collectors_redundant_send_r,
@@ -792,10 +794,12 @@ pub async fn handle_v1_sumeragi_collectors(
             )
         }
         ConsensusMode::Npos => {
-            if let Some(cfg) = sumeragi::load_npos_collector_config(&view) {
+            if let Some(cfg) =
+                sumeragi::load_npos_collector_config_from_world(&world, state.chain_id_ref())
+            {
                 (cfg.k, cfg.redundant_send_r, Some(cfg.seed))
             } else {
-                let params = view.world.parameters().sumeragi();
+                let params = world.parameters().sumeragi();
                 iroha_logger::warn!(
                     "Missing sumeragi_npos_parameters payload; falling back to permissioned collector settings"
                 );
@@ -820,15 +824,14 @@ pub async fn handle_v1_sumeragi_collectors(
     }
     let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
     if epoch_seed.is_none() {
-        epoch_seed = view
-            .world
+        epoch_seed = world
             .sumeragi_npos_parameters()
             .map(|params| params.epoch_seed());
     }
     let plan_height = if snap.prf_height > 0 {
         snap.prf_height
     } else {
-        view.height() as u64
+        chain_height
     };
     let plan_view = snap.prf_view;
     let collectors = sumeragi::collectors::deterministic_collectors(
@@ -875,7 +878,6 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    drop(view);
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -889,8 +891,8 @@ pub async fn handle_v1_sumeragi_params(
     State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let sp = view.world.parameters().sumeragi();
+    let world = state.world_view();
+    let sp = world.parameters().sumeragi();
     let payload = SumeragiParamsResponse {
         block_time_ms: sp.block_time_ms,
         commit_time_ms: sp.commit_time_ms,
@@ -905,9 +907,8 @@ pub async fn handle_v1_sumeragi_params(
             iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => "Npos",
         }),
         mode_activation_height: sp.mode_activation_height,
-        chain_height: view.height() as u64,
+        chain_height: u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
     };
-    drop(view);
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -921,9 +922,8 @@ pub async fn handle_v1_sumeragi_evidence_count(
     State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let n = iroha_core::query::evidence_count(&view) as u64;
-    drop(view);
+    let world = state.world_view();
+    let n = iroha_core::query::evidence_count_from_world(&world) as u64;
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -956,17 +956,15 @@ pub async fn handle_v1_sumeragi_evidence_list(
     crate::NoritoQuery(q): crate::NoritoQuery<EvidenceListQuery>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let view = state.view();
-    let mut records = iroha_core::query::evidence_list_snapshot(&view);
+    let world = state.world_view();
+    let mut records = iroha_core::query::evidence_list_snapshot_from_world(&world);
     // Optional kind filter
     if let Some(kind_s) = q.kind.as_deref() {
         use iroha_core::sumeragi::consensus::EvidenceKind;
         let kind_opt = match kind_s {
             "DoublePrepare" | "DoublePrevote" => Some(EvidenceKind::DoublePrepare),
             "DoubleCommit" | "DoublePrecommit" => Some(EvidenceKind::DoubleCommit),
-            "InvalidQc" | "InvalidQC" => {
-                Some(EvidenceKind::InvalidQc)
-            }
+            "InvalidQc" | "InvalidQC" => Some(EvidenceKind::InvalidQc),
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             _ => None,
         };
@@ -1080,17 +1078,20 @@ fn decode_and_validate_evidence(
     chain_id: &ChainId,
 ) -> Result<ConsensusEvidence, Error> {
     let evidence = decode_evidence_hex(value)?;
-    let view = state.view();
-    let topology_peers: Vec<_> = view.commit_topology().iter().cloned().collect();
-    let (subject_height, _) =
-        iroha_core::sumeragi::evidence_subject_height_view(&evidence);
-    let npos_seed = if view.world.sumeragi_npos_parameters().is_some() {
-        let height = subject_height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(0));
-        Some(iroha_core::sumeragi::npos_seed_for_height(&view, height))
+    let topology_peers = state.commit_topology_snapshot();
+    let (subject_height, _) = iroha_core::sumeragi::evidence_subject_height_view(&evidence);
+    let world = state.world_view();
+    let npos_seed = if world.sumeragi_npos_parameters().is_some() {
+        let height =
+            subject_height.unwrap_or_else(|| u64::try_from(state.committed_height()).unwrap_or(0));
+        Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
+            &world,
+            state.chain_id_ref(),
+            height,
+        ))
     } else {
         None
     };
-    drop(view);
     if topology_peers.is_empty() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -1133,11 +1134,8 @@ mod evidence_submit_tests {
     use iroha_core::sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        block::BlockHeader,
-        consensus::VrfEpochRecord,
-        parameter::system::SumeragiNposParameters,
-        peer::PeerId,
-        prelude::ChainId,
+        block::BlockHeader, consensus::VrfEpochRecord, parameter::system::SumeragiNposParameters,
+        peer::PeerId, prelude::ChainId,
     };
     use norito::codec::Encode as _;
 
@@ -1274,8 +1272,8 @@ mod evidence_submit_tests {
             },
         };
         let encoded = hex::encode(forged.encode());
-        let err =
-            decode_and_validate_evidence(&encoded, &state, &chain_id).expect_err("invalid evidence must fail");
+        let err = decode_and_validate_evidence(&encoded, &state, &chain_id)
+            .expect_err("invalid evidence must fail");
         assert!(matches!(
             err,
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -1316,7 +1314,10 @@ mod evidence_submit_tests {
         let seed_epoch0 = seed_epoch0.expect("seed for epoch 0");
         let seed_epoch1 = seed_epoch1.expect("seed for epoch 1");
         let leader_epoch1 = topology.leader_index_prf(seed_epoch1, height, view);
-        assert_ne!(leader_epoch0, leader_epoch1, "seed search must pick distinct leaders");
+        assert_ne!(
+            leader_epoch0, leader_epoch1,
+            "seed search must pick distinct leaders"
+        );
 
         let signer_peer = peers
             .get(leader_epoch0)
@@ -1636,10 +1637,7 @@ fn nexus_fee_snapshot_value(fee: &sumeragi::status::NexusFeeSnapshot) -> Value {
         json_entry("charged_via_payer_total", fee.charged_via_payer_total),
         json_entry("charged_via_sponsor_total", fee.charged_via_sponsor_total),
         json_entry("sponsor_disabled_total", fee.sponsor_disabled_total),
-        json_entry(
-            "sponsor_unauthorized_total",
-            fee.sponsor_unauthorized_total,
-        ),
+        json_entry("sponsor_unauthorized_total", fee.sponsor_unauthorized_total),
         json_entry("sponsor_cap_exceeded_total", fee.sponsor_cap_exceeded_total),
         json_entry("config_errors_total", fee.config_errors_total),
         json_entry("transfer_failures_total", fee.transfer_failures_total),
@@ -1835,7 +1833,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "vote_capacity_total",
             snap.dedup_evictions.vote_capacity_total,
         ),
-        json_entry("vote_expired_total", snap.dedup_evictions.vote_expired_total),
+        json_entry(
+            "vote_expired_total",
+            snap.dedup_evictions.vote_expired_total,
+        ),
         json_entry(
             "block_created_capacity_total",
             snap.dedup_evictions.block_created_capacity_total,
@@ -1899,8 +1900,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             })
             .collect(),
     );
-    let consensus_message_handling =
-        json_object(vec![json_entry("entries", consensus_message_handling_entries)]);
+    let consensus_message_handling = json_object(vec![json_entry(
+        "entries",
+        consensus_message_handling_entries,
+    )]);
     let vote_validation_drop_entries = Value::Array(
         snap.vote_validation_drops
             .entries
@@ -2022,10 +2025,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             queue_totals_value(&snap.worker_loop.queue_diagnostics.dropped_total),
         ),
     ]);
-    let commit_pause_queue_depths =
-        queue_depths_value(&snap.commit_inflight.pause_queue_depths);
-    let commit_resume_queue_depths =
-        queue_depths_value(&snap.commit_inflight.resume_queue_depths);
+    let commit_pause_queue_depths = queue_depths_value(&snap.commit_inflight.pause_queue_depths);
+    let commit_resume_queue_depths = queue_depths_value(&snap.commit_inflight.resume_queue_depths);
     let worker_loop = json_object(vec![
         json_entry("stage", snap.worker_loop.stage.as_str()),
         json_entry("stage_started_ms", snap.worker_loop.stage_started_ms),
@@ -2057,7 +2058,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_timeout_elapsed_ms",
             snap.commit_inflight.last_timeout_elapsed_ms,
         ),
-        json_entry("last_timeout_height", snap.commit_inflight.last_timeout_height),
+        json_entry(
+            "last_timeout_height",
+            snap.commit_inflight.last_timeout_height,
+        ),
         json_entry("last_timeout_view", snap.commit_inflight.last_timeout_view),
         json_entry(
             "last_timeout_block_hash",
@@ -2086,10 +2090,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 .map(|hash| Value::from(format!("{hash}")))
                 .unwrap_or(Value::Null),
         ),
-        json_entry(
-            "rollback_last_height",
-            snap.kura_store.rollback_last_height,
-        ),
+        json_entry("rollback_last_height", snap.kura_store.rollback_last_height),
         json_entry("rollback_last_view", snap.kura_store.rollback_last_view),
         json_entry(
             "rollback_last_hash",
@@ -2110,10 +2111,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "lock_reset_last_height",
             snap.kura_store.lock_reset_last_height,
         ),
-        json_entry(
-            "lock_reset_last_view",
-            snap.kura_store.lock_reset_last_view,
-        ),
+        json_entry("lock_reset_last_view", snap.kura_store.lock_reset_last_view),
         json_entry(
             "lock_reset_last_hash",
             snap.kura_store
@@ -2458,14 +2456,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             .collect(),
     );
     let access_set_sources = json_object(vec![
-        json_entry(
-            "manifest_hints",
-            snap.access_set_sources.manifest_hints,
-        ),
-        json_entry(
-            "entrypoint_hints",
-            snap.access_set_sources.entrypoint_hints,
-        ),
+        json_entry("manifest_hints", snap.access_set_sources.manifest_hints),
+        json_entry("entrypoint_hints", snap.access_set_sources.entrypoint_hints),
         json_entry("prepass_merge", snap.access_set_sources.prepass_merge),
         json_entry(
             "conservative_fallback",
@@ -2511,10 +2503,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         "payload_hash_mismatch_total",
                         entry.payload_hash_mismatch_total,
                     ),
-                    json_entry(
-                        "chunk_root_mismatch_total",
-                        entry.chunk_root_mismatch_total,
-                    ),
+                    json_entry("chunk_root_mismatch_total", entry.chunk_root_mismatch_total),
                     json_entry("last_timestamp_ms", entry.last_timestamp_ms),
                 ])
             })
@@ -2765,7 +2754,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("effective_npos_timeouts", effective_npos_timeouts),
         json_entry("effective_collectors_k", snap.effective_collectors_k),
-        json_entry("effective_redundant_send_r", snap.effective_redundant_send_r),
+        json_entry(
+            "effective_redundant_send_r",
+            snap.effective_redundant_send_r,
+        ),
         json_entry("leader_index", snap.leader_index),
         json_entry("view_change_index", snap.view_change_index),
         json_entry("view_change_causes", view_change_causes),
@@ -2789,8 +2781,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "quorum_stall_age_escalation_total",
             snap.quorum_stall_age_escalation_total,
         ),
-        json_entry("retransmit_target_set_last", snap.retransmit_target_set_last),
-        json_entry("retransmit_target_set_total", snap.retransmit_target_set_total),
+        json_entry(
+            "retransmit_target_set_last",
+            snap.retransmit_target_set_last,
+        ),
+        json_entry(
+            "retransmit_target_set_total",
+            snap.retransmit_target_set_total,
+        ),
         json_entry(
             "retransmit_target_set_samples",
             snap.retransmit_target_set_samples,
@@ -2889,7 +2887,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             ),
         ),
         json_entry("lane_governance", lane_governance),
-        json_entry("pipeline_conflict_rate_bps", snap.pipeline_conflict_rate_bps),
+        json_entry(
+            "pipeline_conflict_rate_bps",
+            snap.pipeline_conflict_rate_bps,
+        ),
         json_entry("access_set_sources", access_set_sources),
         json_entry("nexus_fee", nexus_fee_snapshot_value(&snap.nexus_fee)),
         json_entry(
@@ -3544,9 +3545,18 @@ mod status_tests {
             .expect("consensus_message_handling entries");
         assert_eq!(entries.len(), 1);
         let entry = entries[0].as_object().expect("entry object");
-        assert_eq!(entry.get("kind").and_then(Value::as_str), Some("block_created"));
-        assert_eq!(entry.get("outcome").and_then(Value::as_str), Some("dropped"));
-        assert_eq!(entry.get("reason").and_then(Value::as_str), Some("hint_mismatch"));
+        assert_eq!(
+            entry.get("kind").and_then(Value::as_str),
+            Some("block_created")
+        );
+        assert_eq!(
+            entry.get("outcome").and_then(Value::as_str),
+            Some("dropped")
+        );
+        assert_eq!(
+            entry.get("reason").and_then(Value::as_str),
+            Some("hint_mismatch")
+        );
         assert_eq!(entry.get("total").and_then(Value::as_u64), Some(4));
     }
 
@@ -3590,8 +3600,7 @@ mod status_tests {
             Some("missing_data_recovered")
         );
         assert_eq!(
-            gate.get("missing_local_data_total")
-                .and_then(Value::as_u64),
+            gate.get("missing_local_data_total").and_then(Value::as_u64),
             Some(2)
         );
         assert_eq!(
@@ -3616,10 +3625,7 @@ mod status_tests {
         assert_eq!(kura.get("failures_total").and_then(Value::as_u64), Some(1));
         assert_eq!(kura.get("abort_total").and_then(Value::as_u64), Some(2));
         assert_eq!(kura.get("stage_total").and_then(Value::as_u64), Some(0));
-        assert_eq!(
-            kura.get("rollback_total").and_then(Value::as_u64),
-            Some(0)
-        );
+        assert_eq!(kura.get("rollback_total").and_then(Value::as_u64), Some(0));
         assert_eq!(
             kura.get("lock_reset_total").and_then(Value::as_u64),
             Some(0)
@@ -3703,14 +3709,13 @@ mod status_tests {
 
     #[test]
     fn status_snapshot_json_includes_commit_qc_and_quorum() {
-        let block_hash =
-            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                Hash::prehashed([0x11; 32]),
-            );
+        let block_hash = HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x11; 32]),
+        );
         let validator_set_hash =
-            HashOf::<Vec<iroha_data_model::peer::PeerId>>::from_untyped_unchecked(
-                Hash::prehashed([0x22; 32]),
-            );
+            HashOf::<Vec<iroha_data_model::peer::PeerId>>::from_untyped_unchecked(Hash::prehashed(
+                [0x22; 32],
+            ));
         let snap = sumeragi::StatusSnapshot {
             commit_qc: status::QcSnapshot {
                 height: 12,
@@ -3773,19 +3778,27 @@ mod status_tests {
             Some(block_hash_str.as_str())
         );
         assert_eq!(
-            commit_quorum.get("signatures_present").and_then(Value::as_u64),
+            commit_quorum
+                .get("signatures_present")
+                .and_then(Value::as_u64),
             Some(4)
         );
         assert_eq!(
-            commit_quorum.get("signatures_counted").and_then(Value::as_u64),
+            commit_quorum
+                .get("signatures_counted")
+                .and_then(Value::as_u64),
             Some(3)
         );
         assert_eq!(
-            commit_quorum.get("signatures_set_b").and_then(Value::as_u64),
+            commit_quorum
+                .get("signatures_set_b")
+                .and_then(Value::as_u64),
             Some(2)
         );
         assert_eq!(
-            commit_quorum.get("signatures_required").and_then(Value::as_u64),
+            commit_quorum
+                .get("signatures_required")
+                .and_then(Value::as_u64),
             Some(3)
         );
         assert_eq!(
@@ -4008,9 +4021,7 @@ pub async fn handle_v1_sumeragi_status(
             block_sync_roster: SumeragiBlockSyncRosterStatus {
                 commit_qc_hint_total: snap.block_sync_roster.commit_qc_hint_total,
                 checkpoint_hint_total: snap.block_sync_roster.checkpoint_hint_total,
-                commit_qc_history_total: snap
-                    .block_sync_roster
-                    .commit_qc_history_total,
+                commit_qc_history_total: snap.block_sync_roster.commit_qc_history_total,
                 checkpoint_history_total: snap.block_sync_roster.checkpoint_history_total,
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
@@ -4068,18 +4079,12 @@ pub async fn handle_v1_sumeragi_status(
                 rollback_last_height: snap.kura_store.rollback_last_height,
                 rollback_last_view: snap.kura_store.rollback_last_view,
                 rollback_last_hash: snap.kura_store.rollback_last_hash,
-                rollback_last_reason: snap
-                    .kura_store
-                    .rollback_last_reason
-                    .map(str::to_string),
+                rollback_last_reason: snap.kura_store.rollback_last_reason.map(str::to_string),
                 lock_reset_total: snap.kura_store.lock_reset_total,
                 lock_reset_last_height: snap.kura_store.lock_reset_last_height,
                 lock_reset_last_view: snap.kura_store.lock_reset_last_view,
                 lock_reset_last_hash: snap.kura_store.lock_reset_last_hash,
-                lock_reset_last_reason: snap
-                    .kura_store
-                    .lock_reset_last_reason
-                    .map(str::to_string),
+                lock_reset_last_reason: snap.kura_store.lock_reset_last_reason.map(str::to_string),
                 last_retry_attempt: snap.kura_store.last_retry_attempt,
                 last_retry_backoff_ms: snap.kura_store.last_retry_backoff_ms,
                 last_height: snap.kura_store.last_height,
@@ -4145,7 +4150,9 @@ pub async fn handle_v1_sumeragi_status(
                     .stash_ready_roster_unverified_total,
                 stash_deliver_total: snap.pending_rbc.stash_deliver_total,
                 stash_deliver_init_missing_total: snap.pending_rbc.stash_deliver_init_missing_total,
-                stash_deliver_roster_missing_total: snap.pending_rbc.stash_deliver_roster_missing_total,
+                stash_deliver_roster_missing_total: snap
+                    .pending_rbc
+                    .stash_deliver_roster_missing_total,
                 stash_deliver_roster_hash_mismatch_total: snap
                     .pending_rbc
                     .stash_deliver_roster_hash_mismatch_total,
@@ -4282,11 +4289,27 @@ pub async fn handle_v1_sumeragi_status(
                             .queue_diagnostics
                             .blocked_total
                             .block_payload_rx,
-                        rbc_chunk_rx: snap.worker_loop.queue_diagnostics.blocked_total.rbc_chunk_rx,
+                        rbc_chunk_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .blocked_total
+                            .rbc_chunk_rx,
                         block_rx: snap.worker_loop.queue_diagnostics.blocked_total.block_rx,
-                        consensus_rx: snap.worker_loop.queue_diagnostics.blocked_total.consensus_rx,
-                        lane_relay_rx: snap.worker_loop.queue_diagnostics.blocked_total.lane_relay_rx,
-                        background_rx: snap.worker_loop.queue_diagnostics.blocked_total.background_rx,
+                        consensus_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .blocked_total
+                            .consensus_rx,
+                        lane_relay_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .blocked_total
+                            .lane_relay_rx,
+                        background_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .blocked_total
+                            .background_rx,
                     },
                     blocked_ms_total: SumeragiWorkerQueueTotals {
                         vote_rx: snap.worker_loop.queue_diagnostics.blocked_ms_total.vote_rx,
@@ -4353,11 +4376,27 @@ pub async fn handle_v1_sumeragi_status(
                             .queue_diagnostics
                             .dropped_total
                             .block_payload_rx,
-                        rbc_chunk_rx: snap.worker_loop.queue_diagnostics.dropped_total.rbc_chunk_rx,
+                        rbc_chunk_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .dropped_total
+                            .rbc_chunk_rx,
                         block_rx: snap.worker_loop.queue_diagnostics.dropped_total.block_rx,
-                        consensus_rx: snap.worker_loop.queue_diagnostics.dropped_total.consensus_rx,
-                        lane_relay_rx: snap.worker_loop.queue_diagnostics.dropped_total.lane_relay_rx,
-                        background_rx: snap.worker_loop.queue_diagnostics.dropped_total.background_rx,
+                        consensus_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .dropped_total
+                            .consensus_rx,
+                        lane_relay_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .dropped_total
+                            .lane_relay_rx,
+                        background_rx: snap
+                            .worker_loop
+                            .queue_diagnostics
+                            .dropped_total
+                            .background_rx,
                     },
                 },
             },
@@ -4541,19 +4580,17 @@ pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl 
         .collect();
     let backlog = status::rbc_backlog_snapshot();
     let pending = status::pending_rbc_snapshot();
-    let vrf_snapshot = {
-        let view = state.view();
-        let mut active: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
-        let mut latest_final: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
-        for (epoch, record) in view.world().vrf_epochs().iter() {
-            if record.finalized {
-                latest_final = Some((*epoch, record.clone()));
-            } else {
-                active = Some((*epoch, record.clone()));
-            }
+    let world = state.world_view();
+    let mut active: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
+    let mut latest_final: Option<(u64, iroha_data_model::consensus::VrfEpochRecord)> = None;
+    for (epoch, record) in world.vrf_epochs().iter() {
+        if record.finalized {
+            latest_final = Some((*epoch, record.clone()));
+        } else {
+            active = Some((*epoch, record.clone()));
         }
-        active.or(latest_final).map(|(_, record)| record)
-    };
+    }
+    let vrf_snapshot = active.or(latest_final).map(|(_, record)| record);
     let vrf_json = vrf_snapshot
         .as_ref()
         .map(|record| vrf_summary_json(record))
@@ -4679,14 +4716,12 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
     state: Arc<CoreState>,
     epoch: u64,
 ) -> Result<impl IntoResponse> {
-    let record_opt = {
-        let view = state.view();
-        view.world()
-            .vrf_epochs()
-            .iter()
-            .find(|entry| *entry.0 == epoch)
-            .map(|(_, rec)| rec.clone())
-    };
+    let world = state.world_view();
+    let record_opt = world
+        .vrf_epochs()
+        .iter()
+        .find(|entry| *entry.0 == epoch)
+        .map(|(_, rec)| rec.clone());
 
     let payload = if let Some(record) = record_opt {
         let participants: Vec<Value> = record
@@ -5004,8 +5039,8 @@ pub async fn handle_v1_sumeragi_commit_qc(
         )))
     })?;
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
-    let view = state.view();
-    let qc_opt = view.world.commit_qcs().get(&typed).cloned();
+    let world = state.world_view();
+    let qc_opt = world.commit_qcs().get(&typed).cloned();
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),

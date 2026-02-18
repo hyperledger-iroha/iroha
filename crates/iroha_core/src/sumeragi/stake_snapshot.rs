@@ -9,7 +9,9 @@ use iroha_primitives::numeric::{Numeric, NumericSpec};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
-use crate::state::{StateView, WorldReadOnly};
+#[cfg(test)]
+use crate::state::StateView;
+use crate::state::WorldReadOnly;
 
 /// Stake snapshot entry for a single validator.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -61,13 +63,13 @@ impl CommitStakeSnapshot {
 }
 
 /// Determine whether 2/3 stake quorum is reached for the provided signers.
-pub fn stake_quorum_reached_for_peers(
-    view: &StateView<'_>,
+pub fn stake_quorum_reached_for_world(
+    world: &impl WorldReadOnly,
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
 ) -> Result<bool, StakeQuorumError> {
-    let fallback_stake = fallback_stake_for_world(view.world());
-    let mut stake_map = stake_map_from_world(view.world());
+    let fallback_stake = fallback_stake_for_world(world);
+    let mut stake_map = stake_map_from_world(world);
     if stake_map.is_empty() {
         for peer in roster {
             stake_map.insert(peer.clone(), fallback_stake.clone());
@@ -123,6 +125,16 @@ pub fn stake_quorum_reached_for_peers(
         .checked_mul(Numeric::from(2_u64), NumericSpec::default())
         .ok_or(StakeQuorumError::Overflow)?;
     Ok(signed_scaled >= total_scaled)
+}
+
+/// Determine whether 2/3 stake quorum is reached for the provided signers.
+#[cfg(test)]
+pub fn stake_quorum_reached_for_peers(
+    view: &StateView<'_>,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+) -> Result<bool, StakeQuorumError> {
+    stake_quorum_reached_for_world(view.world(), roster, signers)
 }
 
 /// Determine whether 2/3 stake quorum is reached for the provided signers and snapshot.
@@ -546,12 +558,20 @@ mod tests {
         signers.insert(peer_a.clone());
         signers.insert(peer_b.clone());
         assert_eq!(
+            stake_quorum_reached_for_world(view.world(), &roster, &signers),
+            Ok(true)
+        );
+        assert_eq!(
             stake_quorum_reached_for_peers(&view, &roster, &signers),
             Ok(true)
         );
 
         let mut partial = BTreeSet::new();
         partial.insert(peer_a);
+        assert_eq!(
+            stake_quorum_reached_for_world(view.world(), &roster, &partial),
+            Ok(false)
+        );
         assert_eq!(
             stake_quorum_reached_for_peers(&view, &roster, &partial),
             Ok(false)
