@@ -2237,6 +2237,21 @@ impl Network {
                 );
                 return Ok(());
             }
+            if !peer.is_running() {
+                let stdout_log = peer.latest_stdout_log_path();
+                let stderr_log = peer.latest_stderr_log_path();
+                let context = peer
+                    .startup_context_summary()
+                    .unwrap_or_else(|| "<startup context not initialized>".to_string());
+                if let Some(preview) = peer.stderr_preview() {
+                    return Err(eyre!(
+                        "peer {index} ({mnemonic}) terminated while waiting for block 1; {context}; stdout={stdout_log:?}; stderr={stderr_log:?}; stderr preview:\n{preview}"
+                    ));
+                }
+                return Err(eyre!(
+                    "peer {index} ({mnemonic}) terminated while waiting for block 1; {context}; stdout={stdout_log:?}; stderr={stderr_log:?}"
+                ));
+            }
             tokio::select! {
                 _ = poll.tick() => {
                     match tokio::time::timeout(status_timeout, peer.status()).await {
@@ -4827,80 +4842,83 @@ impl NetworkBuilder {
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter);
-        let (epoch_length_blocks, npos_params) = match npos_payload {
-            Some(npos) => {
-                let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
-                let duration_ms = |value: Duration| -> u64 {
-                    let ms = value.as_millis();
-                    u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-                };
-                (
-                    npos.epoch_length_blocks(),
-                    Some(NposGenesisParams {
-                        block_time_ms: parameter_state.sumeragi().block_time_ms(),
-                        timeout_propose_ms: duration_ms(timeouts.propose),
-                        timeout_prevote_ms: duration_ms(timeouts.prevote),
-                        timeout_precommit_ms: duration_ms(timeouts.precommit),
-                        timeout_commit_ms: duration_ms(timeouts.commit),
-                        timeout_da_ms: duration_ms(timeouts.da),
-                        timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                        k_aggregators: npos.k_aggregators(),
-                        redundant_send_r: npos.redundant_send_r(),
-                        epoch_seed: npos.epoch_seed(),
-                        vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                        vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                        max_validators: npos.max_validators(),
-                        min_self_bond: npos.min_self_bond(),
-                        min_nomination_bond: npos.min_nomination_bond(),
-                        max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                        seat_band_pct: npos.seat_band_pct(),
-                        max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                        finality_margin_blocks: npos.finality_margin_blocks(),
-                        evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                        activation_lag_blocks: npos.activation_lag_blocks(),
-                        slashing_delay_blocks: npos.slashing_delay_blocks(),
-                    }),
-                )
+        let (epoch_length_blocks, npos_params) = if matches!(consensus_mode, ConsensusMode::Npos) {
+            match npos_payload {
+                Some(npos) => {
+                    let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
+                    let duration_ms = |value: Duration| -> u64 {
+                        let ms = value.as_millis();
+                        u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
+                    };
+                    (
+                        npos.epoch_length_blocks(),
+                        Some(NposGenesisParams {
+                            block_time_ms: parameter_state.sumeragi().block_time_ms(),
+                            timeout_propose_ms: duration_ms(timeouts.propose),
+                            timeout_prevote_ms: duration_ms(timeouts.prevote),
+                            timeout_precommit_ms: duration_ms(timeouts.precommit),
+                            timeout_commit_ms: duration_ms(timeouts.commit),
+                            timeout_da_ms: duration_ms(timeouts.da),
+                            timeout_aggregator_ms: duration_ms(timeouts.aggregator),
+                            k_aggregators: npos.k_aggregators(),
+                            redundant_send_r: npos.redundant_send_r(),
+                            epoch_seed: npos.epoch_seed(),
+                            vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                            vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                            max_validators: npos.max_validators(),
+                            min_self_bond: npos.min_self_bond(),
+                            min_nomination_bond: npos.min_nomination_bond(),
+                            max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                            seat_band_pct: npos.seat_band_pct(),
+                            max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                            finality_margin_blocks: npos.finality_margin_blocks(),
+                            evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                            activation_lag_blocks: npos.activation_lag_blocks(),
+                            slashing_delay_blocks: npos.slashing_delay_blocks(),
+                        }),
+                    )
+                }
+                None => {
+                    let npos = resolved_npos_config
+                        .as_ref()
+                        .expect("NPoS consensus requires resolved runtime config");
+                    let npos = npos_params_from_config(npos);
+                    let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
+                    let duration_ms = |value: Duration| -> u64 {
+                        let ms = value.as_millis();
+                        u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
+                    };
+                    (
+                        npos.epoch_length_blocks,
+                        Some(NposGenesisParams {
+                            block_time_ms: parameter_state.sumeragi().block_time_ms(),
+                            timeout_propose_ms: duration_ms(timeouts.propose),
+                            timeout_prevote_ms: duration_ms(timeouts.prevote),
+                            timeout_precommit_ms: duration_ms(timeouts.precommit),
+                            timeout_commit_ms: duration_ms(timeouts.commit),
+                            timeout_da_ms: duration_ms(timeouts.da),
+                            timeout_aggregator_ms: duration_ms(timeouts.aggregator),
+                            k_aggregators: npos.k_aggregators(),
+                            redundant_send_r: npos.redundant_send_r(),
+                            epoch_seed: npos.epoch_seed(),
+                            vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                            vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                            max_validators: npos.max_validators(),
+                            min_self_bond: npos.min_self_bond(),
+                            min_nomination_bond: npos.min_nomination_bond(),
+                            max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                            seat_band_pct: npos.seat_band_pct(),
+                            max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                            finality_margin_blocks: npos.finality_margin_blocks(),
+                            evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                            activation_lag_blocks: npos.activation_lag_blocks(),
+                            slashing_delay_blocks: npos.slashing_delay_blocks(),
+                        }),
+                    )
+                }
             }
-            None if matches!(consensus_mode, ConsensusMode::Npos) => {
-                let npos = resolved_npos_config
-                    .as_ref()
-                    .expect("NPoS consensus requires resolved runtime config");
-                let npos = npos_params_from_config(npos);
-                let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
-                let duration_ms = |value: Duration| -> u64 {
-                    let ms = value.as_millis();
-                    u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-                };
-                (
-                    npos.epoch_length_blocks,
-                    Some(NposGenesisParams {
-                        block_time_ms: parameter_state.sumeragi().block_time_ms(),
-                        timeout_propose_ms: duration_ms(timeouts.propose),
-                        timeout_prevote_ms: duration_ms(timeouts.prevote),
-                        timeout_precommit_ms: duration_ms(timeouts.precommit),
-                        timeout_commit_ms: duration_ms(timeouts.commit),
-                        timeout_da_ms: duration_ms(timeouts.da),
-                        timeout_aggregator_ms: duration_ms(timeouts.aggregator),
-                        k_aggregators: npos.k_aggregators(),
-                        redundant_send_r: npos.redundant_send_r(),
-                        epoch_seed: npos.epoch_seed(),
-                        vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                        vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                        max_validators: npos.max_validators(),
-                        min_self_bond: npos.min_self_bond(),
-                        min_nomination_bond: npos.min_nomination_bond(),
-                        max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                        seat_band_pct: npos.seat_band_pct(),
-                        max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                        finality_margin_blocks: npos.finality_margin_blocks(),
-                        evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                        activation_lag_blocks: npos.activation_lag_blocks(),
-                        slashing_delay_blocks: npos.slashing_delay_blocks(),
-                    }),
-                )
-            }
-            None => (0, None),
+        } else {
+            (0, None)
         };
 
         let mut consensus_params = ConsensusGenesisParams {

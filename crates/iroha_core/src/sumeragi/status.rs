@@ -4060,9 +4060,14 @@ pub fn snapshot() -> StatusSnapshot {
         vrf_penalty_snapshot();
     let (mode_tag, staged_mode_tag, staged_mode_activation_height, mode_activation_lag_blocks) =
         mode_tags();
-    let epoch_length_blocks = EPOCH_LENGTH_BLOCKS.load(Ordering::Relaxed);
-    let epoch_commit_deadline_offset = EPOCH_COMMIT_DEADLINE_OFFSET.load(Ordering::Relaxed);
-    let epoch_reveal_deadline_offset = EPOCH_REVEAL_DEADLINE_OFFSET.load(Ordering::Relaxed);
+    let mut epoch_length_blocks = EPOCH_LENGTH_BLOCKS.load(Ordering::Relaxed);
+    let mut epoch_commit_deadline_offset = EPOCH_COMMIT_DEADLINE_OFFSET.load(Ordering::Relaxed);
+    let mut epoch_reveal_deadline_offset = EPOCH_REVEAL_DEADLINE_OFFSET.load(Ordering::Relaxed);
+    if mode_tag != crate::sumeragi::consensus::NPOS_TAG {
+        epoch_length_blocks = 0;
+        epoch_commit_deadline_offset = 0;
+        epoch_reveal_deadline_offset = 0;
+    }
     let recent_evictions = recent_rbc_evictions();
     let pending_rbc = pending_rbc_snapshot();
     let (lane_governance_sealed_total, lane_governance_sealed_aliases, lane_governance_entries) =

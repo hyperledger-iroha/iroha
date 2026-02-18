@@ -211,6 +211,8 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.mcp.max_tools_per_list = 2;
+    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
+    cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
 
     let app = build_router(cfg);
 
@@ -274,11 +276,11 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
         .and_then(|value| value.get("tools"))
         .and_then(Value::as_array)
         .expect("tools list page2");
-    let connect_ticket_listed = page1_tools.iter().chain(page2_tools.iter()).any(|tool| {
-        tool.get("name")
-            .and_then(Value::as_str)
-            .is_some_and(|name| name == "connect.ws.ticket")
-    });
+    assert_eq!(page2_tools.len(), 2);
+    let connect_ticket_listed = list_all_tool_names(&app)
+        .await
+        .iter()
+        .any(|name| name == "connect.ws.ticket");
     assert!(
         connect_ticket_listed,
         "connect.ws.ticket should be discoverable across paginated tools/list responses"

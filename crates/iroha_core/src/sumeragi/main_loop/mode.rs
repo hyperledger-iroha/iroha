@@ -318,7 +318,11 @@ impl Actor {
                 &self.config,
                 &config_caps,
             );
-        self.network.update_consensus_caps(consensus_caps, true);
+        // Do not forcibly disconnect peers during an on-chain cutover. Nodes may reach the
+        // activation height at slightly different times; keeping existing connections alive
+        // prevents a lagging peer from being locked out before it can apply the same flip and
+        // catch up via block sync.
+        self.network.update_consensus_caps(consensus_caps, false);
     }
 
     fn record_mode_flip_success(&self) {
