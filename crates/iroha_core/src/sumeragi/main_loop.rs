@@ -10345,7 +10345,9 @@ impl Actor {
         if log_initial_deferral || log_fire_deferral {
             self.on_pacemaker_backpressure_deferral(now, state);
         }
-        if should_attempt_proposal && !mode_flip_pending && self.subsystems.commit.inflight.is_none()
+        if should_attempt_proposal
+            && !mode_flip_pending
+            && self.subsystems.commit.inflight.is_none()
         {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_attempt");

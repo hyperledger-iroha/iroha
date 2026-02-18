@@ -1054,7 +1054,7 @@ if telemetry.vrf.found:
     print("Active VRF epoch:", telemetry.vrf.epoch, "seed:", telemetry.vrf.seed_hex)
 ```
 
-> Developer tip: set `IROHA_PYTHON_CONNECT_STUB=1` when running the unit-test
+> Developer tip: set `IROHA_PYTHON_CONNECT_CODEC=stub` when running the unit-test
 > suite locally to bypass the native Connect codec. The stub keeps the helpers
 > testable without compiling the `iroha_python._crypto` extension; production
 > binaries must run without this flag.

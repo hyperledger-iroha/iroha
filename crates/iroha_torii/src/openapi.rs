@@ -2486,6 +2486,14 @@ fn system_paths() -> Map {
             Vec::new(),
         )),
     );
+    paths.insert(
+        "/v1/telemetry/live".to_owned(),
+        Value::Object(event_stream_get_operation(
+            "System",
+            "Stream live telemetry updates.",
+            "Stream peer and network telemetry updates via SSE.",
+        )),
+    );
     paths
 }
 
@@ -3284,6 +3292,14 @@ fn governance_paths() -> Map {
             }
             methods
         }),
+    );
+    paths.insert(
+        "/v1/gov/stream".to_owned(),
+        Value::Object(event_stream_get_operation(
+            "Governance",
+            "Stream governance updates.",
+            "Stream governance update notifications via SSE.",
+        )),
     );
     paths.insert(
         "/v1/gov/unlocks/stats".to_owned(),
@@ -10119,6 +10135,8 @@ mod tests {
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
+        assert!(paths.contains_key("/v1/gov/stream"));
+        assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
         assert!(paths.contains_key("/v1/accounts/resolve"));

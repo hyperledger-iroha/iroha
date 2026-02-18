@@ -8438,7 +8438,9 @@ impl DetachedStateTransactionDelta {
                     &param,
                     iroha_data_model::parameter::Parameter::Sumeragi(
                         iroha_data_model::parameter::SumeragiParameter::NextMode(_)
-                            | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_)
+                            | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
+                                _
+                            )
                     )
                 ) {
                     if let Err(err) = SetParameter::new(param).execute(authority, &mut stx) {

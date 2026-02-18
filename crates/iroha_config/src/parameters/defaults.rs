@@ -2062,7 +2062,7 @@ pub mod connect {
     pub const DEDUPE_CAP: usize = 8_192;
     /// Enable P2P re-broadcast relay.
     pub const RELAY_ENABLED: bool = true;
-    /// Relay strategy string: "broadcast" or "hash_k=<n>" (future).
+    /// Relay strategy string: "broadcast" or "local_only".
     pub const RELAY_STRATEGY: &str = "broadcast";
     /// Optional hop TTL for relay (0 disables, not enforced in v0 flood).
     pub const P2P_TTL_HOPS: u8 = 0;
@@ -2535,7 +2535,11 @@ pub mod sumeragi {
     /// Default maximum bytes allocated for disk-backed RBC chunks.
     pub const RBC_DISK_STORE_MAX_BYTES: u64 = RBC_STORE_MAX_BYTES as u64;
     /// Default maximum number of RBC chunks stashed before INIT per session.
-    pub const RBC_PENDING_MAX_CHUNKS: usize = 128;
+    ///
+    /// Keep this aligned with Sumeragi's maximum total chunks per RBC session (currently `1024`)
+    /// so that lowering `rbc.chunk_max_bytes` does not inadvertently reduce the effective pending
+    /// byte budget below [`RBC_PENDING_MAX_BYTES`].
+    pub const RBC_PENDING_MAX_CHUNKS: usize = 1024;
     /// Default maximum pending RBC chunk bytes per session before INIT.
     pub const RBC_PENDING_MAX_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
     /// Default maximum pending RBC sessions stashed before INIT.

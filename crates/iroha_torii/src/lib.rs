@@ -7466,6 +7466,87 @@ async fn handler_events_sse(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_gov_stream(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response());
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(&headers, None, "v1/gov/stream", app.api_token_enforced());
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response())
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+async fn handler_telemetry_live(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return Ok(routing::handle_v1_telemetry_live(
+            app.state.clone(),
+            app.kura.clone(),
+            app.telemetry.clone(),
+            app.peer_telemetry.clone(),
+            app.events.clone(),
+        )?
+        .into_response());
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/telemetry/live",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(routing::handle_v1_telemetry_live(
+        app.state.clone(),
+        app.kura.clone(),
+        app.telemetry.clone(),
+        app.peer_telemetry.clone(),
+        app.events.clone(),
+    )?
+    .into_response())
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_explorer_transactions_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -14299,10 +14380,12 @@ impl Torii {
                 );
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             let router = {
-                router.route(
-                    "/v1/telemetry/peers-info",
-                    get(handler_telemetry_peers_info),
-                )
+                router
+                    .route(
+                        "/v1/telemetry/peers-info",
+                        get(handler_telemetry_peers_info),
+                    )
+                    .route("/v1/telemetry/live", get(handler_telemetry_live))
             };
             #[cfg(not(all(feature = "app_api", feature = "telemetry")))]
             let router = router;
@@ -14641,6 +14724,7 @@ impl Torii {
                     iroha_torii_shared::uri::GOV_PROTECTED_SET,
                     get(handler_gov_protected_get),
                 )
+                .route("/v1/gov/stream", get(handler_gov_stream))
                 .route("/v1/gov/unlocks/stats", get(handler_gov_unlock_stats))
                 .route(
                     iroha_torii_shared::uri::GOV_INSTANCES_BY_NS,

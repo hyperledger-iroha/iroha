@@ -153,14 +153,19 @@ _CODEC_MODULE: _CodecModule = None
 _STUB_NOTICE_EMITTED = False
 
 
-def _should_force_stub() -> bool:
+def _connect_codec_mode() -> Optional[str]:
     value = os.environ.get("IROHA_PYTHON_CONNECT_CODEC")
     if value is None:
         value = os.environ.get("IROHA_PYTHON_CONNECT_STUB")
     if value is None:
-        return False
+        return None
     normalized = value.strip().lower()
-    return normalized not in {"", "0", "false", "native", "real"}
+    return normalized or None
+
+
+def _should_force_stub() -> bool:
+    mode = _connect_codec_mode()
+    return mode in {"1", "true", "yes", "on", "stub", "test"}
 
 
 def _load_stub(reason: str) -> Any:
@@ -181,11 +186,14 @@ def _require_codec_module() -> Any:
     if _CODEC_MODULE is not None:
         return _CODEC_MODULE
     if _should_force_stub():
-        return _load_stub("IROHA_PYTHON_CONNECT_STUB")
+        return _load_stub("IROHA_PYTHON_CONNECT_CODEC=stub")
     try:
         _CODEC_MODULE = load_crypto_extension()
     except Exception as exc:  # pragma: no cover - defensive
-        return _load_stub(f"native codec unavailable: {exc}")
+        raise RuntimeError(
+            "native Connect codec unavailable; install the extension or set "
+            "IROHA_PYTHON_CONNECT_CODEC=stub explicitly for tests"
+        ) from exc
     return _CODEC_MODULE
 
 

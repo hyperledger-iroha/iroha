@@ -161,8 +161,26 @@ fn valid_double_prepare_evidence(
 
     let signer_idx = 0u32;
     let chain_id = network.chain_id();
-    let v1 = signed_vote(0x90, mode_tag.as_str(), signer_idx, &chain_id, &signer_kp, height, view, 0);
-    let v2 = signed_vote(0x91, mode_tag.as_str(), signer_idx, &chain_id, &signer_kp, height, view, 0);
+    let v1 = signed_vote(
+        0x90,
+        mode_tag.as_str(),
+        signer_idx,
+        &chain_id,
+        &signer_kp,
+        height,
+        view,
+        0,
+    );
+    let v2 = signed_vote(
+        0x91,
+        mode_tag.as_str(),
+        signer_idx,
+        &chain_id,
+        &signer_kp,
+        height,
+        view,
+        0,
+    );
     let evidence = Evidence {
         kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote {
