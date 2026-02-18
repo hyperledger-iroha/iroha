@@ -633,6 +633,7 @@ enum OfflineNorito {
     private static func formatPublicKeyMultihash(functionCode: UInt64, payload: Data) -> String {
         let functionHex = Data(encodeVarint(functionCode)).hexLowercased()
         let lengthHex = Data(encodeVarint(UInt64(payload.count))).hexLowercased()
+        // Iroha canonical multihash hex is mixed-case: varint bytes lowercase, payload bytes uppercase.
         let payloadHex = payload.hexUppercased()
         return functionHex + lengthHex + payloadHex
     }

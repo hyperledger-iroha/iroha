@@ -5067,10 +5067,14 @@ pub struct StateTransaction<'block, 'state> {
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
     touched_lanes: &'block mut BTreeSet<LaneId>,
-    /// Tracks whether `next_mode` was updated in this block.
+    /// Tracks whether `next_mode` was updated in this block (applied transactions only).
     pub(crate) mode_cutover_next_set_in_block: &'block mut bool,
-    /// Tracks whether `mode_activation_height` was updated in this block.
+    /// Tracks whether `mode_activation_height` was updated in this block (applied transactions only).
     pub(crate) mode_cutover_activation_set_in_block: &'block mut bool,
+    /// Tracks whether `next_mode` was updated in this transaction.
+    mode_cutover_next_set_in_tx: bool,
+    /// Tracks whether `mode_activation_height` was updated in this transaction.
+    mode_cutover_activation_set_in_tx: bool,
     /// Tracks whether confidential registries were updated in this block.
     confidential_registry_dirty: &'block mut bool,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
@@ -5239,12 +5243,12 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
 
     /// Mark that `next_mode` was staged in this transaction.
     pub fn mark_mode_cutover_next_set(&mut self) {
-        *self.mode_cutover_next_set_in_block = true;
+        self.mode_cutover_next_set_in_tx = true;
     }
 
     /// Mark that `mode_activation_height` was staged in this transaction.
     pub fn mark_mode_cutover_activation_set(&mut self) {
-        *self.mode_cutover_activation_set_in_block = true;
+        self.mode_cutover_activation_set_in_tx = true;
     }
 
     /// Exposes the cached block hashes for this transaction scope.
@@ -8028,7 +8032,7 @@ impl DetachedStateTransactionDelta {
         // guarantee identical validation and event emission; extend cautiously and keep
         // the merge logic deterministic to avoid shared mutable state across workers.
         use crate::smartcontracts::Execute as _;
-        use iroha_data_model::isi::{Grant, Revoke};
+        use iroha_data_model::isi::{Grant, Revoke, SetParameter};
         use iroha_data_model::{
             events::data::prelude::{
                 AccountEvent, AssetChanged, AssetDefinitionEvent, AssetDefinitionOwnerChanged,
@@ -8504,6 +8508,18 @@ impl DetachedStateTransactionDelta {
 
             // Apply parameter changes and emit configuration events (old/new)
             for param in self.param_updates {
+                if matches!(
+                    &param,
+                    iroha_data_model::parameter::Parameter::Sumeragi(
+                        iroha_data_model::parameter::SumeragiParameter::NextMode(_)
+                            | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_)
+                    )
+                ) {
+                    if let Err(err) = SetParameter::new(param).execute(authority, &mut stx) {
+                        return Err(ValidationFail::InstructionFailed(err));
+                    }
+                    continue;
+                }
                 macro_rules! set_param_and_emit {
                     ($params:expr, $p:expr, $container:ident($single:ident::$variant:ident)) => {{
                         // previous via iterator
@@ -14462,6 +14478,14 @@ impl State {
         self.pipeline.clone()
     }
 
+    /// Snapshot the current governance configuration.
+    ///
+    /// This avoids acquiring a full [`StateView`] when only governance settings are needed.
+    #[must_use]
+    pub fn governance_snapshot(&self) -> iroha_config::parameters::actual::Governance {
+        self.gov.clone()
+    }
+
     /// Snapshot the current content configuration.
     ///
     /// This avoids acquiring a full [`StateView`] when only content limits/settings are needed.
@@ -17316,6 +17340,8 @@ impl<'state> StateBlock<'state> {
             touched_lanes: &mut self.touched_lanes,
             mode_cutover_next_set_in_block: &mut self.mode_cutover_next_set_in_block,
             mode_cutover_activation_set_in_block: &mut self.mode_cutover_activation_set_in_block,
+            mode_cutover_next_set_in_tx: false,
+            mode_cutover_activation_set_in_tx: false,
             confidential_registry_dirty: &mut self.confidential_registry_dirty,
             world: self.world.trasaction(
                 #[cfg(feature = "telemetry")]
@@ -21082,6 +21108,10 @@ impl StateTransaction<'_, '_> {
         let Self {
             committed_fragments,
             touched_lanes,
+            mode_cutover_next_set_in_block,
+            mode_cutover_activation_set_in_block,
+            mode_cutover_next_set_in_tx,
+            mode_cutover_activation_set_in_tx,
             world,
             block_hashes,
             commit_topology: committed_topology,
@@ -21112,6 +21142,12 @@ impl StateTransaction<'_, '_> {
             telemetry,
             ..
         } = self;
+        if mode_cutover_next_set_in_tx {
+            *mode_cutover_next_set_in_block = true;
+        }
+        if mode_cutover_activation_set_in_tx {
+            *mode_cutover_activation_set_in_block = true;
+        }
         if let Some(lane_id) = current_lane_id {
             touched_lanes.insert(lane_id);
         }

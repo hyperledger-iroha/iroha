@@ -989,6 +989,23 @@ pub enum StartError {
     StartTorii,
 }
 
+#[derive(Debug, Copy, Clone)]
+enum GenesisManifestError {
+    ConsensusFingerprintMismatch,
+}
+
+impl core::fmt::Display for GenesisManifestError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ConsensusFingerprintMismatch => {
+                write!(f, "Genesis manifest consensus_fingerprint mismatch")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GenesisManifestError {}
+
 impl std::fmt::Display for MainError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key = match self {
@@ -4112,8 +4129,8 @@ impl Iroha {
                     && bytes.len() == 32
                     && bytes[..] != consensus_caps.consensus_fingerprint
                 {
-                    return Err(Report::new(StartError::InitKura)
-                        .attach("Genesis manifest consensus_fingerprint mismatch"));
+                    return Err(Report::new(GenesisManifestError::ConsensusFingerprintMismatch)
+                        .change_context(StartError::InitKura));
                 }
             }
         }

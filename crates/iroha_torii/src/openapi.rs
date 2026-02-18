@@ -3974,6 +3974,14 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/explorer/blocks/stream".to_owned(),
+        Value::Object(event_stream_get_operation(
+            "Explorer",
+            "Stream blocks (explorer).",
+            "Stream block updates via SSE.",
+        )),
+    );
+    paths.insert(
         "/v1/explorer/transactions".to_owned(),
         Value::Object({
             let params = explorer_transactions_query_parameters();
@@ -4079,6 +4087,32 @@ fn explorer_paths() -> Map {
             "Explorer",
             "Fetch asset definition detail (explorer).",
             "Fetch asset definition detail for explorer usage.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "definition_id",
+                "Asset definition identifier.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/explorer/asset-definitions/{definition_id}/econometrics".to_owned(),
+        Value::Object(json_get_operation(
+            "Explorer",
+            "Fetch asset definition econometrics (explorer).",
+            "Fetch econometrics aggregates (velocity/issuance windows) for an asset definition.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "definition_id",
+                "Asset definition identifier.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/explorer/asset-definitions/{definition_id}/snapshot".to_owned(),
+        Value::Object(json_get_operation(
+            "Explorer",
+            "Fetch asset definition snapshot (explorer).",
+            "Fetch econometrics snapshot (holders + distribution metrics) for an asset definition.",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "definition_id",

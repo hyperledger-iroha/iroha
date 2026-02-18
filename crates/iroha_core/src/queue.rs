@@ -1418,15 +1418,6 @@ impl Queue {
         !self.is_expired(tx.as_accepted()) && !tx.is_in_blockchain(state_view)
     }
 
-    fn is_pending_with_state(
-        &self,
-        hash: SignedTxHash,
-        tx: &CheckedTransaction<'static>,
-        state: &State,
-    ) -> bool {
-        !self.is_expired(tx.as_accepted()) && !state.has_committed_transaction(hash)
-    }
-
     /// Checks if the transaction is waiting longer than its TTL or than the TTL from [`Config`].
     pub fn is_expired(&self, tx: &AcceptedTransaction<'static>) -> bool {
         self.is_expired_at(tx, self.time_source.get_unix_time())
@@ -1468,8 +1459,9 @@ impl Queue {
 
     /// Returns `n` transactions in a batch for gossiping using narrow state accessors.
     pub fn gossip_batch_with_state(&self, n: u32, state: &State) -> Vec<GossipBatchEntry> {
+        let committed_transactions = state.transactions.view();
         self.gossip_batch_inner(n, |hash, tx_ref| {
-            self.is_pending_with_state(hash, tx_ref, state)
+            !self.is_expired(tx_ref.as_accepted()) && committed_transactions.get(&hash).is_none()
         })
     }
 
@@ -3366,16 +3358,25 @@ impl Queue {
             }
         }
 
+        let committed_transactions = state.transactions.view();
+        let mut route_view: Option<StateView<'_>> = None;
         for entry in &self.txs {
             let tx = entry.value();
-            if self.is_expired(tx.as_accepted()) || state.has_committed_transaction(*entry.key()) {
+            if self.is_expired(tx.as_accepted())
+                || committed_transactions.get(entry.key()).is_some()
+            {
                 #[cfg(feature = "telemetry")]
                 {
                     self.tx_teu.remove(entry.key());
                 }
                 continue;
             }
-            let routing = router.route_with_state(tx.as_accepted(), state);
+            let routing = if let Some(routing) = router.route_without_state(tx.as_accepted()) {
+                routing
+            } else {
+                let state_view = route_view.get_or_insert_with(|| state.view());
+                router.route_with_view(tx.as_accepted(), state_view)
+            };
             self.routing_decisions.insert(*entry.key(), routing);
             #[cfg(feature = "telemetry")]
             {
@@ -5644,6 +5645,68 @@ pub mod tests {
         let tx = accepted_tx_by_someone(&time_source);
         let routing = queue.route_for_gossip_with_state(&tx, state.as_ref());
 
+        assert_eq!(routing.lane_id, expected_lane);
+        assert_eq!(routing.dataspace_id, expected_dataspace);
+    }
+
+    #[test]
+    fn reroute_pending_transactions_with_state_uses_view_router_fallback() {
+        struct ViewOnlyRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for ViewOnlyRouter {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+                panic!("route() should not be used for view-only routers");
+            }
+
+            fn route_with_view(
+                &self,
+                _tx: &AcceptedTransaction<'_>,
+                _state_view: &StateView<'_>,
+            ) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+
+            fn route_without_state(
+                &self,
+                _tx: &AcceptedTransaction<'_>,
+            ) -> Option<RoutingDecision> {
+                None
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push");
+
+        let expected_lane = LaneId::new(6);
+        let expected_dataspace = DataSpaceId::new(14);
+        let router: Arc<dyn LaneRouter> = Arc::new(ViewOnlyRouter {
+            lane: expected_lane,
+            dataspace: expected_dataspace,
+        });
+        let lane_catalog = queue.lane_catalog.read().clone();
+        let dataspace_catalog = queue.dataspace_catalog.read().clone();
+
+        queue.reroute_pending_transactions_with_state(
+            &router,
+            state.as_ref(),
+            &lane_catalog,
+            &dataspace_catalog,
+        );
+
+        let routing = queue
+            .routing_decisions
+            .get(&hash)
+            .expect("routing decision should exist");
         assert_eq!(routing.lane_id, expected_lane);
         assert_eq!(routing.dataspace_id, expected_dataspace);
     }
