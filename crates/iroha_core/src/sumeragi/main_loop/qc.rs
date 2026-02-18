@@ -101,6 +101,37 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
+    fn missing_block_retry_window_with_rbc_progress(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        base_retry_window: Duration,
+    ) -> Duration {
+        if !self.runtime_da_enabled() || base_retry_window == Duration::ZERO {
+            return base_retry_window;
+        }
+        let key = Self::session_key(&block_hash, height, view);
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+            return base_retry_window;
+        };
+        if session.is_invalid() || session.delivered {
+            return base_retry_window;
+        }
+        let chunks_progressed = session.total_chunks() > 0 && session.received_chunks() > 0;
+        let ready_progressed = !session.ready_signatures.is_empty();
+        let pending_payload = self.subsystems.da_rbc.rbc.pending.contains_key(&key);
+        if !chunks_progressed && !ready_progressed && !pending_payload {
+            return base_retry_window;
+        }
+        let availability_timeout = self.availability_timeout(
+            self.quorum_timeout(self.runtime_da_enabled()),
+            self.runtime_da_enabled(),
+        );
+        let widened = super::saturating_mul_duration(base_retry_window, 2);
+        widened.min(availability_timeout.max(base_retry_window))
+    }
+
     fn maybe_validate_pending_for_commit_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
@@ -401,7 +432,18 @@ impl Actor {
         topology: &super::network_topology::Topology,
     ) -> bool {
         let da_enabled = self.runtime_da_enabled();
-        let retry_window = self.rebroadcast_cooldown();
+        let base_retry_window = self.rebroadcast_cooldown();
+        let retry_window = self.missing_block_retry_window_with_rbc_progress(
+            block_hash,
+            height,
+            view,
+            base_retry_window,
+        );
+        if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
+            && retry_window > stats.retry_window
+        {
+            stats.retry_window = retry_window;
+        }
         let defer_view_change =
             self.should_defer_missing_block_view_change(&block_hash, height, view);
         // Retry missing payload fetches on the rebroadcast cadence while keeping
@@ -2883,8 +2925,22 @@ impl Actor {
                 "received QC for unknown block; caching without updating locks/highest"
             );
             let da_enabled = self.runtime_da_enabled();
-            let retry_window = self.quorum_timeout(da_enabled);
+            let base_retry_window = self.quorum_timeout(da_enabled);
+            let retry_window = self.missing_block_retry_window_with_rbc_progress(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                base_retry_window,
+            );
             let now = Instant::now();
+            if let Some(stats) = self
+                .pending
+                .missing_block_requests
+                .get_mut(&qc.subject_block_hash)
+                && retry_window > stats.retry_window
+            {
+                stats.retry_window = retry_window;
+            }
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             let decision = plan_missing_block_fetch(
                 &mut self.pending.missing_block_requests,

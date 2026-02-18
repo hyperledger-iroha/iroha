@@ -17953,6 +17953,75 @@ async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn defer_qc_if_block_missing_widens_retry_window_when_rbc_progresses() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x97; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x98; Hash::LENGTH]));
+    }
+    let height = 2u64;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+    let base_retry_window = actor.rebroadcast_cooldown();
+    let availability_timeout =
+        actor.availability_timeout(actor.quorum_timeout(actor.runtime_da_enabled()), true);
+    let expected_retry_window = base_retry_window
+        .saturating_mul(2)
+        .min(availability_timeout.max(base_retry_window));
+
+    let mut session = RbcSession::test_new(
+        2,
+        Some(Hash::new(b"missing-block-rbc-progress")),
+        None,
+        actor.epoch_for_height(height),
+    );
+    session.test_note_chunk(0, vec![0xAB], 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert((block_hash, height, view), session);
+
+    let deferred = actor.defer_qc_if_block_missing(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        &signers,
+        &topology,
+    );
+    assert!(
+        deferred,
+        "missing payload should still defer QC aggregation"
+    );
+
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert!(
+        stats.retry_window > base_retry_window,
+        "RBC progress should widen missing-block retry window"
+    );
+    assert_eq!(
+        stats.retry_window, expected_retry_window,
+        "retry window should follow RBC-aware widening policy"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -35211,6 +35280,97 @@ async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_after_timeout_while_rbc_backlog_progresses() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((height, current_view));
+
+    let parent_hash = actor.state.view().latest_block_hash();
+    let block = sample_block(height, current_view, parent_hash);
+    let block_hash = block.hash();
+    let session_key = Actor::session_key(&block_hash, height, current_view);
+    let payload_hash = Hash::new(b"rbc-progress-payload");
+    let chunk_root = Hash::new(b"rbc-progress-root");
+    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    session.test_set_block_header_and_signature(&block);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle view change should defer while RBC backlog is actively progressing"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 1);
+    let progress_window = actor
+        .payload_rebroadcast_cooldown()
+        .max(Duration::from_millis(250));
+    let later = now
+        .checked_add(progress_window + Duration::from_millis(1))
+        .unwrap_or(now);
+    assert!(
+        actor.force_view_change_if_idle(later),
+        "idle view change should resume once RBC progress grace elapses"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
     use std::borrow::Cow;
 
@@ -47493,6 +47653,14 @@ async fn validation_defers_block_ahead_of_local_height() {
         matches!(outcome, ValidationGateOutcome::Deferred),
         "blocks ahead of local height should defer validation"
     );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "ahead blocks should defer before dispatching validation work"
+    );
     let pending = actor
         .pending
         .pending_blocks
@@ -56015,6 +56183,115 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
         "pending should be quorum-rescheduled once availability timeout expires"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_defers_near_commit_quorum_while_rbc_chunks_arrive() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = block.header().view_change_index();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required >= 2, "test requires at least two validators");
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+
+    for peer in signature_topology
+        .as_ref()
+        .iter()
+        .take(required.saturating_sub(1))
+    {
+        let signer_idx = signature_topology
+            .as_ref()
+            .iter()
+            .position(|candidate| candidate == peer)
+            .expect("signer in topology");
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        let keypair = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        actor.handle_vote(vote);
+    }
+
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(block_hash, height, view_idx);
+    assert_eq!(
+        vote_status.vote_count,
+        required.saturating_sub(1),
+        "test requires near-quorum commit votes"
+    );
+    assert!(!vote_status.quorum_reached, "test must remain below quorum");
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.touch_progress(Instant::now());
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    assert!(
+        !actor.reschedule_stale_pending_blocks(None),
+        "near-quorum pending should defer while RBC chunks are still arriving"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "near-quorum pending should not be quorum-rescheduled under active RBC chunk backlog"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 1);
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "clearing RBC chunk backlog should allow quorum reschedule"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled once RBC chunk backlog clears"
     );
 
     harness.shutdown.send();

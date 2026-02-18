@@ -4152,6 +4152,33 @@ impl Actor {
         }
     }
 
+    fn has_recent_pending_progress_for_rbc(&self, now: Instant, window: Duration) -> bool {
+        if window == Duration::ZERO {
+            return false;
+        }
+        let tip_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let lower = tip_height.saturating_sub(1);
+        let upper = tip_height.saturating_add(2);
+        if self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending.height >= lower
+                && pending.height <= upper
+                && pending.progress_age(now) <= window
+        }) {
+            return true;
+        }
+        self.subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                !inflight.pending.aborted
+                    && inflight.pending.height >= lower
+                    && inflight.pending.height <= upper
+                    && inflight.pending.progress_age(now) <= window
+            })
+    }
+
     fn rbc_backlog_summary(&self) -> RbcBacklogSummary {
         if !self.runtime_da_enabled() {
             return RbcBacklogSummary::default();
@@ -10350,7 +10377,9 @@ impl Actor {
         if log_initial_deferral || log_fire_deferral {
             self.on_pacemaker_backpressure_deferral(now, state);
         }
-        if should_attempt_proposal && !mode_flip_pending && self.subsystems.commit.inflight.is_none()
+        if should_attempt_proposal
+            && !mode_flip_pending
+            && self.subsystems.commit.inflight.is_none()
         {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_attempt");
@@ -13877,6 +13906,9 @@ impl Actor {
         let rbc_backlog = self.has_unresolved_rbc_backlog();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let queue_depths = super::status::worker_queue_depth_snapshot();
+        let rbc_progress_window = self
+            .payload_rebroadcast_cooldown()
+            .max(Duration::from_millis(250));
         let block_payload_cap =
             u64::try_from(self.config.queues.block_payload.max(1)).unwrap_or(u64::MAX);
         let rbc_chunk_cap = u64::try_from(self.config.queues.rbc_chunks.max(1)).unwrap_or(u64::MAX);
@@ -13956,10 +13988,12 @@ impl Actor {
             now.saturating_duration_since(queue_since.unwrap_or(now))
         };
         let timed_out = idle_round_timed_out(true, age, timeout);
-        // Only defer idle view-change while RBC/relay backlog is within the timeout window.
-        // After the idle timeout elapses, allow view changes to break deadlocks.
-        let backlog_blocking = rbc_backlog || relay_backpressure;
-        if backlog_blocking && !timed_out {
+        let rbc_backlog_progressing = rbc_backlog
+            && (queue_depths.rbc_chunk_rx > 0
+                || queue_depths.block_payload_rx > 0
+                || self.has_recent_pending_progress_for_rbc(now, rbc_progress_window));
+        // Defer idle view-change while backlog is within the timeout window.
+        if (rbc_backlog || relay_backpressure) && !timed_out {
             if rbc_backlog {
                 trace!("skipping idle view-change due to unresolved RBC backlog");
             }
@@ -13967,6 +14001,22 @@ impl Actor {
                 trace!("skipping idle view-change due to relay backpressure");
             }
             return false;
+        }
+        if rbc_backlog && rbc_backlog_progressing {
+            let progress_grace_deadline = timeout.saturating_add(rbc_progress_window);
+            if age < progress_grace_deadline {
+                debug!(
+                    rbc_backlog,
+                    rbc_backlog_progressing,
+                    age_ms = age.as_millis(),
+                    timeout_ms = timeout.as_millis(),
+                    progress_grace_ms = progress_grace_deadline.as_millis(),
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    "deferring idle view-change while RBC backlog is converging"
+                );
+                return false;
+            }
         }
         if consensus_queue_backpressure && !timed_out {
             trace!("skipping idle view-change due to consensus queue backpressure");
@@ -14008,6 +14058,7 @@ impl Actor {
                 suppressed_since_last,
                 proposal_seen,
                 rbc_backlog,
+                rbc_backlog_progressing,
                 relay_backpressure,
                 consensus_queue_backpressure,
                 consensus_queue_backlog,
@@ -14945,6 +14996,7 @@ impl HotspotLogSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum BlockSyncWarningKind {
     MissingCommitRoleQuorum,
+    LockedQcConflict,
 }
 
 #[derive(Debug)]
