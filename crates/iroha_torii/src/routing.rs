@@ -4516,6 +4516,7 @@ fn decode_and_validate_evidence(
     let (subject_height, _) = iroha_core::sumeragi::evidence_subject_height_view(&evidence);
     let current_height = u64::try_from(view.height()).unwrap_or(0);
     let height = subject_height.unwrap_or(current_height);
+    let prf_seed = Some(iroha_core::sumeragi::prf_seed_for_height(&view, height));
     let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
     let fallback_mode = match mode_tag.as_str() {
         iroha_core::sumeragi::consensus::PERMISSIONED_TAG => {
@@ -4545,11 +4546,6 @@ fn decode_and_validate_evidence(
                 iroha_core::sumeragi::consensus::NPOS_TAG
             }
         };
-        let prf_seed = matches!(
-            consensus_mode,
-            iroha_config::parameters::actual::ConsensusMode::Npos
-        )
-        .then(|| iroha_core::sumeragi::npos_seed_for_height(&view, height));
         drop(view);
         let context = iroha_core::sumeragi::EvidenceValidationContext {
             topology: &topology,
@@ -4567,11 +4563,6 @@ fn decode_and_validate_evidence(
         };
     }
 
-    let npos_seed = view
-        .world
-        .sumeragi_npos_parameters()
-        .is_some()
-        .then(|| iroha_core::sumeragi::npos_seed_for_height(&view, height));
     drop(view);
     let mut errors = Vec::new();
     for mode_tag in [
@@ -4582,11 +4573,7 @@ fn decode_and_validate_evidence(
             topology: &topology,
             chain_id,
             mode_tag,
-            prf_seed: if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
-                npos_seed
-            } else {
-                None
-            },
+            prf_seed,
         };
         match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
             Ok(()) => return Ok(evidence),
@@ -20282,8 +20269,17 @@ struct EventsSseState {
 
 #[derive(Clone, Copy)]
 enum ExplorerStreamKind {
+    Blocks,
     Transactions,
     Instructions,
+}
+
+#[cfg(feature = "app_api")]
+pub fn handle_v1_explorer_blocks_stream(
+    kura: Arc<Kura>,
+    events: EventsSender,
+) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
+    explorer_stream(kura, events, ExplorerStreamKind::Blocks)
 }
 
 #[cfg(feature = "app_api")]
@@ -20361,6 +20357,37 @@ fn populate_explorer_queue(
     queue: &mut VecDeque<String>,
 ) {
     match kind {
+        ExplorerStreamKind::Blocks => {
+            let height_usize: usize = match height.try_into() {
+                Ok(value) => value,
+                Err(_) => {
+                    iroha_logger::warn!(
+                        height,
+                        "failed to emit explorer block SSE payload: block height exceeds host pointer width"
+                    );
+                    return;
+                }
+            };
+            let nonzero_height = match NonZeroUsize::new(height_usize) {
+                Some(value) => value,
+                None => {
+                    iroha_logger::warn!(
+                        height,
+                        "failed to emit explorer block SSE payload: block height must be at least 1"
+                    );
+                    return;
+                }
+            };
+            let Some(block) = kura.get_block(nonzero_height) else {
+                return;
+            };
+            let dto = crate::explorer::ExplorerBlockDto::from_block(&block);
+            if let Ok(body) = norito::json::to_json(&dto) {
+                queue.push_back(body);
+            } else {
+                iroha_logger::warn!(height, "failed to serialize explorer block SSE payload");
+            }
+        }
         ExplorerStreamKind::Transactions => {
             let filters = ExplorerTransactionFilters {
                 authority: None,
@@ -30488,7 +30515,7 @@ pub async fn handle_v1_explorer_asset_definitions(
 ) -> Result<AxResponse, Error> {
     let view = state.view();
     let aggregates = crate::explorer::ExplorerAggregates::build(view.world());
-    let page = crate::explorer::asset_definitions_page(
+    let mut page = crate::explorer::asset_definitions_page(
         view.world().asset_definitions_iter(),
         &aggregates,
         domain.as_ref(),
@@ -30496,6 +30523,45 @@ pub async fn handle_v1_explorer_asset_definitions(
         pagination.page,
         pagination.per_page,
     );
+
+    // Enrich the governance voting asset definition with locked/circulating supply figures.
+    // (Other assets default to null for these fields.)
+    let voting_asset_id = view.gov.voting_asset_id.clone();
+    let voting_asset_id_str = voting_asset_id.to_string();
+    if page.items.iter().any(|item| item.id == voting_asset_id_str) {
+        use iroha_primitives::numeric::Numeric;
+
+        let escrow_asset_id = AssetId::new(
+            voting_asset_id.clone(),
+            view.gov.bond_escrow_account.clone(),
+        );
+        let locked = match view.world().asset(&escrow_asset_id) {
+            Ok(entry) => entry.value().as_ref().clone(),
+            Err(_) => Numeric::zero(),
+        };
+
+        let total = view
+            .world()
+            .asset_definition(&voting_asset_id)
+            .map(|def| def.total_quantity().clone())
+            .unwrap_or_else(|_| Numeric::zero());
+
+        let mut circulating = total
+            .clone()
+            .checked_sub(locked.clone())
+            .unwrap_or_else(Numeric::zero);
+        if circulating.mantissa().is_negative() {
+            circulating = Numeric::zero();
+        }
+
+        for item in &mut page.items {
+            if item.id == voting_asset_id_str {
+                item.locked_quantity = Some(locked.to_string());
+                item.circulating_quantity = Some(circulating.to_string());
+                break;
+            }
+        }
+    }
     Ok(JsonBody(page).into_response())
 }
 
@@ -31230,9 +31296,1257 @@ pub async fn handle_v1_explorer_asset_definition_detail(
         .world()
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
-    let dto =
+    let mut dto =
         crate::explorer::ExplorerAssetDefinitionDto::from_definition(&definition, &aggregates);
+
+    if &definition_id == &view.gov.voting_asset_id {
+        use iroha_primitives::numeric::Numeric;
+
+        let escrow_asset_id =
+            AssetId::new(definition_id.clone(), view.gov.bond_escrow_account.clone());
+        let locked = match view.world().asset(&escrow_asset_id) {
+            Ok(entry) => entry.value().as_ref().clone(),
+            Err(_) => Numeric::zero(),
+        };
+
+        let mut circulating = definition
+            .total_quantity()
+            .clone()
+            .checked_sub(locked.clone())
+            .unwrap_or_else(Numeric::zero);
+        if circulating.mantissa().is_negative() {
+            circulating = Numeric::zero();
+        }
+
+        dto.locked_quantity = Some(locked.to_string());
+        dto.circulating_quantity = Some(circulating.to_string());
+    }
     Ok(JsonBody(dto).into_response())
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_explorer_asset_definition_snapshot(
+    state: Arc<CoreState>,
+    definition_id: AssetDefinitionId,
+) -> Result<AxResponse, Error> {
+    use core::cmp::Ordering;
+
+    use iroha_data_model::account::AccountId;
+    use iroha_primitives::numeric::{Numeric, NumericSpec};
+
+    const TOP_HOLDERS: usize = 10;
+    const LORENZ_POINTS: usize = 32;
+
+    let view = state.view();
+
+    // Ensure the definition exists.
+    view.world()
+        .asset_definition(&definition_id)
+        .map_err(|_| explorer_not_found())?;
+
+    let now_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| conversion_error("system time is before unix epoch".into()))?
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+
+    let mut holders: Vec<(AccountId, Numeric)> = Vec::new();
+    let mut total_supply = Numeric::zero();
+
+    for asset in view.world().assets_iter() {
+        if asset.id().definition() != &definition_id {
+            continue;
+        }
+        let balance = asset.value().as_ref().clone();
+        total_supply = total_supply
+            .clone()
+            .checked_add(balance.clone())
+            .ok_or_else(|| conversion_error("numeric overflow computing total supply".into()))?;
+        holders.push((asset.id().account().clone(), balance));
+    }
+
+    let holders_total: u64 = holders.len().try_into().unwrap_or(u64::MAX);
+
+    // Top holders (by balance desc, then account id asc for stable ordering).
+    let mut top_sorted = holders.clone();
+    top_sorted.sort_by(|(a_id, a_balance), (b_id, b_balance)| {
+        b_balance.cmp(a_balance).then_with(|| a_id.cmp(b_id))
+    });
+    let top_holders: Vec<crate::explorer::ExplorerEconometricsTopHolderDto> = top_sorted
+        .iter()
+        .take(TOP_HOLDERS)
+        .map(
+            |(account_id, balance)| crate::explorer::ExplorerEconometricsTopHolderDto {
+                account_id: account_id.to_string(),
+                balance: balance.to_string(),
+            },
+        )
+        .collect();
+
+    let mut values_f64: Vec<f64> = holders
+        .iter()
+        .map(|(_, value)| value.to_f64())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .collect();
+    values_f64.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+
+    let total_f64: f64 = values_f64.iter().sum();
+    let has_total = total_f64.is_finite() && total_f64 > 0.0;
+
+    // Distribution metrics (among holders in the snapshot).
+    let gini = if values_f64.is_empty() || !has_total {
+        0.0
+    } else {
+        let n = values_f64.len() as f64;
+        let mut weighted_sum = 0.0;
+        for (idx, value) in values_f64.iter().enumerate() {
+            weighted_sum += value * (idx as f64 + 1.0);
+        }
+        let g = (2.0 * weighted_sum) / (total_f64 * n) - (n + 1.0) / n;
+        g.clamp(0.0, 1.0)
+    };
+
+    let hhi = if values_f64.is_empty() || !has_total {
+        0.0
+    } else {
+        let sum_sq: f64 = values_f64.iter().map(|v| v * v).sum();
+        let denom = total_f64 * total_f64;
+        if denom > 0.0 && denom.is_finite() {
+            (sum_sq / denom).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+
+    let n = values_f64.len();
+    let theil = if n <= 1 || !has_total {
+        0.0
+    } else {
+        let n_f64 = n as f64;
+        let mut t = 0.0;
+        for v in &values_f64 {
+            if *v <= 0.0 {
+                continue;
+            }
+            let share = v / total_f64;
+            if !share.is_finite() || share <= 0.0 {
+                continue;
+            }
+            t += share * (share * n_f64).ln();
+        }
+        t.max(0.0)
+    };
+
+    let entropy = if values_f64.is_empty() || !has_total {
+        0.0
+    } else {
+        let mut h = 0.0;
+        for v in &values_f64 {
+            if *v <= 0.0 {
+                continue;
+            }
+            let share = v / total_f64;
+            if !share.is_finite() || share <= 0.0 {
+                continue;
+            }
+            h -= share * share.ln();
+        }
+        h.max(0.0)
+    };
+
+    let positive_count = values_f64.iter().filter(|v| **v > 0.0).count();
+    let entropy_normalized = if positive_count <= 1 {
+        0.0
+    } else {
+        let denom = (positive_count as f64).ln();
+        if denom.is_finite() && denom > 0.0 {
+            (entropy / denom).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+
+    let (top1, top5, top10, nakamoto_33, nakamoto_51, nakamoto_67) = if values_f64.is_empty() || !has_total {
+        (0.0, 0.0, 0.0, 0, 0, 0)
+    } else {
+        let mut desc = values_f64.clone();
+        desc.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+
+        let sum_top = |k: usize| -> f64 {
+            let sum = desc.iter().take(k).sum::<f64>();
+            if sum.is_finite() { sum } else { 0.0 }
+        };
+
+        let nakamoto = |threshold: f64| -> u64 {
+            if desc.is_empty() {
+                return 0;
+            }
+            if !threshold.is_finite() {
+                return 0;
+            }
+            let target = threshold.clamp(0.0, 1.0);
+            if target <= 0.0 {
+                return 0;
+            }
+
+            let mut acc = 0.0;
+            for (idx, value) in desc.iter().enumerate() {
+                acc += *value;
+                let share = acc / total_f64;
+                if share.is_finite() && share >= target {
+                    return (idx + 1) as u64;
+                }
+            }
+            desc.len().try_into().unwrap_or(u64::MAX)
+        };
+
+        (
+            (sum_top(1) / total_f64).clamp(0.0, 1.0),
+            (sum_top(5) / total_f64).clamp(0.0, 1.0),
+            (sum_top(10) / total_f64).clamp(0.0, 1.0),
+            nakamoto(0.33),
+            nakamoto(0.51),
+            nakamoto(0.67),
+        )
+    };
+
+    // Quantiles (exact holder balances; p90/p99 use "nearest-rank" without interpolation).
+    let mut values_numeric: Vec<Numeric> = holders.iter().map(|(_, v)| v.clone()).collect();
+    values_numeric.sort();
+
+    let median = if values_numeric.is_empty() {
+        None
+    } else if values_numeric.len() % 2 == 1 {
+        values_numeric
+            .get(values_numeric.len() / 2)
+            .map(ToString::to_string)
+    } else {
+        let mid = values_numeric.len() / 2;
+        let a = values_numeric.get(mid.saturating_sub(1)).cloned();
+        let b = values_numeric.get(mid).cloned();
+        match (a, b) {
+            (Some(a), Some(b)) => a
+                .checked_add(b)
+                .and_then(|sum| sum.checked_div(Numeric::from(2_u32), NumericSpec::unconstrained()))
+                .map(|avg| avg.to_string()),
+            _ => None,
+        }
+    };
+
+    let pick_quantile = |q: f64| -> Option<String> {
+        if values_numeric.is_empty() {
+            return None;
+        }
+        if !q.is_finite() {
+            return None;
+        }
+        let clamped = q.clamp(0.0, 1.0);
+        let rank = (clamped * (values_numeric.len() as f64)).ceil() as usize;
+        let idx = rank.saturating_sub(1).min(values_numeric.len().saturating_sub(1));
+        values_numeric.get(idx).map(ToString::to_string)
+    };
+
+    let p90 = pick_quantile(0.9);
+    let p99 = pick_quantile(0.99);
+
+    let lorenz: Vec<crate::explorer::ExplorerEconometricsLorenzPointDto> =
+        if values_f64.is_empty() || !has_total {
+            vec![
+                crate::explorer::ExplorerEconometricsLorenzPointDto {
+                    population: 0.0,
+                    share: 0.0,
+                },
+                crate::explorer::ExplorerEconometricsLorenzPointDto {
+                    population: 1.0,
+                    share: 1.0,
+                },
+            ]
+        } else {
+            let n = values_f64.len();
+            let mut prefix: Vec<f64> = Vec::with_capacity(n + 1);
+            prefix.push(0.0);
+            for value in &values_f64 {
+                let next = prefix.last().copied().unwrap_or(0.0) + value;
+                prefix.push(next);
+            }
+
+            (0..=LORENZ_POINTS)
+                .map(|i| {
+                    let p = (i as f64) / (LORENZ_POINTS as f64);
+                    let idx = p * (n as f64);
+                    let base = idx.floor() as usize;
+                    let frac = idx - (base as f64);
+                    let base_sum = prefix.get(base.min(n)).copied().unwrap_or(0.0);
+                    let interpolated = if base < n && frac > 0.0 {
+                        base_sum + values_f64.get(base).copied().unwrap_or(0.0) * frac
+                    } else {
+                        base_sum
+                    };
+                    let share = if interpolated.is_finite() {
+                        (interpolated / total_f64).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    crate::explorer::ExplorerEconometricsLorenzPointDto {
+                        population: p.clamp(0.0, 1.0),
+                        share,
+                    }
+                })
+                .collect()
+        };
+
+    let distribution = crate::explorer::ExplorerEconometricsDistributionSnapshotDto {
+        gini,
+        hhi,
+        theil,
+        entropy,
+        entropy_normalized,
+        nakamoto_33,
+        nakamoto_51,
+        nakamoto_67,
+        top1,
+        top5,
+        top10,
+        median,
+        p90,
+        p99,
+        lorenz,
+    };
+
+    let dto = crate::explorer::ExplorerAssetDefinitionSnapshotDto {
+        definition_id: definition_id.to_string(),
+        computed_at_ms: now_ms,
+        holders_total,
+        total_supply: total_supply.to_string(),
+        top_holders,
+        distribution,
+    };
+
+    Ok(JsonBody(dto).into_response())
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_explorer_asset_definition_econometrics(
+    state: Arc<CoreState>,
+    definition_id: AssetDefinitionId,
+) -> Result<AxResponse, Error> {
+    use std::collections::BTreeSet;
+
+    use iroha_data_model::{
+        account::AccountId,
+        isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
+        transaction::executable::Executable,
+    };
+    use iroha_primitives::numeric::Numeric;
+
+    const HOUR_MS: u64 = 60 * 60 * 1000;
+    const DAY_MS: u64 = 24 * HOUR_MS;
+    const ISSUANCE_SERIES_DAYS: usize = 30;
+
+    let view = state.view();
+
+    // Ensure the definition exists.
+    view.world()
+        .asset_definition(&definition_id)
+        .map_err(|_| explorer_not_found())?;
+
+    let now_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| conversion_error("system time is before unix epoch".into()))?
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+
+    let windows: [(&str, u64); 3] = [("1h", HOUR_MS), ("24h", DAY_MS), ("7d", 7 * DAY_MS)];
+
+    #[derive(Clone)]
+    struct VelocityAcc {
+        key: &'static str,
+        window_ms: u64,
+        start_ms: u64,
+        transfers: u64,
+        senders: BTreeSet<AccountId>,
+        receivers: BTreeSet<AccountId>,
+        amount: Numeric,
+    }
+
+    #[derive(Clone)]
+    struct IssuanceAcc {
+        key: &'static str,
+        window_ms: u64,
+        start_ms: u64,
+        mint_count: u64,
+        burn_count: u64,
+        minted: Numeric,
+        burned: Numeric,
+    }
+
+    #[derive(Clone)]
+    struct SeriesAcc {
+        bucket_start_ms: u64,
+        minted: Numeric,
+        burned: Numeric,
+    }
+
+    let mut velocity_accs: Vec<VelocityAcc> = windows
+        .iter()
+        .map(|(key, window_ms)| VelocityAcc {
+            key: *key,
+            window_ms: *window_ms,
+            start_ms: now_ms.saturating_sub(*window_ms),
+            transfers: 0,
+            senders: BTreeSet::new(),
+            receivers: BTreeSet::new(),
+            amount: Numeric::zero(),
+        })
+        .collect();
+
+    let mut issuance_accs: Vec<IssuanceAcc> = windows
+        .iter()
+        .map(|(key, window_ms)| IssuanceAcc {
+            key: *key,
+            window_ms: *window_ms,
+            start_ms: now_ms.saturating_sub(*window_ms),
+            mint_count: 0,
+            burn_count: 0,
+            minted: Numeric::zero(),
+            burned: Numeric::zero(),
+        })
+        .collect();
+
+    let series_start_ms = now_ms.saturating_sub((ISSUANCE_SERIES_DAYS as u64) * DAY_MS);
+    let mut series: Vec<SeriesAcc> = (0..ISSUANCE_SERIES_DAYS)
+        .map(|idx| SeriesAcc {
+            bucket_start_ms: series_start_ms + (idx as u64) * DAY_MS,
+            minted: Numeric::zero(),
+            burned: Numeric::zero(),
+        })
+        .collect();
+
+    let cutoff_ms = series_start_ms;
+    let kura = view.kura();
+    let max_height = view.height() as u64;
+
+    if max_height > 0 {
+        let mut height = max_height;
+        loop {
+            let Some(nonzero_height) = nonzero_height(height) else {
+                break;
+            };
+            let Some(block) = kura.get_block(nonzero_height) else {
+                break;
+            };
+            let block_ref = block.as_ref();
+            let block_ms: u64 = block_ref
+                .header()
+                .creation_time()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX);
+            if block_ms < cutoff_ms {
+                break;
+            }
+
+            let external_total = block_ref.external_transactions().len();
+            for (tx, result) in block_ref
+                .external_transactions()
+                .zip(block_ref.results().take(external_total))
+            {
+                // Ignore rejected transactions.
+                if result.as_ref().is_err() {
+                    continue;
+                }
+
+                let tx_ms: u64 = tx
+                    .creation_time()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX);
+                if tx_ms < cutoff_ms {
+                    continue;
+                }
+
+                let Executable::Instructions(instructions) = tx.instructions() else {
+                    continue;
+                };
+
+                for instr in instructions.iter() {
+                    let any = instr.as_any();
+
+                    // Velocity: asset transfers only.
+                    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+                        if let TransferBox::Asset(asset_transfer) = transfer {
+                            if asset_transfer.source().definition() != &definition_id {
+                                continue;
+                            }
+                            let sender = asset_transfer.source().account().clone();
+                            let receiver = asset_transfer.destination().clone();
+                            let amount = asset_transfer.object().clone();
+
+                            for acc in &mut velocity_accs {
+                                if tx_ms < acc.start_ms {
+                                    continue;
+                                }
+                                acc.transfers = acc.transfers.saturating_add(1);
+                                acc.senders.insert(sender.clone());
+                                acc.receivers.insert(receiver.clone());
+                                if let Some(sum) = acc.amount.clone().checked_add(amount.clone()) {
+                                    acc.amount = sum;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+                        for entry in batch.entries() {
+                            if entry.asset_definition() != &definition_id {
+                                continue;
+                            }
+                            let sender = entry.from().clone();
+                            let receiver = entry.to().clone();
+                            let amount = entry.amount().clone();
+
+                            for acc in &mut velocity_accs {
+                                if tx_ms < acc.start_ms {
+                                    continue;
+                                }
+                                acc.transfers = acc.transfers.saturating_add(1);
+                                acc.senders.insert(sender.clone());
+                                acc.receivers.insert(receiver.clone());
+                                if let Some(sum) = acc.amount.clone().checked_add(amount.clone()) {
+                                    acc.amount = sum;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Issuance: mint/burn asset quantity changes.
+                    if let Some(mint) = any.downcast_ref::<MintBox>() {
+                        if let MintBox::Asset(asset_mint) = mint {
+                            if asset_mint.destination().definition() != &definition_id {
+                                continue;
+                            }
+                            let amount = asset_mint.object().clone();
+
+                            for acc in &mut issuance_accs {
+                                if tx_ms < acc.start_ms {
+                                    continue;
+                                }
+                                acc.mint_count = acc.mint_count.saturating_add(1);
+                                if let Some(sum) = acc.minted.clone().checked_add(amount.clone()) {
+                                    acc.minted = sum;
+                                }
+                            }
+
+                            if tx_ms >= series_start_ms {
+                                let bucket = ((tx_ms - series_start_ms) / DAY_MS) as usize;
+                                if let Some(point) = series.get_mut(bucket) {
+                                    if let Some(sum) =
+                                        point.minted.clone().checked_add(amount.clone())
+                                    {
+                                        point.minted = sum;
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+                        if let BurnBox::Asset(asset_burn) = burn {
+                            if asset_burn.destination().definition() != &definition_id {
+                                continue;
+                            }
+                            let amount = asset_burn.object().clone();
+
+                            for acc in &mut issuance_accs {
+                                if tx_ms < acc.start_ms {
+                                    continue;
+                                }
+                                acc.burn_count = acc.burn_count.saturating_add(1);
+                                if let Some(sum) = acc.burned.clone().checked_add(amount.clone()) {
+                                    acc.burned = sum;
+                                }
+                            }
+
+                            if tx_ms >= series_start_ms {
+                                let bucket = ((tx_ms - series_start_ms) / DAY_MS) as usize;
+                                if let Some(point) = series.get_mut(bucket) {
+                                    if let Some(sum) =
+                                        point.burned.clone().checked_add(amount.clone())
+                                    {
+                                        point.burned = sum;
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            if height == 1 {
+                break;
+            }
+            height -= 1;
+        }
+    }
+
+    let velocity_windows = velocity_accs
+        .iter()
+        .map(
+            |acc| crate::explorer::ExplorerEconometricsVelocityWindowDto {
+                key: acc.key.to_string(),
+                start_ms: acc.start_ms,
+                end_ms: now_ms,
+                transfers: acc.transfers,
+                unique_senders: u64::try_from(acc.senders.len()).unwrap_or(u64::MAX),
+                unique_receivers: u64::try_from(acc.receivers.len()).unwrap_or(u64::MAX),
+                amount: acc.amount.to_string(),
+            },
+        )
+        .collect();
+
+    let issuance_windows = issuance_accs
+        .iter()
+        .map(|acc| {
+            let net = acc
+                .minted
+                .clone()
+                .checked_sub(acc.burned.clone())
+                .unwrap_or_else(Numeric::zero);
+            crate::explorer::ExplorerEconometricsIssuanceWindowDto {
+                key: acc.key.to_string(),
+                start_ms: acc.start_ms,
+                end_ms: now_ms,
+                mint_count: acc.mint_count,
+                burn_count: acc.burn_count,
+                minted: acc.minted.to_string(),
+                burned: acc.burned.to_string(),
+                net: net.to_string(),
+            }
+        })
+        .collect();
+
+    let issuance_series = series
+        .iter()
+        .map(|point| {
+            let net = point
+                .minted
+                .clone()
+                .checked_sub(point.burned.clone())
+                .unwrap_or_else(Numeric::zero);
+            crate::explorer::ExplorerEconometricsIssuanceSeriesPointDto {
+                bucket_start_ms: point.bucket_start_ms,
+                minted: point.minted.to_string(),
+                burned: point.burned.to_string(),
+                net: net.to_string(),
+            }
+        })
+        .collect();
+
+    let dto = crate::explorer::ExplorerAssetDefinitionEconometricsDto {
+        definition_id: definition_id.to_string(),
+        computed_at_ms: now_ms,
+        velocity_windows,
+        issuance_windows,
+        issuance_series,
+    };
+
+    Ok(JsonBody(dto).into_response())
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod explorer_asset_definition_econometrics_tests {
+    use std::{borrow::Cow, sync::Arc};
+
+    use axum::http::StatusCode;
+    use http_body_util::BodyExt;
+    use iroha_core::{
+        block::{BlockBuilder, ValidBlock},
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::Execute as _,
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+        tx::AcceptedTransaction,
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::prelude as dm;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn explorer_asset_definition_econometrics_aggregates_velocity_and_issuance() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        // Setup world state (domain/accounts/asset definition + initial balances) without relying
+        // on transaction permissions/executor behavior.
+        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader0.private_key())
+            .unpack(|_| {});
+        let mut st_block0 = state.block(unverified0.header());
+        let mut stx0 = st_block0.transaction();
+
+        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let alice_id = dm::AccountId::new(domain_id.clone(), kp_alice.public_key().clone());
+        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let bob_id = dm::AccountId::new(domain_id.clone(), kp_bob.public_key().clone());
+        let kp_carol = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let carol_id = dm::AccountId::new(domain_id.clone(), kp_carol.public_key().clone());
+
+        let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(alice_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(bob_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(carol_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+
+        // Ensure balances exist so transfers/burn would be valid if executed.
+        dm::Mint::asset_numeric(
+            1_000_u32,
+            dm::AssetId::new(def_id.clone(), alice_id.clone()),
+        )
+        .execute(&exec_id, &mut stx0)
+        .ok();
+        // Avoid depending on intra-block transaction ordering: ensure burn is valid even if it
+        // executes before the transfers in the canonicalized payload order.
+        dm::Mint::asset_numeric(10_u32, dm::AssetId::new(def_id.clone(), bob_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+
+        stx0.apply();
+        let valid0 = unverified0
+            .clone()
+            .validate_and_record_transactions(&mut st_block0)
+            .unpack(|_| {});
+        let committed0 = valid0.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+
+        let now_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+
+        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let asset_alice = dm::AssetId::new(def_id.clone(), alice_id.clone());
+        let asset_bob = dm::AssetId::new(def_id.clone(), bob_id.clone());
+
+        // Issuance within 1h/24h/7d: mint 100 to Alice.
+        let mint_ms = now_ms.saturating_sub(50 * 60 * 1000);
+        let mut txb_mint = dm::TransactionBuilder::new(chain_id.clone(), exec_id.clone());
+        txb_mint.set_creation_time(core::time::Duration::from_millis(mint_ms));
+        let signed_mint = txb_mint
+            .with_instructions::<dm::InstructionBox>([dm::Mint::asset_numeric(
+                100_u32,
+                asset_alice.clone(),
+            )
+            .into()])
+            .sign(kp_exec.private_key());
+        let tx_mint = AcceptedTransaction::new_unchecked(Cow::Owned(signed_mint));
+
+        // Velocity: one transfer 2h ago (outside 1h, inside 24h/7d).
+        let transfer_ms = now_ms.saturating_sub(2 * 60 * 60 * 1000);
+        let mut txb_transfer = dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone());
+        txb_transfer.set_creation_time(core::time::Duration::from_millis(transfer_ms));
+        let signed_transfer = txb_transfer
+            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
+                asset_alice.clone(),
+                7_u32,
+                bob_id.clone(),
+            )
+            .into()])
+            .sign(kp_alice.private_key());
+        let tx_transfer = AcceptedTransaction::new_unchecked(Cow::Owned(signed_transfer));
+
+        // Velocity: batch transfer 30m ago (inside 1h/24h/7d), two entries.
+        let batch_ms = now_ms.saturating_sub(30 * 60 * 1000);
+        let entry_a = dm::TransferAssetBatchEntry::new(
+            alice_id.clone(),
+            bob_id.clone(),
+            def_id.clone(),
+            1_u32,
+        );
+        let entry_b = dm::TransferAssetBatchEntry::new(
+            alice_id.clone(),
+            carol_id.clone(),
+            def_id.clone(),
+            2_u32,
+        );
+        let batch = dm::TransferAssetBatch::new(vec![entry_a, entry_b]);
+        let mut txb_batch = dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone());
+        txb_batch.set_creation_time(core::time::Duration::from_millis(batch_ms));
+        let signed_batch = txb_batch
+            .with_instructions::<dm::InstructionBox>([batch.into()])
+            .sign(kp_alice.private_key());
+        let tx_batch = AcceptedTransaction::new_unchecked(Cow::Owned(signed_batch));
+
+        // Issuance within 30d series but outside 7d: burn 5 from Bob.
+        let burn_ms = now_ms.saturating_sub(10 * 24 * 60 * 60 * 1000);
+        let mut txb_burn = dm::TransactionBuilder::new(chain_id, bob_id.clone());
+        txb_burn.set_creation_time(core::time::Duration::from_millis(burn_ms));
+        let signed_burn = txb_burn
+            .with_instructions::<dm::InstructionBox>([dm::Burn::asset_numeric(
+                5_u32,
+                asset_bob.clone(),
+            )
+            .into()])
+            .sign(kp_bob.private_key());
+        let tx_burn = AcceptedTransaction::new_unchecked(Cow::Owned(signed_burn));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![tx_mint, tx_transfer, tx_batch, tx_burn])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let resp = handle_v1_explorer_asset_definition_econometrics(state, def_id)
+            .await
+            .expect("handler ok")
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(body.as_ref()).unwrap();
+
+        let velocity = doc
+            .get("velocity_windows")
+            .and_then(norito::json::Value::as_array)
+            .expect("velocity_windows");
+        let win1h = velocity
+            .iter()
+            .find(|entry| entry.get("key").and_then(norito::json::Value::as_str) == Some("1h"))
+            .expect("1h window");
+        let win24h = velocity
+            .iter()
+            .find(|entry| entry.get("key").and_then(norito::json::Value::as_str) == Some("24h"))
+            .expect("24h window");
+
+        assert_eq!(
+            win1h.get("transfers").and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            win24h
+                .get("transfers")
+                .and_then(norito::json::Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            win1h
+                .get("unique_senders")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            win1h
+                .get("unique_receivers")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            win1h.get("amount").and_then(norito::json::Value::as_str),
+            Some("3")
+        );
+        assert_eq!(
+            win24h.get("amount").and_then(norito::json::Value::as_str),
+            Some("10")
+        );
+
+        let issuance = doc
+            .get("issuance_windows")
+            .and_then(norito::json::Value::as_array)
+            .expect("issuance_windows");
+        let iss1h = issuance
+            .iter()
+            .find(|entry| entry.get("key").and_then(norito::json::Value::as_str) == Some("1h"))
+            .expect("1h issuance");
+        let iss7d = issuance
+            .iter()
+            .find(|entry| entry.get("key").and_then(norito::json::Value::as_str) == Some("7d"))
+            .expect("7d issuance");
+
+        assert_eq!(
+            iss1h
+                .get("mint_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            iss1h
+                .get("burn_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            iss1h.get("minted").and_then(norito::json::Value::as_str),
+            Some("100")
+        );
+        assert_eq!(
+            iss1h.get("burned").and_then(norito::json::Value::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            iss1h.get("net").and_then(norito::json::Value::as_str),
+            Some("100")
+        );
+
+        // Burn is outside 7d window.
+        assert_eq!(
+            iss7d
+                .get("burn_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+
+        let series = doc
+            .get("issuance_series")
+            .and_then(norito::json::Value::as_array)
+            .expect("issuance_series");
+        assert_eq!(series.len(), 30);
+        let sum_series = |field: &str| -> i128 {
+            series
+                .iter()
+                .map(|entry| {
+                    entry
+                        .get(field)
+                        .and_then(norito::json::Value::as_str)
+                        .unwrap_or("0")
+                        .parse::<i128>()
+                        .unwrap_or(0)
+                })
+                .sum()
+        };
+        assert_eq!(sum_series("minted"), 100);
+        assert_eq!(sum_series("burned"), 5);
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod explorer_asset_definition_snapshot_tests {
+    use std::{borrow::Cow, sync::Arc};
+
+    use axum::http::StatusCode;
+    use http_body_util::BodyExt;
+    use iroha_core::{
+        block::{BlockBuilder, ValidBlock},
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::Execute as _,
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+        tx::AcceptedTransaction,
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::prelude as dm;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn explorer_asset_definition_snapshot_computes_distribution_metrics() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        // Setup world state (domain/accounts/asset definition + balances) without relying
+        // on transaction permissions/executor behavior.
+        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader0.private_key())
+            .unpack(|_| {});
+        let mut st_block0 = state.block(unverified0.header());
+        let mut stx0 = st_block0.transaction();
+
+        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let alice_id = dm::AccountId::new(domain_id.clone(), kp_alice.public_key().clone());
+        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let bob_id = dm::AccountId::new(domain_id.clone(), kp_bob.public_key().clone());
+
+        let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(alice_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(bob_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+
+        dm::Mint::asset_numeric(100_u32, dm::AssetId::new(def_id.clone(), alice_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Mint::asset_numeric(100_u32, dm::AssetId::new(def_id.clone(), bob_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+
+        stx0.apply();
+        let valid0 = unverified0
+            .clone()
+            .validate_and_record_transactions(&mut st_block0)
+            .unpack(|_| {});
+        let committed0 = valid0.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+
+        let resp = handle_v1_explorer_asset_definition_snapshot(state, def_id)
+            .await
+            .expect("handler ok")
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(body.as_ref()).unwrap();
+
+        assert_eq!(
+            doc.get("holders_total")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            doc.get("total_supply")
+                .and_then(norito::json::Value::as_str),
+            Some("200")
+        );
+
+        let distribution = doc
+            .get("distribution")
+            .and_then(norito::json::Value::as_object)
+            .expect("distribution");
+
+        let parse_f64 = |field: &str| -> f64 {
+            distribution
+                .get(field)
+                .and_then(norito::json::Value::as_f64)
+                .expect(field)
+        };
+
+        let parse_u64 = |field: &str| -> u64 {
+            distribution
+                .get(field)
+                .and_then(norito::json::Value::as_u64)
+                .expect(field)
+        };
+
+        // Equal distribution => gini/theil 0, HHI 0.5, normalized entropy 1.
+        assert!(parse_f64("gini").abs() < 1e-9);
+        assert!((parse_f64("hhi") - 0.5).abs() < 1e-9);
+        assert!(parse_f64("theil").abs() < 1e-9);
+        assert!((parse_f64("entropy") - std::f64::consts::LN_2).abs() < 1e-6);
+        assert!((parse_f64("entropy_normalized") - 1.0).abs() < 1e-9);
+        assert_eq!(parse_u64("nakamoto_33"), 1);
+        assert_eq!(parse_u64("nakamoto_51"), 2);
+        assert_eq!(parse_u64("nakamoto_67"), 2);
+        assert!((parse_f64("top1") - 0.5).abs() < 1e-9);
+        assert!((parse_f64("top5") - 1.0).abs() < 1e-9);
+
+        assert_eq!(
+            distribution
+                .get("median")
+                .and_then(norito::json::Value::as_str),
+            Some("100")
+        );
+        assert_eq!(
+            distribution
+                .get("p90")
+                .and_then(norito::json::Value::as_str),
+            Some("100")
+        );
+        assert_eq!(
+            distribution
+                .get("p99")
+                .and_then(norito::json::Value::as_str),
+            Some("100")
+        );
+
+        let lorenz = distribution
+            .get("lorenz")
+            .and_then(norito::json::Value::as_array)
+            .expect("lorenz");
+        let first = lorenz
+            .first()
+            .and_then(norito::json::Value::as_object)
+            .unwrap();
+        let last = lorenz
+            .last()
+            .and_then(norito::json::Value::as_object)
+            .unwrap();
+        let parse_point = |point: &norito::json::Map, field: &str| -> f64 {
+            point
+                .get(field)
+                .and_then(norito::json::Value::as_f64)
+                .expect(field)
+        };
+        assert!(parse_point(first, "population").abs() < 1e-9);
+        assert!(parse_point(first, "share").abs() < 1e-9);
+        assert!((parse_point(last, "population") - 1.0).abs() < 1e-9);
+        assert!((parse_point(last, "share") - 1.0).abs() < 1e-9);
+
+        let top_holders = doc
+            .get("top_holders")
+            .and_then(norito::json::Value::as_array)
+            .expect("top_holders");
+        assert_eq!(top_holders.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn explorer_asset_definition_snapshot_quantiles_use_nearest_rank() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader0.private_key())
+            .unpack(|_| {});
+        let mut st_block0 = state.block(unverified0.header());
+        let mut stx0 = st_block0.transaction();
+
+        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let alice_id = dm::AccountId::new(domain_id.clone(), kp_alice.public_key().clone());
+        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let bob_id = dm::AccountId::new(domain_id.clone(), kp_bob.public_key().clone());
+
+        let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(alice_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(bob_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+
+        dm::Mint::asset_numeric(1_u32, dm::AssetId::new(def_id.clone(), alice_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        dm::Mint::asset_numeric(100_u32, dm::AssetId::new(def_id.clone(), bob_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+
+        stx0.apply();
+        let valid0 = unverified0
+            .clone()
+            .validate_and_record_transactions(&mut st_block0)
+            .unpack(|_| {});
+        let committed0 = valid0.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+
+        let resp = handle_v1_explorer_asset_definition_snapshot(state, def_id)
+            .await
+            .expect("handler ok")
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(body.as_ref()).unwrap();
+
+        assert_eq!(
+            doc.get("holders_total")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            doc.get("total_supply")
+                .and_then(norito::json::Value::as_str),
+            Some("101")
+        );
+
+        let distribution = doc
+            .get("distribution")
+            .and_then(norito::json::Value::as_object)
+            .expect("distribution");
+
+        assert_eq!(
+            distribution
+                .get("p90")
+                .and_then(norito::json::Value::as_str),
+            Some("100")
+        );
+        assert_eq!(
+            distribution
+                .get("p99")
+                .and_then(norito::json::Value::as_str),
+            Some("100")
+        );
+
+        let parse_u64 = |field: &str| -> u64 {
+            distribution
+                .get(field)
+                .and_then(norito::json::Value::as_u64)
+                .expect(field)
+        };
+        assert_eq!(parse_u64("nakamoto_33"), 1);
+        assert_eq!(parse_u64("nakamoto_51"), 1);
+        assert_eq!(parse_u64("nakamoto_67"), 1);
+    }
 }
 
 #[cfg(feature = "app_api")]

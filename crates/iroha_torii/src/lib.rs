@@ -4570,6 +4570,49 @@ async fn handler_explorer_asset_definition_detail(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_explorer_asset_definition_econometrics(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(def_raw): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            None,
+            "v1/explorer/asset-definitions/{id}/econometrics",
+        )
+        .await?;
+    }
+    let definition_id = parse_asset_definition_id(&def_raw)?;
+    routing::handle_v1_explorer_asset_definition_econometrics(app.state.clone(), definition_id)
+        .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_explorer_asset_definition_snapshot(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(def_raw): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            None,
+            "v1/explorer/asset-definitions/{id}/snapshot",
+        )
+        .await?;
+    }
+    let definition_id = parse_asset_definition_id(&def_raw)?;
+    routing::handle_v1_explorer_asset_definition_snapshot(app.state.clone(), definition_id).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_explorer_asset_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -7466,6 +7509,48 @@ async fn handler_explorer_transactions_stream(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_explorer_blocks_stream(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return Ok(
+            routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone())
+                .into_response(),
+        );
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/explorer/blocks/stream",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(
+        routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone())
+            .into_response(),
+    )
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_explorer_instructions_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -8412,7 +8497,10 @@ async fn handler_sumeragi_status_sse(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    if !app.telemetry.allows_developer_outputs() {
+    // This stream emits the same JSON payload as `/v1/sumeragi/status` but continuously.
+    // Gate it as an expensive telemetry output (allowed in `extended`/`full`) rather than
+    // a developer-only sink.
+    if !(app.telemetry.allows_expensive_metrics() || app.telemetry.allows_developer_outputs()) {
         return Ok(telemetry_unavailable_response(
             "/v1/sumeragi/status/sse",
             &app.telemetry,
@@ -14177,6 +14265,10 @@ impl Torii {
                 .route("/v1/explorer/nfts", get(handler_explorer_nfts_list))
                 .route("/v1/explorer/blocks", get(handler_explorer_blocks_list))
                 .route(
+                    "/v1/explorer/blocks/stream",
+                    get(handler_explorer_blocks_stream),
+                )
+                .route(
                     "/v1/explorer/transactions",
                     get(handler_explorer_transactions_list),
                 )
@@ -14230,6 +14322,14 @@ impl Torii {
                 .route(
                     "/v1/explorer/asset-definitions/{definition_id}",
                     get(handler_explorer_asset_definition_detail),
+                )
+                .route(
+                    "/v1/explorer/asset-definitions/{definition_id}/econometrics",
+                    get(handler_explorer_asset_definition_econometrics),
+                )
+                .route(
+                    "/v1/explorer/asset-definitions/{definition_id}/snapshot",
+                    get(handler_explorer_asset_definition_snapshot),
                 )
                 .route(
                     "/v1/explorer/assets/{asset_id}",
