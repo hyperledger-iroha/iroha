@@ -8,12 +8,9 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use axum::extract::State;
 use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
-use iroha_core::{
-    da::{
-        build_da_commitment_proof, commitment_store::DaCommitmentStore, proof_policy_bundle,
-        verify_da_commitment_proof,
-    },
-    state::StateReadOnly,
+use iroha_core::da::{
+    build_da_commitment_proof, commitment_store::DaCommitmentStore, proof_policy_bundle,
+    verify_da_commitment_proof,
 };
 use iroha_data_model::{
     da::commitment::{
@@ -141,12 +138,11 @@ pub async fn handler_verify_commitment(
 ) -> Result<JsonBody<DaCommitmentVerifyResponse>, Error> {
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS_VERIFY)?;
-    let view = app.state.view();
     let response = verify_against_store(
         &app.state.da_commitments(),
         &nexus.lane_config,
         &proof,
-        &view,
+        app.state.as_ref(),
     );
     Ok(JsonBody(response))
 }
@@ -233,7 +229,7 @@ fn verify_against_store(
     store: &DaCommitmentStore,
     lane_config: &ConfigLaneConfig,
     proof: &DaCommitmentProof,
-    view: &impl StateReadOnly,
+    state: &iroha_core::state::State,
 ) -> DaCommitmentVerifyResponse {
     let Some(bundle) = store.bundle_at(proof.location.block_height) else {
         return DaCommitmentVerifyResponse {
@@ -260,7 +256,7 @@ fn verify_against_store(
             error: Some("proof references block height 0".to_string()),
         };
     };
-    let Some(block) = view.kura().get_block(nonzero_height) else {
+    let Some(block) = state.block_by_height(nonzero_height) else {
         return DaCommitmentVerifyResponse {
             valid: false,
             error: Some(format!(

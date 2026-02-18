@@ -1203,12 +1203,26 @@ fn render_sora_temple_frame(
                     core.powi(2) * style_cfg.logo_core_alpha,
                 );
             }
+            // Add a shallow horizon haze to create depth behind the data grid.
+            let horizon = ((ny - 0.22) * 2.8).clamp(0.0, 1.0);
+            let horizon_falloff = (1.0 - radial / 0.78).clamp(0.0, 1.0).powf(1.7);
+            blend_rgb(
+                &mut rgb,
+                style_cfg.ring_bright,
+                horizon * horizon_falloff * 0.055,
+            );
             let scanline = (ny * 210.0 + phase * std::f64::consts::TAU).sin() * 0.5 + 0.5;
             blend_rgb(
                 &mut rgb,
                 style_cfg.ring_dim,
                 scanline * style_cfg.scanline_alpha,
             );
+            // Add a soft aurora sweep so the temple background feels less flat.
+            let aurora_wave =
+                ((nx * 3.9 + ny * 2.4 + phase * std::f64::consts::TAU).sin() * 0.5 + 0.5).powf(2.1);
+            blend_rgb(&mut rgb, style_cfg.ring_bright, aurora_wave * 0.035);
+            let diagonal_glow = ((nx * 2.1 - ny * 1.6 + phase * 1.4).sin() * 0.5 + 0.5).powf(3.0);
+            blend_rgb(&mut rgb, style_cfg.ring_dim, diagonal_glow * 0.025);
             let vignette = (radial / 0.74).clamp(0.0, 1.0).powi(2) * style_cfg.vignette;
             rgb[0] = lerp(rgb[0], style_cfg.bg_start[0], vignette);
             rgb[1] = lerp(rgb[1], style_cfg.bg_start[1], vignette);
@@ -1225,6 +1239,17 @@ fn render_sora_temple_frame(
             );
 
             if px >= offset_x && py >= offset_y && px < offset_x + width && py < offset_y + height {
+                let grid_u = (px - offset_x) as f64 / width.max(1) as f64;
+                let grid_v = (py - offset_y) as f64 / height.max(1) as f64;
+                let panel_edge = grid_u.min(1.0 - grid_u).min(grid_v.min(1.0 - grid_v));
+                // Give the full payload area a subtle instrument-panel plate.
+                blend_rgb(&mut rgb, style_cfg.ring_dim, 0.052);
+                let panel_focus = ((grid_u - 0.5).powi(2) + (grid_v - 0.5).powi(2)).sqrt();
+                let panel_focus = (1.0 - panel_focus / 0.73).clamp(0.0, 1.0).powf(2.0);
+                blend_rgb(&mut rgb, style_cfg.ring_bright, panel_focus * 0.022);
+                if panel_edge < 0.020 {
+                    blend_rgb(&mut rgb, style_cfg.ring_bright, 0.075);
+                }
                 let gx = (px - offset_x) / cell_size;
                 let gy = (py - offset_y) / cell_size;
                 let idx = gy as usize * grid_size as usize + gx as usize;
@@ -1313,35 +1338,35 @@ struct TempleStyleConfig {
 fn temple_style_config(style: PetalRenderStyle) -> TempleStyleConfig {
     match style {
         PetalRenderStyle::SoraTemple => TempleStyleConfig {
-            bg_start: SORA_BG_START,
-            bg_end: SORA_BG_END,
-            ring_bright: SORA_RING_BRIGHT,
-            ring_dim: SORA_RING_DIM,
-            tile_light_bg: SORA_TILE_LIGHT_BG,
-            tile_light_fg: SORA_TILE_LIGHT_FG,
-            tile_dark_bg: SORA_TILE_DARK_BG,
-            tile_dark_fg: SORA_TILE_DARK_FG,
-            logo_tint: SORA_LOGO_TINT,
-            scanline_alpha: SORA_SCANLINE_ALPHA,
-            vignette: SORA_VIGNETTE,
-            ring_band: SORA_RING_BAND,
-            ring_on_alpha: 0.65,
-            ring_off_alpha: 0.28,
+            bg_start: [0.012, 0.005, 0.035],
+            bg_end: [0.074, 0.027, 0.111],
+            ring_bright: [1.0, 0.87, 0.95],
+            ring_dim: [0.24, 0.14, 0.28],
+            tile_light_bg: [0.965, 0.935, 0.978],
+            tile_light_fg: [0.08, 0.032, 0.12],
+            tile_dark_bg: [0.058, 0.024, 0.089],
+            tile_dark_fg: [0.99, 0.93, 0.99],
+            logo_tint: [1.0, 0.94, 0.985],
+            scanline_alpha: 0.010,
+            vignette: 0.36,
+            ring_band: 0.0067,
+            ring_on_alpha: 0.78,
+            ring_off_alpha: 0.18,
             tile_margin_outer: SORA_TILE_MARGIN_OUTER,
             tile_margin_logo: SORA_TILE_MARGIN_LOGO,
-            tile_glyph_alpha: SORA_TILE_GLYPH_ALPHA,
-            tile_alpha_regular: 0.976,
+            tile_glyph_alpha: 0.30,
+            tile_alpha_regular: 0.985,
             tile_alpha_logo: 0.998,
-            logo_tint_alpha: 0.24,
+            logo_tint_alpha: 0.30,
             logo_light_bg: [0.96, 0.87, 0.90],
             logo_dark_bg: [0.19, 0.03, 0.06],
-            logo_tile_mix: 0.68,
-            border_dark_mix: 0.18,
-            border_light_mix: 0.12,
-            logo_core_bg: [0.78, 0.11, 0.20],
-            logo_core_alpha: 0.54,
-            logo_core_radius: 0.45,
-            logo_glyph_boost: 0.22,
+            logo_tile_mix: 0.75,
+            border_dark_mix: 0.24,
+            border_light_mix: 0.16,
+            logo_core_bg: [0.84, 0.12, 0.24],
+            logo_core_alpha: 0.66,
+            logo_core_radius: 0.50,
+            logo_glyph_boost: 0.24,
         },
         PetalRenderStyle::SoraTempleBold => TempleStyleConfig {
             bg_start: [0.015, 0.006, 0.045],
@@ -1627,12 +1652,50 @@ fn blend_sora_data_tile(
     let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     if cell_size >= 8 {
+        let holder_scale = ((cell_size as f64 - 8.0) / 40.0).clamp(0.0, 1.0);
         let frame_dist = inner_u.min(1.0 - inner_u).min(inner_v.min(1.0 - inner_v));
-        if frame_dist < if param.logo { 0.046 } else { 0.058 } {
-            blend_rgb(rgb, frame_color, if param.logo { 0.14 } else { 0.15 });
+        let frame_thickness = if param.logo {
+            lerp(0.046, 0.054, holder_scale)
+        } else {
+            lerp(0.058, 0.070, holder_scale)
+        };
+        if frame_dist < frame_thickness {
+            let frame_alpha = if param.logo {
+                lerp(0.14, 0.17, holder_scale)
+            } else {
+                lerp(0.15, 0.18, holder_scale)
+            };
+            blend_rgb(rgb, frame_color, frame_alpha);
         }
-        let bracket_len = if param.logo { 0.42 } else { 0.46 };
-        let bracket_w = if param.logo { 0.088 } else { 0.105 };
+        let inset_band = frame_thickness + lerp(0.030, 0.042, holder_scale);
+        if frame_dist >= frame_thickness && frame_dist < inset_band {
+            blend_rgb(rgb, frame_color, if param.logo { 0.045 } else { 0.055 });
+        }
+        let bevel_band = frame_thickness + lerp(0.012, 0.020, holder_scale);
+        if inner_u < bevel_band || inner_v < bevel_band {
+            blend_rgb(
+                rgb,
+                style_cfg.tile_light_fg,
+                if param.logo { 0.050 } else { 0.042 },
+            );
+        }
+        if inner_u > 1.0 - bevel_band || inner_v > 1.0 - bevel_band {
+            blend_rgb(
+                rgb,
+                style_cfg.ring_dim,
+                if param.logo { 0.055 } else { 0.046 },
+            );
+        }
+        let bracket_len = if param.logo {
+            lerp(0.50, 0.54, holder_scale)
+        } else {
+            lerp(0.56, 0.60, holder_scale)
+        };
+        let bracket_w = if param.logo {
+            lerp(0.092, 0.100, holder_scale)
+        } else {
+            lerp(0.110, 0.120, holder_scale)
+        };
         let corner_bracket = (inner_u < bracket_len && inner_v < bracket_w)
             || (inner_u < bracket_w && inner_v < bracket_len)
             || (inner_u > 1.0 - bracket_len && inner_v < bracket_w)
@@ -1642,7 +1705,24 @@ fn blend_sora_data_tile(
             || (inner_u > 1.0 - bracket_len && inner_v > 1.0 - bracket_w)
             || (inner_u > 1.0 - bracket_w && inner_v > 1.0 - bracket_len);
         if corner_bracket {
-            blend_rgb(rgb, frame_color, if param.logo { 0.21 } else { 0.24 });
+            let corner_alpha = if param.logo {
+                lerp(0.23, 0.26, holder_scale)
+            } else {
+                lerp(0.26, 0.29, holder_scale)
+            };
+            blend_rgb(rgb, frame_color, corner_alpha);
+        }
+        let notch_w = bracket_w * 0.62;
+        let corner_notch = (inner_u < notch_w && inner_v < notch_w)
+            || (inner_u > 1.0 - notch_w && inner_v < notch_w)
+            || (inner_u < notch_w && inner_v > 1.0 - notch_w)
+            || (inner_u > 1.0 - notch_w && inner_v > 1.0 - notch_w);
+        if corner_notch {
+            blend_rgb(
+                rgb,
+                style_cfg.ring_dim,
+                if param.logo { 0.11 } else { 0.10 },
+            );
         }
     }
 
@@ -1736,6 +1816,15 @@ fn blend_sora_rings(
         return;
     }
     let radius = (cx * cx + cy * cy).sqrt();
+    // A soft halo ties ring layers together before drawing per-dot signals.
+    for ring_radius in SORA_RING_RADII {
+        let halo_dist = (radius - ring_radius).abs();
+        let halo_span = style_cfg.ring_band * 6.0;
+        if halo_dist <= halo_span {
+            let halo = (1.0 - halo_dist / halo_span).powi(2);
+            blend_rgb(rgb, style_cfg.ring_dim, halo * 0.032);
+        }
+    }
     let angle = cy.atan2(cx);
     let angle_u = (angle / std::f64::consts::TAU).rem_euclid(1.0);
     let mut ring_offset = 0usize;
@@ -1752,7 +1841,9 @@ fn blend_sora_rings(
         let slot_center = slot.round();
         let slot_index = slot_center as usize % dots as usize;
         let angular_dist = (slot - slot_center).abs().min(0.5);
-        let dot_profile = (1.0 - angular_dist * 2.0).max(0.0).powf(2.2);
+        let ring_t = ring_index as f64 / (SORA_RING_RADII.len().saturating_sub(1).max(1)) as f64;
+        let profile_power = lerp(2.2, 2.8, ring_t);
+        let dot_profile = (1.0 - angular_dist * 2.0).max(0.0).powf(profile_power);
         let bit_index =
             (ring_offset + slot_index + (stream_signature as usize % 23)) % stream_bits.len();
         let bit = stream_bits[bit_index];

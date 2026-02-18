@@ -1044,9 +1044,9 @@ impl Actor {
                 }
 
                 let params_snapshot = {
-                    let view = self.state.view();
-                    let params = view.world().parameters();
-                    self.update_effective_timing_status(&view, self.consensus_mode);
+                    let world = self.state.world_view();
+                    let params = world.parameters();
+                    self.update_effective_timing_status_from_world(&world, self.consensus_mode);
                     (
                         params.block().max_transactions().get(),
                         params.smart_contract().execution_depth(),
@@ -3686,9 +3686,9 @@ impl Actor {
                         }
                         signer_peers.insert(peer.clone());
                     }
-                    let view = self.state.view();
-                    super::stake_snapshot::stake_quorum_reached_for_peers(
-                        &view,
+                    let world = self.state.world_view();
+                    super::stake_snapshot::stake_quorum_reached_for_world(
+                        &world,
                         &commit_topology,
                         &signer_peers,
                     )
@@ -4602,9 +4602,9 @@ impl Actor {
                             return None;
                         }
                     };
-                let view = self.state.view();
-                super::stake_snapshot::stake_quorum_reached_for_peers(
-                    &view,
+                let world = self.state.world_view();
+                super::stake_snapshot::stake_quorum_reached_for_world(
+                    &world,
                     topology.as_ref(),
                     &signer_peers,
                 )
@@ -5015,10 +5015,10 @@ impl Actor {
         phase: EpochRefreshPhase,
     ) {
         let (cfg, epoch_params, seed_for_height, epoch_seed_param) = {
-            let view = self.state.view();
+            let world = self.state.world_view();
             let cfg = if matches!(self.consensus_mode, ConsensusMode::Npos) {
                 Some(
-                    super::load_npos_collector_config(&view)
+                    super::load_npos_collector_config_from_world(&world, self.state.chain_id_ref())
                         .or(self.npos_collectors)
                         .unwrap_or(NposCollectorConfig {
                             seed,
@@ -5029,9 +5029,10 @@ impl Actor {
             } else {
                 None
             };
-            let epoch_params = super::load_npos_epoch_params(&view, &self.config);
-            let seed_for_height = super::prf_seed_for_height(&view, height);
-            let epoch_seed_param = view.world().sumeragi_npos_parameters().map(|params| {
+            let epoch_params = super::load_npos_epoch_params_from_world(&world, &self.config.npos);
+            let seed_for_height =
+                super::prf_seed_for_height_from_world(&world, self.state.chain_id_ref(), height);
+            let epoch_seed_param = world.sumeragi_npos_parameters().map(|params| {
                 let seed = params.epoch_seed();
                 <[u8; 32]>::from(seed)
             });
@@ -5229,12 +5230,7 @@ impl Actor {
         ) {
             return Ok(());
         }
-        let local_signer = {
-            let view = self.state.view();
-            let idx = self.local_validator_index(&view);
-            drop(view);
-            idx
-        };
+        let local_signer = self.local_validator_index_current();
         let (_, roster_len, roster_indices) = self.current_height_and_roster();
         let roster_len_hint = u32::try_from(roster_len).unwrap_or_else(|_| {
             warn!(
@@ -5297,8 +5293,8 @@ impl Actor {
             if let Some(manager) = self.epoch_manager.as_ref() {
                 let new_epoch = manager.epoch();
                 let record_exists = {
-                    let view = self.state.view();
-                    view.world().vrf_epochs().get(&new_epoch).is_some()
+                    let world = self.state.world_view();
+                    world.vrf_epochs().get(&new_epoch).is_some()
                 };
                 if !record_exists {
                     let seed_snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
@@ -5399,26 +5395,28 @@ impl Actor {
         seed: [u8; 32],
         roster_len_hint: u32,
     ) -> Result<ValidatorElectionOutcome> {
-        let (params, _candidates, profiles) = {
-            let view = self.state.view();
-            let params = super::resolve_npos_election_params(&view, &self.config.npos);
-            let Some(epoch_roster) = view.epoch_validator_peer_ids(epoch) else {
-                let reason = "stake snapshot unavailable";
-                warn!(epoch, %reason, "validator election skipped");
-                return Ok(ValidatorElectionOutcome {
-                    epoch,
-                    snapshot_height,
-                    seed,
-                    candidates_total: 0,
-                    validator_set_hash: HashOf::new(&Vec::new()),
-                    validator_set: Vec::new(),
-                    params,
-                    rejection_reason: Some(reason.to_owned()),
-                    tie_break: Vec::new(),
-                });
-            };
-            let profiles = self.collect_candidate_profiles(&view, &epoch_roster);
-            (params, epoch_roster, profiles)
+        let params = {
+            let world = self.state.world_view();
+            super::resolve_npos_election_params_from_world(&world, &self.config.npos)
+        };
+        let Some(epoch_roster) = self.state.epoch_validator_peer_ids_fast(epoch) else {
+            let reason = "stake snapshot unavailable";
+            warn!(epoch, %reason, "validator election skipped");
+            return Ok(ValidatorElectionOutcome {
+                epoch,
+                snapshot_height,
+                seed,
+                candidates_total: 0,
+                validator_set_hash: HashOf::new(&Vec::new()),
+                validator_set: Vec::new(),
+                params,
+                rejection_reason: Some(reason.to_owned()),
+                tie_break: Vec::new(),
+            });
+        };
+        let profiles = {
+            let world = self.state.world_view();
+            self.collect_candidate_profiles(&world, &epoch_roster)
         };
 
         let filtered = election::filter_candidates_with_constraints(profiles, &params);
@@ -5480,7 +5478,7 @@ impl Actor {
     #[allow(clippy::unused_self)]
     fn collect_candidate_profiles(
         &self,
-        view: &StateView<'_>,
+        world: &impl WorldReadOnly,
         candidates: &[PeerId],
     ) -> Vec<election::CandidateProfile> {
         use iroha_data_model::{
@@ -5492,7 +5490,7 @@ impl Actor {
         };
 
         let mut record_map: BTreeMap<PeerId, PublicLaneValidatorRecord> = BTreeMap::new();
-        for ((_lane_id, validator_id), record) in view.world.public_lane_validators().iter() {
+        for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
             if let Some(pk) = validator_id.try_signatory() {
                 record_map
                     .entry(PeerId::from(pk.clone()))
@@ -5502,7 +5500,7 @@ impl Actor {
 
         let mut share_map: BTreeMap<(LaneId, AccountId), Vec<PublicLaneStakeShare>> =
             BTreeMap::new();
-        for ((lane_id, validator, _staker), share) in view.world.public_lane_stake_shares().iter() {
+        for ((lane_id, validator, _staker), share) in world.public_lane_stake_shares().iter() {
             share_map
                 .entry((*lane_id, validator.clone()))
                 .or_default()

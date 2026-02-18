@@ -216,14 +216,12 @@ pub fn persist_record(
     if validate_evidence(&canonical, context).is_err() {
         return false;
     }
-    let (fallback_height, horizon) = {
-        let sv = state.view();
-        let current_height = u64::try_from(sv.height()).unwrap_or(0);
-        let horizon = sv
-            .world()
+    let fallback_height = u64::try_from(state.committed_height()).unwrap_or(0);
+    let horizon = {
+        let world = state.world_view();
+        world
             .sumeragi_npos_parameters()
-            .map(|params| params.evidence_horizon_blocks());
-        (current_height, horizon)
+            .map(|params| params.evidence_horizon_blocks())
     };
     let key = evidence_key_inner(&canonical);
     let view = state.world.consensus_evidence.view();

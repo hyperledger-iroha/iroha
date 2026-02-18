@@ -10,23 +10,26 @@ use super::*;
 impl Actor {
     #[allow(clippy::unnecessary_wraps)]
     fn rebuild_npos_state(&mut self) -> Result<Option<[u8; 32]>> {
-        let view = self.state.view();
-        let mut collectors = super::load_npos_collector_config(&view).or_else(|| {
-            Some(NposCollectorConfig {
-                seed: super::latest_epoch_seed(&view),
-                k: self.config.collectors.k,
-                redundant_send_r: self.config.collectors.redundant_send_r,
-            })
-        });
-        let epoch_params = super::load_npos_epoch_params(&view, &self.config);
-        let height = view.height() as u64;
-        let epoch_seed_for_height = super::npos_seed_for_height(&view, height);
+        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let chain_id = self.state.chain_id_ref().clone();
+        let world = self.state.world_view();
+        let mut collectors = super::load_npos_collector_config_from_world(&world, &chain_id)
+            .or_else(|| {
+                Some(NposCollectorConfig {
+                    seed: super::npos_seed_for_height_from_world(&world, &chain_id, height),
+                    k: self.config.collectors.k,
+                    redundant_send_r: self.config.collectors.redundant_send_r,
+                })
+            });
+        let epoch_params = super::load_npos_epoch_params_from_world(&world, &self.config.npos);
+        let epoch_seed_for_height =
+            super::npos_seed_for_height_from_world(&world, &chain_id, height);
         let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-            view.world(),
+            &world,
             epoch_params.epoch_length_blocks,
         );
         let target_epoch = schedule.epoch_for_height(height);
-        let record_for_target_epoch = view.world().vrf_epochs().get(&target_epoch).cloned();
+        let record_for_target_epoch = world.vrf_epochs().get(&target_epoch).cloned();
         let mut manager = EpochManager::new_from_chain(&self.common_config.chain);
         manager.set_params(
             epoch_params.epoch_length_blocks,
@@ -52,7 +55,6 @@ impl Actor {
         if let Some(cfg) = collectors.as_mut() {
             cfg.seed = seed;
         }
-        drop(view);
         self.epoch_manager = Some(manager);
         self.npos_collectors = collectors;
         super::status::set_epoch_parameters(
@@ -71,15 +73,16 @@ impl Actor {
 
     #[allow(clippy::unnecessary_wraps)]
     fn rebuild_permissioned_prf_state(&mut self) -> Result<Option<[u8; 32]>> {
-        let view = self.state.view();
-        let epoch_params = super::load_npos_epoch_params(&view, &self.config);
-        let height = view.height() as u64;
+        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let chain_id = self.state.chain_id_ref().clone();
+        let world = self.state.world_view();
+        let epoch_params = super::load_npos_epoch_params_from_world(&world, &self.config.npos);
         let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-            view.world(),
+            &world,
             epoch_params.epoch_length_blocks,
         );
         let target_epoch = schedule.epoch_for_height(height);
-        let record_for_target_epoch = view.world().vrf_epochs().get(&target_epoch).cloned();
+        let record_for_target_epoch = world.vrf_epochs().get(&target_epoch).cloned();
         let mut manager = EpochManager::new_from_chain(&self.common_config.chain);
         manager.set_params(
             epoch_params.epoch_length_blocks,
@@ -89,7 +92,7 @@ impl Actor {
         if let Some(record) = record_for_target_epoch.as_ref() {
             manager.restore_from_record(record);
         } else {
-            let seed = super::prf_seed_for_height(&view, height);
+            let seed = super::prf_seed_for_height_from_world(&world, &chain_id, height);
             manager.set_epoch_seed(seed);
             manager.set_epoch(target_epoch);
         }
@@ -100,7 +103,6 @@ impl Actor {
         );
         apply_roster_indices_to_manager(&mut manager, roster_len, indices);
         let seed = manager.seed();
-        drop(view);
         self.epoch_manager = Some(manager);
         self.npos_collectors = None;
         super::status::set_epoch_parameters(
@@ -188,11 +190,16 @@ impl Actor {
         self.vote_roster_cache.clear();
         let now = Instant::now();
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
-            let view = self.state.view();
-            let effective_mode = super::effective_consensus_mode(&view, self.config.consensus_mode);
-            let block_time = super::resolve_npos_block_time(&view);
+            let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let world = self.state.world_view();
+            let effective_mode = super::effective_consensus_mode_for_height_from_world(
+                &world,
+                height,
+                self.config.consensus_mode,
+            );
+            let block_time = super::resolve_npos_block_time_from_world(&world);
             let timeouts = if matches!(effective_mode, ConsensusMode::Npos) {
-                super::resolve_npos_timeouts(&view, &self.config.npos)
+                super::resolve_npos_timeouts_from_world(&world, &self.config.npos)
             } else {
                 SumeragiNposTimeouts::from_block_time(block_time)
             };
@@ -245,18 +252,15 @@ impl Actor {
             now,
         );
         self.seed_phase_ema_metrics();
-        let view = self.state.view();
-        self.update_effective_timing_status(&view, effective_mode);
+        let world = self.state.world_view();
+        self.update_effective_timing_status_from_world(&world, effective_mode);
     }
 
     fn apply_mode_specific_state(&mut self, target: ConsensusMode) -> Result<()> {
         match target {
             ConsensusMode::Permissioned => {
                 let seed = self.rebuild_permissioned_prf_state()?;
-                let height = {
-                    let view = self.state.view();
-                    view.height() as u64
-                };
+                let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                 if let Some(seed) = seed {
                     super::status::set_prf_context(seed, height, 0);
                     #[cfg(feature = "telemetry")]
@@ -266,10 +270,7 @@ impl Actor {
             ConsensusMode::Npos => {
                 let seed = self.rebuild_npos_state()?;
                 if let Some(seed) = seed {
-                    let height = {
-                        let view = self.state.view();
-                        view.height() as u64
-                    };
+                    let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
                     super::status::set_prf_context(seed, height, 0);
                     #[cfg(feature = "telemetry")]
                     self.telemetry.set_prf_context(Some(seed), height, 0);
@@ -288,8 +289,8 @@ impl Actor {
         )));
         super::status::set_locked_qc(0, 0, None);
         let (staged_mode_tag, staged_mode_activation_height) = {
-            let view = self.state.view();
-            let params = view.world.parameters().sumeragi();
+            let world = self.state.world_view();
+            let params = world.parameters().sumeragi();
             super::staged_mode_info(params)
         };
         super::status::set_mode_tags(
@@ -307,9 +308,12 @@ impl Actor {
         #[cfg(feature = "telemetry")]
         self.telemetry.set_mode_activation_lag(None);
         let config_caps = self.recompute_consensus_caps();
+        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let world = self.state.world_view();
         let (_mode_tag, _bls_domain, consensus_caps) =
-            super::consensus::compute_consensus_handshake_caps_from_view(
-                &self.state.view(),
+            super::consensus::compute_consensus_handshake_caps_from_world(
+                &world,
+                height,
                 &self.common_config,
                 &self.config,
                 &config_caps,

@@ -19,7 +19,10 @@ use iroha_data_model::{
     transaction::Executable,
 };
 
-use crate::{state::StateView, tx::AcceptedTransaction};
+use crate::{
+    state::{State, StateView},
+    tx::AcceptedTransaction,
+};
 
 /// Routing decision returned by a [`LaneRouter`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -325,8 +328,40 @@ fn eq_ignoring_underscores(left: &str, right: &str) -> bool {
 
 /// Strategy object that derives lane/dataspace assignments for queued transactions.
 pub trait LaneRouter: Send + Sync + 'static {
-    /// Route the given transaction, optionally consulting the provided state view.
-    fn route(&self, tx: &AcceptedTransaction<'_>, state_view: &StateView<'_>) -> RoutingDecision;
+    /// Route the given transaction without requiring a state snapshot.
+    fn route(&self, tx: &AcceptedTransaction<'_>) -> RoutingDecision;
+
+    /// Route the given transaction using an already acquired state view.
+    ///
+    /// Routers that require dynamic world-state can override this method and
+    /// [`LaneRouter::route_without_state`].
+    fn route_with_view(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        _state_view: &StateView<'_>,
+    ) -> RoutingDecision {
+        self.route(tx)
+    }
+
+    /// Route the given transaction with narrow state access when possible.
+    ///
+    /// The default implementation prefers [`LaneRouter::route_without_state`]
+    /// and only falls back to taking a short-lived [`StateView`] when needed.
+    fn route_with_state(&self, tx: &AcceptedTransaction<'_>, state: &State) -> RoutingDecision {
+        if let Some(decision) = self.route_without_state(tx) {
+            return decision;
+        }
+        let state_view = state.view();
+        self.route_with_view(tx, &state_view)
+    }
+
+    /// Route the given transaction without a state snapshot when possible.
+    ///
+    /// Routers that do not depend on dynamic world-state can override this to
+    /// avoid taking a full [`StateView`] in hot requeue paths.
+    fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+        Some(self.route(tx))
+    }
 }
 
 /// Trivial router that keeps the single-lane/global-dataspace behaviour.
@@ -342,7 +377,7 @@ impl SingleLaneRouter {
 }
 
 impl LaneRouter for SingleLaneRouter {
-    fn route(&self, _tx: &AcceptedTransaction<'_>, _state_view: &StateView<'_>) -> RoutingDecision {
+    fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
         RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
     }
 }
@@ -372,8 +407,7 @@ impl ConfigLaneRouter {
 }
 
 impl LaneRouter for ConfigLaneRouter {
-    fn route(&self, tx: &AcceptedTransaction<'_>, state_view: &StateView<'_>) -> RoutingDecision {
-        let _ = state_view;
+    fn route(&self, tx: &AcceptedTransaction<'_>) -> RoutingDecision {
         let decision = evaluate_policy(&self.policy, tx);
         normalize_routing_decision(
             decision,
@@ -518,7 +552,7 @@ mod tests {
         );
 
         let state = blank_state();
-        let decision = router.route(&tx, &state.view());
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id.as_u32(), 1);
         assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
 
@@ -530,8 +564,69 @@ mod tests {
                 "fallback".parse().expect("domain"),
             )))],
         );
-        let decision = router.route(&tx, &state.view());
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id.as_u32(), 0);
+    }
+
+    #[test]
+    fn single_lane_router_supports_state_free_routing() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "single".parse().expect("domain"),
+            )))],
+        );
+        let state = blank_state();
+        let router = SingleLaneRouter::new();
+        let with_view = router.route_with_view(&tx, &state.view());
+        let without_view = router.route_without_state(&tx);
+        assert_eq!(without_view, Some(with_view));
+    }
+
+    #[test]
+    fn config_lane_router_state_free_path_matches_view_path() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(3),
+                dataspace: Some(DataSpaceId::new(7)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: Some("register::domain".to_string()),
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(3), DataSpaceId::new(7)),
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                alias: "alpha".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid dataspace catalog");
+        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "statefree".parse().expect("domain"),
+            )))],
+        );
+        let state = blank_state();
+        let with_view = router.route_with_view(&tx, &state.view());
+        let without_view = router.route_without_state(&tx);
+        assert_eq!(without_view, Some(with_view));
     }
 
     #[test]
@@ -579,7 +674,7 @@ mod tests {
             )))],
         );
         let state = blank_state();
-        let decision = router.route(&tx, &state.view());
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(5));
         assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
 
@@ -638,7 +733,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(4));
         assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
 
@@ -689,7 +784,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::SINGLE);
         assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
 
@@ -749,7 +844,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(2));
         assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
 
@@ -797,7 +892,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::SINGLE);
         assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
 
@@ -833,7 +928,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 
@@ -867,7 +962,7 @@ mod tests {
             vec![InstructionBox::from(register)],
         );
 
-        let decision = router.route(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 
@@ -901,7 +996,7 @@ mod tests {
             vec![InstructionBox::from(instruction)],
         );
 
-        let decision = router.route(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 }

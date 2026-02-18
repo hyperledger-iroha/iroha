@@ -24,20 +24,29 @@ pub fn collect_portfolio(
     state: &impl StateReadOnly,
     uaid: UniversalAccountId,
 ) -> UniversalPortfolio {
-    let dataspace_lookup = DataspaceAliasLookup::new(&state.nexus().dataspace_catalog);
-    let default_dataspace = state.nexus().routing_policy.default_dataspace;
-    let directory = state.world().uaid_dataspaces().get(&uaid);
+    collect_portfolio_from_world_and_nexus(state.world(), state.nexus(), uaid)
+}
+
+/// Collect a deterministic UAID portfolio snapshot from world and nexus snapshots.
+pub fn collect_portfolio_from_world_and_nexus(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    uaid: UniversalAccountId,
+) -> UniversalPortfolio {
+    let dataspace_lookup = DataspaceAliasLookup::new(&nexus.dataspace_catalog);
+    let default_dataspace = nexus.routing_policy.default_dataspace;
+    let directory = world.uaid_dataspaces().get(&uaid);
     let mut grouped: BTreeMap<DataSpaceId, Vec<AccountPortfolio>> = BTreeMap::new();
     let mut totals = PortfolioTotals::default();
 
-    let Some(account_id) = state.world().uaid_accounts().get(&uaid).cloned() else {
+    let Some(account_id) = world.uaid_accounts().get(&uaid).cloned() else {
         return UniversalPortfolio {
             uaid,
             dataspaces: Vec::new(),
             totals,
         };
     };
-    let Some(stored) = state.world().accounts().get(&account_id) else {
+    let Some(stored) = world.accounts().get(&account_id) else {
         return UniversalPortfolio {
             uaid,
             dataspaces: Vec::new(),
@@ -46,7 +55,7 @@ pub fn collect_portfolio(
     };
 
     let label = stored.clone().into_inner().label;
-    let mut assets = account_assets(state.world(), &account_id);
+    let mut assets = account_assets(world, &account_id);
     assets.sort_by(|a, b| a.asset_id.cmp(&b.asset_id));
 
     let dataspace_id = resolve_account_dataspace(directory, default_dataspace, &account_id);

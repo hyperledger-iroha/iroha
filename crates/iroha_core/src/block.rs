@@ -2379,7 +2379,7 @@ mod new {
 }
 
 pub(crate) mod valid {
-    use std::time::Instant;
+    use std::{num::NonZeroUsize, time::Instant};
 
     use commit::CommittedBlock;
     use iroha_data_model::{
@@ -3852,9 +3852,9 @@ pub(crate) mod valid {
                     }
                 };
             let static_state_start = Instant::now();
-            let (static_data, transactions_view) = {
-                let view = state.view();
-                let static_data = match Self::validate_static_state_dependent(
+            let static_data = {
+                let view = state.query_view();
+                match Self::validate_static_state_dependent(
                     &block,
                     topology,
                     expected_chain_id,
@@ -3886,9 +3886,11 @@ pub(crate) mod valid {
                         let _ = ev; // avoid unused warning if optimized out
                         return WithEvents::new(Err((Box::new(block), Box::new(error))));
                     }
-                };
-                let transactions_view = view.transactions.clone();
-                (static_data, transactions_view)
+                }
+            };
+            let committed_heights = {
+                let transactions_view = state.transactions.view();
+                Self::committed_heights_for_block(&block, &transactions_view)
             };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
@@ -3900,7 +3902,7 @@ pub(crate) mod valid {
                 expected_chain_id,
                 genesis_account,
                 &static_data,
-                &transactions_view,
+                &committed_heights,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -4027,9 +4029,9 @@ pub(crate) mod valid {
             soft_fork: bool,
             mut send_events: F,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            let (static_data, transactions_view) = {
-                let view = state.view();
-                let static_data = match Self::validate_static_state_dependent(
+            let static_data = {
+                let view = state.query_view();
+                match Self::validate_static_state_dependent(
                     &block,
                     topology,
                     expected_chain_id,
@@ -4047,9 +4049,11 @@ pub(crate) mod valid {
                         send_events(ev);
                         return WithEvents::new(Err((Box::new(block), Box::new(error))));
                     }
-                };
-                let transactions_view = view.transactions.clone();
-                (static_data, transactions_view)
+                }
+            };
+            let committed_heights = {
+                let transactions_view = state.transactions.view();
+                Self::committed_heights_for_block(&block, &transactions_view)
             };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
@@ -4060,7 +4064,7 @@ pub(crate) mod valid {
                 expected_chain_id,
                 genesis_account,
                 &static_data,
-                &transactions_view,
+                &committed_heights,
                 metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -4147,7 +4151,7 @@ pub(crate) mod valid {
             topology: &Topology,
             chain_id: &ChainId,
             genesis_account: &AccountId,
-            state: &impl StateReadOnlyWithTransactions,
+            state: &impl StateReadOnly,
             soft_fork: bool,
             time_source: &TimeSource,
         ) -> Result<StaticValidationData, BlockValidationError> {
@@ -4273,6 +4277,16 @@ pub(crate) mod valid {
             })
         }
 
+        fn committed_heights_for_block(
+            block: &SignedBlock,
+            transactions: &impl TransactionsReadOnly,
+        ) -> Vec<Option<NonZeroUsize>> {
+            block
+                .external_transactions()
+                .map(|tx| transactions.get(&tx.hash()))
+                .collect()
+        }
+
         /// Static checks that do not require holding a state view.
         #[allow(
             clippy::too_many_arguments,
@@ -4288,7 +4302,7 @@ pub(crate) mod valid {
             chain_id: &ChainId,
             genesis_account: &AccountId,
             static_data: &StaticValidationData,
-            transactions: &impl TransactionsReadOnly,
+            committed_heights: &[Option<NonZeroUsize>],
             metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             #[cfg(not(feature = "telemetry"))]
@@ -4306,6 +4320,11 @@ pub(crate) mod valid {
             let crypto_cfg = &static_data.crypto_cfg;
             let block_creation_time = block.header().creation_time();
             let txs: Vec<&SignedTransaction> = block.external_transactions().collect();
+            debug_assert_eq!(
+                committed_heights.len(),
+                txs.len(),
+                "committed-height snapshot must align with block transaction list",
+            );
 
             // Deterministic pre-verification of transaction signatures by scheme, using
             // runtime pipeline configuration caps. Successful pre-verification allows
@@ -5046,11 +5065,11 @@ pub(crate) mod valid {
                 std::collections::BTreeSet::new();
             let mut entrypoints: Vec<HashOf<TransactionEntrypoint>> = Vec::with_capacity(txs.len());
 
-            for tx in &txs {
-                let tx_hash = tx.hash();
-                if transactions
-                    .get(&tx_hash)
-                    // In case of soft-fork transaction is check if it was added at the same height as candidate block
+            for (tx, committed_height) in txs.iter().zip(committed_heights.iter()) {
+                let tx_hash = (*tx).hash();
+                // In case of soft-fork transaction is check if it was added at the same height as candidate block.
+                if committed_height
+                    .as_ref()
                     .is_some_and(|height| height.get() < expected_block_height)
                 {
                     return Err(BlockValidationError::HasCommittedTransactions);
@@ -5203,6 +5222,7 @@ pub(crate) mod valid {
                 soft_fork,
                 time_source,
             )?;
+            let committed_heights = Self::committed_heights_for_block(block, state.transactions());
             #[cfg(feature = "telemetry")]
             let metrics = Some(state.metrics());
             #[cfg(not(feature = "telemetry"))]
@@ -5212,7 +5232,7 @@ pub(crate) mod valid {
                 chain_id,
                 genesis_account,
                 &static_data,
-                state.transactions(),
+                &committed_heights,
                 metrics,
             )
         }
@@ -9464,7 +9484,7 @@ pub(crate) mod valid {
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let static_data = {
-                let view = state.view();
+                let view = state.query_view();
                 ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
@@ -9476,7 +9496,10 @@ pub(crate) mod valid {
                 )
                 .expect("static state-dependent validation should succeed")
             };
-            let transactions_view = state.transactions.view();
+            let committed_heights = {
+                let transactions_view = state.transactions.view();
+                ValidBlock::committed_heights_for_block(&signed, &transactions_view)
+            };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -9486,7 +9509,7 @@ pub(crate) mod valid {
                 &state.chain_id,
                 &ALICE_ID,
                 &static_data,
-                &transactions_view,
+                &committed_heights,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -9535,7 +9558,7 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
 
             let static_data = {
-                let view = state.view();
+                let view = state.query_view();
                 ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
@@ -9547,7 +9570,10 @@ pub(crate) mod valid {
                 )
                 .expect("static state-dependent validation should succeed")
             };
-            let transactions_view = state.transactions.view();
+            let committed_heights = {
+                let transactions_view = state.transactions.view();
+                ValidBlock::committed_heights_for_block(&signed, &transactions_view)
+            };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -9558,7 +9584,7 @@ pub(crate) mod valid {
                 &state.chain_id,
                 &ALICE_ID,
                 &static_data,
-                &transactions_view,
+                &committed_heights,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");
