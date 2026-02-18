@@ -88,8 +88,15 @@ fn cutover_builder(peers: usize, npos_params: SumeragiNposParameters) -> Network
 
 fn epoch_length(status: &norito::json::Value) -> u64 {
     status
-        .get("epoch_length_blocks")
+        .get("epoch")
+        .and_then(|epoch| epoch.get("length_blocks"))
         .and_then(norito::json::Value::as_u64)
+        .or_else(|| {
+            // Backwards compatibility with legacy sumeragi status shape.
+            status
+                .get("epoch_length_blocks")
+                .and_then(norito::json::Value::as_u64)
+        })
         .unwrap_or_default()
 }
 
@@ -281,11 +288,30 @@ async fn wait_for_collectors_mode_all(clients: &[Client], expected: &str) -> Res
     bail!("collectors mode never reached expected value `{expected}`")
 }
 
+async fn advance_to_height(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    target_height: u64,
+    log_prefix: &str,
+) -> Result<()> {
+    loop {
+        let status = client.get_status()?;
+        if status.blocks >= target_height {
+            return Ok(());
+        }
+        let next = status.blocks.saturating_add(1);
+        client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
+        network
+            .ensure_blocks_with(move |height| height.total >= next)
+            .await?;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Result<()> {
     init_instruction_registry();
 
-    let builder = cutover_builder(1, staged_npos_params());
+    let builder = cutover_builder(4, staged_npos_params());
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -300,20 +326,35 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         .await?;
 
     let client = network.client();
+    let clients: Vec<Client> = network.peers().iter().map(NetworkPeer::client).collect();
+    ensure!(
+        !clients.is_empty(),
+        "expected at least one client from the test network"
+    );
     let pre_status = client.get_sumeragi_status_json()?;
     ensure!(
         epoch_length(&pre_status) == 0,
         "epoch_length_blocks should reflect permissioned mode before activation, got {pre_status:?}"
     );
 
-    let target_height = ACTIVATION_HEIGHT.saturating_add(1);
-    let status = client.get_status()?;
-    for idx in status.blocks..target_height {
-        client.submit_blocking(Log::new(Level::INFO, format!("cutover seed {idx}")))?;
-    }
-    network
-        .ensure_blocks_with(|height| height.total > ACTIVATION_HEIGHT)
-        .await?;
+    advance_to_height(
+        &network,
+        &client,
+        ACTIVATION_HEIGHT,
+        "cutover seed",
+    )
+    .await?;
+    // Ensure the runtime mode flip is visible across all peers before we
+    // attempt to commit the first post-cutover block.
+    wait_for_collectors_mode_all(&clients, "npos").await?;
+
+    advance_to_height(
+        &network,
+        &client,
+        ACTIVATION_HEIGHT.saturating_add(1),
+        "cutover seed",
+    )
+    .await?;
 
     let mut attempts = 0;
     let post_status = loop {
@@ -329,20 +370,15 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         sleep(Duration::from_millis(200)).await;
     };
 
-    let params = client.get_sumeragi_params_json()?;
+    let params = client.get_parameters()?;
+    let sp = params.sumeragi();
     ensure!(
-        params
-            .get("mode_activation_height")
-            .and_then(norito::json::Value::as_u64)
-            == Some(ACTIVATION_HEIGHT),
-        "params should expose the staged activation height, got {params:?}"
+        sp.mode_activation_height == Some(ACTIVATION_HEIGHT),
+        "system parameters should expose the staged activation height, got {sp:?}"
     );
     ensure!(
-        params
-            .get("next_mode")
-            .and_then(|value| value.as_str().map(str::to_string))
-            == Some("Npos".to_string()),
-        "params should advertise staged next_mode Npos, got {params:?}"
+        sp.next_mode == Some(SumeragiConsensusMode::Npos),
+        "system parameters should advertise staged next_mode Npos, got {sp:?}"
     );
     ensure!(
         epoch_length(&post_status) == EPOCH_LENGTH_BLOCKS,
@@ -358,7 +394,7 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
 async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
     init_instruction_registry();
 
-    let builder = cutover_builder(2, staged_npos_params());
+    let builder = cutover_builder(4, staged_npos_params());
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(staged_cutover_recomputes_consensus_fingerprint),
@@ -426,18 +462,22 @@ async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
     );
 
     let client = network.client();
-    let target_height = ACTIVATION_HEIGHT.saturating_add(1);
-    let status = client.get_status()?;
-    for idx in status.blocks..target_height {
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("cutover fingerprint seed {idx}"),
-        ))?;
-    }
-    network
-        .ensure_blocks_with(|height| height.total > ACTIVATION_HEIGHT)
-        .await?;
+    advance_to_height(
+        &network,
+        &client,
+        ACTIVATION_HEIGHT,
+        "cutover fingerprint seed",
+    )
+    .await?;
+    // Ensure every peer flips mode before producing the first post-cutover block.
     wait_for_collectors_mode_all(&clients, "npos").await?;
+    advance_to_height(
+        &network,
+        &client,
+        ACTIVATION_HEIGHT.saturating_add(1),
+        "cutover fingerprint seed",
+    )
+    .await?;
 
     let post_activation: Vec<Vec<u8>> = clients
         .iter()

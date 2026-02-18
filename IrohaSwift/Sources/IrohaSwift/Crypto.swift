@@ -384,7 +384,10 @@ public enum AccountId {
     /// Default network prefix for IH58 encoding (Iroha mainnet).
     public static let defaultNetworkPrefix: UInt16 = 0x02F1
 
-    /// Build a raw public-key account literal: `ed0120<HEX>@<domain>` (non-canonical).
+    /// Build a raw public-key account literal: `ed0120<HEX>@<domain>`.
+    ///
+    /// Note: This is not the canonical IH58 rendering; it is a raw multihash-hex account literal. The multihash hex
+    /// follows Iroha canonical casing (varint bytes lower, payload bytes upper).
     public static func make(publicKey: Data, domain: String) -> String {
         let hex = publicKey.map { String(format: "%02X", $0) }.joined()
         return "ed0120" + hex + "@" + domain

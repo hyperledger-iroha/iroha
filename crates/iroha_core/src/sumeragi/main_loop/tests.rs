@@ -2406,6 +2406,38 @@ async fn actor_next_tick_deadline_tracks_missing_block_windows() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_schedules_tick_when_mode_flip_due() {
+    use iroha_data_model::parameter::system::SumeragiConsensusMode;
+
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    actor.config.mode_flip.enabled = true;
+
+    let now = Instant::now();
+    assert!(
+        actor.next_tick_deadline(now).is_none(),
+        "fresh actor should not schedule ticks"
+    );
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.next_mode = Some(SumeragiConsensusMode::Npos);
+        params.sumeragi.mode_activation_height = Some(0);
+        block.commit();
+    }
+
+    assert!(
+        actor.next_tick_deadline(now).is_some(),
+        "actor should keep ticking when a consensus mode flip is due"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;

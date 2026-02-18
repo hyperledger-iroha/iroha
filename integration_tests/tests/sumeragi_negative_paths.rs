@@ -16,7 +16,10 @@ use iroha::{
         prelude::TransactionBuilder,
     },
 };
-use iroha_core::sumeragi::consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage};
+use iroha_core::sumeragi::{
+    consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, Vote, vote_preimage},
+    network_topology::Topology,
+};
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
@@ -27,7 +30,7 @@ use iroha_data_model::{
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use norito::{codec::Encode as _, json::Value};
+use norito::{json::Value, to_bytes};
 use tokio::runtime::Runtime;
 
 fn evidence_count(value: &norito::json::Value) -> u64 {
@@ -35,6 +38,59 @@ fn evidence_count(value: &norito::json::Value) -> u64 {
         .get("count")
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0)
+}
+
+fn evidence_hex(evidence: &Evidence) -> Result<String> {
+    Ok(hex::encode(to_bytes(evidence)?))
+}
+
+fn sumeragi_mode_tag_and_prf_seed(client: &Client) -> Result<(String, [u8; 32])> {
+    for _ in 0..20 {
+        let status = client.get_sumeragi_status()?;
+        if status.mode_tag.is_empty() {
+            thread::sleep(Duration::from_millis(100));
+            continue;
+        }
+        if let Some(seed) = status.prf_epoch_seed {
+            return Ok((status.mode_tag, seed));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    bail!("sumeragi status did not report prf_epoch_seed")
+}
+
+fn rotated_topology_for_view(
+    network: &Network,
+    mode_tag: &str,
+    prf_seed: [u8; 32],
+    height: u64,
+    view: u64,
+) -> Result<Topology> {
+    let mut roster: Vec<_> = network
+        .topology_entries()
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect();
+    roster.sort();
+    roster.dedup();
+    ensure!(
+        !roster.is_empty(),
+        "network should expose at least one BLS peer id"
+    );
+
+    let mut topology = Topology::new(roster);
+    match mode_tag {
+        PERMISSIONED_TAG => {
+            topology.shuffle_prf(prf_seed, height);
+            topology.nth_rotation(view);
+        }
+        NPOS_TAG => {
+            let leader = topology.leader_index_prf(prf_seed, height, view);
+            topology.rotate_preserve_view_to_front(leader);
+        }
+        other => bail!("unsupported consensus mode tag for evidence votes: {other}"),
+    }
+    Ok(topology)
 }
 
 fn make_vote(seed: u8) -> Vote {
@@ -55,6 +111,7 @@ fn make_vote(seed: u8) -> Vote {
 
 fn signed_vote(
     seed: u8,
+    mode_tag: &str,
     signer: u32,
     chain_id: &ChainId,
     keypair: &KeyPair,
@@ -75,36 +132,45 @@ fn signed_vote(
         signer,
         bls_sig: Vec::new(),
     };
-    let preimage = vote_preimage(chain_id, PERMISSIONED_TAG, &vote);
+    let preimage = vote_preimage(chain_id, mode_tag, &vote);
     let signature = Signature::new(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     vote
 }
 
-fn valid_double_prepare_evidence(network: &Network) -> (Evidence, Vote, Vote) {
-    let (signer_idx, signer_kp) = network
-        .peers()
-        .iter()
-        .enumerate()
-        .find_map(|(idx, peer)| {
-            peer.bls_key_pair()
-                .and_then(|kp| u32::try_from(idx).ok().map(|idx| (idx, kp)))
-        })
-        .expect("network should expose at least one BLS keypair");
+fn valid_double_prepare_evidence(
+    network: &Network,
+    client: &Client,
+    height: u64,
+    view: u64,
+) -> Result<(Evidence, Vote, Vote)> {
+    let (mode_tag, prf_seed) = sumeragi_mode_tag_and_prf_seed(client)?;
+    let topology = rotated_topology_for_view(network, mode_tag.as_str(), prf_seed, height, view)?;
+    let Some(peer) = topology.as_ref().first() else {
+        bail!("rotated topology unexpectedly empty");
+    };
+    let Some(signer_kp) = network.peers().iter().find_map(|peer_ref| {
+        if peer_ref.bls_public_key() == Some(peer.public_key()) {
+            peer_ref.bls_key_pair().cloned()
+        } else {
+            None
+        }
+    }) else {
+        bail!("unable to resolve BLS keypair for rotated signer");
+    };
+
+    let signer_idx = 0u32;
     let chain_id = network.chain_id();
-    let v1 = signed_vote(0x90, signer_idx, &chain_id, signer_kp, 10, 0, 0);
-    let v2 = signed_vote(0x91, signer_idx, &chain_id, signer_kp, 10, 0, 0);
-    (
-        Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote {
-                v1: v1.clone(),
-                v2: v2.clone(),
-            },
+    let v1 = signed_vote(0x90, mode_tag.as_str(), signer_idx, &chain_id, &signer_kp, height, view, 0);
+    let v2 = signed_vote(0x91, mode_tag.as_str(), signer_idx, &chain_id, &signer_kp, height, view, 0);
+    let evidence = Evidence {
+        kind: EvidenceKind::DoublePrepare,
+        payload: EvidencePayload::DoubleVote {
+            v1: v1.clone(),
+            v2: v2.clone(),
         },
-        v1,
-        v2,
-    )
+    };
+    Ok((evidence, v1, v2))
 }
 
 fn set_evidence_horizon(client: &Client, horizon: u64) -> Result<()> {
@@ -160,7 +226,7 @@ fn posting_structurally_invalid_evidence_is_rejected() -> Result<()> {
             v2: vote,
         },
     };
-    let hex_payload = hex::encode(forged.encode());
+    let hex_payload = evidence_hex(&forged)?;
     let err = client
         .post_sumeragi_evidence_hex(&hex_payload)
         .expect_err("invalid evidence must be rejected");
@@ -201,7 +267,7 @@ fn posting_evidence_with_mismatched_signer_is_rejected() -> Result<()> {
     };
 
     let err = client
-        .post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))
+        .post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)
         .expect_err("signer mismatch must be rejected");
     ensure!(
         err.to_string().contains("invalid consensus evidence"),
@@ -232,7 +298,7 @@ fn posting_evidence_with_kind_payload_mismatch_is_rejected() -> Result<()> {
     };
 
     let err = client
-        .post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))
+        .post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)
         .expect_err("kind/payload mismatch must be rejected");
     ensure!(
         err.to_string().contains("invalid consensus evidence"),
@@ -264,7 +330,7 @@ fn posting_evidence_with_conflicting_height_is_rejected() -> Result<()> {
     };
 
     let err = client
-        .post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))
+        .post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)
         .expect_err("height mismatch must be rejected");
     ensure!(
         err.to_string().contains("invalid consensus evidence"),
@@ -296,7 +362,7 @@ fn posting_evidence_with_conflicting_view_is_rejected() -> Result<()> {
     };
 
     let err = client
-        .post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))
+        .post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)
         .expect_err("view mismatch must be rejected");
     ensure!(
         err.to_string().contains("invalid consensus evidence"),
@@ -329,7 +395,7 @@ fn posting_evidence_with_conflicting_epoch_is_rejected() -> Result<()> {
     };
 
     let err = client
-        .post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))
+        .post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)
         .expect_err("epoch mismatch must be rejected");
     ensure!(
         err.to_string().contains("invalid consensus evidence"),
@@ -361,7 +427,7 @@ fn posting_evidence_with_missing_signature_is_rejected() -> Result<()> {
     };
 
     let err = client
-        .post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))
+        .post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)
         .expect_err("missing signature must be rejected");
     ensure!(
         err.to_string().contains("invalid consensus evidence"),
@@ -383,8 +449,6 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
     runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
-    let status_before = client.get_status()?;
-
     let err = client
         .submit_blocking(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::ModeActivationHeight(5),
@@ -396,19 +460,19 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
         "expected missing-next-mode error, got {err:?}"
     );
 
-    // Stage the current mode explicitly so the follow-up check focuses on height validation.
-    client.submit_blocking(SetParameter::new(Parameter::Sumeragi(
-        SumeragiParameter::NextMode(SumeragiConsensusMode::Permissioned),
-    )))?;
-
-    runtime.block_on(network.ensure_blocks_with(|height| height.total > status_before.blocks))?;
-    let status_after = client.get_status()?;
-    let current_height = status_after.blocks;
-
+    let current_height = client.get_status()?.blocks;
+    let invalid_height_tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
+        .with_instructions([
+            SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
+                SumeragiConsensusMode::Permissioned,
+            ))),
+            SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::ModeActivationHeight(current_height),
+            )),
+        ])
+        .sign(ALICE_KEYPAIR.private_key());
     let err = client
-        .submit_blocking(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(current_height),
-        )))
+        .submit_transaction_blocking(&invalid_height_tx)
         .expect_err("mode_activation_height equal to current height must fail");
     ensure!(
         err.to_string().contains("mode_activation_height")
@@ -418,7 +482,7 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
         "expected height validation error, got {err:?}"
     );
 
-    let desired_height = current_height + 2;
+    let desired_height = client.get_status()?.blocks.saturating_add(3);
     let staged_tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
         .with_instructions([
             SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
@@ -438,20 +502,15 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
         desired_height,
         "mode activation staged",
     )?;
-    let params = client.get_sumeragi_params_json()?;
+    let params = client.get_parameters()?;
+    let sp = params.sumeragi();
     ensure!(
-        params
-            .get("next_mode")
-            .and_then(norito::json::Value::as_str)
-            .is_some_and(|mode| mode.eq_ignore_ascii_case("npos")),
-        "next_mode should be staged as Npos, params={params:?}"
+        sp.next_mode == Some(SumeragiConsensusMode::Npos),
+        "next_mode should be staged as Npos, params={sp:?}"
     );
     ensure!(
-        params
-            .get("mode_activation_height")
-            .and_then(norito::json::Value::as_u64)
-            == Some(desired_height),
-        "mode_activation_height should equal {desired_height}, params={params:?}"
+        sp.mode_activation_height == Some(desired_height),
+        "mode_activation_height should equal {desired_height}, params={sp:?}"
     );
 
     Ok(())
@@ -527,25 +586,12 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
 
     let before = evidence_count(&client.get_sumeragi_evidence_count_json()?);
 
-    let (signer_idx, signer_kp) = network
-        .peers()
-        .iter()
-        .enumerate()
-        .find_map(|(idx, peer)| {
-            peer.bls_key_pair()
-                .and_then(|kp| u32::try_from(idx).ok().map(|idx| (idx, kp)))
-        })
-        .expect("network should expose at least one BLS keypair");
-    let chain_id = network.chain_id();
-    let v1 = signed_vote(0x61, signer_idx, &chain_id, signer_kp, 0, 0, 0);
-    let v2 = signed_vote(0x62, signer_idx, &chain_id, signer_kp, 0, 0, 0);
+    let status = client.get_status()?;
+    let stale_height = status.blocks.saturating_sub(2);
+    let (evidence, _first, _second) =
+        valid_double_prepare_evidence(&network, &client, stale_height, 0)?;
 
-    let evidence = Evidence {
-        kind: EvidenceKind::DoublePrepare,
-        payload: EvidencePayload::DoubleVote { v1, v2 },
-    };
-
-    client.post_sumeragi_evidence_hex(&hex::encode(evidence.encode()))?;
+    client.post_sumeragi_evidence_hex(&evidence_hex(&evidence)?)?;
 
     let status_before = client.get_status()?;
     advance_to_height(
@@ -584,8 +630,10 @@ fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> 
         "expected empty evidence store on fresh network, got {before}"
     );
 
-    let (evidence, first_vote, second_vote) = valid_double_prepare_evidence(&network);
-    let hex_payload = hex::encode(evidence.encode());
+    let status = client.get_status()?;
+    let (evidence, first_vote, second_vote) =
+        valid_double_prepare_evidence(&network, &client, status.blocks, 0)?;
+    let hex_payload = evidence_hex(&evidence)?;
     let response = client.post_sumeragi_evidence_hex(&hex_payload)?;
     ensure!(
         response.get("status").and_then(Value::as_str) == Some("accepted"),
@@ -596,7 +644,12 @@ fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> 
         "expected response kind DoublePrepare, got {response:?}"
     );
 
-    let after = evidence_count(&client.get_sumeragi_evidence_count_json()?);
+    let after = wait_for_evidence_count_at_least(
+        &client,
+        before.saturating_add(1),
+        40,
+        Duration::from_millis(200),
+    )?;
     ensure!(
         after == before + 1,
         "valid evidence should increase persisted count (before={before}, after={after})"
@@ -713,8 +766,12 @@ fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> 
 }
 
 fn start_network(context: &'static str) -> Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
-    let Some((network, runtime)) =
-        sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context)?
+    // Evidence list/count endpoints are currently gated behind developer telemetry outputs.
+    // Enable them for this negative-path suite so we can assert persistence behavior.
+    let builder = NetworkBuilder::new().with_config_layer(|t| {
+        t.write(["telemetry_profile"], "developer");
+    });
+    let Some((network, runtime)) = sandbox::start_network_blocking_or_skip(builder, context)?
     else {
         return Ok(None);
     };
@@ -752,6 +809,27 @@ fn wait_for_collectors_mode(
     }
     bail!(
         "collectors mode did not switch to {expected} within {} attempts",
+        attempts
+    );
+}
+
+fn wait_for_evidence_count_at_least(
+    client: &Client,
+    expected: u64,
+    attempts: usize,
+    delay: Duration,
+) -> Result<u64> {
+    for attempt in 0..attempts {
+        let count = evidence_count(&client.get_sumeragi_evidence_count_json()?);
+        if count >= expected {
+            return Ok(count);
+        }
+        if attempt + 1 < attempts {
+            thread::sleep(delay);
+        }
+    }
+    bail!(
+        "evidence count did not reach {expected} within {} attempts",
         attempts
     );
 }

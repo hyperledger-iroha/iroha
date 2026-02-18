@@ -24,6 +24,7 @@ use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Hash, Signature, SignatureOf};
 use iroha_data_model::{
     DATA_MODEL_VERSION,
+    ValidationFail,
     block::consensus::{
         EvidenceRecord, SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiQcEntry,
         SumeragiQcSnapshot, SumeragiStatusWire,
@@ -2569,11 +2570,11 @@ impl Client {
 
     fn parse_evidence_post_response(response: &Response<Vec<u8>>) -> Result<norito::json::Value> {
         if !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED) {
-            return Err(eyre!(
-                "Failed to submit sumeragi evidence: {} {}",
-                response.status(),
-                std::str::from_utf8(response.body()).unwrap_or("")
-            ));
+            return Err(
+                ResponseReport::with_msg("Failed to submit sumeragi evidence", response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            );
         }
         if response.body().is_empty() {
             return Ok(Self::evidence_status_payload(response.status()));
@@ -3112,9 +3113,9 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
         let body = Self::build_evidence_request_body(evidence_hex)?;
         let response = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(body),
+            // Evidence submission is an operator endpoint guarded by operator signatures.
+            self.operator_signed_request(HttpMethod::POST, url, body)
+                .header("Content-Type", APPLICATION_JSON),
         )?;
         let value = Self::parse_evidence_post_response(&response)?;
         Ok(value)
@@ -4870,6 +4871,14 @@ fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
     }
     if let Ok(envelope) = decode_from_bytes::<QueueErrorEnvelope>(body) {
         return Some(format!("{}: {}", envelope.code, envelope.message));
+    }
+    if let Ok(validation_fail) = decode_from_bytes::<ValidationFail>(body) {
+        let detail = match &validation_fail {
+            ValidationFail::QueryFailed(fail) => fail.to_string(),
+            ValidationFail::InstructionFailed(fail) => fail.to_string(),
+            _ => validation_fail.to_string(),
+        };
+        return Some(detail);
     }
     None
 }
@@ -10852,8 +10861,15 @@ fn tx_rejection_to_report(
                 .wrap_err("Transaction rejected during implicit account admission");
         }
 
+        let mut innermost: &(dyn std::error::Error + 'static) = instruction_err;
+        while let Some(source) = std::error::Error::source(innermost) {
+            innermost = source;
+        }
+        let innermost_msg = innermost.to_string();
+
         // Preserve the structured instruction error as the root cause so callers can inspect it.
-        return eyre::Report::from(instruction_err.clone()).wrap_err("Transaction rejected");
+        return eyre::Report::from(instruction_err.clone())
+            .wrap_err(format!("Transaction rejected: {innermost_msg}"));
     }
 
     // Otherwise, fall back to the string representation to avoid requiring

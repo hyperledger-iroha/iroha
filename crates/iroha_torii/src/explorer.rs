@@ -379,6 +379,9 @@ pub(crate) struct ExplorerAssetDefinitionDto {
     pub metadata: Value,
     pub owned_by: String,
     pub assets: u32,
+    pub total_quantity: String,
+    pub locked_quantity: Option<String>,
+    pub circulating_quantity: Option<String>,
 }
 
 impl ExplorerAssetDefinitionDto {
@@ -393,6 +396,9 @@ impl ExplorerAssetDefinitionDto {
             metadata: metadata_to_json(definition.metadata()),
             owned_by: definition.owned_by().to_string(),
             assets: aggregates.definition_instance_count(definition.id()),
+            total_quantity: definition.total_quantity().to_string(),
+            locked_quantity: None,
+            circulating_quantity: None,
         }
     }
 }
@@ -401,6 +407,87 @@ impl ExplorerAssetDefinitionDto {
 pub(crate) struct ExplorerAssetDefinitionsPage {
     pub pagination: ExplorerPaginationMeta,
     pub items: Vec<ExplorerAssetDefinitionDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerEconometricsVelocityWindowDto {
+    pub key: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub transfers: u64,
+    pub unique_senders: u64,
+    pub unique_receivers: u64,
+    pub amount: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerEconometricsIssuanceWindowDto {
+    pub key: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub mint_count: u64,
+    pub burn_count: u64,
+    pub minted: String,
+    pub burned: String,
+    pub net: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerEconometricsIssuanceSeriesPointDto {
+    pub bucket_start_ms: u64,
+    pub minted: String,
+    pub burned: String,
+    pub net: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerAssetDefinitionEconometricsDto {
+    pub definition_id: String,
+    pub computed_at_ms: u64,
+    pub velocity_windows: Vec<ExplorerEconometricsVelocityWindowDto>,
+    pub issuance_windows: Vec<ExplorerEconometricsIssuanceWindowDto>,
+    pub issuance_series: Vec<ExplorerEconometricsIssuanceSeriesPointDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerEconometricsLorenzPointDto {
+    pub population: f64,
+    pub share: f64,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerEconometricsDistributionSnapshotDto {
+    pub gini: f64,
+    pub hhi: f64,
+    pub theil: f64,
+    pub entropy: f64,
+    pub entropy_normalized: f64,
+    pub nakamoto_33: u64,
+    pub nakamoto_51: u64,
+    pub nakamoto_67: u64,
+    pub top1: f64,
+    pub top5: f64,
+    pub top10: f64,
+    pub median: Option<String>,
+    pub p90: Option<String>,
+    pub p99: Option<String>,
+    pub lorenz: Vec<ExplorerEconometricsLorenzPointDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerEconometricsTopHolderDto {
+    pub account_id: String,
+    pub balance: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerAssetDefinitionSnapshotDto {
+    pub definition_id: String,
+    pub computed_at_ms: u64,
+    pub holders_total: u64,
+    pub total_supply: String,
+    pub top_holders: Vec<ExplorerEconometricsTopHolderDto>,
+    pub distribution: ExplorerEconometricsDistributionSnapshotDto,
 }
 
 fn mintable_label(mintable: Mintable) -> String {
@@ -535,7 +622,7 @@ pub(crate) struct ExplorerTransactionDetailDto {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerTransactionRejectionDto {
-    pub scale: String,
+    pub encoded: String,
     pub json: Value,
 }
 
@@ -615,7 +702,7 @@ impl std::str::FromStr for ExplorerInstructionKind {
 
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerInstructionBoxDto {
-    pub scale: String,
+    pub encoded: String,
     pub json: Value,
 }
 
@@ -733,12 +820,12 @@ fn instruction_box_dto(
     kind: ExplorerInstructionKind,
 ) -> ExplorerInstructionBoxDto {
     ExplorerInstructionBoxDto {
-        scale: instruction_scale_hex(instruction),
+        encoded: instruction_encoded_hex(instruction),
         json: instruction_json_payload(instruction, kind),
     }
 }
 
-fn instruction_scale_hex(instruction: &InstructionBox) -> String {
+fn instruction_encoded_hex(instruction: &InstructionBox) -> String {
     let bytes = instruction.dyn_encode();
     format!("0x{}", hex::encode(bytes))
 }
@@ -969,7 +1056,7 @@ fn instruction_variant_value(variant: &str, value: Value) -> Value {
     Value::Object(map)
 }
 
-fn encode_scale_hex<T: Encode>(value: &T) -> String {
+fn encode_norito_hex_prefixed<T: Encode>(value: &T) -> String {
     let bytes = Encode::encode(value);
     format!("0x{}", hex::encode(bytes))
 }
@@ -1044,7 +1131,7 @@ pub(crate) fn transaction_detail_dto(
             .as_ref()
             .err()
             .map(|reason| ExplorerTransactionRejectionDto {
-                scale: encode_scale_hex(reason),
+                encoded: encode_norito_hex_prefixed(reason),
                 json: norito::json::to_value(reason).unwrap_or(Value::Null),
             }),
         metadata: metadata_to_json(tx.metadata()),
@@ -1341,6 +1428,7 @@ mod tests {
             iroha_data_model::asset::definition::AssetDefinition::numeric(def_id.clone())
                 .build(&ALICE_ID);
         definition.set_mintable(Mintable::Once);
+        definition.total_quantity = Numeric::from(100u32);
         definition.metadata_mut().insert(
             "ticker".parse().unwrap(),
             json::Value::String("ROSE".into()),
@@ -1350,6 +1438,9 @@ mod tests {
         let dto = ExplorerAssetDefinitionDto::from_definition(&definition, &aggregates);
         assert_eq!(dto.mintable, "Once");
         assert_eq!(dto.assets, 7);
+        assert_eq!(dto.total_quantity, "100");
+        assert!(dto.locked_quantity.is_none());
+        assert!(dto.circulating_quantity.is_none());
         assert_eq!(dto.owned_by, ALICE_ID.to_string());
     }
 
@@ -1491,6 +1582,16 @@ mod tests {
             Some("test")
         );
         assert!(dto.rejection_reason.is_some());
+
+        let serialized = json::to_value(dto.rejection_reason.as_ref().expect("rejection reason"))
+            .expect("rejection reason dto should serialize");
+        match serialized {
+            Value::Object(map) => {
+                assert!(map.contains_key("encoded"));
+                assert!(!map.contains_key("scale"));
+            }
+            _ => panic!("rejection reason should serialize into object"),
+        }
     }
 
     #[test]
@@ -1682,13 +1783,23 @@ mod tests {
     }
 
     #[test]
-    fn instruction_box_dto_wraps_payload_and_scale() {
+    fn instruction_box_dto_wraps_payload_and_encoded() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
             "payload".parse().expect("domain id"),
         ));
         let instruction: InstructionBox = register.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Register);
-        assert!(dto.scale.starts_with("0x"));
+        assert!(dto.encoded.starts_with("0x"));
+
+        let serialized = json::to_value(&dto).expect("instruction box dto should serialize");
+        match serialized {
+            Value::Object(map) => {
+                assert!(map.contains_key("encoded"));
+                assert!(!map.contains_key("scale"));
+            }
+            _ => panic!("instruction box dto should serialize into object"),
+        }
+
         match dto.json {
             Value::Object(map) => {
                 assert_eq!(

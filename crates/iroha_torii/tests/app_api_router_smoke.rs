@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use axum::http::{Request, StatusCode, Uri};
+use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
 // use iroha_config::base::WithOrigin; // unused in this smoke test
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
@@ -136,6 +136,38 @@ async fn app_api_router_smoke() {
         resp_sse.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
+    if resp_sse.status() == StatusCode::OK {
+        let ct = resp_sse
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/event-stream"));
+    }
+
+    // 2b) App API: GET /v1/explorer/blocks/stream — endpoint exists; allow OK or 429.
+    let resp_blocks_sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/explorer/blocks/stream"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        resp_blocks_sse.status(),
+        StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
+    ));
+    if resp_blocks_sse.status() == StatusCode::OK {
+        let ct = resp_blocks_sse
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/event-stream"));
+    }
 
     // 3) App API: GET /v1/webhooks — ensure route exists; allow OK or 429
     let resp_webhooks = app

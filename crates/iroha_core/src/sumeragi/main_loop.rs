@@ -10063,6 +10063,27 @@ impl Actor {
         if queue_len > 0 {
             return Some(now);
         }
+        if self.config.mode_flip.enabled {
+            // If the committed height already requires a consensus-mode flip but we have not
+            // applied it yet, keep ticking even when idle so the cutover cannot be missed.
+            let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+            let effective_mode = {
+                let world = self.state.world_view();
+                super::effective_consensus_mode_for_height_from_world(
+                    &world,
+                    committed_height,
+                    self.config.consensus_mode,
+                )
+            };
+            if effective_mode != self.consensus_mode {
+                return Some(now);
+            }
+            // Keep the tick loop running while a consensus-mode flip is pending so peers
+            // do not remain stuck in the pre-cutover mode when the queue is empty.
+            if self.pending_mode_flip.is_some() {
+                return Some(now);
+            }
+        }
         if self.pending.commit_pipeline_wakeup {
             return Some(now);
         }
@@ -10193,6 +10214,12 @@ impl Actor {
             let progress = self.poll_committed_blocks();
             (progress, step_start.elapsed())
         };
+        if committed_progress {
+            // `tick_mode_management` runs before commit polling. Re-evaluate after processing
+            // newly committed blocks so activation-height cutovers cannot be missed when the
+            // commit height advances mid-tick.
+            progress |= self.tick_mode_management();
+        }
         let deferred_qc_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_qcs");
             self.try_replay_deferred_qcs()
@@ -10278,7 +10305,9 @@ impl Actor {
                 commit_inflight_queue_depth,
             );
         }
-        let queue_ready = queue_len > 0 && !proposal_backpressure.active_pending;
+        let mode_flip_pending = self.config.mode_flip.enabled && self.pending_mode_flip.is_some();
+        let queue_ready =
+            queue_len > 0 && !proposal_backpressure.active_pending && !mode_flip_pending;
         if queue_ready && self.pacemaker_queue_nudge_due(now) {
             self.subsystems.propose.pacemaker.next_deadline = now;
         }
@@ -10316,7 +10345,8 @@ impl Actor {
         if log_initial_deferral || log_fire_deferral {
             self.on_pacemaker_backpressure_deferral(now, state);
         }
-        if should_attempt_proposal && self.subsystems.commit.inflight.is_none() {
+        if should_attempt_proposal && !mode_flip_pending && self.subsystems.commit.inflight.is_none()
+        {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_attempt");
             if Self::tick_budget_exhausted(tick_deadline, propose_start) {
