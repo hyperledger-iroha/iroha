@@ -337,13 +337,7 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         "epoch_length_blocks should reflect permissioned mode before activation, got {pre_status:?}"
     );
 
-    advance_to_height(
-        &network,
-        &client,
-        ACTIVATION_HEIGHT,
-        "cutover seed",
-    )
-    .await?;
+    advance_to_height(&network, &client, ACTIVATION_HEIGHT, "cutover seed").await?;
     // Ensure the runtime mode flip is visible across all peers before we
     // attempt to commit the first post-cutover block.
     wait_for_collectors_mode_all(&clients, "npos").await?;

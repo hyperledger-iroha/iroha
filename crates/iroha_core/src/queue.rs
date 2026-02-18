@@ -76,7 +76,7 @@ use crate::{
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
     prelude::*,
-    state::{LaneLifecycleError, State, WorldReadOnly},
+    state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly},
     sumeragi::status,
     telemetry::StateTelemetry,
     tx::CheckedTransaction,
@@ -1638,7 +1638,19 @@ impl Queue {
         state: &State,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        let routing_decision = self.router.read().route_with_state(&tx, state);
+        self.push_with_lane_internal_with_state_and_routing(tx, state, None, gossip_payload)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn push_with_lane_internal_with_state_and_routing(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_decision: Option<RoutingDecision>,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<RoutingDecision, Failure> {
+        let routing_decision =
+            routing_decision.unwrap_or_else(|| self.router.read().route_with_state(&tx, state));
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -2094,6 +2106,28 @@ impl Queue {
             .map(|_| ())
     }
 
+    /// Pushes an accepted transaction into the queue using a precomputed routing decision and a
+    /// cached gossip payload.
+    ///
+    /// # Errors
+    /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
+    /// full or violates lane limits).
+    pub(crate) fn push_with_gossip_payload_with_state_and_routing(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_decision: RoutingDecision,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<(), Failure> {
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_decision),
+            gossip_payload,
+        )
+        .map(|_| ())
+    }
+
     /// Push transaction into queue.
     ///
     /// # Errors
@@ -2462,6 +2496,7 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        let committed_transactions = state.transactions.view();
         loop {
             let hash = if let Some(hash) = self.tx_hashes.pop() {
                 hash
@@ -2485,7 +2520,9 @@ impl Queue {
                 continue;
             };
 
-            if let Err(e) = self.check_tx(tx_arc.as_ref(), state.has_committed_transaction(hash)) {
+            if let Err(e) =
+                self.check_tx(tx_arc.as_ref(), committed_transactions.get(&hash).is_some())
+            {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -5709,6 +5746,47 @@ pub mod tests {
             .expect("routing decision should exist");
         assert_eq!(routing.lane_id, expected_lane);
         assert_eq!(routing.dataspace_id, expected_dataspace);
+    }
+
+    #[test]
+    fn push_with_gossip_payload_with_state_and_routing_skips_router_lookup() {
+        struct PanicRouter;
+
+        impl LaneRouter for PanicRouter {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+                panic!("route() should not be called when routing is precomputed");
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test_with_router(config_factory(), &time_source, Arc::new(PanicRouter));
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let payload = Arc::new(vec![1_u8, 2, 3, 4]);
+        queue
+            .push_with_gossip_payload_with_state_and_routing(
+                tx,
+                state.as_ref(),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL),
+                Some(Arc::clone(&payload)),
+            )
+            .expect("push with precomputed routing should succeed");
+
+        let routing = queue
+            .routing_decisions
+            .get(&hash)
+            .expect("routing decision should exist");
+        assert_eq!(routing.lane_id, LaneId::SINGLE);
+        assert_eq!(routing.dataspace_id, DataSpaceId::GLOBAL);
+        let stored_payload = queue
+            .tx_gossip_payloads
+            .get(&hash)
+            .expect("cached gossip payload should exist");
+        assert_eq!(stored_payload.as_slice(), payload.as_slice());
     }
 
     fn config_factory() -> Config {

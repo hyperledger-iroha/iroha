@@ -31449,8 +31449,10 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     if definition_id == governance.voting_asset_id {
         use iroha_primitives::numeric::Numeric;
 
-        let escrow_asset_id =
-            AssetId::new(definition_id.clone(), governance.bond_escrow_account.clone());
+        let escrow_asset_id = AssetId::new(
+            definition_id.clone(),
+            governance.bond_escrow_account.clone(),
+        );
         let locked = match world.asset(&escrow_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => Numeric::zero(),
@@ -31614,49 +31616,50 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         }
     };
 
-    let (top1, top5, top10, nakamoto_33, nakamoto_51, nakamoto_67) = if values_f64.is_empty() || !has_total {
-        (0.0, 0.0, 0.0, 0, 0, 0)
-    } else {
-        let mut desc = values_f64.clone();
-        desc.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+    let (top1, top5, top10, nakamoto_33, nakamoto_51, nakamoto_67) =
+        if values_f64.is_empty() || !has_total {
+            (0.0, 0.0, 0.0, 0, 0, 0)
+        } else {
+            let mut desc = values_f64.clone();
+            desc.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
 
-        let sum_top = |k: usize| -> f64 {
-            let sum = desc.iter().take(k).sum::<f64>();
-            if sum.is_finite() { sum } else { 0.0 }
-        };
+            let sum_top = |k: usize| -> f64 {
+                let sum = desc.iter().take(k).sum::<f64>();
+                if sum.is_finite() { sum } else { 0.0 }
+            };
 
-        let nakamoto = |threshold: f64| -> u64 {
-            if desc.is_empty() {
-                return 0;
-            }
-            if !threshold.is_finite() {
-                return 0;
-            }
-            let target = threshold.clamp(0.0, 1.0);
-            if target <= 0.0 {
-                return 0;
-            }
-
-            let mut acc = 0.0;
-            for (idx, value) in desc.iter().enumerate() {
-                acc += *value;
-                let share = acc / total_f64;
-                if share.is_finite() && share >= target {
-                    return (idx + 1) as u64;
+            let nakamoto = |threshold: f64| -> u64 {
+                if desc.is_empty() {
+                    return 0;
                 }
-            }
-            desc.len().try_into().unwrap_or(u64::MAX)
-        };
+                if !threshold.is_finite() {
+                    return 0;
+                }
+                let target = threshold.clamp(0.0, 1.0);
+                if target <= 0.0 {
+                    return 0;
+                }
 
-        (
-            (sum_top(1) / total_f64).clamp(0.0, 1.0),
-            (sum_top(5) / total_f64).clamp(0.0, 1.0),
-            (sum_top(10) / total_f64).clamp(0.0, 1.0),
-            nakamoto(0.33),
-            nakamoto(0.51),
-            nakamoto(0.67),
-        )
-    };
+                let mut acc = 0.0;
+                for (idx, value) in desc.iter().enumerate() {
+                    acc += *value;
+                    let share = acc / total_f64;
+                    if share.is_finite() && share >= target {
+                        return (idx + 1) as u64;
+                    }
+                }
+                desc.len().try_into().unwrap_or(u64::MAX)
+            };
+
+            (
+                (sum_top(1) / total_f64).clamp(0.0, 1.0),
+                (sum_top(5) / total_f64).clamp(0.0, 1.0),
+                (sum_top(10) / total_f64).clamp(0.0, 1.0),
+                nakamoto(0.33),
+                nakamoto(0.51),
+                nakamoto(0.67),
+            )
+        };
 
     // Quantiles (exact holder balances; p90/p99 use "nearest-rank" without interpolation).
     let mut values_numeric: Vec<Numeric> = holders.iter().map(|(_, v)| v.clone()).collect();
@@ -31690,7 +31693,9 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         }
         let clamped = q.clamp(0.0, 1.0);
         let rank = (clamped * (values_numeric.len() as f64)).ceil() as usize;
-        let idx = rank.saturating_sub(1).min(values_numeric.len().saturating_sub(1));
+        let idx = rank
+            .saturating_sub(1)
+            .min(values_numeric.len().saturating_sub(1));
         values_numeric.get(idx).map(ToString::to_string)
     };
 

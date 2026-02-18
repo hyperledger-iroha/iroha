@@ -119,14 +119,14 @@ impl Actor {
         &self,
         key: super::rbc_store::SessionKey,
         commit_topology: &super::network_topology::Topology,
-        pending_age: Duration,
+        stall_age: Duration,
         availability_timeout: Duration,
     ) -> bool {
         if !self.runtime_da_enabled() {
             return false;
         }
         // After the availability timeout, allow reschedules even if RBC is still incomplete.
-        if availability_timeout != Duration::ZERO && pending_age >= availability_timeout {
+        if availability_timeout != Duration::ZERO && stall_age >= availability_timeout {
             return false;
         }
         if self.block_payload_available_locally(key.0) {
@@ -364,6 +364,11 @@ impl Actor {
                 } else {
                     pending_age
                 };
+            let progress_stall_age = if has_votes || has_qc {
+                pending.progress_age(now)
+            } else {
+                pending_age
+            };
             if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
                 let rbc_key = (*hash, pending.height, pending.view);
                 if queue_depths.vote_rx > 0 {
@@ -395,21 +400,41 @@ impl Actor {
                                 >= self.rbc_deliver_quorum(&commit_topology);
                             missing_chunks || !ready_quorum
                         });
-                if rbc_session_incomplete && pending_age < availability_timeout {
+                if rbc_session_incomplete && progress_stall_age < availability_timeout {
                     debug!(
                         height = pending.height,
                         view = pending.view,
                         block = %hash,
                         pending_age_ms = pending_age.as_millis(),
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
                         quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                         "deferring quorum reschedule while RBC session is incomplete"
+                    );
+                    continue;
+                }
+                let near_commit_quorum = min_votes_for_commit > 0
+                    && vote_count.saturating_add(1) >= min_votes_for_commit;
+                if near_commit_quorum
+                    && queue_depths.rbc_chunk_rx > 0
+                    && progress_stall_age < availability_timeout
+                {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        votes = vote_count,
+                        min_votes = min_votes_for_commit,
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
+                        availability_timeout_ms = availability_timeout.as_millis(),
+                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                        "deferring quorum reschedule: near quorum while RBC chunks are still arriving"
                     );
                     continue;
                 }
                 if self.rbc_availability_unresolved_for_reschedule(
                     rbc_key,
                     &commit_topology,
-                    pending_age,
+                    progress_stall_age,
                     availability_timeout,
                 ) {
                     debug!(
@@ -417,6 +442,7 @@ impl Actor {
                         view = pending.view,
                         block = %hash,
                         pending_age_ms = pending_age.as_millis(),
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
                         quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                         "deferring quorum reschedule while RBC availability is unresolved"
                     );
@@ -425,7 +451,7 @@ impl Actor {
                 let missing_local_data = da_enabled && !payload_available;
                 if (missing_local_data
                     || matches!(pending.last_gate, Some(GateReason::MissingLocalData)))
-                    && pending_age < availability_timeout
+                    && progress_stall_age < availability_timeout
                 {
                     missing_data_backoff_skipped = missing_data_backoff_skipped.saturating_add(1);
                     continue;

@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{GossipBatchEntry, Queue, RoutingDecision},
-    state::State,
+    state::{State, TransactionsReadOnly},
     tx::AcceptedTransaction,
 };
 
@@ -1164,18 +1164,26 @@ impl TransactionGossiper {
         )
     }
 
-    fn is_transaction_known_locally(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
+    fn is_transaction_known_locally(
+        &self,
+        tx_hash: HashOf<SignedTransaction>,
+        committed_transactions: &impl TransactionsReadOnly,
+    ) -> bool {
         if self.queue.contains_transaction_hash(tx_hash) {
             return true;
         }
-        self.state.has_committed_transaction(tx_hash)
+        committed_transactions.get(&tx_hash).is_some()
     }
 
-    fn is_transaction_known_locally_cached(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
+    fn is_transaction_known_locally_cached(
+        &self,
+        tx_hash: HashOf<SignedTransaction>,
+        committed_transactions: &impl TransactionsReadOnly,
+    ) -> bool {
         if GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow().contains(tx_hash)) {
             return true;
         }
-        if self.is_transaction_known_locally(tx_hash) {
+        if self.is_transaction_known_locally(tx_hash, committed_transactions) {
             GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow_mut().remember(tx_hash));
             return true;
         }
@@ -1253,6 +1261,7 @@ impl TransactionGossiper {
         let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
         let state = self.state.as_ref();
+        let committed_transactions = state.transactions.view();
 
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1276,7 +1285,7 @@ impl TransactionGossiper {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            if self.is_transaction_known_locally_cached(tx_hash) {
+            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
@@ -1404,10 +1413,12 @@ impl TransactionGossiper {
                         );
                         continue;
                     }
-                    match self
-                        .queue
-                        .push_with_gossip_payload_with_state(tx, state, payload)
-                    {
+                    match self.queue.push_with_gossip_payload_with_state_and_routing(
+                        tx,
+                        state,
+                        local_route,
+                        payload,
+                    ) {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }
@@ -1508,6 +1519,7 @@ impl TransactionGossiper {
         let crypto_cfg = self.state.crypto();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
         let state = self.state.as_ref();
+        let committed_transactions = state.transactions.view();
 
         for (idx, tx) in txs.iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -1531,7 +1543,7 @@ impl TransactionGossiper {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            if self.is_transaction_known_locally_cached(tx_hash) {
+            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
@@ -1660,10 +1672,12 @@ impl TransactionGossiper {
                         );
                         continue;
                     }
-                    match self
-                        .queue
-                        .push_with_gossip_payload_with_state(tx, state, payload)
-                    {
+                    match self.queue.push_with_gossip_payload_with_state_and_routing(
+                        tx,
+                        state,
+                        local_route,
+                        payload,
+                    ) {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }

@@ -39,6 +39,9 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.status`
   - `iroha.parameters.get`
   - `iroha.node.capabilities`
+  - `iroha.time.now`
+  - `iroha.time.status`
+  - `iroha.api.versions`
   - `iroha.contracts.code.register`
   - `iroha.contracts.code.get`
   - `iroha.contracts.deploy`
@@ -52,6 +55,8 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.accounts.qr`
   - `iroha.accounts.query`
   - `iroha.accounts.resolve`
+  - `iroha.aliases.resolve`
+  - `iroha.aliases.resolve_index`
   - `iroha.accounts.onboard`
   - `iroha.accounts.transactions`
   - `iroha.accounts.transactions.query`
@@ -83,6 +88,37 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.nfts.list`
   - `iroha.nfts.get`
   - `iroha.nfts.query`
+  - `iroha.offline.transfers.list`
+  - `iroha.offline.transfers.get`
+  - `iroha.offline.transfers.query`
+  - `iroha.offline.settlements.list`
+  - `iroha.offline.settlements.get`
+  - `iroha.offline.settlements.query`
+  - `iroha.offline.settlements.submit`
+  - `iroha.offline.certificates.list`
+  - `iroha.offline.certificates.get`
+  - `iroha.offline.certificates.query`
+  - `iroha.offline.certificates.issue`
+  - `iroha.offline.certificates.renew`
+  - `iroha.offline.certificates.renew_issue`
+  - `iroha.offline.certificates.revoke`
+  - `iroha.offline.allowances.get`
+  - `iroha.offline.allowances.issue`
+  - `iroha.offline.allowances.renew`
+  - `iroha.offline.allowances.list`
+  - `iroha.offline.allowances.query`
+  - `iroha.offline.receipts.list`
+  - `iroha.offline.receipts.query`
+  - `iroha.offline.revocations.list`
+  - `iroha.offline.revocations.query`
+  - `iroha.offline.transfers.proof`
+  - `iroha.offline.spend_receipts.submit`
+  - `iroha.offline.state`
+  - `iroha.offline.bundle.proof_status`
+  - `iroha.offline.rejections.list`
+  - `iroha.offline.summaries.list`
+  - `iroha.offline.summaries.query`
+  - `iroha.queries.submit`
   - `iroha.transactions.list`
   - `iroha.transactions.get`
   - `iroha.instructions.list`
@@ -505,7 +541,8 @@ Create a Connect session:
 ```
 
 `connect.session.create` also accepts the raw request body as `arguments.body`;
-if both are provided, `body` takes precedence.
+if both are provided, `body` takes precedence for fields already present there.
+When SID is omitted, MCP auto-generates a random 32-byte base64url session id.
 
 Create session + ticket metadata in one call:
 
@@ -525,8 +562,12 @@ Create session + ticket metadata in one call:
 }
 ```
 
+SID is optional here as well; when omitted, MCP auto-generates it before calling
+`/v1/connect/session`.
+
 `connect.session.create_and_ticket` returns both `create` (HTTP dispatch output from
-`connect.session.create`) and `ticket` (same shape as `connect.ws.ticket`).
+`connect.session.create`) and `ticket` (same shape as `connect.ws.ticket`) when session creation
+succeeds (`2xx`). For non-`2xx` create responses, the tool returns that create response unchanged.
 
 Fetch Connect status:
 
@@ -601,6 +642,39 @@ Health/status/parameter aliases for preflight checks:
   "method": "tools/call",
   "params": {
     "name": "iroha.node.capabilities"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "node-time-now-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.time.now"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "node-time-status-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.time.status"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "node-api-versions-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.api.versions"
   }
 }
 ```
@@ -820,6 +894,211 @@ Transaction explorer detail alias (flat `hash` shortcut):
 }
 ```
 
+Offline transfer bundle list alias (flat query fields):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-transfer-list-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.transfers.list",
+    "arguments": {
+      "limit": 20
+    }
+  }
+}
+```
+
+Offline transfer bundle detail alias (flat `bundle_id` shortcut):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-transfer-get-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.transfers.get",
+    "arguments": {
+      "bundle_id": "<bundle-id-hex>"
+    }
+  }
+}
+```
+
+Offline settlement submit alias (flat body shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-settlement-submit-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.settlements.submit",
+    "arguments": {
+      "authority": "<account-id>",
+      "private_key": "<multihash-private-key>",
+      "transfer": {
+        "bundle_id_hex": "<bundle-id-hex>",
+        "amount": "1",
+        "asset_definition_id": "<asset-definition-id>"
+      }
+    }
+  }
+}
+```
+
+Offline allowance list alias (flat query fields):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-allowance-list-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.allowances.list",
+    "arguments": {
+      "limit": 20
+    }
+  }
+}
+```
+
+Offline certificate renew-issue alias (flat certificate-id and body shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-certificate-renew-issue-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.certificates.renew_issue",
+    "arguments": {
+      "certificate_id": "<certificate-id-hex>",
+      "authority": "<account-id>"
+    }
+  }
+}
+```
+
+Offline allowance detail alias (flat `certificate_id` shortcut):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-allowance-get-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.allowances.get",
+    "arguments": {
+      "certificate_id": "<certificate-id-hex>"
+    }
+  }
+}
+```
+
+Offline allowance issue alias (flat body shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-allowance-issue-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.allowances.issue",
+    "arguments": {
+      "authority": "<account-id>",
+      "certificate": {
+        "id_hex": "<certificate-id-hex>"
+      }
+    }
+  }
+}
+```
+
+Offline allowance renew alias (flat certificate-id and body shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-allowance-renew-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.allowances.renew",
+    "arguments": {
+      "certificate_id": "<certificate-id-hex>",
+      "authority": "<account-id>",
+      "certificate": {
+        "id_hex": "<certificate-id-hex>"
+      }
+    }
+  }
+}
+```
+
+Offline receipt query alias (flat QueryEnvelope shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-receipt-query-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.receipts.query",
+    "arguments": {
+      "query": "FindAll",
+      "limit": 20
+    }
+  }
+}
+```
+
+Offline revocations query alias (flat QueryEnvelope shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-revocations-query-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.revocations.query",
+    "arguments": {
+      "query": "FindAll",
+      "limit": 20
+    }
+  }
+}
+```
+
+Offline bundle proof-status alias (flat `bundle_id` shortcut):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-bundle-proof-status-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.bundle.proof_status",
+    "arguments": {
+      "bundle_id": "<bundle-id-hex>"
+    }
+  }
+}
+```
+
+Offline state alias:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "offline-state-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.offline.state"
+  }
+}
+```
+
 Instruction explorer list alias (flat query fields):
 
 ```json
@@ -875,6 +1154,27 @@ Alias shortcuts accepted by `iroha.transactions.submit`:
 
 - `signed_tx_base64` / `tx_base64` (same as `body_base64`)
 - `signed_tx_hex` / `tx_hex` / `body_hex` (hex payload converted to bytes)
+
+Signed query submit alias (`/query`, binary Norito payload):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "query-submit-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.queries.submit",
+    "arguments": {
+      "signed_query_base64": "<base64-signed-query-bytes>"
+    }
+  }
+}
+```
+
+Alias shortcuts accepted by `iroha.queries.submit`:
+
+- `signed_query_base64` / `query_base64` (same as `body_base64`)
+- `signed_query_hex` / `query_hex` / `body_hex` (hex payload converted to bytes)
 
 Pipeline status alias shortcut:
 
@@ -951,6 +1251,22 @@ Account resolve alias shortcut:
     "name": "iroha.accounts.resolve",
     "arguments": {
       "literal": "<account-literal>"
+    }
+  }
+}
+```
+
+Alias runtime resolve shortcut:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "alias-resolve-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.aliases.resolve",
+    "arguments": {
+      "alias": "<alias-name>"
     }
   }
 }

@@ -14,6 +14,7 @@ use axum::{
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
 use norito::json::{self, Map, Value};
+use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use tower::ServiceExt as _;
 
 use crate::{SharedAppState, limits, openapi};
@@ -146,6 +147,11 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_status_tool());
     tools.push(iroha_parameters_get_tool());
     tools.push(iroha_node_capabilities_tool());
+    tools.push(iroha_time_now_tool());
+    tools.push(iroha_time_status_tool());
+    tools.push(iroha_api_versions_tool());
+    tools.push(iroha_aliases_resolve_tool());
+    tools.push(iroha_aliases_resolve_index_tool());
     tools.push(iroha_contracts_code_register_tool());
     tools.push(iroha_contracts_code_get_tool());
     tools.push(iroha_contracts_deploy_tool());
@@ -190,6 +196,37 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_nfts_list_tool());
     tools.push(iroha_nfts_get_tool());
     tools.push(iroha_nfts_query_tool());
+    tools.push(iroha_offline_transfers_list_tool());
+    tools.push(iroha_offline_transfers_get_tool());
+    tools.push(iroha_offline_transfers_query_tool());
+    tools.push(iroha_offline_settlements_list_tool());
+    tools.push(iroha_offline_settlements_get_tool());
+    tools.push(iroha_offline_settlements_query_tool());
+    tools.push(iroha_offline_settlements_submit_tool());
+    tools.push(iroha_offline_certificates_list_tool());
+    tools.push(iroha_offline_certificates_get_tool());
+    tools.push(iroha_offline_certificates_query_tool());
+    tools.push(iroha_offline_certificates_issue_tool());
+    tools.push(iroha_offline_certificates_renew_tool());
+    tools.push(iroha_offline_certificates_renew_issue_tool());
+    tools.push(iroha_offline_certificates_revoke_tool());
+    tools.push(iroha_offline_allowances_get_tool());
+    tools.push(iroha_offline_allowances_issue_tool());
+    tools.push(iroha_offline_allowances_renew_tool());
+    tools.push(iroha_offline_allowances_list_tool());
+    tools.push(iroha_offline_allowances_query_tool());
+    tools.push(iroha_offline_receipts_list_tool());
+    tools.push(iroha_offline_receipts_query_tool());
+    tools.push(iroha_offline_revocations_list_tool());
+    tools.push(iroha_offline_revocations_query_tool());
+    tools.push(iroha_offline_transfers_proof_tool());
+    tools.push(iroha_offline_spend_receipts_submit_tool());
+    tools.push(iroha_offline_state_tool());
+    tools.push(iroha_offline_bundle_proof_status_tool());
+    tools.push(iroha_offline_rejections_list_tool());
+    tools.push(iroha_offline_summaries_list_tool());
+    tools.push(iroha_offline_summaries_query_tool());
+    tools.push(iroha_queries_submit_tool());
     tools.push(iroha_transactions_list_tool());
     tools.push(iroha_transactions_get_tool());
     tools.push(iroha_instructions_list_tool());
@@ -392,6 +429,36 @@ async fn handle_tools_call(
         }
         "iroha.node.capabilities" => {
             match dispatch_iroha_node_capabilities(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.time.now" => {
+            match dispatch_iroha_time_now(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.time.status" => {
+            match dispatch_iroha_time_status(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.api.versions" => {
+            match dispatch_iroha_api_versions(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.aliases.resolve" => {
+            match dispatch_iroha_aliases_resolve(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.aliases.resolve_index" => {
+            match dispatch_iroha_aliases_resolve_index(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -661,6 +728,207 @@ async fn handle_tools_call(
         }
         "iroha.nfts.query" => {
             match dispatch_iroha_nfts_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.transfers.list" => {
+            match dispatch_iroha_offline_transfers_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.transfers.get" => {
+            match dispatch_iroha_offline_transfers_get(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.transfers.query" => {
+            match dispatch_iroha_offline_transfers_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.settlements.list" => {
+            match dispatch_iroha_offline_settlements_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.settlements.get" => {
+            match dispatch_iroha_offline_settlements_get(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.settlements.query" => {
+            match dispatch_iroha_offline_settlements_query(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.settlements.submit" => {
+            match dispatch_iroha_offline_settlements_submit(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.certificates.list" => {
+            match dispatch_iroha_offline_certificates_list(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.certificates.get" => {
+            match dispatch_iroha_offline_certificates_get(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.certificates.query" => {
+            match dispatch_iroha_offline_certificates_query(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.certificates.issue" => {
+            match dispatch_iroha_offline_certificates_issue(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.certificates.renew" => {
+            match dispatch_iroha_offline_certificates_renew(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.certificates.renew_issue" => {
+            match dispatch_iroha_offline_certificates_renew_issue(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.certificates.revoke" => {
+            match dispatch_iroha_offline_certificates_revoke(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.allowances.get" => {
+            match dispatch_iroha_offline_allowances_get(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.allowances.issue" => {
+            match dispatch_iroha_offline_allowances_issue(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.allowances.renew" => {
+            match dispatch_iroha_offline_allowances_renew(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.allowances.list" => {
+            match dispatch_iroha_offline_allowances_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.allowances.query" => {
+            match dispatch_iroha_offline_allowances_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.receipts.list" => {
+            match dispatch_iroha_offline_receipts_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.receipts.query" => {
+            match dispatch_iroha_offline_receipts_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.revocations.list" => {
+            match dispatch_iroha_offline_revocations_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.revocations.query" => {
+            match dispatch_iroha_offline_revocations_query(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.transfers.proof" => {
+            match dispatch_iroha_offline_transfers_proof(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.spend_receipts.submit" => {
+            match dispatch_iroha_offline_spend_receipts_submit(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.state" => {
+            match dispatch_iroha_offline_state(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.bundle.proof_status" => {
+            match dispatch_iroha_offline_bundle_proof_status(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.rejections.list" => {
+            match dispatch_iroha_offline_rejections_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.summaries.list" => {
+            match dispatch_iroha_offline_summaries_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.summaries.query" => {
+            match dispatch_iroha_offline_summaries_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.queries.submit" => {
+            match dispatch_iroha_queries_submit(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1019,20 +1287,7 @@ async fn dispatch_connect_session_create(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = arguments.get("body").cloned().unwrap_or_else(|| {
-        let mut payload = Map::new();
-        if let Some(sid) = arguments.get("sid").and_then(Value::as_str) {
-            payload.insert("sid".into(), Value::String(sid.to_owned()));
-        }
-        let node = arguments
-            .get("node")
-            .or_else(|| arguments.get("node_url"))
-            .and_then(Value::as_str);
-        if let Some(node) = node {
-            payload.insert("node".into(), Value::String(node.to_owned()));
-        }
-        Value::Object(payload)
-    });
+    let body = build_connect_session_create_body(arguments)?;
     let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
     dispatch_route(
         app,
@@ -1048,6 +1303,44 @@ async fn dispatch_connect_session_create(
             .map(str::to_owned),
     )
     .await
+}
+
+fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
+    let node = arguments
+        .get("node")
+        .or_else(|| arguments.get("node_url"))
+        .and_then(Value::as_str);
+
+    let mut body = arguments
+        .get("body")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+
+    if let Value::Object(payload) = &mut body {
+        if !payload.contains_key("sid") {
+            let sid = arguments
+                .get("sid")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(generate_connect_session_sid_b64url);
+            payload.insert("sid".into(), Value::String(sid));
+        }
+        if !payload.contains_key("node") {
+            if let Some(node) = node {
+                payload.insert("node".into(), Value::String(node.to_owned()));
+            }
+        }
+    }
+
+    Ok(body)
+}
+
+fn generate_connect_session_sid_b64url() -> String {
+    let mut sid = [0_u8; 32];
+    let mut rng = OsRng;
+    rng.try_fill_bytes(&mut sid)
+        .expect("operating-system RNG should be available");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid)
 }
 
 async fn dispatch_connect_session_create_and_ticket(
@@ -1247,6 +1540,115 @@ async fn dispatch_iroha_node_capabilities(
         arguments.get("headers"),
         Vec::new(),
         None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_time_now(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/time/now",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_time_status(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/time/status",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_api_versions(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/api/versions",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_aliases_resolve(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/aliases/resolve",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_aliases_resolve_index(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/aliases/resolve_index",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -2270,6 +2672,831 @@ async fn dispatch_iroha_nfts_query(
     .await
 }
 
+async fn dispatch_iroha_offline_transfers_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/transfers".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_transfers_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let bundle_id_hex = extract_bundle_id_hex_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("bundle_id_hex".into(), Value::String(bundle_id_hex));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/offline/transfers/{bundle_id_hex}", Some(&path_value))?;
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept", "path"])?;
+    let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_transfers_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/transfers/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_settlements_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/settlements".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_settlements_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let bundle_id_hex = extract_bundle_id_hex_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("bundle_id_hex".into(), Value::String(bundle_id_hex));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/offline/settlements/{bundle_id_hex}", Some(&path_value))?;
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept", "path"])?;
+    let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_settlements_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/settlements/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_settlements_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/settlements",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_certificates_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/certificates".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_certificates_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let certificate_id_hex = extract_certificate_id_hex_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert(
+        "certificate_id_hex".into(),
+        Value::String(certificate_id_hex),
+    );
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        "/v1/offline/certificates/{certificate_id_hex}",
+        Some(&path_value),
+    )?;
+    let query = collect_query_arguments(
+        arguments,
+        &[
+            "query",
+            "headers",
+            "accept",
+            "path",
+            "certificate_id_hex",
+            "certificate_id",
+            "id",
+        ],
+    )?;
+    let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_certificates_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/certificates/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_certificates_issue(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/certificates/issue",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_certificates_renew(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let certificate_id_hex = extract_certificate_id_hex_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert(
+        "certificate_id_hex".into(),
+        Value::String(certificate_id_hex),
+    );
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        "/v1/offline/certificates/{certificate_id_hex}/renew",
+        Some(&path_value),
+    )?;
+    let body = build_object_body_or_flat_shortcuts(
+        arguments,
+        &[
+            "body",
+            "headers",
+            "accept",
+            "path",
+            "certificate_id_hex",
+            "certificate_id",
+            "id",
+        ],
+    )?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_certificates_renew_issue(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let certificate_id_hex = extract_certificate_id_hex_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert(
+        "certificate_id_hex".into(),
+        Value::String(certificate_id_hex),
+    );
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        "/v1/offline/certificates/{certificate_id_hex}/renew/issue",
+        Some(&path_value),
+    )?;
+    let body = build_object_body_or_flat_shortcuts(
+        arguments,
+        &[
+            "body",
+            "headers",
+            "accept",
+            "path",
+            "certificate_id_hex",
+            "certificate_id",
+            "id",
+        ],
+    )?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_certificates_revoke(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/certificates/revoke",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_allowances_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let certificate_id_hex = extract_certificate_id_hex_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert(
+        "certificate_id_hex".into(),
+        Value::String(certificate_id_hex),
+    );
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        "/v1/offline/allowances/{certificate_id_hex}",
+        Some(&path_value),
+    )?;
+    let query = collect_query_arguments(
+        arguments,
+        &[
+            "query",
+            "headers",
+            "accept",
+            "path",
+            "certificate_id_hex",
+            "certificate_id",
+            "id",
+        ],
+    )?;
+    let route = append_query(route, query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_allowances_issue(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/allowances",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_allowances_renew(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let certificate_id_hex = extract_certificate_id_hex_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert(
+        "certificate_id_hex".into(),
+        Value::String(certificate_id_hex),
+    );
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        "/v1/offline/allowances/{certificate_id_hex}/renew",
+        Some(&path_value),
+    )?;
+    let body = build_object_body_or_flat_shortcuts(
+        arguments,
+        &[
+            "body",
+            "headers",
+            "accept",
+            "path",
+            "certificate_id_hex",
+            "certificate_id",
+            "id",
+        ],
+    )?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_allowances_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/allowances".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_allowances_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/allowances/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_receipts_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/receipts".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_receipts_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/receipts/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_revocations_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/revocations".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_revocations_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/revocations/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_transfers_proof(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/transfers/proof",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_spend_receipts_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/spend-receipts",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_state(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/offline/state",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_bundle_proof_status(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let mut query = collect_query_map(
+        arguments,
+        &[
+            "query",
+            "headers",
+            "accept",
+            "path",
+            "bundle_id_hex",
+            "bundle_id",
+        ],
+    )?;
+    if !query.contains_key("bundle_id_hex") {
+        let bundle_id_hex = extract_bundle_id_hex_argument(arguments)?;
+        query.insert("bundle_id_hex".to_owned(), Value::String(bundle_id_hex));
+    }
+
+    let query_value = Value::Object(query);
+    let route = append_query(
+        "/v1/offline/bundle/proof_status".to_owned(),
+        Some(&query_value),
+    )?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_rejections_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/offline/rejections",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_summaries_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/summaries".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_summaries_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/offline/summaries/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_transactions_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -2460,6 +3687,55 @@ async fn dispatch_iroha_transactions_submit(
         inbound_headers,
         Method::POST,
         "/transaction",
+        adapted.get("headers"),
+        body,
+        content_type,
+        adapted
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_queries_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let mut adapted = arguments.clone();
+    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
+        if let Some(encoded) = arguments
+            .get("signed_query_base64")
+            .or_else(|| arguments.get("query_base64"))
+            .and_then(Value::as_str)
+        {
+            adapted.insert("body_base64".into(), Value::String(encoded.to_owned()));
+        } else if let Some(encoded_hex) = arguments
+            .get("body_hex")
+            .or_else(|| arguments.get("signed_query_hex"))
+            .or_else(|| arguments.get("query_hex"))
+            .and_then(Value::as_str)
+        {
+            let bytes = hex::decode(encoded_hex)
+                .map_err(|err| format!("query hex payload must be valid hex: {err}"))?;
+            adapted.insert(
+                "body_base64".into(),
+                Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            );
+        }
+    }
+
+    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
+        return Err("one of `body_base64`, `signed_query_base64`, `query_base64`, `body_hex`, `signed_query_hex`, `query_hex`, or `body` is required".to_owned());
+    }
+
+    let (body, content_type) = build_request_body(&adapted)?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/query",
         adapted.get("headers"),
         body,
         content_type,
@@ -2955,6 +4231,45 @@ fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| "`nft_id` is required (provide `nft_id`, `id`, or `path.nft_id`)".to_owned())
+}
+
+fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(bundle_id_hex) = path.get("bundle_id_hex").and_then(Value::as_str) {
+            return Ok(bundle_id_hex.to_owned());
+        }
+    }
+    arguments
+        .get("bundle_id_hex")
+        .or_else(|| arguments.get("bundle_id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            "`bundle_id_hex` is required (provide `bundle_id_hex`, `bundle_id`, or `path.bundle_id_hex`)".to_owned()
+        })
+}
+
+fn extract_certificate_id_hex_argument(arguments: &Map) -> Result<String, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(certificate_id_hex) = path.get("certificate_id_hex").and_then(Value::as_str) {
+            return Ok(certificate_id_hex.to_owned());
+        }
+    }
+    arguments
+        .get("certificate_id_hex")
+        .or_else(|| arguments.get("certificate_id"))
+        .or_else(|| arguments.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            "`certificate_id_hex` is required (provide `certificate_id_hex`, `certificate_id`, `id`, or `path.certificate_id_hex`)".to_owned()
+        })
 }
 
 fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> {
@@ -3588,7 +4903,7 @@ fn connect_session_create_tool() -> ToolSpec {
             "properties": {
                 "sid": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.sid` (base64url session id)."
+                    "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
                 },
                 "node": {
                     "type": "string",
@@ -3601,7 +4916,7 @@ fn connect_session_create_tool() -> ToolSpec {
                 "body": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` shortcuts."
+                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` values already present in `body`."
                 },
                 "headers": {
                     "type": "object",
@@ -3631,7 +4946,7 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
                 },
                 "sid": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.sid` (base64url session id)."
+                    "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
                 },
                 "node": {
                     "type": "string",
@@ -3648,7 +4963,7 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
                 "body": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` shortcuts."
+                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` values already present in `body`."
                 },
                 "headers": {
                     "type": "object",
@@ -3807,6 +5122,125 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_time_now_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.time.now".to_owned(),
+        description: "Get node wall-clock snapshot (`/v1/time/now`).".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/time/now".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_time_status_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.time.status".to_owned(),
+        description: "Get time synchronization status (`/v1/time/status`).".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/time/status".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_api_versions_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.api.versions".to_owned(),
+        description: "List supported Torii API versions (`/v1/api/versions`).".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/api/versions".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_aliases_resolve_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.aliases.resolve".to_owned(),
+        description: "Resolve an alias to its account binding (`/v1/aliases/resolve`).".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/aliases/resolve".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw alias resolve payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "alias": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.alias`."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_aliases_resolve_index_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.aliases.resolve_index".to_owned(),
+        description: "Resolve an alias index to its account binding (`/v1/aliases/resolve_index`)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/aliases/resolve_index".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw alias-index resolve payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "index": {
+                    "type": "integer",
+                    "description": "Convenience shortcut for `body.index`."
+                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -5150,6 +6584,1100 @@ fn iroha_nfts_query_tool() -> ToolSpec {
     }
 }
 
+fn iroha_offline_transfers_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.transfers.list".to_owned(),
+        description: "List offline transfer bundles with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/transfers".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "kind": { "type": "string" },
+                "status": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_transfers_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.transfers.get".to_owned(),
+        description: "Fetch one offline transfer bundle (`bundle_id_hex` shortcut supported)."
+            .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/transfers/{bundle_id_hex}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "bundle_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.bundle_id_hex`."
+                },
+                "bundle_id": {
+                    "type": "string",
+                    "description": "Alias for `bundle_id_hex`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["bundle_id_hex"],
+                    "properties": {
+                        "bundle_id_hex": { "type": "string" }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Optional query parameters (for example `address_format`)."
+                },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_transfers_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.transfers.query".to_owned(),
+        description: "Query offline transfer bundles via QueryEnvelope (flat shortcuts supported)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/transfers/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_settlements_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.settlements.list".to_owned(),
+        description: "List offline settlement bundles with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/settlements".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "kind": { "type": "string" },
+                "status": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_settlements_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.settlements.get".to_owned(),
+        description: "Fetch one offline settlement bundle (`bundle_id_hex` shortcut supported)."
+            .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/settlements/{bundle_id_hex}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "bundle_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.bundle_id_hex`."
+                },
+                "bundle_id": {
+                    "type": "string",
+                    "description": "Alias for `bundle_id_hex`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["bundle_id_hex"],
+                    "properties": {
+                        "bundle_id_hex": { "type": "string" }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Optional query parameters (for example `address_format`)."
+                },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_settlements_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.settlements.query".to_owned(),
+        description:
+            "Query offline settlement bundles via QueryEnvelope (flat shortcuts supported)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/settlements/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_settlements_submit_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.settlements.submit".to_owned(),
+        description: "Submit an offline settlement transaction payload (flat top-level fields are forwarded as body when `body` is omitted).".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/settlements".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw settlement submit payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "authority": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.authority`."
+                },
+                "private_key": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.private_key`."
+                },
+                "transfer": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Convenience shortcut for `body.transfer`."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_certificates_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.certificates.list".to_owned(),
+        description: "List offline certificates with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/certificates".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_certificates_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.certificates.get".to_owned(),
+        description:
+            "Fetch an offline certificate by id (`certificate_id_hex` shortcut supported)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/certificates/{certificate_id_hex}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "certificate_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.certificate_id_hex`."
+                },
+                "certificate_id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["certificate_id_hex"],
+                    "properties": {
+                        "certificate_id_hex": { "type": "string" }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_certificates_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.certificates.query".to_owned(),
+        description: "Query offline certificates via QueryEnvelope (flat shortcuts supported)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/certificates/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_certificates_issue_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.certificates.issue".to_owned(),
+        description: "Issue an offline certificate draft (`/v1/offline/certificates/issue`)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/certificates/issue".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw issue payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_certificates_renew_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.certificates.renew".to_owned(),
+        description: "Renew an offline certificate (`certificate_id_hex` shortcut supported)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/certificates/{certificate_id_hex}/renew".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "certificate_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.certificate_id_hex`."
+                },
+                "certificate_id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["certificate_id_hex"],
+                    "properties": {
+                        "certificate_id_hex": { "type": "string" }
+                    }
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw renew payload. If omitted, flat top-level fields (excluding certificate id shortcuts) are forwarded as body."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_certificates_renew_issue_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.certificates.renew_issue".to_owned(),
+        description:
+            "Issue a renewed offline certificate (`certificate_id_hex` shortcut supported)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/certificates/{certificate_id_hex}/renew/issue".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "certificate_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.certificate_id_hex`."
+                },
+                "certificate_id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["certificate_id_hex"],
+                    "properties": {
+                        "certificate_id_hex": { "type": "string" }
+                    }
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw renew-issue payload. If omitted, flat top-level fields (excluding certificate id shortcuts) are forwarded as body."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_certificates_revoke_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.certificates.revoke".to_owned(),
+        description: "Revoke an offline certificate verdict (`/v1/offline/certificates/revoke`)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/certificates/revoke".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw revoke payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_allowances_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.allowances.get".to_owned(),
+        description:
+            "Fetch an offline allowance by certificate id (`certificate_id_hex` shortcut supported)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/allowances/{certificate_id_hex}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "certificate_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.certificate_id_hex`."
+                },
+                "certificate_id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["certificate_id_hex"],
+                    "properties": {
+                        "certificate_id_hex": { "type": "string" }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_allowances_issue_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.allowances.issue".to_owned(),
+        description: "Register a new offline allowance certificate (`/v1/offline/allowances`)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/allowances".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw issue payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_allowances_renew_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.allowances.renew".to_owned(),
+        description:
+            "Renew an offline allowance certificate (`certificate_id_hex` shortcut supported)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/allowances/{certificate_id_hex}/renew".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "certificate_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.certificate_id_hex`."
+                },
+                "certificate_id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `certificate_id_hex`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["certificate_id_hex"],
+                    "properties": {
+                        "certificate_id_hex": { "type": "string" }
+                    }
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw renew payload. If omitted, flat top-level fields (excluding certificate id shortcuts) are forwarded as body."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_allowances_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.allowances.list".to_owned(),
+        description: "List offline allowances with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/allowances".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_allowances_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.allowances.query".to_owned(),
+        description: "Query offline allowances via QueryEnvelope (flat shortcuts supported)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/allowances/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_receipts_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.receipts.list".to_owned(),
+        description: "List offline receipts with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/receipts".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_receipts_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.receipts.query".to_owned(),
+        description: "Query offline receipts via QueryEnvelope (flat shortcuts supported)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/receipts/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_revocations_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.revocations.list".to_owned(),
+        description: "List offline revocations with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/revocations".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_revocations_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.revocations.query".to_owned(),
+        description: "Query offline revocations via QueryEnvelope (flat shortcuts supported)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/revocations/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_transfers_proof_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.transfers.proof".to_owned(),
+        description: "Submit an offline transfer proof request (`/v1/offline/transfers/proof`)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/transfers/proof".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw transfer-proof payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "transfer": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Convenience shortcut for `body.transfer`."
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.kind` (`sum`, `counter`, or `replay`)."
+                },
+                "counter_checkpoint": {
+                    "type": "integer",
+                    "description": "Convenience shortcut for `body.counter_checkpoint`."
+                },
+                "replay_log_head_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.replay_log_head_hex`."
+                },
+                "replay_log_tail_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.replay_log_tail_hex`."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_spend_receipts_submit_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.spend_receipts.submit".to_owned(),
+        description: "Validate offline spend receipts (`/v1/offline/spend-receipts`).".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/spend-receipts".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw spend-receipts payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "receipts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "description": "Convenience shortcut for `body.receipts`."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_state_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.state".to_owned(),
+        description: "Fetch the aggregated offline state snapshot.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/state".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_bundle_proof_status_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.bundle.proof_status".to_owned(),
+        description: "Fetch lightweight proof status for an offline bundle (`bundle_id_hex` shortcut supported).".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/bundle/proof_status".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "bundle_id_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `query.bundle_id_hex`."
+                },
+                "bundle_id": {
+                    "type": "string",
+                    "description": "Alias for `bundle_id_hex`."
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Optional query object. If provided, include `bundle_id_hex` or use the top-level shortcut."
+                },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_rejections_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.rejections.list".to_owned(),
+        description: "List aggregated offline rejection counters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/rejections".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_summaries_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.summaries.list".to_owned(),
+        description: "List offline counter summaries with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/summaries".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_summaries_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.summaries.query".to_owned(),
+        description: "Query offline summaries via QueryEnvelope (flat shortcuts supported)."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/summaries/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "address_format": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_queries_submit_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.queries.submit".to_owned(),
+        description: "Submit a signed query encoded as Norito bytes (`signed_query_base64`/`query_base64`/hex shortcuts supported).".to_owned(),
+        method: Method::POST,
+        path_template: "/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body_base64": {
+                    "type": "string",
+                    "description": "Base64/base64url encoded SignedQuery bytes."
+                },
+                "signed_query_base64": {
+                    "type": "string",
+                    "description": "Alias for `body_base64`."
+                },
+                "query_base64": {
+                    "type": "string",
+                    "description": "Alias for `body_base64`."
+                },
+                "body_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded SignedQuery bytes."
+                },
+                "signed_query_hex": {
+                    "type": "string",
+                    "description": "Alias for `body_hex`."
+                },
+                "query_hex": {
+                    "type": "string",
+                    "description": "Alias for `body_hex`."
+                },
+                "body": {
+                    "description": "Optional JSON request body; use only when submitting JSON query envelopes."
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "Optional content type override (defaults to application/x-norito)."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_transactions_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.list".to_owned(),
@@ -5661,6 +8189,19 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.node.capabilities")
         );
+        assert!(tools.iter().any(|tool| tool.name == "iroha.time.now"));
+        assert!(tools.iter().any(|tool| tool.name == "iroha.time.status"));
+        assert!(tools.iter().any(|tool| tool.name == "iroha.api.versions"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.aliases.resolve")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.aliases.resolve_index")
+        );
         assert!(
             tools
                 .iter()
@@ -5833,6 +8374,153 @@ mod tests {
         assert!(
             tools
                 .iter()
+                .any(|tool| tool.name == "iroha.offline.transfers.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.transfers.get")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.transfers.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.settlements.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.settlements.get")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.settlements.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.settlements.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.certificates.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.certificates.get")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.certificates.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.certificates.issue")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.certificates.renew")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.certificates.renew_issue")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.certificates.revoke")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.allowances.get")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.allowances.issue")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.allowances.renew")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.allowances.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.allowances.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.receipts.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.receipts.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.revocations.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.revocations.query")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.transfers.proof")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.spend_receipts.submit")
+        );
+        assert!(tools.iter().any(|tool| tool.name == "iroha.offline.state"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.bundle.proof_status")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.rejections.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.summaries.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.summaries.query")
+        );
+        assert!(tools.iter().any(|tool| tool.name == "iroha.queries.submit"));
+        assert!(
+            tools
+                .iter()
                 .any(|tool| tool.name == "iroha.transactions.list")
         );
         assert!(
@@ -5907,6 +8595,50 @@ mod tests {
                 .and_then(Value::as_str)
                 .expect("authorization"),
             "Bearer wallet-token"
+        );
+    }
+
+    #[test]
+    fn build_connect_session_create_body_generates_sid_when_missing() {
+        let args = norito::json!({
+            "node": "https://node.example"
+        });
+        let body = build_connect_session_create_body(args.as_object().expect("object"))
+            .expect("create body");
+        let payload = body.as_object().expect("object");
+        let sid = payload
+            .get("sid")
+            .and_then(Value::as_str)
+            .expect("generated sid");
+        assert_eq!(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(sid)
+                .expect("base64url sid")
+                .len(),
+            32
+        );
+        assert_eq!(
+            payload.get("node").and_then(Value::as_str),
+            Some("https://node.example")
+        );
+    }
+
+    #[test]
+    fn build_connect_session_create_body_preserves_sid_in_body() {
+        let args = norito::json!({
+            "sid": "ignored-shortcut",
+            "body": {
+                "sid": "body-sid",
+                "node": "https://in-body.example"
+            }
+        });
+        let body = build_connect_session_create_body(args.as_object().expect("object"))
+            .expect("create body");
+        let payload = body.as_object().expect("object");
+        assert_eq!(payload.get("sid").and_then(Value::as_str), Some("body-sid"));
+        assert_eq!(
+            payload.get("node").and_then(Value::as_str),
+            Some("https://in-body.example")
         );
     }
 
@@ -6011,6 +8743,26 @@ mod tests {
         });
         let nft_id = extract_nft_id_argument(args.as_object().expect("object")).expect("nft id");
         assert_eq!(nft_id, "nft-001");
+    }
+
+    #[test]
+    fn extract_bundle_id_hex_argument_accepts_alias_shortcut() {
+        let args = norito::json!({
+            "bundle_id": "deadbeef"
+        });
+        let bundle_id =
+            extract_bundle_id_hex_argument(args.as_object().expect("object")).expect("bundle id");
+        assert_eq!(bundle_id, "deadbeef");
+    }
+
+    #[test]
+    fn extract_certificate_id_hex_argument_accepts_id_alias_shortcut() {
+        let args = norito::json!({
+            "id": "cafe1234"
+        });
+        let certificate_id = extract_certificate_id_hex_argument(args.as_object().expect("object"))
+            .expect("certificate id");
+        assert_eq!(certificate_id, "cafe1234");
     }
 
     #[test]

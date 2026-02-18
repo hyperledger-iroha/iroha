@@ -1203,6 +1203,18 @@ fn render_sora_temple_frame(
                     core.powi(2) * style_cfg.logo_core_alpha,
                 );
             }
+            if cell_size >= 8 {
+                let logo_mask_here = sora_ten_logo_mask(nx, ny);
+                if logo_mask_here {
+                    blend_rgb(&mut rgb, style_cfg.ring_bright, 0.070);
+                } else {
+                    let halo_nx = (nx - 0.5) * 0.90 + 0.5;
+                    let halo_ny = (ny - 0.5) * 0.90 + 0.5;
+                    if sora_ten_logo_mask(halo_nx, halo_ny) {
+                        blend_rgb(&mut rgb, style_cfg.logo_core_bg, 0.042);
+                    }
+                }
+            }
             // Add a shallow horizon haze to create depth behind the data grid.
             let horizon = ((ny - 0.22) * 2.8).clamp(0.0, 1.0);
             let horizon_falloff = (1.0 - radial / 0.78).clamp(0.0, 1.0).powf(1.7);
@@ -1639,6 +1651,8 @@ fn blend_sora_data_tile(
     } else {
         style_cfg.tile_light_fg
     };
+    let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
+    let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     if param.logo {
         let logo_bg = if param.bit {
             style_cfg.logo_dark_bg
@@ -1647,10 +1661,13 @@ fn blend_sora_data_tile(
         };
         blend_rgb(rgb, logo_bg, style_cfg.logo_tile_mix);
         blend_rgb(rgb, style_cfg.logo_tint, style_cfg.logo_tint_alpha);
+        if cell_size >= 8 {
+            let logo_radial =
+                ((inner_u - 0.5) * (inner_u - 0.5) + (inner_v - 0.5) * (inner_v - 0.5)).sqrt();
+            let logo_glow = (1.0 - logo_radial / 0.70).clamp(0.0, 1.0).powf(2.2);
+            blend_rgb(rgb, style_cfg.ring_bright, logo_glow * 0.16);
+        }
     }
-
-    let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
-    let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     if cell_size >= 8 {
         let holder_scale = ((cell_size as f64 - 8.0) / 40.0).clamp(0.0, 1.0);
         let frame_dist = inner_u.min(1.0 - inner_u).min(inner_v.min(1.0 - inner_v));
@@ -1872,15 +1889,45 @@ fn blend_rgb(rgb: &mut [f64; 3], target: [f64; 3], alpha: f64) {
 }
 
 fn sora_ten_logo_mask(nx: f64, ny: f64) -> bool {
-    let x = (nx * 2.0 - 1.0) / 0.93;
-    let y = (ny * 2.0 - 1.0) / 0.93;
-    let top_bar = y >= -0.72 && y <= -0.50 && x.abs() <= 0.82;
-    let mid_bar = y >= -0.37 && y <= -0.18 && x.abs() <= 0.58;
-    let stem = y >= -0.20 && y <= 0.00 && x.abs() <= 0.15;
-    let left_leg = y >= -0.02 && y <= 0.92 && (x + 0.64 * y).abs() <= 0.13;
-    let right_leg = y >= -0.02 && y <= 0.92 && (x - 0.64 * y).abs() <= 0.13;
-    let foot = y >= 0.75 && y <= 0.93 && x.abs() <= 0.58;
-    top_bar || mid_bar || stem || left_leg || right_leg || foot
+    let x = (nx * 2.0 - 1.0) / 0.92;
+    let y = (ny * 2.0 - 1.0) / 0.92;
+
+    // Mirror the portal logo's "S" stroke as a rounded polyline in normalized space.
+    let top = segment_distance(x, y, 0.60, -0.56, -0.53, -0.56);
+    let bend_left = segment_distance(x, y, -0.53, -0.56, -0.09, -0.08);
+    let bend_right = segment_distance(x, y, -0.09, -0.08, 0.34, 0.40);
+    let bottom = segment_distance(x, y, 0.34, 0.40, -0.79, 0.40);
+    let primary = top.min(bend_left.min(bend_right.min(bottom)));
+
+    // Secondary sweeps smooth the curvature at the top and bottom turns.
+    let sweep_top = segment_distance(x, y, 0.57, -0.52, -0.48, -0.52);
+    let sweep_bottom = segment_distance(x, y, 0.29, 0.36, -0.75, 0.36);
+    let sweep = sweep_top.min(sweep_bottom);
+
+    let stroke = if y < -0.18 {
+        0.116
+    } else if y < 0.18 {
+        0.110
+    } else {
+        0.118
+    };
+    let in_bounds = x >= -0.92 && x <= 0.72 && y >= -0.76 && y <= 0.58;
+    in_bounds && (primary <= stroke || sweep <= stroke * 0.92)
+}
+
+fn segment_distance(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let abx = bx - ax;
+    let aby = by - ay;
+    let apx = px - ax;
+    let apy = py - ay;
+    let denom = abx * abx + aby * aby;
+    if denom <= f64::EPSILON {
+        return (apx * apx + apy * apy).sqrt();
+    }
+    let t = ((apx * abx + apy * aby) / denom).clamp(0.0, 1.0);
+    let dx = apx - abx * t;
+    let dy = apy - aby * t;
+    (dx * dx + dy * dy).sqrt()
 }
 
 fn estimate_style_aesthetic_score(image: &image::RgbaImage, style: PetalRenderStyle) -> f64 {
