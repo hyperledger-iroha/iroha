@@ -487,23 +487,6 @@ impl CoreHost {
         let intent: axt::RemoteSpendIntent =
             norito::decode_from_bytes(intent_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
 
-        let amount = intent
-            .op
-            .amount
-            .parse::<u128>()
-            .map_err(|_| VMError::NoritoInvalid)?;
-        if amount == 0 {
-            return Err(VMError::PermissionDenied);
-        }
-        if amount > handle.budget.remaining {
-            return Err(VMError::PermissionDenied);
-        }
-        if let Some(per_use) = handle.budget.per_use
-            && amount > per_use
-        {
-            return Err(VMError::PermissionDenied);
-        }
-
         let proof: Option<axt::ProofBlob> = match vm.register(12) {
             0 => None,
             ptr => {
@@ -517,6 +500,16 @@ impl CoreHost {
                 )
             }
         };
+        let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
+            .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
+        if resolved_amount.amount > handle.budget.remaining {
+            return Err(VMError::PermissionDenied);
+        }
+        if let Some(per_use) = handle.budget.per_use
+            && resolved_amount.amount > per_use
+        {
+            return Err(VMError::PermissionDenied);
+        }
 
         if let Some(proof_blob) = proof.as_ref() {
             let policy = self
@@ -554,7 +547,8 @@ impl CoreHost {
             handle,
             intent,
             proof,
-            amount,
+            amount: resolved_amount.amount,
+            amount_commitment: resolved_amount.amount_commitment,
         };
         self.axt_policy.allow_handle(&usage)?;
         let state = self.axt_state.as_mut().expect("axt_state checked above");

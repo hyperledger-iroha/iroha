@@ -234,6 +234,7 @@ fn print_golden_vectors() {
         intent: sample_intent(),
         proof: None,
         amount: 250,
+        amount_commitment: None,
     };
     let snapshot_entries = snapshot.entries.clone();
     let snapshot_fragment = AxtPolicySnapshot {

@@ -198,6 +198,11 @@ def main() -> int:
         help="Skip ci/check_nexus_lane_smoke.sh + NX-18 evidence bundling.",
     )
     parser.add_argument(
+        "--skip-nexus-cross-dataspace-proof",
+        action="store_true",
+        help="Skip ci/check_nexus_cross_dataspace_localnet.sh cross-dataspace atomic swap proof gate.",
+    )
+    parser.add_argument(
         "--publish-target",
         action="append",
         help=(
@@ -331,6 +336,15 @@ def main() -> int:
             print(f"[release-pipeline] (dry-run) copy {nx_source} -> {nx_dest}")
         else:
             copytree_clean(nx_source, nx_dest)
+
+    if args.skip_nexus_cross_dataspace_proof:
+        print("[release-pipeline] skipping Nexus cross-dataspace proof gate")
+    else:
+        cross_ds_cmd = ["bash", str(REPO_ROOT / "ci" / "check_nexus_cross_dataspace_localnet.sh")]
+        if args.dry_run:
+            print(f"[release-pipeline] (dry-run) {' '.join(cross_ds_cmd)}")
+        else:
+            run(cross_ds_cmd)
 
     built_at = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     commit = subprocess.check_output(
@@ -645,6 +659,10 @@ def main() -> int:
         lines.append("Privacy DP notebook: skipped (--skip-privacy-dp)")
     else:
         lines.append("Privacy DP notebook: refreshed")
+    if args.skip_nexus_cross_dataspace_proof:
+        lines.append("Nexus cross-dataspace proof gate: skipped (--skip-nexus-cross-dataspace-proof)")
+    else:
+        lines.append("Nexus cross-dataspace proof gate: passed")
     if publish_target_map:
         lines.append("Publish targets:")
         for profile, target in sorted(publish_target_map.items()):

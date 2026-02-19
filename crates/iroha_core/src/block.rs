@@ -88,8 +88,9 @@ use iroha_data_model::{
         transfer::TransferBox,
     },
     nexus::{
-        AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId, LaneConfig,
-        LaneId, LaneRelayEnvelope, ProofBlob, UniversalAccountId, proof_matches_manifest,
+        AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
+        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, UniversalAccountId,
+        proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,
@@ -3003,37 +3004,6 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    let intent_amount =
-                        fragment.intent.op.amount.parse::<u128>().map_err(|_| {
-                            make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::Budget,
-                                "intent amount is not a valid u128",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            )
-                        })?;
-                    if intent_amount == 0 || fragment.amount == 0 {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Budget,
-                            "handle amount must be non-zero",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if intent_amount != fragment.amount {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Budget,
-                            "handle amount does not match intent amount",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
                     if policy.target_lane != fragment.handle.target_lane {
                         return Err(make_env_error(
                             envelope_lane,
@@ -3167,13 +3137,110 @@ pub(crate) mod valid {
                     )?;
                     dataspace_proofs_present.insert(fragment.intent.asset_dsid);
 
+                    let proof_envelope =
+                        norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload).ok();
+                    let committed_amount = proof_envelope
+                        .as_ref()
+                        .and_then(|proof_envelope| proof_envelope.committed_amount);
+                    let intent_amount = fragment.intent.op.amount.parse::<u128>().ok();
+                    let effective_amount = match (intent_amount, committed_amount) {
+                        (Some(intent_amount), Some(committed_amount)) => {
+                            if intent_amount != committed_amount {
+                                return Err(make_env_error(
+                                    envelope_lane,
+                                    AxtRejectReason::Budget,
+                                    "intent amount does not match proof committed amount",
+                                    Some(fragment.intent.asset_dsid),
+                                    None,
+                                    None,
+                                ));
+                            }
+                            intent_amount
+                        }
+                        (Some(intent_amount), None) => intent_amount,
+                        (None, Some(committed_amount)) => committed_amount,
+                        (None, None) => {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Budget,
+                                "intent amount is not a valid u128 and no committed proof amount was provided",
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            ));
+                        }
+                    };
+                    if effective_amount == 0 {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Budget,
+                            "handle amount must be non-zero",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if intent_amount.is_some() {
+                        if fragment.amount == 0 {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Budget,
+                                "handle amount must be non-zero",
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            ));
+                        }
+                        if fragment.amount != effective_amount {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Budget,
+                                "handle amount does not match intent amount",
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            ));
+                        }
+                    } else {
+                        if fragment.amount != 0 {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Budget,
+                                "hidden handle amount must be redacted in fragment",
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            ));
+                        }
+                        let expected_commitment = proof_envelope
+                            .as_ref()
+                            .and_then(|proof_envelope| proof_envelope.amount_commitment)
+                            .unwrap_or_else(|| {
+                                ivm::axt::derive_amount_commitment(
+                                    fragment.intent.asset_dsid,
+                                    effective_amount,
+                                    Some(proof.payload.as_slice()),
+                                )
+                            });
+                        if fragment.amount_commitment != Some(expected_commitment) {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Budget,
+                                "hidden handle amount commitment mismatch",
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            ));
+                        }
+                    }
+
                     let budget_key = handle_budget_key(&fragment.handle)?;
                     match accumulators.entry(budget_key) {
                         std::collections::btree_map::Entry::Occupied(mut entry) => {
                             let budget = entry.key().budget;
                             let accumulator = entry.get_mut();
                             accumulator
-                                .apply(fragment.intent.asset_dsid, fragment.amount, &budget)
+                                .apply(fragment.intent.asset_dsid, effective_amount, &budget)
                                 .map_err(|msg| {
                                     make_env_error(
                                         envelope_lane,
@@ -3188,17 +3255,21 @@ pub(crate) mod valid {
                         std::collections::btree_map::Entry::Vacant(slot) => {
                             let key_ref = slot.key();
                             let mut acc = HandleAccumulator::new();
-                            acc.apply(fragment.intent.asset_dsid, fragment.amount, &key_ref.budget)
-                                .map_err(|msg| {
-                                    make_env_error(
-                                        envelope_lane,
-                                        AxtRejectReason::Budget,
-                                        &msg,
-                                        Some(fragment.intent.asset_dsid),
-                                        None,
-                                        None,
-                                    )
-                                })?;
+                            acc.apply(
+                                fragment.intent.asset_dsid,
+                                effective_amount,
+                                &key_ref.budget,
+                            )
+                            .map_err(|msg| {
+                                make_env_error(
+                                    envelope_lane,
+                                    AxtRejectReason::Budget,
+                                    &msg,
+                                    Some(fragment.intent.asset_dsid),
+                                    None,
+                                    None,
+                                )
+                            })?;
                             slot.insert(acc);
                         }
                     }
@@ -11273,9 +11344,9 @@ mod commit {
 
         use iroha_data_model::nexus::{
             AssetHandle, AxtBinding, AxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
-            AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment,
-            AxtTouchFragment, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject, ProofBlob,
-            RemoteSpendIntent, SpendOp, TouchManifest,
+            AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope,
+            AxtProofFragment, AxtTouchFragment, AxtTouchSpec, GroupBinding, HandleBudget,
+            HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
         };
         use iroha_primitives::time::TimeSource;
 
@@ -11332,6 +11403,7 @@ mod commit {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }
         }
 
@@ -11398,7 +11470,11 @@ mod commit {
 
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
-                touches: Vec::new(),
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
             };
             let binding = binding_for_descriptor(&descriptor);
             let handle = AxtHandleFragment {
@@ -11438,6 +11514,7 @@ mod commit {
                     expiry_slot: Some(50),
                 }),
                 amount: 5,
+                amount_commitment: None,
             };
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -11478,7 +11555,11 @@ mod commit {
 
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
-                touches: Vec::new(),
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
             };
             let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
@@ -11486,7 +11567,13 @@ mod commit {
                 binding,
                 lane,
                 descriptor,
-                touches: Vec::new(),
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
                 proofs: vec![AxtProofFragment {
                     dsid,
                     proof: ProofBlob {
@@ -11570,8 +11657,8 @@ mod commit {
             let snapshot = state.axt_policy_snapshot();
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
-
-            assert!(validate_axt_envelopes(&block, &state_block).is_ok());
+            let result = validate_axt_envelopes(&block, &state_block);
+            assert!(result.is_ok(), "unexpected validation error: {result:?}");
         }
 
         #[test]
@@ -11592,7 +11679,11 @@ mod commit {
 
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
-                touches: Vec::new(),
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
@@ -11602,7 +11693,13 @@ mod commit {
                 binding,
                 lane,
                 descriptor,
-                touches: Vec::new(),
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
                 proofs: vec![AxtProofFragment {
                     dsid,
                     proof: ProofBlob {
@@ -11652,7 +11749,13 @@ mod commit {
                 binding,
                 lane,
                 descriptor,
-                touches: Vec::new(),
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
                 proofs: vec![AxtProofFragment {
                     dsid,
                     proof: ProofBlob {
@@ -12197,6 +12300,8 @@ mod commit {
                 manifest_root: policy.manifest_root,
                 da_commitment: None,
                 proof: vec![0xAA],
+                committed_amount: None,
+                amount_commitment: None,
             };
             let payload = norito::to_bytes(&wrong_envelope).expect("encode proof envelope");
             let envelope = AxtEnvelopeRecord {
@@ -12604,7 +12709,8 @@ mod commit {
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
-            assert!(validate_axt_envelopes(&block, &state_block).is_ok());
+            let result = validate_axt_envelopes(&block, &state_block);
+            assert!(result.is_ok(), "unexpected validation error: {result:?}");
         }
 
         #[test]
@@ -12618,7 +12724,11 @@ mod commit {
 
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
-                touches: Vec::new(),
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
             };
             let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 9, manifest_root);
@@ -12626,7 +12736,13 @@ mod commit {
                 binding,
                 lane,
                 descriptor,
-                touches: Vec::new(),
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
                 proofs: vec![AxtProofFragment {
                     dsid,
                     proof: ProofBlob {
@@ -12720,6 +12836,145 @@ mod commit {
                 AxtRejectReason::Manifest,
                 "policy manifest root is zeroed",
             );
+        }
+
+        #[test]
+        fn axt_validation_accepts_hidden_amount_commitment() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(61);
+            let lane = LaneId::new(8);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x61; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 2,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let proof_envelope = AxtProofEnvelope {
+                dsid,
+                manifest_root: policy.manifest_root,
+                da_commitment: None,
+                proof: vec![0xAB],
+                committed_amount: Some(5),
+                amount_commitment: None,
+            };
+            let proof_payload = norito::to_bytes(&proof_envelope).expect("encode proof envelope");
+            let expected_commitment =
+                ivm::axt::derive_amount_commitment(dsid, 5, Some(proof_payload.as_slice()));
+
+            let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
+            handle.intent.op.amount = "hidden".to_owned();
+            handle.amount = 0;
+            handle.amount_commitment = Some(expected_commitment);
+
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: proof_payload,
+                        expiry_slot: Some(9),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+            let result = validate_axt_envelopes(&block, &state_block);
+            assert!(result.is_ok(), "unexpected validation error: {result:?}");
+        }
+
+        #[test]
+        fn axt_validation_rejects_hidden_amount_commitment_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(62);
+            let lane = LaneId::new(9);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x62; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 2,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let proof_envelope = AxtProofEnvelope {
+                dsid,
+                manifest_root: policy.manifest_root,
+                da_commitment: None,
+                proof: vec![0xCD],
+                committed_amount: Some(5),
+                amount_commitment: None,
+            };
+            let proof_payload = norito::to_bytes(&proof_envelope).expect("encode proof envelope");
+
+            let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
+            handle.intent.op.amount = "hidden".to_owned();
+            handle.amount = 0;
+            handle.amount_commitment = Some([0xFF; 32]);
+
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: Vec::new(),
+                        write: Vec::new(),
+                    },
+                }],
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: proof_payload,
+                        expiry_slot: Some(9),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Budget, "commitment mismatch");
         }
     }
 }

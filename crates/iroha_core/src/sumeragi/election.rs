@@ -178,6 +178,11 @@ pub fn elect_validator_set(
             .div_ceil(100)
     };
     let desired = base_take.saturating_add(band_extra).min(scored.len());
+    let required_validators = if params.max_validators == 0 {
+        desired
+    } else {
+        base_take
+    };
 
     let per_entity_cap = if params.max_entity_correlation_pct == 0 {
         usize::MAX
@@ -193,6 +198,7 @@ pub fn elect_validator_set(
 
     let mut entity_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut validator_set: Vec<PeerId> = Vec::new();
+    let mut deferred_due_to_correlation: Vec<PeerId> = Vec::new();
     for (profile, tie) in &scored {
         if validator_set.len() >= desired {
             break;
@@ -200,10 +206,21 @@ pub fn elect_validator_set(
         let entity_key = entity_key(profile.record.as_ref(), &tie.peer_id);
         let count = entity_counts.entry(entity_key).or_insert(0);
         if *count >= per_entity_cap {
+            if validator_set.len() < required_validators {
+                deferred_due_to_correlation.push(tie.peer_id.clone());
+            }
             continue;
         }
         *count += 1;
         validator_set.push(tie.peer_id.clone());
+    }
+    if validator_set.len() < required_validators {
+        for peer_id in deferred_due_to_correlation {
+            if validator_set.len() >= required_validators {
+                break;
+            }
+            validator_set.push(peer_id);
+        }
     }
 
     let tie_break: Vec<ValidatorTieBreak> = scored.into_iter().map(|(_, tie)| tie).collect();
@@ -212,7 +229,7 @@ pub fn elect_validator_set(
         Some("no candidates in stake snapshot".to_owned())
     } else if validator_set.is_empty() {
         Some("candidates rejected by entity correlation limit".to_owned())
-    } else if params.max_validators != 0 && validator_set.len() < base_take {
+    } else if params.max_validators != 0 && validator_set.len() < required_validators {
         Some("insufficient distinct entities to satisfy validator target".to_owned())
     } else {
         None
@@ -728,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn seat_band_fractional_entity_cap_reports_shortfall() {
+    fn seat_band_fractional_entity_cap_fills_base_target() {
         let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
@@ -784,11 +801,8 @@ mod tests {
         };
 
         let outcome = elect_validator_set(2, 20, [0x99; 32], profiles, params);
-        assert_eq!(outcome.validator_set.len(), 2);
-        assert_eq!(
-            outcome.rejection_reason.as_deref(),
-            Some("insufficient distinct entities to satisfy validator target")
-        );
+        assert_eq!(outcome.validator_set.len(), 3);
+        assert!(outcome.rejection_reason.is_none());
         let entity_counts = outcome
             .validator_set
             .iter()
@@ -801,7 +815,7 @@ mod tests {
                 *acc.entry(label).or_insert(0) += 1;
                 acc
             });
-        assert_eq!(entity_counts.get("acme"), Some(&1));
+        assert_eq!(entity_counts.get("acme"), Some(&2));
         assert_eq!(entity_counts.get("zeon"), Some(&1));
     }
 
@@ -899,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn correlation_shortfall_sets_rejection_reason() {
+    fn correlation_shortfall_fills_base_target() {
         let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
@@ -948,11 +962,8 @@ mod tests {
         };
 
         let outcome = elect_validator_set(1, 1, [0x33; 32], profiles, params);
-        assert_eq!(outcome.validator_set.len(), 1);
-        assert_eq!(
-            outcome.rejection_reason.as_deref(),
-            Some("insufficient distinct entities to satisfy validator target")
-        );
+        assert_eq!(outcome.validator_set.len(), 2);
+        assert!(outcome.rejection_reason.is_none());
     }
 
     #[test]
@@ -1044,8 +1055,11 @@ mod tests {
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
         let peer_b =
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4");
+        let peer_c =
+            peer_from_hex("ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B");
         let account_a = account_for_peer(&domain, &peer_a);
         let account_b = account_for_peer(&domain, &peer_b);
+        let account_c = account_for_peer(&domain, &peer_c);
 
         let mut meta = Metadata::default();
         meta.insert(Name::from_str("entity").unwrap(), Json::new("acme"));
@@ -1074,6 +1088,11 @@ mod tests {
                 record: Some(record_with_entity(&account_b)),
                 stake_shares: Vec::new(),
             },
+            CandidateProfile {
+                peer_id: peer_c.clone(),
+                record: Some(sample_record(&peer_c, 10_000, 10_000, &account_c)),
+                stake_shares: Vec::new(),
+            },
         ];
 
         let params = ValidatorElectionParameters {
@@ -1089,8 +1108,12 @@ mod tests {
         let outcome = elect_validator_set(1, 1, [0x22; 32], profiles, params);
         assert_eq!(
             outcome.validator_set.len(),
-            1,
-            "entity tag groups both candidates under one entity"
+            2,
+            "base validator target should still be filled"
+        );
+        assert!(
+            outcome.validator_set.iter().any(|peer| peer == &peer_c),
+            "entity tag should still cap acme to one seat in the capped pass"
         );
     }
 }
