@@ -3,7 +3,7 @@
 .PHONY: gost-bench gost-bench-update gost-dudect
 .PHONY: docs-cli docs-kagami-cli
 .PHONY: norito-matrix norito-matrix-downstream
-.PHONY: check-fastpq-row-usage check-fastpq-rollout check-nexus-lanes check-sns-annex
+.PHONY: check-fastpq-row-usage check-fastpq-rollout check-nexus-lanes check-nexus-cross-dataspace check-sns-annex
 .PHONY: bridge-xcframework bridge-checksum
 .PHONY: docs-syscalls
 .PHONY: android-fixtures android-fixtures-check
@@ -188,6 +188,9 @@ check-fastpq-rollout:
 check-nexus-lanes:
 	@bash ci/check_nexus_lane_smoke.sh
 	@bash ci/check_nexus_lane_registry_bundle.sh
+
+check-nexus-cross-dataspace:
+	@bash ci/check_nexus_cross_dataspace_localnet.sh
 
 check-sm-perf:
 	@bash ci/check_sm_perf.sh

@@ -10,6 +10,8 @@ fn axt_proof_envelope_roundtrip() {
         manifest_root: [0xAB; 32],
         da_commitment: Some([0xCD; 32]),
         proof: vec![1, 2, 3, 4],
+        committed_amount: None,
+        amount_commitment: None,
     };
 
     let encoded = norito::to_bytes(&envelope).expect("encode proof envelope");

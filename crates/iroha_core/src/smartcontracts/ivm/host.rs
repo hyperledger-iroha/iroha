@@ -4137,24 +4137,43 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::VMError::PermissionDenied);
         }
 
-        let amount = intent.op.amount.parse::<u128>().map_err(|_| {
-            self.record_axt_reject(
-                AxtRejectReason::Budget,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "intent amount is not a valid u128",
-            );
-            ivm::VMError::NoritoInvalid
-        })?;
-        if amount == 0 {
-            self.record_axt_reject(
-                AxtRejectReason::Budget,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle amount must be non-zero",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
+        let proof_ptr = vm.register(12);
+        let proof = if proof_ptr == 0 {
+            None
+        } else {
+            let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
+            let blob: ProofBlob = Self::decode_header(proof_tlv.payload).inspect_err(|_| {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    Some(intent.asset_dsid),
+                    Some(handle.target_lane),
+                    "proof payload failed to decode",
+                );
+            })?;
+            Some(blob)
+        };
+        let resolved_amount =
+            axt::resolve_handle_amount(&intent, proof.as_ref()).map_err(|err| {
+                let detail = match err {
+                    axt::HandleAmountResolutionError::MissingAmount => {
+                        "intent amount is hidden and proof has no committed amount"
+                    }
+                    axt::HandleAmountResolutionError::Mismatch => {
+                        "intent amount does not match proof committed amount"
+                    }
+                    axt::HandleAmountResolutionError::ZeroAmount => {
+                        "handle amount must be non-zero"
+                    }
+                };
+                self.record_axt_reject(
+                    AxtRejectReason::Budget,
+                    Some(intent.asset_dsid),
+                    Some(handle.target_lane),
+                    detail,
+                );
+                err.to_vm_error()
+            })?;
+        let amount = resolved_amount.amount;
 
         if amount > handle.budget.remaining {
             self.record_axt_reject(
@@ -4179,22 +4198,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-
-        let proof_ptr = vm.register(12);
-        let proof = if proof_ptr == 0 {
-            None
-        } else {
-            let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
-            let blob: ProofBlob = Self::decode_header(proof_tlv.payload).inspect_err(|_| {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    Some(intent.asset_dsid),
-                    Some(handle.target_lane),
-                    "proof payload failed to decode",
-                );
-            })?;
-            Some(blob)
-        };
         if let Some(blob) = proof.as_ref() {
             let policy = self.policy_entry_for(intent.asset_dsid).ok_or_else(|| {
                 self.record_axt_reject(
@@ -4213,6 +4216,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             intent,
             proof,
             amount,
+            amount_commitment: resolved_amount.amount_commitment,
         };
         self.enforce_axt_policy(&usage)?;
         let state = self.axt_state.as_mut().expect("axt_state checked above");
@@ -6831,6 +6835,7 @@ mod pointer_abi_tests {
             intent,
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
 
         let err = host
@@ -6901,6 +6906,7 @@ mod pointer_abi_tests {
             intent,
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
 
         host.enforce_axt_policy(&usage)
@@ -6993,6 +6999,7 @@ mod pointer_abi_tests {
             intent,
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
 
         let err = host
@@ -7088,6 +7095,7 @@ mod pointer_abi_tests {
             intent,
             proof: None,
             amount: 3,
+            amount_commitment: None,
         };
 
         assert_eq!(
