@@ -17,9 +17,7 @@ use iroha_config::{
 };
 use iroha_core::{
     kura::Kura,
-    query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, LaneRouter},
-    state::{State, World},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
@@ -165,18 +163,6 @@ fn build_tx(
         .expect("transaction should be accepted")
 }
 
-fn blank_state() -> State {
-    let world = World::default();
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_core::telemetry::StateTelemetry::default();
-    #[cfg(feature = "telemetry")]
-    return State::with_telemetry(world, kura, query, telemetry);
-    #[cfg(not(feature = "telemetry"))]
-    State::new(world, kura, query)
-}
-
 #[test]
 fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     let (lane_catalog, dataspace_catalog, policy) = sample_catalogs();
@@ -259,7 +245,6 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         ))],
     );
 
-    let _state = blank_state();
     let decision = router.route(&governance_tx);
     assert_eq!(decision.lane_id, LaneId::new(1));
     assert_eq!(decision.dataspace_id, DataSpaceId::new(1));

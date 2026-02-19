@@ -873,9 +873,8 @@ impl DomainSelector {
             // In multi-tenant deployments, callers may attach an explicit `@<domain>` suffix
             // externally to disambiguate. Treat `Default` as matching any provided domain and
             // let higher-level code (or on-chain existence checks) validate the final AccountId.
-            Self::Default => true,
             Self::Local12(expected) => compute_local_digest(&canonical) == *expected,
-            Self::Global { .. } => true,
+            Self::Default | Self::Global { .. } => true,
         }
     }
 }

@@ -7555,6 +7555,11 @@ fn connect_ws_ticket_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["role"],
+            "anyOf": [
+                { "required": ["sid"] },
+                { "required": ["session_id"] }
+            ],
             "properties": {
                 "sid": { "type": "string" },
                 "session_id": {
@@ -7681,6 +7686,11 @@ fn connect_session_delete_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "anyOf": [
+                { "required": ["sid"] },
+                { "required": ["session_id"] },
+                { "required": ["path"] }
+            ],
             "properties": {
                 "sid": { "type": "string" },
                 "session_id": {

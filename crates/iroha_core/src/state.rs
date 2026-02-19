@@ -17680,6 +17680,12 @@ impl<'state> StateBlock<'state> {
             .mutate_vec(|vec| *vec = prev_topology);
         let checkpoint_topology = topology;
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+        let (mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
+        let npos_mode_active = if mode_tag.is_empty() {
+            self.world.sumeragi_npos_parameters().is_some()
+        } else {
+            mode_tag == crate::sumeragi::consensus::NPOS_TAG
+        };
         let roster_source = if checkpoint_topology.is_empty() {
             if world_peers.is_empty() {
                 Vec::new()
@@ -17700,18 +17706,29 @@ impl<'state> StateBlock<'state> {
                 .into_iter()
                 .filter(|peer| !checkpoint_set.contains(peer))
                 .collect();
-            if !missing.is_empty() {
+            if !missing.is_empty() && npos_mode_active {
                 missing.sort();
                 warn!(
                     height = block_height,
                     block = %block_hash,
                     missing = missing.len(),
-                    "commit topology missing peers observed in world state; appending"
+                    "ignoring non-validator world peers for NPoS commit topology reconciliation"
                 );
+                checkpoint_topology.clone()
+            } else {
+                if !missing.is_empty() {
+                    missing.sort();
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        missing = missing.len(),
+                        "commit topology missing peers observed in world state; appending"
+                    );
+                }
+                let mut combined = checkpoint_topology.clone();
+                combined.extend(missing);
+                combined
             }
-            let mut combined = checkpoint_topology.clone();
-            combined.extend(missing);
-            combined
         };
         let next_topology = if roster_source.is_empty() {
             Vec::new()
@@ -32284,6 +32301,60 @@ mod tests {
         assert_eq!(actual, expected);
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_keeps_npos_commit_topology_without_world_peer_append() {
+        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
+        crate::sumeragi::status::set_mode_tags(crate::sumeragi::consensus::NPOS_TAG, None, None);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let new_peer = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+
+        {
+            let mut peers = state_block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.extend(base_topology.clone());
+            peers.push(new_peer);
+            peers.apply();
+        }
+
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let prev_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+
+        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]

@@ -29,12 +29,12 @@ use iroha_smart_contract::data_model::{
     isi::{
         ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
         CompleteReplicationOrder, ExitPublicLaneValidator, IssueReplicationOrder,
-        RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
-        RegisterCapacityDispute, RegisterOfflineAllowance, RegisterPeerWithPop,
-        RegisterPinManifest, RegisterProviderOwner, RegisterPublicLaneValidator,
-        RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
-        SetPricingSchedule, SubmitOfflineToOnlineTransfer, UnregisterProviderOwner,
-        UpsertProviderCredit,
+        ReclaimExpiredOfflineAllowance, RecordCapacityTelemetry, RecordReplicationReceipt,
+        RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterOfflineAllowance,
+        RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
+        RegisterPublicLaneValidator, RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue,
+        SetLaneRelayEmergencyValidators, SetPricingSchedule, SubmitOfflineToOnlineTransfer,
+        UnregisterProviderOwner, UpsertProviderCredit,
         bridge::RecordBridgeReceipt,
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
@@ -71,7 +71,10 @@ pub use staking::{
 mod offline;
 
 /// Re-export offline settlement visitor helper.
-pub use offline::{visit_register_offline_allowance, visit_submit_offline_to_online_transfer};
+pub use offline::{
+    visit_reclaim_expired_offline_allowance, visit_register_offline_allowance,
+    visit_submit_offline_to_online_transfer,
+};
 /// Re-export trigger visitor helpers used by the default executor.
 pub use trigger::{
     visit_burn_trigger_repetitions, visit_execute_trigger, visit_mint_trigger_repetitions,
@@ -221,6 +224,10 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<RegisterOfflineAllowance>() {
             visit_register_offline_allowance(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ReclaimExpiredOfflineAllowance>() {
+            visit_reclaim_expired_offline_allowance(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<RepoInstructionBox>() {
