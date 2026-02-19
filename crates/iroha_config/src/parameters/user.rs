@@ -5526,6 +5526,18 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::VALIDATION_PENDING_CAP"
     )]
     pub validation_pending_cap: usize,
+    /// Vote burst cap when block payload backlog is pending.
+    #[config(
+        env = "SUMERAGI_WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG",
+        default = "defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG"
+    )]
+    pub vote_burst_cap_with_payload_backlog: usize,
+    /// Maximum urgent actor-gate streak before yielding to DA-critical work.
+    #[config(
+        env = "SUMERAGI_WORKER_MAX_URGENT_BEFORE_DA_CRITICAL",
+        default = "defaults::sumeragi::WORKER_MAX_URGENT_BEFORE_DA_CRITICAL"
+    )]
+    pub max_urgent_before_da_critical: u32,
 }
 
 /// User-level configuration container for `SumeragiPacemaker`.
@@ -6470,6 +6482,22 @@ impl Sumeragi {
         } else {
             true
         };
+        let vote_burst_cap_ok = if worker.vote_burst_cap_with_payload_backlog == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.worker.vote_burst_cap_with_payload_backlog must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let urgent_da_streak_ok = if worker.max_urgent_before_da_critical == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.worker.max_urgent_before_da_critical must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
         let pacemaker_backoff_ok = if pacemaker.backoff_multiplier == 0
             || pacemaker.rtt_floor_multiplier == 0
             || pacemaker.max_backoff_ms == 0
@@ -6641,6 +6669,8 @@ impl Sumeragi {
             && validation_work_queue_ok
             && validation_result_queue_ok
             && validation_pending_cap_ok
+            && vote_burst_cap_ok
+            && urgent_da_streak_ok
             && pacemaker_backoff_ok
             && da_enabled_ok
             && da_quorum_multiplier_ok
@@ -6746,6 +6776,8 @@ impl Sumeragi {
                 qc_verify_work_queue_cap: worker.qc_verify_work_queue_cap,
                 qc_verify_result_queue_cap: worker.qc_verify_result_queue_cap,
                 validation_pending_cap: worker.validation_pending_cap,
+                vote_burst_cap_with_payload_backlog: worker.vote_burst_cap_with_payload_backlog,
+                max_urgent_before_da_critical: worker.max_urgent_before_da_critical,
             },
             pacemaker: actual::SumeragiPacemaker {
                 backoff_multiplier: pacemaker.backoff_multiplier,
@@ -16246,6 +16278,53 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "membership_mismatch_alert_threshold".into(),
             Value::Integer(0),
         );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn sumeragi_rejects_zero_worker_vote_burst_cap_with_payload_backlog() {
+        let mut table = base_table();
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let advanced = sumeragi
+            .entry("advanced")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.advanced table");
+        let worker = advanced
+            .entry("worker")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.advanced.worker table");
+        worker.insert(
+            "vote_burst_cap_with_payload_backlog".into(),
+            Value::Integer(0),
+        );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn sumeragi_rejects_zero_worker_max_urgent_before_da_critical() {
+        let mut table = base_table();
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let advanced = sumeragi
+            .entry("advanced")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.advanced table");
+        let worker = advanced
+            .entry("worker")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.advanced.worker table");
+        worker.insert("max_urgent_before_da_critical".into(), Value::Integer(0));
         assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
     }
 
