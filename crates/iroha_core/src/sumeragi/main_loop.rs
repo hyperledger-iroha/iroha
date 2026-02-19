@@ -5596,6 +5596,7 @@ struct ProposeState {
     pacemaker: Pacemaker,
     forced_view_after_timeout: Option<(u64, u64)>,
     last_cached_slot_timeout_trigger: Option<CachedSlotTimeoutTrigger>,
+    last_missing_qc_timeout_trigger: Option<CachedSlotTimeoutTrigger>,
     proposal_cache: ProposalCache,
     collector_plan: Option<CollectorPlan>,
     collector_plan_subject: Option<(u64, u64)>,
@@ -5696,6 +5697,7 @@ fn reset_runtime_state_for_mode_flip(
     pacemaker_backpressure: &mut PacemakerBackpressure,
     pacemaker_backpressure_tracker: &mut pacing::PacemakerBackpressureTracker,
     forced_view_after_timeout: &mut Option<(u64, u64)>,
+    last_missing_qc_timeout_trigger: &mut Option<CachedSlotTimeoutTrigger>,
     last_pacemaker_attempt: &mut Option<Instant>,
     last_successful_proposal: &mut Option<Instant>,
     tick_counter: &mut u64,
@@ -5714,6 +5716,7 @@ fn reset_runtime_state_for_mode_flip(
     *pacemaker_backpressure = PacemakerBackpressure::new();
     *pacemaker_backpressure_tracker = pacing::PacemakerBackpressureTracker::new();
     *forced_view_after_timeout = None;
+    *last_missing_qc_timeout_trigger = None;
     *last_pacemaker_attempt = None;
     *last_successful_proposal = None;
     *tick_counter = 0;
@@ -9298,6 +9301,7 @@ impl Actor {
             pacemaker: Pacemaker::new(pacemaker_base_interval, now),
             forced_view_after_timeout: None,
             last_cached_slot_timeout_trigger: None,
+            last_missing_qc_timeout_trigger: None,
             proposal_cache: ProposalCache::new(PROPOSAL_CACHE_LIMIT),
             collector_plan: None,
             collector_plan_subject: None,
@@ -12545,6 +12549,14 @@ impl Actor {
                 // Allow READY after f+1 READYs to unblock quorum even if chunks lag.
                 let ready_threshold = topology.min_votes_for_view_change();
                 if ready_count < ready_threshold {
+                    // Proactively pull the BlockCreated payload while chunks are still missing.
+                    // This keeps RBC from idling on slow chunk fanout and uses the existing
+                    // missing-block backoff window to avoid request storms.
+                    self.request_missing_block_for_pending_rbc(
+                        key,
+                        "rbc_ready_chunks_pending",
+                        None,
+                    );
                     if self.should_emit_rbc_ready_deferral(
                         key,
                         now,
@@ -13149,6 +13161,120 @@ impl Actor {
             return;
         };
         self.rebroadcast_rbc_payload_bundle(key, init, chunks, session.ready_signatures.len());
+    }
+
+    /// Push RBC payload/READY evidence directly to peers that are still missing READY signatures.
+    /// This bypasses subset fanout under READY-quorum stalls to unblock stragglers faster.
+    fn rescue_rbc_missing_ready_peers(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        missing_ready_peers: &[PeerId],
+        ready_count: usize,
+    ) {
+        if self.is_observer() || !self.runtime_da_enabled() {
+            return;
+        }
+        if !self.rbc_rebroadcast_active(key) || missing_ready_peers.is_empty() {
+            return;
+        }
+
+        let local_peer_id = self.common_config.peer.id().clone();
+        let mut target_set = BTreeSet::new();
+        for peer in missing_ready_peers {
+            if peer != &local_peer_id {
+                target_set.insert(peer.clone());
+            }
+        }
+        if target_set.is_empty() {
+            return;
+        }
+        let targets: Vec<_> = target_set.into_iter().collect();
+
+        let now = Instant::now();
+        let payload_cooldown = self.payload_rebroadcast_cooldown();
+        let queue_drop = self.queue_drop_backpressure_active(now, payload_cooldown);
+        let queue_block = self.queue_block_backpressure_active(now, payload_cooldown);
+        let payload_due = self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown);
+        let roster = self.ensure_rbc_session_roster(key);
+
+        if !queue_drop && !queue_block && payload_due && !roster.is_empty() {
+            if let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) {
+                let chunk_count = chunks.len();
+                info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    ready = ready_count,
+                    chunk_count,
+                    targets = ?targets,
+                    "sending targeted RBC payload to peers missing READY"
+                );
+                let init_message = Arc::new(BlockMessage::RbcInit(init));
+                let init_encoded = Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
+                for peer in &targets {
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer: peer.clone(),
+                        msg: BlockMessageWire::with_encoded(
+                            Arc::clone(&init_message),
+                            Arc::clone(&init_encoded),
+                        ),
+                    });
+                }
+                for chunk in chunks {
+                    let message = Arc::new(BlockMessage::from_rbc_chunk(chunk));
+                    let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+                    for peer in &targets {
+                        self.schedule_background(BackgroundRequest::Post {
+                            peer: peer.clone(),
+                            msg: BlockMessageWire::with_encoded(
+                                Arc::clone(&message),
+                                Arc::clone(&encoded),
+                            ),
+                        });
+                    }
+                }
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .payload_rebroadcast_last_sent
+                    .insert(key, now);
+            }
+        }
+
+        let ready_cooldown = self.rebroadcast_cooldown();
+        let ready_due = self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown);
+        if ready_due && !session.ready_signatures.is_empty() && !roster.is_empty() {
+            let roster_hash = rbc::rbc_roster_hash(&roster);
+            if let Some(readies) = Self::rbc_ready_bundle(key, session, roster_hash) {
+                info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    ready = readies.len(),
+                    targets = ?targets,
+                    "sending targeted RBC READY set to peers missing READY"
+                );
+                for ready in readies {
+                    let message = Arc::new(BlockMessage::RbcReady(ready));
+                    let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+                    for peer in &targets {
+                        self.schedule_background(BackgroundRequest::Post {
+                            peer: peer.clone(),
+                            msg: BlockMessageWire::with_encoded(
+                                Arc::clone(&message),
+                                Arc::clone(&encoded),
+                            ),
+                        });
+                    }
+                }
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .ready_rebroadcast_last_sent
+                    .insert(key, now);
+            }
+        }
     }
 
     fn rebroadcast_rbc_payload_for_missing_init(
@@ -13932,6 +14058,12 @@ impl Actor {
             if !session.ready_signatures.is_empty() {
                 self.rebroadcast_rbc_ready_set(key, &session);
             }
+            self.rescue_rbc_missing_ready_peers(
+                key,
+                &session,
+                missing_ready_peers.as_slice(),
+                ready_count,
+            );
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
@@ -14218,6 +14350,9 @@ impl Actor {
             .propose
             .proposals_seen
             .contains(&(height, current_view));
+        if proposal_seen {
+            self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+        }
         let queue_since = match self.queue_ready_since {
             Some(entry) if entry.height == height && entry.view == current_view => {
                 Some(entry.since)
@@ -14345,8 +14480,60 @@ impl Actor {
         if !timed_out {
             return false;
         }
+        let backlog_hysteresis_base = timeout.max(proposal_gap_backlog_grace);
+        if !proposal_seen
+            && backlog_hysteresis_base != Duration::ZERO
+            && (rbc_backlog || relay_backpressure || consensus_queue_backlog)
+        {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            if let Some(wait_remaining) = missing_qc_timeout_hysteresis_remaining(
+                consensus_mode,
+                backlog_hysteresis_base,
+                self.subsystems.propose.last_missing_qc_timeout_trigger,
+                height,
+                current_view,
+                now,
+            ) {
+                let next_streak = next_missing_qc_timeout_streak(
+                    self.subsystems.propose.last_missing_qc_timeout_trigger,
+                    height,
+                    current_view,
+                );
+                debug!(
+                    height,
+                    view = current_view,
+                    rbc_backlog,
+                    relay_backpressure,
+                    consensus_queue_backlog,
+                    timeout_ms = timeout.as_millis(),
+                    proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
+                    hysteresis_wait_ms = wait_remaining.as_millis(),
+                    timeout_streak = next_streak,
+                    "deferring idle view-change: missing-proposal timeout hysteresis under backlog"
+                );
+                return false;
+            }
+        }
 
         let next_view = current_view.saturating_add(1);
+        let missing_qc_timeout_streak = if !proposal_seen {
+            next_missing_qc_timeout_streak(
+                self.subsystems.propose.last_missing_qc_timeout_trigger,
+                height,
+                current_view,
+            )
+        } else {
+            0
+        };
+        if !proposal_seen {
+            self.subsystems.propose.last_missing_qc_timeout_trigger =
+                Some(CachedSlotTimeoutTrigger {
+                    height,
+                    view: current_view,
+                    at: now,
+                    streak: missing_qc_timeout_streak,
+                });
+        }
         if !proposal_seen {
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.inc_proposal_gap();
@@ -14364,6 +14551,7 @@ impl Actor {
                 timeout_ms = timeout.as_millis(),
                 suppressed_since_last,
                 proposal_seen,
+                missing_qc_timeout_streak,
                 rbc_backlog,
                 rbc_backlog_progressing,
                 relay_backpressure,
@@ -14757,6 +14945,39 @@ fn idle_view_timeout(
     // the timeout so we don't exceed the normal commit window.
     let grace = propose_interval.saturating_mul(4);
     grace.min(commit_timeout).max(Duration::from_millis(1))
+}
+
+fn next_missing_qc_timeout_streak(
+    previous: Option<CachedSlotTimeoutTrigger>,
+    height: u64,
+    view: u64,
+) -> u8 {
+    previous
+        .filter(|last| last.height == height && view > last.view)
+        .map_or(0, |last| last.streak.saturating_add(1))
+}
+
+fn missing_qc_timeout_hysteresis_remaining(
+    mode: ConsensusMode,
+    timeout: Duration,
+    previous: Option<CachedSlotTimeoutTrigger>,
+    height: u64,
+    view: u64,
+    now: Instant,
+) -> Option<Duration> {
+    if !matches!(mode, ConsensusMode::Npos) || timeout == Duration::ZERO {
+        return None;
+    }
+    let last = previous?;
+    if last.height != height || view <= last.view {
+        return None;
+    }
+    let streak = next_missing_qc_timeout_streak(previous, height, view)
+        .max(1)
+        .min(3);
+    let hysteresis = saturating_mul_duration(timeout, u32::from(streak) + 1);
+    let elapsed = now.saturating_duration_since(last.at);
+    (elapsed < hysteresis).then(|| hysteresis.saturating_sub(elapsed))
 }
 
 fn saturating_mul_duration(duration: Duration, mul: u32) -> Duration {

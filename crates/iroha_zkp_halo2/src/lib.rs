@@ -312,8 +312,38 @@ pub mod batch {
     use norito_helpers::DecodedEnvelope;
     #[cfg(feature = "parallel")]
     use rayon::prelude::*;
+    #[cfg(feature = "parallel")]
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex, OnceLock},
+    };
 
     use super::*;
+
+    #[cfg(feature = "parallel")]
+    static LIMITED_POOL_CACHE: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> =
+        OnceLock::new();
+
+    #[cfg(feature = "parallel")]
+    fn limited_pool(limit: NonZeroUsize) -> Option<Arc<rayon::ThreadPool>> {
+        let key = limit.get();
+        let cache = LIMITED_POOL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        {
+            let guard = cache.lock().ok()?;
+            if let Some(pool) = guard.get(&key) {
+                return Some(pool.clone());
+            }
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(key)
+            .build()
+            .ok()?;
+        let pool = Arc::new(pool);
+        if let Ok(mut guard) = cache.lock() {
+            guard.entry(key).or_insert_with(|| pool.clone());
+        }
+        Some(pool)
+    }
 
     /// Execution strategy controls how batch verification work is scheduled.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -474,15 +504,10 @@ pub mod batch {
                     if limit.get() <= 1 {
                         return verify_sequential(envelopes);
                     }
-                    match rayon::ThreadPoolBuilder::new()
-                        .num_threads(limit.get())
-                        .build()
-                    {
-                        Ok(pool) => {
-                            pool.install(|| envelopes.par_iter().map(verify_single).collect())
-                        }
-                        Err(_) => verify_sequential(envelopes),
-                    }
+                    limited_pool(limit).map_or_else(
+                        || verify_sequential(envelopes),
+                        |pool| pool.install(|| envelopes.par_iter().map(verify_single).collect()),
+                    )
                 }
                 #[cfg(not(feature = "parallel"))]
                 {

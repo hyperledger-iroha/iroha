@@ -15,6 +15,7 @@ use std::{
     collections::HashSet,
     fs,
     io::Read as _,
+    io::{Error as IoError, ErrorKind as IoErrorKind},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock, RwLock,
@@ -280,6 +281,7 @@ fn now_ms() -> u64 {
 
 const ATTACHMENT_ID_HEX_LEN: usize = 64;
 const TENANT_KEY_HEX_LEN: usize = 64;
+const REPORT_SCAN_MAX_FILES: usize = 20_000;
 
 #[derive(Debug, Clone)]
 struct AttachmentLocation {
@@ -296,6 +298,10 @@ fn sanitize_attachment_id(raw: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.to_ascii_lowercase())
+}
+
+fn sanitize_report_id(raw: &str) -> Option<String> {
+    sanitize_attachment_id(raw)
 }
 
 fn sanitize_tenant_key(raw: &str) -> Option<String> {
@@ -329,7 +335,7 @@ fn attachment_bin_path(tenant_key: Option<&str>, id: &str) -> PathBuf {
     }
 }
 
-fn report_path(id: &str) -> PathBuf {
+fn report_path_from_sanitized(id: &str) -> PathBuf {
     reports_dir().join(format!("{}.json", id))
 }
 
@@ -430,8 +436,14 @@ fn load_attachment_body(loc: &AttachmentLocation) -> Option<Vec<u8>> {
 }
 
 fn save_report(rep: &ProverReport) -> std::io::Result<()> {
+    let Some(id) = sanitize_report_id(&rep.id) else {
+        return Err(IoError::new(
+            IoErrorKind::InvalidInput,
+            "invalid prover report id",
+        ));
+    };
     ensure_dirs();
-    let path = report_path(&rep.id);
+    let path = report_path_from_sanitized(&id);
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
     let s = norito::json::to_json_pretty(rep).unwrap_or_else(|_| "{}".into());
@@ -442,11 +454,15 @@ fn save_report(rep: &ProverReport) -> std::io::Result<()> {
 }
 
 fn load_report(id: &str) -> Option<ProverReport> {
-    let mut f = fs::File::open(report_path(id)).ok()?;
+    let clean = sanitize_report_id(id)?;
+    let mut f = fs::File::open(report_path_from_sanitized(&clean)).ok()?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).ok()?;
     let s = std::str::from_utf8(&buf).ok()?;
-    norito::json::from_json::<ProverReport>(s).ok()
+    let mut report = norito::json::from_json::<ProverReport>(s).ok()?;
+    // Normalize persisted ids defensively so lookups remain canonical.
+    report.id = clean;
+    Some(report)
 }
 
 fn list_report_ids() -> Vec<String> {
@@ -455,7 +471,9 @@ fn list_report_ids() -> Vec<String> {
         for e in rd.flatten() {
             if let Some(name) = e.file_name().to_str() {
                 if let Some(id) = name.strip_suffix(".json") {
-                    ids.push(id.to_string());
+                    if let Some(clean) = sanitize_report_id(id) {
+                        ids.push(clean);
+                    }
                 }
             }
         }
@@ -464,7 +482,9 @@ fn list_report_ids() -> Vec<String> {
 }
 
 fn delete_report_files(id: &str) {
-    let _ = fs::remove_file(report_path(id));
+    if let Some(clean) = sanitize_report_id(id) {
+        let _ = fs::remove_file(report_path_from_sanitized(&clean));
+    }
 }
 
 fn record_prover_metrics(report: &ProverReport) {
@@ -912,7 +932,7 @@ pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
 
 fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> {
     // Skip if report already exists
-    if report_path(&loc.id).exists() {
+    if report_path_from_sanitized(&loc.id).exists() {
         return load_report(&loc.id);
     }
     let meta = load_attachment_meta(loc)?;
@@ -1029,7 +1049,7 @@ async fn run_budgeted_scan() -> ScanStats {
     let mut pending: Vec<AttachmentLocation> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
     for loc in list_attachment_locations() {
-        if report_path(&loc.id).exists() {
+        if report_path_from_sanitized(&loc.id).exists() {
             continue;
         }
         if seen_ids.insert(loc.id.clone()) {
@@ -1053,6 +1073,28 @@ async fn run_budgeted_scan() -> ScanStats {
     let mut join_set = JoinSet::new();
 
     for loc in pending {
+        while join_set.len() >= max_inflight {
+            let Some(res) = join_set.join_next().await else {
+                break;
+            };
+            match res {
+                Ok(Ok(true)) => processed_reports += 1,
+                Ok(Ok(false)) => {}
+                Ok(Err(err)) => {
+                    iroha_logger::warn!(%err, "Background prover attachment processing failed");
+                }
+                Err(err) => {
+                    iroha_logger::warn!(%err, "Background prover task join failed");
+                }
+            }
+            if start.elapsed().as_millis() as u64 >= max_millis {
+                budget_reason = Some("time");
+                break;
+            }
+        }
+        if budget_reason.is_some() {
+            break;
+        }
         if start.elapsed().as_millis() as u64 >= max_millis {
             budget_reason = Some("time");
             break;
@@ -1073,12 +1115,14 @@ async fn run_budgeted_scan() -> ScanStats {
         remaining = remaining.saturating_sub(1);
         telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
 
-        let semaphore = semaphore.clone();
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => break,
+        };
         let inflight = inflight.clone();
         let telemetry_clone = telemetry.clone();
         let loc_owned = loc;
         join_set.spawn(async move {
-            let permit = semaphore.acquire_owned().await.expect("semaphore closed");
             let prev = inflight.fetch_add(1, Ordering::SeqCst) + 1;
             telemetry_clone.with_metrics(|tel| tel.set_torii_zk_prover_inflight(prev));
             #[cfg(test)]
@@ -1228,33 +1272,66 @@ pub struct ProverListQuery {
 pub async fn handle_list_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
 ) -> impl IntoResponse {
-    let mut reps = Vec::new();
-    for id in list_report_ids() {
-        if let Some(r) = load_report(&id) {
-            reps.push(r);
-        }
-    }
-    // Sort by processed time ascending
-    reps.sort_by_key(|r| r.processed_ms);
-    // Apply filters from query
     let ok_req = q.ok_only.unwrap_or(false);
     let failed_req = q.failed_only.unwrap_or(false)
         || q.errors_only.unwrap_or(false)
         || q.messages_only.unwrap_or(false);
-    let mut filtered: Vec<_> = reps
+    let requested_id = if let Some(id) = q.id.as_deref() {
+        let Some(clean) = sanitize_report_id(id) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid report id (expected 64 hex characters)",
+            )
+                .into_response();
+        };
+        Some(clean)
+    } else {
+        None
+    };
+
+    let mut scanned = 0usize;
+    let mut filtered: Vec<ProverReport> = Vec::new();
+    let ids = requested_id
+        .clone()
+        .map_or_else(list_report_ids, |id| vec![id]);
+    for id in ids {
+        scanned = scanned.saturating_add(1);
+        if scanned > REPORT_SCAN_MAX_FILES {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "too many prover reports to scan (>{REPORT_SCAN_MAX_FILES}); narrow filters"
+                ),
+            )
+                .into_response();
+        }
+        let Some(report) = load_report(&id) else {
+            continue;
+        };
+        let matches = match (
+            &requested_id,
+            &q.content_type,
+            &q.has_tag,
+            q.ok_only,
+            q.failed_only,
+        ) {
+            (Some(req), _, _, _, _) if &report.id != req => false,
+            (_, Some(ct), _, _, _) if !report.content_type.contains(ct) => false,
+            (_, _, Some(tag), _, _) => report
+                .zk1_tags
+                .as_ref()
+                .map(|v| v.iter().any(|t| t == tag))
+                .unwrap_or(false),
+            _ => true,
+        };
+        if !matches {
+            continue;
+        }
+        filtered.push(report);
+    }
+
+    filtered = filtered
         .into_iter()
-        .filter(
-            |r| match (&q.id, &q.content_type, &q.has_tag, q.ok_only, q.failed_only) {
-                (Some(id), _, _, _, _) if &r.id != id => false,
-                (_, Some(ct), _, _, _) if !r.content_type.contains(ct) => false,
-                (_, _, Some(tag), _, _) => r
-                    .zk1_tags
-                    .as_ref()
-                    .map(|v| v.iter().any(|t| t == tag))
-                    .unwrap_or(false),
-                _ => true,
-            },
-        )
         .filter(|r| q.since_ms.map_or(true, |th| r.processed_ms >= th))
         .filter(|r| q.before_ms.map_or(true, |th| r.processed_ms <= th))
         .filter(|r| match (ok_req, failed_req) {
@@ -1264,6 +1341,8 @@ pub async fn handle_list_reports(
             _ => true,
         })
         .collect();
+    // Sort by processed time ascending
+    filtered.sort_by_key(|r| r.processed_ms);
     // latest=true overrides order/offset/limit: pick the last (max processed_ms)
     if q.latest.unwrap_or(false) {
         if let Some(last) = filtered.pop() {
@@ -1328,37 +1407,74 @@ pub async fn handle_list_reports(
 pub async fn handle_count_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
 ) -> impl IntoResponse {
-    let mut reps = Vec::new();
-    for id in list_report_ids() {
-        if let Some(r) = load_report(&id) {
-            reps.push(r);
-        }
-    }
-    // Sort then filter (order doesn't matter for count but keeps parity with list)
-    reps.sort_by_key(|r| r.processed_ms);
     let ok_req = q.ok_only.unwrap_or(false);
     let failed_req = q.failed_only.unwrap_or(false) || q.errors_only.unwrap_or(false);
-    let count = reps
-        .into_iter()
-        .filter(
-            |r| match (&q.id, &q.content_type, &q.has_tag, q.ok_only, q.failed_only) {
-                (Some(id), _, _, _, _) if &r.id != id => false,
-                (_, Some(ct), _, _, _) if !r.content_type.contains(ct) => false,
-                (_, _, Some(tag), _, _) => r
-                    .zk1_tags
-                    .as_ref()
-                    .map(|v| v.iter().any(|t| t == tag))
-                    .unwrap_or(false),
-                _ => true,
-            },
-        )
-        .filter(|r| q.since_ms.map_or(true, |th| r.processed_ms >= th))
-        .filter(|r| match (ok_req, failed_req) {
-            (true, false) => r.ok,
-            (false, true) => !r.ok,
+    let requested_id = if let Some(id) = q.id.as_deref() {
+        let Some(clean) = sanitize_report_id(id) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid report id (expected 64 hex characters)",
+            )
+                .into_response();
+        };
+        Some(clean)
+    } else {
+        None
+    };
+
+    let ids = requested_id
+        .clone()
+        .map_or_else(list_report_ids, |id| vec![id]);
+    let mut scanned = 0usize;
+    let mut count = 0u64;
+    for id in ids {
+        scanned = scanned.saturating_add(1);
+        if scanned > REPORT_SCAN_MAX_FILES {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "too many prover reports to scan (>{REPORT_SCAN_MAX_FILES}); narrow filters"
+                ),
+            )
+                .into_response();
+        }
+        let Some(report) = load_report(&id) else {
+            continue;
+        };
+        let matches = match (
+            &requested_id,
+            &q.content_type,
+            &q.has_tag,
+            q.ok_only,
+            q.failed_only,
+        ) {
+            (Some(req), _, _, _, _) if &report.id != req => false,
+            (_, Some(ct), _, _, _) if !report.content_type.contains(ct) => false,
+            (_, _, Some(tag), _, _) => report
+                .zk1_tags
+                .as_ref()
+                .map(|v| v.iter().any(|t| t == tag))
+                .unwrap_or(false),
             _ => true,
-        })
-        .count();
+        };
+        if !matches {
+            continue;
+        }
+        if !q.since_ms.map_or(true, |th| report.processed_ms >= th) {
+            continue;
+        }
+        if !q.before_ms.map_or(true, |th| report.processed_ms <= th) {
+            continue;
+        }
+        let status_matches = match (ok_req, failed_req) {
+            (true, false) => report.ok,
+            (false, true) => !report.ok,
+            _ => true,
+        };
+        if status_matches {
+            count = count.saturating_add(1);
+        }
+    }
     let body = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
         .unwrap_or_else(|_| "{}".into());
     axum::response::Response::builder()
@@ -1372,39 +1488,74 @@ pub async fn handle_count_reports(
 pub async fn handle_delete_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
 ) -> impl IntoResponse {
-    // Collect matching ids based on same filter logic as list
-    let mut reps = Vec::new();
-    for id in list_report_ids() {
-        if let Some(r) = load_report(&id) {
-            reps.push(r);
-        }
-    }
-    reps.sort_by_key(|r| r.processed_ms);
     let ok_req = q.ok_only.unwrap_or(false);
     let failed_req = q.failed_only.unwrap_or(false) || q.errors_only.unwrap_or(false);
-    let matches: Vec<String> = reps
-        .into_iter()
-        .filter(
-            |r| match (&q.id, &q.content_type, &q.has_tag, q.ok_only, q.failed_only) {
-                (Some(id), _, _, _, _) if &r.id != id => false,
-                (_, Some(ct), _, _, _) if !r.content_type.contains(ct) => false,
-                (_, _, Some(tag), _, _) => r
-                    .zk1_tags
-                    .as_ref()
-                    .map(|v| v.iter().any(|t| t == tag))
-                    .unwrap_or(false),
-                _ => true,
-            },
-        )
-        .filter(|r| q.since_ms.map_or(true, |th| r.processed_ms >= th))
-        .filter(|r| q.before_ms.map_or(true, |th| r.processed_ms <= th))
-        .filter(|r| match (ok_req, failed_req) {
-            (true, false) => r.ok,
-            (false, true) => !r.ok,
+    let requested_id = if let Some(id) = q.id.as_deref() {
+        let Some(clean) = sanitize_report_id(id) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid report id (expected 64 hex characters)",
+            )
+                .into_response();
+        };
+        Some(clean)
+    } else {
+        None
+    };
+    let ids = requested_id
+        .clone()
+        .map_or_else(list_report_ids, |id| vec![id]);
+
+    let mut scanned = 0usize;
+    let mut matches: Vec<String> = Vec::new();
+    for id in ids {
+        scanned = scanned.saturating_add(1);
+        if scanned > REPORT_SCAN_MAX_FILES {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "too many prover reports to scan (>{REPORT_SCAN_MAX_FILES}); narrow filters"
+                ),
+            )
+                .into_response();
+        }
+        let Some(report) = load_report(&id) else {
+            continue;
+        };
+        let filter_matches = match (
+            &requested_id,
+            &q.content_type,
+            &q.has_tag,
+            q.ok_only,
+            q.failed_only,
+        ) {
+            (Some(req), _, _, _, _) if &report.id != req => false,
+            (_, Some(ct), _, _, _) if !report.content_type.contains(ct) => false,
+            (_, _, Some(tag), _, _) => report
+                .zk1_tags
+                .as_ref()
+                .map(|v| v.iter().any(|t| t == tag))
+                .unwrap_or(false),
             _ => true,
-        })
-        .map(|r| r.id)
-        .collect();
+        };
+        if !filter_matches {
+            continue;
+        }
+        if !q.since_ms.map_or(true, |th| report.processed_ms >= th) {
+            continue;
+        }
+        if !q.before_ms.map_or(true, |th| report.processed_ms <= th) {
+            continue;
+        }
+        let status_matches = match (ok_req, failed_req) {
+            (true, false) => report.ok,
+            (false, true) => !report.ok,
+            _ => true,
+        };
+        if status_matches {
+            matches.push(report.id);
+        }
+    }
 
     let mut deleted_ids = Vec::new();
     for id in matches {
@@ -1426,7 +1577,14 @@ pub async fn handle_delete_reports(
 #[cfg(feature = "app_api")]
 /// GET /v1/zk/prover/reports/{id} — get a single report by id.
 pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
-    load_report(&id).map_or_else(
+    let Some(clean) = sanitize_report_id(&id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "invalid report id (expected 64 hex characters)",
+        )
+            .into_response();
+    };
+    load_report(&clean).map_or_else(
         || StatusCode::NOT_FOUND.into_response(),
         |r| {
             let s = norito::json::to_json_pretty(&r).unwrap_or_else(|_| "{}".into());
@@ -1441,12 +1599,19 @@ pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoRespo
 #[cfg(feature = "app_api")]
 /// DELETE /v1/zk/prover/reports/{id} — delete a single report by id.
 pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
-    let existed = report_path(&id).exists();
-    delete_report_files(&id);
+    let Some(clean) = sanitize_report_id(&id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "invalid report id (expected 64 hex characters)",
+        )
+            .into_response();
+    };
+    let existed = report_path_from_sanitized(&clean).exists();
+    delete_report_files(&clean);
     if existed {
-        StatusCode::NO_CONTENT
+        StatusCode::NO_CONTENT.into_response()
     } else {
-        StatusCode::NOT_FOUND
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 
@@ -1499,6 +1664,22 @@ mod tests {
             .expect("attachments tenant dir");
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn get_report_rejects_invalid_id() {
+        let response = axum::response::IntoResponse::into_response(
+            super::handle_get_report(axum::extract::Path("../bad".to_string())).await,
+        );
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delete_report_rejects_invalid_id() {
+        let response = axum::response::IntoResponse::into_response(
+            super::handle_delete_report(axum::extract::Path("../bad".to_string())).await,
+        );
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
     #[test]
     fn scan_and_report_single_attachment() {
         init_test_cfg();
@@ -1514,6 +1695,7 @@ mod tests {
             created_ms: now_ms(),
             tenant: Some(tenant_key.clone()),
             provenance: None,
+            zk1_tags: None,
         };
         ensure_tenant_dir(&tenant_key);
         fs::write(attachment_bin_path(Some(&tenant_key), &id), &body).unwrap();
@@ -1559,6 +1741,7 @@ mod tests {
                 created_ms: now_ms(),
                 tenant: Some(tenant_key.clone()),
                 provenance: None,
+                zk1_tags: None,
             };
             fs::write(
                 attachment_bin_path(Some(&tenant_key), &id),
@@ -1598,6 +1781,7 @@ mod tests {
                 created_ms: now_ms(),
                 tenant: Some(tenant_key.clone()),
                 provenance: None,
+                zk1_tags: None,
             };
             fs::write(attachment_bin_path(Some(&tenant_key), &id), vec![b'B'; 16]).unwrap();
             fs::write(
@@ -1658,6 +1842,7 @@ mod tests {
             created_ms: super::now_ms(),
             tenant: Some(tenant_key.clone()),
             provenance: None,
+            zk1_tags: None,
         };
         fs::write(
             attachment_meta_path(Some(&tenant_key), &ok_id),
@@ -1678,6 +1863,7 @@ mod tests {
             created_ms: super::now_ms(),
             tenant: Some(tenant_key.clone()),
             provenance: None,
+            zk1_tags: None,
         };
         fs::write(
             attachment_meta_path(Some(&tenant_key), &err_id),

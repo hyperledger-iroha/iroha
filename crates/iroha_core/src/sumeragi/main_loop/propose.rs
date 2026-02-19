@@ -2825,6 +2825,7 @@ impl Actor {
             .new_view_tracker
             .remove(height, view_idx);
         self.subsystems.propose.last_cached_slot_timeout_trigger = None;
+        self.subsystems.propose.last_missing_qc_timeout_trigger = None;
         self.subsystems.propose.last_successful_proposal = Some(now);
         true
     }

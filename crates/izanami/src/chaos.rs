@@ -172,12 +172,23 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     }
 }
 
+fn default_nexus_pipeline_time() -> Duration {
+    let block_ms =
+        u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS).expect("izanami block time must be non-negative");
+    let commit_ms = u64::try_from(IZANAMI_NPOS_COMMIT_TIME_MS)
+        .expect("izanami commit time must be non-negative");
+    Duration::from_millis(block_ms.saturating_add(commit_ms))
+}
+
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut genesis = genesis;
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
         .with_base_seed(instructions::IZANAMI_BASE_SEED);
-    builder = match config.pipeline_time {
+    let pipeline_time = config
+        .pipeline_time
+        .or_else(|| config.nexus.as_ref().map(|_| default_nexus_pipeline_time()));
+    builder = match pipeline_time {
         Some(duration) => builder.with_pipeline_time(duration),
         None => builder.with_default_pipeline_time(),
     };
@@ -2387,6 +2398,11 @@ mod tests {
         }
 
         let expected = derive_npos_timing(&config);
+        assert_eq!(
+            network.pipeline_time(),
+            default_nexus_pipeline_time(),
+            "nexus runs without explicit pipeline_time should use Izanami fast pipeline defaults"
+        );
         assert_eq!(params.sumeragi().block_time_ms(), expected.block_ms);
         assert_eq!(params.sumeragi().commit_time_ms(), expected.commit_time_ms);
         assert!(

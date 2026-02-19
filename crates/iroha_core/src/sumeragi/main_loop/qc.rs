@@ -431,6 +431,21 @@ impl Actor {
         signers: &BTreeSet<ValidatorIndex>,
         topology: &super::network_topology::Topology,
     ) -> bool {
+        self.defer_qc_if_block_missing_with_quorum_hint(
+            phase, block_hash, height, view, signers, topology, /*commit_quorum_met*/ false,
+        )
+    }
+
+    pub(super) fn defer_qc_if_block_missing_with_quorum_hint(
+        &mut self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        signers: &BTreeSet<ValidatorIndex>,
+        topology: &super::network_topology::Topology,
+        commit_quorum_met: bool,
+    ) -> bool {
         let da_enabled = self.runtime_da_enabled();
         let base_retry_window = self.rebroadcast_cooldown();
         let commit_quorum = topology.min_votes_for_commit().max(1);
@@ -439,7 +454,7 @@ impl Actor {
             && voting_signers < commit_quorum
             && voting_signers.saturating_add(1) >= commit_quorum;
         let aggressive_qc_fetch = matches!(phase, crate::sumeragi::consensus::Phase::Commit)
-            && (voting_signers >= commit_quorum || near_commit_quorum);
+            && (commit_quorum_met || voting_signers >= commit_quorum || near_commit_quorum);
         let retry_window = if aggressive_qc_fetch {
             super::REBROADCAST_COOLDOWN_FLOOR
         } else {
@@ -1687,14 +1702,26 @@ impl Actor {
         if block_known {
             false
         } else {
-            self.defer_qc_if_block_missing(
-                phase,
-                block_hash,
-                height,
-                view,
-                signers,
-                signature_topology,
-            )
+            if quorum_met {
+                self.defer_qc_if_block_missing_with_quorum_hint(
+                    phase,
+                    block_hash,
+                    height,
+                    view,
+                    signers,
+                    signature_topology,
+                    /*commit_quorum_met*/ true,
+                )
+            } else {
+                self.defer_qc_if_block_missing(
+                    phase,
+                    block_hash,
+                    height,
+                    view,
+                    signers,
+                    signature_topology,
+                )
+            }
         }
     }
 

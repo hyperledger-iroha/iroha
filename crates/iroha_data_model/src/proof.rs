@@ -20,13 +20,21 @@ use norito::{
 
 use crate::{confidential::ConfidentialStatus, zk::BackendTag};
 
+const MAX_BACKEND_FIELD_BYTES: usize = 4 * 1024;
+const MAX_REF_FIELD_BYTES: usize = 16 * 1024;
+const MAX_LEN_PREFIXED_FIELD_BYTES: usize = 64 * 1024 * 1024;
+
 /// Read a length‑prefixed field produced by Norito struct serializers.
 fn take_len_prefixed_slice<'a>(
     bytes: &'a [u8],
     offset: &mut usize,
+    max_len: usize,
 ) -> Result<&'a [u8], ncore::Error> {
     let tail = bytes.get(*offset..).ok_or(ncore::Error::LengthMismatch)?;
     let (len, hdr) = ncore::read_len_dyn_slice(tail)?;
+    if len > max_len {
+        return Err(ncore::Error::LengthMismatch);
+    }
     let start = offset
         .checked_add(hdr)
         .ok_or(ncore::Error::LengthMismatch)?;
@@ -89,12 +97,13 @@ impl<'de> norito::NoritoDeserialize<'de> for ProofBox {
 impl<'a> ncore::DecodeFromSlice<'a> for ProofBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut offset = 0usize;
-        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset)?;
+        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
         let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
         if used != backend_bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-        let proof_bytes_slice = take_len_prefixed_slice(bytes, &mut offset)?;
+        let proof_bytes_slice =
+            take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
         if norito::debug_trace_enabled() {
             let mut head = [0u8; 8];
             let preview = &proof_bytes_slice[..proof_bytes_slice.len().min(8)];
@@ -168,12 +177,13 @@ impl<'de> norito::NoritoDeserialize<'de> for VerifyingKeyBox {
 impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut offset = 0usize;
-        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset)?;
+        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
         let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
         if used != backend_bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-        let vk_bytes_slice = take_len_prefixed_slice(bytes, &mut offset)?;
+        let vk_bytes_slice =
+            take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
         let (vk_bytes, used) =
             <Vec<u8> as ncore::DecodeFromSlice>::decode_from_slice(vk_bytes_slice)?;
         if used != vk_bytes_slice.len() {
@@ -468,26 +478,28 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut offset = 0usize;
 
-        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset)?;
+        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
         let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
         if used != backend_bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
 
-        let proof_slice = take_len_prefixed_slice(bytes, &mut offset)?;
+        let proof_slice =
+            take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
         let (proof, used) = <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(proof_slice)?;
         if used != proof_slice.len() {
             return Err(ncore::Error::LengthMismatch);
         }
 
-        let vk_ref_slice = take_len_prefixed_slice(bytes, &mut offset)?;
+        let vk_ref_slice = take_len_prefixed_slice(bytes, &mut offset, MAX_REF_FIELD_BYTES)?;
         let (vk_ref, used) =
             <Option<VerifyingKeyId> as ncore::DecodeFromSlice>::decode_from_slice(vk_ref_slice)?;
         if used != vk_ref_slice.len() {
             return Err(ncore::Error::LengthMismatch);
         }
 
-        let vk_inline_slice = take_len_prefixed_slice(bytes, &mut offset)?;
+        let vk_inline_slice =
+            take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
         let (vk_inline, used) =
             <Option<VerifyingKeyBox> as ncore::DecodeFromSlice>::decode_from_slice(
                 vk_inline_slice,
@@ -500,7 +512,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
         let vk_commitment = if offset == bytes.len() {
             None
         } else {
-            let slice = take_len_prefixed_slice(bytes, &mut offset)?;
+            let slice = take_len_prefixed_slice(bytes, &mut offset, MAX_REF_FIELD_BYTES)?;
             let (value, used) =
                 <Option<[u8; 32]> as ncore::DecodeFromSlice>::decode_from_slice(slice)?;
             if used != slice.len() {
@@ -512,7 +524,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
         let envelope_hash = if offset == bytes.len() {
             None
         } else {
-            let slice = take_len_prefixed_slice(bytes, &mut offset)?;
+            let slice = take_len_prefixed_slice(bytes, &mut offset, MAX_REF_FIELD_BYTES)?;
             let (value, used) =
                 <Option<[u8; 32]> as ncore::DecodeFromSlice>::decode_from_slice(slice)?;
             if used != slice.len() {
@@ -524,7 +536,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
         let lane_privacy = if offset == bytes.len() {
             None
         } else {
-            let slice = take_len_prefixed_slice(bytes, &mut offset)?;
+            let slice = take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
             let (value, used) =
                 <Option<crate::nexus::LanePrivacyProof> as ncore::DecodeFromSlice>::decode_from_slice(
                     slice,
@@ -1016,5 +1028,26 @@ mod tests {
         let dec: ProofRecord = norito::core::NoritoDeserialize::deserialize(arch);
         assert!(matches!(dec.status, ProofStatus::Verified));
         assert_eq!(dec.verified_at_height, Some(42));
+    }
+
+    #[test]
+    fn take_len_prefixed_slice_rejects_fields_beyond_cap() {
+        let mut encoded = Vec::new();
+        ncore::write_len_header_to_vec(&mut encoded, (MAX_BACKEND_FIELD_BYTES as u64) + 1);
+        let mut offset = 0usize;
+        let result = take_len_prefixed_slice(&encoded, &mut offset, MAX_BACKEND_FIELD_BYTES);
+        assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn proofbox_decode_rejects_oversized_len_prefixed_payloads() {
+        let backend: iroha_schema::Ident = "halo2/ipa".into();
+        let backend_bytes = norito::to_bytes(&backend).expect("encode backend");
+        let mut encoded = Vec::new();
+        ncore::write_len_header_to_vec(&mut encoded, backend_bytes.len() as u64);
+        encoded.extend_from_slice(&backend_bytes);
+        ncore::write_len_header_to_vec(&mut encoded, (MAX_LEN_PREFIXED_FIELD_BYTES as u64) + 1);
+        let result = <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
+        assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }
 }

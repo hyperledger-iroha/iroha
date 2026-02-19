@@ -1888,46 +1888,74 @@ fn blend_rgb(rgb: &mut [f64; 3], target: [f64; 3], alpha: f64) {
     rgb[2] = lerp(rgb[2], target[2], alpha);
 }
 
+const SORA_TEN_LOGO_PATH_POINTS: [[f64; 2]; 25] = [
+    [94.000, 36.000],
+    [86.898, 31.000],
+    [77.019, 28.000],
+    [65.750, 27.000],
+    [54.481, 28.000],
+    [44.602, 31.000],
+    [37.500, 36.000],
+    [34.546, 41.944],
+    [35.537, 47.556],
+    [39.500, 52.500],
+    [45.463, 56.444],
+    [52.454, 59.056],
+    [59.500, 60.000],
+    [66.509, 60.944],
+    [73.407, 63.556],
+    [79.250, 67.500],
+    [83.093, 72.444],
+    [83.991, 78.056],
+    [81.000, 84.000],
+    [73.898, 89.000],
+    [64.019, 92.000],
+    [52.750, 93.000],
+    [41.481, 92.000],
+    [31.602, 89.000],
+    [24.500, 84.000],
+];
+
 fn sora_ten_logo_mask(nx: f64, ny: f64) -> bool {
-    let x = (nx * 2.0 - 1.0) / 0.92;
-    let y = (ny * 2.0 - 1.0) / 0.92;
-
-    // Mirror the portal logo's "S" stroke as a rounded polyline in normalized space.
-    let top = segment_distance(x, y, 0.60, -0.56, -0.53, -0.56);
-    let bend_left = segment_distance(x, y, -0.53, -0.56, -0.09, -0.08);
-    let bend_right = segment_distance(x, y, -0.09, -0.08, 0.34, 0.40);
-    let bottom = segment_distance(x, y, 0.34, 0.40, -0.79, 0.40);
-    let primary = top.min(bend_left.min(bend_right.min(bottom)));
-
-    // Secondary sweeps smooth the curvature at the top and bottom turns.
-    let sweep_top = segment_distance(x, y, 0.57, -0.52, -0.48, -0.52);
-    let sweep_bottom = segment_distance(x, y, 0.29, 0.36, -0.75, 0.36);
-    let sweep = sweep_top.min(sweep_bottom);
-
-    let stroke = if y < -0.18 {
-        0.116
-    } else if y < 0.18 {
-        0.110
+    let x = nx * 128.0;
+    let y = ny * 128.0;
+    let stroke_radius = if y < 58.0 {
+        5.3
+    } else if y < 76.0 {
+        4.9
     } else {
-        0.118
+        5.2
     };
-    let in_bounds = x >= -0.92 && x <= 0.72 && y >= -0.76 && y <= 0.58;
-    in_bounds && (primary <= stroke || sweep <= stroke * 0.92)
+    // Fast reject outside the icon path bounds (with stroke padding).
+    if x < 18.0 || x > 100.0 || y < 20.0 || y > 100.0 {
+        return false;
+    }
+
+    let mut min_dist_sq = f64::MAX;
+    for pair in SORA_TEN_LOGO_PATH_POINTS.windows(2) {
+        let [ax, ay] = pair[0];
+        let [bx, by] = pair[1];
+        let dist_sq = segment_distance_sq(x, y, ax, ay, bx, by);
+        if dist_sq < min_dist_sq {
+            min_dist_sq = dist_sq;
+        }
+    }
+    min_dist_sq <= stroke_radius * stroke_radius
 }
 
-fn segment_distance(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+fn segment_distance_sq(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     let abx = bx - ax;
     let aby = by - ay;
     let apx = px - ax;
     let apy = py - ay;
     let denom = abx * abx + aby * aby;
     if denom <= f64::EPSILON {
-        return (apx * apx + apy * apy).sqrt();
+        return apx * apx + apy * apy;
     }
     let t = ((apx * abx + apy * aby) / denom).clamp(0.0, 1.0);
     let dx = apx - abx * t;
     let dy = apy - aby * t;
-    (dx * dx + dy * dy).sqrt()
+    dx * dx + dy * dy
 }
 
 fn estimate_style_aesthetic_score(image: &image::RgbaImage, style: PetalRenderStyle) -> f64 {

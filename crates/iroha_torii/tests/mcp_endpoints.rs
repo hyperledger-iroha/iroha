@@ -1473,35 +1473,112 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
         ),
         (
             10321,
+            "iroha.gov.proposals.deploy_contract",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10322,
             "iroha.gov.proposals.get",
             norito::json!({
                 "proposal_id": "proposal-001"
             }),
         ),
         (
-            10322,
+            10323,
+            "iroha.gov.locks.get",
+            norito::json!({
+                "rid": "referendum-001"
+            }),
+        ),
+        (
+            10324,
             "iroha.gov.referenda.get",
             norito::json!({
                 "referendum_id": "referendum-001"
             }),
         ),
         (
-            10323,
+            10325,
             "iroha.gov.tally.get",
             norito::json!({
                 "tally_id": "tally-001"
             }),
         ),
-        (10324, "iroha.gov.council.current", norito::json!({})),
         (
-            10325,
+            10326,
+            "iroha.gov.ballots.zk",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10327,
+            "iroha.gov.ballots.zk_v1",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10328,
+            "iroha.gov.ballots.zk_v1.ballot_proof",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10329,
+            "iroha.gov.ballots.plain",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10330,
+            "iroha.gov.protected_namespaces.list",
+            norito::json!({}),
+        ),
+        (
+            10331,
+            "iroha.gov.protected_namespaces.update",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (10332, "iroha.gov.unlocks.stats", norito::json!({})),
+        (10333, "iroha.gov.council.current", norito::json!({})),
+        (
+            10334,
+            "iroha.gov.council.persist",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10335,
+            "iroha.gov.council.replace",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (10336, "iroha.gov.council.audit", norito::json!({})),
+        (
+            10337,
+            "iroha.gov.council.derive_vrf",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10338,
             "iroha.gov.enact",
             norito::json!({
                 "body": {}
             }),
         ),
         (
-            10326,
+            10339,
             "iroha.gov.finalize",
             norito::json!({
                 "body": {}
@@ -2096,8 +2173,18 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly governance instances-list MCP tool"
     );
     assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.gov.proposals.deploy_contract"),
+        "expected agent-friendly governance deploy-contract MCP tool"
+    );
+    assert!(
         names.iter().any(|name| name == "iroha.gov.proposals.get"),
         "expected agent-friendly governance proposal detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.locks.get"),
+        "expected agent-friendly governance lock-detail MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.gov.referenda.get"),
@@ -2108,8 +2195,60 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly governance tally detail MCP tool"
     );
     assert!(
+        names.iter().any(|name| name == "iroha.gov.ballots.zk"),
+        "expected agent-friendly governance ZK-ballot MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.ballots.zk_v1"),
+        "expected agent-friendly governance ZK-v1-ballot MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.gov.ballots.zk_v1.ballot_proof"),
+        "expected agent-friendly governance ballot-proof MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.ballots.plain"),
+        "expected agent-friendly governance plain-ballot MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.gov.protected_namespaces.list"),
+        "expected agent-friendly governance protected-namespaces list MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.gov.protected_namespaces.update"),
+        "expected agent-friendly governance protected-namespaces update MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.unlocks.stats"),
+        "expected agent-friendly governance unlocks-stats MCP tool"
+    );
+    assert!(
         names.iter().any(|name| name == "iroha.gov.council.current"),
         "expected agent-friendly governance council snapshot MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.council.persist"),
+        "expected agent-friendly governance council persist MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.council.replace"),
+        "expected agent-friendly governance council replace MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.council.audit"),
+        "expected agent-friendly governance council audit MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.gov.council.derive_vrf"),
+        "expected agent-friendly governance council derive-vrf MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.gov.enact"),
@@ -2842,6 +2981,44 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_flat_hash
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
         "expected invalid flat hash to be rejected"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_transaction_hash_alias() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10616,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.transactions.status",
+                "arguments": {
+                    "transaction_hash": "not-a-hash"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid transaction_hash alias should be marked as MCP tool error"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid transaction_hash alias to be rejected"
     );
 }
 
@@ -5983,7 +6160,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.ws.ticket",
                 "arguments": {
-                    "sid": sid,
+                    "session_id": sid,
                     "role": "app",
                     "token_app": token_app,
                     "node_url": "https://node.example"
@@ -6086,7 +6263,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.session.delete",
                 "arguments": {
-                    "sid": sid
+                    "session_id": sid
                 }
             }
         }),
@@ -6186,7 +6363,7 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "params": {
                 "name": "iroha.connect.ws.ticket",
                 "arguments": {
-                    "sid": sid,
+                    "session_id": sid,
                     "role": "app",
                     "token_app": token_app,
                     "node_url": "https://node.example"
@@ -6240,7 +6417,7 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "params": {
                 "name": "iroha.connect.session.delete",
                 "arguments": {
-                    "sid": sid
+                    "session_id": sid
                 }
             }
         }),

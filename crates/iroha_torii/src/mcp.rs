@@ -205,10 +205,23 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_proofs_query_tool());
     tools.push(iroha_proofs_retention_tool());
     tools.push(iroha_gov_instances_list_tool());
+    tools.push(iroha_gov_proposals_deploy_contract_tool());
     tools.push(iroha_gov_proposals_get_tool());
+    tools.push(iroha_gov_locks_get_tool());
     tools.push(iroha_gov_referenda_get_tool());
     tools.push(iroha_gov_tally_get_tool());
+    tools.push(iroha_gov_ballots_zk_tool());
+    tools.push(iroha_gov_ballots_zk_v1_tool());
+    tools.push(iroha_gov_ballots_zk_v1_ballot_proof_tool());
+    tools.push(iroha_gov_ballots_plain_tool());
+    tools.push(iroha_gov_protected_namespaces_list_tool());
+    tools.push(iroha_gov_protected_namespaces_update_tool());
+    tools.push(iroha_gov_unlocks_stats_tool());
     tools.push(iroha_gov_council_current_tool());
+    tools.push(iroha_gov_council_persist_tool());
+    tools.push(iroha_gov_council_replace_tool());
+    tools.push(iroha_gov_council_audit_tool());
+    tools.push(iroha_gov_council_derive_vrf_tool());
     tools.push(iroha_gov_enact_tool());
     tools.push(iroha_gov_finalize_tool());
     tools.push(iroha_aliases_resolve_tool());
@@ -855,8 +868,22 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        "iroha.gov.proposals.deploy_contract" => {
+            match dispatch_iroha_gov_proposals_deploy_contract(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
         "iroha.gov.proposals.get" => {
             match dispatch_iroha_gov_proposals_get(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.locks.get" => {
+            match dispatch_iroha_gov_locks_get(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -873,8 +900,80 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        "iroha.gov.ballots.zk" => {
+            match dispatch_iroha_gov_ballots_zk(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.ballots.zk_v1" => {
+            match dispatch_iroha_gov_ballots_zk_v1(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.ballots.zk_v1.ballot_proof" => {
+            match dispatch_iroha_gov_ballots_zk_v1_ballot_proof(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.ballots.plain" => {
+            match dispatch_iroha_gov_ballots_plain(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.protected_namespaces.list" => {
+            match dispatch_iroha_gov_protected_namespaces_list(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.protected_namespaces.update" => {
+            match dispatch_iroha_gov_protected_namespaces_update(&app, inbound_headers, &arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.unlocks.stats" => {
+            match dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
         "iroha.gov.council.current" => {
             match dispatch_iroha_gov_council_current(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.council.persist" => {
+            match dispatch_iroha_gov_council_persist(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.council.replace" => {
+            match dispatch_iroha_gov_council_replace(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.council.audit" => {
+            match dispatch_iroha_gov_council_audit(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.council.derive_vrf" => {
+            match dispatch_iroha_gov_council_derive_vrf(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1796,6 +1895,7 @@ fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
         if !payload.contains_key("sid") {
             let sid = arguments
                 .get("sid")
+                .or_else(|| arguments.get("session_id"))
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .unwrap_or_else(generate_connect_session_sid_b64url);
@@ -1847,6 +1947,7 @@ async fn dispatch_connect_session_create_and_ticket(
             .get("sid")
             .and_then(Value::as_str)
             .or_else(|| arguments.get("sid").and_then(Value::as_str))
+            .or_else(|| arguments.get("session_id").and_then(Value::as_str))
             .ok_or_else(|| "connect session create response is missing `body.sid`".to_owned())?
             .to_owned();
         let token_key = if role == "app" {
@@ -1897,10 +1998,7 @@ async fn dispatch_connect_session_delete(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let sid = arguments
-        .get("sid")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`sid` is required".to_owned())?;
+    let sid = extract_connect_sid_argument(arguments)?;
     let mut path = String::from("/v1/connect/session/");
     path.push_str(&urlencoding::encode(sid));
     dispatch_route(
@@ -3368,6 +3466,29 @@ async fn dispatch_iroha_gov_instances_list(
     .await
 }
 
+async fn dispatch_iroha_gov_proposals_deploy_contract(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/proposals/deploy-contract",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_gov_proposals_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3378,6 +3499,32 @@ async fn dispatch_iroha_gov_proposals_get(
     path_args.insert("id".into(), Value::String(id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/gov/proposals/{id}", Some(&path_value))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_locks_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let rid = extract_governance_entity_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("rid".into(), Value::String(rid));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/gov/locks/{rid}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3446,6 +3593,163 @@ async fn dispatch_iroha_gov_tally_get(
     .await
 }
 
+async fn dispatch_iroha_gov_ballots_zk(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/ballots/zk",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_ballots_zk_v1(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/ballots/zk-v1",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/ballots/zk-v1/ballot-proof",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_ballots_plain(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/ballots/plain",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_protected_namespaces_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/gov/protected-namespaces",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_protected_namespaces_update(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/protected-namespaces",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_unlocks_stats(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/gov/unlocks/stats",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_gov_council_current(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3459,6 +3763,96 @@ async fn dispatch_iroha_gov_council_current(
         arguments.get("headers"),
         Vec::new(),
         None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_council_persist(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/council/persist",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_council_replace(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/council/replace",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_council_audit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/gov/council/audit",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_council_derive_vrf(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/gov/council/derive-vrf",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -5866,7 +6260,7 @@ async fn dispatch_iroha_transactions_wait(
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
     let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
     let tx_hash = extract_optional_transaction_hash_argument(arguments).ok_or_else(|| {
-        "`hash` is required (provide `hash`, `transaction_hash`, or `query.hash`)".to_owned()
+        "`hash` is required (provide `hash`, `transaction_hash`, `query.hash`, or `query.transaction_hash`)".to_owned()
     })?;
 
     wait_for_terminal_transaction_status(
@@ -5990,22 +6384,30 @@ async fn dispatch_iroha_transactions_status(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let mut query = collect_query_map(arguments, &["query", "headers", "accept", "hash"])?;
+    let mut query = collect_query_map(
+        arguments,
+        &["query", "headers", "accept", "hash", "transaction_hash"],
+    )?;
     if !query
         .get("hash")
         .and_then(Value::as_str)
         .is_some_and(|hash| !hash.is_empty())
     {
-        if let Some(hash) = arguments.get("hash").and_then(Value::as_str) {
-            query.insert("hash".into(), Value::String(hash.to_owned()));
+        if let Some(hash) = extract_optional_transaction_hash_argument(arguments) {
+            query.insert("hash".into(), Value::String(hash));
         }
     }
+    // Canonicalize alias query keys before route dispatch.
+    query.remove("transaction_hash");
     if !query
         .get("hash")
         .and_then(Value::as_str)
         .is_some_and(|hash| !hash.is_empty())
     {
-        return Err("`hash` is required (provide `hash` or `query.hash`)".to_owned());
+        return Err(
+            "`hash` is required (provide `hash`, `transaction_hash`, `query.hash`, or `query.transaction_hash`)"
+                .to_owned(),
+        );
     }
 
     let query_value = Value::Object(query);
@@ -6104,6 +6506,12 @@ fn extract_optional_transaction_hash_argument(arguments: &Map) -> Option<String>
     {
         return Some(hash.to_owned());
     }
+    if let Some(query) = arguments.get("query").and_then(Value::as_object)
+        && let Some(hash) = query.get("transaction_hash").and_then(Value::as_str)
+        && !hash.is_empty()
+    {
+        return Some(hash.to_owned());
+    }
 
     arguments
         .get("hash")
@@ -6111,6 +6519,26 @@ fn extract_optional_transaction_hash_argument(arguments: &Map) -> Option<String>
         .and_then(Value::as_str)
         .filter(|hash| !hash.is_empty())
         .map(str::to_owned)
+}
+
+fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(sid) = path.get("sid").and_then(Value::as_str)
+            && !sid.is_empty()
+        {
+            return Ok(sid);
+        }
+    }
+
+    arguments
+        .get("sid")
+        .or_else(|| arguments.get("session_id"))
+        .and_then(Value::as_str)
+        .filter(|sid| !sid.is_empty())
+        .ok_or_else(|| "`sid` is required (provide `sid`, `session_id`, or `path.sid`)".to_owned())
 }
 
 fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<String, String> {
@@ -6320,16 +6748,20 @@ fn extract_governance_entity_id_argument(arguments: &Map) -> Result<String, Stri
         if let Some(id) = path.get("id").and_then(Value::as_str) {
             return Ok(id.to_owned());
         }
+        if let Some(rid) = path.get("rid").and_then(Value::as_str) {
+            return Ok(rid.to_owned());
+        }
     }
     arguments
         .get("id")
+        .or_else(|| arguments.get("rid"))
         .or_else(|| arguments.get("proposal_id"))
         .or_else(|| arguments.get("referendum_id"))
         .or_else(|| arguments.get("tally_id"))
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| {
-            "`id` is required (provide `id`, `proposal_id`, `referendum_id`, `tally_id`, or `path.id`)".to_owned()
+            "`id` is required (provide `id`, `rid`, `proposal_id`, `referendum_id`, `tally_id`, `path.id`, or `path.rid`)".to_owned()
         })
 }
 
@@ -7027,10 +7459,7 @@ fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> Value {
 }
 
 fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Result<Value, String> {
-    let sid = arguments
-        .get("sid")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`sid` is required".to_owned())?;
+    let sid = extract_connect_sid_argument(arguments)?;
     let role = arguments
         .get("role")
         .and_then(Value::as_str)
@@ -7126,9 +7555,12 @@ fn connect_ws_ticket_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["sid", "role"],
             "properties": {
                 "sid": { "type": "string" },
+                "session_id": {
+                    "type": "string",
+                    "description": "Alias for `sid`."
+                },
                 "role": { "type": "string", "enum": ["app", "wallet"] },
                 "token": {
                     "type": "string",
@@ -7161,6 +7593,10 @@ fn connect_session_create_tool() -> ToolSpec {
                 "sid": {
                     "type": "string",
                     "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Alias for `sid` convenience shortcut."
                 },
                 "node": {
                     "type": "string",
@@ -7205,6 +7641,10 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
                     "type": "string",
                     "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": "Alias for `sid` convenience shortcut."
+                },
                 "node": {
                     "type": "string",
                     "description": "Convenience shortcut for `body.node`."
@@ -7241,9 +7681,19 @@ fn connect_session_delete_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["sid"],
             "properties": {
                 "sid": { "type": "string" },
+                "session_id": {
+                    "type": "string",
+                    "description": "Alias for `sid`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "sid": { "type": "string" }
+                    }
+                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -8882,6 +9332,31 @@ fn iroha_proofs_retention_tool() -> ToolSpec {
     }
 }
 
+fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
+    ToolSpec {
+        name: name.to_owned(),
+        description: description.to_owned(),
+        method: Method::POST,
+        path_template: path_template.to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw governance request payload. If omitted, flat top-level fields are forwarded as the request body."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_gov_instances_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.instances.list".to_owned(),
@@ -8929,6 +9404,14 @@ fn iroha_gov_instances_list_tool() -> ToolSpec {
     }
 }
 
+fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.proposals.deploy_contract",
+        "Propose contract deployment (`/v1/gov/proposals/deploy-contract`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/proposals/deploy-contract",
+    )
+}
+
 fn iroha_gov_proposals_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.proposals.get".to_owned(),
@@ -8955,6 +9438,48 @@ fn iroha_gov_proposals_get_tool() -> ToolSpec {
                     "required": ["id"],
                     "properties": {
                         "id": { "type": "string" }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_gov_locks_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.locks.get".to_owned(),
+        description:
+            "Fetch governance lock records (`/v1/gov/locks/{rid}`; `rid`/`referendum_id` shortcuts supported)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/gov/locks/{rid}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "rid": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.rid`."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `rid`."
+                },
+                "referendum_id": {
+                    "type": "string",
+                    "description": "Alias for `rid`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["rid"],
+                    "properties": {
+                        "rid": { "type": "string" }
                     }
                 },
                 "headers": {
@@ -9043,6 +9568,87 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
     }
 }
 
+fn iroha_gov_ballots_zk_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.ballots.zk",
+        "Submit a governance ZK ballot (`/v1/gov/ballots/zk`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/ballots/zk",
+    )
+}
+
+fn iroha_gov_ballots_zk_v1_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.ballots.zk_v1",
+        "Submit a governance ZK v1 ballot (`/v1/gov/ballots/zk-v1`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/ballots/zk-v1",
+    )
+}
+
+fn iroha_gov_ballots_zk_v1_ballot_proof_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.ballots.zk_v1.ballot_proof",
+        "Submit a governance ZK ballot proof bundle (`/v1/gov/ballots/zk-v1/ballot-proof`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/ballots/zk-v1/ballot-proof",
+    )
+}
+
+fn iroha_gov_ballots_plain_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.ballots.plain",
+        "Submit a governance plain ballot (`/v1/gov/ballots/plain`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/ballots/plain",
+    )
+}
+
+fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.protected_namespaces.list".to_owned(),
+        description: "List protected governance namespaces (`/v1/gov/protected-namespaces`)."
+            .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/gov/protected-namespaces".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.protected_namespaces.update",
+        "Update protected governance namespaces (`/v1/gov/protected-namespaces`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/protected-namespaces",
+    )
+}
+
+fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.unlocks.stats".to_owned(),
+        description: "Fetch governance unlock statistics (`/v1/gov/unlocks/stats`).".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/gov/unlocks/stats".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_gov_council_current_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.council.current".to_owned(),
@@ -9063,22 +9669,33 @@ fn iroha_gov_council_current_tool() -> ToolSpec {
     }
 }
 
-fn iroha_gov_enact_tool() -> ToolSpec {
+fn iroha_gov_council_persist_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.council.persist",
+        "Persist a governance council roster (`/v1/gov/council/persist`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/council/persist",
+    )
+}
+
+fn iroha_gov_council_replace_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.council.replace",
+        "Replace a governance council member (`/v1/gov/council/replace`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/council/replace",
+    )
+}
+
+fn iroha_gov_council_audit_tool() -> ToolSpec {
     ToolSpec {
-        name: "iroha.gov.enact".to_owned(),
-        description:
-            "Enact governance proposal effects (`/v1/gov/enact`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/gov/enact".to_owned(),
+        name: "iroha.gov.council.audit".to_owned(),
+        description: "Fetch governance council derivation audit data (`/v1/gov/council/audit`)."
+            .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/gov/council/audit".to_owned(),
         input_schema: norito::json!({
             "type": "object",
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -9089,30 +9706,28 @@ fn iroha_gov_enact_tool() -> ToolSpec {
     }
 }
 
+fn iroha_gov_council_derive_vrf_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.council.derive_vrf",
+        "Derive governance council VRF inputs (`/v1/gov/council/derive-vrf`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/council/derive-vrf",
+    )
+}
+
+fn iroha_gov_enact_tool() -> ToolSpec {
+    iroha_gov_post_tool(
+        "iroha.gov.enact",
+        "Enact governance proposal effects (`/v1/gov/enact`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/enact",
+    )
+}
+
 fn iroha_gov_finalize_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.finalize".to_owned(),
-        description:
-            "Finalize governance tally (`/v1/gov/finalize`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/gov/finalize".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    iroha_gov_post_tool(
+        "iroha.gov.finalize",
+        "Finalize governance tally (`/v1/gov/finalize`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/gov/finalize",
+    )
 }
 
 fn iroha_aliases_resolve_tool() -> ToolSpec {
@@ -12193,9 +12808,12 @@ fn iroha_transactions_wait_tool() -> ToolSpec {
                 "query": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["hash"],
                     "properties": {
-                        "hash": { "type": "string" }
+                        "hash": { "type": "string" },
+                        "transaction_hash": {
+                            "type": "string",
+                            "description": "Alias for `query.hash`."
+                        }
                     }
                 },
                 "timeout_ms": {
@@ -12229,7 +12847,7 @@ fn iroha_transactions_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.status".to_owned(),
         description:
-            "Get latest pipeline status for a submitted transaction hash (`hash` shortcut supported)."
+            "Get latest pipeline status for a submitted transaction hash (`hash`/`transaction_hash` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
         path_template: "/v1/pipeline/transactions/status".to_owned(),
@@ -12241,12 +12859,19 @@ fn iroha_transactions_status_tool() -> ToolSpec {
                     "type": "string",
                     "description": "Convenience shortcut for `query.hash`."
                 },
+                "transaction_hash": {
+                    "type": "string",
+                    "description": "Alias for `hash`."
+                },
                 "query": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["hash"],
                     "properties": {
-                        "hash": { "type": "string" }
+                        "hash": { "type": "string" },
+                        "transaction_hash": {
+                            "type": "string",
+                            "description": "Alias for `query.hash`."
+                        }
                     }
                 },
                 "headers": {
@@ -12596,18 +13221,75 @@ mod tests {
         assert!(
             tools
                 .iter()
+                .any(|tool| tool.name == "iroha.gov.proposals.deploy_contract")
+        );
+        assert!(
+            tools
+                .iter()
                 .any(|tool| tool.name == "iroha.gov.proposals.get")
         );
+        assert!(tools.iter().any(|tool| tool.name == "iroha.gov.locks.get"));
         assert!(
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.referenda.get")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.gov.tally.get"));
+        assert!(tools.iter().any(|tool| tool.name == "iroha.gov.ballots.zk"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.ballots.zk_v1")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.ballots.zk_v1.ballot_proof")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.ballots.plain")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.protected_namespaces.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.protected_namespaces.update")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.unlocks.stats")
+        );
         assert!(
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.council.current")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.council.persist")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.council.replace")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.council.audit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.council.derive_vrf")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.gov.enact"));
         assert!(tools.iter().any(|tool| tool.name == "iroha.gov.finalize"));
@@ -13048,6 +13730,24 @@ mod tests {
     }
 
     #[test]
+    fn ws_ticket_accepts_session_id_alias() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("node.example"));
+        let args = norito::json!({
+            "session_id": "YWJj",
+            "role": "app",
+            "token": "app-token"
+        });
+        let ticket =
+            build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
+        let ws_url = ticket
+            .get("ws_url")
+            .and_then(Value::as_str)
+            .expect("ws url");
+        assert!(ws_url.contains("sid=YWJj"));
+    }
+
+    #[test]
     fn build_connect_session_create_body_generates_sid_when_missing() {
         let args = norito::json!({
             "node": "https://node.example"
@@ -13088,6 +13788,20 @@ mod tests {
         assert_eq!(
             payload.get("node").and_then(Value::as_str),
             Some("https://in-body.example")
+        );
+    }
+
+    #[test]
+    fn build_connect_session_create_body_accepts_session_id_shortcut() {
+        let args = norito::json!({
+            "session_id": "shortcut-sid"
+        });
+        let body = build_connect_session_create_body(args.as_object().expect("object"))
+            .expect("create body");
+        let payload = body.as_object().expect("object");
+        assert_eq!(
+            payload.get("sid").and_then(Value::as_str),
+            Some("shortcut-sid")
         );
     }
 
@@ -13216,6 +13930,13 @@ mod tests {
             extract_governance_entity_id_argument(tally_args.as_object().expect("object"))
                 .expect("tally id");
         assert_eq!(tally_id, "tally-001");
+
+        let lock_args = norito::json!({
+            "rid": "referendum-002"
+        });
+        let lock_id = extract_governance_entity_id_argument(lock_args.as_object().expect("object"))
+            .expect("lock id");
+        assert_eq!(lock_id, "referendum-002");
     }
 
     #[test]
@@ -13342,6 +14063,18 @@ mod tests {
     fn extract_optional_transaction_hash_argument_accepts_alias_shortcut() {
         let args = norito::json!({
             "transaction_hash": "deadbeef"
+        });
+        let hash = extract_optional_transaction_hash_argument(args.as_object().expect("object"))
+            .expect("hash");
+        assert_eq!(hash, "deadbeef");
+    }
+
+    #[test]
+    fn extract_optional_transaction_hash_argument_accepts_query_alias_shortcut() {
+        let args = norito::json!({
+            "query": {
+                "transaction_hash": "deadbeef"
+            }
         });
         let hash = extract_optional_transaction_hash_argument(args.as_object().expect("object"))
             .expect("hash");
