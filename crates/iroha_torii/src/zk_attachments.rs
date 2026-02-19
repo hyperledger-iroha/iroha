@@ -47,6 +47,7 @@ const TEXT_JSON_MIME_TYPE: &str = "text/json";
 const ATTACHMENT_SANITIZER_ENV: &str = "IROHA_ATTACHMENT_SANITIZER";
 const ATTACHMENT_SANITIZER_MAX_INPUT_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_MAX_INPUT_BYTES";
 const SANITIZER_POLL_INTERVAL_MS: u64 = 5;
+const TAG_FILTER_LEGACY_SCAN_CAP: usize = 128;
 
 /// Tenant namespace for the attachments store.
 ///
@@ -168,6 +169,10 @@ pub struct AttachmentMeta {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<AttachmentProvenance>,
+    /// ZK1 TLV tags extracted at ingest time (when content is `application/x-zk1`).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub zk1_tags: Option<Vec<String>>,
 }
 
 pub(crate) fn base_dir() -> PathBuf {
@@ -1095,6 +1100,7 @@ pub async fn handle_post_attachment(
                 sandboxed: sanitized_summary.sandboxed,
             },
         }),
+        zk1_tags: zk1_extract_tags(&sanitized_body),
     };
     if let Err(e) = persist_body(&tenant, &id, &sanitized_body) {
         return (
@@ -1187,7 +1193,8 @@ pub async fn handle_list_attachments_filtered(
     }
     // Optional ZK1 tag filter: requires scanning bodies and parsing TLVs for candidates
     if let Some(ref tag) = q.has_tag {
-        metas.retain(|m| zk1_attachment_has_tag(&tenant, &m.id, tag));
+        let mut legacy_scans = 0usize;
+        metas.retain(|m| attachment_meta_has_tag(&tenant, m, tag, &mut legacy_scans));
     }
     // Sort by created_ms asc (default)
     metas.sort_by_key(|m| m.created_ms);
@@ -1250,7 +1257,8 @@ pub async fn handle_count_attachments(
         metas.retain(|m| m.created_ms <= before);
     }
     if let Some(ref tag) = q.has_tag {
-        metas.retain(|m| zk1_attachment_has_tag(&tenant, &m.id, tag));
+        let mut legacy_scans = 0usize;
+        metas.retain(|m| attachment_meta_has_tag(&tenant, m, tag, &mut legacy_scans));
     }
     let count = metas.len() as u64;
     let s = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
@@ -1271,6 +1279,27 @@ fn zk1_attachment_has_tag(tenant: &AttachmentTenant, id: &str, tag: &str) -> boo
         return false;
     };
     zk1_bytes_has_tag(&bytes, tag)
+}
+
+fn attachment_meta_has_tag(
+    tenant: &AttachmentTenant,
+    meta: &AttachmentMeta,
+    tag: &str,
+    legacy_scans: &mut usize,
+) -> bool {
+    if let Some(tags) = &meta.zk1_tags {
+        return tags.iter().any(|t| t == tag);
+    }
+    // Non-ZK1 payloads cannot satisfy ZK1 tag queries.
+    if meta.content_type != ZK1_MIME_TYPE {
+        return false;
+    }
+    // Legacy fallback: bounded body scanning for pre-indexed metadata.
+    if *legacy_scans >= TAG_FILTER_LEGACY_SCAN_CAP {
+        return false;
+    }
+    *legacy_scans = legacy_scans.saturating_add(1);
+    zk1_attachment_has_tag(tenant, &meta.id, tag)
 }
 
 fn zk1_bytes_has_tag(bytes: &[u8], tag: &str) -> bool {
@@ -1302,6 +1331,32 @@ fn zk1_bytes_has_tag(bytes: &[u8], tag: &str) -> bool {
         pos += len;
     }
     false
+}
+
+fn zk1_extract_tags(bytes: &[u8]) -> Option<Vec<String>> {
+    if bytes.len() < 8 || &bytes[..4] != b"ZK1\0" {
+        return None;
+    }
+    let mut tags = Vec::new();
+    let mut pos = 4usize;
+    while pos + 8 <= bytes.len() {
+        let tag_bytes = &bytes[pos..pos + 4];
+        let len = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as usize;
+        pos += 8;
+        if pos + len > bytes.len() {
+            return None;
+        }
+        if let Ok(tag) = core::str::from_utf8(tag_bytes) {
+            tags.push(tag.to_string());
+        }
+        pos += len;
+    }
+    if tags.is_empty() { None } else { Some(tags) }
 }
 
 fn needs_export_sanitization(meta: &AttachmentMeta) -> bool {
@@ -1878,6 +1933,7 @@ mod tests {
             created_ms: 1_700_000_000_000,
             tenant: Some("a".repeat(64)),
             provenance: None,
+            zk1_tags: None,
         };
 
         let encoded = json::to_json_pretty(&meta).expect("serialize metadata");
@@ -2003,6 +2059,18 @@ mod tests {
     }
 
     #[test]
+    fn zk1_extract_tags_collects_tlv_tags() {
+        let mut bytes = b"ZK1\0".to_vec();
+        bytes.extend_from_slice(b"PROF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"IPAK");
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2, 3, 4]);
+        let tags = super::zk1_extract_tags(&bytes).expect("zk1 tags");
+        assert_eq!(tags, vec!["PROF".to_string(), "IPAK".to_string()]);
+    }
+
+    #[test]
     fn needs_export_sanitization_flags_missing_or_nested() {
         let base = AttachmentMeta {
             id: "deadbeef".repeat(4),
@@ -2011,6 +2079,7 @@ mod tests {
             created_ms: 1_700_000_000_000,
             tenant: None,
             provenance: None,
+            zk1_tags: None,
         };
         assert!(super::needs_export_sanitization(&base));
         let mut meta = base;

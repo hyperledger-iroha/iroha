@@ -18606,6 +18606,58 @@ async fn defer_qc_if_block_missing_widens_retry_window_when_rbc_progresses() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn defer_qc_if_block_missing_uses_aggressive_fetch_with_commit_quorum_hint() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x99; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9A; Hash::LENGTH]));
+    }
+    let height = 2u64;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+
+    let before = super::status::snapshot().qc_missing_payload_aggressive_fetch_total;
+    let deferred = actor.defer_qc_if_block_missing_with_quorum_hint(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        &signers,
+        &topology,
+        /*commit_quorum_met*/ true,
+    );
+    assert!(deferred, "missing payload should defer QC aggregation");
+
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert_eq!(
+        stats.retry_window,
+        super::REBROADCAST_COOLDOWN_FLOOR,
+        "commit quorum hint should force aggressive retry window"
+    );
+    let after = super::status::snapshot().qc_missing_payload_aggressive_fetch_total;
+    assert_eq!(
+        after,
+        before + 1,
+        "commit quorum hint should increment aggressive-fetch counter"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -20797,6 +20849,63 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
         .expect("local sender");
     let expected_ready = if matches!(local_sender, 1 | 2) { 2 } else { 3 };
     assert_eq!(stored.ready_signatures.len(), expected_ready);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_ready_with_missing_chunks_requests_missing_block() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload_hash = Hash::prehashed([0x31; 32]);
+    let chunk_root = Hash::prehashed([0x32; 32]);
+    let mut session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
+
+    session.test_note_chunk(0, b"chunk-a".to_vec(), 0);
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    assert!(
+        harness.actor.pending.missing_block_requests.is_empty(),
+        "missing block requests should start empty"
+    );
+
+    harness
+        .actor
+        .maybe_emit_rbc_ready(key)
+        .expect("maybe emit ready");
+
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(
+        !stored.sent_ready,
+        "READY should not be emitted until missing chunks arrive or READY quorum is met"
+    );
+    assert!(
+        harness
+            .actor
+            .pending
+            .missing_block_requests
+            .contains_key(&key.0),
+        "missing chunk deferral should schedule a missing-block request"
+    );
 
     harness.shutdown.send();
 }
@@ -36330,6 +36439,104 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
     );
 
     super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_dampens_repeated_proposal_gap_rotations_with_backlog() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let availability_timeout =
+        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let elapsed = timeout
+        .saturating_add(availability_timeout)
+        .saturating_add(Duration::from_millis(1));
+    let start = now.checked_sub(elapsed).unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "first proposal-gap timeout under backlog should rotate view"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+
+    let next_view = current_view.saturating_add(1);
+    let second_now = now.checked_add(Duration::from_millis(1)).unwrap_or(now);
+    let second_start = second_now.checked_sub(elapsed).unwrap_or(second_now);
+    actor
+        .phase_tracker
+        .on_view_change(height, next_view, second_start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: next_view,
+        since: second_start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(second_now);
+
+    assert!(
+        !actor.force_view_change_if_idle(second_now),
+        "repeated proposal-gap timeout should be damped by backlog hysteresis"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(next_view),
+        "hysteresis should hold the view instead of rotating again immediately"
+    );
+
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(
+        snapshot.missing_qc_total, 1,
+        "only the first timeout should count while hysteresis holds"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
     super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -54712,6 +54919,120 @@ async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
     assert_eq!(
         first.last_attempt, second.last_attempt,
         "repeat deferral should be throttled within cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_targets_missing_ready_peers_when_subset_skips_local() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let parent = actor.state.view().latest_block_hash();
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "commit roster should be non-empty");
+
+    let mut selected = None;
+    for view in 0..(roster.len() as u64 + 16) {
+        let block = sample_block(height, view, parent);
+        let key = Actor::session_key(&block.hash(), height, view);
+        if !actor.should_rebroadcast_rbc_payload(&roster, key) {
+            selected = Some((block, key));
+            break;
+        }
+    }
+    let (block, key) = selected.expect("expected view where local payload subset rebroadcast skips");
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let epoch = actor.epoch_for_height(height);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("RBC session");
+    let header = block.header();
+    let leader_signature = leader_signature_for_header(actor, &roster, &header, &harness.key_pairs);
+    session.block_header = Some(header);
+    session.leader_signature = Some(leader_signature);
+    session.record_ready(0, vec![0xAA]);
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 1, "ready quorum should require multiple senders");
+    assert!(
+        session.ready_signatures.len() < required,
+        "session should be below READY quorum"
+    );
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .remove(&key);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .remove(&key);
+
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, key.2, mode_tag, prf_seed);
+    let local_peer = actor.common_config.peer.id().clone();
+    let expected_targets: BTreeSet<_> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, peer)| {
+            let idx = u32::try_from(idx).ok()?;
+            (idx != 0 && peer != &local_peer).then_some(peer.clone())
+        })
+        .collect();
+    assert!(
+        !expected_targets.is_empty(),
+        "missing READY peers should include at least one remote peer"
+    );
+
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .maybe_emit_rbc_deliver(key)
+        .expect("emit DELIVER deferral");
+
+    let targeted_payload_peers: BTreeSet<_> = harness
+        .background_rx
+        .try_iter()
+        .filter_map(|post| match post {
+            BackgroundPost::Post { peer, msg, .. }
+                if expected_targets.contains(&peer)
+                    && matches!(
+                        msg.as_ref(),
+                        BlockMessage::RbcInit(_)
+                            | BlockMessage::RbcChunk(_)
+                            | BlockMessage::RbcChunkCompact(_)
+                    ) =>
+            {
+                Some(peer)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !targeted_payload_peers.is_empty(),
+        "expected targeted RBC payload posts to peers missing READY"
     );
 
     harness.shutdown.send();

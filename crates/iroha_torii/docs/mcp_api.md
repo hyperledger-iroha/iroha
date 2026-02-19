@@ -97,10 +97,23 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.proofs.query`
   - `iroha.proofs.retention`
   - `iroha.gov.instances.list`
+  - `iroha.gov.proposals.deploy_contract`
   - `iroha.gov.proposals.get`
+  - `iroha.gov.locks.get`
   - `iroha.gov.referenda.get`
   - `iroha.gov.tally.get`
+  - `iroha.gov.ballots.zk`
+  - `iroha.gov.ballots.zk_v1`
+  - `iroha.gov.ballots.zk_v1.ballot_proof`
+  - `iroha.gov.ballots.plain`
+  - `iroha.gov.protected_namespaces.list`
+  - `iroha.gov.protected_namespaces.update`
+  - `iroha.gov.unlocks.stats`
   - `iroha.gov.council.current`
+  - `iroha.gov.council.persist`
+  - `iroha.gov.council.replace`
+  - `iroha.gov.council.audit`
+  - `iroha.gov.council.derive_vrf`
   - `iroha.gov.enact`
   - `iroha.gov.finalize`
   - `iroha.contracts.code.register`
@@ -198,7 +211,7 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.transactions.status`
 - `iroha.*` aliases accept flat convenience fields in addition to nested
   `path`/`query`/`body` payloads (for example `account_id`, `hash`, `literal`,
-  `index`, `instruction_index`, `identifier`, `height`, `block_height`, `entry_hash`, `tx_hash`, `ticket`, `manifest_ticket`, `proof_id`, `upgrade_id`, `code_hash`, `namespace`, `proposal_id`, `referendum_id`, `tally_id`, `signed_tx_base64`, `signed_tx_hex`, `uaid`, `definition_id`, `domain_id`, `subscription_id`, `asset_id`, `nft_id`, and
+  `index`, `instruction_index`, `identifier`, `height`, `block_height`, `entry_hash`, `tx_hash`, `ticket`, `manifest_ticket`, `proof_id`, `upgrade_id`, `code_hash`, `namespace`, `id`, `rid`, `proposal_id`, `referendum_id`, `tally_id`, `signed_tx_base64`, `signed_tx_hex`, `uaid`, `definition_id`, `domain_id`, `subscription_id`, `asset_id`, `nft_id`, and
   query-envelope shortcuts like `filter`, `sort`, `limit`, `offset`).
 
 ## Account Tool Example
@@ -601,7 +614,7 @@ Create a Connect session:
   "params": {
     "name": "connect.session.create",
     "arguments": {
-      "sid": "<base64url-32-byte-session-id>"
+      "session_id": "<base64url-32-byte-session-id>"
     }
   }
 }
@@ -609,6 +622,7 @@ Create a Connect session:
 
 `connect.session.create` also accepts the raw request body as `arguments.body`;
 if both are provided, `body` takes precedence for fields already present there.
+`sid` and `session_id` are equivalent shortcuts.
 When SID is omitted, MCP auto-generates a random 32-byte base64url session id.
 
 Create session + ticket metadata in one call:
@@ -659,7 +673,7 @@ Delete a Connect session:
   "params": {
     "name": "connect.session.delete",
     "arguments": {
-      "sid": "<base64url-32-byte-session-id>"
+      "session_id": "<base64url-32-byte-session-id>"
     }
   }
 }
@@ -675,7 +689,7 @@ Build WebSocket ticket metadata directly from a create-session response token:
   "params": {
     "name": "connect.ws.ticket",
     "arguments": {
-      "sid": "<session-id>",
+      "session_id": "<session-id>",
       "role": "app",
       "token_app": "<token_app-from-connect.session.create>",
       "node_url": "https://node.example"
@@ -1408,12 +1422,40 @@ Ledger and bridge proof aliases:
 ```json
 {
   "jsonrpc": "2.0",
+  "id": "gov-proposal-deploy-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.proposals.deploy_contract",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
   "id": "gov-proposal-1",
   "method": "tools/call",
   "params": {
     "name": "iroha.gov.proposals.get",
     "arguments": {
       "proposal_id": "<proposal-id>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-locks-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.locks.get",
+    "arguments": {
+      "rid": "<referendum-id>"
     }
   }
 }
@@ -1450,10 +1492,113 @@ Ledger and bridge proof aliases:
 ```json
 {
   "jsonrpc": "2.0",
+  "id": "gov-ballot-zk-v1-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.ballots.zk_v1",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-ballot-proof-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.ballots.zk_v1.ballot_proof",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-protected-ns-list-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.protected_namespaces.list"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-protected-ns-update-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.protected_namespaces.update",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-unlocks-stats-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.unlocks.stats"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
   "id": "gov-council-1",
   "method": "tools/call",
   "params": {
     "name": "iroha.gov.council.current"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-council-persist-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.council.persist",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-council-audit-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.council.audit"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-council-derive-vrf-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.council.derive_vrf",
+    "arguments": {
+      "body": {}
+    }
   }
 }
 ```
@@ -1689,6 +1834,9 @@ Pipeline status alias shortcut:
   }
 }
 ```
+
+`iroha.transactions.status` accepts `hash` or `transaction_hash` (including
+their `query.*` forms) as hash shortcuts.
 
 One-shot submit + wait alias (submits and polls until terminal status):
 
