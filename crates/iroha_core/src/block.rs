@@ -495,7 +495,10 @@ use crate::{
     },
     prelude::*,
     queue::{evaluate_policy_with_catalog, routing_ledger},
-    state::{State, StateBlock, WorldReadOnly, compute_confidential_feature_digest},
+    state::{
+        State, StateBlock, StatelessValidationContext, WorldReadOnly,
+        compute_confidential_feature_digest,
+    },
     sumeragi::{VotingBlock, network_topology::Topology, status},
     tx::{AcceptTransactionFail, LaneAssignment, enforce_fraud_policy},
 };
@@ -3892,6 +3895,32 @@ pub(crate) mod valid {
                 let transactions_view = state.transactions.view();
                 Self::committed_heights_for_block(&block, &transactions_view)
             };
+            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
+            let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
+            let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
+            let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
+            let now_ms = block.header().creation_time().as_millis();
+            let mut cached_ok = vec![false; txs_for_cache.len()];
+            let cache_context = if cache_enabled {
+                Some(StatelessValidationContext::new(
+                    expected_chain_id.clone(),
+                    u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
+                    static_data.tx_params,
+                    static_data.crypto_cfg.allowed_signing.clone(),
+                ))
+            } else {
+                None
+            };
+            if let Some(context) = cache_context.clone() {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context);
+                for (idx, tx) in txs_for_cache.iter().enumerate() {
+                    if cache.get_ok(&tx.hash(), now_ms) {
+                        cached_ok[idx] = true;
+                    }
+                }
+            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -3903,6 +3932,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                cache_enabled.then_some(cached_ok.as_slice()),
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -3918,6 +3948,25 @@ pub(crate) mod valid {
                 // `_with_events` variants. Keep behavior unchanged.
                 let _ = ev; // avoid unused warning if optimized out
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Some(context) = cache_context {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context);
+                for (idx, tx) in txs_for_cache.iter().enumerate() {
+                    if cached_ok[idx] {
+                        continue;
+                    }
+                    let expires_at_ms = tx
+                        .time_to_live()
+                        .and_then(|ttl| tx.creation_time().checked_add(ttl))
+                        .map(|expires_at| expires_at.as_millis());
+                    let not_before_ms = tx
+                        .creation_time()
+                        .as_millis()
+                        .saturating_sub(max_clock_drift_ms);
+                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                }
             }
             if let Some(timings) = timings.as_deref_mut() {
                 timings.stateless_snapshot_ms = to_ms(static_snapshot_start.elapsed());
@@ -4055,6 +4104,32 @@ pub(crate) mod valid {
                 let transactions_view = state.transactions.view();
                 Self::committed_heights_for_block(&block, &transactions_view)
             };
+            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
+            let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
+            let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
+            let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
+            let now_ms = block.header().creation_time().as_millis();
+            let mut cached_ok = vec![false; txs_for_cache.len()];
+            let cache_context = if cache_enabled {
+                Some(StatelessValidationContext::new(
+                    expected_chain_id.clone(),
+                    u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
+                    static_data.tx_params,
+                    static_data.crypto_cfg.allowed_signing.clone(),
+                ))
+            } else {
+                None
+            };
+            if let Some(context) = cache_context.clone() {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context);
+                for (idx, tx) in txs_for_cache.iter().enumerate() {
+                    if cache.get_ok(&tx.hash(), now_ms) {
+                        cached_ok[idx] = true;
+                    }
+                }
+            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -4065,6 +4140,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                cache_enabled.then_some(cached_ok.as_slice()),
                 metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -4073,6 +4149,25 @@ pub(crate) mod valid {
                 });
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Some(context) = cache_context {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context);
+                for (idx, tx) in txs_for_cache.iter().enumerate() {
+                    if cached_ok[idx] {
+                        continue;
+                    }
+                    let expires_at_ms = tx
+                        .time_to_live()
+                        .and_then(|ttl| tx.creation_time().checked_add(ttl))
+                        .map(|expires_at| expires_at.as_millis());
+                    let not_before_ms = tx
+                        .creation_time()
+                        .as_millis()
+                        .saturating_sub(max_clock_drift_ms);
+                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                }
             }
             // Release block writer before creating new one
             let _ = voting_block.take();
@@ -4303,6 +4398,7 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
+            cached_ok: Option<&[bool]>,
             metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             #[cfg(not(feature = "telemetry"))]
@@ -4325,6 +4421,19 @@ pub(crate) mod valid {
                 txs.len(),
                 "committed-height snapshot must align with block transaction list",
             );
+            if let Some(cached_ok) = cached_ok {
+                debug_assert_eq!(
+                    cached_ok.len(),
+                    txs.len(),
+                    "stateless-cache snapshot must align with block transaction list",
+                );
+            }
+            let cached = |idx: usize| {
+                cached_ok
+                    .and_then(|snapshot| snapshot.get(idx))
+                    .copied()
+                    .unwrap_or(false)
+            };
 
             // Deterministic pre-verification of transaction signatures by scheme, using
             // runtime pipeline configuration caps. Successful pre-verification allows
@@ -4342,6 +4451,9 @@ pub(crate) mod valid {
                 }
                 let mut items: Vec<EdItem> = Vec::new();
                 for (i, tx) in txs.iter().enumerate() {
+                    if cached(i) {
+                        continue;
+                    }
                     let AccountController::Single(signatory) = tx.authority().controller() else {
                         continue;
                     };
@@ -4477,6 +4589,9 @@ pub(crate) mod valid {
                 }
                 let mut items: Vec<SecpItem> = Vec::new();
                 for (i, tx) in txs.iter().enumerate() {
+                    if cached(i) {
+                        continue;
+                    }
                     let AccountController::Single(signatory) = tx.authority().controller() else {
                         continue;
                     };
@@ -4620,6 +4735,9 @@ pub(crate) mod valid {
                 let mut items_normal: Vec<BlsItem> = Vec::new();
                 let mut items_small: Vec<BlsItem> = Vec::new();
                 for (i, tx) in txs.iter().enumerate() {
+                    if cached(i) {
+                        continue;
+                    }
                     let AccountController::Single(signatory) = tx.authority().controller() else {
                         continue;
                     };
@@ -4957,6 +5075,9 @@ pub(crate) mod valid {
                 }
                 let mut items: Vec<PqcItem> = Vec::new();
                 for (i, tx) in txs.iter().enumerate() {
+                    if cached(i) {
+                        continue;
+                    }
                     let AccountController::Single(signatory) = tx.authority().controller() else {
                         continue;
                     };
@@ -5094,47 +5215,51 @@ pub(crate) mod valid {
             use rayon::prelude::*;
 
             let is_genesis_block = block.header().is_genesis();
-            let validate_tx = |tx: &&SignedTransaction| -> Option<BlockValidationError> {
-                if is_genesis_block {
-                    return AcceptedTransaction::validate_genesis_with_now(
-                        tx,
-                        chain_id,
-                        max_clock_drift,
-                        genesis_account,
-                        crypto_cfg.as_ref(),
-                        block_creation_time,
-                    )
-                    .err()
-                    .map(BlockValidationError::TransactionAccept);
-                }
-
-                let signature_override = match tx.authority().controller() {
-                    AccountController::Single(signatory) => {
-                        let algo = signatory.algorithm();
-                        let skip = (algo == iroha_crypto::Algorithm::Ed25519 && ed_preverified)
-                            || (algo == iroha_crypto::Algorithm::Secp256k1 && secp_preverified)
-                            || ({
-                                #[cfg(feature = "bls")]
-                                {
-                                    matches!(
-                                        algo,
-                                        iroha_crypto::Algorithm::BlsNormal
-                                            | iroha_crypto::Algorithm::BlsSmall
-                                    ) && bls_preverified
-                                }
-                                #[cfg(not(feature = "bls"))]
-                                {
-                                    false
-                                }
-                            })
-                            || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified);
-                        skip.then_some(Ok(()))
+            let validate_tx =
+                |(idx, tx): (usize, &&SignedTransaction)| -> Option<BlockValidationError> {
+                    if cached(idx) {
+                        return None;
                     }
-                    AccountController::Multisig(_) => None,
-                };
+                    if is_genesis_block {
+                        return AcceptedTransaction::validate_genesis_with_now(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            genesis_account,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                        )
+                        .err()
+                        .map(BlockValidationError::TransactionAccept);
+                    }
 
-                let stateless = if crate::tx::is_heartbeat_transaction(tx) {
-                    match signature_override {
+                    let signature_override = match tx.authority().controller() {
+                        AccountController::Single(signatory) => {
+                            let algo = signatory.algorithm();
+                            let skip = (algo == iroha_crypto::Algorithm::Ed25519 && ed_preverified)
+                                || (algo == iroha_crypto::Algorithm::Secp256k1 && secp_preverified)
+                                || ({
+                                    #[cfg(feature = "bls")]
+                                    {
+                                        matches!(
+                                            algo,
+                                            iroha_crypto::Algorithm::BlsNormal
+                                                | iroha_crypto::Algorithm::BlsSmall
+                                        ) && bls_preverified
+                                    }
+                                    #[cfg(not(feature = "bls"))]
+                                    {
+                                        false
+                                    }
+                                })
+                                || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified);
+                            skip.then_some(Ok(()))
+                        }
+                        AccountController::Multisig(_) => None,
+                    };
+
+                    let stateless = if crate::tx::is_heartbeat_transaction(tx) {
+                        match signature_override {
                         Some(override_result) => {
                             AcceptedTransaction::validate_heartbeat_with_now_with_signature_result(
                                 tx,
@@ -5155,25 +5280,25 @@ pub(crate) mod valid {
                             block_creation_time,
                         ),
                     }
-                } else {
-                    AcceptedTransaction::validate_with_now_with_signature_result(
-                        tx,
-                        chain_id,
-                        max_clock_drift,
-                        tx_params,
-                        crypto_cfg.as_ref(),
-                        block_creation_time,
-                        signature_override,
-                    )
+                    } else {
+                        AcceptedTransaction::validate_with_now_with_signature_result(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            signature_override,
+                        )
+                    };
+                    stateless.err().map(BlockValidationError::TransactionAccept)
                 };
-                stateless.err().map(BlockValidationError::TransactionAccept)
-            };
 
             let use_parallel = pipeline_cfg.workers != 1 && txs.len() > 1;
             let tx_errors: Vec<Option<BlockValidationError>> = if use_parallel {
-                txs.par_iter().map(validate_tx).collect()
+                txs.par_iter().enumerate().map(validate_tx).collect()
             } else {
-                txs.iter().map(validate_tx).collect()
+                txs.iter().enumerate().map(validate_tx).collect()
             };
             for maybe_err in tx_errors {
                 if let Some(err) = maybe_err {
@@ -5209,7 +5334,7 @@ pub(crate) mod valid {
             topology: &Topology,
             chain_id: &ChainId,
             genesis_account: &AccountId,
-            state: &impl StateReadOnlyWithTransactions,
+            state: &StateBlock<'_>,
             soft_fork: bool,
             time_source: &TimeSource,
         ) -> Result<(), BlockValidationError> {
@@ -5223,6 +5348,32 @@ pub(crate) mod valid {
                 time_source,
             )?;
             let committed_heights = Self::committed_heights_for_block(block, state.transactions());
+            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
+            let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
+            let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
+            let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
+            let now_ms = block.header().creation_time().as_millis();
+            let mut cached_ok = vec![false; txs_for_cache.len()];
+            let cache_context = if cache_enabled {
+                Some(StatelessValidationContext::new(
+                    chain_id.clone(),
+                    u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
+                    static_data.tx_params,
+                    static_data.crypto_cfg.allowed_signing.clone(),
+                ))
+            } else {
+                None
+            };
+            if let Some(context) = cache_context.clone() {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context);
+                for (idx, tx) in txs_for_cache.iter().enumerate() {
+                    if cache.get_ok(&tx.hash(), now_ms) {
+                        cached_ok[idx] = true;
+                    }
+                }
+            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(state.metrics());
             #[cfg(not(feature = "telemetry"))]
@@ -5233,8 +5384,29 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                cache_enabled.then_some(cached_ok.as_slice()),
                 metrics,
-            )
+            )?;
+            if let Some(context) = cache_context {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(context);
+                for (idx, tx) in txs_for_cache.iter().enumerate() {
+                    if cached_ok[idx] {
+                        continue;
+                    }
+                    let expires_at_ms = tx
+                        .time_to_live()
+                        .and_then(|ttl| tx.creation_time().checked_add(ttl))
+                        .map(|expires_at| expires_at.as_millis());
+                    let not_before_ms = tx
+                        .creation_time()
+                        .as_millis()
+                        .saturating_sub(max_clock_drift_ms);
+                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                }
+            }
+            Ok(())
         }
 
         /// Validate each transaction in the block, apply resulting state changes,
@@ -5397,6 +5569,51 @@ pub(crate) mod valid {
                     }
                 }
             }
+            let routing_decisions: Vec<_> = if workers > 1 {
+                if let Some(pool) = pool.as_ref() {
+                    pool.install(|| {
+                        txs.par_iter()
+                            .map(|tx| {
+                                let accepted = crate::tx::AcceptedTransaction::new_unchecked(
+                                    Cow::Borrowed(*tx),
+                                );
+                                evaluate_policy_with_catalog(
+                                    routing_policy,
+                                    lane_catalog,
+                                    dataspace_catalog,
+                                    &accepted,
+                                )
+                            })
+                            .collect()
+                    })
+                } else {
+                    txs.par_iter()
+                        .map(|tx| {
+                            let accepted =
+                                crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
+                            evaluate_policy_with_catalog(
+                                routing_policy,
+                                lane_catalog,
+                                dataspace_catalog,
+                                &accepted,
+                            )
+                        })
+                        .collect()
+                }
+            } else {
+                txs.iter()
+                    .map(|tx| {
+                        let accepted =
+                            crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
+                        evaluate_policy_with_catalog(
+                            routing_policy,
+                            lane_catalog,
+                            dataspace_catalog,
+                            &accepted,
+                        )
+                    })
+                    .collect()
+            };
             let mut signature_overrides: Vec<
                 Option<Result<(), crate::tx::SignatureVerificationFail>>,
             > = vec![None; txs.len()];
@@ -5905,14 +6122,7 @@ pub(crate) mod valid {
                     }
                     let is_heartbeat = crate::tx::is_heartbeat_transaction(tx);
                     if !is_heartbeat {
-                        let accepted =
-                            crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                        let routing_decision = evaluate_policy_with_catalog(
-                            routing_policy,
-                            lane_catalog,
-                            dataspace_catalog,
-                            &accepted,
-                        );
+                        let routing_decision = routing_decisions[idx];
                         let lane_assignment = LaneAssignment {
                             lane_id: routing_decision.lane_id,
                             dataspace_id: routing_decision.dataspace_id,
@@ -6563,19 +6773,6 @@ pub(crate) mod valid {
             let mut apply_fallback_ms = 0u64;
             let mut apply_quarantine_ms = 0u64;
             let mut apply_sequential_ms = 0u64;
-            let routing_decisions: Vec<_> = txs
-                .iter()
-                .map(|tx| {
-                    let accepted =
-                        crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                    evaluate_policy_with_catalog(
-                        &state_block.nexus.routing_policy,
-                        &state_block.nexus.lane_catalog,
-                        &state_block.nexus.dataspace_catalog,
-                        &accepted,
-                    )
-                })
-                .collect();
             let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
             let mut dataspace_summaries: BTreeMap<(LaneId, DataSpaceId), u64> = BTreeMap::new();
             let mut pending_settlements = state_block.drain_settlement_records();
@@ -9510,6 +9707,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
+                None,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -9585,6 +9783,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
+                None,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");
@@ -10629,6 +10828,255 @@ pub(crate) mod valid {
             assert!(
                 result.is_ok(),
                 "block validation should use block timestamp for TTL checks"
+            );
+        }
+
+        #[test]
+        fn validate_keep_voting_block_populates_stateless_cache() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::new(), Arc::clone(&kura), query);
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let (authority, signer) = gen_account_in("cache-test");
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
+            .sign(signer.private_key());
+            let tx_hash = tx.hash();
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let builder =
+                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
+            let new_block = builder
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(&leader_private)
+                .unpack(|_| {});
+            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            let block_creation_ms = signed_block.header().creation_time().as_millis();
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let result = ValidBlock::validate_keep_voting_block(
+                signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &block_time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+            assert!(
+                result.is_ok(),
+                "validation should succeed and warm stateless cache"
+            );
+
+            let mut cache = state.stateless_validation_cache().lock();
+            assert!(
+                cache.get_ok(&tx_hash, block_creation_ms),
+                "successful static validation should populate stateless cache",
+            );
+        }
+
+        #[test]
+        fn validate_keep_voting_block_with_events_populates_stateless_cache() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::new(), Arc::clone(&kura), query);
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let (authority, signer) = gen_account_in("cache-test");
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
+            .sign(signer.private_key());
+            let tx_hash = tx.hash();
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let builder =
+                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
+            let new_block = builder
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(&leader_private)
+                .unpack(|_| {});
+            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            let block_creation_ms = signed_block.header().creation_time().as_millis();
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let mut events = Vec::new();
+            let result = ValidBlock::validate_keep_voting_block_with_events(
+                signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &block_time_source,
+                &state,
+                &mut voting_block,
+                false,
+                |event| events.push(event),
+            )
+            .unpack(|_| {});
+            assert!(
+                result.is_ok(),
+                "validation with events should succeed and warm stateless cache"
+            );
+            assert!(events.is_empty(), "no rejection events expected");
+
+            let mut cache = state.stateless_validation_cache().lock();
+            assert!(
+                cache.get_ok(&tx_hash, block_creation_ms),
+                "successful static validation with events should populate stateless cache",
+            );
+        }
+
+        #[test]
+        fn validate_populates_stateless_cache() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::new(), Arc::clone(&kura), query);
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let (authority, signer) = gen_account_in("cache-test");
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
+            .sign(signer.private_key());
+            let tx_hash = tx.hash();
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let builder =
+                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
+            let new_block = builder
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(&leader_private)
+                .unpack(|_| {});
+            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            let block_creation_ms = signed_block.header().creation_time().as_millis();
+
+            let mut state_block = state.block(signed_block.header());
+            let result = ValidBlock::validate(
+                signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &block_time_source,
+                &mut state_block,
+            )
+            .unpack(|_| {});
+            assert!(result.is_ok(), "validation should warm stateless cache");
+            drop(state_block);
+
+            let mut cache = state.stateless_validation_cache().lock();
+            assert!(
+                cache.get_ok(&tx_hash, block_creation_ms),
+                "successful static validation should populate stateless cache",
+            );
+        }
+
+        #[test]
+        fn validate_with_events_populates_stateless_cache() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::new(), Arc::clone(&kura), query);
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let (authority, signer) = gen_account_in("cache-test");
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
+            .sign(signer.private_key());
+            let tx_hash = tx.hash();
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let builder =
+                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
+            let new_block = builder
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(&leader_private)
+                .unpack(|_| {});
+            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            let block_creation_ms = signed_block.header().creation_time().as_millis();
+
+            let mut state_block = state.block(signed_block.header());
+            let events = std::cell::RefCell::new(Vec::new());
+            let result = ValidBlock::validate_with_events(
+                signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &block_time_source,
+                &mut state_block,
+                |event| events.borrow_mut().push(event),
+            )
+            .unpack(|_| {});
+            assert!(
+                result.is_ok(),
+                "validation with events should warm stateless cache"
+            );
+            assert!(events.borrow().is_empty(), "no rejection events expected");
+            drop(state_block);
+
+            let mut cache = state.stateless_validation_cache().lock();
+            assert!(
+                cache.get_ok(&tx_hash, block_creation_ms),
+                "successful static validation with events should populate stateless cache",
             );
         }
 

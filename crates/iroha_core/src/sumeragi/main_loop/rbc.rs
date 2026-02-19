@@ -524,8 +524,11 @@ fn rbc_rebroadcasters_count(roster_len: usize) -> usize {
 }
 
 #[allow(dead_code)]
-fn rbc_rebroadcast_indices(roster_len: usize, seed: u64) -> Vec<usize> {
-    let rebroadcaster_count = rbc_rebroadcasters_count(roster_len);
+fn rbc_rebroadcast_indices_with_count(
+    roster_len: usize,
+    seed: u64,
+    rebroadcaster_count: usize,
+) -> Vec<usize> {
     if rebroadcaster_count == 0 {
         return Vec::new();
     }
@@ -549,6 +552,24 @@ fn rbc_rebroadcast_indices(roster_len: usize, seed: u64) -> Vec<usize> {
 }
 
 #[allow(dead_code)]
+fn rbc_rebroadcast_indices(roster_len: usize, seed: u64) -> Vec<usize> {
+    rbc_rebroadcast_indices_with_count(roster_len, seed, rbc_rebroadcasters_count(roster_len))
+}
+
+#[allow(dead_code)]
+fn rbc_ready_rebroadcasters_count(roster_len: usize) -> usize {
+    if roster_len == 0 {
+        return 0;
+    }
+    commit_quorum_from_len(roster_len).min(roster_len)
+}
+
+#[allow(dead_code)]
+fn rbc_ready_rebroadcast_indices(roster_len: usize, seed: u64) -> Vec<usize> {
+    rbc_rebroadcast_indices_with_count(roster_len, seed, rbc_ready_rebroadcasters_count(roster_len))
+}
+
+#[allow(dead_code)]
 pub(super) fn is_payload_rebroadcaster(
     roster: &[PeerId],
     local_peer_id: &PeerId,
@@ -565,7 +586,7 @@ pub(super) fn is_ready_rebroadcaster(roster: &[PeerId], local_peer_id: &PeerId, 
     let Some(local_idx) = roster.iter().position(|peer| peer == local_peer_id) else {
         return false;
     };
-    rbc_rebroadcast_indices(roster.len(), seed).contains(&local_idx)
+    rbc_ready_rebroadcast_indices(roster.len(), seed).contains(&local_idx)
 }
 
 pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
@@ -705,6 +726,14 @@ mod tests {
     }
 
     #[test]
+    fn rbc_ready_rebroadcaster_count_tracks_commit_quorum() {
+        for roster_len in 0..10 {
+            let expected = commit_quorum_from_len(roster_len).min(roster_len);
+            assert_eq!(rbc_ready_rebroadcasters_count(roster_len), expected);
+        }
+    }
+
+    #[test]
     fn rbc_rebroadcast_subset_includes_leader_and_is_deterministic() {
         let roster = sample_roster(4);
         let seed = 99;
@@ -722,14 +751,29 @@ mod tests {
         let seed = 73;
         let first = is_payload_rebroadcaster(&roster, &local, seed);
         let second = is_payload_rebroadcaster(&roster, &local, seed);
+        let ready_first = is_ready_rebroadcaster(&roster, &local, seed);
+        let ready_second = is_ready_rebroadcaster(&roster, &local, seed);
         assert_eq!(first, second);
-        assert_eq!(is_ready_rebroadcaster(&roster, &local, seed), first);
+        assert_eq!(ready_first, ready_second);
 
-        let rebroadcasters = roster
+        let payload_rebroadcasters = roster
             .iter()
             .filter(|peer| is_payload_rebroadcaster(&roster, peer, seed))
             .count();
-        assert_eq!(rebroadcasters, rbc_rebroadcasters_count(roster.len()));
+        assert_eq!(
+            payload_rebroadcasters,
+            rbc_rebroadcasters_count(roster.len())
+        );
+
+        let ready_rebroadcasters = roster
+            .iter()
+            .filter(|peer| is_ready_rebroadcaster(&roster, peer, seed))
+            .count();
+        assert_eq!(
+            ready_rebroadcasters,
+            rbc_ready_rebroadcasters_count(roster.len())
+        );
+        assert!(ready_rebroadcasters >= payload_rebroadcasters);
 
         let outsider = PeerId::new(
             KeyPair::from_seed(b"rbc-outsider".to_vec(), Algorithm::Ed25519)

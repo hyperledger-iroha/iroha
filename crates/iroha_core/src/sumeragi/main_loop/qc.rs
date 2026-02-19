@@ -433,16 +433,31 @@ impl Actor {
     ) -> bool {
         let da_enabled = self.runtime_da_enabled();
         let base_retry_window = self.rebroadcast_cooldown();
-        let retry_window = self.missing_block_retry_window_with_rbc_progress(
-            block_hash,
-            height,
-            view,
-            base_retry_window,
-        );
-        if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
-            && retry_window > stats.retry_window
-        {
-            stats.retry_window = retry_window;
+        let commit_quorum = topology.min_votes_for_commit().max(1);
+        let voting_signers = voting_signer_count(signers, topology.as_ref().len());
+        let near_commit_quorum = voting_signers > 0
+            && voting_signers < commit_quorum
+            && voting_signers.saturating_add(1) >= commit_quorum;
+        let aggressive_qc_fetch = matches!(phase, crate::sumeragi::consensus::Phase::Commit)
+            && (voting_signers >= commit_quorum || near_commit_quorum);
+        let retry_window = if aggressive_qc_fetch {
+            super::REBROADCAST_COOLDOWN_FLOOR
+        } else {
+            self.missing_block_retry_window_with_rbc_progress(
+                block_hash,
+                height,
+                view,
+                base_retry_window,
+            )
+        };
+        if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+            if aggressive_qc_fetch {
+                if stats.retry_window == Duration::ZERO || retry_window < stats.retry_window {
+                    stats.retry_window = retry_window;
+                }
+            } else if retry_window > stats.retry_window {
+                stats.retry_window = retry_window;
+            }
         }
         let defer_view_change =
             self.should_defer_missing_block_view_change(&block_hash, height, view);
@@ -458,7 +473,13 @@ impl Actor {
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
         let telemetry = self.telemetry_handle();
         let now = Instant::now();
-        let deferred = defer_qc_for_missing_block(
+        let fetch_mode = if aggressive_qc_fetch {
+            crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
+            super::MissingBlockFetchMode::AggressiveTopology
+        } else {
+            super::MissingBlockFetchMode::Default
+        };
+        let deferred = super::defer_qc_for_missing_block_with_mode(
             self.block_payload_available_locally(block_hash),
             retry_window,
             view_change_window,
@@ -472,6 +493,7 @@ impl Actor {
             self.config.recovery.missing_block_signer_fallback_attempts,
             &mut requests,
             telemetry,
+            fetch_mode,
             move |targets| {
                 send_missing_block_request(
                     &network,
@@ -2148,6 +2170,22 @@ impl Actor {
     ) -> bool {
         self.record_phase_sample(PipelinePhase::CollectCommit, qc.height, qc.view);
         let qc_ref = Self::qc_to_header_ref(qc);
+        if let Some(lock) = self.locked_qc
+            && !self.block_known_for_lock(lock.subject_block_hash)
+            && (qc.height != lock.height || qc.subject_block_hash != lock.subject_block_hash)
+        {
+            // Keep lock/highest stable while local lock payload is missing; apply once recovered.
+            self.drop_missing_lock_if_unknown(qc);
+            info!(
+                height = qc.height,
+                view = qc.view,
+                incoming_hash = %qc.subject_block_hash,
+                locked_height = lock.height,
+                locked_hash = %lock.subject_block_hash,
+                "deferring precommit QC lock/highest update until locked payload is available"
+            );
+            return true;
+        }
         if let Some(lock) = self.locked_qc {
             if self.block_known_for_lock(lock.subject_block_hash) {
                 let conflicts_locked = qc.height < lock.height
@@ -2926,23 +2964,35 @@ impl Actor {
             );
             let da_enabled = self.runtime_da_enabled();
             let base_retry_window = self.quorum_timeout(da_enabled);
-            let retry_window = self.missing_block_retry_window_with_rbc_progress(
-                qc.subject_block_hash,
-                qc.height,
-                qc.view,
-                base_retry_window,
-            );
+            let aggressive_qc_fetch = matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit);
+            let retry_window = if aggressive_qc_fetch {
+                crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
+                super::REBROADCAST_COOLDOWN_FLOOR
+            } else {
+                self.missing_block_retry_window_with_rbc_progress(
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    base_retry_window,
+                )
+            };
             let now = Instant::now();
             if let Some(stats) = self
                 .pending
                 .missing_block_requests
                 .get_mut(&qc.subject_block_hash)
+                && !aggressive_qc_fetch
                 && retry_window > stats.retry_window
             {
                 stats.retry_window = retry_window;
             }
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
-            let decision = plan_missing_block_fetch(
+            let fetch_mode = if aggressive_qc_fetch {
+                super::MissingBlockFetchMode::AggressiveTopology
+            } else {
+                super::MissingBlockFetchMode::Default
+            };
+            let decision = plan_missing_block_fetch_with_mode(
                 &mut self.pending.missing_block_requests,
                 qc.subject_block_hash,
                 qc.height,
@@ -2953,8 +3003,9 @@ impl Actor {
                 &topology,
                 now,
                 retry_window,
-                Some(retry_window),
+                Some(base_retry_window),
                 self.config.recovery.missing_block_signer_fallback_attempts,
+                fetch_mode,
             );
             let dwell = self
                 .pending

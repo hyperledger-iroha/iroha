@@ -2917,6 +2917,12 @@ enum MissingBlockFetchDecision {
     NoTargets,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingBlockFetchMode {
+    Default,
+    AggressiveTopology,
+}
+
 /// Plan a missing-block fetch on QC-first arrival, respecting retry backoff and signer preference
 /// with a configurable fallback to the full commit topology.
 #[allow(clippy::too_many_arguments)]
@@ -2934,6 +2940,40 @@ fn plan_missing_block_fetch(
     view_change_window: Option<Duration>,
     signer_fallback_attempts: u32,
 ) -> MissingBlockFetchDecision {
+    plan_missing_block_fetch_with_mode(
+        requests,
+        block_hash,
+        height,
+        view,
+        phase,
+        priority,
+        signers,
+        topology,
+        now,
+        retry_window,
+        view_change_window,
+        signer_fallback_attempts,
+        MissingBlockFetchMode::Default,
+    )
+}
+
+/// Plan a missing-block fetch using an explicit target-selection mode.
+#[allow(clippy::too_many_arguments)]
+fn plan_missing_block_fetch_with_mode(
+    requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    phase: crate::sumeragi::consensus::Phase,
+    priority: MissingBlockPriority,
+    signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    topology: &super::network_topology::Topology,
+    now: Instant,
+    retry_window: Duration,
+    view_change_window: Option<Duration>,
+    signer_fallback_attempts: u32,
+    mode: MissingBlockFetchMode,
+) -> MissingBlockFetchDecision {
     if !touch_missing_block_request(
         requests,
         block_hash,
@@ -2949,8 +2989,10 @@ fn plan_missing_block_fetch(
     }
 
     let attempts = requests.get(&block_hash).map_or(0, |stats| stats.attempts);
-    let prefer_signers =
-        !signers.is_empty() && signer_fallback_attempts > 0 && attempts < signer_fallback_attempts;
+    let prefer_signers = matches!(mode, MissingBlockFetchMode::Default)
+        && !signers.is_empty()
+        && signer_fallback_attempts > 0
+        && attempts < signer_fallback_attempts;
     let signer_targets: Vec<_> = signers
         .iter()
         .filter_map(|signer| usize::try_from(*signer).ok())
@@ -3004,6 +3046,14 @@ fn block_sync_quorum_available(
     }
 
     block_height <= local_height.saturating_add(1)
+}
+
+fn block_sync_commit_cert_present(
+    commit_cert_hint_present: bool,
+    incoming_qc_validated: bool,
+    conflicts_locked: bool,
+) -> bool {
+    commit_cert_hint_present && incoming_qc_validated && !conflicts_locked
 }
 
 fn send_missing_block_request(
@@ -3062,6 +3112,46 @@ fn defer_qc_for_missing_block<F>(
     signer_fallback_attempts: u32,
     requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     telemetry: Option<&crate::telemetry::Telemetry>,
+    request_missing_block: F,
+) -> bool
+where
+    F: FnMut(&[PeerId]),
+{
+    defer_qc_for_missing_block_with_mode(
+        block_known,
+        retry_window,
+        view_change_window,
+        now,
+        block_hash,
+        height,
+        view,
+        phase,
+        signers,
+        topology,
+        signer_fallback_attempts,
+        requests,
+        telemetry,
+        MissingBlockFetchMode::Default,
+        request_missing_block,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn defer_qc_for_missing_block_with_mode<F>(
+    block_known: bool,
+    retry_window: Duration,
+    view_change_window: Option<Duration>,
+    now: Instant,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    phase: crate::sumeragi::consensus::Phase,
+    signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    topology: &super::network_topology::Topology,
+    signer_fallback_attempts: u32,
+    requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
+    telemetry: Option<&crate::telemetry::Telemetry>,
+    mode: MissingBlockFetchMode,
     mut request_missing_block: F,
 ) -> bool
 where
@@ -3078,7 +3168,7 @@ where
         );
     }
 
-    let decision = plan_missing_block_fetch(
+    let decision = plan_missing_block_fetch_with_mode(
         requests,
         block_hash,
         height,
@@ -3091,6 +3181,7 @@ where
         retry_window,
         view_change_window,
         signer_fallback_attempts,
+        mode,
     );
     let (dwell, since_last_request, attempts) = requests.get(&block_hash).map_or(
         (Duration::ZERO, Duration::ZERO, 0),
@@ -4127,6 +4218,137 @@ impl Actor {
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         self.rbc_rebroadcast_active_with_tip(key, tip_height, tip_hash)
+    }
+
+    fn rbc_session_matches_pending_block(&self, key: super::rbc_store::SessionKey) -> bool {
+        if self
+            .pending
+            .pending_blocks
+            .get(&key.0)
+            .is_some_and(|pending| {
+                !pending.aborted && pending.height == key.1 && pending.view == key.2
+            })
+        {
+            return true;
+        }
+        if self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                inflight.block_hash == key.0
+                    && !inflight.pending.aborted
+                    && inflight.pending.height == key.1
+                    && inflight.pending.view == key.2
+            })
+        {
+            return true;
+        }
+        self.pending
+            .pending_processing
+            .get()
+            .is_some_and(|hash| hash == key.0)
+    }
+
+    fn rbc_rebroadcast_session_urgent_near_tip(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        tip_height_u64: u64,
+    ) -> bool {
+        let session_height = session
+            .block_header
+            .as_ref()
+            .map_or(key.1, |header| header.height().get());
+        let near_tip = session_height >= tip_height_u64.saturating_sub(1)
+            && session_height <= tip_height_u64.saturating_add(1);
+        if !near_tip {
+            return false;
+        }
+        if self.rbc_session_matches_pending_block(key) {
+            return true;
+        }
+        if session.delivered {
+            return false;
+        }
+        let missing_chunks =
+            session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();
+        missing_chunks || !session.ready_signatures.is_empty()
+    }
+
+    fn collect_urgent_near_tip_rbc_sessions(
+        &self,
+        tip_height: usize,
+        tip_height_u64: u64,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> Vec<super::rbc_store::SessionKey> {
+        let mut urgent = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut push_candidate = |key: super::rbc_store::SessionKey| {
+            if seen.contains(&key) {
+                return;
+            }
+            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+                return;
+            };
+            if !self.rbc_rebroadcast_active_with_tip_and_session(
+                key,
+                tip_height,
+                tip_hash,
+                Some(session),
+            ) {
+                return;
+            }
+            if session.is_invalid()
+                || !self.rbc_rebroadcast_session_urgent_near_tip(key, session, tip_height_u64)
+            {
+                return;
+            }
+            seen.insert(key);
+            urgent.push(key);
+        };
+
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref()
+            && !inflight.pending.aborted
+        {
+            push_candidate((
+                inflight.block_hash,
+                inflight.pending.height,
+                inflight.pending.view,
+            ));
+        }
+
+        if let Some(processing_hash) = self.pending.pending_processing.get() {
+            if let Some(pending) = self.pending.pending_blocks.get(&processing_hash)
+                && !pending.aborted
+            {
+                push_candidate((processing_hash, pending.height, pending.view));
+            } else if let Some(inflight) = self.subsystems.commit.inflight.as_ref()
+                && inflight.block_hash == processing_hash
+                && !inflight.pending.aborted
+            {
+                push_candidate((
+                    processing_hash,
+                    inflight.pending.height,
+                    inflight.pending.view,
+                ));
+            }
+        }
+
+        for (hash, pending) in &self.pending.pending_blocks {
+            if pending.aborted {
+                continue;
+            }
+            if pending.height < tip_height_u64.saturating_sub(1)
+                || pending.height > tip_height_u64.saturating_add(1)
+            {
+                continue;
+            }
+            push_candidate((*hash, pending.height, pending.view));
+        }
+
+        urgent
     }
 
     fn touch_pending_progress(
@@ -13079,15 +13301,42 @@ impl Actor {
         }
         let ready_cooldown = self.rebroadcast_cooldown();
         let tip_height = self.state.committed_height();
+        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         let tip_hash = self.state.latest_block_hash_fast();
         // Rotate through sessions with a per-tick budget so large backlogs do not trigger storms.
         let total_sessions = self.subsystems.da_rbc.rbc.sessions.len();
         let session_budget = self.config.rbc.rebroadcast_sessions_per_tick.max(1);
         let limit = session_budget.min(total_sessions);
         let cursor = self.subsystems.da_rbc.rbc.rebroadcast_cursor;
-        let mut keys = Vec::with_capacity(limit);
         let mut last_key = cursor;
-        if let Some(cursor_key) = cursor {
+        let mut keys = Vec::with_capacity(limit);
+        let mut selected = BTreeSet::new();
+        let urgent_keys =
+            self.collect_urgent_near_tip_rbc_sessions(tip_height, tip_height_u64, tip_hash);
+        if !urgent_keys.is_empty() {
+            let urgent_start = cursor
+                .and_then(|cursor_key| {
+                    urgent_keys
+                        .iter()
+                        .position(|key| *key == cursor_key)
+                        .map(|idx| (idx + 1) % urgent_keys.len())
+                })
+                .unwrap_or(0);
+            for offset in 0..urgent_keys.len() {
+                if keys.len() >= limit {
+                    break;
+                }
+                let idx = (urgent_start + offset) % urgent_keys.len();
+                let key = urgent_keys[idx];
+                if selected.insert(key) {
+                    keys.push(key);
+                    last_key = Some(key);
+                }
+            }
+        }
+        if keys.len() < limit
+            && let Some(cursor_key) = cursor
+        {
             for (key, _) in self
                 .subsystems
                 .da_rbc
@@ -13095,9 +13344,16 @@ impl Actor {
                 .sessions
                 .range((Excluded(cursor_key), Unbounded))
             {
+                if keys.len() >= limit {
+                    break;
+                }
                 last_key = Some(*key);
+                if selected.contains(key) {
+                    continue;
+                }
                 if self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
                     keys.push(*key);
+                    selected.insert(*key);
                     if keys.len() >= limit {
                         break;
                     }
@@ -13105,20 +13361,34 @@ impl Actor {
             }
             if keys.len() < limit {
                 for (key, _) in self.subsystems.da_rbc.rbc.sessions.range(..=cursor_key) {
+                    if keys.len() >= limit {
+                        break;
+                    }
                     last_key = Some(*key);
+                    if selected.contains(key) {
+                        continue;
+                    }
                     if self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
                         keys.push(*key);
+                        selected.insert(*key);
                         if keys.len() >= limit {
                             break;
                         }
                     }
                 }
             }
-        } else {
+        } else if keys.len() < limit {
             for key in self.subsystems.da_rbc.rbc.sessions.keys() {
+                if keys.len() >= limit {
+                    break;
+                }
                 last_key = Some(*key);
+                if selected.contains(key) {
+                    continue;
+                }
                 if self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash) {
                     keys.push(*key);
+                    selected.insert(*key);
                     if keys.len() >= limit {
                         break;
                     }
@@ -13903,21 +14173,25 @@ impl Actor {
             self.queue_ready_since = None;
             return false;
         }
+        let da_enabled = self.runtime_da_enabled();
         let rbc_backlog = self.has_unresolved_rbc_backlog();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let rbc_progress_window = self
             .payload_rebroadcast_cooldown()
             .max(Duration::from_millis(250));
+        let vote_cap = u64::try_from(self.config.queues.votes.max(1)).unwrap_or(u64::MAX);
         let block_payload_cap =
             u64::try_from(self.config.queues.block_payload.max(1)).unwrap_or(u64::MAX);
         let rbc_chunk_cap = u64::try_from(self.config.queues.rbc_chunks.max(1)).unwrap_or(u64::MAX);
-        let consensus_queue_backpressure = queue_depths.block_payload_rx >= block_payload_cap
+        let consensus_queue_backpressure = queue_depths.vote_rx >= vote_cap
+            || queue_depths.block_payload_rx >= block_payload_cap
             || queue_depths.rbc_chunk_rx >= rbc_chunk_cap;
         let consensus_queue_backlog = queue_depths.vote_rx > 0
             || queue_depths.block_payload_rx > 0
             || queue_depths.rbc_chunk_rx > 0
-            || queue_depths.block_rx > 0;
+            || queue_depths.block_rx > 0
+            || queue_depths.consensus_rx > 0;
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
@@ -13980,7 +14254,7 @@ impl Actor {
             proposal_seen,
             self.commit_quorum_timeout(),
             self.subsystems.propose.pacemaker.propose_interval,
-            self.runtime_da_enabled(),
+            da_enabled,
         );
         let age = if proposal_seen {
             view_age
@@ -13992,6 +14266,12 @@ impl Actor {
             && (queue_depths.rbc_chunk_rx > 0
                 || queue_depths.block_payload_rx > 0
                 || self.has_recent_pending_progress_for_rbc(now, rbc_progress_window));
+        let proposal_gap_backlog_grace = if !proposal_seen && consensus_queue_backlog && da_enabled
+        {
+            self.availability_timeout(self.commit_quorum_timeout(), da_enabled)
+        } else {
+            Duration::ZERO
+        };
         // Defer idle view-change while backlog is within the timeout window.
         if (rbc_backlog || relay_backpressure) && !timed_out {
             if rbc_backlog {
@@ -14002,17 +14282,43 @@ impl Actor {
             }
             return false;
         }
+        if proposal_gap_backlog_grace > Duration::ZERO {
+            let backlog_grace_deadline = timeout.saturating_add(proposal_gap_backlog_grace);
+            if age < backlog_grace_deadline {
+                debug!(
+                    rbc_backlog,
+                    rbc_backlog_progressing,
+                    consensus_queue_backlog,
+                    age_ms = age.as_millis(),
+                    timeout_ms = timeout.as_millis(),
+                    proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
+                    vote_rx_depth = queue_depths.vote_rx,
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
+                    consensus_rx_depth = queue_depths.consensus_rx,
+                    "deferring idle view-change while proposal-gap backlog converges"
+                );
+                return false;
+            }
+        }
         if rbc_backlog && rbc_backlog_progressing {
-            let progress_grace_deadline = timeout.saturating_add(rbc_progress_window);
+            let progress_grace_deadline =
+                timeout.saturating_add(rbc_progress_window.max(proposal_gap_backlog_grace));
             if age < progress_grace_deadline {
                 debug!(
                     rbc_backlog,
                     rbc_backlog_progressing,
+                    consensus_queue_backlog,
                     age_ms = age.as_millis(),
                     timeout_ms = timeout.as_millis(),
                     progress_grace_ms = progress_grace_deadline.as_millis(),
+                    proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
+                    vote_rx_depth = queue_depths.vote_rx,
                     block_payload_rx_depth = queue_depths.block_payload_rx,
                     rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
+                    consensus_rx_depth = queue_depths.consensus_rx,
                     "deferring idle view-change while RBC backlog is converging"
                 );
                 return false;
@@ -14032,6 +14338,7 @@ impl Actor {
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                 block_rx_depth = queue_depths.block_rx,
+                consensus_rx_depth = queue_depths.consensus_rx,
                 "overriding consensus queue backpressure after idle timeout"
             );
         }
@@ -14066,6 +14373,7 @@ impl Actor {
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                 block_rx_depth = queue_depths.block_rx,
+                consensus_rx_depth = queue_depths.consensus_rx,
                 "no proposal observed before cutoff; rotating leader via view change"
             );
         }
