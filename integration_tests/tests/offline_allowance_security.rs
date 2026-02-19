@@ -1,22 +1,30 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Security regressions for offline allowance admission and escrow enforcement.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eyre::Result;
 use integration_tests::sandbox::start_network_async_or_skip;
-use iroha::data_model::{
-    account::AccountId,
-    asset::{AssetDefinition, AssetDefinitionId, AssetId},
-    isi::{Register, offline::RegisterOfflineAllowance},
-    metadata::Metadata,
-    offline::{
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceCommitment, OfflineWalletCertificate,
-        OfflineWalletPolicy,
+use iroha::{
+    data_model::{
+        ValidationFail,
+        account::AccountId,
+        asset::{AssetDefinition, AssetDefinitionId, AssetId},
+        isi::{
+            Mint, Register, SetKeyValue,
+            offline::{ReclaimExpiredOfflineAllowance, RegisterOfflineAllowance},
+        },
+        metadata::Metadata,
+        offline::{
+            OFFLINE_ASSET_ENABLED_METADATA_KEY, OFFLINE_REJECTION_REASON_PREFIX,
+            OfflineAllowanceCommitment, OfflineWalletCertificate, OfflineWalletPolicy,
+        },
+        prelude::*,
     },
-    prelude::*,
+    query::QueryError,
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_data_model::query::error::QueryExecutionFail;
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
@@ -139,6 +147,109 @@ async fn register_offline_allowance_rejects_missing_escrow_binding() -> Result<(
         err.to_string().contains(&expected),
         "unexpected error: {err}"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Result<()> {
+    init_instruction_registry();
+    let now_ms = now_millis();
+    let definition_id: AssetDefinitionId = "offsecreclaime2e#wonderland".parse()?;
+    let initial_balance = Numeric::new(100, 0);
+    let allowance_amount = Numeric::new(50, 0);
+    let mut certificate = signed_certificate_for(definition_id.clone(), now_ms, ALICE_ID.clone());
+    certificate.allowance.amount = allowance_amount.clone();
+    certificate.policy.max_balance = allowance_amount.clone();
+    certificate.policy.max_tx_value = allowance_amount.clone();
+    certificate.expires_at_ms = now_ms + 1_500;
+    certificate.policy.expires_at_ms = certificate.expires_at_ms;
+    certificate.operator_signature = Signature::new(
+        ALICE_KEYPAIR.private_key(),
+        &certificate
+            .operator_signing_bytes()
+            .expect("operator signing bytes"),
+    );
+    let certificate_id = certificate.certificate_id();
+    let expires_at_ms = certificate.expires_at_ms;
+    let controller_asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::new(
+            definition_id.clone(),
+            NumericSpec::integer(),
+        )))
+        .with_genesis_instruction(SetKeyValue::asset_definition(
+            definition_id.clone(),
+            OFFLINE_ASSET_ENABLED_METADATA_KEY
+                .parse()
+                .expect("offline.enabled metadata key should parse"),
+            Json::new(true),
+        ))
+        .with_genesis_instruction(Mint::asset_numeric(
+            initial_balance.clone(),
+            controller_asset_id.clone(),
+        ));
+    let Some(network) = start_network_async_or_skip(
+        builder,
+        stringify!(register_topup_expire_then_reclaim_restores_controller_balance),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    network.ensure_blocks(1).await?;
+
+    let client = network.client();
+    let initial = client
+        .query_single(FindAssetById::new(controller_asset_id.clone()))?
+        .value()
+        .clone();
+    assert_eq!(initial, initial_balance);
+
+    client.submit_blocking(RegisterOfflineAllowance { certificate })?;
+    network.ensure_blocks(2).await?;
+
+    let after_topup = client
+        .query_single(FindAssetById::new(controller_asset_id.clone()))?
+        .value()
+        .clone();
+    assert_eq!(after_topup, Numeric::new(50, 0));
+
+    let record = client.query_single(FindOfflineAllowanceByCertificateId { certificate_id })?;
+    assert_eq!(record.remaining_amount, allowance_amount);
+
+    if let Some(wait_ms) = expires_at_ms
+        .checked_sub(now_millis())
+        .map(|ms| ms.saturating_add(250))
+        .filter(|ms| *ms > 0)
+    {
+        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+    }
+
+    loop {
+        match client.submit_blocking(ReclaimExpiredOfflineAllowance { certificate_id }) {
+            Ok(()) => break,
+            Err(err) if err.to_string().contains("allowance_not_expired") => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    network.ensure_blocks(3).await?;
+
+    let after_reclaim = client
+        .query_single(FindAssetById::new(controller_asset_id))?
+        .value()
+        .clone();
+    assert_eq!(after_reclaim, initial_balance);
+
+    match client.query_single(FindOfflineAllowanceByCertificateId { certificate_id }) {
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {}
+        Ok(_) => panic!("offline allowance should be removed after reclaim"),
+        Err(err) => panic!("unexpected query error after reclaim: {err}"),
+    }
 
     Ok(())
 }

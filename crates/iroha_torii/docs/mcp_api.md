@@ -700,6 +700,8 @@ Build WebSocket ticket metadata directly from a create-session response token:
 
 `connect.ws.ticket` accepts either `token` or role-matched aliases
 (`token_app` when `role=app`, `token_wallet` when `role=wallet`).
+`connect.session.delete` accepts `sid`/`session_id` either top-level or nested
+under `path.sid`/`path.session_id`.
 
 ## Node Ops Example
 

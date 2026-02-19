@@ -6306,7 +6306,9 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.session.delete",
                 "arguments": {
-                    "session_id": sid
+                    "path": {
+                        "session_id": sid
+                    }
                 }
             }
         }),
@@ -6460,7 +6462,9 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "params": {
                 "name": "iroha.connect.session.delete",
                 "arguments": {
-                    "session_id": sid
+                    "path": {
+                        "session_id": sid
+                    }
                 }
             }
         }),
