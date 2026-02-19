@@ -2778,16 +2778,16 @@ mod tests {
     }
 
     #[test]
-        fn sumeragi_npos_from_custom_parameter_accepts_epoch_seed_with_nested_quotes() {
-            let expected = SumeragiNposParameters::default();
-            let mut hex_seed = String::with_capacity(64);
-            for byte in expected.epoch_seed() {
-                const HEX: &[u8; 16] = b"0123456789abcdef";
-                hex_seed.push(HEX[(byte >> 4) as usize] as char);
-                hex_seed.push(HEX[(byte & 0x0F) as usize] as char);
-            }
-            let mut payload =
-                norito::json::to_value(&expected).expect("serialize npos payload to json value");
+    fn sumeragi_npos_from_custom_parameter_accepts_epoch_seed_with_nested_quotes() {
+        let expected = SumeragiNposParameters::default();
+        let mut hex_seed = String::with_capacity(64);
+        for byte in expected.epoch_seed() {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            hex_seed.push(HEX[(byte >> 4) as usize] as char);
+            hex_seed.push(HEX[(byte & 0x0F) as usize] as char);
+        }
+        let mut payload =
+            norito::json::to_value(&expected).expect("serialize npos payload to json value");
         let map = payload
             .as_object_mut()
             .expect("npos payload should serialize as object");

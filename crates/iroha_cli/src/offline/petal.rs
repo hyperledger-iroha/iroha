@@ -1657,26 +1657,35 @@ fn blend_sora_data_tile(
     let inner_u = ((local_x - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     let inner_v = ((local_y - margin) / (1.0 - 2.0 * margin)).clamp(0.0, 0.9999);
     if param.logo {
-        let logo_bg = if param.bit {
-            style_cfg.logo_dark_bg
-        } else {
-            style_cfg.logo_light_bg
-        };
-        blend_rgb(rgb, logo_bg, style_cfg.logo_tile_mix);
-        blend_rgb(rgb, style_cfg.logo_tint, style_cfg.logo_tint_alpha);
-        blend_rgb(rgb, [0.91, 0.11, 0.18], 0.42);
         if cell_size >= 8 {
+            let logo_bg = if param.bit {
+                style_cfg.logo_dark_bg
+            } else {
+                style_cfg.logo_light_bg
+            };
+            blend_rgb(rgb, logo_bg, style_cfg.logo_tile_mix);
+            blend_rgb(rgb, style_cfg.logo_tint, style_cfg.logo_tint_alpha);
+            blend_rgb(rgb, [0.91, 0.11, 0.18], 0.42);
             let logo_radial =
                 ((inner_u - 0.5) * (inner_u - 0.5) + (inner_v - 0.5) * (inner_v - 0.5)).sqrt();
             let logo_glow = (1.0 - logo_radial / 0.70).clamp(0.0, 1.0).powf(2.2);
             blend_rgb(rgb, style_cfg.ring_bright, logo_glow * 0.16);
+        } else {
+            // Keep low-resolution frames decode-friendly while hinting the disk tint.
+            blend_rgb(rgb, [0.91, 0.11, 0.18], 0.12);
         }
     }
     if param.logo_glyph {
-        // Keep per-bit contrast, but push the logo glyph toward near-black ink.
-        let ink_alpha = if param.bit { 0.80 } else { 0.56 };
-        blend_rgb(rgb, [0.02, 0.01, 0.02], ink_alpha);
-        blend_rgb(rgb, style_cfg.ring_dim, 0.26);
+        if cell_size >= 8 {
+            // Bias toward black ink while preserving a decode-relevant light/dark split.
+            let ink_alpha = if param.bit { 0.84 } else { 0.30 };
+            blend_rgb(rgb, [0.01, 0.01, 0.01], ink_alpha);
+            blend_rgb(rgb, style_cfg.ring_dim, if param.bit { 0.18 } else { 0.04 });
+        } else {
+            // At tiny cells, keep contrast for reliable decode.
+            let ink_alpha = if param.bit { 0.22 } else { 0.07 };
+            blend_rgb(rgb, [0.01, 0.01, 0.01], ink_alpha);
+        }
     }
     if cell_size >= 8 {
         let holder_scale = ((cell_size as f64 - 8.0) / 40.0).clamp(0.0, 1.0);
@@ -1905,7 +1914,7 @@ fn sora_ten_logo_mask(nx: f64, ny: f64) -> bool {
 fn sora_ten_logo_disk_mask(nx: f64, ny: f64) -> bool {
     let x = nx * 2.0 - 1.0;
     let y = ny * 2.0 - 1.0;
-    x * x + y * y <= 0.97 * 0.97
+    x * x + y * y <= 0.968 * 0.968
 }
 
 fn sora_ten_logo_glyph_mask(nx: f64, ny: f64) -> bool {
@@ -1915,14 +1924,20 @@ fn sora_ten_logo_glyph_mask(nx: f64, ny: f64) -> bool {
     let x = nx * 2.0 - 1.0;
     let y = ny * 2.0 - 1.0;
 
-    let top_bar = y >= -0.50 && y <= -0.34 && x >= -0.62 && x <= 0.62;
-    let mid_left = y >= -0.17 && y <= 0.00 && x >= -0.62 && x <= -0.08;
-    let mid_right = y >= -0.17 && y <= 0.00 && x >= 0.08 && x <= 0.62;
-    let center_stem = y >= -0.34 && y <= 0.19 && x.abs() <= 0.08;
-    let left_leg = y >= 0.16 && y <= 0.93 && (x + 0.98 * (y - 0.16)).abs() <= 0.10;
-    let right_leg = y >= 0.16 && y <= 0.93 && (x - 0.98 * (y - 0.16)).abs() <= 0.10;
+    let top_bar = y >= -0.56 && y <= -0.38 && x >= -0.62 && x <= 0.62;
+    let mid_band = y >= -0.20 && y <= -0.02 && x >= -0.62 && x <= 0.62;
+    let mid_gap = y >= -0.20 && y <= -0.02 && x.abs() < 0.10;
+    let stem_upper = y >= -0.38 && y <= -0.22 && x.abs() <= 0.09;
+    let stem_lower = y >= -0.01 && y <= 0.07 && x.abs() <= 0.09;
 
-    top_bar || mid_left || mid_right || center_stem || left_leg || right_leg
+    let leg_y = y.clamp(0.0, 0.92);
+    let leg_half_width = lerp(0.13, 0.10, (leg_y / 0.92).clamp(0.0, 1.0));
+    let left_axis = -0.05 - 0.74 * leg_y;
+    let right_axis = 0.05 + 0.74 * leg_y;
+    let left_leg = y >= 0.02 && y <= 0.92 && (x - left_axis).abs() <= leg_half_width;
+    let right_leg = y >= 0.02 && y <= 0.92 && (x - right_axis).abs() <= leg_half_width;
+
+    top_bar || (mid_band && !mid_gap) || stem_upper || stem_lower || left_leg || right_leg
 }
 
 fn estimate_style_aesthetic_score(image: &image::RgbaImage, style: PetalRenderStyle) -> f64 {
@@ -3310,6 +3325,24 @@ mod tests {
             accuracy > 0.72,
             "katakana bit accuracy too low: {accuracy:.3}"
         );
+    }
+
+    #[test]
+    fn sora_ten_logo_glyph_matches_reference_landmarks() {
+        // Circle body
+        assert!(sora_ten_logo_disk_mask(0.50, 0.50));
+        // Top bar
+        assert!(sora_ten_logo_glyph_mask(0.50, 0.24));
+        // Split middle bar
+        assert!(sora_ten_logo_glyph_mask(0.24, 0.42));
+        assert!(sora_ten_logo_glyph_mask(0.76, 0.42));
+        assert!(!sora_ten_logo_glyph_mask(0.50, 0.42));
+        // Center stem
+        assert!(sora_ten_logo_glyph_mask(0.50, 0.34));
+        // Legs and center opening
+        assert!(sora_ten_logo_glyph_mask(0.34, 0.70));
+        assert!(sora_ten_logo_glyph_mask(0.66, 0.70));
+        assert!(!sora_ten_logo_glyph_mask(0.50, 0.86));
     }
 
     #[test]

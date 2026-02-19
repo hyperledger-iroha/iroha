@@ -426,8 +426,13 @@ impl Actor {
                 let zero_vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
                         .max(Duration::from_secs(2));
-                let zero_vote_backlog_deadline =
-                    effective_quorum_timeout.saturating_add(zero_vote_backlog_grace);
+                let zero_vote_backlog_deadline = effective_quorum_timeout
+                    .saturating_add(zero_vote_backlog_grace)
+                    .max(availability_timeout);
+                let vote_backlog_grace =
+                    super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
+                        .max(Duration::from_secs(2));
+                let vote_backlog_deadline = availability_timeout.saturating_add(vote_backlog_grace);
                 if !has_votes
                     && consensus_queue_backlog
                     && progress_stall_age < zero_vote_backlog_deadline
@@ -438,6 +443,7 @@ impl Actor {
                         block = %hash,
                         progress_stall_age_ms = progress_stall_age.as_millis(),
                         quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                        availability_timeout_ms = availability_timeout.as_millis(),
                         zero_vote_backlog_grace_ms = zero_vote_backlog_grace.as_millis(),
                         zero_vote_backlog_deadline_ms = zero_vote_backlog_deadline.as_millis(),
                         block_payload_rx_depth = queue_depths.block_payload_rx,
@@ -467,7 +473,7 @@ impl Actor {
                 if has_votes
                     && !near_commit_quorum
                     && consensus_queue_backlog
-                    && progress_stall_age < availability_timeout
+                    && progress_stall_age < vote_backlog_deadline
                 {
                     debug!(
                         height = pending.height,
@@ -477,6 +483,8 @@ impl Actor {
                         min_votes = min_votes_for_commit,
                         progress_stall_age_ms = progress_stall_age.as_millis(),
                         availability_timeout_ms = availability_timeout.as_millis(),
+                        vote_backlog_grace_ms = vote_backlog_grace.as_millis(),
+                        vote_backlog_deadline_ms = vote_backlog_deadline.as_millis(),
                         block_payload_rx_depth = queue_depths.block_payload_rx,
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                         block_rx_depth = queue_depths.block_rx,
@@ -487,7 +495,7 @@ impl Actor {
                 }
                 if near_commit_quorum
                     && consensus_queue_backlog
-                    && progress_stall_age < availability_timeout
+                    && progress_stall_age < vote_backlog_deadline
                 {
                     debug!(
                         height = pending.height,
@@ -497,6 +505,8 @@ impl Actor {
                         min_votes = min_votes_for_commit,
                         progress_stall_age_ms = progress_stall_age.as_millis(),
                         availability_timeout_ms = availability_timeout.as_millis(),
+                        vote_backlog_grace_ms = vote_backlog_grace.as_millis(),
+                        vote_backlog_deadline_ms = vote_backlog_deadline.as_millis(),
                         block_payload_rx_depth = queue_depths.block_payload_rx,
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                         block_rx_depth = queue_depths.block_rx,
