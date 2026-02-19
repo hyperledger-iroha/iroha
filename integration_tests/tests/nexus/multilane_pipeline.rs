@@ -17,9 +17,7 @@ use iroha_config::{
 use iroha_config_base::WithOrigin;
 use iroha_core::{
     kura::Kura,
-    query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, LaneRouter, RoutingDecision},
-    state::{State, World},
     tx::AcceptedTransaction,
 };
 use iroha_data_model::{
@@ -62,19 +60,6 @@ fn sample_transaction(
     let crypto_cfg = Crypto::default();
     AcceptedTransaction::accept(tx, &chain_id, Duration::from_secs(30), params, &crypto_cfg)
         .expect("transaction should be accepted")
-}
-
-fn blank_state() -> State {
-    let world = World::default();
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    {
-        let telemetry = iroha_core::telemetry::StateTelemetry::default();
-        State::with_telemetry(world, kura, query, telemetry)
-    }
-    #[cfg(not(feature = "telemetry"))]
-    State::new(world, kura, query)
 }
 
 #[test]
@@ -212,8 +197,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         dataspace_catalog,
         lane_catalog.clone(),
     ));
-    let _state = blank_state();
-
     let tx_core = sample_transaction(
         &core_account,
         core_keys.private_key(),

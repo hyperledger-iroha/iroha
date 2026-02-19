@@ -119,6 +119,21 @@ pub mod isi {
         Ok(())
     }
 
+    fn ensure_not_offline_escrow_source(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+    ) -> Result<(), Error> {
+        if crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+            state_transaction,
+            source_id,
+        )? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "direct transfer from offline escrow account is not allowed; use offline settlement instructions".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn apply_transfer_delta(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
@@ -135,6 +150,7 @@ pub mod isi {
             source_id.definition(),
             "transparent transfer not permitted by policy",
         )?;
+        ensure_not_offline_escrow_source(state_transaction, source_id)?;
 
         let remove_source_asset;
         let from_balance_before;
@@ -1111,6 +1127,119 @@ pub mod query {
 
             assert!(stx.world.assets.get(&alice_asset_id).is_none());
             assert!(stx.world.asset_metadata.get(&alice_asset_id).is_none());
+        }
+
+        #[test]
+        fn transfer_rejects_configured_offline_escrow_source() {
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain = Domain::new(domain_id).build(&ALICE_ID);
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+            let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+            let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(10, 0));
+
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [alice_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_store);
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(asset_def_id.clone(), ALICE_ID.clone());
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let err = Transfer::asset_numeric(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("generic transfer from escrow source must be rejected");
+            assert!(
+                err.to_string().contains("offline escrow account"),
+                "unexpected error: {err}"
+            );
+
+            let source_balance = stx
+                .world
+                .assets
+                .get(&alice_asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(source_balance, Numeric::new(10, 0));
+
+            let destination_asset = AssetId::new(asset_def_id, BOB_ID.clone());
+            assert!(
+                stx.world.assets.get(&destination_asset).is_none(),
+                "destination account must not be credited"
+            );
+        }
+
+        #[test]
+        fn transfer_rejects_metadata_derived_offline_escrow_source() {
+            let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+            let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+                &chain_id,
+                &asset_def_id,
+            );
+            let domain = Domain::new(domain_id).build(&ALICE_ID);
+            let escrow_account_model = Account::new(escrow_account.clone()).build(&escrow_account);
+            let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+            let mut asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+            asset_def.metadata_mut().insert(
+                iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::from(norito::json!(true)),
+            );
+            let escrow_asset_id = AssetId::new(asset_def_id.clone(), escrow_account.clone());
+            let escrow_asset = Asset::new(escrow_asset_id.clone(), Numeric::new(10, 0));
+            let world = World::with_assets(
+                [domain],
+                [escrow_account_model, bob_account],
+                [asset_def],
+                [escrow_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new_with_chain(world, kura, query_store, chain_id);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let err = Transfer::asset_numeric(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&escrow_account, &mut stx)
+                .expect_err("metadata-derived escrow source must be rejected");
+            assert!(
+                err.to_string().contains("offline escrow account"),
+                "unexpected error: {err}"
+            );
+
+            let source_balance = stx
+                .world
+                .assets
+                .get(&escrow_asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(source_balance, Numeric::new(10, 0));
+
+            let destination_asset = AssetId::new(asset_def_id, BOB_ID.clone());
+            assert!(
+                stx.world.assets.get(&destination_asset).is_none(),
+                "destination account must not be credited"
+            );
         }
 
         #[test]

@@ -23,14 +23,14 @@ use iroha_data_model::{
     ChainId,
     asset::{AssetDefinitionId, AssetId},
     events::data::offline::{
-        OfflineTransferArchived, OfflineTransferEvent, OfflineTransferPruned,
-        OfflineTransferSettled,
+        OfflineAllowanceReclaimed, OfflineTransferArchived, OfflineTransferEvent,
+        OfflineTransferPruned, OfflineTransferSettled,
     },
     isi::{
         error::{InstructionExecutionError, MathError},
         offline::{
-            RegisterOfflineAllowance, RegisterOfflineVerdictRevocation,
-            SubmitOfflineToOnlineTransfer,
+            ReclaimExpiredOfflineAllowance, RegisterOfflineAllowance,
+            RegisterOfflineVerdictRevocation, SubmitOfflineToOnlineTransfer,
         },
     },
     metadata::Metadata,
@@ -350,6 +350,37 @@ fn resolve_offline_escrow_account(
         ));
     }
     Ok(None)
+}
+
+pub(crate) fn is_offline_escrow_source_asset(
+    state_transaction: &StateTransaction<'_, '_>,
+    source_id: &AssetId,
+) -> Result<bool, Error> {
+    if let Some(account) = state_transaction
+        .settlement
+        .offline
+        .escrow_accounts
+        .get(source_id.definition())
+    {
+        return Ok(account == source_id.account());
+    }
+
+    let asset_definition = state_transaction
+        .world
+        .asset_definition(source_id.definition())
+        .map_err(Error::from)?;
+
+    if !crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
+        asset_definition.metadata(),
+    )? {
+        return Ok(false);
+    }
+
+    let derived = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+        state_transaction.chain_id(),
+        source_id.definition(),
+    );
+    Ok(&derived == source_id.account())
 }
 
 fn reserve_offline_allowance(
@@ -672,6 +703,16 @@ pub mod isi {
         }
     }
 
+    impl Execute for ReclaimExpiredOfflineAllowance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            reclaim_expired_allowance(self, authority, state_transaction)
+        }
+    }
+
     fn register_allowance(
         isi: RegisterOfflineAllowance,
         authority: &AccountId,
@@ -814,7 +855,7 @@ pub mod isi {
         use iroha_data_model::{
             ChainId,
             account::Account,
-            asset::AssetDefinition,
+            asset::{Asset, AssetDefinition},
             block::BlockHeader,
             domain::Domain,
             offline::{
@@ -913,16 +954,42 @@ pub mod isi {
             let controller = certificate.controller.clone();
             let escrow = sample_account(0x02, "offline");
             let definition_id = certificate.allowance.asset.definition().clone();
+            certificate.expires_at_ms = certificate.issued_at_ms + 1;
+            certificate.policy.expires_at_ms = certificate.expires_at_ms;
+            let certificate_id = certificate.certificate_id();
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
-            let world = World::with(
+            let controller_asset = Asset::new(
+                AssetId::new(definition_id.clone(), controller.clone()),
+                Numeric::new(50, 0),
+            );
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
+                [controller_asset, escrow_asset],
+                [],
+            );
+            world.offline_allowances.insert(
+                certificate_id,
+                OfflineAllowanceRecord {
+                    certificate: certificate.clone(),
+                    current_commitment: certificate.allowance.commitment.clone(),
+                    registered_at_ms: certificate.issued_at_ms,
+                    remaining_amount: Numeric::new(50, 0),
+                    counter_state: OfflineCounterState::default(),
+                    verdict_id: None,
+                    attestation_nonce: None,
+                    refresh_at_ms: None,
+                },
             );
 
             let kura = Kura::blank_kura_for_testing();
@@ -992,17 +1059,39 @@ pub mod isi {
             let controller = certificate.controller.clone();
             let escrow = sample_account(0x02, "offline");
             let definition_id = certificate.allowance.asset.definition().clone();
+            let record = OfflineAllowanceRecord {
+                certificate: certificate.clone(),
+                current_commitment: certificate.allowance.commitment.clone(),
+                registered_at_ms: certificate.issued_at_ms,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
-            let world = World::with(
+            let controller_asset = Asset::new(
+                AssetId::new(definition_id.clone(), controller.clone()),
+                Numeric::new(50, 0),
+            );
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
+                [controller_asset, escrow_asset],
+                [],
             );
+            let certificate_id = certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -1072,17 +1161,39 @@ pub mod isi {
             let controller = certificate.controller.clone();
             let escrow = sample_account(0x02, "offline");
             let definition_id = certificate.allowance.asset.definition().clone();
+            let record = OfflineAllowanceRecord {
+                certificate: certificate.clone(),
+                current_commitment: certificate.allowance.commitment.clone(),
+                registered_at_ms: certificate.issued_at_ms,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
-            let world = World::with(
+            let controller_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), controller.clone()),
+                Numeric::new(50, 0),
+            );
+            let escrow_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
+                [controller_asset_entry, escrow_asset_entry],
+                [],
             );
+            let certificate_id = certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -2030,17 +2141,39 @@ pub mod isi {
             let controller = certificate.controller.clone();
             let escrow = sample_account(0x02, "offline");
             let definition_id = certificate.allowance.asset.definition().clone();
+            let record = OfflineAllowanceRecord {
+                certificate: certificate.clone(),
+                current_commitment: certificate.allowance.commitment.clone(),
+                registered_at_ms: certificate.issued_at_ms,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
             let domain = Domain::new(controller.domain().clone()).build(&controller);
             let controller_account = Account::new(controller.clone()).build(&controller);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
-            let world = World::with(
+            let controller_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), controller.clone()),
+                Numeric::new(50, 0),
+            );
+            let escrow_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
                 [domain],
                 [controller_account, escrow_account],
                 [asset_definition],
+                [controller_asset_entry, escrow_asset_entry],
+                [],
             );
+            let certificate_id = certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -2743,6 +2876,423 @@ pub mod isi {
                 "deposit account must not be credited on rejection"
             );
         }
+
+        #[test]
+        fn reclaim_expired_allowance_refunds_controller_and_removes_record() {
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(50, 0);
+            certificate.policy.max_balance = Numeric::new(50, 0);
+            certificate.policy.max_tx_value = Numeric::new(50, 0);
+            certificate.expires_at_ms = certificate.issued_at_ms + 10;
+            certificate.policy.expires_at_ms = certificate.expires_at_ms;
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let controller = certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let record = OfflineAllowanceRecord {
+                certificate: certificate.clone(),
+                current_commitment: certificate.allowance.commitment.clone(),
+                registered_at_ms: certificate.issued_at_ms,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let controller_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), controller.clone()),
+                Numeric::new(50, 0),
+            );
+            let escrow_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+                [controller_asset_entry, escrow_asset_entry],
+                [],
+            );
+            let certificate_id = certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let reclaim_header = BlockHeader::new(
+                nonzero!(1_u64),
+                None,
+                None,
+                None,
+                certificate.expires_at_ms + 1,
+                0,
+            );
+            let mut reclaim_block = state.block(reclaim_header);
+            let mut reclaim_tx = reclaim_block.transaction();
+            reclaim_expired_allowance(
+                ReclaimExpiredOfflineAllowance { certificate_id },
+                &controller,
+                &mut reclaim_tx,
+            )
+            .expect("reclaim should succeed");
+
+            let controller_asset = AssetId::new(definition_id.clone(), controller.clone());
+            let controller_balance = reclaim_tx
+                .world
+                .assets
+                .get(&controller_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(controller_balance, Numeric::new(100, 0));
+
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow);
+            assert!(
+                reclaim_tx.world.assets.get(&escrow_asset).is_none(),
+                "escrow asset should be removed after full reclaim"
+            );
+            assert!(
+                reclaim_tx
+                    .world
+                    .offline_allowances
+                    .get(&certificate_id)
+                    .is_none(),
+                "allowance record must be removed after reclaim"
+            );
+
+            let emitted = reclaim_tx
+                .world
+                .internal_event_buf
+                .iter()
+                .find_map(|event| match event.as_ref() {
+                    iroha_data_model::events::data::DataEvent::Offline(
+                        OfflineTransferEvent::AllowanceReclaimed(payload),
+                    ) => Some(payload.clone()),
+                    _ => None,
+                })
+                .expect("reclaim event should be emitted");
+            assert_eq!(emitted.certificate_id, certificate_id);
+            assert_eq!(emitted.controller, controller);
+            assert_eq!(emitted.asset_definition, definition_id);
+            assert_eq!(emitted.amount, Numeric::new(50, 0));
+
+            let second_err = reclaim_expired_allowance(
+                ReclaimExpiredOfflineAllowance { certificate_id },
+                &controller,
+                &mut reclaim_tx,
+            )
+            .expect_err("reclaim must fail after allowance is removed");
+            assert!(
+                second_err.to_string().contains("allowance_not_found"),
+                "unexpected error: {second_err}"
+            );
+        }
+
+        #[test]
+        fn reclaim_expired_allowance_rejects_before_expiry() {
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(50, 0);
+            certificate.policy.max_balance = Numeric::new(50, 0);
+            certificate.policy.max_tx_value = Numeric::new(50, 0);
+            let controller = certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+
+            let record = OfflineAllowanceRecord {
+                certificate: certificate.clone(),
+                current_commitment: certificate.allowance.commitment.clone(),
+                registered_at_ms: certificate.issued_at_ms,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+                [escrow_asset],
+                [],
+            );
+            let certificate_id = certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(
+                nonzero!(1_u64),
+                None,
+                None,
+                None,
+                certificate.issued_at_ms + 1,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let err = reclaim_expired_allowance(
+                ReclaimExpiredOfflineAllowance { certificate_id },
+                &controller,
+                &mut transaction,
+            )
+            .expect_err("reclaim before expiry should fail");
+            assert!(
+                err.to_string().contains("allowance_not_expired"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_allowances
+                    .get(&certificate_id)
+                    .is_some(),
+                "allowance record must remain when reclaim is rejected"
+            );
+        }
+
+        #[test]
+        fn reclaim_expired_allowance_rejects_unauthorized_controller() {
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(50, 0);
+            certificate.policy.max_balance = Numeric::new(50, 0);
+            certificate.policy.max_tx_value = Numeric::new(50, 0);
+            certificate.expires_at_ms = certificate.issued_at_ms + 1;
+            certificate.policy.expires_at_ms = certificate.expires_at_ms;
+            let controller = certificate.controller.clone();
+            let unauthorized = sample_account(0x09, "offline");
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+
+            let record = OfflineAllowanceRecord {
+                certificate: certificate.clone(),
+                current_commitment: certificate.allowance.commitment.clone(),
+                registered_at_ms: certificate.issued_at_ms,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let unauthorized_account = Account::new(unauthorized.clone()).build(&unauthorized);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, unauthorized_account, escrow_account],
+                [asset_definition],
+                [escrow_asset],
+                [],
+            );
+            let certificate_id = certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id, escrow);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_900_000_000, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let err = reclaim_expired_allowance(
+                ReclaimExpiredOfflineAllowance { certificate_id },
+                &unauthorized,
+                &mut transaction,
+            )
+            .expect_err("unauthorized controller must be rejected");
+            assert!(
+                err.to_string().contains("unauthorized_controller"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_allowances
+                    .get(&certificate_id)
+                    .is_some(),
+                "allowance record must remain when reclaim is rejected"
+            );
+        }
+
+        #[test]
+        fn renewal_registers_new_allowance_without_implicitly_reclaiming_expired_remainder() {
+            let now_ms = 1_700_000_500;
+            let mut expired_certificate = sample_certificate();
+            expired_certificate.allowance.amount = Numeric::new(50, 0);
+            expired_certificate.policy.max_balance = Numeric::new(50, 0);
+            expired_certificate.policy.max_tx_value = Numeric::new(50, 0);
+            expired_certificate.expires_at_ms = now_ms - 100;
+            expired_certificate.policy.expires_at_ms = expired_certificate.expires_at_ms;
+            let expired_id = expired_certificate.certificate_id();
+
+            let expired_record = OfflineAllowanceRecord {
+                certificate: expired_certificate,
+                current_commitment: vec![0; 32],
+                registered_at_ms: now_ms - 200,
+                remaining_amount: Numeric::new(50, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let mut renewal_certificate = sample_certificate();
+            renewal_certificate.allowance.amount = Numeric::new(20, 0);
+            renewal_certificate.policy.max_balance = Numeric::new(20, 0);
+            renewal_certificate.policy.max_tx_value = Numeric::new(20, 0);
+            renewal_certificate.issued_at_ms = now_ms - 10;
+            renewal_certificate.expires_at_ms = now_ms + 10_000;
+            renewal_certificate.policy.expires_at_ms = renewal_certificate.expires_at_ms;
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            renewal_certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &renewal_certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+            let renewal_id = renewal_certificate.certificate_id();
+
+            let controller = renewal_certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = renewal_certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let controller_asset = Asset::new(
+                AssetId::new(definition_id.clone(), controller.clone()),
+                Numeric::new(50, 0),
+            );
+            let escrow_asset = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                Numeric::new(50, 0),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+                [controller_asset, escrow_asset],
+                [],
+            );
+            world.offline_allowances.insert(expired_id, expired_record);
+            let controller_asset = AssetId::new(definition_id.clone(), controller.clone());
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, now_ms, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: renewal_certificate,
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect("renewal register should succeed");
+
+            let preserved = transaction
+                .world
+                .offline_allowances
+                .get(&expired_id)
+                .expect("expired allowance must remain after renewal");
+            assert_eq!(preserved.remaining_amount, Numeric::new(50, 0));
+            assert!(
+                transaction
+                    .world
+                    .offline_allowances
+                    .get(&renewal_id)
+                    .is_some(),
+                "renewal must create a distinct allowance record"
+            );
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id.clone(), escrow))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                escrow_balance,
+                Numeric::new(70, 0),
+                "renewal should only reserve the new amount and keep prior expired remainder locked"
+            );
+
+            let on_chain_balance = transaction
+                .world
+                .assets
+                .get(&controller_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                on_chain_balance,
+                Numeric::new(30, 0),
+                "renewal should debit only the new allowance from on-chain balance"
+            );
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -3005,6 +3555,109 @@ pub mod isi {
         }
         apply_transfer_retention(state_transaction);
 
+        Ok(())
+    }
+
+    fn reclaim_expired_allowance(
+        isi: ReclaimExpiredOfflineAllowance,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let certificate_id = isi.certificate_id;
+        let record = state_transaction
+            .world
+            .offline_allowances
+            .get(&certificate_id)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "allowance_not_found",
+                    "offline allowance certificate not registered",
+                )
+            })?
+            .clone();
+
+        if &record.certificate.controller != authority {
+            return Err(labeled_invariant(
+                "unauthorized_controller",
+                "only the allowance controller may reclaim an expired offline allowance",
+            ));
+        }
+
+        let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
+        let certificate_expired = record.certificate.expires_at_ms <= block_timestamp_ms;
+        let policy_expired = record.certificate.policy.expires_at_ms <= block_timestamp_ms;
+        if !certificate_expired && !policy_expired {
+            return Err(labeled_invariant(
+                "allowance_not_expired",
+                "offline allowance has not expired yet",
+            ));
+        }
+
+        let definition_id = record.certificate.allowance.asset.definition().clone();
+        let controller = record.certificate.controller.clone();
+        let amount = record.remaining_amount.clone();
+
+        let spec = state_transaction.numeric_spec_for(&definition_id)?;
+        assert_numeric_spec_with(&amount, spec)?;
+        state_transaction.world.account(&controller)?;
+
+        if !amount.is_zero() {
+            let controller_asset = AssetId::new(definition_id.clone(), controller.clone());
+            let current_balance = state_transaction
+                .world
+                .assets
+                .get(&controller_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            current_balance
+                .checked_add(amount.clone())
+                .ok_or(MathError::Overflow)?;
+
+            let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?
+                .ok_or_else(|| {
+                labeled_invariant(
+                    "escrow_missing",
+                    format!(
+                        "offline escrow account not configured for asset definition `{definition_id}`",
+                    ),
+                )
+            })?;
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow_account);
+
+            state_transaction
+                .world
+                .withdraw_numeric_asset(&escrow_asset, &amount)?;
+            if let Err(err) = state_transaction
+                .world
+                .deposit_numeric_asset(&controller_asset, &amount)
+            {
+                state_transaction
+                    .world
+                    .deposit_numeric_asset(&escrow_asset, &amount)
+                    .expect("escrow refund must succeed after failed reclaim credit");
+                return Err(err);
+            }
+        }
+
+        let removed = state_transaction
+            .world
+            .offline_allowances
+            .remove(certificate_id);
+        if removed.is_none() {
+            return Err(labeled_invariant(
+                "allowance_not_found",
+                "offline allowance certificate not registered",
+            ));
+        }
+
+        let payload = OfflineAllowanceReclaimed {
+            certificate_id,
+            controller,
+            asset_definition: definition_id,
+            amount,
+            reclaimed_at_ms: block_timestamp_ms,
+        };
+        emit_reclaim_event(state_transaction, payload);
         Ok(())
     }
 
@@ -3510,6 +4163,15 @@ pub mod isi {
             .emit_events(Some(OfflineTransferEvent::RevocationImported(
                 revocation.clone(),
             )));
+    }
+
+    fn emit_reclaim_event(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        payload: OfflineAllowanceReclaimed,
+    ) {
+        state_transaction
+            .world
+            .emit_events(Some(OfflineTransferEvent::AllowanceReclaimed(payload)));
     }
 
     fn emit_transfer_event(

@@ -8993,6 +8993,7 @@ mod tests {
         pipeline::access::AccessSetSource,
         prelude::World,
         query::store::LiveQueryStore,
+        state::StateReadOnly,
         sumeragi::{consensus, message::BlockMessage, network_topology::Topology, status},
         tx::AcceptedTransaction,
     };

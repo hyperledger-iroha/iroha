@@ -544,15 +544,15 @@ struct WireInstructionPayload {
 
 impl RawPayloadFixture {
     fn generate_fixture(&self, keypair: &KeyPair, check_encoded: bool) -> Result<Fixture> {
-        if let Some(chain_hint) = &self.chain_hint {
-            if chain_hint != &self.payload.chain {
-                bail!(
-                    "fixture '{}' chain mismatch: expected {}, got {}",
-                    self.name,
-                    chain_hint,
-                    self.payload.chain
-                );
-            }
+        if let Some(chain_hint) = &self.chain_hint
+            && chain_hint != &self.payload.chain
+        {
+            bail!(
+                "fixture '{}' chain mismatch: expected {}, got {}",
+                self.name,
+                chain_hint,
+                self.payload.chain
+            );
         }
         if let Some(authority_hint) = &self.authority_hint {
             let expected = normalize_authority_hint(authority_hint);
@@ -566,35 +566,35 @@ impl RawPayloadFixture {
                 );
             }
         }
-        if let Some(creation_hint) = self.creation_time_ms_hint {
-            if creation_hint != self.payload.creation_time_ms {
-                bail!(
-                    "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
-                    self.name,
-                    creation_hint,
-                    self.payload.creation_time_ms
-                );
-            }
+        if let Some(creation_hint) = self.creation_time_ms_hint
+            && creation_hint != self.payload.creation_time_ms
+        {
+            bail!(
+                "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
+                self.name,
+                creation_hint,
+                self.payload.creation_time_ms
+            );
         }
-        if let Some(ttl_hint) = self.ttl_ms_hint {
-            if Some(ttl_hint) != self.payload.ttl_ms {
-                bail!(
-                    "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
-                    self.name,
-                    ttl_hint,
-                    self.payload.ttl_ms
-                );
-            }
+        if let Some(ttl_hint) = self.ttl_ms_hint
+            && Some(ttl_hint) != self.payload.ttl_ms
+        {
+            bail!(
+                "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
+                self.name,
+                ttl_hint,
+                self.payload.ttl_ms
+            );
         }
-        if let Some(nonce_hint) = self.nonce_hint {
-            if Some(nonce_hint) != self.payload.nonce {
-                bail!(
-                    "fixture '{}' nonce mismatch: expected {}, got {:?}",
-                    self.name,
-                    nonce_hint,
-                    self.payload.nonce
-                );
-            }
+        if let Some(nonce_hint) = self.nonce_hint
+            && Some(nonce_hint) != self.payload.nonce
+        {
+            bail!(
+                "fixture '{}' nonce mismatch: expected {}, got {:?}",
+                self.name,
+                nonce_hint,
+                self.payload.nonce
+            );
         }
 
         let builder = self.payload.to_builder()?;
@@ -602,17 +602,16 @@ impl RawPayloadFixture {
         let payload_value = signed.payload().clone();
         let payload_bytes = payload_value.encode();
         let payload_base64 = BASE64.encode(&payload_bytes);
-        if check_encoded {
-            if let Some(expected) = &self.encoded_hint {
-                if expected != &payload_base64 {
-                    bail!(
-                        "encoded payload mismatch for '{}': expected {}, got {}",
-                        self.name,
-                        expected,
-                        payload_base64
-                    );
-                }
-            }
+        if check_encoded
+            && let Some(expected) = &self.encoded_hint
+            && expected != &payload_base64
+        {
+            bail!(
+                "encoded payload mismatch for '{}': expected {}, got {}",
+                self.name,
+                expected,
+                payload_base64
+            );
         }
 
         let signed_bytes = signed.encode();

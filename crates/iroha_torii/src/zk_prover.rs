@@ -1792,6 +1792,66 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn count_reports_filters_using_report_summaries() {
+        use http_body_util::BodyExt as _;
+
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let report_with_tag = ProverReport {
+            id: "11".repeat(32),
+            ok: true,
+            error: None,
+            content_type: "application/x-zk1".to_string(),
+            size: 64,
+            created_ms: now_ms(),
+            processed_ms: now_ms(),
+            latency_ms: 0,
+            zk1_tags: Some(vec!["PROF".to_string()]),
+            backend: None,
+            vk_ref: None,
+            proof_hash: None,
+            circuit_id: None,
+            proofs: Vec::new(),
+        };
+        let report_without_tag = ProverReport {
+            id: "22".repeat(32),
+            ok: false,
+            error: Some("verification failed".to_string()),
+            content_type: "application/x-zk1".to_string(),
+            size: 64,
+            created_ms: now_ms(),
+            processed_ms: now_ms(),
+            latency_ms: 0,
+            zk1_tags: Some(vec!["IPAK".to_string()]),
+            backend: None,
+            vk_ref: None,
+            proof_hash: None,
+            circuit_id: None,
+            proofs: Vec::new(),
+        };
+        save_report(&report_with_tag).expect("save tagged report");
+        save_report(&report_without_tag).expect("save untagged report");
+
+        let query = ProverListQuery {
+            has_tag: Some("PROF".to_string()),
+            ..Default::default()
+        };
+        let response = super::handle_count_reports(NoritoQuery(query))
+            .await
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["count"].as_u64(), Some(1));
+    }
+
     #[test]
     fn scan_and_report_single_attachment() {
         init_test_cfg();
