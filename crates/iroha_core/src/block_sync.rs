@@ -47,6 +47,7 @@ const BLOCK_SYNC_QC_WARNING_COOLDOWN: Duration = Duration::from_secs(3);
 enum BlockSyncQcWarningKind {
     QcMismatchReplaced,
     MissingCachedPrecommitSigners,
+    RejectedCachedCommitQcNpos,
 }
 
 #[derive(Debug, Default)]
@@ -836,6 +837,64 @@ impl BlockSynchronizer {
         }
     }
 
+    fn signer_peers_from_bitmap(qc: &Qc) -> Option<BTreeSet<PeerId>> {
+        let roster = &qc.validator_set;
+        if roster.is_empty() {
+            return None;
+        }
+        let mut peers = BTreeSet::new();
+        let mut idx = 0usize;
+        for byte in &qc.aggregate.signers_bitmap {
+            for bit in 0..8usize {
+                let set = (usize::from(*byte) & (1usize << bit)) != 0;
+                if set {
+                    let peer = roster.get(idx)?;
+                    peers.insert(peer.clone());
+                }
+                idx = idx.saturating_add(1);
+            }
+        }
+        Some(peers)
+    }
+
+    fn npos_cached_commit_qc_reusable(
+        world: &impl WorldReadOnly,
+        cert: &Qc,
+    ) -> Result<(), &'static str> {
+        if cert.validator_set.is_empty() {
+            return Err("empty_validator_set");
+        }
+        let signer_peers =
+            Self::signer_peers_from_bitmap(cert).ok_or("invalid_signer_bitmap")?;
+        let snapshot = CommitStakeSnapshot::from_roster(world, &cert.validator_set)
+            .ok_or("stake_snapshot_unavailable")?;
+        match stake_quorum_reached_for_snapshot(&snapshot, &cert.validator_set, &signer_peers) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("stake_quorum_missing"),
+            Err(_) => Err("stake_snapshot_unavailable"),
+        }
+    }
+
+    fn qc_from_cached_precommit_record(
+        consensus_mode: ConsensusMode,
+        record: &status::PrecommitSignerRecord,
+    ) -> Option<Qc> {
+        Self::qc_from_signers(
+            consensus_mode,
+            record.stake_snapshot.as_ref(),
+            &record.mode_tag,
+            record.validator_set.clone(),
+            record.block_hash,
+            record.parent_state_root,
+            record.post_state_root,
+            record.height,
+            record.view,
+            record.epoch,
+            record.signers.clone(),
+            record.bls_aggregate_signature.clone(),
+        )
+    }
+
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn qc_from_signers(
         consensus_mode: ConsensusMode,
@@ -933,6 +992,36 @@ impl BlockSynchronizer {
             (consensus_mode, mode_tag)
         };
 
+        let cached_precommit_record = status::precommit_signer_history().into_iter().find(|record| {
+            record.block_hash == block_hash
+                && record.height == height
+                && record.view == view
+                && record.mode_tag == expected_mode_tag
+        });
+
+        if matches!(consensus_mode, ConsensusMode::Npos)
+            && let Some(record) = cached_precommit_record.as_ref()
+        {
+            if let Some(qc) = Self::qc_from_cached_precommit_record(consensus_mode, record) {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    roster_len = record.roster_len,
+                    signers = record.signers.len(),
+                    "block sync: reusing cached precommit signer set for QC"
+                );
+                return Some(qc);
+            }
+
+            iroha_logger::info!(
+                height,
+                view,
+                roster_len = record.roster_len,
+                signers = record.signers.len(),
+                "block sync: cached precommit signer set could not build QC"
+            );
+        }
+
         if let Some(cert) = status::commit_qc_history().into_iter().find(|cert| {
             cert.height == height
                 && cert.view == view
@@ -940,37 +1029,36 @@ impl BlockSynchronizer {
                 && matches!(cert.phase, Phase::Commit)
                 && cert.mode_tag == expected_mode_tag
         }) {
-            iroha_logger::info!(
-                height,
-                view,
-                "block sync: reusing cached commit QC from history"
-            );
-            return Some(cert);
+            if matches!(consensus_mode, ConsensusMode::Npos)
+                && let Err(reason) = Self::npos_cached_commit_qc_reusable(world, &cert)
+            {
+                if let Some(suppressed) = allow_block_sync_qc_warning(
+                    BlockSyncQcWarningKind::RejectedCachedCommitQcNpos,
+                    block_hash,
+                    height,
+                    view,
+                ) {
+                    warn!(
+                        height,
+                        view,
+                        reason,
+                        signers = qc_signer_count(&cert),
+                        suppressed,
+                        "block sync: skipping cached commit QC in NPoS"
+                    );
+                }
+            } else {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    "block sync: reusing cached commit QC from history"
+                );
+                return Some(cert);
+            }
         }
 
-        if let Some(record) = status::precommit_signer_history()
-            .into_iter()
-            .find(|record| {
-                record.block_hash == block_hash
-                    && record.height == height
-                    && record.view == view
-                    && record.mode_tag == expected_mode_tag
-            })
-        {
-            if let Some(qc) = Self::qc_from_signers(
-                consensus_mode,
-                record.stake_snapshot.as_ref(),
-                &record.mode_tag,
-                record.validator_set.clone(),
-                block_hash,
-                record.parent_state_root,
-                record.post_state_root,
-                record.height,
-                record.view,
-                record.epoch,
-                record.signers.clone(),
-                record.bls_aggregate_signature.clone(),
-            ) {
+        if let Some(record) = cached_precommit_record.as_ref() {
+            if let Some(qc) = Self::qc_from_cached_precommit_record(consensus_mode, record) {
                 iroha_logger::info!(
                     height,
                     view,
@@ -2090,6 +2178,151 @@ mod qc_build_tests {
             BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
                 .expect("commit QC should be reused");
         assert_eq!(out, qc);
+    }
+
+    #[test]
+    fn block_sync_qc_for_skips_npos_commit_qc_without_stake_quorum() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_precommit_signer_history_for_tests();
+
+        let mode_tag = NPOS_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let state_view = state.view();
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let partial_qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            mode_tag: mode_tag.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&peers),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: peers,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
+        };
+        status::record_commit_qc(partial_qc);
+
+        let out = BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Npos, &block);
+        assert!(
+            out.is_none(),
+            "NPoS should skip cached commit QCs that do not meet stake quorum"
+        );
+    }
+
+    #[test]
+    fn block_sync_qc_for_prefers_npos_precommit_record_over_invalid_commit_history() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_precommit_signer_history_for_tests();
+
+        let chain_id = ChainId::from("block-sync-qc-npos-prefer-precommit");
+        let mode_tag = NPOS_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers.clone());
+        let header = BlockHeader::new(nonzero!(6_u64), None, None, None, 0, 0);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let state_view = state.view();
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+
+        let partial_qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            mode_tag: mode_tag.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&peers),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: peers.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
+        };
+        status::record_commit_qc(partial_qc);
+
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        let stake_snapshot = CommitStakeSnapshot::from_roster(state_view.world(), topology.as_ref())
+            .expect("stake snapshot");
+        status::record_precommit_signers(status::PrecommitSignerRecord {
+            block_hash,
+            height,
+            view,
+            epoch: 0,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            signers,
+            roster_len: topology.as_ref().len(),
+            mode_tag: mode_tag.to_string(),
+            bls_aggregate_signature: aggregate.clone(),
+            validator_set: topology.as_ref().to_vec(),
+            stake_snapshot: Some(stake_snapshot),
+        });
+
+        let out = BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Npos, &block)
+            .expect("NPoS should use precommit cache when commit history is invalid");
+        assert_eq!(out.subject_block_hash, block_hash);
+        assert_eq!(qc_signer_count(&out), 2);
+        assert_eq!(out.aggregate.bls_aggregate_signature, aggregate);
     }
 
     #[test]

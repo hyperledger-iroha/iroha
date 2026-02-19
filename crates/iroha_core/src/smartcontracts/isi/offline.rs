@@ -1414,6 +1414,115 @@ pub mod isi {
             );
         }
 
+        #[test]
+        fn credit_deposit_account_rejects_insufficient_escrow_without_credit() {
+            let escrow = sample_account(0x02, "offline");
+            let deposit = sample_account(0x03, "offline");
+            let definition_id =
+                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+            let domain = Domain::new(deposit.domain().clone()).build(&deposit);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let deposit_account = Account::new(deposit.clone()).build(&deposit);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&deposit);
+            let world = World::with(
+                [domain],
+                [escrow_account, deposit_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_000, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow.clone());
+            transaction
+                .world
+                .deposit_numeric_asset(&escrow_asset, &Numeric::new(50, 0))
+                .expect("prefund escrow");
+
+            let asset = AssetId::new(definition_id.clone(), deposit.clone());
+            let amount = Numeric::new(100, 0);
+            credit_deposit_account(&mut transaction, &asset, &deposit, &amount)
+                .expect_err("insufficient escrow must reject settlement credit");
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(escrow_balance, Numeric::new(50, 0));
+
+            let deposit_asset = AssetId::new(definition_id, deposit);
+            assert!(
+                transaction.world.assets.get(&deposit_asset).is_none(),
+                "deposit account must remain unchanged when escrow is insufficient"
+            );
+        }
+
+        #[test]
+        fn credit_deposit_account_rejects_missing_deposit_without_escrow_debit() {
+            let escrow = sample_account(0x02, "offline");
+            let deposit = sample_account(0x03, "offline");
+            let definition_id =
+                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+            let domain = Domain::new(escrow.domain().clone()).build(&escrow);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&escrow);
+            let world = World::with([domain], [escrow_account], [asset_definition]);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_000, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow.clone());
+            transaction
+                .world
+                .deposit_numeric_asset(&escrow_asset, &Numeric::new(250, 0))
+                .expect("prefund escrow");
+
+            let asset = AssetId::new(definition_id.clone(), escrow.clone());
+            let amount = Numeric::new(100, 0);
+            credit_deposit_account(&mut transaction, &asset, &deposit, &amount)
+                .expect_err("missing deposit account must reject settlement credit");
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(escrow_balance, Numeric::new(250, 0));
+
+            let deposit_asset = AssetId::new(definition_id, deposit);
+            assert!(
+                transaction.world.assets.get(&deposit_asset).is_none(),
+                "escrow debit must be reverted when destination deposit fails"
+            );
+        }
+
         fn sample_transfer_record_with_policy(
             bundle_tag: &'static [u8],
             policy: AndroidIntegrityPolicy,
@@ -1895,6 +2004,138 @@ pub mod isi {
         }
 
         #[test]
+        fn refresh_after_expiry_is_rejected() {
+            let mut certificate = sample_certificate();
+            certificate.refresh_at_ms = Some(certificate.expires_at_ms + 1);
+            assert!(
+                ensure_certificate_policy(&certificate, certificate.allowance.amount.scale())
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn register_allowance_rejects_future_certificate() {
+            let mut certificate = sample_certificate();
+            certificate.issued_at_ms += 1_000;
+            certificate.expires_at_ms = certificate.issued_at_ms + 60_000;
+            certificate.policy.expires_at_ms = certificate.expires_at_ms;
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let controller = certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let world = World::with(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id, escrow);
+
+            let block_timestamp_ms = certificate.issued_at_ms - 1;
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, block_timestamp_ms, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .deposit_numeric_asset(&certificate.allowance.asset, &certificate.allowance.amount)
+                .expect("prefund allowance asset");
+
+            let err = register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: certificate.clone(),
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect_err("future-issued certificate should be rejected");
+            let expected = format!("{OFFLINE_REJECTION_REASON_PREFIX}issued_at_in_future");
+            assert!(err.to_string().contains(&expected));
+        }
+
+        #[test]
+        fn register_allowance_rejects_expired_certificate() {
+            let mut certificate = sample_certificate();
+            certificate.expires_at_ms = certificate.issued_at_ms + 1;
+            certificate.policy.expires_at_ms = certificate.expires_at_ms;
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let controller = certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let world = World::with(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id, escrow);
+
+            let block_timestamp_ms = certificate.expires_at_ms;
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, block_timestamp_ms, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .deposit_numeric_asset(&certificate.allowance.asset, &certificate.allowance.amount)
+                .expect("prefund allowance asset");
+
+            let err = register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: certificate.clone(),
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect_err("expired certificate should be rejected");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::CertificateExpired.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+        }
+
+        #[test]
         fn verdict_refresh_expired_is_rejected() {
             let mut record = record_with_verdict(None);
             record.refresh_at_ms = Some(record.registered_at_ms + 5_000);
@@ -2089,6 +2330,419 @@ pub mod isi {
             );
             assert!(err.to_string().contains(&expected));
         }
+
+        #[test]
+        fn submit_transfer_rejects_duplicate_bundle_without_mutating_allowance() {
+            let issued_at_ms = 1_700_000_100;
+            let (transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            let certificate_id = record.certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+            world.offline_to_online_transfers.insert(
+                transfer.bundle_id,
+                OfflineTransferRecord {
+                    transfer: transfer.clone(),
+                    controller: controller.clone(),
+                    status: OfflineTransferStatus::Settled,
+                    recorded_at_ms: issued_at_ms,
+                    recorded_at_height: 1,
+                    archived_at_height: None,
+                    history: Vec::new(),
+                    pos_verdict_snapshots: Vec::new(),
+                    verdict_snapshot: None,
+                    platform_snapshot: None,
+                },
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            let err = submit_transfer(
+                SubmitOfflineToOnlineTransfer {
+                    transfer: transfer.clone(),
+                },
+                &authority,
+                &mut transaction,
+            )
+            .expect_err("duplicate bundle should reject settlement");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::DuplicateBundle.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+
+            let stored = transaction
+                .world
+                .offline_allowances
+                .get(&certificate_id)
+                .expect("allowance should remain stored");
+            assert_eq!(
+                stored.remaining_amount,
+                Numeric::new(1_000, 0),
+                "remaining amount must not change on duplicate bundle rejection"
+            );
+            assert_eq!(
+                transaction.world.offline_to_online_transfers.len(),
+                1,
+                "duplicate rejection must not append a second transfer record"
+            );
+        }
+
+        #[test]
+        fn submit_transfer_rejects_insufficient_escrow_without_mutating_allowance_or_credit() {
+            let issued_at_ms = 1_700_000_100;
+            let controller = sample_account(0x01, "offline");
+            let receiver = sample_account(0x02, "offline");
+            let deposit_account = sample_account(0x03, "offline");
+            let escrow_account = sample_account(0x04, "offline");
+            let definition_id =
+                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+            let asset = AssetId::new(definition_id.clone(), controller.clone());
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let spend_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
+
+            let mut initial_blinding = [0u8; 32];
+            initial_blinding[0] = 7;
+            let mut resulting_blinding = [0u8; 32];
+            resulting_blinding[0] = 9;
+            let initial_commitment =
+                compute_commitment(&Numeric::new(0, 0), 0, &initial_blinding).expect("commitment");
+            let resulting_commitment =
+                compute_commitment(&Numeric::new(100, 0), 0, &resulting_blinding)
+                    .expect("commitment");
+
+            let mut certificate = OfflineWalletCertificate {
+                controller: controller.clone(),
+                operator: controller.clone(),
+                allowance: OfflineAllowanceCommitment {
+                    asset: asset.clone(),
+                    amount: Numeric::new(1_000, 0),
+                    commitment: initial_commitment.clone(),
+                },
+                spend_public_key: spend_pair.public_key().clone(),
+                attestation_report: Vec::new(),
+                issued_at_ms: issued_at_ms - 10,
+                expires_at_ms: issued_at_ms + 600_000,
+                policy: OfflineWalletPolicy {
+                    max_balance: Numeric::new(1_000, 0),
+                    max_tx_value: Numeric::new(250, 0),
+                    expires_at_ms: issued_at_ms + 600_000,
+                },
+                operator_signature: Signature::from_bytes(&[0; 64]),
+                metadata: Metadata::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let mut receipt = OfflineSpendReceipt {
+                tx_id: Hash::new(b"insufficient-escrow-receipt"),
+                from: controller.clone(),
+                to: receiver.clone(),
+                asset: asset.clone(),
+                amount: Numeric::new(100, 0),
+                issued_at_ms,
+                invoice_id: "INV-ESCROW".into(),
+                platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
+                    key_id: BASE64_STANDARD.encode(b"apple"),
+                    counter: 1,
+                    assertion: vec![],
+                    challenge_hash: Hash::new(b"challenge"),
+                }),
+                platform_snapshot: None,
+                sender_certificate_id: certificate.certificate_id(),
+                sender_signature: Signature::from_bytes(&[0; 64]),
+            };
+            receipt.sender_signature = Signature::new(
+                spend_pair.private_key(),
+                &receipt.signing_bytes().expect("receipt signing bytes"),
+            );
+
+            let chain_id: ChainId = "testnet".parse().expect("chain id");
+            let claimed_delta = Numeric::new(100, 0);
+            let zk_proof = build_balance_proof(
+                &chain_id,
+                0,
+                &claimed_delta,
+                &Numeric::new(100, 0),
+                &initial_commitment,
+                &resulting_commitment,
+                &initial_blinding,
+                &resulting_blinding,
+            )
+            .expect("balance proof");
+            let transfer = OfflineToOnlineTransfer {
+                bundle_id: Hash::new(b"insufficient-escrow-bundle"),
+                receiver: receiver.clone(),
+                deposit_account: deposit_account.clone(),
+                receipts: vec![receipt],
+                balance_proof: OfflineBalanceProof {
+                    initial_commitment: certificate.allowance.clone(),
+                    resulting_commitment: resulting_commitment.clone(),
+                    claimed_delta: claimed_delta.clone(),
+                    zk_proof: Some(zk_proof),
+                },
+                aggregate_proof: None,
+                attachments: None,
+                platform_snapshot: None,
+            };
+
+            let record = OfflineAllowanceRecord {
+                certificate: certificate.clone(),
+                current_commitment: initial_commitment,
+                registered_at_ms: issued_at_ms - 1,
+                remaining_amount: Numeric::new(1_000, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let receiver_account = Account::new(receiver).build(&controller);
+            let deposit = Account::new(deposit_account.clone()).build(&controller);
+            let escrow = Account::new(escrow_account.clone()).build(&controller);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let mut world = World::with(
+                [domain],
+                [controller_account, receiver_account, deposit, escrow],
+                [asset_definition],
+            );
+            let certificate_id = certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id);
+            state.settlement.offline.escrow_required = true;
+            state.settlement.offline.skip_platform_attestation = true;
+            state.settlement.offline.proof_mode = OfflineProofMode::Optional;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow_account.clone());
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow_account);
+            transaction
+                .world
+                .deposit_numeric_asset(&escrow_asset, &Numeric::new(50, 0))
+                .expect("prefund escrow");
+
+            let authority = transfer.receiver.clone();
+            submit_transfer(
+                SubmitOfflineToOnlineTransfer {
+                    transfer: transfer.clone(),
+                },
+                &authority,
+                &mut transaction,
+            )
+            .expect_err("insufficient escrow should reject settlement");
+
+            let stored = transaction
+                .world
+                .offline_allowances
+                .get(&certificate_id)
+                .expect("allowance should remain stored");
+            assert_eq!(
+                stored.remaining_amount,
+                Numeric::new(1_000, 0),
+                "remaining amount must not change when settlement credit fails"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_to_online_transfers
+                    .get(&transfer.bundle_id)
+                    .is_none(),
+                "failed settlement must not be stored"
+            );
+            let deposit_asset = AssetId::new(definition_id, transfer.deposit_account.clone());
+            assert!(
+                transaction.world.assets.get(&deposit_asset).is_none(),
+                "deposit account must not be credited when escrow is insufficient"
+            );
+        }
+
+        #[test]
+        fn submit_transfer_rejects_replayed_counter_without_credit() {
+            let issued_at_ms = 1_700_000_100;
+            let (transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+            let replay_scope = canonical_app_attest_key_id(&BASE64_STANDARD.encode(b"apple"))
+                .expect("canonical key id");
+            record
+                .counter_state
+                .apple_key_counters
+                .insert(replay_scope, 1);
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            let certificate_id = record.certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            let err = submit_transfer(
+                SubmitOfflineToOnlineTransfer {
+                    transfer: transfer.clone(),
+                },
+                &authority,
+                &mut transaction,
+            )
+            .expect_err("replayed counter should reject settlement");
+            let expected = format!("{OFFLINE_REJECTION_REASON_PREFIX}counter_conflict");
+            assert!(err.to_string().contains(&expected));
+
+            let stored = transaction
+                .world
+                .offline_allowances
+                .get(&certificate_id)
+                .expect("allowance should remain stored");
+            assert_eq!(
+                stored.remaining_amount,
+                Numeric::new(1_000, 0),
+                "remaining amount must not change on counter replay rejection"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_to_online_transfers
+                    .get(&transfer.bundle_id)
+                    .is_none(),
+                "replayed bundle must not be stored"
+            );
+            assert!(
+                transaction
+                    .world
+                    .assets
+                    .iter()
+                    .all(|(asset_id, _)| asset_id.account() != &transfer.deposit_account),
+                "deposit account must not be credited on replay rejection"
+            );
+        }
+
+        #[test]
+        fn submit_transfer_rejects_revoked_verdict() {
+            let issued_at_ms = 1_700_000_100;
+            let (transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+            let verdict_id = Hash::new(b"revoked-verdict");
+            record.verdict_id = Some(verdict_id);
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            let certificate_id = record.certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+            world.offline_verdict_revocations.insert(
+                verdict_id,
+                OfflineVerdictRevocation {
+                    verdict_id,
+                    issuer: controller.clone(),
+                    revoked_at_ms: issued_at_ms + 10,
+                    reason: OfflineVerdictRevocationReason::PolicyViolation,
+                    note: Some("revoked in test".into()),
+                    metadata: Metadata::default(),
+                },
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            let err = submit_transfer(
+                SubmitOfflineToOnlineTransfer {
+                    transfer: transfer.clone(),
+                },
+                &authority,
+                &mut transaction,
+            )
+            .expect_err("revoked verdict should reject settlement");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::VerdictExpired.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+
+            let stored = transaction
+                .world
+                .offline_allowances
+                .get(&certificate_id)
+                .expect("allowance should remain stored");
+            assert_eq!(
+                stored.remaining_amount,
+                Numeric::new(1_000, 0),
+                "remaining amount must not change on rejection"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_to_online_transfers
+                    .get(&transfer.bundle_id)
+                    .is_none(),
+                "rejected transfer must not be stored"
+            );
+            assert!(
+                transaction
+                    .world
+                    .assets
+                    .iter()
+                    .all(|(asset_id, _)| asset_id.account() != &transfer.deposit_account),
+                "deposit account must not be credited on rejection"
+            );
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2117,6 +2771,18 @@ pub mod isi {
                 OfflineTransferRejectionReason::ReceiptOrderInvalid,
                 OfflineTransferRejectionPlatform::General,
                 "offline bundle receipts must be ordered by (counter, tx_id)",
+            ));
+        }
+        if state_transaction
+            .world
+            .offline_to_online_transfers
+            .get(&transfer.bundle_id)
+            .is_some()
+        {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::DuplicateBundle,
+                OfflineTransferRejectionPlatform::General,
+                "bundle id already exists",
             ));
         }
 
@@ -2157,17 +2823,44 @@ pub mod isi {
             return Err(map_counter_scope_error(err));
         }
 
-        let record = state_transaction
+        let verdict_id = state_transaction
             .world
             .offline_allowances
-            .get_mut(&certificate_id)
+            .get(&certificate_id)
             .ok_or_else(|| {
                 rejection_error(
                     OfflineTransferRejectionReason::AllowanceNotRegistered,
                     OfflineTransferRejectionPlatform::General,
                     "offline allowance certificate not registered",
                 )
-            })?;
+            })?
+            .verdict_id;
+
+        if let Some(verdict_id) = verdict_id {
+            if state_transaction
+                .world
+                .offline_verdict_revocations
+                .get(&verdict_id)
+                .is_some()
+            {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::VerdictExpired,
+                    OfflineTransferRejectionPlatform::General,
+                    "offline attestation verdict revoked; refresh allowance before reconciling",
+                ));
+            }
+        }
+
+        let record = state_transaction
+            .world
+            .offline_allowances
+            .get(&certificate_id)
+            .expect("allowance existence checked above");
+        let receipt_count = u32::try_from(transfer.receipts.len()).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "receipt count exceeds supported range".into(),
+            )
+        })?;
 
         enforce_certificate_window(record, block_timestamp_ms)?;
         enforce_verdict_refresh_window(record, block_timestamp_ms)?;
@@ -2248,16 +2941,6 @@ pub mod isi {
             ));
         }
 
-        record.remaining_amount = record
-            .remaining_amount
-            .clone()
-            .checked_sub(claimed_amount.clone())
-            .ok_or(MathError::Overflow)?;
-        record
-            .current_commitment
-            .clone_from(&transfer.balance_proof.resulting_commitment);
-        merge_counter_state(&mut record.counter_state, &staged_counters);
-
         let pos_verdict_snapshots =
             iroha_data_model::offline::OfflineTransferRecord::collect_pos_verdict_snapshots(
                 &transfer,
@@ -2284,14 +2967,38 @@ pub mod isi {
             history_snapshot.as_ref(),
         );
 
-        insert_transfer_record(state_transaction, audit_record.clone())?;
         credit_deposit_account(
             state_transaction,
             &asset,
             &transfer.deposit_account,
             &claimed_amount,
         )?;
-        emit_transfer_event(state_transaction, &audit_record, claimed_amount.clone())?;
+
+        {
+            let record = state_transaction
+                .world
+                .offline_allowances
+                .get_mut(&certificate_id)
+                .expect("allowance existence checked above");
+            debug_assert!(claimed_amount <= record.remaining_amount);
+            record.remaining_amount = record
+                .remaining_amount
+                .clone()
+                .checked_sub(claimed_amount.clone())
+                .expect("claimed amount is bounded by remaining_amount");
+            record
+                .current_commitment
+                .clone_from(&transfer.balance_proof.resulting_commitment);
+            merge_counter_state(&mut record.counter_state, &staged_counters);
+        }
+
+        insert_transfer_record(state_transaction, audit_record.clone());
+        emit_transfer_event(
+            state_transaction,
+            &audit_record,
+            claimed_amount.clone(),
+            receipt_count,
+        );
         record_transfer_metrics(&audit_record, &claimed_amount);
         if let Some(policy) = policy_label {
             metrics::global_or_default().record_offline_attestation_policy(policy);
@@ -2699,20 +3406,8 @@ pub mod isi {
     fn insert_transfer_record(
         state_transaction: &mut StateTransaction<'_, '_>,
         record: OfflineTransferRecord,
-    ) -> Result<(), Error> {
+    ) {
         let bundle_id = record.transfer.bundle_id;
-        if state_transaction
-            .world
-            .offline_to_online_transfers
-            .get(&bundle_id)
-            .is_some()
-        {
-            return Err(rejection_error(
-                OfflineTransferRejectionReason::DuplicateBundle,
-                OfflineTransferRejectionPlatform::General,
-                "bundle id already exists",
-            ));
-        }
         {
             let sender_index = &mut state_transaction.world.offline_transfer_sender_index;
             if let Some(set) = sender_index.get_mut(&record.controller) {
@@ -2743,11 +3438,14 @@ pub mod isi {
                 status_index.insert(record.status, set);
             }
         }
-        state_transaction
+        let prev = state_transaction
             .world
             .offline_to_online_transfers
             .insert(bundle_id, record);
-        Ok(())
+        assert!(
+            prev.is_none(),
+            "bundle id unexpectedly duplicated after pre-validation"
+        );
     }
 
     fn credit_deposit_account(
@@ -2760,6 +3458,18 @@ pub mod isi {
         let deposit_asset = AssetId::new(definition_id.clone(), deposit_account.clone());
         let spec = state_transaction.numeric_spec_for(&definition_id)?;
         assert_numeric_spec_with(amount, spec)?;
+        state_transaction.world.account(deposit_account)?;
+        if !amount.is_zero() {
+            let current_balance = state_transaction
+                .world
+                .assets
+                .get(&deposit_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            current_balance
+                .checked_add(amount.clone())
+                .ok_or(MathError::Overflow)?;
+        }
         let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?;
         let escrow_account = escrow_account.ok_or_else(|| {
             labeled_invariant(
@@ -2778,10 +3488,17 @@ pub mod isi {
         state_transaction
             .world
             .withdraw_numeric_asset(&escrow_asset, amount)?;
-
-        state_transaction
+        if let Err(err) = state_transaction
             .world
             .deposit_numeric_asset(&deposit_asset, amount)
+        {
+            state_transaction
+                .world
+                .deposit_numeric_asset(&escrow_asset, amount)
+                .expect("escrow refund must succeed after failed deposit credit");
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn emit_revocation_event(
@@ -2799,7 +3516,8 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         record: &OfflineTransferRecord,
         claimed_amount: Numeric,
-    ) -> Result<(), Error> {
+        receipt_count: u32,
+    ) {
         let payload = OfflineTransferSettled {
             bundle_id: record.transfer.bundle_id,
             controller: record.controller.clone(),
@@ -2813,18 +3531,13 @@ pub mod isi {
                 .definition()
                 .clone(),
             amount: claimed_amount,
-            receipt_count: u32::try_from(record.transfer.receipts.len()).map_err(|_| {
-                InstructionExecutionError::InvariantViolation(
-                    "receipt count exceeds supported range".into(),
-                )
-            })?,
+            receipt_count,
             recorded_at_ms: record.recorded_at_ms,
             platform_snapshot: record.platform_snapshot.clone(),
         };
         state_transaction
             .world
             .emit_events(Some(OfflineTransferEvent::Settled(payload)));
-        Ok(())
     }
 
     fn emit_transfer_archived_event(
