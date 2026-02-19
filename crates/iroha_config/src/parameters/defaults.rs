@@ -2481,6 +2481,10 @@ pub mod sumeragi {
     pub const QC_VERIFY_RESULT_QUEUE_CAP: usize = 0;
     /// Cap on deferred vote-validation backlog before dropping inbound votes.
     pub const VALIDATION_PENDING_CAP: usize = 8_192;
+    /// Vote burst cap used when block payload backlog is pending.
+    pub const WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG: usize = 8;
+    /// Maximum urgent actor-gate streak before yielding to DA-critical work.
+    pub const WORKER_MAX_URGENT_BEFORE_DA_CRITICAL: u32 = 8;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.

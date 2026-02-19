@@ -942,6 +942,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -1029,6 +1030,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -1133,6 +1135,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -1188,6 +1191,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -1272,6 +1276,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -5211,6 +5216,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -5321,6 +5327,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -5397,6 +5404,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -5493,6 +5501,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -5545,10 +5554,10 @@ mod tests {
     }
 
     #[test]
-    fn run_worker_iteration_prioritizes_votes_over_block_payload_backlog() {
+    fn run_worker_iteration_rotates_to_payload_after_vote_burst() {
         status::reset_worker_loop_snapshot_for_tests();
 
-        let vote_total = VOTE_BURST_CAP + 1;
+        let vote_total = VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG + 1;
         let vote_cap = vote_total.saturating_add(1);
         let (vote_tx, vote_rx) = mpsc::sync_channel(vote_cap);
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -5609,6 +5618,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(2),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: vote_total,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(2),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(2),
@@ -5648,10 +5658,13 @@ mod tests {
             .iter()
             .position(|entry| *entry == "payload")
             .expect("payload should be drained");
+        assert_eq!(payload_index, VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG);
         assert!(
-            payload_index >= vote_total,
-            "expected votes to be prioritized ahead of block payload backlog"
+            actor.events[..payload_index]
+                .iter()
+                .all(|entry| *entry == "vote")
         );
+        assert_eq!(actor.events.len(), vote_total + 1);
         assert_eq!(stats.votes_handled, vote_total);
         assert_eq!(stats.block_payloads_handled, 1);
         assert_eq!(actor.tick_calls, 0);
@@ -5718,6 +5731,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -5848,6 +5862,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -5980,6 +5995,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6064,6 +6080,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 1,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6123,6 +6140,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6182,6 +6200,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6261,6 +6280,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6318,6 +6338,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6375,6 +6396,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6479,6 +6501,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_millis(50),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_millis(50),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_millis(50),
@@ -6589,6 +6612,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_millis(100),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_millis(100),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_millis(100),
@@ -6696,6 +6720,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6782,6 +6807,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6883,6 +6909,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 2,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -6976,6 +7003,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -7035,6 +7063,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -7119,6 +7148,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -7252,6 +7282,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -7443,6 +7474,7 @@ mod tests {
                 block_payload_rx_drain_budget: Duration::from_secs(1),
                 block_payload_rx_drain_max_messages: 16,
                 vote_rx_drain_max_messages: 16,
+                vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
                 block_rx_drain_budget: Duration::from_secs(1),
                 block_rx_drain_max_messages: 16,
                 rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -7643,6 +7675,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -7706,6 +7739,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -7768,6 +7802,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -8005,6 +8040,89 @@ mod tests {
     }
 
     #[test]
+    fn actor_gate_da_critical_waiter_not_starved_by_urgent_burst() {
+        let gate = Arc::new(ActorGate::new(Vec::<&'static str>::new()));
+        let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let start = Arc::new(Barrier::new(3));
+
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = true;
+        }
+
+        let da_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                let mut guard = gate.enter(GatePriority::DaCritical);
+                order
+                    .lock()
+                    .expect("order lock poisoned")
+                    .push("da_critical");
+                guard.actor_mut().push("da_critical");
+            })
+        };
+
+        let urgent_join = {
+            let gate = Arc::clone(&gate);
+            let order = Arc::clone(&order);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                for _ in 0..(MAX_URGENT_BEFORE_DA_CRITICAL + 2) {
+                    let mut guard = gate.enter(GatePriority::Urgent);
+                    order.lock().expect("order lock poisoned").push("urgent");
+                    guard.actor_mut().push("urgent");
+                }
+            })
+        };
+
+        start.wait();
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while Instant::now() < deadline {
+            let (waiting_urgent, waiting_da_critical) = {
+                let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+                (guard.waiting_urgent, guard.waiting_da_critical)
+            };
+            if waiting_urgent > 0 && waiting_da_critical > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        {
+            let guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            assert!(
+                guard.waiting_urgent > 0 && guard.waiting_da_critical > 0,
+                "waiters should queue while gate is held"
+            );
+        }
+        {
+            let mut guard = gate.state.lock().expect("sumeragi actor gate poisoned");
+            guard.in_flight = false;
+        }
+        gate.cvar.notify_all();
+
+        da_join.join().expect("da-critical waiter thread");
+        urgent_join.join().expect("urgent burst thread");
+
+        let order = order.lock().expect("order lock poisoned");
+        let da_idx = order
+            .iter()
+            .position(|label| *label == "da_critical")
+            .expect("da-critical waiter should have run");
+        let cap =
+            usize::try_from(MAX_URGENT_BEFORE_DA_CRITICAL.saturating_add(1)).unwrap_or(usize::MAX);
+        assert!(
+            da_idx <= cap,
+            "da-critical waiter was starved for too many urgent turns: index={da_idx}, cap={cap}"
+        );
+    }
+
+    #[test]
     fn run_parallel_worker_exits_when_shutdown_is_sent() {
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -8022,6 +8140,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -8050,6 +8169,7 @@ mod tests {
             background_rx,
             wake_rx,
             shutdown_signal,
+            MAX_URGENT_BEFORE_DA_CRITICAL,
         );
     }
 
@@ -8074,6 +8194,7 @@ mod tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 16,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -8103,6 +8224,7 @@ mod tests {
                 background_rx,
                 wake_rx,
                 shutdown_worker,
+                MAX_URGENT_BEFORE_DA_CRITICAL,
             );
         });
 
@@ -10217,20 +10339,26 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 struct ActorGate<A> {
     state: Mutex<ActorGateState<A>>,
     cvar: Condvar,
+    max_urgent_before_da_critical: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GatePriority {
     Urgent,
+    DaCritical,
     Regular,
 }
 
 const MAX_URGENT_GATE_STREAK: u32 = 32;
+#[cfg(test)]
+const MAX_URGENT_BEFORE_DA_CRITICAL: u32 =
+    iroha_config::parameters::defaults::sumeragi::WORKER_MAX_URGENT_BEFORE_DA_CRITICAL;
 
 struct ActorGateState<A> {
     actor: A,
     in_flight: bool,
     waiting_urgent: u32,
+    waiting_da_critical: u32,
     waiting_regular: u32,
     urgent_streak: u32,
 }
@@ -10242,29 +10370,48 @@ struct ActorGuard<'a, A> {
 }
 
 impl<A> ActorGate<A> {
+    #[cfg(test)]
     fn new(actor: A) -> Self {
+        Self::with_limits(actor, MAX_URGENT_BEFORE_DA_CRITICAL)
+    }
+
+    fn with_limits(actor: A, max_urgent_before_da_critical: u32) -> Self {
         Self {
             state: Mutex::new(ActorGateState {
                 actor,
                 in_flight: false,
                 waiting_urgent: 0,
+                waiting_da_critical: 0,
                 waiting_regular: 0,
                 urgent_streak: 0,
             }),
             cvar: Condvar::new(),
+            max_urgent_before_da_critical: max_urgent_before_da_critical.max(1),
         }
     }
 
-    fn can_enter(priority: GatePriority, state: &ActorGateState<A>) -> bool {
+    fn can_enter(
+        priority: GatePriority,
+        state: &ActorGateState<A>,
+        max_urgent_before_da_critical: u32,
+    ) -> bool {
         if state.in_flight {
             return false;
         }
         match priority {
             GatePriority::Urgent => {
-                !(state.waiting_regular > 0 && state.urgent_streak >= MAX_URGENT_GATE_STREAK)
+                if state.waiting_da_critical > 0 {
+                    state.urgent_streak < max_urgent_before_da_critical
+                } else {
+                    !(state.waiting_regular > 0 && state.urgent_streak >= MAX_URGENT_GATE_STREAK)
+                }
+            }
+            GatePriority::DaCritical => {
+                state.waiting_urgent == 0 || state.urgent_streak >= max_urgent_before_da_critical
             }
             GatePriority::Regular => {
-                state.waiting_urgent == 0 || state.urgent_streak >= MAX_URGENT_GATE_STREAK
+                state.waiting_da_critical == 0
+                    && (state.waiting_urgent == 0 || state.urgent_streak >= MAX_URGENT_GATE_STREAK)
             }
         }
     }
@@ -10275,11 +10422,14 @@ impl<A> ActorGate<A> {
             GatePriority::Urgent => {
                 guard.waiting_urgent = guard.waiting_urgent.saturating_add(1);
             }
+            GatePriority::DaCritical => {
+                guard.waiting_da_critical = guard.waiting_da_critical.saturating_add(1);
+            }
             GatePriority::Regular => {
                 guard.waiting_regular = guard.waiting_regular.saturating_add(1);
             }
         }
-        while !Self::can_enter(priority, &guard) {
+        while !Self::can_enter(priority, &guard, self.max_urgent_before_da_critical) {
             guard = self.cvar.wait(guard).expect("sumeragi actor gate poisoned");
         }
         guard.in_flight = true;
@@ -10287,6 +10437,10 @@ impl<A> ActorGate<A> {
             GatePriority::Urgent => {
                 guard.waiting_urgent = guard.waiting_urgent.saturating_sub(1);
                 guard.urgent_streak = guard.urgent_streak.saturating_add(1);
+            }
+            GatePriority::DaCritical => {
+                guard.waiting_da_critical = guard.waiting_da_critical.saturating_sub(1);
+                guard.urgent_streak = 0;
             }
             GatePriority::Regular => {
                 guard.waiting_regular = guard.waiting_regular.saturating_sub(1);
@@ -10318,7 +10472,7 @@ impl<A> Drop for ActorGuard<'_, A> {
         };
         if guard.in_flight {
             guard.in_flight = false;
-            if matches!(self.priority, GatePriority::Regular) {
+            if !matches!(self.priority, GatePriority::Urgent) {
                 guard.urgent_streak = 0;
             }
         }
@@ -10339,6 +10493,10 @@ fn poll_worker_results<A: WorkerActor>(actor: &mut A) -> bool {
 const PRIORITY_TIER_COUNT: usize = 7;
 // Keep vote processing ahead of payload tiers; drain fast-path block messages before heavy payloads.
 const VOTE_BURST_CAP: usize = 32;
+// When payloads are already queued, shrink vote preference to reduce QC-without-payload gaps.
+#[cfg(test)]
+const VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG: usize =
+    iroha_config::parameters::defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG;
 // Keep vote bursts at full size even when blocks are queued to prioritize QC aggregation.
 const VOTE_BURST_CAP_WITH_BLOCKS: usize = 32;
 const BLOCK_PAYLOAD_DRAIN_BACKLOG_DIVISOR: usize = 4;
@@ -10584,6 +10742,7 @@ struct WorkerLoopConfig {
     block_payload_rx_drain_budget: Duration,
     block_payload_rx_drain_max_messages: usize,
     vote_rx_drain_max_messages: usize,
+    vote_burst_cap_with_payload_backlog: usize,
     block_rx_drain_budget: Duration,
     block_rx_drain_max_messages: usize,
     rbc_chunk_rx_drain_budget: Duration,
@@ -10715,7 +10874,9 @@ fn drain_mailbox<A: WorkerActor>(
     phase: DrainPhase,
     tick_deadline: Option<Instant>,
 ) {
-    let vote_burst = if mailbox.has_pending(PriorityTier::Blocks) {
+    let vote_burst = if mailbox.has_pending(PriorityTier::BlockPayload) {
+        cfg.vote_burst_cap_with_payload_backlog.max(1)
+    } else if mailbox.has_pending(PriorityTier::Blocks) {
         VOTE_BURST_CAP_WITH_BLOCKS
     } else {
         VOTE_BURST_CAP
@@ -10770,10 +10931,7 @@ fn drain_mailbox<A: WorkerActor>(
             && stats.consensus_handled == 0
             && stats.lane_relays_handled == 0
             && stats.background_handled == 0;
-        let prefer_votes = votes_pending
-            && !force_payload_turn
-            && (stats.votes_handled < vote_burst
-                || mailbox.has_pending(PriorityTier::BlockPayload));
+        let prefer_votes = votes_pending && !force_payload_turn && stats.votes_handled < vote_burst;
         let tier = if force_payload_turn {
             Some(PriorityTier::BlockPayload)
         } else {
@@ -11494,8 +11652,9 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
     background_rx: mpsc::Receiver<BackgroundRequest>,
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
+    max_urgent_before_da_critical: u32,
 ) {
-    let gate = Arc::new(ActorGate::new(actor));
+    let gate = Arc::new(ActorGate::with_limits(actor, max_urgent_before_da_critical));
     let active = Arc::new(AtomicUsize::new(0));
 
     let mut joins = Vec::new();
@@ -11528,7 +11687,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-rbc",
         rbc_chunk_rx,
         Arc::clone(&gate),
-        GatePriority::Regular,
+        GatePriority::DaCritical,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::RbcChunks.stage(),
@@ -11540,7 +11699,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-blocks",
         block_rx,
         Arc::clone(&gate),
-        GatePriority::Urgent,
+        GatePriority::DaCritical,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::Blocks.stage(),
@@ -11552,7 +11711,7 @@ fn run_parallel_worker<A: WorkerActor + Send + 'static>(
         "sumeragi-payloads",
         block_payload_rx,
         Arc::clone(&gate),
-        GatePriority::Regular,
+        GatePriority::DaCritical,
         Arc::clone(&active),
         shutdown_signal.clone(),
         PriorityTier::BlockPayload.stage(),
@@ -11656,6 +11815,7 @@ mod worker_iteration_warn_tests {
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 1,
             vote_rx_drain_max_messages: 1,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
             block_rx_drain_max_messages: 1,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
@@ -11756,6 +11916,9 @@ impl SumeragiWorker {
         let control_msg_channel_cap = config.queues.control;
         let worker_iteration_budget_cap = config.worker.iteration_budget_cap;
         let worker_iteration_drain_budget_cap = config.worker.iteration_drain_budget_cap;
+        let vote_burst_cap_with_payload_backlog =
+            config.worker.vote_burst_cap_with_payload_backlog.max(1);
+        let max_urgent_before_da_critical = config.worker.max_urgent_before_da_critical.max(1);
         let (block_time, commit_time, da_enabled) = {
             let view = state.view();
             let params = view.world.parameters().sumeragi();
@@ -11851,6 +12014,7 @@ impl SumeragiWorker {
             block_payload_rx_drain_budget: non_vote_drain_budget,
             block_payload_rx_drain_max_messages: msg_channel_cap_block_payload.max(1),
             vote_rx_drain_max_messages: msg_channel_cap_votes.max(1),
+            vote_burst_cap_with_payload_backlog,
             block_rx_drain_budget,
             block_rx_drain_max_messages: msg_channel_cap_blocks.max(1),
             rbc_chunk_rx_drain_budget: rbc_chunk_drain_budget,
@@ -11878,6 +12042,7 @@ impl SumeragiWorker {
                 background_rx,
                 wake_rx,
                 shutdown_signal,
+                max_urgent_before_da_critical,
             );
         } else {
             let now = Instant::now();

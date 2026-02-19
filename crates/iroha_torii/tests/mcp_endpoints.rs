@@ -796,6 +796,755 @@ async fn mcp_jsonrpc_tools_call_agent_alias_node_operational_endpoints_dispatch(
 }
 
 #[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_commit_certificates_accepts_flat_query_fields()
+{
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1038,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.sumeragi.commit_certificates",
+                "arguments": {
+                    "from": 1,
+                    "limit": 1
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let structured = structured_content(&call);
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "sumeragi commit-certificates alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "error path for sumeragi commit-certificates should reflect HTTP error status"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "successful sumeragi commit-certificates lookup should return HTTP 200"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name, arguments) in [
+        (
+            1039,
+            "iroha.sumeragi.validator_sets.list",
+            norito::json!({}),
+        ),
+        (
+            1040,
+            "iroha.sumeragi.validator_sets.get",
+            norito::json!({
+                "block_height": 1
+            }),
+        ),
+        (1041, "iroha.sumeragi.rbc", norito::json!({})),
+        (1042, "iroha.sumeragi.pacemaker", norito::json!({})),
+        (1043, "iroha.sumeragi.phases", norito::json!({})),
+        (1044, "iroha.sumeragi.params", norito::json!({})),
+        (1045, "iroha.sumeragi.status", norito::json!({})),
+        (1046, "iroha.sumeragi.leader", norito::json!({})),
+        (1047, "iroha.sumeragi.qc", norito::json!({})),
+        (1048, "iroha.sumeragi.checkpoints", norito::json!({})),
+        (1049, "iroha.sumeragi.consensus_keys", norito::json!({})),
+        (1050, "iroha.sumeragi.bls_keys", norito::json!({})),
+        (1051, "iroha.sumeragi.key_lifecycle", norito::json!({})),
+        (1052, "iroha.sumeragi.telemetry", norito::json!({})),
+        (1053, "iroha.sumeragi.rbc.sessions", norito::json!({})),
+        (
+            1054,
+            "iroha.sumeragi.commit_qc.get",
+            norito::json!({
+                "hash": "0xabc123"
+            }),
+        ),
+        (1055, "iroha.sumeragi.collectors", norito::json!({})),
+        (1056, "iroha.sumeragi.evidence.count", norito::json!({})),
+        (1057, "iroha.sumeragi.evidence.list", norito::json!({})),
+        (
+            1065,
+            "iroha.sumeragi.evidence.submit",
+            norito::json!({
+                "evidence_hex": "deadbeef"
+            }),
+        ),
+        (1058, "iroha.sumeragi.new_view", norito::json!({})),
+        (
+            1059,
+            "iroha.sumeragi.rbc.delivered",
+            norito::json!({
+                "height": 1,
+                "view": 0
+            }),
+        ),
+        (
+            1060,
+            "iroha.sumeragi.vrf.penalties",
+            norito::json!({
+                "epoch": 0
+            }),
+        ),
+        (
+            1061,
+            "iroha.sumeragi.vrf.epoch",
+            norito::json!({
+                "epoch": 0
+            }),
+        ),
+        (1062, "iroha.sumeragi.vrf.commit", norito::json!({})),
+        (1063, "iroha.sumeragi.vrf.reveal", norito::json!({})),
+        (1064, "iroha.sumeragi.rbc.sample", norito::json!({})),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "sumeragi alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_da_read_endpoints_dispatch() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name, arguments) in [
+        (1045, "iroha.da.proof_policies", norito::json!({})),
+        (1046, "iroha.da.proof_policy_snapshot", norito::json!({})),
+        (
+            1047,
+            "iroha.da.manifests.get",
+            norito::json!({
+                "id": "manifest-ticket-001"
+            }),
+        ),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "DA alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_da_ingest_accepts_body() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1048,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.da.ingest",
+                "arguments": {
+                    "body": {}
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let structured = structured_content(&call);
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "DA ingest alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "error path for DA ingest alias should reflect HTTP error status"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "successful DA ingest alias calls should return HTTP 200"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_da_commitments_endpoints_accept_body() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name) in [
+        (1048, "iroha.da.commitments.list"),
+        (1049, "iroha.da.commitments.prove"),
+        (1050, "iroha.da.commitments.verify"),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "body": {}
+                    }
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "DA alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_da_pin_intents_endpoints_accept_body() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name) in [
+        (1058, "iroha.da.pin_intents.list"),
+        (1059, "iroha.da.pin_intents.prove"),
+        (1060, "iroha.da.pin_intents.verify"),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "body": {}
+                    }
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "DA alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_runtime_endpoints_dispatch() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name) in [
+        (1051, "iroha.runtime.abi.active"),
+        (1052, "iroha.runtime.abi.hash"),
+        (1053, "iroha.runtime.metrics"),
+        (1054, "iroha.runtime.upgrades.list"),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "runtime alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_dispatch() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name, arguments) in [
+        (
+            1055,
+            "iroha.runtime.upgrades.propose",
+            norito::json!({ "body": {} }),
+        ),
+        (
+            1056,
+            "iroha.runtime.upgrades.activate",
+            norito::json!({
+                "upgrade_id": "upgrade-001",
+                "body": {}
+            }),
+        ),
+        (
+            1057,
+            "iroha.runtime.upgrades.cancel",
+            norito::json!({
+                "id": "upgrade-001",
+                "body": {}
+            }),
+        ),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "runtime upgrade alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_ledger_headers_accepts_flat_query_fields() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1038,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.ledger.headers",
+                "arguments": {
+                    "from": 1,
+                    "limit": 1
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "ledger headers alias with flat query fields should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_ledger_height_endpoints_accept_block_height_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name) in [
+        (1039, "iroha.ledger.state_root"),
+        (1040, "iroha.ledger.state_proof"),
+        (1041, "iroha.bridge.finality.proof"),
+        (1042, "iroha.bridge.finality.bundle"),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "block_height": 1
+                    }
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "ledger/finality alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should still reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_ledger_block_proof_accepts_entry_hash_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1043,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.ledger.block_proof",
+                "arguments": {
+                    "height": 1,
+                    "tx_hash": "00"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let structured = structured_content(&call);
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "ledger block-proof alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "invalid entry hash should surface an HTTP error status"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "successful block-proof lookups should return HTTP 200"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_proofs_endpoints_dispatch() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name, arguments) in [
+        (
+            10310,
+            "iroha.proofs.get",
+            norito::json!({
+                "proof_id": "proof-001"
+            }),
+        ),
+        (
+            10311,
+            "iroha.proofs.query",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (10312, "iroha.proofs.retention", norito::json!({})),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "proof alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    for (id, tool_name, arguments) in [
+        (
+            10320,
+            "iroha.gov.instances.list",
+            norito::json!({
+                "namespace": "nexus",
+                "limit": 1
+            }),
+        ),
+        (
+            10321,
+            "iroha.gov.proposals.get",
+            norito::json!({
+                "proposal_id": "proposal-001"
+            }),
+        ),
+        (
+            10322,
+            "iroha.gov.referenda.get",
+            norito::json!({
+                "referendum_id": "referendum-001"
+            }),
+        ),
+        (
+            10323,
+            "iroha.gov.tally.get",
+            norito::json!({
+                "tally_id": "tally-001"
+            }),
+        ),
+        (10324, "iroha.gov.council.current", norito::json!({})),
+        (
+            10325,
+            "iroha.gov.enact",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+        (
+            10326,
+            "iroha.gov.finalize",
+            norito::json!({
+                "body": {}
+            }),
+        ),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        let http_status = structured.get("status").and_then(Value::as_u64);
+        assert!(
+            http_status.is_some(),
+            "governance alias `{tool_name}` should return an HTTP status"
+        );
+        if tool_is_error(&call) {
+            assert!(
+                http_status.is_some_and(|status| status >= 400),
+                "error path for `{tool_name}` should reflect HTTP error status"
+            );
+        } else {
+            assert_eq!(
+                http_status,
+                Some(200),
+                "successful path for `{tool_name}` should return HTTP 200"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -913,6 +1662,89 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_get_accepts_hash_shor
 }
 
 #[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_hash_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10409,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.contracts.code.bytes.get",
+                "arguments": {
+                    "hash": "not-a-code-hash"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid code hash should be marked as MCP tool error for contract code-bytes alias"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid code hash to be rejected by contract code-bytes alias"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_contracts_instances_list_accepts_ns_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10410,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.contracts.instances.list",
+                "arguments": {
+                    "namespace": "payments",
+                    "limit": 5
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let structured = structured_content(&call);
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "contract instances-list alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "error path for contract instances-list alias should reflect HTTP error status"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "successful contract instances-list alias should return HTTP 200"
+        );
+    }
+}
+
+#[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_contracts_state_get_accepts_flat_query_fields() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -996,6 +1828,298 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly api-versions MCP tool"
     );
     assert!(
+        names.iter().any(|name| name == "iroha.da.ingest"),
+        "expected agent-friendly DA ingest MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.da.proof_policies"),
+        "expected agent-friendly DA proof-policies MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.da.proof_policy_snapshot"),
+        "expected agent-friendly DA proof-policy snapshot MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.da.manifests.get"),
+        "expected agent-friendly DA manifest lookup MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.da.commitments.list"),
+        "expected agent-friendly DA commitment list MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.da.commitments.prove"),
+        "expected agent-friendly DA commitment prove MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.da.commitments.verify"),
+        "expected agent-friendly DA commitment verify MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.da.pin_intents.list"),
+        "expected agent-friendly DA pin intents list MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.da.pin_intents.prove"),
+        "expected agent-friendly DA pin intents prove MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.da.pin_intents.verify"),
+        "expected agent-friendly DA pin intents verify MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.runtime.abi.active"),
+        "expected agent-friendly runtime ABI-active MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.runtime.abi.hash"),
+        "expected agent-friendly runtime ABI-hash MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.runtime.metrics"),
+        "expected agent-friendly runtime metrics MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.runtime.upgrades.list"),
+        "expected agent-friendly runtime upgrades-list MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.runtime.upgrades.propose"),
+        "expected agent-friendly runtime upgrades-propose MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.runtime.upgrades.activate"),
+        "expected agent-friendly runtime upgrades-activate MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.runtime.upgrades.cancel"),
+        "expected agent-friendly runtime upgrades-cancel MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.commit_certificates"),
+        "expected agent-friendly sumeragi commit-certificates MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.validator_sets.list"),
+        "expected agent-friendly sumeragi validator-set list MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.validator_sets.get"),
+        "expected agent-friendly sumeragi validator-set detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.rbc"),
+        "expected agent-friendly sumeragi RBC MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.pacemaker"),
+        "expected agent-friendly sumeragi pacemaker MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.phases"),
+        "expected agent-friendly sumeragi phases MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.params"),
+        "expected agent-friendly sumeragi params MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.status"),
+        "expected agent-friendly sumeragi status MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.leader"),
+        "expected agent-friendly sumeragi leader MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.qc"),
+        "expected agent-friendly sumeragi qc MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.checkpoints"),
+        "expected agent-friendly sumeragi checkpoints MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.consensus_keys"),
+        "expected agent-friendly sumeragi consensus-keys MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.bls_keys"),
+        "expected agent-friendly sumeragi bls-keys MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.key_lifecycle"),
+        "expected agent-friendly sumeragi key-lifecycle MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.telemetry"),
+        "expected agent-friendly sumeragi telemetry MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.rbc.sessions"),
+        "expected agent-friendly sumeragi RBC sessions MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.commit_qc.get"),
+        "expected agent-friendly sumeragi commit-qc-by-hash MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.collectors"),
+        "expected agent-friendly sumeragi collectors MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.evidence.count"),
+        "expected agent-friendly sumeragi evidence-count MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.evidence.list"),
+        "expected agent-friendly sumeragi evidence-list MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.evidence.submit"),
+        "expected agent-friendly sumeragi evidence-submit MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.new_view"),
+        "expected agent-friendly sumeragi new-view MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.rbc.delivered"),
+        "expected agent-friendly sumeragi RBC delivered MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.sumeragi.vrf.penalties"),
+        "expected agent-friendly sumeragi VRF penalties MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.vrf.epoch"),
+        "expected agent-friendly sumeragi VRF epoch MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.vrf.commit"),
+        "expected agent-friendly sumeragi VRF commit MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.vrf.reveal"),
+        "expected agent-friendly sumeragi VRF reveal MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.sumeragi.rbc.sample"),
+        "expected agent-friendly sumeragi RBC sample MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.ledger.headers"),
+        "expected agent-friendly ledger headers MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.ledger.state_root"),
+        "expected agent-friendly ledger state-root MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.ledger.state_proof"),
+        "expected agent-friendly ledger state-proof MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.ledger.block_proof"),
+        "expected agent-friendly ledger block-proof MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.bridge.finality.proof"),
+        "expected agent-friendly bridge finality-proof MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.bridge.finality.bundle"),
+        "expected agent-friendly bridge finality-bundle MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.proofs.get"),
+        "expected agent-friendly proof detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.proofs.query"),
+        "expected agent-friendly proof query MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.proofs.retention"),
+        "expected agent-friendly proof retention MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.instances.list"),
+        "expected agent-friendly governance instances-list MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.proposals.get"),
+        "expected agent-friendly governance proposal detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.referenda.get"),
+        "expected agent-friendly governance referendum detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.tally.get"),
+        "expected agent-friendly governance tally detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.council.current"),
+        "expected agent-friendly governance council snapshot MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.enact"),
+        "expected agent-friendly governance enact MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.gov.finalize"),
+        "expected agent-friendly governance finalize MCP tool"
+    );
+    assert!(
         names.iter().any(|name| name == "iroha.aliases.resolve"),
         "expected agent-friendly alias-resolve MCP tool"
     );
@@ -1016,6 +2140,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly contract code detail MCP tool"
     );
     assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.contracts.code.bytes.get"),
+        "expected agent-friendly contract code-bytes MCP tool"
+    );
+    assert!(
         names.iter().any(|name| name == "iroha.contracts.deploy"),
         "expected agent-friendly contract deploy MCP tool"
     );
@@ -1030,6 +2160,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .iter()
             .any(|name| name == "iroha.contracts.instance.activate"),
         "expected agent-friendly contract instance activate MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.contracts.instances.list"),
+        "expected agent-friendly contract instances-list MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.contracts.call"),
@@ -1198,6 +2334,10 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names.iter().any(|name| name == "iroha.assets.get"),
         "expected agent-friendly asset detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.nfts.chain.list"),
+        "expected agent-friendly chain NFT list MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.nfts.list"),
@@ -1388,6 +2528,22 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .iter()
             .any(|name| name == "iroha.offline.summaries.query"),
         "expected agent-friendly offline summaries query MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.iso20022.pacs008.submit"),
+        "expected agent-friendly ISO pacs.008 submit MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.iso20022.pacs009.submit"),
+        "expected agent-friendly ISO pacs.009 submit MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.iso20022.status.get"),
+        "expected agent-friendly ISO status MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.queries.submit"),
@@ -1977,6 +3133,48 @@ async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_flat_asset_id() {
             .is_some_and(|status| status >= 400),
         "expected invalid asset id to be rejected by explorer asset detail alias"
     );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_nfts_chain_list_dispatches_route() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 106151,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.nfts.chain.list",
+                "arguments": {}
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let structured = structured_content(&call);
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "nfts chain-list alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "error path for nft chain-list alias should reflect HTTP error status"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "successful nft chain-list alias should return HTTP 200"
+        );
+    }
 }
 
 #[tokio::test]
@@ -4316,6 +5514,120 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_hex_shortcut() 
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
         "expected invalid Norito query bytes via hex shortcut to be rejected"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs008_accepts_xml_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1135,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.iso20022.pacs008.submit",
+                "arguments": {
+                    "message_xml": "<Document/>"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "ISO pacs.008 submit should surface HTTP errors when bridge is unavailable/invalid"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected pacs.008 alias to dispatch and surface non-success status"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs009_accepts_xml_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1136,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.iso20022.pacs009.submit",
+                "arguments": {
+                    "xml": "<Document/>"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "ISO pacs.009 submit should surface HTTP errors when bridge is unavailable/invalid"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected pacs.009 alias to dispatch and surface non-success status"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_status_accepts_message_id_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1137,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.iso20022.status.get",
+                "arguments": {
+                    "message_id": "msg-001"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "ISO status alias should surface HTTP errors when bridge/status lookup is unavailable"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected ISO status alias to dispatch and surface non-success status"
     );
 }
 

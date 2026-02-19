@@ -390,9 +390,11 @@ static MESSAGE_HANDLING_TOTALS: OnceLock<Mutex<BTreeMap<ConsensusMessageHandling
 static MISSING_BLOCK_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_TARGETS: AtomicU64 = AtomicU64::new(0);
 static MISSING_BLOCK_FETCH_LAST_DWELL_MS: AtomicU64 = AtomicU64::new(0);
+static QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_QC_REPLACED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCK_SYNC_LOCKED_QC_PREFILTER_DROP_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_REASON: OnceLock<Mutex<Option<&'static str>>> = OnceLock::new();
 static VALIDATION_REJECT_STATELESS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3332,6 +3334,8 @@ pub struct StatusSnapshot {
     pub block_sync_qc_replaced_total: u64,
     /// Total block-sync QCs dropped because a local aggregate could not be derived.
     pub block_sync_qc_derive_failed_total: u64,
+    /// Total block-sync incoming QCs dropped by the early locked-chain prefilter.
+    pub block_sync_locked_qc_prefilter_drop_total: u64,
     /// Total blocks rejected by the validation gate before voting.
     pub validation_reject_total: u64,
     /// Last validation-reject reason label (best-effort).
@@ -3350,6 +3354,8 @@ pub struct StatusSnapshot {
     pub missing_block_fetch_last_targets: u64,
     /// Dwell time in milliseconds observed before the most recent missing-block fetch attempt.
     pub missing_block_fetch_last_dwell_ms: u64,
+    /// Total QC-missing payload fetches escalated to topology-wide aggressive mode.
+    pub qc_missing_payload_aggressive_fetch_total: u64,
     /// Data-availability gate snapshot and counters.
     pub da_gate: DaGateSnapshot,
     /// Total times pacemaker deferred proposal assembly due to proposal backpressure
@@ -4178,6 +4184,8 @@ pub fn snapshot() -> StatusSnapshot {
         block_sync_qc_replaced_total: BLOCK_SYNC_QC_REPLACED_TOTAL.load(Ordering::Relaxed),
         block_sync_qc_derive_failed_total: BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL
             .load(Ordering::Relaxed),
+        block_sync_locked_qc_prefilter_drop_total: BLOCK_SYNC_LOCKED_QC_PREFILTER_DROP_TOTAL
+            .load(Ordering::Relaxed),
         validation_reject_total: validation_rejects.total,
         validation_reject_reason: validation_rejects.last_reason,
         validation_rejects,
@@ -4209,6 +4217,8 @@ pub fn snapshot() -> StatusSnapshot {
         missing_block_fetch_total: MISSING_BLOCK_FETCH_TOTAL.load(Ordering::Relaxed),
         missing_block_fetch_last_targets: MISSING_BLOCK_FETCH_LAST_TARGETS.load(Ordering::Relaxed),
         missing_block_fetch_last_dwell_ms: MISSING_BLOCK_FETCH_LAST_DWELL_MS
+            .load(Ordering::Relaxed),
+        qc_missing_payload_aggressive_fetch_total: QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL
             .load(Ordering::Relaxed),
         da_gate: da_gate_snapshot(),
         pacemaker_backpressure_deferrals_total: PACEMAKER_BACKPRESSURE_DEFERRALS_TOTAL
@@ -4649,6 +4659,13 @@ pub fn inc_block_sync_qc_derive_failed() {
     BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment the counter for block-sync QCs dropped by the early lock prefilter.
+pub fn inc_block_sync_locked_qc_prefilter_drop() {
+    #[cfg(test)]
+    let _guard = block_sync_test_guard();
+    BLOCK_SYNC_LOCKED_QC_PREFILTER_DROP_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Increment counter when a block is rejected by the validation gate before voting.
 pub fn record_validation_reject(
     reason: &'static str,
@@ -4970,6 +4987,7 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     MISSING_BLOCK_FETCH_TOTAL.store(0, Ordering::Relaxed);
     MISSING_BLOCK_FETCH_LAST_TARGETS.store(0, Ordering::Relaxed);
     MISSING_BLOCK_FETCH_LAST_DWELL_MS.store(0, Ordering::Relaxed);
+    QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL.store(0, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -4988,6 +5006,7 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
     BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_QC_REPLACED_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_QC_DERIVE_FAILED_TOTAL.store(0, Ordering::Relaxed);
+    BLOCK_SYNC_LOCKED_QC_PREFILTER_DROP_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_ROSTER_CHECKPOINT_HINT_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_SYNC_ROSTER_COMMIT_CERT_HISTORY_TOTAL.store(0, Ordering::Relaxed);
@@ -6039,6 +6058,11 @@ pub fn inc_qc_missing_votes_accepted() {
 /// Increment the counter tracking observed quorums without a cached QC payload.
 pub fn inc_qc_quorum_without_qc() {
     QC_QUORUM_WITHOUT_QC_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment the counter tracking aggressive topology-wide fetches for QC-without-payload stalls.
+pub fn inc_qc_missing_payload_aggressive_fetch() {
+    QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Return the cumulative number of missing-availability transitions observed.
@@ -7647,15 +7671,15 @@ mod tests {
     #[test]
     fn missing_block_fetch_counters_surface_in_snapshot() {
         let _guard = super::missing_block_fetch_test_guard();
-        super::MISSING_BLOCK_FETCH_TOTAL.store(0, std::sync::atomic::Ordering::Relaxed);
-        super::MISSING_BLOCK_FETCH_LAST_TARGETS.store(0, std::sync::atomic::Ordering::Relaxed);
-        super::MISSING_BLOCK_FETCH_LAST_DWELL_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+        super::reset_missing_block_fetch_counters_for_tests();
 
         super::record_missing_block_fetch(3, 42);
+        super::inc_qc_missing_payload_aggressive_fetch();
         let snapshot = super::snapshot();
         assert_eq!(snapshot.missing_block_fetch_total, 1);
         assert_eq!(snapshot.missing_block_fetch_last_targets, 3);
         assert_eq!(snapshot.missing_block_fetch_last_dwell_ms, 42);
+        assert_eq!(snapshot.qc_missing_payload_aggressive_fetch_total, 1);
 
         super::record_missing_block_fetch(1, 7);
         let snapshot = super::snapshot();
@@ -7775,6 +7799,7 @@ mod tests {
         super::inc_block_sync_drop_invalid_signatures();
         super::inc_block_sync_qc_replaced();
         super::inc_block_sync_qc_derive_failed();
+        super::inc_block_sync_locked_qc_prefilter_drop();
         super::inc_block_sync_roster_source("commit_checkpoint_pair_hint");
         super::inc_block_sync_roster_source("commit_roster_journal");
         super::inc_block_sync_roster_drop_missing();
@@ -7784,6 +7809,7 @@ mod tests {
         assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 1);
         assert_eq!(snapshot.block_sync_qc_replaced_total, 1);
         assert_eq!(snapshot.block_sync_qc_derive_failed_total, 1);
+        assert_eq!(snapshot.block_sync_locked_qc_prefilter_drop_total, 1);
         assert_eq!(snapshot.block_sync_roster.commit_qc_hint_total, 1);
         assert_eq!(snapshot.block_sync_roster.checkpoint_hint_total, 1);
         assert_eq!(snapshot.block_sync_roster.commit_roster_journal_total, 1);

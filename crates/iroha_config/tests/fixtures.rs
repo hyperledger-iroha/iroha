@@ -1051,6 +1051,8 @@ fn minimal_config_snapshot() {
                     qc_verify_work_queue_cap: 0,
                     qc_verify_result_queue_cap: 0,
                     validation_pending_cap: 8192,
+                    vote_burst_cap_with_payload_backlog: 8,
+                    max_urgent_before_da_critical: 8,
                 },
                 pacemaker: SumeragiPacemaker {
                     backoff_multiplier: 1,

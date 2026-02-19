@@ -678,6 +678,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 qc_verify_work_queue_cap: defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP,
                 qc_verify_result_queue_cap: defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,
                 validation_pending_cap: defaults::sumeragi::VALIDATION_PENDING_CAP,
+                vote_burst_cap_with_payload_backlog:
+                    defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+                max_urgent_before_da_critical:
+                    defaults::sumeragi::WORKER_MAX_URGENT_BEFORE_DA_CRITICAL,
             },
             pacemaker: A::SumeragiPacemaker {
                 backoff_multiplier: 1,

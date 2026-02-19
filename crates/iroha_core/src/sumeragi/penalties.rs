@@ -735,6 +735,11 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,
                 validation_pending_cap:
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_PENDING_CAP,
+                vote_burst_cap_with_payload_backlog:
+                    iroha_config::parameters::defaults::sumeragi::
+                        WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+                max_urgent_before_da_critical: iroha_config::parameters::defaults::sumeragi::
+                    WORKER_MAX_URGENT_BEFORE_DA_CRITICAL,
             },
             pacemaker: SumeragiPacemaker {
                 backoff_multiplier: 1,

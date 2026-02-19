@@ -248,6 +248,15 @@ fn should_share_unknown_prev_hash(
     }
 }
 
+fn unknown_prev_fallback_start_height(
+    kura: &Kura,
+    latest_hash: Option<HashOf<BlockHeader>>,
+) -> Option<NonZeroUsize> {
+    latest_hash
+        .and_then(|hash| kura.get_block_height_by_hash(hash))
+        .and_then(|height| height.checked_add(1))
+}
+
 /// [`BlockSynchronizer`] actor handle.
 #[derive(Clone)]
 pub struct BlockSynchronizerHandle {
@@ -507,11 +516,13 @@ mod gossip_backoff_tests {
 
 #[cfg(test)]
 mod unknown_prev_hash_tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 
     use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_data_model::block::SignedBlock;
 
     use super::*;
+    use crate::block::ValidBlock;
 
     fn hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
@@ -537,6 +548,39 @@ mod unknown_prev_hash_tests {
             hash1,
             11
         ));
+    }
+
+    #[test]
+    fn unknown_prev_fallback_uses_known_latest_hash_height() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let block1: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+            })
+            .into();
+        let block2: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(2).expect("non-zero height"));
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into();
+        kura.store_block(Arc::new(block1.clone()))
+            .expect("store first block");
+        kura.store_block(Arc::new(block2))
+            .expect("store second block");
+
+        let start_height = unknown_prev_fallback_start_height(&kura, Some(block1.hash()))
+            .expect("fallback start height should be derived from known latest hash");
+        assert_eq!(start_height.get(), 2);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_none_when_latest_hash_unknown() {
+        let kura = Kura::blank_kura_for_testing();
+        let unknown_hash = hash(0xEE);
+        assert!(unknown_prev_fallback_start_height(&kura, Some(unknown_hash)).is_none());
     }
 }
 
@@ -940,7 +984,7 @@ impl BlockSynchronizer {
                 && matches!(cert.phase, Phase::Commit)
                 && cert.mode_tag == expected_mode_tag
         }) {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 height,
                 view,
                 "block sync: reusing cached commit QC from history"
@@ -971,7 +1015,7 @@ impl BlockSynchronizer {
                 record.signers.clone(),
                 record.bls_aggregate_signature.clone(),
             ) {
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     height,
                     view,
                     roster_len = record.roster_len,
@@ -2882,8 +2926,9 @@ pub mod message {
         sanitized_qc: Option<&Qc>,
         allow_without_quorum: bool,
     ) -> bool {
+        let has_qc_evidence = sanitized_qc.is_some();
         if let Err(err) = signature_check {
-            if sanitized_qc.is_none() {
+            if !has_qc_evidence {
                 status::inc_block_sync_drop_invalid_signatures();
                 warn!(
                     ?err,
@@ -2907,9 +2952,13 @@ pub mod message {
             );
         }
 
+        if has_qc_evidence {
+            return false;
+        }
+
         let has_commit_signatures =
             crate::block::ValidBlock::is_commit(block, &context.signature_topology).is_ok();
-        if !has_commit_signatures && sanitized_qc.is_none() {
+        if !has_commit_signatures {
             if allow_without_quorum {
                 return false;
             }
@@ -3219,13 +3268,11 @@ pub mod message {
                                 now_height,
                             );
                             if share_unknown_prev {
-                                let has_latest = latest_hash
-                                    .as_ref()
-                                    .and_then(|hash| {
-                                        block_sync.kura.get_block_height_by_hash(*hash)
-                                    })
-                                    .is_some();
-                                if !has_latest {
+                                let fallback_start_height = unknown_prev_fallback_start_height(
+                                    &block_sync.kura,
+                                    *latest_hash,
+                                );
+                                if fallback_start_height.is_none() {
                                     block_sync
                                         .request_latest_blocks_from_peer(peer_id.clone())
                                         .await;
@@ -3236,8 +3283,14 @@ pub mod message {
                                     requester = %peer_id,
                                     block = %hash,
                                     requested_latest,
-                                    "Block hash not found; sharing from genesis"
+                                    fallback_start_height = ?fallback_start_height.map(NonZeroUsize::get),
+                                    "Block hash not found; sharing from fallback anchor"
                                 );
+                                if let Some(fallback_start_height) = fallback_start_height {
+                                    fallback_start_height
+                                } else {
+                                    nonzero_ext::nonzero!(1_usize)
+                                }
                             } else {
                                 debug!(
                                     peer = %block_sync.peer,
@@ -3245,8 +3298,8 @@ pub mod message {
                                     block = %hash,
                                     "skipping repeated block sync response for unknown prev hash"
                                 );
+                                nonzero_ext::nonzero!(1_usize)
                             }
-                            nonzero_ext::nonzero!(1_usize)
                         }
                     } else {
                         nonzero_ext::nonzero!(1_usize)
@@ -5234,6 +5287,55 @@ pub mod message {
 
             assert_eq!(dropped, 1);
             assert_eq!(filtered, vec![(valid_block, None)]);
+        }
+
+        #[test]
+        fn filter_blocks_accepts_qc_without_block_signature_quorum() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            })
+            .into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index(),
+                0,
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_validator]),
+                &signature_topology,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), Some(qc))],
+                &BTreeMap::new(),
+                Some(&topology),
+                &state,
+                ConsensusMode::Permissioned,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered.len(), 1);
+            assert_eq!(filtered[0].0.hash(), block.hash());
+            assert!(filtered[0].1.is_some());
         }
 
         #[test]
