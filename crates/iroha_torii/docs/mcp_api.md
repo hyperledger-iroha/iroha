@@ -42,11 +42,74 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.time.now`
   - `iroha.time.status`
   - `iroha.api.versions`
+  - `iroha.sumeragi.commit_certificates`
+  - `iroha.sumeragi.validator_sets.list`
+  - `iroha.sumeragi.validator_sets.get`
+  - `iroha.sumeragi.rbc`
+  - `iroha.sumeragi.pacemaker`
+  - `iroha.sumeragi.phases`
+  - `iroha.sumeragi.params`
+  - `iroha.sumeragi.status`
+  - `iroha.sumeragi.leader`
+  - `iroha.sumeragi.qc`
+  - `iroha.sumeragi.checkpoints`
+  - `iroha.sumeragi.consensus_keys`
+  - `iroha.sumeragi.bls_keys`
+  - `iroha.sumeragi.key_lifecycle`
+  - `iroha.sumeragi.telemetry`
+  - `iroha.sumeragi.rbc.sessions`
+  - `iroha.sumeragi.commit_qc.get`
+  - `iroha.sumeragi.collectors`
+  - `iroha.sumeragi.evidence.count`
+  - `iroha.sumeragi.evidence.list`
+  - `iroha.sumeragi.evidence.submit`
+  - `iroha.sumeragi.new_view`
+  - `iroha.sumeragi.rbc.delivered`
+  - `iroha.sumeragi.vrf.penalties`
+  - `iroha.sumeragi.vrf.epoch`
+  - `iroha.sumeragi.vrf.commit`
+  - `iroha.sumeragi.vrf.reveal`
+  - `iroha.sumeragi.rbc.sample`
+  - `iroha.da.ingest`
+  - `iroha.da.proof_policies`
+  - `iroha.da.proof_policy_snapshot`
+  - `iroha.da.manifests.get`
+  - `iroha.da.commitments.list`
+  - `iroha.da.commitments.prove`
+  - `iroha.da.commitments.verify`
+  - `iroha.da.pin_intents.list`
+  - `iroha.da.pin_intents.prove`
+  - `iroha.da.pin_intents.verify`
+  - `iroha.runtime.abi.active`
+  - `iroha.runtime.abi.hash`
+  - `iroha.runtime.metrics`
+  - `iroha.runtime.upgrades.list`
+  - `iroha.runtime.upgrades.propose`
+  - `iroha.runtime.upgrades.activate`
+  - `iroha.runtime.upgrades.cancel`
+  - `iroha.ledger.headers`
+  - `iroha.ledger.state_root`
+  - `iroha.ledger.state_proof`
+  - `iroha.ledger.block_proof`
+  - `iroha.bridge.finality.proof`
+  - `iroha.bridge.finality.bundle`
+  - `iroha.proofs.get`
+  - `iroha.proofs.query`
+  - `iroha.proofs.retention`
+  - `iroha.gov.instances.list`
+  - `iroha.gov.proposals.get`
+  - `iroha.gov.referenda.get`
+  - `iroha.gov.tally.get`
+  - `iroha.gov.council.current`
+  - `iroha.gov.enact`
+  - `iroha.gov.finalize`
   - `iroha.contracts.code.register`
   - `iroha.contracts.code.get`
+  - `iroha.contracts.code.bytes.get`
   - `iroha.contracts.deploy`
   - `iroha.contracts.instance.create`
   - `iroha.contracts.instance.activate`
+  - `iroha.contracts.instances.list`
   - `iroha.contracts.call`
   - `iroha.contracts.call_and_wait`
   - `iroha.contracts.state.get`
@@ -85,6 +148,7 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.assets.holders.query`
   - `iroha.assets.list`
   - `iroha.assets.get`
+  - `iroha.nfts.chain.list`
   - `iroha.nfts.list`
   - `iroha.nfts.get`
   - `iroha.nfts.query`
@@ -118,6 +182,9 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.offline.rejections.list`
   - `iroha.offline.summaries.list`
   - `iroha.offline.summaries.query`
+  - `iroha.iso20022.pacs008.submit`
+  - `iroha.iso20022.pacs009.submit`
+  - `iroha.iso20022.status.get`
   - `iroha.queries.submit`
   - `iroha.transactions.list`
   - `iroha.transactions.get`
@@ -131,7 +198,7 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
   - `iroha.transactions.status`
 - `iroha.*` aliases accept flat convenience fields in addition to nested
   `path`/`query`/`body` payloads (for example `account_id`, `hash`, `literal`,
-  `index`, `instruction_index`, `identifier`, `block_height`, `code_hash`, `signed_tx_base64`, `signed_tx_hex`, `uaid`, `definition_id`, `domain_id`, `subscription_id`, `asset_id`, `nft_id`, and
+  `index`, `instruction_index`, `identifier`, `height`, `block_height`, `entry_hash`, `tx_hash`, `ticket`, `manifest_ticket`, `proof_id`, `upgrade_id`, `code_hash`, `namespace`, `proposal_id`, `referendum_id`, `tally_id`, `signed_tx_base64`, `signed_tx_hex`, `uaid`, `definition_id`, `domain_id`, `subscription_id`, `asset_id`, `nft_id`, and
   query-envelope shortcuts like `filter`, `sort`, `limit`, `offset`).
 
 ## Account Tool Example
@@ -720,6 +787,40 @@ Contract state alias (flat query shortcuts):
 }
 ```
 
+Contract code-bytes alias (`hash` shortcut):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "contract-code-bytes-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.contracts.code.bytes.get",
+    "arguments": {
+      "hash": "<code-hash-hex>"
+    }
+  }
+}
+```
+
+Contract instances alias (`namespace` + flat query shortcuts):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "contract-instances-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.contracts.instances.list",
+    "arguments": {
+      "namespace": "nexus",
+      "limit": 20,
+      "order": "cid_asc"
+    }
+  }
+}
+```
+
 Contract call-and-wait alias (one-shot submit + terminal status wait):
 
 ```json
@@ -775,6 +876,19 @@ Asset explorer detail alias (flat `asset_id` shortcut):
     "arguments": {
       "asset_id": "<asset-id>"
     }
+  }
+}
+```
+
+NFT chain list alias:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "nft-chain-list-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.nfts.chain.list"
   }
 }
 ```
@@ -1175,6 +1289,390 @@ Alias shortcuts accepted by `iroha.queries.submit`:
 
 - `signed_query_base64` / `query_base64` (same as `body_base64`)
 - `signed_query_hex` / `query_hex` / `body_hex` (hex payload converted to bytes)
+
+ISO 20022 bridge submit aliases:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "iso-pacs008-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.iso20022.pacs008.submit",
+    "arguments": {
+      "message_xml": "<Document>...</Document>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "iso-status-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.iso20022.status.get",
+    "arguments": {
+      "message_id": "<iso-message-id>"
+    }
+  }
+}
+```
+
+Ledger and bridge proof aliases:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ledger-proof-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.ledger.block_proof",
+    "arguments": {
+      "block_height": 12345,
+      "tx_hash": "<entry-hash-hex>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "finality-bundle-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.bridge.finality.bundle",
+    "arguments": {
+      "height": 12345
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "proof-get-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.proofs.get",
+    "arguments": {
+      "proof_id": "<proof-record-id>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "proof-query-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.proofs.query",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "proof-retention-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.proofs.retention"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-instances-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.instances.list",
+    "arguments": {
+      "namespace": "nexus",
+      "limit": 20
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-proposal-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.proposals.get",
+    "arguments": {
+      "proposal_id": "<proposal-id>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-referendum-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.referenda.get",
+    "arguments": {
+      "referendum_id": "<referendum-id>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-tally-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.tally.get",
+    "arguments": {
+      "tally_id": "<tally-id>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-council-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.council.current"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-enact-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.enact",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "gov-finalize-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.gov.finalize",
+    "arguments": {
+      "body": {}
+    }
+  }
+}
+```
+
+Sumeragi introspection aliases:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sumeragi-qcs-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.sumeragi.commit_certificates",
+    "arguments": {
+      "from": 12000,
+      "limit": 20
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sumeragi-vset-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.sumeragi.validator_sets.get",
+    "arguments": {
+      "block_height": 12345
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sumeragi-status-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.sumeragi.status"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sumeragi-commit-qc-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.sumeragi.commit_qc.get",
+    "arguments": {
+      "hash": "0xabc123"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sumeragi-rbc-delivered-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.sumeragi.rbc.delivered",
+    "arguments": {
+      "height": 12345,
+      "view": 2
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "sumeragi-evidence-submit-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.sumeragi.evidence.submit",
+    "arguments": {
+      "evidence_hex": "<consensus-evidence-hex>"
+    }
+  }
+}
+```
+
+DA commitment and manifest aliases:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "da-manifest-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.da.manifests.get",
+    "arguments": {
+      "manifest_ticket": "<ticket-id>"
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "da-ingest-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.da.ingest",
+    "arguments": {
+      "body": {
+        "manifest_hash": "<manifest-hash-hex>"
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "da-commitments-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.da.commitments.list",
+    "arguments": {
+      "body": {
+        "manifest_hash": "<manifest-hash-hex>"
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "da-pin-intents-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.da.pin_intents.list",
+    "arguments": {
+      "body": {
+        "manifest_hash": "<manifest-hash-hex>"
+      }
+    }
+  }
+}
+```
+
+Runtime introspection aliases:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "runtime-abi-hash-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.runtime.abi.hash"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "runtime-upgrades-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.runtime.upgrades.list"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "runtime-upgrade-activate-1",
+  "method": "tools/call",
+  "params": {
+    "name": "iroha.runtime.upgrades.activate",
+    "arguments": {
+      "upgrade_id": "<runtime-upgrade-id>",
+      "body": {}
+    }
+  }
+}
+```
 
 Pipeline status alias shortcut:
 

@@ -3745,6 +3745,10 @@ pub struct SumeragiWorker {
     pub qc_verify_result_queue_cap: usize,
     /// Cap on deferred vote-validation backlog before dropping inbound votes.
     pub validation_pending_cap: usize,
+    /// Vote burst cap when block payload backlog is pending.
+    pub vote_burst_cap_with_payload_backlog: usize,
+    /// Maximum urgent actor-gate streak before yielding to DA-critical work.
+    pub max_urgent_before_da_critical: u32,
 }
 
 /// Pacemaker configuration.

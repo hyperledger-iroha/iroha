@@ -412,10 +412,61 @@ impl Actor {
                     );
                     continue;
                 }
-                let near_commit_quorum = min_votes_for_commit > 0
+                let near_commit_quorum = has_votes
+                    && min_votes_for_commit > 0
+                    && vote_count < min_votes_for_commit
                     && vote_count.saturating_add(1) >= min_votes_for_commit;
+                let consensus_queue_backlog = queue_depths.rbc_chunk_rx > 0
+                    || queue_depths.block_payload_rx > 0
+                    || queue_depths.block_rx > 0
+                    || queue_depths.consensus_rx > 0;
+                let near_quorum_recent_progress_grace =
+                    super::saturating_mul_duration(self.rebroadcast_cooldown(), 4)
+                        .max(Duration::from_millis(500));
+                let zero_vote_backlog_grace =
+                    super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
+                        .max(Duration::from_secs(2));
+                let zero_vote_backlog_deadline =
+                    effective_quorum_timeout.saturating_add(zero_vote_backlog_grace);
+                if !has_votes
+                    && consensus_queue_backlog
+                    && progress_stall_age < zero_vote_backlog_deadline
+                {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                        zero_vote_backlog_grace_ms = zero_vote_backlog_grace.as_millis(),
+                        zero_vote_backlog_deadline_ms = zero_vote_backlog_deadline.as_millis(),
+                        block_payload_rx_depth = queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                        block_rx_depth = queue_depths.block_rx,
+                        consensus_rx_depth = queue_depths.consensus_rx,
+                        "deferring quorum reschedule: zero-vote block still has consensus backlog"
+                    );
+                    continue;
+                }
                 if near_commit_quorum
-                    && queue_depths.rbc_chunk_rx > 0
+                    && !consensus_queue_backlog
+                    && progress_stall_age < near_quorum_recent_progress_grace
+                {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        votes = vote_count,
+                        min_votes = min_votes_for_commit,
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
+                        grace_ms = near_quorum_recent_progress_grace.as_millis(),
+                        "deferring quorum reschedule: near quorum with recent vote progress"
+                    );
+                    continue;
+                }
+                if has_votes
+                    && !near_commit_quorum
+                    && consensus_queue_backlog
                     && progress_stall_age < availability_timeout
                 {
                     debug!(
@@ -426,8 +477,31 @@ impl Actor {
                         min_votes = min_votes_for_commit,
                         progress_stall_age_ms = progress_stall_age.as_millis(),
                         availability_timeout_ms = availability_timeout.as_millis(),
+                        block_payload_rx_depth = queue_depths.block_payload_rx,
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                        "deferring quorum reschedule: near quorum while RBC chunks are still arriving"
+                        block_rx_depth = queue_depths.block_rx,
+                        consensus_rx_depth = queue_depths.consensus_rx,
+                        "deferring quorum reschedule: vote-backed block waits behind consensus backlog"
+                    );
+                    continue;
+                }
+                if near_commit_quorum
+                    && consensus_queue_backlog
+                    && progress_stall_age < availability_timeout
+                {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        votes = vote_count,
+                        min_votes = min_votes_for_commit,
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
+                        availability_timeout_ms = availability_timeout.as_millis(),
+                        block_payload_rx_depth = queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                        block_rx_depth = queue_depths.block_rx,
+                        consensus_rx_depth = queue_depths.consensus_rx,
+                        "deferring quorum reschedule: near quorum while consensus backlog is still progressing"
                     );
                     continue;
                 }
@@ -807,6 +881,8 @@ impl Actor {
             view,
             drop_pending,
             &topology_peers,
+            min_votes_for_commit,
+            vote_count,
             now,
         );
 
@@ -919,6 +995,8 @@ impl Actor {
         view: u64,
         drop_pending: bool,
         topology_peers: &[PeerId],
+        min_votes_for_commit: usize,
+        vote_count: usize,
         now: Instant,
     ) -> RescheduleRebroadcast {
         if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
@@ -940,6 +1018,8 @@ impl Actor {
             height,
             view,
             topology_peers,
+            min_votes_for_commit,
+            vote_count,
         );
         if retransmit_targets.is_empty() {
             super::status::inc_retransmit_skip_no_targets();
@@ -1104,11 +1184,18 @@ impl Actor {
         height: u64,
         view: u64,
         topology_peers: &[PeerId],
+        min_votes_for_commit: usize,
+        vote_count: usize,
     ) -> Vec<PeerId> {
         if topology_peers.is_empty() {
             return Vec::new();
         }
         let local_peer_id = self.common_config.peer.id();
+        let all_non_local_targets: Vec<PeerId> = topology_peers
+            .iter()
+            .filter(|peer| *peer != local_peer_id)
+            .cloned()
+            .collect();
         let observed_signers: std::collections::BTreeSet<usize> = self
             .vote_log
             .values()
@@ -1129,6 +1216,16 @@ impl Actor {
             if !observed_signers.contains(&idx) {
                 missing_targets.push(peer.clone());
             }
+        }
+        let near_commit_quorum = min_votes_for_commit > 0
+            && vote_count < min_votes_for_commit
+            && vote_count.saturating_add(1) >= min_votes_for_commit;
+        if near_commit_quorum
+            && missing_targets.len() <= 1
+            && missing_targets.len() < all_non_local_targets.len()
+        {
+            // Near quorum, signer-index inference can be brittle under churn; fan out to all peers.
+            return all_non_local_targets;
         }
         missing_targets
     }
