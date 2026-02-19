@@ -2884,8 +2884,13 @@ fn touch_missing_block_request(
                 std::cmp::Ordering::Equal => {
                     stats.retry_window = if stats.retry_window == Duration::ZERO {
                         retry_window
-                    } else {
+                    } else if stats.attempts == 0 {
+                        // Before the first fetch attempt, keep the most aggressive cadence.
                         stats.retry_window.min(retry_window)
+                    } else {
+                        // After requests have started, preserve any widened backoff and only
+                        // relax toward less aggressive retries.
+                        stats.retry_window.max(retry_window)
                     };
                     stats.view_change_window = match (stats.view_change_window, view_change_window)
                     {

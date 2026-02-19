@@ -6531,6 +6531,11 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
         {
             return Ok(sid);
         }
+        if let Some(sid) = path.get("session_id").and_then(Value::as_str)
+            && !sid.is_empty()
+        {
+            return Ok(sid);
+        }
     }
 
     arguments
@@ -6538,7 +6543,10 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
         .or_else(|| arguments.get("session_id"))
         .and_then(Value::as_str)
         .filter(|sid| !sid.is_empty())
-        .ok_or_else(|| "`sid` is required (provide `sid`, `session_id`, or `path.sid`)".to_owned())
+        .ok_or_else(|| {
+            "`sid` is required (provide `sid`, `session_id`, `path.sid`, or `path.session_id`)"
+                .to_owned()
+        })
 }
 
 fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<String, String> {
@@ -7700,8 +7708,16 @@ fn connect_session_delete_tool() -> ToolSpec {
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
+                    "anyOf": [
+                        { "required": ["sid"] },
+                        { "required": ["session_id"] }
+                    ],
                     "properties": {
-                        "sid": { "type": "string" }
+                        "sid": { "type": "string" },
+                        "session_id": {
+                            "type": "string",
+                            "description": "Alias for `path.sid`."
+                        }
                     }
                 },
                 "headers": {
@@ -13813,6 +13829,18 @@ mod tests {
             payload.get("sid").and_then(Value::as_str),
             Some("shortcut-sid")
         );
+    }
+
+    #[test]
+    fn extract_connect_sid_argument_accepts_path_session_id_alias() {
+        let args = norito::json!({
+            "path": {
+                "session_id": "nested-sid"
+            }
+        });
+        let sid =
+            extract_connect_sid_argument(args.as_object().expect("object")).expect("sid alias");
+        assert_eq!(sid, "nested-sid");
     }
 
     #[test]

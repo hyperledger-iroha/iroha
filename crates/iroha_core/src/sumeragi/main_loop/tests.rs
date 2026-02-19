@@ -18658,6 +18658,79 @@ async fn defer_qc_if_block_missing_uses_aggressive_fetch_with_commit_quorum_hint
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn defer_qc_if_block_missing_does_not_recollapse_retry_window_after_attempts() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9B; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9C; Hash::LENGTH]));
+    }
+    let height = 2u64;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+
+    assert!(
+        actor.defer_qc_if_block_missing_with_quorum_hint(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+            /*commit_quorum_met*/ true,
+        ),
+        "missing payload should defer QC aggregation"
+    );
+
+    let widened_retry_window = actor.rebroadcast_cooldown().saturating_mul(2);
+    let now = Instant::now();
+    {
+        let stats = actor
+            .pending
+            .missing_block_requests
+            .get_mut(&block_hash)
+            .expect("missing-block request recorded");
+        stats.retry_window = widened_retry_window;
+        stats.attempts = 2;
+        stats.last_requested = now
+            .checked_sub(widened_retry_window + Duration::from_millis(1))
+            .unwrap_or(now);
+    }
+
+    assert!(
+        actor.defer_qc_if_block_missing_with_quorum_hint(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+            /*commit_quorum_met*/ true,
+        ),
+        "missing payload should remain deferred"
+    );
+
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert!(
+        stats.retry_window >= actor.rebroadcast_cooldown(),
+        "post-attempt quorum retries must keep widened cadence instead of collapsing to floor"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -31510,6 +31583,62 @@ fn touch_missing_block_request_prefers_consensus_priority_windows() {
 }
 
 #[test]
+fn touch_missing_block_request_keeps_widened_retry_window_after_attempts() {
+    let mut requests = BTreeMap::new();
+    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCF; 32]));
+    let now = Instant::now();
+    let aggressive_retry = Duration::from_millis(25);
+    let widened_retry = Duration::from_millis(100);
+
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        5,
+        1,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        now,
+        aggressive_retry,
+        Some(aggressive_retry),
+    ));
+    {
+        let stats = requests.get_mut(&hash).expect("entry exists");
+        stats.attempts = 1;
+    }
+
+    // Once requests are in flight, equal-priority touches should be able to relax the retry
+    // window instead of collapsing back to the aggressive floor.
+    assert!(!super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        5,
+        1,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        now + Duration::from_millis(1),
+        widened_retry,
+        Some(widened_retry),
+    ));
+    let stats = requests.get(&hash).expect("entry exists");
+    assert_eq!(stats.retry_window, widened_retry);
+
+    // Subsequent equal-priority touches must not shrink a widened retry window.
+    assert!(!super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        5,
+        1,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        now + Duration::from_millis(2),
+        aggressive_retry,
+        Some(aggressive_retry),
+    ));
+    let stats = requests.get(&hash).expect("entry exists");
+    assert_eq!(stats.retry_window, widened_retry);
+}
+
+#[test]
 fn clear_missing_block_request_resets_retry_window() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32]));
@@ -31934,6 +32063,53 @@ async fn retry_missing_block_requests_respects_tick_budget() {
     assert_eq!(stats.last_requested, dwell_start);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_relaxes_aggressive_retry_window_after_first_attempt() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAF; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB0; Hash::LENGTH]));
+    }
+
+    let dwell_start = now - actor.rebroadcast_cooldown() - Duration::from_millis(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: super::REBROADCAST_COOLDOWN_FLOOR,
+            view_change_window: None,
+            first_seen: dwell_start,
+            last_requested: dwell_start,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let _ = actor.retry_missing_block_requests(now, None);
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert_eq!(
+        stats.retry_window,
+        actor.rebroadcast_cooldown(),
+        "retry loop should relax aggressive floor after the first attempt"
+    );
 
     harness.shutdown.send();
 }
@@ -40917,6 +41093,42 @@ async fn new_view_highest_qc_fetch_uses_commit_topology_when_roster_missing() {
     assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
 
     super::status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_highest_qc_fetch_uses_consensus_retry_backoff_window() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0u64;
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+
+    let highest_qc = QcHeaderRef {
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: missing_hash,
+        phase: Phase::Commit,
+    };
+    actor.observe_new_view_highest_qc(highest_qc);
+
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&missing_hash)
+        .expect("missing-block fetch should be scheduled");
+    let expected = super::quorum_reschedule_backoff_from_timeout(
+        actor.quorum_timeout(actor.runtime_da_enabled()),
+    );
+    assert_eq!(
+        request.retry_window, expected,
+        "highest QC fetch should use bounded consensus retry backoff"
+    );
+
     harness.shutdown.send();
 }
 
