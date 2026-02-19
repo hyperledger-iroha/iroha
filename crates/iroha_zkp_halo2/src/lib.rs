@@ -323,6 +323,8 @@ pub mod batch {
     #[cfg(feature = "parallel")]
     static LIMITED_POOL_CACHE: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> =
         OnceLock::new();
+    #[cfg(feature = "parallel")]
+    const LIMITED_POOL_CACHE_MAX_ENTRIES: usize = 16;
 
     #[cfg(feature = "parallel")]
     fn limited_pool(limit: NonZeroUsize) -> Option<Arc<rayon::ThreadPool>> {
@@ -340,6 +342,11 @@ pub mod batch {
             .ok()?;
         let pool = Arc::new(pool);
         if let Ok(mut guard) = cache.lock() {
+            if !guard.contains_key(&key) && guard.len() >= LIMITED_POOL_CACHE_MAX_ENTRIES {
+                if let Some(evict_key) = guard.keys().copied().max() {
+                    guard.remove(&evict_key);
+                }
+            }
             guard.entry(key).or_insert_with(|| pool.clone());
         }
         Some(pool)
@@ -515,6 +522,27 @@ pub mod batch {
                     verify_sequential(envelopes)
                 }
             }
+        }
+    }
+
+    #[cfg(all(test, feature = "parallel"))]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn limited_pool_cache_is_bounded() {
+            let cache = LIMITED_POOL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            cache.lock().expect("cache lock").clear();
+            for threads in 1..=(LIMITED_POOL_CACHE_MAX_ENTRIES + 8) {
+                let limit = NonZeroUsize::new(threads).expect("non-zero thread count");
+                let _ = limited_pool(limit);
+            }
+            let len = cache.lock().expect("cache lock").len();
+            assert!(
+                len <= LIMITED_POOL_CACHE_MAX_ENTRIES,
+                "cache size {len} should be <= {}",
+                LIMITED_POOL_CACHE_MAX_ENTRIES
+            );
         }
     }
 }

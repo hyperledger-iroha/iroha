@@ -47,6 +47,7 @@ const TEXT_JSON_MIME_TYPE: &str = "text/json";
 const ATTACHMENT_SANITIZER_ENV: &str = "IROHA_ATTACHMENT_SANITIZER";
 const ATTACHMENT_SANITIZER_MAX_INPUT_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_MAX_INPUT_BYTES";
 const SANITIZER_POLL_INTERVAL_MS: u64 = 5;
+const ATTACHMENT_META_SCAN_MAX_FILES: usize = 20_000;
 const TAG_FILTER_LEGACY_SCAN_CAP: usize = 128;
 
 /// Tenant namespace for the attachments store.
@@ -1163,7 +1164,10 @@ pub async fn handle_list_attachments_filtered(
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
     let mut metas: Vec<AttachmentMeta> = Vec::new();
-    if let Some(id) = q.id.as_deref() {
+    let mut scanned = 0usize;
+    let mut legacy_scans = 0usize;
+    let mut tag_filter_inconclusive = false;
+    let ids = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_attachment_id(id) else {
             return (
                 StatusCode::BAD_REQUEST,
@@ -1171,30 +1175,55 @@ pub async fn handle_list_attachments_filtered(
             )
                 .into_response();
         };
-        if let Some(m) = load_meta(&tenant, &clean) {
-            metas.push(m);
-        }
+        vec![clean]
     } else {
-        for id in list_all_ids(&tenant) {
-            if let Some(m) = load_meta(&tenant, &id) {
-                metas.push(m);
+        list_all_ids(&tenant)
+    };
+    for id in ids {
+        scanned = scanned.saturating_add(1);
+        if scanned > ATTACHMENT_META_SCAN_MAX_FILES {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "too many attachment metadata records to scan (>{ATTACHMENT_META_SCAN_MAX_FILES}); narrow filters"
+                ),
+            )
+                .into_response();
+        }
+        let Some(meta) = load_meta(&tenant, &id) else {
+            continue;
+        };
+        if let Some(ct) = q.content_type.as_deref() {
+            if !meta.content_type.contains(ct) {
+                continue;
             }
         }
+        if !q.since_ms.map_or(true, |since| meta.created_ms >= since) {
+            continue;
+        }
+        if !q.before_ms.map_or(true, |before| meta.created_ms <= before) {
+            continue;
+        }
+        if let Some(tag) = q.has_tag.as_deref() {
+            match attachment_meta_tag_match(&tenant, &meta, tag, &mut legacy_scans) {
+                AttachmentTagMatch::Match => {}
+                AttachmentTagMatch::NoMatch => continue,
+                AttachmentTagMatch::Inconclusive => {
+                    tag_filter_inconclusive = true;
+                    continue;
+                }
+            }
+        }
+        metas.push(meta);
     }
-    // Filter by content-type and time bounds
-    if let Some(ref ct) = q.content_type {
-        metas.retain(|m| m.content_type.contains(ct));
-    }
-    if let Some(since) = q.since_ms {
-        metas.retain(|m| m.created_ms >= since);
-    }
-    if let Some(before) = q.before_ms {
-        metas.retain(|m| m.created_ms <= before);
-    }
-    // Optional ZK1 tag filter: requires scanning bodies and parsing TLVs for candidates
-    if let Some(ref tag) = q.has_tag {
-        let mut legacy_scans = 0usize;
-        metas.retain(|m| attachment_meta_has_tag(&tenant, m, tag, &mut legacy_scans));
+    if tag_filter_inconclusive {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "tag filter requires scanning more than {TAG_FILTER_LEGACY_SCAN_CAP} legacy records; retry after metadata backfill"
+            ),
+        )
+            .into_response();
     }
     // Sort by created_ms asc (default)
     metas.sort_by_key(|m| m.created_ms);
@@ -1227,9 +1256,11 @@ pub async fn handle_count_attachments(
     tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
-    // Reuse listing path but early-count
-    let mut metas: Vec<AttachmentMeta> = Vec::new();
-    if let Some(id) = q.id.as_deref() {
+    let mut count = 0u64;
+    let mut scanned = 0usize;
+    let mut legacy_scans = 0usize;
+    let mut tag_filter_inconclusive = false;
+    let ids = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_attachment_id(id) else {
             return (
                 StatusCode::BAD_REQUEST,
@@ -1237,30 +1268,56 @@ pub async fn handle_count_attachments(
             )
                 .into_response();
         };
-        if let Some(m) = load_meta(&tenant, &clean) {
-            metas.push(m);
-        }
+        vec![clean]
     } else {
-        for id in list_all_ids(&tenant) {
-            if let Some(m) = load_meta(&tenant, &id) {
-                metas.push(m);
+        list_all_ids(&tenant)
+    };
+    for id in ids {
+        scanned = scanned.saturating_add(1);
+        if scanned > ATTACHMENT_META_SCAN_MAX_FILES {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "too many attachment metadata records to scan (>{ATTACHMENT_META_SCAN_MAX_FILES}); narrow filters"
+                ),
+            )
+                .into_response();
+        }
+        let Some(meta) = load_meta(&tenant, &id) else {
+            continue;
+        };
+        if let Some(ct) = q.content_type.as_deref() {
+            if !meta.content_type.contains(ct) {
+                continue;
             }
         }
+        if !q.since_ms.map_or(true, |since| meta.created_ms >= since) {
+            continue;
+        }
+        if !q.before_ms.map_or(true, |before| meta.created_ms <= before) {
+            continue;
+        }
+        if let Some(tag) = q.has_tag.as_deref() {
+            match attachment_meta_tag_match(&tenant, &meta, tag, &mut legacy_scans) {
+                AttachmentTagMatch::Match => {}
+                AttachmentTagMatch::NoMatch => continue,
+                AttachmentTagMatch::Inconclusive => {
+                    tag_filter_inconclusive = true;
+                    continue;
+                }
+            }
+        }
+        count = count.saturating_add(1);
     }
-    if let Some(ref ct) = q.content_type {
-        metas.retain(|m| m.content_type.contains(ct));
+    if tag_filter_inconclusive {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "tag filter requires scanning more than {TAG_FILTER_LEGACY_SCAN_CAP} legacy records; retry after metadata backfill"
+            ),
+        )
+            .into_response();
     }
-    if let Some(since) = q.since_ms {
-        metas.retain(|m| m.created_ms >= since);
-    }
-    if let Some(before) = q.before_ms {
-        metas.retain(|m| m.created_ms <= before);
-    }
-    if let Some(ref tag) = q.has_tag {
-        let mut legacy_scans = 0usize;
-        metas.retain(|m| attachment_meta_has_tag(&tenant, m, tag, &mut legacy_scans));
-    }
-    let count = metas.len() as u64;
     let s = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
         .unwrap_or_else(|_| "{}".into());
     axum::response::Response::builder()
@@ -1281,25 +1338,62 @@ fn zk1_attachment_has_tag(tenant: &AttachmentTenant, id: &str, tag: &str) -> boo
     zk1_bytes_has_tag(&bytes, tag)
 }
 
-fn attachment_meta_has_tag(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachmentTagMatch {
+    Match,
+    NoMatch,
+    Inconclusive,
+}
+
+fn backfill_attachment_tags(
+    tenant: &AttachmentTenant,
+    meta: &AttachmentMeta,
+) -> Option<Vec<String>> {
+    if let Some(tags) = &meta.zk1_tags {
+        return Some(tags.clone());
+    }
+    if meta.content_type != ZK1_MIME_TYPE {
+        return None;
+    }
+    let clean = sanitize_attachment_id(&meta.id)?;
+    let bytes = std::fs::read(bin_path(tenant, &clean)).ok()?;
+    let tags = zk1_extract_tags(&bytes)?;
+    let mut updated = meta.clone();
+    updated.zk1_tags = Some(tags.clone());
+    let _ = save_meta(tenant, &updated);
+    Some(tags)
+}
+
+fn attachment_meta_tag_match(
     tenant: &AttachmentTenant,
     meta: &AttachmentMeta,
     tag: &str,
     legacy_scans: &mut usize,
-) -> bool {
+) -> AttachmentTagMatch {
     if let Some(tags) = &meta.zk1_tags {
-        return tags.iter().any(|t| t == tag);
+        return if tags.iter().any(|t| t == tag) {
+            AttachmentTagMatch::Match
+        } else {
+            AttachmentTagMatch::NoMatch
+        };
     }
     // Non-ZK1 payloads cannot satisfy ZK1 tag queries.
     if meta.content_type != ZK1_MIME_TYPE {
-        return false;
+        return AttachmentTagMatch::NoMatch;
     }
     // Legacy fallback: bounded body scanning for pre-indexed metadata.
     if *legacy_scans >= TAG_FILTER_LEGACY_SCAN_CAP {
-        return false;
+        return AttachmentTagMatch::Inconclusive;
     }
     *legacy_scans = legacy_scans.saturating_add(1);
-    zk1_attachment_has_tag(tenant, &meta.id, tag)
+    let has_tag = backfill_attachment_tags(tenant, meta)
+        .map(|tags| tags.iter().any(|existing| existing == tag))
+        .unwrap_or_else(|| zk1_attachment_has_tag(tenant, &meta.id, tag));
+    if has_tag {
+        AttachmentTagMatch::Match
+    } else {
+        AttachmentTagMatch::NoMatch
+    }
 }
 
 fn zk1_bytes_has_tag(bytes: &[u8], tag: &str) -> bool {
@@ -2068,6 +2162,56 @@ mod tests {
         bytes.extend_from_slice(&[1, 2, 3, 4]);
         let tags = super::zk1_extract_tags(&bytes).expect("zk1 tags");
         assert_eq!(tags, vec!["PROF".to_string(), "IPAK".to_string()]);
+    }
+
+    #[test]
+    fn attachment_meta_tag_match_backfills_legacy_tags() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+        super::init_persistence();
+
+        let tenant = super::AttachmentTenant::anonymous();
+        let id = "deadbeef".repeat(8);
+        let mut bytes = b"ZK1\0".to_vec();
+        bytes.extend_from_slice(b"PROF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let meta = AttachmentMeta {
+            id: id.clone(),
+            content_type: super::ZK1_MIME_TYPE.to_string(),
+            size: 8,
+            created_ms: 1_700_000_000_000,
+            tenant: Some(tenant.as_str().to_string()),
+            provenance: None,
+            zk1_tags: None,
+        };
+        super::save_meta(&tenant, &meta).expect("save legacy meta");
+        std::fs::write(super::bin_path(&tenant, &id), bytes).expect("write legacy body");
+
+        let mut legacy_scans = 0usize;
+        let matched =
+            super::attachment_meta_tag_match(&tenant, &meta, "PROF", &mut legacy_scans);
+        assert_eq!(matched, super::AttachmentTagMatch::Match);
+        let refreshed = super::load_meta(&tenant, &id).expect("refreshed meta");
+        assert_eq!(refreshed.zk1_tags, Some(vec!["PROF".to_string()]));
+    }
+
+    #[test]
+    fn attachment_meta_tag_match_marks_inconclusive_after_legacy_cap() {
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = AttachmentMeta {
+            id: "cafebabe".repeat(8),
+            content_type: super::ZK1_MIME_TYPE.to_string(),
+            size: 8,
+            created_ms: 1_700_000_000_000,
+            tenant: Some(tenant.as_str().to_string()),
+            provenance: None,
+            zk1_tags: None,
+        };
+        let mut legacy_scans = super::TAG_FILTER_LEGACY_SCAN_CAP;
+        let matched =
+            super::attachment_meta_tag_match(&tenant, &meta, "PROF", &mut legacy_scans);
+        assert_eq!(matched, super::AttachmentTagMatch::Inconclusive);
     }
 
     #[test]
