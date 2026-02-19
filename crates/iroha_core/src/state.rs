@@ -28801,6 +28801,7 @@ mod tests {
             },
             proof: None,
             amount: 10,
+            amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
             dsids: descriptor.dsids.clone(),
@@ -29038,6 +29039,7 @@ mod tests {
             },
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
             dsids: descriptor.dsids.clone(),
@@ -29610,6 +29612,7 @@ mod tests {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }],
             commit_height: Some(1),
         };
@@ -29702,6 +29705,7 @@ mod tests {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }],
             commit_height: Some(1),
         };
@@ -29763,6 +29767,7 @@ mod tests {
                 },
                 proof: None,
                 amount: 4,
+                amount_commitment: None,
             }],
             binding,
             lane,
@@ -29973,6 +29978,7 @@ mod tests {
             },
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
         let envelope = AxtEnvelopeRecord {
             binding,

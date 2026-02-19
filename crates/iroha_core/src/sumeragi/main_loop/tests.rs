@@ -54949,7 +54949,8 @@ async fn maybe_emit_rbc_deliver_targets_missing_ready_peers_when_subset_skips_lo
             break;
         }
     }
-    let (block, key) = selected.expect("expected view where local payload subset rebroadcast skips");
+    let (block, key) =
+        selected.expect("expected view where local payload subset rebroadcast skips");
 
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);

@@ -262,6 +262,12 @@ pub struct AxtProofEnvelope {
     /// Backend-specific proof payload.
     #[norito(default)]
     pub proof: Vec<u8>,
+    /// Optional cleartext amount committed by the proof envelope.
+    #[norito(default)]
+    pub committed_amount: Option<u128>,
+    /// Optional commitment for hidden-amount intents.
+    #[norito(default)]
+    pub amount_commitment: Option<[u8; 32]>,
 }
 
 /// Proof fragment associated with a dataspace.
@@ -396,6 +402,9 @@ pub struct AxtHandleFragment {
     pub proof: Option<ProofBlob>,
     /// Amount associated with the intent.
     pub amount: u128,
+    /// Optional commitment corresponding to the effective amount.
+    #[norito(default)]
+    pub amount_commitment: Option<[u8; 32]>,
 }
 
 /// Canonical fingerprint for a handle usage recorded in the replay ledger.
@@ -924,6 +933,7 @@ mod tests {
                     expiry_slot: None,
                 }),
                 amount: 200,
+                amount_commitment: None,
             }],
             commit_height: Some(5),
         };
@@ -944,6 +954,8 @@ mod tests {
             manifest_root,
             da_commitment: None,
             proof: vec![0xCC],
+            committed_amount: None,
+            amount_commitment: None,
         };
         let encoded = norito::to_bytes(&envelope).expect("encode envelope");
         let proof = ProofBlob {
@@ -970,6 +982,8 @@ mod tests {
             manifest_root: bad_root,
             da_commitment: None,
             proof: vec![0xCC],
+            committed_amount: None,
+            amount_commitment: None,
         };
         let encoded = norito::to_bytes(&envelope).expect("encode envelope");
         let proof = ProofBlob {

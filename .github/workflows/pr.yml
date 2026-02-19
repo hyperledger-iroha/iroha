@@ -376,3 +376,16 @@ jobs:
       - name: Run smart contract tests on WebAssembly VM
         working-directory: crates/iroha_smart_contract
         run: mold --run cargo test -p iroha_smart_contract -p iroha_smart_contract_utils --release --tests --target wasm32-unknown-unknown --no-fail-fast --quiet
+
+  nexus_cross_dataspace_localnet:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Nexus cross-dataspace localnet proof
+        run: bash ci/check_nexus_cross_dataspace_localnet.sh

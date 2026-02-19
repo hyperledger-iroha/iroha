@@ -212,7 +212,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         dataspace_catalog,
         lane_catalog.clone(),
     ));
-    let state = blank_state();
+    let _state = blank_state();
 
     let tx_core = sample_transaction(
         &core_account,
@@ -242,19 +242,19 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         ))],
     );
 
-    let decision_core = router.route(&tx_core, &state.view());
+    let decision_core = router.route(&tx_core);
     assert_eq!(
         decision_core,
         RoutingDecision::new(LaneId::new(0), DataSpaceId::GLOBAL)
     );
 
-    let decision_gov = router.route(&tx_gov, &state.view());
+    let decision_gov = router.route(&tx_gov);
     assert_eq!(
         decision_gov,
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1))
     );
 
-    let decision_zk = router.route(&tx_zk, &state.view());
+    let decision_zk = router.route(&tx_zk);
     assert_eq!(
         decision_zk,
         RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
