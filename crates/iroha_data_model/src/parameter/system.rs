@@ -562,10 +562,11 @@ mod model {
         }
 
         fn encode_epoch_seed_hex(seed: [u8; 32]) -> String {
-            use std::fmt::Write as _;
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
             let mut out = String::with_capacity(64);
             for byte in seed {
-                write!(out, "{byte:02X}").expect("writing to string cannot fail");
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0F) as usize] as char);
             }
             out
         }
@@ -2756,17 +2757,15 @@ mod tests {
         let map = payload
             .as_object_mut()
             .expect("npos payload should serialize as object");
+        let mut hex_seed = String::with_capacity(64);
+        for byte in expected.epoch_seed() {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            hex_seed.push(HEX[(byte >> 4) as usize] as char);
+            hex_seed.push(HEX[(byte & 0x0F) as usize] as char);
+        }
         map.insert(
             "epoch_seed".to_owned(),
-            norito::json::Value::String({
-                use std::fmt::Write as _;
-
-                let mut seed_hex = String::with_capacity(64);
-                for byte in expected.epoch_seed() {
-                    write!(seed_hex, "{byte:02x}").expect("writing to string cannot fail");
-                }
-                seed_hex
-            }),
+            norito::json::Value::String(hex_seed),
         );
 
         let custom = CustomParameter::new(
@@ -2779,19 +2778,16 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_npos_from_custom_parameter_accepts_epoch_seed_with_nested_quotes() {
-        let expected = SumeragiNposParameters::default();
-        let hex_seed = {
-            use std::fmt::Write as _;
-
-            let mut seed_hex = String::with_capacity(64);
+        fn sumeragi_npos_from_custom_parameter_accepts_epoch_seed_with_nested_quotes() {
+            let expected = SumeragiNposParameters::default();
+            let mut hex_seed = String::with_capacity(64);
             for byte in expected.epoch_seed() {
-                write!(seed_hex, "{byte:02x}").expect("writing to string cannot fail");
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                hex_seed.push(HEX[(byte >> 4) as usize] as char);
+                hex_seed.push(HEX[(byte & 0x0F) as usize] as char);
             }
-            seed_hex
-        };
-        let mut payload =
-            norito::json::to_value(&expected).expect("serialize npos payload to json value");
+            let mut payload =
+                norito::json::to_value(&expected).expect("serialize npos payload to json value");
         let map = payload
             .as_object_mut()
             .expect("npos payload should serialize as object");

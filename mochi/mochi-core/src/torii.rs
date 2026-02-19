@@ -3593,6 +3593,10 @@ fn offline_event_summary(event: &offline::OfflineTransferEvent) -> (String, Stri
         offline::OfflineTransferEvent::Settled(payload) => {
             ("Offline bundle settled".to_owned(), format!("{payload:?}"))
         }
+        offline::OfflineTransferEvent::AllowanceReclaimed(payload) => (
+            "Offline allowance reclaimed".to_owned(),
+            format!("{payload:?}"),
+        ),
         offline::OfflineTransferEvent::Archived(payload) => {
             ("Offline bundle archived".to_owned(), format!("{payload:?}"))
         }

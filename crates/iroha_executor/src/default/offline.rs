@@ -9,7 +9,9 @@ use iroha_data_model::{
     prelude::Metadata,
 };
 use iroha_smart_contract::data_model::{
-    isi::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
+    isi::{
+        ReclaimExpiredOfflineAllowance, RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer,
+    },
     offline::{AGGREGATE_PROOF_VERSION_V1, OFFLINE_REJECTION_REASON_PREFIX, compute_receipts_root},
     prelude::Numeric,
 };
@@ -123,6 +125,14 @@ pub fn visit_register_offline_allowance<V: Execute + Visit + ?Sized>(
             ))
         );
     }
+    execute!(executor, isi);
+}
+
+/// Delegate expired allowance reclaim handling to the host.
+pub fn visit_reclaim_expired_offline_allowance<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &ReclaimExpiredOfflineAllowance,
+) {
     execute!(executor, isi);
 }
 

@@ -82,6 +82,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<offline::RegisterOfflineAllowance>,
     InstructionRegistry::register::<offline::SubmitOfflineToOnlineTransfer>,
     InstructionRegistry::register::<offline::RegisterOfflineVerdictRevocation>,
+    InstructionRegistry::register::<offline::ReclaimExpiredOfflineAllowance>,
     InstructionRegistry::register::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ActivatePublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ExitPublicLaneValidator>,

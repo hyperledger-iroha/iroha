@@ -977,7 +977,8 @@ impl super::EventFilter for OfflineTransferEventFilter {
                 super::offline::OfflineTransferEvent::Settled(payload) => &payload.bundle_id,
                 super::offline::OfflineTransferEvent::Archived(payload) => &payload.bundle_id,
                 super::offline::OfflineTransferEvent::Pruned(payload) => &payload.bundle_id,
-                super::offline::OfflineTransferEvent::RevocationImported(_) => return false,
+                super::offline::OfflineTransferEvent::RevocationImported(_)
+                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
             };
             if actual_bundle != expected_bundle {
                 return false;
@@ -993,7 +994,8 @@ impl super::EventFilter for OfflineTransferEventFilter {
                 }
                 super::offline::OfflineTransferEvent::Archived(_)
                 | super::offline::OfflineTransferEvent::Pruned(_)
-                | super::offline::OfflineTransferEvent::RevocationImported(_) => return false,
+                | super::offline::OfflineTransferEvent::RevocationImported(_)
+                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
             }
         }
 
@@ -1009,7 +1011,8 @@ impl super::EventFilter for OfflineTransferEventFilter {
                 }
                 super::offline::OfflineTransferEvent::Archived(_)
                 | super::offline::OfflineTransferEvent::Pruned(_)
-                | super::offline::OfflineTransferEvent::RevocationImported(_) => return false,
+                | super::offline::OfflineTransferEvent::RevocationImported(_)
+                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
             }
         }
 

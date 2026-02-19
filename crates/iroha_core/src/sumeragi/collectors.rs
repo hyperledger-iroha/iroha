@@ -211,4 +211,28 @@ mod tests {
             expected
         );
     }
+
+    #[test]
+    fn single_peer_topology_keeps_local_collector() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let topology = Topology::new(vec![peer.clone()]);
+        let seed = [0xAB; 32];
+
+        assert_eq!(
+            deterministic_collectors(&topology, ConsensusMode::Permissioned, 1, Some(seed), 7, 0),
+            vec![peer.clone()]
+        );
+        assert_eq!(
+            deterministic_collectors(&topology, ConsensusMode::Permissioned, 1, None, 7, 0),
+            vec![peer.clone()]
+        );
+        assert_eq!(
+            deterministic_collectors(&topology, ConsensusMode::Npos, 1, Some(seed), 7, 0),
+            vec![peer.clone()]
+        );
+        assert_eq!(
+            deterministic_collectors(&topology, ConsensusMode::Npos, 1, None, 7, 0),
+            vec![peer]
+        );
+    }
 }
