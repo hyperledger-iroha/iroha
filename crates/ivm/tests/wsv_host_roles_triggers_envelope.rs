@@ -70,6 +70,9 @@ fn envelope_roles_permissions_triggers() {
             .unwrap();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
+    wsv.grant_permission(&alice, PermissionToken::ManageRoles);
+    wsv.grant_permission(&alice, PermissionToken::ManagePermissions);
+    wsv.grant_permission(&alice, PermissionToken::ManageTriggers);
     let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -254,4 +257,31 @@ fn envelope_payload_must_be_object() {
     ]);
     let err = run_env_result(&mut vm, invalid_env).expect_err("payload must be an object");
     assert!(matches!(err, VMError::NoritoInvalid));
+}
+
+#[test]
+fn envelope_admin_alias_rejects_without_manage_permissions() {
+    let alice: AccountId =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
+            .parse()
+            .unwrap();
+    let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(alice.clone());
+    let host = WsvHost::new(wsv, alice.clone(), HashMap::new(), HashMap::new());
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+
+    let create_role_env = json_object([
+        ("type", json_value("wsv.create_role")),
+        (
+            "payload",
+            json_object([
+                ("name", json_value("issuer")),
+                ("perms", json_array([json_value("register_domain")])),
+            ]),
+        ),
+    ]);
+    let err =
+        run_env_result(&mut vm, create_role_env).expect_err("admin alias must require permission");
+    assert!(matches!(err, VMError::PermissionDenied));
 }

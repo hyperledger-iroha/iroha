@@ -114,6 +114,10 @@ pub struct Kura {
     disk_usage: AtomicU64,
     /// Cached total disk usage including DA payloads.
     disk_usage_total: AtomicU64,
+    /// Cached sum of budgeted bytes for blocks queued but not yet durably indexed.
+    pending_budget_bytes: AtomicU64,
+    /// Marks whether `pending_budget_bytes` currently reflects in-memory queue state.
+    pending_budget_bytes_valid: AtomicBool,
     /// Indicates whether the budget usage cache was initialized successfully.
     disk_usage_initialized: AtomicBool,
     /// Indicates whether the total usage cache was initialized successfully.
@@ -136,6 +140,8 @@ pub struct Kura {
     roster_log: Mutex<CommitRosterJournal>,
     /// Optional telemetry sink for storage budget reporting.
     telemetry: OnceLock<StateTelemetry>,
+    /// Last fatal writer fault observed by the background persistence loop.
+    writer_fault: Mutex<Option<String>>,
 }
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
@@ -609,6 +615,8 @@ impl Kura {
             max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
+            pending_budget_bytes: AtomicU64::new(0),
+            pending_budget_bytes_valid: AtomicBool::new(false),
             disk_usage_initialized: AtomicBool::new(false),
             disk_usage_total_initialized: AtomicBool::new(false),
             disk_usage_total_last_refresh: AtomicU64::new(0),
@@ -619,6 +627,7 @@ impl Kura {
             merge_log: Mutex::new(merge_log),
             roster_log: Mutex::new(roster_log),
             telemetry: OnceLock::new(),
+            writer_fault: Mutex::new(None),
         });
 
         match kura.kura_disk_usage_bytes() {
@@ -672,6 +681,8 @@ impl Kura {
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
+            pending_budget_bytes: AtomicU64::new(0),
+            pending_budget_bytes_valid: AtomicBool::new(false),
             disk_usage_initialized: AtomicBool::new(true),
             disk_usage_total_initialized: AtomicBool::new(true),
             disk_usage_total_last_refresh: AtomicU64::new(0),
@@ -685,6 +696,7 @@ impl Kura {
                 BLOCK_SYNC_ROSTER_RETENTION,
             )),
             telemetry: OnceLock::new(),
+            writer_fault: Mutex::new(None),
         })
     }
 
@@ -822,6 +834,58 @@ impl Kura {
     /// Attempt to purge retired Kura segments to reclaim disk budget.
     pub(crate) fn purge_retired_segments(&self) -> bool {
         self.purge_retired_storage()
+    }
+
+    fn invalidate_pending_budget_cache(&self) {
+        self.pending_budget_bytes_valid
+            .store(false, Ordering::Relaxed);
+    }
+
+    fn add_pending_budget_bytes(&self, delta: u64) {
+        if delta == 0 || !self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = self.pending_budget_bytes.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_add(delta)),
+        );
+    }
+
+    fn sub_pending_budget_bytes(&self, delta: u64) {
+        if delta == 0 || !self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = self.pending_budget_bytes.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_sub(delta)),
+        );
+    }
+
+    fn record_writer_fault(&self, context: &'static str, error: &Error) {
+        {
+            let mut fault = self.writer_fault.lock();
+            if fault.is_none() {
+                *fault = Some(format!("{context}: {error}"));
+            }
+        }
+        if let Some(telemetry) = self.telemetry.get() {
+            telemetry.inc_storage_budget_exceeded("kura_writer_fault");
+        }
+    }
+
+    fn ensure_writer_healthy(&self) -> Result<()> {
+        let fault = self.writer_fault.lock();
+        if let Some(reason) = fault.as_ref() {
+            return Err(Error::BlockWriterFaulted(reason.clone()));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_writer_fault_for_tests(&self, reason: impl Into<String>) {
+        *self.writer_fault.lock() = Some(reason.into());
     }
 
     /// Evict persisted block bodies into DA-backed storage to reclaim disk budget.
@@ -1675,6 +1739,7 @@ impl Kura {
                     "kura writer detected in-memory chain shrink; rewinding write cursor"
                 );
                 written_block_count = in_memory_len;
+                kura.invalidate_pending_budget_cache();
                 latest_written_block_hash = written_block_count
                     .checked_sub(1)
                     .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
@@ -1684,6 +1749,7 @@ impl Kura {
                     .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
                 if new_latest_written_block_hash != latest_written_block_hash {
                     written_block_count = written_block_count.saturating_sub(1); // soft-fork rewrite
+                    kura.invalidate_pending_budget_cache();
                 }
                 latest_written_block_hash = written_block_count
                     .checked_sub(1)
@@ -1694,7 +1760,8 @@ impl Kura {
                 if should_exit {
                     if let Err(error) = kura.block_store.lock().flush_pending_fsync(true) {
                         error!(?error, "Failed to fsync pending blocks on shutdown");
-                        panic!("Kura has encountered a fatal IO error.");
+                        kura.record_writer_fault("shutdown fsync", &error);
+                        return;
                     }
                     info!("Kura has written remaining blocks to disk and is shutting down.");
                     return;
@@ -1721,7 +1788,8 @@ impl Kura {
                             let mut store = kura.block_store.lock();
                             if let Err(error) = store.flush_pending_fsync(false) {
                                 error!(?error, "Failed to fsync pending batch");
-                                panic!("Kura has encountered a fatal IO error.");
+                                kura.record_writer_fault("periodic fsync", &error);
+                                return;
                             }
                             continue;
                         }
@@ -1842,7 +1910,8 @@ impl Kura {
                 kura.max_disk_usage_bytes,
             ) {
                 error!(?error, "Failed to store block batch");
-                panic!("Kura has encountered a fatal IO error.");
+                kura.record_writer_fault("append block batch", &error);
+                return;
             }
             let append_ms = u64::try_from(append_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             let index_start = Instant::now();
@@ -1851,13 +1920,27 @@ impl Kura {
                     ?error,
                     "Failed to update index count after persisting block batch"
                 );
-                panic!("Kura has encountered a fatal IO error.");
+                kura.record_writer_fault("write index count", &error);
+                return;
             }
             let index_ms = u64::try_from(index_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             let fsync_start = Instant::now();
             if let Err(error) = block_store_guard.flush_pending_fsync(false) {
                 error!(?error, "Failed to fsync persisted block batch");
-                panic!("Kura has encountered a fatal IO error.");
+                kura.record_writer_fault("batch fsync", &error);
+                return;
+            }
+            match blocks_to_be_written.iter().try_fold(0u64, |acc, block| {
+                Self::block_required_bytes_for_budget(block.as_ref(), kura.max_disk_usage_bytes)
+                    .map(|required| acc.saturating_add(required))
+            }) {
+                Ok(persisted_pending_bytes) => {
+                    kura.sub_pending_budget_bytes(persisted_pending_bytes)
+                }
+                Err(err) => {
+                    warn!(?err, "failed to update pending budget bytes after persist");
+                    kura.invalidate_pending_budget_cache();
+                }
             }
             let fsync_ms = u64::try_from(fsync_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             debug!(
@@ -2035,6 +2118,7 @@ impl Kura {
         block: &Arc<SignedBlock>,
         merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
+        self.ensure_writer_healthy()?;
         #[cfg(test)]
         if merge_entry.is_none() {
             let mut merge_log = self.merge_log.lock();
@@ -2048,6 +2132,8 @@ impl Kura {
         let block_hash = block.hash();
         let has_merge_entry = merge_entry.is_some();
         self.check_storage_budget(block, merge_entry)?;
+        let block_budget_bytes =
+            Self::block_required_bytes_for_budget(block.as_ref(), self.max_disk_usage_bytes)?;
         let mut block_data = self.block_data.lock();
         block_data.push((block_hash, Some(Arc::clone(block))));
         debug!(
@@ -2090,6 +2176,7 @@ impl Kura {
             block_data.pop();
             return Err(Error::BlockWriterUnavailable);
         }
+        self.add_pending_budget_bytes(block_budget_bytes);
 
         Ok(())
     }
@@ -2531,7 +2618,15 @@ impl Kura {
     }
 
     fn pending_block_bytes(&self, persisted_count: usize, unindexed_bytes: u64) -> Result<u64> {
+        if self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
+            let pending = self.pending_budget_bytes.load(Ordering::Relaxed);
+            return Ok(pending.saturating_sub(unindexed_bytes));
+        }
         let pending_bytes = self.pending_block_bytes_raw(persisted_count)?;
+        self.pending_budget_bytes
+            .store(pending_bytes, Ordering::Relaxed);
+        self.pending_budget_bytes_valid
+            .store(true, Ordering::Relaxed);
         Ok(pending_bytes.saturating_sub(unindexed_bytes))
     }
 
@@ -2810,6 +2905,8 @@ impl Kura {
     /// Returns an error if the block cannot be enqueued for persistence or exceeds the
     /// configured storage budget.
     pub fn replace_top_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
+        self.ensure_writer_healthy()?;
+        self.invalidate_pending_budget_cache();
         let block = block.into();
         self.check_replace_storage_budget(block.as_ref())?;
         let mut data = self.block_data.lock();
@@ -2847,6 +2944,7 @@ impl Kura {
             }
             data.truncate(keep);
         }
+        self.invalidate_pending_budget_cache();
 
         if !self.store_root.as_os_str().is_empty() {
             let mut store = self.block_store.lock();
@@ -6106,6 +6204,8 @@ pub enum Error {
     Locked(PathBuf),
     /// Block writer thread unavailable; persistence notifications cannot be delivered
     BlockWriterUnavailable,
+    /// Block writer thread faulted and stopped processing new blocks: {0}
+    BlockWriterFaulted(String),
     /// Conversion of wide integer into narrow integer failed. This error cannot be caught at compile time at present
     IntConversion(#[from] std::num::TryFromIntError),
     /// Blocks count differs hashes file and index file
@@ -7544,6 +7644,21 @@ mod tests {
     }
 
     #[test]
+    fn store_block_reports_writer_fault() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.mark_writer_fault_for_tests("injected writer failure");
+
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let err = kura.store_block(block).expect_err("writer faulted");
+        assert!(matches!(err, Error::BlockWriterFaulted(_)));
+        assert_eq!(
+            kura.blocks_count(),
+            0,
+            "failed enqueue should not mutate block cache"
+        );
+    }
+
+    #[test]
     fn replace_top_block_reports_writer_channel_closed() {
         let kura = Kura::blank_kura_for_testing();
         let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
@@ -7557,6 +7672,25 @@ mod tests {
             .replace_top_block(replacement)
             .expect_err("writer channel closed");
         assert!(matches!(err, Error::BlockWriterUnavailable));
+        assert_eq!(kura.blocks_count(), 1);
+        let top_hash = kura.block_data.lock().last().map(|(hash, _)| *hash);
+        assert_eq!(top_hash, Some(block_hash));
+    }
+
+    #[test]
+    fn replace_top_block_reports_writer_fault() {
+        let kura = Kura::blank_kura_for_testing();
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block_hash = block.hash();
+        kura.store_block(block).expect("store block");
+        kura.mark_writer_fault_for_tests("injected writer failure");
+
+        let replacement: SignedBlock =
+            ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let err = kura
+            .replace_top_block(replacement)
+            .expect_err("writer faulted");
+        assert!(matches!(err, Error::BlockWriterFaulted(_)));
         assert_eq!(kura.blocks_count(), 1);
         let top_hash = kura.block_data.lock().last().map(|(hash, _)| *hash);
         assert_eq!(top_hash, Some(block_hash));
