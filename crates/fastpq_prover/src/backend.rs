@@ -639,15 +639,17 @@ mod observer_tests {
 
     use super::*;
 
+    struct ExecutionModeObserverGuard;
+
+    impl Drop for ExecutionModeObserverGuard {
+        fn drop(&mut self) {
+            clear_execution_mode_observer();
+        }
+    }
+
     #[test]
     fn execution_mode_observer_receives_resolution() {
         clear_execution_mode_observer();
-        struct ExecutionModeObserverGuard;
-        impl Drop for ExecutionModeObserverGuard {
-            fn drop(&mut self) {
-                clear_execution_mode_observer();
-            }
-        }
         let _observer_guard = ExecutionModeObserverGuard;
         let (tx, rx) = mpsc::channel();
         set_execution_mode_observer(move |requested, resolved, backend| {

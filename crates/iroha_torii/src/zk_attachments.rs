@@ -2189,8 +2189,7 @@ mod tests {
         std::fs::write(super::bin_path(&tenant, &id), bytes).expect("write legacy body");
 
         let mut legacy_scans = 0usize;
-        let matched =
-            super::attachment_meta_tag_match(&tenant, &meta, "PROF", &mut legacy_scans);
+        let matched = super::attachment_meta_tag_match(&tenant, &meta, "PROF", &mut legacy_scans);
         assert_eq!(matched, super::AttachmentTagMatch::Match);
         let refreshed = super::load_meta(&tenant, &id).expect("refreshed meta");
         assert_eq!(refreshed.zk1_tags, Some(vec!["PROF".to_string()]));
@@ -2209,8 +2208,7 @@ mod tests {
             zk1_tags: None,
         };
         let mut legacy_scans = super::TAG_FILTER_LEGACY_SCAN_CAP;
-        let matched =
-            super::attachment_meta_tag_match(&tenant, &meta, "PROF", &mut legacy_scans);
+        let matched = super::attachment_meta_tag_match(&tenant, &meta, "PROF", &mut legacy_scans);
         assert_eq!(matched, super::AttachmentTagMatch::Inconclusive);
     }
 

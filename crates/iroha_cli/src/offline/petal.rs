@@ -1155,7 +1155,8 @@ fn render_sora_temple_frame(
             let bit = grid.cells[idx];
             let nx = (x as f64 + 0.5) / grid_size as f64;
             let ny = (y as f64 + 0.5) / grid_size as f64;
-            let logo = role == RenderCellRole::Data && sora_ten_logo_mask(nx, ny);
+            let logo = role == RenderCellRole::Data && sora_ten_logo_disk_mask(nx, ny);
+            let logo_glyph = role == RenderCellRole::Data && sora_ten_logo_glyph_mask(nx, ny);
             let mut seed = cell_seed(x, y)
                 ^ stream_signature
                 ^ (u64::from(frame_index) << 11)
@@ -1164,6 +1165,7 @@ fn render_sora_temple_frame(
             cell_params.push(TempleCellParam {
                 bit,
                 logo,
+                logo_glyph,
                 kana_pattern: katakana_pattern_id(kana_index),
             });
             cell_roles.push(role);
@@ -1204,13 +1206,13 @@ fn render_sora_temple_frame(
                 );
             }
             if cell_size >= 8 {
-                let logo_mask_here = sora_ten_logo_mask(nx, ny);
+                let logo_mask_here = sora_ten_logo_disk_mask(nx, ny);
                 if logo_mask_here {
                     blend_rgb(&mut rgb, style_cfg.ring_bright, 0.070);
                 } else {
                     let halo_nx = (nx - 0.5) * 0.90 + 0.5;
                     let halo_ny = (ny - 0.5) * 0.90 + 0.5;
-                    if sora_ten_logo_mask(halo_nx, halo_ny) {
+                    if sora_ten_logo_disk_mask(halo_nx, halo_ny) {
                         blend_rgb(&mut rgb, style_cfg.logo_core_bg, 0.042);
                     }
                 }
@@ -1311,6 +1313,7 @@ fn render_sora_temple_frame(
 struct TempleCellParam {
     bit: bool,
     logo: bool,
+    logo_glyph: bool,
     kana_pattern: usize,
 }
 
@@ -1661,12 +1664,19 @@ fn blend_sora_data_tile(
         };
         blend_rgb(rgb, logo_bg, style_cfg.logo_tile_mix);
         blend_rgb(rgb, style_cfg.logo_tint, style_cfg.logo_tint_alpha);
+        blend_rgb(rgb, [0.91, 0.11, 0.18], 0.42);
         if cell_size >= 8 {
             let logo_radial =
                 ((inner_u - 0.5) * (inner_u - 0.5) + (inner_v - 0.5) * (inner_v - 0.5)).sqrt();
             let logo_glow = (1.0 - logo_radial / 0.70).clamp(0.0, 1.0).powf(2.2);
             blend_rgb(rgb, style_cfg.ring_bright, logo_glow * 0.16);
         }
+    }
+    if param.logo_glyph {
+        // Keep per-bit contrast, but push the logo glyph toward near-black ink.
+        let ink_alpha = if param.bit { 0.80 } else { 0.56 };
+        blend_rgb(rgb, [0.02, 0.01, 0.02], ink_alpha);
+        blend_rgb(rgb, style_cfg.ring_dim, 0.26);
     }
     if cell_size >= 8 {
         let holder_scale = ((cell_size as f64 - 8.0) / 40.0).clamp(0.0, 1.0);
@@ -1888,74 +1898,31 @@ fn blend_rgb(rgb: &mut [f64; 3], target: [f64; 3], alpha: f64) {
     rgb[2] = lerp(rgb[2], target[2], alpha);
 }
 
-const SORA_TEN_LOGO_PATH_POINTS: [[f64; 2]; 25] = [
-    [94.000, 36.000],
-    [86.898, 31.000],
-    [77.019, 28.000],
-    [65.750, 27.000],
-    [54.481, 28.000],
-    [44.602, 31.000],
-    [37.500, 36.000],
-    [34.546, 41.944],
-    [35.537, 47.556],
-    [39.500, 52.500],
-    [45.463, 56.444],
-    [52.454, 59.056],
-    [59.500, 60.000],
-    [66.509, 60.944],
-    [73.407, 63.556],
-    [79.250, 67.500],
-    [83.093, 72.444],
-    [83.991, 78.056],
-    [81.000, 84.000],
-    [73.898, 89.000],
-    [64.019, 92.000],
-    [52.750, 93.000],
-    [41.481, 92.000],
-    [31.602, 89.000],
-    [24.500, 84.000],
-];
-
 fn sora_ten_logo_mask(nx: f64, ny: f64) -> bool {
-    let x = nx * 128.0;
-    let y = ny * 128.0;
-    let stroke_radius = if y < 58.0 {
-        5.3
-    } else if y < 76.0 {
-        4.9
-    } else {
-        5.2
-    };
-    // Fast reject outside the icon path bounds (with stroke padding).
-    if x < 18.0 || x > 100.0 || y < 20.0 || y > 100.0 {
-        return false;
-    }
-
-    let mut min_dist_sq = f64::MAX;
-    for pair in SORA_TEN_LOGO_PATH_POINTS.windows(2) {
-        let [ax, ay] = pair[0];
-        let [bx, by] = pair[1];
-        let dist_sq = segment_distance_sq(x, y, ax, ay, bx, by);
-        if dist_sq < min_dist_sq {
-            min_dist_sq = dist_sq;
-        }
-    }
-    min_dist_sq <= stroke_radius * stroke_radius
+    sora_ten_logo_disk_mask(nx, ny)
 }
 
-fn segment_distance_sq(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
-    let abx = bx - ax;
-    let aby = by - ay;
-    let apx = px - ax;
-    let apy = py - ay;
-    let denom = abx * abx + aby * aby;
-    if denom <= f64::EPSILON {
-        return apx * apx + apy * apy;
+fn sora_ten_logo_disk_mask(nx: f64, ny: f64) -> bool {
+    let x = nx * 2.0 - 1.0;
+    let y = ny * 2.0 - 1.0;
+    x * x + y * y <= 0.97 * 0.97
+}
+
+fn sora_ten_logo_glyph_mask(nx: f64, ny: f64) -> bool {
+    if !sora_ten_logo_disk_mask(nx, ny) {
+        return false;
     }
-    let t = ((apx * abx + apy * aby) / denom).clamp(0.0, 1.0);
-    let dx = apx - abx * t;
-    let dy = apy - aby * t;
-    dx * dx + dy * dy
+    let x = nx * 2.0 - 1.0;
+    let y = ny * 2.0 - 1.0;
+
+    let top_bar = y >= -0.50 && y <= -0.34 && x >= -0.62 && x <= 0.62;
+    let mid_left = y >= -0.17 && y <= 0.00 && x >= -0.62 && x <= -0.08;
+    let mid_right = y >= -0.17 && y <= 0.00 && x >= 0.08 && x <= 0.62;
+    let center_stem = y >= -0.34 && y <= 0.19 && x.abs() <= 0.08;
+    let left_leg = y >= 0.16 && y <= 0.93 && (x + 0.98 * (y - 0.16)).abs() <= 0.10;
+    let right_leg = y >= 0.16 && y <= 0.93 && (x - 0.98 * (y - 0.16)).abs() <= 0.10;
+
+    top_bar || mid_left || mid_right || center_stem || left_leg || right_leg
 }
 
 fn estimate_style_aesthetic_score(image: &image::RgbaImage, style: PetalRenderStyle) -> f64 {

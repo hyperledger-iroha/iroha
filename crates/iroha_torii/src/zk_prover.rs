@@ -398,7 +398,8 @@ fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io
     let path = report_index_path();
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    let body = norito::json::to_json_pretty(summaries).unwrap_or_else(|_| "[]".into());
+    let owned: Vec<ProverReportSummary> = summaries.to_vec();
+    let body = norito::json::to_json_pretty(&owned).unwrap_or_else(|_| "[]".into());
     use std::io::Write as _;
     tmp.write_all(body.as_bytes())?;
     tmp.flush()?;
@@ -429,7 +430,8 @@ fn load_report_summaries() -> Vec<ProverReportSummary> {
     let _guard = report_summary_lock()
         .lock()
         .expect("report summary lock poisoned");
-    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let mut summaries =
+        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
     let before = summaries.len();
     summaries.retain(|summary| report_path_from_sanitized(&summary.id).exists());
     if summaries.len() != before {
@@ -442,7 +444,8 @@ fn upsert_report_summary(report: &ProverReport) {
     let _guard = report_summary_lock()
         .lock()
         .expect("report summary lock poisoned");
-    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let mut summaries =
+        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
     let summary = report_summary_from_report(report);
     if let Some(existing) = summaries.iter_mut().find(|entry| entry.id == summary.id) {
         *existing = summary;
@@ -459,7 +462,8 @@ fn remove_report_summary(id: &str) {
     let _guard = report_summary_lock()
         .lock()
         .expect("report summary lock poisoned");
-    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let mut summaries =
+        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
     let before = summaries.len();
     summaries.retain(|entry| entry.id != clean);
     if summaries.len() != before {
@@ -636,7 +640,7 @@ fn load_report(id: &str) -> Option<ProverReport> {
         );
         return None;
     }
-    let mut f = fs::File::open(path).ok()?;
+    let f = fs::File::open(path).ok()?;
     let mut reader = f.take(REPORT_FILE_MAX_BYTES.saturating_add(1));
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).ok()?;
@@ -702,7 +706,8 @@ pub fn gc_reports_once() -> usize {
     let _guard = report_summary_lock()
         .lock()
         .expect("report summary lock poisoned");
-    let mut summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let mut summaries =
+        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
     let mut retained = Vec::with_capacity(summaries.len());
     for summary in summaries.drain(..) {
         let age_ms = now.saturating_sub(summary.processed_ms);
@@ -1484,7 +1489,9 @@ pub async fn handle_list_reports(
 
     let mut filtered: Vec<ProverReportSummary> = load_report_summaries()
         .into_iter()
-        .filter(|summary| filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req))
+        .filter(|summary| {
+            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
+        })
         .collect();
     filtered.sort_by_key(|summary| summary.processed_ms);
     // latest=true overrides order/offset/limit: pick the last (max processed_ms)
@@ -1573,7 +1580,9 @@ pub async fn handle_count_reports(
 
     let count = load_report_summaries()
         .into_iter()
-        .filter(|summary| filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req))
+        .filter(|summary| {
+            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
+        })
         .count() as u64;
     let body = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
         .unwrap_or_else(|_| "{}".into());
@@ -1604,7 +1613,9 @@ pub async fn handle_delete_reports(
     };
     let matches: Vec<String> = load_report_summaries()
         .into_iter()
-        .filter(|summary| filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req))
+        .filter(|summary| {
+            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
+        })
         .map(|summary| summary.id)
         .collect();
 
@@ -1776,7 +1787,70 @@ mod tests {
         let path = report_path_from_sanitized(&id);
         std::fs::write(&path, vec![b'x'; (REPORT_FILE_MAX_BYTES as usize) + 1])
             .expect("write oversized report");
-        assert!(load_report(&id).is_none(), "oversized report must be rejected");
+        assert!(
+            load_report(&id).is_none(),
+            "oversized report must be rejected"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn count_reports_filters_using_report_summaries() {
+        use http_body_util::BodyExt as _;
+
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let report_with_tag = ProverReport {
+            id: "11".repeat(32),
+            ok: true,
+            error: None,
+            content_type: "application/x-zk1".to_string(),
+            size: 64,
+            created_ms: now_ms(),
+            processed_ms: now_ms(),
+            latency_ms: 0,
+            zk1_tags: Some(vec!["PROF".to_string()]),
+            backend: None,
+            vk_ref: None,
+            proof_hash: None,
+            circuit_id: None,
+            proofs: Vec::new(),
+        };
+        let report_without_tag = ProverReport {
+            id: "22".repeat(32),
+            ok: false,
+            error: Some("verification failed".to_string()),
+            content_type: "application/x-zk1".to_string(),
+            size: 64,
+            created_ms: now_ms(),
+            processed_ms: now_ms(),
+            latency_ms: 0,
+            zk1_tags: Some(vec!["IPAK".to_string()]),
+            backend: None,
+            vk_ref: None,
+            proof_hash: None,
+            circuit_id: None,
+            proofs: Vec::new(),
+        };
+        save_report(&report_with_tag).expect("save tagged report");
+        save_report(&report_without_tag).expect("save untagged report");
+
+        let query = ProverListQuery {
+            has_tag: Some("PROF".to_string()),
+            ..Default::default()
+        };
+        let response = super::handle_count_reports(NoritoQuery(query))
+            .await
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["count"].as_u64(), Some(1));
     }
 
     #[test]

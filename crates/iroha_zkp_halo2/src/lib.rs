@@ -342,10 +342,11 @@ pub mod batch {
             .ok()?;
         let pool = Arc::new(pool);
         if let Ok(mut guard) = cache.lock() {
-            if !guard.contains_key(&key) && guard.len() >= LIMITED_POOL_CACHE_MAX_ENTRIES {
-                if let Some(evict_key) = guard.keys().copied().max() {
-                    guard.remove(&evict_key);
-                }
+            if !guard.contains_key(&key)
+                && guard.len() >= LIMITED_POOL_CACHE_MAX_ENTRIES
+                && let Some(evict_key) = guard.keys().copied().max()
+            {
+                guard.remove(&evict_key);
             }
             guard.entry(key).or_insert_with(|| pool.clone());
         }

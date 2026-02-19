@@ -54949,7 +54949,8 @@ async fn maybe_emit_rbc_deliver_targets_missing_ready_peers_when_subset_skips_lo
             break;
         }
     }
-    let (block, key) = selected.expect("expected view where local payload subset rebroadcast skips");
+    let (block, key) =
+        selected.expect("expected view where local payload subset rebroadcast skips");
 
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);
@@ -55007,32 +55008,130 @@ async fn maybe_emit_rbc_deliver_targets_missing_ready_peers_when_subset_skips_lo
         "missing READY peers should include at least one remote peer"
     );
 
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
     let _ = harness.background_rx.try_iter().count();
     actor
         .maybe_emit_rbc_deliver(key)
         .expect("emit DELIVER deferral");
 
-    let targeted_payload_peers: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
+    let entries = take_background_log(&background_log);
+    let targeted_payload_peers: BTreeSet<_> = entries
+        .iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if expected_targets.contains(&peer)
-                    && matches!(
-                        msg.as_ref(),
-                        BlockMessage::RbcInit(_)
-                            | BlockMessage::RbcChunk(_)
-                            | BlockMessage::RbcChunkCompact(_)
-                    ) =>
-            {
-                Some(peer)
-            }
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("RbcInit" | "RbcChunk" | "RbcChunkCompact"),
+                peer: Some(peer),
+            } if expected_targets.contains(peer) => Some(peer.clone()),
             _ => None,
         })
         .collect();
     assert!(
         !targeted_payload_peers.is_empty(),
         "expected targeted RBC payload posts to peers missing READY"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_targets_missing_ready_peers_with_unverified_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "commit roster should be non-empty");
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let epoch = actor.epoch_for_height(height);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("RBC session");
+    let header = block.header();
+    let leader_signature = leader_signature_for_header(actor, &roster, &header, &harness.key_pairs);
+    session.block_header = Some(header);
+    session.leader_signature = Some(leader_signature);
+    session.record_ready(0, vec![0xAB]);
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 1, "ready quorum should require multiple senders");
+    assert!(
+        session.ready_signatures.len() < required,
+        "session should be below READY quorum"
+    );
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .remove(&key);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .remove(&key);
+
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, key.2, mode_tag, prf_seed);
+    let local_peer = actor.common_config.peer.id().clone();
+    let expected_targets: BTreeSet<_> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, peer)| {
+            let idx = u32::try_from(idx).ok()?;
+            (idx != 0 && peer != &local_peer).then_some(peer.clone())
+        })
+        .collect();
+    assert!(
+        !expected_targets.is_empty(),
+        "missing READY peers should include at least one remote peer"
+    );
+
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .maybe_emit_rbc_deliver(key)
+        .expect("emit DELIVER deferral");
+
+    let entries = take_background_log(&background_log);
+    let targeted_peers: BTreeSet<_> = entries
+        .iter()
+        .filter_map(|post| match post {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("RbcInit" | "RbcChunk" | "RbcChunkCompact" | "RbcReady"),
+                peer: Some(peer),
+            } if expected_targets.contains(peer) => Some(peer.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !targeted_peers.is_empty(),
+        "expected targeted RBC posts to peers missing READY when roster is unverified"
     );
 
     harness.shutdown.send();
