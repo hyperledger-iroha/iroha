@@ -9,6 +9,7 @@ use std::{
 
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
+use iroha::client::Client;
 use iroha::data_model::{
     Level,
     account::Account,
@@ -58,6 +59,25 @@ fn register_validator_instructions(
         }
         .into(),
     ]
+}
+
+async fn advance_to_height(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    target_height: u64,
+    log_prefix: &str,
+) -> eyre::Result<()> {
+    loop {
+        let status = client.get_status()?;
+        if status.blocks >= target_height {
+            return Ok(());
+        }
+        let next = status.blocks.saturating_add(1);
+        client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
+        network
+            .ensure_blocks_with(move |height| height.total >= next)
+            .await?;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -150,14 +170,13 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     client.submit_all_blocking(instructions)?;
 
     let pre_margin_height = (FINALITY_MARGIN / 2).max(1);
-    let status = client.get_status()?;
-    for idx in status.blocks..pre_margin_height {
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("stake activation seed {idx}"),
-        ))?;
-    }
-    network.ensure_blocks(pre_margin_height).await?;
+    advance_to_height(
+        &network,
+        &client,
+        pre_margin_height,
+        "stake activation seed",
+    )
+    .await?;
     let collectors_url = client
         .torii_url
         .join("v1/sumeragi/collectors")
@@ -169,14 +188,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     )
     .await?;
 
-    let status = client.get_status()?;
-    for idx in status.blocks..WAIT_HEIGHT {
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("stake activation tick {idx}"),
-        ))?;
-    }
-    network.ensure_blocks(WAIT_HEIGHT).await?;
+    advance_to_height(&network, &client, WAIT_HEIGHT, "stake activation tick").await?;
 
     let expected_peer = eligible_peer.id().to_string();
     wait_for_single_collector(&collectors_url, &expected_peer).await?;
@@ -350,16 +362,13 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     ));
     client.submit_all_blocking(instructions)?;
 
-    let status = client.get_status()?;
-    for idx in status.blocks..WAIT_HEIGHT {
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("stake activation entity tick {idx}"),
-        ))?;
-    }
-    network
-        .ensure_blocks_with(|height| height.total >= WAIT_HEIGHT)
-        .await?;
+    advance_to_height(
+        &network,
+        &client,
+        WAIT_HEIGHT,
+        "stake activation entity tick",
+    )
+    .await?;
 
     let collectors_url = client
         .torii_url
