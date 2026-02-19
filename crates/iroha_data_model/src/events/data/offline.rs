@@ -28,6 +28,8 @@ mod model {
         RevocationImported(crate::offline::OfflineVerdictRevocation),
         /// An offline bundle settled on-ledger.
         Settled(OfflineTransferSettled),
+        /// Remaining allowance from an expired certificate was reclaimed to the controller.
+        AllowanceReclaimed(OfflineAllowanceReclaimed),
         /// A settled bundle satisfied the retention policy and moved to the archived tier.
         Archived(OfflineTransferArchived),
         /// An archived bundle exceeded the cold-retention window and was pruned.
@@ -59,6 +61,24 @@ mod model {
         /// Snapshot of the platform token captured during settlement (if applicable).
         #[norito(default)]
         pub platform_snapshot: Option<crate::offline::OfflinePlatformTokenSnapshot>,
+    }
+
+    /// Payload emitted when an expired allowance remainder is reclaimed by its controller.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct OfflineAllowanceReclaimed {
+        /// Certificate identifier reclaimed by this event.
+        pub certificate_id: iroha_crypto::Hash,
+        /// Controller account receiving the reclaimed amount.
+        pub controller: crate::account::AccountId,
+        /// Asset definition moved out of escrow.
+        pub asset_definition: crate::AssetDefinitionId,
+        /// Amount reclaimed back to the controller.
+        pub amount: Numeric,
+        /// Unix timestamp (ms) when the reclaim operation succeeded.
+        pub reclaimed_at_ms: u64,
     }
 
     /// Payload emitted when a bundle transitions into the archived retention tier.
@@ -98,11 +118,15 @@ mod model {
 impl_json_via_norito_bytes!(
     OfflineTransferEvent,
     OfflineTransferSettled,
+    OfflineAllowanceReclaimed,
     OfflineTransferArchived,
     OfflineTransferPruned
 );
 
 /// Prelude exports for offline settlement events.
 pub mod prelude {
-    pub use super::{OfflineTransferArchived, OfflineTransferEvent, OfflineTransferSettled};
+    pub use super::{
+        OfflineAllowanceReclaimed, OfflineTransferArchived, OfflineTransferEvent,
+        OfflineTransferSettled,
+    };
 }

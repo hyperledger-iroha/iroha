@@ -123,14 +123,18 @@ impl Topology {
     ///
     /// Collectors are the peers responsible for aggregating votes and forming a QC.
     /// By default this is a contiguous slice starting at `proxy_tail_index()` and
-    /// extending into Set B validators. The leader is never included and indices do
-    /// not wrap around.
+    /// extending into Set B validators. The leader is excluded except for single-peer
+    /// topologies, where index `0` is used so local vote aggregation can progress.
+    /// Indices do not wrap around.
     ///
     /// Returns at most `k` indices; fewer if there are not enough peers after
     /// the proxy tail.
     pub fn collector_indices_k(&self, k: usize) -> Vec<usize> {
-        if self.0.len() <= 1 {
+        if self.0.is_empty() || k == 0 {
             return Vec::new();
+        }
+        if self.0.len() == 1 {
+            return vec![0];
         }
         let start = self.proxy_tail_index();
         let end_exclusive = (start + k).min(self.0.len());
@@ -143,10 +147,14 @@ impl Topology {
     /// Effective collector fan-out (k) floor for the current topology.
     ///
     /// Ensures the requested `k` is at least the commit quorum size, bounded by the number
-    /// of non-leader peers. Returns `0` for empty/single-peer topologies or when `k` is `0`.
+    /// of non-leader peers. Returns `0` for empty topologies or when `k` is `0`.
+    /// A single-peer topology uses the local validator as its only collector.
     pub fn collector_fanout_floor(&self, k: usize) -> usize {
-        if self.0.len() <= 1 || k == 0 {
+        if self.0.is_empty() || k == 0 {
             return 0;
+        }
+        if self.0.len() == 1 {
+            return 1;
         }
         let required = self.min_votes_for_commit();
         let max_collectors = self.0.len().saturating_sub(1);
@@ -157,10 +165,13 @@ impl Topology {
     ///
     /// The fallback starts at `proxy_tail_index()` and wraps around to fill at least
     /// the commit quorum size (bounded by the number of non-leader peers). The
-    /// leader is never included and indices are unique.
+    /// leader is excluded except for single-peer topologies. Indices are unique.
     pub fn collector_indices_k_fallback(&self, k: usize) -> Vec<usize> {
-        if self.0.len() <= 1 {
+        if self.0.is_empty() || k == 0 {
             return Vec::new();
+        }
+        if self.0.len() == 1 {
+            return vec![0];
         }
         let desired = self.collector_fanout_floor(k);
         if desired == 0 {
@@ -279,8 +290,10 @@ impl Topology {
     /// `NPoS`-style PRF-based collector selection for a given (height, view).
     ///
     /// Deterministically selects up to `k` distinct collector indices from the validator set,
-    /// excluding the leader index. Selection uses a Blake2b-512 based PRF seeded by `seed`
-    /// and keyed by `(height, view, counter)` to avoid repeats.
+    /// excluding the leader index for multi-peer rosters. Single-peer rosters always
+    /// return index `0` so local vote aggregation remains possible. Selection uses a
+    /// Blake2b-512 based PRF seeded by `seed` and keyed by `(height, view, counter)`
+    /// to avoid repeats.
     pub fn collector_indices_k_prf(
         &self,
         k: usize,
@@ -289,8 +302,11 @@ impl Topology {
         view: u64,
     ) -> Vec<usize> {
         let n = self.0.len();
-        if n <= 1 || k == 0 {
+        if n == 0 || k == 0 {
             return Vec::new();
+        }
+        if n == 1 {
+            return vec![0];
         }
         // Build candidate list excluding the leader index (0).
         let mut candidates: Vec<usize> = (1..n).collect();
@@ -1422,10 +1438,15 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k_none_for_single_peer() {
+    fn single_peer_topology_uses_local_collector() {
         let peers = test_peers(1);
-        let topology = Topology::new(peers);
-        assert!(topology.collector_indices_k(1).is_empty());
+        let topology = Topology::new(peers.clone());
+        let seed = [0x55; 32];
+        assert_eq!(topology.collector_fanout_floor(1), 1);
+        assert_eq!(topology.collector_indices_k(1), vec![0]);
+        assert_eq!(topology.collector_indices_k_fallback(1), vec![0]);
+        assert_eq!(topology.collector_indices_k_prf(1, seed, 42, 3), vec![0]);
+        assert!(topology.is_collector(&peers[0], 1));
     }
 
     #[test]

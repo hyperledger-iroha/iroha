@@ -15,8 +15,6 @@ mod zstd_frame;
 
 use std::{io::Cursor, ptr, slice};
 
-use crate::zstd_frame::ZstdEncodeError;
-
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
 const RC_NO_SPACE: i32 = 2;

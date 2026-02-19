@@ -553,18 +553,20 @@ mod model {
             }
 
             let mut out = [0_u8; 32];
-            for idx in 0..32 {
+            for (idx, slot) in out.iter_mut().enumerate() {
                 let start = idx * 2;
                 let end = start + 2;
-                out[idx] = u8::from_str_radix(&hex[start..end], 16).ok()?;
+                *slot = u8::from_str_radix(&hex[start..end], 16).ok()?;
             }
             Some(out)
         }
 
         fn encode_epoch_seed_hex(seed: [u8; 32]) -> String {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
             let mut out = String::with_capacity(64);
             for byte in seed {
-                out.push_str(&format!("{byte:02X}"));
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0F) as usize] as char);
             }
             out
         }
@@ -2755,15 +2757,15 @@ mod tests {
         let map = payload
             .as_object_mut()
             .expect("npos payload should serialize as object");
+        let mut hex_seed = String::with_capacity(64);
+        for byte in expected.epoch_seed() {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            hex_seed.push(HEX[(byte >> 4) as usize] as char);
+            hex_seed.push(HEX[(byte & 0x0F) as usize] as char);
+        }
         map.insert(
             "epoch_seed".to_owned(),
-            norito::json::Value::String(
-                expected
-                    .epoch_seed()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect(),
-            ),
+            norito::json::Value::String(hex_seed),
         );
 
         let custom = CustomParameter::new(
@@ -2778,11 +2780,12 @@ mod tests {
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_epoch_seed_with_nested_quotes() {
         let expected = SumeragiNposParameters::default();
-        let hex_seed = expected
-            .epoch_seed()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let mut hex_seed = String::with_capacity(64);
+        for byte in expected.epoch_seed() {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            hex_seed.push(HEX[(byte >> 4) as usize] as char);
+            hex_seed.push(HEX[(byte & 0x0F) as usize] as char);
+        }
         let mut payload =
             norito::json::to_value(&expected).expect("serialize npos payload to json value");
         let map = payload

@@ -13211,7 +13211,8 @@ impl Actor {
                     "sending targeted RBC payload to peers missing READY"
                 );
                 let init_message = Arc::new(BlockMessage::RbcInit(init));
-                let init_encoded = Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
+                let init_encoded =
+                    Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
                 for peer in &targets {
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),
