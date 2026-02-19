@@ -259,16 +259,16 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         ))],
     );
 
-    let state = blank_state();
-    let decision = router.route(&governance_tx, &state.view());
+    let _state = blank_state();
+    let decision = router.route(&governance_tx);
     assert_eq!(decision.lane_id, LaneId::new(1));
     assert_eq!(decision.dataspace_id, DataSpaceId::new(1));
 
-    let decision = router.route(&zk_tx, &state.view());
+    let decision = router.route(&zk_tx);
     assert_eq!(decision.lane_id, LaneId::new(2));
     assert_eq!(decision.dataspace_id, DataSpaceId::new(2));
 
-    let decision = router.route(&default_tx, &state.view());
+    let decision = router.route(&default_tx);
     assert_eq!(decision.lane_id, LaneId::new(0));
     assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
 

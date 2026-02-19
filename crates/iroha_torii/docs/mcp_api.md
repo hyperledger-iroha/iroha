@@ -635,7 +635,7 @@ Create session + ticket metadata in one call:
   "params": {
     "name": "connect.session.create_and_ticket",
     "arguments": {
-      "sid": "<base64url-32-byte-session-id>",
+      "session_id": "<base64url-32-byte-session-id>",
       "role": "app",
       "node_url": "https://node.example"
     }

@@ -3063,6 +3063,49 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_flat_hash()
 }
 
 #[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_query_transaction_hash_alias()
+{
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10621,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.transactions.wait",
+                "arguments": {
+                    "query": {
+                        "transaction_hash": "not-a-hash"
+                    },
+                    "timeout_ms": 1000,
+                    "poll_interval_ms": 100
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid query.transaction_hash alias should be marked as MCP tool error for transaction wait alias"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid query.transaction_hash alias to be rejected by transaction wait alias"
+    );
+}
+
+#[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_transactions_list_accepts_flat_query_fields() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -5882,7 +5925,7 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
                 "params": {
                     "name": tool_name,
                     "arguments": {
-                        "sid": sid,
+                        "session_id": sid,
                         "role": role,
                         "node_url": "https://node.example"
                     }
@@ -6102,7 +6145,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.session.create",
                 "arguments": {
-                    "sid": sid
+                    "session_id": sid
                 }
             }
         }),
@@ -6328,7 +6371,7 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "params": {
                 "name": "iroha.connect.session.create",
                 "arguments": {
-                    "sid": sid
+                    "session_id": sid
                 }
             }
         }),

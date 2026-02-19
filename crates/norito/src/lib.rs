@@ -2712,7 +2712,6 @@ pub mod json {
             unsafe {
                 write_neon(s, out);
             }
-            return;
         }
         // x86_64 AVX2 fast path using vector compares + movemask
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]

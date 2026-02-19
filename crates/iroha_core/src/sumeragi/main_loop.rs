@@ -199,6 +199,8 @@ const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
 const RBC_REBROADCAST_COMMITTED_DEPTH: u64 = 4;
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
+/// Minimum interval between RBC DELIVER deferral log emissions per session.
+const RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 /// EMA smoothing factor for pacemaker phase latencies.
 pub(super) const PACEMAKER_PHASE_EMA_ALPHA: f64 = 0.2;
 /// Log when the gap between tick invocations exceeds this threshold.
@@ -13175,7 +13177,7 @@ impl Actor {
         if self.is_observer() || !self.runtime_da_enabled() {
             return;
         }
-        if !self.rbc_rebroadcast_active(key) || missing_ready_peers.is_empty() {
+        if missing_ready_peers.is_empty() {
             return;
         }
 
@@ -13193,12 +13195,10 @@ impl Actor {
 
         let now = Instant::now();
         let payload_cooldown = self.payload_rebroadcast_cooldown();
-        let queue_drop = self.queue_drop_backpressure_active(now, payload_cooldown);
-        let queue_block = self.queue_block_backpressure_active(now, payload_cooldown);
         let payload_due = self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown);
         let roster = self.ensure_rbc_session_roster(key);
 
-        if !queue_drop && !queue_block && payload_due && !roster.is_empty() {
+        if payload_due && !roster.is_empty() {
             if let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) {
                 let chunk_count = chunks.len();
                 info!(
@@ -13211,7 +13211,8 @@ impl Actor {
                     "sending targeted RBC payload to peers missing READY"
                 );
                 let init_message = Arc::new(BlockMessage::RbcInit(init));
-                let init_encoded = Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
+                let init_encoded =
+                    Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
                 for peer in &targets {
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),
@@ -13914,7 +13915,8 @@ impl Actor {
                 ready_count,
                 received_chunks,
                 total_chunks,
-                self.rebroadcast_cooldown(),
+                self.rebroadcast_cooldown()
+                    .max(RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR),
             ) {
                 info!(
                     height = key.1,
@@ -13936,14 +13938,16 @@ impl Actor {
             .unwrap_or(RbcRosterSource::Init);
         let allow_unverified = self.allow_unverified_rbc_roster(key);
         if !roster_source.is_authoritative() && !allow_unverified {
-            if self.should_emit_rbc_deliver_deferral(
+            let should_log = self.should_emit_rbc_deliver_deferral(
                 key,
                 now,
                 ready_count,
                 received_chunks,
                 total_chunks,
-                self.rebroadcast_cooldown(),
-            ) {
+                self.rebroadcast_cooldown()
+                    .max(RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR),
+            );
+            if should_log {
                 info!(
                     height = key.1,
                     view = key.2,
@@ -13958,6 +13962,38 @@ impl Actor {
                     "deferring RBC DELIVER: commit roster unverified"
                 );
             }
+            self.rebroadcast_rbc_payload(key, &session);
+            if !session.ready_signatures.is_empty() {
+                self.rebroadcast_rbc_ready_set(key, &session);
+            }
+            let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+            let signature_topology = topology_for_view(
+                &super::network_topology::Topology::new(commit_topology.clone()),
+                key.1,
+                key.2,
+                mode_tag,
+                prf_seed,
+            );
+            let ready_senders: BTreeSet<_> = session
+                .ready_signatures
+                .iter()
+                .map(|entry| entry.sender)
+                .collect();
+            let missing_ready_peers: Vec<_> = signature_topology
+                .as_ref()
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, peer)| {
+                    let idx = ValidatorIndex::try_from(idx).ok()?;
+                    (!ready_senders.contains(&idx)).then_some(peer.clone())
+                })
+                .collect();
+            self.rescue_rbc_missing_ready_peers(
+                key,
+                &session,
+                missing_ready_peers.as_slice(),
+                ready_count,
+            );
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
@@ -13971,17 +14007,14 @@ impl Actor {
             } else {
                 self.rebroadcast_cooldown()
             };
-            if !self.should_emit_rbc_deliver_deferral(
+            let should_log = self.should_emit_rbc_deliver_deferral(
                 key,
                 now,
                 ready_count,
                 received_chunks,
                 total_chunks,
-                cooldown,
-            ) {
-                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-                return Ok(());
-            }
+                cooldown.max(RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR),
+            );
             let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
             let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
             let (missing_ready_total, missing_ready, missing_ready_peers) = {
@@ -14032,28 +14065,30 @@ impl Actor {
                     (pending_ready_total, pending_ready, pending_ready_peers)
                 })
                 .unwrap_or_else(|| (0, Vec::new(), Vec::new()));
-            iroha_logger::info!(
-                height = key.1,
-                view = key.2,
-                block = %key.0,
-                local_peer = %self.common_config.peer.id(),
-                roster_source = ?roster_source,
-                roster_len,
-                ready = ready_count,
-                required,
-                missing_ready_total,
-                missing_ready = ?missing_ready,
-                missing_ready_peers = ?missing_ready_peers,
-                pending_ready_total,
-                pending_ready = ?pending_ready,
-                pending_ready_peers = ?pending_ready_peers,
-                senders = ?session
-                    .ready_signatures
-                    .iter()
-                    .map(|entry| entry.sender)
-                    .collect::<Vec<_>>(),
-                "deferring RBC DELIVER: READY quorum not yet satisfied"
-            );
+            if should_log {
+                iroha_logger::info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    roster_source = ?roster_source,
+                    roster_len,
+                    ready = ready_count,
+                    required,
+                    missing_ready_total,
+                    missing_ready = ?missing_ready,
+                    missing_ready_peers = ?missing_ready_peers,
+                    pending_ready_total,
+                    pending_ready = ?pending_ready,
+                    pending_ready_peers = ?pending_ready_peers,
+                    senders = ?session
+                        .ready_signatures
+                        .iter()
+                        .map(|entry| entry.sender)
+                        .collect::<Vec<_>>(),
+                    "deferring RBC DELIVER: READY quorum not yet satisfied"
+                );
+            }
             self.rebroadcast_rbc_payload(key, &session);
             if !session.ready_signatures.is_empty() {
                 self.rebroadcast_rbc_ready_set(key, &session);
@@ -14068,27 +14103,27 @@ impl Actor {
             return Ok(());
         }
         if missing_chunks && !allow_missing_chunks {
-            if !self.should_emit_rbc_deliver_deferral(
+            let should_log = self.should_emit_rbc_deliver_deferral(
                 key,
                 now,
                 ready_count,
                 received_chunks,
                 total_chunks,
-                self.payload_rebroadcast_cooldown(),
-            ) {
-                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-                return Ok(());
-            }
-            info!(
-                height = key.1,
-                view = key.2,
-                block = %key.0,
-                local_peer = %self.common_config.peer.id(),
-                roster_len,
-                received = received_chunks,
-                total = total_chunks,
-                "deferring RBC DELIVER: payload chunks not yet complete"
+                self.payload_rebroadcast_cooldown()
+                    .max(RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR),
             );
+            if should_log {
+                info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    roster_len,
+                    received = received_chunks,
+                    total = total_chunks,
+                    "deferring RBC DELIVER: payload chunks not yet complete"
+                );
+            }
             self.rebroadcast_rbc_payload(key, &session);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
