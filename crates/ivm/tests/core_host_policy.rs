@@ -121,6 +121,8 @@ fn proof_blob_for(
         manifest_root,
         da_commitment: None,
         proof: proof_bytes,
+        committed_amount: None,
+        amount_commitment: None,
     };
     ProofBlob {
         payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
@@ -1185,6 +1187,7 @@ fn core_host_enforces_fixture_snapshot_fields() {
             intent: base_intent.clone(),
             proof: None,
             amount: 50,
+            amount_commitment: None,
         };
         let max_clock_skew_ms = base_handle.max_clock_skew_ms.map(u64::from).unwrap_or(0);
         let policy = SpaceDirectoryAxtPolicy::from_policy_snapshot_with_timing(

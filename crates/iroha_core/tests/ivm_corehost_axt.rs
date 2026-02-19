@@ -133,6 +133,8 @@ fn proof_blob_for(
         manifest_root,
         da_commitment: None,
         proof: proof_bytes,
+        committed_amount: None,
+        amount_commitment: None,
     };
     axt::ProofBlob {
         payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
@@ -770,6 +772,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             },
             proof: None,
             amount: 10,
+            amount_commitment: None,
         }],
         commit_height: Some(1),
     };
@@ -1007,6 +1010,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }],
             commit_height: Some(1),
         };
@@ -1189,6 +1193,7 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }],
             commit_height: Some(1),
         };
@@ -1314,6 +1319,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
                 },
                 proof: None,
                 amount: 5,
+                amount_commitment: None,
             }],
             commit_height: Some(1),
         });
@@ -1582,6 +1588,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         },
         proof: None,
         amount: 10,
+        amount_commitment: None,
     };
 
     let envelope = ModelAxtEnvelopeRecord {
@@ -1779,6 +1786,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         },
         proof: None,
         amount: 10,
+        amount_commitment: None,
     };
 
     let envelope = ModelAxtEnvelopeRecord {
@@ -3732,6 +3740,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             },
             proof: None,
             amount: 10,
+            amount_commitment: None,
         }],
         commit_height: Some(1),
     };

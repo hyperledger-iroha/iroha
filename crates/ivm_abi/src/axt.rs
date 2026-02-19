@@ -11,6 +11,7 @@ use std::{
     num::NonZeroU64,
 };
 
+use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtHandleFragment,
     AxtPolicyEntry as ModelAxtPolicyEntry, AxtPolicySnapshot as ModelAxtPolicySnapshot,
@@ -25,6 +26,111 @@ use crate::error::VMError;
 
 /// Alias for the Norito proof envelope used in AXT proof verification.
 pub type AxtProofEnvelope = ModelAxtProofEnvelope;
+
+const AMOUNT_COMMITMENT_DOMAIN_SEPARATOR: &[u8] = b"iroha.axt.amount-commitment.v1";
+
+/// Effective handle amount resolved from the intent/proof pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedHandleAmount {
+    /// Non-zero amount used for budget checks and settlement.
+    pub amount: u128,
+    /// Optional amount commitment retained in block fragments.
+    pub amount_commitment: Option<[u8; 32]>,
+}
+
+/// Errors returned by [`resolve_handle_amount`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleAmountResolutionError {
+    /// No cleartext amount was provided and no committed amount could be loaded from proof.
+    MissingAmount,
+    /// Cleartext and committed amounts disagree.
+    Mismatch,
+    /// Resolved amount is zero and therefore invalid for handle usage.
+    ZeroAmount,
+}
+
+impl HandleAmountResolutionError {
+    /// Convert the resolver error to the syscall-level VM error used by hosts.
+    #[must_use]
+    pub const fn to_vm_error(self) -> VMError {
+        match self {
+            Self::MissingAmount => VMError::NoritoInvalid,
+            Self::Mismatch | Self::ZeroAmount => VMError::PermissionDenied,
+        }
+    }
+}
+
+/// Build a deterministic amount commitment used for hidden-amount fragments.
+#[must_use]
+pub fn derive_amount_commitment(
+    dsid: DataSpaceId,
+    amount: u128,
+    proof_payload: Option<&[u8]>,
+) -> [u8; 32] {
+    let mut message = Vec::with_capacity(
+        AMOUNT_COMMITMENT_DOMAIN_SEPARATOR.len()
+            + core::mem::size_of::<u64>()
+            + core::mem::size_of::<u128>()
+            + proof_payload.map_or(0, |payload| payload.len()),
+    );
+    message.extend_from_slice(AMOUNT_COMMITMENT_DOMAIN_SEPARATOR);
+    message.extend_from_slice(&dsid.as_u64().to_be_bytes());
+    message.extend_from_slice(&amount.to_be_bytes());
+    if let Some(payload) = proof_payload {
+        message.extend_from_slice(payload);
+    }
+    Hash::new(&message).into()
+}
+
+/// Resolve an effective amount and commitment for a handle usage.
+///
+/// This supports both cleartext (`intent.op.amount`) and hidden modes where
+/// the cleartext amount is redacted and a committed amount is carried in the
+/// [`AxtProofEnvelope`].
+pub fn resolve_handle_amount(
+    intent: &RemoteSpendIntent,
+    proof: Option<&ProofBlob>,
+) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
+    let intent_amount = intent.op.amount.parse::<u128>().ok();
+    let envelope =
+        proof.and_then(|blob| norito::decode_from_bytes::<AxtProofEnvelope>(&blob.payload).ok());
+    let committed_amount = envelope.as_ref().and_then(|env| env.committed_amount);
+
+    let amount = match (intent_amount, committed_amount) {
+        (Some(intent_amount), Some(committed_amount)) => {
+            if intent_amount != committed_amount {
+                return Err(HandleAmountResolutionError::Mismatch);
+            }
+            intent_amount
+        }
+        (Some(intent_amount), None) => intent_amount,
+        (None, Some(committed_amount)) => committed_amount,
+        (None, None) => return Err(HandleAmountResolutionError::MissingAmount),
+    };
+    if amount == 0 {
+        return Err(HandleAmountResolutionError::ZeroAmount);
+    }
+
+    let amount_commitment = envelope
+        .as_ref()
+        .and_then(|proof_envelope| proof_envelope.amount_commitment)
+        .or_else(|| {
+            if intent_amount.is_none() || committed_amount.is_some() {
+                Some(derive_amount_commitment(
+                    intent.asset_dsid,
+                    amount,
+                    proof.map(|blob| blob.payload.as_slice()),
+                ))
+            } else {
+                None
+            }
+        });
+
+    Ok(ResolvedHandleAmount {
+        amount,
+        amount_commitment,
+    })
+}
 
 /// Canonical descriptor for an AXT envelope.
 #[derive(
@@ -778,6 +884,7 @@ pub struct HandleUsage {
     pub intent: RemoteSpendIntent,
     pub proof: Option<ProofBlob>,
     pub amount: u128,
+    pub amount_commitment: Option<[u8; 32]>,
 }
 
 impl TryFrom<&HandleUsage> for AxtHandleFragment {
@@ -821,11 +928,24 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
             payload: p.payload.clone(),
             expiry_slot: p.expiry_slot,
         });
+        let amount_hidden = usage.intent.op.amount.parse::<u128>().is_err();
+        let amount_commitment = if amount_hidden {
+            usage.amount_commitment.or_else(|| {
+                Some(derive_amount_commitment(
+                    usage.intent.asset_dsid,
+                    usage.amount,
+                    usage.proof.as_ref().map(|blob| blob.payload.as_slice()),
+                ))
+            })
+        } else {
+            usage.amount_commitment
+        };
         Ok(AxtHandleFragment {
             handle,
             intent,
             proof,
-            amount: usage.amount,
+            amount: if amount_hidden { 0 } else { usage.amount },
+            amount_commitment,
         })
     }
 }
@@ -960,6 +1080,90 @@ mod tests {
         }
     }
 
+    fn proof_with_amount(
+        dsid: DataSpaceId,
+        committed_amount: Option<u128>,
+        amount_commitment: Option<[u8; 32]>,
+    ) -> ProofBlob {
+        let payload = norito::to_bytes(&AxtProofEnvelope {
+            dsid,
+            manifest_root: [0xAB; 32],
+            da_commitment: None,
+            proof: vec![0x01, 0x02],
+            committed_amount,
+            amount_commitment,
+        })
+        .expect("encode proof envelope");
+        ProofBlob {
+            payload,
+            expiry_slot: Some(10),
+        }
+    }
+
+    #[test]
+    fn resolve_handle_amount_accepts_cleartext_intent() {
+        let dsid = DataSpaceId::new(90);
+        let intent = sample_intent(dsid, "42");
+        let resolved = resolve_handle_amount(&intent, None).expect("resolve amount");
+        assert_eq!(resolved.amount, 42);
+        assert_eq!(resolved.amount_commitment, None);
+    }
+
+    #[test]
+    fn resolve_handle_amount_uses_proof_commit_when_intent_hidden() {
+        let dsid = DataSpaceId::new(91);
+        let intent = sample_intent(dsid, "hidden");
+        let proof = proof_with_amount(dsid, Some(77), None);
+        let resolved = resolve_handle_amount(&intent, Some(&proof)).expect("resolve amount");
+        assert_eq!(resolved.amount, 77);
+        assert_eq!(
+            resolved.amount_commitment,
+            Some(derive_amount_commitment(
+                dsid,
+                77,
+                Some(proof.payload.as_slice())
+            ))
+        );
+    }
+
+    #[test]
+    fn resolve_handle_amount_rejects_intent_proof_mismatch() {
+        let dsid = DataSpaceId::new(92);
+        let intent = sample_intent(dsid, "11");
+        let proof = proof_with_amount(dsid, Some(12), None);
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&proof)),
+            Err(HandleAmountResolutionError::Mismatch)
+        );
+    }
+
+    #[test]
+    fn try_from_usage_redacts_hidden_amount() {
+        let dsid = DataSpaceId::new(93);
+        let descriptor = AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![AxtTouchSpec {
+                dsid,
+                read: vec!["orders".into()],
+                write: vec!["ledger".into()],
+            }],
+        };
+        let binding = compute_binding(&descriptor).expect("binding");
+        let intent = sample_intent(dsid, "hidden");
+        let proof = proof_with_amount(dsid, Some(5), None);
+        let resolved = resolve_handle_amount(&intent, Some(&proof)).expect("resolve amount");
+        let usage = HandleUsage {
+            handle: sample_handle(dsid, binding, 10, Some(10)),
+            intent,
+            proof: Some(proof),
+            amount: resolved.amount,
+            amount_commitment: resolved.amount_commitment,
+        };
+        let fragment = AxtHandleFragment::try_from(&usage).expect("fragment conversion");
+        assert_eq!(fragment.amount, 0);
+        assert_eq!(fragment.amount_commitment, resolved.amount_commitment);
+    }
+
     #[test]
     fn snapshot_policy_rejects_excess_skew_request() {
         let dsid = DataSpaceId::new(8);
@@ -997,6 +1201,7 @@ mod tests {
             intent,
             proof: None,
             amount: 1,
+            amount_commitment: None,
         };
 
         assert!(matches!(
@@ -1034,6 +1239,7 @@ mod tests {
                 intent: sample_intent(dsid, "60"),
                 proof: proof.clone(),
                 amount: 60,
+                amount_commitment: None,
             })
             .expect("first usage within budget");
         handle.sub_nonce = handle.sub_nonce.saturating_add(1);
@@ -1043,6 +1249,7 @@ mod tests {
                 intent: sample_intent(dsid, "50"),
                 proof,
                 amount: 50,
+                amount_commitment: None,
             })
             .expect("second usage tracked");
 
@@ -1081,6 +1288,7 @@ mod tests {
                 intent: sample_intent(dsid, "60"),
                 proof: proof.clone(),
                 amount: 60,
+                amount_commitment: None,
             })
             .expect("first usage within budget");
         handle.sub_nonce = handle.sub_nonce.saturating_add(1);
@@ -1090,6 +1298,7 @@ mod tests {
                 intent: sample_intent(dsid, "60"),
                 proof,
                 amount: 60,
+                amount_commitment: None,
             })
             .expect("second usage recorded for different sub-nonce");
 
@@ -1128,6 +1337,7 @@ mod tests {
                 intent: sample_intent(dsid, "50"),
                 proof: proof.clone(),
                 amount: 50,
+                amount_commitment: None,
             })
             .expect("first usage within budget");
         handle.sub_nonce = handle.sub_nonce.saturating_add(1);
@@ -1137,6 +1347,7 @@ mod tests {
                 intent: sample_intent(dsid, "50"),
                 proof,
                 amount: 50,
+                amount_commitment: None,
             })
             .expect("second usage within budget");
 
@@ -1170,6 +1381,7 @@ mod tests {
             intent,
             proof: None,
             amount: 10,
+            amount_commitment: None,
         };
 
         state
@@ -1213,6 +1425,7 @@ mod tests {
                 intent: sample_intent(dsid, "10"),
                 proof: proof.clone(),
                 amount: 10,
+                amount_commitment: None,
             })
             .expect("first usage accepted");
         state
@@ -1221,6 +1434,7 @@ mod tests {
                 intent: sample_intent(dsid, "10"),
                 proof,
                 amount: 10,
+                amount_commitment: None,
             })
             .expect("second usage accepted");
 
@@ -1271,6 +1485,7 @@ mod tests {
                 intent: sample_intent(ds_a, "10"),
                 proof: proof.clone(),
                 amount: 10,
+                amount_commitment: None,
             })
             .expect("first usage accepted");
         state
@@ -1279,6 +1494,7 @@ mod tests {
                 intent: sample_intent(ds_b, "10"),
                 proof,
                 amount: 10,
+                amount_commitment: None,
             })
             .expect("second usage accepted for different lane");
 
@@ -1313,6 +1529,7 @@ mod tests {
                 intent: intent.clone(),
                 proof: None,
                 amount: 10,
+                amount_commitment: None,
             })
             .expect_err("zero handle era must be rejected");
         assert!(matches!(err, VMError::PermissionDenied));
@@ -1325,6 +1542,7 @@ mod tests {
                 intent,
                 proof: None,
                 amount: 10,
+                amount_commitment: None,
             })
             .expect_err("zero sub-nonce must be rejected");
         assert!(matches!(err, VMError::PermissionDenied));
@@ -1353,6 +1571,7 @@ mod tests {
             intent: sample_intent(dsid, "5"),
             proof: None,
             amount: 5,
+            amount_commitment: None,
         };
         state.record_handle(usage).expect("handle usage recorded");
 
@@ -1429,6 +1648,7 @@ mod tests {
                 intent: sample_intent(dsid, "10"),
                 proof: None,
                 amount: 10,
+                amount_commitment: None,
             })
             .expect("handle recorded");
 
@@ -1466,6 +1686,7 @@ mod tests {
             intent: sample_intent(dsid, "25"),
             proof: proof.clone(),
             amount: 25,
+            amount_commitment: None,
         };
         state
             .record_handle(usage.clone())
