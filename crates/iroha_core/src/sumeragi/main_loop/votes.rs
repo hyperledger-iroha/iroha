@@ -1043,6 +1043,21 @@ impl Actor {
         self.request_missing_block_for_highest_qc_inner(highest, source, true);
     }
 
+    fn consensus_missing_block_retry_window(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Duration {
+        let quorum_retry = self.quorum_timeout(self.runtime_da_enabled());
+        let mut retry_window = super::quorum_reschedule_backoff_from_timeout(quorum_retry);
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if height > committed_height.saturating_add(1) {
+            retry_window = retry_window.min(self.rebroadcast_cooldown());
+        }
+        self.missing_block_retry_window_with_rbc_progress(block_hash, height, view, retry_window)
+    }
+
     #[allow(clippy::too_many_lines)]
     fn request_missing_block_for_highest_qc_inner(
         &mut self,
@@ -1172,7 +1187,11 @@ impl Actor {
             );
         }
         let topology = super::network_topology::Topology::new(roster);
-        let retry_window = self.quorum_timeout(self.runtime_da_enabled());
+        let retry_window = self.consensus_missing_block_retry_window(
+            highest.subject_block_hash,
+            highest.height,
+            highest.view,
+        );
         let now = Instant::now();
         let decision = plan_missing_block_fetch(
             &mut self.pending.missing_block_requests,
@@ -1831,7 +1850,8 @@ impl Actor {
             return;
         }
         let topology = super::network_topology::Topology::new(roster);
-        let retry_window = self.quorum_timeout(self.runtime_da_enabled());
+        let retry_window =
+            self.consensus_missing_block_retry_window(vote.block_hash, vote.height, vote.view);
         let now = Instant::now();
         let signers = BTreeSet::new();
         let decision = plan_missing_block_fetch(

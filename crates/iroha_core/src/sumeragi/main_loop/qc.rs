@@ -101,7 +101,7 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
-    fn missing_block_retry_window_with_rbc_progress(
+    pub(super) fn missing_block_retry_window_with_rbc_progress(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -130,6 +130,36 @@ impl Actor {
         );
         let widened = super::saturating_mul_duration(base_retry_window, 2);
         widened.min(availability_timeout.max(base_retry_window))
+    }
+
+    fn adaptive_retry_window_for_missing_block_request(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        stats: &super::MissingBlockRequest,
+    ) -> Duration {
+        let mut retry_window = if stats.retry_window == Duration::ZERO {
+            self.rebroadcast_cooldown()
+        } else {
+            stats.retry_window
+        };
+
+        // After the first aggressive pull, relax to normal control-plane cadence to
+        // avoid repeatedly flooding fetch requests while the payload is still in-flight.
+        if matches!(stats.priority, super::MissingBlockPriority::Consensus)
+            && matches!(stats.phase, crate::sumeragi::consensus::Phase::Commit)
+            && stats.attempts > 0
+            && stats.retry_window <= super::REBROADCAST_COOLDOWN_FLOOR
+        {
+            retry_window = retry_window.max(self.rebroadcast_cooldown());
+        }
+
+        let widened = self.missing_block_retry_window_with_rbc_progress(
+            block_hash,
+            stats.height,
+            stats.view,
+            retry_window,
+        );
+        retry_window.max(widened)
     }
 
     fn maybe_validate_pending_for_commit_qc(
@@ -455,7 +485,13 @@ impl Actor {
             && voting_signers.saturating_add(1) >= commit_quorum;
         let aggressive_qc_fetch = matches!(phase, crate::sumeragi::consensus::Phase::Commit)
             && (commit_quorum_met || voting_signers >= commit_quorum || near_commit_quorum);
-        let retry_window = if aggressive_qc_fetch {
+        let existing_attempts = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .map_or(0, |stats| stats.attempts);
+        let aggressive_retry_floor = aggressive_qc_fetch && existing_attempts == 0;
+        let retry_window = if aggressive_retry_floor {
             super::REBROADCAST_COOLDOWN_FLOOR
         } else {
             self.missing_block_retry_window_with_rbc_progress(
@@ -466,7 +502,7 @@ impl Actor {
             )
         };
         if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-            if aggressive_qc_fetch {
+            if aggressive_retry_floor && stats.attempts == 0 {
                 if stats.retry_window == Duration::ZERO || retry_window < stats.retry_window {
                     stats.retry_window = retry_window;
                 }
@@ -489,7 +525,9 @@ impl Actor {
         let telemetry = self.telemetry_handle();
         let now = Instant::now();
         let fetch_mode = if aggressive_qc_fetch {
-            crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
+            if aggressive_retry_floor {
+                crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
+            }
             super::MissingBlockFetchMode::AggressiveTopology
         } else {
             super::MissingBlockFetchMode::Default
@@ -778,11 +816,13 @@ impl Actor {
                 stats_snapshot.height,
                 stats_snapshot.view,
             );
-            let retry_window = self
-                .pending
-                .missing_block_requests
-                .get(&block_hash)
-                .map_or(stats_snapshot.retry_window, |stats| stats.retry_window);
+            let retry_window =
+                self.adaptive_retry_window_for_missing_block_request(block_hash, &stats_snapshot);
+            if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
+                && retry_window != stats.retry_window
+            {
+                stats.retry_window = retry_window;
+            }
             let mut view_change_window = self
                 .pending
                 .missing_block_requests
@@ -2990,9 +3030,16 @@ impl Actor {
                 "received QC for unknown block; caching without updating locks/highest"
             );
             let da_enabled = self.runtime_da_enabled();
-            let base_retry_window = self.quorum_timeout(da_enabled);
+            let view_change_window = self.quorum_timeout(da_enabled);
+            let base_retry_window = self.rebroadcast_cooldown();
             let aggressive_qc_fetch = matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit);
-            let retry_window = if aggressive_qc_fetch {
+            let existing_attempts = self
+                .pending
+                .missing_block_requests
+                .get(&qc.subject_block_hash)
+                .map_or(0, |stats| stats.attempts);
+            let aggressive_retry_floor = aggressive_qc_fetch && existing_attempts == 0;
+            let retry_window = if aggressive_retry_floor {
                 crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
                 super::REBROADCAST_COOLDOWN_FLOOR
             } else {
@@ -3008,10 +3055,14 @@ impl Actor {
                 .pending
                 .missing_block_requests
                 .get_mut(&qc.subject_block_hash)
-                && !aggressive_qc_fetch
-                && retry_window > stats.retry_window
             {
-                stats.retry_window = retry_window;
+                if aggressive_retry_floor && stats.attempts == 0 {
+                    if stats.retry_window == Duration::ZERO || retry_window < stats.retry_window {
+                        stats.retry_window = retry_window;
+                    }
+                } else if retry_window > stats.retry_window {
+                    stats.retry_window = retry_window;
+                }
             }
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             let fetch_mode = if aggressive_qc_fetch {
@@ -3030,7 +3081,7 @@ impl Actor {
                 &topology,
                 now,
                 retry_window,
-                Some(base_retry_window),
+                Some(view_change_window),
                 self.config.recovery.missing_block_signer_fallback_attempts,
                 fetch_mode,
             );
